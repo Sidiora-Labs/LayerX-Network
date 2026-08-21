@@ -17,16 +17,18 @@ use layerx_programs_runtime::{
     AuthorizedExecutionRequest, CompositionContext, Deploy, DeploymentReceipt, Executor,
     KernelTransferPrimitive, Lifecycle, PrincipalId, ProgramId, ProgramVersion, ReceiptOracle,
     ReceiptView, Storage, StorageNamespace, TransferCapability, UpgradePolicy, ValidatedModule,
-    VerifiedProgramSettlement, WasmEngine, WasmValue, ABI_VERSION,
+    VerifiedProgramSettlement, WasmEngine, ABI_VERSION, CALL_ENTRY_EXPORT,
 };
 
+use crate::account::FieldValue;
 use crate::error::PortRefusal;
 use crate::hash::sha256;
 use crate::pubkey::MigrationCell;
 use crate::reference::{
-    query_capabilities, MintLimitPort, ANCHOR_SOURCE, ARTIFACT_PATH, BUILD_COMMAND,
-    DEPENDENCY_LOCK, DEPENDENCY_LOCK_PATH, DESCRIPTOR_PATH, MINT_COUNT_EXPORT, MINT_EXPORT,
-    MINT_REMAINING_EXPORT, SOURCE_PATH, TOOLCHAIN_MANIFEST, TOOLCHAIN_PATH,
+    mint_count_instruction, mint_instruction, mint_remaining_instruction, query_capabilities,
+    MintLimitPort, ANCHOR_SOURCE, ARTIFACT_PATH, BUILD_COMMAND, DEPENDENCY_LOCK,
+    DEPENDENCY_LOCK_PATH, DESCRIPTOR_PATH, MINT_COUNT_EXPORT, MINT_REMAINING_EXPORT, SOURCE_PATH,
+    TOOLCHAIN_MANIFEST, TOOLCHAIN_PATH,
 };
 
 /// Independent hermetic rebuilds a published port is verified with. Two is the
@@ -75,11 +77,10 @@ impl BuildRunner for PortBuildRunner {
                 path: descriptor_path.clone(),
             }
         })?;
-        let text = core::str::from_utf8(&descriptor.content).map_err(|_| {
-            BuildRefusal::BuilderFailed {
+        let text =
+            core::str::from_utf8(&descriptor.content).map_err(|_| BuildRefusal::BuilderFailed {
                 reason: "port descriptor is not valid text".to_owned(),
-            }
-        })?;
+            })?;
         let provenance =
             attempt
                 .archive
@@ -95,9 +96,10 @@ impl BuildRunner for PortBuildRunner {
         let port = MintLimitPort::parse(text).map_err(|refusal| BuildRefusal::BuilderFailed {
             reason: refusal.to_string(),
         })?;
-        port.code().map_err(|refusal| BuildRefusal::ArtifactRejected {
-            reason: refusal.to_string(),
-        })
+        port.code()
+            .map_err(|refusal| BuildRefusal::ArtifactRejected {
+                reason: refusal.to_string(),
+            })
     }
 }
 
@@ -198,7 +200,10 @@ pub fn build_plan() -> BuildPlan {
             toolchain_digest,
             dependency_lock_digest: sha256(DEPENDENCY_LOCK.as_bytes()),
             source_date_epoch: SOURCE_EPOCH,
-            command: BUILD_COMMAND.split_whitespace().map(str::to_owned).collect(),
+            command: BUILD_COMMAND
+                .split_whitespace()
+                .map(str::to_owned)
+                .collect(),
         },
         artifact_path: ARTIFACT_PATH.to_owned(),
         toolchain_manifest: TOOLCHAIN_PATH.to_owned(),
@@ -288,7 +293,8 @@ pub fn execute_mint(
     amount: u64,
 ) -> Result<AuthorizedExecutionRecord, PortRefusal> {
     let capabilities = port.mint_capabilities(amount)?;
-    let taken = i64::try_from(amount).map_err(|_| PortRefusal::OutOfRange)?;
+    let taken = u16::try_from(amount).map_err(|_| PortRefusal::OutOfRange)?;
+    let calldata = mint_instruction()?.data(&[FieldValue::U16(taken)])?;
     Ok(Executor::declared().execute_authorized(
         storage,
         AuthorizedExecutionRequest {
@@ -296,9 +302,10 @@ pub fn execute_mint(
             program: invocation.program,
             authorization: AuthorizationContext::new(invocation.principal, capabilities),
             receipts: invocation.receipts,
-            export: MINT_EXPORT,
-            args: &[WasmValue::I64(taken)],
+            entrypoint: CALL_ENTRY_EXPORT,
+            calldata: &calldata,
             composition: CompositionContext::isolated(),
+            response_capacity: 0,
         },
     )?)
 }
@@ -357,7 +364,10 @@ pub fn settle(
     effects: &AbiEffects,
     kernel: &mut impl KernelTransferPrimitive,
 ) -> Result<VerifiedProgramSettlement, PortRefusal> {
-    Ok(TransferCapability::new(program, principal, invocation_authority)?.settle(effects, kernel)?)
+    Ok(
+        TransferCapability::new(program, principal, invocation_authority)?
+            .settle(effects, kernel)?,
+    )
 }
 
 /// Imports an exported Solana account snapshot into namespaced storage, writing
@@ -392,6 +402,11 @@ fn query(
     storage: &mut Storage,
     export: &str,
 ) -> Result<AuthorizedExecutionRecord, PortRefusal> {
+    let calldata = match export {
+        MINT_COUNT_EXPORT => mint_count_instruction()?.data(&[])?,
+        MINT_REMAINING_EXPORT => mint_remaining_instruction()?.data(&[])?,
+        _ => return Err(PortRefusal::OutOfRange),
+    };
     Ok(Executor::declared().execute_authorized(
         storage,
         AuthorizedExecutionRequest {
@@ -399,9 +414,10 @@ fn query(
             program: invocation.program,
             authorization: AuthorizationContext::new(invocation.principal, query_capabilities()?),
             receipts: invocation.receipts,
-            export,
-            args: &[],
+            entrypoint: CALL_ENTRY_EXPORT,
+            calldata: &calldata,
             composition: CompositionContext::isolated(),
+            response_capacity: 0,
         },
     )?)
 }

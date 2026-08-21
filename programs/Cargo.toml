@@ -9,7 +9,7 @@ members = [
     "sdk/rust",
     "sdk/rust/lint",
 ]
-exclude = ["sdk/rust/quickstart"]
+exclude = ["sdk/rust/quickstart", "sdk/rust/response-fixture"]
 resolver = "2"
 
 [workspace.package]

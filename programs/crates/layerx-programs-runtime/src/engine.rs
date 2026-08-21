@@ -5,7 +5,7 @@ use core::fmt::{self, Display};
 use wasmi::{Config, Engine, StackLimits};
 
 use crate::limits::ValidationLimits;
-use crate::validate::{self, ValidatedModule, ValidationRefusal};
+use crate::validate::{self, AbiRevision, ValidatedModule, ValidationRefusal};
 
 const INITIAL_VALUE_STACK_HEIGHT: u32 = 1_024;
 
@@ -94,7 +94,16 @@ impl WasmEngine {
     /// exceeds a declared limit, carries a forbidden import, uses floating
     /// point or vector types or instructions, or fails engine validation.
     pub fn validate(&self, wasm: &[u8]) -> Result<ValidatedModule, ValidationRefusal> {
-        validate::validate_module(self, wasm)
+        validate::validate_module(self, wasm, AbiRevision::V1)
+    }
+
+    /// Validates against the explicitly selected, non-current candidate ABI.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same deterministic validation refusals as [`Self::validate`].
+    pub fn validate_candidate_v2(&self, wasm: &[u8]) -> Result<ValidatedModule, ValidationRefusal> {
+        validate::validate_module(self, wasm, AbiRevision::CandidateV2)
     }
 
     /// Returns the declared validation limits of this engine.

@@ -5,12 +5,22 @@ use core::fmt::{self, Display};
 use wasmi::core::TrapCode;
 use wasmi::{Extern, Instance, Memory, Store, Value};
 
+use crate::abi::response::{CallResponse, ResponseRefusal};
 use crate::abi::{Abi, AbiEffects, AbiError, AuthorizationContext, ReceiptOracle};
+use crate::budget::{
+    maximum_fee_units, validate_bounds, ActivityBudgetBinding, AdmittedBudget,
+    BudgetAdmissionRefusal, DeclaredBudget, PayerCoverage,
+};
 use crate::calls::{CallGraph, Composition, CompositionContext, CompositionRefusal};
+use crate::entrypoint::{self, EntrypointRefusal};
+use crate::fault::{ProgramFailure, RefusalClass, RefusalReason, CANDIDATE_REFUSAL_SENTINEL};
 use crate::host::RuntimeState;
-use crate::meter::{FeeSchedule, Meter, MeterRefusal, MeteredUsage, ResourceBudget, ResourceKind};
-use crate::storage::{ProgramId, Storage};
-use crate::validate::ValidatedModule;
+use crate::meter::{
+    BudgetMeterRefusal, BudgetResourceKind, FeeSchedule, Meter, MeterRefusal, MeteredUsage,
+    ResourceBudget, ResourceKind,
+};
+use crate::storage::{PrincipalId, ProgramId, Storage};
+use crate::validate::{AbiRevision, ValidatedModule};
 
 /// Runtime version recorded for versioned replay of every execution.
 pub const RUNTIME_VERSION: u16 = 1;
@@ -171,6 +181,12 @@ impl ProgramInstance {
             });
         };
         let result_count = func.ty(&self.store).results().len();
+        let Some(consumed) = self.store.fuel_consumed() else {
+            return Err(ExecutionFault::EngineFault {
+                reason: "fuel metering disabled".to_string(),
+            });
+        };
+        self.store.data_mut().meter_mut().record_cpu(consumed);
         self.store
             .data_mut()
             .meter_mut()
@@ -231,6 +247,33 @@ impl ProgramInstance {
             .map_err(|_| ExecutionFault::MemoryOutOfBounds)
     }
 
+    pub(crate) fn consume_copy_fuel(&mut self, fuel: u64) -> Result<(), EntrypointRefusal> {
+        let activity = self.meter().is_activity();
+        let result = self.store.consume_fuel(fuel);
+        if activity {
+            let consumed = self.store.fuel_consumed().ok_or_else(|| {
+                EntrypointRefusal::Fault(ExecutionFault::EngineFault {
+                    reason: "fuel metering disabled".to_string(),
+                })
+            })?;
+            self.store.data_mut().meter_mut().record_cpu(consumed);
+        }
+        if result.is_err() {
+            self.store.data_mut().meter_mut().mark_cpu_exhausted();
+            let refusal = if activity {
+                self.meter().exhaustion().unwrap_or_else(|| unreachable!())
+            } else {
+                MeterRefusal::BudgetExceeded {
+                    resource: ResourceKind::Cpu,
+                    limit: self.meter().cpu_budget(),
+                    attempted: self.meter().cpu_budget().saturating_add(1),
+                }
+            };
+            return Err(EntrypointRefusal::Resource(refusal));
+        }
+        Ok(())
+    }
+
     pub(crate) fn into_state(self) -> RuntimeState {
         self.store.into_data()
     }
@@ -260,15 +303,610 @@ pub struct AuthorizedExecutionRecord {
     pub call_graph: CallGraph,
 }
 
+/// Additive receipt-ready result of an ABI-v1 activity using an admitted budget.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum BudgetedV1ActivityOutcome {
+    /// Frozen v1 success record, byte-for-byte unchanged.
+    Success(AuthorizedExecutionRecord),
+    /// Guest refusal or deterministic runtime fault with no committed effects.
+    Failure(BudgetedV1FailureRecord),
+    /// Typed resource exhaustion with no committed effects.
+    Resource(BudgetedResourceFailureRecord),
+}
+
+/// Receipt-ready ABI-v1 program failure produced only by the budgeted bridge.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BudgetedV1FailureRecord {
+    root_program: ProgramId,
+    cause: BudgetedV1FailureCause,
+    usage: MeteredUsage,
+    call_graph: CallGraph,
+}
+
+/// Closed typed cause retained by the additive budgeted ABI-v1 bridge.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum BudgetedV1FailureCause {
+    /// Negative guest result or deterministic guest runtime fault.
+    Program(ProgramFailure),
+    /// Typed call-graph or capability refusal observed after metering began.
+    Composition(CompositionRefusal),
+    /// Typed entry protocol refusal observed after metering began.
+    Entrypoint(EntrypointRefusal),
+    /// Typed ABI refusal observed after metering began.
+    Abi(AbiError),
+}
+
+impl BudgetedV1FailureRecord {
+    #[must_use]
+    pub const fn root_program(&self) -> ProgramId {
+        self.root_program
+    }
+
+    #[must_use]
+    pub const fn cause(&self) -> &BudgetedV1FailureCause {
+        &self.cause
+    }
+
+    #[must_use]
+    pub const fn program_failure(&self) -> Option<&ProgramFailure> {
+        match &self.cause {
+            BudgetedV1FailureCause::Program(failure) => Some(failure),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn usage(&self) -> MeteredUsage {
+        self.usage
+    }
+
+    #[must_use]
+    pub const fn call_graph(&self) -> &CallGraph {
+        &self.call_graph
+    }
+}
+
+/// Receipt-ready resource failure shared by new budgeted activity routes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BudgetedResourceFailureRecord {
+    root_program: ProgramId,
+    refusal: BudgetMeterRefusal,
+    usage: MeteredUsage,
+    call_graph: CallGraph,
+}
+
+impl BudgetedResourceFailureRecord {
+    #[must_use]
+    pub const fn root_program(&self) -> ProgramId {
+        self.root_program
+    }
+
+    #[must_use]
+    pub const fn refusal(&self) -> BudgetMeterRefusal {
+        self.refusal
+    }
+
+    #[must_use]
+    pub const fn usage(&self) -> MeteredUsage {
+        self.usage
+    }
+
+    #[must_use]
+    pub const fn call_graph(&self) -> &CallGraph {
+        &self.call_graph
+    }
+}
+
+/// Qualification-only result produced under the explicitly selected candidate ABI.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CandidateAuthorizedExecutionRecord {
+    root_program: ProgramId,
+    abi_revision: AbiRevision,
+    execution: CandidateExecutionRecord,
+    outcome: CandidateActivityOutcome,
+    call_graph: CallGraph,
+}
+
+/// Mutually exclusive candidate activity result carried into receipt projection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CandidateActivityOutcome {
+    Success {
+        response: CallResponse,
+        effects: AbiEffects,
+    },
+    Failure(ProgramFailure),
+    /// Typed resource exhaustion with no committed program effects.
+    Resource(BudgetMeterRefusal),
+}
+
+/// Public, canonical candidate activity receipt projection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CandidateActivityReceipt {
+    root_program: ProgramId,
+    abi_revision: u16,
+    runtime_version: u16,
+    usage: MeteredUsage,
+    graph_evidence: Vec<u8>,
+    outcome: CandidateReceiptOutcome,
+}
+
+/// Receipt outcome with no representable success/failure overlap.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CandidateReceiptOutcome {
+    Success(CallResponse),
+    Failure(ProgramFailure),
+    /// Typed resource exhaustion with actual failed usage in the receipt header.
+    Resource(BudgetMeterRefusal),
+}
+
+/// Execution facts that cannot be confused with frozen v1 receipt evidence.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CandidateExecutionRecord {
+    runtime_version: u16,
+    outputs: Vec<WasmValue>,
+    usage: MeteredUsage,
+}
+
+impl CandidateAuthorizedExecutionRecord {
+    #[must_use]
+    pub const fn root_program(&self) -> ProgramId {
+        self.root_program
+    }
+
+    #[must_use]
+    pub const fn abi_revision(&self) -> AbiRevision {
+        self.abi_revision
+    }
+
+    #[must_use]
+    pub const fn execution(&self) -> &CandidateExecutionRecord {
+        &self.execution
+    }
+
+    #[must_use]
+    pub const fn outcome(&self) -> &CandidateActivityOutcome {
+        &self.outcome
+    }
+
+    #[must_use]
+    pub const fn call_graph(&self) -> &CallGraph {
+        &self.call_graph
+    }
+
+    #[must_use]
+    pub fn receipt_projection(&self) -> CandidateActivityReceipt {
+        CandidateActivityReceipt {
+            root_program: self.root_program,
+            abi_revision: 2,
+            runtime_version: self.execution.runtime_version,
+            usage: self.execution.usage,
+            graph_evidence: self.call_graph.canonical_evidence(),
+            outcome: match &self.outcome {
+                CandidateActivityOutcome::Success { response, .. } => {
+                    CandidateReceiptOutcome::Success(response.clone())
+                }
+                CandidateActivityOutcome::Failure(failure) => {
+                    CandidateReceiptOutcome::Failure(failure.clone())
+                }
+                CandidateActivityOutcome::Resource(refusal) => {
+                    CandidateReceiptOutcome::Resource(*refusal)
+                }
+            },
+        }
+    }
+    #[must_use]
+    pub const fn response(&self) -> Option<&CallResponse> {
+        match &self.outcome {
+            CandidateActivityOutcome::Success { response, .. } => Some(response),
+            CandidateActivityOutcome::Failure(_) | CandidateActivityOutcome::Resource(_) => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn failure(&self) -> Option<&ProgramFailure> {
+        match &self.outcome {
+            CandidateActivityOutcome::Failure(failure) => Some(failure),
+            CandidateActivityOutcome::Success { .. } | CandidateActivityOutcome::Resource(_) => {
+                None
+            }
+        }
+    }
+
+    #[must_use]
+    pub const fn resource_refusal(&self) -> Option<&BudgetMeterRefusal> {
+        match &self.outcome {
+            CandidateActivityOutcome::Resource(refusal) => Some(refusal),
+            CandidateActivityOutcome::Success { .. } | CandidateActivityOutcome::Failure(_) => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn effects(&self) -> Option<&AbiEffects> {
+        match &self.outcome {
+            CandidateActivityOutcome::Success { effects, .. } => Some(effects),
+            CandidateActivityOutcome::Failure(_) | CandidateActivityOutcome::Resource(_) => None,
+        }
+    }
+
+    #[must_use]
+    pub fn canonical_evidence(&self) -> Vec<u8> {
+        let mut evidence = b"LXP/program-execution/v2-candidate\0".to_vec();
+        evidence.extend_from_slice(&self.execution.runtime_version.to_be_bytes());
+        evidence.extend_from_slice(&(self.execution.outputs.len() as u64).to_be_bytes());
+        for output in &self.execution.outputs {
+            match output {
+                WasmValue::I32(value) => {
+                    evidence.push(1);
+                    evidence.extend_from_slice(&value.to_be_bytes());
+                }
+                WasmValue::I64(value) => {
+                    evidence.push(2);
+                    evidence.extend_from_slice(&value.to_be_bytes());
+                }
+            }
+        }
+        evidence.extend_from_slice(&self.execution.usage.cpu_fuel.to_be_bytes());
+        evidence.extend_from_slice(&self.execution.usage.memory_bytes.to_be_bytes());
+        evidence.extend_from_slice(&self.execution.usage.storage_read_bytes.to_be_bytes());
+        evidence.extend_from_slice(&self.execution.usage.storage_write_bytes.to_be_bytes());
+        evidence.extend_from_slice(&self.execution.usage.output_values.to_be_bytes());
+        evidence.extend_from_slice(&self.execution.usage.output_bytes.to_be_bytes());
+        evidence.extend_from_slice(&self.execution.usage.fee_units.to_be_bytes());
+        evidence.extend_from_slice(&self.root_program.bytes());
+        let abi_revision = match self.abi_revision {
+            AbiRevision::V1 => ABI_VERSION,
+            AbiRevision::CandidateV2 => 2,
+        };
+        evidence.extend_from_slice(&abi_revision.to_be_bytes());
+        match &self.outcome {
+            CandidateActivityOutcome::Failure(failure) => {
+                evidence.push(1);
+                let failure = failure.canonical_encode();
+                evidence.extend_from_slice(&(failure.len() as u64).to_be_bytes());
+                evidence.extend_from_slice(&failure);
+            }
+            CandidateActivityOutcome::Success { response, .. } => {
+                evidence.push(0);
+                evidence.extend_from_slice(&response.code.to_be_bytes());
+                evidence.extend_from_slice(&(response.bytes.len() as u64).to_be_bytes());
+                evidence.extend_from_slice(&response.bytes);
+            }
+            CandidateActivityOutcome::Resource(refusal) => {
+                evidence.push(2);
+                encode_meter_refusal(&mut evidence, refusal);
+            }
+        }
+        let graph = self.call_graph.canonical_evidence();
+        evidence.extend_from_slice(&(graph.len() as u64).to_be_bytes());
+        evidence.extend_from_slice(&graph);
+        evidence
+    }
+}
+
+impl CandidateExecutionRecord {
+    #[must_use]
+    pub const fn runtime_version(&self) -> u16 {
+        self.runtime_version
+    }
+
+    #[must_use]
+    pub fn outputs(&self) -> &[WasmValue] {
+        &self.outputs
+    }
+
+    #[must_use]
+    pub const fn usage(&self) -> MeteredUsage {
+        self.usage
+    }
+}
+
+impl CandidateActivityReceipt {
+    const DOMAIN: &'static [u8] = b"LXP/candidate-activity-receipt/v2\0";
+    const MAX_GRAPH_EVIDENCE_BYTES: usize = b"LayerX/programs/call-graph/v1\0".len()
+        + 32
+        + 16
+        + 8
+        + (crate::calls::DEFAULT_MAX_CALL_GRAPH_EDGES as usize * 68);
+
+    #[must_use]
+    pub const fn root_program(&self) -> ProgramId {
+        self.root_program
+    }
+
+    #[must_use]
+    pub const fn abi_revision(&self) -> u16 {
+        self.abi_revision
+    }
+
+    #[must_use]
+    pub const fn runtime_version(&self) -> u16 {
+        self.runtime_version
+    }
+
+    #[must_use]
+    pub const fn usage(&self) -> MeteredUsage {
+        self.usage
+    }
+
+    #[must_use]
+    pub fn graph_evidence(&self) -> &[u8] {
+        &self.graph_evidence
+    }
+
+    #[must_use]
+    pub const fn outcome(&self) -> &CandidateReceiptOutcome {
+        &self.outcome
+    }
+
+    #[must_use]
+    pub fn canonical_encode(&self) -> Vec<u8> {
+        let mut encoded = Self::DOMAIN.to_vec();
+        encoded.extend_from_slice(&self.root_program.bytes());
+        encoded.extend_from_slice(&self.abi_revision.to_be_bytes());
+        encoded.extend_from_slice(&self.runtime_version.to_be_bytes());
+        for value in [
+            self.usage.cpu_fuel,
+            self.usage.memory_bytes,
+            self.usage.storage_read_bytes,
+            self.usage.storage_write_bytes,
+            self.usage.output_bytes,
+        ] {
+            encoded.extend_from_slice(&value.to_be_bytes());
+        }
+        encoded.extend_from_slice(&self.usage.output_values.to_be_bytes());
+        encoded.extend_from_slice(&self.usage.fee_units.to_be_bytes());
+        encoded.extend_from_slice(
+            &u32::try_from(self.graph_evidence.len())
+                .unwrap_or(u32::MAX)
+                .to_be_bytes(),
+        );
+        encoded.extend_from_slice(&self.graph_evidence);
+        match &self.outcome {
+            CandidateReceiptOutcome::Success(response) => {
+                encoded.push(0);
+                encoded.extend_from_slice(&response.code.to_be_bytes());
+                encoded.extend_from_slice(
+                    &u32::try_from(response.bytes.len())
+                        .unwrap_or(u32::MAX)
+                        .to_be_bytes(),
+                );
+                encoded.extend_from_slice(&response.bytes);
+            }
+            CandidateReceiptOutcome::Failure(failure) => {
+                encoded.push(1);
+                let failure = failure.canonical_encode();
+                encoded.extend_from_slice(
+                    &u32::try_from(failure.len())
+                        .unwrap_or(u32::MAX)
+                        .to_be_bytes(),
+                );
+                encoded.extend_from_slice(&failure);
+            }
+            CandidateReceiptOutcome::Resource(refusal) => {
+                encoded.push(2);
+                encode_meter_refusal(&mut encoded, refusal);
+            }
+        }
+        encoded
+    }
+
+    /// Strictly decodes a candidate receipt projection.
+    ///
+    /// # Errors
+    ///
+    /// Refuses the wrong domain/revision, invalid fields, truncation, and trailing bytes.
+    pub fn canonical_decode(encoded: &[u8]) -> Result<Self, crate::fault::FailureEncodingError> {
+        use crate::fault::FailureEncodingError as Error;
+        let mut cursor = ReceiptCursor::new(encoded);
+        if cursor.take(Self::DOMAIN.len())? != Self::DOMAIN {
+            return Err(Error::Malformed);
+        }
+        let root_program =
+            ProgramId::new(cursor.array::<32>()?).map_err(|_| Error::InvalidProgram)?;
+        let abi_revision = u16::from_be_bytes(cursor.array()?);
+        if abi_revision != 2 {
+            return Err(Error::Malformed);
+        }
+        let runtime_version = u16::from_be_bytes(cursor.array()?);
+        let usage = MeteredUsage {
+            cpu_fuel: u64::from_be_bytes(cursor.array()?),
+            memory_bytes: u64::from_be_bytes(cursor.array()?),
+            storage_read_bytes: u64::from_be_bytes(cursor.array()?),
+            storage_write_bytes: u64::from_be_bytes(cursor.array()?),
+            output_bytes: u64::from_be_bytes(cursor.array()?),
+            output_values: u32::from_be_bytes(cursor.array()?),
+            fee_units: u128::from_be_bytes(cursor.array()?),
+        };
+        let graph_length = u32::from_be_bytes(cursor.array()?) as usize;
+        if graph_length > Self::MAX_GRAPH_EVIDENCE_BYTES {
+            return Err(Error::Malformed);
+        }
+        let graph_evidence = cursor.take(graph_length)?.to_vec();
+        let tag = cursor.take(1)?[0];
+        let outcome = match tag {
+            0 => {
+                let code = i32::from_be_bytes(cursor.array()?);
+                if code < 0 {
+                    return Err(Error::Malformed);
+                }
+                let length = u32::from_be_bytes(cursor.array()?) as usize;
+                if length > crate::MAX_CALL_RESPONSE_BYTES {
+                    return Err(Error::Malformed);
+                }
+                CandidateReceiptOutcome::Success(CallResponse {
+                    code,
+                    bytes: cursor.take(length)?.to_vec(),
+                })
+            }
+            1 => {
+                let length = u32::from_be_bytes(cursor.array()?) as usize;
+                CandidateReceiptOutcome::Failure(ProgramFailure::canonical_decode(
+                    cursor.take(length)?,
+                )?)
+            }
+            2 => CandidateReceiptOutcome::Resource(decode_meter_refusal(&mut cursor, usage)?),
+            _ => return Err(Error::Malformed),
+        };
+        if !cursor.is_empty() {
+            return Err(Error::Malformed);
+        }
+        Ok(Self {
+            root_program,
+            abi_revision,
+            runtime_version,
+            usage,
+            graph_evidence,
+            outcome,
+        })
+    }
+}
+
+fn encode_meter_refusal(encoded: &mut Vec<u8>, refusal: &BudgetMeterRefusal) {
+    match refusal {
+        BudgetMeterRefusal::BudgetExceeded {
+            resource,
+            limit,
+            attempted,
+        } => {
+            encoded.push(0);
+            encoded.push(resource_tag(*resource));
+            encoded.extend_from_slice(&limit.to_be_bytes());
+            encoded.extend_from_slice(&attempted.to_be_bytes());
+        }
+        BudgetMeterRefusal::CounterOverflow { resource } => {
+            encoded.push(1);
+            encoded.push(resource_tag(*resource));
+        }
+    }
+}
+
+const fn resource_tag(resource: BudgetResourceKind) -> u8 {
+    match resource {
+        BudgetResourceKind::Cpu => 0,
+        BudgetResourceKind::Memory => 1,
+        BudgetResourceKind::StorageRead => 2,
+        BudgetResourceKind::StorageWrite => 3,
+        BudgetResourceKind::Output => 4,
+        BudgetResourceKind::OutputBytes => 5,
+        BudgetResourceKind::Table => 6,
+    }
+}
+
+fn decode_meter_refusal(
+    cursor: &mut ReceiptCursor<'_>,
+    usage: MeteredUsage,
+) -> Result<BudgetMeterRefusal, crate::fault::FailureEncodingError> {
+    use crate::fault::FailureEncodingError as Error;
+    let refusal_tag = cursor.take(1)?[0];
+    let resource = match cursor.take(1)?[0] {
+        0 => BudgetResourceKind::Cpu,
+        1 => BudgetResourceKind::Memory,
+        2 => BudgetResourceKind::StorageRead,
+        3 => BudgetResourceKind::StorageWrite,
+        4 => BudgetResourceKind::Output,
+        5 => BudgetResourceKind::OutputBytes,
+        6 => BudgetResourceKind::Table,
+        _ => return Err(Error::Malformed),
+    };
+    match refusal_tag {
+        0 => {
+            let limit = u64::from_be_bytes(cursor.array()?);
+            let attempted = u64::from_be_bytes(cursor.array()?);
+            if attempted <= limit
+                || resource_usage(resource, usage).is_some_and(|consumed| consumed > limit)
+            {
+                return Err(Error::Malformed);
+            }
+            Ok(BudgetMeterRefusal::BudgetExceeded {
+                resource,
+                limit,
+                attempted,
+            })
+        }
+        1 => Ok(BudgetMeterRefusal::CounterOverflow { resource }),
+        _ => Err(Error::Malformed),
+    }
+}
+
+const fn resource_usage(resource: BudgetResourceKind, usage: MeteredUsage) -> Option<u64> {
+    match resource {
+        BudgetResourceKind::Cpu => Some(usage.cpu_fuel),
+        BudgetResourceKind::Memory => Some(usage.memory_bytes),
+        BudgetResourceKind::StorageRead => Some(usage.storage_read_bytes),
+        BudgetResourceKind::StorageWrite => Some(usage.storage_write_bytes),
+        BudgetResourceKind::Output => Some(usage.output_values as u64),
+        BudgetResourceKind::OutputBytes => Some(usage.output_bytes),
+        BudgetResourceKind::Table => None,
+    }
+}
+
+struct ReceiptCursor<'a> {
+    remaining: &'a [u8],
+}
+
+impl<'a> ReceiptCursor<'a> {
+    const fn new(remaining: &'a [u8]) -> Self {
+        Self { remaining }
+    }
+
+    fn take(&mut self, length: usize) -> Result<&'a [u8], crate::fault::FailureEncodingError> {
+        let (value, remaining) = self
+            .remaining
+            .split_at_checked(length)
+            .ok_or(crate::fault::FailureEncodingError::Malformed)?;
+        self.remaining = remaining;
+        Ok(value)
+    }
+
+    fn array<const N: usize>(&mut self) -> Result<[u8; N], crate::fault::FailureEncodingError> {
+        self.take(N)?
+            .try_into()
+            .map_err(|_| crate::fault::FailureEncodingError::Malformed)
+    }
+
+    const fn is_empty(&self) -> bool {
+        self.remaining.is_empty()
+    }
+}
+
 /// Complete immutable input to one authorized guest execution.
 pub struct AuthorizedExecutionRequest<'a> {
     pub module: &'a ValidatedModule,
     pub program: ProgramId,
     pub authorization: AuthorizationContext,
     pub receipts: &'a dyn ReceiptOracle,
-    pub export: &'a str,
-    pub args: &'a [WasmValue],
+    pub entrypoint: &'a str,
+    pub calldata: &'a [u8],
     pub composition: CompositionContext,
+    pub response_capacity: usize,
+}
+
+/// Versioned activity request paired with a consumed admission token.
+pub struct BudgetedAuthorizedExecutionRequest<'a> {
+    request: AuthorizedExecutionRequest<'a>,
+    admitted_budget: AdmittedBudget,
+    payer: PrincipalId,
+    activity_binding: ActivityBudgetBinding,
+}
+
+impl<'a> BudgetedAuthorizedExecutionRequest<'a> {
+    /// Binds independently authenticated activity identity to an admitted token.
+    #[must_use]
+    pub const fn new(
+        request: AuthorizedExecutionRequest<'a>,
+        admitted_budget: AdmittedBudget,
+        payer: PrincipalId,
+        activity_binding: ActivityBudgetBinding,
+    ) -> Self {
+        Self {
+            request,
+            admitted_budget,
+            payer,
+            activity_binding,
+        }
+    }
 }
 
 impl ExecutionRecord {
@@ -319,9 +957,15 @@ pub enum ExecutionError {
     Resource(MeterRefusal),
     /// Capability ABI refusal before or during execution.
     Abi(AbiError),
+    /// Canonical calldata entry protocol refusal.
+    Entrypoint(EntrypointRefusal),
     /// Program-to-program composition refusal; no leg of the call graph was
     /// committed.
     Composition(CompositionRefusal),
+    /// Candidate successful-response transport refusal.
+    Response(ResponseRefusal),
+    /// Caller-declared budget was structurally refused before execution.
+    Budget(BudgetAdmissionRefusal),
 }
 
 impl Display for ExecutionError {
@@ -330,7 +974,10 @@ impl Display for ExecutionError {
             Self::Fault(fault) => write!(formatter, "execution fault: {fault}"),
             Self::Resource(refusal) => write!(formatter, "resource refusal: {refusal}"),
             Self::Abi(error) => write!(formatter, "ABI refusal: {error}"),
+            Self::Entrypoint(refusal) => write!(formatter, "entrypoint refusal: {refusal}"),
             Self::Composition(refusal) => write!(formatter, "composition refusal: {refusal}"),
+            Self::Response(refusal) => write!(formatter, "response refusal: {refusal}"),
+            Self::Budget(refusal) => write!(formatter, "budget admission refusal: {refusal}"),
         }
     }
 }
@@ -364,6 +1011,119 @@ impl Executor {
         Self::new(ResourceBudget::declared(), FeeSchedule::declared())
     }
 
+    /// Admits one activity declaration before program lookup or guest execution.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed structural or payer-coverage refusal without creating a meter.
+    pub(crate) fn admit_activity_budget(
+        &self,
+        declared: DeclaredBudget,
+        coverage: PayerCoverage,
+    ) -> Result<AdmittedBudget, BudgetAdmissionRefusal> {
+        let resources = declared.resource_budget();
+        validate_bounds(resources, self.effective_activity_maximum())?;
+        let maximum_fee_units = maximum_fee_units(resources, self.prices)?;
+        let (payer, activity_binding, available_fee_units) = coverage.into_parts();
+        if available_fee_units < maximum_fee_units {
+            return Err(BudgetAdmissionRefusal::InsufficientCoverage {
+                required: maximum_fee_units,
+                available: available_fee_units,
+            });
+        }
+        Ok(AdmittedBudget::new(
+            resources,
+            payer,
+            activity_binding,
+            maximum_fee_units,
+            self.prices,
+            self.effective_activity_maximum(),
+        ))
+    }
+
+    /// Qualification-only admission seam used until the protocol call activity
+    /// constructs authenticated coverage in task 28.7.
+    ///
+    /// This does not read or reserve a balance. Production transition code must
+    /// call the crate-internal authenticated coverage path.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same typed admission refusal as the protocol transition path.
+    pub fn admit_activity_budget_for_qualification(
+        &self,
+        declared: DeclaredBudget,
+        payer: PrincipalId,
+        activity_binding: ActivityBudgetBinding,
+        available_fee_units: u128,
+    ) -> Result<AdmittedBudget, BudgetAdmissionRefusal> {
+        self.admit_activity_budget(
+            declared,
+            PayerCoverage::new(payer, activity_binding, available_fee_units),
+        )
+    }
+
+    const fn effective_activity_maximum(&self) -> ResourceBudget {
+        let protocol = ResourceBudget::declared();
+        ResourceBudget::new_complete(
+            if self.budget.cpu_fuel() < protocol.cpu_fuel() {
+                self.budget.cpu_fuel()
+            } else {
+                protocol.cpu_fuel()
+            },
+            if self.budget.memory_bytes() < protocol.memory_bytes() {
+                self.budget.memory_bytes()
+            } else {
+                protocol.memory_bytes()
+            },
+            if self.budget.storage_read_bytes() < protocol.storage_read_bytes() {
+                self.budget.storage_read_bytes()
+            } else {
+                protocol.storage_read_bytes()
+            },
+            if self.budget.storage_write_bytes() < protocol.storage_write_bytes() {
+                self.budget.storage_write_bytes()
+            } else {
+                protocol.storage_write_bytes()
+            },
+            if self.budget.output_values() < protocol.output_values() {
+                self.budget.output_values()
+            } else {
+                protocol.output_values()
+            },
+            if self.budget.output_bytes() < protocol.output_bytes() {
+                self.budget.output_bytes()
+            } else {
+                protocol.output_bytes()
+            },
+            if self.budget.table_elements() < protocol.table_elements() {
+                self.budget.table_elements()
+            } else {
+                protocol.table_elements()
+            },
+        )
+    }
+
+    fn validate_budget_token(
+        &self,
+        admitted: &AdmittedBudget,
+        payer: PrincipalId,
+        activity_binding: ActivityBudgetBinding,
+    ) -> Result<(), ExecutionError> {
+        let refusal = if admitted.payer() != payer {
+            Some(BudgetAdmissionRefusal::PayerMismatch)
+        } else if admitted.activity_binding() != activity_binding {
+            Some(BudgetAdmissionRefusal::ActivityBindingMismatch)
+        } else if admitted.schedule() != self.prices {
+            Some(BudgetAdmissionRefusal::ScheduleMismatch)
+        } else if admitted.maximum_policy() != self.effective_activity_maximum() {
+            Some(BudgetAdmissionRefusal::MaximumPolicyMismatch)
+        } else {
+            None
+        };
+        refusal.map_or(Ok(()), |refusal| Err(ExecutionError::Budget(refusal)))
+    }
+
     /// Executes a validated module under a fresh store and exact resource budget.
     ///
     /// A failed call returns no instance, output or guest mutation, providing the
@@ -378,6 +1138,9 @@ impl Executor {
         export: &str,
         args: &[WasmValue],
     ) -> Result<ExecutionRecord, ExecutionError> {
+        if module.abi_revision() != AbiRevision::V1 {
+            return Err(ExecutionError::Abi(AbiError::WrongVersion));
+        }
         let meter = Meter::new(self.budget, self.prices);
         let mut instance = module
             .instantiate_metered(meter)
@@ -413,6 +1176,10 @@ impl Executor {
         storage: &mut Storage,
         request: AuthorizedExecutionRequest<'_>,
     ) -> Result<AuthorizedExecutionRecord, ExecutionError> {
+        if request.module.abi_revision() != AbiRevision::V1 {
+            return Err(ExecutionError::Abi(AbiError::WrongVersion));
+        }
+        entrypoint::preflight(request.calldata).map_err(ExecutionError::Entrypoint)?;
         let meter = Meter::new(self.budget, self.prices);
         let principal = request.authorization.principal();
         let abi = Abi::new(
@@ -426,19 +1193,28 @@ impl Executor {
         let composition = Composition::new(
             request.composition.resolver(),
             CallGraph::root(request.composition.rules(), request.program, principal),
+            AbiRevision::V1,
         );
         let mut instance = request
             .module
             .instantiate_composed(meter, abi, composition)
             .map_err(|(fault, exhausted)| self.classify_fault(fault, exhausted))?;
-        let outputs = match instance.call(request.export, request.args) {
-            Ok(outputs) => outputs,
-            Err(fault) => {
+        let code = match entrypoint::invoke(&mut instance, request.entrypoint, request.calldata) {
+            Ok(code) => code,
+            Err(EntrypointRefusal::Fault(fault)) => {
                 if let Some(refusal) = instance.state().refusal() {
                     return Err(ExecutionError::Composition(refusal.clone()));
                 }
                 return Err(self.classify_fault(fault, instance.meter().exhaustion()));
             }
+            Err(EntrypointRefusal::Resource(MeterRefusal::BudgetExceeded {
+                resource: ResourceKind::Cpu,
+                ..
+            })) => return Err(self.classify_fault(ExecutionFault::OutOfFuel, None)),
+            Err(EntrypointRefusal::Resource(refusal)) => {
+                return Err(ExecutionError::Resource(refusal));
+            }
+            Err(refusal) => return Err(ExecutionError::Entrypoint(refusal)),
         };
         let usage = instance
             .meter()
@@ -458,10 +1234,708 @@ impl Executor {
             execution: ExecutionRecord {
                 runtime_version: self.runtime_version,
                 abi_version: self.abi_version,
-                outputs,
+                outputs: vec![WasmValue::I32(code)],
                 usage,
             },
             effects: committed.effects,
+            call_graph,
+        })
+    }
+
+    /// Qualification-only execution of recorded ABI-v1 code under one consumed token.
+    ///
+    /// Frozen unbudgeted v1 execution and evidence are not changed by this additive
+    /// receipt-ready bridge.
+    ///
+    /// # Errors
+    ///
+    /// Returns structural admission, ABI, entrypoint, or composition errors that
+    /// occur before a receipt-ready terminal guest outcome exists.
+    #[allow(clippy::too_many_lines)]
+    pub fn execute_authorized_budgeted_for_qualification(
+        &self,
+        storage: &mut Storage,
+        budgeted: BudgetedAuthorizedExecutionRequest<'_>,
+    ) -> Result<BudgetedV1ActivityOutcome, ExecutionError> {
+        self.execute_authorized_budgeted(storage, budgeted)
+    }
+
+    #[allow(clippy::too_many_lines)]
+    pub(crate) fn execute_authorized_budgeted(
+        &self,
+        storage: &mut Storage,
+        budgeted: BudgetedAuthorizedExecutionRequest<'_>,
+    ) -> Result<BudgetedV1ActivityOutcome, ExecutionError> {
+        let BudgetedAuthorizedExecutionRequest {
+            request,
+            admitted_budget,
+            payer,
+            activity_binding,
+        } = budgeted;
+        self.validate_budget_token(&admitted_budget, payer, activity_binding)?;
+        if request.module.abi_revision() != AbiRevision::V1 {
+            return Err(ExecutionError::Abi(AbiError::WrongVersion));
+        }
+        entrypoint::preflight(request.calldata).map_err(ExecutionError::Entrypoint)?;
+        request
+            .module
+            .preflight_entrypoint(request.entrypoint, request.calldata.is_empty())
+            .map_err(ExecutionError::Entrypoint)?;
+        let principal = request.authorization.principal();
+        let abi = Abi::new(
+            self.abi_version,
+            request.program,
+            request.authorization,
+            storage.clone(),
+            request.receipts,
+        )
+        .map_err(ExecutionError::Abi)?;
+        let meter = Meter::new_activity(admitted_budget.resource_budget(), self.prices);
+        let composition = Composition::new(
+            request.composition.resolver(),
+            CallGraph::root(request.composition.rules(), request.program, principal),
+            AbiRevision::V1,
+        );
+        let mut instance =
+            match request
+                .module
+                .instantiate_composed_retained(meter, abi, composition)
+            {
+                Ok(instance) => instance,
+                Err(error) => {
+                    let (fault, state) = *error;
+                    if let Some(refusal) = state.meter().budget_exhaustion() {
+                        return Self::budgeted_v1_resource(request.program, refusal, state);
+                    }
+                    if let Some(refusal) = state.refusal().cloned() {
+                        if let Some(resource) = composition_meter_refusal(&refusal)
+                            .and_then(|resource| BudgetMeterRefusal::try_from(resource).ok())
+                        {
+                            return Self::budgeted_v1_resource(request.program, resource, state);
+                        }
+                        return Self::budgeted_v1_composition_failure(
+                            request.program,
+                            refusal,
+                            state,
+                        );
+                    }
+                    if is_candidate_runtime_fault(&fault) {
+                        return Self::budgeted_v1_program_failure(
+                            request.program,
+                            request.program,
+                            RefusalClass::RuntimeFault,
+                            state,
+                        );
+                    }
+                    return Err(Self::classify_fault_with_budget(
+                        fault,
+                        state.meter().exhaustion(),
+                        admitted_budget.resource_budget(),
+                    ));
+                }
+            };
+        let code = match entrypoint::invoke(&mut instance, request.entrypoint, request.calldata) {
+            Ok(code) => code,
+            Err(refusal) => {
+                let exhaustion = instance.meter().budget_exhaustion();
+                let carried = instance.state().refusal().cloned();
+                let carried_resource = carried
+                    .as_ref()
+                    .and_then(composition_meter_refusal)
+                    .and_then(|refusal| BudgetMeterRefusal::try_from(refusal).ok());
+                let state = instance.into_state();
+                if let Some(resource) = exhaustion.or(carried_resource) {
+                    return Self::budgeted_v1_resource(request.program, resource, state);
+                }
+                if let Some(carried) = carried {
+                    return Self::budgeted_v1_composition_failure(request.program, carried, state);
+                }
+                match refusal {
+                    EntrypointRefusal::GuestRefused { .. } => {
+                        return Self::budgeted_v1_program_failure(
+                            request.program,
+                            request.program,
+                            RefusalClass::Legacy,
+                            state,
+                        );
+                    }
+                    EntrypointRefusal::Fault(fault) if is_candidate_runtime_fault(&fault) => {
+                        return Self::budgeted_v1_program_failure(
+                            request.program,
+                            request.program,
+                            RefusalClass::RuntimeFault,
+                            state,
+                        );
+                    }
+                    EntrypointRefusal::Fault(fault) => {
+                        return Err(Self::classify_fault_with_budget(
+                            fault,
+                            state.meter().exhaustion(),
+                            admitted_budget.resource_budget(),
+                        ));
+                    }
+                    EntrypointRefusal::Resource(resource) => {
+                        let resource = BudgetMeterRefusal::try_from(resource)
+                            .map_err(ExecutionError::Resource)?;
+                        return Self::budgeted_v1_resource(request.program, resource, state);
+                    }
+                    other => {
+                        return Self::budgeted_v1_failure(
+                            request.program,
+                            BudgetedV1FailureCause::Entrypoint(other),
+                            state,
+                        );
+                    }
+                }
+            }
+        };
+        if let Some(resource) = instance.meter().budget_exhaustion() {
+            return Self::budgeted_v1_resource(request.program, resource, instance.into_state());
+        }
+        if let Some(refusal) = instance.state().refusal().cloned() {
+            let state = instance.into_state();
+            if let Some(resource) = composition_meter_refusal(&refusal)
+                .and_then(|resource| BudgetMeterRefusal::try_from(resource).ok())
+            {
+                return Self::budgeted_v1_resource(request.program, resource, state);
+            }
+            return Self::budgeted_v1_composition_failure(request.program, refusal, state);
+        }
+        let usage = match instance.meter().finish() {
+            Ok(usage) => usage,
+            Err(resource) => return Err(ExecutionError::Resource(resource)),
+        };
+        let (_, abi, composition) = instance.into_state().into_parts();
+        let abi = abi.ok_or(ExecutionError::Abi(AbiError::CapabilityDenied))?;
+        let composition = composition.ok_or(ExecutionError::Composition(
+            CompositionRefusal::NotComposable,
+        ))?;
+        let committed = abi.commit();
+        let call_graph = composition.into_graph();
+        *storage = committed.storage;
+        Ok(BudgetedV1ActivityOutcome::Success(
+            AuthorizedExecutionRecord {
+                execution: ExecutionRecord {
+                    runtime_version: self.runtime_version,
+                    abi_version: self.abi_version,
+                    outputs: vec![WasmValue::I32(code)],
+                    usage,
+                },
+                effects: committed.effects,
+                call_graph,
+            },
+        ))
+    }
+
+    /// Executes an authorized activity through the explicitly selected candidate ABI.
+    ///
+    /// # Errors
+    ///
+    /// Returns typed validation, execution, composition, response, or resource refusals.
+    #[allow(clippy::too_many_lines)]
+    pub fn execute_authorized_candidate(
+        &self,
+        storage: &mut Storage,
+        request: AuthorizedExecutionRequest<'_>,
+    ) -> Result<CandidateAuthorizedExecutionRecord, ExecutionError> {
+        self.execute_authorized_candidate_with_budget(storage, request, self.budget, false)
+    }
+
+    /// Qualification-only candidate execution under one consumed admitted budget.
+    ///
+    /// Production transition code uses the crate-internal authenticated route;
+    /// this public seam mutates only the caller-owned storage supplied here.
+    ///
+    /// # Errors
+    ///
+    /// Returns a pre-execution budget refusal when the token does not match the
+    /// independently carried payer, activity binding, schedule, or maximum policy.
+    pub fn execute_authorized_candidate_budgeted_for_qualification(
+        &self,
+        storage: &mut Storage,
+        budgeted: BudgetedAuthorizedExecutionRequest<'_>,
+    ) -> Result<CandidateAuthorizedExecutionRecord, ExecutionError> {
+        self.execute_authorized_candidate_budgeted(storage, budgeted)
+    }
+
+    pub(crate) fn execute_authorized_candidate_budgeted(
+        &self,
+        storage: &mut Storage,
+        budgeted: BudgetedAuthorizedExecutionRequest<'_>,
+    ) -> Result<CandidateAuthorizedExecutionRecord, ExecutionError> {
+        let BudgetedAuthorizedExecutionRequest {
+            request,
+            admitted_budget,
+            payer,
+            activity_binding,
+        } = budgeted;
+        self.validate_budget_token(&admitted_budget, payer, activity_binding)?;
+        self.execute_authorized_candidate_with_budget(
+            storage,
+            request,
+            admitted_budget.resource_budget(),
+            true,
+        )
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn execute_authorized_candidate_with_budget(
+        &self,
+        storage: &mut Storage,
+        request: AuthorizedExecutionRequest<'_>,
+        active_budget: ResourceBudget,
+        budgeted: bool,
+    ) -> Result<CandidateAuthorizedExecutionRecord, ExecutionError> {
+        if request.module.abi_revision() != AbiRevision::CandidateV2 {
+            return Err(ExecutionError::Abi(AbiError::WrongVersion));
+        }
+        if request.response_capacity > crate::abi::response::MAX_CALL_RESPONSE_BYTES {
+            return Err(ExecutionError::Response(ResponseRefusal::TooLarge {
+                bytes: request.response_capacity,
+                limit: crate::abi::response::MAX_CALL_RESPONSE_BYTES,
+            }));
+        }
+        entrypoint::preflight(request.calldata).map_err(ExecutionError::Entrypoint)?;
+        if budgeted {
+            request
+                .module
+                .preflight_entrypoint(request.entrypoint, request.calldata.is_empty())
+                .map_err(ExecutionError::Entrypoint)?;
+        }
+        let meter = if budgeted {
+            Meter::new_activity(active_budget, self.prices)
+        } else {
+            Meter::new(active_budget, self.prices)
+        };
+        let principal = request.authorization.principal();
+        let abi = Abi::new(
+            self.abi_version,
+            request.program,
+            request.authorization,
+            storage.clone(),
+            request.receipts,
+        )
+        .map_err(ExecutionError::Abi)?;
+        let composition = Composition::new(
+            request.composition.resolver(),
+            CallGraph::root(request.composition.rules(), request.program, principal),
+            AbiRevision::CandidateV2,
+        );
+        let retained = request
+            .module
+            .instantiate_composed_response_retained(
+                meter,
+                abi,
+                composition,
+                request.response_capacity,
+            )
+            .map_err(ExecutionError::Response)?;
+        let mut instance = match retained {
+            Ok(instance) => instance,
+            Err(error) => {
+                let (fault, state) = *error;
+                return self.finish_candidate_start(
+                    request.program,
+                    fault,
+                    state,
+                    active_budget,
+                    budgeted,
+                );
+            }
+        };
+        let invocation = entrypoint::invoke(&mut instance, request.entrypoint, request.calldata);
+        if budgeted {
+            if let Some(resource) = instance
+                .meter()
+                .budget_exhaustion()
+                .or_else(|| candidate_composition_budget_refusal(instance.state()))
+            {
+                return self.candidate_resource_from_state(
+                    request.program,
+                    resource,
+                    instance.into_state(),
+                );
+            }
+        }
+        let (code, failure) = match invocation {
+            Ok(code) => {
+                if let Some(refusal) = instance.state().refusal() {
+                    return Err(ExecutionError::Composition(refusal.clone()));
+                }
+                if instance.state().failure().is_some() {
+                    return Err(ExecutionError::Response(ResponseRefusal::CodeMismatch {
+                        published: CANDIDATE_REFUSAL_SENTINEL,
+                        returned: code,
+                    }));
+                }
+                (code, None)
+            }
+            Err(EntrypointRefusal::GuestRefused { code }) => {
+                if let Some(refusal) = instance.state().refusal() {
+                    return Err(ExecutionError::Composition(refusal.clone()));
+                }
+                let failure = match instance.state().failure().cloned() {
+                    Some(failure) if code == CANDIDATE_REFUSAL_SENTINEL => failure,
+                    Some(_) => {
+                        return Err(ExecutionError::Response(ResponseRefusal::CodeMismatch {
+                            published: CANDIDATE_REFUSAL_SENTINEL,
+                            returned: code,
+                        }));
+                    }
+                    None if code == CANDIDATE_REFUSAL_SENTINEL => {
+                        return Err(ExecutionError::Response(
+                            ResponseRefusal::InvalidPublication,
+                        ));
+                    }
+                    None => ProgramFailure::authenticated(
+                        request.program,
+                        RefusalClass::Legacy,
+                        RefusalReason::empty(),
+                    ),
+                };
+                (code, Some(failure))
+            }
+            Err(EntrypointRefusal::Fault(fault)) => {
+                if let Some(refusal) = instance.state().refusal() {
+                    if let CompositionRefusal::Program(failure) = refusal {
+                        (
+                            crate::fault::CANDIDATE_REFUSAL_SENTINEL,
+                            Some(failure.clone()),
+                        )
+                    } else {
+                        return Err(ExecutionError::Composition(refusal.clone()));
+                    }
+                } else if let Some(failure) = instance.state().failure().cloned() {
+                    (crate::fault::CANDIDATE_REFUSAL_SENTINEL, Some(failure))
+                } else if is_candidate_runtime_fault(&fault) {
+                    (
+                        crate::fault::CANDIDATE_REFUSAL_SENTINEL,
+                        Some(ProgramFailure::authenticated(
+                            request.program,
+                            crate::fault::RefusalClass::RuntimeFault,
+                            crate::fault::RefusalReason::empty(),
+                        )),
+                    )
+                } else {
+                    return Err(Self::classify_fault_with_budget(
+                        fault,
+                        instance.meter().exhaustion(),
+                        active_budget,
+                    ));
+                }
+            }
+            Err(EntrypointRefusal::Resource(refusal)) => {
+                if budgeted {
+                    let refusal = instance
+                        .meter()
+                        .budget_exhaustion()
+                        .or_else(|| BudgetMeterRefusal::try_from(refusal).ok())
+                        .ok_or(ExecutionError::Resource(refusal))?;
+                    return self.candidate_resource_from_state(
+                        request.program,
+                        refusal,
+                        instance.into_state(),
+                    );
+                }
+                if let Some(CompositionRefusal::Program(failure)) = instance.state().refusal() {
+                    (CANDIDATE_REFUSAL_SENTINEL, Some(failure.clone()))
+                } else if let Some(failure) = instance.state().failure().cloned() {
+                    (CANDIDATE_REFUSAL_SENTINEL, Some(failure))
+                } else {
+                    return Err(ExecutionError::Resource(refusal));
+                }
+            }
+            Err(EntrypointRefusal::AllocationRefused { .. }) if budgeted => (
+                CANDIDATE_REFUSAL_SENTINEL,
+                Some(ProgramFailure::authenticated(
+                    request.program,
+                    RefusalClass::Legacy,
+                    RefusalReason::empty(),
+                )),
+            ),
+            Err(refusal) => return Err(ExecutionError::Entrypoint(refusal)),
+        };
+        if let Some(failure) = failure {
+            let usage = instance
+                .meter()
+                .finish_published_failure()
+                .map_err(ExecutionError::Resource)?;
+            let mut state = instance.into_state();
+            let failure_graph = state.take_failure_graph();
+            let (_, _, composition) = state.into_parts();
+            let call_graph = failure_graph
+                .or_else(|| composition.map(Composition::into_graph))
+                .ok_or(ExecutionError::Composition(
+                    CompositionRefusal::NotComposable,
+                ))?;
+            return Ok(CandidateAuthorizedExecutionRecord {
+                root_program: request.program,
+                abi_revision: AbiRevision::CandidateV2,
+                execution: CandidateExecutionRecord {
+                    runtime_version: self.runtime_version,
+                    outputs: vec![WasmValue::I32(code)],
+                    usage,
+                },
+                outcome: CandidateActivityOutcome::Failure(failure),
+                call_graph,
+            });
+        }
+        let response = match instance.state().finalize_response(code) {
+            Ok(response) => response,
+            Err(ResponseRefusal::Meter(refusal)) if budgeted => {
+                let refusal = instance
+                    .meter()
+                    .budget_exhaustion()
+                    .or_else(|| BudgetMeterRefusal::try_from(refusal).ok())
+                    .ok_or(ExecutionError::Resource(refusal))?;
+                return self.candidate_resource_from_state(
+                    request.program,
+                    refusal,
+                    instance.into_state(),
+                );
+            }
+            Err(ResponseRefusal::Meter(refusal)) => return Err(ExecutionError::Resource(refusal)),
+            Err(refusal) => return Err(ExecutionError::Response(refusal)),
+        };
+        let usage = instance
+            .meter()
+            .finish()
+            .map_err(ExecutionError::Resource)?;
+        let (_, abi, composition) = instance.into_state().into_parts();
+        let committed = abi
+            .ok_or(ExecutionError::Abi(AbiError::CapabilityDenied))?
+            .commit();
+        let call_graph = composition
+            .ok_or(ExecutionError::Composition(
+                CompositionRefusal::NotComposable,
+            ))?
+            .into_graph();
+        *storage = committed.storage;
+        Ok(CandidateAuthorizedExecutionRecord {
+            root_program: request.program,
+            abi_revision: AbiRevision::CandidateV2,
+            execution: CandidateExecutionRecord {
+                runtime_version: self.runtime_version,
+                outputs: vec![WasmValue::I32(code)],
+                usage,
+            },
+            outcome: CandidateActivityOutcome::Success {
+                response,
+                effects: committed.effects,
+            },
+            call_graph,
+        })
+    }
+
+    fn finish_candidate_start(
+        &self,
+        program: ProgramId,
+        fault: ExecutionFault,
+        state: RuntimeState,
+        active_budget: ResourceBudget,
+        budgeted: bool,
+    ) -> Result<CandidateAuthorizedExecutionRecord, ExecutionError> {
+        if budgeted {
+            if let Some(resource) = state
+                .meter()
+                .budget_exhaustion()
+                .or_else(|| candidate_composition_budget_refusal(&state))
+            {
+                return self.candidate_resource_from_state(program, resource, state);
+            }
+        }
+        if let Some(refusal) = state.refusal() {
+            if let CompositionRefusal::Program(failure) = refusal {
+                return self.candidate_failure_from_state(program, failure.clone(), state);
+            }
+            return Err(ExecutionError::Composition(refusal.clone()));
+        }
+        let failure = state.failure().cloned().unwrap_or_else(|| {
+            ProgramFailure::authenticated(
+                program,
+                RefusalClass::RuntimeFault,
+                RefusalReason::empty(),
+            )
+        });
+        if !is_candidate_runtime_fault(&fault) && state.failure().is_none() {
+            return Err(Self::classify_fault_with_budget(
+                fault,
+                state.meter().exhaustion(),
+                active_budget,
+            ));
+        }
+        self.candidate_failure_from_state(program, failure, state)
+    }
+
+    fn candidate_failure_from_state(
+        &self,
+        program: ProgramId,
+        failure: ProgramFailure,
+        mut state: RuntimeState,
+    ) -> Result<CandidateAuthorizedExecutionRecord, ExecutionError> {
+        let usage = state
+            .meter()
+            .finish_published_failure()
+            .map_err(ExecutionError::Resource)?;
+        let failure_graph = state.take_failure_graph();
+        let (_, _, composition) = state.into_parts();
+        let call_graph = failure_graph
+            .or_else(|| composition.map(Composition::into_graph))
+            .ok_or(ExecutionError::Composition(
+                CompositionRefusal::NotComposable,
+            ))?;
+        Ok(CandidateAuthorizedExecutionRecord {
+            root_program: program,
+            abi_revision: AbiRevision::CandidateV2,
+            execution: CandidateExecutionRecord {
+                runtime_version: self.runtime_version,
+                outputs: vec![WasmValue::I32(CANDIDATE_REFUSAL_SENTINEL)],
+                usage,
+            },
+            outcome: CandidateActivityOutcome::Failure(failure),
+            call_graph,
+        })
+    }
+
+    fn candidate_resource_from_state(
+        &self,
+        program: ProgramId,
+        refusal: BudgetMeterRefusal,
+        mut state: RuntimeState,
+    ) -> Result<CandidateAuthorizedExecutionRecord, ExecutionError> {
+        let usage = state
+            .meter()
+            .finish_resource_failure()
+            .map_err(ExecutionError::Resource)?;
+        let failure_graph = state.take_failure_graph();
+        let (_, _, composition) = state.into_parts();
+        let call_graph = failure_graph
+            .or_else(|| composition.map(Composition::into_graph))
+            .ok_or(ExecutionError::Composition(
+                CompositionRefusal::NotComposable,
+            ))?;
+        Ok(CandidateAuthorizedExecutionRecord {
+            root_program: program,
+            abi_revision: AbiRevision::CandidateV2,
+            execution: CandidateExecutionRecord {
+                runtime_version: self.runtime_version,
+                outputs: Vec::new(),
+                usage,
+            },
+            outcome: CandidateActivityOutcome::Resource(refusal),
+            call_graph,
+        })
+    }
+
+    fn budgeted_v1_resource(
+        root_program: ProgramId,
+        refusal: BudgetMeterRefusal,
+        mut state: RuntimeState,
+    ) -> Result<BudgetedV1ActivityOutcome, ExecutionError> {
+        let usage = state
+            .meter()
+            .finish_resource_failure()
+            .map_err(ExecutionError::Resource)?;
+        let failure_graph = state.take_failure_graph();
+        let (_, _, composition) = state.into_parts();
+        let call_graph = failure_graph
+            .or_else(|| composition.map(Composition::into_graph))
+            .ok_or(ExecutionError::Composition(
+                CompositionRefusal::NotComposable,
+            ))?;
+        Ok(BudgetedV1ActivityOutcome::Resource(
+            BudgetedResourceFailureRecord {
+                root_program,
+                refusal,
+                usage,
+                call_graph,
+            },
+        ))
+    }
+
+    fn budgeted_v1_program_failure(
+        root_program: ProgramId,
+        refusing_program: ProgramId,
+        class: RefusalClass,
+        state: RuntimeState,
+    ) -> Result<BudgetedV1ActivityOutcome, ExecutionError> {
+        Self::budgeted_v1_failure(
+            root_program,
+            BudgetedV1FailureCause::Program(ProgramFailure::authenticated(
+                refusing_program,
+                class,
+                RefusalReason::empty(),
+            )),
+            state,
+        )
+    }
+
+    fn budgeted_v1_composition_failure(
+        root_program: ProgramId,
+        refusal: CompositionRefusal,
+        state: RuntimeState,
+    ) -> Result<BudgetedV1ActivityOutcome, ExecutionError> {
+        let cause = match refusal {
+            CompositionRefusal::NotComposable => {
+                return Err(ExecutionError::Composition(
+                    CompositionRefusal::NotComposable,
+                ));
+            }
+            CompositionRefusal::GuestRefused { program, .. } => {
+                BudgetedV1FailureCause::Program(ProgramFailure::authenticated(
+                    program,
+                    RefusalClass::Legacy,
+                    RefusalReason::empty(),
+                ))
+            }
+            CompositionRefusal::Program(failure) => BudgetedV1FailureCause::Program(failure),
+            CompositionRefusal::Fault(fault) if is_candidate_runtime_fault(&fault) => {
+                BudgetedV1FailureCause::Program(ProgramFailure::authenticated(
+                    failed_program(&state, root_program),
+                    RefusalClass::RuntimeFault,
+                    RefusalReason::empty(),
+                ))
+            }
+            CompositionRefusal::Fault(fault) => return Err(ExecutionError::Fault(fault)),
+            other => BudgetedV1FailureCause::Composition(other),
+        };
+        Self::budgeted_v1_failure(root_program, cause, state)
+    }
+
+    fn budgeted_v1_failure(
+        root_program: ProgramId,
+        cause: BudgetedV1FailureCause,
+        mut state: RuntimeState,
+    ) -> Result<BudgetedV1ActivityOutcome, ExecutionError> {
+        let usage = match state.meter().finish() {
+            Ok(usage) => usage,
+            Err(resource) => return Err(ExecutionError::Resource(resource)),
+        };
+        let failure_graph = state.take_failure_graph();
+        let (_, _, composition) = state.into_parts();
+        let call_graph = failure_graph
+            .or_else(|| composition.map(Composition::into_graph))
+            .ok_or(ExecutionError::Composition(
+                CompositionRefusal::NotComposable,
+            ))?;
+        Ok(Self::budgeted_v1_failure_with_usage(
+            root_program,
+            cause,
+            usage,
+            call_graph,
+        ))
+    }
+
+    fn budgeted_v1_failure_with_usage(
+        root_program: ProgramId,
+        cause: BudgetedV1FailureCause,
+        usage: MeteredUsage,
+        call_graph: CallGraph,
+    ) -> BudgetedV1ActivityOutcome {
+        BudgetedV1ActivityOutcome::Failure(BudgetedV1FailureRecord {
+            root_program,
+            cause,
+            usage,
             call_graph,
         })
     }
@@ -471,6 +1945,14 @@ impl Executor {
         fault: ExecutionFault,
         exhausted: Option<MeterRefusal>,
     ) -> ExecutionError {
+        Self::classify_fault_with_budget(fault, exhausted, self.budget)
+    }
+
+    fn classify_fault_with_budget(
+        fault: ExecutionFault,
+        exhausted: Option<MeterRefusal>,
+        active_budget: ResourceBudget,
+    ) -> ExecutionError {
         if let Some(refusal) = exhausted {
             return ExecutionError::Resource(refusal);
         }
@@ -478,14 +1960,14 @@ impl Executor {
             ExecutionFault::Resource { refusal } => ExecutionError::Resource(refusal),
             ExecutionFault::OutOfFuel => ExecutionError::Resource(MeterRefusal::BudgetExceeded {
                 resource: ResourceKind::Cpu,
-                limit: self.budget.cpu_fuel(),
-                attempted: self.budget.cpu_fuel().saturating_add(1),
+                limit: active_budget.cpu_fuel(),
+                attempted: active_budget.cpu_fuel().saturating_add(1),
             }),
             ExecutionFault::GrowthLimited => {
                 ExecutionError::Resource(MeterRefusal::BudgetExceeded {
                     resource: ResourceKind::Memory,
-                    limit: self.budget.memory_bytes(),
-                    attempted: self.budget.memory_bytes().saturating_add(1),
+                    limit: active_budget.memory_bytes(),
+                    attempted: active_budget.memory_bytes().saturating_add(1),
                 })
             }
             other => ExecutionError::Fault(other),
@@ -493,8 +1975,90 @@ impl Executor {
     }
 }
 
+fn is_candidate_runtime_fault(fault: &ExecutionFault) -> bool {
+    !matches!(
+        fault,
+        ExecutionFault::EngineFault { .. }
+            | ExecutionFault::UnknownExport { .. }
+            | ExecutionFault::NotAFunction { .. }
+            | ExecutionFault::OutOfFuel
+            | ExecutionFault::GrowthLimited
+            | ExecutionFault::Resource { .. }
+    )
+}
+
+fn failed_program(state: &RuntimeState, root: ProgramId) -> ProgramId {
+    state
+        .failure_graph()
+        .and_then(CallGraph::current)
+        .or_else(|| {
+            state
+                .composition()
+                .and_then(|composition| composition.graph().current())
+        })
+        .map_or(root, |frame| frame.program())
+}
+
+const fn composition_meter_refusal(refusal: &CompositionRefusal) -> Option<MeterRefusal> {
+    match refusal {
+        CompositionRefusal::Resource(refusal)
+        | CompositionRefusal::Authority(AbiError::Meter(refusal))
+        | CompositionRefusal::Response(ResponseRefusal::Meter(refusal)) => Some(*refusal),
+        _ => None,
+    }
+}
+
+fn candidate_composition_budget_refusal(state: &RuntimeState) -> Option<BudgetMeterRefusal> {
+    state
+        .refusal()
+        .and_then(composition_meter_refusal)
+        .and_then(|refusal| BudgetMeterRefusal::try_from(refusal).ok())
+}
+
 impl Default for Executor {
     fn default() -> Self {
         Self::declared()
+    }
+}
+
+#[cfg(test)]
+mod budgeted_v1_invariant_tests {
+    use super::*;
+
+    fn isolated_activity_state() -> RuntimeState {
+        RuntimeState::isolated(Meter::new_activity(
+            ResourceBudget::declared(),
+            FeeSchedule::declared(),
+        ))
+    }
+
+    #[test]
+    fn missing_composition_is_fatal_for_budgeted_v1_terminal_records() {
+        let program =
+            ProgramId::new([0xa5; 32]).unwrap_or_else(|error| panic!("program identity: {error}"));
+        assert_eq!(
+            Executor::budgeted_v1_resource(
+                program,
+                BudgetMeterRefusal::BudgetExceeded {
+                    resource: BudgetResourceKind::Cpu,
+                    limit: 3,
+                    attempted: 4,
+                },
+                isolated_activity_state(),
+            ),
+            Err(ExecutionError::Composition(
+                CompositionRefusal::NotComposable
+            ))
+        );
+        assert_eq!(
+            Executor::budgeted_v1_failure(
+                program,
+                BudgetedV1FailureCause::Abi(AbiError::CapabilityDenied),
+                isolated_activity_state(),
+            ),
+            Err(ExecutionError::Composition(
+                CompositionRefusal::NotComposable
+            ))
+        );
     }
 }

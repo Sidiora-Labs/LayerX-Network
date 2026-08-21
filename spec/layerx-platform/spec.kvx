@@ -1526,7 +1526,7 @@ reqs = ["20.1","20.2","20.6","17.3"]
 
 [task.11.5]
 title = "Build the performance machinery"
-status = "in_progress"
+status = "pending"
 wave = 6
 requires = ["11.1"]
 do_1 = "Code-split by route with declared per-route script budgets enforced in CI."
@@ -2160,7 +2160,7 @@ reqs = ["28.2","28.7"]
 
 [task.19.2]
 title = "Implement deterministic execution and metering"
-status = "pending"
+status = "done"
 wave = 10
 requires = ["19.1"]
 do_1 = "Implement instruction-level CPU metering, memory accounting and storage accounting, charged through the existing fee mechanism."
@@ -2175,7 +2175,7 @@ reqs = ["28.3","28.4","28.2"]
 
 [task.19.3]
 title = "Implement the capability ABI and namespaced storage"
-status = "pending"
+status = "done"
 wave = 10
 requires = ["19.2"]
 do_1 = "Define the versioned program ABI: capability-based host functions for storage, events, program calls, 402LXP transfer requests and receipt-verified reads, with no ambient authority."
@@ -2679,7 +2679,7 @@ note = "Parallel lanes: 28.1 lands first and alone because it reshapes the ABI a
 
 [task.28.1]
 title = "Modularize the ABI and host surface into per-capability units"
-status = "pending"
+status = "done"
 wave = 14
 requires = ["19.3"]
 do_1 = "Split src/abi.rs into an abi module: mod.rs holding the Abi transaction, effects and commit; capability.rs holding Capability, CapabilitySet and narrowing; storage_ops.rs holding the storage operations; leaving room for context, crypto, response and balance units later waves add without collision."
@@ -2694,7 +2694,7 @@ reqs = ["28.6","30.1"]
 
 [task.28.2]
 title = "Carry calldata into the invoked entry point"
-status = "pending"
+status = "done"
 wave = 14
 requires = ["28.1"]
 do_1 = "Add bounded calldata to AuthorizedExecutionRequest so an activity supplies input bytes rather than only integer arguments, routed through the same reserve-and-write protocol the composition path already uses to enter a callee."
@@ -2709,7 +2709,7 @@ reqs = ["35.2"]
 
 [task.28.3]
 title = "Return response bytes across the call boundary"
-status = "pending"
+status = "done"
 wave = 14
 requires = ["28.1"]
 do_1 = "Add a response region to the call protocol: a callee writes bounded response bytes, the runtime copies them into a caller-declared buffer, and the caller reads them through a response host function rather than through storage."
@@ -2724,7 +2724,7 @@ reqs = ["35.3"]
 
 [task.28.4]
 title = "Carry typed failure payloads and program refusal reasons"
-status = "pending"
+status = "done"
 wave = 14
 requires = ["28.1"]
 do_1 = "Extend the refusal taxonomy so a guest refusal carries the refusing program, the refusal class and bounded program-supplied reason bytes, replacing the bare negative result code as the only failure signal."
@@ -2739,7 +2739,7 @@ reqs = ["35.4","35.6"]
 
 [task.28.5]
 title = "Admit a caller-declared execution budget"
-status = "pending"
+status = "done"
 wave = 14
 requires = ["28.1"]
 do_1 = "Replace the compiled-constant execution budget with a budget declared by the invoking activity, bounded above by the protocol maximum and below by the declared minimum viable execution."
@@ -2754,7 +2754,7 @@ reqs = ["35.5","28.3"]
 
 [task.28.6]
 title = "Ship the isolation and composition adversarial suites"
-status = "pending"
+status = "done"
 wave = 14
 requires = ["28.1"]
 do_1 = "Write the isolation suite the capability ABI claims: guests attempting to reach kernel state, another program's namespace, another principal's cells, the host linker and memory outside their own instance, each defeated by construction."

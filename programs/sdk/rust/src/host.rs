@@ -60,6 +60,24 @@ mod raw {
     }
 }
 
+mod candidate_raw {
+    #[link(wasm_import_module = "layerx_v2_candidate")]
+    unsafe extern "C" {
+        pub(super) fn response_write(code: i32, pointer: i32, length: i32) -> i32;
+        pub(super) fn program_call_response(
+            program_pointer: i32,
+            program_length: i32,
+            input_pointer: i32,
+            input_length: i32,
+            capabilities_pointer: i32,
+            capabilities_length: i32,
+            output_pointer: i32,
+            output_capacity: i32,
+        ) -> i64;
+        pub(super) fn refusal_write(class: i32, reason_pointer: i32, reason_length: i32) -> i32;
+    }
+}
+
 fn pointer(bytes: &[u8]) -> Result<i32, ProgramError> {
     i32::try_from(bytes.as_ptr() as usize)
         .map_err(|_| ProgramError::value(Field::Buffer, Reason::TooLarge))
@@ -132,6 +150,60 @@ pub(crate) fn program_call(
         )
     };
     ProgramError::from_status(status)
+}
+
+pub(crate) fn response_write(code: i32, bytes: &[u8]) -> Result<i32, ProgramError> {
+    let status = unsafe { candidate_raw::response_write(code, pointer(bytes)?, length(bytes)?) };
+    ProgramError::from_status(status)
+}
+
+pub(crate) fn refusal_write(
+    class: crate::RefusalClass,
+    reason: crate::RefusalReason<'_>,
+) -> Result<i32, ProgramError> {
+    let bytes = reason.bytes();
+    let reason_pointer = if bytes.is_empty() { 0 } else { pointer(bytes)? };
+    let status = unsafe {
+        candidate_raw::refusal_write(
+            i32::try_from(class.code())
+                .map_err(|_| ProgramError::value(Field::Buffer, Reason::TooLarge))?,
+            reason_pointer,
+            length(bytes)?,
+        )
+    };
+    ProgramError::from_status(status)
+}
+
+pub(crate) fn program_call_response(
+    program: &[u8],
+    input: &[u8],
+    capabilities: &[u8],
+    output: &mut [u8],
+) -> Result<i64, ProgramError> {
+    let output_pointer = if output.is_empty() {
+        0
+    } else {
+        pointer_mut(output)?
+    };
+    let packed = unsafe {
+        candidate_raw::program_call_response(
+            pointer(program)?,
+            length(program)?,
+            pointer(input)?,
+            length(input)?,
+            pointer(capabilities)?,
+            length(capabilities)?,
+            output_pointer,
+            length(output)?,
+        )
+    };
+    if packed < 0 {
+        let status = i32::try_from(packed).unwrap_or(crate::error::STATUS_INVALID);
+        return Err(ProgramError::Host(crate::error::HostRefusal::from_status(
+            status,
+        )));
+    }
+    Ok(packed)
 }
 
 pub(crate) fn transfer_402(

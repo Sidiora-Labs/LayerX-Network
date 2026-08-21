@@ -1,0 +1,26 @@
+[package]
+name = "layerx-response-fixture"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+layerx-program-sdk = { path = ".." }
+
+[dev-dependencies]
+layerx-programs-runtime = { path = "../../../crates/layerx-programs-runtime" }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[lints.rust]
+unsafe_code = "deny"

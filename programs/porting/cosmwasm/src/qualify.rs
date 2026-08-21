@@ -17,15 +17,17 @@ use layerx_programs_runtime::{
     AuthorizedExecutionRequest, CompositionContext, Deploy, DeploymentReceipt, Executor,
     KernelTransferPrimitive, Lifecycle, PrincipalId, ProgramId, ProgramVersion, ReceiptOracle,
     ReceiptView, Storage, StorageNamespace, TransferCapability, UpgradePolicy, ValidatedModule,
-    VerifiedProgramSettlement, WasmEngine, WasmValue, ABI_VERSION,
+    VerifiedProgramSettlement, WasmEngine, ABI_VERSION, CALL_ENTRY_EXPORT,
 };
 
 use crate::error::PortRefusal;
 use crate::hash::sha256;
+use crate::json::FieldValue;
 use crate::reference::{
-    donation_record, query_capabilities, DonationPort, ARTIFACT_PATH, BUILD_COMMAND,
-    COSMWASM_SOURCE, DEPENDENCY_LOCK, DEPENDENCY_LOCK_PATH, DESCRIPTOR_PATH, DONATE_EXPORT,
-    DONATIONS_EXPORT, REMAINING_EXPORT, SOURCE_PATH, TOOLCHAIN_MANIFEST, TOOLCHAIN_PATH,
+    donate_message, donation_record, donations_message, query_capabilities, remaining_message,
+    DonationPort, ARTIFACT_PATH, BUILD_COMMAND, COSMWASM_SOURCE, DEPENDENCY_LOCK,
+    DEPENDENCY_LOCK_PATH, DESCRIPTOR_PATH, DONATIONS_EXPORT, REMAINING_EXPORT, SOURCE_PATH,
+    TOOLCHAIN_MANIFEST, TOOLCHAIN_PATH,
 };
 use crate::storage::MigrationCell;
 
@@ -77,11 +79,10 @@ impl BuildRunner for PortBuildRunner {
                 path: descriptor_path.clone(),
             }
         })?;
-        let text = core::str::from_utf8(&descriptor.content).map_err(|_| {
-            BuildRefusal::BuilderFailed {
+        let text =
+            core::str::from_utf8(&descriptor.content).map_err(|_| BuildRefusal::BuilderFailed {
                 reason: "port descriptor is not valid text".to_owned(),
-            }
-        })?;
+            })?;
         let provenance =
             attempt
                 .archive
@@ -97,9 +98,10 @@ impl BuildRunner for PortBuildRunner {
         let port = DonationPort::parse(text).map_err(|refusal| BuildRefusal::BuilderFailed {
             reason: refusal.to_string(),
         })?;
-        port.code().map_err(|refusal| BuildRefusal::ArtifactRejected {
-            reason: refusal.to_string(),
-        })
+        port.code()
+            .map_err(|refusal| BuildRefusal::ArtifactRejected {
+                reason: refusal.to_string(),
+            })
     }
 }
 
@@ -200,7 +202,10 @@ pub fn build_plan() -> BuildPlan {
             toolchain_digest,
             dependency_lock_digest: sha256(DEPENDENCY_LOCK.as_bytes()),
             source_date_epoch: SOURCE_EPOCH,
-            command: BUILD_COMMAND.split_whitespace().map(str::to_owned).collect(),
+            command: BUILD_COMMAND
+                .split_whitespace()
+                .map(str::to_owned)
+                .collect(),
         },
         artifact_path: ARTIFACT_PATH.to_owned(),
         toolchain_manifest: TOOLCHAIN_PATH.to_owned(),
@@ -291,7 +296,7 @@ pub fn execute_donate(
     times: u64,
 ) -> Result<AuthorizedExecutionRecord, PortRefusal> {
     let capabilities = port.donate_capabilities(times)?;
-    let recorded = i64::try_from(times).map_err(|_| PortRefusal::OutOfRange)?;
+    let calldata = donate_message()?.data(&[FieldValue::U64(times)])?;
     Ok(Executor::declared().execute_authorized(
         storage,
         AuthorizedExecutionRequest {
@@ -299,9 +304,10 @@ pub fn execute_donate(
             program: invocation.program,
             authorization: AuthorizationContext::new(invocation.principal, capabilities),
             receipts: invocation.receipts,
-            export: DONATE_EXPORT,
-            args: &[WasmValue::I64(recorded)],
+            entrypoint: CALL_ENTRY_EXPORT,
+            calldata: &calldata,
             composition: CompositionContext::isolated(),
+            response_capacity: 0,
         },
     )?)
 }
@@ -360,7 +366,10 @@ pub fn settle(
     effects: &AbiEffects,
     kernel: &mut impl KernelTransferPrimitive,
 ) -> Result<VerifiedProgramSettlement, PortRefusal> {
-    Ok(TransferCapability::new(program, principal, invocation_authority)?.settle(effects, kernel)?)
+    Ok(
+        TransferCapability::new(program, principal, invocation_authority)?
+            .settle(effects, kernel)?,
+    )
 }
 
 /// Imports an exported `CosmWasm` state dump into namespaced storage, writing
@@ -399,6 +408,11 @@ fn query(
     storage: &mut Storage,
     export: &str,
 ) -> Result<AuthorizedExecutionRecord, PortRefusal> {
+    let calldata = match export {
+        DONATIONS_EXPORT => donations_message()?.data(&[])?,
+        REMAINING_EXPORT => remaining_message()?.data(&[])?,
+        _ => return Err(PortRefusal::OutOfRange),
+    };
     Ok(Executor::declared().execute_authorized(
         storage,
         AuthorizedExecutionRequest {
@@ -406,9 +420,10 @@ fn query(
             program: invocation.program,
             authorization: AuthorizationContext::new(invocation.principal, query_capabilities()?),
             receipts: invocation.receipts,
-            export,
-            args: &[],
+            entrypoint: CALL_ENTRY_EXPORT,
+            calldata: &calldata,
             composition: CompositionContext::isolated(),
+            response_capacity: 0,
         },
     )?)
 }

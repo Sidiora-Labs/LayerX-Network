@@ -8,13 +8,18 @@ use core::fmt::{self, Display};
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
-use crate::abi::{Abi, AbiError, AuthorizationContext, Capability, MAX_CALL_INPUT_BYTES};
-use crate::execute::{ExecutionFault, ProgramInstance, WasmValue, ABI_VERSION};
+use crate::abi::response::{CallResponse, ResponseRefusal};
+use crate::abi::{
+    Abi, AbiCommit, AbiError, AuthorizationContext, Capability, MAX_CALL_INPUT_BYTES,
+};
+use crate::entrypoint::{self, EntrypointRefusal};
+use crate::execute::{ExecutionFault, ABI_VERSION};
+use crate::fault::{ProgramFailure, RefusalClass, RefusalReason, CANDIDATE_REFUSAL_SENTINEL};
 use crate::host::RuntimeState;
 use crate::limits::{DeclaredLimit, LimitsRefusal};
 use crate::meter::{MeterRefusal, ResourceKind};
 use crate::storage::{PrincipalId, ProgramId};
-use crate::validate::ValidatedModule;
+use crate::validate::{AbiRevision, ValidatedModule};
 
 /// The declared upper bound on program-to-program nesting below the activity's
 /// entry program.
@@ -505,6 +510,11 @@ impl Default for CompositionContext {
 pub enum CompositionRefusal {
     /// The execution carries no authorization context or no composition state.
     NotComposable,
+    /// A call graph attempted to cross ABI revisions.
+    WrongVersion {
+        expected: AbiRevision,
+        actual: AbiRevision,
+    },
     /// The callee identifier resolves to no deployed module.
     UnknownProgram {
         /// The unresolved callee.
@@ -570,6 +580,8 @@ pub enum CompositionRefusal {
         /// The negative result code the callee returned.
         code: i32,
     },
+    /// Candidate program refusal with host-authenticated leaf identity.
+    Program(ProgramFailure),
     /// The call was refused by the capability ABI, including every attempt to
     /// widen authority across an edge.
     Authority(AbiError),
@@ -577,6 +589,8 @@ pub enum CompositionRefusal {
     Fault(ExecutionFault),
     /// The call graph exhausted a metered resource.
     Resource(MeterRefusal),
+    /// Successful-response transport was refused.
+    Response(ResponseRefusal),
 }
 
 impl Display for CompositionRefusal {
@@ -585,6 +599,10 @@ impl Display for CompositionRefusal {
             Self::NotComposable => {
                 formatter.write_str("execution carries no composition authority")
             }
+            Self::WrongVersion { expected, actual } => write!(
+                formatter,
+                "composition ABI revision {actual:?} differs from root {expected:?}"
+            ),
             Self::UnknownProgram { .. } => formatter.write_str("callee program is not deployed"),
             Self::Reentrancy { .. } => {
                 formatter.write_str("callee is already active on the call stack")
@@ -625,9 +643,16 @@ impl Display for CompositionRefusal {
             Self::GuestRefused { code, .. } => {
                 write!(formatter, "callee refused the call with {code}")
             }
+            Self::Program(failure) => write!(
+                formatter,
+                "program {:?} refused with class {:?}",
+                failure.program(),
+                failure.class()
+            ),
             Self::Authority(error) => write!(formatter, "composition authority refusal: {error}"),
             Self::Fault(fault) => write!(formatter, "callee fault: {fault}"),
             Self::Resource(refusal) => write!(formatter, "composition resource refusal: {refusal}"),
+            Self::Response(refusal) => write!(formatter, "composition response refusal: {refusal}"),
         }
     }
 }
@@ -650,11 +675,20 @@ impl From<MeterRefusal> for CompositionRefusal {
 pub(crate) struct Composition {
     resolver: Rc<dyn ProgramResolver>,
     graph: CallGraph,
+    revision: AbiRevision,
 }
 
 impl Composition {
-    pub(crate) fn new(resolver: Rc<dyn ProgramResolver>, graph: CallGraph) -> Self {
-        Self { resolver, graph }
+    pub(crate) fn new(
+        resolver: Rc<dyn ProgramResolver>,
+        graph: CallGraph,
+        revision: AbiRevision,
+    ) -> Self {
+        Self {
+            resolver,
+            graph,
+            revision,
+        }
     }
 
     pub(crate) fn resolver(&self) -> Rc<dyn ProgramResolver> {
@@ -669,6 +703,10 @@ impl Composition {
         &mut self.graph
     }
 
+    pub(crate) const fn revision(&self) -> AbiRevision {
+        self.revision
+    }
+
     pub(crate) fn set_graph(&mut self, graph: CallGraph) {
         self.graph = graph;
     }
@@ -678,10 +716,20 @@ impl Composition {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct NestedOutcome {
     pub(crate) code: i32,
+    pub(crate) response: CallResponse,
     pub(crate) subtree_fuel: u64,
+}
+
+pub(crate) struct PendingNestedOutcome {
+    code: i32,
+    pub(crate) response: CallResponse,
+    subtree_fuel: u64,
+    meter: crate::meter::Meter,
+    committed: AbiCommit,
+    graph: CallGraph,
 }
 
 /// Charges the calling frame for admitting one call of the given input size.
@@ -699,6 +747,37 @@ pub(crate) fn execute_nested_call(
     input: &[u8],
     requested: Vec<Capability>,
 ) -> Result<NestedOutcome, CompositionRefusal> {
+    let pending = execute_nested(state, consumed, callee, input, requested, None)?;
+    adopt_nested_call(state, pending)
+}
+
+pub(crate) fn execute_nested_call_response(
+    state: &mut RuntimeState,
+    consumed: u64,
+    callee: ProgramId,
+    input: &[u8],
+    requested: Vec<Capability>,
+    response_capacity: usize,
+) -> Result<PendingNestedOutcome, CompositionRefusal> {
+    execute_nested(
+        state,
+        consumed,
+        callee,
+        input,
+        requested,
+        Some(response_capacity),
+    )
+}
+
+#[allow(clippy::too_many_lines)]
+fn execute_nested(
+    state: &mut RuntimeState,
+    consumed: u64,
+    callee: ProgramId,
+    input: &[u8],
+    requested: Vec<Capability>,
+    response_capacity: Option<usize>,
+) -> Result<PendingNestedOutcome, CompositionRefusal> {
     if input.len() > MAX_CALL_INPUT_BYTES {
         return Err(CompositionRefusal::InputTooLarge {
             bytes: input.len(),
@@ -712,12 +791,26 @@ pub(crate) fn execute_nested_call(
     let module = resolver
         .program_module(callee)
         .ok_or(CompositionRefusal::UnknownProgram { program: callee })?;
-    let carried = state.meter().cpu_carried();
-    state
-        .composition_mut()
+    let expected = state
+        .composition()
         .ok_or(CompositionRefusal::NotComposable)?
-        .graph_mut()
-        .enter(callee)?;
+        .revision();
+    let actual = module.abi_revision();
+    if actual != expected {
+        return Err(CompositionRefusal::WrongVersion { expected, actual });
+    }
+    if state.meter().is_activity() {
+        module
+            .preflight_entrypoint(CALL_ENTRY_EXPORT, input.is_empty())
+            .map_err(|refusal| preflight_entry_refusal(callee, refusal))?;
+    }
+    let carried = state.meter().cpu_carried();
+    let mut admitted_graph = state
+        .composition()
+        .ok_or(CompositionRefusal::NotComposable)?
+        .graph()
+        .clone();
+    admitted_graph.enter(callee)?;
     let (principal, capabilities, storage, receipts) = {
         let abi = state.abi_mut().ok_or(CompositionRefusal::NotComposable)?;
         let capabilities = abi.stage_call(callee, input, requested)?;
@@ -728,8 +821,14 @@ pub(crate) fn execute_nested_call(
             abi.verified_receipts(),
         )
     };
+    state
+        .composition_mut()
+        .ok_or(CompositionRefusal::NotComposable)?
+        .set_graph(admitted_graph);
     let mut child_meter = state.meter().clone();
     child_meter.carry_cpu(consumed)?;
+    child_meter.record_cpu(0);
+    let activity_meter = child_meter.is_activity();
     if child_meter.cpu_remaining() == 0 {
         return Err(CompositionRefusal::Resource(MeterRefusal::BudgetExceeded {
             resource: ResourceKind::Cpu,
@@ -744,11 +843,88 @@ pub(crate) fn execute_nested_call(
         .ok_or(CompositionRefusal::NotComposable)?
         .graph()
         .clone();
-    let child_composition = Composition::new(Rc::clone(&resolver), child_graph);
-    let mut instance = module
-        .instantiate_composed(child_meter, child_abi, child_composition)
-        .map_err(|(fault, exhausted)| instantiation_refusal(fault, exhausted))?;
-    let code = invoke(&mut instance, callee, input)?;
+    let child_composition = Composition::new(Rc::clone(&resolver), child_graph, expected);
+    let mut instance = if expected == AbiRevision::CandidateV2 {
+        let retained = module
+            .instantiate_composed_response_retained(
+                child_meter,
+                child_abi,
+                child_composition,
+                response_capacity.unwrap_or(0),
+            )
+            .map_err(response_refusal)?;
+        match retained {
+            Ok(instance) => instance,
+            Err(error) => {
+                let (fault, returned) = *error;
+                let refusal = if activity_meter {
+                    returned
+                        .meter()
+                        .exhaustion()
+                        .map(CompositionRefusal::Resource)
+                } else {
+                    None
+                }
+                .or_else(|| returned.refusal().cloned())
+                .or_else(|| returned.failure().cloned().map(CompositionRefusal::Program))
+                .unwrap_or_else(|| {
+                    if candidate_runtime_fault(&fault) {
+                        CompositionRefusal::Program(runtime_failure(callee))
+                    } else {
+                        instantiation_refusal(fault, returned.meter().exhaustion())
+                    }
+                });
+                retain_failed_nested(state, returned, carried, consumed)?;
+                return Err(refusal);
+            }
+        }
+    } else if activity_meter {
+        match module.instantiate_composed_retained(child_meter, child_abi, child_composition) {
+            Ok(instance) => instance,
+            Err(error) => {
+                let (fault, returned) = *error;
+                let refusal = if let Some(exhausted) = returned.meter().exhaustion() {
+                    CompositionRefusal::Resource(exhausted)
+                } else if let Some(refusal) = returned.refusal() {
+                    refusal.clone()
+                } else if let Some(failure) = returned.failure() {
+                    CompositionRefusal::Program(failure.clone())
+                } else {
+                    instantiation_refusal(fault, returned.meter().exhaustion())
+                };
+                retain_failed_nested(state, returned, carried, consumed)?;
+                return Err(refusal);
+            }
+        }
+    } else {
+        module
+            .instantiate_composed(child_meter, child_abi, child_composition)
+            .map_err(|(fault, exhausted)| instantiation_refusal(fault, exhausted))?
+    };
+    let code = match entrypoint::invoke(&mut instance, CALL_ENTRY_EXPORT, input) {
+        Ok(code) => code,
+        Err(refusal) => {
+            let refusal = entry_refusal(&instance, callee, refusal);
+            retain_failed_nested(state, instance.into_state(), carried, consumed)?;
+            return Err(refusal);
+        }
+    };
+    let published_refusal = instance.state().refusal().cloned().or_else(|| {
+        instance.state().failure().map(|_| {
+            CompositionRefusal::Response(ResponseRefusal::CodeMismatch {
+                published: CANDIDATE_REFUSAL_SENTINEL,
+                returned: code,
+            })
+        })
+    });
+    if let Some(refusal) = published_refusal {
+        retain_failed_nested(state, instance.into_state(), carried, consumed)?;
+        return Err(refusal);
+    }
+    let response = instance
+        .state()
+        .finalize_response(code)
+        .map_err(response_refusal)?;
     let (returned_meter, returned_abi, returned_composition) = instance.into_state().into_parts();
     let committed = returned_abi
         .ok_or(CompositionRefusal::NotComposable)?
@@ -756,113 +932,214 @@ pub(crate) fn execute_nested_call(
     let returned_graph = returned_composition
         .ok_or(CompositionRefusal::NotComposable)?
         .into_graph();
-    let mut absorbed = returned_meter;
-    let subtree_fuel = absorbed
-        .cpu_total()
-        .saturating_sub(carried.saturating_add(consumed));
+    let subtree_fuel = reconciled_subtree_fuel(returned_meter.cpu_total(), carried, consumed)?;
+    Ok(PendingNestedOutcome {
+        code,
+        response,
+        subtree_fuel,
+        meter: returned_meter,
+        committed,
+        graph: returned_graph,
+    })
+}
+
+fn retain_failed_nested(
+    state: &mut RuntimeState,
+    mut returned: RuntimeState,
+    carried: u64,
+    consumed: u64,
+) -> Result<(), CompositionRefusal> {
+    let (active_memory, active_tables) = state.meter().active_frame_resources();
+    let propagated_graph = returned.take_failure_graph();
+    let (mut returned_meter, _, returned_composition) = returned.into_parts();
+    let failed_graph =
+        propagated_graph.or_else(|| returned_composition.map(Composition::into_graph));
+    let subtree_fuel = reconciled_subtree_fuel(returned_meter.cpu_total(), carried, consumed)?;
+    returned_meter.restore_cpu_carry(carried);
+    returned_meter.restore_active_frame_resources(active_memory, active_tables);
+    state.set_meter(returned_meter);
+    state.set_failure_subtree_fuel(subtree_fuel);
+    if let Some(graph) = failed_graph {
+        state.set_failure_graph(graph);
+    }
+    Ok(())
+}
+
+fn reconciled_subtree_fuel(
+    returned_total: u64,
+    carried: u64,
+    consumed: u64,
+) -> Result<u64, CompositionRefusal> {
+    let parent_total = carried.checked_add(consumed).ok_or({
+        CompositionRefusal::Resource(MeterRefusal::CounterOverflow {
+            resource: ResourceKind::Cpu,
+        })
+    })?;
+    returned_total.checked_sub(parent_total).ok_or({
+        CompositionRefusal::Resource(MeterRefusal::CounterOverflow {
+            resource: ResourceKind::Cpu,
+        })
+    })
+}
+
+pub(crate) fn adopt_nested_call(
+    state: &mut RuntimeState,
+    pending: PendingNestedOutcome,
+) -> Result<NestedOutcome, CompositionRefusal> {
+    let carried = state.meter().cpu_carried();
+    let (active_memory, active_tables) = state.meter().active_frame_resources();
+    let mut absorbed = pending.meter;
     absorbed.restore_cpu_carry(carried);
+    absorbed.restore_active_frame_resources(active_memory, active_tables);
     state.set_meter(absorbed);
     {
         let abi = state.abi_mut().ok_or(CompositionRefusal::NotComposable)?;
-        abi.adopt_storage(committed.storage);
-        abi.absorb(committed.effects);
+        abi.adopt_storage(pending.committed.storage);
+        abi.absorb(pending.committed.effects);
     }
     {
         let composition = state
             .composition_mut()
             .ok_or(CompositionRefusal::NotComposable)?;
-        composition.set_graph(returned_graph);
+        composition.set_graph(pending.graph);
         composition.graph_mut().leave();
     }
-    Ok(NestedOutcome { code, subtree_fuel })
+    Ok(NestedOutcome {
+        code: pending.code,
+        response: pending.response,
+        subtree_fuel: pending.subtree_fuel,
+    })
 }
 
-fn invoke(
-    instance: &mut ProgramInstance,
-    callee: ProgramId,
-    input: &[u8],
-) -> Result<i32, CompositionRefusal> {
-    let length = i32::try_from(input.len()).map_err(|_| CompositionRefusal::InputTooLarge {
-        bytes: input.len(),
-        limit: MAX_CALL_INPUT_BYTES,
-    })?;
-    let pointer = if input.is_empty() {
-        0
-    } else {
-        reserve(instance, length, input)?
-    };
-    let outputs = match instance.call(
-        CALL_ENTRY_EXPORT,
-        &[WasmValue::I32(pointer), WasmValue::I32(length)],
-    ) {
-        Ok(outputs) => outputs,
-        Err(fault) => {
-            return Err(nested_refusal(
-                instance,
-                fault,
-                CompositionRefusal::MissingEntry,
-            ))
-        }
-    };
-    let code = match outputs.as_slice() {
-        [WasmValue::I32(code)] => *code,
-        _ => return Err(CompositionRefusal::MissingEntry),
-    };
-    if code < 0 {
-        return Err(CompositionRefusal::GuestRefused {
-            program: callee,
-            code,
-        });
+fn response_refusal(refusal: ResponseRefusal) -> CompositionRefusal {
+    match refusal {
+        ResponseRefusal::Meter(refusal) => CompositionRefusal::Resource(refusal),
+        other => CompositionRefusal::Response(other),
     }
-    Ok(code)
 }
 
-fn reserve(
-    instance: &mut ProgramInstance,
-    length: i32,
-    input: &[u8],
-) -> Result<i32, CompositionRefusal> {
-    let outputs = match instance.call(CALL_RESERVE_EXPORT, &[WasmValue::I32(length)]) {
-        Ok(outputs) => outputs,
-        Err(fault) => {
-            return Err(nested_refusal(
-                instance,
-                fault,
-                CompositionRefusal::MissingAllocator,
-            ))
+fn preflight_entry_refusal(program: ProgramId, refusal: EntrypointRefusal) -> CompositionRefusal {
+    match refusal {
+        EntrypointRefusal::InputTooLarge { bytes, limit } => {
+            CompositionRefusal::InputTooLarge { bytes, limit }
         }
-    };
-    let pointer = match outputs.as_slice() {
-        [WasmValue::I32(pointer)] => *pointer,
-        _ => return Err(CompositionRefusal::MissingAllocator),
-    };
-    let offset = usize::try_from(pointer)
-        .map_err(|_| CompositionRefusal::AllocationRefused { code: pointer })?;
-    let memory = instance
-        .linear_memory()
-        .ok_or(CompositionRefusal::MissingMemory)?;
-    instance
-        .write_linear_memory(memory, offset, input)
-        .map_err(CompositionRefusal::Fault)?;
-    Ok(pointer)
+        EntrypointRefusal::MissingAllocator => CompositionRefusal::MissingAllocator,
+        EntrypointRefusal::MissingMemory => CompositionRefusal::MissingMemory,
+        EntrypointRefusal::MissingEntry => CompositionRefusal::MissingEntry,
+        EntrypointRefusal::AllocationRefused { code } => {
+            CompositionRefusal::AllocationRefused { code }
+        }
+        EntrypointRefusal::GuestRefused { code } => {
+            CompositionRefusal::GuestRefused { program, code }
+        }
+        EntrypointRefusal::Fault(fault) => CompositionRefusal::Fault(fault),
+        EntrypointRefusal::Resource(refusal) => CompositionRefusal::Resource(refusal),
+    }
 }
 
-fn nested_refusal(
-    instance: &ProgramInstance,
-    fault: ExecutionFault,
-    missing: CompositionRefusal,
+fn entry_refusal(
+    instance: &crate::execute::ProgramInstance,
+    program: ProgramId,
+    refusal: EntrypointRefusal,
 ) -> CompositionRefusal {
     if let Some(refusal) = instance.state().refusal() {
         return refusal.clone();
     }
-    if let Some(refusal) = instance.meter().exhaustion() {
-        return CompositionRefusal::Resource(refusal);
+    match refusal {
+        EntrypointRefusal::InputTooLarge { bytes, limit } => {
+            CompositionRefusal::InputTooLarge { bytes, limit }
+        }
+        EntrypointRefusal::MissingAllocator => CompositionRefusal::MissingAllocator,
+        EntrypointRefusal::MissingMemory => CompositionRefusal::MissingMemory,
+        EntrypointRefusal::MissingEntry => CompositionRefusal::MissingEntry,
+        EntrypointRefusal::AllocationRefused { code }
+            if instance.meter().is_activity()
+                && instance.state().composition().is_some_and(|composition| {
+                    composition.revision() == AbiRevision::CandidateV2
+                }) =>
+        {
+            legacy_failure(program)
+        }
+        EntrypointRefusal::AllocationRefused { code } => {
+            CompositionRefusal::AllocationRefused { code }
+        }
+        EntrypointRefusal::GuestRefused { code }
+            if instance
+                .state()
+                .composition()
+                .is_some_and(|composition| composition.revision() == AbiRevision::CandidateV2) =>
+        {
+            match instance.state().failure().cloned() {
+                Some(failure) if code == CANDIDATE_REFUSAL_SENTINEL => {
+                    CompositionRefusal::Program(failure)
+                }
+                Some(_) => CompositionRefusal::Response(ResponseRefusal::CodeMismatch {
+                    published: CANDIDATE_REFUSAL_SENTINEL,
+                    returned: code,
+                }),
+                None if code == CANDIDATE_REFUSAL_SENTINEL => {
+                    CompositionRefusal::Response(ResponseRefusal::InvalidPublication)
+                }
+                None => legacy_failure(program),
+            }
+        }
+        EntrypointRefusal::GuestRefused { code } => {
+            CompositionRefusal::GuestRefused { program, code }
+        }
+        EntrypointRefusal::Fault(fault)
+            if instance
+                .state()
+                .composition()
+                .is_some_and(|composition| composition.revision() == AbiRevision::CandidateV2)
+                && candidate_runtime_fault(&fault) =>
+        {
+            instance.state().failure().cloned().map_or_else(
+                || CompositionRefusal::Program(runtime_failure(program)),
+                CompositionRefusal::Program,
+            )
+        }
+        EntrypointRefusal::Fault(fault) => CompositionRefusal::Fault(fault),
+        EntrypointRefusal::Resource(_)
+            if instance
+                .state()
+                .composition()
+                .is_some_and(|composition| composition.revision() == AbiRevision::CandidateV2)
+                && instance.state().failure().is_some() =>
+        {
+            CompositionRefusal::Program(
+                instance
+                    .state()
+                    .failure()
+                    .cloned()
+                    .unwrap_or_else(|| unreachable!("guarded candidate failure")),
+            )
+        }
+        EntrypointRefusal::Resource(refusal) => CompositionRefusal::Resource(refusal),
     }
-    match fault {
-        ExecutionFault::UnknownExport { .. } | ExecutionFault::NotAFunction { .. } => missing,
-        ExecutionFault::Resource { refusal } => CompositionRefusal::Resource(refusal),
-        other => CompositionRefusal::Fault(other),
-    }
+}
+
+fn legacy_failure(program: ProgramId) -> CompositionRefusal {
+    CompositionRefusal::Program(ProgramFailure::authenticated(
+        program,
+        RefusalClass::Legacy,
+        RefusalReason::empty(),
+    ))
+}
+
+fn runtime_failure(program: ProgramId) -> ProgramFailure {
+    ProgramFailure::authenticated(program, RefusalClass::RuntimeFault, RefusalReason::empty())
+}
+
+fn candidate_runtime_fault(fault: &ExecutionFault) -> bool {
+    !matches!(
+        fault,
+        ExecutionFault::EngineFault { .. }
+            | ExecutionFault::UnknownExport { .. }
+            | ExecutionFault::NotAFunction { .. }
+            | ExecutionFault::OutOfFuel
+            | ExecutionFault::GrowthLimited
+            | ExecutionFault::Resource { .. }
+    )
 }
 
 fn instantiation_refusal(

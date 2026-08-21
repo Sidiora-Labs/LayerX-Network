@@ -7,12 +7,27 @@
 
 use core::cell::UnsafeCell;
 
+use crate::abi::MAX_CALL_INPUT_BYTES;
 use crate::error::{Field, ProgramError, Reason};
+use crate::CallResult;
 
 /// Declared capacity of the call-input reservation every SDK program owns.
-pub const CALL_INPUT_CAPACITY: usize = 8_192;
+pub const CALL_INPUT_CAPACITY: usize = MAX_CALL_INPUT_BYTES;
 
 const RESERVATION_REFUSED: i32 = -1;
+
+/// Response returned synchronously by a candidate entry handler.
+pub struct EntryResponse<'a> {
+    pub result: CallResult,
+    pub bytes: &'a [u8],
+}
+
+impl<'a> EntryResponse<'a> {
+    #[must_use]
+    pub const fn new(result: CallResult, bytes: &'a [u8]) -> Self {
+        Self { result, bytes }
+    }
+}
 
 struct CallBuffer(UnsafeCell<[u8; CALL_INPUT_CAPACITY]>);
 
@@ -43,7 +58,11 @@ pub fn reserve_call_input(length: i32) -> i32 {
 ///
 /// Refuses a length past the declared reservation and any pointer other than
 /// the one [`reserve_call_input`] handed out.
-pub fn call_input(pointer: i32, length: i32) -> Result<&'static [u8], ProgramError> {
+pub fn with_call_input<T>(
+    pointer: i32,
+    length: i32,
+    handler: impl FnOnce(&[u8]) -> T,
+) -> Result<T, ProgramError> {
     let requested = usize::try_from(length)
         .map_err(|_| ProgramError::value(Field::CallInput, Reason::Malformed))?;
     if requested > CALL_INPUT_CAPACITY {
@@ -55,5 +74,6 @@ pub fn call_input(pointer: i32, length: i32) -> Result<&'static [u8], ProgramErr
     if requested > 0 && offset != base as usize {
         return Err(ProgramError::value(Field::CallInput, Reason::Malformed));
     }
-    Ok(unsafe { core::slice::from_raw_parts(base.cast_const(), requested) })
+    let input = unsafe { core::slice::from_raw_parts(base.cast_const(), requested) };
+    Ok(handler(input))
 }

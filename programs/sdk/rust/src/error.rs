@@ -357,3 +357,190 @@ impl From<ValueError> for ProgramError {
         Self::Value(value)
     }
 }
+
+/// Stable candidate refusal classes mirrored from the runtime receipt vocabulary.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u32)]
+pub enum RefusalClass {
+    Rejected = 1,
+    InvalidInput = 2,
+    Unauthorized = 3,
+    Conflict = 4,
+    NotFound = 5,
+    RuntimeFault = 254,
+    Legacy = 255,
+}
+
+/// Canonical class vocabulary mirrored by runtime parity checks.
+pub const REFUSAL_CLASS_MANIFEST: &str = "Rejected=1\0InvalidInput=2\0Unauthorized=3\0Conflict=4\0NotFound=5\0RuntimeFault=254\0Legacy=255\0";
+
+impl RefusalClass {
+    #[must_use]
+    pub const fn code(self) -> u32 {
+        self as u32
+    }
+
+    #[must_use]
+    pub const fn is_guest_publishable(self) -> bool {
+        matches!(
+            self,
+            Self::Rejected
+                | Self::InvalidInput
+                | Self::Unauthorized
+                | Self::Conflict
+                | Self::NotFound
+        )
+    }
+
+    /// Decodes a stable refusal-class discriminant.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `code` is not a declared class.
+    pub const fn decode(code: u32) -> Result<Self, ProgramError> {
+        match code {
+            1 => Ok(Self::Rejected),
+            2 => Ok(Self::InvalidInput),
+            3 => Ok(Self::Unauthorized),
+            4 => Ok(Self::Conflict),
+            5 => Ok(Self::NotFound),
+            254 => Ok(Self::RuntimeFault),
+            255 => Ok(Self::Legacy),
+            _ => Err(ProgramError::value(Field::Buffer, Reason::Malformed)),
+        }
+    }
+}
+
+/// Allocation-free borrowed candidate refusal reason.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RefusalReason<'a>(&'a [u8]);
+
+impl<'a> RefusalReason<'a> {
+    /// Borrows a bounded binary refusal reason.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the reason exceeds the candidate ABI bound.
+    pub const fn new(bytes: &'a [u8]) -> Result<Self, ProgramError> {
+        if bytes.len() > crate::abi::MAX_REFUSAL_REASON_BYTES {
+            return Err(ProgramError::value(Field::Buffer, Reason::TooLarge));
+        }
+        Ok(Self(bytes))
+    }
+
+    #[must_use]
+    pub const fn bytes(self) -> &'a [u8] {
+        self.0
+    }
+
+    /// Decodes a canonical length-prefixed refusal reason.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for malformed, oversized, truncated, or trailing input.
+    pub fn decode(encoded: &'a [u8]) -> Result<Self, ProgramError> {
+        let length = encoded
+            .get(..4)
+            .and_then(|bytes| <[u8; 4]>::try_from(bytes).ok())
+            .map(u32::from_be_bytes)
+            .and_then(|length| usize::try_from(length).ok())
+            .ok_or_else(|| ProgramError::value(Field::Buffer, Reason::Malformed))?;
+        if length > crate::abi::MAX_REFUSAL_REASON_BYTES {
+            return Err(ProgramError::value(Field::Buffer, Reason::TooLarge));
+        }
+        let end = 4usize
+            .checked_add(length)
+            .ok_or_else(|| ProgramError::value(Field::Buffer, Reason::Malformed))?;
+        if end != encoded.len() {
+            return Err(ProgramError::value(Field::Buffer, Reason::Malformed));
+        }
+        Self::new(
+            encoded
+                .get(4..end)
+                .ok_or_else(|| ProgramError::value(Field::Buffer, Reason::Malformed))?,
+        )
+    }
+}
+
+/// Guest-constructible candidate refusal without a forgeable program identity.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProgramRefusal<'a> {
+    class: RefusalClass,
+    reason: RefusalReason<'a>,
+}
+
+impl<'a> ProgramRefusal<'a> {
+    /// Constructs a guest-publishable refusal.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for host-only refusal classes.
+    pub const fn new(class: RefusalClass, reason: RefusalReason<'a>) -> Result<Self, ProgramError> {
+        if !class.is_guest_publishable() {
+            return Err(ProgramError::value(Field::Buffer, Reason::Malformed));
+        }
+        Ok(Self { class, reason })
+    }
+
+    /// Decodes a canonical guest refusal.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for malformed input or a host-only class.
+    pub fn decode(encoded: &'a [u8]) -> Result<Self, ProgramError> {
+        let class = encoded
+            .get(..4)
+            .and_then(|bytes| <[u8; 4]>::try_from(bytes).ok())
+            .map(u32::from_be_bytes)
+            .ok_or_else(|| ProgramError::value(Field::Buffer, Reason::Malformed))?;
+        let class = RefusalClass::decode(class)?;
+        let reason = RefusalReason::decode(
+            encoded
+                .get(4..)
+                .ok_or_else(|| ProgramError::value(Field::Buffer, Reason::Malformed))?,
+        )?;
+        Self::new(class, reason)
+    }
+
+    #[must_use]
+    pub const fn class(self) -> RefusalClass {
+        self.class
+    }
+
+    #[must_use]
+    pub const fn reason(self) -> RefusalReason<'a> {
+        self.reason
+    }
+}
+
+#[cfg(test)]
+mod candidate_refusal_tests {
+    use super::{ProgramRefusal, RefusalClass, RefusalReason};
+
+    #[test]
+    fn borrowed_reason_accepts_exact_bound_and_rejects_one_past() {
+        let maximum = std::vec![0xa5; crate::MAX_REFUSAL_REASON_BYTES];
+        assert_eq!(
+            RefusalReason::new(&maximum)
+                .unwrap_or_else(|error| panic!("maximum: {error}"))
+                .bytes(),
+            maximum
+        );
+        assert!(RefusalReason::new(&std::vec![0; crate::MAX_REFUSAL_REASON_BYTES + 1]).is_err());
+    }
+
+    #[test]
+    fn guest_cannot_publish_host_only_classes_and_decode_is_strict() {
+        let empty = RefusalReason::new(&[]).unwrap_or_else(|error| panic!("empty: {error}"));
+        assert!(ProgramRefusal::new(RefusalClass::RuntimeFault, empty).is_err());
+        assert!(ProgramRefusal::new(RefusalClass::Legacy, empty).is_err());
+        let encoded = [0, 0, 0, 2, 0, 0, 0, 2, 0, 0xff];
+        let decoded = ProgramRefusal::decode(&encoded)
+            .unwrap_or_else(|error| panic!("binary decode: {error}"));
+        assert_eq!(decoded.class(), RefusalClass::InvalidInput);
+        assert_eq!(decoded.reason().bytes(), [0, 0xff]);
+        assert!(ProgramRefusal::decode(&[0, 0, 0, 99, 0, 0, 0, 0]).is_err());
+        assert!(ProgramRefusal::decode(&[0, 0, 0, 2, 0, 0, 0, 1]).is_err());
+        assert!(ProgramRefusal::decode(&[0, 0, 0, 2, 0, 0, 0, 0, 7]).is_err());
+    }
+}

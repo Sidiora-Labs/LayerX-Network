@@ -1,13 +1,31 @@
 //! Deterministic WASM runtime foundation for `LayerX` guest programs.
+//!
+//! # Module map
+//!
+//! Caller-declared activity ceilings and their consumed admission token live in
+//! [`budget`]. The [`abi`] transaction boundary lives in `abi/mod.rs`; capability grants,
+//! encoding, and narrowing live in `abi/capability.rs`; candidate response and
+//! refusal transport lives in `abi/response.rs`; and namespaced storage
+//! operations live in `abi/storage_ops.rs`. The private `host/mod.rs` owns
+//! linker orchestration and `RuntimeState`, while `host/memory.rs` owns guest
+//! memory access and `host/{storage,events,calls,transfer}.rs` each register
+//! exactly one host-function family. New capability families belong in their
+//! own ABI and host units and reach execution state only through `RuntimeState`.
 
 #[deny(unsafe_code)]
 pub mod abi;
+#[deny(unsafe_code)]
+pub mod budget;
 #[deny(unsafe_code)]
 pub mod calls;
 #[deny(unsafe_code)]
 pub mod engine;
 #[deny(unsafe_code)]
+pub mod entrypoint;
+#[deny(unsafe_code)]
 pub mod execute;
+#[deny(unsafe_code)]
+pub mod fault;
 mod ffi;
 mod ffi_transfer;
 #[deny(unsafe_code)]
@@ -29,6 +47,11 @@ pub mod transfer;
 #[deny(unsafe_code)]
 pub mod validate;
 
+pub use abi::response::{CallResponse, ResponseRefusal, MAX_CALL_RESPONSE_BYTES};
+pub use budget::{
+    ActivityBudgetBinding, AdmittedBudget, BudgetAdmissionRefusal, BudgetDimension, DeclaredBudget,
+    DECLARED_BUDGET_DOMAIN,
+};
 pub use calls::{
     call_admission_fuel, CallEdge, CallFrame, CallGraph, CompositionContext, CompositionRefusal,
     CompositionRules, ProgramCatalog, ProgramResolver, CALL_ADMISSION_FUEL, CALL_ENTRY_EXPORT,
@@ -36,16 +59,28 @@ pub use calls::{
     DEFAULT_MAX_CALL_GRAPH_EDGES, DEFAULT_MAX_COMPOSITION_DEPTH, DEFAULT_MAX_PROGRAM_VISITS,
 };
 pub use engine::{EngineRefusal, WasmEngine};
+pub use entrypoint::EntrypointRefusal;
 pub use execute::{
-    AuthorizedExecutionRecord, AuthorizedExecutionRequest, ExecutionError, ExecutionFault,
-    ExecutionRecord, Executor, ProgramInstance, WasmValue, ABI_VERSION, RUNTIME_VERSION,
+    AuthorizedExecutionRecord, AuthorizedExecutionRequest, BudgetedAuthorizedExecutionRequest,
+    BudgetedResourceFailureRecord, BudgetedV1ActivityOutcome, BudgetedV1FailureCause,
+    BudgetedV1FailureRecord, CandidateActivityOutcome, CandidateActivityReceipt,
+    CandidateAuthorizedExecutionRecord, CandidateExecutionRecord, CandidateReceiptOutcome,
+    ExecutionError, ExecutionFault, ExecutionRecord, Executor, ProgramInstance, WasmValue,
+    ABI_VERSION, RUNTIME_VERSION,
+};
+pub use fault::{
+    FailureEncodingError, ProgramFailure, RefusalClass, RefusalReason, CANDIDATE_REFUSAL_SENTINEL,
+    MAX_REFUSAL_REASON_BYTES, REFUSAL_CLASS_MANIFEST,
 };
 pub use lifecycle::{
     CodeHash, Deploy, DeploymentReceipt, DiagnosticArtifact, Lifecycle, LifecycleRefusal,
     Migration, ProgramVersion, Upgrade, UpgradePolicy,
 };
 pub use limits::{DeclaredLimit, LimitsRefusal, ValidationLimits};
-pub use meter::{FeeSchedule, Meter, MeterRefusal, MeteredUsage, ResourceBudget, ResourceKind};
+pub use meter::{
+    BudgetMeterRefusal, BudgetResourceKind, FeeSchedule, Meter, MeterRefusal, MeteredUsage,
+    ResourceBudget, ResourceKind,
+};
 pub use qualification::{
     programs_differential_gate, programs_fuzz_targets, replay_recorded_execution,
     DifferentialMismatch, FuzzTarget, RecordedExecution, ReplayRefusal,
@@ -55,7 +90,7 @@ pub use transfer::{
     AtomicTransferSet, KernelTransferPrimitive, TransferCapability, TransferLawError,
     VerifiedProgramSettlement,
 };
-pub use validate::{ValidatedModule, ValidationRefusal};
+pub use validate::{AbiRevision, ValidatedModule, ValidationRefusal};
 
 /// Identifies the workspace manifest that governs every programs-plane crate.
 #[must_use]

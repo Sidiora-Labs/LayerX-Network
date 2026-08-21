@@ -154,6 +154,27 @@ impl Storage {
             .count()
     }
 
+    /// Returns exact persistent key-plus-value bytes in one namespace.
+    /// Adjacent program or principal namespaces never contribute.
+    ///
+    /// # Errors
+    ///
+    /// Refuses accounting that cannot fit the runtime's `u64` counters.
+    pub fn namespace_persistent_bytes(
+        &self,
+        namespace: StorageNamespace,
+    ) -> Result<u64, StorageError> {
+        self.cells
+            .iter()
+            .filter(|(address, _)| address.namespace == namespace)
+            .try_fold(0u64, |total, (address, value)| {
+                let cell_bytes = metered_bytes(&address.key, Some(value))?;
+                total
+                    .checked_add(cell_bytes)
+                    .ok_or(StorageError::SizeOverflow)
+            })
+    }
+
     pub(crate) fn read(
         &self,
         namespace: StorageNamespace,

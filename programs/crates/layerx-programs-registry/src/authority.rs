@@ -395,6 +395,7 @@ fn decode_migration(bytes: &[u8], cursor: &mut usize) -> Result<ExecutionRecord,
             storage_read_bytes: u64::from_be_bytes(take_array::<8>(bytes, cursor)?),
             storage_write_bytes: u64::from_be_bytes(take_array::<8>(bytes, cursor)?),
             output_values: u32::from_be_bytes(take_array::<4>(bytes, cursor)?),
+            output_bytes: 0,
             fee_units: u128::from_be_bytes(take_array::<16>(bytes, cursor)?),
         },
     })

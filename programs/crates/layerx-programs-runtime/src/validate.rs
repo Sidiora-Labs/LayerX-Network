@@ -2,24 +2,24 @@
 
 use core::fmt::{self, Display};
 
-use wasmparser_nostd::{BlockType, FunctionBody, Import, Operator, Parser, Payload, Type, ValType};
+use wasmparser_nostd::{
+    BlockType, FuncType, FunctionBody, Import, Operator, Parser, Payload, Type, TypeRef, ValType,
+};
 
-use crate::abi::Abi;
+use crate::abi::{Abi, AbiValueType, ABI_MODULE, HOST_FUNCTIONS, HOST_FUNCTION_TYPES};
 use crate::calls::Composition;
 use crate::engine::WasmEngine;
+use crate::entrypoint::EntrypointRefusal;
 use crate::execute::{fault_from_error, ExecutionFault, ProgramInstance};
 use crate::host::{self, RuntimeState};
 use crate::meter::Meter;
 
-const PERMITTED_IMPORTS: &[(&str, &str)] = &[
-    ("layerx_v1", "storage_read"),
-    ("layerx_v1", "storage_write"),
-    ("layerx_v1", "storage_delete"),
-    ("layerx_v1", "event_emit"),
-    ("layerx_v1", "program_call"),
-    ("layerx_v1", "transfer_402"),
-    ("layerx_v1", "receipt_read"),
-];
+/// Explicitly selected ABI surface used to validate and instantiate a module.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AbiRevision {
+    V1,
+    CandidateV2,
+}
 
 /// A typed refusal produced while validating a module.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,6 +45,10 @@ pub enum ValidationRefusal {
         /// The name field of the refused import.
         import_name: String,
     },
+    /// A declared ABI name was imported as a non-function item.
+    WrongImportKind { import_name: String },
+    /// A declared ABI function was imported with the wrong type.
+    WrongImportSignature { import_name: String },
     /// The module declares a floating-point type.
     ForbiddenFloatType,
     /// The module contains a floating-point instruction.
@@ -87,6 +91,12 @@ impl Display for ValidationRefusal {
             } => {
                 write!(f, "forbidden import {import_module}::{import_name}")
             }
+            Self::WrongImportKind { import_name } => {
+                write!(f, "ABI import {import_name} is not a function")
+            }
+            Self::WrongImportSignature { import_name } => {
+                write!(f, "ABI import {import_name} has the wrong signature")
+            }
             Self::ForbiddenFloatType => write!(f, "floating-point types are forbidden"),
             Self::ForbiddenFloatInstruction => {
                 write!(f, "floating-point instructions are forbidden")
@@ -104,8 +114,10 @@ impl std::error::Error for ValidationRefusal {}
 #[derive(Debug)]
 pub struct ValidatedModule {
     module: wasmi::Module,
+    linker: wasmi::Linker<RuntimeState>,
     byte_size: u64,
     function_count: u32,
+    revision: AbiRevision,
 }
 
 impl ValidatedModule {
@@ -135,6 +147,45 @@ impl ValidatedModule {
         self.function_count
     }
 
+    #[must_use]
+    pub const fn abi_revision(&self) -> AbiRevision {
+        self.revision
+    }
+
+    pub(crate) fn preflight_entrypoint(
+        &self,
+        entrypoint: &str,
+        calldata_is_empty: bool,
+    ) -> Result<(), EntrypointRefusal> {
+        use wasmi::core::ValueType;
+
+        self.module
+            .get_export(entrypoint)
+            .and_then(|export| export.func().cloned())
+            .filter(|function| {
+                function.params() == [ValueType::I32, ValueType::I32]
+                    && function.results() == [ValueType::I32]
+            })
+            .ok_or(EntrypointRefusal::MissingEntry)?;
+        if calldata_is_empty {
+            return Ok(());
+        }
+        self.module
+            .get_export(crate::calls::CALL_RESERVE_EXPORT)
+            .and_then(|export| export.func().cloned())
+            .filter(|function| {
+                function.params() == [ValueType::I32] && function.results() == [ValueType::I32]
+            })
+            .ok_or(EntrypointRefusal::MissingAllocator)?;
+        if !matches!(
+            self.module.get_export("memory"),
+            Some(wasmi::ExternType::Memory(_))
+        ) {
+            return Err(EntrypointRefusal::MissingMemory);
+        }
+        Ok(())
+    }
+
     /// Instantiates the validated module in an isolated store.
     ///
     /// # Errors
@@ -162,6 +213,59 @@ impl ValidatedModule {
         self.instantiate_state(RuntimeState::composed(meter, abi, composition))
     }
 
+    pub(crate) fn instantiate_composed_retained(
+        &self,
+        meter: Meter,
+        abi: Abi,
+        composition: Composition,
+    ) -> Result<ProgramInstance, Box<(ExecutionFault, RuntimeState)>> {
+        self.instantiate_state_retained(RuntimeState::composed(meter, abi, composition))
+    }
+
+    pub(crate) fn instantiate_composed_response_retained(
+        &self,
+        meter: Meter,
+        abi: Abi,
+        composition: Composition,
+        capacity: usize,
+    ) -> Result<
+        Result<ProgramInstance, Box<(ExecutionFault, RuntimeState)>>,
+        crate::abi::response::ResponseRefusal,
+    > {
+        let state = RuntimeState::composed_with_response(meter, abi, composition, capacity)?;
+        Ok(self.instantiate_state_retained(state))
+    }
+
+    fn instantiate_state_retained(
+        &self,
+        state: RuntimeState,
+    ) -> Result<ProgramInstance, Box<(ExecutionFault, RuntimeState)>> {
+        let fuel = state.meter().cpu_remaining();
+        let mut store = wasmi::Store::new(self.module.engine(), state);
+        store.limiter(|state| state.meter_mut() as &mut dyn wasmi::ResourceLimiter);
+        if let Err(error) = store.add_fuel(fuel) {
+            let fault = ExecutionFault::EngineFault {
+                reason: error.to_string(),
+            };
+            return Err(Box::new(retained_failure(store, fault)));
+        }
+        let pre = match self.linker.clone().instantiate(&mut store, &self.module) {
+            Ok(pre) => pre,
+            Err(error) => {
+                let fault = fault_from_error(&error);
+                return Err(Box::new(retained_failure(store, fault)));
+            }
+        };
+        let instance = match pre.start(&mut store) {
+            Ok(instance) => instance,
+            Err(error) => {
+                let fault = fault_from_error(&error);
+                return Err(Box::new(retained_failure(store, fault)));
+            }
+        };
+        Ok(ProgramInstance::new(store, instance))
+    }
+
     fn instantiate_state(
         &self,
         state: RuntimeState,
@@ -177,9 +281,9 @@ impl ValidatedModule {
                 store.data().meter().exhaustion(),
             )
         })?;
-        let linker = host::linker(self.module.engine())
-            .map_err(|fault| (fault, store.data().meter().exhaustion()))?;
-        let pre = linker
+        let pre = self
+            .linker
+            .clone()
             .instantiate(&mut store, &self.module)
             .map_err(|error| (fault_from_error(&error), store.data().meter().exhaustion()))?;
         let instance = pre
@@ -189,9 +293,23 @@ impl ValidatedModule {
     }
 }
 
+fn retained_failure(
+    mut store: wasmi::Store<RuntimeState>,
+    fault: ExecutionFault,
+) -> (ExecutionFault, RuntimeState) {
+    if let Some(consumed) = store.fuel_consumed() {
+        store.data_mut().meter_mut().record_cpu(consumed);
+    }
+    if fault == ExecutionFault::OutOfFuel {
+        store.data_mut().meter_mut().mark_cpu_exhausted();
+    }
+    (fault, store.into_data())
+}
+
 pub(crate) fn validate_module(
     engine: &WasmEngine,
     wasm: &[u8],
+    revision: AbiRevision,
 ) -> Result<ValidatedModule, ValidationRefusal> {
     let limits = engine.limits();
     let byte_size = wasm.len() as u64;
@@ -202,6 +320,7 @@ pub(crate) fn validate_module(
         });
     }
     let mut function_count: u32 = 0;
+    let mut function_types = Vec::new();
     for payload in Parser::new(0).parse_all(wasm) {
         let payload = payload.map_err(|error| ValidationRefusal::MalformedModule {
             reason: error.to_string(),
@@ -216,6 +335,7 @@ pub(crate) fn validate_module(
                     for value_type in func_type.params().iter().chain(func_type.results()) {
                         refuse_value_type(*value_type)?;
                     }
+                    function_types.push(func_type);
                 }
             }
             Payload::ImportSection(reader) => {
@@ -223,7 +343,7 @@ pub(crate) fn validate_module(
                     let entry = entry.map_err(|error| ValidationRefusal::MalformedModule {
                         reason: error.to_string(),
                     })?;
-                    refuse_import(&entry)?;
+                    refuse_import(&entry, &function_types, revision)?;
                 }
             }
             Payload::FunctionSection(reader) => {
@@ -254,25 +374,75 @@ pub(crate) fn validate_module(
             reason: error.to_string(),
         }
     })?;
+    let linker = host::linker(engine.inner(), revision).map_err(|error| {
+        ValidationRefusal::RejectedByEngine {
+            reason: error.to_string(),
+        }
+    })?;
     Ok(ValidatedModule {
         module,
+        linker,
         byte_size,
         function_count,
+        revision,
     })
 }
 
-fn refuse_import(import: &Import<'_>) -> Result<(), ValidationRefusal> {
-    let permitted = PERMITTED_IMPORTS
+fn refuse_import(
+    import: &Import<'_>,
+    types: &[FuncType],
+    revision: AbiRevision,
+) -> Result<(), ValidationRefusal> {
+    let declaration = if let Some(index) = HOST_FUNCTIONS
         .iter()
-        .any(|(module, name)| *module == import.module && *name == import.name);
-    if permitted {
+        .position(|function| import.module == ABI_MODULE && import.name == function.name)
+    {
+        &HOST_FUNCTION_TYPES[index]
+    } else if revision == AbiRevision::CandidateV2
+        && import.module == crate::abi::response::CANDIDATE_ABI_MODULE
+    {
+        crate::abi::response::candidate_function_type(import.name).ok_or_else(|| {
+            ValidationRefusal::ForbiddenImport {
+                import_module: import.module.to_string(),
+                import_name: import.name.to_string(),
+            }
+        })?
+    } else {
+        return Err(ValidationRefusal::ForbiddenImport {
+            import_module: import.module.to_string(),
+            import_name: import.name.to_string(),
+        });
+    };
+    let TypeRef::Func(type_index) = import.ty else {
+        return Err(ValidationRefusal::WrongImportKind {
+            import_name: import.name.to_string(),
+        });
+    };
+    let function_type =
+        types
+            .get(type_index as usize)
+            .ok_or_else(|| ValidationRefusal::MalformedModule {
+                reason: format!("import {} references absent type {type_index}", import.name),
+            })?;
+    if values_match(function_type.params(), declaration.params)
+        && values_match(function_type.results(), declaration.results)
+    {
         Ok(())
     } else {
-        Err(ValidationRefusal::ForbiddenImport {
-            import_module: import.module.to_string(),
+        Err(ValidationRefusal::WrongImportSignature {
             import_name: import.name.to_string(),
         })
     }
+}
+
+fn values_match(actual: &[ValType], expected: &[AbiValueType]) -> bool {
+    actual.len() == expected.len()
+        && actual.iter().zip(expected).all(|(actual, expected)| {
+            matches!(
+                (actual, expected),
+                (ValType::I32, AbiValueType::I32) | (ValType::I64, AbiValueType::I64)
+            )
+        })
 }
 
 fn refuse_value_type(value_type: ValType) -> Result<(), ValidationRefusal> {

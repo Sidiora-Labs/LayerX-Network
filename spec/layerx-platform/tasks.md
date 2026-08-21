@@ -515,7 +515,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Enforce required contrast across the package's text and semantic token combinations through automated checks.
     - Wire automated accessibility checks into the browser suites, including 1.5x text-expansion layout checks and locale-aware amount rendering with explicit currency codes.
     - _Requirements: 20.1, 20.2, 20.6, 17.3_
-  - [-] 11.5 Build the performance machinery
+  - [ ] 11.5 Build the performance machinery
     - Code-split by route with declared per-route script budgets enforced in CI.
     - Render the explorer plane server-side cacheable.
     - Enforce the paint, interaction and layout-shift budgets in CI on representative pages.
@@ -819,14 +819,14 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Apply the workspace dependency, license and lint policy, including the integer-only rule in every consensus-adjacent path.
     - Prove existing builds are untouched with the programs workspace present.
     - _Requirements: 28.2, 28.7_
-  - [ ] 19.2 Implement deterministic execution and metering
+  - [x] 19.2 Implement deterministic execution and metering
     - Implement instruction-level CPU metering, memory accounting and storage accounting, charged through the existing fee mechanism.
     - Fail an execution exceeding its budget with a typed resource result and full rollback, never a stall or node fault.
     - Record the runtime and ABI version per execution for receipt carriage and versioned replay.
     - Prove byte-identical execution across operating systems, architectures and optimisation levels on the conformance vector set.
     - Property-test that metering is deterministic: equal executions consume equal budgets everywhere.
     - _Requirements: 28.3, 28.4, 28.2_
-  - [ ] 19.3 Implement the capability ABI and namespaced storage
+  - [x] 19.3 Implement the capability ABI and namespaced storage
     - Define the versioned program ABI: capability-based host functions for storage, events, program calls, 402LXP transfer requests and receipt-verified reads, with no ambient authority.
     - Implement namespaced persistent storage per program with storage metering and isolation from every other namespace.
     - Bind every capability to the invoking activity's authorisation context, with downward-only narrowing.
@@ -1070,42 +1070,42 @@ surface makes the evidence portable while custody never leaves Paxeer.
 
 - [ ] 28. Make deployed programs callable on the network
   - Parallel lanes: 28.1 lands first and alone because it reshapes the ABI and host surface every later lane edits. Once it lands, 28.2 through 28.6 are five independent agents on disjoint files. 28.7 joins them and 28.8 follows it.
-  - [ ] 28.1 Modularize the ABI and host surface into per-capability units
+  - [x] 28.1 Modularize the ABI and host surface into per-capability units
     - Split src/abi.rs into an abi module: mod.rs holding the Abi transaction, effects and commit; capability.rs holding Capability, CapabilitySet and narrowing; storage_ops.rs holding the storage operations; leaving room for context, crypto, response and balance units later waves add without collision.
     - Split src/host.rs into a host module: mod.rs holding linker construction and RuntimeState; memory.rs holding the guest read and write helpers; storage.rs, events.rs, calls.rs and transfer.rs holding one host-function family each.
     - Keep the change strictly behaviour-preserving: the frozen ABI manifest, the host-function table, every status code and every refusal taxonomy stay byte-identical, and the existing test suites pass unchanged with no edits to their assertions.
     - Add a module-boundary lint proving no host-function family reaches another family's state except through RuntimeState, so later waves can add a host function without reading the whole file.
     - Record the module map in the runtime crate documentation so a parallel agent can find its lane without reading every file.
     - _Requirements: 28.6, 30.1_
-  - [ ] 28.2 Carry calldata into the invoked entry point
+  - [x] 28.2 Carry calldata into the invoked entry point
     - Add bounded calldata to AuthorizedExecutionRequest so an activity supplies input bytes rather than only integer arguments, routed through the same reserve-and-write protocol the composition path already uses to enter a callee.
     - Unify the entry protocol: the activity boundary and a program-to-program edge enter a program the same way, so a program has one entry contract rather than two.
     - Meter the calldata copy on the same per-byte basis composition already charges, and refuse input past the declared ABI bound with a typed result before any guest code runs.
     - Extend the Rust SDK entry plumbing so a program declares its entry point once and receives calldata identically at both boundaries.
     - Test an activity-level call with calldata against a real module, including the empty, maximum and one-past-maximum cases.
     - _Requirements: 35.2_
-  - [ ] 28.3 Return response bytes across the call boundary
+  - [x] 28.3 Return response bytes across the call boundary
     - Add a response region to the call protocol: a callee writes bounded response bytes, the runtime copies them into a caller-declared buffer, and the caller reads them through a response host function rather than through storage.
     - Carry the response to the activity boundary too, so an authorized execution returns bytes as well as integer outputs and metered usage.
     - Meter the response copy per byte and account it against the output resource class, refusing a response past the caller's declared capacity with a typed result rather than truncating.
     - Bind the response to the exact call edge so a stale or foreign response can never be read, and prove it across a fan-out of sibling calls.
     - Extend the Rust SDK call surface with a typed response and test the empty, maximum and over-capacity cases.
     - _Requirements: 35.3_
-  - [ ] 28.4 Carry typed failure payloads and program refusal reasons
+  - [x] 28.4 Carry typed failure payloads and program refusal reasons
     - Extend the refusal taxonomy so a guest refusal carries the refusing program, the refusal class and bounded program-supplied reason bytes, replacing the bare negative result code as the only failure signal.
     - Propagate a nested refusal to the activity boundary unchanged, naming the frame that refused rather than the frame that observed it, so a deep call graph reports its actual cause.
     - Meter the reason bytes and bound them, so a failure path cannot be used to move unmetered data or to grow a receipt without limit.
     - Carry the failure payload into the activity receipt under the standard receipt shape so every consumer renders a program failure with the same rigor as a success.
     - Extend the Rust SDK error vocabulary to construct and decode a reason, and test refusal propagation from depth one and from the declared maximum depth.
     - _Requirements: 35.4, 35.6_
-  - [ ] 28.5 Admit a caller-declared execution budget
+  - [x] 28.5 Admit a caller-declared execution budget
     - Replace the compiled-constant execution budget with a budget declared by the invoking activity, bounded above by the protocol maximum and below by the declared minimum viable execution.
     - Charge only the metered usage actually consumed inside the declared ceiling, so a caller that over-declares is not billed for headroom it did not use.
     - Refuse an execution whose declared budget exceeds the protocol maximum, or whose payer cannot cover the ceiling, before any guest code runs and with a typed result.
     - Keep the whole call graph inside one declared budget exactly as the carried-fuel accounting already does, so composition cannot multiply a ceiling.
     - Property-test that declared budget and consumed usage are independent: equal executions under different ceilings consume identical usage and produce identical evidence.
     - _Requirements: 35.5, 28.3_
-  - [ ] 28.6 Ship the isolation and composition adversarial suites
+  - [x] 28.6 Ship the isolation and composition adversarial suites
     - Write the isolation suite the capability ABI claims: guests attempting to reach kernel state, another program's namespace, another principal's cells, the host linker and memory outside their own instance, each defeated by construction.
     - Write the composition suite the call rules claim: depth, fan-out, edge-count, visit-count and reentrancy violations, each refused typed with no partial call graph, no surviving storage write and no staged transfer.
     - Prove atomicity across the graph: a refusal at any depth discards every write and every effect of every frame, asserted on storage contents rather than on return codes alone.

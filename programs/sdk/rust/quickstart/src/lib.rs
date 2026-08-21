@@ -13,9 +13,9 @@
 #![no_std]
 
 use layerx_program_sdk::{
-    call, entry, event, receipt, storage, transfer, trap_on_panic, AccountId, Amount, AssetId,
-    CallInput, Capability, CapabilitySet, EventData, EventTopic, Field, Payment, ProgramError,
-    ProgramId, Reason, ReceiptDigest, StorageKey, StorageValue, STATUS_INVALID,
+    call, event, receipt, storage, transfer, trap_on_panic, AccountId, Amount, AssetId, CallInput,
+    Capability, CapabilitySet, EventData, EventTopic, Field, Payment, ProgramError, ProgramId,
+    Reason, ReceiptDigest, StorageKey, StorageValue, STATUS_INVALID,
 };
 
 trap_on_panic!();
@@ -208,16 +208,23 @@ fn reset_counter() -> Result<i32, i32> {
     Ok(0)
 }
 
-fn note_call(input_pointer: i32, input_length: i32) -> Result<i32, i32> {
-    let input = entry::call_input(input_pointer, input_length).map_err(ProgramError::code)?;
+fn note_call(input: &[u8]) -> Result<layerx_program_sdk::CallResult, ProgramError> {
     if input.len() != FORWARD_INPUT_BYTES {
-        return Err(STATUS_INVALID);
+        return Err(ProgramError::value(Field::CallInput, Reason::Malformed));
     }
-    let counter = load_counter()?;
+    let counter = load_counter().map_err(typed_status)?;
     let mut noted = [0u8; NOTED_EVENT_BYTES];
     noted[0..8].copy_from_slice(&counter.to_be_bytes());
     noted[8..16].copy_from_slice(input);
-    emit(TOPIC_NOTED, &noted)
+    let status = emit(TOPIC_NOTED, &noted).map_err(typed_status)?;
+    layerx_program_sdk::CallResult::new(u32::try_from(status).unwrap_or(u32::MAX))
+}
+
+fn typed_status(status: i32) -> ProgramError {
+    match ProgramError::from_status(status) {
+        Err(error) => error,
+        Ok(_) => ProgramError::value(Field::CallInput, Reason::Malformed),
+    }
 }
 
 /// Records the fee, the asset it is denominated in and the account the
@@ -319,21 +326,4 @@ pub extern "C" fn layerx_main(selector: i64) -> i64 {
     }
 }
 
-/// Reserves the bounded region a calling program writes its input into.
-#[allow(unsafe_code)]
-#[no_mangle]
-pub extern "C" fn layerx_reserve(length: i32) -> i32 {
-    entry::reserve_call_input(length)
-}
-
-/// Callee half of [`forward`]. It holds only the storage-read and emit-event
-/// grants that call narrows to, so it files the caller's note as evidence
-/// without reaching for an authority it was not handed.
-#[allow(unsafe_code)]
-#[no_mangle]
-pub extern "C" fn layerx_call(input_pointer: i32, input_length: i32) -> i32 {
-    match note_call(input_pointer, input_length) {
-        Ok(status) => status,
-        Err(status) => status,
-    }
-}
+layerx_program_sdk::entrypoint!(note_call);

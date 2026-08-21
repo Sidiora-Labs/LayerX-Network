@@ -17,7 +17,7 @@ use layerx_programs_runtime::{
     AuthorizedExecutionRequest, CompositionContext, Deploy, DeploymentReceipt, Executor,
     KernelTransferPrimitive, Lifecycle, PrincipalId, ProgramId, ProgramVersion, ReceiptOracle,
     ReceiptView, Storage, StorageNamespace, TransferCapability, UpgradePolicy, ValidatedModule,
-    VerifiedProgramSettlement, WasmEngine, WasmValue, ABI_VERSION,
+    VerifiedProgramSettlement, WasmEngine, ABI_VERSION, CALL_ENTRY_EXPORT,
 };
 
 use crate::error::PortRefusal;
@@ -25,9 +25,12 @@ use crate::hash::sha256;
 use crate::layout::MigrationCell;
 use crate::reference::{
     query_capabilities, PublicLockPort, ARTIFACT_PATH, BUILD_COMMAND, DEPENDENCY_LOCK,
-    DEPENDENCY_LOCK_PATH, DESCRIPTOR_PATH, HAS_VALID_KEY_EXPORT, PURCHASE_EXPORT,
-    REMAINING_PERIODS_EXPORT, SOLIDITY_SOURCE, SOURCE_PATH, TOOLCHAIN_MANIFEST, TOOLCHAIN_PATH,
+    DEPENDENCY_LOCK_PATH, DESCRIPTOR_PATH, HAS_VALID_KEY_EXPORT, HAS_VALID_KEY_METHOD,
+    PURCHASE_METHOD, REMAINING_PERIODS_EXPORT, REMAINING_PERIODS_METHOD, SOLIDITY_SOURCE,
+    SOURCE_PATH, TOOLCHAIN_MANIFEST, TOOLCHAIN_PATH,
 };
+use crate::semantics::MethodAbi;
+use crate::value::Word;
 
 /// Independent hermetic rebuilds a published port is verified with. Two is the
 /// pipeline's floor: one build cannot demonstrate reproducibility.
@@ -75,11 +78,10 @@ impl BuildRunner for PortBuildRunner {
                 path: descriptor_path.clone(),
             }
         })?;
-        let text = core::str::from_utf8(&descriptor.content).map_err(|_| {
-            BuildRefusal::BuilderFailed {
+        let text =
+            core::str::from_utf8(&descriptor.content).map_err(|_| BuildRefusal::BuilderFailed {
                 reason: "port descriptor is not valid text".to_owned(),
-            }
-        })?;
+            })?;
         let provenance =
             attempt
                 .archive
@@ -95,9 +97,10 @@ impl BuildRunner for PortBuildRunner {
         let port = PublicLockPort::parse(text).map_err(|refusal| BuildRefusal::BuilderFailed {
             reason: refusal.to_string(),
         })?;
-        port.code().map_err(|refusal| BuildRefusal::ArtifactRejected {
-            reason: refusal.to_string(),
-        })
+        port.code()
+            .map_err(|refusal| BuildRefusal::ArtifactRejected {
+                reason: refusal.to_string(),
+            })
     }
 }
 
@@ -198,7 +201,10 @@ pub fn build_plan() -> BuildPlan {
             toolchain_digest,
             dependency_lock_digest: sha256(DEPENDENCY_LOCK.as_bytes()),
             source_date_epoch: SOURCE_EPOCH,
-            command: BUILD_COMMAND.split_whitespace().map(str::to_owned).collect(),
+            command: BUILD_COMMAND
+                .split_whitespace()
+                .map(str::to_owned)
+                .collect(),
         },
         artifact_path: ARTIFACT_PATH.to_owned(),
         toolchain_manifest: TOOLCHAIN_PATH.to_owned(),
@@ -287,7 +293,7 @@ pub fn execute_purchase(
     periods: u64,
 ) -> Result<AuthorizedExecutionRecord, PortRefusal> {
     let capabilities = port.purchase_capabilities(periods)?;
-    let bought = i64::try_from(periods).map_err(|_| PortRefusal::OutOfRange)?;
+    let calldata = MethodAbi::new(PURCHASE_METHOD)?.calldata(&[Word::from_u64(periods)])?;
     Ok(Executor::declared().execute_authorized(
         storage,
         AuthorizedExecutionRequest {
@@ -295,9 +301,10 @@ pub fn execute_purchase(
             program: invocation.program,
             authorization: AuthorizationContext::new(invocation.principal, capabilities),
             receipts: invocation.receipts,
-            export: PURCHASE_EXPORT,
-            args: &[WasmValue::I64(bought)],
+            entrypoint: CALL_ENTRY_EXPORT,
+            calldata: &calldata,
             composition: CompositionContext::isolated(),
+            response_capacity: 0,
         },
     )?)
 }
@@ -356,7 +363,10 @@ pub fn settle(
     effects: &AbiEffects,
     kernel: &mut impl KernelTransferPrimitive,
 ) -> Result<VerifiedProgramSettlement, PortRefusal> {
-    Ok(TransferCapability::new(program, principal, invocation_authority)?.settle(effects, kernel)?)
+    Ok(
+        TransferCapability::new(program, principal, invocation_authority)?
+            .settle(effects, kernel)?,
+    )
 }
 
 /// Imports an exported `EVM` state dump into namespaced storage, writing each
@@ -387,6 +397,12 @@ fn query(
     storage: &mut Storage,
     export: &str,
 ) -> Result<AuthorizedExecutionRecord, PortRefusal> {
+    let method = match export {
+        HAS_VALID_KEY_EXPORT => HAS_VALID_KEY_METHOD,
+        REMAINING_PERIODS_EXPORT => REMAINING_PERIODS_METHOD,
+        _ => return Err(PortRefusal::OutOfRange),
+    };
+    let calldata = MethodAbi::new(method)?.calldata(&[])?;
     Ok(Executor::declared().execute_authorized(
         storage,
         AuthorizedExecutionRequest {
@@ -394,9 +410,10 @@ fn query(
             program: invocation.program,
             authorization: AuthorizationContext::new(invocation.principal, query_capabilities()?),
             receipts: invocation.receipts,
-            export,
-            args: &[],
+            entrypoint: CALL_ENTRY_EXPORT,
+            calldata: &calldata,
             composition: CompositionContext::isolated(),
+            response_capacity: 0,
         },
     )?)
 }
