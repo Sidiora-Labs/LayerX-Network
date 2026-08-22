@@ -77,3 +77,11 @@ symbol = "CReceiptOracle::verified_receipt"
 observed = "The production Programs CALL adapter currently returns AbiError::ReceiptMismatch for every receipt lookup. Because receipt-read grants are validated through ReceiptOracle during ABI construction, an explicitly authorised program cannot perform any receipt-verified read through this path."
 assumption = "Task 28.7 remains incomplete until the adapter resolves and verifies canonical receipts from protocol state through an activity-owned scalar callback, or the protocol explicitly removes receipt-read from CALL admission with a typed versioned refusal. An always-mismatch oracle is not treated as implemented host functionality."
 severity = "dependency-boundary"
+
+[observation.workflow.1]
+task = "28.7"
+file = "spec/layerx-platform/spec.kvx"
+symbol = "task status"
+observed = "Twelve tasks (12.1-12.6, 13.1, 13.4, 13.5, 15.2, 25.1, 28.7) held every in_progress slot with no live agent on any of the first eleven. Their work sits on unmerged branches - notably worktree-task-12-6-activity, codex/task-25-1-mirror-publisher and codex/platform-11-x - which were never integrated into main."
+assumption = "The eleven pre-wave-14 claims were released to pending so the wave 14-22 lanes could be claimed under the max_in_progress limit of twelve. No code was deleted and no branch was removed; the unmerged branches named above still carry whatever those tasks produced and need a human integration pass."
+severity = "note"

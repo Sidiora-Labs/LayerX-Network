@@ -526,42 +526,42 @@ surface makes the evidence portable while custody never leaves Paxeer.
 ## Wave 7 - The Application Surfaces
 
 - [ ] 12. Build the application journeys
-  - [-] 12.1 Build onboarding and account activation
+  - [ ] 12.1 Build onboarding and account activation
     - Build account creation in both shells: email, passkey ceremony, honest activation progress, ready only on verified activation.
     - Build failure and resume presentation for every onboarding stage.
     - Keep the surfaces within three decisions and free of banned vocabulary.
     - Build the new-device sign-in flow with the security notification hook.
     - Run onboarding end to end in both shells against the real service.
     - _Requirements: 3.4, 3.9, 2.9_
-  - [-] 12.2 Build home and the move-money wizard
+  - [ ] 12.2 Build home and the move-money wizard
     - Build home in both shells: verified balance with freshness and privacy toggle, the primary actions Add money, Move money and Withdraw, agents summary, recent activity and the approval badge.
     - Build the move-money wizard - who, how much, review, result - as the mobile full-screen wizard and the desktop split pane with the live summary.
     - Render review from the journey quote in plain language with fee estimate and ceiling, and result only from journey state - Done receipt-backed, still-checking locked, refusal honest.
     - Keep initiation within three decisions with automatic routing.
     - Run move-money end to end in both shells including refusal and still-checking paths.
     - _Requirements: 2.1, 2.2, 9.3_
-  - [-] 12.3 Build the custody journey surfaces
+  - [ ] 12.3 Build the custody journey surfaces
     - Build deposit: binding-folded start, single wallet hand-off with designed in-progress, failure and cancel states, the staged timeline, safe-to-close statement and receipt-gated completion.
     - Build withdrawal: irreversibility at review, the staged timeline with the configured settlement expectation, claim readiness with the single wallet hand-off, payout-verified completion.
     - Build challenge-window hold and delay presentations as honest states with expectations.
     - Build the guided emergency exit under Settings with typed confirmation and degraded-mode operability.
     - Run deposit and withdrawal end to end in both shells against the test network.
     - _Requirements: 10.3, 11.2, 18.7_
-  - [-] 12.4 Build the agent surfaces
+  - [ ] 12.4 Build the agent surfaces
     - Build agent creation - name, purpose, limit - with the honest creation-journey progress, in both shells.
     - Build the agent list and detail: the desktop master-detail and the mobile stacked screens, with spend-versus-limit from receipts.
     - Build the controls with the confirmation grammar: fund, return, change limit, pause reversible, archive destructive with disposition-first and typed confirmation.
     - Build rotation and recovery surfaces with the challenge delay in plain time.
     - Run create, pause, reclaim and archive end to end in both shells.
     - _Requirements: 12.1, 12.6, 2.2_
-  - [-] 12.5 Build the approval and notification surfaces
+  - [ ] 12.5 Build the approval and notification surfaces
     - Build the approval inbox and detail in both shells - the mobile screen and the desktop split view - from the rendered disclosure only, with the expiry countdown.
     - Build approve with the step-up ceremony and reject with the nothing-moved confirmation, then track the released activity.
     - Build expired and already-decided presentations.
     - Build the notification surfaces: the mobile screen, the desktop bell popover with archive page, read state and preferences.
     - Run approval grant, reject, expiry and two-device convergence end to end in both shells.
     - _Requirements: 13.1, 13.3, 19.4_
-  - [-] 12.6 Build the activity surfaces
+  - [ ] 12.6 Build the activity surfaces
     - Build the feed in both shells: the mobile stacked rows with month bands and subtotals, the desktop sortable table, with the deferred-apply filters echoed in content.
     - Build entry detail: the plain sentence, the timeline, receipt-backed figures and the collapsed Technical details with explorer links.
     - Build the statement and evidence exports.
@@ -570,7 +570,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - _Requirements: 14.3, 14.4, 18.9_
 
 - [ ] 13. Build settings, security, support and the explorer plane
-  - [-] 13.1 Build settings and preferences
+  - [ ] 13.1 Build settings and preferences
     - Build the settings hub sectioned as profile, security, linked wallet, notifications, advanced and help, with current values on rows.
     - Build notification preferences: per-event classes under channel toggles, the notification detail level, and the non-suppressible security classes presented as such.
     - Build privacy mode masking balances and every derived figure across both shells, persisted per user.
@@ -591,14 +591,14 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Present binding as active only on its verified receipt.
     - Test binding and rebinding end to end with the security notification.
     - _Requirements: 5.3, 5.4, 5.7_
-  - [-] 13.4 Build the support surface
+  - [ ] 13.4 Build the support surface
     - Build support chat seeded with topic suggestion chips, as the mobile screen and the desktop docked panel.
     - Build its designed states: empty with suggestions, offline with retry, send-failure with inline retry, and the feedback loop.
     - Attach the trace identifier to support conversations started from an error's Report action.
     - Keep support reachable from every error surface.
     - Test the support states and the report-to-support path.
     - _Requirements: 8.2, 18.8, 18.2_
-  - [-] 13.5 Build the public explorer plane
+  - [ ] 13.5 Build the public explorer plane
     - Build the server-rendered explorer pages: checkpoints, batches, receipt lookup, account views and the evidence verifier, table-first.
     - Show the verification level for every displayed fact and index freshness on every page.
     - Keep every page deep-linkable and functional signed-out, meeting the same design, accessibility and performance gates.
@@ -669,7 +669,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Establish the signed reproducible release pipeline skeleton for crates.io, npm, PyPI, Go modules, Maven Central, Swift Package Manager and NuGet.
     - Prove existing builds are untouched: make build, make agent-build and make human-build succeed with the platform workspace present.
     - _Requirements: 24.1, 24.6_
-  - [-] 15.2 Harden the Rust, TypeScript and Python SDKs to production
+  - [ ] 15.2 Harden the Rust, TypeScript and Python SDKs to production
     - Bring the existing Rust, TypeScript and Python SDKs to production grade: complete operation coverage from both schemas, idiomatic packaging, typed error taxonomy with stable machine codes and retriability classes.
     - Ship the local receipt, batch-inclusion and checkpoint verification path in all three, requiring no trust in any hosted surface.
     - Enforce integer-only money and required idempotency keys in every public API, with floating-point amounts unrepresentable.
@@ -989,7 +989,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
 ## Wave 12 - The Multichain Surface
 
 - [ ] 25. Publish and verify batch mirrors
-  - [-] 25.1 Build the mirror publisher
+  - [ ] 25.1 Build the mirror publisher
     - Build the mirror publisher anchoring batch commitments to Ethereum and Solana with batch data retrievable per mirror, fed exclusively through the node boundary.
     - Publish as pure archives: no vault, portal or custody semantics of any kind on the mirror chains.
     - Track and expose per-mirror freshness - latest batch and checkpoint mirrored - with lag stated honestly.
@@ -1174,7 +1174,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Prove every attack defeated by construction, and treat an escape as a build-breaking defect rather than a reported finding.
     - Extend rather than rewrite the attack inventory recorded in wave 14.
     - _Requirements: 36.6, 30.7_
-  - [ ] 29.7 Carry shared state into the SDK and every porting kit
+  - [-] 29.7 Carry shared state into the SDK and every porting kit
     - Add typed shared-state accessors to the Rust SDK alongside the principal-scoped ones, with the namespace visible in the type so a program cannot address the wrong scope by accident.
     - Map a Solidity storage slot that is not caller-indexed onto the shared namespace in the EVM kit, and retire the kit declaration that shared state has no version-one representation.
     - Map a Solana program-owned account onto the shared namespace in the Solana kit, and a CosmWasm item and map onto it in the CosmWasm kit.
@@ -1254,21 +1254,21 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Meter the read and bound the number of accounts one activity can grant sight of.
     - Prove sight confers no authority: a program holding every read grant and no spending grant can move nothing.
     - _Requirements: 38.3_
-  - [ ] 31.3 Add deterministic hash primitives
+  - [-] 31.3 Add deterministic hash primitives
     - Add a hash host function covering sha256, keccak256 and blake3, addressed by algorithm identifier, refusing an unknown algorithm rather than defaulting.
     - Meter per input byte with a per-algorithm coefficient reflecting real cost, and bound the input length per call.
     - Implement against integer-only, allocation-bounded code paths with no floating point reachable anywhere, honouring the workspace integer-only rule.
     - Freeze every algorithm behind golden vectors including the published test vectors of each function.
     - Prove byte-identical digests across operating systems, architectures and optimisation levels on the determinism differential.
     - _Requirements: 38.4_
-  - [ ] 31.4 Add deterministic signature verification and recovery
+  - [-] 31.4 Add deterministic signature verification and recovery
     - Add signature host functions covering ed25519 verification, secp256k1 verification and secp256k1 public-key recovery, addressed by algorithm identifier.
     - Return every failure as a typed refusal rather than a trap, so an invalid signature is an ordinary program outcome and not an aborted activity.
     - Meter per operation with a per-algorithm coefficient, and reject malformed keys, signatures and recovery identifiers before any verification work is charged.
     - Implement with constant-shape execution so metered cost does not depend on secret-bearing inputs, and with no floating point in any path.
     - Freeze behind golden vectors including published test vectors, malleable signatures and every rejection case, and prove byte-identical results on the determinism differential.
     - _Requirements: 38.5_
-  - [ ] 31.5 Add wide-integer and modular-exponentiation primitives
+  - [-] 31.5 Add wide-integer and modular-exponentiation primitives
     - Add wide-integer host functions covering 256-bit multiplication, division, remainder and modular exponentiation, operating on big-endian byte operands.
     - Refuse division and remainder by zero and refuse malformed operand widths as typed results rather than traps.
     - Meter by operand width and, for modular exponentiation, by exponent bit length, so cost tracks work rather than call count.
@@ -1356,7 +1356,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Carry interface changes through the upgrade path with the compatibility rules stated: a widening is allowed, a narrowing is a refusal unless the upgrade declares it a breaking change.
     - Test interface binding, drift refusal and upgrade compatibility across the registry conformance suite.
     - _Requirements: 40.1_
-  - [ ] 33.2 Freeze the calldata encoding convention
+  - [-] 33.2 Freeze the calldata encoding convention
     - Define one canonical calldata encoding for the platform covering integers, byte strings, fixed arrays, variable arrays, options and tagged unions, with exactly one valid encoding per value.
     - Refuse a non-canonical encoding of a representable value rather than accepting it leniently, so two encodings can never produce two digests for one call.
     - Bound the decoded size and the nesting depth so decoding cannot be a denial-of-service surface, and charge decoding by decoded bytes.

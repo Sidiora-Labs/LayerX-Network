@@ -1546,7 +1546,7 @@ status = "pending"
 
 [task.12.1]
 title = "Build onboarding and account activation"
-status = "in_progress"
+status = "pending"
 wave = 7
 requires = ["11.3","5.4"]
 do_1 = "Build account creation in both shells: email, passkey ceremony, honest activation progress, ready only on verified activation."
@@ -1561,7 +1561,7 @@ reqs = ["3.4","3.9","2.9"]
 
 [task.12.2]
 title = "Build home and the move-money wizard"
-status = "in_progress"
+status = "pending"
 wave = 7
 requires = ["11.3","7.6"]
 do_1 = "Build home in both shells: verified balance with freshness and privacy toggle, the primary actions Add money, Move money and Withdraw, agents summary, recent activity and the approval badge."
@@ -1576,7 +1576,7 @@ reqs = ["2.1","2.2","9.3"]
 
 [task.12.3]
 title = "Build the custody journey surfaces"
-status = "in_progress"
+status = "pending"
 wave = 7
 requires = ["11.3","7.3","7.4","7.5"]
 do_1 = "Build deposit: binding-folded start, single wallet hand-off with designed in-progress, failure and cancel states, the staged timeline, safe-to-close statement and receipt-gated completion."
@@ -1591,7 +1591,7 @@ reqs = ["10.3","11.2","18.7"]
 
 [task.12.4]
 title = "Build the agent surfaces"
-status = "in_progress"
+status = "pending"
 wave = 7
 requires = ["11.3","8.2","8.5"]
 do_1 = "Build agent creation - name, purpose, limit - with the honest creation-journey progress, in both shells."
@@ -1606,7 +1606,7 @@ reqs = ["12.1","12.6","2.2"]
 
 [task.12.5]
 title = "Build the approval and notification surfaces"
-status = "in_progress"
+status = "pending"
 wave = 7
 requires = ["11.3","9.3","9.5"]
 do_1 = "Build the approval inbox and detail in both shells - the mobile screen and the desktop split view - from the rendered disclosure only, with the expiry countdown."
@@ -1621,7 +1621,7 @@ reqs = ["13.1","13.3","19.4"]
 
 [task.12.6]
 title = "Build the activity surfaces"
-status = "in_progress"
+status = "pending"
 wave = 7
 requires = ["11.3","10.3"]
 do_1 = "Build the feed in both shells: the mobile stacked rows with month bands and subtotals, the desktop sortable table, with the deferred-apply filters echoed in content."
@@ -1640,7 +1640,7 @@ status = "pending"
 
 [task.13.1]
 title = "Build settings and preferences"
-status = "in_progress"
+status = "pending"
 wave = 7
 requires = ["11.2","9.4"]
 do_1 = "Build the settings hub sectioned as profile, security, linked wallet, notifications, advanced and help, with current values on rows."
@@ -1685,7 +1685,7 @@ reqs = ["5.3","5.4","5.7"]
 
 [task.13.4]
 title = "Build the support surface"
-status = "in_progress"
+status = "pending"
 wave = 7
 requires = ["11.3"]
 do_1 = "Build support chat seeded with topic suggestion chips, as the mobile screen and the desktop docked panel."
@@ -1700,7 +1700,7 @@ reqs = ["8.2","18.8","18.2"]
 
 [task.13.5]
 title = "Build the public explorer plane"
-status = "in_progress"
+status = "pending"
 wave = 7
 requires = ["11.1","10.5"]
 do_1 = "Build the server-rendered explorer pages: checkpoints, batches, receipt lookup, account views and the evidence verifier, table-first."
@@ -1844,7 +1844,7 @@ reqs = ["24.1","24.6"]
 
 [task.15.2]
 title = "Harden the Rust, TypeScript and Python SDKs to production"
-status = "in_progress"
+status = "pending"
 wave = 9
 requires = ["15.1"]
 do_1 = "Bring the existing Rust, TypeScript and Python SDKs to production grade: complete operation coverage from both schemas, idiomatic packaging, typed error taxonomy with stable machine codes and retriability classes."
@@ -2515,7 +2515,7 @@ status = "pending"
 
 [task.25.1]
 title = "Build the mirror publisher"
-status = "in_progress"
+status = "pending"
 wave = 12
 requires = ["10.1"]
 do_1 = "Build the mirror publisher anchoring batch commitments to Ethereum and Solana with batch data retrievable per mirror, fed exclusively through the node boundary."
@@ -2896,7 +2896,7 @@ reqs = ["36.6","30.7"]
 
 [task.29.7]
 title = "Carry shared state into the SDK and every porting kit"
-status = "pending"
+status = "in_progress"
 wave = 15
 requires = ["29.2"]
 do_1 = "Add typed shared-state accessors to the Rust SDK alongside the principal-scoped ones, with the namespace visible in the type so a program cannot address the wrong scope by accident."
@@ -3058,7 +3058,7 @@ reqs = ["38.3"]
 
 [task.31.3]
 title = "Add deterministic hash primitives"
-status = "pending"
+status = "in_progress"
 wave = 17
 requires = ["28.1"]
 do_1 = "Add a hash host function covering sha256, keccak256 and blake3, addressed by algorithm identifier, refusing an unknown algorithm rather than defaulting."
@@ -3073,7 +3073,7 @@ reqs = ["38.4"]
 
 [task.31.4]
 title = "Add deterministic signature verification and recovery"
-status = "pending"
+status = "in_progress"
 wave = 17
 requires = ["28.1"]
 do_1 = "Add signature host functions covering ed25519 verification, secp256k1 verification and secp256k1 public-key recovery, addressed by algorithm identifier."
@@ -3088,7 +3088,7 @@ reqs = ["38.5"]
 
 [task.31.5]
 title = "Add wide-integer and modular-exponentiation primitives"
-status = "pending"
+status = "in_progress"
 wave = 17
 requires = ["28.1"]
 do_1 = "Add wide-integer host functions covering 256-bit multiplication, division, remainder and modular exponentiation, operating on big-endian byte operands."
@@ -3266,7 +3266,7 @@ reqs = ["40.1"]
 
 [task.33.2]
 title = "Freeze the calldata encoding convention"
-status = "pending"
+status = "in_progress"
 wave = 19
 requires = ["28.2"]
 do_1 = "Define one canonical calldata encoding for the platform covering integers, byte strings, fixed arrays, variable arrays, options and tagged unions, with exactly one valid encoding per value."
