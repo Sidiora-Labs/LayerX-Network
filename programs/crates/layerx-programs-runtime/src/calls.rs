@@ -10,7 +10,7 @@ use std::rc::Rc;
 
 use crate::abi::response::{CallResponse, ResponseRefusal};
 use crate::abi::{
-    Abi, AbiCommit, AbiError, AuthorizationContext, Capability, MAX_CALL_INPUT_BYTES,
+    Abi, AbiCommit, AbiError, AuthorizationContext, CallFrameId, Capability, MAX_CALL_INPUT_BYTES,
 };
 use crate::entrypoint::{self, EntrypointRefusal};
 use crate::execute::{ExecutionFault, ABI_VERSION};
@@ -147,6 +147,7 @@ impl Default for CompositionRules {
 /// One program active on the call stack of an activity.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CallFrame {
+    id: CallFrameId,
     program: ProgramId,
     principal: PrincipalId,
     depth: u32,
@@ -154,6 +155,11 @@ pub struct CallFrame {
 }
 
 impl CallFrame {
+    /// Returns the host-fixed identity of this call frame.
+    #[must_use]
+    pub const fn id(&self) -> CallFrameId {
+        self.id
+    }
     /// Returns the program executing in this frame.
     #[must_use]
     pub const fn program(&self) -> ProgramId {
@@ -182,6 +188,8 @@ impl CallFrame {
 /// One recorded program-to-program edge.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CallEdge {
+    caller_frame: CallFrameId,
+    callee_frame: CallFrameId,
     caller: ProgramId,
     callee: ProgramId,
     principal: PrincipalId,
@@ -189,6 +197,17 @@ pub struct CallEdge {
 }
 
 impl CallEdge {
+    /// Returns the frame that issued this call.
+    #[must_use]
+    pub const fn caller_frame(&self) -> CallFrameId {
+        self.caller_frame
+    }
+
+    /// Returns the frame entered by this call.
+    #[must_use]
+    pub const fn callee_frame(&self) -> CallFrameId {
+        self.callee_frame
+    }
     /// Returns the program that made the call.
     #[must_use]
     pub const fn caller(&self) -> ProgramId {
@@ -242,6 +261,7 @@ impl CallGraph {
             rules,
             principal,
             frames: vec![CallFrame {
+                id: CallFrameId::root(),
                 program,
                 principal,
                 depth: 0,
@@ -369,14 +389,24 @@ impl CallGraph {
         if let Some(frame) = self.frames.last_mut() {
             frame.calls = calls;
         }
+        let frame_id = origin
+            .id
+            .child(calls)
+            .map_err(|_| CompositionRefusal::FanoutExceeded {
+                limit: self.rules.fanout,
+                attempted: calls,
+            })?;
         self.entered.insert(callee, visits);
         self.edges.push(CallEdge {
+            caller_frame: origin.id,
+            callee_frame: frame_id,
             caller: origin.program,
             callee,
             principal: self.principal,
             depth,
         });
         self.frames.push(CallFrame {
+            id: frame_id,
             program: callee,
             principal: self.principal,
             depth,
@@ -811,14 +841,19 @@ fn execute_nested(
         .graph()
         .clone();
     admitted_graph.enter(callee)?;
-    let (principal, capabilities, storage, receipts) = {
+    let (principal, capabilities, storage, receipts, callee_frame) = {
         let abi = state.abi_mut().ok_or(CompositionRefusal::NotComposable)?;
-        let capabilities = abi.stage_call(callee, input, requested)?;
+        let callee_frame = admitted_graph
+            .current()
+            .ok_or(CompositionRefusal::NotComposable)?
+            .id();
+        let capabilities = abi.stage_call(callee, input, requested, callee_frame)?;
         (
             abi.principal(),
             capabilities,
             abi.storage_snapshot(),
             abi.verified_receipts(),
+            callee_frame,
         )
     };
     state
@@ -836,7 +871,7 @@ fn execute_nested(
             attempted: child_meter.cpu_budget().saturating_add(1),
         }));
     }
-    let authorization = AuthorizationContext::new(principal, capabilities);
+    let authorization = AuthorizationContext::nested(principal, capabilities, callee_frame);
     let child_abi = Abi::nested(ABI_VERSION, callee, authorization, storage, receipts)?;
     let child_graph = state
         .composition()

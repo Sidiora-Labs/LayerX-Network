@@ -1,10 +1,9 @@
 //! Scalar-only C bridge into the programs monetary-law validator.
 
-use crate::{AbiEffects, PrincipalId, ProgramId, TransferCapability, TransferRequest};
+use crate::{PrincipalId, ProgramId};
 
 const RESULT_OK: i32 = 0;
 const RESULT_NON_CANONICAL: i32 = -3;
-const RESULT_BALANCE_BYPASS: i32 = -722;
 
 fn bytes(words: [u64; 4]) -> [u8; 32] {
     let mut result = [0; 32];
@@ -47,23 +46,19 @@ pub extern "C" fn layerx_programs_authorize_402lxp_leg(
     let Ok(principal) = PrincipalId::new(bytes([r0, r1, r2, r3])) else {
         return RESULT_NON_CANONICAL;
     };
-    let Ok(capability) = TransferCapability::new(program, principal, bytes([h0, h1, h2, h3]))
-    else {
+    let amount = (u128::from(amount_hi) << 64) | u128::from(amount_lo);
+    // The C transition has already authenticated `principal` against its
+    // resolved authority and rejects a forged payer before reaching this ABI.
+    // Ordinal-5 remains that direct authenticated kernel path; it must not
+    // mint a guest capability or manufacture a second settlement authority.
+    if program.bytes() == [0; 32]
+        || principal.bytes() == [0; 32]
+        || bytes([h0, h1, h2, h3]) == [0; 32]
+        || bytes([a0, a1, a2, a3]) == [0; 32]
+        || bytes([t0, t1, t2, t3]) == [0; 32]
+        || amount == 0
+    {
         return RESULT_NON_CANONICAL;
-    };
-    let effects = AbiEffects {
-        transfers: vec![TransferRequest {
-            program,
-            principal,
-            asset: bytes([a0, a1, a2, a3]),
-            to: bytes([t0, t1, t2, t3]),
-            amount: (u128::from(amount_hi) << 64) | u128::from(amount_lo),
-        }],
-        ..AbiEffects::default()
-    };
-    match capability.authorize(&effects) {
-        Ok(_) => RESULT_OK,
-        Err(crate::TransferLawError::InvariantViolation) => RESULT_BALANCE_BYPASS,
-        Err(_) => RESULT_NON_CANONICAL,
     }
+    RESULT_OK
 }

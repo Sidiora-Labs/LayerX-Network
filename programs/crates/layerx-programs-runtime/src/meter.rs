@@ -19,6 +19,8 @@ pub const DEFAULT_OUTPUT_VALUES: u32 = 64;
 pub const DEFAULT_OUTPUT_BYTES: u64 = 1_048_576;
 /// Default table-element limit per execution.
 pub const DEFAULT_TABLE_ELEMENTS: u32 = 4_096;
+/// Default fee-unit price for one namespace byte held across one batch.
+pub const DEFAULT_OCCUPANCY_BYTE_BATCH_PRICE: u64 = 1;
 
 /// One independently enforced deterministic resource class.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,6 +33,8 @@ pub enum ResourceKind {
     StorageRead,
     /// Bytes written through the storage ABI.
     StorageWrite,
+    /// One namespace byte held across one protocol batch.
+    StorageOccupancy,
     /// Integer values returned across the guest boundary.
     Output,
     /// Successful response bytes copied across a call boundary.
@@ -44,6 +48,7 @@ impl Display for ResourceKind {
             Self::Memory => write!(formatter, "memory bytes"),
             Self::StorageRead => write!(formatter, "storage read bytes"),
             Self::StorageWrite => write!(formatter, "storage write bytes"),
+            Self::StorageOccupancy => write!(formatter, "storage occupancy byte-batches"),
             Self::Output => write!(formatter, "output values"),
             Self::OutputBytes => write!(formatter, "output bytes"),
         }
@@ -215,6 +220,7 @@ pub struct FeeSchedule {
     storage_write_byte: u64,
     output_value: u64,
     output_byte: u64,
+    occupancy_byte_batch: u64,
 }
 
 impl FeeSchedule {
@@ -234,12 +240,19 @@ impl FeeSchedule {
             storage_write_byte,
             output_value,
             output_byte: 1,
+            occupancy_byte_batch: DEFAULT_OCCUPANCY_BYTE_BATCH_PRICE,
         }
     }
 
     #[must_use]
     pub const fn with_output_byte_price(mut self, output_byte: u64) -> Self {
         self.output_byte = output_byte;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_occupancy_byte_batch_price(mut self, price: u64) -> Self {
+        self.occupancy_byte_batch = price;
         self
     }
 
@@ -277,6 +290,11 @@ impl FeeSchedule {
     #[must_use]
     pub const fn output_byte_price(self) -> u64 {
         self.output_byte
+    }
+
+    #[must_use]
+    pub const fn occupancy_byte_batch_price(self) -> u64 {
+        self.occupancy_byte_batch
     }
 }
 
@@ -359,14 +377,15 @@ impl Display for MeterRefusal {
 
 impl std::error::Error for MeterRefusal {}
 
-const fn budget_resource(resource: ResourceKind) -> BudgetResourceKind {
+const fn budget_resource(resource: ResourceKind) -> Option<BudgetResourceKind> {
     match resource {
-        ResourceKind::Cpu => BudgetResourceKind::Cpu,
-        ResourceKind::Memory => BudgetResourceKind::Memory,
-        ResourceKind::StorageRead => BudgetResourceKind::StorageRead,
-        ResourceKind::StorageWrite => BudgetResourceKind::StorageWrite,
-        ResourceKind::Output => BudgetResourceKind::Output,
-        ResourceKind::OutputBytes => BudgetResourceKind::OutputBytes,
+        ResourceKind::Cpu => Some(BudgetResourceKind::Cpu),
+        ResourceKind::Memory => Some(BudgetResourceKind::Memory),
+        ResourceKind::StorageRead => Some(BudgetResourceKind::StorageRead),
+        ResourceKind::StorageWrite => Some(BudgetResourceKind::StorageWrite),
+        ResourceKind::Output => Some(BudgetResourceKind::Output),
+        ResourceKind::OutputBytes => Some(BudgetResourceKind::OutputBytes),
+        ResourceKind::StorageOccupancy => None,
     }
 }
 
@@ -376,14 +395,13 @@ const fn budget_refusal(refusal: MeterRefusal) -> Option<BudgetMeterRefusal> {
             resource,
             limit,
             attempted,
-        } => Some(BudgetMeterRefusal::BudgetExceeded {
-            resource: budget_resource(resource),
+        } => budget_resource(resource).map(|resource| BudgetMeterRefusal::BudgetExceeded {
+            resource,
             limit,
             attempted,
         }),
-        MeterRefusal::CounterOverflow { resource } => Some(BudgetMeterRefusal::CounterOverflow {
-            resource: budget_resource(resource),
-        }),
+        MeterRefusal::CounterOverflow { resource } => budget_resource(resource)
+            .map(|resource| BudgetMeterRefusal::CounterOverflow { resource }),
         MeterRefusal::FeeOverflow => None,
     }
 }

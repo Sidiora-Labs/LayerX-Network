@@ -185,11 +185,9 @@ impl RecordSchema {
     /// field makes it variable.
     #[must_use]
     pub fn canonical_width(&self) -> Option<usize> {
-        self.fields
-            .iter()
-            .try_fold(0_usize, |total, field| {
-                field.kind.width().map(|width| total.saturating_add(width))
-            })
+        self.fields.iter().try_fold(0_usize, |total, field| {
+            field.kind.width().map(|width| total.saturating_add(width))
+        })
     }
 
     /// Encodes the values into the canonical framing the emitted module reads.

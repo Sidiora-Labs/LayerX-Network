@@ -30,6 +30,12 @@ static lxp_result epoch(lxp_module_ctx *ctx, uint64_t number, uint64_t timestamp
 static lxp_result module_root(lxp_module_ctx *ctx, uint8_t root[32])
 { (void)ctx; (void)memset(root, 0, 32U); return LXP_OK; }
 
+static const uint32_t program_types[] = { UINT32_C(0x00090001) };
+static const lxp_module_iface program_iface = {
+    9U, 1U, "programs", program_types, 1U, genesis, decode, validate,
+    execute, epoch, epoch, module_root, NULL
+};
+
 static int prepare(lxp_kernel *kernel, lxp_state_store *store,
                    lxp_state_journal *journal, lxp_module_ctx *ctx,
                    lxp_arena *arena, uint8_t *arena_bytes, bool reverse)
@@ -78,6 +84,7 @@ int main(void)
     uint8_t second_bytes[128];
     uint8_t first_root[32];
     uint8_t second_root[32];
+    uint8_t legacy_root[32];
     uint8_t chained[32];
     if (prepare(&first, &first_store, &first_journal, &first_ctx, &first_arena,
                 first_bytes, false) != 0 ||
@@ -85,9 +92,41 @@ int main(void)
                 &second_arena, second_bytes, true) != 0 ||
         lxp_state_root(&first, first_root) != LXP_OK ||
         lxp_state_root(&second, second_root) != LXP_OK ||
-        memcmp(first_root, second_root, 32U) != 0 ||
+        memcmp(first_root, second_root, 32U) != 0)
+        return 1;
+    (void)memcpy(legacy_root, first_root, sizeof(legacy_root));
+    if (
+        lxp_kernel_register_module(&first, &program_iface) != LXP_OK ||
+        lxp_state_root(&first, first_root) != LXP_OK ||
+        memcmp(first_root, legacy_root, 32U) == 0 ||
         lxp_state_root_chain(first_root, second_root, 1U, chained) != LXP_OK ||
         memcmp(chained, first_root, 32U) == 0) return 1;
+    first.modules[first.module_count - 1U].enabled_epoch = 1U;
+    if (lxp_state_root(&first, chained) != LXP_OK ||
+        memcmp(chained, first_root, 32U) == 0) return 1;
+    first.modules[first.module_count - 1U].enabled_epoch = 0U;
+    ++first.modules[first.module_count - 1U].activity_types[0];
+    if (lxp_state_root(&first, chained) != LXP_OK ||
+        memcmp(chained, first_root, 32U) == 0) return 1;
+    --first.modules[first.module_count - 1U].activity_types[0];
+    first.modules[first.module_count - 1U].module_id = 10U;
+    if (lxp_state_root(&first, chained) != LXP_ERR_UNKNOWN_MODULE) return 1;
+    first.modules[first.module_count - 1U].module_id = 9U;
+    first.module_count = LXP_KERNEL_MAX_MODULE_REGISTRATIONS + 1U;
+    if (lxp_state_root(&first, chained) != LXP_ERR_LENGTH_LIMIT) return 1;
+    first.module_count = 2U;
+    second.module_kv[second.module_kv_count].module_id = 0U;
+    ++second.module_kv_count;
+    if (lxp_state_root(&second, chained) != LXP_ERR_UNKNOWN_MODULE) return 1;
+    --second.module_kv_count;
+    second.module_kv[second.module_kv_count].module_id = 9U;
+    second.module_kv[second.module_kv_count].key_length = 1U;
+    second.module_kv[second.module_kv_count].key[0] = 9U;
+    second.module_kv[second.module_kv_count].value_length = 1U;
+    second.module_kv[second.module_kv_count].value[0] = 9U;
+    ++second.module_kv_count;
+    if (lxp_state_root(&second, chained) != LXP_ERR_UNKNOWN_MODULE) return 1;
+    --second.module_kv_count;
     supply_bad = true;
     if (lxp_state_root(&first, chained) != LXP_FATAL_SUPPLY_MISMATCH ||
         lxp_state_store_destroy(&first_store) != LXP_OK ||

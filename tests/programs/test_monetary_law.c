@@ -6,6 +6,9 @@
 
 #include <string.h>
 
+static size_t charged_fees;
+static lxp_u128 last_fee;
+
 static lxp_result apply_transfer_set(lxp_kernel *kernel,
                                      const lxp_transfer_set *set,
                                      lxp_receipt *receipt)
@@ -26,7 +29,8 @@ static lxp_result charge_fee(lxp_kernel *kernel, const lxp_activity *activity,
 {
     (void)kernel;
     (void)activity;
-    (void)fee;
+    ++charged_fees;
+    last_fee = fee;
     return LXP_OK;
 }
 
@@ -64,10 +68,10 @@ static int dispatch(lxp_kernel *kernel, lxp_authority_resolved *authority,
     const lxp_module_registration *registration;
     lxp_result result = LXP_OK;
     (void)memset(&activity, 0, sizeof(activity));
-    activity.activity_type = LX_PROGRAMS_CALL;
+    activity.activity_type = LX_PROGRAMS_TRANSFER;
     activity.payload = (lxp_byte_span){payload, payload_length};
     if (lxp_arena_init(&arena, arena_bytes, sizeof(arena_bytes)) != LXP_OK ||
-        lxp_kernel_module_for_activity(kernel, LX_PROGRAMS_CALL, 0U,
+        lxp_kernel_module_for_activity(kernel, LX_PROGRAMS_TRANSFER, 0U,
                                        &registration) != LXP_OK ||
         lxp_module_ctx_init(&ctx, kernel, LXP_MODULE_PROGRAMS, 10U, 0U, 1U,
                             100000U, &arena, true) != LXP_OK ||
@@ -79,7 +83,7 @@ static int dispatch(lxp_kernel *kernel, lxp_authority_resolved *authority,
         return 1;
     if (result == LXP_OK &&
         (effects.count != 1U || effects.effects[0].module_id != LXP_MODULE_PROGRAMS ||
-         effects.effects[0].event_type != LX_PROGRAMS_EVENT_CALLED ||
+         effects.effects[0].event_type != LX_PROGRAMS_EVENT_TRANSFERRED ||
          effects.effects[0].body_length != 32U))
         return 1;
     return 0;
@@ -105,7 +109,7 @@ int main(void)
     static uint8_t execution_arena_bytes[LXP_MAX_ACTIVITY_BYTES + 4096U];
     lxp_arena execution_arena;
     lxp_kernel_execution execution;
-    lxp_fee_params fee_parameters = {1U, {0U, 0U}, {0U, 0U}, {0U, 0U},
+    lxp_fee_params fee_parameters = {1U, {0U, 1U}, {0U, 0U}, {0U, 0U},
                                      {0U, 0U}, {0U, 0U}, 10000U};
     lxp_activity activity;
     lxp_receipt receipt;
@@ -154,7 +158,7 @@ int main(void)
     (void)memset(&activity, 0, sizeof(activity));
     activity.protocol_version = LXP_PROTOCOL_VERSION;
     activity.network_id = 7U;
-    activity.activity_type = LX_PROGRAMS_CALL;
+    activity.activity_type = LX_PROGRAMS_TRANSFER;
     activity.actor_did = (lxp_byte_span){actor_did, sizeof(actor_did) - 1U};
     activity.authority = (lxp_byte_span){primary_key, sizeof(primary_key)};
     activity.timestamp_bound = (lxp_timestamp_bound){1U, 100U};
@@ -183,13 +187,34 @@ int main(void)
         receipt.result_code != LXP_OK || receipt.module_id != LXP_MODULE_PROGRAMS ||
         receipt.module_version != LX_PROGRAMS_ABI_VERSION ||
         receipt.effects.count != 1U ||
-        receipt.effects.effects[0].event_type != LX_PROGRAMS_EVENT_CALLED ||
+        receipt.effects.effects[0].event_type != LX_PROGRAMS_EVENT_TRANSFERRED ||
         receipt.effects.effects[0].body_length != 32U ||
         memcmp(receipt.effects.effects[0].body, zero_root, 32U) == 0 ||
+        charged_fees != 1U || last_fee.hi != 0U || last_fee.lo != 1U ||
         identity->next_sequence != 1U ||
         opened[0]->balance.lo != 50U || opened[1]->balance.lo != 30U ||
         opened[2]->balance.lo != 20U)
         return 1;
+    write_u64(payload + 250U, 80U);
+    activity.account_sequence = 1U;
+    activity.idempotency_key[31] = 2U;
+    activity.payload_hash[0] = 0U;
+    if (lxp_hash_payload(payload, sizeof(payload), activity.payload_hash) != LXP_OK)
+        return 1;
+    execution.global_sequence = 2U;
+    if (lxp_kernel_execute_activity(&kernel, &activity, &execution, &receipt) !=
+            LXP_OK ||
+        receipt.result_code != LXP_ERR_INSUFFICIENT_BALANCE ||
+        receipt.module_id != LXP_MODULE_PROGRAMS ||
+        receipt.module_version != LX_PROGRAMS_ABI_VERSION ||
+        receipt.effects.count != 0U ||
+        receipt.fee_charged.hi != 0U || receipt.fee_charged.lo != 1U ||
+        charged_fees != 2U || last_fee.hi != 0U || last_fee.lo != 1U ||
+        identity->next_sequence != 2U || state.next_sequence != 3U ||
+        opened[0]->balance.lo != 50U || opened[1]->balance.lo != 30U ||
+        opened[2]->balance.lo != 20U)
+        return 1;
+    write_u64(payload + 250U, 20U);
     (void)memcpy(oversized_payload, payload, sizeof(payload));
     oversized_payload[sizeof(payload)] = 0U;
     if (dispatch(&kernel, &authority, oversized_payload,

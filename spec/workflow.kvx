@@ -65,3 +65,6 @@ claude            = "CLAUDE.md"
 codex             = "AGENTS.md"
 copilot           = ".github/copilot-instructions.md"
 kiro              = ".kiro/steering/spec-workflow.md"
+
+[mode]
+name = "prod"

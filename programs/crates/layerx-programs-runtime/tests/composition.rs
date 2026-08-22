@@ -440,7 +440,8 @@ fn execute_unbudgeted_with_output_limit(
 fn seeded_storage(programs: impl IntoIterator<Item = ProgramId>) -> Storage {
     let mut storage = Storage::new();
     for program in programs {
-        let mut transaction = storage.transaction(StorageNamespace::new(program, principal(9)));
+        let mut transaction =
+            storage.transaction(StorageNamespace::principal(program, principal(9)));
         transaction
             .write(b"canary", &[program.bytes()[0]])
             .unwrap_or_else(|error| panic!("seed {program:?}: {error}"));
@@ -619,7 +620,7 @@ fn production_depth_boundary_and_one_past_are_atomic() {
     for (index, program) in exact_ids.iter().copied().enumerate() {
         assert_eq!(
             storage
-                .transaction(StorageNamespace::new(program, principal))
+                .transaction(StorageNamespace::principal(program, principal))
                 .read(b"k"),
             Ok(Some(vec![u8::try_from(index).unwrap_or(u8::MAX)]))
         );

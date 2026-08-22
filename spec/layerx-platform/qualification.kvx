@@ -1,0 +1,63 @@
+[observation.19.4.1]
+task = "19.4"
+file = "src/state/lxp_state_root.c"
+symbol = "universal_leaves"
+observed = "The Programs transition expands module-registration commitments to include activation epochs and exact activity types while kernels without a Programs registration retain the legacy commitment format."
+assumption = "Human qualification will replay roots immediately before and after Programs activation to confirm the intended version boundary."
+severity = "note"
+
+[observation.19.4.2]
+task = "19.4"
+file = "include/layerx/lxp_receipt.h"
+symbol = "lxp_receipt"
+observed = "Program events are carried as module-namespaced receipt effects, but the receipt has no explicit batch event-root field; batch-root qualification must establish the existing external accumulator path."
+assumption = "Task 19.4 keeps the existing receipt shape and emits only through lxp_ctx_emit_event."
+severity = "note"
+
+[observation.29.4.1]
+task = "29.4"
+file = "programs/crates/layerx-programs-runtime/tests/namespace_drop.rs"
+symbol = "candidate_drop_reclaims_every_cell_at_the_declared_cell_ceiling"
+observed = "Task 29.4 asks for a namespace at a declared cell ceiling, but the runtime and requirement 36.4 declare only activity resource budgets and storage key/value ceilings; no durable per-namespace cell-count ceiling exists. The implementation artifact uses a declared 64-cell boundary fixture without inventing a new storage-occupancy policy or making larger namespaces impossible to drop."
+assumption = "Human qualification will decide whether the intended ceiling is the activity's declared reclamation-work budget or a future protocol namespace-occupancy limit; task 29.5 owns the latter resource policy."
+severity = "ambiguity"
+
+[observation.29.4.2]
+task = "29.4"
+file = "programs/crates/layerx-programs-runtime/src/abi/mod.rs"
+symbol = "AbiEffects::namespace_drops"
+observed = "Task 29.4 asks to credit released occupancy against the rent class, while task 29.5 independently owns creation of that resource class, its fee schedule, responsible account, durable ledger and canonical receipt evidence. Task 29.4 therefore records an exact success-only provisional NamespaceDrop fact but does not settle a rent credit or alter receipt pricing before the owning resource class exists."
+assumption = "Task 29.5 consumes committed reclamation facts and final storage, derives the net pre-to-post occupancy delta, and records the durable canonical credit without over-crediting drop-then-write activities."
+severity = "dependency-boundary"
+
+[observation.29.5.1]
+task = "29.5"
+file = "programs/crates/layerx-programs-runtime/src/occupancy.rs"
+symbol = "OccupancyLedger"
+observed = "The Rust programs runtime has no production batch-transition, account-debit, state-root or snapshot bridge; the real programs call bridge in task 28.7 is still pending. Task 29.5 can implement a canonical staged occupancy ledger and debit allocation, but cannot honestly claim that the C kernel already atomically debits balances and commits this ledger."
+assumption = "The task 28.7 programs transition bridge will apply prepared occupancy debits and the bound ledger state in one kernel transaction, and the state/snapshot owners will commit the ledger canonical bytes before production qualification."
+severity = "dependency-boundary"
+
+[observation.29.5.2]
+task = "29.5"
+file = "programs/crates/layerx-programs-runtime/src/meter.rs"
+symbol = "MeteredUsage"
+observed = "Occupancy is charged once per protocol batch to multiple namespace-responsible accounts, while MeteredUsage is one guest execution charged to one activity payer and its v1 and candidate-v2 evidence layouts are frozen. Folding occupancy into that activity record would misattribute charges and silently change frozen encodings."
+assumption = "Task 29.5 records a separate versioned metered occupancy usage and canonical settlement evidence; task 31.6 or the production batch-receipt owner binds that evidence into the versioned protocol receipt without modifying prior layouts."
+severity = "version-boundary"
+
+[observation.29.5.3]
+task = "29.5"
+file = "programs/Cargo.toml"
+symbol = "cargo fmt --all -- --check"
+observed = "The workspace-wide formatting check reports pre-existing formatting drift in programs-registry, porting kits and runtime validation files outside task 29.5; none is changed by the occupancy diff. Targeted rustfmt checks for every Rust file changed by 29.5 remain clean."
+assumption = "Human qualification or the owning tasks will normalize the unrelated files; task 29.5 does not repair inherited formatting drift across other task boundaries."
+severity = "inherited"
+
+[observation.21.1.1]
+task = "21.1"
+file = "programs/crates/layerx-programs-runtime/src/transfer.rs"
+symbol = "KernelTransferPrimitive"
+observed = "The Rust runtime has no production implementation of KernelTransferPrimitive; the only real transactional 402LXP primitive is owned by the C kernel. Task 28.7 owns the C Programs CALL ingress and must map one prepared activity transfer set into one lxp_ctx_emit_transfer_set call inside the same journal. A Rust test implementation would necessarily be a test double or a second ledger, while implementing the real C bridge here would cross the explicitly reserved 28.7 boundary."
+assumption = "Task 21.1 supplies the sealed prepared settlement and strict evidence-verification seam; task 28.7 supplies and qualifies the sole real transactional implementation against the C kernel without introducing a second activity or global map. The actual C program-event envelope and its public receipt/batch publication are task-28.7-owned."
+severity = "dependency-boundary"

@@ -12,10 +12,13 @@ mod storage_ops;
 use capability::CapabilityKey;
 pub use capability::{Capability, CapabilitySet};
 pub use response::{CallResponse, ResponseRefusal, MAX_CALL_RESPONSE_BYTES};
+pub use storage_ops::StorageSelector;
 
 use crate::execute::ABI_VERSION;
 use crate::meter::MeterRefusal;
-use crate::storage::{PrincipalId, ProgramId, Storage, StorageError, StorageNamespace};
+use crate::storage::{
+    NamespaceDrop, PrincipalId, ProgramId, Storage, StorageError, StorageNamespace,
+};
 
 pub const ABI_MODULE: &str = "layerx_v1";
 pub const MAX_EVENT_TOPIC_BYTES: usize = 64;
@@ -124,6 +127,7 @@ pub const HOST_FUNCTIONS: [HostFunction; 7] = [
 pub struct AuthorizationContext {
     principal: PrincipalId,
     capabilities: CapabilitySet,
+    frame: CallFrameId,
 }
 
 impl AuthorizationContext {
@@ -132,6 +136,7 @@ impl AuthorizationContext {
         Self {
             principal,
             capabilities,
+            frame: CallFrameId::root(),
         }
     }
 
@@ -143,6 +148,80 @@ impl AuthorizationContext {
     #[must_use]
     pub const fn capabilities(&self) -> &CapabilitySet {
         &self.capabilities
+    }
+
+    /// Returns the host-fixed frame that owns this authority. Guests never
+    /// supply or alter this value.
+    #[must_use]
+    pub const fn frame(&self) -> CallFrameId {
+        self.frame
+    }
+
+    pub(crate) const fn nested(
+        principal: PrincipalId,
+        capabilities: CapabilitySet,
+        frame: CallFrameId,
+    ) -> Self {
+        Self {
+            principal,
+            capabilities,
+            frame,
+        }
+    }
+}
+
+/// Opaque, host-assigned identity for one frame of an activity call graph.
+/// The eight-byte path admits the declared maximum nesting depth and fan-out;
+/// there is no guest-facing constructor.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct CallFrameId {
+    path: [u8; 8],
+    depth: u8,
+}
+
+impl CallFrameId {
+    #[must_use]
+    pub const fn root() -> Self {
+        Self {
+            path: [0; 8],
+            depth: 0,
+        }
+    }
+
+    /// Derives a child frame for host-side call orchestration. This is never
+    /// exposed through the guest ABI.
+    pub fn child(self, ordinal: u32) -> Result<Self, AbiError> {
+        let depth = usize::from(self.depth);
+        let slot = self.path.get(depth).ok_or(AbiError::CallBounds)?;
+        if ordinal == 0 || ordinal > u32::from(u8::MAX) || *slot != 0 {
+            return Err(AbiError::CallBounds);
+        }
+        let mut path = self.path;
+        path[depth] = ordinal as u8;
+        Ok(Self {
+            path,
+            depth: self.depth.saturating_add(1),
+        })
+    }
+
+    #[must_use]
+    pub const fn canonical_bytes(&self) -> ([u8; 8], u8) {
+        (self.path, self.depth)
+    }
+
+    /// Rebuilds a host-frame identifier from its canonical artifact form.
+    pub(crate) fn from_canonical(path: [u8; 8], depth: u8) -> Result<Self, AbiError> {
+        let depth = usize::from(depth);
+        if depth > path.len() || path[depth..].iter().any(|byte| *byte != 0) {
+            return Err(AbiError::InvalidEncoding);
+        }
+        if path[..depth].iter().any(|byte| *byte == 0) {
+            return Err(AbiError::InvalidEncoding);
+        }
+        Ok(Self {
+            path,
+            depth: depth as u8,
+        })
     }
 }
 
@@ -170,6 +249,7 @@ pub trait ReceiptOracle {
 pub struct ProgramEvent {
     pub program: ProgramId,
     pub principal: PrincipalId,
+    pub frame: CallFrameId,
     pub topic: Vec<u8>,
     pub data: Vec<u8>,
 }
@@ -179,6 +259,8 @@ pub struct ProgramCall {
     pub caller: ProgramId,
     pub callee: ProgramId,
     pub principal: PrincipalId,
+    pub caller_frame: CallFrameId,
+    pub callee_frame: CallFrameId,
     pub input: Vec<u8>,
     pub capabilities: CapabilitySet,
 }
@@ -187,9 +269,22 @@ pub struct ProgramCall {
 pub struct TransferRequest {
     pub program: ProgramId,
     pub principal: PrincipalId,
+    pub frame: CallFrameId,
     pub asset: [u8; 32],
     pub to: [u8; 32],
     pub amount: u128,
+}
+
+impl TransferRequest {
+    #[must_use]
+    pub const fn program(&self) -> ProgramId {
+        self.program
+    }
+
+    #[must_use]
+    pub const fn frame(&self) -> CallFrameId {
+        self.frame
+    }
 }
 
 /// Effects emitted by one successfully committed ABI transaction. Monetary
@@ -200,6 +295,42 @@ pub struct AbiEffects {
     pub events: Vec<ProgramEvent>,
     pub calls: Vec<ProgramCall>,
     pub transfers: Vec<TransferRequest>,
+    /// Provisional exact released-occupancy facts from committed drops. Task
+    /// 29.5 owns durable occupancy accounting and nets these facts against the
+    /// activity's final namespace occupancy.
+    pub namespace_drops: Vec<NamespaceDrop>,
+}
+
+impl AbiEffects {
+    /// Canonically commits every program event to its producing frame, so an
+    /// activity receipt cannot replay an event under another program frame.
+    pub fn canonical_program_event_envelope(&self) -> Result<Vec<u8>, AbiError> {
+        if self.events.len() > crate::DEFAULT_MAX_CALL_GRAPH_EDGES as usize {
+            return Err(AbiError::EventBounds);
+        }
+        let mut encoded = b"LayerX/programs/events/v1\0".to_vec();
+        let event_count = u32::try_from(self.events.len()).map_err(|_| AbiError::EventBounds)?;
+        encoded.extend_from_slice(&event_count.to_be_bytes());
+        for event in &self.events {
+            if event.topic.len() > MAX_EVENT_TOPIC_BYTES || event.data.len() > MAX_EVENT_DATA_BYTES
+            {
+                return Err(AbiError::EventBounds);
+            }
+            encoded.extend_from_slice(&event.program.bytes());
+            encoded.extend_from_slice(&event.principal.bytes());
+            let (path, depth) = event.frame.canonical_bytes();
+            encoded.extend_from_slice(&path);
+            encoded.push(depth);
+            let topic_length =
+                u32::try_from(event.topic.len()).map_err(|_| AbiError::EventBounds)?;
+            encoded.extend_from_slice(&topic_length.to_be_bytes());
+            encoded.extend_from_slice(&event.topic);
+            let data_length = u32::try_from(event.data.len()).map_err(|_| AbiError::EventBounds)?;
+            encoded.extend_from_slice(&data_length.to_be_bytes());
+            encoded.extend_from_slice(&event.data);
+        }
+        Ok(encoded)
+    }
 }
 
 /// Successful atomic ABI state returned to the executor for durable commit.
@@ -266,7 +397,8 @@ pub struct Abi {
     version: u16,
     program: ProgramId,
     authorization: AuthorizationContext,
-    namespace: StorageNamespace,
+    principal_namespace: StorageNamespace,
+    shared_namespace: StorageNamespace,
     storage: Storage,
     receipts: BTreeMap<[u8; 32], ReceiptView>,
     effects: AbiEffects,
@@ -288,7 +420,8 @@ impl Abi {
         if version != ABI_VERSION {
             return Err(AbiError::WrongVersion);
         }
-        let namespace = StorageNamespace::new(program, authorization.principal());
+        let principal_namespace = StorageNamespace::principal(program, authorization.principal());
+        let shared_namespace = StorageNamespace::shared(program);
         let mut verified = BTreeMap::new();
         for digest in authorization.capabilities().receipt_digests() {
             let view = receipts.verified_receipt(digest)?;
@@ -301,7 +434,8 @@ impl Abi {
             version,
             program,
             authorization,
-            namespace,
+            principal_namespace,
+            shared_namespace,
             storage,
             receipts: verified,
             effects: AbiEffects::default(),
@@ -318,7 +452,8 @@ impl Abi {
         if version != ABI_VERSION {
             return Err(AbiError::WrongVersion);
         }
-        let namespace = StorageNamespace::new(program, authorization.principal());
+        let principal_namespace = StorageNamespace::principal(program, authorization.principal());
+        let shared_namespace = StorageNamespace::shared(program);
         for digest in authorization.capabilities().receipt_digests() {
             if receipts.get(&digest).map(|view| view.receipt_digest) != Some(digest) {
                 return Err(AbiError::ReceiptMismatch);
@@ -328,7 +463,8 @@ impl Abi {
             version,
             program,
             authorization,
-            namespace,
+            principal_namespace,
+            shared_namespace,
             storage,
             receipts,
             effects: AbiEffects::default(),
@@ -348,6 +484,18 @@ impl Abi {
         self.program
     }
 
+    /// Returns the principal-scoped namespace fixed before guest entry.
+    #[must_use]
+    pub const fn principal_namespace(&self) -> StorageNamespace {
+        self.principal_namespace
+    }
+
+    /// Returns the program-shared namespace fixed before guest entry.
+    #[must_use]
+    pub const fn shared_namespace(&self) -> StorageNamespace {
+        self.shared_namespace
+    }
+
     pub(crate) fn storage_snapshot(&self) -> Storage {
         self.storage.clone()
     }
@@ -364,6 +512,7 @@ impl Abi {
         self.effects.events.extend(effects.events);
         self.effects.calls.extend(effects.calls);
         self.effects.transfers.extend(effects.transfers);
+        self.effects.namespace_drops.extend(effects.namespace_drops);
     }
 
     #[must_use]
@@ -394,6 +543,7 @@ impl Abi {
         self.effects.events.push(ProgramEvent {
             program: self.program,
             principal: self.authorization.principal(),
+            frame: self.authorization.frame(),
             topic: topic.to_vec(),
             data: data.to_vec(),
         });
@@ -411,7 +561,11 @@ impl Abi {
         input: &[u8],
         requested: impl IntoIterator<Item = Capability>,
     ) -> Result<(), AbiError> {
-        self.stage_call(callee, input, requested.into_iter().collect())?;
+        let ordinal = u32::try_from(self.effects.calls.len())
+            .unwrap_or(u32::MAX)
+            .saturating_add(1);
+        let frame = self.authorization.frame().child(ordinal)?;
+        self.stage_call(callee, input, requested.into_iter().collect(), frame)?;
         Ok(())
     }
 
@@ -420,6 +574,7 @@ impl Abi {
         callee: ProgramId,
         input: &[u8],
         requested: Vec<Capability>,
+        callee_frame: CallFrameId,
     ) -> Result<CapabilitySet, AbiError> {
         self.authorization
             .capabilities()
@@ -432,6 +587,8 @@ impl Abi {
             caller: self.program,
             callee,
             principal: self.authorization.principal(),
+            caller_frame: self.authorization.frame(),
+            callee_frame,
             input: input.to_vec(),
             capabilities: capabilities.clone(),
         });
@@ -465,6 +622,7 @@ impl Abi {
         self.effects.transfers.push(TransferRequest {
             program: self.program,
             principal: self.authorization.principal(),
+            frame: self.authorization.frame(),
             asset,
             to,
             amount,

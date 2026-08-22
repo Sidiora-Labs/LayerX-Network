@@ -20,6 +20,10 @@ use crate::meter::{
     ResourceBudget, ResourceKind,
 };
 use crate::storage::{PrincipalId, ProgramId, Storage};
+use crate::transfer::{
+    AtomicTransferSet, KernelTransferPrimitive, TransferCapability, TransferLawError,
+    VerifiedProgramSettlement,
+};
 use crate::validate::{AbiRevision, ValidatedModule};
 
 /// Runtime version recorded for versioned replay of every execution.
@@ -303,6 +307,233 @@ pub struct AuthorizedExecutionRecord {
     pub call_graph: CallGraph,
 }
 
+/// A successful WASM execution held before its only monetary settlement path.
+/// The contained storage is private until strict kernel settlement succeeds.
+#[derive(Debug, PartialEq, Eq)]
+pub struct PreparedAuthorizedActivity {
+    record: AuthorizedExecutionRecord,
+    prior_storage: Storage,
+    held_storage: Storage,
+    transfer: Option<TransferCapability>,
+    transfer_set: Option<AtomicTransferSet>,
+}
+
+impl PreparedAuthorizedActivity {
+    /// Returns execution-only receipt diagnostics. Staged effects and held
+    /// storage remain inaccessible until affine settlement succeeds.
+    #[must_use]
+    pub const fn execution(&self) -> &ExecutionRecord {
+        &self.record.execution
+    }
+
+    #[must_use]
+    pub(crate) const fn transfer_set(&self) -> Option<&AtomicTransferSet> {
+        self.transfer_set.as_ref()
+    }
+
+    /// Reports sealed monetary work without exposing an executable transfer
+    /// set outside this crate's affine settlement boundary.
+    #[must_use]
+    pub const fn has_monetary_effects(&self) -> bool {
+        self.transfer_set.is_some()
+    }
+
+    /// Returns non-executable sealed-set diagnostics for activity evidence.
+    /// The kernel input itself remains inaccessible until `strict_settle`.
+    #[must_use]
+    pub fn monetary_summary(&self) -> Option<PreparedMonetarySummary> {
+        self.transfer_set
+            .as_ref()
+            .map(|set| PreparedMonetarySummary {
+                program: set.program(),
+                principal: set.principal(),
+                invocation_authority: set.invocation_authority(),
+                total_amount: set.total_amount(),
+                legs: set
+                    .legs()
+                    .iter()
+                    .map(|leg| PreparedTransferLegSummary {
+                        program: leg.program,
+                        principal: leg.principal,
+                        frame: leg.frame,
+                        asset: leg.asset,
+                        to: leg.to,
+                        amount: leg.amount,
+                    })
+                    .collect(),
+            })
+    }
+
+    /// Consumes the held activity, performs its single kernel settlement, and
+    /// assigns its storage exactly once on success. A refusal carries only
+    /// execution diagnostics and graph evidence, never staged effects.
+    pub fn strict_settle(
+        self,
+        storage: &mut Storage,
+        kernel: &mut impl KernelTransferPrimitive,
+    ) -> Result<VerifiedStorageAssignment, SettlementFailure> {
+        if *storage != self.prior_storage {
+            return Err(SettlementFailure::new(
+                self.record.execution,
+                self.record.call_graph,
+                TransferLawError::StaleStorage,
+            ));
+        }
+        let settlement = match (self.transfer, self.transfer_set) {
+            (Some(transfer), Some(transfer_set)) => Some(
+                transfer
+                    .settle_authorized_set(&transfer_set, kernel)
+                    .map_err(|error| {
+                        SettlementFailure::new(
+                            self.record.execution.clone(),
+                            self.record.call_graph.clone(),
+                            error,
+                        )
+                    })?,
+            ),
+            (None, None) => None,
+            _ => {
+                return Err(SettlementFailure::new(
+                    self.record.execution,
+                    self.record.call_graph,
+                    TransferLawError::InvariantViolation,
+                ))
+            }
+        };
+        *storage = self.held_storage;
+        Ok(VerifiedStorageAssignment {
+            record: self.record,
+            settlement,
+        })
+    }
+}
+
+/// Non-executable evidence describing the monetary work sealed in an affine
+/// prepared activity.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PreparedMonetarySummary {
+    program: ProgramId,
+    principal: PrincipalId,
+    invocation_authority: [u8; 32],
+    total_amount: u128,
+    legs: Vec<PreparedTransferLegSummary>,
+}
+
+impl PreparedMonetarySummary {
+    #[must_use]
+    pub const fn program(&self) -> ProgramId {
+        self.program
+    }
+    #[must_use]
+    pub const fn principal(&self) -> PrincipalId {
+        self.principal
+    }
+    #[must_use]
+    pub const fn invocation_authority(&self) -> [u8; 32] {
+        self.invocation_authority
+    }
+    #[must_use]
+    pub const fn total_amount(&self) -> u128 {
+        self.total_amount
+    }
+    #[must_use]
+    pub fn legs(&self) -> &[PreparedTransferLegSummary] {
+        &self.legs
+    }
+}
+
+/// One non-executable transfer-leg fact retained for receipt diagnostics.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PreparedTransferLegSummary {
+    program: ProgramId,
+    principal: PrincipalId,
+    frame: crate::abi::CallFrameId,
+    asset: [u8; 32],
+    to: [u8; 32],
+    amount: u128,
+}
+
+impl PreparedTransferLegSummary {
+    #[must_use]
+    pub const fn program(&self) -> ProgramId {
+        self.program
+    }
+    #[must_use]
+    pub const fn principal(&self) -> PrincipalId {
+        self.principal
+    }
+    #[must_use]
+    pub const fn frame(&self) -> crate::abi::CallFrameId {
+        self.frame
+    }
+    #[must_use]
+    pub const fn asset(&self) -> [u8; 32] {
+        self.asset
+    }
+    #[must_use]
+    pub const fn to(&self) -> [u8; 32] {
+        self.to
+    }
+    #[must_use]
+    pub const fn amount(&self) -> u128 {
+        self.amount
+    }
+}
+
+/// Receipt-ready failure diagnostics for an affine settlement attempt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SettlementFailure {
+    execution: ExecutionRecord,
+    call_graph: CallGraph,
+    error: TransferLawError,
+}
+
+impl SettlementFailure {
+    const fn new(
+        execution: ExecutionRecord,
+        call_graph: CallGraph,
+        error: TransferLawError,
+    ) -> Self {
+        Self {
+            execution,
+            call_graph,
+            error,
+        }
+    }
+    #[must_use]
+    pub const fn execution(&self) -> &ExecutionRecord {
+        &self.execution
+    }
+    #[must_use]
+    pub const fn call_graph(&self) -> &CallGraph {
+        &self.call_graph
+    }
+    #[must_use]
+    pub const fn error(&self) -> TransferLawError {
+        self.error
+    }
+}
+
+/// A prepared activity whose exact set and receipt commitment were verified by
+/// the real kernel. Only this token can publish the held storage snapshot.
+#[derive(Debug, PartialEq, Eq)]
+pub struct VerifiedStorageAssignment {
+    record: AuthorizedExecutionRecord,
+    settlement: Option<VerifiedProgramSettlement>,
+}
+
+impl VerifiedStorageAssignment {
+    #[must_use]
+    pub const fn settlement(&self) -> Option<&VerifiedProgramSettlement> {
+        self.settlement.as_ref()
+    }
+
+    #[must_use]
+    pub const fn record(&self) -> &AuthorizedExecutionRecord {
+        &self.record
+    }
+}
+
 /// Additive receipt-ready result of an ABI-v1 activity using an admitted budget.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -312,6 +543,16 @@ pub enum BudgetedV1ActivityOutcome {
     /// Guest refusal or deterministic runtime fault with no committed effects.
     Failure(BudgetedV1FailureRecord),
     /// Typed resource exhaustion with no committed effects.
+    Resource(BudgetedResourceFailureRecord),
+}
+
+/// Receipt-ready outcome of preparing an activity under an admitted budget.
+/// Only the success variant holds an affine activity that can be settled.
+#[derive(Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PreparedAuthorizedActivityOutcome {
+    Success(PreparedAuthorizedActivity),
+    Failure(BudgetedV1FailureRecord),
     Resource(BudgetedResourceFailureRecord),
 }
 
@@ -966,6 +1207,8 @@ pub enum ExecutionError {
     Response(ResponseRefusal),
     /// Caller-declared budget was structurally refused before execution.
     Budget(BudgetAdmissionRefusal),
+    /// Monetary-law refusal while sealing a successful guest activity.
+    Transfer(TransferLawError),
 }
 
 impl Display for ExecutionError {
@@ -978,6 +1221,7 @@ impl Display for ExecutionError {
             Self::Composition(refusal) => write!(formatter, "composition refusal: {refusal}"),
             Self::Response(refusal) => write!(formatter, "response refusal: {refusal}"),
             Self::Budget(refusal) => write!(formatter, "budget admission refusal: {refusal}"),
+            Self::Transfer(refusal) => write!(formatter, "transfer-law refusal: {refusal}"),
         }
     }
 }
@@ -1240,6 +1484,79 @@ impl Executor {
             effects: committed.effects,
             call_graph,
         })
+    }
+
+    /// Executes real WASM against a private storage clone, then seals the
+    /// resulting graph, events and 402LXP requests for the kernel activity
+    /// owner. It deliberately does not assign caller storage.
+    pub(crate) fn prepare_authorized_activity(
+        &self,
+        storage: &Storage,
+        request: AuthorizedExecutionRequest<'_>,
+        invocation_authority: [u8; 32],
+    ) -> Result<PreparedAuthorizedActivity, ExecutionError> {
+        let transfer = TransferCapability::from_root_authorization(
+            request.program,
+            &request.authorization,
+            invocation_authority,
+        )
+        .map_err(ExecutionError::Transfer)?;
+        let mut held_storage = storage.clone();
+        let record = self.execute_authorized(&mut held_storage, request)?;
+        Self::seal_authorized_activity(storage.clone(), held_storage, record, transfer)
+    }
+
+    fn seal_authorized_activity(
+        prior_storage: Storage,
+        held_storage: Storage,
+        record: AuthorizedExecutionRecord,
+        transfer: TransferCapability,
+    ) -> Result<PreparedAuthorizedActivity, ExecutionError> {
+        let (transfer, transfer_set) = if record.effects.transfers.is_empty() {
+            (None, None)
+        } else {
+            let transfer_set = transfer
+                .authorize_for_graph(&record.effects, &record.call_graph)
+                .map_err(ExecutionError::Transfer)?;
+            (Some(transfer), Some(transfer_set))
+        };
+        Ok(PreparedAuthorizedActivity {
+            record,
+            prior_storage,
+            held_storage,
+            transfer,
+            transfer_set,
+        })
+    }
+
+    /// Qualification-only affine settlement preparation. The admitted token is
+    /// consumed and its authenticated activity binding is the sole source of
+    /// invocation authority; callers cannot mint a raw digest authority.
+    pub fn prepare_authorized_activity_budgeted_for_qualification(
+        &self,
+        storage: &Storage,
+        budgeted: BudgetedAuthorizedExecutionRequest<'_>,
+    ) -> Result<PreparedAuthorizedActivityOutcome, ExecutionError> {
+        let activity_binding = budgeted.activity_binding;
+        let transfer = TransferCapability::from_root_authorization(
+            budgeted.request.program,
+            &budgeted.request.authorization,
+            activity_binding.bytes(),
+        )
+        .map_err(ExecutionError::Transfer)?;
+        let mut held_storage = storage.clone();
+        match self.execute_authorized_budgeted(&mut held_storage, budgeted)? {
+            BudgetedV1ActivityOutcome::Success(record) => {
+                Self::seal_authorized_activity(storage.clone(), held_storage, record, transfer)
+                    .map(PreparedAuthorizedActivityOutcome::Success)
+            }
+            BudgetedV1ActivityOutcome::Failure(failure) => {
+                Ok(PreparedAuthorizedActivityOutcome::Failure(failure))
+            }
+            BudgetedV1ActivityOutcome::Resource(resource) => {
+                Ok(PreparedAuthorizedActivityOutcome::Resource(resource))
+            }
+        }
     }
 
     /// Qualification-only execution of recorded ABI-v1 code under one consumed token.

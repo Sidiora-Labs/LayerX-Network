@@ -39,9 +39,9 @@ pub use error::PortRefusal;
 pub use monetary::{translate_all, Transfer402Plan, ValueFlow};
 pub use pubkey::{per_signer_import, AccountHolder, MigrationCell, Pubkey, SeedPath};
 pub use qualify::{
-    authorize_transfers, build_plan, deploy_and_verify, execute_mint, execute_mint_count,
-    execute_mint_remaining, import_accounts, published_source, settle, source_archive,
-    validated_module, AbsentReceipts, DeployedGuard, Invocation, PortBuildRunner, Publication,
+    build_plan, deploy_and_verify, execute_mint, execute_mint_count, execute_mint_remaining,
+    import_accounts, published_source, settle, source_archive, validated_module, AbsentReceipts,
+    DeployedGuard, Invocation, PortBuildRunner, Publication,
 };
 pub use reference::{GuardTerms, MintLimitPort};
 

@@ -8,10 +8,10 @@ use super::{AbiValueType, HostFunction, HostFunctionType};
 
 /// Explicitly non-current module carrying candidate response operations.
 pub const CANDIDATE_ABI_MODULE: &str = "layerx_v2_candidate";
-pub const CANDIDATE_ABI_MANIFEST: &str = "layerx_v2_candidate\0response_write(i32,i32,i32)->i32\0program_call_response(i32,i32,i32,i32,i32,i32,i32,i32)->i64\0refusal_write(i32,i32,i32)->i32\0";
+pub const CANDIDATE_ABI_MANIFEST: &str = "layerx_v2_candidate\0response_write(i32,i32,i32)->i32\0program_call_response(i32,i32,i32,i32,i32,i32,i32,i32)->i64\0refusal_write(i32,i32,i32)->i32\0storage_read_scoped(i32,i32,i32,i32,i32)->i32\0storage_write_scoped(i32,i32,i32,i32,i32)->i32\0storage_delete_scoped(i32,i32,i32)->i32\0storage_drop_scoped(i32)->i32\0storage_scan_scoped(i32,i32,i32,i32,i32,i32,i32,i32,i32)->i32\0";
 
 /// Exact qualification-only response extension table.
-pub const CANDIDATE_HOST_FUNCTIONS: [HostFunction; 3] = [
+pub const CANDIDATE_HOST_FUNCTIONS: [HostFunction; 8] = [
     HostFunction {
         name: "response_write",
         signature: "(i32,i32,i32)->i32",
@@ -24,11 +24,33 @@ pub const CANDIDATE_HOST_FUNCTIONS: [HostFunction; 3] = [
         name: "refusal_write",
         signature: "(i32,i32,i32)->i32",
     },
+    HostFunction {
+        name: "storage_read_scoped",
+        signature: "(i32,i32,i32,i32,i32)->i32",
+    },
+    HostFunction {
+        name: "storage_write_scoped",
+        signature: "(i32,i32,i32,i32,i32)->i32",
+    },
+    HostFunction {
+        name: "storage_delete_scoped",
+        signature: "(i32,i32,i32)->i32",
+    },
+    HostFunction {
+        name: "storage_drop_scoped",
+        signature: "(i32)->i32",
+    },
+    HostFunction {
+        name: "storage_scan_scoped",
+        signature: "(i32,i32,i32,i32,i32,i32,i32,i32,i32)->i32",
+    },
 ];
 
 const RESPONSE_WRITE_PARAMS: &[AbiValueType] =
     &[AbiValueType::I32, AbiValueType::I32, AbiValueType::I32];
 const PROGRAM_CALL_RESPONSE_PARAMS: &[AbiValueType] = &[AbiValueType::I32; 8];
+const STORAGE_SCOPED_PARAMS: &[AbiValueType] = &[AbiValueType::I32; 5];
+const STORAGE_SCAN_SCOPED_PARAMS: &[AbiValueType] = &[AbiValueType::I32; 9];
 const I32_RESULT: &[AbiValueType] = &[AbiValueType::I32];
 const I64_RESULT: &[AbiValueType] = &[AbiValueType::I64];
 const RESPONSE_WRITE_TYPE: HostFunctionType = HostFunctionType {
@@ -43,12 +65,32 @@ const REFUSAL_WRITE_TYPE: HostFunctionType = HostFunctionType {
     params: RESPONSE_WRITE_PARAMS,
     results: I32_RESULT,
 };
+const STORAGE_SCOPED_TYPE: HostFunctionType = HostFunctionType {
+    params: STORAGE_SCOPED_PARAMS,
+    results: I32_RESULT,
+};
+const STORAGE_SCAN_SCOPED_TYPE: HostFunctionType = HostFunctionType {
+    params: STORAGE_SCAN_SCOPED_PARAMS,
+    results: I32_RESULT,
+};
+const STORAGE_DELETE_SCOPED_TYPE: HostFunctionType = HostFunctionType {
+    params: RESPONSE_WRITE_PARAMS,
+    results: I32_RESULT,
+};
+const STORAGE_DROP_SCOPED_TYPE: HostFunctionType = HostFunctionType {
+    params: &[AbiValueType::I32],
+    results: I32_RESULT,
+};
 
 pub(crate) fn candidate_function_type(name: &str) -> Option<&'static HostFunctionType> {
     match name {
         "response_write" => Some(&RESPONSE_WRITE_TYPE),
         "program_call_response" => Some(&PROGRAM_CALL_RESPONSE_TYPE),
         "refusal_write" => Some(&REFUSAL_WRITE_TYPE),
+        "storage_read_scoped" | "storage_write_scoped" => Some(&STORAGE_SCOPED_TYPE),
+        "storage_delete_scoped" => Some(&STORAGE_DELETE_SCOPED_TYPE),
+        "storage_drop_scoped" => Some(&STORAGE_DROP_SCOPED_TYPE),
+        "storage_scan_scoped" => Some(&STORAGE_SCAN_SCOPED_TYPE),
         _ => None,
     }
 }

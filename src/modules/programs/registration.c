@@ -16,7 +16,8 @@ static const uint32_t activity_types[] = {
     LX_PROGRAMS_DEPLOY,
     LX_PROGRAMS_UPGRADE,
     LX_PROGRAMS_CALL,
-    LX_PROGRAMS_REGISTRY
+    LX_PROGRAMS_REGISTRY,
+    LX_PROGRAMS_TRANSFER
 };
 
 static lxp_result programs_genesis(lxp_module_ctx *ctx,
@@ -37,7 +38,9 @@ static lxp_result programs_decode(lxp_module_ctx *ctx, uint16_t ordinal,
     if (ordinal == 1U || ordinal == 2U)
         return lxp_programs_lifecycle_decode(ctx, ordinal, payload, length,
                                              decoded);
-    if (ordinal == 3U)
+    if (ordinal == lxp_activity_type_ordinal(LX_PROGRAMS_CALL))
+        return LXP_ERR_MODULE_DISABLED;
+    if (ordinal == lxp_activity_type_ordinal(LX_PROGRAMS_TRANSFER))
         return lxp_programs_transfer_decode(ctx, payload, length, decoded);
     if (ctx == NULL || decoded == NULL || ordinal == 0U || ordinal > 4U ||
         payload == NULL || length < 32U)
@@ -66,7 +69,7 @@ static lxp_result programs_validate(lxp_module_ctx *ctx,
          lxp_activity_type_ordinal(activity->activity_type) == 2U))
         return lxp_programs_lifecycle_validate(ctx, activity, authority,
                                                decoded);
-    if (activity != NULL && lxp_activity_type_ordinal(activity->activity_type) == 3U)
+    if (activity != NULL && activity->activity_type == LX_PROGRAMS_TRANSFER)
         return lxp_programs_transfer_validate(ctx, activity, authority, decoded);
     if (ctx == NULL || activity == NULL || authority == NULL || value == NULL)
         return LXP_ERR_NON_CANONICAL;
@@ -95,7 +98,7 @@ static lxp_result programs_execute(lxp_module_ctx *ctx,
          lxp_activity_type_ordinal(activity->activity_type) == 2U))
         return lxp_programs_lifecycle_execute(ctx, activity, authority,
                                               decoded, effects);
-    if (activity != NULL && lxp_activity_type_ordinal(activity->activity_type) == 3U)
+    if (activity != NULL && activity->activity_type == LX_PROGRAMS_TRANSFER)
         return lxp_programs_transfer_execute(ctx, activity, authority, decoded,
                                              effects);
     (void)effects;

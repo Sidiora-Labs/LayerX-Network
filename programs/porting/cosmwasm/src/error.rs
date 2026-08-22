@@ -85,12 +85,8 @@ impl Display for PortRefusal {
                 formatter.write_str("storage namespace is empty or exceeds its bounds")
             }
             Self::KeyTooLong => formatter.write_str("composed key exceeds the storage key bound"),
-            Self::SharedState => {
-                formatter.write_str("shared state has no namespaced equivalent")
-            }
-            Self::SchemaMismatch => {
-                formatter.write_str("values do not match the declared schema")
-            }
+            Self::SharedState => formatter.write_str("shared state has no namespaced equivalent"),
+            Self::SchemaMismatch => formatter.write_str("values do not match the declared schema"),
             Self::InvalidJson => formatter.write_str("JSON document is malformed or unexpected"),
             Self::ContractHeldBalance => {
                 formatter.write_str("a program holds no balance to pay out of")

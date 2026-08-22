@@ -3,6 +3,7 @@
 mod calls;
 mod events;
 mod memory;
+mod scan;
 mod storage;
 mod transfer;
 
@@ -283,6 +284,8 @@ pub(crate) fn linker(
     calls::register(&mut linker)?;
     if revision == AbiRevision::CandidateV2 {
         calls::register_candidate(&mut linker)?;
+        scan::register_candidate(&mut linker)?;
+        storage::register_candidate(&mut linker)?;
     }
     transfer::register(&mut linker)?;
     linker
@@ -339,6 +342,10 @@ pub(super) const fn error_status(error: AbiError) -> i32 {
         AbiError::CapabilityDenied | AbiError::CapabilityEscalation => STATUS_DENIED,
         AbiError::Meter(_) => STATUS_METER,
         AbiError::ReceiptMismatch => STATUS_EVIDENCE,
+        AbiError::Storage(
+            crate::storage::StorageError::InvalidScanCursor
+            | crate::storage::StorageError::InvalidScanLimits,
+        ) => STATUS_INVALID,
         AbiError::EventBounds
         | AbiError::CallBounds
         | AbiError::AmountBounds

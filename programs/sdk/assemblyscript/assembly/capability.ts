@@ -36,6 +36,8 @@ export const CAPABILITY_CALL: u8 = 4;
 export const CAPABILITY_TRANSFER_402: u8 = 5;
 /** Authority to read the facts of one verified receipt. */
 export const CAPABILITY_RECEIPT_READ: u8 = 6;
+export const CAPABILITY_SHARED_STORAGE_READ: u8 = 7;
+export const CAPABILITY_SHARED_STORAGE_WRITE: u8 = 8;
 
 const COUNT_BYTES: i32 = 2;
 const TAG_BYTES: i32 = 1;
@@ -77,6 +79,12 @@ export class Capability {
   /** Grants write and delete authority over this program's namespaced storage. */
   static storageWrite(): Capability {
     return new Capability(CAPABILITY_STORAGE_WRITE, emptyIdentifier(), emptyIdentifier(), Amount.zero());
+  }
+  static sharedStorageRead(): Capability {
+    return new Capability(CAPABILITY_SHARED_STORAGE_READ, emptyIdentifier(), emptyIdentifier(), Amount.zero());
+  }
+  static sharedStorageWrite(): Capability {
+    return new Capability(CAPABILITY_SHARED_STORAGE_WRITE, emptyIdentifier(), emptyIdentifier(), Amount.zero());
   }
 
   /** Grants authority to emit events under this program's namespace. */
@@ -124,6 +132,8 @@ export class Capability {
     if (
       this.kind == CAPABILITY_STORAGE_READ ||
       this.kind == CAPABILITY_STORAGE_WRITE ||
+      this.kind == CAPABILITY_SHARED_STORAGE_READ ||
+      this.kind == CAPABILITY_SHARED_STORAGE_WRITE ||
       this.kind == CAPABILITY_EMIT_EVENT
     ) {
       return OK;
@@ -144,6 +154,8 @@ export class Capability {
     if (
       this.kind == CAPABILITY_STORAGE_READ ||
       this.kind == CAPABILITY_STORAGE_WRITE ||
+      this.kind == CAPABILITY_SHARED_STORAGE_READ ||
+      this.kind == CAPABILITY_SHARED_STORAGE_WRITE ||
       this.kind == CAPABILITY_EMIT_EVENT
     ) {
       return TAG_BYTES;

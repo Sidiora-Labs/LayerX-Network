@@ -52,6 +52,8 @@ static size_t grant_encoded_length(const lxp_program_capability *grant)
     switch (grant->kind) {
     case LXP_PROGRAM_CAPABILITY_STORAGE_READ:
     case LXP_PROGRAM_CAPABILITY_STORAGE_WRITE:
+    case LXP_PROGRAM_CAPABILITY_SHARED_STORAGE_READ:
+    case LXP_PROGRAM_CAPABILITY_SHARED_STORAGE_WRITE:
     case LXP_PROGRAM_CAPABILITY_EMIT_EVENT:
         return 1U;
     case LXP_PROGRAM_CAPABILITY_CALL:
@@ -70,6 +72,8 @@ static lxp_program_status validate_grant(const lxp_program_capability *grant)
     switch (grant->kind) {
     case LXP_PROGRAM_CAPABILITY_STORAGE_READ:
     case LXP_PROGRAM_CAPABILITY_STORAGE_WRITE:
+    case LXP_PROGRAM_CAPABILITY_SHARED_STORAGE_READ:
+    case LXP_PROGRAM_CAPABILITY_SHARED_STORAGE_WRITE:
     case LXP_PROGRAM_CAPABILITY_EMIT_EVENT:
         return LXP_PROGRAM_OK;
     case LXP_PROGRAM_CAPABILITY_CALL:
@@ -105,6 +109,22 @@ lxp_program_capability lxp_program_capability_storage_write(void)
     lxp_program_capability grant;
     clear_grant(&grant);
     grant.kind = (uint8_t)LXP_PROGRAM_CAPABILITY_STORAGE_WRITE;
+    return grant;
+}
+
+lxp_program_capability lxp_program_capability_shared_storage_read(void)
+{
+    lxp_program_capability grant;
+    clear_grant(&grant);
+    grant.kind = (uint8_t)LXP_PROGRAM_CAPABILITY_SHARED_STORAGE_READ;
+    return grant;
+}
+
+lxp_program_capability lxp_program_capability_shared_storage_write(void)
+{
+    lxp_program_capability grant;
+    clear_grant(&grant);
+    grant.kind = (uint8_t)LXP_PROGRAM_CAPABILITY_SHARED_STORAGE_WRITE;
     return grant;
 }
 

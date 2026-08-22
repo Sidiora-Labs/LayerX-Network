@@ -7,10 +7,30 @@ on:
     branches: [main]
     paths:
       - "programs/**"
+      - "src/modules/programs/**"
+      - "src/protocol/**"
+      - "src/state/**"
+      - "include/layerx/programs.h"
+      - "include/layerx/lxp_*.h"
+      - "tests/programs/**"
+      - "tests/protocol/**"
+      - "tests/state/**"
+      - "tests/test_snapshot.c"
+      - "Makefile"
       - ".github/workflows/programs-conformance.yml"
   pull_request:
     paths:
       - "programs/**"
+      - "src/modules/programs/**"
+      - "src/protocol/**"
+      - "src/state/**"
+      - "include/layerx/programs.h"
+      - "include/layerx/lxp_*.h"
+      - "tests/programs/**"
+      - "tests/protocol/**"
+      - "tests/state/**"
+      - "tests/test_snapshot.c"
+      - "Makefile"
       - ".github/workflows/programs-conformance.yml"
   workflow_dispatch:
 

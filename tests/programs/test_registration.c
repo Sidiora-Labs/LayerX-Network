@@ -4,6 +4,66 @@
 
 #include <string.h>
 
+static int registration_contract(void)
+{
+    static const uint32_t expected_types[] = {
+        LX_PROGRAMS_DEPLOY,
+        LX_PROGRAMS_UPGRADE,
+        LX_PROGRAMS_CALL,
+        LX_PROGRAMS_REGISTRY,
+        LX_PROGRAMS_TRANSFER
+    };
+    lxp_state_store store;
+    lxp_state_journal journal;
+    lxp_kernel kernel;
+    lxp_module_iface next;
+    const lxp_module_iface *current = programs_module_registration();
+    const lxp_module_registration *resolved;
+    uint64_t parameters = 1U;
+    size_t i;
+    if (current == NULL || current != lx_programs_module_iface() ||
+        current->module_id != LXP_MODULE_PROGRAMS ||
+        current->abi_version != LX_PROGRAMS_ABI_VERSION ||
+        strcmp(current->name, "programs") != 0 ||
+        current->activity_type_count !=
+            sizeof(expected_types) / sizeof(expected_types[0]) ||
+        current->genesis == NULL || current->decode == NULL ||
+        current->validate == NULL || current->execute == NULL ||
+        current->epoch_begin == NULL || current->epoch_end == NULL ||
+        current->state_root == NULL)
+        return 1;
+    for (i = 0U; i < current->activity_type_count; ++i)
+        if (current->activity_types[i] != expected_types[i]) return 1;
+    if (lxp_state_store_init(&store, 0U) != LXP_OK ||
+        lxp_kernel_create(&kernel, &store, &journal, &parameters, 0U) !=
+            LXP_OK ||
+        lxp_kernel_register_module(&kernel, current) != LXP_OK)
+        return 1;
+    for (i = 0U; i < current->activity_type_count; ++i)
+        if (lxp_kernel_module_for_activity(&kernel, expected_types[i], 0U,
+                                           &resolved) != LXP_OK ||
+            resolved->iface != current ||
+            resolved->abi_version != LX_PROGRAMS_ABI_VERSION)
+            return 1;
+    next = *current;
+    next.abi_version = LX_PROGRAMS_ABI_VERSION + 1U;
+    if (lxp_kernel_set_epoch(&kernel, 1U) != LXP_OK ||
+        lxp_kernel_register_module(&kernel, &next) != LXP_OK ||
+        lxp_module_version_for_epoch(&kernel, LXP_MODULE_PROGRAMS, 0U,
+                                     LX_PROGRAMS_ABI_VERSION, &resolved) !=
+            LXP_OK ||
+        resolved->iface != current ||
+        lxp_module_version_for_epoch(&kernel, LXP_MODULE_PROGRAMS, 1U,
+                                     LX_PROGRAMS_ABI_VERSION + 1U,
+                                     &resolved) != LXP_OK ||
+        resolved->iface != &next ||
+        lxp_module_version_for_epoch(&kernel, LXP_MODULE_PROGRAMS, 1U,
+                                     LX_PROGRAMS_ABI_VERSION, &resolved) !=
+            LXP_ERR_VERSION_UNSUPPORTED)
+        return 1;
+    return lxp_state_store_destroy(&store) == LXP_OK ? 0 : 1;
+}
+
 static int exercise(uint16_t ordinal, size_t payload_length,
                     lxp_result expected, size_t expected_writes)
 {
@@ -58,9 +118,12 @@ static int exercise(uint16_t ordinal, size_t payload_length,
 
 int main(void)
 {
-    if (programs_module_registration() != lx_programs_module_iface()) return 1;
-    if (exercise(3U, 40U, LXP_ERR_LENGTH_LIMIT, 0U) != 0) return 1;
-    if (exercise(4U, 32U, LXP_OK, 0U) != 0) return 1;
-    if (exercise(3U, 31U, LXP_ERR_TRUNCATED, 0U) != 0) return 1;
+    if (registration_contract() != 0) return 1;
+    if (exercise(lxp_activity_type_ordinal(LX_PROGRAMS_CALL), 40U,
+                 LXP_ERR_MODULE_DISABLED, 0U) != 0) return 1;
+    if (exercise(lxp_activity_type_ordinal(LX_PROGRAMS_REGISTRY), 32U,
+                 LXP_OK, 0U) != 0) return 1;
+    if (exercise(lxp_activity_type_ordinal(LX_PROGRAMS_CALL), 31U,
+                 LXP_ERR_MODULE_DISABLED, 0U) != 0) return 1;
     return 0;
 }

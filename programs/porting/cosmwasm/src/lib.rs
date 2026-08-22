@@ -40,9 +40,9 @@ pub use messages::{
 };
 pub use monetary::{translate_all, Transfer402Plan, ValueFlow};
 pub use qualify::{
-    authorize_transfers, build_plan, deploy_and_verify, execute_donate, execute_donations,
-    execute_remaining, import_state, published_source, settle, source_archive, validated_module,
-    AbsentReceipts, DeployedContract, Invocation, PortBuildRunner, Publication,
+    build_plan, deploy_and_verify, execute_donate, execute_donations, execute_remaining,
+    import_state, published_source, settle, source_archive, validated_module, AbsentReceipts,
+    DeployedContract, Invocation, PortBuildRunner, Publication,
 };
 pub use reference::{DonationPort, DonationTerms};
 pub use storage::{

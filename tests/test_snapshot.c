@@ -8,6 +8,39 @@
 #include <string.h>
 #include <unistd.h>
 
+static lxp_result module_genesis(lxp_module_ctx *ctx, const uint8_t *bytes,
+                                 size_t length)
+{ (void)ctx; (void)bytes; (void)length; return LXP_OK; }
+static lxp_result module_decode(lxp_module_ctx *ctx, uint16_t ordinal,
+                                const uint8_t *bytes, size_t length,
+                                void **decoded)
+{ (void)ctx; (void)ordinal; (void)bytes; (void)length; *decoded = NULL;
+  return LXP_OK; }
+static lxp_result module_validate(lxp_module_ctx *ctx,
+                                  const lxp_activity *activity,
+                                  const lxp_authority_resolved *authority,
+                                  const void *decoded)
+{ (void)ctx; (void)activity; (void)authority; (void)decoded; return LXP_OK; }
+static lxp_result module_execute(lxp_module_ctx *ctx,
+                                 const lxp_activity *activity,
+                                 const lxp_authority_resolved *authority,
+                                 const void *decoded,
+                                 lxp_effect_buffer *effects)
+{ (void)ctx; (void)activity; (void)authority; (void)decoded; (void)effects;
+  return LXP_OK; }
+static lxp_result module_epoch(lxp_module_ctx *ctx, uint64_t epoch,
+                               uint64_t timestamp)
+{ (void)ctx; (void)epoch; (void)timestamp; return LXP_OK; }
+static lxp_result module_root(lxp_module_ctx *ctx, uint8_t root[32])
+{ (void)ctx; (void)memset(root, 0, 32U); return LXP_OK; }
+
+static const uint32_t program_types[] = { UINT32_C(0x00090001) };
+static const lxp_module_iface program_iface = {
+    9U, 1U, "programs", program_types, 1U, module_genesis, module_decode,
+    module_validate, module_execute, module_epoch, module_epoch, module_root,
+    NULL
+};
+
 static int apply_value(lxp_state_store *state, lxp_state_journal *journal,
                        uint64_t sequence, uint8_t key_byte, uint64_t value)
 {
@@ -67,6 +100,9 @@ int main(void)
                        sizeof(snapshot_storage)) != LXP_OK ||
         lxp_snapshot_write(&original, 1U, &snapshot_arena, &snapshot) !=
             LXP_OK ||
+        snapshot.length != 482U ||
+        snapshot.bytes[snapshot.length - 9U * 36U - 2U] != 0U ||
+        snapshot.bytes[snapshot.length - 9U * 36U - 1U] != 9U ||
         lxp_snapshot_manifest(snapshot.bytes, snapshot.length, 1U, root,
                               &manifest) != LXP_OK ||
         mkdtemp(directory) == NULL ||
@@ -110,7 +146,14 @@ int main(void)
     ((uint8_t *)stored_snapshot.bytes)[stored_snapshot.length - 1U] ^= 1U;
     if (lxp_snapshot_load(stored_snapshot.bytes, stored_snapshot.length,
                           &stored_manifest, root, &restored) !=
-        LXP_ERR_SNAPSHOT_MISMATCH) return 1;
+        LXP_ERR_SNAPSHOT_MISMATCH ||
+        lxp_kernel_register_module(&original, &program_iface) != LXP_OK ||
+        lxp_arena_reset(&snapshot_arena, 0U) != LXP_OK ||
+        lxp_snapshot_write(&original, 2U, &snapshot_arena, &snapshot) !=
+            LXP_OK ||
+        snapshot.bytes[snapshot.length - 10U * 36U - 2U] != 0U ||
+        snapshot.bytes[snapshot.length - 10U * 36U - 1U] != 10U)
+        return 1;
     if (lxp_state_store_destroy(&original_state) != LXP_OK ||
         lxp_state_store_destroy(&restored_state) != LXP_OK ||
         unlink(path) != 0 || rmdir(directory) != 0) return 1;

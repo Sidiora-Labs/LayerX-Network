@@ -1,15 +1,42 @@
 #include "layerx/lxp_kernel.h"
 
 #include "layerx/lxp_hash.h"
+#include "lxp_state_internal.h"
 
 #include <string.h>
 
 enum {
+    LXP_LEGACY_LAST_MODULE_ID = 8,
     LXP_STATE_MAX_LEAVES = LXP_STATE_MAX_CELLS +
                            LXP_STATE_MAX_IDEMPOTENCY +
                            LXP_KERNEL_MAX_MODULE_REGISTRATIONS +
                            LXP_KERNEL_MAX_MODULE_KV + 2
 };
+
+lxp_result lxp_state_module_root_count(const lxp_kernel *kernel,
+                                       size_t *count)
+{
+    uint16_t last_module_id = LXP_LEGACY_LAST_MODULE_ID;
+    size_t i;
+    if (kernel == NULL || count == NULL) return LXP_ERR_NON_CANONICAL;
+    if (kernel->module_count > LXP_KERNEL_MAX_MODULE_REGISTRATIONS ||
+        kernel->module_kv_count > LXP_KERNEL_MAX_MODULE_KV)
+        return LXP_ERR_LENGTH_LIMIT;
+    for (i = 0U; i < kernel->module_count; ++i) {
+        const lxp_module_registration *registration = &kernel->modules[i];
+        if (registration->module_id == 0U ||
+            registration->module_id > LXP_MODULE_RESERVED_COUNT)
+            return LXP_ERR_UNKNOWN_MODULE;
+        if (registration->module_id > last_module_id)
+            last_module_id = registration->module_id;
+    }
+    for (i = 0U; i < kernel->module_kv_count; ++i)
+        if (kernel->module_kv[i].module_id == 0U ||
+            kernel->module_kv[i].module_id > last_module_id)
+            return LXP_ERR_UNKNOWN_MODULE;
+    *count = (size_t)last_module_id + 1U;
+    return LXP_OK;
+}
 
 typedef struct state_leaf {
     uint8_t key[LXP_MODULE_MAX_KEY_BYTES + 4U];
@@ -114,6 +141,13 @@ static lxp_result universal_leaves(const lxp_kernel *kernel,
     size_t i;
     uint8_t value[16];
     lxp_result status;
+    bool expanded_registration_commitment = false;
+    if (kernel->module_count > LXP_KERNEL_MAX_MODULE_REGISTRATIONS ||
+        kernel->module_kv_count > LXP_KERNEL_MAX_MODULE_KV)
+        return LXP_ERR_LENGTH_LIMIT;
+    for (i = 0U; i < kernel->module_count; ++i)
+        if (kernel->modules[i].module_id == LXP_MODULE_PROGRAMS)
+            expanded_registration_commitment = true;
     *count = 0U;
     for (i = 0U; i < kernel->state->count; ++i) {
         uint8_t key[33];
@@ -135,7 +169,12 @@ static lxp_result universal_leaves(const lxp_kernel *kernel,
     for (i = 0U; i < kernel->module_count; ++i) {
         const lxp_module_registration *registration = &kernel->modules[i];
         uint8_t key[7];
-        uint8_t body[16] = { 0 };
+        uint8_t body[18U + 4U * LXP_MODULE_MAX_ACTIVITY_TYPES] = { 0 };
+        size_t body_length = 16U;
+        size_t j;
+        if (registration->activity_type_count >
+            LXP_MODULE_MAX_ACTIVITY_TYPES)
+            return LXP_ERR_LENGTH_LIMIT;
         key[0] = 3U;
         key[1] = (uint8_t)(registration->module_id >> 8U);
         key[2] = (uint8_t)registration->module_id;
@@ -145,8 +184,25 @@ static lxp_result universal_leaves(const lxp_kernel *kernel,
         key[6] = (uint8_t)registration->abi_version;
         body[0] = registration->enabled ? 1U : 0U;
         body[1] = (uint8_t)registration->activity_type_count;
+        if (expanded_registration_commitment) {
+            for (j = 0U; j < 8U; ++j) {
+                body[2U + j] = (uint8_t)(registration->enabled_epoch >>
+                                         (56U - 8U * j));
+                body[10U + j] = (uint8_t)(registration->disabled_epoch >>
+                                          (56U - 8U * j));
+            }
+            for (j = 0U; j < registration->activity_type_count; ++j) {
+                uint32_t type = registration->activity_types[j];
+                size_t offset = 18U + 4U * j;
+                body[offset] = (uint8_t)(type >> 24U);
+                body[offset + 1U] = (uint8_t)(type >> 16U);
+                body[offset + 2U] = (uint8_t)(type >> 8U);
+                body[offset + 3U] = (uint8_t)type;
+            }
+            body_length = 18U + 4U * registration->activity_type_count;
+        }
         status = leaf_set(&leaves[(*count)++], key, sizeof(key), body,
-                          sizeof(body));
+                          body_length);
         if (status != LXP_OK) return status;
     }
     value[0] = (uint8_t)(kernel->state->next_sequence >> 56U);
@@ -196,16 +252,19 @@ lxp_result lxp_state_supply_check(const lxp_kernel *kernel)
 lxp_result lxp_state_root(const lxp_kernel *kernel, uint8_t root[32])
 {
     state_leaf leaves[LXP_MODULE_RESERVED_COUNT + 1U];
-    uint16_t module_id;
+    size_t module_id;
+    size_t module_root_count;
     size_t count = 0U;
     lxp_result status;
     uint8_t key[2];
     if (kernel == NULL || root == NULL) return LXP_ERR_NON_CANONICAL;
     status = lxp_state_supply_check(kernel);
     if (status != LXP_OK) return status;
-    for (module_id = 0U; module_id <= LXP_MODULE_RESERVED_COUNT; ++module_id) {
+    status = lxp_state_module_root_count(kernel, &module_root_count);
+    if (status != LXP_OK) return status;
+    for (module_id = 0U; module_id < module_root_count; ++module_id) {
         uint8_t subtree[32];
-        status = lxp_state_subtree_root(kernel, module_id, subtree);
+        status = lxp_state_subtree_root(kernel, (uint16_t)module_id, subtree);
         if (status != LXP_OK) return status;
         key[0] = (uint8_t)(module_id >> 8U);
         key[1] = (uint8_t)module_id;

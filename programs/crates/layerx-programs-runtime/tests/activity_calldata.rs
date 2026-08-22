@@ -218,7 +218,7 @@ fn activity_entry_accepts_empty_and_exact_maximum_calldata() {
         .unwrap_or_else(|error| panic!("capability: {error}"));
     execute_with(&sink_module(), &maximum, &mut sink_storage, capabilities)
         .unwrap_or_else(|error| panic!("sink: {error}"));
-    let namespace = StorageNamespace::new(
+    let namespace = StorageNamespace::principal(
         ProgramId::new([1; 32]).unwrap_or_else(|error| panic!("program: {error}")),
         PrincipalId::new([2; 32]).unwrap_or_else(|error| panic!("principal: {error}")),
     );
@@ -293,7 +293,7 @@ fn root_and_nested_boundaries_deliver_identical_bytes_without_double_charge() {
     .unwrap_or_else(|error| panic!("nested: {error}"));
 
     let principal = PrincipalId::new([2; 32]).unwrap_or_else(|error| panic!("principal: {error}"));
-    let namespace = StorageNamespace::new(child, principal);
+    let namespace = StorageNamespace::principal(child, principal);
     assert_eq!(
         direct_storage.transaction(namespace).read(b"key"),
         Ok(Some(payload.to_vec()))

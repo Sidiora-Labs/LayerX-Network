@@ -68,7 +68,11 @@ impl EntryPoint {
 /// is a breaking change exactly as it already is on a chain.
 #[must_use]
 pub fn variant_tag(entry: EntryPoint, variant: &str) -> [u8; VARIANT_TAG_BYTES] {
-    let capacity = entry.name().len().saturating_add(variant.len()).saturating_add(1);
+    let capacity = entry
+        .name()
+        .len()
+        .saturating_add(variant.len())
+        .saturating_add(1);
     let mut preimage = Vec::with_capacity(capacity);
     preimage.extend_from_slice(entry.name().as_bytes());
     preimage.push(b':');
@@ -148,7 +152,10 @@ impl MessageVariant {
     /// Refuses a value list that does not match the declared body schema.
     pub fn json(&self, values: &[FieldValue]) -> Result<String, PortRefusal> {
         let body = self.body.encode_json(values)?;
-        let capacity = body.len().saturating_add(self.variant.len()).saturating_add(6);
+        let capacity = body
+            .len()
+            .saturating_add(self.variant.len())
+            .saturating_add(6);
         let mut text = String::with_capacity(capacity);
         text.push_str("{\"");
         text.push_str(&self.variant);

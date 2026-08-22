@@ -114,7 +114,7 @@ fn assert_authorized_write_rolls_back(wasm: &[u8], executor: Executor, expected:
         Ok(principal) => principal,
         Err(refusal) => panic!("principal id refused: {refusal}"),
     };
-    let namespace = StorageNamespace::new(program, principal);
+    let namespace = StorageNamespace::principal(program, principal);
     let mut storage = Storage::new();
     {
         let mut transaction = storage.transaction(namespace);

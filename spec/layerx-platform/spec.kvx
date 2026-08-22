@@ -2160,7 +2160,7 @@ reqs = ["28.2","28.7"]
 
 [task.19.2]
 title = "Implement deterministic execution and metering"
-status = "done"
+status = "implemented"
 wave = 10
 requires = ["19.1"]
 do_1 = "Implement instruction-level CPU metering, memory accounting and storage accounting, charged through the existing fee mechanism."
@@ -2175,7 +2175,7 @@ reqs = ["28.3","28.4","28.2"]
 
 [task.19.3]
 title = "Implement the capability ABI and namespaced storage"
-status = "done"
+status = "implemented"
 wave = 10
 requires = ["19.2"]
 do_1 = "Define the versioned program ABI: capability-based host functions for storage, events, program calls, 402LXP transfer requests and receipt-verified reads, with no ambient authority."
@@ -2190,7 +2190,7 @@ reqs = ["30.1","29.2","28.6"]
 
 [task.19.4]
 title = "Register the programs module in the core"
-status = "pending"
+status = "implemented"
 wave = 10
 requires = ["19.3"]
 do_1 = "Register the programs module through the existing module system as a versioned transition-function change, declaring its activity types: deploy, upgrade, call, and registry operations."
@@ -2273,7 +2273,7 @@ status = "pending"
 
 [task.21.1]
 title = "Enforce the 402LXP-only monetary law for programs"
-status = "pending"
+status = "implemented"
 wave = 10
 requires = ["19.3"]
 do_1 = "Route every program monetary effect through 402LXP transfer requests applied by the kernel transfer primitive within the invoking activity's authority."
@@ -2679,7 +2679,7 @@ note = "Parallel lanes: 28.1 lands first and alone because it reshapes the ABI a
 
 [task.28.1]
 title = "Modularize the ABI and host surface into per-capability units"
-status = "done"
+status = "implemented"
 wave = 14
 requires = ["19.3"]
 do_1 = "Split src/abi.rs into an abi module: mod.rs holding the Abi transaction, effects and commit; capability.rs holding Capability, CapabilitySet and narrowing; storage_ops.rs holding the storage operations; leaving room for context, crypto, response and balance units later waves add without collision."
@@ -2694,7 +2694,7 @@ reqs = ["28.6","30.1"]
 
 [task.28.2]
 title = "Carry calldata into the invoked entry point"
-status = "done"
+status = "implemented"
 wave = 14
 requires = ["28.1"]
 do_1 = "Add bounded calldata to AuthorizedExecutionRequest so an activity supplies input bytes rather than only integer arguments, routed through the same reserve-and-write protocol the composition path already uses to enter a callee."
@@ -2709,7 +2709,7 @@ reqs = ["35.2"]
 
 [task.28.3]
 title = "Return response bytes across the call boundary"
-status = "done"
+status = "implemented"
 wave = 14
 requires = ["28.1"]
 do_1 = "Add a response region to the call protocol: a callee writes bounded response bytes, the runtime copies them into a caller-declared buffer, and the caller reads them through a response host function rather than through storage."
@@ -2724,7 +2724,7 @@ reqs = ["35.3"]
 
 [task.28.4]
 title = "Carry typed failure payloads and program refusal reasons"
-status = "done"
+status = "implemented"
 wave = 14
 requires = ["28.1"]
 do_1 = "Extend the refusal taxonomy so a guest refusal carries the refusing program, the refusal class and bounded program-supplied reason bytes, replacing the bare negative result code as the only failure signal."
@@ -2739,7 +2739,7 @@ reqs = ["35.4","35.6"]
 
 [task.28.5]
 title = "Admit a caller-declared execution budget"
-status = "done"
+status = "implemented"
 wave = 14
 requires = ["28.1"]
 do_1 = "Replace the compiled-constant execution budget with a budget declared by the invoking activity, bounded above by the protocol maximum and below by the declared minimum viable execution."
@@ -2754,7 +2754,7 @@ reqs = ["35.5","28.3"]
 
 [task.28.6]
 title = "Ship the isolation and composition adversarial suites"
-status = "done"
+status = "implemented"
 wave = 14
 requires = ["28.1"]
 do_1 = "Write the isolation suite the capability ABI claims: guests attempting to reach kernel state, another program's namespace, another principal's cells, the host linker and memory outside their own instance, each defeated by construction."
@@ -2806,7 +2806,7 @@ note = "Parallel lanes: 29.1 fixes the namespace model first because every other
 
 [task.29.1]
 title = "Extend the namespace model with a program-shared namespace"
-status = "pending"
+status = "implemented"
 wave = 15
 requires = ["28.1"]
 do_1 = "Model StorageNamespace as a closed enum over a principal-scoped namespace and a program-shared namespace, both carrying the owning program, so a namespace names its scope in the type rather than by convention."
@@ -2821,7 +2821,7 @@ reqs = ["36.1"]
 
 [task.29.2]
 title = "Grant and enforce shared-namespace access through explicit capabilities"
-status = "pending"
+status = "implemented"
 wave = 15
 requires = ["29.1"]
 do_1 = "Add distinct shared-read and shared-write capabilities so an activity can invoke a program with read-only access to shared state, and keep principal-scoped grants conferring no shared access whatsoever."
@@ -2836,7 +2836,7 @@ reqs = ["36.2","30.1","30.3"]
 
 [task.29.3]
 title = "Implement ordered iteration with a resumable cursor"
-status = "pending"
+status = "implemented"
 wave = 15
 requires = ["29.1"]
 do_1 = "Add a storage scan host function taking a namespace selector, a bounded key prefix and a cursor, returning entries in canonical key order with a resumable cursor."
@@ -2851,7 +2851,7 @@ reqs = ["36.3"]
 
 [task.29.4]
 title = "Implement namespace drop and reclamation"
-status = "pending"
+status = "implemented"
 wave = 15
 requires = ["29.1"]
 do_1 = "Add a namespace drop operation removing every cell of one namespace as a single committed change, refusing a namespace the program does not own."
@@ -2866,7 +2866,7 @@ reqs = ["36.4"]
 
 [task.29.5]
 title = "Charge storage occupancy over time as its own resource class"
-status = "pending"
+status = "implemented"
 wave = 15
 requires = ["29.1"]
 do_1 = "Add an occupancy resource class measured as namespace bytes held across batches, distinct from the one-off read and write classes the meter already enforces."
@@ -2881,7 +2881,7 @@ reqs = ["36.5"]
 
 [task.29.6]
 title = "Extend the isolation gauntlet to the shared namespace"
-status = "pending"
+status = "implemented"
 wave = 15
 requires = ["29.2","29.3","29.4"]
 do_1 = "Add hostile programs attempting to read and write another program's shared namespace by every reachable route: forged selector, forged capability encoding, crafted key, and a narrowed grant across a call edge."

@@ -20,6 +20,8 @@ const TAG_EMIT_EVENT: u8 = 3;
 const TAG_CALL: u8 = 4;
 const TAG_TRANSFER: u8 = 5;
 const TAG_RECEIPT_READ: u8 = 6;
+const TAG_SHARED_STORAGE_READ: u8 = 7;
+const TAG_SHARED_STORAGE_WRITE: u8 = 8;
 
 const COUNT_BYTES: usize = 2;
 const TAG_BYTES: usize = 1;
@@ -37,6 +39,8 @@ enum CapabilityKey {
         to: [u8; IDENTIFIER_BYTES],
     },
     ReceiptRead([u8; IDENTIFIER_BYTES]),
+    SharedStorageRead,
+    SharedStorageWrite,
 }
 
 /// One explicit authority granted by the invoking activity.
@@ -46,6 +50,10 @@ pub enum Capability {
     StorageRead,
     /// Authority to write and delete this program's namespaced storage.
     StorageWrite,
+    /// Authority to read this program's shared storage.
+    SharedStorageRead,
+    /// Authority to write this program's shared storage.
+    SharedStorageWrite,
     /// Authority to emit events under this program's namespace.
     EmitEvent,
     /// Authority to call one named program.
@@ -108,7 +116,11 @@ impl Capability {
     #[must_use]
     pub const fn encoded_len(self) -> usize {
         match self {
-            Self::StorageRead | Self::StorageWrite | Self::EmitEvent => TAG_BYTES,
+            Self::StorageRead
+            | Self::StorageWrite
+            | Self::SharedStorageRead
+            | Self::SharedStorageWrite
+            | Self::EmitEvent => TAG_BYTES,
             Self::Call { .. } | Self::ReceiptRead { .. } => TAG_BYTES + IDENTIFIER_BYTES,
             Self::Transfer402 { .. } => {
                 TAG_BYTES + IDENTIFIER_BYTES + IDENTIFIER_BYTES + AMOUNT_BYTES
@@ -120,6 +132,8 @@ impl Capability {
         match self {
             Self::StorageRead => CapabilityKey::StorageRead,
             Self::StorageWrite => CapabilityKey::StorageWrite,
+            Self::SharedStorageRead => CapabilityKey::SharedStorageRead,
+            Self::SharedStorageWrite => CapabilityKey::SharedStorageWrite,
             Self::EmitEvent => CapabilityKey::EmitEvent,
             Self::Call { program } => CapabilityKey::Call(program.bytes()),
             Self::Transfer402 { asset, to, .. } => CapabilityKey::Transfer {
@@ -259,6 +273,12 @@ impl<const N: usize> CapabilitySet<N> {
             match *grant {
                 Capability::StorageRead => write_bytes(output, &mut cursor, &[TAG_STORAGE_READ])?,
                 Capability::StorageWrite => write_bytes(output, &mut cursor, &[TAG_STORAGE_WRITE])?,
+                Capability::SharedStorageRead => {
+                    write_bytes(output, &mut cursor, &[TAG_SHARED_STORAGE_READ])?
+                }
+                Capability::SharedStorageWrite => {
+                    write_bytes(output, &mut cursor, &[TAG_SHARED_STORAGE_WRITE])?
+                }
                 Capability::EmitEvent => write_bytes(output, &mut cursor, &[TAG_EMIT_EVENT])?,
                 Capability::Call { program } => {
                     write_bytes(output, &mut cursor, &[TAG_CALL])?;

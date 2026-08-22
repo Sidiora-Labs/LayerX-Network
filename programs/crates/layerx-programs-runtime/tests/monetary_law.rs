@@ -1,233 +1,301 @@
+use layerx_programs_runtime::test_support::{
+    code_section, func_body, function_section, import_section, module, type_section, unsigned_leb,
+    OP_CALL, OP_END, OP_I32_CONST, TYPE_I32, TYPE_I64,
+};
 use layerx_programs_runtime::{
-    AbiEffects, Capability, CapabilitySet, PrincipalId, ProgramCall, ProgramId, TransferCapability,
-    TransferLawError, TransferRequest,
+    AbiError, AuthorizationContext, CallFrameId, Capability, CapabilitySet, PrincipalId, ProgramId,
+    Storage,
+};
+use layerx_programs_runtime::{
+    ActivityBudgetBinding, BudgetedAuthorizedExecutionRequest, DeclaredBudget,
+};
+use layerx_programs_runtime::{
+    AuthorizedExecutionRequest, BudgetMeterRefusal, BudgetResourceKind, CompositionContext,
+    Executor, PreparedAuthorizedActivityOutcome, ReceiptOracle, ReceiptView, WasmEngine,
+    ABI_MODULE, CALL_ENTRY_EXPORT,
 };
 
-fn program_id(byte: u8) -> ProgramId {
-    ProgramId::new([byte; 32]).unwrap_or_else(|error| panic!("program: {error}"))
-}
+#[derive(Debug)]
+struct NoReceipts;
 
-fn principal_id(byte: u8) -> PrincipalId {
-    PrincipalId::new([byte; 32]).unwrap_or_else(|error| panic!("principal: {error}"))
-}
-
-fn request(program: ProgramId, principal: PrincipalId, amount: u128) -> TransferRequest {
-    request_for(program, principal, [3; 32], [4; 32], amount)
-}
-
-fn request_for(
-    program: ProgramId,
-    principal: PrincipalId,
-    asset: [u8; 32],
-    to: [u8; 32],
-    amount: u128,
-) -> TransferRequest {
-    TransferRequest {
-        program,
-        principal,
-        asset,
-        to,
-        amount,
+impl ReceiptOracle for NoReceipts {
+    fn verified_receipt(&self, _: [u8; 32]) -> Result<ReceiptView, AbiError> {
+        Err(AbiError::ReceiptMismatch)
     }
 }
 
-fn child_call(
-    parent_program: ProgramId,
-    child_program: ProgramId,
-    principal: PrincipalId,
-    asset: [u8; 32],
-    to: [u8; 32],
-    maximum_amount: u128,
-) -> ProgramCall {
-    let capabilities = CapabilitySet::new([Capability::Transfer402 {
-        asset,
-        to,
-        maximum_amount,
-    }])
-    .unwrap_or_else(|error| panic!("child capabilities: {error}"));
-    ProgramCall {
-        caller: parent_program,
-        callee: child_program,
-        principal,
-        input: Vec::new(),
-        capabilities,
+fn section(id: u8, payload: &[u8]) -> Vec<u8> {
+    let mut encoded = vec![id];
+    encoded.extend(unsigned_leb(payload.len() as u64));
+    encoded.extend_from_slice(payload);
+    encoded
+}
+
+fn exports(entries: &[(&str, u8, u8)]) -> Vec<u8> {
+    let mut payload = unsigned_leb(entries.len() as u64);
+    for (name, kind, index) in entries {
+        payload.extend(unsigned_leb(name.len() as u64));
+        payload.extend_from_slice(name.as_bytes());
+        payload.extend_from_slice(&[*kind, *index]);
     }
+    section(7, &payload)
 }
 
-#[test]
-fn transfer_set_is_bound_to_invocation_authority_and_exact_order() {
-    let program = program_id(1);
-    let principal = principal_id(2);
-    let capability = TransferCapability::new(program, principal, [5; 32])
-        .unwrap_or_else(|error| panic!("capability: {error}"));
-    let effects = AbiEffects {
-        transfers: vec![
-            request(program, principal, 7),
-            request(program, principal, 11),
-        ],
-        ..AbiEffects::default()
-    };
-    let set = capability
-        .authorize(&effects)
-        .unwrap_or_else(|error| panic!("set: {error}"));
-    assert_eq!(set.program(), program);
-    assert_eq!(set.principal(), principal);
-    assert_eq!(set.invocation_authority(), [5; 32]);
-    assert_eq!(set.total_amount(), 18);
-    assert_eq!(set.legs(), effects.transfers);
-    assert!(set
-        .canonical()
-        .starts_with(b"LayerX/programs/402LXP/transfer-set/v1\0"));
+fn data_section(entries: &[(u32, &[u8])]) -> Vec<u8> {
+    let mut payload = unsigned_leb(entries.len() as u64);
+    for (offset, bytes) in entries {
+        payload.extend([0, OP_I32_CONST]);
+        payload.extend(unsigned_leb(u64::from(*offset)));
+        payload.push(OP_END);
+        payload.extend(unsigned_leb(bytes.len() as u64));
+        payload.extend_from_slice(bytes);
+    }
+    section(11, &payload)
 }
 
-#[test]
-fn empty_invalid_and_overflowing_sets_are_refused_before_core() {
-    let program = program_id(1);
-    let principal = principal_id(2);
-    assert_eq!(
-        TransferCapability::new(program, principal, [0; 32]),
-        Err(TransferLawError::UnverifiedAuthority)
-    );
-    let capability = TransferCapability::new(program, principal, [5; 32])
-        .unwrap_or_else(|error| panic!("capability: {error}"));
-    assert_eq!(
-        capability.authorize(&AbiEffects::default()),
-        Err(TransferLawError::InvalidTransferSet)
-    );
-    let overflow = AbiEffects {
-        transfers: vec![
-            request(program, principal, u128::MAX),
-            request(program, principal, 1),
-        ],
-        ..AbiEffects::default()
-    };
-    assert_eq!(
-        capability.authorize(&overflow),
-        Err(TransferLawError::AmountOverflow)
-    );
+fn transfer_module() -> Vec<u8> {
+    let asset = [3; 32];
+    let recipient = [4; 32];
+    module(&[
+        type_section(&[(
+            &[TYPE_I64, TYPE_I64, TYPE_I32, TYPE_I32, TYPE_I32, TYPE_I32],
+            &[TYPE_I32],
+        )]),
+        import_section(&[(ABI_MODULE, "transfer_402", 0)]),
+        function_section(&[0]),
+        section(5, &[1, 1, 1, 1]),
+        exports(&[("run", 0, 1), ("memory", 2, 0)]),
+        code_section(&[func_body(
+            &[],
+            &[
+                0x42,
+                0,
+                0x42,
+                1,
+                OP_I32_CONST,
+                0,
+                OP_I32_CONST,
+                32,
+                OP_I32_CONST,
+                32,
+                OP_I32_CONST,
+                32,
+                OP_CALL,
+                0,
+                OP_END,
+            ],
+        )]),
+        data_section(&[(0, &asset), (32, &recipient)]),
+    ])
 }
 
-#[test]
-fn forged_program_or_principal_is_an_invariant_one_violation() {
-    let program = program_id(1);
-    let principal = principal_id(2);
-    let capability = TransferCapability::new(program, principal, [5; 32])
-        .unwrap_or_else(|error| panic!("capability: {error}"));
-    for transfer in [
-        request(program_id(9), principal, 1),
-        request(program, principal_id(9), 1),
+fn no_effect_module() -> Vec<u8> {
+    module(&[
+        type_section(&[(&[], &[TYPE_I32])]),
+        function_section(&[0]),
+        exports(&[("run", 0, 0)]),
+        code_section(&[func_body(&[], &[OP_I32_CONST, 0, OP_END])]),
+    ])
+}
+
+fn candidate_with_entry(entry: &[u8]) -> Vec<u8> {
+    let functions = function_section(&[0, 1]);
+    let memory = section(5, &[1, 1, 1, 1]);
+    let mut entries = unsigned_leb(3);
+    for (name, kind, index) in [
+        ("layerx_reserve", 0_u8, 0_u8),
+        (CALL_ENTRY_EXPORT, 0, 1),
+        ("memory", 2, 0),
     ] {
-        let effects = AbiEffects {
-            transfers: vec![transfer],
-            ..AbiEffects::default()
-        };
-        assert_eq!(
-            capability.authorize(&effects),
-            Err(TransferLawError::InvariantViolation)
-        );
+        entries.extend(unsigned_leb(name.len() as u64));
+        entries.extend_from_slice(name.as_bytes());
+        entries.extend_from_slice(&[kind, index]);
     }
+    module(&[
+        type_section(&[
+            (&[TYPE_I32], &[TYPE_I32]),
+            (&[TYPE_I32, TYPE_I32], &[TYPE_I32]),
+        ]),
+        functions,
+        memory,
+        section(7, &entries),
+        code_section(&[
+            func_body(&[], &[OP_I32_CONST, 0, OP_END]),
+            func_body(&[], entry),
+        ]),
+    ])
+}
+
+fn looping_module() -> Vec<u8> {
+    candidate_with_entry(&[0x03, 0x40, 0x0c, 0, OP_END, OP_I32_CONST, 0, OP_END])
+}
+
+fn admitted_request<'a>(
+    executor: &Executor,
+    request: AuthorizedExecutionRequest<'a>,
+    payer: PrincipalId,
+    declared: DeclaredBudget,
+    binding: ActivityBudgetBinding,
+) -> BudgetedAuthorizedExecutionRequest<'a> {
+    let admitted = executor
+        .admit_activity_budget_for_qualification(declared, payer, binding, u128::MAX)
+        .unwrap_or_else(|error| panic!("admitted: {error}"));
+    BudgetedAuthorizedExecutionRequest::new(request, admitted, payer, binding)
+}
+
+fn generous_budget() -> DeclaredBudget {
+    DeclaredBudget::new(1_000_000, 1_048_576, 1_048_576, 1_048_576, 64, 0, 64)
+        .unwrap_or_else(|error| panic!("declared: {error}"))
 }
 
 #[test]
-fn child_transfer_requires_a_reachable_call_graph_edge() {
-    let root = program_id(1);
-    let child = program_id(7);
-    let principal = principal_id(2);
-    let capability = TransferCapability::new(root, principal, [5; 32])
-        .unwrap_or_else(|error| panic!("capability: {error}"));
-    let disconnected = AbiEffects {
-        transfers: vec![request(child, principal, 1)],
-        ..AbiEffects::default()
-    };
-    assert_eq!(
-        capability.authorize(&disconnected),
-        Err(TransferLawError::InvariantViolation)
-    );
-}
-
-#[test]
-fn child_call_cannot_change_the_invoking_principal() {
-    let root = program_id(1);
-    let child = program_id(7);
-    let principal = principal_id(2);
-    let capability = TransferCapability::new(root, principal, [5; 32])
-        .unwrap_or_else(|error| panic!("capability: {error}"));
-    let effects = AbiEffects {
-        calls: vec![child_call(
-            root,
-            child,
-            principal_id(9),
-            [3; 32],
-            [4; 32],
-            10,
-        )],
-        transfers: vec![request(child, principal, 1)],
-        ..AbiEffects::default()
-    };
-    assert_eq!(
-        capability.authorize(&effects),
-        Err(TransferLawError::InvariantViolation)
-    );
-}
-
-#[test]
-fn child_transfer_must_fit_its_narrowed_asset_recipient_and_amount() {
-    let root = program_id(1);
-    let child = program_id(7);
-    let principal = principal_id(2);
-    let capability = TransferCapability::new(root, principal, [5; 32])
-        .unwrap_or_else(|error| panic!("capability: {error}"));
-    for transfer in [
-        request_for(child, principal, [8; 32], [4; 32], 1),
-        request_for(child, principal, [3; 32], [8; 32], 1),
-        request_for(child, principal, [3; 32], [4; 32], 11),
+fn real_wasm_budgeted_preparation_seals_transfer_or_zero_transfer_without_kernel() {
+    let program = ProgramId::new([1; 32]).unwrap_or_else(|error| panic!("program: {error}"));
+    let payer = PrincipalId::new([2; 32]).unwrap_or_else(|error| panic!("payer: {error}"));
+    let executor = Executor::declared();
+    for (wasm, grants, has_transfer) in [
+        (
+            transfer_module(),
+            CapabilitySet::new([Capability::Transfer402 {
+                asset: [3; 32],
+                to: [4; 32],
+                maximum_amount: 1,
+            }])
+            .unwrap_or_else(|error| panic!("grants: {error}")),
+            true,
+        ),
+        (no_effect_module(), CapabilitySet::empty(), false),
     ] {
-        let effects = AbiEffects {
-            calls: vec![child_call(root, child, principal, [3; 32], [4; 32], 10)],
-            transfers: vec![transfer],
-            ..AbiEffects::default()
+        let module = WasmEngine::declared()
+            .unwrap_or_else(|error| panic!("engine: {error}"))
+            .validate(&wasm)
+            .unwrap_or_else(|error| panic!("module: {error}"));
+        let storage = Storage::default();
+        let outcome = executor
+            .prepare_authorized_activity_budgeted_for_qualification(
+                &storage,
+                admitted_request(
+                    &executor,
+                    AuthorizedExecutionRequest {
+                        module: &module,
+                        program,
+                        authorization: AuthorizationContext::new(payer, grants),
+                        receipts: &NoReceipts,
+                        entrypoint: "run",
+                        calldata: &[],
+                        composition: CompositionContext::isolated(),
+                        response_capacity: 0,
+                    },
+                    payer,
+                    generous_budget(),
+                    ActivityBudgetBinding::new([9; 32])
+                        .unwrap_or_else(|error| panic!("binding: {error}")),
+                ),
+            )
+            .unwrap_or_else(|error| panic!("prepared: {error}"));
+        let PreparedAuthorizedActivityOutcome::Success(prepared) = outcome else {
+            panic!("real wasm preparation must succeed")
         };
-        assert_eq!(
-            capability.authorize(&effects),
-            Err(TransferLawError::CapabilityEscalation)
-        );
+        assert!(prepared.execution().usage.cpu_fuel > 0);
+        assert_eq!(prepared.execution().usage.memory_bytes, 65_536);
+        assert!(prepared.execution().usage.fee_units > 0);
+        assert_eq!(prepared.has_monetary_effects(), has_transfer);
+        let summary = prepared.monetary_summary();
+        if has_transfer {
+            let summary = summary.unwrap_or_else(|| panic!("missing monetary summary"));
+            assert_eq!(summary.program(), program);
+            assert_eq!(summary.principal(), payer);
+            assert_eq!(summary.invocation_authority(), [9; 32]);
+            assert_eq!(summary.total_amount(), 1);
+            assert_eq!(summary.legs().len(), 1);
+            let leg = &summary.legs()[0];
+            assert_eq!(leg.program(), program);
+            assert_eq!(leg.principal(), payer);
+            assert_eq!(leg.frame(), CallFrameId::root());
+            assert_eq!(leg.asset(), [3; 32]);
+            assert_eq!(leg.to(), [4; 32]);
+            assert_eq!(leg.amount(), 1);
+        } else {
+            assert_eq!(summary, None);
+        }
     }
-    let cumulative = AbiEffects {
-        calls: vec![child_call(root, child, principal, [3; 32], [4; 32], 10)],
-        transfers: vec![request(child, principal, 6), request(child, principal, 6)],
-        ..AbiEffects::default()
-    };
-    assert_eq!(
-        capability.authorize(&cumulative),
-        Err(TransferLawError::CapabilityEscalation)
-    );
 }
 
 #[test]
-fn canonical_transfer_set_commits_child_provenance_and_call_grants() {
-    let root = program_id(1);
-    let child = program_id(7);
-    let principal = principal_id(2);
-    let capability = TransferCapability::new(root, principal, [5; 32])
-        .unwrap_or_else(|error| panic!("capability: {error}"));
-    let effects = |maximum_amount| AbiEffects {
-        calls: vec![child_call(
-            root,
-            child,
-            principal,
-            [3; 32],
-            [4; 32],
-            maximum_amount,
-        )],
-        transfers: vec![request(child, principal, 7)],
-        ..AbiEffects::default()
+fn real_wasm_budgeted_preparation_retains_failure_and_resource_diagnostics() {
+    let executor = Executor::declared();
+    let payer = PrincipalId::new([2; 32]).unwrap_or_else(|error| panic!("payer: {error}"));
+    let program = ProgramId::new([1; 32]).unwrap_or_else(|error| panic!("program: {error}"));
+    let engine = WasmEngine::declared().unwrap_or_else(|error| panic!("engine: {error}"));
+
+    let failed_module = engine
+        .validate(&candidate_with_entry(&[OP_I32_CONST, 0x7f, OP_END]))
+        .unwrap_or_else(|error| panic!("failed module: {error}"));
+    let failure = executor
+        .prepare_authorized_activity_budgeted_for_qualification(
+            &Storage::default(),
+            admitted_request(
+                &executor,
+                AuthorizedExecutionRequest {
+                    module: &failed_module,
+                    program,
+                    authorization: AuthorizationContext::new(payer, CapabilitySet::empty()),
+                    receipts: &NoReceipts,
+                    entrypoint: CALL_ENTRY_EXPORT,
+                    calldata: &[],
+                    composition: CompositionContext::isolated(),
+                    response_capacity: 0,
+                },
+                payer,
+                generous_budget(),
+                ActivityBudgetBinding::new([10; 32])
+                    .unwrap_or_else(|error| panic!("binding: {error}")),
+            ),
+        )
+        .unwrap_or_else(|error| panic!("failure preparation: {error}"));
+    let PreparedAuthorizedActivityOutcome::Failure(failure) = failure else {
+        panic!("expected receipt-ready failure")
     };
-    let narrow = capability
-        .authorize(&effects(7))
-        .unwrap_or_else(|error| panic!("narrow graph: {error}"));
-    let broad = capability
-        .authorize(&effects(8))
-        .unwrap_or_else(|error| panic!("broad graph: {error}"));
-    assert_eq!(narrow.legs()[0].program, child);
-    assert_ne!(narrow.canonical(), broad.canonical());
+    assert!(failure.usage().cpu_fuel > 0);
+    assert!(failure.call_graph().edges().is_empty());
+
+    let looping = engine
+        .validate(&looping_module())
+        .unwrap_or_else(|error| panic!("looping module: {error}"));
+    let resource = executor
+        .prepare_authorized_activity_budgeted_for_qualification(
+            &Storage::default(),
+            admitted_request(
+                &executor,
+                AuthorizedExecutionRequest {
+                    module: &looping,
+                    program,
+                    authorization: AuthorizationContext::new(payer, CapabilitySet::empty()),
+                    receipts: &NoReceipts,
+                    entrypoint: CALL_ENTRY_EXPORT,
+                    calldata: &[],
+                    composition: CompositionContext::isolated(),
+                    response_capacity: 0,
+                },
+                payer,
+                DeclaredBudget::new(100, 65_536, 0, 0, 2, 0, 0)
+                    .unwrap_or_else(|error| panic!("cpu budget: {error}")),
+                ActivityBudgetBinding::new([11; 32])
+                    .unwrap_or_else(|error| panic!("binding: {error}")),
+            ),
+        )
+        .unwrap_or_else(|error| panic!("resource preparation: {error}"));
+    let PreparedAuthorizedActivityOutcome::Resource(resource) = resource else {
+        panic!("expected receipt-ready resource refusal")
+    };
+    assert_eq!(
+        resource.refusal(),
+        BudgetMeterRefusal::BudgetExceeded {
+            resource: BudgetResourceKind::Cpu,
+            limit: 100,
+            attempted: 101,
+        }
+    );
+    assert_eq!(resource.usage().cpu_fuel, 99);
+    assert!(resource.call_graph().edges().is_empty());
 }

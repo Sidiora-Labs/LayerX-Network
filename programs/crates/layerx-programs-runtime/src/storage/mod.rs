@@ -1,10 +1,20 @@
-//! Persistent program storage whose address space is structurally scoped by
-//! both program and invoking principal. Guest-facing APIs never accept an
-//! arbitrary namespace, so neither adjacent programs nor adjacent principals
-//! can be reached by choosing a key.
+//! Persistent program storage whose address space is structurally scoped to
+//! either one program/principal pair or one program-shared plane. Guest-facing
+//! APIs never accept an arbitrary namespace, so neither adjacent programs nor
+//! adjacent principals can be reached by choosing a key.
 
 use core::fmt::{self, Display};
 use std::collections::BTreeMap;
+
+mod namespace;
+#[path = "scan.rs"]
+mod ordered_scan;
+pub mod reclaim;
+
+pub use namespace::StorageNamespace;
+pub(crate) use ordered_scan::scan_cells;
+pub use ordered_scan::{ScanEntry, ScanLimits, StorageScan, MAX_STORAGE_SCAN_CURSOR_BYTES};
+pub use reclaim::NamespaceDrop;
 
 /// Maximum key length admitted by the version-one storage ABI.
 pub const MAX_STORAGE_KEY_BYTES: usize = 256;
@@ -59,35 +69,8 @@ impl PrincipalId {
     }
 }
 
-/// One storage namespace, fixed before guest code begins.
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub struct StorageNamespace {
-    program: ProgramId,
-    principal: PrincipalId,
-}
-
-impl StorageNamespace {
-    /// Constructs the exact program/principal namespace.
-    #[must_use]
-    pub const fn new(program: ProgramId, principal: PrincipalId) -> Self {
-        Self { program, principal }
-    }
-
-    /// Returns the program owning this namespace.
-    #[must_use]
-    pub const fn program(self) -> ProgramId {
-        self.program
-    }
-
-    /// Returns the principal owning this namespace.
-    #[must_use]
-    pub const fn principal(self) -> PrincipalId {
-        self.principal
-    }
-}
-
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-struct StorageAddress {
+pub(crate) struct StorageAddress {
     namespace: StorageNamespace,
     key: Vec<u8>,
 }
@@ -100,6 +83,10 @@ pub enum StorageError {
     EmptyKey,
     KeyTooLarge,
     ValueTooLarge,
+    PrefixTooLarge,
+    InvalidScanCursor,
+    InvalidScanLimits,
+    ScanCeilingExceeded,
     SizeOverflow,
 }
 
@@ -111,6 +98,15 @@ impl Display for StorageError {
             Self::EmptyKey => formatter.write_str("storage key is empty"),
             Self::KeyTooLarge => formatter.write_str("storage key exceeds the ABI bound"),
             Self::ValueTooLarge => formatter.write_str("storage value exceeds the ABI bound"),
+            Self::PrefixTooLarge => {
+                formatter.write_str("storage scan prefix exceeds the ABI bound")
+            }
+            Self::InvalidScanCursor => {
+                formatter.write_str("storage scan cursor is invalid or belongs to another scan")
+            }
+            Self::InvalidScanLimits => formatter.write_str("storage scan limits are invalid"),
+            Self::ScanCeilingExceeded => formatter
+                .write_str("storage scan entry exceeds the declared complete page byte ceiling"),
             Self::SizeOverflow => formatter.write_str("storage accounting overflowed"),
         }
     }
@@ -118,8 +114,8 @@ impl Display for StorageError {
 
 impl std::error::Error for StorageError {}
 
-/// Durable storage shared by program executions. Its map key always includes
-/// both owning program and invoking principal.
+/// Durable storage shared by program executions. Every map key includes a
+/// closed namespace value carrying its owning program and declared scope.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Storage {
     cells: BTreeMap<StorageAddress, Vec<u8>>,
@@ -175,6 +171,36 @@ impl Storage {
             })
     }
 
+    /// Returns every nonempty namespace and its exact persistent bytes in
+    /// canonical namespace order. Protocol state transitions use this to prove
+    /// that no occupied namespace escaped responsibility accounting.
+    pub fn namespace_sizes(&self) -> Result<Vec<(StorageNamespace, u64)>, StorageError> {
+        let mut sizes = BTreeMap::<StorageNamespace, u64>::new();
+        for (address, value) in &self.cells {
+            let bytes = metered_bytes(&address.key, Some(value))?;
+            let size = sizes.entry(address.namespace).or_default();
+            *size = size.checked_add(bytes).ok_or(StorageError::SizeOverflow)?;
+        }
+        Ok(sizes.into_iter().collect())
+    }
+
+    /// Computes exact facts for dropping one namespace without mutating this
+    /// storage snapshot. The caller charges this preview before committing the
+    /// corresponding reclamation.
+    pub(crate) fn namespace_drop_preview(
+        &self,
+        namespace: StorageNamespace,
+    ) -> Result<NamespaceDrop, StorageError> {
+        reclaim::preview(&self.cells, namespace)
+    }
+
+    /// Removes every cell of a preflighted namespace from this storage
+    /// snapshot. Only the ABI can obtain a namespace drop fact from a
+    /// guest-selected scope and matching write authority.
+    pub(crate) fn reclaim_namespace(&mut self, drop: NamespaceDrop) {
+        reclaim::apply(&mut self.cells, drop);
+    }
+
     pub(crate) fn read(
         &self,
         namespace: StorageNamespace,
@@ -221,6 +247,26 @@ impl Storage {
             key: key.to_vec(),
         });
         Ok(())
+    }
+
+    /// Scans one fixed namespace in canonical key order. The cursor is an
+    /// externally portable, self-describing continuation token; it is checked
+    /// against this exact namespace, prefix, and declared page contract before
+    /// any entries are returned.
+    ///
+    /// # Errors
+    ///
+    /// Refuses malformed, foreign, or non-canonical cursors, invalid limits,
+    /// and an entry that cannot fit the caller-declared complete canonical
+    /// page byte ceiling.
+    pub(crate) fn scan(
+        &self,
+        namespace: StorageNamespace,
+        prefix: &[u8],
+        cursor: &[u8],
+        limits: ScanLimits,
+    ) -> Result<StorageScan, StorageError> {
+        scan_cells(&self.cells, namespace, prefix, cursor, limits)
     }
 }
 

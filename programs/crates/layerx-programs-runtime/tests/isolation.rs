@@ -13,6 +13,8 @@ use layerx_programs_runtime::{
 
 const ABI_V1_GOLDEN: &str = include_str!("../vectors/abi-v1.hex");
 const ATTACK_INVENTORY: &str = include_str!("../../../tests/gauntlet/attack-inventory.tsv");
+#[path = "../../../tests/gauntlet/state.rs"]
+mod state_gauntlet;
 #[derive(Debug)]
 struct NoReceipts;
 
@@ -702,9 +704,9 @@ fn real_guest_storage_is_scoped_by_program_and_principal() {
     assert_eq!(other_program.execution.usage.storage_read_bytes, 10);
     assert_eq!(other_principal.execution.outputs, vec![WasmValue::I32(6)]);
     assert_eq!(other_principal.execution.usage.storage_read_bytes, 8);
-    let owner_namespace = StorageNamespace::new(program_a, principal_p);
-    let program_namespace = StorageNamespace::new(program_b, principal_p);
-    let principal_namespace = StorageNamespace::new(program_a, principal_q);
+    let owner_namespace = StorageNamespace::principal(program_a, principal_p);
+    let program_namespace = StorageNamespace::principal(program_b, principal_p);
+    let principal_namespace = StorageNamespace::principal(program_a, principal_q);
     assert_namespace(&mut storage, owner_namespace, b"new");
     assert_namespace(&mut storage, program_namespace, b"foreign");
     assert_namespace(&mut storage, principal_namespace, b"queue");
@@ -714,6 +716,68 @@ fn real_guest_storage_is_scoped_by_program_and_principal() {
         .unwrap_or_else(|error| panic!("replacement: {error}"));
     assert_eq!(replacement.commit(), 1);
     assert_eq!(storage.namespace_persistent_bytes(owner_namespace), Ok(8));
+}
+
+#[test]
+fn principal_and_shared_namespaces_are_closed_ordered_and_disjoint() {
+    let (program_a, principal_a) = ids(21, 31);
+    let (program_b, principal_b) = ids(22, 32);
+    let principal_a_namespace = StorageNamespace::principal(program_a, principal_a);
+    let principal_b_namespace = StorageNamespace::principal(program_a, principal_b);
+    let other_program_principal = StorageNamespace::principal(program_b, principal_a);
+    let shared_a_namespace = StorageNamespace::shared(program_a);
+    let shared_b_namespace = StorageNamespace::shared(program_b);
+    assert_eq!(principal_a_namespace.program(), program_a);
+    assert_eq!(principal_a_namespace.principal_scope(), Some(principal_a));
+    assert_eq!(shared_a_namespace.program(), program_a);
+    assert_eq!(shared_a_namespace.principal_scope(), None);
+    assert!(principal_a_namespace < principal_b_namespace);
+    assert!(principal_b_namespace < shared_a_namespace);
+    assert!(shared_a_namespace < other_program_principal);
+    assert!(shared_a_namespace < shared_b_namespace);
+    let mut principal_bytes = vec![21; 32];
+    principal_bytes.push(0);
+    principal_bytes.extend_from_slice(&[31; 32]);
+    assert_eq!(principal_a_namespace.canonical_bytes(), principal_bytes);
+    let mut shared_bytes = vec![21; 32];
+    shared_bytes.push(1);
+    assert_eq!(shared_a_namespace.canonical_bytes(), shared_bytes);
+    let abi = Abi::new(
+        ABI_VERSION,
+        program_a,
+        AuthorizationContext::new(principal_a, CapabilitySet::empty()),
+        Storage::new(),
+        &NoReceipts,
+    )
+    .unwrap_or_else(|error| panic!("abi: {error}"));
+    assert_eq!(abi.principal_namespace(), principal_a_namespace);
+    assert_eq!(abi.shared_namespace(), shared_a_namespace);
+
+    let mut storage = Storage::new();
+    for (namespace, value) in [
+        (principal_a_namespace, b"principal-a".as_slice()),
+        (principal_b_namespace, b"principal-b".as_slice()),
+        (shared_a_namespace, b"shared-a".as_slice()),
+        (shared_b_namespace, b"shared-b".as_slice()),
+    ] {
+        let mut transaction = storage.transaction(namespace);
+        transaction
+            .write(b"same-key", value)
+            .unwrap_or_else(|error| panic!("write: {error}"));
+        assert_eq!(transaction.commit(), 1);
+    }
+    for (namespace, expected) in [
+        (principal_a_namespace, b"principal-a".as_slice()),
+        (principal_b_namespace, b"principal-b".as_slice()),
+        (shared_a_namespace, b"shared-a".as_slice()),
+        (shared_b_namespace, b"shared-b".as_slice()),
+    ] {
+        assert_eq!(storage.namespace_cell_count(namespace), 1);
+        assert_eq!(
+            storage.transaction(namespace).read(b"same-key"),
+            Ok(Some(expected.to_vec()))
+        );
+    }
 }
 
 #[test]
@@ -740,7 +804,7 @@ fn guest_memory_bounds_refusal_cannot_write_or_emit_effects() {
         assert_eq!(storage, before, "pointer {pointer}");
     }
 
-    let namespace = StorageNamespace::new(program, principal);
+    let namespace = StorageNamespace::principal(program, principal);
     for pointer in [-1, 65_535, i32::MAX] {
         let mut storage = Storage::new();
         let mut seed = storage.transaction(namespace);
@@ -820,19 +884,19 @@ fn nested_frames_use_their_own_program_memory_and_storage_namespace() {
     assert_eq!(record.call_graph.edges()[0].principal(), principal_p);
     assert_eq!(
         storage
-            .transaction(StorageNamespace::new(root, principal_p))
+            .transaction(StorageNamespace::principal(root, principal_p))
             .read(b"k"),
         Ok(Some(vec![b'A']))
     );
     assert_eq!(
         storage
-            .transaction(StorageNamespace::new(child, principal_p))
+            .transaction(StorageNamespace::principal(child, principal_p))
             .read(b"k"),
         Ok(Some(vec![b'B']))
     );
     assert_eq!(
         storage
-            .transaction(StorageNamespace::new(root, principal_q))
+            .transaction(StorageNamespace::principal(root, principal_q))
             .read(b"k"),
         Ok(None)
     );
@@ -847,13 +911,13 @@ fn nested_frames_use_their_own_program_memory_and_storage_namespace() {
     assert_eq!(other.execution.outputs, vec![WasmValue::I32(0)]);
     assert_eq!(
         storage
-            .transaction(StorageNamespace::new(root, principal_p))
+            .transaction(StorageNamespace::principal(root, principal_p))
             .read(b"k"),
         Ok(Some(vec![b'A']))
     );
     assert_eq!(
         storage
-            .transaction(StorageNamespace::new(root, principal_q))
+            .transaction(StorageNamespace::principal(root, principal_q))
             .read(b"key"),
         Ok(Some(b"queue".to_vec()))
     );
@@ -958,6 +1022,7 @@ pub fn programs_isolation_suite() {
     guest_memory_bounds_refusal_cannot_write_or_emit_effects();
     candidate_linker_uses_the_same_bounded_guest_memory_boundary();
     capability_narrowing_rejects_missing_grants_and_limit_widening_without_effects();
+    state_gauntlet::shared_state_gauntlet_suite();
 
     let executed = vec![
         ("ISO-001", "unknown_and_ambient_kernel_imports_are_rejected"),
@@ -993,6 +1058,31 @@ pub fn programs_isolation_suite() {
         (
             "ISO-010",
             "capability_narrowing_rejects_missing_grants_and_limit_widening_without_effects",
+        ),
+        (
+            "ISO-011",
+            "foreign_shared_selectors_are_structurally_closed",
+        ),
+        (
+            "ISO-012",
+            "forged_shared_capability_bytes_never_enter_the_child",
+        ),
+        ("ISO-013", "crafted_keys_cannot_name_a_foreign_namespace"),
+        (
+            "ISO-014",
+            "narrowing_never_widens_shared_authority_across_a_call",
+        ),
+        (
+            "ISO-015",
+            "shared_surface_cannot_reach_another_principal_cells",
+        ),
+        (
+            "ISO-016",
+            "repeated_iteration_exhaustion_has_no_partial_output",
+        ),
+        (
+            "ISO-017",
+            "repeated_drop_rewrite_exhaustion_rolls_back_atomically",
         ),
     ];
     assert_eq!(inventory_rows("isolation"), executed);

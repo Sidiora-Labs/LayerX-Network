@@ -157,6 +157,6 @@ lxp_result lxp_programs_transfer_execute(
     (void)memset(&receipt, 0, sizeof(receipt));
     status = lxp_ctx_emit_transfer_set(ctx, &set, &receipt);
     if (status != LXP_OK) return status;
-    return lxp_ctx_emit_event(ctx, LX_PROGRAMS_EVENT_CALLED,
+    return lxp_ctx_emit_event(ctx, LX_PROGRAMS_EVENT_TRANSFERRED,
                               receipt.transfer_set_root, 32U);
 }

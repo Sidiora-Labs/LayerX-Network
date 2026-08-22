@@ -161,7 +161,10 @@ impl ValueFlow {
     /// in one pass instead of stopping at the first.
     #[must_use]
     pub const fn portable(&self) -> bool {
-        matches!(self, Self::CallerFunded { .. } | Self::AllowanceSpend { .. })
+        matches!(
+            self,
+            Self::CallerFunded { .. } | Self::AllowanceSpend { .. }
+        )
     }
 }
 

@@ -1,5 +1,6 @@
 #include "layerx/lxp_snapshot.h"
 #include "layerx/lxp_crypto.h"
+#include "lxp_state_internal.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -73,10 +74,11 @@ static void sort_kv(const lxp_kernel *kernel, size_t *indices)
     }
 }
 
-static lxp_result snapshot_size(const lxp_kernel *kernel, size_t *size)
+static lxp_result snapshot_size(const lxp_kernel *kernel,
+                                size_t module_root_count, size_t *size)
 {
     size_t total = 4U + 8U + 4U + 4U + 4U + 4U + 2U +
-                   LXP_SNAPSHOT_MODULE_ROOT_COUNT * 36U;
+                   module_root_count * 36U;
     size_t i;
     if (kernel->state->count > LXP_STATE_MAX_CELLS ||
         kernel->state->idempotency_count > LXP_STATE_MAX_IDEMPOTENCY ||
@@ -121,13 +123,16 @@ lxp_result lxp_snapshot_write(const lxp_kernel *kernel,
     size_t *kv_indices;
     void *memory;
     size_t capacity;
+    size_t module_root_count;
     size_t i;
     lxp_result status;
     if (kernel == NULL || kernel->state == NULL || arena == NULL ||
         snapshot == NULL || global_sequence == UINT64_MAX ||
         kernel->state->next_sequence != global_sequence + 1U)
         return LXP_ERR_SEQUENCE_MISMATCH;
-    status = snapshot_size(kernel, &capacity);
+    status = lxp_state_module_root_count(kernel, &module_root_count);
+    if (status != LXP_OK) return status;
+    status = snapshot_size(kernel, module_root_count, &capacity);
     if (status != LXP_OK) return status;
     status = lxp_arena_alloc(arena, kernel->state->count * sizeof(size_t),
                              _Alignof(size_t), &memory);
@@ -209,9 +214,8 @@ lxp_result lxp_snapshot_write(const lxp_kernel *kernel,
     }
     if (status == LXP_OK)
         status = lxp_codec_write_u16(&writer,
-                                     LXP_SNAPSHOT_MODULE_ROOT_COUNT);
-    for (i = 0U; status == LXP_OK &&
-         i < LXP_SNAPSHOT_MODULE_ROOT_COUNT; ++i) {
+                                     (uint16_t)module_root_count);
+    for (i = 0U; status == LXP_OK && i < module_root_count; ++i) {
         uint8_t root[32];
         status = lxp_state_subtree_root(kernel, (uint16_t)i, root);
         if (status == LXP_OK)
@@ -403,8 +407,14 @@ lxp_result lxp_snapshot_load(const uint8_t *snapshot, size_t snapshot_length,
     candidate->module_kv_count = status == LXP_OK ? count : 0U;
     if (status == LXP_OK) state->next_sequence = sequence + 1U;
     if (status == LXP_OK) status = lxp_codec_read_u16(&reader, &root_count);
-    if (status == LXP_OK && root_count != LXP_SNAPSHOT_MODULE_ROOT_COUNT)
+    if (status == LXP_OK && root_count > LXP_SNAPSHOT_MODULE_ROOT_COUNT)
         status = LXP_ERR_SNAPSHOT_MISMATCH;
+    if (status == LXP_OK) {
+        size_t expected_root_count;
+        status = lxp_state_module_root_count(candidate, &expected_root_count);
+        if (status == LXP_OK && root_count != expected_root_count)
+            status = LXP_ERR_SNAPSHOT_MISMATCH;
+    }
     for (i = 0U; status == LXP_OK && i < root_count; ++i) {
         uint8_t recorded[32];
         uint8_t computed[32];

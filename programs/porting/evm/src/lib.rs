@@ -33,7 +33,7 @@ pub use layout::{
 };
 pub use monetary::{translate_all, Transfer402Plan, ValueFlow};
 pub use qualify::{
-    authorize_transfers, build_plan, deploy_and_verify, execute_has_valid_key, execute_purchase,
+    build_plan, deploy_and_verify, execute_has_valid_key, execute_purchase,
     execute_remaining_periods, import_state, published_source, settle, source_archive,
     validated_module, AbsentReceipts, DeployedLock, Invocation, PortBuildRunner, Publication,
 };

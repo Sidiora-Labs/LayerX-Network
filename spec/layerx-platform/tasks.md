@@ -819,21 +819,21 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Apply the workspace dependency, license and lint policy, including the integer-only rule in every consensus-adjacent path.
     - Prove existing builds are untouched with the programs workspace present.
     - _Requirements: 28.2, 28.7_
-  - [x] 19.2 Implement deterministic execution and metering
+  - [ ] 19.2 Implement deterministic execution and metering — **Implemented - qualification pending**
     - Implement instruction-level CPU metering, memory accounting and storage accounting, charged through the existing fee mechanism.
     - Fail an execution exceeding its budget with a typed resource result and full rollback, never a stall or node fault.
     - Record the runtime and ABI version per execution for receipt carriage and versioned replay.
     - Prove byte-identical execution across operating systems, architectures and optimisation levels on the conformance vector set.
     - Property-test that metering is deterministic: equal executions consume equal budgets everywhere.
     - _Requirements: 28.3, 28.4, 28.2_
-  - [x] 19.3 Implement the capability ABI and namespaced storage
+  - [ ] 19.3 Implement the capability ABI and namespaced storage — **Implemented - qualification pending**
     - Define the versioned program ABI: capability-based host functions for storage, events, program calls, 402LXP transfer requests and receipt-verified reads, with no ambient authority.
     - Implement namespaced persistent storage per program with storage metering and isolation from every other namespace.
     - Bind every capability to the invoking activity's authorisation context, with downward-only narrowing.
     - Prove isolation adversarially: no guest can reach kernel state, another program's namespace or another principal's data outside declared capabilities.
     - Freeze the ABI behind golden vectors so an ABI change without a version bump fails the build.
     - _Requirements: 30.1, 29.2, 28.6_
-  - [ ] 19.4 Register the programs module in the core
+  - [ ] 19.4 Register the programs module in the core — **Implemented - qualification pending**
     - Register the programs module through the existing module system as a versioned transition-function change, declaring its activity types: deploy, upgrade, call, and registry operations.
     - Keep the kernel unchanged: no new balance-mutation primitive, no new authority model, module-namespace writes only.
     - Apply module failure semantics exactly: failed program activities consume sequence, charge fees, roll back writes and emit typed-failure receipts.
@@ -872,7 +872,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - _Requirements: 29.6_
 
 - [ ] 21. Enforce the monetary law, composition and multi-language authoring
-  - [ ] 21.1 Enforce the 402LXP-only monetary law for programs
+  - [ ] 21.1 Enforce the 402LXP-only monetary law for programs — **Implemented - qualification pending**
     - Route every program monetary effect through 402LXP transfer requests applied by the kernel transfer primitive within the invoking activity's authority.
     - Make a direct balance write by a program impossible by construction, with INVARIANT 1 aborting any violation.
     - Execute multi-call, multi-transfer program activities as one atomic transfer set with a single receipt and full rollback on any failed leg.
@@ -1070,42 +1070,42 @@ surface makes the evidence portable while custody never leaves Paxeer.
 
 - [ ] 28. Make deployed programs callable on the network
   - Parallel lanes: 28.1 lands first and alone because it reshapes the ABI and host surface every later lane edits. Once it lands, 28.2 through 28.6 are five independent agents on disjoint files. 28.7 joins them and 28.8 follows it.
-  - [x] 28.1 Modularize the ABI and host surface into per-capability units
+  - [ ] 28.1 Modularize the ABI and host surface into per-capability units — **Implemented - qualification pending**
     - Split src/abi.rs into an abi module: mod.rs holding the Abi transaction, effects and commit; capability.rs holding Capability, CapabilitySet and narrowing; storage_ops.rs holding the storage operations; leaving room for context, crypto, response and balance units later waves add without collision.
     - Split src/host.rs into a host module: mod.rs holding linker construction and RuntimeState; memory.rs holding the guest read and write helpers; storage.rs, events.rs, calls.rs and transfer.rs holding one host-function family each.
     - Keep the change strictly behaviour-preserving: the frozen ABI manifest, the host-function table, every status code and every refusal taxonomy stay byte-identical, and the existing test suites pass unchanged with no edits to their assertions.
     - Add a module-boundary lint proving no host-function family reaches another family's state except through RuntimeState, so later waves can add a host function without reading the whole file.
     - Record the module map in the runtime crate documentation so a parallel agent can find its lane without reading every file.
     - _Requirements: 28.6, 30.1_
-  - [x] 28.2 Carry calldata into the invoked entry point
+  - [ ] 28.2 Carry calldata into the invoked entry point — **Implemented - qualification pending**
     - Add bounded calldata to AuthorizedExecutionRequest so an activity supplies input bytes rather than only integer arguments, routed through the same reserve-and-write protocol the composition path already uses to enter a callee.
     - Unify the entry protocol: the activity boundary and a program-to-program edge enter a program the same way, so a program has one entry contract rather than two.
     - Meter the calldata copy on the same per-byte basis composition already charges, and refuse input past the declared ABI bound with a typed result before any guest code runs.
     - Extend the Rust SDK entry plumbing so a program declares its entry point once and receives calldata identically at both boundaries.
     - Test an activity-level call with calldata against a real module, including the empty, maximum and one-past-maximum cases.
     - _Requirements: 35.2_
-  - [x] 28.3 Return response bytes across the call boundary
+  - [ ] 28.3 Return response bytes across the call boundary — **Implemented - qualification pending**
     - Add a response region to the call protocol: a callee writes bounded response bytes, the runtime copies them into a caller-declared buffer, and the caller reads them through a response host function rather than through storage.
     - Carry the response to the activity boundary too, so an authorized execution returns bytes as well as integer outputs and metered usage.
     - Meter the response copy per byte and account it against the output resource class, refusing a response past the caller's declared capacity with a typed result rather than truncating.
     - Bind the response to the exact call edge so a stale or foreign response can never be read, and prove it across a fan-out of sibling calls.
     - Extend the Rust SDK call surface with a typed response and test the empty, maximum and over-capacity cases.
     - _Requirements: 35.3_
-  - [x] 28.4 Carry typed failure payloads and program refusal reasons
+  - [ ] 28.4 Carry typed failure payloads and program refusal reasons — **Implemented - qualification pending**
     - Extend the refusal taxonomy so a guest refusal carries the refusing program, the refusal class and bounded program-supplied reason bytes, replacing the bare negative result code as the only failure signal.
     - Propagate a nested refusal to the activity boundary unchanged, naming the frame that refused rather than the frame that observed it, so a deep call graph reports its actual cause.
     - Meter the reason bytes and bound them, so a failure path cannot be used to move unmetered data or to grow a receipt without limit.
     - Carry the failure payload into the activity receipt under the standard receipt shape so every consumer renders a program failure with the same rigor as a success.
     - Extend the Rust SDK error vocabulary to construct and decode a reason, and test refusal propagation from depth one and from the declared maximum depth.
     - _Requirements: 35.4, 35.6_
-  - [x] 28.5 Admit a caller-declared execution budget
+  - [ ] 28.5 Admit a caller-declared execution budget — **Implemented - qualification pending**
     - Replace the compiled-constant execution budget with a budget declared by the invoking activity, bounded above by the protocol maximum and below by the declared minimum viable execution.
     - Charge only the metered usage actually consumed inside the declared ceiling, so a caller that over-declares is not billed for headroom it did not use.
     - Refuse an execution whose declared budget exceeds the protocol maximum, or whose payer cannot cover the ceiling, before any guest code runs and with a typed result.
     - Keep the whole call graph inside one declared budget exactly as the carried-fuel accounting already does, so composition cannot multiply a ceiling.
     - Property-test that declared budget and consumed usage are independent: equal executions under different ceilings consume identical usage and produce identical evidence.
     - _Requirements: 35.5, 28.3_
-  - [x] 28.6 Ship the isolation and composition adversarial suites
+  - [ ] 28.6 Ship the isolation and composition adversarial suites — **Implemented - qualification pending**
     - Write the isolation suite the capability ABI claims: guests attempting to reach kernel state, another program's namespace, another principal's cells, the host linker and memory outside their own instance, each defeated by construction.
     - Write the composition suite the call rules claim: depth, fan-out, edge-count, visit-count and reentrancy violations, each refused typed with no partial call graph, no surviving storage write and no staged transfer.
     - Prove atomicity across the graph: a refusal at any depth discards every write and every effect of every frame, asserted on storage contents rather than on return codes alone.
@@ -1132,42 +1132,42 @@ surface makes the evidence portable while custody never leaves Paxeer.
 
 - [ ] 29. Give programs shared state, iteration and bounded state lifetimes
   - Parallel lanes: 29.1 fixes the namespace model first because every other lane addresses it. Then 29.2, 29.3, 29.4 and 29.5 are four independent agents on disjoint files, and 29.6 and 29.7 close behind them.
-  - [ ] 29.1 Extend the namespace model with a program-shared namespace
+  - [ ] 29.1 Extend the namespace model with a program-shared namespace — **Implemented - qualification pending**
     - Model StorageNamespace as a closed enum over a principal-scoped namespace and a program-shared namespace, both carrying the owning program, so a namespace names its scope in the type rather than by convention.
     - Fix both namespaces before guest code runs exactly as the principal-scoped namespace is fixed today, so no guest-visible operation can choose, widen or construct a namespace.
     - Keep the address ordering canonical and stable across both variants so state roots and iteration order are deterministic everywhere.
     - Migrate the existing storage plane and its tests to the enum with no behavioural change to principal-scoped access.
     - Prove by construction that no program can name another program's namespace of either kind, with the type system carrying the guarantee rather than a runtime check.
     - _Requirements: 36.1_
-  - [ ] 29.2 Grant and enforce shared-namespace access through explicit capabilities
+  - [ ] 29.2 Grant and enforce shared-namespace access through explicit capabilities — **Implemented - qualification pending**
     - Add distinct shared-read and shared-write capabilities so an activity can invoke a program with read-only access to shared state, and keep principal-scoped grants conferring no shared access whatsoever.
     - Extend the storage host functions with a namespace selector, refusing an unselected or out-of-range selector with a typed invalid result before any access occurs.
     - Keep narrowing downward only across a program-to-program edge for the new grants exactly as it holds for the existing ones, with an attempted widening failing typed.
     - Meter shared access on the same per-byte basis as principal-scoped access so no namespace is cheaper to abuse.
     - Test a two-participant program end to end - a shared total mutated by two different principals - which has no representation before this task.
     - _Requirements: 36.2, 30.1, 30.3_
-  - [ ] 29.3 Implement ordered iteration with a resumable cursor
+  - [ ] 29.3 Implement ordered iteration with a resumable cursor — **Implemented - qualification pending**
     - Add a storage scan host function taking a namespace selector, a bounded key prefix and a cursor, returning entries in canonical key order with a resumable cursor.
     - Meter every returned byte against the storage read class and enforce a declared per-call entry and byte ceiling so iteration can never outrun the budget.
     - Refuse a scan into a namespace the program holds no read grant for, and refuse a cursor that does not belong to the scan that issued it.
     - Make iteration order independent of insertion order, host allocator and platform, proven on the determinism differential.
     - Test iteration over an empty prefix, a single entry, a prefix spanning the per-call ceiling, and a resumption across two activities.
     - _Requirements: 36.3_
-  - [ ] 29.4 Implement namespace drop and reclamation
+  - [ ] 29.4 Implement namespace drop and reclamation — **Implemented - qualification pending**
     - Add a namespace drop operation removing every cell of one namespace as a single committed change, refusing a namespace the program does not own.
     - Meter the drop by the bytes and cells reclaimed rather than as a constant, so the cost tracks the work, and credit the released occupancy against the rent class.
     - Keep the drop atomic with the rest of the activity: a later refusal discards the drop exactly as it discards a write.
     - Prove no cell survives a drop and no adjacent namespace is touched by it, asserted on storage contents across a plane holding several namespaces.
     - Test drop of an empty namespace, a namespace at the declared cell ceiling, and a drop followed by a write in the same activity.
     - _Requirements: 36.4_
-  - [ ] 29.5 Charge storage occupancy over time as its own resource class
+  - [ ] 29.5 Charge storage occupancy over time as its own resource class — **Implemented - qualification pending**
     - Add an occupancy resource class measured as namespace bytes held across batches, distinct from the one-off read and write classes the meter already enforces.
     - Price occupancy through the fee schedule and charge it to the account declared responsible for the namespace, so persistent state is paid for as long as it persists.
     - Account occupancy deterministically from protocol state - the batch sequence and the recorded namespace size - with no wall-clock input anywhere.
     - Record occupancy in the metered usage and the canonical evidence so it replays identically under a recorded fee schedule.
     - Property-test that occupancy is monotone in bytes and in batches held, and that a dropped namespace stops accruing at the batch it was dropped in.
     - _Requirements: 36.5_
-  - [ ] 29.6 Extend the isolation gauntlet to the shared namespace
+  - [ ] 29.6 Extend the isolation gauntlet to the shared namespace — **Implemented - qualification pending**
     - Add hostile programs attempting to read and write another program's shared namespace by every reachable route: forged selector, forged capability encoding, crafted key, and a narrowed grant across a call edge.
     - Add hostile programs attempting to reach principal-scoped cells of a principal other than the invoker through the shared surface.
     - Add hostile programs attempting to escape the budget through iteration and through repeated drop and rewrite.

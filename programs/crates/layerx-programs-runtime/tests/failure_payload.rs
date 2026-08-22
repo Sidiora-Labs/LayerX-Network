@@ -5,9 +5,22 @@ use layerx_programs_runtime::{
 #[test]
 fn candidate_failure_import_is_exactly_appended() {
     let table = layerx_programs_runtime::abi::response::CANDIDATE_HOST_FUNCTIONS;
-    assert_eq!(table.len(), 3);
+    assert_eq!(table.len(), 8);
     assert_eq!(table[2].name, "refusal_write");
     assert_eq!(table[2].signature, "(i32,i32,i32)->i32");
+    assert_eq!(table[3].name, "storage_read_scoped");
+    assert_eq!(table[3].signature, "(i32,i32,i32,i32,i32)->i32");
+    assert_eq!(table[4].name, "storage_write_scoped");
+    assert_eq!(table[4].signature, "(i32,i32,i32,i32,i32)->i32");
+    assert_eq!(table[5].name, "storage_delete_scoped");
+    assert_eq!(table[5].signature, "(i32,i32,i32)->i32");
+    assert_eq!(table[6].name, "storage_drop_scoped");
+    assert_eq!(table[6].signature, "(i32)->i32");
+    assert_eq!(table[7].name, "storage_scan_scoped");
+    assert_eq!(
+        table[7].signature,
+        "(i32,i32,i32,i32,i32,i32,i32,i32,i32)->i32"
+    );
 }
 
 #[test]

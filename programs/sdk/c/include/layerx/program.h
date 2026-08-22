@@ -104,7 +104,9 @@ typedef enum lxp_program_capability_kind {
     LXP_PROGRAM_CAPABILITY_EMIT_EVENT = 3,
     LXP_PROGRAM_CAPABILITY_CALL = 4,
     LXP_PROGRAM_CAPABILITY_TRANSFER_402 = 5,
-    LXP_PROGRAM_CAPABILITY_RECEIPT_READ = 6
+    LXP_PROGRAM_CAPABILITY_RECEIPT_READ = 6,
+    LXP_PROGRAM_CAPABILITY_SHARED_STORAGE_READ = 7,
+    LXP_PROGRAM_CAPABILITY_SHARED_STORAGE_WRITE = 8
 } lxp_program_capability_kind;
 
 /*
@@ -186,6 +188,8 @@ lxp_program_status lxp_program_amount_sub(lxp_program_amount left,
 
 lxp_program_capability lxp_program_capability_storage_read(void);
 lxp_program_capability lxp_program_capability_storage_write(void);
+lxp_program_capability lxp_program_capability_shared_storage_read(void);
+lxp_program_capability lxp_program_capability_shared_storage_write(void);
 lxp_program_capability lxp_program_capability_emit_event(void);
 lxp_program_status lxp_program_capability_call(lxp_program_id program,
                                                lxp_program_capability *out);

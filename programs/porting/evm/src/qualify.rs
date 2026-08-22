@@ -13,11 +13,12 @@ use layerx_programs::{
     PublishedSource, Registry, SourceArchive, SourceFile, SourceStatus, SourceVerifier,
 };
 use layerx_programs_runtime::{
-    AbiEffects, AbiError, AtomicTransferSet, AuthorizationContext, AuthorizedExecutionRecord,
+    AbiEffects, AbiError, AuthorizationContext, AuthorizedExecutionRecord,
     AuthorizedExecutionRequest, CompositionContext, Deploy, DeploymentReceipt, Executor,
-    KernelTransferPrimitive, Lifecycle, PrincipalId, ProgramId, ProgramVersion, ReceiptOracle,
-    ReceiptView, Storage, StorageNamespace, TransferCapability, UpgradePolicy, ValidatedModule,
-    VerifiedProgramSettlement, WasmEngine, ABI_VERSION, CALL_ENTRY_EXPORT,
+    KernelTransferPrimitive, Lifecycle, PreparedAuthorizedActivity, PrincipalId, ProgramId,
+    ProgramVersion, ReceiptOracle, ReceiptView, Storage, StorageNamespace, TransferCapability,
+    UpgradePolicy, ValidatedModule, VerifiedStorageAssignment, WasmEngine, ABI_VERSION,
+    CALL_ENTRY_EXPORT,
 };
 
 use crate::error::PortRefusal;
@@ -333,22 +334,6 @@ pub fn execute_remaining_periods(
     query(invocation, storage, REMAINING_PERIODS_EXPORT)
 }
 
-/// Closes a successful execution's effects into the one atomic set the kernel
-/// monetary boundary accepts, without applying anything.
-///
-/// # Errors
-///
-/// Refuses an unverified invocation authority and every monetary-law
-/// violation, including a leg whose payer is not the invoking principal.
-pub fn authorize_transfers(
-    program: ProgramId,
-    principal: PrincipalId,
-    invocation_authority: [u8; 32],
-    effects: &AbiEffects,
-) -> Result<AtomicTransferSet, PortRefusal> {
-    Ok(TransferCapability::new(program, principal, invocation_authority)?.authorize(effects)?)
-}
-
 /// Settles a successful execution's effects through the kernel's own 402LXP
 /// primitive and returns only its verified receipt.
 ///
@@ -357,16 +342,13 @@ pub fn authorize_transfers(
 /// Refuses an unverified invocation authority, every monetary-law violation
 /// and every kernel or receipt refusal.
 pub fn settle(
-    program: ProgramId,
-    principal: PrincipalId,
-    invocation_authority: [u8; 32],
-    effects: &AbiEffects,
+    activity: PreparedAuthorizedActivity,
+    storage: &mut Storage,
     kernel: &mut impl KernelTransferPrimitive,
-) -> Result<VerifiedProgramSettlement, PortRefusal> {
-    Ok(
-        TransferCapability::new(program, principal, invocation_authority)?
-            .settle(effects, kernel)?,
-    )
+) -> Result<VerifiedStorageAssignment, PortRefusal> {
+    activity
+        .strict_settle(storage, kernel)
+        .map_err(|failure| PortRefusal::from(failure.error()))
 }
 
 /// Imports an exported `EVM` state dump into namespaced storage, writing each
@@ -385,7 +367,7 @@ pub fn import_state(
     let mut changed = 0_usize;
     for (cell, value) in cells {
         let principal = PrincipalId::new(cell.principal)?;
-        let mut transaction = storage.transaction(StorageNamespace::new(program, principal));
+        let mut transaction = storage.transaction(StorageNamespace::principal(program, principal));
         transaction.write(&cell.layerx_key, value)?;
         changed = changed.saturating_add(transaction.commit());
     }
