@@ -1,0 +1,13 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          { "type": "command", "command": "/usr/local/bin/cg sync" },
+          { "type": "command", "command": "/usr/local/bin/cg guard" }
+        ]
+      }
+    ]
+  }
+}
