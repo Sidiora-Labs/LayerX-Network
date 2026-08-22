@@ -1,9 +1,8 @@
-//! Scalar-only C ingress for the deterministic runtime. Avoiding raw pointers
-//! keeps the consensus bridge inside the workspace's `unsafe_code = deny` gate.
-
-use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock};
+//! Scalar-only, activity-owned C ingress for migration validation.
+//!
+//! C owns the bounded source bytes in the current module-context arena. Rust
+//! reads them through one scalar callback, reconstructs transient local input,
+//! and retains no handles or state after this call returns.
 
 use crate::{Executor, WasmEngine};
 
@@ -15,106 +14,68 @@ const RESULT_GAS_EXHAUSTED: i32 = -601;
 const RESULT_FATAL_INVARIANT: i32 = -1001;
 const MAX_MODULE_BYTES: usize = 1_048_576;
 const MAX_HOOK_BYTES: usize = 1_024;
+const WASM_SECTION: u16 = 0;
+const HOOK_SECTION: u16 = 1;
 
-#[derive(Debug)]
-struct PendingMigration {
-    wasm: Vec<u8>,
-    hook: Vec<u8>,
-    expected_wasm: usize,
-    expected_hook: usize,
+unsafe extern "C" {
+    /// Returns one C-owned activity byte as `0..=255`, or a negative LayerX
+    /// refusal. The token and bytes are valid only for this synchronous call.
+    fn layerx_programs_migration_activity_byte(token: u64, section: u16, offset: u32) -> i32;
 }
 
-static NEXT_HANDLE: AtomicU64 = AtomicU64::new(1);
-static PENDING: OnceLock<Mutex<BTreeMap<u64, PendingMigration>>> = OnceLock::new();
-
-fn pending() -> &'static Mutex<BTreeMap<u64, PendingMigration>> {
-    PENDING.get_or_init(|| Mutex::new(BTreeMap::new()))
+fn activity_bytes(token: u64, section: u16, length: usize) -> Result<Vec<u8>, i32> {
+    let length_u32 = u32::try_from(length).map_err(|_| RESULT_LENGTH_LIMIT)?;
+    let mut bytes = Vec::with_capacity(length);
+    for offset in 0..length_u32 {
+        // The C boundary returns only a scalar byte or typed refusal; it never
+        // shares a pointer, and the token is owned by the active C context.
+        let value = unsafe { layerx_programs_migration_activity_byte(token, section, offset) };
+        let byte = u8::try_from(value).map_err(|_| {
+            if value < 0 {
+                value
+            } else {
+                RESULT_NON_CANONICAL
+            }
+        })?;
+        bytes.push(byte);
+    }
+    Ok(bytes)
 }
 
-/// Starts one bounded migration request. Zero means refusal.
+/// Validates and executes one C-owned migration request under declared
+/// metering. The activity token is transient and cannot outlive its module
+/// context; this bridge owns no pending state.
 #[no_mangle]
-pub extern "C" fn layerx_programs_migration_begin(wasm_length: u32, hook_length: u16) -> u64 {
+pub extern "C" fn layerx_programs_migration_execute_activity(
+    token: u64,
+    wasm_length: u32,
+    hook_length: u16,
+) -> i32 {
     let wasm_length = wasm_length as usize;
     let hook_length = hook_length as usize;
-    if wasm_length == 0
+    if token == 0
+        || wasm_length == 0
         || wasm_length > MAX_MODULE_BYTES
         || hook_length == 0
         || hook_length > MAX_HOOK_BYTES
     {
-        return 0;
-    }
-    let handle = NEXT_HANDLE.fetch_add(1, Ordering::Relaxed);
-    if handle == 0 {
-        return 0;
-    }
-    let Ok(mut requests) = pending().lock() else {
-        return 0;
-    };
-    requests.insert(
-        handle,
-        PendingMigration {
-            wasm: Vec::with_capacity(wasm_length),
-            hook: Vec::with_capacity(hook_length),
-            expected_wasm: wasm_length,
-            expected_hook: hook_length,
-        },
-    );
-    handle
-}
-
-/// Appends one byte to the staged WASM module.
-#[no_mangle]
-pub extern "C" fn layerx_programs_migration_wasm_byte(handle: u64, byte: u8) -> i32 {
-    append(handle, byte, false)
-}
-
-/// Appends one byte to the staged migration export name.
-#[no_mangle]
-pub extern "C" fn layerx_programs_migration_hook_byte(handle: u64, byte: u8) -> i32 {
-    append(handle, byte, true)
-}
-
-fn append(handle: u64, byte: u8, hook: bool) -> i32 {
-    let Ok(mut requests) = pending().lock() else {
-        return RESULT_FATAL_INVARIANT;
-    };
-    let Some(request) = requests.get_mut(&handle) else {
-        return RESULT_NON_CANONICAL;
-    };
-    let (bytes, expected) = if hook {
-        (&mut request.hook, request.expected_hook)
-    } else {
-        (&mut request.wasm, request.expected_wasm)
-    };
-    if bytes.len() == expected {
-        return RESULT_LENGTH_LIMIT;
-    }
-    bytes.push(byte);
-    RESULT_OK
-}
-
-/// Validates and executes the staged migration under declared metering.
-#[no_mangle]
-pub extern "C" fn layerx_programs_migration_execute(handle: u64) -> i32 {
-    let request = {
-        let Ok(mut requests) = pending().lock() else {
-            return RESULT_FATAL_INVARIANT;
-        };
-        let Some(request) = requests.remove(&handle) else {
-            return RESULT_NON_CANONICAL;
-        };
-        request
-    };
-    if request.wasm.len() != request.expected_wasm || request.hook.len() != request.expected_hook {
         return RESULT_NON_CANONICAL;
     }
-    let Ok(hook) = String::from_utf8(request.hook) else {
+    let wasm = match activity_bytes(token, WASM_SECTION, wasm_length) {
+        Ok(wasm) => wasm,
+        Err(refusal) => return refusal,
+    };
+    let hook = match activity_bytes(token, HOOK_SECTION, hook_length) {
+        Ok(hook) => hook,
+        Err(refusal) => return refusal,
+    };
+    let Ok(hook) = String::from_utf8(hook) else {
         return RESULT_NON_CANONICAL;
     };
     let Ok(engine) = WasmEngine::declared() else {
         return RESULT_FATAL_INVARIANT;
     };
-    let Ok(module) = engine.validate(&request.wasm) else {
+    let Ok(module) = engine.validate(&wasm) else {
         return RESULT_NON_CANONICAL;
     };
     match Executor::declared().execute(&module, &hook, &[]) {
@@ -124,13 +85,5 @@ pub extern "C" fn layerx_programs_migration_execute(handle: u64) -> i32 {
             RESULT_UNKNOWN_ACTIVITY
         }
         Err(_) => RESULT_NON_CANONICAL,
-    }
-}
-
-/// Discards a partial request after a C-side transfer failure.
-#[no_mangle]
-pub extern "C" fn layerx_programs_migration_abort(handle: u64) {
-    if let Ok(mut requests) = pending().lock() {
-        requests.remove(&handle);
     }
 }

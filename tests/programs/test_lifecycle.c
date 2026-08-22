@@ -19,6 +19,20 @@ static void write_u32(uint8_t *bytes, uint32_t value)
     bytes[3] = (uint8_t)value;
 }
 
+static int blob_matches(const lxp_kernel *kernel, const uint8_t hash[32],
+                        const uint8_t *bytes, size_t length)
+{
+    size_t i;
+    for (i = 0U; i < kernel->blob_count; ++i) {
+        const lxp_module_blob *blob = &kernel->blobs[i];
+        if (blob->module_id == LXP_MODULE_PROGRAMS &&
+            memcmp(blob->key, hash, 32U) == 0)
+            return blob->length == length &&
+                   memcmp(blob->bytes, bytes, length) == 0 ? 0 : 1;
+    }
+    return 1;
+}
+
 static int dispatch(lxp_kernel *kernel, lxp_state_journal *journal,
                     lxp_authority_resolved *authority, uint16_t ordinal,
                     uint8_t *payload, size_t payload_length,
@@ -99,15 +113,20 @@ int main(void)
         lxp_kernel_create(&kernel, &store, &journal, &parameters, 0U) != LXP_OK ||
         lxp_kernel_register_module(&kernel, programs_module_registration()) != LXP_OK ||
         dispatch(&kernel, &journal, &authority, 1U, deploy, sizeof(deploy),
-                 LXP_OK) != 0)
+                 LXP_OK) != 0 || kernel.blob_count != 1U ||
+        blob_matches(&kernel, old_hash, wasm, sizeof(wasm)) != 0)
         return 1;
     upgrade[106] = (uint8_t)'x';
     if (dispatch(&kernel, &journal, &authority, 2U, upgrade, sizeof(upgrade),
-                 LXP_ERR_UNKNOWN_ACTIVITY) != 0)
+                 LXP_ERR_UNKNOWN_ACTIVITY) != 0 || kernel.blob_count != 1U ||
+        blob_matches(&kernel, old_hash, wasm, sizeof(wasm)) != 0)
         return 1;
     upgrade[106] = (uint8_t)'m';
     if (dispatch(&kernel, &journal, &authority, 2U, upgrade, sizeof(upgrade),
-                 LXP_OK) != 0)
+                 LXP_OK) != 0 || kernel.blob_count != 2U ||
+        blob_matches(&kernel, old_hash, wasm, sizeof(wasm)) != 0 ||
+        blob_matches(&kernel, new_hash, migration_wasm,
+                     sizeof(migration_wasm)) != 0)
         return 1;
     upgrade[32] = 0U;
     upgrade[33] = 2U;

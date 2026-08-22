@@ -2,11 +2,44 @@
 
 #include "layerx/lxp_crypto.h"
 #include "layerx/lxp_merkle.h"
+#include "layerx/lxp_module.h"
 
 #include <openssl/evp.h>
 #include <string.h>
 
-enum { LXP_RECEIPT_STRUCTURE_TAG = 0x5201 };
+enum {
+    LXP_RECEIPT_STRUCTURE_TAG = 0x5201,
+    LXP_PROGRAM_OUTCOME_TAG = 0x50524731
+};
+
+static bool valid_program_terminal(uint8_t terminal)
+{
+    return terminal == LXP_PROGRAM_TERMINAL_SUCCESS ||
+           terminal == LXP_PROGRAM_TERMINAL_FAILURE ||
+           terminal == LXP_PROGRAM_TERMINAL_RESOURCE;
+}
+
+static lxp_result program_outcome_validate(const lxp_program_outcome *outcome)
+{
+    if (outcome == NULL || !outcome->present ||
+        !valid_program_terminal(outcome->terminal_kind) ||
+        outcome->runtime_version == 0U || outcome->abi_version == 0U ||
+        outcome->fee_schedule_version == 0U)
+        return LXP_ERR_NON_CANONICAL;
+    if ((outcome->terminal_kind == LXP_PROGRAM_TERMINAL_SUCCESS &&
+         outcome->result_code != LXP_OK) ||
+        (outcome->terminal_kind != LXP_PROGRAM_TERMINAL_SUCCESS &&
+         (outcome->result_code == LXP_OK ||
+          lxp_result_is_fatal(outcome->result_code))))
+        return LXP_FATAL_INVARIANT;
+    if (lxp_ct_is_zero(outcome->terminal_payload_root, 32U))
+        return LXP_ERR_NON_CANONICAL;
+    if (outcome->terminal_kind != LXP_PROGRAM_TERMINAL_SUCCESS &&
+        !lxp_ct_is_zero(outcome->transfer_root, 32U)) {
+        return LXP_FATAL_INVARIANT;
+    }
+    return LXP_OK;
+}
 
 static int effect_compare(const lxp_effect *left, const lxp_effect *right)
 {
@@ -141,6 +174,71 @@ lxp_result lxp_receipt_build(lxp_receipt *receipt,
     return LXP_OK;
 }
 
+lxp_result lxp_receipt_bind_program_outcome(
+    lxp_receipt *receipt, const lxp_program_outcome *outcome)
+{
+    lxp_result status;
+    if (receipt == NULL) return LXP_ERR_NON_CANONICAL;
+    status = program_outcome_validate(outcome);
+    if (status != LXP_OK) return status;
+    if (receipt->module_id != LXP_MODULE_PROGRAMS ||
+        receipt->program_outcome.present)
+        return LXP_FATAL_INVARIANT;
+    if (outcome->terminal_kind == LXP_PROGRAM_TERMINAL_SUCCESS) {
+        if (receipt->result_code != outcome->result_code ||
+            lxp_ct_memcmp(receipt->transfer_set_root,
+                          outcome->transfer_root, 32U) != 0)
+            return LXP_FATAL_INVARIANT;
+    } else if (receipt->result_code != outcome->result_code ||
+               !lxp_ct_is_zero(receipt->transfer_set_root, 32U) ||
+               !lxp_ct_is_zero(outcome->transfer_root, 32U)) {
+        return LXP_FATAL_INVARIANT;
+    }
+    receipt->program_outcome = *outcome;
+    return LXP_OK;
+}
+
+static lxp_result program_outcome_encode(lxp_codec_writer *writer,
+                                         const lxp_program_outcome *outcome)
+{
+    lxp_result status = program_outcome_validate(outcome);
+    if (status == LXP_OK)
+        status = lxp_codec_write_u32(writer, LXP_PROGRAM_OUTCOME_TAG);
+    if (status == LXP_OK)
+        status = lxp_codec_write_u8(writer, outcome->terminal_kind);
+    if (status == LXP_OK)
+        status = lxp_codec_write_i32(writer, outcome->result_code);
+    if (status == LXP_OK)
+        status = lxp_codec_write_u16(writer, outcome->runtime_version);
+    if (status == LXP_OK)
+        status = lxp_codec_write_u16(writer, outcome->abi_version);
+    if (status == LXP_OK)
+        status = lxp_codec_write_u32(writer, outcome->fee_schedule_version);
+    if (status == LXP_OK) status = lxp_codec_write_u64(writer, outcome->cpu_fuel);
+    if (status == LXP_OK)
+        status = lxp_codec_write_u64(writer, outcome->memory_bytes);
+    if (status == LXP_OK)
+        status = lxp_codec_write_u64(writer, outcome->storage_read_bytes);
+    if (status == LXP_OK)
+        status = lxp_codec_write_u64(writer, outcome->storage_write_bytes);
+    if (status == LXP_OK)
+        status = lxp_codec_write_u32(writer, outcome->output_values);
+    if (status == LXP_OK)
+        status = lxp_codec_write_u64(writer, outcome->output_bytes);
+    if (status == LXP_OK)
+        status = lxp_codec_write_u128(writer, outcome->fee_units);
+    if (status == LXP_OK)
+        status = lxp_codec_write_bytes(writer, outcome->call_graph_root, 32U,
+                                       32U);
+    if (status == LXP_OK)
+        status = lxp_codec_write_bytes(writer, outcome->terminal_payload_root,
+                                       32U, 32U);
+    if (status == LXP_OK)
+        status = lxp_codec_write_bytes(writer, outcome->transfer_root, 32U,
+                                       32U);
+    return status;
+}
+
 lxp_result lxp_receipt_encode(const lxp_receipt *receipt,
                               bool include_signature, lxp_arena *arena,
                               lxp_byte_span *encoded)
@@ -151,6 +249,28 @@ lxp_result lxp_receipt_encode(const lxp_receipt *receipt,
     if (receipt == NULL || arena == NULL || encoded == NULL ||
         receipt->effects.count > LXP_MAX_EFFECTS)
         return LXP_ERR_NON_CANONICAL;
+    if (receipt->program_outcome.present &&
+        receipt->module_id != LXP_MODULE_PROGRAMS)
+        return LXP_FATAL_INVARIANT;
+    if (receipt->program_outcome.present) {
+        status = program_outcome_validate(&receipt->program_outcome);
+        if (status != LXP_OK) return status;
+        if (receipt->program_outcome.terminal_kind ==
+            LXP_PROGRAM_TERMINAL_SUCCESS) {
+            if (receipt->result_code !=
+                    receipt->program_outcome.result_code ||
+                lxp_ct_memcmp(receipt->transfer_set_root,
+                              receipt->program_outcome.transfer_root,
+                              32U) != 0)
+                return LXP_FATAL_INVARIANT;
+        } else if (receipt->result_code !=
+                       receipt->program_outcome.result_code ||
+                   !lxp_ct_is_zero(receipt->transfer_set_root, 32U) ||
+                   !lxp_ct_is_zero(receipt->program_outcome.transfer_root,
+                                   32U)) {
+            return LXP_FATAL_INVARIANT;
+        }
+    }
     status = lxp_codec_writer_init(&writer, arena, LXP_MAX_ACTIVITY_BYTES);
     if (status == LXP_OK)
         status = lxp_codec_write_struct_header(&writer,
@@ -217,6 +337,8 @@ lxp_result lxp_receipt_encode(const lxp_receipt *receipt,
                                        32U, 32U);
     if (status == LXP_OK)
         status = lxp_codec_write_u64(&writer, receipt->timestamp);
+    if (status == LXP_OK && receipt->program_outcome.present)
+        status = program_outcome_encode(&writer, &receipt->program_outcome);
     if (status == LXP_OK)
         status = lxp_codec_write_u8(&writer, include_signature ? 1U : 0U);
     if (status == LXP_OK && include_signature)
@@ -228,8 +350,8 @@ lxp_result lxp_receipt_encode(const lxp_receipt *receipt,
     return LXP_OK;
 }
 
-static lxp_result receipt_digest(const lxp_receipt *receipt, lxp_arena *arena,
-                                 uint8_t digest[32])
+lxp_result lxp_receipt_digest(const lxp_receipt *receipt, lxp_arena *arena,
+                              uint8_t digest[32])
 {
     size_t mark = lxp_arena_mark(arena);
     lxp_byte_span encoded;
@@ -252,7 +374,7 @@ lxp_result lxp_receipt_sign(lxp_receipt *receipt,
     int signed_ok;
     if (receipt == NULL || private_key == NULL || arena == NULL)
         return LXP_ERR_NON_CANONICAL;
-    status = receipt_digest(receipt, arena, digest);
+    status = lxp_receipt_digest(receipt, arena, digest);
     if (status != LXP_OK) return status;
     key = EVP_PKEY_new_raw_private_key(EVP_PKEY_ED25519, NULL, private_key,
                                        32U);
@@ -275,11 +397,79 @@ lxp_result lxp_receipt_verify(const lxp_receipt *receipt,
     lxp_result status;
     if (receipt == NULL || public_key == NULL || arena == NULL)
         return LXP_ERR_NON_CANONICAL;
-    status = receipt_digest(receipt, arena, digest);
+    status = lxp_receipt_digest(receipt, arena, digest);
     if (status == LXP_OK)
         status = lxp_ed25519_verify_raw(public_key,
                                         receipt->sequencer_signature,
                                         digest, sizeof(digest));
     lxp_secure_zero(digest, sizeof(digest));
     return status;
+}
+
+lxp_result lxp_verified_receipt_index_init(lxp_verified_receipt_index *index)
+{
+    if (index == NULL) return LXP_ERR_NON_CANONICAL;
+    (void)memset(index, 0, sizeof(*index));
+    return LXP_OK;
+}
+
+lxp_result lxp_verified_receipt_index_add(
+    lxp_verified_receipt_index *index, const lxp_receipt *receipt,
+    const uint8_t sequencer_public_key[32], lxp_arena *arena)
+{
+    lxp_verified_receipt_facts facts;
+    size_t at;
+    lxp_result status;
+    if (index == NULL || receipt == NULL || sequencer_public_key == NULL ||
+        arena == NULL || index->count > LXP_VERIFIED_RECEIPT_INDEX_MAX)
+        return LXP_ERR_NON_CANONICAL;
+    status = lxp_receipt_verify(receipt, sequencer_public_key, arena);
+    if (status != LXP_OK) return status;
+    (void)memset(&facts, 0, sizeof(facts));
+    status = lxp_receipt_digest(receipt, arena, facts.receipt_digest);
+    if (status != LXP_OK) return status;
+    facts.result_code = receipt->result_code;
+    (void)memcpy(facts.asset, receipt->asset, 32U);
+    facts.amount = receipt->amount;
+    (void)memcpy(facts.resulting_state_root, receipt->resulting_state_root, 32U);
+    for (at = 0U; at < index->count; ++at) {
+        int order = memcmp(index->entries[at].receipt_digest,
+                           facts.receipt_digest, 32U);
+        if (order == 0)
+            return memcmp(&index->entries[at], &facts, sizeof(facts)) == 0 ?
+                LXP_OK : LXP_FATAL_INVARIANT;
+        if (order > 0) break;
+    }
+    if (index->count == LXP_VERIFIED_RECEIPT_INDEX_MAX)
+        return LXP_ERR_LENGTH_LIMIT;
+    if (at != index->count)
+        (void)memmove(&index->entries[at + 1U], &index->entries[at],
+                      (index->count - at) * sizeof(index->entries[0]));
+    index->entries[at] = facts;
+    ++index->count;
+    return LXP_OK;
+}
+
+lxp_result lxp_verified_receipt_index_lookup(
+    const lxp_verified_receipt_index *index,
+    const uint8_t receipt_digest[32], lxp_verified_receipt_facts *facts)
+{
+    size_t left = 0U;
+    size_t right;
+    if (index == NULL || receipt_digest == NULL || facts == NULL ||
+        index->count > LXP_VERIFIED_RECEIPT_INDEX_MAX ||
+        lxp_ct_is_zero(receipt_digest, 32U)) return LXP_ERR_NON_CANONICAL;
+    right = index->count;
+    while (left < right) {
+        size_t middle = left + (right - left) / 2U;
+        int order = memcmp(index->entries[middle].receipt_digest,
+                           receipt_digest, 32U);
+        if (order < 0) left = middle + 1U;
+        else right = middle;
+    }
+    if (left == index->count ||
+        memcmp(index->entries[left].receipt_digest, receipt_digest, 32U) != 0)
+        return LXP_ERR_UNKNOWN_FIELD;
+    *facts = index->entries[left];
+    return LXP_OK;
 }

@@ -1,4 +1,5 @@
 #include "layerx/lxp_fee.h"
+#include "layerx/lxp_module.h"
 
 #include <stddef.h>
 #include <string.h>
@@ -32,6 +33,16 @@ lxp_result lxp_fee_compute(const lxp_fee_params *parameters,
     lxp_result status;
     if (parameters == NULL || fee == NULL) return LXP_ERR_NON_CANONICAL;
     if (parameters->version != 1U) return LXP_ERR_VERSION_UNSUPPORTED;
+    if (meter.exact_program_fee_present) {
+        if (lxp_activity_module_id(activity_type) != LXP_MODULE_PROGRAMS ||
+            lxp_activity_type_ordinal(activity_type) != 3U)
+            return LXP_ERR_NON_CANONICAL;
+        if (meter.program_fee_schedule_version == 0U ||
+            meter.program_fee_schedule_version != parameters->version)
+            return LXP_ERR_VERSION_UNSUPPORTED;
+        *fee = meter.exact_program_fee_units;
+        return LXP_OK;
+    }
     total = parameters->base_fee;
     status = add_component(&total, parameters->per_activity_type_unit,
                            activity_type);

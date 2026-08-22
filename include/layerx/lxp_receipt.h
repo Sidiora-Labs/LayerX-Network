@@ -31,6 +31,34 @@ typedef struct lxp_effect_buffer {
     size_t count;
 } lxp_effect_buffer;
 
+typedef enum lxp_program_terminal_kind {
+    LXP_PROGRAM_TERMINAL_NONE = 0,
+    LXP_PROGRAM_TERMINAL_SUCCESS = 1,
+    LXP_PROGRAM_TERMINAL_FAILURE = 2,
+    LXP_PROGRAM_TERMINAL_RESOURCE = 3
+} lxp_program_terminal_kind;
+
+/* Receipt-native Programs outcome evidence.  These fields describe one
+ * terminal runtime outcome; they are not a second receipt or a version alias. */
+typedef struct lxp_program_outcome {
+    bool present;
+    uint8_t terminal_kind;
+    lxp_result result_code;
+    uint16_t runtime_version;
+    uint16_t abi_version;
+    uint32_t fee_schedule_version;
+    uint64_t cpu_fuel;
+    uint64_t memory_bytes;
+    uint64_t storage_read_bytes;
+    uint64_t storage_write_bytes;
+    uint32_t output_values;
+    uint64_t output_bytes;
+    lxp_u128 fee_units;
+    uint8_t call_graph_root[32];
+    uint8_t terminal_payload_root[32];
+    uint8_t transfer_root[32];
+} lxp_program_outcome;
+
 typedef struct lxp_receipt {
     uint16_t protocol_version;
     uint8_t activity_id[32];
@@ -59,8 +87,24 @@ typedef struct lxp_receipt {
     uint8_t authorization_hash[32];
     uint8_t context_hash[32];
     uint64_t timestamp;
+    lxp_program_outcome program_outcome;
     uint8_t sequencer_signature[64];
 } lxp_receipt;
+
+enum { LXP_VERIFIED_RECEIPT_INDEX_MAX = 4096 };
+
+typedef struct lxp_verified_receipt_facts {
+    uint8_t receipt_digest[32];
+    lxp_result result_code;
+    uint8_t asset[32];
+    lxp_u128 amount;
+    uint8_t resulting_state_root[32];
+} lxp_verified_receipt_facts;
+
+typedef struct lxp_verified_receipt_index {
+    lxp_verified_receipt_facts entries[LXP_VERIFIED_RECEIPT_INDEX_MAX];
+    size_t count;
+} lxp_verified_receipt_index;
 
 typedef struct lxp_ledger_receipt_input {
     uint8_t transaction_id[32];
@@ -86,6 +130,7 @@ typedef struct lxp_ledger_receipt_input {
 } lxp_ledger_receipt_input;
 
 #define lxp_effect_buffer lxp_effect_buffer
+#define lxp_program_outcome lxp_program_outcome
 #define lxp_receipt lxp_receipt
 
 lxp_result lxp_effect_buffer_init(lxp_effect_buffer *buffer);
@@ -105,6 +150,8 @@ lxp_result lxp_receipt_build(lxp_receipt *receipt,
                              const uint8_t batch_id[32], uint16_t module_id,
                              uint32_t module_version,
                              uint32_t parameter_version);
+lxp_result lxp_receipt_bind_program_outcome(
+    lxp_receipt *receipt, const lxp_program_outcome *outcome);
 lxp_result lxp_receipt_encode(const lxp_receipt *receipt,
                               bool include_signature, lxp_arena *arena,
                               lxp_byte_span *encoded);
@@ -112,6 +159,15 @@ lxp_result lxp_receipt_sign(lxp_receipt *receipt,
                             const uint8_t private_key[32], lxp_arena *arena);
 lxp_result lxp_receipt_verify(const lxp_receipt *receipt,
                               const uint8_t public_key[32], lxp_arena *arena);
+lxp_result lxp_receipt_digest(const lxp_receipt *receipt, lxp_arena *arena,
+                              uint8_t digest[32]);
+lxp_result lxp_verified_receipt_index_init(lxp_verified_receipt_index *index);
+lxp_result lxp_verified_receipt_index_add(
+    lxp_verified_receipt_index *index, const lxp_receipt *receipt,
+    const uint8_t sequencer_public_key[32], lxp_arena *arena);
+lxp_result lxp_verified_receipt_index_lookup(
+    const lxp_verified_receipt_index *index,
+    const uint8_t receipt_digest[32], lxp_verified_receipt_facts *facts);
 lxp_result lxp_ledger_receipt_build(lxp_receipt *receipt,
                                     const lxp_ledger_receipt_input *input);
 struct lxp_log;

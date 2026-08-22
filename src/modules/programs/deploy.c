@@ -3,6 +3,8 @@
 #include "layerx/lxp_crypto.h"
 #include "layerx/lxp_hash.h"
 
+#include "artifact.h"
+
 #include <limits.h>
 #include <string.h>
 
@@ -186,6 +188,10 @@ static lxp_result execute_deploy(lxp_module_ctx *ctx,
     (void)memcpy(record + 33U, value->new_hash, 32U);
     write_u16(record + 65U, value->abi_version);
     write_u32(record + 67U, 1U);
+    status = lxp_programs_artifact_store(ctx, value->program_id,
+                                         value->new_hash, value->wasm,
+                                         value->wasm_length);
+    if (status != LXP_OK) return status;
     status = lxp_ctx_kv_put(ctx, key, sizeof(key), record, sizeof(record));
     if (status != LXP_OK) return status;
     return lxp_ctx_emit_event(ctx, PROGRAM_EVENT_DEPLOYED,
@@ -214,27 +220,9 @@ static lxp_result execute_upgrade(lxp_module_ctx *ctx,
     if (lxp_ct_memcmp(current + 33U, value->old_hash, 32U) != 0)
         return LXP_ERR_CONTEXT_MISMATCH;
     if ((value->policy_or_flags & 1U) != 0U) {
-        uint64_t handle = layerx_programs_migration_begin(
-            value->wasm_length, value->migration_hook_length);
-        size_t i;
-        if (handle == 0U) return LXP_ERR_ARENA_EXHAUSTED;
-        for (i = 0U; i < value->wasm_length; ++i) {
-            status = layerx_programs_migration_wasm_byte(handle,
-                                                         value->wasm[i]);
-            if (status != LXP_OK) {
-                layerx_programs_migration_abort(handle);
-                return status;
-            }
-        }
-        for (i = 0U; i < value->migration_hook_length; ++i) {
-            status = layerx_programs_migration_hook_byte(
-                handle, value->migration_hook[i]);
-            if (status != LXP_OK) {
-                layerx_programs_migration_abort(handle);
-                return status;
-            }
-        }
-        status = layerx_programs_migration_execute(handle);
+        status = layerx_programs_migration_execute_activity(
+            (uint64_t)(uintptr_t)value, value->wasm_length,
+            value->migration_hook_length);
         if (status != LXP_OK) return status;
     }
     version = read_u32(current + 67U);
@@ -243,11 +231,38 @@ static lxp_result execute_upgrade(lxp_module_ctx *ctx,
     (void)memcpy(record + 33U, value->new_hash, 32U);
     write_u16(record + 65U, value->abi_version);
     write_u32(record + 67U, version + 1U);
+    status = lxp_programs_artifact_store(ctx, value->program_id,
+                                         value->new_hash, value->wasm,
+                                         value->wasm_length);
+    if (status != LXP_OK) return status;
     status = lxp_ctx_kv_put(ctx, key, sizeof(key), record, sizeof(record));
     if (status != LXP_OK) return status;
     (void)memcpy(event, value->old_hash, 32U);
     (void)memcpy(event + 32U, value->new_hash, 32U);
     return lxp_ctx_emit_event(ctx, PROGRAM_EVENT_UPGRADED, event, sizeof(event));
+}
+
+lxp_result layerx_programs_migration_activity_byte(uint64_t token,
+                                                   uint16_t section,
+                                                   uint32_t offset)
+{
+    const programs_lifecycle_decoded *value =
+        (const programs_lifecycle_decoded *)(uintptr_t)token;
+    const uint8_t *bytes;
+    size_t length;
+    if (value == NULL) return LXP_ERR_NON_CANONICAL;
+    if (section == 0U) {
+        bytes = value->wasm;
+        length = value->wasm_length;
+    } else if (section == 1U) {
+        bytes = value->migration_hook;
+        length = value->migration_hook_length;
+    } else {
+        return LXP_ERR_UNKNOWN_FIELD;
+    }
+    if (bytes == NULL || (size_t)offset >= length)
+        return LXP_ERR_TRUNCATED;
+    return (lxp_result)bytes[offset];
 }
 
 lxp_result lxp_programs_lifecycle_execute(

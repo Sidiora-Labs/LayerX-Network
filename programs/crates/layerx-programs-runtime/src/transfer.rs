@@ -214,11 +214,11 @@ impl TransferCapability {
     }
 
     /// Applies all requested monetary effects atomically through the kernel's
-    /// existing 402LXP primitive and verifies its single standard receipt.
+    /// existing 402LXP primitive and verifies the exact sealed transfer root.
     ///
     /// # Errors
     ///
-    /// Returns a typed law, kernel, or receipt refusal. No partially applied
+    /// Returns a typed law, kernel, or commitment refusal. No partially applied
     /// state or unverified success can be returned through this API.
     pub(crate) fn settle(
         &self,
@@ -235,18 +235,15 @@ impl TransferCapability {
         kernel: &mut impl KernelTransferPrimitive,
     ) -> Result<VerifiedProgramSettlement, TransferLawError> {
         let evidence = kernel.apply_and_verify_402lxp_set(transfers)?;
-        kernel.verify_402lxp_transfer_set_digest(&transfers, &evidence)?;
-        if evidence.transfer_set_digest == [0; 32]
-            || evidence.receipt_transfer_set_digest != evidence.transfer_set_digest
+        kernel.verify_402lxp_transfer_set_root(&transfers, &evidence)?;
+        if evidence.transfer_set_root == [0; 32]
             || evidence.leg_count != transfers.legs.len()
             || evidence.total_amount != transfers.total_amount
-            || evidence.receipt_digest == [0; 32]
         {
             return Err(TransferLawError::ReceiptMismatch);
         }
         Ok(VerifiedProgramSettlement {
-            transfer_set_digest: evidence.transfer_set_digest,
-            receipt_digest: evidence.receipt_digest,
+            transfer_set_root: evidence.transfer_set_root,
             leg_count: evidence.leg_count,
             total_amount: evidence.total_amount,
         })
@@ -507,11 +504,12 @@ impl<'a> TransferCursor<'a> {
 }
 
 /// The existing kernel transfer-set primitive. It owns all balance mutation,
-/// conservation enforcement, atomic rollback, standard receipt emission, and
-/// receipt verification against the authorised batch.
+/// conservation enforcement and atomic rollback. The surrounding C activity
+/// owns the standard outer receipt, which is built only after this synchronous
+/// transfer commitment has released the held program state.
 pub trait KernelTransferPrimitive {
-    /// Applies the exact set or none of it and returns only a receipt-verified
-    /// result bound to the exact canonical set.
+    /// Applies the exact set or none of it and returns its nonzero canonical
+    /// transfer root before the surrounding activity receipt is constructed.
     ///
     /// # Errors
     ///
@@ -521,10 +519,10 @@ pub trait KernelTransferPrimitive {
         transfers: &AtomicTransferSet,
     ) -> Result<KernelTransferEvidence, TransferLawError>;
 
-    /// Cryptographically verifies that the nonzero transfer-set digest is the
+    /// Cryptographically verifies that the nonzero transfer-set root is the
     /// commitment to this exact canonical request. The C kernel owns the only
     /// production implementation; the runtime never substitutes a ledger.
-    fn verify_402lxp_transfer_set_digest(
+    fn verify_402lxp_transfer_set_root(
         &self,
         transfers: &AtomicTransferSet,
         evidence: &KernelTransferEvidence,
@@ -535,31 +533,25 @@ pub trait KernelTransferPrimitive {
 /// [`TransferCapability::settle`] before a verified result can exist.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct KernelTransferEvidence {
-    pub transfer_set_digest: [u8; 32],
-    pub receipt_transfer_set_digest: [u8; 32],
-    pub receipt_digest: [u8; 32],
+    pub transfer_set_root: [u8; 32],
     pub leg_count: usize,
     pub total_amount: u128,
 }
 
-/// Receipt-backed terminal result; there is no successful constructor that
-/// bypasses the canonical verifier and core semantic policy.
+/// Kernel-verified transfer commitment awaiting binding into the one outer
+/// activity receipt. There is no successful constructor that bypasses the
+/// canonical verifier and core semantic policy.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct VerifiedProgramSettlement {
-    transfer_set_digest: [u8; 32],
-    receipt_digest: [u8; 32],
+    transfer_set_root: [u8; 32],
     leg_count: usize,
     total_amount: u128,
 }
 
 impl VerifiedProgramSettlement {
     #[must_use]
-    pub const fn transfer_set_digest(&self) -> [u8; 32] {
-        self.transfer_set_digest
-    }
-    #[must_use]
-    pub const fn receipt_digest(&self) -> [u8; 32] {
-        self.receipt_digest
+    pub const fn transfer_set_root(&self) -> [u8; 32] {
+        self.transfer_set_root
     }
     #[must_use]
     pub const fn leg_count(&self) -> usize {

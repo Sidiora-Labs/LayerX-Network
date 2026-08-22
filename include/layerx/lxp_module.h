@@ -28,10 +28,12 @@ typedef struct lxp_module_ctx lxp_module_ctx;
 typedef struct lxp_effect_buffer lxp_effect_buffer;
 typedef struct lxp_transfer_set lxp_transfer_set;
 typedef struct lxp_receipt lxp_receipt;
+typedef struct lxp_verified_receipt_facts lxp_verified_receipt_facts;
 #define lxp_module_ctx lxp_module_ctx
 #define lxp_effect_buffer lxp_effect_buffer
 #define lxp_transfer_set lxp_transfer_set
 #define lxp_receipt lxp_receipt
+
 
 typedef lxp_result (*lxp_kv_visit_fn)(const uint8_t *key, size_t key_length,
                                      const uint8_t *value,
@@ -101,5 +103,8 @@ lxp_result lxp_ctx_charge_gas(lxp_module_ctx *ctx, uint64_t units);
 lxp_result lxp_ctx_arena_alloc(lxp_module_ctx *ctx, size_t size,
                                size_t alignment, void **allocation);
 void *lxp_ctx_module_runtime(const lxp_module_ctx *ctx);
+lxp_result lxp_ctx_verified_receipt_facts(
+    const lxp_module_ctx *ctx, const uint8_t receipt_digest[32],
+    lxp_verified_receipt_facts *facts);
 
 #endif

@@ -12,6 +12,9 @@ typedef struct lxp_fee_meter {
     uint64_t canonical_encoded_bytes;
     uint64_t execution_units;
     uint64_t storage_units;
+    bool exact_program_fee_present;
+    uint32_t program_fee_schedule_version;
+    lxp_u128 exact_program_fee_units;
 } lxp_fee_meter;
 #define lxp_fee_meter lxp_fee_meter
 

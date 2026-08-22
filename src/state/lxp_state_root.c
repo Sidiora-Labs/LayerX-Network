@@ -10,7 +10,8 @@ enum {
     LXP_STATE_MAX_LEAVES = LXP_STATE_MAX_CELLS +
                            LXP_STATE_MAX_IDEMPOTENCY +
                            LXP_KERNEL_MAX_MODULE_REGISTRATIONS +
-                           LXP_KERNEL_MAX_MODULE_KV + 2
+                           LXP_KERNEL_MAX_MODULE_KV +
+                           LXP_KERNEL_MAX_BLOBS + 2
 };
 
 lxp_result lxp_state_module_root_count(const lxp_kernel *kernel,
@@ -235,6 +236,16 @@ lxp_result lxp_state_subtree_root(const lxp_kernel *kernel,
         if (entry->module_id != module_id) continue;
         status = leaf_set(&leaves[count++], entry->key, entry->key_length,
                           entry->value, entry->value_length);
+        if (status != LXP_OK) return status;
+    }
+    for (i = 0U; i < kernel->blob_count; ++i) {
+        const lxp_module_blob *blob = &kernel->blobs[i];
+        uint8_t key[LXP_MODULE_MAX_KEY_BYTES + 1U] = { 0 };
+        if (blob->module_id != module_id) continue;
+        key[0] = 0xffU;
+        (void)memcpy(key + sizeof(key) - 32U, blob->key, 32U);
+        status = leaf_set(&leaves[count++], key, sizeof(key), blob->bytes,
+                          blob->length);
         if (status != LXP_OK) return status;
     }
     return leaves_root(leaves, count, root);

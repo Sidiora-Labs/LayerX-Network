@@ -1,7 +1,10 @@
 #include "layerx/lxp_kernel.h"
 #include "layerx/lxp_transfer.h"
+#include "layerx/lxp_crypto.h"
+#include "layerx/lxp_hash.h"
 
 #include <limits.h>
+#include <stdlib.h>
 #include <string.h>
 
 typedef struct kv_view {
@@ -48,6 +51,25 @@ static size_t staged_find(const lxp_module_ctx *ctx, const uint8_t *key,
         if (key_equal(ctx->staged[i].key, ctx->staged[i].key_length,
                       key, key_length)) return i;
     return ctx->staged_count;
+}
+
+static size_t committed_blob_find(const lxp_module_ctx *ctx,
+                                  const uint8_t key[32])
+{
+    size_t i;
+    for (i = 0U; i < ctx->kernel->blob_count; ++i)
+        if (ctx->kernel->blobs[i].module_id == ctx->module_id &&
+            memcmp(ctx->kernel->blobs[i].key, key, 32U) == 0) return i;
+    return ctx->kernel->blob_count;
+}
+
+static size_t staged_blob_find(const lxp_module_ctx *ctx,
+                               const uint8_t key[32])
+{
+    size_t i;
+    for (i = 0U; i < ctx->staged_blob_count; ++i)
+        if (memcmp(ctx->staged_blobs[i].key, key, 32U) == 0) return i;
+    return ctx->staged_blob_count;
 }
 
 static lxp_result key_check(const uint8_t *key, size_t key_length)
@@ -97,6 +119,16 @@ lxp_result lxp_module_ctx_bind_effects(lxp_module_ctx *ctx,
     ctx->effects = effects;
     ctx->next_effect_ordinal = 0U;
     return LXP_OK;
+}
+
+lxp_result lxp_ctx_verified_receipt_facts(
+    const lxp_module_ctx *ctx, const uint8_t receipt_digest[32],
+    lxp_verified_receipt_facts *facts)
+{
+    if (ctx == NULL || ctx->verified_receipts == NULL)
+        return LXP_ERR_UNKNOWN_FIELD;
+    return lxp_verified_receipt_index_lookup(ctx->verified_receipts,
+                                              receipt_digest, facts);
 }
 
 lxp_result lxp_ctx_kv_get(lxp_module_ctx *ctx, const uint8_t *key,
@@ -166,16 +198,14 @@ lxp_result lxp_ctx_kv_del(lxp_module_ctx *ctx, const uint8_t *key,
 
 lxp_result lxp_module_ctx_commit(lxp_module_ctx *ctx)
 {
-    size_t additions = 0U;
     size_t i;
-    if (ctx == NULL || !ctx->mutable) return LXP_FATAL_INVARIANT;
-    for (i = 0U; i < ctx->staged_count; ++i)
-        if (!ctx->staged[i].deleted &&
-            committed_find(ctx, ctx->staged[i].key,
-                           ctx->staged[i].key_length) ==
-                ctx->kernel->module_kv_count) ++additions;
-    if (additions > LXP_KERNEL_MAX_MODULE_KV - ctx->kernel->module_kv_count)
-        return LXP_ERR_ARENA_EXHAUSTED;
+    lxp_result status;
+    if (ctx == NULL || !ctx->mutable)
+        return LXP_FATAL_INVARIANT;
+    if (!ctx->commit_prepared) {
+        status = lxp_module_ctx_prepare_commit(ctx);
+        if (status != LXP_OK) return status;
+    }
     for (i = 0U; i < ctx->staged_count; ++i) {
         lxp_module_kv_change *change = &ctx->staged[i];
         size_t location = committed_find(ctx, change->key,
@@ -201,13 +231,250 @@ lxp_result lxp_module_ctx_commit(lxp_module_ctx *ctx)
         (void)memcpy(ctx->kernel->module_kv[location].value, change->value,
                      change->value_length);
     }
+    for (i = 0U; i < ctx->staged_blob_count; ++i) {
+        lxp_module_blob *staged = &ctx->staged_blobs[i];
+        size_t location = committed_blob_find(ctx, staged->key);
+        if (location == ctx->kernel->blob_count) {
+            location = ctx->kernel->blob_count++;
+            ctx->kernel->blobs[location] = *staged;
+            ctx->kernel->blob_total_bytes += staged->length;
+            staged->bytes = NULL;
+        }
+    }
+    ctx->staged_blob_count = 0U;
     ctx->staged_count = 0U;
+    ctx->transfer_snapshot_count = 0U;
+    ctx->transfer_applied = false;
+    ctx->commit_prepared = false;
+    if (ctx->activity_state_release != NULL)
+        ctx->activity_state_release(ctx->activity_state);
+    ctx->activity_state = NULL;
+    ctx->activity_state_release = NULL;
     return LXP_OK;
+}
+
+lxp_result lxp_module_ctx_prepare_commit(lxp_module_ctx *ctx)
+{
+    size_t additions = 0U;
+    size_t blob_additions = 0U;
+    size_t blob_bytes = 0U;
+    size_t i;
+    if (ctx == NULL || !ctx->mutable || ctx->commit_prepared)
+        return LXP_FATAL_INVARIANT;
+    for (i = 0U; i < ctx->staged_count; ++i)
+        if (!ctx->staged[i].deleted &&
+            committed_find(ctx, ctx->staged[i].key,
+                           ctx->staged[i].key_length) ==
+                ctx->kernel->module_kv_count) ++additions;
+    if (additions > LXP_KERNEL_MAX_MODULE_KV - ctx->kernel->module_kv_count)
+        return LXP_ERR_ARENA_EXHAUSTED;
+    for (i = 0U; i < ctx->staged_blob_count; ++i)
+        if (committed_blob_find(ctx, ctx->staged_blobs[i].key) ==
+            ctx->kernel->blob_count) {
+            ++blob_additions;
+            if (SIZE_MAX - blob_bytes < ctx->staged_blobs[i].length)
+                return LXP_ERR_OVERFLOW;
+            blob_bytes += ctx->staged_blobs[i].length;
+        }
+    if (blob_additions > LXP_KERNEL_MAX_BLOBS - ctx->kernel->blob_count ||
+        blob_bytes > LXP_KERNEL_MAX_BLOB_TOTAL_BYTES -
+                         ctx->kernel->blob_total_bytes)
+        return LXP_ERR_ARENA_EXHAUSTED;
+    ctx->commit_prepared = true;
+    return LXP_OK;
+}
+
+lxp_result lxp_module_ctx_preview_root(const lxp_module_ctx *ctx,
+                                       uint8_t root[32])
+{
+    lxp_kernel *preview;
+    size_t i;
+    lxp_result status;
+    if (ctx == NULL || root == NULL || !ctx->commit_prepared)
+        return LXP_FATAL_INVARIANT;
+    preview = (lxp_kernel *)malloc(sizeof(*preview));
+    if (preview == NULL) return LXP_ERR_ARENA_EXHAUSTED;
+    *preview = *ctx->kernel;
+    for (i = 0U; i < ctx->staged_count; ++i) {
+        const lxp_module_kv_change *change = &ctx->staged[i];
+        size_t location;
+        for (location = 0U; location < preview->module_kv_count; ++location) {
+            lxp_module_kv_entry *entry = &preview->module_kv[location];
+            if (entry->module_id == ctx->module_id &&
+                key_equal(entry->key, entry->key_length, change->key,
+                          change->key_length)) break;
+        }
+        if (change->deleted) {
+            if (location != preview->module_kv_count) {
+                size_t tail = preview->module_kv_count - location - 1U;
+                if (tail != 0U)
+                    (void)memmove(&preview->module_kv[location],
+                                  &preview->module_kv[location + 1U],
+                                  tail * sizeof(preview->module_kv[0]));
+                --preview->module_kv_count;
+            }
+            continue;
+        }
+        if (location == preview->module_kv_count)
+            ++preview->module_kv_count;
+        preview->module_kv[location].module_id = ctx->module_id;
+        preview->module_kv[location].key_length = change->key_length;
+        preview->module_kv[location].value_length = change->value_length;
+        (void)memcpy(preview->module_kv[location].key, change->key,
+                     change->key_length);
+        (void)memcpy(preview->module_kv[location].value, change->value,
+                     change->value_length);
+    }
+    for (i = 0U; i < ctx->staged_blob_count; ++i) {
+        if (committed_blob_find(ctx, ctx->staged_blobs[i].key) !=
+            ctx->kernel->blob_count) continue;
+        preview->blobs[preview->blob_count++] = ctx->staged_blobs[i];
+    }
+    status = lxp_state_subtree_root(preview, ctx->module_id, root);
+    free(preview);
+    return status;
+}
+
+static void restore_transfer_snapshots(lxp_module_ctx *ctx)
+{
+    size_t i;
+    for (i = 0U; i < ctx->transfer_snapshot_count; ++i) {
+        lxp_module_account_snapshot *snapshot = &ctx->transfer_snapshots[i];
+        snapshot->account->balance = snapshot->balance;
+        (void)memcpy(snapshot->account->asset_id, snapshot->asset_id, 32U);
+        snapshot->account->has_asset = snapshot->has_asset;
+        snapshot->account->next_sequence = snapshot->next_sequence;
+    }
+    ctx->transfer_snapshot_count = 0U;
+    ctx->transfer_applied = false;
 }
 
 void lxp_module_ctx_rollback(lxp_module_ctx *ctx)
 {
-    if (ctx != NULL) ctx->staged_count = 0U;
+    size_t i;
+    if (ctx == NULL) return;
+    restore_transfer_snapshots(ctx);
+    ctx->commit_prepared = false;
+    ctx->staged_count = 0U;
+    for (i = 0U; i < ctx->staged_blob_count; ++i)
+        free(ctx->staged_blobs[i].bytes);
+    ctx->staged_blob_count = 0U;
+    if (ctx->activity_state_release != NULL)
+        ctx->activity_state_release(ctx->activity_state);
+    ctx->activity_state = NULL;
+    ctx->activity_state_release = NULL;
+}
+
+lxp_result lxp_ctx_blob_get(lxp_module_ctx *ctx, const uint8_t key[32],
+                            const uint8_t **bytes, size_t *length)
+{
+    size_t location;
+    if (ctx == NULL || key == NULL || bytes == NULL || length == NULL)
+        return LXP_ERR_NON_CANONICAL;
+    location = staged_blob_find(ctx, key);
+    if (location != ctx->staged_blob_count) {
+        *bytes = ctx->staged_blobs[location].bytes;
+        *length = ctx->staged_blobs[location].length;
+        return LXP_OK;
+    }
+    location = committed_blob_find(ctx, key);
+    if (location == ctx->kernel->blob_count) return LXP_ERR_UNKNOWN_FIELD;
+    *bytes = ctx->kernel->blobs[location].bytes;
+    *length = ctx->kernel->blobs[location].length;
+    return LXP_OK;
+}
+
+lxp_result lxp_ctx_blob_put(lxp_module_ctx *ctx, const uint8_t key[32],
+                            const uint8_t *bytes, size_t length)
+{
+    uint8_t digest[32];
+    uint8_t *copy;
+    size_t location;
+    lxp_result status;
+    if (ctx == NULL || key == NULL || bytes == NULL || length == 0U)
+        return LXP_ERR_NON_CANONICAL;
+    if (!ctx->mutable) return LXP_FATAL_INVARIANT;
+    if (length > LXP_KERNEL_MAX_BLOB_BYTES) return LXP_ERR_LENGTH_LIMIT;
+    status = lxp_hash_sha256(bytes, length, digest);
+    if (status != LXP_OK) return status;
+    if (memcmp(digest, key, 32U) != 0) return LXP_ERR_CONTEXT_MISMATCH;
+    location = staged_blob_find(ctx, key);
+    if (location != ctx->staged_blob_count)
+        return ctx->staged_blobs[location].length == length &&
+                       memcmp(ctx->staged_blobs[location].bytes, bytes,
+                              length) == 0 ? LXP_OK : LXP_FATAL_INVARIANT;
+    location = committed_blob_find(ctx, key);
+    if (location != ctx->kernel->blob_count)
+        return ctx->kernel->blobs[location].length == length &&
+                       memcmp(ctx->kernel->blobs[location].bytes, bytes,
+                              length) == 0 ? LXP_OK : LXP_FATAL_INVARIANT;
+    if (ctx->staged_blob_count == LXP_KERNEL_MAX_STAGED_BLOBS)
+        return LXP_ERR_ARENA_EXHAUSTED;
+    copy = (uint8_t *)malloc(length);
+    if (copy == NULL) return LXP_ERR_ARENA_EXHAUSTED;
+    (void)memcpy(copy, bytes, length);
+    location = ctx->staged_blob_count++;
+    ctx->staged_blobs[location].module_id = ctx->module_id;
+    (void)memcpy(ctx->staged_blobs[location].key, key, 32U);
+    ctx->staged_blobs[location].length = length;
+    ctx->staged_blobs[location].bytes = copy;
+    return LXP_OK;
+}
+
+lxp_result lxp_ctx_bind_activity_state(lxp_module_ctx *ctx, void *state,
+                                       lxp_activity_state_release_fn release)
+{
+    if (ctx == NULL || state == NULL || release == NULL ||
+        ctx->activity_state != NULL) return LXP_ERR_NON_CANONICAL;
+    ctx->activity_state = state;
+    ctx->activity_state_release = release;
+    return LXP_OK;
+}
+
+void *lxp_ctx_activity_state(const lxp_module_ctx *ctx)
+{
+    return ctx == NULL ? NULL : ctx->activity_state;
+}
+
+void *lxp_ctx_take_activity_state(lxp_module_ctx *ctx)
+{
+    void *state;
+    if (ctx == NULL) return NULL;
+    state = ctx->activity_state;
+    ctx->activity_state = NULL;
+    ctx->activity_state_release = NULL;
+    return state;
+}
+
+const uint8_t *lxp_ctx_activity_id(const lxp_module_ctx *ctx)
+{
+    return ctx == NULL || lxp_ct_is_zero(ctx->activity_id, 32U) ? NULL :
+           ctx->activity_id;
+}
+
+const lxp_call_admission_facts *lxp_ctx_call_admission(
+    const lxp_module_ctx *ctx)
+{
+    return ctx != NULL && ctx->call_admission.present ?
+           &ctx->call_admission : NULL;
+}
+
+lxp_result lxp_ctx_bind_program_outcome(
+    lxp_module_ctx *ctx, const lxp_program_outcome *outcome)
+{
+    if (ctx == NULL || outcome == NULL || !outcome->present ||
+        ctx->module_id != LXP_MODULE_PROGRAMS ||
+        ctx->program_outcome.present)
+        return LXP_ERR_NON_CANONICAL;
+    ctx->program_outcome = *outcome;
+    return LXP_OK;
+}
+
+const lxp_program_outcome *lxp_ctx_program_outcome(
+    const lxp_module_ctx *ctx)
+{
+    return ctx != NULL && ctx->program_outcome.present ?
+           &ctx->program_outcome : NULL;
 }
 
 static bool has_prefix(const kv_view *view, const uint8_t *prefix,
@@ -282,13 +549,64 @@ lxp_result lxp_ctx_emit_transfer_set(lxp_module_ctx *ctx,
                                      lxp_receipt *receipt)
 {
     lxp_transfer_set emitted;
+    size_t i;
     if (ctx == NULL || set == NULL || receipt == NULL)
         return LXP_ERR_NON_CANONICAL;
     if (!ctx->mutable || ctx->kernel->apply_transfer_set == NULL)
         return LXP_ERR_BALANCE_BYPASS;
+    if (ctx->transfer_applied) return LXP_ERR_BALANCE_BYPASS;
+    for (i = 0U; i < set->leg_count; ++i) {
+        lx_account *accounts[2] = { set->legs[i].from, set->legs[i].to };
+        size_t side;
+        for (side = 0U; side < 2U; ++side) {
+            size_t prior;
+            if (accounts[side] == NULL) return LXP_ERR_NON_CANONICAL;
+            for (prior = 0U; prior < ctx->transfer_snapshot_count; ++prior)
+                if (ctx->transfer_snapshots[prior].account == accounts[side])
+                    break;
+            if (prior != ctx->transfer_snapshot_count) continue;
+            if (prior == LXP_MAX_TRANSFER_SET_LEGS * 2U + 1U)
+                return LXP_ERR_ARENA_EXHAUSTED;
+            ctx->transfer_snapshots[prior].account = accounts[side];
+            ctx->transfer_snapshots[prior].balance = accounts[side]->balance;
+            (void)memcpy(ctx->transfer_snapshots[prior].asset_id,
+                         accounts[side]->asset_id, 32U);
+            ctx->transfer_snapshots[prior].has_asset = accounts[side]->has_asset;
+            ctx->transfer_snapshots[prior].next_sequence =
+                accounts[side]->next_sequence;
+            ++ctx->transfer_snapshot_count;
+        }
+    }
+    if (set->context.sequence_account != NULL) {
+        size_t prior;
+        lx_account *account = set->context.sequence_account;
+        for (prior = 0U; prior < ctx->transfer_snapshot_count; ++prior)
+            if (ctx->transfer_snapshots[prior].account == account) break;
+        if (prior == ctx->transfer_snapshot_count) {
+            if (prior == LXP_MAX_TRANSFER_SET_LEGS * 2U + 1U)
+                return LXP_ERR_ARENA_EXHAUSTED;
+            ctx->transfer_snapshots[prior].account = account;
+            ctx->transfer_snapshots[prior].balance = account->balance;
+            (void)memcpy(ctx->transfer_snapshots[prior].asset_id,
+                         account->asset_id, 32U);
+            ctx->transfer_snapshots[prior].has_asset = account->has_asset;
+            ctx->transfer_snapshots[prior].next_sequence =
+                account->next_sequence;
+            ++ctx->transfer_snapshot_count;
+        }
+    }
     emitted = *set;
     emitted.context.origin_module_id = ctx->module_id;
-    return ctx->kernel->apply_transfer_set(ctx->kernel, &emitted, receipt);
+    {
+        lxp_result status = ctx->kernel->apply_transfer_set(ctx->kernel,
+                                                            &emitted, receipt);
+        if (status != LXP_OK) {
+            restore_transfer_snapshots(ctx);
+            return status;
+        }
+    }
+    ctx->transfer_applied = true;
+    return LXP_OK;
 }
 
 lxp_result lxp_ctx_emit_event(lxp_module_ctx *ctx, uint16_t event_type,

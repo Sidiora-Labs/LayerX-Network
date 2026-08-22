@@ -1112,7 +1112,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Build each hostile module from real WASM through the existing test support rather than from stubs, so the suites exercise the real validator, the real linker and the real meter.
     - Wire both suites into make programs-test, and record the attack inventory so a later wave extends it rather than rewriting it.
     - _Requirements: 35.8, 28.6, 30.4_
-  - [ ] 28.7 Implement the program call activity in the programs module
+  - [-] 28.7 Implement the program call activity in the programs module
     - Declare a call activity ordinal in the programs module alongside deploy, upgrade, transfer and registry, decoding program identifier, entry point, calldata, declared budget and requested capabilities canonically.
     - Add the scalar-only FFI ingress from the C module into the authorized execution path, following the existing bounded staging pattern, and replace the process-global pending map with per-activity state carried on the module context so nothing in the consensus path depends on process-wide mutable state.
     - Apply the guest effects through the existing boundaries only: storage writes into the module namespace, events through the kernel event stream, transfers through the kernel transfer primitive by way of the existing 402LXP leg authorization.

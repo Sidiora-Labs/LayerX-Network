@@ -39,9 +39,21 @@ static lxp_result epoch(lxp_module_ctx *ctx, uint64_t number, uint64_t ts)
 { (void)ctx; (void)number; (void)ts; return LXP_OK; }
 static lxp_result root(lxp_module_ctx *ctx, uint8_t out[32])
 { (void)ctx; (void)memset(out, 0, 32U); return LXP_OK; }
-static lxp_result charge_fee(lxp_kernel *kernel, const lxp_activity *activity,
-                             lxp_u128 fee)
-{ (void)kernel; (void)activity; (void)fee; ++fee_calls; return LXP_OK; }
+static lxp_result prepare_fee(lxp_kernel *kernel,
+                              const lxp_activity *activity,
+                              const lxp_authority_resolved *authority,
+                              lxp_u128 fee,
+                              void **transaction)
+{
+    (void)kernel; (void)activity; (void)authority; (void)fee;
+    ++fee_calls;
+    *transaction = &fee_calls;
+    return LXP_OK;
+}
+static void commit_fee(lxp_kernel *kernel, void *transaction)
+{ (void)kernel; (void)transaction; }
+static void rollback_fee(lxp_kernel *kernel, void *transaction)
+{ (void)kernel; (void)transaction; --fee_calls; }
 
 static void fill_activity(lxp_activity *activity, const uint8_t *did,
                           size_t did_length, uint64_t sequence)
@@ -92,7 +104,10 @@ int main(void)
                               primary_key, &identity) != LXP_OK ||
         lxp_kernel_create(&kernel, &state, &journal, &parameters, 0U) !=
             LXP_OK || lxp_kernel_register_module(&kernel, &iface) != LXP_OK ||
-        lxp_kernel_set_fee_charger(&kernel, charge_fee) != LXP_OK) return 1;
+        lxp_kernel_set_fee_transaction(
+            &kernel, &(lxp_kernel_fee_transaction){ prepare_fee, commit_fee,
+                                                    rollback_fee }) != LXP_OK)
+        return 1;
     (void)memset(&execution, 0, sizeof(execution));
     execution.network_id = 7U;
     execution.batch_timestamp_ms = 10U;

@@ -2769,7 +2769,7 @@ reqs = ["35.8","28.6","30.4"]
 
 [task.28.7]
 title = "Implement the program call activity in the programs module"
-status = "pending"
+status = "in_progress"
 wave = 14
 requires = ["28.2","28.3","28.4","28.5","19.4","21.1"]
 do_1 = "Declare a call activity ordinal in the programs module alongside deploy, upgrade, transfer and registry, decoding program identifier, entry point, calldata, declared budget and requested capabilities canonically."

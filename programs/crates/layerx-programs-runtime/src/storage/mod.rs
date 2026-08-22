@@ -150,6 +150,16 @@ impl Storage {
             .count()
     }
 
+    /// Returns one fixed namespace in canonical key order for the protocol
+    /// persistence bridge. The returned copies cannot mutate the held state.
+    pub(crate) fn namespace_entries(&self, namespace: StorageNamespace) -> Vec<(Vec<u8>, Vec<u8>)> {
+        self.cells
+            .iter()
+            .filter(|(address, _)| address.namespace == namespace)
+            .map(|(address, value)| (address.key.clone(), value.clone()))
+            .collect()
+    }
+
     /// Returns exact persistent key-plus-value bytes in one namespace.
     /// Adjacent program or principal namespaces never contribute.
     ///

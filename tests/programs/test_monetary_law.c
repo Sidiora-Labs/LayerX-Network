@@ -24,15 +24,26 @@ static lxp_result apply_transfer_set(lxp_kernel *kernel,
     return status;
 }
 
-static lxp_result charge_fee(lxp_kernel *kernel, const lxp_activity *activity,
-                             lxp_u128 fee)
+static lxp_result prepare_fee(lxp_kernel *kernel,
+                              const lxp_activity *activity,
+                              const lxp_authority_resolved *authority,
+                              lxp_u128 fee,
+                              void **transaction)
 {
     (void)kernel;
     (void)activity;
+    (void)authority;
     ++charged_fees;
     last_fee = fee;
+    *transaction = &last_fee;
     return LXP_OK;
 }
+
+static void commit_fee(lxp_kernel *kernel, void *transaction)
+{ (void)kernel; (void)transaction; }
+
+static void rollback_fee(lxp_kernel *kernel, void *transaction)
+{ (void)kernel; (void)transaction; --charged_fees; }
 
 static void write_u16(uint8_t *bytes, uint16_t value)
 {
@@ -146,7 +157,9 @@ int main(void)
                               primary_key, &identity) != LXP_OK ||
         lxp_kernel_create(&kernel, &state, &journal, &parameters, 0U) != LXP_OK ||
         lxp_kernel_register_module(&kernel, programs_module_registration()) != LXP_OK ||
-        lxp_kernel_set_fee_charger(&kernel, charge_fee) != LXP_OK ||
+        lxp_kernel_set_fee_transaction(
+            &kernel, &(lxp_kernel_fee_transaction){ prepare_fee, commit_fee,
+                                                    rollback_fee }) != LXP_OK ||
         lxp_kernel_set_capabilities(&kernel, NULL, apply_transfer_set) != LXP_OK ||
         lxp_kernel_bind_module_runtime(&kernel, LXP_MODULE_PROGRAMS, &runtime) != LXP_OK ||
         dispatch(&kernel, &authority, payload, sizeof(payload),

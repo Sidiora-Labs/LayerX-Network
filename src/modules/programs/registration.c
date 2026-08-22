@@ -39,7 +39,7 @@ static lxp_result programs_decode(lxp_module_ctx *ctx, uint16_t ordinal,
         return lxp_programs_lifecycle_decode(ctx, ordinal, payload, length,
                                              decoded);
     if (ordinal == lxp_activity_type_ordinal(LX_PROGRAMS_CALL))
-        return LXP_ERR_MODULE_DISABLED;
+        return lxp_programs_call_decode(ctx, payload, length, decoded);
     if (ordinal == lxp_activity_type_ordinal(LX_PROGRAMS_TRANSFER))
         return lxp_programs_transfer_decode(ctx, payload, length, decoded);
     if (ctx == NULL || decoded == NULL || ordinal == 0U || ordinal > 4U ||
@@ -71,6 +71,8 @@ static lxp_result programs_validate(lxp_module_ctx *ctx,
                                                decoded);
     if (activity != NULL && activity->activity_type == LX_PROGRAMS_TRANSFER)
         return lxp_programs_transfer_validate(ctx, activity, authority, decoded);
+    if (activity != NULL && activity->activity_type == LX_PROGRAMS_CALL)
+        return lxp_programs_call_validate(ctx, activity, authority, decoded);
     if (ctx == NULL || activity == NULL || authority == NULL || value == NULL)
         return LXP_ERR_NON_CANONICAL;
     if (lxp_ct_is_zero(authority->principal, sizeof(authority->principal)))
@@ -101,6 +103,9 @@ static lxp_result programs_execute(lxp_module_ctx *ctx,
     if (activity != NULL && activity->activity_type == LX_PROGRAMS_TRANSFER)
         return lxp_programs_transfer_execute(ctx, activity, authority, decoded,
                                              effects);
+    if (activity != NULL && activity->activity_type == LX_PROGRAMS_CALL)
+        return lxp_programs_call_execute(ctx, activity, authority, decoded,
+                                         effects);
     (void)effects;
     if (ctx == NULL || authority == NULL || value == NULL)
         return LXP_ERR_NON_CANONICAL;

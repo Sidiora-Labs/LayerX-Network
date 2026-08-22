@@ -61,3 +61,19 @@ symbol = "KernelTransferPrimitive"
 observed = "The Rust runtime has no production implementation of KernelTransferPrimitive; the only real transactional 402LXP primitive is owned by the C kernel. Task 28.7 owns the C Programs CALL ingress and must map one prepared activity transfer set into one lxp_ctx_emit_transfer_set call inside the same journal. A Rust test implementation would necessarily be a test double or a second ledger, while implementing the real C bridge here would cross the explicitly reserved 28.7 boundary."
 assumption = "Task 21.1 supplies the sealed prepared settlement and strict evidence-verification seam; task 28.7 supplies and qualifies the sole real transactional implementation against the C kernel without introducing a second activity or global map. The actual C program-event envelope and its public receipt/batch publication are task-28.7-owned."
 severity = "dependency-boundary"
+
+[observation.28.7.1]
+task = "28.7"
+file = "programs/crates/layerx-programs-runtime/src/transfer.rs"
+symbol = "KernelTransferPrimitive"
+observed = "The C transfer primitive produces and verifies the exact sealed transfer-set root synchronously inside the open Programs CALL journal, while the one authoritative outer activity receipt is constructed only after module execution returns. Requiring an inner receipt digest before Rust releases held storage and effects creates an impossible ordering cycle and would imply a second receipt."
+assumption = "The Rust affine settlement seam verifies the nonzero exact C transfer-set root, leg count and amount before releasing held state; the C kernel then binds that root and the terminal program outcome into the single standard outer receipt before signing and storage."
+severity = "ordering-boundary"
+
+[observation.28.7.2]
+task = "28.7"
+file = "programs/crates/layerx-programs-runtime/src/ffi_call.rs"
+symbol = "CReceiptOracle::verified_receipt"
+observed = "The production Programs CALL adapter currently returns AbiError::ReceiptMismatch for every receipt lookup. Because receipt-read grants are validated through ReceiptOracle during ABI construction, an explicitly authorised program cannot perform any receipt-verified read through this path."
+assumption = "Task 28.7 remains incomplete until the adapter resolves and verifies canonical receipts from protocol state through an activity-owned scalar callback, or the protocol explicitly removes receipt-read from CALL admission with a typed versioned refusal. An always-mismatch oracle is not treated as implemented host functionality."
+severity = "dependency-boundary"

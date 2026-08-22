@@ -26,7 +26,10 @@ pub mod entrypoint;
 pub mod execute;
 #[deny(unsafe_code)]
 pub mod fault;
+#[allow(unsafe_code)]
 mod ffi;
+#[allow(unsafe_code)]
+mod ffi_call;
 mod ffi_transfer;
 #[deny(unsafe_code)]
 mod host;
