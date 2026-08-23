@@ -2465,7 +2465,7 @@ status = "pending"
 
 [task.24.1]
 title = "Build the Ethereum and Solana migration tooling"
-status = "pending"
+status = "in_progress"
 wave = 11
 requires = ["22.1","6.2"]
 do_1 = "Build account mapping: external addresses associated to LayerX identities through the protocol's binding mechanisms."

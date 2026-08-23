@@ -10,5 +10,9 @@ layerx-interop-gateway.workspace = true
 layerx-proof.workspace = true
 sha2.workspace = true
 
+[dev-dependencies]
+ed25519-dalek.workspace = true
+layerx-types.workspace = true
+
 [lints]
 workspace = true

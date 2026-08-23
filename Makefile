@@ -2330,7 +2330,7 @@ interop-test-ramps:
 INTEROP_CARGO ?= cargo
 INTEROP_MANIFEST := interop/Cargo.toml
 
-.PHONY: interop-build interop-test interop-lint interop-test-x402
+.PHONY: interop-build interop-test interop-lint interop-test-x402 interop-test-migration
 
 interop-build:
 	$(INTEROP_CARGO) build --manifest-path $(INTEROP_MANIFEST) --locked --workspace
@@ -2343,6 +2343,9 @@ interop-test-x402:
 
 interop-test-mandates:
 	$(INTEROP_CARGO) test --manifest-path $(INTEROP_MANIFEST) --locked -p layerx-ap2
+
+interop-test-migration:
+	$(INTEROP_CARGO) test --manifest-path $(INTEROP_MANIFEST) --locked -p layerx-migrate
 
 interop-lint:
 	$(INTEROP_CARGO) clippy --manifest-path $(INTEROP_MANIFEST) --locked --workspace --all-targets -- -D warnings
