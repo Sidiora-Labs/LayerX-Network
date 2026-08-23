@@ -2330,7 +2330,7 @@ interop-test-ramps:
 INTEROP_CARGO ?= cargo
 INTEROP_MANIFEST := interop/Cargo.toml
 
-.PHONY: interop-build interop-test interop-lint interop-test-x402 interop-test-mandates interop-test-migration interop-test-ucp interop-test-portable
+.PHONY: interop-build interop-test interop-lint interop-test-x402 interop-test-mandates interop-test-migration interop-test-ucp interop-test-portable interop-test-visa-tap
 
 interop-build:
 	$(INTEROP_CARGO) build --manifest-path $(INTEROP_MANIFEST) --locked --workspace
@@ -2355,6 +2355,9 @@ interop-test-portable:
 	$(INTEROP_CARGO) test --manifest-path $(INTEROP_MANIFEST) --locked -p layerx-portable --test receipt_vectors
 	$(INTEROP_CARGO) test --manifest-path $(INTEROP_MANIFEST) --locked -p layerx-portable --test external_verification
 	$(INTEROP_CARGO) test --manifest-path $(INTEROP_MANIFEST) --locked -p layerx-portable --test independent_verifier
+
+interop-test-visa-tap:
+	$(INTEROP_CARGO) test --manifest-path $(INTEROP_MANIFEST) --locked -p layerx-visa-tap
 
 interop-lint:
 	$(INTEROP_CARGO) clippy --manifest-path $(INTEROP_MANIFEST) --locked --workspace --all-targets -- -D warnings

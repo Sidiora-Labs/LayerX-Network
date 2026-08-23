@@ -2446,7 +2446,7 @@ reqs = ["32.4","32.6"]
 
 [task.23.3]
 title = "Implement Visa Trusted Agent credentials"
-status = "pending"
+status = "done"
 wave = 11
 requires = ["22.1"]
 do_1 = "Implement Trusted Agent credential verification per the published specification."
