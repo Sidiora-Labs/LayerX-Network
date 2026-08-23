@@ -3058,7 +3058,7 @@ reqs = ["38.3"]
 
 [task.31.3]
 title = "Add deterministic hash primitives"
-status = "in_progress"
+status = "done"
 wave = 17
 requires = ["28.1"]
 do_1 = "Add a hash host function covering sha256, keccak256 and blake3, addressed by algorithm identifier, refusing an unknown algorithm rather than defaulting."

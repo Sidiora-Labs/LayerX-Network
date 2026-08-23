@@ -11,6 +11,9 @@ crate-type = ["rlib", "staticlib"]
 [dependencies]
 wasmi.workspace = true
 wasmparser-nostd.workspace = true
+sha2.workspace = true
+sha3.workspace = true
+blake3.workspace = true
 
 [lints.rust]
 unsafe_code = "allow"

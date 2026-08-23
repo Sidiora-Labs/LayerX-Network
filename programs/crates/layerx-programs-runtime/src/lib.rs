@@ -19,6 +19,8 @@ pub mod budget;
 #[deny(unsafe_code)]
 pub mod calls;
 #[deny(unsafe_code)]
+pub mod crypto;
+#[deny(unsafe_code)]
 pub mod engine;
 #[deny(unsafe_code)]
 pub mod entrypoint;
@@ -63,6 +65,7 @@ pub use calls::{
     CALL_INPUT_FUEL_PER_BYTE, CALL_RESERVE_EXPORT, DEFAULT_MAX_CALL_FANOUT,
     DEFAULT_MAX_CALL_GRAPH_EDGES, DEFAULT_MAX_COMPOSITION_DEPTH, DEFAULT_MAX_PROGRAM_VISITS,
 };
+pub use crypto::{hash_bytes, HashAlgorithm};
 pub use engine::{EngineRefusal, WasmEngine};
 pub use entrypoint::EntrypointRefusal;
 pub use execute::{

@@ -1,6 +1,7 @@
 //! Concrete `wasmi` bindings for the version-one capability ABI.
 
 mod calls;
+mod crypto;
 mod events;
 mod memory;
 mod scan;
@@ -282,6 +283,7 @@ pub(crate) fn linker(
     storage::register(&mut linker)?;
     events::register(&mut linker)?;
     calls::register(&mut linker)?;
+    crypto::register(&mut linker)?;
     if revision == AbiRevision::CandidateV2 {
         calls::register_candidate(&mut linker)?;
         scan::register_candidate(&mut linker)?;
