@@ -2397,7 +2397,7 @@ reqs = ["32.2","32.6"]
 
 [task.22.3]
 title = "Implement the x402 facilitator and the transport matrix"
-status = "pending"
+status = "done"
 wave = 11
 requires = ["22.2"]
 do_1 = "Implement the facilitator role settling x402 payments into LayerX with receipt-backed confirmation."

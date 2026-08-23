@@ -142,6 +142,30 @@ observed = "Task 12.2 requires home to display verified balance with freshness, 
 assumption = "Human qualification will determine whether the balance endpoint belongs to a wave-7 sibling task, was already implemented but not bound into the generated client, or remains pending in a later wave. Task 12.2 implements the home UI structure and balance-display logic completely; only the API binding is deferred."
 severity = "dependency-boundary"
 
+[observation.22.3.1]
+task = "22.3"
+file = "interop/crates/layerx-x402/tests/seller.rs, interop/crates/layerx-x402/tests/buyer.rs, interop/crates/layerx-x402/tests/e2e.rs"
+symbol = "GatewayCore::testing, TraceId::testing"
+observed = "The inherited x402 integration test files call GatewayCore::testing() and TraceId::testing(), but neither constructor exists anywhere in layerx-interop-gateway (only GatewayCore::new()/GatewayCore::default() and TraceId::mint/parse/from_inbound are defined). As written the whole layerx-x402 test target - and therefore make interop-test-x402 - cannot compile. Per No Repair this inherited breakage was left intact; the new fault-injection tests added by 22.3 in transports.rs deliberately avoid the missing helpers and set up a real gateway through GatewayCore::new() + register_adapter and a real trace through TraceId::mint()."
+assumption = "Human qualification will add the missing test-support constructors (or migrate seller.rs/buyer.rs/e2e.rs to the real GatewayCore::new()+register_adapter and TraceId::mint() setup) before the x402 test target can build and run."
+severity = "inherited"
+
+[observation.22.3.2]
+task = "22.3"
+file = "interop/crates/layerx-x402/src/facilitator.rs, interop/crates/layerx-x402/src/transport.rs"
+symbol = "interop_x402_facilitator, TRANSPORT_MATRIX"
+observed = "The facilitator role (do_1) and the three-transport carriage for buyer, seller and facilitator (do_2) were already present on main from the earlier x402 commits. Task 22.3 added the exactly-once fault-injection settlement suite in transports.rs (do_5) driving the real receipt-verified settle path with a sequencer-signed receipt whose asset/recipient/amount match the transport-independent requirements fixture, wired make interop-test-x402 into a dedicated CI workflow (do_3), and published the facilitator conformance results in COMPATIBILITY.md (do_4)."
+assumption = "Human qualification will run make interop-test-x402 once the missing test-support constructors above are resolved, and confirm the exactly-once economic-effect assertions and wire conformance pass against real receipts."
+severity = "note"
+
+[observation.22.3.3]
+task = "22.3"
+file = "interop/crates/layerx-x402/COMPATIBILITY.md, .github/workflows/interop-x402.yml"
+symbol = "facilitator conformance results"
+observed = "do_3 and do_4 ask for the transport matrix to run against conformance vectors in CI and for the facilitator conformance results to be published in the compatibility matrix, but the repository carries no upstream x402 v2 reference vector corpus and no independently operated facilitator deployment. The published results are strictly local, offline conformance and fault-injection outcomes over real code paths; they do not claim third-party interoperability or upstream reference-vector conformance."
+assumption = "Human qualification will fetch the pinned upstream x402 v2 vector corpus and, where an independently operated facilitator is available, extend the matrix with those externally sourced results before any production interoperability claim."
+severity = "dependency-boundary"
+
 [observation.22.2.1]
 task = "22.2"
 file = "interop/crates/layerx-x402/src/seller.rs, interop/crates/layerx-x402/src/buyer.rs"

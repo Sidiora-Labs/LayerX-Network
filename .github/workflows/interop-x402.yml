@@ -1,0 +1,55 @@
+name: Interop x402 transport matrix
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "interop/crates/layerx-x402/**"
+      - "interop/crates/layerx-interop-gateway/**"
+      - "interop/Cargo.toml"
+      - "interop/Cargo.lock"
+      - "agent/crates/layerx-proof/**"
+      - "agent/crates/layerx-wire/**"
+      - "agent/crates/layerx-crypto/**"
+      - "agent/crates/layerx-types/**"
+      - "Makefile"
+      - ".github/workflows/interop-x402.yml"
+  pull_request:
+    paths:
+      - "interop/crates/layerx-x402/**"
+      - "interop/crates/layerx-interop-gateway/**"
+      - "interop/Cargo.toml"
+      - "interop/Cargo.lock"
+      - "agent/crates/layerx-proof/**"
+      - "agent/crates/layerx-wire/**"
+      - "agent/crates/layerx-crypto/**"
+      - "agent/crates/layerx-types/**"
+      - "Makefile"
+      - ".github/workflows/interop-x402.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: interop-x402-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  LC_ALL: C
+  TZ: UTC
+
+jobs:
+  transport-matrix:
+    name: Every role on every transport against conformance vectors
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.91.1 --profile minimal --no-self-update
+      - name: Run the x402 transport matrix and conformance vectors
+        run: make interop-test-x402 INTEROP_CARGO="cargo +1.91.1"
