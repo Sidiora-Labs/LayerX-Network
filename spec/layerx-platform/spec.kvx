@@ -1640,7 +1640,7 @@ status = "pending"
 
 [task.13.1]
 title = "Build settings and preferences"
-status = "pending"
+status = "in_progress"
 wave = 7
 requires = ["11.2","9.4"]
 do_1 = "Build the settings hub sectioned as profile, security, linked wallet, notifications, advanced and help, with current values on rows."
