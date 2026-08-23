@@ -2495,7 +2495,7 @@ reqs = ["33.3","33.4","33.5","33.6"]
 
 [task.24.3]
 title = "Implement portable receipt and mandate verification"
-status = "pending"
+status = "done"
 wave = 11
 requires = ["22.2"]
 do_1 = "Export LayerX receipts and proofs in portable forms external parties verify without LayerX infrastructure."

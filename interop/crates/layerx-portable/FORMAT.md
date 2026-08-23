@@ -55,3 +55,43 @@ upstream SD-JWT presentations; the JSON object is only a LayerX transport
 envelope. `Ap2ExternalMandateVerifier` passes both exact strings into AP2's
 signature, selective-disclosure, delegation and constraint verifier and
 returns its private `VerifiedMandates` type through the generic binding.
+
+## Verification Portability
+
+Both LayerX receipts and external protocol evidence are designed for verification
+by independent implementations without LayerX infrastructure:
+
+### LayerX Receipt Portability
+
+An external verifier needs only:
+1. The `layerx-receipt-proof-v1` JSON format (documented above)
+2. An independently trusted `AuthorizedBatch` (from a certificate, snapshot, or vector manifest)
+3. The layerx-proof verification library (or an independent implementation)
+
+No gateway, node, daemon, database, clock, or network connection is required.
+The portable receipt carries every byte needed for cryptographic verification.
+Golden test vectors in `tests/receipt_vectors.rs` and `tests/independent_verifier.rs`
+prove that a standalone verifier can process exported receipts.
+
+### External Evidence Portability
+
+External mandates and receipts (x402, AP2, UCP, etc.) are verified through
+version-pinned adapters. Each adapter:
+1. Declares its exact protocol, spec version, spec document digest, and conformance suite
+2. Performs protocol-specific cryptographic and constraint verification
+3. Returns a typed verified value bound to the exact presentation bytes
+
+`verify_external_evidence` ensures the presentation matches the verifier's
+declared adapter, protocol, version, evidence kind, and media type before
+invoking adapter verification. The resulting `VerifiedExternalEvidence`
+carries the adapter's typed output plus all binding metadata:
+- Exact spec version and document digest
+- Conformance suite name, vector count, and suite digest  
+- Evidence digest (domain-separated hash of all inputs)
+
+This binding means an external system can trust the verification provenance
+without re-running the full verification or storing secret-bearing raw mandates.
+The evidence digest is sufficient for audit and non-repudiation.
+
+Test coverage in `tests/external_verification.rs` proves typed rigour,
+descriptor matching, and digest stability across payload changes.
