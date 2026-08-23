@@ -1,6 +1,7 @@
 #include "layerx/programs.h"
 
 #include "layerx/lxp_fee.h"
+#include "layerx/lxp_kernel.h"
 
 #include <stdlib.h>
 #include <string.h>

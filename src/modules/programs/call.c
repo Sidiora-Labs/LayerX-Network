@@ -102,9 +102,8 @@ struct lxp_programs_call_activity {
     uint32_t emitted_event_count;
 };
 
-static void call_activity_release(lxp_module_ctx *ctx, void *state)
+static void call_activity_release(void *state)
 {
-    (void)ctx;
     (void)state;
 }
 
@@ -119,7 +118,7 @@ static lxp_result call_namespace_for_program(const lxp_programs_call_activity *v
     admission = lxp_ctx_call_admission(value->ctx);
     if (admission == NULL) return LXP_FATAL_INVARIANT;
     (void)memcpy(bytes, program_id, 32U);
-    bytes[32] = selector == 0U ? 0U : 1U;
+    bytes[32] = (uint8_t)(selector == 0U ? 0U : 1U);
     if (selector == 0U) {
         (void)memcpy(bytes + 33U, admission->payer, 32U);
         *length = 65U;
@@ -203,7 +202,7 @@ lxp_result layerx_programs_call_storage_final_begin(
         value->storage_final[selector].begun) return LXP_ERR_NON_CANONICAL;
     if (count > INT32_MAX) return LXP_ERR_LENGTH_LIMIT;
     if (count == 0U) { value->storage_final[selector].begun = true; return LXP_OK; }
-    if (count > SIZE_MAX / sizeof(lxp_programs_storage_cell)) return LXP_ERR_LENGTH_LIMIT;
+    if (sizeof(lxp_programs_storage_cell) > SIZE_MAX / count) return LXP_ERR_LENGTH_LIMIT;
     status = lxp_ctx_arena_alloc(value->ctx,
         (size_t)count * sizeof(lxp_programs_storage_cell),
         _Alignof(lxp_programs_storage_cell), &allocation);
@@ -374,7 +373,7 @@ static lxp_result call_catalog_build(lxp_programs_call_activity *value)
     if (status != LXP_OK) return status;
     count = value->catalog_count;
     if (count == 0U || count > INT32_MAX ||
-        (size_t)count > SIZE_MAX / sizeof(*value->catalog))
+        sizeof(*value->catalog) > SIZE_MAX / count)
         return LXP_ERR_LENGTH_LIMIT;
     status = lxp_ctx_arena_alloc(value->ctx,
                                  (size_t)count * sizeof(*value->catalog),
@@ -614,7 +613,7 @@ lxp_result layerx_programs_call_catalog_storage_final_begin(
         return status == LXP_OK ? LXP_ERR_NON_CANONICAL : status;
     if (count > INT32_MAX) return LXP_ERR_LENGTH_LIMIT;
     if (count == 0U) { entry->storage_final[selector].begun = true; return LXP_OK; }
-    if ((size_t)count > SIZE_MAX / sizeof(*cells)) return LXP_ERR_LENGTH_LIMIT;
+    if (sizeof(*cells) > SIZE_MAX / count) return LXP_ERR_LENGTH_LIMIT;
     status = lxp_ctx_arena_alloc(value->ctx, (size_t)count * sizeof(*cells),
                                  _Alignof(lxp_programs_storage_cell), &allocation);
     if (status != LXP_OK) return status;
@@ -1023,8 +1022,8 @@ static lxp_result call_scalar_begin(const lxp_programs_call_activity *value,
         principal[0], principal[1], principal[2], principal[3],
         authority_hash[0], authority_hash[1], authority_hash[2], authority_hash[3],
         binding[0], binding[1], binding[2], binding[3],
-        admission->signed_fee_limit.high, admission->signed_fee_limit.low,
-        admission->available_fee_units.high, admission->available_fee_units.low,
+        admission->signed_fee_limit.hi, admission->signed_fee_limit.lo,
+        admission->available_fee_units.hi, admission->available_fee_units.lo,
         admission->fee_schedule_version, admission->parameter_version,
         value->abi_version, value->entrypoint_length, value->wasm_length,
         value->calldata_length,
