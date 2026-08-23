@@ -63,7 +63,7 @@ function mockWalletBinding(): WalletBinding {
   return {
     state: "bound",
     address: "0x1234567890123456789012345678901234567890",
-    linked_at: Date.now() - 3600000,
+    bound_at: "2026-08-15T09:00:00Z",
   };
 }
 
@@ -71,8 +71,9 @@ function mockCustodyTiming(): CustodyTiming {
   return {
     depositDelayedAfterSeconds: 120,
     settlement: {
-      estimatedEpochCount: 2,
-      epochLengthSeconds: 1200,
+      checkpointIntervalSeconds: 1200,
+      paxeerBlockSeconds: 600,
+      requiredConfirmations: 2,
     },
     challengeWindowSeconds: 3600,
   };
@@ -82,9 +83,10 @@ function mockDepositJourney(): Journey {
   return {
     journey_id: "jrn_deposit_test",
     kind: "deposit",
+    state_copy_key: "status.processing",
     state: "done",
-    created_at: Date.now() - 600000,
-    updated_at: Date.now() - 300000,
+    started_at: "2026-08-20T09:00:00Z",
+    updated_at: "2026-08-20T10:00:00Z",
     stages: [
       {
         stage_id: "stage_wallet",
@@ -102,7 +104,7 @@ function mockDepositJourney(): Journey {
         stage_id: "stage_crediting",
         copy_key: DEPOSIT_FINAL_STAGE,
         state: "done",
-        evidence: [{ evidence_id: "evt_credit", class: "credit", verification: "sequencer_signed" }],
+        evidence: [{ evidence_id: "evt_credit", class: "layerx-receipt", verification: "receipt-verified" }],
       },
     ],
     evidence: [],
@@ -113,9 +115,10 @@ function mockWithdrawJourney(): Journey {
   return {
     journey_id: "jrn_withdraw_test",
     kind: "withdraw",
+    state_copy_key: "status.processing",
     state: "done",
-    created_at: Date.now() - 7200000,
-    updated_at: Date.now() - 300000,
+    started_at: "2026-08-20T09:00:00Z",
+    updated_at: "2026-08-20T10:00:00Z",
     stages: [
       {
         stage_id: "stage_processing",
@@ -139,7 +142,7 @@ function mockWithdrawJourney(): Journey {
         stage_id: "stage_payout",
         copy_key: WITHDRAW_FINAL_STAGE,
         state: "done",
-        evidence: [{ evidence_id: "evt_payout", class: "payout", verification: "checkpoint_finalised" }],
+        evidence: [{ evidence_id: "evt_payout", class: "paxeer-finality", verification: "paxeer-finalised" }],
       },
     ],
     evidence: [],
@@ -150,9 +153,10 @@ function mockWithdrawJourneyWithHold(): Journey {
   return {
     journey_id: "jrn_withdraw_hold_test",
     kind: "withdraw",
+    state_copy_key: "status.processing",
     state: "processing",
-    created_at: Date.now() - 7200000,
-    updated_at: Date.now() - 60000,
+    started_at: "2026-08-20T09:00:00Z",
+    updated_at: "2026-08-20T10:00:00Z",
     stages: [
       {
         stage_id: "stage_processing",
@@ -193,9 +197,10 @@ function mockExitJourney(): Journey {
   return {
     journey_id: "jrn_exit_test",
     kind: "exit",
+    state_copy_key: "status.processing",
     state: "done",
-    created_at: Date.now() - 600000,
-    updated_at: Date.now() - 300000,
+    started_at: "2026-08-20T09:00:00Z",
+    updated_at: "2026-08-20T10:00:00Z",
     stages: [
       {
         stage_id: "stage_getting_ready",
@@ -213,7 +218,7 @@ function mockExitJourney(): Journey {
         stage_id: "stage_confirming",
         copy_key: EXIT_FINAL_STAGE,
         state: "done",
-        evidence: [{ evidence_id: "evt_exit", class: "exit", verification: "checkpoint_finalised" }],
+        evidence: [{ evidence_id: "evt_exit", class: "paxeer-finality", verification: "paxeer-finalised" }],
       },
     ],
     evidence: [],
@@ -223,6 +228,7 @@ function mockExitJourney(): Journey {
 function mockExitEligibilityEligible(): ExitEligibility {
   return {
     eligible: true,
+    copy_key: "exit.eligible.ready",
   };
 }
 
@@ -532,7 +538,7 @@ test("exit controller checks eligibility and manages typed start flow", async ()
 
 test("custody journey state presentation enforces receipt-gated completion", () => {
   const journeyWithoutEvidence = mockDepositJourney();
-  journeyWithoutEvidence.stages[2].evidence = [];
+  journeyWithoutEvidence.stages[2]!.evidence = [];
   const presentedWithoutEvidence = presentedJourneyState(journeyWithoutEvidence, DEPOSIT_FINAL_STAGE);
   assert.equal(presentedWithoutEvidence, "processing");
 
