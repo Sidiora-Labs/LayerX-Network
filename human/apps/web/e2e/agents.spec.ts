@@ -80,6 +80,10 @@ test("creation journey progress surfaces honest partial and complete states", ()
   const mockJourney: Journey = {
     journey_id: "jrn_creation_001",
     kind: "agent-create",
+    state_copy_key: "status.processing",
+    evidence: [],
+    started_at: "2026-08-01T00:00:00Z",
+    updated_at: "2026-08-01T00:00:00Z",
     state: "processing",
     stages: [
       {
@@ -89,7 +93,7 @@ test("creation journey progress surfaces honest partial and complete states", ()
         evidence: [
           {
             class: "layerx-receipt",
-            reference: "rcp_001",
+            evidence_id: "rcp_001",
             verification: "receipt-verified",
           },
         ],
@@ -107,14 +111,18 @@ test("creation journey progress surfaces honest partial and complete states", ()
   assert.equal(progress.complete, false);
   assert.equal(creationHeadlineKey(progress), "agent.create.partial");
   assert.equal(progress.stages.length, 2);
-  assert.equal(progress.stages[0].receiptVerified, true);
-  assert.equal(progress.stages[1].receiptVerified, false);
+  assert.equal(progress.stages[0]!.receiptVerified, true);
+  assert.equal(progress.stages[1]!.receiptVerified, false);
 });
 
 test("creation journey complete requires all stages receipt-verified", () => {
   const completeJourney: Journey = {
     journey_id: "jrn_creation_002",
     kind: "agent-create",
+    state_copy_key: "status.processing",
+    evidence: [],
+    started_at: "2026-08-01T00:00:00Z",
+    updated_at: "2026-08-01T00:00:00Z",
     state: "done",
     stages: [
       {
@@ -124,7 +132,7 @@ test("creation journey complete requires all stages receipt-verified", () => {
         evidence: [
           {
             class: "layerx-receipt",
-            reference: "rcp_001",
+            evidence_id: "rcp_001",
             verification: "receipt-verified",
           },
         ],
@@ -136,7 +144,7 @@ test("creation journey complete requires all stages receipt-verified", () => {
         evidence: [
           {
             class: "layerx-receipt",
-            reference: "rcp_002",
+            evidence_id: "rcp_002",
             verification: "checkpoint-finalised",
           },
         ],
@@ -156,6 +164,7 @@ test("agent list renders for both mobile and desktop shells", () => {
 
 test("agent list items include spend summary from receipts", () => {
   const mockPage: AgentPage = {
+    next_cursor: "",
     agents: [
       {
         agent_id: "agt_001",
@@ -164,7 +173,10 @@ test("agent list items include spend summary from receipts", () => {
         state: "active",
         state_copy_key: "agent.state.active",
         created_at: "2026-08-01T10:00:00Z",
+        updated_at: "2026-08-15T00:00:00Z",
         spend: {
+          period_start: "2026-08-01T00:00:00Z",
+          period_end: "2026-08-31T23:59:59Z",
           spent: { amount: 25000n, currency: CURRENCY },
           remaining: { amount: 75000n, currency: CURRENCY },
           verification: "receipt-verified",
@@ -178,7 +190,7 @@ test("agent list items include spend summary from receipts", () => {
         evidence: [
           {
             class: "layerx-receipt",
-            reference: "rcp_state_001",
+            evidence_id: "rcp_state_001",
             verification: "receipt-verified",
           },
         ],
@@ -188,9 +200,9 @@ test("agent list items include spend summary from receipts", () => {
 
   const items = agentListItems(mockPage, LOCALE);
   assert.equal(items.length, 1);
-  assert.equal(items[0].name, "Purchase Bot");
-  assert.match(items[0].spendSummary, /25,000/u);
-  assert.match(items[0].spendSummary, /100,000/u);
+  assert.equal(items[0]!.name, "Purchase Bot");
+  assert.match(items[0]!.spendSummary, /25,000/u);
+  assert.match(items[0]!.spendSummary, /100,000/u);
 });
 
 test("agent detail shows spend versus limit computed from verified receipts", () => {
@@ -201,7 +213,10 @@ test("agent detail shows spend versus limit computed from verified receipts", ()
     state: "active",
     state_copy_key: "agent.state.active",
     created_at: "2026-08-01T12:00:00Z",
+    updated_at: "2026-08-15T00:00:00Z",
     spend: {
+      period_start: "2026-08-01T00:00:00Z",
+      period_end: "2026-08-31T23:59:59Z",
       spent: { amount: 30000n, currency: CURRENCY },
       remaining: { amount: 70000n, currency: CURRENCY },
       verification: "checkpoint-finalised",
@@ -214,7 +229,7 @@ test("agent detail shows spend versus limit computed from verified receipts", ()
     evidence: [
       {
         class: "checkpoint-proof",
-        reference: "ckp_001",
+        evidence_id: "ckp_001",
         verification: "checkpoint-finalised",
       },
     ],
@@ -237,7 +252,10 @@ test("agent controls surface when agent is active and receipt-verified", () => {
     state: "active",
     state_copy_key: "agent.state.active",
     created_at: "2026-08-01T14:00:00Z",
+    updated_at: "2026-08-15T00:00:00Z",
     spend: {
+      period_start: "2026-08-01T00:00:00Z",
+      period_end: "2026-08-31T23:59:59Z",
       spent: { amount: 0n, currency: CURRENCY },
       remaining: { amount: 50000n, currency: CURRENCY },
       verification: "receipt-verified",
@@ -250,7 +268,7 @@ test("agent controls surface when agent is active and receipt-verified", () => {
     evidence: [
       {
         class: "layerx-receipt",
-        reference: "rcp_003",
+        evidence_id: "rcp_003",
         verification: "receipt-verified",
       },
     ],
@@ -302,7 +320,10 @@ test("pause is reversible and resume replaces it", () => {
     state: "paused",
     state_copy_key: "agent.state.paused",
     created_at: "2026-08-01T15:00:00Z",
+    updated_at: "2026-08-15T00:00:00Z",
     spend: {
+      period_start: "2026-08-01T00:00:00Z",
+      period_end: "2026-08-31T23:59:59Z",
       spent: { amount: 10000n, currency: CURRENCY },
       remaining: { amount: 40000n, currency: CURRENCY },
       verification: "receipt-verified",
@@ -315,7 +336,7 @@ test("pause is reversible and resume replaces it", () => {
     evidence: [
       {
         class: "layerx-receipt",
-        reference: "rcp_004",
+        evidence_id: "rcp_004",
         verification: "receipt-verified",
       },
     ],
@@ -338,7 +359,10 @@ test("archive requires disposition first and typed confirmation", () => {
     state: "active",
     state_copy_key: "agent.state.active",
     created_at: "2026-08-01T16:00:00Z",
+    updated_at: "2026-08-15T00:00:00Z",
     spend: {
+      period_start: "2026-08-01T00:00:00Z",
+      period_end: "2026-08-31T23:59:59Z",
       spent: { amount: 5000n, currency: CURRENCY },
       remaining: { amount: 45000n, currency: CURRENCY },
       verification: "receipt-verified",
@@ -351,7 +375,7 @@ test("archive requires disposition first and typed confirmation", () => {
     evidence: [
       {
         class: "layerx-receipt",
-        reference: "rcp_005",
+        evidence_id: "rcp_005",
         verification: "receipt-verified",
       },
     ],
@@ -375,7 +399,7 @@ test("rotation and recovery present challenge delay in plain time", () => {
     evidence: [
       {
         class: "layerx-receipt",
-        reference: "rcp_rotation_006",
+        evidence_id: "rcp_rotation_006",
         verification: "receipt-verified",
       },
     ],
@@ -414,7 +438,10 @@ test("agent state verified requires receipt-backed evidence", () => {
     state: "active",
     state_copy_key: "agent.state.active",
     created_at: "2026-08-01T17:00:00Z",
+    updated_at: "2026-08-15T00:00:00Z",
     spend: {
+      period_start: "2026-08-01T00:00:00Z",
+      period_end: "2026-08-31T23:59:59Z",
       spent: { amount: 0n, currency: CURRENCY },
       remaining: { amount: 50000n, currency: CURRENCY },
       verification: "receipt-verified",
@@ -427,7 +454,7 @@ test("agent state verified requires receipt-backed evidence", () => {
     evidence: [
       {
         class: "layerx-receipt",
-        reference: "rcp_007",
+        evidence_id: "rcp_007",
         verification: "receipt-verified",
       },
     ],
@@ -440,7 +467,7 @@ test("agent state verified requires receipt-backed evidence", () => {
     evidence: [
       {
         class: "layerx-receipt",
-        reference: "rcp_008",
+        evidence_id: "rcp_008",
         verification: "unverified",
       },
     ],
@@ -457,7 +484,10 @@ test("agent presentation suppresses unverified active state", () => {
     state: "active",
     state_copy_key: "agent.state.active",
     created_at: "2026-08-01T18:00:00Z",
+    updated_at: "2026-08-15T00:00:00Z",
     spend: {
+      period_start: "2026-08-01T00:00:00Z",
+      period_end: "2026-08-31T23:59:59Z",
       spent: { amount: 0n, currency: CURRENCY },
       remaining: { amount: 50000n, currency: CURRENCY },
       verification: "unverified",
@@ -484,7 +514,10 @@ test("archived agents are read-only with explicit notice", () => {
     state: "archived",
     state_copy_key: "agent.state.archived",
     created_at: "2026-08-01T19:00:00Z",
+    updated_at: "2026-08-15T00:00:00Z",
     spend: {
+      period_start: "2026-08-01T00:00:00Z",
+      period_end: "2026-08-31T23:59:59Z",
       spent: { amount: 20000n, currency: CURRENCY },
       remaining: { amount: 0n, currency: CURRENCY },
       verification: "receipt-verified",
@@ -497,7 +530,7 @@ test("archived agents are read-only with explicit notice", () => {
     evidence: [
       {
         class: "layerx-receipt",
-        reference: "rcp_009",
+        evidence_id: "rcp_009",
         verification: "receipt-verified",
       },
     ],
@@ -517,7 +550,10 @@ test("limit enforcement labelling distinguishes protocol from app restriction", 
     state: "active",
     state_copy_key: "agent.state.active",
     created_at: "2026-08-01T20:00:00Z",
+    updated_at: "2026-08-15T00:00:00Z",
     spend: {
+      period_start: "2026-08-01T00:00:00Z",
+      period_end: "2026-08-31T23:59:59Z",
       spent: { amount: 10000n, currency: CURRENCY },
       remaining: { amount: 40000n, currency: CURRENCY },
       verification: "receipt-verified",
@@ -530,7 +566,7 @@ test("limit enforcement labelling distinguishes protocol from app restriction", 
     evidence: [
       {
         class: "layerx-receipt",
-        reference: "rcp_010",
+        evidence_id: "rcp_010",
         verification: "receipt-verified",
       },
     ],
@@ -571,7 +607,11 @@ test("agents class supports idempotent mutations with automatic key management",
 test("reclaim journey completion returns money from agent to human", async () => {
   const mockJourney: Journey = {
     journey_id: "jrn_reclaim_001",
-    kind: "agent-reclaim",
+    kind: "move",
+    state_copy_key: "status.processing",
+    evidence: [],
+    started_at: "2026-08-01T00:00:00Z",
+    updated_at: "2026-08-01T00:00:00Z",
     state: "done",
     stages: [
       {
@@ -581,7 +621,7 @@ test("reclaim journey completion returns money from agent to human", async () =>
         evidence: [
           {
             class: "layerx-receipt",
-            reference: "rcp_reclaim_001",
+            evidence_id: "rcp_reclaim_001",
             verification: "receipt-verified",
           },
         ],
@@ -591,5 +631,5 @@ test("reclaim journey completion returns money from agent to human", async () =>
 
   const progress = journeyProgress(mockJourney);
   assert.equal(progress.complete, true);
-  assert.equal(progress.kind, "agent-reclaim");
+  assert.equal(progress.kind, "move");
 });

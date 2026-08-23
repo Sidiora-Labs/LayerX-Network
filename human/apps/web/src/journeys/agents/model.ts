@@ -19,6 +19,14 @@ import {
 } from "../../api/index.ts";
 import { type ConfirmationKind, type StatusKey } from "../../kit/model.ts";
 
+export type {
+  Agent,
+  AgentPage,
+  Journey,
+  KeyChallenge,
+  Money,
+} from "../../api/index.ts";
+
 export type AgentsShell = "mobile" | "desktop";
 export type AgentsLayout = "stacked" | "master-detail";
 

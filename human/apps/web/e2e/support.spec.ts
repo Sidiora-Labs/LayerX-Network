@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-import { copyEntry } from "../src/copy/catalog.ts";
+import { copyEntry } from "../copy/catalog.ts";
 import { SUPPORT_TOPICS } from "../src/support/topics.ts";
 
 test.describe("@support support chat states and flows", () => {
