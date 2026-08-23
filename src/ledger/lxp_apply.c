@@ -58,6 +58,20 @@ lxp_result lxp_ledger_bootstrap_balance(lx_account *account,
     return LXP_OK;
 }
 
+lxp_result lxp_ledger_restore_account_snapshot(lx_account *account,
+                                               lxp_u128 balance,
+                                               const uint8_t asset_id[32],
+                                               bool has_asset,
+                                               uint64_t next_sequence)
+{
+    if (account == NULL || asset_id == NULL) return LXP_ERR_NON_CANONICAL;
+    account->balance = balance;
+    (void)memcpy(account->asset_id, asset_id, 32U);
+    account->has_asset = has_asset;
+    account->next_sequence = next_sequence;
+    return LXP_OK;
+}
+
 lxp_result lxp_state_balance_get(const lx_account *account,
                                  const uint8_t asset_id[32],
                                  lxp_u128 *balance)
@@ -160,13 +174,11 @@ lxp_result lxp_balance_restore_snapshot(lxp_ledger_journal *journal)
     size_t i;
     if (journal == NULL || !journal->open) return LXP_ERR_NON_CANONICAL;
     for (i = 0U; i < journal->count; ++i) {
-        journal->entries[i].account->balance =
-            journal->entries[i].balance_before;
-        (void)memcpy(journal->entries[i].account->asset_id,
-                     journal->entries[i].asset_id, 32U);
-        journal->entries[i].account->has_asset = journal->entries[i].has_asset;
-        journal->entries[i].account->next_sequence =
-            journal->entries[i].next_sequence;
+        lxp_result status = lxp_ledger_restore_account_snapshot(
+            journal->entries[i].account, journal->entries[i].balance_before,
+            journal->entries[i].asset_id, journal->entries[i].has_asset,
+            journal->entries[i].next_sequence);
+        if (status != LXP_OK) return status;
     }
     journal->open = false;
     return LXP_OK;

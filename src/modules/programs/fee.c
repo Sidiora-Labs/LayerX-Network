@@ -101,14 +101,12 @@ static void rollback_fee(lxp_kernel *kernel, void *transaction)
     programs_fee_token *token = (programs_fee_token *)transaction;
     (void)kernel;
     if (token == NULL) return;
-    token->actor->balance = token->actor_balance;
-    token->treasury->balance = token->treasury_balance;
-    (void)memcpy(token->actor->asset_id, token->actor_asset, 32U);
-    (void)memcpy(token->treasury->asset_id, token->treasury_asset, 32U);
-    token->actor->next_sequence = token->actor_sequence;
-    token->treasury->next_sequence = token->treasury_sequence;
-    token->actor->has_asset = token->actor_has_asset;
-    token->treasury->has_asset = token->treasury_has_asset;
+    (void)lxp_ledger_restore_account_snapshot(
+        token->actor, token->actor_balance, token->actor_asset,
+        token->actor_has_asset, token->actor_sequence);
+    (void)lxp_ledger_restore_account_snapshot(
+        token->treasury, token->treasury_balance, token->treasury_asset,
+        token->treasury_has_asset, token->treasury_sequence);
     free(token);
 }
 

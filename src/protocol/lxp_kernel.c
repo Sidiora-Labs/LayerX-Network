@@ -39,6 +39,16 @@ lxp_result lxp_kernel_set_supply_checker(lxp_kernel *kernel,
     return LXP_OK;
 }
 
+static void close_failed_fee_transaction(lxp_kernel *kernel,
+                                         void *fee_transaction,
+                                         lxp_result status)
+{
+    if (lxp_result_is_fatal(status))
+        kernel->fee_transaction.commit(kernel, fee_transaction);
+    else
+        kernel->fee_transaction.rollback(kernel, fee_transaction);
+}
+
 lxp_result lxp_kernel_bind_module_runtime(lxp_kernel *kernel,
                                           uint16_t module_id,
                                           void *runtime)
@@ -657,7 +667,7 @@ lxp_result lxp_kernel_execute_activity(lxp_kernel *kernel,
     if (status != LXP_OK) {
         if (module_ctx_initialized) lxp_module_ctx_rollback(&module_ctx);
         if (fee_transaction_open)
-            kernel->fee_transaction.rollback(kernel, fee_transaction);
+            close_failed_fee_transaction(kernel, fee_transaction, status);
         (void)lxp_state_journal_rollback(kernel->journal);
         return status;
     }
@@ -666,7 +676,7 @@ lxp_result lxp_kernel_execute_activity(lxp_kernel *kernel,
     if (status != LXP_OK) {
         lxp_module_ctx_rollback(&module_ctx);
         if (fee_transaction_open)
-            kernel->fee_transaction.rollback(kernel, fee_transaction);
+            close_failed_fee_transaction(kernel, fee_transaction, status);
         (void)lxp_state_journal_rollback(kernel->journal);
         return status;
     }
@@ -728,7 +738,7 @@ lxp_result lxp_kernel_execute_activity(lxp_kernel *kernel,
         if (identity_sequence_consumed)
             identity->next_sequence = identity_sequence_before;
         if (fee_transaction_open)
-            kernel->fee_transaction.rollback(kernel, fee_transaction);
+            close_failed_fee_transaction(kernel, fee_transaction, status);
         if (kernel->journal->open)
             (void)lxp_state_journal_rollback(kernel->journal);
         return status;

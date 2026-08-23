@@ -13,7 +13,14 @@ int main(void)
         { 0U, 4U },
         10001U
     };
-    lxp_fee_meter meter = { 5U, 6U, 7U };
+    lxp_fee_meter meter = {
+        .canonical_encoded_bytes = 5U,
+        .execution_units = 6U,
+        .storage_units = 7U,
+        .exact_program_fee_present = false,
+        .program_fee_schedule_version = 0U,
+        .exact_program_fee_units = {0U, 0U}
+    };
     lxp_u128 fee;
     lxp_u128 unchanged = { 7U, 9U };
     if (lxp_fee_compute(&parameters, 2U, meter, &fee) != LXP_OK ||

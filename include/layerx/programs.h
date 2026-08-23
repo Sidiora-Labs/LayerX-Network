@@ -90,7 +90,7 @@ lxp_result layerx_programs_call_begin(
     uint64_t output_values, uint64_t output_bytes,
     uint64_t table_elements);
 
-/* Returns one CALL-activity-owned byte (0..255) or a negative lxp_result.
+/* Returns one CALL-activity-owned byte (0 through 255) or a negative lxp_result.
  * The token only has meaning while its dispatch arena remains active. */
 lxp_result layerx_programs_call_activity_byte(uint64_t token, uint16_t section,
                                               uint32_t offset);

@@ -86,7 +86,12 @@ int main(void)
 
     for (i = 0U; i < 1000U; ++i) {
         lxp_fee_meter meter = {
-            100U + i, 200U + i * 2U, 50U + i * 3U
+            .canonical_encoded_bytes = 100U + i,
+            .execution_units = 200U + i * 2U,
+            .storage_units = 50U + i * 3U,
+            .exact_program_fee_present = false,
+            .program_fee_schedule_version = 0U,
+            .exact_program_fee_units = {0U, 0U}
         };
         lxp_u128 fee;
         lxp_u128 updated;

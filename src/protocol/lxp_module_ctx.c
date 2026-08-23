@@ -340,10 +340,9 @@ static void restore_transfer_snapshots(lxp_module_ctx *ctx)
     size_t i;
     for (i = 0U; i < ctx->transfer_snapshot_count; ++i) {
         lxp_module_account_snapshot *snapshot = &ctx->transfer_snapshots[i];
-        snapshot->account->balance = snapshot->balance;
-        (void)memcpy(snapshot->account->asset_id, snapshot->asset_id, 32U);
-        snapshot->account->has_asset = snapshot->has_asset;
-        snapshot->account->next_sequence = snapshot->next_sequence;
+        (void)lxp_ledger_restore_account_snapshot(
+            snapshot->account, snapshot->balance, snapshot->asset_id,
+            snapshot->has_asset, snapshot->next_sequence);
     }
     ctx->transfer_snapshot_count = 0U;
     ctx->transfer_applied = false;
