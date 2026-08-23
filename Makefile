@@ -1620,16 +1620,18 @@ human-build:
 	$(HUMAN_NPM) ci
 	$(HUMAN_NPM) run build
 
-human-test:
-	$(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked --workspace
+human-test: $(BUILD_DIR)/tests/explorer_fixture
+	LAYERX_EXPLORER_CORE_FIXTURE=$(abspath $(BUILD_DIR)/tests/explorer_fixture) \
+		$(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked --workspace
 	$(HUMAN_NPM) ci
 	$(HUMAN_NPM) test
 
 human-test-unit:
 	$(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked --workspace --lib
 
-human-test-integration:
-	$(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked --workspace --tests
+human-test-integration: $(BUILD_DIR)/tests/explorer_fixture
+	LAYERX_EXPLORER_CORE_FIXTURE=$(abspath $(BUILD_DIR)/tests/explorer_fixture) \
+		$(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked --workspace --tests
 
 human-test-intents:
 	$(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-intents
