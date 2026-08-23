@@ -131,3 +131,4 @@ pub use crypto::{
     SECP256K1_COMPRESSED_PUBLIC_KEY_BYTES, SECP256K1_SIGNATURE_BYTES,
     SECP256K1_UNCOMPRESSED_PUBLIC_KEY_BYTES,
 };
+pub use crypto::bigint::{WideIntegerOp, WideIntegerRefusal, WideIntegerRefusalReason};

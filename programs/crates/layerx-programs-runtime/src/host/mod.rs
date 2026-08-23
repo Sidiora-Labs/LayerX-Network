@@ -14,6 +14,7 @@ use wasmi::{Caller, Engine, Linker};
 use crate::abi::response::{CallResponse, ResponseRefusal, ResponseRegion};
 use crate::abi::{Abi, AbiError, ReceiptView, ABI_MODULE};
 use crate::calls::{CallGraph, Composition, CompositionRefusal};
+use crate::crypto::bigint;
 use crate::execute::ExecutionFault;
 use crate::fault::{ProgramFailure, RefusalClass, RefusalReason};
 use crate::meter::Meter;
@@ -287,6 +288,7 @@ pub(crate) fn linker(
     calls::register(&mut linker)?;
     crypto::register(&mut linker)?;
     signature::register(&mut linker)?;
+    bigint::register(&mut linker)?;
     if revision == AbiRevision::CandidateV2 {
         calls::register_candidate(&mut linker)?;
         scan::register_candidate(&mut linker)?;

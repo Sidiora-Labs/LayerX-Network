@@ -3088,7 +3088,7 @@ reqs = ["38.5"]
 
 [task.31.5]
 title = "Add wide-integer and modular-exponentiation primitives"
-status = "in_progress"
+status = "done"
 wave = 17
 requires = ["28.1"]
 do_1 = "Add wide-integer host functions covering 256-bit multiplication, division, remainder and modular exponentiation, operating on big-endian byte operands."

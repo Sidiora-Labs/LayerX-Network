@@ -117,3 +117,19 @@ symbol = "explorerOrigin"
 observed = "The explorer client requires LAYERX_EXPLORER_API_ORIGIN environment variable to be configured. Without this variable the explorer pages return ExplorerUnavailable. This configuration is intentionally required and not defaulted."
 assumption = "Human qualification will ensure LAYERX_EXPLORER_API_ORIGIN is set to a valid explorer service origin in all deployment environments where the explorer plane should function."
 severity = "note"
+
+[observation.31.5.1]
+task = "31.5"
+file = "programs/crates/layerx-programs-runtime/src/crypto/bigint.rs"
+symbol = "bigint_mul_256"
+observed = "Task 31.5 requires wide-integer primitives to be deterministic and integer-only with no floating-point. The multiplication implementation uses a manual byte-level algorithm, while division, remainder, and modular exponentiation delegate to the num-bigint crate. The num-bigint crate is documented as deterministic, but cross-platform byte-identical results across every operating system and architecture require verification."
+assumption = "Human qualification will execute the golden vectors on every supported target (x86_64, ARM64, different OS) and confirm byte-identical outputs. If determinism cannot be proven, the division/remainder/modexp operations will require manual bounded-allocation implementations matching the multiplication approach."
+severity = "assumption"
+
+[observation.31.5.2]
+task = "31.5"
+file = "programs/crates/layerx-programs-runtime/src/crypto/bigint.rs"
+symbol = "charge_bigint_operation"
+observed = "Task 31.5 requires metering by operand width and exponent bit length. The implementation charges linear cost for multiplication, quadratic for division/remainder, and exponent-bit-dependent cost for modular exponentiation. The actual computational cost of modular exponentiation depends on the modular reduction algorithm used by num-bigint, which may not match the linear charge model."
+assumption = "Human qualification will profile actual execution costs across representative inputs and adjust the metering formula if the charge significantly underprices or overprices actual work. The freeze behind golden vectors ensures any metering adjustment does not change operation semantics."
+severity = "assumption"

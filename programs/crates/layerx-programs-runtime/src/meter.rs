@@ -576,6 +576,18 @@ impl Meter {
         Ok(())
     }
 
+    /// Charges CPU fuel for computational operations like wide-integer arithmetic.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed refusal when the cumulative CPU budget is exceeded.
+    pub fn charge_cpu(&mut self, fuel: u64) -> Result<(), MeterRefusal> {
+        let attempted = self.counter_add(ResourceKind::Cpu, self.cpu_fuel, fuel)?;
+        self.admit(ResourceKind::Cpu, self.budget.cpu_fuel, attempted)?;
+        self.cpu_fuel = attempted;
+        Ok(())
+    }
+
     pub(crate) fn record_cpu(&mut self, consumed: u64) {
         match self.cpu_carried.checked_add(consumed) {
             Some(total) => self.cpu_fuel = total,

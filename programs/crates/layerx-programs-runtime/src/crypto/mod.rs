@@ -1,5 +1,6 @@
-//! Deterministic cryptographic primitives for guest programs.
+//! Deterministic cryptographic and wide-integer primitives.
 
+pub mod bigint;
 pub mod hash;
 pub mod signature;
 
