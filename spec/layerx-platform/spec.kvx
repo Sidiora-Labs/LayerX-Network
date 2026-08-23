@@ -2515,7 +2515,7 @@ status = "pending"
 
 [task.25.1]
 title = "Build the mirror publisher"
-status = "pending"
+status = "done"
 wave = 12
 requires = ["10.1"]
 do_1 = "Build the mirror publisher anchoring batch commitments to Ethereum and Solana with batch data retrievable per mirror, fed exclusively through the node boundary."

@@ -245,3 +245,19 @@ symbol = "bounded_alloc::BoundingAllocator"
 observed = "do_1 requires unbounded allocation during fuzzing to be a build-breaking defect. The fuzz binary installs a global allocator that aborts the process when the live heap would exceed a declared 256 MiB ceiling. The ceiling is chosen well above the runtime's metered module memory bound, but it was selected by reasoning rather than by measuring peak lawful heap use of every committed corpus seed and its mutations."
 assumption = "Human qualification will confirm, on every supported target, that lawful validation/instantiation/execution of the committed corpora stays under the declared ceiling so the ceiling only ever fires on a genuine unbounded-allocation defect."
 severity = "assumption"
+
+[observation.25.1.1]
+task = "25.1"
+file = "interop/crates/layerx-mirror/src/publisher.rs"
+symbol = "layerx_mirror::Publisher"
+observed = "The mirror publisher (Archive, Archive::from_node, Publisher, the EthereumArchiveClient/SolanaArchiveClient boundaries, MirrorState, MirrorFreshness, RetrievalReport and MirrorDegradation) was already present on main from commits a782a8f and f21ed9b. Task 25.1 added interop/crates/layerx-mirror/tests/publish.rs: an integration suite that builds real archives through the node boundary (VerifiedRead<BatchValue> plus a fully verified AvailabilityResult with genuine availability chunks, Merkle proofs and record roots) and drives publication and retrieval against in-memory Ethereum and Solana test networks. It covers dual-chain confirmation and retrieval, pure-archive write shape (no vault/portal/custody fields), a stalled mirror reporting honest lag while the other confirms, idempotent re-publication, below-finality pending, reorg with cursor retreat, rejected transactions, typed chain unavailability that never blocks the other mirror, confirmation gated on intact retrieval, retrieval of missing/tampered/unavailable mirrors, checkpoint freshness states, and invalid-configuration rejection."
+assumption = "Human qualification will run make interop-test-mirrors (which the implementation phase does not run) against the Ethereum and Solana test networks and confirm the suite compiles and passes, and will confirm the in-memory chain networks used as the EthereumArchiveClient/SolanaArchiveClient boundary faithfully model the append/observe/retrieve semantics of the real signer/RPC implementations."
+severity = "note"
+
+[observation.25.1.2]
+task = "25.1"
+file = "interop/crates/layerx-mirror/tests/publish.rs"
+symbol = "freshness_states_checkpoint_lag_honestly"
+observed = "Checkpoint freshness is exercised for the NodeHasNoCheckpoint and NotYetMirrored states using real checkpoint-free archives, which honestly cover the checkpoint-lag reporting required by do_3. The positive checkpoint-mirrored states (CheckpointFreshness::Current and Behind) require an archive carrying verified checkpoint material, which means constructing both a canonical wire layerx_wire::receipt::CheckpointCertificate (whose fields are private, so it can only be produced via decode_checkpoint of hand-encoded canonical bytes) and a real layerx_proof::checkpoint::ThresholdReport from verify_certificate with k256-signed attestations. That fixture was not added in this task."
+assumption = "Human qualification will add a checkpoint-bearing archive fixture (canonical wire CheckpointCertificate bytes plus a verified ThresholdReport) to cover the CheckpointFreshness::Current and Behind states and the Archive::from_node checkpoint verification path end to end."
+severity = "note"
