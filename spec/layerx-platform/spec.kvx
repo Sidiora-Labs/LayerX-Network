@@ -1621,7 +1621,7 @@ reqs = ["13.1","13.3","19.4"]
 
 [task.12.6]
 title = "Build the activity surfaces"
-status = "pending"
+status = "done"
 wave = 7
 requires = ["11.3","10.3"]
 do_1 = "Build the feed in both shells: the mobile stacked rows with month bands and subtotals, the desktop sortable table, with the deferred-apply filters echoed in content."
