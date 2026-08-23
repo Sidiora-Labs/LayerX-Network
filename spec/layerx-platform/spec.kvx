@@ -1874,7 +1874,7 @@ reqs = ["24.1","24.3","24.4"]
 
 [task.15.4]
 title = "Build the JVM SDK for Java and Kotlin"
-status = "pending"
+status = "in_progress"
 wave = 9
 requires = ["15.1"]
 do_1 = "Generate the JVM SDK from the same schemas with a Java-first API and Kotlin-friendly overloads, published as one Maven artifact."
