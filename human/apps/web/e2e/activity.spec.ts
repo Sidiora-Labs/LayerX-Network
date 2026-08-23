@@ -39,7 +39,7 @@ import {
   type FeedFilterValues,
 } from "../src/journeys/activity/model.ts";
 
-const mockActivityPage: ActivityPage = Object.freeze({
+const mockActivityPage: ActivityPage = {
   groups: [
     {
       month: "2026-08",
@@ -88,9 +88,9 @@ const mockActivityPage: ActivityPage = Object.freeze({
   ],
   next_cursor: "cursor_next_page",
   filter: {},
-});
+};
 
-const mockActivityDetail: ActivityEntryDetail = Object.freeze({
+const mockActivityDetail: ActivityEntryDetail = {
   entry_id: "ent_deposit_001",
   kind: "deposit",
   state: "done",
@@ -127,39 +127,37 @@ const mockActivityDetail: ActivityEntryDetail = Object.freeze({
       ],
     },
   ],
-});
+};
 
-const mockUnresolvedDetail: ActivityEntryDetail = Object.freeze({
+const mockUnresolvedDetail: ActivityEntryDetail = {
   entry_id: "ent_still_checking_001",
   kind: "withdrawal",
   state: "still-checking",
   summary_copy_key: "activity.withdrawal.progress",
   state_copy_key: "status.still_checking",
   occurred_at: "2026-08-20T16:45:00Z",
-  money: undefined,
-  direction: undefined,
   evidence: [],
   stages: [],
-});
+};
 
 test("feedGroups transforms ActivityPage groups into FeedGroupView", () => {
   const groups = feedGroups(mockActivityPage);
   assert.equal(groups.length, 2);
-  assert.equal(groups[0].id, "2026-08");
-  assert.equal(groups[0].label, "August 2026");
-  assert.equal(groups[0].items.length, 2);
-  assert.equal(groups[0].items[0].id, "ent_deposit_001");
-  assert.equal(groups[0].items[0].title, kindLabel("deposit"));
-  assert.equal(groups[0].items[0].currency, "USD");
-  assert.equal(groups[1].id, "2026-07");
-  assert.equal(groups[1].label, "July 2026");
-  assert.equal(groups[1].items.length, 1);
+  assert.equal(groups[0]!.id, "2026-08");
+  assert.equal(groups[0]!.label, "August 2026");
+  assert.equal(groups[0]!.items.length, 2);
+  assert.equal(groups[0]!.items[0]!.id, "ent_deposit_001");
+  assert.equal(groups[0]!.items[0]!.title, kindLabel("deposit"));
+  assert.equal(groups[0]!.items[0]!.currency, "USD");
+  assert.equal(groups[1]!.id, "2026-07");
+  assert.equal(groups[1]!.label, "July 2026");
+  assert.equal(groups[1]!.items.length, 1);
 });
 
 test("feedGroups calculates signed amounts with correct direction", () => {
   const groups = feedGroups(mockActivityPage);
-  const depositAmount = signedBaseUnits(mockActivityPage.groups[0].entries[0].money, "in");
-  const withdrawalAmount = signedBaseUnits(mockActivityPage.groups[0].entries[1].money, "out");
+  const depositAmount = signedBaseUnits(mockActivityPage.groups[0]!.entries[0]!.money, "in");
+  const withdrawalAmount = signedBaseUnits(mockActivityPage.groups[0]!.entries[1]!.money, "out");
   assert.equal(depositAmount, 50000);
   assert.equal(withdrawalAmount, -25000);
 });
@@ -199,7 +197,7 @@ test("kindLabel returns localized label for activity entry kinds", () => {
 });
 
 test("plainSentence returns summary copy for activity entries", () => {
-  const entry = mockActivityPage.groups[0].entries[0];
+  const entry = mockActivityPage.groups[0]!.entries[0]!;
   const sentence = plainSentence(entry);
   assert.equal(typeof sentence, "string");
   assert.ok(sentence.length > 0);
@@ -261,7 +259,7 @@ test("toWireFilter handles date range with same from and to", () => {
   const values: FeedFilterValues = {
     kind: "all",
     agent: "all",
-    date: { from: new Date("2026-08-15"), to: undefined },
+    date: { from: new Date("2026-08-15") },
   };
   const wire = toWireFilter(values);
   assert.equal(wire.from, "2026-08-15T00:00:00.000Z");
@@ -283,28 +281,28 @@ test("feedFilterDefs builds filter definition list with options", () => {
   ];
   const defs = feedFilterDefs(agents);
   assert.equal(defs.length, 3);
-  assert.equal(defs[0].id, "kind");
-  assert.equal(defs[0].type, "options");
-  assert.equal(defs[1].id, "agent");
-  assert.equal(defs[1].type, "options");
-  assert.equal(defs[2].id, "date");
-  assert.equal(defs[2].type, "date-range");
-  assert.ok(defs[1].options !== undefined);
-  assert.equal(defs[1].options.length, 3);
+  assert.equal(defs[0]!.id, "kind");
+  assert.equal(defs[0]!.type, "options");
+  assert.equal(defs[1]!.id, "agent");
+  assert.equal(defs[1]!.type, "options");
+  assert.equal(defs[2]!.id, "date");
+  assert.equal(defs[2]!.type, "date-range");
+  assert.ok(defs[1]!.options !== undefined);
+  assert.equal(defs[1]!.options.length, 3);
 });
 
 test("filterEchoLines generates human-readable filter descriptions", () => {
   const names = new Map([["agent_1", "Agent One"]]);
   const emptyEcho = filterEchoLines({}, names);
   assert.equal(emptyEcho.length, 1);
-  assert.ok(emptyEcho[0].includes("All"));
+  assert.ok(emptyEcho[0]!.includes("All"));
 
   const kindEcho = filterEchoLines({ kinds: ["deposit", "withdrawal"] }, names);
   assert.equal(kindEcho.length, 1);
 
   const agentEcho = filterEchoLines({ agent_id: "agent_1" }, names);
   assert.equal(agentEcho.length, 1);
-  assert.ok(agentEcho[0].includes("Agent One"));
+  assert.ok(agentEcho[0]!.includes("Agent One"));
 
   const rangeEcho = filterEchoLines({ from: "2026-08-01T00:00:00Z", to: "2026-08-31T23:59:59Z" }, names);
   assert.equal(rangeEcho.length, 1);
@@ -318,9 +316,9 @@ test("agentFilterOptions sorts agents by label", () => {
   ];
   const options = agentFilterOptions(agents);
   assert.equal(options.length, 3);
-  assert.equal(options[0].label, "Alpha Agent");
-  assert.equal(options[1].label, "Beta Agent");
-  assert.equal(options[2].label, "Zebra Agent");
+  assert.equal(options[0]!.label, "Alpha Agent");
+  assert.equal(options[1]!.label, "Beta Agent");
+  assert.equal(options[2]!.label, "Zebra Agent");
 });
 
 test("mergePages deduplicates entries and updates cursors", () => {
@@ -330,7 +328,7 @@ test("mergePages deduplicates entries and updates cursors", () => {
         month: "2026-08",
         subtotal_in: { amount: 50000n, currency: "USD" },
         subtotal_out: { amount: 25000n, currency: "USD" },
-        entries: [mockActivityPage.groups[0].entries[0]],
+        entries: [mockActivityPage.groups[0]!.entries[0]!],
       },
     ],
     next_cursor: "cursor_1",
@@ -342,7 +340,7 @@ test("mergePages deduplicates entries and updates cursors", () => {
         month: "2026-08",
         subtotal_in: { amount: 75000n, currency: "USD" },
         subtotal_out: { amount: 25000n, currency: "USD" },
-        entries: [mockActivityPage.groups[0].entries[0], mockActivityPage.groups[0].entries[1]],
+        entries: [mockActivityPage.groups[0]!.entries[0]!, mockActivityPage.groups[0]!.entries[1]!],
       },
     ],
     next_cursor: "cursor_2",
@@ -350,8 +348,8 @@ test("mergePages deduplicates entries and updates cursors", () => {
   };
   const merged = mergePages(current, incoming);
   assert.equal(merged.next_cursor, "cursor_2");
-  assert.equal(merged.groups[0].entries.length, 2);
-  assert.equal(merged.groups[0].subtotal_in.amount, 75000n);
+  assert.equal(merged.groups[0]!.entries.length, 2);
+  assert.equal(merged.groups[0]!.subtotal_in.amount, 75000n);
 });
 
 test("detailUnresolved identifies still-checking entries", () => {
@@ -421,7 +419,7 @@ test("receiptBacked identifies receipt-verified evidence", () => {
 });
 
 test("stageView transforms JourneyStage into TimelineStageView", () => {
-  const stage = mockActivityDetail.stages[1];
+  const stage = mockActivityDetail.stages[1]!;
   const view = stageView(stage);
   assert.equal(view.id, "stage_complete");
   assert.equal(view.status, "done");
@@ -447,7 +445,7 @@ test("explorerPath builds explorer URLs for receipts and checkpoints", () => {
   );
   assert.equal(
     explorerPath({
-      class: "paxeer-batch-proof",
+      class: "paxeer-finality",
       evidence_id: "batch_001",
       verification: "paxeer-finalised",
     }),
@@ -465,7 +463,7 @@ test("verificationLabel returns localized label for verification levels", () => 
 });
 
 test("evidenceClassLabel returns localized label for evidence classes", () => {
-  const classes = ["layerx-receipt", "checkpoint-proof", "paxeer-batch-proof"] as const;
+  const classes = ["layerx-receipt", "checkpoint-proof", "paxeer-finality"] as const;
   for (const evidenceClass of classes) {
     const label = evidenceClassLabel(evidenceClass);
     assert.equal(typeof label, "string");
@@ -524,15 +522,21 @@ test("newExportKey generates valid UUIDs", () => {
 
 test("safeExportArtefact validates export download paths", () => {
   const validArtefact: ExportArtefact = {
+    export_id: "exp_abcdefgh",
     kind: "statement",
     download_path: "/v1/activity/exports/exp_abcdefgh/download",
+    content_type: "application/pdf",
+    created_at: "2026-08-20T10:00:00Z",
     evidence: [],
   };
   assert.equal(safeExportArtefact(validArtefact).download_path, validArtefact.download_path);
 
   const invalidArtefact: ExportArtefact = {
+    export_id: "exp_invalid0",
     kind: "statement",
     download_path: "/invalid/path",
+    content_type: "application/pdf",
+    created_at: "2026-08-20T10:00:00Z",
     evidence: [],
   };
   assert.throws(() => safeExportArtefact(invalidArtefact), /unsafe download path/u);
@@ -540,8 +544,11 @@ test("safeExportArtefact validates export download paths", () => {
 
 test("safeExportArtefact prevents path traversal in download paths", () => {
   const traversalArtefact: ExportArtefact = {
+    export_id: "exp_traversl",
     kind: "statement",
     download_path: "/v1/activity/exports/../../../etc/passwd",
+    content_type: "application/pdf",
+    created_at: "2026-08-20T10:00:00Z",
     evidence: [],
   };
   assert.throws(() => safeExportArtefact(traversalArtefact), /unsafe download path/u);

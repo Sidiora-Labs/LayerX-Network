@@ -444,7 +444,9 @@ export function validatedDetail(detail: ActivityEntryDetail): ActivityEntryDetai
   return detail;
 }
 
-export function agentFilterOptions(agents: readonly Agent[]): readonly FeedFilterOption[] {
+export function agentFilterOptions(
+  agents: readonly Pick<Agent, "agent_id" | "name">[],
+): readonly FeedFilterOption[] {
   return agents
     .map((agent) => ({ value: agent.agent_id, label: agent.name }))
     .sort((left, right) => left.label.localeCompare(right.label, "en-US"));
