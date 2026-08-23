@@ -212,7 +212,7 @@ fn fault_injection_changes_transition_behaviour() -> Result<(), String> {
     assert!(configured.text().contains("\"configured\":true"));
 
     let injected = post_json(&address, "/v1/activities", "{\"activity\":\"00\"}")?;
-    assert_eq!(injected.status, 400);
+    assert_eq!(injected.status, 503, "reject fault surfaces as service unavailable");
     let injected_code = error_code(&injected).ok_or("injected response had no error code")?;
     assert_ne!(
         baseline_code, injected_code,
