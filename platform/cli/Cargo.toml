@@ -18,6 +18,7 @@ layerx-mcp = { path = "../../agent/crates/layerx-mcp" }
 layerx-platform-emulator = { path = "../emulator" }
 layerx-programs-runtime = { path = "../../programs/crates/layerx-programs-runtime" }
 layerx-proof = { path = "../../agent/crates/layerx-proof" }
+layerx-types = { path = "../../agent/crates/layerx-types" }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

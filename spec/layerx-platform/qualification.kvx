@@ -78,6 +78,38 @@ observed = "The production Programs CALL adapter currently returns AbiError::Rec
 assumption = "Task 28.7 remains incomplete until the adapter resolves and verifies canonical receipts from protocol state through an activity-owned scalar callback, or the protocol explicitly removes receipt-read from CALL admission with a typed versioned refusal. An always-mismatch oracle is not treated as implemented host functionality."
 severity = "dependency-boundary"
 
+[observation.28.8.1]
+task = "28.8"
+file = "spec/layerx-platform/spec.kvx"
+symbol = "task.28.8 verify_cmd"
+observed = "The declared verify_cmd is `make programs-test`, but every touched surface lives in a different cargo workspace than programs/: the agent-layer operation is in agent/crates/layerx-types, the CLI and emulator are in platform/, and the explorer surface is in human/crates/layerx-explorer-index. `make programs-test` compiles and runs the programs workspace plus SDK builds only, so it does not build or execute the new intent, CLI, emulator or explorer tests added by this task."
+assumption = "Human qualification will run the per-workspace test suites (agent, platform, human) in addition to `make programs-test`, or a make target will be added that spans the interaction-layer workspaces."
+severity = "note"
+
+[observation.28.8.2]
+task = "28.8"
+file = "platform/cli/src/programs.rs"
+symbol = "programs::call"
+observed = "The hosted `/v1/programs/call` request and response contract, and the canonical program-call *activity envelope* the network compiles from the operation, are owned by core/hosted (28.7 and later plane tasks) and were not present in the tree. The CLI was written to a self-consistent response shape (result.receipt, result.result_code, result.outcome with completed/refused) and re-binds the typed outcome to the returned receipt by its own result code and a SHA-256 content digest; full checkpoint/sequencer verification still routes through `layerx receipt verify`."
+assumption = "When the hosted program-call route lands, its response shape and digest semantics will be reconciled with render_call_result; the canonical-payload the CLI sends is the agent-layer ProgramCall encoding and is the shared anchor for that reconciliation."
+severity = "dependency-boundary"
+
+[observation.28.8.3]
+task = "28.8"
+file = "platform/emulator/src/main.rs"
+symbol = "program_call"
+observed = "The emulator /v1/programs/call route runs the pre-encoded canonical activity bytes through the real transition (platform_emulator_execute), identical to /v1/activities, so a local call and a network call differ only in state. It does not itself compile the structured {program_id, calldata, budget, capabilities} request into canonical activity envelope bytes, because that encoder is owned by core and no reachable Rust encoder for the full signed CALL envelope exists in this tree."
+assumption = "A shared activity encoder (agent-layer or core-exported) will let the emulator accept the structured request directly; until then the emulator consumes the canonical activity bytes produced upstream, which is sufficient for byte-identical transition input and therefore identical receipts."
+severity = "dependency-boundary"
+
+[observation.28.8.4]
+task = "28.8"
+file = "human/crates/layerx-explorer-index/src/programs.rs"
+symbol = "ExplorerProgramCall::from_verified"
+observed = "The explorer program-call projection is gated by a local VerifiedProgramCall carrying a nonzero receipt digest and observed freshness, mirroring the registry-read honesty check, because layerx-programs exposes no VerifiedCallRead equivalent yet. The verified-call evidence (calldata/response digests, declared budget, requested capabilities, typed outcome) must be produced by a receipt-verifying reader that does not exist in this task's scope."
+assumption = "A future task supplies a receipt-verified call-read source (analogous to VerifiedRegistryRead) that constructs VerifiedProgramCall from proof-gated protocol state; the projection and its typed-failure taxonomy are ready to consume it."
+severity = "dependency-boundary"
+
 [observation.workflow.1]
 task = "28.7"
 file = "spec/layerx-platform/spec.kvx"

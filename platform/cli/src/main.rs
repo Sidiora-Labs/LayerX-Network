@@ -227,6 +227,20 @@ enum ProgramCommand {
         #[arg(long)]
         source_uri: Option<String>,
     },
+    /// Submit calldata to a deployed program and render the receipt-verified result.
+    Call {
+        program_id: String,
+        #[arg(long)]
+        calldata: Option<String>,
+        #[arg(long)]
+        fuel: u64,
+        #[arg(long, default_value = "0")]
+        fee_limit: String,
+        #[arg(long = "capability")]
+        capabilities: Vec<String>,
+        #[arg(long)]
+        idempotency_key: String,
+    },
     /// Read the protocol registry or submit source-verification material.
     #[command(subcommand)]
     Registry(RegistryCommand),
@@ -780,6 +794,32 @@ fn program(command: ProgramCommand) -> Result<CommandOutput, String> {
                     upgrade_authority.as_deref(),
                     source_uri.as_deref(),
                     &idempotency_key,
+                )?,
+            ))
+        }
+        ProgramCommand::Call {
+            program_id,
+            calldata,
+            fuel,
+            fee_limit,
+            capabilities,
+            idempotency_key,
+        } => {
+            let configuration = Configuration::load()?;
+            let (environment, client) = active_client(&configuration)?;
+            Ok(CommandOutput::new(
+                "program.call_started",
+                format!("Submitted program call to {environment}"),
+                programs::call(
+                    &client,
+                    &programs::CallRequest {
+                        program_id: &program_id,
+                        calldata: calldata.as_deref().unwrap_or(""),
+                        fuel,
+                        fee_limit: &fee_limit,
+                        capabilities: &capabilities,
+                        idempotency_key: &idempotency_key,
+                    },
                 )?,
             ))
         }

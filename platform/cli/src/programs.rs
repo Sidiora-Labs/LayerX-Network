@@ -3,10 +3,15 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use layerx_programs_runtime::WasmEngine;
+use layerx_types::amount::Amount;
+use layerx_types::intent::{
+    CallBudget, Calldata, CapabilityRequest, ProgramCall, ProgramCallError, ProgramId,
+    RequestedCapabilities, PROGRAM_CALL_CONTRACT_MAJOR,
+};
 use serde_json::{json, Value};
 use sha2::{Digest as _, Sha256};
 
-use crate::encoding::hex_encode;
+use crate::encoding::{fixed_hex, hex_decode, hex_encode};
 use crate::http::{validate_idempotency_key, validate_resource_id, Client};
 
 const DESCRIPTOR: &str = "layerx-program.json";
@@ -200,6 +205,198 @@ pub fn registry_verify_source(
     )
 }
 
+/// One parsed `layerx program call` invocation. A call is a money-adjacent
+/// state change, so an idempotency key is mandatory and the returned receipt is
+/// verified before any typed result is rendered.
+pub struct CallRequest<'a> {
+    pub program_id: &'a str,
+    pub calldata: &'a str,
+    pub fuel: u64,
+    pub fee_limit: &'a str,
+    pub capabilities: &'a [String],
+    pub idempotency_key: &'a str,
+}
+
+/// Submits one program call through the active endpoint and renders the typed
+/// outcome only after re-binding it to the returned canonical receipt.
+///
+/// # Errors
+///
+/// Returns a typed error for an invalid identifier, malformed calldata, an
+/// unbounded budget, an unknown capability, a rejected idempotency key, or a
+/// response whose receipt does not back the typed outcome it reports.
+pub fn call(client: &Client, request: &CallRequest<'_>) -> Result<Value, String> {
+    validate_idempotency_key(request.idempotency_key)?;
+    let operation = build_call(request)?;
+    let payload = operation.canonical_payload();
+    let body = json!({
+        "program_id": request.program_id,
+        "calldata": hex_encode(operation.calldata().as_bytes()),
+        "budget": {
+            "fuel": request.fuel,
+            "fee_limit": request.fee_limit,
+        },
+        "capabilities": capability_names(operation.capabilities()),
+        "canonical_payload": hex_encode(&payload),
+        "contract_major": PROGRAM_CALL_CONTRACT_MAJOR,
+    });
+    let response = client.post("/v1/programs/call", &body, Some(request.idempotency_key))?;
+    render_call_result(request, &payload, &response)
+}
+
+fn build_call(request: &CallRequest<'_>) -> Result<ProgramCall, String> {
+    let program = ProgramId::new(fixed_hex::<32>("program id", request.program_id)?);
+    let calldata_bytes = if request.calldata.is_empty() {
+        Vec::new()
+    } else {
+        hex_decode("calldata", request.calldata)?
+    };
+    let calldata = Calldata::new(&calldata_bytes).map_err(describe_call_error)?;
+    let fee = request
+        .fee_limit
+        .parse::<u128>()
+        .map_err(|_| "fee limit must be an unsigned protocol integer".to_string())?;
+    let budget =
+        CallBudget::new(request.fuel, Amount::from_u128(fee)).map_err(describe_call_error)?;
+    let mut requested = Vec::with_capacity(request.capabilities.len());
+    for name in request.capabilities {
+        requested.push(parse_capability(name)?);
+    }
+    let capabilities = RequestedCapabilities::new(&requested).map_err(describe_call_error)?;
+    Ok(ProgramCall::new(program, calldata, budget, capabilities))
+}
+
+fn parse_capability(name: &str) -> Result<CapabilityRequest, String> {
+    match name {
+        "storage-read" => Ok(CapabilityRequest::StorageRead),
+        "storage-write" => Ok(CapabilityRequest::StorageWrite),
+        "transfer" => Ok(CapabilityRequest::Transfer),
+        "emit-event" => Ok(CapabilityRequest::EmitEvent),
+        "compose" => Ok(CapabilityRequest::Compose),
+        other => Err(format!(
+            "unknown capability {other}; expected one of storage-read, storage-write, transfer, emit-event, compose"
+        )),
+    }
+}
+
+fn capability_names(capabilities: &RequestedCapabilities) -> Vec<&'static str> {
+    capabilities
+        .as_slice()
+        .iter()
+        .map(|capability| match capability {
+            CapabilityRequest::StorageRead => "storage-read",
+            CapabilityRequest::StorageWrite => "storage-write",
+            CapabilityRequest::Transfer => "transfer",
+            CapabilityRequest::EmitEvent => "emit-event",
+            CapabilityRequest::Compose => "compose",
+        })
+        .collect()
+}
+
+const fn describe_call_error(error: ProgramCallError) -> &'static str {
+    match error {
+        ProgramCallError::ZeroFuel => "declared call fuel must be greater than zero",
+        ProgramCallError::UnknownCapability(_) => "a requested capability is outside the closed set",
+        ProgramCallError::DuplicateCapability(_) => "a capability was requested more than once",
+        ProgramCallError::CalldataLength(_) => "calldata exceeds the protocol maximum",
+        ProgramCallError::ResponseLength(_) => "the response exceeds the protocol maximum",
+        ProgramCallError::NegativeResponseCode(_) => "a successful response cannot carry a negative code",
+    }
+}
+
+/// Re-binds the typed outcome to the returned receipt. The rendered result is
+/// refused unless the receipt's own result code agrees with the typed outcome,
+/// so a call is never reported as completed against a receipt that failed, nor
+/// as refused against a receipt that succeeded.
+fn render_call_result(
+    request: &CallRequest<'_>,
+    payload: &[u8],
+    response: &Value,
+) -> Result<Value, String> {
+    let result = response.get("result").unwrap_or(response);
+    let receipt_hex = result
+        .get("receipt")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "program-call response omitted the canonical receipt".to_string())?;
+    let receipt_bytes = hex_decode("receipt", receipt_hex)?;
+    if receipt_bytes.is_empty() {
+        return Err("program-call response carried an empty receipt".into());
+    }
+    let receipt_digest: [u8; 32] = Sha256::digest(&receipt_bytes).into();
+    let result_code = result
+        .get("result_code")
+        .and_then(Value::as_i64)
+        .ok_or_else(|| "program-call response omitted the receipt result code".to_string())?;
+    let outcome = classify_outcome(result, result_code)?;
+    Ok(json!({
+        "program_id": request.program_id,
+        "idempotency_key": request.idempotency_key,
+        "canonical_payload": hex_encode(payload),
+        "contract_major": PROGRAM_CALL_CONTRACT_MAJOR,
+        "receipt": receipt_hex,
+        "receipt_digest": hex_encode(&receipt_digest),
+        "result_code": result_code,
+        "outcome": outcome,
+        "verification": "the typed outcome was re-bound to the returned receipt; run layerx receipt verify with batch authority for full checkpoint verification",
+    }))
+}
+
+fn classify_outcome(result: &Value, result_code: i64) -> Result<Value, String> {
+    let declared = result.get("outcome");
+    let status = declared
+        .and_then(|outcome| outcome.get("status"))
+        .and_then(Value::as_str);
+    match status {
+        Some("completed") => {
+            if result_code < 0 {
+                return Err(
+                    "response reports a completed call but the receipt carries a failure code"
+                        .into(),
+                );
+            }
+            let code = declared
+                .and_then(|outcome| outcome.get("code"))
+                .and_then(Value::as_i64)
+                .unwrap_or(result_code);
+            if code != result_code {
+                return Err(
+                    "response outcome code disagrees with the receipt result code".into(),
+                );
+            }
+            Ok(json!({
+                "status": "completed",
+                "code": result_code,
+                "response": declared
+                    .and_then(|outcome| outcome.get("response"))
+                    .cloned()
+                    .unwrap_or(Value::Null),
+            }))
+        }
+        Some("refused") => {
+            if result_code >= 0 {
+                return Err(
+                    "response reports a refused call but the receipt carries a success code".into(),
+                );
+            }
+            Ok(json!({
+                "status": "refused",
+                "failure": declared
+                    .and_then(|outcome| outcome.get("failure"))
+                    .cloned()
+                    .unwrap_or(Value::Null),
+            }))
+        }
+        Some(other) => Err(format!("response carried an unknown call outcome status {other}")),
+        None => {
+            if result_code >= 0 {
+                Ok(json!({"status": "completed", "code": result_code, "response": Value::Null}))
+            } else {
+                Ok(json!({"status": "refused", "failure": {"result_code": result_code}}))
+            }
+        }
+    }
+}
+
 fn gate_artifact(path: &Path) -> Result<(String, String), String> {
     let artifact = path
         .canonicalize()
@@ -341,5 +538,133 @@ fn discover_artifact(project: &Path) -> Result<PathBuf, String> {
             directory.display()
         )),
         _ => Err("multiple .wasm artifacts were produced; select one with --artifact".into()),
+    }
+}
+
+#[cfg(test)]
+mod call_tests {
+    use super::{build_call, classify_outcome, render_call_result, CallRequest};
+    use crate::encoding::hex_encode;
+    use layerx_types::amount::Amount;
+    use layerx_types::intent::{
+        CallBudget, Calldata, CapabilityRequest, ProgramCall, ProgramId, RequestedCapabilities,
+    };
+    use serde_json::json;
+
+    /// The shared canonical program-call payload the agent layer, the CLI and
+    /// the emulator all encode for the same call, so the same call yields the
+    /// same receipt on every surface.
+    const GOLDEN_PAYLOAD_HEX: &str = "4c61796572582f70726f6772616d732f63616c6c2f763100111111111111111111111111111111111111111111111111111111111111111100000000000003e8000000000000000000000000000000fa0002010300000002aabb";
+
+    fn golden_request() -> CallRequest<'static> {
+        CallRequest {
+            program_id: "1111111111111111111111111111111111111111111111111111111111111111",
+            calldata: "aabb",
+            fuel: 1000,
+            fee_limit: "250",
+            capabilities: &[],
+            idempotency_key: "call-idem-key-0001",
+        }
+    }
+
+    fn agent_layer_call() -> ProgramCall {
+        let program = ProgramId::new([0x11; 32]);
+        let Ok(calldata) = Calldata::new(&[0xAA, 0xBB]) else {
+            panic!("bounded calldata rejected");
+        };
+        let Ok(budget) = CallBudget::new(1000, Amount::from_u128(250)) else {
+            panic!("non-zero fuel rejected");
+        };
+        let Ok(capabilities) = RequestedCapabilities::new(&[
+            CapabilityRequest::Transfer,
+            CapabilityRequest::StorageRead,
+        ]) else {
+            panic!("unique capabilities rejected");
+        };
+        ProgramCall::new(program, calldata, budget, capabilities)
+    }
+
+    #[test]
+    fn cli_and_agent_layer_encode_the_same_canonical_payload() {
+        let capabilities = ["transfer".to_string(), "storage-read".to_string()];
+        let request = CallRequest {
+            program_id: "1111111111111111111111111111111111111111111111111111111111111111",
+            calldata: "aabb",
+            fuel: 1000,
+            fee_limit: "250",
+            capabilities: &capabilities,
+            idempotency_key: "call-idem-key-0001",
+        };
+        let Ok(built) = build_call(&request) else {
+            panic!("valid call request rejected");
+        };
+        assert_eq!(hex_encode(&built.canonical_payload()), GOLDEN_PAYLOAD_HEX);
+        assert_eq!(
+            built.canonical_payload(),
+            agent_layer_call().canonical_payload()
+        );
+    }
+
+    #[test]
+    fn completed_outcome_is_bound_to_a_successful_receipt() {
+        let result = json!({
+            "result_code": 0,
+            "outcome": {"status": "completed", "code": 0, "response": "aabb"},
+        });
+        let Ok(outcome) = classify_outcome(&result, 0) else {
+            panic!("consistent completed outcome rejected");
+        };
+        assert_eq!(outcome["status"], "completed");
+        assert_eq!(outcome["code"], 0);
+    }
+
+    #[test]
+    fn completed_outcome_against_a_failed_receipt_is_refused() {
+        let result = json!({
+            "result_code": -736,
+            "outcome": {"status": "completed", "code": 0},
+        });
+        assert!(classify_outcome(&result, -736).is_err());
+    }
+
+    #[test]
+    fn refused_outcome_is_bound_to_a_failed_receipt() {
+        let result = json!({
+            "result_code": -736,
+            "outcome": {"status": "refused", "failure": {"class": "guest-refused"}},
+        });
+        let Ok(outcome) = classify_outcome(&result, -736) else {
+            panic!("consistent refused outcome rejected");
+        };
+        assert_eq!(outcome["status"], "refused");
+    }
+
+    #[test]
+    fn render_binds_the_typed_result_to_the_returned_receipt() {
+        let request = golden_request();
+        let payload = agent_layer_call().canonical_payload();
+        let response = json!({
+            "result": {
+                "receipt": "aabbccdd",
+                "result_code": 0,
+                "outcome": {"status": "completed", "code": 0, "response": "aabb"},
+            }
+        });
+        let Ok(rendered) = render_call_result(&request, &payload, &response) else {
+            panic!("valid program-call response rejected");
+        };
+        assert_eq!(rendered["result_code"], 0);
+        assert_eq!(rendered["outcome"]["status"], "completed");
+        assert_eq!(rendered["receipt"], "aabbccdd");
+        assert!(rendered["receipt_digest"].is_string());
+        assert_eq!(rendered["canonical_payload"], hex_encode(&payload));
+    }
+
+    #[test]
+    fn render_refuses_a_response_without_a_receipt() {
+        let request = golden_request();
+        let payload = agent_layer_call().canonical_payload();
+        let response = json!({"result": {"result_code": 0}});
+        assert!(render_call_result(&request, &payload, &response).is_err());
     }
 }

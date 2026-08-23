@@ -344,6 +344,75 @@ fn submit(emulator: &mut Emulator, request: &Request, trace: u64) -> Response {
     success(trace, &format!("{{\"activity_id\":\"{activity_id}\",\"batch_id\":\"{}\",\"global_sequence\":{},\"result_code\":{},\"state_root\":\"{}\",\"receipt\":\"{receipt_hex}\"}}", hex_encode(&receipt.batch_id), receipt.global_sequence, receipt.result_code, hex_encode(&receipt.state_root)))
 }
 
+fn decode_activity(request: &Request) -> Result<Vec<u8>, String> {
+    if request.content_type.starts_with("application/octet-stream") {
+        Ok(request.body.clone())
+    } else {
+        json_string(&request.body, "activity")
+            .ok_or_else(|| "missing activity hex".to_string())
+            .and_then(|value| hex_decode(&value))
+    }
+}
+
+/// Runs one Programs CALL activity through the same real transition function as
+/// every other activity. The emulator holds no mock call path: a call submitted
+/// here and the identical canonical activity submitted to the network execute
+/// the exact same transition, so a local call and a network call differ only in
+/// the state they run against. The receipt is stored and the typed outcome is
+/// derived from the receipt's own result code, never invented beside it.
+fn program_call(emulator: &mut Emulator, request: &Request, trace: u64) -> Response {
+    let activity = match decode_activity(request) {
+        Ok(activity) if !activity.is_empty() => activity,
+        Ok(_) => {
+            return refusal(
+                trace,
+                400,
+                "invalid_argument",
+                "program call activity must not be empty",
+            )
+        }
+        Err(error) => return refusal(trace, 400, "invalid_argument", &error),
+    };
+    let mut receipt = CoreReceipt {
+        activity_id: [0; 32],
+        batch_id: [0; 32],
+        state_root: [0; 32],
+        global_sequence: 0,
+        result_code: 0,
+        bytes: ptr::null(),
+        length: 0,
+    };
+    let code = unsafe {
+        platform_emulator_execute(
+            emulator.core,
+            activity.as_ptr(),
+            activity.len(),
+            &raw mut receipt,
+        )
+    };
+    if code != 0 {
+        return core_response(trace, code);
+    }
+    let encoded = unsafe { slice::from_raw_parts(receipt.bytes, receipt.length) };
+    let receipt_hex = hex_encode(encoded);
+    let activity_id = hex_encode(&receipt.activity_id);
+    emulator
+        .receipts
+        .insert(activity_id.clone(), receipt_hex.clone());
+    let outcome = if receipt.result_code >= 0 {
+        format!(
+            "{{\"status\":\"completed\",\"code\":{}}}",
+            receipt.result_code
+        )
+    } else {
+        format!(
+            "{{\"status\":\"refused\",\"failure\":{{\"result_code\":{}}}}}",
+            receipt.result_code
+        )
+    };
+    success(trace, &format!("{{\"activity_kind\":\"program-call\",\"transition\":\"real\",\"activity_id\":\"{activity_id}\",\"batch_id\":\"{}\",\"global_sequence\":{},\"result_code\":{},\"state_root\":\"{}\",\"receipt\":\"{receipt_hex}\",\"outcome\":{outcome}}}", hex_encode(&receipt.batch_id), receipt.global_sequence, receipt.result_code, hex_encode(&receipt.state_root)))
+}
+
 fn inspect(emulator: &Emulator, trace: u64) -> Response {
     let mut state = CoreState {
         state_root: [0; 32],
@@ -529,6 +598,7 @@ fn route(emulator: &mut Emulator, request: &Request) -> Response {
     match (request.method.as_str(), request.path.as_str()) {
         ("GET", "/healthz") => success(trace, "{\"status\":\"ready\",\"core\":\"layerx\"}"),
         ("POST", "/v1/activities") => submit(emulator, request, trace),
+        ("POST", "/v1/programs/call") => program_call(emulator, request, trace),
         ("GET", "/v1/state") => inspect(emulator, trace),
         ("POST", "/__emulator/accounts/prefund") => prefund(emulator, &request.body, trace),
         ("POST", "/__emulator/time/set") => update_time(emulator, &request.body, trace, false),
@@ -558,6 +628,7 @@ fn route(emulator: &mut Emulator, request: &Request) -> Response {
         (
             _,
             "/v1/activities"
+            | "/v1/programs/call"
             | "/v1/state"
             | "/__emulator/accounts/prefund"
             | "/__emulator/time/set"
@@ -695,4 +766,60 @@ fn platform_emulator(config: Config) -> Result<(), String> {
 /// terminating the owning CLI process.
 pub fn run(arguments: impl IntoIterator<Item = String>) -> Result<(), String> {
     parse_config(arguments).and_then(platform_emulator)
+}
+
+#[cfg(test)]
+mod program_call_tests {
+    use super::{decode_activity, hex_decode, Request};
+
+    /// A representative canonical program-call activity. The value only has to
+    /// be the exact bytes both ingress forms carry unchanged; the emulator hands
+    /// these same bytes to the real transition on every path.
+    const CANONICAL_ACTIVITY_HEX: &str = "4c61796572582f70726f6772616d732f63616c6c2f763100111111111111111111111111111111111111111111111111111111111111111100000000000003e8000000000000000000000000000000fa0002010300000002aabb";
+
+    fn json_request(hex: &str) -> Request {
+        Request {
+            method: "POST".to_string(),
+            path: "/v1/programs/call".to_string(),
+            content_type: "application/json".to_string(),
+            body: format!("{{\"activity\":\"{hex}\"}}").into_bytes(),
+        }
+    }
+
+    fn octet_request(bytes: &[u8]) -> Request {
+        Request {
+            method: "POST".to_string(),
+            path: "/v1/programs/call".to_string(),
+            content_type: "application/octet-stream".to_string(),
+            body: bytes.to_vec(),
+        }
+    }
+
+    #[test]
+    fn both_ingress_forms_feed_identical_bytes_to_the_transition() {
+        let Ok(expected) = hex_decode(CANONICAL_ACTIVITY_HEX) else {
+            panic!("golden activity hex did not decode");
+        };
+        let Ok(from_json) = decode_activity(&json_request(CANONICAL_ACTIVITY_HEX)) else {
+            panic!("program-call activity hex did not decode");
+        };
+        let from_octets = match decode_activity(&octet_request(&expected)) {
+            Ok(bytes) => bytes,
+            Err(_) => panic!("octet-stream program-call activity did not decode"),
+        };
+        assert_eq!(from_json, expected);
+        assert_eq!(from_octets, expected);
+        assert_eq!(from_json, from_octets);
+    }
+
+    #[test]
+    fn missing_activity_is_rejected() {
+        let request = Request {
+            method: "POST".to_string(),
+            path: "/v1/programs/call".to_string(),
+            content_type: "application/json".to_string(),
+            body: b"{}".to_vec(),
+        };
+        assert!(decode_activity(&request).is_err());
+    }
 }

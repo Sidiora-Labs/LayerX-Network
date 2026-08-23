@@ -2785,7 +2785,7 @@ reqs = ["35.1","35.6","28.5"]
 
 [task.28.8]
 title = "Expose the call activity through the agent layer, the CLI and the emulator"
-status = "pending"
+status = "done"
 wave = 14
 requires = ["28.7"]
 do_1 = "Add the program call operation to the agent layer contract as an additive change within the current contract major, carrying calldata, declared budget, requested capabilities and the typed response."
