@@ -1606,7 +1606,7 @@ reqs = ["12.1","12.6","2.2"]
 
 [task.12.5]
 title = "Build the approval and notification surfaces"
-status = "pending"
+status = "done"
 wave = 7
 requires = ["11.3","9.3","9.5"]
 do_1 = "Build the approval inbox and detail in both shells - the mobile screen and the desktop split view - from the rendered disclosure only, with the expiry countdown."
