@@ -2480,7 +2480,7 @@ reqs = ["33.1","33.2"]
 
 [task.24.2]
 title = "Build the card, bank and RTP adapter interfaces"
-status = "pending"
+status = "done"
 wave = 11
 requires = ["22.1"]
 do_1 = "Define the fiat adapter interface: settlement evidence classes, pending presentation, reversal and chargeback states with declared holds."
