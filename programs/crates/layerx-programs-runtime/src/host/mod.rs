@@ -5,6 +5,7 @@ mod crypto;
 mod events;
 mod memory;
 mod scan;
+mod signature;
 mod storage;
 mod transfer;
 
@@ -25,6 +26,7 @@ pub(super) const STATUS_INVALID: i32 = -2;
 pub(super) const STATUS_BOUNDS: i32 = -3;
 pub(super) const STATUS_METER: i32 = -4;
 pub(super) const STATUS_EVIDENCE: i32 = -5;
+pub(super) const STATUS_VERIFY_FAILED: i32 = -6;
 pub(super) const FUEL_METERING_DISABLED: &str = "programs runtime fuel metering is disabled";
 pub(super) const COMPOSITION_REFUSED: &str = "program composition refused the call graph";
 
@@ -284,6 +286,7 @@ pub(crate) fn linker(
     events::register(&mut linker)?;
     calls::register(&mut linker)?;
     crypto::register(&mut linker)?;
+    signature::register(&mut linker)?;
     if revision == AbiRevision::CandidateV2 {
         calls::register_candidate(&mut linker)?;
         scan::register_candidate(&mut linker)?;

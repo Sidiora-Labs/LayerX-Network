@@ -3073,7 +3073,7 @@ reqs = ["38.4"]
 
 [task.31.4]
 title = "Add deterministic signature verification and recovery"
-status = "in_progress"
+status = "done"
 wave = 17
 requires = ["28.1"]
 do_1 = "Add signature host functions covering ed25519 verification, secp256k1 verification and secp256k1 public-key recovery, addressed by algorithm identifier."
