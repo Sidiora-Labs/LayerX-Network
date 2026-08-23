@@ -1655,7 +1655,7 @@ reqs = ["19.2","21.5"]
 
 [task.13.2]
 title = "Build the security center"
-status = "pending"
+status = "done"
 wave = 7
 requires = ["11.2","5.2"]
 do_1 = "Build passkey management, the device and session inventory with per-session revoke and sign-out-everywhere."
