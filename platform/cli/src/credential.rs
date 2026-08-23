@@ -1,7 +1,8 @@
 use std::io::{self, Read as _};
+use std::sync::OnceLock;
 
 use ed25519_dalek::SigningKey;
-use keyring::Entry;
+use keyring_core::Entry;
 use zeroize::{Zeroize as _, Zeroizing};
 
 use crate::config::{Configuration, KeyMetadata};
@@ -10,7 +11,44 @@ use crate::encoding::{fixed_hex, hex_encode};
 const SERVICE: &str = "dev.layerx.cli";
 const MAX_STDIN_SECRET_BYTES: u64 = 16 * 1024;
 
+/// Environment variable that swaps the credential store for the in-memory
+/// keyring-core mock store. It exists so the command suite can be driven end to
+/// end on a headless machine without a live operating-system keychain; it is
+/// never consulted in normal operation, where the native store is used.
+const MOCK_STORE_VARIABLE: &str = "LAYERX_CREDENTIAL_STORE";
+const MOCK_STORE_VALUE: &str = "mock";
+
+/// Installs the process-wide credential store exactly once.
+///
+/// In normal operation this defers to the keyring v1 initialiser, which selects
+/// and installs the operating-system credential store (Keychain Services on
+/// macOS, Credential Manager on Windows, the Secret Service on other Unix
+/// systems). When `LAYERX_CREDENTIAL_STORE=mock` is set, the non-persistent
+/// keyring-core mock store is installed instead so tests never touch a real
+/// keychain. Secrets are always held by the store, never written to config.
+fn ensure_store() -> Result<(), String> {
+    static STORE: OnceLock<Result<(), String>> = OnceLock::new();
+    STORE.get_or_init(install_store).clone()
+}
+
+fn install_store() -> Result<(), String> {
+    if matches!(std::env::var(MOCK_STORE_VARIABLE).as_deref(), Ok(MOCK_STORE_VALUE)) {
+        let store = keyring_core::mock::Store::new().map_err(|error| {
+            format!("could not initialise the in-memory test credential store: {error}")
+        })?;
+        keyring_core::set_default_store(store);
+        return Ok(());
+    }
+    if let Err(error) = keyring::Entry::store_status() {
+        return Err(format!(
+            "operating-system credential storage is unavailable: {error}"
+        ));
+    }
+    Ok(())
+}
+
 fn entry(kind: &str, name: &str) -> Result<Entry, String> {
+    ensure_store()?;
     Entry::new(SERVICE, &format!("{kind}:{name}"))
         .map_err(|error| format!("operating-system credential storage is unavailable: {error}"))
 }
@@ -142,7 +180,7 @@ pub fn delete_token(environment: &str) -> Result<(), String> {
 pub fn token(environment: &str) -> Result<Option<Zeroizing<String>>, String> {
     match entry("token", environment)?.get_password() {
         Ok(value) => Ok(Some(Zeroizing::new(value))),
-        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(keyring_core::Error::NoEntry) => Ok(None),
         Err(error) => Err(format!(
             "could not read token from operating-system credential storage: {error}"
         )),

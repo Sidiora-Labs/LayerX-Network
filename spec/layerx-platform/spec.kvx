@@ -2002,7 +2002,7 @@ status = "pending"
 
 [task.17.1]
 title = "Build the CLI"
-status = "pending"
+status = "done"
 wave = 9
 requires = ["15.2"]
 do_1 = "Build the layerx CLI: project scaffolding, key and account management, test payments, receipt lookup and local verification, environment switching between emulator, testnet and production."

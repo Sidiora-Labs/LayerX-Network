@@ -21,7 +21,7 @@ platform-test:
 	$(PLATFORM_CARGO) test --manifest-path $(PLATFORM_MANIFEST) --locked --workspace
 
 platform-test-tooling:
-	$(PLATFORM_CARGO) check --manifest-path $(PLATFORM_MANIFEST) --locked -p layerx-platform-cli
+	$(PLATFORM_CARGO) test --manifest-path $(PLATFORM_MANIFEST) --locked -p layerx-platform-cli
 	$(PLATFORM_CARGO) check --manifest-path $(PLATFORM_MANIFEST) --locked -p layerx-platform-emulator
 	$(PLATFORM_CARGO) test --manifest-path $(PLATFORM_MANIFEST) --locked -p layerx-platform-faucet
 	$(PLATFORM_CARGO) test --manifest-path $(PLATFORM_MANIFEST) --locked -p layerx-platform-testnet

@@ -1258,6 +1258,7 @@ dependencies = [
  "ed25519-dalek",
  "getrandom 0.3.4",
  "keyring",
+ "keyring-core",
  "layerx-mcp",
  "layerx-platform-emulator",
  "layerx-programs-runtime",

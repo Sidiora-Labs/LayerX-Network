@@ -285,3 +285,35 @@ symbol = "registry.npm"
 observed = "do_5 asks to publish the buyer and seller packages through the release pipeline. The release manifest is registry-scoped (no per-package section) and the npm registry status is still \"skeleton\"; both packages are public, non-private workspace members with dist-only files and exports, which is the repo's existing release-eligibility convention. No publishConfig was added because no sibling package uses one and the release CLI rejects unknown manifest sections."
 assumption = "Actual publication remains gated to human qualification (flipping registry statuses to active and running the tagged release-pipeline job with real registry credentials); this change wires metadata only and publishes nothing, matching the do-not-publish-secrets instruction."
 severity = "note"
+
+[observation.17.1.1]
+task = "17.1"
+file = "platform/cli/src/credential.rs"
+symbol = "ensure_store"
+observed = "The layerx CLI command surface (scaffolding, key/account management, test payments, receipt lookup and local verification, environment switching, program build/deploy/registry, machine-readable --json output) was already present from earlier commits under task 17.1. This step routed secret storage through keyring-core with an explicit default store: the native operating-system store in normal operation (installed via the keyring v1 initialiser) and the in-memory keyring-core mock store when LAYERX_CREDENTIAL_STORE=mock, so the command suite can run on a headless machine without a real keychain."
+assumption = "Human qualification will confirm the native store still initialises on macOS, Windows and Secret-Service Linux exactly as the previous keyring v1 facade did, and that the mock branch is only ever reached under the test environment variable."
+severity = "note"
+
+[observation.17.1.2]
+task = "17.1"
+file = "platform/cli/tests/credential.rs, platform/cli/tests/commands.rs"
+symbol = "api_token_is_never_written_to_configuration"
+observed = "The keyring-core mock store is non-persistent and per-process. Because each CLI invocation is a separate process, subprocess tests cannot observe a secret written by one invocation from a later invocation. Credential success paths that require cross-invocation retrieval (auth set then auth status, key delete after key create) are therefore exercised only at the reachable boundary: the write is asserted to succeed and to leave no secret in plaintext config, auth status on a fresh store reports no token, and key delete of an unknown key is refused."
+assumption = "Human qualification will run the suite against a persistent credential store (a live keychain or the keyring-core sample store) to additionally confirm the set-then-read and create-then-delete round trips end to end."
+severity = "assumption"
+
+[observation.17.1.3]
+task = "17.1"
+file = "platform/cli/tests/emulator.rs"
+symbol = "account_is_created_and_read_back_through_the_emulator"
+observed = "The end-to-end emulator tests drive the commands the raw emulator serves directly: environment selection, key creation, account prefunding and account read-back over /__emulator/accounts/prefund and /v1/state. The payment (/v1/moves) and program deploy/registry (/v1/programs) routes are hosted-gateway surfaces that the standalone emulator does not implement, so those commands are covered here by their validation and machine-readable error contracts rather than a full success round trip against the bare emulator."
+assumption = "Human qualification will run the payment and program deployment commands end to end against the emulator fronted by the hosted gateway (tasks 17.2 and 17.4) to close the remaining success paths."
+severity = "dependency-boundary"
+
+[observation.17.1.4]
+task = "17.1"
+file = "platform/Makefile.inc, .github/workflows/platform.yml"
+symbol = "platform-test-tooling"
+observed = "platform-test-tooling now runs cargo test for layerx-platform-cli instead of only cargo check, and the platform CI workflow invokes the target. The tests were written but not compiled or executed in this phase."
+assumption = "Human qualification will compile and run make platform-test-tooling, which builds the emulator's vendored C core and spawns emulator child processes on ephemeral loopback ports."
+severity = "note"
