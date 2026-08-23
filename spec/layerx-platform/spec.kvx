@@ -1685,7 +1685,7 @@ reqs = ["5.3","5.4","5.7"]
 
 [task.13.4]
 title = "Build the support surface"
-status = "pending"
+status = "done"
 wave = 7
 requires = ["11.3"]
 do_1 = "Build support chat seeded with topic suggestion chips, as the mobile screen and the desktop docked panel."
