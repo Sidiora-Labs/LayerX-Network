@@ -2,7 +2,67 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use layerx_programs_runtime::{programs_fuzz_targets, FuzzTarget};
+use layerx_programs_runtime::{programs_fuzz_observation, FuzzTarget};
+
+/// A heap ceiling far above the runtime's metered module memory bound. A lawful
+/// validation, instantiation or execution of a committed corpus seed (and its
+/// bounded mutations) stays well under it, so tripping the ceiling can only mean
+/// an unbounded-allocation defect - which [`bounded_alloc`] turns into a
+/// process abort, i.e. a build-breaking failure of the fuzz gate.
+mod bounded_alloc {
+    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// Declared upper bound on the live heap the fuzz harness may hold at once.
+    pub const MAX_LIVE_HEAP_BYTES: usize = 256 * 1024 * 1024;
+
+    static LIVE_BYTES: AtomicUsize = AtomicUsize::new(0);
+
+    /// System allocator wrapper that aborts the process the moment the live heap
+    /// would exceed the declared ceiling, making unbounded allocation a
+    /// build-breaking defect rather than a silent memory blow-up.
+    pub struct BoundingAllocator;
+
+    #[allow(unsafe_code)]
+    unsafe impl GlobalAlloc for BoundingAllocator {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            let previous = LIVE_BYTES.fetch_add(layout.size(), Ordering::Relaxed);
+            if previous.saturating_add(layout.size()) > MAX_LIVE_HEAP_BYTES {
+                std::process::abort();
+            }
+            System.alloc(layout)
+        }
+
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+            LIVE_BYTES.fetch_sub(layout.size(), Ordering::Relaxed);
+            System.dealloc(ptr, layout);
+        }
+
+        unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+            let previous = LIVE_BYTES.fetch_add(layout.size(), Ordering::Relaxed);
+            if previous.saturating_add(layout.size()) > MAX_LIVE_HEAP_BYTES {
+                std::process::abort();
+            }
+            System.alloc_zeroed(layout)
+        }
+
+        unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+            if new_size > layout.size() {
+                let growth = new_size - layout.size();
+                let previous = LIVE_BYTES.fetch_add(growth, Ordering::Relaxed);
+                if previous.saturating_add(growth) > MAX_LIVE_HEAP_BYTES {
+                    std::process::abort();
+                }
+            } else {
+                LIVE_BYTES.fetch_sub(layout.size() - new_size, Ordering::Relaxed);
+            }
+            System.realloc(ptr, layout, new_size)
+        }
+    }
+}
+
+#[global_allocator]
+static GLOBAL: bounded_alloc::BoundingAllocator = bounded_alloc::BoundingAllocator;
 
 fn decode_hex(text: &str) -> Result<Vec<u8>, String> {
     let compact: Vec<u8> = text
@@ -62,6 +122,24 @@ fn mutate(seed: &[u8]) -> Vec<Vec<u8>> {
     cases
 }
 
+/// Runs one input through the surface twice, rejecting a non-deterministic
+/// outcome. A panic or hang inside the surface fails the process directly; an
+/// unbounded allocation aborts through [`bounded_alloc`]; a byte-level
+/// divergence between the two observations is reported here as a build-breaking
+/// non-determinism defect.
+fn check(selected: FuzzTarget, input: &[u8], path: &Path) -> Result<(), String> {
+    let first = programs_fuzz_observation(selected, input);
+    let second = programs_fuzz_observation(selected, input);
+    if first == second {
+        Ok(())
+    } else {
+        Err(format!(
+            "non-deterministic {selected:?} outcome for input derived from {}",
+            path.display()
+        ))
+    }
+}
+
 fn run() -> Result<(), String> {
     let mut arguments = env::args().skip(1);
     let name = arguments
@@ -78,7 +156,7 @@ fn run() -> Result<(), String> {
         let source = fs::read_to_string(&path).map_err(|error| error.to_string())?;
         let seed = decode_hex(&source)?;
         for input in mutate(&seed) {
-            programs_fuzz_targets(selected, &input);
+            check(selected, &input, &path)?;
         }
     }
     Ok(())

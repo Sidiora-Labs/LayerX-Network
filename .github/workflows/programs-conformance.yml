@@ -56,6 +56,20 @@ jobs:
       - name: Run validation instantiation and execution fuzz targets
         run: make programs-fuzz-smoke PROGRAMS_CARGO="cargo +1.91.1"
 
+  differential-replay:
+    name: Differential and versioned-replay gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.91.1 --profile minimal --no-self-update
+      - name: Run differential and versioned-replay gates
+        run: make programs-differential PROGRAMS_CARGO="cargo +1.91.1"
+
   deterministic-execution:
     name: ${{ matrix.name }}
     strategy:

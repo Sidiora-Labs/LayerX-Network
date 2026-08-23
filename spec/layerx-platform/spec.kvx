@@ -2205,7 +2205,7 @@ reqs = ["28.1","28.5","30.6"]
 
 [task.19.5]
 title = "Prove determinism and fuzz the runtime"
-status = "pending"
+status = "done"
 wave = 10
 requires = ["19.4"]
 do_1 = "Fuzz module validation, instantiation and execution with committed corpora, treating a panic, hang, non-determinism or unbounded allocation as a build-breaking defect."

@@ -132,29 +132,94 @@ fn replay_with_revisions(
     revision.replay(record)
 }
 
+/// Observation tag bytes prefixing a canonical fuzz observation. The tag makes
+/// two structurally different outcomes (a refusal and a success that happen to
+/// share a suffix) impossible to confuse when the fuzz runner compares runs.
+const OBSERVE_INPUT_TOO_LARGE: u8 = 0x00;
+const OBSERVE_ENGINE_REFUSED: u8 = 0x01;
+const OBSERVE_VALIDATED: u8 = 0x10;
+const OBSERVE_VALIDATION_REFUSED: u8 = 0x11;
+const OBSERVE_INSTANTIATED: u8 = 0x20;
+const OBSERVE_INSTANTIATION_FAULT: u8 = 0x21;
+const OBSERVE_EXECUTED: u8 = 0x30;
+const OBSERVE_EXECUTION_REFUSED: u8 = 0x31;
+
+/// Runs one bounded fuzz input through a named real runtime surface, returning a
+/// canonical, comparable observation of the outcome.
+///
+/// The observation is byte-stable for a given input and build: two calls with
+/// the same input MUST return identical bytes. The fuzz runner exploits this to
+/// treat any divergence as non-determinism - and therefore a build-breaking
+/// defect - alongside the panic, hang and unbounded-allocation faults the
+/// runner already observes at the process boundary. Invalid input is an
+/// expected typed refusal encoded into the observation, never a fault.
+#[must_use]
+pub fn programs_fuzz_observation(target: FuzzTarget, input: &[u8]) -> Vec<u8> {
+    let mut observation = Vec::new();
+    if input.len() > MAX_FUZZ_INPUT_BYTES {
+        observation.push(OBSERVE_INPUT_TOO_LARGE);
+        return observation;
+    }
+    let engine = match WasmEngine::new(ValidationLimits::declared()) {
+        Ok(engine) => engine,
+        Err(refusal) => {
+            observation.push(OBSERVE_ENGINE_REFUSED);
+            observation.extend_from_slice(refusal.to_string().as_bytes());
+            return observation;
+        }
+    };
+    let validated = engine.validate(input);
+    if target == FuzzTarget::Validation {
+        match validated {
+            Ok(module) => {
+                observation.push(OBSERVE_VALIDATED);
+                observation.extend_from_slice(&module.byte_size().to_le_bytes());
+                observation.extend_from_slice(&module.function_count().to_le_bytes());
+            }
+            Err(refusal) => {
+                observation.push(OBSERVE_VALIDATION_REFUSED);
+                observation.extend_from_slice(refusal.to_string().as_bytes());
+            }
+        }
+        return observation;
+    }
+    let module = match validated {
+        Ok(module) => module,
+        Err(refusal) => {
+            observation.push(OBSERVE_VALIDATION_REFUSED);
+            observation.extend_from_slice(refusal.to_string().as_bytes());
+            return observation;
+        }
+    };
+    if target == FuzzTarget::Instantiation {
+        match module.instantiate_for_qualification() {
+            Ok(()) => observation.push(OBSERVE_INSTANTIATED),
+            Err(fault) => {
+                observation.push(OBSERVE_INSTANTIATION_FAULT);
+                observation.extend_from_slice(fault.to_string().as_bytes());
+            }
+        }
+        return observation;
+    }
+    match Executor::declared().execute(&module, "add", &[WasmValue::I32(19), WasmValue::I32(23)]) {
+        Ok(record) => {
+            observation.push(OBSERVE_EXECUTED);
+            observation.extend_from_slice(&record.canonical_evidence());
+        }
+        Err(error) => {
+            observation.push(OBSERVE_EXECUTION_REFUSED);
+            observation.extend_from_slice(error.to_string().as_bytes());
+        }
+    }
+    observation
+}
+
 /// Runs one bounded fuzz input through a named real runtime surface.
 ///
 /// Invalid input is an expected typed refusal. A panic, hang, or allocation
 /// beyond the declared module bound is therefore visible to the fuzz runner.
 pub fn programs_fuzz_targets(target: FuzzTarget, input: &[u8]) {
-    if input.len() > MAX_FUZZ_INPUT_BYTES {
-        return;
-    }
-    let Ok(engine) = WasmEngine::new(ValidationLimits::declared()) else {
-        return;
-    };
-    let validated = engine.validate(input);
-    if target == FuzzTarget::Validation {
-        return;
-    }
-    let Ok(module) = validated else {
-        return;
-    };
-    if target == FuzzTarget::Instantiation {
-        let _ = module.instantiate_for_qualification();
-        return;
-    }
-    let _ = Executor::declared().execute(&module, "add", &[WasmValue::I32(19), WasmValue::I32(23)]);
+    let _ = programs_fuzz_observation(target, input);
 }
 
 /// Executes the same immutable input using two separately constructed engines
@@ -269,5 +334,36 @@ mod tests {
         assert_ne!(ExecutorRevision::v1(), ExecutorRevision::test_v2());
         assert_eq!(ExecutorRevision::v1().budget, ResourceBudget::declared());
         assert_eq!(ExecutorRevision::v1().prices, FeeSchedule::declared());
+    }
+
+    #[test]
+    fn fuzz_observation_is_stable_across_every_surface_and_input() {
+        let wasm = add_module();
+        let malformed = [0x00, 0x61, 0x73, 0x6d, 0x01];
+        let inputs: [&[u8]; 3] = [&wasm, &malformed, &[]];
+        for target in [
+            FuzzTarget::Validation,
+            FuzzTarget::Instantiation,
+            FuzzTarget::Execution,
+        ] {
+            for input in inputs {
+                let first = programs_fuzz_observation(target, input);
+                let second = programs_fuzz_observation(target, input);
+                assert_eq!(first, second, "fuzz observation diverged for {target:?}");
+                assert!(!first.is_empty(), "fuzz observation was empty for {target:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn fuzz_observation_records_a_typed_validation_refusal_without_faulting() {
+        let observation = programs_fuzz_observation(FuzzTarget::Validation, &[0x00, 0x61, 0x73]);
+        assert_eq!(observation.first().copied(), Some(super::OBSERVE_VALIDATION_REFUSED));
+    }
+
+    #[test]
+    fn fuzz_observation_executes_the_valid_add_surface() {
+        let observation = programs_fuzz_observation(FuzzTarget::Execution, &add_module());
+        assert_eq!(observation.first().copied(), Some(super::OBSERVE_EXECUTED));
     }
 }

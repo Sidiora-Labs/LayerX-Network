@@ -173,3 +173,19 @@ symbol = "deploy_call_upgrade_and_migration_run_end_to_end"
 observed = "do_5 asks for deploy, call, upgrade and migration exercised end to end. The pre-existing lifecycle tests covered deploy, upgrade, migration and receipt-gated callability but never instantiated and executed deployed code, so the call leg was untested. A new test now deploys an upgradeable program, resolves the verified deployment receipt, instantiates and calls the deployed export, upgrades under the declared authority with a migration hook, then instantiates and calls the upgraded export and reconfirms the original version still resolves. The C real-node end-to-end coverage lives in tests/programs/test_lifecycle.c under make programs-test and dispatches deploy and migrating upgrade through the real kernel registration."
 assumption = "Per phase rules the added Rust test was written but not compiled or run. Human qualification will run make programs-test (Rust workspace tests plus the C real-node lifecycle test) to confirm the full deploy/call/upgrade/migration path passes."
 severity = "note"
+
+[observation.19.5.1]
+task = "19.5"
+file = "programs/crates/layerx-programs-runtime/src/engine.rs, programs/crates/layerx-programs-runtime/src/limits.rs"
+symbol = "WasmEngine::new, ValidationLimits"
+observed = "Requirement 28.7 and task 19.5 do_4 call for the declared value-stack-height and call-depth limits to be refused at deploy time, not discovered at execution time. Of the four declared ValidationLimits, only module byte size and function count are statically checked during validate_module and therefore refused at deploy time (proven in tests/replay.rs). The value-stack-height and call-depth bounds are installed as engine StackLimits and are enforced deterministically at execution as a typed resource result (trap), not during deploy-time validation, because a module's realised stack and call depth are runtime properties of a specific invocation."
+assumption = "Human qualification will decide whether execution-time enforcement of the stack-height and call-depth bounds satisfies 28.7's deploy-time intent, or whether a static deploy-time analysis (e.g. conservative maximum-depth estimation) must be added. The declared bounds, their typed refusals, and the two statically checkable deploy-time refusals are left intact and unweakened."
+severity = "assumption"
+
+[observation.19.5.2]
+task = "19.5"
+file = "programs/fuzz/src/main.rs"
+symbol = "bounded_alloc::BoundingAllocator"
+observed = "do_1 requires unbounded allocation during fuzzing to be a build-breaking defect. The fuzz binary installs a global allocator that aborts the process when the live heap would exceed a declared 256 MiB ceiling. The ceiling is chosen well above the runtime's metered module memory bound, but it was selected by reasoning rather than by measuring peak lawful heap use of every committed corpus seed and its mutations."
+assumption = "Human qualification will confirm, on every supported target, that lawful validation/instantiation/execution of the committed corpora stays under the declared ceiling so the ceiling only ever fires on a genuine unbounded-allocation defect."
+severity = "assumption"

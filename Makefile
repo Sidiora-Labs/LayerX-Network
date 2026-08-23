@@ -2368,7 +2368,7 @@ PROGRAMS_CARGO ?= cargo
 PROGRAMS_RUNTIME_LIB := programs/target/debug/liblayerx_programs_runtime.a
 
 .PHONY: programs-build programs-lint programs-test programs-core-test programs-protocol-regression programs-adversarial programs-module-boundaries \
-	programs-fuzz-smoke programs-quickstart programs-sdk-rust programs-sdk-c programs-sdk-assemblyscript
+	programs-fuzz-smoke programs-differential programs-quickstart programs-sdk-rust programs-sdk-c programs-sdk-assemblyscript
 
 $(PROGRAMS_RUNTIME_LIB):
 	cd programs && $(PROGRAMS_CARGO) build --locked --workspace
@@ -2428,7 +2428,10 @@ programs-fuzz-smoke:
 programs-adversarial:
 	cd programs && $(PROGRAMS_CARGO) test --locked -p layerx-programs-runtime --test isolation --test composition
 
-programs-test: programs-module-boundaries programs-core-test programs-protocol-regression programs-adversarial programs-fuzz-smoke programs-sdk-rust programs-sdk-c programs-sdk-assemblyscript
+programs-differential:
+	cd programs && $(PROGRAMS_CARGO) test --locked -p layerx-programs-runtime --test replay --test determinism
+
+programs-test: programs-module-boundaries programs-core-test programs-protocol-regression programs-adversarial programs-fuzz-smoke programs-differential programs-sdk-rust programs-sdk-c programs-sdk-assemblyscript
 	cd programs && $(PROGRAMS_CARGO) test --locked --workspace
 
 programs-sdk-c:

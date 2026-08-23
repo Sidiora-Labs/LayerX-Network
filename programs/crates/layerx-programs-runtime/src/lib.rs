@@ -102,8 +102,8 @@ pub use occupancy::{
     OccupancyUsage, PreparedOccupancySettlement,
 };
 pub use qualification::{
-    programs_differential_gate, programs_fuzz_targets, replay_recorded_execution,
-    DifferentialMismatch, FuzzTarget, RecordedExecution, ReplayRefusal,
+    programs_differential_gate, programs_fuzz_observation, programs_fuzz_targets,
+    replay_recorded_execution, DifferentialMismatch, FuzzTarget, RecordedExecution, ReplayRefusal,
 };
 pub use storage::{
     NamespaceDrop, PrincipalId, ProgramId, ScanEntry, ScanLimits, Storage, StorageError,
