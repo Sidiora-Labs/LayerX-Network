@@ -1526,7 +1526,7 @@ reqs = ["20.1","20.2","20.6","17.3"]
 
 [task.11.5]
 title = "Build the performance machinery"
-status = "pending"
+status = "in_progress"
 wave = 6
 requires = ["11.1"]
 do_1 = "Code-split by route with declared per-route script budgets enforced in CI."
