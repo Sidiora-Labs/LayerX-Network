@@ -172,7 +172,7 @@ fn real_wasm_budgeted_preparation_seals_transfer_or_zero_transfer_without_kernel
             .unwrap_or_else(|error| panic!("module: {error}"));
         let storage = Storage::default();
         let outcome = executor
-            .prepare_authorized_activity_budgeted_for_qualification(
+            .prepare_authorized_activity_budgeted(
                 &storage,
                 admitted_request(
                     &executor,
@@ -232,7 +232,7 @@ fn real_wasm_budgeted_preparation_retains_failure_and_resource_diagnostics() {
         .validate(&candidate_with_entry(&[OP_I32_CONST, 0x7f, OP_END]))
         .unwrap_or_else(|error| panic!("failed module: {error}"));
     let failure = executor
-        .prepare_authorized_activity_budgeted_for_qualification(
+        .prepare_authorized_activity_budgeted(
             &Storage::default(),
             admitted_request(
                 &executor,
@@ -263,7 +263,7 @@ fn real_wasm_budgeted_preparation_retains_failure_and_resource_diagnostics() {
         .validate(&looping_module())
         .unwrap_or_else(|error| panic!("looping module: {error}"));
     let resource = executor
-        .prepare_authorized_activity_budgeted_for_qualification(
+        .prepare_authorized_activity_budgeted(
             &Storage::default(),
             admitted_request(
                 &executor,

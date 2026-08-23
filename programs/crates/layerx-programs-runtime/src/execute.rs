@@ -1529,10 +1529,11 @@ impl Executor {
         })
     }
 
-    /// Qualification-only affine settlement preparation. The admitted token is
-    /// consumed and its authenticated activity binding is the sole source of
-    /// invocation authority; callers cannot mint a raw digest authority.
-    pub fn prepare_authorized_activity_budgeted_for_qualification(
+    /// Affine settlement preparation for the production transition. The
+    /// admitted token is consumed and its authenticated activity binding is
+    /// the sole source of invocation authority; callers cannot mint a raw
+    /// digest authority.
+    pub fn prepare_authorized_activity_budgeted(
         &self,
         storage: &Storage,
         budgeted: BudgetedAuthorizedExecutionRequest<'_>,

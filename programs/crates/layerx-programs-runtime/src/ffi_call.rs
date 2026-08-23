@@ -1105,7 +1105,7 @@ pub extern "C" fn layerx_programs_call_begin(
             response_capacity: usize::try_from(response_capacity).map_err(|_| LENGTH_LIMIT)?,
         };
         match executor
-            .prepare_authorized_activity_budgeted_for_qualification(
+            .prepare_authorized_activity_budgeted(
                 &storage,
                 BudgetedAuthorizedExecutionRequest::new(request, admitted, payer, binding),
             )

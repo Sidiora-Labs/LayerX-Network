@@ -46,8 +46,9 @@ check_root() {
 
     for path in \
         budget.rs \
-        abi/mod.rs abi/capability.rs abi/response.rs abi/storage_ops.rs \
-        host/mod.rs host/memory.rs host/storage.rs host/events.rs host/calls.rs host/transfer.rs
+        abi/mod.rs abi/capability.rs abi/codec.rs abi/response.rs abi/storage_ops.rs \
+        host/mod.rs host/memory.rs host/storage.rs host/events.rs host/calls.rs \
+        host/transfer.rs host/scan.rs host/crypto.rs host/signature.rs
     do
         if [ ! -f "$root/$path" ]; then
             echo "runtime module boundary: missing $path" >&2
@@ -79,7 +80,7 @@ check_root() {
                 [ -f "$file" ] && basename "$file"
             done | sort
         )
-        expected=$(printf '%s\n' capability.rs mod.rs response.rs storage_ops.rs)
+        expected=$(printf '%s\n' capability.rs codec.rs mod.rs response.rs storage_ops.rs)
         if [ "$actual" != "$expected" ]; then
             echo "runtime module boundary: unexpected ABI module inventory" >&2
             failed=1
@@ -92,7 +93,7 @@ check_root() {
                 [ -f "$file" ] && basename "$file"
             done | sort
         )
-        expected=$(printf '%s\n' calls.rs events.rs memory.rs mod.rs storage.rs transfer.rs)
+        expected=$(printf '%s\n' calls.rs crypto.rs events.rs memory.rs mod.rs scan.rs signature.rs storage.rs transfer.rs)
         if [ "$actual" != "$expected" ]; then
             echo "runtime module boundary: unexpected host module inventory" >&2
             failed=1
@@ -100,12 +101,12 @@ check_root() {
     fi
 
     if [ -d "$root/host" ]; then
-        for family in storage events calls transfer
+        for family in storage events calls transfer scan crypto signature
         do
             file="$root/host/$family.rs"
             [ -f "$file" ] || continue
             flattened=$(rust_code "$file")
-            for sibling in storage events calls transfer
+            for sibling in storage events calls transfer scan crypto signature
             do
                 [ "$sibling" = "$family" ] && continue
                 if printf '%s\n' "$flattened" | grep -E "(super::|crate::host::)([[:space:]]*\\{[^}]*|)$sibling(::|[^[:alnum:]_])" >/dev/null
@@ -139,7 +140,7 @@ if [ "${1:-}" = "--self-test" ]; then
     fixture=$(mktemp -d)
     trap 'find "$fixture" -type f -delete; find "$fixture" -depth -type d -exec rmdir {} \; 2>/dev/null || true' EXIT
     mkdir -p "$fixture/abi" "$fixture/host"
-    for path in budget.rs abi/mod.rs abi/capability.rs abi/response.rs abi/storage_ops.rs host/mod.rs host/memory.rs host/storage.rs host/events.rs host/calls.rs host/transfer.rs
+    for path in budget.rs abi/mod.rs abi/capability.rs abi/codec.rs abi/response.rs abi/storage_ops.rs host/mod.rs host/memory.rs host/storage.rs host/events.rs host/calls.rs host/transfer.rs host/scan.rs host/crypto.rs host/signature.rs
     do
         : > "$fixture/$path"
     done
