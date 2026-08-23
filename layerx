@@ -2,8 +2,23 @@
 
 # LayerX workspace dashboard. This file intentionally uses only Bash and
 # standard host utilities so it can run before project dependencies exist.
+#
+# Rendering model
+#   Every screen is composed into FRAME (an array of finished lines) and then
+#   flushed with flush_frame, which rewrites only the rows that actually
+#   changed. Nothing ever clears the whole screen except a genuine resize, so
+#   repaints are flicker free even at ten frames a second during a run.
+#
+# Hit testing
+#   Interactive elements register their own row and column span while they are
+#   drawn, so mouse targets can never drift out of sync with the layout.
 
 set -u
+
+if (( ${BASH_VERSINFO[0]:-0} < 4 )); then
+  printf 'LayerX Workspace needs Bash 4.0 or newer (found %s).\n' "${BASH_VERSION:-unknown}" >&2
+  return 2 2>/dev/null || exit 2
+fi
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -60,12 +75,34 @@ DRY_RUN=0
 FAIL_FAST=0
 CI_MODE=0
 FOCUS=0
+FOCUS_COUNT=1
 RUN_REQUESTED=0
 QUIT_REQUESTED=0
-EVENT=""
 CURRENT_CHILD=""
 RUN_CANCELLED=0
 TERMINAL_ACTIVE=0
+RUN_DIRECTORY=""
+
+EDIT_MODE=0
+EDIT_TARGET=""
+EDIT_BUFFER=""
+
+EVENT=""
+EVENT_KEY=""
+EVENT_BUTTON=0
+EVENT_X=0
+EVENT_Y=0
+
+RESIZED=0
+FULL_REDRAW=1
+ROWS=24
+COLS=80
+WIDTH=76
+
+MIN_ROWS=24
+MIN_COLS=78
+LOG_LINES=6
+STEP_WINDOW=7
 
 STEP_MODULE=()
 STEP_PHASE=()
@@ -76,9 +113,30 @@ STEP_COMMAND=()
 STEP_STATUS=()
 STEP_LOG=()
 
+LOG_CACHE=()
+LOG_CACHE_FILE=""
+LOG_CACHE_SIZE=""
+
+TOOL_CACHE_KEYS=()
+TOOL_CACHE_VALUES=()
+
 COLOR=0
 if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
   COLOR=1
+fi
+
+MOUSE=1
+if [[ -n "${LAYERX_NO_MOUSE:-}" ]]; then
+  MOUSE=0
+fi
+
+LOCALE_NAME="${LC_ALL:-${LC_CTYPE:-${LANG:-}}}"
+if [[ "${LOCALE_NAME,,}" == *utf* ]]; then
+  G_MARK='›'; G_RULE='─'; G_BAR_FULL='█'; G_BAR_EMPTY='░'
+  G_ELL='…'; G_DOT='·'; G_DASH='—'
+else
+  G_MARK='>'; G_RULE='-'; G_BAR_FULL='#'; G_BAR_EMPTY='.'
+  G_ELL='~'; G_DOT='|'; G_DASH='-'
 fi
 
 ESC=$'\033'
@@ -92,37 +150,63 @@ RED="${ESC}[31m"
 BLUE_BG="${ESC}[44;97m"
 FOCUS_BG="${ESC}[48;5;238;97m"
 
-paint() {
-  local code="$1"
-  shift
-  if (( COLOR )); then
-    printf '%s%s%s' "$code" "$*" "$RESET"
-  else
-    printf '%s' "$*"
-  fi
+# --------------------------------------------------------------------------
+# terminal lifecycle
+# --------------------------------------------------------------------------
+
+refresh_size() {
+  local size rows columns
+  size="$(stty size 2>/dev/null || true)"
+  read -r rows columns <<< "$size"
+  [[ "$rows" =~ ^[0-9]+$ ]] || rows=24
+  [[ "$columns" =~ ^[0-9]+$ ]] || columns=80
+  (( rows < 1 )) && rows=24
+  (( columns < 1 )) && columns=80
+  ROWS="$rows"
+  COLS="$columns"
+  WIDTH=$(( COLS - 4 ))
+  (( WIDTH > 94 )) && WIDTH=94
+  (( WIDTH < 40 )) && WIDTH=40
 }
 
-terminal_enter() {
-  printf '%s' "${ESC}[?1049h${ESC}[?25l${ESC}[?1000h${ESC}[?1006h"
-  TERMINAL_ACTIVE=1
-}
-
-terminal_leave() {
-  printf '%s' "${ESC}[?1000l${ESC}[?1006l${ESC}[?25h${ESC}[?1049l"
-  TERMINAL_ACTIVE=0
+on_winch() {
+  RESIZED=1
+  FULL_REDRAW=1
+  refresh_size
 }
 
 terminal_mouse_on() {
-  printf '%s' "${ESC}[?1000h${ESC}[?1006h"
+  (( MOUSE )) && printf '%s' "${ESC}[?1000h${ESC}[?1006h"
 }
 
 terminal_mouse_off() {
-  printf '%s' "${ESC}[?1000l${ESC}[?1006l"
+  (( MOUSE )) && printf '%s' "${ESC}[?1000l${ESC}[?1006l"
+}
+
+terminal_enter() {
+  printf '%s' "${ESC}[?1049h${ESC}[?25l"
+  terminal_mouse_on
+  TERMINAL_ACTIVE=1
+  FULL_REDRAW=1
+}
+
+terminal_leave() {
+  terminal_mouse_off
+  printf '%s' "${ESC}[?25h${ESC}[?1049l"
+  TERMINAL_ACTIVE=0
+}
+
+kill_tree() {
+  local pid="$1" child
+  for child in $(ps -eo pid=,ppid= 2>/dev/null | awk -v parent="$pid" '$2 == parent { print $1 }'); do
+    kill_tree "$child"
+  done
+  kill -TERM "$pid" 2>/dev/null || true
 }
 
 cleanup() {
   if [[ -n "$CURRENT_CHILD" ]] && kill -0 "$CURRENT_CHILD" 2>/dev/null; then
-    kill "$CURRENT_CHILD" 2>/dev/null || true
+    kill_tree "$CURRENT_CHILD"
     wait "$CURRENT_CHILD" 2>/dev/null || true
   fi
   if (( TERMINAL_ACTIVE )); then
@@ -131,22 +215,199 @@ cleanup() {
 }
 
 trap cleanup EXIT HUP TERM
-trap 'RUN_CANCELLED=1; [[ -n "$CURRENT_CHILD" ]] && kill "$CURRENT_CHILD" 2>/dev/null || true' INT
+trap 'RUN_CANCELLED=1; [[ -n "$CURRENT_CHILD" ]] && kill_tree "$CURRENT_CHILD"' INT
+trap on_winch WINCH
+
+# --------------------------------------------------------------------------
+# frame buffer
+# --------------------------------------------------------------------------
+
+FRAME=()
+PREV_FRAME=()
+LINE=""
+LINE_W=0
+
+FOCUS_IDS=()
+FOCUS_ARGS=()
+HIT_ROW=()
+HIT_C0=()
+HIT_C1=()
+HIT_ID=()
+HIT_ARG=()
+
+SPAN_C0=0
+SPAN_C1=0
+W_INDEX=0
+
+reset_frame() {
+  FRAME=()
+  LINE=""
+  LINE_W=0
+  FOCUS_IDS=()
+  FOCUS_ARGS=()
+  HIT_ROW=()
+  HIT_C0=()
+  HIT_C1=()
+  HIT_ID=()
+  HIT_ARG=()
+}
+
+put() {
+  LINE+="$1"
+  LINE_W=$(( LINE_W + ${#1} ))
+}
+
+putc() {
+  local code="$1"
+  local text="$2"
+  if (( COLOR )); then
+    LINE+="${code}${text}${RESET}"
+  else
+    LINE+="$text"
+  fi
+  LINE_W=$(( LINE_W + ${#text} ))
+}
+
+pad_to() {
+  local target="$1" filler count
+  count=$(( target - LINE_W ))
+  (( count <= 0 )) && return
+  printf -v filler '%*s' "$count" ''
+  LINE+="$filler"
+  LINE_W="$target"
+}
+
+eol() {
+  FRAME+=("$LINE")
+  LINE=""
+  LINE_W=0
+}
+
+blank() {
+  FRAME+=("")
+}
 
 repeat_char() {
-  local character="$1"
-  local count="$2"
-  local output=""
-  while (( count > 0 )); do
-    output+="$character"
-    ((count--))
+  local character="$1" count="$2" spaces
+  (( count <= 0 )) && { printf ''; return; }
+  printf -v spaces '%*s' "$count" ''
+  printf '%s' "${spaces// /$character}"
+}
+
+clip() {
+  local text="$1" limit="$2"
+  (( limit <= 0 )) && { printf ''; return; }
+  if (( ${#text} > limit )); then
+    printf '%s%s' "${text:0:limit - 1}" "$G_ELL"
+  else
+    printf '%s' "$text"
+  fi
+}
+
+flush_frame() {
+  local output="" index total previous
+  total=${#FRAME[@]}
+  previous=${#PREV_FRAME[@]}
+  if (( FULL_REDRAW )); then
+    output+="${ESC}[H${ESC}[2J"
+    PREV_FRAME=()
+    previous=0
+    FULL_REDRAW=0
+  fi
+  for ((index = 0; index < total; index++)); do
+    if (( index >= previous )) || [[ "${FRAME[index]}" != "${PREV_FRAME[index]}" ]]; then
+      output+="${ESC}[$((index + 1));1H${FRAME[index]}${ESC}[K"
+    fi
   done
+  for ((index = total; index < previous; index++)); do
+    output+="${ESC}[$((index + 1));1H${ESC}[K"
+  done
+  output+="${ESC}[$((total + 1));1H"
   printf '%s' "$output"
+  if (( total )); then
+    PREV_FRAME=("${FRAME[@]}")
+  else
+    PREV_FRAME=()
+  fi
+}
+
+# --------------------------------------------------------------------------
+# widgets
+# --------------------------------------------------------------------------
+
+reg_focus() {
+  W_INDEX=${#FOCUS_IDS[@]}
+  FOCUS_IDS+=("$1")
+  FOCUS_ARGS+=("${2-}")
+}
+
+reg_hit() {
+  HIT_ROW+=("$(( ${#FRAME[@]} + 1 ))")
+  HIT_C0+=("$1")
+  HIT_C1+=("$2")
+  HIT_ID+=("$3")
+  HIT_ARG+=("${4-}")
+}
+
+draw_chip() {
+  local active="$1" focused="$2" label="$3" start
+  start=$LINE_W
+  if (( active )); then
+    if (( COLOR )); then putc "$BLUE_BG" " $label "; else put "[$label]"; fi
+  elif (( focused )); then
+    if (( COLOR )); then putc "$FOCUS_BG" " $label "; else put "<$label>"; fi
+  else
+    put " $label "
+  fi
+  SPAN_C0=$(( start + 1 ))
+  SPAN_C1=$LINE_W
+}
+
+draw_focus_marker() {
+  local focused="$1"
+  if (( focused )); then
+    putc "$CYAN" "$G_MARK"
+  else
+    put " "
+  fi
+}
+
+draw_checkbox() {
+  local checked="$1" label="$2" start
+  start=$LINE_W
+  if (( checked )); then
+    putc "$GREEN" "[x] $label"
+  else
+    put "[ ] $label"
+  fi
+  SPAN_C0=$(( start + 1 ))
+  SPAN_C1=$LINE_W
+}
+
+# --------------------------------------------------------------------------
+# host tooling
+# --------------------------------------------------------------------------
+
+missing_tools() {
+  local tools="$1" tool missing="" index
+  for ((index = 0; index < ${#TOOL_CACHE_KEYS[@]}; index++)); do
+    if [[ "${TOOL_CACHE_KEYS[index]}" == "$tools" ]]; then
+      printf '%s' "${TOOL_CACHE_VALUES[index]}"
+      return
+    fi
+  done
+  for tool in $tools; do
+    if ! command -v "$tool" >/dev/null 2>&1; then
+      missing+="${missing:+, }$tool"
+    fi
+  done
+  TOOL_CACHE_KEYS+=("$tools")
+  TOOL_CACHE_VALUES+=("$missing")
+  printf '%s' "$missing"
 }
 
 selected_count() {
-  local count=0
-  local value
+  local count=0 value
   for value in "${SELECTED[@]}"; do
     (( value == 1 )) && ((count++))
   done
@@ -154,352 +415,476 @@ selected_count() {
 }
 
 set_all_modules() {
-  local value="$1"
-  local index
+  local value="$1" index
   for ((index = 0; index < ${#SELECTED[@]}; index++)); do
     SELECTED[index]="$value"
   done
 }
 
-missing_tools() {
-  local tools="$1"
-  local tool
-  local missing=""
-  for tool in $tools; do
-    if ! command -v "$tool" >/dev/null 2>&1; then
-      missing+="${missing:+, }$tool"
-    fi
-  done
-  printf '%s' "$missing"
+# --------------------------------------------------------------------------
+# input
+# --------------------------------------------------------------------------
+
+input_pending() {
+  local discard
+  IFS= read -rsn1 -t 0 discard 2>/dev/null
 }
 
-module_status() {
-  local index="$1"
-  local missing
-  missing="$(missing_tools "${MODULE_TOOLS[$index]}")"
-  if [[ -z "$missing" ]]; then
-    paint "$GREEN" "READY"
-  else
-    paint "$YELLOW" "MISSING $missing"
+decode_sgr_mouse() {
+  local payload="$1" final raw x y
+  final="${payload: -1}"
+  payload="${payload%?}"
+  payload="${payload#<}"
+  IFS=';' read -r raw x y <<< "$payload"
+  [[ "$raw" =~ ^[0-9]+$ && "$x" =~ ^[0-9]+$ && "$y" =~ ^[0-9]+$ ]] || return 1
+  if (( raw & 64 )); then
+    (( raw & 1 )) && EVENT="wheeldown" || EVENT="wheelup"
+    return 0
   fi
+  (( raw & 32 )) && return 1          # drag, ignored
+  [[ "$final" == "M" ]] || return 1   # release, ignored
+  (( (raw & 3) == 0 )) || return 1    # non primary button
+  EVENT="mouse"
+  EVENT_BUTTON=0
+  EVENT_X="$x"
+  EVENT_Y="$y"
 }
 
-focus_marker() {
-  local index="$1"
-  if (( FOCUS == index )); then
-    paint "$CYAN" ">"
-  else
-    printf ' '
-  fi
-}
-
-chip() {
-  local active="$1"
-  local focused="$2"
-  local label="$3"
-  if (( active )); then
-    paint "$BLUE_BG" " $label "
-  elif (( focused )); then
-    paint "$FOCUS_BG" " $label "
-  else
-    printf '[ %s ]' "$label"
-  fi
-}
-
-checkbox() {
-  local checked="$1"
-  local label="$2"
-  if (( checked )); then
-    paint "$GREEN" "[x] $label"
-  else
-    printf '[ ] %s' "$label"
-  fi
-}
-
-clear_screen() {
-  printf '%s' "${ESC}[H${ESC}[2J"
-}
-
-render_dashboard() {
-  local index marker status endpoint network selected module_hint
-  clear_screen
-  selected="$(selected_count)"
-  endpoint="${ENV_ENDPOINTS[$ENV_INDEX]}"
-  network="${ENV_NETWORKS[$ENV_INDEX]}"
-  module_hint="click rows to toggle"
-  if (( FOCUS >= 3 && FOCUS <= 10 )); then
-    module_hint="${MODULE_DESCRIPTIONS[$((FOCUS - 3))]}"
-  fi
-
-  paint "$BOLD$CYAN" "  LAYERX WORKSPACE"
-  printf '   '
-  paint "$DIM" "interactive dependency, build and test control"
-  printf '\n'
-  printf '  %s\n' "$(repeat_char '─' 76)"
-
-  printf '  %s Environment  ' "$(focus_marker 0)"
-  for ((index = 0; index < 3; index++)); do
-    chip "$((ENV_INDEX == index))" "$((FOCUS == 0))" "${ENV_LABELS[$index]}"
-    printf '  '
-  done
-  printf '\n'
-
-  printf '  %s Endpoint     ' "$(focus_marker 1)"
-  if [[ -n "$endpoint" ]]; then
-    printf '%-58s' "${endpoint:0:58}"
-  else
-    paint "$YELLOW" "click or press Enter to configure"
-  fi
-  printf '\n'
-
-  printf '  %s Network ID   ' "$(focus_marker 2)"
-  if [[ -n "$network" ]]; then
-    printf '%s' "$network"
-  else
-    paint "$YELLOW" "click or press Enter to configure"
-  fi
-  printf '\n\n'
-
-  paint "$BOLD" "  MODULES"
-  printf '   '
-  paint "$DIM" "$selected/${#MODULE_IDS[@]} selected — $module_hint"
-  printf '\n'
-  for ((index = 0; index < ${#MODULE_IDS[@]}; index++)); do
-    marker="[ ]"
-    (( SELECTED[index] == 1 )) && marker="[x]"
-    printf '  %s ' "$(focus_marker $((index + 3)))"
-    if (( SELECTED[index] == 1 )); then
-      paint "$GREEN" "$marker"
-    else
-      printf '%s' "$marker"
-    fi
-    printf ' %-24s ' "${MODULE_NAMES[$index]}"
-    status="$(module_status "$index")"
-    printf '%s\n' "$status"
-  done
-
-  printf '\n'
-  paint "$BOLD" "  ACTION"
-  printf '   '
-  paint "$DIM" "${ACTION_DESCRIPTIONS[$ACTION_INDEX]}"
-  printf '\n  %s ' "$(focus_marker 11)"
-  for ((index = 0; index < ${#ACTION_LABELS[@]}; index++)); do
-    chip "$((ACTION_INDEX == index))" "$((FOCUS == 11))" "${ACTION_LABELS[$index]}"
-    printf ' '
-  done
-  printf '\n\n'
-
-  printf '  %s ' "$(focus_marker 12)"
-  checkbox "$DRY_RUN" "Plan only"
-  printf '    %s ' "$(focus_marker 13)"
-  checkbox "$FAIL_FAST" "Stop on failure"
-  printf '    %s ' "$(focus_marker 14)"
-  checkbox "$CI_MODE" "CI environment"
-  printf '\n\n'
-
-  printf '  '
-  chip 0 "$((FOCUS == 15))" "Select all"
-  printf '  '
-  chip 0 "$((FOCUS == 16))" "Clear"
-  printf '  '
-  chip "$((FOCUS == 17))" "$((FOCUS == 17))" "RUN SELECTED"
-  printf '  '
-  chip 0 "$((FOCUS == 18))" "Quit"
-  printf '\n'
-
-  paint "$DIM" "  Click controls · Arrows/Tab move · Space toggles · Enter activates · q quits"
-  printf '\n'
+decode_x10_mouse() {
+  local button x y
+  IFS= read -rsn1 -t 0.2 button || return 1
+  IFS= read -rsn1 -t 0.2 x || return 1
+  IFS= read -rsn1 -t 0.2 y || return 1
+  printf -v button '%d' "'$button"
+  printf -v x '%d' "'$x"
+  printf -v y '%d' "'$y"
+  button=$(( button - 32 ))
+  (( (button & 3) == 0 )) || return 1
+  EVENT="mouse"
+  EVENT_BUTTON=0
+  EVENT_X=$(( x - 32 ))
+  EVENT_Y=$(( y - 32 ))
 }
 
 read_event() {
-  local key next sequence character
+  local key next sequence character final params
   EVENT=""
-  IFS= read -rsn1 key || { EVENT="quit"; return; }
+  if ! IFS= read -rsn1 key; then
+    if (( RESIZED )); then
+      RESIZED=0
+      EVENT="resize"
+    else
+      EVENT="quit"
+    fi
+    return
+  fi
   case "$key" in
     "") EVENT="enter" ;;
     " ") EVENT="space" ;;
     $'\t') EVENT="tab" ;;
-    q|Q) EVENT="quit" ;;
-    a|A) EVENT="all" ;;
-    c|C) EVENT="clear" ;;
-    r|R) EVENT="run" ;;
-    d|D) EVENT="dry" ;;
+    $'\177'|$'\010') EVENT="backspace" ;;
+    $'\003') EVENT="cancel" ;;
     $'\033')
-      IFS= read -rsn1 -t 1 next || { EVENT="escape"; return; }
+      if ! IFS= read -rsn1 -t 0.05 next; then
+        EVENT="escape"
+        return
+      fi
+      if [[ "$next" == "O" ]]; then
+        IFS= read -rsn1 -t 0.05 next || { EVENT="escape"; return; }
+        case "$next" in
+          A) EVENT="up" ;;
+          B) EVENT="down" ;;
+          C) EVENT="right" ;;
+          D) EVENT="left" ;;
+          *) EVENT="escape" ;;
+        esac
+        return
+      fi
       if [[ "$next" != "[" ]]; then
         EVENT="escape"
         return
       fi
-      IFS= read -rsn1 -t 1 next || { EVENT="escape"; return; }
-      case "$next" in
+      sequence=""
+      while IFS= read -rsn1 -t 0.2 character; do
+        sequence+="$character"
+        [[ "$character" == [@-~] ]] && break
+      done
+      [[ -n "$sequence" ]] || { EVENT="escape"; return; }
+      final="${sequence: -1}"
+      params="${sequence%?}"
+      case "$final" in
         A) EVENT="up" ;;
         B) EVENT="down" ;;
         C) EVENT="right" ;;
         D) EVENT="left" ;;
-        '<')
-          sequence=""
-          while IFS= read -rsn1 -t 1 character; do
-            sequence+="$character"
-            [[ "$character" == "M" || "$character" == "m" ]] && break
-          done
-          EVENT="mouse:$sequence"
+        H) EVENT="home" ;;
+        F) EVENT="end" ;;
+        M|m)
+          if [[ -z "$params" ]]; then
+            decode_x10_mouse || EVENT="none"
+          else
+            decode_sgr_mouse "$sequence" || EVENT="none"
+          fi
           ;;
-        *) EVENT="escape" ;;
+        *) EVENT="none" ;;
       esac
       ;;
-    *) EVENT="key:$key" ;;
+    *) EVENT="key"; EVENT_KEY="$key" ;;
   esac
 }
 
-edit_text_value() {
-  local title="$1"
-  local current="$2"
-  local value
-  terminal_mouse_off
-  clear_screen
-  printf '%s' "${ESC}[?25h"
-  paint "$BOLD$CYAN" "  EDIT WORKSPACE ENVIRONMENT"
-  printf '\n\n  %s\n\n' "Press Enter to keep the current value."
-  printf '  %s [%s]: ' "$title" "$current"
-  IFS= read -r value || value=""
-  printf '%s' "${ESC}[?25l"
-  terminal_mouse_on
-  if [[ -n "$value" ]]; then
-    EDITED_VALUE="$value"
-  else
-    EDITED_VALUE="$current"
+find_hit() {
+  local index
+  HIT_FOUND_ID=""
+  HIT_FOUND_ARG=""
+  for ((index = 0; index < ${#HIT_ROW[@]}; index++)); do
+    if (( EVENT_Y == HIT_ROW[index] && EVENT_X >= HIT_C0[index] && EVENT_X <= HIT_C1[index] )); then
+      HIT_FOUND_ID="${HIT_ID[index]}"
+      HIT_FOUND_ARG="${HIT_ARG[index]}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+HIT_FOUND_ID=""
+HIT_FOUND_ARG=""
+
+# --------------------------------------------------------------------------
+# inline field editing
+# --------------------------------------------------------------------------
+
+start_edit() {
+  EDIT_MODE=1
+  EDIT_TARGET="$1"
+  case "$1" in
+    endpoint) EDIT_BUFFER="${ENV_ENDPOINTS[$ENV_INDEX]}" ;;
+    network) EDIT_BUFFER="${ENV_NETWORKS[$ENV_INDEX]}" ;;
+    *) EDIT_BUFFER="" ;;
+  esac
+}
+
+commit_edit() {
+  case "$EDIT_TARGET" in
+    endpoint) ENV_ENDPOINTS[ENV_INDEX]="$EDIT_BUFFER" ;;
+    network)
+      if [[ "$EDIT_BUFFER" =~ ^[0-9]*$ ]]; then
+        ENV_NETWORKS[ENV_INDEX]="$EDIT_BUFFER"
+      fi
+      ;;
+  esac
+  local previous="$EDIT_TARGET"
+  EDIT_MODE=0
+  EDIT_TARGET=""
+  EDIT_BUFFER=""
+  # Chain straight into the network field so an unconfigured environment can be
+  # completed in one pass.
+  if [[ "$previous" == "endpoint" && -n "${ENV_ENDPOINTS[$ENV_INDEX]}" && -z "${ENV_NETWORKS[$ENV_INDEX]}" ]]; then
+    FOCUS="$(focus_index_of network)"
+    start_edit network
   fi
 }
 
-edit_endpoint() {
-  EDITED_VALUE=""
-  edit_text_value "Endpoint" "${ENV_ENDPOINTS[$ENV_INDEX]}"
-  ENV_ENDPOINTS[ENV_INDEX]="$EDITED_VALUE"
+# Shared text key handling. 0 keep editing, 1 commit, 2 cancel.
+edit_consume() {
+  case "$EVENT" in
+    key)
+      if [[ "$EDIT_TARGET" == "network" && ! "$EVENT_KEY" =~ ^[0-9]$ ]]; then
+        return 0
+      fi
+      EDIT_BUFFER+="$EVENT_KEY"
+      ;;
+    space)
+      [[ "$EDIT_TARGET" == "network" ]] || EDIT_BUFFER+=" "
+      ;;
+    backspace) EDIT_BUFFER="${EDIT_BUFFER%?}" ;;
+    enter) return 1 ;;
+    escape|cancel) return 2 ;;
+  esac
+  return 0
 }
 
-edit_network() {
-  local before
-  before="${ENV_NETWORKS[$ENV_INDEX]}"
-  EDITED_VALUE=""
-  edit_text_value "Network ID" "$before"
-  if [[ "$EDITED_VALUE" =~ ^[0-9]+$ ]]; then
-    ENV_NETWORKS[ENV_INDEX]="$EDITED_VALUE"
+# --------------------------------------------------------------------------
+# dashboard
+# --------------------------------------------------------------------------
+
+put_env_field() {
+  local label="$1" value="$2" editing="$3" focused="$4" id="$5" start
+  put "  "
+  draw_focus_marker "$focused"
+  put " "
+  put "$label"
+  pad_to 17
+  start=$LINE_W
+  if (( editing )); then
+    put "$(clip "$value" $(( WIDTH - 20 )))"
+    putc "$FOCUS_BG" " "
+  elif [[ -n "$value" ]]; then
+    put "$(clip "$value" $(( WIDTH - 19 )))"
   else
-    ENV_NETWORKS[ENV_INDEX]="$before"
+    putc "$YELLOW" "click or press Enter to configure"
   fi
+  reg_hit "$(( start + 1 ))" "$(( WIDTH ))" "$id"
+  eol
+}
+
+render_dashboard() {
+  local index selected hint focused label missing text id
+  local module_base=3
+
+  reset_frame
+  selected="$(selected_count)"
+
+  put "  "
+  putc "$BOLD$CYAN" "LAYERX WORKSPACE"
+  put "   "
+  putc "$DIM" "interactive dependency, build and test control"
+  eol
+  put "  "
+  putc "$DIM" "$(repeat_char "$G_RULE" "$WIDTH")"
+  eol
+
+  # environment ------------------------------------------------------------
+  reg_focus env
+  focused=$(( FOCUS == W_INDEX ))
+  put "  "
+  draw_focus_marker "$focused"
+  put " Environment"
+  pad_to 17
+  for ((index = 0; index < 3; index++)); do
+    draw_chip "$(( ENV_INDEX == index ))" "$(( focused && ENV_INDEX == index ))" "${ENV_LABELS[index]}"
+    reg_hit "$SPAN_C0" "$SPAN_C1" env "$index"
+    put " "
+  done
+  eol
+
+  reg_focus endpoint
+  if (( EDIT_MODE )) && [[ "$EDIT_TARGET" == "endpoint" ]]; then
+    put_env_field "Endpoint" "$EDIT_BUFFER" 1 1 endpoint
+  else
+    put_env_field "Endpoint" "${ENV_ENDPOINTS[$ENV_INDEX]}" 0 "$(( FOCUS == W_INDEX ))" endpoint
+  fi
+
+  reg_focus network
+  if (( EDIT_MODE )) && [[ "$EDIT_TARGET" == "network" ]]; then
+    put_env_field "Network ID" "$EDIT_BUFFER" 1 1 network
+  else
+    put_env_field "Network ID" "${ENV_NETWORKS[$ENV_INDEX]}" 0 "$(( FOCUS == W_INDEX ))" network
+  fi
+
+  blank
+
+  # modules ----------------------------------------------------------------
+  hint="click a row to toggle"
+  if (( FOCUS >= module_base && FOCUS < module_base + ${#MODULE_IDS[@]} )); then
+    hint="${MODULE_DESCRIPTIONS[$(( FOCUS - module_base ))]}"
+  fi
+  put "  "
+  putc "$BOLD" "MODULES"
+  put "   "
+  putc "$DIM" "$(clip "$selected/${#MODULE_IDS[@]} selected $G_DASH $hint" $(( WIDTH - 10 )))"
+  eol
+
+  for ((index = 0; index < ${#MODULE_IDS[@]}; index++)); do
+    reg_focus module "$index"
+    focused=$(( FOCUS == W_INDEX ))
+    put "  "
+    draw_focus_marker "$focused"
+    put " "
+    if (( SELECTED[index] == 1 )); then
+      putc "$GREEN" "[x]"
+    else
+      put "[ ]"
+    fi
+    put " "
+    put "${MODULE_NAMES[index]}"
+    pad_to 32
+    missing="$(missing_tools "${MODULE_TOOLS[index]}")"
+    if [[ -z "$missing" ]]; then
+      putc "$GREEN" "READY"
+    else
+      putc "$YELLOW" "$(clip "MISSING $missing" $(( WIDTH - 32 )))"
+    fi
+    reg_hit 3 "$WIDTH" module "$index"
+    eol
+  done
+
+  blank
+
+  # action -----------------------------------------------------------------
+  put "  "
+  putc "$BOLD" "ACTION"
+  put "    "
+  putc "$DIM" "${ACTION_DESCRIPTIONS[$ACTION_INDEX]}"
+  eol
+
+  reg_focus action
+  focused=$(( FOCUS == W_INDEX ))
+  put "  "
+  draw_focus_marker "$focused"
+  put " "
+  for ((index = 0; index < ${#ACTION_LABELS[@]}; index++)); do
+    draw_chip "$(( ACTION_INDEX == index ))" "$(( focused && ACTION_INDEX == index ))" "${ACTION_LABELS[index]}"
+    reg_hit "$SPAN_C0" "$SPAN_C1" action "$index"
+    put " "
+  done
+  eol
+
+  # toggles ----------------------------------------------------------------
+  put "  "
+  reg_focus dry
+  draw_focus_marker "$(( FOCUS == W_INDEX ))"
+  put " "
+  draw_checkbox "$DRY_RUN" "Plan only"
+  reg_hit "$SPAN_C0" "$SPAN_C1" dry
+  pad_to 26
+  reg_focus failfast
+  draw_focus_marker "$(( FOCUS == W_INDEX ))"
+  put " "
+  draw_checkbox "$FAIL_FAST" "Stop on failure"
+  reg_hit "$SPAN_C0" "$SPAN_C1" failfast
+  pad_to 52
+  reg_focus ci
+  draw_focus_marker "$(( FOCUS == W_INDEX ))"
+  put " "
+  draw_checkbox "$CI_MODE" "CI environment"
+  reg_hit "$SPAN_C0" "$SPAN_C1" ci
+  eol
+
+  blank
+
+  # buttons ----------------------------------------------------------------
+  put "  "
+  for label in "Select all:selectall" "Clear:clearall" "RUN SELECTED:run" "Quit:quit"; do
+    text="${label%%:*}"
+    id="${label##*:}"
+    reg_focus "$id"
+    focused=$(( FOCUS == W_INDEX ))
+    if [[ "$id" == "run" ]]; then
+      draw_chip "$focused" "$focused" "$text"
+    else
+      draw_chip 0 "$focused" "$text"
+    fi
+    reg_hit "$SPAN_C0" "$SPAN_C1" "$id"
+    put "  "
+  done
+  eol
+
+  if (( EDIT_MODE )); then
+    put "  "
+    putc "$DIM" "Type a value $G_DOT Enter commits $G_DOT Esc cancels"
+  else
+    put "  "
+    putc "$DIM" "$(clip "Click controls $G_DOT Arrows and Tab move $G_DOT Space toggles $G_DOT Enter activates $G_DOT q quits" "$WIDTH")"
+  fi
+  eol
+
+  FOCUS_COUNT=${#FOCUS_IDS[@]}
+  (( FOCUS >= FOCUS_COUNT )) && FOCUS=$(( FOCUS_COUNT - 1 ))
 }
 
 cycle_environment() {
-  local direction="$1"
-  ENV_INDEX=$(( (ENV_INDEX + direction + 3) % 3 ))
+  ENV_INDEX=$(( (ENV_INDEX + $1 + 3) % 3 ))
 }
 
 cycle_action() {
-  local direction="$1"
-  ACTION_INDEX=$(( (ACTION_INDEX + direction + ${#ACTION_LABELS[@]}) % ${#ACTION_LABELS[@]} ))
+  ACTION_INDEX=$(( (ACTION_INDEX + $1 + ${#ACTION_LABELS[@]}) % ${#ACTION_LABELS[@]} ))
 }
 
-activate_focus() {
-  case "$FOCUS" in
-    0) cycle_environment 1 ;;
-    1) edit_endpoint ;;
-    2) edit_network ;;
-    3|4|5|6|7|8|9|10)
-      local module_index=$((FOCUS - 3))
-      SELECTED[module_index]=$((1 - SELECTED[module_index]))
+activate() {
+  local id="$1" arg="${2-}"
+  case "$id" in
+    env)
+      if [[ -n "$arg" ]]; then ENV_INDEX="$arg"; else cycle_environment 1; fi
       ;;
-    11) cycle_action 1 ;;
-    12) DRY_RUN=$((1 - DRY_RUN)) ;;
-    13) FAIL_FAST=$((1 - FAIL_FAST)) ;;
-    14) CI_MODE=$((1 - CI_MODE)) ;;
-    15) set_all_modules 1 ;;
-    16) set_all_modules 0 ;;
-    17) RUN_REQUESTED=1 ;;
-    18) QUIT_REQUESTED=1 ;;
+    endpoint) start_edit endpoint ;;
+    network) start_edit network ;;
+    module) SELECTED[arg]=$(( 1 - SELECTED[arg] )) ;;
+    action)
+      if [[ -n "$arg" ]]; then ACTION_INDEX="$arg"; else cycle_action 1; fi
+      ;;
+    dry) DRY_RUN=$(( 1 - DRY_RUN )) ;;
+    failfast) FAIL_FAST=$(( 1 - FAIL_FAST )) ;;
+    ci) CI_MODE=$(( 1 - CI_MODE )) ;;
+    selectall) set_all_modules 1 ;;
+    clearall) set_all_modules 0 ;;
+    run) RUN_REQUESTED=1 ;;
+    quit) QUIT_REQUESTED=1 ;;
   esac
 }
 
-handle_click() {
-  local x="$1"
-  local y="$2"
-  local index
-  case "$y" in
-    3)
-      FOCUS=0
-      if (( x >= 18 && x <= 27 )); then ENV_INDEX=0
-      elif (( x >= 30 && x <= 40 )); then ENV_INDEX=1
-      elif (( x >= 43 && x <= 56 )); then ENV_INDEX=2
-      fi
-      ;;
-    4) FOCUS=1; edit_endpoint ;;
-    5) FOCUS=2; edit_network ;;
-    8|9|10|11|12|13|14|15)
-      index=$((y - 8))
-      FOCUS=$((index + 3))
-      SELECTED[index]=$((1 - SELECTED[index]))
-      ;;
-    18)
-      FOCUS=11
-      if (( x >= 5 && x <= 13 )); then ACTION_INDEX=0
-      elif (( x >= 15 && x <= 25 )); then ACTION_INDEX=1
-      elif (( x >= 27 && x <= 35 )); then ACTION_INDEX=2
-      elif (( x >= 37 && x <= 44 )); then ACTION_INDEX=3
-      elif (( x >= 46 && x <= 59 )); then ACTION_INDEX=4
-      fi
-      ;;
-    20)
-      if (( x >= 5 && x <= 17 )); then FOCUS=12; DRY_RUN=$((1 - DRY_RUN))
-      elif (( x >= 24 && x <= 42 )); then FOCUS=13; FAIL_FAST=$((1 - FAIL_FAST))
-      elif (( x >= 49 && x <= 66 )); then FOCUS=14; CI_MODE=$((1 - CI_MODE))
-      fi
-      ;;
-    22)
-      if (( x >= 3 && x <= 16 )); then FOCUS=15; set_all_modules 1
-      elif (( x >= 19 && x <= 27 )); then FOCUS=16; set_all_modules 0
-      elif (( x >= 30 && x <= 43 )); then FOCUS=17; RUN_REQUESTED=1
-      elif (( x >= 46 && x <= 53 )); then FOCUS=18; QUIT_REQUESTED=1
-      fi
-      ;;
-  esac
-}
-
-handle_mouse_event() {
-  local payload="$1"
-  local suffix button x y
-  suffix="${payload: -1}"
-  [[ "$suffix" == "M" ]] || return
-  payload="${payload%?}"
-  IFS=';' read -r button x y <<< "$payload"
-  [[ "$button" =~ ^[0-9]+$ && "$x" =~ ^[0-9]+$ && "$y" =~ ^[0-9]+$ ]] || return
-  (( button == 0 )) || return
-  handle_click "$x" "$y"
+focus_index_of() {
+  local id="$1" arg="${2-}" index
+  for ((index = 0; index < ${#FOCUS_IDS[@]}; index++)); do
+    [[ "${FOCUS_IDS[index]}" == "$id" ]] || continue
+    if [[ "$id" == "module" && -n "$arg" && "${FOCUS_ARGS[index]}" != "$arg" ]]; then
+      continue
+    fi
+    printf '%s' "$index"
+    return
+  done
+  printf '%s' "$FOCUS"
 }
 
 handle_dashboard_event() {
+  local id arg
+
+  if (( EDIT_MODE )); then
+    edit_consume
+    case "$?" in
+      1) commit_edit ;;
+      2) EDIT_MODE=0; EDIT_TARGET=""; EDIT_BUFFER="" ;;
+    esac
+    return
+  fi
+
+  id="${FOCUS_IDS[$FOCUS]:-}"
+
   case "$EVENT" in
-    up) FOCUS=$(( (FOCUS + 18) % 19 )) ;;
-    down|tab) FOCUS=$(( (FOCUS + 1) % 19 )) ;;
+    up|wheelup) FOCUS=$(( (FOCUS - 1 + FOCUS_COUNT) % FOCUS_COUNT )) ;;
+    down|tab|wheeldown) FOCUS=$(( (FOCUS + 1) % FOCUS_COUNT )) ;;
     left)
-      if (( FOCUS == 0 )); then cycle_environment -1
-      elif (( FOCUS == 11 )); then cycle_action -1
-      else FOCUS=$(( (FOCUS + 18) % 19 ))
-      fi
+      case "$id" in
+        env) cycle_environment -1 ;;
+        action) cycle_action -1 ;;
+        *) FOCUS=$(( (FOCUS - 1 + FOCUS_COUNT) % FOCUS_COUNT )) ;;
+      esac
       ;;
     right)
-      if (( FOCUS == 0 )); then cycle_environment 1
-      elif (( FOCUS == 11 )); then cycle_action 1
-      else FOCUS=$(( (FOCUS + 1) % 19 ))
+      case "$id" in
+        env) cycle_environment 1 ;;
+        action) cycle_action 1 ;;
+        *) FOCUS=$(( (FOCUS + 1) % FOCUS_COUNT )) ;;
+      esac
+      ;;
+    home) FOCUS=0 ;;
+    end) FOCUS=$(( FOCUS_COUNT - 1 )) ;;
+    enter|space) activate "$id" "${FOCUS_ARGS[$FOCUS]:-}" ;;
+    key)
+      case "$EVENT_KEY" in
+        q|Q) QUIT_REQUESTED=1 ;;
+        a|A) set_all_modules 1 ;;
+        c|C) set_all_modules 0 ;;
+        r|R) RUN_REQUESTED=1 ;;
+        d|D) DRY_RUN=$(( 1 - DRY_RUN )) ;;
+        i|I) ACTION_INDEX=0 ;;
+        e|E) cycle_environment 1 ;;
+      esac
+      ;;
+    mouse)
+      if find_hit; then
+        arg="$HIT_FOUND_ARG"
+        FOCUS="$(focus_index_of "$HIT_FOUND_ID" "$arg")"
+        activate "$HIT_FOUND_ID" "$arg"
       fi
       ;;
-    enter|space) activate_focus ;;
-    all) set_all_modules 1 ;;
-    clear) set_all_modules 0 ;;
-    run) RUN_REQUESTED=1 ;;
-    dry) DRY_RUN=$((1 - DRY_RUN)) ;;
-    quit|escape) QUIT_REQUESTED=1 ;;
-    mouse:*) handle_mouse_event "${EVENT#mouse:}" ;;
+    escape|cancel|quit) QUIT_REQUESTED=1 ;;
   esac
 }
+
+# --------------------------------------------------------------------------
+# plan construction
+# --------------------------------------------------------------------------
 
 add_step() {
   STEP_MODULE+=("$1")
@@ -513,8 +898,7 @@ add_step() {
 }
 
 append_core_steps() {
-  local phase="$1"
-  case "$phase" in
+  case "$1" in
     INSTALL) add_step core INSTALL "No project-managed dependencies" "." "" ":" ;;
     BUILD) add_step core BUILD "Compile the C17 protocol core" "." "make cc ar" "make build" ;;
     TEST)
@@ -620,35 +1004,22 @@ append_specgen_steps() {
 }
 
 append_module_steps() {
-  local module="$1"
-  local phase="$2"
-  case "$module" in
-    core) append_core_steps "$phase" ;;
-    contracts) append_contracts_steps "$phase" ;;
-    agent) append_agent_steps "$phase" ;;
-    human) append_human_steps "$phase" ;;
-    platform) append_platform_steps "$phase" ;;
-    programs) append_programs_steps "$phase" ;;
-    interop) append_interop_steps "$phase" ;;
-    specgen) append_specgen_steps "$phase" ;;
+  case "$1" in
+    core) append_core_steps "$2" ;;
+    contracts) append_contracts_steps "$2" ;;
+    agent) append_agent_steps "$2" ;;
+    human) append_human_steps "$2" ;;
+    platform) append_platform_steps "$2" ;;
+    programs) append_programs_steps "$2" ;;
+    interop) append_interop_steps "$2" ;;
+    specgen) append_specgen_steps "$2" ;;
   esac
 }
 
-reset_plan() {
-  STEP_MODULE=()
-  STEP_PHASE=()
-  STEP_LABEL=()
-  STEP_CWD=()
-  STEP_TOOLS=()
-  STEP_COMMAND=()
-  STEP_STATUS=()
-  STEP_LOG=()
-}
-
 build_plan() {
-  local phases=()
-  local phase module_index
-  reset_plan
+  local phases=() phase module_index
+  STEP_MODULE=(); STEP_PHASE=(); STEP_LABEL=(); STEP_CWD=()
+  STEP_TOOLS=(); STEP_COMMAND=(); STEP_STATUS=(); STEP_LOG=()
   case "$ACTION_INDEX" in
     1) phases=(INSTALL) ;;
     2) phases=(BUILD) ;;
@@ -659,267 +1030,395 @@ build_plan() {
   for phase in "${phases[@]}"; do
     for ((module_index = 0; module_index < ${#MODULE_IDS[@]}; module_index++)); do
       if (( SELECTED[module_index] == 1 )); then
-        append_module_steps "${MODULE_IDS[$module_index]}" "$phase"
+        append_module_steps "${MODULE_IDS[module_index]}" "$phase"
       fi
     done
   done
 }
 
-selected_module_names() {
-  local result=""
-  local index
-  for ((index = 0; index < ${#MODULE_IDS[@]}; index++)); do
-    if (( SELECTED[index] == 1 )); then
-      result+="${result:+, }${MODULE_NAMES[$index]}"
+# --------------------------------------------------------------------------
+# modal screens
+# --------------------------------------------------------------------------
+
+put_wrapped() {
+  local text="$1" limit="$2" word line=""
+  for word in $text; do
+    if [[ -z "$line" ]]; then
+      line="$word"
+    elif (( ${#line} + 1 + ${#word} <= limit )); then
+      line+=" $word"
+    else
+      put "  "; put "$line"; eol
+      line="$word"
     fi
   done
-  printf '%s' "$result"
+  [[ -n "$line" ]] && { put "  "; put "$line"; eol; }
+}
+
+modal_header() {
+  put "  "
+  putc "$BOLD$CYAN" "$1"
+  eol
+  put "  "
+  putc "$DIM" "$(repeat_char "$G_RULE" "$WIDTH")"
+  eol
+  blank
+}
+
+show_notice() {
+  local title="$1" message="$2"
+  while true; do
+    reset_frame
+    put "  "
+    putc "$BOLD$YELLOW" "$title"
+    eol
+    put "  "
+    putc "$DIM" "$(repeat_char "$G_RULE" "$WIDTH")"
+    eol
+    blank
+    put_wrapped "$message" $(( WIDTH - 2 ))
+    blank
+    put "  "
+    draw_chip 1 0 "BACK TO DASHBOARD"
+    reg_hit "$SPAN_C0" "$SPAN_C1" back
+    eol
+    blank
+    put "  "
+    putc "$DIM" "Click Back or press any key"
+    eol
+    flush_frame
+    read_event
+    case "$EVENT" in
+      resize|none) continue ;;
+      *) break ;;
+    esac
+  done
+  FULL_REDRAW=1
+}
+
+show_doctor() {
+  local index missing
+  while true; do
+    reset_frame
+    modal_header "WORKSPACE READINESS"
+    put "  Environment   ${ENV_LABELS[$ENV_INDEX]}"; eol
+    put "  Endpoint      ${ENV_ENDPOINTS[$ENV_INDEX]:-(not configured)}"; eol
+    put "  Network ID    ${ENV_NETWORKS[$ENV_INDEX]:-(not configured)}"; eol
+    blank
+    for ((index = 0; index < ${#MODULE_IDS[@]}; index++)); do
+      (( SELECTED[index] == 1 )) || continue
+      missing="$(missing_tools "${MODULE_TOOLS[index]}")"
+      put "  ${MODULE_NAMES[index]}"
+      pad_to 28
+      if [[ -z "$missing" ]]; then
+        putc "$GREEN" "READY"
+      else
+        putc "$YELLOW" "BLOCKED"
+        put "  missing $(clip "$missing" $(( WIDTH - 40 )))"
+      fi
+      eol
+    done
+    blank
+    put "  "
+    draw_chip 1 0 "BACK TO DASHBOARD"
+    reg_hit "$SPAN_C0" "$SPAN_C1" back
+    eol
+    blank
+    put "  "
+    putc "$DIM" "Click Back or press any key"
+    eol
+    flush_frame
+    read_event
+    case "$EVENT" in
+      resize|none) continue ;;
+      *) break ;;
+    esac
+  done
+  FULL_REDRAW=1
+}
+
+prompt_confirmation_word() {
+  local word="$1" outcome
+  EDIT_MODE=1
+  EDIT_TARGET="confirm"
+  EDIT_BUFFER=""
+  while true; do
+    reset_frame
+    put "  "
+    putc "$BOLD$RED" "PRODUCTION TEST SAFETY"
+    eol
+    put "  "
+    putc "$DIM" "$(repeat_char "$G_RULE" "$WIDTH")"
+    eol
+    blank
+    put "  Test settings will be exported as production to every selected process."; eol
+    put "  Type $word to unlock this run. No process starts until you do."; eol
+    blank
+    put "  Confirmation: "
+    put "$EDIT_BUFFER"
+    putc "$FOCUS_BG" " "
+    eol
+    blank
+    put "  "
+    putc "$DIM" "Enter confirms $G_DOT Esc cancels"
+    eol
+    flush_frame
+    read_event
+    [[ "$EVENT" == "resize" || "$EVENT" == "none" ]] && continue
+    edit_consume
+    outcome=$?
+    if (( outcome == 1 )); then
+      [[ "$EDIT_BUFFER" == "$word" ]] && outcome=10 || outcome=2
+    fi
+    if (( outcome == 10 )); then
+      EDIT_MODE=0; EDIT_BUFFER=""; EDIT_TARGET=""; FULL_REDRAW=1
+      return 0
+    fi
+    if (( outcome == 2 )); then
+      EDIT_MODE=0; EDIT_BUFFER=""; EDIT_TARGET=""; FULL_REDRAW=1
+      return 1
+    fi
+  done
 }
 
 production_authorized() {
-  local answer=""
   if (( ENV_INDEX != 2 || (ACTION_INDEX != 3 && ACTION_INDEX != 4) )); then
     return 0
   fi
-  clear_screen
-  paint "$BOLD$RED" "  PRODUCTION TEST SAFETY"
-  printf '\n\n  Test settings will be exported as production to every selected test process.\n'
-  printf '  Type production to unlock this run. No process starts until you do.\n\n'
-  terminal_mouse_off
-  printf '%s' "${ESC}[?25h"
-  printf '  Confirmation: '
-  IFS= read -r answer || answer=""
-  printf '%s' "${ESC}[?25l"
-  terminal_mouse_on
-  [[ "$answer" == "production" ]]
-}
-
-render_confirmation() {
-  local choice="$1"
-  local total online dry endpoint network
-  total="${#STEP_MODULE[@]}"
-  endpoint="${ENV_ENDPOINTS[$ENV_INDEX]:-(not configured)}"
-  network="${ENV_NETWORKS[$ENV_INDEX]:-(not configured)}"
-  online="No"
-  (( ACTION_INDEX == 1 || ACTION_INDEX == 4 )) && online="Yes — locked dependencies may be downloaded"
-  dry="No"
-  (( DRY_RUN == 1 )) && dry="Yes — nothing will execute"
-  clear_screen
-  paint "$BOLD$CYAN" "  REVIEW WORKSPACE RUN"
-  printf '\n  %s\n\n' "$(repeat_char '─' 72)"
-  printf '  Action        %s\n' "${ACTION_LABELS[$ACTION_INDEX]}"
-  printf '  Modules       %s selected\n' "$(selected_count)"
-  printf '  Environment   %s\n' "${ENV_LABELS[$ENV_INDEX]}"
-  printf '  Endpoint      %s\n' "$endpoint"
-  printf '  Network ID    %s\n' "$network"
-  printf '  Steps         %s\n' "$total"
-  printf '  Network use   %s\n' "$online"
-  printf '  Plan only     %s\n\n' "$dry"
-  if (( ACTION_INDEX == 1 || ACTION_INDEX == 4 )); then
-    paint "$YELLOW" "  Install steps can access package registries. Nothing runs without confirmation."
-    printf '\n\n'
-  fi
-  printf '  '
-  chip "$((choice == 0))" "$((choice == 0))" "Cancel"
-  printf '     '
-  chip "$((choice == 1))" "$((choice == 1))" "RUN NOW"
-  printf '\n\n'
-  paint "$DIM" "  Click a button · left/right chooses · Enter confirms · Esc cancels"
-  printf '\n'
+  prompt_confirmation_word production
 }
 
 confirm_run() {
-  local choice=0 payload suffix button x y button_row
-  button_row=13
-  (( ACTION_INDEX == 1 || ACTION_INDEX == 4 )) && button_row=15
+  local choice=0 online dry
+  online="No"
+  (( ACTION_INDEX == 1 || ACTION_INDEX == 4 )) && online="Yes $G_DASH locked dependencies may be downloaded"
+  dry="No"
+  (( DRY_RUN == 1 )) && dry="Yes $G_DASH nothing will execute"
   while true; do
-    render_confirmation "$choice"
+    reset_frame
+    modal_header "REVIEW WORKSPACE RUN"
+    put "  Action        ${ACTION_LABELS[$ACTION_INDEX]}"; eol
+    put "  Modules       $(selected_count) selected"; eol
+    put "  Environment   ${ENV_LABELS[$ENV_INDEX]}"; eol
+    put "  Endpoint      ${ENV_ENDPOINTS[$ENV_INDEX]:-(not configured)}"; eol
+    put "  Network ID    ${ENV_NETWORKS[$ENV_INDEX]:-(not configured)}"; eol
+    put "  Steps         ${#STEP_MODULE[@]}"; eol
+    put "  Network use   $online"; eol
+    put "  Plan only     $dry"; eol
+    blank
+    if (( ACTION_INDEX == 1 || ACTION_INDEX == 4 )); then
+      put "  "
+      putc "$YELLOW" "Install steps can access package registries. Nothing runs without confirmation."
+      eol
+      blank
+    fi
+    put "  "
+    draw_chip "$(( choice == 0 ))" "$(( choice == 0 ))" "Cancel"
+    reg_hit "$SPAN_C0" "$SPAN_C1" cancel
+    put "     "
+    draw_chip "$(( choice == 1 ))" "$(( choice == 1 ))" "RUN NOW"
+    reg_hit "$SPAN_C0" "$SPAN_C1" confirm
+    eol
+    blank
+    put "  "
+    putc "$DIM" "Click a button $G_DOT left and right choose $G_DOT Enter confirms $G_DOT Esc cancels"
+    eol
+    flush_frame
+
     read_event
     case "$EVENT" in
-      left|right|tab) choice=$((1 - choice)) ;;
-      enter|space) (( choice == 1 )) && return 0 || return 1 ;;
-      quit|escape) return 1 ;;
-      mouse:*)
-        payload="${EVENT#mouse:}"
-        suffix="${payload: -1}"
-        [[ "$suffix" == "M" ]] || continue
-        payload="${payload%?}"
-        IFS=';' read -r button x y <<< "$payload"
-        [[ "$button" == "0" && "$y" == "$button_row" ]] || continue
-        if (( x >= 3 && x <= 12 )); then return 1
-        elif (( x >= 18 && x <= 26 )); then return 0
+      left|right|tab|up|down) choice=$(( 1 - choice )) ;;
+      enter|space)
+        FULL_REDRAW=1
+        (( choice == 1 )) && return 0 || return 1
+        ;;
+      quit|escape|cancel) FULL_REDRAW=1; return 1 ;;
+      mouse)
+        if find_hit; then
+          FULL_REDRAW=1
+          [[ "$HIT_FOUND_ID" == "confirm" ]] && return 0 || return 1
         fi
         ;;
     esac
   done
 }
 
-render_doctor() {
-  local index missing
-  clear_screen
-  paint "$BOLD$CYAN" "  WORKSPACE READINESS"
-  printf '   '
-  paint "$DIM" "read-only host inspection"
-  printf '\n  %s\n\n' "$(repeat_char '─' 82)"
-  printf '  Environment   %s\n' "${ENV_LABELS[$ENV_INDEX]}"
-  printf '  Endpoint      %s\n' "${ENV_ENDPOINTS[$ENV_INDEX]:-(not configured)}"
-  printf '  Network ID    %s\n\n' "${ENV_NETWORKS[$ENV_INDEX]:-(not configured)}"
-  for ((index = 0; index < ${#MODULE_IDS[@]}; index++)); do
-    (( SELECTED[index] == 1 )) || continue
-    missing="$(missing_tools "${MODULE_TOOLS[$index]}")"
-    printf '  %-22s ' "${MODULE_NAMES[$index]}"
-    if [[ -z "$missing" ]]; then
-      paint "$GREEN" "READY"
-    else
-      paint "$YELLOW" "BLOCKED"
-      printf '  missing %s' "$missing"
-    fi
-    printf '\n'
-  done
-  printf '\n  '
-  chip 1 0 "BACK TO DASHBOARD"
-  printf '\n\n'
-  paint "$DIM" "  Click Back or press any key"
-  printf '\n'
-}
+# --------------------------------------------------------------------------
+# execution
+# --------------------------------------------------------------------------
 
-show_doctor() {
-  render_doctor
-  read_event
-}
-
-show_notice() {
-  local title="$1"
-  local message="$2"
-  clear_screen
-  paint "$BOLD$YELLOW" "  $title"
-  printf '\n\n  %s\n\n  ' "$message"
-  chip 1 0 "BACK TO DASHBOARD"
-  printf '\n\n'
-  paint "$DIM" "  Click Back or press any key"
-  printf '\n'
-  read_event
-}
-
-status_color() {
-  case "$1" in
-    PASSED) printf '%s' "$GREEN" ;;
-    RUNNING) printf '%s' "$CYAN" ;;
-    PLANNED|SKIPPED) printf '%s' "$DIM" ;;
-    BLOCKED|FAILED|CANCELLED) printf '%s' "$RED" ;;
-    *) printf '%s' "$YELLOW" ;;
+put_status() {
+  local status="$1" code
+  case "$status" in
+    PASSED) code="$GREEN" ;;
+    RUNNING) code="$CYAN" ;;
+    PLANNED|SKIPPED) code="$DIM" ;;
+    BLOCKED|FAILED|CANCELLED) code="$RED" ;;
+    *) code="$YELLOW" ;;
   esac
+  putc "$code" "$status"
 }
 
-render_log_tail() {
-  local log_file="$1"
-  if [[ -z "$log_file" || ! -f "$log_file" ]]; then
-    paint "$DIM" "  Waiting for output…"
-    printf '\n'
+load_log_tail() {
+  local file="$1" size="" line
+  if [[ -n "$file" && -f "$file" ]]; then
+    size="$(wc -c <"$file" 2>/dev/null || printf '0')"
+  fi
+  if [[ "$file" == "$LOG_CACHE_FILE" && "$size" == "$LOG_CACHE_SIZE" ]]; then
     return
   fi
-  tail -n 6 "$log_file" 2>/dev/null | sed -E $'s/\033\[[0-9;?]*[ -\/]*[@-~]//g; s/[^[:print:]\t]//g' | while IFS= read -r line; do
-    printf '  %.76s\n' "$line"
-  done
-}
-
-progress_bar() {
-  local complete="$1"
-  local total="$2"
-  local width=52
-  local filled=0
-  (( total > 0 )) && filled=$((complete * width / total))
-  printf '['
-  paint "$CYAN" "$(repeat_char '█' "$filled")"
-  repeat_char '░' "$((width - filled))"
-  printf '] %d/%d' "$complete" "$total"
+  LOG_CACHE_FILE="$file"
+  LOG_CACHE_SIZE="$size"
+  LOG_CACHE=()
+  [[ -n "$file" && -f "$file" ]] || return
+  while IFS= read -r line; do
+    LOG_CACHE+=("$line")
+  done < <(tail -n "$LOG_LINES" "$file" 2>/dev/null |
+    sed -E $'s/\033\\[[0-9;?]*[ -\/]*[@-~]//g; s/\r//g; s/[^[:print:]\t]//g')
 }
 
 render_execution() {
-  local current="$1"
-  local run_log="$2"
-  local total="${#STEP_MODULE[@]}"
-  local start end index code
-  clear_screen
-  paint "$BOLD$CYAN" "  LAYERX WORKSPACE RUN"
-  printf '   %s · %s\n' "${ACTION_LABELS[$ACTION_INDEX]}" "${ENV_LABELS[$ENV_INDEX]}"
-  printf '  '
-  progress_bar "$current" "$total"
-  printf '\n\n'
-  start=$((current - 3))
+  local current="$1" log_file="$2"
+  local total start end index filled bar_width shown
+
+  total=${#STEP_MODULE[@]}
+  load_log_tail "$log_file"
+  reset_frame
+
+  put "  "
+  putc "$BOLD$CYAN" "LAYERX WORKSPACE RUN"
+  put "   "
+  putc "$DIM" "${ACTION_LABELS[$ACTION_INDEX]} $G_DOT ${ENV_LABELS[$ENV_INDEX]}"
+  eol
+
+  bar_width=$(( WIDTH - 16 ))
+  (( bar_width < 20 )) && bar_width=20
+  filled=0
+  (( total > 0 )) && filled=$(( current * bar_width / total ))
+  put "  ["
+  putc "$CYAN" "$(repeat_char "$G_BAR_FULL" "$filled")"
+  putc "$DIM" "$(repeat_char "$G_BAR_EMPTY" "$(( bar_width - filled ))")"
+  put "] $current/$total"
+  eol
+  blank
+
+  start=$(( current - 3 ))
   (( start < 0 )) && start=0
-  end=$((start + 7))
+  (( start + STEP_WINDOW > total )) && start=$(( total - STEP_WINDOW ))
+  (( start < 0 )) && start=0
+  end=$(( start + STEP_WINDOW ))
   (( end > total )) && end=$total
+
   for ((index = start; index < end; index++)); do
-    code="$(status_color "${STEP_STATUS[$index]}")"
     if (( index == current && current < total )); then
-      printf '  '
-      paint "$CYAN" ">"
+      put "  "
+      putc "$CYAN" "$G_MARK"
+      put " "
     else
-      printf '   '
+      put "    "
     fi
-    printf ' %-10s %-8s ' "${STEP_MODULE[$index]}" "${STEP_PHASE[$index]}"
-    paint "$code" "${STEP_STATUS[$index]}"
-    printf '  %.43s\n' "${STEP_LABEL[$index]}"
+    put "${STEP_MODULE[index]}"
+    pad_to 15
+    put "${STEP_PHASE[index]}"
+    pad_to 24
+    put_status "${STEP_STATUS[index]}"
+    pad_to 35
+    put "$(clip "${STEP_LABEL[index]}" $(( WIDTH - 35 )))"
+    eol
   done
-  printf '\n'
-  paint "$BOLD" "  LIVE OUTPUT"
-  printf '\n  %s\n' "$(repeat_char '─' 76)"
-  render_log_tail "$run_log"
-  printf '\n'
-  paint "$DIM" "  Ctrl-C cancels the active process; completed module results are preserved."
-  printf '\n'
+  for ((index = end - start; index < STEP_WINDOW; index++)); do
+    blank
+  done
+
+  blank
+  put "  "
+  putc "$BOLD" "LIVE OUTPUT"
+  eol
+  put "  "
+  putc "$DIM" "$(repeat_char "$G_RULE" "$WIDTH")"
+  eol
+
+  shown=${#LOG_CACHE[@]}
+  for ((index = 0; index < shown; index++)); do
+    put "  "
+    putc "$DIM" "$(clip "${LOG_CACHE[index]}" $(( WIDTH - 2 )))"
+    eol
+  done
+  while (( shown < LOG_LINES )); do
+    blank
+    ((shown++))
+  done
+
+  blank
+  put "  "
+  putc "$DIM" "Ctrl-C cancels the active process; completed module results are preserved."
+  eol
+
+  flush_frame
 }
 
 run_one_step() {
-  local index="$1"
-  local run_directory="$2"
-  local missing command log_file exit_code
-  missing="$(missing_tools "${STEP_TOOLS[$index]}")"
+  local index="$1" run_directory="$2"
+  local missing command log_file exit_code keypress
+
+  missing="$(missing_tools "${STEP_TOOLS[index]}")"
+
   if (( DRY_RUN )); then
-    log_file=""
     STEP_LOG[index]=""
-    STEP_STATUS[index]="PLANNED"
-    render_execution "$((index + 1))" "$log_file"
+    if [[ -n "$missing" ]]; then
+      STEP_STATUS[index]="BLOCKED"
+    else
+      STEP_STATUS[index]="PLANNED"
+    fi
+    render_execution "$(( index + 1 ))" ""
     return 0
   fi
-  log_file="$run_directory/$(printf '%03d' "$((index + 1))")-${STEP_MODULE[$index]}-${STEP_PHASE[$index]}.log"
+
+  log_file="$run_directory/$(printf '%03d' "$(( index + 1 ))")-${STEP_MODULE[index]}-${STEP_PHASE[index]}.log"
   STEP_LOG[index]="$log_file"
-  if [[ "${STEP_COMMAND[$index]}" == ":" ]]; then
+
+  if [[ "${STEP_COMMAND[index]}" == ":" ]]; then
     STEP_STATUS[index]="SKIPPED"
-    render_execution "$((index + 1))" "$log_file"
+    : > "$log_file"
+    render_execution "$(( index + 1 ))" "$log_file"
     return 0
   fi
+
   if [[ -n "$missing" ]]; then
     STEP_STATUS[index]="BLOCKED"
     printf 'Missing host tools: %s\n' "$missing" > "$log_file"
-    render_execution "$((index + 1))" "$log_file"
+    render_execution "$(( index + 1 ))" "$log_file"
     return 1
   fi
 
   STEP_STATUS[index]="RUNNING"
-  command="${STEP_COMMAND[$index]}"
+  command="${STEP_COMMAND[index]}"
   (
-    cd "$ROOT_DIR/${STEP_CWD[$index]}" || exit 127
+    cd "$ROOT_DIR/${STEP_CWD[index]}" || exit 127
     export LAYERX_ENVIRONMENT="${ENV_NAMES[$ENV_INDEX]}"
     export LAYERX_ENDPOINT="${ENV_ENDPOINTS[$ENV_INDEX]}"
     export LAYERX_NETWORK_ID="${ENV_NETWORKS[$ENV_INDEX]}"
     if (( CI_MODE )); then export CI=1; fi
-    bash -c "exec $command"
+    exec bash -c "$command"
   ) </dev/null >"$log_file" 2>&1 &
   CURRENT_CHILD=$!
+
   while kill -0 "$CURRENT_CHILD" 2>/dev/null; do
     render_execution "$index" "$log_file"
-    if IFS= read -rsn1 -t 0.15 command; then
-      if [[ "$command" == $'\003' ]]; then
-        RUN_CANCELLED=1
-        kill "$CURRENT_CHILD" 2>/dev/null || true
-      fi
+    if IFS= read -rsn1 -t 0.12 keypress; then
+      case "$keypress" in
+        $'\003'|c|C|q|Q)
+          RUN_CANCELLED=1
+          kill_tree "$CURRENT_CHILD"
+          ;;
+      esac
     fi
   done
+
   wait "$CURRENT_CHILD"
   exit_code=$?
   CURRENT_CHILD=""
+
   if (( RUN_CANCELLED )); then
     STEP_STATUS[index]="CANCELLED"
     return 130
@@ -934,9 +1433,11 @@ run_one_step() {
 
 render_results() {
   local passed=0 failed=0 blocked=0 planned=0 skipped=0 cancelled=0 waiting=0
-  local index status code start total
-  total="${#STEP_STATUS[@]}"
-  for status in "${STEP_STATUS[@]}"; do
+  local index status total listed=0
+
+  total=${#STEP_STATUS[@]}
+  for ((index = 0; index < total; index++)); do
+    status="${STEP_STATUS[index]}"
     case "$status" in
       PASSED) ((passed++)) ;;
       FAILED) ((failed++)) ;;
@@ -947,109 +1448,155 @@ render_results() {
       WAITING) ((waiting++)) ;;
     esac
   done
-  clear_screen
-  paint "$BOLD$CYAN" "  WORKSPACE RESULTS"
-  printf '\n  %s\n\n' "$(repeat_char '─' 76)"
-  printf '  '
-  paint "$GREEN" "$passed passed"
-  printf '   '
-  paint "$RED" "$failed failed"
-  printf '   '
-  paint "$YELLOW" "$blocked blocked"
-  printf '\n  %s planned   %s skipped   %s cancelled   %s not run\n\n' "$planned" "$skipped" "$cancelled" "$waiting"
-  start=$((total - 14))
-  (( start < 0 )) && start=0
-  for ((index = start; index < total; index++)); do
-    status="${STEP_STATUS[$index]}"
-    code="$(status_color "$status")"
-    printf '  %-10s %-8s ' "${STEP_MODULE[$index]}" "${STEP_PHASE[$index]}"
-    paint "$code" "$status"
-    printf '  %.44s\n' "${STEP_LABEL[$index]}"
+
+  while true; do
+    reset_frame
+    modal_header "WORKSPACE RESULTS"
+    put "  "
+    putc "$GREEN" "$passed passed"
+    put "   "
+    putc "$RED" "$failed failed"
+    put "   "
+    putc "$YELLOW" "$blocked blocked"
+    eol
+    put "  $planned planned   $skipped skipped   $cancelled cancelled   $waiting not run"
+    eol
+    blank
+
+    listed=0
+    if (( failed || blocked || cancelled )); then
+      put "  "
+      putc "$BOLD" "NEEDS ATTENTION"
+      eol
+      for ((index = 0; index < total && listed < 10; index++)); do
+        case "${STEP_STATUS[index]}" in
+          FAILED|BLOCKED|CANCELLED) ;;
+          *) continue ;;
+        esac
+        put "  ${STEP_MODULE[index]}"
+        pad_to 15
+        put "${STEP_PHASE[index]}"
+        pad_to 24
+        put_status "${STEP_STATUS[index]}"
+        pad_to 35
+        put "$(clip "${STEP_LABEL[index]}" $(( WIDTH - 35 )))"
+        eol
+        ((listed++))
+      done
+    else
+      put "  "
+      putc "$GREEN" "Every executed step completed."
+      eol
+    fi
+
+    blank
+    if [[ -n "$RUN_DIRECTORY" ]]; then
+      put "  Logs: $(clip "$RUN_DIRECTORY" $(( WIDTH - 8 )))"
+    else
+      put "  Plan only: no commands ran and no log files were created."
+    fi
+    eol
+    blank
+    put "  "
+    draw_chip 1 0 "BACK TO DASHBOARD"
+    reg_hit "$SPAN_C0" "$SPAN_C1" back
+    eol
+    flush_frame
+
+    read_event
+    case "$EVENT" in
+      resize|none) continue ;;
+      *) break ;;
+    esac
   done
-  if [[ -n "$RUN_DIRECTORY" ]]; then
-    printf '\n  Logs: %s\n\n  ' "$RUN_DIRECTORY"
-  else
-    printf '\n  Plan only: no commands ran and no log files were created.\n\n  '
-  fi
-  chip 1 0 "BACK TO DASHBOARD"
-  printf '\n'
+  FULL_REDRAW=1
 }
 
 run_plan() {
   local timestamp index result=0 completed=0 last_log=""
+
   timestamp="$(date -u +%Y%m%dT%H%M%SZ)-$$"
   RUN_DIRECTORY=""
   if (( ! DRY_RUN )); then
     RUN_DIRECTORY="$ROOT_DIR/.logs/workspace/$timestamp"
     mkdir -p "$RUN_DIRECTORY"
   fi
+
   RUN_CANCELLED=0
+  LOG_CACHE_FILE=""
+  LOG_CACHE_SIZE=""
+  FULL_REDRAW=1
+  terminal_mouse_off
+
   for ((index = 0; index < ${#STEP_MODULE[@]}; index++)); do
     if ! run_one_step "$index" "$RUN_DIRECTORY"; then
       result=1
-      completed=$((index + 1))
+      completed=$(( index + 1 ))
       if (( RUN_CANCELLED || FAIL_FAST )); then
         break
       fi
     else
-      completed=$((index + 1))
+      completed=$(( index + 1 ))
     fi
   done
+
   if (( completed > 0 )); then
-    last_log="${STEP_LOG[$((completed - 1))]}"
+    last_log="${STEP_LOG[$(( completed - 1 ))]}"
   fi
   render_execution "$completed" "$last_log"
+  terminal_mouse_on
   render_results
-  read_event
   return "$result"
 }
 
 start_current_action() {
   RUN_REQUESTED=0
+
   if (( $(selected_count) == 0 )); then
     show_notice "NO MODULES SELECTED" "Select at least one module before starting a workspace action."
     return
   fi
+
   if (( ACTION_INDEX == 0 )); then
     show_doctor
     return
   fi
+
   if [[ -z "${ENV_ENDPOINTS[$ENV_INDEX]}" || -z "${ENV_NETWORKS[$ENV_INDEX]}" ]]; then
-    FOCUS=1
-    edit_endpoint
-    FOCUS=2
-    edit_network
-    if [[ -z "${ENV_ENDPOINTS[$ENV_INDEX]}" || -z "${ENV_NETWORKS[$ENV_INDEX]}" ]]; then
-      show_notice "ENVIRONMENT NOT CONFIGURED" "Enter both an endpoint and a numeric network ID before running this action."
-      return
-    fi
+    show_notice "ENVIRONMENT NOT CONFIGURED" \
+      "Set both an endpoint and a numeric network ID for ${ENV_LABELS[$ENV_INDEX]} before running this action."
+    FOCUS="$(focus_index_of endpoint)"
+    start_edit endpoint
+    return
   fi
+
   build_plan
   production_authorized || return
   confirm_run || return
   run_plan || true
 }
 
-wait_for_usable_terminal() {
-  local size rows columns
-  while true; do
-    size="$(stty size 2>/dev/null || true)"
-    read -r rows columns <<< "$size"
-    [[ "$rows" =~ ^[0-9]+$ && "$columns" =~ ^[0-9]+$ ]] || { rows=24; columns=80; }
-    (( rows == 0 )) && rows=24
-    (( columns == 0 )) && columns=80
-    if (( rows >= 24 && columns >= 78 )); then
-      return 0
-    fi
-    clear_screen
-    paint "$BOLD$YELLOW" "  TERMINAL TOO SMALL"
-    printf '\n\n  LayerX Workspace needs at least 78 columns and 24 rows.\n'
-    printf '  Current terminal: %s columns by %s rows.\n\n' "$columns" "$rows"
-    paint "$DIM" "  Resize the terminal and press any key, or press q to quit."
-    printf '\n'
-    read_event
-    [[ "$EVENT" == "quit" || "$EVENT" == "escape" ]] && return 1
-  done
+# --------------------------------------------------------------------------
+# main loop
+# --------------------------------------------------------------------------
+
+render_too_small() {
+  reset_frame
+  put "  "
+  putc "$BOLD$YELLOW" "TERMINAL TOO SMALL"
+  eol
+  blank
+  put "  LayerX Workspace needs at least $MIN_COLS columns and $MIN_ROWS rows."; eol
+  put "  Current terminal: $COLS columns by $ROWS rows."; eol
+  blank
+  put "  "
+  putc "$DIM" "Resize the terminal, or press q to quit."
+  eol
+  flush_frame
+}
+
+terminal_usable() {
+  (( ROWS >= MIN_ROWS && COLS >= MIN_COLS ))
 }
 
 dashboard_main() {
@@ -1065,16 +1612,42 @@ dashboard_main() {
     printf 'The dashboard must remain in the LayerX repository root.\n' >&2
     return 2
   fi
+
+  refresh_size
   terminal_enter
+
   while (( ! QUIT_REQUESTED )); do
-    wait_for_usable_terminal || break
+    if ! terminal_usable; then
+      render_too_small
+      read_event
+      [[ "$EVENT" == "quit" || "$EVENT" == "escape" ]] && break
+      [[ "$EVENT" == "key" && "$EVENT_KEY" == [qQ] ]] && break
+      continue
+    fi
+
     render_dashboard
+    flush_frame
+
     read_event
+    [[ "$EVENT" == "resize" || "$EVENT" == "none" ]] && continue
     handle_dashboard_event
+
+    # Drain any keys that arrived while the frame was being written so a held
+    # arrow key advances focus once per press instead of once per repaint.
+    while (( ! QUIT_REQUESTED && ! RUN_REQUESTED )) && input_pending; do
+      read_event
+      [[ "$EVENT" == "resize" || "$EVENT" == "none" ]] && continue
+      handle_dashboard_event
+    done
+
     if (( RUN_REQUESTED )); then
       start_current_action
     fi
   done
+
+  terminal_leave
+  TERMINAL_ACTIVE=0
+  return 0
 }
 
 if [[ "${LAYERX_DASHBOARD_LIBRARY:-0}" != "1" ]]; then

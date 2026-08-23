@@ -515,7 +515,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Enforce required contrast across the package's text and semantic token combinations through automated checks.
     - Wire automated accessibility checks into the browser suites, including 1.5x text-expansion layout checks and locale-aware amount rendering with explicit currency codes.
     - _Requirements: 20.1, 20.2, 20.6, 17.3_
-  - [ ] 11.5 Build the performance machinery
+  - [-] 11.5 Build the performance machinery
     - Code-split by route with declared per-route script budgets enforced in CI.
     - Render the explorer plane server-side cacheable.
     - Enforce the paint, interaction and layout-shift budgets in CI on representative pages.
@@ -526,42 +526,42 @@ surface makes the evidence portable while custody never leaves Paxeer.
 ## Wave 7 - The Application Surfaces
 
 - [ ] 12. Build the application journeys
-  - [ ] 12.1 Build onboarding and account activation
+  - [x] 12.1 Build onboarding and account activation
     - Build account creation in both shells: email, passkey ceremony, honest activation progress, ready only on verified activation.
     - Build failure and resume presentation for every onboarding stage.
     - Keep the surfaces within three decisions and free of banned vocabulary.
     - Build the new-device sign-in flow with the security notification hook.
     - Run onboarding end to end in both shells against the real service.
     - _Requirements: 3.4, 3.9, 2.9_
-  - [ ] 12.2 Build home and the move-money wizard
+  - [x] 12.2 Build home and the move-money wizard
     - Build home in both shells: verified balance with freshness and privacy toggle, the primary actions Add money, Move money and Withdraw, agents summary, recent activity and the approval badge.
     - Build the move-money wizard - who, how much, review, result - as the mobile full-screen wizard and the desktop split pane with the live summary.
     - Render review from the journey quote in plain language with fee estimate and ceiling, and result only from journey state - Done receipt-backed, still-checking locked, refusal honest.
     - Keep initiation within three decisions with automatic routing.
     - Run move-money end to end in both shells including refusal and still-checking paths.
     - _Requirements: 2.1, 2.2, 9.3_
-  - [ ] 12.3 Build the custody journey surfaces
+  - [x] 12.3 Build the custody journey surfaces
     - Build deposit: binding-folded start, single wallet hand-off with designed in-progress, failure and cancel states, the staged timeline, safe-to-close statement and receipt-gated completion.
     - Build withdrawal: irreversibility at review, the staged timeline with the configured settlement expectation, claim readiness with the single wallet hand-off, payout-verified completion.
     - Build challenge-window hold and delay presentations as honest states with expectations.
     - Build the guided emergency exit under Settings with typed confirmation and degraded-mode operability.
     - Run deposit and withdrawal end to end in both shells against the test network.
     - _Requirements: 10.3, 11.2, 18.7_
-  - [ ] 12.4 Build the agent surfaces
+  - [-] 12.4 Build the agent surfaces
     - Build agent creation - name, purpose, limit - with the honest creation-journey progress, in both shells.
     - Build the agent list and detail: the desktop master-detail and the mobile stacked screens, with spend-versus-limit from receipts.
     - Build the controls with the confirmation grammar: fund, return, change limit, pause reversible, archive destructive with disposition-first and typed confirmation.
     - Build rotation and recovery surfaces with the challenge delay in plain time.
     - Run create, pause, reclaim and archive end to end in both shells.
     - _Requirements: 12.1, 12.6, 2.2_
-  - [ ] 12.5 Build the approval and notification surfaces
+  - [x] 12.5 Build the approval and notification surfaces
     - Build the approval inbox and detail in both shells - the mobile screen and the desktop split view - from the rendered disclosure only, with the expiry countdown.
     - Build approve with the step-up ceremony and reject with the nothing-moved confirmation, then track the released activity.
     - Build expired and already-decided presentations.
     - Build the notification surfaces: the mobile screen, the desktop bell popover with archive page, read state and preferences.
     - Run approval grant, reject, expiry and two-device convergence end to end in both shells.
     - _Requirements: 13.1, 13.3, 19.4_
-  - [ ] 12.6 Build the activity surfaces
+  - [x] 12.6 Build the activity surfaces
     - Build the feed in both shells: the mobile stacked rows with month bands and subtotals, the desktop sortable table, with the deferred-apply filters echoed in content.
     - Build entry detail: the plain sentence, the timeline, receipt-backed figures and the collapsed Technical details with explorer links.
     - Build the statement and evidence exports.
@@ -570,14 +570,14 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - _Requirements: 14.3, 14.4, 18.9_
 
 - [ ] 13. Build settings, security, support and the explorer plane
-  - [ ] 13.1 Build settings and preferences
+  - [-] 13.1 Build settings and preferences
     - Build the settings hub sectioned as profile, security, linked wallet, notifications, advanced and help, with current values on rows.
     - Build notification preferences: per-event classes under channel toggles, the notification detail level, and the non-suppressible security classes presented as such.
     - Build privacy mode masking balances and every derived figure across both shells, persisted per user.
     - Build profile editing over declared-local data.
     - Test preference application and privacy-mode cascade end to end.
     - _Requirements: 19.2, 21.5_
-  - [ ] 13.2 Build the security center
+  - [x] 13.2 Build the security center
     - Build passkey management, the device and session inventory with per-session revoke and sign-out-everywhere.
     - Build the 2FA surface: authenticator methods, one-time backup codes at setup, disable warnings with consequence copy, all under step-up.
     - Build secret handling: masked by default, step-up reveal, timed re-mask, explicit copy only where declared copyable.
@@ -591,14 +591,14 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Present binding as active only on its verified receipt.
     - Test binding and rebinding end to end with the security notification.
     - _Requirements: 5.3, 5.4, 5.7_
-  - [ ] 13.4 Build the support surface
+  - [x] 13.4 Build the support surface
     - Build support chat seeded with topic suggestion chips, as the mobile screen and the desktop docked panel.
     - Build its designed states: empty with suggestions, offline with retry, send-failure with inline retry, and the feedback loop.
     - Attach the trace identifier to support conversations started from an error's Report action.
     - Keep support reachable from every error surface.
     - Test the support states and the report-to-support path.
     - _Requirements: 8.2, 18.8, 18.2_
-  - [ ] 13.5 Build the public explorer plane
+  - [x] 13.5 Build the public explorer plane
     - Build the server-rendered explorer pages: checkpoints, batches, receipt lookup, account views and the evidence verifier, table-first.
     - Show the verification level for every displayed fact and index freshness on every page.
     - Keep every page deep-linkable and functional signed-out, meeting the same design, accessibility and performance gates.
@@ -669,7 +669,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Establish the signed reproducible release pipeline skeleton for crates.io, npm, PyPI, Go modules, Maven Central, Swift Package Manager and NuGet.
     - Prove existing builds are untouched: make build, make agent-build and make human-build succeed with the platform workspace present.
     - _Requirements: 24.1, 24.6_
-  - [ ] 15.2 Harden the Rust, TypeScript and Python SDKs to production
+  - [x] 15.2 Harden the Rust, TypeScript and Python SDKs to production
     - Bring the existing Rust, TypeScript and Python SDKs to production grade: complete operation coverage from both schemas, idiomatic packaging, typed error taxonomy with stable machine codes and retriability classes.
     - Ship the local receipt, batch-inclusion and checkpoint verification path in all three, requiring no trust in any hosted surface.
     - Enforce integer-only money and required idempotency keys in every public API, with floating-point amounts unrepresentable.
@@ -683,7 +683,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Enforce integer-only money, idempotency keys and secret hygiene per the SDK conformance rules.
     - Run the golden vectors and the conformance suite against the live schema in CI.
     - _Requirements: 24.1, 24.3, 24.4_
-  - [ ] 15.4 Build the JVM SDK for Java and Kotlin
+  - [-] 15.4 Build the JVM SDK for Java and Kotlin
     - Generate the JVM SDK from the same schemas with a Java-first API and Kotlin-friendly overloads, published as one Maven artifact.
     - Implement the local receipt and proof verification path.
     - Implement streaming with resumable cursors on virtual-thread-friendly primitives.
@@ -925,7 +925,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Pin every adapter to a versioned upstream specification with its conformance suite declared at registration.
     - Prove existing builds are untouched with the interop workspace present.
     - _Requirements: 32.1, 32.8, 32.9_
-  - [ ] 22.2 Implement the x402 v2 seller and buyer roles
+  - [x] 22.2 Implement the x402 v2 seller and buyer roles
     - Implement the x402 v2 seller role: payment-required issuance, offer encoding and settlement verification mapped to receipt-verified LayerX operations.
     - Implement the buyer role: offer parsing, payment construction through the plane's typed paths and receipt capture.
     - Conform to the published x402 v2 specification, verified against its vectors and reference implementations in CI.
@@ -941,21 +941,21 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - _Requirements: 32.2, 32.8_
 
 - [ ] 23. Implement the commerce mandate adapters
-  - [ ] 23.1 Implement AP2 checkout and payment mandates
+  - [x] 23.1 Implement AP2 checkout and payment mandates
     - Implement AP2 mandate verification: signatures and constraints checked before any action.
     - Map authorised mandates to typed intents through the plane's existing compilation path.
     - Refuse any mandate whose constraints the resulting LayerX activity cannot honour, with typed refusals.
     - Export LayerX-side evidence in forms AP2 counterparties verify.
     - Conform to the published AP2 specification with golden vectors in CI.
     - _Requirements: 32.3, 32.7_
-  - [ ] 23.2 Implement UCP merchant profiles, checkout and orders
+  - [x] 23.2 Implement UCP merchant profiles, checkout and orders
     - Implement UCP merchant profile publication and capability negotiation for LayerX sellers.
     - Implement the checkout and order flows mapped to receipt-verified LayerX operations.
     - Keep order state receipt-backed or honestly pending in every UCP-visible response.
     - Conform to the published UCP profile with vectors in CI.
     - Test a UCP-speaking client transacting against a LayerX seller end to end.
     - _Requirements: 32.4, 32.6_
-  - [ ] 23.3 Implement Visa Trusted Agent credentials
+  - [x] 23.3 Implement Visa Trusted Agent credentials
     - Implement Trusted Agent credential verification per the published specification.
     - Bind verified credentials to LayerX agent identities without granting any protocol authority.
     - Surface credential status to merchants through the seller and merchant middleware.
@@ -964,21 +964,21 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - _Requirements: 32.5_
 
 - [ ] 24. Ship migration tooling and off-platform settlement
-  - [ ] 24.1 Build the Ethereum and Solana migration tooling
+  - [-] 24.1 Build the Ethereum and Solana migration tooling
     - Build account mapping: external addresses associated to LayerX identities through the protocol's binding mechanisms.
     - Build asset migration through the custody boundary, credited only against verified source-chain finality.
     - Build transaction-history import labelled as external provenance, never as LayerX receipts.
     - Refuse any migration claim lacking verifiable finality evidence, with typed results.
     - Test migration end to end against Ethereum and Solana test networks.
     - _Requirements: 33.1, 33.2_
-  - [ ] 24.2 Build the card, bank and RTP adapter interfaces
+  - [x] 24.2 Build the card, bank and RTP adapter interfaces
     - Define the fiat adapter interface: settlement evidence classes, pending presentation, reversal and chargeback states with declared holds.
     - Credit LayerX value only against verified provider settlement evidence.
     - Keep card data out of every LayerX component: tokenisation at the certified provider edge, tokens and evidence only in LayerX stores, proven by the redaction gates.
     - Reconcile failures, reversals and chargebacks through legitimate protocol operations with honest journey states.
     - Test against provider sandboxes with fault injection at every settlement stage.
     - _Requirements: 33.3, 33.4, 33.5, 33.6_
-  - [ ] 24.3 Implement portable receipt and mandate verification
+  - [x] 24.3 Implement portable receipt and mandate verification
     - Export LayerX receipts and proofs in portable forms external parties verify without LayerX infrastructure.
     - Verify external mandates and receipts through the adapters with the same typed rigor.
     - Cover both directions with golden vectors in CI.
@@ -1112,7 +1112,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Build each hostile module from real WASM through the existing test support rather than from stubs, so the suites exercise the real validator, the real linker and the real meter.
     - Wire both suites into make programs-test, and record the attack inventory so a later wave extends it rather than rewriting it.
     - _Requirements: 35.8, 28.6, 30.4_
-  - [-] 28.7 Implement the program call activity in the programs module
+  - [x] 28.7 Implement the program call activity in the programs module
     - Declare a call activity ordinal in the programs module alongside deploy, upgrade, transfer and registry, decoding program identifier, entry point, calldata, declared budget and requested capabilities canonically.
     - Add the scalar-only FFI ingress from the C module into the authorized execution path, following the existing bounded staging pattern, and replace the process-global pending map with per-activity state carried on the module context so nothing in the consensus path depends on process-wide mutable state.
     - Apply the guest effects through the existing boundaries only: storage writes into the module namespace, events through the kernel event stream, transfers through the kernel transfer primitive by way of the existing 402LXP leg authorization.
@@ -1174,7 +1174,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Prove every attack defeated by construction, and treat an escape as a build-breaking defect rather than a reported finding.
     - Extend rather than rewrite the attack inventory recorded in wave 14.
     - _Requirements: 36.6, 30.7_
-  - [-] 29.7 Carry shared state into the SDK and every porting kit
+  - [x] 29.7 Carry shared state into the SDK and every porting kit
     - Add typed shared-state accessors to the Rust SDK alongside the principal-scoped ones, with the namespace visible in the type so a program cannot address the wrong scope by accident.
     - Map a Solidity storage slot that is not caller-indexed onto the shared namespace in the EVM kit, and retire the kit declaration that shared state has no version-one representation.
     - Map a Solana program-owned account onto the shared namespace in the Solana kit, and a CosmWasm item and map onto it in the CosmWasm kit.
@@ -1254,21 +1254,21 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Meter the read and bound the number of accounts one activity can grant sight of.
     - Prove sight confers no authority: a program holding every read grant and no spending grant can move nothing.
     - _Requirements: 38.3_
-  - [-] 31.3 Add deterministic hash primitives
+  - [x] 31.3 Add deterministic hash primitives
     - Add a hash host function covering sha256, keccak256 and blake3, addressed by algorithm identifier, refusing an unknown algorithm rather than defaulting.
     - Meter per input byte with a per-algorithm coefficient reflecting real cost, and bound the input length per call.
     - Implement against integer-only, allocation-bounded code paths with no floating point reachable anywhere, honouring the workspace integer-only rule.
     - Freeze every algorithm behind golden vectors including the published test vectors of each function.
     - Prove byte-identical digests across operating systems, architectures and optimisation levels on the determinism differential.
     - _Requirements: 38.4_
-  - [-] 31.4 Add deterministic signature verification and recovery
+  - [x] 31.4 Add deterministic signature verification and recovery
     - Add signature host functions covering ed25519 verification, secp256k1 verification and secp256k1 public-key recovery, addressed by algorithm identifier.
     - Return every failure as a typed refusal rather than a trap, so an invalid signature is an ordinary program outcome and not an aborted activity.
     - Meter per operation with a per-algorithm coefficient, and reject malformed keys, signatures and recovery identifiers before any verification work is charged.
     - Implement with constant-shape execution so metered cost does not depend on secret-bearing inputs, and with no floating point in any path.
     - Freeze behind golden vectors including published test vectors, malleable signatures and every rejection case, and prove byte-identical results on the determinism differential.
     - _Requirements: 38.5_
-  - [-] 31.5 Add wide-integer and modular-exponentiation primitives
+  - [x] 31.5 Add wide-integer and modular-exponentiation primitives
     - Add wide-integer host functions covering 256-bit multiplication, division, remainder and modular exponentiation, operating on big-endian byte operands.
     - Refuse division and remainder by zero and refuse malformed operand widths as typed results rather than traps.
     - Meter by operand width and, for modular exponentiation, by exponent bit length, so cost tracks work rather than call count.
@@ -1356,7 +1356,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Carry interface changes through the upgrade path with the compatibility rules stated: a widening is allowed, a narrowing is a refusal unless the upgrade declares it a breaking change.
     - Test interface binding, drift refusal and upgrade compatibility across the registry conformance suite.
     - _Requirements: 40.1_
-  - [-] 33.2 Freeze the calldata encoding convention
+  - [x] 33.2 Freeze the calldata encoding convention
     - Define one canonical calldata encoding for the platform covering integers, byte strings, fixed arrays, variable arrays, options and tagged unions, with exactly one valid encoding per value.
     - Refuse a non-canonical encoding of a representable value rather than accepting it leniently, so two encodings can never produce two digests for one call.
     - Bound the decoded size and the nesting depth so decoding cannot be a denial-of-service surface, and charge decoding by decoded bytes.
