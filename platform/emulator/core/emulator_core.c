@@ -91,12 +91,30 @@ static lxp_result apply_transfer_set(lxp_kernel *kernel,
     return status;
 }
 
-static lxp_result charge_fee(lxp_kernel *kernel, const lxp_activity *activity,
-                             lxp_u128 fee)
+static uint8_t emulator_fee_token;
+
+static lxp_result prepare_fee(lxp_kernel *kernel, const lxp_activity *activity,
+                              const lxp_authority_resolved *authority,
+                              lxp_u128 fee, void **transaction)
 {
     (void)kernel;
     (void)activity;
-    return lxp_u128_is_zero(fee) ? LXP_OK : LXP_ERR_FEE_UNPAYABLE;
+    (void)authority;
+    if (!lxp_u128_is_zero(fee)) return LXP_ERR_FEE_UNPAYABLE;
+    *transaction = &emulator_fee_token;
+    return LXP_OK;
+}
+
+static void commit_fee(lxp_kernel *kernel, void *transaction)
+{
+    (void)kernel;
+    (void)transaction;
+}
+
+static void rollback_fee(lxp_kernel *kernel, void *transaction)
+{
+    (void)kernel;
+    (void)transaction;
 }
 
 static lxp_result register_modules(platform_emulator *emulator)
@@ -174,7 +192,10 @@ platform_emulator *platform_emulator_create(uint32_t network_id,
         status = lxp_kernel_set_capabilities(&emulator->kernel, NULL,
                                              apply_transfer_set);
     if (status == LXP_OK)
-        status = lxp_kernel_set_fee_charger(&emulator->kernel, charge_fee);
+        status = lxp_kernel_set_fee_transaction(
+            &emulator->kernel,
+            &(lxp_kernel_fee_transaction){ prepare_fee, commit_fee,
+                                           rollback_fee });
     if (status == LXP_OK) {
         emulator->native_asset.asset_id[0] = 1U;
         emulator->native_asset.symbol_length = 3U;

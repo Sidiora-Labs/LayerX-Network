@@ -68,9 +68,9 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.4.3"
+version = "1.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "509591b7bcd67f4ef775afad7662703b4935daaa6ec0e5605cfb1090b32a2b6d"
+checksum = "0ad534f4357a5264cce5019c989cf66a4f0dc4e0d1b1d15f8aacec0ff7360273"
 dependencies = [
  "find-msvc-tools",
  "shlex",
@@ -333,6 +333,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "hex"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
+
+[[package]]
 name = "hmac"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -382,6 +388,7 @@ name = "layerx-ap2"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "hex",
  "layerx-intents",
  "layerx-interop-gateway",
  "layerx-portable",
@@ -456,8 +463,10 @@ dependencies = [
 name = "layerx-migrate"
 version = "0.1.0"
 dependencies = [
+ "ed25519-dalek",
  "layerx-interop-gateway",
  "layerx-proof",
+ "layerx-types",
  "sha2",
 ]
 
@@ -543,8 +552,10 @@ name = "layerx-x402"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "ed25519-dalek",
  "layerx-interop-gateway",
  "layerx-proof",
+ "layerx-wire",
  "serde",
  "serde_json",
  "sha2",
@@ -756,9 +767,9 @@ dependencies = [
 
 [[package]]
 name = "rustls-webpki"
-version = "0.103.14"
+version = "0.103.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0527518605e68109d875e248ea259b6758801cf165e4b2c2733ae3b51f12535a"
+checksum = "f3c3cf1d8b1e7d4927e2d154c3fcb02979afb9939629c62cd9048d4f07b60ac2"
 dependencies = [
  "ring",
  "rustls-pki-types",
