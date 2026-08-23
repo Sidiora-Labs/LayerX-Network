@@ -54,7 +54,7 @@ pub(super) fn memory(caller: &Caller<'_, RuntimeState>) -> Result<Memory, i32> {
         .ok_or(STATUS_INVALID)
 }
 
-pub(super) fn read_guest(
+pub(crate) fn read_guest(
     caller: &Caller<'_, RuntimeState>,
     pointer: i32,
     length: i32,
@@ -63,6 +63,23 @@ pub(super) fn read_guest(
     let pointer = nonnegative(pointer)?;
     let length = nonnegative(length)?;
     if length > maximum {
+        return Err(STATUS_BOUNDS);
+    }
+    let mut bytes = vec![0u8; length];
+    memory(caller)?
+        .read(caller, pointer, &mut bytes)
+        .map_err(|_| STATUS_BOUNDS)?;
+    Ok(bytes)
+}
+
+pub(super) fn read_slice(
+    caller: &Caller<'_, RuntimeState>,
+    pointer: i32,
+    length: usize,
+) -> Result<Vec<u8>, i32> {
+    let pointer = nonnegative(pointer)?;
+    let available = memory(caller)?.data(caller).len();
+    if length > available {
         return Err(STATUS_BOUNDS);
     }
     let mut bytes = vec![0u8; length];
@@ -86,7 +103,7 @@ pub(super) fn read_fixed<const N: usize>(
     Ok(output)
 }
 
-pub(super) fn write_guest(
+pub(crate) fn write_guest(
     caller: &mut Caller<'_, RuntimeState>,
     pointer: i32,
     bytes: &[u8],
@@ -97,6 +114,6 @@ pub(super) fn write_guest(
         .map_err(|_| STATUS_BOUNDS)
 }
 
-pub(super) fn nonnegative(value: i32) -> Result<usize, i32> {
+pub(crate) fn nonnegative(value: i32) -> Result<usize, i32> {
     usize::try_from(value).map_err(|_| STATUS_INVALID)
 }

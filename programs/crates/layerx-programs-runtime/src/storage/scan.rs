@@ -338,14 +338,14 @@ fn page_with_cursor(
     limits: ScanLimits,
     entries: Vec<ScanEntry>,
 ) -> Result<StorageScan, StorageError> {
-    let after = entries
-        .last()
-        .map(|entry| entry.key.as_slice())
-        .ok_or(StorageError::ScanCeilingExceeded)?;
-    let page = page(
-        entries,
-        Some(ScanCursor::issued(namespace, prefix, limits, after).encode()?),
-    )?;
+    let cursor = {
+        let after = entries
+            .last()
+            .map(|entry| entry.key.as_slice())
+            .ok_or(StorageError::ScanCeilingExceeded)?;
+        ScanCursor::issued(namespace, prefix, limits, after).encode()?
+    };
+    let page = page(entries, Some(cursor))?;
     if page.metered_bytes > u64::from(limits.max_bytes()) {
         return Err(StorageError::ScanCeilingExceeded);
     }

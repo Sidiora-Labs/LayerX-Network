@@ -6,7 +6,6 @@ use ed25519_dalek::{Signature as Ed25519Signature, Verifier, VerifyingKey as Ed2
 use k256::ecdsa::{
     RecoveryId, Signature as Secp256k1Signature, VerifyingKey as Secp256k1VerifyingKey,
 };
-use k256::elliptic_curve::sec1::ToEncodedPoint;
 
 type VerifyingKey = Secp256k1VerifyingKey;
 

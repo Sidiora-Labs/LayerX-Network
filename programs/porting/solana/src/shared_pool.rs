@@ -39,9 +39,12 @@ impl PoolReserve {
     }
 
     /// Returns the seed path for the pool account.
-    #[must_use]
-    pub fn seeds() -> SeedPath {
-        SeedPath::from_seeds(&[b"pool", b"reserve", &[0u8]])
+    ///
+    /// # Errors
+    ///
+    /// Refuses seed paths the runtime cannot admit.
+    pub fn seeds() -> Result<SeedPath, PortRefusal> {
+        SeedPath::new(vec![b"pool".to_vec(), b"reserve".to_vec(), vec![0u8]])
     }
 
     /// Returns the role of the pool account in a deposit instruction.
@@ -66,7 +69,7 @@ impl PoolReserve {
     /// Refuses key derivation failures.
     pub fn storage_key() -> Result<Vec<u8>, PortRefusal> {
         // No envelope seeds need to be dropped since this is program-owned
-        Self::seeds().collapse(&[])?.storage_key()
+        Self::seeds()?.collapse(&[])?.storage_key()
     }
 
     /// Encodes initial pool state.
@@ -129,9 +132,12 @@ impl ParticipantDeposit {
     /// Returns the seed path for a participant's deposit record.
     ///
     /// The signer's pubkey seed will collapse, making this principal-scoped.
-    #[must_use]
-    pub fn seeds() -> SeedPath {
-        SeedPath::from_seeds(&[b"deposit", b"participant"])
+    ///
+    /// # Errors
+    ///
+    /// Refuses seed paths the runtime cannot admit.
+    pub fn seeds() -> Result<SeedPath, PortRefusal> {
+        SeedPath::new(vec![b"deposit".to_vec(), b"participant".to_vec()])
     }
 
     /// Returns the role of the participant deposit account.
@@ -147,7 +153,7 @@ impl ParticipantDeposit {
     /// Refuses key derivation failures.
     pub fn storage_key() -> Result<Vec<u8>, PortRefusal> {
         // Envelope position 2 would be the signer pubkey, which collapses
-        Self::seeds().collapse(&[2])?.storage_key()
+        Self::seeds()?.collapse(&[2])?.storage_key()
     }
 }
 

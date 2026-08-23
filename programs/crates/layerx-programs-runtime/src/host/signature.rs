@@ -7,7 +7,6 @@ use crate::crypto::signature::{
     SECP256K1_UNCOMPRESSED_PUBLIC_KEY_BYTES,
 };
 use crate::execute::ExecutionFault;
-use crate::meter::MeterRefusal;
 
 use super::memory::{read_guest, write_guest};
 use super::{linker_fault, RuntimeState, ABI_MODULE, STATUS_BOUNDS, STATUS_INVALID, STATUS_METER};
@@ -151,8 +150,5 @@ fn charge_signature_fuel(
         .data_mut()
         .meter_mut()
         .charge_cpu(fuel)
-        .map_err(|refusal| match refusal {
-            MeterRefusal::Cpu { .. } => STATUS_METER,
-            _ => STATUS_METER,
-        })
+        .map_err(|_| STATUS_METER)
 }

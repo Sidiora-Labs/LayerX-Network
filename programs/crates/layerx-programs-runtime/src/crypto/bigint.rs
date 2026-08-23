@@ -6,7 +6,8 @@ use crate::execute::ExecutionFault;
 use crate::meter::MeterRefusal;
 
 use super::super::host::memory::{nonnegative, read_guest, write_guest};
-use super::super::host::{error_status, linker_fault, RuntimeState, ABI_MODULE};
+use super::super::host::{linker_fault, RuntimeState};
+use crate::abi::ABI_MODULE;
 
 const STATUS_BOUNDS: i32 = -3;
 const STATUS_METER: i32 = -4;
@@ -135,7 +136,7 @@ fn count_bits(value: &num_bigint::BigUint) -> usize {
     if value == &num_bigint::BigUint::ZERO {
         return 0;
     }
-    value.bits()
+    usize::try_from(value.bits()).unwrap_or(usize::MAX)
 }
 
 fn bigint_modexp_256(
@@ -205,8 +206,8 @@ pub(crate) fn register(linker: &mut Linker<RuntimeState>) -> Result<(), Executio
                     Err(status) => return status,
                 };
                 
-                if let Err(refusal) =
-                    charge_bigint_operation(caller.data_mut().meter_mut(), WideIntegerOp::Mul, 32, None)
+                if charge_bigint_operation(caller.data_mut().meter_mut(), WideIntegerOp::Mul, 32, None)
+                    .is_err()
                 {
                     return STATUS_METER;
                 }
@@ -253,8 +254,8 @@ pub(crate) fn register(linker: &mut Linker<RuntimeState>) -> Result<(), Executio
                     Err(status) => return status,
                 };
                 
-                if let Err(refusal) =
-                    charge_bigint_operation(caller.data_mut().meter_mut(), WideIntegerOp::Div, 32, None)
+                if charge_bigint_operation(caller.data_mut().meter_mut(), WideIntegerOp::Div, 32, None)
+                    .is_err()
                 {
                     return STATUS_METER;
                 }
@@ -304,8 +305,8 @@ pub(crate) fn register(linker: &mut Linker<RuntimeState>) -> Result<(), Executio
                     Err(status) => return status,
                 };
                 
-                if let Err(refusal) =
-                    charge_bigint_operation(caller.data_mut().meter_mut(), WideIntegerOp::Rem, 32, None)
+                if charge_bigint_operation(caller.data_mut().meter_mut(), WideIntegerOp::Rem, 32, None)
+                    .is_err()
                 {
                     return STATUS_METER;
                 }
@@ -365,12 +366,14 @@ pub(crate) fn register(linker: &mut Linker<RuntimeState>) -> Result<(), Executio
                 let exp_value = bigint_from_be_bytes(&exponent);
                 let exp_bits = count_bits(&exp_value);
                 
-                if let Err(refusal) = charge_bigint_operation(
+                if charge_bigint_operation(
                     caller.data_mut().meter_mut(),
                     WideIntegerOp::ModExp,
                     32,
                     Some(exp_bits),
-                ) {
+                )
+                .is_err()
+                {
                     return STATUS_METER;
                 }
                 

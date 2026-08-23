@@ -1087,7 +1087,7 @@ fn entry_refusal(
         EntrypointRefusal::MissingAllocator => CompositionRefusal::MissingAllocator,
         EntrypointRefusal::MissingMemory => CompositionRefusal::MissingMemory,
         EntrypointRefusal::MissingEntry => CompositionRefusal::MissingEntry,
-        EntrypointRefusal::AllocationRefused { code }
+        EntrypointRefusal::AllocationRefused { .. }
             if instance.meter().is_activity()
                 && instance.state().composition().is_some_and(|composition| {
                     composition.revision() == AbiRevision::CandidateV2

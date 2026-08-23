@@ -395,13 +395,18 @@ const fn budget_refusal(refusal: MeterRefusal) -> Option<BudgetMeterRefusal> {
             resource,
             limit,
             attempted,
-        } => budget_resource(resource).map(|resource| BudgetMeterRefusal::BudgetExceeded {
-            resource,
-            limit,
-            attempted,
-        }),
-        MeterRefusal::CounterOverflow { resource } => budget_resource(resource)
-            .map(|resource| BudgetMeterRefusal::CounterOverflow { resource }),
+        } => match budget_resource(resource) {
+            Some(resource) => Some(BudgetMeterRefusal::BudgetExceeded {
+                resource,
+                limit,
+                attempted,
+            }),
+            None => None,
+        },
+        MeterRefusal::CounterOverflow { resource } => match budget_resource(resource) {
+            Some(resource) => Some(BudgetMeterRefusal::CounterOverflow { resource }),
+            None => None,
+        },
         MeterRefusal::FeeOverflow => None,
     }
 }

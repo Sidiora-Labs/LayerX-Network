@@ -99,5 +99,6 @@ pub(super) fn register_candidate(linker: &mut Linker<RuntimeState>) -> Result<()
                 i32::try_from(encoded.len()).unwrap_or(STATUS_BOUNDS)
             },
         )
-        .map_err(|error| linker_fault(&error))
+        .map_err(|error| linker_fault(&error))?;
+    Ok(())
 }

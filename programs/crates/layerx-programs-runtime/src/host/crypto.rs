@@ -4,7 +4,6 @@ use wasmi::{Caller, Linker};
 
 use crate::crypto::{hash_bytes, HashAlgorithm, HashRefusal};
 use crate::execute::ExecutionFault;
-use crate::meter::MeterRefusal;
 
 use super::memory::{nonnegative, read_slice, write_guest};
 use super::{linker_fault, RuntimeState, STATUS_BOUNDS, STATUS_INVALID, STATUS_METER, ABI_MODULE};
@@ -50,7 +49,7 @@ pub(super) fn register(linker: &mut Linker<RuntimeState>) -> Result<(), Executio
                     );
                     return STATUS_METER;
                 }
-                let digest = match hash_bytes(algorithm, input) {
+                let digest = match hash_bytes(algorithm, &input) {
                     Ok(digest) => digest,
                     Err(HashRefusal::InputTooLong { .. }) => return STATUS_BOUNDS,
                     Err(HashRefusal::UnknownAlgorithm { .. }) => return STATUS_INVALID,
@@ -61,5 +60,6 @@ pub(super) fn register(linker: &mut Linker<RuntimeState>) -> Result<(), Executio
                 0
             },
         )
-        .map_err(|error| linker_fault(&error))
+        .map_err(|error| linker_fault(&error))?;
+    Ok(())
 }

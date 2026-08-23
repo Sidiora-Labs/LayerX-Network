@@ -3,7 +3,7 @@
 mod calls;
 mod crypto;
 mod events;
-mod memory;
+pub(crate) mod memory;
 mod scan;
 mod signature;
 mod storage;
@@ -344,7 +344,7 @@ fn encode_receipt(view: &ReceiptView) -> Vec<u8> {
     encoded
 }
 
-pub(super) const fn error_status(error: AbiError) -> i32 {
+pub(crate) const fn error_status(error: AbiError) -> i32 {
     match error {
         AbiError::CapabilityDenied | AbiError::CapabilityEscalation => STATUS_DENIED,
         AbiError::Meter(_) => STATUS_METER,
@@ -364,7 +364,7 @@ pub(super) const fn error_status(error: AbiError) -> i32 {
     }
 }
 
-pub(super) fn linker_fault(error: &wasmi::errors::LinkerError) -> ExecutionFault {
+pub(crate) fn linker_fault(error: &wasmi::errors::LinkerError) -> ExecutionFault {
     ExecutionFault::EngineFault {
         reason: error.to_string(),
     }
