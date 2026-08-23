@@ -2382,7 +2382,7 @@ reqs = ["32.1","32.8","32.9"]
 
 [task.22.2]
 title = "Implement the x402 v2 seller and buyer roles"
-status = "pending"
+status = "done"
 wave = 11
 requires = ["22.1"]
 do_1 = "Implement the x402 v2 seller role: payment-required issuance, offer encoding and settlement verification mapped to receipt-verified LayerX operations."

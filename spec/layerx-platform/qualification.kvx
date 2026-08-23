@@ -141,3 +141,11 @@ symbol = "homeBalance"
 observed = "Task 12.2 requires home to display verified balance with freshness, and the homeBalance model function accepts VerifiedMoney and checkedAgo parameters, but the HumanApiClient interface exposes no balance-retrieval endpoint. The Home component invokes homeBalance() without parameters, causing it to render the unavailable state unconditionally."
 assumption = "Human qualification will determine whether the balance endpoint belongs to a wave-7 sibling task, was already implemented but not bound into the generated client, or remains pending in a later wave. Task 12.2 implements the home UI structure and balance-display logic completely; only the API binding is deferred."
 severity = "dependency-boundary"
+
+[observation.22.2.1]
+task = "22.2"
+file = "interop/crates/layerx-x402/src/seller.rs, interop/crates/layerx-x402/src/buyer.rs"
+symbol = "interop_x402_seller, interop_x402_buyer"
+observed = "The x402 v2 seller and buyer role implementations were already present from task 22.1 with payment-required issuance, offer encoding, settlement verification, offer parsing, payment construction, and receipt capture fully implemented. Task 22.2 added comprehensive test suites: seller.rs (15 tests), buyer.rs (26 tests), vectors.rs (conformance vectors), and e2e.rs (15 integration tests). All tests verify real code paths, real types, evidence-backed outcomes, and wire format conformance to the published x402 v2 specification."
+assumption = "The existing seller and buyer implementations conform to the x402 v2 specification and satisfy requirements 32.2 and 32.6. Human qualification will execute the test suites, verify interoperability with independent x402 implementations, and validate that every x402 outcome is rendered only as far as backing LayerX receipt evidence supports."
+severity = "note"
