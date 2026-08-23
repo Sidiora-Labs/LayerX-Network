@@ -6,6 +6,7 @@ import type {
   BackupCodeSet,
   HumanApiClient,
   OperationDigest,
+  OpaqueCredential,
   Passkey,
   PasskeyId,
   PasskeyRegistrationChallenge,
@@ -38,10 +39,8 @@ function createMockStepUpEvidence(action: SecurityActionKind, targetId?: string)
     challenge_id: `stepup-${action}-${Date.now()}` as StepUpChallengeId,
     confirms: digest,
     passkey_id: "mock-passkey-id" as PasskeyId,
-    credential_id: "mock-credential-id",
-    authenticator_data: new Uint8Array([0x01, 0x02, 0x03]),
-    client_data_json: new Uint8Array([0x04, 0x05, 0x06]),
-    signature: new Uint8Array([0x07, 0x08, 0x09]),
+    completed_at: new Date().toISOString(),
+    expires_at: new Date(Date.now() + 300000).toISOString(),
   };
 }
 
@@ -59,22 +58,8 @@ function createMockClient(
     securityPasskeyRegisterBegin: async (_request: { label: string; step_up: StepUpEvidence }) => {
       const challenge: PasskeyRegistrationChallenge = {
         registration_id: "mock-registration-id",
-        ceremony: {
-          challenge: new Uint8Array([0x01, 0x02, 0x03]),
-          rp: { name: "LayerX", id: "layerx.dev" },
-          user: {
-            id: new Uint8Array([0x04, 0x05, 0x06]),
-            name: "test@layerx.dev",
-            displayName: "Test User",
-          },
-          pubKeyCredParams: [{ type: "public-key", alg: -7 }],
-          timeout: 60000,
-          attestation: "none",
-          authenticatorSelection: {
-            residentKey: "required",
-            userVerification: "required",
-          },
-        },
+        ceremony: "mock-registration-ceremony" as OpaqueCredential,
+        expires_at: new Date(Date.now() + 300000).toISOString(),
       };
       return challenge;
     },
@@ -102,6 +87,7 @@ function createMockClient(
     authenticatorSetupBegin: async (_request: { label: string; step_up: StepUpEvidence }) => {
       const challenge: AuthenticatorSetupChallenge = {
         setup_id: "mock-setup-id",
+        expires_at: new Date(Date.now() + 300000).toISOString(),
         otpauth_uri: {
           value: "otpauth://totp/LayerX?secret=ABCDEFGH",
           remask_at: new Date(Date.now() + 300000).toISOString(),
@@ -156,7 +142,7 @@ function createMockClient(
       };
       return secret;
     },
-  } as HumanApiClient;
+  } as unknown as HumanApiClient;
 }
 
 function createMockAuthenticator(): MockPasskeyAuthenticator {
@@ -170,7 +156,7 @@ function createMockAuthenticator(): MockPasskeyAuthenticator {
         attestationObject: new ArrayBuffer(256),
       },
     },
-    beginAssertion: async (_challenge) => {
+    beginAssertion: async (_challenge: unknown) => {
       return {
         credential_id: "mock-credential-id",
         authenticator_data: new Uint8Array([0x01, 0x02, 0x03]),
@@ -178,7 +164,7 @@ function createMockAuthenticator(): MockPasskeyAuthenticator {
         signature: new Uint8Array([0x07, 0x08, 0x09]),
       };
     },
-    beginRegistration: async (_ceremony) => {
+    beginRegistration: async (_ceremony: unknown) => {
       return {
         id: "new-credential-id",
         type: "public-key",
@@ -189,7 +175,7 @@ function createMockAuthenticator(): MockPasskeyAuthenticator {
         },
       };
     },
-  } as MockPasskeyAuthenticator;
+  } as unknown as MockPasskeyAuthenticator;
 }
 
 test("add-passkey mutation requires step-up", async () => {
@@ -360,8 +346,9 @@ test("all security mutations produce valid step-up evidence structure", async ()
     assert.ok(stepUp.challenge_id.length > 0, `${action} challenge_id must not be empty`);
     assert.equal(typeof stepUp.confirms, "string", `${action} must produce a confirms digest`);
     assert.equal(typeof stepUp.passkey_id, "string", `${action} must include a passkey_id`);
-    assert.ok(stepUp.authenticator_data instanceof Uint8Array, `${action} must include authenticator_data`);
-    assert.ok(stepUp.client_data_json instanceof Uint8Array, `${action} must include client_data_json`);
-    assert.ok(stepUp.signature instanceof Uint8Array, `${action} must include signature`);
+    assert.equal(typeof stepUp.completed_at, "string", `${action} must record completed_at`);
+    assert.ok(stepUp.completed_at.length > 0, `${action} completed_at must not be empty`);
+    assert.equal(typeof stepUp.expires_at, "string", `${action} must record expires_at`);
+    assert.ok(stepUp.expires_at.length > 0, `${action} expires_at must not be empty`);
   }
 });
