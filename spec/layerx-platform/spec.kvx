@@ -2017,7 +2017,7 @@ reqs = ["26.1"]
 
 [task.17.2]
 title = "Build the local emulator on the real transition function"
-status = "pending"
+status = "done"
 wave = 9
 requires = ["15.1"]
 do_1 = "Build the emulator embedding the real core transition function and real receipt machinery with instant batching and prefunded accounts."
