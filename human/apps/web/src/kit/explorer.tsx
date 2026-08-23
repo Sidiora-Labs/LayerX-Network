@@ -82,7 +82,7 @@ export function ExplorerVerificationBadge({
   label,
   unverified = false,
 }: Readonly<{ label: string; unverified?: boolean }>) {
-  return <Badge variant={unverified ? "warning" : "success"}>{label}</Badge>;
+  return <Badge variant={unverified ? "warning" : "success"} data-verification={unverified ? "unverified" : "verified"}>{label}</Badge>;
 }
 
 export function ExplorerFreshness({

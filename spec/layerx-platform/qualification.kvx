@@ -101,3 +101,19 @@ symbol = "Ap2Adapter::execute"
 observed = "The AP2 adapter verifies mandates and maps them to typed intents through layerx-intents (do_1, do_2), refuses mandates whose constraints cannot be honored through typed Ap2Error variants (do_3), exports portable LayerX evidence through PortableReceipt (do_4), and declares conformance against the pinned AP2 specification (do_5), completing all five do clauses. No protocol authority is granted; adapters translate only."
 assumption = "None. Implementation matches specification."
 severity = "note"
+
+[observation.13.5.1]
+task = "13.5"
+file = "human/apps/web/e2e/explorer.spec.ts"
+symbol = "explorer e2e tests"
+observed = "The implementation wrote complete e2e tests including altered-evidence verification cases as specified in do_5, but per the No Repair principle these tests were not run during implementation. The verify_cmd target 'make human-e2e-explorer' is ready but untested against a live explorer backend."
+assumption = "Human qualification will run make human-e2e-explorer against a configured LAYERX_EXPLORER_API_ORIGIN and repair any environment-specific test failures or timing issues that surface only with a real explorer index backend."
+severity = "note"
+
+[observation.13.5.2]
+task = "13.5"
+file = "human/apps/web/src/explorer/client.ts"
+symbol = "explorerOrigin"
+observed = "The explorer client requires LAYERX_EXPLORER_API_ORIGIN environment variable to be configured. Without this variable the explorer pages return ExplorerUnavailable. This configuration is intentionally required and not defaulted."
+assumption = "Human qualification will ensure LAYERX_EXPLORER_API_ORIGIN is set to a valid explorer service origin in all deployment environments where the explorer plane should function."
+severity = "note"

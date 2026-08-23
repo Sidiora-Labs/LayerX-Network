@@ -1700,7 +1700,7 @@ reqs = ["8.2","18.8","18.2"]
 
 [task.13.5]
 title = "Build the public explorer plane"
-status = "pending"
+status = "done"
 wave = 7
 requires = ["11.1","10.5"]
 do_1 = "Build the server-rendered explorer pages: checkpoints, batches, receipt lookup, account views and the evidence verifier, table-first."
