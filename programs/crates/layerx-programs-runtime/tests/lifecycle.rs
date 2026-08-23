@@ -3,11 +3,26 @@ use layerx_programs_runtime::test_support::{
     OP_END, OP_I32_CONST, TYPE_I32,
 };
 use layerx_programs_runtime::{
-    Deploy, Lifecycle, LifecycleRefusal, Migration, ProgramId, Upgrade, UpgradePolicy, ABI_VERSION,
+    Deploy, Lifecycle, LifecycleRefusal, Migration, ProgramId, Upgrade, UpgradePolicy,
+    ValidatedModule, WasmEngine, WasmValue, ABI_VERSION,
 };
 
 fn program(byte: u8) -> ProgramId {
     ProgramId::new([byte; 32]).unwrap_or_else(|error| panic!("program id refused: {error}"))
+}
+
+fn call_deployed(wasm: &[u8], export: &str, args: &[WasmValue]) -> Vec<WasmValue> {
+    let engine =
+        WasmEngine::declared().unwrap_or_else(|error| panic!("engine construction refused: {error}"));
+    let validated: ValidatedModule = engine
+        .validate(wasm)
+        .unwrap_or_else(|error| panic!("deployed module refused: {error}"));
+    let mut instance = validated
+        .instantiate()
+        .unwrap_or_else(|fault| panic!("deployed module instantiation faulted: {fault}"));
+    instance
+        .call(export, args)
+        .unwrap_or_else(|fault| panic!("deployed export faulted: {fault}"))
 }
 
 fn migration_module() -> Vec<u8> {
@@ -93,6 +108,73 @@ fn immutable_is_default_and_upgrade_records_hash_history() {
     assert_eq!(receipt.version, 2);
     assert_eq!(receipt.old_code_hash, Some([7; 32]));
     assert!(receipt.migration.is_some());
+}
+
+#[test]
+fn deploy_call_upgrade_and_migration_run_end_to_end() {
+    let mut lifecycle = Lifecycle::declared()
+        .unwrap_or_else(|error| panic!("lifecycle construction refused: {error}"));
+
+    let deploy_receipt = lifecycle
+        .deploy(Deploy {
+            program: program(20),
+            code_hash: [21; 32],
+            wasm: add_module(),
+            abi_version: ABI_VERSION,
+            upgrade_policy: UpgradePolicy::Authority([22; 32]),
+        })
+        .unwrap_or_else(|error| panic!("deployment refused: {error}"));
+    assert_eq!(deploy_receipt.version, 1);
+    assert_eq!(deploy_receipt.old_code_hash, None);
+    assert!(deploy_receipt.migration.is_none());
+
+    assert_eq!(
+        lifecycle.callable(&deploy_receipt, false),
+        Err(LifecycleRefusal::UnverifiedReceipt)
+    );
+    let deployed = lifecycle
+        .callable(&deploy_receipt, true)
+        .unwrap_or_else(|error| panic!("verified deployment not callable: {error}"));
+    assert_eq!(deployed.code_hash, [21; 32]);
+    assert_eq!(
+        call_deployed(
+            &deployed.wasm,
+            "add",
+            &[WasmValue::I32(19), WasmValue::I32(23)],
+        ),
+        vec![WasmValue::I32(42)]
+    );
+
+    let upgrade_receipt = lifecycle
+        .upgrade(Upgrade {
+            program: program(20),
+            authority: [22; 32],
+            code_hash: [23; 32],
+            wasm: migration_module(),
+            abi_version: ABI_VERSION,
+            migration: Some(Migration {
+                export: "migrate".to_string(),
+            }),
+        })
+        .unwrap_or_else(|error| panic!("upgrade refused: {error}"));
+    assert_eq!(upgrade_receipt.version, 2);
+    assert_eq!(upgrade_receipt.old_code_hash, Some([21; 32]));
+    assert_eq!(upgrade_receipt.new_code_hash, [23; 32]);
+    assert!(upgrade_receipt.migration.is_some());
+
+    let upgraded = lifecycle
+        .callable(&upgrade_receipt, true)
+        .unwrap_or_else(|error| panic!("verified upgrade not callable: {error}"));
+    assert_eq!(upgraded.code_hash, [23; 32]);
+    assert_eq!(
+        call_deployed(&upgraded.wasm, "migrate", &[]),
+        vec![WasmValue::I32(0)]
+    );
+
+    let original = lifecycle
+        .callable(&deploy_receipt, true)
+        .unwrap_or_else(|error| panic!("original version not callable: {error}"));
+    assert_eq!(original.code_hash, [21; 32]);
 }
 
 #[test]

@@ -2224,7 +2224,7 @@ status = "pending"
 
 [task.20.1]
 title = "Implement deploy, upgrade and migration activities"
-status = "pending"
+status = "done"
 wave = 10
 requires = ["19.4"]
 do_1 = "Implement deployment as an ordinary programs-module activity: validation, fee, registry write, callable on verified receipt, no governance touchpoint."

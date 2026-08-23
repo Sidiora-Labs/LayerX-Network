@@ -157,3 +157,19 @@ symbol = "layerx_programs::Deprecation"
 observed = "The deprecation core (Deprecation::transition, Deprecation::read, ValueAccount, WindDownView, DeprecationRefusal, the exit-only WindDownStateAccess::ReadOnly guard and validate_transition's stranded-value refusal) was already present on main from commit 763df2b 'Enforce program deprecation wind-down exits', while task.20.3 status was still 'pending'. That prior work satisfied do_2, do_3, and the live-balance transition/refusal cases of do_5, but left no path reconstructing the retained ValueAccount wind-down state from a durable log: Deprecation::read depends on the in-memory wind_downs vector, so after a restart holding only the registry lifecycle history and the journalled activities, read() would refuse with InvalidTransition. That leaves ac_6's 'history ... replayable forever' clause unmet by the coordinator."
 assumption = "Task 20.3 adds Deprecation::replay, which re-applies the durable, append-only deprecation activity log in canonical (program, effective_sequence) order through the same stranded-value guard as a live transition, plus WindDownView status-surfacing helpers (status_label, is_wound_down, reachable_value) for do_4 and winddown.rs tests covering a multi-account live-balance wind-down, a single stranded account refusing the whole wind-down, log replay reconstructing identical state, and replay refusing a logged stranding activity. Human qualification will run 'make programs-test', confirm replay determinism matches live transition state byte-for-byte, and confirm the explorer/CLI surfaces consume the status label. Whether registry lifecycle_history should itself be replay-journalled like deployment records (currently only Deprecation's own activity log is replayable) is left for qualification to decide, since that would touch lib.rs outside task 20.3's declared files."
 severity = "note"
+
+[observation.20.1.1]
+task = "20.1"
+file = "spec/layerx-platform/spec.kvx"
+symbol = "task.20.1 status"
+observed = "The deploy, upgrade and migration lifecycle for task 20.1 was already present on main from commit 553ce2b (src/modules/programs/deploy.c, programs/crates/layerx-programs-runtime/src/lifecycle.rs and its FFI/artifact seams), yet task.20.1 remained status=pending while its dependant task.20.2 was already status=done. The dependency ordering (20.2 requires 20.1) and the merged artifacts both indicate 20.1 was implemented but never flipped to done."
+assumption = "20.1 is flipped to done and the pre-existing lifecycle artifacts are treated as its implementation. Human qualification will reconcile the wave-10 status ledger and confirm no other done task depends on a still-pending predecessor."
+severity = "note"
+
+[observation.20.1.2]
+task = "20.1"
+file = "programs/crates/layerx-programs-runtime/tests/lifecycle.rs"
+symbol = "deploy_call_upgrade_and_migration_run_end_to_end"
+observed = "do_5 asks for deploy, call, upgrade and migration exercised end to end. The pre-existing lifecycle tests covered deploy, upgrade, migration and receipt-gated callability but never instantiated and executed deployed code, so the call leg was untested. A new test now deploys an upgradeable program, resolves the verified deployment receipt, instantiates and calls the deployed export, upgrades under the declared authority with a migration hook, then instantiates and calls the upgraded export and reconfirms the original version still resolves. The C real-node end-to-end coverage lives in tests/programs/test_lifecycle.c under make programs-test and dispatches deploy and migrating upgrade through the real kernel registration."
+assumption = "Per phase rules the added Rust test was written but not compiled or run. Human qualification will run make programs-test (Rust workspace tests plus the C real-node lifecycle test) to confirm the full deploy/call/upgrade/migration path passes."
+severity = "note"
