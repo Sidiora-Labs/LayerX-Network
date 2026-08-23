@@ -1,0 +1,17 @@
+{
+  "description": "Checkout and payment binding mismatch - transaction_id does not match checkout hash",
+  "test_case_id": "refusal-003-binding-mismatch",
+  "checkout_presentation": "placeholder-for-checkout~",
+  "payment_presentation": "placeholder-for-payment-with-wrong-hash~",
+  "merchant_checkout_jwt": "placeholder-for-merchant-checkout-jwt",
+  "verification_context": {
+    "now": 1700000000,
+    "clock_skew_seconds": 300,
+    "expected_audience": "test-merchant-api",
+    "expected_nonce": "nonce-pqr345stu",
+    "currency_minor_exponent": 2,
+    "usage": null
+  },
+  "expected_outcome": "PaymentBindingMismatch",
+  "notes": "Payment mandate transaction_id must equal hash of checkout_jwt from checkout mandate. This vector shows a mismatch."
+}

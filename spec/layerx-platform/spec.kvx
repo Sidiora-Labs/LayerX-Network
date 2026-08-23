@@ -2416,7 +2416,7 @@ status = "pending"
 
 [task.23.1]
 title = "Implement AP2 checkout and payment mandates"
-status = "pending"
+status = "done"
 wave = 11
 requires = ["22.1"]
 do_1 = "Implement AP2 mandate verification: signatures and constraints checked before any action."

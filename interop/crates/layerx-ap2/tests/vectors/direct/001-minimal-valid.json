@@ -1,0 +1,26 @@
+{
+  "description": "Minimal valid direct mandate pair - closed checkout and closed payment",
+  "test_case_id": "direct-001-minimal-valid",
+  "checkout_presentation": "placeholder-for-real-sd-jwt-checkout~",
+  "payment_presentation": "placeholder-for-real-sd-jwt-payment~",
+  "merchant_checkout_jwt": "placeholder-for-merchant-checkout-jwt",
+  "verification_context": {
+    "now": 1700000000,
+    "clock_skew_seconds": 300,
+    "expected_audience": "not-used-in-direct-mode",
+    "expected_nonce": "not-used-in-direct-mode",
+    "currency_minor_exponent": 2,
+    "usage": null
+  },
+  "expected_outcome": "success",
+  "expected_values": {
+    "mode": "Direct",
+    "transaction_id": "example-transaction-id",
+    "checkout_id": "checkout-12345",
+    "payee_id": "merchant-001",
+    "payee_name": "Test Merchant",
+    "amount_minor_units": 10000,
+    "currency": "USD"
+  },
+  "notes": "This is a placeholder. Real golden vectors would include properly signed SD-JWTs from the AP2 specification test suite."
+}

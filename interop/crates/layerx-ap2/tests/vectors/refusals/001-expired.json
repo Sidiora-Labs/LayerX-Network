@@ -1,0 +1,17 @@
+{
+  "description": "Expired checkout mandate - iat and exp timestamps in the past",
+  "test_case_id": "refusal-001-expired",
+  "checkout_presentation": "placeholder-for-expired-checkout~",
+  "payment_presentation": "placeholder-for-payment~",
+  "merchant_checkout_jwt": "placeholder-for-merchant-checkout-jwt",
+  "verification_context": {
+    "now": 1800000000,
+    "clock_skew_seconds": 300,
+    "expected_audience": "test-merchant-api",
+    "expected_nonce": "nonce-ghi789rst",
+    "currency_minor_exponent": 2,
+    "usage": null
+  },
+  "expected_outcome": "Expired",
+  "notes": "Mandate exp claim is 1700000000, current time is 1800000000, well beyond clock skew."
+}

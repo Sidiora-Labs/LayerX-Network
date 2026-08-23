@@ -1,0 +1,17 @@
+{
+  "description": "Invalid signature - checkout mandate signature does not verify",
+  "test_case_id": "refusal-002-invalid-signature",
+  "checkout_presentation": "eyJhbGciOiJFUzI1NiIsImtpZCI6Imlzc3Vlci0wMDEifQ.eyJ2Y3QiOiJtYW5kYXRlLmNoZWNrb3V0LjEiLCJjaGVja291dF9qd3QiOiJleGFtcGxlIiwiY2hlY2tvdXRfaGFzaCI6ImV4YW1wbGUiLCJpYXQiOjE3MDAwMDAwMDAsImV4cCI6MTgwMDAwMDAwMH0.aW52YWxpZC1zaWduYXR1cmUtYnl0ZXM~",
+  "payment_presentation": "placeholder-for-payment~",
+  "merchant_checkout_jwt": "placeholder-for-merchant-checkout-jwt",
+  "verification_context": {
+    "now": 1700000000,
+    "clock_skew_seconds": 300,
+    "expected_audience": "test-merchant-api",
+    "expected_nonce": "nonce-jkl012mno",
+    "currency_minor_exponent": 2,
+    "usage": null
+  },
+  "expected_outcome": "InvalidSignature",
+  "notes": "Signature bytes are syntactically valid base64url but cryptographically invalid for the payload."
+}

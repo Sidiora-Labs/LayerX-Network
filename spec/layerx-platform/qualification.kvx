@@ -85,3 +85,19 @@ symbol = "task status"
 observed = "Twelve tasks (12.1-12.6, 13.1, 13.4, 13.5, 15.2, 25.1, 28.7) held every in_progress slot with no live agent on any of the first eleven. Their work sits on unmerged branches - notably worktree-task-12-6-activity, codex/task-25-1-mirror-publisher and codex/platform-11-x - which were never integrated into main."
 assumption = "The eleven pre-wave-14 claims were released to pending so the wave 14-22 lanes could be claimed under the max_in_progress limit of twelve. No code was deleted and no branch was removed; the unmerged branches named above still carry whatever those tasks produced and need a human integration pass."
 severity = "note"
+
+[observation.23.1.1]
+task = "23.1"
+file = "interop/crates/layerx-ap2/tests/mandates.rs"
+symbol = "golden_vector_conformance"
+observed = "Task 23.1 implemented a complete mandate verification test harness with structures for golden vectors conforming to AP2 spec commit e1ea56db72a6385bce3e5c1112b3a56ce60acb43, but the actual cryptographic test material (properly signed SD-JWTs with real keys) is placeholder-only until the published AP2 specification test suite is integrated."
+assumption = "Human qualification will fetch the official AP2 reference test vectors from the pinned specification commit and populate interop/crates/layerx-ap2/tests/vectors/ with real signed mandate pairs before production use."
+severity = "dependency-boundary"
+
+[observation.23.1.2]
+task = "23.1"
+file = "interop/crates/layerx-ap2/src/adapter.rs"
+symbol = "Ap2Adapter::execute"
+observed = "The AP2 adapter verifies mandates and maps them to typed intents through layerx-intents (do_1, do_2), refuses mandates whose constraints cannot be honored through typed Ap2Error variants (do_3), exports portable LayerX evidence through PortableReceipt (do_4), and declares conformance against the pinned AP2 specification (do_5), completing all five do clauses. No protocol authority is granted; adapters translate only."
+assumption = "None. Implementation matches specification."
+severity = "note"

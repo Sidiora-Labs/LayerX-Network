@@ -1,0 +1,26 @@
+{
+  "description": "Autonomous mandate with line items constraint - fully disclosed",
+  "test_case_id": "autonomous-001-line-items",
+  "checkout_presentation": "placeholder-open-checkout~~placeholder-closed-checkout~",
+  "payment_presentation": "placeholder-open-payment~~placeholder-closed-payment~",
+  "merchant_checkout_jwt": "placeholder-for-merchant-checkout-jwt",
+  "verification_context": {
+    "now": 1700000000,
+    "clock_skew_seconds": 300,
+    "expected_audience": "test-merchant-api",
+    "expected_nonce": "nonce-abc123xyz",
+    "currency_minor_exponent": 2,
+    "usage": null
+  },
+  "expected_outcome": "success",
+  "expected_values": {
+    "mode": "Autonomous",
+    "transaction_id": "example-transaction-id",
+    "checkout_id": "checkout-67890",
+    "payee_id": "merchant-002",
+    "payee_name": "Autonomous Test Merchant",
+    "amount_minor_units": 15000,
+    "currency": "USD"
+  },
+  "notes": "This is a placeholder. Real golden vectors would show open mandates with constraints, key-bound closed mandates, and full constraint evaluation."
+}

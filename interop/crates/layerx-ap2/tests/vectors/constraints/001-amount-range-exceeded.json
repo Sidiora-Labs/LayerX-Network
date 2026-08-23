@@ -1,0 +1,18 @@
+{
+  "description": "Payment mandate violates amount_range constraint - amount exceeds maximum",
+  "test_case_id": "constraint-001-amount-range-exceeded",
+  "checkout_presentation": "placeholder-open-checkout~~placeholder-closed-checkout~",
+  "payment_presentation": "placeholder-open-payment~~placeholder-closed-payment~",
+  "merchant_checkout_jwt": "placeholder-for-merchant-checkout-jwt",
+  "verification_context": {
+    "now": 1700000000,
+    "clock_skew_seconds": 300,
+    "expected_audience": "test-merchant-api",
+    "expected_nonce": "nonce-def456uvw",
+    "currency_minor_exponent": 2,
+    "usage": null
+  },
+  "expected_outcome": "ConstraintViolated",
+  "expected_error": "payment.amount_range",
+  "notes": "Open payment mandate declares max: 50.00 USD (5000 minor units), but closed payment requests 100.00 USD (10000 minor units)."
+}

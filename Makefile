@@ -2341,6 +2341,9 @@ interop-test:
 interop-test-x402:
 	$(INTEROP_CARGO) test --manifest-path $(INTEROP_MANIFEST) --locked -p layerx-x402
 
+interop-test-mandates:
+	$(INTEROP_CARGO) test --manifest-path $(INTEROP_MANIFEST) --locked -p layerx-ap2
+
 interop-lint:
 	$(INTEROP_CARGO) clippy --manifest-path $(INTEROP_MANIFEST) --locked --workspace --all-targets -- -D warnings
 	sh interop/tools/dependency-policy.sh
