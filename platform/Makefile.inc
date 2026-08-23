@@ -75,6 +75,7 @@ platform-release-plan:
 platform-test-middleware:
 	cd platform/middleware/seller && npm install --no-audit --no-fund && npm run build
 	cd platform/middleware/buyer && npm install --no-audit --no-fund && npm run build
+	cd platform/middleware/conformance && npm install --no-audit --no-fund && npm run build && npm run conformance
 	cd platform/integrations/express && npm install --no-audit --no-fund && npm run build
 	cd platform/integrations/next && npm install --no-audit --no-fund && npm run build
 	node platform/integrations/next/bin/layerx-scan-bundle.mjs platform/integrations/next/example

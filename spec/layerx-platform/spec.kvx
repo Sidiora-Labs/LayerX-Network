@@ -1923,7 +1923,7 @@ status = "pending"
 
 [task.16.1]
 title = "Build the buyer and seller middleware"
-status = "pending"
+status = "done"
 wave = 9
 requires = ["15.2"]
 do_1 = "Build seller middleware: payment-required responses with machine-readable offers, receipt verification before resource release, idempotent fulfilment and webhook signature verification."

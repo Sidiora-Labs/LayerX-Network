@@ -261,3 +261,27 @@ symbol = "freshness_states_checkpoint_lag_honestly"
 observed = "Checkpoint freshness is exercised for the NodeHasNoCheckpoint and NotYetMirrored states using real checkpoint-free archives, which honestly cover the checkpoint-lag reporting required by do_3. The positive checkpoint-mirrored states (CheckpointFreshness::Current and Behind) require an archive carrying verified checkpoint material, which means constructing both a canonical wire layerx_wire::receipt::CheckpointCertificate (whose fields are private, so it can only be produced via decode_checkpoint of hand-encoded canonical bytes) and a real layerx_proof::checkpoint::ThresholdReport from verify_certificate with k256-signed attestations. That fixture was not added in this task."
 assumption = "Human qualification will add a checkpoint-bearing archive fixture (canonical wire CheckpointCertificate bytes plus a verified ThresholdReport) to cover the CheckpointFreshness::Current and Behind states and the Archive::from_node checkpoint verification path end to end."
 severity = "note"
+
+[observation.16.1.1]
+task = "16.1"
+file = "platform/middleware/conformance/src/receipts.ts"
+symbol = "buildSignedReceipt"
+observed = "The conformance suite mints its own canonical receipts and signs them with a freshly generated Ed25519 key that it also installs as the AuthorizedReceiptBatch.sequencerPublicKey, so verifyReceipt accepts them. This exercises the real seller/buyer/webhook code paths and wire format but does not prove interop against a receipt produced by the real C sequencer/kernel."
+assumption = "Human qualification will replace or supplement the in-suite sequencer with a golden receipt vector emitted by the production kernel (or the hosted testnet) to confirm byte-for-byte interop, and will run make platform-test-middleware to compile and execute the suite."
+severity = "note"
+
+[observation.16.1.2]
+task = "16.1"
+file = "platform/Makefile.inc"
+symbol = "platform-test-middleware"
+observed = "do_4 requires each role's example exercised in CI against a real service. The suite boots the shipped paid-api seller example as a real HTTP service and drives both seller and buyer middleware over the wire, but the buyer-agent example targets the live Human API (move.quote/commit, journey.get, evidence.get) which is not stood up in this job; it is only build/link-checked as a workspace member here."
+assumption = "The buyer end-to-end path against the live Human API is expected to be covered by the hosted testnet job (LAYERX_TESTNET_URL and related secrets), consistent with how other tasks gate live runs. Qualification should confirm a buyer-agent run against the hosted testnet."
+severity = "note"
+
+[observation.16.1.3]
+task = "16.1"
+file = "platform/release/registries.kvx"
+symbol = "registry.npm"
+observed = "do_5 asks to publish the buyer and seller packages through the release pipeline. The release manifest is registry-scoped (no per-package section) and the npm registry status is still \"skeleton\"; both packages are public, non-private workspace members with dist-only files and exports, which is the repo's existing release-eligibility convention. No publishConfig was added because no sibling package uses one and the release CLI rejects unknown manifest sections."
+assumption = "Actual publication remains gated to human qualification (flipping registry statuses to active and running the tagged release-pipeline job with real registry credentials); this change wires metadata only and publishes nothing, matching the do-not-publish-secrets instruction."
+severity = "note"

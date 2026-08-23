@@ -1,0 +1,23 @@
+{
+  "name": "@sidiora/layerx-middleware-conformance",
+  "version": "0.1.0",
+  "description": "Non-authority conformance suite for the LayerX buyer and seller middleware",
+  "type": "module",
+  "private": true,
+  "license": "SEE LICENSE IN LICENSE",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "conformance": "node run.mjs"
+  },
+  "dependencies": {
+    "@sidiora/layerx-buyer-middleware": "0.1.0",
+    "@sidiora/layerx-sdk": "0.1.0",
+    "@sidiora/layerx-seller-middleware": "0.1.0"
+  },
+  "devDependencies": {
+    "typescript": "5.9.2"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
