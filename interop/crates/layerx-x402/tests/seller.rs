@@ -4,11 +4,13 @@
 
 use std::collections::BTreeMap;
 
-use layerx_interop_gateway::gateway::{TranslationKind, TranslationRequest, TranslationStatus};
+use base64::Engine as _;
+use layerx_interop_gateway::adapter::{AdapterId, ConformanceSuite};
 use layerx_interop_gateway::principal::PrincipalId;
 use layerx_interop_gateway::trace::TraceId;
 use layerx_interop_gateway::GatewayCore;
 use layerx_proof::receipt::AuthorizedBatch;
+use layerx_x402::x402_adapter_descriptor;
 use layerx_x402::model::{
     AtomicAmount, PaymentPayload, PaymentRequired, PaymentRequirements, ResourceInfo,
     SettlementResponse, X402_VERSION,
@@ -34,6 +36,20 @@ impl PaymentPlane for TestPaymentPlane {
             PlanePaymentOutcome::Pending,
         ))
     }
+}
+
+
+fn registered_gateway() -> GatewayCore {
+    let mut gateway = GatewayCore::new();
+    let suite = AdapterId::new("x402-v2").unwrap_or_else(|error| panic!("suite id: {error}"));
+    let conformance = ConformanceSuite::new(suite, 20, [0xc0; 32])
+        .unwrap_or_else(|error| panic!("conformance: {error}"));
+    let descriptor = x402_adapter_descriptor(conformance)
+        .unwrap_or_else(|error| panic!("descriptor: {error}"));
+    gateway
+        .register_adapter(descriptor, &TraceId::mint([0xcc; 16]), 0)
+        .unwrap_or_else(|error| panic!("register x402: {error}"));
+    gateway
 }
 
 fn test_requirements() -> PaymentRequirements {
@@ -131,12 +147,12 @@ fn seller_refuses_payment_when_requirements_mismatch() {
     let encoded = base64::engine::general_purpose::STANDARD
         .encode(serde_json::to_vec(&mismatched_payload).unwrap());
 
-    let mut gateway = GatewayCore::testing();
+    let mut gateway = registered_gateway();
     let principal = PrincipalId::new("test-merchant").unwrap();
     let mut plane = TestPaymentPlane {
         outcome: PlanePaymentOutcome::Pending,
     };
-    let trace = TraceId::testing();
+    let trace = TraceId::mint([0xab; 16]);
 
     let result = seller.settle(&mut gateway, &principal, &encoded, &mut plane, &trace, 0);
 
@@ -152,12 +168,12 @@ fn seller_returns_pending_when_plane_returns_pending() {
     let encoded = base64::engine::general_purpose::STANDARD
         .encode(serde_json::to_vec(&payload).unwrap());
 
-    let mut gateway = GatewayCore::testing();
+    let mut gateway = registered_gateway();
     let principal = PrincipalId::new("test-merchant").unwrap();
     let mut plane = TestPaymentPlane {
         outcome: PlanePaymentOutcome::Pending,
     };
-    let trace = TraceId::testing();
+    let trace = TraceId::mint([0xab; 16]);
 
     let outcome = seller
         .settle(&mut gateway, &principal, &encoded, &mut plane, &trace, 0)
@@ -175,14 +191,14 @@ fn seller_returns_refused_when_plane_refuses_payment() {
     let encoded = base64::engine::general_purpose::STANDARD
         .encode(serde_json::to_vec(&payload).unwrap());
 
-    let mut gateway = GatewayCore::testing();
+    let mut gateway = registered_gateway();
     let principal = PrincipalId::new("test-merchant").unwrap();
     let mut plane = TestPaymentPlane {
         outcome: PlanePaymentOutcome::Refused {
             reason: "insufficient_balance",
         },
     };
-    let trace = TraceId::testing();
+    let trace = TraceId::mint([0xab; 16]);
 
     let outcome = seller
         .settle(&mut gateway, &principal, &encoded, &mut plane, &trace, 0)
@@ -206,13 +222,13 @@ fn seller_idempotency_key_is_deterministic_per_principal_and_payload() {
     let encoded = base64::engine::general_purpose::STANDARD
         .encode(serde_json::to_vec(&payload).unwrap());
 
-    let mut gateway1 = GatewayCore::testing();
-    let mut gateway2 = GatewayCore::testing();
+    let mut gateway1 = registered_gateway();
+    let mut gateway2 = registered_gateway();
     let principal = PrincipalId::new("test-merchant").unwrap();
     let mut plane = TestPaymentPlane {
         outcome: PlanePaymentOutcome::Pending,
     };
-    let trace = TraceId::testing();
+    let trace = TraceId::mint([0xab; 16]);
 
     let _outcome1 = seller
         .settle(&mut gateway1, &principal, &encoded, &mut plane, &trace, 0)
@@ -250,12 +266,12 @@ fn seller_validates_payment_payload_before_settlement() {
     let encoded = base64::engine::general_purpose::STANDARD
         .encode(serde_json::to_vec(&invalid_payload).unwrap());
 
-    let mut gateway = GatewayCore::testing();
+    let mut gateway = registered_gateway();
     let principal = PrincipalId::new("test-merchant").unwrap();
     let mut plane = TestPaymentPlane {
         outcome: PlanePaymentOutcome::Pending,
     };
-    let trace = TraceId::testing();
+    let trace = TraceId::mint([0xab; 16]);
 
     let result = seller.settle(&mut gateway, &principal, &encoded, &mut plane, &trace, 0);
 
@@ -286,10 +302,10 @@ fn payment_plane_request_contains_all_requirements() {
     let encoded = base64::engine::general_purpose::STANDARD
         .encode(serde_json::to_vec(&payload).unwrap());
 
-    let mut gateway = GatewayCore::testing();
+    let mut gateway = registered_gateway();
     let principal = PrincipalId::new("test-merchant").unwrap();
     let mut plane = CapturePaymentPlane { captured: None };
-    let trace = TraceId::testing();
+    let trace = TraceId::mint([0xab; 16]);
 
     let _outcome = seller
         .settle(&mut gateway, &principal, &encoded, &mut plane, &trace, 0)

@@ -146,7 +146,7 @@ fn buyer_refuses_unsupported_offer() {
     let mut plane = TestBuyerPlane {
         payload: json!({"scheme": "exact"}),
     };
-    let trace = TraceId::testing();
+    let trace = TraceId::mint([0xab; 16]);
 
     let result = buyer.build_payment(&encoded, [1; 32], &mut plane, &trace);
 
@@ -176,7 +176,7 @@ fn buyer_selects_first_supported_offer_in_seller_order() {
     let mut plane = TestBuyerPlane {
         payload: json!({"authorization": "test"}),
     };
-    let trace = TraceId::testing();
+    let trace = TraceId::mint([0xab; 16]);
 
     let payment = buyer
         .build_payment(&encoded, [1; 32], &mut plane, &trace)
@@ -203,7 +203,7 @@ fn buyer_echoes_required_extensions_byte_for_value() {
     let mut plane = TestBuyerPlane {
         payload: json!({"authorization": "test"}),
     };
-    let trace = TraceId::testing();
+    let trace = TraceId::mint([0xab; 16]);
 
     let payment = buyer
         .build_payment(&encoded, [1; 32], &mut plane, &trace)
@@ -222,7 +222,7 @@ fn buyer_refuses_zero_idempotency_key() {
     let mut plane = TestBuyerPlane {
         payload: json!({"authorization": "test"}),
     };
-    let trace = TraceId::testing();
+    let trace = TraceId::mint([0xab; 16]);
 
     let result = buyer.build_payment(&encoded, [0; 32], &mut plane, &trace);
 
@@ -238,7 +238,7 @@ fn buyer_validates_payment_required_header_before_parsing() {
     let mut plane = TestBuyerPlane {
         payload: json!({"authorization": "test"}),
     };
-    let trace = TraceId::testing();
+    let trace = TraceId::mint([0xab; 16]);
 
     let result = buyer.build_payment(invalid_header, [1; 32], &mut plane, &trace);
 
@@ -257,7 +257,7 @@ fn buyer_refuses_wrong_x402_version() {
     let mut plane = TestBuyerPlane {
         payload: json!({"authorization": "test"}),
     };
-    let trace = TraceId::testing();
+    let trace = TraceId::mint([0xab; 16]);
 
     let result = buyer.build_payment(&encoded, [1; 32], &mut plane, &trace);
 
@@ -274,7 +274,7 @@ fn buyer_includes_resource_info_in_built_payment() {
     let mut plane = TestBuyerPlane {
         payload: json!({"authorization": "test"}),
     };
-    let trace = TraceId::testing();
+    let trace = TraceId::mint([0xab; 16]);
 
     let payment = buyer
         .build_payment(&encoded, [1; 32], &mut plane, &trace)
@@ -297,7 +297,7 @@ fn buyer_payment_header_is_base64_encoded_json() {
     let mut plane = TestBuyerPlane {
         payload: json!({"authorization": "test"}),
     };
-    let trace = TraceId::testing();
+    let trace = TraceId::mint([0xab; 16]);
 
     let payment = buyer
         .build_payment(&encoded, [1; 32], &mut plane, &trace)
@@ -330,7 +330,7 @@ fn buyer_plane_request_contains_all_requirements() {
     let required = test_payment_required();
     let encoded = encode_payment_required(&required);
     let mut plane = CaptureBuyerPlane { captured: None };
-    let trace = TraceId::testing();
+    let trace = TraceId::mint([0xab; 16]);
 
     let _payment = buyer
         .build_payment(&encoded, [5; 32], &mut plane, &trace)
@@ -351,7 +351,7 @@ fn buyer_refuses_non_object_scheme_payload() {
     let mut plane = TestBuyerPlane {
         payload: json!("not-an-object"),
     };
-    let trace = TraceId::testing();
+    let trace = TraceId::mint([0xab; 16]);
 
     let result = buyer.build_payment(&encoded, [1; 32], &mut plane, &trace);
 
@@ -368,7 +368,7 @@ fn buyer_built_payment_preserves_idempotency_key() {
     let mut plane = TestBuyerPlane {
         payload: json!({"authorization": "test"}),
     };
-    let trace = TraceId::testing();
+    let trace = TraceId::mint([0xab; 16]);
 
     let key = [7; 32];
     let payment = buyer
@@ -404,7 +404,7 @@ fn buyer_capture_refuses_failed_settlement_as_success() {
 
     let encoded = STANDARD.encode(serde_json::to_vec(&failed).unwrap());
     let batch = mock_authorized_batch();
-    let trace = TraceId::testing();
+    let trace = TraceId::mint([0xab; 16]);
 
     let result = Buyer::capture_settlement(&encoded, &payment, &batch, &trace);
 
@@ -437,7 +437,7 @@ fn buyer_capture_refuses_missing_layerx_evidence() {
 
     let encoded = STANDARD.encode(serde_json::to_vec(&no_evidence).unwrap());
     let batch = mock_authorized_batch();
-    let trace = TraceId::testing();
+    let trace = TraceId::mint([0xab; 16]);
 
     let result = Buyer::capture_settlement(&encoded, &payment, &batch, &trace);
 
@@ -480,7 +480,7 @@ fn buyer_capture_refuses_wrong_verification_level() {
 
     let encoded = STANDARD.encode(serde_json::to_vec(&wrong_level).unwrap());
     let batch = mock_authorized_batch();
-    let trace = TraceId::testing();
+    let trace = TraceId::mint([0xab; 16]);
 
     let result = Buyer::capture_settlement(&encoded, &payment, &batch, &trace);
 
@@ -523,7 +523,7 @@ fn buyer_capture_refuses_malformed_receipt() {
 
     let encoded = STANDARD.encode(serde_json::to_vec(&bad_receipt).unwrap());
     let batch = mock_authorized_batch();
-    let trace = TraceId::testing();
+    let trace = TraceId::mint([0xab; 16]);
 
     let result = Buyer::capture_settlement(&encoded, &payment, &batch, &trace);
 
@@ -559,7 +559,7 @@ fn buyer_validates_payment_payload_after_construction() {
     let mut plane = TestBuyerPlane {
         payload: json!({"valid": "object"}),
     };
-    let trace = TraceId::testing();
+    let trace = TraceId::mint([0xab; 16]);
 
     let payment = buyer
         .build_payment(&encoded, [1; 32], &mut plane, &trace)

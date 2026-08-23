@@ -71,11 +71,11 @@ fn reject_padded_base64() {
 fn reject_non_canonical_base64() {
     let mut modified = GOLDEN_RECEIPT_JSON.replace(
         r#""receiptDigest": "BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ""#,
-        r#""receiptDigest": "BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQx""#,
+        r#""receiptDigest": "BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAR""#,
     );
     modified = modified.replace(
         r#""resultingStateRoot": "BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ""#,
-        r#""resultingStateRoot": "BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQx""#,
+        r#""resultingStateRoot": "BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAR""#,
     );
     let result = PortableReceipt::from_json(modified.as_bytes());
     match result {
@@ -208,7 +208,7 @@ fn export_and_json_roundtrip() {
 fn reject_oversized_json() {
     let mut oversized = String::with_capacity(2_000_000);
     oversized.push_str(r#"{"format":"layerx-receipt-proof-v1","verificationLevel":"sequencer-signed","canonicalReceipt":""#);
-    for _ in 0..200_000 {
+    for _ in 0..400_000 {
         oversized.push_str("AAAA");
     }
     oversized.push_str(r#"","receiptDigest":"BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ","batchId":"AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE","asset":"AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI","previousStateRoot":"AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM","resultingStateRoot":"BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ","sequencerPublicKey":"BQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQU"}"#);

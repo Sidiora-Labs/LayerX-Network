@@ -453,6 +453,7 @@ fn atomic_amount_canonical_encoding_round_trips() {
 
 #[test]
 fn atomic_amount_refuses_non_canonical_strings() {
+    let overflow = "9".repeat(40);
     let invalid = vec![
         "",
         "-100",
@@ -463,7 +464,7 @@ fn atomic_amount_refuses_non_canonical_strings() {
         " 100",
         "100 ",
         "abc",
-        &"9".repeat(40),
+        overflow.as_str(),
     ];
 
     for value in invalid {

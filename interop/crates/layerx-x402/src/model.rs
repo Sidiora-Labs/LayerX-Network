@@ -93,7 +93,7 @@ pub struct ResourceInfo {
 }
 
 impl ResourceInfo {
-    pub(crate) fn validate(&self) -> Result<(), X402Error> {
+    pub fn validate(&self) -> Result<(), X402Error> {
         validate_url(&self.url)?;
         if self
             .description
@@ -145,7 +145,7 @@ pub struct PaymentRequirements {
 }
 
 impl PaymentRequirements {
-    pub(crate) fn validate(&self) -> Result<(), X402Error> {
+    pub fn validate(&self) -> Result<(), X402Error> {
         if !identifier(&self.scheme, 32)
             || !caip2(&self.network)
             || !bounded_text(&self.asset, 256)
@@ -158,7 +158,7 @@ impl PaymentRequirements {
         Ok(())
     }
 
-    pub(crate) fn layerx_facts(&self) -> Result<([u8; 32], [u8; 32]), X402Error> {
+    pub fn layerx_facts(&self) -> Result<([u8; 32], [u8; 32]), X402Error> {
         let (namespace, _) = self
             .network
             .split_once(':')
@@ -183,7 +183,7 @@ pub struct PaymentRequired {
 }
 
 impl PaymentRequired {
-    pub(crate) fn validate(&self) -> Result<(), X402Error> {
+    pub fn validate(&self) -> Result<(), X402Error> {
         validate_version(self.x402_version)?;
         self.resource.validate()?;
         if self.accepts.is_empty()
@@ -215,7 +215,7 @@ pub struct PaymentPayload {
 }
 
 impl PaymentPayload {
-    pub(crate) fn validate(&self) -> Result<(), X402Error> {
+    pub fn validate(&self) -> Result<(), X402Error> {
         validate_version(self.x402_version)?;
         self.accepted.validate()?;
         if let Some(resource) = &self.resource {
@@ -245,7 +245,7 @@ pub struct SettlementResponse {
 }
 
 impl SettlementResponse {
-    pub(crate) fn validate_wire(&self) -> Result<(), X402Error> {
+    pub fn validate_wire(&self) -> Result<(), X402Error> {
         if !caip2(&self.network)
             || self.transaction.len() > 512
             || self

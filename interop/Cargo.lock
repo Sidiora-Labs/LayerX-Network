@@ -431,8 +431,10 @@ dependencies = [
 name = "layerx-fiat"
 version = "0.1.0"
 dependencies = [
+ "ed25519-dalek",
  "layerx-interop-gateway",
  "layerx-proof",
+ "layerx-types",
  "sha2",
  "zeroize",
 ]
@@ -523,6 +525,7 @@ version = "0.1.0"
 name = "layerx-ucp"
 version = "0.1.0"
 dependencies = [
+ "ed25519-dalek",
  "layerx-interop-gateway",
  "layerx-proof",
  "sha2",

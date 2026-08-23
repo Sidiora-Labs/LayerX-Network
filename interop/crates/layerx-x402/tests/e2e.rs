@@ -6,11 +6,13 @@ use std::collections::BTreeMap;
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
+use layerx_interop_gateway::adapter::{AdapterId, ConformanceSuite};
 use layerx_interop_gateway::principal::PrincipalId;
 use layerx_interop_gateway::trace::TraceId;
 use layerx_interop_gateway::GatewayCore;
 use layerx_proof::receipt::AuthorizedBatch;
 use layerx_x402::buyer::{Buyer, BuyerPaymentPlane, PaymentBuildRequest, SupportedKind};
+use layerx_x402::x402_adapter_descriptor;
 use layerx_x402::model::{
     AtomicAmount, PaymentPayload, PaymentRequired, PaymentRequirements, ResourceInfo, X402Error,
     X402_VERSION,
@@ -49,6 +51,20 @@ impl PaymentPlane for MockSellerPlane {
             PlanePaymentOutcome::Pending,
         ))
     }
+}
+
+
+fn registered_gateway() -> GatewayCore {
+    let mut gateway = GatewayCore::new();
+    let suite = AdapterId::new("x402-v2").unwrap_or_else(|error| panic!("suite id: {error}"));
+    let conformance = ConformanceSuite::new(suite, 20, [0xc0; 32])
+        .unwrap_or_else(|error| panic!("conformance: {error}"));
+    let descriptor = x402_adapter_descriptor(conformance)
+        .unwrap_or_else(|error| panic!("descriptor: {error}"));
+    gateway
+        .register_adapter(descriptor, &TraceId::mint([0xcc; 16]), 0)
+        .unwrap_or_else(|error| panic!("register x402: {error}"));
+    gateway
 }
 
 fn create_payment_required() -> PaymentRequired {
@@ -120,7 +136,7 @@ fn buyer_and_seller_complete_payment_flow_over_http() {
             "authorization": "buyer-signed-payment"
         }),
     };
-    let trace = TraceId::testing();
+    let trace = TraceId::mint([0xab; 16]);
 
     let payment = buyer
         .build_payment(&payment_header, [5; 32], &mut buyer_plane, &trace)
@@ -131,7 +147,7 @@ fn buyer_and_seller_complete_payment_flow_over_http() {
     assert_eq!(payment.payload.accepted.network, "layerx:testnet");
     assert_eq!(payment.idempotency_key, [5; 32]);
 
-    let mut gateway = GatewayCore::testing();
+    let mut gateway = registered_gateway();
     let principal = PrincipalId::new("test-merchant").unwrap();
     let mut seller_plane = MockSellerPlane {
         outcome: PlanePaymentOutcome::Pending,
@@ -165,7 +181,7 @@ fn buyer_selects_first_supported_scheme_from_seller_accepts() {
     let mut plane = MockBuyerPlane {
         scheme_payload: json!({"scheme": "402lxp"}),
     };
-    let trace = TraceId::testing();
+    let trace = TraceId::mint([0xab; 16]);
 
     let payment = buyer
         .build_payment(&encoded, [1; 32], &mut plane, &trace)
@@ -179,7 +195,7 @@ fn buyer_selects_first_supported_scheme_from_seller_accepts() {
 #[test]
 fn seller_validates_buyer_payment_matches_issued_requirements() {
     let required = create_payment_required();
-    let seller = Seller::new(required).expect("seller created");
+    let seller = Seller::new(required.clone()).expect("seller created");
 
     let mut wrong_payload = PaymentPayload {
         x402_version: X402_VERSION,
@@ -199,12 +215,12 @@ fn seller_validates_buyer_payment_matches_issued_requirements() {
 
     let encoded = STANDARD.encode(serde_json::to_vec(&wrong_payload).unwrap());
 
-    let mut gateway = GatewayCore::testing();
+    let mut gateway = registered_gateway();
     let principal = PrincipalId::new("test-merchant").unwrap();
     let mut plane = MockSellerPlane {
         outcome: PlanePaymentOutcome::Pending,
     };
-    let trace = TraceId::testing();
+    let trace = TraceId::mint([0xab; 16]);
 
     let result = seller.settle(&mut gateway, &principal, &encoded, &mut plane, &trace, 0);
 
@@ -234,7 +250,7 @@ fn payment_flow_preserves_extensions_end_to_end() {
     let mut plane = MockBuyerPlane {
         scheme_payload: json!({"authorization": "test"}),
     };
-    let trace = TraceId::testing();
+    let trace = TraceId::mint([0xab; 16]);
 
     let payment = buyer
         .build_payment(&encoded, [7; 32], &mut plane, &trace)
@@ -253,7 +269,7 @@ fn seller_refuses_payment_when_extension_missing() {
             schema: json!({"type": "object"}),
         });
 
-    let seller = Seller::new(required).expect("seller created");
+    let seller = Seller::new(required.clone()).expect("seller created");
 
     let payload = PaymentPayload {
         x402_version: X402_VERSION,
@@ -273,12 +289,12 @@ fn seller_refuses_payment_when_extension_missing() {
 
     let encoded = STANDARD.encode(serde_json::to_vec(&payload).unwrap());
 
-    let mut gateway = GatewayCore::testing();
+    let mut gateway = registered_gateway();
     let principal = PrincipalId::new("test-merchant").unwrap();
     let mut plane = MockSellerPlane {
         outcome: PlanePaymentOutcome::Pending,
     };
-    let trace = TraceId::testing();
+    let trace = TraceId::mint([0xab; 16]);
 
     let result = seller.settle(&mut gateway, &principal, &encoded, &mut plane, &trace, 0);
 
@@ -308,7 +324,7 @@ fn transport_independent_payment_flow_over_mcp() {
     let mut plane = MockBuyerPlane {
         scheme_payload: json!({"authorization": "mcp-payment"}),
     };
-    let trace = TraceId::testing();
+    let trace = TraceId::mint([0xab; 16]);
 
     let payment = buyer
         .build_payment(&encoded, [9; 32], &mut plane, &trace)
@@ -320,7 +336,7 @@ fn transport_independent_payment_flow_over_mcp() {
 #[test]
 fn seller_refuses_payment_before_plane_execution_when_validation_fails() {
     let required = create_payment_required();
-    let seller = Seller::new(required).expect("seller created");
+    let seller = Seller::new(required.clone()).expect("seller created");
 
     let invalid_payload = PaymentPayload {
         x402_version: 1,
@@ -352,10 +368,10 @@ fn seller_refuses_payment_before_plane_execution_when_validation_fails() {
         }
     }
 
-    let mut gateway = GatewayCore::testing();
+    let mut gateway = registered_gateway();
     let principal = PrincipalId::new("test-merchant").unwrap();
     let mut plane = NeverCalledPlane;
-    let trace = TraceId::testing();
+    let trace = TraceId::mint([0xab; 16]);
 
     let result = seller.settle(&mut gateway, &principal, &encoded, &mut plane, &trace, 0);
 
@@ -376,7 +392,7 @@ fn buyer_constructs_payment_with_correct_idempotency_semantics() {
     let mut plane = MockBuyerPlane {
         scheme_payload: json!({"authorization": "test"}),
     };
-    let trace = TraceId::testing();
+    let trace = TraceId::mint([0xab; 16]);
 
     let key1 = [11; 32];
     let key2 = [22; 32];
@@ -397,7 +413,7 @@ fn buyer_constructs_payment_with_correct_idempotency_semantics() {
 #[test]
 fn seller_outcome_types_distinguish_pending_refused_and_settled() {
     let required = create_payment_required();
-    let seller = Seller::new(required).expect("seller created");
+    let seller = Seller::new(required.clone()).expect("seller created");
 
     let buyer = Buyer::new(vec![SupportedKind {
         scheme: "exact".to_owned(),
@@ -409,13 +425,13 @@ fn seller_outcome_types_distinguish_pending_refused_and_settled() {
     let mut plane = MockBuyerPlane {
         scheme_payload: json!({"authorization": "test"}),
     };
-    let trace = TraceId::testing();
+    let trace = TraceId::mint([0xab; 16]);
 
     let payment = buyer
         .build_payment(&encoded, [1; 32], &mut plane, &trace)
         .expect("payment built");
 
-    let mut gateway = GatewayCore::testing();
+    let mut gateway = registered_gateway();
     let principal = PrincipalId::new("test-merchant").unwrap();
 
     let mut pending_plane = MockSellerPlane {
@@ -494,7 +510,7 @@ fn resource_info_with_all_fields_is_preserved() {
     let mut plane = MockBuyerPlane {
         scheme_payload: json!({"authorization": "test"}),
     };
-    let trace = TraceId::testing();
+    let trace = TraceId::mint([0xab; 16]);
 
     let payment = buyer
         .build_payment(&encoded, [1; 32], &mut plane, &trace)

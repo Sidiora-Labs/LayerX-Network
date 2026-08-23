@@ -2,55 +2,49 @@ use layerx_ap2::{
     Ap2Error, KeyResolver, KeyUse, MandateMode, MandateVerifier, ProtectedHeader,
     VerificationContext,
 };
-use p256::ecdsa::VerifyingKey;
-use std::collections::HashMap;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine as _;
+use p256::ecdsa::signature::Signer as _;
+use p256::ecdsa::{Signature, SigningKey, VerifyingKey};
+use serde_json::json;
+
 
 /// Test key resolver that maps key IDs to known public keys for testing.
 struct TestKeyResolver {
-    keys: HashMap<(KeyUse, String), VerifyingKey>,
+    keys: Vec<(KeyUse, String, VerifyingKey)>,
 }
 
 impl TestKeyResolver {
     fn new() -> Self {
-        let mut keys = HashMap::new();
+        let mut keys = Vec::new();
 
-        // Test issuer key (P-256, from golden vectors)
-        let issuer_key_bytes = hex::decode(
-            "04\
-             c67d9f51a3e6a97e9f3e0e1b7f8a9c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b\
-             9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0"
-        )
-        .unwrap();
-        let issuer_key = VerifyingKey::from_sec1_bytes(&issuer_key_bytes).unwrap();
+        let issuer_signing = test_signing_key();
+        let issuer_key = *issuer_signing.verifying_key();
         
-        keys.insert(
-            (KeyUse::CheckoutMandateIssuer, "issuer-001".to_string()),
+        keys.push((
+            KeyUse::CheckoutMandateIssuer,
+            "issuer-001".to_string(),
             issuer_key,
-        );
-        keys.insert(
-            (KeyUse::PaymentMandateIssuer, "issuer-001".to_string()),
+        ));
+        keys.push((
+            KeyUse::PaymentMandateIssuer,
+            "issuer-001".to_string(),
             issuer_key,
-        );
+        ));
 
-        // Test merchant key (P-256, from golden vectors)
-        let merchant_key_bytes = hex::decode(
-            "04\
-             d78e0f62b4f7b08f0a4f1f2c8f9b0d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c\
-             0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1"
-        )
-        .unwrap();
-        let merchant_key = VerifyingKey::from_sec1_bytes(&merchant_key_bytes).unwrap();
+        let merchant_key = *issuer_signing.verifying_key();
 
-        keys.insert(
-            (KeyUse::MerchantCheckout, "merchant-001".to_string()),
+        keys.push((
+            KeyUse::MerchantCheckout,
+            "merchant-001".to_string(),
             merchant_key,
-        );
+        ));
 
         Self { keys }
     }
 
     fn with_key(mut self, usage: KeyUse, kid: &str, key: VerifyingKey) -> Self {
-        self.keys.insert((usage, kid.to_string()), key);
+        self.keys.push((usage, kid.to_string(), key));
         self
     }
 }
@@ -61,10 +55,34 @@ impl KeyResolver for TestKeyResolver {
             .key_id()
             .ok_or(Ap2Error::KeyResolution)?;
         self.keys
-            .get(&(usage, kid.to_string()))
-            .copied()
+            .iter()
+            .find(|(stored_usage, stored_kid, _)| *stored_usage == usage && stored_kid == kid)
+            .map(|(_, _, key)| *key)
             .ok_or(Ap2Error::KeyResolution)
     }
+}
+
+
+fn test_signing_key() -> SigningKey {
+    SigningKey::from_bytes((&[7u8; 32]).into()).unwrap()
+}
+
+fn signed_time_bounded_checkout(iat: u64, exp: u64) -> String {
+    let header = json!({"alg": "ES256", "kid": "issuer-001"});
+    let payload = json!({
+        "iat": iat,
+        "exp": exp,
+        "delegate_payload": [{
+            "vct": "mandate.checkout.1",
+            "checkout_jwt": "placeholder",
+            "checkout_hash": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        }]
+    });
+    let header = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&header).unwrap());
+    let payload = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload).unwrap());
+    let signing_input = format!("{header}.{payload}");
+    let signature: Signature = test_signing_key().sign(signing_input.as_bytes());
+    format!("{signing_input}.{}~", URL_SAFE_NO_PAD.encode(signature.to_bytes()))
 }
 
 fn test_context() -> VerificationContext<'static> {
@@ -130,7 +148,7 @@ fn mandate_verification_refuses_expired_mandates() {
     let mut context = test_context();
     context.now = 2000000000; // Far in the future
 
-    let checkout = create_minimal_closed_checkout_mandate();
+    let checkout = signed_time_bounded_checkout(1_700_000_000, 1_800_000_000);
     let payment = create_minimal_closed_payment_mandate();
 
     let result = verifier.verify(&checkout, &payment, &context);
@@ -145,7 +163,7 @@ fn mandate_verification_refuses_not_yet_valid_mandates() {
     let mut context = test_context();
     context.now = 1000000000; // Far in the past
 
-    let checkout = create_minimal_closed_checkout_mandate();
+    let checkout = signed_time_bounded_checkout(1_700_000_000, 1_800_000_000);
     let payment = create_minimal_closed_payment_mandate();
 
     let result = verifier.verify(&checkout, &payment, &context);

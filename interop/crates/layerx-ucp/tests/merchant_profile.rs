@@ -1,5 +1,5 @@
 use layerx_ucp::{
-    Capability, CheckoutStatus, CheckoutSubmission, MerchantProfile, NegotiatedCapabilities,
+    ucp_adapter_descriptor, Capability, CheckoutStatus, CheckoutSubmission, MerchantProfile, NegotiatedCapabilities,
     OrderMetadata, PaymentHandler, PlatformProfile, StoredOrder, UcpAdapter, UcpError,
     UcpIdempotencyKey, UcpOrder, UcpPaymentIntent, UcpPaymentPlane, UcpPlaneResult,
 };
@@ -17,9 +17,27 @@ const UCP_VERSION: &str = "2026-04-08";
 const CHECKOUT_CAPABILITY: &str = "dev.ucp.shopping.checkout";
 const ORDER_CAPABILITY: &str = "dev.ucp.shopping.order";
 const PAYMENT_HANDLER_ID: &str = "layerx-402";
-const PAYMENT_HANDLER_VERSION: &str = "2.0.0";
+const PAYMENT_HANDLER_VERSION: &str = UCP_VERSION;
 const PAYMENT_HANDLER_SPEC: &str = "https://layerx.dev/2026-04-08/specification/402";
 const PAYMENT_HANDLER_SCHEMA: &str = "https://layerx.dev/2026-04-08/schemas/402.json";
+
+fn registered_gateway(trace: &TraceId) -> GatewayCore {
+    let mut gateway = layerx_interop_gateway::interop_gateway_core();
+    let adapter_id = AdapterId::new("ucp").unwrap_or_else(|error| panic!("adapter id: {error}"));
+    let version = SpecVersion::parse("20260408").unwrap_or_else(|error| panic!("version: {error}"));
+    let spec = PinnedSpec::new(adapter_id, version, [0xea; 32])
+        .unwrap_or_else(|error| panic!("spec: {error}"));
+    let suite_id = AdapterId::new("ucp-2026-04-08-vectors")
+        .unwrap_or_else(|error| panic!("suite id: {error}"));
+    let conformance = ConformanceSuite::new(suite_id, 3, [0xeb; 32])
+        .unwrap_or_else(|error| panic!("conformance: {error}"));
+    let descriptor = ucp_adapter_descriptor(spec, conformance)
+        .unwrap_or_else(|error| panic!("descriptor: {error}"));
+    gateway
+        .register_adapter(descriptor, trace, 0)
+        .unwrap_or_else(|error| panic!("register ucp: {error}"));
+    gateway
+}
 
 struct TestPaymentPlane {
     pending_checkouts: HashMap<[u8; 32], ()>,
@@ -278,9 +296,9 @@ fn capability_negotiation_requires_exact_checkout_match() {
 
 #[test]
 fn checkout_completion_requires_receipt_verification() {
-    let mut gateway = layerx_interop_gateway::interop_gateway_core();
-    let principal = PrincipalId::new("merchant").unwrap_or_else(|error| panic!("principal: {error}"));
     let trace = TraceId::mint([0xcc; 16]);
+    let mut gateway = registered_gateway(&trace);
+    let principal = PrincipalId::new("merchant").unwrap_or_else(|error| panic!("principal: {error}"));
 
     let asset = [0xc1; 32];
     let recipient = [0xd1; 32];
@@ -346,9 +364,9 @@ fn checkout_completion_requires_receipt_verification() {
 
 #[test]
 fn order_state_remains_receipt_backed_or_honestly_pending() {
-    let mut gateway = layerx_interop_gateway::interop_gateway_core();
-    let principal = PrincipalId::new("merchant").unwrap_or_else(|error| panic!("principal: {error}"));
     let trace = TraceId::mint([0xdd; 16]);
+    let mut gateway = registered_gateway(&trace);
+    let principal = PrincipalId::new("merchant").unwrap_or_else(|error| panic!("principal: {error}"));
 
     let asset = [0xc2; 32];
     let recipient = [0xd2; 32];

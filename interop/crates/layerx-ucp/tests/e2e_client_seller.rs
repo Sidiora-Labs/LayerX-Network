@@ -1,8 +1,9 @@
 use layerx_ucp::{
-    Capability, CheckoutStatus, CheckoutSubmission, ExecutedUcpPayment, MerchantProfile,
+    ucp_adapter_descriptor, Capability, CheckoutStatus, CheckoutSubmission, ExecutedUcpPayment, MerchantProfile,
     NegotiatedCapabilities, OrderMetadata, PaymentHandler, PlatformProfile, StoredOrder,
     UcpAdapter, UcpError, UcpIdempotencyKey, UcpPaymentIntent, UcpPaymentPlane, UcpPlaneResult,
 };
+use layerx_interop_gateway::adapter::{AdapterId, ConformanceSuite, PinnedSpec, SpecVersion};
 use layerx_interop_gateway::principal::PrincipalId;
 use layerx_interop_gateway::trace::TraceId;
 use layerx_interop_gateway::GatewayCore;
@@ -14,6 +15,23 @@ use std::collections::HashMap;
 const UCP_VERSION: &str = "2026-04-08";
 const CHECKOUT_CAPABILITY: &str = "dev.ucp.shopping.checkout";
 const ORDER_CAPABILITY: &str = "dev.ucp.shopping.order";
+
+fn registered_gateway(trace: &TraceId) -> Result<GatewayCore, UcpError> {
+    let mut gateway = layerx_interop_gateway::interop_gateway_core();
+    let adapter_id = AdapterId::new("ucp").map_err(|error| UcpError::Gateway(error.into()))?;
+    let version = SpecVersion::parse("20260408").map_err(|error| UcpError::Gateway(error.into()))?;
+    let spec = PinnedSpec::new(adapter_id, version, [0xea; 32])
+        .map_err(|error| UcpError::Gateway(error.into()))?;
+    let suite_id = AdapterId::new("ucp-2026-04-08-vectors")
+        .map_err(|error| UcpError::Gateway(error.into()))?;
+    let conformance = ConformanceSuite::new(suite_id, 3, [0xeb; 32])
+        .map_err(|error| UcpError::Gateway(error.into()))?;
+    let descriptor = ucp_adapter_descriptor(spec, conformance)?;
+    gateway
+        .register_adapter(descriptor, trace, 0)
+        .map_err(|error| UcpError::Gateway(error.into_error()))?;
+    Ok(gateway)
+}
 
 struct UcpClient {
     profile_url: String,
@@ -41,7 +59,7 @@ impl UcpClient {
             ],
             payment_handlers: vec![PaymentHandler::new(
                 "layerx-402",
-                "2.0.0",
+                UCP_VERSION,
                 "https://layerx.dev/2026-04-08/specification/402",
                 "https://layerx.dev/2026-04-08/schemas/402.json",
             )?],
@@ -68,7 +86,7 @@ impl LayerXSeller {
     fn new() -> Result<Self, UcpError> {
         let handler = PaymentHandler::new(
             "layerx-402",
-            "2.0.0",
+            UCP_VERSION,
             "https://layerx.dev/2026-04-08/specification/402",
             "https://layerx.dev/2026-04-08/schemas/402.json",
         )?;
@@ -81,8 +99,9 @@ impl LayerXSeller {
         let principal = PrincipalId::new("seller-merchant")
             .map_err(|_| UcpError::InvalidProfile)?;
 
+        let trace = TraceId::mint([0xcc; 16]);
         Ok(Self {
-            gateway: layerx_interop_gateway::interop_gateway_core(),
+            gateway: registered_gateway(&trace)?,
             principal,
             merchant_profile,
             payment_plane: TestSellerPlane::new(),
@@ -131,6 +150,7 @@ impl LayerXSeller {
 struct TestSellerPlane {
     sequencer_seed: [u8; 32],
     pending: HashMap<[u8; 32], ()>,
+    executed_checkouts: HashMap<[u8; 32], (OrderMetadata, Vec<u8>, AuthorizedBatch)>,
     orders: HashMap<String, StoredOrder>,
 }
 
@@ -139,6 +159,7 @@ impl TestSellerPlane {
         Self {
             sequencer_seed: [0x88; 32],
             pending: HashMap::new(),
+            executed_checkouts: HashMap::new(),
             orders: HashMap::new(),
         }
     }
@@ -167,8 +188,10 @@ impl TestSellerPlane {
         }
     }
 
-    fn get_executed_receipt(&self, _key: [u8; 32]) -> Option<(Vec<u8>, AuthorizedBatch)> {
-        None
+    fn get_executed_receipt(&self, key: [u8; 32]) -> Option<(Vec<u8>, AuthorizedBatch)> {
+        self.executed_checkouts
+            .get(&key)
+            .map(|(_, receipt, batch)| (receipt.clone(), *batch))
     }
 }
 
@@ -178,6 +201,14 @@ impl UcpPaymentPlane for TestSellerPlane {
         intent: &UcpPaymentIntent,
         _trace: &TraceId,
     ) -> Result<UcpPlaneResult, UcpError> {
+        if let Some((metadata, receipt, batch)) = self.executed_checkouts.get(&intent.idempotency_key) {
+            return Ok(UcpPlaneResult::Executed(Box::new(ExecutedUcpPayment {
+                metadata: metadata.clone(),
+                canonical_receipt: receipt.clone(),
+                authorised_batch: *batch,
+            })));
+        }
+
         if self.pending.contains_key(&intent.idempotency_key) {
             self.pending.remove(&intent.idempotency_key);
 
@@ -197,6 +228,11 @@ impl UcpPaymentPlane for TestSellerPlane {
                     hex(&intent.idempotency_key[..8])
                 ),
             };
+
+            self.executed_checkouts.insert(
+                intent.idempotency_key,
+                (metadata.clone(), receipt.clone(), batch),
+            );
 
             return Ok(UcpPlaneResult::Executed(Box::new(ExecutedUcpPayment {
                 metadata,

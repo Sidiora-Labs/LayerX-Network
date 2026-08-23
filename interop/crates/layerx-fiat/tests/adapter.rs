@@ -1,6 +1,6 @@
 use ed25519_dalek::{Signer as _, SigningKey};
 use layerx_fiat::{
-    EvidenceClass, ExternalId, FiatAdapter, FiatError, FiatIntent, FiatIntentKind,
+    EvidenceClass, ExternalId, FiatAdapter, FiatError, FiatIntent, 
     FiatJourneyState, FiatPlane, FiatPlaneResult, FiatRail, PlaneFiatOutcome, ProviderEvidence,
     ProviderVerifier, TokenReference, VerifiedProviderFacts, ExecutedFiatOutcome,
 };
@@ -154,6 +154,7 @@ fn registered_gateway() -> GatewayCore {
     gateway
 }
 
+#[derive(Clone)]
 struct SandboxVerifier {
     provider: ExternalId,
     settlement: ExternalId,
@@ -198,7 +199,14 @@ impl FiatPlane for SandboxPlane {
         _intent: FiatIntent,
         _trace: &TraceId,
     ) -> Result<FiatPlaneResult, FiatError> {
-        self.intent_outcome.clone()
+        match &self.intent_outcome {
+            Ok(FiatPlaneResult::Open(outcome)) => Ok(FiatPlaneResult::Open(*outcome)),
+            Ok(FiatPlaneResult::Executed(executed)) => Ok(FiatPlaneResult::Executed(ExecutedFiatOutcome {
+                canonical_receipt: executed.canonical_receipt.clone(),
+                authorised_batch: executed.authorised_batch,
+            })),
+            Err(error) => Err(*error),
+        }
     }
 }
 
@@ -232,34 +240,40 @@ fn evidence() -> ProviderEvidence {
 
 #[test]
 fn card_data_never_enters_layerx_components() {
-    assert_eq!(
-        TokenReference::new(Vec::new()),
-        Err(FiatError::CardDataRefused),
+    assert!(
+        matches!(TokenReference::new(Vec::new()), Err(FiatError::CardDataRefused)),
         "empty token must be refused"
     );
-    assert_eq!(
-        TokenReference::new(vec![0; 513]),
-        Err(FiatError::CardDataRefused),
+    assert!(
+        matches!(TokenReference::new(vec![0; 513]), Err(FiatError::CardDataRefused)),
         "oversized token must be refused"
     );
-    assert_eq!(
-        TokenReference::new(b"4532123456789012".to_vec()),
-        Err(FiatError::CardDataRefused),
+    assert!(
+        matches!(
+            TokenReference::new(b"4532123456789012".to_vec()),
+            Err(FiatError::CardDataRefused)
+        ),
         "raw 16-digit PAN must be refused"
     );
-    assert_eq!(
-        TokenReference::new(b"4532 1234 5678 9012".to_vec()),
-        Err(FiatError::CardDataRefused),
+    assert!(
+        matches!(
+            TokenReference::new(b"4532 1234 5678 9012".to_vec()),
+            Err(FiatError::CardDataRefused)
+        ),
         "space-separated PAN must be refused"
     );
-    assert_eq!(
-        TokenReference::new(b"4532-1234-5678-9012".to_vec()),
-        Err(FiatError::CardDataRefused),
+    assert!(
+        matches!(
+            TokenReference::new(b"4532-1234-5678-9012".to_vec()),
+            Err(FiatError::CardDataRefused)
+        ),
         "dash-separated PAN must be refused"
     );
-    assert_eq!(
-        TokenReference::new(b"378282246310005".to_vec()),
-        Err(FiatError::CardDataRefused),
+    assert!(
+        matches!(
+            TokenReference::new(b"378282246310005".to_vec()),
+            Err(FiatError::CardDataRefused)
+        ),
         "15-digit AMEX PAN must be refused"
     );
     let token = TokenReference::new(b"tok_visa_abcdef123456".to_vec())
@@ -667,7 +681,7 @@ fn evidence_classes_model_rail_specific_settlement_stages() {
     assert_eq!(facts.rail, FiatRail::Bank);
     let rtp_verifier = SandboxVerifier {
         rail: FiatRail::RealTimePayment,
-        ..verifier
+        ..verifier.clone()
     };
     let rtp_facts = rtp_verifier
         .verify(&token(), &evidence(), &TraceId::mint([12; 16]))
@@ -680,11 +694,11 @@ fn adapter_interfaces_are_rail_agnostic_and_provider_edge_only() {
     let card_verifier = sandbox_verifier(EvidenceClass::Settled, None);
     let bank_verifier = SandboxVerifier {
         rail: FiatRail::Bank,
-        ..card_verifier
+        ..card_verifier.clone()
     };
     let rtp_verifier = SandboxVerifier {
         rail: FiatRail::RealTimePayment,
-        ..card_verifier
+        ..card_verifier.clone()
     };
     let mut gateway = registered_gateway();
     let trace = TraceId::mint([13; 16]);

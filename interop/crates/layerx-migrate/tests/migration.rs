@@ -1,6 +1,6 @@
-use ed25519_dalek::{Signer as _, SigningKey, VerifyingKey};
+use ed25519_dalek::{Signer as _, SigningKey};
 use layerx_interop_gateway::adapter::{
-    AdapterDescriptor, AdapterId, ConformanceSuite, PinnedSpec, SpecVersion,
+    AdapterId, ConformanceSuite, PinnedSpec, SpecVersion,
 };
 use layerx_interop_gateway::principal::PrincipalId;
 use layerx_interop_gateway::trace::TraceId;
@@ -12,7 +12,7 @@ use layerx_migrate::{
     SourceChain, SourceEvidence, SourceTransaction, SourceVerifier, VerifiedAssetFinality,
     VerifiedHistoryPage, VerifiedOwnership,
 };
-use layerx_proof::receipt::{verify, AuthorizedBatch, VerifiedReceipt};
+use layerx_proof::receipt::{AuthorizedBatch, VerifiedReceipt};
 use layerx_types::payload::ModuleId;
 use sha2::{Digest as _, Sha256};
 
@@ -140,7 +140,7 @@ impl TestPlane {
         previous: [u8; 32],
         resulting: [u8; 32],
         batch_id: [u8; 32],
-        _ownership: &VerifiedOwnership,
+        ownership: &VerifiedOwnership,
     ) -> Vec<u8> {
         let mut bytes = Vec::new();
         push_u16(&mut bytes, 1);
@@ -155,16 +155,26 @@ impl TestPlane {
         bytes.extend_from_slice(&0_u32.to_be_bytes());
         bytes.extend_from_slice(&1_u128.to_be_bytes());
         push_bytes(&mut bytes, &batch_id);
-        push_u16(&mut bytes, ModuleId::Identity as u16);
-        bytes.extend_from_slice(&0_u32.to_be_bytes());
-        bytes.extend_from_slice(&0_u32.to_be_bytes());
-        bytes.push(0);
+        push_u16(&mut bytes, ModuleId::Governance as u16);
+        bytes.extend_from_slice(&1_u32.to_be_bytes());
+        bytes.extend_from_slice(&1_u32.to_be_bytes());
+        bytes.push(1);
+        push_bytes(&mut bytes, &TEST_ASSET);
+        bytes.extend_from_slice(&1_u128.to_be_bytes());
+        push_bytes(&mut bytes, &[0x42; 32]);
+        bytes.extend_from_slice(&2_u128.to_be_bytes());
+        bytes.extend_from_slice(&1_u128.to_be_bytes());
+        push_u64(&mut bytes, sequence);
+        push_bytes(&mut bytes, &ownership.layerx_identity);
+        bytes.extend_from_slice(&0_u128.to_be_bytes());
+        bytes.extend_from_slice(&1_u128.to_be_bytes());
         push_bytes(&mut bytes, &[0x91; 32]);
         push_bytes(&mut bytes, &[0x92; 32]);
         push_bytes(&mut bytes, &[0x93; 32]);
         push_u64(&mut bytes, PERIOD_START + sequence);
-        bytes.push(1);
+        bytes.push(0);
         let signature = self.sign(&bytes);
+        *bytes.last_mut().unwrap_or_else(|| panic!("signature flag missing")) = 1;
         push_bytes(&mut bytes, &signature);
         bytes
     }
@@ -178,7 +188,8 @@ impl TestPlane {
         batch_id: [u8; 32],
         finality: &VerifiedAssetFinality,
     ) -> Vec<u8> {
-        let credit_before = 5_000_u128;
+        let debit_before = 5_000_u128;
+        let credit_before = 10_000_u128;
         let mut bytes = Vec::new();
         push_u16(&mut bytes, 1);
         push_u16(&mut bytes, 0x5201);
@@ -198,6 +209,10 @@ impl TestPlane {
         bytes.push(1);
         push_bytes(&mut bytes, &finality.layerx_asset);
         bytes.extend_from_slice(&finality.layerx_amount.to_be_bytes());
+        push_bytes(&mut bytes, &[0x42; 32]);
+        bytes.extend_from_slice(&debit_before.to_be_bytes());
+        bytes.extend_from_slice(&(debit_before - finality.layerx_amount).to_be_bytes());
+        push_u64(&mut bytes, sequence);
         push_bytes(&mut bytes, &finality.destination);
         bytes.extend_from_slice(&credit_before.to_be_bytes());
         bytes.extend_from_slice(&(credit_before + finality.layerx_amount).to_be_bytes());
@@ -205,8 +220,9 @@ impl TestPlane {
         push_bytes(&mut bytes, &[0x92; 32]);
         push_bytes(&mut bytes, &[0x93; 32]);
         push_u64(&mut bytes, PERIOD_START + sequence);
-        bytes.push(1);
+        bytes.push(0);
         let signature = self.sign(&bytes);
+        *bytes.last_mut().unwrap_or_else(|| panic!("signature flag missing")) = 1;
         push_bytes(&mut bytes, &signature);
         bytes
     }
@@ -267,10 +283,10 @@ impl BindingReceiptPolicy for TestBindingPolicy {
         ownership: &VerifiedOwnership,
         receipt: &VerifiedReceipt,
     ) -> Result<(), MigrationError> {
-        if receipt.receipt().identity().is_none() {
+        let Some(protocol) = receipt.receipt().protocol() else {
             return Err(MigrationError::ReceiptMismatch);
-        }
-        if ownership.layerx_identity == [0; 32] {
+        };
+        if protocol.to() != ownership.layerx_identity || ownership.layerx_identity == [0; 32] {
             return Err(MigrationError::ReceiptMismatch);
         }
         Ok(())

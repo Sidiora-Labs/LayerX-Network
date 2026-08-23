@@ -60,7 +60,7 @@ impl IndependentVerifier {
         Ok(VerificationOutcome {
             verifier_name: self.name,
             receipt_digest: verified.receipt_digest(),
-            batch_id: *verified.authorised_batch().batch_id(),
+            batch_id: verified.authorised_batch().batch_id(),
         })
     }
 

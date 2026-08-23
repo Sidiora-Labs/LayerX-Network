@@ -38,7 +38,7 @@ fn ucp_adapter_declares_versioned_spec_and_conformance() {
     ];
     let conformance_digest = conformance_digest(&vectors);
 
-    let version = SpecVersion::parse(UCP_VERSION)
+    let version = SpecVersion::parse("20260408")
         .unwrap_or_else(|error| panic!("version: {error}"));
     let adapter_id = AdapterId::new("ucp")
         .unwrap_or_else(|error| panic!("adapter id: {error}"));
@@ -47,7 +47,7 @@ fn ucp_adapter_declares_versioned_spec_and_conformance() {
     let conformance = ConformanceSuite::new(
         AdapterId::new("ucp-2026-04-08-vectors")
             .unwrap_or_else(|error| panic!("conformance id: {error}")),
-        vectors.len() as u32,
+        vectors.len() as u64,
         conformance_digest,
     )
     .unwrap_or_else(|error| panic!("conformance: {error}"));
@@ -55,8 +55,8 @@ fn ucp_adapter_declares_versioned_spec_and_conformance() {
     let descriptor = ucp_adapter_descriptor(spec, conformance)
         .unwrap_or_else(|error| panic!("descriptor: {error}"));
 
-    assert_eq!(descriptor.adapter(), &adapter_id);
-    assert_eq!(descriptor.spec().version().as_str(), UCP_VERSION);
+    assert_eq!(descriptor.id(), &adapter_id);
+    assert_eq!(descriptor.spec().version().as_str(), "20260408");
     assert_eq!(descriptor.conformance().vector_count(), 3);
 }
 
@@ -64,7 +64,7 @@ fn ucp_adapter_declares_versioned_spec_and_conformance() {
 fn merchant_profile_validation_refuses_invalid_urls() {
     let handler = PaymentHandler::new(
         "test-handler",
-        "2.0.0",
+        UCP_VERSION,
         "https://example.com/spec",
         "https://example.com/schema.json",
     )
@@ -123,7 +123,7 @@ fn idempotency_keys_parse_exact_uuid_format() {
 fn payment_handler_digest_is_stable_and_collision_resistant() {
     let handler1 = PaymentHandler::new(
         "handler-a",
-        "1.0.0",
+        UCP_VERSION,
         "https://example.com/spec-a",
         "https://example.com/schema-a.json",
     )
@@ -131,7 +131,7 @@ fn payment_handler_digest_is_stable_and_collision_resistant() {
 
     let handler2 = PaymentHandler::new(
         "handler-b",
-        "1.0.0",
+        UCP_VERSION,
         "https://example.com/spec-a",
         "https://example.com/schema-a.json",
     )
@@ -139,7 +139,7 @@ fn payment_handler_digest_is_stable_and_collision_resistant() {
 
     let handler1_copy = PaymentHandler::new(
         "handler-a",
-        "1.0.0",
+        UCP_VERSION,
         "https://example.com/spec-a",
         "https://example.com/schema-a.json",
     )

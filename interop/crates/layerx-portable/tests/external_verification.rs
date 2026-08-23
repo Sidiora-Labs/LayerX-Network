@@ -6,9 +6,8 @@
 use layerx_portable::{
     verify_external_evidence, ExternalEvidenceKind, ExternalEvidenceVerifier,
     ExternalPresentation, ExternalPresentationError, ExternalVerificationError,
-    VerifiedExternalEvidence,
 };
-use layerx_interop_gateway::adapter::{AdapterDescriptor, AdapterId, SpecVersion, ConformanceSuite};
+use layerx_interop_gateway::adapter::{AdapterDescriptor, AdapterId, ConformanceSuite, PinnedSpec, SpecVersion};
 
 struct MockMandateVerifier {
     descriptor: AdapterDescriptor,
@@ -20,18 +19,12 @@ impl MockMandateVerifier {
         let protocol_id = AdapterId::new("test-protocol").expect("valid protocol id");
         let spec_version = SpecVersion::parse("1.0.0").expect("valid spec version");
         let spec_document_digest = [1u8; 32];
-        let conformance = ConformanceSuite::new(
-            "test-suite-v1".to_owned(),
-            10,
-            [2u8; 32],
-        );
-        let descriptor = AdapterDescriptor::new(
-            adapter_id,
-            protocol_id,
-            spec_version,
-            spec_document_digest,
-            conformance,
-        );
+        let spec = PinnedSpec::new(protocol_id, spec_version, spec_document_digest)
+            .expect("valid pinned spec");
+        let suite_id = AdapterId::new("test-suite-v1").expect("valid suite id");
+        let conformance = ConformanceSuite::new(suite_id, 10, [2u8; 32])
+            .expect("valid conformance suite");
+        let descriptor = AdapterDescriptor::new(adapter_id, spec, conformance);
         Self { descriptor }
     }
 }
