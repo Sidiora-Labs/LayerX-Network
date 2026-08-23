@@ -1561,7 +1561,7 @@ reqs = ["3.4","3.9","2.9"]
 
 [task.12.2]
 title = "Build home and the move-money wizard"
-status = "pending"
+status = "done"
 wave = 7
 requires = ["11.3","7.6"]
 do_1 = "Build home in both shells: verified balance with freshness and privacy toggle, the primary actions Add money, Move money and Withdraw, agents summary, recent activity and the approval badge."
