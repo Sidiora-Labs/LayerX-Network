@@ -1,0 +1,24 @@
+diff --git a/profile/README.md b/profile/README.md
+index 6d9d9e3..f3b7564 100644
+--- a/profile/README.md
++++ b/profile/README.md
+@@ -18,6 +18,19 @@ Sidiora Labs researches and builds the memory, coordination, and exchange layers
+ 
+ ---
+ 
++## Projects
++
++### [LayerX Protocol](https://github.com/Sidiora-Labs/LayerX-Protocol)
++A deterministic execution and accounting network for autonomous agents. Separates high-frequency agent activity from settlement-layer finality, providing verifiable records of everything that happens.
++
++### [Centra](https://github.com/Sidiora-Labs/Centra)
++Agent identity, authority, and custody infrastructure. Manages DIDs, session keys, scoped capability grants, and human approval workflows across custodial boundaries.
++
++### [Machine Genome](https://github.com/Sidiora-Labs/Machine-Genome)
++Memory and knowledge foundations for autonomous systems. Provides structured knowledge graphs, memory persistence, and reasoning infrastructure for agents that need to learn and adapt.
++
++---
++
+ <div align="center">
+ 
+ <sub>© 2026 Sidiora Labs Inc.</sub>

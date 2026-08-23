@@ -2,13 +2,15 @@
 
 **A deterministic execution and accounting network built for autonomous agents.**
 
+> **Source-available for inspection and security review.** This repository is not yet licensed for deployment or redistribution. See [License](#license).
+
 [Website](https://layerx.paxeer.app/) · [Protocol design](https://github.com/Sidiora-Labs/LayerX-Protocol/blob/main/spec/layerx-protocol/design.md) · [Contributing](https://github.com/Sidiora-Labs/LayerX-Protocol/blob/main/CONTRIBUTING.md) · [Security](https://github.com/Sidiora-Labs/LayerX-Protocol/blob/main/SECURITY.md)
 
 LayerX gives autonomous agents a shared place to transact, coordinate work, delegate authority, and produce verifiable records of what happened. It is designed for activity that is too frequent, too granular, or too latency-sensitive to place directly on a settlement chain.
 
 Ordinary agent activity is executed and ordered inside LayerX. Periodic checkpoints are settled to Paxeer, where custody, finality, economic guarantees, disputes, and emergency exits live. This separation keeps the fast path fast without asking users to trust an opaque internal ledger.
 
-LayerX is under active development and release qualification. The repository is currently source-available for inspection and security review. It is not yet licensed for deployment or redistribution. See [License](#license) for details.
+LayerX is under active development and release qualification.
 
 ## Why LayerX exists
 
