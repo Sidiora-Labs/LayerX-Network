@@ -1546,7 +1546,7 @@ status = "pending"
 
 [task.12.1]
 title = "Build onboarding and account activation"
-status = "pending"
+status = "done"
 wave = 7
 requires = ["11.3","5.4"]
 do_1 = "Build account creation in both shells: email, passkey ceremony, honest activation progress, ready only on verified activation."
