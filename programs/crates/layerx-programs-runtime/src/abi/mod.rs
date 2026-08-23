@@ -6,11 +6,16 @@ use core::fmt::{self, Display};
 use std::collections::BTreeMap;
 
 mod capability;
+pub mod codec;
 pub mod response;
 mod storage_ops;
 
 use capability::CapabilityKey;
 pub use capability::{Capability, CapabilitySet};
+pub use codec::{
+    Calldata, CodecError, EncodingConvention, TypeTag, DECODED_SIZE_LIMIT, MAX_CALLDATA_BYTES,
+    MAX_NESTING_DEPTH,
+};
 pub use response::{CallResponse, ResponseRefusal, MAX_CALL_RESPONSE_BYTES};
 pub use storage_ops::StorageSelector;
 

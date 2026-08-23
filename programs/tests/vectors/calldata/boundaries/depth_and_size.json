@@ -1,0 +1,73 @@
+[
+  {
+    "description": "Maximum nesting depth (16 levels) - exactly at limit",
+    "hex": "0113000000011300000001130000000113000000011300000001130000000113000000011300000001130000000113000000011300000001130000000113000000011300000001130000000113000000011042",
+    "expected": "pass",
+    "note": "16 nested fixed arrays with u8 leaf"
+  },
+  {
+    "description": "Exceeds maximum nesting depth (17 levels)",
+    "hex": "01130000000113000000011300000001130000000113000000011300000001130000000113000000011300000001130000000113000000011300000001130000000113000000011300000001130000000113000000011042",
+    "expected": "reject",
+    "error": "NestingTooDeep",
+    "note": "17 nested fixed arrays"
+  },
+  {
+    "description": "Option nesting at maximum depth",
+    "hex": "0140011400114001140011400114001140011400114001140011400114001140011400114001140011400114001140011400114001140011400110ff",
+    "expected": "pass",
+    "note": "16 nested Some wrappers"
+  },
+  {
+    "description": "Option nesting exceeds maximum depth",
+    "hex": "01400114001140011400114001140011400114001140011400114001140011400114001140011400114001140011400114001140011400110ff",
+    "expected": "reject",
+    "error": "NestingTooDeep",
+    "note": "17 nested Some wrappers"
+  },
+  {
+    "description": "Union nesting at maximum depth",
+    "hex": "0150000000001500000000150000000015000000001500000000150000000015000000001500000000150000000015000000001500000000150000000015000000001500000000150000000015000000001500000000150000000010ff",
+    "expected": "pass",
+    "note": "16 nested unions"
+  },
+  {
+    "description": "Union nesting exceeds maximum depth",
+    "hex": "01500000000015000000001500000000150000000015000000001500000000150000000015000000001500000000150000000015000000001500000000150000000015000000001500000000150000000015000000001500000000150000000010ff",
+    "expected": "reject",
+    "error": "NestingTooDeep",
+    "note": "17 nested unions"
+  },
+  {
+    "description": "Mixed nesting approaching limit",
+    "hex": "0113000000011400114001500000000013000000011400114001500000000010ff",
+    "expected": "pass",
+    "note": "Mixed array, option, union nesting"
+  },
+  {
+    "description": "Empty byte string at maximum size boundary",
+    "hex": "012000000000",
+    "expected": "pass",
+    "note": "Zero-length byte string"
+  },
+  {
+    "description": "Array with maximum element count boundary",
+    "hex": "0130ffffffff",
+    "expected": "reject",
+    "error": "Truncated",
+    "note": "Array claims u32::MAX elements but provides none"
+  },
+  {
+    "description": "Byte string claims huge length",
+    "hex": "0120ffffffff",
+    "expected": "reject",
+    "error": "Truncated",
+    "note": "Byte string claims u32::MAX bytes"
+  },
+  {
+    "description": "Large valid byte string (4096 bytes)",
+    "hex_generator": "layerx_convention + bytes_tag + length(4096) + repeat(0x42, 4096)",
+    "expected": "pass",
+    "note": "Reasonably sized byte string"
+  }
+]

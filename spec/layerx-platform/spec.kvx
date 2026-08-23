@@ -3266,7 +3266,7 @@ reqs = ["40.1"]
 
 [task.33.2]
 title = "Freeze the calldata encoding convention"
-status = "in_progress"
+status = "done"
 wave = 19
 requires = ["28.2"]
 do_1 = "Define one canonical calldata encoding for the platform covering integers, byte strings, fixed arrays, variable arrays, options and tagged unions, with exactly one valid encoding per value."

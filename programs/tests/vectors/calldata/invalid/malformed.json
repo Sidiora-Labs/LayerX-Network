@@ -1,0 +1,133 @@
+[
+  {
+    "description": "Invalid convention tag",
+    "hex": "ff1042",
+    "expected": "reject",
+    "error": "InvalidConvention"
+  },
+  {
+    "description": "Invalid type tag",
+    "hex": "01ff",
+    "expected": "reject",
+    "error": "InvalidType"
+  },
+  {
+    "description": "Truncated u16 value",
+    "hex": "011100",
+    "expected": "reject",
+    "error": "Truncated"
+  },
+  {
+    "description": "Truncated u32 value",
+    "hex": "01120000",
+    "expected": "reject",
+    "error": "Truncated"
+  },
+  {
+    "description": "Truncated u64 value",
+    "hex": "011300000000",
+    "expected": "reject",
+    "error": "Truncated"
+  },
+  {
+    "description": "Truncated u128 value",
+    "hex": "011400000000000000000000",
+    "expected": "reject",
+    "error": "Truncated"
+  },
+  {
+    "description": "Truncated u256 value",
+    "hex": "0115000000000000000000000000000000000000000000000000",
+    "expected": "reject",
+    "error": "Truncated"
+  },
+  {
+    "description": "Byte string with truncated length",
+    "hex": "012000",
+    "expected": "reject",
+    "error": "Truncated"
+  },
+  {
+    "description": "Byte string with incorrect length",
+    "hex": "01200000000568656c",
+    "expected": "reject",
+    "error": "Truncated"
+  },
+  {
+    "description": "Fixed array with truncated count",
+    "hex": "013000",
+    "expected": "reject",
+    "error": "Truncated"
+  },
+  {
+    "description": "Fixed array with missing elements",
+    "hex": "01300000000310421002",
+    "expected": "reject",
+    "error": "Truncated"
+  },
+  {
+    "description": "Variable array with truncated count",
+    "hex": "013100",
+    "expected": "reject",
+    "error": "Truncated"
+  },
+  {
+    "description": "Variable array with missing elements",
+    "hex": "0131000000021042",
+    "expected": "reject",
+    "error": "Truncated"
+  },
+  {
+    "description": "Option with no discriminator",
+    "hex": "0140",
+    "expected": "reject",
+    "error": "Truncated"
+  },
+  {
+    "description": "Option with invalid discriminator",
+    "hex": "014002",
+    "expected": "reject",
+    "error": "InvalidOption"
+  },
+  {
+    "description": "Option Some with no value",
+    "hex": "014001",
+    "expected": "reject",
+    "error": "Truncated"
+  },
+  {
+    "description": "Union with truncated variant",
+    "hex": "015000",
+    "expected": "reject",
+    "error": "Truncated"
+  },
+  {
+    "description": "Union with no payload",
+    "hex": "015000000000",
+    "expected": "reject",
+    "error": "Truncated"
+  },
+  {
+    "description": "Empty input with LayerX tag only",
+    "hex": "01",
+    "expected": "pass"
+  },
+  {
+    "description": "Unrecognized type tag 0x99",
+    "hex": "0199",
+    "expected": "reject",
+    "error": "InvalidType"
+  },
+  {
+    "description": "Option with discriminator 0xff",
+    "hex": "0140ff",
+    "expected": "reject",
+    "error": "InvalidOption"
+  },
+  {
+    "description": "Nested option Some with truncated inner",
+    "hex": "014001400110",
+    "expected": "reject",
+    "error": "Truncated"
+  }
+]

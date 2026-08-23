@@ -1,0 +1,217 @@
+[
+  {
+    "description": "Empty calldata",
+    "hex": "",
+    "expected": "pass"
+  },
+  {
+    "description": "Single u8 value: 0",
+    "hex": "011000",
+    "expected": "pass"
+  },
+  {
+    "description": "Single u8 value: 255",
+    "hex": "0110ff",
+    "expected": "pass"
+  },
+  {
+    "description": "Single u16 value: 0",
+    "hex": "01110000",
+    "expected": "pass"
+  },
+  {
+    "description": "Single u16 value: 65535",
+    "hex": "0111ffff",
+    "expected": "pass"
+  },
+  {
+    "description": "Single u32 value: 0",
+    "hex": "011200000000",
+    "expected": "pass"
+  },
+  {
+    "description": "Single u32 value: 4294967295",
+    "hex": "0112ffffffff",
+    "expected": "pass"
+  },
+  {
+    "description": "Single u64 value: 0",
+    "hex": "01130000000000000000",
+    "expected": "pass"
+  },
+  {
+    "description": "Single u64 value: max",
+    "hex": "0113ffffffffffffffff",
+    "expected": "pass"
+  },
+  {
+    "description": "Single u128 value: 0",
+    "hex": "011400000000000000000000000000000000",
+    "expected": "pass"
+  },
+  {
+    "description": "Single u128 value: max",
+    "hex": "0114ffffffffffffffffffffffffffffffff",
+    "expected": "pass"
+  },
+  {
+    "description": "Single u256 value: 0",
+    "hex": "01150000000000000000000000000000000000000000000000000000000000000000",
+    "expected": "pass"
+  },
+  {
+    "description": "Single u256 value: max",
+    "hex": "0115ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "expected": "pass"
+  },
+  {
+    "description": "Single i8 value: 0",
+    "hex": "011800",
+    "expected": "pass"
+  },
+  {
+    "description": "Single i8 value: -1",
+    "hex": "0118ff",
+    "expected": "pass"
+  },
+  {
+    "description": "Single i8 value: 127",
+    "hex": "01187f",
+    "expected": "pass"
+  },
+  {
+    "description": "Single i8 value: -128",
+    "hex": "011880",
+    "expected": "pass"
+  },
+  {
+    "description": "Single i16 value: 0",
+    "hex": "01190000",
+    "expected": "pass"
+  },
+  {
+    "description": "Single i16 value: -1",
+    "hex": "0119ffff",
+    "expected": "pass"
+  },
+  {
+    "description": "Single i32 value: 0",
+    "hex": "011a00000000",
+    "expected": "pass"
+  },
+  {
+    "description": "Single i32 value: -1",
+    "hex": "011affffffff",
+    "expected": "pass"
+  },
+  {
+    "description": "Single i64 value: 0",
+    "hex": "011b0000000000000000",
+    "expected": "pass"
+  },
+  {
+    "description": "Single i64 value: -1",
+    "hex": "011bffffffffffffffff",
+    "expected": "pass"
+  },
+  {
+    "description": "Single i128 value: 0",
+    "hex": "011c00000000000000000000000000000000",
+    "expected": "pass"
+  },
+  {
+    "description": "Single i128 value: -1",
+    "hex": "011cffffffffffffffffffffffffffffffff",
+    "expected": "pass"
+  },
+  {
+    "description": "Empty byte string",
+    "hex": "012000000000",
+    "expected": "pass"
+  },
+  {
+    "description": "Single byte string",
+    "hex": "0120000000016c",
+    "expected": "pass"
+  },
+  {
+    "description": "Byte string: hello",
+    "hex": "01200000000568656c6c6f",
+    "expected": "pass"
+  },
+  {
+    "description": "Empty fixed array",
+    "hex": "013000000000",
+    "expected": "pass"
+  },
+  {
+    "description": "Fixed array with single u8",
+    "hex": "0130000000011042",
+    "expected": "pass"
+  },
+  {
+    "description": "Fixed array with three u8 values",
+    "hex": "013000000003100110021003",
+    "expected": "pass"
+  },
+  {
+    "description": "Empty variable array",
+    "hex": "013100000000",
+    "expected": "pass"
+  },
+  {
+    "description": "Variable array with single u8",
+    "hex": "0131000000011055",
+    "expected": "pass"
+  },
+  {
+    "description": "Variable array with mixed types",
+    "hex": "0131000000021042012000000003666f6f",
+    "expected": "pass"
+  },
+  {
+    "description": "Option: None",
+    "hex": "014000",
+    "expected": "pass"
+  },
+  {
+    "description": "Option: Some(u8)",
+    "hex": "01400110ff",
+    "expected": "pass"
+  },
+  {
+    "description": "Option: Some(bytes)",
+    "hex": "0140011200000004646174",
+    "expected": "pass"
+  },
+  {
+    "description": "Union variant 0 with u8",
+    "hex": "01500000000010aa",
+    "expected": "pass"
+  },
+  {
+    "description": "Union variant 1 with bytes",
+    "hex": "0150000000011200000003616263",
+    "expected": "pass"
+  },
+  {
+    "description": "Union variant 255 with u32",
+    "hex": "015000000 0ff1200000001",
+    "expected": "pass"
+  },
+  {
+    "description": "Nested option: Some(Some(u8))",
+    "hex": "014001400110ff",
+    "expected": "pass"
+  },
+  {
+    "description": "Nested array: array of arrays",
+    "hex": "0130000000021300000001100113000000011002",
+    "expected": "pass"
+  },
+  {
+    "description": "Complex nested structure",
+    "hex": "0150000000011400011300000002102a1042",
+    "expected": "pass"
+  }
+]
