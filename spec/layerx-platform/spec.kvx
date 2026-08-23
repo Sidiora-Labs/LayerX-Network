@@ -1576,7 +1576,7 @@ reqs = ["2.1","2.2","9.3"]
 
 [task.12.3]
 title = "Build the custody journey surfaces"
-status = "pending"
+status = "done"
 wave = 7
 requires = ["11.3","7.3","7.4","7.5"]
 do_1 = "Build deposit: binding-folded start, single wallet hand-off with designed in-progress, failure and cancel states, the staged timeline, safe-to-close statement and receipt-gated completion."
