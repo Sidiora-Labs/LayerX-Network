@@ -55,7 +55,7 @@ language = "jvm"
 root = "platform/sdk/jvm"
 
 [files.platform-jvm]
-"pom.xml" = "bcbfc246b9d863f7383b994a6560e5a401740cb5b5f58d62b9c48108f2a6859d"
+"pom.xml" = "6525d19fda60fa11ea940e1737a45f83110ee5090354755146d2bdfc7d8db525"
 "src/main/java/com/sidiora/layerx/sdk/HttpProductionTransport.java" = "3abd6473be08f6e2179ce53bb36137012e267fd17faa187fbaa0f50f11dc8cf4"
 "src/main/java/com/sidiora/layerx/sdk/GeneratedContract.java" = "f7d1c41741202a4d178a7061990571403c118e5149f362547c0f44f1aa732193"
 "src/main/java/com/sidiora/layerx/sdk/IdempotencyKey.java" = "2cfba7826e4bb7a6f0d4af63530f43c7aece547cf9f64ff1664b781cc431f6a4"

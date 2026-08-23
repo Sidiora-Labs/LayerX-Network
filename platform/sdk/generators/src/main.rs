@@ -145,6 +145,9 @@ fn walk_files(root: &Path, prefix: &str, files: &mut Vec<String>) -> Result<(), 
             .file_type()
             .map_err(|error| format!("stat {}: {error}", entry.path().display()))?;
         if kind.is_dir() {
+            if name == "__pycache__" {
+                continue;
+            }
             walk_files(&entry.path(), &relative, files)?;
         } else if kind.is_file() {
             files.push(relative);
