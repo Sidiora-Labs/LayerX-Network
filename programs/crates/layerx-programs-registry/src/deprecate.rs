@@ -42,6 +42,41 @@ pub struct WindDownView {
     pub transition_history: Vec<LifecycleReceipt>,
 }
 
+impl WindDownView {
+    /// Returns the stable deprecation-status label so every surface that shows
+    /// a program - agent layer, explorer, CLI - renders the same honest state.
+    #[must_use]
+    pub const fn status_label(&self) -> &'static str {
+        match self.lifecycle {
+            ProgramLifecycle::Active => "active",
+            ProgramLifecycle::Deprecated => "deprecated",
+            ProgramLifecycle::Tombstoned => "tombstoned",
+        }
+    }
+
+    /// Reports whether the program has entered a declared wind-down, so a
+    /// display can flag deprecated and tombstoned programs distinctly from
+    /// active ones.
+    #[must_use]
+    pub const fn is_wound_down(&self) -> bool {
+        matches!(
+            self.lifecycle,
+            ProgramLifecycle::Deprecated | ProgramLifecycle::Tombstoned
+        )
+    }
+
+    /// Returns the value still held under the program's accounts at the
+    /// wind-down point, each of which the accepted transition proved has an
+    /// authorized exit route.
+    #[must_use]
+    pub fn reachable_value(&self) -> u128 {
+        self.live_value_accounts
+            .iter()
+            .map(|account| account.balance)
+            .sum()
+    }
+}
+
 /// Typed refusal which prevents deprecation from stranding program value.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DeprecationRefusal {
@@ -164,6 +199,36 @@ impl Deprecation {
             live_value_accounts: record.2.clone(),
             transition_history: entry.lifecycle_history.clone(),
         })
+    }
+
+    /// Reconstructs both the registry lifecycle and the retained wind-down
+    /// state deterministically from the durable, append-only deprecation
+    /// activity log, so a deprecated or tombstoned program's history stays
+    /// readable and replayable forever - including after a restart that keeps
+    /// only the journalled activities and none of this coordinator's memory.
+    ///
+    /// Activities are applied in canonical protocol order - by program, then
+    /// effective sequence - and each is revalidated through the same
+    /// stranded-value guard as a live transition, so replay can never admit a
+    /// path that a live deprecation would have refused.
+    ///
+    /// # Errors
+    ///
+    /// Refuses the same malformed transitions, elapsed wind-downs, duplicate
+    /// accounts, stranded value and registry conflicts as [`Self::transition`],
+    /// surfacing the first offending activity in the log.
+    pub fn replay(
+        &mut self,
+        registry: &mut Registry,
+        log: &[DeprecationRequest],
+    ) -> Result<Vec<LifecycleReceipt>, DeprecationRefusal> {
+        let mut ordered: Vec<&DeprecationRequest> = log.iter().collect();
+        ordered.sort_by_key(|request| (request.program.bytes(), request.effective_sequence));
+        let mut receipts = Vec::with_capacity(ordered.len());
+        for request in ordered {
+            receipts.push(self.transition(registry, request)?);
+        }
+        Ok(receipts)
     }
 }
 

@@ -2254,7 +2254,7 @@ reqs = ["29.3","29.5"]
 
 [task.20.3]
 title = "Implement deprecation and wind-down rules"
-status = "pending"
+status = "done"
 wave = 10
 requires = ["20.2"]
 do_1 = "Implement deprecation and tombstoning as registry activities keeping history readable and replayable forever."
