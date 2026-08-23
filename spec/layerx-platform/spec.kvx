@@ -2431,7 +2431,7 @@ reqs = ["32.3","32.7"]
 
 [task.23.2]
 title = "Implement UCP merchant profiles, checkout and orders"
-status = "pending"
+status = "done"
 wave = 11
 requires = ["22.1"]
 do_1 = "Implement UCP merchant profile publication and capability negotiation for LayerX sellers."

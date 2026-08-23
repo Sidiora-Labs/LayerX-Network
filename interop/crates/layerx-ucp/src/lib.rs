@@ -140,6 +140,11 @@ impl PaymentHandler {
         &self.version
     }
 
+    #[must_use]
+    pub fn payment_handler_digest(&self) -> [u8; 32] {
+        self.digest()
+    }
+
     fn digest(&self) -> [u8; 32] {
         let mut hash = Sha256::new();
         hash.update(self.id.as_bytes());
@@ -346,7 +351,8 @@ impl UcpIdempotencyKey {
         Ok(Self(bytes))
     }
 
-    fn gateway_key(self) -> [u8; 32] {
+    #[must_use]
+    pub fn gateway_key(self) -> [u8; 32] {
         let mut hash = Sha256::new();
         hash.update(IDEMPOTENCY_DOMAIN);
         hash.update(self.0);
