@@ -69,6 +69,17 @@ Values stay 32-byte big-endian words. `storage_key(slot)` is the identity
 function on the slot address: LayerX keys are arbitrary bounded byte strings, so
 there is nothing to re-derive.
 
+### Shared state
+
+State that is not caller-indexed - a value slot, a constant, or any mapping
+that does not collapse onto `msg.sender` - belongs in the program-shared
+namespace `(program)` instead of the principal-scoped namespace
+`(program, principal)`. Use `shared_key(slot)` to address it and the
+`layerx_program_sdk::storage::shared` module to read and write it.
+
+A total supply, a pool reserve, an order book, or any other cell every account
+must be able to read and write now has an honest representation.
+
 ### Migrating existing state
 
 `layout::caller_indexed_import(slot, holders)` turns your live mapping into an
@@ -80,11 +91,6 @@ anywhere, which is exactly why the mapping key was redundant.
 
 ### What has no equivalent
 
-- **Global or shared state.** There is no cell every principal can read and
-  write. State that must be shared - a total supply, an order book, a pool
-  reserve - has no version-one representation inside one program's namespace.
-  Do not model it as a cell in some designated principal's namespace and hope;
-  that cell is only reachable when that principal is the caller.
 - **`address(this).balance`.** A program has no account. See *Money*.
 
 ## Events
@@ -290,8 +296,9 @@ the original port, which is why the rebuild is reproducible.
 
 ## Checklist before you port
 
-1. Does any state need to be shared between callers? If yes, it does not fit
-   version one.
+1. Classify every variable as caller-indexed or shared. Caller-indexed
+   mappings collapse; shared state uses the shared namespace and its dedicated
+   capabilities.
 2. Does any function pay out of the contract's balance? If yes, restructure it
    so the payer is present.
 3. Does any function depend on time? Replace it with a counted quantity.

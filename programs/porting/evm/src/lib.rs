@@ -23,13 +23,14 @@ pub mod monetary;
 pub mod qualify;
 pub mod reference;
 pub mod semantics;
+pub mod shared_supply;
 pub mod value;
 pub mod wasm;
 
 pub use error::PortRefusal;
 pub use layout::{
     array_slot, caller_indexed_import, caller_indexed_key, mapping_slot, member_slot,
-    nested_mapping_slot, storage_key, value_slot, MigrationCell, StateVariable,
+    nested_mapping_slot, shared_key, storage_key, value_slot, MigrationCell, StateVariable,
 };
 pub use monetary::{translate_all, Transfer402Plan, ValueFlow};
 pub use qualify::{

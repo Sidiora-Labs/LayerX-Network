@@ -84,6 +84,7 @@ published address instead - which is the check that can actually be wrong.
 | Anchor account | After the port |
 | --- | --- |
 | `#[account(init)]` / `init_if_needed` program state | a cell in the `(program, principal)` namespace |
+| program-owned account holding shared state | a cell in the `(program)` shared namespace, using `layerx_program_sdk::storage::shared` |
 | `Signer<'info>` | the invoking principal, authenticated before your code runs |
 | `SystemAccount` / `UncheckedAccount` credited by a transfer | the recipient of an authenticated 402LXP transfer |
 | `Program<'info, System>` and other program handles | a narrowed `Call` capability naming the callee |
@@ -91,6 +92,10 @@ published address instead - which is the check that can actually be wrong.
 
 `AccountRole::translate` returns exactly that mapping, and refuses the last row
 by name.
+
+A program-owned account holding a total supply, a pool reserve, or any other
+state every principal must reach is ported as shared state in the `(program)`
+namespace instead of being refused.
 
 ### Account data carries over unchanged
 

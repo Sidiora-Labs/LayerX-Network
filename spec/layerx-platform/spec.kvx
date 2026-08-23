@@ -2896,7 +2896,7 @@ reqs = ["36.6","30.7"]
 
 [task.29.7]
 title = "Carry shared state into the SDK and every porting kit"
-status = "in_progress"
+status = "done"
 wave = 15
 requires = ["29.2"]
 do_1 = "Add typed shared-state accessors to the Rust SDK alongside the principal-scoped ones, with the namespace visible in the type so a program cannot address the wrong scope by accident."

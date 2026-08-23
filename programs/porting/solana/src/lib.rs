@@ -25,6 +25,7 @@ pub mod monetary;
 pub mod pubkey;
 pub mod qualify;
 pub mod reference;
+pub mod shared_pool;
 pub mod wasm;
 
 pub use account::{

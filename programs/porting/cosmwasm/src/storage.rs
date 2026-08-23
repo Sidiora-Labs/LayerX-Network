@@ -101,7 +101,7 @@ pub enum StateBinding {
     /// key half collapses; the leading elements stay in the key.
     SenderSuffixed,
     /// A `Map` any account must be able to read, such as a name registry or an
-    /// order book.
+    /// order book. Maps onto the program-shared namespace `(program)`.
     Shared,
 }
 
@@ -110,24 +110,26 @@ impl StateBinding {
     ///
     /// # Errors
     ///
-    /// Refuses [`PortRefusal::SharedState`] for state every account must
-    /// reach, because a namespace is `(program, principal)` and no cell is
-    /// visible across principals, plus whatever the key composition refuses.
+    /// Refuses whatever the key composition refuses.
     pub fn layerx_key(self, namespace: &str, leading: &[&[u8]]) -> Result<Vec<u8>, PortRefusal> {
         match self {
-            Self::Item => item_key(namespace),
+            Self::Item | Self::Shared => item_key(namespace),
             Self::SenderIndexed => map_prefix(namespace),
             Self::SenderSuffixed => composite_map_key(namespace, leading, &[]),
-            Self::Shared => Err(PortRefusal::SharedState),
         }
     }
 
-    /// Returns whether the binding can be carried over at all. A porting tool
-    /// uses this to report every unportable piece of state in one pass instead
-    /// of stopping at the first.
+    /// Returns whether the binding addresses the shared namespace instead of
+    /// the principal-scoped namespace.
+    #[must_use]
+    pub const fn shared(self) -> bool {
+        matches!(self, Self::Shared)
+    }
+
+    /// Returns whether the binding can be carried over at all.
     #[must_use]
     pub const fn portable(self) -> bool {
-        !matches!(self, Self::Shared)
+        true
     }
 }
 

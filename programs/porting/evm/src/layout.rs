@@ -112,6 +112,17 @@ pub fn caller_indexed_key(slot: u64) -> [u8; 32] {
     storage_key(value_slot(slot))
 }
 
+/// Returns the key a ported program uses for state that is not caller-indexed
+/// and therefore belongs in the shared namespace.
+///
+/// A value slot, a constant, or any mapping that does not collapse onto
+/// `msg.sender` reaches the program-shared namespace `(program)` instead of
+/// the principal-scoped namespace `(program, principal)`.
+#[must_use]
+pub fn shared_key(slot: Word) -> [u8; 32] {
+    storage_key(slot)
+}
+
 /// One cell of an exported EVM state dump and the namespaced-storage cell it
 /// becomes after the port.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -247,6 +247,10 @@ pub enum AccountRole {
     /// `#[account(init)]` or `init_if_needed`: state the program owns inside
     /// the invoking principal's namespace.
     ProgramState,
+    /// A program-owned account holding state shared across every caller,
+    /// such as a total supply or a pool reserve. Maps onto the program-shared
+    /// namespace `(program)`.
+    ProgramOwnedShared,
     /// A `Signer` account. It is the invoking principal, and the runtime
     /// authenticates it before guest code runs.
     Signer,
@@ -269,6 +273,7 @@ impl AccountRole {
     pub fn translate(self) -> Result<AccountMapping, PortRefusal> {
         match self {
             Self::ProgramState => Ok(AccountMapping::NamespacedCell),
+            Self::ProgramOwnedShared => Ok(AccountMapping::SharedCell),
             Self::Signer => Ok(AccountMapping::InvokingPrincipal),
             Self::TransferTarget => Ok(AccountMapping::TransferRecipient),
             Self::ProgramHandle => Ok(AccountMapping::CallCapability),
@@ -282,6 +287,9 @@ impl AccountRole {
 pub enum AccountMapping {
     /// A cell in the `(program, principal)` namespace.
     NamespacedCell,
+    /// A cell in the `(program)` shared namespace, readable and writable by
+    /// every principal invoking this program.
+    SharedCell,
     /// The principal the runtime fixed before guest code ran.
     InvokingPrincipal,
     /// The recipient of an authenticated 402LXP transfer.

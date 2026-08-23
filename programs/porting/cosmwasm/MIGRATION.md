@@ -90,26 +90,23 @@ element is written bare.
 | `Item<T>` holding per-caller state | one cell per principal, at the namespace bytes |
 | `Map<&Addr, T>` keyed by `info.sender` | collapses onto the map's namespace prefix |
 | `Map<(&Addr, u64), T>` ending in `info.sender` | the trailing element collapses; the leading ones stay |
-| `Map<K, T>` every account must be able to read | **refused**, `SharedState` |
+| `Map<K, T>` every account must be able to read | a cell in the `(program)` shared namespace, using `layerx_program_sdk::storage::shared` |
 
-`StateBinding::layerx_key` returns exactly that mapping, and refuses the last
-row by name. `StateBinding::portable()` answers the same question without
-building a key, so a porting tool can report every unportable piece of state in
-one pass.
+`StateBinding::layerx_key` returns exactly that mapping. A name registry, an
+order book, or a global leaderboard now has an honest port instead of being
+refused.
 
-### Shared state has no port
+### Shared state is now portable
 
-This is the refusal that stops the most ports, so meet it early. A name
-registry, an order book, a global leaderboard - anything one account writes and
-another account reads - has no key on LayerX, because a namespace is
-`(program, principal)` and no cell is visible across principals. A name
-registered by A could never be read by B. The kit refuses `StateBinding::Shared`
-rather than inventing a shared cell that quietly belongs to whoever wrote it
-last.
+A name registry, an order book, a global leaderboard - anything one account
+writes and another account reads - maps onto the program-shared namespace
+`(program)`. Use `StateBinding::Shared` to classify it, and
+`layerx_program_sdk::storage::shared` to read and write it. Every principal
+invoking the program sees the same cell.
 
-If your contract needs a fact to be public, publish it: emit it as a program
-event, which the whole chain sees, and keep the authoritative copy in the
-namespace of the principal it belongs to.
+State that belongs to the deploying configuration is still best pinned into the
+module by the port descriptor, which is what makes the artifact reproducible.
+State that must be readable and writable by every account now has a port.
 
 ### Values: JSON at the edge, framed bytes inside
 
@@ -392,7 +389,7 @@ caller-supplied boundary.
 ## Checklist before you port
 
 1. List every `Item` and every `Map` and classify it with `StateBinding`.
-   Shared state stops the port here.
+   Principal-scoped state collapses; shared state uses the shared namespace.
 2. For each `Map`, mark whether the key is `info.sender` or ends in it. Those
    halves collapse; everything else stays in the key.
 3. Confirm every remaining raw key frames to a key inside the storage bound.

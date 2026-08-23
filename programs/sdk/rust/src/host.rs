@@ -75,6 +75,25 @@ mod candidate_raw {
             output_capacity: i32,
         ) -> i64;
         pub(super) fn refusal_write(class: i32, reason_pointer: i32, reason_length: i32) -> i32;
+        pub(super) fn storage_read_scoped(
+            selector: i32,
+            key_pointer: i32,
+            key_length: i32,
+            output_pointer: i32,
+            output_capacity: i32,
+        ) -> i32;
+        pub(super) fn storage_write_scoped(
+            selector: i32,
+            key_pointer: i32,
+            key_length: i32,
+            value_pointer: i32,
+            value_length: i32,
+        ) -> i32;
+        pub(super) fn storage_delete_scoped(
+            selector: i32,
+            key_pointer: i32,
+            key_length: i32,
+        ) -> i32;
     }
 }
 
@@ -241,6 +260,52 @@ pub(crate) fn receipt_read(digest: &[u8], output: &mut [u8]) -> Result<i32, Prog
             output_pointer,
             output_capacity,
         )
+    };
+    ProgramError::from_status(status)
+}
+
+/// Frozen selector identifying the shared storage namespace.
+const STORAGE_SELECTOR_SHARED: i32 = 2;
+
+pub(crate) fn storage_read_shared(key: &[u8], output: &mut [u8]) -> Result<i32, ProgramError> {
+    let key_pointer = pointer(key)?;
+    let key_length = length(key)?;
+    let output_capacity = length(output)?;
+    let output_pointer = pointer_mut(output)?;
+    let status = unsafe {
+        candidate_raw::storage_read_scoped(
+            STORAGE_SELECTOR_SHARED,
+            key_pointer,
+            key_length,
+            output_pointer,
+            output_capacity,
+        )
+    };
+    ProgramError::from_status(status)
+}
+
+pub(crate) fn storage_write_shared(key: &[u8], value: &[u8]) -> Result<i32, ProgramError> {
+    let key_pointer = pointer(key)?;
+    let key_length = length(key)?;
+    let value_pointer = pointer(value)?;
+    let value_length = length(value)?;
+    let status = unsafe {
+        candidate_raw::storage_write_scoped(
+            STORAGE_SELECTOR_SHARED,
+            key_pointer,
+            key_length,
+            value_pointer,
+            value_length,
+        )
+    };
+    ProgramError::from_status(status)
+}
+
+pub(crate) fn storage_delete_shared(key: &[u8]) -> Result<i32, ProgramError> {
+    let key_pointer = pointer(key)?;
+    let key_length = length(key)?;
+    let status = unsafe {
+        candidate_raw::storage_delete_scoped(STORAGE_SELECTOR_SHARED, key_pointer, key_length)
     };
     ProgramError::from_status(status)
 }

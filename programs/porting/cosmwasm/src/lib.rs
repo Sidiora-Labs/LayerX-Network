@@ -29,6 +29,7 @@ pub mod messages;
 pub mod monetary;
 pub mod qualify;
 pub mod reference;
+pub mod shared_orderbook;
 pub mod storage;
 pub mod wasm;
 
