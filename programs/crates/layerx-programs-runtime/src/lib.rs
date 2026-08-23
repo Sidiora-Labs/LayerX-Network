@@ -15,6 +15,8 @@
 #[deny(unsafe_code)]
 pub mod abi;
 #[deny(unsafe_code)]
+pub mod accounts;
+#[deny(unsafe_code)]
 pub mod budget;
 #[deny(unsafe_code)]
 pub mod calls;
@@ -55,6 +57,10 @@ pub mod transfer;
 pub mod validate;
 
 pub use abi::response::{CallResponse, ResponseRefusal, MAX_CALL_RESPONSE_BYTES};
+pub use accounts::{
+    derive_program_account, program_account_preimage, ProgramAccount, ProgramAccountError,
+    MAX_PROGRAM_ACCOUNT_SEED_BYTES, PROGRAM_ACCOUNT_BYTES, PROGRAM_ACCOUNT_DOMAIN,
+};
 pub use budget::{
     ActivityBudgetBinding, AdmittedBudget, BudgetAdmissionRefusal, BudgetDimension, DeclaredBudget,
     DECLARED_BUDGET_DOMAIN,

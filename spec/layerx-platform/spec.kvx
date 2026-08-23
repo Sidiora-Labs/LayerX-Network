@@ -2917,7 +2917,7 @@ note = "Parallel lanes: 30.1 fixes the derivation every other lane depends on. T
 
 [task.30.1]
 title = "Derive program-owned accounts deterministically"
-status = "pending"
+status = "done"
 wave = 16
 requires = ["28.7"]
 do_1 = "Define a domain-separated derivation from the program identifier and a bounded program-supplied seed to an account identifier, reproducible by any party from public inputs alone."
