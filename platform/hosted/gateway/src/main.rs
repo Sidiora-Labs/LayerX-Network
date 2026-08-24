@@ -1,10 +1,10 @@
-mod http;
-mod store;
-
-use http::{Client, Endpoint, IncomingRequest, OutgoingResponse, UpstreamResponse};
+use layerx_platform_gateway::http::{
+    self, Client, Endpoint, IncomingRequest, OutgoingResponse, UpstreamResponse,
+};
+use layerx_platform_gateway::store::{KeyRecord, RedisEndpoint, RedisStore, Reservation};
 use layerx_platform_gateway::{
-    production_route, verify_activity_operation, verify_submission, AuthorityFacts, IssuedKey,
-    PrincipalId, ProductionRoute, Quota,
+    authenticate_gateway_key, production_route, verify_activity_operation, verify_submission,
+    AccessError, AuthorityFacts, IssuedKey, PrincipalId, ProductionRoute, Quota,
 };
 use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry};
 use native_tls::{Certificate, Identity};
@@ -20,7 +20,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use store::{KeyRecord, RedisEndpoint, RedisStore, Reservation};
 use subtle::ConstantTimeEq;
 use zeroize::{Zeroize, Zeroizing};
 
@@ -370,7 +369,14 @@ fn trace(request: &IncomingRequest) -> String {
         .get("x-trace-id")
         .map(String::as_str)
         .unwrap_or("");
-    if valid_identifier(supplied, 64) {
+    if supplied.strip_prefix("trc_").is_some_and(|digits| {
+        digits.len() == 32
+            && digits
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    }) {
+        supplied.to_owned()
+    } else if valid_identifier(supplied, 64) {
         format!("gw-{supplied}")
     } else {
         format!(
@@ -683,34 +689,14 @@ fn authenticate_key(
     config: &Config,
     request: &IncomingRequest,
 ) -> Result<KeyRecord, OutgoingResponse> {
-    let credentials = request
+    let authorization = request
         .headers
         .get("authorization")
-        .and_then(|value| value.strip_prefix("LayerX-Key "))
         .ok_or_else(|| response(401, "api_key_required", None))?;
-    let (id, secret) = credentials
-        .split_once(':')
-        .filter(|(id, secret)| {
-            valid_identifier(id, 64) && secret.starts_with("lxp_live_") && secret.len() == 73
-        })
-        .ok_or_else(|| response(401, "api_key_required", None))?;
-    let record = config
-        .store
-        .key(id)
-        .map_err(|_| response(503, "persistence_unavailable", Some(5)))?
-        .ok_or_else(|| response(401, "api_key_required", None))?;
-    let candidate = digest(&[b"gateway-key-v1", record.salt.as_bytes(), secret.as_bytes()]);
-    if record.disabled
-        || record
-            .secret_digest
-            .as_bytes()
-            .ct_eq(candidate.as_bytes())
-            .unwrap_u8()
-            != 1
-    {
-        return Err(response(401, "api_key_required", None));
-    }
-    Ok(record)
+    authenticate_gateway_key(&config.store, authorization).map_err(|error| match error {
+        AccessError::Unauthenticated => response(401, "api_key_required", None),
+        AccessError::PersistenceUnavailable => response(503, "persistence_unavailable", Some(5)),
+    })
 }
 
 fn authority(config: &Config, activity_id: &str) -> Result<AuthorityFacts, OutgoingResponse> {

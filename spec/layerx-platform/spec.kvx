@@ -2503,7 +2503,7 @@ reqs = ["32.2","32.8"]
 
 [task.22.4]
 title = "Serve the interoperability adapters through an executable gateway"
-status = "pending"
+status = "implemented"
 wave = 11
 requires = ["17.4","22.3","23.1","23.2","23.3","24.2"]
 work_kind = "implementation"
@@ -2515,7 +2515,7 @@ do_4 = "Implement provider callback and mandate-verification endpoints with repl
 do_5 = "Expose per-adapter readiness and pinned-version metadata without treating upstream or settlement unavailability as LayerX success or failure."
 verify_cmd = "make interop-build"
 symbols = ["layerx_interop_gateway::server","interop_gateway_routes"]
-touches = ["interop/crates/layerx-interop-gateway/src/main.rs","interop/crates/layerx-interop-gateway/src/server","interop/crates/layerx-interop-gateway/src/config.rs"]
+touches = ["interop/Cargo.toml","interop/crates/layerx-interop-gateway/src/lib.rs","interop/crates/layerx-interop-gateway/src/server.rs","interop/crates/layerx-interop-service","interop/crates/layerx-fiat/src/lib.rs","platform/hosted/gateway/src/http.rs","platform/hosted/gateway/src/lib.rs","platform/hosted/gateway/src/main.rs","platform/hosted/gateway/src/store.rs"]
 reqs = ["32.1","32.2","32.6","32.8","32.9"]
 
 [task.23]

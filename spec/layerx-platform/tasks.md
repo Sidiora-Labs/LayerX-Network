@@ -953,7 +953,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Publish the facilitator conformance results in the compatibility matrix.
     - Test facilitator settlement under fault injection with exactly-once economic effect.
     - _Requirements: 32.2, 32.8_
-  - [ ] 22.4 Serve the interoperability adapters through an executable gateway
+  - [ ] 22.4 Serve the interoperability adapters through an executable gateway — **Implemented - qualification pending**
     - Build the interop gateway executable and configuration layer, registering only version-pinned adapters and refusing startup when an adapter has no declared evidence policy.
     - Expose the x402, AP2, UCP, Visa, fiat, HTTP, MCP and A2A ingress surfaces through typed transport handlers backed by the hosted gateway's real authentication, quota, idempotency and audit stores.
     - Bind every state-changing translation to the real typed intent and receipt-verification path, with external pending, reversal and refusal states preserved at the boundary.

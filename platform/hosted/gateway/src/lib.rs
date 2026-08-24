@@ -1,5 +1,8 @@
 //! Receipt-verifying authority boundary for the hosted gateway.
 
+pub mod http;
+pub mod store;
+
 use layerx_crypto::{ed25519, SignatureMessage};
 use layerx_proof::receipt::{verify_outcome, AuthorizedBatch, ReceiptCheck};
 use layerx_types::payload::ModuleRegistry;
@@ -11,8 +14,101 @@ use std::fmt::{Display, Formatter};
 use subtle::ConstantTimeEq;
 use zeroize::Zeroize;
 
+use store::{KeyRecord, RedisStore};
+
 const KEY_PREFIX: &str = "lxp_live_";
 const KEY_BYTES: usize = 32;
+
+/// Authentication failures shared by every hosted ingress using gateway API
+/// keys. Persistence failure is deliberately distinct from a bad credential
+/// so callers never turn an unavailable durable store into an authentication
+/// refusal.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AccessError {
+    Unauthenticated,
+    PersistenceUnavailable,
+}
+
+/// Authenticates the exact `LayerX-Key` credential format issued by the hosted
+/// gateway against its durable key store. Interop and human ingress call this
+/// same boundary, so key revocation and principal scope cannot drift.
+///
+/// # Errors
+/// Returns a typed authentication or persistence failure without exposing the
+/// presented secret.
+pub fn authenticate_gateway_key(
+    store: &RedisStore,
+    authorization: &str,
+) -> Result<KeyRecord, AccessError> {
+    let credentials = authorization
+        .strip_prefix("LayerX-Key ")
+        .ok_or(AccessError::Unauthenticated)?;
+    let (id, secret) = credentials
+        .split_once(':')
+        .filter(|(id, secret)| {
+            valid_key_identifier(id)
+                && secret.starts_with(KEY_PREFIX)
+                && secret.len() == KEY_PREFIX.len() + KEY_BYTES * 2
+        })
+        .ok_or(AccessError::Unauthenticated)?;
+    let record = store
+        .key(id)
+        .map_err(|_| AccessError::PersistenceUnavailable)?
+        .ok_or(AccessError::Unauthenticated)?;
+    let candidate = gateway_digest(&[b"gateway-key-v1", record.salt.as_bytes(), secret.as_bytes()]);
+    if record.disabled
+        || record
+            .secret_digest
+            .as_bytes()
+            .ct_eq(candidate.as_bytes())
+            .unwrap_u8()
+            != 1
+    {
+        return Err(AccessError::Unauthenticated);
+    }
+    Ok(record)
+}
+
+/// Domain-separated hexadecimal SHA-256 used by hosted ingress reservation
+/// and audit identities.
+#[must_use]
+pub fn gateway_digest(parts: &[&[u8]]) -> String {
+    let mut hash = Sha256::new();
+    for part in parts {
+        hash.update((part.len() as u64).to_be_bytes());
+        hash.update(part);
+    }
+    format!("{hash:x}")
+}
+
+/// Builds one redacted audit commitment. Only the principal digest, action,
+/// bounded subject and outcome participate; request payloads and credentials
+/// never reach the durable audit stream.
+#[must_use]
+pub fn gateway_audit_event(
+    principal_digest: &str,
+    action: &str,
+    subject: &str,
+    outcome: &str,
+    observed_at: u64,
+) -> String {
+    let event = gateway_digest(&[
+        b"gateway-audit-v1",
+        action.as_bytes(),
+        subject.as_bytes(),
+        outcome.as_bytes(),
+        &observed_at.to_be_bytes(),
+    ]);
+    format!("{principal_digest}:{event}")
+}
+
+fn valid_key_identifier(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+}
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct PrincipalId(String);
