@@ -6,6 +6,30 @@ observed = "The Programs transition expands module-registration commitments to i
 assumption = "Human qualification will replay roots immediately before and after Programs activation to confirm the intended version boundary."
 severity = "note"
 
+[observation.5.8.1]
+task = "5.8"
+file = "human/crates/layerx-human-service/tests/custody.rs"
+symbol = "copied_principal_record_cannot_cross_the_authenticated_kms_identity"
+observed = "The inherited assertion expects a copied principal record to return KmsError::Refused. The provider-backed record now carries an explicit principal/key binding digest and rejects the copy earlier as KmsError::Integrity, which is the new typed key-reference-integrity refusal required by task 5.8. The assertion was left intact rather than weakened or silently rewritten during implementation."
+assumption = "Human qualification will confirm the more specific integrity refusal and update the expected taxonomy only if the production provider contract is accepted."
+severity = "check-conflict"
+
+[observation.5.8.2]
+task = "5.8"
+file = "spec/layerx-platform/spec.kvx"
+symbol = "task.5.8 touches"
+observed = "The declared touch list names provider.rs, signer.rs and health.rs but omits custody/mod.rs, the two production key-creation call sites and development fixture constructors. The required public provider export, provider-backed record format, production startup refusal and remote key-creation path cannot be wired without those omitted files, so strict scope guard reports the necessary implementation paths outside the declaration."
+assumption = "Human qualification will review the necessary integration paths and reconcile task.5.8's touch declaration rather than removing the production boundary wiring."
+severity = "task-scope"
+
+[observation.5.8.3]
+task = "5.8"
+file = "human/crates/layerx-human-service/src/custody/mod.rs"
+symbol = "Keystore::open"
+observed = "Task 5.8 requires replacing the mounted-root-secret production path but specifies no import or migration ceremony for existing v1 file-envelope primary keys. The implementation keeps legacy envelope records readable only through the explicitly development-only constructor and makes production startup accept only a ready remote provider; it does not unwrap and re-import old primary keys into application memory."
+assumption = "Before production cutover, human qualification will define and exercise a protocol key-rotation ceremony from every legacy primary key to a remotely generated KMS/HSM key, then confirm no legacy envelope is needed by production startup."
+severity = "migration-boundary"
+
 [observation.19.4.2]
 task = "19.4"
 file = "include/layerx/lxp_receipt.h"

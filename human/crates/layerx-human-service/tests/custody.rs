@@ -176,7 +176,7 @@ impl Fixture {
     fn keystore(&self) -> Keystore {
         let provider = EnvelopeKms::new("file-kms://human-primary", &self.secret_path)
             .unwrap_or_else(|error| panic!("KMS provider: {error}"));
-        Keystore::open(&self.custody_root, NETWORK_ID, provider)
+        Keystore::open_development(&self.custody_root, NETWORK_ID, provider)
             .unwrap_or_else(|error| panic!("keystore: {error}"))
     }
 
@@ -670,7 +670,7 @@ fn principal_symlinks_are_refused_before_any_key_access() {
     let provider = EnvelopeKms::new("file-kms://human-primary", &fixture.secret_path)
         .unwrap_or_else(|error| panic!("KMS provider: {error}"));
     assert!(matches!(
-        Keystore::open(&fixture.custody_root, NETWORK_ID, provider),
+        Keystore::open_development(&fixture.custody_root, NETWORK_ID, provider),
         Err(CustodyError::CorruptRecord("foreign principals entry"))
     ));
 }

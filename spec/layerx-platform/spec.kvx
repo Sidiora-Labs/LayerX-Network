@@ -1053,7 +1053,7 @@ reqs = ["5.1","5.4","5.6","5.8"]
 
 [task.5.8]
 title = "Replace the mounted root secret with a production KMS boundary"
-status = "pending"
+status = "implemented"
 wave = 7
 requires = ["5.3"]
 work_kind = "implementation"

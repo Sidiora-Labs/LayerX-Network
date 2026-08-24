@@ -280,7 +280,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Implement rebinding under step-up, keeping the old binding effective until the new receipt verifies, with the security notification.
     - Enforce the single-active-binding invariant, record every binding with its receipts in the audit trail, and test binding and rebinding end to end against a real core.
     - _Requirements: 5.1, 5.4, 5.6, 5.8_
-  - [ ] 5.8 Replace the mounted root secret with a production KMS boundary
+  - [ ] 5.8 Replace the mounted root secret with a production KMS boundary — **Implemented - qualification pending**
     - Refactor custody around a public provider boundary whose production implementation creates, describes, rotates and destroys human and managed-agent keys in a remote KMS or HSM without exporting private key material.
     - Move disclosure-bound signing into that provider so the service submits the exact canonical digest and receives only a signature; no production path may unseal a primary key into application memory.
     - Bind provider key references to principal-scoped records and preserve step-up, audit, rate-limit and typed-refusal semantics across provider failures.
