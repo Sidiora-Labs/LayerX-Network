@@ -56,6 +56,7 @@ from .production import (
     platform_sdk_python,
 )
 from .stream import ResumableStream, StreamCursor, StreamEvent, StreamPage
+from .mirror import MirrorCandidate, MirrorPolicy, MirrorVerification, MirrorVerificationError, MirrorVerifier
 from .verifier import (
     AuthorizedReceiptBatch,
     BatchHeader,
@@ -157,4 +158,9 @@ __all__ = [
     "verify_merkle_inclusion",
     "verify_receipt",
     "verify_receipt_outcome",
+    "MirrorCandidate",
+    "MirrorPolicy",
+    "MirrorVerification",
+    "MirrorVerificationError",
+    "MirrorVerifier",
 ]

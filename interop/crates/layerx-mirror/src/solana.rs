@@ -42,6 +42,230 @@ pub struct SolanaProductionConfig {
     pub journal_directory: PathBuf,
 }
 
+/// Immutable read-only Solana mirror target. The publisher is the PDA seed
+/// and is pinned independently of every archive or public verification call.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SolanaMirrorReadConfig {
+    pub rpc: RpcQuorumConfig,
+    pub genesis_hash: [u8; 32],
+    pub archive_program: [u8; 32],
+    pub upgradeable_loader: [u8; 32],
+    pub program_data_account: [u8; 32],
+    pub program_code_hash: [u8; 32],
+    pub publisher: [u8; 32],
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SolanaMirrorRead {
+    pub archive: Vec<u8>,
+    pub rooted_slot: u64,
+    pub rooted_blockhash: [u8; 32],
+}
+
+/// Production read-only client sharing the publisher program's exact PDA and
+/// binary manifest/chunk decoders.
+pub struct SolanaMirrorReader {
+    config: SolanaMirrorReadConfig,
+    rpc: RpcCluster,
+}
+
+impl SolanaMirrorReader {
+    pub fn open(config: SolanaMirrorReadConfig) -> Result<Self, SolanaError> {
+        if config.genesis_hash == [0; 32]
+            || config.archive_program == [0; 32]
+            || config.upgradeable_loader == [0; 32]
+            || config.program_data_account == [0; 32]
+            || config.program_code_hash == [0; 32]
+            || config.publisher == [0; 32]
+        {
+            return Err(SolanaError::Configuration);
+        }
+        let rpc = RpcCluster::new(&config.rpc)?;
+        let reader = Self { config, rpc };
+        reader.verify_cluster()?;
+        Ok(reader)
+    }
+
+    pub fn retrieve(
+        &self,
+        commitment: ArchiveCommitment,
+    ) -> Result<Option<SolanaMirrorRead>, SolanaError> {
+        self.verify_cluster()?;
+        let reference_root = self
+            .rpc
+            .call("getSlot", json!([{ "commitment": "finalized" }]))?
+            .as_u64()
+            .ok_or(SolanaError::Finality)?;
+        self.verify_program_at(reference_root)?;
+
+        let (manifest_address, _) = manifest_pda(
+            self.config.archive_program,
+            self.config.publisher,
+            commitment,
+        )?;
+        let Some((rooted_slot, manifest_account)) =
+            self.account_at(manifest_address, reference_root)?
+        else {
+            return Ok(None);
+        };
+        if manifest_account.owner != self.config.archive_program || manifest_account.executable {
+            return Err(SolanaError::Retrieval);
+        }
+        let manifest = decode_manifest(&manifest_account.data, commitment, self.config.publisher)?;
+        if !manifest.finalized
+            || manifest.length == 0
+            || manifest.length > 64 * 1024 * 1024
+            || manifest.chunk_count == 0
+            || manifest.chunk_count > 524_288
+        {
+            return Err(SolanaError::Retrieval);
+        }
+        let mut archive = Vec::with_capacity(manifest.length);
+        for index in 0..manifest.chunk_count {
+            let (address, _) = chunk_pda(
+                self.config.archive_program,
+                self.config.publisher,
+                commitment,
+                index,
+            )?;
+            let (_, account) = self
+                .account_at(address, rooted_slot)?
+                .ok_or(SolanaError::Retrieval)?;
+            if account.owner != self.config.archive_program || account.executable {
+                return Err(SolanaError::Retrieval);
+            }
+            let bytes = decode_chunk(&account.data, commitment, index, MAX_CHUNK_BYTES)?;
+            archive.extend_from_slice(&bytes);
+            if archive.len() > manifest.length {
+                return Err(SolanaError::Retrieval);
+            }
+        }
+        if archive.len() != manifest.length
+            || <[u8; 32]>::from(Sha256::digest(&archive)) != manifest.digest
+            || archive_commitment(&archive) != commitment
+        {
+            return Err(SolanaError::Retrieval);
+        }
+        let rooted = self.rpc.call(
+            "getBlock",
+            json!([rooted_slot, {
+                "commitment": "finalized",
+                "transactionDetails": "none",
+                "rewards": false,
+                "maxSupportedTransactionVersion": 0
+            }]),
+        )?;
+        let rooted_blockhash = fixed_base58::<32>(string(&rooted, "blockhash")?)?;
+        Ok(Some(SolanaMirrorRead {
+            archive,
+            rooted_slot,
+            rooted_blockhash,
+        }))
+    }
+
+    pub fn is_canonical(&self, observation: &SolanaMirrorRead) -> Result<bool, SolanaError> {
+        self.is_coordinate_canonical(observation.rooted_slot, observation.rooted_blockhash)
+    }
+
+    pub fn is_coordinate_canonical(
+        &self,
+        rooted_slot: u64,
+        rooted_blockhash: [u8; 32],
+    ) -> Result<bool, SolanaError> {
+        let block = self.rpc.call(
+            "getBlock",
+            json!([rooted_slot, {
+                "commitment": "finalized",
+                "transactionDetails": "none",
+                "rewards": false,
+                "maxSupportedTransactionVersion": 0
+            }]),
+        )?;
+        Ok(!block.is_null()
+            && fixed_base58::<32>(string(&block, "blockhash")?)? == rooted_blockhash)
+    }
+
+    fn verify_cluster(&self) -> Result<(), SolanaError> {
+        let genesis = self.rpc.call("getGenesisHash", json!([]))?;
+        if fixed_base58::<32>(genesis.as_str().ok_or(SolanaError::ClusterIdentity)?)?
+            != self.config.genesis_hash
+        {
+            return Err(SolanaError::ClusterIdentity);
+        }
+        Ok(())
+    }
+
+    fn verify_program_at(&self, minimum_slot: u64) -> Result<(), SolanaError> {
+        let (_, program) = self
+            .account_at(self.config.archive_program, minimum_slot)?
+            .ok_or(SolanaError::ProgramIdentity)?;
+        if !program.executable
+            || program.owner != self.config.upgradeable_loader
+            || decode_program_data_pointer(&program.data)? != self.config.program_data_account
+        {
+            return Err(SolanaError::ProgramIdentity);
+        }
+        let (_, program_data) = self
+            .account_at(self.config.program_data_account, minimum_slot)?
+            .ok_or(SolanaError::ProgramIdentity)?;
+        if program_data.owner != self.config.upgradeable_loader || program_data.executable {
+            return Err(SolanaError::ProgramIdentity);
+        }
+        let (_, code) = immutable_program_code(&program_data.data)?;
+        if <[u8; 32]>::from(Sha256::digest(code)) != self.config.program_code_hash {
+            return Err(SolanaError::ProgramIdentity);
+        }
+        Ok(())
+    }
+
+    fn account_at(
+        &self,
+        address: [u8; 32],
+        minimum_slot: u64,
+    ) -> Result<Option<(u64, Account)>, SolanaError> {
+        let response = self.rpc.call(
+            "getAccountInfo",
+            json!([base58(&address), {
+                "commitment": "finalized",
+                "encoding": "base64",
+                "minContextSlot": minimum_slot
+            }]),
+        )?;
+        let slot = response
+            .get("context")
+            .and_then(|value| value.get("slot"))
+            .and_then(Value::as_u64)
+            .ok_or(SolanaError::Retrieval)?;
+        if slot < minimum_slot {
+            return Err(SolanaError::Finality);
+        }
+        let value = response.get("value").ok_or(SolanaError::Retrieval)?;
+        if value.is_null() {
+            return Ok(None);
+        }
+        let owner = fixed_base58::<32>(string(value, "owner")?)?;
+        let executable = value
+            .get("executable")
+            .and_then(Value::as_bool)
+            .ok_or(SolanaError::Retrieval)?;
+        let data = value
+            .get("data")
+            .and_then(Value::as_array)
+            .and_then(|parts| parts.first())
+            .and_then(Value::as_str)
+            .ok_or(SolanaError::Retrieval)?;
+        let data = BASE64.decode(data).map_err(|_| SolanaError::Retrieval)?;
+        Ok(Some((
+            slot,
+            Account {
+                owner,
+                executable,
+                data,
+            },
+        )))
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SolanaProgress {
     pub commitment: ArchiveCommitment,

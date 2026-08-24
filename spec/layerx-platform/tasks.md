@@ -1017,7 +1017,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Handle mirror-chain unavailability as a typed degradation state, never blocking LayerX operation.
     - Test publication and retrieval against both test networks including stall and reorg scenarios.
     - _Requirements: 34.1, 34.3_
-  - [ ] 25.2 Verify from mirrors in the explorer and the SDKs
+  - [ ] 25.2 Verify from mirrors in the explorer and the SDKs — **Implemented - qualification pending**
     - Extend the explorer verifier to verify receipts and state against mirror data alone.
     - Extend the SDK verification paths to accept mirror sources.
     - Prove in the qualification suite that a receipt verifies from a mirror with LayerX infrastructure unavailable.

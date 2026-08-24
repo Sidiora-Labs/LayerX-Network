@@ -14,9 +14,10 @@ const JVM_GENERATED_PATH: &str =
     "platform/sdk/jvm/src/main/java/com/sidiora/layerx/sdk/GeneratedContract.java";
 const JVM_CONFORMANCE_PATH: &str = "platform/sdk/conformance/jvm.kvx";
 
-const SOURCES: [(&str, &str); 2] = [
+const SOURCES: [(&str, &str); 3] = [
     ("agent-api", "agent/schema/agent-api"),
     ("human-api", "human/schema/human-api"),
+    ("mirror-v2", "platform/sdk/schema"),
 ];
 
 pub const JVM_FILES: &[&str] = &[
@@ -24,6 +25,7 @@ pub const JVM_FILES: &[&str] = &[
     "src/main/java/com/sidiora/layerx/sdk/HttpProductionTransport.java",
     "src/main/java/com/sidiora/layerx/sdk/GeneratedContract.java",
     "src/main/java/com/sidiora/layerx/sdk/GeneratedSchema.java",
+    "src/main/java/com/sidiora/layerx/sdk/GeneratedMirror.java",
     "src/main/java/com/sidiora/layerx/sdk/IdempotencyKey.java",
     "src/main/java/com/sidiora/layerx/sdk/OperationCatalog.java",
     "src/main/java/com/sidiora/layerx/sdk/PlatformSdk.java",
@@ -41,7 +43,13 @@ pub const JVM_FILES: &[&str] = &[
     "src/test/java/com/sidiora/layerx/sdk/GoldenVectorTest.java",
 ];
 
-const OUTPUTS: [(&str, &str, &str, Option<&[&str]>); 10] = [
+const OUTPUTS: [(&str, &str, &str, Option<&[&str]>); 11] = [
+    (
+        "agent-rust-mirror",
+        "rust",
+        "agent/crates/layerx-sdk/src",
+        Some(&["mirror_generated.rs"]),
+    ),
     (
         "agent-typescript",
         "typescript",
@@ -70,26 +78,26 @@ const OUTPUTS: [(&str, &str, &str, Option<&[&str]>); 10] = [
         "platform-go",
         "go",
         "platform/sdk/go",
-        Some(&["generated.go"]),
+        Some(&["generated.go", "mirror_generated.go"]),
     ),
     ("platform-jvm", "jvm", "platform/sdk/jvm", Some(JVM_FILES)),
     (
         "platform-conformance",
         "kvx",
         "platform/sdk/conformance",
-        Some(&["jvm.kvx", "run-jvm.sh"]),
+        Some(&["jvm.kvx", "run-jvm.sh", "mirror-v2.json"]),
     ),
     (
         "platform-swift",
         "swift",
         "platform/sdk/swift/Sources/LayerXSDK/Generated",
-        Some(&["OperationCatalog.swift"]),
+        Some(&["OperationCatalog.swift", "MirrorSchema.swift"]),
     ),
     (
         "platform-dotnet",
         "csharp",
         "platform/sdk/dotnet/Generated",
-        Some(&["OperationCatalog.cs"]),
+        Some(&["OperationCatalog.cs", "MirrorSchema.cs"]),
     ),
     (
         "platform-portable-conformance",

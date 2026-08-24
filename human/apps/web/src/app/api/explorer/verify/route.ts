@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { verifyEvidenceUpstream } from "../../../../explorer/client";
+import { MirrorDivergentError, MirrorUnavailableError, verifyEvidenceFromMirrors } from "../../../../explorer/mirror-server";
 import { encodeVerificationReport } from "../../../../explorer/model";
 
 const MAXIMUM_BODY_BYTES = 1_100_000;
@@ -33,7 +33,7 @@ async function readBoundedBody(request: Request): Promise<string | undefined> {
   }
 }
 
-function requestBody(value: unknown): Readonly<{ kind: string; evidence: string }> | undefined {
+function requestBody(value: unknown): Readonly<{ kind: "receipt" | "state-inclusion"; evidence: string }> | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return undefined;
   }
@@ -41,7 +41,7 @@ function requestBody(value: unknown): Readonly<{ kind: string; evidence: string 
   const kind = item.kind;
   const evidence = item.evidence;
   if (
-    (kind !== "receipt" && kind !== "activity-inclusion" && kind !== "state-inclusion")
+    (kind !== "receipt" && kind !== "state-inclusion")
     || typeof evidence !== "string"
     || evidence.length === 0
     || evidence.length > MAXIMUM_EVIDENCE_CHARACTERS
@@ -71,15 +71,16 @@ export async function POST(request: Request) {
     return NextResponse.json({ status: "invalid" }, { status: 400 });
   }
   try {
-    const report = await verifyEvidenceUpstream(valid);
+    const report = await verifyEvidenceFromMirrors(valid);
     return NextResponse.json(encodeVerificationReport(report), {
       headers: { "Cache-Control": "no-store" },
     });
   } catch (error) {
-    const unavailable = error instanceof Error && error.name === "ExplorerUnavailableError";
+    const unavailable = error instanceof MirrorUnavailableError;
+    const divergent = error instanceof MirrorDivergentError;
     return NextResponse.json(
-      { status: unavailable ? "unavailable" : "refused" },
-      { status: unavailable ? 503 : 422, headers: { "Cache-Control": "no-store" } },
+      { status: unavailable ? "unavailable" : divergent ? "divergent" : "refused" },
+      { status: unavailable ? 503 : divergent ? 409 : 422, headers: { "Cache-Control": "no-store" } },
     );
   }
 }

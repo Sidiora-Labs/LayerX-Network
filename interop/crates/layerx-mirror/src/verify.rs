@@ -7,6 +7,7 @@ use layerx_proof::receipt::{verify_outcome, AuthorizedBatch, ReceiptCheck, Verif
 use layerx_wire::hash::batch_header_digest;
 use layerx_wire::receipt::{decode, decode_batch_header};
 
+use crate::source::{MirrorLag, MirrorObservation, MirrorSourceFreshness, ObservedArchive};
 use crate::{
     ArchiveData, ArchiveError, CheckpointCoordinate, CheckpointFreshness, MirrorFreshness,
 };
@@ -24,9 +25,9 @@ pub struct SignedHeaderTrust {
 /// Mirror coordinates displayed with every mirror-derived result.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct MirrorVerificationFreshness {
-    pub latest_batch_mirrored: u64,
+    pub latest_batch_mirrored: Option<u64>,
     pub latest_checkpoint_mirrored: Option<CheckpointCoordinate>,
-    pub batch_lag: Option<u64>,
+    pub batch_lag: MirrorLag,
     pub checkpoint: Option<CheckpointFreshness>,
 }
 
@@ -37,9 +38,9 @@ impl MirrorVerificationFreshness {
         latest_checkpoint_mirrored: Option<CheckpointCoordinate>,
     ) -> Self {
         Self {
-            latest_batch_mirrored,
+            latest_batch_mirrored: Some(latest_batch_mirrored),
             latest_checkpoint_mirrored,
-            batch_lag: None,
+            batch_lag: MirrorLag::Unknown,
             checkpoint: None,
         }
     }
@@ -47,10 +48,20 @@ impl MirrorVerificationFreshness {
     #[must_use]
     pub fn relative(value: MirrorFreshness) -> Self {
         Self {
-            latest_batch_mirrored: value.latest_batch_mirrored.unwrap_or(0),
+            latest_batch_mirrored: value.latest_batch_mirrored,
             latest_checkpoint_mirrored: value.latest_checkpoint_mirrored,
-            batch_lag: Some(value.batch_lag),
+            batch_lag: MirrorLag::Known(value.batch_lag),
             checkpoint: Some(value.checkpoint),
+        }
+    }
+
+    #[must_use]
+    pub const fn from_source(value: MirrorSourceFreshness) -> Self {
+        Self {
+            latest_batch_mirrored: value.latest_batch,
+            latest_checkpoint_mirrored: value.latest_checkpoint,
+            batch_lag: value.batch_lag,
+            checkpoint: None,
         }
     }
 }
@@ -59,10 +70,50 @@ impl MirrorVerificationFreshness {
 /// configured sequencer key, without a `LayerX` RPC or hosted service.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MirrorVerification<T> {
-    pub value: T,
-    pub batch_number: u64,
-    pub signed_header_digest: [u8; 32],
-    pub freshness: MirrorVerificationFreshness,
+    value: T,
+    level: MirrorEvidenceLevel,
+    batch_number: u64,
+    signed_header_digest: [u8; 32],
+    freshness: MirrorVerificationFreshness,
+    observation: Option<MirrorObservation>,
+}
+
+impl<T> MirrorVerification<T> {
+    #[must_use]
+    pub const fn value(&self) -> &T {
+        &self.value
+    }
+
+    #[must_use]
+    pub const fn level(&self) -> MirrorEvidenceLevel {
+        self.level
+    }
+
+    #[must_use]
+    pub const fn batch_number(&self) -> u64 {
+        self.batch_number
+    }
+
+    #[must_use]
+    pub const fn signed_header_digest(&self) -> [u8; 32] {
+        self.signed_header_digest
+    }
+
+    #[must_use]
+    pub const fn freshness(&self) -> MirrorVerificationFreshness {
+        self.freshness
+    }
+
+    #[must_use]
+    pub fn observation(&self) -> Option<&MirrorObservation> {
+        self.observation.as_ref()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MirrorEvidenceLevel {
+    BatchIncluded,
+    StateProven,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -77,6 +128,10 @@ pub enum MirrorVerifyError {
     Receipt(ReceiptCheck),
     ReceiptInclusion(MerkleError),
     State(InclusionError),
+    SourceCommitment,
+    SourceBatch,
+    SourceReorged,
+    CheckpointTrustUnavailable,
 }
 
 /// Offline verifier over untrusted archive bytes and separately configured
@@ -86,20 +141,29 @@ pub struct MirrorVerifier {
     trust: SignedHeaderTrust,
     header_digest: [u8; 32],
     freshness: MirrorVerificationFreshness,
+    observation: Option<MirrorObservation>,
 }
 
 impl MirrorVerifier {
-    /// Admits archive bytes only after all archive commitments and the batch
-    /// header signature pass locally.
-    ///
-    /// # Errors
-    ///
-    /// Refuses malformed archives, authority mismatches, invalid signatures,
-    /// and freshness that predates the archived batch.
-    pub fn new(
+    /// Admits one sealed source observation. Archive, chain identity,
+    /// canonical position and freshness remain one indivisible source fact.
+    pub fn from_source(
+        observed: ObservedArchive,
+        trust: SignedHeaderTrust,
+    ) -> Result<Self, MirrorVerifyError> {
+        let (archive_bytes, observation) = observed.into_parts();
+        if crate::archive_commitment(&archive_bytes) != observation.commitment {
+            return Err(MirrorVerifyError::SourceCommitment);
+        }
+        let freshness = MirrorVerificationFreshness::from_source(observation.freshness);
+        Self::admit(&archive_bytes, trust, freshness, Some(observation))
+    }
+
+    fn admit(
         archive_bytes: &[u8],
         trust: SignedHeaderTrust,
         freshness: MirrorVerificationFreshness,
+        observation: Option<MirrorObservation>,
     ) -> Result<Self, MirrorVerifyError> {
         let archive = ArchiveData::decode(archive_bytes).map_err(MirrorVerifyError::Archive)?;
         let header = decode_batch_header(&archive.canonical_batch_header)
@@ -122,14 +186,24 @@ impl MirrorVerifier {
             &header_digest,
         )
         .map_err(|_| MirrorVerifyError::HeaderSignature)?;
-        if freshness.latest_batch_mirrored < archive.batch_number {
+        if freshness
+            .latest_batch_mirrored
+            .is_some_and(|latest| latest < archive.batch_number)
+        {
             return Err(MirrorVerifyError::HeaderAuthority);
+        }
+        if observation
+            .as_ref()
+            .is_some_and(|value| value.batch_number != archive.batch_number)
+        {
+            return Err(MirrorVerifyError::SourceBatch);
         }
         Ok(Self {
             archive,
             trust,
             header_digest,
             freshness,
+            observation,
         })
     }
 
@@ -187,7 +261,7 @@ impl MirrorVerifier {
         );
         let value = verify_outcome(canonical_receipt, &authorised)
             .map_err(|failure| MirrorVerifyError::Receipt(failure.check))?;
-        Ok(self.report(value))
+        Ok(self.report(value, MirrorEvidenceLevel::BatchIncluded))
     }
 
     /// Verifies caller-supplied state inclusion against this archive's signed
@@ -219,15 +293,24 @@ impl MirrorVerifier {
             &authority,
         )
         .map_err(MirrorVerifyError::State)?;
-        Ok(self.report(value))
+        Ok(self.report(value, MirrorEvidenceLevel::StateProven))
     }
 
-    fn report<T>(&self, value: T) -> MirrorVerification<T> {
+    fn report<T>(&self, value: T, level: MirrorEvidenceLevel) -> MirrorVerification<T> {
         MirrorVerification {
             value,
+            level,
             batch_number: self.archive.batch_number,
             signed_header_digest: self.header_digest,
             freshness: self.freshness,
+            observation: self.observation.clone(),
         }
+    }
+
+    /// The v2 archive carries canonical checkpoint bytes but omits the
+    /// attestation replay/possession timestamps needed by the protocol-owned
+    /// checkpoint verifier. It must never be promoted to checkpoint level.
+    pub const fn checkpoint_level(&self) -> Result<(), MirrorVerifyError> {
+        Err(MirrorVerifyError::CheckpointTrustUnavailable)
     }
 }

@@ -61,6 +61,13 @@ from .stream import (
     StreamEvent as StreamEvent,
     StreamPage as StreamPage,
 )
+from .mirror import (
+    MirrorCandidate as MirrorCandidate,
+    MirrorPolicy as MirrorPolicy,
+    MirrorVerification as MirrorVerification,
+    MirrorVerificationError as MirrorVerificationError,
+    MirrorVerifier as MirrorVerifier,
+)
 from .verifier import (
     AuthorizedReceiptBatch as AuthorizedReceiptBatch,
     BatchHeader as BatchHeader,

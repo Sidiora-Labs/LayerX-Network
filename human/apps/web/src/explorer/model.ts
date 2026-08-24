@@ -71,12 +71,26 @@ export interface ExplorerRecord<T> {
 }
 
 export interface EvidenceVerificationReport {
-  readonly kind: "receipt" | "activity-inclusion" | "state-inclusion";
+  readonly kind: "receipt" | "state-inclusion";
   readonly achievedLevel: ExplorerVerificationLevel;
   readonly receiptDigest?: string;
   readonly headerDigest?: string;
   readonly proofRoot?: string;
-  readonly freshness: ExplorerFreshness;
+  readonly freshness?: ExplorerFreshness;
+  readonly mirror?: MirrorVerificationProvenance;
+}
+
+export interface MirrorVerificationProvenance {
+  readonly sourceId: string;
+  readonly target: string;
+  readonly canonicalPosition: string;
+  readonly provenance: "canonical" | "reorged";
+  readonly latestBatch?: string;
+  readonly batchLag: Readonly<{ kind: "known"; batches: string }> | Readonly<{ kind: "unknown" }>;
+  readonly failoverCount: string;
+  readonly agreeingSources: string;
+  readonly checkpointLevel: "unavailable";
+  readonly degraded: boolean;
 }
 
 type JsonRecord = Readonly<Record<string, unknown>>;
@@ -268,21 +282,29 @@ export function decodeVerificationReport(
 ): EvidenceVerificationReport {
   const item = record(value, at);
   const kind = text(item.kind, `${at}.kind`);
-  if (kind !== "receipt" && kind !== "activity-inclusion" && kind !== "state-inclusion") {
+  if (kind !== "receipt" && kind !== "state-inclusion") {
     throw new TypeError(`${at}.kind is not supported`);
   }
   const receiptDigest = optionalHex(item.receipt_digest, `${at}.receipt_digest`);
   const headerDigest = optionalHex(item.header_digest, `${at}.header_digest`);
   const proofRoot = optionalHex(item.proof_root, `${at}.proof_root`);
+  const freshness = item.freshness === undefined ? undefined : decodeFreshness(item.freshness, `${at}.freshness`);
+  const mirror = item.mirror === undefined ? undefined : decodeMirrorProvenance(item.mirror, `${at}.mirror`);
+  if ((freshness === undefined) === (mirror === undefined)) {
+    throw new TypeError(`${at} must carry exactly one freshness source`);
+  }
   return Object.freeze({
     kind,
     achievedLevel: verificationLevel(item.achieved_level, `${at}.achieved_level`),
     ...(receiptDigest === undefined ? {} : { receiptDigest }),
     ...(headerDigest === undefined ? {} : { headerDigest }),
     ...(proofRoot === undefined ? {} : { proofRoot }),
-    freshness: decodeFreshness(item.freshness, `${at}.freshness`),
+    ...(freshness === undefined ? {} : { freshness }),
+    ...(mirror === undefined ? {} : { mirror }),
   });
 }
+
+export function decodeMirrorProvenance(value:unknown,at="mirror"):MirrorVerificationProvenance{const item=record(value,at);const provenance=text(item.provenance,`${at}.provenance`);if(provenance!=="canonical"&&provenance!=="reorged")throw new TypeError(`${at}.provenance is invalid`);if(item.checkpoint_level!=="unavailable")throw new TypeError(`${at}.checkpoint_level is invalid`);const lag=record(item.batch_lag,`${at}.batch_lag`);const lagKind=text(lag.kind,`${at}.batch_lag.kind`);if(lagKind!=="known"&&lagKind!=="unknown")throw new TypeError(`${at}.batch_lag.kind is invalid`);const latest=item.latest_batch===undefined||item.latest_batch===null?undefined:decimal(item.latest_batch,`${at}.latest_batch`);return Object.freeze({sourceId:text(item.source_id,`${at}.source_id`),target:text(item.target,`${at}.target`),canonicalPosition:text(item.canonical_position,`${at}.canonical_position`),provenance,...(latest===undefined?{}:{latestBatch:latest}),batchLag:lagKind==="known"?Object.freeze({kind:"known"as const,batches:decimal(lag.batches,`${at}.batch_lag.batches`)}):Object.freeze({kind:"unknown"as const}),failoverCount:decimal(item.failover_count,`${at}.failover_count`),agreeingSources:decimal(item.agreeing_sources,`${at}.agreeing_sources`),checkpointLevel:"unavailable",degraded:boolean(item.degraded,`${at}.degraded`)});}
 
 export function encodeFreshness(freshness: ExplorerFreshness): Readonly<Record<string, unknown>> {
   return Object.freeze({
@@ -305,7 +327,8 @@ export function encodeVerificationReport(
     receipt_digest: report.receiptDigest ?? null,
     header_digest: report.headerDigest ?? null,
     proof_root: report.proofRoot ?? null,
-    freshness: encodeFreshness(report.freshness),
+    ...(report.freshness===undefined?{}:{freshness:encodeFreshness(report.freshness)}),
+    ...(report.mirror===undefined?{}:{mirror:{source_id:report.mirror.sourceId,target:report.mirror.target,canonical_position:report.mirror.canonicalPosition,provenance:report.mirror.provenance,latest_batch:report.mirror.latestBatch??null,batch_lag:report.mirror.batchLag.kind==="known"?{kind:"known",batches:report.mirror.batchLag.batches}:{kind:"unknown"},failover_count:report.mirror.failoverCount,agreeing_sources:report.mirror.agreeingSources,checkpoint_level:report.mirror.checkpointLevel,degraded:report.mirror.degraded}}),
   });
 }
 

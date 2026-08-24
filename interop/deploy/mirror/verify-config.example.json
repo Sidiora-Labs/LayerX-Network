@@ -1,0 +1,50 @@
+{
+  "layerx_network_id": 1,
+  "sequencer_id_hex": "0000000000000000000000000000000000000000000000000000000000000001",
+  "sequencer_public_key_hex": "0000000000000000000000000000000000000000000000000000000000000001",
+  "first_batch_number": 1,
+  "last_batch_number": 18446744073709551615,
+  "sources": [
+    {
+      "kind": "ethereum",
+      "id": "ethereum-primary",
+      "rpc": {
+        "endpoints": [
+          {"url":"https://ethereum-a.example/rpc","ca_certificate_der":"/run/secrets/ethereum-a.ca.der","bearer_token_file":"/run/secrets/ethereum-a.token","independent_backend":"ethereum-a"},
+          {"url":"https://ethereum-b.example/rpc","ca_certificate_der":"/run/secrets/ethereum-b.ca.der","bearer_token_file":"/run/secrets/ethereum-b.token","independent_backend":"ethereum-b"},
+          {"url":"https://ethereum-c.example/rpc","ca_certificate_der":"/run/secrets/ethereum-c.ca.der","bearer_token_file":"/run/secrets/ethereum-c.token","independent_backend":"ethereum-c"}
+        ],
+        "quorum": 2,
+        "connect_timeout_ms": 3000,
+        "request_timeout_ms": 15000,
+        "maximum_response_bytes": 16777216
+      },
+      "chain_id": 11155111,
+      "genesis_hash_hex": "0000000000000000000000000000000000000000000000000000000000000001",
+      "archive_contract_hex": "0000000000000000000000000000000000000001",
+      "archive_code_hash_hex": "0000000000000000000000000000000000000000000000000000000000000001",
+      "publisher_hex": "0000000000000000000000000000000000000001"
+    },
+    {
+      "kind": "solana",
+      "id": "solana-primary",
+      "rpc": {
+        "endpoints": [
+          {"url":"https://solana-a.example/rpc","ca_certificate_der":"/run/secrets/solana-a.ca.der","bearer_token_file":"/run/secrets/solana-a.token","independent_backend":"solana-a"},
+          {"url":"https://solana-b.example/rpc","ca_certificate_der":"/run/secrets/solana-b.ca.der","bearer_token_file":"/run/secrets/solana-b.token","independent_backend":"solana-b"},
+          {"url":"https://solana-c.example/rpc","ca_certificate_der":"/run/secrets/solana-c.ca.der","bearer_token_file":"/run/secrets/solana-c.token","independent_backend":"solana-c"}
+        ],
+        "quorum": 2,
+        "connect_timeout_ms": 3000,
+        "request_timeout_ms": 15000,
+        "maximum_response_bytes": 16777216
+      },
+      "genesis_hash_hex": "0000000000000000000000000000000000000000000000000000000000000001",
+      "archive_program_hex": "0000000000000000000000000000000000000000000000000000000000000001",
+      "upgradeable_loader_hex": "0000000000000000000000000000000000000000000000000000000000000001",
+      "program_data_account_hex": "0000000000000000000000000000000000000000000000000000000000000001",
+      "program_code_hash_hex": "0000000000000000000000000000000000000000000000000000000000000001",
+      "publisher_hex": "0000000000000000000000000000000000000000000000000000000000000001"
+    }
+  ]
+}
