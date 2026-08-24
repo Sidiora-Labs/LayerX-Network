@@ -154,7 +154,7 @@ LIBRARY := $(BUILD_DIR)/liblayerx.a
 	agent-fuzz-wire agent-fuzz-interface agent-fuzz-long agent-fuzz-minimize \
 	agent-check agent-qualify-fuzz \
 	agent-test-errors agent-check-boundary agent-test-sanitize \
-	agent-test-types-ids mirror-live
+	agent-test-types-ids mirror-live mirror-verify-live
 
 all: build
 
@@ -164,6 +164,12 @@ mirror-live:
 	LAYERX_MIRROR_PUBLISHER_BIN=interop/target/release/layerx-mirror-publisher \
 		LAYERX_MIRROR_FAULT_CONTROLLER="$${LAYERX_MIRROR_FAULT_CONTROLLER:?set the authenticated devnet fault controller}" \
 		./scripts/qualify-mirror-live.sh
+
+mirror-verify-live:
+	$(INTEROP_CARGO) build --locked --release --manifest-path $(INTEROP_MANIFEST) \
+		--package layerx-mirror --bin layerx-mirror-verify
+	LAYERX_MIRROR_VERIFY_BIN=interop/target/release/layerx-mirror-verify \
+		./scripts/qualify-mirror-verification-live.sh
 
 build: $(LIBRARY)
 

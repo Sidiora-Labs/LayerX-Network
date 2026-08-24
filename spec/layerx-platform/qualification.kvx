@@ -861,3 +861,43 @@ symbol = "cg guard task 25.1 lifecycle paths"
 observed = "The scoped cg guard accepted every explicit product, protocol, deployment and live-artifact path and reported only the three generated or auditable spec lifecycle files as advisory outside touches."
 assumption = "The lifecycle projection and qualification observations remain in the single published task commit; human review will inspect the advisory rather than remove the implementation state or external dependency record."
 severity = "task-scope"
+
+[observation.25.2.1]
+task = "25.2"
+file = "interop/crates/layerx-mirror/src/verify.rs, interop/crates/layerx-mirror/src/publisher.rs"
+symbol = "MirrorVerifier::checkpoint_level, ArchivedCheckpoint"
+observed = "Archive v2 retains the canonical checkpoint certificate but not the attestation replay, possession, availability-class and attested-at fields required by layerx_proof::checkpoint::verify_certificate. The verifier therefore validates the certificate framing and identifier already enforced by ArchiveData, but explicitly refuses checkpoint verification level rather than treating archived certificate bytes or their threshold field as independent finality proof."
+assumption = "The node/archive owner must extend a versioned archive format with the complete protocol-owned checkpoint proof and independently provisioned bonded-set and registration trust roots. Qualification must verify that new evidence across all SDKs before checkpoint-finalised or settlement-anchored mirror levels may be displayed."
+severity = "dependency-boundary"
+
+[observation.25.2.2]
+task = "25.2"
+file = "interop/contracts/ethereum-mirror/LayerXMirrorArchive.sol, interop/contracts/solana-mirror/src/lib.rs, interop/crates/layerx-mirror/src/source.rs"
+symbol = "MirrorSourceFreshness"
+observed = "The exact task-25.1 contract and program index archives only by content commitment and expose no authenticated latest-batch or latest-checkpoint getter. A verifier can prove that one requested archive exists at a finalized chain coordinate, but cannot infer that it is the newest archive. Every source observation therefore reports latest batch/checkpoint as None and lag as Unknown; it is never labelled current from its own batch number."
+assumption = "A later protocol revision may add an immutable contiguous batch-to-commitment head, or operators may supply an independent authenticated reference head. Qualification must preserve Unknown until that proof exists and must not derive freshness by choosing the numerically newest untrusted request or combining heads across mirrors."
+severity = "protocol-boundary"
+
+[observation.25.2.3]
+task = "25.2"
+file = "interop/crates/layerx-mirror/src/bin/layerx-mirror-verify.rs, agent/sdk, platform/sdk, human/apps/web/src/explorer/mirror-server.ts"
+symbol = "layerx-mirror-verify"
+observed = "The non-Rust SDKs and Next.js server use the local production Rust verifier executable as their shared exact contract/program/archive implementation, with bounded JSON over process pipes and an operator-owned absolute configuration path. This avoids seven drifting chain ABI implementations and keeps RPC URLs and trust anchors out of public verification requests, but published packages require the matching executable and pinned configuration to be installed beside the application."
+assumption = "Packaging owners must ship the verifier binary built from the same release, install its configuration outside public write paths and expose no substitution path to requesters. Qualification must exercise version skew, missing executable, timeout, oversized output and malformed response across every SDK package and explorer deployment."
+severity = "deployment-boundary"
+
+[observation.25.2.4]
+task = "25.2"
+file = "scripts/qualify-mirror-verification-live.sh, .github/workflows/mirror-verification-live.yml"
+symbol = "mirror-verification-live-qualification"
+observed = "The outage, tamper, agreement and seven-SDK parity journey requires real finalized task-25.1 publications plus protected operator configuration and request vectors. Those inputs do not exist in the repository and implementation-phase rules prohibited building the verifier or running any live/parity command. The workflow consumes owner-supplied live evidence and explicitly removes LayerX node, gateway and explorer origins from the verification environment."
+assumption = "Mirror operators must provision reviewed live requests for the same canonical receipt/state evidence on both configured targets and deliberate commitment/tamper conflicts. Human qualification must run the protected workflow and retain each chain observation; checked-in schema vectors alone are not a successful live proof."
+severity = "qualification-input"
+
+[observation.25.2.5]
+task = "25.2"
+file = "spec/layerx-platform/spec.kvx, spec/layerx-platform/tasks.md, spec/layerx-platform/qualification.kvx"
+symbol = "cg guard task 25.2 lifecycle paths"
+observed = "The scoped cg guard accepted every explicit mirror reader, verifier, SDK, explorer, schema, deployment and qualification-artifact path and reported only the three generated or auditable spec lifecycle files as advisory outside touches. The graph transition cannot index npm lockfiles as individual touch witnesses, so the task declares the full agent TypeScript package and retains the root workspace package-lock as an auditable integration advisory."
+assumption = "The implementation-status projection, root dependency lock and qualification observations remain in the single published task commit; human review will inspect the advisory rather than remove the locked dependency, task state or recorded dependency boundaries."
+severity = "task-scope"

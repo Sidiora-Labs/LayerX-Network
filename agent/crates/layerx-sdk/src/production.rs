@@ -3,6 +3,11 @@
 use std::collections::BTreeSet;
 use std::fmt;
 
+pub use layerx_mirror::source::{
+    MirrorCanonicalPosition, MirrorLag, MirrorLocator, MirrorObservation, MirrorProvenance,
+    MirrorReadPolicy, MirrorSource, MirrorSourceError, MirrorSourceFreshness, MirrorSourceId,
+    MirrorSources, MirrorTargetIdentity,
+};
 pub use layerx_mirror::{
     MirrorVerification, MirrorVerificationFreshness, MirrorVerifier, MirrorVerifyError,
     SignedHeaderTrust,
@@ -585,21 +590,47 @@ pub fn verify_receipt(
     verify_outcome(canonical_receipt, authorised_batch)
 }
 
-/// Verifies one receipt from an untrusted mirror archive with no node, gateway,
-/// or hosted `LayerX` dependency. Signed-header trust is caller configuration and
-/// freshness is returned with the result rather than implied.
-///
-/// # Errors
-///
-/// Rejects malformed or tampered archives, untrusted batch headers, missing
-/// receipt inclusion, and invalid receipt signatures.
-pub fn verify_mirror_receipt(
-    archive_bytes: &[u8],
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum MirrorSdkError {
+    Source(MirrorSourceError),
+    Verification(MirrorVerifyError),
+}
+
+impl From<MirrorSourceError> for MirrorSdkError {
+    fn from(value: MirrorSourceError) -> Self {
+        Self::Source(value)
+    }
+}
+
+impl From<MirrorVerifyError> for MirrorSdkError {
+    fn from(value: MirrorVerifyError) -> Self {
+        Self::Verification(value)
+    }
+}
+
+/// Resolves a pinned source policy and verifies the receipt without composing
+/// chain, archive or freshness evidence across sources.
+pub fn verify_mirror_receipt_from_sources(
+    sources: &MirrorSources,
+    batch_number: u64,
+    policy: &MirrorReadPolicy,
     canonical_receipt: &[u8],
     trust: SignedHeaderTrust,
-    freshness: MirrorVerificationFreshness,
-) -> Result<MirrorVerification<VerifiedReceipt>, MirrorVerifyError> {
-    MirrorVerifier::new(archive_bytes, trust, freshness)?.receipt(canonical_receipt)
+) -> Result<MirrorVerification<VerifiedReceipt>, MirrorSdkError> {
+    let archive = sources.read(batch_number, policy)?;
+    Ok(MirrorVerifier::from_source(archive, trust)?.receipt(canonical_receipt)?)
+}
+
+pub fn verify_mirror_state_from_sources(
+    sources: &MirrorSources,
+    batch_number: u64,
+    policy: &MirrorReadPolicy,
+    canonical_state: &[u8],
+    proof: &Proof,
+    trust: SignedHeaderTrust,
+) -> Result<MirrorVerification<InclusionEvidence>, MirrorSdkError> {
+    let archive = sources.read(batch_number, policy)?;
+    Ok(MirrorVerifier::from_source(archive, trust)?.state(canonical_state, proof)?)
 }
 
 /// Verifies canonical activity inclusion under an authorised signed batch header.

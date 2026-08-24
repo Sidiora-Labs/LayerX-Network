@@ -26,7 +26,8 @@ const MAX_FIELD_BYTES: usize = 32 * 1024 * 1024;
 pub struct ArchiveCommitment([u8; 32]);
 
 impl ArchiveCommitment {
-    pub(crate) const fn from_bytes(bytes: [u8; 32]) -> Self {
+    #[must_use]
+    pub const fn from_bytes(bytes: [u8; 32]) -> Self {
         Self(bytes)
     }
 
@@ -674,7 +675,8 @@ fn record_root(records: &[Vec<u8>]) -> Result<[u8; 32], ArchiveError> {
     root(&leaves).map_err(|_| ArchiveError::RecordRoot)
 }
 
-pub(crate) fn archive_commitment(bytes: &[u8]) -> ArchiveCommitment {
+#[must_use]
+pub fn archive_commitment(bytes: &[u8]) -> ArchiveCommitment {
     let mut hasher = Sha256::new();
     hasher.update(ARCHIVE_DOMAIN);
     hasher.update(bytes);

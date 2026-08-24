@@ -1,0 +1,34 @@
+{
+  "schema": "platform/sdk/schema/mirror-v2.kvx",
+  "version": 2,
+  "u64_json": "canonical-nonzero-decimal-string",
+  "archive_magic_hex": "4c584d4952524f52",
+  "archive_commitment_domain_hex": "4c58502f6d6972726f722f617263686976652f763200",
+  "ethereum": {
+    "publisher_getter": "publisher()",
+    "manifest_getter": "manifest(bytes32)",
+    "chunk_getter": "chunk(bytes32,uint32)",
+    "finality": "finalized-block-exact-call"
+  },
+  "solana": {
+    "manifest_magic_hex": "4c584d4d414e3032",
+    "chunk_magic_hex": "4c584d43484b3032",
+    "manifest_bytes": 237,
+    "chunk_header_bytes": 80,
+    "finality": "rooted-finalized-context"
+  },
+  "required_cases": [
+    {"id":"exact-canonical","expect":"verified-one-source"},
+    {"id":"ordered-first-unavailable","expect":"verified-failover-count-one"},
+    {"id":"agreement-identical","expect":"verified-agreeing-sources"},
+    {"id":"agreement-conflict","expect_error":"divergent"},
+    {"id":"archive-byte-flip","expect_error":"commitment"},
+    {"id":"trailing-byte","expect_error":"malformed"},
+    {"id":"header-key-from-archive","expect_error":"authorization"},
+    {"id":"receipt-proof-from-other-source","expect_error":"source-mismatch"},
+    {"id":"historical-publication-reorg","expect":"crypto-valid-provenance-reorged-not-current"},
+    {"id":"no-reference-head","expect":"lag-unknown-not-current"},
+    {"id":"u64-max-decimal-transport","batch_number":"18446744073709551615","expect":"exact-no-rounding"},
+    {"id":"checkpoint-v2-missing-attestation-fields","expect_error":"checkpoint-unavailable"}
+  ]
+}

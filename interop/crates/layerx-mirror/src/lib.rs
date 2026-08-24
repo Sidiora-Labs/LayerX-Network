@@ -6,6 +6,7 @@ pub mod rpc;
 pub mod runtime;
 pub mod signer;
 pub mod solana;
+pub mod source;
 pub mod store;
 
 mod publisher;

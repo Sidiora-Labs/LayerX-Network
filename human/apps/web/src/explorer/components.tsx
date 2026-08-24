@@ -7,7 +7,7 @@ import {
   ExplorerNavigation,
   ScreenCard,
 } from "../kit";
-import type { ExplorerFreshness, ExplorerVerificationLevel } from "./model";
+import type { ExplorerFreshness, ExplorerVerificationLevel, MirrorVerificationProvenance } from "./model";
 
 const EXPLORER_NAVIGATION = [
   { href: "/explorer", copyKey: "explorer.navigation.overview" },
@@ -66,6 +66,8 @@ export function FreshnessDisplay({ freshness }: Readonly<{ freshness?: ExplorerF
     />
   );
 }
+
+export function MirrorFreshnessDisplay({ mirror }:Readonly<{mirror:MirrorVerificationProvenance}>){const lag=mirror.batchLag.kind==="known"?formatCopy("explorer.mirror.lag.known",{batches:mirror.batchLag.batches}):copyEntry("explorer.mirror.lag.unknown").message;return <ExplorerFreshnessView title={copyEntry(mirror.degraded?"explorer.mirror.degraded":"explorer.mirror.canonical").message} description={formatCopy("explorer.mirror.detail",{source:mirror.sourceId,target:mirror.target,position:mirror.canonicalPosition,lag,failovers:mirror.failoverCount,agreement:mirror.agreeingSources})} current={!mirror.degraded}/>;}
 
 export function ExplorerUnavailable() {
   return (

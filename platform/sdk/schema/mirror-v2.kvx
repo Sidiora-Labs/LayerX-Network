@@ -1,0 +1,82 @@
+[meta]
+name = "layerx-mirror-verification"
+version = 2
+source_contract = "interop/contracts/ethereum-mirror/LayerXMirrorArchive.sol"
+source_program = "interop/contracts/solana-mirror/src/lib.rs"
+archive_codec = "interop/crates/layerx-mirror/src/publisher.rs"
+
+[limits]
+max_sources = 8
+max_source_id_bytes = 64
+max_archive_bytes = 67108864
+max_archive_chunks = 65536
+max_archive_records = 1048576
+max_field_bytes = 33554432
+max_merkle_depth = 32
+max_http_header_bytes = 32768
+max_rpc_response_bytes = 16777216
+max_json_depth = 32
+connect_timeout_ms_min = 100
+connect_timeout_ms_max = 30000
+request_timeout_ms_min = 100
+request_timeout_ms_max = 120000
+
+[archive]
+magic_hex = "4c584d4952524f52"
+version = 2
+commitment_domain_utf8_nul = "LXP/mirror/archive/v2"
+digest = "sha256"
+integers = "unsigned-big-endian"
+trailing_bytes = "refuse"
+
+[ethereum]
+publisher_getter = "publisher()"
+manifest_getter = "manifest(bytes32)"
+chunk_getter = "chunk(bytes32,uint32)"
+manifest_opened_event = "ManifestOpened(bytes32,uint32,uint64,uint64,uint32,bytes32)"
+archive_finalized_event = "ArchiveFinalized(bytes32,bytes32)"
+maximum_chunk_bytes = 24576
+maximum_chunks = 65536
+required_transport = "https-json-rpc-strict-majority"
+required_finality = "finalized-block-exact-call"
+
+[solana]
+instruction_magic_hex = "4c584d41"
+instruction_version = 2
+manifest_magic_hex = "4c584d4d414e3032"
+chunk_magic_hex = "4c584d43484b3032"
+manifest_bytes = 237
+chunk_header_bytes = 80
+manifest_seed = "manifest"
+chunk_seed = "chunk"
+maximum_chunk_bytes = 720
+maximum_chunks = 524288
+required_transport = "https-json-rpc-strict-majority"
+required_finality = "rooted-finalized-context"
+
+[policy]
+variants = ["exact","ordered-preference","agreement"]
+conflict = "divergent"
+composition = "forbidden"
+
+[freshness]
+latest_batch = "option-u64"
+latest_checkpoint = "option-coordinate"
+lag = ["known-u64","unknown"]
+current_requires = "independent-reference-head"
+reorg = "cryptographic-validity-preserved-provenance-reorged"
+
+[transport]
+u64_json = "canonical-nonzero-decimal-string"
+request_batch_number = "u64-json"
+response_batch_number = "u64-json"
+response_latest_batch = "option-u64-json"
+target_identity = "stable-chain-prefixed-pinned-coordinate"
+canonical_position = "stable-chain-prefixed-finality-coordinate"
+
+[verification]
+order = ["target-identity","chain-finality","archive-commitment","archive-framing","header-authorization","record-proof","checkpoint-proof"]
+checkpoint_v2 = "unavailable-without-replay-possession-attestation-fields"
+
+[errors]
+variants = ["configuration","unavailable","rate-limited","missing","target-mismatch","source-mismatch","malformed","bounds","commitment","authorization","proof","checkpoint-unavailable","divergent","insufficient-agreement","reorged"]

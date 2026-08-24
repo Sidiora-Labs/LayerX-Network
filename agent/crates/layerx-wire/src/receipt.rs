@@ -718,6 +718,23 @@ pub struct MerkleProof {
     siblings: Vec<[u8; 32]>,
 }
 
+impl MerkleProof {
+    #[must_use]
+    pub const fn leaf_index(&self) -> u32 {
+        self.leaf_index
+    }
+
+    #[must_use]
+    pub const fn leaf_count(&self) -> u32 {
+        self.leaf_count
+    }
+
+    #[must_use]
+    pub fn siblings(&self) -> &[[u8; 32]] {
+        &self.siblings
+    }
+}
+
 fn proof_depth(mut count: u32) -> usize {
     let mut depth = 0;
     while count > 1 {

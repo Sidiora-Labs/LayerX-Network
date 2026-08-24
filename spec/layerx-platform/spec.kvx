@@ -2644,7 +2644,7 @@ reqs = ["34.1","34.3"]
 
 [task.25.2]
 title = "Verify from mirrors in the explorer and the SDKs"
-status = "pending"
+status = "implemented"
 wave = 12
 requires = ["25.1","10.5"]
 work_kind = "implementation"
@@ -2657,7 +2657,7 @@ do_4 = "State mirror freshness wherever mirror-derived data is displayed."
 do_5 = "Test verification against deliberately altered mirror data: tampering is caught, never absorbed."
 verify_cmd = "make interop-test-mirrors"
 symbols = ["layerx_mirror::MirrorVerifier"]
-touches = ["interop/crates/layerx-mirror/src/verify.rs","human/crates/layerx-explorer-index/src/mirror.rs","platform/sdk/conformance"]
+touches = ["interop/crates/layerx-mirror","interop/deploy/mirror","human/crates/layerx-explorer-index/src/mirror.rs","agent/crates/layerx-sdk/src","agent/crates/layerx-wire/src/receipt.rs","agent/sdk/typescript","agent/sdk/python/layerx_sdk","platform/sdk/schema","platform/sdk/generators/src/main.rs","platform/sdk/pipeline.kvx","platform/sdk/conformance","platform/sdk/go","platform/sdk/jvm","platform/sdk/swift/Sources/LayerXSDK","platform/sdk/dotnet","human/apps/web/src/app/api/explorer/verify/route.ts","human/apps/web/src/explorer","human/apps/web/copy/catalog.ts","scripts/qualify-mirror-verification-live.sh",".github/workflows/mirror-verification-live.yml","Makefile"]
 reqs = ["34.2","34.3"]
 
 [task.25.3]

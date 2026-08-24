@@ -1,0 +1,44 @@
+name: mirror-verification-live-qualification
+
+on: { workflow_dispatch: {} }
+permissions: { contents: read }
+concurrency: { group: mirror-verification-live, cancel-in-progress: false }
+
+jobs:
+  mirror-only:
+    runs-on: [self-hosted, layerx-testnet]
+    timeout-minutes: 45
+    environment: mirror-testnets
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - name: Materialize operator configuration and live requests
+        env:
+          VERIFY_CONFIG: ${{ secrets.MIRROR_VERIFY_CONFIG }}
+          VERIFY_VECTORS: ${{ secrets.MIRROR_VERIFY_LIVE_VECTORS }}
+        run: |
+          install -m 0700 -d .live-secrets
+          printf '%s' "${VERIFY_CONFIG}" > .live-secrets/verify.json
+          printf '%s' "${VERIFY_VECTORS}" | base64 -d > .live-secrets/vectors.tar
+          tar -xf .live-secrets/vectors.tar -C .live-secrets
+          chmod 0600 .live-secrets/*
+      - name: Build production verifier for qualification
+        run: cargo build --locked --release --manifest-path interop/Cargo.toml --package layerx-mirror --bin layerx-mirror-verify
+      - name: Verify from mirrors with LayerX infrastructure absent
+        env:
+          LAYERX_MIRROR_VERIFY_BIN: interop/target/release/layerx-mirror-verify
+          LAYERX_MIRROR_VERIFY_CONFIG: .live-secrets/verify.json
+          LAYERX_MIRROR_CANONICAL_REQUEST: .live-secrets/canonical.json
+          LAYERX_MIRROR_FAILOVER_REQUEST: .live-secrets/failover.json
+          LAYERX_MIRROR_DIVERGENCE_REQUEST: .live-secrets/divergence.json
+          LAYERX_MIRROR_TAMPER_REQUEST: .live-secrets/tamper.json
+          LAYERX_MIRROR_TS_CONFORMANCE: ${{ vars.MIRROR_TS_CONFORMANCE }}
+          LAYERX_MIRROR_PYTHON_CONFORMANCE: ${{ vars.MIRROR_PYTHON_CONFORMANCE }}
+          LAYERX_MIRROR_GO_CONFORMANCE: ${{ vars.MIRROR_GO_CONFORMANCE }}
+          LAYERX_MIRROR_JVM_CONFORMANCE: ${{ vars.MIRROR_JVM_CONFORMANCE }}
+          LAYERX_MIRROR_SWIFT_CONFORMANCE: ${{ vars.MIRROR_SWIFT_CONFORMANCE }}
+          LAYERX_MIRROR_DOTNET_CONFORMANCE: ${{ vars.MIRROR_DOTNET_CONFORMANCE }}
+        run: scripts/qualify-mirror-verification-live.sh
+      - name: Remove live material
+        if: always()
+        run: rm -rf .live-secrets

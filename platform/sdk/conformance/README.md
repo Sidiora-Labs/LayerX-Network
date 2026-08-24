@@ -38,6 +38,12 @@ Schema-driven validation that every agent-api and human-api operation is covered
 
 Required by: req.24.1, req.24.3 (operation coverage, error taxonomy)
 
+### Mirror parity (`mirror-v2.json`)
+
+Pins the archive framing, Ethereum contract calls, Solana account layout, source-selection policies, failure codes, freshness semantics, tamper cases and checkpoint-level refusal shared by all seven SDKs. Live evidence is acquired from the configured task-25.1 mirrors; no checked-in self-signed archive is accepted as a success vector.
+
+Required by: req.34.2, req.34.3 (mirror-only verification and honest freshness)
+
 ## Running the Tests
 
 The conformance suite is executed as part of the platform test target:

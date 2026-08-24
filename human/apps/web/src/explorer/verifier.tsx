@@ -12,7 +12,7 @@ import {
   KitButton,
   SettingsSegmentedControl,
 } from "../kit";
-import { FreshnessDisplay, verificationLabel } from "./components";
+import { FreshnessDisplay, MirrorFreshnessDisplay, verificationLabel } from "./components";
 import {
   decodeVerificationReport,
   type EvidenceVerificationReport,
@@ -22,14 +22,13 @@ type EvidenceKind = EvidenceVerificationReport["kind"];
 
 const KIND_OPTIONS: readonly Readonly<{ value: EvidenceKind; label: string }>[] = [
   { value: "receipt", label: copyEntry("explorer.verify.kind.receipt").message },
-  { value: "activity-inclusion", label: copyEntry("explorer.verify.kind.activity").message },
   { value: "state-inclusion", label: copyEntry("explorer.verify.kind.state").message },
 ];
 
 export function EvidenceVerifier() {
   const [kind, setKind] = useState<EvidenceKind>("receipt");
   const [evidence, setEvidence] = useState("");
-  const [status, setStatus] = useState<"idle" | "checking" | "refused" | "unavailable">("idle");
+  const [status, setStatus] = useState<"idle" | "checking" | "refused" | "unavailable" | "divergent">("idle");
   const [report, setReport] = useState<EvidenceVerificationReport | undefined>(undefined);
 
   const verify = async (event: SyntheticEvent<HTMLFormElement>) => {
@@ -46,7 +45,7 @@ export function EvidenceVerifier() {
         body: JSON.stringify({ kind, evidence: evidence.trim() }),
       });
       if (!response.ok) {
-        setStatus(response.status === 503 ? "unavailable" : "refused");
+        setStatus(response.status === 503 ? "unavailable" : response.status===409?"divergent":"refused");
         return;
       }
       setReport(decodeVerificationReport(await response.json()));
@@ -95,9 +94,12 @@ export function EvidenceVerifier() {
       {status === "unavailable" ? (
         <InlineNotice tone="warning" role="status">{copyEntry("explorer.verify.unavailable").message}</InlineNotice>
       ) : null}
+      {status === "divergent" ? (<InlineNotice tone="danger" role="alert">{copyEntry("explorer.verify.divergent").message}</InlineNotice>) : null}
       {report === undefined ? null : (
         <div className="flex flex-col gap-3">
-          <FreshnessDisplay freshness={report.freshness} />
+          {report.mirror === undefined
+            ? <FreshnessDisplay freshness={report.freshness} />
+            : <MirrorFreshnessDisplay mirror={report.mirror} />}
           <ExplorerTable
             caption={copyEntry("explorer.verify.result.table").message}
             columns={[
@@ -110,7 +112,7 @@ export function EvidenceVerifier() {
                 id: "kind",
                 cells: [
                   copyEntry("explorer.verify.result.kind").message,
-                  copyEntry(`explorer.verify.kind.${report.kind === "receipt" ? "receipt" : report.kind === "activity-inclusion" ? "activity" : "state"}`).message,
+                  copyEntry(`explorer.verify.kind.${report.kind === "receipt" ? "receipt" : "state"}`).message,
                   <ExplorerVerificationBadge
                     key="verification"
                     label={verificationLabel(report.achievedLevel)}
@@ -127,6 +129,11 @@ export function EvidenceVerifier() {
               ...(report.proofRoot === undefined
                 ? []
                 : [{ id: "root", cells: [copyEntry("explorer.verify.result.root").message, report.proofRoot, verificationLabel(report.achievedLevel)] }]),
+              ...(report.mirror===undefined?[]:[
+                {id:"source",cells:[copyEntry("explorer.verify.result.source").message,report.mirror.sourceId,report.mirror.provenance]},
+                {id:"target",cells:[copyEntry("explorer.verify.result.target").message,report.mirror.target,report.mirror.canonicalPosition]},
+                {id:"freshness",cells:[copyEntry("explorer.verify.result.freshness").message,report.mirror.batchLag.kind==="known"?report.mirror.batchLag.batches:copyEntry("explorer.mirror.lag.unknown").message,report.mirror.degraded?copyEntry("explorer.mirror.degraded").message:copyEntry("explorer.mirror.canonical").message]},
+              ]),
             ]}
           />
         </div>

@@ -36,6 +36,186 @@ pub struct EthereumProductionConfig {
     pub journal_directory: PathBuf,
 }
 
+/// Immutable read-only target used by SDK and explorer mirror verification.
+/// The publisher and contract identity are operator configuration and are
+/// never accepted from a verification request or archive payload.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EthereumMirrorReadConfig {
+    pub rpc: RpcQuorumConfig,
+    pub chain_id: u64,
+    pub genesis_hash: [u8; 32],
+    pub archive_contract: [u8; 20],
+    pub archive_code_hash: [u8; 32],
+    pub publisher: [u8; 20],
+}
+
+/// Canonical finalized chain coordinate at which an archive was read.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EthereumMirrorRead {
+    pub archive: Vec<u8>,
+    pub block_number: u64,
+    pub block_hash: [u8; 32],
+    pub reference_head_number: u64,
+    pub reference_head_hash: [u8; 32],
+}
+
+/// Production read-only mirror client. It shares the exact ABI encoders and
+/// decoders used by the publisher rather than maintaining a second ABI.
+pub struct EthereumMirrorReader {
+    config: EthereumMirrorReadConfig,
+    rpc: RpcCluster,
+}
+
+impl EthereumMirrorReader {
+    pub fn open(config: EthereumMirrorReadConfig) -> Result<Self, EthereumError> {
+        if config.chain_id == 0
+            || config.genesis_hash == [0; 32]
+            || config.archive_contract == [0; 20]
+            || config.archive_code_hash == [0; 32]
+            || config.publisher == [0; 20]
+        {
+            return Err(EthereumError::Configuration);
+        }
+        let rpc = RpcCluster::new(&config.rpc)?;
+        let reader = Self { config, rpc };
+        reader.verify_static_identity()?;
+        Ok(reader)
+    }
+
+    /// Retrieves one exact commitment from one finalized chain view. All
+    /// contract calls are pinned to the returned block; latest-state results
+    /// are never combined with finalized archive bytes.
+    pub fn retrieve(
+        &self,
+        commitment: ArchiveCommitment,
+    ) -> Result<Option<EthereumMirrorRead>, EthereumError> {
+        self.verify_static_identity()?;
+        let head = self
+            .rpc
+            .call("eth_getBlockByNumber", json!(["finalized", false]))?;
+        if head.is_null() {
+            return Err(EthereumError::Retrieval);
+        }
+        let block_number = parse_quantity(string(&head, "number")?)?;
+        let block_hash = fixed_hex::<32>(string(&head, "hash")?)?;
+        let block = quantity(block_number);
+        self.verify_target_at(&block)?;
+
+        let metadata = self.eth_call_at(
+            &abi_call(
+                "manifest(bytes32)",
+                &[AbiValue::Fixed(*commitment.as_bytes())],
+            ),
+            &block,
+        )?;
+        if metadata.is_empty() || metadata.iter().all(|byte| *byte == 0) {
+            return Ok(None);
+        }
+        let (length, chunks, digest, finalized) = decode_manifest(&metadata)?;
+        if !finalized || length == 0 || length > 64 * 1024 * 1024 || chunks == 0 || chunks > 65_536
+        {
+            return Err(EthereumError::Retrieval);
+        }
+        let mut archive = Vec::with_capacity(length);
+        for index in 0..chunks {
+            let encoded = self.eth_call_at(
+                &abi_call(
+                    "chunk(bytes32,uint32)",
+                    &[
+                        AbiValue::Fixed(*commitment.as_bytes()),
+                        AbiValue::Uint(u128::from(index)),
+                    ],
+                ),
+                &block,
+            )?;
+            let bytes = decode_dynamic_bytes(&encoded, MAX_CHUNK_BYTES)?;
+            archive.extend_from_slice(&bytes);
+            if archive.len() > length {
+                return Err(EthereumError::Retrieval);
+            }
+        }
+        if archive.len() != length
+            || <[u8; 32]>::from(Sha256::digest(&archive)) != digest
+            || archive_commitment(&archive) != commitment
+        {
+            return Err(EthereumError::Retrieval);
+        }
+        Ok(Some(EthereumMirrorRead {
+            archive,
+            block_number,
+            block_hash,
+            reference_head_number: block_number,
+            reference_head_hash: block_hash,
+        }))
+    }
+
+    /// Rechecks the original coordinate without invalidating the archive's
+    /// cryptographic evidence when its publication provenance was reorged.
+    pub fn is_canonical(&self, observation: &EthereumMirrorRead) -> Result<bool, EthereumError> {
+        self.is_coordinate_canonical(observation.block_number, observation.block_hash)
+    }
+
+    pub fn is_coordinate_canonical(
+        &self,
+        block_number: u64,
+        block_hash: [u8; 32],
+    ) -> Result<bool, EthereumError> {
+        let block = self.rpc.call(
+            "eth_getBlockByNumber",
+            json!([quantity(block_number), false]),
+        )?;
+        Ok(!block.is_null() && fixed_hex::<32>(string(&block, "hash")?)? == block_hash)
+    }
+
+    fn verify_static_identity(&self) -> Result<(), EthereumError> {
+        let chain = self.rpc.call("eth_chainId", json!([]))?;
+        if parse_quantity(chain.as_str().ok_or(EthereumError::ChainIdentity)?)?
+            != self.config.chain_id
+        {
+            return Err(EthereumError::ChainIdentity);
+        }
+        let genesis = self
+            .rpc
+            .call("eth_getBlockByNumber", json!(["0x0", false]))?;
+        if fixed_hex::<32>(string(&genesis, "hash")?)? != self.config.genesis_hash {
+            return Err(EthereumError::ChainIdentity);
+        }
+        Ok(())
+    }
+
+    fn verify_target_at(&self, block: &str) -> Result<(), EthereumError> {
+        let code = self.rpc.call(
+            "eth_getCode",
+            json!([format!("0x{}", hex(&self.config.archive_contract)), block]),
+        )?;
+        let code = decode_hex(code.as_str().ok_or(EthereumError::ContractIdentity)?)?;
+        if code.is_empty()
+            || <[u8; 32]>::from(Keccak256::digest(&code)) != self.config.archive_code_hash
+        {
+            return Err(EthereumError::ContractIdentity);
+        }
+        let publisher = self.eth_call_at(&abi_call("publisher()", &[]), block)?;
+        if publisher.len() != 32
+            || publisher[..12].iter().any(|byte| *byte != 0)
+            || publisher[12..] != self.config.publisher
+        {
+            return Err(EthereumError::ContractIdentity);
+        }
+        Ok(())
+    }
+
+    fn eth_call_at(&self, data: &[u8], block: &str) -> Result<Vec<u8>, EthereumError> {
+        let value = self.rpc.call(
+            "eth_call",
+            json!([{
+                "to": format!("0x{}", hex(&self.config.archive_contract)),
+                "data": format!("0x{}", hex(data))
+            }, block]),
+        )?;
+        decode_hex(value.as_str().ok_or(EthereumError::Retrieval)?)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct EthereumProgress {
     pub commitment: ArchiveCommitment,
