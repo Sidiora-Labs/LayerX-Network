@@ -4,7 +4,7 @@ PLATFORM_MANIFEST := platform/Cargo.toml
 .PHONY: platform-build platform-lint platform-test platform-sdk-check \
 	platform-sdk-generate platform-test-sdks platform-release-check platform-release-plan \
 	platform-test-tooling platform-emulator-conformance platform-test-middleware \
-	platform-test-docs
+	platform-test-docs platform-hosted-smoke
 
 platform-build:
 	$(PLATFORM_CARGO) build --manifest-path $(PLATFORM_MANIFEST) --locked --workspace
@@ -34,13 +34,19 @@ platform-test-tooling:
 	else \
 		echo "emulator/testnet differential skipped: set LAYERX_TESTNET_URL and LAYERX_CONFORMANCE_ACTIVITIES"; \
 	fi
-	@if test -n "$${LAYERX_TESTNET_URL:-}" && test -n "$${LAYERX_FAUCET_URL:-}" && \
-		test -n "$${LAYERX_TEST_IDENTITY:-}" && test -n "$${LAYERX_TEST_PUBLIC_KEY:-}" && \
-		test -n "$${LAYERX_TEST_DID:-}" && test -n "$${LAYERX_CONFORMANCE_ACTIVITIES:-}"; then \
-		sh platform/hosted/testnet/tests/hosted-smoke.sh; \
-	else \
-		echo "hosted testnet/faucet smoke skipped: set scheduled CI hosted-testnet variables"; \
-	fi
+
+platform-hosted-smoke:
+	@test -n "$${LAYERX_TESTNET_URL:-}"
+	@test -n "$${LAYERX_GATEWAY_URL:-}"
+	@test -n "$${LAYERX_FAUCET_URL:-}"
+	@test -n "$${LAYERX_TEST_AUTH_TOKEN_FILE:-}"
+	@test -n "$${LAYERX_TEST_CA_FILE:-}"
+	@test -n "$${LAYERX_TEST_SOURCE_DID:-}"
+	@test -n "$${LAYERX_TEST_SOURCE_PUBLIC_KEY:-}"
+	@test -n "$${LAYERX_TEST_DESTINATION_DID:-}"
+	@test -n "$${LAYERX_TEST_ASSET:-}"
+	@test -n "$${LAYERX_TEST_AMOUNT:-}"
+	sh platform/hosted/testnet/tests/hosted-smoke.sh
 
 platform-emulator-conformance:
 	@test -n "$${LAYERX_TESTNET_URL:-}" && test -n "$${LAYERX_CONFORMANCE_ACTIVITIES:-}"

@@ -29,13 +29,16 @@ ed25519-dalek = "=2.2.0"
 getrandom = "=0.3.4"
 keyring = "=4.1.6"
 keyring-core = "=1.0.0"
+native-tls = "=0.2.15"
 layerx-fiat = { path = "../interop/crates/layerx-fiat" }
 layerx-proof = { path = "../agent/crates/layerx-proof" }
 layerx-sdk = { path = "../agent/crates/layerx-sdk" }
 layerx-platform-kvx = { path = "tools/kvx", version = "=0.1.0" }
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.149"
+rustls = { version = "=0.23.43", default-features = false, features = ["ring", "std", "tls12"] }
 sha2 = "=0.10.9"
+subtle = "=2.6.1"
 ureq = { version = "=3.4.0", default-features = false, features = ["json", "native-tls-no-default"] }
 zeroize = "=1.9.0"
 

@@ -1331,7 +1331,13 @@ version = "0.1.0"
 name = "layerx-platform-faucet"
 version = "0.1.0"
 dependencies = [
+ "native-tls",
+ "rustls",
+ "serde",
+ "serde_json",
  "sha2",
+ "subtle",
+ "zeroize",
 ]
 
 [[package]]
@@ -1376,6 +1382,14 @@ dependencies = [
 [[package]]
 name = "layerx-platform-testnet"
 version = "0.1.0"
+dependencies = [
+ "native-tls",
+ "rustls",
+ "serde",
+ "serde_json",
+ "subtle",
+ "zeroize",
+]
 
 [[package]]
 name = "layerx-platform-webhooks"

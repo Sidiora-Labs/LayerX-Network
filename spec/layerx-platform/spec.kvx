@@ -2108,7 +2108,7 @@ reqs = ["26.2"]
 
 [task.17.3]
 title = "Build the deployable hosted testnet and faucet"
-status = "pending"
+status = "implemented"
 wave = 9
 requires = ["17.2"]
 work_kind = "implementation"

@@ -1,0 +1,9 @@
+# Hosted testnet operations
+
+`layerx-testnet-control` is the public status/parameter boundary and the private funding/reset proxy. It is not a protocol node. The deployment deliberately requires separately operated pending-release `core`, `core-admin`, `gateway`, `identity` and `paxeer-boundary` HTTPS services; `/readyz` remains degraded until their real readiness endpoints answer and the package semantic version and LXP wire version match the pending release.
+
+Apply `deployment.yaml` only after provisioning the referenced TLS, outbound CA, identity-client, Redis ACL/client, backend-admin, control-admin and status-publisher Secrets. Public ingress reaches only the control-plane TLS port. The faucet has a dedicated source-IP-preserving load balancer, and the control admin port is ClusterIP-only with NetworkPolicy ingress limited to the faucet and reset operator. The protocol core and emulator administration routes are not part of either public service.
+
+The Redis StatefulSet uses TLS, ACL authentication, an AOF with `appendfsync always`, and a persistent volume. All faucet replicas reserve identity, address and transport-peer quotas with one Redis transaction keyed by a mandatory idempotency key. Retrying an indeterminate funding result repeats the same private funding identifier; a definite funding refusal atomically releases the quota reservation.
+
+The reset CronJob runs each Tuesday at 09:00 UTC, while `reset-testnet.sh` executes only on days 1 through 7 and uses one idempotency key per calendar month. The status CronJob publishes only the redacted four-component document from `/v1/status`. Use `platform-hosted-smoke` from scheduled CI to fund an account, commit a payment, fetch its receipt and verify it independently; this requires real hosted credentials and is not a deployment health probe.

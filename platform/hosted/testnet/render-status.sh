@@ -1,20 +1,38 @@
 #!/bin/sh
 set -eu
-: "${LAYERX_STATUS_OUTPUT:=/var/www/status/components.json}"
-: "${LAYERX_TESTNET_HEALTH:=http://layerx-testnet:9402/healthz}"
-: "${LAYERX_GATEWAY_HEALTH:=http://layerx-gateway:9420/healthz}"
-: "${LAYERX_CORE_HEALTH:=http://layerx-testnet:9402/v1/state}"
-: "${LAYERX_PAXEER_HEALTH:=https://rpc.testnet.paxeer.network/health}"
-
-probe() { if curl --fail --silent --max-time 5 "$1" >/dev/null; then printf operational; else printf degraded; fi; }
-testnet=$(probe "$LAYERX_TESTNET_HEALTH")
-gateway=$(probe "$LAYERX_GATEWAY_HEALTH")
-core=$(probe "$LAYERX_CORE_HEALTH")
-paxeer=$(probe "$LAYERX_PAXEER_HEALTH")
-generated=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-temporary="${LAYERX_STATUS_OUTPUT}.new"
-umask 027
-mkdir -p "$(dirname "$LAYERX_STATUS_OUTPUT")"
-printf '{"generated_at":"%s","components":{"testnet":"%s","gateway":"%s","core":"%s","paxeer":"%s"}}\n' \
-  "$generated" "$testnet" "$gateway" "$core" "$paxeer" >"$temporary"
-mv "$temporary" "$LAYERX_STATUS_OUTPUT"
+command -v curl >/dev/null
+command -v jq >/dev/null
+: "${LAYERX_TESTNET_STATUS_URL:?LAYERX_TESTNET_STATUS_URL is required}"
+: "${LAYERX_STATUS_PUBLISH_URL:?LAYERX_STATUS_PUBLISH_URL is required}"
+: "${LAYERX_STATUS_TOKEN_FILE:?LAYERX_STATUS_TOKEN_FILE is required}"
+: "${LAYERX_TESTNET_CA_FILE:?LAYERX_TESTNET_CA_FILE is required}"
+test -r "$LAYERX_STATUS_TOKEN_FILE"
+test -r "$LAYERX_TESTNET_CA_FILE"
+status_file=$(mktemp /tmp/layerx-status.XXXXXX)
+curl_config=$(mktemp /tmp/layerx-status-curl.XXXXXX)
+trap 'rm -f -- "$status_file" "$curl_config"' EXIT HUP INT TERM
+chmod 0600 "$status_file" "$curl_config"
+curl --fail --silent --show-error --max-time 15 --cacert "$LAYERX_TESTNET_CA_FILE" \
+  --output "$status_file" "$LAYERX_TESTNET_STATUS_URL"
+test "$(wc -c < "$status_file")" -le 65536
+jq -e '
+  type == "object" and
+  ((keys | sort) == (["components","lxp_wire_protocol_version","network_id","package_semver","service","state"] | sort)) and
+  (.service == "layerx-hosted-testnet") and
+  (.state == "ready" or .state == "degraded") and
+  ([.components[].name] | sort) == (["core","gateway","paxeer","testnet"] | sort) and
+  all(.components[]; ((keys | sort) == ["name","state"]) and (.state == "ready" or .state == "degraded" or .state == "unavailable"))
+' "$status_file" >/dev/null
+{
+  printf 'fail\n'
+  printf 'silent\n'
+  printf 'show-error\n'
+  printf 'max-time = 15\n'
+  printf 'cacert = "%s"\n' "$LAYERX_TESTNET_CA_FILE"
+  printf 'request = "PUT"\n'
+  printf 'header = "Authorization: Bearer %s"\n' "$(tr -d '\r\n' < "$LAYERX_STATUS_TOKEN_FILE")"
+  printf 'header = "Content-Type: application/json"\n'
+  printf 'data-binary = "@%s"\n' "$status_file"
+  printf 'url = "%s"\n' "$LAYERX_STATUS_PUBLISH_URL"
+} > "$curl_config"
+curl --config "$curl_config"

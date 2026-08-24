@@ -1,10 +1,10 @@
 {
   "version": 1,
   "components": [
-    {"id": "testnet", "probe": "https://testnet.layerx.network/healthz", "dependency": "core"},
-    {"id": "gateway", "probe": "https://api.testnet.layerx.network/healthz", "dependency": "testnet"},
-    {"id": "core", "probe": "http://layerx-testnet:9402/healthz", "dependency": null},
-    {"id": "paxeer", "probe": "https://rpc.testnet.paxeer.network/health", "dependency": null}
+    {"id": "testnet", "source": "https://testnet.layerx.network/v1/status", "field": "testnet"},
+    {"id": "gateway", "source": "https://testnet.layerx.network/v1/status", "field": "gateway"},
+    {"id": "core", "source": "https://testnet.layerx.network/v1/status", "field": "core"},
+    {"id": "paxeer", "source": "https://testnet.layerx.network/v1/status", "field": "paxeer"}
   ],
-  "redaction": {"request_headers": ["authorization", "cookie", "x-layerx-principal"], "query_values": true}
+  "redaction": {"request_headers": ["authorization", "cookie", "idempotency-key"], "component_urls": true, "query_values": true}
 }

@@ -1,76 +1,279 @@
+apiVersion: v1
+kind: Namespace
+metadata: {name: layerx-testnet}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: layerx-testnet-release, namespace: layerx-testnet}
+data:
+  package-semver: "0.1.0"
+  lxp-wire-protocol-version: "1"
+  reset-schedule: "0 9 * * 2; operator executes only on days 1-7"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: layerx-faucet-redis-config, namespace: layerx-testnet}
+data:
+  redis.conf: |
+    bind 0.0.0.0
+    port 0
+    tls-port 6379
+    tls-cert-file /run/layerx/tls/tls.crt
+    tls-key-file /run/layerx/tls/tls.key
+    tls-ca-cert-file /run/layerx/tls/ca.crt
+    tls-auth-clients no
+    aclfile /run/layerx/auth/users.acl
+    appendonly yes
+    appendfsync always
+    maxmemory-policy noeviction
+    protected-mode yes
+---
 apiVersion: apps/v1
 kind: StatefulSet
-metadata: {name: layerx-testnet}
+metadata: {name: layerx-faucet-redis, namespace: layerx-testnet}
 spec:
-  serviceName: layerx-testnet
+  serviceName: layerx-faucet-redis
   replicas: 1
-  selector: {matchLabels: {app: layerx-testnet}}
+  selector: {matchLabels: {app: layerx-faucet-redis}}
   template:
-    metadata: {labels: {app: layerx-testnet, layerx-plane: core}}
+    metadata: {labels: {app: layerx-faucet-redis, layerx-plane: state}}
     spec:
-      securityContext: {runAsNonRoot: true, runAsUser: 4020, fsGroup: 4020}
+      securityContext: {runAsNonRoot: true, runAsUser: 4020, runAsGroup: 4020, fsGroup: 4020}
       containers:
-        - name: core
-          image: ghcr.io/sidiora-labs/layerx-testnet:0.1.0
-          imagePullPolicy: Always
-          command: ["/opt/layerx/run-testnet.sh"]
-          env:
-            - {name: LAYERX_TESTNET_NETWORK_ID, value: "402"}
-            - {name: LAYERX_TESTNET_STATE, value: /var/lib/layerx-testnet/state.snapshot}
-          ports: [{name: gateway, containerPort: 9402}]
-          readinessProbe: {httpGet: {path: /healthz, port: gateway}, periodSeconds: 5}
-          livenessProbe: {httpGet: {path: /healthz, port: gateway}, periodSeconds: 15}
-          resources: {requests: {cpu: 500m, memory: 512Mi}, limits: {cpu: "2", memory: 2Gi}}
+        - name: redis
+          image: redis:8.2.1-alpine
+          args: [redis-server, /etc/layerx/redis.conf]
+          ports: [{name: rediss, containerPort: 6379}]
+          readinessProbe: {tcpSocket: {port: rediss}, periodSeconds: 5}
+          resources: {requests: {cpu: 100m, memory: 128Mi}, limits: {cpu: "1", memory: 1Gi}}
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
-          volumeMounts: [{name: state, mountPath: /var/lib/layerx-testnet}, {name: tmp, mountPath: /tmp}]
-      volumes: [{name: tmp, emptyDir: {}}]
+          volumeMounts:
+            - {name: data, mountPath: /data}
+            - {name: config, mountPath: /etc/layerx, readOnly: true}
+            - {name: tls, mountPath: /run/layerx/tls, readOnly: true}
+            - {name: auth, mountPath: /run/layerx/auth, readOnly: true}
+      volumes:
+        - {name: config, configMap: {name: layerx-faucet-redis-config}}
+        - {name: tls, secret: {secretName: layerx-faucet-redis-tls}}
+        - {name: auth, secret: {secretName: layerx-faucet-redis-auth}}
   volumeClaimTemplates:
-    - metadata: {name: state}
+    - metadata: {name: data}
       spec: {accessModes: [ReadWriteOnce], resources: {requests: {storage: 20Gi}}}
 ---
 apiVersion: v1
 kind: Service
-metadata: {name: layerx-testnet}
-spec: {selector: {app: layerx-testnet}, ports: [{name: gateway, port: 9402, targetPort: gateway}]}
+metadata: {name: layerx-faucet-redis, namespace: layerx-testnet}
+spec: {clusterIP: None, selector: {app: layerx-faucet-redis}, ports: [{name: rediss, port: 6379, targetPort: rediss}]}
 ---
 apiVersion: apps/v1
 kind: Deployment
-metadata: {name: layerx-faucet}
+metadata: {name: layerx-testnet-control, namespace: layerx-testnet}
 spec:
-  replicas: 1
+  replicas: 2
+  selector: {matchLabels: {app: layerx-testnet-control}}
+  template:
+    metadata: {labels: {app: layerx-testnet-control, layerx-plane: control}}
+    spec:
+      securityContext: {runAsNonRoot: true, runAsUser: 4020, runAsGroup: 4020, fsGroup: 4020}
+      containers:
+        - name: control
+          image: ghcr.io/sidiora-labs/layerx-testnet-control:0.1.0
+          imagePullPolicy: Always
+          command: [/usr/local/bin/layerx-testnet-control]
+          env:
+            - {name: LAYERX_PENDING_PACKAGE_SEMVER, valueFrom: {configMapKeyRef: {name: layerx-testnet-release, key: package-semver}}}
+            - {name: LAYERX_PENDING_WIRE_PROTOCOL_VERSION, valueFrom: {configMapKeyRef: {name: layerx-testnet-release, key: lxp-wire-protocol-version}}}
+            - {name: LAYERX_TESTNET_PUBLIC_LISTEN, value: "0.0.0.0:9443"}
+            - {name: LAYERX_TESTNET_ADMIN_LISTEN, value: "0.0.0.0:9444"}
+            - {name: LAYERX_TESTNET_CORE_URL, value: "https://layerx-pending-core.layerx-testnet.svc.cluster.local:9443"}
+            - {name: LAYERX_TESTNET_CORE_ADMIN_URL, value: "https://layerx-pending-core-admin.layerx-testnet.svc.cluster.local:9444"}
+            - {name: LAYERX_TESTNET_GATEWAY_URL, value: "https://layerx-gateway.layerx-testnet.svc.cluster.local:9443"}
+            - {name: LAYERX_TESTNET_PAXEER_URL, value: "https://paxeer-boundary.layerx-testnet.svc.cluster.local:9443"}
+            - {name: LAYERX_TESTNET_TLS_CERT_DER, value: /run/layerx/tls/server.crt.der}
+            - {name: LAYERX_TESTNET_TLS_KEY_DER, value: /run/layerx/tls/server.key.der}
+            - {name: LAYERX_OUTBOUND_CA_DER, value: /run/layerx/tls/ca.crt.der}
+            - {name: LAYERX_TESTNET_BACKEND_ADMIN_TOKEN_FILE, value: /run/layerx/backend-admin/token}
+            - {name: LAYERX_TESTNET_CONTROL_ADMIN_TOKEN_FILE, value: /run/layerx/control-admin/token}
+          ports: [{name: public-tls, containerPort: 9443}, {name: admin-tls, containerPort: 9444}]
+          readinessProbe: {httpGet: {scheme: HTTPS, path: /readyz, port: public-tls}, periodSeconds: 5}
+          livenessProbe: {httpGet: {scheme: HTTPS, path: /livez, port: public-tls}, periodSeconds: 15}
+          resources: {requests: {cpu: 250m, memory: 128Mi}, limits: {cpu: "1", memory: 512Mi}}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          volumeMounts:
+            - {name: tls, mountPath: /run/layerx/tls, readOnly: true}
+            - {name: backend-admin, mountPath: /run/layerx/backend-admin, readOnly: true}
+            - {name: control-admin, mountPath: /run/layerx/control-admin, readOnly: true}
+      volumes:
+        - {name: tls, secret: {secretName: layerx-testnet-control-tls}}
+        - {name: backend-admin, secret: {secretName: layerx-testnet-backend-admin}}
+        - {name: control-admin, secret: {secretName: layerx-testnet-control-admin}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: layerx-testnet-public, namespace: layerx-testnet}
+spec: {selector: {app: layerx-testnet-control}, ports: [{name: https, port: 443, targetPort: public-tls}]}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: layerx-testnet-admin, namespace: layerx-testnet}
+spec: {type: ClusterIP, selector: {app: layerx-testnet-control}, ports: [{name: https, port: 443, targetPort: admin-tls}]}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: layerx-faucet, namespace: layerx-testnet}
+spec:
+  replicas: 3
   selector: {matchLabels: {app: layerx-faucet}}
   template:
-    metadata: {labels: {app: layerx-faucet, layerx-plane: gateway}}
+    metadata: {labels: {app: layerx-faucet, layerx-plane: public}}
     spec:
-      securityContext: {runAsNonRoot: true, runAsUser: 4020, fsGroup: 4020}
+      securityContext: {runAsNonRoot: true, runAsUser: 4020, runAsGroup: 4020, fsGroup: 4020}
       containers:
         - name: faucet
           image: ghcr.io/sidiora-labs/layerx-faucet:0.1.0
+          imagePullPolicy: Always
           env:
-            - {name: LAYERX_TESTNET_ADMIN_ADDRESS, value: layerx-testnet:9402}
-            - {name: LAYERX_FAUCET_STATE, value: /var/lib/layerx-faucet/claims.tsv}
+            - {name: LAYERX_FAUCET_LISTEN, value: "0.0.0.0:9443"}
+            - {name: LAYERX_FAUCET_TLS_CERT_DER, value: /run/layerx/tls/server.crt.der}
+            - {name: LAYERX_FAUCET_TLS_KEY_DER, value: /run/layerx/tls/server.key.der}
+            - {name: LAYERX_OUTBOUND_CA_DER, value: /run/layerx/tls/ca.crt.der}
+            - {name: LAYERX_IDENTITY_INTROSPECTION_URL, value: "https://layerx-identity.layerx-testnet.svc.cluster.local:9443/v1/introspect"}
+            - {name: LAYERX_IDENTITY_SERVICE_TOKEN_FILE, value: /run/layerx/identity/token}
+            - {name: LAYERX_TESTNET_FUNDING_URL, value: "https://layerx-testnet-admin.layerx-testnet.svc.cluster.local/admin/v1/testnet/fund"}
+            - {name: LAYERX_TESTNET_ADMIN_TOKEN_FILE, value: /run/layerx/control-admin/token}
+            - {name: LAYERX_FAUCET_REDIS_URL, value: "rediss://layerx-faucet-redis.layerx-testnet.svc.cluster.local:6379"}
+            - {name: LAYERX_FAUCET_REDIS_USERNAME_FILE, value: /run/layerx/redis-auth/username}
+            - {name: LAYERX_FAUCET_REDIS_PASSWORD_FILE, value: /run/layerx/redis-auth/password}
             - {name: LAYERX_FAUCET_IDENTITY_LIMIT, value: "10000000"}
             - {name: LAYERX_FAUCET_ADDRESS_LIMIT, value: "10000000"}
-            - {name: LAYERX_FAUCET_IP_LIMIT, value: "50000000"}
-          ports: [{name: http, containerPort: 9410}]
-          readinessProbe: {httpGet: {path: /healthz, port: http}}
+            - {name: LAYERX_FAUCET_NETWORK_LIMIT, value: "50000000"}
+            - {name: LAYERX_FAUCET_NETWORK_REQUEST_LIMIT, value: "60"}
+            - {name: LAYERX_FAUCET_NETWORK_REQUEST_WINDOW_SECONDS, value: "60"}
+            - {name: LAYERX_FAUCET_IDEMPOTENCY_SECONDS, value: "604800"}
+          ports: [{name: https, containerPort: 9443}]
+          readinessProbe: {httpGet: {scheme: HTTPS, path: /readyz, port: https}, periodSeconds: 5}
+          livenessProbe: {httpGet: {scheme: HTTPS, path: /livez, port: https}, periodSeconds: 15}
+          resources: {requests: {cpu: 200m, memory: 128Mi}, limits: {cpu: "1", memory: 512Mi}}
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
-          volumeMounts: [{name: state, mountPath: /var/lib/layerx-faucet}]
-      volumes: [{name: state, persistentVolumeClaim: {claimName: layerx-faucet-state}}]
+          volumeMounts:
+            - {name: tls, mountPath: /run/layerx/tls, readOnly: true}
+            - {name: identity, mountPath: /run/layerx/identity, readOnly: true}
+            - {name: control-admin, mountPath: /run/layerx/control-admin, readOnly: true}
+            - {name: redis-auth, mountPath: /run/layerx/redis-auth, readOnly: true}
+      volumes:
+        - {name: tls, secret: {secretName: layerx-faucet-tls}}
+        - {name: identity, secret: {secretName: layerx-testnet-identity-client}}
+        - {name: control-admin, secret: {secretName: layerx-testnet-control-admin}}
+        - {name: redis-auth, secret: {secretName: layerx-faucet-redis-client}}
 ---
 apiVersion: v1
-kind: PersistentVolumeClaim
-metadata: {name: layerx-faucet-state}
-spec: {accessModes: [ReadWriteOnce], resources: {requests: {storage: 2Gi}}}
+kind: Service
+metadata: {name: layerx-faucet-public, namespace: layerx-testnet}
+spec:
+  type: LoadBalancer
+  externalTrafficPolicy: Local
+  selector: {app: layerx-faucet}
+  ports: [{name: https, port: 443, targetPort: https}]
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: layerx-testnet-public
+  namespace: layerx-testnet
+  annotations: {nginx.ingress.kubernetes.io/backend-protocol: HTTPS}
+spec:
+  ingressClassName: nginx
+  tls: [{hosts: [testnet.layerx.network], secretName: layerx-testnet-ingress-tls}]
+  rules:
+    - host: testnet.layerx.network
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend: {service: {name: layerx-testnet-public, port: {name: https}}}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata: {name: layerx-testnet-reset, namespace: layerx-testnet}
+spec:
+  schedule: "0 9 * * 2"
+  timeZone: Etc/UTC
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        metadata: {labels: {app: layerx-testnet-reset, layerx-plane: operator}}
+        spec:
+          restartPolicy: Never
+          securityContext: {runAsNonRoot: true, runAsUser: 4020, runAsGroup: 4020, fsGroup: 4020}
+          containers:
+            - name: reset
+              image: ghcr.io/sidiora-labs/layerx-testnet-control:0.1.0
+              command: [/opt/layerx/reset-testnet.sh]
+              env:
+                - {name: LAYERX_TESTNET_ADMIN_URL, value: "https://layerx-testnet-admin.layerx-testnet.svc.cluster.local"}
+                - {name: LAYERX_TESTNET_RESET_TOKEN_FILE, value: /run/layerx/control-admin/token}
+                - {name: LAYERX_TESTNET_CA_FILE, value: /run/layerx/tls/ca.crt}
+              securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+              volumeMounts: [{name: control-admin, mountPath: /run/layerx/control-admin, readOnly: true}, {name: tls, mountPath: /run/layerx/tls, readOnly: true}, {name: tmp, mountPath: /tmp}]
+          volumes: [{name: control-admin, secret: {secretName: layerx-testnet-control-admin}}, {name: tls, secret: {secretName: layerx-testnet-control-tls}}, {name: tmp, emptyDir: {medium: Memory, sizeLimit: 1Mi}}]
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata: {name: layerx-testnet-status-publisher, namespace: layerx-testnet}
+spec:
+  schedule: "*/2 * * * *"
+  concurrencyPolicy: Replace
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        metadata: {labels: {app: layerx-testnet-status-publisher, layerx-plane: operator}}
+        spec:
+          restartPolicy: Never
+          securityContext: {runAsNonRoot: true, runAsUser: 4020, runAsGroup: 4020, fsGroup: 4020}
+          containers:
+            - name: publisher
+              image: ghcr.io/sidiora-labs/layerx-testnet-control:0.1.0
+              command: [/opt/layerx/render-status.sh]
+              env:
+                - {name: LAYERX_TESTNET_STATUS_URL, value: "https://layerx-testnet-public.layerx-testnet.svc.cluster.local/v1/status"}
+                - {name: LAYERX_STATUS_PUBLISH_URL, value: "https://status-publisher.layerx-status.svc.cluster.local/v1/components/testnet"}
+                - {name: LAYERX_STATUS_TOKEN_FILE, value: /run/layerx/status/token}
+                - {name: LAYERX_TESTNET_CA_FILE, value: /run/layerx/tls/ca.crt}
+              securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+              volumeMounts: [{name: status, mountPath: /run/layerx/status, readOnly: true}, {name: tls, mountPath: /run/layerx/tls, readOnly: true}, {name: tmp, mountPath: /tmp}]
+          volumes: [{name: status, secret: {secretName: layerx-testnet-status-publisher}}, {name: tls, secret: {secretName: layerx-testnet-control-tls}}, {name: tmp, emptyDir: {medium: Memory, sizeLimit: 1Mi}}]
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
-metadata: {name: layerx-testnet-admin-boundary}
+metadata: {name: layerx-testnet-admin-ingress, namespace: layerx-testnet}
 spec:
-  podSelector: {matchLabels: {app: layerx-testnet}}
+  podSelector: {matchLabels: {app: layerx-testnet-control}}
+  policyTypes: [Ingress]
+  ingress:
+    - from: [{podSelector: {matchLabels: {app: layerx-faucet}}}, {podSelector: {matchLabels: {app: layerx-testnet-reset}}}]
+      ports: [{protocol: TCP, port: 9444}]
+    - from: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ingress-nginx}}}, {podSelector: {matchLabels: {app: layerx-testnet-status-publisher}}}]
+      ports: [{protocol: TCP, port: 9443}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: layerx-faucet-redis-ingress, namespace: layerx-testnet}
+spec:
+  podSelector: {matchLabels: {app: layerx-faucet-redis}}
   policyTypes: [Ingress]
   ingress:
     - from: [{podSelector: {matchLabels: {app: layerx-faucet}}}]
-      ports: [{protocol: TCP, port: 9402}]
-    - from: [{podSelector: {matchLabels: {app: layerx-gateway}}}]
-      ports: [{protocol: TCP, port: 9402}]
+      ports: [{protocol: TCP, port: 6379}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: layerx-faucet-public-ingress, namespace: layerx-testnet}
+spec:
+  podSelector: {matchLabels: {app: layerx-faucet}}
+  policyTypes: [Ingress]
+  ingress:
+    - from: [{ipBlock: {cidr: 0.0.0.0/0}}, {ipBlock: {cidr: "::/0"}}]
+      ports: [{protocol: TCP, port: 9443}]

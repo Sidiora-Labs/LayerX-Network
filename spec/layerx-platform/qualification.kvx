@@ -453,3 +453,27 @@ symbol = "task.12.4 do_5"
 observed = "do_5 asks for create, pause, reclaim and archive to be run end to end in both shells, while the implementation-phase hard rule prohibits running tests and the current tree has no executable Human API router for the generated client's /v1/agents operations. That router is owned by the parallel task 13.6."
 assumption = "No journey, build or verification command was run. Human qualification will run make human-e2e-journeys after task 13.6 is integrated and will exercise the real create, pause, reclaim and archive operations in both shell profiles."
 severity = "dependency-boundary"
+
+[observation.17.3.1]
+task = "17.3"
+file = "src/node/layerxd.c, platform/hosted/testnet/deployment.yaml"
+symbol = "layerxd main, layerx-testnet-control readiness"
+observed = "The repository's layerxd executable only validates a configuration file and exits; it does not expose a network service, durable node store, sequencer, funding operation or reset operation. Task 17.3 therefore writes a deployable TLS control boundary that proxies only to separately supplied pending-release core/admin services and remains degraded when they are absent. It does not deploy the emulator, invent a node, or report the control process as a healthy core."
+assumption = "A production serving node owned outside this task must supply the configured HTTPS core and private admin contracts before hosted-testnet readiness can become ready. Human qualification must deploy that real node, exercise funding/reset recovery, and confirm the control boundary's expected response schemas."
+severity = "dependency-boundary"
+
+[observation.17.3.2]
+task = "17.3"
+file = "platform/hosted/testnet/tests/hosted-smoke.sh, .github/workflows/platform.yml"
+symbol = "platform-hosted-smoke"
+observed = "The scheduled journey is written to fund a real hosted identity, quote and commit a real payment, fetch its canonical receipt plus batch authority, and run the independent local receipt verifier. No hosted environment, CI secret, payment, smoke, build, test or verification command was executed during implementation."
+assumption = "Human qualification will provision the scheduled identity/token/CA and real gateway receipt-authority response, then execute the workflow against the deployed pending-release stack and retain the receipt-verification evidence."
+severity = "phase-boundary"
+
+[observation.17.3.3]
+task = "17.3"
+file = "spec/layerx-platform/spec.kvx"
+symbol = "task.17.3 touches"
+observed = "The declared touch list contains only platform/hosted/testnet, platform/hosted/faucet and platform/docs, while do_5 and the requested scheduled hosted run require platform/Makefile.inc and .github/workflows/platform.yml, and the new TLS dependencies require the platform workspace manifest and lockfile. Those integration files are necessary for the task's executable/container and scheduled-CI acceptance clauses."
+assumption = "Human qualification will review the necessary integration paths and reconcile task.17.3's touch declaration rather than removing the scheduled journey or workspace dependency wiring."
+severity = "task-scope"
