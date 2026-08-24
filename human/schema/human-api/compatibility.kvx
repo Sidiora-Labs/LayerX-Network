@@ -6,3 +6,8 @@ settlement_domains = "Every custody-boundary claim and receipt shape names its s
 schema = "1.0"
 service = "0.1.x"
 web_app = "0.1.x"
+
+[compatibility.row.2]
+schema = "1.1"
+service = "0.1.x"
+web_app = "0.1.x"

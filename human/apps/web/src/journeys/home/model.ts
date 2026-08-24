@@ -1,11 +1,11 @@
 import { copyEntry } from "../../../copy/catalog.ts";
 import { formatCopy } from "../../../copy/format.ts";
 import {
+  type AccountBalance,
   type ActivityEntryDetail,
   type Agent,
   type ApprovalSummary,
   type HumanApiClient,
-  type VerifiedMoney,
 } from "../../api/index.ts";
 import {
   directionWord,
@@ -55,27 +55,19 @@ export function homeActions(): readonly [HomeActionItem, HomeActionItem, HomeAct
 }
 
 export interface HomeData {
+  readonly balance: AccountBalance;
   readonly agents: readonly Agent[];
   readonly approvals: readonly ApprovalSummary[];
   readonly entries: readonly ActivityEntryDetail[];
 }
 
 export async function loadHome(client: HumanApiClient): Promise<HomeData> {
-  const [agentPage, approvalPage, activityPage] = await Promise.all([
-    client.agentList(),
-    client.approvalList(),
-    client.activityQuery({ page_limit: HOME_ACTIVITY_LIMIT }),
-  ]);
-  const summaries = activityPage.groups
-    .flatMap((group) => group.entries)
-    .slice(0, HOME_ACTIVITY_LIMIT);
-  const entries = await Promise.all(
-    summaries.map((entry) => client.activityEntry(entry.entry_id)),
-  );
+  const summary = await client.homeSummary();
   return {
-    agents: agentPage.agents,
-    approvals: approvalPage.approvals,
-    entries,
+    balance: summary.balance,
+    agents: summary.agents,
+    approvals: summary.approvals,
+    entries: summary.recent_activity.slice(0, HOME_ACTIVITY_LIMIT),
   };
 }
 
@@ -93,21 +85,31 @@ export type HomeBalance =
       currency: string;
       verification: string;
       freshness: string;
+      current: boolean;
     }>
   | Readonly<{ kind: "unavailable"; label: string; message: string }>;
 
-export function homeBalance(verified?: VerifiedMoney, checkedAgo?: string): HomeBalance {
+export function homeBalance(balance?: AccountBalance): HomeBalance {
   const label = copyEntry("home.balance.label").message;
-  if (verified === undefined || checkedAgo === undefined) {
+  if (
+    balance === undefined ||
+    balance.verification === "unverified" ||
+    !balance.evidence.some((evidence) => evidence.verification !== "unverified")
+  ) {
     return { kind: "unavailable", label, message: copyEntry("home.balance.unavailable").message };
   }
   return {
     kind: "verified",
     label,
-    amount: moneyAmountNumber(verified.money),
-    currency: verified.money.currency,
-    verification: verificationWord(verified.verification),
-    freshness: formatCopy("home.balance.freshness", { when: checkedAgo }),
+    amount: moneyAmountNumber(balance.money),
+    currency: balance.money.currency,
+    verification: verificationWord(balance.verification),
+    freshness: formatCopy("home.balance.freshness", {
+      when: `${balance.freshness.age_seconds} seconds ago against ${balance.freshness.source_head}${
+        balance.freshness.within_bound ? "" : " (out of date)"
+      }`,
+    }),
+    current: balance.freshness.within_bound,
   };
 }
 

@@ -1,0 +1,4 @@
+{
+  "method": "GET",
+  "path": "/v1/account/balance"
+}

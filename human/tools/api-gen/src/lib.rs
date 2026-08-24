@@ -1019,7 +1019,7 @@ fn emit_client(out: &mut String, planned: &[PlannedOperation]) {
     out.push_str(
         "\nexport type FetchLike = (input: string, init: RequestInit) => Promise<Response>;\n",
     );
-    out.push_str("\nexport interface HumanApiClientOptions {\n  readonly baseUrl?: string;\n  readonly fetch?: FetchLike;\n  readonly headers?: { readonly [name: string]: string };\n}\n");
+    out.push_str("\nexport interface HumanApiClientOptions {\n  readonly baseUrl?: string;\n  readonly fetch?: FetchLike;\n  readonly headers?: { readonly [name: string]: string };\n  readonly credentials?: RequestCredentials;\n  readonly csrfToken?: () => string | undefined;\n  readonly trace?: () => string | undefined;\n}\n");
     out.push_str("\nexport interface HumanApiClient {\n");
     for plan in planned {
         let _ = writeln!(out, "  {};", method_signature(plan));
@@ -1029,11 +1029,16 @@ fn emit_client(out: &mut String, planned: &[PlannedOperation]) {
     out.push_str("  const baseUrl = options.baseUrl ?? \"\";\n");
     out.push_str("  const transport: FetchLike = options.fetch ?? ((input, init) => globalThis.fetch(input, init));\n");
     out.push_str("  const baseHeaders = options.headers ?? {};\n");
+    out.push_str("  const credentials = options.credentials ?? \"include\";\n");
     out.push_str("  async function execute(\n    method: HttpMethod,\n    path: string,\n    body: JsonValue | undefined,\n    idempotencyKey: string | undefined,\n  ): Promise<JsonValue> {\n");
     out.push_str("    const headers: { [name: string]: string } = { ...baseHeaders, Accept: \"application/json\" };\n");
     out.push_str("    if (body !== undefined) {\n      headers[\"Content-Type\"] = \"application/json\";\n    }\n");
     out.push_str("    if (idempotencyKey !== undefined) {\n      headers[\"Idempotency-Key\"] = idempotencyKey;\n    }\n");
-    out.push_str("    const init: RequestInit = { method, headers };\n");
+    out.push_str("    const csrfToken = options.csrfToken?.();\n");
+    out.push_str("    if (method !== \"GET\" && csrfToken !== undefined) {\n      headers[\"X-LayerX-CSRF\"] = csrfToken;\n    }\n");
+    out.push_str("    const outboundTrace = options.trace?.();\n");
+    out.push_str("    if (outboundTrace !== undefined) {\n      headers[\"X-LayerX-Trace\"] = outboundTrace;\n    }\n");
+    out.push_str("    const init: RequestInit = { method, headers, credentials };\n");
     out.push_str("    if (body !== undefined) {\n      init.body = JSON.stringify(body);\n    }\n");
     out.push_str("    const response = await transport(baseUrl + path, init);\n");
     out.push_str("    let parsed: JsonValue;\n    try {\n      parsed = (await response.json()) as JsonValue;\n    } catch {\n      throw new HumanApiDecodeError(\"the response body is not JSON\");\n    }\n");

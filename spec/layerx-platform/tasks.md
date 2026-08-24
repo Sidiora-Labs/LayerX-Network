@@ -612,7 +612,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Link the app's Technical details surfaces to these pages.
     - Run the explorer against a real core end to end including the verifier with altered evidence.
     - _Requirements: 15.1, 15.6, 15.7_
-  - [ ] 13.6 Serve human-api through a production service boundary
+  - [ ] 13.6 Serve human-api through a production service boundary — **Implemented - qualification pending**
     - Build the layerx-human-service executable and versioned HTTPS+JSON router for every human-api v1 operation and resumable event stream, decoding and encoding only schema-owned types.
     - Bind handlers to the real custody, journey, approval, activity, notification and explorer services and to the agent boundary; do not introduce an in-memory, fake or second protocol-write path.
     - Add the missing receipt-verified account-balance and home-summary read contract with freshness and verification level, regenerate the TypeScript client, and bind the home surface to it.
