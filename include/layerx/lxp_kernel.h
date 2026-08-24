@@ -18,6 +18,7 @@ enum {
     LXP_MODULE_MAX_KEY_BYTES = 128,
     LXP_MODULE_MAX_VALUE_BYTES = 1024,
     LXP_MODULE_MAX_STAGED_WRITES = 64,
+    LXP_MODULE_MAX_STAGED_ACCOUNTS = 16,
     LXP_KERNEL_MAX_BLOBS = 512,
     LXP_KERNEL_MAX_STAGED_BLOBS = 4,
     LXP_KERNEL_MAX_BLOB_BYTES = 1048576,
@@ -108,6 +109,9 @@ struct lxp_module_ctx {
     bool mutable;
     lxp_module_kv_change staged[LXP_MODULE_MAX_STAGED_WRITES];
     size_t staged_count;
+    lx_account_registration staged_accounts[
+        LXP_MODULE_MAX_STAGED_ACCOUNTS];
+    size_t staged_account_count;
     lxp_module_account_snapshot transfer_snapshots[
         LXP_MAX_TRANSFER_SET_LEGS * 2U + 1U];
     size_t transfer_snapshot_count;

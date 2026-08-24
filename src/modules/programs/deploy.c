@@ -172,8 +172,10 @@ lxp_result lxp_programs_lifecycle_validate(
 }
 
 static lxp_result execute_deploy(lxp_module_ctx *ctx,
+                                 const lxp_authority_resolved *authority,
                                  const programs_lifecycle_decoded *value)
 {
+    const lxp_module_registration *registration;
     uint8_t key[40];
     uint8_t record[PROGRAM_RECORD_LENGTH];
     const uint8_t *existing;
@@ -192,6 +194,16 @@ static lxp_result execute_deploy(lxp_module_ctx *ctx,
                                          value->new_hash, value->wasm,
                                          value->wasm_length);
     if (status != LXP_OK) return status;
+    status = lxp_kernel_module_by_id(ctx->kernel, LXP_MODULE_PROGRAMS,
+                                     ctx->epoch, &registration);
+    if (status != LXP_OK) return status;
+    if (registration->abi_version == LX_PROGRAMS_ACCOUNT_ABI_VERSION) {
+        status = lxp_programs_account_owner_bind(
+            ctx, value->program_id, authority->principal);
+        if (status != LXP_OK) return status;
+    } else if (registration->abi_version != LX_PROGRAMS_ABI_VERSION) {
+        return LXP_ERR_VERSION_UNSUPPORTED;
+    }
     status = lxp_ctx_kv_put(ctx, key, sizeof(key), record, sizeof(record));
     if (status != LXP_OK) return status;
     return lxp_ctx_emit_event(ctx, PROGRAM_EVENT_DEPLOYED,
@@ -276,7 +288,7 @@ lxp_result lxp_programs_lifecycle_execute(
     (void)effects;
     if (ctx == NULL || authority == NULL || value == NULL)
         return LXP_ERR_UNKNOWN_ACTIVITY;
-    return value->ordinal == 1U ? execute_deploy(ctx, value) :
+    return value->ordinal == 1U ? execute_deploy(ctx, authority, value) :
                                  execute_upgrade(ctx, authority, value);
 }
 

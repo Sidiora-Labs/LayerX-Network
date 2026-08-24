@@ -16,15 +16,34 @@ enum {
     LX_PROGRAMS_CALL = 0x00090003,
     LX_PROGRAMS_REGISTRY = 0x00090004,
     LX_PROGRAMS_TRANSFER = 0x00090005,
+    LX_PROGRAMS_ACCOUNT = 0x00090006,
     LX_PROGRAMS_ABI_VERSION = 1,
+    LX_PROGRAMS_ACCOUNT_ABI_VERSION = 2,
     LX_PROGRAMS_EVENT_DEPLOYED = 1,
     LX_PROGRAMS_EVENT_UPGRADED = 2,
     LX_PROGRAMS_EVENT_CALLED = 3,
     LX_PROGRAMS_EVENT_REGISTRY_READ = 4,
     LX_PROGRAMS_EVENT_TRANSFERRED = 5,
     LX_PROGRAMS_EVENT_GUEST_ENVELOPE = 6,
-    LX_PROGRAMS_EVENT_CALL_OUTCOME = 7
+    LX_PROGRAMS_EVENT_CALL_OUTCOME = 7,
+    LX_PROGRAMS_EVENT_ACCOUNT_REGISTERED = 8
 };
+
+enum {
+    LX_PROGRAMS_ACCOUNT_ID_BYTES = 32,
+    LX_PROGRAMS_ACCOUNT_MAX_SEED_BYTES = 128
+};
+
+typedef struct lx_programs_account_binding {
+    uint8_t program_id[32];
+    uint8_t account_id[32];
+    uint8_t asset_id[32];
+    uint16_t seed_length;
+    uint8_t seed[LX_PROGRAMS_ACCOUNT_MAX_SEED_BYTES];
+} lx_programs_account_binding;
+
+typedef lxp_result (*lx_programs_account_visit_fn)(
+    const lx_programs_account_binding *binding, void *user);
 
 typedef struct lx_programs_fee_schedule {
     uint32_t version;
@@ -62,6 +81,7 @@ enum {
 };
 
 const lxp_module_iface *programs_module_registration(void);
+const lxp_module_iface *programs_module_registration_v2(void);
 const lxp_module_iface *lx_programs_module_iface(void);
 
 lxp_result lxp_programs_lifecycle_decode(lxp_module_ctx *ctx,
@@ -233,6 +253,38 @@ lxp_result lxp_programs_call_validate(
     lxp_module_ctx *ctx, const lxp_activity *activity,
     const lxp_authority_resolved *authority, const void *decoded);
 lxp_result lxp_programs_call_execute(
+    lxp_module_ctx *ctx, const lxp_activity *activity,
+    const lxp_authority_resolved *authority, const void *decoded,
+    lxp_effect_buffer *effects);
+
+lxp_result lxp_programs_account_derive(
+    const uint8_t program_id[32], const uint8_t *seed, size_t seed_length,
+    uint8_t account_id[LX_PROGRAMS_ACCOUNT_ID_BYTES]);
+lxp_result lxp_programs_account_register(
+    lxp_module_ctx *ctx, const uint8_t program_id[32], const uint8_t *seed,
+    size_t seed_length, const uint8_t asset_id[32], lx_account **account,
+    bool *created);
+lxp_result lxp_programs_account_lookup(
+    lxp_module_ctx *ctx, const uint8_t program_id[32], const uint8_t *seed,
+    size_t seed_length, lx_programs_account_binding *binding,
+    lx_account **account);
+lxp_result lxp_programs_account_lookup_id(
+    lxp_module_ctx *ctx, const uint8_t account_id[32],
+    lx_programs_account_binding *binding, lx_account **account);
+lxp_result lxp_programs_account_iter(
+    lxp_module_ctx *ctx, const uint8_t program_id[32],
+    lx_programs_account_visit_fn visit, void *user);
+lxp_result lxp_programs_account_owner_bind(
+    lxp_module_ctx *ctx, const uint8_t program_id[32],
+    const uint8_t owner[32]);
+lxp_result lxp_programs_account_decode(lxp_module_ctx *ctx,
+                                       const uint8_t *payload,
+                                       size_t payload_length,
+                                       void **decoded);
+lxp_result lxp_programs_account_validate(
+    lxp_module_ctx *ctx, const lxp_activity *activity,
+    const lxp_authority_resolved *authority, const void *decoded);
+lxp_result lxp_programs_account_execute(
     lxp_module_ctx *ctx, const lxp_activity *activity,
     const lxp_authority_resolved *authority, const void *decoded,
     lxp_effect_buffer *effects);

@@ -6,6 +6,7 @@
 #include "layerx/lxp_authority.h"
 #include "layerx/lxp_result.h"
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -29,6 +30,7 @@ typedef struct lxp_effect_buffer lxp_effect_buffer;
 typedef struct lxp_transfer_set lxp_transfer_set;
 typedef struct lxp_receipt lxp_receipt;
 typedef struct lxp_verified_receipt_facts lxp_verified_receipt_facts;
+typedef struct lx_account lx_account;
 #define lxp_module_ctx lxp_module_ctx
 #define lxp_effect_buffer lxp_effect_buffer
 #define lxp_transfer_set lxp_transfer_set
@@ -89,6 +91,12 @@ lxp_result lxp_ctx_kv_del(lxp_module_ctx *ctx, const uint8_t *key,
 lxp_result lxp_ctx_kv_iter(lxp_module_ctx *ctx, const uint8_t *prefix,
                            size_t prefix_length, lxp_kv_visit_fn visit,
                            void *user);
+lxp_result lxp_ctx_account_stage_module_value(
+    lxp_module_ctx *ctx, const uint8_t account_id[32],
+    const uint8_t asset_id[32], lx_account **account, bool *created);
+lxp_result lxp_ctx_account_find(lxp_module_ctx *ctx,
+                                const uint8_t account_id[32],
+                                lx_account **account);
 lxp_result lxp_ctx_emit_transfer_set(lxp_module_ctx *ctx,
                                      const lxp_transfer_set *set,
                                      lxp_receipt *receipt);

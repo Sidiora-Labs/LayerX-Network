@@ -3077,7 +3077,7 @@ reqs = ["37.2","37.3"]
 
 [task.30.3]
 title = "Wire program-owned accounts into the kernel account registry"
-status = "pending"
+status = "implemented"
 wave = 16
 requires = ["30.1"]
 do_1 = "Register program-owned accounts through the existing account registry with the same derivation the runtime uses, so the C side and the Rust side agree byte for byte."

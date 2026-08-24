@@ -16,8 +16,8 @@ static int registration_contract(void)
     lxp_state_store store;
     lxp_state_journal journal;
     lxp_kernel kernel;
-    lxp_module_iface next;
     const lxp_module_iface *current = programs_module_registration();
+    const lxp_module_iface *next = programs_module_registration_v2();
     const lxp_module_registration *resolved;
     uint64_t parameters = 1U;
     size_t i;
@@ -32,8 +32,19 @@ static int registration_contract(void)
         current->epoch_begin == NULL || current->epoch_end == NULL ||
         current->state_root == NULL)
         return 1;
+    if (next == NULL || next->module_id != LXP_MODULE_PROGRAMS ||
+        next->abi_version != LX_PROGRAMS_ACCOUNT_ABI_VERSION ||
+        strcmp(next->name, "programs") != 0 ||
+        next->activity_type_count !=
+            sizeof(expected_types) / sizeof(expected_types[0]) + 1U)
+        return 1;
     for (i = 0U; i < current->activity_type_count; ++i)
-        if (current->activity_types[i] != expected_types[i]) return 1;
+        if (current->activity_types[i] != expected_types[i] ||
+            next->activity_types[i] != expected_types[i])
+            return 1;
+    if (next->activity_types[next->activity_type_count - 1U] !=
+        LX_PROGRAMS_ACCOUNT)
+        return 1;
     if (lxp_state_store_init(&store, 0U) != LXP_OK ||
         lxp_kernel_create(&kernel, &store, &journal, &parameters, 0U) !=
             LXP_OK ||
@@ -45,18 +56,22 @@ static int registration_contract(void)
             resolved->iface != current ||
             resolved->abi_version != LX_PROGRAMS_ABI_VERSION)
             return 1;
-    next = *current;
-    next.abi_version = LX_PROGRAMS_ABI_VERSION + 1U;
-    if (lxp_kernel_set_epoch(&kernel, 1U) != LXP_OK ||
-        lxp_kernel_register_module(&kernel, &next) != LXP_OK ||
+    if (lxp_kernel_module_for_activity(&kernel, LX_PROGRAMS_ACCOUNT, 0U,
+                                       &resolved) !=
+            LXP_ERR_UNKNOWN_ACTIVITY ||
+        lxp_kernel_set_epoch(&kernel, 1U) != LXP_OK ||
+        lxp_kernel_register_module(&kernel, next) != LXP_OK ||
         lxp_module_version_for_epoch(&kernel, LXP_MODULE_PROGRAMS, 0U,
                                      LX_PROGRAMS_ABI_VERSION, &resolved) !=
             LXP_OK ||
         resolved->iface != current ||
         lxp_module_version_for_epoch(&kernel, LXP_MODULE_PROGRAMS, 1U,
-                                     LX_PROGRAMS_ABI_VERSION + 1U,
+                                     LX_PROGRAMS_ACCOUNT_ABI_VERSION,
                                      &resolved) != LXP_OK ||
-        resolved->iface != &next ||
+        resolved->iface != next ||
+        lxp_kernel_module_for_activity(&kernel, LX_PROGRAMS_ACCOUNT, 1U,
+                                       &resolved) != LXP_OK ||
+        resolved->iface != next ||
         lxp_module_version_for_epoch(&kernel, LXP_MODULE_PROGRAMS, 1U,
                                      LX_PROGRAMS_ABI_VERSION, &resolved) !=
             LXP_ERR_VERSION_UNSUPPORTED)

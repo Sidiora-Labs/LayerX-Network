@@ -110,7 +110,9 @@ lxp_result lxp_module_ctx_init(lxp_module_ctx *ctx, lxp_kernel *kernel,
 lxp_result lxp_module_ctx_set_mutable(lxp_module_ctx *ctx, bool mutable)
 {
     if (ctx == NULL) return LXP_ERR_NON_CANONICAL;
-    if (!mutable && ctx->staged_count != 0U) return LXP_FATAL_INVARIANT;
+    if (!mutable && (ctx->staged_count != 0U ||
+                     ctx->staged_account_count != 0U))
+        return LXP_FATAL_INVARIANT;
     ctx->mutable = mutable;
     return LXP_OK;
 }
@@ -199,6 +201,110 @@ lxp_result lxp_ctx_kv_del(lxp_module_ctx *ctx, const uint8_t *key,
     return stage_change(ctx, key, key_length, NULL, 0U, true);
 }
 
+static lxp_result account_registry_preview(
+    const lxp_module_ctx *ctx, lx_account_registry *preview)
+{
+    lx_account_registry *live;
+    size_t i;
+    lxp_result status;
+    if (ctx == NULL || ctx->kernel == NULL || ctx->kernel->state == NULL ||
+        preview == NULL || ctx->staged_account_count >
+            LXP_MODULE_MAX_STAGED_ACCOUNTS)
+        return LXP_ERR_NON_CANONICAL;
+    live = ctx->kernel->state->accounts;
+    if (live == NULL || live->count > LX_ACCOUNT_REGISTRY_CAPACITY)
+        return LXP_ERR_NON_CANONICAL;
+    *preview = *live;
+    for (i = 0U; i < ctx->staged_account_count; ++i) {
+        lx_account *committed;
+        status = lx_account_registration_commit(
+            preview, &ctx->staged_accounts[i], &committed);
+        if (status != LXP_OK) return status;
+    }
+    return LXP_OK;
+}
+
+lxp_result lxp_ctx_account_stage_module_value(
+    lxp_module_ctx *ctx, const uint8_t account_id[32],
+    const uint8_t asset_id[32], lx_account **account, bool *created)
+{
+    const lxp_module_registration *module;
+    lx_account_registry *preview;
+    lx_account_registration registration;
+    lx_account *prepared;
+    size_t i;
+    lxp_result status;
+    if (ctx == NULL || account_id == NULL || asset_id == NULL ||
+        account == NULL || created == NULL || !ctx->mutable ||
+        ctx->kernel == NULL || ctx->kernel->state == NULL ||
+        ctx->kernel->journal == NULL || !ctx->kernel->journal->open ||
+        ctx->kernel->journal->store != ctx->kernel->state ||
+        ctx->kernel->journal->global_sequence != ctx->global_sequence)
+        return LXP_ERR_NON_CANONICAL;
+    for (i = 0U; i < ctx->staged_account_count; ++i) {
+        lx_account *staged = &ctx->staged_accounts[i].account;
+        if (memcmp(staged->id, account_id, 32U) != 0) continue;
+        if (!staged->has_asset || memcmp(staged->asset_id, asset_id, 32U) != 0)
+            return LXP_ERR_ASSET_MISMATCH;
+        *account = staged;
+        *created = false;
+        return LXP_OK;
+    }
+    if (ctx->staged_account_count == LXP_MODULE_MAX_STAGED_ACCOUNTS)
+        return LXP_ERR_ARENA_EXHAUSTED;
+    status = lxp_kernel_module_by_id(ctx->kernel, ctx->module_id, ctx->epoch,
+                                     &module);
+    if (status != LXP_OK) return status;
+    preview = (lx_account_registry *)malloc(sizeof(*preview));
+    if (preview == NULL) return LXP_ERR_ARENA_EXHAUSTED;
+    status = account_registry_preview(ctx, preview);
+    if (status == LXP_OK)
+        status = lx_account_module_value_prepare(
+            preview, (const uint8_t *)module->name, strlen(module->name),
+            account_id, asset_id, ctx->global_sequence, &registration,
+            &prepared, created);
+    if (status == LXP_OK && !*created) {
+        size_t location = (size_t)(prepared - preview->accounts);
+        if (location >= preview->count) status = LXP_FATAL_INVARIANT;
+        else *account = &ctx->kernel->state->accounts->accounts[location];
+    }
+    if (status == LXP_OK && *created) {
+        size_t location = ctx->staged_account_count++;
+        ctx->staged_accounts[location] = registration;
+        *account = &ctx->staged_accounts[location].account;
+    }
+    free(preview);
+    if (status != LXP_OK) return status;
+    status = lxp_state_journal_require_account_root(ctx->kernel->journal);
+    if (status != LXP_OK && *created) --ctx->staged_account_count;
+    return status;
+}
+
+lxp_result lxp_ctx_account_find(lxp_module_ctx *ctx,
+                                const uint8_t account_id[32],
+                                lx_account **account)
+{
+    lx_account_registry *registry;
+    size_t i;
+    if (ctx == NULL || account_id == NULL || account == NULL ||
+        ctx->kernel == NULL || ctx->kernel->state == NULL)
+        return LXP_ERR_NON_CANONICAL;
+    for (i = 0U; i < ctx->staged_account_count; ++i)
+        if (memcmp(ctx->staged_accounts[i].account.id, account_id, 32U) == 0) {
+            *account = &ctx->staged_accounts[i].account;
+            return LXP_OK;
+        }
+    registry = ctx->kernel->state->accounts;
+    if (registry == NULL || registry->count > LX_ACCOUNT_REGISTRY_CAPACITY)
+        return LXP_ERR_NON_CANONICAL;
+    for (i = 0U; i < registry->count; ++i)
+        if (memcmp(registry->accounts[i].id, account_id, 32U) == 0) {
+            *account = &registry->accounts[i];
+            return LXP_OK;
+        }
+    return LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE;
+}
+
 lxp_result lxp_module_ctx_commit(lxp_module_ctx *ctx)
 {
     size_t i;
@@ -208,6 +314,13 @@ lxp_result lxp_module_ctx_commit(lxp_module_ctx *ctx)
     if (!ctx->commit_prepared) {
         status = lxp_module_ctx_prepare_commit(ctx);
         if (status != LXP_OK) return status;
+    }
+    for (i = 0U; i < ctx->staged_account_count; ++i) {
+        lx_account *committed;
+        status = lx_account_registration_commit(
+            ctx->kernel->state->accounts, &ctx->staged_accounts[i],
+            &committed);
+        if (status != LXP_OK) return LXP_FATAL_INVARIANT;
     }
     for (i = 0U; i < ctx->staged_count; ++i) {
         lxp_module_kv_change *change = &ctx->staged[i];
@@ -246,6 +359,7 @@ lxp_result lxp_module_ctx_commit(lxp_module_ctx *ctx)
     }
     ctx->staged_blob_count = 0U;
     ctx->staged_count = 0U;
+    ctx->staged_account_count = 0U;
     ctx->transfer_snapshot_count = 0U;
     ctx->transfer_applied = false;
     ctx->commit_prepared = false;
@@ -262,6 +376,9 @@ lxp_result lxp_module_ctx_prepare_commit(lxp_module_ctx *ctx)
     size_t blob_additions = 0U;
     size_t blob_bytes = 0U;
     size_t i;
+    lx_account_registry *account_preview = NULL;
+    uint8_t account_root[32];
+    lxp_result status;
     if (ctx == NULL || !ctx->mutable || ctx->commit_prepared)
         return LXP_FATAL_INVARIANT;
     for (i = 0U; i < ctx->staged_count; ++i)
@@ -271,6 +388,16 @@ lxp_result lxp_module_ctx_prepare_commit(lxp_module_ctx *ctx)
                 ctx->kernel->module_kv_count) ++additions;
     if (additions > LXP_KERNEL_MAX_MODULE_KV - ctx->kernel->module_kv_count)
         return LXP_ERR_ARENA_EXHAUSTED;
+    if (ctx->staged_account_count != 0U) {
+        account_preview = (lx_account_registry *)malloc(
+            sizeof(*account_preview));
+        if (account_preview == NULL) return LXP_ERR_ARENA_EXHAUSTED;
+        status = account_registry_preview(ctx, account_preview);
+        if (status == LXP_OK)
+            status = lx_account_registry_root(account_preview, account_root);
+        free(account_preview);
+        if (status != LXP_OK) return status;
+    }
     for (i = 0U; i < ctx->staged_blob_count; ++i)
         if (committed_blob_find(ctx, ctx->staged_blobs[i].key) ==
             ctx->kernel->blob_count) {
@@ -429,6 +556,7 @@ lxp_result lxp_module_ctx_preview_state_root(
 {
     lxp_kernel *preview_kernel;
     lxp_state_store *preview_state;
+    lx_account_registry *preview_accounts = NULL;
     lxp_result status;
     lxp_result destroy_status;
     if (ctx == NULL || journal == NULL || root == NULL ||
@@ -462,15 +590,26 @@ lxp_result lxp_module_ctx_preview_state_root(
     preview_state->idempotency_count = journal->store->idempotency_count;
     (void)memcpy(preview_state->idempotency, journal->store->idempotency,
                  sizeof(preview_state->idempotency));
-    preview_state->accounts = journal->store->accounts;
+    if (journal->store->accounts != NULL) {
+        preview_accounts = (lx_account_registry *)malloc(
+            sizeof(*preview_accounts));
+        if (preview_accounts == NULL)
+            status = LXP_ERR_ARENA_EXHAUSTED;
+        else status = account_registry_preview(ctx, preview_accounts);
+    } else if (ctx->staged_account_count != 0U) {
+        status = LXP_FATAL_INVARIANT;
+    }
+    preview_state->accounts = preview_accounts;
     preview_state->account_root_required =
         journal->store->account_root_required;
     *preview_kernel = *ctx->kernel;
     preview_kernel->state = preview_state;
-    status = preview_apply_journal(journal, preview_state);
+    if (status == LXP_OK)
+        status = preview_apply_journal(journal, preview_state);
     if (status == LXP_OK) status = preview_apply_module(ctx, preview_kernel);
     if (status == LXP_OK) status = lxp_state_root(preview_kernel, root);
     destroy_status = lxp_state_store_destroy(preview_state);
+    free(preview_accounts);
     free(preview_state);
     free(preview_kernel);
     if (status == LXP_OK && destroy_status != LXP_OK)
@@ -498,6 +637,7 @@ void lxp_module_ctx_rollback(lxp_module_ctx *ctx)
     restore_transfer_snapshots(ctx);
     ctx->commit_prepared = false;
     ctx->staged_count = 0U;
+    ctx->staged_account_count = 0U;
     for (i = 0U; i < ctx->staged_blob_count; ++i)
         free(ctx->staged_blobs[i].bytes);
     ctx->staged_blob_count = 0U;
