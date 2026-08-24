@@ -4,11 +4,11 @@ use layerx_programs_runtime::test_support::{
     OP_CALL, OP_END, OP_I32_CONST, TYPE_I32, TYPE_I64,
 };
 use layerx_programs_runtime::{
-    Abi, AbiError, AuthorizationContext, AuthorizedExecutionRequest, Capability, CapabilitySet,
-    CompositionContext, CompositionRules, ExecutionError, Executor, PrincipalId, ProgramCatalog,
-    ProgramId, ReceiptOracle, ReceiptView, ResponseRefusal, Storage, StorageNamespace,
-    ValidationRefusal, WasmEngine, WasmValue, ABI_MODULE, ABI_VERSION, CALL_ENTRY_EXPORT,
-    HOST_FUNCTIONS,
+    derive_program_account, Abi, AbiError, AuthorizationContext, AuthorizedExecutionRequest,
+    Capability, CapabilitySet, CompositionContext, CompositionRules, ExecutionError, Executor,
+    PrincipalId, ProgramCatalog, ProgramId, ReceiptOracle, ReceiptView, ResponseRefusal, Storage,
+    StorageNamespace, ValidationRefusal, WasmEngine, WasmValue, ABI_MODULE, ABI_VERSION,
+    CALL_ENTRY_EXPORT, HOST_FUNCTIONS,
 };
 
 const ABI_V1_GOLDEN: &str = include_str!("../vectors/abi-v1.hex");
@@ -998,6 +998,89 @@ fn capability_narrowing_rejects_missing_grants_and_limit_widening_without_effect
         Err(AbiError::CapabilityDenied)
     );
     assert!(abi.commit().effects.calls.is_empty());
+}
+
+#[test]
+fn program_spend_capability_binds_owner_seed_account_asset_and_destination() {
+    let (owner, _) = ids(16, 17);
+    let (other, _) = ids(18, 17);
+    let seed = b"vault/isolation";
+    let source_account = derive_program_account(owner, seed)
+        .unwrap_or_else(|error| panic!("source account: {error}"))
+        .bytes();
+    let grant = Capability::ProgramSpend {
+        owner_program: owner,
+        seed: seed.to_vec(),
+        source_account,
+        asset: [19; 32],
+        to: [20; 32],
+        maximum_amount: 50,
+    };
+    let parent = CapabilitySet::new([grant.clone()])
+        .unwrap_or_else(|error| panic!("program spend: {error}"));
+    assert!(matches!(
+        Abi::new(
+            ABI_VERSION,
+            other,
+            AuthorizationContext::new(
+                PrincipalId::new([17; 32]).unwrap_or_else(|error| panic!("principal: {error}")),
+                parent.clone(),
+            ),
+            Storage::new(),
+            &NoReceipts,
+        ),
+        Err(AbiError::InvalidCapability)
+    ));
+    let encoded = parent.canonical_encoding();
+    assert_eq!(encoded[2], 9);
+    assert_eq!(&encoded[3..35], &owner.bytes());
+    assert_eq!(
+        &encoded[35..37],
+        &u16::try_from(seed.len())
+            .unwrap_or_else(|error| panic!("seed length: {error}"))
+            .to_be_bytes()
+    );
+    assert_eq!(&encoded[37..37 + seed.len()], seed);
+    assert_eq!(&encoded[37 + seed.len()..69 + seed.len()], &source_account);
+
+    let mut wrong_account = source_account;
+    wrong_account[31] ^= 1;
+    assert_eq!(
+        CapabilitySet::new([Capability::ProgramSpend {
+            source_account: wrong_account,
+            ..grant.clone()
+        }]),
+        Err(AbiError::InvalidCapability)
+    );
+    for widened in [
+        Capability::ProgramSpend {
+            owner_program: other,
+            source_account: derive_program_account(other, seed)
+                .unwrap_or_else(|error| panic!("other account: {error}"))
+                .bytes(),
+            ..grant.clone()
+        },
+        Capability::ProgramSpend {
+            seed: b"vault/other".to_vec(),
+            source_account: derive_program_account(owner, b"vault/other")
+                .unwrap_or_else(|error| panic!("other seed account: {error}"))
+                .bytes(),
+            ..grant.clone()
+        },
+        Capability::ProgramSpend {
+            asset: [21; 32],
+            ..grant.clone()
+        },
+        Capability::ProgramSpend {
+            to: [22; 32],
+            ..grant.clone()
+        },
+    ] {
+        assert_eq!(
+            parent.narrow([widened]),
+            Err(AbiError::CapabilityEscalation)
+        );
+    }
 }
 
 #[test]

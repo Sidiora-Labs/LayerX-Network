@@ -1228,7 +1228,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Emit program account events through the kernel event stream under the module namespace, committed in the batch event root.
     - Run the protocol conformance suite proving no existing balance, receipt or state-root behaviour changed with program accounts registered.
     - _Requirements: 37.2, 28.1_
-  - [ ] 30.4 Add the program spending capability with downward-only narrowing
+  - [ ] 30.4 Add the program spending capability with downward-only narrowing — **Implemented - qualification pending**
     - Add a capability conveying a bounded spending grant over accounts the granting program itself derives, distinct from the existing transfer grant over the invoking principal's balance.
     - Narrow the new grant downward only across a program-to-program edge, refusing any widening of asset, destination or amount with the same typed escalation refusal the existing grants use.
     - Include the new grant in the canonical capability encoding with its own tag so an existing encoding stays valid and an unknown tag is refused rather than ignored.

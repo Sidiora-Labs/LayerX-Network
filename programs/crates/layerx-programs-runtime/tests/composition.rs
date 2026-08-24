@@ -3,13 +3,13 @@ use layerx_programs_runtime::test_support::{
     TYPE_I32,
 };
 use layerx_programs_runtime::{
-    AbiError, ActivityBudgetBinding, AuthorizationContext, AuthorizedExecutionRequest,
-    BudgetMeterRefusal, BudgetResourceKind, BudgetedAuthorizedExecutionRequest,
-    BudgetedV1ActivityOutcome, BudgetedV1FailureCause, Capability, CapabilitySet,
-    CompositionContext, CompositionRefusal, CompositionRules, DeclaredBudget, ExecutionError,
-    Executor, FeeSchedule, MeterRefusal, PrincipalId, ProgramCatalog, ProgramId, ReceiptOracle,
-    ReceiptView, ResourceBudget, ResourceKind, Storage, StorageNamespace, WasmEngine, ABI_MODULE,
-    CALL_ENTRY_EXPORT,
+    derive_program_account, AbiError, ActivityBudgetBinding, AuthorizationContext,
+    AuthorizedExecutionRequest, BudgetMeterRefusal, BudgetResourceKind,
+    BudgetedAuthorizedExecutionRequest, BudgetedV1ActivityOutcome, BudgetedV1FailureCause,
+    Capability, CapabilitySet, CompositionContext, CompositionRefusal, CompositionRules,
+    DeclaredBudget, ExecutionError, Executor, FeeSchedule, MeterRefusal, PrincipalId,
+    ProgramCatalog, ProgramId, ReceiptOracle, ReceiptView, ResourceBudget, ResourceKind, Storage,
+    StorageNamespace, WasmEngine, ABI_MODULE, CALL_ENTRY_EXPORT,
 };
 
 const ASSET: [u8; 32] = [0xa5; 32];
@@ -1147,6 +1147,50 @@ fn small_rules_isolate_each_graph_limit_precedence() {
     );
     assert_eq!(failure.call_graph().edges().len(), 1);
     assert_eq!(storage, before);
+}
+
+#[test]
+fn inherited_program_spend_narrows_across_depth_fanout_and_repeated_visits() {
+    let owner = id(110);
+    let child = id(111);
+    let seed = b"escrow/composition";
+    let source_account = derive_program_account(owner, seed)
+        .unwrap_or_else(|error| panic!("derived account: {error}"))
+        .bytes();
+    let grant = |asset, to, maximum_amount| Capability::ProgramSpend {
+        owner_program: owner,
+        seed: seed.to_vec(),
+        source_account,
+        asset,
+        to,
+        maximum_amount,
+    };
+    let asset = [112; 32];
+    let to = [113; 32];
+    let parent = CapabilitySet::new([Capability::Call { program: child }, grant(asset, to, 80)])
+        .unwrap_or_else(|error| panic!("parent: {error}"));
+
+    let mut level = parent
+        .narrow([grant(asset, to, 64)])
+        .unwrap_or_else(|error| panic!("level one: {error}"));
+    for amount in (56..=63).rev() {
+        level = level
+            .narrow([grant(asset, to, amount)])
+            .unwrap_or_else(|error| panic!("depth narrowing: {error}"));
+    }
+    for amount in 1..=16 {
+        assert!(parent.narrow([grant(asset, to, amount)]).is_ok());
+    }
+    for widened in [
+        grant(asset, to, 81),
+        grant([114; 32], to, 1),
+        grant(asset, [115; 32], 1),
+    ] {
+        assert_eq!(
+            parent.narrow([widened]),
+            Err(AbiError::CapabilityEscalation)
+        );
+    }
 }
 
 #[test]

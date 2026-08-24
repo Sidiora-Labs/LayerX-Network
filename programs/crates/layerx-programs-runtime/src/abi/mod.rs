@@ -5,7 +5,7 @@
 use core::fmt::{self, Display};
 use std::collections::BTreeMap;
 
-mod capability;
+pub(crate) mod capability;
 pub mod codec;
 pub mod response;
 mod storage_ops;
@@ -425,6 +425,12 @@ impl Abi {
         if version != ABI_VERSION {
             return Err(AbiError::WrongVersion);
         }
+        if !authorization
+            .capabilities()
+            .root_program_spend_is_owned_by(program)
+        {
+            return Err(AbiError::InvalidCapability);
+        }
         let principal_namespace = StorageNamespace::principal(program, authorization.principal());
         let shared_namespace = StorageNamespace::shared(program);
         let mut verified = BTreeMap::new();
@@ -587,7 +593,10 @@ impl Abi {
         if input.len() > MAX_CALL_INPUT_BYTES {
             return Err(AbiError::CallBounds);
         }
-        let capabilities = self.authorization.capabilities().narrow(requested)?;
+        let capabilities = self
+            .authorization
+            .capabilities()
+            .narrow_for_program_edge(self.program, requested)?;
         self.effects.calls.push(ProgramCall {
             caller: self.program,
             callee,
