@@ -283,9 +283,19 @@ lxp_result lxp_codec_read_tag(lxp_codec_reader *reader, uint8_t maximum_tag,
 lxp_result lxp_codec_write_struct_header(lxp_codec_writer *writer,
                                          uint16_t structure_tag)
 {
+    return lxp_codec_write_struct_header_version(
+        writer, structure_tag, (uint16_t)LXP_PROTOCOL_VERSION_LEGACY);
+}
+
+lxp_result lxp_codec_write_struct_header_version(lxp_codec_writer *writer,
+                                                 uint16_t structure_tag,
+                                                 uint16_t protocol_version)
+{
     lxp_result result;
-    if (structure_tag == 0U) return LXP_ERR_INVALID_TAG;
-    result = lxp_codec_write_u16(writer, (uint16_t)LXP_PROTOCOL_VERSION);
+    if (structure_tag == 0U ||
+        !lxp_protocol_version_supported(protocol_version))
+        return LXP_ERR_INVALID_TAG;
+    result = lxp_codec_write_u16(writer, protocol_version);
     if (result != LXP_OK) return result;
     return lxp_codec_write_u16(writer, structure_tag);
 }
@@ -293,16 +303,26 @@ lxp_result lxp_codec_write_struct_header(lxp_codec_writer *writer,
 lxp_result lxp_codec_read_struct_header(lxp_codec_reader *reader,
                                         uint16_t expected_structure_tag)
 {
+    uint16_t ignored;
+    return lxp_codec_read_struct_header_version(
+        reader, expected_structure_tag, &ignored);
+}
+
+lxp_result lxp_codec_read_struct_header_version(
+    lxp_codec_reader *reader, uint16_t expected_structure_tag,
+    uint16_t *protocol_version)
+{
     uint16_t version;
     uint16_t structure_tag;
     lxp_result result = lxp_codec_read_u16(reader, &version);
     if (result != LXP_OK) return result;
     result = lxp_codec_read_u16(reader, &structure_tag);
     if (result != LXP_OK) return result;
-    if (!lxp_protocol_version_supported(version) ||
+    if (protocol_version == NULL || !lxp_protocol_version_supported(version) ||
         structure_tag != expected_structure_tag || expected_structure_tag == 0U) {
         return LXP_ERR_VERSION_UNSUPPORTED;
     }
+    *protocol_version = version;
     return LXP_OK;
 }
 

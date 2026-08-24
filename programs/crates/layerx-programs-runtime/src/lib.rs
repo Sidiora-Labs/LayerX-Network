@@ -98,8 +98,10 @@ pub use meter::{
     ResourceBudget, ResourceKind,
 };
 pub use occupancy::{
-    OccupancyCharge, OccupancyError, OccupancyLedger, OccupancyResponsibility, OccupancySettlement,
-    OccupancyUsage, PreparedOccupancySettlement,
+    OccupancyCharge, OccupancyDisposition, OccupancyError, OccupancyLedger,
+    OccupancyResponsibility, OccupancySettlement, OccupancyUsage,
+    PreparedOccupancySettlement, MAX_OCCUPANCY_EVIDENCE_BYTES,
+    MAX_OCCUPANCY_LEDGER_BYTES, MAX_OCCUPANCY_POSITIONS,
 };
 pub use qualification::{
     programs_differential_gate, programs_fuzz_observation, programs_fuzz_targets,

@@ -1,6 +1,11 @@
 //! Scalar-only C ingress for one real Programs CALL activity.
 
 use crate::storage::StorageError;
+use crate::occupancy::{
+    OccupancyAuthority, OccupancyLedger, OccupancyUsage,
+    MAX_OCCUPANCY_EVIDENCE_BYTES, MAX_OCCUPANCY_LEDGER_BYTES,
+    MAX_OCCUPANCY_POSITIONS,
+};
 use crate::validate::AbiRevision;
 use crate::{
     AbiError, ActivityBudgetBinding, AtomicTransferSet, AuthorizationContext,
@@ -12,11 +17,13 @@ use crate::{
     ReceiptOracle, ReceiptView, ResourceKind, ResponseRefusal, SettlementFailure, Storage,
     StorageNamespace, TransferLawError, WasmEngine,
 };
+use std::collections::{BTreeMap, BTreeSet};
 
 const OK: i32 = 0;
 const NON_CANONICAL: i32 = -3;
 const LENGTH_LIMIT: i32 = -5;
 const MODULE_DISABLED: i32 = -103;
+const INSUFFICIENT_BALANCE: i32 = -400;
 const FATAL_INVARIANT: i32 = -1001;
 const ABI_VERSION: u16 = 1;
 const WASM: u16 = 1;
@@ -96,6 +103,7 @@ const fn storage_tag(value: StorageError) -> u8 {
         StorageError::InvalidScanLimits => 8,
         StorageError::ScanCeilingExceeded => 9,
         StorageError::SizeOverflow => 10,
+        StorageError::FrozenNamespace => 11,
     }
 }
 fn abi_payload(value: &AbiError) -> Vec<u8> {
@@ -440,6 +448,63 @@ unsafe extern "C" {
         selector: u16,
     ) -> i32;
     fn layerx_programs_call_storage_final_authorize(token: u64) -> i32;
+    fn layerx_programs_occupancy_ledger_length(token: u64) -> i32;
+    fn layerx_programs_occupancy_ledger_byte(token: u64, offset: u32) -> i32;
+    fn layerx_programs_occupancy_activation_count(token: u64) -> i32;
+    fn layerx_programs_occupancy_activation_record_length(token: u64, index: u16) -> i32;
+    fn layerx_programs_occupancy_activation_record_byte(
+        token: u64,
+        index: u16,
+        offset: u16,
+    ) -> i32;
+    fn layerx_programs_occupancy_output_begin(
+        token: u64,
+        batch: u64,
+        parameter: u32,
+        schedule: u32,
+        ledger_length: u32,
+        evidence_length: u32,
+        payer_count: u16,
+        units_hi: u64,
+        units_lo: u64,
+        fee_hi: u64,
+        fee_lo: u64,
+        paid_hi: u64,
+        paid_lo: u64,
+        arrears_hi: u64,
+        arrears_lo: u64,
+    ) -> i32;
+    fn layerx_programs_occupancy_output_payer(
+        token: u64,
+        index: u16,
+        p0: u64,
+        p1: u64,
+        p2: u64,
+        p3: u64,
+        due_hi: u64,
+        due_lo: u64,
+        paid_hi: u64,
+        paid_lo: u64,
+        arrears_hi: u64,
+        arrears_lo: u64,
+        frozen: u8,
+    ) -> i32;
+    fn layerx_programs_occupancy_payer_available(
+        token: u64,
+        p0: u64,
+        p1: u64,
+        p2: u64,
+        p3: u64,
+        fee_hi: u64,
+        fee_lo: u64,
+    ) -> i32;
+    fn layerx_programs_occupancy_output_byte(
+        token: u64,
+        section: u16,
+        offset: u32,
+        byte: u8,
+    ) -> i32;
+    fn layerx_programs_occupancy_output_apply(token: u64) -> i32;
     fn layerx_programs_call_terminal_begin(
         token: u64,
         kind: u8,
@@ -912,7 +977,7 @@ fn terminal(
 
 fn terminal_record_failure(
     token: u64,
-    schedule: u16,
+    schedule: u32,
     record: &AuthorizedExecutionRecord,
     detail: &[u8],
 ) -> Result<i32, i32> {
@@ -922,7 +987,7 @@ fn terminal_record_failure(
         PROGRAM_REFUSED,
         record.execution.runtime_version,
         record.execution.abi_version,
-        u32::from(schedule),
+        schedule,
         record.execution.usage,
         [0; 32],
         &record.call_graph.canonical_evidence(),
@@ -933,7 +998,7 @@ fn terminal_record_failure(
 
 fn terminal_settlement_failure(
     token: u64,
-    schedule: u16,
+    schedule: u32,
     failure: SettlementFailure,
 ) -> Result<i32, i32> {
     let detail = settlement_detail(failure.error());
@@ -943,7 +1008,7 @@ fn terminal_settlement_failure(
         PROGRAM_REFUSED,
         failure.execution().runtime_version,
         failure.execution().abi_version,
-        u32::from(schedule),
+        schedule,
         failure.execution().usage,
         [0; 32],
         &failure.call_graph().canonical_evidence(),
@@ -952,10 +1017,305 @@ fn terminal_settlement_failure(
     )
 }
 
+fn split_u128(value: u128) -> (u64, u64) {
+    let bytes = value.to_be_bytes();
+    (
+        u64::from_be_bytes(bytes[..8].try_into().unwrap_or([0; 8])),
+        u64::from_be_bytes(bytes[8..].try_into().unwrap_or([0; 8])),
+    )
+}
+
+fn occupancy_ledger(token: u64, activation_batch: u64) -> Result<OccupancyLedger, i32> {
+    let length = c_count(unsafe { layerx_programs_occupancy_ledger_length(token) })?;
+    if length == 0 {
+        return Ok(OccupancyLedger::activated_after(
+            activation_batch.checked_sub(1).ok_or(NON_CANONICAL)?,
+        ));
+    }
+    let length = usize::try_from(length).map_err(|_| LENGTH_LIMIT)?;
+    if length > MAX_OCCUPANCY_LEDGER_BYTES {
+        return Err(LENGTH_LIMIT);
+    }
+    let encoded = scalar_bytes(
+        length,
+        |offset| unsafe { layerx_programs_occupancy_ledger_byte(token, offset) },
+    )?;
+    OccupancyLedger::canonical_decode(&encoded).map_err(|_| NON_CANONICAL)
+}
+
+fn import_occupancy_activation_positions(
+    token: u64,
+    ledger: &mut OccupancyLedger,
+) -> Result<(), i32> {
+    let count = c_count(unsafe { layerx_programs_occupancy_activation_count(token) })?;
+    let count = usize::try_from(count).map_err(|_| LENGTH_LIMIT)?;
+    if count > MAX_OCCUPANCY_POSITIONS {
+        return Err(LENGTH_LIMIT);
+    }
+    let mut previous = None;
+    for index in 0..count {
+        let index = u16::try_from(index).map_err(|_| LENGTH_LIMIT)?;
+        let length = c_count(unsafe {
+            layerx_programs_occupancy_activation_record_length(token, index)
+        })?;
+        let length = usize::try_from(length).map_err(|_| LENGTH_LIMIT)?;
+        if !(74..=106).contains(&length) {
+            return Err(NON_CANONICAL);
+        }
+        let record = scalar_bytes(length, |offset| {
+            u16::try_from(offset).map_or(LENGTH_LIMIT, |offset| unsafe {
+                layerx_programs_occupancy_activation_record_byte(token, index, offset)
+            })
+        })?;
+        let namespace_length = usize::from(record[0]);
+        if (namespace_length != 33 && namespace_length != 65) ||
+            length != 1 + namespace_length + 32 + 8
+        {
+            return Err(NON_CANONICAL);
+        }
+        let program = ProgramId::new(record[1..33].try_into().map_err(|_| NON_CANONICAL)?)
+            .map_err(|_| NON_CANONICAL)?;
+        let namespace = match (record[33], namespace_length) {
+            (1, 33) => StorageNamespace::shared(program),
+            (0, 65) => StorageNamespace::principal(
+                program,
+                PrincipalId::new(record[34..66].try_into().map_err(|_| NON_CANONICAL)?)
+                    .map_err(|_| NON_CANONICAL)?,
+            ),
+            _ => return Err(NON_CANONICAL),
+        };
+        if previous.is_some_and(|previous| namespace <= previous) {
+            return Err(NON_CANONICAL);
+        }
+        previous = Some(namespace);
+        let payer_offset = 1 + namespace_length;
+        let payer = PrincipalId::new(
+            record[payer_offset..payer_offset + 32]
+                .try_into()
+                .map_err(|_| NON_CANONICAL)?,
+        )
+        .map_err(|_| NON_CANONICAL)?;
+        let bytes = u64::from_be_bytes(
+            record[payer_offset + 32..]
+                .try_into()
+                .map_err(|_| NON_CANONICAL)?,
+        );
+        ledger
+            .import_activation_position(namespace, payer, bytes)
+            .map_err(|_| NON_CANONICAL)?;
+    }
+    Ok(())
+}
+
+fn publish_occupancy(
+    token: u64,
+    parameter_version: u32,
+    settlement: &crate::OccupancySettlement,
+    ledger: &OccupancyLedger,
+) -> Result<(), i32> {
+    let payer_dispositions = settlement.payer_dispositions().map_err(|_| NON_CANONICAL)?;
+    let ledger = ledger.canonical_state();
+    let evidence = settlement.canonical_evidence();
+    if ledger.len() > MAX_OCCUPANCY_LEDGER_BYTES || evidence.len() > MAX_OCCUPANCY_EVIDENCE_BYTES {
+        return Err(LENGTH_LIMIT);
+    }
+    let (units_hi, units_lo) = split_u128(settlement.usage().byte_batches);
+    let (fee_hi, fee_lo) = split_u128(settlement.usage().fee_units);
+    let (paid_hi, paid_lo) = split_u128(settlement.usage().paid_fee_units);
+    let (arrears_hi, arrears_lo) = split_u128(settlement.usage().arrears_fee_units);
+    c_ok(unsafe {
+        layerx_programs_occupancy_output_begin(
+            token,
+            settlement.batch(),
+            parameter_version,
+            settlement.fee_schedule().version(),
+            u32::try_from(ledger.len()).map_err(|_| LENGTH_LIMIT)?,
+            u32::try_from(evidence.len()).map_err(|_| LENGTH_LIMIT)?,
+            u16::try_from(payer_dispositions.len()).map_err(|_| LENGTH_LIMIT)?,
+            units_hi,
+            units_lo,
+            fee_hi,
+            fee_lo,
+            paid_hi,
+            paid_lo,
+            arrears_hi,
+            arrears_lo,
+        )
+    })?;
+    for (index, (payer, (due, paid, arrears, frozen))) in payer_dispositions.into_iter().enumerate() {
+        let principal = words(payer.bytes());
+        let (due_hi, due_lo) = split_u128(due);
+        let (paid_hi, paid_lo) = split_u128(paid);
+        let (arrears_hi, arrears_lo) = split_u128(arrears);
+        c_ok(unsafe {
+            layerx_programs_occupancy_output_payer(
+                token,
+                u16::try_from(index).map_err(|_| LENGTH_LIMIT)?,
+                principal[0],
+                principal[1],
+                principal[2],
+                principal[3],
+                due_hi,
+                due_lo,
+                paid_hi,
+                paid_lo,
+                arrears_hi,
+                arrears_lo,
+                u8::from(frozen),
+            )
+        })?;
+    }
+    for (section, bytes) in [(0_u16, ledger.as_slice()), (1_u16, evidence.as_slice())] {
+        for (offset, byte) in bytes.iter().copied().enumerate() {
+            c_ok(unsafe {
+                layerx_programs_occupancy_output_byte(
+                    token,
+                    section,
+                    u32::try_from(offset).map_err(|_| LENGTH_LIMIT)?,
+                    byte,
+                )
+            })?;
+        }
+    }
+    c_ok(unsafe { layerx_programs_occupancy_output_apply(token) })?;
+    Ok(())
+}
+
+fn unavailable_occupancy_payers(
+    token: u64,
+    settlement: &crate::OccupancySettlement,
+) -> Result<BTreeSet<PrincipalId>, i32> {
+    let mut unavailable = BTreeSet::new();
+    for (payer, (_, paid, _, _)) in settlement.payer_dispositions().map_err(|_| NON_CANONICAL)? {
+        if paid == 0 { continue; }
+        let principal = words(payer.bytes());
+        let (fee_hi, fee_lo) = split_u128(paid);
+        let status = unsafe {
+            layerx_programs_occupancy_payer_available(
+                token, principal[0], principal[1], principal[2], principal[3],
+                fee_hi, fee_lo,
+            )
+        };
+        if status == INSUFFICIENT_BALANCE {
+            unavailable.insert(payer);
+        } else {
+            c_ok(status)?;
+        }
+    }
+    Ok(unavailable)
+}
+
+fn settle_call_occupancy(
+    token: u64,
+    batch: u64,
+    authority: OccupancyAuthority,
+    schedule: crate::FeeSchedule,
+    parameter_version: u32,
+    initial_sizes: &BTreeMap<StorageNamespace, u64>,
+    program_owners: &BTreeMap<ProgramId, PrincipalId>,
+    storage: &Storage,
+    ledger: &mut OccupancyLedger,
+) -> Result<(OccupancyUsage, Vec<u8>), i32> {
+    let sizes: BTreeMap<_, _> = storage
+        .namespace_sizes()
+        .map_err(|_| NON_CANONICAL)?
+        .into_iter()
+        .collect();
+    let changed: BTreeSet<_> = initial_sizes
+        .keys()
+        .chain(sizes.keys())
+        .copied()
+        .filter(|namespace| {
+            initial_sizes.get(namespace) != sizes.get(namespace) ||
+                (ledger.requires_migration(*namespace) &&
+                    storage.was_accessed(*namespace))
+        })
+        .collect();
+    let mut responsibilities = Vec::new();
+    let mut eligible = Vec::new();
+    for namespace in changed {
+        let final_bytes = sizes.get(&namespace).copied().unwrap_or(0);
+        if final_bytes == 0 { continue; }
+        if ledger.requires_migration(namespace) &&
+            namespace.program() != authority.root_program() {
+            continue;
+        }
+        let authorized_payer = match namespace.principal_scope() {
+            Some(principal) => principal,
+            None => *program_owners.get(&namespace.program()).ok_or(NON_CANONICAL)?,
+        };
+        if authorized_payer != authority.payer() { continue; }
+        match ledger.responsibility_limits(namespace) {
+            Some((payer, _)) if payer != authority.payer() &&
+                !ledger.requires_migration(namespace) => continue,
+            Some((_, maximum_bytes)) if final_bytes <= maximum_bytes &&
+                !ledger.requires_migration(namespace) => continue,
+            _ => eligible.push((namespace, final_bytes)),
+        }
+    }
+    let price = schedule.occupancy_byte_batch_price();
+    if price == 0 { return Err(NON_CANONICAL); }
+    let minimum_total = eligible.iter().try_fold(0u128, |total, (_, bytes)| {
+        total.checked_add(u128::from(*bytes).checked_mul(u128::from(price))?)
+    }).ok_or(-500)?;
+    if minimum_total > authority.fee_ceiling() { return Err(NON_CANONICAL); }
+    let share_count = u128::try_from(eligible.len()).map_err(|_| LENGTH_LIMIT)?;
+    let surplus = authority.fee_ceiling().checked_sub(minimum_total).ok_or(-500)?;
+    let equal_share = if share_count == 0 { 0 } else { surplus / share_count };
+    let mut remainder = if share_count == 0 { 0 } else { surplus % share_count };
+    for (namespace, bytes) in eligible {
+        let minimum = u128::from(bytes).checked_mul(u128::from(price)).ok_or(-500)?;
+        let charge_ceiling = minimum.checked_add(equal_share)
+            .and_then(|value| value.checked_add(u128::from(remainder != 0)))
+            .ok_or(-500)?;
+        if remainder != 0 { remainder = remainder.checked_sub(1).ok_or(-500)?; }
+        let maximum_bytes = u64::try_from(charge_ceiling / u128::from(price))
+            .map_err(|_| LENGTH_LIMIT)?
+            .max(bytes);
+        let responsibility = authority.authorize(namespace, maximum_bytes, charge_ceiling)
+            .map_err(|_| NON_CANONICAL)?;
+        responsibilities.push(responsibility);
+    }
+    let prepared = ledger
+        .prepare_batch(batch, storage, responsibilities, schedule)
+        .map_err(|_| NON_CANONICAL)?;
+    let settlement = prepared.settlement().clone();
+    let committed = ledger
+        .commit_after_debits(prepared, storage)
+        .map_err(|_| NON_CANONICAL)?;
+    if committed != settlement {
+        return Err(FATAL_INVARIANT);
+    }
+    let evidence = settlement.canonical_evidence();
+    publish_occupancy(token, parameter_version, &settlement, &ledger)?;
+    Ok((settlement.usage(), evidence))
+}
+
+fn execution_with_occupancy_evidence(
+    execution: &[u8],
+    occupancy: &[u8],
+) -> Result<Vec<u8>, i32> {
+    let mut evidence = b"LXP/program-execution-with-occupancy/v1\0".to_vec();
+    evidence.extend_from_slice(
+        &u32::try_from(execution.len())
+            .map_err(|_| LENGTH_LIMIT)?
+            .to_be_bytes(),
+    );
+    evidence.extend_from_slice(execution);
+    evidence.extend_from_slice(
+        &u32::try_from(occupancy.len())
+            .map_err(|_| LENGTH_LIMIT)?
+            .to_be_bytes(),
+    );
+    evidence.extend_from_slice(occupancy);
+    Ok(evidence)
+}
+
 #[no_mangle]
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 pub extern "C" fn layerx_programs_call_begin(
     token: u64,
+    occupancy_token: u64,
     p0: u64,
     p1: u64,
     p2: u64,
@@ -976,8 +1336,17 @@ pub extern "C" fn layerx_programs_call_begin(
     signed_fee_lo: u64,
     available_fee_hi: u64,
     available_fee_lo: u64,
-    fee_schedule_version: u16,
+    fee_schedule_version: u32,
     parameter_version: u32,
+    fee_cpu: u64,
+    fee_memory_byte: u64,
+    fee_storage_read_byte: u64,
+    fee_storage_write_byte: u64,
+    fee_output_value: u64,
+    fee_output_byte: u64,
+    fee_occupancy_byte_batch: u64,
+    batch_number: u64,
+    protocol_version: u16,
     abi_version: u16,
     entrypoint_length: u16,
     wasm_length: u32,
@@ -994,8 +1363,12 @@ pub extern "C" fn layerx_programs_call_begin(
 ) -> i32 {
     let run = || -> Result<i32, i32> {
         if token == 0
+            || occupancy_token == 0
+            || batch_number == 0
+            || !matches!(protocol_version, 1 | 2)
             || parameter_version == 0
-            || fee_schedule_version != 1
+            || fee_schedule_version == 0
+            || (protocol_version == 2 && fee_schedule_version != parameter_version)
             || abi_version != ABI_VERSION
             || entrypoint_length == 0
             || entrypoint_length > 128
@@ -1023,12 +1396,22 @@ pub extern "C" fn layerx_programs_call_begin(
             u32::try_from(table_elements).map_err(|_| LENGTH_LIMIT)?,
         )
         .map_err(|_| NON_CANONICAL)?;
-        let executor = Executor::declared();
+        let fee_schedule = crate::FeeSchedule::new_complete(
+            fee_schedule_version,
+            fee_cpu,
+            fee_memory_byte,
+            fee_storage_read_byte,
+            fee_storage_write_byte,
+            fee_output_value,
+            fee_output_byte,
+            fee_occupancy_byte_batch,
+        );
+        let executor = Executor::new(crate::ResourceBudget::declared(), fee_schedule);
         let signed_fee = (u128::from(signed_fee_hi) << 64) | u128::from(signed_fee_lo);
         let available_fee = (u128::from(available_fee_hi) << 64) | u128::from(available_fee_lo);
         if crate::budget::maximum_fee_units(
             declared.resource_budget(),
-            crate::FeeSchedule::declared(),
+            fee_schedule,
         )
         .map_err(|_| NON_CANONICAL)?
             > signed_fee
@@ -1041,6 +1424,19 @@ pub extern "C" fn layerx_programs_call_begin(
                 crate::budget::PayerCoverage::new(payer, binding, available_fee),
             )
             .map_err(|_| NON_CANONICAL)?;
+        let occupancy_authority = if protocol_version == 2 {
+            Some(
+                OccupancyAuthority::from_admitted(
+                    &admitted,
+                    signed_fee,
+                    fee_schedule,
+                    program,
+                )
+                    .map_err(|_| NON_CANONICAL)?,
+            )
+        } else {
+            None
+        };
         let entrypoint = String::from_utf8(scalar_bytes(
             usize::from(entrypoint_length),
             |offset| unsafe { layerx_programs_call_activity_byte(token, ENTRYPOINT, offset) },
@@ -1066,10 +1462,13 @@ pub extern "C" fn layerx_programs_call_begin(
         let count = c_count(unsafe { layerx_programs_call_catalog_count(token) })?;
         let mut catalog = ProgramCatalog::new();
         let mut entries = Vec::with_capacity(usize::try_from(count).map_err(|_| LENGTH_LIMIT)?);
+        let mut program_owners = BTreeMap::new();
         let mut storage = Storage::new();
         for index in 0..count {
             let identity = catalog_identity(token, index, 0)?;
             let hash = catalog_identity(token, index, 1)?;
+            let owner = PrincipalId::new(catalog_identity(token, index, 2)?)
+                .map_err(|_| NON_CANONICAL)?;
             if hash == [0; 32] {
                 return Err(NON_CANONICAL);
             }
@@ -1087,12 +1486,44 @@ pub extern "C" fn layerx_programs_call_begin(
             if catalog.insert(entry_program, module).is_some() {
                 return Err(NON_CANONICAL);
             }
+            if program_owners.insert(entry_program, owner).is_some() {
+                return Err(NON_CANONICAL);
+            }
             import_catalog_storage(token, index, entry_program, payer, &mut storage)?;
             entries.push((index, entry_program));
         }
         if !catalog.contains(program) {
             return Err(MODULE_DISABLED);
         }
+        storage.clear_access_log();
+        let mut occupancy_ledger = if protocol_version == 2 {
+            let mut ledger = occupancy_ledger(occupancy_token, batch_number)?;
+            ledger
+                .import_activation_positions(&storage, &program_owners)
+                .map_err(|_| NON_CANONICAL)?;
+            Some(ledger)
+        } else {
+            None
+        };
+        if let Some(ledger) = occupancy_ledger.as_ref() {
+            storage.enforce_frozen_namespaces(
+                ledger.frozen_namespaces().filter(|namespace| {
+                    if !ledger.requires_migration(*namespace) ||
+                        namespace.program() != program {
+                        return true;
+                    }
+                    match namespace.principal_scope() {
+                        Some(principal) => principal != payer,
+                        None => program_owners.get(&program).copied() != Some(payer),
+                    }
+                }),
+            );
+        }
+        let initial_sizes: BTreeMap<_, _> = storage
+            .namespace_sizes()
+            .map_err(|_| NON_CANONICAL)?
+            .into_iter()
+            .collect();
         let receipts = CReceiptOracle { token };
         let request = crate::AuthorizedExecutionRequest {
             module: &root_module,
@@ -1121,6 +1552,34 @@ pub extern "C" fn layerx_programs_call_begin(
                     }
                 };
                 let record = assignment.record();
+                let (occupancy, occupancy_evidence) =
+                    if let (Some(authority), Some(ledger)) =
+                        (occupancy_authority, occupancy_ledger.as_mut())
+                    {
+                        match settle_call_occupancy(
+                            occupancy_token,
+                            batch_number,
+                            authority,
+                            fee_schedule,
+                            parameter_version,
+                            &initial_sizes,
+                            &program_owners,
+                            &final_storage,
+                            ledger,
+                        ) {
+                            Ok(usage) => usage,
+                            Err(status) => {
+                                return terminal_record_failure(
+                                    token,
+                                    fee_schedule_version,
+                                    record,
+                                    &callback_detail(5, status),
+                                )
+                            }
+                        }
+                    } else {
+                        (OccupancyUsage::default(), Vec::new())
+                    };
                 if let Err(status) =
                     c_ok(unsafe { layerx_programs_call_storage_final_authorize(token) })
                 {
@@ -1144,7 +1603,14 @@ pub extern "C" fn layerx_programs_call_begin(
                     }
                 }
                 let graph = record.call_graph.canonical_evidence();
-                let detail = record.execution.canonical_evidence();
+                let detail = if protocol_version == 2 {
+                    execution_with_occupancy_evidence(
+                        &record.execution.canonical_evidence(),
+                        &occupancy_evidence,
+                    )?
+                } else {
+                    record.execution.canonical_evidence()
+                };
                 let events = match record.effects.canonical_program_event_envelope() {
                     Ok(events) => events,
                     Err(_) => {
@@ -1170,8 +1636,12 @@ pub extern "C" fn layerx_programs_call_begin(
                     OK,
                     record.execution.runtime_version,
                     record.execution.abi_version,
-                    u32::from(fee_schedule_version),
-                    record.execution.usage,
+                    fee_schedule_version,
+                    MeteredUsage {
+                        occupancy_byte_batches: occupancy.byte_batches,
+                        occupancy_fee_units: occupancy.fee_units,
+                        ..record.execution.usage
+                    },
                     assignment
                         .settlement()
                         .map_or([0; 32], |settlement| settlement.transfer_set_root()),
@@ -1188,7 +1658,7 @@ pub extern "C" fn layerx_programs_call_begin(
                     PROGRAM_REFUSED,
                     crate::RUNTIME_VERSION,
                     crate::ABI_VERSION,
-                    u32::from(fee_schedule_version),
+                    fee_schedule_version,
                     failure.usage(),
                     [0; 32],
                     &failure.call_graph().canonical_evidence(),
@@ -1204,7 +1674,7 @@ pub extern "C" fn layerx_programs_call_begin(
                     GAS_EXHAUSTED,
                     crate::RUNTIME_VERSION,
                     crate::ABI_VERSION,
-                    u32::from(fee_schedule_version),
+                    fee_schedule_version,
                     resource.usage(),
                     [0; 32],
                     &resource.call_graph().canonical_evidence(),
@@ -1213,6 +1683,58 @@ pub extern "C" fn layerx_programs_call_begin(
                 )
             }
         }
+    };
+    match run() {
+        Ok(status) | Err(status) => status,
+    }
+}
+
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub extern "C" fn layerx_programs_occupancy_finalize_rust(
+    token: u64,
+    batch_number: u64,
+    parameter_version: u32,
+    schedule_version: u32,
+    fee_cpu: u64,
+    fee_memory_byte: u64,
+    fee_storage_read_byte: u64,
+    fee_storage_write_byte: u64,
+    fee_output_value: u64,
+    fee_output_byte: u64,
+    fee_occupancy_byte_batch: u64,
+) -> i32 {
+    let run = || -> Result<i32, i32> {
+        if token == 0 || batch_number == 0 || parameter_version == 0 ||
+            schedule_version != parameter_version {
+            return Err(NON_CANONICAL);
+        }
+        let schedule = crate::FeeSchedule::new_complete(
+            schedule_version,
+            fee_cpu,
+            fee_memory_byte,
+            fee_storage_read_byte,
+            fee_storage_write_byte,
+            fee_output_value,
+            fee_output_byte,
+            fee_occupancy_byte_batch,
+        );
+        let mut ledger = occupancy_ledger(token, batch_number)?;
+        import_occupancy_activation_positions(token, &mut ledger)?;
+        let mut prepared = ledger
+            .prepare_unchanged_batch(batch_number, schedule)
+            .map_err(|_| NON_CANONICAL)?;
+        let unavailable = unavailable_occupancy_payers(token, prepared.settlement())?;
+        prepared.defer_unpaid(&unavailable).map_err(|_| NON_CANONICAL)?;
+        let settlement = prepared.settlement().clone();
+        let committed = ledger
+            .commit_unchanged_after_debits(prepared)
+            .map_err(|_| NON_CANONICAL)?;
+        if committed != settlement {
+            return Err(FATAL_INVARIANT);
+        }
+        publish_occupancy(token, parameter_version, &settlement, &ledger)?;
+        Ok(OK)
     };
     match run() {
         Ok(status) | Err(status) => status,

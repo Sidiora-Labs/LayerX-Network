@@ -2993,7 +2993,7 @@ reqs = ["36.4"]
 
 [task.29.5]
 title = "Charge storage occupancy over time as its own resource class"
-status = "pending"
+status = "implemented"
 wave = 15
 requires = ["29.1"]
 work_kind = "implementation"

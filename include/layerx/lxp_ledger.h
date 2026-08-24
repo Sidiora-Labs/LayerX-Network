@@ -85,7 +85,8 @@ enum {
     LXP_REASON_LIQUIDATION_FEE = 19,
     LXP_REASON_INSURANCE = 20,
     LXP_REASON_ADL = 21,
-    LXP_REASON_PROTOCOL_FEE = 22
+    LXP_REASON_PROTOCOL_FEE = 22,
+    LXP_REASON_STORAGE_OCCUPANCY = 23
 };
 
 typedef enum lxp_authorization_kind {
@@ -94,7 +95,8 @@ typedef enum lxp_authorization_kind {
     LXP_AUTH_DELEGATED_CAPABILITY,
     LXP_AUTH_BUDGET_ALLOWANCE,
     LXP_AUTH_ESCROW,
-    LXP_AUTH_PROTOCOL_MODULE
+    LXP_AUTH_PROTOCOL_MODULE,
+    LXP_AUTH_OCCUPANCY_RESPONSIBILITY
 } lxp_authorization_kind;
 
 typedef enum lxp_condition_kind {
@@ -233,6 +235,8 @@ lxp_result lx_account_kind_of(const uint8_t *name, size_t name_length,
 lxp_result lx_account_id_from_string(const uint8_t *name, size_t name_length,
                                      uint8_t account_id[LX_ACCOUNT_ID_BYTES]);
 lxp_result lx_account_registry_init(lx_account_registry *registry);
+lxp_result lx_account_registry_root(const lx_account_registry *registry,
+                                    uint8_t root[32]);
 lxp_result lx_account_lookup(lx_account_registry *registry,
                              const uint8_t *name, size_t name_length,
                              const uint8_t presented_id[LX_ACCOUNT_ID_BYTES],

@@ -32,8 +32,8 @@ lxp_result lxp_batch_header_encode(const lxp_batch_header *header,
     if (status == LXP_OK) status = (expression); \
     if (status != LXP_OK) return status; \
 } while (0)
-    status = lxp_codec_write_struct_header(&writer,
-                                           LXP_BATCH_HEADER_STRUCTURE_TAG);
+    status = lxp_codec_write_struct_header_version(
+        &writer, LXP_BATCH_HEADER_STRUCTURE_TAG, header->protocol_version);
     if (status != LXP_OK) return status;
     status = lxp_codec_write_u8(&writer, LXP_BATCH_HEADER_FIELD_COUNT);
     if (status != LXP_OK) return status;
@@ -86,6 +86,7 @@ lxp_result lxp_batch_header_decode(const uint8_t *bytes, size_t length,
 {
     lxp_codec_reader reader;
     uint8_t count;
+    uint16_t envelope_version;
     lxp_result status;
     if (header == NULL || (bytes == NULL && length != 0U))
         return LXP_ERR_NON_CANONICAL;
@@ -94,8 +95,8 @@ lxp_result lxp_batch_header_decode(const uint8_t *bytes, size_t length,
     (void)memset(header, 0, sizeof(*header));
     status = lxp_codec_reader_init(&reader, bytes, length);
     if (status != LXP_OK) return status;
-    status = lxp_codec_read_struct_header(&reader,
-                                          LXP_BATCH_HEADER_STRUCTURE_TAG);
+    status = lxp_codec_read_struct_header_version(
+        &reader, LXP_BATCH_HEADER_STRUCTURE_TAG, &envelope_version);
     if (status != LXP_OK) return status;
     status = lxp_codec_read_u8(&reader, &count);
     if (status != LXP_OK) return status;
@@ -106,6 +107,8 @@ lxp_result lxp_batch_header_decode(const uint8_t *bytes, size_t length,
     if (status != LXP_OK) return status; \
 } while (0)
     READ(1U, lxp_codec_read_u16(&reader, &header->protocol_version));
+    if (header->protocol_version != envelope_version)
+        return LXP_ERR_VERSION_UNSUPPORTED;
     READ(2U, lxp_codec_read_u32(&reader, &header->network_id));
     READ(3U, lxp_codec_read_u64(&reader, &header->epoch));
     READ(4U, lxp_codec_read_u64(&reader, &header->batch_number));

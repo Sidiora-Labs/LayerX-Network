@@ -28,12 +28,16 @@ typedef struct lxp_idempotency_key_state {
 } lxp_idempotency_key_state;
 #define lxp_idempotency_key_state lxp_idempotency_key_state
 
+struct lx_account_registry;
+
 typedef struct lxp_state_store {
     lxp_state_cell cells[LXP_STATE_MAX_CELLS];
     size_t count;
     lxp_idempotency_key_state idempotency[LXP_STATE_MAX_IDEMPOTENCY];
     size_t idempotency_count;
     uint64_t next_sequence;
+    struct lx_account_registry *accounts;
+    bool account_root_required;
     pthread_t writer;
     pthread_mutex_t lock;
 } lxp_state_store;
@@ -44,6 +48,7 @@ typedef struct lxp_state_journal {
     size_t count;
     uint64_t global_sequence;
     bool open;
+    bool account_root_required_before;
     bool has_idempotency;
     lxp_idempotency_key_state staged_idempotency;
 } lxp_state_journal;
@@ -52,12 +57,17 @@ typedef struct lxp_state_journal {
 lxp_result lxp_state_store_init(lxp_state_store *store,
                                 uint64_t first_sequence);
 lxp_result lxp_state_store_destroy(lxp_state_store *store);
+lxp_result lxp_state_store_bind_accounts(
+    lxp_state_store *store, struct lx_account_registry *accounts);
+lxp_result lxp_state_store_require_account_root(lxp_state_store *store);
 lxp_result lxp_state_writer_assert_owner(const lxp_state_store *store);
 lxp_result lxp_state_journal_open(lxp_state_store *store,
                                   uint64_t global_sequence,
                                   lxp_state_journal *journal);
 lxp_result lxp_state_journal_set(lxp_state_journal *journal,
                                  const uint8_t key[32], lxp_u128 value);
+lxp_result lxp_state_journal_require_account_root(
+    lxp_state_journal *journal);
 lxp_result lxp_state_journal_commit(lxp_state_journal *journal);
 lxp_result lxp_state_journal_rollback(lxp_state_journal *journal);
 lxp_result lxp_state_store_get(lxp_state_store *store, const uint8_t key[32],

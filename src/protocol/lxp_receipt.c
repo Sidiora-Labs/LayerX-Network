@@ -9,7 +9,8 @@
 
 enum {
     LXP_RECEIPT_STRUCTURE_TAG = 0x5201,
-    LXP_PROGRAM_OUTCOME_TAG = 0x50524731
+    LXP_PROGRAM_OUTCOME_TAG_V1 = 0x50524731,
+    LXP_PROGRAM_OUTCOME_TAG_V2 = 0x50524732
 };
 
 static bool valid_program_terminal(uint8_t terminal)
@@ -34,6 +35,28 @@ static lxp_result program_outcome_validate(const lxp_program_outcome *outcome)
         return LXP_FATAL_INVARIANT;
     if (lxp_ct_is_zero(outcome->terminal_payload_root, 32U))
         return LXP_ERR_NON_CANONICAL;
+    if (outcome->encoding_version != 1U && outcome->encoding_version != 2U)
+        return LXP_ERR_VERSION_UNSUPPORTED;
+    if (outcome->encoding_version == 2U &&
+        outcome->terminal_kind == LXP_PROGRAM_TERMINAL_SUCCESS) {
+        if (lxp_ct_is_zero(outcome->occupancy_asset_id, 32U) ||
+            lxp_ct_is_zero(outcome->occupancy_evidence_digest, 32U))
+            return LXP_ERR_NON_CANONICAL;
+    } else if (outcome->encoding_version == 2U &&
+               (!lxp_u128_is_zero(outcome->occupancy_byte_batches) ||
+                !lxp_u128_is_zero(outcome->occupancy_fee_units) ||
+                !lxp_ct_is_zero(outcome->occupancy_asset_id, 32U) ||
+                !lxp_ct_is_zero(outcome->occupancy_evidence_digest, 32U) ||
+                !lxp_ct_is_zero(outcome->occupancy_transfer_root, 32U))) {
+        return LXP_FATAL_INVARIANT;
+    } else if (outcome->encoding_version == 1U &&
+               (!lxp_u128_is_zero(outcome->occupancy_byte_batches) ||
+                !lxp_u128_is_zero(outcome->occupancy_fee_units) ||
+                !lxp_ct_is_zero(outcome->occupancy_asset_id, 32U) ||
+                !lxp_ct_is_zero(outcome->occupancy_evidence_digest, 32U) ||
+                !lxp_ct_is_zero(outcome->occupancy_transfer_root, 32U))) {
+        return LXP_ERR_VERSION_UNSUPPORTED;
+    }
     if (outcome->terminal_kind != LXP_PROGRAM_TERMINAL_SUCCESS &&
         !lxp_ct_is_zero(outcome->transfer_root, 32U)) {
         return LXP_FATAL_INVARIANT;
@@ -146,11 +169,15 @@ lxp_result lxp_receipt_build(lxp_receipt *receipt,
     uint8_t resulting_copy[32];
     uint8_t activity_root_copy[32];
     uint8_t batch_id_copy[32];
+    uint16_t protocol_version;
     lxp_effect_buffer effects_copy;
     if (receipt == NULL || activity_id == NULL || previous_state_root == NULL ||
         resulting_state_root == NULL || activity_root == NULL ||
         effects == NULL || batch_id == NULL || module_id == 0U ||
         module_version == 0U) return LXP_ERR_NON_CANONICAL;
+    protocol_version = lxp_protocol_version_supported(
+        receipt->protocol_version) ? receipt->protocol_version :
+                                     (uint16_t)LXP_PROTOCOL_VERSION;
     (void)memcpy(activity_id_copy, activity_id, 32U);
     (void)memcpy(previous_copy, previous_state_root, 32U);
     (void)memcpy(resulting_copy, resulting_state_root, 32U);
@@ -158,7 +185,7 @@ lxp_result lxp_receipt_build(lxp_receipt *receipt,
     (void)memcpy(batch_id_copy, batch_id, 32U);
     effects_copy = *effects;
     (void)memset(receipt, 0, sizeof(*receipt));
-    receipt->protocol_version = LXP_PROTOCOL_VERSION;
+    receipt->protocol_version = protocol_version;
     (void)memcpy(receipt->activity_id, activity_id_copy, 32U);
     receipt->global_sequence = global_sequence;
     (void)memcpy(receipt->previous_state_root, previous_copy, 32U);
@@ -184,6 +211,11 @@ lxp_result lxp_receipt_bind_program_outcome(
     if (receipt->module_id != LXP_MODULE_PROGRAMS ||
         receipt->program_outcome.present)
         return LXP_FATAL_INVARIANT;
+    if ((receipt->protocol_version == LXP_PROTOCOL_VERSION_OCCUPANCY &&
+         outcome->encoding_version != 2U) ||
+        (receipt->protocol_version == LXP_PROTOCOL_VERSION_LEGACY &&
+         outcome->encoding_version != 1U))
+        return LXP_ERR_VERSION_UNSUPPORTED;
     if (outcome->terminal_kind == LXP_PROGRAM_TERMINAL_SUCCESS) {
         if (receipt->result_code != outcome->result_code ||
             lxp_ct_memcmp(receipt->transfer_set_root,
@@ -203,7 +235,9 @@ static lxp_result program_outcome_encode(lxp_codec_writer *writer,
 {
     lxp_result status = program_outcome_validate(outcome);
     if (status == LXP_OK)
-        status = lxp_codec_write_u32(writer, LXP_PROGRAM_OUTCOME_TAG);
+        status = lxp_codec_write_u32(
+            writer, outcome->encoding_version == 2U ?
+                LXP_PROGRAM_OUTCOME_TAG_V2 : LXP_PROGRAM_OUTCOME_TAG_V1);
     if (status == LXP_OK)
         status = lxp_codec_write_u8(writer, outcome->terminal_kind);
     if (status == LXP_OK)
@@ -225,6 +259,26 @@ static lxp_result program_outcome_encode(lxp_codec_writer *writer,
         status = lxp_codec_write_u32(writer, outcome->output_values);
     if (status == LXP_OK)
         status = lxp_codec_write_u64(writer, outcome->output_bytes);
+    if (status == LXP_OK && outcome->encoding_version == 2U)
+        status = lxp_codec_write_u128(writer,
+                                      outcome->occupancy_byte_batches);
+    if (status == LXP_OK && outcome->encoding_version == 2U)
+        status = lxp_codec_write_u128(writer, outcome->occupancy_fee_units);
+    if (status == LXP_OK && outcome->encoding_version == 2U) {
+        size_t index;
+        for (index = 0U; index < 7U && status == LXP_OK; ++index)
+            status = lxp_codec_write_u64(
+                writer, outcome->fee_schedule_prices[index]);
+    }
+    if (status == LXP_OK && outcome->encoding_version == 2U)
+        status = lxp_codec_write_bytes(
+            writer, outcome->occupancy_asset_id, 32U, 32U);
+    if (status == LXP_OK && outcome->encoding_version == 2U)
+        status = lxp_codec_write_bytes(
+            writer, outcome->occupancy_evidence_digest, 32U, 32U);
+    if (status == LXP_OK && outcome->encoding_version == 2U)
+        status = lxp_codec_write_bytes(
+            writer, outcome->occupancy_transfer_root, 32U, 32U);
     if (status == LXP_OK)
         status = lxp_codec_write_u128(writer, outcome->fee_units);
     if (status == LXP_OK)
@@ -273,8 +327,8 @@ lxp_result lxp_receipt_encode(const lxp_receipt *receipt,
     }
     status = lxp_codec_writer_init(&writer, arena, LXP_MAX_ACTIVITY_BYTES);
     if (status == LXP_OK)
-        status = lxp_codec_write_struct_header(&writer,
-                                               LXP_RECEIPT_STRUCTURE_TAG);
+        status = lxp_codec_write_struct_header_version(
+            &writer, LXP_RECEIPT_STRUCTURE_TAG, receipt->protocol_version);
     if (status == LXP_OK)
         status = lxp_codec_write_u16(&writer, receipt->protocol_version);
     if (status == LXP_OK)

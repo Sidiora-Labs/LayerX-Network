@@ -26,6 +26,30 @@ lxp_result lxp_state_store_destroy(lxp_state_store *store)
     return pthread_mutex_destroy(&store->lock) == 0 ? LXP_OK : LXP_ERR_IO;
 }
 
+lxp_result lxp_state_store_bind_accounts(
+    lxp_state_store *store, struct lx_account_registry *accounts)
+{
+    lxp_result status;
+    if (store == NULL || accounts == NULL) return LXP_ERR_NON_CANONICAL;
+    status = lxp_state_writer_assert_owner(store);
+    if (status != LXP_OK) return status;
+    if (store->accounts != NULL && store->accounts != accounts)
+        return LXP_ERR_CONTEXT_MISMATCH;
+    store->accounts = accounts;
+    return LXP_OK;
+}
+
+lxp_result lxp_state_store_require_account_root(lxp_state_store *store)
+{
+    lxp_result status;
+    if (store == NULL || store->accounts == NULL)
+        return LXP_ERR_NON_CANONICAL;
+    status = lxp_state_writer_assert_owner(store);
+    if (status != LXP_OK) return status;
+    store->account_root_required = true;
+    return LXP_OK;
+}
+
 lxp_result lxp_state_writer_assert_owner(const lxp_state_store *store)
 {
     if (store == NULL) return LXP_ERR_NON_CANONICAL;
@@ -46,7 +70,21 @@ lxp_result lxp_state_journal_open(lxp_state_store *store,
     journal->count = 0U;
     journal->global_sequence = global_sequence;
     journal->open = true;
+    journal->account_root_required_before = store->account_root_required;
     journal->has_idempotency = false;
+    return LXP_OK;
+}
+
+lxp_result lxp_state_journal_require_account_root(
+    lxp_state_journal *journal)
+{
+    lxp_result status;
+    if (journal == NULL || !journal->open || journal->store == NULL ||
+        journal->store->accounts == NULL)
+        return LXP_ERR_NON_CANONICAL;
+    status = lxp_state_writer_assert_owner(journal->store);
+    if (status != LXP_OK) return status;
+    journal->store->account_root_required = true;
     return LXP_OK;
 }
 
@@ -117,6 +155,8 @@ lxp_result lxp_state_journal_rollback(lxp_state_journal *journal)
     if (status != LXP_OK) return status;
     journal->count = 0U;
     journal->has_idempotency = false;
+    journal->store->account_root_required =
+        journal->account_root_required_before;
     journal->open = false;
     return LXP_OK;
 }

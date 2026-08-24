@@ -110,6 +110,7 @@ int main(void)
         return 1;
     (void)memset(&execution, 0, sizeof(execution));
     execution.network_id = 7U;
+    execution.batch_number = 1U;
     execution.batch_timestamp_ms = 10U;
     execution.maximum_timestamp_window = 100U;
     execution.epoch = 0U;

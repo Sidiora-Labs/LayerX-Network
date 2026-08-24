@@ -179,8 +179,10 @@ lxp_result lxp_apply_transfer_set(lxp_transfer_leg *legs, size_t leg_count,
             return status;
         }
     }
-    ++(context->sequence_account != NULL ? context->sequence_account :
-                                          compact[0].from)->next_sequence;
+    if (context->debit_authority_kind !=
+            LXP_AUTH_OCCUPANCY_RESPONSIBILITY)
+        ++(context->sequence_account != NULL ? context->sequence_account :
+                                              compact[0].from)->next_sequence;
     status = lxp_journal_commit(&journal);
     if (status != LXP_OK) return status;
     result->leg_count = compact_count;

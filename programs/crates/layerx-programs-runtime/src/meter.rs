@@ -214,6 +214,7 @@ impl Default for ResourceBudget {
 /// Integer fee-unit prices for each metered resource.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FeeSchedule {
+    version: u32,
     cpu: u64,
     memory_byte: u64,
     storage_read_byte: u64,
@@ -234,6 +235,7 @@ impl FeeSchedule {
         output_value: u64,
     ) -> Self {
         Self {
+            version: 1,
             cpu,
             memory_byte,
             storage_read_byte,
@@ -242,6 +244,35 @@ impl FeeSchedule {
             output_byte: 1,
             occupancy_byte_batch: DEFAULT_OCCUPANCY_BYTE_BATCH_PRICE,
         }
+    }
+
+    /// Constructs the complete governed schedule recorded by the protocol.
+    #[must_use]
+    pub const fn new_complete(
+        version: u32,
+        cpu: u64,
+        memory_byte: u64,
+        storage_read_byte: u64,
+        storage_write_byte: u64,
+        output_value: u64,
+        output_byte: u64,
+        occupancy_byte_batch: u64,
+    ) -> Self {
+        Self {
+            version,
+            cpu,
+            memory_byte,
+            storage_read_byte,
+            storage_write_byte,
+            output_value,
+            output_byte,
+            occupancy_byte_batch,
+        }
+    }
+
+    #[must_use]
+    pub const fn version(self) -> u32 {
+        self.version
     }
 
     #[must_use]
@@ -319,6 +350,10 @@ pub struct MeteredUsage {
     pub output_values: u32,
     /// Successful response bytes copied across execution boundaries.
     pub output_bytes: u64,
+    /// Persistent storage occupied across canonical protocol batch intervals.
+    pub occupancy_byte_batches: u128,
+    /// Exact occupancy fee, kept distinct from one-off execution fees.
+    pub occupancy_fee_units: u128,
     /// Exact units handed to the existing fee mechanism.
     pub fee_units: u128,
 }
@@ -740,6 +775,8 @@ impl Meter {
             storage_write_bytes: self.storage_write_bytes,
             output_values: self.output_values,
             output_bytes: self.output_bytes,
+            occupancy_byte_batches: 0,
+            occupancy_fee_units: 0,
             fee_units,
         })
     }

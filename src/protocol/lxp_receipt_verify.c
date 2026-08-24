@@ -12,7 +12,7 @@ lxp_result lxp_receipt_verify_offline(
     lxp_arena *arena)
 {
     if (receipt == NULL || sequencer_public_key == NULL || arena == NULL ||
-        receipt->protocol_version != LXP_PROTOCOL_VERSION ||
+        !lxp_protocol_version_supported(receipt->protocol_version) ||
         receipt->result_code != LXP_OK || receipt->operation == 0U ||
         lxp_ct_is_zero(receipt->activity_id, 32U) ||
         lxp_ct_is_zero(receipt->sequencer_signature, 64U))

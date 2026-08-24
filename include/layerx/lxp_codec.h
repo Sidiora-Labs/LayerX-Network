@@ -58,8 +58,14 @@ lxp_result lxp_codec_read_tag(lxp_codec_reader *reader, uint8_t maximum_tag,
                               uint8_t *tag);
 lxp_result lxp_codec_write_struct_header(lxp_codec_writer *writer,
                                          uint16_t structure_tag);
+lxp_result lxp_codec_write_struct_header_version(lxp_codec_writer *writer,
+                                                 uint16_t structure_tag,
+                                                 uint16_t protocol_version);
 lxp_result lxp_codec_read_struct_header(lxp_codec_reader *reader,
                                         uint16_t expected_structure_tag);
+lxp_result lxp_codec_read_struct_header_version(
+    lxp_codec_reader *reader, uint16_t expected_structure_tag,
+    uint16_t *protocol_version);
 lxp_result lxp_codec_finish(const lxp_codec_reader *reader);
 lxp_result lxp_codec_reject_unknown_field(uint16_t field_id,
                                           uint16_t maximum_field_id);
