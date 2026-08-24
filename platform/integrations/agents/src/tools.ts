@@ -41,7 +41,7 @@ export const SPEND_TOOL: ToolDefinition = {
   title: "Spend through LayerX",
   description:
     "Reserve budget, prepare, sign, submit and locally verify a LayerX payment. "
-    + "Returns only after the protocol receipt has been verified on this machine, or an explicit refusal.",
+    + "Returns verified receipt evidence, an approval hold, honest pending/unknown state, or a typed refusal.",
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -248,9 +248,17 @@ export function describeSpend(result: AgentSpendResult): ToolJsonObject {
     return output;
   }
   if (result.kind === "refused") {
-    return { kind: result.kind, code: result.code, reservationState: result.reservation.state };
+    return {
+      kind: result.kind,
+      code: result.code,
+      retry: result.retry,
+      ...(result.retryAfterMs === undefined ? {} : { retryAfterMs: result.retryAfterMs }),
+      ...(result.protocolResultCode === undefined ? {} : { protocolResultCode: result.protocolResultCode }),
+      ...(result.submissionState === undefined ? {} : { submissionState: result.submissionState }),
+      reservationState: result.reservation.state,
+    };
   }
-  return { kind: result.kind, available: result.available };
+  return { kind: result.kind, code: result.code, retry: result.retry, available: result.available };
 }
 
 export function refusalCode(error: unknown): string {

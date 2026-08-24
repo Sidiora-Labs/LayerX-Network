@@ -727,7 +727,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Ship a runnable example for each role, exercised in CI against a real service.
     - Publish both to the package registries through the release pipeline.
     - _Requirements: 25.1, 25.3, 25.4, 25.5_
-  - [ ] 16.2 Build the merchant and agent middleware
+  - [ ] 16.2 Build the merchant and agent middleware — **Implemented - qualification pending**
     - Build merchant middleware: catalog and checkout hooks, order-to-payment mapping, settlement webhooks and receipt-backed order state.
     - Build agent middleware: budget-aware spending, approval-hold awareness, receipt verification and typed refusal handling for agent frameworks.
     - Keep every rendered state receipt-backed or honestly pending, per the conformance suite.

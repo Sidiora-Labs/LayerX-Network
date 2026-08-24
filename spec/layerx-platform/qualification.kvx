@@ -509,3 +509,19 @@ symbol = "task.15.4 touches"
 observed = "The inherited task declared only platform/sdk/jvm and platform/sdk/conformance, while schema regeneration and CI execution necessarily also update the shared generator, pipeline digest, platform Make target, Maven release metadata and platform workflow. The task touch declaration is expanded to those exact paths so strict scope guarding reflects the implementation the do clauses require."
 assumption = "The expansion is limited to JVM generation, packaging and conformance wiring; it does not implement or qualify SDKs in any other language."
 severity = "scope-clarification"
+
+[observation.16.2.1]
+task = "16.2"
+file = "platform/examples/merchant-checkout, platform/examples/merchant-shop"
+symbol = "@sidiora/layerx-example-merchant-checkout, @sidiora/layerx-example-merchant-shop"
+observed = "The active task's implementation scope names merchant-shop, while the pre-existing runnable package and the downstream 18.2 checkout surface use merchant-checkout. Removing or renaming the existing package would break those consumers, so both declared workspace packages retain the same complete receipt-backed service implementation and are included in the locked workspace and middleware target."
+assumption = "Human qualification will select the long-term canonical package name before external documentation or distribution and either retain the second name as a compatibility alias or migrate 18.2 consumers explicitly; neither runnable artifact is removed in this implementation step."
+severity = "dependency-boundary"
+
+[observation.16.2.2]
+task = "16.2"
+file = "package-lock.json"
+symbol = "cg spec implemented touch graph"
+observed = "The scoped strict guard accepted every changed path inside task 16.2, but cg spec implemented reported an explicit package-lock.json touch as unchanged even though git records the root workspace and package-entry lock changes. cg sync explicitly skipped one file and the code graph does not index this lockfile, so the task declares the package*.json family: the indexed package manifest witnesses the family while strict guard still covers both manifest and lockfile."
+assumption = "Human qualification will let npm ci perform the authoritative locked-workspace consistency check; no dependency install, build or test was run in this phase."
+severity = "phase-boundary"
