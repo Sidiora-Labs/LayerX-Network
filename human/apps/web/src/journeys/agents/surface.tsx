@@ -7,13 +7,19 @@ import { copyEntry } from "../../../copy/catalog.ts";
 import { useActiveAccountId } from "../../auth/use-active-account.ts";
 import {
   Badge,
+  InlineNotice,
   KitButton,
   KitList,
   KitListItem,
   ScreenCard,
   StateEmpty,
 } from "../../kit";
-import { LoadingSurface } from "../../states";
+import {
+  ErrorSurface,
+  LoadingSurface,
+  OfflineSurface,
+  errorPresentation,
+} from "../../states";
 import { PrivateFigure } from "../../settings";
 import { AgentDetailScreen } from "./detail.tsx";
 import {
@@ -21,7 +27,6 @@ import {
   Agents,
   agentListItems,
   agentsLayout,
-  apiErrorSentence,
   type AgentListItemView,
   type AgentsShell,
 } from "./model.ts";
@@ -67,16 +72,28 @@ export function AgentsSurface({
   const accountId = useActiveAccountId(ownerAccount);
   const [items, setItems] = useState<readonly AgentListItemView[] | undefined>(undefined);
   const [selected, setSelected] = useState<string | undefined>(undefined);
-  const [errorSentence, setErrorSentence] = useState<string | undefined>(undefined);
+  const [loadError, setLoadError] = useState<unknown>(undefined);
+  const [offline, setOffline] = useState(false);
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
     setLoading(true);
-    setErrorSentence(undefined);
+    setLoadError(undefined);
+    setOffline(false);
     try {
-      setItems(agentListItems(await agents.overview(), AGENT_LOCALE));
+      const nextItems = agentListItems(await agents.overview(), AGENT_LOCALE);
+      setItems(nextItems);
+      setSelected((current) => (
+        current !== undefined && nextItems.some((item) => item.agentId === current)
+          ? current
+          : nextItems[0]?.agentId
+      ));
     } catch (error) {
-      setErrorSentence(apiErrorSentence(error));
+      if (!navigator.onLine) {
+        setOffline(true);
+      } else {
+        setLoadError(error);
+      }
     } finally {
       setLoading(false);
     }
@@ -85,6 +102,24 @@ export function AgentsSurface({
   useEffect(() => {
     void load();
   }, [load]);
+
+  if (loading && items === undefined) {
+    return <LoadingSurface />;
+  }
+  if (items === undefined && offline) {
+    return <OfflineSurface onRetry={() => { void load(); }} />;
+  }
+  if (items === undefined) {
+    return (
+      <ErrorSurface
+        error={errorPresentation(loadError)}
+        route="/app/agents"
+        platform={shell}
+        onRetry={() => { void load(); }}
+        onReload={() => { window.location.reload(); }}
+      />
+    );
+  }
 
   const newAgent = (
     <KitButton
@@ -98,27 +133,7 @@ export function AgentsSurface({
   );
 
   let body;
-  if (loading && items === undefined) {
-    body = <LoadingSurface />;
-  } else if (items === undefined) {
-    body = (
-      <div className="flex flex-col gap-3">
-        <p className="text-sm text-foreground-secondary">
-          {errorSentence ?? copyEntry("state.error.body").message}
-        </p>
-        <div className="flex">
-          <KitButton
-            variant="primary"
-            onClick={() => {
-              void load();
-            }}
-          >
-            {copyEntry("action.retry").message}
-          </KitButton>
-        </div>
-      </div>
-    );
-  } else if (items.length === 0) {
+  if (items.length === 0) {
     body = (
       <StateEmpty
         title={copyEntry("agents.empty").message}
@@ -150,6 +165,7 @@ export function AgentsSurface({
             shell="desktop"
             agentId={selected}
             embedded
+            onChanged={() => { void load(); }}
             {...(accountId === undefined ? {} : { ownerAccount: accountId })}
           />
         )}
@@ -164,6 +180,11 @@ export function AgentsSurface({
       description={copyEntry("agents.summary").message}
     >
       <div className="flex">{newAgent}</div>
+      {items.some((item) => item.verificationSentence === copyEntry("agent.state.unverified").message) ? (
+        <InlineNotice tone="warning" role="status">
+          {copyEntry("agent.state.unverified").message}
+        </InlineNotice>
+      ) : null}
       {body}
     </ScreenCard>
   );
