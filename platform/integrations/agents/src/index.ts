@@ -36,6 +36,7 @@ export {
 export type { ToolDefinition, ToolJson, ToolJsonObject, ToolOutcome } from "./tools.js";
 export {
   AgentWebhookGateway,
+  FileWebhookDeliveryStore,
   MAXIMUM_WEBHOOK_BYTES,
   SingleProcessWebhookDeliveryStore,
   WEBHOOK_ID_HEADER,

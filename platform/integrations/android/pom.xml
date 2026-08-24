@@ -17,6 +17,12 @@
   </properties>
   <dependencies>
     <dependency>
+      <groupId>com.google.android</groupId>
+      <artifactId>android</artifactId>
+      <version>4.1.1.4</version>
+      <scope>provided</scope>
+    </dependency>
+    <dependency>
       <groupId>com.sidiora.layerx</groupId>
       <artifactId>layerx-sdk</artifactId>
       <version>${layerx.sdk.version}</version>

@@ -1,3 +1,4 @@
+import { jsonSchema, tool, type Tool, type ToolSet } from "ai";
 import {
   createAgentIntegration,
   type AgentIntegrationOptions,
@@ -5,28 +6,25 @@ import {
 } from "./integration.js";
 import { renderOutcome, type AgentToolExecutor, type ToolDefinition, type ToolJsonObject } from "./tools.js";
 
-export interface VercelAiTool {
-  readonly type: "function";
-  readonly description: string;
+export type VercelAiTool = Tool<unknown, ToolJsonObject> & {
   readonly parameters: ToolJsonObject;
-  readonly inputSchema: ToolJsonObject;
-  execute(input: unknown): Promise<ToolJsonObject>;
-}
+  execute(input: unknown): PromiseLike<ToolJsonObject>;
+};
 
-export type VercelAiToolSet = Readonly<Record<string, VercelAiTool>>;
+export type VercelAiToolSet = ToolSet & Readonly<Record<string, VercelAiTool>>;
 
 export interface LayerXVercelAiIntegration extends LayerXAgentIntegration {
   readonly vercelAiTools: VercelAiToolSet;
 }
 
 export function vercelAiTool(executor: AgentToolExecutor, definition: ToolDefinition): VercelAiTool {
-  return {
+  const official = tool({
     type: "function",
     description: definition.description,
-    parameters: definition.inputSchema,
-    inputSchema: definition.inputSchema,
+    inputSchema: jsonSchema(definition.inputSchema),
     execute: async (input) => renderOutcome(await executor.execute(definition.name, input ?? {})),
-  };
+  });
+  return Object.assign(official, { parameters: definition.inputSchema });
 }
 
 export function vercelAiToolSet(executor: AgentToolExecutor): VercelAiToolSet {

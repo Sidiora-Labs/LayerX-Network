@@ -101,6 +101,174 @@ public actor InMemoryEventDeliveryStore: EventDeliveryStore {
     }
 }
 
+public actor FileEventDeliveryStore: EventDeliveryStore {
+    private struct Entry: Codable {
+        let payloadDigest: String
+        var leaseUntilMilliseconds: Int64
+        var completed: Bool
+    }
+
+    private struct Ledger: Codable {
+        let version: Int
+        var entries: [String: Entry]
+    }
+
+    private let fileURL: URL
+    private let capacity: Int
+    private let now: @Sendable () -> Int64
+    private var entries: [String: Entry]
+
+    public init(
+        fileURL: URL,
+        capacity: Int = 65_536,
+        now: (@Sendable () -> Int64)? = nil
+    ) throws {
+        guard fileURL.isFileURL, capacity > 0 else {
+            throw MobileIntegrationError(.invalidConfiguration)
+        }
+        self.fileURL = fileURL.standardizedFileURL
+        self.capacity = capacity
+        self.now = now ?? { Int64(Date().timeIntervalSince1970 * 1_000) }
+        let loaded = try Self.load(fileURL: self.fileURL)
+        guard loaded.count <= capacity else {
+            throw MobileIntegrationError(.deliveryStoreFailure)
+        }
+        self.entries = loaded
+    }
+
+    public static func applicationSupportURL(
+        applicationIdentifier: String = "com.sidiora.layerx.mobile"
+    ) throws -> URL {
+        guard !applicationIdentifier.isEmpty,
+              applicationIdentifier.utf8.count <= 255,
+              applicationIdentifier.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "." || $0 == "-") }),
+              let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+            throw MobileIntegrationError(.invalidConfiguration)
+        }
+        return root
+            .appendingPathComponent(applicationIdentifier, isDirectory: true)
+            .appendingPathComponent("layerx-event-deliveries-v1.json", isDirectory: false)
+    }
+
+    public func claim(
+        deliveryID: String,
+        payloadDigest: String,
+        leaseUntilMilliseconds: Int64
+    ) throws -> EventDeliveryClaim {
+        guard Self.validDeliveryID(deliveryID), Self.validDigest(payloadDigest), leaseUntilMilliseconds > 0 else {
+            throw MobileIntegrationError(.deliveryStoreFailure)
+        }
+        if let existing = entries[deliveryID] {
+            guard existing.payloadDigest == payloadDigest else { return .conflict }
+            if existing.completed { return .completed }
+            if existing.leaseUntilMilliseconds > now() { return .processing }
+            entries[deliveryID] = Entry(
+                payloadDigest: payloadDigest,
+                leaseUntilMilliseconds: leaseUntilMilliseconds,
+                completed: false
+            )
+            try persist()
+            return .claimed
+        }
+        if entries.count >= capacity {
+            evict()
+        }
+        guard entries.count < capacity else {
+            throw MobileIntegrationError(.deliveryStoreFailure)
+        }
+        entries[deliveryID] = Entry(
+            payloadDigest: payloadDigest,
+            leaseUntilMilliseconds: leaseUntilMilliseconds,
+            completed: false
+        )
+        try persist()
+        return .claimed
+    }
+
+    public func complete(deliveryID: String, payloadDigest: String) throws {
+        guard Self.validDeliveryID(deliveryID), Self.validDigest(payloadDigest) else {
+            throw MobileIntegrationError(.deliveryStoreFailure)
+        }
+        guard var entry = entries[deliveryID], entry.payloadDigest == payloadDigest else {
+            throw MobileIntegrationError(.eventReplay)
+        }
+        entry.completed = true
+        entry.leaseUntilMilliseconds = 0
+        entries[deliveryID] = entry
+        try persist()
+    }
+
+    public func release(deliveryID: String, payloadDigest: String) throws {
+        guard Self.validDeliveryID(deliveryID), Self.validDigest(payloadDigest) else {
+            throw MobileIntegrationError(.deliveryStoreFailure)
+        }
+        guard let entry = entries[deliveryID], entry.payloadDigest == payloadDigest, !entry.completed else { return }
+        entries.removeValue(forKey: deliveryID)
+        try persist()
+    }
+
+    private func evict() {
+        let timestamp = now()
+        for (identifier, entry) in entries where !entry.completed && entry.leaseUntilMilliseconds <= timestamp {
+            entries.removeValue(forKey: identifier)
+        }
+        if entries.count >= capacity {
+            return
+        }
+    }
+
+    private func persist() throws {
+        let directory = fileURL.deletingLastPathComponent()
+        do {
+            try FileManager.default.createDirectory(
+                at: directory,
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700]
+            )
+            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
+            let data = try JSONEncoder().encode(Ledger(version: 1, entries: entries))
+            try data.write(to: fileURL, options: [.atomic])
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
+        } catch {
+            throw MobileIntegrationError(.deliveryStoreFailure)
+        }
+    }
+
+    private static func load(fileURL: URL) throws -> [String: Entry] {
+        guard FileManager.default.fileExists(atPath: fileURL.path) else { return [:] }
+        do {
+            let data = try Data(contentsOf: fileURL, options: [.mappedIfSafe])
+            guard data.count <= 32 * 1024 * 1024 else {
+                throw MobileIntegrationError(.deliveryStoreFailure)
+            }
+            let ledger = try JSONDecoder().decode(Ledger.self, from: data)
+            guard ledger.version == 1, ledger.entries.count <= 65_536,
+                  ledger.entries.allSatisfy({
+                      validDeliveryID($0.key)
+                          && validDigest($0.value.payloadDigest)
+                          && $0.value.leaseUntilMilliseconds >= 0
+                  }) else {
+                throw MobileIntegrationError(.deliveryStoreFailure)
+            }
+            return ledger.entries
+        } catch let error as MobileIntegrationError {
+            throw error
+        } catch {
+            throw MobileIntegrationError(.deliveryStoreFailure)
+        }
+    }
+
+    private static func validDeliveryID(_ value: String) -> Bool {
+        !value.isEmpty && value.utf8.count <= 255 && !value.contains("\0")
+    }
+
+    private static func validDigest(_ value: String) -> Bool {
+        value.utf8.count == 64 && value.utf8.allSatisfy {
+            ($0 >= 48 && $0 <= 57) || ($0 >= 97 && $0 <= 102)
+        }
+    }
+}
+
 public enum EventConsumeOutcome: String, Sendable {
     case processed, duplicate, processing
 }
@@ -149,7 +317,7 @@ public struct VerifiedEventConsumer: Sendable {
         let issuedAt = seconds * 1_000
         guard boundedText(headers.id, limit: 255),
               identifier(headers.keyID, limit: 64),
-              rawBody.count <= 1_048_576,
+              !rawBody.isEmpty, rawBody.count <= 1_048_576,
               issuedAt <= timestamp + 30_000,
               timestamp - issuedAt <= maximumAgeMilliseconds,
               let publicKey = publicKeys[headers.keyID] else {

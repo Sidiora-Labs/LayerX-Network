@@ -15,10 +15,13 @@ import java.math.BigInteger;
 import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Base64;
 import java.util.Map;
 
 /** End-to-end driver: brokered session, real move, device-side receipt verification, verified event replay. */
 public final class ConsoleSampleMain {
+    private record SignedWebhookDelivery(String body, Map<String, String> headers) {}
+
     private ConsoleSampleMain() {}
 
     public static void main(String[] arguments) {
@@ -65,8 +68,39 @@ public final class ConsoleSampleMain {
                 verified = record(report, settled);
             }
 
-            String eventPath = environment.get("LAYERX_SAMPLE_EVENT_PATH");
-            if (eventPath != null && !eventPath.isEmpty()) {
+            String deliveryPath = environment.get("LAYERX_SAMPLE_WEBHOOK_DELIVERY_PATH");
+            if (deliveryPath != null && !deliveryPath.isEmpty()) {
+                SignedWebhookDelivery delivery = signedWebhookDelivery(mapper, Path.of(deliveryPath));
+                byte[] body;
+                try {
+                    body = Base64.getDecoder().decode(delivery.body());
+                } catch (IllegalArgumentException error) {
+                    throw MobileIntegrationException.of(MobileIntegrationException.Code.INVALID_CONFIGURATION);
+                }
+                if (body.length == 0) throw MobileIntegrationException.of(
+                    MobileIntegrationException.Code.INVALID_CONFIGURATION);
+                byte[] tampered = body.clone();
+                tampered[tampered.length - 1] ^= 1;
+                WalletModel.Snapshot rejected = model.deliver(tampered, delivery.headers());
+                if (!MobileIntegrationException.Code.INVALID_EVENT.wire().equals(rejected.refusal())) {
+                    throw MobileIntegrationException.of(MobileIntegrationException.Code.VERIFICATION_FAILURE);
+                }
+                WalletModel.Snapshot first = model.deliver(body, delivery.headers());
+                if (first.refusal() != null) {
+                    report.put("event", "refused");
+                    report.put("refusal", first.refusal());
+                    emit(report);
+                    System.exit(4);
+                    return;
+                }
+                WalletModel.Snapshot replayed = model.deliver(body, delivery.headers());
+                report.put("event_tamper", "rejected");
+                report.put("event", "verified");
+                report.put("event_replay", replayed.deliveries().isEmpty()
+                    ? "duplicate" : replayed.deliveries().get(replayed.deliveries().size() - 1));
+            } else if ((deliveryPath = environment.get("LAYERX_SAMPLE_EVENT_PATH")) != null
+                    && !deliveryPath.isEmpty()) {
+                String eventPath = deliveryPath;
                 byte[] body = read(Path.of(eventPath));
                 Map<String, String> headers = Map.of(
                     EventEnvelopeHeaders.ID_HEADER, SampleEnvironment.required(environment, "LAYERX_SAMPLE_EVENT_ID"),
@@ -148,6 +182,19 @@ public final class ConsoleSampleMain {
             return Files.readAllBytes(path);
         } catch (IOException error) {
             throw MobileIntegrationException.of(MobileIntegrationException.Code.DECODE_FAILURE);
+        }
+    }
+
+    private static SignedWebhookDelivery signedWebhookDelivery(ObjectMapper mapper, Path path) {
+        try {
+            SignedWebhookDelivery delivery = mapper.readValue(Files.readAllBytes(path), SignedWebhookDelivery.class);
+            if (delivery == null || delivery.body() == null || delivery.body().isEmpty()
+                    || delivery.headers() == null) {
+                throw MobileIntegrationException.of(MobileIntegrationException.Code.INVALID_CONFIGURATION);
+            }
+            return delivery;
+        } catch (IllegalArgumentException | IOException error) {
+            throw MobileIntegrationException.of(MobileIntegrationException.Code.INVALID_CONFIGURATION);
         }
     }
 

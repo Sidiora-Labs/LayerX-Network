@@ -2,60 +2,37 @@
 import { AgentIntegrationError } from "./config.js";
 import { createMcpIntegration } from "./mcp.js";
 
-interface NodeStream {
-  write(chunk: string, callback: (error?: Error | null) => void): boolean;
-}
-
 interface NodeProcess {
   readonly env: Readonly<Record<string, string | undefined>>;
-  readonly stdin: AsyncIterable<Uint8Array>;
-  readonly stdout: NodeStream;
-  readonly stderr: NodeStream;
+  readonly stderr: { write(chunk: string): boolean };
   exitCode: number;
+  once(signal: "SIGINT" | "SIGTERM", listener: () => void): void;
 }
 
 function runtime(): NodeProcess {
   const scope = globalThis as { readonly process?: NodeProcess };
-  if (scope.process === undefined) {
-    throw new AgentIntegrationError("client-runtime-refused");
-  }
+  if (scope.process === undefined) throw new AgentIntegrationError("client-runtime-refused");
   return scope.process;
 }
 
-function writer(stream: NodeStream): (line: string) => Promise<void> {
-  return (line) => new Promise<void>((resolve, reject) => {
-    stream.write(line, (error) => {
-      if (error === null || error === undefined) {
-        resolve();
-        return;
-      }
-      reject(error);
-    });
-  });
-}
-
 function describeFailure(error: unknown): string {
-  if (error instanceof AgentIntegrationError) {
-    return error.code;
-  }
-  if (error instanceof Error) {
-    return error.name;
-  }
-  return "unknown-failure";
+  if (error instanceof AgentIntegrationError) return error.code;
+  return error instanceof Error ? error.name : "unknown-failure";
 }
 
 async function main(): Promise<void> {
   const host = runtime();
   const integration = createMcpIntegration({ environment: host.env });
-  try {
-    await integration.server.serve({ input: host.stdin, write: writer(host.stdout) });
-  } finally {
-    integration.destroy();
-  }
+  const shutdown = (): void => {
+    void integration.closeMcp().finally(() => integration.destroy());
+  };
+  host.once("SIGINT", shutdown);
+  host.once("SIGTERM", shutdown);
+  await integration.connectStdio();
 }
 
 main().catch((error: unknown) => {
   const host = runtime();
-  void writer(host.stderr)(`layerx-mcp-server: ${describeFailure(error)}\n`);
+  host.stderr.write(`layerx-mcp-server: ${describeFailure(error)}\n`);
   host.exitCode = 1;
 });

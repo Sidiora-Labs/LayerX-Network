@@ -1,5 +1,6 @@
 package com.sidiora.layerx.android;
 
+import android.content.Context;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sidiora.layerx.sdk.PlatformSdk;
 import com.sidiora.layerx.sdk.ProductionClient;
@@ -37,7 +38,17 @@ public final class LayerXAndroid implements AutoCloseable {
     }
 
     public static LayerXAndroid create(PublishableConfiguration configuration) {
-        return create(configuration, new InMemoryEventDeliveryStore());
+        return create(configuration, new FileEventDeliveryStore(FileEventDeliveryStore.defaultPath()));
+    }
+
+    public static LayerXAndroid create(Context context, PublishableConfiguration configuration) {
+        Objects.requireNonNull(context, "context");
+        return create(configuration,
+            context.getFilesDir().toPath().resolve("layerx-event-deliveries-v1.json"));
+    }
+
+    public static LayerXAndroid create(PublishableConfiguration configuration, Path deliveryStorePath) {
+        return create(configuration, new FileEventDeliveryStore(deliveryStorePath));
     }
 
     public static LayerXAndroid create(PublishableConfiguration configuration, EventDeliveryStore deliveries) {
@@ -101,7 +112,7 @@ public final class LayerXAndroid implements AutoCloseable {
         metadata.put("sdk", PlatformSdk.platform_sdk_jvm());
         metadata.put("credentialModel", "brokered-ephemeral-session-token");
         metadata.put("eventVerification", "ed25519-v1");
-        metadata.put("replayProtection", "leased-delivery-claim");
+        metadata.put("replayProtection", "durable-leased-delivery-claim");
         metadata.put("declaredKeys", PublishableConfiguration.declaredKeyNames());
         return Map.copyOf(metadata);
     }

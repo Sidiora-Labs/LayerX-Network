@@ -3,27 +3,17 @@ import {
   type AgentIntegrationOptions,
   type LayerXAgentIntegration,
 } from "./integration.js";
-import { renderOutcome, type ToolDefinition, type ToolJsonObject } from "./tools.js";
+import type { Tool, ToolResultBlockParam, ToolUseBlockParam } from "@anthropic-ai/sdk/resources/messages";
+import { renderOutcome, type ToolDefinition } from "./tools.js";
 
-export interface AnthropicTool {
-  readonly name: string;
-  readonly description: string;
-  readonly input_schema: ToolJsonObject;
-}
+export type AnthropicTool = Tool;
 
-export interface AnthropicToolUseBlock {
-  readonly type: "tool_use";
-  readonly id: string;
-  readonly name: string;
-  readonly input: unknown;
-}
+export type AnthropicToolUseBlock = ToolUseBlockParam;
 
-export interface AnthropicToolResultBlock {
-  readonly type: "tool_result";
-  readonly tool_use_id: string;
+export type AnthropicToolResultBlock = ToolResultBlockParam & {
   readonly content: string;
   readonly is_error: boolean;
-}
+};
 
 export interface LayerXAnthropicIntegration extends LayerXAgentIntegration {
   readonly anthropicTools: readonly AnthropicTool[];
@@ -50,7 +40,8 @@ export function isToolUseBlock(value: unknown): value is AnthropicToolUseBlock {
   const block = value as Record<string, unknown>;
   return block["type"] === "tool_use"
     && typeof block["id"] === "string"
-    && typeof block["name"] === "string";
+    && typeof block["name"] === "string"
+    && "input" in block;
 }
 
 export function createAnthropicIntegration(options: AgentIntegrationOptions): LayerXAnthropicIntegration {

@@ -49,7 +49,7 @@ public final class LayerXHolder {
         declared.put(publicKeyName, resources.getString(publicKeyId));
 
         PublishableConfiguration configuration = SampleEnvironment.configuration(declared);
-        LayerXAndroid mobile = LayerXAndroid.create(configuration);
+        LayerXAndroid mobile = LayerXAndroid.create(context, configuration);
         String relay = resources.getString(R.string.layerx_receipt_relay_url);
         RelayReceiptResolver receipts = new RelayReceiptResolver(
             URI.create(relay), new ObjectMapper(), (int) configuration.requestTimeoutMs());

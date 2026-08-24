@@ -146,13 +146,16 @@ public enum EmbeddedSecretDetector {
         guard let walker = FileManager.default.enumerator(
             at: root,
             includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey],
-            options: [.skipsHiddenFiles]
+            options: []
         ) else {
             throw MobileIntegrationError(.invalidConfiguration)
         }
         for case let candidate as URL in walker {
             let values = try candidate.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
-            guard values.isRegularFile == true, (values.fileSize ?? 0) <= 64 * 1024 * 1024 else { continue }
+            guard values.isRegularFile == true else { continue }
+            guard (values.fileSize ?? 0) <= 64 * 1024 * 1024 else {
+                throw MobileIntegrationError(.invalidConfiguration)
+            }
             findings.append(contentsOf: try scan(fileAt: candidate, root: root, exempt: exempt))
         }
         return findings.sorted { left, right in

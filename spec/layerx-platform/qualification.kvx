@@ -605,3 +605,43 @@ symbol = "ReceiptView, Receipt, marketplace::buy"
 observed = "The runtime's verified receipt view exposes digest, result, asset, amount and state root, but not payer, destination or application-purpose binding. The marketplace prevents cross-listing replay by atomically recording each consumed digest and validates success, asset and minimum amount, but it cannot prove from the current receipt capability that the named payment credited this marketplace rather than another recipient. Treating that missing fact as present would be a fabricated authorization boundary."
 assumption = "The versioned Programs receipt capability must add the destination or an equivalent marketplace/listing-purpose binding before qualification accepts buy as an end-to-end payment flow. Until then the program remains genuine and fail-closed at the unavailable exact capability/deployment boundary recorded above; no fixture or invented destination fact is used."
 severity = "dependency-boundary"
+
+[observation.16.4.1]
+task = "16.4"
+file = "platform/integrations/ios/Sources/LayerXMobile/EventVerification.swift, platform/integrations/android/src/main/java/com/sidiora/layerx/android/FileEventDeliveryStore.java, platform/integrations/agents/src/webhooks.ts, platform/integrations/agents/src/mcp.ts"
+symbol = "FileEventDeliveryStore, FileWebhookDeliveryStore, FileVerifiedEventQueue"
+observed = "The default webhook delivery ledgers now persist verified delivery claims before processing and retain completed claims rather than evicting them. The MCP delivery handler also commits verified events to a separate durable, delivery-ID-deduplicated queue before completing the webhook claim. The iOS ledger is actor-serialized for the single application process; Android and Node use filesystem locks and atomic replacement. A full ledger or queue fails closed instead of forgetting a completed delivery, so production operators must monitor storage and define archival retention without deleting identifiers that can still be replayed."
+assumption = "iOS hosts do not run multiple processes against the same application-support ledger. The Android sample targets API 34 and stores its ledger under Context.getFilesDir, where FileChannel locking, POSIX permissions and atomic rename are available. Human qualification will inject crashes around claim, handler and complete and confirm filesystem semantics on supported devices and deployment volumes."
+severity = "platform-assumption"
+
+[observation.16.4.2]
+task = "16.4"
+file = ".github/workflows/platform.yml, platform/Makefile.inc"
+symbol = "mobile application artifact jobs and real integration journeys"
+observed = "The iOS app artifact requires an Apple runner, Xcode and XcodeGen; the Android app artifact requires Java 21, Android SDK 34 and Gradle 8.7. Scheduled real-service journeys require the declared public service endpoints, public webhook/event verification keys, dedicated short-lived service credentials, and an HTTPS fixture endpoint that returns a fresh signed delivery as {body: base64, headers: object}. Each lane mutates that fresh body to prove rejection before processing the valid body twice for durable replay suppression. None of those app builds, scans or real service journeys was executed during implementation."
+assumption = "Repository administrators will provision the named GitHub variables and secrets, expose the signed-delivery fixture under Bearer authorization, keep the macOS image's Xcode toolchain compatible with Swift 5.9, and qualify the real scheduled account as disposable. XcodeGen is installed from Homebrew because the repository does not contain a generated Xcode project or an owner-supplied generator binary."
+severity = "qualification-input"
+
+[observation.16.4.3]
+task = "16.4"
+file = "package-lock.json, platform/integrations/agents/package.json"
+symbol = "official agent framework dependency lock"
+observed = "The lock was mechanically refreshed for the exact official MCP, A2A, OpenAI, Anthropic, LangChain and Vercel AI SDK dependencies. The available implementation host is Node 18 while the package and several official framework dependencies require Node 22, so npm emitted engine warnings during lock-only generation. No dependency build, typecheck, test or integration command was run."
+assumption = "Human qualification and CI will use the package's declared Node 22 runtime for npm ci, TypeScript compilation and real service execution. The implementation does not lower any engine requirement to accommodate the implementation host."
+severity = "phase-boundary"
+
+[observation.16.4.4]
+task = "16.4"
+file = "spec/layerx-platform/spec.kvx"
+symbol = "task.16.4 touches"
+observed = "The inherited touch list named only the three integration directories, but do_4 and do_5 require the shared Make and platform workflow gates, locked one-dependency framework packages require the root manifests, and the browser-artifact half of req.25.7 requires the existing Next bundle scanner to reject an empty artifact set. Those exact integration paths are added to the task scope."
+assumption = "The scope expansion is limited to executable integration, artifact scanning and CI wiring; it does not alter unrelated product behavior or qualification thresholds."
+severity = "scope-clarification"
+
+[observation.16.4.5]
+task = "16.4"
+file = "package-lock.json, spec/layerx-platform/spec.kvx"
+symbol = "cg spec implemented touch graph"
+observed = "The scoped strict guard accepted both root npm manifests and Git records 894 added and 46 removed lockfile lines, but cg spec implemented reported the exact package-lock.json touch as unchanged because cg sync skips that generated lockfile. The task therefore uses the package*.json family already established by task 16.2: package.json is indexed as evidence while the same strict scope includes package-lock.json."
+assumption = "Human qualification will use npm ci as the authoritative lock consistency check. The implementation phase did not install dependencies for execution, compile, typecheck, test or verify."
+severity = "phase-boundary"

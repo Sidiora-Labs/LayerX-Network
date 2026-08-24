@@ -1,33 +1,23 @@
 import { AgentIntegrationError } from "./config.js";
+import type {
+  ChatCompletionFunctionTool,
+  ChatCompletionMessageFunctionToolCall,
+  ChatCompletionToolMessageParam,
+} from "openai/resources/chat/completions";
 import {
   createAgentIntegration,
   type AgentIntegrationOptions,
   type LayerXAgentIntegration,
 } from "./integration.js";
-import { refusalCode, renderOutcome, type ToolDefinition, type ToolJsonObject } from "./tools.js";
+import { refusalCode, renderOutcome, type ToolDefinition } from "./tools.js";
 
-export interface OpenAiFunctionTool {
-  readonly type: "function";
-  readonly function: {
-    readonly name: string;
-    readonly description: string;
-    readonly parameters: ToolJsonObject;
-  };
-}
+export type OpenAiFunctionTool = ChatCompletionFunctionTool;
 
-export interface OpenAiToolCall {
-  readonly id: string;
-  readonly function: {
-    readonly name: string;
-    readonly arguments: string;
-  };
-}
+export type OpenAiToolCall = Omit<ChatCompletionMessageFunctionToolCall, "type"> & {
+  readonly type?: "function";
+};
 
-export interface OpenAiToolMessage {
-  readonly role: "tool";
-  readonly tool_call_id: string;
-  readonly content: string;
-}
+export type OpenAiToolMessage = ChatCompletionToolMessageParam;
 
 export interface LayerXOpenAiIntegration extends LayerXAgentIntegration {
   readonly openAiTools: readonly OpenAiFunctionTool[];

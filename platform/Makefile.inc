@@ -4,7 +4,11 @@ PLATFORM_MANIFEST := platform/Cargo.toml
 .PHONY: platform-build platform-lint platform-test platform-sdk-check \
 	platform-sdk-generate platform-test-sdks platform-release-check platform-release-plan \
 	platform-test-tooling platform-emulator-conformance platform-test-middleware \
-	platform-test-reference-apps platform-test-docs platform-hosted-smoke
+	platform-test-reference-apps platform-test-mobile-artifacts \
+	platform-test-android-artifact platform-test-ios-artifact \
+	platform-real-agent-integration \
+	platform-real-ios-integration platform-real-android-integration \
+	platform-test-docs platform-hosted-smoke
 
 platform-build:
 	$(PLATFORM_CARGO) build --manifest-path $(PLATFORM_MANIFEST) --locked --workspace
@@ -96,7 +100,9 @@ platform-test-middleware:
 	node --check platform/examples/agent-spend/index.mjs
 	cd platform/integrations/express && npm install --no-audit --no-fund && npm run build
 	cd platform/integrations/next && npm install --no-audit --no-fund && npm run build
-	node platform/integrations/next/bin/layerx-scan-bundle.mjs platform/integrations/next/example
+	npm install --no-audit --no-fund --workspace @sidiora/layerx-example-next
+	npm run build --workspace @sidiora/layerx-example-next
+	npm run scan --workspace @sidiora/layerx-example-next
 	PYTHONPATH=agent/sdk/python:platform/integrations/fastapi python3 -m compileall -q \
 		platform/integrations/fastapi/layerx_fastapi platform/integrations/fastapi/examples
 	mvn -q -f platform/sdk/jvm/pom.xml -DskipTests install
@@ -108,6 +114,41 @@ platform-test-middleware:
 
 platform-test-reference-apps:
 	node platform/examples/run-reference-apps.mjs --check
+
+platform-test-mobile-artifacts: platform-test-android-artifact platform-test-ios-artifact
+
+platform-test-android-artifact:
+	mvn -q -f platform/sdk/jvm/pom.xml -DskipTests install
+	mvn -q -f platform/integrations/android/pom.xml -DskipTests install
+	gradle --no-daemon -p platform/integrations/android/sample-app layerxSecretScanRelease \
+		-Playerx.serviceUrl=https://platform.example.com \
+		-Playerx.sessionBrokerUrl=https://app-backend.example.com/layerx/session \
+		-Playerx.eventKeyId=relay-2026 \
+		-Playerx.eventPublicKey=d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a
+
+platform-test-ios-artifact:
+	command -v xcodegen >/dev/null
+	cd platform/integrations/ios/sample-app && xcodegen generate
+	xcodebuild -project platform/integrations/ios/sample-app/LayerXWallet.xcodeproj \
+		-scheme LayerXWallet -configuration Release -sdk iphonesimulator \
+		-derivedDataPath platform/integrations/ios/.derived CODE_SIGNING_ALLOWED=NO build
+	swift run --package-path platform/integrations/ios layerx-ios-secret-scan \
+		platform/integrations/ios/.derived/Build/Products/Release-iphonesimulator/LayerXWallet.app
+
+platform-real-agent-integration:
+	@test -n "$${LAYERX_AGENT_FRAMEWORK:-}"
+	@test -s "$${LAYERX_WEBHOOK_DELIVERY_PATH:-}"
+	cd platform/integrations/agents && npm run integration:real
+
+platform-real-ios-integration:
+	@test -s "$${LAYERX_SAMPLE_WEBHOOK_DELIVERY_PATH:-}"
+	swift run --package-path platform/integrations/ios layerx-ios-sample
+
+platform-real-android-integration:
+	@test -s "$${LAYERX_SAMPLE_WEBHOOK_DELIVERY_PATH:-}"
+	mvn -q -f platform/sdk/jvm/pom.xml -DskipTests install
+	mvn -q -f platform/integrations/android/pom.xml -DskipTests install
+	mvn -q -f platform/integrations/android/pom.xml -Psample test-compile exec:java
 
 platform-test-docs: platform-test-reference-apps
 	sh platform/tools/docs-gate $(CURDIR)

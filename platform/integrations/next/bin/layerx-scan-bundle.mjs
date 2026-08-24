@@ -42,6 +42,9 @@ const artifacts = [];
 for (const root of roots) {
   await collect(resolve(root), base, artifacts);
 }
+if (artifacts.length === 0) {
+  throw new Error("no_browser_artifacts");
+}
 
 const findings = scanBundleArtifacts({
   artifacts,

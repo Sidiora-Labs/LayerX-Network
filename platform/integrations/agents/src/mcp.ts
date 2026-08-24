@@ -1,4 +1,17 @@
 import type { JsonValue } from "@sidiora/layerx-seller-middleware";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
+import {
+  CallToolRequestSchema,
+  ListToolsRequestSchema,
+  type CallToolResult,
+  type Tool as McpTool,
+} from "@modelcontextprotocol/sdk/types.js";
+import { chmod, mkdir, open, readFile, rename, stat, unlink } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
 import { AgentIntegrationError } from "./config.js";
 import {
   createAgentIntegration,
@@ -76,9 +89,16 @@ export interface LayerXMcpServerConfig {
   readonly name?: string;
   readonly version?: string;
   readonly bufferedEvents?: number;
+  readonly eventQueue?: VerifiedEventBuffer;
 }
 
-export class VerifiedEventQueue {
+export interface VerifiedEventBuffer {
+  push(deliveryId: string, event: Readonly<Record<string, JsonValue>>): Promise<void>;
+  drain(limit: number): Promise<readonly { deliveryId: string; event: Readonly<Record<string, JsonValue>> }[]>;
+  count(): Promise<number>;
+}
+
+export class VerifiedEventQueue implements VerifiedEventBuffer {
   readonly #capacity: number;
   readonly #entries: { deliveryId: string; event: Readonly<Record<string, JsonValue>> }[] = [];
 
@@ -93,28 +113,164 @@ export class VerifiedEventQueue {
     return this.#entries.length;
   }
 
-  public push(deliveryId: string, event: Readonly<Record<string, JsonValue>>): void {
+  public push(deliveryId: string, event: Readonly<Record<string, JsonValue>>): Promise<void> {
+    const existing = this.#entries.find((entry) => entry.deliveryId === deliveryId);
+    if (existing !== undefined) {
+      if (JSON.stringify(existing.event) !== JSON.stringify(event)) {
+        return Promise.reject(new AgentIntegrationError("service-refused"));
+      }
+      return Promise.resolve();
+    }
     this.#entries.push({ deliveryId, event });
-    while (this.#entries.length > this.#capacity) {
-      this.#entries.shift();
+    if (this.#entries.length > this.#capacity) {
+      this.#entries.pop();
+      return Promise.reject(new AgentIntegrationError("service-refused"));
+    }
+    return Promise.resolve();
+  }
+
+  public drain(limit: number): Promise<readonly { deliveryId: string; event: Readonly<Record<string, JsonValue>> }[]> {
+    return Promise.resolve(this.#entries.splice(0, Math.max(0, Math.min(limit, this.#entries.length))));
+  }
+
+  public count(): Promise<number> {
+    return Promise.resolve(this.#entries.length);
+  }
+}
+
+interface VerifiedEventLedger {
+  readonly version: 1;
+  readonly entries: readonly { deliveryId: string; event: Readonly<Record<string, JsonValue>> }[];
+}
+
+export class FileVerifiedEventQueue implements VerifiedEventBuffer {
+  readonly #path: string;
+  readonly #lockPath: string;
+  readonly #capacity: number;
+
+  public constructor(path: string, capacity = MAXIMUM_BUFFERED_EVENTS) {
+    if (path.length === 0 || path.length > 4_096 || path.includes("\0")
+        || !Number.isSafeInteger(capacity) || capacity < 1) {
+      throw new AgentIntegrationError("invalid-declared-key");
+    }
+    this.#path = resolve(path);
+    this.#lockPath = `${this.#path}.lock`;
+    this.#capacity = capacity;
+  }
+
+  public push(deliveryId: string, event: Readonly<Record<string, JsonValue>>): Promise<void> {
+    if (deliveryId.length === 0 || deliveryId.length > 255 || deliveryId.includes("\0")) {
+      throw new AgentIntegrationError("service-refused");
+    }
+    return this.#mutate((entries) => {
+      const existing = entries.find((entry) => entry.deliveryId === deliveryId);
+      if (existing !== undefined) {
+        if (JSON.stringify(existing.event) !== JSON.stringify(event)) {
+          throw new AgentIntegrationError("service-refused");
+        }
+        return;
+      }
+      if (entries.length >= this.#capacity) throw new AgentIntegrationError("service-refused");
+      entries.push({ deliveryId, event });
+    });
+  }
+
+  public drain(limit: number): Promise<readonly { deliveryId: string; event: Readonly<Record<string, JsonValue>> }[]> {
+    if (!Number.isSafeInteger(limit) || limit < 0) throw new AgentIntegrationError("invalid-tool-input");
+    return this.#mutate((entries) => entries.splice(0, Math.min(limit, entries.length)));
+  }
+
+  public count(): Promise<number> {
+    return this.#withLock(async () => (await this.#read()).length);
+  }
+
+  async #mutate<Result>(
+    body: (entries: { deliveryId: string; event: Readonly<Record<string, JsonValue>> }[]) => Result,
+  ): Promise<Result> {
+    return this.#withLock(async () => {
+      const entries = await this.#read();
+      const result = body(entries);
+      await this.#write(entries);
+      return result;
+    });
+  }
+
+  async #withLock<Result>(body: () => Promise<Result>): Promise<Result> {
+    await mkdir(dirname(this.#path), { recursive: true, mode: 0o700 });
+    await chmod(dirname(this.#path), 0o700);
+    const lock = await acquireMcpFileLock(this.#lockPath);
+    try {
+      return await body();
+    } catch (error) {
+      if (error instanceof AgentIntegrationError) throw error;
+      throw new AgentIntegrationError("service-refused");
+    } finally {
+      await lock.close();
+      try {
+        await unlink(this.#lockPath);
+      } catch (error) {
+        if (!isNodeFileError(error, "ENOENT")) throw new AgentIntegrationError("service-refused");
+      }
     }
   }
 
-  public drain(limit: number): readonly { deliveryId: string; event: Readonly<Record<string, JsonValue>> }[] {
-    return this.#entries.splice(0, Math.max(0, Math.min(limit, this.#entries.length)));
+  async #read(): Promise<{ deliveryId: string; event: Readonly<Record<string, JsonValue>> }[]> {
+    let encoded: Uint8Array;
+    try {
+      encoded = await readFile(this.#path);
+    } catch (error) {
+      if (isNodeFileError(error, "ENOENT")) return [];
+      throw new AgentIntegrationError("service-refused");
+    }
+    if (encoded.byteLength > 64 * 1024 * 1024) throw new AgentIntegrationError("service-refused");
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(new TextDecoder().decode(encoded));
+    } catch {
+      throw new AgentIntegrationError("service-refused");
+    }
+    if (!isVerifiedEventLedger(parsed)) throw new AgentIntegrationError("service-refused");
+    if (parsed.entries.length > this.#capacity) throw new AgentIntegrationError("service-refused");
+    return parsed.entries.map((entry) => ({ deliveryId: entry.deliveryId, event: entry.event }));
+  }
+
+  async #write(entries: readonly { deliveryId: string; event: Readonly<Record<string, JsonValue>> }[]): Promise<void> {
+    const temporary = `${this.#path}.${globalThis.crypto.randomUUID()}.tmp`;
+    const output = await open(temporary, "wx", 0o600);
+    try {
+      await output.writeFile(JSON.stringify({ version: 1, entries } satisfies VerifiedEventLedger), "utf8");
+      await output.sync();
+    } finally {
+      await output.close();
+    }
+    try {
+      await rename(temporary, this.#path);
+    } catch (error) {
+      await unlink(temporary).catch(() => undefined);
+      throw error;
+    }
+    const directory = await open(dirname(this.#path), "r");
+    try {
+      await directory.sync();
+    } finally {
+      await directory.close();
+    }
   }
 }
 
 export class LayerXMcpServer {
   readonly #integration: LayerXAgentIntegration;
-  readonly #queue: VerifiedEventQueue;
+  readonly #queue: VerifiedEventBuffer;
   readonly #name: string;
   readonly #version: string;
   #initialized = false;
 
   public constructor(config: LayerXMcpServerConfig) {
     this.#integration = config.integration;
-    this.#queue = new VerifiedEventQueue(config.bufferedEvents ?? MAXIMUM_BUFFERED_EVENTS);
+    this.#queue = config.eventQueue ?? new FileVerifiedEventQueue(
+      `${config.integration.config.webhookDeliveryStorePath}.mcp-events.json`,
+      config.bufferedEvents ?? MAXIMUM_BUFFERED_EVENTS,
+    );
     this.#name = config.name ?? "layerx";
     this.#version = config.version ?? "0.1.0";
   }
@@ -123,7 +279,7 @@ export class LayerXMcpServer {
     return this.#integration;
   }
 
-  public get events(): VerifiedEventQueue {
+  public get events(): VerifiedEventBuffer {
     return this.#queue;
   }
 
@@ -134,7 +290,7 @@ export class LayerXMcpServer {
   public deliver(rawBody: Uint8Array, headers: WebhookHeaderSource): Promise<AgentWebhookResponse> {
     return this.#integration.webhooks.respond(rawBody, headers, {
       handle: async (event, deliveryId) => {
-        this.#queue.push(deliveryId, event);
+        await this.#queue.push(deliveryId, event);
       },
     });
   }
@@ -259,7 +415,7 @@ export class LayerXMcpServer {
     const name = params["name"];
     const input = params["arguments"] ?? {};
     if (name === EVENTS_TOOL.name) {
-      return content(this.#drain(input), false);
+      return content(await this.#drain(input), false);
     }
     const outcome = await this.#integration.tools.execute(name, input);
     if (outcome.ok) {
@@ -287,33 +443,118 @@ export class LayerXMcpServer {
     return { status: response.status, body: response.body };
   }
 
-  #drain(input: unknown): ToolJsonObject {
+  async #drain(input: unknown): Promise<ToolJsonObject> {
     const requested = isObject(input) ? input["limit"] : undefined;
     if (requested !== undefined && (typeof requested !== "number" || !Number.isSafeInteger(requested) || requested < 1)) {
       throw new McpMethodError(INVALID_PARAMS, "limit must be a positive integer");
     }
-    const drained = this.#queue.drain(requested === undefined ? MAXIMUM_BUFFERED_EVENTS : requested);
+    const drained = await this.#queue.drain(requested === undefined ? MAXIMUM_BUFFERED_EVENTS : requested);
     const events: ToolJson[] = drained.map((entry) => ({ deliveryId: entry.deliveryId, event: entry.event }));
     return {
       tool: EVENTS_TOOL.name,
-      result: { events, remaining: this.#queue.size },
+      result: { events, remaining: await this.#queue.count() },
     };
   }
 
   public get initialized(): boolean {
     return this.#initialized;
   }
+
+  public drainVerifiedEvents(input: unknown): Promise<ToolJsonObject> {
+    return this.#drain(input);
+  }
 }
 
 export interface LayerXMcpIntegration extends LayerXAgentIntegration {
   readonly server: LayerXMcpServer;
+  readonly officialServer: LayerXMcpSdkServer;
+  connectStdio(): Promise<void>;
+  callToolEmbedded(name: string, input: ToolJsonObject): Promise<CallToolResult>;
+  closeMcp(): Promise<void>;
+}
+
+export class LayerXMcpSdkServer {
+  readonly #legacy: LayerXMcpServer;
+  readonly #server: Server;
+
+  public constructor(legacy: LayerXMcpServer, name = "layerx", version = "0.1.0") {
+    this.#legacy = legacy;
+    this.#server = new Server(
+      { name, version },
+      {
+        capabilities: { tools: { listChanged: false } },
+        instructions:
+          "LayerX spend tools reserve budget and report settlement only after local receipt verification. "
+          + "Refusals are typed and a spend must never be retried with a fresh idempotency key.",
+      },
+    );
+    this.#server.setRequestHandler(ListToolsRequestSchema, () => ({
+      tools: this.#legacy.tools.map(sdkDescribeTool),
+    }));
+    this.#server.setRequestHandler(CallToolRequestSchema, async (request) => {
+      const name = request.params.name;
+      const input = request.params.arguments ?? {};
+      if (name === EVENTS_TOOL.name) {
+        return sdkContent(await this.#legacy.drainVerifiedEvents(input), false);
+      }
+      const outcome = await this.#legacy.integration.tools.execute(name, input);
+      return outcome.ok
+        ? sdkContent({ tool: outcome.tool, result: outcome.result }, false)
+        : sdkContent({ tool: outcome.tool, code: outcome.code }, true);
+    });
+  }
+
+  public connect(transport: Transport): Promise<void> {
+    return this.#server.connect(transport);
+  }
+
+  public close(): Promise<void> {
+    return this.#server.close();
+  }
+
+  public get protocolServer(): Server {
+    return this.#server;
+  }
 }
 
 export function createMcpIntegration(options: AgentIntegrationOptions): LayerXMcpIntegration {
   const integration = createAgentIntegration(options);
+  const server = new LayerXMcpServer({ integration });
+  const officialServer = new LayerXMcpSdkServer(server);
+  let client: Client | undefined;
+  let connection: Promise<void> | undefined;
+  let connectionMode: "embedded" | "stdio" | undefined;
+  const connectEmbedded = (): Promise<void> => {
+    if (connectionMode === "stdio") throw new AgentIntegrationError("service-refused");
+    if (connection !== undefined) return connection;
+    connectionMode = "embedded";
+    client = new Client({ name: "layerx-embedded-client", version: "0.1.0" });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    connection = Promise.all([
+      officialServer.connect(serverTransport),
+      client.connect(clientTransport),
+    ]).then(() => undefined);
+    return connection;
+  };
   return {
     ...integration,
-    server: new LayerXMcpServer({ integration }),
+    server,
+    officialServer,
+    connectStdio: () => {
+      if (connectionMode !== undefined) throw new AgentIntegrationError("service-refused");
+      connectionMode = "stdio";
+      connection = officialServer.connect(new StdioServerTransport());
+      return connection;
+    },
+    callToolEmbedded: async (name, input) => {
+      await connectEmbedded();
+      if (client === undefined) throw new AgentIntegrationError("service-refused");
+      return client.callTool({ name, arguments: input });
+    },
+    closeMcp: async () => {
+      if (client !== undefined) await client.close();
+      await officialServer.close();
+    },
   };
 }
 
@@ -336,7 +577,24 @@ function describeTool(definition: ToolDefinition): ToolJsonObject {
   };
 }
 
+function sdkDescribeTool(definition: ToolDefinition): McpTool {
+  return {
+    name: definition.name,
+    title: definition.title,
+    description: definition.description,
+    inputSchema: definition.inputSchema,
+  };
+}
+
 function content(structured: ToolJsonObject, isError: boolean): ToolJsonObject {
+  return {
+    content: [{ type: "text", text: JSON.stringify(structured) }],
+    structuredContent: structured,
+    isError,
+  };
+}
+
+function sdkContent(structured: ToolJsonObject, isError: boolean): CallToolResult {
   return {
     content: [{ type: "text", text: JSON.stringify(structured) }],
     structuredContent: structured,
@@ -373,4 +631,53 @@ function decodeBase64(value: string): Uint8Array {
 
 function isObject(value: unknown): value is Readonly<Record<string, unknown>> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+async function acquireMcpFileLock(path: string): Promise<Awaited<ReturnType<typeof open>>> {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    try {
+      return await open(path, "wx", 0o600);
+    } catch (error) {
+      if (!isNodeFileError(error, "EEXIST")) throw new AgentIntegrationError("service-refused");
+      const details = await stat(path).catch(() => undefined);
+      if (details !== undefined && Date.now() - details.mtimeMs > 120_000) {
+        await unlink(path).catch(() => undefined);
+        continue;
+      }
+      await new Promise<void>((resolveWait) => setTimeout(resolveWait, Math.min(10 + attempt * 5, 250)));
+    }
+  }
+  throw new AgentIntegrationError("service-refused");
+}
+
+function isNodeFileError(error: unknown, code: string): boolean {
+  return error instanceof Error
+    && "code" in error
+    && (error as Error & { readonly code: unknown }).code === code;
+}
+
+function isVerifiedEventLedger(value: unknown): value is VerifiedEventLedger {
+  if (!isObject(value) || value["version"] !== 1 || !Array.isArray(value["entries"])) return false;
+  const deliveryIds = new Set<string>();
+  for (const untrusted of value["entries"]) {
+    if (!isObject(untrusted)) return false;
+    const deliveryId = untrusted["deliveryId"];
+    const event = untrusted["event"];
+    if (typeof deliveryId !== "string" || deliveryId.length === 0 || deliveryId.length > 255
+        || deliveryId.includes("\0") || deliveryIds.has(deliveryId) || !isJsonObject(event)) return false;
+    deliveryIds.add(deliveryId);
+  }
+  return true;
+}
+
+function isJsonObject(value: unknown): value is Readonly<Record<string, JsonValue>> {
+  if (!isObject(value)) return false;
+  return Object.values(value).every(isJsonValue);
+}
+
+function isJsonValue(value: unknown): value is JsonValue {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return true;
+  if (typeof value === "number") return Number.isFinite(value);
+  if (Array.isArray(value)) return value.every(isJsonValue);
+  return isJsonObject(value);
 }

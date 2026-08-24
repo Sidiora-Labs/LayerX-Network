@@ -741,7 +741,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Scan every browser-facing artifact in CI to prove no API secret or key material ships to a client bundle.
     - Exercise each integration's example end to end in CI against a real service.
     - _Requirements: 25.2, 25.7, 25.5_
-  - [ ] 16.4 Build the mobile bindings and agent-framework integrations
+  - [ ] 16.4 Build the mobile bindings and agent-framework integrations — **Implemented - qualification pending**
     - Ship iOS bindings over the Swift SDK and Android bindings over the JVM SDK, each with a runnable sample app.
     - Ship integrations for the major agent frameworks over the agent middleware, each installable as one dependency.
     - Verify webhook consumption, signature verification and replay protection in every integration's default path.

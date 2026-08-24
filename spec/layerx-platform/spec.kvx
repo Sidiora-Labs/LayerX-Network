@@ -2041,7 +2041,7 @@ reqs = ["25.2","25.7","25.5"]
 
 [task.16.4]
 title = "Build the mobile bindings and agent-framework integrations"
-status = "pending"
+status = "implemented"
 wave = 9
 requires = ["15.5","16.2"]
 work_kind = "implementation"
@@ -2053,7 +2053,7 @@ do_4 = "Prove no secret ships in any mobile artifact via the CI scan."
 do_5 = "Exercise each integration end to end in CI against a real service."
 verify_cmd = "make platform-test-middleware"
 symbols = ["platform_int_ios","platform_int_android","platform_int_agent_frameworks"]
-touches = ["platform/integrations/ios","platform/integrations/android","platform/integrations/agents"]
+touches = ["platform/integrations/ios","platform/integrations/android","platform/integrations/agents","platform/integrations/next/bin/layerx-scan-bundle.mjs","platform/Makefile.inc",".github/workflows/platform.yml","package*.json"]
 reqs = ["25.2","25.6","25.7"]
 
 [task.16.5]
