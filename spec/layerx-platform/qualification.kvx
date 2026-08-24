@@ -381,3 +381,19 @@ symbol = "human-e2e-settings"
 observed = "The settings verification target starts the production Next.js application but does not provision an authenticated human-api session or the executable human-api router. The real-stack browser suite therefore requires HUMAN_E2E_SESSION_COOKIE from the qualification environment and live /v1 profile, binding and notification-preference operations. The task's declared touches name the unit suite but omit the package script and browser-suite path that make `playwright test --grep @settings` execute the settings cascade."
 assumption = "Task 13.6 will supply the production human-api service boundary and web binding. Human qualification will provide a dedicated authenticated session through HUMAN_E2E_SESSION_COOKIE before invoking make human-e2e-settings in both shell projects."
 severity = "dependency-boundary"
+
+[observation.11.5.1]
+task = "11.5"
+file = "human/apps/web/src/app/layout.tsx, human/apps/web/src/app/api/performance/vitals/route.ts, human/apps/web/src/api/performance-sink.ts, human/apps/web/next.config.mjs, human/apps/web/src/explorer/client.ts"
+symbol = "WebVitalsRum, persistPerformanceObservation, explorer cache policy"
+observed = "The reconciled task reality says redacted real-user monitoring and production cache policy are not wired, but the current inherited tree mounts WebVitalsRum at the root, accepts only the exact redacted metric shape through a same-origin bounded endpoint, persists it through an explicitly configured durable sink, serves sink health and p75 aggregates against the normative thresholds, and applies both force-cache/revalidation and public surrogate-cache directives to the server-rendered explorer. Task 11.5 retains those real runtime paths and completes the missing exhaustive per-page route-budget registry and CI coverage gate."
+assumption = "Human qualification will provide LAYERX_RUM_STORAGE_DIRECTORY as a private durable production volume, observe sink health, and confirm the deployed surrogate honors the explorer Cache-Control policy; no production deployment or monitoring backend was exercised during implementation."
+severity = "note"
+
+[observation.11.5.2]
+task = "11.5"
+file = "spec/layerx-platform/spec.kvx, human/apps/web/e2e/perf.spec.ts"
+symbol = "task.11.5 do_3, do_5 and implementation_scope"
+observed = "The task do clauses say to prove the p75 budgets and 3G journey behavior, while the later implementation_scope explicitly assigns budget execution and performance/soak evidence to task 14.5. Task 11.5 therefore writes the executable CI budget and slow-network machinery, including the authenticated Move money route and its honest layout-reserving progress surface, but does not run it or claim measurement evidence."
+assumption = "Human qualification under task 14.5 will execute make human-e2e-perf against representative production pages and the real journey stack and will record the p75 and 3G evidence."
+severity = "phase-boundary"
