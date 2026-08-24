@@ -861,3 +861,43 @@ symbol = "cg guard task 25.1 lifecycle paths"
 observed = "The scoped cg guard accepted every explicit product, protocol, deployment and live-artifact path and reported only the three generated or auditable spec lifecycle files as advisory outside touches."
 assumption = "The lifecycle projection and qualification observations remain in the single published task commit; human review will inspect the advisory rather than remove the implementation state or external dependency record."
 severity = "task-scope"
+
+[observation.26.1.1]
+task = "26.1"
+file = "platform/ramps/toolkit/src/clients.rs, platform/ramps/config.example.json, platform/ramps/OPERATIONS.md"
+symbol = "ProviderClient, ComplianceClient, LayerxClient::sign, PaxeerCustodyClient"
+observed = "The active specification defines economic and custody invariants but the repository contains no owner-published provider settlement schema, compliance decision schema, remote LayerX activity-signer schema, or Paxeer custody signer/broadcaster schema. The toolkit therefore exposes strict versioned deploy-supplied mTLS contracts, requires exact order/customer/beneficiary/amount/currency, signing-purpose/key-handle/public-key and operator account/wallet/vault bindings, and fails closed on every absent or mismatched field instead of inventing a provider-specific success response."
+assumption = "Each production owner must publish and provision the documented layerx-ramp-provider-v1, layerx-ramp-compliance-v1, LayerX signature endpoint and layerx-ramp-paxeer-v1 coordinates or an exactly reviewed compatible binding. Human qualification must reconcile the configured wire fields against those authoritative schemas and exercise refusal, timeout, acknowledgement loss, duplicate callback and reversal behavior against real sandboxes."
+severity = "dependency-boundary"
+
+[observation.26.1.2]
+task = "26.1"
+file = "platform/hosted/gateway/src/main.rs, platform/ramps/reference/src/main.rs, platform/ramps/OPERATIONS.md"
+symbol = "ProductionRoute::State, WorkAction::SubmitLayerx"
+observed = "The production hosted gateway intentionally refuses its principal state route, so the ramp cannot safely discover the LayerX account sequence from that boundary. The NetworkPolicy-restricted operator worker must supply the exact operator debit sequence for an on-ramp direct send or operator receiver sequence for an off-ramp payer-grant draw from an authoritative account-state control plane; the service never guesses, increments a local shadow sequence or accepts a sequence from the customer order."
+assumption = "Qualification must bind the operator worker to the production account-state authority and prove the supplied sequence belongs to the exact order-bound direct send or authenticated payer-grant draw. If the hosted gateway later exposes a principal-isolated proof-backed state read, that read can replace the worker input without changing order or receipt binding."
+severity = "dependency-boundary"
+
+[observation.26.1.3]
+task = "26.1"
+file = "human/crates/layerx-paxeer-client/src/rpc.rs, platform/ramps/deployment.yaml, platform/ramps/toolkit/src/engine.rs"
+symbol = "EndpointConfig, InventoryRebalancer"
+observed = "The existing canonical Paxeer finality client accepts HTTP JSON-RPC endpoints and does not define public-Internet TLS credentials. The deployment therefore confines those exact clients to NetworkPolicy-selected internal Paxeer RPC services while the operator custody broadcast/signing boundary is separately mTLS authenticated. Durable observations compare inclusion block hashes across polls and record displacement rather than retaining stale finality."
+assumption = "The Paxeer operator must provide authenticated internal RPC transport or extend the canonical client with an owner-approved HTTPS/mTLS profile before any public endpoint is configured. Human qualification must inject endpoint disagreement, receipt disappearance, changed inclusion blocks and finality-depth regressions and must confirm no displaced transaction is counted as available inventory."
+severity = "custody-boundary"
+
+[observation.26.1.4]
+task = "26.1"
+file = "platform/ramps/sandbox-journey.sh, .github/workflows/ramp-sandbox.yml, platform/ramps/toolkit/tests/contracts.rs"
+symbol = "interop-test-ramps-sandbox"
+observed = "The implementation writes real-code contract tests and a protected real provider/LayerX sandbox journey, but implementation-phase rules prohibit builds, tests, provider calls, smoke tests, verification commands and qualification. No artifact was executed and no passing signal is claimed."
+assumption = "Human qualification must build the locked platform workspace, run the contract tests, deploy the reference service with owner-supplied schemas and execute both receipt-backed ramp directions plus Paxeer finality/reorg, crash-after-plan, acknowledgement-loss, callback ordering, refusal and reversal scenarios."
+severity = "phase-boundary"
+
+[observation.26.1.5]
+task = "26.1"
+file = "platform/Cargo.toml, platform/Cargo.lock, platform/ramps, Makefile, .github/workflows/ramp-sandbox.yml"
+symbol = "task 26.1 production and qualification surfaces"
+observed = "The inherited task names toolkit/reference source as its primary touch, while a cloneable production reference also requires workspace and lock integration, a container, deployment and NetworkPolicy, operator/customer/reversal documentation, exact configuration, real sandbox runner and protected CI entry point. These paths implement do_1 through do_5 and req 34.4 through 34.6 rather than adding a second ramp authority."
+assumption = "Human review will treat the expanded paths as the minimum deployable and auditable surface, and will inspect generated lifecycle/lock advisories without removing secret custody, durable storage, network isolation or real-sandbox qualification artifacts."
+severity = "task-scope"

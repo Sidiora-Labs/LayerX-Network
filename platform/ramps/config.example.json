@@ -1,0 +1,68 @@
+{
+  "listen": "0.0.0.0:8443",
+  "journal_path": "/var/lib/layerx-ramp/journal.jsonl",
+  "worker_id": "ramp-worker-eu-1",
+  "lease_seconds": 60,
+  "reconcile_seconds": 5,
+  "operator": {
+    "principal_id": "market-maker-eu-1",
+    "account": "agent:did:layerx:market-maker-eu-1:main",
+    "signer_key_handle": "kms://market-maker-eu-1/layerx-primary"
+  },
+  "quotes": [{
+    "quote_id": "REPLACE_ON_RAMP_QUOTE",
+    "direction": "on_ramp",
+    "layerx_asset": [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+    "layerx_amount": 1000000,
+    "external_currency": "EUR",
+    "external_amount_minor": 100,
+    "rate_numerator": 1000000,
+    "rate_denominator": 100,
+    "fee_minor": 2,
+    "maximum_slippage_bps": 25,
+    "context": [8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8],
+    "provider_token": "REPLACE_PROVIDER_PRODUCT_TOKEN",
+    "payout_token": "REPLACE_TOKENIZED_BENEFICIARY",
+    "expires_at": 2000000000
+  }],
+  "server_identity_pkcs12": "/run/secrets/server-identity.p12",
+  "server_identity_password_file": "/run/secrets/server-identity-password",
+  "client_tls": {
+    "ca_pem": "/run/secrets/outbound-ca.pem",
+    "identity_pkcs12": "/run/secrets/outbound-identity.p12",
+    "identity_password_file": "/run/secrets/outbound-identity-password",
+    "timeout_seconds": 8
+  },
+  "identity": {"endpoint":"https://identity.layerx-platform.svc.cluster.local","service_token_file":"/run/secrets/identity-token","audience":"layerx-ramp"},
+  "compliance": {"endpoint":"https://compliance-boundary.layerx-ramps.svc.cluster.local","service_token_file":"/run/secrets/compliance-token","public_key":"REPLACE_64_HEX_ED25519_PUBLIC_KEY"},
+  "provider": {"endpoint":"https://provider-egress.layerx-ramps.svc.cluster.local","credential_file":"/run/secrets/provider-token","settlement_path":"/layerx-ramp-v1/settlements","status_path":"/layerx-ramp-v1/settlements"},
+  "layerx": {
+    "gateway_endpoint":"https://gateway.layerx-platform.svc.cluster.local",
+    "receipt_authority_endpoint":"https://receipt-authority.layerx-platform.svc.cluster.local",
+    "signer_endpoint":"https://kms-boundary.layerx-ramps.svc.cluster.local",
+    "gateway_key_file":"/run/secrets/gateway-key",
+    "authority_token_file":"/run/secrets/receipt-authority-token",
+    "signer_token_file":"/run/secrets/kms-token",
+    "actor_did":"did:layerx:market-maker-eu-1",
+    "protocol_version":1,
+    "network_id":1,
+    "fee_limit":1000,
+    "signer_public_key":"REPLACE_64_HEX_ED25519_PUBLIC_KEY"
+  },
+  "paxeer": {
+    "custody_endpoint":"https://paxeer-custody.layerx-ramps.svc.cluster.local",
+    "custody_credential_file":"/run/secrets/paxeer-custody-token",
+    "broadcast_path":"/layerx-paxeer-v1/rebalances",
+    "status_path":"/layerx-paxeer-v1/rebalances",
+    "operator_account":"agent:did:layerx:market-maker-eu-1:main",
+    "wallet_address":"REPLACE_OPERATOR_WALLET",
+    "vault_id":"REPLACE_OPERATOR_VAULT",
+    "signer_key_handle":"kms://market-maker-eu-1/paxeer",
+    "rpc_endpoints":["http://paxeer-rpc-a.internal:8545","http://paxeer-rpc-b.internal:8545"],
+    "required_confirmations":12,
+    "poll_cadence_seconds":5,
+    "delayed_after_polls":12
+  },
+  "provider_callback_public_key":"REPLACE_64_HEX_ED25519_PUBLIC_KEY",
+  "operator_control_token_file":"/run/secrets/operator-control-token"
+}

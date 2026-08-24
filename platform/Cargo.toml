@@ -30,9 +30,15 @@ getrandom = "=0.3.4"
 keyring = "=4.1.6"
 keyring-core = "=1.0.0"
 native-tls = "=0.2.15"
+rustix = { version = "=1.1.4", features = ["fs"] }
 layerx-fiat = { path = "../interop/crates/layerx-fiat" }
 layerx-proof = { path = "../agent/crates/layerx-proof" }
 layerx-sdk = { path = "../agent/crates/layerx-sdk" }
+layerx-crypto = { path = "../agent/crates/layerx-crypto" }
+layerx-types = { path = "../agent/crates/layerx-types" }
+layerx-wire = { path = "../agent/crates/layerx-wire" }
+layerx-intents = { path = "../human/crates/layerx-intents" }
+layerx-paxeer-client = { path = "../human/crates/layerx-paxeer-client" }
 layerx-platform-kvx = { path = "tools/kvx", version = "=0.1.0" }
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.149"

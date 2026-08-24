@@ -6,9 +6,18 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-layerx-fiat.workspace = true
+ed25519-dalek.workspace = true
+layerx-crypto.workspace = true
+layerx-intents.workspace = true
+layerx-paxeer-client.workspace = true
 layerx-proof.workspace = true
-layerx-sdk.workspace = true
+layerx-types.workspace = true
+layerx-wire.workspace = true
+native-tls.workspace = true
+rustix.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
 
 [lints]
 workspace = true

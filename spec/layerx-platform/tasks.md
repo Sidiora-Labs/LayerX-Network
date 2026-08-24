@@ -1033,7 +1033,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - _Requirements: 34.7, 34.4_
 
 - [ ] 26. Ship the ramp toolkit
-  - [ ] 26.1 Build the market-maker ramp kit and reference ramp
+  - [ ] 26.1 Build the market-maker ramp kit and reference ramp — **Implemented - qualification pending**
     - Build the ramp toolkit letting third parties operate on and off ramps as ordinary LayerX principals over agent accounts, 402LXP transfers and payer grants.
     - Grant no special protocol authority, no reserved vocabulary and no custody claims to any ramp.
     - Ship a runnable reference ramp with rebalancing through the Paxeer boundary on the operator's own account.

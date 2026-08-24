@@ -2332,11 +2332,14 @@ include tools/build/sanitizers.mk
 
 include platform/Makefile.inc
 
-.PHONY: interop-test-ramps
+.PHONY: interop-test-ramps interop-test-ramps-sandbox
 
 interop-test-ramps:
-	cargo test --manifest-path platform/Cargo.toml -p layerx-ramp-toolkit
-	cargo run --manifest-path platform/Cargo.toml -p layerx-reference-ramp
+	cargo test --locked --manifest-path platform/Cargo.toml -p layerx-ramp-toolkit
+	cargo build --locked --manifest-path platform/Cargo.toml -p layerx-reference-ramp
+
+interop-test-ramps-sandbox:
+	sh platform/ramps/sandbox-journey.sh
 
 INTEROP_CARGO ?= cargo
 INTEROP_MANIFEST := interop/Cargo.toml

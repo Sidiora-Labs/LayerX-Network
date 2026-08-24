@@ -2681,7 +2681,7 @@ status = "pending"
 
 [task.26.1]
 title = "Build the market-maker ramp kit and reference ramp"
-status = "pending"
+status = "implemented"
 wave = 12
 requires = ["15.2"]
 work_kind = "implementation"
@@ -2694,7 +2694,7 @@ do_4 = "Document ramp operation, risk boundaries and the external-custody labell
 do_5 = "Exercise the reference ramp end to end in CI against the testnet."
 verify_cmd = "make interop-test-ramps"
 symbols = ["platform_ramp_toolkit","platform_reference_ramp"]
-touches = ["platform/ramps/toolkit","platform/ramps/reference","platform/docs"]
+touches = ["platform/ramps","platform/Cargo.*","Makefile",".github/workflows/ramp-sandbox.yml"]
 reqs = ["34.5"]
 
 [task.26.2]

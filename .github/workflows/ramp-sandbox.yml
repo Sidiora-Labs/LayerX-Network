@@ -1,0 +1,50 @@
+name: Market-maker ramp sandbox
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ramp-sandbox-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  LC_ALL: C
+  TZ: UTC
+
+jobs:
+  real-ramp-journeys:
+    name: Real provider and LayerX sandbox journeys
+    environment: ramp-sandbox
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Materialize sandbox trust anchor
+        env:
+          RAMP_CA_PEM_B64: ${{ secrets.RAMP_CA_PEM_B64 }}
+        run: |
+          set -eu
+          umask 077
+          secret_dir="${RUNNER_TEMP}/layerx-ramp"
+          mkdir -p "${secret_dir}"
+          printf '%s' "${RAMP_CA_PEM_B64}" | base64 --decode > "${secret_dir}/ca.pem"
+          chmod 600 "${secret_dir}/ca.pem"
+      - name: Exercise receipt-backed on-ramp and off-ramp
+        env:
+          LAYERX_RAMP_URL: ${{ vars.RAMP_URL }}
+          LAYERX_RAMP_OPERATOR_URL: ${{ vars.RAMP_OPERATOR_URL }}
+          LAYERX_RAMP_CA_PEM: ${{ runner.temp }}/layerx-ramp/ca.pem
+          LAYERX_RAMP_CUSTOMER_TOKEN: ${{ secrets.RAMP_CUSTOMER_TOKEN }}
+          LAYERX_RAMP_OPERATOR_TOKEN: ${{ secrets.RAMP_OPERATOR_TOKEN }}
+          LAYERX_RAMP_ON_QUOTE_ID: ${{ vars.RAMP_ON_QUOTE_ID }}
+          LAYERX_RAMP_OFF_QUOTE_ID: ${{ vars.RAMP_OFF_QUOTE_ID }}
+          LAYERX_RAMP_OFF_GRANT_JSON: ${{ secrets.RAMP_OFF_GRANT_JSON }}
+          LAYERX_RAMP_ON_ACCOUNT_SEQUENCE: ${{ vars.RAMP_ON_ACCOUNT_SEQUENCE }}
+          LAYERX_RAMP_OFF_RECEIVER_SEQUENCE: ${{ vars.RAMP_OFF_RECEIVER_SEQUENCE }}
+        run: make interop-test-ramps-sandbox

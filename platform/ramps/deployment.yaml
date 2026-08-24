@@ -1,0 +1,125 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: layerx-reference-ramp, namespace: layerx-ramps}
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: {name: layerx-reference-ramp, namespace: layerx-ramps}
+spec:
+  serviceName: layerx-reference-ramp
+  replicas: 1
+  selector: {matchLabels: {app: layerx-reference-ramp}}
+  template:
+    metadata: {labels: {app: layerx-reference-ramp, layerx-plane: ramp}}
+    spec:
+      serviceAccountName: layerx-reference-ramp
+      automountServiceAccountToken: false
+      securityContext: {runAsNonRoot: true, runAsUser: 4020, runAsGroup: 4020, fsGroup: 4020}
+      initContainers:
+        - name: materialize-private-files
+          image: ghcr.io/sidiora-labs/layerx-reference-ramp:0.1.0
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              umask 077
+              cp /source-config/config.json /runtime-config/config.json
+              cp /source-secrets/* /runtime-secrets/
+              chmod 600 /runtime-config/config.json /runtime-secrets/*
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          volumeMounts:
+            - {name: config-source, mountPath: /source-config, readOnly: true}
+            - {name: secrets-source, mountPath: /source-secrets, readOnly: true}
+            - {name: runtime-config, mountPath: /runtime-config}
+            - {name: runtime-secrets, mountPath: /runtime-secrets}
+      containers:
+        - name: ramp
+          image: ghcr.io/sidiora-labs/layerx-reference-ramp:0.1.0
+          imagePullPolicy: Always
+          ports: [{name: https, containerPort: 8443}]
+          readinessProbe: {httpGet: {scheme: HTTPS, path: /readyz, port: https}, periodSeconds: 5, failureThreshold: 3}
+          livenessProbe: {httpGet: {scheme: HTTPS, path: /livez, port: https}, periodSeconds: 15}
+          resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "2", memory: 1Gi}}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/layerx-ramp}
+            - {name: runtime-config, mountPath: /run/layerx-ramp/config, readOnly: true}
+            - {name: runtime-secrets, mountPath: /run/secrets, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - {name: config-source, secret: {secretName: layerx-reference-ramp-config, defaultMode: 292}}
+        - name: secrets-source
+          projected:
+            defaultMode: 292
+            sources:
+              - {secret: {name: layerx-reference-ramp-server-tls}}
+              - {secret: {name: layerx-reference-ramp-client-tls}}
+              - {secret: {name: layerx-reference-ramp-identity}}
+              - {secret: {name: layerx-reference-ramp-compliance}}
+              - {secret: {name: layerx-reference-ramp-provider}}
+              - {secret: {name: layerx-reference-ramp-layerx}}
+              - {secret: {name: layerx-reference-ramp-paxeer}}
+              - {secret: {name: layerx-reference-ramp-operator}}
+        - {name: runtime-config, emptyDir: {medium: Memory, sizeLimit: 1Mi}}
+        - {name: runtime-secrets, emptyDir: {medium: Memory, sizeLimit: 2Mi}}
+        - {name: tmp, emptyDir: {sizeLimit: 64Mi}}
+  volumeClaimTemplates:
+    - metadata: {name: data}
+      spec: {accessModes: [ReadWriteOnce], resources: {requests: {storage: 20Gi}}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: layerx-reference-ramp, namespace: layerx-ramps}
+spec: {selector: {app: layerx-reference-ramp}, ports: [{name: https, port: 443, targetPort: https}]}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: layerx-reference-ramp-operator, namespace: layerx-ramps}
+spec: {type: ClusterIP, selector: {app: layerx-reference-ramp}, ports: [{name: https, port: 443, targetPort: https}]}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: layerx-reference-ramp, namespace: layerx-ramps}
+spec:
+  podSelector: {matchLabels: {app: layerx-reference-ramp}}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ingress-nginx}}}]
+      ports: [{protocol: TCP, port: 8443}]
+    - from: [{podSelector: {matchLabels: {app: layerx-ramp-worker}}}]
+      ports: [{protocol: TCP, port: 8443}]
+  egress:
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}
+          podSelector: {matchLabels: {k8s-app: kube-dns}}
+      ports: [{protocol: UDP, port: 53}, {protocol: TCP, port: 53}]
+    - to: [{podSelector: {matchLabels: {layerx-plane: trusted-boundary}}}]
+      ports: [{protocol: TCP, port: 443}, {protocol: TCP, port: 9443}]
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: layerx-platform}}
+          podSelector: {matchLabels: {layerx-plane: trusted-boundary}}
+      ports: [{protocol: TCP, port: 443}, {protocol: TCP, port: 9443}]
+    - to: [{podSelector: {matchLabels: {app: paxeer-rpc}}}]
+      ports: [{protocol: TCP, port: 8545}]
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: layerx-reference-ramp
+  namespace: layerx-ramps
+  annotations:
+    nginx.ingress.kubernetes.io/backend-protocol: HTTPS
+    nginx.ingress.kubernetes.io/proxy-body-size: 1m
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "15"
+spec:
+  ingressClassName: nginx
+  tls: [{hosts: [ramp.testnet.layerx.network], secretName: layerx-reference-ramp-ingress-tls}]
+  rules:
+    - host: ramp.testnet.layerx.network
+      http:
+        paths:
+          - {path: /v1/orders, pathType: Prefix, backend: {service: {name: layerx-reference-ramp, port: {name: https}}}}
+          - {path: /v1/provider-callbacks, pathType: Exact, backend: {service: {name: layerx-reference-ramp, port: {name: https}}}}
+          - {path: /livez, pathType: Exact, backend: {service: {name: layerx-reference-ramp, port: {name: https}}}}
+          - {path: /readyz, pathType: Exact, backend: {service: {name: layerx-reference-ramp, port: {name: https}}}}

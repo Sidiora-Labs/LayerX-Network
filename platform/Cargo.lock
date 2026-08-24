@@ -1270,6 +1270,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "layerx-intents"
+version = "0.1.0"
+dependencies = [
+ "layerx-client",
+ "layerx-crypto",
+ "layerx-proof",
+ "layerx-sdk",
+ "layerx-types",
+ "layerx-wire",
+]
+
+[[package]]
 name = "layerx-mcp"
 version = "0.1.0"
 dependencies = [
@@ -1427,6 +1439,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "layerx-paxeer-client"
+version = "0.1.0"
+dependencies = [
+ "layerx-agent-api",
+ "layerx-client",
+ "layerx-crypto",
+ "layerx-intents",
+ "layerx-proof",
+ "layerx-sdk",
+ "layerx-types",
+ "sha2",
+]
+
+[[package]]
 name = "layerx-programs-registry"
 version = "0.1.0"
 dependencies = [
@@ -1460,16 +1486,31 @@ dependencies = [
 name = "layerx-ramp-toolkit"
 version = "0.1.0"
 dependencies = [
- "layerx-fiat",
+ "ed25519-dalek",
+ "layerx-crypto",
+ "layerx-intents",
+ "layerx-paxeer-client",
  "layerx-proof",
- "layerx-sdk",
+ "layerx-types",
+ "layerx-wire",
+ "native-tls",
+ "rustix",
+ "serde",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]
 name = "layerx-reference-ramp"
 version = "0.1.0"
 dependencies = [
+ "layerx-paxeer-client",
  "layerx-ramp-toolkit",
+ "layerx-types",
+ "native-tls",
+ "serde",
+ "serde_json",
+ "subtle",
 ]
 
 [[package]]
