@@ -8,6 +8,17 @@
   <version>0.1.0</version>
   <name>LayerX JVM SDK</name>
   <description>Production Java and Kotlin SDK for the LayerX agent and human APIs</description>
+  <url>https://github.com/sidiora/layerx-protocol/tree/main/platform/sdk/jvm</url>
+  <licenses>
+    <license><name>LayerX Protocol License</name><url>https://github.com/sidiora/layerx-protocol/blob/main/LICENSE</url></license>
+  </licenses>
+  <developers><developer><organization>Sidiora Labs</organization></developer></developers>
+  <scm>
+    <connection>scm:git:https://github.com/sidiora/layerx-protocol.git</connection>
+    <developerConnection>scm:git:ssh://git@github.com/sidiora/layerx-protocol.git</developerConnection>
+    <url>https://github.com/sidiora/layerx-protocol</url>
+    <tag>HEAD</tag>
+  </scm>
   <properties>
     <maven.compiler.release>21</maven.compiler.release>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
@@ -64,7 +75,20 @@
         <version>3.4.2</version>
         <configuration>
           <outputTimestamp>2024-01-01T00:00:00Z</outputTimestamp>
+          <archive><manifestEntries><Automatic-Module-Name>com.sidiora.layerx.sdk</Automatic-Module-Name></manifestEntries></archive>
         </configuration>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-source-plugin</artifactId>
+        <version>3.3.1</version>
+        <executions><execution><id>attach-sources</id><goals><goal>jar-no-fork</goal></goals></execution></executions>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-javadoc-plugin</artifactId>
+        <version>3.8.0</version>
+        <executions><execution><id>attach-javadocs</id><goals><goal>jar</goal></goals></execution></executions>
       </plugin>
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>

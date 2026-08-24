@@ -23,6 +23,7 @@ pub const JVM_FILES: &[&str] = &[
     "pom.xml",
     "src/main/java/com/sidiora/layerx/sdk/HttpProductionTransport.java",
     "src/main/java/com/sidiora/layerx/sdk/GeneratedContract.java",
+    "src/main/java/com/sidiora/layerx/sdk/GeneratedSchema.java",
     "src/main/java/com/sidiora/layerx/sdk/IdempotencyKey.java",
     "src/main/java/com/sidiora/layerx/sdk/OperationCatalog.java",
     "src/main/java/com/sidiora/layerx/sdk/PlatformSdk.java",
@@ -31,10 +32,13 @@ pub const JVM_FILES: &[&str] = &[
     "src/main/java/com/sidiora/layerx/sdk/ProductionTransport.java",
     "src/main/java/com/sidiora/layerx/sdk/ProtocolAmount.java",
     "src/main/java/com/sidiora/layerx/sdk/ResumableStream.java",
+    "src/main/java/com/sidiora/layerx/sdk/SchemaErrors.java",
+    "src/main/java/com/sidiora/layerx/sdk/SchemaTypes.java",
     "src/main/java/com/sidiora/layerx/sdk/SecretBytes.java",
     "src/main/java/com/sidiora/layerx/sdk/verify/LocalVerifier.java",
     "src/conformance/java/com/sidiora/layerx/sdk/ConformanceMain.java",
     "src/main/kotlin/com/sidiora/layerx/sdk/LayerX.kt",
+    "src/test/java/com/sidiora/layerx/sdk/GoldenVectorTest.java",
 ];
 
 const OUTPUTS: [(&str, &str, &str, Option<&[&str]>); 10] = [
@@ -685,8 +689,23 @@ fn generate_jvm_contract(repo_root: &Path) -> Result<String, String> {
     )?;
     render_set(
         &mut output,
+        "AGENT_ERROR_CLASSES",
+        &variants(&agent, "type.ErrorClass")?,
+    )?;
+    render_set(
+        &mut output,
+        "AGENT_RETRIABILITY",
+        &variants(&agent, "type.Retriability")?,
+    )?;
+    render_set(
+        &mut output,
         "HUMAN_ERROR_CODES",
         &variants(&human, "type.ErrorCode")?,
+    )?;
+    render_set(
+        &mut output,
+        "HUMAN_RETRIABILITY",
+        &variants(&human, "type.Retriability")?,
     )?;
     writeln!(
         output,
@@ -779,6 +798,11 @@ protocol_version = 1\n\
 agent_operations = {agent_operations}\n\
 human_operations = {human_operations}\n\
 money_type = \"java.math.BigInteger\"\n\
+typed_operations = \"com.sidiora.layerx.sdk.SchemaTypes.Operation\"\n\
+typed_requests = \"com.sidiora.layerx.sdk.SchemaTypes.GeneratedRequest\"\n\
+typed_responses = \"com.sidiora.layerx.sdk.SchemaTypes.GeneratedResponse\"\n\
+typed_events = \"com.sidiora.layerx.sdk.SchemaTypes.GeneratedEvent\"\n\
+schema_errors = \"com.sidiora.layerx.sdk.SchemaErrors\"\n\
 stream = \"atomic cursor chain with duplicate rejection\"\n\
 \n\
 [verification]\n\
@@ -786,11 +810,14 @@ receipt = \"com.sidiora.layerx.sdk.verify.LocalVerifier.verifyReceipt\"\n\
 receipt_outcome = \"com.sidiora.layerx.sdk.verify.LocalVerifier.verifyReceiptOutcome\"\n\
 batch_inclusion = \"com.sidiora.layerx.sdk.verify.LocalVerifier.verifyBatchInclusion\"\n\
 checkpoint = \"com.sidiora.layerx.sdk.verify.LocalVerifier.verifyCheckpoint\"\n\
+receipt_in_batch = \"com.sidiora.layerx.sdk.verify.LocalVerifier.verifyReceiptInBatch\"\n\
 merkle = \"com.sidiora.layerx.sdk.verify.LocalVerifier.verifyMerkleInclusion\"\n\
 \n\
 [golden]\n\
 agent_request = \"agent/schema/agent-api/golden/version-request.hex\"\n\
 agent_response = \"agent/schema/agent-api/golden/version-response.hex\"\n\
+agent_schema_goldens = \"agent/schema/agent-api/golden/*.kvx\"\n\
+human_schema_goldens = \"human/schema/human-api/golden/*.json\"\n\
 codec_valid = \"tests/vectors/codec/valid.lxv\"\n\
 codec_adversarial = \"tests/vectors/codec/adversarial.lxv\"\n"
     ))

@@ -1941,7 +1941,7 @@ reqs = ["24.1","24.3","24.4"]
 
 [task.15.4]
 title = "Build the JVM SDK for Java and Kotlin"
-status = "pending"
+status = "implemented"
 wave = 9
 requires = ["15.1"]
 work_kind = "implementation"
@@ -1953,7 +1953,7 @@ do_4 = "Enforce integer-only money via BigInteger-backed protocol types, idempot
 do_5 = "Run the golden vectors and the conformance suite against the live schema in CI."
 verify_cmd = "make platform-test-sdks"
 symbols = ["platform_sdk_jvm"]
-touches = ["platform/sdk/jvm","platform/sdk/conformance"]
+touches = ["platform/sdk/jvm","platform/sdk/conformance","platform/sdk/generators","platform/sdk/pipeline.kvx","platform/Makefile.inc","platform/release/registries.kvx",".github/workflows/platform.yml"]
 reqs = ["24.1","24.3","24.4"]
 
 [task.15.5]

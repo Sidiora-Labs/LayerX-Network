@@ -453,3 +453,35 @@ symbol = "task.12.4 do_5"
 observed = "do_5 asks for create, pause, reclaim and archive to be run end to end in both shells, while the implementation-phase hard rule prohibits running tests and the current tree has no executable Human API router for the generated client's /v1/agents operations. That router is owned by the parallel task 13.6."
 assumption = "No journey, build or verification command was run. Human qualification will run make human-e2e-journeys after task 13.6 is integrated and will exercise the real create, pause, reclaim and archive operations in both shell profiles."
 severity = "dependency-boundary"
+
+[observation.15.4.1]
+task = "15.4"
+file = "agent/schema/agent-api/read.kvx, agent/schema/agent-api/write.kvx, agent/schema/agent-api/stream.kvx, platform/sdk/generators/generate_jvm.py"
+symbol = "GeneratedSchema.AgentOperations request and response records"
+observed = "The Agent API declares many operation fields only by name (for example prepare.required and read.balance.request_required) without a field-level schema type. The JVM generator emits operation-specific records and preserves those exact required field names, but represents only these under-specified fields as JsonNode. Declared scalars and Human API field:type declarations generate concrete BigInteger, ProtocolAmount, enum, record and list types; the implementation does not infer money or identifier types from field spelling."
+assumption = "A future additive Agent schema revision may attach field types to the existing names, at which point regeneration can narrow the corresponding JsonNode components without inventing wire semantics now. Human qualification should treat the remaining JsonNode components as a source-schema limitation rather than full field typing."
+severity = "schema-ambiguity"
+
+[observation.15.4.2]
+task = "15.4"
+file = "tests/vectors, platform/sdk/jvm/src/conformance/java/com/sidiora/layerx/sdk/ConformanceMain.java, platform/sdk/jvm/src/main/java/com/sidiora/layerx/sdk/verify/LocalVerifier.java"
+symbol = "JVM receipt, batch and checkpoint positive-vector coverage"
+observed = "The shared tests/vectors tree publishes canonical primitive codec vectors and replay corpora but no standalone positive receipt, signed batch-header or checkpoint-certificate vector with its authorization keys. JVM conformance invokes the real successful Merkle path and invokes the receipt, batch and built-in checkpoint verifiers with malformed inputs to prove fail-closed dispatch; it cannot claim cross-language positive cryptographic parity without vectors that do not exist in the declared corpus."
+assumption = "Qualification task 15.6 will supply or identify the authoritative signed receipt, batch and checkpoint vectors and run them across all SDKs. Task 15.4 writes the complete local verification paths and does not synthesize fake signatures or a JVM-only truth source."
+severity = "qualification-input"
+
+[observation.15.4.3]
+task = "15.4"
+file = "human/schema/human-api/home.kvx, platform/sdk/jvm/src/main/java/com/sidiora/layerx/sdk/GeneratedContract.java"
+symbol = "account.balance and home.summary operation coverage"
+observed = "The live Human API schema contains 78 operations, including account.balance and home.summary, while the inherited JVM generated contract and conformance manifest contained 76 and omitted both home operations. Task 15.4 updates the generated JVM route and typed-operation catalogues and the conformance count to the live 78-operation schema."
+assumption = "The cross-language parity qualification task owns reconciling any corresponding inherited omissions in SDKs outside the JVM task's product scope. No other language implementation was edited here."
+severity = "dependency-boundary"
+
+[observation.15.4.4]
+task = "15.4"
+file = "spec/layerx-platform/spec.kvx"
+symbol = "task.15.4 touches"
+observed = "The inherited task declared only platform/sdk/jvm and platform/sdk/conformance, while schema regeneration and CI execution necessarily also update the shared generator, pipeline digest, platform Make target, Maven release metadata and platform workflow. The task touch declaration is expanded to those exact paths so strict scope guarding reflects the implementation the do clauses require."
+assumption = "The expansion is limited to JVM generation, packaging and conformance wiring; it does not implement or qualify SDKs in any other language."
+severity = "scope-clarification"

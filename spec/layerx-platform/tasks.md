@@ -697,7 +697,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Enforce integer-only money, idempotency keys and secret hygiene per the SDK conformance rules.
     - Run the golden vectors and the conformance suite against the live schema in CI.
     - _Requirements: 24.1, 24.3, 24.4_
-  - [ ] 15.4 Build the JVM SDK for Java and Kotlin
+  - [ ] 15.4 Build the JVM SDK for Java and Kotlin — **Implemented - qualification pending**
     - Generate the JVM SDK from the same schemas with a Java-first API and Kotlin-friendly overloads, published as one Maven artifact.
     - Implement the local receipt and proof verification path.
     - Implement streaming with resumable cursors on virtual-thread-friendly primitives.

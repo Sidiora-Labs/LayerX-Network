@@ -50,12 +50,14 @@ platform-emulator-conformance:
 
 platform-sdk-check:
 	python3 platform/sdk/generators/generate_portable.py --check $(CURDIR)
+	python3 platform/sdk/generators/generate_jvm.py --check $(CURDIR)
 	$(PLATFORM_CARGO) run --manifest-path $(PLATFORM_MANIFEST) --locked -p layerx-platform-sdkgen -- --check
 
 platform-sdk-generate:
 	cargo run --manifest-path agent/tools/sdk-gen/Cargo.toml --locked -- --write
 	cargo run --manifest-path human/tools/api-gen/Cargo.toml --locked -- human/schema/human-api human/apps/web/src/api/generated
 	python3 platform/sdk/generators/generate_portable.py $(CURDIR)
+	python3 platform/sdk/generators/generate_jvm.py $(CURDIR)
 	$(PLATFORM_CARGO) run --manifest-path $(PLATFORM_MANIFEST) --locked -p layerx-platform-sdkgen -- --write
 
 platform-test-sdks: platform-sdk-check
