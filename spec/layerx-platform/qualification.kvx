@@ -693,3 +693,51 @@ symbol = "task 17.5 integration and lifecycle paths"
 observed = "The scoped cg guard accepted every declared webhook and dashboard path and reported five advisory outside-touch paths: the existing platform lockfile needed for already-locked TLS dependencies, the required CI/fault workflow, and the spec status, rendered task projection and qualification log. These are integration or generated lifecycle records rather than unrelated product expansion."
 assumption = "Human qualification will review the five advisories instead of removing TLS dependency locking, CI coverage or auditable spec lifecycle state."
 severity = "task-scope"
+
+[observation.24.1.1]
+task = "24.1"
+file = "interop/crates/layerx-migrate/src/ethereum.rs, interop/crates/layerx-migrate/src/solana.rs"
+symbol = "EthereumConfig, SolanaConfig"
+observed = "The repository does not contain owner-authoritative deployed Ethereum custody ABI coordinates or Solana custody program, ProgramData, instruction-layout and authority coordinates. The production clients therefore require every contract/program identity, code hash, event/instruction field, account owner and authority as exact operator configuration and fail closed when any value is absent or mismatched; no deployment fact was invented."
+assumption = "The custody owners must publish and provision reviewed, network-specific configuration for each deployment. Human qualification must reconcile every configured selector, topic, byte offset, account position, code hash and authority against the deployed source and chain state before enabling migration."
+severity = "operator-authority"
+
+[observation.24.1.2]
+task = "24.1"
+file = "interop/crates/layerx-migrate/src/journal.rs, interop/crates/layerx-migrate/OPERATIONS.md"
+symbol = "layerx_getMigrationJournalHead, layerx_advanceMigrationJournalHead"
+observed = "Authenticated local records and head seals cannot independently detect deletion of a valid suffix. The journal therefore refuses operation unless a strict-majority HTTPS service supplies a durable linearizable monotonic head and authenticated compare-and-swap under the documented RPC methods, but no implementation of that authority exists in this repository."
+assumption = "The production datastore or custody owner must implement the documented non-rollbackable head contract and provision independent endpoints. Qualification must prove rollback, truncation, divergent replicas, stale compare-and-swap and authority outage all fail closed before the clients are deployable."
+severity = "dependency-boundary"
+
+[observation.24.1.3]
+task = "24.1"
+file = "interop/crates/layerx-migrate/src/solana.rs"
+symbol = "verify_program_boundary, verify_token_custody"
+observed = "Standard Solana JSON-RPC supplies transaction-time token balance owner and mint metadata but does not supply a general authenticated historical account proof. The verifier pins an immutable ProgramData account and ELF hash whose last upgrade slot is no later than the transaction, verifies exact signer/writable privileges and transaction-time token deltas, and rechecks configured account owners at finalized state; it does not claim that the live account-owner read is a historical proof."
+assumption = "Qualification must use an archive/proof-capable source or independently prove that configured custody and token accounts retained their pinned owners across the accepted migration horizon. If that invariant cannot be established, the operator must narrow the accepted horizon or add an authenticated historical-account proof boundary rather than treating a live read as historical evidence."
+severity = "source-proof-boundary"
+
+[observation.24.1.4]
+task = "24.1"
+file = "interop/crates/layerx-migrate/src/lib.rs, .github/workflows/interop-migration-testnets.yml"
+symbol = "MigrationPlane, interop-test-migration-testnets"
+observed = "The repository exposes the protocol migration plane as an authority trait but contains no deployable binding/custody plane implementation or owner-provisioned binding and custody operation coordinates. The protected live artifact exercises the production Ethereum and Solana verification boundaries only; implementation-phase rules prohibited running it, and an honest end-to-end LayerX credit cannot be claimed without the real plane."
+assumption = "The protocol owner must bind MigrationPlane to the real binding and custody operations and provision exact receipt policies. Human qualification must then exercise wallet binding, custody deposit, protocol credit, receipt verification, history sink durability, retries, reorgs and every injected failure against both real test networks before task 24.1 can be marked done."
+severity = "qualification-input"
+
+[observation.24.1.5]
+task = "24.1"
+file = "spec/layerx-platform/spec.kvx"
+symbol = "task.24.1 touches"
+observed = "The inherited touch list named only the migration crate and its tests, while production dependencies require the interop workspace manifest and lock, exact protocol receipt accessors, an operator runbook, the root Make target and a protected testnet workflow. The touch list is expanded to those exact integration surfaces. cg sync does not index Cargo.lock, so the declared interop/Cargo.* family is witnessed by Cargo.toml while the scoped guard still covers the exact lockfile change."
+assumption = "Human review will treat the expanded paths as the minimum source-client integration and qualification machinery and will use the locked workspace during qualification rather than remove receipt-policy verification, dependency locking or the live testnet gate."
+severity = "scope-clarification"
+
+[observation.24.1.6]
+task = "24.1"
+file = "spec/layerx-platform/spec.kvx, spec/layerx-platform/tasks.md, spec/layerx-platform/qualification.kvx"
+symbol = "cg guard task 24.1 lifecycle paths"
+observed = "The scoped cg guard accepted every implementation, dependency, operator and testnet-workflow path and reported only the three generated/auditable spec lifecycle files as advisory outside touches."
+assumption = "The lifecycle projections and qualification record remain part of the published task commit; human review will inspect the advisory rather than remove the implementation status or recorded external dependencies."
+severity = "task-scope"

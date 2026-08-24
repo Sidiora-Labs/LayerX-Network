@@ -30,11 +30,15 @@ layerx-portable = { path = "crates/layerx-portable" }
 layerx-intents = { path = "../human/crates/layerx-intents" }
 layerx-agent-api = { path = "../agent/crates/layerx-agent-api" }
 layerx-client = { path = "../agent/crates/layerx-client" }
+k256 = { version = "=0.13.4", default-features = false, features = ["ecdsa", "std"] }
 openssl = "=0.10.73"
 p256 = { version = "=0.13.2", default-features = false, features = ["ecdsa", "std"] }
+rustls = { version = "=0.23.43", default-features = false, features = ["ring", "std", "tls12"] }
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.149"
 sha2 = "=0.10.9"
+sha3 = "=0.10.8"
+subtle = "=2.6.1"
 zeroize = "=1.9.0"
 
 [workspace.lints.rust]

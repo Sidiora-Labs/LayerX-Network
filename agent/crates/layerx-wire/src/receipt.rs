@@ -105,6 +105,24 @@ impl ProtocolReceipt {
         self.batch_id
     }
 
+    /// Returns the protocol module that executed the operation.
+    #[must_use]
+    pub const fn module_id(&self) -> u16 {
+        self.module_id
+    }
+
+    /// Returns the executing module's exact semantic version.
+    #[must_use]
+    pub const fn module_version(&self) -> u32 {
+        self.module_version
+    }
+
+    /// Returns the parameter-set version used for execution.
+    #[must_use]
+    pub const fn parameter_version(&self) -> u32 {
+        self.parameter_version
+    }
+
     /// Returns the ledger operation tag.
     #[must_use]
     pub const fn operation(&self) -> u8 {
@@ -163,6 +181,18 @@ impl ProtocolReceipt {
     #[must_use]
     pub const fn credit_balance_after(&self) -> u128 {
         self.to_balance_after
+    }
+
+    /// Returns the authority commitment consumed by core.
+    #[must_use]
+    pub const fn authorization_hash(&self) -> [u8; 32] {
+        self.authorization_hash
+    }
+
+    /// Returns the application context commitment consumed by core.
+    #[must_use]
+    pub const fn context_hash(&self) -> [u8; 32] {
+        self.context_hash
     }
 
     /// Returns the sequencer signature when one was encoded.

@@ -1,38 +1,68 @@
-use ed25519_dalek::{Signer as _, SigningKey};
-use layerx_interop_gateway::adapter::{
-    AdapterId, ConformanceSuite, PinnedSpec, SpecVersion,
+use crate::{
+    migration_adapter_descriptor, BindingExecution, BindingReceiptPolicy, CustodyExecution,
+    CustodyReceiptPolicy, ExternalAddress, ExternalHistoryKind, ExternalHistoryRecord,
+    ExternalHistorySink, ExternalProvenance, MigrationAdapter, MigrationError, MigrationPlane,
+    MigrationPlaneResult, MigrationState, SourceChain, SourceEvidence, SourceTransaction,
+    SourceVerifier, VerifiedAssetFinality, VerifiedHistoryPage, VerifiedOwnership,
 };
+use ed25519_dalek::{Signer as _, SigningKey};
+use layerx_interop_gateway::adapter::{AdapterId, ConformanceSuite, PinnedSpec, SpecVersion};
 use layerx_interop_gateway::principal::PrincipalId;
 use layerx_interop_gateway::trace::TraceId;
 use layerx_interop_gateway::{interop_gateway_core, GatewayCore};
-use layerx_migrate::{
-    migration_adapter_descriptor, BindingReceiptPolicy, ExternalAddress, ExternalHistoryKind,
-    ExternalHistoryRecord, ExternalHistorySink, ExternalProvenance, MigrationAdapter,
-    MigrationError, MigrationIntent, MigrationPlane, MigrationPlaneResult, MigrationState,
-    SourceChain, SourceEvidence, SourceTransaction, SourceVerifier, VerifiedAssetFinality,
-    VerifiedHistoryPage, VerifiedOwnership,
-};
-use layerx_proof::receipt::{AuthorizedBatch, VerifiedReceipt};
+use layerx_proof::receipt::AuthorizedBatch;
 use layerx_types::payload::ModuleId;
 use sha2::{Digest as _, Sha256};
 
 const ETHEREUM_MAINNET_CHAIN_ID: u64 = 1;
 const ETHEREUM_SEPOLIA_CHAIN_ID: u64 = 11_155_111;
 const SOLANA_MAINNET_GENESIS: [u8; 32] = [
-    0x5e, 0x92, 0x22, 0xf9, 0x9e, 0x93, 0xed, 0x8e, 0xf0, 0x98, 0x7f, 0xf0, 0x60, 0x9d, 0x1c,
-    0x77, 0xf9, 0x0d, 0x5e, 0xa9, 0xcc, 0x62, 0xb9, 0xc3, 0x2a, 0x11, 0x76, 0x3a, 0x7e, 0x8d,
-    0x37, 0x1e,
+    0x5e, 0x92, 0x22, 0xf9, 0x9e, 0x93, 0xed, 0x8e, 0xf0, 0x98, 0x7f, 0xf0, 0x60, 0x9d, 0x1c, 0x77,
+    0xf9, 0x0d, 0x5e, 0xa9, 0xcc, 0x62, 0xb9, 0xc3, 0x2a, 0x11, 0x76, 0x3a, 0x7e, 0x8d, 0x37, 0x1e,
 ];
 const SOLANA_TESTNET_GENESIS: [u8; 32] = [
-    0x4c, 0x0d, 0x8c, 0xf9, 0x5e, 0x19, 0xe4, 0x4c, 0x8a, 0x24, 0xe4, 0xe7, 0x6b, 0xf1, 0x5e,
-    0x8a, 0xb4, 0x32, 0x9d, 0x3d, 0x97, 0xa0, 0x8f, 0x9c, 0x8e, 0x39, 0xb6, 0x8d, 0x8f, 0x9a,
-    0x1c, 0xf5,
+    0x4c, 0x0d, 0x8c, 0xf9, 0x5e, 0x19, 0xe4, 0x4c, 0x8a, 0x24, 0xe4, 0xe7, 0x6b, 0xf1, 0x5e, 0x8a,
+    0xb4, 0x32, 0x9d, 0x3d, 0x97, 0xa0, 0x8f, 0x9c, 0x8e, 0x39, 0xb6, 0x8d, 0x8f, 0x9a, 0x1c, 0xf5,
 ];
 
 const PERIOD_START: u64 = 1_700_000_000;
 const WINDOW_START: u64 = 200;
 const TEST_AGENT_ACCOUNT: [u8; 32] = [0xa2; 32];
 const TEST_ASSET: [u8; 32] = [0xc2; 32];
+const TEST_CUSTODY_AUTHORITY: [u8; 32] = [0x42; 32];
+const TEST_CUSTODY_AUTHORIZATION: [u8; 32] = [0x92; 32];
+
+fn test_sequencer_public_key() -> [u8; 32] {
+    SigningKey::from_bytes(&[0xbb; 32])
+        .verifying_key()
+        .to_bytes()
+}
+
+fn custody_policy() -> CustodyReceiptPolicy {
+    CustodyReceiptPolicy::new(
+        test_sequencer_public_key(),
+        TEST_CUSTODY_AUTHORITY,
+        ModuleId::Asset as u16,
+        1,
+        0,
+        1,
+    )
+    .unwrap_or_else(|error| panic!("custody policy: {error}"))
+}
+
+fn binding_policy() -> BindingReceiptPolicy {
+    BindingReceiptPolicy::new(
+        test_sequencer_public_key(),
+        TEST_CUSTODY_AUTHORITY,
+        ModuleId::Governance as u16,
+        1,
+        1,
+        1,
+        TEST_ASSET,
+        1,
+    )
+    .unwrap_or_else(|error| panic!("binding policy: {error}"))
+}
 
 fn principal(name: &str) -> PrincipalId {
     PrincipalId::new(name).unwrap_or_else(|error| panic!("principal {name}: {error}"))
@@ -161,7 +191,7 @@ impl TestPlane {
         bytes.push(1);
         push_bytes(&mut bytes, &TEST_ASSET);
         bytes.extend_from_slice(&1_u128.to_be_bytes());
-        push_bytes(&mut bytes, &[0x42; 32]);
+        push_bytes(&mut bytes, &TEST_CUSTODY_AUTHORITY);
         bytes.extend_from_slice(&2_u128.to_be_bytes());
         bytes.extend_from_slice(&1_u128.to_be_bytes());
         push_u64(&mut bytes, sequence);
@@ -169,12 +199,14 @@ impl TestPlane {
         bytes.extend_from_slice(&0_u128.to_be_bytes());
         bytes.extend_from_slice(&1_u128.to_be_bytes());
         push_bytes(&mut bytes, &[0x91; 32]);
-        push_bytes(&mut bytes, &[0x92; 32]);
-        push_bytes(&mut bytes, &[0x93; 32]);
+        push_bytes(&mut bytes, &TEST_CUSTODY_AUTHORIZATION);
+        push_bytes(&mut bytes, &custody_policy().context_hash(finality));
         push_u64(&mut bytes, PERIOD_START + sequence);
         bytes.push(0);
         let signature = self.sign(&bytes);
-        *bytes.last_mut().unwrap_or_else(|| panic!("signature flag missing")) = 1;
+        *bytes
+            .last_mut()
+            .unwrap_or_else(|| panic!("signature flag missing")) = 1;
         push_bytes(&mut bytes, &signature);
         bytes
     }
@@ -209,7 +241,7 @@ impl TestPlane {
         bytes.push(1);
         push_bytes(&mut bytes, &finality.layerx_asset);
         bytes.extend_from_slice(&finality.layerx_amount.to_be_bytes());
-        push_bytes(&mut bytes, &[0x42; 32]);
+        push_bytes(&mut bytes, &TEST_CUSTODY_AUTHORITY);
         bytes.extend_from_slice(&debit_before.to_be_bytes());
         bytes.extend_from_slice(&(debit_before - finality.layerx_amount).to_be_bytes());
         push_u64(&mut bytes, sequence);
@@ -218,11 +250,13 @@ impl TestPlane {
         bytes.extend_from_slice(&(credit_before + finality.layerx_amount).to_be_bytes());
         push_bytes(&mut bytes, &[0x91; 32]);
         push_bytes(&mut bytes, &[0x92; 32]);
-        push_bytes(&mut bytes, &[0x93; 32]);
+        push_bytes(&mut bytes, &binding_policy().context_hash(ownership));
         push_u64(&mut bytes, PERIOD_START + sequence);
         bytes.push(0);
         let signature = self.sign(&bytes);
-        *bytes.last_mut().unwrap_or_else(|| panic!("signature flag missing")) = 1;
+        *bytes
+            .last_mut()
+            .unwrap_or_else(|| panic!("signature flag missing")) = 1;
         push_bytes(&mut bytes, &signature);
         bytes
     }
@@ -231,33 +265,37 @@ impl TestPlane {
         let mut digest = Sha256::new();
         digest.update(b"LXP/v1/receipt\0");
         digest.update(message);
-        self.sequencer.sign(&<[u8; 32]>::from(digest.finalize())).to_bytes()
+        self.sequencer
+            .sign(&<[u8; 32]>::from(digest.finalize()))
+            .to_bytes()
     }
 }
 
 impl MigrationPlane for TestPlane {
-    fn execute(
+    fn bind_account(
         &mut self,
-        intent: &MigrationIntent,
-        idempotency_key: [u8; 32],
+        request: &BindingExecution<'_>,
         _trace: &TraceId,
     ) -> Result<MigrationPlaneResult, MigrationError> {
-        match intent {
-            MigrationIntent::BindAccount(ownership) => {
-                let (canonical, authority) = self.mint_binding_receipt(ownership, idempotency_key);
-                Ok(MigrationPlaneResult::Executed {
-                    canonical_receipt: canonical,
-                    authorised_batch: authority,
-                })
-            }
-            MigrationIntent::CreditCustody(finality) => {
-                let (canonical, authority) = self.mint_custody_receipt(finality, idempotency_key);
-                Ok(MigrationPlaneResult::Executed {
-                    canonical_receipt: canonical,
-                    authorised_batch: authority,
-                })
-            }
-        }
+        let (canonical, authority) =
+            self.mint_binding_receipt(request.ownership(), request.idempotency_key());
+        Ok(MigrationPlaneResult::Executed {
+            canonical_receipt: canonical,
+            authorised_batch: authority,
+        })
+    }
+
+    fn credit_custody(
+        &mut self,
+        request: &CustodyExecution<'_>,
+        _trace: &TraceId,
+    ) -> Result<MigrationPlaneResult, MigrationError> {
+        let (canonical, authority) =
+            self.mint_custody_receipt(request.finality(), request.idempotency_key());
+        Ok(MigrationPlaneResult::Executed {
+            canonical_receipt: canonical,
+            authorised_batch: authority,
+        })
     }
 }
 
@@ -275,33 +313,13 @@ fn push_bytes(output: &mut Vec<u8>, value: &[u8]) {
     output.extend_from_slice(value);
 }
 
-struct TestBindingPolicy;
-
-impl BindingReceiptPolicy for TestBindingPolicy {
-    fn verify_binding(
-        &self,
-        ownership: &VerifiedOwnership,
-        receipt: &VerifiedReceipt,
-    ) -> Result<(), MigrationError> {
-        let Some(protocol) = receipt.receipt().protocol() else {
-            return Err(MigrationError::ReceiptMismatch);
-        };
-        if protocol.to() != ownership.layerx_identity || ownership.layerx_identity == [0; 32] {
-            return Err(MigrationError::ReceiptMismatch);
-        }
-        Ok(())
-    }
-}
-
 struct TestHistorySink {
     stored: Vec<ExternalHistoryRecord>,
 }
 
 impl TestHistorySink {
     fn new() -> Self {
-        Self {
-            stored: Vec::new(),
-        }
+        Self { stored: Vec::new() }
     }
 }
 
@@ -317,6 +335,8 @@ impl ExternalHistorySink for TestHistorySink {
                 existing.chain == record.chain
                     && existing.transaction == record.transaction
                     && existing.address == record.address
+                    && existing.source_asset == record.source_asset
+                    && existing.kind == record.kind
             }) {
                 self.stored.push(*record);
             }
@@ -328,6 +348,8 @@ impl ExternalHistorySink for TestHistorySink {
 struct EthereumTestVerifier {
     chain_id: u64,
 }
+
+impl crate::sealed::SourceVerifier for EthereumTestVerifier {}
 
 impl EthereumTestVerifier {
     fn new(chain_id: u64) -> Self {
@@ -365,7 +387,7 @@ impl EthereumTestVerifier {
         let canonical = [
             b"ethereum-finality-v1".as_slice(),
             &chain_id.to_be_bytes(),
-            &transaction.bytes(),
+            transaction.bytes(),
             &source,
             &source_asset,
             &source_amount.to_be_bytes(),
@@ -396,7 +418,7 @@ impl EthereumTestVerifier {
         }
         for record in &records {
             if let ExternalAddress::Ethereum(address) = record.address {
-                canonical.extend_from_slice(&record.transaction.bytes());
+                canonical.extend_from_slice(record.transaction.bytes());
                 canonical.extend_from_slice(&address);
                 canonical.push(match record.kind {
                     ExternalHistoryKind::Incoming => 1,
@@ -463,7 +485,7 @@ impl SourceVerifier for EthereumTestVerifier {
             return Err(MigrationError::InvalidNetwork);
         }
         offset += 8;
-        let transaction = SourceTransaction::new(
+        let transaction = SourceTransaction::ethereum(
             canonical[offset..offset + 32]
                 .try_into()
                 .map_err(|_| MigrationError::InvalidTransaction)?,
@@ -559,7 +581,7 @@ impl SourceVerifier for EthereumTestVerifier {
         };
         let mut records = Vec::new();
         for _ in 0..record_count {
-            let transaction = SourceTransaction::new(
+            let transaction = SourceTransaction::ethereum(
                 canonical[offset..offset + 32]
                     .try_into()
                     .map_err(|_| MigrationError::InvalidTransaction)?,
@@ -609,11 +631,25 @@ impl SourceVerifier for EthereumTestVerifier {
             evidence_digest: evidence.digest(),
         })
     }
+
+    fn commit_history(
+        &self,
+        evidence: &SourceEvidence,
+        page: &VerifiedHistoryPage,
+        _trace: &TraceId,
+    ) -> Result<(), MigrationError> {
+        if page.evidence_digest != evidence.digest() {
+            return Err(MigrationError::EvidenceMismatch);
+        }
+        Ok(())
+    }
 }
 
 struct SolanaTestVerifier {
     genesis_hash: [u8; 32],
 }
+
+impl crate::sealed::SourceVerifier for SolanaTestVerifier {}
 
 impl SolanaTestVerifier {
     fn new(genesis_hash: [u8; 32]) -> Self {
@@ -650,7 +686,7 @@ impl SolanaTestVerifier {
         let canonical = [
             b"solana-finality-v1".as_slice(),
             &genesis_hash,
-            &transaction.bytes(),
+            transaction.bytes(),
             &source,
             &source_asset,
             &source_amount.to_be_bytes(),
@@ -681,7 +717,7 @@ impl SolanaTestVerifier {
         }
         for record in &records {
             if let ExternalAddress::Solana(address) = record.address {
-                canonical.extend_from_slice(&record.transaction.bytes());
+                canonical.extend_from_slice(record.transaction.bytes());
                 canonical.extend_from_slice(&address);
                 canonical.push(match record.kind {
                     ExternalHistoryKind::Incoming => 1,
@@ -744,12 +780,12 @@ impl SourceVerifier for SolanaTestVerifier {
             return Err(MigrationError::InvalidNetwork);
         }
         offset += 32;
-        let transaction = SourceTransaction::new(
-            canonical[offset..offset + 32]
+        let transaction = SourceTransaction::solana(
+            canonical[offset..offset + 64]
                 .try_into()
                 .map_err(|_| MigrationError::InvalidTransaction)?,
         )?;
-        offset += 32;
+        offset += 64;
         let source: [u8; 32] = canonical[offset..offset + 32]
             .try_into()
             .map_err(|_| MigrationError::InvalidAddress)?;
@@ -838,12 +874,12 @@ impl SourceVerifier for SolanaTestVerifier {
         };
         let mut records = Vec::new();
         for _ in 0..record_count {
-            let transaction = SourceTransaction::new(
-                canonical[offset..offset + 32]
+            let transaction = SourceTransaction::solana(
+                canonical[offset..offset + 64]
                     .try_into()
                     .map_err(|_| MigrationError::InvalidTransaction)?,
             )?;
-            offset += 32;
+            offset += 64;
             let address: [u8; 32] = canonical[offset..offset + 32]
                 .try_into()
                 .map_err(|_| MigrationError::InvalidAddress)?;
@@ -888,12 +924,23 @@ impl SourceVerifier for SolanaTestVerifier {
             evidence_digest: evidence.digest(),
         })
     }
+
+    fn commit_history(
+        &self,
+        evidence: &SourceEvidence,
+        page: &VerifiedHistoryPage,
+        _trace: &TraceId,
+    ) -> Result<(), MigrationError> {
+        if page.evidence_digest != evidence.digest() {
+            return Err(MigrationError::EvidenceMismatch);
+        }
+        Ok(())
+    }
 }
 
 fn registered_migration_gateway() -> GatewayCore {
     let mut core = interop_gateway_core();
-    let version =
-        SpecVersion::parse("1.0.0").unwrap_or_else(|error| panic!("version: {error}"));
+    let version = SpecVersion::parse("1.0.0").unwrap_or_else(|error| panic!("version: {error}"));
     let spec_id = AdapterId::new("ethereum-solana-migration")
         .unwrap_or_else(|error| panic!("spec id: {error}"));
     let spec = PinnedSpec::new(spec_id, version, [0xea; 32])
@@ -914,12 +961,15 @@ fn ethereum_account_mapping_binds_external_address_to_layerx_identity() {
     let mut gateway = registered_migration_gateway();
     let mut plane = TestPlane::new();
     let verifier = EthereumTestVerifier::new(ETHEREUM_SEPOLIA_CHAIN_ID);
-    let binding_policy = TestBindingPolicy;
+    let binding_policy = binding_policy();
     let alice = principal("alice");
     let eth_address = [0xe1; 20];
     let layerx_identity = [0xf1; 32];
-    let evidence =
-        EthereumTestVerifier::test_ownership_evidence(ETHEREUM_SEPOLIA_CHAIN_ID, eth_address, layerx_identity);
+    let evidence = EthereumTestVerifier::test_ownership_evidence(
+        ETHEREUM_SEPOLIA_CHAIN_ID,
+        eth_address,
+        layerx_identity,
+    );
     let state = MigrationAdapter::map_account(
         &mut gateway,
         &alice,
@@ -955,7 +1005,7 @@ fn ethereum_asset_migration_credits_only_against_verified_finality() {
     let verifier = EthereumTestVerifier::new(ETHEREUM_MAINNET_CHAIN_ID);
     let alice = principal("alice");
     let eth_source = [0xe2; 20];
-    let transaction = SourceTransaction::new([0xd1; 32])
+    let transaction = SourceTransaction::ethereum([0xd1; 32])
         .unwrap_or_else(|error| panic!("transaction: {error}"));
     let source_asset = [0xa1; 32];
     let source_amount = 1_000_000_u128;
@@ -982,6 +1032,7 @@ fn ethereum_asset_migration_credits_only_against_verified_finality() {
         &evidence,
         &verifier,
         &mut plane,
+        &custody_policy(),
         &trace(),
         20,
     )
@@ -998,9 +1049,9 @@ fn ethereum_history_import_labels_records_as_external_provenance() {
     let mut sink = TestHistorySink::new();
     let alice = principal("alice");
     let eth_address = [0xe3; 20];
-    let tx1 = SourceTransaction::new([0xd2; 32])
+    let tx1 = SourceTransaction::ethereum([0xd2; 32])
         .unwrap_or_else(|error| panic!("transaction: {error}"));
-    let tx2 = SourceTransaction::new([0xd3; 32])
+    let tx2 = SourceTransaction::ethereum([0xd3; 32])
         .unwrap_or_else(|error| panic!("transaction: {error}"));
     let records = vec![
         ExternalHistoryRecord {
@@ -1028,8 +1079,11 @@ fn ethereum_history_import_labels_records_as_external_provenance() {
             provenance: ExternalProvenance::Ethereum,
         },
     ];
-    let evidence =
-        EthereumTestVerifier::test_history_evidence(ETHEREUM_SEPOLIA_CHAIN_ID, records.clone(), None);
+    let evidence = EthereumTestVerifier::test_history_evidence(
+        ETHEREUM_SEPOLIA_CHAIN_ID,
+        records.clone(),
+        None,
+    );
     let state = MigrationAdapter::import_history(
         &mut gateway,
         &alice,
@@ -1055,12 +1109,15 @@ fn solana_account_mapping_binds_external_address_to_layerx_identity() {
     let mut gateway = registered_migration_gateway();
     let mut plane = TestPlane::new();
     let verifier = SolanaTestVerifier::new(SOLANA_TESTNET_GENESIS);
-    let binding_policy = TestBindingPolicy;
+    let binding_policy = binding_policy();
     let bob = principal("bob");
     let sol_address = [0xe4; 32];
     let layerx_identity = [0xf2; 32];
-    let evidence =
-        SolanaTestVerifier::test_ownership_evidence(SOLANA_TESTNET_GENESIS, sol_address, layerx_identity);
+    let evidence = SolanaTestVerifier::test_ownership_evidence(
+        SOLANA_TESTNET_GENESIS,
+        sol_address,
+        layerx_identity,
+    );
     let state = MigrationAdapter::map_account(
         &mut gateway,
         &bob,
@@ -1084,7 +1141,7 @@ fn solana_asset_migration_credits_only_against_verified_finality() {
     let verifier = SolanaTestVerifier::new(SOLANA_MAINNET_GENESIS);
     let carol = principal("carol");
     let sol_source = [0xe5; 32];
-    let transaction = SourceTransaction::new([0xd4; 32])
+    let transaction = SourceTransaction::solana([0xd4; 64])
         .unwrap_or_else(|error| panic!("transaction: {error}"));
     let source_asset = [0xa3; 32];
     let source_amount = 2_000_000_u128;
@@ -1111,6 +1168,7 @@ fn solana_asset_migration_credits_only_against_verified_finality() {
         &evidence,
         &verifier,
         &mut plane,
+        &custody_policy(),
         &trace(),
         50,
     )
@@ -1127,7 +1185,7 @@ fn solana_history_import_labels_records_as_external_provenance() {
     let mut sink = TestHistorySink::new();
     let dave = principal("dave");
     let sol_address = [0xe6; 32];
-    let tx1 = SourceTransaction::new([0xd5; 32])
+    let tx1 = SourceTransaction::solana([0xd5; 64])
         .unwrap_or_else(|error| panic!("transaction: {error}"));
     let records = vec![ExternalHistoryRecord {
         chain: SourceChain::Solana {
@@ -1166,9 +1224,8 @@ fn migration_refuses_claims_lacking_verifiable_finality_evidence() {
     let mut gateway = registered_migration_gateway();
     let verifier = EthereumTestVerifier::new(ETHEREUM_MAINNET_CHAIN_ID);
     let eve = principal("eve");
-    let invalid_evidence =
-        SourceEvidence::new(b"invalid-ethereum-finality-evidence".to_vec())
-            .unwrap_or_else(|error| panic!("evidence: {error}"));
+    let invalid_evidence = SourceEvidence::new(b"invalid-ethereum-finality-evidence".to_vec())
+        .unwrap_or_else(|error| panic!("evidence: {error}"));
     let mut plane = TestPlane::new();
     let result = MigrationAdapter::migrate_asset(
         &mut gateway,
@@ -1176,6 +1233,7 @@ fn migration_refuses_claims_lacking_verifiable_finality_evidence() {
         &invalid_evidence,
         &verifier,
         &mut plane,
+        &custody_policy(),
         &trace(),
         70,
     );

@@ -6,12 +6,20 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+base64.workspace = true
+ed25519-dalek.workspace = true
+k256.workspace = true
 layerx-interop-gateway.workspace = true
 layerx-proof.workspace = true
+rustls.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 sha2.workspace = true
+sha3.workspace = true
+subtle.workspace = true
+zeroize.workspace = true
 
 [dev-dependencies]
-ed25519-dalek.workspace = true
 layerx-types.workspace = true
 
 [lints]
