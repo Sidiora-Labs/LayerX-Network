@@ -4,9 +4,12 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "node index.mjs"
+    "start": "node index.mjs --environment emulator",
+    "start:emulator": "node index.mjs --environment emulator",
+    "start:testnet": "node index.mjs --environment testnet"
   },
   "dependencies": {
+    "@sidiora/layerx-sdk": "0.1.0",
     "@sidiora/layerx-seller-middleware": "0.1.0"
   },
   "engines": {

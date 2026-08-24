@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "applications": [
+    {
+      "name": "buyer-agent",
+      "package": "@sidiora/layerx-example-buyer-agent",
+      "path": "platform/examples/buyer-agent",
+      "config": "layerx.example.json",
+      "symbol": "platform_ref_buyer",
+      "commands": {
+        "emulator": ["npm", "run", "start:emulator", "--workspace", "@sidiora/layerx-example-buyer-agent"],
+        "testnet": ["npm", "run", "start:testnet", "--workspace", "@sidiora/layerx-example-buyer-agent"]
+      }
+    },
+    {
+      "name": "paid-api",
+      "package": "@sidiora/layerx-example-paid-api",
+      "path": "platform/examples/paid-api",
+      "config": "layerx.example.json",
+      "symbol": "platform_ref_seller",
+      "commands": {
+        "emulator": ["npm", "run", "start:emulator", "--workspace", "@sidiora/layerx-example-paid-api"],
+        "testnet": ["npm", "run", "start:testnet", "--workspace", "@sidiora/layerx-example-paid-api"]
+      }
+    },
+    {
+      "name": "merchant-shop",
+      "package": "@sidiora/layerx-example-merchant-shop",
+      "path": "platform/examples/merchant-shop",
+      "compatibilityPackage": "@sidiora/layerx-example-merchant-checkout",
+      "config": "layerx.example.json",
+      "symbol": "platform_ref_merchant",
+      "commands": {
+        "emulator": ["npm", "run", "start:emulator", "--workspace", "@sidiora/layerx-example-merchant-shop"],
+        "testnet": ["npm", "run", "start:testnet", "--workspace", "@sidiora/layerx-example-merchant-shop"]
+      }
+    },
+    {
+      "name": "marketplace",
+      "package": "@sidiora/layerx-example-marketplace",
+      "path": "platform/examples/marketplace",
+      "config": "layerx.example.json",
+      "symbol": "platform_ref_marketplace",
+      "commands": {
+        "emulator": ["npm", "run", "start:emulator", "--workspace", "@sidiora/layerx-example-marketplace"],
+        "testnet": ["npm", "run", "start:testnet", "--workspace", "@sidiora/layerx-example-marketplace"]
+      }
+    }
+  ]
+}

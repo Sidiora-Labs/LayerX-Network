@@ -1,32 +1,56 @@
 import { createServer } from "node:http";
 import { mkdir, open, readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import {
   MiddlewareError,
   PAYMENT_SIGNATURE_HEADER,
   ReceiptPayloadAuthority,
   SellerMiddleware,
 } from "@sidiora/layerx-seller-middleware";
+import {
+  LayerXApplicationStateError,
+  ReceiptAuthorityClient,
+  exactObject,
+  hex32,
+  loadApplicationConfig,
+  requiredEnvironment,
+} from "../support/runtime.mjs";
 
-const required = (name) => {
-  const value = process.env[name];
-  if (value === undefined || value.length === 0) throw new Error(`missing_${name.toLowerCase()}`);
+export function platform_ref_seller() {
+  return "seller-middleware-live-receipt-authority-paid-api";
+}
+
+const safeName = (value) => {
+  if (!/^[A-Za-z0-9._-]{1,255}$/u.test(value)) throw new Error("invalid_identifier");
   return value;
 };
 
-const hex32 = (value) => {
-  const digits = value.startsWith("0x") ? value.slice(2) : value;
-  if (!/^[0-9a-fA-F]{64}$/.test(digits)) throw new Error("invalid_authorized_batch");
-  return Uint8Array.from({ length: 32 }, (_, index) => Number.parseInt(digits.slice(index * 2, index * 2 + 2), 16));
+const serializeBatch = (batch) => ({
+  batch_id: Buffer.from(batch.batchId).toString("hex"),
+  asset: Buffer.from(batch.asset).toString("hex"),
+  previous_state_root: Buffer.from(batch.previousStateRoot).toString("hex"),
+  resulting_state_root: Buffer.from(batch.resultingStateRoot).toString("hex"),
+  sequencer_public_key: Buffer.from(batch.sequencerPublicKey).toString("hex"),
+});
+
+const parseBatch = (value) => {
+  const batch = exactObject(value);
+  return {
+    batchId: hex32(batch.batch_id),
+    asset: hex32(batch.asset),
+    previousStateRoot: hex32(batch.previous_state_root),
+    resultingStateRoot: hex32(batch.resulting_state_root),
+    sequencerPublicKey: hex32(batch.sequencer_public_key),
+  };
 };
 
-const authorization = JSON.parse(required("LAYERX_AUTHORIZED_BATCH_JSON"));
-const authorizedBatch = {
-  batchId: hex32(authorization.batchId),
-  asset: hex32(authorization.asset),
-  previousStateRoot: hex32(authorization.previousStateRoot),
-  resultingStateRoot: hex32(authorization.resultingStateRoot),
-  sequencerPublicKey: hex32(authorization.sequencerPublicKey),
+const syncDirectory = async (path) => {
+  const directory = await open(dirname(path), "r");
+  try {
+    await directory.sync();
+  } finally {
+    await directory.close();
+  }
 };
 
 class FileFulfillmentRepository {
@@ -36,70 +60,90 @@ class FileFulfillmentRepository {
 
   async fulfill(proposed, release) {
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
-    const path = join(this.directory, `${proposed.idempotencyKey}.json`);
+    const path = join(this.directory, `${safeName(proposed.idempotencyKey)}.json`);
     try {
       return await this.read(path, proposed);
     } catch (error) {
       if (error.code !== "ENOENT") throw error;
     }
     const resource = await release();
-    const record = JSON.stringify({
+    const record = {
       requestDigest: proposed.requestDigest,
       receipt: Buffer.from(proposed.canonicalReceipt).toString("base64"),
+      authorizedBatch: serializeBatch(proposed.authorizedBatch),
       resource,
-    });
-    let file;
+    };
     try {
-      file = await open(path, "wx", 0o600);
-      await file.writeFile(record, "utf8");
-      await file.sync();
+      const file = await open(path, "wx", 0o600);
+      try {
+        await file.writeFile(JSON.stringify(record), "utf8");
+        await file.sync();
+      } finally {
+        await file.close();
+      }
+      await syncDirectory(path);
       return { ...proposed, resource };
     } catch (error) {
       if (error.code !== "EEXIST") throw error;
-      return await this.read(path, proposed);
-    } finally {
-      await file?.close();
+      return this.read(path, proposed);
     }
   }
 
   async read(path, proposed) {
-    const stored = JSON.parse(await readFile(path, "utf8"));
+    const stored = exactObject(JSON.parse(await readFile(path, "utf8")));
     const canonicalReceipt = Uint8Array.from(Buffer.from(stored.receipt, "base64"));
-    if (stored.requestDigest !== proposed.requestDigest) {
-      throw new MiddlewareError("fulfillment-conflict");
-    }
-    return {
-      ...proposed,
-      canonicalReceipt,
-      resource: stored.resource,
-    };
+    const authorizedBatch = parseBatch(stored.authorizedBatch);
+    if (stored.requestDigest !== proposed.requestDigest) throw new MiddlewareError("fulfillment-conflict");
+    return { ...proposed, canonicalReceipt, authorizedBatch, resource: stored.resource };
   }
 }
 
-const resourceBody = await readFile(required("LAYERX_RESOURCE_FILE"), "utf8");
-const batches = { async resolve() { return authorizedBatch; } };
+class StatePreservingReceiptAuthority {
+  constructor(resolver) {
+    this.delegate = new ReceiptPayloadAuthority(resolver);
+  }
+
+  async settle(request) {
+    try {
+      return await this.delegate.settle(request);
+    } catch (error) {
+      if (!(error instanceof LayerXApplicationStateError)) throw error;
+      if (error.state === "pending") return { kind: "pending" };
+      if (error.state === "refused") return { kind: "refused", reason: error.message };
+      throw error;
+    }
+  }
+}
+
+const config = await loadApplicationConfig(import.meta.url, "paid-api");
+const resourceBody = exactObject(JSON.parse(await readFile(resolve(config.directory, config.resourceFile), "utf8")));
+const resolver = new ReceiptAuthorityClient(
+  config.receiptAuthorityUrl,
+  requiredEnvironment(config.tokenEnvironment),
+);
 const middleware = new SellerMiddleware({
   paymentRequired: {
     x402Version: 2,
     resource: {
-      url: required("LAYERX_RESOURCE_URL"),
-      description: required("LAYERX_RESOURCE_DESCRIPTION"),
+      url: config.resourceUrl,
+      description: "Receipt-verified metered weather",
       mimeType: "application/json",
+      serviceName: "LayerX paid API",
     },
     accepts: [{
-      scheme: required("LAYERX_X402_SCHEME"),
-      network: required("LAYERX_X402_NETWORK"),
-      amount: required("LAYERX_PRICE"),
-      asset: required("LAYERX_ASSET"),
-      payTo: required("LAYERX_PAY_TO"),
-      maxTimeoutSeconds: Number(required("LAYERX_PAYMENT_TIMEOUT_SECONDS")),
+      scheme: config.scheme,
+      network: config.network,
+      amount: requiredEnvironment(config.priceEnvironment),
+      asset: requiredEnvironment(config.assetEnvironment),
+      payTo: requiredEnvironment(config.payToEnvironment),
+      maxTimeoutSeconds: 60,
     }],
   },
-  authority: new ReceiptPayloadAuthority(batches),
-  fulfillments: new FileFulfillmentRepository(process.env.LAYERX_FULFILLMENT_DIR ?? "./fulfillments"),
+  authority: new StatePreservingReceiptAuthority(resolver),
+  fulfillments: new FileFulfillmentRepository(resolve(config.directory, config.fulfillmentDirectory)),
 });
 
-const port = Number(process.env.PORT ?? "8080");
+const port = Number(config.port);
 if (!Number.isSafeInteger(port) || port <= 0 || port > 65535) throw new Error("invalid_port");
 
 createServer(async (request, response) => {
@@ -111,20 +155,37 @@ createServer(async (request, response) => {
     const header = request.headers[PAYMENT_SIGNATURE_HEADER.toLowerCase()];
     const paymentHeader = Array.isArray(header) ? undefined : header;
     const decision = await middleware.handle("public-paid-api", paymentHeader, async () => resourceBody);
-    response.writeHead(decision.status, decision.kind === "payment-required" || decision.kind === "refused" || decision.kind === "released"
+    const headers = decision.kind === "payment-required" || decision.kind === "refused" || decision.kind === "released"
       ? decision.headers
-      : { "retry-after": "1" });
-    if (decision.kind === "payment-required") {
-      response.end(JSON.stringify(decision.body));
-    } else if (decision.kind === "released") {
-      response.end(decision.resource);
-    } else {
-      response.end();
-    }
+      : { "retry-after": "1" };
+    response.writeHead(decision.status, { "content-type": "application/json", ...headers });
+    response.end(JSON.stringify(decision.kind === "payment-required"
+      ? decision.body
+      : decision.kind === "released"
+        ? decision.resource
+        : { state: decision.kind }));
   } catch (error) {
-    const code = error instanceof MiddlewareError ? error.code : "internal-fault";
-    response.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: code }));
+    if (error instanceof LayerXApplicationStateError) {
+      const status = error.state === "pending" ? 202 : error.state === "refused" ? 402 : 503;
+      response.writeHead(status, {
+        "content-type": "application/json",
+        ...(error.state === "pending" || error.state === "unknown" ? { "retry-after": "1" } : {}),
+      }).end(JSON.stringify({ state: error.state, detail: error.message }));
+      return;
+    }
+    const state = error instanceof MiddlewareError
+      ? error.code === "payment-pending"
+        ? "pending"
+        : error.code === "fulfillment-conflict"
+          ? "unknown"
+          : "refused"
+      : "unknown";
+    const status = state === "pending" ? 202 : state === "refused" ? 400 : 503;
+    response.writeHead(status, {
+      "content-type": "application/json",
+      ...(state === "pending" || state === "unknown" ? { "retry-after": "1" } : {}),
+    }).end(JSON.stringify({ state, error: error instanceof MiddlewareError ? error.code : "internal-fault" }));
   }
 }).listen(port, "127.0.0.1", () => {
-  process.stdout.write(JSON.stringify({ listening: port, path: "/paid" }) + "\n");
+  process.stdout.write(`${JSON.stringify({ environment: config.name, listening: port, path: "/paid" })}\n`);
 });

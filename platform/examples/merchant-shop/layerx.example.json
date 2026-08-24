@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "application": "merchant-shop",
+  "environments": {
+    "emulator": {
+      "publicUrl": "http://127.0.0.1:8082",
+      "settlementUrl": "http://127.0.0.1:9411/v1/settle",
+      "receiptAuthorityUrl": "http://127.0.0.1:9410",
+      "scheme": "exact",
+      "network": "layerx:emulator",
+      "tokenEnvironment": "LAYERX_EMULATOR_TOKEN",
+      "webhookKeysEnvironment": "LAYERX_EMULATOR_WEBHOOK_PUBLIC_KEYS_JSON",
+      "assetEnvironment": "LAYERX_EMULATOR_ASSET",
+      "payToEnvironment": "LAYERX_EMULATOR_MERCHANT",
+      "priceEnvironment": "LAYERX_EMULATOR_PRICE",
+      "stateDirectory": "state",
+      "port": 8082
+    },
+    "testnet": {
+      "publicUrl": "http://127.0.0.1:8082",
+      "settlementUrl": "https://api.testnet.layerx.network/v1/settle",
+      "receiptAuthorityUrl": "https://api.testnet.layerx.network",
+      "scheme": "exact",
+      "network": "layerx:testnet",
+      "tokenEnvironment": "LAYERX_TESTNET_TOKEN",
+      "webhookKeysEnvironment": "LAYERX_TESTNET_WEBHOOK_PUBLIC_KEYS_JSON",
+      "assetEnvironment": "LAYERX_TESTNET_ASSET",
+      "payToEnvironment": "LAYERX_TESTNET_MERCHANT",
+      "priceEnvironment": "LAYERX_TESTNET_PRICE",
+      "stateDirectory": "state",
+      "port": 8082
+    }
+  }
+}

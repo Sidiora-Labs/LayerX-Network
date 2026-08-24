@@ -4,7 +4,7 @@ PLATFORM_MANIFEST := platform/Cargo.toml
 .PHONY: platform-build platform-lint platform-test platform-sdk-check \
 	platform-sdk-generate platform-test-sdks platform-release-check platform-release-plan \
 	platform-test-tooling platform-emulator-conformance platform-test-middleware \
-	platform-test-docs platform-hosted-smoke
+	platform-test-reference-apps platform-test-docs platform-hosted-smoke
 
 platform-build:
 	$(PLATFORM_CARGO) build --manifest-path $(PLATFORM_MANIFEST) --locked --workspace
@@ -88,6 +88,11 @@ platform-test-middleware:
 	cd platform/middleware/conformance && npm install --no-audit --no-fund && npm run build && npm run conformance
 	node --check platform/examples/merchant-shop/index.mjs
 	node --check platform/examples/merchant-checkout/index.mjs
+	node --check platform/examples/buyer-agent/index.mjs
+	node --check platform/examples/paid-api/index.mjs
+	node --check platform/examples/marketplace/index.mjs
+	node --check platform/examples/support/runtime.mjs
+	node --check platform/examples/support/merchant-app.mjs
 	node --check platform/examples/agent-spend/index.mjs
 	cd platform/integrations/express && npm install --no-audit --no-fund && npm run build
 	cd platform/integrations/next && npm install --no-audit --no-fund && npm run build
@@ -101,7 +106,10 @@ platform-test-middleware:
 	command -v swift >/dev/null
 	swift build --package-path platform/integrations/ios
 
-platform-test-docs:
+platform-test-reference-apps:
+	node platform/examples/run-reference-apps.mjs --check
+
+platform-test-docs: platform-test-reference-apps
 	sh platform/tools/docs-gate $(CURDIR)
 	command -v node >/dev/null
 	npm install --no-audit --no-fund \

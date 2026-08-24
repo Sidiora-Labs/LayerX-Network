@@ -1,61 +1,81 @@
+import { BuyerMiddleware, LayerXPaymentHttpTransport } from "@sidiora/layerx-buyer-middleware";
+import { PlatformSdkError, ProductionClient, SecretBytes } from "@sidiora/layerx-sdk";
 import {
-  BuyerMiddleware,
-  LayerXPaymentHttpTransport,
-} from "@sidiora/layerx-buyer-middleware";
-import { ProductionClient, SecretBytes } from "@sidiora/layerx-sdk";
+  LayerXApplicationStateError,
+  ReceiptAuthorityClient,
+  loadApplicationConfig,
+  requiredEnvironment,
+} from "../support/runtime.mjs";
 
-const required = (name) => {
-  const value = process.env[name];
-  if (value === undefined || value.length === 0) throw new Error(`missing_${name.toLowerCase()}`);
-  return value;
-};
+export function platform_ref_buyer() {
+  return "buyer-middleware-metered-api-receipt-verified";
+}
 
-const hex32 = (value) => {
-  const digits = value.startsWith("0x") ? value.slice(2) : value;
-  if (!/^[0-9a-fA-F]{64}$/.test(digits)) throw new Error("invalid_authorized_batch");
-  return Uint8Array.from({ length: 32 }, (_, index) => Number.parseInt(digits.slice(index * 2, index * 2 + 2), 16));
-};
-
-const authorization = JSON.parse(required("LAYERX_AUTHORIZED_BATCH_JSON"));
-const authorizedBatch = {
-  batchId: hex32(authorization.batchId),
-  asset: hex32(authorization.asset),
-  previousStateRoot: hex32(authorization.previousStateRoot),
-  resultingStateRoot: hex32(authorization.resultingStateRoot),
-  sequencerPublicKey: hex32(authorization.sequencerPublicKey),
-};
-const token = new SecretBytes(new TextEncoder().encode(required("LAYERX_TOKEN")));
-const transport = new LayerXPaymentHttpTransport({
-  baseUrl: required("LAYERX_HUMAN_URL"),
-  bearerToken: token,
-});
+const config = await loadApplicationConfig(import.meta.url, "buyer-agent");
+const rawToken = requiredEnvironment(config.tokenEnvironment);
+const token = new SecretBytes(new TextEncoder().encode(rawToken));
+const authority = new ReceiptAuthorityClient(config.receiptAuthorityUrl, rawToken);
 const buyer = new BuyerMiddleware({
-  client: new ProductionClient(transport),
-  source: required("LAYERX_SOURCE"),
-  supported: [{
-    scheme: required("LAYERX_X402_SCHEME"),
-    network: required("LAYERX_X402_NETWORK"),
-  }],
-  authorizedBatches: { async resolve() { return authorizedBatch; } },
+  client: new ProductionClient(new LayerXPaymentHttpTransport({ baseUrl: config.humanUrl, bearerToken: token })),
+  source: requiredEnvironment(config.sourceEnvironment),
+  supported: [{ scheme: config.scheme, network: config.network }],
+  authorizedBatches: authority,
 });
 
 try {
   const result = await buyer.fetch(
-    required("LAYERX_RESOURCE_URL"),
+    config.resourceUrl,
     { method: "GET", headers: { accept: "application/json" } },
-    required("LAYERX_IDEMPOTENCY_KEY"),
+    requiredEnvironment(config.idempotencyEnvironment),
   );
-  if (result.kind !== "paid" && result.kind !== "not-payment-required") {
-    throw new Error(`payment_${result.kind}`);
+  if (result.kind === "pending" || result.kind === "unknown" || result.kind === "refused") {
+    process.stdout.write(`${JSON.stringify({ environment: config.name, state: result.kind, result })}\n`);
+    process.exitCode = result.kind === "pending" ? 2 : result.kind === "unknown" ? 3 : 4;
+  } else if (result.kind === "not-payment-required") {
+    await result.response.body?.cancel();
+    throw new LayerXApplicationStateError("refused", `metered_resource_did_not_require_payment_http_${result.response.status}`);
+  } else {
+    if (!result.response.ok) {
+      await result.response.body?.cancel();
+      throw new LayerXApplicationStateError("unknown", `paid_resource_http_${result.response.status}`);
+    }
+    const body = await result.response.text();
+    process.stdout.write(`${JSON.stringify({
+      environment: config.name,
+      state: "paid",
+      status: result.response.status,
+      receiptDigest: result.payment.receiptDigest,
+      verification: result.settlement.verification.level,
+      body,
+    })}\n`);
   }
-  const response = result.response;
-  const body = await response.text();
-  process.stdout.write(JSON.stringify({
-    status: response.status,
-    payment: result.kind,
-    ...(result.kind === "paid" ? { receiptDigest: result.payment.receiptDigest } : {}),
-    body,
-  }) + "\n");
+} catch (error) {
+  const stateError = classifyBoundaryError(error);
+  if (stateError === undefined) throw error;
+  process.stdout.write(`${JSON.stringify({ environment: config.name, state: stateError.state, detail: stateError.message })}\n`);
+  process.exitCode = stateError.state === "pending" ? 2 : stateError.state === "unknown" ? 3 : 4;
 } finally {
   token.destroy();
+}
+
+function classifyBoundaryError(error) {
+  if (error instanceof LayerXApplicationStateError) return error;
+  if (error instanceof PlatformSdkError) {
+    const refused = ["invalid-argument", "capability-refusal", "policy-refusal", "budget-refusal", "unavailable-capability"].includes(error.code);
+    return new LayerXApplicationStateError(refused ? "refused" : "unknown", error.code);
+  }
+  if (error?.name === "MiddlewareError" && typeof error.code === "string") {
+    if (error.code === "payment-pending") return new LayerXApplicationStateError("pending", error.code);
+    const refused = [
+      "invalid-payment-required",
+      "invalid-payment-payload",
+      "requirements-mismatch",
+      "unsupported-payment",
+      "payment-refused",
+      "verification-failure",
+    ].includes(error.code);
+    return new LayerXApplicationStateError(refused ? "refused" : "unknown", error.code);
+  }
+  if (error instanceof TypeError) return new LayerXApplicationStateError("unknown", "resource_transport_failure");
+  return undefined;
 }

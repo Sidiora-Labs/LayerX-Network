@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "application": "marketplace",
+  "environments": {
+    "emulator": {
+      "endpoint": "http://127.0.0.1:9402",
+      "network": "layerx:emulator",
+      "cliBinaryEnvironment": "LAYERX_BIN",
+      "receiptAuthorityUrl": "http://127.0.0.1:9402",
+      "tokenEnvironment": "LAYERX_EMULATOR_TOKEN",
+      "programIdEnvironment": "LAYERX_EMULATOR_MARKETPLACE_PROGRAM_ID",
+      "listingIdEnvironment": "LAYERX_EMULATOR_MARKETPLACE_LISTING_ID",
+      "assetEnvironment": "LAYERX_EMULATOR_ASSET",
+      "sellerEnvironment": "LAYERX_EMULATOR_MERCHANT",
+      "priceEnvironment": "LAYERX_EMULATOR_PRICE",
+      "receiptDigestEnvironment": "LAYERX_EMULATOR_MARKETPLACE_RECEIPT_DIGEST",
+      "idempotencyEnvironment": "LAYERX_EMULATOR_MARKETPLACE_KEY"
+    },
+    "testnet": {
+      "endpoint": "https://api.testnet.layerx.network",
+      "network": "layerx:testnet",
+      "cliBinaryEnvironment": "LAYERX_BIN",
+      "receiptAuthorityUrl": "https://api.testnet.layerx.network",
+      "tokenEnvironment": "LAYERX_TESTNET_TOKEN",
+      "programIdEnvironment": "LAYERX_TESTNET_MARKETPLACE_PROGRAM_ID",
+      "listingIdEnvironment": "LAYERX_TESTNET_MARKETPLACE_LISTING_ID",
+      "assetEnvironment": "LAYERX_TESTNET_ASSET",
+      "sellerEnvironment": "LAYERX_TESTNET_MERCHANT",
+      "priceEnvironment": "LAYERX_TESTNET_PRICE",
+      "receiptDigestEnvironment": "LAYERX_TESTNET_MARKETPLACE_RECEIPT_DIGEST",
+      "idempotencyEnvironment": "LAYERX_TESTNET_MARKETPLACE_KEY"
+    }
+  }
+}

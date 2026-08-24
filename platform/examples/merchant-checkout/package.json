@@ -3,7 +3,11 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "scripts": { "start": "node index.mjs" },
+  "scripts": {
+    "start": "node index.mjs --environment emulator",
+    "start:emulator": "node index.mjs --environment emulator",
+    "start:testnet": "node index.mjs --environment testnet"
+  },
   "dependencies": {
     "@sidiora/layerx-merchant-middleware": "0.1.0",
     "@sidiora/layerx-seller-middleware": "0.1.0"

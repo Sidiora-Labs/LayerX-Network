@@ -1,0 +1,21 @@
+{
+  "name": "@sidiora/layerx-example-marketplace",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node index.mjs --environment emulator --action deploy",
+    "start:emulator": "node index.mjs --environment emulator --action deploy",
+    "start:testnet": "node index.mjs --environment testnet --action deploy",
+    "list:emulator": "node index.mjs --environment emulator --action list",
+    "list:testnet": "node index.mjs --environment testnet --action list",
+    "buy:emulator": "node index.mjs --environment emulator --action buy",
+    "buy:testnet": "node index.mjs --environment testnet --action buy"
+  },
+  "dependencies": {
+    "@sidiora/layerx-sdk": "0.1.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

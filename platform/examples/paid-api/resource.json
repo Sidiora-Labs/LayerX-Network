@@ -1,0 +1,5 @@
+{
+  "service": "LayerX metered weather",
+  "forecast": "clear",
+  "units": "protocol-integer"
+}

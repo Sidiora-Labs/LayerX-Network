@@ -43,9 +43,10 @@ fn plan_is_deterministic_and_machine_readable() {
     let first = plan(&pipeline).unwrap_or_else(|error| panic!("plan: {error}"));
     let second = plan(&pipeline).unwrap_or_else(|error| panic!("plan: {error}"));
     assert_eq!(first, second);
-    assert_eq!(first.lines().count(), 9);
+    assert_eq!(first.lines().count(), 10);
     assert!(first.starts_with("tag_format=sdk-v{version}\n"));
-    for line in first.lines().skip(2) {
+    assert!(first.lines().nth(2).is_some_and(|line| line.starts_with("reference_applications=")));
+    for line in first.lines().skip(3) {
         assert!(line.starts_with("registry="), "unexpected plan line: {line}");
         assert!(line.contains(" signing="), "plan line lost signing: {line}");
         assert!(
@@ -53,6 +54,21 @@ fn plan_is_deterministic_and_machine_readable() {
             "plan line lost verification: {line}"
         );
     }
+}
+
+#[test]
+fn release_plan_carries_every_cloneable_reference_application() {
+    let pipeline = release_pipeline(&committed_manifest())
+        .unwrap_or_else(|error| panic!("manifest refused: {error}"));
+    assert_eq!(
+        pipeline.reference_applications,
+        vec![
+            "@sidiora/layerx-example-buyer-agent",
+            "@sidiora/layerx-example-marketplace",
+            "@sidiora/layerx-example-merchant-shop",
+            "@sidiora/layerx-example-paid-api",
+        ]
+    );
 }
 
 #[test]

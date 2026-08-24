@@ -45,6 +45,8 @@ jobs:
         run: make platform-test-tooling
       - name: Build the framework integrations and scan client bundles for secrets
         run: make platform-test-middleware
+      - name: Gate the four cloneable reference application launch profiles
+        run: make platform-test-reference-apps
       - name: Build the documentation site and gate its executable samples
         run: make platform-test-docs
 
@@ -100,12 +102,25 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
+      - name: Install Node.js for hosted reference applications
+        if: ${{ vars.LAYERX_REFERENCE_APPS_ENABLED == 'true' }}
+        uses: actions/setup-node@1e60f620b9541d6140a364a9ae8c74a2b0e1afe6
+        with:
+          node-version: 22
+          cache: npm
       - name: Install pinned Rust toolchain and journey tools
         run: >-
           rustup toolchain install 1.91.1 --profile minimal &&
           sudo apt-get update && sudo apt-get install --yes jq
       - name: Build the receipt-verifying CLI
         run: cargo build --locked --release --manifest-path platform/Cargo.toml -p layerx-platform-cli
+      - name: Build middleware dependencies for the hosted reference applications
+        if: ${{ vars.LAYERX_REFERENCE_APPS_ENABLED == 'true' }}
+        run: >-
+          npm ci --ignore-scripts --no-audit --no-fund &&
+          npm run build --workspace @sidiora/layerx-buyer-middleware &&
+          npm run build --workspace @sidiora/layerx-seller-middleware &&
+          npm run build --workspace @sidiora/layerx-merchant-middleware
       - name: Materialize short-lived test credentials
         env:
           TESTNET_TOKEN: ${{ secrets.LAYERX_SCHEDULED_TESTNET_TOKEN }}
@@ -130,3 +145,21 @@ jobs:
           LAYERX_TEST_AMOUNT: "1"
           LAYERX_BIN: platform/target/release/layerx
         run: make platform-hosted-smoke
+      - name: Exercise the four reference applications against hosted testnet
+        if: ${{ vars.LAYERX_REFERENCE_APPS_ENABLED == 'true' }}
+        env:
+          LAYERX_BIN: platform/target/release/layerx
+          LAYERX_TESTNET_TOKEN: ${{ secrets.LAYERX_SCHEDULED_TESTNET_TOKEN }}
+          LAYERX_TESTNET_SOURCE: ${{ vars.LAYERX_SCHEDULED_SOURCE_DID }}
+          LAYERX_TESTNET_ASSET: ${{ vars.LAYERX_SCHEDULED_ASSET }}
+          LAYERX_TESTNET_SELLER: ${{ vars.LAYERX_REFERENCE_SELLER }}
+          LAYERX_TESTNET_MERCHANT: ${{ vars.LAYERX_REFERENCE_MERCHANT }}
+          LAYERX_TESTNET_PRICE: "1"
+          LAYERX_TESTNET_PAYMENT_KEY: ${{ vars.LAYERX_REFERENCE_PAYMENT_KEY }}
+          LAYERX_TESTNET_MERCHANT_CHECKOUT_KEY: ${{ vars.LAYERX_REFERENCE_CHECKOUT_KEY }}
+          LAYERX_TESTNET_WEBHOOK_PUBLIC_KEYS_JSON: ${{ vars.LAYERX_REFERENCE_WEBHOOK_KEYS_JSON }}
+          LAYERX_TESTNET_MARKETPLACE_PROGRAM_ID: ${{ vars.LAYERX_REFERENCE_MARKETPLACE_PROGRAM_ID }}
+          LAYERX_TESTNET_MARKETPLACE_LISTING_ID: ${{ vars.LAYERX_REFERENCE_MARKETPLACE_LISTING_ID }}
+          LAYERX_TESTNET_MARKETPLACE_RECEIPT_DIGEST: ${{ vars.LAYERX_REFERENCE_MARKETPLACE_RECEIPT_DIGEST }}
+          LAYERX_TESTNET_MARKETPLACE_KEY: ${{ vars.LAYERX_REFERENCE_MARKETPLACE_KEY }}
+        run: node platform/examples/run-reference-apps.mjs --scenario testnet
