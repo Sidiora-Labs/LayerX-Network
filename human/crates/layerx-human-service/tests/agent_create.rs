@@ -60,7 +60,7 @@ impl Fixture {
         fs::write(&kms_secret, [0x42; 64]).unwrap_or_else(|error| panic!("KMS secret: {error}"));
         let kms = EnvelopeKms::new("kms://agent-create", kms_secret)
             .unwrap_or_else(|error| panic!("KMS: {error}"));
-        let keystore = Keystore::open(root.join("custody"), NETWORK_ID, kms)
+        let keystore = Keystore::open_development(root.join("custody"), NETWORK_ID, kms)
             .unwrap_or_else(|error| panic!("keystore: {error}"));
         let governance = ModuleRegistration::new(
             ModuleId::Governance,

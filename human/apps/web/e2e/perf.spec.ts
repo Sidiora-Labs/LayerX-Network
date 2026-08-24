@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { readFile, stat } from "node:fs/promises";
+import { readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -13,6 +13,7 @@ import {
 
 const WEB_ROOT = fileURLToPath(new URL("../", import.meta.url));
 const NEXT_ROOT = path.join(WEB_ROOT, ".next");
+const APP_ROOT = path.join(WEB_ROOT, "src/app");
 
 interface LabMetrics {
   LCP: number;
@@ -72,6 +73,26 @@ async function routeScriptBytes(route: string): Promise<number> {
   return bytes;
 }
 
+async function applicationPageRoutes(
+  directory = APP_ROOT,
+  segments: readonly string[] = [],
+): Promise<readonly string[]> {
+  const routes: string[] = [];
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    if (entry.isDirectory()) {
+      routes.push(
+        ...(await applicationPageRoutes(path.join(directory, entry.name), [
+          ...segments,
+          entry.name,
+        ])),
+      );
+    } else if (entry.isFile() && entry.name === "page.tsx") {
+      routes.push(segments.length === 0 ? "/" : `/${segments.join("/")}`);
+    }
+  }
+  return routes.sort();
+}
+
 async function installMetricObservers(page: Page): Promise<void> {
   await page.addInitScript(() => {
     const metrics: LabMetrics = { LCP: 0, INP: 0, CLS: 0 };
@@ -122,6 +143,7 @@ async function measuredInteraction(page: Page): Promise<number> {
 }
 
 test("production routes stay split and within their declared script budgets", async () => {
+  expect(Object.keys(ROUTE_SCRIPT_BUDGETS).sort()).toEqual(await applicationPageRoutes());
   for (const [route, budget] of Object.entries(ROUTE_SCRIPT_BUDGETS)) {
     expect(await routeScriptBytes(route), `${route} raw script bytes`).toBeLessThanOrEqual(budget);
   }
@@ -129,7 +151,8 @@ test("production routes stay split and within their declared script budgets", as
 
 test("representative pages meet p75 paint interaction and layout budgets", async ({ page }) => {
   await installMetricObservers(page);
-  for (const route of ["/", "/explorer"] as const) {
+  await page.setExtraHTTPHeaders({ "x-layerx-authenticated": "1" });
+  for (const route of ["/", "/explorer", "/app"] as const) {
     const largestPaints: number[] = [];
     const layoutShifts: number[] = [];
     for (let sample = 0; sample < PERFORMANCE_SAMPLE_COUNT; sample += 1) {
@@ -152,7 +175,7 @@ test("representative pages meet p75 paint interaction and layout budgets", async
   expect(percentile75(interactions)).toBeLessThanOrEqual(WEB_VITAL_BUDGETS.INP.limit);
 });
 
-test("redacted RUM, cache controls, and generic 3G route progress use the production server", async ({
+test("redacted RUM, cache controls, and 3G journey progress use the production server", async ({
   context,
   page,
   request,
@@ -233,6 +256,14 @@ test("redacted RUM, cache controls, and generic 3G route progress use the produc
   await page.getByRole("button", { name: "Open explorer" }).click({ noWaitAfter: true });
   await expect(page.locator('[data-honest-progress="explorer"]')).toBeVisible();
   await expect(page.getByRole("heading", { name: "LayerX Explorer" })).toBeVisible({
+    timeout: 30_000,
+  });
+
+  await context.setExtraHTTPHeaders({ "x-layerx-authenticated": "1" });
+  const journeyNavigation = page.goto("/app/move", { waitUntil: "networkidle" });
+  await expect(page.locator('[data-honest-progress="app"]')).toBeVisible();
+  await journeyNavigation;
+  await expect(page.getByRole("heading", { name: "Move money" })).toBeVisible({
     timeout: 30_000,
   });
   await session.send("Network.disable");

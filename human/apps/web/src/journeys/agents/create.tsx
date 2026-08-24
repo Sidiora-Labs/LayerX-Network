@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { copyEntry } from "../../../copy/catalog.ts";
 import {
@@ -14,6 +14,7 @@ import {
   StatusPill,
 } from "../../kit";
 import { PrivateFigure } from "../../settings";
+import { StillCheckingSurface } from "../../states";
 import {
   AGENT_CURRENCY,
   AGENT_LOCALE,
@@ -195,14 +196,32 @@ export function AgentCreateJourney({ shell: initialShell }: Readonly<{ shell: Ag
     }
   };
 
+  const lookupUnknownOutcome = useCallback(async (): Promise<"pending" | "resolved"> => {
+    try {
+      setProgress(journeyProgress(await agents.create(draft)));
+      setOutcomeUnknown(false);
+      setErrorSentence(undefined);
+      return "resolved";
+    } catch (error) {
+      if (!mutationOutcomeUnknown(error)) {
+        setOutcomeUnknown(false);
+        setErrorSentence(apiErrorSentence(error));
+        return "resolved";
+      }
+      return "pending";
+    }
+  }, [agents, draft]);
+
+  const unknownOutcomeResolved = useCallback(() => {
+    setOutcomeUnknown(false);
+  }, []);
+
   if (outcomeUnknown) {
     return (
-      <ScreenCard
-        landmark="section"
-        title={copyEntry("status.still_checking").message}
-        description={copyEntry("state.still_checking.body").message}
+      <StillCheckingSurface
+        lookupOutcome={lookupUnknownOutcome}
+        onResolved={unknownOutcomeResolved}
       >
-        <StatusPill status="still_checking" />
         <p className="text-sm text-muted-foreground">
           {copyEntry("agent.create.find_in_list").message}
         </p>
@@ -216,7 +235,7 @@ export function AgentCreateJourney({ shell: initialShell }: Readonly<{ shell: Ag
             {copyEntry("action.back_to_agents").message}
           </KitButton>
         </div>
-      </ScreenCard>
+      </StillCheckingSurface>
     );
   }
 

@@ -2,7 +2,6 @@ use std::fmt::{Debug, Formatter};
 use std::sync::{Mutex, MutexGuard};
 
 use layerx_crypto::disclosure::Disclosure;
-use layerx_crypto::signer::{sign_disclosed, Signer as _};
 use layerx_types::payload::ModuleRegistry;
 
 use crate::audit::{
@@ -337,7 +336,7 @@ impl CustodySigner {
             return Err(error);
         }
 
-        let (signer, _class) = match self.keystore.unseal_signer(request.principal, request.key) {
+        let signer = match self.keystore.remote_signer(request.principal, request.key) {
             Ok(signer) => signer,
             Err(error) => {
                 self.append_decision(&request, Some(disclosure_digest), Some(&error))?;
@@ -345,17 +344,12 @@ impl CustodySigner {
             }
         };
         let signer_public_key = signer.public_key();
-        let signature = match sign_disclosed(
-            &signer,
-            request.canonical_bytes,
-            request.disclosure,
-            &self.registry,
-        )
-        .await
+        let signature = match signer
+            .sign_disclosed(request.canonical_bytes, request.disclosure, &self.registry)
+            .await
         {
-            Ok(signature) => *signature.as_bytes(),
+            Ok(signature) => signature,
             Err(error) => {
-                let error = CustodyError::Sign(error);
                 self.append_decision(&request, Some(disclosure_digest), Some(&error))?;
                 return Err(error);
             }
@@ -408,7 +402,7 @@ impl CustodySigner {
             return Err(error);
         }
 
-        let (signer, _class) = match self.keystore.unseal_signer(request.principal, request.key) {
+        let signer = match self.keystore.remote_signer(request.principal, request.key) {
             Ok(signer) => signer,
             Err(error) => {
                 append_decision_to_scope(scope, &request, Some(disclosure_digest), Some(&error))?;
@@ -416,17 +410,12 @@ impl CustodySigner {
             }
         };
         let signer_public_key = signer.public_key();
-        let signature = match sign_disclosed(
-            &signer,
-            request.canonical_bytes,
-            request.disclosure,
-            &self.registry,
-        )
-        .await
+        let signature = match signer
+            .sign_disclosed(request.canonical_bytes, request.disclosure, &self.registry)
+            .await
         {
-            Ok(signature) => *signature.as_bytes(),
+            Ok(signature) => signature,
             Err(error) => {
-                let error = CustodyError::Sign(error);
                 append_decision_to_scope(scope, &request, Some(disclosure_digest), Some(&error))?;
                 return Err(error);
             }

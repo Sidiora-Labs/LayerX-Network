@@ -16,14 +16,18 @@ import {
   ScreenCard,
   StatPair,
 } from "../../kit";
-import { LoadingSurface } from "../../states";
+import {
+  ErrorSurface,
+  LoadingSurface,
+  OfflineSurface,
+  errorPresentation,
+} from "../../states";
 import { PrivateFigure } from "../../settings";
 import { AgentControls } from "./controls.tsx";
 import {
   AGENT_LOCALE,
   Agents,
   agentPresentation,
-  apiErrorSentence,
   creationHeadlineKey,
   formatPlainTimestamp,
   journeyProgress,
@@ -73,11 +77,13 @@ export function AgentDetailScreen({
   agentId,
   ownerAccount,
   embedded = false,
+  onChanged,
 }: Readonly<{
   shell: AgentsShell;
   agentId: string;
   ownerAccount?: string;
   embedded?: boolean;
+  onChanged?: () => void;
 }>) {
   const router = useRouter();
   const shell = useAgentsShell(initialShell);
@@ -85,12 +91,14 @@ export function AgentDetailScreen({
   const accountId = useActiveAccountId(ownerAccount);
   const [agent, setAgent] = useState<Agent | undefined>(undefined);
   const [creation, setCreation] = useState<JourneyProgress | undefined>(undefined);
-  const [errorSentence, setErrorSentence] = useState<string | undefined>(undefined);
+  const [loadError, setLoadError] = useState<unknown>(undefined);
+  const [offline, setOffline] = useState(false);
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
     setLoading(true);
-    setErrorSentence(undefined);
+    setLoadError(undefined);
+    setOffline(false);
     try {
       const loaded = await agents.agent(agentId);
       setAgent(loaded);
@@ -100,7 +108,11 @@ export function AgentDetailScreen({
         setCreation(undefined);
       }
     } catch (error) {
-      setErrorSentence(apiErrorSentence(error));
+      if (!navigator.onLine) {
+        setOffline(true);
+      } else {
+        setLoadError(error);
+      }
     } finally {
       setLoading(false);
     }
@@ -125,23 +137,18 @@ export function AgentDetailScreen({
   if (loading && agent === undefined) {
     return <LoadingSurface />;
   }
+  if (agent === undefined && offline) {
+    return <OfflineSurface onRetry={() => { void load(); }} />;
+  }
   if (agent === undefined) {
     return (
-      <ScreenCard landmark="section" title={copyEntry("state.error").message}>
-        <p className="text-sm text-foreground-secondary">
-          {errorSentence ?? copyEntry("state.error.body").message}
-        </p>
-        <div className="flex">
-          <KitButton
-            variant="primary"
-            onClick={() => {
-              void load();
-            }}
-          >
-            {copyEntry("action.retry").message}
-          </KitButton>
-        </div>
-      </ScreenCard>
+      <ErrorSurface
+        error={errorPresentation(loadError)}
+        route={`/app/agents/${encodeURIComponent(agentId)}`}
+        platform={shell}
+        onRetry={() => { void load(); }}
+        onReload={() => { window.location.reload(); }}
+      />
     );
   }
 
@@ -154,6 +161,16 @@ export function AgentDetailScreen({
       {presentation.stateVerified ? null : (
         <InlineNotice tone="warning" role="status">
           {copyEntry("agent.state.unverified").message}
+        </InlineNotice>
+      )}
+      {offline ? (
+        <InlineNotice tone="warning" role="status">
+          {copyEntry("state.offline.body").message}
+        </InlineNotice>
+      ) : null}
+      {loadError === undefined ? null : (
+        <InlineNotice tone="danger" role="alert">
+          {copyEntry("state.error.body").message}
         </InlineNotice>
       )}
       {presentation.readOnlyKey === undefined ? null : (
@@ -179,6 +196,17 @@ export function AgentDetailScreen({
             {copyEntry(creationHeadlineKey(creation)).message}
           </p>
           <JourneyStages progress={creation} />
+          {creation.complete || creation.refusalSentence !== undefined ? null : (
+            <div className="flex">
+              <KitButton
+                variant="secondary"
+                loading={loading}
+                onClick={() => { void load(); }}
+              >
+                {copyEntry("agent.create.check").message}
+              </KitButton>
+            </div>
+          )}
         </div>
       )}
       <SpendSection agent={agent} />
@@ -187,9 +215,13 @@ export function AgentDetailScreen({
         agent={agent}
         agents={agents}
         {...(accountId === undefined ? {} : { ownerAccount: accountId })}
-        onAgent={setAgent}
+        onAgent={(updated) => {
+          setAgent(updated);
+          onChanged?.();
+        }}
         onChanged={() => {
           void load();
+          onChanged?.();
         }}
       />
       {embedded ? null : (
