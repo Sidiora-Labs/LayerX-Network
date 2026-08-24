@@ -985,7 +985,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - _Requirements: 32.5_
 
 - [ ] 24. Ship migration tooling and off-platform settlement
-  - [ ] 24.1 Build the Ethereum and Solana migration tooling
+  - [ ] 24.1 Build the Ethereum and Solana migration tooling — **Implemented - qualification pending**
     - Build account mapping: external addresses associated to LayerX identities through the protocol's binding mechanisms.
     - Build asset migration through the custody boundary, credited only against verified source-chain finality.
     - Build transaction-history import labelled as external provenance, never as LayerX receipts.

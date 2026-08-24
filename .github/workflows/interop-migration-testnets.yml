@@ -1,0 +1,81 @@
+name: Interop migration testnets
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: interop-migration-testnets-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  LC_ALL: C
+  TZ: UTC
+
+jobs:
+  live-source-verification:
+    name: Ethereum and Solana live source verification
+    environment: migration-testnets
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.91.1 --profile minimal --no-self-update
+      - name: Materialize protected migration configuration
+        env:
+          ETHEREUM_CONFIG_B64: ${{ secrets.ETHEREUM_CONFIG_B64 }}
+          ETHEREUM_OWNERSHIP_EVIDENCE_B64: ${{ secrets.ETHEREUM_OWNERSHIP_EVIDENCE_B64 }}
+          ETHEREUM_ASSET_EVIDENCE_B64: ${{ secrets.ETHEREUM_ASSET_EVIDENCE_B64 }}
+          ETHEREUM_HISTORY_EVIDENCE_B64: ${{ secrets.ETHEREUM_HISTORY_EVIDENCE_B64 }}
+          SOLANA_CONFIG_B64: ${{ secrets.SOLANA_CONFIG_B64 }}
+          SOLANA_OWNERSHIP_EVIDENCE_B64: ${{ secrets.SOLANA_OWNERSHIP_EVIDENCE_B64 }}
+          SOLANA_ASSET_EVIDENCE_B64: ${{ secrets.SOLANA_ASSET_EVIDENCE_B64 }}
+          SOLANA_HISTORY_EVIDENCE_B64: ${{ secrets.SOLANA_HISTORY_EVIDENCE_B64 }}
+          MIGRATION_CA_DER_B64: ${{ secrets.MIGRATION_CA_DER_B64 }}
+          ETHEREUM_RPC_A_TOKEN: ${{ secrets.ETHEREUM_RPC_A_TOKEN }}
+          ETHEREUM_RPC_B_TOKEN: ${{ secrets.ETHEREUM_RPC_B_TOKEN }}
+          SOLANA_RPC_A_TOKEN: ${{ secrets.SOLANA_RPC_A_TOKEN }}
+          SOLANA_RPC_B_TOKEN: ${{ secrets.SOLANA_RPC_B_TOKEN }}
+          JOURNAL_ANCHOR_A_TOKEN: ${{ secrets.JOURNAL_ANCHOR_A_TOKEN }}
+          JOURNAL_ANCHOR_B_TOKEN: ${{ secrets.JOURNAL_ANCHOR_B_TOKEN }}
+          JOURNAL_AUTHENTICATION_KEY: ${{ secrets.JOURNAL_AUTHENTICATION_KEY }}
+        run: |
+          set -eu
+          secret_dir="${RUNNER_TEMP}/layerx-migration-testnets"
+          umask 077
+          mkdir -p "${secret_dir}"
+          printf '%s' "${ETHEREUM_CONFIG_B64}" | base64 --decode > "${secret_dir}/ethereum.json"
+          printf '%s' "${ETHEREUM_OWNERSHIP_EVIDENCE_B64}" | base64 --decode > "${secret_dir}/ethereum-ownership.evidence"
+          printf '%s' "${ETHEREUM_ASSET_EVIDENCE_B64}" | base64 --decode > "${secret_dir}/ethereum-asset.evidence"
+          printf '%s' "${ETHEREUM_HISTORY_EVIDENCE_B64}" | base64 --decode > "${secret_dir}/ethereum-history.evidence"
+          printf '%s' "${SOLANA_CONFIG_B64}" | base64 --decode > "${secret_dir}/solana.json"
+          printf '%s' "${SOLANA_OWNERSHIP_EVIDENCE_B64}" | base64 --decode > "${secret_dir}/solana-ownership.evidence"
+          printf '%s' "${SOLANA_ASSET_EVIDENCE_B64}" | base64 --decode > "${secret_dir}/solana-asset.evidence"
+          printf '%s' "${SOLANA_HISTORY_EVIDENCE_B64}" | base64 --decode > "${secret_dir}/solana-history.evidence"
+          printf '%s' "${MIGRATION_CA_DER_B64}" | base64 --decode > "${secret_dir}/rpc-ca.der"
+          printf '%s' "${ETHEREUM_RPC_A_TOKEN}" > "${secret_dir}/ethereum-rpc-a.token"
+          printf '%s' "${ETHEREUM_RPC_B_TOKEN}" > "${secret_dir}/ethereum-rpc-b.token"
+          printf '%s' "${SOLANA_RPC_A_TOKEN}" > "${secret_dir}/solana-rpc-a.token"
+          printf '%s' "${SOLANA_RPC_B_TOKEN}" > "${secret_dir}/solana-rpc-b.token"
+          printf '%s' "${JOURNAL_ANCHOR_A_TOKEN}" > "${secret_dir}/journal-anchor-a.token"
+          printf '%s' "${JOURNAL_ANCHOR_B_TOKEN}" > "${secret_dir}/journal-anchor-b.token"
+          printf '%s' "${JOURNAL_AUTHENTICATION_KEY}" > "${secret_dir}/journal-authentication.key"
+          chmod 600 "${secret_dir}"/*
+      - name: Exercise live production verifiers
+        env:
+          LAYERX_MIGRATION_SECRET_DIR: ${{ runner.temp }}/layerx-migration-testnets
+          LAYERX_ETHEREUM_CONFIG: ${{ runner.temp }}/layerx-migration-testnets/ethereum.json
+          LAYERX_ETHEREUM_OWNERSHIP_EVIDENCE: ${{ runner.temp }}/layerx-migration-testnets/ethereum-ownership.evidence
+          LAYERX_ETHEREUM_ASSET_EVIDENCE: ${{ runner.temp }}/layerx-migration-testnets/ethereum-asset.evidence
+          LAYERX_ETHEREUM_HISTORY_EVIDENCE: ${{ runner.temp }}/layerx-migration-testnets/ethereum-history.evidence
+          LAYERX_SOLANA_CONFIG: ${{ runner.temp }}/layerx-migration-testnets/solana.json
+          LAYERX_SOLANA_OWNERSHIP_EVIDENCE: ${{ runner.temp }}/layerx-migration-testnets/solana-ownership.evidence
+          LAYERX_SOLANA_ASSET_EVIDENCE: ${{ runner.temp }}/layerx-migration-testnets/solana-asset.evidence
+          LAYERX_SOLANA_HISTORY_EVIDENCE: ${{ runner.temp }}/layerx-migration-testnets/solana-history.evidence
+        run: make interop-test-migration-testnets INTEROP_CARGO="cargo +1.91.1"
