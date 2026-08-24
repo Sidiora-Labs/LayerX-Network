@@ -15,7 +15,7 @@
     "test:foundation": "node --test e2e/shell.spec.ts e2e/a11y.spec.ts e2e/states.spec.ts",
     "test:perf": "playwright test --config playwright.perf.config.ts --project=desktop-shell",
     "test:journey": "playwright test --grep @journey",
-    "test:settings": "playwright test --grep @settings",
+    "test:settings": "node --test e2e/settings.spec.ts && playwright test --grep @settings",
     "test:explorer": "playwright test --grep @explorer",
     "test:e2e": "playwright test",
     "test:visual": "playwright test --grep @visual",

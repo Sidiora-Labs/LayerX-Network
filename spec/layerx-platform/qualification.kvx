@@ -373,3 +373,11 @@ symbol = "commit 230ffdf publication"
 observed = "The reconciled spec, generated task projection and qualification observations were committed locally as 230ffdf, but git push origin main failed because GitHub rejected the configured HTTPS username or token and does not accept password authentication."
 assumption = "The user or an authorized CI session will refresh the GitHub credential and push the local main branch; no credential was available to this session and no secret was requested, printed or stored."
 severity = "dependency-boundary"
+
+[observation.13.1.1]
+task = "13.1"
+file = "human/apps/web/e2e/browser/settings.spec.ts, human/apps/web/package.json, Makefile"
+symbol = "human-e2e-settings"
+observed = "The settings verification target starts the production Next.js application but does not provision an authenticated human-api session or the executable human-api router. The real-stack browser suite therefore requires HUMAN_E2E_SESSION_COOKIE from the qualification environment and live /v1 profile, binding and notification-preference operations. The task's declared touches name the unit suite but omit the package script and browser-suite path that make `playwright test --grep @settings` execute the settings cascade."
+assumption = "Task 13.6 will supply the production human-api service boundary and web binding. Human qualification will provide a dedicated authenticated session through HUMAN_E2E_SESSION_COOKIE before invoking make human-e2e-settings in both shell projects."
+severity = "dependency-boundary"
