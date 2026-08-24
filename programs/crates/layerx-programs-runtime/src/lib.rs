@@ -99,9 +99,8 @@ pub use meter::{
 };
 pub use occupancy::{
     OccupancyCharge, OccupancyDisposition, OccupancyError, OccupancyLedger,
-    OccupancyResponsibility, OccupancySettlement, OccupancyUsage,
-    PreparedOccupancySettlement, MAX_OCCUPANCY_EVIDENCE_BYTES,
-    MAX_OCCUPANCY_LEDGER_BYTES, MAX_OCCUPANCY_POSITIONS,
+    OccupancyResponsibility, OccupancySettlement, OccupancyUsage, PreparedOccupancySettlement,
+    MAX_OCCUPANCY_EVIDENCE_BYTES, MAX_OCCUPANCY_LEDGER_BYTES, MAX_OCCUPANCY_POSITIONS,
 };
 pub use qualification::{
     programs_differential_gate, programs_fuzz_observation, programs_fuzz_targets,
@@ -112,8 +111,8 @@ pub use storage::{
     StorageNamespace, StorageScan,
 };
 pub use transfer::{
-    AtomicTransferSet, KernelTransferEvidence, KernelTransferPrimitive, TransferCapability,
-    TransferLawError, VerifiedProgramSettlement,
+    AtomicTransferSet, KernelTransferEvidence, KernelTransferPrimitive, ProgramAuthority,
+    TransferCapability, TransferLawError, TransferSource, VerifiedProgramSettlement,
 };
 pub use validate::{AbiRevision, ValidatedModule, ValidationRefusal};
 
@@ -133,10 +132,10 @@ pub use abi::{
     CapabilitySet, HostFunction, ProgramCall, ProgramEvent, ReceiptOracle, ReceiptView,
     StorageSelector, TransferRequest, ABI_MANIFEST, ABI_MODULE, HOST_FUNCTIONS,
 };
+pub use crypto::bigint::{WideIntegerOp, WideIntegerRefusal, WideIntegerRefusalReason};
 pub use crypto::{
     recover_secp256k1, verify_ed25519, verify_secp256k1, SignatureAlgorithm, SignatureRefusal,
     ED25519_PUBLIC_KEY_BYTES, ED25519_SIGNATURE_BYTES, MAX_MESSAGE_DIGEST_BYTES,
     SECP256K1_COMPRESSED_PUBLIC_KEY_BYTES, SECP256K1_SIGNATURE_BYTES,
     SECP256K1_UNCOMPRESSED_PUBLIC_KEY_BYTES,
 };
-pub use crypto::bigint::{WideIntegerOp, WideIntegerRefusal, WideIntegerRefusalReason};

@@ -3062,7 +3062,7 @@ reqs = ["37.1"]
 
 [task.30.2]
 title = "Authorise transfer legs under program authority"
-status = "pending"
+status = "implemented"
 wave = 16
 requires = ["30.1"]
 do_1 = "Extend the transfer law with a second authorization root beside the invoking principal: a leg whose source is an account the staging program derives, bound to the deriving program and the exact derivation seed."

@@ -1,10 +1,11 @@
+use layerx_programs_runtime::abi::response::CANDIDATE_ABI_MODULE;
 use layerx_programs_runtime::test_support::{
     code_section, func_body, function_section, import_section, module, type_section, unsigned_leb,
     OP_CALL, OP_END, OP_I32_CONST, TYPE_I32, TYPE_I64,
 };
 use layerx_programs_runtime::{
     AbiError, AuthorizationContext, CallFrameId, Capability, CapabilitySet, PrincipalId, ProgramId,
-    Storage,
+    Storage, TransferSource,
 };
 use layerx_programs_runtime::{
     ActivityBudgetBinding, BudgetedAuthorizedExecutionRequest, DeclaredBudget,
@@ -86,6 +87,61 @@ fn transfer_module() -> Vec<u8> {
             ],
         )]),
         data_section(&[(0, &asset), (32, &recipient)]),
+    ])
+}
+
+fn candidate_program_transfer_module(
+    seed: &[u8],
+    source: [u8; 32],
+    asset: [u8; 32],
+    recipient: [u8; 32],
+) -> Vec<u8> {
+    const SOURCE_OFFSET: u32 = 128;
+    const ASSET_OFFSET: u32 = 160;
+    const RECIPIENT_OFFSET: u32 = 192;
+    let mut entries = unsigned_leb(3);
+    for (name, kind, index) in [
+        ("layerx_reserve", 0_u8, 1_u8),
+        (CALL_ENTRY_EXPORT, 0, 2),
+        ("memory", 2, 0),
+    ] {
+        entries.extend(unsigned_leb(name.len() as u64));
+        entries.extend_from_slice(name.as_bytes());
+        entries.extend_from_slice(&[kind, index]);
+    }
+    let mut entry = vec![0x42, 0, 0x42, 5, OP_I32_CONST, 0, OP_I32_CONST];
+    entry.extend(unsigned_leb(seed.len() as u64));
+    for value in [SOURCE_OFFSET, 32, ASSET_OFFSET, 32, RECIPIENT_OFFSET, 32] {
+        entry.push(OP_I32_CONST);
+        entry.extend(unsigned_leb(u64::from(value)));
+    }
+    entry.extend([OP_CALL, 0, OP_END]);
+    module(&[
+        type_section(&[
+            (
+                &[
+                    TYPE_I64, TYPE_I64, TYPE_I32, TYPE_I32, TYPE_I32, TYPE_I32, TYPE_I32, TYPE_I32,
+                    TYPE_I32, TYPE_I32,
+                ],
+                &[TYPE_I32],
+            ),
+            (&[TYPE_I32], &[TYPE_I32]),
+            (&[TYPE_I32, TYPE_I32], &[TYPE_I32]),
+        ]),
+        import_section(&[(CANDIDATE_ABI_MODULE, "transfer_program_402", 0)]),
+        function_section(&[1, 2]),
+        section(5, &[1, 1, 1, 1]),
+        section(7, &entries),
+        code_section(&[
+            func_body(&[], &[OP_I32_CONST, 0, OP_END]),
+            func_body(&[], &entry),
+        ]),
+        data_section(&[
+            (0, seed),
+            (SOURCE_OFFSET, &source),
+            (ASSET_OFFSET, &asset),
+            (RECIPIENT_OFFSET, &recipient),
+        ]),
     ])
 }
 
@@ -219,6 +275,69 @@ fn real_wasm_budgeted_preparation_seals_transfer_or_zero_transfer_without_kernel
             assert_eq!(summary, None);
         }
     }
+}
+
+#[test]
+fn candidate_program_transfer_host_issues_exact_owner_frame_authority() {
+    let program = ProgramId::new([31; 32]).unwrap_or_else(|error| panic!("program: {error}"));
+    let payer = PrincipalId::new([32; 32]).unwrap_or_else(|error| panic!("payer: {error}"));
+    let seed = b"merchant/settlement";
+    let source = layerx_programs_runtime::derive_program_account(program, seed)
+        .unwrap_or_else(|error| panic!("source: {error}"))
+        .bytes();
+    let asset = [33; 32];
+    let recipient = [34; 32];
+    let grants = CapabilitySet::new([Capability::ProgramSpend {
+        owner_program: program,
+        seed: seed.to_vec(),
+        source_account: source,
+        asset,
+        to: recipient,
+        maximum_amount: 5,
+    }])
+    .unwrap_or_else(|error| panic!("grants: {error}"));
+    let module = WasmEngine::declared()
+        .unwrap_or_else(|error| panic!("engine: {error}"))
+        .validate_candidate_v2(&candidate_program_transfer_module(
+            seed, source, asset, recipient,
+        ))
+        .unwrap_or_else(|error| panic!("module: {error}"));
+    let record = Executor::declared()
+        .execute_authorized_candidate(
+            &mut Storage::default(),
+            AuthorizedExecutionRequest {
+                module: &module,
+                program,
+                authorization: AuthorizationContext::new(payer, grants),
+                receipts: &NoReceipts,
+                entrypoint: CALL_ENTRY_EXPORT,
+                calldata: &[],
+                composition: CompositionContext::isolated(),
+                response_capacity: 0,
+            },
+        )
+        .unwrap_or_else(|error| panic!("candidate execution: {error}"));
+    let effects = record
+        .effects()
+        .unwrap_or_else(|| panic!("candidate effects missing"));
+    assert_eq!(effects.transfers.len(), 1);
+    let transfer = &effects.transfers[0];
+    assert_eq!(transfer.program, program);
+    assert_eq!(transfer.principal, payer);
+    assert_eq!(transfer.frame, CallFrameId::root());
+    assert_eq!(transfer.asset, asset);
+    assert_eq!(transfer.to, recipient);
+    assert_eq!(transfer.amount, 5);
+    let TransferSource::Program(authority) = transfer.source() else {
+        panic!("candidate transfer must carry program authority")
+    };
+    assert_eq!(authority.owner_program(), program);
+    assert_eq!(authority.seed(), seed);
+    assert_eq!(authority.source_account(), source);
+    assert_eq!(authority.staging_frame(), CallFrameId::root());
+    assert_eq!(authority.asset(), asset);
+    assert_eq!(authority.to(), recipient);
+    assert_eq!(authority.amount(), 5);
 }
 
 #[test]

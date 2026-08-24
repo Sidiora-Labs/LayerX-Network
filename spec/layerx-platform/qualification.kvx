@@ -1077,3 +1077,35 @@ symbol = "task.30.3.touches"
 observed = "Scoped cg guard accepts the declared accounts.c, programs.h and tests/programs paths, and reports twelve advisory integration paths outside the task's narrow touch declaration: Makefile, the generic kernel/ledger/module headers, the Rust derivation vector, qualification.kvx, the account identifier/registry/apply files, Programs deploy/registration, and module context staging. These paths implement the task's required existing-registry, frozen-ABI, generic account-root and C/Rust parity boundaries rather than a second monetary route."
 assumption = "Human qualification must review the complete published integration diff against req28.1 and req37.2 and retain the advisory as evidence of a narrow task touch declaration; removing the generic staging or version-transition paths would make the implementation non-atomic or break historical replay."
 severity = "task-scope"
+
+[observation.30.2.1]
+task = "30.2"
+file = "programs/crates/layerx-programs-runtime/src/transfer.rs, programs/crates/layerx-programs-runtime/tests/monetary_law.rs, tests/programs/test_monetary_law.c"
+symbol = "ProgramAuthority, AtomicTransferSet, mixed_source_kernel_law"
+observed = "The implementation writes real-code artifacts for exact owner/seed/source binding, owner-frame refusal, cumulative grant exhaustion, mixed principal/program-source canonical encoding, independently recomputed C transfer roots, missing per-source authority and injected atomic rollback. Implementation-phase rules prohibited compiling or executing any artifact, so no passing result is asserted."
+assumption = "Human qualification must build and execute the Rust and C artifacts, compare C/Rust roots and evidence byte for byte, fault-inject every leg and post-transfer module boundary, and prove one activity sequence plus one receipt commits the whole mixed set before changing the task from implemented."
+severity = "phase-boundary"
+
+[observation.30.2.2]
+task = "30.2"
+file = "spec/layerx-platform/spec.kvx, include/layerx/lxp_transfer.h, include/layerx/programs.h, src/ledger/lxp_apply.c, src/ledger/lxp_journal.c, src/modules/programs/call.c, programs/crates/layerx-programs-runtime/src"
+symbol = "task.30.2.touches"
+observed = "The task declares only transfer.rs and its Rust monetary-law artifact, while its acceptance criteria and integration ownership require the candidate host import, ABI request source, CALL scalar bridge, generic C per-source authorization, kernel rollback/root parity, receipt evidence and frozen ordinal-five boundary. Scoped cg guard therefore reports the exact required ABI, C kernel, CALL and lifecycle paths as advisory outside the stale two-file touch declaration."
+assumption = "Human review must inspect the complete published integration diff against req37.2 and req37.3 and retain the advisory as evidence of a narrow task declaration; deleting the bridge or generic kernel authority table would leave program authority unable to reach the sole balance primitive."
+severity = "task-scope"
+
+[observation.30.2.3]
+task = "30.2"
+file = "src/modules/programs/call.c, programs/crates/layerx-programs-runtime/src/abi/response.rs, programs/crates/layerx-programs-runtime/src/ffi_call.rs"
+symbol = "transfer_program_402, Programs CALL ABI two"
+observed = "Program-authorised transfer staging is exposed only through the explicitly candidate ABI and the epoch-activated Programs ABI-two CALL route; ABI one keeps its frozen manifest, decoder and principal-only ordinal-five transfer behavior. The lifecycle validator still admits only guest ABI one until task 31.6 performs the single coordinated ABI bump, so production deployment of an ABI-two guest is intentionally unavailable in this task."
+assumption = "Task 31.6 must activate the recorded guest ABI-two deployment and manifest as one versioned transition before operators enable candidate program spending in production. Qualification for 30.2 may exercise the candidate engine and ABI-two CALL fixtures, but must not relabel the candidate surface as frozen or make ABI-one decode tag nine."
+severity = "version-boundary"
+
+[observation.30.2.4]
+task = "30.2"
+file = "programs/crates/layerx-programs-runtime/src/abi/capability.rs, programs/crates/layerx-programs-runtime/src/transfer.rs"
+symbol = "ProgramSpend owner-frame staging"
+observed = "The integrated transfer law follows requirement 37.3 and observation 30.4.1: only the deriving program's own frame may stage a program-source leg. An inherited grant over a caller-derived account can be narrowed and forwarded but cannot make a callee the staging owner."
+assumption = "Qualification must refuse direct callee-frame staging and preserve exact inherited-key narrowing. A future returned-request mechanism or normative change to requirement 37.4 must be separately versioned rather than weakening the owner-frame check in this task."
+severity = "ambiguity"

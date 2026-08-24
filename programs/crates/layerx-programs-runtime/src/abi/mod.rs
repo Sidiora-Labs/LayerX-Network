@@ -24,6 +24,7 @@ use crate::meter::MeterRefusal;
 use crate::storage::{
     NamespaceDrop, PrincipalId, ProgramId, Storage, StorageError, StorageNamespace,
 };
+use crate::transfer::{ProgramAuthority, TransferLawError, TransferSource};
 
 pub const ABI_MODULE: &str = "layerx_v1";
 pub const MAX_EVENT_TOPIC_BYTES: usize = 64;
@@ -275,6 +276,7 @@ pub struct TransferRequest {
     pub program: ProgramId,
     pub principal: PrincipalId,
     pub frame: CallFrameId,
+    pub source: TransferSource,
     pub asset: [u8; 32],
     pub to: [u8; 32],
     pub amount: u128,
@@ -289,6 +291,11 @@ impl TransferRequest {
     #[must_use]
     pub const fn frame(&self) -> CallFrameId {
         self.frame
+    }
+
+    #[must_use]
+    pub const fn source(&self) -> &TransferSource {
+        &self.source
     }
 }
 
@@ -637,6 +644,78 @@ impl Abi {
             program: self.program,
             principal: self.authorization.principal(),
             frame: self.authorization.frame(),
+            source: TransferSource::Principal(self.authorization.principal()),
+            asset,
+            to,
+            amount,
+        });
+        Ok(())
+    }
+
+    /// Requests a candidate-v2 402LXP transfer from an account derived by the
+    /// currently executing program. The opaque authority token is issued only
+    /// after the exact source derivation and cumulative ProgramSpend grant are
+    /// checked at this host-fixed frame.
+    pub(crate) fn request_program_transfer(
+        &mut self,
+        seed: &[u8],
+        source_account: [u8; 32],
+        asset: [u8; 32],
+        to: [u8; 32],
+        amount: u128,
+    ) -> Result<(), AbiError> {
+        if amount == 0 {
+            return Err(AbiError::AmountBounds);
+        }
+        let cumulative = self
+            .effects
+            .transfers
+            .iter()
+            .filter_map(|request| match &request.source {
+                TransferSource::Program(authority)
+                    if authority.owner_program() == self.program
+                        && authority.seed() == seed
+                        && authority.source_account() == source_account
+                        && authority.asset() == asset
+                        && authority.to() == to =>
+                {
+                    Some(request.amount)
+                }
+                _ => None,
+            })
+            .try_fold(amount, |total, prior| total.checked_add(prior))
+            .ok_or(AbiError::AmountBounds)?;
+        if !self.authorization.capabilities().permits_program_spend(
+            capability::ProgramSpendAuthorization {
+                staging_program: self.program,
+                owner_program: self.program,
+                seed,
+                source_account,
+                asset,
+                to,
+                amount: cumulative,
+            },
+        ) {
+            return Err(AbiError::CapabilityEscalation);
+        }
+        let authority = ProgramAuthority::issue(
+            self.program,
+            seed,
+            source_account,
+            self.authorization.frame(),
+            asset,
+            to,
+            amount,
+        )
+        .map_err(|error| match error {
+            TransferLawError::InvalidProgramAuthority => AbiError::CapabilityDenied,
+            _ => AbiError::InvalidEncoding,
+        })?;
+        self.effects.transfers.push(TransferRequest {
+            program: self.program,
+            principal: self.authorization.principal(),
+            frame: self.authorization.frame(),
+            source: TransferSource::Program(authority),
             asset,
             to,
             amount,

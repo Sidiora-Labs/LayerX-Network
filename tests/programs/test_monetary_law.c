@@ -3,6 +3,7 @@
 #include "layerx/lxp_kernel.h"
 #include "layerx/lxp_receipt.h"
 #include "layerx/lxp_hash.h"
+#include "layerx/lxp_crypto.h"
 
 #include <string.h>
 
@@ -96,6 +97,77 @@ static int dispatch(lxp_kernel *kernel, lxp_authority_resolved *authority,
         (effects.count != 1U || effects.effects[0].module_id != LXP_MODULE_PROGRAMS ||
          effects.effects[0].event_type != LX_PROGRAMS_EVENT_TRANSFERRED ||
          effects.effects[0].body_length != 32U))
+        return 1;
+    return 0;
+}
+
+static int mixed_source_kernel_law(
+    lx_account *principal, lx_account *program_account, lx_account *recipient,
+    const lxp_transfer_asset_state *asset)
+{
+    lxp_transfer_leg legs[2];
+    lxp_transfer_context context;
+    lxp_transfer_source_authority authorities[2];
+    lxp_transfer_set_result result;
+    lxp_u128 principal_before = principal->balance;
+    lxp_u128 program_before = program_account->balance;
+    lxp_u128 recipient_before = recipient->balance;
+    uint64_t sequence_before = principal->next_sequence;
+    size_t index;
+    (void)memset(legs, 0, sizeof(legs));
+    for (index = 0U; index < 2U; ++index) {
+        legs[index].from = index == 0U ? principal : program_account;
+        legs[index].to = recipient;
+        (void)memcpy(legs[index].asset_id, asset->asset_id, 32U);
+        legs[index].amount = (lxp_u128){0U, index == 0U ? 5U : 7U};
+        legs[index].reason = LXP_REASON_PAYMENT;
+        legs[index].supply_mode = LXP_TRANSFER_CONSERVED;
+        (void)memcpy(authorities[index].authorized_from,
+                     legs[index].from->id, 32U);
+        authorities[index].debit_authority_kind = LXP_AUTH_OWNER;
+        authorities[index].protocol_system_capability = false;
+    }
+    (void)memset(&context, 0, sizeof(context));
+    context.assets = asset;
+    context.asset_count = 1U;
+    context.actor_sequence = sequence_before;
+    context.sequence_account = principal;
+    context.debit_authority_kind = LXP_AUTH_OWNER;
+    context.source_authorities = authorities;
+    context.source_authority_count = 2U;
+    if (lxp_apply_transfer_set(legs, 2U, &context, &result) != LXP_OK ||
+        result.leg_count != 2U || !result.receipt_emitted ||
+        lxp_ct_is_zero(result.transfer_set_root, 32U) ||
+        principal->balance.lo != principal_before.lo - 5U ||
+        program_account->balance.lo != program_before.lo - 7U ||
+        recipient->balance.lo != recipient_before.lo + 12U ||
+        principal->next_sequence != sequence_before + 1U ||
+        program_account->next_sequence != 0U)
+        return 1;
+
+    principal_before = principal->balance;
+    program_before = program_account->balance;
+    recipient_before = recipient->balance;
+    sequence_before = principal->next_sequence;
+    context.actor_sequence = sequence_before;
+    context.inject_failure = true;
+    context.failure_after_leg = 1U;
+    if (lxp_apply_transfer_set(legs, 2U, &context, &result) != LXP_ERR_IO ||
+        principal->balance.lo != principal_before.lo ||
+        program_account->balance.lo != program_before.lo ||
+        recipient->balance.lo != recipient_before.lo ||
+        principal->next_sequence != sequence_before ||
+        program_account->next_sequence != 0U)
+        return 1;
+
+    context.inject_failure = false;
+    context.source_authority_count = 1U;
+    if (lxp_apply_transfer_set(legs, 2U, &context, &result) !=
+            LXP_ERR_UNAUTHORIZED_DEBIT ||
+        principal->balance.lo != principal_before.lo ||
+        program_account->balance.lo != program_before.lo ||
+        recipient->balance.lo != recipient_before.lo ||
+        principal->next_sequence != sequence_before)
         return 1;
     return 0;
 }
@@ -239,6 +311,8 @@ int main(void)
     payload[34] ^= 1U;
     if (dispatch(&kernel, &authority, payload, sizeof(payload),
                  LXP_ERR_AUTH_SCOPE) != 0 || opened[0]->balance.lo != 50U)
+        return 1;
+    if (mixed_source_kernel_law(opened[0], opened[1], opened[2], &asset) != 0)
         return 1;
     return lxp_state_store_destroy(&state) == LXP_OK ? 0 : 1;
 }
