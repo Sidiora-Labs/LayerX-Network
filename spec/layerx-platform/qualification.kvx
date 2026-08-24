@@ -397,3 +397,19 @@ symbol = "task.11.5 do_3, do_5 and implementation_scope"
 observed = "The task do clauses say to prove the p75 budgets and 3G journey behavior, while the later implementation_scope explicitly assigns budget execution and performance/soak evidence to task 14.5. Task 11.5 therefore writes the executable CI budget and slow-network machinery, including the authenticated Move money route and its honest layout-reserving progress surface, but does not run it or claim measurement evidence."
 assumption = "Human qualification under task 14.5 will execute make human-e2e-perf against representative production pages and the real journey stack and will record the p75 and 3G evidence."
 severity = "phase-boundary"
+
+[observation.12.4.1]
+task = "12.4"
+file = "human/apps/web/src/journeys/agents/controls.tsx, human/schema/human-api/agents.kvx"
+symbol = "AgentControls archive disposition"
+observed = "The Agent response carries spend against the monthly limit but no receipt-verified current agent-account balance. The archive surface can therefore offer the real agent.reclaim path and the service can refuse archive while funds remain, but the browser cannot prefill or independently attest the exact amount that must be returned before typed archive confirmation. Using AgentSpend.remaining would be incorrect because it is remaining budget, not held funds."
+assumption = "The implementation leaves the service's receipt-verified zero-balance archive gate authoritative and exposes Take money back from the disposition step without inventing a balance. Human qualification will decide whether the executable Human API must add a verified current-balance field or a reclaim-all operation before the archive journey is accepted as disposition-first end to end."
+severity = "dependency-boundary"
+
+[observation.12.4.2]
+task = "12.4"
+file = "human/apps/web/e2e/agents.spec.ts, spec/layerx-platform/spec.kvx"
+symbol = "task.12.4 do_5"
+observed = "do_5 asks for create, pause, reclaim and archive to be run end to end in both shells, while the implementation-phase hard rule prohibits running tests and the current tree has no executable Human API router for the generated client's /v1/agents operations. That router is owned by the parallel task 13.6."
+assumption = "No journey, build or verification command was run. Human qualification will run make human-e2e-journeys after task 13.6 is integrated and will exercise the real create, pause, reclaim and archive operations in both shell profiles."
+severity = "dependency-boundary"

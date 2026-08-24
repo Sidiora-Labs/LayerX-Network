@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { copyEntry } from "../../../copy/catalog.ts";
 import type { Agent, MoveQuote } from "../../api/index.ts";
@@ -13,6 +13,7 @@ import {
   MobileConfirmation,
 } from "../../kit";
 import { PrivateFigure } from "../../settings";
+import { StillCheckingSurface } from "../../states";
 import {
   AGENT_CURRENCY,
   AGENT_LOCALE,
@@ -78,13 +79,14 @@ export function AgentControls({
   const [errorSentence, setErrorSentence] = useState<string | undefined>(undefined);
   const [lastJourney, setLastJourney] = useState<JourneyProgress | undefined>(undefined);
   const [challenge, setChallenge] = useState<KeyChallengePresentation | undefined>(undefined);
-  const [outcomeUnknown, setOutcomeUnknown] = useState(false);
+  const [unknownControl, setUnknownControl] = useState<OpenControl | undefined>(undefined);
 
   const controls = controlsFor(agent, ownerAccount === undefined ? {} : { ownerAccount });
   const Confirmation = shell === "mobile" ? MobileConfirmation : DesktopConfirmation;
   const journeyPending = lastJourney !== undefined
     && !lastJourney.complete
     && lastJourney.refusalSentence === undefined;
+  const outcomeUnknown = unknownControl !== undefined;
   const controlsLocked = journeyPending || outcomeUnknown;
 
   useEffect(() => {
@@ -99,6 +101,9 @@ export function AgentControls({
         if (!cancelled) {
           setLastJourney(next);
           setErrorSentence(undefined);
+          if (next.complete) {
+            onChanged();
+          }
         }
       } catch (error) {
         if (!cancelled) {
@@ -118,7 +123,73 @@ export function AgentControls({
         clearTimeout(timer);
       }
     };
-  }, [agents, journeyPending, lastJourney]);
+  }, [agents, journeyPending, lastJourney, onChanged]);
+
+  const lookupUnknownOutcome = useCallback(async (): Promise<"pending" | "resolved"> => {
+    if (unknownControl === undefined) {
+      return "resolved";
+    }
+    try {
+      if (unknownControl.id === "pause") {
+        onAgent(await agents.pause(agent.agent_id));
+      } else if (unknownControl.id === "resume") {
+        onAgent(await agents.resume(agent.agent_id));
+      } else if (unknownControl.id === "limit") {
+        const money = parseMonthlyLimit(unknownControl.input, AGENT_CURRENCY);
+        if (money === undefined) {
+          setErrorSentence(copyEntry("error.agent.limit-invalid").message);
+          setUnknownControl(undefined);
+          return "resolved";
+        }
+        onAgent(await agents.changeLimit(agent.agent_id, money));
+      } else if (unknownControl.id === "reclaim") {
+        const money = parseMonthlyLimit(unknownControl.input, AGENT_CURRENCY);
+        if (money === undefined) {
+          setErrorSentence(copyEntry("error.agent.limit-invalid").message);
+          setUnknownControl(undefined);
+          return "resolved";
+        }
+        setLastJourney(journeyProgress(await agents.reclaim(agent.agent_id, money)));
+        onChanged();
+      } else if (unknownControl.id === "fund") {
+        if (unknownControl.quote === undefined) {
+          setErrorSentence(copyEntry("state.error.body").message);
+          setUnknownControl(undefined);
+          return "resolved";
+        }
+        setLastJourney(journeyProgress(await agents.fundCommit(unknownControl.quote.quote_id)));
+        onChanged();
+      } else if (unknownControl.id === "archive") {
+        if (unknownControl.phase !== "confirm") {
+          setErrorSentence(copyEntry("state.error.body").message);
+          setUnknownControl(undefined);
+          return "resolved";
+        }
+        setLastJourney(journeyProgress(
+          await agents.archive(agent.agent_id, unknownControl.typed),
+        ));
+        onChanged();
+      } else if (unknownControl.id === "rotate") {
+        setChallenge(keyChallengePresentation(await agents.rotate(agent.agent_id), AGENT_LOCALE));
+      } else {
+        setChallenge(keyChallengePresentation(await agents.recover(agent.agent_id), AGENT_LOCALE));
+      }
+      setUnknownControl(undefined);
+      setErrorSentence(undefined);
+      return "resolved";
+    } catch (error) {
+      if (mutationOutcomeUnknown(error)) {
+        return "pending";
+      }
+      setUnknownControl(undefined);
+      setErrorSentence(apiErrorSentence(error));
+      return "resolved";
+    }
+  }, [agent.agent_id, agents, onAgent, onChanged, unknownControl]);
+
+  const unknownOutcomeResolved = useCallback(() => {
+    setUnknownControl(undefined);
+  }, []);
 
   if (
     controls.length === 0
@@ -132,7 +203,7 @@ export function AgentControls({
   const close = () => {
     setOpen(undefined);
     setErrorSentence(undefined);
-    setOutcomeUnknown(false);
+    setUnknownControl(undefined);
   };
 
   const openControl = (control: AgentControl) => {
@@ -153,7 +224,7 @@ export function AgentControls({
     setBusy(true);
     setErrorSentence(undefined);
     try {
-      setOutcomeUnknown(false);
+      setUnknownControl(undefined);
       if (open.id === "pause") {
         onAgent(await agents.pause(agent.agent_id));
         close();
@@ -212,7 +283,7 @@ export function AgentControls({
       const quoteReadFailed = open.id === "fund" && open.quote === undefined;
       if (mutationOutcomeUnknown(error) && !quoteReadFailed) {
         setOpen(undefined);
-        setOutcomeUnknown(true);
+        setUnknownControl(open);
         setErrorSentence(copyEntry("state.still_checking.body").message);
         return;
       }
@@ -294,11 +365,22 @@ export function AgentControls({
           </div>
         </>
       )}
-      {open === undefined && errorSentence !== undefined ? (
-        <InlineNotice tone={outcomeUnknown ? "warning" : "danger"} role="status">
-          {errorSentence}
-        </InlineNotice>
-      ) : null}
+      {unknownControl === undefined ? (
+        open === undefined && errorSentence !== undefined ? (
+          <InlineNotice tone="danger" role="alert">
+            {errorSentence}
+          </InlineNotice>
+        ) : null
+      ) : (
+        <StillCheckingSurface
+          lookupOutcome={lookupUnknownOutcome}
+          onResolved={unknownOutcomeResolved}
+        >
+          <p className="text-sm text-foreground-secondary">
+            {errorSentence ?? copyEntry("state.still_checking.body").message}
+          </p>
+        </StillCheckingSurface>
+      )}
       {challenge === undefined ? null : (
         <InlineNotice tone="neutral" role="status">
           <span className="flex flex-col gap-1">
@@ -383,6 +465,16 @@ export function AgentControls({
             ) : null}
             {open.id === "fund" && open.quote !== undefined ? (
               <QuoteSummary quote={open.quote} />
+            ) : null}
+            {open.id === "archive" ? (
+              <KitButton
+                variant="secondary"
+                onClick={() => {
+                  setOpen({ id: "reclaim", input: "" });
+                }}
+              >
+                {copyEntry("agent.control.reclaim").message}
+              </KitButton>
             ) : null}
             {errorNotice}
           </div>

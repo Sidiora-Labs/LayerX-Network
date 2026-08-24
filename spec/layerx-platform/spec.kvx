@@ -1630,7 +1630,7 @@ reqs = ["10.3","11.2","18.7"]
 
 [task.12.4]
 title = "Build the agent surfaces"
-status = "pending"
+status = "implemented"
 wave = 7
 requires = ["11.3","8.2","8.5"]
 work_kind = "implementation"
