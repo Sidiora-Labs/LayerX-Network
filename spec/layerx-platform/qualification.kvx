@@ -365,3 +365,11 @@ symbol = "supersession of observation.22.3.1"
 observed = "The earlier observation.22.3.1 is stale against the current tree: seller.rs, buyer.rs and e2e.rs no longer call GatewayCore::testing or TraceId::testing; they construct GatewayCore through new/default and traces through mint. This static reconciliation removes that item from the current gap assessment but does not delete the historical observation."
 assumption = "Human qualification still owns compilation and execution of the x402 suites and independent upstream conformance."
 severity = "note"
+
+[observation.reconciliation.20260824.push]
+task = "reconciliation"
+file = "git remote"
+symbol = "commit 230ffdf publication"
+observed = "The reconciled spec, generated task projection and qualification observations were committed locally as 230ffdf, but git push origin main failed because GitHub rejected the configured HTTPS username or token and does not accept password authentication."
+assumption = "The user or an authorized CI session will refresh the GitHub credential and push the local main branch; no credential was available to this session and no secret was requested, printed or stored."
+severity = "dependency-boundary"
