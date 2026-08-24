@@ -1,0 +1,33 @@
+[package]
+name = "layerx-interop-service"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "layerx-interop-gateway"
+path = "src/main.rs"
+
+[dependencies]
+base64.workspace = true
+ed25519-dalek.workspace = true
+layerx-ap2 = { path = "../layerx-ap2" }
+layerx-fiat = { path = "../layerx-fiat" }
+layerx-interop-gateway.workspace = true
+layerx-platform-gateway = { path = "../../../platform/hosted/gateway" }
+layerx-proof.workspace = true
+layerx-ucp = { path = "../layerx-ucp" }
+layerx-visa-tap = { path = "../layerx-visa-tap" }
+layerx-x402 = { path = "../layerx-x402" }
+native-tls.workspace = true
+p256.workspace = true
+rustls.workspace = true
+serde.workspace = true
+serde_json = { workspace = true, features = ["arbitrary_precision"] }
+sha2.workspace = true
+subtle.workspace = true
+zeroize.workspace = true
+
+[lints]
+workspace = true

@@ -7,6 +7,7 @@ pub mod error;
 pub mod gateway;
 pub mod principal;
 pub mod redaction;
+pub mod server;
 pub mod trace;
 
 pub use gateway::GatewayCore;
@@ -17,7 +18,7 @@ pub use gateway::GatewayCore;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct InteropWorkspaceManifest {
     /// Interop-plane crates in build order.
-    pub crates: [&'static str; 1],
+    pub crates: [&'static str; 2],
     /// The only contract through which the interop plane reaches `LayerX`.
     pub core_boundary: &'static str,
 }
@@ -26,7 +27,7 @@ pub struct InteropWorkspaceManifest {
 #[must_use]
 pub const fn interop_workspace_manifest() -> InteropWorkspaceManifest {
     InteropWorkspaceManifest {
-        crates: ["layerx-interop-gateway"],
+        crates: ["layerx-interop-gateway", "layerx-interop-service"],
         core_boundary: "layerx-agent-api",
     }
 }

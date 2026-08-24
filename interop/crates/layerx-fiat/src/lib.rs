@@ -306,6 +306,24 @@ pub enum FiatJourneyState {
 pub struct FiatAdapter;
 
 impl FiatAdapter {
+    /// Verifies provider-authenticated evidence and returns only validated,
+    /// typed settlement facts. Executable gateway composition uses this gate
+    /// before durable reservation or a typed plane call.
+    ///
+    /// # Errors
+    /// Returns a trace-bound provider or evidence refusal.
+    pub fn verify_evidence(
+        token: &TokenReference,
+        evidence: &ProviderEvidence,
+        verifier: &impl ProviderVerifier,
+        trace: &TraceId,
+    ) -> Result<VerifiedProviderFacts, Traced<FiatError>> {
+        let fail = |error| trace.wrap(error);
+        let facts = verifier.verify(token, evidence, trace).map_err(fail)?;
+        facts.validate().map_err(fail)?;
+        Ok(facts)
+    }
+
     /// Verifies provider evidence and advances the matching honest journey.
     /// Authorisation and clearing only produce declared holds. Credit,
     /// reversal and chargeback complete only under a verified `LayerX` receipt.
@@ -326,8 +344,7 @@ impl FiatAdapter {
         now: u64,
     ) -> Result<FiatJourneyState, Traced<FiatError>> {
         let fail = |error| trace.wrap(error);
-        let facts = verifier.verify(token, evidence, trace).map_err(fail)?;
-        facts.validate().map_err(fail)?;
+        let facts = Self::verify_evidence(token, evidence, verifier, trace)?;
         match facts.class {
             EvidenceClass::Authorised | EvidenceClass::Clearing => {
                 Self::record_hold(gateway, principal, evidence, &facts, trace, now)

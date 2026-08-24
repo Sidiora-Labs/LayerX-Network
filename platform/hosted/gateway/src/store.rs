@@ -71,11 +71,21 @@ pub enum Reservation {
         state: String,
         response: String,
         receipt: String,
+        principal: String,
     },
     RateLimited {
         retry_after_seconds: u64,
     },
     Revoked,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OperationRecord {
+    pub digest: String,
+    pub state: String,
+    pub response: String,
+    pub receipt: String,
+    pub principal: String,
 }
 
 enum Resp {
@@ -322,12 +332,31 @@ impl RedisStore {
                         state: values.get(2).and_then(text).unwrap_or_default(),
                         response: values.get(3).and_then(text).unwrap_or_default(),
                         receipt: values.get(4).and_then(text).unwrap_or_default(),
+                        principal: values.get(5).and_then(text).unwrap_or_default(),
                     })
                 }
                 _ => return Err("gateway reservation state is invalid".to_owned()),
             }
         }
         Err("gateway audit head remained contended".to_owned())
+    }
+
+    pub fn operation(&self, idempotency_scope: &str) -> Result<Option<OperationRecord>, String> {
+        let key = format!("gateway:idem:{idempotency_scope}");
+        match self.command(&["HGETALL", &key])? {
+            Resp::Array(values) if values.is_empty() => Ok(None),
+            Resp::Array(values) => {
+                let fields = pairs(&values)?;
+                Ok(Some(OperationRecord {
+                    digest: required(&fields, "digest")?,
+                    state: required(&fields, "state")?,
+                    response: fields.get("response").cloned().unwrap_or_default(),
+                    receipt: fields.get("receipt").cloned().unwrap_or_default(),
+                    principal: required(&fields, "principal")?,
+                }))
+            }
+            _ => Err("gateway operation response is invalid".to_owned()),
+        }
     }
 
     pub fn consume_read(
@@ -528,7 +557,7 @@ return {'revoked'}
 const RESERVE_SCRIPT: &str = r#"
 if redis.call('HGET', KEYS[1], 'disabled') ~= '0' or redis.call('HGET', KEYS[1], 'epoch') ~= ARGV[1] then return {'revoked'} end
 local existing = redis.call('HGET', KEYS[3], 'digest')
-if existing then return {'existing', existing, redis.call('HGET', KEYS[3], 'state') or '', redis.call('HGET', KEYS[3], 'response') or '', redis.call('HGET', KEYS[3], 'receipt') or ''} end
+if existing then return {'existing', existing, redis.call('HGET', KEYS[3], 'state') or '', redis.call('HGET', KEYS[3], 'response') or '', redis.call('HGET', KEYS[3], 'receipt') or '', redis.call('HGET', KEYS[3], 'principal') or ''} end
 local previous = redis.call('GET', KEYS[5]) or ''
 if previous ~= ARGV[8] then return {'audit_retry'} end
 local owner = redis.call('GET', KEYS[7])
@@ -539,7 +568,7 @@ if used >= tonumber(ARGV[2]) then
  return {'rate_limited', ARGV[3]}
 end
 redis.call('INCR', KEYS[2]); redis.call('EXPIRE', KEYS[2], ARGV[3])
-redis.call('HSET', KEYS[3], 'digest', ARGV[5], 'state', 'pending', 'started_at', ARGV[7]); redis.call('EXPIRE', KEYS[3], ARGV[4]); redis.call('SADD', KEYS[6], KEYS[3])
+redis.call('HSET', KEYS[3], 'digest', ARGV[5], 'state', 'pending', 'started_at', ARGV[7], 'principal', ARGV[10]); redis.call('EXPIRE', KEYS[3], ARGV[4]); redis.call('SADD', KEYS[6], KEYS[3])
 redis.call('SET', KEYS[7], ARGV[10])
 redis.call('XADD', KEYS[4], '*', 'previous', ARGV[8], 'chain', ARGV[9], 'event', ARGV[6], 'outcome', 'pending'); redis.call('SET', KEYS[5], ARGV[9])
 return {'reserved'}

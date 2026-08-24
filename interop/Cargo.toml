@@ -2,6 +2,7 @@
 members = [
     "crates/layerx-ap2",
     "crates/layerx-interop-gateway",
+    "crates/layerx-interop-service",
     "crates/layerx-fiat",
     "crates/layerx-migrate",
     "crates/layerx-mirror",
@@ -36,6 +37,9 @@ serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.149"
 sha2 = "=0.10.9"
 zeroize = "=1.9.0"
+native-tls = "=0.2.15"
+rustls = { version = "=0.23.43", default-features = false, features = ["ring", "std", "tls12"] }
+subtle = "=2.6.1"
 
 [workspace.lints.rust]
 unsafe_code = "deny"

@@ -85,8 +85,73 @@ impl Client {
         content_type: &str,
         body: &[u8],
     ) -> Result<UpstreamResponse, String> {
+        self.request_authorized(
+            endpoint,
+            method,
+            path,
+            &format!("Bearer {bearer}"),
+            idempotency,
+            content_type,
+            body,
+        )
+    }
+
+    /// Sends one bounded request with an already validated authorization
+    /// value. This is used when another hosted ingress forwards the exact
+    /// `LayerX-Key` credential to the gateway authentication boundary.
+    pub fn request_authorized(
+        &self,
+        endpoint: &Endpoint,
+        method: &str,
+        path: &str,
+        authorization: &str,
+        idempotency: Option<&str>,
+        content_type: &str,
+        body: &[u8],
+    ) -> Result<UpstreamResponse, String> {
+        self.request_authorized_traced(
+            endpoint,
+            method,
+            path,
+            authorization,
+            idempotency,
+            content_type,
+            body,
+            None,
+        )
+    }
+
+    /// Sends one bounded authorized request while propagating the ingress
+    /// trace identifier unchanged across the service boundary.
+    #[allow(clippy::too_many_arguments)]
+    pub fn request_authorized_traced(
+        &self,
+        endpoint: &Endpoint,
+        method: &str,
+        path: &str,
+        authorization: &str,
+        idempotency: Option<&str>,
+        content_type: &str,
+        body: &[u8],
+        trace: Option<&str>,
+    ) -> Result<UpstreamResponse, String> {
         if !path.starts_with('/') || path.contains(['?', '#', '\\']) || body.len() > MAX_RESPONSE {
             return Err("outbound request exceeds its boundary".to_owned());
+        }
+        if authorization.is_empty()
+            || authorization.len() > 4096
+            || authorization
+                .bytes()
+                .any(|byte| matches!(byte, b'\r' | b'\n' | 0))
+        {
+            return Err("outbound authorization exceeds its boundary".to_owned());
+        }
+        if trace.is_some_and(|value| {
+            value.is_empty()
+                || value.len() > 64
+                || value.bytes().any(|byte| matches!(byte, b'\r' | b'\n' | 0))
+        }) {
+            return Err("outbound trace exceeds its boundary".to_owned());
         }
         let connector = TlsConnector::builder()
             .add_root_certificate(self.ca.clone())
@@ -111,9 +176,11 @@ impl Client {
                         .map_err(|error| error.to_string())?;
                     let idempotency = idempotency
                         .map_or_else(String::new, |key| format!("Idempotency-Key: {key}\r\n"));
+                    let trace =
+                        trace.map_or_else(String::new, |value| format!("X-Trace-Id: {value}\r\n"));
                     write!(
                         stream,
-                        "{method} {}{path} HTTP/1.1\r\nHost: {}\r\nAuthorization: Bearer {bearer}\r\nAccept: application/json\r\nContent-Type: {content_type}\r\n{idempotency}Content-Length: {}\r\nConnection: close\r\n\r\n",
+                        "{method} {}{path} HTTP/1.1\r\nHost: {}\r\nAuthorization: {authorization}\r\nAccept: application/json\r\nContent-Type: {content_type}\r\n{idempotency}{trace}Content-Length: {}\r\nConnection: close\r\n\r\n",
                         endpoint.base_path,
                         endpoint.authority(),
                         body.len()
