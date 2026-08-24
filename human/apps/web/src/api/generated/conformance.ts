@@ -44,6 +44,7 @@ import {
   decodeSupportReplyRequest,
   decodeWithdrawClaimRequest,
   decodeWithdrawStartRequest,
+  encodeAccountBalance,
   encodeAccountCreation,
   encodeActivityEntryDetail,
   encodeActivityPage,
@@ -61,6 +62,7 @@ import {
   encodeEvidenceMaterial,
   encodeExitEligibility,
   encodeExportArtefact,
+  encodeHomeSummary,
   encodeJourney,
   encodeJourneyPage,
   encodeKeyChallenge,
@@ -123,6 +125,8 @@ export function runKey(run: ConformanceRun): string {
 }
 
 export const conformance: { readonly [name in OperationName]: (run: ConformanceRun) => Promise<JsonValue> } = {
+  "account.balance": async (run) =>
+    encodeAccountBalance(await run.client.accountBalance()),
   "account.create": async (run) =>
     encodeAccountCreation(await run.client.accountCreate(decodeAccountCreateRequest(runBody(run), "golden request body"), runKey(run))),
   "activity.entry": async (run) =>
@@ -191,6 +195,8 @@ export const conformance: { readonly [name in OperationName]: (run: ConformanceR
     encodeExitEligibility(await run.client.exitEligibility()),
   "exit.start": async (run) =>
     encodeJourney(await run.client.exitStart(decodeExitStartRequest(runBody(run), "golden request body"), runKey(run))),
+  "home.summary": async (run) =>
+    encodeHomeSummary(await run.client.homeSummary()),
   "journey.get": async (run) =>
     encodeJourney(await run.client.journeyGet(runParam(run, "journey_id"))),
   "journey.list": async (run) =>

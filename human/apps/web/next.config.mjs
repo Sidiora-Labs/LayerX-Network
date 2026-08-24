@@ -2,6 +2,34 @@
 const nextConfig = {
   output: "standalone",
   reactStrictMode: true,
+  async rewrites() {
+    const service = process.env.LAYERX_HUMAN_SERVICE_URL;
+    if (service === undefined) {
+      return [];
+    }
+    const endpoint = new URL(service);
+    if (
+      endpoint.protocol !== "https:" ||
+      endpoint.username !== "" ||
+      endpoint.password !== "" ||
+      endpoint.pathname !== "/" ||
+      endpoint.search !== "" ||
+      endpoint.hash !== ""
+    ) {
+      throw new Error("LAYERX_HUMAN_SERVICE_URL must name the HTTPS human service");
+    }
+    const baseUrl = endpoint.origin;
+    return [
+      {
+        source: "/v1/:path*",
+        destination: `${baseUrl}/v1/:path*`,
+      },
+      {
+        source: "/readyz",
+        destination: `${baseUrl}/readyz`,
+      },
+    ];
+  },
   async headers() {
     return [
       {

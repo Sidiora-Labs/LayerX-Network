@@ -87,7 +87,7 @@ export function Home() {
     );
   }
 
-  const balance = homeBalance();
+  const balance = homeBalance(load.data.balance);
   const approvals = approvalBadge(load.data.approvals);
   const agents = homeAgentRows(load.data.agents);
   const activity = homeActivityRows(load.data.entries);
@@ -114,7 +114,10 @@ export function Home() {
                   {copyEntry("home.balance.show").message}
                 </KitButton>
               ) : null}
-              <p className="text-sm text-muted-foreground">
+              <p
+                className={balance.current ? "text-sm text-muted-foreground" : "text-sm text-warning"}
+                role={balance.current ? undefined : "status"}
+              >
                 {`${balance.verification} · ${balance.freshness}`}
               </p>
             </div>

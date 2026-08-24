@@ -1,0 +1,31 @@
+[module]
+name = "home"
+contract_major = 1
+compatibility = "additive_only"
+spine = "The home surface is one receipt-honest read model: its balance is decoded from an agent-layer verified read, its freshness says exactly which head or checkpoint it is relative to, and the remaining summaries retain their evidence and verification levels."
+
+[type.ProtocolFreshness]
+required = ["observed_at:Timestamp","age_seconds:integer","source_head:string","within_bound:boolean"]
+optional = ["checkpoint:string"]
+honesty = "source_head is the exact agent-layer head relative to which the read was verified. checkpoint is present only when checkpoint proof material backed the read. A value outside the configured bound remains usable only with within_bound false and its age visibly rendered."
+
+[type.AccountBalance]
+required = ["account_id:AccountId","money:Money","verification:VerificationLevel","freshness:ProtocolFreshness","evidence:EvidenceRef[]"]
+source = "money is decoded only from core-produced balance bytes admitted by the agent layer at verification or above. The human service never maintains or increments a balance of its own and never raises verification."
+evidence = "evidence includes the verified read and any checkpoint proof required to reproduce the presented balance independently."
+
+[type.HomeSummary]
+required = ["balance:AccountBalance","agents:Agent[]","approvals:ApprovalSummary[]","recent_activity:ActivityEntryDetail[]"]
+composition = "Every protocol fact retains the verification and evidence carried by its source operation. The summary is a bounded composition of the real balance, agent, approval and activity services, never a second cache or write model."
+
+[operation.account.balance]
+method = "GET"
+path = "/v1/account/balance"
+request = "Empty"
+response = "AccountBalance"
+
+[operation.home.summary]
+method = "GET"
+path = "/v1/home"
+request = "Empty"
+response = "HomeSummary"

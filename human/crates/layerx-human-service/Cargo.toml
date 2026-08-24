@@ -24,6 +24,7 @@ sha3.workspace = true
 k256.workspace = true
 subtle.workspace = true
 zeroize.workspace = true
+rustls = { version = "0.23.32", default-features = false, features = ["ring", "std", "tls12"] }
 
 [dev-dependencies]
 ciborium = "=0.2.2"

@@ -1,10 +1,10 @@
 [schema]
 name = "LayerX Human API"
 major = 1
-minor = 0
+minor = 1
 source_of_truth = "This schema and the schema files it includes define the human-api contract between layerx-human-service and the web application. Generated client output is never authoritative."
 compatibility = "Additive only within a major version: a release may only add sections, keys, list entries or optional fields. Removing or changing an existing declaration requires a new major version."
-includes = ["journeys.kvx","errors.kvx","stream.kvx","identity.kvx","movement.kvx","agents.kvx","activity.kvx","support.kvx"]
+includes = ["journeys.kvx","errors.kvx","stream.kvx","identity.kvx","movement.kvx","agents.kvx","activity.kvx","support.kvx","home.kvx"]
 
 [encoding]
 transport = "HTTPS"

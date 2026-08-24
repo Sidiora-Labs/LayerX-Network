@@ -759,6 +759,7 @@ dependencies = [
  "layerx-types",
  "passkey-auth",
  "proptest",
+ "rustls",
  "serde",
  "serde_json",
  "sha2",

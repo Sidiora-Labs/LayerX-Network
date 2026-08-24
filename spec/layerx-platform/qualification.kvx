@@ -230,6 +230,22 @@ observed = "do_5 asks for deploy, call, upgrade and migration exercised end to e
 assumption = "Per phase rules the added Rust test was written but not compiled or run. Human qualification will run make programs-test (Rust workspace tests plus the C real-node lifecycle test) to confirm the full deploy/call/upgrade/migration path passes."
 severity = "note"
 
+[observation.13.6.1]
+task = "13.6"
+file = "human/crates/layerx-human-service/src/server/backend.rs"
+symbol = "UnixComponents"
+observed = "The existing human crate exposes custody, journey, approval, activity, notification, support and explorer-facing libraries but no aggregate runtime owns all of their concrete configuration, while layerx-sdk daemon mode constructs typed calls without implementing a daemon transport. The HTTPS executable therefore uses one finite framed Unix component boundary carrying the authenticated principal, mapped agent tenancy, trace and idempotency key into the deployment process that owns those real components. It adds no state store, payload compiler or protocol write path."
+assumption = "Production deployment will configure LAYERX_HUMAN_COMPONENT_SOCKET to the privileged human component process using the declared framed request/reply contract. Human qualification must exercise that deployment binding against the concrete custody, agent, core and Paxeer services and refuse a release if any route is unowned, if a component can bypass layerx-intents/agent prepare-sign-submit, or if the socket permissions permit an unintended peer."
+severity = "dependency-boundary"
+
+[observation.13.6.2]
+task = "13.6"
+file = "human/crates/layerx-human-service/src/server/http.rs"
+symbol = "mint_trace"
+observed = "A request without a valid inbound trace requires operating-system entropy to mint its trace identifier. If entropy is unavailable the router emits a typed unavailable response under the all-zero emergency trace and performs no component operation; it does not silently continue with a predictable trace."
+assumption = "Human qualification will fault-inject entropy failure and confirm the request is refused before authentication or component dispatch, every normal request preserves or mints exactly one trace, and the emergency identifier is never treated as a successful support correlation."
+severity = "assumption"
+
 [observation.19.5.1]
 task = "19.5"
 file = "programs/crates/layerx-programs-runtime/src/engine.rs, programs/crates/layerx-programs-runtime/src/limits.rs"
