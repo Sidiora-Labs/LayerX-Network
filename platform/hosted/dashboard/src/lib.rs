@@ -4,9 +4,8 @@
 //! gateway's durable store and the hosted webhook store for reading and
 //! projects what they already recorded onto the vocabulary the human plane
 //! displays. Keys, quotas, usage and the request log come from the gateway;
-//! endpoint health, delivery logs, the dead-letter path and delivered payment
-//! events come from the webhook store; retained receipts are addressable only
-//! by the developer's own idempotency key.
+//! endpoint health, delivery logs, the dead-letter path and verified payment
+//! receipts come from the webhook event store and its principal scope.
 //!
 //! Every protocol fact carries the verification level its evidence established,
 //! and no payment is presented as settled on anything weaker than a verified

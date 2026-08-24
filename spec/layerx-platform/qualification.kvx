@@ -645,3 +645,51 @@ symbol = "cg spec implemented touch graph"
 observed = "The scoped strict guard accepted both root npm manifests and Git records 894 added and 46 removed lockfile lines, but cg spec implemented reported the exact package-lock.json touch as unchanged because cg sync skips that generated lockfile. The task therefore uses the package*.json family already established by task 16.2: package.json is indexed as evidence while the same strict scope includes package-lock.json."
 assumption = "Human qualification will use npm ci as the authoritative lock consistency check. The implementation phase did not install dependencies for execution, compile, typecheck, test or verify."
 severity = "phase-boundary"
+
+[observation.17.5.1]
+task = "17.5"
+file = "platform/hosted/webhooks/src/trusted.rs, platform/hosted/webhooks/deployment.yaml"
+symbol = "TrustedSources, ReceiptVerifier"
+observed = "The repository does not contain serving production journey, payment, approval or program event-source services. The webhook boundary therefore accepts only a bounded source event identifier, retrieves the canonical record over separately authenticated mTLS adapters, and independently verifies any protocol activity against the component receipt plus authority facts before a verified event can exist. Readiness remains degraded when any configured source is absent; the implementation does not restore caller-supplied facts or fabricate a source."
+assumption = "Owners of the real journey, payment, approval and program services must implement the strict internal event lookup contract and provision its distinct service credentials. Human qualification will deploy those services and confirm canonical subject ordering and receipt correspondence before exercising fault injection."
+severity = "dependency-boundary"
+
+[observation.17.5.2]
+task = "17.5"
+file = "platform/hosted/webhooks/src/hosted.rs, platform/hosted/webhooks/deployment.yaml"
+symbol = "KmsClient create_key and sign"
+observed = "Task 17.5 requires webhook signing secrets to live behind a real file or KMS boundary, but no webhook-specific KMS schema or executable is present in the repository. The service defines a strict mTLS/token KMS adapter that persists only an opaque handle and public key in Redis, verifies every returned Ed25519 signature locally, and fails readiness closed without the signer; no seed is generated, serialized or accepted from configuration by the production path."
+assumption = "The production custody owner must bind the documented create/sign operations to its managed HSM/KMS service and provision non-exportable Ed25519 keys. Human qualification will exercise creation, rotation, signer outage and public-key verification against that real service."
+severity = "dependency-boundary"
+
+[observation.17.5.3]
+task = "17.5"
+file = "platform/hosted/dashboard/src/gateway.rs, platform/hosted/dashboard/src/service.rs"
+symbol = "Store request projection, Dashboard receipt"
+observed = "The hosted gateway Redis audit stream records a principal digest, an opaque audit digest and an optional outcome, but not a reversible route label; its activity owner index also has no principal-scoped reverse link to an idempotency record. The dashboard therefore renders gateway request records as opaque and unverified and derives receipt views only from payment events created through independent sealed receipt verification. It does not read gateway secret digests, scan another principal's idempotency keys or invent route and receipt facts."
+assumption = "A later additive gateway projection may publish redacted route labels and a principal-scoped activity-to-idempotency index. Until then, human qualification should expect request labels to remain opaque and receipts to appear after the canonical verified payment event is published."
+severity = "schema-ambiguity"
+
+[observation.17.5.4]
+task = "17.5"
+file = "platform/hosted/dashboard/web/package.json, human/apps/web/packages/layerx-ui"
+symbol = "@layerx/developer-dashboard owner UI dependency"
+observed = "The owner @layerx/ui package exists only as a repository-local package and has no immutable registry coordinate in this tree. The developer dashboard consumes its exact public AppShell, Card, List, Badge, Stat, SegmentedControl, EmptyState and feedback APIs through a file dependency rather than copying or restyling primitives."
+assumption = "Release qualification will either build the dashboard from the monorepo context as written or replace the file coordinate with the exact published owner package at the same API version; it must not substitute a separately styled component implementation."
+severity = "release-boundary"
+
+[observation.17.5.5]
+task = "17.5"
+file = "platform/hosted/webhooks/tests/fault-injection.sh, .github/workflows/hosted-developer.yml"
+symbol = "hosted webhook fault and UI/deployment qualification artifacts"
+observed = "The task asks for drops, duplicates and out-of-order delivery testing while the implementation-phase rules prohibit executing tests or deployed journeys. Real-stack fault, UI contract, Rust and deployment-render machinery is written, but no build, dependency install, test, smoke, load, fault injection or verify command was run."
+assumption = "Human qualification will provide a deployed canonical event stack, real receiver observation API and protected sessions, then execute the artifacts and retain the ordering, duplicate-body, cursor and independently verified receipt evidence."
+severity = "phase-boundary"
+
+[observation.17.5.6]
+task = "17.5"
+file = "platform/Cargo.lock, .github/workflows/hosted-developer.yml, spec/layerx-platform/spec.kvx, spec/layerx-platform/tasks.md, spec/layerx-platform/qualification.kvx"
+symbol = "task 17.5 integration and lifecycle paths"
+observed = "The scoped cg guard accepted every declared webhook and dashboard path and reported five advisory outside-touch paths: the existing platform lockfile needed for already-locked TLS dependencies, the required CI/fault workflow, and the spec status, rendered task projection and qualification log. These are integration or generated lifecycle records rather than unrelated product expansion."
+assumption = "Human qualification will review the five advisories instead of removing TLS dependency locking, CI coverage or auditable spec lifecycle state."
+severity = "task-scope"

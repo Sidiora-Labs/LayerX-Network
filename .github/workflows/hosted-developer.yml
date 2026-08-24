@@ -1,0 +1,41 @@
+name: hosted-developer-surfaces
+
+on:
+  pull_request:
+    paths:
+      - "platform/hosted/webhooks/**"
+      - "platform/hosted/dashboard/**"
+      - ".github/workflows/hosted-developer.yml"
+  push:
+    branches: [main]
+    paths:
+      - "platform/hosted/webhooks/**"
+      - "platform/hosted/dashboard/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rust-boundaries:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with: { toolchain: 1.91.1 }
+      - run: cargo test --manifest-path platform/Cargo.toml --locked -p layerx-platform-webhooks -p layerx-platform-dashboard
+  owner-ui-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24.6.0 }
+      - run: node platform/hosted/dashboard/web/tests/ui-contract.mjs
+      - working-directory: platform/hosted/dashboard/web
+        run: npm install --ignore-scripts --no-audit --no-fund && npm run build
+  deployment-render:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-kubectl@v4
+      - run: kubectl apply --dry-run=client -f platform/hosted/webhooks/deployment.yaml

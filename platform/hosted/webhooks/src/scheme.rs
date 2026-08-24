@@ -32,14 +32,10 @@
 //! a receiver applying side effects must read the signed body rather than trust
 //! them.
 
+use ed25519_dalek::{Signature, VerifyingKey};
 use std::collections::BTreeMap;
-use std::fmt::{Debug, Formatter};
 
-use ed25519_dalek::{Signature, Signer as _, SigningKey, VerifyingKey};
-use serde::{Deserialize, Serialize};
-use zeroize::Zeroize;
-
-use crate::encoding::{base64_encode, fixed_base64, hex_encode};
+use crate::encoding::{base64_encode, fixed_base64};
 use crate::error::WebhookError;
 
 /// Domain word carried in the delivered envelope.
@@ -79,10 +75,8 @@ pub const MAXIMUM_KEY_ID_LENGTH: usize = 64;
 /// The receiver obligation this scheme places on developers.
 pub const RECEIVER_OBLIGATION: &str = "Verify layerx-webhook-signature over \"<layerx-webhook-id>.<layerx-webhook-timestamp>.\" followed by the exact body bytes before reading the body, reject a timestamp outside the accepted window, and deduplicate on layerx-webhook-id before applying side effects.";
 
-const SEED_BYTES: usize = 32;
 const PUBLIC_KEY_BYTES: usize = 32;
 const SIGNATURE_BYTES: usize = 64;
-const KEY_SUFFIX_BYTES: usize = 16;
 
 /// Returns true when the value is a usable signing key identifier.
 #[must_use]
@@ -116,86 +110,6 @@ pub fn parse_canonical_integer(value: &str) -> Result<u64, WebhookError> {
     value.parse().map_err(|_| WebhookError::SignatureRejected)
 }
 
-/// One endpoint signing key. The seed is redacted in debug output and zeroed
-/// when the value is dropped; only the public half is ever published.
-#[derive(Clone, Serialize, Deserialize)]
-pub struct EndpointKey {
-    id: String,
-    seed: [u8; SEED_BYTES],
-}
-
-impl EndpointKey {
-    /// Generates a fresh identifier and seed from the system entropy source.
-    ///
-    /// # Errors
-    /// Returns [`WebhookError::Entropy`] when secure generation is unavailable.
-    pub fn generate() -> Result<Self, WebhookError> {
-        let mut random = [0_u8; SEED_BYTES + KEY_SUFFIX_BYTES];
-        getrandom::fill(&mut random).map_err(|_| WebhookError::Entropy)?;
-        let mut seed = [0_u8; SEED_BYTES];
-        seed.copy_from_slice(&random[..SEED_BYTES]);
-        let id = format!("{KEY_PREFIX}{}", hex_encode(&random[SEED_BYTES..]));
-        random.zeroize();
-        Ok(Self { id, seed })
-    }
-
-    /// Adopts an operator-supplied identifier and seed.
-    ///
-    /// # Errors
-    /// Returns [`WebhookError::InvalidRequest`] for an identifier outside the
-    /// accepted shape.
-    pub fn from_parts(id: impl Into<String>, seed: [u8; SEED_BYTES]) -> Result<Self, WebhookError> {
-        let id = id.into();
-        if !valid_key_id(&id) {
-            return Err(WebhookError::InvalidRequest);
-        }
-        Ok(Self { id, seed })
-    }
-
-    /// Borrows the published key identifier.
-    #[must_use]
-    pub fn id(&self) -> &str {
-        &self.id
-    }
-
-    /// Returns the public half receivers verify with.
-    #[must_use]
-    pub fn public_key(&self) -> [u8; PUBLIC_KEY_BYTES] {
-        SigningKey::from_bytes(&self.seed)
-            .verifying_key()
-            .to_bytes()
-    }
-
-    /// Returns the public half in the exact encoding the shipped consumers
-    /// accept in `LAYERX_WEBHOOK_PUBLIC_KEYS_JSON`.
-    #[must_use]
-    pub fn public_key_base64(&self) -> String {
-        base64_encode(&self.public_key())
-    }
-
-    /// Signs one canonical message.
-    #[must_use]
-    pub fn sign(&self, message: &[u8]) -> [u8; SIGNATURE_BYTES] {
-        SigningKey::from_bytes(&self.seed).sign(message).to_bytes()
-    }
-}
-
-impl Debug for EndpointKey {
-    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("EndpointKey")
-            .field("id", &self.id)
-            .field("seed", &"[REDACTED]")
-            .finish()
-    }
-}
-
-impl Drop for EndpointKey {
-    fn drop(&mut self) {
-        self.seed.zeroize();
-    }
-}
-
 /// Builds the exact message this scheme signs.
 #[must_use]
 pub fn canonical_message(id: &str, timestamp: u64, payload: &[u8]) -> Vec<u8> {
@@ -210,12 +124,6 @@ pub fn canonical_message(id: &str, timestamp: u64, payload: &[u8]) -> Vec<u8> {
 #[must_use]
 pub fn signature_header(signature: &[u8; SIGNATURE_BYTES]) -> String {
     format!("{SIGNATURE_PREFIX}{}", base64_encode(signature))
-}
-
-/// Signs one delivery under the endpoint's own key.
-#[must_use]
-pub fn sign(key: &EndpointKey, id: &str, timestamp: u64, payload: &[u8]) -> String {
-    signature_header(&key.sign(&canonical_message(id, timestamp, payload)))
 }
 
 /// Everything a receiver needs to verify one presented delivery.

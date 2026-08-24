@@ -1,22 +1,12 @@
-//! The loopback control surface shared by the hosted webhook and dashboard
-//! services. Authentication is terminated by the hosted gateway in front, which
-//! forwards the authenticated principal, so this listener refuses to bind
-//! anything other than a loopback address.
+//! Bounded HTTP/1.1 request and response framing shared by hosted services.
 
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
-use std::time::Duration;
 
 use crate::error::WebhookError;
 
 /// Largest request the control surface reads.
 pub const MAXIMUM_REQUEST_BYTES: usize = 128 * 1024;
-/// Header carrying the principal the hosted gateway authenticated.
-pub const PRINCIPAL_HEADER: &str = "x-layerx-principal";
-
-const IO_TIMEOUT: Duration = Duration::from_secs(15);
-
 /// One parsed request.
 #[derive(Clone, Debug)]
 pub struct Request {
@@ -95,19 +85,12 @@ impl Reply {
     }
 }
 
-/// Returns true when the listen address is a loopback address.
-#[must_use]
-pub fn loopback(listen: &str) -> bool {
-    let host = listen.rsplit_once(':').map_or(listen, |(host, _)| host);
-    matches!(host, "127.0.0.1" | "localhost" | "::1" | "[::1]")
-}
-
 /// Reads one request from the stream.
 ///
 /// # Errors
 /// Returns [`WebhookError::InvalidRequest`] for a malformed or oversized request
 /// and [`WebhookError::Io`] when the stream fails.
-pub fn read_request(stream: &mut TcpStream) -> Result<Request, WebhookError> {
+pub fn read_request(stream: &mut impl Read) -> Result<Request, WebhookError> {
     let mut bytes = Vec::new();
     let mut chunk = [0_u8; 4096];
     let header_end = loop {
@@ -132,6 +115,13 @@ pub fn read_request(stream: &mut TcpStream) -> Result<Request, WebhookError> {
         .ok_or(WebhookError::InvalidRequest)?
         .to_ascii_uppercase();
     let target = first.next().ok_or(WebhookError::InvalidRequest)?;
+    if first.next() != Some("HTTP/1.1")
+        || first.next().is_some()
+        || !target.starts_with('/')
+        || target.contains(['#', '\\', '\0'])
+    {
+        return Err(WebhookError::InvalidRequest);
+    }
     let (path, query) = target.split_once('?').unwrap_or((target, ""));
     let path = path.to_owned();
     let query = query.to_owned();
@@ -141,10 +131,23 @@ pub fn read_request(stream: &mut TcpStream) -> Result<Request, WebhookError> {
         let (name, value) = line.split_once(':').ok_or(WebhookError::InvalidRequest)?;
         let name = name.trim().to_ascii_lowercase();
         let value = value.trim().to_owned();
+        if name.is_empty()
+            || headers.contains_key(&name)
+            || name
+                .bytes()
+                .any(|byte| !(byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-'))
+            || value.contains(['\r', '\n', '\0'])
+            || name == "transfer-encoding"
+        {
+            return Err(WebhookError::InvalidRequest);
+        }
         if name == "content-length" {
             content_length = value.parse().map_err(|_| WebhookError::InvalidRequest)?;
         }
         headers.insert(name, value);
+    }
+    if !headers.contains_key("host") {
+        return Err(WebhookError::InvalidRequest);
     }
     let total = header_end.saturating_add(content_length);
     if total > MAXIMUM_REQUEST_BYTES {
@@ -156,6 +159,9 @@ pub fn read_request(stream: &mut TcpStream) -> Result<Request, WebhookError> {
             return Err(WebhookError::InvalidRequest);
         }
         bytes.extend_from_slice(&chunk[..count]);
+    }
+    if bytes.len() != total {
+        return Err(WebhookError::InvalidRequest);
     }
     Ok(Request {
         method,
@@ -173,7 +179,7 @@ pub fn read_request(stream: &mut TcpStream) -> Result<Request, WebhookError> {
 ///
 /// # Errors
 /// Returns [`WebhookError::Io`] when the stream fails.
-pub fn write_reply(stream: &mut TcpStream, reply: &Reply) -> Result<(), WebhookError> {
+pub fn write_reply(stream: &mut impl Write, reply: &Reply) -> Result<(), WebhookError> {
     let reason = match reply.status {
         200 => "OK",
         201 => "Created",
@@ -200,33 +206,5 @@ pub fn write_reply(stream: &mut TcpStream, reply: &Reply) -> Result<(), WebhookE
         reply.body
     )?;
     stream.flush()?;
-    Ok(())
-}
-
-/// Serves the loopback control surface until the process is stopped.
-///
-/// # Errors
-/// Returns [`WebhookError::InvalidRequest`] when the address is not loopback and
-/// [`WebhookError::Io`] when the address cannot be bound.
-pub fn serve<F>(listen: &str, handler: F) -> Result<(), WebhookError>
-where
-    F: Fn(&Request) -> Reply,
-{
-    if !loopback(listen) {
-        return Err(WebhookError::InvalidRequest);
-    }
-    let listener = TcpListener::bind(listen)?;
-    for connection in listener.incoming() {
-        let Ok(mut stream) = connection else {
-            continue;
-        };
-        let _ = stream.set_read_timeout(Some(IO_TIMEOUT));
-        let _ = stream.set_write_timeout(Some(IO_TIMEOUT));
-        let reply = read_request(&mut stream).map_or_else(
-            |_| Reply::refusal(400, "invalid_request", None),
-            |request| handler(&request),
-        );
-        let _ = write_reply(&mut stream, &reply);
-    }
     Ok(())
 }

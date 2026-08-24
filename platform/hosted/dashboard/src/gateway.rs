@@ -1,165 +1,272 @@
-//! A read-only projection of the hosted gateway's durable store.
-//!
-//! The dashboard never writes to the gateway store and never loads the fields
-//! that authenticate a key: the mirrored records below carry the principal, the
-//! quota and the disabled flag, and the salt and secret digest beside them are
-//! simply not read. Audit records are matched by the same principal digest the
-//! gateway itself records, so one developer's request log can never contain
-//! another's line.
-
-use std::collections::BTreeMap;
-use std::fs;
-use std::io;
-use std::path::{Path, PathBuf};
-
-use layerx_platform_gateway::Quota;
 use layerx_platform_webhooks::encoding::hex_encode;
 use layerx_platform_webhooks::events::{Principal, Verification};
-use serde::Deserialize;
+use native_tls::{Certificate, TlsConnector};
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
+use std::env;
+use std::fs;
+use std::io::{Read, Write};
+use std::net::{TcpStream, ToSocketAddrs};
+use std::time::Duration;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::error::DashboardError;
 use crate::model::{
-    per_mille, KeyView, ReceiptView, RequestOutcome, RequestRecord, RequestSummary, UsageSummary,
+    per_mille, KeyView, RequestOutcome, RequestRecord, RequestSummary, UsageSummary,
 };
 
-/// Name of the durable gateway store inside the configured root.
-pub const STATE_FILE: &str = "gateway-state.json";
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
+const IO_TIMEOUT: Duration = Duration::from_secs(8);
+const MAX_RESPONSE: usize = 2 * 1024 * 1024;
+const MAX_KEYS: usize = 128;
 
-const KNOWN_OPERATIONS: [&str; 2] = ["POST /v1/activities", "GET /v1/state"];
-const MAXIMUM_IDEMPOTENCY_KEY: usize = 128;
-
-#[derive(Deserialize)]
-struct KeyRecord {
-    principal: String,
-    quota: Quota,
-    #[serde(default)]
-    disabled: bool,
-}
-
-#[derive(Deserialize)]
-struct UsageRecord {
-    window_started: u64,
-    used: u64,
-}
-
-#[derive(Deserialize)]
-struct OperationRecord {
-    #[serde(default)]
-    response: Vec<u8>,
-    #[serde(default)]
-    receipt: Vec<u8>,
-    #[serde(default)]
-    verification_level: String,
-}
-
-#[derive(Deserialize)]
-struct IdempotencyRecord {
-    request_digest: [u8; 32],
-    result: OperationRecord,
-}
-
-#[derive(Clone, Copy, Deserialize)]
-enum AuditOutcome {
-    Completed,
-    RateLimited,
-    Refused,
-}
-
-impl AuditOutcome {
-    const fn presented(self) -> RequestOutcome {
-        match self {
-            Self::Completed => RequestOutcome::Completed,
-            Self::RateLimited => RequestOutcome::RateLimited,
-            Self::Refused => RequestOutcome::Refused,
-        }
-    }
-}
-
-#[derive(Deserialize)]
-struct AuditRecord {
-    at: u64,
-    principal_digest: [u8; 32],
-    operation_digest: [u8; 32],
-    outcome: AuditOutcome,
-}
-
-#[derive(Default, Deserialize)]
-struct Mirror {
-    #[serde(default)]
-    keys: BTreeMap<String, KeyRecord>,
-    #[serde(default)]
-    usage: BTreeMap<String, UsageRecord>,
-    #[serde(default)]
-    idempotency: BTreeMap<String, IdempotencyRecord>,
-    #[serde(default)]
-    audit: Vec<AuditRecord>,
-}
-
-/// Everything the developer's gateway account looks like at one instant.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Snapshot {
-    /// The issued keys and the quota window each is spending.
     pub keys: Vec<KeyView>,
-    /// Quota and usage across those keys.
     pub usage: UsageSummary,
-    /// The shape of the whole request log.
     pub requests: RequestSummary,
-    /// The most recent request lines, newest first.
     pub recent_requests: Vec<RequestRecord>,
 }
 
-fn hash(bytes: &[u8]) -> [u8; 32] {
-    Sha256::digest(bytes).into()
+#[derive(Clone)]
+struct Endpoint {
+    host: String,
+    port: u16,
 }
 
-fn byte_count(value: usize) -> u64 {
-    u64::try_from(value).unwrap_or(u64::MAX)
+enum Resp {
+    Simple(String),
+    Bulk(Option<Vec<u8>>),
+    Integer(i64),
+    Array(Vec<Resp>),
 }
 
-fn operation_name(digest: &[u8; 32]) -> Option<&'static str> {
-    KNOWN_OPERATIONS
-        .into_iter()
-        .find(|operation| &hash(operation.as_bytes()) == digest)
+pub struct Store {
+    endpoint: Endpoint,
+    ca: Certificate,
+    username: Zeroizing<String>,
+    password: Zeroizing<String>,
 }
 
-fn scoped_idempotency(principal: &Principal, key: &str) -> String {
-    hex_encode(&hash(
-        &[principal.as_str().as_bytes(), b"\0", key.as_bytes()].concat(),
-    ))
-}
-
-fn key_view(id: &str, record: &KeyRecord, usage: Option<&UsageRecord>, now: u64) -> KeyView {
-    let recorded = usage.map_or(now, |value| value.window_started);
-    let lapsed = usage.is_none() || now.saturating_sub(recorded) >= record.quota.window_seconds;
-    let used = if lapsed {
-        0
-    } else {
-        usage.map_or(0, |value| value.used)
-    };
-    let started = if lapsed { now } else { recorded };
-    KeyView {
-        key_id: id.to_owned(),
-        principal: record.principal.clone(),
-        disabled: record.disabled,
-        requests_per_window: record.quota.requests,
-        window_seconds: record.quota.window_seconds,
-        used_in_window: used,
-        remaining_in_window: record.quota.requests.saturating_sub(used),
-        window_started_at: started,
-        window_resets_at: started.saturating_add(record.quota.window_seconds),
-        window_lapsed: lapsed,
-        utilisation_per_mille: per_mille(used, record.quota.requests),
+impl Store {
+    pub fn from_environment() -> Result<Self, String> {
+        let endpoint = parse_endpoint(
+            &env::var("LAYERX_DASHBOARD_GATEWAY_REDIS_URL")
+                .map_err(|_| "dashboard gateway Redis URL is required")?,
+        )?;
+        let ca = Certificate::from_der(
+            &fs::read(
+                env::var("LAYERX_DASHBOARD_REDIS_CA_DER")
+                    .map_err(|_| "dashboard Redis CA is required")?,
+            )
+            .map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| error.to_string())?;
+        Ok(Self {
+            endpoint,
+            ca,
+            username: read_secret("LAYERX_DASHBOARD_GATEWAY_REDIS_USERNAME_FILE")?,
+            password: read_secret("LAYERX_DASHBOARD_GATEWAY_REDIS_PASSWORD_FILE")?,
+        })
     }
-}
 
-fn key_views(state: &Mirror, principal: &Principal, now: u64) -> Vec<KeyView> {
-    state
-        .keys
-        .iter()
-        .filter(|(_, record)| record.principal == principal.as_str())
-        .map(|(id, record)| key_view(id, record, state.usage.get(id), now))
-        .collect()
+    pub fn ready(&self) -> bool {
+        matches!(self.command(&["PING"]), Ok(Resp::Simple(value)) if value == "PONG")
+    }
+
+    pub fn keys(&self, principal: &Principal, now: u64) -> Result<Vec<KeyView>, DashboardError> {
+        let digest = principal_digest(principal);
+        let ids = self.key_ids(&digest)?;
+        let mut keys = Vec::with_capacity(ids.len());
+        for id in ids {
+            let key = format!("gateway:key:{id}");
+            let values = self
+                .command(&[
+                    "HMGET",
+                    &key,
+                    "principal",
+                    "quota_requests",
+                    "quota_window_seconds",
+                    "disabled",
+                ])
+                .map_err(|_| DashboardError::CorruptStore)?;
+            let Resp::Array(fields) = values else {
+                return Err(DashboardError::CorruptStore);
+            };
+            if fields.len() != 4 || text(&fields[0]).as_deref() != Some(digest.as_str()) {
+                return Err(DashboardError::CorruptStore);
+            }
+            let allowed = number(&fields[1])?;
+            let window = number(&fields[2])?;
+            if allowed == 0 || window == 0 {
+                return Err(DashboardError::CorruptStore);
+            }
+            let disabled = text(&fields[3]).as_deref() == Some("1");
+            let window_number = now / window;
+            let window_started_at = window_number.saturating_mul(window);
+            let usage_key = format!("gateway:quota:{id}:{window_number}");
+            let used = match self
+                .command(&["GET", &usage_key])
+                .map_err(|_| DashboardError::CorruptStore)?
+            {
+                Resp::Bulk(None) => 0,
+                value => number(&value)?,
+            };
+            keys.push(KeyView {
+                key_id: id,
+                principal: principal.as_str().to_owned(),
+                disabled,
+                requests_per_window: allowed,
+                window_seconds: window,
+                used_in_window: used,
+                remaining_in_window: allowed.saturating_sub(used),
+                window_started_at,
+                window_resets_at: window_started_at.saturating_add(window),
+                window_lapsed: false,
+                utilisation_per_mille: per_mille(used, allowed),
+            });
+        }
+        Ok(keys)
+    }
+
+    pub fn usage(&self, principal: &Principal, now: u64) -> Result<UsageSummary, DashboardError> {
+        Ok(usage_summary(&self.keys(principal, now)?))
+    }
+
+    pub fn requests(
+        &self,
+        principal: &Principal,
+        limit: usize,
+    ) -> Result<Vec<RequestRecord>, DashboardError> {
+        let digest = principal_digest(principal);
+        let count = limit.clamp(1, 200).saturating_mul(8).min(1600);
+        let response = self
+            .command(&[
+                "XREVRANGE",
+                "gateway:audit",
+                "+",
+                "-",
+                "COUNT",
+                &count.to_string(),
+            ])
+            .map_err(|_| DashboardError::CorruptStore)?;
+        let Resp::Array(entries) = response else {
+            return Err(DashboardError::CorruptStore);
+        };
+        let mut records = Vec::new();
+        for entry in entries {
+            let Resp::Array(parts) = entry else {
+                return Err(DashboardError::CorruptStore);
+            };
+            if parts.len() != 2 {
+                return Err(DashboardError::CorruptStore);
+            }
+            let id = text(&parts[0]).ok_or(DashboardError::CorruptStore)?;
+            let fields = pairs(&parts[1])?;
+            let event = fields.get("event").ok_or(DashboardError::CorruptStore)?;
+            let Some(operation_digest) = event.strip_prefix(&format!("{digest}:")) else {
+                continue;
+            };
+            let outcome = match fields.get("outcome").map(String::as_str) {
+                Some("rate_limited") => RequestOutcome::RateLimited,
+                Some("receipt_verified" | "completed") => RequestOutcome::Completed,
+                Some("pending") | None => RequestOutcome::Pending,
+                Some(_) => RequestOutcome::Refused,
+            };
+            let at = id
+                .split_once('-')
+                .and_then(|(milliseconds, _)| milliseconds.parse::<u64>().ok())
+                .map(|milliseconds| milliseconds / 1_000)
+                .ok_or(DashboardError::CorruptStore)?;
+            records.push(RequestRecord {
+                at,
+                operation: None,
+                operation_digest: operation_digest.to_owned(),
+                outcome,
+                verification: Verification::Unverified,
+            });
+            if records.len() >= limit.clamp(1, 200) {
+                break;
+            }
+        }
+        Ok(records)
+    }
+
+    pub fn snapshot(
+        &self,
+        principal: &Principal,
+        now: u64,
+        limit: usize,
+    ) -> Result<Snapshot, DashboardError> {
+        let keys = self.keys(principal, now)?;
+        let recent_requests = self.requests(principal, limit)?;
+        Ok(Snapshot {
+            usage: usage_summary(&keys),
+            keys,
+            requests: request_summary(&recent_requests),
+            recent_requests,
+        })
+    }
+
+    fn key_ids(&self, principal_digest: &str) -> Result<Vec<String>, DashboardError> {
+        let key = format!("gateway:principal:{principal_digest}:keys");
+        let Resp::Array(values) = self
+            .command(&["SMEMBERS", &key])
+            .map_err(|_| DashboardError::CorruptStore)?
+        else {
+            return Err(DashboardError::CorruptStore);
+        };
+        if values.len() > MAX_KEYS {
+            return Err(DashboardError::CorruptStore);
+        }
+        let mut ids = values
+            .iter()
+            .map(text)
+            .collect::<Option<Vec<_>>>()
+            .ok_or(DashboardError::CorruptStore)?;
+        ids.sort();
+        Ok(ids)
+    }
+
+    fn command(&self, arguments: &[&str]) -> Result<Resp, String> {
+        let mut last = None;
+        for address in (self.endpoint.host.as_str(), self.endpoint.port)
+            .to_socket_addrs()
+            .map_err(|error| error.to_string())?
+            .take(8)
+        {
+            match TcpStream::connect_timeout(&address, CONNECT_TIMEOUT) {
+                Ok(tcp) => {
+                    tcp.set_read_timeout(Some(IO_TIMEOUT))
+                        .map_err(|error| error.to_string())?;
+                    tcp.set_write_timeout(Some(IO_TIMEOUT))
+                        .map_err(|error| error.to_string())?;
+                    let connector = TlsConnector::builder()
+                        .add_root_certificate(self.ca.clone())
+                        .min_protocol_version(Some(native_tls::Protocol::Tlsv12))
+                        .build()
+                        .map_err(|error| error.to_string())?;
+                    let mut stream = connector
+                        .connect(&self.endpoint.host, tcp)
+                        .map_err(|error| error.to_string())?;
+                    write_resp(
+                        &mut stream,
+                        &["AUTH", self.username.as_str(), self.password.as_str()],
+                    )?;
+                    if !matches!(read_resp(&mut stream, 0)?, Resp::Simple(value) if value == "OK") {
+                        return Err("dashboard Redis authentication failed".to_owned());
+                    }
+                    write_resp(&mut stream, arguments)?;
+                    return read_resp(&mut stream, 0);
+                }
+                Err(error) => last = Some(error),
+            }
+        }
+        Err(last.map_or_else(
+            || "dashboard Redis did not resolve".to_owned(),
+            |error| error.to_string(),
+        ))
+    }
 }
 
 fn usage_summary(keys: &[KeyView]) -> UsageSummary {
@@ -168,54 +275,32 @@ fn usage_summary(keys: &[KeyView]) -> UsageSummary {
         summary.keys = summary.keys.saturating_add(1);
         if key.disabled {
             summary.disabled_keys = summary.disabled_keys.saturating_add(1);
-            continue;
+        } else {
+            summary.live_keys = summary.live_keys.saturating_add(1);
+            summary.requests_allowed = summary
+                .requests_allowed
+                .saturating_add(key.requests_per_window);
+            summary.requests_used = summary.requests_used.saturating_add(key.used_in_window);
+            summary.requests_remaining = summary
+                .requests_remaining
+                .saturating_add(key.remaining_in_window);
         }
-        summary.live_keys = summary.live_keys.saturating_add(1);
-        summary.requests_allowed = summary
-            .requests_allowed
-            .saturating_add(key.requests_per_window);
-        summary.requests_used = summary.requests_used.saturating_add(key.used_in_window);
-        summary.requests_remaining = summary
-            .requests_remaining
-            .saturating_add(key.remaining_in_window);
     }
     summary.utilisation_per_mille = per_mille(summary.requests_used, summary.requests_allowed);
     summary
 }
 
-fn request_records(state: &Mirror, principal: &Principal, limit: usize) -> Vec<RequestRecord> {
-    let owned = principal.audit_digest();
-    state
-        .audit
-        .iter()
-        .rev()
-        .filter(|record| record.principal_digest == owned)
-        .take(limit)
-        .map(|record| RequestRecord {
-            at: record.at,
-            operation: operation_name(&record.operation_digest).map(str::to_owned),
-            operation_digest: hex_encode(&record.operation_digest),
-            outcome: record.outcome.presented(),
-            verification: Verification::Unverified,
-        })
-        .collect()
-}
-
-fn request_summary(state: &Mirror, principal: &Principal) -> RequestSummary {
-    let owned = principal.audit_digest();
+fn request_summary(records: &[RequestRecord]) -> RequestSummary {
     let mut summary = RequestSummary::default();
-    for record in state
-        .audit
-        .iter()
-        .filter(|record| record.principal_digest == owned)
-    {
+    for record in records {
         summary.records = summary.records.saturating_add(1);
         match record.outcome {
-            AuditOutcome::Completed => summary.completed = summary.completed.saturating_add(1),
-            AuditOutcome::RateLimited => {
+            RequestOutcome::Pending => summary.pending = summary.pending.saturating_add(1),
+            RequestOutcome::Completed => summary.completed = summary.completed.saturating_add(1),
+            RequestOutcome::RateLimited => {
                 summary.rate_limited = summary.rate_limited.saturating_add(1);
             }
-            AuditOutcome::Refused => summary.refused = summary.refused.saturating_add(1),
+            RequestOutcome::Refused => summary.refused = summary.refused.saturating_add(1),
         }
         summary.first_at = Some(summary.first_at.map_or(record.at, |at| at.min(record.at)));
         summary.last_at = Some(summary.last_at.map_or(record.at, |at| at.max(record.at)));
@@ -223,127 +308,165 @@ fn request_summary(state: &Mirror, principal: &Principal) -> RequestSummary {
     summary
 }
 
-fn receipt_view(idempotency_key: &str, record: &IdempotencyRecord) -> ReceiptView {
-    let verification =
-        Verification::parse(&record.result.verification_level).unwrap_or(Verification::Unverified);
-    let evidence = !record.result.receipt.is_empty();
-    ReceiptView {
-        idempotency_key: idempotency_key.to_owned(),
-        request_digest: hex_encode(&record.request_digest),
-        receipt_digest: evidence.then(|| hex_encode(&hash(&record.result.receipt))),
-        receipt_bytes: byte_count(record.result.receipt.len()),
-        response_bytes: byte_count(record.result.response.len()),
-        recorded_level: record.result.verification_level.clone(),
-        verification,
-        settled: evidence && verification.at_least(Verification::ReceiptVerified),
+fn principal_digest(principal: &Principal) -> String {
+    hex_encode(&Sha256::digest(principal.as_str().as_bytes()))
+}
+
+fn parse_endpoint(value: &str) -> Result<Endpoint, String> {
+    let authority = value
+        .strip_prefix("rediss://")
+        .ok_or_else(|| "dashboard Redis endpoint must use rediss".to_owned())?
+        .trim_end_matches('/');
+    if authority.is_empty() || authority.contains(['@', '/', '?', '#', '\\']) {
+        return Err("dashboard Redis endpoint is not canonical".to_owned());
+    }
+    let (host, port) = authority.rsplit_once(':').map_or_else(
+        || Ok::<_, String>((authority.to_owned(), 6379)),
+        |(host, port)| {
+            Ok((
+                host.to_owned(),
+                port.parse::<u16>()
+                    .map_err(|_| "dashboard Redis port is invalid".to_owned())?,
+            ))
+        },
+    )?;
+    if host.is_empty() {
+        return Err("dashboard Redis host is missing".to_owned());
+    }
+    Ok(Endpoint { host, port })
+}
+
+fn read_secret(name: &str) -> Result<Zeroizing<String>, String> {
+    let mut value = fs::read_to_string(env::var(name).map_err(|_| format!("{name} is required"))?)
+        .map_err(|error| error.to_string())?;
+    while matches!(value.as_bytes().last(), Some(b'\r' | b'\n')) {
+        value.pop();
+    }
+    if value.is_empty() || value.len() > 4096 {
+        value.zeroize();
+        return Err(format!("{name} is empty or oversized"));
+    }
+    Ok(Zeroizing::new(value))
+}
+
+fn number(value: &Resp) -> Result<u64, DashboardError> {
+    text(value)
+        .ok_or(DashboardError::CorruptStore)?
+        .parse::<u64>()
+        .map_err(|_| DashboardError::CorruptStore)
+}
+
+fn pairs(value: &Resp) -> Result<BTreeMap<String, String>, DashboardError> {
+    let Resp::Array(values) = value else {
+        return Err(DashboardError::CorruptStore);
+    };
+    if !values.len().is_multiple_of(2) {
+        return Err(DashboardError::CorruptStore);
+    }
+    values
+        .chunks_exact(2)
+        .map(|pair| {
+            Ok((
+                text(&pair[0]).ok_or(DashboardError::CorruptStore)?,
+                text(&pair[1]).ok_or(DashboardError::CorruptStore)?,
+            ))
+        })
+        .collect()
+}
+
+fn text(value: &Resp) -> Option<String> {
+    match value {
+        Resp::Simple(value) => Some(value.clone()),
+        Resp::Bulk(Some(value)) => String::from_utf8(value.clone()).ok(),
+        Resp::Integer(value) => Some(value.to_string()),
+        Resp::Bulk(None) | Resp::Array(_) => None,
     }
 }
 
-/// The gateway store, opened for reading only.
-pub struct Store {
-    path: PathBuf,
+fn write_resp(stream: &mut impl Write, arguments: &[&str]) -> Result<(), String> {
+    write!(stream, "*{}\r\n", arguments.len()).map_err(|error| error.to_string())?;
+    for argument in arguments {
+        write!(stream, "${}\r\n{}\r\n", argument.len(), argument)
+            .map_err(|error| error.to_string())?;
+    }
+    stream.flush().map_err(|error| error.to_string())
 }
 
-impl Store {
-    /// Opens the durable gateway store for reading.
-    ///
-    /// # Errors
-    /// Returns [`DashboardError::UnknownRoot`] when the root is not an existing
-    /// directory.
-    pub fn open(root: impl AsRef<Path>) -> Result<Self, DashboardError> {
-        let root = root.as_ref();
-        if !root.is_dir() {
-            return Err(DashboardError::UnknownRoot);
+fn read_resp(stream: &mut impl Read, depth: usize) -> Result<Resp, String> {
+    if depth > 8 {
+        return Err("dashboard Redis nesting is excessive".to_owned());
+    }
+    let mut marker = [0_u8; 1];
+    stream
+        .read_exact(&mut marker)
+        .map_err(|error| error.to_string())?;
+    match marker[0] {
+        b'+' => Ok(Resp::Simple(read_line(stream)?)),
+        b'-' => Err(format!(
+            "dashboard Redis refused command: {}",
+            read_line(stream)?
+        )),
+        b':' => read_line(stream)?
+            .parse::<i64>()
+            .map(Resp::Integer)
+            .map_err(|_| "dashboard Redis integer is invalid".to_owned()),
+        b'$' => {
+            let length = read_line(stream)?
+                .parse::<i64>()
+                .map_err(|_| "dashboard Redis bulk length is invalid".to_owned())?;
+            if length == -1 {
+                return Ok(Resp::Bulk(None));
+            }
+            let length = usize::try_from(length)
+                .map_err(|_| "dashboard Redis bulk length is invalid".to_owned())?;
+            if length > MAX_RESPONSE {
+                return Err("dashboard Redis response exceeds its bound".to_owned());
+            }
+            let mut bytes = vec![0_u8; length];
+            stream
+                .read_exact(&mut bytes)
+                .map_err(|error| error.to_string())?;
+            let mut ending = [0_u8; 2];
+            stream
+                .read_exact(&mut ending)
+                .map_err(|error| error.to_string())?;
+            if ending != *b"\r\n" {
+                return Err("dashboard Redis response is malformed".to_owned());
+            }
+            Ok(Resp::Bulk(Some(bytes)))
         }
-        Ok(Self {
-            path: root.join(STATE_FILE),
-        })
-    }
-
-    fn read(&self) -> Result<Mirror, DashboardError> {
-        match fs::read(&self.path) {
-            Ok(bytes) => serde_json::from_slice(&bytes).map_err(|_| DashboardError::CorruptStore),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Mirror::default()),
-            Err(error) => Err(error.into()),
+        b'*' => {
+            let length = read_line(stream)?
+                .parse::<usize>()
+                .map_err(|_| "dashboard Redis array length is invalid".to_owned())?;
+            if length > 10_000 {
+                return Err("dashboard Redis array exceeds its bound".to_owned());
+            }
+            let mut values = Vec::with_capacity(length);
+            for _ in 0..length {
+                values.push(read_resp(stream, depth + 1)?);
+            }
+            Ok(Resp::Array(values))
         }
+        _ => Err("dashboard Redis response marker is invalid".to_owned()),
     }
+}
 
-    /// Reads the keys the principal holds and the window each is spending.
-    ///
-    /// # Errors
-    /// Returns [`DashboardError::CorruptStore`] for an undecodable store and
-    /// [`DashboardError::Io`] when it cannot be read.
-    pub fn keys(&self, principal: &Principal, now: u64) -> Result<Vec<KeyView>, DashboardError> {
-        Ok(key_views(&self.read()?, principal, now))
-    }
-
-    /// Reads quota and usage across every key the principal holds.
-    ///
-    /// # Errors
-    /// Returns [`DashboardError::CorruptStore`] for an undecodable store and
-    /// [`DashboardError::Io`] when it cannot be read.
-    pub fn usage(&self, principal: &Principal, now: u64) -> Result<UsageSummary, DashboardError> {
-        Ok(usage_summary(&key_views(&self.read()?, principal, now)))
-    }
-
-    /// Reads the principal's own request log, newest first.
-    ///
-    /// # Errors
-    /// Returns [`DashboardError::CorruptStore`] for an undecodable store and
-    /// [`DashboardError::Io`] when it cannot be read.
-    pub fn requests(
-        &self,
-        principal: &Principal,
-        limit: usize,
-    ) -> Result<Vec<RequestRecord>, DashboardError> {
-        Ok(request_records(&self.read()?, principal, limit))
-    }
-
-    /// Reads keys, usage and the request log in one pass over the store.
-    ///
-    /// # Errors
-    /// Returns [`DashboardError::CorruptStore`] for an undecodable store and
-    /// [`DashboardError::Io`] when it cannot be read.
-    pub fn snapshot(
-        &self,
-        principal: &Principal,
-        now: u64,
-        limit: usize,
-    ) -> Result<Snapshot, DashboardError> {
-        let state = self.read()?;
-        let keys = key_views(&state, principal, now);
-        Ok(Snapshot {
-            usage: usage_summary(&keys),
-            keys,
-            requests: request_summary(&state, principal),
-            recent_requests: request_records(&state, principal, limit),
-        })
-    }
-
-    /// Reads the receipt the gateway retained under the developer's own
-    /// idempotency key, addressable only by the principal that made the request.
-    ///
-    /// # Errors
-    /// Returns [`DashboardError::InvalidRequest`] for a key outside the bounds
-    /// the gateway accepts, [`DashboardError::UnknownReceipt`] when no receipt
-    /// is recorded under it, [`DashboardError::CorruptStore`] for an undecodable
-    /// store and [`DashboardError::Io`] when it cannot be read.
-    pub fn receipt(
-        &self,
-        principal: &Principal,
-        idempotency_key: &str,
-    ) -> Result<ReceiptView, DashboardError> {
-        if idempotency_key.is_empty()
-            || idempotency_key.len() > MAXIMUM_IDEMPOTENCY_KEY
-            || !idempotency_key.bytes().all(|byte| byte.is_ascii_graphic())
-        {
-            return Err(DashboardError::InvalidRequest);
+fn read_line(stream: &mut impl Read) -> Result<String, String> {
+    let mut bytes = Vec::new();
+    loop {
+        let mut byte = [0_u8; 1];
+        stream
+            .read_exact(&mut byte)
+            .map_err(|error| error.to_string())?;
+        bytes.push(byte[0]);
+        if bytes.len() > 8192 {
+            return Err("dashboard Redis response line is excessive".to_owned());
         }
-        let state = self.read()?;
-        let record = state
-            .idempotency
-            .get(&scoped_idempotency(principal, idempotency_key))
-            .ok_or(DashboardError::UnknownReceipt)?;
-        Ok(receipt_view(idempotency_key, record))
+        if bytes.ends_with(b"\r\n") {
+            bytes.truncate(bytes.len().saturating_sub(2));
+            return String::from_utf8(bytes)
+                .map_err(|_| "dashboard Redis response is not UTF-8".to_owned());
+        }
     }
 }

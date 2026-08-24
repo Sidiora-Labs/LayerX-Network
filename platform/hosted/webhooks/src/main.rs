@@ -1,55 +1,41 @@
-//! Executable entry point of the hosted webhook service.
-//!
-//! Authentication is terminated by the hosted gateway in front, which forwards
-//! the principal it authenticated in `x-layerx-principal`, so this process binds
-//! a loopback address only. Outbound delivery runs on its own thread against the
-//! real transport; setting the dispatch interval to zero leaves every attempt
-//! under the operator's control, which is what an exercise that injects drops,
-//! duplicates and reordering needs in order to stay deterministic.
-//!
-//! A payment event reaches the wire one of two ways: through the receipt-checked
-//! path, where the caller hands over the gateway's own receipt bytes and the
-//! event presents settlement at the level those bytes establish, or as an
-//! explicitly unverified notification. A published fact that claims receipt
-//! evidence on a payment without those bytes behind it is refused.
-
+use layerx_platform_webhooks::error::WebhookError;
+use layerx_platform_webhooks::events::{
+    DeliveryId, EndpointId, EventKind, Principal, Verification,
+};
+use layerx_platform_webhooks::hosted::HostedService;
+use layerx_platform_webhooks::http::{self, Reply, Request};
+use layerx_platform_webhooks::scheme;
+use layerx_platform_webhooks::trusted::{DeveloperIdentity, SourceTrigger, TrustedSources};
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
+use rustls::{ServerConfig, ServerConnection, StreamOwned};
+use serde::{Deserialize, Serialize};
 use std::env;
-use std::path::PathBuf;
+use std::fs;
+use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use layerx_platform_gateway::VerifiedOperation;
-use layerx_platform_webhooks::deliveries::DeliveryRecord;
-use layerx_platform_webhooks::encoding::base64_decode;
-use layerx_platform_webhooks::endpoints::{EndpointHealth, RetryPolicy};
-use layerx_platform_webhooks::error::WebhookError;
-use layerx_platform_webhooks::events::{
-    settled_payment, DeliveryId, EndpointId, EventDraft, EventId, EventKind, PaymentDraft,
-    Principal, ProtocolEvent, ProtocolFact, SubjectId, Verification,
-};
-use layerx_platform_webhooks::http::{self, Reply, Request, PRINCIPAL_HEADER};
-use layerx_platform_webhooks::scheme;
-use layerx_platform_webhooks::service::{EndpointRequest, Service};
-use layerx_platform_webhooks::transport::HttpTransport;
-use serde::{Deserialize, Serialize};
-
-const DEFAULT_LISTEN: &str = "127.0.0.1:9430";
-const DEFAULT_ROOT: &str = "/var/lib/layerx-webhooks";
+const MAX_CONNECTIONS: usize = 256;
 const DEFAULT_PAGE: usize = 50;
-const DEFAULT_RETENTION_EVENTS: usize = 10_000;
+static ACTIVE_CONNECTIONS: AtomicUsize = AtomicUsize::new(0);
 
 struct Config {
-    listen: String,
-    root: PathBuf,
-    policy: RetryPolicy,
-    attempt_deadline: Duration,
+    listen: SocketAddr,
+    tls: Arc<ServerConfig>,
+    service: Arc<HostedService>,
+    sources: Arc<TrustedSources>,
+    identity: Arc<DeveloperIdentity>,
+    source_trigger: Arc<SourceTrigger>,
+    operator_trigger: Arc<SourceTrigger>,
     dispatch_interval: Duration,
     dispatch_budget: u32,
-    key_overlap_seconds: u64,
+    retention_events: usize,
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RegisterBody {
     url: String,
     #[serde(default)]
@@ -59,43 +45,9 @@ struct RegisterBody {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct SuspendBody {
     reason: String,
-}
-
-#[derive(Deserialize)]
-struct FactBody {
-    name: String,
-    value: String,
-    #[serde(default)]
-    verification: Option<String>,
-    #[serde(default)]
-    receipt_digest: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct PaymentBody {
-    amount: String,
-    asset: String,
-    #[serde(default)]
-    response: String,
-    receipt: String,
-    verification_level: String,
-}
-
-#[derive(Deserialize)]
-struct EventBody {
-    #[serde(default)]
-    id: Option<String>,
-    kind: String,
-    subject: String,
-    subject_sequence: u64,
-    #[serde(default)]
-    occurred_at: Option<u64>,
-    #[serde(default)]
-    facts: Vec<FactBody>,
-    #[serde(default)]
-    payment: Option<PaymentBody>,
 }
 
 #[derive(Serialize)]
@@ -103,105 +55,68 @@ struct SchemeDocument {
     scheme: &'static str,
     algorithm: &'static str,
     signed_message: &'static str,
-    signature_encoding: &'static str,
-    id_header: &'static str,
-    timestamp_header: &'static str,
-    key_header: &'static str,
-    signature_header: &'static str,
-    signature_prefix: &'static str,
-    metadata_headers: [&'static str; 6],
-    tolerance_seconds: u64,
-    maximum_future_skew_seconds: u64,
-    public_key_environment_variable: &'static str,
     receiver_obligation: &'static str,
-}
-
-#[derive(Serialize)]
-struct HealthPage {
-    endpoints: Vec<EndpointHealth>,
-}
-
-#[derive(Serialize)]
-struct DeliveryPage {
-    deliveries: Vec<DeliveryRecord>,
-}
-
-#[derive(Serialize)]
-struct EventLogPage {
-    events: Vec<ProtocolEvent>,
-}
-
-#[derive(Serialize)]
-struct ReplayOutcome {
-    queued: String,
-}
-
-#[derive(Serialize)]
-struct PruneOutcome {
-    released: usize,
 }
 
 fn now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_or(0, |value| value.as_secs())
+        .map_or(0, |duration| duration.as_secs())
 }
 
-fn parse_u64(name: &str, default: u64) -> Result<u64, String> {
+fn number(name: &str, default: u64) -> Result<u64, String> {
     env::var(name).map_or(Ok(default), |value| {
         value
-            .parse()
-            .map_err(|_| format!("{name} must be an integer"))
+            .parse::<u64>()
+            .map_err(|_| format!("{name} is not an integer"))
     })
 }
 
-fn parse_u32(name: &str, default: u32) -> Result<u32, String> {
-    env::var(name).map_or(Ok(default), |value| {
-        value
-            .parse()
-            .map_err(|_| format!("{name} must be an integer"))
-    })
-}
-
-fn parse_u8(name: &str, default: u8) -> Result<u8, String> {
-    env::var(name).map_or(Ok(default), |value| {
-        value
-            .parse()
-            .map_err(|_| format!("{name} must be an integer"))
-    })
+fn tls_config() -> Result<Arc<ServerConfig>, String> {
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .map_err(|_| "failed to install TLS provider".to_owned())?;
+    let cert = CertificateDer::from(
+        fs::read(
+            env::var("LAYERX_WEBHOOKS_TLS_CERT_DER")
+                .map_err(|_| "webhook TLS certificate is required")?,
+        )
+        .map_err(|error| error.to_string())?,
+    );
+    let key = PrivateKeyDer::from(PrivatePkcs8KeyDer::from(
+        fs::read(
+            env::var("LAYERX_WEBHOOKS_TLS_KEY_DER").map_err(|_| "webhook TLS key is required")?,
+        )
+        .map_err(|error| error.to_string())?,
+    ));
+    ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(vec![cert], key)
+        .map(Arc::new)
+        .map_err(|error| error.to_string())
 }
 
 fn config() -> Result<Config, String> {
-    let listen = env::var("LAYERX_WEBHOOKS_LISTEN").unwrap_or_else(|_| DEFAULT_LISTEN.to_owned());
-    if !http::loopback(&listen) {
-        return Err("LAYERX_WEBHOOKS_LISTEN must be a loopback address".to_owned());
-    }
-    let policy = RetryPolicy {
-        base_delay_seconds: parse_u64("LAYERX_WEBHOOKS_BASE_DELAY_SECONDS", 10)?,
-        maximum_delay_seconds: parse_u64("LAYERX_WEBHOOKS_MAXIMUM_DELAY_SECONDS", 3_600)?,
-        maximum_attempts: parse_u32("LAYERX_WEBHOOKS_MAXIMUM_ATTEMPTS", 8)?,
-        spread_percent: parse_u8("LAYERX_WEBHOOKS_SPREAD_PERCENT", 20)?,
-        suspend_after_dead_letters: parse_u32("LAYERX_WEBHOOKS_SUSPEND_AFTER_DEAD_LETTERS", 20)?,
-        in_flight_timeout_seconds: parse_u64("LAYERX_WEBHOOKS_IN_FLIGHT_TIMEOUT_SECONDS", 120)?,
-    }
-    .validate()
-    .map_err(|_| "webhook retry policy bounds are unusable".to_owned())?;
-    let deadline = parse_u64("LAYERX_WEBHOOKS_ATTEMPT_DEADLINE_SECONDS", 15)?;
-    if deadline == 0 {
-        return Err("LAYERX_WEBHOOKS_ATTEMPT_DEADLINE_SECONDS must be positive".to_owned());
-    }
     Ok(Config {
-        listen,
-        root: env::var("LAYERX_WEBHOOKS_STATE")
-            .map_or_else(|_| PathBuf::from(DEFAULT_ROOT), PathBuf::from),
-        policy,
-        attempt_deadline: Duration::from_secs(deadline),
-        dispatch_interval: Duration::from_secs(parse_u64(
+        listen: env::var("LAYERX_WEBHOOKS_LISTEN")
+            .unwrap_or_else(|_| "0.0.0.0:9444".to_owned())
+            .parse::<SocketAddr>()
+            .map_err(|_| "webhook listen address is invalid".to_owned())?,
+        tls: tls_config()?,
+        service: Arc::new(HostedService::from_environment()?),
+        sources: Arc::new(TrustedSources::from_environment()?),
+        identity: Arc::new(DeveloperIdentity::from_environment()?),
+        source_trigger: Arc::new(SourceTrigger::from_environment()?),
+        operator_trigger: Arc::new(SourceTrigger::operator_from_environment()?),
+        dispatch_interval: Duration::from_secs(number(
             "LAYERX_WEBHOOKS_DISPATCH_INTERVAL_SECONDS",
             1,
         )?),
-        dispatch_budget: parse_u32("LAYERX_WEBHOOKS_DISPATCH_BUDGET", 64)?,
-        key_overlap_seconds: parse_u64("LAYERX_WEBHOOKS_KEY_OVERLAP_SECONDS", 86_400)?,
+        dispatch_budget: u32::try_from(number("LAYERX_WEBHOOKS_DISPATCH_BUDGET", 64)?)
+            .map_err(|_| "webhook dispatch budget is invalid".to_owned())?,
+        retention_events: usize::try_from(number("LAYERX_WEBHOOKS_RETENTION_EVENTS", 10_000)?)
+            .map_err(|_| "webhook retention bound is invalid".to_owned())?
+            .clamp(1, 20_000),
     })
 }
 
@@ -212,7 +127,7 @@ fn refusal(error: &WebhookError) -> Reply {
         WebhookError::UnknownDelivery => (404, "unknown_delivery", None),
         WebhookError::NotDeadLettered => (409, "not_dead_lettered", None),
         WebhookError::EndpointSuspended => (409, "endpoint_suspended", None),
-        WebhookError::EventConflict => (409, "event_conflict", None),
+        WebhookError::EventConflict => (409, "conflict", None),
         WebhookError::OrderViolation => (409, "order_violation", None),
         WebhookError::InvalidCursor => (400, "invalid_cursor", None),
         WebhookError::CursorExpired => (410, "cursor_expired", None),
@@ -223,33 +138,25 @@ fn refusal(error: &WebhookError) -> Reply {
         WebhookError::ReplayCapacity => (503, "replay_capacity", Some(10)),
         WebhookError::Entropy => (503, "entropy_unavailable", Some(5)),
         WebhookError::CorruptStore | WebhookError::Unavailable | WebhookError::Io(_) => {
-            (503, "state_unavailable", Some(10))
+            (503, "dependency_unavailable", Some(5))
         }
-        WebhookError::Gateway(_) => (403, "principal_refused", None),
+        WebhookError::Gateway(_) => (422, "verification_refused", None),
     };
     Reply::refusal(status, code, retry)
 }
 
 fn encoded<T: Serialize>(status: u16, value: &T) -> Reply {
     serde_json::to_string(value).map_or_else(
-        |_| Reply::refusal(503, "encoding_failed", Some(10)),
+        |_| Reply::refusal(503, "encoding_failed", Some(5)),
         |body| Reply::json(status, body),
     )
 }
 
-fn principal_of(request: &Request) -> Result<Principal, WebhookError> {
-    Principal::new(
-        request
-            .header(PRINCIPAL_HEADER)
-            .ok_or(WebhookError::InvalidRequest)?,
-    )
-}
-
-fn body_of<T: for<'a> Deserialize<'a>>(request: &Request) -> Result<T, WebhookError> {
+fn body<T: for<'de> Deserialize<'de>>(request: &Request) -> Result<T, WebhookError> {
     serde_json::from_slice(&request.body).map_err(|_| WebhookError::InvalidRequest)
 }
 
-fn page_size(request: &Request) -> usize {
+fn page(request: &Request) -> usize {
     request
         .parameter("limit")
         .and_then(|value| value.parse::<usize>().ok())
@@ -257,221 +164,60 @@ fn page_size(request: &Request) -> usize {
         .clamp(1, 200)
 }
 
-fn scheme_document() -> SchemeDocument {
-    SchemeDocument {
-        scheme: scheme::SCHEME_VERSION,
-        algorithm: "ed25519",
-        signed_message:
-            "\"<layerx-webhook-id>.<layerx-webhook-timestamp>.\" followed by the exact body bytes",
-        signature_encoding: "standard padded base64 of the 64-byte signature",
-        id_header: scheme::ID_HEADER,
-        timestamp_header: scheme::TIMESTAMP_HEADER,
-        key_header: scheme::KEY_HEADER,
-        signature_header: scheme::SIGNATURE_HEADER,
-        signature_prefix: scheme::SIGNATURE_PREFIX,
-        metadata_headers: [
-            scheme::DELIVERY_HEADER,
-            scheme::KIND_HEADER,
-            scheme::SUBJECT_HEADER,
-            scheme::SEQUENCE_HEADER,
-            scheme::ATTEMPT_HEADER,
-            scheme::ENDPOINT_HEADER,
-        ],
-        tolerance_seconds: scheme::DEFAULT_TOLERANCE_SECONDS,
-        maximum_future_skew_seconds: scheme::MAXIMUM_FUTURE_SKEW_SECONDS,
-        public_key_environment_variable: "LAYERX_WEBHOOK_PUBLIC_KEYS_JSON",
-        receiver_obligation: scheme::RECEIVER_OBLIGATION,
+fn principal(config: &Config, request: &Request) -> Result<Principal, WebhookError> {
+    config.identity.authenticate(
+        request.header("authorization"),
+        request.header("cookie"),
+        request.header("x-layerx-csrf"),
+        matches!(request.method.as_str(), "POST" | "DELETE"),
+    )
+}
+
+fn endpoints(config: &Config, request: &Request, principal: &Principal, at: u64) -> Reply {
+    if request.method == "GET" {
+        return config
+            .service
+            .snapshot(principal, at, page(request))
+            .map_or_else(
+                |error| refusal(&error),
+                |value| encoded(200, &value.endpoints),
+            );
     }
-}
-
-fn draft_facts(facts: Vec<FactBody>) -> Result<Vec<ProtocolFact>, WebhookError> {
-    facts
-        .into_iter()
-        .map(|fact| match (fact.verification, fact.receipt_digest) {
-            (Some(level), Some(receipt)) => {
-                ProtocolFact::verified(fact.name, fact.value, Verification::parse(&level)?, receipt)
-            }
-            (None, None) => ProtocolFact::unverified(fact.name, fact.value),
-            _ => Err(WebhookError::VerificationRequired),
-        })
-        .collect()
-}
-
-fn payment_event(
-    payment: PaymentBody,
-    id: EventId,
-    principal: &Principal,
-    subject: SubjectId,
-    subject_sequence: u64,
-    occurred_at: u64,
-) -> Result<ProtocolEvent, WebhookError> {
-    let response = if payment.response.is_empty() {
-        Vec::new()
-    } else {
-        base64_decode(&payment.response)?
-    };
-    let operation = VerifiedOperation {
-        response,
-        receipt: base64_decode(&payment.receipt)?,
-        verification_level: payment.verification_level,
-    };
-    settled_payment(PaymentDraft {
-        id,
-        principal: principal.clone(),
-        subject,
-        subject_sequence,
-        occurred_at,
-        operation: &operation,
-        amount: payment.amount,
-        asset: payment.asset,
-    })
-}
-
-fn build_event(
-    body: EventBody,
-    principal: &Principal,
-    at: u64,
-) -> Result<ProtocolEvent, WebhookError> {
-    let id = match body.id {
-        Some(value) => EventId::new(value)?,
-        None => EventId::generate()?,
-    };
-    let kind = EventKind::parse(&body.kind)?;
-    let subject = SubjectId::new(body.subject)?;
-    let occurred_at = body.occurred_at.unwrap_or(at);
-    if let Some(payment) = body.payment {
-        if kind != EventKind::Payment || !body.facts.is_empty() {
-            return Err(WebhookError::InvalidRequest);
-        }
-        return payment_event(
-            payment,
-            id,
-            principal,
-            subject,
-            body.subject_sequence,
-            occurred_at,
-        );
+    if request.method != "POST" {
+        return Reply::refusal(404, "not_found", None);
     }
-    let facts = draft_facts(body.facts)?;
-    if kind == EventKind::Payment
-        && facts
-            .iter()
-            .any(|fact| fact.verification().requires_receipt())
-    {
-        return Err(WebhookError::VerificationRequired);
-    }
-    ProtocolEvent::new(EventDraft {
-        id,
-        kind,
-        principal: principal.clone(),
-        subject,
-        subject_sequence: body.subject_sequence,
-        occurred_at,
-        facts,
-    })
-}
-
-fn register(
-    service: &Service<HttpTransport>,
-    request: &Request,
-    principal: &Principal,
-    at: u64,
-) -> Reply {
-    let body = match body_of::<RegisterBody>(request) {
+    let idempotency = match request.header("idempotency-key") {
+        Some(value) => value,
+        None => return Reply::refusal(400, "idempotency_key_required", None),
+    };
+    let body = match body::<RegisterBody>(request) {
         Ok(value) => value,
         Err(error) => return refusal(&error),
     };
-    let kinds = body
+    let kinds = match body
         .kinds
         .iter()
-        .map(|kind| EventKind::parse(kind.as_str()))
-        .collect::<Result<Vec<EventKind>, WebhookError>>();
-    let kinds = match kinds {
+        .map(|value| EventKind::parse(value))
+        .collect::<Result<Vec<_>, _>>()
+    {
         Ok(value) => value,
         Err(error) => return refusal(&error),
     };
-    let minimum = match body
-        .minimum_verification
-        .as_deref()
-        .map(Verification::parse)
-    {
-        Some(Ok(value)) => value,
-        Some(Err(error)) => return refusal(&error),
+    let minimum = match body.minimum_verification.as_deref() {
+        Some(value) => match Verification::parse(value) {
+            Ok(value) => value,
+            Err(error) => return refusal(&error),
+        },
         None => Verification::Unverified,
     };
-    service
-        .register(
-            &EndpointRequest {
-                principal,
-                url: &body.url,
-                kinds: &kinds,
-                minimum_verification: minimum,
-            },
-            at,
-        )
-        .map_or_else(|error| refusal(&error), |issued| encoded(201, &issued))
-}
-
-fn publish(
-    service: &Service<HttpTransport>,
-    request: &Request,
-    principal: &Principal,
-    at: u64,
-) -> Reply {
-    let event = body_of::<EventBody>(request)
-        .and_then(|body| build_event(body, principal, at))
-        .and_then(|event| service.publish(&event, at));
-    event.map_or_else(|error| refusal(&error), |outcome| encoded(202, &outcome))
-}
-
-fn event_log(service: &Service<HttpTransport>, request: &Request, principal: &Principal) -> Reply {
-    let kind = match request.parameter("kind").map(EventKind::parse) {
-        Some(Ok(value)) => Some(value),
-        Some(Err(error)) => return refusal(&error),
-        None => None,
-    };
-    service
-        .events(principal, kind, page_size(request))
-        .map_or_else(
-            |error| refusal(&error),
-            |events| encoded(200, &EventLogPage { events }),
-        )
-}
-
-fn delivery_log(
-    service: &Service<HttpTransport>,
-    request: &Request,
-    principal: &Principal,
-) -> Reply {
-    let endpoint = match request.parameter("endpoint").map(EndpointId::new) {
-        Some(Ok(value)) => Some(value),
-        Some(Err(error)) => return refusal(&error),
-        None => None,
-    };
-    service
-        .deliveries(principal, endpoint.as_ref(), page_size(request))
-        .map_or_else(
-            |error| refusal(&error),
-            |deliveries| encoded(200, &DeliveryPage { deliveries }),
-        )
-}
-
-fn replay(
-    service: &Service<HttpTransport>,
-    principal: &Principal,
-    delivery: &str,
-    at: u64,
-) -> Reply {
-    DeliveryId::new(delivery)
-        .and_then(|delivery| service.replay_dead_letter(principal, &delivery, at))
-        .map_or_else(
-            |error| refusal(&error),
-            |queued| encoded(202, &ReplayOutcome { queued }),
-        )
+    config
+        .service
+        .register(principal, &body.url, &kinds, minimum, idempotency, at)
+        .map_or_else(|error| refusal(&error), |value| encoded(201, &value))
 }
 
 fn endpoint_route(
-    service: &Service<HttpTransport>,
+    config: &Config,
     request: &Request,
     principal: &Principal,
     endpoint: &str,
@@ -483,36 +229,51 @@ fn endpoint_route(
         Err(error) => return refusal(&error),
     };
     match (request.method.as_str(), action) {
-        ("GET", "events") => service
+        ("GET", "events") => config
+            .service
             .events_since(
                 principal,
                 &endpoint,
                 request.parameter("cursor"),
-                page_size(request),
+                page(request),
             )
-            .map_or_else(|error| refusal(&error), |page| encoded(200, &page)),
-        ("GET", "keys") => service
+            .map_or_else(|error| refusal(&error), |value| encoded(200, &value)),
+        ("GET", "keys") => config
+            .service
             .signing_keys(principal, &endpoint, at)
-            .map_or_else(|error| refusal(&error), |keys| encoded(200, &keys)),
-        ("POST", "keys") => service
-            .rotate_key(principal, &endpoint, at)
-            .map_or_else(|error| refusal(&error), |issued| encoded(201, &issued)),
-        ("POST", "redeliveries") => service
+            .map_or_else(|error| refusal(&error), |value| encoded(200, &value)),
+        ("POST", "keys") => match request.header("idempotency-key") {
+            Some(idempotency) => config
+                .service
+                .rotate_key(principal, &endpoint, idempotency, at)
+                .map_or_else(|error| refusal(&error), |value| encoded(201, &value)),
+            None => Reply::refusal(400, "idempotency_key_required", None),
+        },
+        ("POST", "redeliveries") => config
+            .service
             .redeliver(
                 principal,
                 &endpoint,
                 request.parameter("cursor"),
-                page_size(request),
+                page(request),
+                match request.header("idempotency-key") {
+                    Some(value) => value,
+                    None => return Reply::refusal(400, "idempotency_key_required", None),
+                },
                 at,
             )
-            .map_or_else(|error| refusal(&error), |outcome| encoded(202, &outcome)),
-        ("POST", "suspensions") => body_of::<SuspendBody>(request)
-            .and_then(|body| service.suspend(principal, &endpoint, &body.reason, at))
+            .map_or_else(|error| refusal(&error), |value| encoded(202, &value)),
+        ("POST", "suspensions") => body::<SuspendBody>(request)
+            .and_then(|body| {
+                config
+                    .service
+                    .suspend(principal, &endpoint, &body.reason, at)
+            })
             .map_or_else(
                 |error| refusal(&error),
                 |()| Reply::json(200, "{\"suspended\":true}".to_owned()),
             ),
-        ("POST", "resumptions") => service.resume(principal, &endpoint).map_or_else(
+        ("POST", "resumptions") => config.service.resume(principal, &endpoint).map_or_else(
             |error| refusal(&error),
             |()| Reply::json(200, "{\"suspended\":false}".to_owned()),
         ),
@@ -520,105 +281,172 @@ fn endpoint_route(
     }
 }
 
-fn owned_route(
-    service: &Service<HttpTransport>,
-    request: &Request,
-    principal: &Principal,
-    tail: &[&str],
-    at: u64,
-) -> Reply {
-    match (request.method.as_str(), tail) {
-        ("POST", ["endpoints"]) => register(service, request, principal, at),
-        ("GET", ["endpoints"]) => service.health(principal, at).map_or_else(
-            |error| refusal(&error),
-            |endpoints| encoded(200, &HealthPage { endpoints }),
-        ),
-        ("POST", ["events"]) => publish(service, request, principal, at),
-        ("GET", ["events"]) => event_log(service, request, principal),
-        ("GET", ["deliveries"]) => delivery_log(service, request, principal),
-        ("GET", ["dead-letters"]) => service
-            .dead_letters(principal, page_size(request))
+fn owned_route(config: &Config, request: &Request, principal: &Principal, at: u64) -> Reply {
+    let segments = request.segments();
+    match (request.method.as_str(), segments.as_slice()) {
+        (_, ["v1", "webhooks", "endpoints"]) => endpoints(config, request, principal, at),
+        (_, ["v1", "webhooks", "endpoints", endpoint, action]) => {
+            endpoint_route(config, request, principal, endpoint, action, at)
+        }
+        ("GET", ["v1", "webhooks", "events"]) => config
+            .service
+            .snapshot(principal, at, page(request))
+            .map_or_else(|error| refusal(&error), |value| encoded(200, &value.events)),
+        ("GET", ["v1", "webhooks", "deliveries"]) => config
+            .service
+            .snapshot(principal, at, page(request))
             .map_or_else(
                 |error| refusal(&error),
-                |deliveries| encoded(200, &DeliveryPage { deliveries }),
+                |value| encoded(200, &value.deliveries),
             ),
-        ("POST", ["deliveries", delivery, "replays"]) => replay(service, principal, delivery, at),
-        (_, ["endpoints", endpoint, action]) => {
-            endpoint_route(service, request, principal, endpoint, action, at)
+        ("GET", ["v1", "webhooks", "dead-letters"]) => config
+            .service
+            .snapshot(principal, at, page(request))
+            .map_or_else(
+                |error| refusal(&error),
+                |value| encoded(200, &value.dead_letters),
+            ),
+        ("POST", ["v1", "webhooks", "dead-letters", delivery, "replay"]) => {
+            let idempotency = match request.header("idempotency-key") {
+                Some(value) => value,
+                None => return Reply::refusal(400, "idempotency_key_required", None),
+            };
+            DeliveryId::new(*delivery)
+                .and_then(|delivery| {
+                    config
+                        .service
+                        .replay_dead_letter(principal, &delivery, idempotency, at)
+                })
+                .map_or_else(|error| refusal(&error), |value| encoded(202, &value))
         }
         _ => Reply::refusal(404, "not_found", None),
     }
 }
 
-fn route(service: &Service<HttpTransport>, request: &Request, budget: u32) -> Reply {
-    let at = now();
+fn internal_route(config: &Config, request: &Request, at: u64) -> Reply {
     let segments = request.segments();
-    if request.method == "GET" && matches!(segments.as_slice(), ["healthz"]) {
-        return Reply::json(
-            200,
-            "{\"status\":\"ready\",\"service\":\"layerx-webhooks\"}".to_owned(),
-        );
-    }
-    let ["v1", "webhooks", tail @ ..] = segments.as_slice() else {
-        return Reply::refusal(404, "not_found", None);
-    };
-    match (request.method.as_str(), tail) {
-        ("GET", ["scheme"]) => encoded(200, &scheme_document()),
-        ("POST", ["dispatch"]) => service
-            .dispatch(at, budget)
-            .map_or_else(|error| refusal(&error), |report| encoded(200, &report)),
-        ("POST", ["prune"]) => {
-            let keep = request
-                .parameter("keep")
-                .and_then(|value| value.parse::<usize>().ok())
-                .unwrap_or(DEFAULT_RETENTION_EVENTS);
-            service.prune(keep).map_or_else(
-                |error| refusal(&error),
-                |released| encoded(200, &PruneOutcome { released }),
-            )
+    match (request.method.as_str(), segments.as_slice()) {
+        ("POST", ["internal", "v1", "events", kind, source_event]) => {
+            if !config
+                .source_trigger
+                .authorizes(request.header("authorization"))
+            {
+                return Reply::refusal(401, "source_authentication_required", None);
+            }
+            EventKind::parse(kind)
+                .and_then(|kind| config.sources.fetch(kind, source_event))
+                .and_then(|event| config.service.publish(&event, at))
+                .map_or_else(|error| refusal(&error), |value| encoded(202, &value))
         }
-        _ => match principal_of(request) {
-            Ok(principal) => owned_route(service, request, &principal, tail, at),
-            Err(error) => refusal(&error),
-        },
+        ("POST", ["internal", "v1", "dispatch"]) => {
+            if !config
+                .operator_trigger
+                .authorizes(request.header("authorization"))
+            {
+                return Reply::refusal(401, "operator_authentication_required", None);
+            }
+            config
+                .service
+                .dispatch(at, config.dispatch_budget)
+                .map_or_else(|error| refusal(&error), |value| encoded(200, &value))
+        }
+        _ => Reply::refusal(404, "not_found", None),
     }
 }
 
-fn serve(config: &Config) -> Result<(), String> {
-    let transport =
-        HttpTransport::new(config.attempt_deadline).map_err(|_| "attempt deadline is unusable")?;
-    let service = Arc::new(
-        Service::open(&config.root, transport, config.policy)
-            .map_err(|error| error.to_string())?
-            .with_key_overlap(config.key_overlap_seconds),
-    );
-    let budget = config.dispatch_budget;
-    let interval = config.dispatch_interval;
-    if interval.is_zero() {
-        eprintln!("LayerX webhooks dispatch is operator driven: POST /v1/webhooks/dispatch");
-    } else {
-        let dispatcher = Arc::clone(&service);
-        thread::Builder::new()
-            .name("layerx-webhooks-dispatch".to_owned())
-            .spawn(move || loop {
-                if let Err(error) = dispatcher.dispatch(now(), budget) {
-                    eprintln!("webhook dispatch error: {error}");
+fn route(config: &Config, request: &Request) -> Reply {
+    let at = now();
+    if request.method == "GET" && request.path == "/healthz" {
+        let delivery = config.service.ready();
+        let sources = config.sources.ready();
+        return encoded(
+            if delivery && sources { 200 } else { 503 },
+            &serde_json::json!({
+                "ready": delivery && sources,
+                "components": {
+                    "delivery_state_and_signer": delivery,
+                    "canonical_sources_and_receipt_authority": sources
                 }
-                thread::sleep(interval);
-            })
-            .map_err(|error| error.to_string())?;
+            }),
+        );
     }
-    eprintln!(
-        "LayerX webhooks ready on {} with durable state {}",
-        config.listen,
-        config.root.display()
+    if request.method == "GET" && request.path == "/v1/webhooks/scheme" {
+        return encoded(
+            200,
+            &SchemeDocument {
+                scheme: scheme::SCHEME_VERSION,
+                algorithm: "ed25519",
+                signed_message: "<event-id>.<timestamp>. followed by exact body bytes",
+                receiver_obligation: scheme::RECEIVER_OBLIGATION,
+            },
+        );
+    }
+    if request.path.starts_with("/internal/") {
+        return internal_route(config, request, at);
+    }
+    match principal(config, request) {
+        Ok(principal) => owned_route(config, request, &principal, at),
+        Err(_) => Reply::refusal(401, "session_required", None),
+    }
+}
+
+fn serve(config: Arc<Config>) -> Result<(), String> {
+    if config.dispatch_interval.is_zero() {
+        return Err("webhook dispatch interval must be positive".to_owned());
+    }
+    let worker_config = Arc::clone(&config);
+    thread::spawn(move || loop {
+        thread::sleep(worker_config.dispatch_interval);
+        let _ = worker_config
+            .service
+            .dispatch(now(), worker_config.dispatch_budget);
+        let _ = worker_config
+            .service
+            .prune_all(worker_config.retention_events);
+    });
+    let listener = TcpListener::bind(config.listen).map_err(|error| error.to_string())?;
+    for accepted in listener.incoming() {
+        let Ok(tcp) = accepted else {
+            continue;
+        };
+        if ACTIVE_CONNECTIONS.fetch_add(1, Ordering::AcqRel) >= MAX_CONNECTIONS {
+            ACTIVE_CONNECTIONS.fetch_sub(1, Ordering::AcqRel);
+            continue;
+        }
+        let request_config = Arc::clone(&config);
+        thread::spawn(move || {
+            let _guard = ConnectionGuard;
+            let _ = handle(tcp, &request_config);
+        });
+    }
+    Ok(())
+}
+
+struct ConnectionGuard;
+
+impl Drop for ConnectionGuard {
+    fn drop(&mut self) {
+        ACTIVE_CONNECTIONS.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+fn handle(tcp: TcpStream, config: &Config) -> Result<(), String> {
+    tcp.set_read_timeout(Some(Duration::from_secs(15)))
+        .map_err(|error| error.to_string())?;
+    tcp.set_write_timeout(Some(Duration::from_secs(15)))
+        .map_err(|error| error.to_string())?;
+    let connection =
+        ServerConnection::new(Arc::clone(&config.tls)).map_err(|error| error.to_string())?;
+    let mut stream = StreamOwned::new(connection, tcp);
+    let reply = http::read_request(&mut stream).map_or_else(
+        |_| Reply::refusal(400, "invalid_request", None),
+        |request| route(config, &request),
     );
-    http::serve(&config.listen, |request| route(&service, request, budget))
-        .map_err(|error| error.to_string())
+    http::write_reply(&mut stream, &reply).map_err(|error| error.to_string())
 }
 
 fn main() {
-    if let Err(error) = config().and_then(|config| serve(&config)) {
+    if let Err(error) = config().and_then(|config| serve(Arc::new(config))) {
         eprintln!("layerx-webhooks: {error}");
         std::process::exit(2);
     }
