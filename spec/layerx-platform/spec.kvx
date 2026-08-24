@@ -2126,7 +2126,7 @@ reqs = ["26.3","26.7"]
 
 [task.17.4]
 title = "Build the deployable hosted gateway with keys and quotas"
-status = "pending"
+status = "implemented"
 wave = 9
 requires = ["17.3"]
 work_kind = "implementation"

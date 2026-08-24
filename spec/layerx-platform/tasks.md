@@ -778,7 +778,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Monitor testnet health on the status page, distinguishing testnet, gateway and core degradation.
     - Exercise the faucet and a full test payment through the hosted surface in the scheduled CI run.
     - _Requirements: 26.3, 26.7_
-  - [ ] 17.4 Build the deployable hosted gateway with keys and quotas
+  - [ ] 17.4 Build the deployable hosted gateway with keys and quotas — **Implemented - qualification pending**
     - Stand up the hosted gateway and RPC surface with self-service API key issuance and rotation.
     - Enforce per-key quotas with typed rate-limit refusals carrying retry timing.
     - Prove no gateway path weakens protocol authorisation or verification rules, by the boundary conformance suite.
