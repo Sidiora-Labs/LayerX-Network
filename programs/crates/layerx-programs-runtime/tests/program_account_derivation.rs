@@ -27,21 +27,49 @@ const FROZEN_DOMAIN: &[u8] = b"LayerX/programs/program-account/v1\0";
 
 /// The conformance vector set: a spread of program identifiers and bounded
 /// seeds, including the empty seed, a maximal seed and non-ASCII bytes.
-fn conformance_vectors() -> Vec<([u8; 32], Vec<u8>)> {
+fn conformance_vectors() -> Vec<([u8; 32], Vec<u8>, &'static str)> {
     vec![
-        ([1u8; 32], b"".to_vec()),
-        ([1u8; 32], b"vault".to_vec()),
-        ([2u8; 32], b"vault".to_vec()),
-        ([7u8; 32], b"escrow/42".to_vec()),
-        ([0x11u8; 32], b"pool/reserve".to_vec()),
-        ({
-            let mut program = [0u8; 32];
-            for (index, byte) in program.iter_mut().enumerate() {
-                *byte = index as u8 + 1;
-            }
-            program
-        }, vec![0x00, 0xff, 0x7f, 0x80, 0x01]),
-        ([0xabu8; 32], vec![0xcd; MAX_PROGRAM_ACCOUNT_SEED_BYTES]),
+        (
+            [1u8; 32],
+            b"".to_vec(),
+            "558c786d2c1f6371169ad993b4adb445e3081e410ce50bc7da1752005426fd40",
+        ),
+        (
+            [1u8; 32],
+            b"vault".to_vec(),
+            "ae8ecdd739892abd6f799dc19ebf0c5791eddf59db1c41e12f8ee22a590507f2",
+        ),
+        (
+            [2u8; 32],
+            b"vault".to_vec(),
+            "49294889000402bf4e669ada3bbcebe1a34294fc9541feeaa5c69c5e6321639c",
+        ),
+        (
+            [7u8; 32],
+            b"escrow/42".to_vec(),
+            "e80fb6a9b24f2423fd014df649569b01aa3c8dcf22d249f678c925210b3ca0ec",
+        ),
+        (
+            [0x11u8; 32],
+            b"pool/reserve".to_vec(),
+            "a6107c8f7f8a2d470b3fbeeae6ccc90a9d46233e1b66de9e81ae033a8020406b",
+        ),
+        (
+            {
+                let mut program = [0u8; 32];
+                for (index, byte) in program.iter_mut().enumerate() {
+                    *byte = index as u8 + 1;
+                }
+                program
+            },
+            vec![0x00, 0xff, 0x7f, 0x80, 0x01],
+            "694e43962a8b89d0ee449629e50c6e8f2bf8492ba86c3b6e99782158235a29f5",
+        ),
+        (
+            [0xabu8; 32],
+            vec![0xcd; MAX_PROGRAM_ACCOUNT_SEED_BYTES],
+            "295fb65ee3e4ffa67749a0ea0e4c709c0f14f1223034ac8b5e7d1d76346aba24",
+        ),
     ]
 }
 
@@ -51,7 +79,9 @@ fn frozen_preimage(program: [u8; 32], seed: &[u8]) -> Vec<u8> {
     let mut preimage = Vec::new();
     preimage.extend_from_slice(FROZEN_DOMAIN);
     preimage.extend_from_slice(&program);
-    preimage.extend_from_slice(&(u32::try_from(seed.len()).expect("seed length fits u32")).to_be_bytes());
+    preimage.extend_from_slice(
+        &(u32::try_from(seed.len()).expect("seed length fits u32")).to_be_bytes(),
+    );
     preimage.extend_from_slice(seed);
     preimage
 }
@@ -66,7 +96,7 @@ fn format_hex(bytes: &[u8]) -> String {
 
 #[test]
 fn golden_preimage_layout_is_frozen() {
-    for (program_bytes, seed) in conformance_vectors() {
+    for (program_bytes, seed, _) in conformance_vectors() {
         let assembled =
             program_account_preimage(program(program_bytes), &seed).expect("preimage assembles");
         assert_eq!(
@@ -80,23 +110,27 @@ fn golden_preimage_layout_is_frozen() {
 
 #[test]
 fn golden_derivation_matches_frozen_preimage_hash() {
-    for (program_bytes, seed) in conformance_vectors() {
+    for (program_bytes, seed, expected_hex) in conformance_vectors() {
         let account = derive_program_account(program(program_bytes), &seed)
             .expect("derivation succeeds for admitted seed");
-        let expected = hash_bytes(HashAlgorithm::Sha256, &frozen_preimage(program_bytes, &seed))
-            .expect("hash succeeds");
+        let expected = hash_bytes(
+            HashAlgorithm::Sha256,
+            &frozen_preimage(program_bytes, &seed),
+        )
+        .expect("hash succeeds");
         assert_eq!(
             account.bytes(),
             expected,
             "derived account diverged from the frozen preimage hash for seed length {}",
             seed.len()
         );
+        assert_eq!(format_hex(&account.bytes()), expected_hex);
     }
 }
 
 #[test]
 fn derivation_is_byte_identical_across_repeated_computation() {
-    for (program_bytes, seed) in conformance_vectors() {
+    for (program_bytes, seed, _) in conformance_vectors() {
         let first = derive_program_account(program(program_bytes), &seed).expect("derivation");
         let baseline_hex = format_hex(&first.bytes());
         for _ in 0..64 {
@@ -113,7 +147,7 @@ fn derivation_is_byte_identical_across_repeated_computation() {
 
 #[test]
 fn derivation_outputs_are_fixed_width() {
-    for (program_bytes, seed) in conformance_vectors() {
+    for (program_bytes, seed, _) in conformance_vectors() {
         let account = derive_program_account(program(program_bytes), &seed).expect("derivation");
         assert_eq!(account.bytes().len(), PROGRAM_ACCOUNT_BYTES);
     }
@@ -122,7 +156,7 @@ fn derivation_outputs_are_fixed_width() {
 #[test]
 fn conformance_vectors_do_not_collide() {
     let mut seen: Vec<[u8; PROGRAM_ACCOUNT_BYTES]> = Vec::new();
-    for (program_bytes, seed) in conformance_vectors() {
+    for (program_bytes, seed, _) in conformance_vectors() {
         let account: ProgramAccount =
             derive_program_account(program(program_bytes), &seed).expect("derivation");
         let bytes = account.bytes();

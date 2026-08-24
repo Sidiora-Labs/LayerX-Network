@@ -1221,7 +1221,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Carry both authorization roots into one atomic transfer set with one canonical encoding and one receipt, so a mixed activity settles whole or not at all.
     - Test the law against programs attempting to spend from an account they cannot derive, from a callee frame, and past the total of legs the set conserves.
     - _Requirements: 37.2, 37.3_
-  - [ ] 30.3 Wire program-owned accounts into the kernel account registry
+  - [ ] 30.3 Wire program-owned accounts into the kernel account registry — **Implemented - qualification pending**
     - Register program-owned accounts through the existing account registry with the same derivation the runtime uses, so the C side and the Rust side agree byte for byte.
     - Keep the kernel unchanged: no new authority kind, no new balance-mutation primitive, no kernel type gaining program-specific fields, with program authority resolved as an ordinary authority the existing model already expresses.
     - Fund, hold and disburse through the existing 402LXP leg authorization path, adding no second monetary route.

@@ -2437,16 +2437,24 @@ $(BUILD_DIR)/tests/programs_occupancy_batch: tests/programs/test_occupancy_batch
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) \
 		$(EXTRA_LDFLAGS) -lcrypto -pthread -ldl -lm -o $@
 
+$(BUILD_DIR)/tests/programs_accounts: tests/programs/test_accounts.c \
+		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) \
+		$(EXTRA_LDFLAGS) -lcrypto -pthread -ldl -lm -o $@
+
 programs-core-test: $(BUILD_DIR)/tests/programs_registration \
 		$(BUILD_DIR)/tests/programs_lifecycle \
 		$(BUILD_DIR)/tests/programs_monetary_law \
 		$(BUILD_DIR)/tests/programs_call_activity \
-		$(BUILD_DIR)/tests/programs_occupancy_batch
+		$(BUILD_DIR)/tests/programs_occupancy_batch \
+		$(BUILD_DIR)/tests/programs_accounts
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/programs_registration
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/programs_lifecycle
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/programs_monetary_law
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/programs_call_activity
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/programs_occupancy_batch
+	$(RUN_PREFIX) $(BUILD_DIR)/tests/programs_accounts
 
 programs-protocol-regression: test-kernel test-module-ctx test-dispatch \
 		test-receipts test-state-root test-snapshot test-replay-golden-local

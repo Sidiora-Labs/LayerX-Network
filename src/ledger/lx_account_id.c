@@ -75,6 +75,44 @@ static bool system_tail(const uint8_t *name, size_t length,
     return true;
 }
 
+static bool module_value(const uint8_t *name, size_t length)
+{
+    static const uint8_t prefix[] = "module:";
+    static const uint8_t marker[] = ":value:";
+    const size_t prefix_length = sizeof(prefix) - 1U;
+    const size_t marker_length = sizeof(marker) - 1U;
+    const size_t identifier_length = 64U;
+    size_t module_length;
+    size_t i;
+    if (length <= prefix_length + marker_length + identifier_length ||
+        memcmp(name, prefix, prefix_length) != 0 ||
+        memcmp(name + length - identifier_length - marker_length,
+               marker, marker_length) != 0)
+        return false;
+    module_length = length - prefix_length - marker_length - identifier_length;
+    if (module_length == 0U || module_length > 31U) return false;
+    for (i = prefix_length; i < prefix_length + module_length; ++i) {
+        uint8_t byte = name[i];
+        if (!((byte >= (uint8_t)'a' && byte <= (uint8_t)'z') ||
+              (byte >= (uint8_t)'0' && byte <= (uint8_t)'9') ||
+              byte == (uint8_t)'-'))
+            return false;
+    }
+    for (i = length - identifier_length; i < length; ++i) {
+        uint8_t byte = name[i];
+        if (!((byte >= (uint8_t)'0' && byte <= (uint8_t)'9') ||
+              (byte >= (uint8_t)'a' && byte <= (uint8_t)'f')))
+            return false;
+    }
+    return true;
+}
+
+static uint8_t hex_nibble(uint8_t byte)
+{
+    return byte <= (uint8_t)'9' ? (uint8_t)(byte - (uint8_t)'0') :
+                                  (uint8_t)(byte - (uint8_t)'a' + 10U);
+}
+
 lxp_result lx_account_name_parse(const uint8_t *name, size_t name_length,
                                  lx_account_name *parsed)
 {
@@ -106,6 +144,8 @@ lxp_result lx_account_name_parse(const uint8_t *name, size_t name_length,
         kind = LX_ACCOUNT_AGENT_STREAM;
     else if (has_agent_shape(name, name_length, ":margin:"))
         kind = LX_ACCOUNT_AGENT_MARGIN;
+    else if (module_value(name, name_length))
+        kind = LX_ACCOUNT_MODULE_VALUE;
     else return LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE;
     parsed->bytes = name;
     parsed->length = name_length;
@@ -136,6 +176,14 @@ lxp_result lx_account_id_from_string(const uint8_t *name, size_t name_length,
         return LXP_ERR_NON_CANONICAL;
     status = lx_account_name_parse(name, name_length, &parsed);
     if (status != LXP_OK) return status;
+    if (parsed.kind == LX_ACCOUNT_MODULE_VALUE) {
+        const uint8_t *encoded = name + name_length - 64U;
+        size_t i;
+        for (i = 0U; i < 32U; ++i)
+            account_id[i] = (uint8_t)((hex_nibble(encoded[i * 2U]) << 4U) |
+                                      hex_nibble(encoded[i * 2U + 1U]));
+        return LXP_OK;
+    }
     length_be[0] = (uint8_t)(name_length >> 24U);
     length_be[1] = (uint8_t)(name_length >> 16U);
     length_be[2] = (uint8_t)(name_length >> 8U);

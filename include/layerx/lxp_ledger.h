@@ -17,17 +17,18 @@ enum {
 
 typedef enum lx_account_kind {
     LX_ACCOUNT_AGENT_MAIN = 1,
-    LX_ACCOUNT_AGENT_BUDGET,
-    LX_ACCOUNT_AGENT_ESCROW,
-    LX_ACCOUNT_AGENT_STREAM,
-    LX_ACCOUNT_AGENT_MARGIN,
-    LX_ACCOUNT_SYSTEM_LIQUIDITY,
-    LX_ACCOUNT_SYSTEM_FUNDING_LONG,
-    LX_ACCOUNT_SYSTEM_FUNDING_SHORT,
-    LX_ACCOUNT_SYSTEM_INSURANCE,
-    LX_ACCOUNT_SYSTEM_FEES,
-    LX_ACCOUNT_SYSTEM_PAXEER_RESERVE,
-    LX_ACCOUNT_SYSTEM_PAXEER_WITHDRAWALS
+    LX_ACCOUNT_AGENT_BUDGET = 2,
+    LX_ACCOUNT_AGENT_ESCROW = 3,
+    LX_ACCOUNT_AGENT_STREAM = 4,
+    LX_ACCOUNT_AGENT_MARGIN = 5,
+    LX_ACCOUNT_SYSTEM_LIQUIDITY = 6,
+    LX_ACCOUNT_SYSTEM_FUNDING_LONG = 7,
+    LX_ACCOUNT_SYSTEM_FUNDING_SHORT = 8,
+    LX_ACCOUNT_SYSTEM_INSURANCE = 9,
+    LX_ACCOUNT_SYSTEM_FEES = 10,
+    LX_ACCOUNT_SYSTEM_PAXEER_RESERVE = 11,
+    LX_ACCOUNT_SYSTEM_PAXEER_WITHDRAWALS = 12,
+    LX_ACCOUNT_MODULE_VALUE = 13
 } lx_account_kind;
 
 typedef enum lx_account_open_authority {
@@ -59,6 +60,11 @@ typedef struct lx_account {
 } lx_account;
 
 typedef struct lx_account_registry lx_account_registry;
+
+typedef struct lx_account_registration {
+    lx_account account;
+    size_t expected_count;
+} lx_account_registration;
 
 enum {
     LXP_SEND_MAX_CONDITIONS = 8,
@@ -247,6 +253,15 @@ lxp_result lx_account_open(lx_account_registry *registry,
                            uint64_t global_sequence,
                            lx_account_open_authority authority,
                            lxp_log *activity_log, lx_account **account);
+lxp_result lx_account_module_value_prepare(
+    lx_account_registry *registry, const uint8_t *module_name,
+    size_t module_name_length, const uint8_t account_id[LX_ACCOUNT_ID_BYTES],
+    const uint8_t asset_id[32], uint64_t global_sequence,
+    lx_account_registration *registration, lx_account **account,
+    bool *created);
+lxp_result lx_account_registration_commit(
+    lx_account_registry *registry, const lx_account_registration *registration,
+    lx_account **account);
 lxp_result lx_account_close(lx_account_registry *registry,
                             const uint8_t account_id[LX_ACCOUNT_ID_BYTES]);
 lxp_result lxp_send_decode(const uint8_t *bytes, size_t length, lxp_send *send);

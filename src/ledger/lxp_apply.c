@@ -19,7 +19,18 @@ static const lxp_transfer_asset_state *asset_find(
 
 static bool privileged_system(lx_account_kind kind)
 {
-    return kind >= LX_ACCOUNT_SYSTEM_LIQUIDITY;
+    switch (kind) {
+    case LX_ACCOUNT_SYSTEM_LIQUIDITY:
+    case LX_ACCOUNT_SYSTEM_FUNDING_LONG:
+    case LX_ACCOUNT_SYSTEM_FUNDING_SHORT:
+    case LX_ACCOUNT_SYSTEM_INSURANCE:
+    case LX_ACCOUNT_SYSTEM_FEES:
+    case LX_ACCOUNT_SYSTEM_PAXEER_RESERVE:
+    case LX_ACCOUNT_SYSTEM_PAXEER_WITHDRAWALS:
+        return true;
+    default:
+        return false;
+    }
 }
 
 static lxp_result custody_spend_check(const lxp_transfer_leg *leg,

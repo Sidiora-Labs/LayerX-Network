@@ -1013,3 +1013,43 @@ symbol = "task.29.5.touches"
 observed = "The task declares only the two original Rust occupancy files as touch witnesses, while its explicit implementation_scope requires integration through C Programs, canonical account debit, protocol versions, receipts, state roots, snapshots, replay and their real-code artifacts. Scoped cg guard over all 47 Git-changed paths therefore reports 45 integration and lifecycle paths as advisory outside touches; the two declared symbols and paths remain present."
 assumption = "Human qualification must review the full published integration diff against req36.5 and retain the advisory as evidence of a stale narrow task touch declaration, rather than deleting required protocol integration or weakening the task to the isolated Rust ledger."
 severity = "task-scope"
+
+[observation.30.3.1]
+task = "30.3"
+file = "src/modules/programs/accounts.c, src/modules/programs/registration.c, src/modules/programs/deploy.c"
+symbol = "programs_module_registration_v2, LX_PROGRAMS_ACCOUNT"
+observed = "The implementation freezes Programs ABI one with its original five activity types and original DEPLOY effects, then exposes an epoch-activated ABI two interface whose new ordinal six carries the exact LXPA1 layout (program, marker, asset, u32 seed length, seed). An ABI two deployment atomically records a versioned owner principal for immutable and authority-governed programs, and only that principal may bind a seed to an asset; a legacy authority-governed record safely falls back to its recorded upgrade authority. Registry ordinal four remains byte-for-byte on its historical read path even when its body begins LXPA."
+assumption = "Rollout must register Programs ABI one at its historical epoch and activate ABI two only at the declared later epoch. Qualification must replay ABI one DEPLOY and adversarial ordinal-four LXPA-prefixed reads against frozen roots, then prove ABI two owner admission, exact LXPA1 decoding and wrong-principal no-effects refusal."
+severity = "version-boundary"
+
+[observation.30.3.2]
+task = "30.3"
+file = "include/layerx/lxp_ledger.h, src/ledger/lx_account_id.c, src/ledger/lx_account_registry.c, src/protocol/lxp_module_ctx.c"
+symbol = "LX_ACCOUNT_MODULE_VALUE, lxp_ctx_account_stage_module_value"
+observed = "Program balances use a generic non-system module-value account kind with existing account-kind numbers frozen. The canonical name embeds the externally derived identifier, ordinary account opening refuses this namespace, and the module context stages creation through prepare/preview/commit/rollback while activating the existing journalled account-tree root. No transfer authorization kind or balance mutation path is added."
+assumption = "Qualification must fault-inject every boundary after account staging, verify no account or index survives rollback, restore the version-two snapshot into a fresh bound registry, and confirm exhaustive system-kind predicates keep module-value accounts on the ordinary authorization path."
+severity = "consensus-boundary"
+
+[observation.30.3.3]
+task = "30.3"
+file = "tests/programs/test_accounts.c, programs/crates/layerx-programs-runtime/tests/program_account_derivation.rs"
+symbol = "program account conformance artifacts"
+observed = "The implementation writes literal C and Rust SHA-256 vectors, registration/idempotency/asset-binding/index/event/root assertions and a fresh-registry snapshot round trip. Implementation-phase rules prohibited compiling or executing these artifacts, so no passing result is asserted."
+assumption = "Human qualification must build and execute the focused C artifact and Rust vectors on the supported architecture matrix, compare all literal outputs byte for byte, exercise ABI two replay through ordinal six while retaining ABI one's ordinal-four read behavior, and retain existing balance, receipt and state-root regression coverage."
+severity = "phase-boundary"
+
+[observation.30.3.4]
+task = "30.3"
+file = "src/modules/programs/accounts.c, src/modules/programs/deploy.c"
+symbol = "registration_authorized, lxp_programs_account_owner_bind"
+observed = "An immutable program deployed before ABI two has no owner principal in its frozen 71-byte registry record, so no state fact can authenticate a later principal as its deployer. The ABI two registration path refuses such an account admission instead of permitting first-caller asset squatting. Legacy authority-governed programs remain admissible through the authority already committed in their record, and all programs deployed under ABI two commit an owner record."
+assumption = "If pre-ABI-two immutable programs must acquire derived value accounts, the protocol owner must define a receipt-proven migration or a separately versioned owner-adoption law. Qualification must confirm the current path fails closed and must not invent an owner from unauthenticated input."
+severity = "migration-boundary"
+
+[observation.30.3.5]
+task = "30.3"
+file = "spec/layerx-platform/spec.kvx"
+symbol = "task.30.3.touches"
+observed = "Scoped cg guard accepts the declared accounts.c, programs.h and tests/programs paths, and reports twelve advisory integration paths outside the task's narrow touch declaration: Makefile, the generic kernel/ledger/module headers, the Rust derivation vector, qualification.kvx, the account identifier/registry/apply files, Programs deploy/registration, and module context staging. These paths implement the task's required existing-registry, frozen-ABI, generic account-root and C/Rust parity boundaries rather than a second monetary route."
+assumption = "Human qualification must review the complete published integration diff against req28.1 and req37.2 and retain the advisory as evidence of a narrow task touch declaration; removing the generic staging or version-transition paths would make the implementation non-atomic or break historical replay."
+severity = "task-scope"
