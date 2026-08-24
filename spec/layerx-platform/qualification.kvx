@@ -1109,3 +1109,59 @@ symbol = "ProgramSpend owner-frame staging"
 observed = "The integrated transfer law follows requirement 37.3 and observation 30.4.1: only the deriving program's own frame may stage a program-source leg. An inherited grant over a caller-derived account can be narrowed and forwarded but cannot make a callee the staging owner."
 assumption = "Qualification must refuse direct callee-frame staging and preserve exact inherited-key narrowing. A future returned-request mechanism or normative change to requirement 37.4 must be separately versioned rather than weakening the owner-frame check in this task."
 severity = "ambiguity"
+
+[observation.30.5.1]
+task = "30.5"
+file = "programs/crates/layerx-programs-registry/src/deprecate.rs"
+symbol = "WindDownPolicy::exit_program, Deprecation::authorize_exit"
+observed = "The inherited policy names exit_program as an untyped thirty-two-byte value, while requirement 37.3 and the integrated transfer law permit a derived-account debit only from the deriving program's own frame. Treating exit_program as an unrelated helper program would make the recorded route incapable of constructing ProgramAuthority without weakening owner-frame authorization. The implementation therefore requires exit_program to equal the deprecated program id and keeps that owner's exit-only path callable through tombstone state."
+assumption = "The protocol owner must state whether exit_program was intended to mean the owner program id, an export identifier, or a separate helper program. Until a versioned policy schema defines otherwise, qualification must retain the strict owner-program interpretation and refuse helper-program delegation rather than manufacture cross-program authority."
+severity = "ambiguity"
+
+[observation.30.5.2]
+task = "30.5"
+file = "programs/crates/layerx-programs-registry/src/account_state.rs, src/modules/programs/accounts.c"
+symbol = "VerifiedAccountSnapshot, lxp_programs_value_account_read"
+observed = "Registry balances now resolve from exact MODULE_VALUE account leaf material through the account root, universal subtree root and receipt state root. The Rust verifier reproduces the C state-leaf and state-node domains, while the C view exposes the same canonical balance, asset, freeze flag, observed sequence and account root from the existing account registry. The receipt authority is an explicit boundary which must verify that the named receipt commits the supplied state root and sequence; raw client balance fields no longer exist in DeprecationRequest."
+assumption = "Qualification must bind AccountStateReadAuthority to the production receipt verifier, compare C and Rust commitments over the written multi-account and multi-asset fixtures, alter every leaf and proof field adversarially, and confirm stale or mismatched state is refused before lifecycle mutation."
+severity = "consensus-boundary"
+
+[observation.30.5.3]
+task = "30.5"
+file = "programs/crates/layerx-programs-registry/src/deprecate.rs"
+symbol = "Deprecation::transition_legacy, Deprecation::read_legacy"
+observed = "ABI one had no program-account registration activity or account-tree balance proof. Its lifecycle history remains replayable only behind an explicit ABI-one gate with an empty durable program-account enumeration; caller-declared legacy balances are not imported as real value. ABI two deprecation requires the immediate pre-transition receipt-backed account snapshot and complete durable binding enumeration."
+assumption = "If an external deployment persisted legacy caller-declared ValueAccount records, the protocol owner must define a versioned evidence migration before those claims can be treated as balances. Qualification must preserve empty ABI-one history and fail closed on any legacy record that claims unprovable program-held value."
+severity = "migration-boundary"
+
+[observation.30.5.4]
+task = "30.5"
+file = "programs/crates/layerx-programs-registry/tests/winddown.rs, tests/programs/test_accounts.c"
+symbol = "task 30.5 proof and wind-down artifacts"
+observed = "The implementation writes static artifacts for several derived accounts and assets, live and frozen balances, altered account proofs, missing and duplicate exits, lifecycle authority and deadline refusals, exact full-balance ProgramAuthority exits, ABI-one history, tombstone replay and canonical C account-root balance views. Implementation-phase rules prohibited compiling or executing these artifacts, so no passing result is asserted."
+assumption = "Human qualification must build and execute the focused Rust and C artifacts, exercise the same transitions through a real node and snapshot restore, settle authorized exits through the ordinary atomic 402LXP path, and confirm every surfaced balance carries standard freshness and verified receipt status."
+severity = "phase-boundary"
+
+[observation.30.5.5]
+task = "30.5"
+file = "spec/layerx-platform/spec.kvx"
+symbol = "task.30.5.touches"
+observed = "The task declares only the registry deprecation implementation and wind-down artifact, while binding real balances necessarily consumes the ABI-two C account index, public account view, runtime ProgramAuthority constructor, registry entry schema and generated task state. Scoped cg guard may therefore report those required integration paths as advisory outside the narrow touch declaration."
+assumption = "Human review must inspect the complete integration diff against requirements 37.5 and 29.6 and retain the advisory as task-scope evidence rather than deleting the canonical account-tree or 402LXP authority integration."
+severity = "task-scope"
+
+[observation.30.5.6]
+task = "30.5"
+file = "interop/Cargo.toml"
+symbol = "workspace.dependencies.rustls"
+observed = "Mechanical `cargo generate-lockfile --offline` for the agent, human and platform workspaces is blocked before dependency resolution because interop/Cargo.toml declares the `rustls` key twice at lines 30 and 45. The duplicate is inherited through layerx-mirror and is unrelated to task 30.5. A standalone offline workspace rooted at the exact layerx-agentd path dependency produced the ureq/serde and path-package closure, which was mechanically merged into the agent and human lockfiles; the platform lockfile already carried the same pinned ureq closure. Full workspace resolution remains unperformed because of the duplicate key."
+assumption = "Human qualification or the interop owner must resolve the duplicate manifest key and regenerate the affected workspace lockfiles. Task 30.5 does not repair that unrelated manifest conflict and does not claim the manually synchronized path entries constitute a successful Cargo resolution."
+severity = "inherited"
+
+[observation.30.5.7]
+task = "30.5"
+file = "include/layerx/lxp_ledger.h, include/layerx/lxp_transfer.h, src/ledger/lxp_apply.c, src/ledger/lxp_journal.c, programs/crates/layerx-programs-runtime/src/ffi_transfer.rs"
+symbol = "LXP_AUTH_PROGRAM_SPEND, layerx_programs_consume_program_spend_authorization"
+observed = "The wind-down exit must let the ordinary 402LXP ledger synchronously consume an unforgeable, one-shot owner-program/frame authorization rather than accept a C-asserted OWNER value. The implementation names that transient consumption marker LXP_AUTH_PROGRAM_SPEND and binds it to the exact source, destination, asset, amount, seed-derived owner frame and transfer-set root. Requirement 30.1 and task 30.3 also say that Programs adds no new authority kind, even though an ordinary OWNER marker cannot encode or consume this program-frame witness. The marker creates no balance primitive and direct single-leg application refuses it, but it is a new closed enum value."
+assumption = "Protocol qualification must resolve whether 'no new authority kind' prohibits even a transient ledger-consumed representation of the already specified ProgramAuthority. Until a versioned alternative is defined, qualification must retain one-shot exact witness consumption and must not replace it with fabricated OWNER authority or a parallel balance route."
+severity = "spec-conflict"

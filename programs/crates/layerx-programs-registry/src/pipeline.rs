@@ -281,7 +281,10 @@ impl Display for BuildRefusal {
                 hex::encode(repeated)
             ),
             Self::ArtifactRejected { reason } => {
-                write!(formatter, "rebuilt module violates the runtime policy: {reason}")
+                write!(
+                    formatter,
+                    "rebuilt module violates the runtime policy: {reason}"
+                )
             }
             Self::Engine { reason } => {
                 write!(formatter, "deterministic engine unavailable: {reason}")

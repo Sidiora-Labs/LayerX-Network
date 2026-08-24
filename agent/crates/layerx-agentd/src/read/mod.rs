@@ -8,6 +8,10 @@ mod balances;
 mod checkpoint_impl;
 #[path = "history.rs"]
 mod historical;
+#[path = "program_balances.rs"]
+mod program_balances_impl;
+#[path = "program_node.rs"]
+mod program_node;
 
 pub use available::{
     availability, AvailabilityAudit, AvailabilityFailure, AvailabilityRead, AvailabilityRequest,
@@ -18,6 +22,11 @@ pub use checkpoint_impl::{
     proof_bundle, CheckpointReadError, GuarantorSignature, HeaderCommitments, ProofBundleKind,
     ProofBundleRequest, ServedCheckpoint, ServedProofBundle,
 };
+pub use program_balances_impl::{
+    program_balances_from_protocol, ProgramBalanceFreshness, ProgramBalanceRead,
+    ProgramValueBalance, ProtocolProgramBalanceReader,
+};
+pub use program_node::{LayerxdProgramBalanceReader, ProgramBalanceReadRoute};
 
 /// Verifies and serves one checkpoint certificate.
 ///

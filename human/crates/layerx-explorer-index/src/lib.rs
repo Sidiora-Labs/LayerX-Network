@@ -8,17 +8,18 @@ pub mod verify;
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use layerx_agentd::read::LayerxdProgramBalanceReader;
 use layerx_client::availability::AvailabilityResult;
 use layerx_client::head::Head;
+use layerx_programs_protocol_adapter::ProtocolAdapterError;
 use layerx_proof::availability::RootCommitments;
-use layerx_proof::checkpoint::{
-    verify_certificate, Certificate, CheckpointError, GuarantorKey,
-};
+use layerx_proof::checkpoint::{verify_certificate, Certificate, CheckpointError, GuarantorKey};
 use layerx_proof::receipt::{verify_outcome, AuthorizedBatch, ReceiptCheck};
 use layerx_types::verify::VerificationLevel;
 use sha2::{Digest as _, Sha256};
 
 pub use freshness::{Freshness, Indexed};
+use programs::{ExplorerProgram, ExplorerProgramReadError};
 pub use query::{Page, PublicExplorer, QueryError, QueryFailure, VerificationFailure};
 
 /// Stable identity of the rebuildable public projection.
@@ -121,6 +122,7 @@ pub struct IndexSnapshot {
     pub events: Vec<PublicRecord>,
     pub account_activities: Vec<AccountActivityRecord>,
     pub receipt_authority_batches: Vec<u64>,
+    pub programs: Vec<ExplorerProgram>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -133,16 +135,27 @@ pub enum IngestOutcome {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum IndexError {
     HeadRegression,
-    BatchAheadOfHead { batch: u64, head: u64 },
+    BatchAheadOfHead {
+        batch: u64,
+        head: u64,
+    },
     CheckpointHeadMismatch {
         expected: [u8; 32],
         actual: [u8; 32],
     },
     Checkpoint(CheckpointError),
-    ConflictingCheckpoint { batch: u64 },
-    ConflictingBatch { batch: u64 },
-    AvailabilityCheckpointMismatch { batch: u64 },
-    ReplayedPublicRecord { id: RecordId },
+    ConflictingCheckpoint {
+        batch: u64,
+    },
+    ConflictingBatch {
+        batch: u64,
+    },
+    AvailabilityCheckpointMismatch {
+        batch: u64,
+    },
+    ReplayedPublicRecord {
+        id: RecordId,
+    },
     ReplayedProtocolReceipt {
         identifier: [u8; 32],
     },
@@ -151,6 +164,52 @@ pub enum IndexError {
         check: ReceiptCheck,
     },
     RecordCountOverflow,
+    ProgramRead(ExplorerProgramReadError),
+    ProgramProtocolUnavailable(ProtocolAdapterError),
+    ProgramHeadRegression {
+        program: [u8; 32],
+    },
+    ConflictingProgram {
+        program: [u8; 32],
+    },
+}
+
+/// Running explorer ingestion bridge. It refreshes the exact program record
+/// from the same layerxd evidence service used by agent reads before every
+/// index update; no caller-supplied balance list can enter the projection.
+pub struct ProtocolProgramIngestor {
+    reader: LayerxdProgramBalanceReader,
+    staleness_limit: u64,
+}
+
+impl ProtocolProgramIngestor {
+    #[must_use]
+    pub const fn new(reader: LayerxdProgramBalanceReader) -> Self {
+        let staleness_limit = reader.staleness_limit();
+        Self {
+            reader,
+            staleness_limit,
+        }
+    }
+
+    pub fn ingest(
+        &mut self,
+        index: &mut Indexer,
+        mut registry_read: layerx_programs::VerifiedRegistryRead,
+        now: u64,
+    ) -> Result<IngestOutcome, IndexError> {
+        let state = self
+            .reader
+            .read_protocol_state(registry_read.entry.program, now)
+            .map_err(IndexError::ProgramProtocolUnavailable)?;
+        registry_read.entry.lifecycle = state.balances().lifecycle();
+        registry_read.entry.value_accounts = state.balances().bindings().to_vec();
+        registry_read.entry.exit_routes = state.routes().to_vec();
+        registry_read.entry.lifecycle_history = state.history().to_vec();
+        registry_read.receipt_digest = state.balances().receipt_digest();
+        registry_read.freshness = state.balances().freshness();
+        index.ingest_program(registry_read, &state, now, self.staleness_limit)
+    }
 }
 
 /// Rebuildable, non-authoritative projection over proof-gated boundary data.
@@ -164,6 +223,7 @@ pub struct Indexer {
     events: BTreeMap<RecordId, PublicRecord>,
     account_activities: BTreeMap<RecordId, AccountActivityRecord>,
     receipt_authority_batches: BTreeSet<u64>,
+    programs: BTreeMap<[u8; 32], ExplorerProgram>,
 }
 
 impl Indexer {
@@ -180,6 +240,7 @@ impl Indexer {
             events: BTreeMap::new(),
             account_activities: BTreeMap::new(),
             receipt_authority_batches: BTreeSet::new(),
+            programs: BTreeMap::new(),
         }
     }
 
@@ -255,11 +316,15 @@ impl Indexer {
             return if existing == &record {
                 Ok(IngestOutcome::AlreadyPresent)
             } else {
-                Err(IndexError::ConflictingCheckpoint { batch: batch_number })
+                Err(IndexError::ConflictingCheckpoint {
+                    batch: batch_number,
+                })
             };
         }
         if self.checkpoints_by_batch.contains_key(&batch_number) {
-            return Err(IndexError::ConflictingCheckpoint { batch: batch_number });
+            return Err(IndexError::ConflictingCheckpoint {
+                batch: batch_number,
+            });
         }
         if let Some(batch) = self.batches.get(&batch_number) {
             require_matching_evidence(batch, &record)?;
@@ -323,15 +388,12 @@ impl Indexer {
             return if existing == &batch {
                 Ok(IngestOutcome::AlreadyPresent)
             } else {
-                Err(IndexError::ConflictingBatch { batch: batch_number })
+                Err(IndexError::ConflictingBatch {
+                    batch: batch_number,
+                })
             };
         }
-        let staged_receipts = stage_records(
-            b"receipt",
-            batch_number,
-            &records.receipts,
-            level,
-        )?;
+        let staged_receipts = stage_records(b"receipt", batch_number, &records.receipts, level)?;
         let staged_events = stage_records(b"event", batch_number, &records.events, level)?;
         require_no_replay(&self.receipts, &staged_receipts)?;
         require_no_replay(&self.events, &staged_events)?;
@@ -340,11 +402,8 @@ impl Indexer {
                 .into_iter()
                 .map(|record| (record.id, record)),
         );
-        self.events.extend(
-            staged_events
-                .into_iter()
-                .map(|record| (record.id, record)),
-        );
+        self.events
+            .extend(staged_events.into_iter().map(|record| (record.id, record)));
         self.batches.insert(batch_number, batch);
         Ok(IngestOutcome::Inserted)
     }
@@ -502,6 +561,49 @@ impl Indexer {
         }
     }
 
+    /// Projects one production adapter read into the public program index.
+    /// Existing rows are refreshed only by a later current-head proof for the
+    /// exact same program identity.
+    pub fn ingest_program(
+        &mut self,
+        registry_read: layerx_programs::VerifiedRegistryRead,
+        state: &layerx_programs_protocol_adapter::ProtocolProgramStateRead,
+        now: u64,
+        staleness_limit: u64,
+    ) -> Result<IngestOutcome, IndexError> {
+        let program =
+            ExplorerProgram::from_protocol_state(registry_read, state, now, staleness_limit)
+                .map_err(IndexError::ProgramRead)?;
+        let identifier = program.identifier;
+        if let Some(existing) = self.programs.get(&identifier) {
+            if program.balance_observed_sequence < existing.balance_observed_sequence {
+                return Err(IndexError::ProgramHeadRegression {
+                    program: identifier,
+                });
+            }
+            if program.balance_observed_sequence == existing.balance_observed_sequence {
+                return if existing == &program {
+                    Ok(IngestOutcome::AlreadyPresent)
+                } else {
+                    Err(IndexError::ConflictingProgram {
+                        program: identifier,
+                    })
+                };
+            }
+        }
+        self.programs.insert(identifier, program);
+        Ok(IngestOutcome::Inserted)
+    }
+
+    /// Returns the current proof-gated program projection.
+    #[must_use]
+    pub fn program(&self, identifier: [u8; 32]) -> Indexed<Option<ExplorerProgram>> {
+        Indexed {
+            value: self.programs.get(&identifier).cloned(),
+            freshness: self.freshness(),
+        }
+    }
+
     /// Returns a stable, map-order-independent image of every public query row.
     #[must_use]
     pub fn snapshot(&self) -> IndexSnapshot {
@@ -513,6 +615,7 @@ impl Indexer {
             events: self.events.values().cloned().collect(),
             account_activities: self.account_activities.values().cloned().collect(),
             receipt_authority_batches: self.receipt_authority_batches.iter().copied().collect(),
+            programs: self.programs.values().cloned().collect(),
         }
     }
 
@@ -569,10 +672,7 @@ fn require_matching_evidence(
 }
 
 fn record_ids(kind: &[u8], records: &[Vec<u8>]) -> Vec<RecordId> {
-    records
-        .iter()
-        .map(|bytes| record_id(kind, bytes))
-        .collect()
+    records.iter().map(|bytes| record_id(kind, bytes)).collect()
 }
 
 fn stage_records(

@@ -16,6 +16,15 @@ lxp_result lxp_daemon_shutdown(lxp_daemon *daemon)
     for (i = 0U; i < daemon->worker_count; ++i)
         (void)pthread_join(daemon->workers[i], NULL);
     status = daemon->failure;
+    if (daemon->protocol_owner != NULL) {
+        lxp_result owner_status = lxp_daemon_protocol_listener_stop(
+            daemon->protocol_owner);
+        if (owner_status == LXP_OK)
+            owner_status = lxp_daemon_protocol_owner_detach(
+                daemon->protocol_owner);
+        if (status == LXP_OK) status = owner_status;
+        daemon->protocol_owner = NULL;
+    }
     (void)pthread_cond_destroy(&daemon->queue_changed);
     (void)pthread_mutex_destroy(&daemon->mutex);
     daemon->primitives_initialized = false;

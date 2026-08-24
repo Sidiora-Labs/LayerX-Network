@@ -7,26 +7,30 @@
 //! registered on-chain code hash, so a mismatch is reported as a mismatch and
 //! never as a verified source.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use layerx_programs::{
     hex, programs_source_verification, BuildPlan, BuildRefusal, DeploymentRecord,
     JournalReadAuthority, LifecycleReceipt, ObservedHead, ProgramId, ProgramLifecycle, Registry,
     RegistryError, RegistryVersion, ReproducibleBuild, SourceArchive, SourceStatus, SourceVerifier,
-    UpgradePolicy, VerifiedRegistryRead, WindDownStateAccess,
+    UpgradePolicy, VerifiedProgramBalanceRead, VerifiedRegistryRead, WindDownStateAccess,
 };
+use layerx_programs_protocol_adapter::ProtocolProgramStateRead;
 use serde_json::{json, Value};
 use sha2::{Digest as _, Sha256};
 
 use crate::builder::HermeticBuilder;
 use crate::journal::FileDeploymentJournal;
 use crate::mirror::{MirrorRefusal, SourceMirror};
+use crate::node_state::NodeProgramStateSource;
+use crate::program_state::FileProgramStateJournal;
 use crate::verified::{VerifiedSource, VerifiedSourceStore};
 use crate::Config;
 
 const IDEMPOTENCY_DOMAIN: &[u8] = b"LayerX/platform/registry/idempotency/v1\0";
 const REQUEST_DOMAIN: &[u8] = b"LayerX/platform/registry/source-request/v1\0";
 const MAX_IDEMPOTENCY_RECORDS: usize = 4_096;
+const MAX_CHANGE_PAGES: usize = 1_024;
 const ROUTE_PREFIX: &str = "/v1/programs/registry/";
 
 /// One parsed request.
@@ -58,10 +62,13 @@ struct Completed {
 pub struct Registrar {
     registry: Registry,
     journal: FileDeploymentJournal,
+    program_state: FileProgramStateJournal,
+    node_state: NodeProgramStateSource,
     mirror: SourceMirror,
     verified: VerifiedSourceStore,
     verifier: SourceVerifier<HermeticBuilder>,
     staleness_seconds: u64,
+    balance_reads: BTreeMap<ProgramId, VerifiedProgramBalanceRead>,
     idempotency: BTreeMap<String, Completed>,
 }
 
@@ -74,7 +81,7 @@ impl Registrar {
     /// Returns unusable directories, a corrupt journal, an inadmissible
     /// declared build environment and stored verifications that no longer
     /// decode.
-    pub fn open(config: &Config) -> Result<Self, String> {
+    pub fn open(config: &Config, now: u64) -> Result<Self, String> {
         let builder = HermeticBuilder::new(
             config.workspace.clone(),
             config.builder_image_digest,
@@ -89,13 +96,27 @@ impl Registrar {
         let mut registrar = Self {
             registry: Registry::new(),
             journal: FileDeploymentJournal::open(config.journal.clone())?,
+            program_state: FileProgramStateJournal::open(config.journal.join("program-state"))?,
+            node_state: NodeProgramStateSource::connect(
+                &config.node_endpoint,
+                config.node_authorization.clone(),
+                &config.receipt_authority_endpoint,
+                config.receipt_authority_authorization.clone(),
+                config.receipt_authority_replica_id,
+                config.sequencer_id,
+                config.sequencer_public_key,
+                config.sequencer_first_batch,
+                config.sequencer_last_batch,
+            )?,
             mirror: SourceMirror::open(config.mirror.clone())?,
             verified: VerifiedSourceStore::open(config.verified.clone())?,
             verifier,
             staleness_seconds: config.staleness_seconds,
+            balance_reads: BTreeMap::new(),
             idempotency: BTreeMap::new(),
         };
         registrar.rebuild()?;
+        registrar.synchronize_protocol_state(None, now)?;
         Ok(registrar)
     }
 
@@ -121,6 +142,98 @@ impl Registrar {
         }
     }
 
+    /// Reconciles the hosted cache with the authenticated state and receipt
+    /// authority owned by the production node that commits activities. The
+    /// cursor is advanced only after every affected program has been resolved
+    /// at the same current head, independently receipt-checked, replayed and
+    /// persisted.
+    pub fn synchronize_protocol_state(
+        &mut self,
+        requested: Option<ProgramId>,
+        now: u64,
+    ) -> Result<(), String> {
+        if now == 0 {
+            return Err("program-state synchronization requires an observed time".to_owned());
+        }
+        let prior_cursor = self.program_state.cursor()?;
+        let mut complete = prior_cursor;
+        let mut programs = BTreeSet::new();
+        let mut caught_up = false;
+        let mut feed_head = 0_u64;
+        for _ in 0..MAX_CHANGE_PAGES {
+            let (notices, next, scanned, current) = self.node_state.changes(complete)?;
+            programs.extend(notices.into_iter().map(|notice| notice.program));
+            if next == complete && !current {
+                return Err("node program-state change feed made no progress".to_owned());
+            }
+            complete = next;
+            if scanned < feed_head {
+                return Err("node program-state scan head regressed".to_owned());
+            }
+            feed_head = scanned;
+            if current {
+                caught_up = true;
+                break;
+            }
+        }
+        if !caught_up {
+            return Err("node program-state change feed exceeded its page bound".to_owned());
+        }
+        if prior_cursor.sequence == 0 || self.balance_reads.is_empty() {
+            programs.extend(self.registry.program_ids());
+        }
+        if let Some(program) = requested {
+            programs.insert(program);
+        }
+        let current_head = self.node_state.current_head()?;
+        if complete.sequence > feed_head || feed_head > current_head.freshness.observed_sequence {
+            return Err(
+                "program-state feed is ahead of the independently verified head".to_owned(),
+            );
+        }
+        let mut registry = self.registry.clone();
+        let mut staged = Vec::with_capacity(programs.len());
+        for program in programs {
+            let entry = registry
+                .entry_for_wind_down(program)
+                .map_err(|error| format!("program-state registry lookup refused: {error}"))?;
+            let abi = entry.versions.last().map(|version| version.abi_version);
+            if abi == Some(1) && entry.value_accounts.is_empty() {
+                continue;
+            }
+            if abi != Some(2) {
+                return Err("program value accounts require the frozen ABI-two protocol".to_owned());
+            }
+            let record = self.node_state.program_state(program, current_head)?;
+            let state = ProtocolProgramStateRead::restore_verified(
+                &record.bytes,
+                &mut registry,
+                record.receipt,
+                current_head,
+                now,
+                self.staleness_seconds,
+            )
+            .map_err(|error| format!("protocol program-state adapter refused: {error:?}"))?;
+            if state.program() != program {
+                return Err("node program-state record changed program identity".to_owned());
+            }
+            staged.push(state);
+        }
+
+        for state in &staged {
+            self.program_state.store(state)?;
+        }
+        self.program_state.advance(complete)?;
+        let mut balance_reads = self.balance_reads.clone();
+        for state in staged {
+            let balances = state.into_balances();
+            balance_reads.insert(balances.program(), balances);
+        }
+        self.registry = registry;
+        self.balance_reads = balance_reads;
+        Ok(())
+    }
+
     fn program_route(&mut self, request: &Request, now: u64) -> Response {
         let Some(rest) = request.path.strip_prefix(ROUTE_PREFIX) else {
             return refusal(404, "not_found", "route does not exist");
@@ -139,7 +252,7 @@ impl Registrar {
         }
     }
 
-    fn read(&self, program: &str, now: u64) -> Response {
+    fn read(&mut self, program: &str, now: u64) -> Response {
         let Some(program) = program_id(program) else {
             return refusal(
                 400,
@@ -147,23 +260,84 @@ impl Registrar {
                 "program id must be thirty-two hexadecimal-encoded bytes",
             );
         };
+        if self.registry.latest_version(program).is_err() {
+            return refusal(404, "not_found", "program is not registered");
+        }
+        if let Err(error) = self.synchronize_protocol_state(Some(program), now) {
+            return refusal(503, "protocol_state_unavailable", &error);
+        }
         let authority = match JournalReadAuthority::new(&self.journal, now, self.staleness_seconds)
         {
             Ok(authority) => authority,
             Err(error) => return refusal(503, "read_unverifiable", &error.to_string()),
         };
         match self.registry.read(program, &authority) {
-            Ok(read) => Response {
-                status: 200,
-                body: registry_read_json(&read).to_string(),
-            },
+            Ok(read) => self.render_read(&read, now),
             Err(RegistryError::UnknownProgram | RegistryError::UnknownVersion) => {
                 refusal(404, "not_found", "program is not registered")
             }
-            Err(error @ RegistryError::StaleRead) => {
-                refusal(503, "stale_read", &error.to_string())
-            }
+            Err(error @ RegistryError::StaleRead) => refusal(503, "stale_read", &error.to_string()),
             Err(error) => refusal(502, "unverified_read", &error.to_string()),
+        }
+    }
+
+    fn render_read(&self, read: &VerifiedRegistryRead, now: u64) -> Response {
+        let abi = read
+            .entry
+            .versions
+            .last()
+            .map(|version| version.abi_version);
+        if abi == Some(1) && read.entry.value_accounts.is_empty() {
+            return Response {
+                status: 200,
+                body: registry_read_json(read, None).to_string(),
+            };
+        }
+        if abi != Some(2) {
+            return refusal(
+                502,
+                "balance_protocol_unsupported",
+                "program value accounts require the frozen ABI-two account protocol",
+            );
+        }
+        let Some(balances) = self.balance_reads.get(&read.entry.program) else {
+            return refusal(
+                503,
+                "balance_read_unavailable",
+                "a current receipt-proven program balance read is not available",
+            );
+        };
+        let freshness = balances.freshness();
+        if now < freshness.observed_at
+            || now.saturating_sub(freshness.observed_at) > self.staleness_seconds
+            || freshness.observed_sequence < read.freshness.observed_sequence
+        {
+            return refusal(
+                503,
+                "stale_balance_read",
+                "the program balance proof is not current at the observed registry head",
+            );
+        }
+        let bindings_match = balances.bindings().len() == read.entry.value_accounts.len()
+            && read.entry.value_accounts.iter().all(|binding| {
+                balances
+                    .bindings()
+                    .iter()
+                    .any(|candidate| candidate == binding)
+            });
+        if balances.program() != read.entry.program
+            || balances.lifecycle() != read.entry.lifecycle
+            || !bindings_match
+        {
+            return refusal(
+                502,
+                "balance_registry_mismatch",
+                "the current balance proof does not match the receipt-verified registry record",
+            );
+        }
+        Response {
+            status: 200,
+            body: registry_read_json(read, Some(balances)).to_string(),
         }
     }
 
@@ -251,7 +425,13 @@ impl Registrar {
         verification_response(program, version, &build, status)
     }
 
-    fn remember(&mut self, scoped: String, request_digest: [u8; 32], response: &Response, now: u64) {
+    fn remember(
+        &mut self,
+        scoped: String,
+        request_digest: [u8; 32],
+        response: &Response,
+        now: u64,
+    ) {
         if self.idempotency.len() >= MAX_IDEMPOTENCY_RECORDS {
             let oldest = self
                 .idempotency
@@ -277,7 +457,9 @@ impl Registrar {
         let mut registry = Registry::new();
         registry
             .replay_journal(&self.journal.records()?)
-            .map_err(|error| format!("the canonical deployment journal is not replayable: {error}"))?;
+            .map_err(|error| {
+                format!("the canonical deployment journal is not replayable: {error}")
+            })?;
         for record in self.verified.records()? {
             let build = ReproducibleBuild::from_record(
                 record.source_uri.clone(),
@@ -293,7 +475,9 @@ impl Registrar {
                 }
             }
         }
+        self.program_state.audit()?;
         self.registry = registry;
+        self.balance_reads.clear();
         Ok(())
     }
 
@@ -415,9 +599,7 @@ pub fn refusal(status: u16, code: &str, detail: &str) -> Response {
 
 fn rebuild_refusal(refused: &BuildRefusal) -> Response {
     match refused {
-        BuildRefusal::SandboxUnavailable { reason } => {
-            refusal(503, "builder_unavailable", reason)
-        }
+        BuildRefusal::SandboxUnavailable { reason } => refusal(503, "builder_unavailable", reason),
         BuildRefusal::BuilderFailed { reason } => refusal(422, "build_failed", reason),
         BuildRefusal::NondeterministicBuild { .. } => {
             refusal(422, "build_not_reproducible", &refused.to_string())
@@ -463,11 +645,42 @@ fn verification_response(
     }
 }
 
-fn registry_read_json(read: &VerifiedRegistryRead) -> Value {
+fn registry_read_json(
+    read: &VerifiedRegistryRead,
+    balances: Option<&VerifiedProgramBalanceRead>,
+) -> Value {
+    let lifecycle = balances.map_or(read.entry.lifecycle, VerifiedProgramBalanceRead::lifecycle);
+    let value_accounts = balances.map_or_else(
+        || {
+            json!({
+                "status": "account-incapable-abi1",
+                "accounts": [],
+            })
+        },
+        |balances| {
+            json!({
+                "status": "current",
+                "lifecycle": lifecycle_name(balances.lifecycle()),
+                "accounts": balances.value_accounts().iter().map(|account| json!({
+                    "account_id": hex::encode(&account.account_id),
+                    "asset_id": hex::encode(&account.asset_id),
+                    "balance": account.balance.to_string(),
+                    "frozen": account.frozen,
+                })).collect::<Vec<Value>>(),
+                "receipt": {
+                    "receipt_digest": hex::encode(&balances.receipt_digest()),
+                    "state_root": hex::encode(&balances.state_root()),
+                    "observed_sequence": balances.freshness().observed_sequence,
+                    "observed_at": balances.freshness().observed_at,
+                    "verification": "account-primary-and-state-proof-verified",
+                },
+            })
+        },
+    );
     json!({
         "program_id": hex::encode(&read.entry.program.bytes()),
         "upgrade_policy": policy_json(read.entry.upgrade_policy),
-        "lifecycle": lifecycle_name(read.entry.lifecycle),
+        "lifecycle": lifecycle_name(lifecycle),
         "latest_version": read.entry.versions.last().map(|version| version.number),
         "versions": read
             .entry
@@ -481,6 +694,18 @@ fn registry_read_json(read: &VerifiedRegistryRead) -> Value {
             .iter()
             .map(lifecycle_json)
             .collect::<Vec<Value>>(),
+        "exit_routes": read
+            .entry
+            .exit_routes
+            .iter()
+            .map(|route| json!({
+                "seed_hex": hex::encode(&route.seed),
+                "account_id": hex::encode(&route.account_id),
+                "asset_id": hex::encode(&route.asset_id),
+                "destination": hex::encode(&route.destination),
+            }))
+            .collect::<Vec<Value>>(),
+        "value_accounts": value_accounts,
         "receipt": {
             "deployment_receipt_digest": hex::encode(&read.receipt_digest),
             "observed_sequence": read.freshness.observed_sequence,

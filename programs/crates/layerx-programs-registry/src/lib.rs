@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod account_state;
 mod archive;
 mod authority;
 mod deprecate;
@@ -7,10 +8,18 @@ mod hash;
 pub mod hex;
 mod pipeline;
 
+pub use account_state::{
+    account_tree_commitment, program_account_registration_commitment, programs_root_commitment,
+    state_leaf_commitment, state_node_commitment, universal_root_commitment, AccountStateError,
+    AccountStateHead, AccountStateJournal, CanonicalAccountLeaf, JournalAccountStateAuthority,
+    ProgramValueAccountBinding, ProvenAccountLeaf, ProvenProgramBinding, StateProof, ValueAccount,
+    VerifiedAccountSnapshot, MAX_PROGRAM_VALUE_ACCOUNTS,
+};
 pub use archive::{ArchiveError, SourceArchive, SourceFile};
 pub use authority::{DeploymentJournal, DeploymentRecord, JournalReadAuthority, ObservedHead};
 pub use deprecate::{
-    Deprecation, DeprecationRefusal, DeprecationRequest, ValueAccount, WindDownView,
+    AuthorizedExit, Deprecation, DeprecationRefusal, DeprecationRequest, ExitRoute,
+    LegacyDeprecationRequest, WindDownExitActivity, WindDownView,
 };
 pub use pipeline::{BuildAttempt, BuildPlan, BuildRefusal, BuildRunner, SourceVerifier};
 
@@ -198,6 +207,8 @@ pub struct RegistryEntry {
     pub lifecycle: ProgramLifecycle,
     pub versions: Vec<RegistryVersion>,
     pub lifecycle_history: Vec<LifecycleReceipt>,
+    pub value_accounts: Vec<ProgramValueAccountBinding>,
+    pub exit_routes: Vec<ExitRoute>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -213,6 +224,57 @@ pub struct VerifiedRegistryRead {
     pub freshness: ReadFreshness,
 }
 
+/// Current program-held balances after both the durable Programs primary
+/// index and every live `MODULE_VALUE` account have been proven into one
+/// canonical receipt state root.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VerifiedProgramBalanceRead {
+    program: ProgramId,
+    lifecycle: ProgramLifecycle,
+    bindings: Vec<ProgramValueAccountBinding>,
+    value_accounts: Vec<ValueAccount>,
+    receipt_digest: [u8; 32],
+    state_root: [u8; 32],
+    freshness: ReadFreshness,
+}
+
+impl VerifiedProgramBalanceRead {
+    #[must_use]
+    pub const fn program(&self) -> ProgramId {
+        self.program
+    }
+
+    #[must_use]
+    pub const fn lifecycle(&self) -> ProgramLifecycle {
+        self.lifecycle
+    }
+
+    #[must_use]
+    pub fn value_accounts(&self) -> &[ValueAccount] {
+        &self.value_accounts
+    }
+
+    #[must_use]
+    pub fn bindings(&self) -> &[ProgramValueAccountBinding] {
+        &self.bindings
+    }
+
+    #[must_use]
+    pub const fn receipt_digest(&self) -> [u8; 32] {
+        self.receipt_digest
+    }
+
+    #[must_use]
+    pub const fn state_root(&self) -> [u8; 32] {
+        self.state_root
+    }
+
+    #[must_use]
+    pub const fn freshness(&self) -> ReadFreshness {
+        self.freshness
+    }
+}
+
 pub trait RegistryReadAuthority {
     /// Verifies the protocol receipt backing the latest registry projection.
     ///
@@ -226,7 +288,7 @@ pub trait RegistryReadAuthority {
     ) -> Result<([u8; 32], ReadFreshness), RegistryError>;
 }
 
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct Registry {
     entries: BTreeMap<ProgramId, RegistryEntry>,
 }
@@ -235,6 +297,14 @@ impl Registry {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Returns every durably deployed program in canonical identifier order.
+    /// The protocol-state ingestor uses this to obtain a complete initial
+    /// ABI-two projection before it exposes any balance read.
+    #[must_use]
+    pub fn program_ids(&self) -> Vec<ProgramId> {
+        self.entries.keys().copied().collect()
     }
 
     /// Appends one lifecycle-produced deployment or upgrade to contiguous
@@ -265,6 +335,8 @@ impl Registry {
                 lifecycle: ProgramLifecycle::Active,
                 versions: Vec::new(),
                 lifecycle_history: Vec::new(),
+                value_accounts: Vec::new(),
+                exit_routes: Vec::new(),
             });
         if entry.upgrade_policy != policy
             || usize::try_from(receipt.version).ok() != Some(entry.versions.len() + 1)
@@ -376,6 +448,230 @@ impl Registry {
         })
     }
 
+    /// Records one receipt-verified ABI-two binding in the program registry's
+    /// durable primary account enumeration. This records identity and asset
+    /// only; balances are always resolved from canonical account-tree proofs.
+    ///
+    /// # Errors
+    ///
+    /// Refuses unknown programs, non-canonical registration event records and
+    /// any attempt to rebind a seed or account identifier.
+    pub fn record_value_account(
+        &mut self,
+        binding: ProgramValueAccountBinding,
+    ) -> Result<(), AccountStateError> {
+        binding.validate()?;
+        let entry = self
+            .entries
+            .get(&binding.program)
+            .ok_or(AccountStateError::UnknownProgram)?;
+        if entry.versions.last().map(|version| version.abi_version) != Some(2) {
+            return Err(AccountStateError::LegacyProtocol);
+        }
+        if entry.lifecycle != ProgramLifecycle::Active {
+            return entry
+                .value_accounts
+                .iter()
+                .any(|existing| existing == &binding)
+                .then_some(())
+                .ok_or(AccountStateError::InactiveProgram);
+        }
+        let entry = self
+            .entries
+            .get_mut(&binding.program)
+            .ok_or(AccountStateError::UnknownProgram)?;
+        if let Some(existing) = entry.value_accounts.iter().find(|existing| {
+            existing.seed == binding.seed || existing.account_id == binding.account_id
+        }) {
+            return if existing == &binding {
+                Ok(())
+            } else {
+                Err(AccountStateError::BindingConflict)
+            };
+        }
+        entry.value_accounts.push(binding);
+        entry
+            .value_accounts
+            .sort_by_key(|binding| binding.account_id);
+        Ok(())
+    }
+
+    /// Returns the append-only derived-account enumeration for a program.
+    ///
+    /// # Errors
+    ///
+    /// Refuses unknown programs.
+    pub fn value_account_bindings(
+        &self,
+        program: ProgramId,
+    ) -> Result<&[ProgramValueAccountBinding], AccountStateError> {
+        self.entries
+            .get(&program)
+            .map(|entry| entry.value_accounts.as_slice())
+            .ok_or(AccountStateError::UnknownProgram)
+    }
+
+    /// Replays the exact protocol-owned binding, route and lifecycle indexes
+    /// obtained by the production C adapter. The update is atomic and accepts
+    /// inactive programs only when their previously registered bindings are
+    /// byte-for-byte unchanged.
+    ///
+    /// # Errors
+    ///
+    /// Refuses an ABI mismatch, a non-canonical binding/route, a gap or fork
+    /// in lifecycle history, or any conflict with an already replayed index.
+    pub fn replay_protocol_state(
+        &mut self,
+        program: ProgramId,
+        bindings: &[ProgramValueAccountBinding],
+        routes: &[ExitRoute],
+        lifecycle: ProgramLifecycle,
+        history: &[LifecycleReceipt],
+    ) -> Result<(), RegistryError> {
+        let mut candidate = self.clone();
+        let entry = candidate
+            .entries
+            .get(&program)
+            .ok_or(RegistryError::UnknownProgram)?;
+        if entry.versions.last().map(|version| version.abi_version) != Some(2) {
+            return Err(RegistryError::ProtocolStateMismatch);
+        }
+        for binding in bindings {
+            if binding.program != program || binding.validate().is_err() {
+                return Err(RegistryError::ProtocolStateMismatch);
+            }
+        }
+        let mut ordered_bindings = bindings.to_vec();
+        ordered_bindings.sort_by_key(|binding| binding.account_id);
+        if ordered_bindings
+            .windows(2)
+            .any(|pair| pair[0].account_id == pair[1].account_id || pair[0].seed == pair[1].seed)
+        {
+            return Err(RegistryError::ProtocolStateMismatch);
+        }
+        let mut ordered_routes = routes.to_vec();
+        ordered_routes.sort_by_key(|route| route.account_id);
+        if ordered_routes
+            .windows(2)
+            .any(|pair| pair[0].account_id == pair[1].account_id)
+            || ordered_routes.iter().any(|route| {
+                route.destination == [0; 32]
+                    || !ordered_bindings.iter().any(|binding| {
+                        binding.account_id == route.account_id
+                            && binding.asset_id == route.asset_id
+                            && binding.seed == route.seed
+                    })
+            })
+        {
+            return Err(RegistryError::ProtocolStateMismatch);
+        }
+        let mut prior = ProgramLifecycle::Active;
+        let mut prior_sequence = 0_u64;
+        let mut policy = None;
+        for receipt in history {
+            if receipt.program != program
+                || receipt.prior != prior
+                || receipt.current == ProgramLifecycle::Active
+                || receipt.effective_sequence <= prior_sequence
+                || receipt.authority == [0; 32]
+                || receipt.wind_down.exit_program != program.bytes()
+                || receipt.wind_down.deadline == 0
+                || policy.is_some_and(|value| value != receipt.wind_down)
+            {
+                return Err(RegistryError::ProtocolStateMismatch);
+            }
+            let edge = matches!(
+                (receipt.prior, receipt.current),
+                (ProgramLifecycle::Active, ProgramLifecycle::Deprecated)
+                    | (ProgramLifecycle::Deprecated, ProgramLifecycle::Tombstoned)
+            );
+            if !edge {
+                return Err(RegistryError::ProtocolStateMismatch);
+            }
+            prior = receipt.current;
+            prior_sequence = receipt.effective_sequence;
+            policy = Some(receipt.wind_down);
+        }
+        if prior != lifecycle
+            || (lifecycle == ProgramLifecycle::Active
+                && (!history.is_empty() || !ordered_routes.is_empty()))
+            || (lifecycle != ProgramLifecycle::Active
+                && (history.is_empty() || ordered_routes.len() != ordered_bindings.len()))
+        {
+            return Err(RegistryError::ProtocolStateMismatch);
+        }
+        let entry = candidate
+            .entries
+            .get_mut(&program)
+            .ok_or(RegistryError::UnknownProgram)?;
+        let retains_bindings = entry
+            .value_accounts
+            .iter()
+            .all(|existing| ordered_bindings.iter().any(|value| value == existing));
+        let retains_routes = entry
+            .exit_routes
+            .iter()
+            .all(|existing| ordered_routes.iter().any(|value| value == existing));
+        let retains_history = history.starts_with(&entry.lifecycle_history);
+        let lifecycle_does_not_regress = match (entry.lifecycle, lifecycle) {
+            (ProgramLifecycle::Active, _) => true,
+            (
+                ProgramLifecycle::Deprecated,
+                ProgramLifecycle::Deprecated | ProgramLifecycle::Tombstoned,
+            )
+            | (ProgramLifecycle::Tombstoned, ProgramLifecycle::Tombstoned) => true,
+            _ => false,
+        };
+        let inactive_indexes_immutable = entry.lifecycle == ProgramLifecycle::Active
+            || (entry.value_accounts == ordered_bindings && entry.exit_routes == ordered_routes);
+        if !retains_bindings
+            || !retains_routes
+            || !retains_history
+            || !lifecycle_does_not_regress
+            || !inactive_indexes_immutable
+        {
+            return Err(RegistryError::ProtocolStateMismatch);
+        }
+        entry.value_accounts = ordered_bindings;
+        entry.exit_routes = ordered_routes;
+        entry.lifecycle_history = history.to_vec();
+        entry.lifecycle = lifecycle;
+        *self = candidate;
+        Ok(())
+    }
+
+    /// Resolves the complete ABI-two primary enumeration into current,
+    /// receipt-bound balances suitable for agent, explorer and CLI surfaces.
+    ///
+    /// # Errors
+    ///
+    /// Refuses ABI one, historical or stale evidence, an incomplete primary
+    /// enumeration, and any account, asset or root mismatch.
+    pub fn read_value_accounts(
+        &self,
+        program: ProgramId,
+        snapshot: &VerifiedAccountSnapshot,
+        authority: &JournalAccountStateAuthority<impl AccountStateJournal>,
+    ) -> Result<VerifiedProgramBalanceRead, AccountStateError> {
+        let entry = self
+            .entries
+            .get(&program)
+            .ok_or(AccountStateError::UnknownProgram)?;
+        if entry.versions.last().map(|version| version.abi_version) != Some(2) {
+            return Err(AccountStateError::LegacyProtocol);
+        }
+        let value_accounts = snapshot.resolve_program(program, &entry.value_accounts, authority)?;
+        Ok(VerifiedProgramBalanceRead {
+            program,
+            lifecycle: entry.lifecycle,
+            bindings: entry.value_accounts.clone(),
+            value_accounts,
+            receipt_digest: snapshot.receipt_digest,
+            state_root: snapshot.state_root,
+            freshness: snapshot.freshness,
+        })
+    }
+
     /// Applies one authority-bearing lifecycle record while retaining the
     /// complete append-only transition history for the wind-down subsystem.
     ///
@@ -467,6 +763,7 @@ pub enum RegistryError {
     InvalidDigestEncoding,
     InvalidLifecycleTransition,
     LifecycleConflict,
+    ProtocolStateMismatch,
 }
 
 impl Display for RegistryError {
@@ -486,6 +783,9 @@ impl Display for RegistryError {
             Self::InvalidDigestEncoding => "digest is not thirty-two hexadecimal-encoded bytes",
             Self::InvalidLifecycleTransition => "program lifecycle transition is invalid",
             Self::LifecycleConflict => "program lifecycle state changed before transition",
+            Self::ProtocolStateMismatch => {
+                "protocol program-state replay conflicts with the canonical registry"
+            }
         };
         formatter.write_str(message)
     }

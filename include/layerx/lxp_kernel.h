@@ -91,6 +91,13 @@ typedef struct lxp_kernel_fee_transaction {
     lxp_kernel_fee_finish_fn rollback;
 } lxp_kernel_fee_transaction;
 typedef lxp_result (*lxp_kernel_supply_checker)(const struct lxp_kernel *kernel);
+/* The owning node installs this durable publication barrier. It runs only
+ * after the transition is committed and before canonical outputs are handed
+ * back to the publisher. A refusal is fatal: the node must recover the
+ * committed sequence from canonical history before publishing later work. */
+typedef lxp_result (*lxp_kernel_commit_observer)(
+    void *context, const struct lxp_kernel *kernel,
+    const lxp_activity *activity, const lxp_receipt *receipt);
 
 struct lxp_module_ctx {
     struct lxp_kernel *kernel;
@@ -154,6 +161,12 @@ typedef struct lxp_kernel {
     lxp_kernel_transfer_applier apply_transfer_set;
     lxp_kernel_fee_transaction fee_transaction;
     lxp_kernel_supply_checker check_supply;
+    lxp_kernel_commit_observer observe_commit;
+    void *commit_observer_context;
+    bool publication_poisoned;
+    uint64_t poisoned_sequence;
+    uint8_t poisoned_activity_id[32];
+    uint8_t poisoned_state_root[32];
     void *module_runtime[LXP_MODULE_RESERVED_COUNT + 1U];
     uint8_t current_state_root[32];
 } lxp_kernel;
@@ -166,10 +179,32 @@ lxp_result lxp_kernel_set_epoch(lxp_kernel *kernel, uint64_t epoch);
 lxp_result lxp_kernel_set_capabilities(
     lxp_kernel *kernel, lxp_kernel_parameter_reader read_parameter,
     lxp_kernel_transfer_applier apply_transfer_set);
+/* The only module-to-ledger entry. PROGRAM_SPEND permits are consumed here,
+ * before the caller-installed applier is invoked, and the opaque token is
+ * never exposed to that applier. */
+lxp_result lxp_kernel_apply_transfer_set(
+    lxp_kernel *kernel, const lxp_transfer_set *set, lxp_receipt *receipt);
+/* Production ledger applier installed by layerxd. PROGRAM_SPEND execution is
+ * sealed to this exact symbol after the kernel has consumed the permit. */
+lxp_result lxp_kernel_canonical_ledger_apply(
+    lxp_kernel *kernel, const lxp_transfer_set *set, lxp_receipt *receipt);
 lxp_result lxp_kernel_set_fee_transaction(
     lxp_kernel *kernel, const lxp_kernel_fee_transaction *transaction);
 lxp_result lxp_kernel_set_supply_checker(lxp_kernel *kernel,
                                          lxp_kernel_supply_checker checker);
+lxp_result lxp_kernel_set_commit_observer(
+    lxp_kernel *kernel, lxp_kernel_commit_observer observer, void *context);
+lxp_result lxp_kernel_clear_commit_observer(
+    lxp_kernel *kernel, void *exact_context);
+lxp_result lxp_kernel_recover_commit_observer(
+    lxp_kernel *kernel, const lxp_activity *canonical_activity,
+    const lxp_receipt *canonical_receipt);
+/* Restores the durable post-commit pending boundary during node restart. The
+ * caller must supply the canonical activity/receipt pair read from the
+ * authoritative log; recovery consumes it immediately through the observer. */
+lxp_result lxp_kernel_restore_commit_observer_pending(
+    lxp_kernel *kernel, const lxp_activity *canonical_activity,
+    const lxp_receipt *canonical_receipt);
 lxp_result lxp_kernel_bind_module_runtime(lxp_kernel *kernel,
                                           uint16_t module_id,
                                           void *runtime);
@@ -281,5 +316,11 @@ lxp_result lxp_replay_golden_run(const lxp_replay_record *records,
 lxp_result lxp_kernel_module_by_id(
     const lxp_kernel *kernel, uint16_t module_id, uint64_t epoch,
     const lxp_module_registration **registration);
+lxp_result lxp_state_subtree_proof(
+    const lxp_kernel *kernel, uint16_t module_id, const uint8_t *key,
+    size_t key_length, uint8_t root[32], lxp_state_proof *proof);
+lxp_result lxp_state_root_proof(
+    const lxp_kernel *kernel, uint16_t module_id, uint8_t root[32],
+    lxp_state_proof *proof);
 
 #endif

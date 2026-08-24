@@ -15,7 +15,9 @@ const DEFAULT_PATH: &str = "/usr/local/bin:/usr/bin:/bin";
 fn now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_or(0, |value| value.as_secs())
+        .ok()
+        .and_then(|value| u64::try_from(value.as_millis()).ok())
+        .unwrap_or(0)
 }
 
 fn parse_u64(name: &str, default: u64) -> Result<u64, String> {
@@ -48,19 +50,50 @@ fn config() -> Result<Config, String> {
         mirror: parse_path("LAYERX_REGISTRY_SOURCE_MIRROR", root.join("sources")),
         verified: parse_path("LAYERX_REGISTRY_VERIFIED", root.join("verified")),
         workspace: parse_path("LAYERX_REGISTRY_BUILD_ROOT", root.join("builds")),
-        builder_image_digest: hex::decode_digest(&digest).map_err(|error| {
-            format!("LAYERX_REGISTRY_BUILDER_IMAGE_DIGEST is invalid: {error}")
-        })?,
+        builder_image_digest: hex::decode_digest(&digest)
+            .map_err(|error| format!("LAYERX_REGISTRY_BUILDER_IMAGE_DIGEST is invalid: {error}"))?,
         builder_path: env::var("LAYERX_REGISTRY_BUILDER_PATH")
             .unwrap_or_else(|_| DEFAULT_PATH.to_owned()),
         build_timeout_seconds: parse_u64("LAYERX_REGISTRY_BUILD_TIMEOUT_SECONDS", 1_800)?,
         attempts: parse_u32("LAYERX_REGISTRY_ATTEMPTS", 2)?,
-        staleness_seconds: parse_u64("LAYERX_REGISTRY_MAX_STALENESS_SECONDS", 300)?,
+        staleness_seconds: parse_u64("LAYERX_REGISTRY_MAX_STALENESS_SECONDS", 300)?
+            .checked_mul(1_000)
+            .ok_or_else(|| "LAYERX_REGISTRY_MAX_STALENESS_SECONDS is too large".to_owned())?,
+        node_endpoint: env::var("LAYERX_REGISTRY_NODE_ENDPOINT")
+            .map_err(|_| "LAYERX_REGISTRY_NODE_ENDPOINT is required".to_owned())?,
+        node_authorization: env::var("LAYERX_REGISTRY_NODE_AUTHORIZATION")
+            .map_err(|_| "LAYERX_REGISTRY_NODE_AUTHORIZATION is required".to_owned())?,
+        receipt_authority_endpoint: env::var("LAYERX_REGISTRY_RECEIPT_AUTHORITY_ENDPOINT")
+            .map_err(|_| "LAYERX_REGISTRY_RECEIPT_AUTHORITY_ENDPOINT is required".to_owned())?,
+        receipt_authority_authorization: env::var(
+            "LAYERX_REGISTRY_RECEIPT_AUTHORITY_AUTHORIZATION",
+        )
+        .map_err(|_| "LAYERX_REGISTRY_RECEIPT_AUTHORITY_AUTHORIZATION is required".to_owned())?,
+        receipt_authority_replica_id: hex::decode_digest(
+            &env::var("LAYERX_REGISTRY_RECEIPT_AUTHORITY_REPLICA_ID").map_err(|_| {
+                "LAYERX_REGISTRY_RECEIPT_AUTHORITY_REPLICA_ID is required".to_owned()
+            })?,
+        )
+        .map_err(|error| {
+            format!("LAYERX_REGISTRY_RECEIPT_AUTHORITY_REPLICA_ID is invalid: {error}")
+        })?,
+        sequencer_id: hex::decode_digest(
+            &env::var("LAYERX_REGISTRY_SEQUENCER_ID")
+                .map_err(|_| "LAYERX_REGISTRY_SEQUENCER_ID is required".to_owned())?,
+        )
+        .map_err(|error| format!("LAYERX_REGISTRY_SEQUENCER_ID is invalid: {error}"))?,
+        sequencer_public_key: hex::decode_digest(
+            &env::var("LAYERX_REGISTRY_SEQUENCER_PUBLIC_KEY")
+                .map_err(|_| "LAYERX_REGISTRY_SEQUENCER_PUBLIC_KEY is required".to_owned())?,
+        )
+        .map_err(|error| format!("LAYERX_REGISTRY_SEQUENCER_PUBLIC_KEY is invalid: {error}"))?,
+        sequencer_first_batch: parse_u64("LAYERX_REGISTRY_SEQUENCER_FIRST_BATCH", 1)?,
+        sequencer_last_batch: parse_u64("LAYERX_REGISTRY_SEQUENCER_LAST_BATCH", u64::MAX)?,
     })
 }
 
 fn serve(config: &Config) -> Result<(), String> {
-    let mut registrar = Registrar::open(config)?;
+    let mut registrar = Registrar::open(config, now())?;
     let listener = TcpListener::bind(&config.listen).map_err(|error| error.to_string())?;
     eprintln!(
         "LayerX program registry ready on {} with journal {} and source mirror {}",

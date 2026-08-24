@@ -7,6 +7,8 @@ mod builder;
 mod http;
 mod journal;
 mod mirror;
+mod node_state;
+mod program_state;
 mod routes;
 mod verified;
 
@@ -18,6 +20,8 @@ pub use builder::HermeticBuilder;
 pub use http::{parse_request, write_response};
 pub use journal::FileDeploymentJournal;
 pub use mirror::{MirrorRefusal, MirroredSource, SourceMirror};
+pub use node_state::{NodeProgramStateSource, ProgramStateCursor};
+pub use program_state::FileProgramStateJournal;
 pub use routes::{refusal, Registrar, Request, Response};
 pub use verified::{VerifiedSource, VerifiedSourceStore};
 
@@ -34,6 +38,15 @@ pub struct Config {
     pub build_timeout_seconds: u64,
     pub attempts: u32,
     pub staleness_seconds: u64,
+    pub node_endpoint: String,
+    pub node_authorization: String,
+    pub receipt_authority_endpoint: String,
+    pub receipt_authority_authorization: String,
+    pub receipt_authority_replica_id: [u8; 32],
+    pub sequencer_id: [u8; 32],
+    pub sequencer_public_key: [u8; 32],
+    pub sequencer_first_batch: u64,
+    pub sequencer_last_batch: u64,
 }
 
 /// Stable graph anchor for the hosted program registry.

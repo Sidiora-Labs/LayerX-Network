@@ -79,9 +79,13 @@ impl SourceArchive {
     pub fn encode(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(MAGIC);
-        bytes.extend_from_slice(&(u32::try_from(self.files.len()).unwrap_or(u32::MAX)).to_be_bytes());
+        bytes.extend_from_slice(
+            &(u32::try_from(self.files.len()).unwrap_or(u32::MAX)).to_be_bytes(),
+        );
         for file in &self.files {
-            bytes.extend_from_slice(&(u16::try_from(file.path.len()).unwrap_or(u16::MAX)).to_be_bytes());
+            bytes.extend_from_slice(
+                &(u16::try_from(file.path.len()).unwrap_or(u16::MAX)).to_be_bytes(),
+            );
             bytes.extend_from_slice(file.path.as_bytes());
             bytes.push(u8::from(file.executable));
             bytes.extend_from_slice(

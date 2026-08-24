@@ -102,7 +102,8 @@ typedef enum lxp_authorization_kind {
     LXP_AUTH_BUDGET_ALLOWANCE,
     LXP_AUTH_ESCROW,
     LXP_AUTH_PROTOCOL_MODULE,
-    LXP_AUTH_OCCUPANCY_RESPONSIBILITY
+    LXP_AUTH_OCCUPANCY_RESPONSIBILITY,
+    LXP_AUTH_PROGRAM_SPEND
 } lxp_authorization_kind;
 
 typedef enum lxp_condition_kind {
@@ -234,6 +235,14 @@ struct lx_account_registry {
     size_t count;
 };
 
+enum { LXP_STATE_PROOF_MAX_DEPTH = 32 };
+typedef struct lxp_state_proof {
+    uint32_t leaf_index;
+    uint32_t leaf_count;
+    uint8_t depth;
+    uint8_t siblings[LXP_STATE_PROOF_MAX_DEPTH][32];
+} lxp_state_proof;
+
 lxp_result lx_account_name_parse(const uint8_t *name, size_t name_length,
                                  lx_account_name *parsed);
 lxp_result lx_account_kind_of(const uint8_t *name, size_t name_length,
@@ -243,6 +252,10 @@ lxp_result lx_account_id_from_string(const uint8_t *name, size_t name_length,
 lxp_result lx_account_registry_init(lx_account_registry *registry);
 lxp_result lx_account_registry_root(const lx_account_registry *registry,
                                     uint8_t root[32]);
+lxp_result lx_account_registry_proof(
+    const lx_account_registry *registry,
+    const uint8_t account_id[LX_ACCOUNT_ID_BYTES], uint8_t root[32],
+    lxp_state_proof *proof);
 lxp_result lx_account_lookup(lx_account_registry *registry,
                              const uint8_t *name, size_t name_length,
                              const uint8_t presented_id[LX_ACCOUNT_ID_BYTES],

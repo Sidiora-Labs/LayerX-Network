@@ -103,14 +103,22 @@ enum { LXP_VERIFIED_RECEIPT_INDEX_MAX = 4096 };
 typedef struct lxp_verified_receipt_facts {
     uint8_t receipt_digest[32];
     lxp_result result_code;
+    uint64_t global_sequence;
+    uint64_t timestamp;
     uint8_t asset[32];
     lxp_u128 amount;
     uint8_t resulting_state_root[32];
 } lxp_verified_receipt_facts;
 
+typedef lxp_result (*lxp_verified_receipt_fallback_fn)(
+    void *context, const uint8_t receipt_digest[32],
+    lxp_verified_receipt_facts *facts);
+
 typedef struct lxp_verified_receipt_index {
     lxp_verified_receipt_facts entries[LXP_VERIFIED_RECEIPT_INDEX_MAX];
     size_t count;
+    lxp_verified_receipt_fallback_fn fallback;
+    void *fallback_context;
 } lxp_verified_receipt_index;
 
 typedef struct lxp_ledger_receipt_input {
@@ -162,6 +170,8 @@ lxp_result lxp_receipt_bind_program_outcome(
 lxp_result lxp_receipt_encode(const lxp_receipt *receipt,
                               bool include_signature, lxp_arena *arena,
                               lxp_byte_span *encoded);
+lxp_result lxp_receipt_decode(const uint8_t *bytes, size_t length,
+                              bool require_signature, lxp_receipt *receipt);
 lxp_result lxp_receipt_sign(lxp_receipt *receipt,
                             const uint8_t private_key[32], lxp_arena *arena);
 lxp_result lxp_receipt_verify(const lxp_receipt *receipt,
@@ -169,6 +179,9 @@ lxp_result lxp_receipt_verify(const lxp_receipt *receipt,
 lxp_result lxp_receipt_digest(const lxp_receipt *receipt, lxp_arena *arena,
                               uint8_t digest[32]);
 lxp_result lxp_verified_receipt_index_init(lxp_verified_receipt_index *index);
+lxp_result lxp_verified_receipt_index_bind_fallback(
+    lxp_verified_receipt_index *index,
+    lxp_verified_receipt_fallback_fn fallback, void *context);
 lxp_result lxp_verified_receipt_index_add(
     lxp_verified_receipt_index *index, const lxp_receipt *receipt,
     const uint8_t sequencer_public_key[32], lxp_arena *arena);

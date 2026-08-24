@@ -182,7 +182,75 @@ pub fn deploy(
 
 pub fn registry_get(client: &Client, program_id: &str) -> Result<Value, String> {
     validate_resource_id(program_id, "program id")?;
-    client.get(&format!("/v1/programs/registry/{program_id}"))
+    let response = client.get(&format!("/v1/programs/registry/{program_id}"))?;
+    if response["program_id"]
+        .as_str()
+        .is_none_or(|value| !value.eq_ignore_ascii_case(program_id))
+    {
+        return Err("registry response changed the requested program identity".to_owned());
+    }
+    let Some(value_accounts) = response["value_accounts"].as_object() else {
+        return Err("registry response omitted receipt-proven program balances".to_owned());
+    };
+    match value_accounts.get("status").and_then(Value::as_str) {
+        Some("current") => {
+            let Some(accounts) = value_accounts.get("accounts").and_then(Value::as_array) else {
+                return Err("registry response has no canonical program account list".to_owned());
+            };
+            for account in accounts {
+                let Some(account_id) = account["account_id"].as_str() else {
+                    return Err("program balance omitted its account id".to_owned());
+                };
+                let Some(asset_id) = account["asset_id"].as_str() else {
+                    return Err("program balance omitted its asset id".to_owned());
+                };
+                let _: [u8; 32] = crate::encoding::fixed_hex("program account", account_id)?;
+                let _: [u8; 32] = crate::encoding::fixed_hex("program account asset", asset_id)?;
+                if account["balance"]
+                    .as_str()
+                    .and_then(|balance| balance.parse::<u128>().ok())
+                    .is_none()
+                    || account["frozen"].as_bool().is_none()
+                {
+                    return Err("program balance is not a canonical amount record".to_owned());
+                }
+            }
+            let receipt = &value_accounts["receipt"];
+            let Some(receipt_digest) = receipt["receipt_digest"].as_str() else {
+                return Err("program balances omitted their receipt digest".to_owned());
+            };
+            let Some(state_root) = receipt["state_root"].as_str() else {
+                return Err("program balances omitted their state root".to_owned());
+            };
+            let receipt_digest: [u8; 32] =
+                crate::encoding::fixed_hex("program balance receipt", receipt_digest)?;
+            let state_root: [u8; 32] =
+                crate::encoding::fixed_hex("program balance state root", state_root)?;
+            if receipt_digest == [0; 32] || state_root == [0; 32] {
+                return Err("program balance proof contains a reserved zero root".to_owned());
+            }
+            if receipt["observed_sequence"]
+                .as_u64()
+                .filter(|value| *value != 0)
+                .is_none()
+                || receipt["observed_at"]
+                    .as_u64()
+                    .filter(|value| *value != 0)
+                    .is_none()
+                || receipt["verification"].as_str()
+                    != Some("account-primary-and-state-proof-verified")
+            {
+                return Err("program balance freshness is absent or unverifiable".to_owned());
+            }
+        }
+        Some("account-incapable-abi1")
+            if value_accounts
+                .get("accounts")
+                .and_then(Value::as_array)
+                .is_some_and(Vec::is_empty) => {}
+        _ => return Err("program balance status is absent or stale".to_owned()),
+    }
+    Ok(response)
 }
 
 pub fn registry_verify_source(
@@ -296,11 +364,15 @@ fn capability_names(capabilities: &RequestedCapabilities) -> Vec<&'static str> {
 const fn describe_call_error(error: ProgramCallError) -> &'static str {
     match error {
         ProgramCallError::ZeroFuel => "declared call fuel must be greater than zero",
-        ProgramCallError::UnknownCapability(_) => "a requested capability is outside the closed set",
+        ProgramCallError::UnknownCapability(_) => {
+            "a requested capability is outside the closed set"
+        }
         ProgramCallError::DuplicateCapability(_) => "a capability was requested more than once",
         ProgramCallError::CalldataLength(_) => "calldata exceeds the protocol maximum",
         ProgramCallError::ResponseLength(_) => "the response exceeds the protocol maximum",
-        ProgramCallError::NegativeResponseCode(_) => "a successful response cannot carry a negative code",
+        ProgramCallError::NegativeResponseCode(_) => {
+            "a successful response cannot carry a negative code"
+        }
     }
 }
 
@@ -359,9 +431,7 @@ fn classify_outcome(result: &Value, result_code: i64) -> Result<Value, String> {
                 .and_then(Value::as_i64)
                 .unwrap_or(result_code);
             if code != result_code {
-                return Err(
-                    "response outcome code disagrees with the receipt result code".into(),
-                );
+                return Err("response outcome code disagrees with the receipt result code".into());
             }
             Ok(json!({
                 "status": "completed",
@@ -386,7 +456,9 @@ fn classify_outcome(result: &Value, result_code: i64) -> Result<Value, String> {
                     .unwrap_or(Value::Null),
             }))
         }
-        Some(other) => Err(format!("response carried an unknown call outcome status {other}")),
+        Some(other) => Err(format!(
+            "response carried an unknown call outcome status {other}"
+        )),
         None => {
             if result_code >= 0 {
                 Ok(json!({"status": "completed", "code": result_code, "response": Value::Null}))

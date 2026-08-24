@@ -1235,7 +1235,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Bind the grant to the deriving program so a callee holding it can spend only what the caller actually owns, never what the callee derives for itself.
     - Test escalation adversarially across depth, fan-out and repeated visits, with every attempt refused typed and no partial transfer set surviving.
     - _Requirements: 37.4, 30.3_
-  - [ ] 30.5 Bind registry value accounts to real program balances
+  - [ ] 30.5 Bind registry value accounts to real program balances — **Implemented - qualification pending**
     - Replace the registry's declared value-account bookkeeping with real derived accounts carrying real balances read from protocol state.
     - Prove the wind-down rules against live balances: every derived account of a deprecated program has an authorised exit path, and a deprecation that would strand value is refused.
     - Keep a tombstoned program's history readable and its state reachable under the declared wind-down rules with the exit path intact.

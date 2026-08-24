@@ -225,6 +225,8 @@ static lxp_result execute_upgrade(lxp_module_ctx *ctx,
     status = lxp_ctx_kv_get(ctx, key, sizeof(key), &current, &current_length);
     if (status != LXP_OK) return LXP_ERR_UNKNOWN_FIELD;
     if (current_length != sizeof(record)) return LXP_FATAL_INVARIANT;
+    status = lxp_programs_program_active(ctx, value->program_id);
+    if (status != LXP_OK) return status;
     if (current[0] != PROGRAM_POLICY_AUTHORITY)
         return LXP_ERR_AUTH_SCOPE;
     if (lxp_ct_memcmp(current + 1U, authority->principal, 32U) != 0)

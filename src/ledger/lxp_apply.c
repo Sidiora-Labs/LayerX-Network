@@ -253,7 +253,20 @@ lxp_result lxp_apply_transfer(lxp_transfer_leg *leg,
                               lxp_transfer_context *context,
                               lxp_transfer_result *result)
 {
+    size_t index;
     lxp_result status;
+    if (context == NULL) return LXP_ERR_NON_CANONICAL;
+    if (context->source_authority_count > LXP_MAX_TRANSFER_SET_LEGS)
+        return LXP_ERR_NON_CANONICAL;
+    if (context->debit_authority_kind == LXP_AUTH_PROGRAM_SPEND)
+        return LXP_ERR_UNAUTHORIZED_DEBIT;
+    for (index = 0U; index < context->source_authority_count; ++index)
+        if (context->source_authorities == NULL ||
+            context->source_authorities[index].debit_authority_kind ==
+                LXP_AUTH_PROGRAM_SPEND)
+            return LXP_ERR_UNAUTHORIZED_DEBIT;
+    if (context->program_spend_token != 0U)
+        return LXP_ERR_UNAUTHORIZED_DEBIT;
     if (leg != NULL && leg->supply_mode != LXP_TRANSFER_CONSERVED)
         return LXP_ERR_CONSERVATION;
     status = lxp_precondition_check(leg, 1U, context);

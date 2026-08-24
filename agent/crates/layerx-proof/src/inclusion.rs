@@ -157,6 +157,26 @@ pub fn verify_activity(
     Ok(InclusionEvidence { header, evidence })
 }
 
+/// Verifies canonical receipt bytes against a signed batch receipt root.
+///
+/// # Errors
+///
+/// Returns a typed header, authority, signature, or Merkle failure. No
+/// batch-included evidence is returned unless every check passes.
+pub fn verify_receipt(
+    receipt_bytes: &[u8],
+    proof: &Proof,
+    header_bytes: &[u8],
+    header_signature: &[u8; 64],
+    authorization: &SequencerAuthorization,
+) -> Result<InclusionEvidence, InclusionError> {
+    let header = verify_header(header_bytes, header_signature, authorization)?;
+    let receipt_root = header.header.receipt_merkle_root();
+    verify_path(receipt_bytes, proof, &receipt_root).map_err(InclusionError::Merkle)?;
+    let evidence = Evidence::batch(header.digest, receipt_root);
+    Ok(InclusionEvidence { header, evidence })
+}
+
 /// Verifies canonical state-leaf bytes against a named resulting state root
 /// and the same root committed by an authorised signed batch header.
 ///

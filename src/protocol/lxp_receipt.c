@@ -119,6 +119,43 @@ static lxp_result effect_encode(lxp_codec_writer *writer,
     return status;
 }
 
+static lxp_result copy_exact(lxp_codec_reader *reader, uint8_t *destination,
+                             size_t length)
+{
+    lxp_byte_span span;
+    lxp_result status = lxp_codec_read_bytes(reader, &span, (uint32_t)length);
+    if (status != LXP_OK || span.length != length) return LXP_ERR_NON_CANONICAL;
+    (void)memcpy(destination, span.bytes, length);
+    return LXP_OK;
+}
+
+static lxp_result effect_decode(lxp_codec_reader *reader, lxp_effect *effect)
+{
+    lxp_byte_span span;
+    uint8_t kind;
+    uint8_t monetary;
+    lxp_result status;
+    (void)memset(effect, 0, sizeof(*effect));
+    status = lxp_codec_read_u16(reader, &effect->module_id);
+    if (status == LXP_OK) status = lxp_codec_read_u16(reader, &effect->ordinal);
+    if (status == LXP_OK) status = lxp_codec_read_u16(reader, &effect->event_type);
+    if (status == LXP_OK) status = lxp_codec_read_u8(reader, &kind);
+    if (status == LXP_OK) status = lxp_codec_read_u8(reader, &monetary);
+    if (status == LXP_OK)
+        status = copy_exact(reader, effect->transfer_set_root, 32U);
+    if (status == LXP_OK)
+        status = lxp_codec_read_bytes(reader, &span, sizeof(effect->body));
+    if (status != LXP_OK || kind < (uint8_t)LXP_EFFECT_STATE ||
+        kind > (uint8_t)LXP_EFFECT_EVENT || monetary > 1U ||
+        span.length > sizeof(effect->body))
+        return LXP_ERR_NON_CANONICAL;
+    effect->kind = (lxp_effect_kind)kind;
+    effect->monetary = monetary != 0U;
+    effect->body_length = (uint16_t)span.length;
+    (void)memcpy(effect->body, span.bytes, span.length);
+    return LXP_OK;
+}
+
 lxp_result lxp_effect_event_root(const lxp_effect_buffer *buffer,
                                  lxp_arena *arena, uint8_t root[32])
 {
@@ -293,6 +330,69 @@ static lxp_result program_outcome_encode(lxp_codec_writer *writer,
     return status;
 }
 
+static lxp_result program_outcome_decode(lxp_codec_reader *reader,
+                                         lxp_program_outcome *outcome)
+{
+    uint32_t tag;
+    size_t index;
+    lxp_result status;
+    (void)memset(outcome, 0, sizeof(*outcome));
+    status = lxp_codec_read_u32(reader, &tag);
+    if (status != LXP_OK ||
+        (tag != LXP_PROGRAM_OUTCOME_TAG_V1 &&
+         tag != LXP_PROGRAM_OUTCOME_TAG_V2))
+        return LXP_ERR_NON_CANONICAL;
+    outcome->present = true;
+    outcome->encoding_version =
+        tag == LXP_PROGRAM_OUTCOME_TAG_V2 ? 2U : 1U;
+    status = lxp_codec_read_u8(reader, &outcome->terminal_kind);
+    if (status == LXP_OK)
+        status = lxp_codec_read_i32(reader, &outcome->result_code);
+    if (status == LXP_OK)
+        status = lxp_codec_read_u16(reader, &outcome->runtime_version);
+    if (status == LXP_OK)
+        status = lxp_codec_read_u16(reader, &outcome->abi_version);
+    if (status == LXP_OK)
+        status = lxp_codec_read_u32(reader, &outcome->fee_schedule_version);
+    if (status == LXP_OK)
+        status = lxp_codec_read_u64(reader, &outcome->cpu_fuel);
+    if (status == LXP_OK)
+        status = lxp_codec_read_u64(reader, &outcome->memory_bytes);
+    if (status == LXP_OK)
+        status = lxp_codec_read_u64(reader, &outcome->storage_read_bytes);
+    if (status == LXP_OK)
+        status = lxp_codec_read_u64(reader, &outcome->storage_write_bytes);
+    if (status == LXP_OK)
+        status = lxp_codec_read_u32(reader, &outcome->output_values);
+    if (status == LXP_OK)
+        status = lxp_codec_read_u64(reader, &outcome->output_bytes);
+    if (status == LXP_OK && outcome->encoding_version == 2U)
+        status = lxp_codec_read_u128(reader,
+                                     &outcome->occupancy_byte_batches);
+    if (status == LXP_OK && outcome->encoding_version == 2U)
+        status = lxp_codec_read_u128(reader, &outcome->occupancy_fee_units);
+    for (index = 0U; status == LXP_OK &&
+         outcome->encoding_version == 2U && index < 7U; ++index)
+        status = lxp_codec_read_u64(
+            reader, &outcome->fee_schedule_prices[index]);
+    if (status == LXP_OK && outcome->encoding_version == 2U)
+        status = copy_exact(reader, outcome->occupancy_asset_id, 32U);
+    if (status == LXP_OK && outcome->encoding_version == 2U)
+        status = copy_exact(reader, outcome->occupancy_evidence_digest, 32U);
+    if (status == LXP_OK && outcome->encoding_version == 2U)
+        status = copy_exact(reader, outcome->occupancy_transfer_root, 32U);
+    if (status == LXP_OK)
+        status = lxp_codec_read_u128(reader, &outcome->fee_units);
+    if (status == LXP_OK)
+        status = copy_exact(reader, outcome->call_graph_root, 32U);
+    if (status == LXP_OK)
+        status = copy_exact(reader, outcome->terminal_payload_root, 32U);
+    if (status == LXP_OK)
+        status = copy_exact(reader, outcome->transfer_root, 32U);
+    if (status != LXP_OK) return status;
+    return program_outcome_validate(outcome);
+}
+
 lxp_result lxp_receipt_encode(const lxp_receipt *receipt,
                               bool include_signature, lxp_arena *arena,
                               lxp_byte_span *encoded)
@@ -404,6 +504,107 @@ lxp_result lxp_receipt_encode(const lxp_receipt *receipt,
     return LXP_OK;
 }
 
+lxp_result lxp_receipt_decode(const uint8_t *bytes, size_t length,
+                              bool require_signature, lxp_receipt *receipt)
+{
+    lxp_codec_reader reader;
+    lxp_receipt decoded;
+    uint16_t envelope_version;
+    uint32_t effect_count;
+    uint8_t signature_present;
+    size_t index;
+    lxp_result status;
+    if (receipt == NULL || (bytes == NULL && length != 0U) ||
+        length > LXP_MAX_ACTIVITY_BYTES)
+        return LXP_ERR_NON_CANONICAL;
+    (void)memset(receipt, 0, sizeof(*receipt));
+    (void)memset(&decoded, 0, sizeof(decoded));
+    status = lxp_codec_reader_init(&reader, bytes, length);
+    if (status == LXP_OK)
+        status = lxp_codec_read_struct_header_version(
+            &reader, LXP_RECEIPT_STRUCTURE_TAG, &envelope_version);
+    if (status == LXP_OK)
+        status = lxp_codec_read_u16(&reader, &decoded.protocol_version);
+    if (status == LXP_OK &&
+        (decoded.protocol_version != envelope_version ||
+         !lxp_protocol_version_supported(decoded.protocol_version)))
+        status = LXP_ERR_VERSION_UNSUPPORTED;
+    if (status == LXP_OK)
+        status = copy_exact(&reader, decoded.activity_id, 32U);
+    if (status == LXP_OK)
+        status = lxp_codec_read_u64(&reader, &decoded.global_sequence);
+    if (status == LXP_OK)
+        status = copy_exact(&reader, decoded.previous_state_root, 32U);
+    if (status == LXP_OK)
+        status = copy_exact(&reader, decoded.resulting_state_root, 32U);
+    if (status == LXP_OK)
+        status = copy_exact(&reader, decoded.activity_root, 32U);
+    if (status == LXP_OK)
+        status = lxp_codec_read_i32(&reader, &decoded.result_code);
+    if (status == LXP_OK)
+        status = lxp_codec_read_u32(&reader, &effect_count);
+    if (status == LXP_OK && effect_count > LXP_MAX_EFFECTS)
+        status = LXP_ERR_LENGTH_LIMIT;
+    for (index = 0U; status == LXP_OK && index < effect_count; ++index) {
+        lxp_effect effect;
+        status = effect_decode(&reader, &effect);
+        if (status == LXP_OK)
+            status = lxp_effect_buffer_add(&decoded.effects, &effect);
+    }
+    if (status == LXP_OK)
+        status = lxp_codec_read_u128(&reader, &decoded.fee_charged);
+    if (status == LXP_OK) status = copy_exact(&reader, decoded.batch_id, 32U);
+    if (status == LXP_OK)
+        status = lxp_codec_read_u16(&reader, &decoded.module_id);
+    if (status == LXP_OK)
+        status = lxp_codec_read_u32(&reader, &decoded.module_version);
+    if (status == LXP_OK)
+        status = lxp_codec_read_u32(&reader, &decoded.parameter_version);
+    if (status == LXP_OK)
+        status = lxp_codec_read_u8(&reader, &decoded.operation);
+    if (status == LXP_OK) status = copy_exact(&reader, decoded.asset, 32U);
+    if (status == LXP_OK) status = lxp_codec_read_u128(&reader, &decoded.amount);
+    if (status == LXP_OK) status = copy_exact(&reader, decoded.from, 32U);
+    if (status == LXP_OK)
+        status = lxp_codec_read_u128(&reader, &decoded.from_balance_before);
+    if (status == LXP_OK)
+        status = lxp_codec_read_u128(&reader, &decoded.from_balance_after);
+    if (status == LXP_OK)
+        status = lxp_codec_read_u64(&reader, &decoded.from_sequence);
+    if (status == LXP_OK) status = copy_exact(&reader, decoded.to, 32U);
+    if (status == LXP_OK)
+        status = lxp_codec_read_u128(&reader, &decoded.to_balance_before);
+    if (status == LXP_OK)
+        status = lxp_codec_read_u128(&reader, &decoded.to_balance_after);
+    if (status == LXP_OK)
+        status = copy_exact(&reader, decoded.transfer_set_root, 32U);
+    if (status == LXP_OK)
+        status = copy_exact(&reader, decoded.authorization_hash, 32U);
+    if (status == LXP_OK)
+        status = copy_exact(&reader, decoded.context_hash, 32U);
+    if (status == LXP_OK)
+        status = lxp_codec_read_u64(&reader, &decoded.timestamp);
+    if (status == LXP_OK && reader.length - reader.offset > 69U)
+        status = program_outcome_decode(&reader, &decoded.program_outcome);
+    if (status == LXP_OK)
+        status = lxp_codec_read_u8(&reader, &signature_present);
+    if (status == LXP_OK && signature_present > 1U)
+        status = LXP_ERR_NON_CANONICAL;
+    if (status == LXP_OK && require_signature && signature_present == 0U)
+        status = LXP_ERR_BAD_SIGNATURE;
+    if (status == LXP_OK && signature_present != 0U)
+        status = copy_exact(&reader, decoded.sequencer_signature, 64U);
+    if (status == LXP_OK) status = lxp_codec_finish(&reader);
+    if (status != LXP_OK) return status;
+    if (decoded.global_sequence == 0U || decoded.module_id == 0U ||
+        decoded.module_version == 0U || decoded.timestamp == 0U ||
+        lxp_ct_is_zero(decoded.activity_id, 32U) ||
+        lxp_ct_is_zero(decoded.resulting_state_root, 32U))
+        return LXP_ERR_NON_CANONICAL;
+    *receipt = decoded;
+    return LXP_OK;
+}
+
 lxp_result lxp_receipt_digest(const lxp_receipt *receipt, lxp_arena *arena,
                               uint8_t digest[32])
 {
@@ -467,6 +668,17 @@ lxp_result lxp_verified_receipt_index_init(lxp_verified_receipt_index *index)
     return LXP_OK;
 }
 
+lxp_result lxp_verified_receipt_index_bind_fallback(
+    lxp_verified_receipt_index *index,
+    lxp_verified_receipt_fallback_fn fallback, void *context)
+{
+    if (index == NULL || ((fallback == NULL) != (context == NULL)))
+        return LXP_ERR_NON_CANONICAL;
+    index->fallback = fallback;
+    index->fallback_context = context;
+    return LXP_OK;
+}
+
 lxp_result lxp_verified_receipt_index_add(
     lxp_verified_receipt_index *index, const lxp_receipt *receipt,
     const uint8_t sequencer_public_key[32], lxp_arena *arena)
@@ -483,6 +695,8 @@ lxp_result lxp_verified_receipt_index_add(
     status = lxp_receipt_digest(receipt, arena, facts.receipt_digest);
     if (status != LXP_OK) return status;
     facts.result_code = receipt->result_code;
+    facts.global_sequence = receipt->global_sequence;
+    facts.timestamp = receipt->timestamp;
     (void)memcpy(facts.asset, receipt->asset, 32U);
     facts.amount = receipt->amount;
     (void)memcpy(facts.resulting_state_root, receipt->resulting_state_root, 32U);
@@ -494,8 +708,24 @@ lxp_result lxp_verified_receipt_index_add(
                 LXP_OK : LXP_FATAL_INVARIANT;
         if (order > 0) break;
     }
-    if (index->count == LXP_VERIFIED_RECEIPT_INDEX_MAX)
-        return LXP_ERR_LENGTH_LIMIT;
+    if (index->count == LXP_VERIFIED_RECEIPT_INDEX_MAX) {
+        size_t oldest = 0U;
+        size_t candidate;
+        for (candidate = 1U; candidate < index->count; ++candidate)
+            if (index->entries[candidate].global_sequence <
+                    index->entries[oldest].global_sequence)
+                oldest = candidate;
+        if (oldest + 1U != index->count)
+            (void)memmove(&index->entries[oldest],
+                          &index->entries[oldest + 1U],
+                          (index->count - oldest - 1U) *
+                              sizeof(index->entries[0]));
+        --index->count;
+        for (at = 0U; at < index->count; ++at)
+            if (memcmp(index->entries[at].receipt_digest,
+                       facts.receipt_digest, 32U) > 0)
+                break;
+    }
     if (at != index->count)
         (void)memmove(&index->entries[at + 1U], &index->entries[at],
                       (index->count - at) * sizeof(index->entries[0]));
@@ -523,7 +753,9 @@ lxp_result lxp_verified_receipt_index_lookup(
     }
     if (left == index->count ||
         memcmp(index->entries[left].receipt_digest, receipt_digest, 32U) != 0)
-        return LXP_ERR_UNKNOWN_FIELD;
+        return index->fallback == NULL ? LXP_ERR_UNKNOWN_FIELD :
+               index->fallback(index->fallback_context,
+                               receipt_digest, facts);
     *facts = index->entries[left];
     return LXP_OK;
 }

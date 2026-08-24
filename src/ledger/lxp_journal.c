@@ -86,7 +86,7 @@ static lxp_result source_authorities_check(
         bool used = false;
         if (authority->debit_authority_kind < LXP_AUTH_OWNER ||
             authority->debit_authority_kind >
-                LXP_AUTH_OCCUPANCY_RESPONSIBILITY)
+                LXP_AUTH_PROGRAM_SPEND)
             return LXP_ERR_NON_CANONICAL;
         for (j = 0U; j < i; ++j)
             if (memcmp(authority->authorized_from,
@@ -109,6 +109,29 @@ static lxp_result source_authorities_check(
         if (matches != 1U) return LXP_ERR_UNAUTHORIZED_DEBIT;
     }
     return LXP_OK;
+}
+
+static lxp_result program_spend_refuse(
+    const lxp_transfer_leg *legs, size_t leg_count,
+    lxp_transfer_context *context, const uint8_t transfer_set_root[32])
+{
+    size_t index;
+    size_t program_spends = 0U;
+    if (legs == NULL || context == NULL || transfer_set_root == NULL)
+        return LXP_ERR_NON_CANONICAL;
+    for (index = 0U; index < context->source_authority_count; ++index) {
+        const lxp_transfer_source_authority *authority =
+            &context->source_authorities[index];
+        if (authority->debit_authority_kind != LXP_AUTH_PROGRAM_SPEND)
+            continue;
+        ++program_spends;
+    }
+    if (program_spends == 0U)
+        return context->program_spend_token == 0U ?
+                   LXP_OK : LXP_ERR_NON_CANONICAL;
+    (void)leg_count;
+    (void)transfer_set_root;
+    return LXP_ERR_UNAUTHORIZED_DEBIT;
 }
 
 lxp_result lxp_conservation_check(const lxp_transfer_leg *legs,
@@ -208,6 +231,9 @@ lxp_result lxp_apply_transfer_set(lxp_transfer_leg *legs, size_t leg_count,
     if (status != LXP_OK) return status;
     status = lxp_transfer_set_root(compact, compact_count,
                                    result->transfer_set_root);
+    if (status != LXP_OK) return status;
+    status = program_spend_refuse(compact, compact_count, context,
+                                  result->transfer_set_root);
     if (status != LXP_OK) return status;
     status = lxp_journal_open(compact, compact_count, &journal);
     if (status != LXP_OK) return status;
