@@ -10,11 +10,46 @@ export const WEB_VITAL_BUDGETS = Object.freeze({
   CLS: Object.freeze({ limit: 0.1, scale: 1_000_000 }),
 } satisfies Readonly<Record<WebVitalName, Readonly<{ limit: number; scale: number }>>>);
 
+const ROOT_ROUTE_SCRIPT_BUDGET_BYTES = 900 * 1_024;
+const EXPLORER_ROUTE_SCRIPT_BUDGET_BYTES = 900 * 1_024;
+const APP_ROUTE_SCRIPT_BUDGET_BYTES = 1_100 * 1_024;
+
 export const ROUTE_SCRIPT_BUDGETS = Object.freeze({
-  "/": 900 * 1_024,
-  "/explorer": 900 * 1_024,
-  "/app": 1_100 * 1_024,
-} satisfies Readonly<Record<string, number>>);
+  "/": ROOT_ROUTE_SCRIPT_BUDGET_BYTES,
+  "/explorer": EXPLORER_ROUTE_SCRIPT_BUDGET_BYTES,
+  "/explorer/accounts/[accountId]": EXPLORER_ROUTE_SCRIPT_BUDGET_BYTES,
+  "/explorer/batches": EXPLORER_ROUTE_SCRIPT_BUDGET_BYTES,
+  "/explorer/batches/[batchNumber]": EXPLORER_ROUTE_SCRIPT_BUDGET_BYTES,
+  "/explorer/checkpoints": EXPLORER_ROUTE_SCRIPT_BUDGET_BYTES,
+  "/explorer/checkpoints/[checkpointId]": EXPLORER_ROUTE_SCRIPT_BUDGET_BYTES,
+  "/explorer/receipts/[receiptId]": EXPLORER_ROUTE_SCRIPT_BUDGET_BYTES,
+  "/explorer/verify": EXPLORER_ROUTE_SCRIPT_BUDGET_BYTES,
+  "/app": APP_ROUTE_SCRIPT_BUDGET_BYTES,
+  "/app/activity": APP_ROUTE_SCRIPT_BUDGET_BYTES,
+  "/app/activity/[entryId]": APP_ROUTE_SCRIPT_BUDGET_BYTES,
+  "/app/agents": APP_ROUTE_SCRIPT_BUDGET_BYTES,
+  "/app/agents/[agentId]": APP_ROUTE_SCRIPT_BUDGET_BYTES,
+  "/app/agents/new": APP_ROUTE_SCRIPT_BUDGET_BYTES,
+  "/app/approvals": APP_ROUTE_SCRIPT_BUDGET_BYTES,
+  "/app/approvals/[approvalId]": APP_ROUTE_SCRIPT_BUDGET_BYTES,
+  "/app/deposit": APP_ROUTE_SCRIPT_BUDGET_BYTES,
+  "/app/journeys/[journeyId]": APP_ROUTE_SCRIPT_BUDGET_BYTES,
+  "/app/journeys/[journeyId]/claim": APP_ROUTE_SCRIPT_BUDGET_BYTES,
+  "/app/move": APP_ROUTE_SCRIPT_BUDGET_BYTES,
+  "/app/move/withdraw": APP_ROUTE_SCRIPT_BUDGET_BYTES,
+  "/app/notifications": APP_ROUTE_SCRIPT_BUDGET_BYTES,
+  "/app/security/devices": APP_ROUTE_SCRIPT_BUDGET_BYTES,
+  "/app/security/recovery": APP_ROUTE_SCRIPT_BUDGET_BYTES,
+  "/app/settings": APP_ROUTE_SCRIPT_BUDGET_BYTES,
+  "/app/settings/devices": APP_ROUTE_SCRIPT_BUDGET_BYTES,
+  "/app/settings/exit": APP_ROUTE_SCRIPT_BUDGET_BYTES,
+  "/app/settings/security": APP_ROUTE_SCRIPT_BUDGET_BYTES,
+  "/app/settings/wallet": APP_ROUTE_SCRIPT_BUDGET_BYTES,
+  "/app/support": APP_ROUTE_SCRIPT_BUDGET_BYTES,
+  "/app/withdraw": APP_ROUTE_SCRIPT_BUDGET_BYTES,
+} as const satisfies Readonly<Record<string, number>>);
+
+export type BudgetedApplicationRoute = keyof typeof ROUTE_SCRIPT_BUDGETS;
 
 export const THREE_G_PROFILE = Object.freeze({
   latencyMs: 150,

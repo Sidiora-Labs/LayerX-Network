@@ -6,6 +6,30 @@ observed = "The Programs transition expands module-registration commitments to i
 assumption = "Human qualification will replay roots immediately before and after Programs activation to confirm the intended version boundary."
 severity = "note"
 
+[observation.5.8.1]
+task = "5.8"
+file = "human/crates/layerx-human-service/tests/custody.rs"
+symbol = "copied_principal_record_cannot_cross_the_authenticated_kms_identity"
+observed = "The inherited assertion expects a copied principal record to return KmsError::Refused. The provider-backed record now carries an explicit principal/key binding digest and rejects the copy earlier as KmsError::Integrity, which is the new typed key-reference-integrity refusal required by task 5.8. The assertion was left intact rather than weakened or silently rewritten during implementation."
+assumption = "Human qualification will confirm the more specific integrity refusal and update the expected taxonomy only if the production provider contract is accepted."
+severity = "check-conflict"
+
+[observation.5.8.2]
+task = "5.8"
+file = "spec/layerx-platform/spec.kvx"
+symbol = "task.5.8 touches"
+observed = "The declared touch list names provider.rs, signer.rs and health.rs but omits custody/mod.rs, the two production key-creation call sites and development fixture constructors. The required public provider export, provider-backed record format, production startup refusal and remote key-creation path cannot be wired without those omitted files, so strict scope guard reports the necessary implementation paths outside the declaration."
+assumption = "Human qualification will review the necessary integration paths and reconcile task.5.8's touch declaration rather than removing the production boundary wiring."
+severity = "task-scope"
+
+[observation.5.8.3]
+task = "5.8"
+file = "human/crates/layerx-human-service/src/custody/mod.rs"
+symbol = "Keystore::open"
+observed = "Task 5.8 requires replacing the mounted-root-secret production path but specifies no import or migration ceremony for existing v1 file-envelope primary keys. The implementation keeps legacy envelope records readable only through the explicitly development-only constructor and makes production startup accept only a ready remote provider; it does not unwrap and re-import old primary keys into application memory."
+assumption = "Before production cutover, human qualification will define and exercise a protocol key-rotation ceremony from every legacy primary key to a remotely generated KMS/HSM key, then confirm no legacy envelope is needed by production startup."
+severity = "migration-boundary"
+
 [observation.19.4.2]
 task = "19.4"
 file = "include/layerx/lxp_receipt.h"
@@ -374,18 +398,18 @@ observed = "The reconciled spec, generated task projection and qualification obs
 assumption = "The user or an authorized CI session will refresh the GitHub credential and push the local main branch; no credential was available to this session and no secret was requested, printed or stored."
 severity = "dependency-boundary"
 
-[observation.12.4.1]
-task = "12.4"
-file = "human/apps/web/src/journeys/agents/controls.tsx, human/schema/human-api/agents.kvx"
-symbol = "AgentControls archive disposition"
-observed = "The Agent response carries spend against the monthly limit but no receipt-verified current agent-account balance. The archive surface can therefore offer the real agent.reclaim path and the service can refuse archive while funds remain, but the browser cannot prefill or independently attest the exact amount that must be returned before typed archive confirmation. Using AgentSpend.remaining would be incorrect because it is remaining budget, not held funds."
-assumption = "The implementation leaves the service's receipt-verified zero-balance archive gate authoritative and exposes Take money back from the disposition step without inventing a balance. Human qualification will decide whether the executable Human API must add a verified current-balance field or a reclaim-all operation before the archive journey is accepted as disposition-first end to end."
-severity = "dependency-boundary"
+[observation.11.5.1]
+task = "11.5"
+file = "human/apps/web/src/app/layout.tsx, human/apps/web/src/app/api/performance/vitals/route.ts, human/apps/web/src/api/performance-sink.ts, human/apps/web/next.config.mjs, human/apps/web/src/explorer/client.ts"
+symbol = "WebVitalsRum, persistPerformanceObservation, explorer cache policy"
+observed = "The reconciled task reality says redacted real-user monitoring and production cache policy are not wired, but the current inherited tree mounts WebVitalsRum at the root, accepts only the exact redacted metric shape through a same-origin bounded endpoint, persists it through an explicitly configured durable sink, serves sink health and p75 aggregates against the normative thresholds, and applies both force-cache/revalidation and public surrogate-cache directives to the server-rendered explorer. Task 11.5 retains those real runtime paths and completes the missing exhaustive per-page route-budget registry and CI coverage gate."
+assumption = "Human qualification will provide LAYERX_RUM_STORAGE_DIRECTORY as a private durable production volume, observe sink health, and confirm the deployed surrogate honors the explorer Cache-Control policy; no production deployment or monitoring backend was exercised during implementation."
+severity = "note"
 
-[observation.12.4.2]
-task = "12.4"
-file = "human/apps/web/e2e/agents.spec.ts, spec/layerx-platform/spec.kvx"
-symbol = "task.12.4 do_5"
-observed = "do_5 asks for create, pause, reclaim and archive to be run end to end in both shells, while the implementation-phase hard rule prohibits running tests and the current tree has no executable Human API router for the generated client's /v1/agents operations. That router is owned by the parallel task 13.6."
-assumption = "No journey, build or verification command was run. Human qualification will run make human-e2e-journeys after task 13.6 is integrated and will exercise the real create, pause, reclaim and archive operations in both shell profiles."
-severity = "dependency-boundary"
+[observation.11.5.2]
+task = "11.5"
+file = "spec/layerx-platform/spec.kvx, human/apps/web/e2e/perf.spec.ts"
+symbol = "task.11.5 do_3, do_5 and implementation_scope"
+observed = "The task do clauses say to prove the p75 budgets and 3G journey behavior, while the later implementation_scope explicitly assigns budget execution and performance/soak evidence to task 14.5. Task 11.5 therefore writes the executable CI budget and slow-network machinery, including the authenticated Move money route and its honest layout-reserving progress surface, but does not run it or claim measurement evidence."
+assumption = "Human qualification under task 14.5 will execute make human-e2e-perf against representative production pages and the real journey stack and will record the p75 and 3G evidence."
+severity = "phase-boundary"
