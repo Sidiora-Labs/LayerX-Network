@@ -70,6 +70,22 @@ final class GeneratedContract {
         "subscription.delete",
         "subscription.pause",
         "subscription.resume");
+    static final Set<String> AGENT_ERROR_CLASSES = Set.of(
+        "TransportFailure",
+        "Deadline",
+        "ProtocolIncompatibility",
+        "UnavailableCapability",
+        "CoreRejection",
+        "VerificationFailure",
+        "PolicyRefusal",
+        "CapabilityRefusal",
+        "BudgetRefusal",
+        "RateLimit",
+        "IdempotencyConflict",
+        "InternalFault");
+    static final Set<String> AGENT_RETRIABILITY = Set.of(
+        "Terminal",
+        "Retriable");
     static final Set<String> HUMAN_ERROR_CODES = Set.of(
         "unauthenticated",
         "session-expired",
@@ -100,7 +116,13 @@ final class GeneratedContract {
         "support-unavailable",
         "support-conversation-unknown",
         "support-message-unknown");
+    static final Set<String> HUMAN_RETRIABILITY = Set.of(
+        "retriable",
+        "retriable-after",
+        "structural",
+        "final");
     static final Map<String, OperationCatalog.Route> HUMAN_ROUTES = Map.ofEntries(
+        Map.entry("account.balance", new OperationCatalog.Route("GET", "/v1/account/balance", List.of(), false, true)),
         Map.entry("account.create", new OperationCatalog.Route("POST", "/v1/accounts", List.of(), true, false)),
         Map.entry("activity.entry", new OperationCatalog.Route("GET", "/v1/activity/{entry_id}", List.of("entry_id"), false, true)),
         Map.entry("activity.export.evidence", new OperationCatalog.Route("POST", "/v1/activity/exports/evidence", List.of(), true, false)),
@@ -135,6 +157,7 @@ final class GeneratedContract {
         Map.entry("evidence.get", new OperationCatalog.Route("GET", "/v1/evidence/{evidence_id}", List.of("evidence_id"), false, true)),
         Map.entry("exit.eligibility", new OperationCatalog.Route("GET", "/v1/exit/eligibility", List.of(), false, true)),
         Map.entry("exit.start", new OperationCatalog.Route("POST", "/v1/exit", List.of(), true, false)),
+        Map.entry("home.summary", new OperationCatalog.Route("GET", "/v1/home", List.of(), false, true)),
         Map.entry("journey.get", new OperationCatalog.Route("GET", "/v1/journeys/{journey_id}", List.of("journey_id"), false, true)),
         Map.entry("journey.list", new OperationCatalog.Route("GET", "/v1/journeys", List.of(), false, true)),
         Map.entry("move.commit", new OperationCatalog.Route("POST", "/v1/moves", List.of(), true, false)),

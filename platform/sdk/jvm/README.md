@@ -42,7 +42,6 @@ implementation("com.sidiora.layerx:layerx-sdk:0.1.0")
 ```java
 import com.sidiora.layerx.sdk.*;
 import java.net.URI;
-import java.util.concurrent.CompletionStage;
 
 var credential = new HttpProductionTransport.BearerCredential(
     new SecretBytes("your-api-key".getBytes()));
@@ -52,13 +51,10 @@ var transport = HttpProductionTransport.create(
     credential);
 var client = new ProductionClient(transport);
 
-var options = ProductionClient.Options.idempotent(
-    new IdempotencyKey("unique-key-123"));
-CompletionStage<Map<String, Object>> response = client.agent(
-    "version", 
-    Map.of(), 
-    new TypeReference<Map<String, Object>>() {},
-    options);
+var money = new GeneratedSchema.HumanModels.Money(ProtocolAmount.parse("1000000"), "LXP");
+var request = new GeneratedSchema.HumanOperations.MoveQuoteRequest("source", "destination", money);
+var response = client.human(GeneratedSchema.HumanOperations.MOVE_QUOTE, request,
+    ProductionClient.Options.none());
 ```
 
 ### Kotlin
@@ -74,13 +70,14 @@ val transport = HttpProductionTransport.create(
     credential)
 val client = ProductionClient(transport)
 
-val options = idempotencyKey("unique-key-123").asOptions()
-val response = client.agent(
-    "version",
-    emptyMap(),
-    Map::class,
-    options)
+val money = GeneratedSchema.HumanModels.Money(protocolAmount("1000000"), "LXP")
+val request = GeneratedSchema.HumanOperations.MoveQuoteRequest("source", "destination", money)
+val response = client.human(GeneratedSchema.HumanOperations.MOVE_QUOTE, request)
 ```
+
+The string/class overloads remain available for Android and source compatibility. New code should use
+the operation-specific records and constants in `GeneratedSchema`, which keep agent and human
+operations, requests, responses, and events distinct at the JVM type boundary.
 
 ## Local Verification
 

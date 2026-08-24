@@ -62,10 +62,9 @@ public final class HttpProductionTransport implements ProductionTransport {
     public <T> CompletionStage<T> call(Call call, JavaType responseType) {
         Objects.requireNonNull(call, "call");
         Objects.requireNonNull(responseType, "responseType");
-        OperationCatalog.requireKnown(call.plane(), call.operation());
         HttpRequest request;
         try {
-            request = call.plane() == OperationCatalog.Plane.HUMAN ? humanRequest(call) : agentRequest(call);
+            request = call.operation().plane() == OperationCatalog.Plane.HUMAN ? humanRequest(call) : agentRequest(call);
         } catch (IOException error) {
             return CompletableFuture.failedFuture(new PlatformSdkException(
                 PlatformSdkException.Code.INVALID_ARGUMENT, PlatformSdkException.Retry.NEVER, null, null, null));
@@ -78,7 +77,7 @@ public final class HttpProductionTransport implements ProductionTransport {
                     byte[] encoded = body.readNBytes(MAXIMUM_RESPONSE_BYTES + 1);
                     if (encoded.length > MAXIMUM_RESPONSE_BYTES) throw new PlatformSdkException(
                         PlatformSdkException.Code.DECODE_FAILURE, PlatformSdkException.Retry.NEVER, null, null, null);
-                    return decode(response.statusCode(), encoded, responseType);
+                    return decode(response.statusCode(), encoded, responseType, call.operation().plane());
                 } catch (IOException error) {
                     throw new CompletionException(new PlatformSdkException(PlatformSdkException.Code.TRANSPORT_FAILURE,
                         PlatformSdkException.Retry.SAFE, null, null, null));
@@ -87,11 +86,11 @@ public final class HttpProductionTransport implements ProductionTransport {
     }
 
     private HttpRequest humanRequest(Call call) throws IOException {
-        var route = OperationCatalog.HUMAN_ROUTES.get(call.operation());
+        var route = OperationCatalog.HUMAN_ROUTES.get(call.operation().wireName());
+        if (route == null) throw PlatformSdkException.invalidArgument();
         String path = route.path();
         for (String parameter : route.pathParameters()) {
-            String value = call.pathParameters().get(parameter);
-            if (value == null || value.isEmpty()) throw PlatformSdkException.invalidArgument();
+            String value = call.pathParameters().require(parameter);
             path = path.replace("{" + parameter + "}", encodePath(value));
         }
         var builder = common(endpoint(humanBaseUri, path), call);
@@ -102,8 +101,8 @@ public final class HttpProductionTransport implements ProductionTransport {
 
     private HttpRequest agentRequest(Call call) throws IOException {
         var body = mapper.createObjectNode();
-        body.put("operation", call.operation());
-        body.set("request", mapper.valueToTree(call.request()));
+        body.put("operation", call.operation().wireName());
+        body.set("request", call.request());
         return common(agentEndpoint, call).POST(jsonBody(body)).build();
     }
 
@@ -120,20 +119,26 @@ public final class HttpProductionTransport implements ProductionTransport {
         return HttpRequest.BodyPublishers.ofByteArray(mapper.writeValueAsBytes(value == null ? Map.of() : value));
     }
 
-    private <T> T decode(int status, byte[] encoded, JavaType type) {
+    private <T> T decode(int status, byte[] encoded, JavaType type, OperationCatalog.Plane plane) {
         try {
             JsonNode envelope = mapper.readTree(encoded);
-            if (envelope == null || !envelope.isObject() || !envelope.path("ok").isBoolean()) {
+            if (envelope == null || !envelope.isObject()) {
                 throw new PlatformSdkException(PlatformSdkException.Code.DECODE_FAILURE,
                     PlatformSdkException.Retry.NEVER, null, null, null);
             }
+            if (plane == OperationCatalog.Plane.AGENT) return decodeAgent(status, envelope, type);
             String trace = envelope.path("trace").isTextual() ? envelope.path("trace").textValue() : null;
-            if (!envelope.path("ok").booleanValue()) throw serviceError(status, trace, envelope.path("error"));
+            if (!envelope.path("ok").isBoolean()) throw decodeFailure(trace);
+            if (!envelope.path("ok").booleanValue()) throw serviceError(status, trace, envelope.path("error"), plane);
             if (status < 200 || status >= 300 || envelope.has("error")) throw new PlatformSdkException(
                 PlatformSdkException.Code.DECODE_FAILURE, PlatformSdkException.Retry.NEVER, trace, null, null);
             if (!envelope.has("result")) throw new PlatformSdkException(PlatformSdkException.Code.DECODE_FAILURE,
                 PlatformSdkException.Retry.NEVER, trace, null, null);
-            return mapper.convertValue(envelope.get("result"), type);
+            JsonNode result = envelope.get("result");
+            if (result instanceof com.fasterxml.jackson.databind.node.ObjectNode object) {
+                result = SchemaTypes.canonicalBody(object);
+            }
+            return mapper.convertValue(result, type);
         } catch (PlatformSdkException error) {
             throw error;
         } catch (IOException | IllegalArgumentException error) {
@@ -142,9 +147,69 @@ public final class HttpProductionTransport implements ProductionTransport {
         }
     }
 
-    private static PlatformSdkException serviceError(int status, String trace, JsonNode error) {
+    private <T> T decodeAgent(int status, JsonNode envelope, JavaType type) {
+        if (envelope.has("class")) throw agentServiceError(envelope);
+        String requestId = envelope.path("request_id").asText("");
+        if (status < 200 || status >= 300 || requestId.isEmpty() || !envelope.has("value")
+                || !envelope.path("verification_status").isObject()) throw decodeFailure(requestId);
+        JsonNode value = envelope.get("value");
+        if (value instanceof com.fasterxml.jackson.databind.node.ObjectNode object) {
+            value = SchemaTypes.canonicalBody(object);
+        }
+        return mapper.convertValue(value, type);
+    }
+
+    private static PlatformSdkException agentServiceError(JsonNode error) {
+        try {
+            var exactClass = SchemaErrors.AgentClass.fromWire(error.path("class").asText(null));
+            var exactRetry = SchemaErrors.AgentRetriability.fromWire(error.path("retriability").asText(null));
+            String requestId = error.path("request_id").asText("");
+            if (requestId.isEmpty() || !error.path("reason").isTextual()) throw new IllegalArgumentException();
+            JsonNode protocolResult = error.path("protocol_result_code");
+            if (!protocolResult.isNull() && !protocolResult.canConvertToInt()) throw new IllegalArgumentException();
+            Integer resultCode = protocolResult.isNull() ? null : protocolResult.intValue();
+            PlatformSdkException.Retry retry = exactRetry == SchemaErrors.AgentRetriability.RETRIABLE
+                ? PlatformSdkException.Retry.SAFE : PlatformSdkException.Retry.NEVER;
+            return PlatformSdkException.agent(mapAgentClass(exactClass), retry, requestId, resultCode, null,
+                exactClass, exactRetry);
+        } catch (IllegalArgumentException invalidSchemaError) {
+            throw decodeFailure(null);
+        }
+    }
+
+    private static PlatformSdkException.Code mapAgentClass(SchemaErrors.AgentClass value) {
+        return switch (value) {
+            case TRANSPORT_FAILURE -> PlatformSdkException.Code.TRANSPORT_FAILURE;
+            case DEADLINE -> PlatformSdkException.Code.DEADLINE;
+            case PROTOCOL_INCOMPATIBILITY -> PlatformSdkException.Code.PROTOCOL_INCOMPATIBILITY;
+            case UNAVAILABLE_CAPABILITY -> PlatformSdkException.Code.UNAVAILABLE_CAPABILITY;
+            case CORE_REJECTION -> PlatformSdkException.Code.CORE_REJECTION;
+            case VERIFICATION_FAILURE -> PlatformSdkException.Code.VERIFICATION_FAILURE;
+            case POLICY_REFUSAL -> PlatformSdkException.Code.POLICY_REFUSAL;
+            case CAPABILITY_REFUSAL -> PlatformSdkException.Code.CAPABILITY_REFUSAL;
+            case BUDGET_REFUSAL -> PlatformSdkException.Code.BUDGET_REFUSAL;
+            case RATE_LIMIT -> PlatformSdkException.Code.RATE_LIMIT;
+            case IDEMPOTENCY_CONFLICT -> PlatformSdkException.Code.IDEMPOTENCY_CONFLICT;
+            case INTERNAL_FAULT -> PlatformSdkException.Code.INTERNAL_FAULT;
+        };
+    }
+
+    private static PlatformSdkException serviceError(int status, String trace, JsonNode error,
+                                                     OperationCatalog.Plane plane) {
         String code = error.path("code").asText("");
         var mapped = switch (code) {
+            case "TransportFailure" -> PlatformSdkException.Code.TRANSPORT_FAILURE;
+            case "Deadline" -> PlatformSdkException.Code.DEADLINE;
+            case "ProtocolIncompatibility" -> PlatformSdkException.Code.PROTOCOL_INCOMPATIBILITY;
+            case "UnavailableCapability" -> PlatformSdkException.Code.UNAVAILABLE_CAPABILITY;
+            case "CoreRejection" -> PlatformSdkException.Code.CORE_REJECTION;
+            case "VerificationFailure" -> PlatformSdkException.Code.VERIFICATION_FAILURE;
+            case "PolicyRefusal" -> PlatformSdkException.Code.POLICY_REFUSAL;
+            case "CapabilityRefusal" -> PlatformSdkException.Code.CAPABILITY_REFUSAL;
+            case "BudgetRefusal" -> PlatformSdkException.Code.BUDGET_REFUSAL;
+            case "RateLimit" -> PlatformSdkException.Code.RATE_LIMIT;
+            case "IdempotencyConflict" -> PlatformSdkException.Code.IDEMPOTENCY_CONFLICT;
+            case "InternalFault" -> PlatformSdkException.Code.INTERNAL_FAULT;
             case "rate-limited" -> PlatformSdkException.Code.RATE_LIMIT;
             case "conflict" -> PlatformSdkException.Code.IDEMPOTENCY_CONFLICT;
             case "refused-by-policy" -> PlatformSdkException.Code.POLICY_REFUSAL;
@@ -154,17 +219,32 @@ public final class HttpProductionTransport implements ProductionTransport {
             case "unavailable", "upstream-degraded" -> PlatformSdkException.Code.UNAVAILABLE_CAPABILITY;
             default -> status >= 500 ? PlatformSdkException.Code.INTERNAL_FAULT : PlatformSdkException.Code.CORE_REJECTION;
         };
-        var retry = switch (error.path("retry").asText("")) {
-            case "retriable" -> PlatformSdkException.Retry.SAFE;
-            case "retriable-after" -> PlatformSdkException.Retry.AFTER;
-            case "structural", "final" -> PlatformSdkException.Retry.NEVER;
-            default -> throw new PlatformSdkException(PlatformSdkException.Code.DECODE_FAILURE,
-                PlatformSdkException.Retry.NEVER, trace, null, null);
-        };
         Long after = error.path("retry_after_ms").canConvertToLong() ? error.path("retry_after_ms").longValue() : null;
         Integer resultCode = error.path("protocol_result_code").canConvertToInt()
             ? error.path("protocol_result_code").intValue() : null;
-        return new PlatformSdkException(mapped, retry, trace, resultCode, after);
+        try {
+            if (plane == OperationCatalog.Plane.HUMAN) {
+                var exactCode = SchemaErrors.HumanCode.fromWire(code);
+                var exactRetry = SchemaErrors.HumanRetriability.fromWire(error.path("retry").asText(null));
+                var retry = switch (exactRetry) {
+                    case RETRIABLE -> PlatformSdkException.Retry.SAFE;
+                    case RETRIABLE_AFTER -> PlatformSdkException.Retry.AFTER;
+                    case STRUCTURAL, FINAL -> PlatformSdkException.Retry.NEVER;
+                };
+                if (exactRetry == SchemaErrors.HumanRetriability.RETRIABLE_AFTER && after == null) {
+                    throw new IllegalArgumentException("missing retry_after_ms");
+                }
+                return PlatformSdkException.human(mapped, retry, trace, resultCode, after, exactCode, exactRetry);
+            }
+            var exactClass = SchemaErrors.AgentClass.fromWire(code);
+            var exactRetry = SchemaErrors.AgentRetriability.fromWire(error.path("retry").asText(null));
+            var retry = exactRetry == SchemaErrors.AgentRetriability.RETRIABLE
+                ? PlatformSdkException.Retry.SAFE : PlatformSdkException.Retry.NEVER;
+            return PlatformSdkException.agent(mapped, retry, trace, resultCode, after, exactClass, exactRetry);
+        } catch (IllegalArgumentException invalidSchemaError) {
+            throw new PlatformSdkException(PlatformSdkException.Code.DECODE_FAILURE,
+                PlatformSdkException.Retry.NEVER, trace, null, null);
+        }
     }
 
     private static URI requireHttpUri(URI uri) {
@@ -191,4 +271,8 @@ public final class HttpProductionTransport implements ProductionTransport {
         return URI.create(prefix + path);
     }
     private static String encodePath(String value) { return URLEncoder.encode(value, StandardCharsets.UTF_8).replace("+", "%20"); }
+    private static PlatformSdkException decodeFailure(String requestId) {
+        return new PlatformSdkException(PlatformSdkException.Code.DECODE_FAILURE,
+            PlatformSdkException.Retry.NEVER, requestId, null, null);
+    }
 }

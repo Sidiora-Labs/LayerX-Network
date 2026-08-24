@@ -89,6 +89,8 @@ public final class LocalVerifier {
         byte[] resultingStateRoot, byte[] sequencerPublicKey) {}
     public record ReceiptVerification(VerificationLevel level, ProtocolReceipt receipt,
         byte[] canonicalBytes, byte[] receiptDigest) {}
+    public record ReceiptInclusionVerification(ReceiptVerification receipt,
+        InclusionVerification inclusion) {}
     private record DecodedReceipt(ProtocolReceipt receipt, byte[] unsignedBytes) {}
 
     public static void verifyMerkleInclusion(byte[] canonicalLeaf, MerkleProof proof, byte[] expectedRoot) {
@@ -192,6 +194,10 @@ public final class LocalVerifier {
             : VerificationLevel.SETTLEMENT_ANCHORED, checkpointId, achieved, certificate.threshold(), header);
     }
 
+    public static CheckpointVerification verifyCheckpoint(CheckpointVerificationInput input) {
+        return verifyCheckpoint(input, LocalVerifier::verifySecp256k1);
+    }
+
     /** Production raw compact secp256k1 verifier for checkpoint attestations. */
     public static boolean verifySecp256k1(byte[] publicKey, byte[] signature, byte[] digest) {
         try {
@@ -234,6 +240,18 @@ public final class LocalVerifier {
         ReceiptVerification verified = verifyReceiptOutcome(canonicalReceipt, authorized);
         if (verified.receipt().resultCode() != 0) fail();
         return verified;
+    }
+
+    public static ReceiptInclusionVerification verifyReceiptInBatch(byte[] canonicalReceipt,
+        AuthorizedReceiptBatch authorizedReceipt, MerkleProof proof, byte[] canonicalHeader,
+        byte[] headerSignature, SequencerAuthorization sequencerAuthorization) {
+        ReceiptVerification receipt = verifyReceipt(canonicalReceipt, authorizedReceipt);
+        InclusionVerification inclusion = verifyBatchInclusion(InclusionKind.RECEIPT, canonicalReceipt,
+            proof, canonicalHeader, headerSignature, sequencerAuthorization);
+        if (!equal(inclusion.header().previousStateRoot(), authorizedReceipt.previousStateRoot())
+                || !equal(inclusion.header().resultingStateRoot(), authorizedReceipt.resultingStateRoot())
+                || !equal(inclusion.header().sequencerId(), sequencerAuthorization.sequencerId())) fail();
+        return new ReceiptInclusionVerification(receipt, inclusion);
     }
 
     private static DecodedReceipt decodeProtocolReceipt(byte[] canonicalReceipt) {

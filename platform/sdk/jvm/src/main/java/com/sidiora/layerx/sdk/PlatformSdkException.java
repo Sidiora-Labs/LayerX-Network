@@ -46,14 +46,48 @@ public final class PlatformSdkException extends RuntimeException {
     private final String requestId;
     private final Integer protocolResultCode;
     private final Long retryAfterMs;
+    private final SchemaErrors.AgentClass agentClass;
+    private final SchemaErrors.AgentRetriability agentRetriability;
+    private final SchemaErrors.HumanCode humanCode;
+    private final SchemaErrors.HumanRetriability humanRetriability;
 
     public PlatformSdkException(Code code, Retry retry, String requestId, Integer protocolResultCode, Long retryAfterMs) {
+        this(code, retry, requestId, protocolResultCode, retryAfterMs, null, null, null, null);
+    }
+
+    private PlatformSdkException(Code code, Retry retry, String requestId, Integer protocolResultCode,
+                                 Long retryAfterMs, SchemaErrors.AgentClass agentClass,
+                                 SchemaErrors.AgentRetriability agentRetriability,
+                                 SchemaErrors.HumanCode humanCode,
+                                 SchemaErrors.HumanRetriability humanRetriability) {
         super(MESSAGES.get(code));
         this.code = code;
         this.retry = retry;
         this.requestId = requestId;
         this.protocolResultCode = protocolResultCode;
         this.retryAfterMs = retryAfterMs;
+        this.agentClass = agentClass;
+        this.agentRetriability = agentRetriability;
+        this.humanCode = humanCode;
+        this.humanRetriability = humanRetriability;
+    }
+
+    public static PlatformSdkException agent(Code code, Retry retry, String requestId,
+                                             Integer protocolResultCode, Long retryAfterMs,
+                                             SchemaErrors.AgentClass agentClass,
+                                             SchemaErrors.AgentRetriability retriability) {
+        if (agentClass == null || retriability == null) throw invalidArgument();
+        return new PlatformSdkException(code, retry, requestId, protocolResultCode, retryAfterMs,
+            agentClass, retriability, null, null);
+    }
+
+    public static PlatformSdkException human(Code code, Retry retry, String requestId,
+                                             Integer protocolResultCode, Long retryAfterMs,
+                                             SchemaErrors.HumanCode humanCode,
+                                             SchemaErrors.HumanRetriability retriability) {
+        if (humanCode == null || retriability == null) throw invalidArgument();
+        return new PlatformSdkException(code, retry, requestId, protocolResultCode, retryAfterMs,
+            null, null, humanCode, retriability);
     }
 
     public static PlatformSdkException invalidArgument() {
@@ -67,12 +101,20 @@ public final class PlatformSdkException extends RuntimeException {
     public String requestId() { return requestId; }
     public Integer protocolResultCode() { return protocolResultCode; }
     public Long retryAfterMs() { return retryAfterMs; }
+    public SchemaErrors.AgentClass agentClass() { return agentClass; }
+    public SchemaErrors.AgentRetriability agentRetriability() { return agentRetriability; }
+    public SchemaErrors.HumanCode humanCode() { return humanCode; }
+    public SchemaErrors.HumanRetriability humanRetriability() { return humanRetriability; }
     @JsonValue public Map<String, Object> safeDetails() {
         var value = new java.util.LinkedHashMap<String, Object>();
         value.put("code", code.wire()); value.put("retry", retry.wire());
         if (requestId != null) value.put("requestId", requestId);
         if (protocolResultCode != null) value.put("protocolResultCode", protocolResultCode);
         if (retryAfterMs != null) value.put("retryAfterMs", retryAfterMs);
+        if (agentClass != null) value.put("agentClass", agentClass.wire());
+        if (agentRetriability != null) value.put("agentRetriability", agentRetriability.wire());
+        if (humanCode != null) value.put("humanCode", humanCode.wire());
+        if (humanRetriability != null) value.put("humanRetriability", humanRetriability.wire());
         return Map.copyOf(value);
     }
 }

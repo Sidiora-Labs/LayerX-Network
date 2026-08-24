@@ -9,6 +9,7 @@ import java.math.BigInteger;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
@@ -24,26 +25,28 @@ public final class GoldenVectorTest {
         byte[] response = hexDecode(readHex(goldenRoot.resolve("version-response.hex")));
         assertNotNull(request);
         assertNotNull(response);
-        assertTrue(request.length > 0);
-        assertTrue(response.length > 0);
+        assertEquals(19, request.length);
+        assertEquals(23, response.length);
     }
 
     @Test
     void testCodecValidVectors() throws Exception {
         Path vectorPath = REPO_ROOT.resolve("tests/vectors/codec/valid.lxv");
-        if (!Files.exists(vectorPath)) return;
+        assertTrue(Files.isRegularFile(vectorPath));
         List<String> lines = Files.readAllLines(vectorPath);
         int verified = 0;
         for (String line : lines) {
             if (line.startsWith("#") || line.trim().isEmpty()) continue;
             String[] parts = line.split("\\|");
-            if (parts.length < 3) continue;
+            assertEquals(5, parts.length, line);
             String kind = parts[0];
             String hex = parts[2];
             if (kind.equals("u64")) {
                 byte[] bytes = hexDecode(hex);
                 assertNotNull(bytes);
                 assertEquals(8, bytes.length);
+                assertEquals(parts[4], java.util.HexFormat.of().formatHex(
+                    MessageDigest.getInstance("SHA-256").digest(bytes)));
                 verified++;
             }
         }
@@ -51,7 +54,23 @@ public final class GoldenVectorTest {
     }
 
     @Test
-    void testProtocolAmountBounds() {
+    void testCodecAdversarialVectorsAreExplicit() throws Exception {
+        Path vectorPath = REPO_ROOT.resolve("tests/vectors/codec/adversarial.lxv");
+        assertTrue(Files.isRegularFile(vectorPath));
+        int verified = 0;
+        for (String line : Files.readAllLines(vectorPath)) {
+            if (line.startsWith("#") || line.isBlank()) continue;
+            String[] parts = line.split("\\|");
+            assertEquals(5, parts.length, line);
+            assertTrue(Integer.parseInt(parts[3]) < 0, line);
+            assertFalse(parts[2].isEmpty(), line);
+            verified++;
+        }
+        assertTrue(verified > 0);
+    }
+
+    @Test
+    void testProtocolAmountBounds() throws Exception {
         assertThrows(PlatformSdkException.class, () -> 
             ProtocolAmount.of(BigInteger.valueOf(-1)));
         assertThrows(PlatformSdkException.class, () -> 
@@ -62,6 +81,9 @@ public final class GoldenVectorTest {
         
         ProtocolAmount max = ProtocolAmount.of(ProtocolAmount.MAX_VALUE);
         assertTrue(max.toString().length() > 30);
+        assertThrows(PlatformSdkException.class, () -> SchemaTypes.protocolInteger(JSON.readTree("1.0")));
+        assertThrows(PlatformSdkException.class, () -> SchemaTypes.protocolInteger(JSON.readTree("1")));
+        assertEquals(BigInteger.TEN, SchemaTypes.protocolInteger(JSON.readTree("\"10\"")));
     }
 
     @Test
@@ -110,7 +132,7 @@ public final class GoldenVectorTest {
     @Test
     void testMerkleProofDepthCalculation() {
         byte[] leaf = new byte[32];
-        byte[] root = new byte[32];
+        byte[] root = sha256("LXP/v1/merkle-leaf\0".getBytes(java.nio.charset.StandardCharsets.UTF_8), leaf);
         
         LocalVerifier.MerkleProof singleLeaf = new LocalVerifier.MerkleProof(0, 1, List.of());
         assertDoesNotThrow(() -> LocalVerifier.verifyMerkleInclusion(leaf, singleLeaf, root));
@@ -118,6 +140,29 @@ public final class GoldenVectorTest {
         LocalVerifier.MerkleProof twoLeaves = new LocalVerifier.MerkleProof(0, 2, List.of(new byte[32]));
         assertThrows(PlatformSdkException.class, () -> 
             LocalVerifier.verifyMerkleInclusion(leaf, twoLeaves, root));
+    }
+
+    @Test
+    void testTypedSchemaContracts() {
+        var operation = GeneratedSchema.HumanOperations.MOVE_QUOTE;
+        assertEquals(OperationCatalog.Plane.HUMAN, operation.plane());
+        assertEquals(GeneratedSchema.HumanOperations.MoveQuoteRequest.class, operation.requestType());
+        var money = new GeneratedSchema.HumanModels.Money(ProtocolAmount.parse("42"), "LXP");
+        var request = new GeneratedSchema.HumanOperations.MoveQuoteRequest("source", "destination", money);
+        assertEquals(new BigInteger("42"), request.money().amount().value());
+
+        var floating = JSON.createObjectNode();
+        floating.put("source", "source").put("destination", "destination");
+        floating.putObject("money").put("amount", 42.0).put("currency", "LXP");
+        assertThrows(IllegalArgumentException.class,
+            () -> JSON.convertValue(floating, GeneratedSchema.HumanOperations.MoveQuoteRequest.class));
+
+        assertEquals(OperationCatalog.AGENT_ERROR_CLASSES,
+            java.util.Arrays.stream(SchemaErrors.AgentClass.values()).map(SchemaErrors.AgentClass::wire)
+                .collect(java.util.stream.Collectors.toUnmodifiableSet()));
+        assertEquals(OperationCatalog.HUMAN_ERROR_CODES,
+            java.util.Arrays.stream(SchemaErrors.HumanCode.values()).map(SchemaErrors.HumanCode::wire)
+                .collect(java.util.stream.Collectors.toUnmodifiableSet()));
     }
 
     @Test
@@ -155,6 +200,7 @@ public final class GoldenVectorTest {
     }
 
     private static byte[] hexDecode(String hex) {
+        assertEquals(0, hex.length() & 1, "hex must have even length");
         int len = hex.length();
         byte[] data = new byte[len / 2];
         for (int i = 0; i < len; i += 2) {
@@ -162,5 +208,15 @@ public final class GoldenVectorTest {
                 + Character.digit(hex.charAt(i + 1), 16));
         }
         return data;
+    }
+
+    private static byte[] sha256(byte[]... parts) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            for (byte[] part : parts) digest.update(part);
+            return digest.digest();
+        } catch (java.security.GeneralSecurityException impossible) {
+            throw new AssertionError(impossible);
+        }
     }
 }

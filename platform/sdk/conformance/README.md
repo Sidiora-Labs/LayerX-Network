@@ -1,6 +1,7 @@
 # LayerX SDK Conformance Suite
 
-This conformance suite validates production-grade hardening across all LayerX SDKs (Rust, TypeScript, Python).
+This conformance suite validates production-grade hardening across the generated LayerX SDKs,
+including Go, Java/Kotlin, Swift, and .NET plus the Agent SDK implementations.
 
 ## Test Coverage
 
@@ -56,11 +57,14 @@ cd agent/sdk/python && pytest
 
 # Rust
 cd agent/crates/layerx-sdk && cargo test
+
+# JVM (JUnit, schema goldens, typed errors, streams, secrets, and local verification)
+sh platform/sdk/conformance/run-jvm.sh
 ```
 
 ## Conformance Requirements
 
-All three SDKs must:
+Every published SDK must:
 
 1. **Secret Hygiene**: Pass all `secret-hygiene.test.*` tests proving no key material or session tokens in logs, errors, or serialized output
 2. **Resumable Streaming**: Pass all `streaming-resumability.test.*` tests proving stable cursors and no-gap-no-duplicate semantics
@@ -97,3 +101,10 @@ When adding a new conformance requirement:
 - Newtype wrappers for type safety
 - `#[must_use]` attributes on verification functions
 - No `Clone` on `SecretBytes` to prevent accidental copying
+
+### JVM
+
+- Java-first schema operation/request/response/event types with Kotlin overloads in one Maven coordinate
+- `BigInteger` protocol amounts encoded only as canonical decimal strings
+- Virtual-thread streaming that fetches only under downstream demand and advances cursors atomically
+- Local receipt, batch-inclusion, Merkle, and checkpoint verification with built-in signature verification

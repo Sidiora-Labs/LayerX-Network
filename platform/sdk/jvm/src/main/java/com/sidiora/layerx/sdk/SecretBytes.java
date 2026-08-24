@@ -20,7 +20,12 @@ public final class SecretBytes implements AutoCloseable {
     public synchronized <T> T use(Function<byte[], T> consumer) {
         Objects.requireNonNull(consumer, "consumer");
         if (destroyed) throw PlatformSdkException.invalidArgument();
-        return consumer.apply(bytes);
+        byte[] temporary = bytes.clone();
+        try {
+            return consumer.apply(temporary);
+        } finally {
+            Arrays.fill(temporary, (byte) 0);
+        }
     }
 
     public synchronized boolean isDestroyed() {
