@@ -477,3 +477,43 @@ symbol = "task.17.3 touches"
 observed = "The declared touch list contains only platform/hosted/testnet, platform/hosted/faucet and platform/docs, while do_5 and the requested scheduled hosted run require platform/Makefile.inc and .github/workflows/platform.yml, and the new TLS dependencies require the platform workspace manifest and lockfile. Those integration files are necessary for the task's executable/container and scheduled-CI acceptance clauses."
 assumption = "Human qualification will review the necessary integration paths and reconcile task.17.3's touch declaration rather than removing the scheduled journey or workspace dependency wiring."
 severity = "task-scope"
+
+[observation.17.4.1]
+task = "17.4"
+file = "platform/hosted/gateway/src/main.rs, platform/hosted/gateway/deployment.yaml"
+symbol = "dependency_ready, /readyz, /v1/authorized-batches/by-activity"
+observed = "The repository still has no production serving layerxd or layerx-agentd process, and the LNI Client submission boundary returns only Acknowledged or Unknown. Receipt verification requires an AuthorizedBatch containing batch_id, asset, both roots and sequencer key, but current LNI NodeInfo supplies only the current head/key and BatchHeader lacks batch_id and asset. The gateway therefore separates its mTLS core component and independent authority endpoints, locally verifies every receipt against the independently provisioned sequencer key, and remains degraded when either real boundary is absent. It never accepts the gateway/component's own status word as verification."
+assumption = "A real serving core-agent component and an independently administered batch-authority service must be deployed under the documented mTLS/token contracts before hosted readiness and synchronous emulator-compatible activity responses can qualify. Human qualification must validate that those facts originate outside the gateway response and correspond to the canonical batch."
+severity = "dependency-boundary"
+
+[observation.17.4.2]
+task = "17.4"
+file = "platform/emulator/src/main.rs, platform/hosted/gateway/src/main.rs"
+symbol = "GET /v1/state, read_route"
+observed = "The emulator GET /v1/state response is a global unproved debug dump of in-memory cells and accounts. No production proof-gated or principal-filtered state snapshot contract exists, so exposing that shape would violate the same principal isolation and protocol-fact rules required of the human plane. The production route is present but fails closed with principal_state_proof_unavailable, and /readyz names the missing boundary instead of claiming readiness."
+assumption = "Human qualification must define and integrate a principal-isolated state proof contract before accepting exact state-route parity. The global emulator debug snapshot must not be placed on hosted public ingress to satisfy route-shape wording."
+severity = "spec-contradiction"
+
+[observation.17.4.3]
+task = "17.4"
+file = "platform/hosted/webhooks/src/main.rs, platform/hosted/webhooks/src/events.rs, platform/hosted/dashboard/src/gateway.rs"
+symbol = "VerifiedOperation construction and legacy gateway-state.json projection"
+observed = "Task 17.5 remains pending and its inherited webhook executable directly constructs VerifiedOperation from caller-supplied response, receipt and verification_level fields, while its event code reads those public fields. Task 17.4 deliberately seals VerifiedOperation and derives it only from canonical receipt verification, so that inherited direct construction no longer matches the gateway API. The dashboard likewise still projects the removed single-process gateway-state.json format rather than the redacted Redis schema."
+assumption = "The dependent task 17.5 must consume sealed gateway verification accessors and a principal-scoped read model instead of restoring public construction or the standalone JSON write path. No compatibility constructor may accept claimed verification facts."
+severity = "dependency-boundary"
+
+[observation.17.4.4]
+task = "17.4"
+file = "platform/hosted/gateway/deployment.yaml, platform/hosted/gateway/tests/load.js"
+symbol = "layerx-core-module-registry, hosted_gateway load scenario"
+observed = "No authoritative production module-registration artifact exists in the repository. The gateway requires an explicit sorted core-owned registry and refuses startup without it rather than accepting every syntactically valid module activity. The load and hosted-boundary artifacts require unique real signed activities, deployed services and independent receipt verification; they were written but no build, test, smoke, load or verify command was run during implementation."
+assumption = "The serving core owner must publish the exact module registry ConfigMap used by admission. Human qualification will provision that registry and a non-reused signed activity corpus, execute the boundary and load machinery against the deployed stack, and retain latency, throughput and independent verification evidence."
+severity = "phase-boundary"
+
+[observation.17.4.5]
+task = "17.4"
+file = "platform/Cargo.lock, spec/layerx-platform/spec.kvx, spec/layerx-platform/tasks.md, spec/layerx-platform/qualification.kvx"
+symbol = "task.17.4 touches, cg guard"
+observed = "The scoped cg guard accepted every gateway implementation and test path and reported four advisory outside-touch paths: the platform lockfile needed by the real proof/wire/crypto dependencies and the required spec status, rendered task projection and qualification log."
+assumption = "These are lifecycle and workspace integration paths required by the implementation; human qualification will review the advisory rather than removing dependency locking or the auditable task records."
+severity = "task-scope"

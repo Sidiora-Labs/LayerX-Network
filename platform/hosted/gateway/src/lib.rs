@@ -1,27 +1,24 @@
-//! Hosted gateway policy boundary. The gateway authenticates developer keys,
-//! enforces durable quotas and idempotency, and only returns operations backed
-//! by verification evidence produced by the protocol service.
+//! Receipt-verifying authority boundary for the hosted gateway.
 
-use serde::{Deserialize, Serialize};
+use layerx_crypto::{ed25519, SignatureMessage};
+use layerx_proof::receipt::{verify_outcome, AuthorizedBatch, ReceiptCheck};
+use layerx_types::payload::ModuleRegistry;
+use layerx_wire::activity::{decode_signed, encode_signed, encode_unsigned};
+use layerx_wire::hash::{activity_id, Domain};
+use serde::Serialize;
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
-use std::fs::{self, OpenOptions};
-use std::io::{self, Write};
-use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard};
+use subtle::ConstantTimeEq;
 use zeroize::Zeroize;
 
 const KEY_PREFIX: &str = "lxp_live_";
 const KEY_BYTES: usize = 32;
-const HASH_DOMAIN: &[u8] = b"LayerX/gateway/api-key/v1\0";
-const REQUEST_DOMAIN: &[u8] = b"LayerX/gateway/request/v1\0";
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct PrincipalId(String);
 
 impl PrincipalId {
-    /// Creates a path-safe principal identifier.
+    /// Creates a bounded stable principal identifier.
     ///
     /// # Errors
     /// Returns [`GatewayError::InvalidRequest`] for an invalid identifier.
@@ -29,29 +26,45 @@ impl PrincipalId {
         let value = value.into();
         if value.is_empty()
             || value.len() > 128
-            || !value
-                .bytes()
-                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_')
+            || !value.bytes().all(|byte| {
+                byte.is_ascii_lowercase()
+                    || byte.is_ascii_digit()
+                    || matches!(byte, b'-' | b'_' | b'.' | b':')
+            })
         {
             return Err(GatewayError::InvalidRequest);
         }
         Ok(Self(value))
     }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    #[must_use]
+    pub fn audit_digest(&self) -> [u8; 32] {
+        Sha256::digest(self.0.as_bytes()).into()
+    }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Quota {
     pub requests: u64,
     pub window_seconds: u64,
 }
 
 impl Quota {
-    /// Creates a non-zero fixed-window quota.
+    /// Creates a finite, non-zero fixed-window quota.
     ///
     /// # Errors
-    /// Returns [`GatewayError::InvalidRequest`] when either bound is zero.
-    pub fn new(requests: u64, window_seconds: u64) -> Result<Self, GatewayError> {
-        if requests == 0 || window_seconds == 0 {
+    /// Returns [`GatewayError::InvalidRequest`] for a zero or excessive bound.
+    pub const fn new(requests: u64, window_seconds: u64) -> Result<Self, GatewayError> {
+        if requests == 0
+            || requests > 1_000_000
+            || window_seconds == 0
+            || window_seconds > 2_592_000
+        {
             return Err(GatewayError::InvalidRequest);
         }
         Ok(Self {
@@ -59,12 +72,60 @@ impl Quota {
             window_seconds,
         })
     }
+
+    #[must_use]
+    pub const fn requests(self) -> u64 {
+        self.requests
+    }
+
+    #[must_use]
+    pub const fn window_seconds(self) -> u64 {
+        self.window_seconds
+    }
 }
 
 #[derive(Debug)]
 pub struct IssuedKey {
-    pub id: String,
-    pub secret: String,
+    id: String,
+    secret: String,
+}
+
+impl IssuedKey {
+    /// Generates a gateway key from operating-system entropy.
+    ///
+    /// # Errors
+    /// Returns [`GatewayError::Entropy`] when secure randomness is unavailable.
+    pub fn generate() -> Result<Self, GatewayError> {
+        let mut random = [0_u8; KEY_BYTES + 16];
+        getrandom::fill(&mut random).map_err(|_| GatewayError::Entropy)?;
+        let id = hex(&Sha256::digest(random)[..12]);
+        let secret = format!("{KEY_PREFIX}{}", hex(&random[..KEY_BYTES]));
+        random.zeroize();
+        Ok(Self { id, secret })
+    }
+
+    /// Derives a replay-stable credential for an authenticated, durable
+    /// issuance idempotency scope. The provisioning key is never retained.
+    #[must_use]
+    pub fn derive(provisioning_key: &[u8; 32], context: &[u8]) -> Self {
+        let identifier = hmac_sha256(provisioning_key, b"layerx-gateway-key-id-v1", context);
+        let mut secret_bytes =
+            hmac_sha256(provisioning_key, b"layerx-gateway-key-secret-v1", context);
+        let id = hex(&identifier[..12]);
+        let secret = format!("{KEY_PREFIX}{}", hex(&secret_bytes));
+        secret_bytes.zeroize();
+        Self { id, secret }
+    }
+
+    #[must_use]
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    #[must_use]
+    pub fn secret(&self) -> &str {
+        &self.secret
+    }
 }
 
 impl Drop for IssuedKey {
@@ -73,344 +134,255 @@ impl Drop for IssuedKey {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AuthorityFacts {
+    batch_id: [u8; 32],
+    asset: [u8; 32],
+    previous_state_root: [u8; 32],
+    resulting_state_root: [u8; 32],
+    sequencer_public_key: [u8; 32],
+}
+
+impl AuthorityFacts {
+    #[must_use]
+    pub const fn new(
+        batch_id: [u8; 32],
+        asset: [u8; 32],
+        previous_state_root: [u8; 32],
+        resulting_state_root: [u8; 32],
+        sequencer_public_key: [u8; 32],
+    ) -> Self {
+        Self {
+            batch_id,
+            asset,
+            previous_state_root,
+            resulting_state_root,
+            sequencer_public_key,
+        }
+    }
+
+    #[must_use]
+    pub const fn sequencer_public_key(self) -> [u8; 32] {
+        self.sequencer_public_key
+    }
+
+    fn authorized(self) -> AuthorizedBatch {
+        AuthorizedBatch::new(
+            self.batch_id,
+            self.asset,
+            self.previous_state_root,
+            self.resulting_state_root,
+            self.sequencer_public_key,
+        )
+    }
+}
+
+/// A response whose receipt passed canonical, invariant, root-chain and pinned
+/// sequencer-signature verification. Its fields are private so a caller cannot
+/// construct one from a status word and non-empty bytes.
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VerifiedOperation {
-    pub response: Vec<u8>,
-    pub receipt: Vec<u8>,
-    pub verification_level: String,
+    response: Vec<u8>,
+    receipt: Vec<u8>,
+    receipt_digest: [u8; 32],
+    activity_id: [u8; 32],
+    result_code: i32,
+    verification_rank: u8,
+}
+
+/// Canonical activity identity available only after module, network, wire and
+/// signer verification under the key's pinned signer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VerifiedSubmission {
+    activity_id: [u8; 32],
+    idempotency_key: [u8; 32],
+}
+
+impl VerifiedSubmission {
+    #[must_use]
+    pub const fn activity_id(self) -> [u8; 32] {
+        self.activity_id
+    }
+
+    #[must_use]
+    pub const fn idempotency_key(self) -> [u8; 32] {
+        self.idempotency_key
+    }
+}
+
+/// Refuses a submitted activity unless its bytes are canonical, its module was
+/// provisioned from the core contract, its protocol scope is exact, and its
+/// Ed25519 signature belongs to the signer bound to the authenticated key.
+///
+/// # Errors
+/// Returns [`GatewayError::InvalidRequest`] without yielding partial identity.
+pub fn verify_submission(
+    bytes: &[u8],
+    registry: &ModuleRegistry,
+    protocol_version: u16,
+    network_id: u32,
+    signer_public_key: &[u8; 32],
+) -> Result<VerifiedSubmission, GatewayError> {
+    let activity = decode_signed(bytes, registry).map_err(|_| GatewayError::InvalidRequest)?;
+    if activity.protocol_version() != protocol_version || activity.network_id() != network_id {
+        return Err(GatewayError::InvalidRequest);
+    }
+    if encode_signed(&activity).map_err(|_| GatewayError::InvalidRequest)? != bytes {
+        return Err(GatewayError::InvalidRequest);
+    }
+    let signature_bytes = activity.signature().ok_or(GatewayError::InvalidRequest)?;
+    let signature: [u8; 64] = signature_bytes
+        .try_into()
+        .map_err(|_| GatewayError::InvalidRequest)?;
+    let unsigned = encode_unsigned(&activity).map_err(|_| GatewayError::InvalidRequest)?;
+    let message = SignatureMessage::new(
+        Domain::SignaturePreimage,
+        activity.protocol_version(),
+        activity.network_id(),
+        &unsigned,
+    )
+    .map_err(|_| GatewayError::InvalidRequest)?;
+    ed25519::verify(signer_public_key, &signature, message).map_err(|_| GatewayError::Forbidden)?;
+    Ok(VerifiedSubmission {
+        activity_id: activity_id(&activity).map_err(|_| GatewayError::InvalidRequest)?,
+        idempotency_key: activity.idempotency_key(),
+    })
 }
 
 impl VerifiedOperation {
-    fn validate(&self) -> Result<(), GatewayError> {
-        if self.receipt.is_empty() || self.verification_level != "receipt-verified" {
-            return Err(GatewayError::VerificationRequired);
-        }
-        Ok(())
+    #[must_use]
+    pub fn response(&self) -> &[u8] {
+        &self.response
+    }
+
+    #[must_use]
+    pub fn receipt(&self) -> &[u8] {
+        &self.receipt
+    }
+
+    #[must_use]
+    pub const fn receipt_digest(&self) -> [u8; 32] {
+        self.receipt_digest
+    }
+
+    #[must_use]
+    pub const fn activity_id(&self) -> [u8; 32] {
+        self.activity_id
+    }
+
+    #[must_use]
+    pub const fn result_code(&self) -> i32 {
+        self.result_code
+    }
+
+    #[must_use]
+    pub const fn verification_rank(&self) -> u8 {
+        self.verification_rank
+    }
+
+    #[must_use]
+    pub const fn verification_level(&self) -> &'static str {
+        "receipt-verified"
     }
 }
 
-pub trait ProtocolGateway: Send + Sync {
-    /// Executes an already-authenticated request against the protocol service.
-    ///
-    /// # Errors
-    /// Returns a typed gateway error when transport or protocol verification fails.
-    fn execute(
-        &self,
-        principal: &PrincipalId,
-        operation: &str,
-        signed_request: &[u8],
-    ) -> Result<VerifiedOperation, GatewayError>;
+#[derive(Serialize)]
+struct ActivityResult {
+    activity_id: String,
+    batch_id: String,
+    global_sequence: u64,
+    result_code: i32,
+    state_root: String,
+    receipt: String,
+}
+
+/// Verifies a component receipt against the independently provisioned
+/// sequencer key and derives the public activity response only from verified
+/// receipt fields.
+///
+/// # Errors
+/// Returns a typed verification error without a partially verified value.
+pub fn verify_activity_operation(
+    receipt_bytes: &[u8],
+    authority: AuthorityFacts,
+    trusted_sequencer_key: &[u8; 32],
+    expected_activity_id: Option<[u8; 32]>,
+) -> Result<VerifiedOperation, GatewayError> {
+    if authority
+        .sequencer_public_key()
+        .ct_eq(trusted_sequencer_key)
+        .unwrap_u8()
+        != 1
+    {
+        return Err(GatewayError::UntrustedSequencer);
+    }
+    let verified = verify_outcome(receipt_bytes, &authority.authorized())
+        .map_err(|failure| GatewayError::Receipt(failure.check))?;
+    let protocol = verified
+        .receipt()
+        .protocol()
+        .ok_or(GatewayError::Receipt(ReceiptCheck::ReceiptShape))?;
+    if expected_activity_id.is_some_and(|expected| protocol.activity_id() != expected) {
+        return Err(GatewayError::ActivityMismatch);
+    }
+    let receipt_digest = verified
+        .evidence()
+        .receipt_digest()
+        .ok_or(GatewayError::VerificationRequired)?;
+    let response = serde_json::to_vec(&ActivityResult {
+        activity_id: hex(&protocol.activity_id()),
+        batch_id: hex(&protocol.batch_id()),
+        global_sequence: protocol.global_sequence(),
+        result_code: protocol.result_code(),
+        state_root: hex(&protocol.resulting_state_root()),
+        receipt: hex(verified.canonical_bytes()),
+    })
+    .map_err(|_| GatewayError::Encoding)?;
+    Ok(VerifiedOperation {
+        response,
+        receipt: verified.canonical_bytes().to_vec(),
+        receipt_digest,
+        activity_id: protocol.activity_id(),
+        result_code: protocol.result_code(),
+        verification_rank: verified.level().wire_rank(),
+    })
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum GatewayResponse {
-    Completed(VerifiedOperation),
-    RateLimited { retry_after_seconds: u64 },
+pub enum ProductionRoute<'a> {
+    Activity,
+    State,
+    Receipt(&'a str),
 }
 
-#[derive(Serialize, Deserialize)]
-struct KeyRecord {
-    principal: PrincipalId,
-    salt: [u8; 16],
-    digest: [u8; 32],
-    quota: Quota,
-    disabled: bool,
-}
-
-#[derive(Serialize, Deserialize)]
-struct Usage {
-    window_started: u64,
-    used: u64,
-}
-
-#[derive(Serialize, Deserialize)]
-struct IdempotencyRecord {
-    request_digest: [u8; 32],
-    result: VerifiedOperation,
-}
-
-#[derive(Serialize, Deserialize, Default)]
-struct State {
-    keys: BTreeMap<String, KeyRecord>,
-    usage: BTreeMap<String, Usage>,
-    idempotency: BTreeMap<String, IdempotencyRecord>,
-    audit: Vec<AuditRecord>,
-}
-
-#[derive(Serialize, Deserialize)]
-struct AuditRecord {
-    at: u64,
-    principal_digest: [u8; 32],
-    operation_digest: [u8; 32],
-    outcome: AuditOutcome,
-}
-
-#[derive(Serialize, Deserialize)]
-enum AuditOutcome {
-    Completed,
-    RateLimited,
-    Refused,
-}
-
-pub struct HostedGateway<P> {
-    root: PathBuf,
-    state: Mutex<State>,
-    protocol: P,
-}
-
-impl<P: ProtocolGateway> HostedGateway<P> {
-    /// Opens or creates the durable gateway state.
-    ///
-    /// # Errors
-    /// Returns an error when the store is missing integrity or cannot be read.
-    pub fn open(root: impl AsRef<Path>, protocol: P) -> Result<Self, GatewayError> {
-        fs::create_dir_all(root.as_ref())?;
-        let path = root.as_ref().join("gateway-state.json");
-        let state = match fs::read(&path) {
-            Ok(bytes) => serde_json::from_slice(&bytes).map_err(|_| GatewayError::CorruptStore)?,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => State::default(),
-            Err(error) => return Err(error.into()),
-        };
-        Ok(Self {
-            root: root.as_ref().to_path_buf(),
-            state: Mutex::new(state),
-            protocol,
-        })
-    }
-
-    /// Issues a new secret, returning its plaintext exactly once.
-    ///
-    /// # Errors
-    /// Returns an error when entropy or durable storage is unavailable.
-    pub fn issue_key(
-        &self,
-        principal: PrincipalId,
-        quota: Quota,
-    ) -> Result<IssuedKey, GatewayError> {
-        let (issued, record) = generate_key(principal, quota)?;
-        let mut state = self.lock()?;
-        state.keys.insert(issued.id.clone(), record);
-        self.persist(&state)?;
-        Ok(issued)
-    }
-
-    /// Atomically replaces an authenticated key and disables its predecessor.
-    ///
-    /// # Errors
-    /// Returns an authentication, entropy, or durable-storage error.
-    pub fn rotate_key(
-        &self,
-        old_id: &str,
-        secret: &str,
-        quota: Quota,
-    ) -> Result<IssuedKey, GatewayError> {
-        let principal = self.authenticate(old_id, secret)?;
-        let (issued, record) = generate_key(principal, quota)?;
-        let mut state = self.lock()?;
-        let old = state
-            .keys
-            .get_mut(old_id)
-            .ok_or(GatewayError::Unauthenticated)?;
-        old.disabled = true;
-        state.keys.insert(issued.id.clone(), record);
-        self.persist(&state)?;
-        Ok(issued)
-    }
-
-    /// Authenticates, quota-checks and durably executes a production RPC request.
-    ///
-    /// # Errors
-    /// Returns typed authentication, idempotency, verification and storage failures.
-    pub fn execute(
-        &self,
-        key_id: &str,
-        secret: &str,
-        idempotency_key: &str,
-        operation: &str,
-        signed_request: &[u8],
-        now: u64,
-    ) -> Result<GatewayResponse, GatewayError> {
-        if idempotency_key.is_empty()
-            || idempotency_key.len() > 128
-            || !production_route(operation)
-            || signed_request.is_empty()
-        {
-            return Err(GatewayError::InvalidRequest);
-        }
-        let principal = self.authenticate(key_id, secret)?;
-        let request_digest = request_digest(operation, signed_request);
-        let idem_key = scoped_idempotency(&principal, idempotency_key);
-        {
-            let mut state = self.lock()?;
-            if let Some(record) = state.idempotency.get(&idem_key) {
-                if record.request_digest != request_digest {
-                    return Err(GatewayError::IdempotencyConflict);
-                }
-                return Ok(GatewayResponse::Completed(record.result.clone()));
+/// Parses the exact production route set shared with the emulator. Emulator
+/// administration paths are never accepted.
+///
+/// # Errors
+/// Returns [`GatewayError::InvalidRoute`] for drift or unsafe identifiers.
+pub fn production_route(method: &str, path: &str) -> Result<ProductionRoute<'_>, GatewayError> {
+    match (method, path) {
+        ("POST", "/v1/activities") => Ok(ProductionRoute::Activity),
+        ("GET", "/v1/state") => Ok(ProductionRoute::State),
+        ("GET", path) => {
+            let id = path
+                .strip_prefix("/v1/receipts/")
+                .ok_or(GatewayError::InvalidRoute)?;
+            if id.len() == 64 && id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                Ok(ProductionRoute::Receipt(id))
+            } else {
+                Err(GatewayError::InvalidRoute)
             }
-            let key = state
-                .keys
-                .get(key_id)
-                .ok_or(GatewayError::Unauthenticated)?;
-            let quota = key.quota;
-            let usage = state.usage.entry(key_id.to_owned()).or_insert(Usage {
-                window_started: now,
-                used: 0,
-            });
-            let elapsed = now.saturating_sub(usage.window_started);
-            if elapsed >= quota.window_seconds {
-                usage.window_started = now;
-                usage.used = 0;
-            }
-            if usage.used >= quota.requests {
-                let retry = quota
-                    .window_seconds
-                    .saturating_sub(now.saturating_sub(usage.window_started))
-                    .max(1);
-                append_audit(
-                    &mut state,
-                    now,
-                    &principal,
-                    operation,
-                    AuditOutcome::RateLimited,
-                );
-                self.persist(&state)?;
-                return Ok(GatewayResponse::RateLimited {
-                    retry_after_seconds: retry,
-                });
-            }
-            usage.used = usage.used.saturating_add(1);
-            self.persist(&state)?;
         }
-        let result = self
-            .protocol
-            .execute(&principal, operation, signed_request)?;
-        result.validate()?;
-        let mut state = self.lock()?;
-        state.idempotency.insert(
-            idem_key,
-            IdempotencyRecord {
-                request_digest,
-                result: result.clone(),
-            },
-        );
-        append_audit(
-            &mut state,
-            now,
-            &principal,
-            operation,
-            AuditOutcome::Completed,
-        );
-        self.persist(&state)?;
-        Ok(GatewayResponse::Completed(result))
-    }
-
-    fn authenticate(&self, key_id: &str, secret: &str) -> Result<PrincipalId, GatewayError> {
-        let state = self.lock()?;
-        let record = state
-            .keys
-            .get(key_id)
-            .ok_or(GatewayError::Unauthenticated)?;
-        let candidate = key_digest(&record.salt, secret.as_bytes());
-        if record.disabled || !constant_time_eq(&candidate, &record.digest) {
-            return Err(GatewayError::Unauthenticated);
-        }
-        Ok(record.principal.clone())
-    }
-
-    fn lock(&self) -> Result<MutexGuard<'_, State>, GatewayError> {
-        self.state.lock().map_err(|_| GatewayError::Unavailable)
-    }
-
-    fn persist(&self, state: &State) -> Result<(), GatewayError> {
-        let bytes = serde_json::to_vec(state).map_err(|_| GatewayError::CorruptStore)?;
-        let temporary = self.root.join("gateway-state.json.tmp");
-        let target = self.root.join("gateway-state.json");
-        let mut file = OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .open(&temporary)?;
-        file.write_all(&bytes)?;
-        file.sync_all()?;
-        fs::rename(temporary, target)?;
-        Ok(())
+        _ => Err(GatewayError::InvalidRoute),
     }
 }
 
 #[must_use]
 pub fn platform_gateway() -> &'static str {
-    "authenticated-receipt-backed-hosted-gateway"
+    "tls-receipt-verifying-multi-instance-hosted-gateway"
 }
 
-fn append_audit(
-    state: &mut State,
-    at: u64,
-    principal: &PrincipalId,
-    operation: &str,
-    outcome: AuditOutcome,
-) {
-    state.audit.push(AuditRecord {
-        at,
-        principal_digest: hash(principal.0.as_bytes()),
-        operation_digest: hash(operation.as_bytes()),
-        outcome,
-    });
-}
-fn scoped_idempotency(principal: &PrincipalId, key: &str) -> String {
-    hex(&hash(
-        &[principal.0.as_bytes(), b"\0", key.as_bytes()].concat(),
-    ))
-}
-fn request_digest(operation: &str, request: &[u8]) -> [u8; 32] {
-    hash(&[REQUEST_DOMAIN, operation.as_bytes(), b"\0", request].concat())
-}
-fn production_route(operation: &str) -> bool {
-    matches!(operation, "POST /v1/activities" | "GET /v1/state")
-        || operation
-            .strip_prefix("GET /v1/receipts/")
-            .is_some_and(|id| {
-                !id.is_empty()
-                    && id.len() <= 128
-                    && id
-                        .bytes()
-                        .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
-            })
-}
-fn key_digest(salt: &[u8; 16], secret: &[u8]) -> [u8; 32] {
-    hash(&[HASH_DOMAIN, salt, secret].concat())
-}
-fn generate_key(
-    principal: PrincipalId,
-    quota: Quota,
-) -> Result<(IssuedKey, KeyRecord), GatewayError> {
-    let mut random = [0_u8; KEY_BYTES + 16];
-    getrandom::fill(&mut random).map_err(|_| GatewayError::Entropy)?;
-    let id = hex(&hash(&random)[..12]);
-    let secret = format!("{KEY_PREFIX}{}", hex(&random[..KEY_BYTES]));
-    let mut salt = [0_u8; 16];
-    salt.copy_from_slice(&random[KEY_BYTES..]);
-    let digest = key_digest(&salt, secret.as_bytes());
-    random.zeroize();
-    let issued = IssuedKey { id, secret };
-    let record = KeyRecord {
-        principal,
-        salt,
-        digest,
-        quota,
-        disabled: false,
-    };
-    Ok((issued, record))
-}
-fn hash(bytes: &[u8]) -> [u8; 32] {
-    Sha256::digest(bytes).into()
-}
-fn constant_time_eq(left: &[u8; 32], right: &[u8; 32]) -> bool {
-    left.iter()
-        .zip(right)
-        .fold(0_u8, |difference, (a, b)| difference | (a ^ b))
-        == 0
-}
 fn hex(bytes: &[u8]) -> String {
     const DIGITS: &[u8; 16] = b"0123456789abcdef";
     let mut value = String::with_capacity(bytes.len() * 2);
@@ -421,42 +393,61 @@ fn hex(bytes: &[u8]) -> String {
     value
 }
 
-#[derive(Debug)]
+fn hmac_sha256(key: &[u8; 32], domain: &[u8], context: &[u8]) -> [u8; 32] {
+    let mut inner_pad = [0x36_u8; 64];
+    let mut outer_pad = [0x5c_u8; 64];
+    for (index, byte) in key.iter().enumerate() {
+        inner_pad[index] ^= byte;
+        outer_pad[index] ^= byte;
+    }
+    let mut inner = Sha256::new();
+    inner.update(inner_pad);
+    inner.update((domain.len() as u64).to_be_bytes());
+    inner.update(domain);
+    inner.update((context.len() as u64).to_be_bytes());
+    inner.update(context);
+    let inner_digest = inner.finalize();
+    let mut outer = Sha256::new();
+    outer.update(outer_pad);
+    outer.update(inner_digest);
+    inner_pad.zeroize();
+    outer_pad.zeroize();
+    outer.finalize().into()
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GatewayError {
     Unauthenticated,
+    Forbidden,
     InvalidRequest,
+    InvalidRoute,
     IdempotencyConflict,
     VerificationRequired,
-    CorruptStore,
+    UntrustedSequencer,
+    ActivityMismatch,
+    Receipt(ReceiptCheck),
+    Encoding,
     Entropy,
     Unavailable,
-    Io(io::Error),
 }
+
 impl Display for GatewayError {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(match self {
             Self::Unauthenticated => "gateway authentication refused",
+            Self::Forbidden => "gateway principal is not authorized",
             Self::InvalidRequest => "gateway request is invalid",
+            Self::InvalidRoute => "gateway route is not available",
             Self::IdempotencyConflict => "idempotency key conflicts with an earlier request",
             Self::VerificationRequired => "protocol response lacks verified receipt evidence",
-            Self::CorruptStore => "gateway durable store is corrupt",
+            Self::UntrustedSequencer => "receipt sequencer is not an authorized gateway key",
+            Self::ActivityMismatch => "receipt does not identify the requested activity",
+            Self::Receipt(_) => "protocol receipt verification refused",
+            Self::Encoding => "gateway response encoding failed",
             Self::Entropy => "secure key generation unavailable",
-            Self::Unavailable => "gateway state unavailable",
-            Self::Io(_) => "gateway durable store unavailable",
+            Self::Unavailable => "gateway dependency unavailable",
         })
     }
 }
-impl std::error::Error for GatewayError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        if let Self::Io(error) = self {
-            Some(error)
-        } else {
-            None
-        }
-    }
-}
-impl From<io::Error> for GatewayError {
-    fn from(value: io::Error) -> Self {
-        Self::Io(value)
-    }
-}
+
+impl std::error::Error for GatewayError {}

@@ -1,0 +1,188 @@
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: layerx-gateway-redis-config, namespace: layerx-testnet}
+data:
+  redis.conf: |
+    bind 0.0.0.0
+    port 0
+    tls-port 6379
+    tls-cert-file /run/layerx/tls/tls.crt
+    tls-key-file /run/layerx/tls/tls.key
+    tls-ca-cert-file /run/layerx/tls/ca.crt
+    tls-auth-clients no
+    aclfile /run/layerx/auth/users.acl
+    appendonly yes
+    appendfsync always
+    maxmemory-policy noeviction
+    protected-mode yes
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: {name: layerx-gateway-redis, namespace: layerx-testnet}
+spec:
+  serviceName: layerx-gateway-redis
+  replicas: 1
+  selector: {matchLabels: {app: layerx-gateway-redis}}
+  template:
+    metadata: {labels: {app: layerx-gateway-redis, layerx-plane: state}}
+    spec:
+      securityContext: {runAsNonRoot: true, runAsUser: 4020, runAsGroup: 4020, fsGroup: 4020}
+      containers:
+        - name: redis
+          image: redis:8.2.1-alpine
+          args: [redis-server, /etc/layerx/redis.conf]
+          ports: [{name: rediss, containerPort: 6379}]
+          readinessProbe: {tcpSocket: {port: rediss}, periodSeconds: 5}
+          resources: {requests: {cpu: 250m, memory: 256Mi}, limits: {cpu: "2", memory: 2Gi}}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          volumeMounts:
+            - {name: data, mountPath: /data}
+            - {name: config, mountPath: /etc/layerx, readOnly: true}
+            - {name: tls, mountPath: /run/layerx/tls, readOnly: true}
+            - {name: auth, mountPath: /run/layerx/auth, readOnly: true}
+      volumes:
+        - {name: config, configMap: {name: layerx-gateway-redis-config}}
+        - {name: tls, secret: {secretName: layerx-gateway-redis-tls}}
+        - {name: auth, secret: {secretName: layerx-gateway-redis-auth}}
+  volumeClaimTemplates:
+    - metadata: {name: data}
+      spec: {accessModes: [ReadWriteOnce], resources: {requests: {storage: 50Gi}}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: layerx-gateway-redis, namespace: layerx-testnet}
+spec: {clusterIP: None, selector: {app: layerx-gateway-redis}, ports: [{name: rediss, port: 6379, targetPort: rediss}]}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: layerx-gateway, namespace: layerx-testnet}
+spec:
+  replicas: 3
+  selector: {matchLabels: {app: layerx-gateway}}
+  template:
+    metadata: {labels: {app: layerx-gateway, layerx-plane: public}}
+    spec:
+      securityContext: {runAsNonRoot: true, runAsUser: 4020, runAsGroup: 4020, fsGroup: 4020}
+      containers:
+        - name: gateway
+          image: ghcr.io/sidiora-labs/layerx-gateway:0.1.0
+          imagePullPolicy: Always
+          ports: [{name: https, containerPort: 9443}]
+          env:
+            - {name: LAYERX_GATEWAY_LISTEN, value: "0.0.0.0:9443"}
+            - {name: LAYERX_GATEWAY_TLS_CERT_DER, value: /run/layerx/server/server.crt.der}
+            - {name: LAYERX_GATEWAY_TLS_KEY_DER, value: /run/layerx/server/server.key.der}
+            - {name: LAYERX_GATEWAY_OUTBOUND_CA_DER, value: /run/layerx/trust/ca.crt.der}
+            - {name: LAYERX_GATEWAY_CLIENT_IDENTITY_PKCS12, value: /run/layerx/client/client.p12}
+            - {name: LAYERX_GATEWAY_CLIENT_IDENTITY_PASSWORD_FILE, value: /run/layerx/client/password}
+            - {name: LAYERX_GATEWAY_COMPONENT_URL, value: "https://layerx-agent-boundary.layerx-testnet.svc.cluster.local:9443"}
+            - {name: LAYERX_GATEWAY_COMPONENT_TOKEN_FILE, value: /run/layerx/component/token}
+            - {name: LAYERX_GATEWAY_AUTHORITY_URL, value: "https://layerx-receipt-authority.layerx-testnet.svc.cluster.local:9443"}
+            - {name: LAYERX_GATEWAY_AUTHORITY_TOKEN_FILE, value: /run/layerx/authority/token}
+            - {name: LAYERX_GATEWAY_IDENTITY_URL, value: "https://layerx-identity.layerx-testnet.svc.cluster.local:9443"}
+            - {name: LAYERX_GATEWAY_IDENTITY_TOKEN_FILE, value: /run/layerx/identity/token}
+            - {name: LAYERX_GATEWAY_REDIS_URL, value: "rediss://layerx-gateway-redis.layerx-testnet.svc.cluster.local:6379"}
+            - {name: LAYERX_GATEWAY_REDIS_USERNAME_FILE, value: /run/layerx/redis/username}
+            - {name: LAYERX_GATEWAY_REDIS_PASSWORD_FILE, value: /run/layerx/redis/password}
+            - {name: LAYERX_GATEWAY_SEQUENCER_PUBLIC_KEY_FILE, value: /run/layerx/authority/sequencer-public-key}
+            - {name: LAYERX_GATEWAY_KEY_PROVISIONING_KEY_FILE, value: /run/layerx/provisioning/key}
+            - {name: LAYERX_GATEWAY_NETWORK_ID, value: layerx-testnet}
+            - {name: LAYERX_GATEWAY_LXP_WIRE_VERSION, value: "1"}
+            - {name: LAYERX_GATEWAY_PROTOCOL_NETWORK_ID, value: "1"}
+            - {name: LAYERX_GATEWAY_MODULE_REGISTRY_FILE, value: /run/layerx/modules/registry.json}
+            - {name: LAYERX_GATEWAY_IDEMPOTENCY_SECONDS, value: "604800"}
+          readinessProbe: {httpGet: {scheme: HTTPS, path: /readyz, port: https}, periodSeconds: 5, failureThreshold: 3}
+          livenessProbe: {httpGet: {scheme: HTTPS, path: /livez, port: https}, periodSeconds: 15}
+          resources: {requests: {cpu: 500m, memory: 256Mi}, limits: {cpu: "2", memory: 1Gi}}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          volumeMounts:
+            - {name: server, mountPath: /run/layerx/server, readOnly: true}
+            - {name: trust, mountPath: /run/layerx/trust, readOnly: true}
+            - {name: client, mountPath: /run/layerx/client, readOnly: true}
+            - {name: component, mountPath: /run/layerx/component, readOnly: true}
+            - {name: authority, mountPath: /run/layerx/authority, readOnly: true}
+            - {name: identity, mountPath: /run/layerx/identity, readOnly: true}
+            - {name: redis, mountPath: /run/layerx/redis, readOnly: true}
+            - {name: provisioning, mountPath: /run/layerx/provisioning, readOnly: true}
+            - {name: modules, mountPath: /run/layerx/modules, readOnly: true}
+      volumes:
+        - {name: server, secret: {secretName: layerx-gateway-server-tls}}
+        - {name: trust, secret: {secretName: layerx-internal-ca}}
+        - {name: client, secret: {secretName: layerx-gateway-client-identity}}
+        - {name: component, secret: {secretName: layerx-gateway-component-client}}
+        - {name: authority, secret: {secretName: layerx-gateway-authority-client}}
+        - {name: identity, secret: {secretName: layerx-gateway-identity-client}}
+        - {name: redis, secret: {secretName: layerx-gateway-redis-client}}
+        - {name: provisioning, secret: {secretName: layerx-gateway-key-provisioning}}
+        - {name: modules, configMap: {name: layerx-core-module-registry}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: layerx-gateway, namespace: layerx-testnet}
+spec: {selector: {app: layerx-gateway}, ports: [{name: https, port: 443, targetPort: https}]}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: {name: layerx-gateway, namespace: layerx-testnet}
+spec: {minAvailable: 2, selector: {matchLabels: {app: layerx-gateway}}}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata: {name: layerx-gateway, namespace: layerx-testnet}
+spec:
+  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: layerx-gateway}
+  minReplicas: 3
+  maxReplicas: 30
+  behavior: {scaleDown: {stabilizationWindowSeconds: 300}}
+  metrics:
+    - type: Resource
+      resource: {name: cpu, target: {type: Utilization, averageUtilization: 65}}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: layerx-gateway-redis, namespace: layerx-testnet}
+spec:
+  podSelector: {matchLabels: {app: layerx-gateway-redis}}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from: [{podSelector: {matchLabels: {app: layerx-gateway}}}]
+      ports: [{protocol: TCP, port: 6379}]
+  egress: []
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: layerx-gateway, namespace: layerx-testnet}
+spec:
+  podSelector: {matchLabels: {app: layerx-gateway}}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ingress-nginx}}}]
+      ports: [{protocol: TCP, port: 9443}]
+  egress:
+    - to: [{podSelector: {matchLabels: {app: layerx-gateway-redis}}}]
+      ports: [{protocol: TCP, port: 6379}]
+    - to: [{podSelector: {matchLabels: {layerx-plane: trusted-boundary}}}]
+      ports: [{protocol: TCP, port: 9443}]
+    - to: [{namespaceSelector: {}}]
+      ports: [{protocol: UDP, port: 53}, {protocol: TCP, port: 53}]
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: layerx-gateway
+  namespace: layerx-testnet
+  annotations:
+    nginx.ingress.kubernetes.io/backend-protocol: HTTPS
+    nginx.ingress.kubernetes.io/proxy-body-size: 512k
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "3"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "10"
+spec:
+  ingressClassName: nginx
+  tls: [{hosts: [gateway.testnet.layerx.network], secretName: layerx-gateway-ingress-tls}]
+  rules:
+    - host: gateway.testnet.layerx.network
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend: {service: {name: layerx-gateway, port: {name: https}}}

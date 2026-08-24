@@ -1345,9 +1345,16 @@ name = "layerx-platform-gateway"
 version = "0.1.0"
 dependencies = [
  "getrandom 0.3.4",
+ "layerx-crypto",
+ "layerx-proof",
+ "layerx-types",
+ "layerx-wire",
+ "native-tls",
+ "rustls",
  "serde",
  "serde_json",
  "sha2",
+ "subtle",
  "zeroize",
 ]
 
