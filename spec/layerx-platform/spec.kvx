@@ -1681,7 +1681,7 @@ status = "pending"
 
 [task.13.1]
 title = "Build settings and preferences"
-status = "pending"
+status = "implemented"
 wave = 7
 requires = ["11.2","9.4"]
 work_kind = "implementation"
