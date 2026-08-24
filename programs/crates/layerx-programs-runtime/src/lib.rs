@@ -34,6 +34,7 @@ pub mod fault;
 mod ffi;
 #[allow(unsafe_code)]
 mod ffi_call;
+#[allow(unsafe_code)]
 mod ffi_transfer;
 #[deny(unsafe_code)]
 mod host;

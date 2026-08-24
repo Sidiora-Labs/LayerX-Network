@@ -15,8 +15,12 @@ path = "src/main.rs"
 
 [dependencies]
 layerx-programs = { package = "layerx-programs-registry", path = "../../../programs/crates/layerx-programs-registry" }
+layerx-programs-protocol-adapter = { path = "../../../programs/crates/layerx-programs-protocol-adapter" }
+layerx-proof.workspace = true
+layerx-wire.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+ureq.workspace = true
 
 [lints]
 workspace = true

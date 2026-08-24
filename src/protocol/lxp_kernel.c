@@ -40,6 +40,93 @@ lxp_result lxp_kernel_set_supply_checker(lxp_kernel *kernel,
     return LXP_OK;
 }
 
+lxp_result lxp_kernel_set_commit_observer(
+    lxp_kernel *kernel, lxp_kernel_commit_observer observer, void *context)
+{
+    if (kernel == NULL || observer == NULL || context == NULL)
+        return LXP_ERR_NON_CANONICAL;
+    if (kernel->observe_commit != NULL)
+        return LXP_ERR_NON_CANONICAL;
+    kernel->observe_commit = observer;
+    kernel->commit_observer_context = context;
+    return LXP_OK;
+}
+
+lxp_result lxp_kernel_clear_commit_observer(
+    lxp_kernel *kernel, void *exact_context)
+{
+    if (kernel == NULL || exact_context == NULL ||
+        kernel->observe_commit == NULL ||
+        kernel->commit_observer_context != exact_context ||
+        kernel->publication_poisoned)
+        return LXP_ERR_NON_CANONICAL;
+    kernel->observe_commit = NULL;
+    kernel->commit_observer_context = NULL;
+    return LXP_OK;
+}
+
+lxp_result lxp_kernel_recover_commit_observer(
+    lxp_kernel *kernel, const lxp_activity *canonical_activity,
+    const lxp_receipt *canonical_receipt)
+{
+    lxp_result status;
+    if (kernel == NULL || canonical_activity == NULL ||
+        canonical_receipt == NULL || !kernel->publication_poisoned ||
+        kernel->observe_commit == NULL ||
+        canonical_receipt->global_sequence != kernel->poisoned_sequence ||
+        lxp_ct_memcmp(canonical_receipt->activity_id,
+                      kernel->poisoned_activity_id, 32U) != 0 ||
+        lxp_ct_memcmp(canonical_receipt->resulting_state_root,
+                      kernel->poisoned_state_root, 32U) != 0)
+        return LXP_ERR_CONTEXT_MISMATCH;
+    status = kernel->observe_commit(kernel->commit_observer_context, kernel,
+                                    canonical_activity, canonical_receipt);
+    if (status != LXP_OK) return status;
+    kernel->publication_poisoned = false;
+    kernel->poisoned_sequence = 0U;
+    (void)memset(kernel->poisoned_activity_id, 0,
+                 sizeof(kernel->poisoned_activity_id));
+    (void)memset(kernel->poisoned_state_root, 0,
+                 sizeof(kernel->poisoned_state_root));
+    return LXP_OK;
+}
+
+lxp_result lxp_kernel_restore_commit_observer_pending(
+    lxp_kernel *kernel, const lxp_activity *canonical_activity,
+    const lxp_receipt *canonical_receipt)
+{
+    uint8_t activity_id[32];
+    lxp_result status;
+    if (kernel == NULL || canonical_activity == NULL ||
+        canonical_receipt == NULL || kernel->publication_poisoned ||
+        kernel->observe_commit == NULL ||
+        canonical_receipt->global_sequence == 0U ||
+        lxp_ct_is_zero(canonical_receipt->resulting_state_root, 32U))
+        return LXP_ERR_NON_CANONICAL;
+    {
+        lxp_byte_span canonical;
+        uint8_t bytes[LXP_MAX_ACTIVITY_BYTES];
+        lxp_arena arena;
+        status = lxp_arena_init(&arena, bytes, sizeof(bytes));
+        if (status == LXP_OK)
+            status = lxp_activity_encode(canonical_activity, &arena,
+                                         &canonical);
+        if (status == LXP_OK)
+            status = lxp_activity_id(canonical.bytes, canonical.length,
+                                     activity_id);
+    }
+    if (status != LXP_OK ||
+        lxp_ct_memcmp(activity_id, canonical_receipt->activity_id, 32U) != 0)
+        return status != LXP_OK ? status : LXP_ERR_CONTEXT_MISMATCH;
+    kernel->publication_poisoned = true;
+    kernel->poisoned_sequence = canonical_receipt->global_sequence;
+    (void)memcpy(kernel->poisoned_activity_id,
+                 canonical_receipt->activity_id, 32U);
+    (void)memcpy(kernel->poisoned_state_root,
+                 canonical_receipt->resulting_state_root, 32U);
+    return LXP_OK;
+}
+
 static void close_failed_fee_transaction(lxp_kernel *kernel,
                                          void *fee_transaction,
                                          lxp_result status)
@@ -66,6 +153,11 @@ lxp_result lxp_kernel_bind_module_runtime(lxp_kernel *kernel,
         status = lxp_state_store_bind_accounts(
             kernel->state, programs_runtime->accounts);
         if (status != LXP_OK) return status;
+        if (programs_runtime->state_feed != NULL) {
+            status = lxp_programs_bind_state_feed(
+                kernel, programs_runtime->state_feed);
+            if (status != LXP_OK) return status;
+        }
     }
     kernel->module_runtime[module_id] = runtime;
     if (module_id == LXP_MODULE_PROGRAMS &&
@@ -128,6 +220,140 @@ lxp_result lxp_kernel_set_capabilities(
     kernel->read_parameter = read_parameter;
     kernel->apply_transfer_set = apply_transfer_set;
     return LXP_OK;
+}
+
+static lxp_result program_spend_authorized_set(
+    const lxp_transfer_set *set, lxp_transfer_set *authorized,
+    lxp_transfer_source_authority
+        authorities[LXP_MAX_TRANSFER_SET_LEGS])
+{
+    const lxp_transfer_leg *leg = NULL;
+    size_t authority_index;
+    size_t program_spend_count = 0U;
+    uint8_t root[32];
+    lxp_result status;
+    if (set == NULL || authorized == NULL || authorities == NULL ||
+        set->leg_count == 0U ||
+        set->leg_count > LXP_MAX_TRANSFER_SET_LEGS ||
+        set->context.source_authorities == NULL ||
+        set->context.source_authority_count == 0U ||
+        set->context.source_authority_count > set->leg_count ||
+        set->context.source_authority_count > LXP_MAX_TRANSFER_SET_LEGS)
+        return LXP_ERR_NON_CANONICAL;
+    *authorized = *set;
+    for (authority_index = 0U;
+         authority_index < set->context.source_authority_count;
+         ++authority_index) {
+        const lxp_transfer_source_authority *authority =
+            &set->context.source_authorities[authority_index];
+        const lxp_transfer_leg *matching_leg = NULL;
+        size_t matching_leg_count = 0U;
+        size_t leg_index;
+        size_t prior_authority_index;
+        for (prior_authority_index = 0U;
+             prior_authority_index < authority_index;
+             ++prior_authority_index)
+            if (lxp_ct_memcmp(
+                    authority->authorized_from,
+                    set->context.source_authorities[prior_authority_index]
+                        .authorized_from,
+                    32U) == 0)
+                return LXP_ERR_UNAUTHORIZED_DEBIT;
+        for (leg_index = 0U; leg_index < set->leg_count; ++leg_index)
+            if (set->legs[leg_index].from != NULL &&
+                lxp_ct_memcmp(authority->authorized_from,
+                              set->legs[leg_index].from->id, 32U) == 0) {
+                ++matching_leg_count;
+                matching_leg = &set->legs[leg_index];
+            }
+        if (matching_leg_count != 1U)
+            return LXP_ERR_UNAUTHORIZED_DEBIT;
+        if (authority->debit_authority_kind != LXP_AUTH_PROGRAM_SPEND)
+            continue;
+        ++program_spend_count;
+        leg = matching_leg;
+    }
+    if (program_spend_count == 0U)
+        return set->context.program_spend_token == 0U ?
+                   LXP_ERR_UNKNOWN_FIELD : LXP_ERR_UNAUTHORIZED_DEBIT;
+    if (program_spend_count != 1U || leg == NULL ||
+        set->context.origin_module_id != LXP_MODULE_PROGRAMS ||
+        set->context.program_spend_token == 0U ||
+        set->context.source_authorities == NULL)
+        return LXP_ERR_UNAUTHORIZED_DEBIT;
+    status = lxp_transfer_set_root(set->legs, set->leg_count, root);
+    if (status == LXP_OK)
+        status = layerx_programs_consume_program_spend_authorization(
+            set->context.program_spend_token,
+            set->context.origin_module_id, leg->from->id, leg->to->id,
+            leg->asset_id, leg->amount.hi, leg->amount.lo, leg->reason,
+            leg->supply_mode, root);
+    if (status != LXP_OK) return LXP_ERR_UNAUTHORIZED_DEBIT;
+    authorized->context.program_spend_token = 0U;
+    authorized->context.debit_authority_kind = LXP_AUTH_OWNER;
+    (void)memcpy(authorities, set->context.source_authorities,
+                 set->context.source_authority_count * sizeof(authorities[0]));
+    authorized->context.source_authorities = authorities;
+    for (authority_index = 0U;
+         authority_index < authorized->context.source_authority_count;
+         ++authority_index)
+        if (authorities[authority_index]
+                .debit_authority_kind == LXP_AUTH_PROGRAM_SPEND) {
+            authorities[authority_index].debit_authority_kind =
+                LXP_AUTH_OWNER;
+        }
+    return LXP_OK;
+}
+
+lxp_result lxp_kernel_canonical_ledger_apply(
+    lxp_kernel *kernel, const lxp_transfer_set *set, lxp_receipt *receipt)
+{
+    lxp_transfer_context context;
+    lxp_transfer_set_result result;
+    lxp_result status;
+    if (kernel == NULL || set == NULL || receipt == NULL)
+        return LXP_ERR_NON_CANONICAL;
+    context = set->context;
+    status = lxp_apply_transfer_set((lxp_transfer_leg *)set->legs,
+                                    set->leg_count, &context, &result);
+    if (status == LXP_OK)
+        (void)memcpy(receipt->transfer_set_root,
+                     result.transfer_set_root, 32U);
+    return status;
+}
+
+lxp_result lxp_kernel_apply_transfer_set(
+    lxp_kernel *kernel, const lxp_transfer_set *set, lxp_receipt *receipt)
+{
+    lxp_transfer_set authorized;
+    lxp_transfer_source_authority authorities[LXP_MAX_TRANSFER_SET_LEGS];
+    lxp_result status;
+    size_t index;
+    bool program_spend = false;
+    if (kernel == NULL || set == NULL || receipt == NULL ||
+        kernel->apply_transfer_set == NULL)
+        return LXP_ERR_BALANCE_BYPASS;
+    if (set->leg_count == 0U ||
+        set->leg_count > LXP_MAX_TRANSFER_SET_LEGS ||
+        set->context.source_authorities == NULL ||
+        set->context.source_authority_count == 0U ||
+        set->context.source_authority_count > set->leg_count ||
+        set->context.source_authority_count > LXP_MAX_TRANSFER_SET_LEGS)
+        return LXP_ERR_NON_CANONICAL;
+    for (index = 0U; index < set->context.source_authority_count; ++index)
+        if (set->context.source_authorities[index].debit_authority_kind ==
+            LXP_AUTH_PROGRAM_SPEND)
+            program_spend = true;
+    if (!program_spend) {
+        if (set->context.program_spend_token != 0U)
+            return LXP_ERR_UNAUTHORIZED_DEBIT;
+        return kernel->apply_transfer_set(kernel, set, receipt);
+    }
+    if (kernel->apply_transfer_set != lxp_kernel_canonical_ledger_apply)
+        return LXP_ERR_BALANCE_BYPASS;
+    status = program_spend_authorized_set(set, &authorized, authorities);
+    if (status != LXP_OK) return status;
+    return kernel->apply_transfer_set(kernel, &authorized, receipt);
 }
 
 lxp_result lxp_kernel_register_module(lxp_kernel *kernel,
@@ -849,6 +1075,7 @@ lxp_result lxp_kernel_execute_activity(lxp_kernel *kernel,
     bool fee_transaction_open = false;
     void *fee_transaction = NULL;
     bool programs_call;
+    bool programs_state_activity;
     const lx_programs_transfer_runtime *programs_runtime = NULL;
     lx_programs_fee_schedule programs_fee_schedule;
     uint8_t programs_occupancy_asset_id[32];
@@ -859,10 +1086,21 @@ lxp_result lxp_kernel_execute_activity(lxp_kernel *kernel,
         execution->authority == NULL || execution->fee_parameters == NULL ||
         execution->arena == NULL || execution->batch_number == 0U)
         return LXP_ERR_NON_CANONICAL;
+    if (kernel->publication_poisoned) return LXP_FATAL_INVARIANT;
     arena_mark = lxp_arena_mark(execution->arena);
     programs_call = lxp_activity_module_id(activity->activity_type) ==
                         LXP_MODULE_PROGRAMS &&
                     lxp_activity_type_ordinal(activity->activity_type) == 3U;
+    programs_state_activity =
+        activity->activity_type == LX_PROGRAMS_ACCOUNT ||
+        activity->activity_type == LX_PROGRAMS_WIND_DOWN;
+    if (programs_state_activity &&
+        (activity->protocol_version != LXP_PROTOCOL_VERSION_OCCUPANCY ||
+         kernel->module_runtime[LXP_MODULE_PROGRAMS] == NULL ||
+         ((const lx_programs_transfer_runtime *)
+              kernel->module_runtime[LXP_MODULE_PROGRAMS])->state_feed == NULL ||
+         kernel->observe_commit == NULL))
+        return LXP_ERR_MODULE_DISABLED;
     if (programs_call) {
         programs_runtime = (const lx_programs_transfer_runtime *)
             kernel->module_runtime[LXP_MODULE_PROGRAMS];
@@ -1119,6 +1357,8 @@ lxp_result lxp_kernel_execute_activity(lxp_kernel *kernel,
                 &(lxp_effect_buffer){ { { 0 } }, 0U },
             fee_policy.fee_charged, execution->batch_id, registration->module_id,
             registration->abi_version, execution->parameter_version);
+    if (status == LXP_OK)
+        receipt->timestamp = execution->batch_timestamp_ms;
     if (status == LXP_OK && programs_call &&
         program_outcome->terminal_kind == LXP_PROGRAM_TERMINAL_SUCCESS)
         (void)memcpy(receipt->transfer_set_root,
@@ -1174,6 +1414,19 @@ lxp_result lxp_kernel_execute_activity(lxp_kernel *kernel,
     if (fee_transaction_open)
         kernel->fee_transaction.commit(kernel, fee_transaction);
     (void)memcpy(kernel->current_state_root, receipt->resulting_state_root, 32U);
+    if (kernel->observe_commit != NULL) {
+        status = kernel->observe_commit(kernel->commit_observer_context,
+                                        kernel, activity, receipt);
+        if (status != LXP_OK) {
+            kernel->publication_poisoned = true;
+            kernel->poisoned_sequence = receipt->global_sequence;
+            (void)memcpy(kernel->poisoned_activity_id,
+                         receipt->activity_id, 32U);
+            (void)memcpy(kernel->poisoned_state_root,
+                         receipt->resulting_state_root, 32U);
+            return LXP_FATAL_INVARIANT;
+        }
+    }
     if (programs_call && fee_policy.apply_module_effects &&
         program_outcome != NULL &&
         program_outcome->terminal_kind == LXP_PROGRAM_TERMINAL_SUCCESS &&

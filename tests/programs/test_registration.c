@@ -36,14 +36,16 @@ static int registration_contract(void)
         next->abi_version != LX_PROGRAMS_ACCOUNT_ABI_VERSION ||
         strcmp(next->name, "programs") != 0 ||
         next->activity_type_count !=
-            sizeof(expected_types) / sizeof(expected_types[0]) + 1U)
+            sizeof(expected_types) / sizeof(expected_types[0]) + 2U)
         return 1;
     for (i = 0U; i < current->activity_type_count; ++i)
         if (current->activity_types[i] != expected_types[i] ||
             next->activity_types[i] != expected_types[i])
             return 1;
-    if (next->activity_types[next->activity_type_count - 1U] !=
-        LX_PROGRAMS_ACCOUNT)
+    if (next->activity_types[next->activity_type_count - 2U] !=
+            LX_PROGRAMS_ACCOUNT ||
+        next->activity_types[next->activity_type_count - 1U] !=
+            LX_PROGRAMS_WIND_DOWN)
         return 1;
     if (lxp_state_store_init(&store, 0U) != LXP_OK ||
         lxp_kernel_create(&kernel, &store, &journal, &parameters, 0U) !=
@@ -70,6 +72,9 @@ static int registration_contract(void)
                                      &resolved) != LXP_OK ||
         resolved->iface != next ||
         lxp_kernel_module_for_activity(&kernel, LX_PROGRAMS_ACCOUNT, 1U,
+                                       &resolved) != LXP_OK ||
+        resolved->iface != next ||
+        lxp_kernel_module_for_activity(&kernel, LX_PROGRAMS_WIND_DOWN, 1U,
                                        &resolved) != LXP_OK ||
         resolved->iface != next ||
         lxp_module_version_for_epoch(&kernel, LXP_MODULE_PROGRAMS, 1U,

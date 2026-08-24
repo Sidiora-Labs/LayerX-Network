@@ -2,6 +2,11 @@
 #define LAYERX_LXP_DAEMON_H
 
 #include "layerx/lxp_result.h"
+#include "layerx/lxp_batch.h"
+#include "layerx/lxp_history.h"
+#include "layerx/lxp_kernel.h"
+#include "layerx/lxp_merkle.h"
+#include "layerx/programs.h"
 
 #include <pthread.h>
 #include <stdbool.h>
@@ -11,8 +16,118 @@
 enum {
     LXP_DAEMON_MAX_WORKERS = 16,
     LXP_DAEMON_QUEUE_CAPACITY = 4096,
-    LXP_DAEMON_ACTIVITY_BYTES = 256
+    LXP_DAEMON_ACTIVITY_BYTES = 256,
+    LXP_DAEMON_AUTHORITY_CACHE_RECEIPTS = 256,
+    LXP_DAEMON_BEARER_MAX_BYTES = 128,
+    LXP_DAEMON_PROTOCOL_MAX_CONNECTIONS = 4,
+    LXP_DAEMON_PROTOCOL_SCRATCH_MIN_BYTES = 48 * 1024 * 1024
 };
+
+typedef struct lxp_daemon_receipt_authority_entry {
+    uint8_t receipt_digest[32];
+    uint8_t batch_id[32];
+    uint64_t global_sequence;
+    uint64_t record_offset;
+    uint32_t body_length;
+} lxp_daemon_receipt_authority_entry;
+
+typedef struct lxp_daemon_receipt_authority_store {
+    lxp_log *log;
+    lxp_sequencer_authorization authorization;
+    lxp_daemon_receipt_authority_entry
+        cache[LXP_DAEMON_AUTHORITY_CACHE_RECEIPTS];
+    size_t cache_count;
+    size_t cache_next;
+    uint64_t record_count;
+    uint64_t last_global_sequence;
+    uint64_t last_batch_number;
+    uint64_t replay_offset;
+} lxp_daemon_receipt_authority_store;
+
+typedef struct lxp_daemon_receipt_evidence {
+    lxp_byte_span canonical_receipt;
+    lxp_byte_span canonical_header;
+    uint8_t header_signature[64];
+    lxp_merkle_proof receipt_proof;
+    uint8_t receipt_digest[32];
+    uint8_t batch_id[32];
+    uint64_t global_sequence;
+} lxp_daemon_receipt_evidence;
+
+typedef struct lxp_daemon_protocol_owner {
+    lxp_kernel *kernel;
+    lx_programs_transfer_runtime *programs_runtime;
+    lxp_history *history;
+    lxp_verified_receipt_index *verified_receipts;
+    lxp_daemon_receipt_authority_store *receipt_authority;
+    lxp_arena *scratch;
+    lx_programs_state_feed_store feed_store;
+    uint8_t bearer_token[LXP_DAEMON_BEARER_MAX_BYTES];
+    size_t bearer_token_length;
+    pthread_mutex_t mutex;
+    pthread_cond_t listener_changed;
+    pthread_t listener_thread;
+    int listener_connections[LXP_DAEMON_PROTOCOL_MAX_CONNECTIONS];
+    size_t listener_active_connections;
+    int listener_descriptor;
+    uint16_t listener_port;
+    lxp_result listener_failure;
+    bool listener_started;
+    bool listener_stopping;
+    bool attached;
+} lxp_daemon_protocol_owner;
+
+typedef struct lxp_daemon_protocol_response {
+    uint16_t status;
+    lxp_byte_span body;
+} lxp_daemon_protocol_response;
+
+typedef lxp_result (*lxp_daemon_protocol_replay_fn)(
+    void *context, lxp_daemon_protocol_owner *owner);
+
+lxp_result lxp_daemon_receipt_authority_open(
+    lxp_daemon_receipt_authority_store *store, lxp_log *log,
+    const lxp_sequencer_authorization *authorization);
+lxp_result lxp_daemon_receipt_authority_append(
+    lxp_daemon_receipt_authority_store *store,
+    const uint8_t *canonical_receipt, size_t receipt_length,
+    const uint8_t *canonical_header, size_t header_length,
+    const uint8_t header_signature[64],
+    const lxp_merkle_proof *receipt_proof, lxp_arena *arena);
+lxp_result lxp_daemon_receipt_authority_lookup(
+    const lxp_daemon_receipt_authority_store *store,
+    const uint8_t receipt_digest[32], lxp_arena *arena,
+    lxp_daemon_receipt_evidence *evidence);
+lxp_result lxp_daemon_receipt_authority_scan(
+    const lxp_daemon_receipt_authority_store *store, uint64_t *record_offset,
+    lxp_arena *arena, lxp_daemon_receipt_evidence *evidence,
+    bool *present);
+lxp_result lxp_daemon_protocol_owner_attach(
+    lxp_daemon_protocol_owner *owner, lxp_kernel *kernel,
+    lx_programs_transfer_runtime *programs_runtime, lxp_log *feed_log,
+    lxp_log *canonical_log, lxp_history *history,
+    lxp_verified_receipt_index *verified_receipts,
+    lxp_daemon_receipt_authority_store *receipt_authority,
+    lxp_arena *scratch, lxp_daemon_protocol_replay_fn replay,
+    void *replay_context, const uint8_t *bearer_token,
+    size_t bearer_token_length);
+lxp_result lxp_daemon_protocol_owner_detach(
+    lxp_daemon_protocol_owner *owner);
+lxp_result lxp_daemon_protocol_publish_receipt(
+    lxp_daemon_protocol_owner *owner,
+    const uint8_t *canonical_receipt, size_t receipt_length,
+    const uint8_t *canonical_header, size_t header_length,
+    const uint8_t header_signature[64],
+    const lxp_merkle_proof *receipt_proof);
+lxp_result lxp_daemon_protocol_route(
+    lxp_daemon_protocol_owner *owner, const uint8_t *bearer_token,
+    size_t bearer_token_length, const char *method, const char *path,
+    lxp_arena *response_arena, lxp_daemon_protocol_response *response);
+lxp_result lxp_daemon_protocol_listener_start(
+    lxp_daemon_protocol_owner *owner, const char *loopback_address,
+    uint16_t port);
+lxp_result lxp_daemon_protocol_listener_stop(
+    lxp_daemon_protocol_owner *owner);
 
 typedef enum lxp_daemon_role_kind {
     LXP_DAEMON_SEQUENCER = 1,
@@ -44,6 +159,7 @@ typedef struct lxp_daemon {
     lxp_daemon_configuration config;
     lxp_daemon_apply_fn apply;
     void *apply_context;
+    lxp_daemon_protocol_owner *protocol_owner;
     pthread_t executor_thread;
     pthread_t workers[LXP_DAEMON_MAX_WORKERS * 4U];
     size_t worker_count;
@@ -70,9 +186,25 @@ lxp_result lxp_daemon_role(
 lxp_result lxp_daemon_start(
     lxp_daemon *daemon, const lxp_daemon_configuration *config,
     lxp_daemon_apply_fn apply, void *apply_context);
+lxp_result lxp_daemon_start_protocol(
+    lxp_daemon *daemon, const lxp_daemon_configuration *config,
+    lxp_daemon_apply_fn apply, void *apply_context,
+    lxp_daemon_protocol_owner *protocol_owner,
+    const char *loopback_address, uint16_t port);
 lxp_result lxp_daemon_submit(
     lxp_daemon *daemon, const uint8_t *activity, size_t activity_length);
 lxp_result lxp_daemon_shutdown(lxp_daemon *daemon);
 lxp_result lxp_daemon_main(int argc, char **argv);
+lxp_result lxp_daemon_serve(const char *configuration_path);
+lxp_result lxp_daemon_authority_replica_serve(
+    const char *configuration_path);
+lxp_result lxp_daemon_authority_replica_publish(
+    const char *loopback_address, uint16_t port,
+    const uint8_t *bearer_token, size_t bearer_token_length,
+    const uint8_t expected_replica_id[32],
+    const uint8_t *canonical_receipt, size_t receipt_length,
+    const uint8_t *canonical_header, size_t header_length,
+    const uint8_t header_signature[64],
+    const lxp_merkle_proof *receipt_proof);
 
 #endif

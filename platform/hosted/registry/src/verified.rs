@@ -91,8 +91,7 @@ impl VerifiedSourceStore {
         for path in paths {
             let bytes = fs::read(&path)
                 .map_err(|error| format!("could not read {}: {error}", path.display()))?;
-            let record =
-                decode(&bytes).ok_or_else(|| format!("{} is corrupt", path.display()))?;
+            let record = decode(&bytes).ok_or_else(|| format!("{} is corrupt", path.display()))?;
             records.push(record);
         }
         Ok(records)

@@ -118,9 +118,10 @@ impl SourceMirror {
         if !archive_path.exists() {
             return Err(MirrorRefusal::NotMirrored);
         }
-        let canonical_archive = fs::read(&archive_path).map_err(|error| MirrorRefusal::Unreadable {
-            reason: error.to_string(),
-        })?;
+        let canonical_archive =
+            fs::read(&archive_path).map_err(|error| MirrorRefusal::Unreadable {
+                reason: error.to_string(),
+            })?;
         let mirrored: [u8; 32] = Sha256::digest(&canonical_archive).into();
         if mirrored != digest {
             return Err(MirrorRefusal::DigestMismatch { mirrored });

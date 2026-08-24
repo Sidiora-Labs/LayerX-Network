@@ -25,6 +25,7 @@ layerx-client = { path = "../agent/crates/layerx-client" }
 layerx-sdk = { path = "../agent/crates/layerx-sdk" }
 layerx-mirror = { path = "../interop/crates/layerx-mirror" }
 layerx-programs = { package = "layerx-programs-registry", path = "../programs/crates/layerx-programs-registry" }
+layerx-programs-protocol-adapter = { path = "../programs/crates/layerx-programs-protocol-adapter" }
 layerx-agentd = { path = "../agent/crates/layerx-agentd" }
 layerx-paxeer-client = { path = "crates/layerx-paxeer-client" }
 layerx-intents = { path = "crates/layerx-intents" }

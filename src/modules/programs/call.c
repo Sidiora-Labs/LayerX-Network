@@ -343,6 +343,7 @@ static lxp_result catalog_count_visit(const uint8_t *key, size_t key_length,
                                       void *user)
 {
     lxp_programs_call_activity *value = user;
+    lxp_result lifecycle;
     if (value == NULL || key == NULL || record == NULL ||
         key_length != PROGRAM_KEY_BYTES || record_length != PROGRAM_RECORD_BYTES ||
         memcmp(key, "program\0", 8U) != 0 || lxp_ct_is_zero(key + 8U, 32U) ||
@@ -352,6 +353,9 @@ static lxp_result catalog_count_visit(const uint8_t *key, size_t key_length,
          value->ctx->protocol_version != LXP_PROTOCOL_VERSION_OCCUPANCY) ||
         lxp_ct_is_zero(record + 33U, 32U) || value->catalog_count == UINT32_MAX)
         return LXP_FATAL_INVARIANT;
+    lifecycle = lxp_programs_program_active(value->ctx, key + 8U);
+    if (lifecycle == LXP_ERR_PROGRAM_REFUSED) return LXP_OK;
+    if (lifecycle != LXP_OK) return lifecycle;
     ++value->catalog_count;
     return LXP_OK;
 }
@@ -369,6 +373,9 @@ static lxp_result catalog_fill_visit(const uint8_t *key, size_t key_length,
         key_length != PROGRAM_KEY_BYTES || record_length != PROGRAM_RECORD_BYTES ||
         value->catalog == NULL || value->catalog_count == 0U)
         return LXP_FATAL_INVARIANT;
+    status = lxp_programs_program_active(value->ctx, key + 8U);
+    if (status == LXP_ERR_PROGRAM_REFUSED) return LXP_OK;
+    if (status != LXP_OK) return status;
     if (value->catalog_cursor >= value->catalog_count)
         return LXP_FATAL_INVARIANT;
     entry = &value->catalog[value->catalog_cursor];
@@ -1528,6 +1535,8 @@ lxp_result lxp_programs_call_validate(
     if (status != LXP_OK) return status;
     if (record_length != PROGRAM_RECORD_BYTES) return LXP_FATAL_INVARIANT;
     if (read_u16(record + 65U) != value->abi_version) return LXP_ERR_VERSION_UNSUPPORTED;
+    status = lxp_programs_program_active(ctx, value->program_id);
+    if (status != LXP_OK) return status;
     (void)memcpy(value->code_hash, record + 33U, sizeof(value->code_hash));
     status = lxp_programs_artifact_open(ctx, value->program_id, value->code_hash,
                                         &wasm, &wasm_length);

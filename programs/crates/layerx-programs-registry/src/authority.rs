@@ -170,8 +170,9 @@ impl DeploymentRecord {
         let new_code_hash = take_array::<32>(bytes, &mut cursor)?;
         let sequence = u64::from_be_bytes(take_array::<8>(bytes, &mut cursor)?);
         let observed_at = u64::from_be_bytes(take_array::<8>(bytes, &mut cursor)?);
-        let module_bytes = usize::try_from(u32::from_be_bytes(take_array::<4>(bytes, &mut cursor)?))
-            .map_err(|_| RegistryError::CorruptRecord)?;
+        let module_bytes =
+            usize::try_from(u32::from_be_bytes(take_array::<4>(bytes, &mut cursor)?))
+                .map_err(|_| RegistryError::CorruptRecord)?;
         if module_bytes > MAX_MODULE_BYTES {
             return Err(RegistryError::CorruptRecord);
         }
@@ -412,8 +413,12 @@ fn take_slice<'bytes>(
     cursor: &mut usize,
     length: usize,
 ) -> Result<&'bytes [u8], RegistryError> {
-    let end = cursor.checked_add(length).ok_or(RegistryError::CorruptRecord)?;
-    let slice = bytes.get(*cursor..end).ok_or(RegistryError::CorruptRecord)?;
+    let end = cursor
+        .checked_add(length)
+        .ok_or(RegistryError::CorruptRecord)?;
+    let slice = bytes
+        .get(*cursor..end)
+        .ok_or(RegistryError::CorruptRecord)?;
     *cursor = end;
     Ok(slice)
 }

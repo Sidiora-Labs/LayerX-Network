@@ -26,11 +26,12 @@ const MAX_TRANSFER_LEGS: usize = 256;
 
 /// Exact, owner-frame authority for one program-account debit.
 ///
-/// The constructor is crate-private and recomputes the derived source account,
-/// so a guest cannot fabricate this token by naming an account. The token binds
-/// the owner program, exact seed, host-assigned staging frame and every monetary
-/// field of the leg. It grants no balance access; it is consumed only by the
-/// existing atomic kernel transfer-set boundary.
+/// Construction always recomputes the derived source account. All issuance
+/// remains crate-private; wind-down fixes the staging frame to the owner root
+/// and still grants no balance access. The
+/// token binds the owner program, exact seed, host-assigned staging frame and
+/// every monetary field of the leg, and is consumed only by the existing
+/// capability checks and atomic kernel transfer-set boundary.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProgramAuthority {
     owner_program: ProgramId,
@@ -43,6 +44,34 @@ pub struct ProgramAuthority {
 }
 
 impl ProgramAuthority {
+    /// Issues the exact owner-root authority witness used by an
+    /// exit-only wind-down call. This does not settle or mutate a balance: the
+    /// existing capability checks, owner-frame rule and atomic kernel transfer
+    /// primitive still consume and enforce the witness.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a source which is not derived by `owner_program`, an invalid
+    /// monetary field or an over-bound seed.
+    pub(crate) fn for_owner_frame(
+        owner_program: ProgramId,
+        seed: &[u8],
+        source_account: [u8; 32],
+        asset: [u8; 32],
+        to: [u8; 32],
+        amount: u128,
+    ) -> Result<Self, TransferLawError> {
+        Self::issue(
+            owner_program,
+            seed,
+            source_account,
+            CallFrameId::root(),
+            asset,
+            to,
+            amount,
+        )
+    }
+
     pub(crate) fn issue(
         owner_program: ProgramId,
         seed: &[u8],

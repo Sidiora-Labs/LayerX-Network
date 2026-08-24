@@ -885,9 +885,14 @@ static lxp_result emit_transfer_set(lxp_module_ctx *ctx,
     }
     emitted = *set;
     emitted.context.origin_module_id = ctx->module_id;
+    for (i = 0U; i < emitted.context.source_authority_count; ++i)
+        if (emitted.context.source_authorities[i].debit_authority_kind ==
+                LXP_AUTH_PROGRAM_SPEND &&
+            ctx->module_id != LXP_MODULE_PROGRAMS)
+            return LXP_ERR_UNAUTHORIZED_DEBIT;
     {
-        lxp_result status = ctx->kernel->apply_transfer_set(ctx->kernel,
-                                                            &emitted, receipt);
+        lxp_result status = lxp_kernel_apply_transfer_set(ctx->kernel,
+                                                          &emitted, receipt);
         if (status != LXP_OK) {
             restore_transfer_snapshots(ctx);
             return status;

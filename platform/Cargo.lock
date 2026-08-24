@@ -1220,6 +1220,8 @@ dependencies = [
  "layerx-client",
  "layerx-crypto",
  "layerx-proof",
+ "layerx-programs-protocol-adapter",
+ "layerx-programs-registry",
  "layerx-types",
  "layerx-wire",
  "sha2",
@@ -1383,9 +1385,11 @@ version = "0.1.0"
 name = "layerx-platform-registry"
 version = "0.1.0"
 dependencies = [
+ "layerx-programs-protocol-adapter",
  "layerx-programs-registry",
  "serde_json",
  "sha2",
+ "ureq",
 ]
 
 [[package]]
@@ -1450,6 +1454,13 @@ dependencies = [
  "layerx-sdk",
  "layerx-types",
  "sha2",
+]
+
+[[package]]
+name = "layerx-programs-protocol-adapter"
+version = "0.1.0"
+dependencies = [
+ "layerx-programs-registry",
 ]
 
 [[package]]

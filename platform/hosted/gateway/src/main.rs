@@ -38,6 +38,8 @@ struct Config {
     authority_token: Zeroizing<String>,
     identity: Endpoint,
     identity_token: Zeroizing<String>,
+    registry: Endpoint,
+    registry_token: Zeroizing<String>,
     store: RedisStore,
     trusted_sequencer_key: [u8; 32],
     key_provisioning_key: Zeroizing<[u8; 32]>,
@@ -327,6 +329,11 @@ fn config() -> Result<Config, String> {
                 .map_err(|_| "gateway identity URL is required")?,
         )?,
         identity_token: read_secret("LAYERX_GATEWAY_IDENTITY_TOKEN_FILE")?,
+        registry: Endpoint::parse(
+            &env::var("LAYERX_GATEWAY_PROGRAM_REGISTRY_URL")
+                .map_err(|_| "gateway program registry URL is required")?,
+        )?,
+        registry_token: read_secret("LAYERX_GATEWAY_PROGRAM_REGISTRY_TOKEN_FILE")?,
         store: RedisStore::new(
             RedisEndpoint::parse(
                 &env::var("LAYERX_GATEWAY_REDIS_URL")
@@ -515,6 +522,9 @@ fn permits(record: &KeyRecord, route: &ProductionRoute<'_>) -> bool {
         ProductionRoute::Activity => "activity:write",
         ProductionRoute::State => "state:read",
         ProductionRoute::Receipt(_) => "receipt:read",
+        ProductionRoute::ProgramRegistry(_) | ProductionRoute::ProgramRegistrySource(_) => {
+            "state:read"
+        }
     };
     record.scopes.split(',').any(|scope| scope == required)
 }
@@ -1130,6 +1140,29 @@ fn read_route(
                 }),
             )
         }
+        ProductionRoute::ProgramRegistry(program) => {
+            let upstream = match config.client.request(
+                &config.registry,
+                "GET",
+                &format!("/v1/programs/registry/{program}"),
+                config.registry_token.as_str(),
+                None,
+                "application/json",
+                &[],
+            ) {
+                Ok(value) => value,
+                Err(_) => return response(503, "program_registry_unavailable", Some(5)),
+            };
+            if upstream.content_type != "application/json" {
+                return response(503, "program_registry_invalid", Some(5));
+            }
+            OutgoingResponse {
+                status: upstream.status,
+                body: upstream.body,
+                retry_after: None,
+            }
+        }
+        ProductionRoute::ProgramRegistrySource(_) => response(405, "method_not_allowed", None),
         ProductionRoute::Activity => response(404, "not_found", None),
     }
 }
@@ -1162,6 +1195,27 @@ fn dependency_ready(
         && (!require_routes || (readiness.synchronous_receipts && readiness.state_snapshot))
 }
 
+fn program_registry_ready(config: &Config) -> bool {
+    let Ok(upstream) = config.client.request(
+        &config.registry,
+        "GET",
+        "/healthz",
+        config.registry_token.as_str(),
+        None,
+        "application/json",
+        &[],
+    ) else {
+        return false;
+    };
+    let Ok(status) = serde_json::from_slice::<serde_json::Value>(&upstream.body) else {
+        return false;
+    };
+    upstream.status == 200
+        && upstream.content_type == "application/json"
+        && status["status"].as_str() == Some("ready")
+        && status["service"].as_str() == Some("program-registry")
+}
+
 fn route(config: &Config, request: &IncomingRequest) -> OutgoingResponse {
     if request.headers.contains_key("x-layerx-principal")
         || request.headers.contains_key("x-layerx-api-key")
@@ -1192,6 +1246,7 @@ fn route(config: &Config, request: &IncomingRequest) -> OutgoingResponse {
             config.authority_token.as_str(),
             false,
         );
+        let registry = program_registry_ready(config);
         let ready = false;
         return json_response(
             if ready { 200 } else { 503 },
@@ -1205,6 +1260,7 @@ fn route(config: &Config, request: &IncomingRequest) -> OutgoingResponse {
                     "durable_store": if store { "ready" } else { "unavailable" },
                     "core_agent_boundary": if component { "ready" } else { "unavailable" },
                     "independent_receipt_authority": if authority { "ready" } else { "unavailable" },
+                    "program_registry": if registry { "ready" } else { "unavailable" },
                     "principal_state_boundary": "unavailable"
                 }
             }),
@@ -1256,6 +1312,28 @@ fn route(config: &Config, request: &IncomingRequest) -> OutgoingResponse {
     let trace_id = trace(request);
     match parsed {
         ProductionRoute::Activity => activity(config, request, &record, &trace_id),
+        ProductionRoute::ProgramRegistrySource(program) => {
+            let upstream = match config.client.request(
+                &config.registry,
+                "POST",
+                &format!("/v1/programs/registry/{program}/source"),
+                config.registry_token.as_str(),
+                request.headers.get("idempotency-key").map(String::as_str),
+                "application/json",
+                &request.body,
+            ) {
+                Ok(value) => value,
+                Err(_) => return response(503, "program_registry_unavailable", Some(5)),
+            };
+            if upstream.content_type != "application/json" {
+                return response(503, "program_registry_invalid", Some(5));
+            }
+            OutgoingResponse {
+                status: upstream.status,
+                body: upstream.body,
+                retry_after: None,
+            }
+        }
         read => read_route(config, &record, read, &trace_id),
     }
 }

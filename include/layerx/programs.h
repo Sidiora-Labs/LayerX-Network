@@ -9,6 +9,81 @@
 #include <stdint.h>
 
 typedef struct lxp_kernel lxp_kernel;
+typedef struct lxp_log lxp_log;
+typedef struct lxp_history lxp_history;
+
+/* Node-owned durable account-state feed. `append` must commit the notice and
+ * its canonical receipt reference before returning. The node binds the feed
+ * to the same kernel instance that commits activities; a refusal halts
+ * publication and restart recovery resumes from canonical history. */
+typedef lxp_result (*lx_programs_state_feed_append_fn)(
+    void *context, uint64_t global_sequence, uint32_t ordinal,
+    const uint8_t program_id[32], uint32_t activity_type,
+    uint16_t event_type, const lxp_receipt *receipt);
+typedef lxp_result (*lx_programs_state_feed_begin_fn)(
+    void *context, const lxp_activity *activity, const lxp_receipt *receipt);
+typedef lxp_result (*lx_programs_state_feed_advance_fn)(
+    void *context, const lxp_activity *activity, const lxp_receipt *receipt);
+typedef lxp_result (*lx_programs_state_feed_lock_fn)(void *context);
+typedef lxp_result (*lx_programs_state_feed_unlock_fn)(void *context);
+
+typedef struct lx_programs_state_feed {
+    lx_programs_state_feed_begin_fn begin;
+    lx_programs_state_feed_append_fn append;
+    lx_programs_state_feed_advance_fn advance;
+    lx_programs_state_feed_lock_fn lock;
+    lx_programs_state_feed_unlock_fn unlock;
+    void *context;
+} lx_programs_state_feed;
+
+enum {
+    LX_PROGRAMS_STATE_FEED_MAX_NOTICES = 4096,
+    LX_PROGRAMS_STATE_FEED_CACHE_NOTICES = 256
+};
+typedef struct lx_programs_state_notice {
+    uint64_t global_sequence;
+    uint32_t ordinal;
+    uint8_t program_id[32];
+    uint32_t activity_type;
+    uint16_t event_type;
+    uint8_t receipt_digest[32];
+} lx_programs_state_notice;
+
+typedef struct lx_programs_state_feed_store {
+    lxp_log *log;
+    lxp_log *canonical_log;
+    lxp_history *history;
+    lxp_arena *scratch;
+    pthread_mutex_t *coordination_mutex;
+    lx_programs_state_notice notices[LX_PROGRAMS_STATE_FEED_CACHE_NOTICES];
+    size_t notice_count;
+    size_t notice_next;
+    uint64_t notice_record_count;
+    uint64_t open_notice_sequence;
+    uint8_t open_notice_receipt_digest[32];
+    uint32_t next_notice_ordinal;
+    bool notice_group_open;
+    uint64_t scanned_through_sequence;
+    uint8_t head_receipt_digest[32];
+    uint8_t head_state_root[32];
+    uint64_t head_timestamp;
+    uint64_t baseline_next_sequence;
+    uint8_t baseline_state_root[32];
+    bool baseline_present;
+    lx_programs_state_feed feed;
+} lx_programs_state_feed_store;
+
+lxp_result lxp_programs_state_feed_store_open(
+    lx_programs_state_feed_store *store, lxp_log *log,
+    lxp_log *canonical_log, lxp_history *history, lxp_arena *scratch,
+    pthread_mutex_t *coordination_mutex,
+    uint64_t baseline_next_sequence, const uint8_t baseline_state_root[32]);
+lxp_result lxp_programs_state_feed_store_recover(
+    lx_programs_state_feed_store *store, lxp_kernel *kernel);
+lxp_result lxp_programs_state_feed_store_page(
+    const lx_programs_state_feed_store *store, uint64_t after_sequence,
+    size_t maximum, lx_programs_state_notice *notices, size_t *notice_count,
+    uint64_t *complete_through, uint64_t *scanned_through);
 
 enum {
     LX_PROGRAMS_DEPLOY = 0x00090001,
@@ -17,6 +92,7 @@ enum {
     LX_PROGRAMS_REGISTRY = 0x00090004,
     LX_PROGRAMS_TRANSFER = 0x00090005,
     LX_PROGRAMS_ACCOUNT = 0x00090006,
+    LX_PROGRAMS_WIND_DOWN = 0x00090007,
     LX_PROGRAMS_ABI_VERSION = 1,
     LX_PROGRAMS_ACCOUNT_ABI_VERSION = 2,
     LX_PROGRAMS_EVENT_DEPLOYED = 1,
@@ -26,7 +102,11 @@ enum {
     LX_PROGRAMS_EVENT_TRANSFERRED = 5,
     LX_PROGRAMS_EVENT_GUEST_ENVELOPE = 6,
     LX_PROGRAMS_EVENT_CALL_OUTCOME = 7,
-    LX_PROGRAMS_EVENT_ACCOUNT_REGISTERED = 8
+    LX_PROGRAMS_EVENT_ACCOUNT_REGISTERED = 8,
+    LX_PROGRAMS_EVENT_EXIT_ROUTE = 9,
+    LX_PROGRAMS_EVENT_DEPRECATED = 10,
+    LX_PROGRAMS_EVENT_TOMBSTONED = 11,
+    LX_PROGRAMS_EVENT_VALUE_EXITED = 12
 };
 
 enum {
@@ -35,15 +115,97 @@ enum {
 };
 
 typedef struct lx_programs_account_binding {
+    uint8_t record_version;
     uint8_t program_id[32];
     uint8_t account_id[32];
     uint8_t asset_id[32];
     uint16_t seed_length;
     uint8_t seed[LX_PROGRAMS_ACCOUNT_MAX_SEED_BYTES];
+    uint64_t registered_sequence;
+    uint8_t registration_event_digest[32];
 } lx_programs_account_binding;
 
 typedef lxp_result (*lx_programs_account_visit_fn)(
     const lx_programs_account_binding *binding, void *user);
+
+typedef struct lx_programs_value_account_view {
+    lx_programs_account_binding binding;
+    lx_account account;
+    lxp_u128 balance;
+    bool frozen;
+    uint64_t observed_sequence;
+    uint64_t observed_at;
+    uint8_t receipt_digest[32];
+    uint8_t account_root[32];
+    uint8_t universal_root[32];
+    uint8_t programs_root[32];
+    uint8_t state_root[32];
+    lxp_state_proof account_proof;
+    lxp_state_proof account_tree_proof;
+    lxp_state_proof universal_root_proof;
+    lxp_state_proof binding_proof;
+    lxp_state_proof programs_root_proof;
+} lx_programs_value_account_view;
+
+typedef lxp_result (*lx_programs_value_account_visit_fn)(
+    const lx_programs_value_account_view *account, void *user);
+
+typedef struct lx_programs_account_state_head {
+    uint64_t observed_sequence;
+    uint64_t observed_at;
+    uint8_t receipt_digest[32];
+    uint8_t account_root[32];
+    uint8_t universal_root[32];
+    uint8_t programs_root[32];
+    uint8_t state_root[32];
+    lxp_state_proof account_tree_proof;
+    lxp_state_proof universal_root_proof;
+    lxp_state_proof programs_root_proof;
+} lx_programs_account_state_head;
+
+typedef enum lx_programs_lifecycle_status {
+    LX_PROGRAMS_LIFECYCLE_ACTIVE = 1,
+    LX_PROGRAMS_LIFECYCLE_DEPRECATED = 2,
+    LX_PROGRAMS_LIFECYCLE_TOMBSTONED = 3
+} lx_programs_lifecycle_status;
+
+typedef struct lx_programs_wind_down_view {
+    uint8_t program_id[32];
+    lx_programs_lifecycle_status status;
+    uint8_t exit_program[32];
+    uint64_t deadline;
+    uint64_t effective_sequence;
+    uint16_t value_account_count;
+    uint16_t live_value_account_count;
+} lx_programs_wind_down_view;
+
+typedef struct lx_programs_exit_route_view {
+    uint8_t program_id[32];
+    uint8_t account_id[32];
+    uint8_t asset_id[32];
+    uint8_t destination[32];
+    uint16_t seed_length;
+    uint8_t seed[LX_PROGRAMS_ACCOUNT_MAX_SEED_BYTES];
+} lx_programs_exit_route_view;
+
+typedef lxp_result (*lx_programs_exit_route_visit_fn)(
+    const lx_programs_exit_route_view *route, void *user);
+
+typedef struct lx_programs_wind_down_history_view {
+    uint8_t program_id[32];
+    lx_programs_lifecycle_status prior;
+    lx_programs_lifecycle_status current;
+    uint8_t authority[32];
+    uint8_t exit_program[32];
+    uint64_t deadline;
+    uint64_t effective_sequence;
+    uint16_t value_account_count;
+    uint16_t live_value_account_count;
+    uint8_t account_root[32];
+} lx_programs_wind_down_history_view;
+
+typedef lxp_result (*lx_programs_wind_down_history_visit_fn)(
+    const lx_programs_wind_down_history_view *history, void *user);
 
 typedef struct lx_programs_fee_schedule {
     uint32_t version;
@@ -281,9 +443,50 @@ lxp_result lxp_programs_account_lookup_id(
 lxp_result lxp_programs_account_iter(
     lxp_module_ctx *ctx, const uint8_t program_id[32],
     lx_programs_account_visit_fn visit, void *user);
+lxp_result lxp_programs_value_account_read(
+    lxp_module_ctx *ctx, const uint8_t account_id[32],
+    const uint8_t receipt_digest[32],
+    lx_programs_value_account_view *view);
+lxp_result lxp_programs_value_account_iter(
+    lxp_module_ctx *ctx, const uint8_t program_id[32],
+    const uint8_t receipt_digest[32],
+    lx_programs_value_account_visit_fn visit, void *user);
+lxp_result lxp_programs_account_state_head_read(
+    lxp_module_ctx *ctx, const uint8_t program_id[32],
+    const uint8_t receipt_digest[32], lx_programs_account_state_head *head);
+lxp_result lxp_programs_state_record_encode(
+    lxp_module_ctx *ctx, const uint8_t program_id[32],
+    const uint8_t receipt_digest[32], lxp_arena *arena,
+    lxp_byte_span *encoded);
 lxp_result lxp_programs_account_owner_bind(
     lxp_module_ctx *ctx, const uint8_t program_id[32],
     const uint8_t owner[32]);
+lxp_result lxp_programs_program_abi(
+    lxp_module_ctx *ctx, const uint8_t program_id[32], uint16_t *abi_version);
+lxp_result lxp_programs_program_active(
+    lxp_module_ctx *ctx, const uint8_t program_id[32]);
+lxp_result lxp_programs_wind_down_read(
+    lxp_module_ctx *ctx, const uint8_t program_id[32],
+    lx_programs_wind_down_view *view);
+lxp_result lxp_programs_exit_route_read(
+    lxp_module_ctx *ctx, const uint8_t program_id[32],
+    const uint8_t account_id[32], lx_programs_exit_route_view *route);
+lxp_result lxp_programs_exit_route_iter(
+    lxp_module_ctx *ctx, const uint8_t program_id[32],
+    lx_programs_exit_route_visit_fn visit, void *user);
+lxp_result lxp_programs_wind_down_history_iter(
+    lxp_module_ctx *ctx, const uint8_t program_id[32],
+    lx_programs_wind_down_history_visit_fn visit, void *user);
+lxp_result lxp_programs_wind_down_decode(
+    lxp_module_ctx *ctx, const uint8_t *payload, size_t payload_length,
+    void **decoded);
+lxp_result lxp_programs_wind_down_validate(
+    lxp_module_ctx *ctx, const lxp_activity *activity,
+    const lxp_authority_resolved *authority, const void *decoded);
+lxp_result lxp_programs_wind_down_execute(
+    lxp_module_ctx *ctx, const lxp_activity *activity,
+    const lxp_authority_resolved *authority, const void *decoded,
+    lxp_effect_buffer *effects);
 lxp_result lxp_programs_account_decode(lxp_module_ctx *ctx,
                                        const uint8_t *payload,
                                        size_t payload_length,
@@ -308,6 +511,7 @@ typedef struct lx_programs_transfer_runtime {
     uint8_t occupancy_asset_id[32];
     lx_programs_occupancy_parameters_fn resolve_occupancy_parameters;
     void *occupancy_parameter_context;
+    const lx_programs_state_feed *state_feed;
 } lx_programs_transfer_runtime;
 
 enum { LXP_PROGRAMS_OCCUPANCY_MAX_PAYERS = LXP_MAX_TRANSFER_SET_LEGS };
@@ -363,6 +567,11 @@ lxp_result lxp_programs_replay_engine_bind(lxp_replay_engine *engine,
                                            lxp_kernel *kernel);
 
 lxp_result lxp_programs_bind_fee_transaction(lxp_kernel *kernel);
+lxp_result lxp_programs_bind_state_feed(
+    lxp_kernel *kernel, const lx_programs_state_feed *feed);
+lxp_result lxp_programs_state_feed_observe(
+    const lx_programs_state_feed *feed, const lxp_activity *activity,
+    const lxp_receipt *receipt);
 
 lxp_result lxp_programs_transfer_decode(lxp_module_ctx *ctx,
                                         const uint8_t *payload,
@@ -383,5 +592,36 @@ lxp_result layerx_programs_authorize_402lxp_leg(
     uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
     uint64_t t0, uint64_t t1, uint64_t t2, uint64_t t3,
     uint64_t amount_hi, uint64_t amount_lo);
+
+lxp_result layerx_programs_settle_wind_down_402lxp_leg(
+    uint64_t token,
+    uint64_t p0, uint64_t p1, uint64_t p2, uint64_t p3,
+    uint64_t r0, uint64_t r1, uint64_t r2, uint64_t r3,
+    uint64_t h0, uint64_t h1, uint64_t h2, uint64_t h3,
+    const uint8_t *seed, size_t seed_length,
+    uint64_t s0, uint64_t s1, uint64_t s2, uint64_t s3,
+    uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
+    uint64_t t0, uint64_t t1, uint64_t t2, uint64_t t3,
+    uint64_t amount_hi, uint64_t amount_lo);
+lxp_result layerx_programs_wind_down_transfer_begin(
+    uint64_t token, uint64_t program_spend_token, uint8_t source_kind,
+    uint64_t f0, uint64_t f1, uint64_t f2, uint64_t f3,
+    uint64_t o0, uint64_t o1, uint64_t o2, uint64_t o3,
+    uint64_t p0, uint64_t p1, uint64_t p2, uint64_t p3,
+    uint64_t frame_path, uint8_t frame_depth, uint16_t seed_length,
+    uint64_t t0, uint64_t t1, uint64_t t2, uint64_t t3,
+    uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
+    uint64_t amount_hi, uint64_t amount_lo);
+lxp_result layerx_programs_wind_down_transfer_seed_byte(
+    uint64_t token, uint16_t offset, uint8_t byte);
+lxp_result layerx_programs_wind_down_transfer_apply(uint64_t token);
+lxp_result layerx_programs_wind_down_transfer_root_byte(uint64_t token,
+                                                         uint32_t offset);
+lxp_result layerx_programs_consume_program_spend_authorization(
+    uint64_t token, uint16_t origin_module_id,
+    const uint8_t from[32], const uint8_t to[32],
+    const uint8_t asset_id[32], uint64_t amount_hi, uint64_t amount_lo,
+    uint16_t reason, uint8_t supply_mode,
+    const uint8_t transfer_set_root[32]);
 
 #endif

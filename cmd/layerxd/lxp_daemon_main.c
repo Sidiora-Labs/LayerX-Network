@@ -95,6 +95,29 @@ lxp_result lxp_daemon_start(
     return LXP_OK;
 }
 
+lxp_result lxp_daemon_start_protocol(
+    lxp_daemon *daemon, const lxp_daemon_configuration *config,
+    lxp_daemon_apply_fn apply, void *apply_context,
+    lxp_daemon_protocol_owner *protocol_owner,
+    const char *loopback_address, uint16_t port)
+{
+    lxp_result status;
+    if (protocol_owner == NULL || !protocol_owner->attached ||
+        loopback_address == NULL || port == 0U)
+        return LXP_ERR_NON_CANONICAL;
+    status = lxp_daemon_start(daemon, config, apply, apply_context);
+    if (status == LXP_OK)
+        status = lxp_daemon_protocol_listener_start(
+            protocol_owner, loopback_address, port);
+    if (status != LXP_OK) {
+        if (daemon != NULL && daemon->primitives_initialized)
+            (void)lxp_daemon_shutdown(daemon);
+        return status;
+    }
+    daemon->protocol_owner = protocol_owner;
+    return LXP_OK;
+}
+
 lxp_result lxp_daemon_submit(
     lxp_daemon *daemon, const uint8_t *activity, size_t activity_length)
 {

@@ -56,6 +56,7 @@ typedef struct lxp_transfer_context {
     lxp_authorization_kind debit_authority_kind;
     const lxp_transfer_source_authority *source_authorities;
     size_t source_authority_count;
+    uint64_t program_spend_token;
 } lxp_transfer_context;
 
 typedef struct lxp_transfer_result {
@@ -93,6 +94,17 @@ typedef struct lxp_transfer_set {
     size_t leg_count;
     lxp_transfer_context context;
 } lxp_transfer_set;
+
+/* Fixed Programs runtime verifier. The generic ledger may invoke this symbol
+ * for an opaque token but callers cannot replace it with a permissive
+ * callback. A token exists only during the synchronous Rust owner-frame
+ * authorization that enters the kernel transfer primitive. */
+lxp_result layerx_programs_consume_program_spend_authorization(
+    uint64_t token, uint16_t origin_module_id,
+    const uint8_t from[32], const uint8_t to[32],
+    const uint8_t asset_id[32], uint64_t amount_hi, uint64_t amount_lo,
+    uint16_t reason, uint8_t supply_mode,
+    const uint8_t transfer_set_root[32]);
 
 lxp_result lxp_ledger_bootstrap_balance(lx_account *account,
                                         const uint8_t asset_id[32],

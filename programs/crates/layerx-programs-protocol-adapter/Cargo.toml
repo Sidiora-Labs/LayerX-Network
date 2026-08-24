@@ -1,0 +1,12 @@
+[package]
+name = "layerx-programs-protocol-adapter"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+layerx-programs-registry = { path = "../layerx-programs-registry" }
+
+[lints]
+workspace = true

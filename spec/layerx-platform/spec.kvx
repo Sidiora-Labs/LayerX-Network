@@ -3107,7 +3107,7 @@ reqs = ["37.4","30.3"]
 
 [task.30.5]
 title = "Bind registry value accounts to real program balances"
-status = "pending"
+status = "implemented"
 wave = 16
 requires = ["30.2","30.3"]
 do_1 = "Replace the registry's declared value-account bookkeeping with real derived accounts carrying real balances read from protocol state."

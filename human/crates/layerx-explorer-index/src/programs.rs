@@ -1,8 +1,10 @@
 //! Public program-registry projection built only from receipt-verified reads.
 
 use layerx_programs::{
-    ProgramId, ProgramLifecycle, ReadFreshness, SourceStatus, UpgradePolicy, VerifiedRegistryRead,
+    ProgramId, ProgramLifecycle, ReadFreshness, SourceStatus, UpgradePolicy,
+    VerifiedProgramBalanceRead, VerifiedRegistryRead,
 };
+use layerx_programs_protocol_adapter::ProtocolProgramStateRead;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExplorerProgramVersion {
@@ -21,11 +23,66 @@ pub struct ExplorerProgram {
     pub observed_sequence: u64,
     pub observed_at: u64,
     pub receipt_digest: [u8; 32],
+    pub value_accounts: Vec<ExplorerProgramBalance>,
+    pub balance_observed_sequence: u64,
+    pub balance_observed_at: u64,
+    pub balance_receipt_digest: [u8; 32],
+    pub balance_state_root: [u8; 32],
 }
 
-impl From<VerifiedRegistryRead> for ExplorerProgram {
-    fn from(read: VerifiedRegistryRead) -> Self {
-        Self {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ExplorerProgramBalance {
+    pub account: [u8; 32],
+    pub asset: [u8; 32],
+    pub balance: u128,
+    pub frozen: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ExplorerProgramReadError {
+    RegistryBalanceMismatch,
+    HistoricalBalance,
+    StaleBalance,
+}
+
+impl ExplorerProgram {
+    /// Joins a receipt-verified registry record with a proof-verified current
+    /// account enumeration. There is intentionally no registry-only
+    /// conversion which could silently omit program-held value.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a different program/lifecycle or a balance observation older
+    /// than the registry head being rendered.
+    pub fn from_verified(
+        read: VerifiedRegistryRead,
+        balances: VerifiedProgramBalanceRead,
+        now: u64,
+        staleness_limit: u64,
+    ) -> Result<Self, ExplorerProgramReadError> {
+        if balances.program() != read.entry.program
+            || balances.lifecycle() != read.entry.lifecycle
+            || balances.value_accounts().len() != read.entry.value_accounts.len()
+            || !read.entry.value_accounts.iter().all(|binding| {
+                balances
+                    .bindings()
+                    .iter()
+                    .any(|candidate| candidate == binding)
+            })
+        {
+            return Err(ExplorerProgramReadError::RegistryBalanceMismatch);
+        }
+        if balances.freshness().observed_sequence < read.freshness.observed_sequence {
+            return Err(ExplorerProgramReadError::HistoricalBalance);
+        }
+        if now == 0
+            || staleness_limit == 0
+            || now < balances.freshness().observed_at
+            || now.saturating_sub(balances.freshness().observed_at) > staleness_limit
+        {
+            return Err(ExplorerProgramReadError::StaleBalance);
+        }
+        Ok(Self {
             identifier: read.entry.program.bytes(),
             upgrade_policy: read.entry.upgrade_policy,
             lifecycle: read.entry.lifecycle,
@@ -43,7 +100,32 @@ impl From<VerifiedRegistryRead> for ExplorerProgram {
             observed_sequence: read.freshness.observed_sequence,
             observed_at: read.freshness.observed_at,
             receipt_digest: read.receipt_digest,
-        }
+            value_accounts: balances
+                .value_accounts()
+                .iter()
+                .map(|account| ExplorerProgramBalance {
+                    account: account.account_id,
+                    asset: account.asset_id,
+                    balance: account.balance,
+                    frozen: account.frozen,
+                })
+                .collect(),
+            balance_observed_sequence: balances.freshness().observed_sequence,
+            balance_observed_at: balances.freshness().observed_at,
+            balance_receipt_digest: balances.receipt_digest(),
+            balance_state_root: balances.state_root(),
+        })
+    }
+
+    /// Projects the exact production protocol adapter output without an
+    /// intermediate caller-defined balance representation.
+    pub fn from_protocol_state(
+        read: VerifiedRegistryRead,
+        state: &ProtocolProgramStateRead,
+        now: u64,
+        staleness_limit: u64,
+    ) -> Result<Self, ExplorerProgramReadError> {
+        Self::from_verified(read, state.balances().clone(), now, staleness_limit)
     }
 }
 

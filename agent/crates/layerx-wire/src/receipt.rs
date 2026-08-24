@@ -123,6 +123,12 @@ impl ProtocolReceipt {
         self.parameter_version
     }
 
+    /// Returns the canonical batch timestamp carried by the receipt.
+    #[must_use]
+    pub const fn timestamp(&self) -> u64 {
+        self.timestamp
+    }
+
     /// Returns the ledger operation tag.
     #[must_use]
     pub const fn operation(&self) -> u8 {
@@ -289,7 +295,7 @@ fn decode_protocol(bytes: &[u8]) -> Result<Receipt, WireError> {
     let mut decoder = Decoder::new(bytes, MAX_MESSAGE_BYTES);
     decoder.structure_header(RECEIPT_TAG)?;
     let protocol_version = decoder.u16()?;
-    if protocol_version != 1 {
+    if protocol_version != 1 && protocol_version != 2 {
         return Err(WireError::known(
             KnownResult::VersionUnsupported,
             decoder.offset(),

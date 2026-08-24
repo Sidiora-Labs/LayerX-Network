@@ -76,6 +76,8 @@ pub enum ReceiptCheck {
     MissingSignature,
     /// The protocol version was not the supported version.
     ProtocolVersion,
+    /// The receipt was not emitted by the required protocol module.
+    Module,
     /// The core result was not successful.
     ResultCode,
     /// The operation tag was absent.
@@ -260,6 +262,64 @@ pub fn verify_outcome(
         {
             return Err(VerificationFailure::at(ReceiptCheck::CreditBalance));
         }
+    }
+    let signature = protocol
+        .sequencer_signature()
+        .ok_or_else(|| VerificationFailure::at(ReceiptCheck::MissingSignature))?;
+    let unsigned = encode_unsigned(&receipt)
+        .map_err(|_| VerificationFailure::at(ReceiptCheck::CanonicalEncoding))?;
+    let digest = receipt_digest(&unsigned)
+        .map_err(|_| VerificationFailure::at(ReceiptCheck::CanonicalEncoding))?;
+    ed25519::verify_digest(&authorised.sequencer_public_key, &signature, &digest)
+        .map_err(|_| VerificationFailure::at(ReceiptCheck::SequencerSignature))?;
+    Ok(VerifiedReceipt {
+        receipt,
+        canonical_bytes: reproduced,
+        evidence: Evidence::sequencer(digest),
+    })
+}
+
+/// Verifies one successful ABI-two Programs state receipt without imposing
+/// ledger-transfer fields on an ACCOUNT or WIND_DOWN transition.
+///
+/// # Errors
+///
+/// Returns the exact canonical, module, root-chain, result or sequencer
+/// signature check which refused the state receipt.
+pub fn verify_program_state(
+    receipt_bytes: &[u8],
+    authorised: &AuthorizedBatch,
+) -> Result<VerifiedReceipt, VerificationFailure> {
+    let receipt =
+        decode(receipt_bytes).map_err(|_| VerificationFailure::at(ReceiptCheck::Decode))?;
+    let reproduced =
+        encode(&receipt).map_err(|_| VerificationFailure::at(ReceiptCheck::CanonicalEncoding))?;
+    if reproduced != receipt_bytes {
+        return Err(VerificationFailure::at(ReceiptCheck::CanonicalEncoding));
+    }
+    let protocol = receipt
+        .protocol()
+        .ok_or_else(|| VerificationFailure::at(ReceiptCheck::ReceiptShape))?;
+    if protocol.protocol_version() != 2 {
+        return Err(VerificationFailure::at(ReceiptCheck::ProtocolVersion));
+    }
+    if protocol.module_id() != 9 || protocol.operation() != 0 {
+        return Err(VerificationFailure::at(ReceiptCheck::Module));
+    }
+    if protocol.result_code() != 0 {
+        return Err(VerificationFailure::at(ReceiptCheck::ResultCode));
+    }
+    if protocol.activity_id() == [0; 32] {
+        return Err(VerificationFailure::at(ReceiptCheck::ActivityId));
+    }
+    if protocol.batch_id() != authorised.batch_id {
+        return Err(VerificationFailure::at(ReceiptCheck::BatchId));
+    }
+    if protocol.previous_state_root() != authorised.previous_state_root {
+        return Err(VerificationFailure::at(ReceiptCheck::PreviousStateRoot));
+    }
+    if protocol.resulting_state_root() != authorised.resulting_state_root {
+        return Err(VerificationFailure::at(ReceiptCheck::ResultingStateRoot));
     }
     let signature = protocol
         .sequencer_signature()

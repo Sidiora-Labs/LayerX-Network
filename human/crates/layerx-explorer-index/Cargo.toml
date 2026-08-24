@@ -13,6 +13,8 @@ layerx-client.workspace = true
 layerx-sdk.workspace = true
 layerx-mirror.workspace = true
 layerx-programs.workspace = true
+layerx-programs-protocol-adapter.workspace = true
+layerx-agentd.workspace = true
 sha2.workspace = true
 
 [dev-dependencies]

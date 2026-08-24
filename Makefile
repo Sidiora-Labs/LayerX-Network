@@ -31,7 +31,7 @@ LIB_SOURCES := $(filter-out src/storage/lxp_projection.c,$(shell find src -type 
 LIB_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(LIB_SOURCES))
 LIBRARY := $(BUILD_DIR)/liblayerx.a
 
-.PHONY: all build clean reproducible test test-harness list-tests \
+.PHONY: all build clean reproducible layerxd test test-harness list-tests \
 	test-result test-protocol test-arena test-sanitizer-smoke \
 	test-sanitizer-suite test-codec test-codec-limits test-codec-version \
 	test-codec-vectors fuzz-codec-smoke test-crypto-hash test-crypto-ed25519 \
@@ -1091,13 +1091,28 @@ LAYERXD_SOURCES = \
 	cmd/layerxd/lxp_daemon_main.c \
 	cmd/layerxd/lxp_daemon_config.c \
 	cmd/layerxd/lxp_daemon_shutdown.c \
+	cmd/layerxd/lxp_daemon_receipt_authority.c \
+	cmd/layerxd/lxp_daemon_protocol.c \
+	cmd/layerxd/lxp_daemon_listener.c \
+	cmd/layerxd/lxp_daemon_process.c \
+	cmd/layerxd/lxp_daemon_authority_replica.c \
 	cmd/layerxd/lxp_daemon_cli.c
 
+$(BUILD_DIR)/bin/layerxd: cmd/layerxd/main.c $(LAYERXD_SOURCES) $(LIBRARY) \
+		$(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) cmd/layerxd/main.c $(LAYERXD_SOURCES) \
+		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) $(EXTRA_LDFLAGS) \
+		-lcrypto -pthread -ldl -lm -o $@
+
+layerxd: $(BUILD_DIR)/bin/layerxd
+
 $(BUILD_DIR)/tests/test_layerxd: tests/test_layerxd.c $(LAYERXD_SOURCES) \
-		$(LIBRARY)
+		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(CFLAGS) tests/test_layerxd.c $(LAYERXD_SOURCES) \
-		$(LIBRARY) $(EXTRA_LDFLAGS) -lcrypto -pthread -o $@
+		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) $(EXTRA_LDFLAGS) \
+		-lcrypto -pthread -ldl -lm -o $@
 
 test-layerxd: $(BUILD_DIR)/tests/test_layerxd
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_layerxd
@@ -1977,10 +1992,11 @@ agent-test-lni-abi:
 	$(AGENT_CARGO) run --manifest-path agent/tools/boundary-check/Cargo.toml --locked --quiet -- agent
 
 $(BUILD_DIR)/agent/layerxd-lni: agent/tests/boundary/node/layerxd_lni.c \
-		$(LAYERXD_SOURCES) $(LIBRARY)
+		$(LAYERXD_SOURCES) $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
 	mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) agent/tests/boundary/node/layerxd_lni.c \
-		$(LAYERXD_SOURCES) $(LIBRARY) $(EXTRA_LDFLAGS) -lcrypto -pthread -o $@
+		$(LAYERXD_SOURCES) $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) \
+		$(EXTRA_LDFLAGS) -lcrypto -pthread -ldl -lm -o $@
 
 agent-test-boundary: $(BUILD_DIR)/agent/layerxd-lni
 	$(AGENT_CARGO) run --manifest-path agent/tests/boundary/Cargo.toml --locked -- \
@@ -2443,18 +2459,26 @@ $(BUILD_DIR)/tests/programs_accounts: tests/programs/test_accounts.c \
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) \
 		$(EXTRA_LDFLAGS) -lcrypto -pthread -ldl -lm -o $@
 
+$(BUILD_DIR)/tests/programs_winddown: tests/programs/test_winddown.c \
+		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) \
+		$(EXTRA_LDFLAGS) -lcrypto -pthread -ldl -lm -o $@
+
 programs-core-test: $(BUILD_DIR)/tests/programs_registration \
 		$(BUILD_DIR)/tests/programs_lifecycle \
 		$(BUILD_DIR)/tests/programs_monetary_law \
 		$(BUILD_DIR)/tests/programs_call_activity \
 		$(BUILD_DIR)/tests/programs_occupancy_batch \
-		$(BUILD_DIR)/tests/programs_accounts
+		$(BUILD_DIR)/tests/programs_accounts \
+		$(BUILD_DIR)/tests/programs_winddown
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/programs_registration
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/programs_lifecycle
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/programs_monetary_law
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/programs_call_activity
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/programs_occupancy_batch
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/programs_accounts
+	$(RUN_PREFIX) $(BUILD_DIR)/tests/programs_winddown
 
 programs-protocol-regression: test-kernel test-module-ctx test-dispatch \
 		test-receipts test-state-root test-snapshot test-replay-golden-local
