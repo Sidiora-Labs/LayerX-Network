@@ -333,3 +333,35 @@ symbol = "push authentication"
 observed = "Commit c77fa28 completed locally but push to origin/main failed with 'Invalid username or token. Password authentication is not supported for Git operations.' No secret/token available in session; push not completed."
 assumption = "User or CI will provide valid git credentials or push via an authorized session; the qualification note and code change remain in the local repo."
 severity = "note"
+
+[observation.reconciliation.20260824.1]
+task = "reconciliation"
+file = "spec/layerx-platform/spec.kvx"
+symbol = "active implementation graph"
+observed = "Static source inspection found five stale in_progress tasks with no current owner; three done integration tasks whose required hosted or middleware predecessor remained pending (16.4, 17.5 and 17.6); a done mirror-publisher task with only client traits and in-memory chain implementations (25.1); one implemented occupancy task whose Rust ledger is not connected to protocol charging, state roots, snapshots or receipts (29.5); and one pending labelling task whose implementation is present (26.2). The ledger also omitted production KMS custody, a runnable human-api server, an executable interop gateway and hosted/seven-SDK program operations. The active spec now records those gaps as tasks 5.8, 13.6, 22.4 and 33.7, resets stale ownership, reopens incomplete integrations, and moves qualification/documentation-only leaves after all product-code waves."
+assumption = "This is a code-presence and dependency reconciliation only. No compilation, test, benchmark, live service, external network, fault-injection or qualification result is claimed. Human qualification must decide whether every status=done or status=implemented task satisfies its runtime acceptance criteria."
+severity = "dependency-boundary"
+
+[observation.reconciliation.20260824.2]
+task = "13.6,17.4,22.4"
+file = "human/crates/layerx-human-service, platform/hosted/gateway, interop/crates/layerx-interop-gateway"
+symbol = "production service entry points"
+observed = "The human service and interoperability gateway are libraries without executable HTTP routers. The hosted gateway contains API-key, quota and idempotency machinery but no server entry point and no /v1/programs/call route. The generated human web client calls same-origin /v1 while the Next.js application has no service rewrite, and home invokes its balance model without a verified balance value because human-api defines no balance operation."
+assumption = "Tasks 13.6, 17.4, 22.4 and 33.7 own these missing product-code boundaries. Live deployment, interoperability, load and journey evidence remains qualification work and must not be inferred from the presence of the new task records."
+severity = "dependency-boundary"
+
+[observation.reconciliation.20260824.3]
+task = "29.5,32,33,34,35"
+file = "programs/"
+symbol = "remaining programs implementation plane"
+observed = "The deterministic WASM runtime, call bridge, capability/storage model, composition, monetary primitive, registry lifecycle, shared state, scans, drop, crypto primitives and porting kits are substantial. The checked-in tree has no implementation files for the declared execution context and balance host APIs, module cache, injected metering, governed fee schedule, access declarations, parallel scheduler, program interface registry, interpreter, sandbox leases, compute marketplace or dispute arbiter. Occupancy exists only at the Rust runtime layer and is reopened for protocol integration."
+assumption = "The code-only dependency frontiers recorded in spec.kvx are the implementation sequence. Tasks 30.6, 32.7, 34.7 and 36.1 through 36.6 are qualification rather than product implementation and are intentionally excluded from agent coding waves."
+severity = "dependency-boundary"
+
+[observation.reconciliation.20260824.4]
+task = "22.3"
+file = "interop/crates/layerx-x402/tests"
+symbol = "supersession of observation.22.3.1"
+observed = "The earlier observation.22.3.1 is stale against the current tree: seller.rs, buyer.rs and e2e.rs no longer call GatewayCore::testing or TraceId::testing; they construct GatewayCore through new/default and traces through mint. This static reconciliation removes that item from the current gap assessment but does not delete the historical observation."
+assumption = "Human qualification still owns compilation and execution of the x402 suites and independent upstream conformance."
+severity = "note"

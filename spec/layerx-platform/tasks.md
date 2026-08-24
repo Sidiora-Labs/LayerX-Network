@@ -280,6 +280,13 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Implement rebinding under step-up, keeping the old binding effective until the new receipt verifies, with the security notification.
     - Enforce the single-active-binding invariant, record every binding with its receipts in the audit trail, and test binding and rebinding end to end against a real core.
     - _Requirements: 5.1, 5.4, 5.6, 5.8_
+  - [ ] 5.8 Replace the mounted root secret with a production KMS boundary
+    - Refactor custody around a public provider boundary whose production implementation creates, describes, rotates and destroys human and managed-agent keys in a remote KMS or HSM without exporting private key material.
+    - Move disclosure-bound signing into that provider so the service submits the exact canonical digest and receives only a signature; no production path may unseal a primary key into application memory.
+    - Bind provider key references to principal-scoped records and preserve step-up, audit, rate-limit and typed-refusal semantics across provider failures.
+    - Make the file-envelope provider explicitly development-only and refuse production startup when it is selected.
+    - Expose provider readiness, key-reference integrity and rotation state through the existing redacted health model without logging key material or payloads.
+    - _Requirements: 4.1, 4.2, 4.10_
 
 - [ ] 6. Build layerx-paxeer-client, the custody-boundary client
   - [x] 6.1 Implement Paxeer reads, finality tracking and reorg handling
@@ -515,7 +522,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Enforce required contrast across the package's text and semantic token combinations through automated checks.
     - Wire automated accessibility checks into the browser suites, including 1.5x text-expansion layout checks and locale-aware amount rendering with explicit currency codes.
     - _Requirements: 20.1, 20.2, 20.6, 17.3_
-  - [-] 11.5 Build the performance machinery
+  - [ ] 11.5 Build the performance machinery
     - Code-split by route with declared per-route script budgets enforced in CI.
     - Render the explorer plane server-side cacheable.
     - Enforce the paint, interaction and layout-shift budgets in CI on representative pages.
@@ -547,7 +554,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Build the guided emergency exit under Settings with typed confirmation and degraded-mode operability.
     - Run deposit and withdrawal end to end in both shells against the test network.
     - _Requirements: 10.3, 11.2, 18.7_
-  - [-] 12.4 Build the agent surfaces
+  - [ ] 12.4 Build the agent surfaces
     - Build agent creation - name, purpose, limit - with the honest creation-journey progress, in both shells.
     - Build the agent list and detail: the desktop master-detail and the mobile stacked screens, with spend-versus-limit from receipts.
     - Build the controls with the confirmation grammar: fund, return, change limit, pause reversible, archive destructive with disposition-first and typed confirmation.
@@ -570,7 +577,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - _Requirements: 14.3, 14.4, 18.9_
 
 - [ ] 13. Build settings, security, support and the explorer plane
-  - [-] 13.1 Build settings and preferences
+  - [ ] 13.1 Build settings and preferences
     - Build the settings hub sectioned as profile, security, linked wallet, notifications, advanced and help, with current values on rows.
     - Build notification preferences: per-event classes under channel toggles, the notification detail level, and the non-suppressible security classes presented as such.
     - Build privacy mode masking balances and every derived figure across both shells, persisted per user.
@@ -605,8 +612,15 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Link the app's Technical details surfaces to these pages.
     - Run the explorer against a real core end to end including the verifier with altered evidence.
     - _Requirements: 15.1, 15.6, 15.7_
+  - [ ] 13.6 Serve human-api through a production service boundary
+    - Build the layerx-human-service executable and versioned HTTPS+JSON router for every human-api v1 operation and resumable event stream, decoding and encoding only schema-owned types.
+    - Bind handlers to the real custody, journey, approval, activity, notification and explorer services and to the agent boundary; do not introduce an in-memory, fake or second protocol-write path.
+    - Add the missing receipt-verified account-balance and home-summary read contract with freshness and verification level, regenerate the TypeScript client, and bind the home surface to it.
+    - Implement browser session cookies, anti-forgery enforcement, trace propagation, idempotency keys, typed error responses and principal-scoped request limits at the transport boundary.
+    - Wire the web application's server-side and browser-side client configuration to the service and expose redacted liveness/readiness that distinguishes custody, agent, core and Paxeer degradation.
+    - _Requirements: 1.3, 1.8, 8.1, 8.5, 8.8, 22.4_
 
-## Wave 8 - Qualification
+## Deferred Qualification - Human Plane
 
 - [ ] 14. Qualify the human plane end to end
   - [ ] 14.1 Run every journey against the real stack
@@ -683,7 +697,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Enforce integer-only money, idempotency keys and secret hygiene per the SDK conformance rules.
     - Run the golden vectors and the conformance suite against the live schema in CI.
     - _Requirements: 24.1, 24.3, 24.4_
-  - [-] 15.4 Build the JVM SDK for Java and Kotlin
+  - [ ] 15.4 Build the JVM SDK for Java and Kotlin
     - Generate the JVM SDK from the same schemas with a Java-first API and Kotlin-friendly overloads, published as one Maven artifact.
     - Implement the local receipt and proof verification path.
     - Implement streaming with resumable cursors on virtual-thread-friendly primitives.
@@ -706,7 +720,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - _Requirements: 24.2, 24.7_
 
 - [ ] 16. Ship middleware and framework integrations
-  - [ ] 16.1 Build the buyer and seller middleware
+  - [x] 16.1 Build the buyer and seller middleware
     - Build seller middleware: payment-required responses with machine-readable offers, receipt verification before resource release, idempotent fulfilment and webhook signature verification.
     - Build buyer middleware: offer parsing, quote and commit through the SDK, receipt capture and verification, retry discipline under idempotency keys.
     - Enforce the non-authority rule in both: no code path can present success without backing evidence, proven by the conformance suite.
@@ -727,7 +741,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Scan every browser-facing artifact in CI to prove no API secret or key material ships to a client bundle.
     - Exercise each integration's example end to end in CI against a real service.
     - _Requirements: 25.2, 25.7, 25.5_
-  - [x] 16.4 Build the mobile bindings and agent-framework integrations
+  - [ ] 16.4 Build the mobile bindings and agent-framework integrations
     - Ship iOS bindings over the Swift SDK and Android bindings over the JVM SDK, each with a runnable sample app.
     - Ship integrations for the major agent frameworks over the agent middleware, each installable as one dependency.
     - Verify webhook consumption, signature verification and replay protection in every integration's default path.
@@ -743,42 +757,42 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - _Requirements: 27.4, 25.5_
 
 - [ ] 17. Stand up developer tooling and hosted surfaces
-  - [ ] 17.1 Build the CLI
+  - [x] 17.1 Build the CLI
     - Build the layerx CLI: project scaffolding, key and account management, test payments, receipt lookup and local verification, environment switching between emulator, testnet and production.
     - Add program deployment and registry commands wired to the programs toolchain.
     - Give every command machine-readable output alongside the human presentation.
     - Keep secrets in OS-appropriate credential storage, never plaintext config, verified in tests.
     - Test every command end to end against the emulator in CI.
     - _Requirements: 26.1_
-  - [ ] 17.2 Build the local emulator on the real transition function
+  - [x] 17.2 Build the local emulator on the real transition function
     - Build the emulator embedding the real core transition function and real receipt machinery with instant batching and prefunded accounts.
     - Expose the same gateway surface as production so SDKs and middleware run unmodified against it.
     - Run the conformance suite against both emulator and testnet, failing the build on any behavioural divergence.
     - Ship time-control and fault-injection hooks for integration testing, clearly outside the deterministic transition path.
     - Make one command start it: layerx emulator up.
     - _Requirements: 26.2_
-  - [ ] 17.3 Operate the hosted testnet and faucet
+  - [ ] 17.3 Build the deployable hosted testnet and faucet
     - Stand up the hosted testnet running the pending-release protocol version with declared reset schedule and public status.
     - Build the faucet with per-identity and per-address rate limits and abuse resistance.
     - Publish testnet endpoints, chain parameters and reset calendar in the docs.
     - Monitor testnet health on the status page, distinguishing testnet, gateway and core degradation.
     - Exercise the faucet and a full test payment through the hosted surface in the scheduled CI run.
     - _Requirements: 26.3, 26.7_
-  - [ ] 17.4 Operate the hosted gateway with keys and quotas
+  - [ ] 17.4 Build the deployable hosted gateway with keys and quotas
     - Stand up the hosted gateway and RPC surface with self-service API key issuance and rotation.
     - Enforce per-key quotas with typed rate-limit refusals carrying retry timing.
     - Prove no gateway path weakens protocol authorisation or verification rules, by the boundary conformance suite.
     - Apply the human service's principal isolation, redaction and audit rules to every gateway store and log.
     - Load-test the gateway against declared throughput and latency budgets.
     - _Requirements: 26.4, 26.7_
-  - [x] 17.5 Deliver webhooks and developer dashboards
+  - [ ] 17.5 Deliver webhooks and developer dashboards
     - Implement webhook delivery for journey, payment, approval and program events: signed payloads, ordered per subject, at-least-once with replay protection.
     - Build the redelivery surface for missed events with stable cursors.
     - Build the developer dashboard: keys, usage, request logs, webhook delivery logs, test payments and receipts.
     - Carry verification status on every displayed protocol fact, exactly as the human plane requires.
     - Test webhook delivery semantics under fault injection: drops, duplicates and out-of-order delivery.
     - _Requirements: 26.5, 26.6_
-  - [x] 17.6 Ship one-command MCP and A2A installation
+  - [ ] 17.6 Ship one-command MCP and A2A installation
     - Build layerx install mcp: one command installing a working payment-capable MCP server configuration against the chosen environment.
     - Build layerx install a2a with the same one-command rule for A2A.
     - Verify both installations end to end in CI against a real agent runtime completing a test payment.
@@ -840,7 +854,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Emit program events only through the kernel event stream under the module namespace, committed in the batch event root.
     - Run the protocol conformance suite proving no existing behaviour changed with the module registered.
     - _Requirements: 28.1, 28.5, 30.6_
-  - [ ] 19.5 Prove determinism and fuzz the runtime
+  - [x] 19.5 Prove determinism and fuzz the runtime
     - Fuzz module validation, instantiation and execution with committed corpora, treating a panic, hang, non-determinism or unbounded allocation as a build-breaking defect.
     - Run differential execution across two independent builds asserting identical state roots, receipts and events per vector.
     - Test replay under recorded runtime versions across a simulated upgrade.
@@ -849,7 +863,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - _Requirements: 28.8, 28.4, 28.7_
 
 - [ ] 20. Implement permissionless deployment and the registry
-  - [ ] 20.1 Implement deploy, upgrade and migration activities
+  - [x] 20.1 Implement deploy, upgrade and migration activities
     - Implement deployment as an ordinary programs-module activity: validation, fee, registry write, callable on verified receipt, no governance touchpoint.
     - Implement the immutable-by-default upgrade policy: upgradeability and its authority declared at deployment, upgrades recording old and new code hashes.
     - Run declared migration hooks under full determinism and metering law.
@@ -863,7 +877,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Publish registry lookups on the public explorer with the standard freshness rules.
     - Test verification catches a source mismatch: an altered build fails verification visibly.
     - _Requirements: 29.3, 29.5_
-  - [ ] 20.3 Implement deprecation and wind-down rules
+  - [x] 20.3 Implement deprecation and wind-down rules
     - Implement deprecation and tombstoning as registry activities keeping history readable and replayable forever.
     - Keep existing program state reachable under declared wind-down rules.
     - Prove no deprecation path strands value without a legitimate exit.
@@ -932,13 +946,20 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Render every x402 outcome only as far as backing evidence supports.
     - Test both roles end to end against a real service and an independent x402 implementation.
     - _Requirements: 32.2, 32.6_
-  - [ ] 22.3 Implement the x402 facilitator and the transport matrix
+  - [x] 22.3 Implement the x402 facilitator and the transport matrix
     - Implement the facilitator role settling x402 payments into LayerX with receipt-backed confirmation.
     - Carry all three roles across the HTTP, MCP and A2A transports per the transport-independence rules of x402 v2.
     - Run the transport matrix in CI: every role on every transport against conformance vectors.
     - Publish the facilitator conformance results in the compatibility matrix.
     - Test facilitator settlement under fault injection with exactly-once economic effect.
     - _Requirements: 32.2, 32.8_
+  - [ ] 22.4 Serve the interoperability adapters through an executable gateway
+    - Build the interop gateway executable and configuration layer, registering only version-pinned adapters and refusing startup when an adapter has no declared evidence policy.
+    - Expose the x402, AP2, UCP, Visa, fiat, HTTP, MCP and A2A ingress surfaces through typed transport handlers backed by the hosted gateway's real authentication, quota, idempotency and audit stores.
+    - Bind every state-changing translation to the real typed intent and receipt-verification path, with external pending, reversal and refusal states preserved at the boundary.
+    - Implement provider callback and mandate-verification endpoints with replay protection, principal isolation, redacted tracing and durable resumption after restart.
+    - Expose per-adapter readiness and pinned-version metadata without treating upstream or settlement unavailability as LayerX success or failure.
+    - _Requirements: 32.1, 32.2, 32.6, 32.8, 32.9_
 
 - [ ] 23. Implement the commerce mandate adapters
   - [x] 23.1 Implement AP2 checkout and payment mandates
@@ -964,7 +985,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - _Requirements: 32.5_
 
 - [ ] 24. Ship migration tooling and off-platform settlement
-  - [-] 24.1 Build the Ethereum and Solana migration tooling
+  - [ ] 24.1 Build the Ethereum and Solana migration tooling
     - Build account mapping: external addresses associated to LayerX identities through the protocol's binding mechanisms.
     - Build asset migration through the custody boundary, credited only against verified source-chain finality.
     - Build transaction-history import labelled as external provenance, never as LayerX receipts.
@@ -1019,7 +1040,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Document ramp operation, risk boundaries and the external-custody labelling obligations.
     - Exercise the reference ramp end to end in CI against the testnet.
     - _Requirements: 34.5_
-  - [ ] 26.2 Enforce external-custody labelling
+  - [ ] 26.2 Enforce external-custody labelling — **Implemented - qualification pending**
     - Keep third-party ramps off the human plane's default surfaces by rule and by the copy lint.
     - Label any surfaced ramp as external custody in plain language from the copy catalog.
     - Render ramp outcomes as Done only against the verified LayerX receipt of the LayerX-side leg.
@@ -1027,7 +1048,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Wire the checks into the existing UI and copy gates.
     - _Requirements: 34.6, 34.4_
 
-## Wave 13 - Platform Qualification
+## Deferred Qualification - Platform
 
 - [ ] 27. Qualify the platform end to end
   - [ ] 27.1 Run the adoption benchmark gates
@@ -1120,7 +1141,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Record the runtime version, ABI version and fee schedule version in the receipt so replay executes under the recorded versions.
     - Test deploy, call, refuse, upgrade and call-again end to end against a real node, asserting state roots and receipts rather than return codes.
     - _Requirements: 35.1, 35.6, 28.5_
-  - [ ] 28.8 Expose the call activity through the agent layer, the CLI and the emulator
+  - [x] 28.8 Expose the call activity through the agent layer, the CLI and the emulator
     - Add the program call operation to the agent layer contract as an additive change within the current contract major, carrying calldata, declared budget, requested capabilities and the typed response.
     - Add layerx program call to the CLI with machine-readable output, an idempotency key because a call is a money-adjacent state change, and receipt-verified result rendering.
     - Run the call activity in the local emulator through the real transition function so a local call and a network call differ only in their state.
@@ -1131,7 +1152,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
 ## Wave 15 - The Program State Model
 
 - [ ] 29. Give programs shared state, iteration and bounded state lifetimes
-  - Parallel lanes: 29.1 fixes the namespace model first because every other lane addresses it. Then 29.2, 29.3, 29.4 and 29.5 are four independent agents on disjoint files, and 29.6 and 29.7 close behind them.
+  - Reconciled code lane: 29.1 through 29.4, 29.6 and 29.7 have code present. Task 29.5 remains because its Rust occupancy ledger is not integrated with protocol charging, state roots, snapshots and receipts.
   - [ ] 29.1 Extend the namespace model with a program-shared namespace — **Implemented - qualification pending**
     - Model StorageNamespace as a closed enum over a principal-scoped namespace and a program-shared namespace, both carrying the owning program, so a namespace names its scope in the type rather than by convention.
     - Fix both namespaces before guest code runs exactly as the principal-scoped namespace is fixed today, so no guest-visible operation can choose, widen or construct a namespace.
@@ -1160,7 +1181,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Prove no cell survives a drop and no adjacent namespace is touched by it, asserted on storage contents across a plane holding several namespaces.
     - Test drop of an empty namespace, a namespace at the declared cell ceiling, and a drop followed by a write in the same activity.
     - _Requirements: 36.4_
-  - [ ] 29.5 Charge storage occupancy over time as its own resource class — **Implemented - qualification pending**
+  - [ ] 29.5 Charge storage occupancy over time as its own resource class
     - Add an occupancy resource class measured as namespace bytes held across batches, distinct from the one-off read and write classes the meter already enforces.
     - Price occupancy through the fee schedule and charge it to the account declared responsible for the namespace, so persistent state is paid for as long as it persists.
     - Account occupancy deterministically from protocol state - the batch sequence and the recorded namespace size - with no wall-clock input anywhere.
@@ -1185,8 +1206,8 @@ surface makes the evidence portable while custody never leaves Paxeer.
 ## Wave 16 - Program-Owned Accounts
 
 - [ ] 30. Let programs hold and disburse value under their own authority
-  - Parallel lanes: 30.1 fixes the derivation every other lane depends on. Then 30.2, 30.3 and 30.4 are three independent agents on the transfer law, the C module and the capability model, with 30.5, 30.6 and 30.7 closing behind them.
-  - [ ] 30.1 Derive program-owned accounts deterministically
+  - Code-only lanes: 30.2, 30.3 and 30.4 are three independent implementations on the transfer law, the C module and the capability model. Then 30.5 and 30.7 close the product-code wave. Task 30.6 is deferred qualification work.
+  - [x] 30.1 Derive program-owned accounts deterministically
     - Define a domain-separated derivation from the program identifier and a bounded program-supplied seed to an account identifier, reproducible by any party from public inputs alone.
     - Make the derivation collision-resistant against principal identifiers so no principal can ever derive, claim or sign for a program-owned account, and no program can derive another program's account.
     - Expose derivation to guest code as a pure computation that grants no authority by itself, so deriving an account and being allowed to spend from it stay separate concerns.
@@ -1239,7 +1260,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
 ## Wave 17 - Execution Context and Compute Primitives
 
 - [ ] 31. Give programs self-knowledge and the primitives every chain provides
-  - Parallel lanes: 31.3, 31.4 and 31.5 are three fully independent agents from the start of the wave, each owning one file under src/crypto. 31.1 and 31.2 run beside them. 31.6 joins all five and 31.7 follows it.
+  - Code-only lanes: 31.3, 31.4 and 31.5 are complete. Tasks 31.1 and 31.2 run in parallel; 31.6 joins them into ABI version two and 31.7 binds the result into the SDK and porting kits.
   - [ ] 31.1 Expose the execution context to guest code
     - Add a single field-addressed context host function exposing the executing program, the immediate calling program, the invoking principal, the activity sequence, the batch height, the runtime and ABI versions, the remaining fuel and the effective fee schedule version.
     - Derive every field from protocol state only, with no wall-clock time, host entropy or node-local value reachable through any field, and refuse an unknown field identifier rather than returning a zero.
@@ -1293,7 +1314,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
 ## Wave 18 - Economics, Performance and Parallel Execution
 
 - [ ] 32. Make program execution fast enough and priced honestly enough to be a real plane
-  - Parallel lanes: 32.1, 32.2, 32.3 and 32.4 are four independent agents on disjoint files from the start of the wave. 32.5 depends only on the state model and runs beside them. 32.6 joins 32.5, and 32.7 measures everything last.
+  - Code-only lanes: 32.1, 32.2, 32.3, 32.4 and 32.5 are five independent implementations on disjoint files. Task 32.6 follows 32.5. Task 32.7 is deferred benchmark and qualification work.
   - [ ] 32.1 Cache validated and compiled modules by code hash
     - Add a bounded cache keyed by code hash and runtime version holding validated, compiled module artifacts, so a program validated once is not revalidated per invocation.
     - Keep the cache an accelerator with no consensus authority: a cache miss, an eviction and a cold node must produce byte-identical results and identical metered cost to a cache hit.
@@ -1348,7 +1369,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
 ## Wave 19 - Interfaces and Agent-Native Authoring
 
 - [ ] 33. Make programs discoverable, callable and authorable without a compiler
-  - Parallel lanes: 33.1 and 33.2 are two independent agents defining the interface record and the calldata convention. 33.3 follows both. 33.4 and 33.5 are an independent pair on the interpreter. 33.6 joins everything.
+  - Code-only lanes: 33.1 and 33.4 start independently because 33.2 is already complete. Task 33.3 follows 33.1, task 33.5 follows 33.4, task 33.6 joins those lanes, and task 33.7 finishes hosted and SDK exposure.
   - [ ] 33.1 Publish program interfaces as protocol state
     - Define an interface description naming each callable entry point, its parameters, its return shape, its typed failures and the capabilities it requires, in a canonical encoding with a stable digest.
     - Bind the description to the deployed code hash at deployment so an interface cannot drift from the program it describes, and refuse a deployment whose declared entry points the module does not export.
@@ -1392,11 +1413,18 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Extend the emulator to execute program calls with real runtime semantics so an agent can develop against it and get real refusals.
     - Ship an end-to-end walkthrough of an agent discovering an unknown program and calling it correctly with no human in the loop.
     - _Requirements: 40.6_
+  - [ ] 33.7 Finish program operations across the hosted gateway and seven SDKs
+    - Expose discover, interface, simulate and receipt-verified call routes on the hosted gateway using the agent-plane operations from task 33.6, with idempotency required for calls and typed refusal and unknown outcomes preserved.
+    - Add the program operation and interface records to the shared schema and generation inputs so one regeneration supplies identical wire behavior to Rust, TypeScript, Python, Go, JVM, Swift and C#.
+    - Implement idiomatic typed program clients in all seven SDKs, including bounded calldata, declared budgets, capability requests, typed responses and failures, and local receipt verification.
+    - Add verified-source and interface metadata to the public explorer program projection and connect the rendered explorer route to that projection.
+    - Keep emulator and hosted routes contract-identical so SDK configuration changes environment only, never payload construction or outcome semantics.
+    - _Requirements: 35.7, 40.1, 40.2, 40.6_
 
 ## Wave 20 - Ephemeral Metered Sandboxes
 
 - [ ] 34. Rent a sandbox through a program, pay only for the compute used, and have it destroyed
-  - Parallel lanes: 34.1 defines the lease record every other lane addresses. Then 34.2, 34.3 and 34.6 are three independent agents on escrow, execution and snapshotting, with 34.4 and 34.5 following the first two, and 34.7 and 34.8 closing the wave.
+  - Code-only lanes: 34.1 defines the lease record. Then 34.2, 34.3 and 34.6 are three independent implementations on escrow, execution and snapshotting; 34.4 and 34.5 close the product-code wave. Tasks 34.7 and 34.8 are deferred qualification and documentation.
   - [ ] 34.1 Model the sandbox lease as protocol state
     - Define a lease record naming the renting principal, the sandbox program image by code hash, the funded escrow amount and asset, the resource ceilings, the expiry height and the current lifecycle state.
     - Make the lifecycle explicit and one-way through its terminal states: requested, funded, active, settling, expired, destroyed, with every transition receipt-backed and no transition reachable except through a declared activity.
@@ -1457,7 +1485,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
 ## Wave 21 - Verifiable Off-Platform Compute
 
 - [ ] 35. Settle rented compute the platform did not execute, without trusting the provider
-  - Parallel lanes: 35.1 lands the commitment scheme first. Then 35.2 and 35.4 are two independent agents on verification and the marketplace, with 35.7 running independently beside them. 35.3 follows 35.2, 35.5 and 35.6 follow 35.4, and 35.8 closes.
+  - Code-only lanes: 35.1, 35.4 and 35.7 start independently. Task 35.2 follows 35.1, task 35.5 follows 35.4, task 35.3 follows 35.2, and task 35.6 joins the dispute and marketplace lanes. Task 35.8 is deferred documentation.
   - [ ] 35.1 Commit to execution state per step
     - Define a canonical commitment to the complete execution state at a step boundary, covering the instruction pointer, the value stack, the call frames, linear memory, the storage overlay and the fuel remaining.
     - Make the commitment reproducible by any party from the module, the inputs and the step index alone, with no node-local input reachable in the digest.
@@ -1515,7 +1543,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Add the compute-market capabilities to the enforced-by tables in the same shape as every other documented capability.
     - _Requirements: 42.7_
 
-## Wave 22 - Programs Plane Qualification
+## Deferred Qualification - Programs Plane
 
 - [ ] 36. Gate the whole programs plane on adversarial evidence before release
   - Parallel lanes: 36.1, 36.2, 36.3, 36.4 and 36.5 are five independent agents, each owning one evidence class and one gate. 36.6 is the only join and it writes nothing it has not measured.
@@ -1675,23 +1703,25 @@ violation.
     { "id": 3,  "tasks": ["5.1", "5.2", "5.3", "5.4", "5.5", "5.6", "5.7", "6.1", "6.2", "6.3", "6.4", "6.5"] },
     { "id": 4,  "tasks": ["7.1", "7.2", "7.3", "7.4", "7.5", "7.6", "8.1", "8.2", "8.3", "8.4", "8.5", "8.6", "9.1", "9.2", "9.3", "9.4", "9.5"] },
     { "id": 5,  "tasks": ["10.1", "10.2", "10.3", "10.4", "10.5"] },
-    { "id": 6,  "tasks": ["11.1", "11.2", "11.3", "11.4", "11.5"] },
-    { "id": 7,  "tasks": ["12.1", "12.2", "12.3", "12.4", "12.5", "12.6", "13.1", "13.2", "13.3", "13.4", "13.5"] },
-    { "id": 8,  "tasks": ["14.1", "14.2", "14.3", "14.4", "14.5", "14.6", "14.7"] },
-    { "id": 9,  "tasks": ["15.1", "15.2", "15.3", "15.4", "15.5", "15.6", "16.1", "16.2", "16.3", "16.4", "16.5", "17.1", "17.2", "17.3", "17.4", "17.5", "17.6", "18.1", "18.2", "18.3"] },
-    { "id": 10, "tasks": ["19.1", "19.2", "19.3", "19.4", "19.5", "20.1", "20.2", "20.3", "21.1", "21.2", "21.3", "21.4", "21.5", "21.6"] },
-    { "id": 11, "tasks": ["22.1", "22.2", "22.3", "23.1", "23.2", "23.3", "24.1", "24.2", "24.3"] },
+    { "id": 6,  "tasks": ["11.1", "11.2", "11.3", "11.4"] },
+    { "id": 7,  "tasks": ["5.8", "11.5", "12.1", "12.2", "12.3", "12.4", "12.5", "12.6", "13.1", "13.2", "13.3", "13.4", "13.5", "13.6"] },
+    { "id": 9,  "tasks": ["15.1", "15.2", "15.3", "15.4", "15.5", "16.1", "16.2", "16.3", "16.4", "17.1", "17.2", "17.3", "17.4", "17.5", "17.6", "18.1", "18.2"] },
+    { "id": 10, "tasks": ["19.1", "19.2", "19.3", "19.4", "19.5", "20.1", "20.2", "20.3", "21.1", "21.2", "21.4", "21.5", "21.6"] },
+    { "id": 11, "tasks": ["22.1", "22.2", "22.3", "22.4", "23.1", "23.2", "23.3", "24.1", "24.2", "24.3"] },
     { "id": 12, "tasks": ["25.1", "25.2", "25.3", "26.1", "26.2"] },
-    { "id": 13, "tasks": ["27.1", "27.2", "27.3", "27.4", "27.5"] },
     { "id": 14, "tasks": ["28.1", "28.2", "28.3", "28.4", "28.5", "28.6", "28.7", "28.8"] },
     { "id": 15, "tasks": ["29.1", "29.2", "29.3", "29.4", "29.5", "29.6", "29.7"] },
-    { "id": 16, "tasks": ["30.1", "30.2", "30.3", "30.4", "30.5", "30.6", "30.7"] },
+    { "id": 16, "tasks": ["30.1", "30.2", "30.3", "30.4", "30.5", "30.7"] },
     { "id": 17, "tasks": ["31.1", "31.2", "31.3", "31.4", "31.5", "31.6", "31.7"] },
-    { "id": 18, "tasks": ["32.1", "32.2", "32.3", "32.4", "32.5", "32.6", "32.7"] },
-    { "id": 19, "tasks": ["33.1", "33.2", "33.3", "33.4", "33.5", "33.6"] },
-    { "id": 20, "tasks": ["34.1", "34.2", "34.3", "34.4", "34.5", "34.6", "34.7", "34.8"] },
-    { "id": 21, "tasks": ["35.1", "35.2", "35.3", "35.4", "35.5", "35.6", "35.7", "35.8"] },
-    { "id": 22, "tasks": ["36.1", "36.2", "36.3", "36.4", "36.5", "36.6"] }
+    { "id": 18, "tasks": ["32.1", "32.2", "32.3", "32.4", "32.5", "32.6"] },
+    { "id": 19, "tasks": ["33.1", "33.2", "33.3", "33.4", "33.5", "33.6", "33.7"] },
+    { "id": 20, "tasks": ["34.1", "34.2", "34.3", "34.4", "34.5", "34.6"] },
+    { "id": 21, "tasks": ["35.1", "35.2", "35.3", "35.4", "35.5", "35.6", "35.7"] },
+    { "id": 90, "tasks": ["14.1", "14.2", "14.3", "14.4", "15.6", "16.5", "18.3", "21.3", "30.6", "32.7", "34.7"] },
+    { "id": 91, "tasks": ["14.5", "14.6", "27.1", "27.2", "27.3", "27.4"] },
+    { "id": 92, "tasks": ["14.7", "36.1", "36.2", "36.3", "36.4", "36.5"] },
+    { "id": 93, "tasks": ["27.5", "36.6"] },
+    { "id": 99, "tasks": ["34.8", "35.8"] }
   ]
 }
 ```

@@ -24,7 +24,7 @@ feature      = "layerx-platform"
 title        = "LayerX Platform - The Complete Surface"
 kind         = "platform-specification"
 version      = "1.0.0"
-status       = "draft"
+status       = "active"
 language     = "C17 core extension; Rust services and tooling; TypeScript, Python, Go, JVM, Swift and C# SDKs; TypeScript web application"
 repo_root    = "human/ (control plane); platform/ (developer platform); programs/ (programs runtime); interop/ (interoperability gateway)"
 upstream     = "spec/layerx-protocol (normative for protocol behaviour); spec/layerx-agent-interface (normative for the node boundary and the agent layer); supersedes spec/layerx-human-interface as the active feature, carrying its requirements and tasks verbatim"
@@ -58,6 +58,25 @@ interop_edge        = "External protocols - x402 v2, AP2, UCP, A2A, MCP, Visa Tr
 external_settlement = "Money entering LayerX through an external rail is credited only against verified settlement evidence from that rail's provider, with honest pending states while evidence is outstanding, and chargeback or reversal exposure modelled as typed states, never hidden. Card data never touches LayerX components; it is tokenised at the provider edge."
 multichain_surface  = "The multichain surface is presence, not custody. Batch mirror archives are published to external chains as pure archives - commitments plus retrievable data, no vaults, no portals, no custody semantics - and anyone can verify LayerX state from a mirror alone. The protocol's custody and withdrawal guarantee remains Paxeer exclusively. Third-party on and off ramps are market makers operating ordinary LayerX accounts over existing rails; the protocol grants them no special authority and default surfaces never present them as LayerX custody. Claim and receipt vocabulary is domain-tagged in schemas now so a future settlement domain is an additive change, and the one-ledger invariant - one identity, one balance system, one canonical order - is never traded away."
 supersession        = "This spec supersedes spec/layerx-human-interface as the active feature. Requirements 1-23, tasks 1-14, their ids, wave numbers, statuses and every decision above this entry are carried verbatim and remain binding; in-flight work continues under the same task ids without interruption."
+
+[reconciliation]
+audited_at = "2026-08-24"
+basis = "Static inspection of the checked-in first-party source, manifests, executable entry points, generated clients, routes and task dependencies. No build, test, benchmark, live deployment or qualification command was run, so implemented means code is present and qualification remains pending."
+policy = "The active execution queue contains product-code writing only. Test execution, qualification suites, benchmarks, soak, release reports, external deployment evidence and documentation-only work remain recorded but are moved behind the implementation waves and are not implementation-agent work."
+stale_in_progress_reset = ["11.5","12.4","13.1","15.4","24.1"]
+new_gap_tasks = ["5.8","13.6","22.4","33.7"]
+reopened_incomplete_tasks = ["16.4","17.5","17.6","25.1","29.5"]
+code_complete_awaiting_qualification = ["19.2","19.3","19.4","21.1","26.2","28.1","28.2","28.3","28.4","28.5","28.6","29.1","29.2","29.3","29.4","29.6"]
+qualification_only = ["14.1","14.2","14.3","14.4","14.5","14.6","14.7","15.6","16.5","18.3","21.3","27.1","27.2","27.3","27.4","27.5","30.6","32.7","34.7","36.1","36.2","36.3","36.4","36.5","36.6"]
+documentation_only = ["34.8","35.8"]
+parallel_frontier_1 = ["5.8","11.5","12.4","13.1","13.6"]
+parallel_frontier_2 = ["15.4","16.2","17.3"]
+parallel_frontier_3 = ["16.4","17.4","18.2"]
+parallel_frontier_4 = ["17.5","17.6"]
+parallel_frontier_5 = ["22.4","24.1"]
+parallel_frontier_6 = ["25.1","26.1"]
+parallel_frontier_7 = ["25.2"]
+programs_frontiers = "Wave 15: 29.5. Wave 16: 30.2, 30.3 and 30.4 in parallel; then 30.5 and 30.7. Wave 17: 31.1 and 31.2 in parallel; then 31.6 and 31.7. Wave 18: 32.1 through 32.5 in parallel; then 32.6. Wave 19: 33.1 and 33.4 in parallel; then 33.3 and 33.5; then 33.6 and 33.7. Wave 20: 34.1; then 34.2, 34.3 and 34.6 in parallel; then 34.4 and 34.5. Wave 21: 35.1, 35.4 and 35.7 in parallel; then their declared dependency joins through 35.6."
 
 [design]
 include = "design.body.md"
@@ -1032,6 +1051,23 @@ symbols = ["layerx_human_service::binding::BindingJourney"]
 touches = ["human/crates/layerx-human-service/src/binding/mod.rs","human/crates/layerx-human-service/tests/binding.rs"]
 reqs = ["5.1","5.4","5.6","5.8"]
 
+[task.5.8]
+title = "Replace the mounted root secret with a production KMS boundary"
+status = "pending"
+wave = 7
+requires = ["5.3"]
+work_kind = "implementation"
+reality = "The only concrete provider is EnvelopeKms, which opens a file-mounted root secret and unwraps signing keys into the service process. The production custody boundary required by req.4 is absent."
+do_1 = "Refactor custody around a public provider boundary whose production implementation creates, describes, rotates and destroys human and managed-agent keys in a remote KMS or HSM without exporting private key material."
+do_2 = "Move disclosure-bound signing into that provider so the service submits the exact canonical digest and receives only a signature; no production path may unseal a primary key into application memory."
+do_3 = "Bind provider key references to principal-scoped records and preserve step-up, audit, rate-limit and typed-refusal semantics across provider failures."
+do_4 = "Make the file-envelope provider explicitly development-only and refuse production startup when it is selected."
+do_5 = "Expose provider readiness, key-reference integrity and rotation state through the existing redacted health model without logging key material or payloads."
+verify_cmd = "make human-test-service"
+symbols = ["layerx_human_service::custody::KmsProvider","layerx_human_service::custody::RemoteCustodySigner"]
+touches = ["human/crates/layerx-human-service/src/custody/provider.rs","human/crates/layerx-human-service/src/custody/signer.rs","human/crates/layerx-human-service/src/health.rs"]
+reqs = ["4.1","4.2","4.10"]
+
 [task.6]
 title = "Build layerx-paxeer-client, the custody-boundary client"
 status = "pending"
@@ -1526,9 +1562,12 @@ reqs = ["20.1","20.2","20.6","17.3"]
 
 [task.11.5]
 title = "Build the performance machinery"
-status = "in_progress"
-wave = 6
+status = "pending"
+wave = 7
 requires = ["11.1"]
+work_kind = "implementation"
+reality = "Route budgets, the performance Playwright configuration and partial reporting code exist. Redacted real-user monitoring, production cache policy and complete runtime integration are not wired. No agent currently owns this task."
+implementation_scope = "Finish only the runtime code: route chunk boundaries and budget metadata, server cache directives, redacted real-user monitoring, and honest slow-network progress states. Budget execution and performance/soak evidence belong to task 14.5."
 do_1 = "Code-split by route with declared per-route script budgets enforced in CI."
 do_2 = "Render the explorer plane server-side cacheable."
 do_3 = "Enforce the paint, interaction and layout-shift budgets in CI on representative pages."
@@ -1591,9 +1630,11 @@ reqs = ["10.3","11.2","18.7"]
 
 [task.12.4]
 title = "Build the agent surfaces"
-status = "in_progress"
+status = "pending"
 wave = 7
 requires = ["11.3","8.2","8.5"]
+work_kind = "implementation"
+reality = "The agent journey components and state types are substantial but the surface is not fully connected through a runnable human-api service. No agent currently owns this task."
 do_1 = "Build agent creation - name, purpose, limit - with the honest creation-journey progress, in both shells."
 do_2 = "Build the agent list and detail: the desktop master-detail and the mobile stacked screens, with spend-versus-limit from receipts."
 do_3 = "Build the controls with the confirmation grammar: fund, return, change limit, pause reversible, archive destructive with disposition-first and typed confirmation."
@@ -1640,9 +1681,11 @@ status = "pending"
 
 [task.13.1]
 title = "Build settings and preferences"
-status = "in_progress"
+status = "pending"
 wave = 7
 requires = ["11.2","9.4"]
+work_kind = "implementation"
+reality = "Settings, notification and privacy components exist, but service-backed persistence and complete route integration remain partial. No agent currently owns this task."
 do_1 = "Build the settings hub sectioned as profile, security, linked wallet, notifications, advanced and help, with current values on rows."
 do_2 = "Build notification preferences: per-event classes under channel toggles, the notification detail level, and the non-suppressible security classes presented as such."
 do_3 = "Build privacy mode masking balances and every derived figure across both shells, persisted per user."
@@ -1713,16 +1756,34 @@ symbols = ["human_web::explorer"]
 touches = ["human/apps/web/src/explorer","human/apps/web/e2e/explorer.spec.ts"]
 reqs = ["15.1","15.6","15.7"]
 
+[task.13.6]
+title = "Serve human-api through a production service boundary"
+status = "pending"
+wave = 7
+requires = ["4.6","5.6","7.2","8.6","9.5","10.5"]
+work_kind = "implementation"
+reality = "layerx-human-service is a library with no executable HTTP router. The generated web client calls same-origin /v1, Next.js defines no service rewrite, and home has no verified balance operation to call."
+do_1 = "Build the layerx-human-service executable and versioned HTTPS+JSON router for every human-api v1 operation and resumable event stream, decoding and encoding only schema-owned types."
+do_2 = "Bind handlers to the real custody, journey, approval, activity, notification and explorer services and to the agent boundary; do not introduce an in-memory, fake or second protocol-write path."
+do_3 = "Add the missing receipt-verified account-balance and home-summary read contract with freshness and verification level, regenerate the TypeScript client, and bind the home surface to it."
+do_4 = "Implement browser session cookies, anti-forgery enforcement, trace propagation, idempotency keys, typed error responses and principal-scoped request limits at the transport boundary."
+do_5 = "Wire the web application's server-side and browser-side client configuration to the service and expose redacted liveness/readiness that distinguishes custody, agent, core and Paxeer degradation."
+verify_cmd = "make human-build"
+symbols = ["layerx_human_service::server","human_api_balance_operation"]
+touches = ["human/crates/layerx-human-service/src/main.rs","human/crates/layerx-human-service/src/server","human/schema/human-api","human/apps/web/src/api"]
+reqs = ["1.3","1.8","8.1","8.5","8.8","22.4"]
+
 [task.14]
-section = "Wave 8 - Qualification"
+section = "Deferred Qualification - Human Plane"
 title = "Qualify the human plane end to end"
 status = "pending"
 
 [task.14.1]
 title = "Run every journey against the real stack"
 status = "pending"
-wave = 8
-requires = ["12.1","12.2","12.3","12.4","12.5","12.6","13.5"]
+wave = 90
+requires = ["12.1","12.2","12.3","12.4","12.5","12.6","13.5","13.6"]
+work_kind = "qualification"
 do_1 = "Run onboarding, wallet binding, deposit, move money, create agent, approval grant and reject, withdrawal with claim and emergency exit end to end against a real node, a real layerx-agentd and a Paxeer test network."
 do_2 = "Run every journey in both shells."
 do_3 = "Permit no in-process substitute for the node, the daemon or the test network anywhere in the suite."
@@ -1736,8 +1797,9 @@ reqs = ["23.1","16.6"]
 [task.14.2]
 title = "Run the hostile-plane no-fabrication suite"
 status = "pending"
-wave = 8
+wave = 90
 requires = ["10.4","10.5","12.6"]
+work_kind = "qualification"
 do_1 = "Build a tampered human-service that reports altered balances, altered outcomes and fabricated successes."
 do_2 = "Demonstrate exported evidence bundles and explorer verification catch every alteration."
 do_3 = "Demonstrate the untampered application cannot render Done without a verifying receipt, by construction of the success-rendering path."
@@ -1751,8 +1813,9 @@ reqs = ["23.2","1.9"]
 [task.14.3]
 title = "Run the journey fault-injection matrix"
 status = "pending"
-wave = 8
+wave = 90
 requires = ["12.2","12.3"]
+work_kind = "qualification"
 do_1 = "Inject crash, disconnect and duplicate delivery at every stage of every money journey, including between wallet signature and journey registration."
 do_2 = "Assert exactly-once economic effect per leg, honest still-checking presentation and correct resumption in every case."
 do_3 = "Assert no journey is lost, duplicated or stranded without an owner across restarts."
@@ -1766,8 +1829,9 @@ reqs = ["23.3","9.6"]
 [task.14.4]
 title = "Run the UI, copy and accessibility gates"
 status = "pending"
-wave = 8
+wave = 90
 requires = ["12.6","13.5"]
+work_kind = "qualification"
 do_1 = "Enumerate every screen in both shells against the state-matrix registry and fail on any missing state."
 do_2 = "Run visual regression across both shells at the canonical @layerx/ui reference viewports."
 do_3 = "Run the copy lint, component-library integrity and component-kit gates as build gates."
@@ -1781,8 +1845,9 @@ reqs = ["23.4","23.5"]
 [task.14.5]
 title = "Run the performance and soak gates"
 status = "pending"
-wave = 8
+wave = 91
 requires = ["11.5","14.1"]
+work_kind = "qualification"
 do_1 = "Enforce the performance budgets in CI on the representative pages of both planes."
 do_2 = "Run the soak: long-lived journeys - a deposit awaiting finality, a withdrawal awaiting checkpoint, an unactioned approval - held across service restarts."
 do_3 = "Assert no journey lost, duplicated or stranded and no unbounded resource growth across the soak, then delete the human-service store, restart against the same core, and assert every protocol-derived answer - balances, journey outcomes, agent states, spend figures - reconstructs with only declared-local artefacts lost."
@@ -1796,8 +1861,9 @@ reqs = ["23.6","20.3","1.6"]
 [task.14.6]
 title = "Run the usability gate"
 status = "pending"
-wave = 8
+wave = 91
 requires = ["14.1"]
+work_kind = "qualification"
 do_1 = "Define the protocol for the usability gate: participants, tasks - onboarding, deposit, move money, create agent - on mobile, without documentation, and the declared task-success threshold."
 do_2 = "Run the sessions and record task success, time and abandonment per journey."
 do_3 = "File every failure as a defect against the responsible requirement."
@@ -1811,8 +1877,9 @@ reqs = ["23.7","2.9"]
 [task.14.7]
 title = "Run the custody gates and publish the release report"
 status = "pending"
-wave = 8
-requires = ["14.1","14.2","14.3","14.4","14.5","14.6"]
+wave = 92
+requires = ["5.8","14.1","14.2","14.3","14.4","14.5","14.6"]
+work_kind = "qualification"
 do_1 = "Run the isolation, custody, no-key-export and telemetry-redaction suites as build gates."
 do_2 = "Generate the qualification report stating which guarantees are protocol-enforced, agent-layer-enforced and human-plane-enforced, which suites ran with what results, and every unmet gate."
 do_3 = "Make an unmet gate block the release through tooling, recording any exception with its explicit approval."
@@ -1874,9 +1941,11 @@ reqs = ["24.1","24.3","24.4"]
 
 [task.15.4]
 title = "Build the JVM SDK for Java and Kotlin"
-status = "in_progress"
+status = "pending"
 wave = 9
 requires = ["15.1"]
+work_kind = "implementation"
+reality = "The JVM SDK has substantive generated types and client code, but it is not wired to the same complete conformance and packaging surface as the other SDKs. No agent currently owns this task."
 do_1 = "Generate the JVM SDK from the same schemas with a Java-first API and Kotlin-friendly overloads, published as one Maven artifact."
 do_2 = "Implement the local receipt and proof verification path."
 do_3 = "Implement streaming with resumable cursors on virtual-thread-friendly primitives."
@@ -1905,8 +1974,9 @@ reqs = ["24.1","24.3","24.4"]
 [task.15.6]
 title = "Prove cross-language parity and publish the compatibility matrix"
 status = "pending"
-wave = 9
+wave = 90
 requires = ["15.2","15.3","15.4","15.5"]
+work_kind = "qualification"
 do_1 = "Extend the cross-SDK parity suite to all seven languages: every operation, event, error outcome, golden vector and verification API proven wire-identical."
 do_2 = "Make a parity divergence a build failure with the divergence named per language."
 do_3 = "Publish the compatibility matrix recording schema, service and protocol versions per SDK release."
@@ -1941,6 +2011,9 @@ title = "Build the merchant and agent middleware"
 status = "pending"
 wave = 9
 requires = ["16.1"]
+work_kind = "implementation"
+reality = "Both middleware packages contain substantial code, but merchant is absent from the middleware build path, the runnable examples do not match the declared artifacts, and publication wiring is incomplete."
+implementation_scope = "Finish package manifests and real service adapters, include merchant and agent in the platform build, and make the merchant-shop and agent examples runnable from their declared packages. Publishing and conformance execution remain qualification/release work."
 do_1 = "Build merchant middleware: catalog and checkout hooks, order-to-payment mapping, settlement webhooks and receipt-backed order state."
 do_2 = "Build agent middleware: budget-aware spending, approval-hold awareness, receipt verification and typed refusal handling for agent frameworks."
 do_3 = "Keep every rendered state receipt-backed or honestly pending, per the conformance suite."
@@ -1968,9 +2041,11 @@ reqs = ["25.2","25.7","25.5"]
 
 [task.16.4]
 title = "Build the mobile bindings and agent-framework integrations"
-status = "done"
+status = "pending"
 wave = 9
 requires = ["15.5","16.2"]
+work_kind = "implementation"
+reality = "Integration source exists, but this task was marked done while its agent-middleware prerequisite is pending; the bindings cannot be considered integrated until they consume the completed package surface."
 do_1 = "Ship iOS bindings over the Swift SDK and Android bindings over the JVM SDK, each with a runnable sample app."
 do_2 = "Ship integrations for the major agent frameworks over the agent middleware, each installable as one dependency."
 do_3 = "Verify webhook consumption, signature verification and replay protection in every integration's default path."
@@ -1984,8 +2059,9 @@ reqs = ["25.2","25.6","25.7"]
 [task.16.5]
 title = "Enforce the ten-line benchmark gate"
 status = "pending"
-wave = 9
+wave = 90
 requires = ["16.1","16.3"]
+work_kind = "qualification"
 do_1 = "Build the benchmark gate that counts integration lines in the seller and buyer quickstarts against the published packages."
 do_2 = "Fail the release when either quickstart exceeds ten lines of integration code."
 do_3 = "Measure against the packages as published, not against internal shortcuts, by installing from the registry snapshot in the gate."
@@ -2031,10 +2107,13 @@ touches = ["platform/emulator/src/main.rs","platform/emulator/tests"]
 reqs = ["26.2"]
 
 [task.17.3]
-title = "Operate the hosted testnet and faucet"
+title = "Build the deployable hosted testnet and faucet"
 status = "pending"
 wave = 9
 requires = ["17.2"]
+work_kind = "implementation"
+reality = "Configuration validation, a local emulator/snapshot script and faucet logic exist, but there is no deployable hosted-testnet control plane, reset scheduler or public status integration."
+implementation_scope = "Write the deployable testnet and faucet services, infrastructure configuration, reset scheduler, rate-limit persistence, public parameter/status endpoints and monitoring hooks. Actually operating the public service and recording live evidence are qualification/operations work."
 do_1 = "Stand up the hosted testnet running the pending-release protocol version with declared reset schedule and public status."
 do_2 = "Build the faucet with per-identity and per-address rate limits and abuse resistance."
 do_3 = "Publish testnet endpoints, chain parameters and reset calendar in the docs."
@@ -2046,10 +2125,13 @@ touches = ["platform/hosted/testnet","platform/hosted/faucet","platform/docs"]
 reqs = ["26.3","26.7"]
 
 [task.17.4]
-title = "Operate the hosted gateway with keys and quotas"
+title = "Build the deployable hosted gateway with keys and quotas"
 status = "pending"
 wave = 9
 requires = ["17.3"]
+work_kind = "implementation"
+reality = "API-key, quota and idempotency libraries exist, but the hosted gateway has no executable HTTP server and does not expose the complete production/emulator route surface."
+implementation_scope = "Write the gateway executable, router, durable stores and real agent/core adapters; expose self-service key rotation, typed quota refusals, activity/state/receipt routes and readiness. Load and live-operation evidence remain qualification work."
 do_1 = "Stand up the hosted gateway and RPC surface with self-service API key issuance and rotation."
 do_2 = "Enforce per-key quotas with typed rate-limit refusals carrying retry timing."
 do_3 = "Prove no gateway path weakens protocol authorisation or verification rules, by the boundary conformance suite."
@@ -2062,9 +2144,11 @@ reqs = ["26.4","26.7"]
 
 [task.17.5]
 title = "Deliver webhooks and developer dashboards"
-status = "done"
+status = "pending"
 wave = 9
 requires = ["17.4"]
+work_kind = "implementation"
+reality = "Webhook and dashboard executables exist, but they were marked done before the hosted gateway they consume. Remaining code is the real gateway integration and removal of standalone-only assumptions."
 do_1 = "Implement webhook delivery for journey, payment, approval and program events: signed payloads, ordered per subject, at-least-once with replay protection."
 do_2 = "Build the redelivery surface for missed events with stable cursors."
 do_3 = "Build the developer dashboard: keys, usage, request logs, webhook delivery logs, test payments and receipts."
@@ -2077,9 +2161,11 @@ reqs = ["26.5","26.6"]
 
 [task.17.6]
 title = "Ship one-command MCP and A2A installation"
-status = "done"
+status = "pending"
 wave = 9
 requires = ["17.1","17.4"]
+work_kind = "implementation"
+reality = "Installer command code exists, but a working hosted target and end-to-end credential handoff cannot be completed until task 17.4 supplies the production gateway."
 do_1 = "Build layerx install mcp: one command installing a working payment-capable MCP server configuration against the chosen environment."
 do_2 = "Build layerx install a2a with the same one-command rule for A2A."
 do_3 = "Verify both installations end to end in CI against a real agent runtime completing a test payment."
@@ -2114,6 +2200,9 @@ title = "Ship the reference applications"
 status = "pending"
 wave = 9
 requires = ["16.2","17.2"]
+work_kind = "implementation"
+reality = "Buyer-agent, paid-api, merchant-checkout and agent-spend examples exist, but declared naming/launch contracts are inconsistent and the Programs marketplace reference is absent."
+implementation_scope = "Normalize the buyer, seller and merchant applications into cloneable one-command examples over the published middleware and add the missing Programs marketplace application. Execution against emulator/testnet remains qualification."
 do_1 = "Ship the buyer agent reference: an agent paying for a metered API through the buyer middleware."
 do_2 = "Ship the paid API seller reference over the seller middleware."
 do_3 = "Ship the merchant checkout reference over the merchant middleware."
@@ -2127,8 +2216,9 @@ reqs = ["27.2"]
 [task.18.3]
 title = "Enforce the five-minute first-payment gate"
 status = "pending"
-wave = 9
+wave = 90
 requires = ["18.1","17.3"]
+work_kind = "qualification"
 do_1 = "Script the clean-environment run: fresh machine image, published quickstart only, account setup, faucet funding, verified test payment."
 do_2 = "Measure wall-clock to the verified receipt and fail the release beyond five minutes."
 do_3 = "Run the gate against every quickstart language on the schedule and before release."
@@ -2304,8 +2394,9 @@ reqs = ["30.3","30.4"]
 [task.21.3]
 title = "Run the hostile-program gauntlet"
 status = "pending"
-wave = 10
+wave = 90
 requires = ["21.2","20.1"]
+work_kind = "qualification"
 do_1 = "Build the gauntlet: hostile programs attempting balance manipulation, capability escalation, reentrancy exploitation, storage escape, metering evasion and determinism violation."
 do_2 = "Prove every attack defeated by construction, with an escape a build-breaking defect."
 do_3 = "Run the gauntlet against a real node as a release gate."
@@ -2410,6 +2501,23 @@ symbols = ["interop_x402_facilitator"]
 touches = ["interop/crates/layerx-x402/src/facilitator.rs","interop/crates/layerx-x402/tests/transports.rs"]
 reqs = ["32.2","32.8"]
 
+[task.22.4]
+title = "Serve the interoperability adapters through an executable gateway"
+status = "pending"
+wave = 11
+requires = ["17.4","22.3","23.1","23.2","23.3","24.2"]
+work_kind = "implementation"
+reality = "The interoperability gateway is a library with adapter, isolation, idempotency, audit and redaction code but no production service entry point or transport router."
+do_1 = "Build the interop gateway executable and configuration layer, registering only version-pinned adapters and refusing startup when an adapter has no declared evidence policy."
+do_2 = "Expose the x402, AP2, UCP, Visa, fiat, HTTP, MCP and A2A ingress surfaces through typed transport handlers backed by the hosted gateway's real authentication, quota, idempotency and audit stores."
+do_3 = "Bind every state-changing translation to the real typed intent and receipt-verification path, with external pending, reversal and refusal states preserved at the boundary."
+do_4 = "Implement provider callback and mandate-verification endpoints with replay protection, principal isolation, redacted tracing and durable resumption after restart."
+do_5 = "Expose per-adapter readiness and pinned-version metadata without treating upstream or settlement unavailability as LayerX success or failure."
+verify_cmd = "make interop-build"
+symbols = ["layerx_interop_gateway::server","interop_gateway_routes"]
+touches = ["interop/crates/layerx-interop-gateway/src/main.rs","interop/crates/layerx-interop-gateway/src/server","interop/crates/layerx-interop-gateway/src/config.rs"]
+reqs = ["32.1","32.2","32.6","32.8","32.9"]
+
 [task.23]
 title = "Implement the commerce mandate adapters"
 status = "pending"
@@ -2465,9 +2573,12 @@ status = "pending"
 
 [task.24.1]
 title = "Build the Ethereum and Solana migration tooling"
-status = "in_progress"
+status = "pending"
 wave = 11
 requires = ["22.1","6.2"]
+work_kind = "implementation"
+reality = "The migration model, orchestration and verifier traits are substantial, but Ethereum and Solana verifier implementations exist only inside tests; production RPC/finality clients are missing. No agent currently owns this task."
+implementation_scope = "Implement production Ethereum and Solana source-chain clients, finality/reorg policies, authenticated checkpoint persistence and operator configuration, then bind them to the existing migration orchestration. Test-network execution remains qualification."
 do_1 = "Build account mapping: external addresses associated to LayerX identities through the protocol's binding mechanisms."
 do_2 = "Build asset migration through the custody boundary, credited only against verified source-chain finality."
 do_3 = "Build transaction-history import labelled as external provenance, never as LayerX receipts."
@@ -2515,9 +2626,12 @@ status = "pending"
 
 [task.25.1]
 title = "Build the mirror publisher"
-status = "done"
+status = "pending"
 wave = 12
 requires = ["10.1"]
+work_kind = "implementation"
+reality = "Archive construction, publication state, finality/reorg handling and EthereumArchiveClient/SolanaArchiveClient traits exist, but the only client implementations are in-memory test networks. No production Ethereum signer/RPC client, Solana signer/RPC client or deployable publisher executable is checked in."
+implementation_scope = "Implement the production Ethereum and Solana archive clients, signer/credential boundary, durable publication cursor/state and deployable publisher process over the existing generic publication engine. Live test-network publication remains qualification."
 do_1 = "Build the mirror publisher anchoring batch commitments to Ethereum and Solana with batch data retrievable per mirror, fed exclusively through the node boundary."
 do_2 = "Publish as pure archives: no vault, portal or custody semantics of any kind on the mirror chains."
 do_3 = "Track and expose per-mirror freshness - latest batch and checkpoint mirrored - with lag stated honestly."
@@ -2533,6 +2647,9 @@ title = "Verify from mirrors in the explorer and the SDKs"
 status = "pending"
 wave = 12
 requires = ["25.1","10.5"]
+work_kind = "implementation"
+reality = "Mirror verification is implemented in the mirror crate, the Rust agent SDK and explorer-index library. TypeScript, Python, Go, JVM, Swift, C# and the rendered web explorer have no mirror source surface."
+implementation_scope = "Add mirror source and freshness types to the shared schema/generators, implement verification-source selection in all seven SDKs, and bind the public explorer UI to mirror-only evidence reads. Tamper and infrastructure-outage execution remain qualification."
 do_1 = "Extend the explorer verifier to verify receipts and state against mirror data alone."
 do_2 = "Extend the SDK verification paths to accept mirror sources."
 do_3 = "Prove in the qualification suite that a receipt verifies from a mirror with LayerX infrastructure unavailable."
@@ -2567,6 +2684,9 @@ title = "Build the market-maker ramp kit and reference ramp"
 status = "pending"
 wave = 12
 requires = ["15.2"]
+work_kind = "implementation"
+reality = "The ramp toolkit models ordinary-principal transfers, payer grants and receipt-backed states, but the reference executable only prints a configuration message and has no operator plane, Paxeer rebalancing or durable workflow."
+implementation_scope = "Finish the real OrdinaryPrincipalPlane adapters, durable operator workflow, Paxeer rebalancing path, configuration/credential boundary and runnable reference service. Live testnet execution remains qualification."
 do_1 = "Build the ramp toolkit letting third parties operate on and off ramps as ordinary LayerX principals over agent accounts, 402LXP transfers and payer grants."
 do_2 = "Grant no special protocol authority, no reserved vocabulary and no custody claims to any ramp."
 do_3 = "Ship a runnable reference ramp with rebalancing through the Paxeer boundary on the operator's own account."
@@ -2579,9 +2699,11 @@ reqs = ["34.5"]
 
 [task.26.2]
 title = "Enforce external-custody labelling"
-status = "pending"
+status = "implemented"
 wave = 12
-requires = ["26.1"]
+requires = ["1.3","11.2"]
+work_kind = "implementation"
+reality = "The copy catalog has a dedicated ramp surface and mandatory external-custody copy, and the copy lint rejects default-surface ramp copy, ambiguous custody claims and Done without the verified LayerX-side receipt. Qualification remains pending."
 do_1 = "Keep third-party ramps off the human plane's default surfaces by rule and by the copy lint."
 do_2 = "Label any surfaced ramp as external custody in plain language from the copy catalog."
 do_3 = "Render ramp outcomes as Done only against the verified LayerX receipt of the LayerX-side leg."
@@ -2593,15 +2715,16 @@ touches = ["human/apps/web/copy/catalog.ts","human/tools/copy-lint"]
 reqs = ["34.6","34.4"]
 
 [task.27]
-section = "Wave 13 - Platform Qualification"
+section = "Deferred Qualification - Platform"
 title = "Qualify the platform end to end"
 status = "pending"
 
 [task.27.1]
 title = "Run the adoption benchmark gates"
 status = "pending"
-wave = 13
+wave = 91
 requires = ["18.3","16.5"]
+work_kind = "qualification"
 do_1 = "Run the five-minute first-payment gate across every quickstart language against published artifacts."
 do_2 = "Run the ten-line integration gate against published middleware."
 do_3 = "Run the programs five-minute variant: quickstart program deployed and first paid call executed within budget."
@@ -2615,8 +2738,9 @@ reqs = ["27.3","27.4","31.6"]
 [task.27.2]
 title = "Run the programs security qualification"
 status = "pending"
-wave = 13
+wave = 91
 requires = ["21.3","21.6"]
+work_kind = "qualification"
 do_1 = "Run the hostile-program gauntlet, the isolation suite, the determinism differential and the metering suites against a real node as release gates."
 do_2 = "Run the ported reference contracts end to end."
 do_3 = "Prove the monetary law with the balance-conservation suite over program-heavy histories."
@@ -2630,8 +2754,9 @@ reqs = ["30.7","28.2","31.4"]
 [task.27.3]
 title = "Run the interop conformance matrix"
 status = "pending"
-wave = 13
-requires = ["22.3","23.1","23.2","23.3","24.3"]
+wave = 91
+requires = ["22.3","22.4","23.1","23.2","23.3","24.1","24.3"]
+work_kind = "qualification"
 do_1 = "Run every adapter's conformance suite against its pinned upstream specification version: x402 v2 across all transports, AP2, UCP and Visa Trusted Agent."
 do_2 = "Run the portable-verification vectors in both directions."
 do_3 = "Run the migration and fiat fault-injection suites."
@@ -2645,8 +2770,9 @@ reqs = ["32.8","33.6"]
 [task.27.4]
 title = "Run the multichain verification gates"
 status = "pending"
-wave = 13
+wave = 91
 requires = ["25.2","26.2"]
+work_kind = "qualification"
 do_1 = "Prove receipt verification from each mirror with LayerX infrastructure unavailable."
 do_2 = "Prove tampered mirror data is caught by verification."
 do_3 = "Prove the Paxeer-exclusivity and one-ledger invariants across every multichain surface."
@@ -2660,8 +2786,9 @@ reqs = ["34.2","34.4","34.6"]
 [task.27.5]
 title = "Publish the platform release report"
 status = "pending"
-wave = 13
+wave = 93
 requires = ["14.7","27.1","27.2","27.3","27.4"]
+work_kind = "qualification"
 do_1 = "Extend the qualification report to the whole platform: human plane, developer platform, programs, interop and multichain gates, each stating its enforcement layer and results."
 do_2 = "Record every unmet gate, with tooling refusing the release while any remains."
 do_3 = "Publish the report with the compatibility matrix and benchmark artifacts."
@@ -2802,7 +2929,7 @@ reqs = ["35.7"]
 section = "Wave 15 - The Program State Model"
 title = "Give programs shared state, iteration and bounded state lifetimes"
 status = "pending"
-note = "Parallel lanes: 29.1 fixes the namespace model first because every other lane addresses it. Then 29.2, 29.3, 29.4 and 29.5 are four independent agents on disjoint files, and 29.6 and 29.7 close behind them."
+note = "Reconciled code lane: 29.1 through 29.4, 29.6 and 29.7 have code present. Task 29.5 remains because its Rust occupancy ledger is not integrated with protocol charging, state roots, snapshots and receipts."
 
 [task.29.1]
 title = "Extend the namespace model with a program-shared namespace"
@@ -2866,9 +2993,12 @@ reqs = ["36.4"]
 
 [task.29.5]
 title = "Charge storage occupancy over time as its own resource class"
-status = "implemented"
+status = "pending"
 wave = 15
 requires = ["29.1"]
+work_kind = "implementation"
+reality = "OccupancyLedger and occupancy metering exist inside the Rust runtime, but the charge is not wired through the C programs module to canonical account debit, protocol state root, snapshot/replay and receipt evidence."
+implementation_scope = "Integrate the existing occupancy calculation into batch execution, fee-schedule state, account charging, canonical evidence, state roots and snapshots without changing the already-written runtime semantics."
 do_1 = "Add an occupancy resource class measured as namespace bytes held across batches, distinct from the one-off read and write classes the meter already enforces."
 do_2 = "Price occupancy through the fee schedule and charge it to the account declared responsible for the namespace, so persistent state is paid for as long as it persists."
 do_3 = "Account occupancy deterministically from protocol state - the batch sequence and the recorded namespace size - with no wall-clock input anywhere."
@@ -2913,7 +3043,7 @@ reqs = ["36.7","31.3","31.4"]
 section = "Wave 16 - Program-Owned Accounts"
 title = "Let programs hold and disburse value under their own authority"
 status = "pending"
-note = "Parallel lanes: 30.1 fixes the derivation every other lane depends on. Then 30.2, 30.3 and 30.4 are three independent agents on the transfer law, the C module and the capability model, with 30.5, 30.6 and 30.7 closing behind them."
+note = "Code-only lanes: 30.2, 30.3 and 30.4 are three independent implementations on the transfer law, the C module and the capability model. Then 30.5 and 30.7 close the product-code wave. Task 30.6 is deferred qualification work."
 
 [task.30.1]
 title = "Derive program-owned accounts deterministically"
@@ -2993,8 +3123,9 @@ reqs = ["37.5","29.6"]
 [task.30.6]
 title = "Extend the hostile-program gauntlet to program custody"
 status = "pending"
-wave = 16
+wave = 90
 requires = ["30.2","30.3","30.4"]
+work_kind = "qualification"
 do_1 = "Add hostile programs attempting to derive another program's account, to spend from an account they cannot derive, and to stage a derived-account leg from a callee frame."
 do_2 = "Add hostile programs attempting to escape the atomic transfer set through partial settlement, reentrant spending and repeated visits."
 do_3 = "Add hostile programs attempting to mint by staging legs whose totals do not conserve, defeated by the kernel primitive rather than by the program."
@@ -3024,7 +3155,7 @@ reqs = ["37.7","31.4"]
 section = "Wave 17 - Execution Context and Compute Primitives"
 title = "Give programs self-knowledge and the primitives every chain provides"
 status = "pending"
-note = "Parallel lanes: 31.3, 31.4 and 31.5 are three fully independent agents from the start of the wave, each owning one file under src/crypto. 31.1 and 31.2 run beside them. 31.6 joins all five and 31.7 follows it."
+note = "Code-only lanes: 31.3, 31.4 and 31.5 are complete. Tasks 31.1 and 31.2 run in parallel; 31.6 joins them into ABI version two and 31.7 binds the result into the SDK and porting kits."
 
 [task.31.1]
 title = "Expose the execution context to guest code"
@@ -3135,7 +3266,7 @@ reqs = ["38.8","31.3","31.4"]
 section = "Wave 18 - Economics, Performance and Parallel Execution"
 title = "Make program execution fast enough and priced honestly enough to be a real plane"
 status = "pending"
-note = "Parallel lanes: 32.1, 32.2, 32.3 and 32.4 are four independent agents on disjoint files from the start of the wave. 32.5 depends only on the state model and runs beside them. 32.6 joins 32.5, and 32.7 measures everything last."
+note = "Code-only lanes: 32.1, 32.2, 32.3, 32.4 and 32.5 are five independent implementations on disjoint files. Task 32.6 follows 32.5. Task 32.7 is deferred benchmark and qualification work."
 
 [task.32.1]
 title = "Cache validated and compiled modules by code hash"
@@ -3230,8 +3361,9 @@ reqs = ["39.6"]
 [task.32.7]
 title = "Establish the program execution performance baseline"
 status = "pending"
-wave = 18
+wave = 90
 requires = ["32.1","32.2","32.3","32.6"]
+work_kind = "qualification"
 do_1 = "Benchmark cold and warm validation, instantiation, a trivial call, a storage-heavy call, a compute-heavy call, a deep composition chain and a wide fan-out, on fixed hardware with the methodology recorded."
 do_2 = "Benchmark the sustained program-activity throughput of a full batch, reported as activities per second and as fuel per second, with the workload mix stated."
 do_3 = "Record every number in the performance ledger beside the existing kernel and service measurements, in the same format, with no number reported without its conditions."
@@ -3247,7 +3379,7 @@ reqs = ["39.7","43.5"]
 section = "Wave 19 - Interfaces and Agent-Native Authoring"
 title = "Make programs discoverable, callable and authorable without a compiler"
 status = "pending"
-note = "Parallel lanes: 33.1 and 33.2 are two independent agents defining the interface record and the calldata convention. 33.3 follows both. 33.4 and 33.5 are an independent pair on the interpreter. 33.6 joins everything."
+note = "Code-only lanes: 33.1 and 33.4 start independently because 33.2 is already complete. Task 33.3 follows 33.1, task 33.5 follows 33.4, task 33.6 joins those lanes, and task 33.7 finishes hosted and SDK exposure."
 
 [task.33.1]
 title = "Publish program interfaces as protocol state"
@@ -3340,11 +3472,28 @@ symbols = ["layerx_agent::ops::program","layerx_platform_cli::program::call"]
 touches = ["agent/crates/layerx-agent/src/ops/program.rs","platform/crates/layerx-platform-cli/src/program/call.rs","agent/crates/layerx-agent-emulator/src/program.rs"]
 reqs = ["40.6"]
 
+[task.33.7]
+title = "Finish program operations across the hosted gateway and seven SDKs"
+status = "pending"
+wave = 19
+requires = ["17.4","33.6"]
+work_kind = "implementation"
+reality = "Program call types exist in the agent type crate, CLI, emulator and explorer-index projection, but the hosted gateway has no program routes and none of the seven developer SDKs exposes program discover, interface, simulate or call operations."
+do_1 = "Expose discover, interface, simulate and receipt-verified call routes on the hosted gateway using the agent-plane operations from task 33.6, with idempotency required for calls and typed refusal and unknown outcomes preserved."
+do_2 = "Add the program operation and interface records to the shared schema and generation inputs so one regeneration supplies identical wire behavior to Rust, TypeScript, Python, Go, JVM, Swift and C#."
+do_3 = "Implement idiomatic typed program clients in all seven SDKs, including bounded calldata, declared budgets, capability requests, typed responses and failures, and local receipt verification."
+do_4 = "Add verified-source and interface metadata to the public explorer program projection and connect the rendered explorer route to that projection."
+do_5 = "Keep emulator and hosted routes contract-identical so SDK configuration changes environment only, never payload construction or outcome semantics."
+verify_cmd = "make platform-build"
+symbols = ["platform_gateway_program_routes","platform_sdk_programs"]
+touches = ["platform/hosted/gateway/src","platform/sdk","agent/schema/agent-api","human/crates/layerx-explorer-index/src/programs.rs","human/apps/web/src/explorer"]
+reqs = ["35.7","40.1","40.2","40.6"]
+
 [task.34]
 section = "Wave 20 - Ephemeral Metered Sandboxes"
 title = "Rent a sandbox through a program, pay only for the compute used, and have it destroyed"
 status = "pending"
-note = "Parallel lanes: 34.1 defines the lease record every other lane addresses. Then 34.2, 34.3 and 34.6 are three independent agents on escrow, execution and snapshotting, with 34.4 and 34.5 following the first two, and 34.7 and 34.8 closing the wave."
+note = "Code-only lanes: 34.1 defines the lease record. Then 34.2, 34.3 and 34.6 are three independent implementations on escrow, execution and snapshotting; 34.4 and 34.5 close the product-code wave. Tasks 34.7 and 34.8 are deferred qualification and documentation."
 
 [task.34.1]
 title = "Model the sandbox lease as protocol state"
@@ -3439,8 +3588,9 @@ reqs = ["41.6"]
 [task.34.7]
 title = "Run the sandbox escape gauntlet"
 status = "pending"
-wave = 20
+wave = 90
 requires = ["34.3","34.5","34.6"]
+work_kind = "qualification"
 do_1 = "Add hostile sandbox images attempting to read another lease's namespace, to survive expiry, to spend past the escrow, and to call an unauthorised program."
 do_2 = "Add hostile images attempting to consume unbounded resources, to recurse into their own lease, and to leave state behind after destruction."
 do_3 = "Add a hostile renter attempting to restore a lease from a snapshot they do not own or from a forged digest."
@@ -3454,8 +3604,9 @@ reqs = ["43.1","30.7"]
 [task.34.8]
 title = "Document what an on-platform sandbox is and is not"
 status = "pending"
-wave = 20
+wave = 99
 requires = ["34.7","32.7"]
+work_kind = "documentation"
 do_1 = "Document the sandbox as deterministic, replicated, metered compute: every node executes every sandbox activity, and the price reflects that replication."
 do_2 = "Publish the measured cost per unit of sandbox compute beside the ordinary program cost, so the premium is visible rather than implied."
 do_3 = "State plainly which workloads belong here - deterministic, small, settlement-adjacent - and which belong in the off-platform market of the next wave."
@@ -3470,7 +3621,7 @@ reqs = ["41.8"]
 section = "Wave 21 - Verifiable Off-Platform Compute"
 title = "Settle rented compute the platform did not execute, without trusting the provider"
 status = "pending"
-note = "Parallel lanes: 35.1 lands the commitment scheme first. Then 35.2 and 35.4 are two independent agents on verification and the marketplace, with 35.7 running independently beside them. 35.3 follows 35.2, 35.5 and 35.6 follow 35.4, and 35.8 closes."
+note = "Code-only lanes: 35.1, 35.4 and 35.7 start independently. Task 35.2 follows 35.1, task 35.5 follows 35.4, task 35.3 follows 35.2, and task 35.6 joins the dispute and marketplace lanes. Task 35.8 is deferred documentation."
 
 [task.35.1]
 title = "Commit to execution state per step"
@@ -3580,8 +3731,9 @@ reqs = ["42.6"]
 [task.35.8]
 title = "State the verification model plainly wherever compute is sold"
 status = "pending"
-wave = 21
+wave = 99
 requires = ["35.6","35.7"]
+work_kind = "documentation"
 do_1 = "Label every compute lease with its verification model: replicated execution, fraud-proof arbitration or attestation, in the same words everywhere it appears."
 do_2 = "State what each model costs and what each model assumes, including the assumption a fraud proof makes about at least one honest watcher."
 do_3 = "Refuse to present an attested result as a verified one anywhere in the agent plane, the CLI or the documentation."
@@ -3593,7 +3745,7 @@ touches = ["platform/docs/content/guide/compute-market.md","platform/docs/conten
 reqs = ["42.7"]
 
 [task.36]
-section = "Wave 22 - Programs Plane Qualification"
+section = "Deferred Qualification - Programs Plane"
 title = "Gate the whole programs plane on adversarial evidence before release"
 status = "pending"
 note = "Parallel lanes: 36.1, 36.2, 36.3, 36.4 and 36.5 are five independent agents, each owning one evidence class and one gate. 36.6 is the only join and it writes nothing it has not measured."
@@ -3601,8 +3753,9 @@ note = "Parallel lanes: 36.1, 36.2, 36.3, 36.4 and 36.5 are five independent age
 [task.36.1]
 title = "Extend the hostile-program gauntlet to every capability added after version one"
 status = "pending"
-wave = 22
+wave = 92
 requires = ["29.6","30.6","34.7"]
+work_kind = "qualification"
 do_1 = "Consolidate the shared-state, custody, sandbox and composition gauntlets into one inventory covering every capability waves fourteen through twenty-one added, with each attack named, its target capability named and its defence named."
 do_2 = "Add the attacks the new capabilities create that no earlier gauntlet covered: context spoofing across a call edge, precompile abuse as a metering-evasion route, access-set evasion, iteration used to escape the resource budget, occupancy charged to the wrong account, and arbiter fraud through a forged step commitment."
 do_3 = "Run the whole inventory under the parallel scheduler as well as serially, so no defence depends on serial execution order."
@@ -3616,8 +3769,9 @@ reqs = ["43.1","30.7"]
 [task.36.2]
 title = "Run the determinism differential across every added surface"
 status = "pending"
-wave = 22
+wave = 92
 requires = ["32.6","34.6","35.1"]
+work_kind = "qualification"
 do_1 = "Extend the differential to every host function added in waves fourteen through seventeen, asserting byte-identical results across operating systems, architectures and optimisation levels."
 do_2 = "Run the differential across both metering paths - engine fuel and injected instrumentation - asserting identical charges per vector, so the mechanism change is provably not a repricing."
 do_3 = "Run the differential across serial and parallel scheduling, asserting identical state roots, identical receipts, identical event order and identical fuel per activity."
@@ -3631,8 +3785,9 @@ reqs = ["43.2","28.2"]
 [task.36.3]
 title = "Extend the fuzz corpora to every new input surface"
 status = "pending"
-wave = 22
+wave = 92
 requires = ["33.2","34.6","35.2"]
+work_kind = "qualification"
 do_1 = "Add fuzz targets over calldata decoding, response encoding, iteration cursors, context field addressing, hash and signature and wide-integer inputs, access-set declarations, snapshot restoration and step proofs."
 do_2 = "Seed each corpus from the golden vectors of the surface it covers so fuzzing starts from valid structure rather than from noise."
 do_3 = "Treat a panic, a hang, a non-deterministic result or an unbounded allocation as a build-breaking defect on every target."
@@ -3646,8 +3801,9 @@ reqs = ["43.3","28.8"]
 [task.36.4]
 title = "Re-prove the monetary law over program-heavy histories"
 status = "pending"
-wave = 22
+wave = 92
 requires = ["30.6","34.5","35.6"]
+work_kind = "qualification"
 do_1 = "Generate long histories mixing derived-account custody, sandbox escrow, incremental usage settlement, marketplace stakes and slashing, and replay each one from genesis."
 do_2 = "Assert balance conservation over every history: total supply unchanged, every slashed unit landing somewhere, every escrow funded equal to spent plus refunded."
 do_3 = "Assert that no history contains a balance change outside a kernel-applied 402LXP transfer, checked against the state transition record rather than against the code."
@@ -3661,8 +3817,9 @@ reqs = ["43.4","30.2"]
 [task.36.5]
 title = "Make the performance measurements release gates"
 status = "pending"
-wave = 22
+wave = 92
 requires = ["32.7","33.5"]
+work_kind = "qualification"
 do_1 = "Set declared thresholds for cold and warm call latency, fuel throughput, parallel speedup at the declared conflict distribution, interpreter overhead and arbiter step cost."
 do_2 = "Fail the release when any threshold is unmet, naming the measurement, the threshold and the observed value."
 do_3 = "Record every measurement with its hardware, its workload mix and its methodology, so a number without its conditions is never published."
@@ -3676,8 +3833,9 @@ reqs = ["43.5","39.7"]
 [task.36.6]
 title = "Report the programs plane in the platform release report"
 status = "pending"
-wave = 22
-requires = ["36.1","36.2","36.3","36.4","36.5"]
+wave = 93
+requires = ["33.7","36.1","36.2","36.3","36.4","36.5"]
+work_kind = "qualification"
 do_1 = "Add the programs plane to the platform release report under the same rules as every other pillar, with each gate named, its evidence linked and its outcome stated."
 do_2 = "Record every unmet gate explicitly and refuse the release while any remains unmet, so the report is a gate rather than a summary."
 do_3 = "State the plane's honest limits alongside its guarantees: what replicated execution costs, what a fraud proof assumes, what an attestation does not prove, and which workloads do not belong here."
