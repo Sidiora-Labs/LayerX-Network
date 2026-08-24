@@ -24,7 +24,7 @@ Point your app at it and nothing else changes:
 
 ```
 export LAYERX_API_URL=http://127.0.0.1:9402
-layerx environment use local --endpoint http://127.0.0.1:9402 --network-id 402
+layerx environment use emulator --endpoint http://127.0.0.1:9402 --network-id 402
 ```
 
 Loopback `http://` is accepted here and only here. Every non-loopback endpoint must be `https://`, in the CLI and in the middleware transport alike, and that is a refusal rather than a warning.

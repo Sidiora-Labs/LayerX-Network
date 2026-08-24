@@ -62,6 +62,7 @@ struct SessionResponse {
 #[serde(deny_unknown_fields)]
 struct IssueRequest {
     signer_public_key: String,
+    scopes: Vec<String>,
     quota_requests: u64,
     quota_window_seconds: u64,
 }
@@ -70,6 +71,7 @@ struct IssueRequest {
 struct PublicKeyRecord {
     id: String,
     signer_public_key: String,
+    scopes: Vec<String>,
     quota_requests: u64,
     quota_window_seconds: u64,
     state: &'static str,
@@ -457,6 +459,7 @@ fn key_record(
     issued: &IssuedKey,
     principal: &PrincipalId,
     signer: &str,
+    scopes: &str,
     quota: Quota,
     epoch: u64,
 ) -> KeyRecord {
@@ -471,11 +474,43 @@ fn key_record(
         ]),
         salt,
         signer_public_key: signer.to_ascii_lowercase(),
+        scopes: scopes.to_owned(),
         quota_requests: quota.requests(),
         quota_window_seconds: quota.window_seconds(),
         epoch,
         disabled: false,
     }
+}
+
+fn canonical_scopes(scopes: &[String]) -> Result<String, ()> {
+    if scopes.is_empty() || scopes.len() > 3 {
+        return Err(());
+    }
+    let mut previous = None;
+    for scope in scopes {
+        if !matches!(
+            scope.as_str(),
+            "activity:write" | "receipt:read" | "state:read"
+        ) || previous.is_some_and(|value: &str| value >= scope.as_str())
+        {
+            return Err(());
+        }
+        previous = Some(scope.as_str());
+    }
+    Ok(scopes.join(","))
+}
+
+fn record_scopes(record: &KeyRecord) -> Vec<&str> {
+    record.scopes.split(',').collect()
+}
+
+fn permits(record: &KeyRecord, route: &ProductionRoute<'_>) -> bool {
+    let required = match route {
+        ProductionRoute::Activity => "activity:write",
+        ProductionRoute::State => "state:read",
+        ProductionRoute::Receipt(_) => "receipt:read",
+    };
+    record.scopes.split(',').any(|scope| scope == required)
 }
 
 fn audit_event(principal_digest: &str, action: &str, subject: &str, outcome: &str) -> String {
@@ -515,13 +550,24 @@ fn manage_keys(config: &Config, request: &IncomingRequest) -> OutgoingResponse {
             Ok(value) => value,
             Err(_) => return response(400, "invalid_quota", None),
         };
+        let scopes = match canonical_scopes(&issue.scopes) {
+            Ok(value) => value,
+            Err(()) => return response(400, "invalid_scopes", None),
+        };
         let context = digest(&[
             b"gateway-key-issuance-v1",
             principal_hash.as_bytes(),
             issuance_idempotency.as_bytes(),
         ]);
         let issued = IssuedKey::derive(&config.key_provisioning_key, context.as_bytes());
-        let record = key_record(&issued, &principal, &issue.signer_public_key, quota, 1);
+        let record = key_record(
+            &issued,
+            &principal,
+            &issue.signer_public_key,
+            &scopes,
+            quota,
+            1,
+        );
         let written = config
             .store
             .issue_key(
@@ -550,6 +596,7 @@ fn manage_keys(config: &Config, request: &IncomingRequest) -> OutgoingResponse {
                     "secret": issued.secret(),
                     "authorization_scheme": "LayerX-Key",
                     "signer_public_key": record.signer_public_key,
+                    "scopes": record_scopes(&record),
                     "quota_requests": record.quota_requests,
                     "quota_window_seconds": record.quota_window_seconds
                 }
@@ -575,9 +622,14 @@ fn manage_keys(config: &Config, request: &IncomingRequest) -> OutgoingResponse {
             {
                 return response(503, "persistence_unavailable", Some(5));
             }
+            let public_scopes = record_scopes(&record)
+                .into_iter()
+                .map(str::to_owned)
+                .collect();
             records.push(PublicKeyRecord {
                 id: record.key_id,
                 signer_public_key: record.signer_public_key,
+                scopes: public_scopes,
                 quota_requests: record.quota_requests,
                 quota_window_seconds: record.quota_window_seconds,
                 state: if record.disabled { "revoked" } else { "active" },
@@ -643,7 +695,14 @@ fn manage_keys(config: &Config, request: &IncomingRequest) -> OutgoingResponse {
             Ok(value) => value,
             Err(_) => return response(503, "persistence_unavailable", Some(5)),
         };
-        let replacement = key_record(&issued, &principal, &old.signer_public_key, quota, 1);
+        let replacement = key_record(
+            &issued,
+            &principal,
+            &old.signer_public_key,
+            &old.scopes,
+            quota,
+            1,
+        );
         let written = config
             .store
             .rotate_key(
@@ -668,6 +727,7 @@ fn manage_keys(config: &Config, request: &IncomingRequest) -> OutgoingResponse {
                         "id": issued.id(),
                         "secret": issued.secret(),
                         "authorization_scheme": "LayerX-Key",
+                        "scopes": record_scopes(&replacement),
                         "replaces": key_id
                     }
                 }),
@@ -1204,6 +1264,9 @@ fn route(config: &Config, request: &IncomingRequest) -> OutgoingResponse {
         Ok(value) => value,
         Err(error) => return error,
     };
+    if !permits(&record, &parsed) {
+        return response(403, "insufficient_scope", None);
+    }
     let trace_id = trace(request);
     match parsed {
         ProductionRoute::Activity => activity(config, request, &record, &trace_id),

@@ -7,10 +7,15 @@ use std::fs::{self, DirBuilder, Metadata, OpenOptions};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
+use serde::Deserialize;
 use serde_json::{json, Map, Value};
+use sha2::{Digest as _, Sha256};
+use zeroize::{Zeroize as _, Zeroizing};
 
 use crate::config::{self, Configuration};
 use crate::credential;
+use crate::encoding::hex_encode;
+use crate::http::Client;
 
 pub const SERVER_NAME: &str = "layerx";
 
@@ -123,6 +128,94 @@ pub struct Outcome {
     pub changed: bool,
 }
 
+struct Snapshot {
+    path: PathBuf,
+    bytes: Option<Vec<u8>>,
+    permissions: Option<fs::Permissions>,
+}
+
+pub struct FileTransaction {
+    snapshots: Vec<Snapshot>,
+}
+
+impl FileTransaction {
+    pub fn capture(paths: &[PathBuf]) -> Result<Self, String> {
+        let mut snapshots = Vec::new();
+        for path in paths {
+            if snapshots
+                .iter()
+                .any(|snapshot: &Snapshot| snapshot.path == *path)
+            {
+                continue;
+            }
+            match fs::read(path) {
+                Ok(bytes) => snapshots.push(Snapshot {
+                    path: path.clone(),
+                    bytes: Some(bytes),
+                    permissions: Some(
+                        fs::metadata(path)
+                            .map_err(|error| {
+                                format!("could not inspect {}: {error}", path.display())
+                            })?
+                            .permissions(),
+                    ),
+                }),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    snapshots.push(Snapshot {
+                        path: path.clone(),
+                        bytes: None,
+                        permissions: None,
+                    });
+                }
+                Err(error) => {
+                    return Err(format!("could not snapshot {}: {error}", path.display()))
+                }
+            }
+        }
+        Ok(Self { snapshots })
+    }
+
+    pub fn rollback(self) -> Result<(), String> {
+        let mut failures = Vec::new();
+        for snapshot in self.snapshots.into_iter().rev() {
+            match snapshot.bytes {
+                Some(bytes) => {
+                    if let Err(error) = fs::write(&snapshot.path, bytes) {
+                        failures.push(format!(
+                            "could not restore {}: {error}",
+                            snapshot.path.display()
+                        ));
+                        continue;
+                    }
+                    if let Some(permissions) = snapshot.permissions {
+                        if let Err(error) = fs::set_permissions(&snapshot.path, permissions) {
+                            failures.push(format!(
+                                "could not restore permissions on {}: {error}",
+                                snapshot.path.display()
+                            ));
+                        }
+                    }
+                }
+                None => match fs::remove_file(&snapshot.path) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => {
+                        failures.push(format!(
+                            "could not remove rolled-back {}: {error}",
+                            snapshot.path.display()
+                        ));
+                    }
+                },
+            }
+        }
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(failures.join("; "))
+        }
+    }
+}
+
 pub struct Selection {
     pub environment: String,
     pub endpoint: String,
@@ -131,6 +224,10 @@ pub struct Selection {
     pub did: String,
     pub public_key: String,
     pub created_key: bool,
+    pub gateway_alias: String,
+    pub gateway_key_id: String,
+    pub gateway_scopes: Vec<String>,
+    pub rotated_gateway_key: bool,
 }
 
 impl Selection {
@@ -143,7 +240,33 @@ impl Selection {
             "storage": "operating-system-credential-store",
             "scope": "one environment and one key",
             "written_to_disk": false,
+            "gateway_alias": self.gateway_alias,
+            "gateway_key_id": self.gateway_key_id,
+            "gateway_scopes": self.gateway_scopes,
+            "gateway_authorization": "LayerX-Key",
+            "gateway_rotated": self.rotated_gateway_key,
         })
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GatewayEnvelope {
+    ok: bool,
+    key: GatewayKey,
+}
+
+#[derive(Deserialize)]
+struct GatewayKey {
+    id: String,
+    secret: String,
+    authorization_scheme: String,
+    scopes: Vec<String>,
+}
+
+impl Drop for GatewayKey {
+    fn drop(&mut self) {
+        self.secret.zeroize();
     }
 }
 
@@ -153,6 +276,9 @@ pub fn select(
     key: Option<String>,
     fallback_key: &str,
     token_stdin: bool,
+    component: &str,
+    read_only: bool,
+    rotate: bool,
 ) -> Result<Selection, String> {
     let environment = match environment {
         Some(name) => {
@@ -168,19 +294,88 @@ pub fn select(
     })?;
     let endpoint = profile.endpoint.clone();
     let network_id = profile.network_id;
+    if environment == "emulator" {
+        return Err(
+            "MCP and A2A installation require a configured hosted testnet or production gateway; the emulator does not expose self-service scoped keys or the production activity route"
+                .into(),
+        );
+    }
     if token_stdin {
         credential::set_token(&environment)?;
-    }
-    if environment != "emulator" && credential::token(&environment)?.is_none() {
-        return Err(format!(
-            "no {environment} API token is held in credential storage; pipe one in with --token-stdin or run layerx auth set --environment {environment}"
-        ));
     }
     let (name, created_key) = resolve_key(configuration, key, fallback_key)?;
     let metadata = configuration
         .keys
         .get(&name)
         .ok_or_else(|| format!("key {name} does not exist"))?;
+    let mode = if read_only { "read" } else { "payment" };
+    let gateway_alias = format!("{environment}:{component}:{mode}:{name}");
+    let gateway_scopes = if read_only {
+        vec!["receipt:read".to_owned()]
+    } else {
+        vec!["activity:write".to_owned(), "receipt:read".to_owned()]
+    };
+    let existing = credential::gateway(&gateway_alias)?;
+    let existing_id = existing
+        .as_ref()
+        .and_then(|value| value.split_once(':').map(|(id, _)| id.to_owned()));
+    let (gateway_key_id, rotated_gateway_key) = if let (Some(id), false) =
+        (existing_id.clone(), rotate)
+    {
+        (id, false)
+    } else {
+        let token = credential::token(&environment)?.ok_or_else(|| {
+                format!(
+                    "no {environment} identity session is held in credential storage; pipe one in with --token-stdin or run layerx auth set --environment {environment}"
+                )
+            })?;
+        let client = Client::new(&endpoint, Some(token))?;
+        let idempotency = provisioning_idempotency(
+            &environment,
+            component,
+            mode,
+            &name,
+            &metadata.public_key,
+            existing_id.as_deref(),
+        );
+        let path = existing_id.as_ref().map_or_else(
+            || "/v1/keys".to_owned(),
+            |id| format!("/v1/keys/{id}/rotate"),
+        );
+        let body = if existing_id.is_some() {
+            json!({})
+        } else {
+            json!({
+                "signer_public_key": metadata.public_key,
+                "scopes": gateway_scopes,
+                "quota_requests": 3600,
+                "quota_window_seconds": 3600,
+            })
+        };
+        let (status, mut issued): (u16, GatewayEnvelope) =
+            client.post_sensitive(&path, &body, &idempotency)?;
+        if !issued.ok
+            || issued.key.authorization_scheme != "LayerX-Key"
+            || issued.key.scopes != gateway_scopes
+        {
+            if existing_id.is_none() {
+                let _ = client.delete(&format!("/v1/keys/{}", issued.key.id));
+            }
+            return Err("gateway returned a key outside the requested installation scope".into());
+        }
+        let mut stored = Zeroizing::new(format!("{}:{}", issued.key.id, issued.key.secret));
+        issued.key.secret.zeroize();
+        if let Err(error) = credential::set_gateway(&gateway_alias, &mut stored) {
+            if status == 201 {
+                let _ = client.delete(&format!("/v1/keys/{}", issued.key.id));
+            }
+            if existing_id.is_some() {
+                let _ = credential::delete_gateway(&gateway_alias);
+            }
+            return Err(error);
+        }
+        (issued.key.id.clone(), existing_id.is_some())
+    };
     Ok(Selection {
         environment,
         endpoint,
@@ -189,7 +384,35 @@ pub fn select(
         did: metadata.did.clone(),
         public_key: metadata.public_key.clone(),
         created_key,
+        gateway_alias,
+        gateway_key_id,
+        gateway_scopes,
+        rotated_gateway_key,
     })
+}
+
+fn provisioning_idempotency(
+    environment: &str,
+    component: &str,
+    mode: &str,
+    key: &str,
+    public_key: &str,
+    replacement: Option<&str>,
+) -> String {
+    let mut digest = Sha256::new();
+    for value in [
+        "layerx-install-gateway-key-v1",
+        environment,
+        component,
+        mode,
+        key,
+        public_key,
+        replacement.unwrap_or("new"),
+    ] {
+        digest.update((value.len() as u64).to_be_bytes());
+        digest.update(value.as_bytes());
+    }
+    hex_encode(&digest.finalize())
 }
 
 fn resolve_key(

@@ -12,10 +12,15 @@ const INSTRUCTIONS: &str = "Every result carries the exact protocol material ret
 
 pub fn serve(
     configuration: &Configuration,
-    subject: Option<&str>,
+    gateway_credential: &str,
+    key: &str,
+    source: Option<&str>,
+    asset: Option<&str>,
     mode: DeploymentMode,
 ) -> Result<(), String> {
     let tools = toolset::surface(mode)?;
+    let runtime =
+        toolset::Runtime::new(configuration, gateway_credential, key, source, asset, mode)?;
     let stdin = io::stdin();
     let mut reader = stdin.lock();
     let stdout = io::stdout();
@@ -39,7 +44,7 @@ pub fn serve(
         if message.is_empty() {
             continue;
         }
-        let Some(response) = handle(configuration, subject, &tools, mode, message) else {
+        let Some(response) = handle(&runtime, &tools, mode, message) else {
             continue;
         };
         let encoded = serde_json::to_string(&response)
@@ -51,8 +56,7 @@ pub fn serve(
 }
 
 fn handle(
-    configuration: &Configuration,
-    subject: Option<&str>,
+    runtime: &toolset::Runtime,
     tools: &[ToolDefinition],
     mode: DeploymentMode,
     message: &str,
@@ -80,7 +84,7 @@ fn handle(
         "initialize" => success(identifier, initialize(mode)),
         "ping" => success(identifier, json!({})),
         "tools/list" => success(identifier, json!({"tools": listing(tools)})),
-        "tools/call" => call(configuration, subject, tools, identifier, &parameters),
+        "tools/call" => call(runtime, tools, identifier, &parameters),
         _ => failure(
             identifier,
             -32601,
@@ -122,7 +126,6 @@ fn listing(tools: &[ToolDefinition]) -> Vec<Value> {
                     "layerx/scope": tool.required_scope,
                     "layerx/mutation": tool.mutation,
                     "layerx/evidence": tool.evidence,
-                    "layerx/daemon_gates": toolset::gates(),
                 },
             })
         })
@@ -130,8 +133,7 @@ fn listing(tools: &[ToolDefinition]) -> Vec<Value> {
 }
 
 fn call(
-    configuration: &Configuration,
-    subject: Option<&str>,
+    runtime: &toolset::Runtime,
     tools: &[ToolDefinition],
     identifier: Value,
     parameters: &Value,
@@ -147,13 +149,23 @@ fn call(
         );
     };
     let arguments = parameters.get("arguments").cloned().unwrap_or(Value::Null);
-    match toolset::invoke(configuration, subject, tool, &arguments) {
-        Ok(value) => success(identifier, content(&json!({"result": value}), false)),
+    match toolset::invoke(runtime, tool, &arguments) {
+        Ok(value) => {
+            let refused = gateway_state(&value) == Some("refused");
+            success(identifier, content(&json!({"result": value}), refused))
+        }
         Err(error) => success(
             identifier,
             content(&json!({"refusal": error, "tool": tool.name}), true),
         ),
     }
+}
+
+fn gateway_state(value: &Value) -> Option<&str> {
+    value
+        .pointer("/gateway/state")
+        .or_else(|| value.pointer("/gateway/result/state"))
+        .and_then(Value::as_str)
 }
 
 fn content(value: &Value, refused: bool) -> Value {

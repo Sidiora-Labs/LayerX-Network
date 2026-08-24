@@ -22,14 +22,14 @@ Start on the emulator. It runs the same transition function as production, so a 
 
 ```text
 layerx emulator up --listen 127.0.0.1:9402
-layerx environment use local --endpoint http://127.0.0.1:9402
+layerx environment use emulator --endpoint http://127.0.0.1:9402 --network-id 402
 ```
 
 `layerx environment current` shows the active profile, and `layerx environment list` shows every profile you have configured.
 
 ## Get credentials
 
-For the hosted testnet and for production you authenticate with a bearer token. The CLI reads it from standard input and stores it in your operating system credential store, so it never lands in your shell history or a dotfile:
+For the hosted testnet and for production you provision with a short-lived identity session. The CLI reads it from standard input and stores it in your operating system credential store, so it never lands in your shell history or a dotfile:
 
 ```text
 layerx auth set --environment testnet
@@ -52,6 +52,30 @@ layerx payment test --from "$LAYERX_SOURCE" --to "$LAYERX_DESTINATION" \
 ```
 
 That performs a real quote and a real commit against the active endpoint and prints the journey. If it works, your language quickstart will work.
+
+## Five-minute agent-runtime installation
+
+MCP and A2A use the hosted gateway, not the emulator. Create or import the Ed25519 key already bound to your funded account, select the hosted environment, and keep the source account and asset identifiers nearby.
+
+For MCP, pipe the identity session once and choose an exact supported host:
+
+```text
+printf '%s\n' "$LAYERX_IDENTITY_SESSION" | layerx install mcp \
+  --environment testnet --host claude-code --key agent-runtime \
+  --source-account "$LAYERX_SOURCE_ACCOUNT" --asset "$LAYERX_ASSET" \
+  --token-stdin --json
+```
+
+For A2A, the already stored identity session provisions a separate least-scoped key and the command starts the loopback runtime:
+
+```text
+layerx install a2a --environment testnet --key agent-runtime \
+  --source-account "$LAYERX_SOURCE_ACCOUNT" --asset "$LAYERX_ASSET" \
+  --listen 127.0.0.1:9433 --json
+layerx a2a status --json
+```
+
+The installed JSON contains only the executable arguments, the configuration path, a non-secret gateway key identifier and an opaque credential alias. Gateway secrets and signing seeds stay in the operating-system credential store. A normal reinstall is idempotent; add `--rotate` to replace the component's gateway key and restart its managed A2A process. `--read-only` removes the payment tool and issues only `receipt:read` scope.
 
 ## Install an SDK
 

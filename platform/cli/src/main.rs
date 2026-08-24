@@ -297,6 +297,12 @@ struct InstallMcpArgs {
     read_only: bool,
     #[arg(long)]
     token_stdin: bool,
+    #[arg(long)]
+    rotate: bool,
+    #[arg(long)]
+    source_account: Option<String>,
+    #[arg(long)]
+    asset: Option<String>,
 }
 
 #[derive(Args)]
@@ -313,6 +319,12 @@ struct InstallA2aArgs {
     read_only: bool,
     #[arg(long)]
     token_stdin: bool,
+    #[arg(long)]
+    rotate: bool,
+    #[arg(long)]
+    source_account: Option<String>,
+    #[arg(long)]
+    asset: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -323,6 +335,12 @@ enum McpCommand {
         environment: Option<String>,
         #[arg(long)]
         key: Option<String>,
+        #[arg(long)]
+        gateway_credential: String,
+        #[arg(long)]
+        source_account: Option<String>,
+        #[arg(long)]
+        asset: Option<String>,
         #[arg(long)]
         read_only: bool,
     },
@@ -336,11 +354,23 @@ enum A2aCommand {
         environment: Option<String>,
         #[arg(long)]
         key: Option<String>,
+        #[arg(long)]
+        gateway_credential: String,
+        #[arg(long)]
+        source_account: Option<String>,
+        #[arg(long)]
+        asset: Option<String>,
         #[arg(long, default_value = "127.0.0.1:9433")]
         listen: String,
         #[arg(long)]
         read_only: bool,
     },
+    /// Start the installed managed A2A runtime.
+    Start,
+    /// Stop the installed managed A2A runtime.
+    Stop,
+    /// Report the installed managed A2A runtime state.
+    Status,
 }
 
 /// Stable graph anchor for the unified developer CLI.
@@ -381,33 +411,62 @@ fn run(command: Command, machine: bool) -> Result<Option<CommandOutput>, String>
         Command::Mcp(McpCommand::Serve {
             environment,
             key,
+            gateway_credential,
+            source_account,
+            asset,
             read_only,
         }) => {
             let configuration = serving_configuration(environment)?;
-            let subject = bound_subject(&configuration, key.as_deref())?;
+            let key = serving_key(&configuration, key.as_deref())?;
             mcp::serve(
                 &configuration,
-                subject.as_deref(),
+                &gateway_credential,
+                key,
+                source_account.as_deref(),
+                asset.as_deref(),
                 deployment_mode(read_only),
             )?;
             Ok(None)
         }
-        Command::A2a(A2aCommand::Serve {
-            environment,
-            key,
-            listen,
-            read_only,
-        }) => {
-            let configuration = serving_configuration(environment)?;
-            let subject = bound_subject(&configuration, key.as_deref())?;
-            a2a::serve(
-                &configuration,
-                subject.as_deref(),
-                &listen,
-                deployment_mode(read_only),
-            )?;
-            Ok(None)
-        }
+        Command::A2a(command) => match command {
+            A2aCommand::Serve {
+                environment,
+                key,
+                gateway_credential,
+                source_account,
+                asset,
+                listen,
+                read_only,
+            } => {
+                let configuration = serving_configuration(environment)?;
+                let key = serving_key(&configuration, key.as_deref())?;
+                a2a::serve(
+                    &configuration,
+                    &gateway_credential,
+                    key,
+                    source_account.as_deref(),
+                    asset.as_deref(),
+                    &listen,
+                    deployment_mode(read_only),
+                )?;
+                Ok(None)
+            }
+            A2aCommand::Start => Ok(Some(CommandOutput::new(
+                "a2a.started",
+                "Started the installed LayerX A2A runtime",
+                a2a::start_from_manifest()?,
+            ))),
+            A2aCommand::Stop => Ok(Some(CommandOutput::new(
+                "a2a.stopped",
+                "Stopped the installed LayerX A2A runtime",
+                a2a::stop_installed()?,
+            ))),
+            A2aCommand::Status => Ok(Some(CommandOutput::new(
+                "a2a.status",
+                "Read the installed LayerX A2A runtime state",
+                a2a::installed_status()?,
+            ))),
+        },
     }
 }
 
@@ -421,6 +480,9 @@ fn install(command: InstallCommand) -> Result<CommandOutput, String> {
                 key: arguments.key,
                 read_only: arguments.read_only,
                 token_stdin: arguments.token_stdin,
+                rotate: arguments.rotate,
+                source_account: arguments.source_account,
+                asset: arguments.asset,
             };
             let data = install::mcp::platform_install_mcp(&mut configuration, &request)?;
             let message = format!(
@@ -437,6 +499,9 @@ fn install(command: InstallCommand) -> Result<CommandOutput, String> {
                 well_known: arguments.well_known,
                 read_only: arguments.read_only,
                 token_stdin: arguments.token_stdin,
+                rotate: arguments.rotate,
+                source_account: arguments.source_account,
+                asset: arguments.asset,
             };
             let data = install::a2a::platform_install_a2a(&mut configuration, &request)?;
             let message = format!(
@@ -468,22 +533,21 @@ fn serving_configuration(environment: Option<String>) -> Result<Configuration, S
     Ok(configuration)
 }
 
-fn bound_subject(
-    configuration: &Configuration,
-    key: Option<&str>,
-) -> Result<Option<String>, String> {
+fn serving_key<'a>(
+    configuration: &'a Configuration,
+    key: Option<&'a str>,
+) -> Result<&'a str, String> {
     let name = match key {
         Some(value) => value,
         None => match &configuration.default_key {
             Some(value) => value.as_str(),
-            None => return Ok(None),
+            None => return Err("the installed runtime did not name a signing key".into()),
         },
     };
-    let metadata = configuration
-        .keys
-        .get(name)
-        .ok_or_else(|| format!("key {name} does not exist"))?;
-    Ok(Some(metadata.did.clone()))
+    if !configuration.keys.contains_key(name) {
+        return Err(format!("key {name} does not exist"));
+    }
+    Ok(name)
 }
 
 const fn deployment_mode(read_only: bool) -> DeploymentMode {

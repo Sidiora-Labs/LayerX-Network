@@ -58,6 +58,7 @@ pub struct KeyRecord {
     pub salt: String,
     pub secret_digest: String,
     pub signer_public_key: String,
+    pub scopes: String,
     pub quota_requests: u64,
     pub quota_window_seconds: u64,
     pub epoch: u64,
@@ -122,6 +123,7 @@ impl RedisStore {
                 &record.salt,
                 &record.secret_digest,
                 &record.signer_public_key,
+                &record.scopes,
                 &record.quota_requests.to_string(),
                 &record.quota_window_seconds.to_string(),
                 &record.epoch.to_string(),
@@ -155,6 +157,7 @@ impl RedisStore {
                     salt: required(&fields, "salt")?,
                     secret_digest: required(&fields, "secret_digest")?,
                     signer_public_key: required(&fields, "signer_public_key")?,
+                    scopes: required(&fields, "scopes")?,
                     quota_requests: number(&fields, "quota_requests")?,
                     quota_window_seconds: number(&fields, "quota_window_seconds")?,
                     epoch: number(&fields, "epoch")?,
@@ -208,6 +211,7 @@ impl RedisStore {
                 &replacement.salt,
                 &replacement.secret_digest,
                 &replacement.signer_public_key,
+                &replacement.scopes,
                 &replacement.quota_requests.to_string(),
                 &replacement.quota_window_seconds.to_string(),
                 &replacement.epoch.to_string(),
@@ -492,26 +496,26 @@ impl RedisStore {
 
 const ISSUE_SCRIPT: &str = r#"
 local current = redis.call('GET', KEYS[4]) or ''
-if current ~= ARGV[11] then return {'audit_retry'} end
+if current ~= ARGV[12] then return {'audit_retry'} end
 if redis.call('EXISTS', KEYS[1]) == 1 then return {'conflict'} end
-if redis.call('SCARD', KEYS[2]) >= tonumber(ARGV[9]) then return {'limit'} end
-redis.call('HSET', KEYS[1], 'principal', ARGV[2], 'salt', ARGV[3], 'secret_digest', ARGV[4], 'signer_public_key', ARGV[5], 'quota_requests', ARGV[6], 'quota_window_seconds', ARGV[7], 'epoch', ARGV[8], 'disabled', '0')
+if redis.call('SCARD', KEYS[2]) >= tonumber(ARGV[10]) then return {'limit'} end
+redis.call('HSET', KEYS[1], 'principal', ARGV[2], 'salt', ARGV[3], 'secret_digest', ARGV[4], 'signer_public_key', ARGV[5], 'scopes', ARGV[6], 'quota_requests', ARGV[7], 'quota_window_seconds', ARGV[8], 'epoch', ARGV[9], 'disabled', '0')
 redis.call('SADD', KEYS[2], ARGV[1])
-redis.call('XADD', KEYS[3], '*', 'previous', ARGV[11], 'chain', ARGV[12], 'event', ARGV[10])
-redis.call('SET', KEYS[4], ARGV[12])
+redis.call('XADD', KEYS[3], '*', 'previous', ARGV[12], 'chain', ARGV[13], 'event', ARGV[11])
+redis.call('SET', KEYS[4], ARGV[13])
 return {'issued'}
 "#;
 
 const ROTATE_SCRIPT: &str = r#"
 local current = redis.call('GET', KEYS[5]) or ''
-if current ~= ARGV[11] then return {'audit_retry'} end
+if current ~= ARGV[12] then return {'audit_retry'} end
 if redis.call('HGET', KEYS[1], 'principal') ~= ARGV[1] or redis.call('HGET', KEYS[1], 'epoch') ~= ARGV[2] or redis.call('HGET', KEYS[1], 'disabled') ~= '0' then return {'conflict'} end
 if redis.call('EXISTS', KEYS[2]) == 1 then return {'conflict'} end
-if redis.call('SCARD', KEYS[3]) >= tonumber(ARGV[13]) then return {'limit'} end
+if redis.call('SCARD', KEYS[3]) >= tonumber(ARGV[14]) then return {'limit'} end
 redis.call('HSET', KEYS[1], 'disabled', '1', 'epoch', tostring(tonumber(ARGV[2]) + 1))
-redis.call('HSET', KEYS[2], 'principal', ARGV[1], 'salt', ARGV[4], 'secret_digest', ARGV[5], 'signer_public_key', ARGV[6], 'quota_requests', ARGV[7], 'quota_window_seconds', ARGV[8], 'epoch', ARGV[9], 'disabled', '0')
+redis.call('HSET', KEYS[2], 'principal', ARGV[1], 'salt', ARGV[4], 'secret_digest', ARGV[5], 'signer_public_key', ARGV[6], 'scopes', ARGV[7], 'quota_requests', ARGV[8], 'quota_window_seconds', ARGV[9], 'epoch', ARGV[10], 'disabled', '0')
 redis.call('SADD', KEYS[3], ARGV[3])
-redis.call('XADD', KEYS[4], '*', 'previous', ARGV[11], 'chain', ARGV[12], 'event', ARGV[10]); redis.call('SET', KEYS[5], ARGV[12])
+redis.call('XADD', KEYS[4], '*', 'previous', ARGV[12], 'chain', ARGV[13], 'event', ARGV[11]); redis.call('SET', KEYS[5], ARGV[13])
 return {'rotated'}
 "#;
 

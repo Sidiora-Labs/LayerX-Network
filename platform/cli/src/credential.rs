@@ -32,7 +32,10 @@ fn ensure_store() -> Result<(), String> {
 }
 
 fn install_store() -> Result<(), String> {
-    if matches!(std::env::var(MOCK_STORE_VARIABLE).as_deref(), Ok(MOCK_STORE_VALUE)) {
+    if matches!(
+        std::env::var(MOCK_STORE_VARIABLE).as_deref(),
+        Ok(MOCK_STORE_VALUE)
+    ) {
         let store = keyring_core::mock::Store::new().map_err(|error| {
             format!("could not initialise the in-memory test credential store: {error}")
         })?;
@@ -185,6 +188,80 @@ pub fn token(environment: &str) -> Result<Option<Zeroizing<String>>, String> {
             "could not read token from operating-system credential storage: {error}"
         )),
     }
+}
+
+pub fn key_seed(name: &str) -> Result<Zeroizing<[u8; 32]>, String> {
+    validate_name(name)?;
+    let encoded = entry("key", name)?.get_password().map_err(|error| {
+        format!("could not read signing key from operating-system storage: {error}")
+    })?;
+    let encoded = Zeroizing::new(encoded);
+    fixed_hex::<32>("private seed", &encoded).map(Zeroizing::new)
+}
+
+pub fn set_gateway(alias: &str, credential: &mut Zeroizing<String>) -> Result<(), String> {
+    validate_alias(alias)?;
+    validate_gateway_credential(credential)?;
+    entry("gateway", alias)?
+        .set_password(credential)
+        .map_err(|error| {
+            format!("could not save gateway key in operating-system credential storage: {error}")
+        })
+}
+
+pub fn gateway(alias: &str) -> Result<Option<Zeroizing<String>>, String> {
+    validate_alias(alias)?;
+    match entry("gateway", alias)?.get_password() {
+        Ok(value) => {
+            let value = Zeroizing::new(value);
+            validate_gateway_credential(&value)?;
+            Ok(Some(value))
+        }
+        Err(keyring_core::Error::NoEntry) => Ok(None),
+        Err(error) => Err(format!(
+            "could not read gateway key from operating-system credential storage: {error}"
+        )),
+    }
+}
+
+pub fn delete_gateway(alias: &str) -> Result<(), String> {
+    validate_alias(alias)?;
+    match entry("gateway", alias)?.delete_credential() {
+        Ok(()) | Err(keyring_core::Error::NoEntry) => Ok(()),
+        Err(error) => Err(format!(
+            "could not delete gateway key from operating-system credential storage: {error}"
+        )),
+    }
+}
+
+fn validate_gateway_credential(value: &str) -> Result<(), String> {
+    let (id, secret) = value
+        .split_once(':')
+        .ok_or_else(|| "gateway credential is malformed".to_owned())?;
+    if id.is_empty()
+        || id.len() > 64
+        || !id.bytes().all(|byte| byte.is_ascii_alphanumeric())
+        || !secret.starts_with("lxp_live_")
+        || secret.len() != 73
+    {
+        return Err("gateway credential is malformed".to_owned());
+    }
+    Ok(())
+}
+
+fn validate_alias(alias: &str) -> Result<(), String> {
+    if alias.is_empty()
+        || alias.len() > 192
+        || !alias
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b':'))
+    {
+        return Err(
+            "credential alias must be 1-192 ASCII letters, digits, dashes, underscores, or colons"
+                .into(),
+        );
+    }
+    Ok(())
 }
 
 fn validate_name(name: &str) -> Result<(), String> {

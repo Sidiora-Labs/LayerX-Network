@@ -111,7 +111,7 @@ jobs:
       - name: Install pinned Rust toolchain and journey tools
         run: >-
           rustup toolchain install 1.91.1 --profile minimal &&
-          sudo apt-get update && sudo apt-get install --yes jq
+          sudo apt-get update && sudo apt-get install --yes dbus-x11 gnome-keyring jq
       - name: Build the receipt-verifying CLI
         run: cargo build --locked --release --manifest-path platform/Cargo.toml -p layerx-platform-cli
       - name: Build middleware dependencies for the hosted reference applications
@@ -145,6 +145,22 @@ jobs:
           LAYERX_TEST_AMOUNT: "1"
           LAYERX_BIN: platform/target/release/layerx
         run: make platform-hosted-smoke
+      - name: Install MCP and A2A runtimes and complete real scoped payments
+        env:
+          LAYERX_BIN: platform/target/release/layerx
+          LAYERX_GATEWAY_URL: https://api.testnet.layerx.network
+          LAYERX_NETWORK_ID: ${{ vars.LAYERX_AGENT_INSTALL_NETWORK_ID }}
+          LAYERX_IDENTITY_TOKEN: ${{ secrets.LAYERX_AGENT_INSTALL_IDENTITY_TOKEN }}
+          LAYERX_SIGNING_SEED: ${{ secrets.LAYERX_AGENT_INSTALL_SIGNING_SEED }}
+          LAYERX_SOURCE_ACCOUNT: ${{ vars.LAYERX_AGENT_INSTALL_SOURCE_ACCOUNT }}
+          LAYERX_PAYMENT_ASSET: ${{ vars.LAYERX_AGENT_INSTALL_ASSET }}
+          LAYERX_PAYMENT_DESTINATION: ${{ vars.LAYERX_AGENT_INSTALL_DESTINATION }}
+          LAYERX_MCP_SEQUENCE: ${{ vars.LAYERX_AGENT_INSTALL_MCP_SEQUENCE }}
+          LAYERX_A2A_SEQUENCE: ${{ vars.LAYERX_AGENT_INSTALL_A2A_SEQUENCE }}
+        run: >-
+          dbus-run-session -- bash -c '
+          eval "$(printf "\n" | gnome-keyring-daemon --unlock)" &&
+          make platform-test-agent-install'
       - name: Exercise the four reference applications against hosted testnet
         if: ${{ vars.LAYERX_REFERENCE_APPS_ENABLED == 'true' }}
         env:
