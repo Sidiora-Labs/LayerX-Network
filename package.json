@@ -11,6 +11,7 @@
     "platform/integrations/agents",
     "platform/integrations/express",
     "platform/integrations/next",
+    "platform/integrations/next/example",
     "platform/examples/agent-spend",
     "platform/examples/buyer-agent",
     "platform/examples/merchant-checkout",

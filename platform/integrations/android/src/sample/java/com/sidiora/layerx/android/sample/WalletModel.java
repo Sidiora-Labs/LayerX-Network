@@ -2,12 +2,12 @@ package com.sidiora.layerx.android.sample;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.sidiora.layerx.android.LayerXAndroid;
 import com.sidiora.layerx.android.MobileIntegrationException;
 import com.sidiora.layerx.android.ReceiptGate;
 import com.sidiora.layerx.android.VerifiedEventConsumer;
 import com.sidiora.layerx.sdk.IdempotencyKey;
+import com.sidiora.layerx.sdk.GeneratedSchema.HumanOperations;
 import com.sidiora.layerx.sdk.PlatformSdkException;
 import java.util.ArrayList;
 import java.util.List;
@@ -43,15 +43,14 @@ public final class WalletModel {
 
     public synchronized Snapshot refresh() {
         try {
-            JsonNode version = await(mobile.client().version());
-            JsonNode profile = await(mobile.client().profile());
-            ObjectNode query = mapper.createObjectNode();
-            query.put("page_limit", 25);
-            JsonNode activity = await(mobile.client().activity(query));
+            HumanOperations.VersionResponse version = await(mobile.client().versionTyped());
+            HumanOperations.ProfileGetResponse profile = await(mobile.client().profileTyped());
+            HumanOperations.ActivityQueryResponse activity = await(mobile.client().activity(
+                new HumanOperations.ActivityQueryRequest(null, null, 25L)));
             snapshot = new Snapshot(
-                text(version, "version", "protocol_version"),
-                text(profile, "display_name", "email"),
-                entries(activity),
+                version.service(),
+                profile.display_name(),
+                activity.groups().stream().mapToInt(group -> group.entries().size()).sum(),
                 snapshot.settlement(),
                 deliveries,
                 null);
@@ -64,13 +63,12 @@ public final class WalletModel {
 
     public synchronized Snapshot pay(JsonNode quoteRequest, ReceiptGate.Expectation expectation, IdempotencyKey key) {
         try {
-            JsonNode quote = await(mobile.client().quote(quoteRequest));
-            if (!quote.path("quote_id").isTextual()) {
-                throw MobileIntegrationException.of(MobileIntegrationException.Code.DECODE_FAILURE);
-            }
-            ObjectNode commit = mapper.createObjectNode();
-            commit.put("quote_id", quote.path("quote_id").textValue());
-            JsonNode journey = await(mobile.client().commit(commit, key));
+            HumanOperations.MoveQuoteRequest request = mapper.convertValue(
+                quoteRequest, HumanOperations.MoveQuoteRequest.class);
+            HumanOperations.MoveQuoteResponse quote = await(mobile.client().quote(request));
+            HumanOperations.MoveCommitResponse committed = await(mobile.client().commit(
+                new HumanOperations.MoveCommitRequest(quote.quote_id()), key));
+            JsonNode journey = mapper.valueToTree(committed);
             snapshot = new Snapshot(snapshot.serviceVersion(), snapshot.displayName(), snapshot.activityCount(),
                 gate.project(journey, expectation), deliveries, null);
         } catch (RuntimeException error) {
@@ -84,7 +82,7 @@ public final class WalletModel {
                                                  int attempts, Backoff backoff) {
         for (int attempt = 0; attempt < Math.max(attempts, 1); attempt++) {
             try {
-                JsonNode journey = await(mobile.client().journey(journeyId));
+                JsonNode journey = mapper.valueToTree(await(mobile.client().journeyTyped(journeyId)));
                 ReceiptGate.State state = gate.project(journey, expectation);
                 snapshot = new Snapshot(snapshot.serviceVersion(), snapshot.displayName(), snapshot.activityCount(),
                     state, deliveries, null);
@@ -135,16 +133,6 @@ public final class WalletModel {
             if (cause instanceof RuntimeException runtime) throw runtime;
             throw error;
         }
-    }
-
-    private static String text(JsonNode value, String primary, String fallback) {
-        if (value.path(primary).isTextual()) return value.path(primary).textValue();
-        if (value.path(fallback).isTextual()) return value.path(fallback).textValue();
-        return "";
-    }
-
-    private static int entries(JsonNode value) {
-        return value.path("entries").isArray() ? value.path("entries").size() : 0;
     }
 
     private static String refusal(RuntimeException error) {

@@ -14,8 +14,10 @@ export const DECLARED_KEYS = [
   "LAYERX_WEBHOOK_PUBLIC_KEYS_JSON",
   "LAYERX_WEBHOOK_MAX_AGE_MS",
   "LAYERX_WEBHOOK_LEASE_MS",
+  "LAYERX_WEBHOOK_DELIVERY_STORE_PATH",
   "LAYERX_WEBHOOK_LISTEN_HOST",
   "LAYERX_WEBHOOK_LISTEN_PORT",
+  "LAYERX_A2A_URL",
   "LAYERX_TOKEN",
 ] as const;
 
@@ -64,6 +66,7 @@ export interface AgentDeclaredConfig {
   readonly maximumTrackPolls: number;
   readonly requestTimeoutMs: number;
   readonly webhook: AgentWebhookSettings;
+  readonly webhookDeliveryStorePath: string;
 }
 
 export function assertServerRuntime(): void {
@@ -91,6 +94,9 @@ export function readDeclaredConfig(environment: Environment): AgentDeclaredConfi
       maximumAgeMs: boundedInteger(optional(environment, "LAYERX_WEBHOOK_MAX_AGE_MS") ?? "300000", 1, 86_400_000),
       leaseMs: boundedInteger(optional(environment, "LAYERX_WEBHOOK_LEASE_MS") ?? "60000", 1, 86_400_000),
     },
+    webhookDeliveryStorePath: filesystemPath(
+      optional(environment, "LAYERX_WEBHOOK_DELIVERY_STORE_PATH") ?? ".layerx/webhook-deliveries-v1.json",
+    ),
   };
 }
 
@@ -149,6 +155,13 @@ export function bounded(value: string, maximum: number): string {
 
 export function canonicalInteger(value: string): string {
   if (!/^(0|[1-9][0-9]*)$/u.test(value) || value.length > 39) {
+    throw new AgentIntegrationError("invalid-declared-key");
+  }
+  return value;
+}
+
+export function filesystemPath(value: string): string {
+  if (value.length === 0 || value.length > 4_096 || value.includes("\0")) {
     throw new AgentIntegrationError("invalid-declared-key");
   }
   return value;

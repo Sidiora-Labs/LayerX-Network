@@ -39,6 +39,7 @@ public final class LayerXMobile: @unchecked Sendable {
         configuration: PublishableConfiguration,
         session: URLSession = .shared,
         deliveries: EventDeliveryStore? = nil,
+        deliveryStoreURL: URL? = nil,
         telemetry: SDKTelemetry? = nil
     ) throws {
         let provider = try BrokeredSessionTokenProvider(brokerURL: configuration.sessionBrokerURL, session: session)
@@ -50,9 +51,12 @@ public final class LayerXMobile: @unchecked Sendable {
             session: session,
             telemetry: telemetry
         )
+        let deliveryStore = try deliveries ?? FileEventDeliveryStore(
+            fileURL: deliveryStoreURL ?? FileEventDeliveryStore.applicationSupportURL()
+        )
         self.events = try VerifiedEventConsumer(
             configuration: configuration,
-            deliveries: deliveries ?? InMemoryEventDeliveryStore()
+            deliveries: deliveryStore
         )
     }
 
@@ -80,7 +84,7 @@ private let integrationMetadata = MobileIntegrationMetadata(
     sdk: platform_sdk_swift(),
     credentialModel: "brokered-ephemeral-session-token",
     eventVerification: "ed25519-v1",
-    replayProtection: "leased-delivery-claim"
+    replayProtection: "durable-leased-delivery-claim"
 )
 
 public func platform_int_ios() -> MobileIntegrationMetadata { integrationMetadata }

@@ -26,7 +26,7 @@ export interface ToolDefinition {
   readonly name: string;
   readonly title: string;
   readonly description: string;
-  readonly inputSchema: ToolJsonObject;
+  readonly inputSchema: ToolJsonObject & { readonly type: "object" };
 }
 
 export type ToolOutcome =

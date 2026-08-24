@@ -57,7 +57,7 @@
 		<key>amount</key>
 		<string>1250</string>
 		<key>quote_json</key>
-		<string>{"destination":"merchant:demo","amount":"1250","asset":"0000000000000000000000000000000000000000000000000000000000000001"}</string>
+		<string>{"source":"wallet:primary","destination":"merchant:demo","money":{"amount":"1250","currency":"0000000000000000000000000000000000000000000000000000000000000001"}}</string>
 	</dict>
 </dict>
 </plist>

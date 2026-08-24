@@ -9,6 +9,7 @@ public final class MobileIntegrationException extends RuntimeException {
         INVALID_CONFIGURATION("invalid-configuration"), EMBEDDED_SECRET("embedded-secret"),
         INVALID_SESSION("invalid-session"), SESSION_EXPIRED("session-expired"),
         INVALID_EVENT("invalid-event"), EVENT_REPLAY("event-replay"),
+        DELIVERY_STORE_FAILURE("delivery-store-failure"),
         VERIFICATION_FAILURE("verification-failure"), DECODE_FAILURE("decode-failure"),
         TRANSPORT_FAILURE("transport-failure"), UNAVAILABLE_CAPABILITY("unavailable-capability");
         private final String wire;
@@ -23,6 +24,7 @@ public final class MobileIntegrationException extends RuntimeException {
         Map.entry(Code.SESSION_EXPIRED, "The ephemeral session expired and must be re-brokered."),
         Map.entry(Code.INVALID_EVENT, "The delivered event failed signature or freshness verification."),
         Map.entry(Code.EVENT_REPLAY, "The delivery identifier was replayed with different payload bytes."),
+        Map.entry(Code.DELIVERY_STORE_FAILURE, "The durable delivery ledger could not be read or committed."),
         Map.entry(Code.VERIFICATION_FAILURE, "Local receipt verification failed."),
         Map.entry(Code.DECODE_FAILURE, "The service response did not match the contract."),
         Map.entry(Code.TRANSPORT_FAILURE, "The request could not reach the service."),

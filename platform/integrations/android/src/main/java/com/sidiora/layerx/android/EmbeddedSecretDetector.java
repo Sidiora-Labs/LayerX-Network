@@ -12,6 +12,8 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Stream;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
 
 /** Structural detector that keeps API secrets and key material out of shipped mobile artifacts. */
 public final class EmbeddedSecretDetector {
@@ -61,6 +63,7 @@ public final class EmbeddedSecretDetector {
     private static final int MINIMUM_RUN = 16;
     private static final int MAXIMUM_RUN = 8192;
     private static final long MAXIMUM_FILE_BYTES = 64L * 1024L * 1024L;
+    private static final int MAXIMUM_ARCHIVE_ENTRIES = 100_000;
 
     public static boolean isSecretShapedName(String name) {
         String normalized = name.toLowerCase(Locale.ROOT);
@@ -162,14 +165,19 @@ public final class EmbeddedSecretDetector {
     public static List<Finding> scanArtifact(Path root, Set<String> exempt) throws IOException {
         if (!Files.exists(root)) throw MobileIntegrationException.of(MobileIntegrationException.Code.INVALID_CONFIGURATION);
         if (!Files.isDirectory(root)) {
+            if (isArchive(root)) return scanArchive(root, exempt);
             return scanFile(root, root.getFileName().toString(), exempt);
         }
         List<Finding> findings = new ArrayList<>();
         try (Stream<Path> walker = Files.walk(root)) {
             List<Path> files = walker.filter(Files::isRegularFile).sorted().toList();
             for (Path file : files) {
-                if (Files.size(file) > MAXIMUM_FILE_BYTES) continue;
-                findings.addAll(scanFile(file, root.relativize(file).toString(), exempt));
+                if (Files.size(file) > MAXIMUM_FILE_BYTES) {
+                    throw MobileIntegrationException.of(MobileIntegrationException.Code.INVALID_CONFIGURATION);
+                }
+                findings.addAll(isArchive(file)
+                    ? scanArchive(file, exempt)
+                    : scanFile(file, root.relativize(file).toString(), exempt));
             }
         }
         return findings;
@@ -178,6 +186,45 @@ public final class EmbeddedSecretDetector {
     private static List<Finding> scanFile(Path file, String path, Set<String> exempt) throws IOException {
         try (InputStream stream = new java.io.BufferedInputStream(Files.newInputStream(file))) {
             return scan(stream, path, isTextual(file), exempt);
+        }
+    }
+
+    private static List<Finding> scanArchive(Path file, Set<String> exempt) throws IOException {
+        List<Finding> findings = new ArrayList<>();
+        try (ZipInputStream archive = new ZipInputStream(
+                new java.io.BufferedInputStream(Files.newInputStream(file)))) {
+            int entries = 0;
+            ZipEntry entry;
+            while ((entry = archive.getNextEntry()) != null) {
+                entries++;
+                if (entries > MAXIMUM_ARCHIVE_ENTRIES || entry.getName().indexOf('\0') >= 0) {
+                    throw MobileIntegrationException.of(MobileIntegrationException.Code.INVALID_CONFIGURATION);
+                }
+                if (!entry.isDirectory()) {
+                    String path = file.getFileName() + "!/" + entry.getName();
+                    findings.addAll(scan(new BoundedInputStream(archive, MAXIMUM_FILE_BYTES), path,
+                        isTextual(entry.getName()), exempt));
+                }
+                archive.closeEntry();
+            }
+        }
+        return findings;
+    }
+
+    private static final class BoundedInputStream extends InputStream {
+        private final InputStream source;
+        private final long maximum;
+        private long consumed;
+
+        private BoundedInputStream(InputStream source, long maximum) {
+            this.source = source;
+            this.maximum = maximum;
+        }
+
+        @Override public int read() throws IOException {
+            int value = source.read();
+            if (value >= 0 && ++consumed > maximum) throw new IOException("archive entry exceeds scan bound");
+            return value;
         }
     }
 
@@ -202,10 +249,18 @@ public final class EmbeddedSecretDetector {
     }
 
     private static boolean isTextual(Path file) {
-        String name = file.getFileName().toString();
+        return isTextual(file.getFileName().toString());
+    }
+
+    private static boolean isTextual(String name) {
         int dot = name.lastIndexOf('.');
         if (dot < 0) return false;
         return TEXTUAL_EXTENSIONS.contains(name.substring(dot + 1).toLowerCase(Locale.ROOT));
+    }
+
+    private static boolean isArchive(Path file) {
+        String name = file.getFileName().toString().toLowerCase(Locale.ROOT);
+        return name.endsWith(".apk") || name.endsWith(".aab") || name.endsWith(".jar") || name.endsWith(".zip");
     }
 
     private static String padded(String segment) {

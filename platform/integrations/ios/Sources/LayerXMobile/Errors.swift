@@ -7,6 +7,7 @@ public enum MobileErrorCode: String, Sendable {
     case sessionExpired = "session-expired"
     case invalidEvent = "invalid-event"
     case eventReplay = "event-replay"
+    case deliveryStoreFailure = "delivery-store-failure"
     case verificationFailure = "verification-failure"
     case decodeFailure = "decode-failure"
     case transportFailure = "transport-failure"

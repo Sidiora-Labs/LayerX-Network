@@ -35,6 +35,20 @@ func decodeJSON(_ text: String) -> JSONValue {
     return value
 }
 
+struct SignedWebhookDelivery: Decodable {
+    let body: String
+    let headers: [String: String]
+}
+
+func signedWebhookDelivery(at path: String) -> (Data, [String: String]) {
+    guard let encoded = FileManager.default.contents(atPath: path),
+          let delivery = try? JSONDecoder().decode(SignedWebhookDelivery.self, from: encoded),
+          let body = Data(base64Encoded: delivery.body), !body.isEmpty else {
+        fail("invalid signed webhook delivery")
+    }
+    return (body, delivery.headers)
+}
+
 let environment = ProcessInfo.processInfo.environment
 
 let configuration: PublishableConfiguration
@@ -127,11 +141,30 @@ case .none:
     report["refusal"] = .string(paid.refusal ?? "verification-failure")
 }
 
-if let eventPath = environment["LAYERX_SAMPLE_EVENT_PATH"] {
+if let deliveryPath = environment["LAYERX_SAMPLE_WEBHOOK_DELIVERY_PATH"] {
+    let (body, headers) = signedWebhookDelivery(at: deliveryPath)
+    var tampered = body
+    tampered[tampered.index(before: tampered.endIndex)] ^= 1
+    let rejected = await model.deliver(rawBody: tampered, headerFields: headers)
+    guard rejected.refusal == MobileErrorCode.invalidEvent.rawValue else {
+        fail("tampered event was not rejected")
+    }
+    let first = await model.deliver(rawBody: body, headerFields: headers)
+    if let refusal = first.refusal {
+        report["event"] = .string("refused")
+        report["refusal"] = .string(refusal)
+        emit(report)
+        exit(4)
+    }
+    let replayed = await model.deliver(rawBody: body, headerFields: headers)
+    report["event_tamper"] = .string("rejected")
+    report["event"] = .string("verified")
+    report["event_replay"] = .string(replayed.deliveries.last ?? "duplicate")
+} else if let eventPath = environment["LAYERX_SAMPLE_EVENT_PATH"] {
     guard let body = FileManager.default.contents(atPath: eventPath) else {
         fail("missing event payload at \(eventPath)")
     }
-    let headers = [
+    let headers: [String: String] = [
         EventEnvelopeHeaders.idHeader: required("LAYERX_SAMPLE_EVENT_ID", in: environment),
         EventEnvelopeHeaders.timestampHeader: required("LAYERX_SAMPLE_EVENT_TIMESTAMP", in: environment),
         EventEnvelopeHeaders.keyIDHeader: required("LAYERX_SAMPLE_EVENT_KEY_ID", in: environment),

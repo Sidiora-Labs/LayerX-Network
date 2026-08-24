@@ -17,7 +17,7 @@ import {
 import { AgentToolExecutor } from "./tools.js";
 import { AgentWebhookGateway } from "./webhooks.js";
 
-export const AGENT_FRAMEWORKS = ["mcp", "openai", "anthropic", "langchain", "vercel-ai"] as const;
+export const AGENT_FRAMEWORKS = ["mcp", "a2a", "openai", "anthropic", "langchain", "vercel-ai"] as const;
 
 export type AgentFramework = (typeof AGENT_FRAMEWORKS)[number];
 
@@ -59,6 +59,7 @@ export function createAgentIntegration(options: AgentIntegrationOptions): LayerX
   });
   const webhooks = new AgentWebhookGateway({
     webhook: config.webhook,
+    deliveryStorePath: config.webhookDeliveryStorePath,
     ...(options.deliveries === undefined ? {} : { deliveries: options.deliveries }),
     ...(options.now === undefined ? {} : { now: options.now }),
   });

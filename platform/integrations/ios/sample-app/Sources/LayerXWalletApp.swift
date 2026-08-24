@@ -13,7 +13,16 @@ struct WalletLaunch {
         do {
             let configuration = try SampleEnvironment.configuration(bundle: bundle)
             let session = SampleEnvironment.session(timeoutSeconds: configuration.requestTimeoutSeconds)
-            let mobile = try LayerXMobile(configuration: configuration, session: session)
+            guard let bundleIdentifier = bundle.bundleIdentifier else {
+                throw MobileIntegrationError(.invalidConfiguration)
+            }
+            let mobile = try LayerXMobile(
+                configuration: configuration,
+                session: session,
+                deliveryStoreURL: try FileEventDeliveryStore.applicationSupportURL(
+                    applicationIdentifier: bundleIdentifier
+                )
+            )
             guard let sample = bundle.object(forInfoDictionaryKey: "LayerXSample") as? [String: Any],
                   let relay = sample["receipt_relay_url"] as? String,
                   let relayURL = URL(string: relay),
