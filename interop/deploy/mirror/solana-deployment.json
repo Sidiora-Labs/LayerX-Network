@@ -1,0 +1,7 @@
+{
+  "program": "layerx-solana-mirror-program",
+  "source": "interop/contracts/solana-mirror",
+  "upgrade_policy": "finalize the program-data upgrade authority before publisher readiness",
+  "archive_namespace": "manifest and chunk PDAs are derived with the configured publisher Ed25519 public key, preventing another payer from reserving the canonical archive addresses",
+  "required_post_deploy_records": ["genesis_hash", "program_id", "publisher_ed25519_public_key", "program_data_account", "upgradeable_loader_id", "program_elf_sha256", "deployment_signature", "rooted_slot"]
+}

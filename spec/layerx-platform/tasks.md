@@ -1010,7 +1010,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
 ## Wave 12 - The Multichain Surface
 
 - [ ] 25. Publish and verify batch mirrors
-  - [ ] 25.1 Build the mirror publisher
+  - [ ] 25.1 Build the mirror publisher — **Implemented - qualification pending**
     - Build the mirror publisher anchoring batch commitments to Ethereum and Solana with batch data retrievable per mirror, fed exclusively through the node boundary.
     - Publish as pure archives: no vault, portal or custody semantics of any kind on the mirror chains.
     - Track and expose per-mirror freshness - latest batch and checkpoint mirrored - with lag stated honestly.

@@ -1,0 +1,14 @@
+[package]
+name = "layerx-solana-mirror-program"
+version = "0.1.0"
+edition = "2021"
+license = "LicenseRef-Centra-ai-Protocol"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+solana-program = "=2.3.0"
+
+[lints.rust]
+unsafe_code = "deny"

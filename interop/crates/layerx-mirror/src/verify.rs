@@ -19,7 +19,6 @@ pub struct SignedHeaderTrust {
     pub sequencer_public_key: [u8; 32],
     pub first_batch_number: u64,
     pub last_batch_number: u64,
-    pub header_signature: [u8; 64],
 }
 
 /// Mirror coordinates displayed with every mirror-derived result.
@@ -108,6 +107,10 @@ impl MirrorVerifier {
         if header.sequencer_id() != trust.sequencer_id
             || header.batch_number() < trust.first_batch_number
             || header.batch_number() > trust.last_batch_number
+            || archive.batch_authorization.sequencer_id != trust.sequencer_id
+            || archive.batch_authorization.sequencer_public_key != trust.sequencer_public_key
+            || archive.batch_authorization.first_batch_number != trust.first_batch_number
+            || archive.batch_authorization.last_batch_number != trust.last_batch_number
         {
             return Err(MirrorVerifyError::HeaderAuthority);
         }
@@ -115,7 +118,7 @@ impl MirrorVerifier {
             .map_err(|_| MirrorVerifyError::Header)?;
         ed25519::verify_digest(
             &trust.sequencer_public_key,
-            &trust.header_signature,
+            &archive.batch_authorization.header_signature,
             &header_digest,
         )
         .map_err(|_| MirrorVerifyError::HeaderSignature)?;
@@ -212,7 +215,7 @@ impl MirrorVerifier {
             proof,
             &header.resulting_state_root(),
             &self.archive.canonical_batch_header,
-            &self.trust.header_signature,
+            &self.archive.batch_authorization.header_signature,
             &authority,
         )
         .map_err(MirrorVerifyError::State)?;

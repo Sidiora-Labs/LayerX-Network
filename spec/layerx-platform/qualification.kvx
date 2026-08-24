@@ -813,3 +813,51 @@ symbol = "cg guard task 24.1 lifecycle paths"
 observed = "The scoped cg guard accepted every implementation, dependency, operator and testnet-workflow path and reported only the three generated/auditable spec lifecycle files as advisory outside touches."
 assumption = "The lifecycle projections and qualification record remain part of the published task commit; human review will inspect the advisory rather than remove the implementation status or recorded external dependencies."
 severity = "task-scope"
+
+[observation.25.1.3]
+task = "25.1"
+file = "agent/schema/lni/v1.kvx, interop/crates/layerx-mirror/src/node.rs"
+symbol = "CheckpointResponse, LniArchiveSource::acquire"
+observed = "The stable LNI declares a checkpoint response but supplies no canonical encoding for the full replay/possession attestation fields required to reconstruct layerx_proof::checkpoint::Attestation and verify a ThresholdReport. NodeInfo exposes the latest checkpoint identifier but not its batch coordinate, and no serving checkpoint implementation is present. The publisher implements and verifies the exact batch-header authorization response and availability stream, but it refuses to manufacture checkpoint verification or infer checkpoint lag: a nonzero node checkpoint makes checkpoint readiness fail closed and archives remain checkpoint-free until the owner publishes the missing proof/server contract."
+assumption = "The node owner must add a versioned canonical checkpoint response carrying every attestation field, bonded-set/settlement registration identity and checkpoint batch coordinate, then bind it to a real serving node. Qualification must prove certificate verification and checkpoint freshness against that endpoint before deployment readiness may be treated as complete."
+severity = "dependency-boundary"
+
+[observation.25.1.4]
+task = "25.1"
+file = "interop/crates/layerx-mirror/src/signer.rs, interop/deploy/mirror/config.example.json"
+symbol = "RemoteChainSigner"
+observed = "The repository contains no owner-provisioned Ethereum secp256k1 or Solana Ed25519 transaction-signing service. The production clients therefore use only an opaque policy handle and public verification key over a bounded UDS or mutually authenticated TLS protocol, verify every returned signature locally, and never accept an inline chain private key. No signer key, endpoint identity, deployed chain address, runtime code hash, program-data address or test-network credential was invented."
+assumption = "The custody owner must implement the documented signer request contract with non-exportable keys and policy-domain enforcement, provision independent RPC identities and publish reviewed deployment coordinates. Qualification must exercise refusal, timeout, malformed signature, crash-after-sign, broadcast-unknown and key-policy mismatch against those real services."
+severity = "operator-authority"
+
+[observation.25.1.5]
+task = "25.1"
+file = "interop/contracts/ethereum-mirror, interop/contracts/solana-mirror, .github/workflows/mirror-live.yml"
+symbol = "LayerXMirrorArchive, layerx-solana-mirror-program, mirror-live-qualification"
+observed = "A 64 MiB archive cannot be an atomic Ethereum or Solana transaction. Both mirror protocols are implemented as immutable resumable manifest, ordered chunk and finalize stages with an expected rolling chunk commitment; the publisher persists each signed transaction before broadcast and verifies canonical retrieval after finality. The protected workflow and deployment manifests require real node, RPC, signer and testnet inputs, but implementation-phase rules prohibited compiling contracts/clients, deploying, broadcasting, running the workflow or observing chain state."
+assumption = "Human qualification will compile and review both on-chain programs, pin their deployment artifacts and code identities, then run the protected live journey through stalls, restarts, ambiguous broadcasts and reorgs. A code-writing status must not be read as a claim that any contract is deployed or any live transaction succeeded."
+severity = "qualification-input"
+
+[observation.25.1.6]
+task = "25.1"
+file = "spec/layerx-platform/spec.kvx"
+symbol = "task.25.1 touches"
+observed = "The original touch list named only the generic publisher and its in-memory integration test. Closing the recorded production gap necessarily adds authenticated LNI evidence and checkpoint accessors, durable journals, concrete Ethereum/Solana RPC and remote-signer clients, two chunk/manifest protocols, an executable, deployment configuration and protected live qualification machinery. The touch list is expanded to those exact surfaces; no unrelated product path is included."
+assumption = "Human review will treat the expanded paths as the minimum deployable mirror boundary and will not replace the durable stages, exact target checks or fail-closed checkpoint state with the earlier in-memory path."
+severity = "scope-clarification"
+
+[observation.25.1.7]
+task = "25.1"
+file = "scripts/qualify-mirror-live.sh, .github/workflows/mirror-live.yml"
+symbol = "LAYERX_MIRROR_FAULT_CONTROLLER"
+observed = "The live qualification artifact requires an authenticated controlled-testnet authority that can stall and restore each chain independently and induce a bounded reorg of the publisher's latest archive transaction. That authority is intentionally not implemented in the publisher or exposed through either public archive protocol, and no such devnet control service exists in this repository. The protected self-hosted workflow names the required operator-installed executable and fails closed when it is absent."
+assumption = "The testnet owners must provision and audit the fault controller on the protected runner, constrain it to disposable mirror testnets and retain its chain evidence. Human qualification must observe the unaffected lane advancing during each stall and each durable reorg counter followed by exact archive recovery; a public-chain run without those injected faults is not equivalent."
+severity = "qualification-input"
+
+[observation.25.1.8]
+task = "25.1"
+file = "spec/layerx-platform/spec.kvx, spec/layerx-platform/tasks.md, spec/layerx-platform/qualification.kvx"
+symbol = "cg guard task 25.1 lifecycle paths"
+observed = "The scoped cg guard accepted every explicit product, protocol, deployment and live-artifact path and reported only the three generated or auditable spec lifecycle files as advisory outside touches."
+assumption = "The lifecycle projection and qualification observations remain in the single published task commit; human review will inspect the advisory rather than remove the implementation state or external dependency record."
+severity = "task-scope"

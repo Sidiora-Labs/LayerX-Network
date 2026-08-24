@@ -103,7 +103,7 @@ golden = "00010000000b0000000000000000000000010b00000000"
 name = "BatchHeaderRequest"
 kind = "request"
 capability = "batch_header"
-canonical_payload = "canonical batch-number or checkpoint-id selector bytes"
+canonical_payload = "version:u16be=1 selector_batch_number:u64be; zero and trailing bytes are refused"
 proof_material = "empty"
 golden = "00010000000c0000000000000000000000010c00000000"
 
@@ -112,7 +112,7 @@ name = "BatchHeaderResponse"
 kind = "response"
 capability = "batch_header"
 canonical_payload = "canonical LayerX batch-header bytes"
-proof_material = "authorised sequencer signature and range evidence bytes"
+proof_material = "version:u16be=1 sequencer_id:bytes32 authorised_sequencer_public_key:bytes32 first_batch_number:u64be last_batch_number:u64be canonical_header_signature:bytes64; key must equal the authenticated NodeInfo key and the selected batch must lie in the inclusive nonzero range"
 golden = "00010000000d0000000000000000000000010d00000001a5"
 
 [message.14]

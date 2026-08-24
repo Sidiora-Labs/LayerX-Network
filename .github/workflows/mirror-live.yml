@@ -1,0 +1,38 @@
+name: mirror-live-qualification
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mirror-live-qualification
+  cancel-in-progress: false
+
+jobs:
+  publish-retrieve:
+    runs-on: [self-hosted, layerx-testnet]
+    timeout-minutes: 45
+    environment: mirror-testnets
+    steps:
+      - uses: actions/checkout@v4
+        with: {persist-credentials: false}
+      - name: Materialize bounded runtime configuration
+        env:
+          MIRROR_LIVE_CONFIG: ${{ secrets.MIRROR_LIVE_CONFIG }}
+        run: |
+          install -m 0700 -d .live-secrets
+          printf '%s' "${MIRROR_LIVE_CONFIG}" > .live-secrets/config.json
+          chmod 0600 .live-secrets/config.json
+      - name: Build qualification executable
+        run: cargo build --locked --release --manifest-path interop/Cargo.toml --package layerx-mirror --bin layerx-mirror-publisher
+      - name: Publish and retrieve the same live archive on both chains
+        env:
+          LAYERX_MIRROR_LIVE_CONFIG: .live-secrets/config.json
+          LAYERX_MIRROR_PUBLISHER_BIN: interop/target/release/layerx-mirror-publisher
+          LAYERX_MIRROR_FAULT_CONTROLLER: /opt/layerx/bin/mirror-devnet-fault-control
+        run: scripts/qualify-mirror-live.sh
+      - name: Remove materialized configuration
+        if: always()
+        run: rm -f .live-secrets/config.json

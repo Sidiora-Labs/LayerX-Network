@@ -1,0 +1,86 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: layerx-mirror-publisher
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: layerx-mirror-publisher}
+  template:
+    metadata:
+      labels: {app: layerx-mirror-publisher}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: publisher
+          image: ghcr.io/layerx/layerx-mirror-publisher@sha256:REPLACE_WITH_PINNED_DIGEST
+          args: ["/etc/layerx-mirror/config.json"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          resources:
+            requests: {cpu: 250m, memory: 256Mi}
+            limits: {cpu: "2", memory: 2Gi}
+          readinessProbe:
+            exec:
+              command: ["/usr/local/bin/layerx-mirror-publisher", "--probe", "127.0.0.1:9091"]
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            exec:
+              command: ["/usr/local/bin/layerx-mirror-publisher", "--probe", "127.0.0.1:9091"]
+            periodSeconds: 30
+            timeoutSeconds: 3
+            failureThreshold: 6
+          volumeMounts:
+            - {name: config, mountPath: /etc/layerx-mirror, readOnly: true}
+            - {name: state, mountPath: /var/lib/layerx-mirror}
+            - {name: lni, mountPath: /run/layerx, readOnly: true}
+            - {name: signer-sockets, mountPath: /run/signers, readOnly: true}
+            - {name: rpc-secrets, mountPath: /run/secrets, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: config
+          secret: {secretName: layerx-mirror-config, defaultMode: 288}
+        - name: state
+          persistentVolumeClaim: {claimName: layerx-mirror-state}
+        - name: lni
+          hostPath: {path: /run/layerx, type: Directory}
+        - name: signer-sockets
+          hostPath: {path: /run/layerx-signers, type: Directory}
+        - name: rpc-secrets
+          secret: {secretName: layerx-mirror-rpc-credentials, defaultMode: 288}
+        - name: tmp
+          emptyDir: {sizeLimit: 64Mi}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: layerx-mirror-state
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests: {storage: 200Gi}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: layerx-mirror-publisher
+spec:
+  podSelector:
+    matchLabels: {app: layerx-mirror-publisher}
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    - ports:
+        - {protocol: TCP, port: 443}
+        - {protocol: TCP, port: 9443}
+        - {protocol: UDP, port: 53}

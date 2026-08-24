@@ -807,6 +807,38 @@ pub struct CheckpointCertificate {
     settlement_reference: Vec<u8>,
 }
 
+impl CheckpointCertificate {
+    /// Returns the canonical batch header committed by this certificate.
+    #[must_use]
+    pub const fn header(&self) -> &BatchHeader {
+        &self.header
+    }
+
+    /// Returns the exact validity proof committed by the checkpoint identity.
+    #[must_use]
+    pub fn validity_proof(&self) -> &[u8] {
+        &self.validity_proof
+    }
+
+    /// Returns the sorted guarantor identifiers and their canonical signatures.
+    #[must_use]
+    pub fn guarantor_signatures(&self) -> &[([u8; 32], [u8; 64])] {
+        &self.guarantor_signatures
+    }
+
+    /// Returns the threshold stated by the canonical certificate.
+    #[must_use]
+    pub const fn threshold(&self) -> u32 {
+        self.threshold
+    }
+
+    /// Returns the exact settlement reference included in the certificate.
+    #[must_use]
+    pub fn settlement_reference(&self) -> &[u8] {
+        &self.settlement_reference
+    }
+}
+
 /// Decodes the canonical checkpoint body, sorted signature set, threshold, and
 /// settlement reference.
 ///

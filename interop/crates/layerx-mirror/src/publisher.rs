@@ -1,20 +1,21 @@
 use std::collections::BTreeMap;
 
-use layerx_agent_api::read::{BatchValue, CheckpointValue, VerifiedRead};
+use layerx_agent_api::read::{CheckpointValue, VerifiedRead};
 use layerx_agent_api::verify::Level;
 use layerx_client::availability::{AvailabilityRecords, AvailabilityResult};
+use layerx_crypto::ed25519;
 use layerx_proof::availability::{AvailabilityClass, RootCommitments};
 use layerx_proof::checkpoint::ThresholdReport;
 use layerx_proof::merkle::{root, root_from_leaf_hashes};
-use layerx_wire::hash::availability_chunk_digest;
+use layerx_wire::hash::{availability_chunk_digest, batch_header_digest, checkpoint_id};
 use layerx_wire::receipt::{
     decode_batch_header, decode_checkpoint, encode_batch_header, encode_checkpoint,
 };
 use sha2::{Digest, Sha256};
 
 const ARCHIVE_MAGIC: &[u8; 8] = b"LXMIRROR";
-const ARCHIVE_VERSION: u16 = 1;
-const ARCHIVE_DOMAIN: &[u8] = b"LXP/mirror/archive/v1\0";
+const ARCHIVE_VERSION: u16 = 2;
+const ARCHIVE_DOMAIN: &[u8] = b"LXP/mirror/archive/v2\0";
 const MAX_ARCHIVE_BYTES: usize = 64 * 1024 * 1024;
 const MAX_ARCHIVE_CHUNKS: usize = 65_536;
 const MAX_ARCHIVE_RECORDS: usize = 1_048_576;
@@ -25,6 +26,10 @@ const MAX_FIELD_BYTES: usize = 32 * 1024 * 1024;
 pub struct ArchiveCommitment([u8; 32]);
 
 impl ArchiveCommitment {
+    pub(crate) const fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+
     #[must_use]
     pub const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
@@ -43,6 +48,66 @@ pub struct CheckpointCoordinate {
 pub struct NodeHead {
     pub latest_sealed_batch: u64,
     pub latest_finalised_checkpoint: Option<CheckpointCoordinate>,
+}
+
+/// Exact core-published sequencer authorization covering one signed header.
+/// The signature and range are retained in the archive so a mirror consumer
+/// never has to trust a publisher assertion about batch authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BatchAuthorization {
+    pub sequencer_id: [u8; 32],
+    pub sequencer_public_key: [u8; 32],
+    pub first_batch_number: u64,
+    pub last_batch_number: u64,
+    pub header_signature: [u8; 64],
+}
+
+/// Proof-gated batch material paired with its exact core authorization.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NodeBatch {
+    canonical_header: Vec<u8>,
+    authorization: BatchAuthorization,
+}
+
+impl NodeBatch {
+    /// Admits batch material only after canonical decoding and exact sequencer
+    /// authorization verification. Authenticated transports use the same
+    /// constructor after binding the key to their handshake identity.
+    pub fn verify(
+        canonical_header: Vec<u8>,
+        authorization: BatchAuthorization,
+        trust: &crate::SignedHeaderTrust,
+    ) -> Result<Self, SourceError> {
+        let header =
+            decode_batch_header(&canonical_header).map_err(|_| SourceError::BatchHeader)?;
+        let reproduced = encode_batch_header(&header).map_err(|_| SourceError::BatchHeader)?;
+        if reproduced != canonical_header {
+            return Err(SourceError::BatchHeader);
+        }
+        if authorization.sequencer_id != trust.sequencer_id
+            || authorization.sequencer_public_key != trust.sequencer_public_key
+            || authorization.first_batch_number != trust.first_batch_number
+            || authorization.last_batch_number != trust.last_batch_number
+        {
+            return Err(SourceError::BatchAuthorization);
+        }
+        verify_batch_authorization(&header, &canonical_header, authorization)
+            .map_err(|_| SourceError::BatchAuthorization)?;
+        Ok(Self {
+            canonical_header,
+            authorization,
+        })
+    }
+
+    pub(crate) fn authenticated(
+        canonical_header: Vec<u8>,
+        authorization: BatchAuthorization,
+    ) -> Self {
+        Self {
+            canonical_header,
+            authorization,
+        }
+    }
 }
 
 /// Proof-gated checkpoint material paired with its exact node read.
@@ -106,6 +171,7 @@ pub struct ArchiveData {
     pub network_id: u32,
     pub batch_number: u64,
     pub canonical_batch_header: Vec<u8>,
+    pub batch_authorization: BatchAuthorization,
     pub data_availability_root: [u8; 32],
     pub record_roots: RootCommitments,
     pub chunks: Vec<ArchivedChunk>,
@@ -147,6 +213,14 @@ impl ArchiveData {
         {
             return Err(ArchiveError::BatchHeader);
         }
+        let batch_authorization = BatchAuthorization {
+            sequencer_id: reader.array()?,
+            sequencer_public_key: reader.array()?,
+            first_batch_number: reader.u64()?,
+            last_batch_number: reader.u64()?,
+            header_signature: reader.array()?,
+        };
+        verify_batch_authorization(&header, &canonical_batch_header, batch_authorization)?;
         let data_availability_root = reader.array()?;
         let record_roots = RootCommitments {
             activity: reader.array()?,
@@ -209,7 +283,19 @@ impl ArchiveData {
                     .map_err(|_| ArchiveError::Checkpoint)?;
                 let reproduced =
                     encode_checkpoint(&certificate).map_err(|_| ArchiveError::Checkpoint)?;
-                if reproduced != canonical_certificate {
+                let certificate_header = certificate.header();
+                let computed_id = checkpoint_id(
+                    &encode_batch_header(certificate_header)
+                        .map_err(|_| ArchiveError::Checkpoint)?,
+                    certificate.validity_proof(),
+                )
+                .map_err(|_| ArchiveError::Checkpoint)?;
+                if reproduced != canonical_certificate
+                    || certificate_header.protocol_version() != protocol_version
+                    || certificate_header.network_id() != network_id
+                    || certificate_header.batch_number() != coordinate.batch_number
+                    || computed_id != coordinate.checkpoint_id
+                {
                     return Err(ArchiveError::Checkpoint);
                 }
                 Some(ArchivedCheckpoint {
@@ -225,6 +311,7 @@ impl ArchiveData {
             network_id,
             batch_number,
             canonical_batch_header,
+            batch_authorization,
             data_availability_root,
             record_roots,
             chunks,
@@ -241,6 +328,11 @@ impl ArchiveData {
         writer.u32(self.network_id)?;
         writer.u64(self.batch_number)?;
         writer.bytes(&self.canonical_batch_header)?;
+        writer.raw(&self.batch_authorization.sequencer_id)?;
+        writer.raw(&self.batch_authorization.sequencer_public_key)?;
+        writer.u64(self.batch_authorization.first_batch_number)?;
+        writer.u64(self.batch_authorization.last_batch_number)?;
+        writer.raw(&self.batch_authorization.header_signature)?;
         writer.raw(&self.data_availability_root)?;
         writer.raw(&self.record_roots.activity)?;
         writer.raw(&self.record_roots.receipt)?;
@@ -280,6 +372,26 @@ pub struct Archive {
 }
 
 impl Archive {
+    /// Restores immutable archive bytes from the crash-safe spool. All archive
+    /// evidence is reverified before chain workers receive the value.
+    pub(crate) fn from_spool(bytes: Vec<u8>, node_head: NodeHead) -> Result<Self, SourceError> {
+        let data = ArchiveData::decode(&bytes).map_err(SourceError::Archive)?;
+        if node_head.latest_sealed_batch < data.batch_number
+            || node_head
+                .latest_finalised_checkpoint
+                .is_some_and(|checkpoint| checkpoint.batch_number > node_head.latest_sealed_batch)
+        {
+            return Err(SourceError::HeadBehindBatch);
+        }
+        let commitment = archive_commitment(&bytes);
+        Ok(Self {
+            data,
+            bytes,
+            commitment,
+            node_head,
+        })
+    }
+
     /// Builds one archive exclusively from an authoritative batch read, a
     /// complete verified availability result, and optional verified checkpoint.
     ///
@@ -288,21 +400,20 @@ impl Archive {
     /// Rejects insufficient proof levels, cross-batch/root data, non-canonical
     /// node bytes, inconsistent checkpoint evidence, or dishonest head values.
     pub fn from_node(
-        batch: &VerifiedRead<BatchValue>,
+        batch: &NodeBatch,
         availability: &AvailabilityResult,
         checkpoint: Option<NodeCheckpoint<'_>>,
         node_head: NodeHead,
     ) -> Result<Self, SourceError> {
-        if batch.achieved_verification_level < Level::BatchIncluded {
-            return Err(SourceError::BatchVerificationLevel);
-        }
-        let canonical_batch_header = batch.value.0.as_bytes().to_vec();
+        let canonical_batch_header = batch.canonical_header.clone();
         let header =
             decode_batch_header(&canonical_batch_header).map_err(|_| SourceError::BatchHeader)?;
         let reproduced = encode_batch_header(&header).map_err(|_| SourceError::BatchHeader)?;
         if reproduced != canonical_batch_header {
             return Err(SourceError::BatchHeader);
         }
+        verify_batch_authorization(&header, &canonical_batch_header, batch.authorization)
+            .map_err(|_| SourceError::BatchAuthorization)?;
         if header.batch_number() != availability.batch_number() {
             return Err(SourceError::BatchMismatch);
         }
@@ -352,6 +463,7 @@ impl Archive {
             network_id: header.network_id(),
             batch_number: header.batch_number(),
             canonical_batch_header,
+            batch_authorization: batch.authorization,
             data_availability_root: availability.data_availability_root(),
             record_roots,
             chunks,
@@ -393,6 +505,30 @@ impl Archive {
     }
 }
 
+fn verify_batch_authorization(
+    header: &layerx_wire::receipt::BatchHeader,
+    canonical_header: &[u8],
+    authorization: BatchAuthorization,
+) -> Result<(), ArchiveError> {
+    if authorization.sequencer_id == [0; 32]
+        || authorization.sequencer_public_key == [0; 32]
+        || authorization.first_batch_number > authorization.last_batch_number
+        || header.sequencer_id() != authorization.sequencer_id
+        || header.batch_number() < authorization.first_batch_number
+        || header.batch_number() > authorization.last_batch_number
+    {
+        return Err(ArchiveError::BatchAuthorization);
+    }
+    let digest =
+        batch_header_digest(canonical_header).map_err(|_| ArchiveError::BatchAuthorization)?;
+    ed25519::verify_digest(
+        &authorization.sequencer_public_key,
+        &authorization.header_signature,
+        &digest,
+    )
+    .map_err(|_| ArchiveError::BatchAuthorization)
+}
+
 fn verify_node_checkpoint(
     material: NodeCheckpoint<'_>,
     network_id: u32,
@@ -406,7 +542,38 @@ fn verify_node_checkpoint(
         decode_checkpoint(&certificate_bytes).map_err(|_| SourceError::CheckpointCertificate)?;
     let reproduced =
         encode_checkpoint(&certificate).map_err(|_| SourceError::CheckpointCertificate)?;
-    if reproduced != certificate_bytes || material.verification.network_id() != network_id {
+    let certificate_header = certificate.header();
+    let canonical_header =
+        encode_batch_header(certificate_header).map_err(|_| SourceError::CheckpointCertificate)?;
+    let canonical_checkpoint_id = checkpoint_id(&canonical_header, certificate.validity_proof())
+        .map_err(|_| SourceError::CheckpointCertificate)?;
+    let report_roots = material.verification.record_roots();
+    let certificate_roots = RootCommitments {
+        activity: certificate_header.activity_merkle_root(),
+        receipt: certificate_header.receipt_merkle_root(),
+        event: certificate_header.event_merkle_root(),
+        oracle: certificate_header.oracle_root(),
+    };
+    if reproduced != certificate_bytes
+        || certificate_header.network_id() != network_id
+        || material.verification.protocol_version() != certificate_header.protocol_version()
+        || material.verification.network_id() != certificate_header.network_id()
+        || material.verification.batch_number() != certificate_header.batch_number()
+        || material.verification.first_sequence() != certificate_header.first_sequence()
+        || material.verification.last_sequence() != certificate_header.last_sequence()
+        || material.verification.data_availability_root()
+            != certificate_header.data_availability_root()
+        || material.verification.resulting_state_root() != certificate_header.resulting_state_root()
+        || report_roots != certificate_roots
+        || material.verification.required
+            != usize::try_from(certificate.threshold())
+                .map_err(|_| SourceError::CheckpointMismatch)?
+        || material.verification.achieved < material.verification.required
+        || material.verification.achieved != certificate.guarantor_signatures().len()
+        || material.verification.evidence().settlement_reference()
+            != (!certificate.settlement_reference().is_empty())
+                .then_some(certificate.settlement_reference())
+    {
         return Err(SourceError::CheckpointMismatch);
     }
     let checkpoint_id = material
@@ -414,6 +581,9 @@ fn verify_node_checkpoint(
         .evidence()
         .checkpoint_id()
         .ok_or(SourceError::CheckpointMismatch)?;
+    if checkpoint_id != canonical_checkpoint_id {
+        return Err(SourceError::CheckpointMismatch);
+    }
     let coordinate = CheckpointCoordinate {
         batch_number: material.verification.batch_number(),
         checkpoint_id,
@@ -504,7 +674,7 @@ fn record_root(records: &[Vec<u8>]) -> Result<[u8; 32], ArchiveError> {
     root(&leaves).map_err(|_| ArchiveError::RecordRoot)
 }
 
-fn archive_commitment(bytes: &[u8]) -> ArchiveCommitment {
+pub(crate) fn archive_commitment(bytes: &[u8]) -> ArchiveCommitment {
     let mut hasher = Sha256::new();
     hasher.update(ARCHIVE_DOMAIN);
     hasher.update(bytes);
@@ -527,6 +697,7 @@ fn decode_class(value: u8) -> Result<AvailabilityClass, ArchiveError> {
 pub enum SourceError {
     BatchVerificationLevel,
     BatchHeader,
+    BatchAuthorization,
     BatchMismatch,
     RootMismatch,
     CheckpointVerificationLevel,
@@ -545,6 +716,7 @@ pub enum ArchiveError {
     Format,
     Version,
     BatchHeader,
+    BatchAuthorization,
     RootMismatch,
     ChunkHash,
     ChunkOrder,
@@ -1437,12 +1609,12 @@ fn validate_retrieved(commitment: ArchiveCommitment, bytes: &[u8]) -> RetrievalS
 /// Coordinates independent Ethereum and Solana archival writes. Chain
 /// degradation is returned in-band and never blocks `LayerX` operation or the
 /// other mirror attempt.
-pub struct Publisher<E, S> {
+pub struct GenericPublisher<E, S> {
     ethereum: EthereumPublisher<E>,
     solana: SolanaPublisher<S>,
 }
 
-impl<E: EthereumArchiveClient, S: SolanaArchiveClient> Publisher<E, S> {
+impl<E: EthereumArchiveClient, S: SolanaArchiveClient> GenericPublisher<E, S> {
     /// Creates a dual-chain publisher with validated archive destinations.
     ///
     /// # Errors
@@ -1513,5 +1685,137 @@ impl<E: EthereumArchiveClient, S: SolanaArchiveClient> Publisher<E, S> {
     #[must_use]
     pub fn into_clients(self) -> (E, S) {
         (self.ethereum.client, self.solana.client)
+    }
+}
+
+/// Exact durable status for the Ethereum lane.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum EthereumLaneState {
+    Progress {
+        stage: crate::store::PublicationStage,
+        phase: crate::store::PublicationPhase,
+        transaction_hash: Option<[u8; 32]>,
+        position: crate::store::FinalityPosition,
+        freshness: MirrorFreshness,
+    },
+    Degraded {
+        error: crate::ethereum::EthereumError,
+        freshness: MirrorFreshness,
+    },
+}
+
+/// Exact durable status for the Solana lane.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SolanaLaneState {
+    Progress {
+        stage: crate::store::PublicationStage,
+        phase: crate::store::PublicationPhase,
+        signature: Option<[u8; 64]>,
+        position: crate::store::FinalityPosition,
+        freshness: MirrorFreshness,
+    },
+    Degraded {
+        error: crate::solana::SolanaError,
+        freshness: MirrorFreshness,
+    },
+}
+
+/// Independent dual-chain durable publication report.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DurablePublicationReport {
+    pub commitment: ArchiveCommitment,
+    pub ethereum: EthereumLaneState,
+    pub solana: SolanaLaneState,
+}
+
+/// Production publisher over concrete durable Ethereum and Solana clients.
+/// The executable runs each lane on its own worker; this type keeps their state
+/// and errors independent even when called by an embedded operator.
+pub struct Publisher {
+    ethereum: crate::ethereum::EthereumArchiveClient,
+    solana: crate::solana::SolanaArchiveClient,
+}
+
+impl Publisher {
+    #[must_use]
+    pub const fn new(
+        ethereum: crate::ethereum::EthereumArchiveClient,
+        solana: crate::solana::SolanaArchiveClient,
+    ) -> Self {
+        Self { ethereum, solana }
+    }
+
+    /// Advances both durable lanes without converting either failure into the
+    /// other lane's state or into a LayerX node failure.
+    #[must_use]
+    pub fn publish(&mut self, archive: &Archive) -> DurablePublicationReport {
+        let ethereum_client = &mut self.ethereum;
+        let solana_client = &mut self.solana;
+        let (ethereum_result, solana_result) = std::thread::scope(|scope| {
+            let ethereum = scope.spawn(|| ethereum_client.advance(archive));
+            let solana = scope.spawn(|| solana_client.advance(archive));
+            (
+                ethereum
+                    .join()
+                    .unwrap_or(Err(crate::ethereum::EthereumError::WorkerTerminated)),
+                solana
+                    .join()
+                    .unwrap_or(Err(crate::solana::SolanaError::WorkerTerminated)),
+            )
+        });
+        let ethereum = match ethereum_result {
+            Ok(progress) => EthereumLaneState::Progress {
+                stage: progress.stage,
+                phase: progress.phase,
+                transaction_hash: progress.transaction_hash,
+                position: progress.position,
+                freshness: MirrorFreshness::new(progress.cursor, archive.node_head()),
+            },
+            Err(error) => EthereumLaneState::Degraded {
+                error,
+                freshness: MirrorFreshness::new(self.ethereum.cursor(), archive.node_head()),
+            },
+        };
+        let solana = match solana_result {
+            Ok(progress) => SolanaLaneState::Progress {
+                stage: progress.stage,
+                phase: progress.phase,
+                signature: progress.signature,
+                position: progress.position,
+                freshness: MirrorFreshness::new(progress.cursor, archive.node_head()),
+            },
+            Err(error) => SolanaLaneState::Degraded {
+                error,
+                freshness: MirrorFreshness::new(self.solana.cursor(), archive.node_head()),
+            },
+        };
+        DurablePublicationReport {
+            commitment: archive.commitment(),
+            ethereum,
+            solana,
+        }
+    }
+
+    #[must_use]
+    pub fn ethereum_cursor(&self) -> MirrorCursor {
+        self.ethereum.cursor()
+    }
+
+    #[must_use]
+    pub fn solana_cursor(&self) -> MirrorCursor {
+        self.solana.cursor()
+    }
+
+    pub fn retrieve(
+        &self,
+        commitment: ArchiveCommitment,
+    ) -> (
+        Result<Option<Vec<u8>>, crate::ethereum::EthereumError>,
+        Result<Option<Vec<u8>>, crate::solana::SolanaError>,
+    ) {
+        (
+            self.ethereum.retrieve(commitment),
+            self.solana.retrieve(commitment),
+        )
     }
 }
