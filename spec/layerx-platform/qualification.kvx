@@ -317,3 +317,11 @@ symbol = "platform-test-tooling"
 observed = "platform-test-tooling now runs cargo test for layerx-platform-cli instead of only cargo check, and the platform CI workflow invokes the target. The tests were written but not compiled or executed in this phase."
 assumption = "Human qualification will compile and run make platform-test-tooling, which builds the emulator's vendored C core and spawns emulator child processes on ephemeral loopback ports."
 severity = "note"
+
+[observation.install.1]
+task = "install"
+file = ".logs/workspace/20260824T051927Z-1061104"
+symbol = "005-human-INSTALL, 007-platform-INSTALL, 009-platform-INSTALL, 010-platform-INSTALL, 011-platform-INSTALL, 013-programs-INSTALL, 014-programs-INSTALL, 015-interop-INSTALL"
+observed = "Blocked installs: 005/007/013/014 report 'Missing host tools: npm'; 009 reports 'Missing host tools: mvn, java'; 010 reports 'Missing host tools: dotnet'; 011 reports 'Missing host tools: swift'; 015 interop log is empty (0 bytes) with no install attempt; 001-core and 002-contracts logs are also empty (0 bytes). Installed via apt: nodejs/npm (v18.19.1/9.2.0), openjdk-21-jdk (21.0.11), maven (3.8.7 after fixing missing /etc/maven/m2.conf from .dpkg-new), dotnet-sdk-8.0 (8.0.130). Swift package not available in Ubuntu 24.04 apt repositories (no swift-lang/swift-language/swift-toolchain package found); swift remains uninstalled. Per No Repair, no build/test repair attempted; no code changed; system package state changed only."
+assumption = "Swift installation may require Swift.org binary tarball or different repository; empty 001/002/015 logs indicate those install steps never started or produced no output rather than a failure. Human qualification should confirm the installed package versions are sufficient for the repo's build/test targets."
+severity = "note"
