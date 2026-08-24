@@ -1,0 +1,12 @@
+{
+  "name": "@sidiora/layerx-example-merchant-shop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": { "start": "node index.mjs" },
+  "dependencies": {
+    "@sidiora/layerx-merchant-middleware": "0.1.0",
+    "@sidiora/layerx-seller-middleware": "0.1.0"
+  },
+  "engines": { "node": ">=22" }
+}

@@ -1,14 +1,18 @@
 package com.sidiora.layerx.sdk;
 
 import com.fasterxml.jackson.databind.JavaType;
-import java.util.Map;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import java.util.Objects;
 import java.util.concurrent.CompletionStage;
 
 public interface ProductionTransport {
-    record Call(OperationCatalog.Plane plane, String operation, Object request,
-                Map<String, String> pathParameters, IdempotencyKey idempotencyKey) {
+    record Call(SchemaTypes.Operation operation, ObjectNode request,
+                SchemaTypes.PathParameters pathParameters, IdempotencyKey idempotencyKey) {
         public Call {
-            pathParameters = pathParameters == null ? Map.of() : Map.copyOf(pathParameters);
+            Objects.requireNonNull(operation, "operation");
+            request = request == null ? com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode()
+                : request.deepCopy();
+            pathParameters = pathParameters == null ? SchemaTypes.PathParameters.none() : pathParameters;
         }
     }
     <T> CompletionStage<T> call(Call call, JavaType responseType);

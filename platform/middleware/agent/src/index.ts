@@ -1,12 +1,22 @@
 import {
   PlatformSdkError,
   ProductionClient,
+  SDK_ERROR_CODES,
   idempotencyKey,
   protocolAmount,
   verifyReceipt,
   type AuthorizedReceiptBatch,
   type ReceiptVerification,
+  type RetryClass,
+  type SdkErrorCode,
 } from "@sidiora/layerx-sdk";
+
+const POST_SUBMIT_UNCERTAIN_CODES: ReadonlySet<SdkErrorCode> = new Set([
+  "transport-failure",
+  "deadline",
+  "decode-failure",
+  "internal-fault",
+]);
 
 export interface AgentSpendRequest {
   readonly tenant: string;
@@ -23,18 +33,63 @@ export interface AgentSpendRequest {
   readonly recipient: string;
 }
 
-export interface BudgetReservation {
+interface BudgetReservationBase {
   readonly reservationId: string;
   readonly requestDigest: string;
   readonly amount: string;
   readonly asset: string;
-  readonly state: "reserved" | "held" | "committed" | "released";
 }
+
+export type ReservedBudgetReservation = BudgetReservationBase & {
+  readonly state: "reserved";
+};
+
+export type HeldBudgetReservation = BudgetReservationBase & {
+  readonly state: "held";
+  readonly approvalId: string;
+  readonly canonicalBytesDigest: string;
+};
+
+export type CommittedBudgetReservation = BudgetReservationBase & {
+  readonly state: "committed";
+  readonly receiptDigest: string;
+};
+
+export type ReleasedBudgetReservation = BudgetReservationBase & {
+  readonly state: "released";
+  readonly refusal: AgentRefusal;
+};
+
+export type BudgetReservation =
+  | ReservedBudgetReservation
+  | HeldBudgetReservation
+  | CommittedBudgetReservation
+  | ReleasedBudgetReservation;
 
 export type BudgetReserveResult =
   | { readonly kind: "reserved"; readonly reservation: BudgetReservation }
   | { readonly kind: "exhausted"; readonly available: string }
   | { readonly kind: "conflict" };
+
+export interface BudgetTransition {
+  readonly reservationId: string;
+  readonly requestDigest: string;
+  readonly amount: string;
+  readonly asset: string;
+}
+
+export interface BudgetHoldTransition extends BudgetTransition {
+  readonly approvalId: string;
+  readonly canonicalBytesDigest: string;
+}
+
+export interface BudgetCommitTransition extends BudgetTransition {
+  readonly receiptDigest: string;
+}
+
+export interface BudgetReleaseTransition extends BudgetTransition {
+  readonly refusal: AgentRefusal;
+}
 
 export interface AgentBudgetLedger {
   reserve(request: {
@@ -44,9 +99,9 @@ export interface AgentBudgetLedger {
     readonly amount: string;
     readonly asset: string;
   }): Promise<BudgetReserveResult>;
-  hold(reservationId: string, requestDigest: string, approvalId: string): Promise<BudgetReservation>;
-  commit(reservationId: string, requestDigest: string, receiptDigest: string): Promise<BudgetReservation>;
-  release(reservationId: string, requestDigest: string): Promise<BudgetReservation>;
+  hold(transition: BudgetHoldTransition): Promise<HeldBudgetReservation>;
+  commit(transition: BudgetCommitTransition): Promise<CommittedBudgetReservation>;
+  release(transition: BudgetReleaseTransition): Promise<ReleasedBudgetReservation>;
 }
 
 export interface PreparedActivity {
@@ -85,6 +140,16 @@ export interface ApprovalHold {
   readonly enforcement: "daemon_enforced";
 }
 
+export type AgentRefusalRetry = Exclude<RetryClass, "unknown-outcome">;
+
+export interface AgentRefusal {
+  readonly code: SdkErrorCode;
+  readonly retry: AgentRefusalRetry;
+  readonly retryAfterMs?: number;
+  readonly protocolResultCode?: number;
+  readonly submissionState?: "Failed" | "Expired";
+}
+
 export interface AgentMiddlewareConfig {
   readonly client: ProductionClient;
   readonly budgets: AgentBudgetLedger;
@@ -99,13 +164,13 @@ export type AgentSpendResult =
     readonly kind: "verified";
     readonly submission: Submission;
     readonly verification: ReceiptVerification;
-    readonly reservation: BudgetReservation;
+    readonly reservation: CommittedBudgetReservation;
   }
-  | { readonly kind: "approval-hold"; readonly approval: ApprovalHold; readonly reservation: BudgetReservation }
+  | { readonly kind: "approval-hold"; readonly approval: ApprovalHold; readonly reservation: HeldBudgetReservation }
   | { readonly kind: "pending"; readonly submission: Submission; readonly reservation: BudgetReservation }
   | { readonly kind: "unknown"; readonly reservation: BudgetReservation; readonly submission?: Submission }
-  | { readonly kind: "refused"; readonly code: string; readonly reservation: BudgetReservation }
-  | { readonly kind: "budget-refused"; readonly available: string };
+  | ({ readonly kind: "refused"; readonly reservation: BudgetReservation } & AgentRefusal)
+  | { readonly kind: "budget-refused"; readonly code: "budget-refusal"; readonly retry: "never"; readonly available: string };
 
 export class AgentMiddleware {
   readonly #client: ProductionClient;
@@ -129,6 +194,9 @@ export class AgentMiddleware {
 
   public async spend(request: AgentSpendRequest): Promise<AgentSpendResult> {
     validateSpend(request);
+    if (!await payloadHashMatches(request.payloadBase64, request.payloadHash)) {
+      throw new AgentMiddlewareError("invalid-request");
+    }
     const amount = protocolAmount(request.amount).toString();
     const mutationKey = idempotencyKey(request.idempotencyKey);
     const requestDigest = await digestSpend(request);
@@ -140,10 +208,28 @@ export class AgentMiddleware {
       asset: request.asset,
     });
     if (reserved.kind === "exhausted") {
-      return { kind: "budget-refused", available: reserved.available };
+      protocolAmount(reserved.available);
+      return { kind: "budget-refused", code: "budget-refusal", retry: "never", available: reserved.available };
     }
     if (reserved.kind === "conflict") {
       throw new AgentMiddlewareError("idempotency-conflict");
+    }
+    const budget = { requestDigest, amount, asset: request.asset };
+    const reservation = validateBudgetReservation(reserved.reservation, budget);
+    if (reservation.state === "held") {
+      return {
+        kind: "approval-hold",
+        approval: {
+          approvalId: reservation.approvalId,
+          state: "Held",
+          canonicalBytesDigest: reservation.canonicalBytesDigest,
+          enforcement: "daemon_enforced",
+        },
+        reservation,
+      };
+    }
+    if (reservation.state === "released") {
+      return { kind: "refused", reservation, ...reservation.refusal };
     }
     let prepared: PreparedActivity;
     try {
@@ -158,12 +244,22 @@ export class AgentMiddleware {
         payload_hash: request.payloadHash,
       }, { idempotencyKey: mutationKey }));
     } catch (error) {
-      return this.#sdkFailure(error, reserved.reservation, requestDigest);
+      return this.#sdkFailure(error, reservation, budget, false);
     }
-    const signature = await this.#signer.sign(prepared);
+    let signature: string;
+    try {
+      signature = await this.#signer.sign(prepared);
+    } catch (error) {
+      return this.#sdkFailure(error, reservation, budget, false);
+    }
     if (signature.length === 0 || signature.length > 16_384 || signature.includes("\0")) {
-      await this.#budgets.release(reserved.reservation.reservationId, requestDigest);
-      throw new AgentMiddlewareError("invalid-signature");
+      const refusal: AgentRefusal = { code: "decode-failure", retry: "never" };
+      try {
+        const released = await this.#release(reservation, budget, refusal);
+        return { kind: "refused", reservation: released, ...refusal };
+      } catch {
+        return { kind: "unknown", reservation };
+      }
     }
     let submission: Submission;
     try {
@@ -173,67 +269,134 @@ export class AgentMiddleware {
       }, { idempotencyKey: mutationKey }));
     } catch (error) {
       if (error instanceof PlatformSdkError && (error.code === "policy-refusal" || error.code === "budget-refusal")) {
-        const approval = await this.#approvalHold(request.tenant, prepared);
+        let approval: ApprovalHold | undefined;
+        try {
+          approval = await this.#approvalHold(request.tenant, prepared);
+        } catch {
+          return { kind: "unknown", reservation };
+        }
         if (approval !== undefined) {
-          const held = await this.#budgets.hold(
-            reserved.reservation.reservationId,
-            requestDigest,
-            approval.approvalId,
-          );
+          let held: BudgetReservation;
+          try {
+            held = validateBudgetReservation(
+              await this.#budgets.hold({
+                reservationId: reservation.reservationId,
+                requestDigest,
+                amount,
+                asset: request.asset,
+                approvalId: approval.approvalId,
+                canonicalBytesDigest: approval.canonicalBytesDigest,
+              }),
+              budget,
+              reservation.reservationId,
+            );
+          } catch {
+            return { kind: "unknown", reservation };
+          }
+          if (
+            held.state !== "held"
+            || held.approvalId !== approval.approvalId
+            || held.canonicalBytesDigest !== approval.canonicalBytesDigest
+          ) {
+            throw new AgentMiddlewareError("budget-conflict");
+          }
           return { kind: "approval-hold", approval, reservation: held };
         }
       }
-      return this.#sdkFailure(error, reserved.reservation, requestDigest);
+      return this.#sdkFailure(error, reservation, budget, true);
     }
-    for (let poll = 0; poll < this.#maximumTrackPolls && submissionState(submission) === "Pending"; poll += 1) {
+    let state: ReturnType<typeof submissionState>;
+    try {
+      state = submissionState(submission);
+    } catch {
+      return { kind: "unknown", reservation, submission };
+    }
+    for (let poll = 0; poll < this.#maximumTrackPolls && state === "Pending"; poll += 1) {
       await this.#wait(Math.min((poll + 1) * 250, 2_500));
       try {
         submission = parseSubmission(await this.#client.agent("track", {
           submission_ref: submission.submission_ref,
         }));
+        state = submissionState(submission);
       } catch (error) {
         if (error instanceof PlatformSdkError && error.retry === "unknown-outcome") {
-          return { kind: "unknown", reservation: reserved.reservation, submission };
+          return { kind: "unknown", reservation, submission };
         }
-        throw error;
+        if (error instanceof PlatformSdkError) {
+          return { kind: "pending", submission, reservation };
+        }
+        return { kind: "unknown", reservation, submission };
       }
     }
-    const state = submissionState(submission);
     if (state === "Unknown") {
-      return { kind: "unknown", reservation: reserved.reservation, submission };
+      return { kind: "unknown", reservation, submission };
     }
     if (state === "Pending") {
-      return { kind: "pending", submission, reservation: reserved.reservation };
+      if (reservation.state === "committed") {
+        return { kind: "unknown", reservation, submission };
+      }
+      return { kind: "pending", submission, reservation };
     }
     if (state === "Failed" || state === "Expired") {
-      const released = await this.#budgets.release(reserved.reservation.reservationId, requestDigest);
-      return { kind: "refused", code: state.toLowerCase(), reservation: released };
+      const refusal: AgentRefusal = {
+        code: "core-rejection",
+        retry: "never",
+        submissionState: state,
+      };
+      try {
+        const released = await this.#release(reservation, budget, refusal);
+        return { kind: "refused", reservation: released, ...refusal };
+      } catch {
+        return { kind: "unknown", reservation, submission };
+      }
     }
     const receiptRef = executedReceiptRef(submission);
     if (receiptRef === undefined) {
-      return { kind: "pending", submission, reservation: reserved.reservation };
+      if (reservation.state === "committed") {
+        return { kind: "unknown", reservation, submission };
+      }
+      return { kind: "pending", submission, reservation };
     }
-    const evidence = await this.#receipts.resolve(receiptRef);
+    let evidence: AgentReceiptEvidence;
+    try {
+      evidence = await this.#receipts.resolve(receiptRef);
+    } catch {
+      if (reservation.state === "committed") {
+        return { kind: "unknown", reservation, submission };
+      }
+      return { kind: "pending", submission, reservation };
+    }
     let verification: ReceiptVerification;
     try {
       verification = await verifyReceipt(evidence.canonicalReceipt, evidence.authorizedBatch);
     } catch {
-      throw new AgentMiddlewareError("verification-failure");
+      return { kind: "unknown", reservation, submission };
     }
     if (
       verification.receipt.amount !== BigInt(amount)
       || !constantTimeHex(verification.receipt.asset, request.asset)
       || !constantTimeHex(verification.receipt.to, request.recipient)
     ) {
-      throw new AgentMiddlewareError("verification-failure");
+      return { kind: "unknown", reservation, submission };
     }
     const receiptDigest = toHex(verification.receiptDigest);
-    const committed = await this.#budgets.commit(
-      reserved.reservation.reservationId,
-      requestDigest,
-      receiptDigest,
-    );
-    if (committed.state !== "committed" || committed.requestDigest !== requestDigest) {
+    let committed: BudgetReservation;
+    try {
+      committed = validateBudgetReservation(
+        await this.#budgets.commit({
+          reservationId: reservation.reservationId,
+          requestDigest,
+          amount,
+          asset: request.asset,
+          receiptDigest,
+        }),
+        budget,
+        reservation.reservationId,
+      );
+    } catch {
+      return { kind: "unknown", reservation, submission };
+    }
+    if (committed.state !== "committed" || committed.receiptDigest !== receiptDigest) {
       throw new AgentMiddlewareError("budget-conflict");
     }
     return { kind: "verified", submission, verification, reservation: committed };
@@ -242,17 +405,65 @@ export class AgentMiddleware {
   async #sdkFailure(
     error: unknown,
     reservation: BudgetReservation,
-    requestDigest: string,
+    budget: BudgetFacts,
+    mayHaveExecuted: boolean,
   ): Promise<AgentSpendResult> {
-    if (error instanceof PlatformSdkError && error.retry === "unknown-outcome") {
+    if (!(error instanceof PlatformSdkError)) {
       return { kind: "unknown", reservation };
     }
-    if (error instanceof PlatformSdkError && error.retry === "safe") {
+    if (
+      error.retry === "unknown-outcome"
+      || error.code === "unknown-outcome"
+      || (mayHaveExecuted && POST_SUBMIT_UNCERTAIN_CODES.has(error.code))
+    ) {
       return { kind: "unknown", reservation };
     }
-    const released = await this.#budgets.release(reservation.reservationId, requestDigest);
-    const code = error instanceof PlatformSdkError ? error.code : "transport-failure";
-    return { kind: "refused", code, reservation: released };
+    let refusal: AgentRefusal;
+    try {
+      refusal = sdkRefusal(error);
+    } catch {
+      return { kind: "unknown", reservation };
+    }
+    if (refusal.retry === "safe" || refusal.retry === "after") {
+      return { kind: "refused", reservation, ...refusal };
+    }
+    try {
+      const released = await this.#release(reservation, budget, refusal);
+      return { kind: "refused", reservation: released, ...refusal };
+    } catch {
+      return { kind: "unknown", reservation };
+    }
+  }
+
+  async #release(
+    reservation: BudgetReservation,
+    budget: BudgetFacts,
+    refusal: AgentRefusal,
+  ): Promise<ReleasedBudgetReservation> {
+    if (reservation.state === "released") {
+      if (!sameRefusal(reservation.refusal, refusal)) {
+        throw new AgentMiddlewareError("budget-conflict");
+      }
+      return reservation;
+    }
+    if (reservation.state === "committed") {
+      throw new AgentMiddlewareError("budget-conflict");
+    }
+    const released = validateBudgetReservation(
+      await this.#budgets.release({
+        reservationId: reservation.reservationId,
+        requestDigest: budget.requestDigest,
+        amount: budget.amount,
+        asset: budget.asset,
+        refusal,
+      }),
+      budget,
+      reservation.reservationId,
+    );
+    if (released.state !== "released" || !sameRefusal(released.refusal, refusal)) {
+      throw new AgentMiddlewareError("budget-conflict");
+    }
+    return released;
   }
 
   async #approvalHold(tenant: string, prepared: PreparedActivity): Promise<ApprovalHold | undefined> {
@@ -301,6 +512,126 @@ export class AgentMiddlewareError extends Error {
 
 export function platform_mw_agent(): "budget-aware-receipt-verified-agent" {
   return "budget-aware-receipt-verified-agent";
+}
+
+interface BudgetFacts {
+  readonly requestDigest: string;
+  readonly amount: string;
+  readonly asset: string;
+}
+
+function validateBudgetReservation(
+  reservation: BudgetReservation,
+  expected: BudgetFacts,
+  reservationId?: string,
+): BudgetReservation {
+  if (
+    reservation === null
+    || typeof reservation !== "object"
+    || Array.isArray(reservation)
+    || typeof reservation.reservationId !== "string"
+    || typeof reservation.requestDigest !== "string"
+    || typeof reservation.amount !== "string"
+    || typeof reservation.asset !== "string"
+    || !(new Set(["reserved", "held", "committed", "released"])).has((reservation as { readonly state: string }).state)
+  ) {
+    throw new AgentMiddlewareError("budget-conflict");
+  }
+  if (
+    reservation.reservationId.length === 0
+    || reservation.reservationId.length > 512
+    || reservation.reservationId.includes("\0")
+    || (reservationId !== undefined && reservation.reservationId !== reservationId)
+    || reservation.requestDigest !== expected.requestDigest
+    || reservation.amount !== expected.amount
+    || reservation.asset !== expected.asset
+    || !/^[0-9a-f]{64}$/u.test(reservation.requestDigest)
+    || !/^[0-9a-f]{64}$/u.test(reservation.asset)
+  ) {
+    throw new AgentMiddlewareError("budget-conflict");
+  }
+  try {
+    protocolAmount(reservation.amount);
+  } catch {
+    throw new AgentMiddlewareError("budget-conflict");
+  }
+  if (reservation.state === "held") {
+    if (
+      typeof reservation.approvalId !== "string"
+      || typeof reservation.canonicalBytesDigest !== "string"
+      || reservation.approvalId.length === 0
+      || reservation.approvalId.length > 512
+      || reservation.approvalId.includes("\0")
+      || !/^[0-9a-f]{64}$/u.test(reservation.canonicalBytesDigest)
+    ) {
+      throw new AgentMiddlewareError("budget-conflict");
+    }
+  } else if (reservation.state === "committed") {
+    if (typeof reservation.receiptDigest !== "string" || !/^[0-9a-f]{64}$/u.test(reservation.receiptDigest)) {
+      throw new AgentMiddlewareError("budget-conflict");
+    }
+  } else if (reservation.state === "released") {
+    validateRefusal(reservation.refusal);
+  }
+  return reservation;
+}
+
+function sdkRefusal(error: PlatformSdkError): AgentRefusal {
+  if (error.retry === "unknown-outcome" || error.code === "unknown-outcome") {
+    throw new AgentMiddlewareError("budget-conflict");
+  }
+  const refusal: AgentRefusal = {
+    code: error.code,
+    retry: error.retry,
+    ...(error.retryAfterMs === undefined ? {} : { retryAfterMs: error.retryAfterMs }),
+    ...(error.protocolResultCode === undefined ? {} : { protocolResultCode: error.protocolResultCode }),
+  };
+  validateRefusal(refusal);
+  return refusal;
+}
+
+function validateRefusal(refusal: AgentRefusal): void {
+  if (
+    refusal === null
+    || typeof refusal !== "object"
+    || Array.isArray(refusal)
+    || !(SDK_ERROR_CODES as readonly string[]).includes(refusal.code)
+    || refusal.code === "unknown-outcome"
+    || !(new Set(["never", "safe", "after"])).has((refusal as { readonly retry: string }).retry)
+  ) {
+    throw new AgentMiddlewareError("budget-conflict");
+  }
+  if (
+    (refusal.retry === "after" && refusal.retryAfterMs === undefined)
+    || (refusal.retry !== "after" && refusal.retryAfterMs !== undefined)
+    || (refusal.retryAfterMs !== undefined
+      && (!Number.isSafeInteger(refusal.retryAfterMs) || refusal.retryAfterMs < 0))
+  ) {
+    throw new AgentMiddlewareError("budget-conflict");
+  }
+  if (
+    refusal.protocolResultCode !== undefined
+    && (!Number.isSafeInteger(refusal.protocolResultCode)
+      || refusal.protocolResultCode < -2_147_483_648
+      || refusal.protocolResultCode > 2_147_483_647)
+  ) {
+    throw new AgentMiddlewareError("budget-conflict");
+  }
+  if (
+    refusal.submissionState !== undefined
+    && refusal.submissionState !== "Failed"
+    && refusal.submissionState !== "Expired"
+  ) {
+    throw new AgentMiddlewareError("budget-conflict");
+  }
+}
+
+function sameRefusal(left: AgentRefusal, right: AgentRefusal): boolean {
+  return left.code === right.code
+    && left.retry === right.retry
+    && left.retryAfterMs === right.retryAfterMs
+    && left.protocolResultCode === right.protocolResultCode
+    && left.submissionState === right.submissionState;
 }
 
 function validateSpend(request: AgentSpendRequest): void {
@@ -407,6 +738,13 @@ async function digestSpend(request: AgentSpendRequest): Promise<string> {
   });
   const digest = new Uint8Array(await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonical)));
   return toHex(digest);
+}
+
+async function payloadHashMatches(payloadBase64: string, expected: string): Promise<boolean> {
+  const binary = globalThis.atob(payloadBase64);
+  const payload = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+  const digest = new Uint8Array(await globalThis.crypto.subtle.digest("SHA-256", payload));
+  return constantTimeHex(digest, expected);
 }
 
 function constantTimeHex(actual: Uint8Array, expected: string): boolean {

@@ -7,8 +7,13 @@ agent_schema = "agent/schema/agent-api"
 human_schema = "human/schema/human-api"
 protocol_version = 1
 agent_operations = 40
-human_operations = 76
+human_operations = 78
 money_type = "java.math.BigInteger"
+typed_operations = "com.sidiora.layerx.sdk.SchemaTypes.Operation"
+typed_requests = "com.sidiora.layerx.sdk.SchemaTypes.GeneratedRequest"
+typed_responses = "com.sidiora.layerx.sdk.SchemaTypes.GeneratedResponse"
+typed_events = "com.sidiora.layerx.sdk.SchemaTypes.GeneratedEvent"
+schema_errors = "com.sidiora.layerx.sdk.SchemaErrors"
 stream = "atomic cursor chain with duplicate rejection"
 
 [verification]
@@ -16,10 +21,13 @@ receipt = "com.sidiora.layerx.sdk.verify.LocalVerifier.verifyReceipt"
 receipt_outcome = "com.sidiora.layerx.sdk.verify.LocalVerifier.verifyReceiptOutcome"
 batch_inclusion = "com.sidiora.layerx.sdk.verify.LocalVerifier.verifyBatchInclusion"
 checkpoint = "com.sidiora.layerx.sdk.verify.LocalVerifier.verifyCheckpoint"
+receipt_in_batch = "com.sidiora.layerx.sdk.verify.LocalVerifier.verifyReceiptInBatch"
 merkle = "com.sidiora.layerx.sdk.verify.LocalVerifier.verifyMerkleInclusion"
 
 [golden]
 agent_request = "agent/schema/agent-api/golden/version-request.hex"
 agent_response = "agent/schema/agent-api/golden/version-response.hex"
+agent_schema_goldens = "agent/schema/agent-api/golden/*.kvx"
+human_schema_goldens = "human/schema/human-api/golden/*.json"
 codec_valid = "tests/vectors/codec/valid.lxv"
 codec_adversarial = "tests/vectors/codec/adversarial.lxv"

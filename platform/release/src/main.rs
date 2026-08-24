@@ -25,12 +25,20 @@ const REGISTRY_KEYS: [&str; 7] = [
     "status",
 ];
 
+const NPM_MIDDLEWARE_PACKAGES: [&str; 4] = [
+    "@sidiora/layerx-agent-middleware",
+    "@sidiora/layerx-buyer-middleware",
+    "@sidiora/layerx-merchant-middleware",
+    "@sidiora/layerx-seller-middleware",
+];
+
 const STATUSES: [&str; 2] = ["skeleton", "active"];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Registry {
     pub name: String,
     pub declarations: Vec<(String, String)>,
+    pub packages: Vec<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -88,7 +96,20 @@ pub fn release_pipeline(source: &str) -> Result<ReleasePipeline, String> {
             return Err(format!("registry {name} is not declared"));
         }
         let mut declarations = Vec::new();
+        let mut packages = Vec::new();
         for (key, value) in &entries {
+            if *key == "packages" {
+                packages = layerx_platform_kvx::string_list(value)?;
+                if packages.is_empty()
+                    || packages.iter().any(String::is_empty)
+                    || packages.windows(2).any(|pair| pair[0] >= pair[1])
+                {
+                    return Err(format!(
+                        "{section}.packages must be a non-empty, sorted, duplicate-free string list"
+                    ));
+                }
+                continue;
+            }
             if !REGISTRY_KEYS.contains(key) {
                 return Err(format!("unknown declaration {section}.{key}"));
             }
@@ -110,9 +131,18 @@ pub fn release_pipeline(source: &str) -> Result<ReleasePipeline, String> {
                 "registry {name} has unknown status {status}; expected one of {STATUSES:?}"
             ));
         }
+        if name == "npm" && packages != NPM_MIDDLEWARE_PACKAGES {
+            return Err(format!(
+                "registry.npm.packages must list the four published middleware packages {NPM_MIDDLEWARE_PACKAGES:?}, got {packages:?}"
+            ));
+        }
+        if name != "npm" && !packages.is_empty() {
+            return Err(format!("registry {name} does not accept a packages declaration"));
+        }
         registries.push(Registry {
             name: name.to_owned(),
             declarations,
+            packages,
         });
     }
     Ok(ReleasePipeline {
@@ -142,6 +172,9 @@ pub fn plan(pipeline: &ReleasePipeline) -> Result<String, String> {
                 .map(|(_, value)| value.as_str())
                 .ok_or_else(|| format!("registry {} lost {key}", registry.name))?;
             write!(text, " {key}={value}").map_err(fail)?;
+        }
+        if !registry.packages.is_empty() {
+            write!(text, " packages={}", registry.packages.join(",")).map_err(fail)?;
         }
         writeln!(text).map_err(fail)?;
     }

@@ -55,6 +55,26 @@ fn plan_is_deterministic_and_machine_readable() {
     }
 }
 
+#[test]
+fn npm_release_declares_every_middleware_package() {
+    let pipeline = release_pipeline(&committed_manifest())
+        .unwrap_or_else(|error| panic!("manifest refused: {error}"));
+    let npm = pipeline
+        .registries
+        .iter()
+        .find(|registry| registry.name == "npm")
+        .unwrap_or_else(|| panic!("npm registry missing"));
+    assert_eq!(
+        npm.packages,
+        vec![
+            "@sidiora/layerx-agent-middleware",
+            "@sidiora/layerx-buyer-middleware",
+            "@sidiora/layerx-merchant-middleware",
+            "@sidiora/layerx-seller-middleware",
+        ]
+    );
+}
+
 fn expect_refusal(source: &str, needle: &str) {
     let error = release_pipeline(source)
         .err()

@@ -477,3 +477,51 @@ symbol = "task.17.3 touches"
 observed = "The declared touch list contains only platform/hosted/testnet, platform/hosted/faucet and platform/docs, while do_5 and the requested scheduled hosted run require platform/Makefile.inc and .github/workflows/platform.yml, and the new TLS dependencies require the platform workspace manifest and lockfile. Those integration files are necessary for the task's executable/container and scheduled-CI acceptance clauses."
 assumption = "Human qualification will review the necessary integration paths and reconcile task.17.3's touch declaration rather than removing the scheduled journey or workspace dependency wiring."
 severity = "task-scope"
+
+[observation.15.4.1]
+task = "15.4"
+file = "agent/schema/agent-api/read.kvx, agent/schema/agent-api/write.kvx, agent/schema/agent-api/stream.kvx, platform/sdk/generators/generate_jvm.py"
+symbol = "GeneratedSchema.AgentOperations request and response records"
+observed = "The Agent API declares many operation fields only by name (for example prepare.required and read.balance.request_required) without a field-level schema type. The JVM generator emits operation-specific records and preserves those exact required field names, but represents only these under-specified fields as JsonNode. Declared scalars and Human API field:type declarations generate concrete BigInteger, ProtocolAmount, enum, record and list types; the implementation does not infer money or identifier types from field spelling."
+assumption = "A future additive Agent schema revision may attach field types to the existing names, at which point regeneration can narrow the corresponding JsonNode components without inventing wire semantics now. Human qualification should treat the remaining JsonNode components as a source-schema limitation rather than full field typing."
+severity = "schema-ambiguity"
+
+[observation.15.4.2]
+task = "15.4"
+file = "tests/vectors, platform/sdk/jvm/src/conformance/java/com/sidiora/layerx/sdk/ConformanceMain.java, platform/sdk/jvm/src/main/java/com/sidiora/layerx/sdk/verify/LocalVerifier.java"
+symbol = "JVM receipt, batch and checkpoint positive-vector coverage"
+observed = "The shared tests/vectors tree publishes canonical primitive codec vectors and replay corpora but no standalone positive receipt, signed batch-header or checkpoint-certificate vector with its authorization keys. JVM conformance invokes the real successful Merkle path and invokes the receipt, batch and built-in checkpoint verifiers with malformed inputs to prove fail-closed dispatch; it cannot claim cross-language positive cryptographic parity without vectors that do not exist in the declared corpus."
+assumption = "Qualification task 15.6 will supply or identify the authoritative signed receipt, batch and checkpoint vectors and run them across all SDKs. Task 15.4 writes the complete local verification paths and does not synthesize fake signatures or a JVM-only truth source."
+severity = "qualification-input"
+
+[observation.15.4.3]
+task = "15.4"
+file = "human/schema/human-api/home.kvx, platform/sdk/jvm/src/main/java/com/sidiora/layerx/sdk/GeneratedContract.java"
+symbol = "account.balance and home.summary operation coverage"
+observed = "The live Human API schema contains 78 operations, including account.balance and home.summary, while the inherited JVM generated contract and conformance manifest contained 76 and omitted both home operations. Task 15.4 updates the generated JVM route and typed-operation catalogues and the conformance count to the live 78-operation schema."
+assumption = "The cross-language parity qualification task owns reconciling any corresponding inherited omissions in SDKs outside the JVM task's product scope. No other language implementation was edited here."
+severity = "dependency-boundary"
+
+[observation.15.4.4]
+task = "15.4"
+file = "spec/layerx-platform/spec.kvx"
+symbol = "task.15.4 touches"
+observed = "The inherited task declared only platform/sdk/jvm and platform/sdk/conformance, while schema regeneration and CI execution necessarily also update the shared generator, pipeline digest, platform Make target, Maven release metadata and platform workflow. The task touch declaration is expanded to those exact paths so strict scope guarding reflects the implementation the do clauses require."
+assumption = "The expansion is limited to JVM generation, packaging and conformance wiring; it does not implement or qualify SDKs in any other language."
+severity = "scope-clarification"
+
+[observation.16.2.1]
+task = "16.2"
+file = "platform/examples/merchant-checkout, platform/examples/merchant-shop"
+symbol = "@sidiora/layerx-example-merchant-checkout, @sidiora/layerx-example-merchant-shop"
+observed = "The active task's implementation scope names merchant-shop, while the pre-existing runnable package and the downstream 18.2 checkout surface use merchant-checkout. Removing or renaming the existing package would break those consumers, so both declared workspace packages retain the same complete receipt-backed service implementation and are included in the locked workspace and middleware target."
+assumption = "Human qualification will select the long-term canonical package name before external documentation or distribution and either retain the second name as a compatibility alias or migrate 18.2 consumers explicitly; neither runnable artifact is removed in this implementation step."
+severity = "dependency-boundary"
+
+[observation.16.2.2]
+task = "16.2"
+file = "package-lock.json"
+symbol = "cg spec implemented touch graph"
+observed = "The scoped strict guard accepted every changed path inside task 16.2, but cg spec implemented reported an explicit package-lock.json touch as unchanged even though git records the root workspace and package-entry lock changes. cg sync explicitly skipped one file and the code graph does not index this lockfile, so the task declares the package*.json family: the indexed package manifest witnesses the family while strict guard still covers both manifest and lockfile."
+assumption = "Human qualification will let npm ci perform the authoritative locked-workspace consistency check; no dependency install, build or test was run in this phase."
+severity = "phase-boundary"

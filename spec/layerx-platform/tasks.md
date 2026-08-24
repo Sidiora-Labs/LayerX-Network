@@ -697,7 +697,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Enforce integer-only money, idempotency keys and secret hygiene per the SDK conformance rules.
     - Run the golden vectors and the conformance suite against the live schema in CI.
     - _Requirements: 24.1, 24.3, 24.4_
-  - [ ] 15.4 Build the JVM SDK for Java and Kotlin
+  - [ ] 15.4 Build the JVM SDK for Java and Kotlin — **Implemented - qualification pending**
     - Generate the JVM SDK from the same schemas with a Java-first API and Kotlin-friendly overloads, published as one Maven artifact.
     - Implement the local receipt and proof verification path.
     - Implement streaming with resumable cursors on virtual-thread-friendly primitives.
@@ -727,7 +727,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Ship a runnable example for each role, exercised in CI against a real service.
     - Publish both to the package registries through the release pipeline.
     - _Requirements: 25.1, 25.3, 25.4, 25.5_
-  - [ ] 16.2 Build the merchant and agent middleware
+  - [ ] 16.2 Build the merchant and agent middleware — **Implemented - qualification pending**
     - Build merchant middleware: catalog and checkout hooks, order-to-payment mapping, settlement webhooks and receipt-backed order state.
     - Build agent middleware: budget-aware spending, approval-hold awareness, receipt verification and typed refusal handling for agent frameworks.
     - Keep every rendered state receipt-backed or honestly pending, per the conformance suite.

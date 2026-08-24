@@ -19,6 +19,7 @@ distribution = "https://registry.npmjs.org"
 signing = "sigstore-keyless"
 provenance = "npm-provenance-attestation"
 verification = "byte-compare-against-tagged-source"
+packages = ["@sidiora/layerx-agent-middleware","@sidiora/layerx-buyer-middleware","@sidiora/layerx-merchant-middleware","@sidiora/layerx-seller-middleware"]
 status = "skeleton"
 
 [registry.pypi]
@@ -42,6 +43,9 @@ status = "skeleton"
 [registry.maven-central]
 ecosystem = "jvm"
 artifact = "jar-and-pom"
+coordinate = "com.sidiora.layerx:layerx-sdk"
+languages = ["java","kotlin"]
+module_name = "com.sidiora.layerx.sdk"
 distribution = "https://repo1.maven.org/maven2"
 signing = "pgp-detached-signature"
 provenance = "github-actions-attestation"

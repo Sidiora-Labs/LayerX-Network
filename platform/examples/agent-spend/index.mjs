@@ -1,5 +1,8 @@
 import { AgentMiddleware } from "@sidiora/layerx-agent-middleware";
-import { PlatformSdkError, ProductionClient, SecretBytes } from "@sidiora/layerx-sdk";
+import { PlatformSdkError, ProductionClient, SDK_ERROR_CODES, SecretBytes } from "@sidiora/layerx-sdk";
+
+const SDK_CODES = new Set(SDK_ERROR_CODES);
+const RETRY_CLASSES = new Set(["never", "safe", "after", "unknown-outcome"]);
 
 const required = (name) => {
   const value = process.env[name];
@@ -37,15 +40,23 @@ class ServiceClient {
     try {
       response = await fetch(this.url, { method: "POST", headers, body: JSON.stringify(payload) });
     } catch {
-      throw new PlatformSdkError({ code: "transport-failure", retry: "safe" });
+      throw new PlatformSdkError({ code: "transport-failure", retry: "unknown-outcome" });
     }
     const body = await response.json().catch(() => undefined);
     if (!response.ok) {
-      const failure = body === undefined ? {} : object(body);
+      const envelope = body === undefined ? {} : object(body);
+      const failure = envelope.error === undefined ? envelope : object(envelope.error);
+      const code = typeof failure.code === "string" && SDK_CODES.has(failure.code)
+        ? failure.code
+        : "internal-fault";
+      const retry = typeof failure.retry === "string" && RETRY_CLASSES.has(failure.retry)
+        ? failure.retry
+        : "unknown-outcome";
       throw new PlatformSdkError({
-        code: typeof failure.code === "string" ? failure.code : "transport-failure",
-        retry: typeof failure.retry === "string" ? failure.retry : response.status >= 500 ? "unknown-outcome" : "never",
+        code,
+        retry,
         ...(Number.isSafeInteger(failure.retry_after_ms) ? { retryAfterMs: failure.retry_after_ms } : {}),
+        ...(Number.isSafeInteger(failure.protocol_result_code) ? { protocolResultCode: failure.protocol_result_code } : {}),
       });
     }
     return body;
@@ -64,16 +75,106 @@ class AgentTransport {
 
 class BudgetLedger {
   constructor(service) { this.service = service; }
-  reserve(request) { return this.service.call({ action: "reserve", request }, request.idempotencyKey); }
-  hold(reservationId, requestDigest, approvalId) { return this.service.call({ action: "hold", reservation_id: reservationId, request_digest: requestDigest, approval_id: approvalId }); }
-  commit(reservationId, requestDigest, receiptDigest) { return this.service.call({ action: "commit", reservation_id: reservationId, request_digest: requestDigest, receipt_digest: receiptDigest }); }
-  release(reservationId, requestDigest) { return this.service.call({ action: "release", reservation_id: reservationId, request_digest: requestDigest }); }
+  async reserve(request) {
+    const response = object(await this.service.call({
+      action: "reserve",
+      request: {
+        tenant: request.tenant,
+        idempotency_key: request.idempotencyKey,
+        request_digest: request.requestDigest,
+        amount: request.amount,
+        asset: request.asset,
+      },
+    }, request.idempotencyKey));
+    return response.kind === "reserved"
+      ? { kind: "reserved", reservation: reservationFromWire(response.reservation) }
+      : response;
+  }
+  async hold(transition) {
+    return reservationFromWire(await this.service.call({
+      action: "hold",
+      transition: transitionWire(transition, {
+        approval_id: transition.approvalId,
+        canonical_bytes_digest: transition.canonicalBytesDigest,
+      }),
+    }, transitionKey(transition, "hold")));
+  }
+  async commit(transition) {
+    return reservationFromWire(await this.service.call({
+      action: "commit",
+      transition: transitionWire(transition, { receipt_digest: transition.receiptDigest }),
+    }, transitionKey(transition, "commit")));
+  }
+  async release(transition) {
+    return reservationFromWire(await this.service.call({
+      action: "release",
+      transition: transitionWire(transition, { refusal: refusalWire(transition.refusal) }),
+    }, transitionKey(transition, "release")));
+  }
 }
+
+const transitionWire = (transition, specific) => ({
+  reservation_id: transition.reservationId,
+  request_digest: transition.requestDigest,
+  amount: transition.amount,
+  asset: transition.asset,
+  ...specific,
+});
+
+const transitionKey = (transition, action) => `${transition.requestDigest}:${action}`;
+
+const refusalWire = (refusal) => ({
+  code: refusal.code,
+  retry: refusal.retry,
+  ...(refusal.retryAfterMs === undefined ? {} : { retry_after_ms: refusal.retryAfterMs }),
+  ...(refusal.protocolResultCode === undefined ? {} : { protocol_result_code: refusal.protocolResultCode }),
+  ...(refusal.submissionState === undefined ? {} : { submission_state: refusal.submissionState }),
+});
+
+const reservationFromWire = (value) => {
+  const reservation = object(value);
+  const base = {
+    reservationId: reservation.reservation_id,
+    requestDigest: reservation.request_digest,
+    amount: reservation.amount,
+    asset: reservation.asset,
+  };
+  if (reservation.state === "reserved") return { ...base, state: "reserved" };
+  if (reservation.state === "held") {
+    return {
+      ...base,
+      state: "held",
+      approvalId: reservation.approval_id,
+      canonicalBytesDigest: reservation.canonical_bytes_digest,
+    };
+  }
+  if (reservation.state === "committed") {
+    return { ...base, state: "committed", receiptDigest: reservation.receipt_digest };
+  }
+  if (reservation.state === "released") {
+    const refusal = object(reservation.refusal);
+    return {
+      ...base,
+      state: "released",
+      refusal: {
+        code: refusal.code,
+        retry: refusal.retry,
+        ...(refusal.retry_after_ms === undefined ? {} : { retryAfterMs: refusal.retry_after_ms }),
+        ...(refusal.protocol_result_code === undefined ? {} : { protocolResultCode: refusal.protocol_result_code }),
+        ...(refusal.submission_state === undefined ? {} : { submissionState: refusal.submission_state }),
+      },
+    };
+  }
+  throw new Error("invalid_service_response");
+};
 
 class RemoteSigner {
   constructor(service) { this.service = service; }
   async sign(prepared) {
-    const response = object(await this.service.call({ signing_preimage: prepared.signing_preimage, disclosure: prepared.disclosure }));
+    const response = object(await this.service.call(
+      { signing_preimage: prepared.signing_preimage, disclosure: prepared.disclosure },
+      prepared.preparation_ref,
+    ));
     if (typeof response.signature !== "string") throw new Error("invalid_service_response");
     return response.signature;
   }
@@ -114,6 +215,14 @@ try {
     kind: result.kind,
     ...(result.kind === "verified" ? { receiptDigest: Buffer.from(result.verification.receiptDigest).toString("hex") } : {}),
     ...(result.kind === "approval-hold" ? { approvalId: result.approval.approvalId } : {}),
+    ...(result.kind === "refused" || result.kind === "budget-refused"
+      ? {
+          code: result.code,
+          retry: result.retry,
+          ...(result.retryAfterMs === undefined ? {} : { retryAfterMs: result.retryAfterMs }),
+        }
+      : {}),
+    ...("reservation" in result ? { reservationState: result.reservation.state } : {}),
   }) + "\n");
   if (result.kind !== "verified" && result.kind !== "approval-hold" && result.kind !== "pending") process.exitCode = 2;
 } finally {

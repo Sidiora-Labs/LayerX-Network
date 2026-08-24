@@ -1941,7 +1941,7 @@ reqs = ["24.1","24.3","24.4"]
 
 [task.15.4]
 title = "Build the JVM SDK for Java and Kotlin"
-status = "pending"
+status = "implemented"
 wave = 9
 requires = ["15.1"]
 work_kind = "implementation"
@@ -1953,7 +1953,7 @@ do_4 = "Enforce integer-only money via BigInteger-backed protocol types, idempot
 do_5 = "Run the golden vectors and the conformance suite against the live schema in CI."
 verify_cmd = "make platform-test-sdks"
 symbols = ["platform_sdk_jvm"]
-touches = ["platform/sdk/jvm","platform/sdk/conformance"]
+touches = ["platform/sdk/jvm","platform/sdk/conformance","platform/sdk/generators","platform/sdk/pipeline.kvx","platform/Makefile.inc","platform/release/registries.kvx",".github/workflows/platform.yml"]
 reqs = ["24.1","24.3","24.4"]
 
 [task.15.5]
@@ -2008,7 +2008,7 @@ reqs = ["25.1","25.3","25.4","25.5"]
 
 [task.16.2]
 title = "Build the merchant and agent middleware"
-status = "pending"
+status = "implemented"
 wave = 9
 requires = ["16.1"]
 work_kind = "implementation"
@@ -2021,7 +2021,7 @@ do_4 = "Ship runnable examples for both, exercised in CI against a real service.
 do_5 = "Publish both through the release pipeline."
 verify_cmd = "make platform-test-middleware"
 symbols = ["platform_mw_merchant","platform_mw_agent"]
-touches = ["platform/middleware/merchant","platform/middleware/agent","platform/examples"]
+touches = [".github/workflows/platform.yml","package*.json","platform/Makefile.inc","platform/examples","platform/integrations/agents","platform/middleware/agent","platform/middleware/conformance","platform/middleware/merchant","platform/release"]
 reqs = ["25.1","25.4","25.5"]
 
 [task.16.3]
