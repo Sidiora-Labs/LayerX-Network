@@ -1,0 +1,295 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: layerx-developer-hosted
+data:
+  LAYERX_WEBHOOKS_LISTEN: 0.0.0.0:9444
+  LAYERX_WEBHOOKS_REDIS_URL: rediss://redis.layerx-internal.svc:6379
+  LAYERX_WEBHOOKS_KMS_URL: https://kms.layerx-internal.svc
+  LAYERX_WEBHOOKS_IDENTITY_URL: https://identity.layerx-internal.svc
+  LAYERX_WEBHOOKS_COMPONENT_URL: https://component.layerx-internal.svc
+  LAYERX_WEBHOOKS_AUTHORITY_URL: https://authority.layerx-internal.svc
+  LAYERX_WEBHOOKS_JOURNEY_SOURCE_URL: https://journeys.layerx-internal.svc
+  LAYERX_WEBHOOKS_PAYMENT_SOURCE_URL: https://payments.layerx-internal.svc
+  LAYERX_WEBHOOKS_APPROVAL_SOURCE_URL: https://approvals.layerx-internal.svc
+  LAYERX_WEBHOOKS_PROGRAM_SOURCE_URL: https://programs.layerx-internal.svc
+  LAYERX_WEBHOOKS_NETWORK_ID: testnet
+  LAYERX_WEBHOOKS_LXP_WIRE_VERSION: "1"
+  LAYERX_WEBHOOKS_DISPATCH_INTERVAL_SECONDS: "1"
+  LAYERX_WEBHOOKS_DISPATCH_BUDGET: "64"
+  LAYERX_WEBHOOKS_LEASE_SECONDS: "120"
+  LAYERX_WEBHOOKS_RETENTION_EVENTS: "10000"
+  LAYERX_WEBHOOKS_KEY_OVERLAP_SECONDS: "86400"
+  LAYERX_WEBHOOKS_TLS_CERT_DER: /run/layerx/tls/server.der
+  LAYERX_WEBHOOKS_TLS_KEY_DER: /run/layerx/tls/server-key.der
+  LAYERX_WEBHOOKS_INTERNAL_CA_DER: /run/layerx/ca/internal.der
+  LAYERX_WEBHOOKS_PUBLIC_CA_DER: /run/layerx/ca/public.der
+  LAYERX_WEBHOOKS_CLIENT_IDENTITY_PKCS12: /run/layerx/client/identity.p12
+  LAYERX_WEBHOOKS_CLIENT_IDENTITY_PASSWORD_FILE: /run/layerx/client/password
+  LAYERX_WEBHOOKS_REDIS_USERNAME_FILE: /run/layerx/redis/username
+  LAYERX_WEBHOOKS_REDIS_PASSWORD_FILE: /run/layerx/redis/password
+  LAYERX_WEBHOOKS_KMS_TOKEN_FILE: /run/layerx/tokens/kms
+  LAYERX_WEBHOOKS_IDENTITY_TOKEN_FILE: /run/layerx/tokens/identity
+  LAYERX_WEBHOOKS_COMPONENT_TOKEN_FILE: /run/layerx/tokens/component
+  LAYERX_WEBHOOKS_AUTHORITY_TOKEN_FILE: /run/layerx/tokens/authority
+  LAYERX_WEBHOOKS_JOURNEY_SOURCE_TOKEN_FILE: /run/layerx/tokens/journey
+  LAYERX_WEBHOOKS_PAYMENT_SOURCE_TOKEN_FILE: /run/layerx/tokens/payment
+  LAYERX_WEBHOOKS_APPROVAL_SOURCE_TOKEN_FILE: /run/layerx/tokens/approval
+  LAYERX_WEBHOOKS_PROGRAM_SOURCE_TOKEN_FILE: /run/layerx/tokens/program
+  LAYERX_WEBHOOKS_SOURCE_TRIGGER_TOKEN_FILE: /run/layerx/tokens/source-trigger
+  LAYERX_WEBHOOKS_OPERATOR_TOKEN_FILE: /run/layerx/tokens/operator
+  LAYERX_WEBHOOKS_CURSOR_KEY_FILE: /run/layerx/keys/cursor
+  LAYERX_WEBHOOKS_SEQUENCER_PUBLIC_KEY_FILE: /run/layerx/keys/sequencer
+  LAYERX_DASHBOARD_LISTEN: 0.0.0.0:9445
+  LAYERX_DASHBOARD_GATEWAY_REDIS_URL: rediss://redis.layerx-internal.svc:6379
+  LAYERX_DASHBOARD_REDIS_CA_DER: /run/layerx/ca/internal.der
+  LAYERX_DASHBOARD_INTERNAL_CA_DER: /run/layerx/ca/internal.der
+  LAYERX_DASHBOARD_GATEWAY_REDIS_USERNAME_FILE: /run/layerx/dashboard-redis/username
+  LAYERX_DASHBOARD_GATEWAY_REDIS_PASSWORD_FILE: /run/layerx/dashboard-redis/password
+  LAYERX_DASHBOARD_IDENTITY_URL: https://identity.layerx-internal.svc
+  LAYERX_DASHBOARD_IDENTITY_TOKEN_FILE: /run/layerx/tokens/identity
+  LAYERX_DASHBOARD_CLIENT_IDENTITY_PKCS12: /run/layerx/client/identity.p12
+  LAYERX_DASHBOARD_CLIENT_IDENTITY_PASSWORD_FILE: /run/layerx/client/password
+  LAYERX_DASHBOARD_TLS_CERT_DER: /run/layerx/tls/server.der
+  LAYERX_DASHBOARD_TLS_KEY_DER: /run/layerx/tls/server-key.der
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: layerx-webhooks
+spec:
+  replicas: 3
+  selector: { matchLabels: { app: layerx-webhooks } }
+  template:
+    metadata: { labels: { app: layerx-webhooks } }
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: webhooks
+          image: ghcr.io/centra-ai/layerx-webhooks:0.1.0
+          envFrom: [{ configMapRef: { name: layerx-developer-hosted } }]
+          env:
+            - name: LAYERX_WEBHOOKS_INSTANCE_ID
+              valueFrom: { fieldRef: { fieldPath: metadata.uid } }
+          ports: [{ name: https, containerPort: 9444 }]
+          readinessProbe: { httpGet: { scheme: HTTPS, path: /healthz, port: https }, periodSeconds: 10 }
+          livenessProbe: { tcpSocket: { port: https }, periodSeconds: 20 }
+          resources:
+            requests: { cpu: 250m, memory: 256Mi }
+            limits: { cpu: "2", memory: 1Gi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities: { drop: [ALL] }
+          volumeMounts:
+            - { name: runtime, mountPath: /run/layerx, readOnly: true }
+      volumes:
+        - name: runtime
+          projected:
+            sources:
+              - secret:
+                  name: layerx-developer-hosted-runtime
+                  items:
+                    - { key: tls-cert.der, path: tls/server.der }
+                    - { key: tls-key.der, path: tls/server-key.der }
+                    - { key: internal-ca.der, path: ca/internal.der }
+                    - { key: public-ca.der, path: ca/public.der }
+                    - { key: client-identity.p12, path: client/identity.p12 }
+                    - { key: client-password, path: client/password }
+                    - { key: webhook-redis-username, path: redis/username }
+                    - { key: webhook-redis-password, path: redis/password }
+                    - { key: dashboard-redis-username, path: dashboard-redis/username }
+                    - { key: dashboard-redis-password, path: dashboard-redis/password }
+                    - { key: kms-token, path: tokens/kms }
+                    - { key: identity-token, path: tokens/identity }
+                    - { key: component-token, path: tokens/component }
+                    - { key: authority-token, path: tokens/authority }
+                    - { key: journey-source-token, path: tokens/journey }
+                    - { key: payment-source-token, path: tokens/payment }
+                    - { key: approval-source-token, path: tokens/approval }
+                    - { key: program-source-token, path: tokens/program }
+                    - { key: source-trigger-token, path: tokens/source-trigger }
+                    - { key: webhook-operator-token, path: tokens/operator }
+                    - { key: cursor-key, path: keys/cursor }
+                    - { key: sequencer-public-key, path: keys/sequencer }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: layerx-dashboard-api
+spec:
+  replicas: 2
+  selector: { matchLabels: { app: layerx-dashboard-api } }
+  template:
+    metadata: { labels: { app: layerx-dashboard-api } }
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: api
+          image: ghcr.io/centra-ai/layerx-dashboard:0.1.0
+          envFrom: [{ configMapRef: { name: layerx-developer-hosted } }]
+          ports: [{ name: https, containerPort: 9445 }]
+          readinessProbe: { httpGet: { scheme: HTTPS, path: /healthz, port: https }, periodSeconds: 10 }
+          livenessProbe: { tcpSocket: { port: https }, periodSeconds: 20 }
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { cpu: "1", memory: 512Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities: { drop: [ALL] }
+          volumeMounts:
+            - { name: runtime, mountPath: /run/layerx, readOnly: true }
+      volumes:
+        - name: runtime
+          projected:
+            sources:
+              - secret:
+                  name: layerx-developer-hosted-runtime
+                  items:
+                    - { key: tls-cert.der, path: tls/server.der }
+                    - { key: tls-key.der, path: tls/server-key.der }
+                    - { key: internal-ca.der, path: ca/internal.der }
+                    - { key: client-identity.p12, path: client/identity.p12 }
+                    - { key: client-password, path: client/password }
+                    - { key: dashboard-redis-username, path: dashboard-redis/username }
+                    - { key: dashboard-redis-password, path: dashboard-redis/password }
+                    - { key: webhook-redis-username, path: redis/username }
+                    - { key: webhook-redis-password, path: redis/password }
+                    - { key: identity-token, path: tokens/identity }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: layerx-dashboard-web
+spec:
+  replicas: 2
+  selector: { matchLabels: { app: layerx-dashboard-web } }
+  template:
+    metadata: { labels: { app: layerx-dashboard-web } }
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: web
+          image: ghcr.io/centra-ai/layerx-dashboard-web:0.1.0
+          ports: [{ name: http, containerPort: 3000 }]
+          readinessProbe: { httpGet: { path: /, port: http }, periodSeconds: 10 }
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { cpu: "1", memory: 512Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities: { drop: [ALL] }
+          volumeMounts:
+            - { name: temporary, mountPath: /tmp }
+      volumes:
+        - name: temporary
+          emptyDir: { sizeLimit: 64Mi }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: layerx-webhooks }
+spec:
+  selector: { app: layerx-webhooks }
+  ports: [{ name: https, port: 443, targetPort: https }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: layerx-dashboard-api }
+spec:
+  selector: { app: layerx-dashboard-api }
+  ports: [{ name: https, port: 443, targetPort: https }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: layerx-dashboard-web }
+spec:
+  selector: { app: layerx-dashboard-web }
+  ports: [{ name: http, port: 80, targetPort: http }]
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: layerx-developer
+  annotations:
+    nginx.ingress.kubernetes.io/backend-protocol: HTTPS
+    nginx.ingress.kubernetes.io/proxy-body-size: 512k
+spec:
+  tls: [{ hosts: [developers.layerx.example], secretName: layerx-developer-ingress-tls }]
+  rules:
+    - host: developers.layerx.example
+      http:
+        paths:
+          - path: /v1/dashboard
+            pathType: Prefix
+            backend: { service: { name: layerx-dashboard-api, port: { name: https } } }
+          - path: /v1/webhooks
+            pathType: Prefix
+            backend: { service: { name: layerx-webhooks, port: { name: https } } }
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: layerx-developer-web
+spec:
+  tls: [{ hosts: [developers.layerx.example], secretName: layerx-developer-ingress-tls }]
+  rules:
+    - host: developers.layerx.example
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend: { service: { name: layerx-dashboard-web, port: { name: http } } }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: { name: layerx-webhooks }
+spec: { minAvailable: 2, selector: { matchLabels: { app: layerx-webhooks } } }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: layerx-webhooks }
+spec:
+  podSelector: { matchLabels: { app: layerx-webhooks } }
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from: [{ namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: ingress-nginx } } }]
+      ports: [{ protocol: TCP, port: 9444 }]
+    - from:
+        - namespaceSelector: { matchLabels: { layerx.internal-events: "true" } }
+      ports: [{ protocol: TCP, port: 9444 }]
+  egress:
+    - ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 443 }
+        - { protocol: TCP, port: 6379 }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: layerx-dashboard-api }
+spec:
+  podSelector: { matchLabels: { app: layerx-dashboard-api } }
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from: [{ namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: ingress-nginx } } }]
+      ports: [{ protocol: TCP, port: 9445 }]
+  egress:
+    - ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 443 }
+        - { protocol: TCP, port: 6379 }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: layerx-dashboard-web }
+spec:
+  podSelector: { matchLabels: { app: layerx-dashboard-web } }
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from: [{ namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: ingress-nginx } } }]
+      ports: [{ protocol: TCP, port: 3000 }]
+  egress: []

@@ -785,7 +785,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Apply the human service's principal isolation, redaction and audit rules to every gateway store and log.
     - Load-test the gateway against declared throughput and latency budgets.
     - _Requirements: 26.4, 26.7_
-  - [ ] 17.5 Deliver webhooks and developer dashboards
+  - [ ] 17.5 Deliver webhooks and developer dashboards — **Implemented - qualification pending**
     - Implement webhook delivery for journey, payment, approval and program events: signed payloads, ordered per subject, at-least-once with replay protection.
     - Build the redelivery surface for missed events with stable cursors.
     - Build the developer dashboard: keys, usage, request logs, webhook delivery logs, test payments and receipts.

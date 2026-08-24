@@ -16,10 +16,12 @@ path = "src/main.rs"
 ed25519-dalek.workspace = true
 getrandom.workspace = true
 layerx-platform-gateway = { path = "../gateway" }
+native-tls.workspace = true
+rustls.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
-ureq.workspace = true
+subtle.workspace = true
 zeroize.workspace = true
 
 [lints]

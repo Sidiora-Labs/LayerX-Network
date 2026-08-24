@@ -27,10 +27,16 @@ fn fact_value(event: &ProtocolEvent, name: &str) -> Option<String> {
         .map(|fact| fact.value().to_owned())
 }
 
+fn fact<'a>(event: &'a ProtocolEvent, name: &str) -> Option<&'a ProtocolFact> {
+    event.facts().iter().find(|fact| fact.name() == name)
+}
+
 /// How the hosted gateway answered one recorded request.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum RequestOutcome {
+    /// The request has durable pending or unknown state and may still complete.
+    Pending,
     /// The operation ran and returned receipt-backed evidence.
     Completed,
     /// The per-key quota was exhausted and the refusal carried retry timing.
@@ -44,6 +50,7 @@ impl RequestOutcome {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::Pending => "pending",
             Self::Completed => "completed",
             Self::RateLimited => "rate-limited",
             Self::Refused => "refused",
@@ -122,6 +129,8 @@ pub struct RequestRecord {
 pub struct RequestSummary {
     /// Requests recorded for this principal.
     pub records: u64,
+    /// Requests whose durable state is pending or unknown.
+    pub pending: u64,
     /// Requests that completed against the protocol.
     pub completed: u64,
     /// Requests refused by the quota with retry timing.
@@ -134,27 +143,18 @@ pub struct RequestSummary {
     pub last_at: Option<u64>,
 }
 
-/// One receipt the gateway retained under the developer's own idempotency key.
+/// One receipt-backed payment visible to the authenticated developer.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ReceiptView {
-    /// The idempotency key the developer supplied.
-    pub idempotency_key: String,
-    /// Digest of the request the receipt answers.
-    pub request_digest: String,
-    /// Digest of the receipt bytes themselves, absent when the retained
-    /// operation carries none.
-    pub receipt_digest: Option<String>,
-    /// Size of the retained receipt in bytes.
-    pub receipt_bytes: u64,
-    /// Size of the retained response in bytes.
-    pub response_bytes: u64,
-    /// The exact level word the gateway recorded, whatever it was.
-    pub recorded_level: String,
-    /// That word projected onto the human plane vocabulary. A word outside the
-    /// vocabulary presents as `unverified`.
+    /// Canonical activity identifier established by the verified receipt.
+    pub activity_id: String,
+    /// Event which carries this receipt-backed activity.
+    pub event: String,
+    /// Digest of the independently verified receipt bytes.
+    pub receipt_digest: String,
+    /// Human-plane verification level established by that receipt.
     pub verification: Verification,
-    /// True only when real receipt bytes stand behind a level of
-    /// `receipt-verified` or stronger.
+    /// True only when verified evidence establishes settlement.
     pub settled: bool,
 }
 
@@ -175,7 +175,9 @@ pub struct PaymentView {
     pub asset: Option<String>,
     /// The weakest level among the displayed facts.
     pub verification: Verification,
-    /// The receipt digest backing that level.
+    /// Evidence level carried by the settlement-state fact specifically.
+    pub settlement_verification: Verification,
+    /// Receipt digest backing the settlement-state fact specifically.
     pub receipt_digest: Option<String>,
     /// True only when a verified `LayerX` receipt establishes settlement.
     pub settled: bool,
@@ -186,15 +188,20 @@ pub struct PaymentView {
 impl PaymentView {
     /// Projects one payment event onto the dashboard view.
     ///
-    /// Settlement is claimed only when the event's weakest fact is at least
-    /// `receipt-verified`, a receipt digest stands behind it, and the event
-    /// itself states settlement. Anything weaker renders as a payment that has
-    /// not settled, whatever the event says.
+    /// Settlement is claimed only when the state fact is at least
+    /// `receipt-verified` and a receipt digest stands behind that exact fact.
+    /// The event-level verification remains the weakest level among all facts,
+    /// including source annotations such as amount and asset.
     #[must_use]
     pub fn of(event: &ProtocolEvent) -> Self {
-        let settled = event.verification().at_least(Verification::ReceiptVerified)
-            && event.receipt_digest().is_some()
-            && fact_value(event, "state").is_some_and(|state| state == "settled");
+        let settlement = fact(event, "state");
+        let settlement_verification = settlement
+            .map(ProtocolFact::verification)
+            .unwrap_or(Verification::Unverified);
+        let receipt_digest = settlement.and_then(ProtocolFact::receipt_digest);
+        let settled = settlement.is_some_and(|fact| fact.value() == "settled")
+            && settlement_verification.at_least(Verification::ReceiptVerified)
+            && receipt_digest.is_some();
         Self {
             event: event.id().as_str().to_owned(),
             subject: event.subject().as_str().to_owned(),
@@ -203,7 +210,8 @@ impl PaymentView {
             amount: fact_value(event, "amount"),
             asset: fact_value(event, "asset"),
             verification: event.verification(),
-            receipt_digest: event.receipt_digest().map(str::to_owned),
+            settlement_verification,
+            receipt_digest: receipt_digest.map(str::to_owned),
             settled,
             facts: event.facts().to_vec(),
         }

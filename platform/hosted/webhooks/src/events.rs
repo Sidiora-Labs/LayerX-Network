@@ -350,7 +350,7 @@ impl ProtocolFact {
     /// Returns [`WebhookError::InvalidRequest`] for an invalid name or value and
     /// [`WebhookError::VerificationRequired`] when the level is unverified or the
     /// receipt digest is not a receipt digest.
-    pub fn verified(
+    pub(crate) fn verified(
         name: impl Into<String>,
         value: impl Into<String>,
         verification: Verification,
@@ -480,7 +480,7 @@ impl ProtocolEvent {
     /// Returns [`WebhookError::InvalidRequest`] when the draft carries no facts
     /// or more than the accepted maximum, and [`WebhookError::VerificationRequired`]
     /// when a fact claims a level its evidence does not support.
-    pub fn new(draft: EventDraft) -> Result<Self, WebhookError> {
+    pub(crate) fn new(draft: EventDraft) -> Result<Self, WebhookError> {
         if draft.facts.is_empty() || draft.facts.len() > MAXIMUM_FACTS {
             return Err(WebhookError::InvalidRequest);
         }
@@ -611,43 +611,50 @@ pub struct PaymentDraft<'a> {
     pub occurred_at: u64,
     /// The receipt-backed operation the hosted gateway returned.
     pub operation: &'a VerifiedOperation,
-    /// Exact protocol amount as an integer string.
+    /// Exact protocol amount from the canonical payment source. This source
+    /// annotation is not promoted to receipt-verified evidence.
     pub amount: String,
-    /// Protocol asset identifier.
+    /// Protocol asset identifier from the canonical payment source. This
+    /// source annotation is not promoted to receipt-verified evidence.
     pub asset: String,
 }
 
-/// Builds a payment event that presents settlement only when the hosted gateway
-/// returned real receipt bytes at `receipt-verified` or stronger.
+/// Builds a payment event whose settlement state and activity identity are
+/// backed by real receipt bytes at `receipt-verified` or stronger. Amount and
+/// asset remain visibly unverified source annotations.
 ///
 /// # Errors
 /// Returns [`WebhookError::VerificationRequired`] when the operation carries no
 /// receipt bytes or a level weaker than a verified `LayerX` receipt, and
 /// [`WebhookError::InvalidRequest`] for an invalid amount or asset.
 pub fn settled_payment(draft: PaymentDraft<'_>) -> Result<ProtocolEvent, WebhookError> {
-    if draft.operation.receipt.is_empty() {
+    if draft.operation.receipt().is_empty() {
         return Err(WebhookError::VerificationRequired);
     }
-    let verification = Verification::parse(&draft.operation.verification_level)?;
+    if draft.operation.result_code() != 0 {
+        return Err(WebhookError::VerificationRequired);
+    }
+    let verification = Verification::parse(draft.operation.verification_level())?;
     if !verification.at_least(Verification::ReceiptVerified) {
         return Err(WebhookError::VerificationRequired);
     }
     if draft.amount.is_empty() || !draft.amount.bytes().all(|byte| byte.is_ascii_digit()) {
         return Err(WebhookError::InvalidRequest);
     }
-    let receipt_digest = hex_encode(&digest(&draft.operation.receipt));
+    let receipt_digest = hex_encode(&draft.operation.receipt_digest());
     let facts = vec![
         ProtocolFact::verified("state", "settled", verification, receipt_digest.as_str())?,
+        ProtocolFact::unverified("amount", draft.amount)?,
+        ProtocolFact::unverified("asset", draft.asset)?,
         ProtocolFact::verified(
-            "amount",
-            draft.amount,
+            "activity_id",
+            hex_encode(&draft.operation.activity_id()),
             verification,
             receipt_digest.as_str(),
         )?,
-        ProtocolFact::verified("asset", draft.asset, verification, receipt_digest.as_str())?,
         ProtocolFact::verified(
             "receipt_bytes",
-            draft.operation.receipt.len().to_string(),
+            draft.operation.receipt().len().to_string(),
             verification,
             receipt_digest.as_str(),
         )?,

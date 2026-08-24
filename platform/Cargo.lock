@@ -1318,9 +1318,13 @@ version = "0.1.0"
 dependencies = [
  "layerx-platform-gateway",
  "layerx-platform-webhooks",
+ "native-tls",
+ "rustls",
  "serde",
  "serde_json",
  "sha2",
+ "subtle",
+ "zeroize",
 ]
 
 [[package]]
@@ -1405,10 +1409,12 @@ dependencies = [
  "ed25519-dalek",
  "getrandom 0.3.4",
  "layerx-platform-gateway",
+ "native-tls",
+ "rustls",
  "serde",
  "serde_json",
  "sha2",
- "ureq",
+ "subtle",
  "zeroize",
 ]
 

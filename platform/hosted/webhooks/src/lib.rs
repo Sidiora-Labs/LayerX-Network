@@ -11,32 +11,26 @@
 //! is presented above `unverified` without the receipt digest that established
 //! it.
 
-pub mod cursor;
+mod boundary;
 pub mod deliveries;
 pub mod encoding;
 pub mod endpoints;
 pub mod error;
 pub mod events;
+pub mod hosted;
 pub mod http;
 pub mod scheme;
-pub mod service;
-pub mod state;
-pub mod transport;
+pub mod trusted;
 
 pub use deliveries::{AttemptRecord, Delivery, DeliveryRecord, DeliveryState, FailureKind};
-pub use endpoints::{Endpoint, EndpointHealth, RetryPolicy};
+pub use endpoints::{EndpointHealth, RetryPolicy};
 pub use error::WebhookError;
 pub use events::{
-    settled_payment, DeliveryId, EndpointId, EventDraft, EventId, EventKind, PaymentDraft,
-    Principal, ProtocolEvent, ProtocolFact, SubjectId, Verification,
+    settled_payment, DeliveryId, EndpointId, EventId, EventKind, PaymentDraft, Principal,
+    ProtocolEvent, ProtocolFact, SubjectId, Verification,
 };
-pub use scheme::{EndpointKey, Presentation, ReplayGuard, Verified};
-pub use service::{
-    DispatchReport, EndpointRequest, EventPage, PublishOutcome, RedeliveryOutcome, Registration,
-    Service,
-};
-pub use state::Ledger;
-pub use transport::{Attempt, HttpTransport, Transport};
+pub use hosted::{HostedReader, HostedService, HostedSnapshot};
+pub use scheme::{Presentation, ReplayGuard, Verified};
 
 /// Names the delivery contract this crate implements.
 #[must_use]
