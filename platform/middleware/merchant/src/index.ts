@@ -139,6 +139,9 @@ export class MerchantMiddleware {
         throw new MerchantError("catalog-item-missing");
       }
       validateCatalogItem(item);
+      if (item.sku !== line.sku) {
+        throw new MerchantError("catalog-item-missing");
+      }
       if (first === undefined) {
         first = item;
       } else if (
@@ -206,7 +209,13 @@ export class MerchantMiddleware {
     const quote = await this.quote(checkoutKey, lines);
     const requestDigest = await digestQuote(quote);
     const opened = await this.#orders.open({ checkoutKey, requestDigest, quote });
-    requireMatchingOrder(opened, checkoutKey, requestDigest);
+    requireMatchingOrder(opened, checkoutKey, requestDigest, quote);
+    if (paymentHeader === undefined && opened.state === "paid-verified") {
+      return { kind: "pending", order: opened };
+    }
+    if (paymentHeader === undefined && opened.state === "refused") {
+      return { kind: "refused", order: opened };
+    }
     const seller = this.#sellers.create(quote.paymentRequired);
     const decision = await seller.handle(
       principal,
@@ -221,7 +230,10 @@ export class MerchantMiddleware {
     }
     if (decision.kind === "refused") {
       const refused = await this.#orders.markRefused(opened.orderId, requestDigest);
-      requireMatchingOrder(refused, checkoutKey, requestDigest);
+      requireMatchingOrder(refused, checkoutKey, requestDigest, quote);
+      if (refused.state !== "refused") {
+        throw new MerchantError("order-conflict");
+      }
       return { kind: "refused", order: refused };
     }
     const receiptDigest = layerXReceiptDigest(decision.settlement.extensions);
@@ -231,7 +243,7 @@ export class MerchantMiddleware {
       receiptDigest,
       decision.settlement.transaction,
     );
-    requireMatchingOrder(paid, checkoutKey, requestDigest);
+    requireMatchingOrder(paid, checkoutKey, requestDigest, quote);
     if (
       paid.state !== "paid-verified"
       || paid.receiptDigest !== receiptDigest
@@ -286,9 +298,16 @@ export class MerchantSettlementWebhooks {
       if (current === undefined || current.requestDigest !== event.request_digest) {
         throw new MerchantError("order-conflict");
       }
+      requireMatchingOrder(current, current.checkoutKey, event.request_digest, current.quote);
+      if (await digestQuote(current.quote) !== current.requestDigest) {
+        throw new MerchantError("order-conflict");
+      }
       const evidence = await this.receipts.resolve(event.receipt_ref);
-      await verifyPaymentReceipt(evidence, current.quote.paymentRequired.accepts[0]!);
-      const receiptDigest = toHex(await merkleLeafDigest(evidence.canonicalReceipt));
+      const verification = await verifyPaymentReceipt(evidence, current.quote.paymentRequired.accepts[0]!);
+      if (verificationRank(event.verification) > verificationRank(verification.level)) {
+        throw new MerchantError("invalid-webhook");
+      }
+      const receiptDigest = toHex(verification.receiptDigest);
       if (!constantTimeHex(receiptDigest, event.receipt_digest)) {
         throw new MerchantError("invalid-webhook");
       }
@@ -298,7 +317,13 @@ export class MerchantSettlementWebhooks {
         event.receipt_digest,
         event.transaction,
       );
-      if (paid.state !== "paid-verified" || paid.receiptDigest !== event.receipt_digest) {
+      requireMatchingOrder(paid, current.checkoutKey, current.requestDigest, current.quote);
+      if (
+        paid.orderId !== current.orderId
+        || paid.state !== "paid-verified"
+        || paid.receiptDigest !== event.receipt_digest
+        || paid.transaction !== event.transaction
+      ) {
         throw new MerchantError("order-conflict");
       }
     });
@@ -337,9 +362,57 @@ function validateCatalogItem(item: CatalogItem): void {
   }
 }
 
-function requireMatchingOrder(order: MerchantOrder, key: string, digest: string): void {
-  if (order.checkoutKey !== key || order.requestDigest !== digest) {
+function requireMatchingOrder(
+  order: MerchantOrder,
+  key: string,
+  digest: string,
+  quote: MerchantQuote,
+): void {
+  if (
+    order === null
+    || typeof order !== "object"
+    || Array.isArray(order)
+    || typeof order.orderId !== "string"
+    || typeof order.checkoutKey !== "string"
+    || typeof order.requestDigest !== "string"
+    || order.quote === null
+    || typeof order.quote !== "object"
+    || Array.isArray(order.quote)
+    || (order.state !== "awaiting-payment" && order.state !== "paid-verified" && order.state !== "refused")
+    || order.orderId.length === 0
+    || order.orderId.length > 255
+    || order.orderId.includes("\0")
+    || order.checkoutKey.length === 0
+    || order.checkoutKey.length > 255
+    || order.checkoutKey.includes("\0")
+    || !/^[0-9a-f]{64}$/u.test(order.requestDigest)
+    || order.checkoutKey !== key
+    || order.requestDigest !== digest
+    || !sameQuote(order.quote, quote)
+  ) {
     throw new MerchantError("order-conflict");
+  }
+  if (order.state === "paid-verified") {
+    if (
+      order.receiptDigest === undefined
+      || !/^[0-9a-f]{64}$/u.test(order.receiptDigest)
+      || order.transaction === undefined
+      || order.transaction.length === 0
+      || order.transaction.length > 512
+      || order.transaction.includes("\0")
+    ) {
+      throw new MerchantError("order-conflict");
+    }
+  } else if (order.receiptDigest !== undefined || order.transaction !== undefined) {
+    throw new MerchantError("order-conflict");
+  }
+}
+
+function sameQuote(left: MerchantQuote, right: MerchantQuote): boolean {
+  try {
+    return JSON.stringify(left) === JSON.stringify(right);
+  } catch {
+    return false;
   }
 }
 
@@ -364,12 +437,16 @@ function parseSettlementWebhook(value: Readonly<Record<string, JsonValue>>): Set
   return event as SettlementWebhookEvent;
 }
 
-async function merkleLeafDigest(canonicalReceipt: Uint8Array): Promise<Uint8Array> {
-  const domain = new TextEncoder().encode("LXP/v1/merkle-leaf\0");
-  const input = new Uint8Array(domain.length + canonicalReceipt.length);
-  input.set(domain);
-  input.set(canonicalReceipt, domain.length);
-  return new Uint8Array(await globalThis.crypto.subtle.digest("SHA-256", input));
+function verificationRank(
+  level: SettlementWebhookEvent["verification"] | ReceiptVerification["level"],
+): number {
+  switch (level) {
+    case "sequencer-signed": return 1;
+    case "batch-included": return 2;
+    case "state-proven": return 3;
+    case "checkpoint-finalised": return 4;
+    case "settlement-anchored": return 5;
+  }
 }
 
 function constantTimeHex(actual: string, expected: string): boolean {
@@ -406,6 +483,7 @@ async function digestQuote(quote: MerchantQuote): Promise<string> {
     scheme: quote.scheme,
     network: quote.network,
     maxTimeoutSeconds: quote.maxTimeoutSeconds,
+    paymentRequired: quote.paymentRequired,
   });
   const digest = new Uint8Array(await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonical)));
   return Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("");

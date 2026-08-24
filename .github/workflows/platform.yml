@@ -22,6 +22,11 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
+      - name: Install Node.js for middleware conformance
+        uses: actions/setup-node@1e60f620b9541d6140a364a9ae8c74a2b0e1afe6
+        with:
+          node-version: 22
+          cache: npm
       - name: Install pinned Rust toolchain and policy auditor
         run: >-
           rustup toolchain install 1.91.1 --profile minimal --component clippy &&
@@ -53,6 +58,12 @@ jobs:
           persist-credentials: false
       - name: Install pinned Rust toolchain
         run: rustup toolchain install 1.91.1 --profile minimal
+      - name: Install Node.js for npm middleware publication
+        uses: actions/setup-node@1e60f620b9541d6140a364a9ae8c74a2b0e1afe6
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+          cache: npm
       - name: Verify the signed release registry manifest
         run: make platform-release-check
       - name: Verify the generated SDKs against the schemas
@@ -61,3 +72,17 @@ jobs:
         run: make platform-release-plan | tee release-plan.txt
       - name: Record the reproducible source digest for byte-verification
         run: git archive --format=tar HEAD | sha256sum | tee source-digest.txt
+      - name: Build the published middleware packages from the locked workspace
+        run: >-
+          npm ci --ignore-scripts --no-audit --no-fund &&
+          npm run build --workspace @sidiora/layerx-buyer-middleware &&
+          npm run build --workspace @sidiora/layerx-seller-middleware &&
+          npm run build --workspace @sidiora/layerx-merchant-middleware &&
+          npm run build --workspace @sidiora/layerx-agent-middleware
+      - name: Publish the four middleware packages with provenance
+        if: startsWith(github.ref, 'refs/tags/sdk-v')
+        run: >-
+          npm publish --workspace @sidiora/layerx-buyer-middleware --access public --provenance &&
+          npm publish --workspace @sidiora/layerx-seller-middleware --access public --provenance &&
+          npm publish --workspace @sidiora/layerx-merchant-middleware --access public --provenance &&
+          npm publish --workspace @sidiora/layerx-agent-middleware --access public --provenance

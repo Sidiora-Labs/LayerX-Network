@@ -19,6 +19,7 @@ distribution = "https://registry.npmjs.org"
 signing = "sigstore-keyless"
 provenance = "npm-provenance-attestation"
 verification = "byte-compare-against-tagged-source"
+packages = ["@sidiora/layerx-agent-middleware","@sidiora/layerx-buyer-middleware","@sidiora/layerx-merchant-middleware","@sidiora/layerx-seller-middleware"]
 status = "skeleton"
 
 [registry.pypi]

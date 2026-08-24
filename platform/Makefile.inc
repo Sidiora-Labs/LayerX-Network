@@ -75,7 +75,12 @@ platform-release-plan:
 platform-test-middleware:
 	cd platform/middleware/seller && npm install --no-audit --no-fund && npm run build
 	cd platform/middleware/buyer && npm install --no-audit --no-fund && npm run build
+	cd platform/middleware/merchant && npm install --no-audit --no-fund && npm run build
+	cd platform/middleware/agent && npm install --no-audit --no-fund && npm run build
 	cd platform/middleware/conformance && npm install --no-audit --no-fund && npm run build && npm run conformance
+	node --check platform/examples/merchant-shop/index.mjs
+	node --check platform/examples/merchant-checkout/index.mjs
+	node --check platform/examples/agent-spend/index.mjs
 	cd platform/integrations/express && npm install --no-audit --no-fund && npm run build
 	cd platform/integrations/next && npm install --no-audit --no-fund && npm run build
 	node platform/integrations/next/bin/layerx-scan-bundle.mjs platform/integrations/next/example
@@ -83,7 +88,6 @@ platform-test-middleware:
 		platform/integrations/fastapi/layerx_fastapi platform/integrations/fastapi/examples
 	mvn -q -f platform/sdk/jvm/pom.xml -DskipTests install
 	mvn -q -f platform/integrations/spring/pom.xml -DskipTests install
-	cd platform/middleware/agent && npm install --no-audit --no-fund && npm run build
 	cd platform/integrations/agents && npm install --no-audit --no-fund && npm run build
 	mvn -q -f platform/integrations/android/pom.xml -DskipTests verify
 	command -v swift >/dev/null

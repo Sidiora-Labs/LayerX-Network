@@ -2008,7 +2008,7 @@ reqs = ["25.1","25.3","25.4","25.5"]
 
 [task.16.2]
 title = "Build the merchant and agent middleware"
-status = "pending"
+status = "implemented"
 wave = 9
 requires = ["16.1"]
 work_kind = "implementation"
@@ -2021,7 +2021,7 @@ do_4 = "Ship runnable examples for both, exercised in CI against a real service.
 do_5 = "Publish both through the release pipeline."
 verify_cmd = "make platform-test-middleware"
 symbols = ["platform_mw_merchant","platform_mw_agent"]
-touches = ["platform/middleware/merchant","platform/middleware/agent","platform/examples"]
+touches = [".github/workflows/platform.yml","package*.json","platform/Makefile.inc","platform/examples","platform/integrations/agents","platform/middleware/agent","platform/middleware/conformance","platform/middleware/merchant","platform/release"]
 reqs = ["25.1","25.4","25.5"]
 
 [task.16.3]
