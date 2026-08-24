@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "layerx/lxp_snapshot.h"
+#include "layerx/lxp_transfer.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -51,6 +52,22 @@ static int apply_value(lxp_state_store *state, lxp_state_journal *journal,
                LXP_OK || lxp_state_journal_commit(journal) != LXP_OK;
 }
 
+static int open_funded(lx_account_registry *accounts, const char *name,
+                       const uint8_t asset_id[32], uint64_t balance,
+                       uint64_t sequence)
+{
+    lx_account *account;
+    uint8_t id[32];
+    size_t length = strlen(name);
+    return lx_account_id_from_string((const uint8_t *)name, length, id) !=
+               LXP_OK ||
+           lx_account_open(accounts, (const uint8_t *)name, length, id,
+                           sequence, LX_ACCOUNT_OPEN_GENESIS, NULL,
+                           &account) != LXP_OK ||
+           lxp_ledger_bootstrap_balance(
+               account, asset_id, (lxp_u128){0U, balance}, sequence) != LXP_OK;
+}
+
 int main(void)
 {
     static uint8_t snapshot_storage[4194304];
@@ -61,6 +78,8 @@ int main(void)
     lxp_state_journal restored_journal;
     lxp_kernel original;
     lxp_kernel restored;
+    lx_account_registry original_accounts;
+    lx_account_registry restored_accounts;
     lxp_snapshot_manifest_record manifest;
     lxp_snapshot_manifest_record stored_manifest;
     lxp_byte_span snapshot;
@@ -71,16 +90,27 @@ int main(void)
     uint8_t original_terminal[32];
     uint8_t restored_terminal[32];
     uint8_t before_truncation_root[32];
+    uint8_t asset_id[32] = { 0x41U };
     size_t cut;
     char directory[] = "/tmp/lxp-snapshot-XXXXXX";
     char path[128];
     static uint64_t parameters = 1U;
-    if (lxp_state_store_init(&original_state, 0U) != LXP_OK ||
+    if (lx_account_registry_init(&original_accounts) != LXP_OK ||
+        lx_account_registry_init(&restored_accounts) != LXP_OK ||
+        lxp_state_store_init(&original_state, 0U) != LXP_OK ||
         lxp_state_store_init(&restored_state, 0U) != LXP_OK ||
+        lxp_state_store_bind_accounts(&original_state,
+                                      &original_accounts) != LXP_OK ||
+        lxp_state_store_bind_accounts(&restored_state,
+                                      &restored_accounts) != LXP_OK ||
         lxp_kernel_create(&original, &original_state, &original_journal,
                           &parameters, 0U) != LXP_OK ||
         lxp_kernel_create(&restored, &restored_state, &restored_journal,
                           &parameters, 0U) != LXP_OK ||
+        open_funded(&original_accounts, "agent:alice:main", asset_id,
+                    100U, 0U) != 0 ||
+        open_funded(&original_accounts, "system:fees", asset_id,
+                    7U, 0U) != 0 ||
         apply_value(&original_state, &original_journal, 0U, 2U, 20U) != 0 ||
         apply_value(&original_state, &original_journal, 1U, 1U, 10U) != 0)
         return 1;
@@ -143,16 +173,34 @@ int main(void)
             memcmp(before_truncation_root, after, 32U) != 0)
             return 1;
     }
+    if (lxp_state_store_require_account_root(&restored_state) != LXP_OK ||
+        lxp_snapshot_load(stored_snapshot.bytes, stored_snapshot.length,
+                          &stored_manifest, root, &restored) !=
+            LXP_ERR_SNAPSHOT_MISMATCH)
+        return 1;
     ((uint8_t *)stored_snapshot.bytes)[stored_snapshot.length - 1U] ^= 1U;
     if (lxp_snapshot_load(stored_snapshot.bytes, stored_snapshot.length,
                           &stored_manifest, root, &restored) !=
         LXP_ERR_SNAPSHOT_MISMATCH ||
         lxp_kernel_register_module(&original, &program_iface) != LXP_OK ||
+        lxp_kernel_register_module(&restored, &program_iface) != LXP_OK ||
+        lxp_state_store_require_account_root(&original_state) != LXP_OK ||
+        lxp_state_root(&original, root) != LXP_OK ||
         lxp_arena_reset(&snapshot_arena, 0U) != LXP_OK ||
         lxp_snapshot_write(&original, 2U, &snapshot_arena, &snapshot) !=
             LXP_OK ||
+        snapshot.bytes[0] != 0U ||
+        snapshot.bytes[1] != LXP_PROTOCOL_VERSION_OCCUPANCY ||
         snapshot.bytes[snapshot.length - 10U * 36U - 2U] != 0U ||
-        snapshot.bytes[snapshot.length - 10U * 36U - 1U] != 10U)
+        snapshot.bytes[snapshot.length - 10U * 36U - 1U] != 10U ||
+        lxp_snapshot_manifest(snapshot.bytes, snapshot.length, 2U, root,
+                              &manifest) != LXP_OK ||
+        lxp_snapshot_load(snapshot.bytes, snapshot.length, &manifest, root,
+                          &restored) != LXP_OK ||
+        !restored_state.account_root_required ||
+        restored_accounts.count != original_accounts.count ||
+        lxp_state_root(&restored, restored_terminal) != LXP_OK ||
+        memcmp(root, restored_terminal, 32U) != 0)
         return 1;
     if (lxp_state_store_destroy(&original_state) != LXP_OK ||
         lxp_state_store_destroy(&restored_state) != LXP_OK ||

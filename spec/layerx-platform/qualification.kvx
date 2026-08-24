@@ -941,3 +941,75 @@ symbol = "cg guard task 25.2 lifecycle paths"
 observed = "The scoped cg guard accepted every explicit mirror reader, verifier, SDK, explorer, schema, deployment and qualification-artifact path and reported only the three generated or auditable spec lifecycle files as advisory outside touches. The graph transition cannot index npm lockfiles as individual touch witnesses, so the task declares the full agent TypeScript package and retains the root workspace package-lock as an auditable integration advisory."
 assumption = "The implementation-status projection, root dependency lock and qualification observations remain in the single published task commit; human review will inspect the advisory rather than remove the locked dependency, task state or recorded dependency boundaries."
 severity = "task-scope"
+
+[observation.29.5.4]
+task = "29.5"
+file = "src/modules/programs/occupancy.c, src/protocol/lxp_kernel.c"
+symbol = "resolve_parameters"
+observed = "The occupancy transition requires a production-supplied exact parameter-version resolver for the complete seven-price schedule and occupancy asset, freezes that value for the open batch, and records it in authenticated module state and every maintenance receipt. The repository does not yet contain task 32.4's governed parameter-store implementation or activation proof, so this callback has no in-repo owner that can independently prove governance authorization."
+assumption = "Task 32.4 must implement the canonical parameter-version resolver and bind each returned schedule and asset to its governed activation batch. Human qualification must reject an operator-only resolver even when its arithmetic and evidence are otherwise canonical."
+severity = "dependency-boundary"
+
+[observation.29.5.5]
+task = "29.5"
+file = "src/modules/programs/occupancy.c, src/replica/lxp_replay.c, include/layerx/programs.h"
+symbol = "lxp_programs_replay_engine_bind"
+observed = "The implementation supplies a concrete replay-engine binder and real batch-finalizer adapter, reserves one terminal system sequence, publishes the versioned occupancy receipt into the canonical receipt section and exercises the adapter through an empty-batch replay artifact. The repository still has no serving producer coordinator that owns replay-engine construction and can prove this binder is installed exactly once before accepting version-two batches."
+assumption = "The production batch-coordinator owner must call lxp_programs_replay_engine_bind during fail-closed startup and use the same replay boundary for production and replica execution. Qualification must refuse a version-two engine without the binder and compare producer and replica roots for empty and nonempty batches."
+severity = "dependency-boundary"
+
+[observation.29.5.6]
+task = "29.5"
+file = "src/modules/programs/occupancy.c"
+symbol = "lxp_programs_finalize_occupancy_batch"
+observed = "Empty-batch occupancy is a protocol-owned deterministic system transition without an ordinary user signature. Its canonical receipt binds the exact batch, schedule, asset, usage, payer dispositions, Rust settlement evidence, ledger root, transfer root and prior/result roots, but the current protocol has no owner-defined ordinary activity envelope or sequencer authorization shape for this maintenance action."
+assumption = "The batch/receipt owner must either standardize this reserved terminal system receipt as the canonical activity form or add a versioned protocol-owned maintenance authorization without manufacturing a user signature. Qualification must include the resulting receipt in checkpoint and replay publication."
+severity = "ambiguity"
+
+[observation.29.5.7]
+task = "29.5"
+file = "programs/crates/layerx-programs-runtime/src/occupancy.rs, tests/programs/test_occupancy_batch.c"
+symbol = "occupancy implementation artifacts"
+observed = "The implementation writes real-code artifacts for lifetime-cap exhaustion, insufficient balance, multiple payers, schedule transitions and gaps, committed drops, canonical state/evidence round trips and empty-batch replay. Implementation-phase rules prohibited compiling or executing any of them, so no passing result is asserted."
+assumption = "Human qualification must build the C and Rust boundaries, execute the artifacts plus funded debit and rollback fault injection, compare C/Rust evidence vectors, restore snapshots and replay producer/replica roots before changing task status from implemented."
+severity = "phase-boundary"
+
+[observation.29.5.8]
+task = "29.5"
+file = "spec/layerx-platform/qualification.kvx"
+symbol = "observation.29.5.1 and observation.29.5.2"
+observed = "Earlier implementation notes described the production C Programs bridge and versioned receipt binding as absent. This task now supplies those concrete boundaries, canonical v2 compact persistence and legacy v1 decoding; the earlier entries remain as historical observations rather than being rewritten."
+assumption = "Qualification should evaluate the current implementation and observations 29.5.4 through 29.5.7, while retaining the older entries as an auditable record of the dependency state before this task's integration."
+severity = "note"
+
+[observation.29.5.9]
+task = "29.5"
+file = "src/state/lxp_snapshot.c, src/state/lxp_state_root.c"
+symbol = "lxp_snapshot_write, lxp_snapshot_load"
+observed = "Task 29.5 adds canonical account-registry rooting and version-two snapshot encode/load so occupancy debits cannot restore with pre-debit balances. The inherited generic snapshot format still omits kernel blob bytes even though the universal state root commits blob digests; occupancy itself stores its ledger, schedule, account-root commitment and final record in module KV and does not use the blob store."
+assumption = "The generic snapshot owner must add a separately versioned bounded blob section before a blob-bearing kernel can claim full fresh-process restoration. Qualification for 29.5 must use the KV-backed Programs occupancy state and must fail rather than reuse an external live blob set when checking a snapshot root."
+severity = "inherited"
+
+[observation.29.5.10]
+task = "29.5"
+file = "src/state/lxp_journal.c, src/modules/programs/occupancy.c"
+symbol = "lxp_state_journal_require_account_root"
+observed = "Account-tree root activation is staged through the canonical state journal: rollback restores the prior root mode, while a committed journal retains it with the exact account registry included in the preview/result root. Programs runtime binding must therefore precede fresh-process version-two snapshot load and must present the same authoritative registry identity for the life of the state store."
+assumption = "The production owner binds one canonical account registry through lxp_kernel_bind_module_runtime before loading a version-two snapshot and never swaps registry identity under a live state store. Qualification must inject activation failures before commit and a mismatched registry on restore."
+severity = "deployment-boundary"
+
+[observation.29.5.11]
+task = "29.5"
+file = "src/modules/programs/occupancy.c, programs/crates/layerx-programs-runtime/src/occupancy.rs"
+symbol = "load_activation_positions, OccupancyLedger::import_activation_position"
+observed = "On the first version-two batch, including an empty batch, the terminal transition inventories every bounded canonical progstor namespace and persists its exact byte size at the activation baseline. Pre-upgrade bytes have no authenticated payer mandate, lifetime ceiling or historical governed price, so the transition marks them MigrationRequired, records byte-batches at price zero and freezes access until the namespace owner supplies a signed bounded responsibility through a real CALL. This is an explicit upgrade exemption: those frozen intervals are not retroactively charged while the owner has not migrated or reclaimed the namespace."
+assumption = "The protocol owner must ratify a bounded migration grace/reclaim law if persistent pre-upgrade bytes must eventually pay without an owner call; charging them through a manufactured grant would violate the ordinary-account authority boundary. Qualification must exercise empty-batch activation, owner migration and frozen-state rejection and must report the zero-price legacy interval rather than treating it as paid occupancy."
+severity = "ambiguity"
+
+[observation.29.5.12]
+task = "29.5"
+file = "spec/layerx-platform/spec.kvx"
+symbol = "task.29.5.touches"
+observed = "The task declares only the two original Rust occupancy files as touch witnesses, while its explicit implementation_scope requires integration through C Programs, canonical account debit, protocol versions, receipts, state roots, snapshots, replay and their real-code artifacts. Scoped cg guard over all 47 Git-changed paths therefore reports 45 integration and lifecycle paths as advisory outside touches; the two declared symbols and paths remain present."
+assumption = "Human qualification must review the full published integration diff against req36.5 and retain the advisory as evidence of a stale narrow task touch declaration, rather than deleting required protocol integration or weakening the task to the isolated Rust ledger."
+severity = "task-scope"

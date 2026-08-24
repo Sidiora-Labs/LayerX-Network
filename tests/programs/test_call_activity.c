@@ -6,6 +6,20 @@
 
 #include <string.h>
 
+static lxp_result occupancy_parameters(
+    void *context, uint32_t version, lx_programs_fee_schedule *schedule,
+    uint8_t asset_id[32])
+{
+    const lx_programs_transfer_runtime *runtime =
+        (const lx_programs_transfer_runtime *)context;
+    if (runtime == NULL || schedule == NULL || asset_id == NULL ||
+        runtime->fee_schedule.version != version)
+        return LXP_ERR_VERSION_UNSUPPORTED;
+    *schedule = runtime->fee_schedule;
+    (void)memcpy(asset_id, runtime->occupancy_asset_id, 32U);
+    return LXP_OK;
+}
+
 enum {
     CALL_FIXED_BYTES = 32 + 2 + 2 + 4 + 2 + 4 +
                        LX_PROGRAMS_CALL_BUDGET_FIELDS * 8,
@@ -438,7 +452,16 @@ static int deploy_and_upgrade_persist_exact_artifacts(void)
     (void)memset(&fee_asset_state, 0, sizeof(fee_asset_state));
     (void)memcpy(fee_asset_state.asset_id, fee_asset, sizeof(fee_asset));
     fee_asset_state.registered = true;
-    runtime = (lx_programs_transfer_runtime){&accounts, &fee_asset_state, 1U};
+    (void)memset(&runtime, 0, sizeof(runtime));
+    runtime.accounts = &accounts;
+    runtime.assets = &fee_asset_state;
+    runtime.asset_count = 1U;
+    runtime.fee_schedule = (lx_programs_fee_schedule){
+        1U, 1U, 1U, 2U, 4U, 1U, 1U, 1U
+    };
+    (void)memcpy(runtime.occupancy_asset_id, fee_asset, 32U);
+    runtime.resolve_occupancy_parameters = occupancy_parameters;
+    runtime.occupancy_parameter_context = &runtime;
     payload_length = deploy_payload(payload, program_id, authority.principal,
                                     wasm, wasm_length, code_hash);
     fill_activity(&activity, LX_PROGRAMS_DEPLOY, payload, payload_length,
@@ -458,6 +481,7 @@ static int deploy_and_upgrade_persist_exact_artifacts(void)
         return 1;
     (void)memset(&execution, 0, sizeof(execution));
     execution.network_id = 7U;
+    execution.batch_number = 1U;
     execution.batch_timestamp_ms = 10U;
     execution.maximum_timestamp_window = 100U;
     execution.global_sequence = 1U;
@@ -500,6 +524,7 @@ static int deploy_and_upgrade_persist_exact_artifacts(void)
             LXP_OK || receipt.result_code != LXP_OK ||
         !receipt.program_outcome.present ||
         receipt.program_outcome.terminal_kind != LXP_PROGRAM_TERMINAL_SUCCESS ||
+        receipt.program_outcome.encoding_version != 2U ||
         receipt.program_outcome.runtime_version == 0U ||
         receipt.program_outcome.abi_version != LX_PROGRAMS_ABI_VERSION ||
         receipt.program_outcome.fee_schedule_version != 1U ||
@@ -508,6 +533,9 @@ static int deploy_and_upgrade_persist_exact_artifacts(void)
         receipt.effects.effects[0].body_length == 0U ||
         lxp_ct_is_zero(receipt.program_outcome.call_graph_root, 32U) ||
         lxp_ct_is_zero(receipt.program_outcome.terminal_payload_root, 32U) ||
+        lxp_ct_is_zero(receipt.program_outcome.occupancy_evidence_digest, 32U) ||
+        memcmp(receipt.program_outcome.occupancy_asset_id,
+               fee_asset, 32U) != 0 ||
         !lxp_ct_is_zero(receipt.program_outcome.transfer_root, 32U) ||
         lxp_u128_is_zero(receipt.fee_charged) ||
         lxp_u128_cmp(receipt.fee_charged,

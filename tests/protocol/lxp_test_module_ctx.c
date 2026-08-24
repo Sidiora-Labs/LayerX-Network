@@ -80,6 +80,7 @@ int main(void)
     lxp_state_journal journal;
     lxp_kernel kernel;
     lxp_module_ctx asset;
+    lxp_module_ctx preview_ctx;
     uint64_t parameters = 40U;
     uint8_t arena_bytes[128];
     lxp_arena arena;
@@ -96,6 +97,11 @@ int main(void)
     lxp_transfer_asset_state asset_state;
     lxp_transfer_set set;
     lxp_receipt receipt;
+    uint8_t state_key[32] = { 0x44U };
+    uint8_t preview_value = 13U;
+    uint8_t before_root[32];
+    uint8_t preview_root[32];
+    uint8_t committed_root[32];
     void *allocation;
 
     (void)memset(&from_account, 0, sizeof(from_account));
@@ -181,6 +187,24 @@ int main(void)
         lxp_ctx_emit_transfer_set(&asset, &set, &receipt) !=
             LXP_ERR_BALANCE_BYPASS ||
         applied_count != 1U ||
+        lxp_state_root(&kernel, before_root) != LXP_OK ||
+        lxp_state_journal_open(&store, 0U, &journal) != LXP_OK ||
+        lxp_state_journal_set(&journal, state_key,
+                              (lxp_u128){ 0U, 19U }) != LXP_OK ||
+        lxp_module_ctx_init(&preview_ctx, &kernel, LXP_MODULE_ASSET,
+                            901U, 3U, 0U, 20U, &arena, true) != LXP_OK ||
+        lxp_ctx_kv_put(&preview_ctx, &key_a, 1U, &preview_value, 1U) !=
+            LXP_OK ||
+        lxp_module_ctx_prepare_commit(&preview_ctx) != LXP_OK ||
+        lxp_module_ctx_preview_state_root(&preview_ctx, &journal,
+                                          preview_root) != LXP_OK ||
+        !journal.open || store.next_sequence != 0U || store.count != 0U ||
+        kernel.module_kv[1].value[0] != value_a ||
+        memcmp(before_root, preview_root, 32U) == 0 ||
+        lxp_state_journal_commit(&journal) != LXP_OK ||
+        lxp_module_ctx_commit(&preview_ctx) != LXP_OK ||
+        lxp_state_root(&kernel, committed_root) != LXP_OK ||
+        memcmp(preview_root, committed_root, 32U) != 0 ||
         lxp_state_store_destroy(&store) != LXP_OK) return 1;
     return 0;
 }

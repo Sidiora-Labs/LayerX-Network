@@ -74,8 +74,27 @@ static void sort_kv(const lxp_kernel *kernel, size_t *indices)
     }
 }
 
+static void sort_accounts(const lx_account_registry *accounts,
+                          size_t *indices)
+{
+    size_t i;
+    for (i = 0U; i < accounts->count; ++i) indices[i] = i;
+    for (i = 1U; i < accounts->count; ++i) {
+        size_t value = indices[i];
+        size_t at = i;
+        while (at != 0U && memcmp(
+            accounts->accounts[indices[at - 1U]].id,
+            accounts->accounts[value].id, 32U) > 0) {
+            indices[at] = indices[at - 1U];
+            --at;
+        }
+        indices[at] = value;
+    }
+}
+
 static lxp_result snapshot_size(const lxp_kernel *kernel,
-                                size_t module_root_count, size_t *size)
+                                size_t module_root_count,
+                                bool include_accounts, size_t *size)
 {
     size_t total = 4U + 8U + 4U + 4U + 4U + 4U + 2U +
                    module_root_count * 36U;
@@ -109,8 +128,59 @@ static lxp_result snapshot_size(const lxp_kernel *kernel,
             return LXP_ERR_LENGTH_LIMIT;
         total += 10U + entry->key_length + entry->value_length;
     }
+    if (include_accounts) {
+        const lx_account_registry *accounts = kernel->state->accounts;
+        if (accounts == NULL) return LXP_FATAL_INVARIANT;
+        if (accounts->count > LX_ACCOUNT_REGISTRY_CAPACITY)
+            return LXP_ERR_LENGTH_LIMIT;
+        if (SIZE_MAX - total < 40U) return LXP_ERR_LENGTH_LIMIT;
+        total += 40U;
+        for (i = 0U; i < accounts->count; ++i) {
+            const lx_account *account = &accounts->accounts[i];
+            if (account->name_length == 0U ||
+                account->name_length > LX_ACCOUNT_NAME_MAX ||
+                SIZE_MAX - total < 149U + account->name_length)
+                return LXP_ERR_LENGTH_LIMIT;
+            total += 149U + account->name_length;
+        }
+    }
     *size = total;
     return LXP_OK;
+}
+
+static lxp_result write_account(lxp_codec_writer *writer,
+                                const lx_account *account)
+{
+    lxp_result status;
+    status = lxp_codec_write_bytes(writer, account->id, 32U, 32U);
+    if (status == LXP_OK)
+        status = lxp_codec_write_bytes(writer, account->name,
+                                       account->name_length,
+                                       LX_ACCOUNT_NAME_MAX);
+    if (status == LXP_OK)
+        status = lxp_codec_write_u8(writer, (uint8_t)account->kind);
+    if (status == LXP_OK)
+        status = lxp_codec_write_u128(writer, account->balance);
+    if (status == LXP_OK)
+        status = lxp_codec_write_bytes(writer, account->asset_id, 32U, 32U);
+    if (status == LXP_OK)
+        status = lxp_codec_write_u8(writer, account->has_asset ? 1U : 0U);
+    if (status == LXP_OK)
+        status = lxp_codec_write_u64(writer, account->next_sequence);
+    if (status == LXP_OK)
+        status = lxp_codec_write_u64(writer, account->created_at_sequence);
+    if (status == LXP_OK)
+        status = lxp_codec_write_u8(writer, account->frozen ? 1U : 0U);
+    if (status == LXP_OK)
+        status = lxp_codec_write_u8(
+            writer, account->has_open_reference ? 1U : 0U);
+    if (status == LXP_OK)
+        status = lxp_codec_write_bytes(writer, account->authority_key,
+                                       32U, 32U);
+    if (status == LXP_OK)
+        status = lxp_codec_write_u8(
+            writer, account->has_authority_key ? 1U : 0U);
+    return status;
 }
 
 lxp_result lxp_snapshot_write(const lxp_kernel *kernel,
@@ -121,18 +191,33 @@ lxp_result lxp_snapshot_write(const lxp_kernel *kernel,
     size_t *cell_order;
     size_t *idem_order;
     size_t *kv_indices;
+    size_t *account_indices = NULL;
     void *memory;
     size_t capacity;
     size_t module_root_count;
     size_t i;
+    uint16_t snapshot_version;
+    uint8_t account_root[32];
+    bool include_accounts;
     lxp_result status;
     if (kernel == NULL || kernel->state == NULL || arena == NULL ||
         snapshot == NULL || global_sequence == UINT64_MAX ||
         kernel->state->next_sequence != global_sequence + 1U)
         return LXP_ERR_SEQUENCE_MISMATCH;
+    include_accounts = kernel->state->account_root_required;
+    snapshot_version = include_accounts ?
+        (uint16_t)LXP_PROTOCOL_VERSION_OCCUPANCY :
+        (uint16_t)LXP_PROTOCOL_VERSION_LEGACY;
+    if (include_accounts) {
+        if (kernel->state->accounts == NULL) return LXP_FATAL_INVARIANT;
+        status = lx_account_registry_root(kernel->state->accounts,
+                                          account_root);
+        if (status != LXP_OK) return status;
+    }
     status = lxp_state_module_root_count(kernel, &module_root_count);
     if (status != LXP_OK) return status;
-    status = snapshot_size(kernel, module_root_count, &capacity);
+    status = snapshot_size(kernel, module_root_count, include_accounts,
+                           &capacity);
     if (status != LXP_OK) return status;
     status = lxp_arena_alloc(arena, kernel->state->count * sizeof(size_t),
                              _Alignof(size_t), &memory);
@@ -147,13 +232,22 @@ lxp_result lxp_snapshot_write(const lxp_kernel *kernel,
                              _Alignof(size_t), &memory);
     if (status != LXP_OK) return status;
     kv_indices = (size_t *)memory;
+    if (include_accounts) {
+        status = lxp_arena_alloc(
+            arena, kernel->state->accounts->count * sizeof(size_t),
+            _Alignof(size_t), &memory);
+        if (status != LXP_OK) return status;
+        account_indices = (size_t *)memory;
+    }
     sort_cells(kernel->state, cell_order);
     sort_idempotency(kernel->state, idem_order);
     sort_kv(kernel, kv_indices);
+    if (include_accounts)
+        sort_accounts(kernel->state->accounts, account_indices);
     status = lxp_codec_writer_init(&writer, arena, capacity);
     if (status == LXP_OK)
-        status = lxp_codec_write_struct_header(&writer,
-                                               LXP_SNAPSHOT_STRUCTURE_TAG);
+        status = lxp_codec_write_struct_header_version(
+            &writer, LXP_SNAPSHOT_STRUCTURE_TAG, snapshot_version);
     if (status == LXP_OK)
         status = lxp_codec_write_u64(&writer, global_sequence);
     if (status == LXP_OK)
@@ -212,6 +306,16 @@ lxp_result lxp_snapshot_write(const lxp_kernel *kernel,
             status = lxp_codec_write_bytes(&writer, entry->value,
                 entry->value_length, LXP_MODULE_MAX_VALUE_BYTES);
     }
+    if (status == LXP_OK && include_accounts)
+        status = lxp_codec_write_u32(
+            &writer, (uint32_t)kernel->state->accounts->count);
+    for (i = 0U; status == LXP_OK && include_accounts &&
+         i < kernel->state->accounts->count; ++i)
+        status = write_account(
+            &writer,
+            &kernel->state->accounts->accounts[account_indices[i]]);
+    if (status == LXP_OK && include_accounts)
+        status = lxp_codec_write_bytes(&writer, account_root, 32U, 32U);
     if (status == LXP_OK)
         status = lxp_codec_write_u16(&writer,
                                      (uint16_t)module_root_count);
@@ -278,6 +382,56 @@ static lxp_result read_fixed(lxp_codec_reader *reader, uint8_t *output,
     return LXP_OK;
 }
 
+static lxp_result read_bool(lxp_codec_reader *reader, bool *value)
+{
+    uint8_t encoded;
+    lxp_result status;
+    if (value == NULL) return LXP_ERR_NON_CANONICAL;
+    status = lxp_codec_read_u8(reader, &encoded);
+    if (status != LXP_OK) return status;
+    if (encoded > 1U) return LXP_ERR_NON_CANONICAL;
+    *value = encoded == 1U;
+    return LXP_OK;
+}
+
+static lxp_result read_account(lxp_codec_reader *reader, lx_account *account)
+{
+    lxp_byte_span name;
+    uint8_t kind;
+    lxp_result status;
+    if (reader == NULL || account == NULL) return LXP_ERR_NON_CANONICAL;
+    (void)memset(account, 0, sizeof(*account));
+    status = read_fixed(reader, account->id, 32U);
+    if (status == LXP_OK)
+        status = lxp_codec_read_bytes(reader, &name, LX_ACCOUNT_NAME_MAX);
+    if (status == LXP_OK && name.length == 0U)
+        status = LXP_ERR_NON_CANONICAL;
+    if (status == LXP_OK) {
+        account->name_length = (uint16_t)name.length;
+        (void)memcpy(account->name, name.bytes, name.length);
+    }
+    if (status == LXP_OK) status = lxp_codec_read_u8(reader, &kind);
+    if (status == LXP_OK) account->kind = (lx_account_kind)kind;
+    if (status == LXP_OK)
+        status = lxp_codec_read_u128(reader, &account->balance);
+    if (status == LXP_OK)
+        status = read_fixed(reader, account->asset_id, 32U);
+    if (status == LXP_OK)
+        status = read_bool(reader, &account->has_asset);
+    if (status == LXP_OK)
+        status = lxp_codec_read_u64(reader, &account->next_sequence);
+    if (status == LXP_OK)
+        status = lxp_codec_read_u64(reader, &account->created_at_sequence);
+    if (status == LXP_OK) status = read_bool(reader, &account->frozen);
+    if (status == LXP_OK)
+        status = read_bool(reader, &account->has_open_reference);
+    if (status == LXP_OK)
+        status = read_fixed(reader, account->authority_key, 32U);
+    if (status == LXP_OK)
+        status = read_bool(reader, &account->has_authority_key);
+    return status;
+}
+
 lxp_result lxp_snapshot_load(const uint8_t *snapshot, size_t snapshot_length,
                              const lxp_snapshot_manifest_record *manifest,
                              const uint8_t receipt_state_root[32],
@@ -285,16 +439,20 @@ lxp_result lxp_snapshot_load(const uint8_t *snapshot, size_t snapshot_length,
 {
     lxp_kernel *candidate;
     lxp_state_store *state;
+    lx_account_registry *accounts = NULL;
+    lx_account_registry *live_accounts;
     lxp_codec_reader reader;
     uint8_t digest[32];
     uint64_t sequence = 0U;
     uint32_t count = 0U;
     uint16_t root_count = 0U;
+    uint16_t snapshot_version = 0U;
     size_t i;
     lxp_result status;
     if ((snapshot == NULL && snapshot_length != 0U) || manifest == NULL ||
         receipt_state_root == NULL || kernel == NULL || kernel->state == NULL)
         return LXP_ERR_NON_CANONICAL;
+    live_accounts = kernel->state->accounts;
     status = lxp_hash_domain(LXP_DOMAIN_SNAPSHOT, snapshot, snapshot_length,
                              digest);
     if (status != LXP_OK || lxp_ct_memcmp(
@@ -311,8 +469,30 @@ lxp_result lxp_snapshot_load(const uint8_t *snapshot, size_t snapshot_length,
     candidate->module_kv_count = 0U;
     status = lxp_codec_reader_init(&reader, snapshot, snapshot_length);
     if (status == LXP_OK)
-        status = lxp_codec_read_struct_header(&reader,
-                                              LXP_SNAPSHOT_STRUCTURE_TAG);
+        status = lxp_codec_read_struct_header_version(
+            &reader, LXP_SNAPSHOT_STRUCTURE_TAG, &snapshot_version);
+    if (status == LXP_OK &&
+        snapshot_version != (uint16_t)LXP_PROTOCOL_VERSION_LEGACY &&
+        snapshot_version != (uint16_t)LXP_PROTOCOL_VERSION_OCCUPANCY)
+        status = LXP_ERR_VERSION_UNSUPPORTED;
+    if (status == LXP_OK &&
+        snapshot_version == (uint16_t)LXP_PROTOCOL_VERSION_LEGACY &&
+        kernel->state->account_root_required)
+        status = LXP_ERR_SNAPSHOT_MISMATCH;
+    if (status == LXP_OK &&
+        snapshot_version == (uint16_t)LXP_PROTOCOL_VERSION_OCCUPANCY &&
+        live_accounts == NULL)
+        status = LXP_ERR_SNAPSHOT_MISMATCH;
+    if (status == LXP_OK &&
+        snapshot_version == (uint16_t)LXP_PROTOCOL_VERSION_OCCUPANCY) {
+        accounts = malloc(sizeof(*accounts));
+        if (accounts == NULL) status = LXP_ERR_IO;
+        else {
+            (void)memset(accounts, 0, sizeof(*accounts));
+            state->accounts = accounts;
+            state->account_root_required = true;
+        }
+    }
     if (status == LXP_OK) status = lxp_codec_read_u64(&reader, &sequence);
     if (status == LXP_OK && sequence != manifest->global_sequence)
         status = LXP_ERR_SNAPSHOT_MISMATCH;
@@ -405,6 +585,35 @@ lxp_result lxp_snapshot_load(const uint8_t *snapshot, size_t snapshot_length,
             status = LXP_ERR_NON_CANONICAL;
     }
     candidate->module_kv_count = status == LXP_OK ? count : 0U;
+    if (status == LXP_OK &&
+        snapshot_version == (uint16_t)LXP_PROTOCOL_VERSION_OCCUPANCY)
+        status = lxp_codec_read_u32(&reader, &count);
+    if (status == LXP_OK &&
+        snapshot_version == (uint16_t)LXP_PROTOCOL_VERSION_OCCUPANCY &&
+        count > LX_ACCOUNT_REGISTRY_CAPACITY)
+        status = LXP_ERR_LENGTH_LIMIT;
+    for (i = 0U; status == LXP_OK &&
+         snapshot_version == (uint16_t)LXP_PROTOCOL_VERSION_OCCUPANCY &&
+         i < count; ++i) {
+        status = read_account(&reader, &accounts->accounts[i]);
+        if (status == LXP_OK && i != 0U &&
+            memcmp(accounts->accounts[i - 1U].id,
+                   accounts->accounts[i].id, 32U) >= 0)
+            status = LXP_ERR_NON_CANONICAL;
+    }
+    if (accounts != NULL)
+        accounts->count = status == LXP_OK ? count : 0U;
+    if (status == LXP_OK &&
+        snapshot_version == (uint16_t)LXP_PROTOCOL_VERSION_OCCUPANCY) {
+        uint8_t recorded[32];
+        uint8_t computed[32];
+        status = read_fixed(&reader, recorded, 32U);
+        if (status == LXP_OK)
+            status = lx_account_registry_root(accounts, computed);
+        if (status == LXP_OK &&
+            lxp_ct_memcmp(recorded, computed, 32U) != 0)
+            status = LXP_ERR_SNAPSHOT_MISMATCH;
+    }
     if (status == LXP_OK) state->next_sequence = sequence + 1U;
     if (status == LXP_OK) status = lxp_codec_read_u16(&reader, &root_count);
     if (status == LXP_OK && root_count > LXP_SNAPSHOT_MODULE_ROOT_COUNT)
@@ -429,6 +638,11 @@ lxp_result lxp_snapshot_load(const uint8_t *snapshot, size_t snapshot_length,
         status = lxp_snapshot_verify_root(candidate, manifest,
                                           receipt_state_root);
     if (status == LXP_OK) {
+        if (snapshot_version ==
+                (uint16_t)LXP_PROTOCOL_VERSION_OCCUPANCY) {
+            *live_accounts = *accounts;
+            kernel->state->account_root_required = true;
+        }
         kernel->state->count = state->count;
         (void)memcpy(kernel->state->cells, state->cells,
                      state->count * sizeof(state->cells[0]));
@@ -444,6 +658,7 @@ lxp_result lxp_snapshot_load(const uint8_t *snapshot, size_t snapshot_length,
                      sizeof(candidate->module_kv[0]));
         (void)memcpy(kernel->current_state_root, manifest->state_root, 32U);
     }
+    free(accounts);
     free(state);
     free(candidate);
     return status;

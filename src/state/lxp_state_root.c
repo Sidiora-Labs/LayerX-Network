@@ -106,6 +106,109 @@ static lxp_result leaves_root(state_leaf *leaves, size_t count,
 
 static lxp_result leaf_set(state_leaf *leaf, const uint8_t *key,
                            size_t key_length, const uint8_t *value,
+                           size_t value_length);
+
+static bool bytes_zero(const uint8_t *bytes, size_t length)
+{
+    size_t i;
+    for (i = 0U; i < length; ++i)
+        if (bytes[i] != 0U) return false;
+    return true;
+}
+
+static void account_write_u64(uint8_t bytes[8], uint64_t value)
+{
+    size_t i;
+    for (i = 0U; i < 8U; ++i)
+        bytes[i] = (uint8_t)(value >> (56U - 8U * i));
+}
+
+static lxp_result account_leaf_material(
+    const lx_account *account, uint8_t key[33], uint8_t value[615],
+    size_t *value_length)
+{
+    lx_account_name parsed;
+    uint8_t derived[32];
+    size_t offset = 0U;
+    lxp_result status;
+    if (account == NULL || key == NULL || value == NULL ||
+        value_length == NULL || account->name_length == 0U ||
+        account->name_length > LX_ACCOUNT_NAME_MAX)
+        return LXP_ERR_NON_CANONICAL;
+    status = lx_account_name_parse(account->name, account->name_length,
+                                   &parsed);
+    if (status == LXP_OK)
+        status = lx_account_id_from_string(account->name,
+                                           account->name_length, derived);
+    if (status != LXP_OK || parsed.kind != account->kind ||
+        memcmp(derived, account->id, 32U) != 0 ||
+        (!account->has_asset &&
+         (!lxp_u128_is_zero(account->balance) ||
+          !bytes_zero(account->asset_id, 32U))) ||
+        (account->has_asset && bytes_zero(account->asset_id, 32U)) ||
+        (!account->has_authority_key &&
+         !bytes_zero(account->authority_key, 32U)) ||
+        (account->has_authority_key &&
+         bytes_zero(account->authority_key, 32U)))
+        return status != LXP_OK ? status : LXP_ERR_NON_CANONICAL;
+    key[0] = 4U;
+    (void)memcpy(key + 1U, account->id, 32U);
+    value[offset++] = (uint8_t)(account->name_length >> 8U);
+    value[offset++] = (uint8_t)account->name_length;
+    (void)memcpy(value + offset, account->name, account->name_length);
+    offset += account->name_length;
+    value[offset++] = (uint8_t)account->kind;
+    status = lxp_u128_to_be(account->balance, value + offset);
+    if (status != LXP_OK) return status;
+    offset += 16U;
+    (void)memcpy(value + offset, account->asset_id, 32U);
+    offset += 32U;
+    value[offset++] = account->has_asset ? 1U : 0U;
+    account_write_u64(value + offset, account->next_sequence);
+    offset += 8U;
+    account_write_u64(value + offset, account->created_at_sequence);
+    offset += 8U;
+    value[offset++] = account->frozen ? 1U : 0U;
+    value[offset++] = account->has_open_reference ? 1U : 0U;
+    (void)memcpy(value + offset, account->authority_key, 32U);
+    offset += 32U;
+    value[offset++] = account->has_authority_key ? 1U : 0U;
+    *value_length = offset;
+    return LXP_OK;
+}
+
+lxp_result lx_account_registry_root(const lx_account_registry *registry,
+                                    uint8_t root[32])
+{
+    state_leaf leaves[LX_ACCOUNT_REGISTRY_CAPACITY];
+    size_t count;
+    size_t i;
+    size_t j;
+    lxp_result status;
+    if (registry == NULL || root == NULL) return LXP_ERR_NON_CANONICAL;
+    if (registry->count > LX_ACCOUNT_REGISTRY_CAPACITY)
+        return LXP_ERR_LENGTH_LIMIT;
+    count = registry->count;
+    for (i = 0U; i < count; ++i) {
+        uint8_t key[33];
+        uint8_t value[615];
+        size_t value_length;
+        for (j = 0U; j < i; ++j)
+            if (memcmp(registry->accounts[j].id,
+                       registry->accounts[i].id, 32U) == 0)
+                return LXP_ERR_NON_CANONICAL;
+        status = account_leaf_material(&registry->accounts[i], key, value,
+                                       &value_length);
+        if (status == LXP_OK)
+            status = leaf_set(&leaves[i], key, sizeof(key), value,
+                              value_length);
+        if (status != LXP_OK) return status;
+    }
+    return leaves_root(leaves, count, root);
+}
+
+static lxp_result leaf_set(state_leaf *leaf, const uint8_t *key,
+                           size_t key_length, const uint8_t *value,
                            size_t value_length)
 {
     lxp_hash_context context;
@@ -204,6 +307,18 @@ static lxp_result universal_leaves(const lxp_kernel *kernel,
         }
         status = leaf_set(&leaves[(*count)++], key, sizeof(key), body,
                           body_length);
+        if (status != LXP_OK) return status;
+    }
+    if (kernel->state->account_root_required) {
+        uint8_t account_root[32];
+        static const uint8_t account_key[] = "account-tree";
+        if (kernel->state->accounts == NULL) return LXP_FATAL_INVARIANT;
+        status = lx_account_registry_root(kernel->state->accounts,
+                                          account_root);
+        if (status != LXP_OK) return status;
+        status = leaf_set(&leaves[(*count)++], account_key,
+                          sizeof(account_key) - 1U, account_root,
+                          sizeof(account_root));
         if (status != LXP_OK) return status;
     }
     value[0] = (uint8_t)(kernel->state->next_sequence >> 56U);

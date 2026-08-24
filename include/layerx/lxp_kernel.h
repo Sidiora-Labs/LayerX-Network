@@ -62,7 +62,8 @@ typedef struct lxp_call_admission_facts {
     uint8_t payer[32];
     lxp_u128 available_fee_units;
     lxp_u128 signed_fee_limit;
-    uint16_t fee_schedule_version;
+    uint32_t fee_schedule_version;
+    uint64_t fee_schedule_prices[7];
     uint32_t parameter_version;
     bool present;
 } lxp_call_admission_facts;
@@ -93,9 +94,11 @@ typedef lxp_result (*lxp_kernel_supply_checker)(const struct lxp_kernel *kernel)
 struct lxp_module_ctx {
     struct lxp_kernel *kernel;
     uint16_t module_id;
+    uint16_t protocol_version;
     lxp_exec_clock clock;
     uint64_t epoch;
     uint64_t global_sequence;
+    uint64_t batch_number;
     uint64_t gas_limit;
     uint64_t gas_used;
     uint8_t activity_id[32];
@@ -182,6 +185,9 @@ lxp_result lxp_module_ctx_bind_effects(lxp_module_ctx *ctx,
 lxp_result lxp_module_ctx_prepare_commit(lxp_module_ctx *ctx);
 lxp_result lxp_module_ctx_preview_root(const lxp_module_ctx *ctx,
                                        uint8_t root[32]);
+lxp_result lxp_module_ctx_preview_state_root(
+    const lxp_module_ctx *ctx, const lxp_state_journal *journal,
+    uint8_t root[32]);
 lxp_result lxp_module_ctx_commit(lxp_module_ctx *ctx);
 void lxp_module_ctx_rollback(lxp_module_ctx *ctx);
 lxp_result lxp_ctx_bind_activity_state(lxp_module_ctx *ctx, void *state,
@@ -202,6 +208,7 @@ lxp_result lxp_ctx_blob_put(lxp_module_ctx *ctx, const uint8_t key[32],
 
 typedef struct lxp_kernel_execution {
     uint32_t network_id;
+    uint64_t batch_number;
     uint64_t batch_timestamp_ms;
     uint64_t maximum_timestamp_window;
     uint64_t epoch;

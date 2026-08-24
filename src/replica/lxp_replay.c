@@ -1,5 +1,6 @@
 #include "layerx/lxp_replica.h"
 #include "layerx/lxp_crypto.h"
+#include "layerx/lxp_protocol.h"
 
 #include <string.h>
 
@@ -72,8 +73,12 @@ lxp_result lxp_replay_engine_register(lxp_replay_engine *engine,
                                       lxp_replay_transition_fn transition)
 {
     size_t i;
-    if (engine == NULL || version == 0U || transition == NULL)
+    if (engine == NULL || !lxp_protocol_version_supported(version) ||
+        transition == NULL)
         return LXP_ERR_NON_CANONICAL;
+    if (version == (uint16_t)LXP_PROTOCOL_VERSION_OCCUPANCY &&
+        engine->batch_finalize == NULL)
+        return LXP_ERR_MODULE_DISABLED;
     for (i = 0U; i < engine->transition_count; ++i)
         if (engine->transitions[i].version == version)
             return LXP_ERR_NON_CANONICAL;
@@ -82,6 +87,18 @@ lxp_result lxp_replay_engine_register(lxp_replay_engine *engine,
     engine->transitions[engine->transition_count].version = version;
     engine->transitions[engine->transition_count].transition = transition;
     engine->transition_count += 1U;
+    return LXP_OK;
+}
+
+lxp_result lxp_replay_engine_register_batch_finalizer(
+    lxp_replay_engine *engine, lxp_replay_batch_finalize_fn finalize,
+    void *context)
+{
+    if (engine == NULL || finalize == NULL ||
+        engine->batch_finalize != NULL)
+        return LXP_ERR_NON_CANONICAL;
+    engine->batch_finalize = finalize;
+    engine->batch_finalize_context = context;
     return LXP_OK;
 }
 
@@ -173,6 +190,7 @@ lxp_result lxp_replay_batch(lxp_replay_engine *engine,
     lxp_byte_span *oracles;
     lxp_byte_span availability[5];
     size_t activity_count;
+    size_t receipt_count;
     size_t oracle_count;
     size_t i;
     void *memory;
@@ -183,37 +201,60 @@ lxp_result lxp_replay_batch(lxp_replay_engine *engine,
     if (engine == NULL || body == NULL || starting_state_root == NULL ||
         arena == NULL || result == NULL || engine->parameter_version == NULL)
         return LXP_ERR_NON_CANONICAL;
+    if (!lxp_protocol_version_supported(body->header.protocol_version))
+        return LXP_ERR_VERSION_UNSUPPORTED;
     if (lxp_ct_memcmp(starting_state_root,
                       body->header.previous_state_root, 32U) != 0)
         return LXP_ERR_ROOT_MISMATCH;
-    transition = transition_for(engine, body->header.protocol_version);
-    if (transition == NULL) return LXP_ERR_VERSION_UNSUPPORTED;
     status = engine->parameter_version(engine->context, body->header.epoch,
                                        &parameter_version);
     if (status != LXP_OK) return status;
     status = lxp_replay_section_decode(&body->activities, arena, &activities,
                                        &activity_count);
     if (status != LXP_OK) return status;
-    if (activity_count == 0U || body->header.last_sequence <
-        body->header.first_sequence || activity_count !=
-        body->header.last_sequence - body->header.first_sequence + 1U)
+    transition = transition_for(engine, body->header.protocol_version);
+    if (activity_count != 0U && transition == NULL)
+        return LXP_ERR_VERSION_UNSUPPORTED;
+    if (body->header.last_sequence < body->header.first_sequence)
         return LXP_ERR_BATCH_GAP;
+    if (body->header.protocol_version ==
+            (uint16_t)LXP_PROTOCOL_VERSION_OCCUPANCY) {
+        if (engine->batch_finalize == NULL || activity_count == SIZE_MAX ||
+            activity_count >= LXP_MAX_BATCH_ACTIVITIES ||
+            body->header.last_sequence - body->header.first_sequence !=
+                (uint64_t)activity_count)
+            return engine->batch_finalize == NULL ? LXP_ERR_MODULE_DISABLED :
+                                                    LXP_ERR_BATCH_GAP;
+        receipt_count = activity_count + 1U;
+    } else {
+        if (activity_count == 0U ||
+            body->header.last_sequence - body->header.first_sequence !=
+                (uint64_t)(activity_count - 1U))
+            return LXP_ERR_BATCH_GAP;
+        receipt_count = activity_count;
+    }
     (void)memset(result, 0, sizeof(*result));
-    status = lxp_arena_alloc(arena, activity_count * sizeof(*result->outputs),
-                             _Alignof(lxp_replay_activity_output), &memory);
-    if (status != LXP_OK) return status;
-    result->outputs = (lxp_replay_activity_output *)memory;
+    if (activity_count != 0U) {
+        status = lxp_arena_alloc(arena,
+                                 activity_count * sizeof(*result->outputs),
+                                 _Alignof(lxp_replay_activity_output), &memory);
+        if (status != LXP_OK) return status;
+        result->outputs = (lxp_replay_activity_output *)memory;
+    }
     status = lxp_arena_alloc(arena,
-                             activity_count * sizeof(lxp_byte_span),
+                             receipt_count * sizeof(lxp_byte_span),
                              _Alignof(lxp_byte_span), &memory);
     if (status != LXP_OK) return status;
     result->encoded_receipts = (lxp_byte_span *)memory;
-    status = lxp_arena_alloc(arena,
-                             activity_count * sizeof(lxp_byte_span),
-                             _Alignof(lxp_byte_span), &memory);
-    if (status != LXP_OK) return status;
-    result->encoded_events = (lxp_byte_span *)memory;
+    if (activity_count != 0U) {
+        status = lxp_arena_alloc(arena,
+                                 activity_count * sizeof(lxp_byte_span),
+                                 _Alignof(lxp_byte_span), &memory);
+        if (status != LXP_OK) return status;
+        result->encoded_events = (lxp_byte_span *)memory;
+    }
     result->activity_count = activity_count;
+    result->receipt_count = receipt_count;
     (void)memcpy(current_root, starting_state_root, 32U);
     for (i = 0U; i < activity_count; ++i) {
         status = transition(engine->context, body->header.protocol_version,
@@ -228,9 +269,27 @@ lxp_result lxp_replay_batch(lxp_replay_engine *engine,
         (void)memcpy(current_root,
                      result->outputs[i].resulting_state_root, 32U);
     }
+    if (body->header.protocol_version ==
+            (uint16_t)LXP_PROTOCOL_VERSION_OCCUPANCY) {
+        status = engine->batch_finalize(
+            engine->batch_finalize_context, &body->header,
+            parameter_version, body->header.last_sequence, current_root,
+            arena, &result->batch_maintenance_output);
+        if (status != LXP_OK) return status;
+        if (result->batch_maintenance_output.canonical_events.length != 0U)
+            return LXP_FATAL_INVARIANT;
+        status = record_encode(&result->batch_maintenance_output, arena,
+                               &result->encoded_batch_maintenance_receipt);
+        if (status != LXP_OK) return status;
+        result->encoded_receipts[activity_count] =
+            result->encoded_batch_maintenance_receipt;
+        (void)memcpy(current_root,
+                     result->batch_maintenance_output.resulting_state_root,
+                     32U);
+    }
     (void)memcpy(result->resulting_state_root, current_root, 32U);
     status = lxp_replay_section_encode(result->encoded_receipts,
-                                       activity_count, arena,
+                                       receipt_count, arena,
                                        &result->canonical_receipt_section);
     if (status == LXP_OK)
         status = lxp_replay_section_encode(result->encoded_events,
@@ -247,7 +306,7 @@ lxp_result lxp_replay_batch(lxp_replay_engine *engine,
     availability[4] = body->recovery_metadata;
     root_inputs = (lxp_batch_root_inputs){
         activities, activity_count,
-        result->encoded_receipts, activity_count,
+        result->encoded_receipts, receipt_count,
         result->encoded_events, activity_count,
         oracles, oracle_count,
         availability, 5U

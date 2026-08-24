@@ -4,6 +4,7 @@
 #include "layerx/lxp_module.h"
 #include "layerx/lxp_ledger.h"
 #include "layerx/lxp_transfer.h"
+#include "layerx/lxp_replica.h"
 
 #include <stdint.h>
 
@@ -24,6 +25,17 @@ enum {
     LX_PROGRAMS_EVENT_GUEST_ENVELOPE = 6,
     LX_PROGRAMS_EVENT_CALL_OUTCOME = 7
 };
+
+typedef struct lx_programs_fee_schedule {
+    uint32_t version;
+    uint64_t cpu;
+    uint64_t memory_byte;
+    uint64_t storage_read_byte;
+    uint64_t storage_write_byte;
+    uint64_t output_value;
+    uint64_t output_byte;
+    uint64_t occupancy_byte_batch;
+} lx_programs_fee_schedule;
 
 /* Canonical CALL payload limits. The activity names a UTF-8 export, carries
  * opaque ABI calldata, and has no ambient or process-global staging state. */
@@ -74,14 +86,19 @@ void lxp_programs_lifecycle_release(lxp_module_ctx *ctx, void *decoded);
  * the activity owner consumes them.
  */
 lxp_result layerx_programs_call_begin(
-    uint64_t token,
+    uint64_t token, uint64_t occupancy_token,
     uint64_t p0, uint64_t p1, uint64_t p2, uint64_t p3,
     uint64_t r0, uint64_t r1, uint64_t r2, uint64_t r3,
     uint64_t h0, uint64_t h1, uint64_t h2, uint64_t h3,
     uint64_t b0, uint64_t b1, uint64_t b2, uint64_t b3,
     uint64_t signed_fee_hi, uint64_t signed_fee_lo,
     uint64_t available_fee_hi, uint64_t available_fee_lo,
-    uint16_t fee_schedule_version, uint32_t parameter_version,
+    uint32_t fee_schedule_version, uint32_t parameter_version,
+    uint64_t fee_cpu, uint64_t fee_memory_byte,
+    uint64_t fee_storage_read_byte, uint64_t fee_storage_write_byte,
+    uint64_t fee_output_value, uint64_t fee_output_byte,
+    uint64_t fee_occupancy_byte_batch, uint64_t batch_number,
+    uint16_t protocol_version,
     uint16_t abi_version, uint16_t entrypoint_length,
     uint32_t wasm_length, uint32_t calldata_length, uint16_t capabilities_length,
     uint32_t response_capacity,
@@ -220,11 +237,71 @@ lxp_result lxp_programs_call_execute(
     const lxp_authority_resolved *authority, const void *decoded,
     lxp_effect_buffer *effects);
 
+typedef lxp_result (*lx_programs_occupancy_parameters_fn)(
+    void *context, uint32_t parameter_version,
+    lx_programs_fee_schedule *schedule, uint8_t occupancy_asset_id[32]);
+
 typedef struct lx_programs_transfer_runtime {
     lx_account_registry *accounts;
     const lxp_transfer_asset_state *assets;
     size_t asset_count;
+    lx_programs_fee_schedule fee_schedule;
+    uint8_t occupancy_asset_id[32];
+    lx_programs_occupancy_parameters_fn resolve_occupancy_parameters;
+    void *occupancy_parameter_context;
 } lx_programs_transfer_runtime;
+
+enum { LXP_PROGRAMS_OCCUPANCY_MAX_PAYERS = LXP_MAX_TRANSFER_SET_LEGS };
+typedef struct lxp_programs_occupancy_payer_receipt {
+    uint8_t principal[32];
+    lxp_u128 due;
+    lxp_u128 paid;
+    lxp_u128 arrears;
+    bool frozen;
+} lxp_programs_occupancy_payer_receipt;
+
+typedef struct lxp_programs_occupancy_receipt {
+    uint64_t batch_number;
+    uint64_t global_sequence;
+    uint32_t parameter_version;
+    uint32_t schedule_version;
+    uint64_t schedule_prices[7];
+    uint8_t occupancy_asset_id[32];
+    lxp_u128 byte_batches;
+    lxp_u128 fee_units;
+    lxp_u128 paid_fee_units;
+    lxp_u128 arrears_fee_units;
+    lxp_programs_occupancy_payer_receipt
+        payers[LXP_PROGRAMS_OCCUPANCY_MAX_PAYERS];
+    uint16_t payer_count;
+    uint8_t schedule_commitment[32];
+    lxp_byte_span settlement_evidence;
+    uint8_t settlement_evidence_digest[32];
+    uint8_t ledger_root[32];
+    uint8_t transfer_set_root[32];
+    uint8_t previous_state_root[32];
+    uint8_t resulting_state_root[32];
+} lxp_programs_occupancy_receipt;
+
+/* The batch coordinator invokes this exactly once after the batch's activity
+ * transitions and before sealing roots, including for an empty batch. The
+ * encoded receipt is included in the canonical batch receipt set. */
+lxp_result lxp_programs_finalize_occupancy_batch(
+    lxp_kernel *kernel, uint64_t batch_number, uint64_t batch_timestamp_ms,
+    uint64_t global_sequence, uint32_t parameter_version, lxp_arena *arena,
+    lxp_programs_occupancy_receipt *receipt, lxp_byte_span *encoded);
+lxp_result lxp_programs_occupancy_receipt_encode(
+    const lxp_programs_occupancy_receipt *receipt, lxp_arena *arena,
+    lxp_byte_span *encoded);
+lxp_result lxp_programs_occupancy_receipt_decode(
+    const uint8_t *bytes, size_t length,
+    lxp_programs_occupancy_receipt *receipt);
+lxp_result lxp_programs_replay_finalize(
+    void *context, const lxp_batch_header *header, uint32_t parameter_version,
+    uint64_t system_sequence, const uint8_t previous_state_root[32],
+    lxp_arena *arena, lxp_replay_activity_output *output);
+lxp_result lxp_programs_replay_engine_bind(lxp_replay_engine *engine,
+                                           lxp_kernel *kernel);
 
 lxp_result lxp_programs_bind_fee_transaction(lxp_kernel *kernel);
 

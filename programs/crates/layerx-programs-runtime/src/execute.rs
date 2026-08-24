@@ -958,6 +958,8 @@ impl CandidateActivityReceipt {
             storage_write_bytes: u64::from_be_bytes(cursor.array()?),
             output_bytes: u64::from_be_bytes(cursor.array()?),
             output_values: u32::from_be_bytes(cursor.array()?),
+            occupancy_byte_batches: 0,
+            occupancy_fee_units: 0,
             fee_units: u128::from_be_bytes(cursor.array()?),
         };
         let graph_length = u32::from_be_bytes(cursor.array()?) as usize;

@@ -130,14 +130,13 @@ int main(void)
         lxp_arena_init(&replay_arena, replay_storage,
                        sizeof(replay_storage)) != LXP_OK ||
         lxp_replay_engine_init(&engine, parameter_version, NULL) != LXP_OK ||
-        lxp_replay_engine_register(&engine, 1U, transition) != LXP_OK ||
-        lxp_replay_engine_register(&engine, 2U, transition) != LXP_OK)
+        lxp_replay_engine_register(&engine, 1U, transition) != LXP_OK)
         return 1;
     built_status = build_batch(&engine, &first, 1U, 1U, 0U, 0U, genesis,
                                first_activities, 2U, &history_arena,
                                &built_first);
     if (built_status != 0) return built_status;
-    built_status = build_batch(&engine, &second, 2U, 2U, 1U, 2U,
+    built_status = build_batch(&engine, &second, 1U, 2U, 1U, 2U,
                                first.header.resulting_state_root,
                                second_activities, 2U, &history_arena,
                                &built_second);

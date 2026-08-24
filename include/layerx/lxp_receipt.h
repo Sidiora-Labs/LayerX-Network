@@ -42,6 +42,7 @@ typedef enum lxp_program_terminal_kind {
  * terminal runtime outcome; they are not a second receipt or a version alias. */
 typedef struct lxp_program_outcome {
     bool present;
+    uint8_t encoding_version;
     uint8_t terminal_kind;
     lxp_result result_code;
     uint16_t runtime_version;
@@ -53,6 +54,12 @@ typedef struct lxp_program_outcome {
     uint64_t storage_write_bytes;
     uint32_t output_values;
     uint64_t output_bytes;
+    lxp_u128 occupancy_byte_batches;
+    lxp_u128 occupancy_fee_units;
+    uint64_t fee_schedule_prices[7];
+    uint8_t occupancy_asset_id[32];
+    uint8_t occupancy_evidence_digest[32];
+    uint8_t occupancy_transfer_root[32];
     lxp_u128 fee_units;
     uint8_t call_graph_root[32];
     uint8_t terminal_payload_root[32];

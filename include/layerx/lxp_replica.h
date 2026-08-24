@@ -65,6 +65,10 @@ typedef lxp_result (*lxp_replay_transition_fn)(
     lxp_arena *arena, lxp_replay_activity_output *output);
 typedef lxp_result (*lxp_replay_parameter_version_fn)(
     void *context, uint64_t epoch, uint32_t *parameter_version);
+typedef lxp_result (*lxp_replay_batch_finalize_fn)(
+    void *context, const lxp_batch_header *header, uint32_t parameter_version,
+    uint64_t system_sequence, const uint8_t previous_state_root[32],
+    lxp_arena *arena, lxp_replay_activity_output *output);
 
 typedef struct lxp_replay_transition_registration {
     uint16_t version;
@@ -76,6 +80,8 @@ typedef struct lxp_replay_engine {
         transitions[LXP_MAX_REPLAY_TRANSITIONS];
     size_t transition_count;
     lxp_replay_parameter_version_fn parameter_version;
+    lxp_replay_batch_finalize_fn batch_finalize;
+    void *batch_finalize_context;
     void *context;
 } lxp_replay_engine;
 #define lxp_replay_engine lxp_replay_engine
@@ -85,6 +91,9 @@ typedef struct lxp_replay_batch_result {
     lxp_byte_span *encoded_receipts;
     lxp_byte_span *encoded_events;
     size_t activity_count;
+    lxp_replay_activity_output batch_maintenance_output;
+    lxp_byte_span encoded_batch_maintenance_receipt;
+    size_t receipt_count;
     lxp_byte_span canonical_receipt_section;
     lxp_byte_span canonical_event_section;
     uint8_t resulting_state_root[32];
@@ -108,6 +117,11 @@ lxp_result lxp_replay_engine_init(
 lxp_result lxp_replay_engine_register(lxp_replay_engine *engine,
                                       uint16_t version,
                                       lxp_replay_transition_fn transition);
+/* Occupancy-protocol transitions may be registered only after the mandatory
+ * batch finalizer has been bound; an unbound v2 engine fails closed. */
+lxp_result lxp_replay_engine_register_batch_finalizer(
+    lxp_replay_engine *engine, lxp_replay_batch_finalize_fn finalize,
+    void *context);
 lxp_result lxp_replay_section_encode(const lxp_byte_span *items, size_t count,
                                      lxp_arena *arena,
                                      lxp_byte_span *encoded);

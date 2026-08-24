@@ -40,7 +40,8 @@ static lxp_result encode_internal(const lxp_activity *activity, lxp_arena *arena
     if (status == LXP_OK) status = (expression); \
     if (status != LXP_OK) return status; \
 } while (0)
-    status = lxp_codec_write_struct_header(&writer, LXP_ACTIVITY_STRUCTURE_TAG);
+    status = lxp_codec_write_struct_header_version(
+        &writer, LXP_ACTIVITY_STRUCTURE_TAG, activity->protocol_version);
     if (status != LXP_OK) return status;
     status = lxp_codec_write_u8(&writer, include_signature != 0 ?
                                 LXP_ACTIVITY_FIELD_COUNT : 11U);
@@ -98,6 +99,7 @@ lxp_result lxp_activity_decode(const uint8_t *bytes, size_t length,
     lxp_codec_reader reader;
     lxp_activity decoded;
     lxp_byte_span span;
+    uint16_t envelope_version;
     uint8_t count;
     lxp_result status;
     if (activity == NULL) return LXP_ERR_MALFORMED_ENVELOPE;
@@ -107,7 +109,8 @@ lxp_result lxp_activity_decode(const uint8_t *bytes, size_t length,
         return LXP_ERR_MALFORMED_ENVELOPE;
     status = lxp_codec_reader_init(&reader, bytes, length);
     if (status != LXP_OK ||
-        lxp_codec_read_struct_header(&reader, LXP_ACTIVITY_STRUCTURE_TAG) != LXP_OK ||
+        lxp_codec_read_struct_header_version(
+            &reader, LXP_ACTIVITY_STRUCTURE_TAG, &envelope_version) != LXP_OK ||
         lxp_codec_read_u8(&reader, &count) != LXP_OK ||
         count != LXP_ACTIVITY_FIELD_COUNT) return LXP_ERR_MALFORMED_ENVELOPE;
 #define READ_FIELD(id, expression) do { \
@@ -115,6 +118,8 @@ lxp_result lxp_activity_decode(const uint8_t *bytes, size_t length,
         return LXP_ERR_MALFORMED_ENVELOPE; \
 } while (0)
     READ_FIELD(1U, lxp_codec_read_u16(&reader, &decoded.protocol_version));
+    if (decoded.protocol_version != envelope_version)
+        return LXP_ERR_MALFORMED_ENVELOPE;
     READ_FIELD(2U, lxp_codec_read_u32(&reader, &decoded.network_id));
     READ_FIELD(3U, lxp_codec_read_u32(&reader, &decoded.activity_type));
     READ_FIELD(4U, lxp_codec_read_bytes(&reader, &decoded.actor_did,

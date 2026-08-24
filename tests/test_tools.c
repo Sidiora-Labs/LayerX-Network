@@ -201,7 +201,7 @@ int main(void)
             &verify_engine, 1U, transition) != LXP_OK)
         return 1;
     (void)memset(&body, 0, sizeof(body));
-    body.header.protocol_version = LXP_PROTOCOL_VERSION;
+    body.header.protocol_version = LXP_PROTOCOL_VERSION_LEGACY;
     body.header.network_id = 42U;
     body.header.epoch = 7U;
     body.header.batch_number = 8U;

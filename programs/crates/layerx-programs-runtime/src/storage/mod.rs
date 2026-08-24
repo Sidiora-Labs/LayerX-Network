@@ -4,7 +4,8 @@
 //! adjacent principals can be reached by choosing a key.
 
 use core::fmt::{self, Display};
-use std::collections::BTreeMap;
+use std::cell::RefCell;
+use std::collections::{BTreeMap, BTreeSet};
 
 mod namespace;
 #[path = "scan.rs"]
@@ -87,6 +88,7 @@ pub enum StorageError {
     InvalidScanCursor,
     InvalidScanLimits,
     ScanCeilingExceeded,
+    FrozenNamespace,
     SizeOverflow,
 }
 
@@ -107,6 +109,7 @@ impl Display for StorageError {
             Self::InvalidScanLimits => formatter.write_str("storage scan limits are invalid"),
             Self::ScanCeilingExceeded => formatter
                 .write_str("storage scan entry exceeds the declared complete page byte ceiling"),
+            Self::FrozenNamespace => formatter.write_str("storage namespace is frozen"),
             Self::SizeOverflow => formatter.write_str("storage accounting overflowed"),
         }
     }
@@ -116,10 +119,21 @@ impl std::error::Error for StorageError {}
 
 /// Durable storage shared by program executions. Every map key includes a
 /// closed namespace value carrying its owning program and declared scope.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default)]
 pub struct Storage {
     cells: BTreeMap<StorageAddress, Vec<u8>>,
+    frozen_namespaces: BTreeSet<StorageNamespace>,
+    accessed_namespaces: RefCell<BTreeSet<StorageNamespace>>,
 }
+
+impl PartialEq for Storage {
+    fn eq(&self, other: &Self) -> bool {
+        self.cells == other.cells &&
+            self.frozen_namespaces == other.frozen_namespaces
+    }
+}
+
+impl Eq for Storage {}
 
 impl Storage {
     /// Creates an empty storage plane.
@@ -127,7 +141,33 @@ impl Storage {
     pub const fn new() -> Self {
         Self {
             cells: BTreeMap::new(),
+            frozen_namespaces: BTreeSet::new(),
+            accessed_namespaces: RefCell::new(BTreeSet::new()),
         }
+    }
+
+    pub(crate) fn enforce_frozen_namespaces(
+        &mut self,
+        namespaces: impl IntoIterator<Item = StorageNamespace>,
+    ) {
+        self.frozen_namespaces = namespaces.into_iter().collect();
+    }
+
+    fn ensure_accessible(&self, namespace: StorageNamespace) -> Result<(), StorageError> {
+        if self.frozen_namespaces.contains(&namespace) {
+            Err(StorageError::FrozenNamespace)
+        } else {
+            self.accessed_namespaces.borrow_mut().insert(namespace);
+            Ok(())
+        }
+    }
+
+    pub(crate) fn clear_access_log(&self) {
+        self.accessed_namespaces.borrow_mut().clear();
+    }
+
+    pub(crate) fn was_accessed(&self, namespace: StorageNamespace) -> bool {
+        self.accessed_namespaces.borrow().contains(&namespace)
     }
 
     /// Begins an isolated write transaction. Dropping it without commit leaves
@@ -201,6 +241,7 @@ impl Storage {
         &self,
         namespace: StorageNamespace,
     ) -> Result<NamespaceDrop, StorageError> {
+        self.ensure_accessible(namespace)?;
         reclaim::preview(&self.cells, namespace)
     }
 
@@ -216,6 +257,7 @@ impl Storage {
         namespace: StorageNamespace,
         key: &[u8],
     ) -> Result<Option<Vec<u8>>, StorageError> {
+        self.ensure_accessible(namespace)?;
         validate_key(key)?;
         Ok(self
             .cells
@@ -232,6 +274,7 @@ impl Storage {
         key: &[u8],
         value: &[u8],
     ) -> Result<(), StorageError> {
+        self.ensure_accessible(namespace)?;
         validate_key(key)?;
         if value.len() > MAX_STORAGE_VALUE_BYTES {
             return Err(StorageError::ValueTooLarge);
@@ -251,6 +294,7 @@ impl Storage {
         namespace: StorageNamespace,
         key: &[u8],
     ) -> Result<(), StorageError> {
+        self.ensure_accessible(namespace)?;
         validate_key(key)?;
         self.cells.remove(&StorageAddress {
             namespace,
@@ -276,6 +320,7 @@ impl Storage {
         cursor: &[u8],
         limits: ScanLimits,
     ) -> Result<StorageScan, StorageError> {
+        self.ensure_accessible(namespace)?;
         scan_cells(&self.cells, namespace, prefix, cursor, limits)
     }
 }
@@ -295,6 +340,7 @@ impl StorageTransaction<'_> {
     ///
     /// Refuses empty and oversized keys.
     pub fn read(&self, key: &[u8]) -> Result<Option<Vec<u8>>, StorageError> {
+        self.owner.ensure_accessible(self.namespace)?;
         validate_key(key)?;
         if let Some(value) = self.writes.get(key) {
             return Ok(value.clone());
@@ -315,6 +361,7 @@ impl StorageTransaction<'_> {
     ///
     /// Refuses empty or oversized keys and oversized values.
     pub fn write(&mut self, key: &[u8], value: &[u8]) -> Result<(), StorageError> {
+        self.owner.ensure_accessible(self.namespace)?;
         validate_key(key)?;
         if value.len() > MAX_STORAGE_VALUE_BYTES {
             return Err(StorageError::ValueTooLarge);
@@ -329,6 +376,7 @@ impl StorageTransaction<'_> {
     ///
     /// Refuses empty and oversized keys.
     pub fn delete(&mut self, key: &[u8]) -> Result<(), StorageError> {
+        self.owner.ensure_accessible(self.namespace)?;
         validate_key(key)?;
         self.writes.insert(key.to_vec(), None);
         Ok(())

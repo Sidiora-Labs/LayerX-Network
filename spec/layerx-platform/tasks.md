@@ -1181,7 +1181,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Prove no cell survives a drop and no adjacent namespace is touched by it, asserted on storage contents across a plane holding several namespaces.
     - Test drop of an empty namespace, a namespace at the declared cell ceiling, and a drop followed by a write in the same activity.
     - _Requirements: 36.4_
-  - [ ] 29.5 Charge storage occupancy over time as its own resource class
+  - [ ] 29.5 Charge storage occupancy over time as its own resource class — **Implemented - qualification pending**
     - Add an occupancy resource class measured as namespace bytes held across batches, distinct from the one-off read and write classes the meter already enforces.
     - Price occupancy through the fee schedule and charge it to the account declared responsible for the namespace, so persistent state is paid for as long as it persists.
     - Account occupancy deterministically from protocol state - the batch sequence and the recorded namespace size - with no wall-clock input anywhere.

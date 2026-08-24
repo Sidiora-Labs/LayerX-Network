@@ -91,6 +91,7 @@ lxp_result lxp_precondition_check(const lxp_transfer_leg *legs,
     const lxp_transfer_leg *leg;
     const lxp_transfer_asset_state *asset;
     lxp_u128 computed;
+    bool occupancy_mandate;
     if (legs == NULL || context == NULL) return LXP_ERR_NON_CANONICAL;
     if (context->has_client_balance) return LXP_ERR_CLIENT_SUPPLIED_BALANCE;
     if (leg_count == 0U || leg_count > LXP_MAX_TRANSFER_SET_LEGS)
@@ -111,11 +112,22 @@ lxp_result lxp_precondition_check(const lxp_transfer_leg *legs,
         lxp_result custody_status = custody_spend_check(leg, context);
         if (custody_status != LXP_OK) return custody_status;
     }
+    occupancy_mandate = context->debit_authority_kind ==
+                            LXP_AUTH_OCCUPANCY_RESPONSIBILITY &&
+                        context->protocol_system_capability &&
+                        context->origin_module_id == LXP_MODULE_PROGRAMS &&
+                        leg->reason == LXP_REASON_STORAGE_OCCUPANCY &&
+                        leg->from->kind == LX_ACCOUNT_AGENT_MAIN &&
+                        memcmp(context->authorized_from, leg->from->id, 32U) == 0;
+    if (context->debit_authority_kind ==
+            LXP_AUTH_OCCUPANCY_RESPONSIBILITY && !occupancy_mandate)
+        return LXP_ERR_UNAUTHORIZED_DEBIT;
     if ((privileged_system(leg->from->kind) &&
          !context->protocol_system_capability) ||
         (!privileged_system(leg->from->kind) &&
          !(context->protocol_system_capability &&
-           leg->from->kind == LX_ACCOUNT_AGENT_MARGIN) &&
+           (leg->from->kind == LX_ACCOUNT_AGENT_MARGIN ||
+            occupancy_mandate)) &&
          memcmp(context->authorized_from, leg->from->id, 32U) != 0))
         return LXP_ERR_UNAUTHORIZED_DEBIT;
     if (!context->protocol_system_capability && context->actor_sequence <
@@ -194,7 +206,8 @@ lxp_result lxp_apply_transfer(lxp_transfer_leg *leg,
     status = lxp_precondition_check(leg, 1U, context);
     if (status != LXP_OK) return status;
     status = lxp_balance_apply_leg(leg, result);
-    if (status == LXP_OK)
+    if (status == LXP_OK && context->debit_authority_kind !=
+                            LXP_AUTH_OCCUPANCY_RESPONSIBILITY)
         ++(context->sequence_account != NULL ? context->sequence_account :
                                               leg->from)->next_sequence;
     return status;

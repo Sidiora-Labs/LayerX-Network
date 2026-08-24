@@ -31,7 +31,8 @@ static const domain_tag_entry domain_tags[LXP_DOMAIN_TAG_COUNT] = {
 
 bool lxp_protocol_version_supported(uint16_t protocol_version)
 {
-    return protocol_version == (uint16_t)LXP_PROTOCOL_VERSION;
+    return protocol_version == (uint16_t)LXP_PROTOCOL_VERSION_LEGACY ||
+           protocol_version == (uint16_t)LXP_PROTOCOL_VERSION_OCCUPANCY;
 }
 
 bool lxp_network_id_matches(uint32_t configured_network_id,

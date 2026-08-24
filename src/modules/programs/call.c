@@ -3,6 +3,7 @@
 #include "artifact.h"
 #include "event.h"
 #include "storage.h"
+#include "occupancy.h"
 
 #include "layerx/lxp_crypto.h"
 #include "layerx/lxp_hash.h"
@@ -21,6 +22,7 @@ enum {
 
 typedef struct lxp_programs_call_catalog_entry {
     uint8_t program_id[32];
+    uint8_t owner[32];
     uint8_t code_hash[32];
     uint32_t wasm_length;
     uint16_t abi_version;
@@ -50,6 +52,7 @@ struct lxp_programs_call_activity {
     lxp_effect_buffer *effects;
     lxp_transfer_set *transfer_set;
     lxp_receipt transfer_receipt;
+    lxp_programs_occupancy_bridge *occupancy;
     uint8_t transfer_leg_written[LXP_MAX_TRANSFER_SET_LEGS];
     uint16_t transfer_leg_count;
     bool transfer_applied;
@@ -349,6 +352,7 @@ static lxp_result catalog_fill_visit(const uint8_t *key, size_t key_length,
         return LXP_FATAL_INVARIANT;
     entry = &value->catalog[value->catalog_cursor];
     (void)memcpy(entry->program_id, key + 8U, 32U);
+    (void)memcpy(entry->owner, record + 1U, 32U);
     (void)memcpy(entry->code_hash, record + 33U, 32U);
     entry->abi_version = read_u16(record + 65U);
     status = lxp_programs_artifact_open(value->ctx, entry->program_id,
@@ -425,6 +429,7 @@ lxp_result layerx_programs_call_catalog_identity_byte(
     if (entry == NULL || offset >= 32U) return LXP_ERR_NON_CANONICAL;
     if (section == 0U) bytes = entry->program_id;
     else if (section == 1U) bytes = entry->code_hash;
+    else if (section == 2U) bytes = entry->owner;
     else return LXP_ERR_UNKNOWN_FIELD;
     return (lxp_result)bytes[offset];
 }
@@ -753,6 +758,10 @@ lxp_result layerx_programs_call_terminal_begin(
         runtime_version == 0U || abi_version == 0U || fee_schedule_version == 0U ||
         graph_length == 0U || terminal_length == 0U || events_length == 0U)
         return LXP_ERR_NON_CANONICAL;
+    if (value->ctx->protocol_version == LXP_PROTOCOL_VERSION_OCCUPANCY &&
+        terminal_kind == LXP_PROGRAM_TERMINAL_SUCCESS &&
+        (value->occupancy == NULL || !value->occupancy->applied))
+        return LXP_FATAL_INVARIANT;
     if (terminal_kind == LXP_PROGRAM_TERMINAL_SUCCESS) {
         if (value->transfer_set == NULL) {
             if (!lxp_ct_is_zero(transfer_root, sizeof(transfer_root)))
@@ -829,6 +838,8 @@ lxp_result layerx_programs_call_terminal_publish(uint64_t token)
     if (status != LXP_OK) return status;
     (void)memset(&outcome, 0, sizeof(outcome));
     outcome.present = true;
+    outcome.encoding_version = value->ctx->protocol_version ==
+        LXP_PROTOCOL_VERSION_OCCUPANCY ? 2U : 1U;
     outcome.terminal_kind = value->terminal.terminal_kind;
     outcome.result_code = value->terminal.result_code;
     outcome.runtime_version = value->terminal.runtime_version;
@@ -841,6 +852,25 @@ lxp_result layerx_programs_call_terminal_publish(uint64_t token)
     outcome.output_values = value->terminal.output_values;
     outcome.output_bytes = value->terminal.output_bytes;
     outcome.fee_units = value->terminal.fee_units;
+    if (outcome.encoding_version == 2U)
+        (void)memcpy(outcome.fee_schedule_prices,
+                     admission->fee_schedule_prices,
+                     sizeof(outcome.fee_schedule_prices));
+    if (outcome.encoding_version == 2U &&
+        outcome.terminal_kind == LXP_PROGRAM_TERMINAL_SUCCESS) {
+        outcome.occupancy_byte_batches =
+            value->occupancy->receipt.byte_batches;
+        outcome.occupancy_fee_units =
+            value->occupancy->receipt.fee_units;
+        (void)memcpy(outcome.occupancy_asset_id,
+                     value->occupancy->receipt.occupancy_asset_id, 32U);
+        (void)memcpy(outcome.occupancy_evidence_digest,
+                     value->occupancy->receipt.settlement_evidence_digest,
+                     sizeof(outcome.occupancy_evidence_digest));
+        (void)memcpy(outcome.occupancy_transfer_root,
+                     value->occupancy->receipt.transfer_set_root,
+                     sizeof(outcome.occupancy_transfer_root));
+    }
     (void)memcpy(outcome.call_graph_root, graph_root, sizeof(graph_root));
     (void)memcpy(outcome.terminal_payload_root, terminal_root, sizeof(terminal_root));
     if (outcome.terminal_kind != LXP_PROGRAM_TERMINAL_SUCCESS)
@@ -1018,6 +1048,7 @@ static lxp_result call_scalar_begin(const lxp_programs_call_activity *value,
     }
     return layerx_programs_call_begin(
         (uint64_t)(uintptr_t)value,
+        (uint64_t)(uintptr_t)value->occupancy,
         program[0], program[1], program[2], program[3],
         principal[0], principal[1], principal[2], principal[3],
         authority_hash[0], authority_hash[1], authority_hash[2], authority_hash[3],
@@ -1025,6 +1056,11 @@ static lxp_result call_scalar_begin(const lxp_programs_call_activity *value,
         admission->signed_fee_limit.hi, admission->signed_fee_limit.lo,
         admission->available_fee_units.hi, admission->available_fee_units.lo,
         admission->fee_schedule_version, admission->parameter_version,
+        admission->fee_schedule_prices[0], admission->fee_schedule_prices[1],
+        admission->fee_schedule_prices[2], admission->fee_schedule_prices[3],
+        admission->fee_schedule_prices[4], admission->fee_schedule_prices[5],
+        admission->fee_schedule_prices[6], lxp_ctx_batch_number(value->ctx),
+        value->ctx->protocol_version,
         value->abi_version, value->entrypoint_length, value->wasm_length,
         value->calldata_length,
         value->capabilities_length, value->response_capacity,
@@ -1284,6 +1320,7 @@ lxp_result lxp_programs_call_execute(
     lxp_programs_call_activity *value =
         (lxp_programs_call_activity *)decoded;
     lxp_result status;
+    void *allocation;
     if (ctx == NULL || activity == NULL || authority == NULL || value == NULL ||
         activity->activity_type != LX_PROGRAMS_CALL)
         return LXP_ERR_NON_CANONICAL;
@@ -1292,6 +1329,17 @@ lxp_result lxp_programs_call_execute(
     status = lxp_ctx_bind_activity_state(ctx, value, call_activity_release);
     if (status != LXP_OK) return status;
     status = call_catalog_build(value);
+    if (status != LXP_OK) return status;
+    status = lxp_ctx_arena_alloc(ctx, sizeof(*value->occupancy),
+                                 _Alignof(lxp_programs_occupancy_bridge),
+                                 &allocation);
+    if (status != LXP_OK) return status;
+    value->occupancy = (lxp_programs_occupancy_bridge *)allocation;
+    status = lxp_programs_occupancy_bridge_init(value->occupancy, ctx);
+    if (status == LXP_OK &&
+        ctx->protocol_version == LXP_PROTOCOL_VERSION_OCCUPANCY)
+        status = lxp_programs_occupancy_bind_call(
+            value->occupancy, value->program_id, value->budget);
     if (status != LXP_OK) return status;
     /* The Rust boundary consumes this exact arena-owned activity once. It must
      * publish into the existing C journal before reporting success. */

@@ -95,6 +95,7 @@ lxp_result lxp_ctx_emit_transfer_set(lxp_module_ctx *ctx,
 lxp_result lxp_ctx_emit_event(lxp_module_ctx *ctx, uint16_t event_type,
                               const uint8_t *body, size_t body_length);
 uint64_t lxp_ctx_batch_timestamp_ms(const lxp_module_ctx *ctx);
+uint64_t lxp_ctx_batch_number(const lxp_module_ctx *ctx);
 uint64_t lxp_ctx_epoch(const lxp_module_ctx *ctx);
 uint64_t lxp_ctx_global_sequence(const lxp_module_ctx *ctx);
 lxp_result lxp_ctx_read_param(const lxp_module_ctx *ctx, uint32_t parameter_id,

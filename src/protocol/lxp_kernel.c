@@ -1,6 +1,7 @@
 #include "layerx/lxp_kernel.h"
 
 #include "layerx/lxp_admission.h"
+#include "layerx/lxp_crypto.h"
 #include "layerx/lxp_hash.h"
 #include "layerx/programs.h"
 
@@ -53,9 +54,19 @@ lxp_result lxp_kernel_bind_module_runtime(lxp_kernel *kernel,
                                           uint16_t module_id,
                                           void *runtime)
 {
+    lxp_result status;
     if (kernel == NULL || runtime == NULL || module_id == 0U ||
         module_id > LXP_MODULE_RESERVED_COUNT)
         return LXP_ERR_NON_CANONICAL;
+    if (module_id == LXP_MODULE_PROGRAMS) {
+        lx_programs_transfer_runtime *programs_runtime =
+            (lx_programs_transfer_runtime *)runtime;
+        if (programs_runtime->accounts == NULL)
+            return LXP_ERR_NON_CANONICAL;
+        status = lxp_state_store_bind_accounts(
+            kernel->state, programs_runtime->accounts);
+        if (status != LXP_OK) return status;
+    }
     kernel->module_runtime[module_id] = runtime;
     if (module_id == LXP_MODULE_PROGRAMS &&
         kernel->fee_transaction.prepare == NULL)
@@ -311,6 +322,41 @@ typedef struct compact_receipt {
     lxp_program_outcome program_outcome;
 } compact_receipt;
 
+typedef struct legacy_program_outcome_v1 {
+    bool present;
+    uint8_t terminal_kind;
+    lxp_result result_code;
+    uint16_t runtime_version;
+    uint16_t abi_version;
+    uint32_t fee_schedule_version;
+    uint64_t cpu_fuel;
+    uint64_t memory_bytes;
+    uint64_t storage_read_bytes;
+    uint64_t storage_write_bytes;
+    uint32_t output_values;
+    uint64_t output_bytes;
+    lxp_u128 fee_units;
+    uint8_t call_graph_root[32];
+    uint8_t terminal_payload_root[32];
+    uint8_t transfer_root[32];
+} legacy_program_outcome_v1;
+
+typedef struct legacy_program_compact_receipt_v1 {
+    uint16_t protocol_version;
+    uint8_t activity_id[32];
+    uint64_t global_sequence;
+    uint8_t previous_state_root[32];
+    uint8_t resulting_state_root[32];
+    uint8_t activity_root[32];
+    lxp_result result_code;
+    lxp_u128 fee_charged;
+    uint8_t batch_id[32];
+    uint16_t module_id;
+    uint32_t module_version;
+    uint32_t parameter_version;
+    legacy_program_outcome_v1 program_outcome;
+} legacy_program_compact_receipt_v1;
+
 typedef struct legacy_compact_receipt {
     uint16_t protocol_version;
     uint8_t activity_id[32];
@@ -325,12 +371,226 @@ typedef struct legacy_compact_receipt {
     uint32_t parameter_version;
 } legacy_compact_receipt;
 
+enum { COMPACT_RECEIPT_V2_BYTES = 560 };
+static const uint8_t compact_receipt_v2_magic[5] = {
+    'L', 'X', 'R', 'C', '2'
+};
+
+static void compact_write_u16(uint8_t *bytes, uint16_t value)
+{
+    bytes[0] = (uint8_t)(value >> 8U);
+    bytes[1] = (uint8_t)value;
+}
+
+static void compact_write_u32(uint8_t *bytes, uint32_t value)
+{
+    bytes[0] = (uint8_t)(value >> 24U);
+    bytes[1] = (uint8_t)(value >> 16U);
+    bytes[2] = (uint8_t)(value >> 8U);
+    bytes[3] = (uint8_t)value;
+}
+
+static void compact_write_u64(uint8_t *bytes, uint64_t value)
+{
+    size_t index;
+    for (index = 0U; index < 8U; ++index)
+        bytes[index] = (uint8_t)(value >> (56U - 8U * index));
+}
+
+static uint16_t compact_read_u16(const uint8_t *bytes)
+{
+    return (uint16_t)(((uint16_t)bytes[0] << 8U) | bytes[1]);
+}
+
+static uint32_t compact_read_u32(const uint8_t *bytes)
+{
+    return ((uint32_t)bytes[0] << 24U) | ((uint32_t)bytes[1] << 16U) |
+           ((uint32_t)bytes[2] << 8U) | bytes[3];
+}
+
+static uint64_t compact_read_u64(const uint8_t *bytes)
+{
+    uint64_t value = 0U;
+    size_t index;
+    for (index = 0U; index < 8U; ++index)
+        value = (value << 8U) | bytes[index];
+    return value;
+}
+
+static lxp_result compact_receipt_v2_encode(
+    const lxp_receipt *receipt, uint8_t bytes[COMPACT_RECEIPT_V2_BYTES])
+{
+    const lxp_program_outcome *outcome;
+    size_t offset = 0U;
+    size_t index;
+    if (receipt == NULL || bytes == NULL ||
+        !lxp_protocol_version_supported(receipt->protocol_version) ||
+        receipt->program_outcome.encoding_version > 2U)
+        return LXP_ERR_NON_CANONICAL;
+    outcome = &receipt->program_outcome;
+#define COMPACT_COPY(value, length) do { \
+    (void)memcpy(bytes + offset, (value), (length)); \
+    offset += (length); \
+} while (0)
+#define COMPACT_U16(value) do { \
+    compact_write_u16(bytes + offset, (value)); offset += 2U; \
+} while (0)
+#define COMPACT_U32(value) do { \
+    compact_write_u32(bytes + offset, (value)); offset += 4U; \
+} while (0)
+#define COMPACT_U64(value) do { \
+    compact_write_u64(bytes + offset, (value)); offset += 8U; \
+} while (0)
+#define COMPACT_U128(value) do { \
+    lxp_result compact_status = lxp_u128_to_be((value), bytes + offset); \
+    if (compact_status != LXP_OK) return compact_status; \
+    offset += 16U; \
+} while (0)
+    COMPACT_COPY(compact_receipt_v2_magic, sizeof(compact_receipt_v2_magic));
+    COMPACT_U16(receipt->protocol_version);
+    COMPACT_COPY(receipt->activity_id, 32U);
+    COMPACT_U64(receipt->global_sequence);
+    COMPACT_COPY(receipt->previous_state_root, 32U);
+    COMPACT_COPY(receipt->resulting_state_root, 32U);
+    COMPACT_COPY(receipt->activity_root, 32U);
+    COMPACT_U32((uint32_t)receipt->result_code);
+    COMPACT_U128(receipt->fee_charged);
+    COMPACT_COPY(receipt->batch_id, 32U);
+    COMPACT_U16(receipt->module_id);
+    COMPACT_U32(receipt->module_version);
+    COMPACT_U32(receipt->parameter_version);
+    bytes[offset++] = outcome->present ? 1U : 0U;
+    bytes[offset++] = outcome->encoding_version;
+    bytes[offset++] = outcome->terminal_kind;
+    COMPACT_U32((uint32_t)outcome->result_code);
+    COMPACT_U16(outcome->runtime_version);
+    COMPACT_U16(outcome->abi_version);
+    COMPACT_U32(outcome->fee_schedule_version);
+    COMPACT_U64(outcome->cpu_fuel);
+    COMPACT_U64(outcome->memory_bytes);
+    COMPACT_U64(outcome->storage_read_bytes);
+    COMPACT_U64(outcome->storage_write_bytes);
+    COMPACT_U32(outcome->output_values);
+    COMPACT_U64(outcome->output_bytes);
+    COMPACT_U128(outcome->occupancy_byte_batches);
+    COMPACT_U128(outcome->occupancy_fee_units);
+    for (index = 0U; index < 7U; ++index)
+        COMPACT_U64(outcome->fee_schedule_prices[index]);
+    COMPACT_COPY(outcome->occupancy_asset_id, 32U);
+    COMPACT_COPY(outcome->occupancy_evidence_digest, 32U);
+    COMPACT_COPY(outcome->occupancy_transfer_root, 32U);
+    COMPACT_U128(outcome->fee_units);
+    COMPACT_COPY(outcome->call_graph_root, 32U);
+    COMPACT_COPY(outcome->terminal_payload_root, 32U);
+    COMPACT_COPY(outcome->transfer_root, 32U);
+#undef COMPACT_U128
+#undef COMPACT_U64
+#undef COMPACT_U32
+#undef COMPACT_U16
+#undef COMPACT_COPY
+    return offset == COMPACT_RECEIPT_V2_BYTES ? LXP_OK : LXP_FATAL_INVARIANT;
+}
+
+static lxp_result compact_receipt_v2_decode(
+    const uint8_t bytes[COMPACT_RECEIPT_V2_BYTES], lxp_receipt *receipt)
+{
+    lxp_program_outcome *outcome;
+    size_t offset = 0U;
+    size_t index;
+    if (bytes == NULL || receipt == NULL ||
+        memcmp(bytes, compact_receipt_v2_magic,
+               sizeof(compact_receipt_v2_magic)) != 0)
+        return LXP_FATAL_REPLAY_DIVERGENCE;
+    (void)memset(receipt, 0, sizeof(*receipt));
+#define COMPACT_READ_COPY(value, length) do { \
+    (void)memcpy((value), bytes + offset, (length)); \
+    offset += (length); \
+} while (0)
+#define COMPACT_READ_U16(value) do { \
+    (value) = compact_read_u16(bytes + offset); offset += 2U; \
+} while (0)
+#define COMPACT_READ_U32(value) do { \
+    (value) = compact_read_u32(bytes + offset); offset += 4U; \
+} while (0)
+#define COMPACT_READ_U64(value) do { \
+    (value) = compact_read_u64(bytes + offset); offset += 8U; \
+} while (0)
+#define COMPACT_READ_U128(value) do { \
+    if (lxp_u128_from_be(bytes + offset, &(value)) != LXP_OK) \
+        return LXP_FATAL_REPLAY_DIVERGENCE; \
+    offset += 16U; \
+} while (0)
+    offset += sizeof(compact_receipt_v2_magic);
+    COMPACT_READ_U16(receipt->protocol_version);
+    COMPACT_READ_COPY(receipt->activity_id, 32U);
+    COMPACT_READ_U64(receipt->global_sequence);
+    COMPACT_READ_COPY(receipt->previous_state_root, 32U);
+    COMPACT_READ_COPY(receipt->resulting_state_root, 32U);
+    COMPACT_READ_COPY(receipt->activity_root, 32U);
+    receipt->result_code =
+        (lxp_result)(int32_t)compact_read_u32(bytes + offset);
+    offset += 4U;
+    COMPACT_READ_U128(receipt->fee_charged);
+    COMPACT_READ_COPY(receipt->batch_id, 32U);
+    COMPACT_READ_U16(receipt->module_id);
+    COMPACT_READ_U32(receipt->module_version);
+    COMPACT_READ_U32(receipt->parameter_version);
+    outcome = &receipt->program_outcome;
+    if (bytes[offset] > 1U) return LXP_FATAL_REPLAY_DIVERGENCE;
+    outcome->present = bytes[offset++] != 0U;
+    outcome->encoding_version = bytes[offset++];
+    outcome->terminal_kind = bytes[offset++];
+    outcome->result_code =
+        (lxp_result)(int32_t)compact_read_u32(bytes + offset);
+    offset += 4U;
+    COMPACT_READ_U16(outcome->runtime_version);
+    COMPACT_READ_U16(outcome->abi_version);
+    COMPACT_READ_U32(outcome->fee_schedule_version);
+    COMPACT_READ_U64(outcome->cpu_fuel);
+    COMPACT_READ_U64(outcome->memory_bytes);
+    COMPACT_READ_U64(outcome->storage_read_bytes);
+    COMPACT_READ_U64(outcome->storage_write_bytes);
+    COMPACT_READ_U32(outcome->output_values);
+    COMPACT_READ_U64(outcome->output_bytes);
+    COMPACT_READ_U128(outcome->occupancy_byte_batches);
+    COMPACT_READ_U128(outcome->occupancy_fee_units);
+    for (index = 0U; index < 7U; ++index)
+        COMPACT_READ_U64(outcome->fee_schedule_prices[index]);
+    COMPACT_READ_COPY(outcome->occupancy_asset_id, 32U);
+    COMPACT_READ_COPY(outcome->occupancy_evidence_digest, 32U);
+    COMPACT_READ_COPY(outcome->occupancy_transfer_root, 32U);
+    COMPACT_READ_U128(outcome->fee_units);
+    COMPACT_READ_COPY(outcome->call_graph_root, 32U);
+    COMPACT_READ_COPY(outcome->terminal_payload_root, 32U);
+    COMPACT_READ_COPY(outcome->transfer_root, 32U);
+#undef COMPACT_READ_U128
+#undef COMPACT_READ_U64
+#undef COMPACT_READ_U32
+#undef COMPACT_READ_U16
+#undef COMPACT_READ_COPY
+    if (offset != COMPACT_RECEIPT_V2_BYTES ||
+        !lxp_protocol_version_supported(receipt->protocol_version) ||
+        (outcome->encoding_version != 1U &&
+         outcome->encoding_version != 2U) ||
+        (outcome->present && receipt->module_id != LXP_MODULE_PROGRAMS) ||
+        (receipt->protocol_version == LXP_PROTOCOL_VERSION_OCCUPANCY &&
+         outcome->present && outcome->encoding_version != 2U) ||
+        (receipt->protocol_version == LXP_PROTOCOL_VERSION_LEGACY &&
+         outcome->present && outcome->encoding_version != 1U))
+        return LXP_FATAL_REPLAY_DIVERGENCE;
+    return LXP_OK;
+}
+
 static lxp_result receipt_restore_compact(const uint8_t *bytes, size_t length,
                                           lxp_receipt *receipt)
 {
     const compact_receipt *compact;
     if (bytes == NULL || receipt == NULL)
         return LXP_FATAL_REPLAY_DIVERGENCE;
+    if (length == COMPACT_RECEIPT_V2_BYTES &&
+        memcmp(bytes, compact_receipt_v2_magic,
+               sizeof(compact_receipt_v2_magic)) == 0)
+        return compact_receipt_v2_decode(bytes, receipt);
     if (length == sizeof(legacy_compact_receipt)) {
         const legacy_compact_receipt *legacy =
             (const legacy_compact_receipt *)bytes;
@@ -348,6 +608,56 @@ static lxp_result receipt_restore_compact(const uint8_t *bytes, size_t length,
         receipt->module_id = legacy->module_id;
         receipt->module_version = legacy->module_version;
         receipt->parameter_version = legacy->parameter_version;
+        return LXP_OK;
+    }
+    if (length == sizeof(legacy_program_compact_receipt_v1)) {
+        const legacy_program_compact_receipt_v1 *legacy =
+            (const legacy_program_compact_receipt_v1 *)bytes;
+        (void)memset(receipt, 0, sizeof(*receipt));
+        receipt->protocol_version = legacy->protocol_version;
+        (void)memcpy(receipt->activity_id, legacy->activity_id, 32U);
+        receipt->global_sequence = legacy->global_sequence;
+        (void)memcpy(receipt->previous_state_root,
+                     legacy->previous_state_root, 32U);
+        (void)memcpy(receipt->resulting_state_root,
+                     legacy->resulting_state_root, 32U);
+        (void)memcpy(receipt->activity_root, legacy->activity_root, 32U);
+        receipt->result_code = legacy->result_code;
+        receipt->fee_charged = legacy->fee_charged;
+        (void)memcpy(receipt->batch_id, legacy->batch_id, 32U);
+        receipt->module_id = legacy->module_id;
+        receipt->module_version = legacy->module_version;
+        receipt->parameter_version = legacy->parameter_version;
+        receipt->program_outcome.present = legacy->program_outcome.present;
+        receipt->program_outcome.encoding_version = 1U;
+        receipt->program_outcome.terminal_kind =
+            legacy->program_outcome.terminal_kind;
+        receipt->program_outcome.result_code =
+            legacy->program_outcome.result_code;
+        receipt->program_outcome.runtime_version =
+            legacy->program_outcome.runtime_version;
+        receipt->program_outcome.abi_version =
+            legacy->program_outcome.abi_version;
+        receipt->program_outcome.fee_schedule_version =
+            legacy->program_outcome.fee_schedule_version;
+        receipt->program_outcome.cpu_fuel = legacy->program_outcome.cpu_fuel;
+        receipt->program_outcome.memory_bytes =
+            legacy->program_outcome.memory_bytes;
+        receipt->program_outcome.storage_read_bytes =
+            legacy->program_outcome.storage_read_bytes;
+        receipt->program_outcome.storage_write_bytes =
+            legacy->program_outcome.storage_write_bytes;
+        receipt->program_outcome.output_values =
+            legacy->program_outcome.output_values;
+        receipt->program_outcome.output_bytes =
+            legacy->program_outcome.output_bytes;
+        receipt->program_outcome.fee_units = legacy->program_outcome.fee_units;
+        (void)memcpy(receipt->program_outcome.call_graph_root,
+                     legacy->program_outcome.call_graph_root, 32U);
+        (void)memcpy(receipt->program_outcome.terminal_payload_root,
+                     legacy->program_outcome.terminal_payload_root, 32U);
+        (void)memcpy(receipt->program_outcome.transfer_root,
+                     legacy->program_outcome.transfer_root, 32U);
         return LXP_OK;
     }
     if (length != sizeof(*compact)) return LXP_FATAL_REPLAY_DIVERGENCE;
@@ -375,26 +685,60 @@ static lxp_result receipt_store(lxp_state_journal *journal,
                                 const lxp_activity *activity,
                                 const lxp_receipt *receipt)
 {
-    compact_receipt compact;
-    (void)memset(&compact, 0, sizeof(compact));
-    compact.protocol_version = receipt->protocol_version;
-    (void)memcpy(compact.activity_id, receipt->activity_id, 32U);
-    compact.global_sequence = receipt->global_sequence;
-    (void)memcpy(compact.previous_state_root, receipt->previous_state_root, 32U);
-    (void)memcpy(compact.resulting_state_root, receipt->resulting_state_root,
-                 32U);
-    (void)memcpy(compact.activity_root, receipt->activity_root, 32U);
-    compact.result_code = receipt->result_code;
-    compact.fee_charged = receipt->fee_charged;
-    (void)memcpy(compact.batch_id, receipt->batch_id, 32U);
-    compact.module_id = receipt->module_id;
-    compact.module_version = receipt->module_version;
-    compact.parameter_version = receipt->parameter_version;
-    compact.program_outcome = receipt->program_outcome;
+    if (receipt->protocol_version == LXP_PROTOCOL_VERSION_LEGACY) {
+        legacy_program_compact_receipt_v1 legacy;
+        legacy_program_outcome_v1 *outcome = &legacy.program_outcome;
+        (void)memset(&legacy, 0, sizeof(legacy));
+        legacy.protocol_version = receipt->protocol_version;
+        (void)memcpy(legacy.activity_id, receipt->activity_id, 32U);
+        legacy.global_sequence = receipt->global_sequence;
+        (void)memcpy(legacy.previous_state_root,
+                     receipt->previous_state_root, 32U);
+        (void)memcpy(legacy.resulting_state_root,
+                     receipt->resulting_state_root, 32U);
+        (void)memcpy(legacy.activity_root, receipt->activity_root, 32U);
+        legacy.result_code = receipt->result_code;
+        legacy.fee_charged = receipt->fee_charged;
+        (void)memcpy(legacy.batch_id, receipt->batch_id, 32U);
+        legacy.module_id = receipt->module_id;
+        legacy.module_version = receipt->module_version;
+        legacy.parameter_version = receipt->parameter_version;
+        outcome->present = receipt->program_outcome.present;
+        outcome->terminal_kind = receipt->program_outcome.terminal_kind;
+        outcome->result_code = receipt->program_outcome.result_code;
+        outcome->runtime_version = receipt->program_outcome.runtime_version;
+        outcome->abi_version = receipt->program_outcome.abi_version;
+        outcome->fee_schedule_version =
+            receipt->program_outcome.fee_schedule_version;
+        outcome->cpu_fuel = receipt->program_outcome.cpu_fuel;
+        outcome->memory_bytes = receipt->program_outcome.memory_bytes;
+        outcome->storage_read_bytes =
+            receipt->program_outcome.storage_read_bytes;
+        outcome->storage_write_bytes =
+            receipt->program_outcome.storage_write_bytes;
+        outcome->output_values = receipt->program_outcome.output_values;
+        outcome->output_bytes = receipt->program_outcome.output_bytes;
+        outcome->fee_units = receipt->program_outcome.fee_units;
+        (void)memcpy(outcome->call_graph_root,
+                     receipt->program_outcome.call_graph_root, 32U);
+        (void)memcpy(outcome->terminal_payload_root,
+                     receipt->program_outcome.terminal_payload_root, 32U);
+        (void)memcpy(outcome->transfer_root,
+                     receipt->program_outcome.transfer_root, 32U);
+        return lxp_idempotency_record(
+            journal, activity->actor_did.bytes, activity->actor_did.length,
+            activity->idempotency_key,
+            (const uint8_t *)&legacy, sizeof(legacy));
+    }
+    if (receipt->protocol_version != LXP_PROTOCOL_VERSION_OCCUPANCY)
+        return LXP_ERR_VERSION_UNSUPPORTED;
+    uint8_t compact[COMPACT_RECEIPT_V2_BYTES];
+    lxp_result status = compact_receipt_v2_encode(receipt, compact);
+    if (status != LXP_OK) return status;
     return lxp_idempotency_record(journal, activity->actor_did.bytes,
                                   activity->actor_did.length,
                                   activity->idempotency_key,
-                                  (const uint8_t *)&compact,
+                                  compact,
                                   sizeof(compact));
 }
 
@@ -437,6 +781,8 @@ static lxp_result synthesize_program_call_failure(
     if (status != LXP_OK) return status;
     (void)memset(outcome, 0, sizeof(*outcome));
     outcome->present = true;
+    outcome->encoding_version = activity->protocol_version ==
+        LXP_PROTOCOL_VERSION_OCCUPANCY ? 2U : 1U;
     outcome->terminal_kind = LXP_PROGRAM_TERMINAL_FAILURE;
     outcome->result_code = module_result;
     outcome->runtime_version = 1U;
@@ -503,16 +849,49 @@ lxp_result lxp_kernel_execute_activity(lxp_kernel *kernel,
     bool fee_transaction_open = false;
     void *fee_transaction = NULL;
     bool programs_call;
+    const lx_programs_transfer_runtime *programs_runtime = NULL;
+    lx_programs_fee_schedule programs_fee_schedule;
+    uint8_t programs_occupancy_asset_id[32];
     if (execution != NULL && execution->canonical_events_out != NULL)
         *execution->canonical_events_out = (lxp_byte_span){NULL, 0U};
     if (kernel == NULL || activity == NULL || execution == NULL ||
         receipt == NULL || execution->identities == NULL ||
         execution->authority == NULL || execution->fee_parameters == NULL ||
-        execution->arena == NULL) return LXP_ERR_NON_CANONICAL;
+        execution->arena == NULL || execution->batch_number == 0U)
+        return LXP_ERR_NON_CANONICAL;
     arena_mark = lxp_arena_mark(execution->arena);
     programs_call = lxp_activity_module_id(activity->activity_type) ==
                         LXP_MODULE_PROGRAMS &&
                     lxp_activity_type_ordinal(activity->activity_type) == 3U;
+    if (programs_call) {
+        programs_runtime = (const lx_programs_transfer_runtime *)
+            kernel->module_runtime[LXP_MODULE_PROGRAMS];
+        if (programs_runtime == NULL)
+            return LXP_ERR_VERSION_UNSUPPORTED;
+        if (activity->protocol_version == LXP_PROTOCOL_VERSION_OCCUPANCY) {
+            if (programs_runtime->resolve_occupancy_parameters == NULL)
+                return LXP_ERR_MODULE_DISABLED;
+            (void)memset(&programs_fee_schedule, 0,
+                         sizeof(programs_fee_schedule));
+            (void)memset(programs_occupancy_asset_id, 0,
+                         sizeof(programs_occupancy_asset_id));
+            status = programs_runtime->resolve_occupancy_parameters(
+                programs_runtime->occupancy_parameter_context,
+                execution->parameter_version, &programs_fee_schedule,
+                programs_occupancy_asset_id);
+            if (status != LXP_OK) return status;
+        } else {
+            programs_fee_schedule = programs_runtime->fee_schedule;
+            (void)memcpy(programs_occupancy_asset_id,
+                         programs_runtime->occupancy_asset_id, 32U);
+        }
+        if (programs_fee_schedule.version == 0U ||
+            programs_fee_schedule.version != execution->fee_parameters->version ||
+            (activity->protocol_version == LXP_PROTOCOL_VERSION_OCCUPANCY &&
+             programs_fee_schedule.version != execution->parameter_version) ||
+            lxp_ct_is_zero(programs_occupancy_asset_id, 32U))
+            return LXP_ERR_VERSION_UNSUPPORTED;
+    }
     status = lxp_module_version_for_epoch(
         kernel, lxp_activity_module_id(activity->activity_type),
         execution->epoch, execution->recorded_module_version, &registration);
@@ -595,6 +974,9 @@ lxp_result lxp_kernel_execute_activity(lxp_kernel *kernel,
             execution->arena, false);
         if (status == LXP_OK) module_ctx_initialized = true;
         if (status == LXP_OK)
+            module_ctx.protocol_version = activity->protocol_version;
+        if (status == LXP_OK) module_ctx.batch_number = execution->batch_number;
+        if (status == LXP_OK)
             module_ctx.verified_receipts = execution->verified_receipts;
         if (status == LXP_OK)
             (void)memcpy(module_ctx.activity_id, canonical_activity_id, 32U);
@@ -607,7 +989,21 @@ lxp_result lxp_kernel_execute_activity(lxp_kernel *kernel,
                 execution->fee_balance;
             module_ctx.call_admission.signed_fee_limit = activity->fee_limit;
             module_ctx.call_admission.fee_schedule_version =
-                execution->fee_parameters->version;
+                programs_fee_schedule.version;
+            module_ctx.call_admission.fee_schedule_prices[0] =
+                programs_fee_schedule.cpu;
+            module_ctx.call_admission.fee_schedule_prices[1] =
+                programs_fee_schedule.memory_byte;
+            module_ctx.call_admission.fee_schedule_prices[2] =
+                programs_fee_schedule.storage_read_byte;
+            module_ctx.call_admission.fee_schedule_prices[3] =
+                programs_fee_schedule.storage_write_byte;
+            module_ctx.call_admission.fee_schedule_prices[4] =
+                programs_fee_schedule.output_value;
+            module_ctx.call_admission.fee_schedule_prices[5] =
+                programs_fee_schedule.output_byte;
+            module_ctx.call_admission.fee_schedule_prices[6] =
+                programs_fee_schedule.occupancy_byte_batch;
             module_ctx.call_admission.parameter_version =
                 execution->parameter_version;
             module_ctx.call_admission.present = true;
@@ -626,8 +1022,25 @@ lxp_result lxp_kernel_execute_activity(lxp_kernel *kernel,
                     activity, canonical_activity_id, execution,
                     module_result, pre_runtime_fee,
                     &synthetic_program_outcome);
-                if (status == LXP_OK)
+                if (status == LXP_OK) {
+                    synthetic_program_outcome.fee_schedule_version =
+                        programs_fee_schedule.version;
+                    synthetic_program_outcome.fee_schedule_prices[0] =
+                        programs_fee_schedule.cpu;
+                    synthetic_program_outcome.fee_schedule_prices[1] =
+                        programs_fee_schedule.memory_byte;
+                    synthetic_program_outcome.fee_schedule_prices[2] =
+                        programs_fee_schedule.storage_read_byte;
+                    synthetic_program_outcome.fee_schedule_prices[3] =
+                        programs_fee_schedule.storage_write_byte;
+                    synthetic_program_outcome.fee_schedule_prices[4] =
+                        programs_fee_schedule.output_value;
+                    synthetic_program_outcome.fee_schedule_prices[5] =
+                        programs_fee_schedule.output_byte;
+                    synthetic_program_outcome.fee_schedule_prices[6] =
+                        programs_fee_schedule.occupancy_byte_batch;
                     program_outcome = &synthetic_program_outcome;
+                }
             } else if (program_outcome == NULL) {
                 status = LXP_FATAL_INVARIANT;
             }
@@ -729,7 +1142,22 @@ lxp_result lxp_kernel_execute_activity(lxp_kernel *kernel,
                                                activity->account_sequence);
         identity_sequence_consumed = status == LXP_OK;
     }
-    if (status == LXP_OK) status = lxp_state_journal_commit(kernel->journal);
+    if (status == LXP_OK) {
+        status = lxp_state_journal_commit(kernel->journal);
+        if (status != LXP_OK && !kernel->journal->open) {
+            lxp_result committed_status = LXP_OK;
+            if (fee_policy.apply_module_effects)
+                committed_status = lxp_module_ctx_commit(&module_ctx);
+            else if (module_ctx_initialized)
+                lxp_module_ctx_rollback(&module_ctx);
+            if (fee_transaction_open)
+                close_failed_fee_transaction(kernel, fee_transaction, status);
+            if (committed_status == LXP_OK)
+                (void)memcpy(kernel->current_state_root,
+                             receipt->resulting_state_root, 32U);
+            return committed_status == LXP_OK ? status : LXP_FATAL_INVARIANT;
+        }
+    }
     if (status == LXP_OK && fee_policy.apply_module_effects)
         status = lxp_module_ctx_commit(&module_ctx);
     else if (module_ctx_initialized)

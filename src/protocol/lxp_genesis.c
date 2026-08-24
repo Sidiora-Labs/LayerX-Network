@@ -21,7 +21,7 @@ static lxp_result validate(const lxp_genesis_manifest *manifest)
 {
     size_t i;
     if (manifest == NULL ||
-        manifest->protocol_version != LXP_PROTOCOL_VERSION ||
+        !lxp_protocol_version_supported(manifest->protocol_version) ||
         manifest->network_id == 0U || manifest->genesis_timestamp_ms == 0U ||
         manifest->parameter_count == 0U ||
         manifest->parameter_count > LXP_GENESIS_MAX_PARAMETERS ||
@@ -154,8 +154,9 @@ lxp_result lxp_genesis_encode(
     status = lxp_codec_writer_init(
         &writer, arena, LXP_GENESIS_MAX_ENCODED_BYTES);
     if (status == LXP_OK)
-        status = lxp_codec_write_struct_header(
-            &writer, LXP_GENESIS_STRUCTURE_TAG);
+        status = lxp_codec_write_struct_header_version(
+            &writer, LXP_GENESIS_STRUCTURE_TAG,
+            manifest->protocol_version);
     if (status == LXP_OK) status = encode_content(manifest, &writer);
     if (status == LXP_OK) status = lxp_codec_write_bytes(
         &writer, manifest->genesis_state_root, 32U, 32U);
@@ -190,6 +191,7 @@ lxp_result lxp_genesis_parse(
     lxp_codec_reader reader;
     uint32_t count = 0U;
     uint8_t locked;
+    uint16_t envelope_version = 0U;
     lxp_byte_span value;
     size_t i;
     lxp_result status;
@@ -199,10 +201,12 @@ lxp_result lxp_genesis_parse(
         return LXP_ERR_NON_CANONICAL;
     (void)memset(manifest, 0, sizeof(*manifest));
     status = lxp_codec_reader_init(&reader, bytes, length);
-    if (status == LXP_OK) status = lxp_codec_read_struct_header(
-        &reader, LXP_GENESIS_STRUCTURE_TAG);
+    if (status == LXP_OK) status = lxp_codec_read_struct_header_version(
+        &reader, LXP_GENESIS_STRUCTURE_TAG, &envelope_version);
     if (status == LXP_OK)
         status = lxp_codec_read_u16(&reader, &manifest->protocol_version);
+    if (status == LXP_OK && manifest->protocol_version != envelope_version)
+        status = LXP_ERR_VERSION_UNSUPPORTED;
     if (status == LXP_OK)
         status = lxp_codec_read_u32(&reader, &manifest->network_id);
     if (status == LXP_OK) status = lxp_codec_read_u64(
