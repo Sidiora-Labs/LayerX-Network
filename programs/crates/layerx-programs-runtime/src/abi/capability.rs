@@ -298,6 +298,12 @@ impl CapabilitySet {
         })
     }
 
+    pub(crate) fn has_program_spend(&self) -> bool {
+        self.0
+            .values()
+            .any(|capability| matches!(capability, Capability::ProgramSpend { .. }))
+    }
+
     pub(super) fn grant(&self, key: &CapabilityKey) -> Result<&Capability, AbiError> {
         self.0.get(key).ok_or(AbiError::CapabilityDenied)
     }

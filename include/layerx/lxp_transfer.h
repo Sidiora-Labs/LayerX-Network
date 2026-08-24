@@ -29,6 +29,16 @@ enum {
     LXP_TRANSFER_DEBIT_ONLY = 2
 };
 
+/* Generic per-source authorization resolved before the balance primitive is
+ * entered. The kernel sees only an ordinary source account and an existing
+ * authorization kind; program-specific derivation evidence is verified by the
+ * owning module before it constructs this table. */
+typedef struct lxp_transfer_source_authority {
+    uint8_t authorized_from[32];
+    lxp_authorization_kind debit_authority_kind;
+    bool protocol_system_capability;
+} lxp_transfer_source_authority;
+
 typedef struct lxp_transfer_context {
     const lxp_transfer_asset_state *assets;
     size_t asset_count;
@@ -44,6 +54,8 @@ typedef struct lxp_transfer_context {
     size_t failure_after_leg;
     uint16_t origin_module_id;
     lxp_authorization_kind debit_authority_kind;
+    const lxp_transfer_source_authority *source_authorities;
+    size_t source_authority_count;
 } lxp_transfer_context;
 
 typedef struct lxp_transfer_result {

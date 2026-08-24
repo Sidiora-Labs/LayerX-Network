@@ -157,6 +157,8 @@ lxp_result layerx_programs_call_storage_final_apply(uint64_t token,
 lxp_result layerx_programs_call_catalog_count(uint64_t token);
 lxp_result layerx_programs_call_catalog_wasm_length(uint64_t token,
                                                      uint32_t index);
+lxp_result layerx_programs_call_catalog_abi_version(uint64_t token,
+                                                    uint32_t index);
 lxp_result layerx_programs_call_catalog_identity_byte(
     uint64_t token, uint32_t index, uint16_t section, uint32_t offset);
 lxp_result layerx_programs_call_catalog_wasm_byte(uint64_t token,
@@ -223,11 +225,16 @@ lxp_result layerx_programs_call_event_emit(uint64_t token);
 lxp_result layerx_programs_call_transfer_begin(uint64_t token,
                                                uint16_t leg_count);
 lxp_result layerx_programs_call_transfer_leg(
-    uint64_t token, uint16_t index,
+    uint64_t token, uint16_t index, uint8_t source_kind,
     uint64_t f0, uint64_t f1, uint64_t f2, uint64_t f3,
+    uint64_t o0, uint64_t o1, uint64_t o2, uint64_t o3,
+    uint64_t p0, uint64_t p1, uint64_t p2, uint64_t p3,
+    uint64_t frame_path, uint8_t frame_depth, uint16_t seed_length,
     uint64_t t0, uint64_t t1, uint64_t t2, uint64_t t3,
     uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
     uint64_t amount_hi, uint64_t amount_lo);
+lxp_result layerx_programs_call_transfer_seed_byte(
+    uint64_t token, uint16_t index, uint16_t offset, uint8_t byte);
 lxp_result layerx_programs_call_transfer_apply(uint64_t token);
 lxp_result layerx_programs_call_transfer_root_byte(uint64_t token,
                                                     uint32_t offset);

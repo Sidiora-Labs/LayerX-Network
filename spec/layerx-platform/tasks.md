@@ -1214,7 +1214,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Freeze the derivation behind golden vectors, because a change to it would silently relocate every program-held balance.
     - Test derivation determinism across operating systems, architectures and optimisation levels on the conformance vector set.
     - _Requirements: 37.1_
-  - [ ] 30.2 Authorise transfer legs under program authority
+  - [ ] 30.2 Authorise transfer legs under program authority — **Implemented - qualification pending**
     - Extend the transfer law with a second authorization root beside the invoking principal: a leg whose source is an account the staging program derives, bound to the deriving program and the exact derivation seed.
     - Refuse any program-authorised leg whose source account the staging program cannot derive, and refuse any such leg staged by a frame of the call graph other than the deriving program itself.
     - Keep the kernel transfer primitive the only balance mutation and add no new balance-writing primitive anywhere: INVARIANT 1 applies to program-authorised legs unchanged.

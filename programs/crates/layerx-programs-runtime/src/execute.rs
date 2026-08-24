@@ -356,6 +356,7 @@ impl PreparedAuthorizedActivity {
                         program: leg.program,
                         principal: leg.principal,
                         frame: leg.frame,
+                        source: leg.source.clone(),
                         asset: leg.asset,
                         to: leg.to,
                         amount: leg.amount,
@@ -443,11 +444,12 @@ impl PreparedMonetarySummary {
 }
 
 /// One non-executable transfer-leg fact retained for receipt diagnostics.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PreparedTransferLegSummary {
     program: ProgramId,
     principal: PrincipalId,
     frame: crate::abi::CallFrameId,
+    source: crate::TransferSource,
     asset: [u8; 32],
     to: [u8; 32],
     amount: u128,
@@ -465,6 +467,10 @@ impl PreparedTransferLegSummary {
     #[must_use]
     pub const fn frame(&self) -> crate::abi::CallFrameId {
         self.frame
+    }
+    #[must_use]
+    pub const fn source(&self) -> &crate::TransferSource {
+        &self.source
     }
     #[must_use]
     pub const fn asset(&self) -> [u8; 32] {

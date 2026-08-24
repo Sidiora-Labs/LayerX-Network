@@ -34,26 +34,61 @@ static bool privileged_system(lx_account_kind kind)
 }
 
 static lxp_result custody_spend_check(const lxp_transfer_leg *leg,
-                                      const lxp_transfer_context *context)
+                                      const lxp_transfer_context *context,
+                                      lxp_authorization_kind authority_kind)
 {
     lxp_result status = lx_escrow_authority_check(
-        leg->from, context->debit_authority_kind,
+        leg->from, authority_kind,
         context->origin_module_id, leg->reason);
     if (status != LXP_OK) return status;
     status = lx_budget_authority_check(leg->from,
-                                       context->debit_authority_kind,
+                                       authority_kind,
                                        context->origin_module_id,
                                        leg->reason);
     if (status != LXP_OK) return status;
     status = lx_stream_authority_check(leg->from,
-                                       context->debit_authority_kind,
+                                       authority_kind,
                                        context->origin_module_id,
                                        leg->reason);
     if (status != LXP_OK) return status;
     return lx_perps_authority_check(leg->from,
-                                    context->debit_authority_kind,
+                                    authority_kind,
                                     context->origin_module_id,
                                     leg->reason);
+}
+
+static lxp_result source_authority(
+    const lxp_transfer_leg *leg, const lxp_transfer_context *context,
+    const uint8_t **authorized_from, lxp_authorization_kind *authority_kind,
+    bool *protocol_system_capability)
+{
+    size_t i;
+    size_t matches = 0U;
+    if (leg == NULL || leg->from == NULL || context == NULL ||
+        authorized_from == NULL || authority_kind == NULL ||
+        protocol_system_capability == NULL)
+        return LXP_ERR_NON_CANONICAL;
+    if (context->source_authority_count == 0U) {
+        if (context->source_authorities != NULL) return LXP_ERR_NON_CANONICAL;
+        *authorized_from = context->authorized_from;
+        *authority_kind = context->debit_authority_kind;
+        *protocol_system_capability = context->protocol_system_capability;
+        return LXP_OK;
+    }
+    if (context->source_authorities == NULL ||
+        context->source_authority_count > LXP_MAX_TRANSFER_SET_LEGS)
+        return LXP_ERR_NON_CANONICAL;
+    for (i = 0U; i < context->source_authority_count; ++i) {
+        const lxp_transfer_source_authority *candidate =
+            &context->source_authorities[i];
+        if (memcmp(candidate->authorized_from, leg->from->id, 32U) != 0)
+            continue;
+        *authorized_from = candidate->authorized_from;
+        *authority_kind = candidate->debit_authority_kind;
+        *protocol_system_capability = candidate->protocol_system_capability;
+        ++matches;
+    }
+    return matches == 1U ? LXP_OK : LXP_ERR_UNAUTHORIZED_DEBIT;
 }
 
 lxp_result lxp_ledger_bootstrap_balance(lx_account *account,
@@ -101,6 +136,9 @@ lxp_result lxp_precondition_check(const lxp_transfer_leg *legs,
 {
     const lxp_transfer_leg *leg;
     const lxp_transfer_asset_state *asset;
+    const uint8_t *authorized_from;
+    lxp_authorization_kind authority_kind;
+    bool protocol_system_capability;
     lxp_u128 computed;
     bool occupancy_mandate;
     if (legs == NULL || context == NULL) return LXP_ERR_NON_CANONICAL;
@@ -120,32 +158,36 @@ lxp_result lxp_precondition_check(const lxp_transfer_leg *legs,
         return LXP_ERR_ASSET_MISMATCH;
     if (leg->from->frozen || leg->to->frozen) return LXP_ERR_ACCOUNT_FROZEN;
     {
-        lxp_result custody_status = custody_spend_check(leg, context);
+        lxp_result custody_status = source_authority(
+            leg, context, &authorized_from, &authority_kind,
+            &protocol_system_capability);
+        if (custody_status != LXP_OK) return custody_status;
+        custody_status = custody_spend_check(leg, context, authority_kind);
         if (custody_status != LXP_OK) return custody_status;
     }
-    occupancy_mandate = context->debit_authority_kind ==
+    occupancy_mandate = authority_kind ==
                             LXP_AUTH_OCCUPANCY_RESPONSIBILITY &&
-                        context->protocol_system_capability &&
+                        protocol_system_capability &&
                         context->origin_module_id == LXP_MODULE_PROGRAMS &&
                         leg->reason == LXP_REASON_STORAGE_OCCUPANCY &&
                         leg->from->kind == LX_ACCOUNT_AGENT_MAIN &&
-                        memcmp(context->authorized_from, leg->from->id, 32U) == 0;
-    if (context->debit_authority_kind ==
+                        memcmp(authorized_from, leg->from->id, 32U) == 0;
+    if (authority_kind ==
             LXP_AUTH_OCCUPANCY_RESPONSIBILITY && !occupancy_mandate)
         return LXP_ERR_UNAUTHORIZED_DEBIT;
     if ((privileged_system(leg->from->kind) &&
-         !context->protocol_system_capability) ||
+         !protocol_system_capability) ||
         (!privileged_system(leg->from->kind) &&
-         !(context->protocol_system_capability &&
+         !(protocol_system_capability &&
            (leg->from->kind == LX_ACCOUNT_AGENT_MARGIN ||
             occupancy_mandate)) &&
-         memcmp(context->authorized_from, leg->from->id, 32U) != 0))
+         memcmp(authorized_from, leg->from->id, 32U) != 0))
         return LXP_ERR_UNAUTHORIZED_DEBIT;
-    if (!context->protocol_system_capability && context->actor_sequence <
+    if (!protocol_system_capability && context->actor_sequence <
         (context->sequence_account != NULL ? context->sequence_account->next_sequence :
                                              leg->from->next_sequence))
         return LXP_ERR_SEQUENCE_REUSED;
-    if (!context->protocol_system_capability && context->actor_sequence >
+    if (!protocol_system_capability && context->actor_sequence >
         (context->sequence_account != NULL ? context->sequence_account->next_sequence :
                                              leg->from->next_sequence))
         return LXP_ERR_SEQUENCE_GAP;

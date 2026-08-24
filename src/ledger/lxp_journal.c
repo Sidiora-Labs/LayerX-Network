@@ -67,6 +67,50 @@ static lxp_result accumulator_add(lxp_u256 *value, lxp_u128 amount)
     return status;
 }
 
+static lxp_result source_authorities_check(
+    const lxp_transfer_leg *legs, size_t leg_count,
+    const lxp_transfer_context *context)
+{
+    size_t i;
+    size_t j;
+    if (context->source_authority_count == 0U)
+        return context->source_authorities == NULL ? LXP_OK :
+                                                    LXP_ERR_NON_CANONICAL;
+    if (context->source_authorities == NULL ||
+        context->source_authority_count > leg_count ||
+        context->source_authority_count > LXP_MAX_TRANSFER_SET_LEGS)
+        return LXP_ERR_NON_CANONICAL;
+    for (i = 0U; i < context->source_authority_count; ++i) {
+        const lxp_transfer_source_authority *authority =
+            &context->source_authorities[i];
+        bool used = false;
+        if (authority->debit_authority_kind < LXP_AUTH_OWNER ||
+            authority->debit_authority_kind >
+                LXP_AUTH_OCCUPANCY_RESPONSIBILITY)
+            return LXP_ERR_NON_CANONICAL;
+        for (j = 0U; j < i; ++j)
+            if (memcmp(authority->authorized_from,
+                       context->source_authorities[j].authorized_from,
+                       32U) == 0)
+                return LXP_ERR_NON_CANONICAL;
+        for (j = 0U; j < leg_count; ++j)
+            if (legs[j].from != NULL &&
+                memcmp(authority->authorized_from, legs[j].from->id, 32U) == 0)
+                used = true;
+        if (!used) return LXP_ERR_UNAUTHORIZED_DEBIT;
+    }
+    for (i = 0U; i < leg_count; ++i) {
+        size_t matches = 0U;
+        if (legs[i].from == NULL) return LXP_ERR_NON_CANONICAL;
+        for (j = 0U; j < context->source_authority_count; ++j)
+            if (memcmp(context->source_authorities[j].authorized_from,
+                       legs[i].from->id, 32U) == 0)
+                ++matches;
+        if (matches != 1U) return LXP_ERR_UNAUTHORIZED_DEBIT;
+    }
+    return LXP_OK;
+}
+
 lxp_result lxp_conservation_check(const lxp_transfer_leg *legs,
                                   size_t leg_count)
 {
@@ -158,6 +202,8 @@ lxp_result lxp_apply_transfer_set(lxp_transfer_leg *legs, size_t leg_count,
         original_index[compact_count++] = i;
     }
     if (compact_count == 0U) return LXP_ERR_ZERO_AMOUNT;
+    status = source_authorities_check(compact, compact_count, context);
+    if (status != LXP_OK) return status;
     status = lxp_conservation_check(compact, compact_count);
     if (status != LXP_OK) return status;
     status = lxp_transfer_set_root(compact, compact_count,
