@@ -792,7 +792,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Carry verification status on every displayed protocol fact, exactly as the human plane requires.
     - Test webhook delivery semantics under fault injection: drops, duplicates and out-of-order delivery.
     - _Requirements: 26.5, 26.6_
-  - [ ] 17.6 Ship one-command MCP and A2A installation
+  - [ ] 17.6 Ship one-command MCP and A2A installation — **Implemented - qualification pending**
     - Build layerx install mcp: one command installing a working payment-capable MCP server configuration against the chosen environment.
     - Build layerx install a2a with the same one-command rule for A2A.
     - Verify both installations end to end in CI against a real agent runtime completing a test payment.

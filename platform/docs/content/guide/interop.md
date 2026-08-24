@@ -34,29 +34,33 @@ The relationship between the layers is worth stating plainly: x402 is the transp
 
 ## Agent transports: MCP and A2A
 
-Two more edges exist for the case where the counterparty is a model rather than a service. Both are served by the CLI and both expose exactly the same five tools.
+Two more edges exist for the case where the counterparty is a model rather than a service. Both are served by the CLI and expose the same receipt and canonical-payment tools. Installation targets the hosted testnet or production gateway; it does not silently fall back to the emulator, whose route set does not include hosted key provisioning.
 
 ```
-layerx install mcp --environment testnet --key <key-id> --host claude
-layerx mcp serve --environment testnet --key <key-id>
+layerx environment use testnet --endpoint https://api.testnet.layerx.network --network-id <network-id>
+layerx key create agent-runtime
 
-layerx install a2a --environment testnet --key <key-id> --listen 127.0.0.1:9433
-layerx a2a serve --environment testnet --key <key-id> --listen 127.0.0.1:9433
+layerx install mcp --environment testnet --key agent-runtime \
+  --host claude-code --source-account <64-hex-funded-account> \
+  --asset <64-hex-asset> --token-stdin
+
+layerx install a2a --environment testnet --key agent-runtime \
+  --source-account <64-hex-funded-account> --asset <64-hex-asset> \
+  --listen 127.0.0.1:9433
 ```
 
-`mcp serve` speaks the model context protocol over standard input and output. `a2a serve` publishes an agent card and a task interface on a loopback endpoint. `install` writes the host configuration and registers the transport in one command, so an agent host gains payment capability without anyone hand-editing a JSON config.
+Pipe the short-lived hosted identity session to the first command. It is used only to issue a gateway key scoped to `activity:write` and `receipt:read`; the runtime receives an opaque operating-system credential-store alias, never that identity session or the gateway secret. Repeating the command is deterministic. Use `--rotate` when the scoped gateway credential must be replaced.
+
+`mcp serve` speaks the model context protocol over standard input and output. The supported host names are `layerx`, `claude-code`, `claude-desktop`, `cursor`, and `vscode`. `a2a serve` publishes a standard agent card and task interface on a loopback endpoint. `install a2a` writes the consumed runtime manifest and starts the managed Linux runtime; `layerx a2a status`, `layerx a2a stop`, and `layerx a2a start` provide its lifecycle. Host documents are snapshotted and restored if an installation step fails.
 
 | Tool | Kind | Does |
 |---|---|---|
-| `balance.get` | read | Reads account balance material |
-| `receipt.get` | read | Fetches exact receipt material for one receipt id |
-| `activity.prepare` | write | Quotes a payment from source, destination, currency and amount |
-| `activity.submit` | write | Commits a quote under a caller-supplied idempotency key |
-| `activity.track` | read | Reads the current state of one committed journey |
+| `receipt.get` | read | Fetches gateway-verified receipt material for one activity id |
+| `activity.submit` | write | Builds, signs and submits an Asset SEND from the installation-bound source and asset |
 
-`--read-only` serves only the read tools. It is not a prompt instruction or a policy note - the write tools are not in the surface at all, so a model that decides to spend money finds nothing to call. Every served tool declares its required scope, whether it mutates, and what evidence it produces, and every one of them passes the daemon's policy, capability, budget and audit gates.
+`--read-only` serves only the receipt tool. It is not a prompt instruction or a policy note - the write tool is not in the surface at all, so a model that decides to spend money finds nothing to call. Every served tool declares its enforced hosted-gateway scope, whether it mutates, and what evidence it produces.
 
-Note the shape of `activity.submit`: `quote_id` and `idempotency_key`, both required. A model cannot commit a payment it did not quote, and cannot commit one without a key.
+`activity.submit` never accepts a source account or an asset from a model. Those values are fixed when the runtime is installed. The call supplies the destination, exact integer amount, current account sequence, a validity interval no wider than five minutes, a fee limit and a 32-byte idempotency key. Pending and unknown gateway results remain pending or unknown; a transport failure or protocol refusal is never reported as a completed payment.
 
 ## Enforced by
 

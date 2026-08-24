@@ -717,3 +717,51 @@ symbol = "RedisStore::operation, gateway:idem principal field, interop workspace
 observed = "Durable operation resumption requires binding every idempotency record to its authenticated principal, so new reservations persist a principal field and resume refuses records without the exact principal digest. Redis records created by the earlier hosted gateway schema do not contain that field and intentionally fail closed rather than becoming cross-principal readable. Adding the executable workspace member also changes the Cargo dependency graph, but no build, dependency resolution, lock refresh or qualification command was permitted in this implementation phase."
 assumption = "Deployment qualification will drain or explicitly migrate pre-field pending Redis records and regenerate/review interop/Cargo.lock using the pinned dependency graph before building. It must exercise restart, replay and cross-principal resume against Redis AOF persistence."
 severity = "phase-boundary"
+
+[observation.17.6.1]
+task = "17.6"
+file = "platform/hosted/gateway/src/main.rs, platform/integrations/agents/src/integration.ts, platform/cli/src/toolset.rs"
+symbol = "ProductionRoute, createAgentIntegration, Runtime"
+observed = "The completed task-16.4 AgentMiddleware requires distinct agent-RPC, budget, signer and receipt service contracts authenticated by one Bearer service token. The task-17.4 gateway instead exposes scoped LayerX-Key activity and receipt routes and cannot satisfy those four contracts. The installed runtimes therefore use the stable canonical protocol types and a fixed keyring-backed payment source directly against the gateway; they do not claim the task-16.4 daemon gates or put its broad Bearer token into runtime configuration."
+assumption = "A later hosted agent-service deployment may provide the four task-16.4 contracts and a keyring-alias credential adapter, at which point the installers can select that middleware without changing their MCP/A2A tool inputs. Qualification must not infer budget or capability gating from this task's gateway scope enforcement."
+severity = "dependency-boundary"
+
+[observation.17.6.2]
+task = "17.6"
+file = "platform/hosted/gateway/src/main.rs, platform/cli/src/toolset.rs, platform/cli/tests/install-journey.sh"
+symbol = "read_route, activity.submit, platform-test-agent-install"
+observed = "The hosted gateway intentionally fails GET /v1/state closed because no principal-isolated proof contract exists. A runtime cannot safely discover the payer's account sequence or protocol timestamp from that route, so activity.submit requires the real runtime/CI caller to supply the current sequence and exact bounded timestamps and never guesses or remaps an unavailable state read to a safe value."
+assumption = "Human qualification will provision the dedicated funded journey identity with exact consecutive MCP/A2A sequences, or first integrate a principal-proof state contract and update the journey to read them. Static scheduled sequence variables must be refreshed whenever that identity is used outside this journey."
+severity = "dependency-boundary"
+
+[observation.17.6.3]
+task = "17.6"
+file = "spec/layerx-platform/spec.kvx, platform/hosted/gateway, platform/cli, platform/docs, platform/Makefile.inc, .github/workflows/platform.yml"
+symbol = "task.17.6 touches, scoped gateway keys and hosted install journey"
+observed = "The task declares only the CLI installer and its test file, while a working least-scoped installation against task 17.4 necessarily adds enforced gateway key scopes, canonical payment serving, lock/workspace integration, quickstarts, managed A2A lifecycle and a real hosted CI journey. These paths are required by do_1 through do_5 and req 26.8 rather than unrelated expansion."
+assumption = "Human qualification will review the expanded integration surface and execute the hosted journey with a real operating-system keyring, identity session and funded source. No build, test, smoke, CI, verification or qualification command was run during implementation."
+severity = "task-scope"
+
+[observation.17.6.4]
+task = "17.6"
+file = "platform/cli/src/a2a.rs"
+symbol = "start_installed, stop_installed, installed_status"
+observed = "The managed one-command A2A lifecycle uses Linux /proc process identity and the platform kill utility and explicitly refuses automatic lifecycle management on other operating systems instead of publishing an unconsumed private registry or pretending a detached child is supervised. MCP host configuration remains available on every host whose exact config format is implemented."
+assumption = "Additional native lifecycle backends require separately qualified launchd and Windows service integrations. The five-minute A2A path and CI journey qualify the declared Linux runtime only."
+severity = "platform-scope"
+
+[observation.17.6.5]
+task = "17.6"
+file = "platform/hosted/gateway/src/store.rs"
+symbol = "KeyRecord.scopes, RedisStore::key"
+observed = "Least-scope enforcement makes the scopes field mandatory on every persisted gateway key and fails closed when a pre-scope key record is read. The active task-17.4 implementation did not define a legacy-key migration or a deployment promise that issued keys already exist, so silently granting old keys a default scope would weaken the new boundary."
+assumption = "If qualification upgrades a Redis deployment that already issued task-17.4 keys, operators must revoke and reissue those keys through the scoped self-service contract before serving production routes. Qualification must verify this rollout explicitly rather than treating a scope-less record as authorized."
+severity = "deployment-boundary"
+
+[observation.17.6.6]
+task = "17.6"
+file = "platform/Cargo.lock, spec/layerx-platform/spec.kvx"
+symbol = "task.17.6 touches, cg spec implemented"
+observed = "The required platform lockfile contains the new layerx-wire dependency edge and passed the task's explicit strict scope guard, but cg sync deliberately skips Cargo.lock and the implemented graph check consequently reports that exact declared touch as having no indexed change."
+assumption = "The lifecycle transition is performed without the skipped lockfile touch in the graph-check input and the exact lockfile touch is restored immediately afterward. Qualification must inspect the lockfile delta as part of the declared task surface; this observation does not assert dependency resolution or compilation."
+severity = "workflow-tooling"

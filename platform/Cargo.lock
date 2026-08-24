@@ -1305,6 +1305,7 @@ dependencies = [
  "layerx-programs-runtime",
  "layerx-proof",
  "layerx-types",
+ "layerx-wire",
  "serde",
  "serde_json",
  "sha2",

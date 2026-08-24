@@ -1,12 +1,18 @@
 use std::time::Duration;
 
-use serde_json::Value;
+use serde::de::DeserializeOwned;
+use serde_json::{json, Value};
 use zeroize::Zeroizing;
+
+enum Authorization {
+    Bearer(Zeroizing<String>),
+    Gateway(Zeroizing<String>),
+}
 
 pub struct Client {
     agent: ureq::Agent,
     endpoint: String,
-    token: Option<Zeroizing<String>>,
+    authorization: Option<Authorization>,
 }
 
 impl Client {
@@ -34,21 +40,37 @@ impl Client {
         Ok(Self {
             agent: config.into(),
             endpoint: endpoint.to_owned(),
-            token,
+            authorization: token.map(Authorization::Bearer),
         })
+    }
+
+    pub fn new_gateway(endpoint: &str, credential: Zeroizing<String>) -> Result<Self, String> {
+        let (id, secret) = credential
+            .split_once(':')
+            .ok_or_else(|| "stored gateway credential is malformed".to_owned())?;
+        if id.is_empty()
+            || id.len() > 64
+            || !id.bytes().all(|byte| byte.is_ascii_alphanumeric())
+            || !secret.starts_with("lxp_live_")
+            || secret.len() != 73
+        {
+            return Err("stored gateway credential is malformed".to_owned());
+        }
+        let mut client = Self::new(endpoint, None)?;
+        client.authorization = Some(Authorization::Gateway(credential));
+        Ok(client)
     }
 
     pub fn get(&self, path: &str) -> Result<Value, String> {
         let url = self.url(path)?;
-        let response = match &self.token {
-            Some(token) => self
-                .agent
-                .get(&url)
-                .header("Authorization", &format!("Bearer {}", token.as_str()))
-                .call(),
-            None => self.agent.get(&url).call(),
+        let mut request = self.agent.get(&url);
+        let authorization = self.authorization_header();
+        if let Some(value) = &authorization {
+            request = request.header("Authorization", value.as_str());
         }
-        .map_err(|error| format!("GET {path} failed: {error}"))?;
+        let response = request
+            .call()
+            .map_err(|error| format!("GET {path} failed: {error}"))?;
         decode(response, "GET", path)
     }
 
@@ -60,8 +82,9 @@ impl Client {
     ) -> Result<Value, String> {
         let url = self.url(path)?;
         let mut request = self.agent.post(&url);
-        if let Some(token) = &self.token {
-            request = request.header("Authorization", &format!("Bearer {}", token.as_str()));
+        let authorization = self.authorization_header();
+        if let Some(value) = &authorization {
+            request = request.header("Authorization", value.as_str());
         }
         if let Some(key) = idempotency {
             request = request.header("Idempotency-Key", key);
@@ -70,6 +93,86 @@ impl Client {
             .send_json(body)
             .map_err(|error| format!("POST {path} failed: {error}"))?;
         decode(response, "POST", path)
+    }
+
+    pub fn post_stateful(
+        &self,
+        path: &str,
+        body: &Value,
+        idempotency: &str,
+    ) -> Result<Value, String> {
+        let url = self.url(path)?;
+        let mut request = self.agent.post(&url).header("Idempotency-Key", idempotency);
+        let authorization = self.authorization_header();
+        if let Some(value) = &authorization {
+            request = request.header("Authorization", value.as_str());
+        }
+        let response = match request.send_json(body) {
+            Ok(response) => response,
+            Err(error) => {
+                return Ok(json!({
+                    "state": "unknown",
+                    "failure": {"code": "gateway_transport_unavailable", "detail": error.to_string()},
+                }))
+            }
+        };
+        decode_stateful(response, "POST", path)
+    }
+
+    pub fn post_sensitive<T: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &Value,
+        idempotency: &str,
+    ) -> Result<(u16, T), String> {
+        let url = self.url(path)?;
+        let mut request = self.agent.post(&url).header("Idempotency-Key", idempotency);
+        let authorization = self.authorization_header();
+        if let Some(value) = &authorization {
+            request = request.header("Authorization", value.as_str());
+        }
+        let mut response = request
+            .send_json(body)
+            .map_err(|error| format!("POST {path} failed: {error}"))?;
+        let status = response.status().as_u16();
+        let source =
+            Zeroizing::new(response.body_mut().read_to_string().map_err(|error| {
+                format!("POST {path} returned an unreadable response: {error}")
+            })?);
+        if !response.status().is_success() {
+            let detail = serde_json::from_str::<Value>(&source)
+                .map_or_else(|_| "non-JSON error".to_owned(), |value| concise(&value));
+            return Err(format!("POST {path} returned HTTP {status}: {detail}"));
+        }
+        serde_json::from_str(&source)
+            .map(|value| (status, value))
+            .map_err(|error| format!("POST {path} returned invalid JSON: {error}"))
+    }
+
+    pub fn delete(&self, path: &str) -> Result<Value, String> {
+        let url = self.url(path)?;
+        let mut request = self.agent.delete(&url);
+        let authorization = self.authorization_header();
+        if let Some(value) = &authorization {
+            request = request.header("Authorization", value.as_str());
+        }
+        let response = request
+            .call()
+            .map_err(|error| format!("DELETE {path} failed: {error}"))?;
+        decode(response, "DELETE", path)
+    }
+
+    fn authorization_header(&self) -> Option<Zeroizing<String>> {
+        self.authorization
+            .as_ref()
+            .map(|authorization| match authorization {
+                Authorization::Bearer(value) => {
+                    Zeroizing::new(format!("Bearer {}", value.as_str()))
+                }
+                Authorization::Gateway(value) => {
+                    Zeroizing::new(format!("LayerX-Key {}", value.as_str()))
+                }
+            })
     }
 
     fn url(&self, path: &str) -> Result<String, String> {
@@ -105,6 +208,67 @@ fn decode(
             concise(&value)
         ))
     }
+}
+
+fn decode_stateful(
+    mut response: ureq::http::Response<ureq::Body>,
+    method: &str,
+    path: &str,
+) -> Result<Value, String> {
+    let status = response.status().as_u16();
+    let retry_after = response
+        .headers()
+        .get("Retry-After")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok());
+    let body = match response.body_mut().read_to_string() {
+        Ok(body) => body,
+        Err(error) => {
+            return Ok(json!({
+                "state": "unknown",
+                "failure": {
+                    "code": "gateway_response_unreadable",
+                    "detail": format!("{method} {path} returned an unreadable response: {error}"),
+                    "http_status": status,
+                    "retry_after_seconds": retry_after,
+                },
+            }))
+        }
+    };
+    let value = if body.trim().is_empty() {
+        Value::Null
+    } else {
+        match serde_json::from_str(&body) {
+            Ok(value) => value,
+            Err(error) => {
+                return Ok(json!({
+                    "state": "unknown",
+                    "failure": {
+                        "code": "gateway_response_invalid",
+                        "detail": format!("{method} {path} returned non-JSON data: {error}"),
+                        "http_status": status,
+                        "retry_after_seconds": retry_after,
+                    },
+                }))
+            }
+        }
+    };
+    if (200..300).contains(&status) {
+        return Ok(value);
+    }
+    let state = if (400..500).contains(&status) {
+        "refused"
+    } else {
+        "unknown"
+    };
+    Ok(json!({
+        "state": state,
+        "failure": {
+            "http_status": status,
+            "response": value,
+            "retry_after_seconds": retry_after,
+        }
+    }))
 }
 
 fn concise(value: &Value) -> String {

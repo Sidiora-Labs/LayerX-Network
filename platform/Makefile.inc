@@ -8,7 +8,7 @@ PLATFORM_MANIFEST := platform/Cargo.toml
 	platform-test-android-artifact platform-test-ios-artifact \
 	platform-real-agent-integration \
 	platform-real-ios-integration platform-real-android-integration \
-	platform-test-docs platform-hosted-smoke
+	platform-test-docs platform-hosted-smoke platform-test-agent-install
 
 platform-build:
 	$(PLATFORM_CARGO) build --manifest-path $(PLATFORM_MANIFEST) --locked --workspace
@@ -31,6 +31,7 @@ platform-test-tooling:
 	$(PLATFORM_CARGO) test --manifest-path $(PLATFORM_MANIFEST) --locked -p layerx-platform-testnet
 	sh -n platform/hosted/testnet/run-testnet.sh platform/hosted/testnet/reset-testnet.sh \
 		platform/hosted/testnet/render-status.sh platform/hosted/testnet/tests/hosted-smoke.sh
+	bash -n platform/cli/tests/install-journey.sh
 	@if test -n "$${LAYERX_TESTNET_URL:-}" && test -n "$${LAYERX_CONFORMANCE_ACTIVITIES:-}"; then \
 		sh platform/emulator/tests/conformance.sh \
 			"$${LAYERX_EMULATOR_URL:-http://127.0.0.1:9402}" \
@@ -51,6 +52,19 @@ platform-hosted-smoke:
 	@test -n "$${LAYERX_TEST_ASSET:-}"
 	@test -n "$${LAYERX_TEST_AMOUNT:-}"
 	sh platform/hosted/testnet/tests/hosted-smoke.sh
+
+platform-test-agent-install:
+	@test -n "$${LAYERX_BIN:-}"
+	@test -n "$${LAYERX_GATEWAY_URL:-}"
+	@test -n "$${LAYERX_NETWORK_ID:-}"
+	@test -n "$${LAYERX_IDENTITY_TOKEN:-}"
+	@test -n "$${LAYERX_SIGNING_SEED:-}"
+	@test -n "$${LAYERX_SOURCE_ACCOUNT:-}"
+	@test -n "$${LAYERX_PAYMENT_ASSET:-}"
+	@test -n "$${LAYERX_PAYMENT_DESTINATION:-}"
+	@test -n "$${LAYERX_MCP_SEQUENCE:-}"
+	@test -n "$${LAYERX_A2A_SEQUENCE:-}"
+	bash platform/cli/tests/install-journey.sh
 
 platform-emulator-conformance:
 	@test -n "$${LAYERX_TESTNET_URL:-}" && test -n "$${LAYERX_CONFORMANCE_ACTIVITIES:-}"

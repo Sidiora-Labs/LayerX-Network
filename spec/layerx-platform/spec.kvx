@@ -2161,7 +2161,7 @@ reqs = ["26.5","26.6"]
 
 [task.17.6]
 title = "Ship one-command MCP and A2A installation"
-status = "pending"
+status = "implemented"
 wave = 9
 requires = ["17.1","17.4"]
 work_kind = "implementation"
@@ -2173,7 +2173,7 @@ do_4 = "Document both in the quickstarts with their five-minute paths."
 do_5 = "Keep installed credentials in credential storage with least scope."
 verify_cmd = "make platform-test-tooling"
 symbols = ["platform_install_mcp","platform_install_a2a"]
-touches = ["platform/cli/src/install","platform/cli/tests/install.rs"]
+touches = ["platform/cli/src","platform/cli/tests/install.rs","platform/cli/tests/install-journey.sh","platform/cli/Cargo.toml","platform/Cargo.lock","platform/hosted/gateway","platform/docs","platform/Makefile.inc",".github/workflows/platform.yml","spec/layerx-platform/qualification.kvx"]
 reqs = ["26.8","26.1"]
 
 [task.18]
