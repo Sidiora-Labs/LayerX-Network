@@ -280,7 +280,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Implement rebinding under step-up, keeping the old binding effective until the new receipt verifies, with the security notification.
     - Enforce the single-active-binding invariant, record every binding with its receipts in the audit trail, and test binding and rebinding end to end against a real core.
     - _Requirements: 5.1, 5.4, 5.6, 5.8_
-  - [ ] 5.8 Replace the mounted root secret with a production KMS boundary
+  - [ ] 5.8 Replace the mounted root secret with a production KMS boundary — **Implemented - qualification pending**
     - Refactor custody around a public provider boundary whose production implementation creates, describes, rotates and destroys human and managed-agent keys in a remote KMS or HSM without exporting private key material.
     - Move disclosure-bound signing into that provider so the service submits the exact canonical digest and receives only a signature; no production path may unseal a primary key into application memory.
     - Bind provider key references to principal-scoped records and preserve step-up, audit, rate-limit and typed-refusal semantics across provider failures.
@@ -554,7 +554,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Build the guided emergency exit under Settings with typed confirmation and degraded-mode operability.
     - Run deposit and withdrawal end to end in both shells against the test network.
     - _Requirements: 10.3, 11.2, 18.7_
-  - [ ] 12.4 Build the agent surfaces
+  - [ ] 12.4 Build the agent surfaces — **Implemented - qualification pending**
     - Build agent creation - name, purpose, limit - with the honest creation-journey progress, in both shells.
     - Build the agent list and detail: the desktop master-detail and the mobile stacked screens, with spend-versus-limit from receipts.
     - Build the controls with the confirmation grammar: fund, return, change limit, pause reversible, archive destructive with disposition-first and typed confirmation.
@@ -577,7 +577,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - _Requirements: 14.3, 14.4, 18.9_
 
 - [ ] 13. Build settings, security, support and the explorer plane
-  - [ ] 13.1 Build settings and preferences
+  - [ ] 13.1 Build settings and preferences — **Implemented - qualification pending**
     - Build the settings hub sectioned as profile, security, linked wallet, notifications, advanced and help, with current values on rows.
     - Build notification preferences: per-event classes under channel toggles, the notification detail level, and the non-suppressible security classes presented as such.
     - Build privacy mode masking balances and every derived figure across both shells, persisted per user.

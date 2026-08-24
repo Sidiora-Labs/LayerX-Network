@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { copyEntry } from "../copy/catalog.ts";
@@ -59,6 +60,16 @@ const baseNotificationPreferences: NotificationPreferences = {
   },
   detail: "summary",
 };
+
+test("settings verification runs the authenticated browser cascade", () => {
+  const browserSuite = readFileSync(
+    new URL("./browser/settings.spec.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(browserSuite, /@settings/u);
+  assert.match(browserSuite, /data-private-figure/u);
+  assert.match(browserSuite, /notifications\/preferences/u);
+});
 
 test("settings hub sections enumerate profile security wallet notifications advanced and help", () => {
   const sections = [

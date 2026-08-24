@@ -20,7 +20,7 @@ use layerx_types::verify::VerificationLevel;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
-use crate::custody::{CustodyError, KeyClass, KeyEntropy, KeyId, Keystore};
+use crate::custody::{CustodyError, KeyClass, KeyId, Keystore};
 use crate::store::{PrincipalScope, RowKey, StoreError, Table};
 
 const RECORD_VERSION: u8 = 1;
@@ -656,18 +656,7 @@ impl CreationJourney {
         let descriptor = match keystore.describe(scope.principal(), &key_id) {
             Ok(value) => value,
             Err(CustodyError::KeyNotFound) => {
-                let mut seed = [0_u8; 32];
-                let mut salt = [0_u8; 16];
-                let mut nonce = [0_u8; 24];
-                getrandom::fill(&mut seed).map_err(|_| AgentCreationError::EntropyUnavailable)?;
-                getrandom::fill(&mut salt).map_err(|_| AgentCreationError::EntropyUnavailable)?;
-                getrandom::fill(&mut nonce).map_err(|_| AgentCreationError::EntropyUnavailable)?;
-                match keystore.generate(
-                    scope.principal(),
-                    &key_id,
-                    KeyClass::AgentPrimary,
-                    KeyEntropy::new(seed, salt, nonce)?,
-                ) {
+                match keystore.create(scope.principal(), &key_id, KeyClass::AgentPrimary) {
                     Ok(public_key) => crate::custody::KeyDescriptor {
                         class: KeyClass::AgentPrimary,
                         public_key,

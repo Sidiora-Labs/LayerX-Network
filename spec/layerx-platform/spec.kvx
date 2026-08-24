@@ -1053,7 +1053,7 @@ reqs = ["5.1","5.4","5.6","5.8"]
 
 [task.5.8]
 title = "Replace the mounted root secret with a production KMS boundary"
-status = "pending"
+status = "implemented"
 wave = 7
 requires = ["5.3"]
 work_kind = "implementation"
@@ -1630,7 +1630,7 @@ reqs = ["10.3","11.2","18.7"]
 
 [task.12.4]
 title = "Build the agent surfaces"
-status = "pending"
+status = "implemented"
 wave = 7
 requires = ["11.3","8.2","8.5"]
 work_kind = "implementation"
@@ -1681,7 +1681,7 @@ status = "pending"
 
 [task.13.1]
 title = "Build settings and preferences"
-status = "pending"
+status = "implemented"
 wave = 7
 requires = ["11.2","9.4"]
 work_kind = "implementation"

@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
 use crate::audit::{AuditChain, AuditError, AuditEvent, IdentityEvent};
-use crate::custody::{CustodyError, KeyClass, KeyEntropy, KeyId, Keystore};
+use crate::custody::{CustodyError, KeyClass, KeyId, Keystore};
 use crate::store::{EvidenceRef, PrincipalScope, RowKey, StoreError, Table};
 use crate::trace::TraceId;
 
@@ -573,9 +573,7 @@ impl OnboardingJourney {
         let descriptor = match keystore.describe(scope.principal(), &key_id) {
             Ok(descriptor) => descriptor,
             Err(CustodyError::KeyNotFound) => {
-                let entropy = fresh_key_entropy()?;
-                match keystore.generate(scope.principal(), &key_id, KeyClass::HumanPrimary, entropy)
-                {
+                match keystore.create(scope.principal(), &key_id, KeyClass::HumanPrimary) {
                     Ok(public_key) => crate::custody::KeyDescriptor {
                         class: KeyClass::HumanPrimary,
                         public_key,
@@ -1253,16 +1251,6 @@ fn hash_text(digest: &mut Sha256, value: &str) {
     let length = u32::try_from(value.len()).unwrap_or(u32::MAX);
     digest.update(length.to_be_bytes());
     digest.update(value.as_bytes());
-}
-
-fn fresh_key_entropy() -> Result<KeyEntropy, OnboardingError> {
-    let mut seed = [0_u8; 32];
-    let mut salt = [0_u8; 16];
-    let mut nonce = [0_u8; 24];
-    getrandom::fill(&mut seed).map_err(|_| OnboardingError::EntropyUnavailable)?;
-    getrandom::fill(&mut salt).map_err(|_| OnboardingError::EntropyUnavailable)?;
-    getrandom::fill(&mut nonce).map_err(|_| OnboardingError::EntropyUnavailable)?;
-    KeyEntropy::new(seed, salt, nonce).map_err(Into::into)
 }
 
 fn encode_key_evidence(
