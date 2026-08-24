@@ -522,7 +522,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Enforce required contrast across the package's text and semantic token combinations through automated checks.
     - Wire automated accessibility checks into the browser suites, including 1.5x text-expansion layout checks and locale-aware amount rendering with explicit currency codes.
     - _Requirements: 20.1, 20.2, 20.6, 17.3_
-  - [ ] 11.5 Build the performance machinery
+  - [ ] 11.5 Build the performance machinery — **Implemented - qualification pending**
     - Code-split by route with declared per-route script budgets enforced in CI.
     - Render the explorer plane server-side cacheable.
     - Enforce the paint, interaction and layout-shift budgets in CI on representative pages.
