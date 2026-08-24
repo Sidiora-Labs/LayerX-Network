@@ -54,7 +54,7 @@ impl Fixture {
         let (store, digest) = install_and_open(&store_root, &map, retention_uniform(10));
         let kms = EnvelopeKms::new("kms://onboarding-primary", secret_path.clone())
             .unwrap_or_else(|error| panic!("KMS: {error}"));
-        let keystore = Keystore::open(&custody_root, NETWORK_ID, kms)
+        let keystore = Keystore::open_development(&custody_root, NETWORK_ID, kms)
             .unwrap_or_else(|error| panic!("keystore: {error}"));
         let did = ActivityType::new(ModuleId::Governance, 1)
             .unwrap_or_else(|error| panic!("DID activity: {error:?}"));

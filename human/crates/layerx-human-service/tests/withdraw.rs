@@ -672,7 +672,7 @@ impl Fixture {
         let principal = principal("alice");
         let provider = EnvelopeKms::new("file-kms://human-primary", &secret_path)
             .unwrap_or_else(|error| panic!("KMS provider: {error}"));
-        let keystore = Keystore::open(root.join("custody"), NETWORK_ID, provider)
+        let keystore = Keystore::open_development(root.join("custody"), NETWORK_ID, provider)
             .unwrap_or_else(|error| panic!("keystore: {error}"));
         let key = KeyId::new("human-primary").unwrap_or_else(|error| panic!("key id: {error}"));
         keystore

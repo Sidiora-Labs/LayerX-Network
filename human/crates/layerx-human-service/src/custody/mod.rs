@@ -1,8 +1,14 @@
 //! KMS-backed custody for human and managed-agent signing keys.
 
+mod provider;
 mod sessions;
 mod signer;
 
+pub use provider::{
+    KmsProvider, PrincipalKeyBinding, ProviderDeployment, ProviderKeyDescription,
+    ProviderKeyReference, ProviderSignRequest, RemoteCustodySigner, RemoteKmsProvider,
+    RotationState,
+};
 pub use sessions::{
     AgentContractError, AgentSessionContract, AgentSessionProvision, AgentSessionSecret,
     ManagedAgentState, PlainTime, ProtocolIdentitySnapshot, ProvisionEvidence, RenewalOutcome,
@@ -22,11 +28,10 @@ use std::fs;
 use std::io;
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-use layerx_crypto::keystore::{Keystore as KeyEnvelope, KeystoreEntropy, KeystoreError};
-use layerx_crypto::local::LocalSigner;
-use layerx_crypto::redact::Secret;
-use layerx_crypto::signer::{SignError, Signer as _};
+use layerx_crypto::keystore::{KeystoreEntropy, KeystoreError};
+use layerx_crypto::signer::SignError;
 use zeroize::Zeroizing;
 
 use crate::audit::AuditError;
@@ -34,7 +39,8 @@ use crate::store::{PrincipalId, StoreError};
 
 const IDENTITY_DOMAIN: &[u8] = b"layerx-human-custody/v1";
 const RECORD_MAGIC: &[u8; 4] = b"LXCK";
-const RECORD_VERSION: u8 = 1;
+const RECORD_VERSION: u8 = 2;
+const LEGACY_RECORD_VERSION: u8 = 1;
 const PRINCIPALS_DIR: &str = "principals";
 const KEY_FILE_SUFFIX: &str = ".key";
 const TEMP_FILE_SUFFIX: &str = ".key.tmp";
@@ -112,8 +118,9 @@ impl KeyClass {
     }
 }
 
-/// Caller-supplied entropy for one generated key: the private seed and the
-/// envelope entropy, zeroized on release and never rendered.
+/// Development-only caller-supplied entropy for the file-envelope provider.
+/// Production providers generate primary keys remotely and never accept this
+/// type. Its private seed and envelope entropy are zeroized on release.
 pub struct KeyEntropy {
     seed: Zeroizing<[u8; 32]>,
     envelope: KeystoreEntropy,
@@ -151,6 +158,24 @@ pub enum KmsError {
     Refused,
     /// The sealed envelope bytes are malformed.
     InvalidEnvelope,
+    /// Provider configuration cannot satisfy the bounded protocol.
+    InvalidConfiguration,
+    /// A provider key reference is empty or exceeds its bound.
+    InvalidReference,
+    /// The mutually authenticated provider identity could not be established.
+    Authentication,
+    /// The provider exceeded the declared operation deadline.
+    Timeout,
+    /// The provider returned a malformed or cross-operation response.
+    InvalidResponse,
+    /// The named provider key does not exist.
+    KeyNotFound,
+    /// The provider rejected a conflicting lifecycle operation.
+    Conflict,
+    /// The provider response did not match the principal-scoped key record.
+    Integrity,
+    /// A development-only operation was requested from a production provider.
+    DevelopmentOnly,
 }
 
 impl Display for KmsError {
@@ -159,58 +184,24 @@ impl Display for KmsError {
             Self::Unavailable => "key-management service is unavailable",
             Self::Refused => "key-management service refused the operation",
             Self::InvalidEnvelope => "sealed key envelope is malformed",
+            Self::InvalidConfiguration => "key-management service configuration is invalid",
+            Self::InvalidReference => "key-management key reference is invalid",
+            Self::Authentication => "key-management service authentication failed",
+            Self::Timeout => "key-management service operation timed out",
+            Self::InvalidResponse => "key-management service returned an invalid response",
+            Self::KeyNotFound => "key-management service key does not exist",
+            Self::Conflict => "key-management service lifecycle operation conflicted",
+            Self::Integrity => "key-management key reference integrity failed",
+            Self::DevelopmentOnly => "operation is available only with the development provider",
         })
     }
 }
 
 impl std::error::Error for KmsError {}
 
-/// The boundary inside which private key material exists in the clear. Every
-/// implementation seals seeds into ciphertext envelopes and unseals them only
-/// into zeroizing memory, and none exposes key material on any surface.
-trait KmsKeyProvider: std::fmt::Debug + Send + Sync {
-    /// Returns the non-secret root key reference this provider seals under.
-    fn key_reference(&self) -> &str;
-
-    /// Reports whether the provider can currently reach its root material.
-    ///
-    /// # Errors
-    ///
-    /// Returns the typed unavailability or refusal the next operation would hit.
-    fn probe(&self) -> Result<(), KmsError>;
-
-    /// Seals one private seed into a ciphertext envelope bound to the exact
-    /// identity and network.
-    ///
-    /// # Errors
-    ///
-    /// Returns a typed refusal and never a partially sealed envelope.
-    fn seal(
-        &self,
-        identity: &[u8],
-        network_id: u32,
-        seed: &[u8; 32],
-        entropy: KeystoreEntropy,
-    ) -> Result<Vec<u8>, KmsError>;
-
-    /// Unseals one envelope into zeroizing memory under the exact identity and
-    /// network it was sealed for.
-    ///
-    /// # Errors
-    ///
-    /// Refuses foreign identities, foreign networks and tampered envelopes.
-    fn unseal(
-        &self,
-        identity: &[u8],
-        network_id: u32,
-        envelope: &[u8],
-    ) -> Result<Secret<[u8; 32]>, KmsError>;
-}
-
-/// Working KMS provider performing authenticated envelope encryption under a
-/// root secret the operator mounts at a declared path. The root secret is read
-/// per operation into zeroizing memory and never cached, so removing the mount
-/// makes the provider honestly unavailable rather than silently degraded.
+/// Development-only envelope provider. It performs authenticated envelope
+/// encryption under a file-mounted root secret and is rejected by
+/// [`Keystore::open_production`]. Production uses [`RemoteKmsProvider`].
 pub struct EnvelopeKms {
     key_reference: String,
     secret_path: PathBuf,
@@ -239,7 +230,7 @@ impl EnvelopeKms {
         })
     }
 
-    fn root_secret(&self) -> Result<Zeroizing<Vec<u8>>, KmsError> {
+    pub(super) fn root_secret(&self) -> Result<Zeroizing<Vec<u8>>, KmsError> {
         let file = fs::File::open(&self.secret_path).map_err(|_| KmsError::Unavailable)?;
         let mut secret = Zeroizing::new(Vec::with_capacity(KMS_SECRET_MINIMUM));
         file.take(
@@ -263,7 +254,7 @@ impl std::fmt::Debug for EnvelopeKms {
     }
 }
 
-fn seal_refusal(error: KeystoreError) -> KmsError {
+pub(super) fn seal_refusal(error: KeystoreError) -> KmsError {
     match error {
         KeystoreError::MalformedStorage => KmsError::InvalidEnvelope,
         KeystoreError::InvalidInput
@@ -271,42 +262,6 @@ fn seal_refusal(error: KeystoreError) -> KmsError {
         | KeystoreError::NetworkMismatch
         | KeystoreError::KeyDerivation
         | KeystoreError::AuthenticationFailed => KmsError::Refused,
-    }
-}
-
-impl KmsKeyProvider for EnvelopeKms {
-    fn key_reference(&self) -> &str {
-        &self.key_reference
-    }
-
-    fn probe(&self) -> Result<(), KmsError> {
-        self.root_secret().map(|_| ())
-    }
-
-    fn seal(
-        &self,
-        identity: &[u8],
-        network_id: u32,
-        seed: &[u8; 32],
-        entropy: KeystoreEntropy,
-    ) -> Result<Vec<u8>, KmsError> {
-        let root = self.root_secret()?;
-        let envelope =
-            KeyEnvelope::seal(seed, &root, identity, network_id, entropy).map_err(seal_refusal)?;
-        envelope.to_bytes().map_err(seal_refusal)
-    }
-
-    fn unseal(
-        &self,
-        identity: &[u8],
-        network_id: u32,
-        envelope: &[u8],
-    ) -> Result<Secret<[u8; 32]>, KmsError> {
-        let root = self.root_secret()?;
-        let envelope = KeyEnvelope::from_bytes(envelope).map_err(seal_refusal)?;
-        envelope
-            .open(&root, identity, network_id)
-            .map_err(seal_refusal)
     }
 }
 
@@ -319,6 +274,7 @@ pub enum CustodyError {
     InvalidEntropy,
     InvalidLimits,
     InvalidEvidence,
+    DevelopmentProviderInProduction,
     CorruptState(&'static str),
     KeyExists,
     KeyNotFound,
@@ -350,6 +306,7 @@ impl CustodyError {
             Self::InvalidEntropy => "invalid-entropy",
             Self::InvalidLimits => "invalid-limits",
             Self::InvalidEvidence => "invalid-evidence",
+            Self::DevelopmentProviderInProduction => "development-kms-in-production",
             Self::CorruptState(_) => "corrupt-state",
             Self::KeyExists => "key-exists",
             Self::KeyNotFound => "key-not-found",
@@ -358,6 +315,15 @@ impl CustodyError {
             Self::Kms(KmsError::Unavailable) => "kms-unavailable",
             Self::Kms(KmsError::Refused) => "kms-refused",
             Self::Kms(KmsError::InvalidEnvelope) => "kms-invalid-envelope",
+            Self::Kms(KmsError::InvalidConfiguration) => "kms-invalid-configuration",
+            Self::Kms(KmsError::InvalidReference) => "kms-invalid-reference",
+            Self::Kms(KmsError::Authentication) => "kms-authentication",
+            Self::Kms(KmsError::Timeout) => "kms-timeout",
+            Self::Kms(KmsError::InvalidResponse) => "kms-invalid-response",
+            Self::Kms(KmsError::KeyNotFound) => "kms-key-not-found",
+            Self::Kms(KmsError::Conflict) => "kms-conflict",
+            Self::Kms(KmsError::Integrity) => "kms-integrity",
+            Self::Kms(KmsError::DevelopmentOnly) => "kms-development-only",
             Self::Sign(SignError::DisclosureMismatch(_)) => "disclosure-mismatch",
             Self::Sign(SignError::InvalidDisclosure) => "disclosure-invalid",
             Self::Sign(_) => "signer-refused",
@@ -385,6 +351,9 @@ impl Display for CustodyError {
             Self::InvalidEntropy => formatter.write_str("key entropy is invalid"),
             Self::InvalidLimits => formatter.write_str("signing limits must be non-zero"),
             Self::InvalidEvidence => formatter.write_str("step-up evidence is invalid"),
+            Self::DevelopmentProviderInProduction => {
+                formatter.write_str("development file-envelope KMS is forbidden in production")
+            }
             Self::CorruptState(reason) => write!(formatter, "corrupt custody state: {reason}"),
             Self::KeyExists => formatter.write_str("custody key already exists"),
             Self::KeyNotFound => formatter.write_str("custody key does not exist"),
@@ -458,6 +427,14 @@ pub enum Availability {
     Unavailable,
 }
 
+/// Aggregate integrity of principal-scoped provider key references.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum KeyReferenceIntegrity {
+    Verified,
+    Failed,
+    Unknown,
+}
+
 /// Degradation state surfaced for the custody service.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CustodyStatus {
@@ -465,6 +442,11 @@ pub struct CustodyStatus {
     pub kms: Availability,
     /// Whether the sealed-record storage can be reached.
     pub storage: Availability,
+    /// Whether every persisted provider handle describes the expected key and
+    /// principal binding.
+    pub key_references: KeyReferenceIntegrity,
+    /// Aggregate provider-reported key rotation state.
+    pub rotation: RotationState,
 }
 
 impl CustodyStatus {
@@ -472,8 +454,13 @@ impl CustodyStatus {
     #[must_use]
     pub const fn degraded(self) -> bool {
         !matches!(
-            (self.kms, self.storage),
-            (Availability::Available, Availability::Available)
+            (self.kms, self.storage, self.key_references, self.rotation),
+            (
+                Availability::Available,
+                Availability::Available,
+                KeyReferenceIntegrity::Verified,
+                RotationState::Stable
+            )
         )
     }
 }
@@ -481,34 +468,92 @@ impl CustodyStatus {
 struct KeyRecord {
     class: KeyClass,
     public_key: [u8; 32],
-    envelope: Vec<u8>,
+    binding_digest: Option<[u8; 32]>,
+    provider_reference: ProviderKeyReference,
 }
 
-/// KMS-backed keystore holding every human and managed-agent private key as a
-/// sealed envelope under one principal subtree. Key material at rest is
-/// ciphertext only; unsealed seeds live exclusively in zeroizing memory and no
-/// method returns private material.
+/// KMS-backed keystore holding only provider references and public key facts
+/// under principal-scoped subtrees. Production private keys never enter this
+/// process and no method returns private material.
 #[derive(Debug)]
 pub struct Keystore {
     root: PathBuf,
     network_id: u32,
-    provider: EnvelopeKms,
+    provider: Arc<dyn KmsProvider>,
 }
 
 impl Keystore {
-    /// Opens the keystore at `root` for one network under one KMS provider.
+    /// Opens the production keystore at `root` for one network under a remote
+    /// KMS/HSM provider. Development-only providers are always refused.
     ///
     /// # Errors
     ///
-    /// Refuses network zero, foreign entries in the principals tree, and
-    /// storage failures.
-    pub fn open(
+    /// Refuses development providers, unavailable remote providers, network
+    /// zero, foreign entries in the principals tree and storage failures.
+    pub fn open<P>(
+        root: impl AsRef<Path>,
+        network_id: u32,
+        provider: P,
+    ) -> Result<Self, CustodyError>
+    where
+        P: KmsProvider + 'static,
+    {
+        Self::open_shared(root, network_id, Arc::new(provider), true)
+    }
+
+    /// Opens the explicitly development-only file-envelope keystore.
+    ///
+    /// # Errors
+    ///
+    /// Returns invalid-network, corrupt-tree and storage failures. This method
+    /// cannot accept a production provider.
+    pub fn open_development(
         root: impl AsRef<Path>,
         network_id: u32,
         provider: EnvelopeKms,
     ) -> Result<Self, CustodyError> {
+        Self::open_shared(root, network_id, Arc::new(provider), false)
+    }
+
+    /// Opens a production keystore and refuses a development-only provider or
+    /// an unreachable remote boundary before service startup completes.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed refusal for a development provider, provider readiness
+    /// failure, invalid network, corrupt custody tree or storage failure.
+    pub fn open_production<P>(
+        root: impl AsRef<Path>,
+        network_id: u32,
+        provider: P,
+    ) -> Result<Self, CustodyError>
+    where
+        P: KmsProvider + 'static,
+    {
+        Self::open(root, network_id, provider)
+    }
+
+    fn open_shared(
+        root: impl AsRef<Path>,
+        network_id: u32,
+        provider: Arc<dyn KmsProvider>,
+        production: bool,
+    ) -> Result<Self, CustodyError> {
         if network_id == 0 {
             return Err(CustodyError::InvalidNetwork);
+        }
+        let provider_reference = provider.provider_reference();
+        if provider_reference.is_empty()
+            || provider_reference.len() > KEY_REFERENCE_LIMIT
+            || provider_reference.as_bytes().contains(&0)
+        {
+            return Err(CustodyError::InvalidKeyReference);
+        }
+        if production && provider.deployment() != ProviderDeployment::Production {
+            return Err(CustodyError::DevelopmentProviderInProduction);
+        }
+        if production {
+            provider.probe()?;
         }
         let root = root.as_ref().to_path_buf();
         fs::create_dir_all(&root)?;
@@ -530,7 +575,23 @@ impl Keystore {
     /// Returns the non-secret KMS root key reference in use.
     #[must_use]
     pub fn key_reference(&self) -> &str {
-        self.provider.key_reference()
+        self.provider.provider_reference()
+    }
+
+    /// Creates a key wholly inside the selected provider and returns only its
+    /// public verification key.
+    ///
+    /// # Errors
+    ///
+    /// Refuses duplicates and returns typed provider, integrity and storage
+    /// failures without persisting a partial record.
+    pub fn create(
+        &self,
+        principal: &PrincipalId,
+        key: &KeyId,
+        class: KeyClass,
+    ) -> Result<[u8; 32], CustodyError> {
+        self.create_with(principal, key, class, None)
     }
 
     /// Generates one key inside the KMS boundary and returns only its public
@@ -547,19 +608,32 @@ impl Keystore {
         class: KeyClass,
         entropy: KeyEntropy,
     ) -> Result<[u8; 32], CustodyError> {
+        if self.provider.deployment() != ProviderDeployment::DevelopmentOnly {
+            return Err(CustodyError::Kms(KmsError::DevelopmentOnly));
+        }
+        self.create_with(principal, key, class, Some(entropy))
+    }
+
+    fn create_with(
+        &self,
+        principal: &PrincipalId,
+        key: &KeyId,
+        class: KeyClass,
+        entropy: Option<KeyEntropy>,
+    ) -> Result<[u8; 32], CustodyError> {
         let directory = self.create_principal_directory(principal)?;
         let path = directory.join(format!("{}{KEY_FILE_SUFFIX}", key.as_str()));
         if fs::symlink_metadata(&path).is_ok() {
             return Err(CustodyError::KeyExists);
         }
-        let identity = identity_bytes(principal, key, class);
-        let KeyEntropy { seed, envelope } = entropy;
-        let public_key = LocalSigner::new(*seed).public_key();
-        let sealed = self
-            .provider
-            .seal(&identity, self.network_id, &seed, envelope)?;
-        drop(seed);
-        let record = encode_record(class, &public_key, &sealed)?;
+        let binding = self.binding(principal, key, class)?;
+        let description = match entropy {
+            Some(entropy) => self.provider.create_development_key(&binding, entropy)?,
+            None => self.provider.create_key(&binding)?,
+        };
+        require_description(&binding, class, None, &description)?;
+        let public_key = description.public_key();
+        let record = encode_record(class, &description)?;
         write_atomic(
             &directory,
             &format!("{}{KEY_FILE_SUFFIX}", key.as_str()),
@@ -569,7 +643,8 @@ impl Keystore {
         Ok(public_key)
     }
 
-    /// Describes one held key without touching the KMS boundary.
+    /// Describes one held key and verifies its provider reference against the
+    /// principal-scoped local record.
     ///
     /// # Errors
     ///
@@ -580,10 +655,77 @@ impl Keystore {
         key: &KeyId,
     ) -> Result<KeyDescriptor, CustodyError> {
         let record = self.read_record(principal, key)?;
+        let binding = self.binding(principal, key, record.class)?;
+        self.require_record_binding(&binding, &record)?;
+        let description = self
+            .provider
+            .describe_key(&binding, &record.provider_reference)?;
+        require_description(
+            &binding,
+            record.class,
+            Some(record.public_key),
+            &description,
+        )?;
+        if description.reference() != &record.provider_reference {
+            return Err(CustodyError::Kms(KmsError::Integrity));
+        }
         Ok(KeyDescriptor {
             class: record.class,
-            public_key: record.public_key,
+            public_key: description.public_key(),
         })
+    }
+
+    /// Rotates one key inside the provider and atomically replaces only its
+    /// opaque handle and public facts in local storage.
+    ///
+    /// # Errors
+    ///
+    /// Returns typed provider, principal-binding and storage failures.
+    pub fn rotate(
+        &self,
+        principal: &PrincipalId,
+        key: &KeyId,
+    ) -> Result<KeyDescriptor, CustodyError> {
+        let record = self.read_record(principal, key)?;
+        let binding = self.binding(principal, key, record.class)?;
+        self.require_record_binding(&binding, &record)?;
+        let description = self
+            .provider
+            .rotate_key(&binding, &record.provider_reference)?;
+        require_description(&binding, record.class, None, &description)?;
+        if self.provider.deployment() == ProviderDeployment::Production
+            && description.reference() != &record.provider_reference
+        {
+            return Err(CustodyError::Kms(KmsError::Integrity));
+        }
+        let bytes = encode_record(record.class, &description)?;
+        replace_atomic(
+            &self.principal_directory(principal),
+            &format!("{}{KEY_FILE_SUFFIX}", key.as_str()),
+            &format!("{}{TEMP_FILE_SUFFIX}", key.as_str()),
+            &bytes,
+        )?;
+        Ok(KeyDescriptor {
+            class: record.class,
+            public_key: description.public_key(),
+        })
+    }
+
+    /// Destroys one provider key before removing its local opaque record.
+    ///
+    /// # Errors
+    ///
+    /// Returns typed provider, principal-binding and storage failures. A
+    /// provider refusal never removes the local record.
+    pub fn destroy(&self, principal: &PrincipalId, key: &KeyId) -> Result<(), CustodyError> {
+        let record = self.read_record(principal, key)?;
+        let binding = self.binding(principal, key, record.class)?;
+        self.require_record_binding(&binding, &record)?;
+        self.provider
+            .destroy_key(&binding, &record.provider_reference)?;
+        fs::remove_file(self.key_path(principal, key))?;
+        fs::File::open(self.principal_directory(principal))?.sync_all()?;
+        Ok(())
     }
 
     /// Lists one principal's key identifiers in deterministic order.
@@ -628,31 +770,155 @@ impl Keystore {
             Ok(()) => Availability::Available,
             Err(_) => Availability::Unavailable,
         };
-        let storage = if self.root.is_dir() {
-            Availability::Available
-        } else {
-            Availability::Unavailable
+        let (storage, key_references, rotation) = match self.inspect_records() {
+            Ok((key_references, rotation)) => (Availability::Available, key_references, rotation),
+            Err(_) => (
+                Availability::Unavailable,
+                KeyReferenceIntegrity::Unknown,
+                RotationState::Unknown,
+            ),
         };
-        CustodyStatus { kms, storage }
+        CustodyStatus {
+            kms,
+            storage,
+            key_references,
+            rotation,
+        }
     }
 
-    pub(crate) fn unseal_signer(
+    pub(crate) fn remote_signer(
         &self,
         principal: &PrincipalId,
         key: &KeyId,
-    ) -> Result<(LocalSigner, KeyClass), CustodyError> {
+    ) -> Result<RemoteCustodySigner, CustodyError> {
         let record = self.read_record(principal, key)?;
-        let identity = identity_bytes(principal, key, record.class);
-        let seed = self
+        let binding = self.binding(principal, key, record.class)?;
+        self.require_record_binding(&binding, &record)?;
+        let description = self
             .provider
-            .unseal(&identity, self.network_id, &record.envelope)?;
-        let signer = LocalSigner::from_secret(seed);
-        if signer.public_key() != record.public_key {
-            return Err(CustodyError::CorruptRecord(
-                "sealed key does not match its recorded public key",
-            ));
+            .describe_key(&binding, &record.provider_reference)?;
+        require_description(
+            &binding,
+            record.class,
+            Some(record.public_key),
+            &description,
+        )?;
+        if description.reference() != &record.provider_reference {
+            return Err(CustodyError::Kms(KmsError::Integrity));
         }
-        Ok((signer, record.class))
+        Ok(RemoteCustodySigner::new(
+            Arc::clone(&self.provider),
+            binding,
+            description,
+            record.class,
+        ))
+    }
+
+    fn binding(
+        &self,
+        principal: &PrincipalId,
+        key: &KeyId,
+        class: KeyClass,
+    ) -> Result<PrincipalKeyBinding, CustodyError> {
+        PrincipalKeyBinding::new(
+            identity_bytes(principal, key, class),
+            self.network_id,
+            class,
+            self.provider.provider_reference(),
+        )
+    }
+
+    fn require_record_binding(
+        &self,
+        binding: &PrincipalKeyBinding,
+        record: &KeyRecord,
+    ) -> Result<(), CustodyError> {
+        if record
+            .binding_digest
+            .is_some_and(|digest| !layerx_crypto::ct::eq_fixed(&digest, &binding.digest()))
+        {
+            return Err(CustodyError::Kms(KmsError::Integrity));
+        }
+        Ok(())
+    }
+
+    fn inspect_records(&self) -> Result<(KeyReferenceIntegrity, RotationState), CustodyError> {
+        require_directory(&self.root, "custody root is not a directory")?;
+        let principals = self.root.join(PRINCIPALS_DIR);
+        if !principals.try_exists()? {
+            return Ok((KeyReferenceIntegrity::Verified, RotationState::Stable));
+        }
+        require_directory(&principals, "principals path is not a directory")?;
+        let mut integrity = KeyReferenceIntegrity::Verified;
+        let mut rotation = RotationState::Stable;
+        for principal_entry in fs::read_dir(principals)? {
+            let principal_entry = principal_entry?;
+            let Some(principal_name) = principal_entry.file_name().to_str().map(str::to_owned)
+            else {
+                integrity = KeyReferenceIntegrity::Failed;
+                continue;
+            };
+            let Ok(principal) = PrincipalId::new(principal_name) else {
+                integrity = KeyReferenceIntegrity::Failed;
+                continue;
+            };
+            for key_entry in fs::read_dir(principal_entry.path())? {
+                let key_entry = key_entry?;
+                let Some(key_name) = key_entry.file_name().to_str().map(str::to_owned) else {
+                    integrity = KeyReferenceIntegrity::Failed;
+                    continue;
+                };
+                if key_name.ends_with(TEMP_FILE_SUFFIX) {
+                    continue;
+                }
+                let Some(stem) = key_name.strip_suffix(KEY_FILE_SUFFIX) else {
+                    integrity = KeyReferenceIntegrity::Failed;
+                    continue;
+                };
+                let Ok(key) = KeyId::new(stem) else {
+                    integrity = KeyReferenceIntegrity::Failed;
+                    continue;
+                };
+                let record = match self.read_record(&principal, &key) {
+                    Ok(record) => record,
+                    Err(CustodyError::Io(error)) => return Err(CustodyError::Io(error)),
+                    Err(_) => {
+                        integrity = KeyReferenceIntegrity::Failed;
+                        continue;
+                    }
+                };
+                let binding = self.binding(&principal, &key, record.class)?;
+                if self.require_record_binding(&binding, &record).is_err() {
+                    integrity = KeyReferenceIntegrity::Failed;
+                    continue;
+                }
+                match self
+                    .provider
+                    .describe_key(&binding, &record.provider_reference)
+                {
+                    Ok(description)
+                        if require_description(
+                            &binding,
+                            record.class,
+                            Some(record.public_key),
+                            &description,
+                        )
+                        .is_ok()
+                            && description.reference() == &record.provider_reference =>
+                    {
+                        rotation = merge_rotation(rotation, description.rotation());
+                    }
+                    Err(KmsError::Unavailable | KmsError::Timeout | KmsError::Authentication) => {
+                        if integrity != KeyReferenceIntegrity::Failed {
+                            integrity = KeyReferenceIntegrity::Unknown;
+                        }
+                        rotation = RotationState::Unknown;
+                    }
+                    Ok(_) | Err(_) => integrity = KeyReferenceIntegrity::Failed,
+                }
+            }
+        }
+        Ok((integrity, rotation))
     }
 
     fn principal_directory(&self, principal: &PrincipalId) -> PathBuf {
@@ -722,20 +988,49 @@ fn identity_bytes(principal: &PrincipalId, key: &KeyId, class: KeyClass) -> Vec<
     identity
 }
 
+fn require_description(
+    binding: &PrincipalKeyBinding,
+    class: KeyClass,
+    expected_public_key: Option<[u8; 32]>,
+    description: &ProviderKeyDescription,
+) -> Result<(), CustodyError> {
+    if binding.class() != class
+        || !layerx_crypto::ct::eq_fixed(&description.binding_digest(), &binding.digest())
+        || expected_public_key.is_some_and(|public_key| {
+            !layerx_crypto::ct::eq_fixed(&public_key, &description.public_key())
+        })
+    {
+        return Err(CustodyError::Kms(KmsError::Integrity));
+    }
+    Ok(())
+}
+
+const fn merge_rotation(current: RotationState, next: RotationState) -> RotationState {
+    match (current, next) {
+        (RotationState::Failed, _) | (_, RotationState::Failed) => RotationState::Failed,
+        (RotationState::Unknown, _) | (_, RotationState::Unknown) => RotationState::Unknown,
+        (RotationState::InProgress, _) | (_, RotationState::InProgress) => {
+            RotationState::InProgress
+        }
+        (RotationState::Stable, RotationState::Stable) => RotationState::Stable,
+    }
+}
+
 fn encode_record(
     class: KeyClass,
-    public_key: &[u8; 32],
-    envelope: &[u8],
+    description: &ProviderKeyDescription,
 ) -> Result<Vec<u8>, CustodyError> {
-    let envelope_length = u32::try_from(envelope.len())
-        .map_err(|_| CustodyError::CorruptRecord("envelope exceeds encoding bounds"))?;
-    let mut output = Vec::with_capacity(4 + 1 + 1 + 32 + 4 + envelope.len());
+    let reference = description.reference().as_bytes();
+    let reference_length = u32::try_from(reference.len())
+        .map_err(|_| CustodyError::CorruptRecord("provider reference exceeds encoding bounds"))?;
+    let mut output = Vec::with_capacity(4 + 1 + 1 + 32 + 32 + 4 + reference.len());
     output.extend_from_slice(RECORD_MAGIC);
     output.push(RECORD_VERSION);
     output.push(class.code());
-    output.extend_from_slice(public_key);
-    output.extend_from_slice(&envelope_length.to_be_bytes());
-    output.extend_from_slice(envelope);
+    output.extend_from_slice(&description.public_key());
+    output.extend_from_slice(&description.binding_digest());
+    output.extend_from_slice(&reference_length.to_be_bytes());
+    output.extend_from_slice(reference);
     Ok(output)
 }
 
@@ -744,7 +1039,8 @@ fn decode_record(bytes: &[u8]) -> Result<KeyRecord, CustodyError> {
     if reader.take(4)? != RECORD_MAGIC {
         return Err(CustodyError::CorruptRecord("invalid record header"));
     }
-    if reader.byte()? != RECORD_VERSION {
+    let version = reader.byte()?;
+    if !matches!(version, LEGACY_RECORD_VERSION | RECORD_VERSION) {
         return Err(CustodyError::CorruptRecord("unknown record version"));
     }
     let class = KeyClass::from_code(reader.byte()?)?;
@@ -752,13 +1048,25 @@ fn decode_record(bytes: &[u8]) -> Result<KeyRecord, CustodyError> {
         .take(32)?
         .try_into()
         .map_err(|_| CustodyError::CorruptRecord("truncated public key"))?;
-    let envelope_length = reader.length()?;
-    let envelope = reader.take(envelope_length)?.to_vec();
+    let binding_digest = if version == RECORD_VERSION {
+        Some(
+            reader
+                .take(32)?
+                .try_into()
+                .map_err(|_| CustodyError::CorruptRecord("truncated key binding"))?,
+        )
+    } else {
+        None
+    };
+    let reference_length = reader.length()?;
+    let provider_reference = ProviderKeyReference::new(reader.take(reference_length)?.to_vec())
+        .map_err(CustodyError::Kms)?;
     reader.finish()?;
     Ok(KeyRecord {
         class,
         public_key,
-        envelope,
+        binding_digest,
+        provider_reference,
     })
 }
 
@@ -881,6 +1189,33 @@ fn write_atomic(
         };
     }
     fs::remove_file(temp_path)?;
+    fs::File::open(directory)?.sync_all()?;
+    Ok(())
+}
+
+fn replace_atomic(
+    directory: &Path,
+    final_name: &str,
+    temp_name: &str,
+    bytes: &[u8],
+) -> Result<(), CustodyError> {
+    use std::io::Write as _;
+
+    let temp_path = directory.join(temp_name);
+    let mut file = fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&temp_path)?;
+    if let Err(error) = file.write_all(bytes).and_then(|()| file.sync_all()) {
+        drop(file);
+        let _ = fs::remove_file(&temp_path);
+        return Err(CustodyError::Io(error));
+    }
+    drop(file);
+    if let Err(error) = fs::rename(&temp_path, directory.join(final_name)) {
+        let _ = fs::remove_file(&temp_path);
+        return Err(CustodyError::Io(error));
+    }
     fs::File::open(directory)?.sync_all()?;
     Ok(())
 }

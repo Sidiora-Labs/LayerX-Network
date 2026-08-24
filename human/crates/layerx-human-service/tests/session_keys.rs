@@ -614,7 +614,7 @@ fn keystore(
     fs::write(&secret_path, [0xa5; 64]).unwrap_or_else(|error| panic!("KMS root: {error}"));
     let provider = EnvelopeKms::new("file-kms://rotation", secret_path)
         .unwrap_or_else(|error| panic!("KMS provider: {error}"));
-    let keystore = Keystore::open(root.join("sealed"), NETWORK_ID, provider)
+    let keystore = Keystore::open_development(root.join("sealed"), NETWORK_ID, provider)
         .unwrap_or_else(|error| panic!("keystore: {error}"));
     let current =
         KeyId::new("current-primary").unwrap_or_else(|error| panic!("current key id: {error}"));
