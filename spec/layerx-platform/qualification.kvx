@@ -1013,3 +1013,27 @@ symbol = "task.29.5.touches"
 observed = "The task declares only the two original Rust occupancy files as touch witnesses, while its explicit implementation_scope requires integration through C Programs, canonical account debit, protocol versions, receipts, state roots, snapshots, replay and their real-code artifacts. Scoped cg guard over all 47 Git-changed paths therefore reports 45 integration and lifecycle paths as advisory outside touches; the two declared symbols and paths remain present."
 assumption = "Human qualification must review the full published integration diff against req36.5 and retain the advisory as evidence of a stale narrow task touch declaration, rather than deleting required protocol integration or weakening the task to the isolated Rust ledger."
 severity = "task-scope"
+
+[observation.30.4.1]
+task = "30.4"
+file = "programs/crates/layerx-programs-runtime/src/abi/capability.rs"
+symbol = "Capability::ProgramSpend, CapabilitySet::permits_program_spend"
+observed = "Requirement 37.3 says a program-authorised transfer leg is refused when staged by any frame other than the deriving program, while requirement 37.4 describes a callee holding a bounded grant as able to spend what the caller owns. The capability preserves the deriving owner across every edge, but its monetary-law handoff enforces the stricter owner-frame-only staging rule; a callee may narrow and forward the inherited grant but cannot present itself as the staging owner."
+assumption = "The protocol owner must state whether 'callee spend' means a typed request returned for the deriving owner frame to stage or direct callee-frame staging. Task 30.2 must retain owner-frame-only staging unless a versioned normative decision changes requirement 37.3, and qualification must exercise both the returned-request path and direct-callee refusal."
+severity = "ambiguity"
+
+[observation.30.4.2]
+task = "30.4"
+file = "programs/crates/layerx-programs-runtime/src/abi/mod.rs, programs/crates/layerx-programs-runtime/src/host/calls.rs, programs/crates/layerx-programs-runtime/tests/composition.rs, programs/crates/layerx-programs-runtime/tests/isolation.rs, spec/layerx-platform"
+symbol = "task 30.4 candidate decoder and lifecycle artifacts"
+observed = "The task's declared touch names only capability.rs, while preserving the frozen v1 decoder requires selecting the tag-9-aware decoder at the existing candidate-v2 call host, and the task explicitly requires composition and isolation artifacts plus lifecycle state. After a worktree-local graph index was created, scoped cg guard accepted capability.rs and reported the seven exact ABI integration, adversarial-artifact and lifecycle paths named here as outside the stale one-file touch declaration; non-strict guard retained them as auditable advisories."
+assumption = "Human review must treat the candidate host selection, adversarial artifacts and generated task state as the minimum implementation of do_2 through do_5, and inspect them statically rather than deleting them to satisfy the stale one-file touch declaration. Qualification remains responsible for executing the artifacts."
+severity = "task-scope"
+
+[observation.30.4.3]
+task = "30.4"
+file = "programs/crates/layerx-programs-runtime/src/abi/capability.rs, programs/crates/layerx-programs-runtime/src/transfer.rs"
+symbol = "CapabilitySet::contains_narrowed_for_program_edge, TransferCapability::authorized_frames"
+observed = "ProgramSpend grants differ from principal grants because the caller program may originate a bounded grant over its own derived account even when the parent frame did not receive that grant. This task exposes an edge-aware containment check that recognizes only that exact owner origin and otherwise requires an inherited exact key with a downward amount. The parallel task 30.2 owns transfer.rs and must adopt this check when reconstructing authorised frames; the inherited v1-only checker intentionally remains unchanged on this isolated branch."
+assumption = "Task 30.2 must call contains_narrowed_for_program_edge with the authenticated caller program while sealing candidate-v2 program-authorised transfer evidence, retain generic contains_narrowed for frozen v1, and aggregate repeated/fan-out spend against the originating grant. Integration review must reject a merge that accepts owner origin during staging but labels the same edge an escalation during settlement."
+severity = "dependency-boundary"

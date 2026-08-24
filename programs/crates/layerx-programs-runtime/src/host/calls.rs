@@ -177,7 +177,7 @@ pub(super) fn register_candidate(linker: &mut Linker<RuntimeState>) -> Result<()
                         Ok(encoded) => encoded,
                         Err(status) => return Ok(i64::from(status)),
                     };
-                let capabilities = match CapabilitySet::decode_canonical(&encoded) {
+                let capabilities = match CapabilitySet::decode_candidate_canonical(&encoded) {
                     Ok(capabilities) => capabilities,
                     Err(error) => return Ok(i64::from(error_status(error))),
                 };
