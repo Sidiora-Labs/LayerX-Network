@@ -1,0 +1,74 @@
+{
+  "state_directory": "/var/lib/layerx-mirror",
+  "first_batch_number": 1,
+  "poll_interval_ms": 5000,
+  "status_listen": "127.0.0.1:9091",
+  "node": {
+    "socket": "/run/layerx/lni.sock",
+    "expected_protocol_version": 1,
+    "expected_network_id": 1,
+    "maximum_frame_bytes": 67108864,
+    "maximum_connections": 2,
+    "maximum_streams": 2,
+    "maximum_queued_bytes": 67108864,
+    "deadline_ms": 30000,
+    "maximum_archive_bytes": 67108864,
+    "maximum_archive_chunks": 65536
+  },
+  "ethereum": {
+    "rpc": {
+      "endpoints": [
+        {"url":"https://ethereum-a.example/rpc","ca_certificate_der":"/run/secrets/ethereum-a.ca.der","bearer_token_file":"/run/secrets/ethereum-a.token","independent_backend":"ethereum-a"},
+        {"url":"https://ethereum-b.example/rpc","ca_certificate_der":"/run/secrets/ethereum-b.ca.der","bearer_token_file":"/run/secrets/ethereum-b.token","independent_backend":"ethereum-b"},
+        {"url":"https://ethereum-c.example/rpc","ca_certificate_der":"/run/secrets/ethereum-c.ca.der","bearer_token_file":"/run/secrets/ethereum-c.token","independent_backend":"ethereum-c"}
+      ],
+      "quorum": 2,
+      "connect_timeout_ms": 3000,
+      "request_timeout_ms": 15000,
+      "maximum_response_bytes": 16777216
+    },
+    "chain_id": 11155111,
+    "genesis_hash_hex": "0000000000000000000000000000000000000000000000000000000000000001",
+    "archive_contract_hex": "0000000000000000000000000000000000000001",
+    "archive_code_hash_hex": "0000000000000000000000000000000000000000000000000000000000000001",
+    "required_confirmations": 12,
+    "maximum_reorg_depth": 256,
+    "chunk_bytes": 24576,
+    "transaction_gas_limit": 30000000,
+    "maximum_fee_per_gas": 100000000000,
+    "maximum_priority_fee_per_gas": 5000000000,
+    "signer": {
+      "key_handle": "mirror/ethereum/testnet",
+      "public_key": "02aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "timeout_ms": 5000,
+      "transport": {"kind":"uds","socket":"/run/signers/ethereum.sock"}
+    }
+  },
+  "solana": {
+    "rpc": {
+      "endpoints": [
+        {"url":"https://solana-a.example/rpc","ca_certificate_der":"/run/secrets/solana-a.ca.der","bearer_token_file":"/run/secrets/solana-a.token","independent_backend":"solana-a"},
+        {"url":"https://solana-b.example/rpc","ca_certificate_der":"/run/secrets/solana-b.ca.der","bearer_token_file":"/run/secrets/solana-b.token","independent_backend":"solana-b"},
+        {"url":"https://solana-c.example/rpc","ca_certificate_der":"/run/secrets/solana-c.ca.der","bearer_token_file":"/run/secrets/solana-c.token","independent_backend":"solana-c"}
+      ],
+      "quorum": 2,
+      "connect_timeout_ms": 3000,
+      "request_timeout_ms": 15000,
+      "maximum_response_bytes": 16777216
+    },
+    "genesis_hash_base58": "11111111111111111111111111111112",
+    "archive_program_base58": "11111111111111111111111111111113",
+    "upgradeable_loader_base58": "BPFLoaderUpgradeab1e11111111111111111111111",
+    "program_data_account_base58": "11111111111111111111111111111114",
+    "program_code_hash_hex": "0000000000000000000000000000000000000000000000000000000000000001",
+    "required_rooted_slots": 32,
+    "maximum_ancestry": 4096,
+    "chunk_bytes": 640,
+    "signer": {
+      "key_handle": "mirror/solana/testnet",
+      "public_key": "11111111111111111111111111111115",
+      "timeout_ms": 5000,
+      "transport": {"kind":"mutual_tls","endpoint":"signer.example:9443","server_name":"signer.example","trust_anchor":"/run/secrets/signer.ca.pem","client_certificate":"/run/secrets/signer.client.pem","client_private_key":"/run/secrets/signer.client-key.pem"}
+    }
+  }
+}

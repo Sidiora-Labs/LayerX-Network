@@ -13,22 +13,20 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
-use layerx_agent_api::prepare::CanonicalBytes;
-use layerx_agent_api::read::{BatchRef, BatchValue, CheckpointRef, Freshness, RelativeTo, VerifiedRead};
-use layerx_agent_api::verify::Level;
-use layerx_agent_api::Sequence;
+use ed25519_dalek::{Signer as _, SigningKey};
 use layerx_client::availability::{AvailabilityRecords, AvailabilityResult};
 use layerx_mirror::{
-    Archive, ArchiveCommitment, ArchiveData, ChainFailure, ChainPosition, CheckpointCoordinate,
-    CheckpointFreshness, ConfigError, EthereumArchiveClient, EthereumArchiveWrite,
-    EthereumConfig, EthereumObservation, EthereumSubmission, MirrorDegradation, MirrorState,
-    NodeHead, PublicationId, Publisher, RetrievalState, SolanaArchiveClient, SolanaArchiveWrite,
-    SolanaConfig, SolanaObservation, SolanaSubmission,
+    Archive, ArchiveCommitment, ArchiveData, BatchAuthorization, ChainFailure, ChainPosition,
+    CheckpointCoordinate, CheckpointFreshness, ConfigError, EthereumArchiveClient,
+    EthereumArchiveWrite, EthereumConfig, EthereumObservation, EthereumSubmission,
+    GenericPublisher, MirrorDegradation, MirrorState, NodeBatch, NodeHead, PublicationId,
+    RetrievalState, SignedHeaderTrust, SolanaArchiveClient, SolanaArchiveWrite, SolanaConfig,
+    SolanaObservation, SolanaSubmission,
 };
 use layerx_proof::availability::{verify_chunk, AvailabilityClass, Chunk, RootCommitments};
 use layerx_proof::merkle::{build_leaf_hash_proof, root};
 use layerx_wire::encode::Encoder;
-use layerx_wire::hash::availability_chunk_digest;
+use layerx_wire::hash::{availability_chunk_digest, batch_header_digest};
 
 const NETWORK_ID: u32 = 42;
 const PROTOCOL_VERSION: u16 = 1;
@@ -53,22 +51,6 @@ fn solana_config() -> SolanaConfig {
         archive_program: [0x01; 32],
         archive_account: [0x02; 32],
         required_rooted_slots: REQUIRED_ROOTED_SLOTS,
-    }
-}
-
-fn batch_ref(batch_number: u64) -> BatchRef {
-    BatchRef::new(format!("batch-{batch_number}"))
-        .unwrap_or_else(|error| panic!("batch reference failed: {error:?}"))
-}
-
-fn freshness(batch_number: u64) -> Freshness {
-    Freshness {
-        chain_head: Sequence(batch_number),
-        latest_sealed_batch: batch_ref(batch_number),
-        latest_finalised_checkpoint: CheckpointRef::new("checkpoint-node")
-            .unwrap_or_else(|error| panic!("checkpoint reference failed: {error:?}")),
-        value_sequence: Sequence(batch_number),
-        relative_to: RelativeTo::Batch(batch_ref(batch_number)),
     }
 }
 
@@ -153,8 +135,8 @@ fn build_archive(batch_number: u64, node_head: NodeHead) -> Archive {
     ];
     let mut chunks = Vec::new();
     for (position, (class, bytes)) in class_data.into_iter().enumerate() {
-        let index = u32::try_from(position)
-            .unwrap_or_else(|error| panic!("chunk index overflow: {error}"));
+        let index =
+            u32::try_from(position).unwrap_or_else(|error| panic!("chunk index overflow: {error}"));
         let claimed_hash = availability_chunk_digest(batch_number, index, class as u8, 0, &bytes)
             .unwrap_or_else(|error| panic!("chunk digest failed: {error:?}"));
         chunks.push(Chunk {
@@ -180,13 +162,27 @@ fn build_archive(batch_number: u64, node_head: NodeHead) -> Archive {
     }
 
     let header = header_bytes(batch_number, availability_root, roots);
-    let batch = VerifiedRead::new(
-        BatchValue(
-            CanonicalBytes::new(header).unwrap_or_else(|error| panic!("header bytes: {error:?}")),
-        ),
-        Level::BatchIncluded,
-        freshness(batch_number),
-    );
+    let signing_key = SigningKey::from_bytes(&[7; 32]);
+    let digest = batch_header_digest(&header)
+        .unwrap_or_else(|error| panic!("header digest failed: {error:?}"));
+    let trust = SignedHeaderTrust {
+        sequencer_id: [9; 32],
+        sequencer_public_key: signing_key.verifying_key().to_bytes(),
+        first_batch_number: 1,
+        last_batch_number: u64::MAX,
+    };
+    let batch = NodeBatch::verify(
+        header,
+        BatchAuthorization {
+            sequencer_id: [9; 32],
+            sequencer_public_key: signing_key.verifying_key().to_bytes(),
+            first_batch_number: 1,
+            last_batch_number: u64::MAX,
+            header_signature: signing_key.sign(&digest).to_bytes(),
+        },
+        &trust,
+    )
+    .unwrap_or_else(|error| panic!("signed batch failed: {error:?}"));
 
     let availability = AvailabilityResult::from_verified(
         "primary-provider".to_owned(),
@@ -333,13 +329,18 @@ impl EthereumArchiveClient for Ethereum {
             checkpoint: request.checkpoint,
             archive: request.archive.to_vec(),
         });
-        state.stored.insert(request.commitment, request.archive.to_vec());
+        state
+            .stored
+            .insert(request.commitment, request.archive.to_vec());
         Ok(EthereumSubmission {
             transaction_hash: *request.commitment.as_bytes(),
         })
     }
 
-    fn observe(&mut self, _transaction_hash: [u8; 32]) -> Result<EthereumObservation, ChainFailure> {
+    fn observe(
+        &mut self,
+        _transaction_hash: [u8; 32],
+    ) -> Result<EthereumObservation, ChainFailure> {
         match self.state.borrow().observe.clone() {
             EthObserve::Pending => Ok(EthereumObservation::Pending),
             EthObserve::Canonical {
@@ -512,7 +513,9 @@ impl SolanaArchiveClient for Solana {
             checkpoint: request.checkpoint,
             archive: request.archive.to_vec(),
         });
-        state.stored.insert(request.commitment, request.archive.to_vec());
+        state
+            .stored
+            .insert(request.commitment, request.archive.to_vec());
         Ok(SolanaSubmission {
             signature: solana_signature(request.commitment),
         })
@@ -570,8 +573,8 @@ impl SolanaArchiveClient for Solana {
     }
 }
 
-fn new_publisher(ethereum: &Ethereum, solana: &Solana) -> Publisher<Ethereum, Solana> {
-    Publisher::new(
+fn new_publisher(ethereum: &Ethereum, solana: &Solana) -> GenericPublisher<Ethereum, Solana> {
+    GenericPublisher::new(
         ethereum_config(),
         ethereum.clone(),
         solana_config(),
@@ -672,7 +675,10 @@ fn publishes_pure_archives_without_custody_semantics() {
 
     let eth_append = ethereum.last_append();
     assert_eq!(eth_append.chain_id, ethereum_config().chain_id);
-    assert_eq!(eth_append.archive_contract, ethereum_config().archive_contract);
+    assert_eq!(
+        eth_append.archive_contract,
+        ethereum_config().archive_contract
+    );
     assert_eq!(eth_append.commitment, archive.commitment());
     assert_eq!(eth_append.network_id, NETWORK_ID);
     assert_eq!(eth_append.batch_number, 11);
@@ -885,7 +891,9 @@ fn mirror_chain_unavailability_is_a_typed_degradation_not_a_block() {
     let ethereum = Ethereum::new();
     let solana = Solana::new();
     // Ethereum RPC is unreachable; Solana is healthy.
-    ethereum.fail_append(ChainFailure::Unavailable("ethereum rpc unreachable".to_owned()));
+    ethereum.fail_append(ChainFailure::Unavailable(
+        "ethereum rpc unreachable".to_owned(),
+    ));
     solana.confirmed(REQUIRED_ROOTED_SLOTS);
     let mut publisher = new_publisher(&ethereum, &solana);
 
@@ -991,7 +999,9 @@ fn retrieval_reports_missing_tampered_and_unavailable_mirrors() {
     healthy_solana.confirmed(REQUIRED_ROOTED_SLOTS);
     let mut second = new_publisher(&offline, &healthy_solana);
     let _ = second.publish(&archive);
-    offline.fail_retrieve(ChainFailure::Unavailable("ethereum archive node down".to_owned()));
+    offline.fail_retrieve(ChainFailure::Unavailable(
+        "ethereum archive node down".to_owned(),
+    ));
     let retrieval = second.retrieve(archive.commitment());
     assert!(matches!(
         retrieval.ethereum,
@@ -1055,8 +1065,13 @@ fn invalid_chain_configuration_is_rejected_before_any_write() {
         required_confirmations: 0,
     };
     assert_eq!(
-        Publisher::new(zero_ethereum, Ethereum::new(), solana_config(), Solana::new())
-            .err(),
+        GenericPublisher::new(
+            zero_ethereum,
+            Ethereum::new(),
+            solana_config(),
+            Solana::new()
+        )
+        .err(),
         Some(ConfigError::Ethereum)
     );
 
@@ -1067,8 +1082,13 @@ fn invalid_chain_configuration_is_rejected_before_any_write() {
         required_rooted_slots: 0,
     };
     assert_eq!(
-        Publisher::new(ethereum_config(), Ethereum::new(), zero_solana, Solana::new())
-            .err(),
+        GenericPublisher::new(
+            ethereum_config(),
+            Ethereum::new(),
+            zero_solana,
+            Solana::new()
+        )
+        .err(),
         Some(ConfigError::Solana)
     );
 }

@@ -17,6 +17,8 @@ HUMAN_CARGO ?= cargo
 HUMAN_MANIFEST := human/Cargo.toml
 HUMAN_WEB_DIR := human/apps/web
 HUMAN_NPM ?= npm --prefix $(HUMAN_WEB_DIR)
+INTEROP_CARGO ?= cargo
+INTEROP_MANIFEST := interop/Cargo.toml
 
 CPPFLAGS := -Iinclude \
 	-DLXP_BUILD_TARGET_TRIPLE=\"$(shell $(CC) -dumpmachine)\" \
@@ -152,9 +154,16 @@ LIBRARY := $(BUILD_DIR)/liblayerx.a
 	agent-fuzz-wire agent-fuzz-interface agent-fuzz-long agent-fuzz-minimize \
 	agent-check agent-qualify-fuzz \
 	agent-test-errors agent-check-boundary agent-test-sanitize \
-	agent-test-types-ids
+	agent-test-types-ids mirror-live
 
 all: build
+
+mirror-live:
+	$(INTEROP_CARGO) build --locked --release --manifest-path $(INTEROP_MANIFEST) \
+		--package layerx-mirror --bin layerx-mirror-publisher
+	LAYERX_MIRROR_PUBLISHER_BIN=interop/target/release/layerx-mirror-publisher \
+		LAYERX_MIRROR_FAULT_CONTROLLER="$${LAYERX_MIRROR_FAULT_CONTROLLER:?set the authenticated devnet fault controller}" \
+		./scripts/qualify-mirror-live.sh
 
 build: $(LIBRARY)
 

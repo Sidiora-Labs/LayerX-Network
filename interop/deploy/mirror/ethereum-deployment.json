@@ -1,0 +1,6 @@
+{
+  "contract": "LayerXMirrorArchive",
+  "source": "interop/contracts/ethereum-mirror/LayerXMirrorArchive.sol",
+  "constructor_arguments": ["publisher_secp256k1_address"],
+  "required_post_deploy_records": ["chain_id", "genesis_hash", "contract_address", "publisher_secp256k1_address", "runtime_code_keccak256", "deployment_transaction", "deployment_block_hash"]
+}
