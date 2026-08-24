@@ -8,5 +8,8 @@ RRULE:FREQ=MONTHLY;BYDAY=1TU
 DURATION:PT30M
 SUMMARY:LayerX public testnet reset
 DESCRIPTION:Balances and receipts on the LayerX public testnet are reset.
+URL:https://status.layerx.network/testnet-resets.ics
+CATEGORIES:MAINTENANCE,TESTNET
+TRANSP:TRANSPARENT
 END:VEVENT
 END:VCALENDAR

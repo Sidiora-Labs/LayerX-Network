@@ -1,32 +1,19 @@
 #!/bin/sh
 set -eu
-: "${LAYERX_TESTNET_LISTEN:=0.0.0.0:9402}"
-: "${LAYERX_TESTNET_NETWORK_ID:=402}"
-: "${LAYERX_TESTNET_STATE:=/var/lib/layerx-testnet/state.snapshot}"
-: "${LAYERX_TESTNET_SNAPSHOT_SECONDS:=15}"
-
-mkdir -p "$(dirname "$LAYERX_TESTNET_STATE")"
-layerx emulator up --listen "$LAYERX_TESTNET_LISTEN" --network-id "$LAYERX_TESTNET_NETWORK_ID" &
-testnet_pid=$!
-trap 'kill "$testnet_pid" 2>/dev/null || true; wait "$testnet_pid" 2>/dev/null || true' EXIT INT TERM
-
-until curl --fail --silent --show-error "http://127.0.0.1:${LAYERX_TESTNET_LISTEN##*:}/healthz" >/dev/null; do
-  kill -0 "$testnet_pid"
-done
-
-if test -s "$LAYERX_TESTNET_STATE"; then
-  curl --fail --silent --show-error --request PUT --header 'Content-Type: application/vnd.layerx.emulator-snapshot' \
-    --data-binary "@$LAYERX_TESTNET_STATE" "http://127.0.0.1:${LAYERX_TESTNET_LISTEN##*:}/__emulator/snapshot" >/dev/null
-fi
-
-while kill -0 "$testnet_pid" 2>/dev/null; do
-  sleep "$LAYERX_TESTNET_SNAPSHOT_SECONDS"
-  snapshot="${LAYERX_TESTNET_STATE}.new"
-  if curl --fail --silent --show-error "http://127.0.0.1:${LAYERX_TESTNET_LISTEN##*:}/__emulator/snapshot" --output "$snapshot"; then
-    chmod 0600 "$snapshot"
-    mv "$snapshot" "$LAYERX_TESTNET_STATE"
-  else
-    rm -f "$snapshot"
-  fi
-done
-wait "$testnet_pid"
+: "${LAYERX_PENDING_PACKAGE_SEMVER:?LAYERX_PENDING_PACKAGE_SEMVER is required}"
+: "${LAYERX_PENDING_WIRE_PROTOCOL_VERSION:?LAYERX_PENDING_WIRE_PROTOCOL_VERSION is required}"
+: "${LAYERX_TESTNET_CORE_URL:?LAYERX_TESTNET_CORE_URL is required}"
+: "${LAYERX_TESTNET_CORE_ADMIN_URL:?LAYERX_TESTNET_CORE_ADMIN_URL is required}"
+: "${LAYERX_TESTNET_GATEWAY_URL:?LAYERX_TESTNET_GATEWAY_URL is required}"
+: "${LAYERX_TESTNET_PAXEER_URL:?LAYERX_TESTNET_PAXEER_URL is required}"
+: "${LAYERX_TESTNET_TLS_CERT_DER:?LAYERX_TESTNET_TLS_CERT_DER is required}"
+: "${LAYERX_TESTNET_TLS_KEY_DER:?LAYERX_TESTNET_TLS_KEY_DER is required}"
+: "${LAYERX_OUTBOUND_CA_DER:?LAYERX_OUTBOUND_CA_DER is required}"
+: "${LAYERX_TESTNET_BACKEND_ADMIN_TOKEN_FILE:?LAYERX_TESTNET_BACKEND_ADMIN_TOKEN_FILE is required}"
+: "${LAYERX_TESTNET_CONTROL_ADMIN_TOKEN_FILE:?LAYERX_TESTNET_CONTROL_ADMIN_TOKEN_FILE is required}"
+test -r "$LAYERX_TESTNET_TLS_CERT_DER"
+test -r "$LAYERX_TESTNET_TLS_KEY_DER"
+test -r "$LAYERX_OUTBOUND_CA_DER"
+test -r "$LAYERX_TESTNET_BACKEND_ADMIN_TOKEN_FILE"
+test -r "$LAYERX_TESTNET_CONTROL_ADMIN_TOKEN_FILE"
+exec layerx-testnet-control

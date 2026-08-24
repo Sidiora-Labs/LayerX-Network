@@ -771,7 +771,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Ship time-control and fault-injection hooks for integration testing, clearly outside the deterministic transition path.
     - Make one command start it: layerx emulator up.
     - _Requirements: 26.2_
-  - [ ] 17.3 Build the deployable hosted testnet and faucet
+  - [ ] 17.3 Build the deployable hosted testnet and faucet — **Implemented - qualification pending**
     - Stand up the hosted testnet running the pending-release protocol version with declared reset schedule and public status.
     - Build the faucet with per-identity and per-address rate limits and abuse resistance.
     - Publish testnet endpoints, chain parameters and reset calendar in the docs.

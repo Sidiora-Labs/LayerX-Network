@@ -1,6 +1,8 @@
 name: Platform workspace
 
 on:
+  schedule:
+    - cron: "17 4 * * 2"
   push:
     branches: [main]
     tags: ["sdk-v*"]
@@ -61,3 +63,43 @@ jobs:
         run: make platform-release-plan | tee release-plan.txt
       - name: Record the reproducible source digest for byte-verification
         run: git archive --format=tar HEAD | sha256sum | tee source-digest.txt
+
+  hosted-testnet-journey:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Install pinned Rust toolchain and journey tools
+        run: >-
+          rustup toolchain install 1.91.1 --profile minimal &&
+          sudo apt-get update && sudo apt-get install --yes jq
+      - name: Build the receipt-verifying CLI
+        run: cargo build --locked --release --manifest-path platform/Cargo.toml -p layerx-platform-cli
+      - name: Materialize short-lived test credentials
+        env:
+          TESTNET_TOKEN: ${{ secrets.LAYERX_SCHEDULED_TESTNET_TOKEN }}
+          TESTNET_CA_BASE64: ${{ secrets.LAYERX_SCHEDULED_TESTNET_CA_BASE64 }}
+        run: |
+          umask 077
+          test -n "$TESTNET_TOKEN"
+          test -n "$TESTNET_CA_BASE64"
+          printf '%s' "$TESTNET_TOKEN" > "$RUNNER_TEMP/layerx-testnet-token"
+          printf '%s' "$TESTNET_CA_BASE64" | base64 --decode > "$RUNNER_TEMP/layerx-testnet-ca.pem"
+      - name: Fund, pay, fetch, and independently verify the receipt
+        env:
+          LAYERX_TESTNET_URL: https://testnet.layerx.network
+          LAYERX_GATEWAY_URL: https://api.testnet.layerx.network
+          LAYERX_FAUCET_URL: https://faucet.testnet.layerx.network
+          LAYERX_TEST_AUTH_TOKEN_FILE: ${{ runner.temp }}/layerx-testnet-token
+          LAYERX_TEST_CA_FILE: ${{ runner.temp }}/layerx-testnet-ca.pem
+          LAYERX_TEST_SOURCE_DID: ${{ vars.LAYERX_SCHEDULED_SOURCE_DID }}
+          LAYERX_TEST_SOURCE_PUBLIC_KEY: ${{ vars.LAYERX_SCHEDULED_SOURCE_PUBLIC_KEY }}
+          LAYERX_TEST_DESTINATION_DID: ${{ vars.LAYERX_SCHEDULED_DESTINATION_DID }}
+          LAYERX_TEST_ASSET: ${{ vars.LAYERX_SCHEDULED_ASSET }}
+          LAYERX_TEST_AMOUNT: "1"
+          LAYERX_BIN: platform/target/release/layerx
+        run: make platform-hosted-smoke
