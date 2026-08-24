@@ -32,6 +32,13 @@ const NPM_MIDDLEWARE_PACKAGES: [&str; 4] = [
     "@sidiora/layerx-seller-middleware",
 ];
 
+const REFERENCE_APPLICATIONS: [&str; 4] = [
+    "@sidiora/layerx-example-buyer-agent",
+    "@sidiora/layerx-example-marketplace",
+    "@sidiora/layerx-example-merchant-shop",
+    "@sidiora/layerx-example-paid-api",
+];
+
 const STATUSES: [&str; 2] = ["skeleton", "active"];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -45,6 +52,7 @@ pub struct Registry {
 pub struct ReleasePipeline {
     pub tag_format: String,
     pub source_digest: String,
+    pub reference_applications: Vec<String>,
     pub registries: Vec<Registry>,
 }
 
@@ -64,7 +72,10 @@ pub fn release_pipeline(source: &str) -> Result<ReleasePipeline, String> {
         ));
     }
     for (key, _) in document.section_entries("release") {
-        if !matches!(key, "registries" | "tag_format" | "source_digest") {
+        if !matches!(
+            key,
+            "registries" | "tag_format" | "source_digest" | "reference_applications"
+        ) {
             return Err(format!("unknown declaration release.{key}"));
         }
     }
@@ -76,6 +87,14 @@ pub fn release_pipeline(source: &str) -> Result<ReleasePipeline, String> {
         layerx_platform_kvx::unquote(document.required("release", "source_digest")?)?;
     if source_digest.is_empty() {
         return Err("release.source_digest must not be empty".to_owned());
+    }
+    let reference_applications = layerx_platform_kvx::string_list(
+        document.required("release", "reference_applications")?,
+    )?;
+    if reference_applications != REFERENCE_APPLICATIONS {
+        return Err(format!(
+            "release.reference_applications must list exactly the four cloneable applications {REFERENCE_APPLICATIONS:?}, got {reference_applications:?}"
+        ));
     }
     for section in document.sections() {
         if section == "release" {
@@ -148,6 +167,7 @@ pub fn release_pipeline(source: &str) -> Result<ReleasePipeline, String> {
     Ok(ReleasePipeline {
         tag_format,
         source_digest,
+        reference_applications,
         registries,
     })
 }
@@ -162,6 +182,12 @@ pub fn plan(pipeline: &ReleasePipeline) -> Result<String, String> {
     let fail = |error| format!("render plan: {error}");
     writeln!(text, "tag_format={}", pipeline.tag_format).map_err(fail)?;
     writeln!(text, "source_digest={}", pipeline.source_digest).map_err(fail)?;
+    writeln!(
+        text,
+        "reference_applications={}",
+        pipeline.reference_applications.join(",")
+    )
+    .map_err(fail)?;
     for registry in &pipeline.registries {
         write!(text, "registry={}", registry.name).map_err(fail)?;
         for key in REGISTRY_KEYS {

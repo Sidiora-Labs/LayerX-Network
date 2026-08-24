@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "application": "paid-api",
+  "environments": {
+    "emulator": {
+      "receiptAuthorityUrl": "http://127.0.0.1:9410",
+      "resourceUrl": "http://127.0.0.1:8081/paid",
+      "scheme": "exact",
+      "network": "layerx:emulator",
+      "tokenEnvironment": "LAYERX_EMULATOR_TOKEN",
+      "assetEnvironment": "LAYERX_EMULATOR_ASSET",
+      "payToEnvironment": "LAYERX_EMULATOR_SELLER",
+      "priceEnvironment": "LAYERX_EMULATOR_PRICE",
+      "resourceFile": "resource.json",
+      "fulfillmentDirectory": "state/fulfillments",
+      "port": 8081
+    },
+    "testnet": {
+      "receiptAuthorityUrl": "https://api.testnet.layerx.network",
+      "resourceUrl": "http://127.0.0.1:8081/paid",
+      "scheme": "exact",
+      "network": "layerx:testnet",
+      "tokenEnvironment": "LAYERX_TESTNET_TOKEN",
+      "assetEnvironment": "LAYERX_TESTNET_ASSET",
+      "payToEnvironment": "LAYERX_TESTNET_SELLER",
+      "priceEnvironment": "LAYERX_TESTNET_PRICE",
+      "resourceFile": "resource.json",
+      "fulfillmentDirectory": "state/fulfillments",
+      "port": 8081
+    }
+  }
+}

@@ -235,6 +235,13 @@ summary = "x402, AP2, UCP, A2A, MCP and the fiat rails, translated at the edge."
 file = "content/guide/interop.md"
 order = 8
 
+[page.guide/reference-applications]
+section = "guides"
+title = "Reference applications"
+summary = "Run receipt-verifying buyer, seller, merchant and Programs applications against the emulator or testnet."
+file = "content/guide/reference-applications.md"
+order = 9
+
 [page.reference/human-api]
 section = "reference"
 title = "Human API"

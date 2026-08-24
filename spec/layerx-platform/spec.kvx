@@ -2197,7 +2197,7 @@ reqs = ["27.1","27.5","27.6"]
 
 [task.18.2]
 title = "Ship the reference applications"
-status = "pending"
+status = "implemented"
 wave = 9
 requires = ["16.2","17.2"]
 work_kind = "implementation"
@@ -2210,7 +2210,7 @@ do_4 = "Ship the marketplace reference built on LayerX Programs once the runtime
 do_5 = "Make each reference cloneable and runnable against emulator or testnet with one command, exercised in CI."
 verify_cmd = "make platform-test-docs"
 symbols = ["platform_ref_buyer","platform_ref_seller","platform_ref_merchant","platform_ref_marketplace"]
-touches = ["platform/examples/buyer-agent","platform/examples/paid-api","platform/examples/merchant-shop","platform/examples/marketplace"]
+touches = ["platform/examples","platform/docs","platform/release","platform/Makefile.inc","package*.json",".github/workflows/platform.yml"]
 reqs = ["27.2"]
 
 [task.18.3]

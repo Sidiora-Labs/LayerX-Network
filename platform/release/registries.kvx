@@ -2,6 +2,7 @@
 registries = ["crates-io", "npm", "pypi", "go-modules", "maven-central", "swiftpm", "nuget"]
 tag_format = "sdk-v{version}"
 source_digest = "git-archive-sha256"
+reference_applications = ["@sidiora/layerx-example-buyer-agent","@sidiora/layerx-example-marketplace","@sidiora/layerx-example-merchant-shop","@sidiora/layerx-example-paid-api"]
 
 [registry.crates-io]
 ecosystem = "rust"

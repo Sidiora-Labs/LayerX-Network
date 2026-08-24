@@ -525,3 +525,43 @@ symbol = "cg spec implemented touch graph"
 observed = "The scoped strict guard accepted every changed path inside task 16.2, but cg spec implemented reported an explicit package-lock.json touch as unchanged even though git records the root workspace and package-entry lock changes. cg sync explicitly skipped one file and the code graph does not index this lockfile, so the task declares the package*.json family: the indexed package manifest witnesses the family while strict guard still covers both manifest and lockfile."
 assumption = "Human qualification will let npm ci perform the authoritative locked-workspace consistency check; no dependency install, build or test was run in this phase."
 severity = "phase-boundary"
+
+[observation.18.2.1]
+task = "18.2"
+file = "platform/hosted/gateway/src/lib.rs, platform/emulator/src/main.rs"
+symbol = "production_route, program_call"
+observed = "The hosted gateway admits only activities, state and receipt reads and has neither /v1/programs/deploy nor /v1/programs/call. The standalone emulator has a real-transition /v1/programs/call route, but it accepts a pre-encoded canonical activity rather than the structured client request and has no deployment/registry route. The reference marketplace therefore contains the real deterministic program, declared deployment/call commands and receipt verification, but correctly reports the missing hosted route as Unknown instead of pretending a deployment succeeded."
+assumption = "Tasks 33.6 and 33.7 will expose receipt-backed deploy/call operations through the hosted gateway and reconcile their structured request/response contract with the CLI before human qualification runs the enabled reference-app scenario."
+severity = "dependency-boundary"
+
+[observation.18.2.2]
+task = "18.2"
+file = "agent/crates/layerx-types/src/intent.rs, platform/cli/src/programs.rs, platform/examples/marketplace/program/src/lib.rs"
+symbol = "CapabilityRequest, programs::call, marketplace"
+observed = "The genuine marketplace needs program-shared storage, one exact receipt-read grant and one asset/recipient/amount-bounded transfer grant. The current interaction-layer ProgramCall request exposes only caller-scoped storage-read/write plus broad transfer, event and compose requests; it cannot encode SharedStorageRead, SharedStorageWrite, ReceiptRead(digest), or Transfer402(asset,to,ceiling). The reference program uses the runtime's exact capabilities and the client sends only the currently declared high-level requests, so list/buy will fail closed until the hosted call contract can bind those exact grants."
+assumption = "The hosted program-call work will add a versioned, canonical way to request the exact shared-storage, receipt and bounded-transfer grants without weakening the runtime capability model; qualification must refuse the marketplace release if the interaction surface still cannot express them."
+severity = "dependency-boundary"
+
+[observation.18.2.3]
+task = "18.2"
+file = "platform/emulator/core/emulator_core.c, platform/emulator/src/main.rs, platform/examples/support/runtime.mjs"
+symbol = "platform_emulator_execute, ReceiptAuthorityClient"
+observed = "The standalone emulator encodes receipts with the signature flag disabled and its /v1/receipts response publishes receipt bytes without an authorised batch or sequencer public key. Buyer, seller and merchant emulator profiles therefore target the declared hosted-emulator service boundary on port 9410, where live authority must be supplied; the marketplace profile aimed at the bare emulator will preserve an authority-resolution failure as Unknown and cannot honestly report independent verification."
+assumption = "Task 17.2/17.4 integration or qualification will front the real emulator transition with a receipt-authority surface that publishes signed canonical receipts and exact batch facts, or explicitly constrain emulator reference runs to transition evidence below sequencer-signed verification. The applications will not install a static AuthorizedBatch fallback."
+severity = "dependency-boundary"
+
+[observation.18.2.4]
+task = "18.2"
+file = "spec/layerx-platform/spec.kvx"
+symbol = "task.18.2 touches"
+observed = "The original touch declaration named only four example directories, while the task explicitly requires locked workspace, release, documentation, Make and CI scenario wiring and the retained merchant-checkout compatibility package. The touch list is expanded to those exact integration surfaces so strict guard describes the implementation rather than hiding necessary out-of-scope files. cg sync skips package-lock.json, so the declared package*.json family is witnessed by the indexed package.json while still scope-covering the lockfile change."
+assumption = "Human qualification will review the expanded integration surface together with the four applications, let npm ci perform the authoritative lock consistency check, and run the declared reference-app scenario only after the hosted program dependencies above land."
+severity = "scope-clarification"
+
+[observation.18.2.5]
+task = "18.2"
+file = "programs/crates/layerx-programs-runtime/src/abi/mod.rs, programs/sdk/rust/src/receipt.rs, platform/examples/marketplace/program/src/lib.rs"
+symbol = "ReceiptView, Receipt, marketplace::buy"
+observed = "The runtime's verified receipt view exposes digest, result, asset, amount and state root, but not payer, destination or application-purpose binding. The marketplace prevents cross-listing replay by atomically recording each consumed digest and validates success, asset and minimum amount, but it cannot prove from the current receipt capability that the named payment credited this marketplace rather than another recipient. Treating that missing fact as present would be a fabricated authorization boundary."
+assumption = "The versioned Programs receipt capability must add the destination or an equivalent marketplace/listing-purpose binding before qualification accepts buy as an end-to-end payment flow. Until then the program remains genuine and fail-closed at the unavailable exact capability/deployment boundary recorded above; no fixture or invented destination fact is used."
+severity = "dependency-boundary"

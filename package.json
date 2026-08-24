@@ -13,6 +13,7 @@
     "platform/integrations/next",
     "platform/examples/agent-spend",
     "platform/examples/buyer-agent",
+    "platform/examples/marketplace",
     "platform/examples/merchant-checkout",
     "platform/examples/merchant-shop",
     "platform/examples/paid-api",

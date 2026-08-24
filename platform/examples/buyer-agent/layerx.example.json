@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "application": "buyer-agent",
+  "environments": {
+    "emulator": {
+      "humanUrl": "http://127.0.0.1:9410",
+      "receiptAuthorityUrl": "http://127.0.0.1:9410",
+      "resourceUrl": "http://127.0.0.1:8081/paid",
+      "scheme": "exact",
+      "network": "layerx:emulator",
+      "tokenEnvironment": "LAYERX_EMULATOR_TOKEN",
+      "sourceEnvironment": "LAYERX_EMULATOR_SOURCE",
+      "idempotencyEnvironment": "LAYERX_EMULATOR_PAYMENT_KEY"
+    },
+    "testnet": {
+      "humanUrl": "https://api.testnet.layerx.network",
+      "receiptAuthorityUrl": "https://api.testnet.layerx.network",
+      "resourceUrl": "http://127.0.0.1:8081/paid",
+      "scheme": "exact",
+      "network": "layerx:testnet",
+      "tokenEnvironment": "LAYERX_TESTNET_TOKEN",
+      "sourceEnvironment": "LAYERX_TESTNET_SOURCE",
+      "idempotencyEnvironment": "LAYERX_TESTNET_PAYMENT_KEY"
+    }
+  }
+}

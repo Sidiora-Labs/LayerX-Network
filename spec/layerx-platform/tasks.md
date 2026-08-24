@@ -808,7 +808,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Keep quickstarts free of protocol vocabulary and free of manual key or byte handling.
     - Wire the docs build and sample execution into make platform-test-docs and CI.
     - _Requirements: 27.1, 27.5, 27.6_
-  - [ ] 18.2 Ship the reference applications
+  - [ ] 18.2 Ship the reference applications — **Implemented - qualification pending**
     - Ship the buyer agent reference: an agent paying for a metered API through the buyer middleware.
     - Ship the paid API seller reference over the seller middleware.
     - Ship the merchant checkout reference over the merchant middleware.
