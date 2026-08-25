@@ -811,9 +811,9 @@ dependencies = [
  "layerx-agent-api",
  "layerx-client",
  "layerx-crypto",
- "layerx-proof",
  "layerx-programs-protocol-adapter",
  "layerx-programs-registry",
+ "layerx-proof",
  "layerx-types",
  "layerx-wire",
  "serde_json",
@@ -912,12 +912,21 @@ dependencies = [
 name = "layerx-mirror"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
+ "ed25519-dalek",
+ "k256",
  "layerx-agent-api",
  "layerx-client",
  "layerx-crypto",
  "layerx-proof",
  "layerx-wire",
+ "openssl",
+ "rustls",
+ "serde",
+ "serde_json",
  "sha2",
+ "sha3",
+ "zeroize",
 ]
 
 [[package]]
