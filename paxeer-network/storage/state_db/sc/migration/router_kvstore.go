@@ -9,11 +9,6 @@ import (
 	db "github.com/tendermint/tm-db"
 )
 
-// rootHashSize matches the digest length used by the other CommitKVStore
-// implementations in this codebase: memiavl returns sha256 (32 B) and flatkv
-// returns Blake3-256 (32 B).
-const rootHashSize = 32
-
 var _ types.CommitKVStore = (*RouterCommitKVStore)(nil)
 
 // RouterCommitKVStore adapts a [Router] (which is keyed by store name on every
@@ -109,14 +104,14 @@ func (r *RouterCommitKVStore) GetProof(key []byte) *ics23.CommitmentProof {
 	return proof
 }
 
-// RootHash is a placeholder that returns a fresh zeroed 32-byte slice on every
-// call. The CommitKVStore contract permits callers to mutate the returned
-// slice, so a fresh allocation is required to keep the placeholder safe.
-//
-// TODO: revisit before shipping to production once the production usage of
-// RootHash() across this code path is understood.
+// RootHash cannot be represented by the routing abstraction: a Router exposes
+// reads, writes, and per-key proofs, but no authenticated per-store root. A
+// zero digest is not a valid substitute because callers may treat it as a
+// canonical commitment. This deprecated interface permits implementations to
+// panic when a capability is unavailable, so fail closed just as Iterator and
+// GetProof do when their backing capability is absent.
 func (r *RouterCommitKVStore) RootHash() []byte {
-	return make([]byte, rootHashSize)
+	panic(fmt.Errorf("RouterCommitKVStore.RootHash(store=%q): authenticated root unavailable through router", r.storeName))
 }
 
 func (r *RouterCommitKVStore) Version() int64 {

@@ -102,19 +102,14 @@ func TestRouterCommitKVStore_VersionInvokesProviderEachCall(t *testing.T) {
 	require.Equal(t, int64(42), store.Version())
 }
 
-// TestRouterCommitKVStore_RootHashIs32ZeroBytes locks in the placeholder
-// contract: 32 bytes, all zero, freshly allocated on every call so that a
-// caller mutating the returned slice cannot corrupt subsequent reads.
-func TestRouterCommitKVStore_RootHashIs32ZeroBytes(t *testing.T) {
+// TestRouterCommitKVStore_RootHashPanics verifies that the adapter never
+// fabricates an authenticated root that the Router cannot provide.
+func TestRouterCommitKVStore_RootHashPanics(t *testing.T) {
 	store, _ := newRouterCommitKVStoreForTest(t, 0)
-	hash := store.RootHash()
-	require.Len(t, hash, 32)
-	require.Equal(t, make([]byte, 32), hash)
-
-	hash[0] = 0xFF
-	hash2 := store.RootHash()
-	require.Len(t, hash2, 32)
-	require.Equal(t, make([]byte, 32), hash2)
+	require.PanicsWithError(t,
+		`RouterCommitKVStore.RootHash(store="bank"): authenticated root unavailable through router`,
+		func() { _ = store.RootHash() },
+	)
 }
 
 // TestRouterCommitKVStore_CloseReturnsError locks in that Close is illegal
