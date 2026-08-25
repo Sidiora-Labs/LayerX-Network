@@ -1,4 +1,5 @@
 #include "layerx/lxp_gateway.h"
+#include "lxp_gateway_internal.h"
 
 #include "layerx/lxp_crypto.h"
 #include "layerx/lxp_hash.h"
@@ -16,12 +17,20 @@ typedef struct receive_transaction {
     size_t arena_mark;
 } receive_transaction;
 
-static lxp_result transaction_boundary(
-    const lxp_gateway_receive_context *context,
+static lxp_gateway_transaction_boundary test_failure_boundary;
+
+void lxp_gateway_receive_test_fail_after(
     lxp_gateway_transaction_boundary boundary)
 {
-    return context->inject_failure &&
-           context->failure_after_boundary == boundary ? LXP_ERR_IO : LXP_OK;
+    test_failure_boundary = boundary;
+}
+
+static lxp_result transaction_boundary(
+    lxp_gateway_transaction_boundary boundary)
+{
+    if (test_failure_boundary != boundary) return LXP_OK;
+    test_failure_boundary = 0;
+    return LXP_ERR_IO;
 }
 
 static lxp_result receive_transaction_abort(
@@ -218,7 +227,7 @@ static lxp_result gateway_receive_claim_locked(
         requirement, context->receive_environment->network_id,
         context->service_public_key);
     if (status != LXP_OK) return status;
-    status = lxp_gateway_invoice_state(
+    status = lxp_gateway_invoice_state_locked(
         context->invoices, requirement->invoice_id,
         receive->idempotency_key, receipt, &settled);
     if (status != LXP_OK) return status;
@@ -228,6 +237,9 @@ static lxp_result gateway_receive_claim_locked(
         context->receive_environment->idempotency->count >=
             LXP_SEND_STORE_CAPACITY)
         return LXP_ERR_ARENA_EXHAUSTED;
+    if (lxp_ct_memcmp(receive->grant_id,
+                      receive->payer_grant.grant_id, 32U) != 0)
+        return LXP_ERR_GRANT_SCOPE_VIOLATION;
     (void)memset(&leg, 0, sizeof(leg));
     leg.from = account_for(context->receive_environment->accounts,
                            receive->from);
@@ -260,7 +272,7 @@ static lxp_result gateway_receive_claim_locked(
     if (status != LXP_OK)
         return receive_transaction_abort(
             context, &transaction, receipt, status);
-    status = transaction_boundary(context, LXP_GATEWAY_AFTER_GRANT_WRITE);
+    status = transaction_boundary(LXP_GATEWAY_AFTER_GRANT_WRITE);
     if (status != LXP_OK)
         return receive_transaction_abort(
             context, &transaction, receipt, status);
@@ -283,11 +295,11 @@ static lxp_result gateway_receive_claim_locked(
     if (status != LXP_OK)
         return receive_transaction_abort(
             context, &transaction, receipt, status);
-    status = transaction_boundary(context, LXP_GATEWAY_AFTER_BALANCE_WRITE);
+    status = transaction_boundary(LXP_GATEWAY_AFTER_BALANCE_WRITE);
     if (status != LXP_OK)
         return receive_transaction_abort(
             context, &transaction, receipt, status);
-    status = transaction_boundary(context, LXP_GATEWAY_AFTER_IDEMPOTENCY_WRITE);
+    status = transaction_boundary(LXP_GATEWAY_AFTER_IDEMPOTENCY_WRITE);
     if (status != LXP_OK)
         return receive_transaction_abort(
             context, &transaction, receipt, status);
@@ -297,7 +309,7 @@ static lxp_result gateway_receive_claim_locked(
     if (status != LXP_OK)
         return receive_transaction_abort(
             context, &transaction, receipt, status);
-    status = transaction_boundary(context, LXP_GATEWAY_AFTER_STATE_ROOT);
+    status = transaction_boundary(LXP_GATEWAY_AFTER_STATE_ROOT);
     if (status != LXP_OK)
         return receive_transaction_abort(
             context, &transaction, receipt, status);
@@ -307,7 +319,7 @@ static lxp_result gateway_receive_claim_locked(
     if (status != LXP_OK)
         return receive_transaction_abort(
             context, &transaction, receipt, status);
-    status = transaction_boundary(context, LXP_GATEWAY_AFTER_RECEIPT_SIGN);
+    status = transaction_boundary(LXP_GATEWAY_AFTER_RECEIPT_SIGN);
     if (status != LXP_OK)
         return receive_transaction_abort(
             context, &transaction, receipt, status);
@@ -319,7 +331,7 @@ static lxp_result gateway_receive_claim_locked(
         receive->idempotency_key, 32U);
     context->invoices->records[context->invoices->count].receipt = *receipt;
     ++context->invoices->count;
-    status = transaction_boundary(context, LXP_GATEWAY_AFTER_INVOICE_WRITE);
+    status = transaction_boundary(LXP_GATEWAY_AFTER_INVOICE_WRITE);
     if (status != LXP_OK)
         return receive_transaction_abort(
             context, &transaction, receipt, status);
@@ -341,13 +353,13 @@ lxp_result lxp_gateway_receive_claim(
         context->receive_environment->grants == NULL ||
         context->invoices == NULL || context->service_public_key == NULL ||
         context->sequencer_private_key == NULL || context->arena == NULL ||
-        context->coordination_mutex == NULL || receipt == NULL)
+        receipt == NULL)
         return LXP_ERR_NON_CANONICAL;
-    if (pthread_mutex_lock(context->coordination_mutex) != 0)
+    if (pthread_mutex_lock(&context->invoices->coordination_mutex) != 0)
         return LXP_ERR_IO;
     status = gateway_receive_claim_locked(
         requirement, receive, context, receipt);
-    if (pthread_mutex_unlock(context->coordination_mutex) != 0)
+    if (pthread_mutex_unlock(&context->invoices->coordination_mutex) != 0)
         return LXP_FATAL_INVARIANT;
     return status;
 }

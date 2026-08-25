@@ -1,5 +1,6 @@
 #include "layerx/lxp_gateway.h"
 #include "layerx/lxp_hash.h"
+#include "../src/network/lxp_gateway_internal.h"
 
 #include <openssl/evp.h>
 #include <string.h>
@@ -15,7 +16,6 @@ typedef struct gateway_world {
     lxp_send_environment environment;
     lxp_gateway_invoice_registry invoices;
     lxp_gateway_settlement_context settlement;
-    pthread_mutex_t coordination_mutex;
 } gateway_world;
 
 typedef struct settlement_thread {
@@ -104,7 +104,7 @@ static int world_init(
     const char *payer_name = "agent:did:key:payer:main";
     const char *payee_name = "agent:did:key:service:main";
     (void)memset(world, 0, sizeof(*world));
-    if (pthread_mutex_init(&world->coordination_mutex, NULL) != 0)
+    if (lxp_gateway_invoice_registry_init(&world->invoices) != LXP_OK)
         return 1;
     world->asset.asset_id[0] = 3U;
     (void)memcpy(world->asset.symbol, "USD", 4U);
@@ -148,7 +148,6 @@ static int world_init(
     world->settlement.global_sequence = 1U;
     world->settlement.batch_id[0] = 0x88U;
     world->settlement.arena = arena;
-    world->settlement.coordination_mutex = &world->coordination_mutex;
     return 0;
 }
 
@@ -249,8 +248,7 @@ int main(void)
         (void)memset(&zero_send, 0, sizeof(zero_send));
         (void)memset(&zero_invoice, 0, sizeof(zero_invoice));
         (void)memset(&gateway_receipt, 0xa5, sizeof(gateway_receipt));
-        gateway.settlement.inject_failure = true;
-        gateway.settlement.failure_after_boundary = boundary;
+        lxp_gateway_send_test_fail_after(boundary);
         if (lxp_gateway_send_settle(
                 &requirement, &send, &gateway.settlement,
                 &gateway_receipt) != LXP_ERR_IO ||
@@ -266,7 +264,6 @@ int main(void)
                    sizeof(gateway_receipt)) != 0)
             return 1;
     }
-    gateway.settlement.inject_failure = false;
     {
         size_t capacity = arena_a.capacity;
         lxp_receipt zero_receipt;
@@ -362,7 +359,7 @@ int main(void)
             &direct_receipt) != LXP_ERR_EXPIRED ||
         direct.payer->balance.lo != 75U || direct.payee->balance.lo != 25U)
         return 1;
-    return pthread_mutex_destroy(&gateway.coordination_mutex) != 0 ||
-           pthread_mutex_destroy(&direct.coordination_mutex) != 0 ||
-           pthread_mutex_destroy(&concurrent.coordination_mutex) != 0;
+    return lxp_gateway_invoice_registry_destroy(&gateway.invoices) != LXP_OK ||
+           lxp_gateway_invoice_registry_destroy(&direct.invoices) != LXP_OK ||
+           lxp_gateway_invoice_registry_destroy(&concurrent.invoices) != LXP_OK;
 }

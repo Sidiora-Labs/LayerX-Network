@@ -1,4 +1,5 @@
 #include "layerx/lxp_gateway.h"
+#include "lxp_gateway_internal.h"
 
 #include "layerx/lxp_crypto.h"
 #include "layerx/lxp_hash.h"
@@ -12,12 +13,20 @@ typedef struct send_transaction {
     size_t arena_mark;
 } send_transaction;
 
-static lxp_result transaction_boundary(
-    const lxp_gateway_settlement_context *context,
+static lxp_gateway_transaction_boundary test_failure_boundary;
+
+void lxp_gateway_send_test_fail_after(
     lxp_gateway_transaction_boundary boundary)
 {
-    return context->inject_failure &&
-           context->failure_after_boundary == boundary ? LXP_ERR_IO : LXP_OK;
+    test_failure_boundary = boundary;
+}
+
+static lxp_result transaction_boundary(
+    lxp_gateway_transaction_boundary boundary)
+{
+    if (test_failure_boundary != boundary) return LXP_OK;
+    test_failure_boundary = 0;
+    return LXP_ERR_IO;
 }
 
 static lxp_result send_transaction_abort(
@@ -41,7 +50,7 @@ static lxp_result send_transaction_abort(
            LXP_FATAL_INVARIANT;
 }
 
-lxp_result lxp_gateway_invoice_state(
+lxp_result lxp_gateway_invoice_state_locked(
     const lxp_gateway_invoice_registry *registry,
     const uint8_t invoice_id[32],
     const uint8_t idempotency_key[32],
@@ -64,6 +73,41 @@ lxp_result lxp_gateway_invoice_state(
         }
     }
     return LXP_OK;
+}
+
+lxp_result lxp_gateway_invoice_registry_init(
+    lxp_gateway_invoice_registry *registry)
+{
+    if (registry == NULL) return LXP_ERR_NON_CANONICAL;
+    (void)memset(registry, 0, sizeof(*registry));
+    return pthread_mutex_init(&registry->coordination_mutex, NULL) == 0 ?
+        LXP_OK : LXP_ERR_IO;
+}
+
+lxp_result lxp_gateway_invoice_registry_destroy(
+    lxp_gateway_invoice_registry *registry)
+{
+    if (registry == NULL) return LXP_ERR_NON_CANONICAL;
+    return pthread_mutex_destroy(&registry->coordination_mutex) == 0 ?
+        LXP_OK : LXP_ERR_IO;
+}
+
+lxp_result lxp_gateway_invoice_state(
+    lxp_gateway_invoice_registry *registry,
+    const uint8_t invoice_id[32],
+    const uint8_t idempotency_key[32],
+    lxp_receipt *receipt,
+    bool *settled)
+{
+    lxp_result status;
+    if (registry == NULL) return LXP_ERR_NON_CANONICAL;
+    if (pthread_mutex_lock(&registry->coordination_mutex) != 0)
+        return LXP_ERR_IO;
+    status = lxp_gateway_invoice_state_locked(
+        registry, invoice_id, idempotency_key, receipt, settled);
+    if (pthread_mutex_unlock(&registry->coordination_mutex) != 0)
+        return LXP_FATAL_INVARIANT;
+    return status;
 }
 
 static lxp_result requirement_matches_send(
@@ -178,7 +222,7 @@ static lxp_result gateway_send_settle_locked(
         requirement, context->send_environment->network_id,
         context->service_public_key);
     if (status != LXP_OK) return status;
-    status = lxp_gateway_invoice_state(
+    status = lxp_gateway_invoice_state_locked(
         context->invoices, requirement->invoice_id,
         send->idempotency_key, receipt, &settled);
     if (status != LXP_OK) return status;
@@ -207,10 +251,10 @@ static lxp_result gateway_send_settle_locked(
         send, context->send_environment, &projection);
     if (status != LXP_OK)
         return send_transaction_abort(context, &transaction, receipt, status);
-    status = transaction_boundary(context, LXP_GATEWAY_AFTER_BALANCE_WRITE);
+    status = transaction_boundary(LXP_GATEWAY_AFTER_BALANCE_WRITE);
     if (status != LXP_OK)
         return send_transaction_abort(context, &transaction, receipt, status);
-    status = transaction_boundary(context, LXP_GATEWAY_AFTER_IDEMPOTENCY_WRITE);
+    status = transaction_boundary(LXP_GATEWAY_AFTER_IDEMPOTENCY_WRITE);
     if (status != LXP_OK)
         return send_transaction_abort(context, &transaction, receipt, status);
     status = lx_asset_state_root(
@@ -218,7 +262,7 @@ static lxp_result gateway_send_settle_locked(
         resulting_state_root);
     if (status != LXP_OK)
         return send_transaction_abort(context, &transaction, receipt, status);
-    status = transaction_boundary(context, LXP_GATEWAY_AFTER_STATE_ROOT);
+    status = transaction_boundary(LXP_GATEWAY_AFTER_STATE_ROOT);
     if (status != LXP_OK)
         return send_transaction_abort(context, &transaction, receipt, status);
     status = build_signed_receipt(
@@ -226,7 +270,7 @@ static lxp_result gateway_send_settle_locked(
         context, receipt);
     if (status != LXP_OK)
         return send_transaction_abort(context, &transaction, receipt, status);
-    status = transaction_boundary(context, LXP_GATEWAY_AFTER_RECEIPT_SIGN);
+    status = transaction_boundary(LXP_GATEWAY_AFTER_RECEIPT_SIGN);
     if (status != LXP_OK)
         return send_transaction_abort(context, &transaction, receipt, status);
     (void)memcpy(
@@ -237,7 +281,7 @@ static lxp_result gateway_send_settle_locked(
         send->idempotency_key, 32U);
     context->invoices->records[context->invoices->count].receipt = *receipt;
     ++context->invoices->count;
-    status = transaction_boundary(context, LXP_GATEWAY_AFTER_INVOICE_WRITE);
+    status = transaction_boundary(LXP_GATEWAY_AFTER_INVOICE_WRITE);
     if (status != LXP_OK)
         return send_transaction_abort(context, &transaction, receipt, status);
     status = lxp_journal_commit(&transaction.balances);
@@ -257,12 +301,12 @@ lxp_result lxp_gateway_send_settle(
         context->send_environment->accounts == NULL ||
         context->invoices == NULL || context->service_public_key == NULL ||
         context->sequencer_private_key == NULL || context->arena == NULL ||
-        context->coordination_mutex == NULL || receipt == NULL)
+        receipt == NULL)
         return LXP_ERR_NON_CANONICAL;
-    if (pthread_mutex_lock(context->coordination_mutex) != 0)
+    if (pthread_mutex_lock(&context->invoices->coordination_mutex) != 0)
         return LXP_ERR_IO;
     status = gateway_send_settle_locked(requirement, send, context, receipt);
-    if (pthread_mutex_unlock(context->coordination_mutex) != 0)
+    if (pthread_mutex_unlock(&context->invoices->coordination_mutex) != 0)
         return LXP_FATAL_INVARIANT;
     return status;
 }
