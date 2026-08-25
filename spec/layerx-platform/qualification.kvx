@@ -1334,6 +1334,14 @@ observed = "Owner-authorized publication run 32804681730 completed successfully 
 assumption = "The GHCR package exists and contains the two-platform manifest, but an anonymous manifest request returned unauthorized and the host GitHub token has no package-administration scope, so public GHCR visibility remains an owner-controlled package setting rather than a claimed result. This does not gate the public node.hyperpaxeer.com service, which consumes the public checksum-bound release executable. Human qualification must still begin from a clean host, exercise installer and node bootstrap through the public origin, restart with persisted peers, and adversarially check registration spoof refusal."
 severity = "qualification-boundary"
 
+[observation.23.3.1]
+task = "23.3"
+file = "interop/crates/layerx-interop-service/src/server.rs, interop/crates/layerx-interop-service/src/config.rs, platform/hosted/gateway/src/store.rs"
+symbol = "visa, VisaRegistry, RedisStore::consume_tap_nonce"
+observed = "Post-implementation source review found that the hosted Visa TAP path trusted caller-supplied time and target envelope values, discarded nonce state between requests, synthesized every configured registry key as active, did not bind the submitted canonical LayerX activity to the credential or resulting receipt, and converted an exact retry of a pending operation into a replay refusal. The repair uses server time with bounded configured skew, requires a canonical per-principal target and explicit active or revoked registry status, atomically persists the registry-key/nonce credential-target-operation-activity binding in Redis, admits only the exact already-consumed pending retry, and requires the verified receipt activity identifier to equal the submitted canonical activity identifier. Source tests were added but were not executed in the implementation phase."
+assumption = "Human qualification must run the TAP conformance, interop service, real TLS Redis restart/replay, and hosted execution suites; exercise cross-authority, cross-path, revoked, expired, altered-principal, altered-intent, altered-activity, altered-signer, altered-evidence and altered-operation nonce reuse; prove exact pending retries remain idempotent across service and Redis restarts; and inspect durable binding expiry and reconstruction before retaining task 23.3 as qualified."
+severity = "qualification-repair"
+
 [observation.15.2.1]
 task = "15.2"
 file = "agent/crates/layerx-client/src/client.rs, agent/crates/layerx-agentd/src/authority.rs"

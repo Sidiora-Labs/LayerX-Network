@@ -103,6 +103,9 @@ pub struct TapCredentialRecord {
     pub evidence_digest: String,
     pub activity_id: Option<String>,
     pub signer_public_key: String,
+    pub target_authority: String,
+    pub target_path: String,
+    pub operation_identity: String,
     pub credential_expires_at: u64,
 }
 
@@ -110,6 +113,7 @@ pub struct TapCredentialRecord {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TapNonceConsumption {
     Consumed { binding_digest: String },
+    AlreadyConsumed { binding_digest: String },
     Replay,
 }
 
@@ -509,19 +513,7 @@ impl RedisStore {
             nonce.as_bytes(),
         ]);
         let activity_id = record.activity_id.as_deref().unwrap_or("");
-        let binding_digest = digest(&[
-            b"gateway-tap-binding-v1",
-            record.principal_digest.as_bytes(),
-            record.key_id.as_bytes(),
-            record.layerx_agent.as_bytes(),
-            record.trusted_agent_id.as_bytes(),
-            record.trusted_agent_domain.as_bytes(),
-            record.intent.as_bytes(),
-            record.evidence_digest.as_bytes(),
-            activity_id.as_bytes(),
-            record.signer_public_key.as_bytes(),
-            &record.credential_expires_at.to_be_bytes(),
-        ]);
+        let binding_digest = tap_binding_digest(record);
         let nonce_key = format!("gateway:tap:nonce:{nonce_scope}");
         let binding_key = format!("gateway:tap:binding:{binding_digest}");
         let ttl = replay_until - now;
@@ -546,6 +538,9 @@ impl RedisStore {
                 &record.evidence_digest,
                 activity_id,
                 &record.signer_public_key,
+                &record.target_authority,
+                &record.target_path,
+                &record.operation_identity,
                 &record.credential_expires_at.to_string(),
                 &now.to_string(),
                 audit_event,
@@ -558,6 +553,9 @@ impl RedisStore {
             }
             return match tag.as_str() {
                 "consumed" => Ok(TapNonceConsumption::Consumed {
+                    binding_digest,
+                }),
+                "existing" => Ok(TapNonceConsumption::AlreadyConsumed {
                     binding_digest,
                 }),
                 "replay" => Ok(TapNonceConsumption::Replay),
@@ -582,7 +580,7 @@ impl RedisStore {
                     .get("activity_id")
                     .filter(|value| !value.is_empty())
                     .cloned();
-                Ok(Some(TapCredentialRecord {
+                let record = TapCredentialRecord {
                     principal_digest: required(&fields, "principal")?,
                     key_id: required(&fields, "key_id")?,
                     layerx_agent: required(&fields, "layerx_agent")?,
@@ -592,8 +590,16 @@ impl RedisStore {
                     evidence_digest: required(&fields, "evidence_digest")?,
                     activity_id,
                     signer_public_key: required(&fields, "signer_public_key")?,
+                    target_authority: required(&fields, "target_authority")?,
+                    target_path: required(&fields, "target_path")?,
+                    operation_identity: required(&fields, "operation_identity")?,
                     credential_expires_at: number(&fields, "credential_expires_at")?,
-                }))
+                };
+                validate_tap_record_fields(&record)?;
+                if tap_binding_digest(&record) != binding_digest {
+                    return Err("gateway TAP binding digest does not match its record".to_owned());
+                }
+                Ok(Some(record))
             }
             _ => Err("gateway TAP binding response is invalid".to_owned()),
         }
@@ -739,19 +745,26 @@ return {'completed'}
 
 const TAP_CONSUME_SCRIPT: &str = r#"
 local previous = redis.call('GET', KEYS[4]) or ''
-if previous ~= ARGV[15] then return {'audit_retry'} end
-if redis.call('EXISTS', KEYS[1]) == 1 then
- redis.call('XADD', KEYS[3], '*', 'previous', ARGV[15], 'chain', ARGV[16], 'event', ARGV[14], 'outcome', 'replay')
- redis.call('SET', KEYS[4], ARGV[16])
+if previous ~= ARGV[18] then return {'audit_retry'} end
+local existing = redis.call('GET', KEYS[1])
+if existing then
+ local outcome = 'replay'
+ if existing == ARGV[2] then
+  if redis.call('HGET', KEYS[2], 'principal') == ARGV[3] and redis.call('HGET', KEYS[2], 'key_id') == ARGV[4] and redis.call('HGET', KEYS[2], 'layerx_agent') == ARGV[5] and redis.call('HGET', KEYS[2], 'trusted_agent_id') == ARGV[6] and redis.call('HGET', KEYS[2], 'trusted_agent_domain') == ARGV[7] and redis.call('HGET', KEYS[2], 'intent') == ARGV[8] and redis.call('HGET', KEYS[2], 'evidence_digest') == ARGV[9] and redis.call('HGET', KEYS[2], 'activity_id') == ARGV[10] and redis.call('HGET', KEYS[2], 'signer_public_key') == ARGV[11] and redis.call('HGET', KEYS[2], 'target_authority') == ARGV[12] and redis.call('HGET', KEYS[2], 'target_path') == ARGV[13] and redis.call('HGET', KEYS[2], 'operation_identity') == ARGV[14] and redis.call('HGET', KEYS[2], 'credential_expires_at') == ARGV[15] then outcome = 'existing' else outcome = 'corrupt' end
+ end
+ redis.call('XADD', KEYS[3], '*', 'previous', ARGV[18], 'chain', ARGV[19], 'event', ARGV[17], 'outcome', outcome)
+ redis.call('SET', KEYS[4], ARGV[19])
+ if outcome == 'existing' then return {'existing'} end
+ if outcome == 'corrupt' then return {'conflict'} end
  return {'replay'}
 end
 if redis.call('EXISTS', KEYS[2]) == 1 then return {'conflict'} end
 local consumed = redis.call('SET', KEYS[1], ARGV[2], 'EX', ARGV[1], 'NX')
 if not consumed then return {'conflict'} end
-redis.call('HSET', KEYS[2], 'principal', ARGV[3], 'key_id', ARGV[4], 'layerx_agent', ARGV[5], 'trusted_agent_id', ARGV[6], 'trusted_agent_domain', ARGV[7], 'intent', ARGV[8], 'evidence_digest', ARGV[9], 'activity_id', ARGV[10], 'signer_public_key', ARGV[11], 'credential_expires_at', ARGV[12], 'consumed_at', ARGV[13])
+redis.call('HSET', KEYS[2], 'principal', ARGV[3], 'key_id', ARGV[4], 'layerx_agent', ARGV[5], 'trusted_agent_id', ARGV[6], 'trusted_agent_domain', ARGV[7], 'intent', ARGV[8], 'evidence_digest', ARGV[9], 'activity_id', ARGV[10], 'signer_public_key', ARGV[11], 'target_authority', ARGV[12], 'target_path', ARGV[13], 'operation_identity', ARGV[14], 'credential_expires_at', ARGV[15], 'consumed_at', ARGV[16])
 redis.call('EXPIRE', KEYS[2], ARGV[1])
-redis.call('XADD', KEYS[3], '*', 'previous', ARGV[15], 'chain', ARGV[16], 'event', ARGV[14], 'outcome', 'consumed')
-redis.call('SET', KEYS[4], ARGV[16])
+redis.call('XADD', KEYS[3], '*', 'previous', ARGV[18], 'chain', ARGV[19], 'event', ARGV[17], 'outcome', 'consumed')
+redis.call('SET', KEYS[4], ARGV[19])
 return {'consumed'}
 "#;
 
@@ -762,26 +775,10 @@ fn validate_tap_record(
     now: u64,
     replay_until: u64,
 ) -> Result<(), String> {
-    let bounded = |value: &str, maximum: usize| {
-        !value.is_empty()
-            && value.len() <= maximum
-            && !value.bytes().any(|byte| byte.is_ascii_control())
-    };
+    validate_tap_record_fields(record)?;
     if registry_key != record.key_id
-        || !bounded(registry_key, 512)
-        || !bounded(nonce, 512)
-        || !valid_hex_digest(&record.principal_digest)
-        || !valid_hex_digest(&record.layerx_agent)
-        || !bounded(&record.trusted_agent_id, 512)
-        || !bounded(&record.trusted_agent_domain, 2048)
-        || !record.trusted_agent_domain.starts_with("https://")
-        || !matches!(record.intent.as_str(), "browse" | "pay")
-        || !valid_hex_digest(&record.evidence_digest)
-        || record
-            .activity_id
-            .as_ref()
-            .is_some_and(|value| !valid_hex_digest(value))
-        || !valid_hex_digest(&record.signer_public_key)
+        || !bounded_text(registry_key, 512)
+        || !bounded_text(nonce, 512)
         || replay_until <= now
         || replay_until - now > MAX_TAP_REPLAY_SECONDS
         || replay_until < record.credential_expires_at
@@ -791,8 +788,113 @@ fn validate_tap_record(
     Ok(())
 }
 
+fn validate_tap_record_fields(record: &TapCredentialRecord) -> Result<(), String> {
+    if !valid_hex_digest(&record.principal_digest)
+        || !valid_hex_digest(&record.layerx_agent)
+        || !bounded_text(&record.key_id, 512)
+        || !bounded_text(&record.trusted_agent_id, 512)
+        || !bounded_text(&record.trusted_agent_domain, 2048)
+        || !record.trusted_agent_domain.starts_with("https://")
+        || !matches!(record.intent.as_str(), "browse" | "pay")
+        || !valid_hex_digest(&record.evidence_digest)
+        || record
+            .activity_id
+            .as_ref()
+            .is_some_and(|value| !valid_hex_digest(value))
+        || !valid_hex_digest(&record.signer_public_key)
+        || !canonical_target_authority(&record.target_authority)
+        || !canonical_target_path(&record.target_path)
+        || !valid_hex_digest(&record.operation_identity)
+        || record.credential_expires_at == 0
+    {
+        return Err("gateway TAP credential binding is invalid".to_owned());
+    }
+    Ok(())
+}
+
+fn bounded_text(value: &str, maximum: usize) -> bool {
+    !value.is_empty()
+        && value.len() <= maximum
+        && !value.bytes().any(|byte| byte.is_ascii_control())
+}
+
+fn canonical_target_authority(value: &str) -> bool {
+    if !bounded_text(value, 512)
+        || value != value.to_ascii_lowercase()
+        || value.contains(['/', '@', '?', '#', '\\'])
+    {
+        return false;
+    }
+    let (host, port) = value.rsplit_once(':').map_or((value, None), |(host, port)| {
+        (host, Some(port))
+    });
+    if host.is_empty()
+        || host.contains(':')
+        || host.ends_with('.')
+        || port.is_some_and(|port| {
+            port.parse::<u16>().map_or(true, |number| {
+                number == 0 || number.to_string() != port
+            })
+        })
+    {
+        return false;
+    }
+    !host.split('.').any(|label| {
+        label.is_empty()
+            || label.len() > 63
+            || !label
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+            || !label
+                .as_bytes()
+                .first()
+                .is_some_and(u8::is_ascii_alphanumeric)
+            || !label
+                .as_bytes()
+                .last()
+                .is_some_and(u8::is_ascii_alphanumeric)
+    })
+}
+
+fn canonical_target_path(value: &str) -> bool {
+    value == "/"
+        || (bounded_text(value, 512)
+            && value.starts_with('/')
+            && !value.ends_with('/')
+            && !value.split('/').skip(1).any(|segment| {
+                segment.is_empty()
+                    || matches!(segment, "." | "..")
+                    || !segment.bytes().all(|byte| {
+                        byte.is_ascii_alphanumeric()
+                            || matches!(byte, b'-' | b'_' | b'.' | b'~')
+                    })
+            }))
+}
+
 fn valid_hex_digest(value: &str) -> bool {
-    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+}
+
+fn tap_binding_digest(record: &TapCredentialRecord) -> String {
+    digest(&[
+        b"gateway-tap-binding-v1",
+        record.principal_digest.as_bytes(),
+        record.key_id.as_bytes(),
+        record.layerx_agent.as_bytes(),
+        record.trusted_agent_id.as_bytes(),
+        record.trusted_agent_domain.as_bytes(),
+        record.intent.as_bytes(),
+        record.evidence_digest.as_bytes(),
+        record.activity_id.as_deref().unwrap_or("").as_bytes(),
+        record.signer_public_key.as_bytes(),
+        record.target_authority.as_bytes(),
+        record.target_path.as_bytes(),
+        record.operation_identity.as_bytes(),
+        &record.credential_expires_at.to_be_bytes(),
+    ])
 }
 
 fn digest(parts: &[&[u8]]) -> String {

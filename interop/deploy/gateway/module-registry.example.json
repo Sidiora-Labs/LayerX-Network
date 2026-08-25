@@ -1,0 +1,12 @@
+{
+  "modules": [
+    {"module": 1, "ordinals": [1]},
+    {"module": 2, "ordinals": [1]},
+    {"module": 3, "ordinals": [1]},
+    {"module": 4, "ordinals": [1]},
+    {"module": 5, "ordinals": [1]},
+    {"module": 6, "ordinals": [1]},
+    {"module": 7, "ordinals": [1]},
+    {"module": 8, "ordinals": [1]}
+  ]
+}

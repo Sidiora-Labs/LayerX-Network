@@ -1,4 +1,6 @@
-use crate::config::{decode_hex, parse_hex32, Ap2KeyPin, Config, FiatProviderPin, VisaAgentPin};
+use crate::config::{
+    decode_hex, parse_hex32, Ap2KeyPin, Config, FiatProviderPin, VisaAgentPin, VisaTargetPin,
+};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use ed25519_dalek::{Signature, Verifier as _, VerifyingKey as Ed25519Key};
@@ -983,7 +985,7 @@ fn visa(
     record: &KeyRecord,
     principal: &PrincipalId,
     trace: &TraceId,
-    _operation: &str,
+    operation: &str,
     execute: bool,
 ) -> Dispatch {
     let body: VisaRequest = match direct_body(request) {
@@ -999,6 +1001,18 @@ fn visa(
         Ok(value) => value,
         Err(_) => return Dispatch::error(400, "refused", "visa_tap_refused"),
     };
+    let target = match config
+        .manifest
+        .visa_targets
+        .iter()
+        .find(|target| target.principal_digest.as_str() == record.principal_digest)
+    {
+        Some(value) => value,
+        None => return Dispatch::error(400, "refused", "visa_tap_target_unavailable"),
+    };
+    if require_visa_target(&tap, target).is_err() {
+        return Dispatch::error(400, "refused", "visa_tap_target_mismatch");
+    }
     let registry = VisaRegistry {
         pins: &config.manifest.visa_agents,
     };
@@ -1072,6 +1086,9 @@ fn visa(
         intent: verified.intent,
         activity_id: activity_binding.as_ref().map(|binding| binding.activity_id),
         signer_public_key,
+        target_authority: tap.authority(),
+        target_path: tap.path(),
+        operation_identity: operation,
         credential_expires_at: verified.expires_at,
         replay_until,
         consumed_at: observed_at,
@@ -1156,6 +1173,14 @@ fn require_visa_actor(
     }
 }
 
+fn require_visa_target(tap: &TapRequest, target: &VisaTargetPin) -> Result<(), &'static str> {
+    if tap.authority() == target.authority.as_str() && tap.path() == target.path.as_str() {
+        Ok(())
+    } else {
+        Err("visa_tap_target_mismatch")
+    }
+}
+
 fn require_visa_route(
     execute: bool,
     intent: AgentIntent,
@@ -1181,13 +1206,21 @@ impl TrustedAgentRegistry for VisaRegistry<'_> {
     fn resolve(
         &self,
         key_id: &str,
-        _now: u64,
+        now: u64,
     ) -> Result<RegisteredAgentKey, layerx_visa_tap::TapError> {
         let pin = self
             .pins
             .iter()
             .find(|pin| pin.key_id == key_id)
             .ok_or(layerx_visa_tap::TapError::UnknownKey)?;
+        let status = match pin.status.as_str() {
+            "active" => KeyStatus::Active,
+            "revoked" => return Err(layerx_visa_tap::TapError::Revoked),
+            _ => return Err(layerx_visa_tap::TapError::RegistryUnavailable),
+        };
+        if pin.expires_at <= now {
+            return Err(layerx_visa_tap::TapError::ExpiredKey);
+        }
         let key = match pin.algorithm.as_str() {
             "ed25519" => AgentPublicKey::Ed25519(
                 parse_hex32(&pin.public_key)
@@ -1209,7 +1242,7 @@ impl TrustedAgentRegistry for VisaRegistry<'_> {
                     .map_err(|_| layerx_visa_tap::TapError::RegistryUnavailable)?,
             ),
             key,
-            status: KeyStatus::Active,
+            status,
             expires_at: pin.expires_at,
         })
     }
@@ -1221,6 +1254,9 @@ struct DurableVisaBinding<'a> {
     intent: AgentIntent,
     activity_id: Option<[u8; 32]>,
     signer_public_key: [u8; 32],
+    target_authority: &'a str,
+    target_path: &'a str,
+    operation_identity: &'a str,
     credential_expires_at: u64,
     replay_until: u64,
     consumed_at: u64,
@@ -1248,6 +1284,9 @@ impl CredentialBindingStore for DurableVisaBinding<'_> {
             evidence_digest: hex(&binding.evidence_digest),
             activity_id: self.activity_id.map(|value| hex(&value)),
             signer_public_key: hex(&self.signer_public_key),
+            target_authority: self.target_authority.to_owned(),
+            target_path: self.target_path.to_owned(),
+            operation_identity: self.operation_identity.to_owned(),
             credential_expires_at: self.credential_expires_at,
         };
         match self.store.consume_tap_nonce(
@@ -1258,7 +1297,10 @@ impl CredentialBindingStore for DurableVisaBinding<'_> {
             self.replay_until,
             self.audit_event,
         ) {
-            Ok(TapNonceConsumption::Consumed { .. }) => Ok(()),
+            Ok(
+                TapNonceConsumption::Consumed { .. }
+                | TapNonceConsumption::AlreadyConsumed { .. },
+            ) => Ok(()),
             Ok(TapNonceConsumption::Replay) => Err(TapError::Replay),
             Err(_) => Err(TapError::StorageRefused),
         }
@@ -1986,6 +2028,29 @@ fn hex(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
 
+    fn parsed_tap(authority: &str, path: &str) -> TapRequest {
+        TapRequest::parse(
+            authority,
+            path,
+            "sig2=(\"@authority\" \"@path\");created=1;keyid=\"tap-key-1\";alg=\"Ed25519\";expires=100;nonce=\"target-nonce\";tag=\"agent-payer-auth\"",
+            "sig2=:AA==:",
+        )
+        .unwrap_or_else(|error| panic!("TAP target fixture must parse: {error}"))
+    }
+
+    fn visa_pin(status: &str, expires_at: u64) -> VisaAgentPin {
+        VisaAgentPin {
+            key_id: "tap-key-1".to_owned(),
+            agent_id: "trusted-agent-1".to_owned(),
+            agent_domain: "https://agent.example".to_owned(),
+            layerx_agent: "11".repeat(32),
+            algorithm: "ed25519".to_owned(),
+            public_key: "22".repeat(32),
+            status: status.to_owned(),
+            expires_at,
+        }
+    }
+
     fn visa_wire() -> serde_json::Value {
         serde_json::json!({
             "authority": "shop.example",
@@ -2015,6 +2080,48 @@ mod tests {
         assert_eq!(
             require_visa_route(true, AgentIntent::Browse, "00"),
             Err("payer_credential_required")
+        );
+    }
+
+    #[test]
+    fn visa_target_refuses_cross_authority_and_cross_path_credentials() {
+        let target = VisaTargetPin {
+            principal_digest: "33".repeat(32),
+            authority: "shop.example".to_owned(),
+            path: "/checkout".to_owned(),
+        };
+        assert!(require_visa_target(&parsed_tap("shop.example", "/checkout"), &target).is_ok());
+        assert!(require_visa_target(&parsed_tap("other.example", "/checkout"), &target).is_err());
+        assert!(require_visa_target(&parsed_tap("shop.example", "/other"), &target).is_err());
+    }
+
+    #[test]
+    fn visa_registry_preserves_revocation_and_expiry_instead_of_synthesizing_active() {
+        let revoked = vec![visa_pin("revoked", 100)];
+        let revoked_registry = VisaRegistry { pins: &revoked };
+        assert_eq!(
+            TapVerifier::verify_credential(
+                &parsed_tap("shop.example", "/checkout"),
+                &revoked_registry,
+                1,
+                0,
+            ),
+            Err(TapError::Revoked)
+        );
+        let expired = vec![visa_pin("active", 1)];
+        let expired_registry = VisaRegistry { pins: &expired };
+        assert_eq!(
+            TapVerifier::verify_credential(
+                &parsed_tap("shop.example", "/checkout"),
+                &expired_registry,
+                2,
+                0,
+            ),
+            Err(TapError::ExpiredKey)
+        );
+        assert_eq!(
+            revoked_registry.resolve("unknown-key", 1),
+            Err(TapError::UnknownKey)
         );
     }
 

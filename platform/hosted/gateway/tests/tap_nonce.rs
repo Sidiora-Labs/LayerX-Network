@@ -152,7 +152,7 @@ fn path(value: &Path) -> &str {
 }
 
 #[test]
-fn tap_nonce_replay_survives_store_reconstruction_and_preserves_binding() {
+fn exact_pending_retry_survives_reconstruction_but_altered_nonce_reuse_is_replay() {
     let redis = RedisProcess::start();
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -168,6 +168,9 @@ fn tap_nonce_replay_survives_store_reconstruction_and_preserves_binding() {
         evidence_digest: "33".repeat(32),
         activity_id: Some("44".repeat(32)),
         signer_public_key: "22".repeat(32),
+        target_authority: "shop.example".to_owned(),
+        target_path: "/checkout".to_owned(),
+        operation_identity: "55".repeat(32),
         credential_expires_at: now + 300,
     };
     let first = redis
@@ -197,6 +200,38 @@ fn tap_nonce_replay_survives_store_reconstruction_and_preserves_binding() {
                 "tap-nonce-second-request",
             )
             .unwrap_or_else(|error| panic!("replay decision must come from Redis: {error}")),
+        TapNonceConsumption::AlreadyConsumed {
+            binding_digest: binding_digest.clone()
+        }
+    );
+    let mut altered_operation = record.clone();
+    altered_operation.operation_identity = "66".repeat(32);
+    assert_eq!(
+        reconstructed
+            .consume_tap_nonce(
+                &altered_operation.key_id,
+                "nonce-across-service-restart",
+                &altered_operation,
+                now + 2,
+                now + 360,
+                "tap-nonce-altered-operation",
+            )
+            .unwrap_or_else(|error| panic!("altered operation must reach replay state: {error}")),
+        TapNonceConsumption::Replay
+    );
+    let mut altered_target = record.clone();
+    altered_target.target_path = "/other-checkout".to_owned();
+    assert_eq!(
+        reconstructed
+            .consume_tap_nonce(
+                &altered_target.key_id,
+                "nonce-across-service-restart",
+                &altered_target,
+                now + 3,
+                now + 360,
+                "tap-nonce-altered-target",
+            )
+            .unwrap_or_else(|error| panic!("altered target must reach replay state: {error}")),
         TapNonceConsumption::Replay
     );
     assert_eq!(

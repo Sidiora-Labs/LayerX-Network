@@ -126,6 +126,40 @@ fn target_tampering_replay_expiry_and_revocation_are_typed_refusals() {
         TapVerifier::verify(&altered, &active, &mut NonceWindow::new(), NOW),
         Err(TapError::InvalidSignature)
     );
+    let altered_path = TapRequest::parse(
+        "shop.example",
+        "/other-checkout",
+        &format!("sig2={}", request_parameters()),
+        &signature_for(&signing, &request_parameters()),
+    )
+    .unwrap_or_else(|error| panic!("altered path must remain syntactically valid: {error}"));
+    assert_eq!(
+        TapVerifier::verify(&altered_path, &active, &mut NonceWindow::new(), NOW),
+        Err(TapError::InvalidSignature)
+    );
+}
+
+#[test]
+fn target_components_require_one_canonical_authority_and_path_representation() {
+    let signature_input = format!("sig2={}", request_parameters());
+    let signing = SigningKey::from_bytes(&[0x36; 32]);
+    let signature = signature_for(&signing, &request_parameters());
+    assert_eq!(
+        TapRequest::parse("Shop.Example", "/checkout", &signature_input, &signature),
+        Err(TapError::InvalidTarget)
+    );
+    assert_eq!(
+        TapRequest::parse("shop.example:0443", "/checkout", &signature_input, &signature),
+        Err(TapError::InvalidTarget)
+    );
+    assert_eq!(
+        TapRequest::parse("shop.example", "/checkout/../pay", &signature_input, &signature),
+        Err(TapError::InvalidTarget)
+    );
+    assert_eq!(
+        TapRequest::parse("shop.example", "/checkout//pay", &signature_input, &signature),
+        Err(TapError::InvalidTarget)
+    );
 }
 
 #[test]

@@ -10,7 +10,10 @@ use layerx_platform_gateway::http::{Client, Endpoint};
 use layerx_platform_gateway::store::{RedisEndpoint, RedisStore};
 use layerx_platform_gateway::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry};
 use layerx_ucp::ucp_adapter_descriptor;
-use layerx_visa_tap::{visa_tap_adapter_descriptor, MAX_CLOCK_SKEW_SECONDS};
+use layerx_visa_tap::{
+    canonical_tap_authority, canonical_tap_path, visa_tap_adapter_descriptor,
+    MAX_CLOCK_SKEW_SECONDS,
+};
 use layerx_x402::facilitator::SupportedResponse;
 use layerx_x402::{x402_adapter_descriptor, X402_SPEC_SHA256};
 use native_tls::{Certificate, Identity};
@@ -55,6 +58,7 @@ pub struct RuntimeManifest {
     pub ap2_keys: Vec<Ap2KeyPin>,
     pub ap2_assets: Vec<Ap2AssetBinding>,
     pub visa_agents: Vec<VisaAgentPin>,
+    pub visa_targets: Vec<VisaTargetPin>,
     pub fiat_providers: Vec<FiatProviderPin>,
 }
 
@@ -82,6 +86,7 @@ struct ManifestFile {
     ap2_keys: Vec<Ap2KeyPin>,
     ap2_assets: Vec<Ap2AssetBinding>,
     visa_agents: Vec<VisaAgentPin>,
+    visa_targets: Vec<VisaTargetPin>,
     fiat_providers: Vec<FiatProviderPin>,
 }
 
@@ -114,7 +119,16 @@ pub struct VisaAgentPin {
     pub layerx_agent: String,
     pub algorithm: String,
     pub public_key: String,
+    pub status: String,
     pub expires_at: u64,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VisaTargetPin {
+    pub principal_digest: String,
+    pub authority: String,
+    pub path: String,
 }
 
 #[derive(Clone, Deserialize)]
@@ -306,6 +320,7 @@ fn runtime_manifest(file: ManifestFile) -> Result<RuntimeManifest, String> {
     if file.ap2_keys.is_empty()
         || file.ap2_assets.is_empty()
         || file.visa_agents.is_empty()
+        || file.visa_targets.is_empty()
         || file.fiat_providers.is_empty()
     {
         return Err(
@@ -356,10 +371,28 @@ fn runtime_manifest(file: ManifestFile) -> Result<RuntimeManifest, String> {
             || parse_hex32(&key.layerx_agent).is_err()
             || !matches!(key.algorithm.as_str(), "ed25519" | "rsa-pss-sha256")
             || key.public_key.is_empty()
+            || !matches!(key.status.as_str(), "active" | "revoked")
             || key.expires_at == 0
             || !visa_key_ids.insert(key.key_id.as_str())
         {
             return Err("Visa TAP trust-root declaration is invalid".to_owned());
+        }
+    }
+    let mut visa_target_principals = BTreeSet::new();
+    for target in &file.visa_targets {
+        if parse_hex32(&target.principal_digest).is_err()
+            || target.principal_digest != target.principal_digest.to_ascii_lowercase()
+            || !matches!(
+                canonical_tap_authority(&target.authority),
+                Ok(canonical) if canonical == target.authority.as_str()
+            )
+            || !matches!(
+                canonical_tap_path(&target.path),
+                Ok(canonical) if canonical == target.path.as_str()
+            )
+            || !visa_target_principals.insert(target.principal_digest.as_str())
+        {
+            return Err("Visa TAP merchant target declaration is invalid".to_owned());
         }
     }
     let mut fiat_provider_ids = BTreeSet::new();
@@ -378,6 +411,7 @@ fn runtime_manifest(file: ManifestFile) -> Result<RuntimeManifest, String> {
         ap2_keys: file.ap2_keys,
         ap2_assets: file.ap2_assets,
         visa_agents: file.visa_agents,
+        visa_targets: file.visa_targets,
         fiat_providers: file.fiat_providers,
     };
     let _ = gateway;

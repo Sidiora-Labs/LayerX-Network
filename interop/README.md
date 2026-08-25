@@ -27,6 +27,11 @@ There is no standalone `layerx-a2a` crate. A2A is a transport on the gateway and
 
 Normative MCP tool design: [`spec/layerx-agent-interface/docs/mcp-tools.md`](../spec/layerx-agent-interface/docs/mcp-tools.md). CLI install copy: [`platform/docs/content/install.md`](../platform/docs/content/install.md) and [`platform/docs/content/guide/interop.md`](../platform/docs/content/guide/interop.md).
 
+Interop service deployment inputs, including the required protocol network,
+authoritative module registry, server-owned TAP clock skew, explicit trusted
+agent status, and per-principal canonical TAP targets, are documented in
+[`deploy/gateway/`](deploy/gateway/README.md).
+
 ## Mirrors are archives
 
 `layerx-mirror-publisher` and `layerx-mirror-verify` publish and check batch commitments on Ethereum and Solana. Anyone can verify LayerX state from a mirror. Funds do not live on those chains. Settlement stays on Paxeer (EVM chain ID `125`), whose node now lives in [`paxeer-network/`](../paxeer-network/).

@@ -215,7 +215,7 @@ impl TapRequest {
     ) -> Result<Self, TapError> {
         let authority = authority.into();
         let path = path.into();
-        if !valid_authority(&authority) || !valid_path(&path) {
+        if canonical_tap_authority(&authority)? != authority || canonical_tap_path(&path)? != path {
             return Err(TapError::InvalidTarget);
         }
         let input = SignatureInput::parse(signature_input)?;
@@ -254,6 +254,18 @@ impl TapRequest {
     #[must_use]
     pub fn nonce(&self) -> &str {
         self.input.nonce()
+    }
+
+    /// Returns the exact canonical authority covered by the signature.
+    #[must_use]
+    pub fn authority(&self) -> &str {
+        &self.authority
+    }
+
+    /// Returns the exact canonical path covered by the signature.
+    #[must_use]
+    pub fn path(&self) -> &str {
+        &self.path
     }
 }
 
@@ -722,24 +734,86 @@ fn valid_nonce(value: &str) -> bool {
         })
 }
 
-fn valid_authority(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= VALUE_LIMIT
-        && !value.contains('/')
-        && !value.contains('@')
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_graphic() && !matches!(byte, b'"' | b'\\'))
+/// Canonicalizes a TAP HTTP authority to a lowercase DNS-style host and canonical
+/// optional decimal port.
+///
+/// # Errors
+///
+/// Refuses schemes, user information, empty host labels, unsafe characters,
+/// and invalid ports.
+pub fn canonical_tap_authority(value: &str) -> Result<String, TapError> {
+    if value.is_empty()
+        || value.len() > VALUE_LIMIT
+        || value.contains(['/', '@', '?', '#', '\\'])
+        || value.bytes().any(|byte| !byte.is_ascii_graphic())
+    {
+        return Err(TapError::InvalidTarget);
+    }
+    let (host, port) = value.rsplit_once(':').map_or_else(
+        || Ok::<_, TapError>((value, None)),
+        |(host, port)| {
+            if host.contains(':') || port.is_empty() {
+                return Err(TapError::InvalidTarget);
+            }
+            let port = port
+                .parse::<u16>()
+                .map_err(|_| TapError::InvalidTarget)?;
+            if port == 0 {
+                return Err(TapError::InvalidTarget);
+            }
+            Ok((host, Some(port)))
+        },
+    )?;
+    if host.is_empty() || host.ends_with('.') {
+        return Err(TapError::InvalidTarget);
+    }
+    let canonical_host = host.to_ascii_lowercase();
+    if canonical_host.split('.').any(|label| {
+        label.is_empty()
+            || label.len() > 63
+            || !label
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+            || !label
+                .as_bytes()
+                .first()
+                .is_some_and(u8::is_ascii_alphanumeric)
+            || !label
+                .as_bytes()
+                .last()
+                .is_some_and(u8::is_ascii_alphanumeric)
+    }) {
+        return Err(TapError::InvalidTarget);
+    }
+    Ok(port.map_or(canonical_host.clone(), |port| {
+        format!("{canonical_host}:{port}")
+    }))
 }
 
-fn valid_path(value: &str) -> bool {
-    value.starts_with('/')
-        && value.len() <= VALUE_LIMIT
-        && !value.contains('?')
-        && !value.contains('#')
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_graphic() && !matches!(byte, b'"' | b'\\'))
+/// Validates one canonical, query-free TAP target path.
+///
+/// # Errors
+///
+/// Refuses empty or dot segments, repeated or trailing separators, percent
+/// aliases, query/fragment material, and non-ASCII path bytes.
+pub fn canonical_tap_path(value: &str) -> Result<String, TapError> {
+    if value == "/" {
+        return Ok(value.to_owned());
+    }
+    if !value.starts_with('/')
+        || value.len() > VALUE_LIMIT
+        || value.ends_with('/')
+        || value.split('/').skip(1).any(|segment| {
+            segment.is_empty()
+                || matches!(segment, "." | "..")
+                || !segment.bytes().all(|byte| {
+                    byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~')
+                })
+        })
+    {
+        return Err(TapError::InvalidTarget);
+    }
+    Ok(value.to_owned())
 }
 
 fn valid_https_origin(value: &str) -> bool {

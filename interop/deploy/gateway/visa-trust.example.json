@@ -1,0 +1,21 @@
+{
+  "visa_agents": [
+    {
+      "key_id": "tap-registry-key-1",
+      "agent_id": "trusted-agent-1",
+      "agent_domain": "https://agent.example",
+      "layerx_agent": "1111111111111111111111111111111111111111111111111111111111111111",
+      "algorithm": "ed25519",
+      "public_key": "2222222222222222222222222222222222222222222222222222222222222222",
+      "status": "active",
+      "expires_at": 1893456000
+    }
+  ],
+  "visa_targets": [
+    {
+      "principal_digest": "3333333333333333333333333333333333333333333333333333333333333333",
+      "authority": "shop.example",
+      "path": "/checkout"
+    }
+  ]
+}
