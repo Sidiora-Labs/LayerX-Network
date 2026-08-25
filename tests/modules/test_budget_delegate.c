@@ -115,6 +115,13 @@ int main(void)
         memcmp(store.records[0].delegates[0], delegate_b, 32U) != 0 ||
         memcmp(store.records[0].delegates[1], delegate_a, 32U) != 0)
         return 1;
+    store.records[0].delegate_count = LX_BUDGET_MAX_DELEGATES + 1U;
+    if (lx_budget_delegate_add_execute(&store.records[0], delegate_a) !=
+            LXP_ERR_NON_CANONICAL ||
+        lx_budget_delegate_remove_execute(&store.records[0], delegate_a) !=
+            LXP_ERR_NON_CANONICAL)
+        return 1;
+    store.records[0].delegate_count = 2U;
     (void)memset(&capability, 0, sizeof(capability));
     (void)memcpy(capability.holder, delegate_a, 32U);
     (void)memcpy(capability.asset_id, asset.asset_id, 32U);

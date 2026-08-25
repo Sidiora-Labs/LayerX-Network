@@ -62,6 +62,11 @@ int main(void)
     request.commitment.deadline = 1000U;
     request.commitment.resource_bound = 500U;
     (void)memcpy(request.commitment.escrow_id, agreement->escrow_id, 32U);
+    store.commitment_count = LX_SERVICE_STORE_CAPACITY + 1U;
+    if (lx_service_commitment_put(&store, &request.commitment) !=
+        LXP_ERR_NON_CANONICAL)
+        return 1;
+    store.commitment_count = 0U;
     if (lx_service_commit_task_execute(&ctx, &request, &first) !=
             LXP_ERR_AGREEMENT_STATE || store.commitment_count != 0U)
         return 1;

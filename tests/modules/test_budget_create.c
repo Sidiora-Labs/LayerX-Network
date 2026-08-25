@@ -82,6 +82,14 @@ int main(void)
     request.record.purpose_hash[0] = 5U;
     request.record.expiry = 10000U;
     request.record.revocation_sequence = 1U;
+    store.count = LX_BUDGET_STORE_CAPACITY + 1U;
+    if (lx_budget_state_put(&store, &request.record) !=
+            LXP_ERR_NON_CANONICAL ||
+        lx_budget_create_execute(&ctx, &request, &receipt) !=
+            LXP_ERR_NON_CANONICAL ||
+        owner.balance.lo != 100U || !lxp_u128_is_zero(budget_account.balance))
+        return 1;
+    store.count = 0U;
     if (lx_budget_create_execute(&ctx, &request, &receipt) != LXP_OK ||
         legs != 1U || reason != LXP_REASON_BUDGET_FUND ||
         owner.balance.lo != 50U || budget_account.balance.lo != 50U ||

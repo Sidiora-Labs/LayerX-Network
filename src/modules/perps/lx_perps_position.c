@@ -104,6 +104,7 @@ static lxp_result position_validate(const lx_perps_position_request *request)
 {
     const lx_perps_position *position;
     if (request == NULL || request->store == NULL ||
+        request->store->count > LX_PERPS_POSITION_CAPACITY ||
         request->owner_main == NULL || request->margin_account == NULL ||
         request->asset == NULL || lxp_u128_is_zero(request->margin_amount))
         return LXP_ERR_NON_CANONICAL;

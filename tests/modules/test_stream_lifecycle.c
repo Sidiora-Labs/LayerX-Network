@@ -106,6 +106,7 @@ static int fixed_lifecycle(lxp_kernel *kernel, lxp_arena *arena,
     lxp_receipt receipt;
     lxp_receipt replayed;
     lxp_u128 accrued;
+    bool found;
 
     (void)memset(&payer, 0, sizeof(payer));
     (void)memset(&stream_account, 0, sizeof(stream_account));
@@ -133,6 +134,14 @@ static int fixed_lifecycle(lxp_kernel *kernel, lxp_arena *arena,
         return 1;
     lifecycle_init(&request, &store, stored, &stream_account, &payer,
                    &recipient, asset, asset_state, &authority, 5U);
+    store.economic_result_count = LX_STREAM_IDEMPOTENCY_CAPACITY + 1U;
+    if (lx_stream_receipt_replay(&store, request.idempotency_key,
+                                 &replayed, &found) !=
+            LXP_ERR_NON_CANONICAL ||
+        lx_stream_receipt_record(&store, request.idempotency_key,
+                                 &receipt) != LXP_ERR_NON_CANONICAL)
+        return 1;
+    store.economic_result_count = 0U;
     if (lxp_module_ctx_init(&ctx, kernel, LXP_MODULE_STREAM, 1100U, 0U, 1U,
                             1000U, arena, true) != LXP_OK ||
         lx_stream_pause_execute(&ctx, &request) != LXP_OK || !stored->paused ||

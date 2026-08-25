@@ -2,6 +2,12 @@
 
 #include <string.h>
 
+static int state_counts_valid(const lxp_gov_emergency_state *state)
+{
+    return state != NULL && state->pause_count <= LXP_MAX_GOV_PAUSES &&
+           state->event_count <= LXP_MAX_GOV_EMERGENCY_EVENTS;
+}
+
 static int zero_id(const uint8_t id[32])
 {
     uint8_t combined = 0U;
@@ -38,6 +44,7 @@ static lxp_result event_append(lxp_gov_emergency_state *state,
                                uint64_t ordered_sequence, bool entered)
 {
     lxp_gov_emergency_event *event;
+    if (!state_counts_valid(state)) return LXP_ERR_NON_CANONICAL;
     if (state->event_count == LXP_MAX_GOV_EMERGENCY_EVENTS)
         return LXP_ERR_LENGTH_LIMIT;
     event = &state->events[state->event_count++];
@@ -73,7 +80,8 @@ lxp_result lxp_gov_emergency_halt(
     lxp_gov_pause_record pause;
     size_t i;
     lxp_result status;
-    if (state == NULL || trigger == NULL || exit_conditions == NULL ||
+    if (!state_counts_valid(state) || trigger == NULL ||
+        exit_conditions == NULL ||
         entry_epoch == 0U || scope < LXP_PAUSE_MODULE ||
         scope > LXP_PAUSE_NETWORK ||
         (scope == LXP_PAUSE_NETWORK && module_id != 0U) ||
@@ -111,7 +119,7 @@ lxp_result lxp_gov_emergency_resume(
 {
     size_t i;
     lxp_result status;
-    if (state == NULL || scope < LXP_PAUSE_MODULE ||
+    if (!state_counts_valid(state) || scope < LXP_PAUSE_MODULE ||
         scope > LXP_PAUSE_NETWORK)
         return LXP_ERR_NON_CANONICAL;
     status = ordered(state, ordered_sequence, governance_authorized,
@@ -133,7 +141,7 @@ lxp_result lxp_pause_scope_check(
     const uint8_t market_id[32], bool cancellation_or_exit_path)
 {
     size_t i;
-    if (state == NULL || module_id == 0U ||
+    if (!state_counts_valid(state) || module_id == 0U ||
         module_id > LXP_MAX_GOV_MODULE_ID)
         return LXP_ERR_NON_CANONICAL;
     if (cancellation_or_exit_path) return LXP_OK;
@@ -159,7 +167,7 @@ lxp_result lxp_gov_module_enable(
 {
     lxp_gov_pause_record control;
     lxp_result status;
-    if (state == NULL || module_id == 0U ||
+    if (!state_counts_valid(state) || module_id == 0U ||
         module_id > LXP_MAX_GOV_MODULE_ID)
         return LXP_ERR_NON_CANONICAL;
     if (attempted_effect_mask != 0U) return LXP_ERR_AUTH_SCOPE;

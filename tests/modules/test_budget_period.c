@@ -46,6 +46,11 @@ static int run(bool delayed, uint8_t root[32])
         return 1;
     if (delayed)
         for (i = 0U; i < UINT64_C(1000000); ++i) elapsed += i;
+    store.count = LX_BUDGET_STORE_CAPACITY + 1U;
+    if (lx_budget_module_iface()->epoch_begin(&ctx, 0U, 450U) !=
+        LXP_ERR_NON_CANONICAL)
+        return 1;
+    store.count = 2U;
     if (lx_budget_module_iface()->epoch_begin(&ctx, 0U, 450U) != LXP_OK ||
         store.records[0].period_start != 400U ||
         store.records[0].per_period_limit.lo != 140U ||

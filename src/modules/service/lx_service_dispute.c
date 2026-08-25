@@ -130,7 +130,8 @@ lxp_result lx_service_effect_audit(uint32_t activity_type,
     const lxp_module_iface *iface = lx_service_module_iface();
     size_t i;
     bool declared = false;
-    if (effects == NULL) return LXP_ERR_NON_CANONICAL;
+    if (effects == NULL || effects->count > LXP_MAX_EFFECTS)
+        return LXP_ERR_NON_CANONICAL;
     for (i = 0U; i < iface->activity_type_count; ++i)
         if (iface->activity_types[i] == activity_type) {
             declared = true;

@@ -71,7 +71,8 @@ lxp_result lx_oracle_key_set_check(const lx_oracle_market *market,
     size_t i;
     bool permitted = false;
     if (market == NULL || observation == NULL || canonical_payload == NULL ||
-        payload_length != LX_ORACLE_OBSERVATION_BYTES)
+        payload_length != LX_ORACLE_OBSERVATION_BYTES ||
+        market->permitted_key_count > LX_ORACLE_MAX_KEYS)
         return LXP_ERR_NON_CANONICAL;
     for (i = 0U; i < market->permitted_key_count; ++i)
         if (memcmp(market->permitted_keys[i],
@@ -97,7 +98,8 @@ lxp_result lx_oracle_store_put(lx_oracle_store *store,
 {
     lx_oracle_accepted *entry;
     if (store == NULL || observation == NULL || payload == NULL ||
-        payload_length != LX_ORACLE_OBSERVATION_BYTES)
+        payload_length != LX_ORACLE_OBSERVATION_BYTES ||
+        store->count > LX_ORACLE_STORE_CAPACITY)
         return LXP_ERR_NON_CANONICAL;
     if (store->count == LX_ORACLE_STORE_CAPACITY)
         return LXP_ERR_ARENA_EXHAUSTED;

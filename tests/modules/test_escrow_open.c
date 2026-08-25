@@ -102,6 +102,14 @@ int main(void)
     request.record.terms_hash[0] = 10U;
     request.record.agreement_reference[0] = 11U;
 
+    store.count = LX_ESCROW_STORE_CAPACITY + 1U;
+    if (lx_escrow_state_put(&store, &request.record) !=
+            LXP_ERR_NON_CANONICAL ||
+        lx_escrow_open_execute(&ctx, &request, &receipt) !=
+            LXP_ERR_NON_CANONICAL ||
+        owner->balance.lo != 100U || !lxp_u128_is_zero(escrow_account->balance))
+        return 1;
+    store.count = 0U;
     if (lx_escrow_open_execute(&ctx, &request, &receipt) != LXP_OK ||
         emitted_legs != 1U || emitted_reason != LXP_REASON_ESCROW_LOCK ||
         owner->balance.hi != 0U || owner->balance.lo != 60U ||

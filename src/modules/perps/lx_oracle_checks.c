@@ -53,7 +53,8 @@ lxp_result lx_oracle_store_latest(const lx_oracle_store *store,
                                   const lx_oracle_accepted **latest)
 {
     size_t i;
-    if (store == NULL || market_id == NULL || latest == NULL)
+    if (store == NULL || market_id == NULL || latest == NULL ||
+        store->count > LX_ORACLE_STORE_CAPACITY)
         return LXP_ERR_NON_CANONICAL;
     for (i = store->count; i != 0U; --i)
         if (memcmp(store->accepted[i - 1U].observation.market_id,

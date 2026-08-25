@@ -102,5 +102,19 @@ int main(void)
         lx_asset_supply_check(&assets, &accounts, &attestation, 1U) !=
             LXP_FATAL_SUPPLY_MISMATCH)
         return 1;
+    accounts.count = LX_ACCOUNT_REGISTRY_CAPACITY + 1U;
+    if (lx_asset_reserve_report(&accounts, &attestation, &report) !=
+        LXP_FATAL_SUPPLY_MISMATCH)
+        return 1;
+    accounts.count = 4U;
+    assets.count = LX_ASSET_REGISTRY_CAPACITY + 1U;
+    if (lx_asset_supply_check(&assets, &accounts, &attestation, 1U) !=
+        LXP_FATAL_SUPPLY_MISMATCH)
+        return 1;
+    assets.count = 1U;
+    if (lx_asset_supply_check(&assets, &accounts, &attestation,
+                              LX_ASSET_REGISTRY_CAPACITY + 1U) !=
+        LXP_FATAL_SUPPLY_MISMATCH)
+        return 1;
     return 0;
 }

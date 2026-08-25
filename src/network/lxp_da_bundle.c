@@ -224,7 +224,7 @@ lxp_result lxp_da_bundle_root(const lxp_da_bundle *bundle, lxp_arena *arena,
         (void)memcpy(hashes[i], copy.chunk_hash, 32U);
     }
     if (status == LXP_OK &&
-        (expected_class != LXP_DA_RECOVERY_METADATA ||
+        (expected_class != LXP_DA_RECOVERY_METADATA || !class_has_chunk ||
          total != bundle->total_bytes))
         status = LXP_ERR_NON_CANONICAL;
     if (status == LXP_OK)

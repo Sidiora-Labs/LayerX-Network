@@ -61,6 +61,11 @@ int main(void)
         return 1;
 
     offer_request_init(&publish, &store, &provider, 3U);
+    store.offer_count = LX_SERVICE_STORE_CAPACITY + 1U;
+    if (lx_service_offer_publish_execute(&ctx, &publish) !=
+        LXP_ERR_NON_CANONICAL)
+        return 1;
+    store.offer_count = 0U;
     publish.attempts_balance_mutation = true;
     if (lx_service_offer_publish_execute(&ctx, &publish) !=
             LXP_ERR_MODULE_MAY_NOT_WRITE_BALANCE || store.offer_count != 0U)

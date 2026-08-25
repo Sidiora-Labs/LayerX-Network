@@ -25,7 +25,7 @@ lxp_result lx_service_commitment_put(lx_service_store *store,
                                      const lx_service_commitment *commitment)
 {
     lx_service_commitment *existing;
-    if (store == NULL || commitment == NULL ||
+    if (lx_service_store_validate(store) != LXP_OK || commitment == NULL ||
         lxp_ct_is_zero(commitment->commitment_id, 32U))
         return LXP_ERR_NON_CANONICAL;
     if (commitment_lookup(store, commitment->commitment_id, &existing) ==

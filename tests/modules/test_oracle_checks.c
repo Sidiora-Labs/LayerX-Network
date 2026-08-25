@@ -57,5 +57,15 @@ int main(void)
     if (observation.observation_sequence >
         found->observation.observation_sequence)
         return 1;
+    store.count = LX_ORACLE_STORE_CAPACITY + 1U;
+    if (lx_oracle_store_latest(&store, latest.market_id, &found) !=
+            LXP_ERR_NON_CANONICAL ||
+        lx_oracle_store_put(&store, &latest, payload, payload_length, 11U) !=
+            LXP_ERR_NON_CANONICAL)
+        return 1;
+    market.permitted_key_count = LX_ORACLE_MAX_KEYS + 1U;
+    if (lx_oracle_key_set_check(&market, &latest, payload,
+                                payload_length) != LXP_ERR_NON_CANONICAL)
+        return 1;
     return 0;
 }

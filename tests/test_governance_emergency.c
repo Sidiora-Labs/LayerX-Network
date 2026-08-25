@@ -74,5 +74,17 @@ int main(void)
         memcmp(state.events[0].pause.exit_conditions,
                exit_conditions, 32U) != 0)
         return 1;
+    unchanged = state;
+    state.pause_count = LXP_MAX_GOV_PAUSES + 1U;
+    if (lxp_pause_scope_check(&state, 2U, NULL, false) !=
+            LXP_ERR_NON_CANONICAL ||
+        lxp_gov_emergency_resume(&state, LXP_PAUSE_MODULE, 2U, NULL, 8U,
+                                 true, true) != LXP_ERR_NON_CANONICAL)
+        return 1;
+    state = unchanged;
+    state.event_count = LXP_MAX_GOV_EMERGENCY_EVENTS + 1U;
+    if (lxp_gov_module_enable(&state, 4U, false, 0U, 8U,
+                              true, true) != LXP_ERR_NON_CANONICAL)
+        return 1;
     return 0;
 }

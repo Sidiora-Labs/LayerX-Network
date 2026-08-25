@@ -10,7 +10,8 @@ lxp_result lx_escrow_receipt_replay(const lx_escrow_store *store,
                                     lxp_receipt *receipt, bool *found)
 {
     size_t i;
-    if (store == NULL || key == NULL || receipt == NULL || found == NULL)
+    if (store == NULL || key == NULL || receipt == NULL || found == NULL ||
+        store->economic_result_count > LX_ESCROW_IDEMPOTENCY_CAPACITY)
         return LXP_ERR_NON_CANONICAL;
     *found = false;
     for (i = 0U; i < store->economic_result_count; ++i) {
@@ -28,6 +29,9 @@ lxp_result lx_escrow_receipt_record(lx_escrow_store *store,
                                     const lxp_receipt *receipt)
 {
     size_t index;
+    if (store == NULL || key == NULL || receipt == NULL ||
+        store->economic_result_count > LX_ESCROW_IDEMPOTENCY_CAPACITY)
+        return LXP_ERR_NON_CANONICAL;
     if (store->economic_result_count == LX_ESCROW_IDEMPOTENCY_CAPACITY)
         return LXP_ERR_ARENA_EXHAUSTED;
     index = store->economic_result_count++;

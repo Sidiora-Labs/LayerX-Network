@@ -20,7 +20,8 @@ lxp_result lx_asset_balance_get(const lx_account_registry *accounts,
 {
     size_t i;
     if (accounts == NULL || account_id == NULL || asset_id == NULL ||
-        balance == NULL) return LXP_ERR_NON_CANONICAL;
+        balance == NULL || accounts->count > LX_ACCOUNT_REGISTRY_CAPACITY)
+        return LXP_ERR_NON_CANONICAL;
     for (i = 0U; i < accounts->count; ++i) {
         if (memcmp(accounts->accounts[i].id, account_id, 32U) == 0) {
             if (!accounts->accounts[i].has_asset ||
@@ -66,6 +67,9 @@ static lxp_result sum_units(const lx_account_registry *accounts,
 {
     lxp_u128 sum = { 0U, 0U };
     size_t i;
+    if (accounts == NULL || asset_id == NULL || total == NULL ||
+        accounts->count > LX_ACCOUNT_REGISTRY_CAPACITY)
+        return LXP_ERR_NON_CANONICAL;
     for (i = 0U; i < accounts->count; ++i) {
         lxp_u128 next;
         if (!accounts->accounts[i].has_asset ||
@@ -115,7 +119,9 @@ lxp_result lx_asset_state_root(const lx_asset_registry *assets,
     size_t count = 0U;
     size_t i;
     lxp_result status = LXP_OK;
-    if (assets == NULL || accounts == NULL || root == NULL)
+    if (assets == NULL || accounts == NULL || root == NULL ||
+        assets->count > LX_ASSET_REGISTRY_CAPACITY ||
+        accounts->count > LX_ACCOUNT_REGISTRY_CAPACITY)
         return LXP_ERR_NON_CANONICAL;
     (void)memset(entries, 0, sizeof(entries));
     for (i = 0U; i < assets->count; ++i) {

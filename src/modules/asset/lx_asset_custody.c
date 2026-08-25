@@ -266,6 +266,7 @@ bool lx_asset_nullifier_seen(const lx_withdrawal_store *store,
 {
     size_t i;
     if (store == NULL || nullifier == NULL) return false;
+    if (store->count > LX_DEPOSIT_NULLIFIER_CAPACITY) return true;
     for (i = 0U; i < store->count; ++i)
         if (memcmp(store->records[i].nullifier, nullifier, 32U) == 0)
             return true;
@@ -282,7 +283,9 @@ lxp_result lx_asset_withdraw_request(lxp_module_ctx *ctx,
     uint8_t nullifier[32];
     lxp_result status;
     if (ctx == NULL || transfer == NULL || withdrawal == NULL || store == NULL ||
-        transfer->from == NULL || transfer->to == NULL || transfer->asset == NULL)
+        transfer->from == NULL || transfer->to == NULL ||
+        transfer->asset == NULL ||
+        store->count > LX_DEPOSIT_NULLIFIER_CAPACITY)
         return LXP_ERR_NON_CANONICAL;
     status = lx_withdrawal_nullifier(withdrawal, nullifier);
     if (status != LXP_OK) return status;
@@ -329,6 +332,8 @@ lxp_result lx_asset_withdraw_settle(lxp_module_ctx *ctx,
     if (ctx == NULL || withdrawals == NULL || reserve == NULL || asset == NULL ||
         checkpoint == NULL || nullifier == NULL || store == NULL ||
         !checkpoint->finalized) return LXP_ERR_DEPOSIT_PROOF_NOT_FINAL;
+    if (store->count > LX_DEPOSIT_NULLIFIER_CAPACITY)
+        return LXP_ERR_NON_CANONICAL;
     for (i = 0U; i < store->count; ++i)
         if (memcmp(store->records[i].nullifier, nullifier, 32U) == 0) break;
     if (i == store->count || store->records[i].settled)

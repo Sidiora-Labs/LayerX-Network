@@ -96,6 +96,12 @@ int main(void)
     request.context.sequence_account = owner;
     request.context.debit_authority_kind = LXP_AUTH_OWNER;
     (void)memcpy(request.context.authorized_from, owner->id, 32U);
+    positions.count = LX_PERPS_POSITION_CAPACITY + 1U;
+    if (lx_perps_position_open_execute(&ctx, &request, &receipt) !=
+            LXP_ERR_NON_CANONICAL ||
+        owner->balance.lo != 100U || !lxp_u128_is_zero(margin->balance))
+        return 1;
+    positions.count = 0U;
     if (lx_perps_position_open_execute(&ctx, &request, &receipt) != LXP_OK ||
         last_legs != 1U || last_reason != LXP_REASON_MARGIN_POST ||
         owner->balance.lo != 60U || margin->balance.lo != 40U ||

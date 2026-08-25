@@ -83,6 +83,14 @@ int main(void)
     request.record.total_cap = (lxp_u128){ 0U, 1000U };
     request.record.meter_authorities[0][0] = 6U;
     request.record.meter_authority_count = 1U;
+    store.count = LX_STREAM_STORE_CAPACITY + 1U;
+    if (lx_stream_state_put(&store, &request.record) !=
+            LXP_ERR_NON_CANONICAL ||
+        lx_stream_open_execute(&ctx, &request, &receipt) !=
+            LXP_ERR_NON_CANONICAL ||
+        payer.balance.lo != 100U || !lxp_u128_is_zero(stream_account.balance))
+        return 1;
+    store.count = 0U;
     if (lx_stream_open_execute(&ctx, &request, &receipt) != LXP_OK ||
         legs != 1U || reason != LXP_REASON_STREAM_FUND ||
         payer.balance.lo != 60U || stream_account.balance.lo != 40U ||

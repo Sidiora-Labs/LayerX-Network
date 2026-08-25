@@ -75,15 +75,18 @@ int main(void)
     lxp_byte_span recovery_metadata;
     lxp_batch_body body;
     lxp_batch_body rebuilt_body;
+    lxp_batch_body zero_body;
     lxp_da_bundle bundle;
     lxp_da_bundle rebuilt_bundle;
     lxp_da_bundle changed_bundle;
+    lxp_da_bundle zero_bundle;
     lxp_arena arena;
     lxp_arena rebuilt_arena;
     lxp_arena changed_arena;
     uint8_t root[32];
     uint8_t rebuilt_root[32];
     uint8_t changed_root[32];
+    uint8_t zero_root[32];
     lxp_batch_roots roots;
     lxp_batch_seal_input seal_input;
     lxp_batch_header header;
@@ -91,6 +94,7 @@ int main(void)
     char directory[] = "/tmp/lxp-da-bundle-XXXXXX";
     char path[128];
     uint32_t saved_index;
+    uint64_t saved_batch;
     size_t i;
 
     if (lxp_arena_init(&arena, arena_storage, sizeof(arena_storage)) != LXP_OK ||
@@ -166,6 +170,20 @@ int main(void)
         memcmp(root, changed_root, sizeof(root)) == 0)
         return 1;
     rebuilt_activities[0] ^= 1U;
+    zero_body = body;
+    zero_body.header.batch_number = 0U;
+    if (lxp_arena_reset(&changed_arena, 0U) != LXP_OK ||
+        lxp_da_bundle_build(&zero_body, 5U, &changed_arena,
+                            &zero_bundle) != LXP_OK ||
+        zero_bundle.batch_number != 0U ||
+        lxp_da_bundle_root(&zero_bundle, &changed_arena, zero_root) != LXP_OK)
+        return 1;
+    saved_batch = bundle.chunks[1].batch_number;
+    bundle.chunks[1].batch_number = saved_batch + 1U;
+    if (lxp_da_bundle_root(&bundle, &arena, changed_root) !=
+        LXP_ERR_UNSORTED_SEQUENCE)
+        return 1;
+    bundle.chunks[1].batch_number = saved_batch;
     saved_index = bundle.chunks[1].chunk_index;
     bundle.chunks[1].chunk_index = 0U;
     if (lxp_da_bundle_root(&bundle, &arena, changed_root) !=
@@ -192,6 +210,26 @@ int main(void)
         LXP_ERR_UNSORTED_SEQUENCE)
         return 1;
     bundle.chunks[0].availability_class = LXP_DA_ACTIVITIES;
+    {
+        size_t saved_chunk_count = bundle.chunk_count;
+        size_t saved_total = bundle.total_bytes;
+        size_t retained_total = 0U;
+        size_t recovery_index = 0U;
+        while (recovery_index < bundle.chunk_count &&
+               bundle.chunks[recovery_index].availability_class !=
+                   LXP_DA_RECOVERY_METADATA) {
+            retained_total += bundle.chunks[recovery_index].bytes.length;
+            ++recovery_index;
+        }
+        if (recovery_index == bundle.chunk_count) return 1;
+        bundle.chunk_count = recovery_index;
+        bundle.total_bytes = retained_total;
+        if (lxp_da_bundle_root(&bundle, &arena, changed_root) !=
+            LXP_ERR_NON_CANONICAL)
+            return 1;
+        bundle.chunk_count = saved_chunk_count;
+        bundle.total_bytes = saved_total;
+    }
 
     (void)memset(&roots, 0, sizeof(roots));
     (void)memcpy(roots.data_availability_root, root, sizeof(root));

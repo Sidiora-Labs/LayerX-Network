@@ -89,6 +89,9 @@ static lx_account *account_by_id(lx_account_registry *accounts,
                                  const uint8_t id[32])
 {
     size_t i;
+    if (accounts == NULL || id == NULL ||
+        accounts->count > LX_ACCOUNT_REGISTRY_CAPACITY)
+        return NULL;
     for (i = 0U; i < accounts->count; ++i)
         if (memcmp(accounts->accounts[i].id, id, 32U) == 0)
             return &accounts->accounts[i];
@@ -116,7 +119,12 @@ lxp_result lx_escrow_epoch_begin(lxp_module_ctx *ctx, uint64_t epoch,
     runtime = (lx_escrow_runtime *)lxp_ctx_module_runtime(ctx);
     if (runtime == NULL) return lxp_ctx_charge_gas(ctx, 1U);
     if (runtime->store == NULL || runtime->accounts == NULL ||
-        runtime->assets == NULL)
+        runtime->assets == NULL ||
+        runtime->store->count > LX_ESCROW_STORE_CAPACITY ||
+        runtime->store->economic_result_count >
+            LX_ESCROW_IDEMPOTENCY_CAPACITY ||
+        runtime->accounts->count > LX_ACCOUNT_REGISTRY_CAPACITY ||
+        runtime->assets->count > LX_ASSET_REGISTRY_CAPACITY)
         return LXP_ERR_NON_CANONICAL;
     for (i = 0U; i < runtime->store->count; ++i) {
         lx_escrow_record *record = &runtime->store->records[i];

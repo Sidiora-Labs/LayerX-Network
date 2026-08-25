@@ -34,6 +34,7 @@ lxp_result lx_stream_meter_authority_check(
     bool found = false;
     lxp_result status;
     if (record == NULL || attestation == NULL ||
+        record->meter_authority_count > LX_STREAM_MAX_METER_AUTHORITIES ||
         memcmp(record->stream_id, attestation->stream_id, 32U) != 0)
         return LXP_ERR_UNAUTHORIZED_METER;
     for (i = 0U; i < record->meter_authority_count; ++i)

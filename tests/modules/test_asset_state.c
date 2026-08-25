@@ -74,5 +74,19 @@ int main(void)
                              accounts_a.accounts[0].asset_id, &balance) != LXP_OK ||
         balance.lo != 10U || balance.hi != 0U)
         return 1;
+    accounts_a.count = LX_ACCOUNT_REGISTRY_CAPACITY + 1U;
+    if (lx_asset_balance_get(&accounts_a, accounts_a.accounts[0].id,
+                             accounts_a.accounts[0].asset_id, &balance) !=
+            LXP_ERR_NON_CANONICAL ||
+        lx_asset_total_units(&assets_a, &accounts_a, asset_one, &total) !=
+            LXP_ERR_NON_CANONICAL ||
+        lx_asset_state_root(&assets_a, &accounts_a, root_a) !=
+            LXP_ERR_NON_CANONICAL)
+        return 1;
+    accounts_a.count = 3U;
+    assets_a.count = LX_ASSET_REGISTRY_CAPACITY + 1U;
+    if (lx_asset_state_root(&assets_a, &accounts_a, root_a) !=
+        LXP_ERR_NON_CANONICAL)
+        return 1;
     return 0;
 }

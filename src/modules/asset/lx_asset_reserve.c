@@ -38,6 +38,7 @@ lxp_result lx_asset_reserve_report(
     size_t i;
     lxp_result status = LXP_OK;
     if (accounts == NULL || attestation == NULL || report == NULL ||
+        accounts->count > LX_ACCOUNT_REGISTRY_CAPACITY ||
         !attestation->finalized) return LXP_FATAL_SUPPLY_MISMATCH;
     (void)memset(report, 0, sizeof(*report));
     (void)memcpy(report->asset_id, attestation->asset_id, 32U);
@@ -138,7 +139,10 @@ lxp_result lx_asset_supply_check(
     size_t attestation_count)
 {
     size_t i;
-    if (assets == NULL || accounts == NULL || attestations == NULL)
+    if (assets == NULL || accounts == NULL || attestations == NULL ||
+        assets->count > LX_ASSET_REGISTRY_CAPACITY ||
+        accounts->count > LX_ACCOUNT_REGISTRY_CAPACITY ||
+        attestation_count > LX_ASSET_REGISTRY_CAPACITY)
         return LXP_FATAL_SUPPLY_MISMATCH;
     for (i = 0U; i < assets->count; ++i) {
         lx_asset_reserve_report_record report;

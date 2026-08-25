@@ -96,8 +96,8 @@ severity = "post-implementation-repair"
 task = "10.1"
 file = "src/network/lxp_da_bundle.c, tests/test_da_bundle.c"
 symbol = "lxp_da_chunk_hash, lxp_da_bundle_root"
-observed = "Post-implementation review found public DA chunk hashing dereferenced a null chunk and accepted mismatched declared/present byte lengths, invalid availability classes and overflowing class ranges. Bundle-root verification authenticated each supplied chunk independently but did not enforce contiguous class offsets, exact class ordering or the declared total byte count. The repair validates each chunk before metadata access and requires one ordered contiguous sequence across all five DA classes whose exact accumulated bytes equal the bundle declaration."
-assumption = "Human qualification must run DA bundle, retrieval, possession, challenge and unavailable suites, alter every chunk metadata field independently, and confirm valid bundle roots remain byte-identical. No build or test result is asserted here."
+observed = "Post-implementation review found public DA chunk hashing dereferenced a null chunk and accepted mismatched declared/present byte lengths, invalid availability classes and overflowing class ranges. Bundle-root verification authenticated each supplied chunk independently but did not enforce one batch number, contiguous class offsets, exact class ordering, a populated final recovery class or the declared total byte count. The repair validates each chunk before metadata access and requires one ordered contiguous sequence across all five DA classes whose exact accumulated bytes equal the bundle declaration. Batch zero remains canonical only for genesis, matching replica chain admission; cross-batch chunks are refused."
+assumption = "Human qualification must run DA bundle, retrieval, possession, challenge and unavailable suites, retain a canonical genesis batch-zero bundle, alter every chunk metadata field and batch number independently, omit each class including final recovery metadata, and confirm valid bundle roots remain byte-identical. No build or test result is asserted here."
 severity = "post-implementation-repair"
 
 [observation.12.2.1]
@@ -122,4 +122,12 @@ file = "src/protocol/lxp_receipt.c"
 symbol = "lxp_verified_receipt_index_add"
 observed = "Duplicate verified-receipt admission compared the raw object representation of receipt facts, including padding bytes, to decide whether an identical digest was consistent. The repair compares every canonical field explicitly, so logical equality is independent of compiler layout and indeterminate padding."
 assumption = "Human qualification must admit logically identical facts with deliberately different padding representations and prove a changed canonical field still raises the invariant failure. No build or test result is asserted here."
+severity = "post-implementation-repair"
+
+[observation.17.1.2]
+task = "17.1"
+file = "src/modules/asset, src/modules/budget, src/modules/escrow, src/modules/governance, src/modules/perps, src/modules/service, src/modules/stream, tests/modules, tests/test_governance_emergency.c"
+symbol = "epoch callbacks and fixed-capacity public mutation helpers"
+observed = "A second full traversal audit found epoch callbacks, reverse lookups, state-root and reserve helpers, idempotency tables, delegate and meter key arrays, oracle accepted/key stores, governance emergency state and effect buffers that still trusted caller-visible counts. Several append paths called a bounded lookup but discarded its malformed-store result, then checked only count equal to capacity; count above capacity could therefore proceed through a balance transfer and out-of-bounds append. The repair performs typed structural admission before every affected traversal or economic mutation, makes the boolean withdrawal replay helper conservatively report seen for malformed state while public mutators return NON_CANONICAL, and caps asset attestations to the asset registry bound."
+assumption = "Human qualification must exercise each epoch and helper with every count at zero, exact capacity and capacity plus one under memory instrumentation, prove malformed mutation requests emit no transfer and change no state, and retain canonical roots, reserve totals, replay receipts and valid exact-capacity behavior. No build or test result is asserted here."
 severity = "post-implementation-repair"

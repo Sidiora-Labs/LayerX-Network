@@ -63,7 +63,9 @@ lxp_result lx_budget_epoch_begin(lxp_module_ctx *ctx, uint64_t epoch,
         return LXP_ERR_TIMESTAMP_REGRESSION;
     runtime = (lx_budget_runtime *)lxp_ctx_module_runtime(ctx);
     if (runtime == NULL) return lxp_ctx_charge_gas(ctx, 1U);
-    if (runtime->store == NULL) return LXP_ERR_NON_CANONICAL;
+    if (runtime->store == NULL ||
+        runtime->store->count > LX_BUDGET_STORE_CAPACITY)
+        return LXP_ERR_NON_CANONICAL;
     for (i = 0U; i < runtime->store->count; ++i) {
         lxp_result status = lx_budget_rollover(&runtime->store->records[i],
                                                timestamp);

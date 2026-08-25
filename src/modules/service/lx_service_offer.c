@@ -146,7 +146,8 @@ lxp_result lx_service_agreement_lookup(lx_service_store *store,
 static lxp_result offer_validate(const lx_service_offer_request *request)
 {
     const lx_service_offer *offer;
-    if (request == NULL || request->store == NULL ||
+    if (request == NULL ||
+        lx_service_store_validate(request->store) != LXP_OK ||
         request->authority == NULL) return LXP_ERR_NON_CANONICAL;
     if (request->attempts_balance_mutation)
         return LXP_ERR_MODULE_MAY_NOT_WRITE_BALANCE;

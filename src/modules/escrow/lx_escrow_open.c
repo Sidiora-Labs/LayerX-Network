@@ -122,6 +122,7 @@ lxp_result lx_escrow_state_put(lx_escrow_store *store,
 {
     lx_escrow_record *existing;
     if (store == NULL || record == NULL ||
+        store->count > LX_ESCROW_STORE_CAPACITY ||
         lxp_ct_is_zero(record->escrow_id, 32U) ||
         record->state < LX_ESCROW_STATE_OPEN ||
         record->state > LX_ESCROW_STATE_TIMED_OUT)
@@ -137,7 +138,9 @@ lxp_result lx_escrow_state_put(lx_escrow_store *store,
 static lxp_result validate_open(const lx_escrow_open_request *request)
 {
     lx_escrow_record *existing;
-    if (request == NULL || request->store == NULL || request->owner == NULL ||
+    if (request == NULL || request->store == NULL ||
+        request->store->count > LX_ESCROW_STORE_CAPACITY ||
+        request->owner == NULL ||
         request->escrow_account == NULL || request->asset == NULL ||
         request->owner->kind != LX_ACCOUNT_AGENT_MAIN ||
         request->escrow_account->kind != LX_ACCOUNT_AGENT_ESCROW ||

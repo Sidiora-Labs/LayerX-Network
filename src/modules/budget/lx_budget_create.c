@@ -133,7 +133,9 @@ lxp_result lx_budget_state_put(lx_budget_store *store,
 {
     lx_budget_record *existing;
     lxp_result status = record_validate(record);
-    if (store == NULL || status != LXP_OK) return status;
+    if (store == NULL || status != LXP_OK ||
+        store->count > LX_BUDGET_STORE_CAPACITY)
+        return status != LXP_OK ? status : LXP_ERR_NON_CANONICAL;
     if (lx_budget_lookup(store, record->budget_id, &existing) == LXP_OK)
         return LXP_ERR_SEQUENCE_REUSED;
     if (store->count == LX_BUDGET_STORE_CAPACITY)
@@ -172,7 +174,11 @@ lxp_result lx_budget_create_execute(lxp_module_ctx *ctx,
 {
     lx_budget_record *existing;
     lxp_result status;
-    if (request == NULL || request->store == NULL) return LXP_ERR_NON_CANONICAL;
+    if (ctx == NULL || request == NULL || request->store == NULL ||
+        request->owner == NULL || request->budget_account == NULL ||
+        request->asset == NULL || receipt == NULL ||
+        request->store->count > LX_BUDGET_STORE_CAPACITY)
+        return LXP_ERR_NON_CANONICAL;
     status = record_validate(&request->record);
     if (status != LXP_OK) return status;
     if (lx_budget_lookup(request->store, request->record.budget_id,
@@ -195,7 +201,10 @@ lxp_result lx_budget_fund_execute(lxp_module_ctx *ctx,
 {
     lx_budget_record *record;
     lxp_result status;
-    if (request == NULL || request->store == NULL) return LXP_ERR_NON_CANONICAL;
+    if (ctx == NULL || request == NULL || request->store == NULL ||
+        request->owner == NULL || request->budget_account == NULL ||
+        request->asset == NULL || receipt == NULL)
+        return LXP_ERR_NON_CANONICAL;
     status = lx_budget_lookup(request->store, request->record.budget_id, &record);
     if (status != LXP_OK || record->closed) return LXP_ERR_UNKNOWN_FIELD;
     if (memcmp(record->owner, request->owner->id, 32U) != 0 ||

@@ -78,5 +78,9 @@ int main(void)
         lx_stream_meter_execute(&record, &attestation, &accrued) !=
             LXP_ERR_ACCRUAL_OVERFLOW || record.cumulative_meter != 3U)
         return 1;
+    record.meter_authority_count = LX_STREAM_MAX_METER_AUTHORITIES + 1U;
+    if (lx_stream_meter_execute(&record, &attestation, &accrued) !=
+        LXP_ERR_UNAUTHORIZED_METER)
+        return 1;
     return 0;
 }

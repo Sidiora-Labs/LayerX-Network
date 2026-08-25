@@ -121,6 +121,26 @@ static int run_timeout(bool delayed, uint8_t root[32])
 
     if (delayed)
         for (i = 0U; i < UINT64_C(1000000); ++i) elapsed_work += i;
+    store.count = LX_ESCROW_STORE_CAPACITY + 1U;
+    if (lx_escrow_module_iface()->epoch_begin(&ctx, 0U, 1000U) !=
+        LXP_ERR_NON_CANONICAL)
+        return 1;
+    store.count = 1U;
+    store.economic_result_count = LX_ESCROW_IDEMPOTENCY_CAPACITY + 1U;
+    if (lx_escrow_module_iface()->epoch_begin(&ctx, 0U, 1000U) !=
+        LXP_ERR_NON_CANONICAL)
+        return 1;
+    store.economic_result_count = 0U;
+    accounts.count = LX_ACCOUNT_REGISTRY_CAPACITY + 1U;
+    if (lx_escrow_module_iface()->epoch_begin(&ctx, 0U, 1000U) !=
+        LXP_ERR_NON_CANONICAL)
+        return 1;
+    accounts.count = 2U;
+    assets.count = LX_ASSET_REGISTRY_CAPACITY + 1U;
+    if (lx_escrow_module_iface()->epoch_begin(&ctx, 0U, 1000U) !=
+        LXP_ERR_NON_CANONICAL)
+        return 1;
+    assets.count = 1U;
     if (lx_escrow_module_iface()->epoch_begin(&ctx, 0U, 1000U) != LXP_OK ||
         escrow_account->balance.lo != 0U || owner->balance.lo != 50U ||
         store.records[0].state != LX_ESCROW_STATE_TIMED_OUT)
@@ -169,6 +189,8 @@ static int explicit_release(void)
     lxp_module_ctx ctx;
     lxp_arena arena;
     lxp_receipt receipt;
+    lxp_receipt replayed;
+    bool found;
     uint8_t arena_bytes[4096];
     uint64_t parameters = 1U;
 
@@ -218,6 +240,14 @@ static int explicit_release(void)
     request.context.asset_count = 1U;
     request.context.sequence_account = &escrow_account;
     (void)memcpy(request.context.authorized_from, escrow_account.id, 32U);
+    store.economic_result_count = LX_ESCROW_IDEMPOTENCY_CAPACITY + 1U;
+    if (lx_escrow_receipt_replay(&store, request.idempotency_key,
+                                 &replayed, &found) !=
+            LXP_ERR_NON_CANONICAL ||
+        lx_escrow_receipt_record(&store, request.idempotency_key,
+                                 &receipt) != LXP_ERR_NON_CANONICAL)
+        return 1;
+    store.economic_result_count = 0U;
     if (lx_escrow_release_execute(&ctx, &request, &receipt) != LXP_OK ||
         escrow_account.balance.lo != 0U || owner.balance.lo != 20U ||
         store.records[0].state != LX_ESCROW_STATE_RELEASED ||

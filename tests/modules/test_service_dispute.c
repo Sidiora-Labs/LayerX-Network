@@ -134,6 +134,9 @@ static int dispute_checks(lxp_kernel *kernel, lxp_arena *arena)
     effects.count = 1U;
     if (lx_service_effect_audit(LX_SERVICE_DELIVER, &effects) !=
         LXP_FATAL_INVARIANT) return 1;
+    effects.count = LXP_MAX_EFFECTS + 1U;
+    if (lx_service_effect_audit(LX_SERVICE_DELIVER, &effects) !=
+        LXP_ERR_NON_CANONICAL) return 1;
     return 0;
 }
 

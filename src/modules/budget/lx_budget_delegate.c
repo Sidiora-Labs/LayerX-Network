@@ -21,7 +21,9 @@ lxp_result lx_budget_delegate_add_execute(lx_budget_record *record,
 {
     bool found;
     size_t position;
-    if (record == NULL || delegate == NULL || lxp_ct_is_zero(delegate, 32U))
+    if (record == NULL || delegate == NULL ||
+        record->delegate_count > LX_BUDGET_MAX_DELEGATES ||
+        lxp_ct_is_zero(delegate, 32U))
         return LXP_ERR_NON_CANONICAL;
     position = delegate_position(record, delegate, &found);
     if (found) return LXP_ERR_SEQUENCE_REUSED;
@@ -41,7 +43,9 @@ lxp_result lx_budget_delegate_remove_execute(lx_budget_record *record,
 {
     bool found;
     size_t position;
-    if (record == NULL || delegate == NULL) return LXP_ERR_NON_CANONICAL;
+    if (record == NULL || delegate == NULL ||
+        record->delegate_count > LX_BUDGET_MAX_DELEGATES)
+        return LXP_ERR_NON_CANONICAL;
     position = delegate_position(record, delegate, &found);
     if (!found) return LXP_ERR_UNAUTHORIZED_DELEGATE;
     if (position + 1U != record->delegate_count)
@@ -62,7 +66,9 @@ lxp_result lx_budget_authorize_delegate(
     bool found;
     lxp_u128 consumed;
     if (record == NULL || submitter == NULL || capability == NULL ||
-        recipient == NULL || lxp_u128_is_zero(amount))
+        recipient == NULL ||
+        record->delegate_count > LX_BUDGET_MAX_DELEGATES ||
+        lxp_u128_is_zero(amount))
         return LXP_ERR_UNAUTHORIZED_DELEGATE;
     (void)delegate_position(record, submitter, &found);
     if (!found || capability->revoked ||

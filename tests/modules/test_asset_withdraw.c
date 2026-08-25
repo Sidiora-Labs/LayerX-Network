@@ -118,6 +118,19 @@ int main(void)
                                      &receipt) !=
                 LXP_ERR_WITHDRAWAL_ALREADY_SETTLED) return 1;
     }
+    store.count = LX_DEPOSIT_NULLIFIER_CAPACITY + 1U;
+    if (!lx_asset_nullifier_seen(&store, nullifier) ||
+        lx_asset_withdraw_request(&ctx, &transfer, &withdrawal, &store,
+                                  &receipt) != LXP_ERR_NON_CANONICAL)
+        return 1;
+    {
+        lxp_transfer_context settlement = { 0 };
+        if (lx_asset_withdraw_settle(&ctx, withdrawals, reserve, &asset,
+                                     &checkpoint, nullifier, &store,
+                                     settlement, &receipt) !=
+            LXP_ERR_NON_CANONICAL)
+            return 1;
+    }
     if (lxp_state_store_destroy(&state) != LXP_OK) return 1;
     return 0;
 }
