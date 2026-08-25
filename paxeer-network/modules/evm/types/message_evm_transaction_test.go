@@ -25,6 +25,28 @@ func TestIsAssociate(t *testing.T) {
 	require.True(t, tx.IsAssociateTx())
 }
 
+func TestAssociateEnvelopeIsNotEthereumTransaction(t *testing.T) {
+	associate := &ethtx.AssociateTx{V: []byte{1}, R: []byte{2}, S: []byte{3}, CustomMessage: "associate"}
+	msg, err := types.NewMsgEVMTransaction(associate)
+	require.NoError(t, err)
+
+	ethTx, txData := msg.AsTransaction()
+	require.Nil(t, ethTx)
+	require.Equal(t, associate, txData)
+
+	copyTx := associate.Copy().(*ethtx.AssociateTx)
+	copyTx.V[0] = 9
+	require.Equal(t, byte(1), associate.V[0])
+}
+
+func TestMalformedEnvelopeAssociationCheckFailsClosed(t *testing.T) {
+	msg := &types.MsgEVMTransaction{}
+	require.False(t, msg.IsAssociateTx())
+	associate, ok := msg.GetAssociateTx()
+	require.False(t, ok)
+	require.Nil(t, associate)
+}
+
 func TestIsNotAssociate(t *testing.T) {
 	tx, err := types.NewMsgEVMTransaction(nil)
 	require.Error(t, err)

@@ -70,7 +70,11 @@ func (msg *MsgEVMTransaction) AsTransaction() (*ethtypes.Transaction, ethtx.TxDa
 		return nil, nil
 	}
 
-	return ethtypes.NewTx(txData.AsEthereumData()), txData
+	ethereumData, ok := txData.(ethtx.EthereumTxData)
+	if !ok {
+		return nil, txData
+	}
+	return ethtypes.NewTx(ethereumData.AsEthereumData()), txData
 }
 
 // UnpackInterfaces implements UnpackInterfacesMesssage.UnpackInterfaces
@@ -86,8 +90,7 @@ func (msg *MsgEVMTransaction) IsAssociateTx() bool {
 func (msg *MsgEVMTransaction) GetAssociateTx() (*ethtx.AssociateTx, bool) {
 	txData, err := UnpackTxData(msg.Data)
 	if err != nil {
-		// should never happen
-		panic(err)
+		return nil, false
 	}
 	amsg, ok := txData.(*ethtx.AssociateTx)
 	return amsg, ok

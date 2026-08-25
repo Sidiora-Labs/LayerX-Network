@@ -43,26 +43,30 @@ func (fc EVMFeeCheckDecorator) AnteHandle(ctx sdk.Context, tx sdk.Tx, simulate b
 	if err != nil {
 		return ctx, err
 	}
+	ethereumData, ok := txData.(ethtx.EthereumTxData)
+	if !ok {
+		return ctx, sdkerrors.Wrap(sdkerrors.ErrInvalidRequest, "unsupported EVM transaction envelope")
+	}
 
 	ver := msg.Derived.Version
 
-	if txData.GetGasFeeCap().Cmp(fc.getBaseFee(ctx)) < 0 {
+	if ethereumData.GetGasFeeCap().Cmp(fc.getBaseFee(ctx)) < 0 {
 		return ctx, sdkerrors.ErrInsufficientFee
 	}
-	if txData.GetGasFeeCap().Cmp(fc.getMinimumFee(ctx)) < 0 {
+	if ethereumData.GetGasFeeCap().Cmp(fc.getMinimumFee(ctx)) < 0 {
 		return ctx, sdkerrors.ErrInsufficientFee
 	}
-	if txData.GetGasTipCap().Sign() < 0 {
+	if ethereumData.GetGasTipCap().Sign() < 0 {
 		return ctx, sdkerrors.Wrapf(sdkerrors.ErrInvalidRequest, "gas fee cap cannot be negative")
 	}
 	ethCfg := evmtypes.DefaultChainConfig().EthereumConfig(fc.evmKeeper.ChainID(ctx))
 
 	// if EVM version is Cancun or later, and the transaction contains at least one blob, we need to
 	// make sure the transaction carries a non-zero blob fee cap.
-	if ver >= derived.Cancun && len(txData.GetBlobHashes()) > 0 {
+	if ver >= derived.Cancun && len(ethereumData.GetBlobHashes()) > 0 {
 		// For now we are simply assuming excessive blob gas is 0. In the future we might change it to be
 		// dynamic based on prior block usage.
-		if txData.GetBlobFeeCap().Cmp(eip4844.CalcBlobFee(ethCfg, &ethtypes.Header{Time: uint64(ctx.BlockTime().Unix())})) < 0 { // nolint:gosec
+		if ethereumData.GetBlobFeeCap().Cmp(eip4844.CalcBlobFee(ethCfg, &ethtypes.Header{Time: uint64(ctx.BlockTime().Unix())})) < 0 { // nolint:gosec
 			return ctx, sdkerrors.ErrInsufficientFee
 		}
 	}
@@ -102,7 +106,7 @@ func (fc EVMFeeCheckDecorator) AnteHandle(ctx sdk.Context, tx sdk.Tx, simulate b
 	}
 
 	// calculate the priority by dividing the total fee with the native gas limit (i.e. the effective native gas price)
-	priority := fc.CalculatePriority(ctx, txData)
+	priority := fc.CalculatePriority(ctx, ethereumData)
 	ctx = ctx.WithPriority(priority.Int64())
 
 	return next(ctx, tx, simulate)
@@ -125,7 +129,7 @@ func (fc EVMFeeCheckDecorator) getMinimumFee(ctx sdk.Context) *big.Int {
 }
 
 // CalculatePriority returns a priority based on the effective gas price of the transaction
-func (fc EVMFeeCheckDecorator) CalculatePriority(ctx sdk.Context, txData ethtx.TxData) *big.Int {
+func (fc EVMFeeCheckDecorator) CalculatePriority(ctx sdk.Context, txData ethtx.EthereumTxData) *big.Int {
 	gp := txData.EffectiveGasPrice(utils.Big0)
 	if !ctx.IsCheckTx() && !ctx.IsReCheckTx() {
 		utilmetrics.HistogramEvmEffectiveGasPrice(gp) // TODO(PLT-330): remove once evm_effective_gas_price verified

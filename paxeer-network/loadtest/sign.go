@@ -184,7 +184,7 @@ func (sc *SignerClient) SignTx(chainID string, txBuilder *client.TxBuilder, priv
 		Sequence: seqNum,
 	}
 	if err := (*txBuilder).SetSignatures(sigV2); err != nil {
-		return fmt.Errorf("SetSignatures (placeholder): %w", err)
+		return fmt.Errorf("set empty signature metadata: %w", err)
 	}
 	signerData := xauthsigning.SignerData{
 		ChainID:       chainID,

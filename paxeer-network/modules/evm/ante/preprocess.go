@@ -164,7 +164,11 @@ func PreprocessUnpacked(ctx sdk.Context, msgEVMTransaction *evmtypes.MsgEVMTrans
 		return nil
 	}
 
-	ethTx := ethtypes.NewTx(txData.AsEthereumData())
+	ethereumData, ok := txData.(ethtx.EthereumTxData)
+	if !ok {
+		return sdkerrors.Wrap(sdkerrors.ErrInvalidRequest, "unsupported EVM transaction envelope")
+	}
+	ethTx := ethtypes.NewTx(ethereumData.AsEthereumData())
 	if ethTx.Type() != ethtypes.LegacyTxType {
 		chainID = ethTx.ChainId()
 	}

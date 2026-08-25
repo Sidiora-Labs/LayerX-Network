@@ -6,7 +6,9 @@ import (
 
 	evmkeeper "github.com/sidiora-labs/paxeer-network/modules/evm/keeper"
 	evmtypes "github.com/sidiora-labs/paxeer-network/modules/evm/types"
+	"github.com/sidiora-labs/paxeer-network/modules/evm/types/ethtx"
 	sdk "github.com/sidiora-labs/paxeer-network/sdk/types"
+	sdkerrors "github.com/sidiora-labs/paxeer-network/sdk/types/errors"
 )
 
 const (
@@ -28,8 +30,12 @@ func (gl GasDecorator) AnteHandle(ctx sdk.Context, tx sdk.Tx, simulate bool, nex
 	if err != nil {
 		return ctx, err
 	}
+	ethereumData, ok := txData.(ethtx.EthereumTxData)
+	if !ok {
+		return ctx, sdkerrors.Wrap(sdkerrors.ErrInvalidRequest, "unsupported EVM transaction envelope")
+	}
 
-	txGas := txData.GetGas()
+	txGas := ethereumData.GetGas()
 	if txGas > math.MaxInt64 {
 		return ctx, errors.New("tx gas exceeds max")
 	}

@@ -1,6 +1,8 @@
 package state
 
 import (
+	"errors"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/stateless"
@@ -14,6 +16,8 @@ import (
 )
 
 var logger = paxlog.NewLogger("x", "evm", "state")
+
+var errUnsupportedStateRoot = errors.New("EVM StateDB does not own an Ethereum state trie root")
 
 // Initialized for each transaction individually
 type DBImpl struct {
@@ -194,7 +198,7 @@ func (s *DBImpl) Finalise(bool) {
 }
 
 func (s *DBImpl) Commit(uint64, bool, bool) (common.Hash, error) {
-	panic("Commit is not implemented and called unexpectedly")
+	return common.Hash{}, errUnsupportedStateRoot
 }
 
 func (s *DBImpl) SetTxContext(common.Hash, int) {
@@ -218,7 +222,10 @@ func (s *DBImpl) PointCache() *ethutils.PointCache {
 func (s *DBImpl) Witness() *stateless.Witness { return nil }
 
 func (s *DBImpl) IntermediateRoot(bool) common.Hash {
-	panic("IntermediateRoot is not implemented and called unexpectedly")
+	if s.err == nil {
+		s.err = errUnsupportedStateRoot
+	}
+	return common.Hash{}
 }
 
 func (s *DBImpl) TxIndex() int {

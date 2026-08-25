@@ -96,9 +96,13 @@ func (s *PaxTxPrioritizer) getEvmTxPriority(ctx sdk.Context, evmTx *evmtypes.Msg
 		}
 		return 0, sdkerrors.Wrap(sdkerrors.ErrInvalidRequest, "account already has association set")
 	}
+	ethereumData, ok := txData.(ethtx.EthereumTxData)
+	if !ok {
+		return 0, sdkerrors.Wrap(sdkerrors.ErrInvalidRequest, "unsupported EVM transaction envelope")
+	}
 
 	// Check txData for sanity.
-	feeCap := txData.GetGasFeeCap()
+	feeCap := ethereumData.GetGasFeeCap()
 	fee := s.getEvmBaseFee(ctx)
 	if feeCap.Cmp(fee) < 0 {
 		return 0, sdkerrors.ErrInsufficientFee
@@ -107,22 +111,22 @@ func (s *PaxTxPrioritizer) getEvmTxPriority(ctx sdk.Context, evmTx *evmtypes.Msg
 	if feeCap.Cmp(minimumFee) < 0 {
 		return 0, sdkerrors.ErrInsufficientFee
 	}
-	if txData.GetGasTipCap().Sign() < 0 {
+	if ethereumData.GetGasTipCap().Sign() < 0 {
 		return 0, sdkerrors.Wrapf(sdkerrors.ErrInvalidRequest, "gas fee cap cannot be negative")
 	}
 	// Check blob hashes for sanity. If EVM version is Cancun or later, and the
 	// transaction contains at least one blob, we need to make sure the transaction
 	// carries a non-zero blob fee cap.
-	if evmTx.Derived != nil && evmTx.Derived.Version >= derived.Cancun && len(txData.GetBlobHashes()) > 0 {
+	if evmTx.Derived != nil && evmTx.Derived.Version >= derived.Cancun && len(ethereumData.GetBlobHashes()) > 0 {
 		// For now we are simply assuming excessive blob gas is 0. In the future we might change it to be
 		// dynamic based on prior block usage.
 		chainConfig := evmtypes.DefaultChainConfig().EthereumConfig(s.evmKeeper.ChainID(ctx))
-		if txData.GetBlobFeeCap().Cmp(eip4844.CalcBlobFee(chainConfig, &ethtypes.Header{Time: uint64(ctx.BlockTime().Unix())})) < 0 { //nolint:gosec
+		if ethereumData.GetBlobFeeCap().Cmp(eip4844.CalcBlobFee(chainConfig, &ethtypes.Header{Time: uint64(ctx.BlockTime().Unix())})) < 0 { //nolint:gosec
 			return 0, sdkerrors.ErrInsufficientFee
 		}
 	}
 
-	gp := txData.EffectiveGasPrice(utils.Big0)
+	gp := ethereumData.EffectiveGasPrice(utils.Big0)
 	priority := sdk.NewDecFromBigInt(gp).Quo(s.evmKeeper.GetPriorityNormalizer(ctx)).TruncateInt().BigInt()
 	if priority.Cmp(big.NewInt(antedecorators.MaxPriority)) > 0 {
 		priority = big.NewInt(antedecorators.MaxPriority)

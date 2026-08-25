@@ -221,7 +221,7 @@ func BlockTest(a *App, bt *ethtests.BlockTest) {
 }
 
 func encodeTx(tx *ethtypes.Transaction, txConfig client.TxConfig) []byte {
-	var txData ethtx.TxData
+	var txData ethtx.EthereumTxData
 	var err error
 	switch tx.Type() {
 	case ethtypes.LegacyTxType:

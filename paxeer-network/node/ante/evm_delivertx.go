@@ -34,19 +34,23 @@ func EvmDeliverTxAnte(
 	if atx, ok := txData.(*ethtx.AssociateTx); ok {
 		return HandleAssociateTx(ctx, ek, atx, false)
 	}
-	etx := ethtypes.NewTx(txData.AsEthereumData())
-	evmAddr, paxAddr, version, err := EvmDeliverHandleSignatures(ctx, ek, txData, chainID, msg)
+	ethereumData, ok := txData.(ethtx.EthereumTxData)
+	if !ok {
+		return ctx, sdkerrors.Wrap(sdkerrors.ErrInvalidRequest, "unsupported EVM transaction envelope")
+	}
+	etx := ethtypes.NewTx(ethereumData.AsEthereumData())
+	evmAddr, paxAddr, version, err := EvmDeliverHandleSignatures(ctx, ek, ethereumData, chainID, msg)
 	if err != nil {
 		return ctx, err
 	}
 	ctx = DecorateNonceCallback(ctx, ek, evmAddr, etx.Nonce())
-	if err := EvmDeliverChargeFees(ctx, ek, upgradeKeeper, txData, etx, msg, version, evmAddr); err != nil {
+	if err := EvmDeliverChargeFees(ctx, ek, upgradeKeeper, ethereumData, etx, msg, version, evmAddr); err != nil {
 		return ctx, err
 	}
-	return DecorateContext(ctx, ek, tx, txData, etx, evmAddr, paxAddr), nil
+	return DecorateContext(ctx, ek, tx, ethereumData, etx, evmAddr, paxAddr), nil
 }
 
-func EvmDeliverHandleSignatures(ctx sdk.Context, ek *evmkeeper.Keeper, txData ethtx.TxData, chainID *big.Int, msg *evmtypes.MsgEVMTransaction) (common.Address, sdk.AccAddress, derived.SignerVersion, error) {
+func EvmDeliverHandleSignatures(ctx sdk.Context, ek *evmkeeper.Keeper, txData ethtx.EthereumTxData, chainID *big.Int, msg *evmtypes.MsgEVMTransaction) (common.Address, sdk.AccAddress, derived.SignerVersion, error) {
 	if msg.Derived != nil {
 		if msg.Derived.PubKey == nil {
 			return common.Address{}, nil, 0, sdkerrors.ErrInvalidPubKey
@@ -83,7 +87,7 @@ func EvmDeliverHandleSignatures(ctx sdk.Context, ek *evmkeeper.Keeper, txData et
 	return evmAddr, paxAddr, version, nil
 }
 
-func EvmDeliverChargeFees(ctx sdk.Context, ek *evmkeeper.Keeper, upgradeKeeper *upgradekeeper.Keeper, txData ethtx.TxData, etx *ethtypes.Transaction, msg *evmtypes.MsgEVMTransaction, version derived.SignerVersion, evmAddr common.Address) error {
+func EvmDeliverChargeFees(ctx sdk.Context, ek *evmkeeper.Keeper, upgradeKeeper *upgradekeeper.Keeper, txData ethtx.EthereumTxData, etx *ethtypes.Transaction, msg *evmtypes.MsgEVMTransaction, version derived.SignerVersion, evmAddr common.Address) error {
 	stateDB, err := EvmCheckAndChargeFees(ctx, evmAddr, ek, upgradeKeeper, txData, etx, msg, version, true)
 	if err != nil {
 		return err

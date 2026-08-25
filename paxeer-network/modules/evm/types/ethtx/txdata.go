@@ -16,14 +16,27 @@ var (
 	_ TxData = &BlobTx{}
 	_ TxData = &AssociateTx{}
 	_ TxData = &SetCodeTx{}
+
+	_ EthereumTxData = &LegacyTx{}
+	_ EthereumTxData = &AccessListTx{}
+	_ EthereumTxData = &DynamicFeeTx{}
+	_ EthereumTxData = &BlobTx{}
+	_ EthereumTxData = &SetCodeTx{}
 )
 
 // Unfortunately `TxData` interface in go-ethereum/core/types defines its functions
 // as private, so we have to define our own here.
 type TxData interface {
 	proto.Message
-	TxType() byte
 	Copy() TxData
+	Validate() error
+}
+
+// EthereumTxData is transaction data that can be converted to a native
+// Ethereum transaction. Association envelopes are deliberately excluded.
+type EthereumTxData interface {
+	TxData
+	TxType() byte
 	GetChainID() *big.Int
 	GetAccessList() ethtypes.AccessList
 	GetData() []byte
@@ -39,8 +52,6 @@ type TxData interface {
 	SetSignatureValues(chainID, v, r, s *big.Int)
 
 	AsEthereumData() ethtypes.TxData
-	Validate() error
-
 	Fee() *big.Int
 	Cost() *big.Int
 
@@ -52,8 +63,8 @@ type TxData interface {
 	GetBlobFeeCap() *big.Int
 }
 
-func NewTxDataFromTx(tx *ethtypes.Transaction) (TxData, error) {
-	var txData TxData
+func NewTxDataFromTx(tx *ethtypes.Transaction) (EthereumTxData, error) {
+	var txData EthereumTxData
 	var err error
 	switch tx.Type() {
 	case ethtypes.DynamicFeeTxType:

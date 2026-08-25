@@ -49,15 +49,19 @@ func EvmCheckTxAnte(
 	if atx, ok := txData.(*ethtx.AssociateTx); ok {
 		return HandleAssociateTx(ctx, ek, atx, true)
 	}
-	etx := ethtypes.NewTx(txData.AsEthereumData())
-	evmAddr, paxAddr, paxPubkey, version, err := CheckAndDecodeSignature(ctx, txData, chainID, false)
+	ethereumData, ok := txData.(ethtx.EthereumTxData)
+	if !ok {
+		return ctx, sdkerrors.Wrap(sdkerrors.ErrInvalidRequest, "unsupported EVM transaction envelope")
+	}
+	etx := ethtypes.NewTx(ethereumData.AsEthereumData())
+	evmAddr, paxAddr, paxPubkey, version, err := CheckAndDecodeSignature(ctx, ethereumData, chainID, false)
 	if err != nil {
 		return ctx, err
 	}
 	if err := AssociateAddress(ctx, ek, evmAddr, paxAddr, paxPubkey); err != nil {
 		return ctx, err
 	}
-	if _, err := EvmCheckAndChargeFees(ctx, evmAddr, ek, upgradeKeeper, txData, etx, msg, version, false); err != nil {
+	if _, err := EvmCheckAndChargeFees(ctx, evmAddr, ek, upgradeKeeper, ethereumData, etx, msg, version, false); err != nil {
 		return ctx, err
 	}
 
@@ -66,7 +70,7 @@ func EvmCheckTxAnte(
 		return ctx, err
 	}
 
-	return DecorateContext(ctx, ek, tx, txData, etx, evmAddr, paxAddr), nil
+	return DecorateContext(ctx, ek, tx, ethereumData, etx, evmAddr, paxAddr), nil
 }
 
 func EvmStatelessChecks(ctx sdk.Context, tx sdk.Tx, chainID *big.Int) error {
@@ -94,6 +98,10 @@ func EvmStatelessChecks(ctx sdk.Context, tx sdk.Tx, chainID *big.Int) error {
 	}
 	if _, ok := txData.(*ethtx.AssociateTx); ok {
 		return nil
+	}
+	ethereumData, ok := txData.(ethtx.EthereumTxData)
+	if !ok {
+		return sdkerrors.Wrap(sdkerrors.ErrInvalidRequest, "unsupported EVM transaction envelope")
 	}
 	etx, _ := msg.AsTransaction()
 	if etx.To() == nil && len(etx.Data()) > params.MaxInitCodeSize {
@@ -125,7 +133,7 @@ func EvmStatelessChecks(ctx sdk.Context, tx sdk.Tx, chainID *big.Int) error {
 		}
 	}
 
-	if txData.GetGasTipCap().Sign() < 0 {
+	if ethereumData.GetGasTipCap().Sign() < 0 {
 		return sdkerrors.Wrapf(sdkerrors.ErrInvalidRequest, "gas fee cap cannot be negative")
 	}
 
@@ -146,14 +154,14 @@ func EvmStatelessChecks(ctx sdk.Context, tx sdk.Tx, chainID *big.Int) error {
 		}
 	}
 
-	txGas := txData.GetGas()
+	txGas := ethereumData.GetGas()
 	if txGas > math.MaxInt64 {
 		return errors.New("tx gas exceeds max")
 	}
 	return nil
 }
 
-func DecorateContext(ctx sdk.Context, ek *evmkeeper.Keeper, tx sdk.Tx, txData ethtx.TxData, etx *ethtypes.Transaction, sender common.Address, paxSender sdk.AccAddress) sdk.Context {
+func DecorateContext(ctx sdk.Context, ek *evmkeeper.Keeper, tx sdk.Tx, txData ethtx.EthereumTxData, etx *ethtypes.Transaction, sender common.Address, paxSender sdk.AccAddress) sdk.Context {
 	ctx = ctx.WithPriority(CalculatePriority(ctx, txData, ek).Int64())
 
 	// set EVM properties
@@ -197,7 +205,7 @@ func HandleAssociateTx(ctx sdk.Context, ek *evmkeeper.Keeper, atx *ethtx.Associa
 	return ctx.WithPriority(antedecorators.EVMAssociatePriority), nil
 }
 
-func CheckAndDecodeSignature(ctx sdk.Context, txData ethtx.TxData, chainID *big.Int, isBlockTest bool) (common.Address, sdk.AccAddress, cryptotypes.PubKey, derived.SignerVersion, error) {
+func CheckAndDecodeSignature(ctx sdk.Context, txData ethtx.EthereumTxData, chainID *big.Int, isBlockTest bool) (common.Address, sdk.AccAddress, cryptotypes.PubKey, derived.SignerVersion, error) {
 	ethTx := ethtypes.NewTx(txData.AsEthereumData())
 	if ethTx.Type() != ethtypes.LegacyTxType {
 		chainID = ethTx.ChainId()
@@ -242,7 +250,7 @@ func AssociateAddress(ctx sdk.Context, ek *evmkeeper.Keeper, evmAddr common.Addr
 	return nil
 }
 
-func EvmCheckAndChargeFees(ctx sdk.Context, sender common.Address, ek *evmkeeper.Keeper, upgradeKeeper *upgradekeeper.Keeper, txData ethtx.TxData, etx *ethtypes.Transaction, msg *evmtypes.MsgEVMTransaction, version derived.SignerVersion, statelessChecks bool) (*state.DBImpl, error) {
+func EvmCheckAndChargeFees(ctx sdk.Context, sender common.Address, ek *evmkeeper.Keeper, upgradeKeeper *upgradekeeper.Keeper, txData ethtx.EthereumTxData, etx *ethtypes.Transaction, msg *evmtypes.MsgEVMTransaction, version derived.SignerVersion, statelessChecks bool) (*state.DBImpl, error) {
 	if txData.GetGasFeeCap().Cmp(GetBaseFee(ctx, ek, upgradeKeeper)) < 0 {
 		return nil, sdkerrors.ErrInsufficientFee
 	}
@@ -325,7 +333,7 @@ func GetMinimumFee(ctx sdk.Context, evmKeeper *evmkeeper.Keeper) *big.Int {
 	return evmKeeper.GetMinimumFeePerGas(ctx).TruncateInt().BigInt()
 }
 
-func CalculatePriority(ctx sdk.Context, txData ethtx.TxData, evmKeeper *evmkeeper.Keeper) *big.Int {
+func CalculatePriority(ctx sdk.Context, txData ethtx.EthereumTxData, evmKeeper *evmkeeper.Keeper) *big.Int {
 	gp := txData.EffectiveGasPrice(utils.Big0)
 	priority := sdk.NewDecFromBigInt(gp).Quo(evmKeeper.GetPriorityNormalizer(ctx)).TruncateInt().BigInt()
 	if priority.Cmp(big.NewInt(antedecorators.MaxPriority)) > 0 {
