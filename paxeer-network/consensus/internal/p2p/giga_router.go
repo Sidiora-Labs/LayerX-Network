@@ -38,11 +38,12 @@ func (a GigaNodeAddr) String() string {
 }
 
 type GigaRouterConfig struct {
-	DialInterval   time.Duration
-	ValidatorAddrs map[atypes.PublicKey]GigaNodeAddr
-	Consensus      *consensus.Config
-	Producer       *producer.Config
-	GenDoc         *types.GenesisDoc
+	DialInterval     time.Duration
+	HandshakeTimeout time.Duration
+	ValidatorAddrs   map[atypes.PublicKey]GigaNodeAddr
+	Consensus        *consensus.Config
+	Producer         *producer.Config
+	GenDoc           *types.GenesisDoc
 }
 
 type GigaRouter struct {
@@ -69,6 +70,9 @@ type GigaRouter struct {
 }
 
 func NewGigaRouter(cfg *GigaRouterConfig, key NodeSecretKey) (*GigaRouter, error) {
+	if cfg.HandshakeTimeout <= 0 {
+		return nil, fmt.Errorf("HandshakeTimeout = %v, want >0", cfg.HandshakeTimeout)
+	}
 	if cfg.GenDoc.InitialHeight < 1 {
 		return nil, fmt.Errorf("GenDoc.InitialHeight = %v, want >=1", cfg.GenDoc.InitialHeight)
 	}
@@ -406,8 +410,9 @@ func (r *GigaRouter) dialAndRunConn(ctx context.Context, key NodePublicKey, hp t
 			return fmt.Errorf("tcp.Dial(%v): %w", addrs[0], err)
 		}
 		s.SpawnBg(func() error { return tcpConn.Run(ctx) })
-		// TODO: handshake needs a timeout.
-		hConn, err := handshake(ctx, tcpConn, r.key, handshakeSpec{PaxGigaConnection: true})
+		hConn, err := utils.WithTimeout1(ctx, r.cfg.HandshakeTimeout, func(ctx context.Context) (*handshakedConn, error) {
+			return handshake(ctx, tcpConn, r.key, handshakeSpec{PaxGigaConnection: true})
+		})
 		if err != nil {
 			return fmt.Errorf("handshake(): %w", err)
 		}

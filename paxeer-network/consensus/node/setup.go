@@ -369,6 +369,7 @@ func createRouter(
 		if err != nil {
 			return nil, closer, fmt.Errorf("buildGigaConfig: %w", err)
 		}
+		gigaCfg.HandshakeTimeout = cfg.P2P.HandshakeTimeout
 		// Resolve a relative persistent_state_dir against the node's --home dir,
 		// matching how other paths in the tendermint config are handled
 		// (config.go's rootify). Absolute paths pass through unchanged. None
