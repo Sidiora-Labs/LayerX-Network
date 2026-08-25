@@ -130,7 +130,7 @@ static lxp_result decode_position(occ_cursor *cursor, occ_position *position,
                                   bool legacy)
 {
     const uint8_t *bytes;
-    uint8_t flag;
+    uint8_t flag = 0U;
     lxp_result status = take_namespace(cursor, position);
     if (status != LXP_OK) return status;
     status = take(cursor, 32U, &bytes);
@@ -171,12 +171,13 @@ static lxp_result decode_position(occ_cursor *cursor, occ_position *position,
     if (status == LXP_OK) (void)memcpy(position->mandate, bytes, 32U);
     if (status == LXP_OK) status = take_u128(cursor, &position->arrears);
     if (status == LXP_OK) status = take_u8(cursor, &flag);
-    if (status == LXP_OK && flag > 1U) status = LXP_ERR_NON_CANONICAL;
-    position->frozen = flag != 0U;
-    if (status == LXP_OK) status = take_u8(cursor, &flag);
-    if (status == LXP_OK && flag > 1U) status = LXP_ERR_NON_CANONICAL;
-    position->legacy = flag != 0U;
     if (status != LXP_OK) return status;
+    if (flag > 1U) return LXP_ERR_NON_CANONICAL;
+    position->frozen = flag != 0U;
+    status = take_u8(cursor, &flag);
+    if (status != LXP_OK) return status;
+    if (flag > 1U) return LXP_ERR_NON_CANONICAL;
+    position->legacy = flag != 0U;
     if ((position->bytes == 0U && lxp_u128_is_zero(position->arrears)) ||
         position->bytes > position->maximum_bytes ||
         (position->legacy && (!position->frozen ||

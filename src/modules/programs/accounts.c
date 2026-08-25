@@ -4,6 +4,7 @@
 #include "layerx/lxp_hash.h"
 #include "layerx/lxp_receipt.h"
 #include "layerx/lxp_state.h"
+#include "layerx/lxp_kernel.h"
 
 #include <string.h>
 

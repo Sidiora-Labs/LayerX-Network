@@ -4,6 +4,7 @@
 #include "layerx/lxp_history.h"
 #include "layerx/lxp_receipt.h"
 #include "layerx/lxp_storage.h"
+#include "layerx/lxp_kernel.h"
 
 #include <stdlib.h>
 #include <string.h>

@@ -1014,6 +1014,30 @@ observed = "The task declares only the two original Rust occupancy files as touc
 assumption = "Human qualification must review the full published integration diff against req36.5 and retain the advisory as evidence of a stale narrow task touch declaration, rather than deleting required protocol integration or weakening the task to the isolated Rust ledger."
 severity = "task-scope"
 
+[observation.29.5.13]
+task = "29.5"
+file = "include/layerx/programs.h, src/modules/programs/accounts.c, src/modules/programs/deploy.c, src/modules/programs/feed_store.c, src/modules/programs/occupancy.c, src/modules/programs/winddown.c"
+symbol = "layerx_programs_occupancy_output_apply"
+observed = "Human qualification reached the Programs sources and found missing direct pthread and kernel-definition includes, then found occupancy settlement referring to an undeclared LXP_DOMAIN_TRANSFER_SET while folding separately committed payer roots into a value labelled transfer_set_root. The repair retains the direct includes and submits every non-zero payer debit in canonical principal order as one multi-source kernel transfer set, copying the root returned by that exact ledger mutation into occupancy state and receipt evidence."
+assumption = "Human qualification must rerun the build and funded multi-payer occupancy artifacts, prove one atomic ledger transfer set covers every paid payer exactly once, compare its canonical ordered root with the occupancy receipt and persisted final record, and inject a later-leg failure to prove all payer balances and occupancy state roll back together."
+severity = "qualification-repair"
+
+[observation.29.5.14]
+task = "29.5"
+file = "spec/layerx-platform/spec.kvx"
+symbol = "task.29.5"
+observed = "The non-executing implemented gate resolved both declared Rust symbols but refused the lifecycle transition because Codify has no task-tagged change for the two historical Rust touch paths. Git commit e93f5fb3 contains those Rust paths and the C occupancy integration and is an ancestor of the current main branch, but the Codify snapshot history does not carry that task tag. The task's pre-repair implemented state is retained; this repair does not claim qualification."
+assumption = "Human qualification or project-history reconciliation must attach the historical implementation evidence to task 29.5 without fabricating a new Rust edit or bypassing the graph gate."
+severity = "task-evidence"
+
+[observation.29.5.15]
+task = "29.5"
+file = "src/modules/programs/occupancy_evidence.c"
+symbol = "decode_position"
+observed = "Human qualification next reached the optimized occupancy evidence decoder and GCC rejected both boolean flag assignments because the shared flag could be read after a failed take_u8 call. The repair initializes the temporary and returns immediately after either failed read, then validates the canonical 0-or-1 encoding before assigning frozen or legacy."
+assumption = "Human qualification must resume the same build and exercise truncated and non-canonical boolean encodings to confirm they remain rejected before decoded position state is accepted."
+severity = "qualification-repair"
+
 [observation.30.4.1]
 task = "30.4"
 file = "programs/crates/layerx-programs-runtime/src/abi/capability.rs"

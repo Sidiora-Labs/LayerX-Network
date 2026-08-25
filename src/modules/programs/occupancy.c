@@ -611,20 +611,25 @@ lxp_result layerx_programs_occupancy_payer_available(
            LXP_ERR_INSUFFICIENT_BALANCE : LXP_OK;
 }
 
-static lxp_result apply_payer(
+static lxp_result append_payer_transfer(
     lxp_programs_occupancy_bridge *bridge,
     const lxp_programs_occupancy_payer *payer,
-    uint8_t aggregate_root[32])
+    lxp_transfer_set *set,
+    lxp_transfer_source_authority
+        authorities[LXP_PROGRAMS_OCCUPANCY_MAX_PAYERS])
 {
     lx_programs_transfer_runtime *runtime =
         (lx_programs_transfer_runtime *)lxp_ctx_module_runtime(bridge->ctx);
+    lxp_transfer_source_authority *authority;
+    lxp_transfer_leg *leg;
     lx_account *from;
     lx_account *treasury;
-    lxp_transfer_set set;
-    lxp_receipt receipt;
-    uint8_t material[64];
+    size_t index;
     lxp_result status;
     if (lxp_u128_is_zero(payer->paid)) return LXP_OK;
+    if (set == NULL || authorities == NULL ||
+        set->leg_count == LXP_PROGRAMS_OCCUPANCY_MAX_PAYERS)
+        return LXP_ERR_TOO_MANY_LEGS;
     if (runtime == NULL || runtime->accounts == NULL || runtime->assets == NULL ||
         runtime->asset_count == 0U ||
         lxp_ct_is_zero(bridge->resolved_asset_id, 32U))
@@ -633,33 +638,33 @@ static lxp_result apply_payer(
     if (from == NULL) return LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE;
     status = lxp_fee_treasury_account(runtime->accounts, &treasury);
     if (status != LXP_OK) return status;
-    (void)memset(&set, 0, sizeof(set));
-    set.leg_count = 1U;
-    set.legs[0].from = from;
-    set.legs[0].to = treasury;
-    (void)memcpy(set.legs[0].asset_id, bridge->resolved_asset_id, 32U);
-    set.legs[0].amount = payer->paid;
-    set.legs[0].reason = LXP_REASON_STORAGE_OCCUPANCY;
-    set.legs[0].supply_mode = LXP_TRANSFER_CONSERVED;
-    set.context.assets = runtime->assets;
-    set.context.asset_count = runtime->asset_count;
-    (void)memcpy(set.context.authorized_from, payer->principal, 32U);
-    set.context.protocol_system_capability = true;
-    set.context.origin_module_id = LXP_MODULE_PROGRAMS;
-    set.context.debit_authority_kind = LXP_AUTH_OCCUPANCY_RESPONSIBILITY;
-    (void)memset(&receipt, 0, sizeof(receipt));
-    status = lxp_ctx_emit_programs_maintenance_transfer_set(
-        bridge->ctx, &set, &receipt);
-    if (status != LXP_OK) return status;
-    (void)memcpy(material, aggregate_root, 32U);
-    (void)memcpy(material + 32U, receipt.transfer_set_root, 32U);
-    return lxp_hash_domain(LXP_DOMAIN_TRANSFER_SET, material, sizeof(material),
-                           aggregate_root);
+    index = set->leg_count;
+    leg = &set->legs[index];
+    authority = &authorities[index];
+    (void)memset(leg, 0, sizeof(*leg));
+    (void)memset(authority, 0, sizeof(*authority));
+    leg->from = from;
+    leg->to = treasury;
+    (void)memcpy(leg->asset_id, bridge->resolved_asset_id, 32U);
+    leg->amount = payer->paid;
+    leg->reason = LXP_REASON_STORAGE_OCCUPANCY;
+    leg->supply_mode = LXP_TRANSFER_CONSERVED;
+    (void)memcpy(authority->authorized_from, payer->principal, 32U);
+    authority->debit_authority_kind = LXP_AUTH_OCCUPANCY_RESPONSIBILITY;
+    authority->protocol_system_capability = true;
+    ++set->leg_count;
+    set->context.assets = runtime->assets;
+    set->context.asset_count = runtime->asset_count;
+    set->context.protocol_system_capability = true;
+    set->context.debit_authority_kind = LXP_AUTH_OCCUPANCY_RESPONSIBILITY;
+    set->context.source_authorities = authorities;
+    set->context.source_authority_count = set->leg_count;
+    return LXP_OK;
 }
 
 static lxp_result persist_output(lxp_programs_occupancy_bridge *bridge,
                                  const uint8_t evidence_digest[32],
-                                 const uint8_t aggregate_root[32])
+                                 const uint8_t transfer_set_root[32])
 {
     uint32_t computed_chunks;
     uint16_t chunks;
@@ -739,7 +744,7 @@ static lxp_result persist_output(lxp_programs_occupancy_bridge *bridge,
         write_u64(final + 8U, bridge->global_sequence);
         write_u32(final + 16U, bridge->parameter_version);
         (void)memcpy(final + 20U, evidence_digest, 32U);
-        (void)memcpy(final + 52U, aggregate_root, 32U);
+        (void)memcpy(final + 52U, transfer_set_root, 32U);
         status = lxp_ctx_kv_put(bridge->ctx, occupancy_final_key,
                                 sizeof(occupancy_final_key) - 1U,
                                 final, sizeof(final));
@@ -776,7 +781,7 @@ static lxp_result persist_output(lxp_programs_occupancy_bridge *bridge,
     (void)memcpy(bridge->receipt.settlement_evidence_digest,
                  evidence_digest, 32U);
     (void)memcpy(bridge->receipt.ledger_root, ledger_digest, 32U);
-    (void)memcpy(bridge->receipt.transfer_set_root, aggregate_root, 32U);
+    (void)memcpy(bridge->receipt.transfer_set_root, transfer_set_root, 32U);
     return LXP_OK;
 }
 
@@ -784,10 +789,13 @@ lxp_result layerx_programs_occupancy_output_apply(uint64_t token)
 {
     lxp_programs_occupancy_bridge *bridge =
         (lxp_programs_occupancy_bridge *)(uintptr_t)token;
+    lxp_transfer_source_authority
+        authorities[LXP_PROGRAMS_OCCUPANCY_MAX_PAYERS];
+    lxp_transfer_set transfer_set;
+    lxp_receipt transfer_receipt;
     lxp_u128 paid_total = {0U, 0U};
     lxp_u128 arrears_total = {0U, 0U};
     uint8_t evidence_digest[32];
-    uint8_t aggregate_root[32] = {0};
     uint16_t index;
     lxp_result status;
     if (bridge == NULL || !bridge->begun || bridge->applied ||
@@ -811,11 +819,20 @@ lxp_result layerx_programs_occupancy_output_apply(uint64_t token)
     status = lxp_hash_sha256(bridge->evidence, bridge->evidence_length,
                              evidence_digest);
     if (status != LXP_OK) return status;
+    (void)memset(&transfer_set, 0, sizeof(transfer_set));
+    (void)memset(&transfer_receipt, 0, sizeof(transfer_receipt));
+    (void)memset(authorities, 0, sizeof(authorities));
     for (index = 0U; index < bridge->payer_count; ++index) {
-        status = apply_payer(bridge, &bridge->payers[index], aggregate_root);
+        status = append_payer_transfer(
+            bridge, &bridge->payers[index], &transfer_set, authorities);
         if (status != LXP_OK) return status;
     }
-    status = persist_output(bridge, evidence_digest, aggregate_root);
+    if (transfer_set.leg_count != 0U)
+        status = lxp_ctx_emit_programs_maintenance_transfer_set(
+            bridge->ctx, &transfer_set, &transfer_receipt);
+    if (status == LXP_OK)
+        status = persist_output(
+            bridge, evidence_digest, transfer_receipt.transfer_set_root);
     if (status == LXP_OK) bridge->applied = true;
     return status;
 }

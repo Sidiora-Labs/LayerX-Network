@@ -6,6 +6,7 @@
 #include "layerx/lxp_transfer.h"
 #include "layerx/lxp_replica.h"
 
+#include <pthread.h>
 #include <stdint.h>
 
 typedef struct lxp_kernel lxp_kernel;
