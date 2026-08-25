@@ -1206,6 +1206,14 @@ observed = "Human qualification next reached the persisted exit-route decoder an
 assumption = "Human qualification must resume the build and retain route-decoder artifacts for exact, truncated and trailing-byte records at both zero and maximum seed length."
 severity = "qualification-repair"
 
+[observation.30.5.10]
+task = "30.5"
+file = "interop/Cargo.toml"
+symbol = "workspace.dependencies.rustls, workspace.dependencies.subtle"
+observed = "Workspace BUILD logs 003, 005 and 014 all stopped while parsing interop/Cargo.toml. The manifest contained duplicate rustls and subtle keys appended after native-tls; the repair removes the later duplicates and retains the earlier identically pinned workspace dependencies. The reported layerx-mirror edition-inheritance failures were downstream parse errors, not a separate edition defect."
+assumption = "Human qualification must resume the agent, platform Rust and interop builds and regenerate any affected lockfiles through Cargo if the now-parseable manifests report locked-resolution drift."
+severity = "qualification-repair"
+
 [observation.37.1.1]
 task = "37.1"
 file = "paxeer-network/wasm-runtime/internal/api, paxeer-network/wasm/x/wasm/artifacts, paxeer-network/Dockerfile, paxeer-network/hpx"
