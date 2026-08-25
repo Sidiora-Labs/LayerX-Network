@@ -1595,3 +1595,11 @@ symbol = "Executor::prepare_authorized_activity, TransferCapability::settle, Cap
 observed = "Post-implementation review found obsolete private wrappers left alongside the production budget-token and authenticated transfer-set path. In particular, the unused prepare_authorized_activity helper accepted a raw invocation-authority digest instead of the affine BudgetedAuthorizedExecutionRequest consumed by production admission. The repair removes that bypass-shaped helper and the unused unsealed transfer, capability, occupancy and duplicate status wrappers, leaving the budgeted preparation and authorized-set settlement APIs as the only internal routes."
 assumption = "Human qualification must compile the Programs runtime with warnings denied and exercise the budgeted FFI call path, nested capability narrowing, occupancy responsibility checks and authenticated transfer-set settlement. No build, test, formatting or passing result is asserted by this source repair."
 severity = "post-implementation-repair"
+
+[observation.30.2.7]
+task = "30.2"
+file = "programs/crates/layerx-programs-runtime/src/transfer.rs, programs/crates/layerx-programs-runtime/src/abi/mod.rs"
+symbol = "AtomicTransferSet::canonical_decode, decode_program_authority, parse_event_envelope, TransferCursor, CallFrameId::from_canonical"
+observed = "The canonical transfer-set decoder and its cursor helpers were private production code with no production caller; they existed only to assert round-trip and malformed-input behavior in the module's source regressions. The repair compiles those private reverse-decoding helpers only for the source-test configuration, reducing the production parser surface while retaining the canonical encoder and all regression assertions."
+assumption = "Human qualification must compile both the ordinary library and its source tests with warnings denied, then retain the canonical transfer-set round-trip, trailing-byte, ordering and malformed-envelope checks. No build, test, formatting or passing result is asserted by this source repair."
+severity = "post-implementation-repair"

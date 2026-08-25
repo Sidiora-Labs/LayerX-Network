@@ -216,6 +216,7 @@ impl CallFrameId {
     }
 
     /// Rebuilds a host-frame identifier from its canonical artifact form.
+    #[cfg(test)]
     pub(crate) fn from_canonical(path: [u8; 8], depth: u8) -> Result<Self, AbiError> {
         let depth = usize::from(depth);
         if depth > path.len() || path[depth..].iter().any(|byte| *byte != 0) {
