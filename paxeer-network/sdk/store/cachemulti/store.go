@@ -1,6 +1,7 @@
 package cachemulti
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"sync"
@@ -12,6 +13,11 @@ import (
 	"github.com/sidiora-labs/paxeer-network/sdk/store/dbadapter"
 	"github.com/sidiora-labs/paxeer-network/sdk/store/tracekv"
 	"github.com/sidiora-labs/paxeer-network/sdk/store/types"
+)
+
+var (
+	ErrCacheMultiStoreExportUnsupported = errors.New("state export requires a root multi-store")
+	ErrWorkingHashUnavailable           = errors.New("working hash is only available from the root multi-store")
 )
 
 //----------------------------------------
@@ -37,6 +43,8 @@ type Store struct {
 	materializeOnce *sync.Once
 
 	closers []io.Closer
+
+	earliestVersion int64
 }
 
 var _ types.CacheMultiStore = Store{}
@@ -48,8 +56,9 @@ func NewFromKVStore(
 	store types.KVStore, stores map[types.StoreKey]types.CacheWrapper,
 	gigaStores map[types.StoreKey]types.KVStore,
 	keys map[string]types.StoreKey, gigaKeys []types.StoreKey, traceWriter io.Writer, traceContext types.TraceContext,
+	earliestVersion int64,
 ) Store {
-	cms := newStoreWithoutGiga(store, stores, keys, gigaKeys, traceWriter, traceContext)
+	cms := newStoreWithoutGiga(store, stores, keys, gigaKeys, traceWriter, traceContext, earliestVersion)
 
 	cms.gigaStores = make(map[types.StoreKey]types.KVStore, len(gigaKeys))
 	for _, key := range gigaKeys {
@@ -66,7 +75,7 @@ func NewFromKVStore(
 	return cms
 }
 
-func newStoreWithoutGiga(store types.KVStore, stores map[types.StoreKey]types.CacheWrapper, keys map[string]types.StoreKey, gigaKeys []types.StoreKey, traceWriter io.Writer, traceContext types.TraceContext) Store {
+func newStoreWithoutGiga(store types.KVStore, stores map[types.StoreKey]types.CacheWrapper, keys map[string]types.StoreKey, gigaKeys []types.StoreKey, traceWriter io.Writer, traceContext types.TraceContext, earliestVersion int64) Store {
 	cms := Store{
 		db:              cachekv.NewStore(store, nil, types.DefaultCacheSizeLimit),
 		stores:          make(map[types.StoreKey]types.CacheWrap, len(stores)),
@@ -78,6 +87,7 @@ func newStoreWithoutGiga(store types.KVStore, stores map[types.StoreKey]types.Ca
 		mu:              &sync.RWMutex{},
 		materializeOnce: &sync.Once{},
 		closers:         []io.Closer{},
+		earliestVersion: earliestVersion,
 	}
 
 	for key, store := range stores {
@@ -90,10 +100,10 @@ func newStoreWithoutGiga(store types.KVStore, stores map[types.StoreKey]types.Ca
 // CacheWrapper objects. Each CacheWrapper store is a branched store.
 func NewStore(
 	db dbm.DB, stores map[types.StoreKey]types.CacheWrapper, keys map[string]types.StoreKey,
-	gigaKeys []types.StoreKey, traceWriter io.Writer, traceContext types.TraceContext,
+	gigaKeys []types.StoreKey, traceWriter io.Writer, traceContext types.TraceContext, earliestVersion int64,
 ) Store {
 
-	return newStoreWithoutGiga(dbadapter.Store{DB: db}, stores, keys, gigaKeys, traceWriter, traceContext)
+	return newStoreWithoutGiga(dbadapter.Store{DB: db}, stores, keys, gigaKeys, traceWriter, traceContext, earliestVersion)
 }
 
 func newCacheMultiStoreFromCMS(cms Store) Store {
@@ -129,7 +139,7 @@ func newCacheMultiStoreFromCMS(cms Store) Store {
 		gigaStores[k] = v
 	}
 
-	return NewFromKVStore(cms.db, stores, gigaStores, cms.keys, cms.gigaKeys, cms.traceWriter, cms.traceContext)
+	return NewFromKVStore(cms.db, stores, gigaStores, cms.keys, cms.gigaKeys, cms.traceWriter, cms.traceContext, cms.earliestVersion)
 }
 
 // getOrCreateStore lazily creates a cachekv store from its parent on first access.
@@ -269,7 +279,7 @@ func (cms Store) IsStoreGiga(key types.StoreKey) bool {
 }
 
 func (cms Store) GetWorkingHash() ([]byte, error) {
-	panic("should never attempt to get working hash from cache multi store")
+	return nil, ErrWorkingHashUnavailable
 }
 
 // StoreKeys returns a list of all store keys
@@ -300,8 +310,8 @@ func (cms Store) SetGigaKVStores(handler func(sk types.StoreKey, s types.KVStore
 	return cms
 }
 
-func (cms Store) CacheMultiStoreForExport(_ int64) (types.CacheMultiStore, error) {
-	panic("Not implemented")
+func (cms Store) CacheMultiStoreForExport(version int64) (types.CacheMultiStore, error) {
+	return nil, fmt.Errorf("%w: requested version %d", ErrCacheMultiStoreExportUnsupported, version)
 }
 
 func (cms *Store) AddCloser(closer io.Closer) {
@@ -315,5 +325,5 @@ func (cms Store) Close() {
 }
 
 func (cms Store) GetEarliestVersion() int64 {
-	panic("not implemented")
+	return cms.earliestVersion
 }

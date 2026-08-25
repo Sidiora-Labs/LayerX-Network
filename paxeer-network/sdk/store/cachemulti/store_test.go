@@ -48,7 +48,7 @@ func TestNestedCacheMultiStorePreservesStoreKeys(t *testing.T) {
 	}
 
 	// Create the initial CacheMultiStore
-	cms := NewStore(db, stores, keys, nil, nil, nil)
+	cms := NewStore(db, stores, keys, nil, nil, nil, 7)
 
 	// Verify the original store returns the correct keys
 	originalKeys := cms.StoreKeys()
@@ -97,7 +97,7 @@ func TestDoubleNestedCacheMultiStorePreservesStoreKeys(t *testing.T) {
 	}
 
 	// Level 0: Original store
-	cms0 := NewStore(db, stores, keys, nil, nil, nil)
+	cms0 := NewStore(db, stores, keys, nil, nil, nil, 7)
 	require.Len(t, cms0.StoreKeys(), 2, "Level 0 should have 2 keys")
 
 	// Level 1: First nested store
@@ -107,4 +107,11 @@ func TestDoubleNestedCacheMultiStorePreservesStoreKeys(t *testing.T) {
 	// Level 2: Double nested store
 	cms2 := cms1.CacheMultiStore()
 	require.Len(t, cms2.StoreKeys(), 2, "Level 2 should preserve 2 keys")
+	require.Equal(t, int64(7), cms2.GetEarliestVersion())
+
+	_, err := cms2.CacheMultiStoreForExport(4)
+	require.ErrorIs(t, err, ErrCacheMultiStoreExportUnsupported)
+
+	_, err = cms2.GetWorkingHash()
+	require.ErrorIs(t, err, ErrWorkingHashUnavailable)
 }

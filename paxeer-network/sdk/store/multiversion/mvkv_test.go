@@ -130,7 +130,8 @@ func TestVersionIndexedStoreBoilerplateFunctions(t *testing.T) {
 	// asserts panics where appropriate
 	require.Panics(t, func() { vis.CacheWrap(types.NewKVStoreKey("mock")) })
 	require.Panics(t, func() { vis.CacheWrapWithTrace(types.NewKVStoreKey("mock"), nil, nil) })
-	require.Panics(t, func() { vis.GetWorkingHash() })
+	_, err := vis.GetWorkingHash()
+	require.ErrorIs(t, err, multiversion.ErrWorkingHashUnavailable)
 
 	// assert properly returns store type
 	require.Equal(t, types.StoreTypeDB, vis.GetStoreType())
@@ -156,7 +157,8 @@ func TestVersionIndexedStoreWrite(t *testing.T) {
 	vis.Set([]byte("key2"), []byte("value2"))
 	vis.Delete([]byte("key3"))
 
-	vis.WriteToMultiVersionStore()
+	vis.Write()
+	vis.Write()
 
 	require.Equal(t, []byte("value1"), mvs.GetLatest([]byte("key1")).Value())
 	require.Equal(t, []byte("value2"), mvs.GetLatest([]byte("key2")).Value())

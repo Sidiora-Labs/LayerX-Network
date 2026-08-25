@@ -497,7 +497,7 @@ func (rs *Store) CacheMultiStore() types.CacheMultiStore {
 	for k, v := range rs.stores {
 		stores[k] = v
 	}
-	return cachemulti.NewStore(rs.db, stores, rs.keysByName, nil, rs.traceWriter, rs.getTracingContext())
+	return cachemulti.NewStore(rs.db, stores, rs.keysByName, nil, rs.traceWriter, rs.getTracingContext(), rs.earliestVersion)
 }
 
 // CacheMultiStoreWithVersion is analogous to CacheMultiStore except that it
@@ -510,7 +510,7 @@ func (rs *Store) CacheMultiStoreWithVersion(version int64) (types.CacheMultiStor
 		cachedStores[key] = store
 	}
 
-	return cachemulti.NewStore(rs.db, cachedStores, rs.keysByName, nil, rs.traceWriter, rs.getTracingContext()), nil
+	return cachemulti.NewStore(rs.db, cachedStores, rs.keysByName, nil, rs.traceWriter, rs.getTracingContext(), rs.earliestVersion), nil
 }
 
 func (rs *Store) CacheMultiStoreForExport(version int64) (types.CacheMultiStore, error) {

@@ -1873,6 +1873,14 @@ observed = "Post-implementation review found remotely supplied range conditions 
 assumption = "Human qualification must run block and transaction index searches with inclusive and exclusive integer and time bounds, string range operands, int64 extrema, corrupted iterator state and cancelled contexts, and prove malformed remote queries return errors without process termination or false matches. No build, test, format or runtime result is asserted by this source repair."
 severity = "consensus-safety"
 
+[observation.37.1.20]
+task = "37.1"
+file = "paxeer-network/sdk/store/multiversion/mvkv.go, paxeer-network/sdk/store/cachemulti/store.go, paxeer-network/sdk/store/rootmulti/store.go, paxeer-network/sdk/storev2/rootmulti/store.go"
+symbol = "VersionIndexedStore.Write, VersionIndexedStore.GetWorkingHash, cachemulti.Store.CacheMultiStoreForExport, cachemulti.Store.GetEarliestVersion, cachemulti.Store.GetWorkingHash"
+observed = "Post-implementation review found the scheduler's version-indexed cache implemented its CacheWrap publication and event-shaped compatibility methods with process panics, while cached multistores panicked on export, earliest-version and working-hash queries. The repair publishes a versioned transaction's tracked read, write and iterator sets exactly once, removes event methods that are not part of any implemented store contract, propagates the root store's real earliest retained version through every nested cache, and returns stable unavailable errors for root-only export and working-hash capabilities. Scheduler publication remains idempotent when both CacheWrap.Write and the scheduler's explicit publish boundary are reached."
+assumption = "Human qualification must run OCC scheduler retries, aborts, nested message caches, iterator conflicts and repeated Write calls; verify one publication per incarnation; exercise old and store-v2 nested caches across pruning and historical export; and prove only root multistores produce working hashes or historical export views. VersionIndexedStore.CacheWrap and CacheWrapWithTrace remain explicit unsupported invariants because the scheduler installs the version store beneath a newly created cachekv branch and no production caller recursively wraps it directly; qualification must preserve that topology. No build, test, format or runtime result is asserted by this source repair."
+severity = "consensus-safety"
+
 [observation.11.1.1]
 task = "11.1"
 file = "agent/crates/layerx-agentd/src/budget/create.rs, agent/crates/layerx-agentd/src/sign_verify.rs, agent/crates/layerx-agentd/tests/budget_create.rs, human/crates/layerx-human-service/tests/agent_create.rs, human/crates/layerx-human-service/tests/agent_controls.rs"

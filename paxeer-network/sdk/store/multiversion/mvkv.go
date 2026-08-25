@@ -2,16 +2,17 @@ package multiversion
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"sort"
-
-	abci "github.com/sidiora-labs/paxeer-network/consensus/abci/types"
 
 	"github.com/sidiora-labs/paxeer-network/sdk/store/types"
 	scheduler "github.com/sidiora-labs/paxeer-network/sdk/types/occ"
 	dbm "github.com/tendermint/tm-db"
 )
+
+var ErrWorkingHashUnavailable = errors.New("working hash is only available from the root multi-store")
 
 // exposes a handler for adding items to readset, useful for iterators
 type ReadsetHandler interface {
@@ -90,6 +91,7 @@ type VersionIndexedStore struct {
 	incarnation      int
 	// have abort channel here for aborting transactions
 	abortChannel chan scheduler.Abort
+	published    bool
 }
 
 var _ types.KVStore = (*VersionIndexedStore)(nil)
@@ -354,7 +356,7 @@ func (*VersionIndexedStore) CacheWrapWithTrace(storeKey types.StoreKey, w io.Wri
 
 // GetWorkingHash implements types.KVStore.
 func (v *VersionIndexedStore) GetWorkingHash() ([]byte, error) {
-	panic("should never attempt to get working hash from version indexed store")
+	return nil, ErrWorkingHashUnavailable
 }
 
 // Only entrypoint to mutate writeset
@@ -366,6 +368,9 @@ func (store *VersionIndexedStore) setValue(key, value []byte) {
 }
 
 func (store *VersionIndexedStore) WriteToMultiVersionStore() {
+	if store.published {
+		return
+	}
 	// TODO: remove?
 	// store.mtx.Lock()
 	// defer store.mtx.Unlock()
@@ -373,14 +378,19 @@ func (store *VersionIndexedStore) WriteToMultiVersionStore() {
 	store.multiVersionStore.SetWriteset(store.transactionIndex, store.incarnation, store.writeset)
 	store.multiVersionStore.SetReadset(store.transactionIndex, store.readset)
 	store.multiVersionStore.SetIterateset(store.transactionIndex, store.iterateset)
+	store.published = true
 }
 
 func (store *VersionIndexedStore) WriteEstimatesToMultiVersionStore() {
+	if store.published {
+		return
+	}
 	// TODO: remove?
 	// store.mtx.Lock()
 	// defer store.mtx.Unlock()
 	// defer telemetry.MeasureSince(time.Now(), "store", "mvkv", "write_mvs")
 	store.multiVersionStore.SetEstimatedWriteset(store.transactionIndex, store.incarnation, store.writeset)
+	store.published = true
 	// TODO: do we need to write readset and iterateset in this case? I don't think so since if this is called it means we aren't doing validation
 }
 
@@ -402,17 +412,7 @@ func (store *VersionIndexedStore) UpdateReadSet(key []byte, value []byte) {
 
 // Write implements types.CacheWrap so this store can exist on the cache multi store
 func (store *VersionIndexedStore) Write() {
-	panic("not implemented")
-}
-
-// GetEvents implements types.CacheWrap so this store can exist on the cache multi store
-func (store *VersionIndexedStore) GetEvents() []abci.Event {
-	panic("not implemented")
-}
-
-// ResetEvents implements types.CacheWrap so this store can exist on the cache multi store
-func (store *VersionIndexedStore) ResetEvents() {
-	panic("not implemented")
+	store.WriteToMultiVersionStore()
 }
 
 func (store *VersionIndexedStore) UpdateIterateSet(iterationTracker *iterationTracker) {

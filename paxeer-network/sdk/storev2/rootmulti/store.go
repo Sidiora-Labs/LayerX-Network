@@ -292,7 +292,7 @@ func (rs *Store) cacheMultiStoreLocked() types.CacheMultiStore {
 	for _, k := range rs.gigaKeys {
 		gigaKeys = append(gigaKeys, rs.storeKeys[k])
 	}
-	return cachemulti.NewStore(nil, stores, rs.storeKeys, gigaKeys, nil, nil)
+	return cachemulti.NewStore(nil, stores, rs.storeKeys, gigaKeys, nil, nil, rs.earliestVersionLocked())
 }
 
 // CacheMultiStoreWithVersion Implements interface MultiStore
@@ -321,7 +321,7 @@ func (rs *Store) CacheMultiStoreWithVersion(version int64) (types.CacheMultiStor
 		return nil, fmt.Errorf("unable to load historical state with SS disabled for version: %d", version)
 	}
 
-	return cachemulti.NewStore(nil, stores, rs.storeKeys, nil, nil, nil), nil
+	return cachemulti.NewStore(nil, stores, rs.storeKeys, nil, nil, nil, rs.earliestVersionLocked()), nil
 }
 
 func (rs *Store) CacheMultiStoreForExport(version int64) (types.CacheMultiStore, error) {
@@ -347,8 +347,9 @@ func (rs *Store) CacheMultiStoreForExport(version int64) (types.CacheMultiStore,
 			stores[k] = commitment.NewStore(tree)
 		}
 	}
+	earliestVersion := rs.earliestVersionLocked()
 	rs.mtx.RUnlock()
-	cacheMs := cachemulti.NewStore(nil, stores, rs.storeKeys, nil, nil, nil)
+	cacheMs := cachemulti.NewStore(nil, stores, rs.storeKeys, nil, nil, nil, earliestVersion)
 	// We need this because we need to make sure sc is closed after being used to release the resources
 	cacheMs.AddCloser(scStore)
 	return cacheMs, nil
@@ -393,7 +394,7 @@ func (rs *Store) CacheMultiStoreFromCommitter(snap sctypes.Committer) (types.Cac
 		}
 		stores[k] = commitment.NewStore(tree)
 	}
-	return cachemulti.NewStore(nil, stores, rs.storeKeys, nil, nil, nil), nil
+	return cachemulti.NewStore(nil, stores, rs.storeKeys, nil, nil, nil, rs.earliestVersionLocked()), nil
 }
 
 // GetStore Implements interface MultiStore
@@ -1068,9 +1069,17 @@ func (rs *Store) StoreKeys() []types.StoreKey {
 
 // GetEarliestVersion return earliest version for SS or latestVersion if only SC is enabled
 func (rs *Store) GetEarliestVersion() int64 {
+	rs.mtx.RLock()
+	defer rs.mtx.RUnlock()
+	return rs.earliestVersionLocked()
+}
+
+func (rs *Store) earliestVersionLocked() int64 {
 	if rs.ssStore != nil {
 		return rs.ssStore.GetEarliestVersion()
-	} else {
+	}
+	if rs.lastCommitInfo != nil {
 		return rs.lastCommitInfo.Version
 	}
+	return 0
 }
