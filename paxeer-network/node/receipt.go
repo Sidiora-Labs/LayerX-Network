@@ -43,11 +43,11 @@ func getOwnerEventKey(contractAddr string, tokenID string) string {
 	return fmt.Sprintf("%s-%s", contractAddr, tokenID)
 }
 
-func (app *App) AddCosmosEventsToEVMReceiptIfApplicable(ctx sdk.Context, tx sdk.Tx, checksum [32]byte, response sdk.DeliverTxHookInput) {
+func (app *App) AddCosmosEventsToEVMReceiptIfApplicable(ctx sdk.Context, tx sdk.Tx, checksum [32]byte, response sdk.DeliverTxHookInput) error {
 	// hooks will only be called if DeliverTx is successful
 	wasmEvents := GetEventsOfType(response, wasmtypes.WasmModuleEventType)
 	if len(wasmEvents) == 0 {
-		return
+		return nil
 	}
 	logs := []*ethtypes.Log{}
 	// Note: txs with a very large number of WASM events may run out of gas due to
@@ -62,7 +62,7 @@ func (app *App) AddCosmosEventsToEVMReceiptIfApplicable(ctx sdk.Context, tx sdk.
 	ownerEvents := GetEventsOfType(response, wasmtypes.EventTypeCW721PreTransferOwner)
 	ownerEventsMap, err := indexCW721OwnerEvents(ownerEvents)
 	if err != nil {
-		panic(err)
+		return err
 	}
 	cw721TransferCounterMap := map[string]int{}
 	for _, wasmEvent := range wasmEvents {
@@ -74,7 +74,7 @@ func (app *App) AddCosmosEventsToEVMReceiptIfApplicable(ctx sdk.Context, tx sdk.
 		if exists {
 			translated, err := app.translateCW20Event(wasmToEvmEventCtx, wasmEvent, pointerAddr, contractAddr)
 			if err != nil {
-				panic(err)
+				return err
 			}
 			for _, log := range translated {
 				log.Index = uint(len(logs))
@@ -87,7 +87,7 @@ func (app *App) AddCosmosEventsToEVMReceiptIfApplicable(ctx sdk.Context, tx sdk.
 		if exists {
 			translated, err := app.translateCW721Event(wasmToEvmEventCtx, wasmEvent, pointerAddr, contractAddr, ownerEventsMap, cw721TransferCounterMap)
 			if err != nil {
-				panic(err)
+				return err
 			}
 			for _, log := range translated {
 				log.Index = uint(len(logs))
@@ -100,7 +100,7 @@ func (app *App) AddCosmosEventsToEVMReceiptIfApplicable(ctx sdk.Context, tx sdk.
 		if exists {
 			translated, err := app.translateCW1155Event(wasmToEvmEventCtx, wasmEvent, pointerAddr, contractAddr)
 			if err != nil {
-				panic(err)
+				return err
 			}
 			for _, log := range translated {
 				log.Index = uint(len(logs))
@@ -110,7 +110,7 @@ func (app *App) AddCosmosEventsToEVMReceiptIfApplicable(ctx sdk.Context, tx sdk.
 		}
 	}
 	if len(logs) == 0 {
-		return
+		return nil
 	}
 	txHash := common.BytesToHash(checksum[:])
 	if response.EvmTxInfo != nil {
@@ -125,11 +125,11 @@ func (app *App) AddCosmosEventsToEVMReceiptIfApplicable(ctx sdk.Context, tx sdk.
 		bloom = ethtypes.CreateBloom(&ethtypes.Receipt{Logs: evmkeeper.GetLogsForTx(r, 0)})
 		r.LogsBloom = bloom[:]
 		if err := app.EvmKeeper.SetTransientReceipt(wasmToEvmEventCtx, txHash, r); err != nil {
-			panic(fmt.Errorf("persist synthetic EVM receipt: %w", err))
+			return fmt.Errorf("persist synthetic EVM receipt: %w", err)
 		}
 	} else {
 		if err != nil && !errors.Is(err, receiptstore.ErrNotFound) {
-			panic(fmt.Errorf("load synthetic EVM receipt: %w", err))
+			return fmt.Errorf("load synthetic EVM receipt: %w", err)
 		}
 		bloom = ethtypes.CreateBloom(&ethtypes.Receipt{Logs: logs})
 		receipt := &evmtypes.Receipt{
@@ -148,7 +148,7 @@ func (app *App) AddCosmosEventsToEVMReceiptIfApplicable(ctx sdk.Context, tx sdk.
 			receipt.From = app.EvmKeeper.GetEVMAddressOrDefault(wasmToEvmEventCtx, sigTx.GetSigners()[0]).Hex()
 		}
 		if err := app.EvmKeeper.SetTransientReceipt(wasmToEvmEventCtx, txHash, receipt); err != nil {
-			panic(fmt.Errorf("persist synthetic EVM receipt: %w", err))
+			return fmt.Errorf("persist synthetic EVM receipt: %w", err)
 		}
 	}
 	if d, found := app.EvmKeeper.GetEVMTxDeferredInfo(ctx); found {
@@ -156,6 +156,7 @@ func (app *App) AddCosmosEventsToEVMReceiptIfApplicable(ctx sdk.Context, tx sdk.
 	} else {
 		app.EvmKeeper.AppendToEvmTxDeferredInfo(wasmToEvmEventCtx, bloom, txHash, sdk.ZeroInt())
 	}
+	return nil
 }
 
 func indexCW721OwnerEvents(ownerEvents []abci.Event) (map[string][]abci.Event, error) {

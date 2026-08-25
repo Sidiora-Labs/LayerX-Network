@@ -1501,8 +1501,10 @@ func TestDeliverTx(t *testing.T) {
 
 func TestDeliverTxHooks(t *testing.T) {
 	anteOpt := func(*BaseApp) {}
+	deliverKey := []byte("deliver-hook-message")
+	hookKey := []byte("deliver-hook-write")
 	routerOpt := func(bapp *BaseApp) {
-		r := sdk.NewRoute(routeMsgCounter, func(ctx sdk.Context, msg sdk.Msg) (*sdk.Result, error) { return &sdk.Result{}, nil })
+		r := sdk.NewRoute(routeMsgCounter, handlerMsgCounter(t, capKey1, deliverKey))
 		bapp.Router().AddRoute(r)
 	}
 
@@ -1517,7 +1519,7 @@ func TestDeliverTxHooks(t *testing.T) {
 	app.setDeliverState(header)
 
 	// every even i is an evm tx
-	counter := int64(1)
+	counter := int64(0)
 	tx := newTxCounter(counter, counter)
 
 	txBytes, err := codec.Marshal(tx)
@@ -1528,16 +1530,24 @@ func TestDeliverTxHooks(t *testing.T) {
 	ctx := app.deliverState.ctx
 
 	// register noop hook
-	app.RegisterDeliverTxHook(func(ctx sdk.Context, tx sdk.Tx, b [32]byte, rdt sdk.DeliverTxHookInput) {})
+	app.RegisterDeliverTxHook(func(ctx sdk.Context, tx sdk.Tx, b [32]byte, rdt sdk.DeliverTxHookInput) error { return nil })
 	res := app.DeliverTx(ctx, abci.RequestDeliverTxV2{Tx: txBytes}, decoded, sha256.Sum256(txBytes))
 	require.True(t, res.IsOK(), fmt.Sprintf("%v", res))
+	require.Equal(t, counter+1, getIntFromStore(app.deliverState.ctx.KVStore(capKey1), deliverKey))
 
-	// register panic hook (should be captured by recover() middleware)
-	app.RegisterDeliverTxHook(func(ctx sdk.Context, tx sdk.Tx, b [32]byte, rdt sdk.DeliverTxHookInput) { panic(1) })
-	require.NotPanics(t, func() {
-		res = app.DeliverTx(ctx, abci.RequestDeliverTxV2{Tx: txBytes}, decoded, sha256.Sum256(txBytes))
+	hookErr := errors.New("deliver hook failed")
+	app.RegisterDeliverTxHook(func(ctx sdk.Context, tx sdk.Tx, b [32]byte, rdt sdk.DeliverTxHookInput) error {
+		setIntOnStore(ctx.KVStore(capKey1), hookKey, 1)
+		return hookErr
 	})
+	nextTx := newTxCounter(counter+1, counter+1)
+	nextTxBytes, err := codec.Marshal(nextTx)
+	require.NoError(t, err)
+	nextDecoded, _ := app.txDecoder(nextTxBytes)
+	res = app.DeliverTx(ctx, abci.RequestDeliverTxV2{Tx: nextTxBytes}, nextDecoded, sha256.Sum256(nextTxBytes))
 	require.False(t, res.IsOK(), fmt.Sprintf("%v", res))
+	require.Equal(t, counter+1, getIntFromStore(app.deliverState.ctx.KVStore(capKey1), deliverKey))
+	require.Nil(t, app.deliverState.ctx.KVStore(capKey1).Get(hookKey))
 }
 
 func TestOptionFunction(t *testing.T) {

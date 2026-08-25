@@ -512,7 +512,7 @@ func TestEvmEventsForMultipleCW721Transfers(t *testing.T) {
 	require.Nil(t, err)
 	sum := sha256.Sum256(txbz)
 
-	testkeeper.EVMTestApp.AddCosmosEventsToEVMReceiptIfApplicable(ctx, tx, sum, sdk.DeliverTxHookInput{
+	require.NoError(t, testkeeper.EVMTestApp.AddCosmosEventsToEVMReceiptIfApplicable(ctx, tx, sum, sdk.DeliverTxHookInput{
 		Events: []abci.Event{
 			{
 				Type: wasmtypes.EventTypeCW721PreTransferOwner,
@@ -545,7 +545,7 @@ func TestEvmEventsForMultipleCW721Transfers(t *testing.T) {
 				},
 			},
 		},
-	})
+	}))
 
 	receipt, err := testkeeper.EVMTestApp.EvmKeeper.GetTransientReceipt(ctx, common.BytesToHash(sum[:]), 0)
 	require.Nil(t, err)

@@ -79,7 +79,7 @@ type (
 	// (or removed a substore) between two versions of the software.
 	StoreLoader func(ms sdk.CommitMultiStore) error
 
-	DeliverTxHook func(sdk.Context, sdk.Tx, [32]byte, sdk.DeliverTxHookInput)
+	DeliverTxHook func(sdk.Context, sdk.Tx, [32]byte, sdk.DeliverTxHookInput) error
 )
 
 func (app *BaseApp) EvmNonce(_ common.Address) uint64 {
@@ -970,9 +970,6 @@ func (app *BaseApp) runTx(ctx sdk.Context, mode runTxMode, tx sdk.Tx, checksum [
 	// Result if any single message fails or does not have a registered Handler.
 	runTxRes.result, err = app.RunMsgs(runMsgCtx, msgs)
 
-	if err == nil {
-		msCache.Write()
-	}
 	// we do this since we will only be looking at result in DeliverTx
 	if runTxRes.result != nil && len(runTxRes.anteEvents) > 0 {
 		// append the events in the order of occurrence
@@ -994,11 +991,17 @@ func (app *BaseApp) runTx(ctx sdk.Context, mode runTxMode, tx sdk.Tx, checksum [
 			events = sdk.MarkEventsToIndex(runTxRes.result.Events, app.IndexEvents)
 		}
 		for _, hook := range app.deliverTxHooks {
-			hook(ctx, tx, checksum, sdk.DeliverTxHookInput{
+			if hookErr := hook(runMsgCtx, tx, checksum, sdk.DeliverTxHookInput{
 				EvmTxInfo: evmTxInfo,
 				Events:    events,
-			})
+			}); hookErr != nil {
+				err = hookErr
+				break
+			}
 		}
+	}
+	if err == nil {
+		msCache.Write()
 	}
 	return runTxRes, err
 }

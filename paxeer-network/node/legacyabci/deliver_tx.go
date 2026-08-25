@@ -44,7 +44,7 @@ func DeliverTx(
 	contextCacher func(sdk.Context) (sdk.Context, sdk.CacheMultiStore),
 	msgRunner func(ctx sdk.Context, msgs []sdk.Msg) (*sdk.Result, error), //TODO: remove
 	tracingInfo *tracing.Info,
-	evmHook func(ctx sdk.Context, tx sdk.Tx, checksum [32]byte, response sdk.DeliverTxHookInput),
+	evmHook func(ctx sdk.Context, tx sdk.Tx, checksum [32]byte, response sdk.DeliverTxHookInput) error,
 ) (
 	gInfo sdk.GasInfo,
 	result *sdk.Result,
@@ -127,9 +127,6 @@ func DeliverTx(
 	// TODO: simplify
 	result, err = msgRunner(runMsgCtx, tx.GetMsgs())
 
-	if err == nil {
-		msCache.Write()
-	}
 	// we do this since we will only be looking at result in DeliverTx
 	if result != nil && len(anteEvents) > 0 {
 		// append the events in the order of occurrence
@@ -146,10 +143,13 @@ func DeliverTx(
 				VmError:       result.EvmError,
 			}
 		}
-		evmHook(ctx, tx, checksum, sdk.DeliverTxHookInput{
+		err = evmHook(runMsgCtx, tx, checksum, sdk.DeliverTxHookInput{
 			EvmTxInfo: evmTxInfo,
 			Events:    result.Events,
 		})
+	}
+	if err == nil {
+		msCache.Write()
 	}
 	return gInfo, result, anteEvents, ctx, err
 }
