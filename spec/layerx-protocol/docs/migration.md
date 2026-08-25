@@ -9,6 +9,17 @@ over. MUST, MUST NOT, SHOULD and MAY are normative; companion documents under
 `spec/layerx-protocol/docs/` are `economics.md` (reserve accounting),
 `data-availability.md`, `checkpointing.md` and `state-machine.md`.
 
+This document is the LayerX genesis / cutover procedure (prior Go system → C17).
+It is not Ethereum/Solana source-chain migration and not Paxeer EVM store
+migration. Those live elsewhere in this monorepo:
+
+| Surface | Location |
+|---|---|
+| Genesis SQL and projections | [`migrations/`](../../../migrations/README.md) |
+| Ethereum / Solana source verifiers | [`interop/crates/layerx-migrate`](../../../interop/crates/layerx-migrate/OPERATIONS.md) |
+| Paxeer EVM store migrations | `paxeer-network/modules/evm/migrations/` |
+| Paxeer Network (settlement L1) | [`paxeer-network/`](../../../paxeer-network/README.md) |
+
 ## 1. Posture
 
 The new protocol starts from an **explicit genesis manifest**. It does not

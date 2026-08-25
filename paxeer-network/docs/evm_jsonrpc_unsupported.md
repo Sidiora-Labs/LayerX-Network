@@ -1,5 +1,7 @@
 # Pax EVM JSON-RPC: explicitly unsupported methods
 
+This page is Paxeer Network RPC documentation inside [Sidiora-Labs/LayerX-Protocol](https://github.com/Sidiora-Labs/LayerX-Protocol) (`paxeer-network/`). It is not a standalone repository.
+
 Some Ethereum JSON-RPC methods are **registered** on Pax’s EVM endpoint but return a **JSON-RPC error** instead of a result, so clients and tools get a stable, documented failure (code **`-32000`**) rather than “method not found” (`-32601`).
 
 ## Methods
