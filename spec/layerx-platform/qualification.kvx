@@ -1181,3 +1181,11 @@ symbol = "PAXEER_DIR, PAXEER_PROJECT_HOME, paxeer-ci, monorepo-ci"
 observed = "The task initially declared the required Make variables and targets as graph symbols. Codify does not index GNU Make declarations, so all four symbol checks reported not defined even though the exact declarations are written in the task's guarded Makefiles. The non-applicable symbol declarations were removed; the exact Makefile paths remain in the task scope and the verify command remains make paxeer-ci for human qualification."
 assumption = "Qualification must inspect and invoke the Make targets from a clean checkout. Removing unsupported graph symbols does not constitute evidence that the targets parse, execute or pass."
 severity = "tooling-boundary"
+
+[observation.37.2.1]
+task = "37.2"
+file = ".github/workflows/paxeer-hpx-registry.yml, paxeer-network/hpx/hosting/deploy.sh"
+symbol = "Publish registry executables"
+observed = "The monorepo-native HPX artifact release was assembled at /srv/hpx/artifacts/releases/20260825T022104Z-5c0b0357495f and atomically selected as current with source revision e1bb9f145ae322fc17e758758312c90ea29d253a. The revision-bound registry publication run 32801046736 reached a macOS hosted runner but failed before compilation because that runner image had no go command. The Ubuntu image job remained behind a repository-wide queue exceeding one hundred jobs and was cancelled so the completed failure log could be retrieved. No registry executable or image was published, and Nginx, TLS and running services were intentionally left unchanged rather than expose a partial static-only installer."
+assumption = "Human qualification must supply the declared Go toolchain to the executable publication job, publish and checksum the revision-bound registry artifact, then run hosting/deploy.sh and verify the public certificate, exact artifact allowlist, persistent peer registry, registration spoof refusal and state-sync response. Implementation agents must not enter the prohibited compile, test and repair loop to manufacture that missing runtime locally."
+severity = "phase-boundary"
