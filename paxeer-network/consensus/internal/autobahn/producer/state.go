@@ -146,8 +146,7 @@ func (s *State) Run(ctx context.Context) error {
 						Txs:               b.txs,
 					}.Build()
 					if err != nil {
-						// This should never happen: we construct the payload from correctly sized data.
-						panic(fmt.Errorf("PayloadBuilder{}.Build(): %w", err))
+						return fmt.Errorf("PayloadBuilder{}.Build(): %w", err)
 					}
 				}
 				if _, err := availState.ProduceLocalBlock(toProduce, payload); err != nil {
