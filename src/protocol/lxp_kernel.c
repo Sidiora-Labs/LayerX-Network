@@ -168,19 +168,27 @@ lxp_result lxp_kernel_bind_module_runtime(lxp_kernel *kernel,
 
 static lxp_result validate_iface(const lxp_module_iface *iface)
 {
+    const char *expected;
+    size_t expected_length;
+    const char *terminator;
     size_t i;
     if (iface == NULL || iface->module_id == 0U ||
         iface->module_id > LXP_MODULE_RESERVED_COUNT ||
         iface->abi_version == 0U || iface->name == NULL ||
-        strcmp(iface->name, module_names[iface->module_id - 1U]) != 0 ||
         iface->activity_types == NULL || iface->activity_type_count == 0U ||
         iface->activity_type_count > LXP_MODULE_MAX_ACTIVITY_TYPES ||
         iface->genesis == NULL || iface->decode == NULL ||
         iface->validate == NULL || iface->execute == NULL ||
         iface->epoch_begin == NULL || iface->epoch_end == NULL ||
         iface->state_root == NULL) return LXP_ERR_UNKNOWN_MODULE;
-    if (strlen(iface->name) > LXP_MODULE_MAX_NAME)
+    terminator = memchr(iface->name, '\0', LXP_MODULE_MAX_NAME + 1U);
+    if (terminator == NULL)
         return LXP_ERR_LENGTH_LIMIT;
+    expected = module_names[iface->module_id - 1U];
+    expected_length = strlen(expected);
+    if ((size_t)(terminator - iface->name) != expected_length ||
+        memcmp(iface->name, expected, expected_length) != 0)
+        return LXP_ERR_UNKNOWN_MODULE;
     for (i = 0U; i < iface->activity_type_count; ++i) {
         if (lxp_activity_module_id(iface->activity_types[i]) !=
             iface->module_id) return LXP_ERR_UNKNOWN_ACTIVITY;

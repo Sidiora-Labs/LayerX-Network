@@ -202,6 +202,13 @@ int main(void)
         lxp_state_root(&restored, restored_terminal) != LXP_OK ||
         memcmp(root, restored_terminal, 32U) != 0)
         return 1;
+    (void)memset((uint8_t *)snapshot.bytes + 2U, 0xff, 8U);
+    if (lxp_snapshot_manifest(snapshot.bytes, snapshot.length, UINT64_MAX,
+                              root, &manifest) != LXP_OK ||
+        lxp_snapshot_load(snapshot.bytes, snapshot.length, &manifest, root,
+                          &restored) != LXP_ERR_SEQUENCE_MISMATCH ||
+        restored_state.next_sequence != 3U)
+        return 1;
     if (lxp_state_store_destroy(&original_state) != LXP_OK ||
         lxp_state_store_destroy(&restored_state) != LXP_OK ||
         unlink(path) != 0 || rmdir(directory) != 0) return 1;

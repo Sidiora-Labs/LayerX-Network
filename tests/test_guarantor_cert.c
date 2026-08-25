@@ -104,6 +104,11 @@ int main(void)
     if (lxp_guarantor_cert_verify(&certificate, keys, 3U, &arena, &valid) !=
             LXP_ERR_ATTESTATION_THRESHOLD || valid != 1U)
         return 1;
+    certificate.attestation_count = LXP_MAX_GUARANTOR_ATTESTATIONS + 1U;
+    if (lxp_guarantor_cert_verify(&certificate, keys, 3U, &arena, &valid) !=
+            LXP_ERR_ATTESTATION_THRESHOLD)
+        return 1;
+    certificate.attestation_count = 3U;
     keys[1].bonded = true;
     keys[2].bonded = true;
     shuffled[1] = shuffled[0];

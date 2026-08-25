@@ -14,15 +14,60 @@ enum {
                            LXP_KERNEL_MAX_BLOBS + 2
 };
 
+static lxp_result kernel_state_validate(const lxp_kernel *kernel)
+{
+    size_t blob_total = 0U;
+    size_t i;
+    if (kernel == NULL) return LXP_ERR_NON_CANONICAL;
+    if (kernel->state == NULL) return LXP_FATAL_INVARIANT;
+    if (kernel->state->count > LXP_STATE_MAX_CELLS ||
+        kernel->state->idempotency_count > LXP_STATE_MAX_IDEMPOTENCY ||
+        kernel->module_count > LXP_KERNEL_MAX_MODULE_REGISTRATIONS ||
+        kernel->module_kv_count > LXP_KERNEL_MAX_MODULE_KV ||
+        kernel->blob_count > LXP_KERNEL_MAX_BLOBS ||
+        kernel->blob_total_bytes > LXP_KERNEL_MAX_BLOB_TOTAL_BYTES ||
+        (kernel->state->accounts != NULL &&
+         kernel->state->accounts->count > LX_ACCOUNT_REGISTRY_CAPACITY))
+        return LXP_ERR_LENGTH_LIMIT;
+    if (kernel->state->account_root_required &&
+        kernel->state->accounts == NULL)
+        return LXP_FATAL_INVARIANT;
+    for (i = 0U; i < kernel->state->idempotency_count; ++i)
+        if (kernel->state->idempotency[i].receipt_length >
+            LXP_STATE_MAX_RECEIPT_BYTES)
+            return LXP_ERR_LENGTH_LIMIT;
+    for (i = 0U; i < kernel->module_count; ++i)
+        if (kernel->modules[i].activity_type_count >
+            LXP_MODULE_MAX_ACTIVITY_TYPES)
+            return LXP_ERR_LENGTH_LIMIT;
+    for (i = 0U; i < kernel->module_kv_count; ++i)
+        if (kernel->module_kv[i].key_length == 0U ||
+            kernel->module_kv[i].key_length > LXP_MODULE_MAX_KEY_BYTES ||
+            kernel->module_kv[i].value_length > LXP_MODULE_MAX_VALUE_BYTES)
+            return LXP_ERR_LENGTH_LIMIT;
+    for (i = 0U; i < kernel->blob_count; ++i) {
+        const lxp_module_blob *blob = &kernel->blobs[i];
+        if (blob->length > LXP_KERNEL_MAX_BLOB_BYTES ||
+            blob->length > LXP_KERNEL_MAX_BLOB_TOTAL_BYTES - blob_total)
+            return LXP_ERR_LENGTH_LIMIT;
+        if (blob->length != 0U && blob->bytes == NULL)
+            return LXP_FATAL_INVARIANT;
+        blob_total += blob->length;
+    }
+    return blob_total == kernel->blob_total_bytes ? LXP_OK :
+           LXP_FATAL_INVARIANT;
+}
+
 lxp_result lxp_state_module_root_count(const lxp_kernel *kernel,
                                        size_t *count)
 {
     uint16_t last_module_id = LXP_LEGACY_LAST_MODULE_ID;
     size_t i;
-    if (kernel == NULL || count == NULL) return LXP_ERR_NON_CANONICAL;
-    if (kernel->module_count > LXP_KERNEL_MAX_MODULE_REGISTRATIONS ||
-        kernel->module_kv_count > LXP_KERNEL_MAX_MODULE_KV)
-        return LXP_ERR_LENGTH_LIMIT;
+    if (count == NULL) return LXP_ERR_NON_CANONICAL;
+    {
+        lxp_result validation = kernel_state_validate(kernel);
+        if (validation != LXP_OK) return validation;
+    }
     for (i = 0U; i < kernel->module_count; ++i) {
         const lxp_module_registration *registration = &kernel->modules[i];
         if (registration->module_id == 0U ||
@@ -422,6 +467,8 @@ lxp_result lxp_state_subtree_root(const lxp_kernel *kernel,
     lxp_result status;
     if (kernel == NULL || root == NULL || module_id >
         LXP_MODULE_RESERVED_COUNT) return LXP_ERR_NON_CANONICAL;
+    status = kernel_state_validate(kernel);
+    if (status != LXP_OK) return status;
     if (module_id == 0U) {
         status = universal_leaves(kernel, leaves, &count);
         return status == LXP_OK ? leaves_root(leaves, count, root) : status;
@@ -457,6 +504,8 @@ lxp_result lxp_state_subtree_proof(
     if (kernel == NULL || key == NULL || root == NULL || proof == NULL ||
         module_id > LXP_MODULE_RESERVED_COUNT)
         return LXP_ERR_NON_CANONICAL;
+    status = kernel_state_validate(kernel);
+    if (status != LXP_OK) return status;
     if (module_id == 0U) {
         status = universal_leaves(kernel, leaves, &count);
         return status == LXP_OK ?
@@ -485,7 +534,8 @@ lxp_result lxp_state_subtree_proof(
 lxp_result lxp_state_supply_check(const lxp_kernel *kernel)
 {
     lxp_result status;
-    if (kernel == NULL) return LXP_ERR_NON_CANONICAL;
+    status = kernel_state_validate(kernel);
+    if (status != LXP_OK) return status;
     if (kernel->check_supply == NULL) return LXP_OK;
     status = kernel->check_supply(kernel);
     return status == LXP_OK ? LXP_OK : LXP_FATAL_SUPPLY_MISMATCH;
@@ -500,6 +550,8 @@ lxp_result lxp_state_root(const lxp_kernel *kernel, uint8_t root[32])
     lxp_result status;
     uint8_t key[2];
     if (kernel == NULL || root == NULL) return LXP_ERR_NON_CANONICAL;
+    status = kernel_state_validate(kernel);
+    if (status != LXP_OK) return status;
     status = lxp_state_supply_check(kernel);
     if (status != LXP_OK) return status;
     status = lxp_state_module_root_count(kernel, &module_root_count);
@@ -528,6 +580,8 @@ lxp_result lxp_state_root_proof(const lxp_kernel *kernel, uint16_t module_id,
     if (kernel == NULL || root == NULL || proof == NULL ||
         module_id > LXP_MODULE_RESERVED_COUNT)
         return LXP_ERR_NON_CANONICAL;
+    status = kernel_state_validate(kernel);
+    if (status != LXP_OK) return status;
     status = lxp_state_supply_check(kernel);
     if (status != LXP_OK) return status;
     status = lxp_state_module_root_count(kernel, &module_root_count);

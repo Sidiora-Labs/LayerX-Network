@@ -169,10 +169,14 @@ lxp_result lxp_secp256k1_recover_address(const uint8_t signature[64],
         !lxp_secp256k1_sig_is_low_s(signature)) return LXP_ERR_BAD_SIGNATURE;
     group=EC_GROUP_new_by_curve_name(NID_secp256k1); context=BN_CTX_new();
     r=BN_bin2bn(signature,32,NULL); s=BN_bin2bn(signature+32U,32,NULL);
-    order=BN_new(); prime=BN_new(); x=BN_dup(r); e=BN_bin2bn(digest,32,NULL);
+    order=BN_new(); prime=BN_new(); e=BN_bin2bn(digest,32,NULL);
     negative_e=BN_new();
-    point_r=EC_POINT_new(group); check=EC_POINT_new(group); sum=EC_POINT_new(group); public_point=EC_POINT_new(group);
-    if (!group||!context||!r||!s||!order||!prime||!x||!e||!negative_e||!point_r||!check||!sum||!public_point ||
+    if (!group||!context||!r||!s||!order||!prime||!e||!negative_e)
+        goto cleanup;
+    x=BN_dup(r);
+    point_r=EC_POINT_new(group); check=EC_POINT_new(group);
+    sum=EC_POINT_new(group); public_point=EC_POINT_new(group);
+    if (!x||!point_r||!check||!sum||!public_point ||
         EC_GROUP_get_order(group,order,context)!=1 || EC_GROUP_get_curve(group,prime,NULL,NULL,context)!=1) goto cleanup;
     if ((recovery_id>>1U)!=0U && BN_add(x,x,order)!=1) goto cleanup;
     if (BN_cmp(x,prime)>=0 || EC_POINT_set_compressed_coordinates(group,point_r,x,(int)(recovery_id&1U),context)!=1 ||

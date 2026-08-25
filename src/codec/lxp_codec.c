@@ -112,8 +112,10 @@ lxp_result lxp_codec_read_u8(lxp_codec_reader *reader, uint8_t *value)
 lxp_result lxp_codec_read_u16(lxp_codec_reader *reader, uint16_t *value)
 {
     uint8_t in[2];
-    lxp_result result = read_raw(reader, in, sizeof(in));
-    if (result != LXP_OK || value == NULL) return result != LXP_OK ? result : LXP_ERR_NON_CANONICAL;
+    lxp_result result;
+    if (value == NULL) return LXP_ERR_NON_CANONICAL;
+    result = read_raw(reader, in, sizeof(in));
+    if (result != LXP_OK) return result;
     *value = (uint16_t)(((uint16_t)in[0] << 8U) | (uint16_t)in[1]);
     return LXP_OK;
 }

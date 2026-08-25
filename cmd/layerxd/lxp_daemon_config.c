@@ -14,6 +14,8 @@ static lxp_result parse_u64(
     if (strncmp(line, prefix, prefix_length) != 0 ||
         line[prefix_length] == '\0')
         return LXP_ERR_NON_CANONICAL;
+    if (line[prefix_length] < '0' || line[prefix_length] > '9')
+        return LXP_ERR_NON_CANONICAL;
     errno = 0;
     parsed = strtoull(line + prefix_length, &end, 10);
     if (errno != 0 || end == line + prefix_length ||

@@ -127,6 +127,35 @@ int main(void)
     ++second.module_kv_count;
     if (lxp_state_root(&second, chained) != LXP_ERR_UNKNOWN_MODULE) return 1;
     --second.module_kv_count;
+    {
+        lxp_state_store *saved_state = first.state;
+        first.state = NULL;
+        if (lxp_state_root(&first, chained) != LXP_FATAL_INVARIANT)
+            return 1;
+        first.state = saved_state;
+    }
+    first.blob_count = LXP_KERNEL_MAX_BLOBS + 1U;
+    if (lxp_state_root(&first, chained) != LXP_ERR_LENGTH_LIMIT) return 1;
+    first.blob_count = 0U;
+    first.blob_total_bytes = 1U;
+    if (lxp_state_root(&first, chained) != LXP_FATAL_INVARIANT) return 1;
+    first.blob_total_bytes = 0U;
+    first_store.count = LXP_STATE_MAX_CELLS + 1U;
+    if (lxp_state_root(&first, chained) != LXP_ERR_LENGTH_LIMIT) return 1;
+    first_store.count = 2U;
+    first_store.idempotency_count = LXP_STATE_MAX_IDEMPOTENCY + 1U;
+    if (lxp_state_root(&first, chained) != LXP_ERR_LENGTH_LIMIT) return 1;
+    first_store.idempotency_count = 0U;
+    first.module_kv_count = LXP_KERNEL_MAX_MODULE_KV + 1U;
+    if (lxp_state_root(&first, chained) != LXP_ERR_LENGTH_LIMIT) return 1;
+    first.module_kv_count = 2U;
+    first.blob_count = 1U;
+    first.blobs[0].length = 1U;
+    first.blobs[0].bytes = NULL;
+    first.blob_total_bytes = 1U;
+    if (lxp_state_root(&first, chained) != LXP_FATAL_INVARIANT) return 1;
+    first.blob_count = 0U;
+    first.blob_total_bytes = 0U;
     supply_bad = true;
     if (lxp_state_root(&first, chained) != LXP_FATAL_SUPPLY_MISMATCH ||
         lxp_state_store_destroy(&first_store) != LXP_OK ||

@@ -26,6 +26,12 @@ int main(void)
     if (lxp_codec_write_u128(&writer, wide) != LXP_OK) return 1;
     if (lxp_codec_reader_init(&reader, writer.bytes, writer.length) != LXP_OK)
         return 1;
+    {
+        size_t offset = reader.offset;
+        if (lxp_codec_read_u16(&reader, NULL) != LXP_ERR_NON_CANONICAL ||
+            reader.offset != offset)
+            return 1;
+    }
     for (i = 0U; i < sizeof(values) / sizeof(values[0]); ++i) {
         uint64_t out = 0U;
         if (lxp_codec_read_u64(&reader, &out) != LXP_OK || out != values[i])

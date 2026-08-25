@@ -5,3 +5,67 @@ symbol = "CheckpointRegistry.invalidateCheckpoint, CheckpointRegistry.latestCano
 observed = "The inherited emergency-exit path treated an upheld challenge against the latest checkpoint as both the eligibility trigger and the checkpoint whose state root authorised payout. The repair makes challenge resolution record an irreversible invalidation watermark through the existing slashing-authority boundary, preserves every registered checkpoint and certificate for audit, makes the challenged checkpoint and all descendants non-canonical, halts further registration on that invalid lineage, and selects the immediately preceding canonical checkpoint for emergency exit. If the first registered checkpoint is invalidated, no certificate-backed predecessor is invented and exit remains fail-closed."
 assumption = "Human qualification must exercise an upheld challenge against the latest and a non-latest checkpoint, prove no invalid checkpoint or descendant can authorise a withdrawal or emergency exit, prove the last canonical predecessor remains executable with sequencer and guarantors offline, and confirm deployment sets the challenge manager as the GuarantorBond slashing authority before challenges are accepted. No build or test result is asserted by this implementation repair."
 severity = "qualification-repair"
+
+[observation.1.4.1]
+task = "1.4"
+file = "src/protocol/lxp_arena.c, tests/protocol/lxp_test_arena.c"
+symbol = "lxp_arena_alloc"
+observed = "Post-implementation review found that a valid zero-capacity arena could reach null-pointer arithmetic during a zero-byte allocation. The repair defines that exact case as a successful null allocation and refuses every nonzero request as arena exhaustion without pointer arithmetic."
+assumption = "Human qualification must run the arena suite under the declared sanitizers and retain identical allocation/content behavior for nonempty arenas. No passing test result is asserted here."
+severity = "post-implementation-repair"
+
+[observation.2.1.1]
+task = "2.1"
+file = "src/codec/lxp_codec.c, tests/codec/lxp_test_codec_primitives.c"
+symbol = "lxp_codec_read_u16"
+observed = "The primitive decoder consumed two input bytes before checking whether the caller supplied an output pointer. The repair refuses a null output before reading, so a rejected call leaves the canonical decoder cursor unchanged."
+assumption = "Human qualification must exercise every primitive reader with null output, truncation and exact-boundary input and confirm rejection never advances the cursor."
+severity = "post-implementation-repair"
+
+[observation.3.3.1]
+task = "3.3"
+file = "src/crypto/lxp_secp256k1.c"
+symbol = "lxp_secp256k1_recover_address"
+observed = "The recovery path passed potentially null OpenSSL group and big-number allocations into dependent constructors before its aggregate null check. The repair validates all prerequisite allocations first, then creates dependent points and checks those before use."
+assumption = "Human qualification must run allocation-failure injection and the published recovery, malformed-point and low-S vectors under ASan and leak detection."
+severity = "post-implementation-repair"
+
+[observation.8.1.1]
+task = "8.1"
+file = "src/protocol/lxp_kernel.c, tests/protocol/lxp_test_kernel.c"
+symbol = "validate_iface"
+observed = "Module registration used unbounded strlen/strcmp on the caller-supplied interface name. The repair requires a terminator within LXP_MODULE_MAX_NAME plus one byte and then compares the exact bounded length and bytes against the canonical static module name."
+assumption = "Human qualification must exercise unterminated, overlong, embedded-null and exact canonical module names through real registration."
+severity = "post-implementation-repair"
+
+[observation.8.5.1]
+task = "8.5"
+file = "src/state/lxp_state_root.c, tests/state/lxp_test_state_root.c"
+symbol = "kernel_state_validate"
+observed = "State-root and proof entry points trusted public kernel counts, blob totals and nested state pointers before iterating fixed-capacity storage. The repair centralises fail-closed validation of state/account/idempotency/module/KV/blob bounds, receipt lengths, account-root presence, non-null blob storage and exact blob-byte totals before any root, proof or supply traversal."
+assumption = "Human qualification must run state-root/proof/supply suites with each count at, below and above its declared capacity, inconsistent totals and missing nested storage, and must prove valid histories retain byte-identical roots."
+severity = "post-implementation-repair"
+
+[observation.18.4.1]
+task = "18.4"
+file = "src/state/lxp_snapshot.c, tests/test_snapshot.c"
+symbol = "lxp_snapshot_load"
+observed = "Snapshot loading accepted global sequence UINT64_MAX and later derived next_sequence by adding one, allowing wrap to zero. The repair refuses that terminal value before manifest comparison or state mutation."
+assumption = "Human qualification must exercise maximum-minus-one and maximum sequences, prove refused loads leave the destination unchanged, and replay a valid restored snapshot to the same terminal root."
+severity = "post-implementation-repair"
+
+[observation.19.2.1]
+task = "19.2"
+file = "src/paxeer/lxp_checkpoint_cert.c, tests/test_guarantor_cert.c"
+symbol = "lxp_guarantor_cert_verify"
+observed = "Certificate verification checked threshold relations but not that attestation_count fit the fixed certificate array before traversal. The repair rejects any count above LXP_MAX_GUARANTOR_ATTESTATIONS at the admission boundary."
+assumption = "Human qualification must retain exact threshold behavior at the maximum and refuse every over-maximum certificate without reading beyond the fixed array."
+severity = "post-implementation-repair"
+
+[observation.23.5.1]
+task = "23.5"
+file = "cmd/layerxd/lxp_daemon_config.c, tests/test_layerxd.c"
+symbol = "parse_u64"
+observed = "The daemon configuration delegated unsigned parsing directly to strtoull, which accepts a leading minus sign and can map -1 to UINT64_MAX. The repair requires the first value byte to be an ASCII digit before conversion, thereby also refusing plus signs and whitespace-prefixed values."
+assumption = "Human qualification must exercise negative, signed, whitespace, overflow and exact-maximum values and prove invalid configuration is rejected before daemon state is created."
+severity = "post-implementation-repair"

@@ -32,6 +32,10 @@ lxp_result lxp_arena_alloc(lxp_arena *arena, size_t size, size_t alignment,
         return LXP_ERR_NON_CANONICAL;
     }
     *allocation = NULL;
+    if (arena->buffer == NULL) {
+        return size == 0U && arena->capacity == 0U ? LXP_OK :
+               LXP_ERR_ARENA_EXHAUSTED;
+    }
     mask = alignment - 1U;
     if (arena->offset > SIZE_MAX - mask) {
         return LXP_ERR_ARENA_EXHAUSTED;

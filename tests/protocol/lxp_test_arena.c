@@ -40,14 +40,21 @@ int main(void)
     } shifted;
     lxp_arena a;
     lxp_arena b;
+    lxp_arena empty;
     size_t offsets_a[3];
     size_t offsets_b[3];
     void *allocation = NULL;
 
     if (lxp_arena_init(&a, storage_a, sizeof(storage_a)) != LXP_OK ||
-        lxp_arena_init(&b, shifted.storage, sizeof(shifted.storage)) != LXP_OK) {
+        lxp_arena_init(&b, shifted.storage, sizeof(shifted.storage)) != LXP_OK ||
+        lxp_arena_init(&empty, NULL, 0U) != LXP_OK) {
         return 1;
     }
+    if (lxp_arena_alloc(&empty, 0U, 1U, &allocation) != LXP_OK ||
+        allocation != NULL ||
+        lxp_arena_alloc(&empty, 1U, 1U, &allocation) !=
+            LXP_ERR_ARENA_EXHAUSTED || allocation != NULL)
+        return 1;
     if (exercise(&a, offsets_a) != 0 || exercise(&b, offsets_b) != 0) return 1;
     if (memcmp(offsets_a, offsets_b, sizeof(offsets_a)) != 0 ||
         memcmp(storage_a, shifted.storage, sizeof(storage_a)) != 0) return 1;

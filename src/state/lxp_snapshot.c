@@ -494,6 +494,8 @@ lxp_result lxp_snapshot_load(const uint8_t *snapshot, size_t snapshot_length,
         }
     }
     if (status == LXP_OK) status = lxp_codec_read_u64(&reader, &sequence);
+    if (status == LXP_OK && sequence == UINT64_MAX)
+        status = LXP_ERR_SEQUENCE_MISMATCH;
     if (status == LXP_OK && sequence != manifest->global_sequence)
         status = LXP_ERR_SNAPSHOT_MISMATCH;
     if (status == LXP_OK) status = lxp_codec_read_u32(&reader, &count);

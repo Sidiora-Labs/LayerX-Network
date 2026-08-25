@@ -124,6 +124,7 @@ lxp_result lxp_guarantor_cert_verify(
     if (certificate == NULL || keys == NULL || key_count == 0U ||
         arena == NULL || valid_signatures == NULL ||
         certificate->threshold == 0U ||
+        certificate->attestation_count > LXP_MAX_GUARANTOR_ATTESTATIONS ||
         certificate->attestation_count < certificate->threshold ||
         !certificate->bonded_economic_guarantee)
         return LXP_ERR_ATTESTATION_THRESHOLD;

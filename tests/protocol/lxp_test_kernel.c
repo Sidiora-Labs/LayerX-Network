@@ -96,7 +96,11 @@ int main(void)
     lxp_module_iface v1 = make_iface(1U, v1_types, 2U);
     lxp_module_iface v2 = make_iface(2U, v2_types, 2U);
     lxp_module_iface bad = make_iface(3U, unsorted, 2U);
+    lxp_module_iface unterminated = make_iface(3U, v1_types, 2U);
+    char unterminated_name[LXP_MODULE_MAX_NAME + 1U];
     const lxp_module_registration *registration;
+    (void)memset(unterminated_name, 'a', sizeof(unterminated_name));
+    unterminated.name = unterminated_name;
     if (lxp_state_store_init(&store, 0U) != LXP_OK ||
         lxp_kernel_create(&kernel, &store, &journal, &parameters, 0U) !=
             LXP_OK ||
@@ -112,6 +116,8 @@ int main(void)
             LXP_ERR_MODULE_DISABLED ||
         lxp_kernel_register_module(&kernel, &bad) !=
             LXP_ERR_UNSORTED_SEQUENCE ||
+        lxp_kernel_register_module(&kernel, &unterminated) !=
+            LXP_ERR_LENGTH_LIMIT ||
         lxp_kernel_set_epoch(&kernel, 4U) != LXP_OK ||
         lxp_kernel_register_module(&kernel, &v2) != LXP_OK ||
         lxp_kernel_module_for_activity(&kernel, v1_types[1], 3U,

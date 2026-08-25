@@ -64,6 +64,30 @@ static int write_config(
     return result < 0 || fclose(file) != 0;
 }
 
+static int write_negative_sequence_config(char path[64])
+{
+    int descriptor = mkstemp(path);
+    FILE *file;
+    int result;
+    if (descriptor < 0) return 1;
+    file = fdopen(descriptor, "wb");
+    if (file == NULL) {
+        (void)close(descriptor);
+        return 1;
+    }
+    result = fprintf(
+        file,
+        "role=sequencer\n"
+        "network_id=42\n"
+        "start_sequence=-1\n"
+        "verify_workers=0\n"
+        "network_workers=0\n"
+        "projection_workers=0\n"
+        "checkpoint_workers=0\n"
+        "serial_execution=true\n");
+    return result < 0 || fclose(file) != 0;
+}
+
 static int submit_range(
     lxp_daemon *daemon, uint64_t first, uint64_t count)
 {
@@ -104,6 +128,7 @@ int main(void)
     char parallel_path[64] = "/tmp/layerxd-parallel-XXXXXX";
     char serial_path[64] = "/tmp/layerxd-serial-XXXXXX";
     char invalid_path[64] = "/tmp/layerxd-invalid-XXXXXX";
+    char negative_path[64] = "/tmp/layerxd-negative-XXXXXX";
     lxp_daemon_configuration parallel;
     lxp_daemon_configuration serial;
     lxp_daemon_configuration invalid;
@@ -119,6 +144,7 @@ int main(void)
         write_config(serial_path, "sequencer", 0U, 0U, true) != 0 ||
         write_config(
             invalid_path, "sequencer,guarantor", 0U, 0U, true) != 0 ||
+        write_negative_sequence_config(negative_path) != 0 ||
         lxp_daemon_config_load(parallel_path, &parallel) != LXP_OK ||
         lxp_daemon_config_load(serial_path, &serial) != LXP_OK ||
         lxp_daemon_role(&parallel, &role) != LXP_OK ||
@@ -126,6 +152,8 @@ int main(void)
         parallel.role != LXP_DAEMON_SEQUENCER ||
         parallel.serial_execution || !serial.serial_execution ||
         lxp_daemon_config_load(invalid_path, &invalid) !=
+            LXP_ERR_NON_CANONICAL ||
+        lxp_daemon_config_load(negative_path, &invalid) !=
             LXP_ERR_NON_CANONICAL ||
         run_window(&parallel, 5000U, parallel_root) != 0 ||
         run_window(&serial, 5000U, serial_root) != 0 ||
@@ -149,7 +177,7 @@ int main(void)
         durable.expected_sequence != 10000U ||
         daemon.next_sequence != 10000U ||
         unlink(parallel_path) != 0 || unlink(serial_path) != 0 ||
-        unlink(invalid_path) != 0)
+        unlink(invalid_path) != 0 || unlink(negative_path) != 0)
         return 1;
     return 0;
 }
