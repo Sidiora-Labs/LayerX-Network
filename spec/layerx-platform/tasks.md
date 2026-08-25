@@ -1600,6 +1600,13 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Add root Makefile entry points for Paxeer build, lint, tests and CI, and bind Paxeer's internal project root to its subsystem directory so its cleanup and Docker mounts cannot touch LayerX build output.
     - Update the root README and dependency automation to describe and maintain the ecosystem monorepo and its explicit LayerX/Paxeer trust, build and release boundaries.
     - _Requirements: 44.1, 44.2, 44.3, 44.4, 44.5, 44.6_
+  - [-] 37.2 Publish the monorepo-native HPX registry and node distribution
+    - Replace obsolete HPX domains, private fleet examples and project-Quorum source paths with the canonical node.hyperpaxeer.com origin and paths derived from paxeer-network inside this monorepo.
+    - Make the artifact publisher stage a complete versioned release, require the Paxeer binary and all supported native libraries, write the chain metadata and sorted SHA-256 manifest, and atomically switch the served current-release pointer only after assembly completes.
+    - Harden the registry's static artifact surface and public registration boundary, package it through root repository automation, and provide a durable loopback-only production service plus Nginx HTTPS reverse-proxy configuration for node.hyperpaxeer.com.
+    - Make the web installer and HPX node manager verify the checksum manifest for the CLI, binary, native libraries, genesis and node configuration before installing any downloaded artifact.
+    - Publish the assembled HPX artifacts and registry at node.hyperpaxeer.com from the verified local Paxeer runtime inputs, while leaving generated binaries, native libraries, registry data, certificates and deployment secrets outside Git.
+    - _Requirements: 45.1, 45.2, 45.3, 45.4, 45.5, 45.6, 45.7_
 
 ## Engineering ground rules
 
@@ -1722,7 +1729,7 @@ violation.
     { "id": 12, "tasks": ["25.1", "25.2", "25.3", "26.1", "26.2"] },
     { "id": 14, "tasks": ["28.1", "28.2", "28.3", "28.4", "28.5", "28.6", "28.7", "28.8"] },
     { "id": 15, "tasks": ["29.1", "29.2", "29.3", "29.4", "29.5", "29.6", "29.7"] },
-    { "id": 16, "tasks": ["30.1", "30.2", "30.3", "30.4", "30.5", "30.7", "37.1"] },
+    { "id": 16, "tasks": ["30.1", "30.2", "30.3", "30.4", "30.5", "30.7", "37.1", "37.2"] },
     { "id": 17, "tasks": ["31.1", "31.2", "31.3", "31.4", "31.5", "31.6", "31.7"] },
     { "id": 18, "tasks": ["32.1", "32.2", "32.3", "32.4", "32.5", "32.6"] },
     { "id": 19, "tasks": ["33.1", "33.2", "33.3", "33.4", "33.5", "33.6", "33.7"] },

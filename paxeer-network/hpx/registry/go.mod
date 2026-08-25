@@ -1,3 +1,3 @@
-module github.com/sidiora-labs/paxeer-network/hpx/registry
+module github.com/Sidiora-Labs/LayerX-Protocol/paxeer-network/hpx/registry
 
 go 1.22

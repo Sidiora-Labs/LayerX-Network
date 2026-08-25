@@ -53,7 +53,7 @@ readonly W_KEY="funding-w"                     # new funding wallet, coin-type 1
 readonly BUFFER_PAX="${HPX_BUFFER_PAX:-1000}"       # PAX kept in W as a fee buffer
 readonly SSH_USER="${HPX_SSH_USER:-root}"
 readonly SSH="ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=12 ${HPX_SSH_OPTS:-}"
-readonly MIRROR="${HPX_MIRROR:-https://get.cloud.hyperpaxeer.com}"
+readonly MIRROR="${HPX_MIRROR:-https://node.hyperpaxeer.com}"
 
 # ── UI ────────────────────────────────────────────────────────────────────────
 C_RST=$'\033[0m'; C_B=$'\033[1m'; C_D=$'\033[2m'

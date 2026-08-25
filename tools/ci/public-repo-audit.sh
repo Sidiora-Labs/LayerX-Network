@@ -79,7 +79,7 @@ audit_rg() {
     return 1
 }
 
-private_refs='(/root/|147\.93\.139\.18)'
+private_refs='(/root/(Layerx-protocol|project-Quorum|private-neo-v1|matrix|layerX)(/|$)|147\.93\.139\.18)'
 if audit_rg --glob '!tools/ci/public-repo-audit.sh' "$private_refs"; then
     echo "private workspace or infrastructure reference found" >&2
     exit 1

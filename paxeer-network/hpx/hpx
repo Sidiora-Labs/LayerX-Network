@@ -17,7 +17,7 @@
 # =============================================================================
 set -uo pipefail
 
-readonly VERSION="3.0.0"
+readonly VERSION="3.1.0"
 
 # ── Mirror / chain defaults (chain-info.json overrides at runtime) ────────────
 MIRROR="${HPX_MIRROR:-https://node.hyperpaxeer.com}"
@@ -65,7 +65,7 @@ prompt() {
         pr "${C_WHT}${msg}${C_RST}: "
     fi
     read -r input
-    eval "$var=\"${input:-$default}\""
+    printf -v "$var" '%s' "${input:-$default}"
 }
 
 confirm() {
@@ -137,15 +137,43 @@ ensure_deps() {
 }
 
 # ── Mirror helpers ────────────────────────────────────────────────────────────
-CI_VERSION="" CI_SHA="" CI_CHAIN_ID="" CI_SEEDS=""
+CI_VERSION="" CI_SHA="" CI_CHAIN_ID="" CI_SEEDS="" CI_CHECKSUMS=""
+checksum_for() {
+    local rel="$1"
+    printf '%s\n' "$CI_CHECKSUMS" | awk -v p="$rel" '$2 == p { print $1; exit }'
+}
+
+verify_download() {
+    local file="$1" rel="$2" want got
+    want=$(checksum_for "$rel")
+    [ -n "$want" ] || { rm -f "$file"; die "checksum missing for ${rel}"; }
+    got=$(sha256sum "$file" | awk '{print $1}')
+    [ "$got" = "$want" ] || { rm -f "$file"; die "${rel} sha256 mismatch (got $got want $want)"; }
+}
+
+download_verified() {
+    local rel="$1" dst="$2"
+    curl -fL --retry 5 --retry-delay 3 --max-time 300 -o "$dst" "${MIRROR}/${rel}" \
+        || { rm -f "$dst"; die "${rel} download failed"; }
+    verify_download "$dst" "$rel"
+}
+
 fetch_chain_info() {
-    local j
-    j=$(curl -fsS --max-time 15 "${MIRROR}/chain-info.json" 2>/dev/null) \
-        || die "cannot reach mirror ${MIRROR} (chain-info.json)"
-    CI_CHAIN_ID=$(echo "$j" | jq -r '.chain_id // empty')
-    CI_VERSION=$(echo "$j" | jq -r '.paxd_version // empty')
-    CI_SHA=$(echo "$j" | jq -r '.paxd_sha256 // empty')
-    CI_SEEDS=$(echo "$j" | jq -r '.seeds | join(",") // empty')
+    local manifest info_file
+    manifest=$(curl -fsS --max-time 15 "${MIRROR}/checksums.txt" 2>/dev/null) \
+        || die "cannot reach mirror ${MIRROR} (checksums.txt)"
+    [ -n "$manifest" ] || die "mirror returned an empty checksum manifest"
+    CI_CHECKSUMS="$manifest"
+    info_file=$(mktemp)
+    download_verified "chain-info.json" "$info_file"
+    CI_CHAIN_ID=$(jq -r '.chain_id // empty' "$info_file")
+    CI_VERSION=$(jq -r '.paxd_version // empty' "$info_file")
+    CI_SHA=$(jq -r '.paxd_sha256 // empty' "$info_file")
+    CI_SEEDS=$(jq -r '.seeds | join(",") // empty' "$info_file")
+    rm -f "$info_file"
+    [ -n "$CI_CHAIN_ID" ] || die "chain-info.json has no chain_id"
+    [ -n "$CI_SHA" ] || die "chain-info.json has no paxd_sha256"
+    [ "$CI_SHA" = "$(checksum_for paxd)" ] || die "chain-info paxd checksum disagrees with checksums.txt"
     [ -n "$CI_CHAIN_ID" ] && CHAIN_ID="$CI_CHAIN_ID"
 }
 
@@ -162,26 +190,30 @@ node_id() { "$BIN" tendermint show-node-id --home "$HOME_DIR" 2>/dev/null \
 
 # ── Download install artifacts ────────────────────────────────────────────────
 download_binary() {
-    local arch; arch=$(arch_suffix)
+    local arch stage f ld
+    arch=$(arch_suffix)
+    ld=$(lib_dir)
+    stage=$(mktemp -d)
+    trap 'rm -rf "$stage"' EXIT
     info "downloading paxd (${CI_VERSION:-latest})"
-    curl -fL --retry 5 --retry-delay 3 -o "${BIN}.new" "${MIRROR}/paxd" || die "paxd download failed"
-    if [ -n "$CI_SHA" ]; then
-        local got; got=$(sha256sum "${BIN}.new" | awk '{print $1}')
-        [ "$got" = "$CI_SHA" ] || { rm -f "${BIN}.new"; die "paxd sha256 mismatch (got $got want $CI_SHA)"; }
-        ok "paxd sha256 verified"
-    fi
-    chmod +x "${BIN}.new" && mv -f "${BIN}.new" "$BIN"
+    download_verified "paxd" "${stage}/paxd"
+    ok "paxd sha256 verified"
 
-    local ld; ld=$(lib_dir)
     info "downloading libwasmvm shared objects -> ${ld}"
-    local f
     for f in "libwasmvm.${arch}.so" "libwasmvm152.${arch}.so" "libwasmvm155.${arch}.so"; do
-        if curl -fL --retry 3 --max-time 120 -o "${ld}/${f}.new" "${MIRROR}/lib/${f}" 2>/dev/null; then
-            mv -f "${ld}/${f}.new" "${ld}/${f}"
-        else
-            rm -f "${ld}/${f}.new"
-        fi
+        download_verified "lib/${f}" "${stage}/${f}"
     done
+
+    install -m 0755 "${stage}/paxd" "${BIN}.new"
+    for f in "libwasmvm.${arch}.so" "libwasmvm152.${arch}.so" "libwasmvm155.${arch}.so"; do
+        install -m 0644 "${stage}/${f}" "${ld}/${f}.new"
+    done
+    mv -f "${BIN}.new" "$BIN"
+    for f in "libwasmvm.${arch}.so" "libwasmvm152.${arch}.so" "libwasmvm155.${arch}.so"; do
+        mv -f "${ld}/${f}.new" "${ld}/${f}"
+    done
+    rm -rf "$stage"
+    trap - EXIT
     ldconfig
     "$BIN" version >/dev/null 2>&1 || die "paxd installed but won't run (libwasmvm/arch issue)"
     ok "paxd $("$BIN" version 2>/dev/null) ready"
@@ -191,9 +223,12 @@ download_chain_files() {
     local type="$1"
     mkdir -p "$CFG_DIR" "$DATA_DIR"
     info "downloading genesis + ${type} config"
-    curl -fL --retry 5 -o "${CFG_DIR}/genesis.json" "${MIRROR}/genesis.json" || die "genesis download failed"
-    curl -fL --retry 5 -o "${CFG_DIR}/config.toml" "${MIRROR}/config/${type}/config.toml" || die "config.toml download failed"
-    curl -fL --retry 5 -o "${CFG_DIR}/app.toml" "${MIRROR}/config/${type}/app.toml" || die "app.toml download failed"
+    download_verified "genesis.json" "${CFG_DIR}/genesis.json.new"
+    download_verified "config/${type}/config.toml" "${CFG_DIR}/config.toml.new"
+    download_verified "config/${type}/app.toml" "${CFG_DIR}/app.toml.new"
+    mv -f "${CFG_DIR}/genesis.json.new" "${CFG_DIR}/genesis.json"
+    mv -f "${CFG_DIR}/config.toml.new" "${CFG_DIR}/config.toml"
+    mv -f "${CFG_DIR}/app.toml.new" "${CFG_DIR}/app.toml"
     write_client_toml
     ok "genesis + config in place"
 }
@@ -297,10 +332,11 @@ register_node() {
     body=$(jq -nc --arg id "$id" --arg m "$moniker" --arg ip "$ip" \
         --arg t "$type" --arg v "$ver" --argjson p "$P2P_PORT" \
         '{node_id:$id,moniker:$m,ip:$ip,type:$t,version:$v,p2p_port:$p}')
+    local -a headers=(-H "Content-Type: application/json")
+    [ -n "$HPX_TOKEN" ] && headers+=(-H "X-HPX-Token: ${HPX_TOKEN}")
     resp=$(curl -fsS --max-time 12 -X POST "${MIRROR}/api/register" \
-        -H "Content-Type: application/json" \
-        ${HPX_TOKEN:+-H "X-HPX-Token: ${HPX_TOKEN}"} \
-        --data "$body" 2>/dev/null) || { warn "registry register failed (will still start; peers from /api/peers)"; echo ""; return 1; }
+        "${headers[@]}" --data "$body" 2>/dev/null) \
+        || { warn "registry register failed (will still start; peers from /api/peers)"; echo ""; return 1; }
     echo "$resp" | jq -r '.persistent_peers // empty' 2>/dev/null
 }
 

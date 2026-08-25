@@ -662,3 +662,17 @@ The LayerX Platform is the complete product surface of LayerX: the human control
 5. THE root Makefile SHALL expose bounded Paxeer build, lint, test and CI entry points without reusing LayerX build directories, and the Paxeer Makefile SHALL resolve its project root to paxeer-network rather than to the enclosing Git worktree.
 6. THE publication boundary SHALL exclude generated binaries, dependency caches, runtime data and credentials from the imported Paxeer tree, and repository auditing SHALL inspect the Git publication set rather than ignored workspace material.
 
+## Requirement 45: Public HPX Distribution and Peer Registry
+
+**User Story:** As a Paxeer operator joining HyperPax, I want one authenticated public HPX endpoint backed by the monorepo, so that I can install the exact published node runtime, discover peers and operate the node without depending on a private checkout or an obsolete hosting domain.
+
+### Acceptance Criteria
+
+1. THE HPX publication scripts SHALL derive source paths from paxeer-network/hpx and its enclosing Paxeer subsystem, SHALL accept explicit runtime-config and artifact-root overrides, and SHALL contain no dependency on a machine-specific source checkout.
+2. EACH HPX publication SHALL assemble a new immutable release directory containing paxd, every supported architecture-specific libwasmvm runtime, genesis, fullnode and validator configuration, the HPX CLI and lifecycle scripts, chain metadata and a sorted SHA-256 manifest, and SHALL expose it only by atomically changing the current-release pointer after every required input has been copied.
+3. THE public origin https://node.hyperpaxeer.com SHALL terminate a certificate valid for that hostname and SHALL serve the installer, HPX CLI, manifest, chain metadata and node artifacts plus the health, registration, peers, nodes, caller-address and state-sync APIs, while directory listings and undeclared filesystem paths remain unavailable.
+4. THE registry SHALL run as a restartable unprivileged service bound only to the loopback publication port, SHALL persist its node registry outside the container or process image, SHALL accept only syntactically valid public peer addresses and ports observed at the trusted reverse-proxy boundary, and SHALL rate-limit registration without disclosing deployment secrets.
+5. THE public installer and HPX update path SHALL use node.hyperpaxeer.com as the sole default mirror, SHALL verify every downloaded binary, native library and chain configuration file against the published SHA-256 manifest before installation, and SHALL fail closed on a missing artifact, unsupported architecture or checksum mismatch.
+6. THE registry runtime executables and container image SHALL be produced from paxeer-network/hpx/registry by repository automation, SHALL be identified by the source revision used to build them, and production deployment SHALL consume a checksum-bound separately published runtime artifact rather than commit generated executables or native libraries to Git.
+7. QUALIFICATION SHALL begin from a clean host, install through the public HTTPS command, verify every public endpoint and certificate, restart the registry and recover its persisted peers, reject malformed and spoofed registrations, and prove a downloaded node reaches the declared chain without treating artifact publication alone as node or protocol qualification.
+

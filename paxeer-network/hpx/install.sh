@@ -46,11 +46,13 @@ if [ -d /etc/bash_completion.d ]; then
     cat > /etc/bash_completion.d/hpx << 'COMP'
 _hpx() {
     local cur="${COMP_WORDS[COMP_CWORD]}"
-    local cmds="setup status info logs start stop restart update peers register remove version help"
+    local cmds="setup status info logs start stop restart update peers register statesync validator stake keygen remove version help"
     if [ "$COMP_CWORD" -eq 1 ]; then
         COMPREPLY=($(compgen -W "$cmds" -- "$cur"))
     elif [ "$COMP_CWORD" -eq 2 ] && [ "${COMP_WORDS[1]}" = "peers" ]; then
         COMPREPLY=($(compgen -W "show refresh" -- "$cur"))
+    elif [ "$COMP_CWORD" -eq 2 ] && [ "${COMP_WORDS[1]}" = "validator" ]; then
+        COMPREPLY=($(compgen -W "keygen stake status" -- "$cur"))
     fi
 }
 complete -F _hpx hpx

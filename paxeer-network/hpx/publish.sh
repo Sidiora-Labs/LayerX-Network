@@ -1,73 +1,88 @@
 #!/usr/bin/env bash
-# =============================================================================
-# publish.sh — assemble the HyperPax node install package into the artifact
-# root served by hpx-registry (default /srv/hpx/artifacts).
-#
-# Run this once now, and again any time you rebuild paxd or change the chain
-# config. It is the ONLY step that touches the source chain files; everything
-# downstream (installer, CLI, nodes) just pulls from the served artifacts.
-#
-#   sudo bash publish.sh
-# =============================================================================
+# Assemble one immutable HPX release and atomically publish it through
+# /srv/hpx/artifacts/current. Generated binaries and registry data stay outside Git.
 set -euo pipefail
 
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SRC_BIN="${SRC_BIN:-/root/project-Quorum/paxeer-v3-matrix-release/build/paxd}"
-SRC_CFG="${SRC_CFG:-/root/.paxeer/config}"
-WASM_ROOT="${WASM_ROOT:-/root/project-Quorum/paxeer-v3-matrix-release}"
-OUT="${HPX_ARTIFACTS_DIR:-/srv/hpx/artifacts}"
+HPX_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PAXEER_ROOT="$(cd "${HPX_DIR}/.." && pwd)"
+MONOREPO_ROOT="$(cd "${PAXEER_ROOT}/.." && pwd)"
 
-CHAIN_ID="${CHAIN_ID:-hyperpax_125-1}"
-EVM_CHAIN_ID="${EVM_CHAIN_ID:-125}"
-P2P_PORT="${P2P_PORT:-26656}"
-RPC_PORT="${RPC_PORT:-26657}"
-# The genesis validator is the permanent seed every node dials first.
-SEED_PEER="${SEED_PEER:-e9c56cbadc4a96b67f69dcaaa7b4691851e945ca@31.220.74.140:26656}"
+SRC_BIN="${SRC_BIN:-${PAXEER_ROOT}/build/paxd}"
+SRC_CFG="${SRC_CFG:-${HPX_RUNTIME_CONFIG_DIR:-/root/.paxeer/config}}"
+WASM_ROOT="${WASM_ROOT:-${PAXEER_ROOT}}"
+VERSION_FILE="${HPX_VERSION_FILE:-${PAXEER_ROOT}/version.json}"
+ARTIFACTS_ROOT="${HPX_ARTIFACTS_ROOT:-/srv/hpx/artifacts}"
+RELEASES_DIR="${ARTIFACTS_ROOT}/releases"
 
-say() { printf "\033[0;36m[publish]\033[0m %s\n" "$*"; }
-die() { printf "\033[0;31m[publish] ERROR:\033[0m %s\n" "$*" >&2; exit 1; }
+CHAIN_ID="${HPX_CHAIN_ID:-hyperpax_125-1}"
+EVM_CHAIN_ID="${HPX_EVM_CHAIN_ID:-125}"
+P2P_PORT="${HPX_P2P_PORT:-26656}"
+RPC_PORT="${HPX_RPC_PORT:-26657}"
+SEED_PEER="${HPX_SEED_PEER:-e9c56cbadc4a96b67f69dcaaa7b4691851e945ca@31.220.74.140:26656}"
 
-[ -f "$SRC_BIN" ] || die "paxd binary not found: $SRC_BIN"
-[ -f "$SRC_CFG/genesis.json" ] || die "genesis not found: $SRC_CFG/genesis.json"
-[ -f "$SRC_CFG/config.toml" ] || die "config.toml not found: $SRC_CFG/config.toml"
-[ -f "$SRC_CFG/app.toml" ] || die "app.toml not found: $SRC_CFG/app.toml"
+say() { printf '\033[0;36m[publish]\033[0m %s\n' "$*"; }
+die() { printf '\033[0;31m[publish] ERROR:\033[0m %s\n' "$*" >&2; exit 1; }
 
-mkdir -p "$OUT/lib" "$OUT/config/fullnode" "$OUT/config/validator"
-
-# ── binary + checksum ────────────────────────────────────────────────────────
-say "copying paxd binary"
-install -m 0755 "$SRC_BIN" "$OUT/paxd.new" && mv -f "$OUT/paxd.new" "$OUT/paxd"
-SHA=$(sha256sum "$OUT/paxd" | awk '{print $1}')
-echo "$SHA" > "$OUT/paxd.sha256"
-say "paxd sha256 = $SHA"
-
-VERSION=$(LD_LIBRARY_PATH="$WASM_ROOT/wasm-runtime/internal/api" "$SRC_BIN" version 2>/dev/null || echo "v6.1.6-2218-g4f5889e00")
-say "paxd version = $VERSION"
-
-# ── libwasmvm shared objects (CGO runtime dep) ───────────────────────────────
-say "copying libwasmvm shared objects"
-copied=0
-for so in \
-  "$WASM_ROOT/wasm-runtime/internal/api/libwasmvm.x86_64.so" \
-  "$WASM_ROOT/wasm-runtime/internal/api/libwasmvm.aarch64.so" \
-  "$WASM_ROOT/wasm/x/wasm/artifacts/v152/api/libwasmvm152.x86_64.so" \
-  "$WASM_ROOT/wasm/x/wasm/artifacts/v152/api/libwasmvm152.aarch64.so" \
-  "$WASM_ROOT/wasm/x/wasm/artifacts/v155/api/libwasmvm155.x86_64.so" \
-  "$WASM_ROOT/wasm/x/wasm/artifacts/v155/api/libwasmvm155.aarch64.so" ; do
-  if [ -f "$so" ]; then install -m 0644 "$so" "$OUT/lib/"; copied=$((copied+1)); fi
+required=(
+  "$SRC_BIN"
+  "$SRC_CFG/genesis.json"
+  "$SRC_CFG/config.toml"
+  "$SRC_CFG/app.toml"
+  "$VERSION_FILE"
+  "$WASM_ROOT/wasm-runtime/internal/api/libwasmvm.x86_64.so"
+  "$WASM_ROOT/wasm-runtime/internal/api/libwasmvm.aarch64.so"
+  "$WASM_ROOT/wasm/x/wasm/artifacts/v152/api/libwasmvm152.x86_64.so"
+  "$WASM_ROOT/wasm/x/wasm/artifacts/v152/api/libwasmvm152.aarch64.so"
+  "$WASM_ROOT/wasm/x/wasm/artifacts/v155/api/libwasmvm155.x86_64.so"
+  "$WASM_ROOT/wasm/x/wasm/artifacts/v155/api/libwasmvm155.aarch64.so"
+  "$HPX_DIR/hpx"
+  "$HPX_DIR/get-hpx.sh"
+  "$HPX_DIR/install.sh"
+  "$HPX_DIR/uninstall.sh"
+)
+for file in "${required[@]}"; do
+  [ -f "$file" ] || die "required input not found: $file"
 done
-[ "$copied" -ge 2 ] || die "expected libwasmvm .so files under $WASM_ROOT, found $copied"
-say "copied $copied libwasmvm objects"
 
-# ── genesis ──────────────────────────────────────────────────────────────────
-say "copying genesis.json"
-install -m 0644 "$SRC_CFG/genesis.json" "$OUT/genesis.json"
+genesis_chain_id=$(jq -er '.chain_id' "$SRC_CFG/genesis.json") \
+  || die "cannot read chain_id from $SRC_CFG/genesis.json"
+[ "$genesis_chain_id" = "$CHAIN_ID" ] \
+  || die "genesis chain_id $genesis_chain_id does not match $CHAIN_ID"
 
-# ── config variants ──────────────────────────────────────────────────────────
-# Produce fullnode + validator config.toml from the live config (CometBFT v1 /
-# Pax layout — hyphenated keys). We set the node `mode` and enable pex; moniker,
-# external-address and persistent/bootstrap peers are filled per host by the
-# hpx CLI, so we just normalise them to a clean default here.
+source_revision=$(git -C "$MONOREPO_ROOT" rev-parse HEAD 2>/dev/null || true)
+[ -n "$source_revision" ] || die "cannot resolve monorepo source revision"
+paxd_sha=$(sha256sum "$SRC_BIN" | awk '{print $1}')
+release_id="${HPX_RELEASE_ID:-$(date -u +%Y%m%dT%H%M%SZ)-${paxd_sha:0:12}}"
+[[ "$release_id" =~ ^[A-Za-z0-9._-]+$ ]] || die "invalid release id: $release_id"
+
+mkdir -p "$RELEASES_DIR"
+stage=$(mktemp -d "${RELEASES_DIR}/.stage.XXXXXXXX")
+cleanup() { [ -n "${stage:-}" ] && [ -d "$stage" ] && rm -rf "$stage"; }
+trap cleanup EXIT
+mkdir -p "$stage/lib" "$stage/config/fullnode" "$stage/config/validator"
+
+say "staging paxd from ${SRC_BIN}"
+install -m 0755 "$SRC_BIN" "$stage/paxd"
+printf '%s  paxd\n' "$paxd_sha" > "$stage/paxd.sha256"
+
+runtime_path="$WASM_ROOT/wasm-runtime/internal/api:$WASM_ROOT/wasm/x/wasm/artifacts/v152/api:$WASM_ROOT/wasm/x/wasm/artifacts/v155/api"
+binary_info=$(LD_LIBRARY_PATH="$runtime_path" "$SRC_BIN" version --long --output json 2>/dev/null) \
+  || die "published paxd cannot report its build identity with the required native libraries"
+paxd_commit=$(printf '%s' "$binary_info" | jq -er '.commit') \
+  || die "published paxd has no embedded source commit"
+paxd_version=$(jq -er '.version' "$VERSION_FILE") \
+  || die "cannot read the Paxeer release identity from $VERSION_FILE"
+
+say "staging all supported libwasmvm runtimes"
+install -m 0644 "$WASM_ROOT/wasm-runtime/internal/api/libwasmvm.x86_64.so" "$stage/lib/"
+install -m 0644 "$WASM_ROOT/wasm-runtime/internal/api/libwasmvm.aarch64.so" "$stage/lib/"
+install -m 0644 "$WASM_ROOT/wasm/x/wasm/artifacts/v152/api/libwasmvm152.x86_64.so" "$stage/lib/"
+install -m 0644 "$WASM_ROOT/wasm/x/wasm/artifacts/v152/api/libwasmvm152.aarch64.so" "$stage/lib/"
+install -m 0644 "$WASM_ROOT/wasm/x/wasm/artifacts/v155/api/libwasmvm155.x86_64.so" "$stage/lib/"
+install -m 0644 "$WASM_ROOT/wasm/x/wasm/artifacts/v155/api/libwasmvm155.aarch64.so" "$stage/lib/"
+
+install -m 0644 "$SRC_CFG/genesis.json" "$stage/genesis.json"
+
 make_config() {
   local mode="$1" dst="$2"
   sed -E \
@@ -79,34 +94,52 @@ make_config() {
     -e 's|^pex = .*|pex = true|' \
     "$SRC_CFG/config.toml" > "$dst"
 }
-say "generating fullnode config (mode=full)"
-make_config "full" "$OUT/config/fullnode/config.toml"
-install -m 0644 "$SRC_CFG/app.toml" "$OUT/config/fullnode/app.toml"
 
-say "generating validator config (mode=validator)"
-make_config "validator" "$OUT/config/validator/config.toml"
-install -m 0644 "$SRC_CFG/app.toml" "$OUT/config/validator/app.toml"
+say "staging fullnode and validator configurations"
+make_config full "$stage/config/fullnode/config.toml"
+install -m 0644 "$SRC_CFG/app.toml" "$stage/config/fullnode/app.toml"
+make_config validator "$stage/config/validator/config.toml"
+install -m 0644 "$SRC_CFG/app.toml" "$stage/config/validator/app.toml"
 
-# ── CLI + scripts ────────────────────────────────────────────────────────────
-say "copying hpx CLI + install scripts"
-for f in hpx get-hpx.sh uninstall.sh; do
-  [ -f "$REPO/$f" ] && install -m 0755 "$REPO/$f" "$OUT/$f" || say "  (skip missing $f)"
+for script in hpx get-hpx.sh install.sh uninstall.sh; do
+  install -m 0755 "$HPX_DIR/$script" "$stage/$script"
 done
 
-# ── chain-info manifest ──────────────────────────────────────────────────────
-say "writing chain-info.json"
-cat > "$OUT/chain-info.json" <<JSON
+cat > "$stage/chain-info.json" <<JSON
 {
   "chain_id": "$CHAIN_ID",
   "evm_chain_id": $EVM_CHAIN_ID,
-  "paxd_version": "$VERSION",
-  "paxd_sha256": "$SHA",
+  "paxd_version": "$paxd_version",
+  "paxd_commit": "$paxd_commit",
+  "paxd_sha256": "$paxd_sha",
   "p2p_port": $P2P_PORT,
   "rpc_port": $RPC_PORT,
   "seeds": ["$SEED_PEER"],
+  "release_id": "$release_id",
+  "source_revision": "$source_revision",
   "published_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
 JSON
 
-say "done. artifact tree:"
-( cd "$OUT" && find . -maxdepth 2 -type f | sort | sed 's/^/    /' )
+say "writing sorted SHA-256 manifest"
+(
+  cd "$stage"
+  find . -type f ! -name checksums.txt -print0 \
+    | sort -z \
+    | xargs -0 sha256sum \
+    | sed 's#  \./#  #'
+) > "$stage/checksums.txt"
+
+release_dir="$RELEASES_DIR/$release_id"
+[ ! -e "$release_dir" ] || die "release already exists: $release_dir"
+mv "$stage" "$release_dir"
+stage=""
+
+next_link="$ARTIFACTS_ROOT/.current.${release_id}"
+ln -s "releases/$release_id" "$next_link"
+mv -Tf "$next_link" "$ARTIFACTS_ROOT/current"
+trap - EXIT
+
+say "published ${release_id} at ${ARTIFACTS_ROOT}/current"
+say "source revision ${source_revision}"
+find "$release_dir" -type f -printf '%P\n' | sort | sed 's/^/    /'

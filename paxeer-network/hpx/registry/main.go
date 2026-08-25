@@ -33,6 +33,8 @@ import (
 	"time"
 )
 
+var sourceRevision = "development"
+
 // ---- config ----------------------------------------------------------------
 
 type config struct {
@@ -55,7 +57,7 @@ type config struct {
 func loadConfig() config {
 	c := config{
 		Addr:         env("HPX_ADDR", ":8099"),
-		ArtifactsDir: env("HPX_ARTIFACTS_DIR", "/srv/hpx/artifacts"),
+		ArtifactsDir: env("HPX_ARTIFACTS_DIR", "/srv/hpx/artifacts/current"),
 		DataDir:      env("HPX_DATA_DIR", "/srv/hpx/data"),
 		RegisterTok:  os.Getenv("HPX_REGISTER_TOKEN"),
 		ChainID:      env("HPX_CHAIN_ID", "hyperpax_125-1"),
@@ -125,7 +127,7 @@ func (n Node) Peer() string {
 	if port == 0 {
 		port = 26656
 	}
-	return fmt.Sprintf("%s@%s:%d", n.NodeID, n.IP, port)
+	return fmt.Sprintf("%s@%s", n.NodeID, net.JoinHostPort(n.IP, strconv.Itoa(port)))
 }
 
 type registry struct {
@@ -225,9 +227,9 @@ func main() {
 	mux.HandleFunc("/api/myip", s.handleMyIP)
 	mux.HandleFunc("/api/statesync", s.handleStateSync)
 
-	// Everything else is a static artifact (binary, genesis, configs, scripts).
-	fs := http.FileServer(http.Dir(cfg.ArtifactsDir))
-	mux.Handle("/", noCacheScripts(fs))
+	// Everything else is an explicitly declared static artifact. Filesystem
+	// traversal and directory indexes are intentionally unavailable.
+	mux.Handle("/", artifactHandler(cfg.ArtifactsDir))
 
 	srv := &http.Server{
 		Addr:              cfg.Addr,
@@ -240,7 +242,9 @@ func main() {
 }
 
 func (s *server) handleHealth(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "chain_id": s.cfg.ChainID})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok": true, "chain_id": s.cfg.ChainID, "source_revision": sourceRevision,
+	})
 }
 
 // peerStrings returns seeds first, then every registered node, de-duplicated.
@@ -291,15 +295,29 @@ func (s *server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid node_id (expect 40-char hex CometBFT id)", http.StatusBadRequest)
 		return
 	}
-	if n.IP == "" {
-		n.IP = clientIP(r) // fall back to the source address
-	}
-	if net.ParseIP(n.IP) == nil {
-		http.Error(w, "invalid ip", http.StatusBadRequest)
+	// The peer address is always the address observed by the trusted local
+	// reverse proxy. A caller-provided address must never poison peer discovery.
+	n.IP = clientIP(r)
+	if !validPublicIP(n.IP) {
+		http.Error(w, "registration requires a public source address", http.StatusBadRequest)
 		return
 	}
 	if n.P2PPort == 0 {
 		n.P2PPort = 26656
+	}
+	if n.P2PPort < 1 || n.P2PPort > 65535 {
+		http.Error(w, "invalid p2p_port", http.StatusBadRequest)
+		return
+	}
+	n.Moniker = strings.TrimSpace(n.Moniker)
+	n.Version = strings.TrimSpace(n.Version)
+	if len(n.Moniker) > 64 || strings.IndexFunc(n.Moniker, func(r rune) bool { return r < 0x20 || r == 0x7f }) >= 0 {
+		http.Error(w, "invalid moniker", http.StatusBadRequest)
+		return
+	}
+	if len(n.Version) > 64 || strings.IndexFunc(n.Version, func(r rune) bool { return r < 0x20 || r == 0x7f }) >= 0 {
+		http.Error(w, "invalid version", http.StatusBadRequest)
+		return
 	}
 	switch n.Type {
 	case "fullnode", "validator":
@@ -339,10 +357,11 @@ func (s *server) handlePeersTxt(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleNodes(w http.ResponseWriter, _ *http.Request) {
+	nodes := s.reg.list()
 	writeJSON(w, http.StatusOK, map[string]any{
 		"chain_id": s.cfg.ChainID,
-		"count":    len(s.reg.Nodes),
-		"nodes":    s.reg.list(),
+		"count":    len(nodes),
+		"nodes":    nodes,
 	})
 }
 
@@ -455,8 +474,14 @@ func isHexID(s string) bool {
 	return true
 }
 
-// clientIP prefers the X-Forwarded-For left-most entry (we sit behind Caddy),
-// then falls back to the TCP source address.
+func validPublicIP(raw string) bool {
+	ip := net.ParseIP(strings.TrimSpace(raw))
+	return ip != nil && ip.IsGlobalUnicast() && !ip.IsPrivate() && !ip.IsLoopback() &&
+		!ip.IsUnspecified() && !ip.IsLinkLocalUnicast()
+}
+
+// clientIP prefers the X-Forwarded-For left-most entry written by the local
+// Nginx boundary, then falls back to the TCP source address.
 func clientIP(r *http.Request) string {
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 		if ip := strings.TrimSpace(strings.Split(xff, ",")[0]); ip != "" {
@@ -486,12 +511,61 @@ func noCacheScripts(next http.Handler) http.Handler {
 		switch {
 		case strings.HasSuffix(r.URL.Path, ".sh"),
 			r.URL.Path == "/hpx",
+			r.URL.Path == "/install",
+			r.URL.Path == "/checksums.txt",
+			r.URL.Path == "/paxd.sha256",
 			strings.HasSuffix(r.URL.Path, ".json"),
 			strings.HasSuffix(r.URL.Path, ".toml"):
 			w.Header().Set("Cache-Control", "no-store")
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+var publicArtifacts = map[string]string{
+	"/chain-info.json":              "chain-info.json",
+	"/checksums.txt":                "checksums.txt",
+	"/config/fullnode/app.toml":     "config/fullnode/app.toml",
+	"/config/fullnode/config.toml":  "config/fullnode/config.toml",
+	"/config/validator/app.toml":    "config/validator/app.toml",
+	"/config/validator/config.toml": "config/validator/config.toml",
+	"/genesis.json":                 "genesis.json",
+	"/get-hpx.sh":                   "get-hpx.sh",
+	"/hpx":                          "hpx",
+	"/install":                      "get-hpx.sh",
+	"/install.sh":                   "install.sh",
+	"/lib/libwasmvm.aarch64.so":     "lib/libwasmvm.aarch64.so",
+	"/lib/libwasmvm.x86_64.so":      "lib/libwasmvm.x86_64.so",
+	"/lib/libwasmvm152.aarch64.so":  "lib/libwasmvm152.aarch64.so",
+	"/lib/libwasmvm152.x86_64.so":   "lib/libwasmvm152.x86_64.so",
+	"/lib/libwasmvm155.aarch64.so":  "lib/libwasmvm155.aarch64.so",
+	"/lib/libwasmvm155.x86_64.so":   "lib/libwasmvm155.x86_64.so",
+	"/paxd":                         "paxd",
+	"/paxd.sha256":                  "paxd.sha256",
+	"/uninstall":                    "uninstall.sh",
+	"/uninstall.sh":                 "uninstall.sh",
+}
+
+func artifactHandler(root string) http.Handler {
+	return noCacheScripts(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		rel, ok := publicArtifacts[r.URL.Path]
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		file := filepath.Join(root, filepath.FromSlash(rel))
+		info, err := os.Stat(file)
+		if err != nil || !info.Mode().IsRegular() {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		http.ServeFile(w, r, file)
+	}))
 }
 
 func logreq(next http.Handler) http.Handler {

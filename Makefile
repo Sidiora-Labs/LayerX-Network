@@ -21,6 +21,7 @@ INTEROP_CARGO ?= cargo
 INTEROP_MANIFEST := interop/Cargo.toml
 PAXEER_DIR := $(CURDIR)/paxeer-network
 PAXEER_MAKE := $(MAKE) -C $(PAXEER_DIR)
+HPX_ORIGIN ?= https://node.hyperpaxeer.com
 
 CPPFLAGS := -Iinclude \
 	-DLXP_BUILD_TARGET_TRIPLE=\"$(shell $(CC) -dumpmachine)\" \
@@ -2350,7 +2351,7 @@ agent-check-secrets:
 
 ci: public-audit test reproducible scan-consensus test-sanitizers
 
-.PHONY: paxeer-build paxeer-lint paxeer-test paxeer-ci monorepo-ci
+.PHONY: paxeer-build paxeer-lint paxeer-test paxeer-ci hpx-public-check monorepo-ci
 
 paxeer-build:
 	$(PAXEER_MAKE) build
@@ -2363,6 +2364,22 @@ paxeer-test:
 
 paxeer-ci:
 	$(PAXEER_MAKE) ci
+
+hpx-public-check:
+	@set -eu; \
+	tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT HUP INT TERM; \
+	curl -fsS "$(HPX_ORIGIN)/healthz" | jq -e '.ok == true and .chain_id == "hyperpax_125-1"' >/dev/null; \
+	curl -fsS "$(HPX_ORIGIN)/checksums.txt" -o "$$tmp/checksums.txt"; \
+	curl -fsS "$(HPX_ORIGIN)/chain-info.json" -o "$$tmp/chain-info.json"; \
+	want=$$(awk '$$2 == "chain-info.json" { print $$1; exit }' "$$tmp/checksums.txt"); \
+	[ -n "$$want" ]; \
+	[ "$$(sha256sum "$$tmp/chain-info.json" | awk '{print $$1}')" = "$$want" ]; \
+	jq -e '.chain_id == "hyperpax_125-1" and (.paxd_sha256 | length == 64)' "$$tmp/chain-info.json" >/dev/null; \
+	for path in get-hpx.sh hpx paxd genesis.json lib/libwasmvm.x86_64.so lib/libwasmvm.aarch64.so lib/libwasmvm152.x86_64.so lib/libwasmvm152.aarch64.so lib/libwasmvm155.x86_64.so lib/libwasmvm155.aarch64.so config/fullnode/config.toml config/fullnode/app.toml config/validator/config.toml config/validator/app.toml api/peers api/nodes api/myip api/statesync; do \
+		curl -fsSI "$(HPX_ORIGIN)/$$path" >/dev/null; \
+	done; \
+	[ "$$(curl -sS -o /dev/null -w '%{http_code}' "$(HPX_ORIGIN)/")" = 404 ]; \
+	[ "$$(curl -sS -o /dev/null -w '%{http_code}' "$(HPX_ORIGIN)/not-a-public-artifact")" = 404 ]
 
 monorepo-ci: ci paxeer-ci
 

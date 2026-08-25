@@ -1,0 +1,87 @@
+name: Paxeer / HPX Registry
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - paxeer-network/hpx/registry/**
+      - .github/workflows/paxeer-hpx-registry.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: paxeer-hpx-registry-${{ github.sha }}
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/sidiora-labs/layerx-protocol/hpx-registry
+
+jobs:
+  publish:
+    name: Publish registry runtime
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+
+      - name: Build revision-bound registry executables
+        working-directory: paxeer-network/hpx/registry
+        env:
+          SOURCE_REVISION: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          for arch in amd64 arm64; do
+            output="dist/hpx-registry-linux-${arch}"
+            CGO_ENABLED=0 GOOS=linux GOARCH="$arch" \
+              go build -trimpath -ldflags "-s -w -X main.sourceRevision=${SOURCE_REVISION}" -o "$output" .
+            (cd dist && sha256sum "hpx-registry-linux-${arch}" > "hpx-registry-linux-${arch}.sha256")
+          done
+
+      - name: Publish immutable public release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: hpx-registry-${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "Release already exists: $RELEASE_TAG"
+          else
+            gh release create "$RELEASE_TAG" \
+              paxeer-network/hpx/registry/dist/hpx-registry-linux-amd64 \
+              paxeer-network/hpx/registry/dist/hpx-registry-linux-amd64.sha256 \
+              paxeer-network/hpx/registry/dist/hpx-registry-linux-arm64 \
+              paxeer-network/hpx/registry/dist/hpx-registry-linux-arm64.sha256 \
+              --target "$GITHUB_SHA" \
+              --title "HPX Registry ${GITHUB_SHA::12}" \
+              --notes "Revision-bound HPX registry runtime for ${GITHUB_SHA}."
+          fi
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ github.token }}
+
+      - name: Publish revision-bound registry image
+        uses: docker/build-push-action@v6
+        with:
+          context: paxeer-network/hpx/registry
+          file: paxeer-network/hpx/registry/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: SOURCE_REVISION=${{ github.sha }}
+          tags: |
+            ${{ env.IMAGE }}:main
+            ${{ env.IMAGE }}:sha-${{ github.sha }}

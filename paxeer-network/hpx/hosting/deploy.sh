@@ -1,77 +1,127 @@
 #!/usr/bin/env bash
-# =============================================================================
-# Deploy hpx files to the web server
-# Run this on the server hosting get.hyperpaxeer.com
-#
-# Usage:
-#   sudo bash hosting/deploy.sh
-#
-# After first run, set up SSL:
-#   sudo apt install certbot python3-certbot-nginx
-#   sudo certbot --nginx -d node.hyperpaxeer.com
-#   Then uncomment the HTTPS block in the nginx config.
-# =============================================================================
+# Install the revision-bound HPX registry runtime and HTTPS Nginx vhost.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-WEB_ROOT="/var/www/hpx"
-NGINX_CONF="/etc/nginx/sites-available/hpx"
+HPX_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+PAXEER_ROOT="$(cd "${HPX_DIR}/.." && pwd)"
+MONOREPO_ROOT="$(cd "${PAXEER_ROOT}/.." && pwd)"
 
-GRN='\033[0;32m'; CYN='\033[0;36m'; RST='\033[0m'
-ok()   { printf "${GRN}[+]${RST} %s\n" "$*"; }
-info() { printf "${CYN}[*]${RST} %s\n" "$*"; }
+DOMAIN="node.hyperpaxeer.com"
+SOURCE_REVISION="${HPX_SOURCE_REVISION:-$(git -C "$MONOREPO_ROOT" rev-parse HEAD)}"
+ARTIFACTS_ROOT="${HPX_ARTIFACTS_ROOT:-/srv/hpx/artifacts}"
+DATA_DIR="${HPX_DATA_DIR:-/srv/hpx/data}"
+REGISTRY_BIN="${HPX_REGISTRY_BIN:-/usr/local/libexec/hpx-registry}"
+ENV_FILE="${HPX_REGISTRY_ENV:-/etc/hpx-registry.env}"
+UNIT_FILE="/etc/systemd/system/hpx-registry.service"
+NGINX_SITE="/etc/nginx/sites-available/hpx-registry"
+RELEASE_BASE="https://github.com/Sidiora-Labs/LayerX-Protocol/releases/download/hpx-registry-${SOURCE_REVISION}"
 
-[ "$(id -u)" -eq 0 ] || { echo "Run as root"; exit 1; }
+CHAIN_ID="${HPX_CHAIN_ID:-hyperpax_125-1}"
+SEED_PEERS="${HPX_SEED_PEERS:-e9c56cbadc4a96b67f69dcaaa7b4691851e945ca@31.220.74.140:26656}"
+STATESYNC_RPC="${HPX_STATESYNC_RPC:-http://31.220.74.140:26657}"
+STATESYNC_SERVERS="${HPX_STATESYNC_RPC_SERVERS:-31.220.74.140:26657,31.220.74.140:26657}"
 
-# Install nginx if missing
-if ! command -v nginx >/dev/null 2>&1; then
-    info "Installing nginx..."
-    apt-get update -qq && apt-get install -y nginx >/dev/null 2>&1
-    ok "nginx installed"
+say() { printf '\033[0;36m[deploy]\033[0m %s\n' "$*"; }
+die() { printf '\033[0;31m[deploy] ERROR:\033[0m %s\n' "$*" >&2; exit 1; }
+
+[ "$(id -u)" -eq 0 ] || die "run as root"
+[[ "$SOURCE_REVISION" =~ ^[0-9a-f]{40}$ ]] || die "invalid source revision: $SOURCE_REVISION"
+if [ -n "${HPX_REGISTER_TOKEN:-}" ] && [[ ! "$HPX_REGISTER_TOKEN" =~ ^[A-Za-z0-9._~-]+$ ]]; then
+  die "HPX_REGISTER_TOKEN may contain only letters, digits, dot, underscore, tilde and hyphen"
 fi
+[ -L "$ARTIFACTS_ROOT/current" ] || die "publish an HPX release before deployment: $ARTIFACTS_ROOT/current"
+for command in curl sha256sum systemctl nginx certbot; do
+  command -v "$command" >/dev/null 2>&1 || die "missing dependency: $command"
+done
 
-# Create web root and copy files
-info "Deploying files to ${WEB_ROOT}..."
-mkdir -p "$WEB_ROOT"
-cp "$PROJECT_DIR/get-hpx.sh"  "$WEB_ROOT/get-hpx.sh"
-cp "$PROJECT_DIR/hpx"         "$WEB_ROOT/hpx"
-cp "$PROJECT_DIR/uninstall.sh" "$WEB_ROOT/uninstall.sh"
+case "$(uname -m)" in
+  x86_64|amd64) registry_arch=amd64 ;;
+  aarch64|arm64) registry_arch=arm64 ;;
+  *) die "unsupported registry architecture: $(uname -m)" ;;
+esac
 
-# Write version file
-VERSION=$(grep '^readonly VERSION=' "$PROJECT_DIR/hpx" | sed 's/.*"\(.*\)"/\1/')
-echo "$VERSION" > "$WEB_ROOT/version.txt"
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+asset="hpx-registry-linux-${registry_arch}"
+say "downloading registry runtime for ${SOURCE_REVISION}"
+curl -fL --retry 5 --max-time 180 -o "$tmp/$asset" "$RELEASE_BASE/$asset"
+curl -fL --retry 5 --max-time 60 -o "$tmp/$asset.sha256" "$RELEASE_BASE/$asset.sha256"
+(
+  cd "$tmp"
+  sha256sum -c "$asset.sha256"
+)
 
-chmod 644 "$WEB_ROOT"/*
-ok "Files deployed"
-
-# Install nginx config
-info "Installing nginx config..."
-cp "$SCRIPT_DIR/nginx.conf" "$NGINX_CONF"
-
-# Enable site
-if [ ! -L /etc/nginx/sites-enabled/hpx ]; then
-    ln -sf "$NGINX_CONF" /etc/nginx/sites-enabled/hpx
+if ! id hpx-registry >/dev/null 2>&1; then
+  useradd --system --home-dir /nonexistent --shell /usr/sbin/nologin hpx-registry
 fi
+install -d -m 0755 /usr/local/libexec "$ARTIFACTS_ROOT" /var/www/certbot
+install -d -o hpx-registry -g hpx-registry -m 0750 "$DATA_DIR"
+install -m 0755 "$tmp/$asset" "${REGISTRY_BIN}.new"
+mv -f "${REGISTRY_BIN}.new" "$REGISTRY_BIN"
 
-# Test and reload
-nginx -t 2>&1
+umask 077
+cat > "$ENV_FILE" <<ENV
+HPX_ADDR=127.0.0.1:8099
+HPX_ARTIFACTS_DIR=${ARTIFACTS_ROOT}/current
+HPX_DATA_DIR=${DATA_DIR}
+HPX_CHAIN_ID=${CHAIN_ID}
+HPX_SEED_PEERS=${SEED_PEERS}
+HPX_STATESYNC_RPC=${STATESYNC_RPC}
+HPX_STATESYNC_RPC_SERVERS=${STATESYNC_SERVERS}
+HPX_REGISTER_TOKEN=${HPX_REGISTER_TOKEN:-}
+ENV
+chmod 0600 "$ENV_FILE"
+
+cat > "$UNIT_FILE" <<UNIT
+[Unit]
+Description=HyperPax HPX distribution and peer registry
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=hpx-registry
+Group=hpx-registry
+EnvironmentFile=${ENV_FILE}
+ExecStart=${REGISTRY_BIN}
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=${ARTIFACTS_ROOT}
+ReadWritePaths=${DATA_DIR}
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+systemctl daemon-reload
+systemctl enable --now hpx-registry.service
+
+say "bootstrapping HTTP vhost for certificate issuance"
+install -m 0644 "$SCRIPT_DIR/nginx-http.conf" "$NGINX_SITE"
+ln -sfn "$NGINX_SITE" /etc/nginx/sites-enabled/hpx-registry
+nginx -t
 systemctl reload nginx
-ok "nginx reloaded"
 
-echo ""
-ok "Deployment complete!"
-echo ""
-echo "  Endpoints:"
-echo "    http://node.hyperpaxeer.com/install    Installer script"
-echo "    http://node.hyperpaxeer.com/hpx        CLI binary"
-echo "    http://node.hyperpaxeer.com/uninstall  Uninstaller"
-echo "    http://node.hyperpaxeer.com/version    Version check"
-echo ""
-echo "  Users install with:"
-echo "    curl -sSL https://node.hyperpaxeer.com/install | sudo bash"
-echo ""
-echo "  Next: set up HTTPS with certbot:"
-echo "    sudo apt install certbot python3-certbot-nginx"
-echo "    sudo certbot --nginx -d get.hyperpaxeer.com"
-echo ""
+certbot_args=(certonly --webroot -w /var/www/certbot -d "$DOMAIN" --non-interactive --agree-tos --keep-until-expiring)
+if [ -n "${LETSENCRYPT_EMAIL:-}" ]; then
+  certbot_args+=(--email "$LETSENCRYPT_EMAIL")
+else
+  certbot_args+=(--register-unsafely-without-email)
+fi
+certbot "${certbot_args[@]}"
+
+say "enabling HTTPS registry vhost"
+install -m 0644 "$SCRIPT_DIR/nginx.conf" "$NGINX_SITE"
+nginx -t
+systemctl reload nginx
+
+say "HPX registry deployed at https://${DOMAIN}"
+say "registry source revision ${SOURCE_REVISION}"

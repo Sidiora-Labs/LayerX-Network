@@ -616,6 +616,17 @@ ac_3 = "ALL GitHub Actions workflows SHALL live under the repository-level .gith
 ac_4 = "PAXEER workflow triggers SHALL be scoped to Paxeer-owned paths wherever the GitHub event model supports path filtering, and workflow, artifact and release names SHALL identify the Paxeer subsystem so they cannot be mistaken for LayerX core outputs."
 ac_5 = "THE root Makefile SHALL expose bounded Paxeer build, lint, test and CI entry points without reusing LayerX build directories, and the Paxeer Makefile SHALL resolve its project root to paxeer-network rather than to the enclosing Git worktree."
 ac_6 = "THE publication boundary SHALL exclude generated binaries, dependency caches, runtime data and credentials from the imported Paxeer tree, and repository auditing SHALL inspect the Git publication set rather than ignored workspace material."
+
+[req.45]
+title = "Public HPX Distribution and Peer Registry"
+story = "As a Paxeer operator joining HyperPax, I want one authenticated public HPX endpoint backed by the monorepo, so that I can install the exact published node runtime, discover peers and operate the node without depending on a private checkout or an obsolete hosting domain."
+ac_1 = "THE HPX publication scripts SHALL derive source paths from paxeer-network/hpx and its enclosing Paxeer subsystem, SHALL accept explicit runtime-config and artifact-root overrides, and SHALL contain no dependency on a machine-specific source checkout."
+ac_2 = "EACH HPX publication SHALL assemble a new immutable release directory containing paxd, every supported architecture-specific libwasmvm runtime, genesis, fullnode and validator configuration, the HPX CLI and lifecycle scripts, chain metadata and a sorted SHA-256 manifest, and SHALL expose it only by atomically changing the current-release pointer after every required input has been copied."
+ac_3 = "THE public origin https://node.hyperpaxeer.com SHALL terminate a certificate valid for that hostname and SHALL serve the installer, HPX CLI, manifest, chain metadata and node artifacts plus the health, registration, peers, nodes, caller-address and state-sync APIs, while directory listings and undeclared filesystem paths remain unavailable."
+ac_4 = "THE registry SHALL run as a restartable unprivileged service bound only to the loopback publication port, SHALL persist its node registry outside the container or process image, SHALL accept only syntactically valid public peer addresses and ports observed at the trusted reverse-proxy boundary, and SHALL rate-limit registration without disclosing deployment secrets."
+ac_5 = "THE public installer and HPX update path SHALL use node.hyperpaxeer.com as the sole default mirror, SHALL verify every downloaded binary, native library and chain configuration file against the published SHA-256 manifest before installation, and SHALL fail closed on a missing artifact, unsupported architecture or checksum mismatch."
+ac_6 = "THE registry runtime executables and container image SHALL be produced from paxeer-network/hpx/registry by repository automation, SHALL be identified by the source revision used to build them, and production deployment SHALL consume a checksum-bound separately published runtime artifact rather than commit generated executables or native libraries to Git."
+ac_7 = "QUALIFICATION SHALL begin from a clean host, install through the public HTTPS command, verify every public endpoint and certificate, restart the registry and recover its persisted peers, reject malformed and spoofed registrations, and prove a downloaded node reaches the declared chain without treating artifact publication alone as node or protocol qualification."
 # --------------------------------------------------------------------------
 # TASKS
 # --------------------------------------------------------------------------
@@ -3873,3 +3884,17 @@ do_5 = "Update the root README and dependency automation to describe and maintai
 verify_cmd = "make paxeer-ci"
 touches = ["paxeer-network","README.md","Makefile",".gitignore",".github/workflows",".github/dependabot.yml","tools/ci/public-repo-audit.sh","spec/layerx-platform/spec.kvx","spec/layerx-platform/requirements.md","spec/layerx-platform/tasks.md","spec/layerx-platform/qualification.kvx"]
 reqs = ["44.1","44.2","44.3","44.4","44.5","44.6"]
+
+[task.37.2]
+title = "Publish the monorepo-native HPX registry and node distribution"
+status = "in_progress"
+wave = 16
+do_1 = "Replace obsolete HPX domains, private fleet examples and project-Quorum source paths with the canonical node.hyperpaxeer.com origin and paths derived from paxeer-network inside this monorepo."
+do_2 = "Make the artifact publisher stage a complete versioned release, require the Paxeer binary and all supported native libraries, write the chain metadata and sorted SHA-256 manifest, and atomically switch the served current-release pointer only after assembly completes."
+do_3 = "Harden the registry's static artifact surface and public registration boundary, package it through root repository automation, and provide a durable loopback-only production service plus Nginx HTTPS reverse-proxy configuration for node.hyperpaxeer.com."
+do_4 = "Make the web installer and HPX node manager verify the checksum manifest for the CLI, binary, native libraries, genesis and node configuration before installing any downloaded artifact."
+do_5 = "Publish the assembled HPX artifacts and registry at node.hyperpaxeer.com from the verified local Paxeer runtime inputs, while leaving generated binaries, native libraries, registry data, certificates and deployment secrets outside Git."
+verify_cmd = "make hpx-public-check"
+symbols = ["artifactHandler","validPublicIP"]
+touches = ["paxeer-network/hpx",".github/workflows/paxeer-hpx-registry.yml","Makefile","tools/ci/public-repo-audit.sh","spec/layerx-platform/spec.kvx","spec/layerx-platform/requirements.md","spec/layerx-platform/tasks.md","spec/layerx-platform/qualification.kvx"]
+reqs = ["45.1","45.2","45.3","45.4","45.5","45.6","45.7"]

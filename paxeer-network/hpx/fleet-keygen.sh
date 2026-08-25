@@ -13,7 +13,7 @@
 #
 # Usage:
 #   ./fleet-keygen.sh                      # servers from registry /api/nodes
-#   SERVERS='147.93.139.18 94.72.119.124' ./fleet-keygen.sh
+#   SERVERS='203.0.113.10 203.0.113.11' ./fleet-keygen.sh
 #   SERVERS_FILE=ips.txt ./fleet-keygen.sh
 #   HPX_PUSH=0 ./fleet-keygen.sh           # skip push (servers already updated)
 # =============================================================================
@@ -24,7 +24,7 @@ readonly HPX_LOCAL="${HPX_LOCAL:-${SELF_DIR}/hpx}"
 readonly WORKDIR="${HPX_WORKDIR:-${SELF_DIR}/.fleet}"
 readonly OPERATORS_FILE="${WORKDIR}/operators.tsv"
 readonly REMOTE_HPX="/usr/local/bin/hpx"
-readonly MIRROR="${HPX_MIRROR:-https://get.cloud.hyperpaxeer.com}"
+readonly MIRROR="${HPX_MIRROR:-https://node.hyperpaxeer.com}"
 readonly SSH_USER="${HPX_SSH_USER:-root}"
 readonly PUSH="${HPX_PUSH:-1}"
 readonly SSH="ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=12 ${HPX_SSH_OPTS:-}"

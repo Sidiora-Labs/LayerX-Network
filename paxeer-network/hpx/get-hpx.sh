@@ -2,7 +2,7 @@
 # =============================================================================
 # HyperPax Node Manager — web installer
 #
-#   curl -sSL https://get.cloud.hyperpaxeer.com/get-hpx.sh | sudo bash
+#   curl -sSL https://node.hyperpaxeer.com/get-hpx.sh | sudo bash
 #
 # Installs the lightweight `hpx` CLI, then launches the interactive setup
 # wizard. The node itself runs as a native paxd binary under systemd — no
@@ -11,7 +11,7 @@
 # =============================================================================
 set -euo pipefail
 
-MIRROR="${HPX_MIRROR:-https://get.cloud.hyperpaxeer.com}"
+MIRROR="${HPX_MIRROR:-https://node.hyperpaxeer.com}"
 INSTALL_DIR="/usr/local/bin"
 
 RST='\033[0m'; BOLD='\033[1m'; DIM='\033[2m'
@@ -58,10 +58,21 @@ fi
 
 # ── Download the hpx CLI ──────────────────────────────────────────────────────
 info "downloading hpx CLI from ${MIRROR}"
+manifest=$(mktemp)
+trap 'rm -f "$manifest" "${INSTALL_DIR}/hpx.new"' EXIT
+curl -fsSL --retry 5 --max-time 60 "${MIRROR}/checksums.txt" -o "$manifest" \
+    || die "could not download ${MIRROR}/checksums.txt"
 curl -fsSL --retry 5 --max-time 60 "${MIRROR}/hpx" -o "${INSTALL_DIR}/hpx.new" \
     || die "could not download ${MIRROR}/hpx"
+want=$(awk '$2 == "hpx" { print $1; exit }' "$manifest")
+[ -n "$want" ] || die "checksum manifest has no hpx entry"
+got=$(sha256sum "${INSTALL_DIR}/hpx.new" | awk '{print $1}')
+[ "$got" = "$want" ] || die "hpx sha256 mismatch (got $got want $want)"
+ok "hpx sha256 verified"
 chmod +x "${INSTALL_DIR}/hpx.new"
 mv -f "${INSTALL_DIR}/hpx.new" "${INSTALL_DIR}/hpx"
+trap - EXIT
+rm -f "$manifest"
 ok "installed ${INSTALL_DIR}/hpx"
 
 # ── Bash completion ───────────────────────────────────────────────────────────
@@ -69,11 +80,13 @@ if [ -d /etc/bash_completion.d ]; then
     cat > /etc/bash_completion.d/hpx <<'COMP'
 _hpx() {
     local cur="${COMP_WORDS[COMP_CWORD]}"
-    local cmds="setup status info logs start stop restart update peers register remove version help"
+    local cmds="setup status info logs start stop restart update peers register statesync validator stake keygen remove version help"
     if [ "$COMP_CWORD" -eq 1 ]; then
         COMPREPLY=($(compgen -W "$cmds" -- "$cur"))
     elif [ "$COMP_CWORD" -eq 2 ] && [ "${COMP_WORDS[1]}" = "peers" ]; then
         COMPREPLY=($(compgen -W "show refresh" -- "$cur"))
+    elif [ "$COMP_CWORD" -eq 2 ] && [ "${COMP_WORDS[1]}" = "validator" ]; then
+        COMPREPLY=($(compgen -W "keygen stake status" -- "$cur"))
     fi
 }
 complete -F _hpx hpx

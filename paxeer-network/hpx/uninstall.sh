@@ -2,7 +2,7 @@
 # =============================================================================
 # HyperPax Node Manager — uninstaller
 #
-#   curl -sSL https://get.cloud.hyperpaxeer.com/uninstall.sh | sudo bash
+#   curl -sSL https://node.hyperpaxeer.com/uninstall.sh | sudo bash
 #
 # Stops + removes the paxd node service and the hpx CLI. Chain data/keys under
 # /root/.paxeer are only deleted if you explicitly confirm.
