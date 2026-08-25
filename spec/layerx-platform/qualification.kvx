@@ -1819,6 +1819,14 @@ observed = "Post-implementation review found production RPC paths fabricated cur
 assumption = "Human qualification must compile and exercise HTTP, WebSocket, simulation and debug RPC against both Tendermint and Autobahn paths; verify the unsafe keyring gate on local and live chain IDs; inject missing, nil, partial, pruned, corrupt, overflow and cancellation cases; prove no partial block, receipt, fee-history or trace response is emitted; and prove newHeads resumes only after the Autobahn producer supplies canonical parent, transaction and receipt roots. Paxeer has no Ethereum chain database, so bad-block database operations must return the declared unsupported error, and CurrentHeader can return nil before any canonical header has been cached after its bounded consensus lookup fails. No build, test, format, RPC process or passing result is asserted by this source repair."
 severity = "post-implementation-repair"
 
+[observation.37.1.13]
+task = "37.1"
+file = "paxeer-network/scripts/initialize_local_chain.sh, paxeer-network/loadtest/scripts/populate_genesis_accounts.py"
+symbol = "local chain reset and genesis-account population"
+observed = "Post-implementation review found the local-chain initializer unconditionally recursively deleted the default node home, accepted unquoted override paths, ignored its selected Python interpreter, and let its account helper invoke a fixed binary and home through shell command strings. The repair requires an explicit PAX_LOCAL_RESET=1 gate, resolves and confines the target below HOME, uses a selected executable and home consistently, removes shell command construction, quotes configuration paths, validates installation output, and performs grouped genesis rewrites through checked temporary files."
+assumption = "Human qualification must run the initializer only in a disposable home; prove unset authorization, HOME itself, parent traversal, missing Python, missing paxd and paths containing spaces are refused safely; then initialize with default and overridden homes and compare the resulting genesis and generated accounts. The script remains intentionally destructive after the explicit local-reset gate and still invokes make install, so it must not be used against a production node home. No shell execution, install, chain start or generated-genesis result is asserted by this source repair."
+severity = "post-implementation-repair"
+
 [observation.11.1.1]
 task = "11.1"
 file = "agent/crates/layerx-agentd/src/budget/create.rs, agent/crates/layerx-agentd/src/sign_verify.rs, agent/crates/layerx-agentd/tests/budget_create.rs, human/crates/layerx-human-service/tests/agent_create.rs, human/crates/layerx-human-service/tests/agent_controls.rs"

@@ -13,16 +13,20 @@ PARALLEISM=64
 # Does not need to be thread safe, each thread should only be writing to its own index
 global_accounts_mapping = {}
 home_path = os.path.expanduser('~')
+pax_home = os.path.realpath(os.environ.get("PAX_HOME", os.path.join(home_path, ".pax")))
+paxd_bin = os.path.realpath(os.environ.get("PAXD_BIN", os.path.join(home_path, "go/bin/paxd")))
 
 def add_key(account_name, local=False):
     if local:
-        add_key_cmd = f"yes | ~/go/bin/paxd keys add {account_name} --keyring-backend test"
+        add_key_cmd = [paxd_bin, "keys", "add", account_name, "--keyring-backend", "test", "--home", pax_home]
+        key_input = b"yes\n"
     else:
-        add_key_cmd = f"printf '12345678\n' | ~/go/bin/paxd keys add {account_name}"
+        add_key_cmd = [paxd_bin, "keys", "add", account_name, "--home", pax_home]
+        key_input = b"12345678\n"
     add_key_output = subprocess.check_output(
-        [add_key_cmd],
+        add_key_cmd,
+        input=key_input,
         stderr=subprocess.STDOUT,
-        shell=True,
     ).decode()
 
     splitted_outputs = add_key_output.strip().split('\n')
@@ -94,7 +98,7 @@ def main():
     if len(args) > 1 and args[1] == "loc":
         is_local = True
 
-    genesis_json_file_path = f"{home_path}/.pax/config/genesis.json"
+    genesis_json_file_path = os.path.join(pax_home, "config/genesis.json")
     genesis_file = read_genesis_file(genesis_json_file_path)
 
     num_threads = max(1, number_of_accounts // PARALLEISM)
@@ -126,7 +130,10 @@ def main():
     num_accounts_created = len([account for account in account_info if account != 0])
     print(f'Created {num_accounts_created} accounts')
 
-    assert num_accounts_created >= number_of_accounts
+    if num_accounts_created < number_of_accounts:
+        raise RuntimeError(
+            f"created {num_accounts_created} accounts, expected {number_of_accounts}"
+        )
     write_genesis_file(genesis_json_file_path, genesis_file)
 
 if __name__ == "__main__":
