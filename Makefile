@@ -2358,6 +2358,7 @@ PAXEER_NESTED_GO_DIRS := paxeer-network/hpx/registry \
 	paxeer-network/sdk/cosmovisor paxeer-network/sdk/ics23
 PAXEER_TOOLS_DIR := $(CURDIR)/build/paxeer-tools
 PAXEER_GOLANGCI_LINT := $(PAXEER_TOOLS_DIR)/golangci-lint
+PAXEER_GOLANGCI_LINT_SUM_FILE := tools/workspace/checksums/golangci-lint-v2.8.0.h1
 
 paxeer-build:
 	GOPROXY=off $(PAXEER_MAKE) build
@@ -2402,13 +2403,26 @@ paxeer-npm-build: paxeer-hardhat-compilers-ready
 
 paxeer-npm-static-test: paxeer-npm-dependencies-ready
 	npm --prefix paxeer-network/contracts exec -- tsc --noEmit
-	find paxeer-network/integration_test/dapp_tests -type f -name '*.js' -exec node --check {} +
+	find paxeer-network/integration_test/dapp_tests -type f -name '*.js' -exec node --check {} \;
 	npm --prefix paxeer-network/integration_test/rpc_tests exec -- tsc --noEmit
 	$(MAKE) paxeer-docs-static-test
 
 paxeer-tools-install:
-	mkdir -p $(PAXEER_TOOLS_DIR)
-	GOBIN=$(PAXEER_TOOLS_DIR) go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.8.0
+	@set -eu; \
+	if test ! -f "$(PAXEER_GOLANGCI_LINT_SUM_FILE)"; then \
+		echo "paxeer-tools-install: missing reviewed module checksum $(PAXEER_GOLANGCI_LINT_SUM_FILE)" >&2; \
+		echo "record the exact Sum from: go mod download -json github.com/golangci/golangci-lint/v2@v2.8.0" >&2; \
+		exit 1; \
+	fi; \
+	expected=$$(tr -d '\r\n' < "$(PAXEER_GOLANGCI_LINT_SUM_FILE)"); \
+	case "$$expected" in h1:*) ;; *) echo "paxeer-tools-install: invalid h1 checksum record" >&2; exit 1 ;; esac; \
+	mkdir -p "$(PAXEER_TOOLS_DIR)"; \
+	metadata="$(PAXEER_TOOLS_DIR)/golangci-lint-v2.8.0.module.json"; \
+	go mod download -json github.com/golangci/golangci-lint/v2@v2.8.0 > "$$metadata"; \
+	actual=$$(awk -F '"' '$$2 == "Sum" { print $$4; exit }' "$$metadata"); \
+	test -n "$$actual" || { echo "paxeer-tools-install: module download did not report a Sum" >&2; exit 1; }; \
+	test "$$actual" = "$$expected" || { echo "paxeer-tools-install: golangci-lint module checksum mismatch" >&2; exit 1; }; \
+	GOBIN="$(PAXEER_TOOLS_DIR)" go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.8.0
 
 paxeer-manifest-install: workspace-inventory-check paxeer-npm-install paxeer-tools-install
 	@set -eu; for manifest in $(PAXEER_LOCKED_RUST_MANIFESTS); do cargo fetch --manifest-path "$$manifest" --locked; done
