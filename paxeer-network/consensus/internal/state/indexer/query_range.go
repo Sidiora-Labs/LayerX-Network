@@ -1,6 +1,8 @@
 package indexer
 
 import (
+	"fmt"
+	"math"
 	"time"
 
 	"github.com/sidiora-labs/paxeer-network/consensus/internal/pubsub/query/syntax"
@@ -31,48 +33,44 @@ func (qr QueryRange) AnyBound() interface{} {
 
 // LowerBoundValue returns the value for the lower bound. If the lower bound is
 // nil, nil will be returned.
-func (qr QueryRange) LowerBoundValue() interface{} {
-	if qr.LowerBound == nil {
-		return nil
-	}
-
-	if qr.IncludeLowerBound {
-		return qr.LowerBound
-	}
-
-	switch t := qr.LowerBound.(type) {
-	case int64:
-		return t + 1
-
-	case time.Time:
-		return t.Unix() + 1
-
-	default:
-		panic("not implemented")
-	}
+func (qr QueryRange) LowerBoundValue() (interface{}, error) {
+	return normalizedBound(qr.LowerBound, qr.IncludeLowerBound, true)
 }
 
 // UpperBoundValue returns the value for the upper bound. If the upper bound is
 // nil, nil will be returned.
-func (qr QueryRange) UpperBoundValue() interface{} {
-	if qr.UpperBound == nil {
-		return nil
+func (qr QueryRange) UpperBoundValue() (interface{}, error) {
+	return normalizedBound(qr.UpperBound, qr.IncludeUpperBound, false)
+}
+
+func normalizedBound(bound interface{}, inclusive bool, lower bool) (interface{}, error) {
+	if bound == nil {
+		return nil, nil
 	}
 
-	if qr.IncludeUpperBound {
-		return qr.UpperBound
-	}
-
-	switch t := qr.UpperBound.(type) {
+	var value int64
+	switch typed := bound.(type) {
 	case int64:
-		return t - 1
-
+		value = typed
 	case time.Time:
-		return t.Unix() - 1
-
+		value = typed.Unix()
 	default:
-		panic("not implemented")
+		return nil, fmt.Errorf("unsupported query range bound type %T", bound)
 	}
+
+	if inclusive {
+		return value, nil
+	}
+	if lower {
+		if value == math.MaxInt64 {
+			return nil, fmt.Errorf("exclusive lower query range bound overflows int64")
+		}
+		return value + 1, nil
+	}
+	if value == math.MinInt64 {
+		return nil, fmt.Errorf("exclusive upper query range bound underflows int64")
+	}
+	return value - 1, nil
 }
 
 // LookForRanges returns a mapping of QueryRanges and the matching indexes in

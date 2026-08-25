@@ -1865,6 +1865,14 @@ observed = "Post-implementation review found the legacy multisignature public-ke
 assumption = "Human qualification must compile and run multisignature, store-v2 commitment, root multistore, scheduler and tracing regressions; prove raw multisignature verification returns false without a panic, structured multisignature verification still follows VerifyMultisignature, wrapper handlers receive every mounted store, trace setup cannot replace the commit store with nil, and child stores cannot be mistaken for owners of the composite app hash. The deprecated storage CommitKVStore RootHash contract still cannot report an unavailable capability as an error; routed flatKV views therefore retain the separately recorded explicit fail-closed compatibility boundary. No build, test, format or runtime result is asserted by this source repair."
 severity = "post-implementation-repair"
 
+[observation.37.1.19]
+task = "37.1"
+file = "paxeer-network/consensus/internal/state/indexer/query_range.go, paxeer-network/consensus/internal/state/indexer/block/kv/kv.go, paxeer-network/consensus/internal/state/indexer/tx/kv/kv.go"
+symbol = "QueryRange.LowerBoundValue, QueryRange.UpperBoundValue, BlockerIndexer.matchRange, TxIndex.matchRange"
+observed = "Post-implementation review found remotely supplied range conditions could reach process panics when the query parser produced a non-numeric bound, and exclusive bounds at the int64 limits wrapped into the opposite end of the index. The transaction index also panicked on range-iterator construction or traversal failures. The repair makes bound normalization error-returning, accepts only numeric and time values, rejects exclusive-bound overflow and underflow, and propagates bound and database failures through both block and transaction Search results without clamping or returning a fabricated empty match."
+assumption = "Human qualification must run block and transaction index searches with inclusive and exclusive integer and time bounds, string range operands, int64 extrema, corrupted iterator state and cancelled contexts, and prove malformed remote queries return errors without process termination or false matches. No build, test, format or runtime result is asserted by this source repair."
+severity = "consensus-safety"
+
 [observation.11.1.1]
 task = "11.1"
 file = "agent/crates/layerx-agentd/src/budget/create.rs, agent/crates/layerx-agentd/src/sign_verify.rs, agent/crates/layerx-agentd/tests/budget_create.rs, human/crates/layerx-human-service/tests/agent_create.rs, human/crates/layerx-human-service/tests/agent_controls.rs"

@@ -225,8 +225,14 @@ func (idx *BlockerIndexer) matchRange(
 	}
 
 	tmpHeights := make(map[string][]byte)
-	lowerBound := qr.LowerBoundValue()
-	upperBound := qr.UpperBoundValue()
+	lowerBound, err := qr.LowerBoundValue()
+	if err != nil {
+		return nil, fmt.Errorf("invalid lower bound for %q: %w", qr.Key, err)
+	}
+	upperBound, err := qr.UpperBoundValue()
+	if err != nil {
+		return nil, fmt.Errorf("invalid upper bound for %q: %w", qr.Key, err)
+	}
 
 	it, err := dbm.IteratePrefix(idx.store, startKey)
 	if err != nil {
@@ -251,24 +257,22 @@ iter:
 			continue
 		}
 
-		if _, ok := qr.AnyBound().(int64); ok {
-			v, err := strconv.ParseInt(eventValue, 10, 64)
-			if err != nil {
-				continue iter
-			}
+		v, err := strconv.ParseInt(eventValue, 10, 64)
+		if err != nil {
+			continue iter
+		}
 
-			include := true
-			if lowerBound != nil && v < lowerBound.(int64) {
-				include = false
-			}
+		include := true
+		if lowerBound != nil && v < lowerBound.(int64) {
+			include = false
+		}
 
-			if upperBound != nil && v > upperBound.(int64) {
-				include = false
-			}
+		if upperBound != nil && v > upperBound.(int64) {
+			include = false
+		}
 
-			if include {
-				tmpHeights[string(it.Value())] = it.Value()
-			}
+		if include {
+			tmpHeights[string(it.Value())] = it.Value()
 		}
 
 		select {

@@ -181,7 +181,10 @@ func (txi *TxIndex) Search(ctx context.Context, q *query.Query) ([]*abci.TxResul
 
 		for _, qr := range ranges {
 			if !hashesInitialized {
-				filteredHashes = txi.matchRange(ctx, qr, prefixFromCompositeKey(qr.Key), filteredHashes, true)
+				filteredHashes, err = txi.matchRange(ctx, qr, prefixFromCompositeKey(qr.Key), filteredHashes, true)
+				if err != nil {
+					return nil, err
+				}
 				hashesInitialized = true
 
 				// Ignore any remaining conditions if the first condition resulted
@@ -190,7 +193,10 @@ func (txi *TxIndex) Search(ctx context.Context, q *query.Query) ([]*abci.TxResul
 					break
 				}
 			} else {
-				filteredHashes = txi.matchRange(ctx, qr, prefixFromCompositeKey(qr.Key), filteredHashes, false)
+				filteredHashes, err = txi.matchRange(ctx, qr, prefixFromCompositeKey(qr.Key), filteredHashes, false)
+				if err != nil {
+					return nil, err
+				}
 			}
 		}
 	}
@@ -429,20 +435,26 @@ func (txi *TxIndex) matchRange(
 	startKey []byte,
 	filteredHashes map[string][]byte,
 	firstRun bool,
-) map[string][]byte {
+) (map[string][]byte, error) {
 	// A previous match was attempted but resulted in no matches, so we return
 	// no matches (assuming AND operand).
 	if !firstRun && len(filteredHashes) == 0 {
-		return filteredHashes
+		return filteredHashes, nil
 	}
 
 	tmpHashes := make(map[string][]byte)
-	lowerBound := qr.LowerBoundValue()
-	upperBound := qr.UpperBoundValue()
+	lowerBound, err := qr.LowerBoundValue()
+	if err != nil {
+		return nil, fmt.Errorf("invalid lower bound for %q: %w", qr.Key, err)
+	}
+	upperBound, err := qr.UpperBoundValue()
+	if err != nil {
+		return nil, fmt.Errorf("invalid upper bound for %q: %w", qr.Key, err)
+	}
 
 	it, err := dbm.IteratePrefix(txi.store, startKey)
 	if err != nil {
-		panic(err)
+		return nil, fmt.Errorf("failed to create prefix iterator: %w", err)
 	}
 	defer func() { _ = it.Close() }()
 
@@ -452,31 +464,22 @@ iter:
 		if err != nil {
 			continue
 		}
-		if _, ok := qr.AnyBound().(int64); ok {
-			v, err := strconv.ParseInt(value, 10, 64)
-			if err != nil {
-				continue iter
-			}
+		v, err := strconv.ParseInt(value, 10, 64)
+		if err != nil {
+			continue iter
+		}
 
-			include := true
-			if lowerBound != nil && v < lowerBound.(int64) {
-				include = false
-			}
+		include := true
+		if lowerBound != nil && v < lowerBound.(int64) {
+			include = false
+		}
 
-			if upperBound != nil && v > upperBound.(int64) {
-				include = false
-			}
+		if upperBound != nil && v > upperBound.(int64) {
+			include = false
+		}
 
-			if include {
-				tmpHashes[string(it.Value())] = it.Value()
-			}
-
-			// XXX: passing time in a ABCI Events is not yet implemented
-			// case time.Time:
-			// 	v := strconv.ParseInt(extractValueFromKey(it.Key()), 10, 64)
-			// 	if v == r.upperBound {
-			// 		break
-			// 	}
+		if include {
+			tmpHashes[string(it.Value())] = it.Value()
 		}
 
 		// Potentially exit early.
@@ -487,7 +490,7 @@ iter:
 		}
 	}
 	if err := it.Error(); err != nil {
-		panic(err)
+		return nil, fmt.Errorf("range iterator failed: %w", err)
 	}
 
 	if len(tmpHashes) == 0 || firstRun {
@@ -498,7 +501,7 @@ iter:
 		// return no matches (assuming AND operand).
 		//
 		// 2. A previous match was not attempted, so we return all results.
-		return tmpHashes
+		return tmpHashes, nil
 	}
 
 	// Remove/reduce matches in filteredHashes that were not found in this
@@ -516,7 +519,7 @@ iter:
 		}
 	}
 
-	return filteredHashes
+	return filteredHashes, nil
 }
 
 // ##########################  Keys  #############################
