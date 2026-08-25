@@ -7,9 +7,9 @@ use std::time::Duration;
 
 use k256::ecdsa::SigningKey;
 use layerx_paxeer_client::{
-    balance_leaf, raw_call, EmergencyExit, EndpointConfig, EndpointFault, ExecutionOutcome,
-    ExitConfig, ExitEligibility, ExitError, ExitEvidence, ExitProgress, ExitRefusal,
-    GuarantorAttestation, Json, PaxeerClient, TransactionHash, TransactionInclusion,
+    balance_leaf, raw_call, EmergencyExit, EndpointConfig, EndpointFault, EndpointTransport,
+    ExecutionOutcome, ExitConfig, ExitEligibility, ExitError, ExitEvidence, ExitProgress,
+    ExitRefusal, GuarantorAttestation, Json, PaxeerClient, TransactionHash, TransactionInclusion,
 };
 use layerx_types::intent::EvmAddress;
 use sha2::{Digest as _, Sha256};
@@ -66,6 +66,8 @@ impl Anvil {
             let endpoint = EndpointConfig {
                 url: format!("http://127.0.0.1:{port}"),
                 request_timeout: Duration::from_secs(10),
+                transport: EndpointTransport::LocalEmulator,
+                expected_chain_id: 31_337,
             };
             let child = Command::new(anvil_binary())
                 .arg("--port")
@@ -482,6 +484,8 @@ fn prove_core_endpoint_is_unavailable() {
     let endpoint = EndpointConfig {
         url: format!("http://127.0.0.1:{port}"),
         request_timeout: Duration::from_millis(100),
+        transport: EndpointTransport::LocalEmulator,
+        expected_chain_id: 31_337,
     };
     let failure = match raw_call(&endpoint, "layerx_getFinalisedCheckpoint", &[]) {
         Err(failure) => failure,
@@ -497,6 +501,7 @@ fn prove_core_endpoint_is_unavailable() {
 fn exit_client(anvil: &Anvil, contract: EvmAddress) -> EmergencyExit {
     EmergencyExit::new(ExitConfig {
         endpoints: vec![anvil.endpoint.clone()],
+        minimum_endpoint_agreement: 1,
         exit_contract: contract,
         required_confirmations: 2,
         poll_cadence: Duration::from_millis(20),

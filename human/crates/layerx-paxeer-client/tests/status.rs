@@ -6,8 +6,8 @@ use std::time::Duration;
 
 use layerx_paxeer_client::{
     raw_call, BoundaryHealth, ChainStatus, ContractStatus, DelayExpectation, EndpointConfig,
-    EndpointFault, EndpointStatus, FinalityStage, FinalityTracker, Json, TrackerConfig,
-    TransactionHash,
+    EndpointFault, EndpointStatus, EndpointTransport, FinalityStage, FinalityTracker, Json,
+    TrackerConfig, TransactionHash,
 };
 
 const FUNDED: &str = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266";
@@ -45,6 +45,8 @@ impl Anvil {
             let endpoint = EndpointConfig {
                 url: format!("http://127.0.0.1:{port}"),
                 request_timeout: Duration::from_secs(5),
+                transport: EndpointTransport::LocalEmulator,
+                expected_chain_id: 31_337,
             };
             let child = Command::new(anvil_binary())
                 .arg("--port")
@@ -122,6 +124,7 @@ fn tracker(
     FinalityTracker::new(
         TrackerConfig {
             endpoints,
+            minimum_endpoint_agreement: 1,
             required_confirmations,
             poll_cadence: Duration::from_millis(25),
             delayed_after_polls,
@@ -255,6 +258,8 @@ fn failover_degradation_remains_distinct_from_chain_delay() {
     let dead = EndpointConfig {
         url: format!("http://127.0.0.1:{}", next_port()),
         request_timeout: Duration::from_millis(100),
+        transport: EndpointTransport::LocalEmulator,
+        expected_chain_id: 31_337,
     };
     let dead_url = dead.url.clone();
     let transaction = transfer(&anvil);

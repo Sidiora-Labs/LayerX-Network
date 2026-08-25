@@ -11,8 +11,9 @@ use layerx_agent_api::prepare::TimestampBound as AgentTimestampBound;
 use layerx_agent_api::{Amount as AgentAmount, Sequence, TimestampSeconds};
 use layerx_paxeer_client::{
     account_address, raw_call, AgentCreditContext, CreditFault, CreditPath, CustodyFault,
-    DepositFailure, DepositProof, EndpointConfig, ExecutionOutcome, FinalityReport, FinalityStage,
-    FinalityTracker, FinalizedCheckpoint, Json, PaxeerClient, ProofFault, TrackerConfig,
+    DepositFailure, DepositProof, EndpointConfig, EndpointTransport, ExecutionOutcome,
+    FinalityReport, FinalityStage, FinalityTracker, FinalizedCheckpoint, Json, PaxeerClient,
+    ProofFault, TrackerConfig,
     TransactionHash, TransactionInclusion,
 };
 use layerx_proof::checkpoint::{
@@ -81,6 +82,8 @@ impl Anvil {
             let endpoint = EndpointConfig {
                 url: format!("http://127.0.0.1:{port}"),
                 request_timeout: Duration::from_secs(5),
+                transport: EndpointTransport::LocalEmulator,
+                expected_chain_id: 31_337,
             };
             let child = Command::new(anvil_binary())
                 .arg("--port")
@@ -176,6 +179,7 @@ fn final_report(anvil: &Anvil, transaction: TransactionHash) -> FinalityReport {
     let mut tracker = FinalityTracker::new(
         TrackerConfig {
             endpoints: vec![anvil.endpoint.clone()],
+            minimum_endpoint_agreement: 1,
             required_confirmations: 1,
             poll_cadence: Duration::from_millis(20),
             delayed_after_polls: 100,

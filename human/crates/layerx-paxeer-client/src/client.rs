@@ -1,7 +1,9 @@
 use layerx_types::intent::EvmAddress;
 
 use crate::json::Json;
-use crate::rpc::{parse_url, raw_call, EndpointConfig, EndpointFailure, EndpointFault};
+use crate::rpc::{
+    raw_call, validate_endpoint, EndpointConfig, EndpointFailure, EndpointFault,
+};
 
 /// Exact 32-byte Paxeer transaction hash.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -127,14 +129,25 @@ pub struct EndpointError {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ClientConfigError {
     NoEndpoints,
-    InvalidEndpointUrl { url: String },
+    InvalidEndpoint {
+        url: String,
+        fault: EndpointFault,
+    },
     ZeroRequestTimeout { url: String },
+    InconsistentChainBinding {
+        url: String,
+        expected: u64,
+        actual: u64,
+    },
+    MixedTransportModes,
+    DuplicateEndpoint { url: String },
 }
 
 /// Read-only Paxeer client over one or more declared endpoints.
 #[derive(Clone, Debug)]
 pub struct PaxeerClient {
     endpoints: Vec<EndpointConfig>,
+    expected_chain_id: u64,
 }
 
 impl PaxeerClient {
@@ -147,19 +160,74 @@ impl PaxeerClient {
         if endpoints.is_empty() {
             return Err(ClientConfigError::NoEndpoints);
         }
+        let expected_chain_id = endpoints[0].expected_chain_id;
+        let production = matches!(
+            &endpoints[0].transport,
+            crate::rpc::EndpointTransport::PinnedTls { .. }
+        );
+        let mut urls = std::collections::BTreeSet::new();
         for endpoint in &endpoints {
-            if parse_url(&endpoint.url).is_none() {
-                return Err(ClientConfigError::InvalidEndpointUrl {
-                    url: endpoint.url.clone(),
-                });
-            }
+            validate_endpoint(endpoint).map_err(|fault| ClientConfigError::InvalidEndpoint {
+                url: endpoint.url.clone(),
+                fault,
+            })?;
             if endpoint.request_timeout.is_zero() {
                 return Err(ClientConfigError::ZeroRequestTimeout {
                     url: endpoint.url.clone(),
                 });
             }
+            if endpoint.expected_chain_id != expected_chain_id {
+                return Err(ClientConfigError::InconsistentChainBinding {
+                    url: endpoint.url.clone(),
+                    expected: expected_chain_id,
+                    actual: endpoint.expected_chain_id,
+                });
+            }
+            if matches!(
+                &endpoint.transport,
+                crate::rpc::EndpointTransport::PinnedTls { .. }
+            ) != production
+            {
+                return Err(ClientConfigError::MixedTransportModes);
+            }
+            if !urls.insert(endpoint.url.clone()) {
+                return Err(ClientConfigError::DuplicateEndpoint {
+                    url: endpoint.url.clone(),
+                });
+            }
         }
-        Ok(Self { endpoints })
+        Ok(Self {
+            endpoints,
+            expected_chain_id,
+        })
+    }
+
+    fn verify_chain(&self, endpoint: &EndpointConfig) -> Result<(), EndpointFailure> {
+        let value = raw_call(endpoint, "eth_chainId", &[])?;
+        let actual = quantity(&value).map_err(|detail| EndpointFailure {
+            url: endpoint.url.clone(),
+            fault: EndpointFault::UnexpectedValue { detail },
+        })?;
+        if actual != self.expected_chain_id {
+            return Err(EndpointFailure {
+                url: endpoint.url.clone(),
+                fault: EndpointFault::ChainMismatch {
+                    expected: self.expected_chain_id,
+                    actual,
+                },
+            });
+        }
+        Ok(())
+    }
+
+    fn bound_call(
+        &self,
+        endpoint: &EndpointConfig,
+        method: &str,
+        params: &[Json],
+    ) -> Result<Json, EndpointFailure> {
+        self.verify_chain(endpoint)?;
+        raw_call(endpoint, method, params)
     }
 
     fn read<T>(
@@ -171,7 +239,7 @@ impl PaxeerClient {
     ) -> Result<T, EndpointError> {
         let mut failures = Vec::new();
         for endpoint in &self.endpoints {
-            match raw_call(endpoint, method, params) {
+            match self.bound_call(endpoint, method, params) {
                 Ok(value) => match decode(&value) {
                     Ok(decoded) => {
                         failovers.append(&mut failures);
@@ -326,6 +394,140 @@ impl PaxeerClient {
         })
     }
 
+    pub(crate) fn agreed_finality_observation(
+        &self,
+        transaction: TransactionHash,
+        minimum_agreement: usize,
+    ) -> Result<(FinalityObservation, Vec<EndpointFailure>), EndpointError> {
+        let mut failures = Vec::new();
+        let mut observations = Vec::new();
+        for endpoint in &self.endpoints {
+            match self.endpoint_finality_observation(endpoint, transaction) {
+                Ok(observation) => observations.push((endpoint.url.clone(), observation)),
+                Err(failure) => failures.push(failure),
+            }
+        }
+        for (_, candidate) in &observations {
+            let agreeing = observations
+                .iter()
+                .filter(|(_, observed)| observed.same_chain_fact(candidate))
+                .collect::<Vec<_>>();
+            if agreeing.len() >= minimum_agreement {
+                let head = agreeing
+                    .iter()
+                    .map(|(_, observed)| observed.head)
+                    .min()
+                    .unwrap_or(candidate.head);
+                failures.extend(observations.iter().filter_map(|(url, observed)| {
+                    (!observed.same_chain_fact(candidate)).then_some(EndpointFailure {
+                        url: url.clone(),
+                        fault: EndpointFault::InconsistentObservation,
+                    })
+                }));
+                return Ok((
+                    FinalityObservation {
+                        head,
+                        transaction: candidate.transaction,
+                        canonical_block: candidate.canonical_block,
+                    },
+                    failures,
+                ));
+            }
+        }
+        failures.extend(observations.into_iter().map(|(url, _)| EndpointFailure {
+            url,
+            fault: EndpointFault::InconsistentObservation,
+        }));
+        Err(EndpointError { failures })
+    }
+
+    fn endpoint_finality_observation(
+        &self,
+        endpoint: &EndpointConfig,
+        transaction: TransactionHash,
+    ) -> Result<FinalityObservation, EndpointFailure> {
+        self.verify_chain(endpoint)?;
+        let head = raw_call(endpoint, "eth_blockNumber", &[]).and_then(|value| {
+            quantity(&value).map_err(|detail| EndpointFailure {
+                url: endpoint.url.clone(),
+                fault: EndpointFault::UnexpectedValue { detail },
+            })
+        })?;
+        let anchor_parameters = [Json::Text(format!("0x{head:x}")), Json::Bool(false)];
+        let anchor_before = raw_call(endpoint, "eth_getBlockByNumber", &anchor_parameters)
+            .and_then(|value| {
+                block_reference(&value).map_err(|detail| EndpointFailure {
+                    url: endpoint.url.clone(),
+                    fault: EndpointFault::UnexpectedValue { detail },
+                })
+            })?
+            .filter(|anchor| anchor.number == head)
+            .ok_or_else(|| EndpointFailure {
+                url: endpoint.url.clone(),
+                fault: EndpointFault::InconsistentObservation,
+            })?;
+        let receipt = raw_call(
+            endpoint,
+            "eth_getTransactionReceipt",
+            &[Json::Text(transaction.to_hex())],
+        )?;
+        let included = inclusion(&receipt).map_err(|detail| EndpointFailure {
+            url: endpoint.url.clone(),
+            fault: EndpointFault::UnexpectedValue { detail },
+        })?;
+        let (transaction_view, canonical_block) = if let Some(included) = included {
+            if included.block.number > head {
+                return Err(EndpointFailure {
+                    url: endpoint.url.clone(),
+                    fault: EndpointFault::InconsistentObservation,
+                });
+            }
+            let block = raw_call(
+                endpoint,
+                "eth_getBlockByNumber",
+                &[
+                    Json::Text(format!("0x{:x}", included.block.number)),
+                    Json::Bool(false),
+                ],
+            )?;
+            let canonical = block_reference(&block).map_err(|detail| EndpointFailure {
+                url: endpoint.url.clone(),
+                fault: EndpointFault::UnexpectedValue { detail },
+            })?;
+            (TransactionView::Included(included), canonical)
+        } else {
+            let value = raw_call(
+                endpoint,
+                "eth_getTransactionByHash",
+                &[Json::Text(transaction.to_hex())],
+            )?;
+            let view = if value.is_null() {
+                TransactionView::Unknown
+            } else {
+                TransactionView::Pending
+            };
+            (view, None)
+        };
+        let anchor_after = raw_call(endpoint, "eth_getBlockByNumber", &anchor_parameters)
+            .and_then(|value| {
+                block_reference(&value).map_err(|detail| EndpointFailure {
+                    url: endpoint.url.clone(),
+                    fault: EndpointFault::UnexpectedValue { detail },
+                })
+            })?;
+        if anchor_after != Some(anchor_before) {
+            return Err(EndpointFailure {
+                url: endpoint.url.clone(),
+                fault: EndpointFault::InconsistentObservation,
+            });
+        }
+        Ok(FinalityObservation {
+            head,
+            transaction: transaction_view,
+            canonical_block,
+        })
+    }
+
     /// Executes a read-only contract call against the latest state.
     ///
     /// # Errors
@@ -357,6 +559,19 @@ impl PaxeerClient {
             ],
             variable_bytes,
         )
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct FinalityObservation {
+    pub head: u64,
+    pub transaction: TransactionView,
+    pub canonical_block: Option<BlockRef>,
+}
+
+impl FinalityObservation {
+    fn same_chain_fact(&self, other: &Self) -> bool {
+        self.transaction == other.transaction && self.canonical_block == other.canonical_block
     }
 }
 

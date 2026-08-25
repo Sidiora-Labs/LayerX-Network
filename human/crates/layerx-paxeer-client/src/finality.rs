@@ -4,12 +4,13 @@ use crate::client::{
     ClientConfigError, EndpointError, PaxeerClient, TransactionHash, TransactionInclusion,
     TransactionView,
 };
-use crate::rpc::{EndpointConfig, EndpointFailure};
+use crate::rpc::{EndpointConfig, EndpointFailure, EndpointTransport};
 
 /// Declared tracking configuration: endpoints, depth, cadence and stall bound.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TrackerConfig {
     pub endpoints: Vec<EndpointConfig>,
+    pub minimum_endpoint_agreement: usize,
     pub required_confirmations: u64,
     pub poll_cadence: Duration,
     pub delayed_after_polls: u64,
@@ -22,6 +23,9 @@ pub enum TrackerConfigError {
     ZeroRequiredConfirmations,
     ZeroPollCadence,
     ZeroDelayedAfterPolls,
+    ZeroEndpointAgreement,
+    InsufficientEndpointAgreement,
+    ProductionAgreementRequiresTwo,
 }
 
 /// The complete staged state matrix of one tracked custody transaction.
@@ -99,6 +103,7 @@ pub struct FinalityTracker {
     required_confirmations: u64,
     poll_cadence: Duration,
     delayed_after_polls: u64,
+    minimum_endpoint_agreement: usize,
     recorded: Option<TransactionInclusion>,
     lost: Option<TransactionInclusion>,
     last_observation: Option<(u64, FinalityStage)>,
@@ -128,13 +133,16 @@ impl FinalityTracker {
         if config.delayed_after_polls == 0 {
             return Err(TrackerConfigError::ZeroDelayedAfterPolls);
         }
-        let client = PaxeerClient::new(config.endpoints).map_err(TrackerConfigError::Endpoints)?;
+        let client = PaxeerClient::new(config.endpoints.clone())
+            .map_err(TrackerConfigError::Endpoints)?;
+        validate_endpoint_agreement(&config.endpoints, config.minimum_endpoint_agreement)?;
         Ok(Self {
             client,
             transaction,
             required_confirmations: config.required_confirmations,
             poll_cadence: config.poll_cadence,
             delayed_after_polls: config.delayed_after_polls,
+            minimum_endpoint_agreement: config.minimum_endpoint_agreement,
             recorded: None,
             lost: None,
             last_observation: None,
@@ -259,12 +267,14 @@ impl FinalityTracker {
         &mut self,
         failovers: &mut Vec<EndpointFailure>,
     ) -> Result<(u64, FinalityStage), EndpointError> {
-        let head = self.client.head_number_with_failovers(failovers)?;
-        match self.client.transaction_with_failovers(failovers, self.transaction)? {
+        let (observation, mut dissent) = self
+            .client
+            .agreed_finality_observation(self.transaction, self.minimum_endpoint_agreement)?;
+        failovers.append(&mut dissent);
+        let head = observation.head;
+        match observation.transaction {
             TransactionView::Included(included) => {
-                let canonical = self
-                    .client
-                    .block_by_number_with_failovers(failovers, included.block.number)?;
+                let canonical = observation.canonical_block;
                 if canonical.is_some_and(|block| block.hash == included.block.hash) {
                     if let Some(prior) = self.recorded {
                         if prior.block.hash != included.block.hash {
@@ -339,4 +349,23 @@ impl FinalityTracker {
         }
         self.lost
     }
+}
+
+pub(crate) fn validate_endpoint_agreement(
+    endpoints: &[EndpointConfig],
+    minimum_endpoint_agreement: usize,
+) -> Result<(), TrackerConfigError> {
+    if minimum_endpoint_agreement == 0 {
+        return Err(TrackerConfigError::ZeroEndpointAgreement);
+    }
+    if minimum_endpoint_agreement > endpoints.len() {
+        return Err(TrackerConfigError::InsufficientEndpointAgreement);
+    }
+    let production = endpoints
+        .iter()
+        .any(|endpoint| matches!(&endpoint.transport, EndpointTransport::PinnedTls { .. }));
+    if production && minimum_endpoint_agreement < 2 {
+        return Err(TrackerConfigError::ProductionAgreementRequiresTwo);
+    }
+    Ok(())
 }

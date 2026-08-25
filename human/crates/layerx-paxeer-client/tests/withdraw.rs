@@ -9,10 +9,10 @@ use std::time::Duration;
 use ed25519_dalek::SigningKey;
 use layerx_paxeer_client::{
     raw_call, CancelledFundsDisposition, ChallengeKind, CheckpointProof, ClaimProgress,
-    CommittedWithdrawalDebit, DebitExpectation, EndpointConfig, ExecutionOutcome, FinalityReport,
-    FinalityStage, Json, PaxeerFundsDisposition, PayoutEvidence, ProtocolDebitDisposition,
-    SubmittedWithdrawalClaim, TransactionHash, TransactionInclusion, WithdrawalAttestation,
-    WithdrawalBoundary, WithdrawalConfig, WithdrawalError,
+    CommittedWithdrawalDebit, DebitExpectation, EndpointConfig, EndpointTransport,
+    ExecutionOutcome, FinalityReport, FinalityStage, Json, PaxeerFundsDisposition, PayoutEvidence,
+    ProtocolDebitDisposition, SubmittedWithdrawalClaim, TransactionHash, TransactionInclusion,
+    WithdrawalAttestation, WithdrawalBoundary, WithdrawalConfig, WithdrawalError,
 };
 use layerx_proof::receipt::AuthorizedBatch;
 use layerx_types::intent::EvmAddress;
@@ -64,6 +64,8 @@ impl Anvil {
             let endpoint = EndpointConfig {
                 url: format!("http://127.0.0.1:{port}"),
                 request_timeout: Duration::from_secs(10),
+                transport: EndpointTransport::LocalEmulator,
+                expected_chain_id: 31_337,
             };
             let child = Command::new(anvil_binary())
                 .arg("--port")
@@ -817,6 +819,7 @@ fn fixture() -> Fixture {
     );
     let boundary = WithdrawalBoundary::new(WithdrawalConfig {
         endpoints: vec![anvil.endpoint.clone()],
+        minimum_endpoint_agreement: 1,
         claims_contract: claims,
         required_confirmations: 2,
         poll_cadence: Duration::from_millis(20),

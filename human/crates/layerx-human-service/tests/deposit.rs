@@ -47,9 +47,9 @@ use layerx_human_service::notify::JourneyId;
 use layerx_human_service::store::{PrincipalId, PrincipalStore, TenancyDigest};
 use layerx_human_service::trace::TraceId;
 use layerx_paxeer_client::{
-    raw_call, DepositFailure, DepositProof, EndpointConfig, ExecutionOutcome, FinalityReport,
-    FinalityStage, FinalityTracker, FinalizedCheckpoint, Json, PaxeerClient, TrackerConfig,
-    TransactionHash, TransactionInclusion,
+    raw_call, DepositFailure, DepositProof, EndpointConfig, EndpointTransport, ExecutionOutcome,
+    FinalityReport, FinalityStage, FinalityTracker, FinalizedCheckpoint, Json, PaxeerClient,
+    TrackerConfig, TransactionHash, TransactionInclusion,
 };
 use layerx_proof::checkpoint::{checkpoint_id, Attestation, Certificate, Checkpoint, GuarantorKey};
 use layerx_proof::receipt::AuthorizedBatch;
@@ -190,6 +190,8 @@ impl Anvil {
             let endpoint = EndpointConfig {
                 url: format!("http://127.0.0.1:{port}"),
                 request_timeout: Duration::from_secs(5),
+                transport: EndpointTransport::LocalEmulator,
+                expected_chain_id: 31_337,
             };
             let binary = if PathBuf::from("/root/.foundry/bin/anvil").exists() {
                 PathBuf::from("/root/.foundry/bin/anvil")
@@ -607,6 +609,7 @@ impl RealDepositRuntime {
         let mut tracker = FinalityTracker::new(
             TrackerConfig {
                 endpoints: vec![self.anvil.endpoint.clone()],
+                minimum_endpoint_agreement: 1,
                 required_confirmations: 1,
                 poll_cadence: Duration::from_millis(20),
                 delayed_after_polls: 100,

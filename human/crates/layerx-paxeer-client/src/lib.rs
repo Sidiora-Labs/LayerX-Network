@@ -27,7 +27,9 @@ pub use finality::{
     FinalityTracker, TrackerConfig, TrackerConfigError,
 };
 pub use json::{parse as parse_json, Json, JsonError, JsonErrorReason};
-pub use rpc::{raw_call, EndpointConfig, EndpointFailure, EndpointFault};
+pub use rpc::{
+    raw_call, EndpointConfig, EndpointFailure, EndpointFault, EndpointTransport,
+};
 pub use status::{
     BoundaryHealth, BoundaryStatus, ChainStatus, ContractStatus, DelayExpectation, EndpointStatus,
 };

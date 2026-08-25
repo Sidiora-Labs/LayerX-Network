@@ -58,7 +58,10 @@
     "wallet_address":"REPLACE_OPERATOR_WALLET",
     "vault_id":"REPLACE_OPERATOR_VAULT",
     "signer_key_handle":"kms://market-maker-eu-1/paxeer",
-    "rpc_endpoints":["http://paxeer-rpc-a.internal:8545","http://paxeer-rpc-b.internal:8545"],
+    "rpc_endpoints":["https://paxeer-rpc-a.internal:8545","https://paxeer-rpc-b.internal:8545"],
+    "rpc_trust_anchor_der":"/run/secrets/paxeer-rpc-ca.der",
+    "rpc_chain_id":0,
+    "rpc_minimum_agreement":2,
     "required_confirmations":12,
     "poll_cadence_seconds":5,
     "delayed_after_polls":12

@@ -23,7 +23,8 @@ use layerx_ramp_toolkit::{
 };
 use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry};
 use layerx_paxeer_client::{
-    ChainSignal, EndpointConfig, EndpointSignal, FinalityTracker, TrackerConfig, TransactionHash,
+    ChainSignal, EndpointConfig, EndpointSignal, EndpointTransport, FinalityTracker,
+    TrackerConfig, TransactionHash,
 };
 use native_tls::{Identity, TlsAcceptor, TlsStream};
 use serde::{Deserialize, Serialize};
@@ -118,6 +119,9 @@ struct PaxeerConfig {
     vault_id: String,
     signer_key_handle: String,
     rpc_endpoints: Vec<String>,
+    rpc_trust_anchor_der: PathBuf,
+    rpc_chain_id: u64,
+    rpc_minimum_agreement: usize,
     required_confirmations: u64,
     poll_cadence_seconds: u64,
     delayed_after_polls: u64,
@@ -242,6 +246,9 @@ fn validate_config(config: &Config) -> Result<(), String> {
                 .saturating_mul(5)
         || config.quotes.is_empty()
         || config.paxeer.rpc_endpoints.is_empty()
+        || config.paxeer.rpc_chain_id == 0
+        || config.paxeer.rpc_minimum_agreement < 2
+        || config.paxeer.rpc_minimum_agreement > config.paxeer.rpc_endpoints.len()
         || config.paxeer.required_confirmations == 0
         || config.paxeer.poll_cadence_seconds == 0
         || config.paxeer.delayed_after_polls == 0
@@ -372,6 +379,11 @@ fn build_state(config: &Config) -> Result<State, String> {
         vault_id: config.paxeer.vault_id.clone(),
         signer_key_handle: config.paxeer.signer_key_handle.clone(),
     };
+    let rpc_trust_anchor_der = fs::read(&config.paxeer.rpc_trust_anchor_der)
+        .map_err(|_| "Paxeer RPC trust anchor is unavailable".to_owned())?;
+    if rpc_trust_anchor_der.is_empty() {
+        return Err("Paxeer RPC trust anchor is empty".to_owned());
+    }
     let paxeer_tracker_config = TrackerConfig {
         endpoints: config
             .paxeer
@@ -380,8 +392,13 @@ fn build_state(config: &Config) -> Result<State, String> {
             .map(|url| EndpointConfig {
                 url: url.clone(),
                 request_timeout: timeout,
+                transport: EndpointTransport::PinnedTls {
+                    trust_anchor_der: rpc_trust_anchor_der.clone(),
+                },
+                expected_chain_id: config.paxeer.rpc_chain_id,
             })
             .collect(),
+        minimum_endpoint_agreement: config.paxeer.rpc_minimum_agreement,
         required_confirmations: config.paxeer.required_confirmations,
         poll_cadence: Duration::from_secs(config.paxeer.poll_cadence_seconds),
         delayed_after_polls: config.paxeer.delayed_after_polls,

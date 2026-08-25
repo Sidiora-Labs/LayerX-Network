@@ -1,3 +1,5 @@
+use std::io::{Read, Write};
+use std::net::TcpListener;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU16, Ordering};
@@ -6,8 +8,9 @@ use std::time::Duration;
 
 use layerx_paxeer_client::{
     raw_call, ChainSignal, ClientConfigError, ConfirmationProgress, EndpointConfig, EndpointFault,
-    EndpointSignal, ExecutionOutcome, FinalityReport, FinalityStage, FinalityTracker, Json,
-    PaxeerClient, TrackerConfig, TrackerConfigError, TransactionHash, TransactionInclusion,
+    EndpointSignal, EndpointTransport, ExecutionOutcome, FinalityReport, FinalityStage,
+    FinalityTracker, Json, PaxeerClient, TrackerConfig, TrackerConfigError, TransactionHash,
+    TransactionInclusion,
 };
 use layerx_types::intent::EvmAddress;
 
@@ -46,6 +49,8 @@ impl Anvil {
             let endpoint = EndpointConfig {
                 url: format!("http://127.0.0.1:{port}"),
                 request_timeout: Duration::from_secs(5),
+                transport: EndpointTransport::LocalEmulator,
+                expected_chain_id: 31_337,
             };
             let child = Command::new(anvil_binary())
                 .arg("--port")
@@ -135,6 +140,7 @@ fn transfer_params() -> Json {
 fn tracker_config(anvil: &Anvil, required: u64, delayed_after: u64) -> TrackerConfig {
     TrackerConfig {
         endpoints: vec![anvil.endpoint.clone()],
+        minimum_endpoint_agreement: 1,
         required_confirmations: required,
         poll_cadence: Duration::from_millis(100),
         delayed_after_polls: delayed_after,
@@ -501,12 +507,15 @@ fn unreachable_endpoint_fails_over_to_healthy_one() {
     let dead = EndpointConfig {
         url: format!("http://127.0.0.1:{}", next_port()),
         request_timeout: Duration::from_secs(2),
+        transport: EndpointTransport::LocalEmulator,
+        expected_chain_id: 31_337,
     };
     let dead_url = dead.url.clone();
     let transaction = anvil.transfer();
     let mut tracked = FinalityTracker::new(
         TrackerConfig {
             endpoints: vec![dead, anvil.endpoint.clone()],
+            minimum_endpoint_agreement: 1,
             required_confirmations: 1,
             poll_cadence: Duration::from_millis(100),
             delayed_after_polls: 100,
@@ -647,10 +656,13 @@ fn declared_configuration_is_validated() {
     let endpoint = EndpointConfig {
         url: "http://127.0.0.1:1".to_owned(),
         request_timeout: Duration::from_secs(1),
+        transport: EndpointTransport::LocalEmulator,
+        expected_chain_id: 31_337,
     };
     let transaction = TransactionHash::new([1; 32]);
     let base = TrackerConfig {
         endpoints: vec![endpoint.clone()],
+        minimum_endpoint_agreement: 1,
         required_confirmations: 3,
         poll_cadence: Duration::from_millis(100),
         delayed_after_polls: 5,
@@ -696,13 +708,15 @@ fn declared_configuration_is_validated() {
         endpoints: vec![EndpointConfig {
             url: "ws://127.0.0.1:1".to_owned(),
             request_timeout: Duration::from_secs(1),
+            transport: EndpointTransport::LocalEmulator,
+            expected_chain_id: 31_337,
         }],
         ..base.clone()
     };
     assert!(matches!(
         FinalityTracker::new(unsupported_scheme, transaction).err(),
         Some(TrackerConfigError::Endpoints(
-            ClientConfigError::InvalidEndpointUrl { .. }
+            ClientConfigError::InvalidEndpoint { .. }
         ))
     ));
 
@@ -710,6 +724,8 @@ fn declared_configuration_is_validated() {
         endpoints: vec![EndpointConfig {
             url: endpoint.url,
             request_timeout: Duration::ZERO,
+            transport: EndpointTransport::LocalEmulator,
+            expected_chain_id: 31_337,
         }],
         ..base
     };
@@ -719,4 +735,156 @@ fn declared_configuration_is_validated() {
             ClientConfigError::ZeroRequestTimeout { .. }
         ))
     ));
+}
+
+fn one_response(response: Vec<u8>) -> EndpointConfig {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .unwrap_or_else(|error| panic!("bind response fixture: {error}"));
+    let address = listener
+        .local_addr()
+        .unwrap_or_else(|error| panic!("response fixture address: {error}"));
+    thread::spawn(move || {
+        let (mut stream, _) = listener
+            .accept()
+            .unwrap_or_else(|error| panic!("response fixture accept: {error}"));
+        let mut request = [0_u8; 8_192];
+        let _ = stream.read(&mut request);
+        stream
+            .write_all(&response)
+            .unwrap_or_else(|error| panic!("response fixture write: {error}"));
+    });
+    EndpointConfig {
+        url: format!("http://{address}"),
+        request_timeout: Duration::from_secs(1),
+        transport: EndpointTransport::LocalEmulator,
+        expected_chain_id: 31_337,
+    }
+}
+
+#[test]
+fn plaintext_requires_explicit_loopback_emulator_mode() {
+    let public_plaintext = EndpointConfig {
+        url: "http://rpc.paxeer.example".to_owned(),
+        request_timeout: Duration::from_secs(1),
+        transport: EndpointTransport::LocalEmulator,
+        expected_chain_id: 1,
+    };
+    assert!(matches!(
+        PaxeerClient::new(vec![public_plaintext]).err(),
+        Some(ClientConfigError::InvalidEndpoint {
+            fault: EndpointFault::InsecureTransport,
+            ..
+        })
+    ));
+
+    let production_plaintext = EndpointConfig {
+        url: "http://127.0.0.1:8545".to_owned(),
+        request_timeout: Duration::from_secs(1),
+        transport: EndpointTransport::PinnedTls {
+            trust_anchor_der: vec![1],
+        },
+        expected_chain_id: 1,
+    };
+    assert!(matches!(
+        PaxeerClient::new(vec![production_plaintext]).err(),
+        Some(ClientConfigError::InvalidEndpoint {
+            fault: EndpointFault::InsecureTransport,
+            ..
+        })
+    ));
+}
+
+#[test]
+fn response_bounds_and_ambiguous_framing_fail_closed() {
+    let oversized = one_response(
+        b"HTTP/1.1 200 OK\r\nContent-Length: 2097153\r\nConnection: close\r\n\r\n".to_vec(),
+    );
+    assert!(matches!(
+        raw_call(&oversized, "eth_chainId", &[]).err().map(|failure| failure.fault),
+        Some(EndpointFault::ResponseTooLarge)
+    ));
+
+    let body = b"{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":\"0x7a69\"}";
+    let mut response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len(),
+        body.len()
+    )
+    .into_bytes();
+    response.extend_from_slice(body);
+    let ambiguous = one_response(response);
+    assert!(matches!(
+        raw_call(&ambiguous, "eth_chainId", &[])
+            .err()
+            .map(|failure| failure.fault),
+        Some(EndpointFault::AmbiguousFraming)
+    ));
+
+    let conflicting = one_response(
+        b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
+            .to_vec(),
+    );
+    assert!(matches!(
+        raw_call(&conflicting, "eth_chainId", &[])
+            .err()
+            .map(|failure| failure.fault),
+        Some(EndpointFault::AmbiguousFraming)
+    ));
+
+    let oversized_chunk = one_response(
+        b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n200001\r\n"
+            .to_vec(),
+    );
+    assert!(matches!(
+        raw_call(&oversized_chunk, "eth_chainId", &[])
+            .err()
+            .map(|failure| failure.fault),
+        Some(EndpointFault::ResponseTooLarge)
+    ));
+}
+
+#[test]
+fn every_read_is_bound_to_the_configured_chain() {
+    let anvil = Anvil::launch(&[]);
+    let mut wrong_chain = anvil.endpoint.clone();
+    wrong_chain.expected_chain_id = 1;
+    let client = PaxeerClient::new(vec![wrong_chain])
+        .unwrap_or_else(|error| panic!("client configuration: {error:?}"));
+    let error = client
+        .head_number()
+        .err()
+        .unwrap_or_else(|| panic!("chain mismatch was accepted"));
+    assert!(error.failures.iter().any(|failure| matches!(
+        failure.fault,
+        EndpointFault::ChainMismatch {
+            expected: 1,
+            actual: 31_337
+        }
+    )));
+}
+
+#[test]
+fn finality_refuses_split_endpoint_observations() {
+    let first = Anvil::launch(&[]);
+    let second = Anvil::launch(&[]);
+    let transaction = first.transfer();
+    let mut tracker = FinalityTracker::new(
+        TrackerConfig {
+            endpoints: vec![first.endpoint.clone(), second.endpoint.clone()],
+            minimum_endpoint_agreement: 2,
+            required_confirmations: 1,
+            poll_cadence: Duration::from_millis(10),
+            delayed_after_polls: 10,
+        },
+        transaction,
+    )
+    .unwrap_or_else(|error| panic!("tracker: {error:?}"));
+    let report = tracker.poll();
+    let EndpointSignal::Unreachable { error } = report.endpoint else {
+        panic!("split observations were accepted: {:?}", report.endpoint)
+    };
+    assert!(error
+        .failures
+        .iter()
+        .all(|failure| matches!(failure.fault, EndpointFault::InconsistentObservation)));
 }

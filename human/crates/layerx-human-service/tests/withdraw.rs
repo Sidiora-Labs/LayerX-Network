@@ -34,6 +34,7 @@ mod paxeer_real {
             );
             let boundary = WithdrawalBoundary::new(WithdrawalConfig {
                 endpoints: vec![anvil.endpoint.clone()],
+                minimum_endpoint_agreement: 1,
                 claims_contract: claims,
                 required_confirmations: 2,
                 poll_cadence: Duration::from_millis(20),

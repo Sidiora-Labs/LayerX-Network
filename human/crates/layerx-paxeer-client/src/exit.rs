@@ -41,6 +41,7 @@ const ATTESTATION_WORDS: usize = 13;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExitConfig {
     pub endpoints: Vec<EndpointConfig>,
+    pub minimum_endpoint_agreement: usize,
     pub exit_contract: EvmAddress,
     pub required_confirmations: u64,
     pub poll_cadence: Duration,
@@ -51,6 +52,7 @@ pub struct ExitConfig {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ExitConfigError {
     Endpoints(ClientConfigError),
+    Agreement(TrackerConfigError),
     ZeroExitContract,
     ZeroRequiredConfirmations,
     ZeroPollCadence,
@@ -230,6 +232,7 @@ pub struct EmergencyExit {
     required_confirmations: u64,
     poll_cadence: Duration,
     delayed_after_polls: u64,
+    minimum_endpoint_agreement: usize,
 }
 
 impl EmergencyExit {
@@ -252,6 +255,11 @@ impl EmergencyExit {
         if config.delayed_after_polls == 0 {
             return Err(ExitConfigError::ZeroDelayedAfterPolls);
         }
+        crate::finality::validate_endpoint_agreement(
+            &config.endpoints,
+            config.minimum_endpoint_agreement,
+        )
+        .map_err(ExitConfigError::Agreement)?;
         let client =
             PaxeerClient::new(config.endpoints.clone()).map_err(ExitConfigError::Endpoints)?;
         Ok(Self {
@@ -261,6 +269,7 @@ impl EmergencyExit {
             required_confirmations: config.required_confirmations,
             poll_cadence: config.poll_cadence,
             delayed_after_polls: config.delayed_after_polls,
+            minimum_endpoint_agreement: config.minimum_endpoint_agreement,
         })
     }
 
@@ -372,6 +381,7 @@ impl EmergencyExit {
         FinalityTracker::new(
             TrackerConfig {
                 endpoints: self.endpoints.clone(),
+                minimum_endpoint_agreement: self.minimum_endpoint_agreement,
                 required_confirmations: self.required_confirmations,
                 poll_cadence: self.poll_cadence,
                 delayed_after_polls: self.delayed_after_polls,

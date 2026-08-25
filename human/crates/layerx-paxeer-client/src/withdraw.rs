@@ -64,6 +64,7 @@ const CUSTODY_RELEASE_TOPIC: [u8; 32] = [
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WithdrawalConfig {
     pub endpoints: Vec<EndpointConfig>,
+    pub minimum_endpoint_agreement: usize,
     pub claims_contract: EvmAddress,
     pub required_confirmations: u64,
     pub poll_cadence: Duration,
@@ -74,6 +75,7 @@ pub struct WithdrawalConfig {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum WithdrawalConfigError {
     Endpoints(ClientConfigError),
+    Agreement(TrackerConfigError),
     ZeroClaimsContract,
     ZeroRequiredConfirmations,
     ZeroPollCadence,
@@ -499,6 +501,7 @@ pub struct WithdrawalBoundary {
     required_confirmations: u64,
     poll_cadence: Duration,
     delayed_after_polls: u64,
+    minimum_endpoint_agreement: usize,
 }
 
 impl WithdrawalBoundary {
@@ -520,6 +523,11 @@ impl WithdrawalBoundary {
         if config.delayed_after_polls == 0 {
             return Err(WithdrawalConfigError::ZeroDelayedAfterPolls);
         }
+        crate::finality::validate_endpoint_agreement(
+            &config.endpoints,
+            config.minimum_endpoint_agreement,
+        )
+        .map_err(WithdrawalConfigError::Agreement)?;
         PaxeerClient::new(config.endpoints.clone()).map_err(WithdrawalConfigError::Endpoints)?;
         Ok(Self {
             endpoints: config.endpoints,
@@ -527,6 +535,7 @@ impl WithdrawalBoundary {
             required_confirmations: config.required_confirmations,
             poll_cadence: config.poll_cadence,
             delayed_after_polls: config.delayed_after_polls,
+            minimum_endpoint_agreement: config.minimum_endpoint_agreement,
         })
     }
 
@@ -640,6 +649,7 @@ impl WithdrawalBoundary {
         FinalityTracker::new(
             TrackerConfig {
                 endpoints: self.endpoints.clone(),
+                minimum_endpoint_agreement: self.minimum_endpoint_agreement,
                 required_confirmations: self.required_confirmations,
                 poll_cadence: self.poll_cadence,
                 delayed_after_polls: self.delayed_after_polls,
