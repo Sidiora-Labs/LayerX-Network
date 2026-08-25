@@ -3,6 +3,7 @@ package types
 import (
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"time"
 
@@ -121,11 +122,11 @@ func (vs *ViewSpec) View() View {
 	return View{Index: idx, Number: 0}
 }
 
-func (vs *ViewSpec) NextTimestamp(c *Committee) time.Time {
+func (vs *ViewSpec) NextTimestamp(c *Committee) (time.Time, error) {
 	if cQC, ok := vs.CommitQC.Get(); ok {
 		return cQC.Proposal().NextTimestamp()
 	}
-	return c.GenesisTimestamp()
+	return c.GenesisTimestamp(), nil
 }
 
 // Proposal is the road tipcut proposal.
@@ -186,30 +187,72 @@ func (m *Proposal) GlobalRange(c *Committee) GlobalRange {
 	return gr
 }
 
+func (m *Proposal) checkedGlobalRange(c *Committee) (GlobalRange, error) {
+	gr := GlobalRange{}
+	for _, r := range m.laneRanges {
+		if r.first > r.next {
+			return GlobalRange{}, fmt.Errorf("invalid lane range [%v,%v)", r.first, r.next)
+		}
+		if math.MaxUint64-uint64(gr.First) < uint64(r.first) || math.MaxUint64-uint64(gr.Next) < uint64(r.next) {
+			return GlobalRange{}, errors.New("global range overflow")
+		}
+		gr.First += GlobalBlockNumber(r.first)
+		gr.Next += GlobalBlockNumber(r.next)
+	}
+	if math.MaxUint64-uint64(gr.First) < uint64(c.FirstBlock()) || math.MaxUint64-uint64(gr.Next) < uint64(c.FirstBlock()) {
+		return GlobalRange{}, errors.New("global range offset overflow")
+	}
+	gr.First += c.FirstBlock()
+	gr.Next += c.FirstBlock()
+	return gr, nil
+}
+
 // Arbitrary deterministic minimal diff between consecutive blocks.
 const minTimestampDiff = time.Microsecond
 
 // Monotone timestamp assigned to each block of the proposal.
 // Returns None, if n doed not belong to the proposal's global range.
 func (m *Proposal) BlockTimestamp(c *Committee, n GlobalBlockNumber) utils.Option[time.Time] {
-	gr := m.GlobalRange(c)
+	gr, err := m.checkedGlobalRange(c)
+	if err != nil {
+		return utils.None[time.Time]()
+	}
 	if !gr.Has(n) {
 		return utils.None[time.Time]()
 	}
-	//nolint:gosec // TODO: do stricter timestamp validation before running in prod.
-	return utils.Some(m.Timestamp().Add(time.Duration(n-gr.First) * minTimestampDiff))
+	timestamp, err := timestampAfter(m.Timestamp(), uint64(n-gr.First))
+	if err != nil {
+		return utils.None[time.Time]()
+	}
+	return utils.Some(timestamp)
 }
 
 // Lowest allowed timestamp for the next index proposal.
-func (m *Proposal) NextTimestamp() time.Time {
-	//nolint:gosec // TODO: do stricter timestamp validation before running in prod.
-	return m.Timestamp().Add(time.Duration(m.globalRangeWithoutOffset.Len()) * minTimestampDiff)
+func (m *Proposal) NextTimestamp() (time.Time, error) {
+	return timestampAfter(m.Timestamp(), m.globalRangeWithoutOffset.Len())
+}
+
+func timestampAfter(base time.Time, steps uint64) (time.Time, error) {
+	if steps > uint64(math.MaxInt64/int64(minTimestampDiff)) {
+		return time.Time{}, errors.New("proposal timestamp offset overflow")
+	}
+	return base.Add(time.Duration(steps) * minTimestampDiff), nil
 }
 
 // Verify checks that every present lane range belongs to the committee
 // and is internally valid. Lanes may be omitted — omitted lanes are
 // treated as implicit empty ranges by FullProposal.Verify.
 func (m *Proposal) Verify(c *Committee) error {
+	gr, err := m.checkedGlobalRange(c)
+	if err != nil {
+		return err
+	}
+	if gr.First > gr.Next {
+		return fmt.Errorf("invalid global range [%v,%v)", gr.First, gr.Next)
+	}
+	if _, err := timestampAfter(m.Timestamp(), gr.Len()); err != nil {
+		return err
+	}
 	for _, r := range m.laneRanges {
 		if err := r.Verify(c); err != nil {
 			return fmt.Errorf("laneRange[%v]: %w", r.Lane(), err)
@@ -296,10 +339,18 @@ func NewProposal(
 		appQC = utils.None[*AppQC]()
 	}
 	// Normalize the creation timestamp.
-	if wantMin := viewSpec.NextTimestamp(committee); timestamp.Before(wantMin) {
-		timestamp = wantMin
+	wantMin, err := viewSpec.NextTimestamp(committee)
+	if err != nil {
+		return nil, fmt.Errorf("next proposal timestamp: %w", err)
 	}
 	proposal := newProposal(viewSpec.View(), timestamp, laneRanges, app)
+	if err := proposal.Verify(committee); err != nil {
+		return nil, fmt.Errorf("proposal: %w", err)
+	}
+	if timestamp.Before(wantMin) {
+		timestamp = wantMin
+		proposal = newProposal(viewSpec.View(), timestamp, laneRanges, app)
+	}
 
 	return &FullProposal{
 		proposal:  Sign(key, proposal),
@@ -331,15 +382,23 @@ func (m *FullProposal) TimeoutQC() utils.Option[*TimeoutQC] {
 // Verify verifies the FullProposal against the current view.
 func (m *FullProposal) Verify(c *Committee, vs ViewSpec) error {
 	return scope.Parallel(func(s scope.ParallelScope) error {
+		proposal := m.proposal.Msg()
+		if err := proposal.Verify(c); err != nil {
+			return fmt.Errorf("proposal: %w", err)
+		}
 		// Does the view match?
 		if got, want := m.proposal.Msg().View(), vs.View(); got != want {
 			return fmt.Errorf("view = %v, want %v", m.View(), vs.View())
 		}
-		if got, want := m.proposal.Msg().GlobalRange(c).First, GlobalRangeOpt(vs.CommitQC, c).Next; got != want {
+		if got, want := proposal.GlobalRange(c).First, GlobalRangeOpt(vs.CommitQC, c).Next; got != want {
 			return fmt.Errorf("proposal.GlobalRange().First = %v, want %v", got, want)
 		}
 		// Is the timestamp monotone?
-		if got, wantMin := m.proposal.Msg().Timestamp(), vs.NextTimestamp(c); got.Before(wantMin) {
+		wantMin, err := vs.NextTimestamp(c)
+		if err != nil {
+			return fmt.Errorf("next proposal timestamp: %w", err)
+		}
+		if got := proposal.Timestamp(); got.Before(wantMin) {
 			return fmt.Errorf("proposal.Timestamp() = %v, want >= %v", got, wantMin)
 		}
 		// Is proposer valid?
@@ -375,10 +434,6 @@ func (m *FullProposal) Verify(c *Committee, vs ViewSpec) error {
 			}
 		}
 		// Verify the proposal's lane structure against the committee.
-		proposal := m.proposal.Msg()
-		if err := proposal.Verify(c); err != nil {
-			return fmt.Errorf("proposal: %w", err)
-		}
 		// Verify each lane range against the previous commitQC and its laneQC justification.
 		for lane := range c.Lanes().All() {
 			r := proposal.LaneRange(lane)

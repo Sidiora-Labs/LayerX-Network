@@ -1,6 +1,7 @@
 package types
 
 import (
+	"math"
 	"slices"
 	"testing"
 	"time"
@@ -143,6 +144,7 @@ func TestProposalVerifyRejectsNonMonotoneTimestamp(t *testing.T) {
 		require.NoError(t, fp.Verify(committee, vs))
 
 		committee = utils.OrPanic1(NewRoundRobinElection(
+			committee.ChainID(),
 			slices.Collect(committee.Replicas().All()),
 			committee.FirstBlock(),
 			fp.Proposal().Msg().Timestamp().Add(time.Nanosecond)),
@@ -170,7 +172,7 @@ func TestProposalVerifyRejectsNonMonotoneTimestamp(t *testing.T) {
 			proposer0,
 			committee,
 			vs0,
-			fp0a.Proposal().Msg().NextTimestamp().Add(time.Hour),
+			utils.OrPanic1(fp0a.Proposal().Msg().NextTimestamp()).Add(time.Hour),
 			map[LaneID]*LaneQC{lane: lQC},
 			utils.None[*AppQC](),
 		))
@@ -183,7 +185,7 @@ func TestProposalVerifyRejectsNonMonotoneTimestamp(t *testing.T) {
 			proposer1,
 			committee,
 			vs1a,
-			fp0a.Proposal().Msg().NextTimestamp(),
+			utils.OrPanic1(fp0a.Proposal().Msg().NextTimestamp()),
 			nil,
 			utils.None[*AppQC](),
 		))
@@ -191,6 +193,26 @@ func TestProposalVerifyRejectsNonMonotoneTimestamp(t *testing.T) {
 		require.NoError(t, fp1a.Verify(committee, vs1a))
 		require.Error(t, fp1a.Verify(committee, vs1b))
 	})
+}
+
+func TestNewProposalRejectsTimestampOffsetOverflow(t *testing.T) {
+	rng := utils.TestRng()
+	committee, keys := GenCommittee(rng, 1)
+	viewSpec := ViewSpec{}
+	leader := leaderKey(committee, keys, viewSpec.View())
+	lane := committee.Lanes().At(0)
+	tooManyBlocks := uint64(math.MaxInt64/int64(minTimestampDiff)) + 1
+	laneQC := makeLaneQC(rng, committee, keys, lane, BlockNumber(tooManyBlocks-1), GenBlockHeaderHash(rng))
+
+	_, err := NewProposal(
+		leader,
+		committee,
+		viewSpec,
+		time.Unix(1_700_000_000, 0).UTC(),
+		map[LaneID]*LaneQC{lane: laneQC},
+		utils.None[*AppQC](),
+	)
+	require.Error(t, err)
 }
 
 func TestProposalVerifyRejectsViewMismatch(t *testing.T) {

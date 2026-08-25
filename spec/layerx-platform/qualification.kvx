@@ -1390,6 +1390,14 @@ observed = "Post-implementation review found negative or uninitialized fractiona
 assumption = "Human qualification must run the bank, epoch, mint, staking, tokenfactory, RPC and contract suites; inject failed coin writes after fractional staging, malformed genesis keys and addresses, panicking hooks, missing block time, unsupported tracer state, malformed EVM messages and invalid staking funds; and prove application startup rejects duplicate migration registration. No build, test, formatting, migration replay or passing result is asserted by this source repair."
 severity = "post-implementation-repair"
 
+[observation.37.1.6]
+task = "37.1"
+file = "paxeer-network/consensus/autobahn/types/committee.go, paxeer-network/consensus/autobahn/types/msg.go, paxeer-network/consensus/autobahn/types/proposal.go, paxeer-network/consensus/internal/p2p/giga_router.go"
+symbol = "Committee.Leader, SecretKey.ForCommittee, Sign, Signed.VerifySig, Proposal.checkedGlobalRange, Proposal.NextTimestamp"
+observed = "Post-implementation review found Autobahn used one process-wide signature tag for every network and committee, selected leaders from only the view coordinates, and converted attacker-controlled proposal block counts to time.Duration without a checked bound. A valid vote, proposal, timeout or quorum certificate could therefore be replayed wherever the same validator key was accepted, while oversized lane ranges could wrap global block or timestamp arithmetic. The repair derives a canonical committee domain from the verifier-owned chain ID, genesis boundary, first block, ordered validator keys and weights; binds local validator keys to that domain at router construction; includes explicit operation domains in signature, leader and shard preimages; rejects unbound signing; and checks lane aggregation, committee offsets and timestamp steps before proposal production or acceptance."
+assumption = "Human qualification must run Autobahn type, consensus, availability, persistence, data and router suites; replay serialized votes and quorum certificates across different chain IDs, first blocks and validator weights; restart over existing WAL state with the identical genesis; and inject maximum lane and timestamp offsets. No build, test, formatting, network or passing result is asserted by this source repair."
+severity = "post-implementation-repair"
+
 [observation.21.4.1]
 task = "21.4"
 file = "programs/sdk/rust/src/abi.rs, programs/sdk/rust/src/host.rs, programs/sdk/rust/src/storage.rs, programs/sdk/rust/src/transfer.rs, programs/sdk/c/src/receipts.c, programs/sdk/c/src/storage.c"
