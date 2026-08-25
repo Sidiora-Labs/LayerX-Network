@@ -4,6 +4,7 @@ import (
 	"embed"
 	"errors"
 	"fmt"
+	"math"
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/accounts/abi"
@@ -280,6 +281,9 @@ func (p PrecompileExecutor) getChannelConnection(ctx sdk.Context, port string, c
 	if !found {
 		return nil, errors.New("channel not found")
 	}
+	if len(channel.ConnectionHops) != 1 {
+		return nil, fmt.Errorf("channel must reference exactly one connection hop, got %d", len(channel.ConnectionHops))
+	}
 
 	connection, found := p.connectionKeeper.GetConnection(ctx, channel.ConnectionHops[0])
 
@@ -309,31 +313,52 @@ func GetAdjustedHeight(latestConsensusHeight clienttypes.Height) (clienttypes.He
 		return clienttypes.Height{}, err
 	}
 
-	absoluteHeight := latestConsensusHeight
-	absoluteHeight.RevisionNumber += defaultTimeoutHeight.RevisionNumber
-	absoluteHeight.RevisionHeight += defaultTimeoutHeight.RevisionHeight
+	revisionNumber, err := checkedAddUint64(latestConsensusHeight.RevisionNumber, defaultTimeoutHeight.RevisionNumber)
+	if err != nil {
+		return clienttypes.Height{}, fmt.Errorf("default timeout revision number: %w", err)
+	}
+	revisionHeight, err := checkedAddUint64(latestConsensusHeight.RevisionHeight, defaultTimeoutHeight.RevisionHeight)
+	if err != nil {
+		return clienttypes.Height{}, fmt.Errorf("default timeout revision height: %w", err)
+	}
+
+	absoluteHeight := clienttypes.Height{
+		RevisionNumber: revisionNumber,
+		RevisionHeight: revisionHeight,
+	}
 	return absoluteHeight, nil
 }
 
 func (p PrecompileExecutor) GetAdjustedTimestamp(ctx sdk.Context, clientId string, height clienttypes.Height) (uint64, error) {
 	consensusState, found := p.clientKeeper.GetClientConsensusState(ctx, clientId, height)
-	var consensusStateTimestamp uint64
-	if found {
-		consensusStateTimestamp = consensusState.GetTimestamp()
+	if !found || consensusState == nil {
+		return 0, fmt.Errorf("consensus state for client %s at height %s not found", clientId, height)
 	}
+	consensusStateTimestamp := consensusState.GetTimestamp()
 
 	defaultRelativePacketTimeoutTimestamp := types.DefaultRelativePacketTimeoutTimestamp
 	blockTime := ctx.BlockTime().UnixNano()
 	if blockTime > 0 {
 		now := uint64(blockTime)
-		if now > consensusStateTimestamp {
-			return now + defaultRelativePacketTimeoutTimestamp, nil
-		} else {
-			return consensusStateTimestamp + defaultRelativePacketTimeoutTimestamp, nil
+		baseTimestamp := consensusStateTimestamp
+		if now > baseTimestamp {
+			baseTimestamp = now
 		}
+		adjustedTimestamp, err := checkedAddUint64(baseTimestamp, defaultRelativePacketTimeoutTimestamp)
+		if err != nil {
+			return 0, fmt.Errorf("default timeout timestamp: %w", err)
+		}
+		return adjustedTimestamp, nil
 	} else {
 		return 0, errors.New("block time is not greater than Jan 1st, 1970 12:00 AM")
 	}
+}
+
+func checkedAddUint64(left, right uint64) (uint64, error) {
+	if right > math.MaxUint64-left {
+		return 0, errors.New("uint64 overflow")
+	}
+	return left + right, nil
 }
 
 type ValidatedArgs struct {

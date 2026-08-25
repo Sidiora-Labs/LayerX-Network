@@ -1841,6 +1841,14 @@ observed = "Post-implementation review found truncated upload payloads could pan
 assumption = "Human qualification must compile the Paxeer WASM modules with the declared native libwasmvm artifacts, run upload, ante and IBC callback regressions, inject malformed persisted counter bytes and channel records, and exercise empty, truncated and oversized upload payloads without a process panic. Native FFI sanitizer, race, cross-architecture and state-sync replay remain required environment-owned gates; no build, test, format or runtime result is asserted by this source repair."
 severity = "consensus-safety"
 
+[observation.37.1.16]
+task = "37.1"
+file = "paxeer-network/precompiles/ibc/ibc.go, paxeer-network/precompiles/json/json.go, paxeer-network/precompiles/solo/solo.go"
+symbol = "getChannelConnection, GetAdjustedHeight, GetAdjustedTimestamp, ExtractAsUint256, sigverify"
+observed = "Post-implementation review found that the IBC precompile indexed an unvalidated connection-hop list, fabricated a default timeout from block time when the referenced client consensus state was absent, and allowed height or timestamp arithmetic to wrap. The JSON uint256 extractor accepted negative decimal input, whose magnitude could then be encoded as an unsigned result, and Solo claim replay protection ignored sequence-update errors and wrapped an exhausted uint64 sequence to zero. The repair rejects malformed channel state and absent consensus state, checks every default-timeout addition, rejects negative uint256 values, and advances claim sequences only through a successful non-wrapping account update. The inherited IBC module implementation was otherwise left unchanged."
+assumption = "Human qualification must run the current and supported-version IBC, JSON and Solo precompile suites, inject empty and multi-hop channel state, missing consensus state, arithmetic boundaries, negative decimal JSON values, and a maximum account sequence, and prove each call reverts without state or event leakage. No build, test, format or runtime result is asserted by this source repair."
+severity = "consensus-safety"
+
 [observation.11.1.1]
 task = "11.1"
 file = "agent/crates/layerx-agentd/src/budget/create.rs, agent/crates/layerx-agentd/src/sign_verify.rs, agent/crates/layerx-agentd/tests/budget_create.rs, human/crates/layerx-human-service/tests/agent_create.rs, human/crates/layerx-human-service/tests/agent_controls.rs"

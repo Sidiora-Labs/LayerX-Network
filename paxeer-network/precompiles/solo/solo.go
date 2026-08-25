@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"math/big"
 
 	"github.com/sidiora-labs/paxeer-network/sdk/client"
@@ -307,8 +308,12 @@ func (p PrecompileExecutor) sigverify(ctx sdk.Context, tx sdk.Tx, claimMsg claim
 	if err := authsigning.VerifySignature(pubkey, signerData, sig.Data, p.txConfig.SignModeHandler(), tx); err != nil {
 		return fmt.Errorf("failed to verify signature for claim tx: %w", err)
 	}
-	// increment sequence
-	_ = acct.SetSequence(acct.GetSequence() + 1)
+	if acct.GetSequence() == math.MaxUint64 {
+		return errors.New("account sequence is exhausted")
+	}
+	if err := acct.SetSequence(acct.GetSequence() + 1); err != nil {
+		return fmt.Errorf("failed to advance account sequence: %w", err)
+	}
 	p.accountKeeper.SetAccount(ctx, acct)
 	return nil
 }

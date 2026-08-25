@@ -181,6 +181,9 @@ func (p PrecompileExecutor) ExtractAsUint256(_ sdk.Context, _ *abi.Method, args 
 	if !success {
 		return nil, fmt.Errorf("failed to convert %s to big.Int", strValue)
 	}
+	if value.Sign() < 0 {
+		return nil, errors.New("uint256 value cannot be negative")
+	}
 
 	return value, nil
 }
