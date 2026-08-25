@@ -8,8 +8,9 @@ use layerx_interop_gateway::trace::TraceId;
 use layerx_interop_gateway::GatewayCore;
 use layerx_platform_gateway::http::{Client, Endpoint};
 use layerx_platform_gateway::store::{RedisEndpoint, RedisStore};
+use layerx_platform_gateway::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry};
 use layerx_ucp::ucp_adapter_descriptor;
-use layerx_visa_tap::visa_tap_adapter_descriptor;
+use layerx_visa_tap::{visa_tap_adapter_descriptor, MAX_CLOCK_SKEW_SECONDS};
 use layerx_x402::facilitator::SupportedResponse;
 use layerx_x402::{x402_adapter_descriptor, X402_SPEC_SHA256};
 use native_tls::{Certificate, Identity};
@@ -38,6 +39,10 @@ pub struct Config {
     pub trusted_sequencer_key: [u8; 32],
     pub network_id: String,
     pub wire_version: String,
+    pub protocol_version: u16,
+    pub protocol_network_id: u32,
+    pub modules: ModuleRegistry,
+    pub tap_clock_skew_seconds: u64,
     pub idempotency_seconds: u64,
     pub manifest: RuntimeManifest,
 }
@@ -132,6 +137,19 @@ struct AdapterPin {
     evidence_policy: String,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ModuleFile {
+    modules: Vec<ModuleDeclaration>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ModuleDeclaration {
+    module: u16,
+    ordinals: Vec<u16>,
+}
+
 pub fn load() -> Result<Config, String> {
     let manifest_path = env::var("LAYERX_INTEROP_CONFIG")
         .map_err(|_| "LAYERX_INTEROP_CONFIG is required".to_owned())?;
@@ -169,6 +187,21 @@ pub fn load() -> Result<Config, String> {
     }
     let network_id = required_label("LAYERX_INTEROP_NETWORK_ID", 128)?;
     let wire_version = required_label("LAYERX_INTEROP_WIRE_VERSION", 64)?;
+    let protocol_version = wire_version
+        .parse::<u16>()
+        .map_err(|_| "interop LXP wire version must be numeric".to_owned())?;
+    let protocol_network_id = env::var("LAYERX_INTEROP_PROTOCOL_NETWORK_ID")
+        .map_err(|_| "LAYERX_INTEROP_PROTOCOL_NETWORK_ID is required".to_owned())?
+        .parse::<u32>()
+        .map_err(|_| "interop protocol network identifier is invalid".to_owned())?;
+    let modules = module_registry()?;
+    let tap_clock_skew_seconds = env::var("LAYERX_INTEROP_TAP_CLOCK_SKEW_SECONDS")
+        .map_err(|_| "LAYERX_INTEROP_TAP_CLOCK_SKEW_SECONDS is required".to_owned())?
+        .parse::<u64>()
+        .map_err(|_| "interop TAP clock skew is invalid".to_owned())?;
+    if tap_clock_skew_seconds > MAX_CLOCK_SKEW_SECONDS {
+        return Err("interop TAP clock skew exceeds its bound".to_owned());
+    }
     Ok(Config {
         listen: env::var("LAYERX_INTEROP_LISTEN")
             .map_err(|_| "LAYERX_INTEROP_LISTEN is required".to_owned())?
@@ -189,9 +222,40 @@ pub fn load() -> Result<Config, String> {
         trusted_sequencer_key,
         network_id,
         wire_version,
+        protocol_version,
+        protocol_network_id,
+        modules,
+        tap_clock_skew_seconds,
         idempotency_seconds,
         manifest,
     })
+}
+
+fn module_registry() -> Result<ModuleRegistry, String> {
+    let file: ModuleFile = serde_json::from_slice(&read_file(
+        "LAYERX_INTEROP_MODULE_REGISTRY_FILE",
+        64 * 1024,
+    )?)
+    .map_err(|_| "interop module registry is invalid".to_owned())?;
+    if file.modules.is_empty() || file.modules.len() > 8 {
+        return Err("interop module registry is outside its bound".to_owned());
+    }
+    let mut registrations = Vec::with_capacity(file.modules.len());
+    for declaration in file.modules {
+        let module = ModuleId::from_u16(declaration.module)
+            .map_err(|_| "interop module registry names an unknown module".to_owned())?;
+        let activity_types = declaration
+            .ordinals
+            .into_iter()
+            .map(|ordinal| ActivityType::new(module, ordinal))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| "interop module registry contains an invalid ordinal".to_owned())?;
+        let registration = ModuleRegistration::new(module, &activity_types)
+            .map_err(|_| "interop module registry declaration is invalid".to_owned())?;
+        registrations.push(registration);
+    }
+    ModuleRegistry::new(&registrations)
+        .map_err(|_| "interop module registry contains duplicates".to_owned())
 }
 
 fn runtime_manifest(file: ManifestFile) -> Result<RuntimeManifest, String> {

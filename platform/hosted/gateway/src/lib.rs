@@ -5,7 +5,7 @@ pub mod store;
 
 use layerx_crypto::{ed25519, SignatureMessage};
 use layerx_proof::receipt::{verify_outcome, AuthorizedBatch, ReceiptCheck};
-use layerx_types::payload::ModuleRegistry;
+pub use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry};
 use layerx_wire::activity::{decode_signed, encode_signed, encode_unsigned};
 use layerx_wire::hash::{activity_id, Domain};
 use serde::Serialize;

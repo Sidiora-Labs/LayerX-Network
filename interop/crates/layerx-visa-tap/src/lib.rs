@@ -23,6 +23,8 @@ const COMPONENTS: &str = "(\"@authority\" \"@path\")";
 const BROWSER_TAG: &str = "agent-browser-auth";
 const PAYER_TAG: &str = "agent-payer-auth";
 const MAX_WINDOW_SECONDS: u64 = 8 * 60;
+/// Maximum clock disagreement accepted by TAP credential verification.
+pub const MAX_CLOCK_SKEW_SECONDS: u64 = 5 * 60;
 const VALUE_LIMIT: usize = 512;
 const SIGNATURE_LIMIT: usize = 16 * 1024;
 const BINDING_DOMAIN: &[u8] = b"LayerX/interop/visa-tap/binding/v1\0";
@@ -246,6 +248,13 @@ impl TapRequest {
         )
         .into_bytes()
     }
+
+    /// Returns the signed nonce that a durable service must consume after
+    /// cryptographic verification.
+    #[must_use]
+    pub fn nonce(&self) -> &str {
+        self.input.nonce()
+    }
 }
 
 /// Current registry status for one trusted-agent public key.
@@ -429,6 +438,41 @@ impl MerchantOperationResult {
 pub struct TapVerifier;
 
 impl TapVerifier {
+    /// Verifies freshness against a server-owned time, key status, target
+    /// binding, and cryptography without consuming replay state.
+    ///
+    /// This split lets hosted services perform replay consumption atomically in
+    /// their durable state store after signature verification. The configured
+    /// skew is bounded and never comes from the credential request.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed merchant-facing refusal for every failed gate.
+    pub fn verify_credential(
+        request: &TapRequest,
+        registry: &impl TrustedAgentRegistry,
+        now: u64,
+        clock_skew_seconds: u64,
+    ) -> Result<VerifiedTrustedAgent, TapError> {
+        verify_window(&request.input, now, clock_skew_seconds)?;
+        let registered = registry.resolve(request.input.key_id(), now)?;
+        registered.validate(request.input.key_id(), now)?;
+        if registered.key.algorithm() != request.input.algorithm {
+            return Err(TapError::AlgorithmMismatch);
+        }
+        let base = request.signature_base();
+        verify_signature(&registered.key, &base, &request.signature)?;
+        Ok(VerifiedTrustedAgent {
+            agent_id: registered.agent_id,
+            agent_domain: registered.agent_domain,
+            key_id: registered.key_id,
+            layerx_agent: registered.layerx_agent,
+            intent: request.input.intent,
+            expires_at: request.input.expires,
+            signature_digest: Sha256::digest(&request.signature).into(),
+        })
+    }
+
     /// Verifies freshness, key status, target binding, cryptography, and nonce
     /// uniqueness in that order without an ambient clock read.
     ///
@@ -441,37 +485,29 @@ impl TapVerifier {
         nonces: &mut NonceWindow,
         now: u64,
     ) -> Result<VerifiedTrustedAgent, TapError> {
-        verify_window(&request.input, now)?;
-        let registered = registry.resolve(request.input.key_id(), now)?;
-        registered.validate(request.input.key_id(), now)?;
-        if registered.key.algorithm() != request.input.algorithm {
-            return Err(TapError::AlgorithmMismatch);
-        }
-        let base = request.signature_base();
-        verify_signature(&registered.key, &base, &request.signature)?;
+        let verified = Self::verify_credential(request, registry, now, 0)?;
         nonces.consume(
             request.input.key_id(),
             request.input.nonce(),
             request.input.expires,
             now,
         )?;
-        Ok(VerifiedTrustedAgent {
-            agent_id: registered.agent_id,
-            agent_domain: registered.agent_domain,
-            key_id: registered.key_id,
-            layerx_agent: registered.layerx_agent,
-            intent: request.input.intent,
-            expires_at: request.input.expires,
-            signature_digest: Sha256::digest(&request.signature).into(),
-        })
+        Ok(verified)
     }
 }
 
-fn verify_window(input: &SignatureInput, now: u64) -> Result<(), TapError> {
-    if input.created > now {
+fn verify_window(
+    input: &SignatureInput,
+    now: u64,
+    clock_skew_seconds: u64,
+) -> Result<(), TapError> {
+    if clock_skew_seconds > MAX_CLOCK_SKEW_SECONDS {
+        return Err(TapError::ClockSkewTooLarge);
+    }
+    if input.created > now.saturating_add(clock_skew_seconds) {
         return Err(TapError::NotYetValid);
     }
-    if input.expires <= now {
+    if input.expires.saturating_add(clock_skew_seconds) <= now {
         return Err(TapError::Expired);
     }
     if input
@@ -749,6 +785,7 @@ pub enum TapError {
     NotYetValid,
     Expired,
     WindowTooLong,
+    ClockSkewTooLarge,
     RegistryUnavailable,
     UnknownKey,
     RegistryMismatch,
@@ -781,6 +818,7 @@ impl Display for TapError {
             Self::NotYetValid => "TAP signature is not yet valid",
             Self::Expired => "TAP signature expired",
             Self::WindowTooLong => "TAP signature validity exceeds eight minutes",
+            Self::ClockSkewTooLarge => "TAP clock skew exceeds its configured bound",
             Self::RegistryUnavailable => "trusted-agent registry is unavailable",
             Self::UnknownKey => "trusted-agent key is unknown",
             Self::RegistryMismatch => "trusted-agent registry facts do not match",

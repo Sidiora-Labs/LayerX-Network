@@ -15,10 +15,12 @@ use layerx_interop_gateway::server::{
 };
 use layerx_interop_gateway::trace::TraceId;
 use layerx_platform_gateway::http::{IncomingRequest, OutgoingResponse};
-use layerx_platform_gateway::store::{KeyRecord, Reservation};
+use layerx_platform_gateway::store::{
+    KeyRecord, Reservation, TapCredentialRecord, TapNonceConsumption,
+};
 use layerx_platform_gateway::{
     authenticate_gateway_key, gateway_audit_event, gateway_digest, verify_activity_operation,
-    AccessError, AuthorityFacts,
+    verify_submission, AccessError, AuthorityFacts,
 };
 use layerx_proof::receipt::{verify, AuthorizedBatch};
 use layerx_ucp::{
@@ -26,8 +28,9 @@ use layerx_ucp::{
     UcpIdempotencyKey,
 };
 use layerx_visa_tap::{
-    prepare_trusted_intent, AgentPublicKey, CredentialBinding, CredentialBindingStore, KeyStatus,
-    RegisteredAgentKey, TapRequest, TapVerifier, TrustedAgentRegistry,
+    prepare_trusted_intent, AgentIntent, AgentPublicKey, CredentialBinding,
+    CredentialBindingStore, KeyStatus, RegisteredAgentKey, TapError, TapRequest, TapVerifier,
+    TrustedAgentRegistry,
 };
 use layerx_x402::buyer::{BuyerPaymentPlane, PaymentBuildRequest, SupportedKind};
 use layerx_x402::facilitator::FacilitatorRequest;
@@ -515,6 +518,7 @@ fn x402_settle(
         activity,
         idempotency: protocol_idempotency,
         expected_signer: &record.signer_public_key,
+        submitted_activity_id: None,
         trace,
     };
     match execution.submit() {
@@ -705,6 +709,7 @@ fn ap2(
         activity,
         idempotency: &body.activity_idempotency_key,
         expected_signer: &record.signer_public_key,
+        submitted_activity_id: None,
         trace,
     };
     match execution.submit() {
@@ -897,6 +902,7 @@ fn ucp(
         activity,
         idempotency: &protocol_idempotency,
         expected_signer: &record.signer_public_key,
+        submitted_activity_id: None,
         trace,
     };
     match execution.submit() {
@@ -961,11 +967,14 @@ struct VisaRequest {
     path: String,
     signature_input: String,
     signature: String,
-    now: u64,
     #[serde(default)]
     activity: String,
-    #[serde(default)]
-    activity_idempotency_key: String,
+}
+
+struct VisaActivityBinding {
+    canonical: Vec<u8>,
+    activity_id: [u8; 32],
+    idempotency_key: String,
 }
 
 fn visa(
@@ -993,7 +1002,16 @@ fn visa(
     let registry = VisaRegistry {
         pins: &config.manifest.visa_agents,
     };
-    let verified = match TapVerifier::verify(&tap, &registry, &mut Default::default(), body.now) {
+    let observed_at = match now() {
+        Ok(value) => value,
+        Err(_) => return Dispatch::error(503, "pending", "server_clock_unavailable"),
+    };
+    let verified = match TapVerifier::verify_credential(
+        &tap,
+        &registry,
+        observed_at,
+        config.tap_clock_skew_seconds,
+    ) {
         Ok(value) => value,
         Err(_) => return Dispatch::error(400, "refused", "visa_tap_refused"),
     };
@@ -1001,10 +1019,73 @@ fn visa(
         Some(value) => value,
         None => return Dispatch::error(400, "refused", "layerx_agent_binding_required"),
     };
-    let mut bindings = BindingCapture::default();
+    let signer_public_key = match parse_hex32(&record.signer_public_key) {
+        Ok(value) => value,
+        Err(_) => return Dispatch::error(503, "pending", "persistence_unavailable"),
+    };
+    if let Err(code) = require_visa_actor(layerx_agent, signer_public_key) {
+        return Dispatch::error(400, "refused", code);
+    }
+    if let Err(code) = require_visa_route(execute, verified.intent, &body.activity) {
+        return Dispatch::error(400, "refused", code);
+    }
+    let activity_binding = if execute {
+        let canonical = match decode_hex(&body.activity, MAX_BODY) {
+            Ok(value) if !value.is_empty() => value,
+            _ => return Dispatch::error(400, "refused", "typed_intent_required"),
+        };
+        let submission = match verify_submission(
+            &canonical,
+            &config.modules,
+            config.protocol_version,
+            config.protocol_network_id,
+            &signer_public_key,
+        ) {
+            Ok(value) => value,
+            Err(_) => return Dispatch::error(400, "refused", "activity_authorization_refused"),
+        };
+        Some(VisaActivityBinding {
+            canonical,
+            activity_id: submission.activity_id(),
+            idempotency_key: hex(&submission.idempotency_key()),
+        })
+    } else {
+        None
+    };
+    let replay_until = match verified
+        .expires_at
+        .checked_add(config.tap_clock_skew_seconds)
+    {
+        Some(value) if value > observed_at => value,
+        _ => return Dispatch::error(400, "refused", "visa_tap_refused"),
+    };
+    let tap_audit = gateway_audit_event(
+        &record.principal_digest,
+        "visa_tap_nonce",
+        &verified.key_id,
+        "attempted",
+        observed_at,
+    );
+    let mut bindings = DurableVisaBinding {
+        store: &config.store,
+        nonce: tap.nonce(),
+        intent: verified.intent,
+        activity_id: activity_binding.as_ref().map(|binding| binding.activity_id),
+        signer_public_key,
+        credential_expires_at: verified.expires_at,
+        replay_until,
+        consumed_at: observed_at,
+        audit_event: &tap_audit,
+    };
     let intent =
         match prepare_trusted_intent(principal, layerx_agent, &verified, &mut bindings, trace) {
             Ok(value) => value,
+            Err(TapError::Replay) => {
+                return Dispatch::error(409, "refused", "visa_tap_replayed")
+            }
+            Err(TapError::StorageRefused) => {
+                return Dispatch::error(503, "pending", "persistence_unavailable")
+            }
             Err(_) => return Dispatch::error(400, "refused", "visa_tap_refused"),
         };
     if !execute {
@@ -1017,29 +1098,25 @@ fn visa(
             }),
         );
     }
-    let activity = match decode_hex(&body.activity, MAX_BODY) {
-        Ok(value) if !value.is_empty() => value,
-        _ => return Dispatch::error(400, "refused", "typed_intent_required"),
+    let activity = match activity_binding {
+        Some(value) => value,
+        None => return Dispatch::error(400, "refused", "typed_intent_required"),
     };
+    let activity_id = activity.activity_id;
+    let idempotency_key = activity.idempotency_key;
+    let canonical = activity.canonical;
     let authorization = request
         .headers
         .get("authorization")
         .map(String::as_str)
         .unwrap_or("");
-    if body.activity_idempotency_key.len() != 64
-        || !body
-            .activity_idempotency_key
-            .bytes()
-            .all(|byte| byte.is_ascii_hexdigit())
-    {
-        return Dispatch::error(400, "refused", "protocol_idempotency_required");
-    }
     match (Execution {
         config,
         authorization,
-        activity,
-        idempotency: &body.activity_idempotency_key,
+        activity: canonical,
+        idempotency: &idempotency_key,
         expected_signer: &record.signer_public_key,
+        submitted_activity_id: Some(activity_id),
         trace,
     })
     .submit()
@@ -1066,6 +1143,34 @@ fn visa(
         }
         Err(_) => Dispatch::error(503, "pending", "settlement_unavailable"),
     }
+}
+
+fn require_visa_actor(
+    layerx_agent: [u8; 32],
+    signer_public_key: [u8; 32],
+) -> Result<(), &'static str> {
+    if layerx_agent == signer_public_key {
+        Ok(())
+    } else {
+        Err("layerx_agent_signer_mismatch")
+    }
+}
+
+fn require_visa_route(
+    execute: bool,
+    intent: AgentIntent,
+    activity: &str,
+) -> Result<(), &'static str> {
+    if execute && intent != AgentIntent::Pay {
+        return Err("payer_credential_required");
+    }
+    if execute && activity.is_empty() {
+        return Err("typed_intent_required");
+    }
+    if !execute && !activity.is_empty() {
+        return Err("unexpected_activity_decoration");
+    }
+    Ok(())
 }
 
 struct VisaRegistry<'a> {
@@ -1110,20 +1215,53 @@ impl TrustedAgentRegistry for VisaRegistry<'_> {
     }
 }
 
-#[derive(Default)]
-struct BindingCapture {
-    binding: Option<CredentialBinding>,
+struct DurableVisaBinding<'a> {
+    store: &'a layerx_platform_gateway::store::RedisStore,
+    nonce: &'a str,
+    intent: AgentIntent,
+    activity_id: Option<[u8; 32]>,
+    signer_public_key: [u8; 32],
+    credential_expires_at: u64,
+    replay_until: u64,
+    consumed_at: u64,
+    audit_event: &'a str,
 }
 
-impl CredentialBindingStore for BindingCapture {
+impl CredentialBindingStore for DurableVisaBinding<'_> {
     fn put(
         &mut self,
-        _principal: &PrincipalId,
+        principal: &PrincipalId,
         binding: &CredentialBinding,
         _trace: &TraceId,
-    ) -> Result<(), layerx_visa_tap::TapError> {
-        self.binding = Some(binding.clone());
-        Ok(())
+    ) -> Result<(), TapError> {
+        let record = TapCredentialRecord {
+            principal_digest: principal.as_str().to_owned(),
+            key_id: binding.key_id.clone(),
+            layerx_agent: hex(&binding.layerx_agent),
+            trusted_agent_id: binding.trusted_agent_id.clone(),
+            trusted_agent_domain: binding.trusted_agent_domain.clone(),
+            intent: match self.intent {
+                AgentIntent::Browse => "browse",
+                AgentIntent::Pay => "pay",
+            }
+            .to_owned(),
+            evidence_digest: hex(&binding.evidence_digest),
+            activity_id: self.activity_id.map(|value| hex(&value)),
+            signer_public_key: hex(&self.signer_public_key),
+            credential_expires_at: self.credential_expires_at,
+        };
+        match self.store.consume_tap_nonce(
+            &binding.key_id,
+            self.nonce,
+            &record,
+            self.consumed_at,
+            self.replay_until,
+            self.audit_event,
+        ) {
+            Ok(TapNonceConsumption::Consumed { .. }) => Ok(()),
+            Ok(TapNonceConsumption::Replay) => Err(TapError::Replay),
+            Err(_) => Err(TapError::StorageRefused),
+        }
     }
 }
 
@@ -1225,6 +1363,7 @@ fn fiat(
                 activity,
                 idempotency: &protocol_idempotency,
                 expected_signer: &record.signer_public_key,
+                submitted_activity_id: None,
                 trace,
             };
             match execution.submit() {
@@ -1411,6 +1550,7 @@ struct Execution<'a> {
     activity: Vec<u8>,
     idempotency: &'a str,
     expected_signer: &'a str,
+    submitted_activity_id: Option<[u8; 32]>,
     trace: &'a TraceId,
 }
 
@@ -1479,6 +1619,9 @@ impl Execution<'_> {
             Some(expected),
         )
         .map_err(|_| "independent receipt verification failed".to_owned())?;
+        if let Some(submitted) = self.submitted_activity_id {
+            require_receipt_activity(submitted, verified.activity_id())?;
+        }
         let independently_verified = verify(&receipt, &authorized)
             .map_err(|_| "independent receipt verification failed".to_owned())?;
         let protocol = independently_verified
@@ -1503,6 +1646,17 @@ impl Execution<'_> {
             authorized,
             verified,
         }))
+    }
+}
+
+fn require_receipt_activity(
+    submitted_activity_id: [u8; 32],
+    receipt_activity_id: [u8; 32],
+) -> Result<(), String> {
+    if submitted_activity_id == receipt_activity_id {
+        Ok(())
+    } else {
+        Err("verified receipt does not match the submitted activity".to_owned())
     }
 }
 
@@ -1826,4 +1980,56 @@ fn hex(bytes: &[u8]) -> String {
         value.push(char::from(DIGITS[usize::from(byte & 0x0f)]));
     }
     value
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn visa_wire() -> serde_json::Value {
+        serde_json::json!({
+            "authority": "shop.example",
+            "path": "/checkout",
+            "signature_input": "sig2=(\"@authority\" \"@path\")",
+            "signature": "sig2=:AA==:"
+        })
+    }
+
+    #[test]
+    fn visa_wire_has_no_caller_time_or_trust_override() {
+        assert!(serde_json::from_value::<VisaRequest>(visa_wire()).is_ok());
+        let mut caller_time = visa_wire();
+        caller_time["now"] = serde_json::json!(u64::MAX);
+        assert!(serde_json::from_value::<VisaRequest>(caller_time).is_err());
+        let mut trust_override = visa_wire();
+        trust_override["verified"] = serde_json::json!(true);
+        assert!(serde_json::from_value::<VisaRequest>(trust_override).is_err());
+    }
+
+    #[test]
+    fn unrelated_activity_decoration_and_browse_execution_are_refused() {
+        assert_eq!(
+            require_visa_route(false, AgentIntent::Browse, "00"),
+            Err("unexpected_activity_decoration")
+        );
+        assert_eq!(
+            require_visa_route(true, AgentIntent::Browse, "00"),
+            Err("payer_credential_required")
+        );
+    }
+
+    #[test]
+    fn tap_agent_must_be_the_authenticated_activity_signer() {
+        assert!(require_visa_actor([0x41; 32], [0x41; 32]).is_ok());
+        assert_eq!(
+            require_visa_actor([0x41; 32], [0x42; 32]),
+            Err("layerx_agent_signer_mismatch")
+        );
+    }
+
+    #[test]
+    fn receipt_must_match_the_exact_submitted_activity() {
+        assert!(require_receipt_activity([0x51; 32], [0x51; 32]).is_ok());
+        assert!(require_receipt_activity([0x51; 32], [0x52; 32]).is_err());
+    }
 }

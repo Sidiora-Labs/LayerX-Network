@@ -128,6 +128,50 @@ fn target_tampering_replay_expiry_and_revocation_are_typed_refusals() {
     );
 }
 
+#[test]
+fn server_time_and_bounded_skew_refuse_validity_manipulation() {
+    let signing = SigningKey::from_bytes(&[0x35; 32]);
+    let active = registry(&signing, KeyStatus::Active, NOW + 1_000);
+    let future = format!(
+        "(\"@authority\" \"@path\");created={};keyid=\"{KEY_ID}\";alg=\"Ed25519\";expires={};nonce=\"future-session\";tag=\"agent-payer-auth\"",
+        NOW + 61,
+        NOW + 300
+    );
+    let future_request = TapRequest::parse(
+        "shop.example",
+        "/checkout",
+        &format!("sig2={future}"),
+        &signature_for(&signing, &future),
+    )
+    .unwrap_or_else(|error| panic!("future request must parse: {error}"));
+    assert_eq!(
+        TapVerifier::verify_credential(&future_request, &active, NOW, 60),
+        Err(TapError::NotYetValid)
+    );
+
+    let expired = format!(
+        "(\"@authority\" \"@path\");created={};keyid=\"{KEY_ID}\";alg=\"Ed25519\";expires={};nonce=\"expired-session\";tag=\"agent-payer-auth\"",
+        NOW - 479,
+        NOW - 60
+    );
+    let expired_request = TapRequest::parse(
+        "shop.example",
+        "/checkout",
+        &format!("sig2={expired}"),
+        &signature_for(&signing, &expired),
+    )
+    .unwrap_or_else(|error| panic!("expired request must parse: {error}"));
+    assert_eq!(
+        TapVerifier::verify_credential(&expired_request, &active, NOW, 60),
+        Err(TapError::Expired)
+    );
+    assert!(TapVerifier::verify_credential(&expired_request, &active, NOW, 61).is_ok());
+    assert_eq!(
+        TapVerifier::verify_credential(&future_request, &active, NOW, 301),
+        Err(TapError::ClockSkewTooLarge)
+    );
+}
+
 fn request_parameters() -> String {
     format!(
         "(\"@authority\" \"@path\");created={};keyid=\"{KEY_ID}\";alg=\"Ed25519\";expires={};nonce=\"unique-session-3\";tag=\"agent-payer-auth\"",
