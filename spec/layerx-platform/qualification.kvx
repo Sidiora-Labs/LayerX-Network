@@ -166,6 +166,14 @@ observed = "The AP2 adapter verifies mandates and maps them to typed intents thr
 assumption = "None. Implementation matches specification."
 severity = "note"
 
+[observation.23.1.3]
+task = "23.1"
+file = "interop/crates/layerx-interop-service/src/config.rs, interop/crates/layerx-interop-service/src/server.rs, interop/deploy/gateway/README.md"
+symbol = "Ap2AssetBinding::audience, Ap2Request, ap2_execution_key"
+observed = "Post-implementation source review found the runnable AP2 ingress accepted caller-selected current time, clock skew, expected audience and activity idempotency. A caller could validate expired mandates against an invented clock, make an arbitrary audience appear expected, and replay the same verified mandate pair under fresh hosted-gateway keys. The repair removes those request overrides, uses the service clock with zero skew, requires one consistent deployment-pinned audience for every authenticated merchant's currency bindings, and derives the execution identity from the authenticated principal plus both signature-verified mandate references."
+assumption = "AP2 deployment manifests must add the audience field to every asset binding and clients must stop sending now, clock_skew_seconds, audience and activity_idempotency_key. Human qualification must exercise expired and future mandates, cross-merchant audiences, same-pair retries with altered activities and direct and autonomous presentations across restarts. The signed nonce is still supplied with the presentation and must be issued by the integrating merchant challenge flow; this service does not claim to mint that external AP2 nonce. No build, test, formatter or live ingress was run during this source repair."
+severity = "post-implementation-repair"
+
 [observation.24.2.1]
 task = "24.2"
 file = "interop/crates/layerx-interop-service/src/server.rs, interop/deploy/gateway/README.md"

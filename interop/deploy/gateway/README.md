@@ -31,3 +31,10 @@ The callback does not accept an activity idempotency override. The service
 derives the economic key from the authenticated provider, settlement, rail,
 and evidence class, so retries converge and one settlement cannot be credited
 again under a fresh caller-selected key.
+
+Every AP2 asset binding declares one deployment-owned `audience`; all currency
+bindings for the same authenticated merchant principal must use that exact
+value. AP2 request bodies carry the signed nonce but cannot override time,
+clock skew, audience, or activity idempotency. The service verifies against
+its own clock with zero skew and derives the hosted execution key from the
+authenticated principal and both verified mandate references.

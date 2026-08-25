@@ -102,6 +102,7 @@ pub struct Ap2KeyPin {
 #[serde(deny_unknown_fields)]
 pub struct Ap2AssetBinding {
     pub principal_digest: String,
+    pub audience: String,
     pub currency: String,
     pub minor_unit_exponent: u8,
     pub atomic_units_per_minor_unit: String,
@@ -341,12 +342,19 @@ fn runtime_manifest(file: ManifestFile) -> Result<RuntimeManifest, String> {
         }
     }
     let mut ap2_asset_identities = BTreeSet::new();
+    let mut ap2_principal_audiences = BTreeMap::new();
     for binding in &file.ap2_assets {
         let atomic_units = binding
             .atomic_units_per_minor_unit
             .parse::<u128>()
             .map_err(|_| "AP2 asset binding declaration is invalid".to_owned())?;
         if parse_hex32(&binding.principal_digest).is_err()
+            || binding.audience.is_empty()
+            || binding.audience.len() > 512
+            || binding
+                .audience
+                .bytes()
+                .any(|byte| byte.is_ascii_control())
             || binding.currency.len() != 3
             || !binding
                 .currency
@@ -361,6 +369,12 @@ fn runtime_manifest(file: ManifestFile) -> Result<RuntimeManifest, String> {
                 .insert((binding.principal_digest.as_str(), binding.currency.as_str()))
         {
             return Err("AP2 asset binding declaration is invalid".to_owned());
+        }
+        if ap2_principal_audiences
+            .insert(binding.principal_digest.as_str(), binding.audience.as_str())
+            .is_some_and(|audience| audience != binding.audience.as_str())
+        {
+            return Err("AP2 principal audience declaration is inconsistent".to_owned());
         }
     }
     let mut visa_key_ids = BTreeSet::new();

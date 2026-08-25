@@ -50,6 +50,7 @@ use subtle::ConstantTimeEq;
 const MAX_BODY: usize = 512 * 1024;
 const FIAT_EVIDENCE_SIGNATURE_DOMAIN: &[u8] =
     b"LayerX/interop/fiat/provider-evidence/v1\0";
+const AP2_EXECUTION_KEY_DOMAIN: &[u8] = b"LayerX/interop/ap2/execution-key/v1\0";
 
 pub fn route(config: &Config, request: &IncomingRequest) -> OutgoingResponse {
     if request.headers.contains_key("x-layerx-principal")
@@ -604,13 +605,8 @@ fn x402_settle(
 struct Ap2Request {
     checkout_presentation: String,
     payment_presentation: String,
-    audience: String,
     nonce: String,
-    now: u64,
-    clock_skew_seconds: u64,
     currency_minor_exponent: u8,
-    #[serde(default)]
-    activity_idempotency_key: String,
     #[serde(default)]
     activity: String,
 }
@@ -630,10 +626,23 @@ fn ap2(
     let resolver = Ap2Resolver {
         keys: &config.manifest.ap2_keys,
     };
+    let binding = match config
+        .manifest
+        .ap2_assets
+        .iter()
+        .find(|binding| binding.principal_digest == record.principal_digest)
+    {
+        Some(value) => value,
+        None => return Dispatch::error(400, "refused", "asset_binding_unavailable"),
+    };
+    let server_now = match now() {
+        Ok(value) => value,
+        Err(_) => return Dispatch::error(503, "pending", "clock_unavailable"),
+    };
     let context = VerificationContext {
-        now: body.now,
-        clock_skew_seconds: body.clock_skew_seconds,
-        expected_audience: &body.audience,
+        now: server_now,
+        clock_skew_seconds: 0,
+        expected_audience: &binding.audience,
         expected_nonce: &body.nonce,
         currency_minor_exponent: body.currency_minor_exponent,
         usage: None,
@@ -699,19 +708,12 @@ fn ap2(
         .get("authorization")
         .map(String::as_str)
         .unwrap_or("");
-    if body.activity_idempotency_key.len() != 64
-        || !body
-            .activity_idempotency_key
-            .bytes()
-            .all(|byte| byte.is_ascii_hexdigit())
-    {
-        return Dispatch::error(400, "refused", "protocol_idempotency_required");
-    }
+    let activity_idempotency_key = ap2_execution_key(record, &verified);
     let execution = Execution {
         config,
         authorization,
         activity,
-        idempotency: &body.activity_idempotency_key,
+        idempotency: &activity_idempotency_key,
         expected_signer: &record.signer_public_key,
         submitted_activity_id: None,
         trace,
@@ -766,6 +768,17 @@ fn ap2(
         }
         Err(_) => Dispatch::error(503, "pending", "settlement_unavailable"),
     }
+}
+
+fn ap2_execution_key(record: &KeyRecord, verified: &layerx_ap2::VerifiedMandates) -> String {
+    let mut digest = Sha256::new();
+    digest.update(AP2_EXECUTION_KEY_DOMAIN);
+    digest.update(record.principal_digest.as_bytes());
+    digest.update([0]);
+    digest.update(verified.checkout_receipt_reference().as_bytes());
+    digest.update([0]);
+    digest.update(verified.payment_receipt_reference().as_bytes());
+    hex(&digest.finalize())
 }
 
 struct Ap2Resolver<'a> {
@@ -2225,5 +2238,22 @@ mod tests {
             "activity_idempotency_key": "33".repeat(32)
         });
         assert!(serde_json::from_value::<FiatCallback>(callback).is_err());
+    }
+
+    #[test]
+    fn ap2_request_refuses_caller_clock_audience_and_economic_identity() {
+        let mut request = serde_json::json!({
+            "checkout_presentation": "checkout",
+            "payment_presentation": "payment",
+            "nonce": "merchant-issued-nonce",
+            "currency_minor_exponent": 2,
+            "activity": "00"
+        });
+        assert!(serde_json::from_value::<Ap2Request>(request.clone()).is_ok());
+        for field in ["now", "clock_skew_seconds", "audience", "activity_idempotency_key"] {
+            request[field] = serde_json::json!(1);
+            assert!(serde_json::from_value::<Ap2Request>(request.clone()).is_err());
+            request.as_object_mut().expect("AP2 request is an object").remove(field);
+        }
     }
 }
