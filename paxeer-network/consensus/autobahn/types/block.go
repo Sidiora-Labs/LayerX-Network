@@ -295,7 +295,7 @@ var BlockConv = protoutils.Conv[*Block, *pb.Block]{
 func (b *GlobalBlock) CalculateBlockHash() common.Hash {
 	header := &ethtypes.Header{
 		Time:       uint64(b.Payload.CreatedAt().Unix()), //nolint:gosec // block timestamps are always positive post-epoch values
-		Number:     big.NewInt(int64(b.GlobalNumber)),    //nolint:gosec // block numbers are within int64 range for all practical chain heights
+		Number:     new(big.Int).SetUint64(uint64(b.GlobalNumber)),
 		GasUsed:    b.Payload.TotalGasWanted(),
 		Difficulty: big.NewInt(0),
 		BaseFee:    big.NewInt(0),

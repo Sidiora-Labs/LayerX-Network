@@ -285,7 +285,7 @@ func (r *GigaRouter) executeBlock(ctx context.Context, b *atypes.GlobalBlock) (*
 		Hash: hash[:],
 		Header: (&types.Header{
 			ChainID: r.cfg.GenDoc.ChainID,
-			Height:  int64(b.GlobalNumber), // nolint:gosec // different representations of the same value
+			Height:  utils.Clamp[int64](b.GlobalNumber),
 			Time:    b.Timestamp,
 			// WARNING: the reward distribution has corner cases where it forgets the proposer,
 			// because reward is distributed with a delay. This is not our problem here though.

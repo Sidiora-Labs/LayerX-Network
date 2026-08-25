@@ -60,6 +60,16 @@ func (fc *AutobahnFileConfig) Validate() error {
 	if fc.MaxTxsPerBlock == 0 {
 		return errors.New("max_txs_per_block must be > 0")
 	}
+	if maxTxsPerSecond, ok := fc.MaxTxsPerSecond.Get(); ok {
+		if maxTxsPerSecond == 0 {
+			return errors.New("max_txs_per_second must be > 0 when set")
+		}
+		maxBurst := uint64(^uint(0) >> 1)
+		blockTxs := min(fc.MaxTxsPerBlock, atypes.MaxTxsPerBlock)
+		if maxTxsPerSecond > maxBurst || blockTxs > maxBurst-maxTxsPerSecond {
+			return errors.New("max_txs_per_second is too large")
+		}
+	}
 	if fc.BlockInterval <= 0 {
 		return errors.New("block_interval must be > 0")
 	}

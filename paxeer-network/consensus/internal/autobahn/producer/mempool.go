@@ -187,6 +187,9 @@ func (s *State) insertTx(ctx context.Context, tx tmtypes.Tx, waitIfFull bool) (*
 			if nonce != resp.EVMNonce {
 				return nil, fmt.Errorf("%w: got %v, want %v", errBadNonce, resp.EVMNonce, nonce)
 			}
+			if nonce == ^uint64(0) {
+				return nil, fmt.Errorf("%w: nonce exhausted", errBadNonce)
+			}
 			m.evmNonces[addr] = nonce + 1
 		}
 		// If any limit would be exceeded, then construct a payload.
