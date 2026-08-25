@@ -309,7 +309,7 @@ impl ProtocolProgramStateRead {
         }
         registry.replay_protocol_state(program, &bindings, &routes, lifecycle, &history)?;
         let journal = ProtocolJournal { head: current_head };
-        let authority = JournalAccountStateAuthority::new(&journal, now, staleness_limit)?;
+        let authority = JournalAccountStateAuthority::new(journal, now, staleness_limit)?;
         let balances = registry.read_value_accounts(program, &snapshot, &authority)?;
         Ok(Self {
             balances,
@@ -1036,7 +1036,7 @@ pub unsafe fn read_program_state(
             freshness: snapshot.freshness,
         },
     };
-    let authority = JournalAccountStateAuthority::new(&journal, now, staleness_limit)?;
+    let authority = JournalAccountStateAuthority::new(journal, now, staleness_limit)?;
     let balances = registry.read_value_accounts(program, &snapshot, &authority)?;
     Ok(ProtocolProgramStateRead {
         balances,

@@ -1246,6 +1246,14 @@ observed = "Workspace BUILD logs 003, 005 and 014 all stopped while parsing inte
 assumption = "Human qualification must resume the agent, platform Rust and interop builds and regenerate any affected lockfiles through Cargo if the now-parseable manifests report locked-resolution drift."
 severity = "qualification-repair"
 
+[observation.30.5.11]
+task = "30.5"
+file = "programs/crates/layerx-programs-runtime/src/transfer.rs, programs/crates/layerx-programs-registry/src/deprecate.rs, programs/crates/layerx-programs-registry/src/authority.rs, programs/crates/layerx-programs-protocol-adapter/src/ffi.rs"
+symbol = "ProgramAuthority::validate_owner_frame, decode_migration, ProtocolProgramStateRead"
+observed = "Human BUILD exposed three cross-crate integration mismatches after program-owned balance and occupancy work: wind-down validation attempted to construct a crate-private authority token, the legacy registry record decoder omitted occupancy fields that did not exist in that wire version, and an owning account-state authority was instantiated with a reference to ProtocolJournal even though only the journal value implements the required trait. The repair exposes validation without exposing authority issuance, restores legacy occupancy as zero because the legacy encoding carried no such values, and moves the Copy journal value into its owner."
+assumption = "Human qualification must resume the Programs and Agent builds, exercise owner-frame rejection as well as acceptance, decode historical registry records, and prove live balance reads retain receipt, state-root and freshness binding. No build or test result is asserted by this source repair."
+severity = "qualification-repair"
+
 [observation.37.1.1]
 task = "37.1"
 file = "paxeer-network/wasm-runtime/internal/api, paxeer-network/wasm/x/wasm/artifacts, paxeer-network/Dockerfile, paxeer-network/hpx"

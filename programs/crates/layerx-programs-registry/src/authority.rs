@@ -391,6 +391,8 @@ fn decode_migration(bytes: &[u8], cursor: &mut usize) -> Result<ExecutionRecord,
         abi_version,
         outputs,
         usage: MeteredUsage {
+            occupancy_byte_batches: 0,
+            occupancy_fee_units: 0,
             cpu_fuel: u64::from_be_bytes(take_array::<8>(bytes, cursor)?),
             memory_bytes: u64::from_be_bytes(take_array::<8>(bytes, cursor)?),
             storage_read_bytes: u64::from_be_bytes(take_array::<8>(bytes, cursor)?),

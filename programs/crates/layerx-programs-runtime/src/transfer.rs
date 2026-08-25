@@ -44,6 +44,31 @@ pub struct ProgramAuthority {
 }
 
 impl ProgramAuthority {
+    /// Validates an owner-root authority without exposing the authority token.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the source derivation, seed, asset, destination, or
+    /// amount cannot form an owner-frame program authority.
+    pub fn validate_owner_frame(
+        owner_program: ProgramId,
+        seed: &[u8],
+        source_account: [u8; 32],
+        asset: [u8; 32],
+        to: [u8; 32],
+        amount: u128,
+    ) -> Result<(), TransferLawError> {
+        Self::for_owner_frame(
+            owner_program,
+            seed,
+            source_account,
+            asset,
+            to,
+            amount,
+        )?;
+        Ok(())
+    }
+
     /// Issues the exact owner-root authority witness used by an
     /// exit-only wind-down call. This does not settle or mutate a balance: the
     /// existing capability checks, owner-frame rule and atomic kernel transfer

@@ -2,7 +2,7 @@
 
 use core::fmt::{self, Display};
 
-use layerx_programs_runtime::ProgramId;
+use layerx_programs_runtime::{ProgramAuthority, ProgramId};
 
 const PROGRAMS_WIND_DOWN_ACTIVITY_TYPE: u32 = 0x0009_0007;
 const WIND_DOWN_EXIT_OPERATION: u8 = 4;
@@ -574,7 +574,7 @@ fn validate_exits(
             });
         }
         let probe_amount = account.balance.max(1);
-        ProgramAuthority::for_owner_frame(
+        ProgramAuthority::validate_owner_frame(
             request.program,
             &route.seed,
             route.account_id,
