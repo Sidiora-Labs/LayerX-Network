@@ -79,6 +79,7 @@ impl Decision {
 }
 
 /// Evaluates a request with no ambient inputs and denies on every failure.
+/// An input without an opaque verified protocol-budget result is invalid.
 #[must_use]
 pub fn evaluate(policy: &PolicySet, input: &EvaluationInput<'_>) -> Decision {
     eval::evaluate_policy(policy, input)

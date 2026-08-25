@@ -62,37 +62,133 @@ pub enum SpendReconciliationStatus {
 /// Future output schema for current-period spend after canonical integration.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AgentSpendView {
-    pub agent_id: [u8; 32],
-    pub period_start: u64,
-    pub period_end: u64,
+    agent_id: [u8; 32],
+    period_start: u64,
+    period_end: u64,
     /// Authoritative figure to be shown only after adopting verified protocol
     /// budget state and comparing it with receipt-only accounting.
-    pub spent: u128,
+    spent: u128,
     /// Independently recomputed total from verified current-period receipts.
-    pub receipt_spent: u128,
-    pub limit: u128,
-    pub remaining: u128,
-    pub receipt_count: usize,
-    pub verification_level: VerificationLevel,
-    pub observed_head_sequence: u64,
-    pub reconciliation: SpendReconciliationStatus,
-    pub reconciliation_copy_key: Option<&'static str>,
-    pub reconciliation_explanation: Option<&'static str>,
-    pub evidence_digests: Vec<[u8; 32]>,
+    receipt_spent: u128,
+    limit: u128,
+    remaining: u128,
+    receipt_count: usize,
+    verification_level: VerificationLevel,
+    observed_head_sequence: u64,
+    reconciliation: SpendReconciliationStatus,
+    reconciliation_copy_key: Option<&'static str>,
+    reconciliation_explanation: Option<&'static str>,
+    evidence_digests: Vec<[u8; 32]>,
+}
+
+impl AgentSpendView {
+    #[must_use]
+    pub const fn agent_id(&self) -> [u8; 32] {
+        self.agent_id
+    }
+
+    #[must_use]
+    pub const fn period_start(&self) -> u64 {
+        self.period_start
+    }
+
+    #[must_use]
+    pub const fn period_end(&self) -> u64 {
+        self.period_end
+    }
+
+    #[must_use]
+    pub const fn spent(&self) -> u128 {
+        self.spent
+    }
+
+    #[must_use]
+    pub const fn receipt_spent(&self) -> u128 {
+        self.receipt_spent
+    }
+
+    #[must_use]
+    pub const fn limit(&self) -> u128 {
+        self.limit
+    }
+
+    #[must_use]
+    pub const fn remaining(&self) -> u128 {
+        self.remaining
+    }
+
+    #[must_use]
+    pub const fn receipt_count(&self) -> usize {
+        self.receipt_count
+    }
+
+    #[must_use]
+    pub const fn verification_level(&self) -> VerificationLevel {
+        self.verification_level
+    }
+
+    #[must_use]
+    pub const fn observed_head_sequence(&self) -> u64 {
+        self.observed_head_sequence
+    }
+
+    #[must_use]
+    pub const fn reconciliation(&self) -> SpendReconciliationStatus {
+        self.reconciliation
+    }
+
+    #[must_use]
+    pub const fn reconciliation_copy_key(&self) -> Option<&'static str> {
+        self.reconciliation_copy_key
+    }
+
+    #[must_use]
+    pub const fn reconciliation_explanation(&self) -> Option<&'static str> {
+        self.reconciliation_explanation
+    }
+
+    #[must_use]
+    pub fn evidence_digests(&self) -> &[[u8; 32]] {
+        &self.evidence_digests
+    }
 }
 
 /// Future shell-tagged projection of the Human API agent-spend contract.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ShellAgentSpend {
-    pub shell: AgentShell,
-    pub spend: AgentSpendView,
+    shell: AgentShell,
+    spend: AgentSpendView,
+}
+
+impl ShellAgentSpend {
+    #[must_use]
+    pub const fn shell(&self) -> AgentShell {
+        self.shell
+    }
+
+    #[must_use]
+    pub const fn spend(&self) -> &AgentSpendView {
+        &self.spend
+    }
 }
 
 /// Future native shell projections derived from one atomic snapshot.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AgentSpendSurfaces {
-    pub mobile: ShellAgentSpend,
-    pub desktop: ShellAgentSpend,
+    mobile: ShellAgentSpend,
+    desktop: ShellAgentSpend,
+}
+
+impl AgentSpendSurfaces {
+    #[must_use]
+    pub const fn mobile(&self) -> &ShellAgentSpend {
+        &self.mobile
+    }
+
+    #[must_use]
+    pub const fn desktop(&self) -> &ShellAgentSpend {
+        &self.desktop
+    }
 }
 
 /// Principal-scoped spend service which refuses reads until the daemon can

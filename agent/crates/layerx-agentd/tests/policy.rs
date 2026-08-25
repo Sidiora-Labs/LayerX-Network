@@ -1,6 +1,5 @@
 use std::collections::BTreeSet;
 
-use layerx_agentd::budget::ReconciliationState;
 use layerx_agentd::capability::{Capability, CapabilityDimensions, CapabilityId, RateCeiling};
 use layerx_agentd::identity::ProtocolAuthority;
 use layerx_agentd::policy::{
@@ -74,20 +73,6 @@ fn request() -> PolicyRequest {
     }
 }
 
-fn budget() -> ReconciliationState {
-    ReconciliationState {
-        last_verified_receipt: Some([6; 32]),
-        protocol_consumed: 250,
-        local_before: 250,
-        local_after: 250,
-        divergence: None,
-        window_start_sequence: 100,
-        window_end_sequence: 199,
-        remaining: 750,
-        observed_head_sequence: 120,
-    }
-}
-
 fn complete_constraints() -> RuleConstraints {
     RuleConstraints {
         activity_types: BTreeSet::from([7]),
@@ -118,20 +103,14 @@ fn policy(rules: Vec<Rule>) -> PolicySet {
 }
 
 #[test]
-fn deny_by_default_and_all_constraint_dimensions_are_enforced() {
+fn unavailable_protocol_budget_denies_before_any_permit_rule() {
     let session = session();
     let capability = capability();
     let request = request();
-    let budget = budget();
-    let input = EvaluationInput {
-        request: &request,
-        session: &session,
-        capability: &capability,
-        budget: &budget,
-    };
+    let input = EvaluationInput::without_protocol_budget(&request, &session, &capability);
     let empty = evaluate(&policy(Vec::new()), &input);
     assert_eq!(empty.outcome, Outcome::Deny);
-    assert_eq!(empty.reason, DecisionReason::NoPermittingRule);
+    assert_eq!(empty.reason, DecisionReason::InvalidContext);
 
     let allowed = evaluate(
         &policy(vec![Rule {
@@ -141,22 +120,17 @@ fn deny_by_default_and_all_constraint_dimensions_are_enforced() {
         }]),
         &input,
     );
-    assert_eq!(allowed.outcome, Outcome::Allow);
+    assert_eq!(allowed.outcome, Outcome::Deny);
+    assert_eq!(allowed.reason, DecisionReason::InvalidContext);
     assert_eq!(allowed.policy_version, "policy-v1");
 }
 
 #[test]
-fn conflicting_rules_deny_in_stable_order() {
+fn unavailable_budget_denial_is_stable_across_conflicting_rules() {
     let session = session();
     let capability = capability();
     let request = request();
-    let budget = budget();
-    let input = EvaluationInput {
-        request: &request,
-        session: &session,
-        capability: &capability,
-        budget: &budget,
-    };
+    let input = EvaluationInput::without_protocol_budget(&request, &session, &capability);
     let rules = vec![
         Rule {
             id: "z-permit".to_owned(),
@@ -171,8 +145,8 @@ fn conflicting_rules_deny_in_stable_order() {
     ];
     let expected = evaluate(&policy(rules.clone()), &input);
     assert_eq!(expected.outcome, Outcome::Deny);
-    assert_eq!(expected.reason, DecisionReason::ExplicitDeny);
-    assert_eq!(expected.deciding_rule.as_deref(), Some("a-deny"));
+    assert_eq!(expected.reason, DecisionReason::InvalidContext);
+    assert_eq!(expected.deciding_rule, None);
     for _ in 0..2_000 {
         assert_eq!(evaluate(&policy(rules.clone()), &input), expected);
     }
@@ -191,17 +165,11 @@ impl RuleMatcher for PanickingMatcher {
 }
 
 #[test]
-fn panic_and_deterministic_step_timeout_fail_closed() {
+fn unavailable_budget_precedes_matcher_and_step_evaluation() {
     let session = session();
     let capability = capability();
     let request = request();
-    let budget = budget();
-    let input = EvaluationInput {
-        request: &request,
-        session: &session,
-        capability: &capability,
-        budget: &budget,
-    };
+    let input = EvaluationInput::without_protocol_budget(&request, &session, &capability);
     let permit = Rule {
         id: "permit".to_owned(),
         effect: RuleEffect::Permit,
@@ -209,11 +177,11 @@ fn panic_and_deterministic_step_timeout_fail_closed() {
     };
     let panicked = evaluate_with_matcher(&policy(vec![permit.clone()]), &input, &PanickingMatcher);
     assert_eq!(panicked.outcome, Outcome::Deny);
-    assert_eq!(panicked.reason, DecisionReason::EvaluationFailure);
+    assert_eq!(panicked.reason, DecisionReason::InvalidContext);
 
     let mut bounded = policy(vec![permit]);
     bounded.evaluation_step_limit = 0;
     let timed_out = evaluate(&bounded, &input);
     assert_eq!(timed_out.outcome, Outcome::Deny);
-    assert_eq!(timed_out.reason, DecisionReason::EvaluationFailure);
+    assert_eq!(timed_out.reason, DecisionReason::InvalidContext);
 }

@@ -74,12 +74,64 @@ pub struct PolicySet {
     pub evaluation_step_limit: u64,
 }
 
-/// All authoritative inputs admitted to deterministic local evaluation.
+/// Inputs admitted to deterministic local evaluation.
+///
+/// The budget context is private: callers either supply an opaque result issued
+/// by protocol reconciliation or explicitly evaluate without one and receive a
+/// fail-closed invalid-context denial.
 pub struct EvaluationInput<'a> {
     pub request: &'a PolicyRequest,
     pub session: &'a SessionRecord,
     pub capability: &'a Capability,
-    pub budget: &'a ReconciliationState,
+    budget: BudgetContext<'a>,
+}
+
+#[derive(Clone, Copy)]
+enum BudgetContext<'a> {
+    Unavailable,
+    Verified(&'a ReconciliationState),
+}
+
+impl<'a> EvaluationInput<'a> {
+    /// Creates an input with no canonical protocol-budget authority.
+    ///
+    /// Evaluation of this input always denies with `InvalidContext`.
+    #[must_use]
+    pub const fn without_protocol_budget(
+        request: &'a PolicyRequest,
+        session: &'a SessionRecord,
+        capability: &'a Capability,
+    ) -> Self {
+        Self {
+            request,
+            session,
+            capability,
+            budget: BudgetContext::Unavailable,
+        }
+    }
+
+    /// Binds an opaque result issued only by protocol-budget reconciliation.
+    #[must_use]
+    pub const fn with_verified_protocol_budget(
+        request: &'a PolicyRequest,
+        session: &'a SessionRecord,
+        capability: &'a Capability,
+        budget: &'a ReconciliationState,
+    ) -> Self {
+        Self {
+            request,
+            session,
+            capability,
+            budget: BudgetContext::Verified(budget),
+        }
+    }
+
+    const fn verified_budget(&self) -> Option<&ReconciliationState> {
+        match self.budget {
+            BudgetContext::Unavailable => None,
+            BudgetContext::Verified(budget) => Some(budget),
+        }
+    }
 }
 
 /// Typed internal failure. Every variant maps to a denial.
@@ -222,12 +274,15 @@ fn evaluate_inner(
 }
 
 fn valid_context(policy: &PolicySet, input: &EvaluationInput<'_>) -> bool {
+    let Some(budget) = input.verified_budget() else {
+        return false;
+    };
     let session = &input.session.request;
     if policy.version.is_empty()
         || policy.version != session.policy_version
         || !input.session.open
         || session.tenant != input.capability.tenant
-        || input.request.amount > input.budget.remaining
+        || input.request.amount > budget.remaining()
     {
         return false;
     }

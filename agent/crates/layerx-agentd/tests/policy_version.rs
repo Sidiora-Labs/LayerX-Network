@@ -1,6 +1,5 @@
 use std::collections::BTreeSet;
 
-use layerx_agentd::budget::ReconciliationState;
 use layerx_agentd::capability::{Capability, CapabilityDimensions, CapabilityId, RateCeiling};
 use layerx_agentd::identity::ProtocolAuthority;
 use layerx_agentd::policy::{
@@ -84,20 +83,6 @@ fn request() -> PolicyRequest {
     }
 }
 
-fn budget() -> ReconciliationState {
-    ReconciliationState {
-        last_verified_receipt: None,
-        protocol_consumed: 100,
-        local_before: 100,
-        local_after: 100,
-        divergence: None,
-        window_start_sequence: 100,
-        window_end_sequence: 199,
-        remaining: 900,
-        observed_head_sequence: 120,
-    }
-}
-
 #[test]
 fn activation_only_changes_requests_received_after_it() {
     let mut registry = PolicyRegistry::new(policy("v1", RuleEffect::Permit))
@@ -112,27 +97,19 @@ fn activation_only_changes_requests_received_after_it() {
 
     let request = request();
     let capability = capability();
-    let budget = budget();
     let old_session = session("v1");
-    let old_input = EvaluationInput {
-        request: &request,
-        session: &old_session,
-        capability: &capability,
-        budget: &budget,
-    };
+    let old_input =
+        EvaluationInput::without_protocol_budget(&request, &old_session, &capability);
     let old_decision = evaluate(in_flight.policy(), &old_input);
-    assert_eq!(old_decision.outcome, Outcome::Allow);
+    assert_eq!(old_decision.outcome, Outcome::Deny);
+    assert_eq!(old_decision.reason, DecisionReason::InvalidContext);
 
     let new_session = session("v2");
-    let new_input = EvaluationInput {
-        request: &request,
-        session: &new_session,
-        capability: &capability,
-        budget: &budget,
-    };
+    let new_input =
+        EvaluationInput::without_protocol_budget(&request, &new_session, &capability);
     let new_decision = evaluate(later.policy(), &new_input);
     assert_eq!(new_decision.outcome, Outcome::Deny);
-    assert_eq!(new_decision.reason, DecisionReason::ExplicitDeny);
+    assert_eq!(new_decision.reason, DecisionReason::InvalidContext);
 
     registry.record_decision([9; 32], new_decision.clone());
     assert_eq!(

@@ -262,13 +262,13 @@ fn verified_budget(remaining: u128, observed_at_sequence: u64) -> VerifiedBudget
 fn budget_from_state(state: ReconciliationState) -> VerifiedBudgetAfter {
     let mut evidence = Sha256::new();
     evidence.update(b"layerx-agent-budget-read/v1");
-    evidence.update(state.remaining.to_be_bytes());
-    evidence.update(state.observed_head_sequence.to_be_bytes());
+    evidence.update(state.remaining().to_be_bytes());
+    evidence.update(state.observed_head_sequence().to_be_bytes());
     VerifiedBudgetAfter {
-        remaining: state.remaining,
+        remaining: state.remaining(),
         level: Level::StateProven,
         evidence_digest: evidence.finalize().into(),
-        observed_at_sequence: state.observed_head_sequence,
+        observed_at_sequence: state.observed_head_sequence(),
     }
 }
 

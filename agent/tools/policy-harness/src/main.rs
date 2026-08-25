@@ -6,7 +6,7 @@ use layerx_agentd::policy::{evaluate, DecisionReason, EvaluationInput, Outcome, 
 mod adversarial;
 
 use adversarial::{
-    agent_policy_adversarial_corpus, required_constraint_coverage, ConstraintDimension,
+    agent_policy_adversarial_corpus, required_blocked_constraints, ConstraintDimension,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -20,21 +20,20 @@ struct HarnessDecision {
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct HarnessReport {
     decisions: Vec<HarnessDecision>,
-    coverage: BTreeSet<ConstraintDimension>,
+    blocked_constraints: BTreeSet<ConstraintDimension>,
 }
 
 fn agent_policy_harness() -> Result<HarnessReport, String> {
     let corpus = agent_policy_adversarial_corpus();
     let mut decisions = Vec::new();
-    let mut coverage = BTreeSet::new();
+    let mut blocked_constraints = BTreeSet::new();
     for case in &corpus {
-        coverage.extend(case.coverage.iter().copied());
-        let input = EvaluationInput {
-            request: &case.request,
-            session: &case.session,
-            capability: &case.capability,
-            budget: &case.budget,
-        };
+        blocked_constraints.extend(case.blocked_dimensions.iter().copied());
+        let input = EvaluationInput::without_protocol_budget(
+            &case.request,
+            &case.session,
+            &case.capability,
+        );
         let decision = evaluate(&case.policy, &input);
         if decision.outcome != case.expected {
             return Err(format!(
@@ -60,14 +59,14 @@ fn agent_policy_harness() -> Result<HarnessReport, String> {
             policy_version: decision.policy_version,
         });
     }
-    let required = required_constraint_coverage();
-    if coverage != required {
-        let missing: Vec<_> = required.difference(&coverage).copied().collect();
-        return Err(format!("constraint coverage missing: {missing:?}"));
+    let required = required_blocked_constraints();
+    if blocked_constraints != required {
+        let missing: Vec<_> = required.difference(&blocked_constraints).copied().collect();
+        return Err(format!("blocked constraint corpus missing: {missing:?}"));
     }
     Ok(HarnessReport {
         decisions,
-        coverage,
+        blocked_constraints,
     })
 }
 
@@ -80,9 +79,9 @@ fn main() {
         );
     }
     println!(
-        "cases={} constraints_covered={}",
+        "cases={} constraints_blocked={}",
         report.decisions.len(),
-        report.coverage.len()
+        report.blocked_constraints.len()
     );
 }
 
@@ -91,9 +90,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn adversarial_corpus_has_no_unintended_allow_and_complete_coverage() {
+    fn unavailable_budget_denies_the_complete_adversarial_corpus() {
         let report = agent_policy_harness().unwrap_or_else(|error| panic!("harness: {error}"));
-        assert_eq!(report.coverage, required_constraint_coverage());
+        assert_eq!(report.blocked_constraints, required_blocked_constraints());
         assert_eq!(
             report
                 .decisions
@@ -101,7 +100,7 @@ mod tests {
                 .filter(|decision| decision.outcome == Outcome::Allow)
                 .map(|decision| decision.case)
                 .collect::<Vec<_>>(),
-            vec!["intended-control"]
+            Vec::<&str>::new()
         );
     }
 }

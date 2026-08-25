@@ -146,13 +146,13 @@ impl ApprovalBoundary for AgentdBoundary<'_> {
         )
         .map_err(|_| ApprovalBoundaryError::VerificationFailed)?;
         let mut evidence = Sha256::new();
-        evidence.update(state.remaining.to_be_bytes());
-        evidence.update(state.observed_head_sequence.to_be_bytes());
+        evidence.update(state.remaining().to_be_bytes());
+        evidence.update(state.observed_head_sequence().to_be_bytes());
         Ok(VerifiedBudgetAfter {
-            remaining: state.remaining,
+            remaining: state.remaining(),
             level: Level::StateProven,
             evidence_digest: evidence.finalize().into(),
-            observed_at_sequence: state.observed_head_sequence,
+            observed_at_sequence: state.observed_head_sequence(),
         })
     }
 

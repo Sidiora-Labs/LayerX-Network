@@ -1,11 +1,10 @@
 use std::collections::BTreeSet;
 
-use layerx_agentd::budget::ReconciliationState;
 use layerx_agentd::capability::{Capability, CapabilityDimensions, CapabilityId, RateCeiling};
 use layerx_agentd::identity::ProtocolAuthority;
 use layerx_agentd::policy::{
-    dry_run, evaluate, explain, EvaluationInput, EvaluationMode, Outcome, PolicyRegistry,
-    PolicyRequest, PolicySet, Rule, RuleConstraints, RuleEffect,
+    dry_run, evaluate, explain, DecisionReason, EvaluationInput, EvaluationMode, Outcome,
+    PolicyRegistry, PolicyRequest, PolicySet, Rule, RuleConstraints, RuleEffect,
 };
 use layerx_agentd::session::{OpenRequest, SessionId, SessionRecord};
 use layerx_agentd::store::TenantId;
@@ -82,40 +81,21 @@ fn request() -> PolicyRequest {
     }
 }
 
-fn budget() -> ReconciliationState {
-    ReconciliationState {
-        last_verified_receipt: None,
-        protocol_consumed: 100,
-        local_before: 100,
-        local_after: 100,
-        divergence: None,
-        window_start_sequence: 100,
-        window_end_sequence: 199,
-        remaining: 900,
-        observed_head_sequence: 120,
-    }
-}
-
 #[test]
-fn dry_run_matches_live_and_only_adds_its_audit_entry() {
+fn dry_run_matches_live_fail_closed_budget_result_and_adds_its_audit_entry() {
     let policy = policy();
     let mut registry =
         PolicyRegistry::new(policy.clone()).unwrap_or_else(|error| panic!("registry: {error:?}"));
     let request = request();
     let session = session();
     let capability = capability();
-    let budget = budget();
-    let input = EvaluationInput {
-        request: &request,
-        session: &session,
-        capability: &capability,
-        budget: &budget,
-    };
+    let input = EvaluationInput::without_protocol_budget(&request, &session, &capability);
 
     let live = evaluate(&policy, &input);
     let result = dry_run(&mut registry, [7; 32], &policy, &input);
     assert_eq!(result.decision, live);
-    assert_eq!(result.decision.outcome, Outcome::Allow);
+    assert_eq!(result.decision.outcome, Outcome::Deny);
+    assert_eq!(result.decision.reason, DecisionReason::InvalidContext);
     assert_eq!(
         registry.audit_entry([7; 32]).map(|entry| &entry.decision),
         Some(&live)
@@ -136,22 +116,16 @@ fn explanation_is_stable_machine_readable_and_complete() {
     let request = request();
     let session = session();
     let capability = capability();
-    let budget = budget();
-    let input = EvaluationInput {
-        request: &request,
-        session: &session,
-        capability: &capability,
-        budget: &budget,
-    };
+    let input = EvaluationInput::without_protocol_budget(&request, &session, &capability);
     let decision = evaluate(&policy, &input);
     let first = explain(&decision, EvaluationMode::Live);
     let second = explain(&decision, EvaluationMode::Live);
     assert_eq!(first, second);
-    assert_eq!(first.matched_rules, vec!["permit-research"]);
-    assert_eq!(first.deciding_rule.as_deref(), Some("permit-research"));
+    assert!(first.matched_rules.is_empty());
+    assert_eq!(first.deciding_rule, None);
     let encoded = String::from_utf8(first.machine_bytes())
         .unwrap_or_else(|error| panic!("machine explanation: {error}"));
     assert!(encoded.contains("policy_version=2:v1\n"));
-    assert!(encoded.contains("matched_0=15:permit-research\n"));
-    assert!(encoded.contains("reason=17:permitted_by_rule\n"));
+    assert!(encoded.contains("matched_count=1:0\n"));
+    assert!(encoded.contains("reason=15:invalid_context\n"));
 }

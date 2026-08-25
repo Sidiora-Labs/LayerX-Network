@@ -1,6 +1,5 @@
 use std::collections::BTreeSet;
 
-use layerx_agentd::budget::ReconciliationState;
 use layerx_agentd::capability::{Capability, CapabilityDimensions, CapabilityId, RateCeiling};
 use layerx_agentd::identity::ProtocolAuthority;
 use layerx_agentd::policy::{
@@ -33,12 +32,11 @@ pub struct CorpusCase {
     pub request: PolicyRequest,
     pub session: SessionRecord,
     pub capability: Capability,
-    pub budget: ReconciliationState,
     pub expected: Outcome,
-    pub coverage: BTreeSet<ConstraintDimension>,
+    pub blocked_dimensions: BTreeSet<ConstraintDimension>,
 }
 
-pub fn required_constraint_coverage() -> BTreeSet<ConstraintDimension> {
+pub fn required_blocked_constraints() -> BTreeSet<ConstraintDimension> {
     BTreeSet::from([
         ConstraintDimension::ActivityType,
         ConstraintDimension::Counterparty,
@@ -142,7 +140,7 @@ pub fn agent_policy_adversarial_corpus() -> Vec<CorpusCase> {
 
 fn deny_for(case: &mut CorpusCase, dimension: ConstraintDimension) {
     case.expected = Outcome::Deny;
-    case.coverage = BTreeSet::from([dimension]);
+    case.blocked_dimensions = BTreeSet::from([dimension]);
 }
 
 fn base_case() -> CorpusCase {
@@ -229,19 +227,8 @@ fn base_case() -> CorpusCase {
         request,
         session,
         capability,
-        budget: ReconciliationState {
-            last_verified_receipt: None,
-            protocol_consumed: 300,
-            local_before: 300,
-            local_after: 300,
-            divergence: None,
-            window_start_sequence: 100,
-            window_end_sequence: 199,
-            remaining: 700,
-            observed_head_sequence: 120,
-        },
-        expected: Outcome::Allow,
-        coverage: BTreeSet::new(),
+        expected: Outcome::Deny,
+        blocked_dimensions: BTreeSet::new(),
     }
 }
 

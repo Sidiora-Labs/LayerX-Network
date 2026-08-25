@@ -34,18 +34,18 @@ pub(crate) fn build_alert(
     state: &ReconciliationState,
     local_ceiling: u128,
 ) -> Option<BudgetDivergenceAlert> {
-    state.divergence?;
-    let enforced_consumed = state.local_before.max(state.protocol_consumed);
-    let local_remaining = local_ceiling.saturating_sub(state.local_before);
-    let enforced_remaining = state.remaining.min(local_remaining);
+    state.divergence()?;
+    let enforced_consumed = state.local_before().max(state.protocol_consumed());
+    let local_remaining = local_ceiling.saturating_sub(state.local_before());
+    let enforced_remaining = state.remaining().min(local_remaining);
     Some(BudgetDivergenceAlert {
         audit: DivergenceAuditRecord {
-            local_consumed: state.local_before,
-            protocol_consumed: state.protocol_consumed,
-            last_verified_receipt: state.last_verified_receipt,
-            observed_head_sequence: state.observed_head_sequence,
-            window_start_sequence: state.window_start_sequence,
-            window_end_sequence: state.window_end_sequence,
+            local_consumed: state.local_before(),
+            protocol_consumed: state.protocol_consumed(),
+            last_verified_receipt: state.last_verified_receipt(),
+            observed_head_sequence: state.observed_head_sequence(),
+            window_start_sequence: state.window_start_sequence(),
+            window_end_sequence: state.window_end_sequence(),
         },
         health: BudgetHealth {
             ready_for_writes: false,

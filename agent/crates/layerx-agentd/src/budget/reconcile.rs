@@ -28,18 +28,65 @@ pub struct LocalAccounting {
     pub last_receipt: Option<[u8; 32]>,
 }
 
-/// Observable reconciliation result including the corrected divergence.
+/// Opaque reconciliation result issued only after protocol evidence succeeds.
+///
+/// No public constructor exists. While the canonical budget record/key schema
+/// is unavailable, reconciliation issues no value of this type.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ReconciliationState {
-    pub last_verified_receipt: Option<[u8; 32]>,
-    pub protocol_consumed: u128,
-    pub local_before: u128,
-    pub local_after: u128,
-    pub divergence: Option<i128>,
-    pub window_start_sequence: u64,
-    pub window_end_sequence: u64,
-    pub remaining: u128,
-    pub observed_head_sequence: u64,
+    last_verified_receipt: Option<[u8; 32]>,
+    protocol_consumed: u128,
+    local_before: u128,
+    local_after: u128,
+    divergence: Option<i128>,
+    window_start_sequence: u64,
+    window_end_sequence: u64,
+    remaining: u128,
+    observed_head_sequence: u64,
+}
+
+impl ReconciliationState {
+    /// Returns the protocol remaining amount from this opaque verified result.
+    #[must_use]
+    pub const fn remaining(&self) -> u128 {
+        self.remaining
+    }
+
+    /// Returns the signed head sequence which anchored this result.
+    #[must_use]
+    pub const fn observed_head_sequence(&self) -> u64 {
+        self.observed_head_sequence
+    }
+
+    /// Returns the corrected local amount from this opaque verified result.
+    #[must_use]
+    pub const fn local_after(&self) -> u128 {
+        self.local_after
+    }
+
+    pub(crate) const fn last_verified_receipt(&self) -> Option<[u8; 32]> {
+        self.last_verified_receipt
+    }
+
+    pub(crate) const fn protocol_consumed(&self) -> u128 {
+        self.protocol_consumed
+    }
+
+    pub(crate) const fn local_before(&self) -> u128 {
+        self.local_before
+    }
+
+    pub(crate) const fn divergence(&self) -> Option<i128> {
+        self.divergence
+    }
+
+    pub(crate) const fn window_start_sequence(&self) -> u64 {
+        self.window_start_sequence
+    }
+
+    pub(crate) const fn window_end_sequence(&self) -> u64 {
+        self.window_end_sequence
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
