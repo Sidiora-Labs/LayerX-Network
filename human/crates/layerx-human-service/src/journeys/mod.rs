@@ -10,8 +10,8 @@ mod withdraw;
 pub use deposit::{
     DepositActivity, DepositAgentBoundary, DepositAgentPlan, DepositBoundaryError,
     DepositFailureKind, DepositJourney, DepositJourneyError, DepositNotification, DepositPlan,
-    DepositRuntime, DepositStage, DepositStatus, FinalityDelay, WalletCustodyOutcome,
-    WalletCustodyRequest,
+    DepositProofIdentity, DepositRuntime, DepositStage, DepositStatus, FinalityDelay,
+    WalletCustodyOutcome, WalletCustodyRequest,
 };
 
 pub use engine::{

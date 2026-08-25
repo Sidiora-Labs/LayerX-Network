@@ -26,11 +26,11 @@ use crate::notify::JourneyId;
 use crate::store::{PrincipalScope, RowKey, StoreError, Table};
 use crate::trace::TraceId;
 
-const RECORD_VERSION: u8 = 2;
+const RECORD_VERSION: u8 = 3;
 const RECORD_PREFIX: &str = "deposit-journey-";
 const NOTIFICATION_PREFIX: &str = "deposit-notification-";
 const WALLET_ACTION_DOMAIN: &[u8] = b"layerx-human-deposit-wallet/v1\0";
-const PLAN_DIGEST_DOMAIN: &[u8] = b"layerx-human-deposit-plan/v1\0";
+const PLAN_DIGEST_DOMAIN: &[u8] = b"layerx-human-deposit-plan/v2\0";
 const CREDIT_PLAN_DOMAIN: &[u8] = b"layerx-human-deposit-credit-plan/v1\0";
 
 /// Agent preparation facts for the one bridge credit leg.
@@ -52,7 +52,10 @@ pub struct DepositPlan {
     pub journey_id: JourneyId,
     pub idempotency_key: [u8; 32],
     pub wallet: EvmAddress,
+    /// Existing wallet-binding scope; this is not the Paxeer RPC chain id.
     pub network: NetworkId,
+    /// Full Paxeer EVM chain identity used by RPC and wallet custody.
+    pub paxeer_chain_id: u64,
     pub layerx_network: NetworkId,
     pub layerx_protocol_version: u16,
     pub vault: EvmAddress,
@@ -71,7 +74,7 @@ pub struct DepositPlan {
 pub struct WalletCustodyRequest {
     pub action_key: [u8; 32],
     pub wallet: EvmAddress,
-    pub network_id: u32,
+    pub chain_id: u64,
     pub vault: EvmAddress,
     pub asset: AssetId,
     pub beneficiary: [u8; 32],
@@ -163,6 +166,7 @@ pub enum DepositFailureKind {
     ReorgDisplaced { requeued: bool },
     ProofUnavailable,
     CreditRefused,
+    LegacyProofSchema,
 }
 
 /// User-facing deposit timeline. Protocol machinery is represented as the
@@ -180,11 +184,19 @@ pub enum DepositStage {
     Failed(DepositFailureKind),
 }
 
+/// Explicit replay identity retained for current and legacy deposit history.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "value", rename_all = "kebab-case")]
+pub enum DepositProofIdentity {
+    CanonicalNullifier([u8; 32]),
+    LegacyProofCommitment([u8; 32]),
+}
+
 /// Joined custody/proof/credit evidence retained for Activity.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct DepositActivity {
     pub custody_transaction: [u8; 32],
-    pub deposit_nullifier: [u8; 32],
+    pub proof_identity: DepositProofIdentity,
     pub credit_activity_id: [u8; 32],
     pub credit_receipt_digest: [u8; 32],
 }
@@ -260,6 +272,7 @@ enum StoredFailure {
     ReorgDisplacedDropped,
     ProofUnavailable,
     CreditRefused,
+    LegacyProofSchema,
 }
 
 impl StoredFailure {
@@ -272,6 +285,7 @@ impl StoredFailure {
             Self::ReorgDisplacedDropped => DepositFailureKind::ReorgDisplaced { requeued: false },
             Self::ProofUnavailable => DepositFailureKind::ProofUnavailable,
             Self::CreditRefused => DepositFailureKind::CreditRefused,
+            Self::LegacyProofSchema => DepositFailureKind::LegacyProofSchema,
         }
     }
 
@@ -284,6 +298,7 @@ impl StoredFailure {
             Self::ReorgDisplacedDropped => "reorg-displaced",
             Self::ProofUnavailable => "proof-unavailable",
             Self::CreditRefused => "credit-refused",
+            Self::LegacyProofSchema => "legacy-proof-schema",
         }
     }
 }
@@ -307,16 +322,27 @@ impl StoredDelay {
     }
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum RecordSchema {
+    Current,
+    LegacyV1,
+    LegacyV2,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 struct Record {
     version: u8,
+    schema: RecordSchema,
     journey_id: String,
     idempotency_key: [u8; 32],
     plan_digest: [u8; 32],
     wallet: [u8; 20],
-    network_id: u32,
-    layerx_network_id: u32,
-    layerx_protocol_version: u16,
+    binding_network_id: u32,
+    paxeer_chain_id: Option<u64>,
+    layerx_network_id: Option<u32>,
+    layerx_protocol_version: Option<u16>,
     binding_receipt_digest: [u8; 32],
     vault: [u8; 20],
     asset: [u8; 32],
@@ -340,7 +366,79 @@ struct Record {
     required: u64,
     delay: Option<StoredDelay>,
     deposit_nullifier: Option<[u8; 32]>,
+    legacy_proof_commitment: Option<[u8; 32]>,
+    legacy_phase: Option<Phase>,
     activity: Option<DepositActivity>,
+    failure: Option<StoredFailure>,
+    started_at: u64,
+    updated_at: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(untagged)]
+enum LegacyDepositActivity {
+    V1(LegacyDepositActivityV1),
+    V2(LegacyDepositActivityV2),
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct LegacyDepositActivityV1 {
+    custody_transaction: [u8; 32],
+    proof_commitment: [u8; 32],
+    credit_activity_id: [u8; 32],
+    credit_receipt_digest: [u8; 32],
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct LegacyDepositActivityV2 {
+    custody_transaction: [u8; 32],
+    deposit_nullifier: [u8; 32],
+    credit_activity_id: [u8; 32],
+    credit_receipt_digest: [u8; 32],
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct LegacyRecord {
+    version: u8,
+    journey_id: String,
+    idempotency_key: [u8; 32],
+    plan_digest: [u8; 32],
+    wallet: [u8; 20],
+    network_id: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    layerx_network_id: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    layerx_protocol_version: Option<u16>,
+    binding_receipt_digest: [u8; 32],
+    vault: [u8; 20],
+    asset: [u8; 32],
+    amount: u128,
+    recipient: String,
+    reserve: String,
+    currency: String,
+    actor: String,
+    authority: String,
+    account_sequence: u64,
+    not_before: u64,
+    not_after: u64,
+    fee_limit: u128,
+    custody_key: String,
+    wallet_action_key: [u8; 32],
+    credit_plan_key: [u8; 32],
+    credit_journey_id: String,
+    phase: Phase,
+    transaction: Option<[u8; 32]>,
+    confirmations: u64,
+    required: u64,
+    delay: Option<StoredDelay>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    proof_commitment: Option<[u8; 32]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    deposit_nullifier: Option<[u8; 32]>,
+    activity: Option<LegacyDepositActivity>,
     failure: Option<StoredFailure>,
     started_at: u64,
     updated_at: u64,
@@ -370,10 +468,16 @@ impl DepositJourney {
         let digest = plan_digest(plan);
         if let Some(existing) = scope.get(Table::Journeys, &row) {
             let record = decode(existing.bytes())?;
-            if record.plan_digest != digest || record.journey_id != plan.journey_id.as_str() {
+            if record.journey_id != plan.journey_id.as_str()
+                || (record.schema == RecordSchema::Current && record.plan_digest != digest)
+            {
                 return Err(DepositJourneyError::IdempotencyConflict);
             }
-            return Ok(Self { record });
+            let journey = Self { record };
+            if journey.record.schema != RecordSchema::Current {
+                journey.persist(scope)?;
+            }
+            return Ok(journey);
         }
         let active = match binding.state(scope)? {
             BindingState::Active(active) | BindingState::Rebinding { active, .. } => active,
@@ -389,13 +493,15 @@ impl DepositJourney {
         let credit_journey_id = credit_journey_id(credit_plan_key)?;
         let record = Record {
             version: RECORD_VERSION,
+            schema: RecordSchema::Current,
             journey_id: plan.journey_id.as_str().to_owned(),
             idempotency_key: plan.idempotency_key,
             plan_digest: digest,
             wallet: plan.wallet.bytes(),
-            network_id: plan.network.value(),
-            layerx_network_id: plan.layerx_network.value(),
-            layerx_protocol_version: plan.layerx_protocol_version,
+            binding_network_id: plan.network.value(),
+            paxeer_chain_id: Some(plan.paxeer_chain_id),
+            layerx_network_id: Some(plan.layerx_network.value()),
+            layerx_protocol_version: Some(plan.layerx_protocol_version),
             binding_receipt_digest: active.receipt_digest(),
             vault: plan.vault.bytes(),
             asset: plan.asset.bytes(),
@@ -419,6 +525,8 @@ impl DepositJourney {
             required: 0,
             delay: None,
             deposit_nullifier: None,
+            legacy_proof_commitment: None,
+            legacy_phase: None,
             activity: None,
             failure: None,
             started_at: now,
@@ -478,6 +586,9 @@ impl DepositJourney {
     ) -> Result<DepositStatus, DepositJourneyError> {
         if now < self.record.updated_at {
             return Err(DepositJourneyError::TimeRegressed);
+        }
+        if self.record.schema != RecordSchema::Current {
+            self.persist(scope)?;
         }
         match self.record.phase {
             Phase::Ready => self.transition(scope, Phase::WalletOpening, now)?,
@@ -652,7 +763,9 @@ impl DepositJourney {
                     }
                     self.record.activity = Some(DepositActivity {
                         custody_transaction: self.transaction()?.bytes(),
-                        deposit_nullifier: proof.nullifier(),
+                        proof_identity: DepositProofIdentity::CanonicalNullifier(
+                            proof.nullifier(),
+                        ),
                         credit_activity_id: evidence.activity_id,
                         credit_receipt_digest: evidence.receipt_digest,
                     });
@@ -725,10 +838,14 @@ impl DepositJourney {
     }
 
     fn wallet_request(&self) -> WalletCustodyRequest {
+        let chain_id = self
+            .record
+            .paxeer_chain_id
+            .unwrap_or_else(|| unreachable!("active current deposit has a Paxeer chain"));
         WalletCustodyRequest {
             action_key: self.record.wallet_action_key,
             wallet: EvmAddress::new(self.record.wallet),
-            network_id: self.record.network_id,
+            chain_id,
             vault: EvmAddress::new(self.record.vault),
             asset: AssetId::new(self.record.asset),
             beneficiary: account_address(&self.recipient_unchecked()),
@@ -768,9 +885,9 @@ impl DepositJourney {
         let recipient = self.recipient()?;
         if proof.transaction() != self.transaction()?
             || proof.vault().bytes() != self.record.vault
-            || proof.chain_id() != u64::from(self.record.network_id)
-            || proof.network_id() != self.record.layerx_network_id
-            || proof.protocol_version() != self.record.layerx_protocol_version
+            || Some(proof.chain_id()) != self.record.paxeer_chain_id
+            || Some(proof.network_id()) != self.record.layerx_network_id
+            || Some(proof.protocol_version()) != self.record.layerx_protocol_version
             || proof.custody().payer.bytes() != self.record.wallet
             || proof.custody().asset.bytes() != self.record.asset
             || proof.custody().amount.value() != self.record.amount
@@ -894,6 +1011,7 @@ impl DepositJourney {
 fn validate_plan(plan: &DepositPlan) -> Result<(), DepositJourneyError> {
     if plan.idempotency_key == [0; 32]
         || plan.amount.value() == 0
+        || plan.paxeer_chain_id == 0
         || plan.layerx_protocol_version == 0
         || plan.currency.is_empty()
         || plan.currency.len() > 12
@@ -909,6 +1027,82 @@ fn validate_plan(plan: &DepositPlan) -> Result<(), DepositJourneyError> {
 }
 
 fn validate_record(record: &Record) -> Result<(), DepositJourneyError> {
+    let schema_invalid = match record.schema {
+        RecordSchema::Current => {
+            record.paxeer_chain_id.is_none_or(|value| value == 0)
+                || record.layerx_network_id.is_none_or(|value| value == 0)
+                || record
+                    .layerx_protocol_version
+                    .is_none_or(|value| value == 0)
+                || record.legacy_proof_commitment.is_some()
+                || record.legacy_phase.is_some()
+                || record.activity.as_ref().is_some_and(|activity| {
+                    !matches!(
+                        activity.proof_identity,
+                        DepositProofIdentity::CanonicalNullifier(_)
+                    )
+                })
+        }
+        RecordSchema::LegacyV1 => {
+            record.paxeer_chain_id.is_some()
+                || record.layerx_network_id.is_some()
+                || record.layerx_protocol_version.is_some()
+                || record.deposit_nullifier.is_some()
+                || !matches!(record.phase, Phase::Done | Phase::Failed)
+                || record
+                    .legacy_phase
+                    .is_some_and(|phase| matches!(phase, Phase::Done | Phase::Failed))
+                || (record.failure == Some(StoredFailure::LegacyProofSchema))
+                    != record.legacy_phase.is_some()
+                || record.activity.as_ref().is_some_and(|activity| {
+                    !matches!(
+                        activity.proof_identity,
+                        DepositProofIdentity::LegacyProofCommitment(_)
+                    )
+                })
+        }
+        RecordSchema::LegacyV2 => {
+            record.paxeer_chain_id.is_some()
+                || record.layerx_network_id.is_none_or(|value| value == 0)
+                || record
+                    .layerx_protocol_version
+                    .is_none_or(|value| value == 0)
+                || record.legacy_proof_commitment.is_some()
+                || !matches!(record.phase, Phase::Done | Phase::Failed)
+                || record
+                    .legacy_phase
+                    .is_some_and(|phase| matches!(phase, Phase::Done | Phase::Failed))
+                || (record.failure == Some(StoredFailure::LegacyProofSchema))
+                    != record.legacy_phase.is_some()
+                || record.activity.as_ref().is_some_and(|activity| {
+                    !matches!(
+                        activity.proof_identity,
+                        DepositProofIdentity::CanonicalNullifier(_)
+                    )
+                })
+        }
+    };
+    let terminal_identity_invalid = if record.phase == Phase::Done {
+        match (record.schema, record.activity.as_ref()) {
+            (
+                RecordSchema::Current | RecordSchema::LegacyV2,
+                Some(DepositActivity {
+                    proof_identity: DepositProofIdentity::CanonicalNullifier(value),
+                    ..
+                }),
+            ) => record.deposit_nullifier != Some(*value),
+            (
+                RecordSchema::LegacyV1,
+                Some(DepositActivity {
+                    proof_identity: DepositProofIdentity::LegacyProofCommitment(value),
+                    ..
+                }),
+            ) => record.legacy_proof_commitment != Some(*value),
+            _ => true,
+        }
+    } else {
+        false
+    };
     if record.version != RECORD_VERSION
         || JourneyId::new(record.journey_id.clone()).is_err()
         || record.idempotency_key == [0; 32]
@@ -917,10 +1111,10 @@ fn validate_record(record: &Record) -> Result<(), DepositJourneyError> {
         || record.credit_plan_key == [0; 32]
         || record.wallet == [0; 20]
         || record.vault == [0; 20]
-        || record.network_id == 0
-        || record.layerx_network_id == 0
-        || record.layerx_protocol_version == 0
+        || record.binding_network_id == 0
         || record.amount == 0
+        || schema_invalid
+        || terminal_identity_invalid
         || record.updated_at < record.started_at
         || (matches!(
             record.phase,
@@ -944,10 +1138,201 @@ fn validate_record(record: &Record) -> Result<(), DepositJourneyError> {
 }
 
 fn decode(bytes: &[u8]) -> Result<Record, DepositJourneyError> {
-    let record = serde_json::from_slice(bytes)
+    #[derive(Deserialize)]
+    struct Version {
+        version: u8,
+    }
+
+    let version: Version = serde_json::from_slice(bytes)
         .map_err(|_| DepositJourneyError::Corrupt("invalid deposit encoding"))?;
+    let record = match version.version {
+        RECORD_VERSION => serde_json::from_slice(bytes)
+            .map_err(|_| DepositJourneyError::Corrupt("invalid current deposit encoding"))?,
+        1 | 2 => {
+            let legacy: LegacyRecord = serde_json::from_slice(bytes)
+                .map_err(|_| DepositJourneyError::Corrupt("invalid legacy deposit encoding"))?;
+            migrate_legacy(legacy)?
+        }
+        _ => {
+            return Err(DepositJourneyError::Corrupt(
+                "unsupported deposit record version",
+            ));
+        }
+    };
     validate_record(&record)?;
     Ok(record)
+}
+
+fn migrate_legacy(legacy: LegacyRecord) -> Result<Record, DepositJourneyError> {
+    if !matches!(legacy.version, 1 | 2)
+        || JourneyId::new(legacy.journey_id.clone()).is_err()
+        || legacy.idempotency_key == [0; 32]
+        || legacy.plan_digest == [0; 32]
+        || legacy.wallet == [0; 20]
+        || legacy.network_id == 0
+        || legacy.vault == [0; 20]
+        || legacy.amount == 0
+        || legacy.wallet_action_key == [0; 32]
+        || legacy.credit_plan_key == [0; 32]
+        || legacy.updated_at < legacy.started_at
+        || AccountId::parse(&legacy.recipient).is_err()
+        || AccountId::parse(&legacy.reserve).is_err()
+        || AgentDid::new(legacy.actor.clone()).is_err()
+        || AuthorityRef::new(legacy.authority.clone()).is_err()
+        || KeyId::new(legacy.custody_key.clone()).is_err()
+        || JourneyId::new(legacy.credit_journey_id.clone()).is_err()
+        || (matches!(
+            legacy.phase,
+            Phase::Confirming | Phase::Proving | Phase::Crediting | Phase::Done
+        ) && legacy.transaction.is_none())
+        || (legacy.phase == Phase::Done && legacy.activity.is_none())
+        || (legacy.phase == Phase::Failed) != legacy.failure.is_some()
+        || legacy.phase != Phase::Done && legacy.activity.is_some()
+    {
+        return Err(DepositJourneyError::Corrupt(
+            "legacy deposit invariants are invalid",
+        ));
+    }
+    if legacy.version == 1
+        && (legacy.layerx_network_id.is_some()
+            || legacy.layerx_protocol_version.is_some()
+            || legacy.deposit_nullifier.is_some())
+    {
+        return Err(DepositJourneyError::Corrupt(
+            "legacy v1 deposit contains later-schema fields",
+        ));
+    }
+    if legacy.version == 2
+        && (legacy.layerx_network_id.is_none_or(|value| value == 0)
+            || legacy
+                .layerx_protocol_version
+                .is_none_or(|value| value == 0)
+            || legacy.proof_commitment.is_some())
+    {
+        return Err(DepositJourneyError::Corrupt(
+            "legacy v2 deposit fields are invalid",
+        ));
+    }
+    if legacy.phase == Phase::Done {
+        let consistent = match (legacy.version, legacy.activity.as_ref()) {
+            (
+                1,
+                Some(LegacyDepositActivity::V1(LegacyDepositActivityV1 {
+                    proof_commitment,
+                    ..
+                })),
+            ) => legacy.proof_commitment == Some(*proof_commitment),
+            (
+                2,
+                Some(LegacyDepositActivity::V2(LegacyDepositActivityV2 {
+                    deposit_nullifier,
+                    ..
+                })),
+            ) => legacy.deposit_nullifier == Some(*deposit_nullifier),
+            _ => false,
+        };
+        if !consistent {
+            return Err(DepositJourneyError::Corrupt(
+                "legacy terminal deposit evidence is inconsistent",
+            ));
+        }
+    }
+
+    let schema = if legacy.version == 1 {
+        RecordSchema::LegacyV1
+    } else {
+        RecordSchema::LegacyV2
+    };
+    let resumable = !matches!(legacy.phase, Phase::Done | Phase::Failed);
+    let original_phase = legacy.phase;
+    let activity = legacy
+        .activity
+        .map(|activity| migrate_legacy_activity(schema, activity))
+        .transpose()?;
+    Ok(Record {
+        version: RECORD_VERSION,
+        schema,
+        journey_id: legacy.journey_id,
+        idempotency_key: legacy.idempotency_key,
+        plan_digest: legacy.plan_digest,
+        wallet: legacy.wallet,
+        binding_network_id: legacy.network_id,
+        paxeer_chain_id: None,
+        layerx_network_id: legacy.layerx_network_id,
+        layerx_protocol_version: legacy.layerx_protocol_version,
+        binding_receipt_digest: legacy.binding_receipt_digest,
+        vault: legacy.vault,
+        asset: legacy.asset,
+        amount: legacy.amount,
+        recipient: legacy.recipient,
+        reserve: legacy.reserve,
+        currency: legacy.currency,
+        actor: legacy.actor,
+        authority: legacy.authority,
+        account_sequence: legacy.account_sequence,
+        not_before: legacy.not_before,
+        not_after: legacy.not_after,
+        fee_limit: legacy.fee_limit,
+        custody_key: legacy.custody_key,
+        wallet_action_key: legacy.wallet_action_key,
+        credit_plan_key: legacy.credit_plan_key,
+        credit_journey_id: legacy.credit_journey_id,
+        phase: if resumable { Phase::Failed } else { original_phase },
+        transaction: legacy.transaction,
+        confirmations: legacy.confirmations,
+        required: legacy.required,
+        delay: legacy.delay,
+        deposit_nullifier: legacy.deposit_nullifier,
+        legacy_proof_commitment: legacy.proof_commitment,
+        legacy_phase: resumable.then_some(original_phase),
+        activity: if resumable { None } else { activity },
+        failure: if resumable {
+            Some(StoredFailure::LegacyProofSchema)
+        } else {
+            legacy.failure
+        },
+        started_at: legacy.started_at,
+        updated_at: legacy.updated_at,
+    })
+}
+
+fn migrate_legacy_activity(
+    schema: RecordSchema,
+    activity: LegacyDepositActivity,
+) -> Result<DepositActivity, DepositJourneyError> {
+    match (schema, activity) {
+        (
+            RecordSchema::LegacyV1,
+            LegacyDepositActivity::V1(LegacyDepositActivityV1 {
+                custody_transaction,
+                proof_commitment,
+                credit_activity_id,
+                credit_receipt_digest,
+            }),
+        ) => Ok(DepositActivity {
+            custody_transaction,
+            proof_identity: DepositProofIdentity::LegacyProofCommitment(proof_commitment),
+            credit_activity_id,
+            credit_receipt_digest,
+        }),
+        (
+            RecordSchema::LegacyV2,
+            LegacyDepositActivity::V2(LegacyDepositActivityV2 {
+                custody_transaction,
+                deposit_nullifier,
+                credit_activity_id,
+                credit_receipt_digest,
+            }),
+        ) => Ok(DepositActivity {
+            custody_transaction,
+            proof_identity: DepositProofIdentity::CanonicalNullifier(deposit_nullifier),
+            credit_activity_id,
+            credit_receipt_digest,
+        }),
+        _ => Err(DepositJourneyError::Corrupt(
+            "legacy deposit activity schema is inconsistent",
+        )),
+    }
 }
 
 fn record_row(key: [u8; 32]) -> Result<RowKey, StoreError> {
@@ -979,6 +1364,7 @@ fn plan_digest(plan: &DepositPlan) -> [u8; 32] {
     digest.update(plan.idempotency_key);
     digest.update(plan.wallet.bytes());
     digest.update(plan.network.value().to_be_bytes());
+    digest.update(plan.paxeer_chain_id.to_be_bytes());
     digest.update(plan.layerx_network.value().to_be_bytes());
     digest.update(plan.layerx_protocol_version.to_be_bytes());
     digest.update(plan.vault.bytes());
@@ -1109,5 +1495,186 @@ impl From<AgentBoundaryError> for DepositJourneyError {
 impl From<DepositBoundaryError> for DepositJourneyError {
     fn from(value: DepositBoundaryError) -> Self {
         Self::Boundary(value)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn legacy_record(version: u8, phase: Phase) -> LegacyRecord {
+        let transaction = matches!(
+            phase,
+            Phase::Confirming | Phase::Proving | Phase::Crediting | Phase::Done
+        )
+        .then_some([7; 32]);
+        let done = phase == Phase::Done;
+        let failed = phase == Phase::Failed;
+        let activity = done.then_some(if version == 1 {
+            LegacyDepositActivity::V1(LegacyDepositActivityV1 {
+                custody_transaction: [7; 32],
+                proof_commitment: [8; 32],
+                credit_activity_id: [9; 32],
+                credit_receipt_digest: [10; 32],
+            })
+        } else {
+            LegacyDepositActivity::V2(LegacyDepositActivityV2 {
+                custody_transaction: [7; 32],
+                deposit_nullifier: [8; 32],
+                credit_activity_id: [9; 32],
+                credit_receipt_digest: [10; 32],
+            })
+        });
+        LegacyRecord {
+            version,
+            journey_id: "jrn_depositcrash".to_owned(),
+            idempotency_key: [1; 32],
+            plan_digest: [2; 32],
+            wallet: [3; 20],
+            network_id: 17,
+            layerx_network_id: (version == 2).then_some(17),
+            layerx_protocol_version: (version == 2).then_some(1),
+            binding_receipt_digest: [4; 32],
+            vault: [5; 20],
+            asset: [6; 32],
+            amount: 25,
+            recipient: "agent:did:layerx:deposit-recipient:main".to_owned(),
+            reserve: "system:paxeer-reserve".to_owned(),
+            currency: "LXP".to_owned(),
+            actor: "did:layerx:deposit-recipient".to_owned(),
+            authority: "owner:deposit-owner".to_owned(),
+            account_sequence: 5,
+            not_before: 995,
+            not_after: 1_010,
+            fee_limit: 7,
+            custody_key: "human-primary".to_owned(),
+            wallet_action_key: [11; 32],
+            credit_plan_key: [12; 32],
+            credit_journey_id: credit_journey_id([12; 32])
+                .unwrap_or_else(|error| panic!("credit journey: {error}")),
+            phase,
+            transaction,
+            confirmations: 1,
+            required: 1,
+            delay: None,
+            proof_commitment: (version == 1 && done).then_some([8; 32]),
+            deposit_nullifier: (version == 2 && done).then_some([8; 32]),
+            activity,
+            failure: failed.then_some(StoredFailure::WalletRejected),
+            started_at: 100,
+            updated_at: 101,
+        }
+    }
+
+    fn decode_legacy(record: &LegacyRecord) -> DepositJourney {
+        let encoded = serde_json::to_vec(record)
+            .unwrap_or_else(|error| panic!("legacy encoding: {error}"));
+        DepositJourney {
+            record: decode(&encoded).unwrap_or_else(|error| panic!("legacy decode: {error}")),
+        }
+    }
+
+    #[test]
+    fn terminal_v1_history_preserves_legacy_proof_identity() {
+        let journey = decode_legacy(&legacy_record(1, Phase::Done));
+        let status = journey
+            .status()
+            .unwrap_or_else(|error| panic!("legacy status: {error}"));
+        assert_eq!(status.stage(), &DepositStage::Done);
+        assert!(matches!(
+            status.activity().map(|activity| &activity.proof_identity),
+            Some(DepositProofIdentity::LegacyProofCommitment(value)) if value == &[8; 32]
+        ));
+        assert_eq!(journey.record.schema, RecordSchema::LegacyV1);
+        assert_eq!(journey.record.paxeer_chain_id, None);
+    }
+
+    #[test]
+    fn terminal_v1_failure_preserves_its_original_reason() {
+        let journey = decode_legacy(&legacy_record(1, Phase::Failed));
+        let status = journey
+            .status()
+            .unwrap_or_else(|error| panic!("legacy status: {error}"));
+        assert_eq!(
+            status.stage(),
+            &DepositStage::Failed(DepositFailureKind::WalletRejected)
+        );
+        assert_eq!(journey.record.legacy_phase, None);
+    }
+
+    #[test]
+    fn resumable_v1_is_explicitly_failed_without_chain_or_proof_reinterpretation() {
+        let journey = decode_legacy(&legacy_record(1, Phase::Proving));
+        let status = journey
+            .status()
+            .unwrap_or_else(|error| panic!("legacy status: {error}"));
+        assert_eq!(
+            status.stage(),
+            &DepositStage::Failed(DepositFailureKind::LegacyProofSchema)
+        );
+        assert_eq!(journey.record.legacy_phase, Some(Phase::Proving));
+        assert_eq!(journey.record.paxeer_chain_id, None);
+        assert_eq!(journey.record.deposit_nullifier, None);
+        let migrated = serde_json::to_vec(&journey.record)
+            .unwrap_or_else(|error| panic!("migrated encoding: {error}"));
+        let restarted = DepositJourney {
+            record: decode(&migrated)
+                .unwrap_or_else(|error| panic!("migrated restart: {error}")),
+        };
+        assert_eq!(
+            restarted
+                .status()
+                .unwrap_or_else(|error| panic!("migrated status: {error}"))
+                .stage(),
+            &DepositStage::Failed(DepositFailureKind::LegacyProofSchema)
+        );
+    }
+
+    #[test]
+    fn terminal_v2_nullifier_history_is_preserved_but_chain_is_not_inferred() {
+        let journey = decode_legacy(&legacy_record(2, Phase::Done));
+        let status = journey
+            .status()
+            .unwrap_or_else(|error| panic!("legacy status: {error}"));
+        assert!(matches!(
+            status.activity().map(|activity| &activity.proof_identity),
+            Some(DepositProofIdentity::CanonicalNullifier(value)) if value == &[8; 32]
+        ));
+        assert_eq!(journey.record.schema, RecordSchema::LegacyV2);
+        assert_eq!(journey.record.paxeer_chain_id, None);
+    }
+
+    #[test]
+    fn inconsistent_legacy_terminal_identity_is_corrupt_not_reinterpreted() {
+        let mut legacy = legacy_record(1, Phase::Done);
+        legacy.proof_commitment = Some([12; 32]);
+        let encoded = serde_json::to_vec(&legacy)
+            .unwrap_or_else(|error| panic!("legacy encoding: {error}"));
+        assert!(matches!(
+            decode(&encoded),
+            Err(DepositJourneyError::Corrupt(
+                "legacy terminal deposit evidence is inconsistent"
+            ))
+        ));
+    }
+
+    #[test]
+    fn current_paxeer_chain_identity_preserves_values_above_u32() {
+        let mut record = migrate_legacy(legacy_record(1, Phase::Failed))
+            .unwrap_or_else(|error| panic!("legacy migration: {error}"));
+        record.schema = RecordSchema::Current;
+        record.paxeer_chain_id = Some(4_294_967_312);
+        record.layerx_network_id = Some(17);
+        record.layerx_protocol_version = Some(1);
+        record.legacy_proof_commitment = None;
+        record.legacy_phase = None;
+        let encoded = serde_json::to_vec(&record)
+            .unwrap_or_else(|error| panic!("current encoding: {error}"));
+        let current = DepositJourney {
+            record: decode(&encoded).unwrap_or_else(|error| panic!("current decode: {error}")),
+        };
+        assert_eq!(current.record.binding_network_id, 17);
+        assert_eq!(current.record.paxeer_chain_id, Some(4_294_967_312));
+        assert_eq!(current.wallet_request().chain_id, 4_294_967_312);
     }
 }

@@ -76,6 +76,7 @@ const VAULT_CREATION: &str =
 const ASSET: [u8; 32] = [0x42; 32];
 const AMOUNT: u128 = 25;
 const NETWORK_ID: u32 = 17;
+const PAXEER_CHAIN_ID: u64 = 4_294_967_312;
 const CHECKPOINT_ID_HEX: &str = "5cd43e8c1a6a0ba5594d75846fe40bd851909368fc0a7439657180c5fb8b9572";
 const CREDIT_RECEIPT_HEX: &str = "000152010001000000203ad4f279bd6297c488fbf76c0802a3fb20c5060d955a7648e6417f8653f8fa110000000000000009000000200707070707070707070707070707070707070707070707070707070707070707000000200808080808080808080808080808080808080808080808080808080808080808000000200808080808080808080808080808080808080808080808080808080808080808000000000000000000000000000000000000000000000001000000205cd43e8c1a6a0ba5594d75846fe40bd851909368fc0a7439657180c5fb8b957200080000000100000001010000002042424242424242424242424242424242424242424242424242424242424242420000000000000000000000000000001900000020f94d2cc01cae556915267bc3d1ad7c58034009ea25cbe56906be12b9ca876de0000000000000000000000000000000640000000000000000000000000000004b00000000000000010000002042de0bc2f3c75fd9995e3ad3d57efaf06530b93679d956ddf17fa9d325e1d60d0000000000000000000000000000000a00000000000000000000000000000023000000200909090909090909090909090909090909090909090909090909090909090909000000200a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a000000200b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b00000000000003e80100000040d8bdb7a072cdbc700f7390c482c40823192d2bfc983749456a20e08dc42f54526e153909c707f05d141c20ec9a728f6358fe1a460f6bf7ca7171758511b02e0d";
 
@@ -179,7 +180,7 @@ impl Anvil {
                 url: format!("http://127.0.0.1:{port}"),
                 request_timeout: Duration::from_secs(5),
                 transport: EndpointTransport::LocalEmulator,
-                expected_chain_id: 31_337,
+                expected_chain_id: PAXEER_CHAIN_ID,
             };
             let binary = if PathBuf::from("/root/.foundry/bin/anvil").exists() {
                 PathBuf::from("/root/.foundry/bin/anvil")
@@ -187,7 +188,11 @@ impl Anvil {
                 PathBuf::from("anvil")
             };
             let child = Command::new(binary)
-                .args(["--port", &port.to_string(), "--silent"])
+                .arg("--port")
+                .arg(port.to_string())
+                .arg("--chain-id")
+                .arg(PAXEER_CHAIN_ID.to_string())
+                .arg("--silent")
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
@@ -576,7 +581,7 @@ impl DepositRuntime for RealDepositRuntime {
         request: &WalletCustodyRequest,
     ) -> Result<WalletCustodyOutcome, DepositBoundaryError> {
         if request.wallet != parse_address(FUNDED)
-            || request.network_id != NETWORK_ID
+            || request.chain_id != PAXEER_CHAIN_ID
             || request.vault != self.vault
             || request.asset != AssetId::new(ASSET)
             || request.amount != Amount::from_u128(AMOUNT)
@@ -989,6 +994,7 @@ impl Fixture {
             idempotency_key: [0x61; 32],
             wallet,
             network,
+            paxeer_chain_id: PAXEER_CHAIN_ID,
             layerx_network: network,
             layerx_protocol_version: 1,
             vault: runtime.vault,
