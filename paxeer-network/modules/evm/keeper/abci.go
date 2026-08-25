@@ -1,6 +1,7 @@
 package keeper
 
 import (
+	"fmt"
 	"math"
 	"time"
 
@@ -62,6 +63,12 @@ func (k *Keeper) BeginBlock(ctx sdk.Context) {
 	}
 }
 
+func failEndBlockOnError(operation string, err error) {
+	if err != nil {
+		panic(fmt.Errorf("end block: %s: %w", operation, err))
+	}
+}
+
 func (k *Keeper) EndBlock(ctx sdk.Context, height int64, blockGasUsed int64) {
 	endBlockerStart := time.Now()
 	defer func() {
@@ -118,19 +125,21 @@ func (k *Keeper) EndBlock(ctx sdk.Context, height int64, blockGasUsed int64) {
 	}
 	evmTxDeferredInfoList := k.GetAllEVMTxDeferredInfo(ctx)
 	denom := k.GetBaseDenom(ctx)
-	surplus := k.GetAnteSurplusSum(ctx)
+	surplus, err := k.GetAnteSurplusSum(ctx)
+	failEndBlockOnError("sum ante surplus", err)
 	for _, deferredInfo := range evmTxDeferredInfoList {
 		txHash := common.BytesToHash(deferredInfo.TxHash)
 		if deferredInfo.Error != "" && txHash.Cmp(ethtypes.EmptyTxsHash) != 0 {
 			if !k.GetNonceBumped(ctx, deferredInfo.TxIndex) {
 				continue
 			}
-			_ = k.SetTransientReceipt(ctx, txHash, &types.Receipt{
+			err := k.SetTransientReceipt(ctx, txHash, &types.Receipt{
 				TxHashHex:        txHash.Hex(),
 				TransactionIndex: deferredInfo.TxIndex,
 				VmError:          deferredInfo.Error,
 				BlockNumber:      uint64(ctx.BlockHeight()), // nolint:gosec
 			})
+			failEndBlockOnError(fmt.Sprintf("persist failed receipt for transaction %s", txHash.Hex()), err)
 			continue
 		}
 		idx := int(deferredInfo.TxIndex)
@@ -140,23 +149,20 @@ func (k *Keeper) EndBlock(ctx sdk.Context, height int64, blockGasUsed int64) {
 		balance := uhpxBalance.Sub(lockedUhpxBalance)
 		weiBalance := k.BankKeeper().GetWeiBalance(ctx, coinbaseAddress)
 		if !balance.IsZero() || !weiBalance.IsZero() {
-			if err := k.BankKeeper().SendCoinsAndWei(ctx, coinbaseAddress, coinbase, balance, weiBalance); err != nil {
-				logger.Error("failed to send uhpx surplus to coinbase account", "from", coinbaseAddress, "err", err)
-			}
+			err := k.BankKeeper().SendCoinsAndWei(ctx, coinbaseAddress, coinbase, balance, weiBalance)
+			failEndBlockOnError(fmt.Sprintf("sweep coinbase surplus from %s", coinbaseAddress), err)
 		}
 		surplus = surplus.Add(deferredInfo.Surplus)
 	}
 	if surplus.IsPositive() {
 		surplusUhpx, surplusWei := state.SplitUhpxWeiAmount(surplus.BigInt())
 		if surplusUhpx.GT(sdk.ZeroInt()) {
-			if err := k.BankKeeper().AddCoins(ctx, k.AccountKeeper().GetModuleAddress(types.ModuleName), sdk.NewCoins(sdk.NewCoin(k.GetBaseDenom(ctx), surplusUhpx)), true); err != nil {
-				logger.Error("failed to send uhpx surplus to EVM module account", "surplus", surplusUhpx)
-			}
+			err := k.BankKeeper().AddCoins(ctx, k.AccountKeeper().GetModuleAddress(types.ModuleName), sdk.NewCoins(sdk.NewCoin(k.GetBaseDenom(ctx), surplusUhpx)), true)
+			failEndBlockOnError(fmt.Sprintf("credit uhpx surplus %s to EVM module account", surplusUhpx), err)
 		}
 		if surplusWei.GT(sdk.ZeroInt()) {
-			if err := k.BankKeeper().AddWei(ctx, k.AccountKeeper().GetModuleAddress(types.ModuleName), surplusWei); err != nil {
-				logger.Error("failed to send wei surplus to EVM module account", "surplus", surplusWei)
-			}
+			err := k.BankKeeper().AddWei(ctx, k.AccountKeeper().GetModuleAddress(types.ModuleName), surplusWei)
+			failEndBlockOnError(fmt.Sprintf("credit wei surplus %s to EVM module account", surplusWei), err)
 		}
 	}
 	allBlooms := utils.Map(evmTxDeferredInfoList, func(i *types.DeferredInfo) ethtypes.Bloom { return ethtypes.BytesToBloom(i.TxBloom) })

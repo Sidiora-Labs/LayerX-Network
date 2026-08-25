@@ -1333,3 +1333,11 @@ symbol = "Client::reconnect, authority::resolve"
 observed = "Repository-wide post-implementation review found two state-integrity defects in the Agent boundary consumed by production SDK paths. Reconnect discarded its transport before handshake and head validation but could return while retaining an earlier Connected state, and authority-cache age used saturating subtraction so an observation ahead of the canonical core sequence appeared freshly observed. The repair records a non-connected state before reconnection, maps every failure before return, installs Connected only with a live transport, and explicitly evicts and refuses cached or newly resolved future-sequence authority."
 assumption = "Human qualification must run the Agent connection and authority suites, exercise real transport loss and canonical-head regression, and prove no mutation proceeds using a future or disconnected authority state. The added regression tests are source artifacts only; no build or passing test result is asserted by this implementation repair."
 severity = "post-implementation-repair"
+
+[observation.37.1.4]
+task = "37.1"
+file = "paxeer-network/modules/evm/keeper/ante.go, paxeer-network/modules/evm/keeper/abci.go, paxeer-network/modules/evm/migrations/migrate_all_pointers.go"
+symbol = "Keeper.GetAnteSurplusSum, Keeper.EndBlock, MigrateERCNativePointers"
+observed = "Post-implementation review found that corrupt transient surplus data was treated as a zero balance, critical EndBlock accounting and persistence failures were logged while block processing continued, and the pointer migration sliced unvalidated keys, trusted unchecked ABI output shapes and discarded EVM call errors. The repair returns the surplus decoding error, makes consensus-critical EndBlock failures deterministic, validates key and ABI result shapes before use, and propagates all one-off EVM and migration errors."
+assumption = "Human qualification must run the EVM EndBlock and upgrade migration suites, inject malformed transient state and ABI results, and prove the block or migration aborts without partial accounting or pointer state. No build, migration replay or passing test result is asserted by this source repair."
+severity = "post-implementation-repair"

@@ -1,6 +1,8 @@
 package keeper
 
 import (
+	"fmt"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/sidiora-labs/paxeer-network/modules/evm/types"
 	"github.com/sidiora-labs/paxeer-network/sdk/store/prefix"
@@ -17,14 +19,16 @@ func (k *Keeper) AddAnteSurplus(ctx sdk.Context, txHash common.Hash, surplus sdk
 	return nil
 }
 
-func (k *Keeper) GetAnteSurplusSum(ctx sdk.Context) sdk.Int {
+func (k *Keeper) GetAnteSurplusSum(ctx sdk.Context) (sdk.Int, error) {
 	iter := prefix.NewStore(ctx.TransientStore(k.transientStoreKey), types.AnteSurplusPrefix).Iterator(nil, nil)
 	defer func() { _ = iter.Close() }()
 	res := sdk.ZeroInt()
 	for ; iter.Valid(); iter.Next() {
 		surplus := sdk.Int{}
-		_ = surplus.Unmarshal(iter.Value())
+		if err := surplus.Unmarshal(iter.Value()); err != nil {
+			return sdk.ZeroInt(), fmt.Errorf("decode ante surplus for transaction %x: %w", iter.Key(), err)
+		}
 		res = res.Add(surplus)
 	}
-	return res
+	return res, nil
 }

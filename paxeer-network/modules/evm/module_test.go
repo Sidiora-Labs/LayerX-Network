@@ -193,7 +193,9 @@ func TestAnteSurplus(t *testing.T) {
 	// ante surplus should be cleared
 	a.SetDeliverStateToCommit()
 	a.Commit(context.Background())
-	require.Equal(t, uint64(0), k.GetAnteSurplusSum(ctx).Uint64())
+	anteSurplus, err := k.GetAnteSurplusSum(ctx)
+	require.NoError(t, err)
+	require.Equal(t, uint64(0), anteSurplus.Uint64())
 }
 
 // This test is just to make sure that the routes can be added without crashing

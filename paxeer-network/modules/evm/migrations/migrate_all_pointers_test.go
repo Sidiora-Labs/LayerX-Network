@@ -9,6 +9,7 @@ import (
 	"github.com/sidiora-labs/paxeer-network/modules/evm/keeper"
 	"github.com/sidiora-labs/paxeer-network/modules/evm/migrations"
 	"github.com/sidiora-labs/paxeer-network/modules/evm/types"
+	"github.com/sidiora-labs/paxeer-network/sdk/store/prefix"
 	sdk "github.com/sidiora-labs/paxeer-network/sdk/types"
 	testkeeper "github.com/sidiora-labs/paxeer-network/testutil/keeper"
 	"github.com/sidiora-labs/paxeer-network/utils"
@@ -28,6 +29,16 @@ func TestMigrateERCNativePointers(t *testing.T) {
 	// address should stay the same
 	addr, _, _ := k.GetERC20NativePointer(ctx, "test")
 	require.Equal(t, pointerAddr, addr)
+}
+
+func TestMigrateERCNativePointersRejectsShortRegistryKey(t *testing.T) {
+	k := testkeeper.EVMTestApp.EvmKeeper
+	ctx := testkeeper.EVMTestApp.GetContextForDeliverTx([]byte{}).WithBlockTime(time.Now())
+	store := prefix.NewStore(ctx.KVStore(k.GetStoreKey()), append(types.PointerRegistryPrefix, types.PointerERC20NativePrefix...))
+	store.Set([]byte{1, 2}, common.Address{1}.Bytes())
+	defer store.Delete([]byte{1, 2})
+
+	require.Error(t, migrations.MigrateERCNativePointers(ctx, &k))
 }
 
 func TestMigrateERCCW20Pointers(t *testing.T) {
