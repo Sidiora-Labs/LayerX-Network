@@ -14,6 +14,7 @@ public class LayerXProperties {
 
     private String principal;
     private String protectedPath;
+    private String storageDirectory;
     private final Resource resource = new Resource();
     private final Payment payment = new Payment();
     private final Batch authorizedBatch = new Batch();
@@ -26,6 +27,10 @@ public class LayerXProperties {
     public String getProtectedPath() { return protectedPath; }
 
     public void setProtectedPath(String protectedPath) { this.protectedPath = protectedPath; }
+
+    public String getStorageDirectory() { return storageDirectory; }
+
+    public void setStorageDirectory(String storageDirectory) { this.storageDirectory = storageDirectory; }
 
     public Resource getResource() { return resource; }
 

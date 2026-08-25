@@ -495,11 +495,25 @@ function webhookHeaders(headers: Headers): WebhookRequestHeaders {
 }
 
 async function readRawBody(request: Request): Promise<Uint8Array> {
-  const buffer = await request.arrayBuffer();
-  if (buffer.byteLength > MAXIMUM_WEBHOOK_BYTES) {
-    throw new MiddlewareError("invalid-webhook");
+  if (request.body === null) return new Uint8Array();
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (let step = await reader.read(); step.done !== true; step = await reader.read()) {
+    total += step.value.length;
+    if (total > MAXIMUM_WEBHOOK_BYTES) {
+      await reader.cancel();
+      throw new MiddlewareError("invalid-webhook");
+    }
+    chunks.push(step.value);
   }
-  return new Uint8Array(buffer);
+  const body = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return body;
 }
 
 function jsonResponse(status: number, body: Readonly<Record<string, string>>): Response {

@@ -2,6 +2,8 @@ package com.sidiora.layerx.spring;
 
 import com.sidiora.layerx.sdk.verify.LocalVerifier;
 import jakarta.servlet.Filter;
+import java.io.IOException;
+import java.nio.file.Path;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
@@ -38,14 +40,15 @@ public class LayerXAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
-    public Fulfillments.FulfillmentRepository layerXFulfillmentRepository() {
-        return new Fulfillments.InMemoryFulfillmentRepository();
+    public Fulfillments.FulfillmentRepository layerXFulfillmentRepository(
+            LayerXProperties properties) throws IOException {
+        return DurableStores.fulfillments(Path.of(requiredStorageDirectory(properties)));
     }
 
     @Bean
     @ConditionalOnMissingBean
-    public Webhooks.DeliveryStore layerXWebhookDeliveryStore() {
-        return new Webhooks.InMemoryDeliveryStore();
+    public Webhooks.DeliveryStore layerXWebhookDeliveryStore(LayerXProperties properties) throws IOException {
+        return DurableStores.deliveries(Path.of(requiredStorageDirectory(properties)));
     }
 
     @Bean
@@ -91,5 +94,13 @@ public class LayerXAutoConfiguration {
 
     static String urlPattern(String mount) {
         return "/".equals(mount) ? "/*" : mount + "/*";
+    }
+
+    private static String requiredStorageDirectory(LayerXProperties properties) {
+        String value = properties.getStorageDirectory();
+        if (value == null || value.isBlank()) {
+            throw new IllegalStateException("layerx.storage-directory is required for durable replay state");
+        }
+        return value;
     }
 }

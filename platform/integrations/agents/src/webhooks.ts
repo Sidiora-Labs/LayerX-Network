@@ -8,7 +8,8 @@ import {
   type WebhookDeliveryStore,
   type WebhookRequestHeaders,
 } from "@sidiora/layerx-seller-middleware";
-import { chmod, open, mkdir, readFile, rename, stat, unlink } from "node:fs/promises";
+import { constants } from "node:fs";
+import { chmod, open, mkdir, rename, unlink } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { AgentIntegrationError, type AgentWebhookSettings } from "./config.js";
 
@@ -210,11 +211,6 @@ export class FileWebhookDeliveryStore implements WebhookDeliveryStore {
         return await open(this.#lockPath, "wx", 0o600);
       } catch (error) {
         if (!isNodeError(error, "EEXIST")) throw error;
-        const details = await stat(this.#lockPath).catch(() => undefined);
-        if (details !== undefined && Date.now() - details.mtimeMs > 120_000) {
-          await unlink(this.#lockPath).catch(() => undefined);
-          continue;
-        }
         await new Promise<void>((resolveWait) => setTimeout(resolveWait, Math.min(10 + attempt * 5, 250)));
       }
     }
@@ -224,12 +220,11 @@ export class FileWebhookDeliveryStore implements WebhookDeliveryStore {
   async #read(): Promise<Record<string, FileDeliveryEntry>> {
     let encoded: Uint8Array;
     try {
-      encoded = await readFile(this.#ledgerPath);
+      encoded = await readBoundedRegularFile(this.#ledgerPath, 32 * 1024 * 1024);
     } catch (error) {
       if (isNodeError(error, "ENOENT")) return {};
       throw error;
     }
-    if (encoded.byteLength > 32 * 1024 * 1024) throw new AgentIntegrationError("service-refused");
     const parsed: unknown = JSON.parse(new TextDecoder().decode(encoded));
     if (!isLedger(parsed)) throw new AgentIntegrationError("service-refused");
     return { ...parsed.entries };
@@ -385,6 +380,33 @@ function json(status: number, body: Readonly<Record<string, string>>): AgentWebh
 
 function isNodeError(error: unknown, code: string): boolean {
   return error instanceof Error && "code" in error && (error as Error & { readonly code: unknown }).code === code;
+}
+
+async function readBoundedRegularFile(path: string, maximum: number): Promise<Uint8Array> {
+  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    const metadata = await handle.stat();
+    if (!metadata.isFile() || metadata.size > maximum) throw new AgentIntegrationError("service-refused");
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    for (;;) {
+      const chunk = new Uint8Array(Math.min(64 * 1024, maximum + 1 - total));
+      const { bytesRead } = await handle.read(chunk, 0, chunk.length, null);
+      if (bytesRead === 0) break;
+      total += bytesRead;
+      if (total > maximum) throw new AgentIntegrationError("service-refused");
+      chunks.push(chunk.subarray(0, bytesRead));
+    }
+    const encoded = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+      encoded.set(chunk, offset);
+      offset += chunk.length;
+    }
+    return encoded;
+  } finally {
+    await handle.close();
+  }
 }
 
 function isLedger(value: unknown): value is FileDeliveryLedger {

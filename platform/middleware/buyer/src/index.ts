@@ -30,6 +30,8 @@ import {
 
 const MAX_U128 = 340282366920938463463374607431768211455n;
 const MERKLE_LEAF_DOMAIN = new TextEncoder().encode("LXP/v1/merkle-leaf\0");
+const MAXIMUM_HTTP_RESPONSE_BYTES = 8 * 1024 * 1024;
+const HTTP_REQUEST_TIMEOUT_MS = 30_000;
 
 export interface BuyerSupportedKind {
   readonly scheme: string;
@@ -439,7 +441,12 @@ export class LayerXPaymentHttpTransport implements ProductionTransport {
 
   public constructor(config: LayerXHttpTransportConfig) {
     this.#baseUrl = new URL(config.baseUrl.endsWith("/") ? config.baseUrl : `${config.baseUrl}/`);
-    if (this.#baseUrl.protocol !== "https:" && this.#baseUrl.hostname !== "127.0.0.1" && this.#baseUrl.hostname !== "localhost") {
+    const loopback = this.#baseUrl.hostname === "127.0.0.1"
+      || this.#baseUrl.hostname === "localhost"
+      || this.#baseUrl.hostname === "[::1]";
+    if (this.#baseUrl.username.length > 0 || this.#baseUrl.password.length > 0
+      || this.#baseUrl.hash.length > 0
+      || (this.#baseUrl.protocol !== "https:" && !(this.#baseUrl.protocol === "http:" && loopback))) {
       throw new MiddlewareError("unsupported-payment");
     }
     this.#token = config.bearerToken;
@@ -467,11 +474,12 @@ export class LayerXPaymentHttpTransport implements ProductionTransport {
         method: route.method,
         headers,
         ...(route.body === undefined ? {} : { body: JSON.stringify(route.body) }),
+        signal: AbortSignal.timeout(HTTP_REQUEST_TIMEOUT_MS),
       });
     } catch {
       throw new PlatformSdkError({ code: "transport-failure", retry: "safe" });
     }
-    const body = await response.json().catch(() => undefined) as unknown;
+    const body = await readBoundedJson(response);
     if (!response.ok) {
       throw mapHttpError(response);
     }
@@ -480,6 +488,32 @@ export class LayerXPaymentHttpTransport implements ProductionTransport {
       throw new PlatformSdkError({ code: "decode-failure", retry: "never" });
     }
     return envelope["result"] as TResponse;
+  }
+}
+
+async function readBoundedJson(response: Response): Promise<unknown> {
+  if (response.body === null) return undefined;
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (let step = await reader.read(); step.done !== true; step = await reader.read()) {
+    total += step.value.length;
+    if (total > MAXIMUM_HTTP_RESPONSE_BYTES) {
+      await reader.cancel();
+      throw new PlatformSdkError({ code: "decode-failure", retry: "never" });
+    }
+    chunks.push(step.value);
+  }
+  const encoded = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    encoded.set(chunk, offset);
+    offset += chunk.length;
+  }
+  try {
+    return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(encoded));
+  } catch {
+    throw new PlatformSdkError({ code: "decode-failure", retry: "never" });
   }
 }
 

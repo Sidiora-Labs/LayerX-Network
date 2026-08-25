@@ -10,7 +10,8 @@ import {
   type CallToolResult,
   type Tool as McpTool,
 } from "@modelcontextprotocol/sdk/types.js";
-import { chmod, mkdir, open, readFile, rename, stat, unlink } from "node:fs/promises";
+import { constants } from "node:fs";
+import { chmod, mkdir, open, rename, unlink } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { AgentIntegrationError } from "./config.js";
 import {
@@ -217,12 +218,11 @@ export class FileVerifiedEventQueue implements VerifiedEventBuffer {
   async #read(): Promise<{ deliveryId: string; event: Readonly<Record<string, JsonValue>> }[]> {
     let encoded: Uint8Array;
     try {
-      encoded = await readFile(this.#path);
+      encoded = await readBoundedRegularFile(this.#path, 64 * 1024 * 1024);
     } catch (error) {
       if (isNodeFileError(error, "ENOENT")) return [];
       throw new AgentIntegrationError("service-refused");
     }
-    if (encoded.byteLength > 64 * 1024 * 1024) throw new AgentIntegrationError("service-refused");
     let parsed: unknown;
     try {
       parsed = JSON.parse(new TextDecoder().decode(encoded));
@@ -639,15 +639,37 @@ async function acquireMcpFileLock(path: string): Promise<Awaited<ReturnType<type
       return await open(path, "wx", 0o600);
     } catch (error) {
       if (!isNodeFileError(error, "EEXIST")) throw new AgentIntegrationError("service-refused");
-      const details = await stat(path).catch(() => undefined);
-      if (details !== undefined && Date.now() - details.mtimeMs > 120_000) {
-        await unlink(path).catch(() => undefined);
-        continue;
-      }
       await new Promise<void>((resolveWait) => setTimeout(resolveWait, Math.min(10 + attempt * 5, 250)));
     }
   }
   throw new AgentIntegrationError("service-refused");
+}
+
+async function readBoundedRegularFile(path: string, maximum: number): Promise<Uint8Array> {
+  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    const metadata = await handle.stat();
+    if (!metadata.isFile() || metadata.size > maximum) throw new AgentIntegrationError("service-refused");
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    for (;;) {
+      const chunk = new Uint8Array(Math.min(64 * 1024, maximum + 1 - total));
+      const { bytesRead } = await handle.read(chunk, 0, chunk.length, null);
+      if (bytesRead === 0) break;
+      total += bytesRead;
+      if (total > maximum) throw new AgentIntegrationError("service-refused");
+      chunks.push(chunk.subarray(0, bytesRead));
+    }
+    const encoded = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+      encoded.set(chunk, offset);
+      offset += chunk.length;
+    }
+    return encoded;
+  } finally {
+    await handle.close();
+  }
 }
 
 function isNodeFileError(error: unknown, code: string): boolean {

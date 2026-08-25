@@ -3,6 +3,7 @@ server:
   port: 8080
 
 layerx:
+  storage-directory: ${LAYERX_STORAGE_DIRECTORY}
   principal: ${LAYERX_PRINCIPAL}
   protected-path: ${LAYERX_PROTECTED_PATH:/paid}
   resource:
