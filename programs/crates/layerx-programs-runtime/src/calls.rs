@@ -429,7 +429,9 @@ pub trait ProgramResolver: fmt::Debug {
     fn program_module(&self, program: ProgramId) -> Option<&ValidatedModule>;
 }
 
-/// The set of validated modules reachable by composition in one activity.
+/// Caller-assembled validated modules for qualification and in-memory
+/// execution. This catalog carries no deployment receipt or journal proof and
+/// must not be treated as production deployment authority.
 #[derive(Debug, Default)]
 pub struct ProgramCatalog {
     modules: BTreeMap<ProgramId, ValidatedModule>,
@@ -445,8 +447,9 @@ impl ProgramCatalog {
         }
     }
 
-    /// Publishes one validated module under its program identifier, returning
-    /// the module it replaced.
+    /// Publishes one caller-supplied validated module under its program
+    /// identifier, returning the module it replaced. This raw insertion does
+    /// not verify deployment state.
     pub fn insert(
         &mut self,
         program: ProgramId,

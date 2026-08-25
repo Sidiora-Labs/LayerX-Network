@@ -14,7 +14,9 @@ use layerx_programs_runtime::{
 };
 
 use crate::hash::sha256;
-use crate::{ReadFreshness, RegistryError, RegistryReadAuthority, RegistryVersion};
+use crate::{
+    ProgramLifecycle, ReadFreshness, RegistryError, RegistryReadAuthority, RegistryVersion,
+};
 
 const RECORD_DOMAIN: &[u8] = b"LayerX/programs/registry/deployment/v1\0";
 const MAX_MODULE_BYTES: usize = 32 * 1024 * 1024;
@@ -38,6 +40,7 @@ pub struct VerifiedDeploymentEvidence {
     abi_version: u16,
     receipt_digest: [u8; 32],
     freshness: ReadFreshness,
+    lifecycle: ProgramLifecycle,
     module: Vec<u8>,
     migration: Option<ExecutionRecord>,
 }
@@ -71,6 +74,11 @@ impl VerifiedDeploymentEvidence {
     #[must_use]
     pub const fn freshness(&self) -> ReadFreshness {
         self.freshness
+    }
+
+    #[must_use]
+    pub const fn lifecycle(&self) -> ProgramLifecycle {
+        self.lifecycle
     }
 
     #[must_use]
@@ -140,13 +148,15 @@ impl DeploymentRecord {
     /// modules, modules that do not hash to the recorded code hash, and
     /// inconsistent version history.
     pub fn validate(&self) -> Result<(), RegistryError> {
+        if matches!(self.upgrade_policy, UpgradePolicy::Authority([0; 32])) {
+            return Err(RegistryError::InvalidUpgradeAuthority);
+        }
         if self.version == 0
             || self.new_code_hash == [0; 32]
             || self.sequence == 0
             || self.observed_at == 0
             || self.module.is_empty()
             || self.module.len() > MAX_MODULE_BYTES
-            || matches!(self.upgrade_policy, UpgradePolicy::Authority([0; 32]))
         {
             return Err(RegistryError::CorruptRecord);
         }
@@ -344,6 +354,7 @@ impl<J: DeploymentJournal> JournalReadAuthority<J> {
         expected: &RegistryVersion,
         expected_policy: UpgradePolicy,
         expected_old_code_hash: Option<[u8; 32]>,
+        lifecycle: ProgramLifecycle,
     ) -> Result<VerifiedDeploymentEvidence, RegistryError> {
         let bytes = self
             .journal
@@ -384,6 +395,7 @@ impl<J: DeploymentJournal> JournalReadAuthority<J> {
                 observed_sequence: head.sequence,
                 observed_at: head.observed_at,
             },
+            lifecycle,
             module: record.module,
             migration: record.migration,
         })

@@ -1,11 +1,15 @@
 use std::collections::BTreeMap;
 
 use layerx_programs::{
-    BuildEnvironment, DeploymentJournal, DeploymentRecord, JournalReadAuthority, ObservedHead,
-    ProgramLifecycle, PublishedSource, ReadFreshness, Registry, RegistryError,
-    RegistryReadAuthority, ReproducibleBuild, SourceStatus,
+    BuildEnvironment, DeploymentJournal, DeploymentRecord, ExecutableAdmissionError,
+    JournalReadAuthority, ObservedHead, ProgramLifecycle, PublishedSource, ReadFreshness,
+    Registry, RegistryError,
+    RegistryReadAuthority, ReproducibleBuild, SourceStatus, VerifiedProgramCatalog,
 };
-use layerx_programs_runtime::{hash_bytes, HashAlgorithm, ProgramId, UpgradePolicy};
+use layerx_programs_runtime::{
+    hash_bytes, CompositionRules, Deploy, HashAlgorithm, Lifecycle, ProgramId, ProgramResolver,
+    ProgramVersion, UpgradePolicy, ABI_VERSION,
+};
 
 const PROGRAM: [u8; 32] = [0x31; 32];
 const WASM_V1: &[u8] = &[0, 97, 115, 109, 1, 0, 0, 0];
@@ -103,10 +107,28 @@ fn registry_resolves_latest_and_historical_code_only_from_canonical_journal_evid
     assert_eq!(historical.receipt_digest(), first.digest());
     assert_eq!(historical.module(), WASM_V1);
     assert_eq!(historical.freshness().observed_sequence, 77);
+    assert_eq!(historical.lifecycle(), ProgramLifecycle::Active);
     assert_eq!(latest.version(), 2);
     assert_eq!(latest.code_hash(), second.new_code_hash);
     assert_eq!(latest.receipt_digest(), second.digest());
     assert_eq!(latest.module(), WASM_V2);
+
+    let mut executable = VerifiedProgramCatalog::declared()
+        .unwrap_or_else(|error| panic!("verified catalog: {error}"));
+    executable
+        .admit(historical)
+        .unwrap_or_else(|error| panic!("historical admission: {error}"));
+    assert_eq!(executable.version(program), Some(1));
+    executable
+        .admit(latest)
+        .unwrap_or_else(|error| panic!("latest admission: {error}"));
+    assert_eq!(executable.version(program), Some(2));
+    assert_eq!(executable.code_hash(program), Some(second.new_code_hash));
+    assert_eq!(executable.abi_version(program), Some(ABI_VERSION));
+    assert_eq!(executable.receipt_digest(program), Some(second.digest()));
+    assert!(ProgramResolver::program_module(&executable, program).is_some());
+    let composition = executable.into_composition_context(CompositionRules::declared());
+    assert!(composition.resolver().program_module(program).is_some());
 
     let read = registry
         .read(program, &authority)
@@ -159,6 +181,180 @@ fn callable_resolution_preserves_typed_mismatch_and_stale_refusals() {
     assert_eq!(
         registry.resolve_deployment(program, 1, &stale_authority),
         Err(RegistryError::StaleRead)
+    );
+}
+
+#[test]
+fn invalid_module_abi_and_receipt_evidence_never_enter_the_verified_resolver() {
+    let program = program();
+    let expected = record(program, 1, None, WASM_V1, UpgradePolicy::Immutable, 70);
+    let wrong_receipt = record(
+        program,
+        1,
+        None,
+        FOREIGN_WASM,
+        UpgradePolicy::Immutable,
+        70,
+    );
+    let mut receipt_registry = Registry::new();
+    receipt_registry
+        .replay_journal(&[expected.clone()])
+        .unwrap_or_else(|error| panic!("receipt projection: {error}"));
+    let mut receipt_journal = CanonicalJournal::new(
+        &[expected.clone()],
+        ObservedHead {
+            sequence: 77,
+            observed_at: 1_700_000_100,
+        },
+    );
+    receipt_journal
+        .records
+        .insert(expected.digest(), wrong_receipt.canonical_encoding());
+    let receipt_authority = JournalReadAuthority::new(receipt_journal, 1_700_000_150, 100)
+        .unwrap_or_else(|error| panic!("receipt authority: {error}"));
+    assert_eq!(
+        receipt_registry.resolve_deployment(program, 1, &receipt_authority),
+        Err(RegistryError::UnverifiedRead)
+    );
+
+    let wrong_abi = record_with_abi(
+        program,
+        1,
+        None,
+        WASM_V1,
+        UpgradePolicy::Immutable,
+        70,
+        2,
+    );
+    let mut abi_journal = CanonicalJournal::new(
+        &[expected.clone()],
+        ObservedHead {
+            sequence: 77,
+            observed_at: 1_700_000_100,
+        },
+    );
+    abi_journal
+        .records
+        .insert(expected.digest(), wrong_abi.canonical_encoding());
+    let abi_authority = JournalReadAuthority::new(abi_journal, 1_700_000_150, 100)
+        .unwrap_or_else(|error| panic!("ABI authority: {error}"));
+    assert_eq!(
+        receipt_registry.resolve_deployment(program, 1, &abi_authority),
+        Err(RegistryError::UnverifiedRead)
+    );
+
+    let malformed = record(
+        program,
+        1,
+        None,
+        b"not-wasm",
+        UpgradePolicy::Immutable,
+        70,
+    );
+    let mut malformed_registry = Registry::new();
+    malformed_registry
+        .replay_journal(&[malformed.clone()])
+        .unwrap_or_else(|error| panic!("malformed projection: {error}"));
+    let malformed_authority = JournalReadAuthority::new(
+        CanonicalJournal::new(
+            &[malformed],
+            ObservedHead {
+                sequence: 77,
+                observed_at: 1_700_000_100,
+            },
+        ),
+        1_700_000_150,
+        100,
+    )
+    .unwrap_or_else(|error| panic!("malformed authority: {error}"));
+    let malformed_evidence = malformed_registry
+        .resolve_deployment(program, 1, &malformed_authority)
+        .unwrap_or_else(|error| panic!("malformed evidence resolution: {error}"));
+
+    let unsupported = record_with_abi(
+        program,
+        1,
+        None,
+        WASM_V1,
+        UpgradePolicy::Immutable,
+        70,
+        3,
+    );
+    let mut unsupported_registry = Registry::new();
+    unsupported_registry
+        .replay_journal(&[unsupported.clone()])
+        .unwrap_or_else(|error| panic!("unsupported ABI projection: {error}"));
+    let unsupported_authority = JournalReadAuthority::new(
+        CanonicalJournal::new(
+            &[unsupported],
+            ObservedHead {
+                sequence: 77,
+                observed_at: 1_700_000_100,
+            },
+        ),
+        1_700_000_150,
+        100,
+    )
+    .unwrap_or_else(|error| panic!("unsupported ABI authority: {error}"));
+    let unsupported_evidence = unsupported_registry
+        .resolve_deployment(program, 1, &unsupported_authority)
+        .unwrap_or_else(|error| panic!("unsupported ABI evidence: {error}"));
+
+    let mut executable = VerifiedProgramCatalog::declared()
+        .unwrap_or_else(|error| panic!("verified catalog: {error}"));
+    assert!(matches!(
+        executable.admit(malformed_evidence),
+        Err(ExecutableAdmissionError::Validation(_))
+    ));
+    assert!(executable.is_empty());
+    assert_eq!(
+        executable.admit(unsupported_evidence),
+        Err(ExecutableAdmissionError::UnsupportedAbi { declared: 3 })
+    );
+    assert!(executable.is_empty());
+}
+
+#[test]
+fn direct_deployment_insertion_refuses_the_reserved_upgrade_authority() {
+    let program = program();
+    let code_hash = code_hash(WASM_V1);
+    let version = ProgramVersion {
+        code_hash,
+        wasm: WASM_V1.to_vec(),
+        abi_version: ABI_VERSION,
+    };
+    let mut lifecycle = Lifecycle::declared()
+        .unwrap_or_else(|error| panic!("lifecycle construction: {error}"));
+    let receipt = lifecycle
+        .deploy(Deploy {
+            program,
+            code_hash,
+            wasm: WASM_V1.to_vec(),
+            abi_version: ABI_VERSION,
+            upgrade_policy: UpgradePolicy::Immutable,
+        })
+        .unwrap_or_else(|error| panic!("deployment: {error}"));
+    let canonical = DeploymentRecord::from_deployment(
+        &receipt,
+        &version,
+        UpgradePolicy::Immutable,
+        70,
+        1_700_000_070,
+    )
+    .unwrap_or_else(|error| panic!("canonical deployment: {error}"));
+    let mut registry = Registry::new();
+    assert_eq!(
+        registry.record_deployment(
+            &receipt,
+            &version,
+            UpgradePolicy::Authority([0; 32]),
+            canonical.digest(),
+        ),
+        Err(RegistryError::InvalidUpgradeAuthority)
+    );
+    assert_eq!(
+        registry.latest_version(program),
+        Err(RegistryError::UnknownProgram)
     );
 }
 
@@ -219,7 +415,7 @@ fn noncontiguous_or_unverified_registry_history_is_refused() {
     );
     assert_eq!(
         registry.replay_journal(&[reserved_authority]),
-        Err(RegistryError::CorruptRecord)
+        Err(RegistryError::InvalidUpgradeAuthority)
     );
     let second = record(
         program,
@@ -261,11 +457,31 @@ fn record(
     upgrade_policy: UpgradePolicy,
     sequence: u64,
 ) -> DeploymentRecord {
+    record_with_abi(
+        program,
+        version,
+        old_code_hash,
+        wasm,
+        upgrade_policy,
+        sequence,
+        ABI_VERSION,
+    )
+}
+
+fn record_with_abi(
+    program: ProgramId,
+    version: u32,
+    old_code_hash: Option<[u8; 32]>,
+    wasm: &[u8],
+    upgrade_policy: UpgradePolicy,
+    sequence: u64,
+    abi_version: u16,
+) -> DeploymentRecord {
     let new_code_hash = code_hash(wasm);
     DeploymentRecord {
         program,
         version,
-        abi_version: 1,
+        abi_version,
         upgrade_policy,
         old_code_hash,
         new_code_hash,

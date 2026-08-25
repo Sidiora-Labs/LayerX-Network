@@ -7,6 +7,7 @@ mod deprecate;
 mod hash;
 pub mod hex;
 mod pipeline;
+mod resolver;
 
 pub use account_state::{
     account_tree_commitment, program_account_registration_commitment, programs_root_commitment,
@@ -25,6 +26,7 @@ pub use deprecate::{
     LegacyDeprecationRequest, WindDownExitActivity, WindDownView,
 };
 pub use pipeline::{BuildAttempt, BuildPlan, BuildRefusal, BuildRunner, SourceVerifier};
+pub use resolver::{ExecutableAdmissionError, VerifiedProgramCatalog};
 
 use core::fmt::{self, Display};
 use std::collections::BTreeMap;
@@ -344,6 +346,9 @@ impl Registry {
         policy: UpgradePolicy,
         receipt_digest: [u8; 32],
     ) -> Result<(), RegistryError> {
+        if matches!(policy, UpgradePolicy::Authority([0; 32])) {
+            return Err(RegistryError::InvalidUpgradeAuthority);
+        }
         if receipt_digest == [0; 32] || new_code_hash != version.code_hash || number == 0 {
             return Err(RegistryError::DeploymentMismatch);
         }
@@ -507,6 +512,7 @@ impl Registry {
             expected,
             entry.upgrade_policy,
             expected_old_code_hash,
+            entry.lifecycle,
         )
     }
 
@@ -817,6 +823,7 @@ pub enum RegistryError {
     UnknownProgram,
     UnknownVersion,
     DeploymentMismatch,
+    InvalidUpgradeAuthority,
     VersionHistoryMismatch,
     UnverifiedRead,
     StaleRead,
@@ -837,6 +844,7 @@ impl Display for RegistryError {
             Self::UnknownProgram => "program is not registered",
             Self::UnknownVersion => "program version is not registered",
             Self::DeploymentMismatch => "deployment receipt and program version do not match",
+            Self::InvalidUpgradeAuthority => "upgrade authority uses the reserved zero identifier",
             Self::VersionHistoryMismatch => "program version history is not contiguous",
             Self::UnverifiedRead => "registry read lacks matching receipt evidence",
             Self::StaleRead => "registry read is older than the declared freshness bound",
