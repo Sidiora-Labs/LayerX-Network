@@ -10,6 +10,7 @@ use layerx_agentd::receipt::{serve, store, ReceiptLookupKey};
 use layerx_agentd::store::{Store, TenantId};
 use layerx_proof::checkpoint::{
     checkpoint_id, Attestation, Certificate, Checkpoint, CheckpointError, GuarantorKey,
+    SettlementDomain,
 };
 use layerx_proof::inclusion::SequencerAuthorization;
 use layerx_proof::merkle::{build_proof, Proof};
@@ -270,6 +271,7 @@ fn verified_checkpoint_and_settlement_raise_level_without_altering_receipt() {
         certificate: &certificate,
         bonded_set: &bonded,
         registered_checkpoint_id: checkpoint_id,
+        expected_settlement_domain: SettlementDomain::new(31_337, [0x55; 20]),
         registered_settlement_reference: Some(b"paxeer-settlement-42"),
     };
     let record = augment(
@@ -358,6 +360,7 @@ fn subthreshold_certificate_records_no_unearned_checkpoint_level() {
         certificate: &certificate,
         bonded_set: &bonded,
         registered_checkpoint_id: checkpoint_id,
+        expected_settlement_domain: SettlementDomain::new(31_337, [0x55; 20]),
         registered_settlement_reference: None,
     };
     assert!(matches!(
@@ -400,6 +403,7 @@ fn mismatched_settlement_reference_is_rejected_without_level_change() {
         certificate: &certificate,
         bonded_set: &bonded,
         registered_checkpoint_id: checkpoint_id,
+        expected_settlement_domain: SettlementDomain::new(31_337, [0x55; 20]),
         registered_settlement_reference: Some(b"different-reference"),
     };
     assert!(matches!(

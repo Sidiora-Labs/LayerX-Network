@@ -2,7 +2,7 @@ use k256::ecdsa::{Signature, SigningKey};
 use layerx_crypto::secp256k1;
 use layerx_proof::checkpoint::{
     checkpoint_id, verify_certificate, Attestation, Certificate, Checkpoint, CheckpointError,
-    GuarantorKey,
+    GuarantorKey, SettlementDomain,
 };
 use layerx_types::verify::VerificationLevel;
 use layerx_wire::encode::Encoder;
@@ -120,10 +120,14 @@ fn fixture() -> (Certificate, Vec<GuarantorKey>, [u8; 32]) {
     fixture_with_settlement(None)
 }
 
+fn settlement_domain() -> SettlementDomain {
+    SettlementDomain::new(31_337, [0x55; 20])
+}
+
 #[test]
 fn reports_distinct_threshold_and_settlement_levels() {
     let (certificate, keys, identifier) = fixture();
-    let finalised = verify_certificate(&certificate, &keys, &identifier, None)
+    let finalised = verify_certificate(&certificate, &keys, &identifier, settlement_domain(), None)
         .unwrap_or_else(|error| panic!("finalised certificate failed: {error:?}"));
     assert_eq!(finalised.achieved, 3);
     assert_eq!(finalised.required, 2);
@@ -148,6 +152,7 @@ fn reports_distinct_threshold_and_settlement_levels() {
         &anchored,
         &anchored_keys,
         &anchored_identifier,
+        settlement_domain(),
         Some(b"paxeer-registered-1"),
     )
     .unwrap_or_else(|error| panic!("anchored certificate failed: {error:?}"));
@@ -166,6 +171,7 @@ fn reports_distinct_threshold_and_settlement_levels() {
             &anchored,
             &anchored_keys,
             &anchored_identifier,
+            settlement_domain(),
             Some(b"different-reference"),
         ),
         Err(CheckpointError::Settlement)
@@ -184,7 +190,7 @@ fn rejects_threshold_duplicate_membership_signature_and_identifier_failures() {
         None,
     );
     assert_eq!(
-        verify_certificate(&duplicate_certificate, &keys, &identifier, None),
+        verify_certificate(&duplicate_certificate, &keys, &identifier, settlement_domain(), None),
         Err(CheckpointError::DuplicateSigner(first_id))
     );
 
@@ -196,7 +202,7 @@ fn rejects_threshold_duplicate_membership_signature_and_identifier_failures() {
         None,
     );
     assert_eq!(
-        verify_certificate(&outsider, &keys, &identifier, None),
+        verify_certificate(&outsider, &keys, &identifier, settlement_domain(), None),
         Err(CheckpointError::SignerMembership(outsider_id))
     );
 
@@ -207,7 +213,7 @@ fn rejects_threshold_duplicate_membership_signature_and_identifier_failures() {
         None,
     );
     assert_eq!(
-        verify_certificate(&one_signature, &keys, &identifier, None),
+        verify_certificate(&one_signature, &keys, &identifier, settlement_domain(), None),
         Err(CheckpointError::Threshold {
             achieved: 1,
             required: 2,
@@ -224,12 +230,42 @@ fn rejects_threshold_duplicate_membership_signature_and_identifier_failures() {
         None,
     );
     assert_eq!(
-        verify_certificate(&bad_signature, &keys, &identifier, None),
+        verify_certificate(&bad_signature, &keys, &identifier, settlement_domain(), None),
         Err(CheckpointError::Signature(first_id))
     );
 
     assert_eq!(
-        verify_certificate(&certificate, &keys, &[99; 32], None),
+        verify_certificate(&certificate, &keys, &[99; 32], settlement_domain(), None),
         Err(CheckpointError::CheckpointIdentifier)
+    );
+    assert_eq!(
+        verify_certificate(
+            &certificate,
+            &keys,
+            &identifier,
+            SettlementDomain::new(31_338, [0x55; 20]),
+            None,
+        ),
+        Err(CheckpointError::CheckpointFields)
+    );
+    assert_eq!(
+        verify_certificate(
+            &certificate,
+            &keys,
+            &identifier,
+            SettlementDomain::new(31_337, [0x56; 20]),
+            None,
+        ),
+        Err(CheckpointError::CheckpointFields)
+    );
+    assert_eq!(
+        verify_certificate(
+            &certificate,
+            &keys,
+            &identifier,
+            SettlementDomain::new(0, [0; 20]),
+            None,
+        ),
+        Err(CheckpointError::Settlement)
     );
 }

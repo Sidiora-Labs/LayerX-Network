@@ -62,6 +62,14 @@ observed = "Finality now requires the verifier policy checkpoint epoch to equal 
 assumption = "Human integration qualification must establish that only the registry's trusted finality-policy owner constructs lxp_finalisation_requirements and must fault-inject an unrelated caller epoch and deadline. The C verifier does not derive policy authority from either value."
 severity = "integration-boundary"
 
+[observation.22.9.1]
+task = "22.9"
+file = "agent/crates/layerx-proof/src/checkpoint.rs, agent/crates/layerx-proof/src/export.rs, agent/sdk/typescript/src/verifier.ts, agent/sdk/python/layerx_sdk/verifier.py, platform/integrations/fastapi/layerx_fastapi/signatures.py, platform/sdk/go/verify.go, platform/sdk/jvm/src/main/java/com/sidiora/layerx/sdk/verify/LocalVerifier.java, platform/sdk/dotnet/Verifier.cs, platform/sdk/swift/Sources/LayerXSDK/Verifier.swift"
+symbol = "checkpoint certificate verifier settlement and recoverable-signature policy"
+observed = "Checkpoint verification now receives the expected Paxeer chain and settlement contract from the verifier and requires every attestation to match exactly. Rust, JVM, .NET, and the Python FastAPI integration bind the compressed key, compact signature, recovery id, EVM signer, and attestation digest; TypeScript, core Python, Go, and Swift expose that complete tuple through a mandatory external verifier contract because those artifacts bundle no authentic secp256k1 recovery primitive. Offline export review also receives the expected domain separately instead of trusting a domain embedded in the exported facts."
+assumption = "Human qualification must exercise valid and altered signer, recovery-id, chain, and contract vectors in every SDK, including independent Keccak and recovery vectors for the FastAPI implementation. TypeScript, core Python, Go, and Swift must be supplied a production recoverable-secp256k1 implementation; without one their checkpoint path is unavailable and must not be represented as verified. This source-only implementation step does not claim those cross-language checks pass."
+severity = "integration-boundary"
+
 [observation.29.4.1]
 task = "29.4"
 file = "programs/crates/layerx-programs-runtime/tests/namespace_drop.rs"

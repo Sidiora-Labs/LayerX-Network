@@ -78,7 +78,12 @@ from .seller import (
     StaticAuthorizedBatches,
     StoredFulfillment,
 )
-from .signatures import LayerXSignatureVerifier, verify_ed25519, verify_secp256k1
+from .signatures import (
+    LayerXSignatureVerifier,
+    verify_ed25519,
+    verify_recoverable_secp256k1,
+    verify_secp256k1,
+)
 from .webhooks import (
     WEBHOOK_ID_HEADER,
     WEBHOOK_KEY_HEADER,
@@ -180,4 +185,5 @@ __all__ = [
     "verify_ed25519",
     "verify_payment_receipt",
     "verify_secp256k1",
+    "verify_recoverable_secp256k1",
 ]

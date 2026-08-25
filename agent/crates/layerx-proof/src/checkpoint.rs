@@ -158,6 +158,35 @@ pub struct GuarantorKey {
     bonded: bool,
 }
 
+/// Settlement domain owned by the certificate verifier.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SettlementDomain {
+    paxeer_chain_id: u64,
+    settlement_contract: [u8; 20],
+}
+
+impl SettlementDomain {
+    /// Creates the exact Paxeer chain and GuarantorBond contract expected by
+    /// the verifier.
+    #[must_use]
+    pub const fn new(paxeer_chain_id: u64, settlement_contract: [u8; 20]) -> Self {
+        Self {
+            paxeer_chain_id,
+            settlement_contract,
+        }
+    }
+
+    #[must_use]
+    pub const fn paxeer_chain_id(self) -> u64 {
+        self.paxeer_chain_id
+    }
+
+    #[must_use]
+    pub const fn settlement_contract(self) -> [u8; 20] {
+        self.settlement_contract
+    }
+}
+
 impl GuarantorKey {
     /// Creates one checkpoint-relative guarantor key record.
     #[must_use]
@@ -343,6 +372,7 @@ pub fn verify_certificate(
     certificate: &Certificate,
     bonded_set: &[GuarantorKey],
     registered_checkpoint_id: &[u8; 32],
+    expected_settlement_domain: SettlementDomain,
     registered_settlement_reference: Option<&[u8]>,
 ) -> Result<ThresholdReport, CheckpointError> {
     let header = decode_batch_header(&certificate.checkpoint.header_bytes)
@@ -353,15 +383,20 @@ pub fn verify_certificate(
     }
     let mut seen = BTreeSet::new();
     let mut achieved = 0;
-    let mut settlement_domain = None;
+    if expected_settlement_domain.paxeer_chain_id == 0
+        || expected_settlement_domain.settlement_contract == [0; 20]
+    {
+        return Err(CheckpointError::Settlement);
+    }
     for attestation in &certificate.attestations {
         if !seen.insert(attestation.guarantor_id) {
             return Err(CheckpointError::DuplicateSigner(attestation.guarantor_id));
         }
         if attestation.protocol_version != header.protocol_version()
             || attestation.network_id != header.network_id()
-            || attestation.paxeer_chain_id == 0
-            || attestation.paxeer_settlement_contract == [0; 20]
+            || attestation.paxeer_chain_id != expected_settlement_domain.paxeer_chain_id
+            || attestation.paxeer_settlement_contract
+                != expected_settlement_domain.settlement_contract
             || attestation.epoch != header.epoch()
             || attestation.checkpoint_id != identifier
             || attestation.checkpoint_hash != identifier
@@ -376,16 +411,6 @@ pub fn verify_certificate(
         {
             return Err(CheckpointError::CheckpointFields);
         }
-        let domain = (
-            attestation.paxeer_chain_id,
-            attestation.paxeer_settlement_contract,
-        );
-        if let Some(expected) = settlement_domain {
-            if expected != domain {
-                return Err(CheckpointError::CheckpointFields);
-            }
-        }
-        settlement_domain = Some(domain);
         let key = bonded_set
             .iter()
             .find(|key| key.guarantor_id == attestation.guarantor_id && key.bonded)

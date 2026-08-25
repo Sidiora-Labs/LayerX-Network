@@ -16,9 +16,12 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 import org.bouncycastle.crypto.ec.CustomNamedCurves;
+import org.bouncycastle.crypto.digests.KeccakDigest;
 import org.bouncycastle.crypto.params.ECDomainParameters;
 import org.bouncycastle.crypto.params.ECPublicKeyParameters;
 import org.bouncycastle.crypto.signers.ECDSASigner;
+import org.bouncycastle.math.ec.ECAlgorithms;
+import org.bouncycastle.math.ec.ECPoint;
 
 /** Trustless 402LXP receipt, Merkle, batch, and checkpoint verification. */
 public final class LocalVerifier {
@@ -69,13 +72,15 @@ public final class LocalVerifier {
         public CheckpointCertificate { attestations = List.copyOf(attestations); }
     }
     public record CheckpointVerificationInput(CheckpointCertificate certificate, List<GuarantorKey> bondedSet,
-        byte[] registeredCheckpointId, byte[] registeredSettlementReference, boolean availabilityObtained) {
+        byte[] registeredCheckpointId, BigInteger expectedPaxeerChainId, byte[] expectedSettlementContract,
+        byte[] registeredSettlementReference, boolean availabilityObtained) {
         public CheckpointVerificationInput { bondedSet = List.copyOf(bondedSet); }
     }
     public record CheckpointVerification(VerificationLevel level, byte[] checkpointId, int achieved,
         int required, BatchHeader header) {}
     @FunctionalInterface public interface LocalSignatureVerifier {
-        boolean verifySecp256k1(byte[] publicKey, byte[] signature, byte[] digest);
+        boolean verifyRecoverableSecp256k1(byte[] publicKey, byte[] signature, int signatureV,
+            byte[] signer, byte[] digest);
     }
     public record ReceiptEffect(int moduleId, int ordinal, int eventType, int kind, boolean monetary,
         byte[] transferSetRoot, byte[] body) {}
@@ -169,11 +174,12 @@ public final class LocalVerifier {
         BatchHeader header = decodeBatchHeader(certificate.canonicalHeader());
         byte[] checkpointId = sha256(CHECKPOINT_DOMAIN, certificate.canonicalHeader(),
             u32(certificate.validityProof().length), certificate.validityProof());
-        if (!equal(checkpointId, exact(input.registeredCheckpointId(), 32)) || certificate.threshold() <= 0) fail();
+        byte[] expectedSettlementContract = exact(input.expectedSettlementContract(), 20);
+        if (!equal(checkpointId, exact(input.registeredCheckpointId(), 32)) || certificate.threshold() <= 0
+                || input.expectedPaxeerChainId() == null || input.expectedPaxeerChainId().signum() <= 0
+                || allZero(expectedSettlementContract)) fail();
         Set<String> seen = new HashSet<>();
         int achieved = 0;
-        BigInteger paxeerChainId = null;
-        byte[] settlementContract = null;
         for (CheckpointAttestation attestation : certificate.attestations()) {
             byte[] guarantorId = exact(attestation.guarantorId(), 32);
             byte[] attestationSettlementContract = exact(attestation.settlementContract(), 20);
@@ -181,10 +187,8 @@ public final class LocalVerifier {
                     || attestation.protocolVersion() != header.protocolVersion()
                     || attestation.networkId() != header.networkId()
                     || !attestation.epoch().equals(header.epoch())
-                    || attestation.paxeerChainId().signum() <= 0
-                    || allZero(attestationSettlementContract)
-                    || (paxeerChainId != null && (!attestation.paxeerChainId().equals(paxeerChainId)
-                        || !equal(attestationSettlementContract, settlementContract)))
+                    || !attestation.paxeerChainId().equals(input.expectedPaxeerChainId())
+                    || !equal(attestationSettlementContract, expectedSettlementContract)
                     || !equal(attestation.checkpointId(), checkpointId)
                     || !equal(attestation.checkpointHash(), checkpointId)
                     || !attestation.batchNumber().equals(header.batchNumber())
@@ -194,13 +198,12 @@ public final class LocalVerifier {
                     || attestation.attestedAtMs().signum() <= 0
                     || allZero(exact(attestation.signer(), 20))
                     || (attestation.signatureV() != 27 && attestation.signatureV() != 28)) fail();
-            paxeerChainId = attestation.paxeerChainId();
-            settlementContract = attestationSettlementContract;
             GuarantorKey member = input.bondedSet().stream().filter(candidate -> candidate.bonded()
                 && equal(candidate.guarantorId(), guarantorId)).findFirst().orElseThrow(LocalVerifier::failure);
             byte[] digest = sha256(GUARANTOR_ATTESTATION_DOMAIN, attestationMessage(attestation));
-            if (!signatures.verifySecp256k1(exact(member.publicKey(), 33),
-                    exact(attestation.signature(), 64), digest)) fail();
+            if (!signatures.verifyRecoverableSecp256k1(exact(member.publicKey(), 33),
+                    exact(attestation.signature(), 64), attestation.signatureV(),
+                    exact(attestation.signer(), 20), digest)) fail();
             achieved++;
         }
         if (achieved < certificate.threshold()) fail();
@@ -212,20 +215,43 @@ public final class LocalVerifier {
     }
 
     public static CheckpointVerification verifyCheckpoint(CheckpointVerificationInput input) {
-        return verifyCheckpoint(input, LocalVerifier::verifySecp256k1);
+        return verifyCheckpoint(input, LocalVerifier::verifyRecoverableSecp256k1);
     }
 
-    /** Production raw compact secp256k1 verifier for checkpoint attestations. */
-    public static boolean verifySecp256k1(byte[] publicKey, byte[] signature, byte[] digest) {
+    /** Production recoverable secp256k1 verifier for registered EVM attestations. */
+    public static boolean verifyRecoverableSecp256k1(byte[] publicKey, byte[] signature,
+                                                       int signatureV, byte[] signer, byte[] digest) {
         try {
-            exact(publicKey, 33); exact(signature, 64); exact(digest, 32);
+            exact(publicKey, 33); exact(signature, 64); exact(signer, 20); exact(digest, 32);
+            if (signatureV != 27 && signatureV != 28) return false;
             var params = CustomNamedCurves.getByName("secp256k1");
             var domain = new ECDomainParameters(params.getCurve(), params.getG(), params.getN(), params.getH());
             var key = new ECPublicKeyParameters(params.getCurve().decodePoint(publicKey), domain);
+            var r = new BigInteger(1, Arrays.copyOfRange(signature, 0, 32));
+            var s = new BigInteger(1, Arrays.copyOfRange(signature, 32, 64));
+            if (r.signum() <= 0 || r.compareTo(params.getN()) >= 0 || s.signum() <= 0
+                    || s.compareTo(params.getN().shiftRight(1)) > 0) return false;
             var verifier = new ECDSASigner();
             verifier.init(false, key);
-            return verifier.verifySignature(digest, new BigInteger(1, Arrays.copyOfRange(signature, 0, 32)),
-                new BigInteger(1, Arrays.copyOfRange(signature, 32, 64)));
+            if (!verifier.verifySignature(digest, r, s)) return false;
+            byte[] compressed = new byte[33];
+            compressed[0] = (byte)(2 + (signatureV - 27));
+            byte[] x = unsigned(r, 32);
+            System.arraycopy(x, 0, compressed, 1, x.length);
+            ECPoint recoveredR = params.getCurve().decodePoint(compressed);
+            if (!recoveredR.multiply(params.getN()).isInfinity()) return false;
+            BigInteger inverseR = r.modInverse(params.getN());
+            BigInteger e = new BigInteger(1, digest);
+            ECPoint recovered = ECAlgorithms.sumOfTwoMultiplies(
+                params.getG(), e.negate().mod(params.getN()).multiply(inverseR).mod(params.getN()),
+                recoveredR, s.multiply(inverseR).mod(params.getN())).normalize();
+            if (!equal(recovered.getEncoded(true), publicKey)) return false;
+            byte[] uncompressed = recovered.getEncoded(false);
+            KeccakDigest keccak = new KeccakDigest(256);
+            keccak.update(uncompressed, 1, uncompressed.length - 1);
+            byte[] addressHash = new byte[32];
+            keccak.doFinal(addressHash, 0);
+            return equal(Arrays.copyOfRange(addressHash, 12, 32), signer);
         } catch (RuntimeException error) {
             return false;
         }

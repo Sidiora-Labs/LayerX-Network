@@ -13,6 +13,7 @@ use layerx_agentd::identity::ProtocolAuthority;
 use layerx_agentd::store::TenantId;
 use layerx_agentd::tenant::{Config, RedactionPolicy, Retention};
 use layerx_proof::export::{InclusionFact, InclusionKind, OfflineExport, ReceiptFact};
+use layerx_proof::checkpoint::SettlementDomain;
 use layerx_proof::inclusion::SequencerAuthorization;
 use layerx_proof::merkle::build_proof;
 use layerx_proof::receipt::{verify_outcome, AuthorizedBatch};
@@ -22,6 +23,10 @@ use layerx_wire::encode::Encoder;
 use layerx_wire::hash::{batch_header_digest, receipt_digest};
 
 static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(1);
+
+fn settlement_domain() -> SettlementDomain {
+    SettlementDomain::new(31_337, [0x55; 20])
+}
 
 fn root(label: &str) -> PathBuf {
     let sequence = NEXT_DIRECTORY.fetch_add(1, Ordering::Relaxed);
@@ -270,7 +275,7 @@ fn tenant_agent_and_time_slice_carries_real_receipt_and_proof_evidence() {
         from_observed_at_ms: Some(90),
         through_observed_at_ms: Some(150),
     };
-    let exported = export(&path, &config, query, &evidence_store)
+    let exported = export(&path, &config, query, &evidence_store, settlement_domain())
         .unwrap_or_else(|error| panic!("export: {error}"));
     assert_eq!(exported.entries.len(), 1);
     assert_eq!(exported.entries[0].entry.observed_at_ms, 100);
@@ -278,7 +283,8 @@ fn tenant_agent_and_time_slice_carries_real_receipt_and_proof_evidence() {
     assert_eq!(exported.chain.links.len(), 3);
     assert!(exported.chain.links[0].canonical_entry_bytes.is_some());
     assert!(exported.chain.links[1].canonical_entry_bytes.is_none());
-    let report = review(&exported).unwrap_or_else(|error| panic!("review: {error}"));
+    let report = review(&exported, settlement_domain())
+        .unwrap_or_else(|error| panic!("review: {error}"));
     assert_eq!(report.exported_entries, 1);
     assert_eq!(report.verified_receipts, 1);
     assert_eq!(report.verified_inclusions, 1);
@@ -286,7 +292,7 @@ fn tenant_agent_and_time_slice_carries_real_receipt_and_proof_evidence() {
     let mut altered = exported.clone();
     altered.referenced_evidence[0].protocol_facts.receipts[0].canonical_receipt_bytes[10] ^= 1;
     assert!(matches!(
-        review(&altered),
+        review(&altered, settlement_domain()),
         Err(ReviewError::Evidence { .. })
     ));
 
@@ -297,7 +303,7 @@ fn tenant_agent_and_time_slice_carries_real_receipt_and_proof_evidence() {
         through_observed_at_ms: None,
     };
     assert_eq!(
-        export(&path, &config, wrong_tenant, &evidence_store),
+        export(&path, &config, wrong_tenant, &evidence_store, settlement_domain()),
         Err(ExportError::WrongTenant)
     );
     let _ = fs::remove_dir_all(root);
@@ -358,6 +364,7 @@ fn retention_boundary_redacts_old_payload_and_keeps_availability_failure() {
             through_observed_at_ms: Some(200),
         },
         &evidence_store,
+        settlement_domain(),
     )
     .unwrap_or_else(|error| panic!("export: {error}"));
     assert_eq!(
@@ -375,12 +382,16 @@ fn retention_boundary_redacts_old_payload_and_keeps_availability_failure() {
     );
     assert!(exported.chain.links[0].canonical_entry_bytes.is_none());
     assert!(exported.chain.links[2].canonical_entry_bytes.is_some());
-    let report = review(&exported).unwrap_or_else(|error| panic!("review: {error}"));
+    let report = review(&exported, settlement_domain())
+        .unwrap_or_else(|error| panic!("review: {error}"));
     assert_eq!(report.failed_records, 1);
 
     let mut excised = exported;
     excised.chain.links[1].previous_hash[0] ^= 1;
-    assert_eq!(review(&excised), Err(ReviewError::Chain(ChainError::Link)));
+    assert_eq!(
+        review(&excised, settlement_domain()),
+        Err(ReviewError::Chain(ChainError::Link))
+    );
     let _ = fs::remove_dir_all(root);
 }
 
@@ -420,6 +431,7 @@ fn missing_referenced_evidence_is_an_explicit_availability_error() {
             through_observed_at_ms: None,
         },
         &evidence_store,
+        settlement_domain(),
     );
     assert_eq!(result, Err(ExportError::EvidenceUnavailable { receipt_id }));
     let _ = fs::remove_dir_all(root);

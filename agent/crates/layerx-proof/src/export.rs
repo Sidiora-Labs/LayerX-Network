@@ -4,7 +4,9 @@ use std::collections::BTreeSet;
 
 use layerx_types::verify::VerificationLevel;
 
-use crate::checkpoint::{verify_certificate, Certificate, CheckpointError, GuarantorKey};
+use crate::checkpoint::{
+    verify_certificate, Certificate, CheckpointError, GuarantorKey, SettlementDomain,
+};
 use crate::inclusion::{verify_activity, verify_state, InclusionError, SequencerAuthorization};
 use crate::merkle::Proof;
 use crate::receipt::{verify_outcome, AuthorizedBatch, ReceiptCheck};
@@ -109,7 +111,10 @@ pub enum ExportVerificationError {
 ///
 /// Returns the first malformed statement, failed receipt, inclusion,
 /// checkpoint, or aggregate-consistency check.
-pub fn verify(export: &OfflineExport) -> Result<VerificationReport, ExportVerificationError> {
+pub fn verify(
+    export: &OfflineExport,
+    expected_settlement_domain: SettlementDomain,
+) -> Result<VerificationReport, ExportVerificationError> {
     let mut receipt_digests = Vec::with_capacity(export.receipts.len());
     let mut achieved_levels = Vec::new();
     for (index, fact) in export.receipts.iter().enumerate() {
@@ -164,6 +169,7 @@ pub fn verify(export: &OfflineExport) -> Result<VerificationReport, ExportVerifi
             &fact.certificate,
             &fact.bonded_set,
             &fact.registered_checkpoint_id,
+            expected_settlement_domain,
             fact.registered_settlement_reference.as_deref(),
         )
         .map_err(|error| ExportVerificationError::Checkpoint { index, error })?;

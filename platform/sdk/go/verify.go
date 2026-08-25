@@ -522,12 +522,14 @@ type CheckpointVerificationInput struct {
 	Certificate                   CheckpointCertificate
 	BondedSet                     []GuarantorKey
 	RegisteredCheckpointID        [32]byte
+	ExpectedPaxeerChainID          uint64
+	ExpectedSettlementContract    [20]byte
 	RegisteredSettlementReference []byte
 	AvailabilityObtained          bool
 }
 
 type Secp256k1Verifier interface {
-	VerifySecp256k1(context.Context, [33]byte, [64]byte, [32]byte) bool
+	VerifyRecoverableSecp256k1(context.Context, [33]byte, [64]byte, uint8, [20]byte, [32]byte) bool
 }
 
 type CheckpointVerification struct {
@@ -540,7 +542,8 @@ type CheckpointVerification struct {
 
 func VerifyCheckpoint(ctx context.Context, input CheckpointVerificationInput, signatures Secp256k1Verifier) (CheckpointVerification, error) {
 	certificate := input.Certificate
-	if ctx == nil || signatures == nil || !input.AvailabilityObtained || uint64(len(certificate.ValidityProof)) > uint64(^uint32(0)) || certificate.Threshold == 0 {
+	if ctx == nil || signatures == nil || !input.AvailabilityObtained || uint64(len(certificate.ValidityProof)) > uint64(^uint32(0)) || certificate.Threshold == 0 ||
+		input.ExpectedPaxeerChainID == 0 || input.ExpectedSettlementContract == ([20]byte{}) {
 		return CheckpointVerification{}, verificationFailure()
 	}
 	header, err := DecodeBatchHeader(certificate.CanonicalHeader)
@@ -561,16 +564,13 @@ func VerifyCheckpoint(ctx context.Context, input CheckpointVerificationInput, si
 	}
 	seen := make(map[[32]byte]struct{}, len(certificate.Attestations))
 	var achieved uint32
-	var paxeerChainID uint64
-	var settlementContract [20]byte
 	for _, attestation := range certificate.Attestations {
 		if err := ctx.Err(); err != nil {
 			return CheckpointVerification{}, err
 		}
 		if _, duplicate := seen[attestation.GuarantorID]; duplicate ||
 			attestation.ProtocolVersion != header.ProtocolVersion || attestation.NetworkID != header.NetworkID || attestation.Epoch != header.Epoch ||
-			attestation.PaxeerChainID == 0 || attestation.SettlementContract == ([20]byte{}) ||
-			(achieved > 0 && (attestation.PaxeerChainID != paxeerChainID || attestation.SettlementContract != settlementContract)) ||
+			attestation.PaxeerChainID != input.ExpectedPaxeerChainID || attestation.SettlementContract != input.ExpectedSettlementContract ||
 			attestation.CheckpointID != checkpointID || attestation.CheckpointHash != checkpointID ||
 			attestation.BatchNumber != header.BatchNumber || attestation.DataAvailabilityRoot != header.DataAvailabilityRoot ||
 			!attestation.Replayed || !attestation.DataPossessed || attestation.AvailabilityClassMask != allAvailabilityClasses || attestation.AttestedAtMillis == 0 ||
@@ -582,8 +582,6 @@ func VerifyCheckpoint(ctx context.Context, input CheckpointVerificationInput, si
 			return CheckpointVerification{}, verificationFailure()
 		}
 		seen[attestation.GuarantorID] = struct{}{}
-		paxeerChainID = attestation.PaxeerChainID
-		settlementContract = attestation.SettlementContract
 		message := make([]byte, 0, 189)
 		message = appendUint16(message, attestation.ProtocolVersion)
 		message = appendUint32(message, attestation.NetworkID)
@@ -598,7 +596,7 @@ func VerifyCheckpoint(ctx context.Context, input CheckpointVerificationInput, si
 		message = append(message, boolByte(attestation.Replayed), boolByte(attestation.DataPossessed), attestation.AvailabilityClassMask)
 		message = appendUint64(message, attestation.AttestedAtMillis)
 		digest := domainDigest(guarantorAttestationDomain, message)
-		if !signatures.VerifySecp256k1(ctx, member.PublicKey, attestation.Signature, digest) {
+		if !signatures.VerifyRecoverableSecp256k1(ctx, member.PublicKey, attestation.Signature, attestation.SignatureV, attestation.Signer, digest) {
 			return CheckpointVerification{}, verificationFailure()
 		}
 		achieved++

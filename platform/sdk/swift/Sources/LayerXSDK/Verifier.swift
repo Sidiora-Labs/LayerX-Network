@@ -149,19 +149,23 @@ public struct CheckpointVerificationInput: Sendable {
     public let certificate: CheckpointCertificate
     public let bondedSet: [GuarantorKey]
     public let registeredCheckpointID: Data
+    public let expectedPaxeerChainID: UInt64
+    public let expectedSettlementContract: Data
     public let registeredSettlementReference: Data?
     public let availabilityObtained: Bool
 
-    public init(certificate: CheckpointCertificate, bondedSet: [GuarantorKey], registeredCheckpointID: Data, registeredSettlementReference: Data? = nil, availabilityObtained: Bool) {
+    public init(certificate: CheckpointCertificate, bondedSet: [GuarantorKey], registeredCheckpointID: Data, expectedPaxeerChainID: UInt64, expectedSettlementContract: Data, registeredSettlementReference: Data? = nil, availabilityObtained: Bool) {
         self.certificate = certificate; self.bondedSet = bondedSet
         self.registeredCheckpointID = registeredCheckpointID
+        self.expectedPaxeerChainID = expectedPaxeerChainID
+        self.expectedSettlementContract = expectedSettlementContract
         self.registeredSettlementReference = registeredSettlementReference
         self.availabilityObtained = availabilityObtained
     }
 }
 
 public protocol LocalSignatureVerifier: Sendable {
-    func verifySecp256k1(publicKey: Data, signature: Data, digest: Data) async -> Bool
+    func verifyRecoverableSecp256k1(publicKey: Data, signature: Data, signatureV: UInt8, signer: Data, digest: Data) async -> Bool
 }
 
 public struct CheckpointVerification: Sendable {
@@ -303,15 +307,15 @@ public enum LocalVerifier {
         let header = try decodeBatchHeader(certificate.canonicalHeader)
         let checkpointID = digest(checkpointDomain, certificate.canonicalHeader, encodeUInt32(UInt32(certificate.validityProof.count)), certificate.validityProof)
         let registeredCheckpointID = try exact(input.registeredCheckpointID, 32)
-        guard checkpointID == registeredCheckpointID else { throw verificationFailure() }
+        let expectedSettlementContract = try exact(input.expectedSettlementContract, 20)
+        guard checkpointID == registeredCheckpointID, input.expectedPaxeerChainID > 0,
+              !allZero(expectedSettlementContract) else { throw verificationFailure() }
         var bonded: [Data: GuarantorKey] = [:]
         for member in input.bondedSet where member.bonded {
             bonded[try exact(member.guarantorID, 32)] = member
         }
         var seen: Set<Data> = []
         var achieved: UInt32 = 0
-        var paxeerChainID: UInt64?
-        var settlementContract: Data?
         for attestation in certificate.attestations {
             let guarantorID = try exact(attestation.guarantorID, 32)
             let attestationSettlementContract = try exact(attestation.settlementContract, 20)
@@ -319,9 +323,8 @@ public enum LocalVerifier {
                   attestation.protocolVersion == header.protocolVersion,
                   attestation.networkID == header.networkID,
                   attestation.epoch == header.epoch,
-                  attestation.paxeerChainID > 0,
-                  !allZero(attestationSettlementContract),
-                  paxeerChainID == nil || (attestation.paxeerChainID == paxeerChainID && attestationSettlementContract == settlementContract),
+                  attestation.paxeerChainID == input.expectedPaxeerChainID,
+                  attestationSettlementContract == expectedSettlementContract,
                   try exact(attestation.checkpointID, 32) == checkpointID,
                   try exact(attestation.checkpointHash, 32) == checkpointID,
                   attestation.batchNumber == header.batchNumber,
@@ -332,8 +335,6 @@ public enum LocalVerifier {
                   !allZero(try exact(attestation.signer, 20)),
                   attestation.signatureV == 27 || attestation.signatureV == 28,
                   let member = bonded[guarantorID], achieved < UInt32.max else { throw verificationFailure() }
-            paxeerChainID = attestation.paxeerChainID
-            settlementContract = attestationSettlementContract
             let message = try concatenate(
                 encodeUInt16(attestation.protocolVersion), encodeUInt32(attestation.networkID), encodeUInt64(attestation.paxeerChainID),
                 attestationSettlementContract, encodeUInt64(attestation.epoch),
@@ -342,9 +343,11 @@ public enum LocalVerifier {
                 Data([1, 1, attestation.availabilityClassMask]), encodeUInt64(attestation.attestedAtMilliseconds)
             )
             let attestationDigest = digest(guarantorAttestationDomain, message)
-            guard await signatures.verifySecp256k1(
+            guard await signatures.verifyRecoverableSecp256k1(
                 publicKey: try exact(member.publicKey, 33),
                 signature: try exact(attestation.signature, 64),
+                signatureV: attestation.signatureV,
+                signer: try exact(attestation.signer, 20),
                 digest: attestationDigest
             ) else { throw verificationFailure() }
             achieved += 1

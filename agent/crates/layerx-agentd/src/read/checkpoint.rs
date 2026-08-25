@@ -1,6 +1,8 @@
 //! Verified checkpoint certificates and root-provenance proof bundles.
 
-use layerx_proof::checkpoint::{verify_certificate, Certificate, CheckpointError, GuarantorKey};
+use layerx_proof::checkpoint::{
+    verify_certificate, Certificate, CheckpointError, GuarantorKey, SettlementDomain,
+};
 use layerx_proof::inclusion::{
     verify_activity, verify_state, InclusionError, SequencerAuthorization,
 };
@@ -80,6 +82,7 @@ pub(crate) fn serve_checkpoint(
     certificate: &Certificate,
     bonded_set: &[GuarantorKey],
     registered_checkpoint_id: [u8; 32],
+    expected_settlement_domain: SettlementDomain,
     registered_settlement_reference: Option<&[u8]>,
     availability_obtained: bool,
 ) -> Result<ServedCheckpoint, CheckpointReadError> {
@@ -92,6 +95,7 @@ pub(crate) fn serve_checkpoint(
         certificate,
         bonded_set,
         &registered_checkpoint_id,
+        expected_settlement_domain,
         registered_settlement_reference,
     )
     .map_err(CheckpointReadError::Certificate)?;

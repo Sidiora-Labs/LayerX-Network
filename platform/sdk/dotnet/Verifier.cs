@@ -5,8 +5,10 @@ using System.Security.Cryptography;
 using System.Text;
 using Org.BouncyCastle.Asn1.Sec;
 using Org.BouncyCastle.Crypto.Parameters;
+using Org.BouncyCastle.Crypto.Digests;
 using Org.BouncyCastle.Crypto.Signers;
 using Org.BouncyCastle.Math;
+using Org.BouncyCastle.Math.EC;
 
 namespace LayerX.Sdk;
 
@@ -75,20 +77,20 @@ public sealed record CheckpointAttestation(
 
 public sealed record GuarantorKey(byte[] GuarantorId, byte[] PublicKey, bool Bonded);
 public sealed record CheckpointCertificate(byte[] CanonicalHeader, byte[] ValidityProof, IReadOnlyList<CheckpointAttestation> Attestations, uint Threshold, byte[]? SettlementReference = null);
-public sealed record CheckpointVerificationInput(CheckpointCertificate Certificate, IReadOnlyList<GuarantorKey> BondedSet, byte[] RegisteredCheckpointId, byte[]? RegisteredSettlementReference, bool AvailabilityObtained);
+public sealed record CheckpointVerificationInput(CheckpointCertificate Certificate, IReadOnlyList<GuarantorKey> BondedSet, byte[] RegisteredCheckpointId, ulong ExpectedPaxeerChainId, byte[] ExpectedSettlementContract, byte[]? RegisteredSettlementReference, bool AvailabilityObtained);
 public sealed record CheckpointVerification(string Level, byte[] CheckpointId, uint Achieved, uint Required, BatchHeader Header);
 
 public interface ILocalSignatureVerifier
 {
-    ValueTask<bool> VerifySecp256k1Async(ReadOnlyMemory<byte> publicKey, ReadOnlyMemory<byte> signature, ReadOnlyMemory<byte> digest, CancellationToken cancellationToken = default);
+    ValueTask<bool> VerifyRecoverableSecp256k1Async(ReadOnlyMemory<byte> publicKey, ReadOnlyMemory<byte> signature, byte signatureV, ReadOnlyMemory<byte> signer, ReadOnlyMemory<byte> digest, CancellationToken cancellationToken = default);
 }
 
 public sealed class BouncyCastleSignatureVerifier : ILocalSignatureVerifier
 {
-    public ValueTask<bool> VerifySecp256k1Async(ReadOnlyMemory<byte> publicKey, ReadOnlyMemory<byte> signature, ReadOnlyMemory<byte> digest, CancellationToken cancellationToken = default)
+    public ValueTask<bool> VerifyRecoverableSecp256k1Async(ReadOnlyMemory<byte> publicKey, ReadOnlyMemory<byte> signature, byte signatureV, ReadOnlyMemory<byte> signer, ReadOnlyMemory<byte> digest, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (publicKey.Length != 33 || signature.Length != 64 || digest.Length != 32) return ValueTask.FromResult(false);
+        if (publicKey.Length != 33 || signature.Length != 64 || signer.Length != 20 || digest.Length != 32 || (signatureV != 27 && signatureV != 28)) return ValueTask.FromResult(false);
         try
         {
             var curve = SecNamedCurves.GetByName("secp256k1");
@@ -98,11 +100,33 @@ public sealed class BouncyCastleSignatureVerifier : ILocalSignatureVerifier
             var encodedSignature = signature.Span;
             var r = new BigInteger(1, encodedSignature[..32].ToArray());
             var s = new BigInteger(1, encodedSignature[32..].ToArray());
+            if (r.SignValue <= 0 || r.CompareTo(curve.N) >= 0 || s.SignValue <= 0 || s.CompareTo(curve.N.ShiftRight(1)) > 0)
+                return ValueTask.FromResult(false);
             var verifier = new ECDsaSigner();
             verifier.Init(false, key);
-            return ValueTask.FromResult(verifier.VerifySignature(digest.ToArray(), r, s));
+            if (!verifier.VerifySignature(digest.ToArray(), r, s)) return ValueTask.FromResult(false);
+            var compressed = new byte[33];
+            compressed[0] = (byte)(2 + signatureV - 27);
+            var x = r.ToByteArrayUnsigned();
+            if (x.Length > 32) return ValueTask.FromResult(false);
+            x.CopyTo(compressed, compressed.Length - x.Length);
+            var recoveredR = curve.Curve.DecodePoint(compressed);
+            if (!recoveredR.Multiply(curve.N).IsInfinity) return ValueTask.FromResult(false);
+            var inverseR = r.ModInverse(curve.N);
+            var e = new BigInteger(1, digest.ToArray());
+            var recovered = ECAlgorithms.SumOfTwoMultiplies(
+                curve.G, e.Negate().Mod(curve.N).Multiply(inverseR).Mod(curve.N),
+                recoveredR, s.Multiply(inverseR).Mod(curve.N)).Normalize();
+            if (!CryptographicOperations.FixedTimeEquals(recovered.GetEncoded(true), publicKey.Span))
+                return ValueTask.FromResult(false);
+            var uncompressed = recovered.GetEncoded(false);
+            var keccak = new KeccakDigest(256);
+            keccak.BlockUpdate(uncompressed, 1, uncompressed.Length - 1);
+            var addressHash = new byte[32];
+            keccak.DoFinal(addressHash, 0);
+            return ValueTask.FromResult(CryptographicOperations.FixedTimeEquals(addressHash.AsSpan(12, 20), signer.Span));
         }
-        catch (Exception exception) when (exception is ArgumentException or InvalidOperationException)
+        catch (Exception exception) when (exception is ArgumentException or InvalidOperationException or ArithmeticException)
         {
             return ValueTask.FromResult(false);
         }
@@ -233,14 +257,13 @@ public static class LocalVerifier
             throw VerificationFailure();
         var header = DecodeBatchHeader(certificate.CanonicalHeader);
         var checkpointId = Digest(CheckpointDomain, certificate.CanonicalHeader, EncodeUInt32((uint)certificate.ValidityProof.Length), certificate.ValidityProof);
-        if (!Equal(checkpointId, Exact(input.RegisteredCheckpointId, 32))) throw VerificationFailure();
+        var expectedSettlementContract = Exact(input.ExpectedSettlementContract, 20);
+        if (!Equal(checkpointId, Exact(input.RegisteredCheckpointId, 32)) || input.ExpectedPaxeerChainId == 0 || AllZero(expectedSettlementContract)) throw VerificationFailure();
         var bonded = new Dictionary<string, GuarantorKey>(StringComparer.Ordinal);
         foreach (var member in input.BondedSet ?? throw VerificationFailure())
             if (member.Bonded) bonded[Convert.ToHexString(Exact(member.GuarantorId, 32))] = member;
         var seen = new HashSet<string>(StringComparer.Ordinal);
         uint achieved = 0;
-        ulong? paxeerChainId = null;
-        byte[]? settlementContract = null;
         foreach (var attestation in certificate.Attestations)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -248,16 +271,13 @@ public static class LocalVerifier
             var attestationSettlementContract = Exact(attestation.SettlementContract, 20);
             var identity = Convert.ToHexString(guarantorId);
             if (!seen.Add(identity) || attestation.ProtocolVersion != header.ProtocolVersion || attestation.NetworkId != header.NetworkId || attestation.Epoch != header.Epoch ||
-                attestation.PaxeerChainId == 0 || AllZero(attestationSettlementContract) ||
-                (paxeerChainId.HasValue && (attestation.PaxeerChainId != paxeerChainId.Value || !Equal(attestationSettlementContract, settlementContract!))) ||
+                attestation.PaxeerChainId != input.ExpectedPaxeerChainId || !Equal(attestationSettlementContract, expectedSettlementContract) ||
                 !Equal(Exact(attestation.CheckpointId, 32), checkpointId) || !Equal(Exact(attestation.CheckpointHash, 32), checkpointId) ||
                 attestation.BatchNumber != header.BatchNumber || !Equal(Exact(attestation.DataAvailabilityRoot, 32), header.DataAvailabilityRoot) ||
                 !attestation.Replayed || !attestation.DataPossessed || attestation.AvailabilityClassMask != AllAvailabilityClasses || attestation.AttestedAtMilliseconds == 0 ||
                 AllZero(Exact(attestation.Signer, 20)) || (attestation.SignatureV != 27 && attestation.SignatureV != 28) ||
                 !bonded.TryGetValue(identity, out var member) || achieved == uint.MaxValue)
                 throw VerificationFailure();
-            paxeerChainId = attestation.PaxeerChainId;
-            settlementContract = attestationSettlementContract;
             var message = Concatenate(
                 EncodeUInt16(attestation.ProtocolVersion), EncodeUInt32(attestation.NetworkId), EncodeUInt64(attestation.PaxeerChainId),
                 attestationSettlementContract, EncodeUInt64(attestation.Epoch),
@@ -265,7 +285,7 @@ public static class LocalVerifier
                 EncodeUInt64(attestation.BatchNumber), Exact(attestation.DataAvailabilityRoot, 32),
                 new byte[] { 1, 1, attestation.AvailabilityClassMask }, EncodeUInt64(attestation.AttestedAtMilliseconds));
             var attestationDigest = Digest(GuarantorAttestationDomain, message);
-            if (!await signatures.VerifySecp256k1Async(Exact(member.PublicKey, 33), Exact(attestation.Signature, 64), attestationDigest, cancellationToken).ConfigureAwait(false))
+            if (!await signatures.VerifyRecoverableSecp256k1Async(Exact(member.PublicKey, 33), Exact(attestation.Signature, 64), attestation.SignatureV, Exact(attestation.Signer, 20), attestationDigest, cancellationToken).ConfigureAwait(false))
                 throw VerificationFailure();
             achieved++;
         }

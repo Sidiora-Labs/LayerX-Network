@@ -191,7 +191,11 @@ public final class ConformanceMain {
             new LocalVerifier.SequencerAuthorization(new byte[32], new byte[32], BigInteger.ZERO, BigInteger.ZERO)));
         expectVerificationFailure(() -> LocalVerifier.verifyCheckpoint(new LocalVerifier.CheckpointVerificationInput(
             new LocalVerifier.CheckpointCertificate(new byte[0], new byte[0], List.of(), 1, null),
-            List.of(), new byte[32], null, true)));
+            List.of(), new byte[32], BigInteger.valueOf(31_337), new byte[20], null, true)));
+        if (LocalVerifier.verifyRecoverableSecp256k1(
+                new byte[33], new byte[64], 27, new byte[20], new byte[32])) {
+            throw new IllegalStateException("invalid recoverable EVM attestation accepted");
+        }
     }
 
     private static void expectVerificationFailure(Runnable action) {

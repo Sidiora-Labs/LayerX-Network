@@ -23,6 +23,7 @@ use layerx_human_service::notify::ActivityEntryId;
 use layerx_human_service::store::{EvidenceRef, PrincipalScope, Table};
 use layerx_human_service::trace::TraceId;
 use layerx_proof::export::{InclusionFact, InclusionKind, OfflineExport, ReceiptFact};
+use layerx_proof::checkpoint::SettlementDomain;
 use layerx_proof::inclusion::SequencerAuthorization;
 use layerx_proof::merkle::{build_proof, encode_proof};
 use layerx_proof::receipt::{verify_outcome, AuthorizedBatch};
@@ -30,6 +31,10 @@ use sha2::{Digest as _, Sha256};
 
 fn result<T, E: std::fmt::Debug>(value: Result<T, E>, label: &str) -> T {
     value.unwrap_or_else(|error| panic!("{label}: {error:?}"))
+}
+
+fn settlement_domain() -> SettlementDomain {
+    SettlementDomain::new(31_337, [0x55; 20])
 }
 
 fn protocol_artifact() -> OfflineExport {
@@ -206,14 +211,18 @@ fn filtered_statement_and_evidence_are_offline_verifiable_and_redacted() {
             &filters,
             std::slice::from_ref(&movement_id),
             vec![artifact.clone()],
+            settlement_domain(),
             21,
             2,
         ),
         "evidence bundle",
     );
-    let report = result(bundle.verify(), "third-party bundle verification");
+    let report = result(
+        bundle.verify(settlement_domain()),
+        "third-party bundle verification",
+    );
     let agent_verified = result(
-        build_agent_export(bundle.protocol_evidence()[0].clone()),
+        build_agent_export(bundle.protocol_evidence()[0].clone(), settlement_domain()),
         "agent offline verification of bundle",
     );
     assert_eq!(report.entries(), 1);
@@ -228,6 +237,7 @@ fn filtered_statement_and_evidence_are_offline_verifiable_and_redacted() {
             &filters,
             std::slice::from_ref(&movement_id),
             vec![artifact.clone()],
+            settlement_domain(),
             21,
             2,
         ),
@@ -243,6 +253,7 @@ fn filtered_statement_and_evidence_are_offline_verifiable_and_redacted() {
             &filters,
             std::slice::from_ref(&movement_id),
             vec![artifact.clone()],
+            settlement_domain(),
             21,
             0,
         ),
@@ -300,10 +311,17 @@ fn audit_uses_the_same_bounded_bundle_and_keeps_referenced_bytes() {
     );
     let feed = result(Feed::new(5), "feed");
     let bundle = result(
-        result(EvidenceExport::new(feed, 64 * 1024), "audit exporter").audit(&scope, &chain),
+        result(EvidenceExport::new(feed, 64 * 1024), "audit exporter").audit(
+            &scope,
+            &chain,
+            settlement_domain(),
+        ),
         "audit evidence bundle",
     );
-    let report = result(bundle.verify(), "offline audit bundle verification");
+    let report = result(
+        bundle.verify(settlement_domain()),
+        "offline audit bundle verification",
+    );
     assert_eq!(report.audit_entries(), 1);
     assert_eq!(report.entries(), 0);
     let audit_bytes = bundle
@@ -316,7 +334,11 @@ fn audit_uses_the_same_bounded_bundle_and_keeps_referenced_bytes() {
     assert_eq!(audit_report.principal().as_str(), "alice");
     assert_eq!(audit_report.evidence_rows(), 2);
     assert!(matches!(
-        result(EvidenceExport::new(feed, 64), "bounded audit exporter").audit(&scope, &chain),
+        result(EvidenceExport::new(feed, 64), "bounded audit exporter").audit(
+            &scope,
+            &chain,
+            settlement_domain(),
+        ),
         Err(ExportError::SizeBoundExceeded { maximum: 64 })
     ));
     let _ = std::fs::remove_dir_all(root);

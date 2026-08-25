@@ -27,6 +27,7 @@ use layerx_client::client::{Client as NodeClient, ClientConfig, ConnectionError}
 use layerx_proof::export::{
     verify as verify_offline_export, ExportVerificationError, OfflineExport, VerificationReport,
 };
+pub use layerx_proof::checkpoint::SettlementDomain;
 use layerx_types::result::ResultCode;
 
 pub mod approval;
@@ -523,8 +524,9 @@ impl Client {
     /// Returns the exact proof verification failure.
     pub fn verify_offline(
         export: &OfflineExport,
+        expected_settlement_domain: SettlementDomain,
     ) -> Result<VerificationReport, ExportVerificationError> {
-        verify_offline_export(export)
+        verify_offline_export(export, expected_settlement_domain)
     }
 
     mutation_methods! {

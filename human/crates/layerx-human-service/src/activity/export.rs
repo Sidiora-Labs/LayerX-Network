@@ -4,6 +4,7 @@ use std::fmt::{Display, Formatter, Write as _};
 use layerx_proof::export::{
     verify as verify_offline, ExportVerificationError, OfflineExport, VerificationReport,
 };
+use layerx_proof::checkpoint::SettlementDomain;
 use layerx_proof::merkle::encode_proof;
 use sha2::{Digest as _, Sha256};
 
@@ -103,9 +104,16 @@ impl EvidenceBundle {
     ///
     /// Refuses altered protocol evidence, changed activity-to-receipt bindings,
     /// or an invalid audit export.
-    pub fn verify(&self) -> Result<BundleReport, ExportError> {
+    pub fn verify(
+        &self,
+        expected_settlement_domain: SettlementDomain,
+    ) -> Result<BundleReport, ExportError> {
         let expected = referenced_receipts(&self.entries);
-        let protocol = verify_protocol_set(&self.protocol_evidence, &expected)?;
+        let protocol = verify_protocol_set(
+            &self.protocol_evidence,
+            &expected,
+            expected_settlement_domain,
+        )?;
         let audit = self.audit_export.as_deref().map(verify_audit).transpose()?;
         if let Some(report) = &audit {
             if principal_binding(report.principal().as_str()) != self.principal_binding {
@@ -225,6 +233,7 @@ impl EvidenceExport {
         filters: &AppliedFilters,
         entry_ids: &[ActivityEntryId],
         protocol_evidence: Vec<OfflineExport>,
+        expected_settlement_domain: SettlementDomain,
         now: u64,
         observed_agent_head: u64,
     ) -> Result<EvidenceBundle, ExportError> {
@@ -241,7 +250,11 @@ impl EvidenceExport {
             })
             .collect::<Vec<_>>();
         let expected = referenced_receipts(&entries);
-        verify_protocol_set(&protocol_evidence, &expected)?;
+        verify_protocol_set(
+            &protocol_evidence,
+            &expected,
+            expected_settlement_domain,
+        )?;
         let bounded_bytes = evidence_size(&entries, &protocol_evidence, None)?;
         require_bound(bounded_bytes, self.maximum_bytes)?;
         let bundle = EvidenceBundle {
@@ -251,7 +264,7 @@ impl EvidenceExport {
             audit_export: None,
             bounded_bytes,
         };
-        bundle.verify()?;
+        bundle.verify(expected_settlement_domain)?;
         Ok(bundle)
     }
 
@@ -265,6 +278,7 @@ impl EvidenceExport {
         self,
         scope: &PrincipalScope<'_>,
         audit: &AuditChain,
+        expected_settlement_domain: SettlementDomain,
     ) -> Result<EvidenceBundle, ExportError> {
         let audit_export = audit.export(scope)?;
         verify_audit(&audit_export)?;
@@ -277,7 +291,7 @@ impl EvidenceExport {
             audit_export: Some(audit_export),
             bounded_bytes,
         };
-        bundle.verify()?;
+        bundle.verify(expected_settlement_domain)?;
         Ok(bundle)
     }
 
@@ -397,6 +411,7 @@ fn referenced_receipts(entries: &[EvidenceEntry]) -> BTreeSet<String> {
 fn verify_protocol_set(
     protocol: &[OfflineExport],
     expected: &BTreeSet<String>,
+    expected_settlement_domain: SettlementDomain,
 ) -> Result<Vec<VerificationReport>, ExportError> {
     let mut provided = BTreeSet::new();
     let mut reports = Vec::with_capacity(protocol.len());
@@ -404,7 +419,8 @@ fn verify_protocol_set(
         if artifact.receipts.is_empty() {
             return Err(ExportError::UnboundProtocolEvidence);
         }
-        let report = verify_offline(artifact).map_err(ExportError::Protocol)?;
+        let report = verify_offline(artifact, expected_settlement_domain)
+            .map_err(ExportError::Protocol)?;
         for receipt in &artifact.receipts {
             let reference = hex(Sha256::digest(&receipt.canonical_receipt_bytes));
             if !provided.insert(reference.clone()) {

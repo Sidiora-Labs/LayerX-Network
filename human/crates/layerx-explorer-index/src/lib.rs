@@ -13,7 +13,9 @@ use layerx_client::availability::AvailabilityResult;
 use layerx_client::head::Head;
 use layerx_programs_protocol_adapter::ProtocolAdapterError;
 use layerx_proof::availability::RootCommitments;
-use layerx_proof::checkpoint::{verify_certificate, Certificate, CheckpointError, GuarantorKey};
+use layerx_proof::checkpoint::{
+    verify_certificate, Certificate, CheckpointError, GuarantorKey, SettlementDomain,
+};
 use layerx_proof::receipt::{verify_outcome, AuthorizedBatch, ReceiptCheck};
 use layerx_types::verify::VerificationLevel;
 use sha2::{Digest as _, Sha256};
@@ -271,12 +273,14 @@ impl Indexer {
         certificate: &Certificate,
         bonded_set: &[GuarantorKey],
         registered_checkpoint_id: [u8; 32],
+        expected_settlement_domain: SettlementDomain,
         registered_settlement_reference: Option<&[u8]>,
     ) -> Result<IngestOutcome, IndexError> {
         let report = verify_certificate(
             certificate,
             bonded_set,
             &registered_checkpoint_id,
+            expected_settlement_domain,
             registered_settlement_reference,
         )
         .map_err(IndexError::Checkpoint)?;

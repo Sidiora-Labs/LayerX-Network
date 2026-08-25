@@ -27,7 +27,7 @@ class BatchHeader:
 
 class LocalSignatureVerifier(Protocol):
     def verify_ed25519(self, public_key: bytes, signature: bytes, digest: bytes) -> bool: ...
-    def verify_secp256k1(self, public_key: bytes, signature: bytes, digest: bytes) -> bool: ...
+    def verify_recoverable_secp256k1(self, public_key: bytes, signature: bytes, signature_v: int, signer: bytes, digest: bytes) -> bool: ...
 
 @dataclass(frozen=True)
 class ReceiptEffect:
@@ -139,6 +139,8 @@ class CheckpointVerificationInput:
     certificate: CheckpointCertificate
     bonded_set: tuple[GuarantorKey, ...]
     registered_checkpoint_id: bytes
+    expected_paxeer_chain_id: int
+    expected_settlement_contract: bytes
     registered_settlement_reference: bytes | None
     availability_obtained: bool
 

@@ -8,7 +8,7 @@ use layerx_proof::availability::{
     verify_chunk, AvailabilityClass, Chunk, RootCommitments, VerifiedChunk,
 };
 use layerx_proof::checkpoint::{
-    checkpoint_id, Attestation, Certificate, Checkpoint, GuarantorKey,
+    checkpoint_id, Attestation, Certificate, Checkpoint, GuarantorKey, SettlementDomain,
 };
 use layerx_proof::merkle::{build_leaf_hash_proof, root};
 use layerx_types::verify::VerificationLevel;
@@ -239,7 +239,13 @@ fn deleting_and_rebuilding_from_verified_boundary_evidence_is_identical() {
         Ok(IngestOutcome::Inserted)
     );
     assert_eq!(
-        original.ingest_checkpoint(&certificate, &keys, checkpoint_id, None),
+        original.ingest_checkpoint(
+            &certificate,
+            &keys,
+            checkpoint_id,
+            SettlementDomain::new(31_337, [0x55; 20]),
+            None,
+        ),
         Ok(IngestOutcome::Inserted)
     );
     assert!(original.freshness().is_current());
@@ -248,7 +254,13 @@ fn deleting_and_rebuilding_from_verified_boundary_evidence_is_identical() {
         Ok(IngestOutcome::AlreadyPresent)
     );
     assert_eq!(
-        original.ingest_checkpoint(&certificate, &keys, checkpoint_id, None),
+        original.ingest_checkpoint(
+            &certificate,
+            &keys,
+            checkpoint_id,
+            SettlementDomain::new(31_337, [0x55; 20]),
+            None,
+        ),
         Ok(IngestOutcome::AlreadyPresent)
     );
     let expected = original.snapshot();
@@ -262,7 +274,13 @@ fn deleting_and_rebuilding_from_verified_boundary_evidence_is_identical() {
     drop(original);
     let mut rebuilt = Indexer::new(head);
     assert_eq!(
-        rebuilt.ingest_checkpoint(&certificate, &keys, checkpoint_id, None),
+        rebuilt.ingest_checkpoint(
+            &certificate,
+            &keys,
+            checkpoint_id,
+            SettlementDomain::new(31_337, [0x55; 20]),
+            None,
+        ),
         Ok(IngestOutcome::Inserted)
     );
     assert_eq!(
@@ -341,7 +359,13 @@ fn freshness_and_evidence_mismatches_are_refused_without_partial_rows() {
     };
     let mut mismatched = Indexer::new(wrong_checkpoint_head);
     assert_eq!(
-        mismatched.ingest_checkpoint(&certificate, &keys, checkpoint_id, None),
+        mismatched.ingest_checkpoint(
+            &certificate,
+            &keys,
+            checkpoint_id,
+            SettlementDomain::new(31_337, [0x55; 20]),
+            None,
+        ),
         Err(IndexError::CheckpointHeadMismatch {
             expected: [9; 32],
             actual: checkpoint_id,
@@ -355,7 +379,13 @@ fn freshness_and_evidence_mismatches_are_refused_without_partial_rows() {
         finalised_checkpoint: checkpoint_id,
     });
     assert_eq!(
-        current.ingest_checkpoint(&certificate, &keys, checkpoint_id, None),
+        current.ingest_checkpoint(
+            &certificate,
+            &keys,
+            checkpoint_id,
+            SettlementDomain::new(31_337, [0x55; 20]),
+            None,
+        ),
         Ok(IngestOutcome::Inserted)
     );
     assert!(!current.freshness().is_current());

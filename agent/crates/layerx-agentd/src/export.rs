@@ -1,5 +1,6 @@
 //! Construction of proof-only offline verification exports.
 
+use layerx_proof::checkpoint::SettlementDomain;
 use layerx_proof::export::{verify, ExportVerificationError, OfflineExport, VerificationReport};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -20,14 +21,18 @@ pub enum ExportBuildError {
 ///
 /// Refuses an artifact holding no receipts, inclusions or checkpoints, and returns the first
 /// verification failure raised by `layerx-proof` over the artifact.
-pub fn build(artifact: OfflineExport) -> Result<BuiltExport, ExportBuildError> {
+pub fn build(
+    artifact: OfflineExport,
+    expected_settlement_domain: SettlementDomain,
+) -> Result<BuiltExport, ExportBuildError> {
     if artifact.receipts.is_empty()
         && artifact.inclusions.is_empty()
         && artifact.checkpoints.is_empty()
     {
         return Err(ExportBuildError::Empty);
     }
-    let local_verification = verify(&artifact).map_err(ExportBuildError::Verification)?;
+    let local_verification = verify(&artifact, expected_settlement_domain)
+        .map_err(ExportBuildError::Verification)?;
     Ok(BuiltExport {
         artifact,
         local_verification,

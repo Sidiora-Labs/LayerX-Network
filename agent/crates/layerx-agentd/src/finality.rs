@@ -1,6 +1,8 @@
 //! Proof-gated submission finality augmentation and deadline-bounded waiting.
 
-use layerx_proof::checkpoint::{verify_certificate, Certificate, CheckpointError, GuarantorKey};
+use layerx_proof::checkpoint::{
+    verify_certificate, Certificate, CheckpointError, GuarantorKey, SettlementDomain,
+};
 use layerx_proof::inclusion::{
     verify_activity, verify_state, InclusionError, SequencerAuthorization,
 };
@@ -29,6 +31,7 @@ pub struct CheckpointBundle<'a> {
     pub certificate: &'a Certificate,
     pub bonded_set: &'a [GuarantorKey],
     pub registered_checkpoint_id: [u8; 32],
+    pub expected_settlement_domain: SettlementDomain,
     pub registered_settlement_reference: Option<&'a [u8]>,
 }
 
@@ -122,6 +125,7 @@ pub fn augment(
             checkpoint.certificate,
             checkpoint.bonded_set,
             &checkpoint.registered_checkpoint_id,
+            checkpoint.expected_settlement_domain,
             checkpoint.registered_settlement_reference,
         )
         .map_err(FinalityError::Checkpoint)?;

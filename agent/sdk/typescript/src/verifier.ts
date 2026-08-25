@@ -91,6 +91,8 @@ export interface CheckpointVerificationInput {
   readonly certificate: CheckpointCertificate;
   readonly bondedSet: readonly GuarantorKey[];
   readonly registeredCheckpointId: Uint8Array;
+  readonly expectedPaxeerChainId: bigint;
+  readonly expectedSettlementContract: Uint8Array;
   readonly registeredSettlementReference?: Uint8Array;
   readonly availabilityObtained: boolean;
 }
@@ -104,7 +106,13 @@ export interface CheckpointVerification {
 }
 
 export interface LocalSignatureVerifier {
-  verifySecp256k1(publicKey: Uint8Array, signature: Uint8Array, digest: Uint8Array): Promise<boolean>;
+  verifyRecoverableSecp256k1(
+    publicKey: Uint8Array,
+    signature: Uint8Array,
+    signatureV: number,
+    signer: Uint8Array,
+    digest: Uint8Array,
+  ): Promise<boolean>;
 }
 
 export interface ReceiptEffect {
@@ -535,12 +543,16 @@ export async function verifyCheckpoint(
   if (!equal(checkpointId, exactBytes(input.registeredCheckpointId, 32))) {
     return verificationFailure();
   }
-  if (certificate.threshold <= 0 || !Number.isSafeInteger(certificate.threshold)) {
+  const expectedSettlementContract = exactBytes(input.expectedSettlementContract, 20);
+  if (
+    certificate.threshold <= 0
+    || !Number.isSafeInteger(certificate.threshold)
+    || input.expectedPaxeerChainId <= 0n
+    || expectedSettlementContract.every((byte) => byte === 0)
+  ) {
     return verificationFailure();
   }
   const seen = new Set<string>();
-  let paxeerChainId: bigint | undefined;
-  let settlementContract: Uint8Array | undefined;
   let achieved = 0;
   for (const attestation of certificate.attestations) {
     const guarantorId = exactBytes(attestation.guarantorId, 32);
@@ -550,10 +562,8 @@ export async function verifyCheckpoint(
       || attestation.protocolVersion !== header.protocolVersion
       || attestation.networkId !== header.networkId
       || attestation.epoch !== header.epoch
-      || attestation.paxeerChainId === 0n
-      || exactBytes(attestation.settlementContract, 20).every((byte) => byte === 0)
-      || (paxeerChainId !== undefined && attestation.paxeerChainId !== paxeerChainId)
-      || (settlementContract !== undefined && !equal(attestation.settlementContract, settlementContract))
+      || attestation.paxeerChainId !== input.expectedPaxeerChainId
+      || !equal(exactBytes(attestation.settlementContract, 20), expectedSettlementContract)
       || !equal(attestation.checkpointId, checkpointId)
       || !equal(attestation.checkpointHash, checkpointId)
       || attestation.batchNumber !== header.batchNumber
@@ -567,17 +577,17 @@ export async function verifyCheckpoint(
     ) {
       return verificationFailure();
     }
-    paxeerChainId = attestation.paxeerChainId;
-    settlementContract = exactBytes(attestation.settlementContract, 20);
     seen.add(identity);
     const member = input.bondedSet.find((candidate) => candidate.bonded && equal(candidate.guarantorId, guarantorId));
     if (member === undefined) {
       return verificationFailure();
     }
     const digest = await sha256(GUARANTOR_ATTESTATION_DOMAIN, attestationMessage(attestation));
-    if (!await signatures.verifySecp256k1(
+    if (!await signatures.verifyRecoverableSecp256k1(
       exactBytes(member.publicKey, 33),
       exactBytes(attestation.signature, 64),
+      attestation.signatureV,
+      exactBytes(attestation.signer, 20),
       digest,
     )) {
       return verificationFailure();

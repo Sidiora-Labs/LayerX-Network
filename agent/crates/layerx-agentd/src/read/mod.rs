@@ -39,6 +39,7 @@ pub fn checkpoint(
     certificate: &layerx_proof::checkpoint::Certificate,
     bonded_set: &[layerx_proof::checkpoint::GuarantorKey],
     registered_checkpoint_id: [u8; 32],
+    expected_settlement_domain: layerx_proof::checkpoint::SettlementDomain,
     registered_settlement_reference: Option<&[u8]>,
     availability_obtained: bool,
 ) -> Result<ServedCheckpoint, CheckpointReadError> {
@@ -46,6 +47,7 @@ pub fn checkpoint(
         certificate,
         bonded_set,
         registered_checkpoint_id,
+        expected_settlement_domain,
         registered_settlement_reference,
         availability_obtained,
     )

@@ -2,7 +2,9 @@ use ed25519_dalek::{Signer as _, SigningKey as EdSigningKey};
 use k256::ecdsa::{Signature, SigningKey};
 use layerx_crypto::secp256k1;
 use layerx_agentd::export::build;
-use layerx_proof::checkpoint::{checkpoint_id, Attestation, Certificate, Checkpoint, GuarantorKey};
+use layerx_proof::checkpoint::{
+    checkpoint_id, Attestation, Certificate, Checkpoint, GuarantorKey, SettlementDomain,
+};
 use layerx_proof::export::{
     verify as verify_export, CheckpointFact, DerivedAggregate, ExportVerificationError,
     InclusionFact, InclusionKind, OfflineExport, ReceiptFact,
@@ -220,7 +222,8 @@ fn artifact() -> OfflineExport {
 
 #[test]
 fn layerx_proof_verifies_complete_export_with_no_daemon_node_or_network() {
-    let built = build(artifact()).unwrap_or_else(|error| panic!("build: {error:?}"));
+    let domain = SettlementDomain::new(31_337, [0x55; 20]);
+    let built = build(artifact(), domain).unwrap_or_else(|error| panic!("build: {error:?}"));
     assert_eq!(built.local_verification.verified_receipts, 1);
     assert_eq!(built.local_verification.verified_inclusions, 1);
     assert_eq!(built.local_verification.verified_checkpoints, 1);
@@ -232,7 +235,8 @@ fn layerx_proof_verifies_complete_export_with_no_daemon_node_or_network() {
 
     let offline = built.artifact;
     let third_party =
-        verify_export(&offline).unwrap_or_else(|error| panic!("offline verification: {error:?}"));
+        verify_export(&offline, domain)
+            .unwrap_or_else(|error| panic!("offline verification: {error:?}"));
     assert_eq!(third_party.verified_receipts, 1);
     assert_eq!(third_party.achieved_levels.len(), 3);
 }
@@ -240,16 +244,26 @@ fn layerx_proof_verifies_complete_export_with_no_daemon_node_or_network() {
 #[test]
 fn hostile_export_changes_and_unknown_aggregate_contributors_fail() {
     let mut changed = artifact();
+    assert_eq!(
+        verify_export(&changed, SettlementDomain::new(31_338, [0x55; 20])),
+        Err(ExportVerificationError::Checkpoint {
+            index: 0,
+            error: layerx_proof::checkpoint::CheckpointError::CheckpointFields,
+        })
+    );
     changed.receipts[0].expected_receipt_digest[0] ^= 1;
     assert_eq!(
-        verify_export(&changed),
+        verify_export(&changed, SettlementDomain::new(31_337, [0x55; 20])),
         Err(ExportVerificationError::ReceiptDigest { index: 0 })
     );
 
     let mut unknown_contributor = artifact();
     unknown_contributor.derived_aggregates[0].contributing_receipt_digests[0] = [0x99; 32];
     assert!(matches!(
-        verify_export(&unknown_contributor),
+        verify_export(
+            &unknown_contributor,
+            SettlementDomain::new(31_337, [0x55; 20]),
+        ),
         Err(ExportVerificationError::UnknownAggregateContributor {
             aggregate: 0,
             digest

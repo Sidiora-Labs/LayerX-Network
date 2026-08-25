@@ -13,7 +13,8 @@ pub use layerx_mirror::{
     SignedHeaderTrust,
 };
 use layerx_proof::checkpoint::{
-    verify_certificate, Certificate, CheckpointError, GuarantorKey, ThresholdReport,
+    verify_certificate, Certificate, CheckpointError, GuarantorKey, SettlementDomain,
+    ThresholdReport,
 };
 use layerx_proof::inclusion::{
     verify_activity, verify_state, InclusionError, InclusionEvidence, SequencerAuthorization,
@@ -686,12 +687,14 @@ pub fn verify_checkpoint(
     certificate: &Certificate,
     bonded_set: &[GuarantorKey],
     registered_checkpoint_id: &[u8; 32],
+    expected_settlement_domain: SettlementDomain,
     registered_settlement_reference: Option<&[u8]>,
 ) -> Result<ThresholdReport, CheckpointError> {
     verify_certificate(
         certificate,
         bonded_set,
         registered_checkpoint_id,
+        expected_settlement_domain,
         registered_settlement_reference,
     )
 }
