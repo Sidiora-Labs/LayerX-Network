@@ -180,10 +180,19 @@ impl Quota {
     }
 }
 
-#[derive(Debug)]
 pub struct IssuedKey {
     id: String,
     secret: String,
+}
+
+impl std::fmt::Debug for IssuedKey {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("IssuedKey")
+            .field("id", &self.id)
+            .field("secret", &"[REDACTED]")
+            .finish()
+    }
 }
 
 impl IssuedKey {
@@ -570,3 +579,17 @@ impl Display for GatewayError {
 }
 
 impl std::error::Error for GatewayError {}
+
+#[cfg(test)]
+mod tests {
+    use super::IssuedKey;
+
+    #[test]
+    fn issued_key_debug_redacts_the_credential() {
+        let key = IssuedKey::derive(&[7_u8; 32], b"debug-redaction");
+        let output = format!("{key:?}");
+        assert!(output.contains(key.id()));
+        assert!(output.contains("[REDACTED]"));
+        assert!(!output.contains(key.secret()));
+    }
+}
