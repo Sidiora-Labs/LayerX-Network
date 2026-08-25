@@ -10,7 +10,7 @@ struct lxp_gateway_invoice_registry {
     lxp_gateway_invoice_record records[LXP_GATEWAY_INVOICE_CAPACITY];
     size_t count;
     pthread_mutex_t coordination_mutex;
-    lx_account_registry *owner_accounts;
+    _Atomic(lx_account_registry *) owner_accounts;
     atomic_size_t active_users;
     atomic_uint lifecycle;
 };
@@ -29,6 +29,9 @@ void lxp_gateway_send_test_fail_after(
     lxp_gateway_transaction_boundary boundary);
 void lxp_gateway_receive_test_fail_after(
     lxp_gateway_transaction_boundary boundary);
+void lxp_gateway_registry_test_pause_before_activation(void);
+bool lxp_gateway_registry_test_activation_paused(void);
+void lxp_gateway_registry_test_release_activation(void);
 #endif
 lxp_result lxp_gateway_invoice_state_locked(
     const lxp_gateway_invoice_registry *registry,

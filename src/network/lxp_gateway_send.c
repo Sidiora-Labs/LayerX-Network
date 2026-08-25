@@ -6,6 +6,9 @@
 
 #include <stdlib.h>
 #include <string.h>
+#ifdef LXP_TESTING
+#include <sched.h>
+#endif
 
 typedef struct send_transaction {
     lxp_ledger_journal balances;
@@ -23,10 +26,28 @@ enum {
 
 #ifdef LXP_TESTING
 static _Thread_local lxp_gateway_transaction_boundary test_failure_boundary;
+static atomic_bool test_pause_before_activation;
+static atomic_bool test_activation_paused;
 void lxp_gateway_send_test_fail_after(
     lxp_gateway_transaction_boundary boundary)
 {
     test_failure_boundary = boundary;
+}
+
+void lxp_gateway_registry_test_pause_before_activation(void)
+{
+    atomic_store(&test_activation_paused, false);
+    atomic_store(&test_pause_before_activation, true);
+}
+
+bool lxp_gateway_registry_test_activation_paused(void)
+{
+    return atomic_load(&test_activation_paused);
+}
+
+void lxp_gateway_registry_test_release_activation(void)
+{
+    atomic_store(&test_pause_before_activation, false);
 }
 #endif
 
@@ -111,6 +132,7 @@ lxp_gateway_invoice_registry *lxp_gateway_invoice_registry_create(
     }
     atomic_init(&created->active_users, 0U);
     atomic_init(&created->lifecycle, LXP_GATEWAY_REGISTRY_ZERO);
+    atomic_init(&created->owner_accounts, owner_accounts);
     if (pthread_mutex_init(&created->coordination_mutex, NULL) != 0) {
         free(created);
         *status = LXP_ERR_IO;
@@ -123,7 +145,6 @@ lxp_gateway_invoice_registry *lxp_gateway_invoice_registry_create(
         *status = LXP_ERR_SEQUENCE_REUSED;
         return NULL;
     }
-    created->owner_accounts = owner_accounts;
     atomic_store(&created->lifecycle, LXP_GATEWAY_REGISTRY_READY);
     *status = LXP_OK;
     return created;
@@ -144,10 +165,14 @@ lxp_result lxp_gateway_invoice_registry_destroy(
         atomic_store(&owned->lifecycle, LXP_GATEWAY_REGISTRY_READY);
         return LXP_ERR_IO;
     }
-    if (owned->owner_accounts == NULL ||
-        atomic_load(&owned->owner_accounts->gateway_owner) != owned) {
-        atomic_store(&owned->lifecycle, LXP_GATEWAY_REGISTRY_READY);
-        return LXP_FATAL_INVARIANT;
+    {
+        lx_account_registry *owner_accounts =
+            atomic_load(&owned->owner_accounts);
+        if (owner_accounts == NULL ||
+            atomic_load(&owner_accounts->gateway_owner) != owned) {
+            atomic_store(&owned->lifecycle, LXP_GATEWAY_REGISTRY_READY);
+            return LXP_FATAL_INVARIANT;
+        }
     }
     if (pthread_mutex_destroy(&owned->coordination_mutex) != 0) {
         atomic_store(&owned->lifecycle, LXP_GATEWAY_REGISTRY_READY);
@@ -155,7 +180,7 @@ lxp_result lxp_gateway_invoice_registry_destroy(
     }
     (void)memset(owned->records, 0, sizeof(owned->records));
     owned->count = 0U;
-    owned->owner_accounts = NULL;
+    atomic_store(&owned->owner_accounts, NULL);
     atomic_store(&owned->lifecycle, LXP_GATEWAY_REGISTRY_DESTROYED);
     *registry = NULL;
     return LXP_OK;
@@ -165,16 +190,26 @@ lxp_result lxp_gateway_registry_enter(
     lxp_gateway_invoice_registry *registry,
     lx_account_registry *accounts)
 {
-    if (registry == NULL || accounts == NULL ||
+    lx_account_registry *owner_accounts;
+    if (registry == NULL ||
         atomic_load(&registry->lifecycle) != LXP_GATEWAY_REGISTRY_READY)
         return LXP_ERR_NON_CANONICAL;
+#ifdef LXP_TESTING
+    if (atomic_load(&test_pause_before_activation)) {
+        atomic_store(&test_activation_paused, true);
+        while (atomic_load(&test_pause_before_activation)) (void)sched_yield();
+        atomic_store(&test_activation_paused, false);
+    }
+#endif
     (void)atomic_fetch_add(&registry->active_users, 1U);
     if (atomic_load(&registry->lifecycle) != LXP_GATEWAY_REGISTRY_READY) {
         (void)atomic_fetch_sub(&registry->active_users, 1U);
         return LXP_ERR_IO;
     }
-    if (registry->owner_accounts != accounts ||
-        atomic_load(&accounts->gateway_owner) != registry) {
+    owner_accounts = atomic_load(&registry->owner_accounts);
+    if (owner_accounts == NULL ||
+        (accounts != NULL && owner_accounts != accounts) ||
+        atomic_load(&owner_accounts->gateway_owner) != registry) {
         (void)atomic_fetch_sub(&registry->active_users, 1U);
         return LXP_ERR_NON_CANONICAL;
     }
@@ -204,9 +239,8 @@ lxp_result lxp_gateway_invoice_state(
     bool *settled)
 {
     lxp_result status;
-    if (registry == NULL || registry->owner_accounts == NULL)
-        return LXP_ERR_NON_CANONICAL;
-    status = lxp_gateway_registry_enter(registry, registry->owner_accounts);
+    if (registry == NULL) return LXP_ERR_NON_CANONICAL;
+    status = lxp_gateway_registry_enter(registry, NULL);
     if (status != LXP_OK) return status;
     status = lxp_gateway_invoice_state_locked(
         registry, invoice_id, idempotency_key, receipt, settled);

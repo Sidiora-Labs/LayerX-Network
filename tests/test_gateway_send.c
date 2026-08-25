@@ -3,6 +3,7 @@
 #include "../src/network/lxp_gateway_internal.h"
 
 #include <openssl/evp.h>
+#include <sched.h>
 #include <string.h>
 
 typedef struct gateway_world {
@@ -26,11 +27,29 @@ typedef struct settlement_thread {
     lxp_result status;
 } settlement_thread;
 
+typedef struct invoice_lookup_thread {
+    lxp_gateway_invoice_registry *registry;
+    uint8_t invoice_id[32];
+    uint8_t idempotency_key[32];
+    lxp_receipt receipt;
+    bool settled;
+    lxp_result status;
+} invoice_lookup_thread;
+
 static void *settle_concurrently(void *argument)
 {
     settlement_thread *thread = (settlement_thread *)argument;
     thread->status = lxp_gateway_send_settle(
         thread->requirement, thread->send, thread->context, &thread->receipt);
+    return NULL;
+}
+
+static void *lookup_concurrently(void *argument)
+{
+    invoice_lookup_thread *thread = (invoice_lookup_thread *)argument;
+    thread->status = lxp_gateway_invoice_state(
+        thread->registry, thread->invoice_id, thread->idempotency_key,
+        &thread->receipt, &thread->settled);
     return NULL;
 }
 
@@ -239,14 +258,20 @@ int main(void)
         return 1;
     {
         lx_account_registry alternate_accounts;
+        lx_account_registry race_accounts;
         lxp_gateway_invoice_registry *alternate_invoices = NULL;
         lxp_gateway_invoice_registry *competing_invoices = NULL;
+        lxp_gateway_invoice_registry *race_invoices = NULL;
         lxp_gateway_invoice_registry *destroyed;
         lxp_gateway_settlement_context mismatched = gateway.settlement;
+        invoice_lookup_thread lookup;
+        pthread_t lookup_worker;
         lxp_receipt unused_receipt;
         lxp_result create_status;
         bool settled = false;
         (void)memset(&alternate_accounts, 0, sizeof(alternate_accounts));
+        (void)memset(&race_accounts, 0, sizeof(race_accounts));
+        (void)memset(&lookup, 0, sizeof(lookup));
         if (lxp_gateway_invoice_state(
                 alternate_invoices, requirement.invoice_id,
                 send.idempotency_key, &unused_receipt,
@@ -261,6 +286,26 @@ int main(void)
             &alternate_accounts, &create_status);
         if (competing_invoices != NULL ||
             create_status != LXP_ERR_SEQUENCE_REUSED)
+            return 1;
+        if (lx_account_registry_init(&race_accounts) != LXP_OK)
+            return 1;
+        race_invoices = lxp_gateway_invoice_registry_create(
+            &race_accounts, &create_status);
+        if (race_invoices == NULL || create_status != LXP_OK)
+            return 1;
+        lookup.registry = race_invoices;
+        lxp_gateway_registry_test_pause_before_activation();
+        if (pthread_create(
+                &lookup_worker, NULL, lookup_concurrently, &lookup) != 0)
+            return 1;
+        while (!lxp_gateway_registry_test_activation_paused())
+            (void)sched_yield();
+        if (lxp_gateway_invoice_registry_destroy(&race_invoices) != LXP_OK ||
+            race_invoices != NULL)
+            return 1;
+        lxp_gateway_registry_test_release_activation();
+        if (pthread_join(lookup_worker, NULL) != 0 ||
+            lookup.status != LXP_ERR_IO)
             return 1;
         mismatched.invoices = alternate_invoices;
         if (lxp_gateway_send_settle(
