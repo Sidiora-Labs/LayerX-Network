@@ -31,6 +31,8 @@ const CUSTODY_DEPOSIT_TOPIC: [u8; 32] = [
 ];
 
 const CUSTODY_DEPOSIT_DOMAIN: &[u8] = b"LXP/Paxeer/custody-deposit/v1";
+const CUSTODY_DEPOSIT_DOMAIN_LENGTH: u64 = 29;
+const _: [(); 29] = [(); CUSTODY_DEPOSIT_DOMAIN.len()];
 const ACCOUNT_ID_DOMAIN: &[u8] = b"LXP/v1/account-id\0";
 const DEPOSIT_ROOT_DOMAIN: &[u8] = b"LX:PAXEER:DEPOSIT:ROOT:v1";
 const DEPOSIT_LEAF_DOMAIN: &[u8] = b"LX:PAXEER:DEPOSIT:LEAF:v1";
@@ -107,6 +109,10 @@ pub enum ProofFault {
     },
     MissingQuorumEvidence,
     EvidenceSourceMismatch,
+    FinalityChainIdMismatch {
+        expected: u64,
+        found: u64,
+    },
     ConfirmationPolicyMismatch {
         expected: u64,
         reported: u64,
@@ -171,13 +177,14 @@ pub enum DepositFailure {
     CreditRefused(CreditFault),
 }
 
-/// The exact Paxeer quorum and confirmation policy permitted to mint a
-/// custody proof.
+/// The exact Paxeer chain, quorum, and confirmation policy permitted to mint
+/// a custody proof.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DepositProofConfig {
     pub endpoints: Vec<EndpointConfig>,
     pub minimum_endpoint_agreement: usize,
     pub required_confirmations: u64,
+    pub paxeer_chain_id: u64,
     pub paxeer_checkpoint_authority: [u8; 32],
     pub custody_reference: [u8; 32],
     pub layerx_network_id: u32,
@@ -190,6 +197,11 @@ pub enum DepositProofConfigError {
     Endpoints(ClientConfigError),
     Agreement(TrackerConfigError),
     ZeroRequiredConfirmations,
+    ZeroPaxeerChainId,
+    EndpointChainIdMismatch {
+        expected: u64,
+        found: u64,
+    },
     InvalidCheckpointAuthority,
     ZeroCustodyReference,
     ZeroNetworkId,
@@ -204,6 +216,7 @@ pub enum DepositProofConfigError {
 pub struct DepositProofVerifier {
     binding: QuorumBinding,
     required_confirmations: u64,
+    paxeer_chain_id: u64,
     checkpoint_authority: VerifyingKey,
     custody_reference: [u8; 32],
     layerx_network_id: u32,
@@ -218,16 +231,29 @@ struct AdmittedFinality<'a> {
 }
 
 impl DepositProofVerifier {
-    /// Validates and owns the exact endpoint quorum and confirmation depth
-    /// under which deposit proofs may be minted.
+    /// Validates and owns the exact Paxeer chain, endpoint quorum, and
+    /// confirmation depth under which deposit proofs may be minted.
     ///
     /// # Errors
     ///
-    /// Refuses zero confirmation depth, an invalid endpoint agreement, or an
-    /// invalid endpoint declaration.
+    /// Refuses zero chain or confirmation values, an invalid endpoint
+    /// agreement, or an endpoint declared for another chain.
     pub fn new(config: DepositProofConfig) -> Result<Self, DepositProofConfigError> {
         if config.required_confirmations == 0 {
             return Err(DepositProofConfigError::ZeroRequiredConfirmations);
+        }
+        if config.paxeer_chain_id == 0 {
+            return Err(DepositProofConfigError::ZeroPaxeerChainId);
+        }
+        if let Some(endpoint) = config
+            .endpoints
+            .iter()
+            .find(|endpoint| endpoint.expected_chain_id != config.paxeer_chain_id)
+        {
+            return Err(DepositProofConfigError::EndpointChainIdMismatch {
+                expected: config.paxeer_chain_id,
+                found: endpoint.expected_chain_id,
+            });
         }
         if config.custody_reference == [0; 32] {
             return Err(DepositProofConfigError::ZeroCustodyReference);
@@ -254,6 +280,7 @@ impl DepositProofVerifier {
         Ok(Self {
             binding,
             required_confirmations: config.required_confirmations,
+            paxeer_chain_id: config.paxeer_chain_id,
             checkpoint_authority,
             custody_reference: config.custody_reference,
             layerx_network_id: config.layerx_network_id,
@@ -402,6 +429,14 @@ impl DepositProofVerifier {
         if evidence.binding() != &self.binding {
             return Err(DepositFailure::ProofUnavailable(
                 ProofFault::EvidenceSourceMismatch,
+            ));
+        }
+        if evidence.chain_id() != self.paxeer_chain_id {
+            return Err(DepositFailure::ProofUnavailable(
+                ProofFault::FinalityChainIdMismatch {
+                    expected: self.paxeer_chain_id,
+                    found: evidence.chain_id(),
+                },
             ));
         }
         if reported_required != self.required_confirmations {
@@ -922,9 +957,7 @@ fn derive_deposit_id(chain_id: u64, vault: EvmAddress, custody: &CustodyDeposit)
     hasher.update(custody.beneficiary);
     hasher.update(amount_word);
     hasher.update(word_u64(custody.nonce));
-    hasher.update(word_u64(
-        u64::try_from(CUSTODY_DEPOSIT_DOMAIN.len()).unwrap_or(0),
-    ));
+    hasher.update(word_u64(CUSTODY_DEPOSIT_DOMAIN_LENGTH));
     hasher.update(domain_word);
     hasher.finalize().into()
 }

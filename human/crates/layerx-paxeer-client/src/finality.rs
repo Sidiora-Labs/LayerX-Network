@@ -478,7 +478,8 @@ pub(crate) fn validate_endpoint_agreement(
 mod tests {
     use super::*;
     use crate::deposit::{
-        DepositFailure, DepositProofConfig, DepositProofVerifier, ProofFault,
+        DepositFailure, DepositProofConfig, DepositProofConfigError, DepositProofVerifier,
+        ProofFault,
     };
     use crate::rpc::EndpointFault;
     use crate::status::{BoundaryHealth, BoundaryStatus};
@@ -497,6 +498,7 @@ mod tests {
         reported_confirmations: u64,
         reported_required: u64,
         observed_head: u64,
+        chain_id: u64,
     ) -> FinalityReport {
         let inclusion = TransactionInclusion {
             block: BlockRef {
@@ -524,7 +526,7 @@ mod tests {
             polls: 1,
             evidence: Some(FinalityEvidence {
                 binding,
-                chain_id: 31_337,
+                chain_id,
                 head: observed_head,
                 transaction: TransactionView::Included(inclusion),
                 canonical_block: Some(inclusion.block),
@@ -533,18 +535,23 @@ mod tests {
         }
     }
 
-    fn deposit_verifier(endpoints: &[EndpointConfig]) -> DepositProofVerifier {
+    fn deposit_config(endpoints: &[EndpointConfig]) -> DepositProofConfig {
         let authority = ed25519_dalek::SigningKey::from_bytes(&[9; 32]);
-        DepositProofVerifier::new(DepositProofConfig {
+        DepositProofConfig {
             endpoints: endpoints.to_vec(),
             minimum_endpoint_agreement: 2,
             required_confirmations: 12,
+            paxeer_chain_id: 31_337,
             paxeer_checkpoint_authority: authority.verifying_key().to_bytes(),
             custody_reference: [10; 32],
             layerx_network_id: 17,
             layerx_protocol_version: 1,
-        })
-        .unwrap_or_else(|error| panic!("deposit verifier: {error:?}"))
+        }
+    }
+
+    fn deposit_verifier(endpoints: &[EndpointConfig]) -> DepositProofVerifier {
+        DepositProofVerifier::new(deposit_config(endpoints))
+            .unwrap_or_else(|error| panic!("deposit verifier: {error:?}"))
     }
 
     #[test]
@@ -585,7 +592,7 @@ mod tests {
         let verifier = deposit_verifier(&endpoints);
         let client = PaxeerClient::new(endpoints)
             .unwrap_or_else(|error| panic!("Paxeer client: {error:?}"));
-        let report = final_report(client.quorum_binding(1), 12, 12, 21);
+        let report = final_report(client.quorum_binding(1), 12, 12, 21, 31_337);
 
         assert_eq!(
             verifier.verify_report_policy(&report),
@@ -596,12 +603,52 @@ mod tests {
     }
 
     #[test]
+    fn deposit_proof_config_refuses_zero_or_endpoint_mismatched_chain_identity() {
+        let endpoints = vec![endpoint(18_551), endpoint(18_552)];
+        let mut zero = deposit_config(&endpoints);
+        zero.paxeer_chain_id = 0;
+        assert_eq!(
+            DepositProofVerifier::new(zero).unwrap_err(),
+            DepositProofConfigError::ZeroPaxeerChainId
+        );
+
+        let mut mismatched = deposit_config(&endpoints);
+        mismatched.paxeer_chain_id = 1;
+        assert_eq!(
+            DepositProofVerifier::new(mismatched).unwrap_err(),
+            DepositProofConfigError::EndpointChainIdMismatch {
+                expected: 1,
+                found: 31_337,
+            }
+        );
+    }
+
+    #[test]
+    fn deposit_proof_refuses_quorum_evidence_from_another_chain() {
+        let endpoints = vec![endpoint(18_553), endpoint(18_554)];
+        let verifier = deposit_verifier(&endpoints);
+        let client = PaxeerClient::new(endpoints)
+            .unwrap_or_else(|error| panic!("Paxeer client: {error:?}"));
+        let report = final_report(client.quorum_binding(2), 12, 12, 21, 1);
+
+        assert_eq!(
+            verifier.verify_report_policy(&report),
+            Err(DepositFailure::ProofUnavailable(
+                ProofFault::FinalityChainIdMismatch {
+                    expected: 31_337,
+                    found: 1,
+                },
+            ))
+        );
+    }
+
+    #[test]
     fn deposit_proof_refuses_report_from_weaker_confirmation_policy() {
         let endpoints = vec![endpoint(18_547), endpoint(18_548)];
         let verifier = deposit_verifier(&endpoints);
         let client = PaxeerClient::new(endpoints)
             .unwrap_or_else(|error| panic!("Paxeer client: {error:?}"));
-        let report = final_report(client.quorum_binding(2), 12, 1, 21);
+        let report = final_report(client.quorum_binding(2), 12, 1, 21, 31_337);
 
         assert_eq!(
             verifier.verify_report_policy(&report),
@@ -620,7 +667,7 @@ mod tests {
         let verifier = deposit_verifier(&endpoints);
         let client = PaxeerClient::new(endpoints)
             .unwrap_or_else(|error| panic!("Paxeer client: {error:?}"));
-        let report = final_report(client.quorum_binding(2), 12, 12, 10);
+        let report = final_report(client.quorum_binding(2), 12, 12, 10, 31_337);
 
         assert_eq!(
             verifier.verify_report_policy(&report),

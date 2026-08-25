@@ -155,6 +155,7 @@ fn deposit_verifier(
         endpoints: vec![anvil.endpoint.clone()],
         minimum_endpoint_agreement: 1,
         required_confirmations,
+        paxeer_chain_id: 31_337,
         paxeer_checkpoint_authority: authority.verifying_key().to_bytes(),
         custody_reference: CUSTODY_REFERENCE,
         layerx_network_id: CORE_NETWORK,
