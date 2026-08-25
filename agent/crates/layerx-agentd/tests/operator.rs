@@ -8,7 +8,7 @@ use layerx_agentd::admin::{
 };
 use layerx_agentd::audit::verify_chain;
 use layerx_agentd::budget::{
-    divergence_alert, LocalAccounting, ProtocolBudgetState, SpendReceiptEvidence,
+    LocalAccounting, ProtocolBudgetState, ReconcileError, SpendReceiptEvidence,
 };
 use layerx_agentd::outbox::{Outbox, SubmissionState};
 use layerx_agentd::store::{ObjectKind, Store, TenantKey};
@@ -90,7 +90,7 @@ fn catalogue_routes_every_operator_action_without_protocol_mutating_power() {
 }
 
 #[test]
-fn inspections_and_verified_budget_reconciliation_are_audited_before_action() {
+fn inspections_and_unavailable_budget_reconciliation_are_audited_before_refusal() {
     let root = directory("operator-actions");
     let mut store = Store::open(&root).unwrap_or_else(|error| panic!("store: {error}"));
     let mut outbox = Outbox::default();
@@ -109,30 +109,27 @@ fn inspections_and_verified_budget_reconciliation_are_audited_before_action() {
         last_receipt: None,
     };
     let protocol = ProtocolBudgetState {
-        evidence: support::raw_budget_state(7, 93, 80, 120, 99),
+        evidence: support::raw_state_leaf(b"budget-state-schema-unavailable".to_vec(), 99),
     };
     let receipts = [SpendReceiptEvidence {
-        window_start_sequence: 80,
+        expected_activity_id: [0x44; 32],
         evidence: support::raw_receipt_at([0x44; 32], 0, 7, 90),
     }];
-    let reconciled = surface
-        .reconcile_budget_divergence(
+    assert!(matches!(
+        surface
+            .reconcile_budget_divergence(
             &context(2),
             [2; 32],
             &mut local,
             protocol,
             &receipts,
             &support::evidence_verifier(),
-        )
-        .unwrap_or_else(|error| panic!("reconcile: {error:?}"));
-    let alert =
-        divergence_alert(&reconciled, 100).unwrap_or_else(|| panic!("divergence alert absent"));
-    assert_eq!(
-        surface
-            .inspect_budget_divergence(&context(3), [2; 32], alert)
-            .unwrap_or_else(|error| panic!("inspect budget: {error:?}")),
-        alert
-    );
+        ),
+        Err(layerx_agentd::admin::AdminError::BudgetReconciliation(
+            ReconcileError::ProtocolStateSchemaUnavailable
+        ))
+    ));
+    assert_eq!(local.consumed, 11);
 
     let backlog = VerificationBacklog {
         idempotency_key: [3; 32],
@@ -143,14 +140,14 @@ fn inspections_and_verified_budget_reconciliation_are_audited_before_action() {
     };
     assert_eq!(
         surface
-            .inspect_verification_backlog(&context(4), backlog)
+            .inspect_verification_backlog(&context(3), backlog)
             .unwrap_or_else(|error| panic!("inspect verification: {error:?}")),
         backlog
     );
-    assert_eq!(surface.audit_entries(), 4);
+    assert_eq!(surface.audit_entries(), 3);
     let verified = verify_chain(surface.audit_path())
         .unwrap_or_else(|error| panic!("verify operator audit: {error}"));
-    assert_eq!(verified.entries, 4);
+    assert_eq!(verified.entries, 3);
     let _ = fs::remove_dir_all(root);
 }
 

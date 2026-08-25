@@ -10,6 +10,7 @@ use super::{Outbox, OutboxError, SubmissionState};
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct UnknownCeilingReservation {
     pub id: [u8; 32],
+    pub expected_activity_id: [u8; 32],
     pub amount: u128,
     pub expiry_sequence: u64,
 }
@@ -106,6 +107,7 @@ pub fn recover(
         capability::consume(
             &ceiling,
             reservation.id,
+            reservation.expected_activity_id,
             reservation.amount,
             reservation.expiry_sequence,
             inputs.current_sequence,

@@ -1,23 +1,20 @@
 mod support;
 
 use layerx_agentd::budget::{
-    reconcile, LocalAccounting, ProtocolBudgetState, SpendReceiptEvidence,
+    reconcile, LocalAccounting, ProtocolBudgetState, ReconcileError, SpendReceiptEvidence,
 };
 
 fn protocol(consumed: u128, start: u64) -> ProtocolBudgetState {
+    let mut candidate = Vec::with_capacity(24);
+    candidate.extend_from_slice(&consumed.to_be_bytes());
+    candidate.extend_from_slice(&start.to_be_bytes());
     ProtocolBudgetState {
-        evidence: support::raw_budget_state(
-            consumed,
-            1_000 - consumed,
-            start,
-            start + 99,
-            start + 20,
-        ),
+        evidence: support::raw_state_leaf(candidate, start + 20),
     }
 }
 
 #[test]
-fn rollover_comes_only_from_protocol_state() {
+fn merkle_inclusion_without_a_canonical_budget_schema_cannot_correct_the_cache() {
     let mut local = LocalAccounting {
         consumed: 900,
         window_start_sequence: 1,
@@ -32,65 +29,84 @@ fn rollover_comes_only_from_protocol_state() {
         verified.level(),
         layerx_types::verify::VerificationLevel::STATE_PROVEN
     );
-    let state = reconcile(&mut local, protocol, &[], &verifier)
-        .unwrap_or_else(|error| panic!("reconcile: {error:?}"));
-    assert_eq!(state.window_start_sequence, 100);
-    assert_eq!(state.window_end_sequence, 199);
-    assert_eq!(state.remaining, 1_000);
-    assert_eq!(local.consumed, 0);
-    assert_eq!(state.divergence, Some(-900));
+    assert_eq!(
+        reconcile(&mut local, protocol, &[], &verifier),
+        Err(ReconcileError::ProtocolStateSchemaUnavailable)
+    );
+    assert_eq!(local.consumed, 900);
+    assert_eq!(local.window_start_sequence, 1);
+    assert_eq!(local.last_receipt, Some([1; 32]));
 }
 
 #[test]
-fn missed_receipt_divergence_is_exposed_and_cache_is_corrected() {
+fn duplicate_receipt_and_activity_evidence_are_rejected_before_reconciliation() {
+    let mut local = LocalAccounting {
+        consumed: 200,
+        window_start_sequence: 100,
+        last_receipt: Some([1; 32]),
+    };
+    let receipt = support::raw_receipt_at([2; 32], 0, 200, 120);
+    let duplicates = [
+        SpendReceiptEvidence {
+            expected_activity_id: [2; 32],
+            evidence: receipt.clone(),
+        },
+        SpendReceiptEvidence {
+            expected_activity_id: [2; 32],
+            evidence: receipt,
+        },
+    ];
+    assert_eq!(
+        reconcile(
+            &mut local,
+            protocol(350, 100),
+            &duplicates,
+            &support::evidence_verifier(),
+        ),
+        Err(ReconcileError::DuplicateReceipt)
+    );
+    let same_activity = [
+        SpendReceiptEvidence {
+            expected_activity_id: [3; 32],
+            evidence: support::raw_receipt_at([3; 32], 0, 100, 120),
+        },
+        SpendReceiptEvidence {
+            expected_activity_id: [3; 32],
+            evidence: support::raw_receipt_at([3; 32], 0, 100, 121),
+        },
+    ];
+    assert_eq!(
+        reconcile(
+            &mut local,
+            protocol(350, 100),
+            &same_activity,
+            &support::evidence_verifier(),
+        ),
+        Err(ReconcileError::DuplicateActivity)
+    );
+    assert_eq!(local.consumed, 200);
+}
+
+#[test]
+fn receipts_are_bound_to_the_expected_activity_before_reconciliation() {
     let mut local = LocalAccounting {
         consumed: 200,
         window_start_sequence: 100,
         last_receipt: Some([1; 32]),
     };
     let receipts = [SpendReceiptEvidence {
-        window_start_sequence: 100,
+        expected_activity_id: [9; 32],
         evidence: support::raw_receipt_at([2; 32], 0, 200, 120),
     }];
-    let state = reconcile(
-        &mut local,
-        protocol(350, 100),
-        &receipts,
-        &support::evidence_verifier(),
-    )
-        .unwrap_or_else(|error| panic!("reconcile: {error:?}"));
-    assert_eq!(state.local_before, 200);
-    assert_eq!(state.protocol_consumed, 350);
-    assert_eq!(state.local_after, 350);
-    assert_eq!(state.divergence, Some(150));
-    assert!(state.last_verified_receipt.is_some());
-}
-
-#[test]
-fn verified_failed_receipt_does_not_consume_budget() {
-    let mut local = LocalAccounting {
-        consumed: 0,
-        window_start_sequence: 100,
-        last_receipt: None,
-    };
-    let receipts = [
-        SpendReceiptEvidence {
-            window_start_sequence: 100,
-            evidence: support::raw_receipt_at([2; 32], 0, 200, 120),
-        },
-        SpendReceiptEvidence {
-            window_start_sequence: 100,
-            evidence: support::raw_receipt_at([3; 32], 5, 900, 121),
-        },
-    ];
-    let state = reconcile(
-        &mut local,
-        protocol(200, 100),
-        &receipts,
-        &support::evidence_verifier(),
-    )
-        .unwrap_or_else(|error| panic!("reconcile: {error:?}"));
-    assert_eq!(state.protocol_consumed, 200);
+    assert_eq!(
+        reconcile(
+            &mut local,
+            protocol(350, 100),
+            &receipts,
+            &support::evidence_verifier(),
+        ),
+        Err(ReconcileError::ReceiptActivityMismatch)
+    );
     assert_eq!(local.consumed, 200);
 }
 
@@ -105,7 +121,7 @@ fn unverified_inputs_never_correct_the_cache() {
     let mut corrupted = raw.canonical_receipt().to_vec();
     corrupted[0] ^= 1;
     let unverified_receipt = [SpendReceiptEvidence {
-        window_start_sequence: 100,
+        expected_activity_id: [3; 32],
         evidence: support::corrupt_raw_receipt(&raw, corrupted),
     }];
     assert!(reconcile(

@@ -224,20 +224,8 @@ pub fn raw_receipt_evidence(
     )
 }
 
-pub fn raw_budget_state(
-    consumed: u128,
-    remaining: u128,
-    window_start: u64,
-    window_end: u64,
-    observed_head: u64,
-) -> RawStateEvidence {
-    let mut state = Vec::with_capacity(52);
-    state.extend_from_slice(b"LXBS");
-    state.extend_from_slice(&consumed.to_be_bytes());
-    state.extend_from_slice(&remaining.to_be_bytes());
-    state.extend_from_slice(&window_start.to_be_bytes());
-    state.extend_from_slice(&window_end.to_be_bytes());
-    let leaves = [state.as_slice()];
+pub fn raw_state_leaf(canonical_state: Vec<u8>, observed_head: u64) -> RawStateEvidence {
+    let leaves = [canonical_state.as_slice()];
     let (proof, state_root) = build_proof(&leaves, 0)
         .unwrap_or_else(|error| panic!("state proof: {error:?}"));
     let signer = SigningKey::from_bytes(&[0x84; 32]);
@@ -252,7 +240,7 @@ pub fn raw_budget_state(
     );
     let digest = batch_header_digest(&header);
     RawStateEvidence::new(
-        state,
+        canonical_state,
         proof,
         state_root,
         header,

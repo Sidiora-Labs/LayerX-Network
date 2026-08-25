@@ -1,5 +1,6 @@
 //! Raw protocol evidence ingress and verifier-owned trusted protocol policy.
 
+use std::collections::BTreeSet;
 use std::fs;
 
 use layerx_programs::hex;
@@ -453,6 +454,39 @@ impl EvidenceAuthority {
     ) -> Result<VerifiedStateEvidence, StateEvidenceError> {
         self.verifier.verify_state(raw)
     }
+
+    pub(crate) fn receipt_replay_guard(&self) -> ReceiptReplayGuard {
+        ReceiptReplayGuard::default()
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct ReceiptReplayGuard {
+    receipt_refs: BTreeSet<[u8; 32]>,
+    activity_ids: BTreeSet<[u8; 32]>,
+}
+
+impl ReceiptReplayGuard {
+    pub(crate) fn admit(
+        &mut self,
+        receipt: &VerifiedReceiptEvidence,
+    ) -> Result<(), ReceiptReplayError> {
+        if self.receipt_refs.contains(&receipt.receipt_ref()) {
+            return Err(ReceiptReplayError::DuplicateReceipt);
+        }
+        if self.activity_ids.contains(&receipt.activity_id()) {
+            return Err(ReceiptReplayError::DuplicateActivity);
+        }
+        self.receipt_refs.insert(receipt.receipt_ref());
+        self.activity_ids.insert(receipt.activity_id());
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ReceiptReplayError {
+    DuplicateReceipt,
+    DuplicateActivity,
 }
 
 /// Raw receipt bytes, Merkle path, and signature returned by a core boundary.

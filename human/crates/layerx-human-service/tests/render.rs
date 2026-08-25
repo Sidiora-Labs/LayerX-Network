@@ -247,11 +247,8 @@ fn verified_budget(remaining: u128, observed_at_sequence: u64) -> VerifiedBudget
     let state = reconcile(
         &mut local,
         ProtocolBudgetState {
-            evidence: support::raw_budget_state(
-                25,
-                remaining,
-                1,
-                10_000,
+            evidence: support::raw_state_leaf(
+                remaining.to_be_bytes().to_vec(),
                 observed_at_sequence,
             ),
         },

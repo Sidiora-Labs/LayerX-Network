@@ -446,13 +446,13 @@ impl Surface {
         Ok(alert)
     }
 
-    /// Rebuilds only the local budget cache from verified core evidence and receipts.
+    /// Attempts a local budget-cache rebuild from verified evidence.
     ///
     /// # Errors
     ///
-    /// Returns `InvalidOperator` or `Audit` when the attempt cannot be audited, or
-    /// `BudgetReconciliation` for unverified protocol state, an unverified receipt, a receipt
-    /// from another spend window, or accounting overflow.
+    /// Returns `InvalidOperator` or `Audit` when the attempt cannot be audited.
+    /// `BudgetReconciliation` includes typed evidence/replay failures and the
+    /// fail-closed missing canonical budget-state schema result.
     pub fn reconcile_budget_divergence(
         &mut self,
         context: &OperatorContext,

@@ -39,8 +39,7 @@ pub use recovery::{
     ROTATION_DELAY_COPY_KEY,
 };
 pub use spend::{
-    AgentShell, AgentSpendSurfaces, AgentSpendView, ProtocolBudgetEvidence,
-    ReconciliationDirection, ShellAgentSpend, SpendAgentContract, SpendBoundaryError, SpendError,
-    SpendProfile, SpendReceiptEvidence, SpendReconciliation, SpendReconciliationStatus,
-    SpendSnapshot, RECONCILIATION_COPY_KEY, RECONCILIATION_EXPLANATION,
+    AgentShell, AgentSpendSurfaces, AgentSpendView, ReconciliationDirection, ShellAgentSpend,
+    SpendError, SpendProfile, SpendReconciliation, SpendReconciliationStatus,
+    RECONCILIATION_COPY_KEY, RECONCILIATION_EXPLANATION,
 };

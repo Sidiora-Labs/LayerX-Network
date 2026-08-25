@@ -48,12 +48,12 @@ fn verifier(identity: PolicyIdentity) -> EvidenceAuthority {
 }
 
 fn state(identity: StateHeaderIdentity) -> layerx_agentd::protocol_evidence::RawStateEvidence {
-    support::raw_budget_state_with(10, 90, 1, 100, 50, identity)
+    support::raw_state_leaf_with(b"canonical-state-value".to_vec(), 50, identity)
 }
 
 #[test]
 fn trusted_policy_issues_state_evidence_only_for_its_exact_identity() {
-    let raw = support::raw_budget_state(10, 90, 1, 100, 50);
+    let raw = support::raw_state_leaf(b"canonical-state-value".to_vec(), 50);
     let verified = support::evidence_verifier()
         .verify_state(&raw)
         .unwrap_or_else(|error| panic!("trusted evidence: {error:?}"));

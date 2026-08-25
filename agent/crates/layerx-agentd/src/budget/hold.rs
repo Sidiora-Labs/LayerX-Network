@@ -1,9 +1,10 @@
 //! Durable unknown reservations and fail-closed restart accounting.
 
-use crate::protocol_evidence::{EvidenceAuthority, RawReceiptEvidence};
+use crate::protocol_evidence::{
+    EvidenceAuthority, RawReceiptEvidence, ReceiptReplayError,
+};
 use crate::store::{ObjectKind, Store, StoreError, TenantId, TenantKey};
 
-use super::accounting::verify_protocol_budget_state;
 use super::ProtocolBudgetState;
 
 /// Reservation kept unavailable until a receipt resolves it.
@@ -25,13 +26,14 @@ pub enum UnknownOutcome {
 /// Persisted verified receipt used to rebuild consumed accounting.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PersistedReceipt {
+    pub expected_activity_id: [u8; 32],
     pub evidence: RawReceiptEvidence,
 }
 
 /// Operator-visible restart accounting.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RestartAccounting {
-    pub protocol_consumed: u128,
+    pub protocol_consumed: Option<u128>,
     pub receipt_consumed: u128,
     pub held_unresolved: u128,
     pub unresolved_count: usize,
@@ -43,10 +45,13 @@ impl RestartAccounting {
     ///
     /// # Errors
     ///
-    /// Returns `RestartError::Unreconciled` whenever rebuilt receipt consumption disagrees
-    /// with the protocol-reported consumed amount.
+    /// Returns `ProtocolStateSchemaUnavailable` until core produces a canonical
+    /// budget record and proof, or `Unreconciled` when a future canonical state
+    /// disagrees with rebuilt receipt consumption.
     pub fn require_write_ready(self) -> Result<(), RestartError> {
-        if self.reconciled {
+        if self.protocol_consumed.is_none() {
+            Err(RestartError::ProtocolStateSchemaUnavailable)
+        } else if self.reconciled {
             Ok(())
         } else {
             Err(RestartError::Unreconciled)
@@ -59,7 +64,11 @@ pub enum RestartError {
     Store(StoreError),
     Corrupt,
     UnverifiedProtocol,
+    ProtocolStateSchemaUnavailable,
     UnverifiedReceipt,
+    DuplicateReceipt,
+    DuplicateActivity,
+    ReceiptActivityMismatch,
     Unreconciled,
     Arithmetic,
 }
@@ -87,25 +96,25 @@ pub(crate) fn rebuild_accounting(
     protocol: ProtocolBudgetState,
     verifier: &EvidenceAuthority,
 ) -> Result<RestartAccounting, RestartError> {
-    let protocol = verify_protocol_budget_state(&protocol, verifier)
-        .map_err(|_| RestartError::UnverifiedProtocol)?;
+    let mut replay = verifier.receipt_replay_guard();
     let mut receipt_consumed = 0_u128;
     for receipt in receipts {
         let verified = verifier
             .verify_receipt(&receipt.evidence)
             .map_err(|_| RestartError::UnverifiedReceipt)?;
-        if verified.global_sequence() < protocol.window_start_sequence
-            || verified.global_sequence() > protocol.window_end_sequence
-            || verified.global_sequence() > protocol.observed_head_sequence
-        {
-            return Err(RestartError::UnverifiedReceipt);
+        if verified.activity_id() != receipt.expected_activity_id {
+            return Err(RestartError::ReceiptActivityMismatch);
         }
+        replay.admit(&verified).map_err(map_replay_error)?;
         if verified.result_code() == 0 {
             receipt_consumed = receipt_consumed
                 .checked_add(verified.amount())
                 .ok_or(RestartError::Arithmetic)?;
         }
     }
+    verifier
+        .verify_state(&protocol.evidence)
+        .map_err(|_| RestartError::UnverifiedProtocol)?;
     let mut held_unresolved = 0_u128;
     let mut unresolved_count = 0_usize;
     for id in unknown_ids {
@@ -122,12 +131,19 @@ pub(crate) fn rebuild_accounting(
         }
     }
     Ok(RestartAccounting {
-        protocol_consumed: protocol.consumed,
+        protocol_consumed: None,
         receipt_consumed,
         held_unresolved,
         unresolved_count,
-        reconciled: receipt_consumed == protocol.consumed,
+        reconciled: false,
     })
+}
+
+const fn map_replay_error(error: ReceiptReplayError) -> RestartError {
+    match error {
+        ReceiptReplayError::DuplicateReceipt => RestartError::DuplicateReceipt,
+        ReceiptReplayError::DuplicateActivity => RestartError::DuplicateActivity,
+    }
 }
 
 fn key(tenant: TenantId, id: [u8; 32]) -> Result<TenantKey, RestartError> {

@@ -1,6 +1,6 @@
 mod support;
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::fs;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Barrier, Mutex};
@@ -8,26 +8,22 @@ use std::thread;
 
 use ed25519_dalek::{Signer as _, SigningKey};
 use layerx_agentd::budget::{
-    reconcile, release, reserve, BudgetLimiter, LimitConfig, LimitId, LimitRefusal, LimitScope,
-    LocalAccounting, ProtocolBudgetState, ReconcileError, ReleaseKind, ReservationRequest,
-    SpendReceiptEvidence as BudgetReceiptEvidence,
+    release, reserve, BudgetLimiter, LimitConfig, LimitId, LimitRefusal, LimitScope, ReleaseKind,
+    ReservationRequest,
 };
 use layerx_agentd::capability::{
     consume, evaluate, Capability, CapabilityDimensions, CapabilityId, Ceiling, CeilingError,
     Decision, Dimension, PreparedIntent, RateCeiling, ReceiptApplication,
 };
 use layerx_agentd::protocol_evidence::RawReceiptEvidence;
-use layerx_agentd::receipt::{self as daemon_receipt, ReceiptLookupKey};
+use layerx_agentd::receipt as daemon_receipt;
 use layerx_agentd::store::{Store, TenantId};
 use layerx_human_service::agents::{
-    AgentShell, ProtocolBudgetEvidence, ReconciliationDirection, SpendAgentContract,
-    SpendBoundaryError, SpendError, SpendProfile, SpendReceiptEvidence, SpendReconciliation,
-    SpendReconciliationStatus, SpendSnapshot, RECONCILIATION_COPY_KEY, RECONCILIATION_EXPLANATION,
+    AgentShell, SpendError, SpendProfile, SpendReconciliation,
 };
 use layerx_human_service::store::PrincipalId;
-use layerx_proof::receipt::{verify, AuthorizedBatch};
+use layerx_proof::receipt::AuthorizedBatch;
 use layerx_types::payload::ModuleId;
-use layerx_types::verify::VerificationLevel;
 use sha2::{Digest as _, Sha256};
 
 const AGENT_ID: [u8; 32] = [0x31; 32];
@@ -36,7 +32,6 @@ const BUDGET_ID: [u8; 32] = [0xb1; 32];
 const ASSET: [u8; 32] = [0xc1; 32];
 const COUNTERPARTY: [u8; 32] = [0xd1; 32];
 const PERIOD_START: u64 = 1_700_000_000;
-const PERIOD_END: u64 = PERIOD_START + 2_592_000;
 const WINDOW_START: u64 = 100;
 const WINDOW_END: u64 = 10_000;
 
@@ -54,50 +49,20 @@ fn profile() -> SpendProfile {
     }
 }
 
-#[derive(Clone)]
-struct AgentBoundary {
-    layer: Arc<RealAgentLayer>,
-    omit_latest_receipt: bool,
-}
-
-impl SpendAgentContract for AgentBoundary {
-    fn spend_snapshot(
-        &self,
-        principal: &PrincipalId,
-        agent_id: [u8; 32],
-    ) -> Result<SpendSnapshot, SpendBoundaryError> {
-        let mut snapshot = self.layer.snapshot(principal, agent_id)?;
-        if self.omit_latest_receipt {
-            snapshot.receipts.pop();
-        }
-        Ok(snapshot)
-    }
-}
-
-#[derive(Clone)]
-struct ReceiptRecord {
-    idempotency_key: [u8; 32],
-    authorized_batch: AuthorizedBatch,
-    evidence: RawReceiptEvidence,
-}
-
 struct DurableReceipts {
     store: Store,
-    records: BTreeMap<u64, ReceiptRecord>,
 }
 
 /// In-process contract over the actual agentd capability evaluator, capability
-/// ceiling, multi-scope budget limiter, receipt verifier, durable receipt
-/// indexes, and budget reconciler.
+/// ceiling, multi-scope budget limiter, receipt verifier, and durable receipt
+/// indexes.
 struct RealAgentLayer {
     root: std::path::PathBuf,
-    principal: PrincipalId,
     tenant: TenantId,
     capability: Capability,
     capability_ceiling: Ceiling,
     budget: BudgetLimiter,
     budget_limit_id: LimitId,
-    budget_limit: u128,
     next_sequence: AtomicU64,
     commit: Mutex<()>,
     durable: Mutex<DurableReceipts>,
@@ -144,7 +109,6 @@ impl RealAgentLayer {
             .unwrap_or_else(|error| panic!("agent store: {error}"));
         Arc::new(Self {
             root,
-            principal: principal("alice"),
             tenant,
             capability,
             capability_ceiling: Ceiling::new(
@@ -153,12 +117,10 @@ impl RealAgentLayer {
             ),
             budget,
             budget_limit_id,
-            budget_limit,
             next_sequence: AtomicU64::new(WINDOW_START),
             commit: Mutex::new(()),
             durable: Mutex::new(DurableReceipts {
                 store,
-                records: BTreeMap::new(),
             }),
         })
     }
@@ -187,6 +149,7 @@ impl RealAgentLayer {
                 return Err(SubmitRefusal::Capability(dimension));
             }
         }
+        let activity_id = spend_activity_id(sequence, idempotency_key);
 
         let reservation = ReservationRequest {
             id: idempotency_key,
@@ -198,6 +161,7 @@ impl RealAgentLayer {
         consume(
             &self.capability_ceiling,
             idempotency_key,
+            activity_id,
             amount,
             sequence + 100,
             sequence,
@@ -210,7 +174,7 @@ impl RealAgentLayer {
             return Err(SubmitRefusal::Budget(error));
         }
 
-        let material = signed_receipt(sequence, idempotency_key, amount, asset, counterparty);
+        let material = signed_receipt(sequence, activity_id, amount, asset, counterparty);
         let _commit = self
             .commit
             .lock()
@@ -227,24 +191,12 @@ impl RealAgentLayer {
                 &material.canonical_receipt,
                 &material.authorized_batch,
             );
-            match metadata {
-                Ok(metadata) => {
-                    durable.records.insert(
-                        metadata.global_sequence,
-                        ReceiptRecord {
-                            idempotency_key,
-                            authorized_batch: material.authorized_batch,
-                            evidence: material.evidence.clone(),
-                        },
-                    );
-                    Ok(())
-                }
-                Err(_) => Err(()),
-            }
+            metadata.map(|_| ()).map_err(|_| ())
         };
         self.capability_ceiling
             .apply_receipt(&ReceiptApplication {
                 reservation_id: idempotency_key,
+                expected_activity_id: activity_id,
                 evidence: material.evidence,
             })
             .unwrap_or_else(|error| panic!("apply capability receipt: {error:?}"));
@@ -261,127 +213,12 @@ impl RealAgentLayer {
             Ok(())
         }
     }
-
-    fn snapshot(
-        &self,
-        requesting_principal: &PrincipalId,
-        agent_id: [u8; 32],
-    ) -> Result<SpendSnapshot, SpendBoundaryError> {
-        if requesting_principal != &self.principal || agent_id != AGENT_ID {
-            return Err(SpendBoundaryError::Refused(
-                "wrong principal or managed agent",
-            ));
-        }
-        let _commit = self
-            .commit
-            .lock()
-            .map_err(|_| SpendBoundaryError::Unavailable)?;
-        let durable = self
-            .durable
-            .lock()
-            .map_err(|_| SpendBoundaryError::Unavailable)?;
-        let mut receipts = Vec::with_capacity(durable.records.len());
-        let mut accounting_receipts = Vec::with_capacity(durable.records.len());
-        let mut receipt_total = 0_u128;
-        let mut last_receipt = None;
-        for (sequence, record) in &durable.records {
-            let served = daemon_receipt::serve(
-                &durable.store,
-                self.tenant.clone(),
-                ReceiptLookupKey::Idempotency(record.idempotency_key),
-            )
-            .map_err(|_| SpendBoundaryError::CorruptResponse)?;
-            if served.metadata.global_sequence != *sequence {
-                return Err(SpendBoundaryError::CorruptResponse);
-            }
-            let verified = verify(&served.canonical_bytes, &record.authorized_batch)
-                .map_err(|_| SpendBoundaryError::CorruptResponse)?;
-            let protocol = verified
-                .receipt()
-                .protocol()
-                .ok_or(SpendBoundaryError::CorruptResponse)?;
-            receipt_total = receipt_total
-                .checked_add(protocol.amount())
-                .ok_or(SpendBoundaryError::CorruptResponse)?;
-            last_receipt = Some(protocol.activity_id());
-            accounting_receipts.push(BudgetReceiptEvidence {
-                window_start_sequence: WINDOW_START,
-                evidence: record.evidence.clone(),
-            });
-            receipts.push(SpendReceiptEvidence {
-                canonical_receipt: served.canonical_bytes,
-                authorized_batch: record.authorized_batch,
-            });
-        }
-        let consumed = self
-            .budget
-            .consumed(self.budget_limit_id)
-            .map_err(|_| SpendBoundaryError::CorruptResponse)?;
-        let observed_head_sequence = self
-            .next_sequence
-            .load(Ordering::SeqCst)
-            .saturating_sub(1)
-            .max(WINDOW_START);
-        let protocol = ProtocolBudgetState {
-            evidence: support::raw_budget_state(
-                consumed,
-                self.budget_limit - consumed,
-                WINDOW_START,
-                WINDOW_END,
-                observed_head_sequence,
-            ),
-        };
-        let mut local = LocalAccounting {
-            consumed: receipt_total,
-            window_start_sequence: WINDOW_START,
-            last_receipt,
-        };
-        let reconciled = reconcile(
-            &mut local,
-            protocol,
-            &accounting_receipts,
-            &support::evidence_verifier(&SigningKey::from_bytes(&[0x84; 32])),
-        )
-            .map_err(map_reconciliation_failure)?;
-        let evidence_digest: [u8; 32] = Sha256::digest(
-            [
-                AGENT_ID.as_slice(),
-                BUDGET_ID.as_slice(),
-                &reconciled.protocol_consumed.to_be_bytes(),
-                &reconciled.observed_head_sequence.to_be_bytes(),
-            ]
-            .concat(),
-        )
-        .into();
-        Ok(SpendSnapshot {
-            protocol_budget: ProtocolBudgetEvidence {
-                agent_id: AGENT_ID,
-                budget_id: BUDGET_ID,
-                asset: ASSET,
-                period_start: PERIOD_START,
-                period_end: PERIOD_END,
-                window_start_sequence: reconciled.window_start_sequence,
-                window_end_sequence: reconciled.window_end_sequence,
-                observed_head_sequence: reconciled.observed_head_sequence,
-                limit: self.budget_limit,
-                consumed: reconciled.protocol_consumed,
-                remaining: reconciled.remaining,
-                verification_level: VerificationLevel::STATE_PROVEN,
-                evidence_digest,
-            },
-            receipts,
-        })
-    }
 }
 
 impl Drop for RealAgentLayer {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.root);
     }
-}
-
-fn map_reconciliation_failure(_error: ReconcileError) -> SpendBoundaryError {
-    SpendBoundaryError::CorruptResponse
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -412,20 +249,11 @@ struct ReceiptFields {
 
 fn signed_receipt(
     sequence: u64,
-    idempotency_key: [u8; 32],
+    activity_id: [u8; 32],
     amount: u128,
     asset: [u8; 32],
     counterparty: [u8; 32],
 ) -> ReceiptMaterial {
-    let activity_id: [u8; 32] = Sha256::digest(
-        [
-            b"layerx-human-spend-activity/v1".as_slice(),
-            &sequence.to_be_bytes(),
-            &idempotency_key,
-        ]
-        .concat(),
-    )
-    .into();
     let previous_state_root: [u8; 32] =
         Sha256::digest([b"before".as_slice(), &activity_id].concat()).into();
     let fields = ReceiptFields {
@@ -463,6 +291,18 @@ fn signed_receipt(
         authorized_batch,
         evidence,
     }
+}
+
+fn spend_activity_id(sequence: u64, idempotency_key: [u8; 32]) -> [u8; 32] {
+    Sha256::digest(
+        [
+            b"layerx-human-spend-activity/v1".as_slice(),
+            &sequence.to_be_bytes(),
+            &idempotency_key,
+        ]
+        .concat(),
+    )
+    .into()
 }
 
 fn encode_receipt(fields: &ReceiptFields, signature: Option<[u8; 64]>) -> Vec<u8> {
@@ -520,7 +360,7 @@ fn push_bytes(output: &mut Vec<u8>, value: &[u8]) {
 }
 
 #[test]
-fn receipt_only_spend_adopts_verified_protocol_state_and_both_shells_match() {
+fn spend_surface_fails_closed_without_a_canonical_budget_state_record() {
     let layer = RealAgentLayer::new("reconcile", 1_000, 500);
     layer
         .submit(7, COUNTERPARTY, ASSET, 100, [1; 32])
@@ -529,61 +369,13 @@ fn receipt_only_spend_adopts_verified_protocol_state_and_both_shells_match() {
         .submit(7, COUNTERPARTY, ASSET, 100, [2; 32])
         .unwrap_or_else(|error| panic!("second activity: {error:?}"));
 
-    let current = SpendReconciliation::new(
-        AgentBoundary {
-            layer: Arc::clone(&layer),
-            omit_latest_receipt: false,
-        },
-        profile(),
-    )
-    .unwrap_or_else(|error| panic!("current spend service: {error}"));
-    let in_sync = current
-        .both_shells(&principal("alice"))
-        .unwrap_or_else(|error| panic!("in-sync spend: {error}"));
-    assert_eq!(in_sync.mobile.spend, in_sync.desktop.spend);
-    assert_eq!(in_sync.mobile.spend.spent, 200);
-    assert_eq!(in_sync.mobile.spend.receipt_spent, 200);
-    assert_eq!(in_sync.mobile.spend.remaining, 300);
-    assert_eq!(in_sync.mobile.spend.receipt_count, 2);
-    assert_eq!(
-        in_sync.mobile.spend.reconciliation,
-        SpendReconciliationStatus::InSync
-    );
-    assert_eq!(in_sync.mobile.spend.reconciliation_copy_key, None);
-
-    let lagging = SpendReconciliation::new(
-        AgentBoundary {
-            layer,
-            omit_latest_receipt: true,
-        },
-        profile(),
-    )
-    .unwrap_or_else(|error| panic!("lagging spend service: {error}"));
-    let reconciled = lagging
-        .both_shells(&principal("alice"))
-        .unwrap_or_else(|error| panic!("reconciled spend: {error}"));
-    assert_eq!(reconciled.mobile.spend, reconciled.desktop.spend);
-    assert_eq!(reconciled.mobile.shell, AgentShell::Mobile);
-    assert_eq!(reconciled.desktop.shell, AgentShell::Desktop);
-    assert_eq!(reconciled.mobile.spend.receipt_spent, 100);
-    assert_eq!(reconciled.mobile.spend.spent, 200);
-    assert_eq!(reconciled.mobile.spend.remaining, 300);
-    assert_eq!(
-        reconciled.mobile.spend.reconciliation,
-        SpendReconciliationStatus::ProtocolAdopted {
-            direction: ReconciliationDirection::ProtocolHigher,
-            difference: 100,
-        }
-    );
-    assert_eq!(
-        reconciled.mobile.spend.reconciliation_copy_key,
-        Some(RECONCILIATION_COPY_KEY)
-    );
-    assert_eq!(
-        reconciled.mobile.spend.reconciliation_explanation,
-        Some(RECONCILIATION_EXPLANATION)
-    );
-    assert!(reconciled.mobile.spend.evidence_digests.len() >= 2);
+    let service = SpendReconciliation::new(profile())
+        .unwrap_or_else(|error| panic!("spend service: {error}"));
+    assert!(matches!(
+        service.both_shells(&principal("alice")),
+        Err(SpendError::ProtocolBudgetStateUnavailable)
+    ));
+    drop(layer);
 }
 
 #[test]
@@ -628,21 +420,12 @@ fn concurrent_hostile_activity_stays_inside_capability_and_budget_bounds() {
         Err(SubmitRefusal::Capability(Dimension::Amount))
     );
 
-    let service = SpendReconciliation::new(
-        AgentBoundary {
-            layer: Arc::clone(&capability_bound),
-            omit_latest_receipt: false,
-        },
-        profile(),
-    )
-    .unwrap_or_else(|error| panic!("spend service: {error}"));
-    let surfaces = service
-        .both_shells(&principal("alice"))
-        .unwrap_or_else(|error| panic!("spend surfaces: {error}"));
-    assert_eq!(surfaces.mobile.spend, surfaces.desktop.spend);
-    assert_eq!(surfaces.mobile.spend.spent, 400);
-    assert_eq!(surfaces.mobile.spend.receipt_spent, 400);
-    assert_eq!(surfaces.mobile.spend.remaining, 100);
+    let service = SpendReconciliation::new(profile())
+        .unwrap_or_else(|error| panic!("spend service: {error}"));
+    assert!(matches!(
+        service.both_shells(&principal("alice")),
+        Err(SpendError::ProtocolBudgetStateUnavailable)
+    ));
 
     for shell in [AgentShell::Mobile, AgentShell::Desktop] {
         assert!(matches!(
@@ -662,17 +445,11 @@ fn concurrent_hostile_activity_stays_inside_capability_and_budget_bounds() {
         budget_bound.submit(7, COUNTERPARTY, ASSET, 60, [0x33; 32]),
         Err(SubmitRefusal::Budget(LimitRefusal::Exceeded { .. }))
     ));
-    let budget_service = SpendReconciliation::new(
-        AgentBoundary {
-            layer: budget_bound,
-            omit_latest_receipt: false,
-        },
-        profile(),
-    )
-    .unwrap_or_else(|error| panic!("budget spend service: {error}"));
-    let budget_view = budget_service
-        .for_shell(&principal("alice"), AgentShell::Desktop)
-        .unwrap_or_else(|error| panic!("budget view: {error}"));
-    assert_eq!(budget_view.spend.spent, 200);
-    assert_eq!(budget_view.spend.remaining, 50);
+    let budget_service = SpendReconciliation::new(profile())
+        .unwrap_or_else(|error| panic!("budget spend service: {error}"));
+    assert!(matches!(
+        budget_service.for_shell(&principal("alice"), AgentShell::Desktop),
+        Err(SpendError::ProtocolBudgetStateUnavailable)
+    ));
+    drop(budget_bound);
 }

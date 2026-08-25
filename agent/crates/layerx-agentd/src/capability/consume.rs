@@ -1,14 +1,17 @@
 //! Serialised capability-ceiling reservations and receipt-only consumption.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Mutex;
 
-use crate::protocol_evidence::{EvidenceAuthority, RawReceiptEvidence};
+use crate::protocol_evidence::{
+    EvidenceAuthority, RawReceiptEvidence, ReceiptReplayError, ReceiptReplayGuard,
+};
 
 /// One held amount awaiting a verified terminal receipt.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Reservation {
     pub id: [u8; 32],
+    pub expected_activity_id: [u8; 32],
     pub amount: u128,
     pub expiry_sequence: u64,
     pub unknown: bool,
@@ -18,6 +21,7 @@ pub struct Reservation {
 struct State {
     consumed: u128,
     reservations: BTreeMap<[u8; 32], Reservation>,
+    receipt_replay: ReceiptReplayGuard,
     reconciled: bool,
 }
 
@@ -32,12 +36,14 @@ pub struct Ceiling {
 impl Ceiling {
     #[must_use]
     pub fn new(maximum: u128, verifier: EvidenceAuthority) -> Self {
+        let receipt_replay = verifier.receipt_replay_guard();
         Self {
             maximum,
             verifier,
             state: Mutex::new(State {
                 consumed: 0,
                 reservations: BTreeMap::new(),
+                receipt_replay,
                 reconciled: true,
             }),
         }
@@ -47,19 +53,34 @@ impl Ceiling {
     ///
     /// # Errors
     ///
-    /// Returns `UnverifiedReceipt` for any unverified receipt, `Overflow` when the
-    /// executed amounts do not sum, and `Exceeded` when the rebuilt total passes the
-    /// ceiling.
+    /// Returns `UnverifiedReceipt` for any unverified receipt, typed identity or
+    /// replay failures for mismatched and repeated evidence, `Overflow` when the
+    /// executed amounts do not sum, and `Exceeded` when the rebuilt total passes
+    /// the ceiling.
     pub fn rebuild(
         maximum: u128,
         verifier: EvidenceAuthority,
         receipts: &[ReceiptApplication],
     ) -> Result<Self, CeilingError> {
         let mut consumed = 0_u128;
+        let mut receipt_replay = verifier.receipt_replay_guard();
+        let mut settled_reservations = BTreeSet::new();
         for receipt in receipts {
+            if receipt.reservation_id == [0; 32] || receipt.expected_activity_id == [0; 32] {
+                return Err(CeilingError::InvalidIdentity);
+            }
+            if !settled_reservations.insert(receipt.reservation_id) {
+                return Err(CeilingError::Duplicate);
+            }
             let verified = verifier
                 .verify_receipt(&receipt.evidence)
                 .map_err(|_| CeilingError::UnverifiedReceipt)?;
+            if verified.activity_id() != receipt.expected_activity_id {
+                return Err(CeilingError::ActivityMismatch);
+            }
+            receipt_replay
+                .admit(&verified)
+                .map_err(map_replay_error)?;
             if verified.result_code() == 0 {
                 let amount = verified.amount();
                 consumed = consumed.checked_add(amount).ok_or(CeilingError::Overflow)?;
@@ -74,6 +95,7 @@ impl Ceiling {
             state: Mutex::new(State {
                 consumed,
                 reservations: BTreeMap::new(),
+                receipt_replay,
                 reconciled: true,
             }),
         })
@@ -84,9 +106,10 @@ impl Ceiling {
     /// # Errors
     ///
     /// Returns `UnverifiedReceipt` for an unverified receipt, `MissingReservation`
-    /// when no held reservation matches, `AmountMismatch` when the executed amount
-    /// differs from the held amount, `Overflow` when consumption does not sum, and
-    /// `Poisoned` when the state lock is poisoned.
+    /// when no held reservation matches, typed identity or replay failures when
+    /// evidence does not belong to that reservation, `AmountMismatch` when the
+    /// executed amount differs from the held amount, `Overflow` when consumption
+    /// does not sum, and `Poisoned` when the state lock is poisoned.
     pub fn apply_receipt(&self, receipt: &ReceiptApplication) -> Result<(), CeilingError> {
         let verified = self
             .verifier
@@ -97,6 +120,11 @@ impl Ceiling {
             .reservations
             .get(&receipt.reservation_id)
             .ok_or(CeilingError::MissingReservation)?;
+        if receipt.expected_activity_id != reservation.expected_activity_id
+            || verified.activity_id() != reservation.expected_activity_id
+        {
+            return Err(CeilingError::ActivityMismatch);
+        }
         let updated_consumed = if verified.result_code() == 0 {
             let amount = verified.amount();
             if amount != reservation.amount {
@@ -109,6 +137,10 @@ impl Ceiling {
         } else {
             state.consumed
         };
+        state
+            .receipt_replay
+            .admit(&verified)
+            .map_err(map_replay_error)?;
         state.reservations.remove(&receipt.reservation_id);
         state.consumed = updated_consumed;
         Ok(())
@@ -191,6 +223,7 @@ impl Ceiling {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReceiptApplication {
     pub reservation_id: [u8; 32],
+    pub expected_activity_id: [u8; 32],
     pub evidence: RawReceiptEvidence,
 }
 
@@ -207,14 +240,18 @@ pub struct CeilingSnapshot {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CeilingError {
     ZeroAmount,
+    InvalidIdentity,
     Expired,
     Duplicate,
     Exceeded,
     Unreconciled,
     UnverifiedReceipt,
+    DuplicateReceipt,
+    DuplicateActivity,
     MissingReservation,
     Indeterminate,
     AmountMismatch,
+    ActivityMismatch,
     Overflow,
     Poisoned,
 }
@@ -222,12 +259,16 @@ pub enum CeilingError {
 pub(crate) fn reserve(
     ceiling: &Ceiling,
     reservation_id: [u8; 32],
+    expected_activity_id: [u8; 32],
     amount: u128,
     expiry_sequence: u64,
     current_sequence: u64,
 ) -> Result<Reservation, CeilingError> {
     if amount == 0 {
         return Err(CeilingError::ZeroAmount);
+    }
+    if reservation_id == [0; 32] || expected_activity_id == [0; 32] {
+        return Err(CeilingError::InvalidIdentity);
     }
     if expiry_sequence <= current_sequence {
         return Err(CeilingError::Expired);
@@ -238,6 +279,13 @@ pub(crate) fn reserve(
     }
     if state.reservations.contains_key(&reservation_id) {
         return Err(CeilingError::Duplicate);
+    }
+    if state
+        .reservations
+        .values()
+        .any(|reservation| reservation.expected_activity_id == expected_activity_id)
+    {
+        return Err(CeilingError::DuplicateActivity);
     }
     let held = state
         .reservations
@@ -254,6 +302,7 @@ pub(crate) fn reserve(
     }
     let reservation = Reservation {
         id: reservation_id,
+        expected_activity_id,
         amount,
         expiry_sequence,
         unknown: false,
@@ -262,4 +311,11 @@ pub(crate) fn reserve(
         .reservations
         .insert(reservation_id, reservation.clone());
     Ok(reservation)
+}
+
+const fn map_replay_error(error: ReceiptReplayError) -> CeilingError {
+    match error {
+        ReceiptReplayError::DuplicateReceipt => CeilingError::DuplicateReceipt,
+        ReceiptReplayError::DuplicateActivity => CeilingError::DuplicateActivity,
+    }
 }

@@ -248,11 +248,14 @@ pub fn revoke_subtree(
 ///
 /// # Errors
 ///
-/// Refuses a zero or already expired amount, an unreconciled or poisoned ceiling, a duplicate
-/// reservation identifier, an arithmetic overflow, and a total that would exceed the maximum.
+/// Refuses a zero or already expired amount, an empty reservation or expected
+/// activity identity, an unreconciled or poisoned ceiling, a duplicate
+/// reservation identifier, an arithmetic overflow, and a total that would
+/// exceed the maximum.
 pub fn consume(
     ceiling: &Ceiling,
     reservation_id: [u8; 32],
+    expected_activity_id: [u8; 32],
     amount: u128,
     expiry_sequence: u64,
     current_sequence: u64,
@@ -260,6 +263,7 @@ pub fn consume(
     consumption::reserve(
         ceiling,
         reservation_id,
+        expected_activity_id,
         amount,
         expiry_sequence,
         current_sequence,

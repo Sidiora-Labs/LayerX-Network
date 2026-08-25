@@ -31,9 +31,10 @@ pub use reservations::{
 ///
 /// # Errors
 ///
-/// Returns `UnverifiedProtocolState` for unverified core state, `UnverifiedReceipt` or
-/// `ReceiptFromOtherWindow` for a receipt that is unverified or from another window, and
-/// `Arithmetic` when receipts overflow or sum above the protocol-reported consumption.
+/// Returns `ProtocolStateSchemaUnavailable` after authenticating the included
+/// candidate state because core defines no canonical budget record/key schema.
+/// Receipt verification, activity binding, and replay rejection happen before
+/// that fail-closed result.
 pub fn reconcile(
     local: &mut LocalAccounting,
     protocol: ProtocolBudgetState,
@@ -89,9 +90,11 @@ pub fn hold_unknown(
 ///
 /// # Errors
 ///
-/// Returns `UnverifiedProtocol` or `UnverifiedReceipt` for unverified inputs, `Corrupt` when an
-/// unknown reservation is absent from the store or decodes to the wrong length, `Arithmetic` on
-/// overflow, and `Store` when a reservation key cannot be built.
+/// Returns typed verification, activity-identity, and replay failures before
+/// rebuilding receipt consumption. The resulting accounting remains blocked by
+/// `ProtocolStateSchemaUnavailable` because core defines no canonical budget
+/// record/key schema. Returns `Corrupt` for malformed reservations, `Arithmetic`
+/// on overflow, and `Store` for storage failures.
 pub fn rebuild(
     store: &crate::store::Store,
     tenant: &crate::store::TenantId,

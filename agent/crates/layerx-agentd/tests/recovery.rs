@@ -16,7 +16,7 @@ use support::{directory, tenant, verified_submission};
 
 fn protocol(consumed: u128) -> ProtocolBudgetState {
     ProtocolBudgetState {
-        evidence: support::raw_budget_state(consumed, 1_000 - consumed, 1, 100, 50),
+        evidence: support::raw_state_leaf(consumed.to_be_bytes().to_vec(), 50),
     }
 }
 
@@ -80,10 +80,14 @@ fn populate_every_stage(store: &mut Store) -> (Outbox, Vec<u8>) {
 }
 
 #[test]
-fn restart_at_every_write_stage_preserves_exactly_one_recovery_action() {
+fn restart_preserves_recovery_actions_but_blocks_writes_without_budget_schema() {
     let root = directory("stages");
     let mut before = Store::open(&root).unwrap_or_else(|error| panic!("store: {error}"));
-    let (_, queued_exact) = populate_every_stage(&mut before);
+    let (before_outbox, queued_exact) = populate_every_stage(&mut before);
+    let unknown_activity_id = before_outbox
+        .status([4; 32])
+        .map(|status| status.activity_id)
+        .unwrap_or_else(|| panic!("unknown activity missing"));
     hold_unknown(
         &mut before,
         &UnknownReservation {
@@ -106,6 +110,7 @@ fn restart_at_every_write_stage_preserves_exactly_one_recovery_action() {
             &[],
             &[UnknownCeilingReservation {
                 id: [4; 32],
+                expected_activity_id: unknown_activity_id,
                 amount: 300,
                 expiry_sequence: 100,
             }],
@@ -131,7 +136,10 @@ fn restart_at_every_write_stage_preserves_exactly_one_recovery_action() {
         recovered.ceiling.snapshot().map(|value| value.held),
         Ok(300)
     );
-    assert!(recovered.require_write_ready().is_ok());
+    assert!(matches!(
+        recovered.require_write_ready(),
+        Err(RecoveryError::WritesBlocked)
+    ));
     let _ = std::fs::remove_dir_all(root);
 }
 

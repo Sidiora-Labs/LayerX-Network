@@ -305,7 +305,7 @@ fn lost_resend_response_keeps_budget_and_ceiling_held_and_reuses_exact_bytes() {
     )
     .unwrap_or_else(|error| panic!("budget reserve: {error:?}"));
     let ceiling = Ceiling::new(1_000, support::evidence_verifier());
-    consume(&ceiling, [2; 32], 400, 5, 1)
+    consume(&ceiling, [2; 32], [2; 32], 400, 5, 1)
         .unwrap_or_else(|error| panic!("ceiling reserve: {error:?}"));
     ceiling
         .mark_unknown([2; 32])
