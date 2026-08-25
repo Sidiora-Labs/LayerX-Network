@@ -198,53 +198,37 @@ lxp_result lx_bridge_verify_deposit(const lx_deposit_proof *proof,
     return LXP_OK;
 }
 
-static bool nullifier_seen(const lx_deposit_nullifier_store *store,
-                           const lx_deposit_proof *proof)
-{
-    uint8_t nullifier[32];
-    size_t i;
-    if (store == NULL || lxp_deposit_nullifier(proof, nullifier) != LXP_OK)
-        return true;
-    if (store->count > LX_DEPOSIT_NULLIFIER_CAPACITY) return true;
-    for (i = 0U; i < store->count; ++i)
-        if (memcmp(store->nullifiers[i], nullifier, 32U) == 0) return true;
-    return false;
-}
-
-lxp_result lx_deposit_nullifier_consume(lx_deposit_nullifier_store *store,
-                                        const lx_deposit_proof *proof)
-{
-    uint8_t nullifier[32];
-    if (store == NULL || proof == NULL) return LXP_ERR_NON_CANONICAL;
-    if (nullifier_seen(store, proof)) return LXP_ERR_DEPOSIT_ALREADY_CREDITED;
-    if (store->count >= LX_DEPOSIT_NULLIFIER_CAPACITY)
-        return LXP_ERR_ARENA_EXHAUSTED;
-    if (lxp_deposit_nullifier(proof, nullifier) != LXP_OK)
-        return LXP_ERR_NON_CANONICAL;
-    (void)memcpy(store->nullifiers[store->count++], nullifier, 32U);
-    return LXP_OK;
-}
-
 lxp_result lx_asset_deposit_credit(lxp_module_ctx *ctx,
                                    const lx_asset_transfer_request *request,
                                    const lx_deposit_proof *proof,
                                    const lx_checkpoint_registry *checkpoints,
-                                   lx_deposit_nullifier_store *nullifiers,
                                    uint32_t network_id,
                                    uint16_t protocol_version,
                                    lxp_receipt *receipt)
 {
+    static const uint8_t nullifier_prefix[] = "deposit-nullifier:";
     lxp_transfer_set set;
-    size_t nullifier_count;
+    uint8_t nullifier_key[sizeof(nullifier_prefix) - 1U + 32U];
+    uint8_t nullifier[32];
+    const uint8_t *existing;
+    size_t existing_length;
     lxp_result status;
     if (ctx == NULL || request == NULL || request->from == NULL ||
-        request->to == NULL || request->asset == NULL || nullifiers == NULL)
+        request->to == NULL || request->asset == NULL)
         return LXP_ERR_DEPOSIT_PROOF_NOT_FINAL;
     status = lx_bridge_verify_deposit(proof, checkpoints, network_id,
                                       protocol_version);
     if (status != LXP_OK) return status;
-    if (nullifiers->count > LX_DEPOSIT_NULLIFIER_CAPACITY)
-        return LXP_ERR_NON_CANONICAL;
+    status = lxp_deposit_nullifier(proof, nullifier);
+    if (status != LXP_OK) return status;
+    (void)memcpy(nullifier_key, nullifier_prefix,
+                 sizeof(nullifier_prefix) - 1U);
+    (void)memcpy(nullifier_key + sizeof(nullifier_prefix) - 1U,
+                 nullifier, 32U);
+    status = lxp_ctx_kv_get(ctx, nullifier_key, sizeof(nullifier_key),
+                            &existing, &existing_length);
+    if (status == LXP_OK) return LXP_ERR_DEPOSIT_ALREADY_CREDITED;
+    if (status != LXP_ERR_UNKNOWN_FIELD) return status;
     if (request->from->kind != LX_ACCOUNT_SYSTEM_PAXEER_RESERVE ||
         request->to->kind != LX_ACCOUNT_AGENT_MAIN ||
         request->asset->custody_kind != LX_ASSET_CUSTODY_PAXEER ||
@@ -263,14 +247,11 @@ lxp_result lx_asset_deposit_credit(lxp_module_ctx *ctx,
     set.legs[0].reason = LXP_REASON_DEPOSIT;
     set.context = request->context;
     set.context.protocol_system_capability = true;
-    nullifier_count = nullifiers->count;
-    status = lx_deposit_nullifier_consume(nullifiers, proof);
+    status = lxp_ctx_kv_put(ctx, nullifier_key, sizeof(nullifier_key),
+                            nullifier, sizeof(nullifier));
     if (status != LXP_OK) return status;
     status = lxp_ctx_emit_transfer_set(ctx, &set, receipt);
-    if (status != LXP_OK) {
-        (void)memset(nullifiers->nullifiers[nullifier_count], 0, 32U);
-        nullifiers->count = nullifier_count;
-    }
+    if (status != LXP_OK) lxp_module_ctx_rollback(ctx);
     return status;
 }
 

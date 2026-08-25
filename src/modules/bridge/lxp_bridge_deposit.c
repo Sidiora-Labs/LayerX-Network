@@ -9,20 +9,14 @@ lxp_result lxp_deposit_nullifier(const lx_deposit_proof *proof,
                                  uint8_t nullifier[32])
 {
     static const uint8_t tag[] = "LX:DEPOSIT:NULLIFIER:v1";
-    uint8_t input[sizeof(tag) - 1U + 96U];
+    uint8_t input[sizeof(tag) - 1U + 32U];
     size_t cursor = 0U;
     if (proof == NULL || nullifier == NULL ||
-        lxp_ct_is_zero(proof->deposit_id, 32U) ||
-        lxp_ct_is_zero(proof->custody_reference, 32U) ||
-        lxp_ct_is_zero(proof->asset_id, 32U))
+        lxp_ct_is_zero(proof->deposit_id, 32U))
         return LXP_ERR_NON_CANONICAL;
     (void)memcpy(input + cursor, tag, sizeof(tag) - 1U);
     cursor += sizeof(tag) - 1U;
     (void)memcpy(input + cursor, proof->deposit_id, 32U);
-    cursor += 32U;
-    (void)memcpy(input + cursor, proof->custody_reference, 32U);
-    cursor += 32U;
-    (void)memcpy(input + cursor, proof->asset_id, 32U);
     cursor += 32U;
     return lxp_hash_sha256(input, cursor, nullifier);
 }
@@ -51,7 +45,7 @@ lxp_result lxp_bridge_deposit_credit(
     lxp_result status;
     if (bridge == NULL || bridge->module_ctx == NULL ||
         bridge->assets == NULL || bridge->accounts == NULL ||
-        bridge->checkpoints == NULL || bridge->nullifiers == NULL ||
+        bridge->checkpoints == NULL ||
         transfer == NULL || transfer->asset == NULL || proof == NULL ||
         receipt == NULL)
         return LXP_ERR_DEPOSIT_PROOF_NOT_FINAL;
@@ -60,16 +54,18 @@ lxp_result lxp_bridge_deposit_credit(
                                       bridge->protocol_version);
     if (status != LXP_OK) return status;
     status = lx_asset_total_units(bridge->assets, bridge->accounts,
-                                  proof->asset_id, &total_before);
+                                  transfer->asset->asset_id, &total_before);
     if (status != LXP_OK) return LXP_FATAL_SUPPLY_MISMATCH;
     status = lx_asset_deposit_credit(
         bridge->module_ctx, transfer, proof, bridge->checkpoints,
-        bridge->nullifiers, bridge->network_id, bridge->protocol_version,
+        bridge->network_id, bridge->protocol_version,
         receipt);
     if (status != LXP_OK) return status;
     status = lx_asset_total_units(bridge->assets, bridge->accounts,
-                                  proof->asset_id, &total_after);
-    if (status != LXP_OK || lxp_u128_cmp(total_before, total_after) != 0)
+                                  transfer->asset->asset_id, &total_after);
+    if (status != LXP_OK || lxp_u128_cmp(total_before, total_after) != 0) {
+        lxp_module_ctx_rollback(bridge->module_ctx);
         return LXP_FATAL_SUPPLY_MISMATCH;
+    }
     return LXP_OK;
 }

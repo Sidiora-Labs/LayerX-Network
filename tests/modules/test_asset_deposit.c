@@ -72,7 +72,6 @@ int main(void)
     const char *reserve_name = "system:paxeer-reserve";
     const char *agent_name = "agent:did:key:a:main";
     lx_checkpoint_registry *checkpoints = NULL;
-    lx_deposit_nullifier_store nullifiers;
     lx_deposit_proof proof;
     lx_asset_transfer_request request;
     lxp_transfer_asset_state asset_state;
@@ -128,7 +127,6 @@ int main(void)
             root_register(&checkpoints, &proof, deposit_root) != 0)
             return 1;
     }
-    (void)memset(&nullifiers, 0, sizeof(nullifiers));
     (void)memset(&request, 0, sizeof(request));
     request.from = reserve;
     request.to = agent;
@@ -137,16 +135,16 @@ int main(void)
     request.context.assets = &asset_state;
     request.context.asset_count = 1U;
     request.context.protocol_system_capability = true;
-    if (lx_asset_deposit_credit(&ctx, &request, &proof, checkpoints, &nullifiers,
+    if (lx_asset_deposit_credit(&ctx, &request, &proof, checkpoints,
                                 8U, LXP_PROTOCOL_VERSION, &receipt) !=
             LXP_ERR_DEPOSIT_PROOF_NOT_FINAL || reserve->balance.lo != 100U)
         return 1;
-    if (lx_asset_deposit_credit(&ctx, &request, &proof, checkpoints, &nullifiers,
+    if (lx_asset_deposit_credit(&ctx, &request, &proof, checkpoints,
                                 7U, LXP_PROTOCOL_VERSION, &receipt) != LXP_OK ||
         reserve->balance.lo != 75U || agent->balance.lo != 25U ||
         lx_asset_total_units(&assets, &accounts, asset.asset_id, &total) != LXP_OK ||
         total.lo != 100U) return 1;
-    if (lx_asset_deposit_credit(&ctx, &request, &proof, checkpoints, &nullifiers,
+    if (lx_asset_deposit_credit(&ctx, &request, &proof, checkpoints,
                                 7U, LXP_PROTOCOL_VERSION, &receipt) !=
             LXP_ERR_DEPOSIT_ALREADY_CREDITED || reserve->balance.lo != 75U ||
         agent->balance.lo != 25U) return 1;

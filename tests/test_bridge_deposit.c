@@ -60,11 +60,11 @@ static lxp_result apply_capability(lxp_kernel *kernel,
 }
 
 static int unchanged(const lx_account *reserve, const lx_account *agent,
-                     size_t consumed)
+                     size_t staged)
 {
     return reserve->balance.hi == 0U && reserve->balance.lo == 100U &&
            agent->balance.hi == 0U && agent->balance.lo == 0U &&
-           consumed == 0U;
+           staged == 0U;
 }
 
 int main(void)
@@ -76,10 +76,9 @@ int main(void)
     lx_account *agent;
     lx_checkpoint_registry *checkpoints = NULL;
     lx_checkpoint_registry *wrong_root_checkpoints = NULL;
+    lx_checkpoint_registry *alternate_asset_checkpoints = NULL;
     lx_paxeer_deposit_root_registration root_registration;
     lx_paxeer_deposit_root_registration altered_registration;
-    lx_deposit_nullifier_store nullifiers;
-    lx_deposit_nullifier_store restored_nullifiers;
     lx_deposit_proof proof;
     lx_deposit_proof altered;
     lx_deposit_proof other;
@@ -97,6 +96,7 @@ int main(void)
     uint8_t second_nullifier[32];
     uint8_t leaf_hashes[2][32];
     uint8_t deposit_root[32];
+    uint8_t alternate_root[32];
     static const uint8_t paxeer_private_key[32] = {9U};
     uint8_t paxeer_public_key[32];
     uint64_t parameters = 1U;
@@ -191,7 +191,6 @@ int main(void)
         lxp_deposit_nullifier(&proof, second_nullifier) != LXP_OK ||
         memcmp(first_nullifier, second_nullifier, 32U) != 0) return 1;
 
-    (void)memset(&nullifiers, 0, sizeof(nullifiers));
     (void)memset(&transfer, 0, sizeof(transfer));
     transfer.from = reserve;
     transfer.to = agent;
@@ -201,7 +200,7 @@ int main(void)
     transfer.context.asset_count = 1U;
     transfer.context.protocol_system_capability = true;
     bridge = (lxp_bridge_deposit_context){
-        &module_ctx, &assets, &accounts, checkpoints, &nullifiers, 7U,
+        &module_ctx, &assets, &accounts, checkpoints, 7U,
         LXP_PROTOCOL_VERSION
     };
 
@@ -217,7 +216,7 @@ int main(void)
     bridge.checkpoints = wrong_root_checkpoints;
     if (lxp_bridge_deposit_credit(&bridge, &transfer, &proof, &receipt) !=
             LXP_ERR_DEPOSIT_PROOF_NOT_FINAL ||
-        !unchanged(reserve, agent, nullifiers.count))
+        !unchanged(reserve, agent, module_ctx.staged_count))
         return 1;
     bridge.checkpoints = checkpoints;
 
@@ -226,69 +225,97 @@ int main(void)
             LXP_ERR_DEPOSIT_PROOF_NOT_FINAL ||
         lxp_bridge_deposit_credit(&bridge, &transfer, NULL, &receipt) !=
             LXP_ERR_DEPOSIT_PROOF_NOT_FINAL ||
-        !unchanged(reserve, agent, nullifiers.count)) return 1;
+        !unchanged(reserve, agent, module_ctx.staged_count)) return 1;
     altered = proof;
     altered.network_id = 8U;
     if (lxp_deposit_proof_verify(&altered, checkpoints, 7U,
                                  LXP_PROTOCOL_VERSION) !=
             LXP_ERR_DEPOSIT_PROOF_NOT_FINAL ||
-        !unchanged(reserve, agent, nullifiers.count)) return 1;
+        !unchanged(reserve, agent, module_ctx.staged_count)) return 1;
     altered = proof;
     altered.protocol_version = (uint16_t)(LXP_PROTOCOL_VERSION + 1U);
     if (lxp_deposit_proof_verify(&altered, checkpoints, 7U,
                                  LXP_PROTOCOL_VERSION) !=
             LXP_ERR_DEPOSIT_PROOF_NOT_FINAL ||
-        !unchanged(reserve, agent, nullifiers.count)) return 1;
+        !unchanged(reserve, agent, module_ctx.staged_count)) return 1;
     altered = proof;
     altered.inclusion_proof.leaf_count = 1U;
     altered.inclusion_proof.leaf_index = 0U;
     altered.inclusion_proof.depth = 0U;
     if (lxp_bridge_deposit_credit(&bridge, &transfer, &altered, &receipt) !=
             LXP_ERR_DEPOSIT_PROOF_NOT_FINAL ||
-        !unchanged(reserve, agent, nullifiers.count)) return 1;
+        !unchanged(reserve, agent, module_ctx.staged_count)) return 1;
     altered = proof;
     altered.inclusion_proof.siblings[0][0] ^= 0xffU;
     if (lxp_bridge_deposit_credit(&bridge, &transfer, &altered, &receipt) !=
             LXP_ERR_DEPOSIT_PROOF_NOT_FINAL ||
-        !unchanged(reserve, agent, nullifiers.count)) return 1;
+        !unchanged(reserve, agent, module_ctx.staged_count)) return 1;
     altered = proof;
     altered.inclusion_proof.leaf_index = 1U;
     if (lxp_bridge_deposit_credit(&bridge, &transfer, &altered, &receipt) !=
             LXP_ERR_DEPOSIT_PROOF_NOT_FINAL ||
-        !unchanged(reserve, agent, nullifiers.count)) return 1;
+        !unchanged(reserve, agent, module_ctx.staged_count)) return 1;
     altered = proof;
     altered.checkpoint_id[0] ^= 0xffU;
     if (lxp_bridge_deposit_credit(&bridge, &transfer, &altered, &receipt) !=
             LXP_ERR_DEPOSIT_PROOF_NOT_FINAL ||
-        !unchanged(reserve, agent, nullifiers.count)) return 1;
+        !unchanged(reserve, agent, module_ctx.staged_count)) return 1;
     altered = proof;
     altered.custody_reference[0] ^= 0xffU;
     if (lxp_bridge_deposit_credit(&bridge, &transfer, &altered, &receipt) !=
             LXP_ERR_DEPOSIT_PROOF_NOT_FINAL ||
-        !unchanged(reserve, agent, nullifiers.count)) return 1;
+        !unchanged(reserve, agent, module_ctx.staged_count)) return 1;
     reserve->balance.lo = 0U;
     if (lxp_bridge_deposit_credit(&bridge, &transfer, &proof, &receipt) !=
             LXP_ERR_INSUFFICIENT_BALANCE || reserve->balance.hi != 0U ||
         reserve->balance.lo != 0U || agent->balance.hi != 0U ||
-        agent->balance.lo != 0U || nullifiers.count != 0U ||
-        !lxp_ct_is_zero(nullifiers.nullifiers[0], 32U))
+        agent->balance.lo != 0U || module_ctx.staged_count != 0U)
         return 1;
     reserve->balance.lo = 100U;
     if (lxp_bridge_deposit_credit(&bridge, &transfer, &proof, &receipt) !=
             LXP_OK || reserve->balance.lo != 75U || agent->balance.lo != 25U ||
-        nullifiers.count != 1U ||
-        memcmp(nullifiers.nullifiers[0], first_nullifier, 32U) != 0 ||
+        module_ctx.staged_count != 1U ||
         lx_asset_total_units(&assets, &accounts, asset.asset_id, &total) !=
             LXP_OK || total.hi != 0U || total.lo != 100U ||
         lxp_ct_is_zero(receipt.transfer_set_root, 32U)) return 1;
-    (void)memcpy(&restored_nullifiers, &nullifiers, sizeof(nullifiers));
-    (void)memset(&nullifiers, 0, sizeof(nullifiers));
-    bridge.nullifiers = &restored_nullifiers;
     if (lxp_bridge_deposit_credit(&bridge, &transfer, &proof, &receipt) !=
             LXP_ERR_DEPOSIT_ALREADY_CREDITED || reserve->balance.lo != 75U ||
-        agent->balance.lo != 25U || restored_nullifiers.count != 1U ||
-        nullifiers.count != 0U) return 1;
-    if (lx_checkpoint_registry_destroy(&wrong_root_checkpoints) != LXP_OK ||
+        agent->balance.lo != 25U || module_ctx.staged_count != 1U)
+        return 1;
+    altered = proof;
+    altered.asset_id[1] ^= 0x5aU;
+    altered.checkpoint_id[0] ^= 0x3cU;
+    (void)memset(&altered.inclusion_proof, 0,
+                 sizeof(altered.inclusion_proof));
+    altered.inclusion_proof.leaf_count = 1U;
+    altered_registration = root_registration;
+    (void)memcpy(altered_registration.checkpoint_id,
+                 altered.checkpoint_id, 32U);
+    if (lx_paxeer_deposit_leaf_hash(&altered, alternate_root) != LXP_OK)
+        return 1;
+    (void)memcpy(altered_registration.deposit_root, alternate_root, 32U);
+    if (sign_root(paxeer_private_key, &altered_registration) != 0 ||
+        lx_checkpoint_registry_create(
+            paxeer_public_key, 7U, LXP_PROTOCOL_VERSION,
+            &alternate_asset_checkpoints) != LXP_OK ||
+        lx_checkpoint_registry_register_deposit_root(
+            alternate_asset_checkpoints, &altered_registration) != LXP_OK)
+        return 1;
+    bridge.checkpoints = alternate_asset_checkpoints;
+    if (lxp_bridge_deposit_credit(&bridge, &transfer, &altered, &receipt) !=
+            LXP_ERR_DEPOSIT_ALREADY_CREDITED || reserve->balance.lo != 75U ||
+        agent->balance.lo != 25U || module_ctx.staged_count != 1U)
+        return 1;
+    bridge.checkpoints = checkpoints;
+    lxp_module_ctx_rollback(&module_ctx);
+    if (!unchanged(reserve, agent, module_ctx.staged_count) ||
+        lxp_bridge_deposit_credit(&bridge, &transfer, &proof, &receipt) !=
+            LXP_OK || reserve->balance.lo != 75U ||
+        agent->balance.lo != 25U || module_ctx.staged_count != 1U)
+        return 1;
+    if (lx_checkpoint_registry_destroy(&alternate_asset_checkpoints) !=
+            LXP_OK ||
+        lx_checkpoint_registry_destroy(&wrong_root_checkpoints) != LXP_OK ||
         lx_checkpoint_registry_destroy(&checkpoints) != LXP_OK ||
         lxp_state_store_destroy(&state) != LXP_OK) return 1;
     return 0;

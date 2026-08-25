@@ -11,7 +11,6 @@ typedef struct lxp_bridge_deposit_context {
     lx_asset_registry *assets;
     const lx_account_registry *accounts;
     const lx_checkpoint_registry *checkpoints;
-    lx_deposit_nullifier_store *nullifiers;
     uint32_t network_id;
     uint16_t protocol_version;
 } lxp_bridge_deposit_context;

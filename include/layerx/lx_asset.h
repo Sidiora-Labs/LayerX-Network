@@ -95,11 +95,6 @@ typedef struct lx_deposit_proof {
     uint16_t protocol_version;
 } lx_deposit_proof;
 
-typedef struct lx_deposit_nullifier_store {
-    uint8_t nullifiers[LX_DEPOSIT_NULLIFIER_CAPACITY][32];
-    size_t count;
-} lx_deposit_nullifier_store;
-
 typedef struct lx_withdrawal_request {
     uint32_t network_id;
     uint8_t withdrawal_id[32];
@@ -218,13 +213,10 @@ lxp_result lx_bridge_verify_deposit(const lx_deposit_proof *proof,
                                     const lx_checkpoint_registry *checkpoints,
                                     uint32_t network_id,
                                     uint16_t protocol_version);
-lxp_result lx_deposit_nullifier_consume(lx_deposit_nullifier_store *store,
-                                        const lx_deposit_proof *proof);
 lxp_result lx_asset_deposit_credit(lxp_module_ctx *ctx,
                                    const lx_asset_transfer_request *request,
                                    const lx_deposit_proof *proof,
                                    const lx_checkpoint_registry *checkpoints,
-                                   lx_deposit_nullifier_store *nullifiers,
                                    uint32_t network_id,
                                    uint16_t protocol_version,
                                    lxp_receipt *receipt);
