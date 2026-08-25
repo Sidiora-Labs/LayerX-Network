@@ -66,7 +66,8 @@ lxp_result lxp_gov_param_propose(
     const lxp_param_entry *entry;
     lxp_byte_span key;
     size_t i;
-    if (table == NULL || proposal == NULL || !governance_authorized ||
+    if (lxp_param_table_validate(table) != LXP_OK || proposal == NULL ||
+        !governance_authorized ||
         !ordered_governance_activity)
         return LXP_ERR_AUTH_SCOPE;
     key = (lxp_byte_span){proposal->parameter_key,
@@ -123,7 +124,7 @@ lxp_result lxp_gov_activation_apply(lxp_param_table *table,
     size_t i;
     bool due = false;
     lxp_result status = LXP_OK;
-    if (table == NULL || batch_epoch == 0U)
+    if (lxp_param_table_validate(table) != LXP_OK || batch_epoch == 0U)
         return LXP_ERR_NON_CANONICAL;
     for (i = 0U; i < table->proposal_count; ++i) {
         if (!table->proposals[i].enacted &&
@@ -191,7 +192,9 @@ lxp_result lxp_gov_param_enact(
     uint64_t selected_activation;
     size_t i;
     lxp_result status;
-    if (table == NULL || value == NULL || parameter_version == NULL)
+    if (lxp_param_table_validate(table) != LXP_OK || value == NULL ||
+        parameter_version == NULL || key.bytes == NULL || key.length == 0U ||
+        key.length > LXP_MAX_PARAMETER_KEY_BYTES)
         return LXP_ERR_NON_CANONICAL;
     status = lxp_param_get(table, key, execution_epoch, value,
                            parameter_version);
@@ -232,7 +235,8 @@ lxp_result lxp_gov_parameter_state_root(
     uint32_t version;
     size_t i;
     lxp_result status;
-    if (table == NULL || root == NULL) return LXP_ERR_NON_CANONICAL;
+    if (lxp_param_table_validate(table) != LXP_OK || root == NULL)
+        return LXP_ERR_NON_CANONICAL;
     status = lxp_param_version(table, execution_epoch, &version);
     if (status != LXP_OK) return status;
     lxp_hash_init(&hash);

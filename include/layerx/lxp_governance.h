@@ -126,6 +126,7 @@ typedef struct lxp_gov_emergency_state {
 } lxp_gov_emergency_state;
 
 lxp_result lxp_param_table_init(lxp_param_table *table);
+lxp_result lxp_param_table_validate(const lxp_param_table *table);
 lxp_result lxp_param_set_bounds(
     lxp_param_table *table, lxp_byte_span key, uint16_t target_module,
     uint64_t minimum_value, uint64_t maximum_value, uint64_t initial_value,

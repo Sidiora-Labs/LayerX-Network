@@ -81,5 +81,23 @@ int main(void)
     if (lxp_param_get(&table, fee, 2U, &value, &historical_version) != LXP_OK ||
         value != 10U)
         return 51;
+    {
+        lxp_param_table malformed = table;
+        malformed.count = LXP_MAX_PARAMETERS + 1U;
+        if (lxp_param_get(&malformed, fee, 2U, &value,
+                          &historical_version) != LXP_ERR_NON_CANONICAL)
+            return 61;
+        malformed = table;
+        malformed.version_count = LXP_MAX_PARAMETER_VERSIONS + 1U;
+        if (lxp_param_version(&malformed, 2U, &historical_version) !=
+            LXP_ERR_NON_CANONICAL)
+            return 62;
+        malformed = table;
+        malformed.entries[0].history_count =
+            LXP_MAX_PARAMETER_HISTORY + 1U;
+        if (lxp_param_get(&malformed, fee, 2U, &value,
+                          &historical_version) != LXP_ERR_NON_CANONICAL)
+            return 63;
+    }
     return 0;
 }

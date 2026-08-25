@@ -67,6 +67,29 @@ lxp_result lxp_param_table_init(lxp_param_table *table)
     return LXP_OK;
 }
 
+lxp_result lxp_param_table_validate(const lxp_param_table *table)
+{
+    size_t i;
+    if (table == NULL || table->count > LXP_MAX_PARAMETERS ||
+        table->version_count > LXP_MAX_PARAMETER_VERSIONS ||
+        table->proposal_count > LXP_MAX_GOV_PROPOSALS)
+        return LXP_ERR_NON_CANONICAL;
+    for (i = 0U; i < table->count; ++i)
+        if (table->entries[i].key_length == 0U ||
+            table->entries[i].key_length > LXP_MAX_PARAMETER_KEY_BYTES ||
+            table->entries[i].history_count == 0U ||
+            table->entries[i].history_count > LXP_MAX_PARAMETER_HISTORY)
+            return LXP_ERR_NON_CANONICAL;
+    for (i = 0U; i < table->proposal_count; ++i)
+        if (table->proposals[i].parameter_key_length == 0U ||
+            table->proposals[i].parameter_key_length >
+                LXP_MAX_PARAMETER_KEY_BYTES ||
+            table->proposals[i].cohort_count >
+                LXP_MAX_GOV_COHORT_MEMBERS)
+            return LXP_ERR_NON_CANONICAL;
+    return LXP_OK;
+}
+
 lxp_result lxp_param_set_bounds(
     lxp_param_table *table, lxp_byte_span key, uint16_t target_module,
     uint64_t minimum_value, uint64_t maximum_value, uint64_t initial_value,
@@ -76,7 +99,8 @@ lxp_result lxp_param_set_bounds(
     size_t position;
     uint32_t version;
     lxp_result status;
-    if (table == NULL || key.bytes == NULL || key.length == 0U ||
+    if (lxp_param_table_validate(table) != LXP_OK || key.bytes == NULL ||
+        key.length == 0U ||
         key.length > LXP_MAX_PARAMETER_KEY_BYTES || target_module == 0U ||
         activation_epoch == 0U || minimum_value > maximum_value ||
         initial_value < minimum_value || initial_value > maximum_value ||
@@ -120,7 +144,10 @@ lxp_result lxp_param_apply_ordered(
     lxp_param_value_record *record;
     uint32_t version;
     lxp_result status;
-    if (table == NULL || proposal_id == NULL || !ordered_governance_activity)
+    if (lxp_param_table_validate(table) != LXP_OK || proposal_id == NULL ||
+        key.bytes == NULL || key.length == 0U ||
+        key.length > LXP_MAX_PARAMETER_KEY_BYTES ||
+        !ordered_governance_activity)
         return LXP_ERR_AUTH_SCOPE;
     entry = find_entry(table, key, NULL);
     if (entry == NULL || value < entry->minimum_value ||
@@ -148,7 +175,8 @@ lxp_result lxp_param_version(const lxp_param_table *table,
 {
     size_t i;
     uint32_t selected = 0U;
-    if (table == NULL || parameter_version == NULL || execution_epoch == 0U)
+    if (lxp_param_table_validate(table) != LXP_OK ||
+        parameter_version == NULL || execution_epoch == 0U)
         return LXP_ERR_NON_CANONICAL;
     for (i = 0U; i < table->version_count; ++i)
         if (table->versions[i].activation_epoch <= execution_epoch &&
@@ -167,7 +195,9 @@ lxp_result lxp_param_get(const lxp_param_table *table, lxp_byte_span key,
     const lxp_param_value_record *selected = NULL;
     size_t i;
     lxp_result status;
-    if (table == NULL || value == NULL || parameter_version == NULL)
+    if (lxp_param_table_validate(table) != LXP_OK || value == NULL ||
+        parameter_version == NULL || key.bytes == NULL || key.length == 0U ||
+        key.length > LXP_MAX_PARAMETER_KEY_BYTES)
         return LXP_ERR_NON_CANONICAL;
     entry = find_const(table, key);
     if (entry == NULL) return LXP_ERR_PARAMETER_BOUNDS;
@@ -184,7 +214,8 @@ lxp_result lxp_param_get(const lxp_param_table *table, lxp_byte_span key,
 lxp_result lxp_param_at(const lxp_param_table *table, size_t index,
                         const lxp_param_entry **entry)
 {
-    if (table == NULL || entry == NULL || index >= table->count)
+    if (lxp_param_table_validate(table) != LXP_OK || entry == NULL ||
+        index >= table->count)
         return LXP_ERR_NON_CANONICAL;
     *entry = &table->entries[index];
     return LXP_OK;
@@ -192,7 +223,8 @@ lxp_result lxp_param_at(const lxp_param_table *table, size_t index,
 
 lxp_result lxp_param_mark_sealed(lxp_param_table *table, uint64_t epoch)
 {
-    if (table == NULL || epoch < table->last_sealed_epoch)
+    if (lxp_param_table_validate(table) != LXP_OK ||
+        epoch < table->last_sealed_epoch)
         return LXP_ERR_NON_MONOTONIC_TIME;
     table->last_sealed_epoch = epoch;
     return LXP_OK;
