@@ -1497,26 +1497,6 @@ impl Executor {
         })
     }
 
-    /// Executes real WASM against a private storage clone, then seals the
-    /// resulting graph, events and 402LXP requests for the kernel activity
-    /// owner. It deliberately does not assign caller storage.
-    pub(crate) fn prepare_authorized_activity(
-        &self,
-        storage: &Storage,
-        request: AuthorizedExecutionRequest<'_>,
-        invocation_authority: [u8; 32],
-    ) -> Result<PreparedAuthorizedActivity, ExecutionError> {
-        let transfer = TransferCapability::from_root_authorization(
-            request.program,
-            &request.authorization,
-            invocation_authority,
-        )
-        .map_err(ExecutionError::Transfer)?;
-        let mut held_storage = storage.clone();
-        let record = self.execute_authorized(&mut held_storage, request)?;
-        Self::seal_authorized_activity(storage.clone(), held_storage, record, transfer)
-    }
-
     fn seal_authorized_activity(
         prior_storage: Storage,
         held_storage: Storage,

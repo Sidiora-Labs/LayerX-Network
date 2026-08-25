@@ -518,22 +518,6 @@ impl TransferCapability {
         Ok(frames)
     }
 
-    /// Applies all requested monetary effects atomically through the kernel's
-    /// existing 402LXP primitive and verifies the exact sealed transfer root.
-    ///
-    /// # Errors
-    ///
-    /// Returns a typed law, kernel, or commitment refusal. No partially applied
-    /// state or unverified success can be returned through this API.
-    pub(crate) fn settle(
-        &self,
-        effects: &AbiEffects,
-        kernel: &mut impl KernelTransferPrimitive,
-    ) -> Result<VerifiedProgramSettlement, TransferLawError> {
-        let transfers = self.authorize(effects)?;
-        self.settle_authorized_set(&transfers, kernel)
-    }
-
     pub(crate) fn settle_authorized_set(
         &self,
         transfers: &AtomicTransferSet,
@@ -983,7 +967,7 @@ pub trait KernelTransferPrimitive {
 }
 
 /// Raw facts returned by the trusted kernel boundary and strictly checked by
-/// [`TransferCapability::settle`] before a verified result can exist.
+/// [`TransferCapability::settle_authorized_set`] before a verified result can exist.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct KernelTransferEvidence {
     pub transfer_set_root: [u8; 32],

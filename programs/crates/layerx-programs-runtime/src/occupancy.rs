@@ -472,9 +472,6 @@ impl OccupancyLedger {
     pub const fn last_finalized_batch(&self) -> u64 { self.last_finalized_batch }
     #[must_use]
     pub fn contains_namespace(&self, namespace: StorageNamespace) -> bool { self.positions.contains_key(&namespace) }
-    pub(crate) fn responsibility_payer(&self, namespace: StorageNamespace) -> Option<PrincipalId> {
-        self.positions.get(&namespace).map(|position| position.payer)
-    }
     pub(crate) fn responsibility_limits(
         &self,
         namespace: StorageNamespace,

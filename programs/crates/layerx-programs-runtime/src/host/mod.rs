@@ -27,7 +27,6 @@ pub(super) const STATUS_INVALID: i32 = -2;
 pub(super) const STATUS_BOUNDS: i32 = -3;
 pub(super) const STATUS_METER: i32 = -4;
 pub(super) const STATUS_EVIDENCE: i32 = -5;
-pub(super) const STATUS_VERIFY_FAILED: i32 = -6;
 pub(super) const FUEL_METERING_DISABLED: &str = "programs runtime fuel metering is disabled";
 pub(super) const COMPOSITION_REFUSED: &str = "program composition refused the call graph";
 

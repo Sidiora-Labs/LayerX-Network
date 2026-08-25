@@ -342,12 +342,6 @@ impl CapabilitySet {
         )
     }
 
-    /// Returns whether every grant in `requested` is a non-escalating subset
-    /// of this exact frame's authority.
-    pub(crate) fn contains_narrowed(&self, requested: &Self) -> bool {
-        self.contains_narrowed_with_origin(requested, None)
-    }
-
     pub(crate) fn contains_narrowed_for_program_edge(
         &self,
         caller_program: ProgramId,
