@@ -18,3 +18,16 @@ The TAP skew is a server-owned deployment value in seconds, from zero through
 300. It is never accepted from the public request. Production deployments must
 replace every example identity, key, expiry, principal, module, and ordinal
 with authenticated operator configuration.
+
+Fiat provider callbacks carry an opaque `token_reference` beside a signed
+evidence envelope. The evidence `facts` object must include
+`token_reference_sha256`, the lowercase hexadecimal SHA-256 digest of those
+exact token bytes. Providers sign the UTF-8 bytes
+`LayerX/interop/fiat/provider-evidence/v1\0` followed immediately by the
+compact JSON serialization of `facts`. The configured Ed25519 provider key
+must verify that signature; evidence signed without the domain or for another
+token is refused before any hold or protocol activity is admitted.
+The callback does not accept an activity idempotency override. The service
+derives the economic key from the authenticated provider, settlement, rail,
+and evidence class, so retries converge and one settlement cannot be credited
+again under a fresh caller-selected key.

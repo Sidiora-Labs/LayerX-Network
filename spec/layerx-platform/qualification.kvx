@@ -166,6 +166,14 @@ observed = "The AP2 adapter verifies mandates and maps them to typed intents thr
 assumption = "None. Implementation matches specification."
 severity = "note"
 
+[observation.24.2.1]
+task = "24.2"
+file = "interop/crates/layerx-interop-service/src/server.rs, interop/deploy/gateway/README.md"
+symbol = "FiatEvidenceVerifier::verify, FiatFacts::token_reference_sha256"
+observed = "Post-implementation source review found the hosted fiat verifier accepted an opaque provider token but deliberately ignored it while verifying a signature over settlement facts alone. Authentic provider evidence could therefore be substituted alongside a different token reference, and the undomained signature bytes could alias another provider protocol using the same key and JSON. The runnable handler also bypassed the fiat adapter's provider-derived economic identity and accepted an arbitrary activity idempotency key from the callback, allowing the same signed settlement to be submitted under fresh keys. The repair requires the signed facts to commit to the exact token SHA-256 digest, compares it in constant time, verifies Ed25519 over a LayerX fiat-provider domain followed by the compact facts JSON, removes the callback idempotency override, and uses the adapter identity derived from provider, settlement, rail and evidence class. A source test signs authentic evidence and proves token substitution is refused."
+assumption = "Provider callback producers must adopt the documented version-one signature domain and token_reference_sha256 field atomically with deployment and stop sending activity_idempotency_key. Human qualification must replay authentic card, bank and RTP sandbox callbacks, substitute token bytes and cross-protocol signatures, retry the same signed settlement with altered activities, verify the refusal or original result precedes any duplicate effect, and exercise reversals and chargebacks as their distinct signed stages. No build, test, formatter, provider sandbox or live callback was run during this source repair."
+severity = "post-implementation-repair"
+
 [observation.13.5.1]
 task = "13.5"
 file = "human/apps/web/e2e/explorer.spec.ts"

@@ -306,6 +306,14 @@ pub enum FiatJourneyState {
 pub struct FiatAdapter;
 
 impl FiatAdapter {
+    /// Returns the stable economic identity for one provider settlement stage.
+    /// It is derived exclusively from provider-authenticated facts so callback
+    /// callers cannot replay one settlement under fresh transport keys.
+    #[must_use]
+    pub fn idempotency_key(facts: &VerifiedProviderFacts) -> [u8; 32] {
+        idempotency_key(facts)
+    }
+
     /// Verifies provider-authenticated evidence and returns only validated,
     /// typed settlement facts. Executable gateway composition uses this gate
     /// before durable reservation or a typed plane call.
@@ -364,7 +372,7 @@ impl FiatAdapter {
         now: u64,
     ) -> Result<FiatJourneyState, Traced<FiatError>> {
         let fail = |error| trace.wrap(error);
-        let idempotency_key = idempotency_key(facts);
+        let idempotency_key = Self::idempotency_key(facts);
         let request = TranslationRequest::new(
             adapter_id().map_err(fail)?,
             TranslationKind::ReadOnly,
@@ -396,7 +404,7 @@ impl FiatAdapter {
         let fail = |error| trace.wrap(error);
         let kind = intent_kind(facts.class).map_err(fail)?;
         let request_digest = request_digest(facts, evidence.digest());
-        let idempotency_key = idempotency_key(facts);
+        let idempotency_key = Self::idempotency_key(facts);
         let request = TranslationRequest::new(
             adapter_id().map_err(fail)?,
             TranslationKind::StateChanging,

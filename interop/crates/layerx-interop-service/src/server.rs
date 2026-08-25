@@ -48,6 +48,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use subtle::ConstantTimeEq;
 
 const MAX_BODY: usize = 512 * 1024;
+const FIAT_EVIDENCE_SIGNATURE_DOMAIN: &[u8] =
+    b"LayerX/interop/fiat/provider-evidence/v1\0";
 
 pub fn route(config: &Config, request: &IncomingRequest) -> OutgoingResponse {
     if request.headers.contains_key("x-layerx-principal")
@@ -1312,6 +1314,7 @@ impl CredentialBindingStore for DurableVisaBinding<'_> {
 struct FiatFacts {
     provider: String,
     settlement: String,
+    token_reference_sha256: String,
     rail: String,
     class: String,
     amount: String,
@@ -1335,8 +1338,6 @@ struct FiatCallback {
     evidence: FiatEvidenceEnvelope,
     #[serde(default)]
     activity: String,
-    #[serde(default)]
-    activity_idempotency_key: String,
 }
 
 fn fiat(
@@ -1376,7 +1377,6 @@ fn fiat(
         .get("authorization")
         .map(String::as_str)
         .unwrap_or("");
-    let protocol_idempotency = body.activity_idempotency_key;
     let facts = match FiatAdapter::verify_evidence(&token, &evidence, &verifier, trace) {
         Ok(value) => value,
         Err(_) => return Dispatch::error(400, "refused", "provider_callback_refused"),
@@ -1392,13 +1392,7 @@ fn fiat(
             let Some(activity) = activity else {
                 return Dispatch::error(400, "refused", "typed_intent_required");
             };
-            if protocol_idempotency.len() != 64
-                || !protocol_idempotency
-                    .bytes()
-                    .all(|byte| byte.is_ascii_hexdigit())
-            {
-                return Dispatch::error(400, "refused", "protocol_idempotency_required");
-            }
+            let protocol_idempotency = hex(&FiatAdapter::idempotency_key(&facts));
             let execution = Execution {
                 config,
                 authorization,
@@ -1529,7 +1523,7 @@ struct FiatEvidenceVerifier<'a> {
 impl ProviderVerifier for FiatEvidenceVerifier<'_> {
     fn verify(
         &self,
-        _token: &TokenReference,
+        token: &TokenReference,
         evidence: &ProviderEvidence,
         _trace: &TraceId,
     ) -> Result<VerifiedProviderFacts, layerx_fiat::FiatError> {
@@ -1550,8 +1544,21 @@ impl ProviderVerifier for FiatEvidenceVerifier<'_> {
             .map_err(|_| layerx_fiat::FiatError::InvalidEvidence)?;
         let canonical = serde_json::to_vec(&envelope.facts)
             .map_err(|_| layerx_fiat::FiatError::InvalidEvidence)?;
-        key.verify(&canonical, &signature)
+        let mut signed = Vec::with_capacity(FIAT_EVIDENCE_SIGNATURE_DOMAIN.len() + canonical.len());
+        signed.extend_from_slice(FIAT_EVIDENCE_SIGNATURE_DOMAIN);
+        signed.extend_from_slice(&canonical);
+        key.verify(&signed, &signature)
             .map_err(|_| layerx_fiat::FiatError::InvalidEvidence)?;
+        let expected_token_digest = parse_hex32(&envelope.facts.token_reference_sha256)
+            .map_err(|_| layerx_fiat::FiatError::InvalidEvidence)?;
+        let actual_token_digest: [u8; 32] = Sha256::digest(token.as_bytes()).into();
+        if expected_token_digest
+            .ct_eq(&actual_token_digest)
+            .unwrap_u8()
+            != 1
+        {
+            return Err(layerx_fiat::FiatError::InvalidEvidence);
+        }
         let rail = match envelope.facts.rail.as_str() {
             "card" if self.expected_rail == HostedAdapter::FiatCard => FiatRail::Card,
             "bank" if self.expected_rail == HostedAdapter::FiatBank => FiatRail::Bank,
@@ -2027,6 +2034,7 @@ fn hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ed25519_dalek::{Signer as _, SigningKey};
 
     fn parsed_tap(authority: &str, path: &str) -> TapRequest {
         TapRequest::parse(
@@ -2058,6 +2066,36 @@ mod tests {
             "signature_input": "sig2=(\"@authority\" \"@path\")",
             "signature": "sig2=:AA==:"
         })
+    }
+
+    fn signed_fiat_evidence(
+        signing: &SigningKey,
+        token: &TokenReference,
+    ) -> ProviderEvidence {
+        let facts = FiatFacts {
+            provider: "provider-001".to_owned(),
+            settlement: "settlement-001".to_owned(),
+            token_reference_sha256: hex(&Sha256::digest(token.as_bytes())),
+            rail: "card".to_owned(),
+            class: "settled".to_owned(),
+            amount: "10000".to_owned(),
+            asset: "41".repeat(32),
+            destination: "42".repeat(32),
+            observed_at: 1_700_000_000,
+            hold_until: None,
+        };
+        let canonical = serde_json::to_vec(&facts).expect("fiat facts serialize");
+        let mut signed = FIAT_EVIDENCE_SIGNATURE_DOMAIN.to_vec();
+        signed.extend_from_slice(&canonical);
+        let signature = signing.sign(&signed);
+        ProviderEvidence::new(
+            serde_json::to_vec(&FiatEvidenceEnvelope {
+                facts,
+                signature: hex(&signature.to_bytes()),
+            })
+            .expect("fiat evidence serializes"),
+        )
+        .expect("fiat evidence is bounded")
     }
 
     #[test]
@@ -2138,5 +2176,54 @@ mod tests {
     fn receipt_must_match_the_exact_submitted_activity() {
         assert!(require_receipt_activity([0x51; 32], [0x51; 32]).is_ok());
         assert!(require_receipt_activity([0x51; 32], [0x52; 32]).is_err());
+    }
+
+    #[test]
+    fn fiat_provider_signature_binds_the_opaque_token_reference() {
+        let signing = SigningKey::from_bytes(&[0x61; 32]);
+        let token = TokenReference::new(b"provider-token-a".to_vec())
+            .expect("opaque provider token is valid");
+        let substituted = TokenReference::new(b"provider-token-b".to_vec())
+            .expect("substitute provider token is valid");
+        let evidence = signed_fiat_evidence(&signing, &token);
+        let pins = [FiatProviderPin {
+            provider: "provider-001".to_owned(),
+            public_key_ed25519: hex(signing.verifying_key().as_bytes()),
+        }];
+        let verifier = FiatEvidenceVerifier {
+            pins: &pins,
+            expected_rail: HostedAdapter::FiatCard,
+        };
+        let trace = TraceId::mint([0x62; 16]);
+        assert!(verifier.verify(&token, &evidence, &trace).is_ok());
+        assert_eq!(
+            verifier.verify(&substituted, &evidence, &trace),
+            Err(layerx_fiat::FiatError::InvalidEvidence)
+        );
+    }
+
+    #[test]
+    fn fiat_callback_refuses_caller_selected_economic_identity() {
+        let callback = serde_json::json!({
+            "token_reference": "provider-token-a",
+            "evidence": {
+                "facts": {
+                    "provider": "provider-001",
+                    "settlement": "settlement-001",
+                    "token_reference_sha256": "11".repeat(32),
+                    "rail": "card",
+                    "class": "settled",
+                    "amount": "10000",
+                    "asset": "41".repeat(32),
+                    "destination": "42".repeat(32),
+                    "observed_at": 1_700_000_000,
+                    "hold_until": null
+                },
+                "signature": "22".repeat(64)
+            },
+            "activity": "00",
+            "activity_idempotency_key": "33".repeat(32)
+        });
+        assert!(serde_json::from_value::<FiatCallback>(callback).is_err());
     }
 }
