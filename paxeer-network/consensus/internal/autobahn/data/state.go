@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -208,6 +209,9 @@ func (i *inner) insertQC(committee *types.Committee, qc *types.FullCommitQC) err
 		return fmt.Errorf("qc.Verify(): %w", err)
 	}
 	gr := qc.QC().GlobalRange(committee)
+	if err := validateExecutableGlobalRange(gr); err != nil {
+		return err
+	}
 	if gr.Next <= i.nextQC {
 		return nil // fully behind, skip
 	}
@@ -217,6 +221,14 @@ func (i *inner) insertQC(committee *types.Committee, qc *types.FullCommitQC) err
 	for i.nextQC < gr.Next {
 		i.qcs[i.nextQC] = qc
 		i.nextQC++
+	}
+	return nil
+}
+
+func validateExecutableGlobalRange(gr types.GlobalRange) error {
+	maxNext := types.GlobalBlockNumber(math.MaxInt64) + 1
+	if gr.Next > maxNext {
+		return fmt.Errorf("global range [%d,%d) exceeds maximum executable block height %d", gr.First, gr.Next, int64(math.MaxInt64))
 	}
 	return nil
 }
@@ -357,6 +369,9 @@ func (s *State) PushQC(ctx context.Context, qc *types.FullCommitQC, blocks []*ty
 	}
 	// Wait until QC is needed.
 	gr := qc.QC().GlobalRange(s.cfg.Committee)
+	if err := validateExecutableGlobalRange(gr); err != nil {
+		return err
+	}
 	needQC, err := func() (bool, error) {
 		for inner, ctrl := range s.inner.Lock() {
 			if err := ctrl.WaitUntil(ctx, func() bool {

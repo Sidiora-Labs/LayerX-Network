@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"math"
 	"net/url"
 	"slices"
 	"time"
@@ -157,7 +158,10 @@ func (r *GigaRouter) LastCommittedBlockNumber() int64 {
 	// GlobalRange is a half-open [First, Next) interval; the highest
 	// committed block number is Next-1.
 	gr := atypes.GlobalRangeOpt(r.lastCommitQCRecv.Load(), r.data.Committee())
-	return utils.Clamp[int64](gr.Next) - 1
+	if gr.Next == 0 {
+		return -1
+	}
+	return int64(gr.Next - 1) //nolint:gosec // data.State rejects certificates above the executable int64 height range.
 }
 
 // MaxGasEstimatedPerBlock .
@@ -187,6 +191,9 @@ func (r *GigaRouter) MaxGasEstimatedPerBlock() uint64 {
 // BlockDB has the right shape (height + hash indexes, async pruning) and
 // is the long-term home for this read path.
 func (r *GigaRouter) BlockByNumber(ctx context.Context, n atypes.GlobalBlockNumber) (*coretypes.ResultBlock, error) {
+	if uint64(n) > math.MaxInt64 {
+		return nil, fmt.Errorf("block height %d exceeds maximum executable height %d", n, int64(math.MaxInt64))
+	}
 	gb, err := r.data.GlobalBlock(ctx, n)
 	if err != nil {
 		// Map Autobahn's pruning sentinel to CometBFT's, so callers
@@ -195,7 +202,7 @@ func (r *GigaRouter) BlockByNumber(ctx context.Context, n atypes.GlobalBlockNumb
 		// active lower bound (data.State.inner.first) is internal to
 		// data.State; both call sites format through the same helper.
 		if errors.Is(err, data.ErrPruned) {
-			return nil, coretypes.WrapErrHeightNotAvailable(utils.Clamp[int64](n), utils.None[int64]())
+			return nil, coretypes.WrapErrHeightNotAvailable(int64(n), utils.None[int64]())
 		}
 		return nil, fmt.Errorf("data.GlobalBlock(%v): %w", n, err)
 	}
@@ -261,10 +268,7 @@ func (r *GigaRouter) translateGlobalBlock(gb *atypes.GlobalBlock) *coretypes.Res
 		Block: &types.Block{
 			Header: types.Header{
 				ChainID: r.cfg.GenDoc.ChainID,
-				// Clamp accepts any constraints.Integer for From, so
-				// gb.GlobalNumber (a typed uint64) goes in directly — no
-				// intermediate uint64() conversion needed.
-				Height: utils.Clamp[int64](gb.GlobalNumber),
+				Height: int64(gb.GlobalNumber), //nolint:gosec // data.State rejects certificates above the executable int64 height range.
 				Time:   gb.Timestamp,
 			},
 			Data:       types.Data{Txs: tmTxs},
@@ -274,6 +278,9 @@ func (r *GigaRouter) translateGlobalBlock(gb *atypes.GlobalBlock) *coretypes.Res
 }
 
 func (r *GigaRouter) executeBlock(ctx context.Context, b *atypes.GlobalBlock) (*abci.ResponseCommit, error) {
+	if uint64(b.GlobalNumber) > math.MaxInt64 {
+		return nil, fmt.Errorf("block height %d exceeds maximum executable height %d", b.GlobalNumber, int64(math.MaxInt64))
+	}
 	app := r.cfg.Producer.App
 	hash := b.Header.Hash()
 	var proposerAddress types.Address
@@ -299,7 +306,7 @@ func (r *GigaRouter) executeBlock(ctx context.Context, b *atypes.GlobalBlock) (*
 		Hash: hash[:],
 		Header: (&types.Header{
 			ChainID: r.cfg.GenDoc.ChainID,
-			Height:  utils.Clamp[int64](b.GlobalNumber),
+			Height:  int64(b.GlobalNumber), //nolint:gosec // checked above against math.MaxInt64.
 			Time:    b.Timestamp,
 			// WARNING: the reward distribution has corner cases where it forgets the proposer,
 			// because reward is distributed with a delay. This is not our problem here though.

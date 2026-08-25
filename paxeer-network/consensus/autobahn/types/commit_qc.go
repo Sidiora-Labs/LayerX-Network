@@ -2,6 +2,7 @@ package types
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/sidiora-labs/paxeer-network/consensus/internal/autobahn/pb"
 	"github.com/sidiora-labs/paxeer-network/consensus/internal/protoutils"
@@ -50,6 +51,10 @@ func (m *CommitQC) GlobalRange(c *Committee) GlobalRange {
 func (m *CommitQC) Verify(c *Committee) error {
 	if err := m.Proposal().Verify(c); err != nil {
 		return fmt.Errorf("proposal: %w", err)
+	}
+	gr := m.GlobalRange(c)
+	if gr.Next > GlobalBlockNumber(math.MaxInt64)+1 {
+		return fmt.Errorf("global range [%d,%d) exceeds maximum executable block height %d", gr.First, gr.Next, int64(math.MaxInt64))
 	}
 	return m.vote.verifyQC(c, c.CommitQuorum(), m.sigs)
 }
