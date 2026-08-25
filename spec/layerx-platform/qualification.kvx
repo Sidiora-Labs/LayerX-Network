@@ -374,6 +374,14 @@ observed = "Blocked installs: 005/007/013/014 report 'Missing host tools: npm'; 
 assumption = "Swift installation may require Swift.org binary tarball or different repository; empty 001/002/015 logs indicate those install steps never started or produced no output rather than a failure. Human qualification should confirm the installed package versions are sufficient for the repo's build/test targets."
 severity = "note"
 
+[observation.install.2]
+task = "install"
+file = "package-lock.json, programs/sdk/assemblyscript/package-lock.json, programs/sdk/assemblyscript/examples/paid-counter/package-lock.json, .logs/workspace/20260825T102938Z-1976242"
+symbol = "JavaScript and AssemblyScript workspace dependencies, Swift SDK"
+observed = "The locked root JavaScript workspace INSTALL completed with 201 packages, and the two independent AssemblyScript npm ci actions completed with three packages each. The expected tsc, next and both asc executables are now present. npm reported engine mismatches because the host remains Node 18.19.1 while repository packages require Node 22 and several dependencies require Node 20 or 22; it also reported the locked Next.js 15.5.0 and 15.5.4 packages as deprecated for a security vulnerability. Swift remains unavailable, and the current workspace BUILD log 011 is empty rather than evidence of a Swift build attempt."
+assumption = "The Swift SDK remains explicitly blocked until a human qualifier supplies an owner-approved Swift toolchain source. Human qualification must use Node 22 for the JavaScript and AssemblyScript builds, assess the locked Next.js advisories through dependency ownership, and rerun BUILD; successful dependency installation alone is not a build result."
+severity = "qualification-blocker"
+
 [observation.install.push]
 task = "install"
 file = "git remote"
