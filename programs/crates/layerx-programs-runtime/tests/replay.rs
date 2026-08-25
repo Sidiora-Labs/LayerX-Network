@@ -3,9 +3,10 @@ use layerx_programs_runtime::test_support::{
     OP_END,
 };
 use layerx_programs_runtime::{
-    programs_differential_gate, replay_recorded_execution, Deploy, Executor, Lifecycle,
-    LifecycleRefusal, ProgramId, RecordedExecution, ReplayRefusal, UpgradePolicy, ValidationLimits,
-    ValidationRefusal, WasmEngine, WasmValue, ABI_VERSION, RUNTIME_VERSION,
+    hash_bytes, programs_differential_gate, replay_recorded_execution, Deploy, Executor,
+    HashAlgorithm, Lifecycle, LifecycleRefusal, ProgramId, RecordedExecution, ReplayRefusal,
+    UpgradePolicy, ValidationLimits, ValidationRefusal, WasmEngine, WasmValue, ABI_VERSION,
+    RUNTIME_VERSION,
 };
 
 #[test]
@@ -149,9 +150,11 @@ fn program_id(byte: u8) -> ProgramId {
 }
 
 fn deploy_activity(byte: u8, wasm: Vec<u8>) -> Deploy {
+    let code_hash = hash_bytes(HashAlgorithm::Sha256, &wasm)
+        .unwrap_or_else(|error| panic!("program code hash refused: {error}"));
     Deploy {
         program: program_id(byte),
-        code_hash: [byte; 32],
+        code_hash,
         wasm,
         abi_version: ABI_VERSION,
         upgrade_policy: UpgradePolicy::Immutable,

@@ -3,6 +3,8 @@
 use core::fmt::{self, Display};
 use std::collections::BTreeMap;
 
+use sha2::{Digest, Sha256};
+
 use crate::{
     ExecutionError, ExecutionRecord, Executor, ProgramId, ValidationRefusal, WasmEngine,
     ABI_VERSION,
@@ -79,6 +81,10 @@ pub enum LifecycleRefusal {
     AlreadyDeployed,
     Immutable,
     InvalidAuthority,
+    CodeHashMismatch {
+        declared: CodeHash,
+        computed: CodeHash,
+    },
     IncompatibleAbi { requested: u16, supported: u16 },
     Validation(ValidationRefusal),
     Migration(ExecutionError),
@@ -93,6 +99,9 @@ impl Display for LifecycleRefusal {
             Self::AlreadyDeployed => write!(formatter, "program already deployed"),
             Self::Immutable => write!(formatter, "program is immutable"),
             Self::InvalidAuthority => write!(formatter, "upgrade authority does not match"),
+            Self::CodeHashMismatch { .. } => {
+                formatter.write_str("declared program code hash does not match exact WASM bytes")
+            }
             Self::IncompatibleAbi {
                 requested,
                 supported,
@@ -155,10 +164,17 @@ impl Lifecycle {
         if self.programs.contains_key(&activity.program) {
             return Err(LifecycleRefusal::AlreadyDeployed);
         }
+        if matches!(activity.upgrade_policy, UpgradePolicy::Authority([0; 32])) {
+            return Err(LifecycleRefusal::InvalidAuthority);
+        }
         Self::check_abi(activity.abi_version)?;
         if let Err(refusal) = self.engine.validate(&activity.wasm) {
             self.retain(&activity, &refusal.to_string());
             return Err(LifecycleRefusal::Validation(refusal));
+        }
+        if let Err(refusal) = verify_code_hash(activity.code_hash, &activity.wasm) {
+            self.retain(&activity, &refusal.to_string());
+            return Err(refusal);
         }
         let version = ProgramVersion {
             code_hash: activity.code_hash,
@@ -188,6 +204,9 @@ impl Lifecycle {
     /// Returns a typed refusal without changing the current program version.
     pub fn upgrade(&mut self, activity: Upgrade) -> Result<DeploymentReceipt, LifecycleRefusal> {
         Self::check_abi(activity.abi_version)?;
+        if activity.authority == [0; 32] {
+            return Err(LifecycleRefusal::InvalidAuthority);
+        }
         let record = self
             .programs
             .get(&activity.program)
@@ -206,6 +225,10 @@ impl Lifecycle {
                 return Err(LifecycleRefusal::Validation(refusal));
             }
         };
+        if let Err(refusal) = verify_code_hash(activity.code_hash, &activity.wasm) {
+            self.retain_upgrade(&activity, &refusal.to_string());
+            return Err(refusal);
+        }
         let migration = match &activity.migration {
             Some(migration) => match self.executor.execute(&validated, &migration.export, &[]) {
                 Ok(record) => Some(record),
@@ -308,4 +331,12 @@ impl Lifecycle {
             refusal: refusal.to_string(),
         });
     }
+}
+
+fn verify_code_hash(declared: CodeHash, wasm: &[u8]) -> Result<(), LifecycleRefusal> {
+    let computed: CodeHash = Sha256::digest(wasm).into();
+    if declared != computed {
+        return Err(LifecycleRefusal::CodeHashMismatch { declared, computed });
+    }
+    Ok(())
 }

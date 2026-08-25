@@ -262,6 +262,14 @@ observed = "do_5 asks for deploy, call, upgrade and migration exercised end to e
 assumption = "Per phase rules the added Rust test was written but not compiled or run. Human qualification will run make programs-test (Rust workspace tests plus the C real-node lifecycle test) to confirm the full deploy/call/upgrade/migration path passes."
 severity = "note"
 
+[observation.20.1.3]
+task = "20.1"
+file = "programs/crates/layerx-programs-runtime/src/lifecycle.rs, programs/crates/layerx-programs-runtime/tests/lifecycle.rs, programs/crates/layerx-programs-runtime/tests/replay.rs"
+symbol = "Lifecycle::deploy, Lifecycle::upgrade, LifecycleRefusal::CodeHashMismatch"
+observed = "Post-implementation review found that the Rust lifecycle validated exact WASM bytes but installed and receipted the caller-declared code hash without recomputing it, and admitted an all-zero upgrade authority. The C Programs lifecycle already defines the artifact identifier as raw SHA-256 of the exact WASM bytes. The repair applies that same digest before any deploy or upgrade mutation, returns the declared and computed values in a typed mismatch refusal, retains mismatched artifacts only for diagnosis, leaves version history unchanged on refusal, and rejects zero authority both as a deployment policy and upgrade witness."
+assumption = "Human qualification must run lifecycle and replay suites against matching, mismatching and retained artifacts, prove source verification and registry histories consume the computed digest, and exercise zero-authority refusal across Rust and C ingress. No build or test result is asserted by this source repair."
+severity = "post-implementation-repair"
+
 [observation.13.6.1]
 task = "13.6"
 file = "human/crates/layerx-human-service/src/server/backend.rs"
