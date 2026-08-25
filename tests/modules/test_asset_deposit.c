@@ -2,7 +2,50 @@
 #include "layerx/lxp_kernel.h"
 #include "layerx/lxp_receipt.h"
 
+#include <openssl/evp.h>
 #include <string.h>
+
+static int root_register(
+    lx_checkpoint_registry **registry, const lx_deposit_proof *proof,
+    const uint8_t deposit_root[32])
+{
+    static const uint8_t private_key[32] = {9U};
+    lx_paxeer_deposit_root_registration registration;
+    uint8_t public_key[32];
+    uint8_t message[192];
+    size_t public_key_length = 32U;
+    size_t message_length;
+    size_t signature_length = 64U;
+    EVP_PKEY *key = EVP_PKEY_new_raw_private_key(
+        EVP_PKEY_ED25519, NULL, private_key, 32U);
+    EVP_MD_CTX *context = EVP_MD_CTX_new();
+    int ok = key != NULL && context != NULL &&
+        EVP_PKEY_get_raw_public_key(
+            key, public_key, &public_key_length) == 1 &&
+        public_key_length == 32U;
+    (void)memset(&registration, 0, sizeof(registration));
+    (void)memcpy(registration.checkpoint_id, proof->checkpoint_id, 32U);
+    registration.checkpoint_state_root[0] = 3U;
+    (void)memcpy(registration.deposit_root, deposit_root, 32U);
+    (void)memcpy(registration.custody_reference,
+                 proof->custody_reference, 32U);
+    registration.network_id = proof->network_id;
+    registration.protocol_version = proof->protocol_version;
+    ok = ok && lx_paxeer_deposit_root_message(
+        &registration, message, sizeof(message), &message_length) == LXP_OK &&
+        EVP_DigestSignInit(context, NULL, NULL, NULL, key) == 1 &&
+        EVP_DigestSign(context, registration.signature, &signature_length,
+                       message, message_length) == 1 &&
+        signature_length == 64U &&
+        lx_checkpoint_registry_create(
+            public_key, proof->network_id, proof->protocol_version,
+            registry) == LXP_OK &&
+        lx_checkpoint_registry_register_deposit_root(
+            *registry, &registration) == LXP_OK;
+    EVP_MD_CTX_free(context);
+    EVP_PKEY_free(key);
+    return ok ? 0 : 1;
+}
 
 static lxp_result apply_capability(lxp_kernel *kernel,
                                    const lxp_transfer_set *set,
@@ -28,7 +71,7 @@ int main(void)
     lx_account *agent;
     const char *reserve_name = "system:paxeer-reserve";
     const char *agent_name = "agent:did:key:a:main";
-    lx_checkpoint_registry checkpoints;
+    lx_checkpoint_registry *checkpoints = NULL;
     lx_deposit_nullifier_store nullifiers;
     lx_deposit_proof proof;
     lx_asset_transfer_request request;
@@ -48,8 +91,8 @@ int main(void)
     (void)memcpy(asset.symbol, "A", 2U);
     asset.symbol_length = 1U;
     asset.custody_kind = LX_ASSET_CUSTODY_PAXEER;
-    asset.custody_reference[0] = 1U;
-    asset.custody_reference_length = 1U;
+    asset.custody_reference[0] = 5U;
+    asset.custody_reference_length = 32U;
     if (lx_asset_registry_init(&assets, 0U) != LXP_OK ||
         lx_asset_register(&assets, &asset, 0U, (lxp_u128){ 0U, 0U }) != LXP_OK ||
         lx_account_registry_init(&accounts) != LXP_OK ||
@@ -70,25 +113,21 @@ int main(void)
         lxp_arena_init(&arena, arena_bytes, sizeof(arena_bytes)) != LXP_OK ||
         lxp_module_ctx_init(&ctx, &kernel, LXP_MODULE_ASSET, 10U, 0U, 1U,
                             1000U, &arena, true) != LXP_OK) return 1;
-    (void)memset(&checkpoints, 0, sizeof(checkpoints));
-    checkpoints.count = 1U;
-    checkpoints.checkpoints[0].checkpoint_id[0] = 2U;
-    checkpoints.checkpoints[0].state_root[0] = 3U;
-    checkpoints.checkpoints[0].finalized = true;
     (void)memset(&proof, 0, sizeof(proof));
     proof.deposit_id[0] = 4U;
     proof.custody_reference[0] = 5U;
     (void)memcpy(proof.asset_id, asset.asset_id, 32U);
     proof.amount = (lxp_u128){ 0U, 25U };
-    (void)memcpy(proof.checkpoint_id,
-                 checkpoints.checkpoints[0].checkpoint_id, 32U);
-    (void)memcpy(proof.checkpoint_state_root,
-                 checkpoints.checkpoints[0].state_root, 32U);
+    proof.checkpoint_id[0] = 2U;
     proof.network_id = 7U;
     proof.protocol_version = LXP_PROTOCOL_VERSION;
-    proof.finalized = true;
-    if (lx_deposit_proof_commitment(&proof, proof.commitment) != LXP_OK)
-        return 1;
+    proof.inclusion_proof.leaf_count = 1U;
+    {
+        uint8_t deposit_root[32];
+        if (lx_paxeer_deposit_leaf_hash(&proof, deposit_root) != LXP_OK ||
+            root_register(&checkpoints, &proof, deposit_root) != 0)
+            return 1;
+    }
     (void)memset(&nullifiers, 0, sizeof(nullifiers));
     (void)memset(&request, 0, sizeof(request));
     request.from = reserve;
@@ -98,25 +137,20 @@ int main(void)
     request.context.assets = &asset_state;
     request.context.asset_count = 1U;
     request.context.protocol_system_capability = true;
-    proof.finalized = false;
-    if (lx_asset_deposit_credit(&ctx, &request, &proof, &checkpoints, &nullifiers,
-                                7U, LXP_PROTOCOL_VERSION, &receipt) !=
-            LXP_ERR_DEPOSIT_PROOF_NOT_FINAL || reserve->balance.lo != 100U ||
-        agent->balance.lo != 0U) return 1;
-    proof.finalized = true;
-    if (lx_asset_deposit_credit(&ctx, &request, &proof, &checkpoints, &nullifiers,
+    if (lx_asset_deposit_credit(&ctx, &request, &proof, checkpoints, &nullifiers,
                                 8U, LXP_PROTOCOL_VERSION, &receipt) !=
             LXP_ERR_DEPOSIT_PROOF_NOT_FINAL || reserve->balance.lo != 100U)
         return 1;
-    if (lx_asset_deposit_credit(&ctx, &request, &proof, &checkpoints, &nullifiers,
+    if (lx_asset_deposit_credit(&ctx, &request, &proof, checkpoints, &nullifiers,
                                 7U, LXP_PROTOCOL_VERSION, &receipt) != LXP_OK ||
         reserve->balance.lo != 75U || agent->balance.lo != 25U ||
         lx_asset_total_units(&assets, &accounts, asset.asset_id, &total) != LXP_OK ||
         total.lo != 100U) return 1;
-    if (lx_asset_deposit_credit(&ctx, &request, &proof, &checkpoints, &nullifiers,
+    if (lx_asset_deposit_credit(&ctx, &request, &proof, checkpoints, &nullifiers,
                                 7U, LXP_PROTOCOL_VERSION, &receipt) !=
             LXP_ERR_DEPOSIT_ALREADY_CREDITED || reserve->balance.lo != 75U ||
         agent->balance.lo != 25U) return 1;
-    if (lxp_state_store_destroy(&state) != LXP_OK) return 1;
+    if (lx_checkpoint_registry_destroy(&checkpoints) != LXP_OK ||
+        lxp_state_store_destroy(&state) != LXP_OK) return 1;
     return 0;
 }

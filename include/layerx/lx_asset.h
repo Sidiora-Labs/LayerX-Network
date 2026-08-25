@@ -2,6 +2,7 @@
 #define LAYERX_LX_ASSET_H
 
 #include "layerx/lxp_module.h"
+#include "layerx/lxp_merkle.h"
 #include "layerx/lxp_transfer.h"
 
 #include <stdbool.h>
@@ -64,13 +65,24 @@ enum {
 typedef struct lx_finalized_checkpoint {
     uint8_t checkpoint_id[32];
     uint8_t state_root[32];
+    uint8_t deposit_root[32];
+    uint8_t custody_reference[32];
+    uint32_t network_id;
+    uint16_t protocol_version;
     bool finalized;
 } lx_finalized_checkpoint;
 
-typedef struct lx_checkpoint_registry {
-    lx_finalized_checkpoint checkpoints[LX_CHECKPOINT_CAPACITY];
-    size_t count;
-} lx_checkpoint_registry;
+typedef struct lx_checkpoint_registry lx_checkpoint_registry;
+
+typedef struct lx_paxeer_deposit_root_registration {
+    uint8_t checkpoint_id[32];
+    uint8_t checkpoint_state_root[32];
+    uint8_t deposit_root[32];
+    uint8_t custody_reference[32];
+    uint32_t network_id;
+    uint16_t protocol_version;
+    uint8_t signature[64];
+} lx_paxeer_deposit_root_registration;
 
 typedef struct lx_deposit_proof {
     uint8_t deposit_id[32];
@@ -78,11 +90,9 @@ typedef struct lx_deposit_proof {
     uint8_t asset_id[32];
     lxp_u128 amount;
     uint8_t checkpoint_id[32];
-    uint8_t checkpoint_state_root[32];
+    lxp_merkle_proof inclusion_proof;
     uint32_t network_id;
     uint16_t protocol_version;
-    bool finalized;
-    uint8_t commitment[32];
 } lx_deposit_proof;
 
 typedef struct lx_deposit_nullifier_store {
@@ -190,8 +200,20 @@ lxp_result lx_asset_send_execute(lxp_module_ctx *ctx,
 lxp_result lx_asset_receive_execute(lxp_module_ctx *ctx,
                                     const lx_asset_transfer_request *request,
                                     lxp_receipt *receipt);
-lxp_result lx_deposit_proof_commitment(const lx_deposit_proof *proof,
-                                       uint8_t commitment[32]);
+lxp_result lx_paxeer_deposit_leaf_hash(const lx_deposit_proof *proof,
+                                       uint8_t leaf_hash[32]);
+lxp_result lx_paxeer_deposit_root_message(
+    const lx_paxeer_deposit_root_registration *registration,
+    uint8_t *message, size_t capacity, size_t *message_length);
+lxp_result lx_checkpoint_registry_create(
+    const uint8_t paxeer_checkpoint_authority[32],
+    uint32_t network_id, uint16_t protocol_version,
+    lx_checkpoint_registry **registry);
+lxp_result lx_checkpoint_registry_destroy(
+    lx_checkpoint_registry **registry);
+lxp_result lx_checkpoint_registry_register_deposit_root(
+    lx_checkpoint_registry *registry,
+    const lx_paxeer_deposit_root_registration *registration);
 lxp_result lx_bridge_verify_deposit(const lx_deposit_proof *proof,
                                     const lx_checkpoint_registry *checkpoints,
                                     uint32_t network_id,

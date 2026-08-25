@@ -34,8 +34,7 @@ lxp_result lxp_deposit_proof_verify(const lx_deposit_proof *proof,
 {
     if (proof == NULL || checkpoints == NULL ||
         lxp_ct_is_zero(proof->asset_id, 32U) ||
-        lxp_ct_is_zero(proof->checkpoint_id, 32U) ||
-        lxp_ct_is_zero(proof->checkpoint_state_root, 32U))
+        lxp_ct_is_zero(proof->checkpoint_id, 32U))
         return LXP_ERR_DEPOSIT_PROOF_NOT_FINAL;
     return lx_bridge_verify_deposit(proof, checkpoints, network_id,
                                     protocol_version);
