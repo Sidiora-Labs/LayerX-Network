@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useId, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { navStructure } from './nav'
 
@@ -17,6 +17,8 @@ export function Search() {
   const [selectedIndex, setSelectedIndex] = useState(0)
   const router = useRouter()
   const inputRef = useRef<HTMLInputElement>(null)
+  const dialogTitleId = useId()
+  const resultsId = useId()
 
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
@@ -70,6 +72,7 @@ export function Search() {
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (results.length === 0) return
     if (e.key === 'ArrowDown') {
       e.preventDefault()
       setSelectedIndex((i) => (i + 1) % results.length)
@@ -84,6 +87,8 @@ export function Search() {
   if (!isOpen) {
     return (
       <button
+        type="button"
+        aria-haspopup="dialog"
         onClick={() => setIsOpen(true)}
         className="flex items-center gap-2 px-3 py-1.5 bg-surface-high rounded-md border border-outline-variant hover:border-outline transition-all text-sm text-on-surface-variant"
       >
@@ -99,9 +104,20 @@ export function Search() {
 
   return (
     <>
-      <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm" onClick={() => setIsOpen(false)} />
-      <div className="fixed inset-x-0 top-20 z-50 mx-auto max-w-2xl px-4">
+      <button
+        type="button"
+        aria-label="Close documentation search"
+        className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm"
+        onClick={() => setIsOpen(false)}
+      />
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={dialogTitleId}
+        className="fixed inset-x-0 top-20 z-50 mx-auto max-w-2xl px-4"
+      >
         <div className="bg-surface-high rounded-xl border border-outline shadow-3 overflow-hidden">
+          <h2 id={dialogTitleId} className="sr-only">Search Paxeer documentation</h2>
           <div className="flex items-center gap-3 px-4 py-3 border-b border-outline-variant">
             <svg className="w-5 h-5 text-on-surface-variant" viewBox="0 0 24 24" fill="none">
               <circle cx="11" cy="11" r="7" stroke="currentColor" strokeWidth="1.7" />
@@ -113,11 +129,18 @@ export function Search() {
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               onKeyDown={handleKeyDown}
+              role="combobox"
+              aria-autocomplete="list"
+              aria-controls={resultsId}
+              aria-expanded={results.length > 0}
+              aria-activedescendant={results[selectedIndex] ? `${resultsId}-${selectedIndex}` : undefined}
               placeholder="Search documentation..."
               className="flex-1 bg-transparent border-none outline-none text-on-surface placeholder:text-on-surface-variant"
             />
             {query && (
               <button
+                type="button"
+                aria-label="Clear search"
                 onClick={() => setQuery('')}
                 className="text-on-surface-variant hover:text-on-surface"
               >
@@ -128,9 +151,13 @@ export function Search() {
             )}
           </div>
           {results.length > 0 ? (
-            <div className="max-h-96 overflow-y-auto">
+            <div id={resultsId} role="listbox" className="max-h-96 overflow-y-auto">
               {results.map((result, index) => (
                 <button
+                  type="button"
+                  id={`${resultsId}-${index}`}
+                  role="option"
+                  aria-selected={index === selectedIndex}
                   key={result.href}
                   onClick={() => handleSelect(result.href)}
                   className={`w-full text-left px-4 py-3 border-b border-outline-variant last:border-b-0 transition-colors ${

@@ -1294,6 +1294,14 @@ observed = "The task initially declared the required Make variables and targets 
 assumption = "Qualification must inspect and invoke the Make targets from a clean checkout. Removing unsupported graph symbols does not constitute evidence that the targets parse, execute or pass."
 severity = "tooling-boundary"
 
+[observation.37.1.3]
+task = "37.1"
+file = "paxeer-network/paxeer-docs/src/components/DocsLayout.tsx, paxeer-network/paxeer-docs/src/components/Sidebar.tsx, paxeer-network/paxeer-docs/src/components/Search.tsx, paxeer-network/paxeer-docs/src/components/nav.ts, paxeer-network/paxeer-docs/src/app/page.tsx, paxeer-network/paxeer-docs/src/app/engine/page.tsx, paxeer-network/paxeer-docs/package.json"
+symbol = "DocsLayout, Sidebar, Search, pageTitleForPath"
+observed = "Post-implementation review found that the moved Paxeer documentation site retained a fixed 280-pixel desktop sidebar and fixed multi-column grids on mobile, omitted Copy for agent from every page except installation, allowed empty search results to enter modulo-zero keyboard selection, and described EVM chain ID 125 as unconditional rather than selected by the hyperpax_125-1 mapping. The repair adds responsive off-canvas navigation and grids, canonical pathname metadata for every copy surface without duplicate article headings, guarded accessible search semantics, accurate chain-ID/fallback wording, coherent pinned Tailwind/PostCSS declarations, and removes an unreferenced placeholder inventory file."
+assumption = "Human qualification must run the package build and browser journeys at mobile and desktop widths, verify focus/keyboard behavior and clipboard output on all 28 pages, and confirm the rendered operator wording against the live chain configuration. No build, browser or visual result is asserted by this source repair."
+severity = "post-implementation-repair"
+
 [observation.37.2.1]
 task = "37.2"
 file = ".github/workflows/paxeer-hpx-registry.yml, paxeer-network/hpx/hosting/deploy.sh"

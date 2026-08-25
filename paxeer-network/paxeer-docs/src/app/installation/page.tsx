@@ -3,7 +3,10 @@ import Link from 'next/link'
 
 export default function Installation() {
   return (
-    <DocsLayout pageTitle="Installation & Build">
+    <DocsLayout>
+      <div className="page-header">
+        <h1 className="page-title">Installation &amp; Build</h1>
+      </div>
       <p className="text-on-surface-variant mb-6">
         How to build and install the paxd node binary.
       </p>

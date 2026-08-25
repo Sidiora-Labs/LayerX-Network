@@ -185,7 +185,7 @@ func NewEvmoneExecutor(evmoneVM *evmc.VM, blockCtx vm.BlockContext,
       <h2>Chain ID</h2>
 
       <p>
-        Paxeer uses <strong>EVM chain ID 125</strong>. This is hardcoded in the chain configuration and must match the <code>chainId</code> field in EVM transactions for replay protection.
+        The chain configuration maps the Cosmos identifier <code>hyperpax_125-1</code> to <strong>EVM chain ID 125</strong>. Transactions on that network must use chain ID 125 for EIP-155 replay protection. Unknown Cosmos identifiers use the separate development fallback chain ID and must not be treated as Paxeer mainnet.
       </p>
 
       <h2>Utilities</h2>

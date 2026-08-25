@@ -64,3 +64,9 @@ export const navStructure = [
     ]
   },
 ]
+
+export function pageTitleForPath(pathname: string): string {
+  return navStructure
+    .flatMap((section) => section.items)
+    .find((item) => item.href === pathname)?.title ?? 'Paxeer Network'
+}

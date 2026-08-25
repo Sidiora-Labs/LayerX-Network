@@ -38,7 +38,7 @@ export default function Home() {
       </div>
 
       <div className="max-w-[1200px] mx-auto px-6 py-16">
-        <div className="grid grid-cols-4 gap-3 mb-16">
+        <div className="grid grid-cols-1 gap-3 mb-16 sm:grid-cols-2 lg:grid-cols-4">
           <div className="bg-surface-low rounded-lg p-6">
             <div className="text-xs text-on-surface-variant mb-3 tracking-wide">Chain ID</div>
             <div className="font-mono text-base font-medium">125</div>
@@ -70,7 +70,7 @@ export default function Home() {
           </div>
         </div>
 
-        <div className="grid grid-cols-3 gap-4 mb-16">
+        <div className="grid grid-cols-1 gap-4 mb-16 md:grid-cols-3">
           <div className="bg-surface-low rounded-lg p-6">
             <div className="w-12 h-12 rounded-md bg-surface-high text-ink-text flex items-center justify-center mb-6">
               <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none"><path d="M5 5.5h14v13H5z" stroke="currentColor" strokeWidth="1.7"/><path d="m8 9 2 2-2 2M12.5 14H16" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"/></svg>
@@ -118,7 +118,7 @@ export default function Home() {
 
         <div>
           <h2 className="text-3xl font-normal tracking-[-0.02em] mb-6">Start here</h2>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <Link href="/installation" className="group bg-surface-high rounded-lg p-5 border border-outline-variant hover:border-ink-text transition-all duration-150 hover:translate-y-[-2px]">
               <div className="text-xs text-on-surface-variant uppercase tracking-wider mb-2">Getting Started</div>
               <div className="text-lg font-medium">Installation & Build →</div>
