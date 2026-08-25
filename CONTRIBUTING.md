@@ -45,7 +45,9 @@ security boundaries to satisfy tests.
 
 ## Implementation rules
 
-- Use C17 for the protocol runtime and Solidity `0.8.27` for Paxeer contracts.
+- Use C17 for the LayerX protocol runtime and Solidity `0.8.27` for LayerX settlement contracts.
+- Paxeer Network is a separate Go module under `paxeer-network/` with its own Makefile and CI (`make paxeer-build`, `make paxeer-lint`, `make paxeer-test`, `make paxeer-ci`).
+- Programs is a Rust workspace under `programs/` for the programmable LayerX runtime.
 - Preserve canonical byte encodings and result-code assignments. Both are
   protocol interfaces, not implementation details.
 - Use checked fixed-width integer arithmetic for every consensus-critical
@@ -68,6 +70,13 @@ make public-audit
 make build
 make test
 make test-contracts
+```
+
+Paxeer Network and the monorepo have separate optional gates that do not replace LayerX qualification:
+
+```sh
+make paxeer-ci       # Paxeer-specific evidence
+make monorepo-ci     # Cross-subsystem integrity
 ```
 
 Arithmetic, replay, recovery, settlement, and cross-architecture changes have

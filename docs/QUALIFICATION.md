@@ -79,3 +79,14 @@ Live contract deployment, validator mutation, custody migration, or a real-value
 canary requires an explicit owner-approved runbook. Repository tests may prepare
 that evidence but cannot satisfy or authorize the live gate by themselves.
 
+## Paxeer qualification
+
+Paxeer Network has its own qualification gates under `paxeer-network/`:
+
+```sh
+make paxeer-ci
+make monorepo-ci
+```
+
+Paxeer evidence is a separate gate from LayerX qualification. A passing Paxeer build does not imply LayerX qualification, and vice versa. Each subsystem qualifies independently against its own specification, and co-location in this monorepo grants neither system new protocol or deployment authority over the other.
+
