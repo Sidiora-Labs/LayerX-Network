@@ -2,7 +2,9 @@ use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{ErrorKind, Write};
 use std::path::PathBuf;
-use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _, PermissionsExt as _};
+use std::os::unix::fs::{
+    DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _,
+};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -148,6 +150,7 @@ impl Journal {
             .map_err(|_| MigrationError::Configuration)?;
         if !key_metadata.file_type().is_file()
             || key_metadata.permissions().mode() & 0o077 != 0
+            || !canonical_direct_path(&config.authentication_key_file)
         {
             return Err(MigrationError::Configuration);
         }
@@ -170,6 +173,8 @@ impl Journal {
             .map_err(|_| MigrationError::Configuration)?;
         if !directory_metadata.file_type().is_dir()
             || directory_metadata.permissions().mode() & 0o077 != 0
+            || directory_metadata.uid() != key_metadata.uid()
+            || !canonical_direct_path(&directory)
         {
             return Err(MigrationError::Configuration);
         }
@@ -446,6 +451,14 @@ impl Journal {
     }
 
     fn load(&self) -> Result<State, MigrationError> {
+        let directory_metadata = fs::symlink_metadata(&self.directory)
+            .map_err(|_| MigrationError::CheckpointIntegrity)?;
+        if !private_directory(&directory_metadata)
+            || !canonical_direct_path(&self.directory)
+        {
+            return Err(MigrationError::CheckpointIntegrity);
+        }
+        let owner = directory_metadata.uid();
         let mut records = Vec::new();
         let mut seals = Vec::new();
         for entry in
@@ -457,11 +470,7 @@ impl Journal {
                 .into_string()
                 .map_err(|_| MigrationError::CheckpointIntegrity)?;
             if let Some(sequence) = seal_sequence(&name) {
-                if !entry
-                    .file_type()
-                    .map_err(|_| MigrationError::CheckpointIntegrity)?
-                    .is_file()
-                {
+                if !private_file(&entry, owner)? {
                     return Err(MigrationError::CheckpointIntegrity);
                 }
                 seals.push((sequence, entry.path()));
@@ -473,11 +482,7 @@ impl Journal {
                 }
                 return Err(MigrationError::CheckpointIntegrity);
             };
-            if !entry
-                .file_type()
-                .map_err(|_| MigrationError::CheckpointIntegrity)?
-                .is_file()
-            {
+            if !private_file(&entry, owner)? {
                 return Err(MigrationError::CheckpointIntegrity);
             }
             records.push((sequence, entry.path()));
@@ -643,6 +648,28 @@ impl Journal {
     fn seal_path(&self, sequence: u64) -> PathBuf {
         self.directory.join(format!("{sequence:020}.seal"))
     }
+}
+
+fn private_directory(metadata: &fs::Metadata) -> bool {
+    metadata.file_type().is_dir() && metadata.permissions().mode() & 0o077 == 0
+}
+
+fn canonical_direct_path(path: &std::path::Path) -> bool {
+    fs::canonicalize(path).is_ok_and(|canonical| canonical == path)
+}
+
+fn private_file(entry: &fs::DirEntry, owner: u32) -> Result<bool, MigrationError> {
+    if !entry
+        .file_type()
+        .map_err(|_| MigrationError::CheckpointIntegrity)?
+        .is_file()
+    {
+        return Ok(false);
+    }
+    let metadata = entry
+        .metadata()
+        .map_err(|_| MigrationError::CheckpointIntegrity)?;
+    Ok(metadata.uid() == owner && metadata.permissions().mode() & 0o077 == 0)
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -836,4 +863,96 @@ fn valid_key(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b':' | b'.'))
+}
+
+#[cfg(test)]
+mod storage_tests {
+    use super::*;
+    use std::os::unix::fs::symlink;
+
+    struct Paths {
+        root: PathBuf,
+        alias: PathBuf,
+    }
+
+    impl Drop for Paths {
+        fn drop(&mut self) {
+            let _ = fs::remove_file(&self.alias);
+            let _ = fs::remove_dir_all(&self.root);
+        }
+    }
+
+    fn paths() -> Paths {
+        let suffix = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "layerx-migration-storage-{}-{suffix}",
+            std::process::id()
+        ));
+        let alias = root.with_extension("link");
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&root)
+            .expect("private journal fixture directory");
+        symlink(&root, &alias).expect("journal fixture ancestor symlink");
+        Paths { root, alias }
+    }
+
+    #[test]
+    fn canonical_path_refuses_symlinked_ancestor() {
+        let paths = paths();
+        let direct = paths.root.join("namespace");
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&direct)
+            .expect("private namespace");
+        assert!(canonical_direct_path(&direct));
+        assert!(!canonical_direct_path(&paths.alias.join("namespace")));
+    }
+
+    #[test]
+    fn replay_file_must_be_private_and_owned_with_namespace() {
+        let paths = paths();
+        let file_path = paths.root.join("00000000000000000001.record");
+        OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .mode(0o600)
+            .open(&file_path)
+            .expect("private record");
+        let owner = fs::metadata(&paths.root).expect("namespace metadata").uid();
+        let entry = fs::read_dir(&paths.root)
+            .expect("namespace entries")
+            .next()
+            .expect("record entry")
+            .expect("record entry metadata");
+        assert_eq!(private_file(&entry, owner), Ok(true));
+        assert_eq!(private_file(&entry, owner.wrapping_add(1)), Ok(false));
+        fs::set_permissions(&file_path, fs::Permissions::from_mode(0o640))
+            .expect("make record group-readable");
+        assert_eq!(private_file(&entry, owner), Ok(false));
+    }
+
+    #[test]
+    fn replay_file_refuses_symlink_even_when_target_is_private() {
+        let paths = paths();
+        let target = paths.root.join("private-target");
+        OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .mode(0o600)
+            .open(&target)
+            .expect("private symlink target");
+        let link = paths.root.join("00000000000000000001.seal");
+        symlink(&target, &link).expect("record symlink");
+        let owner = fs::metadata(&paths.root).expect("namespace metadata").uid();
+        let entry = fs::read_dir(&paths.root)
+            .expect("namespace entries")
+            .find_map(|entry| {
+                let entry = entry.ok()?;
+                (entry.file_name().to_str() == Some("00000000000000000001.seal"))
+                    .then_some(entry)
+            })
+            .expect("seal symlink entry");
+        assert_eq!(private_file(&entry, owner), Ok(false));
+    }
 }

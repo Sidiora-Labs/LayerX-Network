@@ -606,7 +606,6 @@ struct Ap2Request {
     checkout_presentation: String,
     payment_presentation: String,
     nonce: String,
-    currency_minor_exponent: u8,
     #[serde(default)]
     activity: String,
 }
@@ -626,34 +625,46 @@ fn ap2(
     let resolver = Ap2Resolver {
         keys: &config.manifest.ap2_keys,
     };
-    let binding = match config
-        .manifest
-        .ap2_assets
-        .iter()
-        .find(|binding| binding.principal_digest == record.principal_digest)
+    if parse_hex32(&record.principal_digest).is_err()
+        || record.principal_digest != record.principal_digest.to_ascii_lowercase()
     {
-        Some(value) => value,
-        None => return Dispatch::error(400, "refused", "asset_binding_unavailable"),
-    };
+        return Dispatch::error(503, "pending", "authenticated_principal_invalid");
+    }
     let server_now = match now() {
         Ok(value) => value,
         Err(_) => return Dispatch::error(503, "pending", "clock_unavailable"),
     };
-    let context = VerificationContext {
-        now: server_now,
-        clock_skew_seconds: 0,
-        expected_audience: &binding.audience,
-        expected_nonce: &body.nonce,
-        currency_minor_exponent: body.currency_minor_exponent,
-        usage: None,
-    };
-    let verified = match MandateVerifier::new(&resolver).verify(
-        &body.checkout_presentation,
-        &body.payment_presentation,
-        &context,
-    ) {
-        Ok(value) => value,
-        Err(_) => return Dispatch::error(400, "refused", "mandate_verification_refused"),
+    let mut matched = None;
+    for binding in config
+        .manifest
+        .ap2_assets
+        .iter()
+        .filter(|binding| binding.principal_digest == record.principal_digest)
+    {
+        let context = VerificationContext {
+            now: server_now,
+            clock_skew_seconds: 0,
+            expected_audience: &binding.audience,
+            expected_nonce: &body.nonce,
+            currency_minor_exponent: binding.minor_unit_exponent,
+            usage: None,
+        };
+        let Ok(verified) = MandateVerifier::new(&resolver).verify(
+            &body.checkout_presentation,
+            &body.payment_presentation,
+            &context,
+        ) else {
+            continue;
+        };
+        if verified.amount().currency() != binding.currency.as_str() {
+            continue;
+        }
+        if matched.replace((binding, verified)).is_some() {
+            return Dispatch::error(400, "refused", "asset_binding_ambiguous");
+        }
+    }
+    let Some((binding, verified)) = matched else {
+        return Dispatch::error(400, "refused", "mandate_verification_refused");
     };
     if !execute {
         let mode = match verified.mode() {
@@ -676,16 +687,6 @@ fn ap2(
     }
     if verified.amount().currency().len() != 3 || body.activity.is_empty() {
         return Dispatch::error(400, "refused", "typed_intent_required");
-    }
-    let binding = match config.manifest.ap2_assets.iter().find(|binding| {
-        binding.principal_digest == record.principal_digest
-            && binding.currency == verified.amount().currency()
-    }) {
-        Some(value) => value,
-        None => return Dispatch::error(400, "refused", "asset_binding_unavailable"),
-    };
-    if binding.minor_unit_exponent != body.currency_minor_exponent {
-        return Dispatch::error(400, "refused", "asset_binding_invalid");
     }
     let activity = match decode_hex(&body.activity, MAX_BODY) {
         Ok(value) => value,
@@ -2246,11 +2247,16 @@ mod tests {
             "checkout_presentation": "checkout",
             "payment_presentation": "payment",
             "nonce": "merchant-issued-nonce",
-            "currency_minor_exponent": 2,
             "activity": "00"
         });
         assert!(serde_json::from_value::<Ap2Request>(request.clone()).is_ok());
-        for field in ["now", "clock_skew_seconds", "audience", "activity_idempotency_key"] {
+        for field in [
+            "now",
+            "clock_skew_seconds",
+            "audience",
+            "currency_minor_exponent",
+            "activity_idempotency_key",
+        ] {
             request[field] = serde_json::json!(1);
             assert!(serde_json::from_value::<Ap2Request>(request.clone()).is_err());
             request.as_object_mut().expect("AP2 request is an object").remove(field);

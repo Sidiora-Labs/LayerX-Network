@@ -30,6 +30,7 @@ use zeroize::{Zeroize, Zeroizing};
 const MAX_IDEMPOTENCY_SECONDS: u64 = 2_592_000;
 const REQUIRED_ADAPTERS: [&str; 5] = ["x402", "ap2", "ucp", "visa-tap", "fiat"];
 const REQUIRED_TRANSPORTS: [&str; 3] = ["http", "mcp", "a2a"];
+const MAX_AP2_ASSET_BINDINGS: usize = 256;
 
 pub struct Config {
     pub listen: SocketAddr,
@@ -320,6 +321,7 @@ fn runtime_manifest(file: ManifestFile) -> Result<RuntimeManifest, String> {
     }
     if file.ap2_keys.is_empty()
         || file.ap2_assets.is_empty()
+        || file.ap2_assets.len() > MAX_AP2_ASSET_BINDINGS
         || file.visa_agents.is_empty()
         || file.visa_targets.is_empty()
         || file.fiat_providers.is_empty()
@@ -342,13 +344,13 @@ fn runtime_manifest(file: ManifestFile) -> Result<RuntimeManifest, String> {
         }
     }
     let mut ap2_asset_identities = BTreeSet::new();
-    let mut ap2_principal_audiences = BTreeMap::new();
     for binding in &file.ap2_assets {
         let atomic_units = binding
             .atomic_units_per_minor_unit
             .parse::<u128>()
             .map_err(|_| "AP2 asset binding declaration is invalid".to_owned())?;
         if parse_hex32(&binding.principal_digest).is_err()
+            || binding.principal_digest != binding.principal_digest.to_ascii_lowercase()
             || binding.audience.is_empty()
             || binding.audience.len() > 512
             || binding
@@ -369,12 +371,6 @@ fn runtime_manifest(file: ManifestFile) -> Result<RuntimeManifest, String> {
                 .insert((binding.principal_digest.as_str(), binding.currency.as_str()))
         {
             return Err("AP2 asset binding declaration is invalid".to_owned());
-        }
-        if ap2_principal_audiences
-            .insert(binding.principal_digest.as_str(), binding.audience.as_str())
-            .is_some_and(|audience| audience != binding.audience.as_str())
-        {
-            return Err("AP2 principal audience declaration is inconsistent".to_owned());
         }
     }
     let mut visa_key_ids = BTreeSet::new();
