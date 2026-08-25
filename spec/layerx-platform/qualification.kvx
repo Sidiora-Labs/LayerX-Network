@@ -1382,6 +1382,30 @@ observed = "Post-implementation review found the AssemblyScript binding accepted
 assumption = "Human qualification must compile the AssemblyScript SDK and safety module, compare its encodings with Rust and C vectors, and adversarially attempt post-construction identifier, amount and grant mutation before and after set insertion. No toolchain or byte-equivalence result is asserted by this source repair."
 severity = "post-implementation-repair"
 
+[observation.15.2.2]
+task = "15.2"
+file = "agent/sdk/typescript/src/production.ts, agent/sdk/typescript/src/verifier.ts, agent/sdk/typescript/test/integration.test.ts, platform/middleware/conformance/src/scenarios.ts"
+symbol = "SecretBytes.withBytes, verifyReceiptOutcome"
+observed = "Post-implementation review found that SecretBytes passed its stored credential array directly to callbacks, allowing a consumer to retain or mutate the credential, and receipt verification read caller-owned receipt and authority arrays across asynchronous cryptographic operations. The repair provides a zeroized callback-scoped copy and snapshots canonical receipt bytes plus every authorized-batch field before verification can yield, with source regressions for retained secret views and in-flight evidence mutation."
+assumption = "Human qualification must run the TypeScript SDK and platform conformance suites, exercise callback throws and all supported transports, and adversarially mutate every evidence and authority field during real WebCrypto operations. No build, cryptographic execution or passing test result is asserted by this source repair."
+severity = "post-implementation-repair"
+
+[observation.16.1.4]
+task = "16.1"
+file = "platform/middleware/seller/src/index.ts, platform/middleware/conformance/src/scenarios.ts"
+symbol = "VerifiedWebhookConsumer"
+observed = "Post-implementation review found the verified webhook consumer retained the caller's mutable key record and Uint8Array values, so code holding the configuration object could replace verification authority after consumer construction. The repair validates every configured key identifier and width, copies each public key into a frozen private record, and adds a source conformance scenario that mutates the caller's key after construction while requiring the original authority to remain effective."
+assumption = "Human qualification must run middleware conformance with real Ed25519 WebCrypto, exercise invalid and duplicate key identifiers, rotate authority only by constructing the declared replacement consumer, and prove no request can change a live consumer's key set. No build or passing conformance result is asserted by this source repair."
+severity = "post-implementation-repair"
+
+[observation.12.3.1]
+task = "12.3"
+file = "human/apps/web/src/journeys/custody/evidence.ts, human/apps/web/e2e/custody-evidence.test.ts, human/apps/web/package.json"
+symbol = "stageEvidenceRule, stageEvidenceBacked, presentedStageState"
+observed = "Post-implementation review found unknown custody stage copy keys inherited a receipt-verified default, allowing a newly introduced payout or finality stage to retain Done presentation without a stage-specific evidence contract. The repair removes the default authority rule: unknown stages are not evidence-backed and completed protocol state presents as still-checking until the web application explicitly recognizes the stage and its required evidence class."
+assumption = "Human qualification must run the Human component and custody journey suites, inject unknown stages carrying every verification level, and prove deposit, withdrawal and emergency-exit completion remains locked until the exact known final-stage evidence verifies. No browser, build or passing test result is asserted by this source repair."
+severity = "post-implementation-repair"
+
 [observation.30.2.1]
 task = "30.2"
 file = "programs/sdk/rust/src/transfer.rs, programs/sdk/rust/src/host.rs, programs/sdk/rust/src/abi.rs"

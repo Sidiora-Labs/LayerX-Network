@@ -363,7 +363,14 @@ export class VerifiedWebhookConsumer {
     if (Object.keys(config.publicKeys).length === 0) {
       throw new MiddlewareError("invalid-webhook");
     }
-    this.#keys = config.publicKeys;
+    this.#keys = Object.freeze(Object.fromEntries(
+      Object.entries(config.publicKeys).map(([keyId, publicKey]) => {
+        if (!identifier(keyId, 64) || publicKey.length !== 32) {
+          throw new MiddlewareError("invalid-webhook");
+        }
+        return [keyId, publicKey.slice()];
+      }),
+    ));
     this.#deliveries = config.deliveries;
     this.#maximumAgeMs = config.maximumAgeMs ?? 5 * 60 * 1000;
     this.#leaseMs = config.leaseMs ?? 60 * 1000;

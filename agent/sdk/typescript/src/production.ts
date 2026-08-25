@@ -222,7 +222,18 @@ export class SecretBytes {
     if (this.#destroyed) {
       throw new PlatformSdkError({ code: "invalid-argument", retry: "never" });
     }
-    return consumer(this.#bytes);
+    const scoped = this.#bytes.slice();
+    try {
+      const result = consumer(scoped);
+      if (result instanceof Promise) {
+        return result.finally(() => scoped.fill(0)) as T;
+      }
+      scoped.fill(0);
+      return result;
+    } catch (error) {
+      scoped.fill(0);
+      throw error;
+    }
   }
 
   public destroy(): void {

@@ -1,6 +1,7 @@
 import {
   ProductionClient,
   SecretBytes,
+  verifyReceipt,
   type ReceiptVerification,
 } from "@sidiora/layerx-sdk";
 import {
@@ -214,6 +215,27 @@ export async function runScenarios(): Promise<Suite> {
   const receipt = await buildSignedReceipt(sequencer, facts);
   const resolver = new FixedBatchResolver(receipt.authorizedBatch);
 
+  await suite.check("sdk: in-flight receipt verification snapshots evidence and authority", async () => {
+    const mutableReceipt = receipt.canonicalReceipt.slice();
+    const mutableAuthority = {
+      batchId: receipt.authorizedBatch.batchId.slice(),
+      asset: receipt.authorizedBatch.asset.slice(),
+      previousStateRoot: receipt.authorizedBatch.previousStateRoot.slice(),
+      resultingStateRoot: receipt.authorizedBatch.resultingStateRoot.slice(),
+      sequencerPublicKey: receipt.authorizedBatch.sequencerPublicKey.slice(),
+    };
+    const verification = verifyReceipt(mutableReceipt, mutableAuthority);
+    mutableReceipt.fill(0);
+    mutableAuthority.batchId.fill(0);
+    mutableAuthority.asset.fill(0);
+    mutableAuthority.previousStateRoot.fill(0);
+    mutableAuthority.resultingStateRoot.fill(0);
+    mutableAuthority.sequencerPublicKey.fill(0);
+    const result = await verification;
+    assert(result.level === "sequencer-signed", "caller mutation changed in-flight verification");
+    assert(result.canonicalBytes.some((byte) => byte !== 0), "verified evidence aliased caller bytes");
+  });
+
   await suite.check("seller: no payment header yields a 402 offer and never releases", async () => {
     const repository = new InMemoryFulfillmentRepository<string>();
     const seller = new SellerMiddleware<string>({
@@ -373,6 +395,26 @@ export async function runScenarios(): Promise<Suite> {
     });
     assert(second === "duplicate", "a replay must be reported as a duplicate");
     assert(handled === 1, "a replay must not re-run the handler");
+  });
+
+  await suite.check("webhook: caller mutation cannot replace configured verification authority", async () => {
+    const deliveries = new InMemoryDeliveryStore();
+    const configuredKey = sequencer.publicKey.slice();
+    const consumer = new VerifiedWebhookConsumer({
+      publicKeys: { "seq-stable": configuredKey },
+      deliveries,
+    });
+    configuredKey.fill(0);
+    const body = new TextEncoder().encode(JSON.stringify({ event: "settlement", authority: "stable" }));
+    const id = "delivery-stable-authority";
+    const timestamp = Math.floor(Date.now() / 1000).toString();
+    const signature = await signWebhook(sequencer, id, timestamp, body);
+    const result = await consumer.consume(
+      body,
+      { id, timestamp, keyId: "seq-stable", signature },
+      async () => undefined,
+    );
+    assert(result === "processed", "configured webhook authority changed through caller alias");
   });
 
   await suite.check("webhook: a tampered body cannot be presented as verified", async () => {

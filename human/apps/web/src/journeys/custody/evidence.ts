@@ -38,14 +38,13 @@ const STAGE_EVIDENCE_RULES: Readonly<Record<string, StageEvidenceRule>> = Object
   "exit.stage.confirming-on-paxeer": Object.freeze({ class: "paxeer-finality", verification: "paxeer-finalised" }),
 });
 
-const DEFAULT_STAGE_EVIDENCE_RULE: StageEvidenceRule = Object.freeze({ verification: "receipt-verified" });
-
-export function stageEvidenceRule(copyKey: string): StageEvidenceRule {
-  return STAGE_EVIDENCE_RULES[copyKey] ?? DEFAULT_STAGE_EVIDENCE_RULE;
+export function stageEvidenceRule(copyKey: string): StageEvidenceRule | undefined {
+  return STAGE_EVIDENCE_RULES[copyKey];
 }
 
 export function stageEvidenceBacked(stage: JourneyStage): boolean {
   const rule = stageEvidenceRule(stage.copy_key);
+  if (rule === undefined) return false;
   return stage.evidence.some(
     (reference) =>
       (rule.class === undefined || reference.class === rule.class) &&

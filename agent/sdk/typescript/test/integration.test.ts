@@ -5,6 +5,7 @@ import {
   APPROVAL_EVENT_KINDS,
   APPROVAL_STATES,
   Client,
+  SecretBytes,
   VerificationLevel,
   layerx_sdk_ts_package,
   parseAmount,
@@ -40,6 +41,25 @@ export async function verifyTypeScriptPackage(): Promise<void> {
   assert(parseSequence("18446744073709551615") === 18446744073709551615n, "sequence lost precision");
   expectThrow(() => parseAmount("1.5"), "fractional amount accepted");
   expectThrow(() => parseSequence("18446744073709551616"), "overflowing sequence accepted");
+
+  const secret = new SecretBytes(new Uint8Array([41, 42, 43]));
+  let retained: Uint8Array | undefined;
+  secret.withBytes((bytes) => {
+    retained = bytes;
+    bytes[0] = 99;
+  });
+  assert(retained!.every((byte) => byte === 0), "scoped secret view survived callback");
+  secret.withBytes((bytes) => {
+    assert(bytes[0] === 41, "scoped consumer mutated stored secret");
+  });
+  let retainedAsync: Uint8Array | undefined;
+  await secret.withBytes(async (bytes) => {
+    retainedAsync = bytes;
+    await Promise.resolve();
+    assert(bytes[1] === 42, "async secret scope was cleared before callback completed");
+  });
+  assert(retainedAsync!.every((byte) => byte === 0), "async secret view survived callback");
+  secret.destroy();
 
   const read: VerifiedRead<bigint> = {
     value: 10n,

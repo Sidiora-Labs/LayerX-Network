@@ -691,15 +691,23 @@ export async function verifyReceiptOutcome(
   canonicalReceipt: Uint8Array,
   authorized: AuthorizedReceiptBatch,
 ): Promise<ReceiptVerification> {
-  const { receipt, unsignedBytes } = decodeProtocolReceipt(canonicalReceipt);
+  const canonical = canonicalReceipt.slice();
+  const authority = Object.freeze({
+    batchId: exactBytes(authorized.batchId, 32).slice(),
+    asset: exactBytes(authorized.asset, 32).slice(),
+    previousStateRoot: exactBytes(authorized.previousStateRoot, 32).slice(),
+    resultingStateRoot: exactBytes(authorized.resultingStateRoot, 32).slice(),
+    sequencerPublicKey: exactBytes(authorized.sequencerPublicKey, 32).slice(),
+  });
+  const { receipt, unsignedBytes } = decodeProtocolReceipt(canonical);
   if (
     receipt.operation === 0
     || allZero(receipt.activityId)
     || allZero(receipt.asset)
-    || !equal(receipt.batchId, exactBytes(authorized.batchId, 32))
-    || !equal(receipt.asset, exactBytes(authorized.asset, 32))
-    || !equal(receipt.previousStateRoot, exactBytes(authorized.previousStateRoot, 32))
-    || !equal(receipt.resultingStateRoot, exactBytes(authorized.resultingStateRoot, 32))
+    || !equal(receipt.batchId, authority.batchId)
+    || !equal(receipt.asset, authority.asset)
+    || !equal(receipt.previousStateRoot, authority.previousStateRoot)
+    || !equal(receipt.resultingStateRoot, authority.resultingStateRoot)
   ) {
     return verificationFailure();
   }
@@ -715,7 +723,7 @@ export async function verifyReceiptOutcome(
   }
   const receiptDigest = await sha256(RECEIPT_DOMAIN, unsignedBytes);
   if (!await verifyEd25519(
-    exactBytes(authorized.sequencerPublicKey, 32),
+    authority.sequencerPublicKey,
     receipt.sequencerSignature,
     receiptDigest,
   )) {
@@ -724,7 +732,7 @@ export async function verifyReceiptOutcome(
   return Object.freeze({
     level: "sequencer-signed",
     receipt,
-    canonicalBytes: canonicalReceipt.slice(),
+    canonicalBytes: canonical,
     receiptDigest,
   });
 }
