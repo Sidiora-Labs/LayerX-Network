@@ -26,6 +26,13 @@ lxp_result lxp_da_chunk_hash(lxp_da_chunk *chunk)
     size_t tag_length;
     const uint8_t *tag = lxp_domain_tag(LXP_DOMAIN_DA_CHUNK, &tag_length);
     lxp_result status;
+    if (chunk == NULL || chunk->availability_class < LXP_DA_ACTIVITIES ||
+        chunk->availability_class > LXP_DA_RECOVERY_METADATA ||
+        chunk->length > LXP_DA_MAX_CHUNK_BYTES ||
+        chunk->bytes.length != (size_t)chunk->length ||
+        (chunk->bytes.bytes == NULL && chunk->bytes.length != 0U) ||
+        UINT64_MAX - chunk->class_offset < (uint64_t)chunk->length)
+        return LXP_ERR_NON_CANONICAL;
     if (tag == NULL) return LXP_ERR_INVALID_TAG;
     store_u64(metadata, chunk->batch_number);
     store_u32(metadata + 8U, chunk->chunk_index);
@@ -167,6 +174,10 @@ lxp_result lxp_da_bundle_root(const lxp_da_bundle *bundle, lxp_arena *arena,
     void *memory;
     size_t mark;
     size_t i;
+    size_t total = 0U;
+    uint64_t class_offset = 0U;
+    lxp_da_class expected_class = LXP_DA_ACTIVITIES;
+    bool class_has_chunk = false;
     lxp_result status;
     if (bundle == NULL || arena == NULL || root == NULL ||
         bundle->chunks == NULL || bundle->chunk_count < LXP_DA_CLASS_COUNT ||
@@ -183,6 +194,23 @@ lxp_result lxp_da_bundle_root(const lxp_da_bundle *bundle, lxp_arena *arena,
             status = LXP_ERR_UNSORTED_SEQUENCE;
             break;
         }
+        if (copy.availability_class != expected_class) {
+            if (copy.availability_class !=
+                    (lxp_da_class)((unsigned)expected_class + 1U) ||
+                !class_has_chunk) {
+                status = LXP_ERR_UNSORTED_SEQUENCE;
+                break;
+            }
+            expected_class = copy.availability_class;
+            class_offset = 0U;
+            class_has_chunk = false;
+        }
+        if ((class_has_chunk && class_offset == 0U) ||
+            copy.class_offset != class_offset ||
+            copy.bytes.length > SIZE_MAX - total) {
+            status = LXP_ERR_NON_CANONICAL;
+            break;
+        }
         status = lxp_da_chunk_hash(&copy);
         if (status != LXP_OK ||
             lxp_ct_memcmp(copy.chunk_hash,
@@ -190,8 +218,15 @@ lxp_result lxp_da_bundle_root(const lxp_da_bundle *bundle, lxp_arena *arena,
             status = status == LXP_OK ? LXP_ERR_ROOT_MISMATCH : status;
             break;
         }
+        class_offset += copy.length;
+        total += copy.bytes.length;
+        class_has_chunk = true;
         (void)memcpy(hashes[i], copy.chunk_hash, 32U);
     }
+    if (status == LXP_OK &&
+        (expected_class != LXP_DA_RECOVERY_METADATA ||
+         total != bundle->total_bytes))
+        status = LXP_ERR_NON_CANONICAL;
     if (status == LXP_OK)
         status = lxp_merkle_build((const uint8_t (*)[32])hashes,
                                   bundle->chunk_count, arena, root);

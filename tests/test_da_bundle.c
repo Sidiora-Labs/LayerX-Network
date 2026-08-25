@@ -172,6 +172,26 @@ int main(void)
         LXP_ERR_UNSORTED_SEQUENCE)
         return 1;
     bundle.chunks[1].chunk_index = saved_index;
+    bundle.total_bytes += 1U;
+    if (lxp_da_bundle_root(&bundle, &arena, changed_root) !=
+        LXP_ERR_NON_CANONICAL)
+        return 1;
+    bundle.total_bytes -= 1U;
+    bundle.chunks[0].bytes.length += 1U;
+    if (lxp_da_bundle_root(&bundle, &arena, changed_root) !=
+        LXP_ERR_NON_CANONICAL)
+        return 1;
+    bundle.chunks[0].bytes.length -= 1U;
+    bundle.chunks[1].class_offset += 1U;
+    if (lxp_da_bundle_root(&bundle, &arena, changed_root) !=
+        LXP_ERR_NON_CANONICAL)
+        return 1;
+    bundle.chunks[1].class_offset -= 1U;
+    bundle.chunks[0].availability_class = LXP_DA_RECEIPTS;
+    if (lxp_da_bundle_root(&bundle, &arena, changed_root) !=
+        LXP_ERR_UNSORTED_SEQUENCE)
+        return 1;
+    bundle.chunks[0].availability_class = LXP_DA_ACTIVITIES;
 
     (void)memset(&roots, 0, sizeof(roots));
     (void)memcpy(roots.data_availability_root, root, sizeof(root));
