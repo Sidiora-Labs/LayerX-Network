@@ -1,0 +1,21 @@
+# kind|path|classification
+python|agent/sdk/python/pyproject.toml|local-source-install
+python|platform/integrations/fastapi/pyproject.toml|local-source-install
+python|platform/docs/samples/first-payment-python/requirements.txt|compile-only-manifest
+python|platform/docs/samples/paid-endpoint-fastapi/requirements.txt|compile-only-manifest
+go|platform/sdk/go/go.mod|install-resolved
+go|platform/docs/samples/first-payment-go/go.mod|local-replacements
+rust|platform/docs/samples/verify-receipt-rust/Cargo.toml|locked
+maven|platform/sdk/jvm/pom.xml|install-resolved
+maven|platform/integrations/spring/pom.xml|install-resolved
+maven|platform/integrations/android/pom.xml|install-resolved
+maven|platform/docs/samples/first-payment-jvm/pom.xml|install-resolved
+maven|platform/docs/samples/paid-endpoint-spring/pom.xml|install-resolved
+maven|platform/docs/samples/mobile-payment-android/pom.xml|install-resolved
+gradle|platform/integrations/android/sample-app/build.gradle.kts|install-resolved
+swift|platform/sdk/swift/Package.swift|install-resolved
+swift|platform/integrations/ios/Package.swift|revision-locked
+swift|platform/docs/samples/first-payment-swift/Package.swift|local-replacements
+swift|platform/docs/samples/mobile-payment-ios/Package.swift|local-replacements
+dotnet|platform/sdk/dotnet/LayerX.Sdk.csproj|install-resolved
+dotnet|platform/docs/samples/first-payment-csharp/FirstPayment.csproj|install-resolved

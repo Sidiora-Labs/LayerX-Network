@@ -22,7 +22,7 @@ fail() {
 
 ACTION_INDEX=4
 build_plan
-[[ ${#STEP_MODULE[@]} -eq 57 ]] || fail "full plan should contain all 57 workspace steps"
+[[ ${#STEP_MODULE[@]} -eq 48 ]] || fail "full plan should contain all 48 workspace steps"
 
 for expected in core contracts agent human platform programs interop paxeer specgen; do
   found=0
@@ -48,10 +48,10 @@ set_all_modules 0
 SELECTED[4]=1
 ACTION_INDEX=1
 build_plan
-[[ ${#STEP_MODULE[@]} -eq 6 ]] || fail "platform install should contain six dependency steps"
+[[ ${#STEP_MODULE[@]} -eq 3 ]] || fail "platform install should contain three dependency steps"
 [[ "${STEP_COMMAND[0]}" == "cargo fetch --manifest-path platform/Cargo.toml --locked" ]] || fail "platform Rust dependency step drifted"
 [[ "${STEP_COMMAND[1]}" == "make platform-js-install" ]] || fail "platform JavaScript install step drifted"
-[[ "${STEP_COMMAND[5]}" == "swift package resolve" ]] || fail "platform Swift dependency step drifted"
+[[ "${STEP_COMMAND[2]}" == "make platform-dependencies-install" ]] || fail "platform sample dependency step drifted"
 
 set_all_modules 1
 before="${SELECTED[0]}"

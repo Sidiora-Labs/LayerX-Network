@@ -951,20 +951,9 @@ append_platform_steps() {
     INSTALL)
       add_step platform INSTALL "Fetch locked platform workspace crates" "." "cargo" "cargo fetch --manifest-path platform/Cargo.toml --locked"
       add_step platform INSTALL "Install locked JavaScript workspaces" "." "make npm" "make platform-js-install"
-      add_step platform INSTALL "Download Go SDK modules" "platform/sdk/go" "go" "go mod download"
-      add_step platform INSTALL "Resolve JVM SDK modules" "platform/sdk/jvm" "mvn java" "mvn -q dependency:go-offline"
-      add_step platform INSTALL "Restore the C sharp SDK" "platform/sdk/dotnet" "dotnet" "dotnet restore LayerX.Sdk.csproj --nologo"
-      add_step platform INSTALL "Resolve Swift SDK packages" "platform/sdk/swift" "swift" "swift package resolve"
+      add_step platform INSTALL "Resolve Platform SDK, middleware, mobile and documentation dependencies" "." "make python3 go cargo mvn java gradle swift dotnet" "make platform-dependencies-install"
       ;;
-    BUILD)
-      add_step platform BUILD "Build the platform Rust workspace" "." "make cargo python3" "make platform-build"
-      add_step platform BUILD "Build JavaScript middleware and integrations" "." "npm" "npm run build --workspaces --if-present"
-      add_step platform BUILD "Build the Go SDK" "platform/sdk/go" "go" "go build ./..."
-      add_step platform BUILD "Build the JVM SDK" "platform/sdk/jvm" "mvn java" "mvn -q -DskipTests package"
-      add_step platform BUILD "Build the C sharp SDK" "platform/sdk/dotnet" "dotnet" "dotnet build LayerX.Sdk.csproj --configuration Release --nologo"
-      add_step platform BUILD "Build the Swift SDK" "platform/sdk/swift" "swift" "swift build"
-      add_step platform BUILD "Compile Python SDK and integrations" "." "python3" "python3 -m compileall -q agent/sdk/python platform/integrations/fastapi"
-      ;;
+    BUILD) add_step platform BUILD "Build every Platform workspace and SDK from installed dependencies" "." "make npm cargo python3 go mvn java dotnet swift" "make platform-build-all" ;;
     TEST)
       add_step platform TEST "Test the platform Rust workspace" "." "make cargo" "make platform-test"
       add_step platform TEST "Conformance-test Go and JVM SDKs; compile Swift and C sharp SDKs" "." "make cargo python3 go mvn java dotnet swift" "make platform-verify-sdks"

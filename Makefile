@@ -2381,6 +2381,7 @@ paxeer-ci:
 workspace-inventory-check:
 	sh tools/workspace/check-paxeer-manifests.sh
 	sh tools/workspace/check-core-gates.sh
+	sh tools/workspace/check-platform-dependencies.sh
 
 paxeer-node-preflight:
 	@node -e 'const major=Number(process.versions.node.split(".")[0]); if (major < 20) { console.error(`Node >=20 required; found $${process.version}`); process.exit(1); }'
@@ -2495,15 +2496,11 @@ workspace-install:
 	cd programs && cargo fetch --locked
 	cargo fetch --manifest-path interop/Cargo.toml --locked
 	$(MAKE) platform-js-install programs-js-install
-	$(MAKE) developer-dashboard-install paxeer-manifest-install
-	cd platform/sdk/go && go mod download
-	cd platform/sdk/jvm && mvn -q dependency:go-offline
-	cd platform/sdk/dotnet && dotnet restore LayerX.Sdk.csproj --nologo
-	cd platform/sdk/swift && swift package resolve
+	$(MAKE) developer-dashboard-install paxeer-manifest-install platform-dependencies-install
 	cd paxeer-network && go mod download
 	cd spec/specgen && go mod download
 
-workspace-build: build agent-build human-build platform-build programs-build interop-build \
+workspace-build: build agent-build human-build platform-build-all programs-build interop-build \
 	paxeer-build paxeer-manifest-build developer-dashboard-build specgen-build
 	forge build
 

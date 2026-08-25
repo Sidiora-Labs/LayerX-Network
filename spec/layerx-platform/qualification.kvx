@@ -1366,6 +1366,14 @@ observed = "Post-implementation source review found that the hosted Visa TAP pat
 assumption = "Human qualification must run the TAP conformance, interop service, real TLS Redis restart/replay, and hosted execution suites; exercise cross-authority, cross-path, revoked, expired, altered-principal, altered-intent, altered-activity, altered-signer, altered-evidence and altered-operation nonce reuse; prove exact pending retries remain idempotent across service and Redis restarts; and inspect durable binding expiry and reconstruction before retaining task 23.3 as qualified."
 severity = "qualification-repair"
 
+[observation.37.1.8]
+task = "37.1"
+file = "platform/Makefile.inc, platform/sdk/conformance/run-go.sh, platform/sdk/conformance/run-jvm.sh, tools/workspace/platform-dependency-roots.txt"
+symbol = "platform-dependencies-install, platform-sample-install, platform-sample-dependencies-ready, platform-install-local-artifacts"
+observed = "The complete workspace dependency phase now inventories and resolves the Platform documentation, middleware and mobile package roots before their build or test targets run. Python samples use a repository-local virtual environment and install the two first-party distributions from the current source tree with no index, no dependency resolution and no system-global mutation; their documented third-party requirements are not installed because this gate syntax-compiles rather than executes those applications. Go, locked Rust, Maven, Gradle, Swift and dotnet dependency resolution is owned by platform-sample-install. The consuming commands use GOPROXY=off, Cargo offline and locked mode, Maven offline mode, Gradle offline mode, Swift disabled automatic resolution and dotnet no-restore. First-party Maven artifacts are built locally offline before middleware, Android and documentation consumers execute."
+assumption = "Human qualification must run workspace-install before workspace-ci. Missing Python venv support, Maven, Gradle, Swift or dotnet now stops INSTALL with an explicit prerequisite error; in particular Swift is not skipped. The iOS artifact gate additionally requires xcodegen and Xcode and remains an explicit macOS environment gate. Live middleware, testnet and production routes remain separately authorized environment qualification. No install, build, test or lint command was executed for this observation."
+severity = "qualification-boundary"
+
 [observation.15.2.1]
 task = "15.2"
 file = "agent/crates/layerx-client/src/client.rs, agent/crates/layerx-agentd/src/authority.rs"
