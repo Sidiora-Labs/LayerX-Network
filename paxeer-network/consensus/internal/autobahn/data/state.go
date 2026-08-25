@@ -349,6 +349,12 @@ func (s *State) Committee() *types.Committee { return s.cfg.Committee }
 // Pushing the qc and blocks is atomic, so that no unnecessary GetBlock RPCs are issued.
 // Even if the qc was already pushed earlier, the blocks are pushed anyway.
 func (s *State) PushQC(ctx context.Context, qc *types.FullCommitQC, blocks []*types.Block) error {
+	// Authenticate and validate the complete certificate before using its range
+	// to decide whether this call should wait.  The range is peer-controlled;
+	// consulting it first lets a malformed certificate pin an ingress handler.
+	if err := qc.Verify(s.cfg.Committee); err != nil {
+		return fmt.Errorf("qc.Verify(): %w", err)
+	}
 	// Wait until QC is needed.
 	gr := qc.QC().GlobalRange(s.cfg.Committee)
 	needQC, err := func() (bool, error) {
@@ -366,11 +372,6 @@ func (s *State) PushQC(ctx context.Context, qc *types.FullCommitQC, blocks []*ty
 		return err
 	}
 	// Verify data.
-	if needQC {
-		if err := qc.Verify(s.cfg.Committee); err != nil {
-			return fmt.Errorf("qc.Verify(): %w", err)
-		}
-	}
 	byHash := map[types.BlockHeaderHash]*types.Block{}
 	for _, b := range blocks {
 		byHash[b.Header().Hash()] = b

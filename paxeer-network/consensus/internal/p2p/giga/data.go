@@ -21,8 +21,9 @@ func (s *Service) clientStreamFullCommitQCs(ctx context.Context, client rpc.Clie
 		return fmt.Errorf("client.StreamFullCommitQCs(): %w", err)
 	}
 	defer stream.Close()
+	nextBlock := s.state.Data().NextBlock()
 	if err := stream.Send(ctx, StreamFullCommitQCsReqConv.Encode(&StreamFullCommitQCsReq{
-		NextBlock: s.state.Data().NextBlock(),
+		NextBlock: nextBlock,
 	})); err != nil {
 		return fmt.Errorf("stream.Send(): %w", err)
 	}
@@ -35,10 +36,17 @@ func (s *Service) clientStreamFullCommitQCs(ctx context.Context, client rpc.Clie
 		if err != nil {
 			return fmt.Errorf("types.CommitQCConv.Decode(): %w", err)
 		}
-		// TODO: add DoS protection (i.e. that only useful state.Data() has been actually sent).
+		if err := qc.Verify(s.state.Data().Committee()); err != nil {
+			return fmt.Errorf("qc.Verify(): %w", err)
+		}
+		gr := qc.QC().GlobalRange(s.state.Data().Committee())
+		if gr.First > nextBlock || gr.Next <= nextBlock {
+			return fmt.Errorf("non-progressing commit QC range [%d,%d), expected block %d", gr.First, gr.Next, nextBlock)
+		}
 		if err := s.state.Data().PushQC(ctx, qc, nil); err != nil {
 			return fmt.Errorf("s.PushCommitQC(): %w", err)
 		}
+		nextBlock = gr.Next
 	}
 	return ctx.Err()
 }

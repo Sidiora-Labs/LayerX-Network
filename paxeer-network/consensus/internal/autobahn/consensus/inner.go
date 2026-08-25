@@ -170,6 +170,16 @@ func (s *State) pushTimeoutQC(ctx context.Context, qc *types.TimeoutQC) error {
 
 // pushProposal processes an unverified FullProposal message.
 func (s *State) pushProposal(ctx context.Context, proposal *types.FullProposal) error {
+	committee := s.Data().Committee()
+	// Reject malformed or unauthenticated proposals before waiting on their
+	// peer-controlled view. Full verification still happens below once the
+	// corresponding local ViewSpec is available.
+	if err := proposal.Proposal().Msg().Verify(committee); err != nil {
+		return fmt.Errorf("proposal.Verify(): %w", err)
+	}
+	if err := proposal.Proposal().VerifySig(committee); err != nil {
+		return fmt.Errorf("proposal.VerifySig(): %w", err)
+	}
 	// Wait for view.
 	vs, err := s.waitForView(ctx, proposal.View())
 	if err != nil {
@@ -179,7 +189,7 @@ func (s *State) pushProposal(ctx context.Context, proposal *types.FullProposal) 
 	if vs.View() != proposal.View() {
 		return nil
 	}
-	if err := proposal.Verify(s.Data().Committee(), vs); err != nil {
+	if err := proposal.Verify(committee, vs); err != nil {
 		return fmt.Errorf("proposal.Verify(): %w", err)
 	}
 	// Update.
@@ -196,6 +206,11 @@ func (s *State) pushProposal(ctx context.Context, proposal *types.FullProposal) 
 }
 
 func (s *State) pushPrepareQC(ctx context.Context, qc *types.PrepareQC) error {
+	// PrepareQC verification depends only on the committee, so perform it
+	// before waiting on the certificate's peer-controlled view.
+	if err := qc.Verify(s.Data().Committee()); err != nil {
+		return fmt.Errorf("qc.Verify(): %w", err)
+	}
 	// Wait for view.
 	vs, err := s.waitForView(ctx, qc.Proposal().View())
 	if err != nil {
@@ -204,9 +219,6 @@ func (s *State) pushPrepareQC(ctx context.Context, qc *types.PrepareQC) error {
 	// Verify message.
 	if vs.View() != qc.Proposal().View() {
 		return nil
-	}
-	if err := qc.Verify(s.Data().Committee()); err != nil {
-		return fmt.Errorf("qc.Verify(): %w", err)
 	}
 	// Update.
 	for isend := range s.inner.Lock() {
