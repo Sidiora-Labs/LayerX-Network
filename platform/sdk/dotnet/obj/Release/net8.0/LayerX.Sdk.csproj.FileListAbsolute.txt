@@ -1,0 +1,13 @@
+/root/Layerx-protocol/platform/sdk/dotnet/bin/Release/net8.0/LayerX.Sdk.deps.json
+/root/Layerx-protocol/platform/sdk/dotnet/bin/Release/net8.0/LayerX.Sdk.dll
+/root/Layerx-protocol/platform/sdk/dotnet/bin/Release/net8.0/LayerX.Sdk.pdb
+/root/Layerx-protocol/platform/sdk/dotnet/obj/Release/net8.0/LayerX.Sdk.csproj.AssemblyReference.cache
+/root/Layerx-protocol/platform/sdk/dotnet/obj/Release/net8.0/LayerX.Sdk.GeneratedMSBuildEditorConfig.editorconfig
+/root/Layerx-protocol/platform/sdk/dotnet/obj/Release/net8.0/LayerX.Sdk.AssemblyInfoInputs.cache
+/root/Layerx-protocol/platform/sdk/dotnet/obj/Release/net8.0/LayerX.Sdk.AssemblyInfo.cs
+/root/Layerx-protocol/platform/sdk/dotnet/obj/Release/net8.0/LayerX.Sdk.csproj.CoreCompileInputs.cache
+/root/Layerx-protocol/platform/sdk/dotnet/obj/Release/net8.0/LayerX.Sdk.sourcelink.json
+/root/Layerx-protocol/platform/sdk/dotnet/obj/Release/net8.0/LayerX.Sdk.dll
+/root/Layerx-protocol/platform/sdk/dotnet/obj/Release/net8.0/refint/LayerX.Sdk.dll
+/root/Layerx-protocol/platform/sdk/dotnet/obj/Release/net8.0/LayerX.Sdk.pdb
+/root/Layerx-protocol/platform/sdk/dotnet/obj/Release/net8.0/ref/LayerX.Sdk.dll
