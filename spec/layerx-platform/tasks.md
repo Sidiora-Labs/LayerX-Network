@@ -1600,7 +1600,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Add root Makefile entry points for Paxeer build, lint, tests and CI, and bind Paxeer's internal project root to its subsystem directory so its cleanup and Docker mounts cannot touch LayerX build output.
     - Update the root README and dependency automation to describe and maintain the ecosystem monorepo and its explicit LayerX/Paxeer trust, build and release boundaries.
     - _Requirements: 44.1, 44.2, 44.3, 44.4, 44.5, 44.6_
-  - [-] 37.2 Publish the monorepo-native HPX registry and node distribution
+  - [ ] 37.2 Publish the monorepo-native HPX registry and node distribution — **Implemented - qualification pending**
     - Replace obsolete HPX domains, private fleet examples and project-Quorum source paths with the canonical node.hyperpaxeer.com origin and paths derived from paxeer-network inside this monorepo.
     - Make the artifact publisher stage a complete versioned release, require the Paxeer binary and all supported native libraries, write the chain metadata and sorted SHA-256 manifest, and atomically switch the served current-release pointer only after assembly completes.
     - Harden the registry's static artifact surface and public registration boundary, package it through root repository automation, and provide a durable loopback-only production service plus Nginx HTTPS reverse-proxy configuration for node.hyperpaxeer.com.

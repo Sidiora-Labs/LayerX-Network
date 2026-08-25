@@ -131,7 +131,8 @@ WantedBy=multi-user.target
 UNIT
 
 systemctl daemon-reload
-systemctl enable --now hpx-registry.service
+systemctl enable hpx-registry.service
+systemctl restart hpx-registry.service
 
 say "bootstrapping HTTP vhost for certificate issuance"
 install -m 0644 "$SCRIPT_DIR/nginx-http.conf" "$NGINX_SITE"

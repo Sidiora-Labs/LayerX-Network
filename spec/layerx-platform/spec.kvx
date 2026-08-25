@@ -3887,7 +3887,7 @@ reqs = ["44.1","44.2","44.3","44.4","44.5","44.6"]
 
 [task.37.2]
 title = "Publish the monorepo-native HPX registry and node distribution"
-status = "in_progress"
+status = "implemented"
 wave = 16
 do_1 = "Replace obsolete HPX domains, private fleet examples and project-Quorum source paths with the canonical node.hyperpaxeer.com origin and paths derived from paxeer-network inside this monorepo."
 do_2 = "Make the artifact publisher stage a complete versioned release, require the Paxeer binary and all supported native libraries, write the chain metadata and sorted SHA-256 manifest, and atomically switch the served current-release pointer only after assembly completes."
