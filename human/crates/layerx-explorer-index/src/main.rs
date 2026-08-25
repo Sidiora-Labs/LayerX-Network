@@ -58,14 +58,7 @@ struct Config {
     authority_endpoint: String,
     authority_bearer: String,
     authority_replica_id: [u8; 32],
-    protocol_version: u16,
-    network_id: u32,
-    epoch: u64,
-    sequencer_id: [u8; 32],
-    sequencer_public_key: [u8; 32],
-    first_batch: u64,
-    last_batch: u64,
-    revoked_from_batch: Option<u64>,
+    sequencer_trust_history: PathBuf,
     staleness_ms: u64,
     journal: FileJournal,
     probe_program: ProgramId,
@@ -86,15 +79,6 @@ fn parse_u64(name: &str) -> Result<u64, String> {
         .map_err(|_| format!("{name} must be an unsigned integer"))
 }
 
-fn parse_optional_u64(name: &str) -> Result<Option<u64>, String> {
-    env::var(name).map_or(Ok(None), |value| {
-        value
-            .parse()
-            .map(Some)
-            .map_err(|_| format!("{name} must be an unsigned integer"))
-    })
-}
-
 fn parse_digest(name: &str) -> Result<[u8; 32], String> {
     hex::decode_digest(&required(name)?).map_err(|error| format!("{name} is invalid: {error}"))
 }
@@ -113,25 +97,9 @@ fn config() -> Result<Config, String> {
     {
         return Err("explorer program reads require loopback and distinct credentials".to_owned());
     }
-    let first_batch = parse_u64("LAYERX_EXPLORER_SEQUENCER_FIRST_BATCH")?;
-    let last_batch = parse_u64("LAYERX_EXPLORER_SEQUENCER_LAST_BATCH")?;
-    let protocol_version = u16::try_from(parse_u64("LAYERX_EXPLORER_PROTOCOL_VERSION")?)
-        .map_err(|_| "LAYERX_EXPLORER_PROTOCOL_VERSION is out of range".to_owned())?;
-    let network_id = u32::try_from(parse_u64("LAYERX_EXPLORER_NETWORK_ID")?)
-        .map_err(|_| "LAYERX_EXPLORER_NETWORK_ID is out of range".to_owned())?;
-    let epoch = parse_u64("LAYERX_EXPLORER_EPOCH")?;
-    let revoked_from_batch =
-        parse_optional_u64("LAYERX_EXPLORER_SEQUENCER_REVOKED_FROM_BATCH")?;
     let staleness_ms = parse_u64("LAYERX_EXPLORER_PROGRAM_MAX_STALENESS_MS")?;
-    if !matches!(protocol_version, 1 | 2)
-        || network_id == 0
-        || epoch == 0
-        || first_batch == 0
-        || last_batch < first_batch
-        || revoked_from_batch.is_some_and(|batch| batch == 0 || batch <= first_batch)
-        || staleness_ms == 0
-    {
-        return Err("explorer authority range and staleness bound are non-canonical".to_owned());
+    if staleness_ms == 0 {
+        return Err("explorer staleness bound is non-canonical".to_owned());
     }
     Ok(Config {
         listen,
@@ -141,14 +109,9 @@ fn config() -> Result<Config, String> {
         authority_endpoint: required("LAYERX_EXPLORER_AUTHORITY_ENDPOINT")?,
         authority_bearer,
         authority_replica_id: parse_digest("LAYERX_EXPLORER_AUTHORITY_REPLICA_ID")?,
-        protocol_version,
-        network_id,
-        epoch,
-        sequencer_id: parse_digest("LAYERX_EXPLORER_SEQUENCER_ID")?,
-        sequencer_public_key: parse_digest("LAYERX_EXPLORER_SEQUENCER_PUBLIC_KEY")?,
-        first_batch,
-        last_batch,
-        revoked_from_batch,
+        sequencer_trust_history: PathBuf::from(required(
+            "LAYERX_EXPLORER_SEQUENCER_TRUST_HISTORY",
+        )?),
         staleness_ms,
         journal: FileJournal {
             root: PathBuf::from(required("LAYERX_EXPLORER_DEPLOYMENT_JOURNAL")?),
@@ -353,15 +316,8 @@ fn serve_connection(
 }
 
 fn serve(config: Config) -> Result<(), String> {
-    let verifier = ProtocolDeploymentVerifier::new(
-        config.protocol_version,
-        config.network_id,
-        config.epoch,
-        config.sequencer_id,
-        config.sequencer_public_key,
-        config.first_batch,
-        config.last_batch,
-        config.revoked_from_batch,
+    let verifier = ProtocolDeploymentVerifier::from_protected_history(
+        &config.sequencer_trust_history,
         config.staleness_ms,
     )
     .map_err(|error| format!("explorer deployment verifier is invalid: {error}"))?;
@@ -372,16 +328,8 @@ fn serve(config: Config) -> Result<(), String> {
         &config.authority_endpoint,
         config.authority_bearer.clone(),
         config.authority_replica_id,
-        config.protocol_version,
-        config.network_id,
-        config.epoch,
-        config.sequencer_id,
-        config.sequencer_public_key,
-        config.first_batch,
-        config.last_batch,
-        config.revoked_from_batch,
+        verifier,
         registry.clone(),
-        config.staleness_ms,
     )
     .map_err(|error| format!("explorer protocol reader configuration failed: {error:?}"))?;
     let head = config

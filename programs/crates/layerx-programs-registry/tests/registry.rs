@@ -4,8 +4,8 @@ mod support;
 
 use layerx_programs::{
     BuildEnvironment, DeploymentJournal, DeploymentRecord, ExecutableAdmissionError,
-    JournalReadAuthority, ObservedHead, ProgramLifecycle, ProtocolDeploymentVerifier,
-    ProtocolEvidenceError, PublishedSource, ReadFreshness, Registry, RegistryError,
+    JournalReadAuthority, ObservedHead, ProgramLifecycle, ProtocolEvidenceError, PublishedSource,
+    ReadFreshness, Registry, RegistryError,
     RegistryReadAuthority, ReproducibleBuild, SourceStatus, VerifiedProgramCatalog,
 };
 use layerx_programs_runtime::{
@@ -14,8 +14,10 @@ use layerx_programs_runtime::{
 };
 
 use support::{
-    code_hash as fixture_code_hash, deploy_fixture, deprecated_state, program as fixture_program,
-    upgrade_fixture, wrong_abi_fixture, wrong_batch_id_fixture, AUTHORITY, NOW,
+    code_hash as fixture_code_hash, deploy_fixture, deploy_fixture_in_epoch, deprecated_state,
+    program as fixture_program, try_verifier_from_history, upgrade_fixture, verifier_for_fixture,
+    verifier_from_history, wrong_abi_fixture, wrong_batch_id_fixture, TrustAnchorFixture,
+    AUTHORITY, NOW,
     WASM_V1 as PROTOCOL_WASM_V1, WASM_V2 as PROTOCOL_WASM_V2,
 };
 
@@ -87,18 +89,7 @@ fn registry_resolves_historical_and_latest_code_only_from_protocol_evidence() {
         71,
         1_700_000_071,
     );
-    let verifier = ProtocolDeploymentVerifier::new(
-        2,
-        42,
-        2,
-        deploy.sequencer_id,
-        deploy.sequencer_public_key,
-        70,
-        100,
-        None,
-        1_000,
-    )
-    .unwrap_or_else(|error| panic!("protocol verifier: {error}"));
+    let verifier = verifier_for_fixture(&deploy, 70, 100, None, 1_000);
     let first = verifier
         .verify_deployment(&deploy.proof, NOW)
         .unwrap_or_else(|error| panic!("deploy evidence: {error}"));
@@ -183,24 +174,13 @@ fn forged_batch_journal_and_stale_evidence_never_create_deployment_authority() {
         70,
         1_700_000_070,
     );
-    let verifier = ProtocolDeploymentVerifier::new(
-        2,
-        42,
-        2,
-        fixture.sequencer_id,
-        fixture.sequencer_public_key,
-        70,
-        100,
-        None,
-        100,
-    )
-    .unwrap_or_else(|error| panic!("protocol verifier: {error}"));
+    let verifier = verifier_for_fixture(&fixture, 70, 100, None, 100);
     let mut forged = fixture.proof.clone();
     forged.state.header_signature[0] ^= 1;
-    assert_eq!(
+    assert!(matches!(
         verifier.verify_deployment(&forged, NOW),
-        Err(ProtocolEvidenceError::ActivityInclusion)
-    );
+        Err(ProtocolEvidenceError::ReceiptInclusion | ProtocolEvidenceError::ActivityInclusion)
+    ));
     assert_eq!(
         verifier.verify_deployment(&fixture.proof, NOW + 100),
         Err(ProtocolEvidenceError::Stale)
@@ -225,52 +205,45 @@ fn forged_batch_journal_and_stale_evidence_never_create_deployment_authority() {
         verifier.verify_deployment(&impossible_module.proof, NOW),
         Err(ProtocolEvidenceError::CanonicalActivity)
     );
-    let foreign_network = ProtocolDeploymentVerifier::new(
-        2,
-        43,
-        2,
-        fixture.sequencer_id,
-        fixture.sequencer_public_key,
-        70,
+    let foreign_network = verifier_from_history(
+        &[TrustAnchorFixture {
+            protocol_version: 2,
+            network_id: 43,
+            epoch: 2,
+            sequencer_id: fixture.sequencer_id,
+            sequencer_public_key: fixture.sequencer_public_key,
+            first_batch: 70,
+            last_batch: 100,
+            revoked_from_batch: None,
+        }],
+        0,
         100,
-        None,
-        100,
-    )
-    .unwrap_or_else(|error| panic!("foreign network verifier: {error}"));
+    );
     assert_eq!(
         foreign_network.verify_deployment(&fixture.proof, NOW),
-        Err(ProtocolEvidenceError::ProtocolDomain)
+        Err(ProtocolEvidenceError::TrustAnchorUnavailable)
     );
     for (protocol, epoch) in [(1, 2), (2, 3)] {
-        let foreign_domain = ProtocolDeploymentVerifier::new(
-            protocol,
-            42,
-            epoch,
-            fixture.sequencer_id,
-            fixture.sequencer_public_key,
-            70,
+        let foreign_domain = verifier_from_history(
+            &[TrustAnchorFixture {
+                protocol_version: protocol,
+                network_id: 42,
+                epoch,
+                sequencer_id: fixture.sequencer_id,
+                sequencer_public_key: fixture.sequencer_public_key,
+                first_batch: 70,
+                last_batch: 100,
+                revoked_from_batch: None,
+            }],
+            0,
             100,
-            None,
-            100,
-        )
-        .unwrap_or_else(|error| panic!("foreign protocol domain verifier: {error}"));
+        );
         assert_eq!(
             foreign_domain.verify_deployment(&fixture.proof, NOW),
-            Err(ProtocolEvidenceError::ProtocolDomain)
+            Err(ProtocolEvidenceError::TrustAnchorUnavailable)
         );
     }
-    let revoked = ProtocolDeploymentVerifier::new(
-        2,
-        42,
-        2,
-        fixture.sequencer_id,
-        fixture.sequencer_public_key,
-        70,
-        100,
-        Some(71),
-        100,
-    )
-    .unwrap_or_else(|error| panic!("revoked verifier: {error}"));
+    let revoked = verifier_for_fixture(&fixture, 70, 100, Some(71), 100);
     assert_eq!(
         revoked.verify_deployment(&fixture.proof, NOW),
         Ok(verifier
@@ -290,6 +263,110 @@ fn forged_batch_journal_and_stale_evidence_never_create_deployment_authority() {
 }
 
 #[test]
+fn historical_deployments_replay_across_an_explicit_sequencer_rotation() {
+    let historical = deploy_fixture_in_epoch(
+        PROTOCOL_WASM_V1,
+        UpgradePolicy::Immutable,
+        70,
+        1_700_000_070,
+        2,
+        [7; 32],
+    );
+    let current = deploy_fixture_in_epoch(
+        PROTOCOL_WASM_V1,
+        UpgradePolicy::Immutable,
+        101,
+        1_700_000_101,
+        3,
+        [8; 32],
+    );
+    let verifier = verifier_from_history(
+        &[
+            TrustAnchorFixture {
+                protocol_version: 2,
+                network_id: 42,
+                epoch: 2,
+                sequencer_id: historical.sequencer_id,
+                sequencer_public_key: historical.sequencer_public_key,
+                first_batch: 70,
+                last_batch: 100,
+                revoked_from_batch: Some(101),
+            },
+            TrustAnchorFixture {
+                protocol_version: 2,
+                network_id: 42,
+                epoch: 3,
+                sequencer_id: current.sequencer_id,
+                sequencer_public_key: current.sequencer_public_key,
+                first_batch: 101,
+                last_batch: 200,
+                revoked_from_batch: None,
+            },
+        ],
+        1,
+        50,
+    );
+
+    assert!(verifier
+        .verify_historical_deployment(&historical.proof)
+        .is_ok());
+    assert_eq!(
+        verifier.verify_deployment(&historical.proof, NOW),
+        Err(ProtocolEvidenceError::HistoricalTrustAnchor)
+    );
+    assert!(verifier.verify_deployment(&current.proof, NOW).is_ok());
+
+    let current_only = verifier_from_history(
+        &[TrustAnchorFixture {
+            protocol_version: 2,
+            network_id: 42,
+            epoch: 3,
+            sequencer_id: current.sequencer_id,
+            sequencer_public_key: current.sequencer_public_key,
+            first_batch: 101,
+            last_batch: 200,
+            revoked_from_batch: None,
+        }],
+        0,
+        50,
+    );
+    assert_eq!(
+        current_only.verify_historical_deployment(&historical.proof),
+        Err(ProtocolEvidenceError::TrustAnchorUnavailable)
+    );
+
+    assert!(matches!(
+        try_verifier_from_history(
+            &[
+                TrustAnchorFixture {
+                    protocol_version: 2,
+                    network_id: 42,
+                    epoch: 2,
+                    sequencer_id: historical.sequencer_id,
+                    sequencer_public_key: historical.sequencer_public_key,
+                    first_batch: 70,
+                    last_batch: 100,
+                    revoked_from_batch: None,
+                },
+                TrustAnchorFixture {
+                    protocol_version: 2,
+                    network_id: 42,
+                    epoch: 2,
+                    sequencer_id: historical.sequencer_id,
+                    sequencer_public_key: historical.sequencer_public_key,
+                    first_batch: 80,
+                    last_batch: 110,
+                    revoked_from_batch: None,
+                },
+            ],
+            1,
+            1_000,
+        ),
+        Err(ProtocolEvidenceError::TrustAnchorAmbiguous)
+    ));
+}
+
+#[test]
 fn mismatched_receipt_invalid_module_stale_head_and_deprecation_are_fail_closed() {
     let fixture = deploy_fixture(
         INVALID_WASM,
@@ -303,18 +380,7 @@ fn mismatched_receipt_invalid_module_stale_head_and_deprecation_are_fail_closed(
         71,
         1_700_000_071,
     );
-    let verifier = ProtocolDeploymentVerifier::new(
-        2,
-        42,
-        2,
-        fixture.sequencer_id,
-        fixture.sequencer_public_key,
-        70,
-        100,
-        None,
-        1_000,
-    )
-    .unwrap_or_else(|error| panic!("protocol verifier: {error}"));
+    let verifier = verifier_for_fixture(&fixture, 70, 100, None, 1_000);
     let mut swapped_receipt = fixture.proof.clone();
     swapped_receipt.state.receipt = other.proof.state.receipt.clone();
     assert!(matches!(

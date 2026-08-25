@@ -29,6 +29,7 @@ pub use pipeline::{BuildAttempt, BuildPlan, BuildRefusal, BuildRunner, SourceVer
 pub use protocol_evidence::{
     DeploymentProof, ProgramLifecycleProof, ProgramStateProof, ProtocolDeploymentVerifier,
     ProtocolEvidenceError, StateLeafWitness, VerifiedDeploymentEvidence, VerifiedProgramHead,
+    VerifiedProtocolHead,
 };
 pub use resolver::{ExecutableAdmissionError, VerifiedProgramCatalog};
 

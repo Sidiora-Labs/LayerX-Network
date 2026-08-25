@@ -1,7 +1,7 @@
 use ed25519_dalek::{Signer as _, SigningKey};
 use layerx_programs::{
     programs_root_commitment, state_leaf_commitment, DeploymentProof, ProgramLifecycleProof,
-    ProgramStateProof, StateLeafWitness, StateProof,
+    ProgramStateProof, ProtocolDeploymentVerifier, StateLeafWitness, StateProof,
 };
 use layerx_programs_runtime::{hash_bytes, HashAlgorithm, ProgramId, UpgradePolicy};
 use layerx_proof::merkle::{build_leaf_hash_proof, build_proof, Proof};
@@ -17,12 +17,126 @@ pub const PROGRAM_BYTES: [u8; 32] = [0x31; 32];
 pub const AUTHORITY: [u8; 32] = [0x51; 32];
 pub const WASM_V1: &[u8] = &[0, 97, 115, 109, 1, 0, 0, 0];
 pub const WASM_V2: &[u8] = &[0, 97, 115, 109, 1, 0, 0, 0, 0, 3, 2, b'v', b'2'];
+const TRUST_HISTORY_DOMAIN: &[u8] = b"LayerX/sequencer-trust-history/v1\0";
 
 pub struct ProtocolFixture {
     pub proof: DeploymentProof,
     pub sequencer_id: [u8; 32],
     pub sequencer_public_key: [u8; 32],
     pub batch_number: u64,
+}
+
+#[derive(Clone, Copy)]
+pub struct TrustAnchorFixture {
+    pub protocol_version: u16,
+    pub network_id: u32,
+    pub epoch: u64,
+    pub sequencer_id: [u8; 32],
+    pub sequencer_public_key: [u8; 32],
+    pub first_batch: u64,
+    pub last_batch: u64,
+    pub revoked_from_batch: Option<u64>,
+}
+
+pub fn verifier_for_fixture(
+    fixture: &ProtocolFixture,
+    first_batch: u64,
+    last_batch: u64,
+    revoked_from_batch: Option<u64>,
+    staleness_ms: u64,
+) -> ProtocolDeploymentVerifier {
+    verifier_from_history(
+        &[TrustAnchorFixture {
+            protocol_version: 2,
+            network_id: 42,
+            epoch: 2,
+            sequencer_id: fixture.sequencer_id,
+            sequencer_public_key: fixture.sequencer_public_key,
+            first_batch,
+            last_batch,
+            revoked_from_batch,
+        }],
+        0,
+        staleness_ms,
+    )
+}
+
+pub fn verifier_from_history(
+    anchors: &[TrustAnchorFixture],
+    current_anchor: usize,
+    staleness_ms: u64,
+) -> ProtocolDeploymentVerifier {
+    try_verifier_from_history(anchors, current_anchor, staleness_ms)
+        .unwrap_or_else(|error| panic!("protocol verifier: {error}"))
+}
+
+pub fn try_verifier_from_history(
+    anchors: &[TrustAnchorFixture],
+    current_anchor: usize,
+    staleness_ms: u64,
+) -> Result<ProtocolDeploymentVerifier, layerx_programs::ProtocolEvidenceError> {
+    use std::fs;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_HISTORY: AtomicU64 = AtomicU64::new(0);
+    let mut entries = anchors.iter().copied().map(|anchor| {
+        let mut bytes = Vec::with_capacity(103);
+        bytes.extend_from_slice(&anchor.protocol_version.to_be_bytes());
+        bytes.extend_from_slice(&anchor.network_id.to_be_bytes());
+        bytes.extend_from_slice(&anchor.epoch.to_be_bytes());
+        bytes.extend_from_slice(&anchor.sequencer_id);
+        bytes.extend_from_slice(&anchor.sequencer_public_key);
+        bytes.extend_from_slice(&anchor.first_batch.to_be_bytes());
+        bytes.extend_from_slice(&anchor.last_batch.to_be_bytes());
+        bytes.push(u8::from(anchor.revoked_from_batch.is_some()));
+        bytes.extend_from_slice(&anchor.revoked_from_batch.unwrap_or(0).to_be_bytes());
+        (bytes, anchor)
+    }).collect::<Vec<_>>();
+    entries.sort_by(|left, right| left.0.cmp(&right.0));
+    let selected = entries
+        .iter()
+        .position(|(_, anchor)| {
+            let requested = anchors[current_anchor];
+            anchor.protocol_version == requested.protocol_version
+                && anchor.network_id == requested.network_id
+                && anchor.epoch == requested.epoch
+                && anchor.sequencer_id == requested.sequencer_id
+                && anchor.sequencer_public_key == requested.sequencer_public_key
+                && anchor.first_batch == requested.first_batch
+                && anchor.last_batch == requested.last_batch
+                && anchor.revoked_from_batch == requested.revoked_from_batch
+        })
+        .unwrap_or_else(|| panic!("current trust anchor is absent"));
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(TRUST_HISTORY_DOMAIN);
+    bytes.extend_from_slice(
+        &u16::try_from(entries.len())
+            .unwrap_or_else(|_| panic!("trust history length"))
+            .to_be_bytes(),
+    );
+    bytes.extend_from_slice(
+        &u16::try_from(selected)
+            .unwrap_or_else(|_| panic!("current trust anchor index"))
+            .to_be_bytes(),
+    );
+    for (entry, _) in entries {
+        bytes.extend_from_slice(&entry);
+    }
+    let path = std::env::temp_dir().join(format!(
+        "layerx-programs-trust-{}-{}",
+        std::process::id(),
+        NEXT_HISTORY.fetch_add(1, Ordering::Relaxed),
+    ));
+    fs::write(&path, bytes).unwrap_or_else(|error| panic!("write trust history: {error}"));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
+            .unwrap_or_else(|error| panic!("protect trust history: {error}"));
+    }
+    let verifier = ProtocolDeploymentVerifier::from_protected_history(&path, staleness_ms);
+    fs::remove_file(&path).unwrap_or_else(|error| panic!("remove trust history: {error}"));
+    verifier
 }
 
 pub fn program() -> ProgramId {
@@ -40,8 +154,19 @@ pub fn deploy_fixture(
     batch_number: u64,
     timestamp: u64,
 ) -> ProtocolFixture {
+    deploy_fixture_in_epoch(wasm, policy, batch_number, timestamp, 2, [7; 32])
+}
+
+pub fn deploy_fixture_in_epoch(
+    wasm: &[u8],
+    policy: UpgradePolicy,
+    batch_number: u64,
+    timestamp: u64,
+    epoch: u64,
+    signing_key: [u8; 32],
+) -> ProtocolFixture {
     let payload = deploy_payload(wasm, policy);
-    fixture(
+    fixture_in_epoch(
         payload,
         1,
         wasm,
@@ -51,6 +176,8 @@ pub fn deploy_fixture(
         timestamp,
         false,
         false,
+        epoch,
+        signing_key,
     )
 }
 
@@ -132,8 +259,36 @@ fn fixture(
     deprecated: bool,
     wrong_batch_id: bool,
 ) -> ProtocolFixture {
+    fixture_in_epoch(
+        payload,
+        ordinal,
+        wasm,
+        policy,
+        version,
+        batch_number,
+        timestamp,
+        deprecated,
+        wrong_batch_id,
+        2,
+        [7; 32],
+    )
+}
+
+fn fixture_in_epoch(
+    payload: Vec<u8>,
+    ordinal: u16,
+    wasm: &[u8],
+    policy: UpgradePolicy,
+    version: u32,
+    batch_number: u64,
+    timestamp: u64,
+    deprecated: bool,
+    wrong_batch_id: bool,
+    epoch: u64,
+    signing_key: [u8; 32],
+) -> ProtocolFixture {
     let activity = encode_activity(&payload, ordinal);
-    let key = SigningKey::from_bytes(&[7; 32]);
+    let key = SigningKey::from_bytes(&signing_key);
     let sequencer_id = key.verifying_key().to_bytes();
     let (state, header_signature) = state_fixture_with_key(
         &activity,
@@ -145,6 +300,7 @@ fn fixture(
         version,
         deprecated,
         wrong_batch_id,
+        epoch,
     );
     let (activity_proof, _) = build_proof(&[activity.as_slice()], 0)
         .unwrap_or_else(|error| panic!("activity proof: {error:?}"));
@@ -185,6 +341,7 @@ fn state_fixture(
         version,
         deprecated,
         wrong_batch_id,
+        2,
     )
 }
 
@@ -198,6 +355,7 @@ fn state_fixture_with_key(
     version: u32,
     deprecated: bool,
     wrong_batch_id: bool,
+    epoch: u64,
 ) -> (ProgramStateProof, [u8; 64]) {
     let program_key = program_key();
     let program_value = program_record(wasm, policy, version);
@@ -289,6 +447,7 @@ fn state_fixture_with_key(
         activity_root,
         receipt_root,
         key.verifying_key().to_bytes(),
+        epoch,
     );
     let header_hash = batch_header_digest(&header)
         .unwrap_or_else(|error| panic!("header digest: {error:?}"));
@@ -406,6 +565,7 @@ fn encode_header(
     activity_root: [u8; 32],
     receipt_root: [u8; 32],
     sequencer_id: [u8; 32],
+    epoch: u64,
 ) -> Vec<u8> {
     let mut encoder = Encoder::new(354);
     assert_eq!(encoder.structure_header(0x1701), Ok(()));
@@ -415,7 +575,7 @@ fn encode_header(
     assert_eq!(encoder.tag(2, 15), Ok(()));
     assert_eq!(encoder.u32(42), Ok(()));
     assert_eq!(encoder.tag(3, 15), Ok(()));
-    assert_eq!(encoder.u64(2), Ok(()));
+    assert_eq!(encoder.u64(epoch), Ok(()));
     assert_eq!(encoder.tag(4, 15), Ok(()));
     assert_eq!(encoder.u64(batch_number), Ok(()));
     assert_eq!(encoder.tag(5, 15), Ok(()));

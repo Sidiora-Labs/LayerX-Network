@@ -36,30 +36,6 @@ fn parse_u32(name: &str, default: u32) -> Result<u32, String> {
     })
 }
 
-fn required_u64(name: &str) -> Result<u64, String> {
-    env::var(name)
-        .map_err(|_| format!("{name} is required"))?
-        .parse()
-        .map_err(|_| format!("{name} must be an integer"))
-}
-
-fn required_u32(name: &str) -> Result<u32, String> {
-    u32::try_from(required_u64(name)?).map_err(|_| format!("{name} is out of range"))
-}
-
-fn required_u16(name: &str) -> Result<u16, String> {
-    u16::try_from(required_u64(name)?).map_err(|_| format!("{name} is out of range"))
-}
-
-fn optional_u64(name: &str) -> Result<Option<u64>, String> {
-    env::var(name).map_or(Ok(None), |value| {
-        value
-            .parse()
-            .map(Some)
-            .map_err(|_| format!("{name} must be an integer"))
-    })
-}
-
 fn parse_path(name: &str, default: PathBuf) -> PathBuf {
     env::var(name).map_or(default, PathBuf::from)
 }
@@ -101,24 +77,10 @@ fn config() -> Result<Config, String> {
         .map_err(|error| {
             format!("LAYERX_REGISTRY_RECEIPT_AUTHORITY_REPLICA_ID is invalid: {error}")
         })?,
-        protocol_version: required_u16("LAYERX_REGISTRY_PROTOCOL_VERSION")?,
-        network_id: required_u32("LAYERX_REGISTRY_NETWORK_ID")?,
-        epoch: required_u64("LAYERX_REGISTRY_EPOCH")?,
-        sequencer_id: hex::decode_digest(
-            &env::var("LAYERX_REGISTRY_SEQUENCER_ID")
-                .map_err(|_| "LAYERX_REGISTRY_SEQUENCER_ID is required".to_owned())?,
-        )
-        .map_err(|error| format!("LAYERX_REGISTRY_SEQUENCER_ID is invalid: {error}"))?,
-        sequencer_public_key: hex::decode_digest(
-            &env::var("LAYERX_REGISTRY_SEQUENCER_PUBLIC_KEY")
-                .map_err(|_| "LAYERX_REGISTRY_SEQUENCER_PUBLIC_KEY is required".to_owned())?,
-        )
-        .map_err(|error| format!("LAYERX_REGISTRY_SEQUENCER_PUBLIC_KEY is invalid: {error}"))?,
-        sequencer_first_batch: parse_u64("LAYERX_REGISTRY_SEQUENCER_FIRST_BATCH", 1)?,
-        sequencer_last_batch: parse_u64("LAYERX_REGISTRY_SEQUENCER_LAST_BATCH", u64::MAX)?,
-        sequencer_revoked_from_batch: optional_u64(
-            "LAYERX_REGISTRY_SEQUENCER_REVOKED_FROM_BATCH",
-        )?,
+        sequencer_trust_history: PathBuf::from(
+            env::var("LAYERX_REGISTRY_SEQUENCER_TRUST_HISTORY")
+                .map_err(|_| "LAYERX_REGISTRY_SEQUENCER_TRUST_HISTORY is required".to_owned())?,
+        ),
     })
 }
 

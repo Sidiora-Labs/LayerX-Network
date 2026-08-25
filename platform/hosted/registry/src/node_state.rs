@@ -4,10 +4,8 @@ use layerx_programs::{
     hex, AccountStateHead, DeploymentProof, ProgramId, ProtocolDeploymentVerifier,
     ReadFreshness, VerifiedDeploymentEvidence,
 };
-use layerx_proof::inclusion::{verify_receipt as verify_receipt_inclusion, SequencerAuthorization};
 use layerx_proof::merkle::{decode_proof, Proof};
-use layerx_proof::receipt::{verify_program_state, AuthorizedBatch};
-use layerx_wire::hash::{execution_batch_id, receipt_digest};
+use layerx_wire::hash::receipt_digest;
 use layerx_wire::receipt::{decode as decode_receipt, encode_unsigned};
 use serde_json::Value;
 
@@ -43,12 +41,6 @@ pub struct NodeProgramStateSource {
     authority_endpoint: String,
     authority_authorization: String,
     authority_replica_id: [u8; 32],
-    expected_protocol_version: u16,
-    expected_network_id: u32,
-    expected_epoch: u64,
-    revoked_from_batch: Option<u64>,
-    sequencer_authorization: SequencerAuthorization,
-    sequencer_public_key: [u8; 32],
     deployment_verifier: ProtocolDeploymentVerifier,
 }
 
@@ -66,35 +58,16 @@ impl NodeProgramStateSource {
         authority_endpoint: &str,
         authority_authorization: String,
         authority_replica_id: [u8; 32],
-        expected_protocol_version: u16,
-        expected_network_id: u32,
-        expected_epoch: u64,
-        sequencer_id: [u8; 32],
-        sequencer_public_key: [u8; 32],
-        sequencer_first_batch: u64,
-        sequencer_last_batch: u64,
-        revoked_from_batch: Option<u64>,
-        staleness_limit_ms: u64,
+        deployment_verifier: ProtocolDeploymentVerifier,
     ) -> Result<Self, String> {
         let endpoint = endpoint.trim_end_matches('/');
         let authority_endpoint = authority_endpoint.trim_end_matches('/');
         if authorization.is_empty()
             || authority_authorization.is_empty()
             || authority_replica_id == [0; 32]
-            || !matches!(expected_protocol_version, 1 | 2)
-            || expected_network_id == 0
-            || expected_epoch == 0
-            || sequencer_id == [0; 32]
-            || sequencer_public_key == [0; 32]
-            || sequencer_first_batch == 0
-            || sequencer_last_batch < sequencer_first_batch
-            || revoked_from_batch
-                .is_some_and(|batch| batch == 0 || batch <= sequencer_first_batch)
-            || staleness_limit_ms == 0
         {
             return Err(
-                "node authorities, protocol domain, key window and millisecond freshness are required"
-                    .to_owned(),
+                "node authorities and a configured verifier are required".to_owned(),
             );
         }
         if !(endpoint.starts_with("https://") || loopback_http(endpoint))
@@ -109,18 +82,6 @@ impl NodeProgramStateSource {
             .timeout_global(Some(Duration::from_secs(30)))
             .http_status_as_error(false)
             .build();
-        let deployment_verifier = ProtocolDeploymentVerifier::new(
-            expected_protocol_version,
-            expected_network_id,
-            expected_epoch,
-            sequencer_id,
-            sequencer_public_key,
-            sequencer_first_batch,
-            sequencer_last_batch,
-            revoked_from_batch,
-            staleness_limit_ms,
-        )
-        .map_err(|error| format!("deployment verifier is not configured: {error}"))?;
         Ok(Self {
             agent: config.into(),
             endpoint: endpoint.to_owned(),
@@ -128,17 +89,6 @@ impl NodeProgramStateSource {
             authority_endpoint: authority_endpoint.to_owned(),
             authority_authorization,
             authority_replica_id,
-            expected_protocol_version,
-            expected_network_id,
-            expected_epoch,
-            revoked_from_batch,
-            sequencer_authorization: SequencerAuthorization::new(
-                sequencer_id,
-                sequencer_public_key,
-                sequencer_first_batch,
-                sequencer_last_batch,
-            ),
-            sequencer_public_key,
             deployment_verifier,
         })
     }
@@ -162,13 +112,13 @@ impl NodeProgramStateSource {
             .map_err(|error| format!("stored protocol deployment evidence refused: {error}"))
     }
 
-    pub fn current_head(&self) -> Result<AccountStateHead, String> {
-        self.parse_head(&self.get("/v1/protocol/account-state/head")?, true)
+    pub fn current_head(&self, now_ms: u64) -> Result<AccountStateHead, String> {
+        self.parse_head(&self.get("/v1/protocol/account-state/head")?, Some(now_ms))
     }
 
     pub fn receipt_head(&self, digest: [u8; 32]) -> Result<AccountStateHead, String> {
         let path = format!("/v1/receipts/{}/account-state", hex::encode(&digest));
-        let head = self.parse_head(&self.get(&path)?, false)?;
+        let head = self.parse_head(&self.get(&path)?, None)?;
         if head.receipt_digest != digest {
             return Err("node receipt lookup returned a different receipt digest".to_owned());
         }
@@ -336,11 +286,11 @@ impl NodeProgramStateSource {
             .map_err(|error| format!("node authority GET {path} returned invalid JSON: {error}"))
     }
 
-    fn parse_head(&self, value: &Value, require_current: bool) -> Result<AccountStateHead, String> {
+    fn parse_head(&self, value: &Value, now_ms: Option<u64>) -> Result<AccountStateHead, String> {
         let current = value["current"]
             .as_bool()
             .ok_or_else(|| "node account-state response omitted current".to_owned())?;
-        if require_current && !current {
+        if now_ms.is_some() && !current {
             return Err("node account-state response is not the current head".to_owned());
         }
         let receipt_bytes = hex::decode(field(value, "receipt_hex")?)
@@ -367,100 +317,52 @@ impl NodeProgramStateSource {
         if node_evidence != independent_evidence {
             return Err("node batch authority disagrees with the independent authority".to_owned());
         }
-        if hex::decode_digest(field(&independent_document, "sequencer_public_key")?)
-            .map_err(|error| format!("independent sequencer key is invalid: {error}"))?
-            != self.sequencer_public_key
-        {
-            return Err("independent authority declared a different sequencer key".to_owned());
-        }
         if hex::decode_digest(field(&independent_document, "authority_replica_id")?)
             .map_err(|error| format!("independent authority id is invalid: {error}"))?
             != self.authority_replica_id
         {
             return Err("independent authority declared a different replica id".to_owned());
         }
-        let inclusion = verify_receipt_inclusion(
-            &receipt_bytes,
-            &independent_evidence.receipt_proof,
-            &independent_evidence.header,
-            &independent_evidence.signature,
-            &self.sequencer_authorization,
-        )
-        .map_err(|error| format!("program-state receipt inclusion failed: {error:?}"))?;
-        let header = inclusion.header().header();
-        if header.protocol_version() != self.expected_protocol_version
-            || header.network_id() != self.expected_network_id
-            || header.epoch() != self.expected_epoch
+        let verified = match now_ms {
+            Some(now_ms) => self.deployment_verifier.verify_current_protocol_head(
+                &receipt_bytes,
+                &independent_evidence.receipt_proof,
+                &independent_evidence.header,
+                &independent_evidence.signature,
+                now_ms,
+            ),
+            None => self.deployment_verifier.verify_historical_protocol_head(
+                &receipt_bytes,
+                &independent_evidence.receipt_proof,
+                &independent_evidence.header,
+                &independent_evidence.signature,
+            ),
+        }
+        .map_err(|error| format!("program-state receipt verification failed: {error}"))?;
+        if hex::decode_digest(field(&independent_document, "sequencer_public_key")?)
+            .map_err(|error| format!("independent sequencer key is invalid: {error}"))?
+            != verified.sequencer_public_key()
         {
-            return Err("program-state receipt belongs to another protocol domain".to_owned());
+            return Err("independent authority declared a different sequencer key".to_owned());
         }
-        if self
-            .revoked_from_batch
-            .is_some_and(|revoked| header.batch_number() >= revoked)
-        {
-            return Err("program-state receipt uses a revoked sequencer key".to_owned());
-        }
-        if protocol.global_sequence() < header.first_sequence()
-            || protocol.global_sequence() > header.last_sequence()
-        {
-            return Err("program-state receipt sequence is outside its signed batch".to_owned());
-        }
-        let expected_batch_id = execution_batch_id(
-            header.previous_state_root(),
-            protocol.activity_id(),
-            protocol.global_sequence(),
-            header.batch_number(),
-        )
-        .map_err(|_| "program-state batch identifier could not be derived".to_owned())?;
-        if protocol.batch_id() != expected_batch_id {
-            return Err("program-state receipt carries the wrong batch identifier".to_owned());
-        }
-        let authorized = AuthorizedBatch::new(
-            protocol.batch_id(),
-            protocol.asset(),
-            header.previous_state_root(),
-            header.resulting_state_root(),
-            self.sequencer_public_key,
-        );
-        let verified = verify_program_state(&receipt_bytes, &authorized).map_err(|error| {
-            format!(
-                "program-state receipt verification failed: {:?}",
-                error.check
-            )
-        })?;
-        let verified_protocol = verified
-            .receipt()
-            .protocol()
-            .ok_or_else(|| "verified state receipt lost its protocol body".to_owned())?;
-        if verified_protocol.protocol_version() != header.protocol_version()
-            || verified_protocol.timestamp() != header.timestamp_ms()
-            || verified_protocol.activity_root() != header.activity_merkle_root()
-        {
-            return Err(
-                "program-state receipt disagrees with its signed batch header".to_owned(),
-            );
-        }
-        let unsigned = encode_unsigned(verified.receipt())
-            .map_err(|_| "verified state receipt could not be encoded unsigned".to_owned())?;
-        let verified_digest = receipt_digest(&unsigned)
-            .map_err(|_| "verified state receipt digest could not be computed".to_owned())?;
         let declared_digest = hex::decode_digest(field(value, "receipt_digest")?)
             .map_err(|error| format!("node receipt digest is invalid: {error}"))?;
         let declared_root = hex::decode_digest(field(value, "state_root")?)
             .map_err(|error| format!("node state root is invalid: {error}"))?;
-        if declared_digest != verified_digest
-            || declared_root != verified_protocol.resulting_state_root()
-            || value["observed_sequence"].as_u64() != Some(verified_protocol.global_sequence())
-            || value["observed_at"].as_u64() != Some(verified_protocol.timestamp())
+        if declared_digest != verified.receipt_digest()
+            || declared_root != verified.state_root()
+            || value["observed_sequence"].as_u64()
+                != Some(verified.freshness().observed_sequence)
+            || value["observed_at"].as_u64() != Some(verified.freshness().observed_at)
         {
             return Err("node account-state claims disagree with the verified receipt".to_owned());
         }
         Ok(AccountStateHead {
-            receipt_digest: verified_digest,
-            state_root: verified_protocol.resulting_state_root(),
+            receipt_digest: verified.receipt_digest(),
+            state_root: verified.state_root(),
             freshness: ReadFreshness {
-                observed_sequence: verified_protocol.global_sequence(),
-                observed_at: verified_protocol.timestamp(),
+                observed_sequence: verified.freshness().observed_sequence,
+                observed_at: verified.freshness().observed_at,
             },
         })
     }

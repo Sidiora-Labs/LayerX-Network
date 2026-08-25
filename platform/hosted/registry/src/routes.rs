@@ -12,9 +12,10 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use layerx_programs::{
     hex, programs_source_verification, BuildPlan, BuildRefusal,
-    JournalReadAuthority, LifecycleReceipt, ObservedHead, ProgramId, ProgramLifecycle, Registry,
-    RegistryError, RegistryVersion, ReproducibleBuild, SourceArchive, SourceStatus, SourceVerifier,
-    UpgradePolicy, VerifiedProgramBalanceRead, VerifiedRegistryRead, WindDownStateAccess,
+    JournalReadAuthority, LifecycleReceipt, ObservedHead, ProgramId, ProgramLifecycle,
+    ProtocolDeploymentVerifier, Registry, RegistryError, RegistryVersion, ReproducibleBuild,
+    SourceArchive, SourceStatus, SourceVerifier, UpgradePolicy, VerifiedProgramBalanceRead,
+    VerifiedRegistryRead, WindDownStateAccess,
 };
 use layerx_programs_protocol_adapter::ProtocolProgramStateRead;
 use serde_json::{json, Value};
@@ -94,6 +95,11 @@ impl Registrar {
         if config.staleness_ms == 0 {
             return Err("a registry read freshness bound is required".to_owned());
         }
+        let deployment_verifier = ProtocolDeploymentVerifier::from_protected_history(
+            &config.sequencer_trust_history,
+            config.staleness_ms,
+        )
+        .map_err(|error| format!("sequencer trust history is unavailable: {error}"))?;
         let mut registrar = Self {
             registry: Registry::new(),
             journal: FileDeploymentJournal::open(config.journal.clone())?,
@@ -104,15 +110,7 @@ impl Registrar {
                 &config.receipt_authority_endpoint,
                 config.receipt_authority_authorization.clone(),
                 config.receipt_authority_replica_id,
-                config.protocol_version,
-                config.network_id,
-                config.epoch,
-                config.sequencer_id,
-                config.sequencer_public_key,
-                config.sequencer_first_batch,
-                config.sequencer_last_batch,
-                config.sequencer_revoked_from_batch,
-                config.staleness_ms,
+                deployment_verifier,
             )?,
             mirror: SourceMirror::open(config.mirror.clone())?,
             verified: VerifiedSourceStore::open(config.verified.clone())?,
@@ -136,7 +134,7 @@ impl Registrar {
             ("POST", "/__registry/deployments") => {
                 deployment_ingress_unavailable(&request.body)
             }
-            ("POST", "/__registry/head") => self.ingest_head(),
+            ("POST", "/__registry/head") => self.ingest_head(now),
             ("POST", "/__registry/sources") => self.ingest_source(&request.body),
             (
                 _,
@@ -193,7 +191,7 @@ impl Registrar {
         if let Some(program) = requested {
             programs.insert(program);
         }
-        let current_head = self.node_state.current_head()?;
+        let current_head = self.node_state.current_head(now)?;
         if complete.sequence > feed_head || feed_head > current_head.freshness.observed_sequence {
             return Err(
                 "program-state feed is ahead of the independently verified head".to_owned(),
@@ -491,8 +489,8 @@ impl Registrar {
         Ok(())
     }
 
-    fn ingest_head(&mut self) -> Response {
-        let verified = match self.node_state.current_head() {
+    fn ingest_head(&mut self, now: u64) -> Response {
+        let verified = match self.node_state.current_head(now) {
             Ok(head) => head,
             Err(error) => return refusal(503, "protocol_state_unavailable", &error),
         };

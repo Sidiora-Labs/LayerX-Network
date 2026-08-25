@@ -1,6 +1,9 @@
 //! Cryptographic deployment and current-lifecycle evidence for Programs.
 
 use core::fmt::{self, Display};
+use std::fs::{self, File};
+use std::io::Read as _;
+use std::path::Path;
 
 use layerx_programs_runtime::{ProgramId, UpgradePolicy, ABI_VERSION};
 use layerx_proof::inclusion::{
@@ -11,7 +14,9 @@ use layerx_proof::receipt::{verify_program_state, AuthorizedBatch};
 use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry};
 use layerx_wire::activity::{decode_signed, encode_signed};
 use layerx_wire::hash::{activity_id, execution_batch_id, payload_hash, receipt_digest};
-use layerx_wire::receipt::{decode as decode_receipt, encode_unsigned};
+use layerx_wire::receipt::{
+    decode as decode_receipt, decode_batch_header, encode_unsigned,
+};
 
 use crate::account_state::verify_state_membership;
 use crate::{
@@ -29,6 +34,11 @@ const WASM_HEADER: &[u8; 8] = b"\0asm\x01\0\0\0";
 const MAX_MODULE_BYTES: usize = 32 * 1024 * 1024;
 const MAX_EVIDENCE_BYTES: usize = 40 * 1024 * 1024;
 const EVIDENCE_DOMAIN: &[u8] = b"LayerX/programs/deployment-proof/v1\0";
+const TRUST_HISTORY_DOMAIN: &[u8] = b"LayerX/sequencer-trust-history/v1\0";
+const TRUST_ANCHOR_BYTES: usize = 103;
+const MAX_TRUST_ANCHORS: usize = 64;
+const MAX_TRUST_HISTORY_BYTES: usize =
+    TRUST_HISTORY_DOMAIN.len() + 4 + MAX_TRUST_ANCHORS * TRUST_ANCHOR_BYTES;
 
 /// One exact state-tree leaf and its index-aware membership proof.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -75,6 +85,10 @@ pub struct DeploymentProof {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProtocolEvidenceError {
     InvalidTrustAnchor,
+    TrustHistoryUnavailable,
+    TrustAnchorUnavailable,
+    TrustAnchorAmbiguous,
+    HistoricalTrustAnchor,
     ProtocolDomain,
     SequencerRevoked,
     CanonicalActivity,
@@ -99,6 +113,18 @@ impl Display for ProtocolEvidenceError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::InvalidTrustAnchor => "deployment verifier trust anchor is invalid",
+            Self::TrustHistoryUnavailable => {
+                "canonical protected sequencer trust history is unavailable"
+            }
+            Self::TrustAnchorUnavailable => {
+                "signed batch has no configured sequencer trust anchor"
+            }
+            Self::TrustAnchorAmbiguous => {
+                "signed batch matches more than one sequencer trust anchor"
+            }
+            Self::HistoricalTrustAnchor => {
+                "historical sequencer trust cannot authorize a current state head"
+            }
             Self::ProtocolDomain => "evidence belongs to a different network, protocol, or epoch",
             Self::SequencerRevoked => "evidence was signed at or after sequencer-key revocation",
             Self::CanonicalActivity => "Programs activity is not canonical",
@@ -277,70 +303,151 @@ impl VerifiedProgramHead {
         self.freshness
     }
 
-    #[must_use]
     pub const fn valid_until_ms(&self) -> u64 {
         self.valid_until_ms
     }
 }
 
-/// Verifier bound to one protocol/network/epoch and one core-published
-/// sequencer-key authorization and revocation range.
-#[derive(Clone, Copy, Debug)]
-pub struct ProtocolDeploymentVerifier {
-    expected_protocol_version: u16,
-    expected_network_id: u32,
-    expected_epoch: u64,
-    authorization: SequencerAuthorization,
+/// Opaque current receipt head established under the one configured active
+/// sequencer trust anchor.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VerifiedProtocolHead {
+    activity_id: [u8; 32],
+    receipt_digest: [u8; 32],
+    batch_header_digest: [u8; 32],
+    state_root: [u8; 32],
+    freshness: ReadFreshness,
     sequencer_public_key: [u8; 32],
+}
+
+impl VerifiedProtocolHead {
+    #[must_use]
+    pub const fn activity_id(&self) -> [u8; 32] {
+        self.activity_id
+    }
+
+    #[must_use]
+    pub const fn receipt_digest(&self) -> [u8; 32] {
+        self.receipt_digest
+    }
+
+    #[must_use]
+    pub const fn batch_header_digest(&self) -> [u8; 32] {
+        self.batch_header_digest
+    }
+
+    #[must_use]
+    pub const fn state_root(&self) -> [u8; 32] {
+        self.state_root
+    }
+
+    #[must_use]
+    pub const fn freshness(&self) -> ReadFreshness {
+        self.freshness
+    }
+
+    #[must_use]
+    pub const fn sequencer_public_key(&self) -> [u8; 32] {
+        self.sequencer_public_key
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SequencerTrustAnchor {
+    protocol_version: u16,
+    network_id: u32,
+    epoch: u64,
+    sequencer_id: [u8; 32],
+    sequencer_public_key: [u8; 32],
+    first_batch: u64,
+    last_batch: u64,
     revoked_from_batch: Option<u64>,
+}
+
+impl SequencerTrustAnchor {
+    const fn effective_last_batch(self) -> u64 {
+        match self.revoked_from_batch {
+            Some(revoked) => {
+                let last_valid = revoked - 1;
+                if last_valid < self.last_batch {
+                    last_valid
+                } else {
+                    self.last_batch
+                }
+            }
+            None => self.last_batch,
+        }
+    }
+
+    const fn authorization(self) -> SequencerAuthorization {
+        SequencerAuthorization::new(
+            self.sequencer_id,
+            self.sequencer_public_key,
+            self.first_batch,
+            self.effective_last_batch(),
+        )
+    }
+}
+
+/// Verifier bound to a bounded, protected history of core-published
+/// sequencer authorizations and one explicit current anchor.
+#[derive(Clone, Debug)]
+pub struct ProtocolDeploymentVerifier {
+    anchors: Vec<SequencerTrustAnchor>,
+    current_anchor: usize,
     staleness_limit_ms: u64,
 }
 
 impl ProtocolDeploymentVerifier {
-    /// Creates a verifier over one configured protocol trust anchor.
+    /// Loads one canonical bounded trust history from a private regular file.
+    /// The proof request cannot add or replace any anchor selected here.
     ///
     /// # Errors
     ///
-    /// Refuses reserved protocol-domain identifiers, empty or already-revoked
-    /// key ranges, and an absent millisecond freshness bound before evidence
-    /// can be evaluated.
-    pub fn new(
-        expected_protocol_version: u16,
-        expected_network_id: u32,
-        expected_epoch: u64,
-        sequencer_id: [u8; 32],
-        sequencer_public_key: [u8; 32],
-        first_batch: u64,
-        last_batch: u64,
-        revoked_from_batch: Option<u64>,
+    /// Refuses missing, symlinked, non-private, oversized, non-canonical,
+    /// overlapping or current-anchor-ambiguous histories.
+    pub fn from_protected_history(
+        path: &Path,
         staleness_limit_ms: u64,
     ) -> Result<Self, ProtocolEvidenceError> {
-        if !matches!(expected_protocol_version, 1 | 2)
-            || expected_network_id == 0
-            || expected_epoch == 0
-            || sequencer_id == [0; 32]
-            || sequencer_public_key == [0; 32]
-            || first_batch == 0
-            || last_batch < first_batch
-            || revoked_from_batch.is_some_and(|batch| batch == 0 || batch <= first_batch)
-            || staleness_limit_ms == 0
-        {
+        if staleness_limit_ms == 0 {
             return Err(ProtocolEvidenceError::InvalidTrustAnchor);
         }
+        let link_metadata = fs::symlink_metadata(path)
+            .map_err(|_| ProtocolEvidenceError::TrustHistoryUnavailable)?;
+        if !link_metadata.file_type().is_file() || link_metadata.file_type().is_symlink() {
+            return Err(ProtocolEvidenceError::TrustHistoryUnavailable);
+        }
+        require_private_history(&link_metadata)?;
+        let mut file = File::open(path)
+            .map_err(|_| ProtocolEvidenceError::TrustHistoryUnavailable)?;
+        let metadata = file
+            .metadata()
+            .map_err(|_| ProtocolEvidenceError::TrustHistoryUnavailable)?;
+        require_private_history(&metadata)?;
+        require_same_history_file(&link_metadata, &metadata)?;
+        let length = usize::try_from(metadata.len())
+            .map_err(|_| ProtocolEvidenceError::TrustHistoryUnavailable)?;
+        if length == 0 || length > MAX_TRUST_HISTORY_BYTES {
+            return Err(ProtocolEvidenceError::TrustHistoryUnavailable);
+        }
+        let mut bytes = Vec::with_capacity(length);
+        file.read_to_end(&mut bytes)
+            .map_err(|_| ProtocolEvidenceError::TrustHistoryUnavailable)?;
+        if bytes.len() != length {
+            return Err(ProtocolEvidenceError::TrustHistoryUnavailable);
+        }
+        let (anchors, current_anchor) = decode_trust_history(&bytes)?;
         Ok(Self {
-            expected_protocol_version,
-            expected_network_id,
-            expected_epoch,
-            authorization: SequencerAuthorization::new(
-                sequencer_id,
-                sequencer_public_key,
-                first_batch,
-                last_batch,
-            ),
-            sequencer_public_key,
-            revoked_from_batch,
+            anchors,
+            current_anchor,
             staleness_limit_ms,
         })
+    }
+
+    #[must_use]
+    pub const fn staleness_limit_ms(&self) -> u64 {
+        self.staleness_limit_ms
     }
 
     /// Verifies a canonical deploy or upgrade through its exact successful
@@ -351,7 +458,6 @@ impl ProtocolDeploymentVerifier {
         now_ms: u64,
     ) -> Result<VerifiedDeploymentEvidence, ProtocolEvidenceError> {
         let activity = canonical_programs_activity(&proof.activity)?;
-        self.verify_activity_domain(&activity)?;
         let parsed = parse_lifecycle_activity(activity.activity_type().ordinal(), activity.payload())?;
         if payload_hash(&activity).map_err(|_| ProtocolEvidenceError::PayloadHash)?
             != activity.payload_hash()
@@ -360,15 +466,17 @@ impl ProtocolDeploymentVerifier {
         }
         let activity_identifier =
             activity_id(&activity).map_err(|_| ProtocolEvidenceError::CanonicalActivity)?;
+        let head = self.verify_program_head(&proof.state, EvidenceMoment::Current(now_ms))?;
+        let anchor = self.anchors[head.anchor_index];
+        verify_activity_domain(&activity, anchor)?;
         let included = verify_activity(
             &proof.activity,
             &proof.activity_proof,
             &proof.state.header,
             &proof.state.header_signature,
-            &self.authorization,
+            &anchor.authorization(),
         )
         .map_err(|_| ProtocolEvidenceError::ActivityInclusion)?;
-        let head = self.verify_program_head(&proof.state, Some(now_ms))?;
         if included.header().digest() != head.batch_header_digest
             || head.activity_id != activity_identifier
         {
@@ -400,7 +508,6 @@ impl ProtocolDeploymentVerifier {
         proof: &DeploymentProof,
     ) -> Result<VerifiedDeploymentEvidence, ProtocolEvidenceError> {
         let activity = canonical_programs_activity(&proof.activity)?;
-        self.verify_activity_domain(&activity)?;
         let parsed = parse_lifecycle_activity(activity.activity_type().ordinal(), activity.payload())?;
         if payload_hash(&activity).map_err(|_| ProtocolEvidenceError::PayloadHash)?
             != activity.payload_hash()
@@ -409,15 +516,17 @@ impl ProtocolDeploymentVerifier {
         }
         let activity_identifier =
             activity_id(&activity).map_err(|_| ProtocolEvidenceError::CanonicalActivity)?;
+        let head = self.verify_program_head(&proof.state, EvidenceMoment::Historical)?;
+        let anchor = self.anchors[head.anchor_index];
+        verify_activity_domain(&activity, anchor)?;
         let included = verify_activity(
             &proof.activity,
             &proof.activity_proof,
             &proof.state.header,
             &proof.state.header_signature,
-            &self.authorization,
+            &anchor.authorization(),
         )
         .map_err(|_| ProtocolEvidenceError::ActivityInclusion)?;
-        let head = self.verify_program_head(&proof.state, None)?;
         if included.header().digest() != head.batch_header_digest
             || head.activity_id != activity_identifier
         {
@@ -448,7 +557,7 @@ impl ProtocolDeploymentVerifier {
         expected_program: ProgramId,
         now_ms: u64,
     ) -> Result<VerifiedProgramHead, ProtocolEvidenceError> {
-        let head = self.verify_program_head(proof, Some(now_ms))?;
+        let head = self.verify_program_head(proof, EvidenceMoment::Current(now_ms))?;
         if head.record.program != expected_program {
             return Err(ProtocolEvidenceError::ProgramRecord);
         }
@@ -472,34 +581,127 @@ impl ProtocolDeploymentVerifier {
         })
     }
 
+    /// Verifies one fresh protocol receipt under the explicitly configured
+    /// current trust anchor.
+    pub fn verify_current_protocol_head(
+        &self,
+        receipt: &[u8],
+        receipt_proof: &Proof,
+        header: &[u8],
+        header_signature: &[u8; 64],
+        now_ms: u64,
+    ) -> Result<VerifiedProtocolHead, ProtocolEvidenceError> {
+        self.verify_protocol_head(
+            receipt,
+            receipt_proof,
+            header,
+            header_signature,
+            EvidenceMoment::Current(now_ms),
+        )
+    }
+
+    /// Verifies a historical protocol receipt under the exact trust anchor
+    /// selected from its signed header, without applying current-head age.
+    pub fn verify_historical_protocol_head(
+        &self,
+        receipt: &[u8],
+        receipt_proof: &Proof,
+        header: &[u8],
+        header_signature: &[u8; 64],
+    ) -> Result<VerifiedProtocolHead, ProtocolEvidenceError> {
+        self.verify_protocol_head(
+            receipt,
+            receipt_proof,
+            header,
+            header_signature,
+            EvidenceMoment::Historical,
+        )
+    }
+
+    fn verify_protocol_head(
+        &self,
+        receipt: &[u8],
+        receipt_proof: &Proof,
+        header: &[u8],
+        header_signature: &[u8; 64],
+        moment: EvidenceMoment,
+    ) -> Result<VerifiedProtocolHead, ProtocolEvidenceError> {
+        let claims = self.verify_receipt(
+            receipt,
+            receipt_proof,
+            header,
+            header_signature,
+            moment,
+        )?;
+        Ok(VerifiedProtocolHead {
+            activity_id: claims.activity_id,
+            receipt_digest: claims.receipt_digest,
+            batch_header_digest: claims.batch_header_digest,
+            state_root: claims.state_root,
+            freshness: claims.freshness,
+            sequencer_public_key: self.anchors[claims.anchor_index].sequencer_public_key,
+        })
+    }
+
     fn verify_program_head(
         &self,
         proof: &ProgramStateProof,
-        now_ms: Option<u64>,
+        moment: EvidenceMoment,
     ) -> Result<VerifiedHeadClaims, ProtocolEvidenceError> {
-        let decoded = decode_receipt(&proof.receipt).map_err(|_| ProtocolEvidenceError::Receipt)?;
-        let protocol = decoded.protocol().ok_or(ProtocolEvidenceError::Receipt)?;
-        let inclusion = verify_receipt_inclusion(
+        let receipt = self.verify_receipt(
             &proof.receipt,
             &proof.receipt_proof,
             &proof.header,
             &proof.header_signature,
-            &self.authorization,
+            moment,
+        )?;
+        if proof.programs_root == [0; 32] {
+            return Err(ProtocolEvidenceError::StateRoot);
+        }
+        verify_state_membership(
+            &PROGRAMS_MODULE_ID.to_be_bytes(),
+            &proof.programs_root,
+            &proof.programs_root_proof,
+            receipt.state_root,
+        )
+        .map_err(|_| ProtocolEvidenceError::StateRoot)?;
+        verify_witness(&proof.program_record, proof.programs_root)?;
+        let record = decode_program_record(&proof.program_record)?;
+        let lifecycle = verify_lifecycle(record.program, &proof.lifecycle, proof.programs_root)?;
+        Ok(VerifiedHeadClaims {
+            record,
+            lifecycle,
+            activity_id: receipt.activity_id,
+            receipt_digest: receipt.receipt_digest,
+            batch_header_digest: receipt.batch_header_digest,
+            state_root: receipt.state_root,
+            programs_root: proof.programs_root,
+            freshness: receipt.freshness,
+            anchor_index: receipt.anchor_index,
+        })
+    }
+
+    fn verify_receipt(
+        &self,
+        receipt: &[u8],
+        receipt_proof: &Proof,
+        header_bytes: &[u8],
+        header_signature: &[u8; 64],
+        moment: EvidenceMoment,
+    ) -> Result<VerifiedReceiptClaims, ProtocolEvidenceError> {
+        let selected = self.select_anchor(header_bytes, moment)?;
+        let anchor = self.anchors[selected];
+        let decoded = decode_receipt(receipt).map_err(|_| ProtocolEvidenceError::Receipt)?;
+        let protocol = decoded.protocol().ok_or(ProtocolEvidenceError::Receipt)?;
+        let inclusion = verify_receipt_inclusion(
+            receipt,
+            receipt_proof,
+            header_bytes,
+            header_signature,
+            &anchor.authorization(),
         )
         .map_err(|_| ProtocolEvidenceError::ReceiptInclusion)?;
         let header = inclusion.header().header();
-        if header.protocol_version() != self.expected_protocol_version
-            || header.network_id() != self.expected_network_id
-            || header.epoch() != self.expected_epoch
-        {
-            return Err(ProtocolEvidenceError::ProtocolDomain);
-        }
-        if self
-            .revoked_from_batch
-            .is_some_and(|revoked| header.batch_number() >= revoked)
-        {
-            return Err(ProtocolEvidenceError::SequencerRevoked);
-        }
         if protocol.global_sequence() < header.first_sequence()
             || protocol.global_sequence() > header.last_sequence()
         {
@@ -520,23 +722,22 @@ impl ProtocolDeploymentVerifier {
             protocol.asset(),
             header.previous_state_root(),
             header.resulting_state_root(),
-            self.sequencer_public_key,
+            anchor.sequencer_public_key,
         );
-        let verified = verify_program_state(&proof.receipt, &authorized)
+        let verified = verify_program_state(receipt, &authorized)
             .map_err(|_| ProtocolEvidenceError::Receipt)?;
         let verified_protocol = verified.receipt().protocol().ok_or(ProtocolEvidenceError::Receipt)?;
         if verified_protocol.resulting_state_root() != header.resulting_state_root()
             || verified_protocol.protocol_version() != header.protocol_version()
             || verified_protocol.timestamp() != header.timestamp_ms()
             || verified_protocol.activity_root() != header.activity_merkle_root()
-            || proof.programs_root == [0; 32]
         {
             return Err(ProtocolEvidenceError::StateRoot);
         }
         if verified_protocol.timestamp() == 0 {
             return Err(ProtocolEvidenceError::Stale);
         }
-        if let Some(now_ms) = now_ms {
+        if let EvidenceMoment::Current(now_ms) = moment {
             if now_ms == 0
                 || now_ms < verified_protocol.timestamp()
                 || now_ms.saturating_sub(verified_protocol.timestamp()) > self.staleness_limit_ms
@@ -544,47 +745,59 @@ impl ProtocolDeploymentVerifier {
                 return Err(ProtocolEvidenceError::Stale);
             }
         }
-        verify_state_membership(
-            &PROGRAMS_MODULE_ID.to_be_bytes(),
-            &proof.programs_root,
-            &proof.programs_root_proof,
-            verified_protocol.resulting_state_root(),
-        )
-        .map_err(|_| ProtocolEvidenceError::StateRoot)?;
-        verify_witness(&proof.program_record, proof.programs_root)?;
-        let record = decode_program_record(&proof.program_record)?;
-        let lifecycle = verify_lifecycle(
-            record.program,
-            &proof.lifecycle,
-            proof.programs_root,
-        )?;
         let unsigned = encode_unsigned(verified.receipt()).map_err(|_| ProtocolEvidenceError::Receipt)?;
         let digest = receipt_digest(&unsigned).map_err(|_| ProtocolEvidenceError::Receipt)?;
-        Ok(VerifiedHeadClaims {
-            record,
-            lifecycle,
+        Ok(VerifiedReceiptClaims {
             activity_id: verified_protocol.activity_id(),
             receipt_digest: digest,
             batch_header_digest: inclusion.header().digest(),
             state_root: verified_protocol.resulting_state_root(),
-            programs_root: proof.programs_root,
             freshness: ReadFreshness {
                 observed_sequence: verified_protocol.global_sequence(),
                 observed_at: verified_protocol.timestamp(),
             },
+            anchor_index: selected,
         })
     }
 
-    fn verify_activity_domain(
+    fn select_anchor(
         &self,
-        activity: &layerx_wire::activity::Activity,
-    ) -> Result<(), ProtocolEvidenceError> {
-        if activity.protocol_version() != self.expected_protocol_version
-            || activity.network_id() != self.expected_network_id
-        {
-            return Err(ProtocolEvidenceError::ProtocolDomain);
+        header_bytes: &[u8],
+        moment: EvidenceMoment,
+    ) -> Result<usize, ProtocolEvidenceError> {
+        let header = decode_batch_header(header_bytes)
+            .map_err(|_| ProtocolEvidenceError::ReceiptInclusion)?;
+        let mut selected = None;
+        let mut revoked = false;
+        for (index, anchor) in self.anchors.iter().copied().enumerate() {
+            if header.protocol_version() == anchor.protocol_version
+                && header.network_id() == anchor.network_id
+                && header.epoch() == anchor.epoch
+                && header.sequencer_id() == anchor.sequencer_id
+                && header.batch_number() >= anchor.first_batch
+                && header.batch_number() <= anchor.last_batch
+            {
+                if anchor
+                    .revoked_from_batch
+                    .is_some_and(|batch| header.batch_number() >= batch)
+                {
+                    revoked = true;
+                    continue;
+                }
+                if selected.replace(index).is_some() {
+                    return Err(ProtocolEvidenceError::TrustAnchorAmbiguous);
+                }
+            }
         }
-        Ok(())
+        let selected = match selected {
+            Some(index) => index,
+            None if revoked => return Err(ProtocolEvidenceError::SequencerRevoked),
+            None => return Err(ProtocolEvidenceError::TrustAnchorUnavailable),
+        };
+        if matches!(moment, EvidenceMoment::Current(_)) && selected != self.current_anchor {
+            return Err(ProtocolEvidenceError::HistoricalTrustAnchor);
+        }
+        Ok(selected)
     }
 }
 
@@ -606,6 +819,180 @@ struct VerifiedHeadClaims {
     state_root: [u8; 32],
     programs_root: [u8; 32],
     freshness: ReadFreshness,
+    anchor_index: usize,
+}
+
+#[derive(Clone, Copy)]
+enum EvidenceMoment {
+    Current(u64),
+    Historical,
+}
+
+struct VerifiedReceiptClaims {
+    activity_id: [u8; 32],
+    receipt_digest: [u8; 32],
+    batch_header_digest: [u8; 32],
+    state_root: [u8; 32],
+    freshness: ReadFreshness,
+    anchor_index: usize,
+}
+
+fn verify_activity_domain(
+    activity: &layerx_wire::activity::Activity,
+    anchor: SequencerTrustAnchor,
+) -> Result<(), ProtocolEvidenceError> {
+    if activity.protocol_version() != anchor.protocol_version
+        || activity.network_id() != anchor.network_id
+    {
+        return Err(ProtocolEvidenceError::ProtocolDomain);
+    }
+    Ok(())
+}
+
+fn decode_trust_history(
+    bytes: &[u8],
+) -> Result<(Vec<SequencerTrustAnchor>, usize), ProtocolEvidenceError> {
+    if bytes.len() > MAX_TRUST_HISTORY_BYTES
+        || bytes.get(..TRUST_HISTORY_DOMAIN.len()) != Some(TRUST_HISTORY_DOMAIN)
+    {
+        return Err(ProtocolEvidenceError::InvalidTrustAnchor);
+    }
+    let mut cursor = TRUST_HISTORY_DOMAIN.len();
+    let count = usize::from(u16::from_be_bytes(history_array::<2>(bytes, &mut cursor)?));
+    let current_anchor = usize::from(u16::from_be_bytes(history_array::<2>(bytes, &mut cursor)?));
+    if count == 0
+        || count > MAX_TRUST_ANCHORS
+        || current_anchor >= count
+        || bytes.len().checked_sub(cursor) != count.checked_mul(TRUST_ANCHOR_BYTES)
+    {
+        return Err(ProtocolEvidenceError::InvalidTrustAnchor);
+    }
+    let mut anchors = Vec::with_capacity(count);
+    let mut previous_entry: Option<&[u8]> = None;
+    for _ in 0..count {
+        let entry_start = cursor;
+        let protocol_version = u16::from_be_bytes(history_array::<2>(bytes, &mut cursor)?);
+        let network_id = u32::from_be_bytes(history_array::<4>(bytes, &mut cursor)?);
+        let epoch = u64::from_be_bytes(history_array::<8>(bytes, &mut cursor)?);
+        let sequencer_id = history_array::<32>(bytes, &mut cursor)?;
+        let sequencer_public_key = history_array::<32>(bytes, &mut cursor)?;
+        let first_batch = u64::from_be_bytes(history_array::<8>(bytes, &mut cursor)?);
+        let last_batch = u64::from_be_bytes(history_array::<8>(bytes, &mut cursor)?);
+        let revoked_marker = history_array::<1>(bytes, &mut cursor)?[0];
+        let revoked_value = u64::from_be_bytes(history_array::<8>(bytes, &mut cursor)?);
+        let revoked_from_batch = match (revoked_marker, revoked_value) {
+            (0, 0) => None,
+            (1, value) if value > first_batch => Some(value),
+            _ => return Err(ProtocolEvidenceError::InvalidTrustAnchor),
+        };
+        let entry = bytes
+            .get(entry_start..cursor)
+            .ok_or(ProtocolEvidenceError::InvalidTrustAnchor)?;
+        if previous_entry.is_some_and(|previous| previous >= entry)
+            || !matches!(protocol_version, 1 | 2)
+            || network_id == 0
+            || epoch == 0
+            || sequencer_id == [0; 32]
+            || sequencer_public_key == [0; 32]
+            || first_batch == 0
+            || last_batch < first_batch
+        {
+            return Err(ProtocolEvidenceError::InvalidTrustAnchor);
+        }
+        previous_entry = Some(entry);
+        anchors.push(SequencerTrustAnchor {
+            protocol_version,
+            network_id,
+            epoch,
+            sequencer_id,
+            sequencer_public_key,
+            first_batch,
+            last_batch,
+            revoked_from_batch,
+        });
+    }
+    if cursor != bytes.len() {
+        return Err(ProtocolEvidenceError::InvalidTrustAnchor);
+    }
+    let current = anchors[current_anchor];
+    if anchors.iter().any(|anchor| anchor.network_id != current.network_id) {
+        return Err(ProtocolEvidenceError::InvalidTrustAnchor);
+    }
+    let current_position = (
+        current.epoch,
+        current.first_batch,
+        current.protocol_version,
+    );
+    if anchors.iter().any(|anchor| {
+        (anchor.epoch, anchor.first_batch, anchor.protocol_version) > current_position
+    }) {
+        return Err(ProtocolEvidenceError::InvalidTrustAnchor);
+    }
+    for (index, left) in anchors.iter().copied().enumerate() {
+        for right in anchors.iter().copied().skip(index + 1) {
+            if left.protocol_version == right.protocol_version
+                && left.network_id == right.network_id
+                && left.epoch == right.epoch
+                && left.sequencer_id == right.sequencer_id
+                && left.first_batch <= right.effective_last_batch()
+                && right.first_batch <= left.effective_last_batch()
+            {
+                return Err(ProtocolEvidenceError::TrustAnchorAmbiguous);
+            }
+        }
+    }
+    Ok((anchors, current_anchor))
+}
+
+fn history_array<const N: usize>(
+    bytes: &[u8],
+    cursor: &mut usize,
+) -> Result<[u8; N], ProtocolEvidenceError> {
+    let end = cursor
+        .checked_add(N)
+        .ok_or(ProtocolEvidenceError::InvalidTrustAnchor)?;
+    let value = bytes
+        .get(*cursor..end)
+        .and_then(|slice| slice.try_into().ok())
+        .ok_or(ProtocolEvidenceError::InvalidTrustAnchor)?;
+    *cursor = end;
+    Ok(value)
+}
+
+#[cfg(unix)]
+fn require_private_history(metadata: &fs::Metadata) -> Result<(), ProtocolEvidenceError> {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    if metadata.permissions().mode() & 0o077 != 0 {
+        return Err(ProtocolEvidenceError::TrustHistoryUnavailable);
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn require_same_history_file(
+    path_metadata: &fs::Metadata,
+    file_metadata: &fs::Metadata,
+) -> Result<(), ProtocolEvidenceError> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    if path_metadata.dev() != file_metadata.dev() || path_metadata.ino() != file_metadata.ino() {
+        return Err(ProtocolEvidenceError::TrustHistoryUnavailable);
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn require_private_history(_metadata: &fs::Metadata) -> Result<(), ProtocolEvidenceError> {
+    Err(ProtocolEvidenceError::TrustHistoryUnavailable)
+}
+
+#[cfg(not(unix))]
+fn require_same_history_file(
+    _path_metadata: &fs::Metadata,
+    _file_metadata: &fs::Metadata,
+) -> Result<(), ProtocolEvidenceError> {
+    Err(ProtocolEvidenceError::TrustHistoryUnavailable)
 }
 
 enum LifecycleActivity {
