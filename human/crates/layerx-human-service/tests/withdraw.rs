@@ -23,7 +23,11 @@ mod paxeer_real {
             let (token, vault, checkpoint_registry, challenge_manager, claims) =
                 deploy_suite(&anvil);
             let leaf = withdrawal_leaf(expectation);
-            let header = checkpoint_header(leaf, anvil.latest_timestamp());
+            let timestamp_ms = anvil
+                .latest_timestamp()
+                .checked_mul(1_000)
+                .unwrap_or_else(|| panic!("latest block timestamp exceeds canonical milliseconds"));
+            let header = checkpoint_header(leaf, timestamp_ms);
             let checkpoint_hash = checkpoint_hash(&header);
             let attestation = signed_attestation(&header, checkpoint_hash);
             anvil.send_checked(

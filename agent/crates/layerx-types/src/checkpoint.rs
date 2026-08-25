@@ -2,8 +2,8 @@
 
 use crate::batch::BatchHeader;
 
-/// The exact fields signed by one guarantor attestation.
-pub const GUARANTOR_ATTESTATION_FIELDS: [&str; 15] = [
+/// The exact canonical fields carried by one Paxeer guarantor attestation.
+pub const GUARANTOR_ATTESTATION_FIELDS: [&str; 17] = [
     "protocol_version",
     "network_id",
     "paxeer_chain_id",
@@ -18,7 +18,9 @@ pub const GUARANTOR_ATTESTATION_FIELDS: [&str; 15] = [
     "da_possessed",
     "availability_class_mask",
     "attested_at_ms",
+    "signer",
     "signature",
+    "signature_v",
 ];
 
 /// One canonical Merkle path decoded from core bytes.
@@ -72,7 +74,9 @@ pub struct GuarantorAttestation {
     da_possessed: bool,
     availability_class_mask: u8,
     attested_at_ms: u64,
+    signer: [u8; 20],
     signature: [u8; 64],
+    signature_v: u8,
 }
 
 /// The checkpoint body hashed before guarantor attestation.

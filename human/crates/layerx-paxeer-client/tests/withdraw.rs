@@ -725,7 +725,10 @@ fn signed_attestation(
     checkpoint: [u8; 32],
     settlement_contract: EvmAddress,
 ) -> WithdrawalAttestation {
-    let attested_at = header.timestamp.saturating_add(1);
+    let attested_at = header
+        .timestamp
+        .checked_add(1)
+        .unwrap_or_else(|| panic!("checkpoint timestamp cannot advance attestation milliseconds"));
     let mut message = Vec::with_capacity(189);
     message.extend_from_slice(&header.protocol_version.to_be_bytes());
     message.extend_from_slice(&header.network_id.to_be_bytes());
@@ -860,7 +863,11 @@ fn fixture() -> Fixture {
     let expectation = debit_expectation(recipient);
     let debit = committed_debit(expectation);
     let leaf = withdrawal_leaf(expectation);
-    let header = checkpoint_header(leaf, anvil.latest_timestamp());
+    let timestamp_ms = anvil
+        .latest_timestamp()
+        .checked_mul(1_000)
+        .unwrap_or_else(|| panic!("latest block timestamp exceeds canonical milliseconds"));
+    let header = checkpoint_header(leaf, timestamp_ms);
     let checkpoint_hash = checkpoint_hash(&header);
     let attestation = signed_attestation(&header, checkpoint_hash, bond);
     anvil.send_checked(

@@ -139,6 +139,7 @@ lxp_result lxp_checkpoint_finalisable(
         return LXP_ERR_ROOT_MISMATCH;
     if (certificate->threshold != requirements->threshold)
         return LXP_ERR_ATTESTATION_THRESHOLD;
+    (void)memset(keys, 0, sizeof(keys));
     for (i = 0U; i < set->count; ++i) {
         bool eligible = false;
         status = lxp_guarantor_eligible(&set->records[i],
@@ -147,8 +148,11 @@ lxp_result lxp_checkpoint_finalisable(
                                         &eligible);
         if (status != LXP_OK) return status;
         (void)memcpy(keys[i].guarantor_id, set->records[i].guarantor_id, 32U);
-        (void)memcpy(keys[i].public_key, set->records[i].public_key, 33U);
-        keys[i].bonded = eligible;
+        status = lxp_guarantor_signer_at_epoch(
+            &set->records[i], requirements->checkpoint_epoch,
+            keys[i].public_key);
+        keys[i].bonded = eligible && status == LXP_OK;
+        if (status != LXP_OK && status != LXP_ERR_AUTH_SCOPE) return status;
     }
     status = lxp_guarantor_cert_verify(certificate, keys, set->count, arena,
                                        &valid_signatures);

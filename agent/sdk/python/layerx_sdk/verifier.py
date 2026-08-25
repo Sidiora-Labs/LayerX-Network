@@ -363,7 +363,9 @@ class CheckpointAttestation:
     data_possessed: bool
     availability_class_mask: int
     attested_at_ms: int
+    signer: bytes
     signature: bytes
+    signature_v: int
 
 
 @dataclass(frozen=True)
@@ -480,6 +482,8 @@ def verify_checkpoint(
             or not attestation.data_possessed
             or attestation.availability_class_mask != _ALL_AVAILABILITY_CLASSES
             or attestation.attested_at_ms <= 0
+            or not any(_exact(attestation.signer, 20))
+            or attestation.signature_v not in (27, 28)
         ):
             _failure()
         paxeer_chain_id = attestation.paxeer_chain_id

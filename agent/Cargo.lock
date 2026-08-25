@@ -749,6 +749,7 @@ dependencies = [
  "layerx-wire",
  "openssl",
  "sha2",
+ "sha3",
  "subtle",
  "zeroize",
 ]

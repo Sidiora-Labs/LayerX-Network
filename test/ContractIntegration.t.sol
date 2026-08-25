@@ -637,8 +637,10 @@ contract ContractIntegrationTest {
             CanonicalCheckpoint.GuarantorAttestation[] memory attestations
         )
     {
-        uint256 minimumTimestamp = uint256(checkpointRegistry.finalisedTimestamp()) + 1;
-        if (block.timestamp < minimumTimestamp) vm.warp(minimumTimestamp);
+        uint256 minimumTimestampMilliseconds = uint256(checkpointRegistry.finalisedTimestamp()) + 1;
+        uint256 minimumWallClockSeconds = (minimumTimestampMilliseconds + 999) / 1_000;
+        if (block.timestamp < minimumWallClockSeconds) vm.warp(minimumWallClockSeconds);
+        require(block.timestamp <= type(uint64).max / 1_000, "test wall clock exceeds milliseconds");
         header = CanonicalCheckpoint.HeaderCommitments({
             protocolVersion: checkpointRegistry.protocolVersion(),
             networkId: checkpointRegistry.networkId(),
@@ -653,7 +655,7 @@ contract ContractIntegrationTest {
             eventMerkleRoot: keccak256("integration-event-root"),
             dataAvailabilityRoot: keccak256("integration-da-root"),
             oracleRoot: keccak256("integration-oracle-root"),
-            timestamp: uint64(block.timestamp),
+            timestamp: uint64(block.timestamp * 1_000),
             sequencerId: keccak256("integration-sequencer")
         });
         digest = checkpointRegistry.checkpointHash(header, "");

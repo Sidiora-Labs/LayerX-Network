@@ -23,6 +23,7 @@ enum {
     LXP_MAX_VALIDITY_PROOF_BYTES = 1048576,
     LXP_MAX_SETTLEMENT_REFERENCE_BYTES = 1024,
     LXP_GUARANTOR_AVAILABILITY_ALL = 0x1f,
+    LXP_MAX_GUARANTOR_SIGNER_AUTHORIZATIONS = 32,
     LXP_MAX_DA_CHALLENGE_INDICES = 16,
     LXP_MAX_DA_CHALLENGE_RECORDS = 128
 };
@@ -131,7 +132,9 @@ typedef struct lxp_guarantor_attestation {
     bool da_possessed;
     uint8_t availability_class_mask;
     uint64_t attested_at_ms;
+    uint8_t signer[20];
     uint8_t signature[64];
+    uint8_t signature_v;
 } lxp_guarantor_attestation;
 #define lxp_guarantor_attestation lxp_guarantor_attestation
 
@@ -207,12 +210,23 @@ typedef struct lxp_augmented_receipt {
     lxp_byte_span paxeer_settlement_reference;
 } lxp_augmented_receipt;
 
+typedef struct lxp_guarantor_signer_authorization {
+    uint8_t public_key[33];
+    uint64_t active_from_epoch;
+    uint64_t active_until_epoch;
+    uint64_t set_version;
+} lxp_guarantor_signer_authorization;
+
 typedef struct lxp_guarantor_bond_state {
     uint8_t guarantor_id[32];
     uint8_t public_key[33];
     lxp_u128 bond_amount;
     uint64_t joined_epoch;
     uint64_t removed_epoch;
+    uint64_t ejected_at_version;
+    lxp_guarantor_signer_authorization
+        signer_authorizations[LXP_MAX_GUARANTOR_SIGNER_AUTHORIZATIONS];
+    size_t signer_authorization_count;
     bool jailed;
     bool unresolved_slashing;
     bool active;
@@ -315,6 +329,17 @@ lxp_result lxp_guarantor_set_apply(
     lxp_guarantor_set *set, uint64_t governance_sequence,
     bool ordered_governance_activity,
     const lxp_guarantor_bond_state *bond_state);
+lxp_result lxp_guarantor_set_rotate_signer(
+    lxp_guarantor_set *set, uint64_t governance_sequence,
+    bool ordered_governance_activity, const uint8_t guarantor_id[32],
+    const uint8_t public_key[33], uint64_t activation_epoch);
+lxp_result lxp_guarantor_signer_authorized(
+    const lxp_guarantor_bond_state *bond_state,
+    const uint8_t public_key[33], uint64_t checkpoint_epoch,
+    bool *authorized);
+lxp_result lxp_guarantor_signer_at_epoch(
+    const lxp_guarantor_bond_state *bond_state, uint64_t checkpoint_epoch,
+    uint8_t public_key[33]);
 lxp_result lxp_guarantor_eligible(
     const lxp_guarantor_bond_state *bond_state, uint64_t checkpoint_epoch,
     lxp_u128 minimum_bond, bool *eligible);

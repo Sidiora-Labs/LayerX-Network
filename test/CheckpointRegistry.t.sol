@@ -38,13 +38,47 @@ contract CheckpointRegistryTest {
     }
 
     function testCanonicalHeaderMatchesCVector() public view {
-        CanonicalCheckpoint.HeaderCommitments memory header = _header();
+        CanonicalCheckpoint.HeaderCommitments memory header = _vectorHeader();
         bytes memory encoded = registry.canonicalHeader(header);
         require(encoded.length == 354, "header length");
         require(
             registry.checkpointHash(header, "") == 0xf655c001cc9392bddb71932afa21742e7be6ac762e76f3ce0c56e32e8ec35aee,
             "C checkpoint vector mismatch"
         );
+    }
+
+    function testCanonicalMillisecondTimestampsMeetSecondBasedWallClockBounds() public {
+        vm.warp(1_700_000_000);
+        CanonicalCheckpoint.HeaderCommitments memory header = _header();
+        header.timestamp = 1_700_000_000_123;
+        bytes32 digest = registry.checkpointHash(header, "");
+        CanonicalCheckpoint.GuarantorAttestation[] memory attestations = _attestations(header, digest, 2);
+        attestations[0].attestedAt = header.timestamp + (1 hours * 1_000);
+        (attestations[0].v, attestations[0].r, attestations[0].s) =
+            vm.sign(keys[0], CanonicalCheckpoint.attestationHash(attestations[0]));
+        registry.registerCheckpoint(header, "", attestations);
+        require(registry.checkpointTimestamp(digest) == 1_700_000_000_123, "milliseconds were truncated");
+    }
+
+    function testRejectsMillisecondTimestampBeyondSecondConfiguredDrift() public {
+        vm.warp(1_700_000_000);
+        CanonicalCheckpoint.HeaderCommitments memory header = _header();
+        header.timestamp = 1_700_000_000_000 + ((5 minutes + 1) * 1_000);
+        bytes32 digest = registry.checkpointHash(header, "");
+        CanonicalCheckpoint.GuarantorAttestation[] memory attestations = _attestations(header, digest, 2);
+        vm.expectRevert(CheckpointRegistry.InvalidHeader.selector);
+        registry.registerCheckpoint(header, "", attestations);
+    }
+
+    function testRejectsMillisecondAttestationBeyondSecondConfiguredDelay() public {
+        CanonicalCheckpoint.HeaderCommitments memory header = _header();
+        bytes32 digest = registry.checkpointHash(header, "");
+        CanonicalCheckpoint.GuarantorAttestation[] memory attestations = _attestations(header, digest, 2);
+        attestations[0].attestedAt = header.timestamp + ((1 hours + 1) * 1_000);
+        (attestations[0].v, attestations[0].r, attestations[0].s) =
+            vm.sign(keys[0], CanonicalCheckpoint.attestationHash(attestations[0]));
+        vm.expectRevert(CheckpointRegistry.InvalidCertificate.selector);
+        registry.registerCheckpoint(header, "", attestations);
     }
 
     function testRegistersThresholdCertificate() public {
@@ -281,9 +315,14 @@ contract CheckpointRegistryTest {
             eventMerkleRoot: bytes32(uint256(0x55) << 248),
             dataAvailabilityRoot: bytes32(uint256(0x66) << 248),
             oracleRoot: bytes32(uint256(0x77) << 248),
-            timestamp: 1000,
+            timestamp: 1_000_000,
             sequencerId: bytes32(uint256(0x88) << 248)
         });
+    }
+
+    function _vectorHeader() private pure returns (CanonicalCheckpoint.HeaderCommitments memory header) {
+        header = _header();
+        header.timestamp = 1000;
     }
 
     function _requireRecordedCertificate(

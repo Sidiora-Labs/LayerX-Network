@@ -116,7 +116,9 @@ class PythonSdkIntegration(unittest.TestCase):
             data_possessed=True,
             availability_class_mask=0x1F,
             attested_at_ms=1,
+            signer=bytes([2]) * 20,
             signature=bytes(64),
+            signature_v=27,
         )
         self.assertEqual(attestation.paxeer_chain_id, 777)
         self.assertEqual(attestation.settlement_contract, bytes([1]) * 20)

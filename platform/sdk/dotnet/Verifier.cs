@@ -69,7 +69,9 @@ public sealed record CheckpointAttestation(
     bool DataPossessed,
     byte AvailabilityClassMask,
     ulong AttestedAtMilliseconds,
-    byte[] Signature);
+    byte[] Signer,
+    byte[] Signature,
+    byte SignatureV);
 
 public sealed record GuarantorKey(byte[] GuarantorId, byte[] PublicKey, bool Bonded);
 public sealed record CheckpointCertificate(byte[] CanonicalHeader, byte[] ValidityProof, IReadOnlyList<CheckpointAttestation> Attestations, uint Threshold, byte[]? SettlementReference = null);
@@ -251,6 +253,7 @@ public static class LocalVerifier
                 !Equal(Exact(attestation.CheckpointId, 32), checkpointId) || !Equal(Exact(attestation.CheckpointHash, 32), checkpointId) ||
                 attestation.BatchNumber != header.BatchNumber || !Equal(Exact(attestation.DataAvailabilityRoot, 32), header.DataAvailabilityRoot) ||
                 !attestation.Replayed || !attestation.DataPossessed || attestation.AvailabilityClassMask != AllAvailabilityClasses || attestation.AttestedAtMilliseconds == 0 ||
+                AllZero(Exact(attestation.Signer, 20)) || (attestation.SignatureV != 27 && attestation.SignatureV != 28) ||
                 !bonded.TryGetValue(identity, out var member) || achieved == uint.MaxValue)
                 throw VerificationFailure();
             paxeerChainId = attestation.PaxeerChainId;

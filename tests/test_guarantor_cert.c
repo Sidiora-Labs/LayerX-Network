@@ -1,6 +1,7 @@
 #define OPENSSL_API_COMPAT 0x10100000L
 
 #include "layerx/lxp_guarantor.h"
+#include "layerx/lxp_crypto.h"
 
 #include <openssl/bn.h>
 #include <openssl/ec.h>
@@ -83,7 +84,10 @@ int main(void)
         keys[i].bonded = true;
         if (lxp_guarantor_attest(&guarantors[i], &checkpoint, true, true,
                                  1000U + i, &arena,
-                                 &attestations[i]) != LXP_OK)
+                                 &attestations[i]) != LXP_OK ||
+            lxp_ct_is_zero(attestations[i].signer, 20U) ||
+            (attestations[i].signature_v != 27U &&
+             attestations[i].signature_v != 28U))
             return 1;
     }
     if (lxp_guarantor_attest(&guarantors[0], &checkpoint, false, true,

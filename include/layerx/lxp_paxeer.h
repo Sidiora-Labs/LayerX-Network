@@ -35,8 +35,34 @@ typedef struct lxp_checkpoint_registry_state {
 } lxp_checkpoint_registry_state;
 #define lxp_checkpoint_registry_state lxp_checkpoint_registry_state
 
+typedef struct lxp_paxeer_guarantor_attestation {
+    uint16_t protocol_version;
+    uint32_t network_id;
+    uint64_t paxeer_chain_id;
+    uint8_t settlement_contract[20];
+    uint64_t epoch;
+    uint8_t checkpoint_id[32];
+    uint8_t checkpoint_hash[32];
+    uint8_t guarantor_id[32];
+    uint64_t batch_number;
+    uint8_t data_availability_root[32];
+    bool replayed;
+    bool data_available;
+    uint8_t availability_class_mask;
+    uint64_t attested_at_ms;
+    uint8_t signer[20];
+    uint8_t r[32];
+    uint8_t s[32];
+    uint8_t v;
+} lxp_paxeer_guarantor_attestation;
+
 typedef struct lxp_checkpoint_registration {
+    lxp_batch_header header;
     lxp_byte_span header_commitments;
+    lxp_byte_span validity_proof;
+    lxp_paxeer_guarantor_attestation
+        attestations[LXP_MAX_GUARANTOR_ATTESTATIONS];
+    size_t attestation_count;
     uint8_t checkpoint_id[32];
     uint8_t resulting_state_root[32];
     uint64_t batch_number;
@@ -56,6 +82,9 @@ typedef struct lxp_paxeer_bond_state {
 #define lxp_paxeer_bond_state lxp_paxeer_bond_state
 
 lxp_result lxp_paxeer_custody_abi_init(lxp_paxeer_custody_abi *abi);
+lxp_result lxp_paxeer_guarantor_attestation_from_core(
+    const lxp_guarantor_attestation *source,
+    lxp_paxeer_guarantor_attestation *target);
 lxp_result lxp_paxeer_verify_cert(
     lxp_checkpoint_registry_state *state,
     const lxp_guarantor_cert *certificate,
@@ -81,6 +110,9 @@ lxp_result lxp_paxeer_bond_deposit(
 lxp_result lxp_paxeer_bond_state_read(
     const lxp_paxeer_bond_state *state, const uint8_t guarantor_id[32],
     lxp_guarantor_bond_state *bond, bool *threshold_eligible);
+lxp_result lxp_paxeer_rotate_guarantor_signer(
+    lxp_paxeer_bond_state *state, const uint8_t guarantor_id[32],
+    const uint8_t public_key[33], uint64_t activation_epoch);
 lxp_result lxp_paxeer_jail_guarantor(
     lxp_paxeer_bond_state *state, const uint8_t guarantor_id[32],
     uint64_t removed_epoch);

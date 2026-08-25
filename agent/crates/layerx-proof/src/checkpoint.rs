@@ -61,7 +61,9 @@ pub struct Attestation {
     data_possessed: bool,
     availability_class_mask: u8,
     attested_at_ms: u64,
+    signer: [u8; 20],
     signature: [u8; 64],
+    signature_v: u8,
 }
 
 impl Attestation {
@@ -83,7 +85,9 @@ impl Attestation {
         data_possessed: bool,
         availability_class_mask: u8,
         attested_at_ms: u64,
+        signer: [u8; 20],
         signature: [u8; 64],
+        signature_v: u8,
     ) -> Self {
         Self {
             protocol_version,
@@ -100,7 +104,9 @@ impl Attestation {
             data_possessed,
             availability_class_mask,
             attested_at_ms,
+            signer,
             signature,
+            signature_v,
         }
     }
 
@@ -112,6 +118,16 @@ impl Attestation {
     #[must_use]
     pub const fn signature(&self) -> [u8; 64] {
         self.signature
+    }
+
+    #[must_use]
+    pub const fn signer(&self) -> [u8; 20] {
+        self.signer
+    }
+
+    #[must_use]
+    pub const fn signature_v(&self) -> u8 {
+        self.signature_v
     }
 
     fn message(&self) -> [u8; ATTESTATION_BYTES] {
@@ -355,6 +371,8 @@ pub fn verify_certificate(
             || !attestation.data_possessed
             || attestation.availability_class_mask != ALL_AVAILABILITY_CLASSES
             || attestation.attested_at_ms == 0
+            || attestation.signer == [0; 20]
+            || !matches!(attestation.signature_v, 27 | 28)
         {
             return Err(CheckpointError::CheckpointFields);
         }
@@ -374,7 +392,18 @@ pub fn verify_certificate(
             .ok_or(CheckpointError::SignerMembership(attestation.guarantor_id))?;
         let digest = checkpoint_attestation_digest(&attestation.message())
             .map_err(|_| CheckpointError::Signature(attestation.guarantor_id))?;
-        secp256k1::verify_digest(&key.public_key, &attestation.signature, &digest)
+        if secp256k1::evm_address(&key.public_key)
+            .map_err(|_| CheckpointError::Signature(attestation.guarantor_id))?
+            != attestation.signer
+        {
+            return Err(CheckpointError::Signature(attestation.guarantor_id));
+        }
+        secp256k1::verify_recoverable_digest(
+            &key.public_key,
+            &attestation.signature,
+            attestation.signature_v,
+            &digest,
+        )
             .map_err(|_| CheckpointError::Signature(attestation.guarantor_id))?;
         achieved += 1;
     }

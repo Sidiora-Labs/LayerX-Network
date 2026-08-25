@@ -1,4 +1,5 @@
-use k256::ecdsa::{signature::hazmat::PrehashSigner as _, Signature, SigningKey};
+use k256::ecdsa::{Signature, SigningKey};
+use layerx_crypto::secp256k1;
 use layerx_proof::checkpoint::{
     checkpoint_id, verify_certificate, Attestation, Certificate, Checkpoint, CheckpointError,
     GuarantorKey,
@@ -67,9 +68,13 @@ fn attestation(
     message[181..].copy_from_slice(&(1_000 + u64::from(guarantor_id[0])).to_be_bytes());
     let digest = checkpoint_attestation_digest(&message)
         .unwrap_or_else(|error| panic!("attestation hash failed: {error:?}"));
-    let signature: Signature = signing_key
-        .sign_prehash(&digest)
+    let (signature, recovery_id): (Signature, _) = signing_key
+        .sign_prehash_recoverable(&digest)
         .unwrap_or_else(|error| panic!("attestation signing failed: {error}"));
+    let signer = secp256k1::evm_address(
+        signing_key.verifying_key().to_encoded_point(true).as_bytes(),
+    )
+    .unwrap_or_else(|error| panic!("attestation signer: {error:?}"));
     Attestation::new(
         1,
         42,
@@ -85,7 +90,9 @@ fn attestation(
         true,
         0x1f,
         1_000 + u64::from(guarantor_id[0]),
+        signer,
         signature.to_bytes().into(),
+        27 + u8::from(recovery_id),
     )
 }
 
@@ -211,7 +218,7 @@ fn rejects_threshold_duplicate_membership_signature_and_identifier_failures() {
         Checkpoint::new(header_bytes(), b"PROOF".to_vec()),
         vec![Attestation::new(
             1, 42, 31_337, [0x55; 20], 7, identifier, identifier, first_id, 8, [12; 32],
-            true, true, 0x1f, 1_001, [1; 64],
+            true, true, 0x1f, 1_001, [1; 20], [1; 64], 27,
         )],
         1,
         None,

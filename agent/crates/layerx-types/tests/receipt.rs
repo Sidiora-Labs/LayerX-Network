@@ -37,7 +37,7 @@ fn receipt_and_batch_field_sets_match_protocol() {
     assert_eq!(BATCH_HEADER_FIELDS.len(), 15);
     assert_eq!(BATCH_HEADER_FIELDS[0], "protocol_version");
     assert_eq!(BATCH_HEADER_FIELDS[14], "sequencer_id");
-    assert_eq!(GUARANTOR_ATTESTATION_FIELDS.len(), 10);
+    assert_eq!(GUARANTOR_ATTESTATION_FIELDS.len(), 17);
 }
 
 #[test]

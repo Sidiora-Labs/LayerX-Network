@@ -37,7 +37,10 @@ int main(void)
     uint8_t private_key[32];
     uint8_t public_key[33];
     uint8_t other_id[32] = {8U};
-    uint8_t other_key[33] = {2U};
+    uint8_t other_private_key[32];
+    uint8_t other_key[33];
+    uint8_t rotated_private_key[32];
+    uint8_t rotated_key[33];
     uint8_t paxeer_contract[20] = {0xa1U};
     uint8_t corrupted[1024];
     lxp_arena arena;
@@ -60,6 +63,8 @@ int main(void)
     bool eligible = false;
     if (lxp_arena_init(&arena, arena_storage, sizeof(arena_storage)) != LXP_OK ||
         key_pair(7U, private_key, public_key) != 0 ||
+        key_pair(8U, other_private_key, other_key) != 0 ||
+        key_pair(9U, rotated_private_key, rotated_key) != 0 ||
         lxp_paxeer_bond_init(&bonds, 1U, 42U, 31337U, paxeer_contract,
                              (lxp_u128){0U, 10000U}, 100U) != LXP_OK)
         return 1;
@@ -93,6 +98,8 @@ int main(void)
                                 (lxp_u128){0U, 100U}, 1U) != LXP_OK ||
         lxp_paxeer_bond_deposit(&bonds, other_id, other_key,
                                 (lxp_u128){0U, 99U}, 1U) != LXP_OK ||
+        lxp_paxeer_rotate_guarantor_signer(
+            &bonds, guarantor.guarantor_id, rotated_key, 5U) != LXP_OK ||
         lxp_paxeer_bond_state_read(&bonds, other_id, &view, &eligible) !=
             LXP_OK || eligible)
         return 1;
@@ -130,6 +137,7 @@ int main(void)
                                    &view, &eligible) != LXP_OK ||
         eligible || view.active || !view.jailed ||
         !lxp_u128_is_zero(view.bond_amount) || view.removed_epoch != 0U ||
+        view.ejected_at_version == 0U ||
         lxp_paxeer_jail_guarantor(&bonds, other_id, 5U) != LXP_OK ||
         lxp_paxeer_bond_state_read(&bonds, other_id, &view, &eligible) !=
             LXP_OK || eligible || !view.jailed)

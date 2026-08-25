@@ -1,4 +1,5 @@
-use k256::ecdsa::{signature::hazmat::PrehashSigner as _, Signature, SigningKey};
+use k256::ecdsa::{Signature, SigningKey};
+use layerx_crypto::secp256k1;
 use layerx_client::availability::{AvailabilityRecords, AvailabilityResult};
 use layerx_client::head::Head;
 use layerx_explorer_index::verify::Verifier;
@@ -177,9 +178,13 @@ fn attestation(
     hasher.update(b"LXP/v1/guarantor-attestation\0");
     hasher.update(message);
     let digest: [u8; 32] = hasher.finalize().into();
-    let signature: Signature = signing_key
-        .sign_prehash(&digest)
+    let (signature, recovery_id): (Signature, _) = signing_key
+        .sign_prehash_recoverable(&digest)
         .unwrap_or_else(|error| panic!("fixture attestation signing failed: {error}"));
+    let signer = secp256k1::evm_address(
+        signing_key.verifying_key().to_encoded_point(true).as_bytes(),
+    )
+    .unwrap_or_else(|error| panic!("fixture attestation signer failed: {error:?}"));
     Attestation::new(
         1,
         42,
@@ -195,7 +200,9 @@ fn attestation(
         true,
         0x1f,
         1_000 + u64::from(guarantor_id[0]),
+        signer,
         signature.to_bytes().into(),
+        27 + u8::from(recovery_id),
     )
 }
 

@@ -95,6 +95,36 @@ fn core_secp256k1_vector_and_malleable_forms_match() {
         ]
     );
     let signature_bytes: [u8; 64] = signature.to_bytes().into();
+    let (recoverable_signature, recovery_id) = signing_key
+        .sign_prehash_recoverable(&digest)
+        .unwrap_or_else(|error| panic!("recoverable secp256k1 signing failed: {error}"));
+    let recoverable_bytes: [u8; 64] = recoverable_signature.to_bytes().into();
+    assert_eq!(recoverable_bytes, signature_bytes);
+    assert_eq!(
+        secp256k1::evm_address(public_key.as_bytes()),
+        Ok([
+            0x7e, 0x5f, 0x45, 0x52, 0x09, 0x1a, 0x69, 0x12, 0x5d, 0x5d,
+            0xfc, 0xb7, 0xb8, 0xc2, 0x65, 0x90, 0x29, 0x39, 0x5b, 0xdf,
+        ])
+    );
+    assert_eq!(
+        secp256k1::verify_recoverable_digest(
+            public_key.as_bytes(),
+            &signature_bytes,
+            27 + u8::from(recovery_id),
+            &digest,
+        ),
+        Ok(())
+    );
+    assert_eq!(
+        secp256k1::verify_recoverable_digest(
+            public_key.as_bytes(),
+            &signature_bytes,
+            29,
+            &digest,
+        ),
+        Err(VerifyError::BadSignature)
+    );
     assert_eq!(
         secp256k1::verify(public_key.as_bytes(), &signature_bytes, scoped),
         Ok(())

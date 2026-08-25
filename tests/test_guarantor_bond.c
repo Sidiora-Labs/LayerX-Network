@@ -51,6 +51,8 @@ int main(void)
     lxp_arena arena;
     lxp_checkpoint_certificate checkpoint;
     lxp_guarantor_ctx signers[3];
+    uint8_t rotated_private_key[32];
+    uint8_t rotated_public_key[33];
     lxp_guarantor_attestation attestations[3];
     lxp_guarantor_cert certificate;
     lxp_guarantor_set set;
@@ -102,6 +104,21 @@ int main(void)
         set.version != 3U ||
         lxp_guarantor_cert_assemble(&checkpoint, attestations, 3U, 2U,
                                     &certificate) != LXP_OK)
+        return 1;
+    if (key_pair(9U, rotated_private_key, rotated_public_key) != 0 ||
+        lxp_guarantor_set_rotate_signer(
+            &set, 4U, true, signers[0].guarantor_id,
+            rotated_public_key, 8U) != LXP_OK ||
+        set.version != 4U || set.last_governance_sequence != 4U ||
+        set.records[0].signer_authorization_count != 2U ||
+        set.records[0].signer_authorizations[0].active_until_epoch != 8U ||
+        set.records[0].signer_authorizations[1].active_from_epoch != 8U ||
+        memcmp(set.records[0].public_key, rotated_public_key, 33U) != 0)
+        return 1;
+    bond = set.records[0];
+    (void)memcpy(bond.public_key, signers[0].paxeer_public_key, 33U);
+    if (lxp_guarantor_set_apply(&set, 5U, true, &bond) !=
+            LXP_ERR_NON_CANONICAL || set.version != 4U)
         return 1;
     (void)memset(&initial, 0, sizeof(initial));
     initial.settlement_anchor[0] = 0x11U;

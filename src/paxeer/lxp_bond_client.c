@@ -93,16 +93,36 @@ lxp_result lxp_paxeer_jail_guarantor(
     uint64_t removed_epoch)
 {
     lxp_guarantor_bond_state *bond;
+    lxp_guarantor_bond_state candidate;
+    lxp_result status;
     if (state == NULL || guarantor_id == NULL || removed_epoch == 0U)
         return LXP_ERR_NON_CANONICAL;
     bond = find_bond(state, guarantor_id);
     if (bond == NULL) return LXP_ERR_UNKNOWN_FIELD;
-    bond->active = false;
-    bond->jailed = true;
-    bond->removed_epoch = removed_epoch;
-    ++state->guarantors.version;
-    state->mirror_version = state->guarantors.version;
-    return LXP_OK;
+    candidate = *bond;
+    candidate.active = false;
+    candidate.jailed = true;
+    candidate.removed_epoch = removed_epoch;
+    status = lxp_guarantor_set_apply(
+        &state->guarantors,
+        state->guarantors.last_governance_sequence + 1U, true, &candidate);
+    if (status == LXP_OK) state->mirror_version = state->guarantors.version;
+    return status;
+}
+
+lxp_result lxp_paxeer_rotate_guarantor_signer(
+    lxp_paxeer_bond_state *state, const uint8_t guarantor_id[32],
+    const uint8_t public_key[33], uint64_t activation_epoch)
+{
+    lxp_result status;
+    if (state == NULL || guarantor_id == NULL || public_key == NULL)
+        return LXP_ERR_NON_CANONICAL;
+    status = lxp_guarantor_set_rotate_signer(
+        &state->guarantors,
+        state->guarantors.last_governance_sequence + 1U, true,
+        guarantor_id, public_key, activation_epoch);
+    if (status == LXP_OK) state->mirror_version = state->guarantors.version;
+    return status;
 }
 
 lxp_result lxp_paxeer_slash_submit(

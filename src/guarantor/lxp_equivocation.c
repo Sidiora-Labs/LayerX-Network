@@ -5,7 +5,7 @@
 #include <string.h>
 
 enum {
-    LXP_ATTESTATION_ENCODED_BYTES = 277,
+    LXP_ATTESTATION_ENCODED_BYTES = 306,
     LXP_SEQUENCER_STATEMENT_BYTES = LXP_BATCH_HEADER_ENCODED_SIZE + 64
 };
 
@@ -48,8 +48,15 @@ static lxp_result encode_attestation(
     if (status == LXP_OK)
         status = lxp_codec_write_u64(writer, attestation->attested_at_ms);
     if (status == LXP_OK)
-        status = lxp_codec_write_bytes(writer, attestation->signature, 64U,
-                                       64U);
+        status = lxp_codec_write_bytes(writer, attestation->signer, 20U, 20U);
+    if (status == LXP_OK)
+        status = lxp_codec_write_bytes(writer, attestation->signature, 32U,
+                                       32U);
+    if (status == LXP_OK)
+        status = lxp_codec_write_bytes(writer, attestation->signature + 32U,
+                                       32U, 32U);
+    if (status == LXP_OK)
+        status = lxp_codec_write_u8(writer, attestation->signature_v);
     return status;
 }
 

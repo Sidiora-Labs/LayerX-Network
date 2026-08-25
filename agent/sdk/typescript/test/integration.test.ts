@@ -77,7 +77,9 @@ export async function verifyTypeScriptPackage(): Promise<void> {
     dataPossessed: true,
     availabilityClassMask: 0x1f,
     attestedAtMs: 1n,
+    signer: new Uint8Array(20).fill(2),
     signature: new Uint8Array(64),
+    signatureV: 27,
   };
   assert(attestation.paxeerChainId === 777n, "Paxeer attestation binding changed");
 

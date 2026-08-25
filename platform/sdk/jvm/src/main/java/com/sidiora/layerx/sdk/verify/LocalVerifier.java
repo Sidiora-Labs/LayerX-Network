@@ -61,7 +61,8 @@ public final class LocalVerifier {
     public record CheckpointAttestation(int protocolVersion, long networkId, BigInteger paxeerChainId,
         byte[] settlementContract, BigInteger epoch, byte[] checkpointId, byte[] checkpointHash,
         byte[] guarantorId, BigInteger batchNumber, byte[] dataAvailabilityRoot, boolean replayed,
-        boolean dataPossessed, int availabilityClassMask, BigInteger attestedAtMs, byte[] signature) {}
+        boolean dataPossessed, int availabilityClassMask, BigInteger attestedAtMs, byte[] signer,
+        byte[] signature, int signatureV) {}
     public record GuarantorKey(byte[] guarantorId, byte[] publicKey, boolean bonded) {}
     public record CheckpointCertificate(byte[] canonicalHeader, byte[] validityProof,
         List<CheckpointAttestation> attestations, int threshold, byte[] settlementReference) {
@@ -190,7 +191,9 @@ public final class LocalVerifier {
                     || !equal(attestation.dataAvailabilityRoot(), header.dataAvailabilityRoot())
                     || !attestation.replayed() || !attestation.dataPossessed()
                     || attestation.availabilityClassMask() != ALL_AVAILABILITY_CLASSES
-                    || attestation.attestedAtMs().signum() <= 0) fail();
+                    || attestation.attestedAtMs().signum() <= 0
+                    || allZero(exact(attestation.signer(), 20))
+                    || (attestation.signatureV() != 27 && attestation.signatureV() != 28)) fail();
             paxeerChainId = attestation.paxeerChainId();
             settlementContract = attestationSettlementContract;
             GuarantorKey member = input.bondedSet().stream().filter(candidate -> candidate.bonded()

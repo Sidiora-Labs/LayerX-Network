@@ -107,16 +107,18 @@ public struct CheckpointAttestation: Sendable {
     public let dataPossessed: Bool
     public let availabilityClassMask: UInt8
     public let attestedAtMilliseconds: UInt64
+    public let signer: Data
     public let signature: Data
+    public let signatureV: UInt8
 
-    public init(protocolVersion: UInt16, networkID: UInt32, paxeerChainID: UInt64, settlementContract: Data, epoch: UInt64, checkpointID: Data, checkpointHash: Data, guarantorID: Data, batchNumber: UInt64, dataAvailabilityRoot: Data, replayed: Bool, dataPossessed: Bool, availabilityClassMask: UInt8, attestedAtMilliseconds: UInt64, signature: Data) {
+    public init(protocolVersion: UInt16, networkID: UInt32, paxeerChainID: UInt64, settlementContract: Data, epoch: UInt64, checkpointID: Data, checkpointHash: Data, guarantorID: Data, batchNumber: UInt64, dataAvailabilityRoot: Data, replayed: Bool, dataPossessed: Bool, availabilityClassMask: UInt8, attestedAtMilliseconds: UInt64, signer: Data, signature: Data, signatureV: UInt8) {
         self.protocolVersion = protocolVersion; self.networkID = networkID
         self.paxeerChainID = paxeerChainID; self.settlementContract = settlementContract; self.epoch = epoch
         self.checkpointID = checkpointID; self.checkpointHash = checkpointHash; self.guarantorID = guarantorID
         self.batchNumber = batchNumber; self.dataAvailabilityRoot = dataAvailabilityRoot
         self.replayed = replayed; self.dataPossessed = dataPossessed
         self.availabilityClassMask = availabilityClassMask; self.attestedAtMilliseconds = attestedAtMilliseconds
-        self.signature = signature
+        self.signer = signer; self.signature = signature; self.signatureV = signatureV
     }
 }
 
@@ -327,6 +329,8 @@ public enum LocalVerifier {
                   attestation.replayed, attestation.dataPossessed,
                   attestation.availabilityClassMask == allAvailabilityClasses,
                   attestation.attestedAtMilliseconds > 0,
+                  !allZero(try exact(attestation.signer, 20)),
+                  attestation.signatureV == 27 || attestation.signatureV == 28,
                   let member = bonded[guarantorID], achieved < UInt32.max else { throw verificationFailure() }
             paxeerChainID = attestation.paxeerChainID
             settlementContract = attestationSettlementContract

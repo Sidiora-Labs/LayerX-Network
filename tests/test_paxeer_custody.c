@@ -74,6 +74,8 @@ int main(void)
     lxp_checkpoint_registry_state registry;
     lxp_checkpoint_registry_state before_second;
     lxp_checkpoint_registration registration;
+    lxp_guarantor_attestation unsupported_recovery;
+    lxp_paxeer_guarantor_attestation paxeer_attestation;
     lxp_guarantor_ctx guarantors[3];
     lxp_guarantor_set guarantor_set;
     lxp_guarantor_cert certificate;
@@ -86,9 +88,9 @@ int main(void)
     for (i = 0U; i < abi.input_count; ++i)
         if (abi.inputs[i] != (lxp_paxeer_custody_input_kind)(i + 1U)) return 1;
     (void)memset(&registry, 0, sizeof(registry));
-    (void)memset(&guarantor_set, 0, sizeof(guarantor_set));
-    guarantor_set.count = 3U;
+    if (lxp_guarantor_set_init(&guarantor_set) != LXP_OK) return 1;
     for (i = 0U; i < 3U; ++i) {
+        lxp_guarantor_bond_state bond;
         (void)memset(&guarantors[i], 0, sizeof(guarantors[i]));
         guarantors[i].guarantor_id[0] = (uint8_t)(i + 1U);
         guarantors[i].ready_to_sign = true;
@@ -101,12 +103,14 @@ int main(void)
         if (key_pair((uint8_t)(i + 1U), guarantors[i].paxeer_private_key,
                      guarantors[i].paxeer_public_key) != 0)
             return 1;
-        guarantor_set.records[i].guarantor_id[0] = (uint8_t)(i + 1U);
-        (void)memcpy(guarantor_set.records[i].public_key,
-                     guarantors[i].paxeer_public_key, 33U);
-        guarantor_set.records[i].bond_amount = (lxp_u128){0U, 1000U};
-        guarantor_set.records[i].joined_epoch = 1U;
-        guarantor_set.records[i].active = true;
+        (void)memset(&bond, 0, sizeof(bond));
+        bond.guarantor_id[0] = (uint8_t)(i + 1U);
+        (void)memcpy(bond.public_key, guarantors[i].paxeer_public_key, 33U);
+        bond.bond_amount = (lxp_u128){0U, 1000U};
+        bond.joined_epoch = 1U;
+        bond.active = true;
+        if (lxp_guarantor_set_apply(&guarantor_set, i + 1U, true, &bond) !=
+            LXP_OK) return 1;
     }
     (void)memset(&requirements, 0, sizeof(requirements));
     requirements.checkpoint_epoch = 1U;
@@ -122,10 +126,29 @@ int main(void)
                                 &requirements, &arena, &registration) != LXP_OK ||
         registration.header_commitments.length !=
             LXP_BATCH_HEADER_ENCODED_SIZE ||
+        registration.attestation_count != certificate.attestation_count ||
+        registration.header.timestamp_ms !=
+            certificate.checkpoint.header.timestamp_ms ||
+        registration.validity_proof.length !=
+            certificate.checkpoint.validity_proof.length ||
+        memcmp(registration.attestations[0].signer,
+               certificate.attestations[0].signer, 20U) != 0 ||
+        memcmp(registration.attestations[0].r,
+               certificate.attestations[0].signature, 32U) != 0 ||
+        memcmp(registration.attestations[0].s,
+               certificate.attestations[0].signature + 32U, 32U) != 0 ||
+        registration.attestations[0].v !=
+            certificate.attestations[0].signature_v ||
         registry.registered_header_length != LXP_BATCH_HEADER_ENCODED_SIZE ||
         registry.registration_count != 1U ||
         memcmp(registry.finalisation.settlement_anchor,
                certificate.checkpoint.header.resulting_state_root, 32U) != 0)
+        return 1;
+    unsupported_recovery = certificate.attestations[0];
+    unsupported_recovery.signature_v = 29U;
+    if (lxp_paxeer_guarantor_attestation_from_core(
+            &unsupported_recovery, &paxeer_attestation) !=
+        LXP_ERR_NON_CANONICAL)
         return 1;
     (void)memcpy(first_header, registration.header_commitments.bytes,
                  sizeof(first_header));

@@ -56,6 +56,8 @@ int main(void)
     lxp_checkpoint_certificate foreign_checkpoint;
     lxp_guarantor_ctx guarantor;
     lxp_guarantor_ctx foreign_guarantor;
+    uint8_t rotated_private_key[32];
+    uint8_t rotated_public_key[33];
     lxp_guarantor_attestation first;
     lxp_guarantor_attestation second;
     lxp_guarantor_attestation foreign;
@@ -174,12 +176,22 @@ int main(void)
         return 1;
     unauthorized_set = set;
     unauthorized_set.records[0].joined_epoch = 5U;
+    unauthorized_set.records[0].signer_authorizations[0].active_from_epoch = 5U;
     if (lxp_slashing_submit(&evidence, &unauthorized_set,
                             &arena_one) != LXP_ERR_AUTH_SCOPE ||
+        secp_key(8U, rotated_private_key, rotated_public_key) != 0 ||
+        lxp_guarantor_set_rotate_signer(
+            &set, 2U, true, guarantor.guarantor_id,
+            rotated_public_key, 5U) != LXP_OK ||
+        set.records[0].signer_authorization_count != 2U ||
+        memcmp(set.records[0].public_key, rotated_public_key, 33U) != 0 ||
         lxp_slashing_submit(&evidence, &set, &arena_one) != LXP_OK ||
         set.records[0].active || !set.records[0].jailed ||
         !lxp_u128_is_zero(set.records[0].bond_amount) ||
-        set.records[0].removed_epoch != 0U || set.version != 2U)
+        set.records[0].removed_epoch != 0U ||
+        set.records[0].ejected_at_version != 3U || set.version != 3U ||
+        lxp_slashing_submit(&evidence, &set, &arena_one) !=
+            LXP_ERR_AUTH_SCOPE || set.version != 3U)
         return 1;
 
     (void)memset(&authorization, 0, sizeof(authorization));

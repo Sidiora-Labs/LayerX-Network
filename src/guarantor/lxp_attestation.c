@@ -51,6 +51,40 @@ static void attestation_message(const lxp_guarantor_attestation *attestation,
     store_u64(message + 181U, attestation->attested_at_ms);
 }
 
+static lxp_result attach_evm_recovery(
+    lxp_guarantor_attestation *attestation, const uint8_t public_key[33],
+    const uint8_t message[LXP_ATTESTATION_MESSAGE_BYTES])
+{
+    uint8_t expected[20];
+    uint8_t recovered[20];
+    uint8_t digest[32];
+    uint8_t recovery_id;
+    uint8_t matching_recovery_id = UINT8_MAX;
+    uint8_t matching_recovery_count = 0U;
+    lxp_result status = lxp_secp256k1_address(public_key, 33U, expected);
+    if (status == LXP_OK)
+        status = lxp_hash_domain(LXP_DOMAIN_GUARANTOR_ATTESTATION,
+                                 message, LXP_ATTESTATION_MESSAGE_BYTES,
+                                 digest);
+    if (status != LXP_OK) return status;
+    for (recovery_id = 0U; recovery_id < 4U; ++recovery_id) {
+        if (lxp_secp256k1_recover_address(attestation->signature,
+                                         recovery_id, digest,
+                                         recovered) == LXP_OK &&
+            lxp_ct_memcmp(expected, recovered, 20U) == 0) {
+            matching_recovery_id = recovery_id;
+            ++matching_recovery_count;
+        }
+    }
+    lxp_secure_zero(digest, sizeof(digest));
+    if (matching_recovery_count != 1U || matching_recovery_id == UINT8_MAX)
+        return LXP_ERR_BAD_SIGNATURE;
+    if (matching_recovery_id > 1U) return LXP_ERR_VERSION_UNSUPPORTED;
+    (void)memcpy(attestation->signer, expected, sizeof(attestation->signer));
+    attestation->signature_v = (uint8_t)(27U + matching_recovery_id);
+    return LXP_OK;
+}
+
 lxp_result lxp_secp256k1_sign(const uint8_t private_key[32],
                               lxp_domain_tag_id domain,
                               const void *message, size_t message_length,
@@ -148,10 +182,15 @@ lxp_result lxp_guarantor_attest(
     attestation->availability_class_mask = LXP_GUARANTOR_AVAILABILITY_ALL;
     attestation->attested_at_ms = attested_at_ms;
     attestation_message(attestation, message);
-    return lxp_secp256k1_sign(ctx->paxeer_private_key,
-                              LXP_DOMAIN_GUARANTOR_ATTESTATION,
-                              message, sizeof(message),
-                              attestation->signature);
+    status = lxp_secp256k1_sign(ctx->paxeer_private_key,
+                               LXP_DOMAIN_GUARANTOR_ATTESTATION,
+                               message, sizeof(message),
+                               attestation->signature);
+    if (status == LXP_OK)
+        status = attach_evm_recovery(attestation, ctx->paxeer_public_key,
+                                     message);
+    if (status != LXP_OK) (void)memset(attestation, 0, sizeof(*attestation));
+    return status;
 }
 
 lxp_result lxp_guarantor_attestation_verify(
@@ -159,6 +198,10 @@ lxp_result lxp_guarantor_attestation_verify(
     const uint8_t public_key[33])
 {
     uint8_t message[LXP_ATTESTATION_MESSAGE_BYTES];
+    uint8_t digest[32];
+    uint8_t public_key_signer[20];
+    uint8_t recovered_signer[20];
+    lxp_result status;
     if (attestation == NULL || public_key == NULL ||
         !lxp_protocol_version_supported(attestation->protocol_version) ||
         attestation->network_id == 0U || attestation->paxeer_chain_id == 0U ||
@@ -170,10 +213,28 @@ lxp_result lxp_guarantor_attestation_verify(
         !attestation->da_possessed ||
         attestation->availability_class_mask !=
             LXP_GUARANTOR_AVAILABILITY_ALL ||
-        attestation->attested_at_ms == 0U)
+        attestation->attested_at_ms == 0U ||
+        lxp_ct_is_zero(attestation->signer, 20U) ||
+        (attestation->signature_v != 27U && attestation->signature_v != 28U))
         return LXP_ERR_BAD_SIGNATURE;
     attestation_message(attestation, message);
-    return lxp_secp256k1_verify(public_key, 33U, attestation->signature,
-                                LXP_DOMAIN_GUARANTOR_ATTESTATION,
-                                message, sizeof(message));
+    status = lxp_secp256k1_address(public_key, 33U, public_key_signer);
+    if (status == LXP_OK)
+        status = lxp_hash_domain(LXP_DOMAIN_GUARANTOR_ATTESTATION,
+                                 message, sizeof(message), digest);
+    if (status == LXP_OK)
+        status = lxp_secp256k1_recover_address(
+            attestation->signature,
+            (uint8_t)(attestation->signature_v - 27U), digest,
+            recovered_signer);
+    if (status == LXP_OK &&
+        (lxp_ct_memcmp(public_key_signer, attestation->signer, 20U) != 0 ||
+         lxp_ct_memcmp(recovered_signer, attestation->signer, 20U) != 0))
+        status = LXP_ERR_BAD_SIGNATURE;
+    if (status == LXP_OK)
+        status = lxp_secp256k1_verify(
+            public_key, 33U, attestation->signature,
+            LXP_DOMAIN_GUARANTOR_ATTESTATION, message, sizeof(message));
+    lxp_secure_zero(digest, sizeof(digest));
+    return status;
 }

@@ -68,7 +68,9 @@ export interface CheckpointAttestation {
   readonly dataPossessed: boolean;
   readonly availabilityClassMask: number;
   readonly attestedAtMs: bigint;
+  readonly signer: Uint8Array;
   readonly signature: Uint8Array;
+  readonly signatureV: number;
 }
 
 export interface GuarantorKey {
@@ -560,6 +562,8 @@ export async function verifyCheckpoint(
       || !attestation.dataPossessed
       || attestation.availabilityClassMask !== ALL_AVAILABILITY_CLASSES
       || attestation.attestedAtMs <= 0n
+      || exactBytes(attestation.signer, 20).every((byte) => byte === 0)
+      || (attestation.signatureV !== 27 && attestation.signatureV !== 28)
     ) {
       return verificationFailure();
     }

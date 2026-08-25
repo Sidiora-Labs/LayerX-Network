@@ -56,6 +56,7 @@ lxp_result lxp_da_challenge_record_failure(
     if (registry == NULL || evidence == NULL || set == NULL ||
         registry->publish_evidence == NULL)
         return LXP_ERR_NON_CANONICAL;
+    if (set->version == UINT64_MAX) return LXP_ERR_OVERFLOW;
     status = registry->publish_evidence(registry->publish_context, evidence);
     if (status != LXP_OK) return status;
     status = append_record(registry, &evidence->challenge,

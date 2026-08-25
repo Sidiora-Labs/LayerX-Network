@@ -499,7 +499,9 @@ type CheckpointAttestation struct {
 	DataPossessed         bool
 	AvailabilityClassMask uint8
 	AttestedAtMillis      uint64
+	Signer                [20]byte
 	Signature             [64]byte
+	SignatureV            uint8
 }
 
 type GuarantorKey struct {
@@ -571,7 +573,8 @@ func VerifyCheckpoint(ctx context.Context, input CheckpointVerificationInput, si
 			(achieved > 0 && (attestation.PaxeerChainID != paxeerChainID || attestation.SettlementContract != settlementContract)) ||
 			attestation.CheckpointID != checkpointID || attestation.CheckpointHash != checkpointID ||
 			attestation.BatchNumber != header.BatchNumber || attestation.DataAvailabilityRoot != header.DataAvailabilityRoot ||
-			!attestation.Replayed || !attestation.DataPossessed || attestation.AvailabilityClassMask != allAvailabilityClasses || attestation.AttestedAtMillis == 0 {
+			!attestation.Replayed || !attestation.DataPossessed || attestation.AvailabilityClassMask != allAvailabilityClasses || attestation.AttestedAtMillis == 0 ||
+			attestation.Signer == ([20]byte{}) || (attestation.SignatureV != 27 && attestation.SignatureV != 28) {
 			return CheckpointVerification{}, verificationFailure()
 		}
 		member, ok := bonded[attestation.GuarantorID]

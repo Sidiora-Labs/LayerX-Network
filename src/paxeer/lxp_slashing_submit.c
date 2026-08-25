@@ -17,19 +17,19 @@ lxp_result lxp_slashing_submit(
     for (i = 0U; i < set->count; ++i)
         if (memcmp(set->records[i].guarantor_id,
                    evidence->guarantor_first.guarantor_id, 32U) == 0) {
-            if (memcmp(set->records[i].public_key,
-                       evidence->offender_public_key, 33U) != 0 ||
-                set->records[i].joined_epoch >
-                    evidence->guarantor_first.epoch ||
-                (set->records[i].removed_epoch != 0U &&
-                 set->records[i].removed_epoch <=
-                    evidence->guarantor_first.epoch) ||
+            bool authorized = false;
+            status = lxp_guarantor_signer_authorized(
+                &set->records[i], evidence->offender_public_key,
+                evidence->guarantor_first.epoch, &authorized);
+            if (status != LXP_OK) return status;
+            if (!authorized || set->records[i].ejected_at_version != 0U ||
                 set->version == UINT64_MAX)
                 return LXP_ERR_AUTH_SCOPE;
             set->records[i].bond_amount = (lxp_u128){0U, 0U};
             set->records[i].active = false;
             set->records[i].jailed = true;
             set->records[i].unresolved_slashing = false;
+            set->records[i].ejected_at_version = set->version + 1U;
             ++set->version;
             return LXP_OK;
         }

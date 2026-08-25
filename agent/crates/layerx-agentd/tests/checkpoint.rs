@@ -1,5 +1,6 @@
 use ed25519_dalek::{Signer as _, SigningKey as EdSigningKey};
-use k256::ecdsa::{signature::hazmat::PrehashSigner as _, Signature, SigningKey};
+use k256::ecdsa::{Signature, SigningKey};
+use layerx_crypto::secp256k1;
 use layerx_agentd::read::{
     checkpoint, proof_bundle, CheckpointReadError, ProofBundleKind, ProofBundleRequest,
 };
@@ -74,9 +75,13 @@ fn attestation(checkpoint: [u8; 32], guarantor_id: [u8; 32], key: &SigningKey) -
     message[181..].copy_from_slice(&(1_000 + u64::from(guarantor_id[0])).to_be_bytes());
     let digest = checkpoint_attestation_digest(&message)
         .unwrap_or_else(|error| panic!("attestation digest: {error:?}"));
-    let signature: Signature = key
-        .sign_prehash(&digest)
+    let (signature, recovery_id): (Signature, _) = key
+        .sign_prehash_recoverable(&digest)
         .unwrap_or_else(|error| panic!("attestation signature: {error}"));
+    let signer = secp256k1::evm_address(
+        key.verifying_key().to_encoded_point(true).as_bytes(),
+    )
+    .unwrap_or_else(|error| panic!("attestation signer: {error:?}"));
     Attestation::new(
         1,
         42,
@@ -92,7 +97,9 @@ fn attestation(checkpoint: [u8; 32], guarantor_id: [u8; 32], key: &SigningKey) -
         true,
         0x1f,
         1_000 + u64::from(guarantor_id[0]),
+        signer,
         signature.to_bytes().into(),
+        27 + u8::from(recovery_id),
     )
 }
 

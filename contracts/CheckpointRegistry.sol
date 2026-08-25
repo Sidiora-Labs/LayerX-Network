@@ -19,6 +19,7 @@ contract CheckpointRegistry is LayerXComponent {
 
     bytes32 private constant REGISTERED_CERTIFICATE_DOMAIN =
         keccak256("LXP1/registered-guarantor-certificate/v1");
+    uint64 private constant MILLISECONDS_PER_SECOND = 1_000;
 
     IGuarantorEligibility public immutable guarantorEligibility;
     uint16 public immutable protocolVersion;
@@ -27,6 +28,8 @@ contract CheckpointRegistry is LayerXComponent {
     uint16 public immutable maximumAttestations;
     uint64 public immutable maximumAttestationDelay;
     uint64 public immutable maximumFutureTimestampDrift;
+    uint64 public immutable maximumAttestationDelayMilliseconds;
+    uint64 public immutable maximumFutureTimestampDriftMilliseconds;
 
     mapping(bytes32 => bytes32) public finalisedStateRoot;
     mapping(uint64 => bytes32) public checkpointAtBatch;
@@ -79,6 +82,8 @@ contract CheckpointRegistry is LayerXComponent {
             address(eligibility) == address(0) || expectedProtocolVersion == 0 || expectedNetworkId == 0
                 || certificateThreshold == 0 || attestationLimit < certificateThreshold || attestationLimit > 32
                 || attestationDelay == 0 || futureTimestampDrift == 0 || genesisStateRoot == bytes32(0)
+                || attestationDelay > type(uint64).max / MILLISECONDS_PER_SECOND
+                || futureTimestampDrift > type(uint64).max / MILLISECONDS_PER_SECOND
                 || block.chainid > type(uint64).max || eligibility.protocolVersion() != expectedProtocolVersion
                 || eligibility.networkId() != expectedNetworkId
         ) {
@@ -91,6 +96,8 @@ contract CheckpointRegistry is LayerXComponent {
         maximumAttestations = attestationLimit;
         maximumAttestationDelay = attestationDelay;
         maximumFutureTimestampDrift = futureTimestampDrift;
+        maximumAttestationDelayMilliseconds = attestationDelay * MILLISECONDS_PER_SECOND;
+        maximumFutureTimestampDriftMilliseconds = futureTimestampDrift * MILLISECONDS_PER_SECOND;
         latestFinalisedStateRoot = genesisStateRoot;
     }
 
@@ -135,7 +142,8 @@ contract CheckpointRegistry is LayerXComponent {
                     || !attestation.dataAvailable
                     || attestation.availabilityClassMask != Constants.ALL_AVAILABILITY_CLASSES
                     || attestation.attestedAt < header.timestamp
-                    || uint256(attestation.attestedAt) > uint256(header.timestamp) + maximumAttestationDelay
+                    || uint256(attestation.attestedAt)
+                        > uint256(header.timestamp) + maximumAttestationDelayMilliseconds
                     || !_validSignature(attestation)
                     || !guarantorEligibility.bondedActive(attestation.guarantorId, attestation.signer, header.epoch)
             ) revert InvalidCertificate();
@@ -250,7 +258,8 @@ contract CheckpointRegistry is LayerXComponent {
                     || !attestation.dataAvailable
                     || attestation.availabilityClassMask != Constants.ALL_AVAILABILITY_CLASSES
                     || attestation.attestedAt < timestamp
-                    || uint256(attestation.attestedAt) > uint256(timestamp) + maximumAttestationDelay
+                    || uint256(attestation.attestedAt)
+                        > uint256(timestamp) + maximumAttestationDelayMilliseconds
                     || !_validSignature(attestation)
             ) {
                 return false;
@@ -282,7 +291,8 @@ contract CheckpointRegistry is LayerXComponent {
             header.protocolVersion != protocolVersion || header.networkId != networkId || header.epoch <= finalisedEpoch
                 || header.batchNumber != finalisedBatchNumber + 1 || header.firstSequence != finalisedLastSequence + 1
                 || header.lastSequence < header.firstSequence || header.timestamp <= finalisedTimestamp
-                || header.timestamp > block.timestamp + maximumFutureTimestampDrift
+                || uint256(header.timestamp)
+                    > uint256(_wallClockMilliseconds()) + maximumFutureTimestampDriftMilliseconds
                 || header.resultingStateRoot == bytes32(0) || header.activityMerkleRoot == bytes32(0)
                 || header.receiptMerkleRoot == bytes32(0) || header.eventMerkleRoot == bytes32(0)
                 || header.dataAvailabilityRoot == bytes32(0) || header.oracleRoot == bytes32(0)
@@ -291,6 +301,11 @@ contract CheckpointRegistry is LayerXComponent {
         if (header.previousStateRoot != latestFinalisedStateRoot) {
             revert StateRootDiscontinuity();
         }
+    }
+
+    function _wallClockMilliseconds() private view returns (uint64) {
+        if (block.timestamp > type(uint64).max / MILLISECONDS_PER_SECOND) revert InvalidHeader();
+        return uint64(block.timestamp * MILLISECONDS_PER_SECOND);
     }
 
     function _validSignature(CanonicalCheckpoint.GuarantorAttestation calldata attestation)
