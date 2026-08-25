@@ -1,18 +1,32 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::ffi::{c_char, c_int, c_uchar, c_uint, c_ulonglong, c_void, CStr};
 use std::fmt::Write as _;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::ptr;
 use std::slice;
+use std::sync::{
+    mpsc::{sync_channel, SyncSender, TrySendError},
+    Arc, Mutex,
+};
+use std::thread;
 use std::time::Duration;
+
+use serde::de::DeserializeOwned;
+use serde::Deserialize;
 
 const DEFAULT_PORT: u16 = 9402;
 const DEFAULT_NETWORK_ID: u32 = 402;
 const DEFAULT_TIME_MS: u64 = 1_700_000_000_000;
 const MAX_HEADER_BYTES: usize = 32 * 1024;
 const MAX_REQUEST_BYTES: usize = 64 * 1024 * 1024;
+const MAX_JSON_BYTES: usize = 1024 * 1024;
 const IO_TIMEOUT: Duration = Duration::from_secs(10);
+const PARSER_WORKERS: usize = 8;
+const ADMISSION_CAPACITY: usize = 32;
+const TRANSITION_CAPACITY: usize = 32;
+const MAX_RECEIPTS: usize = 4096;
+const MAX_RECEIPT_BYTES: usize = 64 * 1024;
 
 #[repr(C)]
 struct CoreReceipt {
@@ -92,6 +106,7 @@ unsafe extern "C" {
 struct Emulator {
     core: *mut c_void,
     receipts: HashMap<String, String>,
+    receipt_order: VecDeque<String>,
     trace: u64,
 }
 
@@ -115,6 +130,46 @@ struct Prefund {
     amount_lo: u64,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ActivityBody {
+    activity: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PrefundBody {
+    did: String,
+    public_key: String,
+    #[serde(default)]
+    amount_hi: u64,
+    amount_lo: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TimestampBody {
+    timestamp_ms: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AdvanceBody {
+    delta_ms: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FaultBody {
+    kind: String,
+    #[serde(default = "one")]
+    count: u64,
+}
+
+const fn one() -> u64 {
+    1
+}
+
 struct Request {
     method: String,
     path: String,
@@ -126,6 +181,11 @@ struct Response {
     status: u16,
     content_type: &'static str,
     body: Vec<u8>,
+}
+
+struct ParsedConnection {
+    request: Result<Request, String>,
+    response: SyncSender<Response>,
 }
 
 fn hex_encode(bytes: &[u8]) -> String {
@@ -162,25 +222,17 @@ fn hex_decode(encoded: &str) -> Result<Vec<u8>, String> {
         .collect()
 }
 
-fn json_string(body: &[u8], field: &str) -> Option<String> {
-    let source = std::str::from_utf8(body).ok()?;
-    let marker = format!("\"{field}\"");
-    let after = source.get(source.find(&marker)? + marker.len()..)?;
-    let after_colon = after.get(after.find(':')? + 1..)?.trim_start();
-    let quoted = after_colon.strip_prefix('"')?;
-    let end = quoted.find('"')?;
-    Some(quoted[..end].to_string())
-}
-
-fn json_u64(body: &[u8], field: &str) -> Option<u64> {
-    let source = std::str::from_utf8(body).ok()?;
-    let marker = format!("\"{field}\"");
-    let after = source.get(source.find(&marker)? + marker.len()..)?;
-    let value = after.get(after.find(':')? + 1..)?.trim_start();
-    let end = value
-        .find(|character: char| !character.is_ascii_digit())
-        .unwrap_or(value.len());
-    value.get(..end)?.parse().ok()
+fn decode_json<T: DeserializeOwned>(request: &Request) -> Result<T, String> {
+    let media_type = request
+        .content_type
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim();
+    if media_type != "application/json" || request.body.len() > MAX_JSON_BYTES {
+        return Err("request must carry bounded application/json".into());
+    }
+    serde_json::from_slice(&request.body).map_err(|_| "request body is not valid JSON".into())
 }
 
 fn escape_json(value: &str) -> String {
@@ -192,11 +244,27 @@ fn escape_json(value: &str) -> String {
             '\n' => escaped.push_str("\\n"),
             '\r' => escaped.push_str("\\r"),
             '\t' => escaped.push_str("\\t"),
-            value if value.is_control() => escaped.push_str("\\u001f"),
+            value if value.is_control() => {
+                let _ = write!(escaped, "\\u{:04x}", u32::from(value));
+            }
             value => escaped.push(value),
         }
     }
     escaped
+}
+
+fn remember_receipt(emulator: &mut Emulator, activity_id: String, receipt: String) {
+    if !emulator.receipts.contains_key(&activity_id) {
+        while emulator.receipts.len() >= MAX_RECEIPTS {
+            let Some(evicted) = emulator.receipt_order.pop_front() else {
+                emulator.receipts.clear();
+                break;
+            };
+            emulator.receipts.remove(&evicted);
+        }
+        emulator.receipt_order.push_back(activity_id.clone());
+    }
+    emulator.receipts.insert(activity_id, receipt);
 }
 
 fn core_error(code: i32) -> String {
@@ -253,20 +321,22 @@ fn parse_request(stream: &mut TcpStream) -> Result<Request, String> {
     };
     let headers = std::str::from_utf8(&bytes[..header_end]).map_err(|_| "headers are not UTF-8")?;
     let mut lines = headers.split("\r\n");
-    let mut request_line = lines
-        .next()
-        .ok_or("missing request line")?
-        .split_whitespace();
-    let method = request_line.next().ok_or("missing method")?.to_string();
-    let target = request_line.next().ok_or("missing path")?;
-    if request_line.next() != Some("HTTP/1.1")
-        || request_line.next().is_some()
+    let request_line = lines.next().ok_or("missing request line")?;
+    let mut request_fields = request_line.split(' ');
+    let method = request_fields.next().unwrap_or_default();
+    let target = request_fields.next().unwrap_or_default();
+    if method.is_empty()
+        || !method.bytes().all(|byte| byte.is_ascii_uppercase())
+        || request_fields.next() != Some("HTTP/1.1")
+        || request_fields.next().is_some()
         || !target.starts_with('/')
-        || target.contains(['#', '\\', '\0'])
+        || target.starts_with("//")
+        || target.contains(['?', '#', '\\', '\0'])
+        || target.split('/').any(|segment| matches!(segment, "." | ".."))
     {
         return Err("invalid request line".into());
     }
-    let path = target.split('?').next().unwrap_or("/").to_string();
+    let path = target.to_string();
     let mut content_length = 0_usize;
     let mut has_content_length = false;
     let mut content_type = String::new();
@@ -276,9 +346,22 @@ fn parse_request(stream: &mut TcpStream) -> Result<Request, String> {
         let (name, value) = line
             .split_once(':')
             .ok_or_else(|| "invalid request header".to_string())?;
-        let value = value.trim();
+        if name.is_empty()
+            || !name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        {
+            return Err("invalid request header name".into());
+        }
+        let value = value.trim_matches([' ', '\t']);
+        if value.bytes().any(|byte| byte.is_ascii_control() && byte != b'\t') {
+            return Err("invalid request header value".into());
+        }
         if name.eq_ignore_ascii_case("content-length") {
-            if has_content_length {
+            if has_content_length
+                || value.is_empty()
+                || !value.bytes().all(|byte| byte.is_ascii_digit())
+            {
                 return Err("duplicate content length".into());
             }
             content_length = value.parse().map_err(|_| "invalid content length")?;
@@ -301,6 +384,12 @@ fn parse_request(stream: &mut TcpStream) -> Result<Request, String> {
     if !has_host {
         return Err("missing host header".into());
     }
+    if matches!(method, "POST" | "PUT") && !has_content_length {
+        return Err("write request is missing content length".into());
+    }
+    if !matches!(method, "POST" | "PUT") && content_length != 0 {
+        return Err("read request may not carry a body".into());
+    }
     if content_length > MAX_REQUEST_BYTES {
         return Err("request body exceeds emulator limit".into());
     }
@@ -310,9 +399,15 @@ fn parse_request(stream: &mut TcpStream) -> Result<Request, String> {
             return Err("connection closed before request body".into());
         }
         bytes.extend_from_slice(&chunk[..read]);
+        if bytes.len() > header_end.saturating_add(content_length) {
+            return Err("request carries bytes beyond its declared body".into());
+        }
+    }
+    if bytes.len() != header_end + content_length {
+        return Err("request carries bytes beyond its declared body".into());
     }
     Ok(Request {
-        method,
+        method: method.to_string(),
         path,
         content_type,
         body: bytes[header_end..header_end + content_length].to_vec(),
@@ -334,12 +429,13 @@ fn write_response(stream: &mut TcpStream, response: &Response) -> std::io::Resul
 }
 
 fn submit(emulator: &mut Emulator, request: &Request, trace: u64) -> Response {
-    let activity = if request.content_type.starts_with("application/octet-stream") {
+    let media_type = request.content_type.split(';').next().unwrap_or_default().trim();
+    let activity = if media_type == "application/octet-stream" {
         Ok(request.body.clone())
+    } else if media_type == "application/json" {
+        decode_json::<ActivityBody>(request).and_then(|value| hex_decode(&value.activity))
     } else {
-        json_string(&request.body, "activity")
-            .ok_or_else(|| "missing activity hex".to_string())
-            .and_then(|value| hex_decode(&value))
+        Err("activity content type is not supported".into())
     };
     let activity = match activity {
         Ok(activity) if !activity.is_empty() => activity,
@@ -366,22 +462,32 @@ fn submit(emulator: &mut Emulator, request: &Request, trace: u64) -> Response {
     if code != 0 {
         return core_response(trace, code);
     }
+    if receipt.bytes.is_null()
+        || receipt.length == 0
+        || receipt.length > MAX_RECEIPT_BYTES
+    {
+        return refusal(
+            trace,
+            503,
+            "core_invalid_output",
+            "the LayerX core returned an invalid receipt buffer",
+        );
+    }
     let encoded = unsafe { slice::from_raw_parts(receipt.bytes, receipt.length) };
     let receipt_hex = hex_encode(encoded);
     let activity_id = hex_encode(&receipt.activity_id);
-    emulator
-        .receipts
-        .insert(activity_id.clone(), receipt_hex.clone());
+    remember_receipt(emulator, activity_id.clone(), receipt_hex.clone());
     success(trace, &format!("{{\"activity_id\":\"{activity_id}\",\"batch_id\":\"{}\",\"global_sequence\":{},\"result_code\":{},\"state_root\":\"{}\",\"receipt\":\"{receipt_hex}\"}}", hex_encode(&receipt.batch_id), receipt.global_sequence, receipt.result_code, hex_encode(&receipt.state_root)))
 }
 
 fn decode_activity(request: &Request) -> Result<Vec<u8>, String> {
-    if request.content_type.starts_with("application/octet-stream") {
+    let media_type = request.content_type.split(';').next().unwrap_or_default().trim();
+    if media_type == "application/octet-stream" {
         Ok(request.body.clone())
+    } else if media_type == "application/json" {
+        decode_json::<ActivityBody>(request).and_then(|value| hex_decode(&value.activity))
     } else {
-        json_string(&request.body, "activity")
-            .ok_or_else(|| "missing activity hex".to_string())
-            .and_then(|value| hex_decode(&value))
+        Err("program-call content type is not supported".into())
     }
 }
 
@@ -424,12 +530,21 @@ fn program_call(emulator: &mut Emulator, request: &Request, trace: u64) -> Respo
     if code != 0 {
         return core_response(trace, code);
     }
+    if receipt.bytes.is_null()
+        || receipt.length == 0
+        || receipt.length > MAX_RECEIPT_BYTES
+    {
+        return refusal(
+            trace,
+            503,
+            "core_invalid_output",
+            "the LayerX core returned an invalid receipt buffer",
+        );
+    }
     let encoded = unsafe { slice::from_raw_parts(receipt.bytes, receipt.length) };
     let receipt_hex = hex_encode(encoded);
     let activity_id = hex_encode(&receipt.activity_id);
-    emulator
-        .receipts
-        .insert(activity_id.clone(), receipt_hex.clone());
+    remember_receipt(emulator, activity_id.clone(), receipt_hex.clone());
     let outcome = if receipt.result_code >= 0 {
         format!(
             "{{\"status\":\"completed\",\"code\":{}}}",
@@ -504,6 +619,14 @@ fn inspect(emulator: &Emulator, trace: u64) -> Response {
         if code != 0 {
             return core_response(trace, code);
         }
+        if name.is_null() || name_length == 0 {
+            return refusal(
+                trace,
+                503,
+                "core_invalid_output",
+                "the LayerX core returned an invalid account name buffer",
+            );
+        }
         let account_name = unsafe { slice::from_raw_parts(name, name_length) };
         let account_name = String::from_utf8_lossy(account_name);
         if !accounts.is_empty() {
@@ -540,14 +663,15 @@ fn health(emulator: &Emulator, trace: u64) -> Response {
     success(trace, "{\"status\":\"ready\",\"core\":\"layerx\"}")
 }
 
-fn prefund(emulator: &mut Emulator, body: &[u8], trace: u64) -> Response {
-    let Some(did) = json_string(body, "did") else {
-        return refusal(trace, 400, "invalid_argument", "missing did");
+fn prefund(emulator: &mut Emulator, request: &Request, trace: u64) -> Response {
+    let body = match decode_json::<PrefundBody>(request) {
+        Ok(body) => body,
+        Err(error) => return refusal(trace, 400, "invalid_argument", &error),
     };
-    let Some(key_hex) = json_string(body, "public_key") else {
-        return refusal(trace, 400, "invalid_argument", "missing public_key");
-    };
-    let Ok(key) = hex_decode(&key_hex) else {
+    if body.did.len() > 512 || !body.did.starts_with("did:") || body.did.contains('\0') {
+        return refusal(trace, 400, "invalid_argument", "did is not a bounded DID");
+    }
+    let Ok(key) = hex_decode(&body.public_key) else {
         return refusal(trace, 400, "invalid_argument", "public_key must be hex");
     };
     if key.len() != 32 {
@@ -558,18 +682,14 @@ fn prefund(emulator: &mut Emulator, body: &[u8], trace: u64) -> Response {
             "public_key must be 32 bytes",
         );
     }
-    let amount_hi = json_u64(body, "amount_hi").unwrap_or(0);
-    let Some(amount_lo) = json_u64(body, "amount_lo") else {
-        return refusal(trace, 400, "invalid_argument", "missing integer amount_lo");
-    };
     let code = unsafe {
         platform_emulator_prefund(
             emulator.core,
-            did.as_ptr(),
-            did.len(),
+            body.did.as_ptr(),
+            body.did.len(),
             key.as_ptr(),
-            amount_hi,
-            amount_lo,
+            body.amount_hi,
+            body.amount_lo,
         )
     };
     if code != 0 {
@@ -578,15 +698,15 @@ fn prefund(emulator: &mut Emulator, body: &[u8], trace: u64) -> Response {
     success(trace, "{\"prefunded\":true}")
 }
 
-fn update_time(emulator: &mut Emulator, body: &[u8], trace: u64, advance: bool) -> Response {
-    let field = if advance { "delta_ms" } else { "timestamp_ms" };
-    let Some(value) = json_u64(body, field) else {
-        return refusal(
-            trace,
-            400,
-            "invalid_argument",
-            &format!("missing integer {field}"),
-        );
+fn update_time(emulator: &mut Emulator, request: &Request, trace: u64, advance: bool) -> Response {
+    let value = if advance {
+        decode_json::<AdvanceBody>(request).map(|body| body.delta_ms)
+    } else {
+        decode_json::<TimestampBody>(request).map(|body| body.timestamp_ms)
+    };
+    let value = match value {
+        Ok(value) => value,
+        Err(error) => return refusal(trace, 400, "invalid_argument", &error),
     };
     let code = unsafe {
         if advance {
@@ -602,15 +722,21 @@ fn update_time(emulator: &mut Emulator, body: &[u8], trace: u64, advance: bool) 
     }
 }
 
-fn inject_fault(emulator: &mut Emulator, body: &[u8], trace: u64) -> Response {
-    let kind = match json_string(body, "kind").as_deref() {
-        Some("reject") => 1,
-        Some("drop_receipt") => 2,
-        Some("corrupt_receipt") => 3,
+fn inject_fault(emulator: &mut Emulator, request: &Request, trace: u64) -> Response {
+    let body = match decode_json::<FaultBody>(request) {
+        Ok(body) => body,
+        Err(error) => return refusal(trace, 400, "invalid_argument", &error),
+    };
+    let kind = match body.kind.as_str() {
+        "reject" => 1,
+        "drop_receipt" => 2,
+        "corrupt_receipt" => 3,
         _ => return refusal(trace, 400, "invalid_argument", "unknown fault kind"),
     };
-    let count = json_u64(body, "count").unwrap_or(1);
-    let code = unsafe { platform_emulator_inject_failure(emulator.core, kind, count) };
+    if body.count == 0 || body.count > 1_000_000 {
+        return refusal(trace, 400, "invalid_argument", "fault count is outside its bound");
+    }
+    let code = unsafe { platform_emulator_inject_failure(emulator.core, kind, body.count) };
     if code == 0 {
         success(trace, "{\"configured\":true}")
     } else {
@@ -627,6 +753,14 @@ fn export_snapshot(emulator: &mut Emulator, trace: u64) -> Response {
     if code != 0 {
         return core_response(trace, code);
     }
+    if bytes.is_null() || length == 0 || length > MAX_REQUEST_BYTES {
+        return refusal(
+            trace,
+            503,
+            "core_invalid_output",
+            "the LayerX core returned an invalid snapshot buffer",
+        );
+    }
     Response {
         status: 200,
         content_type: "application/vnd.layerx.emulator-snapshot",
@@ -641,21 +775,34 @@ fn import_snapshot(emulator: &mut Emulator, body: &[u8], trace: u64) -> Response
         return core_response(trace, code);
     }
     emulator.receipts.clear();
+    emulator.receipt_order.clear();
     success(trace, "{\"imported\":true}")
 }
 
+fn advance_trace(trace: &mut u64) -> Option<u64> {
+    let next = trace.checked_add(1)?;
+    *trace = next;
+    Some(next)
+}
+
 fn route(emulator: &mut Emulator, request: &Request) -> Response {
-    emulator.trace += 1;
-    let trace = emulator.trace;
+    let Some(trace) = advance_trace(&mut emulator.trace) else {
+        return refusal(
+            u64::MAX,
+            503,
+            "trace_exhausted",
+            "the emulator trace space is exhausted",
+        );
+    };
     match (request.method.as_str(), request.path.as_str()) {
         ("GET", "/healthz") => health(emulator, trace),
         ("POST", "/v1/activities") => submit(emulator, request, trace),
         ("POST", "/v1/programs/call") => program_call(emulator, request, trace),
         ("GET", "/v1/state") => inspect(emulator, trace),
-        ("POST", "/__emulator/accounts/prefund") => prefund(emulator, &request.body, trace),
-        ("POST", "/__emulator/time/set") => update_time(emulator, &request.body, trace, false),
-        ("POST", "/__emulator/time/advance") => update_time(emulator, &request.body, trace, true),
-        ("POST", "/__emulator/faults") => inject_fault(emulator, &request.body, trace),
+        ("POST", "/__emulator/accounts/prefund") => prefund(emulator, request, trace),
+        ("POST", "/__emulator/time/set") => update_time(emulator, request, trace, false),
+        ("POST", "/__emulator/time/advance") => update_time(emulator, request, trace, true),
+        ("POST", "/__emulator/faults") => inject_fault(emulator, request, trace),
         ("GET", "/__emulator/snapshot") => export_snapshot(emulator, trace),
         ("PUT", "/__emulator/snapshot") => import_snapshot(emulator, &request.body, trace),
         ("GET", path) if path.starts_with("/v1/receipts/") => {
@@ -773,6 +920,7 @@ fn platform_emulator(config: Config) -> Result<(), String> {
     let mut emulator = Emulator {
         core,
         receipts: HashMap::new(),
+        receipt_order: VecDeque::new(),
         trace: 0,
     };
     for prefund in config.prefunds {
@@ -800,9 +948,23 @@ fn platform_emulator(config: Config) -> Result<(), String> {
         "LayerX emulator ready on http://{} (network {}, deterministic time {})",
         config.listen, config.network_id, config.timestamp_ms
     );
-    for connection in listener.incoming() {
-        match connection {
-            Ok(mut stream) => {
+    let (admission_sender, admission_receiver) = sync_channel::<TcpStream>(ADMISSION_CAPACITY);
+    let admission_receiver = Arc::new(Mutex::new(admission_receiver));
+    let (transition_sender, transition_receiver) =
+        sync_channel::<ParsedConnection>(TRANSITION_CAPACITY);
+    for index in 0..PARSER_WORKERS {
+        let admission_receiver = Arc::clone(&admission_receiver);
+        let transition_sender = transition_sender.clone();
+        thread::Builder::new()
+            .name(format!("layerx-emulator-http-{index}"))
+            .spawn(move || loop {
+                let stream = match admission_receiver.lock() {
+                    Ok(receiver) => receiver.recv(),
+                    Err(_) => return,
+                };
+                let Ok(mut stream) = stream else {
+                    return;
+                };
                 if stream
                     .set_read_timeout(Some(IO_TIMEOUT))
                     .and_then(|()| stream.set_write_timeout(Some(IO_TIMEOUT)))
@@ -810,19 +972,68 @@ fn platform_emulator(config: Config) -> Result<(), String> {
                 {
                     continue;
                 }
-                let response = match parse_request(&mut stream) {
-                    Ok(request) => route(&mut emulator, &request),
-                    Err(error) => {
-                        emulator.trace += 1;
-                        refusal(emulator.trace, 400, "invalid_request", &error)
-                    }
+                let request = parse_request(&mut stream);
+                let (response_sender, response_receiver) = sync_channel(1);
+                if transition_sender
+                    .send(ParsedConnection {
+                        request,
+                        response: response_sender,
+                    })
+                    .is_err()
+                {
+                    return;
+                }
+                let Ok(response) = response_receiver.recv() else {
+                    return;
                 };
                 let _ = write_response(&mut stream, &response);
-            }
-            Err(error) => eprintln!("emulator connection error: {error}"),
-        }
+            })
+            .map_err(|error| format!("could not start emulator HTTP worker {index}: {error}"))?;
     }
-    Ok(())
+    drop(transition_sender);
+    thread::Builder::new()
+        .name("layerx-emulator-admission".to_owned())
+        .spawn(move || {
+            for connection in listener.incoming() {
+                match connection {
+                    Ok(stream) => match admission_sender.try_send(stream) {
+                        Ok(()) => {}
+                        Err(TrySendError::Full(mut stream)) => {
+                            let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
+                            let response = refusal(
+                                0,
+                                503,
+                                "overloaded",
+                                "the emulator HTTP admission queue is full",
+                            );
+                            let _ = write_response(&mut stream, &response);
+                        }
+                        Err(TrySendError::Disconnected(_)) => return,
+                    },
+                    Err(error) => eprintln!("emulator connection error: {error}"),
+                }
+            }
+        })
+        .map_err(|error| format!("could not start emulator admission worker: {error}"))?;
+    for work in transition_receiver {
+        let response = match work.request {
+            Ok(request) => route(&mut emulator, &request),
+            Err(error) => {
+                if let Some(trace) = advance_trace(&mut emulator.trace) {
+                    refusal(trace, 400, "invalid_request", &error)
+                } else {
+                    refusal(
+                        u64::MAX,
+                        503,
+                        "trace_exhausted",
+                        "the emulator trace space is exhausted",
+                    )
+                }
+            }
+        };
+        let _ = work.response.send(response);
+    }
+    Err("all emulator HTTP workers stopped".into())
 }
 
 /// Runs the emulator subcommand behind the unified `layerx` CLI dispatcher.
@@ -837,7 +1048,7 @@ pub fn run(arguments: impl IntoIterator<Item = String>) -> Result<(), String> {
 
 #[cfg(test)]
 mod boundary_tests {
-    use super::parse_config;
+    use super::{advance_trace, parse_config};
 
     #[test]
     fn control_surface_refuses_non_loopback_listeners() {
@@ -849,6 +1060,14 @@ mod boundary_tests {
     fn control_surface_accepts_ipv4_and_ipv6_loopback() {
         assert!(parse_config(["up".to_owned(), "--listen".to_owned(), "127.0.0.1:0".to_owned()]).is_ok());
         assert!(parse_config(["up".to_owned(), "--listen".to_owned(), "[::1]:0".to_owned()]).is_ok());
+    }
+
+    #[test]
+    fn trace_exhaustion_never_wraps() {
+        let mut trace = u64::MAX - 1;
+        assert_eq!(advance_trace(&mut trace), Some(u64::MAX));
+        assert_eq!(advance_trace(&mut trace), None);
+        assert_eq!(trace, u64::MAX);
     }
 }
 
@@ -905,5 +1124,23 @@ mod program_call_tests {
             body: b"{}".to_vec(),
         };
         assert!(decode_activity(&request).is_err());
+    }
+
+    #[test]
+    fn duplicate_or_unknown_activity_fields_are_rejected() {
+        let duplicate = Request {
+            method: "POST".to_string(),
+            path: "/v1/programs/call".to_string(),
+            content_type: "application/json".to_string(),
+            body: b"{\"activity\":\"00\",\"activity\":\"11\"}".to_vec(),
+        };
+        let unknown = Request {
+            method: "POST".to_string(),
+            path: "/v1/programs/call".to_string(),
+            content_type: "application/json".to_string(),
+            body: b"{\"activity\":\"00\",\"trusted\":true}".to_vec(),
+        };
+        assert!(decode_activity(&duplicate).is_err());
+        assert!(decode_activity(&unknown).is_err());
     }
 }

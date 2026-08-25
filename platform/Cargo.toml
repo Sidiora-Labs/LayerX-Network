@@ -30,7 +30,7 @@ getrandom = "=0.3.4"
 keyring = "=4.1.6"
 keyring-core = "=1.0.0"
 native-tls = "=0.2.15"
-rustix = { version = "=1.1.4", features = ["fs"] }
+rustix = { version = "=1.1.4", features = ["fs", "process"] }
 layerx-fiat = { path = "../interop/crates/layerx-fiat" }
 layerx-proof = { path = "../agent/crates/layerx-proof" }
 layerx-sdk = { path = "../agent/crates/layerx-sdk" }

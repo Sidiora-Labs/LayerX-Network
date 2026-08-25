@@ -1336,9 +1336,11 @@ dependencies = [
  "layerx-proof",
  "layerx-types",
  "layerx-wire",
+ "rustix",
  "serde",
  "serde_json",
  "sha2",
+ "subtle",
  "ureq",
  "zeroize",
 ]
@@ -1361,6 +1363,10 @@ dependencies = [
 [[package]]
 name = "layerx-platform-emulator"
 version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "layerx-platform-faucet"

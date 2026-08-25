@@ -12,6 +12,8 @@ name = "layerx_platform_emulator"
 path = "src/main.rs"
 
 [dependencies]
+serde.workspace = true
+serde_json.workspace = true
 
 [lints.clippy]
 all = { level = "deny", priority = -1 }

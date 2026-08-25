@@ -1,7 +1,10 @@
-use std::path::PathBuf;
+use std::fs::{self, File};
+use std::io::Read as _;
+use std::path::{Path, PathBuf};
 
 use layerx_mcp::server::{DeploymentMode, ToolDefinition};
 use serde_json::{json, Value};
+use zeroize::{Zeroize as _, Zeroizing};
 
 use crate::config::Configuration;
 use crate::encoding::fixed_hex;
@@ -18,6 +21,8 @@ pub const ENVIRONMENT_EXTENSION: &str = "https://layerx.dev/a2a/extensions/envir
 const CARD_FILE: &str = "agent-card.json";
 const REGISTRY_FILE: &str = "runtime.json";
 const REGISTRY_SECTION: &str = "agents";
+const AUTHORIZATION_FILE: &str = "authorization";
+const MAX_AUTHORIZATION_BYTES: usize = 256;
 
 pub struct Request {
     pub environment: Option<String>,
@@ -61,6 +66,9 @@ pub fn platform_install_a2a(
         "LAYERX_GATEWAY_KEY_ID".to_owned(),
         selection.gateway_key_id.clone(),
     );
+    let directory = layerx_directory()?.join("a2a");
+    let authorization_path = directory.join(AUTHORIZATION_FILE);
+    let authorization = prepare_authorization(&authorization_path, request.rotate)?;
     let arguments = launch_arguments(
         &selection.environment,
         &selection.key,
@@ -68,8 +76,8 @@ pub fn platform_install_a2a(
         payment.as_ref(),
         &listen,
         request.read_only,
+        &authorization_path,
     );
-    let directory = layerx_directory()?.join("a2a");
     let card_path = directory.join(CARD_FILE);
     let card = agent_card(&selection.environment, &listen, mode, &tools);
     let registration = Registration {
@@ -92,7 +100,11 @@ pub fn platform_install_a2a(
         }),
     };
     let descriptors: Vec<Value> = tools.iter().copied().map(toolset::descriptor).collect();
-    let mut paths = vec![card_path.clone(), registration.path.clone()];
+    let mut paths = vec![
+        card_path.clone(),
+        registration.path.clone(),
+        authorization_path.clone(),
+    ];
     if let Some(root) = &request.well_known {
         paths.push(root.join(".well-known").join(CARD_FILE));
     }
@@ -102,9 +114,12 @@ pub fn platform_install_a2a(
     };
     let mut published: Vec<Value> = Vec::new();
     let applied = (|| {
+        if authorization.changed {
+            super::write_private(&authorization_path, authorization.value.as_str())?;
+        }
         let card_outcome = publish(&card_path, &card)?;
         let registry_outcome = apply(&registration)?;
-        let mut changed = card_outcome.changed || registry_outcome.changed;
+        let mut changed = authorization.changed || card_outcome.changed || registry_outcome.changed;
         if let Some(root) = &request.well_known {
             let path = root.join(".well-known").join(CARD_FILE);
             let outcome = publish(&path, &card)?;
@@ -125,7 +140,7 @@ pub fn platform_install_a2a(
             };
         }
     };
-    if selection.rotated_gateway_key {
+    if selection.rotated_gateway_key || authorization.changed {
         if let Err(error) = crate::a2a::stop_installed() {
             let rollback = transaction.rollback();
             return match rollback {
@@ -153,6 +168,11 @@ pub fn platform_install_a2a(
         "deployment_mode": toolset::mode_name(mode),
         "listen": listen,
         "url": endpoint_url(&listen),
+        "authorization": {
+            "scheme": "Bearer",
+            "credential_file": authorization_path.display().to_string(),
+            "permissions": "owner-only",
+        },
         "server": {
             "name": SERVER_NAME,
             "command": command,
@@ -221,6 +241,14 @@ pub fn agent_card(
                 },
             ],
         },
+        "securitySchemes": {
+            "layerxLocalBearer": {
+                "type": "http",
+                "scheme": "bearer",
+                "description": "Installation-local bearer credential delivered through the owner-only runtime credential file.",
+            },
+        },
+        "security": [{"layerxLocalBearer": []}],
         "defaultInputModes": ["application/json"],
         "defaultOutputModes": ["application/json"],
         "skills": skills,
@@ -259,6 +287,7 @@ fn launch_arguments(
     payment: Option<&(String, String)>,
     listen: &str,
     read_only: bool,
+    authorization_path: &Path,
 ) -> Vec<String> {
     let mut arguments = vec![
         "a2a".to_owned(),
@@ -271,6 +300,8 @@ fn launch_arguments(
         gateway_alias.to_owned(),
         "--listen".to_owned(),
         listen.to_owned(),
+        "--authorization-file".to_owned(),
+        authorization_path.display().to_string(),
     ];
     if let Some((source, asset)) = payment {
         arguments.extend([
@@ -284,4 +315,117 @@ fn launch_arguments(
         arguments.push("--read-only".to_owned());
     }
     arguments
+}
+
+struct PreparedAuthorization {
+    value: Zeroizing<String>,
+    changed: bool,
+}
+
+fn prepare_authorization(path: &Path, rotate: bool) -> Result<PreparedAuthorization, String> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => {
+            super::private_file_metadata(path)?;
+            if !rotate {
+                return Ok(PreparedAuthorization {
+                    value: read_authorization(path)?,
+                    changed: false,
+                });
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(format!("could not inspect {}: {error}", path.display())),
+    }
+    let mut random = Zeroizing::new([0_u8; 32]);
+    getrandom::fill(random.as_mut())
+        .map_err(|error| format!("operating-system randomness failed: {error}"))?;
+    Ok(PreparedAuthorization {
+        value: Zeroizing::new(format!("lxa2a_{}", crate::encoding::hex_encode(random.as_ref()))),
+        changed: true,
+    })
+}
+
+pub(crate) fn read_authorization(path: &Path) -> Result<Zeroizing<String>, String> {
+    let expected = super::private_file_metadata(path)?;
+    let mut source = String::new();
+    let file = File::open(path)
+        .map_err(|error| format!("could not read {}: {error}", path.display()))?;
+    let opened = file
+        .metadata()
+        .map_err(|error| format!("could not inspect opened {}: {error}", path.display()))?;
+    let current = super::private_file_metadata(path)?;
+    if !super::same_file(&expected, &opened) || !super::same_file(&opened, &current) {
+        return Err(format!("{} changed while its credential was opened", path.display()));
+    }
+    file
+        .take((MAX_AUTHORIZATION_BYTES + 1) as u64)
+        .read_to_string(&mut source)
+        .map_err(|error| format!("could not read {}: {error}", path.display()))?;
+    if source.len() > MAX_AUTHORIZATION_BYTES {
+        source.zeroize();
+        return Err("A2A authorization credential exceeds its bound".into());
+    }
+    let value = Zeroizing::new(source.trim_end_matches(['\r', '\n']).to_owned());
+    source.zeroize();
+    if !valid_authorization(&value) {
+        return Err("A2A authorization credential is malformed".into());
+    }
+    Ok(value)
+}
+
+fn valid_authorization(value: &str) -> bool {
+    value.len() == 70
+        && value.starts_with("lxa2a_")
+        && value[6..].bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+#[cfg(all(test, unix))]
+mod authorization_file_tests {
+    use std::fs;
+    use std::os::unix::fs::{symlink, PermissionsExt as _};
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use super::read_authorization;
+
+    static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
+    const CREDENTIAL: &str =
+        "lxa2a_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    fn temporary_directory() -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "layerx-a2a-auth-{}-{}",
+            std::process::id(),
+            NEXT_DIRECTORY.fetch_add(1, Ordering::Relaxed)
+        ))
+    }
+
+    #[test]
+    fn requires_private_current_owner_parent_and_leaf() -> Result<(), String> {
+        let root = temporary_directory();
+        let path = root.join("authorization");
+        super::super::write_private(&path, CREDENTIAL)?;
+        assert_eq!(read_authorization(&path)?.as_str(), CREDENTIAL);
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644))
+            .map_err(|error| error.to_string())?;
+        assert!(read_authorization(&path).is_err());
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
+            .map_err(|error| error.to_string())?;
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o755))
+            .map_err(|error| error.to_string())?;
+        assert!(read_authorization(&path).is_err());
+        fs::remove_dir_all(&root).map_err(|error| error.to_string())
+    }
+
+    #[test]
+    fn rejects_a_symlinked_ancestor() -> Result<(), String> {
+        let root = temporary_directory();
+        let actual = root.join("actual");
+        let path = actual.join("authorization");
+        super::super::write_private(&path, CREDENTIAL)?;
+        let alias = root.join("alias");
+        symlink(&actual, &alias).map_err(|error| error.to_string())?;
+        assert!(read_authorization(&alias.join("authorization")).is_err());
+        fs::remove_dir_all(&root).map_err(|error| error.to_string())
+    }
 }

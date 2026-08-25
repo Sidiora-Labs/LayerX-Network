@@ -62,6 +62,8 @@ a2a_port="${LAYERX_A2A_PORT:-19433}"
   --source-account "$LAYERX_SOURCE_ACCOUNT" --asset "$LAYERX_PAYMENT_ASSET" \
   --listen "127.0.0.1:$a2a_port" >"$journey_root/a2a-install.json"
 jq -e '.data.lifecycle.state == "running"' "$journey_root/a2a-install.json" >/dev/null
+a2a_authorization_file=$(jq -er '.data.authorization.credential_file' "$journey_root/a2a-install.json")
+a2a_authorization=$(tr -d '\r\n' <"$a2a_authorization_file")
 "$LAYERX_BIN" --json a2a stop | jq -e '.data.state == "stopped"' >/dev/null
 "$LAYERX_BIN" --json a2a start | jq -e '.data.state == "running"' >/dev/null
 
@@ -87,7 +89,8 @@ a2a_request=$(jq -nc \
   --arg idempotency "$a2a_idempotency" \
   '{jsonrpc:"2.0",id:1,method:"message/send",params:{message:{kind:"message",role:"user",messageId:"install-journey",parts:[{kind:"data",data:{skill:"activity.submit",arguments:{destination:$destination,amount:"1",account_sequence:$sequence,not_before_ms:$not_before,expires_at_ms:$expires,fee_limit:"1000",idempotency_key:$idempotency}}}]}}}')
 a2a_response=$(curl --fail-with-body --silent --show-error \
-  -H 'Content-Type: application/json' --data "$a2a_request" "http://127.0.0.1:$a2a_port/")
+  -H 'Content-Type: application/json' -H "Authorization: Bearer $a2a_authorization" \
+  --data "$a2a_request" "http://127.0.0.1:$a2a_port/")
 a2a_activity=$(printf '%s' "$a2a_response" | \
   jq -er '.result.artifacts[0].parts[0].data.result.gateway.result.activity_id')
 test "$(printf '%s' "$a2a_activity" | wc -c)" -eq 64

@@ -75,7 +75,9 @@ layerx install a2a --environment testnet --key agent-runtime \
 layerx a2a status --json
 ```
 
-The installed JSON contains only the executable arguments, the configuration path, a non-secret gateway key identifier and an opaque credential alias. Gateway secrets and signing seeds stay in the operating-system credential store. A normal reinstall is idempotent; add `--rotate` to replace the component's gateway key and restart its managed A2A process. `--read-only` removes the payment tool and issues only `receipt:read` scope.
+The A2A installation result also names an owner-only `authorization.credential_file`. Keep that file local and send its value as `Authorization: Bearer <value>` on every JSON-RPC POST. The public Agent Card stays readable without that credential. The installed runtime rejects missing or incorrect bearer values before it invokes a read or payment tool.
+
+The installed JSON contains only the executable arguments, the configuration path, a non-secret gateway key identifier, an opaque credential alias and the path to that local authorization file. Gateway secrets and signing seeds stay in the operating-system credential store. A normal reinstall is idempotent; add `--rotate` to replace both the component's gateway key and its local A2A bearer before restarting the managed process. `--read-only` removes the payment tool and issues only `receipt:read` scope.
 
 ## Install an SDK
 

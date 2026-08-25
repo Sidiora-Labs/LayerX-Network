@@ -103,10 +103,10 @@ platform-lint:
 	cargo deny --disable-fetch --manifest-path $(PLATFORM_MANIFEST) check advisories bans sources
 
 platform-test:
-	$(PLATFORM_CARGO) test --offline --manifest-path $(PLATFORM_MANIFEST) --locked --workspace
+	$(PLATFORM_CARGO) test --offline --manifest-path $(PLATFORM_MANIFEST) --locked --workspace --features layerx-platform-cli/test-credential-store
 
 platform-test-tooling:
-	$(PLATFORM_CARGO) test --offline --manifest-path $(PLATFORM_MANIFEST) --locked -p layerx-platform-cli
+	$(PLATFORM_CARGO) test --offline --manifest-path $(PLATFORM_MANIFEST) --locked -p layerx-platform-cli --features test-credential-store
 	$(PLATFORM_CARGO) check --offline --manifest-path $(PLATFORM_MANIFEST) --locked -p layerx-platform-emulator
 	$(PLATFORM_CARGO) test --offline --manifest-path $(PLATFORM_MANIFEST) --locked -p layerx-platform-faucet
 	$(PLATFORM_CARGO) test --offline --manifest-path $(PLATFORM_MANIFEST) --locked -p layerx-platform-testnet

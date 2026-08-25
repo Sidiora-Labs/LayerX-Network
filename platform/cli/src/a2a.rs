@@ -2,21 +2,32 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io::{Read as _, Write as _};
 use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::path::Path;
 use std::process::{Command, Stdio};
+use std::sync::{
+    mpsc::{sync_channel, TrySendError},
+    Arc, Mutex,
+};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use layerx_mcp::server::{DeploymentMode, ToolDefinition};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use sha2::{Digest as _, Sha256};
+use subtle::ConstantTimeEq as _;
+use zeroize::{Zeroize as _, Zeroizing};
 
 use crate::config::Configuration;
 use crate::encoding::hex_encode;
 use crate::install::a2a::agent_card;
 use crate::toolset;
 
-const MAX_REQUEST_BYTES: usize = 1_048_576;
-const MAX_TRACKED_TASKS: usize = 256;
+const MAX_HEADER_BYTES: usize = 32 * 1024;
+const MAX_REQUEST_BYTES: usize = 256 * 1024;
+const MAX_TRACKED_TASKS: usize = 128;
+const MAX_CONTEXT_ID_BYTES: usize = 256;
+const WORKER_COUNT: usize = 8;
+const ADMISSION_CAPACITY: usize = 32;
 const CARD_ROUTES: [&str; 2] = ["/.well-known/agent-card.json", "/.well-known/agent.json"];
 const STATE_FILE: &str = "service.json";
 
@@ -31,7 +42,14 @@ struct ServiceState {
 struct Request {
     method: String,
     path: String,
+    authorization: Option<Zeroizing<String>>,
     body: Vec<u8>,
+}
+
+impl Drop for Request {
+    fn drop(&mut self) {
+        self.body.zeroize();
+    }
 }
 
 struct Response {
@@ -64,32 +82,90 @@ pub fn serve(
     source: Option<&str>,
     asset: Option<&str>,
     listen: &str,
+    authorization_file: &Path,
     mode: DeploymentMode,
 ) -> Result<(), String> {
     let address = endpoint(listen)?;
     let tools = toolset::surface(mode)?;
-    let runtime =
-        toolset::Runtime::new(configuration, gateway_credential, key, source, asset, mode)?;
-    let card = agent_card(
+    let runtime = Arc::new(toolset::Runtime::new(
+        configuration,
+        gateway_credential,
+        key,
+        source,
+        asset,
+        mode,
+    )?);
+    let card = Arc::new(agent_card(
         &configuration.current_environment,
         &address.to_string(),
         mode,
         &tools,
-    );
+    ));
+    let tools = Arc::new(tools);
+    let authorization = Arc::new(crate::install::a2a::read_authorization(
+        authorization_file,
+    )?);
     let listener =
         TcpListener::bind(address).map_err(|error| format!("could not bind {listen}: {error}"))?;
-    let mut tasks: BTreeMap<String, Value> = BTreeMap::new();
+    let tasks = Arc::new(Mutex::new(BTreeMap::<String, Value>::new()));
+    let (sender, receiver) = sync_channel::<TcpStream>(ADMISSION_CAPACITY);
+    let receiver = Arc::new(Mutex::new(receiver));
+    for index in 0..WORKER_COUNT {
+        let runtime = Arc::clone(&runtime);
+        let tools = Arc::clone(&tools);
+        let card = Arc::clone(&card);
+        let tasks = Arc::clone(&tasks);
+        let authorization = Arc::clone(&authorization);
+        let receiver = Arc::clone(&receiver);
+        std::thread::Builder::new()
+            .name(format!("layerx-a2a-{index}"))
+            .spawn(move || loop {
+                let stream = match receiver.lock() {
+                    Ok(receiver) => receiver.recv(),
+                    Err(_) => return,
+                };
+                let Ok(mut stream) = stream else {
+                    return;
+                };
+                if stream
+                    .set_read_timeout(Some(Duration::from_secs(10)))
+                    .and_then(|()| stream.set_write_timeout(Some(Duration::from_secs(10))))
+                    .is_err()
+                {
+                    continue;
+                }
+                let response = match read_request(&mut stream) {
+                    Ok(request) => route(
+                        &runtime,
+                        &tools,
+                        &card,
+                        &tasks,
+                        &authorization,
+                        &request,
+                    ),
+                    Err(error) => encode(400, &json!({"error": error})),
+                };
+                let _ = write_response(&mut stream, &response);
+            })
+            .map_err(|error| format!("could not start A2A worker {index}: {error}"))?;
+    }
     for accepted in listener.incoming() {
-        let Ok(mut stream) = accepted else {
+        let Ok(stream) = accepted else {
             continue;
         };
-        let _ = stream.set_read_timeout(Some(Duration::from_secs(30)));
-        let _ = stream.set_write_timeout(Some(Duration::from_secs(30)));
-        let response = match read_request(&mut stream) {
-            Ok(request) => route(&runtime, &tools, &card, &mut tasks, &request),
-            Err(error) => encode(400, &json!({"error": error})),
-        };
-        let _ = write_response(&mut stream, &response);
+        match sender.try_send(stream) {
+            Ok(()) => {}
+            Err(TrySendError::Full(mut stream)) => {
+                let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
+                let _ = write_response(
+                    &mut stream,
+                    &encode(503, &json!({"error": "agent-to-agent service is at capacity"})),
+                );
+            }
+            Err(TrySendError::Disconnected(_)) => {
+                return Err("all agent-to-agent workers stopped".into())
+            }
+        }
     }
     Ok(())
 }
@@ -98,11 +174,15 @@ fn route(
     runtime: &toolset::Runtime,
     tools: &[ToolDefinition],
     card: &Value,
-    tasks: &mut BTreeMap<String, Value>,
+    tasks: &Mutex<BTreeMap<String, Value>>,
+    authorization: &str,
     request: &Request,
 ) -> Response {
     match request.method.as_str() {
         "GET" if CARD_ROUTES.contains(&request.path.as_str()) => encode(200, card),
+        "POST" if !authorized(request, authorization) => {
+            encode(401, &json!({"error": "valid bearer authorization is required"}))
+        }
         "POST" if request.path == "/" => {
             encode(200, &dispatch(runtime, tools, tasks, &request.body))
         }
@@ -111,10 +191,22 @@ fn route(
     }
 }
 
+fn authorized(request: &Request, expected: &str) -> bool {
+    let Some(presented) = request
+        .authorization
+        .as_deref()
+        .and_then(|value| value.strip_prefix("Bearer "))
+    else {
+        return false;
+    };
+    presented.len() == expected.len()
+        && presented.as_bytes().ct_eq(expected.as_bytes()).unwrap_u8() == 1
+}
+
 fn dispatch(
     runtime: &toolset::Runtime,
     tools: &[ToolDefinition],
-    tasks: &mut BTreeMap<String, Value>,
+    tasks: &Mutex<BTreeMap<String, Value>>,
     body: &[u8],
 ) -> Value {
     let Ok(message) = serde_json::from_slice::<Value>(body) else {
@@ -141,7 +233,7 @@ fn dispatch(
 fn send(
     runtime: &toolset::Runtime,
     tools: &[ToolDefinition],
-    tasks: &mut BTreeMap<String, Value>,
+    tasks: &Mutex<BTreeMap<String, Value>>,
     identifier: Value,
     parameters: &Value,
 ) -> Value {
@@ -180,8 +272,23 @@ fn send(
         .get("contextId")
         .and_then(Value::as_str)
         .map_or_else(|| ids.0.clone(), str::to_owned);
+    if context.is_empty() || context.len() > MAX_CONTEXT_ID_BYTES {
+        return failure(
+            identifier,
+            -32602,
+            "the context identifier is outside the transport limit",
+        );
+    }
+    let timestamp = match timestamp() {
+        Ok(value) => value,
+        Err(error) => return failure(identifier, -32603, &error),
+    };
     let outcome = toolset::invoke(runtime, tool, &instruction.arguments);
-    let task = build_task(&ids, &context, message, tool.name, outcome);
+    let task = build_task(&ids, &context, message, tool.name, &timestamp, outcome);
+    let mut tasks = match tasks.lock() {
+        Ok(tasks) => tasks,
+        Err(_) => return failure(identifier, -32603, "the task ledger is unavailable"),
+    };
     if tasks.len() >= MAX_TRACKED_TASKS {
         if let Some(evicted) = tasks.keys().next().cloned() {
             tasks.remove(&evicted);
@@ -196,9 +303,9 @@ fn build_task(
     context: &str,
     message: &Value,
     tool: &str,
+    timestamp: &str,
     outcome: Result<Value, String>,
 ) -> Value {
-    let timestamp = timestamp();
     match outcome {
         Ok(value) => {
             let state = match gateway_state(&value) {
@@ -248,9 +355,17 @@ fn gateway_state(value: &Value) -> Option<&str> {
         .and_then(Value::as_str)
 }
 
-fn cancel(tasks: &BTreeMap<String, Value>, identifier: Value, parameters: &Value) -> Value {
+fn cancel(
+    tasks: &Mutex<BTreeMap<String, Value>>,
+    identifier: Value,
+    parameters: &Value,
+) -> Value {
     let Some(name) = parameters.get("id").and_then(Value::as_str) else {
         return failure(identifier, -32602, "the request did not name a task");
+    };
+    let tasks = match tasks.lock() {
+        Ok(tasks) => tasks,
+        Err(_) => return failure(identifier, -32603, "the task ledger is unavailable"),
     };
     let Some(task) = tasks.get(name) else {
         return failure(identifier, -32001, "the task was not found");
@@ -269,9 +384,17 @@ fn cancel(tasks: &BTreeMap<String, Value>, identifier: Value, parameters: &Value
     }
 }
 
-fn fetch(tasks: &BTreeMap<String, Value>, identifier: Value, parameters: &Value) -> Value {
+fn fetch(
+    tasks: &Mutex<BTreeMap<String, Value>>,
+    identifier: Value,
+    parameters: &Value,
+) -> Value {
     let Some(name) = parameters.get("id").and_then(Value::as_str) else {
         return failure(identifier, -32602, "the request did not name a task");
+    };
+    let tasks = match tasks.lock() {
+        Ok(tasks) => tasks,
+        Err(_) => return failure(identifier, -32603, "the task ledger is unavailable"),
     };
     match tasks.get(name) {
         Some(task) => success(identifier, task.clone()),
@@ -318,41 +441,95 @@ fn read_request(stream: &mut TcpStream) -> Result<Request, String> {
             return Err("the connection closed before the request headers".into());
         }
         bytes.extend_from_slice(&chunk[..read]);
-        if bytes.len() > MAX_REQUEST_BYTES {
-            return Err("the request exceeds the transport limit".into());
-        }
         if let Some(position) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
-            break position + 4;
+            let end = position + 4;
+            if end > MAX_HEADER_BYTES {
+                return Err("the request headers exceed the transport limit".into());
+            }
+            break end;
+        }
+        if bytes.len() > MAX_HEADER_BYTES {
+            return Err("the request headers exceed the transport limit".into());
         }
     };
     let headers = std::str::from_utf8(&bytes[..header_end])
         .map_err(|_| "the request headers are not UTF-8".to_string())?;
     let mut lines = headers.split("\r\n");
-    let mut start = lines
+    let start = lines
         .next()
-        .ok_or_else(|| "the request has no start line".to_string())?
-        .split_whitespace();
-    let method = start
-        .next()
-        .ok_or_else(|| "the request has no method".to_string())?
-        .to_owned();
-    let path = start
-        .next()
-        .ok_or_else(|| "the request has no path".to_string())?
-        .split('?')
-        .next()
-        .unwrap_or("/")
-        .to_owned();
+        .ok_or_else(|| "the request has no start line".to_string())?;
+    let mut start_fields = start.split(' ');
+    let method = start_fields.next().unwrap_or_default();
+    let path = start_fields.next().unwrap_or_default();
+    if method.is_empty()
+        || !method.bytes().all(|byte| byte.is_ascii_uppercase())
+        || path.is_empty()
+        || !path.starts_with('/')
+        || path.starts_with("//")
+        || path.contains(['?', '#', '\\', '\0'])
+        || path.split('/').any(|segment| matches!(segment, "." | ".."))
+        || start_fields.next() != Some("HTTP/1.1")
+        || start_fields.next().is_some()
+    {
+        return Err("the request line is not canonical HTTP/1.1".into());
+    }
     let mut length = 0_usize;
-    for line in lines {
-        if let Some((name, value)) = line.split_once(':') {
-            if name.eq_ignore_ascii_case("content-length") {
-                length = value
-                    .trim()
-                    .parse()
-                    .map_err(|_| "the content length is not a number".to_string())?;
-            }
+    let mut has_length = false;
+    let mut has_host = false;
+    let mut content_type = None;
+    let mut authorization = None;
+    for line in lines.filter(|line| !line.is_empty()) {
+        let (name, value) = line
+            .split_once(':')
+            .ok_or_else(|| "the request contains a malformed header".to_string())?;
+        if name.is_empty()
+            || !name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        {
+            return Err("the request contains a malformed header name".into());
         }
+        let value = value.trim_matches([' ', '\t']);
+        if value.bytes().any(|byte| byte.is_ascii_control() && byte != b'\t') {
+            return Err("the request contains a malformed header value".into());
+        }
+        if name.eq_ignore_ascii_case("content-length") {
+            if has_length || value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+                return Err("the request contains an ambiguous content length".into());
+            }
+            length = value
+                .parse()
+                .map_err(|_| "the content length is not a number".to_string())?;
+            has_length = true;
+        } else if name.eq_ignore_ascii_case("host") {
+            if has_host || value.is_empty() {
+                return Err("the request contains an ambiguous host".into());
+            }
+            has_host = true;
+        } else if name.eq_ignore_ascii_case("content-type") {
+            if content_type.is_some() {
+                return Err("the request contains an ambiguous content type".into());
+            }
+            content_type = Some(value);
+        } else if name.eq_ignore_ascii_case("authorization") {
+            if authorization.is_some() || value.len() > 256 {
+                return Err("the request contains ambiguous authorization".into());
+            }
+            authorization = Some(Zeroizing::new(value.to_owned()));
+        } else if name.eq_ignore_ascii_case("transfer-encoding") {
+            return Err("transfer encoding is not supported".into());
+        }
+    }
+    if !has_host {
+        return Err("the request has no host header".into());
+    }
+    if method == "POST"
+        && (!has_length || content_type != Some("application/json"))
+    {
+        return Err("POST requires one application/json body with an explicit length".into());
+    }
+    if method != "POST" && length != 0 {
+        return Err("a non-POST request may not carry a body".into());
     }
     if length > MAX_REQUEST_BYTES {
         return Err("the request body exceeds the transport limit".into());
@@ -369,16 +546,26 @@ fn read_request(stream: &mut TcpStream) -> Result<Request, String> {
             return Err("the request exceeds the transport limit".into());
         }
     }
+    if bytes.len() != header_end + length {
+        return Err("the request carries bytes beyond its declared body".into());
+    }
     let body = bytes[header_end..header_end + length].to_vec();
-    Ok(Request { method, path, body })
+    Ok(Request {
+        method: method.to_owned(),
+        path: path.to_owned(),
+        authorization,
+        body,
+    })
 }
 
 fn write_response(stream: &mut TcpStream, response: &Response) -> std::io::Result<()> {
     let reason = match response.status {
         200 => "OK",
         400 => "Bad Request",
+        401 => "Unauthorized",
         404 => "Not Found",
         405 => "Method Not Allowed",
+        503 => "Service Unavailable",
         _ => "Error",
     };
     write!(
@@ -422,17 +609,20 @@ fn new_identifier() -> Result<String, String> {
     Ok(hex_encode(&bytes))
 }
 
-fn timestamp() -> String {
+fn timestamp() -> Result<String, String> {
     let seconds = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_or(0, |elapsed| elapsed.as_secs());
+        .map_err(|_| "the system clock is before the Unix epoch".to_owned())?
+        .as_secs();
     let days = seconds / 86_400;
     let remainder = seconds % 86_400;
     let (year, month, day) = civil_date(days);
     let hour = remainder / 3_600;
     let minute = (remainder % 3_600) / 60;
     let second = remainder % 60;
-    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
+    Ok(format!(
+        "{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z"
+    ))
 }
 
 pub fn start_installed(
@@ -673,4 +863,69 @@ fn civil_date(days: u64) -> (u64, u64, u64) {
         civil_year
     };
     (year, month, day_of_month)
+}
+
+#[cfg(test)]
+mod request_boundary_tests {
+    use std::io::Write as _;
+    use std::net::{TcpListener, TcpStream};
+    use std::thread;
+
+    use zeroize::Zeroizing;
+
+    use super::{authorized, read_request, Request};
+
+    fn parse(raw: Vec<u8>) -> Result<(), String> {
+        let listener = TcpListener::bind("127.0.0.1:0").map_err(|error| error.to_string())?;
+        let address = listener.local_addr().map_err(|error| error.to_string())?;
+        let writer = thread::spawn(move || -> Result<(), String> {
+            let mut stream = TcpStream::connect(address).map_err(|error| error.to_string())?;
+            stream
+                .write_all(&raw)
+                .map_err(|error| error.to_string())
+        });
+        let (mut stream, _) = listener.accept().map_err(|error| error.to_string())?;
+        let parsed = read_request(&mut stream).map(|_| ());
+        writer
+            .join()
+            .map_err(|_| "request writer panicked".to_owned())??;
+        parsed
+    }
+
+    #[test]
+    fn rejects_ambiguous_http_framing() {
+        assert!(parse(b"POST / HTTP/1.0\r\nHost: localhost\r\nContent-Length: 0\r\nContent-Type: application/json\r\n\r\n".to_vec()).is_err());
+        assert!(parse(b"POST / HTTP/1.1\r\nHost: localhost\r\nTransfer-Encoding: chunked\r\nContent-Length: 0\r\nContent-Type: application/json\r\n\r\n".to_vec()).is_err());
+        assert!(parse(b"POST / HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\nContent-Length: 0\r\nContent-Type: application/json\r\n\r\n".to_vec()).is_err());
+        assert!(parse(b"POST / HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\nContent-Type: application/json\r\n\r\nsurplus".to_vec()).is_err());
+    }
+
+    #[test]
+    fn rejects_query_aliases_and_oversized_headers() {
+        assert!(parse(b"GET /.well-known/agent-card.json?write=true HTTP/1.1\r\nHost: localhost\r\n\r\n".to_vec()).is_err());
+        let mut request = b"GET / HTTP/1.1\r\nHost: localhost\r\nX-Fill: ".to_vec();
+        request.extend(std::iter::repeat_n(b'a', super::MAX_HEADER_BYTES));
+        request.extend_from_slice(b"\r\n\r\n");
+        assert!(parse(request).is_err());
+    }
+
+    #[test]
+    fn binds_mutation_authorization_to_the_exact_installed_bearer() {
+        let request = Request {
+            method: "POST".to_owned(),
+            path: "/".to_owned(),
+            authorization: Some(Zeroizing::new("Bearer lxa2a_presented".to_owned())),
+            body: Vec::new(),
+        };
+        assert!(authorized(&request, "lxa2a_presented"));
+        assert!(!authorized(&request, "lxa2a_other"));
+
+        let absent = Request {
+            method: "POST".to_owned(),
+            path: "/".to_owned(),
+            authorization: None,
+            body: Vec::new(),
+        };
+        assert!(!authorized(&absent, "lxa2a_presented"));
+    }
 }

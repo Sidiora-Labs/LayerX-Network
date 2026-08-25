@@ -130,7 +130,7 @@ pub struct Outcome {
 
 struct Snapshot {
     path: PathBuf,
-    bytes: Option<Vec<u8>>,
+    bytes: Option<Zeroizing<Vec<u8>>>,
     permissions: Option<fs::Permissions>,
 }
 
@@ -148,10 +148,27 @@ impl FileTransaction {
             {
                 continue;
             }
+            validate_existing_ancestors(path, false)?;
+            let metadata = match fs::symlink_metadata(path) {
+                Ok(metadata) => Some(metadata),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                Err(error) => {
+                    return Err(format!("could not inspect {}: {error}", path.display()))
+                }
+            };
+            if metadata
+                .as_ref()
+                .is_some_and(|metadata| metadata.file_type().is_symlink() || !metadata.is_file())
+            {
+                return Err(format!(
+                    "installation target {} must be a regular non-symlink file",
+                    path.display()
+                ));
+            }
             match fs::read(path) {
                 Ok(bytes) => snapshots.push(Snapshot {
                     path: path.clone(),
-                    bytes: Some(bytes),
+                    bytes: Some(Zeroizing::new(bytes)),
                     permissions: Some(
                         fs::metadata(path)
                             .map_err(|error| {
@@ -180,7 +197,7 @@ impl FileTransaction {
         for snapshot in self.snapshots.into_iter().rev() {
             match snapshot.bytes {
                 Some(bytes) => {
-                    if let Err(error) = fs::write(&snapshot.path, bytes) {
+                    if let Err(error) = fs::write(&snapshot.path, bytes.as_slice()) {
                         failures.push(format!(
                             "could not restore {}: {error}",
                             snapshot.path.display()
@@ -600,14 +617,19 @@ fn write_private(path: &Path, contents: &str) -> Result<(), String> {
     let parent = path
         .parent()
         .ok_or_else(|| format!("{} has no parent directory", path.display()))?;
+    validate_existing_ancestors(path, false)?;
     ensure_directory(parent)?;
+    #[cfg(unix)]
+    fs::set_permissions(parent, std::os::unix::fs::PermissionsExt::from_mode(0o700))
+        .map_err(|error| format!("could not protect {}: {error}", parent.display()))?;
+    validate_existing_ancestors(path, true)?;
     let temporary = path.with_extension(format!("tmp-{}", std::process::id()));
     let result = write_temporary(&temporary, path, contents);
     if result.is_err() {
         let _ = fs::remove_file(&temporary);
         return result;
     }
-    if private(path)? {
+    if private_file_metadata(path).is_ok() {
         Ok(())
     } else {
         Err(format!(
@@ -650,11 +672,105 @@ fn ensure_directory(path: &Path) -> Result<(), String> {
 }
 
 fn private(path: &Path) -> Result<bool, String> {
-    match fs::metadata(path) {
-        Ok(metadata) => Ok(owner_only(&metadata)),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+    match private_file_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.contains("does not exist") => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
+pub(super) fn private_file_metadata(path: &Path) -> Result<Metadata, String> {
+    validate_existing_ancestors(path, true)?;
+    match fs::symlink_metadata(path) {
+        Ok(metadata)
+            if metadata.is_file()
+                && !metadata.file_type().is_symlink()
+                && owner_only(&metadata)
+                && owned_by_current_user(&metadata) => Ok(metadata),
+        Ok(_) => Err(format!(
+            "{} must be a regular owner-only file owned by the current user",
+            path.display()
+        )),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Err(format!("{} does not exist", path.display()))
+        }
         Err(error) => Err(format!("could not inspect {}: {error}", path.display())),
     }
+}
+
+pub(super) fn validate_existing_ancestors(path: &Path, private_parent: bool) -> Result<(), String> {
+    if !path.is_absolute() {
+        return Err(format!("{} must be an absolute path", path.display()));
+    }
+    let direct_parent = path
+        .parent()
+        .ok_or_else(|| format!("{} has no parent directory", path.display()))?;
+    let mut current = Some(direct_parent);
+    while let Some(directory) = current {
+        match fs::symlink_metadata(directory) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                    return Err(format!(
+                        "{} has a non-directory or symlink ancestor {}",
+                        path.display(),
+                        directory.display()
+                    ));
+                }
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::MetadataExt as _;
+                    if metadata.mode() & 0o022 != 0
+                        && (metadata.mode() & 0o1000 == 0 || metadata.uid() != 0)
+                    {
+                        return Err(format!(
+                            "{} has a group- or world-writable ancestor {}",
+                            path.display(),
+                            directory.display()
+                        ));
+                    }
+                    if private_parent
+                        && directory == direct_parent
+                        && (!owned_by_current_user(&metadata) || metadata.mode() & 0o077 != 0)
+                    {
+                        return Err(format!(
+                            "{} must have an owner-only parent directory owned by the current user",
+                            path.display()
+                        ));
+                    }
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(format!("could not inspect {}: {error}", directory.display()))
+            }
+        }
+        current = directory.parent();
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn owned_by_current_user(metadata: &Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+    metadata.uid() == rustix::process::geteuid().as_raw()
+}
+
+#[cfg(not(unix))]
+const fn owned_by_current_user(_metadata: &Metadata) -> bool {
+    true
+}
+
+#[cfg(unix)]
+pub(super) fn same_file(left: &Metadata, right: &Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+    left.dev() == right.dev() && left.ino() == right.ino()
+}
+
+#[cfg(not(unix))]
+pub(super) fn same_file(left: &Metadata, right: &Metadata) -> bool {
+    left.len() == right.len()
+        && left.modified().ok().is_some()
+        && left.modified().ok() == right.modified().ok()
 }
 
 #[cfg(unix)]

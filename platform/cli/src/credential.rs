@@ -11,11 +11,11 @@ use crate::encoding::{fixed_hex, hex_encode};
 const SERVICE: &str = "dev.layerx.cli";
 const MAX_STDIN_SECRET_BYTES: u64 = 16 * 1024;
 
-/// Environment variable that swaps the credential store for the in-memory
-/// keyring-core mock store. It exists so the command suite can be driven end to
-/// end on a headless machine without a live operating-system keychain; it is
-/// never consulted in normal operation, where the native store is used.
+/// Environment variable used by a test-feature build to select its isolated
+/// in-memory store. Release builds reject the override rather than admitting a
+/// non-persistent credential backend into a production process.
 const MOCK_STORE_VARIABLE: &str = "LAYERX_CREDENTIAL_STORE";
+#[cfg(feature = "test-credential-store")]
 const MOCK_STORE_VALUE: &str = "mock";
 
 /// Installs the process-wide credential store exactly once.
@@ -23,24 +23,26 @@ const MOCK_STORE_VALUE: &str = "mock";
 /// In normal operation this defers to the keyring v1 initialiser, which selects
 /// and installs the operating-system credential store (Keychain Services on
 /// macOS, Credential Manager on Windows, the Secret Service on other Unix
-/// systems). When `LAYERX_CREDENTIAL_STORE=mock` is set, the non-persistent
-/// keyring-core mock store is installed instead so tests never touch a real
-/// keychain. Secrets are always held by the store, never written to config.
+/// systems). The non-persistent keyring-core store is compiled only for the
+/// command suite's explicit `test-credential-store` feature.
 fn ensure_store() -> Result<(), String> {
     static STORE: OnceLock<Result<(), String>> = OnceLock::new();
     STORE.get_or_init(install_store).clone()
 }
 
 fn install_store() -> Result<(), String> {
-    if matches!(
-        std::env::var(MOCK_STORE_VARIABLE).as_deref(),
-        Ok(MOCK_STORE_VALUE)
-    ) {
-        let store = keyring_core::mock::Store::new().map_err(|error| {
-            format!("could not initialise the in-memory test credential store: {error}")
-        })?;
-        keyring_core::set_default_store(store);
-        return Ok(());
+    if let Ok(requested) = std::env::var(MOCK_STORE_VARIABLE) {
+        #[cfg(feature = "test-credential-store")]
+        if requested == MOCK_STORE_VALUE {
+            let store = keyring_core::mock::Store::new().map_err(|error| {
+                format!("could not initialise the in-memory test credential store: {error}")
+            })?;
+            keyring_core::set_default_store(store);
+            return Ok(());
+        }
+        return Err(format!(
+            "credential store override {requested} is unavailable in this binary"
+        ));
     }
     if let Err(error) = keyring::Entry::store_status() {
         return Err(format!(
@@ -57,17 +59,25 @@ fn entry(kind: &str, name: &str) -> Result<Entry, String> {
 }
 
 fn read_secret() -> Result<Zeroizing<String>, String> {
+    read_secret_from(io::stdin())
+}
+
+fn read_secret_from(reader: impl Read) -> Result<Zeroizing<String>, String> {
     let mut value = String::new();
-    io::stdin()
-        .take(MAX_STDIN_SECRET_BYTES)
+    reader
+        .take(MAX_STDIN_SECRET_BYTES + 1)
         .read_to_string(&mut value)
         .map_err(|error| format!("could not read secret from standard input: {error}"))?;
-    let trimmed = value.trim().to_owned();
+    if value.len() as u64 > MAX_STDIN_SECRET_BYTES {
+        value.zeroize();
+        return Err("standard input secret exceeds the credential limit".into());
+    }
+    let trimmed = Zeroizing::new(value.trim().to_owned());
     value.zeroize();
     if trimmed.is_empty() {
         return Err("standard input did not contain a secret".into());
     }
-    Ok(Zeroizing::new(trimmed))
+    Ok(trimmed)
 }
 
 pub fn create_key(
@@ -82,7 +92,7 @@ pub fn create_key(
     let mut seed = Zeroizing::new([0_u8; 32]);
     getrandom::fill(seed.as_mut())
         .map_err(|error| format!("operating-system randomness failed: {error}"))?;
-    import_seed(configuration, name, did, *seed)
+    import_seed(configuration, name, did, seed)
 }
 
 pub fn import_key(
@@ -95,7 +105,7 @@ pub fn import_key(
         return Err(format!("key {name} already exists"));
     }
     let mut source = read_secret()?;
-    let seed = fixed_hex::<32>("private seed", &source)?;
+    let seed = Zeroizing::new(fixed_hex::<32>("private seed", &source)?);
     source.zeroize();
     import_seed(configuration, name, did, seed)
 }
@@ -104,7 +114,7 @@ fn import_seed(
     configuration: &mut Configuration,
     name: &str,
     did: Option<String>,
-    seed: [u8; 32],
+    seed: Zeroizing<[u8; 32]>,
 ) -> Result<KeyMetadata, String> {
     let signing = SigningKey::from_bytes(&seed);
     let public_key = signing.verifying_key().to_bytes();
@@ -164,6 +174,7 @@ pub fn set_default_key(configuration: &mut Configuration, name: &str) -> Result<
 pub fn set_token(environment: &str) -> Result<(), String> {
     Configuration::validate_environment_name(environment)?;
     let mut token = read_secret()?;
+    validate_bearer_secret(&token)?;
     entry("token", environment)?
         .set_password(&token)
         .map_err(|error| {
@@ -182,12 +193,26 @@ pub fn delete_token(environment: &str) -> Result<(), String> {
 
 pub fn token(environment: &str) -> Result<Option<Zeroizing<String>>, String> {
     match entry("token", environment)?.get_password() {
-        Ok(value) => Ok(Some(Zeroizing::new(value))),
+        Ok(value) => {
+            let value = Zeroizing::new(value);
+            validate_bearer_secret(&value)?;
+            Ok(Some(value))
+        }
         Err(keyring_core::Error::NoEntry) => Ok(None),
         Err(error) => Err(format!(
             "could not read token from operating-system credential storage: {error}"
         )),
     }
+}
+
+fn validate_bearer_secret(value: &str) -> Result<(), String> {
+    if value.is_empty()
+        || value.len() as u64 > MAX_STDIN_SECRET_BYTES
+        || !value.bytes().all(|byte| matches!(byte, 0x21..=0x7e))
+    {
+        return Err("hosted API token must contain only visible ASCII bytes".into());
+    }
+    Ok(())
 }
 
 pub fn key_seed(name: &str) -> Result<Zeroizing<[u8; 32]>, String> {
@@ -243,6 +268,7 @@ fn validate_gateway_credential(value: &str) -> Result<(), String> {
         || !id.bytes().all(|byte| byte.is_ascii_alphanumeric())
         || !secret.starts_with("lxp_live_")
         || secret.len() != 73
+        || !secret[9..].bytes().all(|byte| byte.is_ascii_hexdigit())
     {
         return Err("gateway credential is malformed".to_owned());
     }
@@ -274,4 +300,24 @@ fn validate_name(name: &str) -> Result<(), String> {
         return Err("key name must be 1-128 ASCII letters, digits, dashes, or underscores".into());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod secret_boundary_tests {
+    use std::io::Cursor;
+
+    use super::{read_secret_from, validate_bearer_secret, MAX_STDIN_SECRET_BYTES};
+
+    #[test]
+    fn stdin_secret_refuses_truncation() {
+        let oversized = vec![b'a'; MAX_STDIN_SECRET_BYTES as usize + 1];
+        assert!(read_secret_from(Cursor::new(oversized)).is_err());
+    }
+
+    #[test]
+    fn bearer_secret_refuses_header_control_bytes() {
+        assert!(validate_bearer_secret("token\r\nInjected: value").is_err());
+        assert!(validate_bearer_secret("token with space").is_err());
+        assert!(validate_bearer_secret("token.with-visible_ascii").is_ok());
+    }
 }

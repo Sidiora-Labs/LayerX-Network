@@ -363,6 +363,8 @@ enum A2aCommand {
         #[arg(long, default_value = "127.0.0.1:9433")]
         listen: String,
         #[arg(long)]
+        authorization_file: PathBuf,
+        #[arg(long)]
         read_only: bool,
     },
     /// Start the installed managed A2A runtime.
@@ -436,6 +438,7 @@ fn run(command: Command, machine: bool) -> Result<Option<CommandOutput>, String>
                 source_account,
                 asset,
                 listen,
+                authorization_file,
                 read_only,
             } => {
                 let configuration = serving_configuration(environment)?;
@@ -447,6 +450,7 @@ fn run(command: Command, machine: bool) -> Result<Option<CommandOutput>, String>
                     source_account.as_deref(),
                     asset.as_deref(),
                     &listen,
+                    &authorization_file,
                     deployment_mode(read_only),
                 )?;
                 Ok(None)

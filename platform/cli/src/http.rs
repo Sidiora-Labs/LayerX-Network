@@ -1,8 +1,11 @@
+use std::io::Read as _;
 use std::time::Duration;
 
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 use zeroize::Zeroizing;
+
+const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 
 enum Authorization {
     Bearer(Zeroizing<String>),
@@ -135,10 +138,7 @@ impl Client {
             .send_json(body)
             .map_err(|error| format!("POST {path} failed: {error}"))?;
         let status = response.status().as_u16();
-        let source =
-            Zeroizing::new(response.body_mut().read_to_string().map_err(|error| {
-                format!("POST {path} returned an unreadable response: {error}")
-            })?);
+        let source = Zeroizing::new(read_response_body(&mut response, "POST", path)?);
         if !response.status().is_success() {
             let detail = serde_json::from_str::<Value>(&source)
                 .map_or_else(|_| "non-JSON error".to_owned(), |value| concise(&value));
@@ -189,10 +189,7 @@ fn decode(
     path: &str,
 ) -> Result<Value, String> {
     let status = response.status();
-    let body = response
-        .body_mut()
-        .read_to_string()
-        .map_err(|error| format!("{method} {path} returned an unreadable response: {error}"))?;
+    let body = read_response_body(&mut response, method, path)?;
     let value = if body.trim().is_empty() {
         Value::Null
     } else {
@@ -221,7 +218,7 @@ fn decode_stateful(
         .get("Retry-After")
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.parse::<u64>().ok());
-    let body = match response.body_mut().read_to_string() {
+    let body = match read_response_body(&mut response, method, path) {
         Ok(body) => body,
         Err(error) => {
             return Ok(json!({
@@ -269,6 +266,26 @@ fn decode_stateful(
             "retry_after_seconds": retry_after,
         }
     }))
+}
+
+fn read_response_body(
+    response: &mut ureq::http::Response<ureq::Body>,
+    method: &str,
+    path: &str,
+) -> Result<String, String> {
+    let mut body = String::new();
+    response
+        .body_mut()
+        .as_reader()
+        .take((MAX_RESPONSE_BYTES + 1) as u64)
+        .read_to_string(&mut body)
+        .map_err(|error| format!("{method} {path} returned an unreadable response: {error}"))?;
+    if body.len() > MAX_RESPONSE_BYTES {
+        return Err(format!(
+            "{method} {path} returned a response larger than {MAX_RESPONSE_BYTES} bytes"
+        ));
+    }
+    Ok(body)
 }
 
 fn concise(value: &Value) -> String {
