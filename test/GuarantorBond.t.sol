@@ -31,11 +31,21 @@ contract GuarantorBondTest {
         _sign(first, privateKey);
         _sign(second, privateKey);
         vm.prank(address(0xBEEF));
-        bond.submitEquivocation(first, second, 4);
+        bond.submitEquivocation(first, second);
         GuarantorBond.BondRecord memory record = bond.bondRecord(guarantorId);
-        require(record.jailed && record.amount == 0 && record.removedEpoch == 4, "not slashed");
+        require(
+            record.jailed && record.amount == 0 && record.removedEpoch == 0 && record.ejectedAtVersion == 2,
+            "not slashed"
+        );
         require(bond.slashedBalance() == 1 ether, "slash not conserved");
         require(bond.membershipVersion() == 2, "evidence removal was not versioned");
+        vm.expectRevert(GuarantorBond.InvalidBondAction.selector);
+        bond.setGuarantorJailStatus(guarantorId, false, 2);
+        vm.expectRevert(GuarantorBond.InvalidBondAction.selector);
+        vm.prank(signer);
+        bond.depositBond{value: 1 ether}(guarantorId);
+        bond.removeGuarantor(guarantorId, 4, 2);
+        require(bond.bondRecord(guarantorId).removedEpoch == 4, "governed removal missing");
     }
 
     function testGovernedRemovalStartsUnbonding() public {
@@ -106,6 +116,57 @@ contract GuarantorBondTest {
         vm.prank(originalSigner);
         bond.beginUnbond(guarantorId, 1 ether);
         require(bond.bondRecord(guarantorId).pendingWithdrawal == 1 ether, "bond controller lost custody");
+    }
+
+    function testOldSignerEquivocationPreservesEpochHistoryAndExcludesCurrentMember() public {
+        uint256 oldPrivateKey = 12;
+        address oldSigner = vm.addr(oldPrivateKey);
+        address newSigner = vm.addr(13);
+        bytes32 guarantorId = bytes32(uint256(12));
+        GuarantorBond bond =
+            new GuarantorBond(address(this), address(this), 100, 100 ether, 7 days, CONFIG, RELEASE);
+        bond.activateGuarantor(guarantorId, oldSigner, oldSigner, 1, 1);
+        vm.deal(oldSigner, 2 ether);
+        vm.prank(oldSigner);
+        bond.depositBond{value: 1 ether}(guarantorId);
+        bond.rotateGuarantorSigner(guarantorId, newSigner, 5, 2);
+
+        CanonicalCheckpoint.GuarantorAttestation memory first =
+            _statement(guarantorId, oldSigner, bytes32(uint256(21)));
+        CanonicalCheckpoint.GuarantorAttestation memory second =
+            _statement(guarantorId, oldSigner, bytes32(uint256(22)));
+        _sign(first, oldPrivateKey);
+        _sign(second, oldPrivateKey);
+        vm.prank(address(0xCAFE));
+        bond.submitEquivocation(first, second);
+
+        GuarantorBond.BondRecord memory record = bond.bondRecord(guarantorId);
+        (, uint64 oldActiveUntil,) = bond.signerAuthorization(guarantorId, oldSigner);
+        (, uint64 newActiveUntil,) = bond.signerAuthorization(guarantorId, newSigner);
+        require(
+            record.jailed && record.removedEpoch == 0 && record.ejectedAtVersion == 3,
+            "evidence exclusion boundary missing"
+        );
+        require(oldActiveUntil == 5 && newActiveUntil == 0, "signer history was rewritten");
+        require(!bond.bondedActive(guarantorId, newSigner, 5), "slashed member remained eligible");
+        require(bond.membershipVersion() == 3, "evidence exclusion was not versioned");
+    }
+
+    function testAdministrativeJailDoesNotShieldBondFromLaterSlash() public {
+        address signer = vm.addr(14);
+        bytes32 guarantorId = bytes32(uint256(14));
+        GuarantorBond bond =
+            new GuarantorBond(address(this), address(this), 100, 100 ether, 7 days, CONFIG, RELEASE);
+        bond.activateGuarantor(guarantorId, signer, signer, 1, 1);
+        vm.deal(signer, 2 ether);
+        vm.prank(signer);
+        bond.depositBond{value: 1 ether}(guarantorId);
+        bond.setGuarantorJailStatus(guarantorId, true, 2);
+        bond.setSlashingAuthority(address(this));
+        bond.slashForCheckpoint(guarantorId, bytes32(uint256(31)));
+        GuarantorBond.BondRecord memory record = bond.bondRecord(guarantorId);
+        require(record.amount == 0 && record.ejectedAtVersion == 3, "jailed bond escaped slash");
+        require(bond.slashedBalance() == 1 ether, "jailed slash not conserved");
     }
 
     function _statement(bytes32 guarantorId, address signer, bytes32 checkpointHash)

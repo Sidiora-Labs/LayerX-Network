@@ -24,6 +24,7 @@ contract GuarantorBond is IGuarantorEligibility, LayerXComponent {
         uint256 amount;
         uint64 joinedEpoch;
         uint64 removedEpoch;
+        uint64 ejectedAtVersion;
         uint64 withdrawalAvailableAt;
         uint256 pendingWithdrawal;
         bool jailed;
@@ -156,6 +157,7 @@ contract GuarantorBond is IGuarantorEligibility, LayerXComponent {
             amount: 0,
             joinedEpoch: joinedEpoch,
             removedEpoch: 0,
+            ejectedAtVersion: 0,
             withdrawalAvailableAt: 0,
             pendingWithdrawal: 0,
             jailed: false,
@@ -217,7 +219,10 @@ contract GuarantorBond is IGuarantorEligibility, LayerXComponent {
         onlyMembershipAuthority
     {
         BondRecord storage record = records[guarantorId];
-        if (record.signer == address(0) || record.removedEpoch != 0 || record.jailed == jailed) {
+        if (
+            record.signer == address(0) || record.removedEpoch != 0 || record.jailed == jailed
+                || (!jailed && record.ejectedAtVersion != 0)
+        ) {
             revert InvalidBondAction();
         }
         uint64 version = _advanceMembership(governanceSequence);
@@ -227,7 +232,10 @@ contract GuarantorBond is IGuarantorEligibility, LayerXComponent {
 
     function depositBond(bytes32 guarantorId) external payable {
         BondRecord storage record = records[guarantorId];
-        if (record.signer == address(0) || msg.value == 0 || record.removedEpoch != 0) revert InvalidBondAction();
+        if (
+            record.signer == address(0) || msg.value == 0 || record.removedEpoch != 0
+                || record.ejectedAtVersion != 0
+        ) revert InvalidBondAction();
         record.amount = Arithmetic.add(record.amount, msg.value);
         emit BondDeposited(guarantorId, msg.sender, msg.value, record.amount);
     }
@@ -276,6 +284,7 @@ contract GuarantorBond is IGuarantorEligibility, LayerXComponent {
         return authorization.activeFromEpoch != 0 && authorization.activeFromEpoch <= checkpointEpoch
             && (authorization.activeUntilEpoch == 0 || authorization.activeUntilEpoch > checkpointEpoch)
             && !record.jailed && !record.unresolvedSlashing && record.joinedEpoch != 0
+            && record.ejectedAtVersion == 0
             && record.joinedEpoch <= checkpointEpoch
             && (record.removedEpoch == 0 || record.removedEpoch > checkpointEpoch) && record.amount >= minimumBond();
     }
@@ -289,11 +298,10 @@ contract GuarantorBond is IGuarantorEligibility, LayerXComponent {
 
     function submitEquivocation(
         CanonicalCheckpoint.GuarantorAttestation calldata first,
-        CanonicalCheckpoint.GuarantorAttestation calldata second,
-        uint64 removedEpoch
+        CanonicalCheckpoint.GuarantorAttestation calldata second
     ) external {
         if (
-            removedEpoch == 0 || first.guarantorId != second.guarantorId || first.signer != second.signer
+            first.guarantorId != second.guarantorId || first.signer != second.signer
                 || first.checkpointHash == second.checkpointHash
                 || (first.batchNumber != second.batchNumber && first.checkpointId != second.checkpointId)
                 || !_validSignature(first) || !_validSignature(second)
@@ -301,22 +309,21 @@ contract GuarantorBond is IGuarantorEligibility, LayerXComponent {
             revert InvalidEquivocationEvidence();
         }
         BondRecord storage record = records[first.guarantorId];
-        if (signerAuthorization[first.guarantorId][first.signer].activeFromEpoch == 0 || record.jailed) {
+        if (
+            signerAuthorization[first.guarantorId][first.signer].activeFromEpoch == 0
+                || record.ejectedAtVersion != 0
+        ) {
             revert InvalidEquivocationEvidence();
         }
-        _slash(
-            first.guarantorId, record, first.signer, removedEpoch, first.checkpointHash, second.checkpointHash
-        );
+        _slash(first.guarantorId, record, first.signer, first.checkpointHash, second.checkpointHash);
     }
 
-    function slashForCheckpoint(bytes32 guarantorId, bytes32 checkpointHash, uint64 removedEpoch) external {
-        if (msg.sender != slashingAuthority || removedEpoch == 0) {
-            revert Unauthorized();
-        }
+    function slashForCheckpoint(bytes32 guarantorId, bytes32 checkpointHash) external {
+        if (msg.sender != slashingAuthority) revert Unauthorized();
         BondRecord storage record = records[guarantorId];
         if (record.signer == address(0)) revert InvalidBondAction();
-        if (record.jailed) return;
-        _slash(guarantorId, record, record.signer, removedEpoch, checkpointHash, checkpointHash);
+        if (record.ejectedAtVersion != 0) return;
+        _slash(guarantorId, record, record.signer, checkpointHash, checkpointHash);
     }
 
     function sweepSlashed(address payable recipient, uint256 amount) external nonReentrant {
@@ -343,26 +350,19 @@ contract GuarantorBond is IGuarantorEligibility, LayerXComponent {
         bytes32 guarantorId,
         BondRecord storage record,
         address offendingSigner,
-        uint64 removedEpoch,
         bytes32 firstCheckpoint,
         bytes32 secondCheckpoint
     ) private {
-        if (removedEpoch <= record.joinedEpoch || membershipVersion == type(uint64).max) {
-            revert InvalidBondAction();
-        }
+        if (membershipVersion == type(uint64).max) revert InvalidBondAction();
         uint256 amount = record.amount;
         record.amount = 0;
         record.pendingWithdrawal = 0;
         record.withdrawalAvailableAt = 0;
         record.jailed = true;
         record.unresolvedSlashing = false;
-        record.removedEpoch = removedEpoch;
-        SignerAuthorization storage current = signerAuthorization[guarantorId][record.signer];
-        if (current.activeUntilEpoch == 0 && removedEpoch > current.activeFromEpoch) {
-            current.activeUntilEpoch = removedEpoch;
-        }
         uint64 version = membershipVersion + 1;
         membershipVersion = version;
+        record.ejectedAtVersion = version;
         slashedBalance = Arithmetic.add(slashedBalance, amount);
         emit GuarantorSlashed(guarantorId, offendingSigner, firstCheckpoint, secondCheckpoint, amount, version);
     }

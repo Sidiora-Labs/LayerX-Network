@@ -109,9 +109,8 @@ contract CheckpointChallengeManager is Governed, ReentrancyLock, LayerXComponent
         bytes32[] memory guarantors = registry.guarantorIds(checkpointHash);
         if (upheld) {
             registry.invalidateCheckpoint(checkpointHash);
-            uint64 removedEpoch = Arithmetic.toUint64(uint256(registry.checkpointEpoch(checkpointHash)) + 1);
             for (uint256 i = 0; i < guarantors.length; ++i) {
-                guarantorBond.slashForCheckpoint(guarantors[i], checkpointHash, removedEpoch);
+                guarantorBond.slashForCheckpoint(guarantors[i], checkpointHash);
             }
         }
         address recipient = upheld ? item.challenger : governance;

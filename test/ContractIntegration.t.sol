@@ -551,7 +551,7 @@ contract ContractIntegrationTest {
         vm.deal(thirdSigner, 3 ether);
         vm.prank(thirdSigner);
         isolated.depositBond{value: 2 ether}(bytes32(uint256(3)));
-        isolated.slashForCheckpoint(bytes32(uint256(3)), keccak256("faulted-checkpoint"), 2);
+        isolated.slashForCheckpoint(bytes32(uint256(3)), keccak256("faulted-checkpoint"));
         address payable recipient = payable(address(0x51A5));
         isolated.sweepSlashed(recipient, 2 ether);
         require(recipient.balance == 2 ether && isolated.slashedBalance() == 0, "slash sweep not conserved");

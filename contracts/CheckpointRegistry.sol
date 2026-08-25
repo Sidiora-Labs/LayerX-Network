@@ -17,6 +17,9 @@ contract CheckpointRegistry is LayerXComponent {
     error ChallengeAuthorityOnly();
     error CanonicalChainInvalidated();
 
+    bytes32 private constant REGISTERED_CERTIFICATE_DOMAIN =
+        keccak256("LXP1/registered-guarantor-certificate/v1");
+
     IGuarantorEligibility public immutable guarantorEligibility;
     uint16 public immutable protocolVersion;
     uint32 public immutable networkId;
@@ -141,7 +144,9 @@ contract CheckpointRegistry is LayerXComponent {
         checkpointBatchNumber[digest] = header.batchNumber;
         checkpointGuarantorSetVersion[digest] = guarantorEligibility.membershipVersion();
         checkpointTimestamp[digest] = header.timestamp;
-        certificateCommitment[digest] = sha256(abi.encode(attestations));
+        certificateCommitment[digest] = _registeredCertificateCommitment(
+            digest, header.epoch, checkpointGuarantorSetVersion[digest], attestations
+        );
         for (uint256 i = 0; i < attestations.length; ++i) {
             checkpointGuarantors[digest].push(attestations[i].guarantorId);
         }
@@ -217,7 +222,10 @@ contract CheckpointRegistry is LayerXComponent {
                 || checkpointAtBatch[batchNumber] != digest || checkpointEpoch[digest] != epoch
                 || attestations.length < threshold
                 || attestations.length > maximumAttestations
-                || certificateCommitment[digest] != sha256(abi.encode(attestations))
+                || certificateCommitment[digest]
+                    != _registeredCertificateCommitment(
+                        digest, epoch, checkpointGuarantorSetVersion[digest], attestations
+                    )
         ) {
             return false;
         }
@@ -234,7 +242,6 @@ contract CheckpointRegistry is LayerXComponent {
                     || attestation.attestedAt < timestamp
                     || uint256(attestation.attestedAt) > uint256(timestamp) + maximumAttestationDelay
                     || !_validSignature(attestation)
-                    || !guarantorEligibility.bondedActive(attestation.guarantorId, attestation.signer, epoch)
             ) {
                 return false;
             }
@@ -250,7 +257,13 @@ contract CheckpointRegistry is LayerXComponent {
     {
         return
             finalisedStateRoot[digest] != bytes32(0)
-                && certificateCommitment[digest] == sha256(abi.encode(attestations));
+                && certificateCommitment[digest]
+                    == _registeredCertificateCommitment(
+                        digest,
+                        checkpointEpoch[digest],
+                        checkpointGuarantorSetVersion[digest],
+                        attestations
+                    );
     }
 
     function _validateHeader(CanonicalCheckpoint.HeaderCommitments calldata header) private view {
@@ -279,5 +292,16 @@ contract CheckpointRegistry is LayerXComponent {
         return CryptographyPrimitives.recoverOrZero(
             CanonicalCheckpoint.attestationHash(attestation), attestation.r, attestation.s, attestation.v
         ) == attestation.signer;
+    }
+
+    function _registeredCertificateCommitment(
+        bytes32 digest,
+        uint64 epoch,
+        uint64 guarantorSetVersion,
+        CanonicalCheckpoint.GuarantorAttestation[] calldata attestations
+    ) private pure returns (bytes32) {
+        return sha256(
+            abi.encode(REGISTERED_CERTIFICATE_DOMAIN, digest, epoch, guarantorSetVersion, attestations)
+        );
     }
 }

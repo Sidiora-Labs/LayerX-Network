@@ -55,6 +55,19 @@ contract CheckpointRegistryTest {
         require(registry.latestFinalisedStateRoot() == header.resultingStateRoot, "root not advanced");
         require(registry.checkpointAtBatch(1) == digest, "batch checkpoint absent");
         require(registry.checkpointGuarantorSetVersion(digest) == 3, "guarantor-set version absent");
+        require(
+            registry.certificateCommitment(digest)
+                == sha256(
+                    abi.encode(
+                        keccak256("LXP1/registered-guarantor-certificate/v1"),
+                        digest,
+                        header.epoch,
+                        uint64(3),
+                        attestations
+                    )
+                ),
+            "certificate not bound to guarantor-set version"
+        );
     }
 
     function testRejectsSignatureOutsideGovernedMembership() public {
@@ -132,6 +145,55 @@ contract CheckpointRegistryTest {
         );
     }
 
+    function testRecordedCertificateSurvivesLaterMembershipAndCustodyMutations() public {
+        CanonicalCheckpoint.HeaderCommitments memory header = _header();
+        bytes32 digest = registry.checkpointHash(header, "");
+        CanonicalCheckpoint.GuarantorAttestation[] memory attestations = _attestations(header, digest, 2);
+        registry.registerCheckpoint(header, "", attestations);
+        _requireRecordedCertificate(header, digest, attestations);
+
+        bytes32 guarantorId = bytes32(uint256(1));
+        address originalSigner = vm.addr(1);
+        bond.setUnresolvedSlashing(guarantorId, true);
+        _requireRecordedCertificate(header, digest, attestations);
+        bond.setUnresolvedSlashing(guarantorId, false);
+        bond.setGuarantorJailStatus(guarantorId, true, 4);
+        _requireRecordedCertificate(header, digest, attestations);
+        bond.setGuarantorJailStatus(guarantorId, false, 5);
+        bond.rotateGuarantorSigner(guarantorId, vm.addr(4), 2, 6);
+        _requireRecordedCertificate(header, digest, attestations);
+        bond.removeGuarantor(guarantorId, 3, 7);
+        _requireRecordedCertificate(header, digest, attestations);
+
+        vm.prank(originalSigner);
+        bond.beginUnbond(guarantorId, 2 ether);
+        _requireRecordedCertificate(header, digest, attestations);
+        vm.warp(block.timestamp + 7 days);
+        vm.prank(originalSigner);
+        bond.finalizeUnbond(guarantorId);
+        _requireRecordedCertificate(header, digest, attestations);
+        bond.updateCustodiedValue(1_000 ether);
+        _requireRecordedCertificate(header, digest, attestations);
+
+        _slashRotatedOldSigner(attestations[1]);
+        _requireRecordedCertificate(header, digest, attestations);
+        require(registry.isRecordedCertificate(digest, attestations), "recorded path used mutable eligibility");
+    }
+
+    function testRecordedCertificateSurvivesLaterVersionedSlash() public {
+        CanonicalCheckpoint.HeaderCommitments memory header = _header();
+        bytes32 digest = registry.checkpointHash(header, "");
+        CanonicalCheckpoint.GuarantorAttestation[] memory attestations = _attestations(header, digest, 2);
+        registry.registerCheckpoint(header, "", attestations);
+        bond.setSlashingAuthority(address(this));
+        bond.slashForCheckpoint(bytes32(uint256(1)), digest);
+        require(bond.membershipVersion() == 4, "slash did not advance guarantor-set version");
+        require(bond.bondRecord(bytes32(uint256(1))).removedEpoch == 0, "slash invented removal epoch");
+        require(bond.bondRecord(bytes32(uint256(1))).ejectedAtVersion == 4, "slash boundary not recorded");
+        _requireRecordedCertificate(header, digest, attestations);
+        require(registry.checkpointGuarantorSetVersion(digest) == 3, "recorded set version mutated");
+    }
+
     function testOnlySlashingAuthorityCanInvalidateWithoutErasingHistory() public {
         CanonicalCheckpoint.HeaderCommitments memory header = _header();
         bytes32 digest = registry.checkpointHash(header, "");
@@ -191,6 +253,39 @@ contract CheckpointRegistryTest {
             timestamp: 1000,
             sequencerId: bytes32(uint256(0x88) << 248)
         });
+    }
+
+    function _requireRecordedCertificate(
+        CanonicalCheckpoint.HeaderCommitments memory header,
+        bytes32 digest,
+        CanonicalCheckpoint.GuarantorAttestation[] memory attestations
+    ) private view {
+        require(
+            registry.verifyRegisteredCertificate(
+                digest,
+                header.resultingStateRoot,
+                header.epoch,
+                header.batchNumber,
+                header.dataAvailabilityRoot,
+                attestations
+            ),
+            "later state invalidated recorded certificate"
+        );
+    }
+
+    function _slashRotatedOldSigner(CanonicalCheckpoint.GuarantorAttestation memory first) private {
+        bytes32 guarantorId = bytes32(uint256(2));
+        address rotatedSigner = vm.addr(5);
+        bond.rotateGuarantorSigner(guarantorId, rotatedSigner, 4, 8);
+        CanonicalCheckpoint.GuarantorAttestation memory second = first;
+        second.checkpointHash = keccak256("conflicting-old-signer-checkpoint");
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(2, CanonicalCheckpoint.attestationHash(second));
+        second.v = v;
+        second.r = r;
+        second.s = s;
+        bond.submitEquivocation(first, second);
+        require(bond.bondRecord(guarantorId).ejectedAtVersion == 9, "old signer did not eject member");
+        require(!bond.bondedActive(guarantorId, rotatedSigner, 4), "rotated member survived old-key slash");
     }
 
     function _attestations(CanonicalCheckpoint.HeaderCommitments memory header, bytes32 digest, uint256 count)
