@@ -356,6 +356,9 @@ func (k BaseSendKeeper) BlockedAddr(addr sdk.AccAddress) bool {
 }
 
 func (k BaseSendKeeper) SubWei(ctx sdk.Context, addr sdk.AccAddress, amt sdk.Int) (err error) {
+	if amt.IsNegative() {
+		return sdkerrors.Wrap(sdkerrors.ErrInvalidCoins, "wei amount cannot be negative")
+	}
 	if amt.Equal(sdk.ZeroInt()) {
 		return nil
 	}
@@ -385,6 +388,9 @@ func (k BaseSendKeeper) SubWei(ctx sdk.Context, addr sdk.AccAddress, amt sdk.Int
 }
 
 func (k BaseSendKeeper) AddWei(ctx sdk.Context, addr sdk.AccAddress, amt sdk.Int) (err error) {
+	if amt.IsNegative() {
+		return sdkerrors.Wrap(sdkerrors.ErrInvalidCoins, "wei amount cannot be negative")
+	}
 	if !k.CanSendTo(ctx, addr) {
 		return sdkerrors.ErrInvalidRecipient
 	}
@@ -413,13 +419,17 @@ func (k BaseSendKeeper) AddWei(ctx sdk.Context, addr sdk.AccAddress, amt sdk.Int
 }
 
 func (k BaseSendKeeper) SendCoinsAndWei(ctx sdk.Context, from sdk.AccAddress, to sdk.AccAddress, amt sdk.Int, wei sdk.Int) error {
-	if err := k.SubWei(ctx, from, wei); err != nil {
+	if amt.IsNegative() || wei.IsNegative() {
+		return sdkerrors.Wrap(sdkerrors.ErrInvalidCoins, "transfer amounts cannot be negative")
+	}
+	cacheCtx, write := ctx.CacheContext()
+	if err := k.SubWei(cacheCtx, from, wei); err != nil {
 		return err
 	}
-	if err := k.AddWei(ctx, to, wei); err != nil {
+	if err := k.AddWei(cacheCtx, to, wei); err != nil {
 		return err
 	}
-	ctx.EventManager().EmitEvents(sdk.Events{
+	cacheCtx.EventManager().EmitEvents(sdk.Events{
 		sdk.NewEvent(
 			types.EventTypeWeiTransfer,
 			sdk.NewAttribute(types.AttributeKeyRecipient, to.String()),
@@ -428,8 +438,12 @@ func (k BaseSendKeeper) SendCoinsAndWei(ctx sdk.Context, from sdk.AccAddress, to
 		),
 	})
 	if amt.GT(sdk.ZeroInt()) {
-		return k.SendCoinsWithoutAccCreation(ctx, from, to, sdk.NewCoins(sdk.NewCoin(sdk.MustGetBaseDenom(), amt)))
+		if err := k.SendCoinsWithoutAccCreation(cacheCtx, from, to, sdk.NewCoins(sdk.NewCoin(sdk.MustGetBaseDenom(), amt))); err != nil {
+			return err
+		}
 	}
+	write()
+	ctx.EventManager().EmitEvents(cacheCtx.EventManager().Events())
 	return nil
 }
 

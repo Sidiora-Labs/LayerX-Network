@@ -125,6 +125,22 @@ func (suite *IntegrationTestSuite) TestSendCoinsAndWei() {
 	addr2 := sdk.AccAddress([]byte("addr2_______________"))
 	addr3 := sdk.AccAddress([]byte("addr3_______________"))
 	require.NoError(keeper.SendCoinsFromModuleToAccount(ctx, authtypes.Minter, addr1, amt))
+	eventsBeforeInvalidTransfers := len(ctx.EventManager().Events())
+	require.Error(keeper.SubWei(ctx, addr1, sdk.NewInt(-1)))
+	require.Error(keeper.AddWei(ctx, addr2, sdk.NewInt(-1)))
+	require.Error(keeper.SendCoinsAndWei(ctx, addr1, addr2, sdk.NewInt(-1), sdk.ZeroInt()))
+	require.Error(keeper.SendCoinsAndWei(ctx, addr1, addr2, sdk.ZeroInt(), sdk.NewInt(-1)))
+	require.Equal(sdk.NewInt(100), keeper.GetBalance(ctx, addr1, sdk.DefaultBondDenom).Amount)
+	require.Equal(sdk.ZeroInt(), keeper.GetBalance(ctx, addr2, sdk.DefaultBondDenom).Amount)
+	require.Equal(sdk.ZeroInt(), keeper.GetWeiBalance(ctx, addr1))
+	require.Equal(sdk.ZeroInt(), keeper.GetWeiBalance(ctx, addr2))
+	require.Len(ctx.EventManager().Events(), eventsBeforeInvalidTransfers)
+	require.Error(keeper.SendCoinsAndWei(ctx, addr1, addr2, sdk.NewInt(101), sdk.OneInt()))
+	require.Equal(sdk.NewInt(100), keeper.GetBalance(ctx, addr1, sdk.DefaultBondDenom).Amount)
+	require.Equal(sdk.ZeroInt(), keeper.GetBalance(ctx, addr2, sdk.DefaultBondDenom).Amount)
+	require.Equal(sdk.ZeroInt(), keeper.GetWeiBalance(ctx, addr1))
+	require.Equal(sdk.ZeroInt(), keeper.GetWeiBalance(ctx, addr2))
+	require.Len(ctx.EventManager().Events(), eventsBeforeInvalidTransfers)
 	// should no-op if sending zero
 	require.NoError(keeper.SendCoinsAndWei(ctx, addr1, addr2, sdk.ZeroInt(), sdk.ZeroInt()))
 	require.Equal(sdk.ZeroInt(), keeper.GetWeiBalance(ctx, addr1))
@@ -1199,6 +1215,20 @@ func (suite *IntegrationTestSuite) TestMsgMultiSendEvents() {
 	suite.Require().Equal(abci.Event(event2), events[23])
 	suite.Require().Equal(abci.Event(event3), events[25])
 	suite.Require().Equal(abci.Event(event4), events[27])
+}
+
+func (suite *IntegrationTestSuite) TestMsgMultiSendRejectsInvalidDirectCalls() {
+	server := keeper.NewMsgServerImpl(suite.app.BankKeeper)
+	ctx := sdk.WrapSDKContext(suite.ctx)
+
+	_, err := server.MultiSend(ctx, nil)
+	suite.Require().Error(err)
+
+	_, err = server.MultiSend(ctx, &types.MsgMultiSend{
+		Inputs:  []types.Input{{Address: "invalid", Coins: sdk.NewCoins(sdk.NewInt64Coin(fooDenom, 1))}},
+		Outputs: []types.Output{{Address: sdk.AccAddress([]byte("receiver_____________")).String(), Coins: sdk.NewCoins(sdk.NewInt64Coin(fooDenom, 1))}},
+	})
+	suite.Require().Error(err)
 }
 
 func (suite *IntegrationTestSuite) TestSpendableCoins() {

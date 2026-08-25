@@ -33,3 +33,23 @@ func TestGenesis(t *testing.T) {
 	nullify.Fill(&genesisState)
 	nullify.Fill(got)
 }
+
+func TestDefaultGenesisUsesConsensusBlockTime(t *testing.T) {
+	k, ctx := keepertest.EpochKeeper(t)
+	blockTime := time.Unix(1_700_000_000, 0).UTC()
+	ctx = ctx.WithBlockTime(blockTime)
+
+	epoch.InitGenesis(ctx, *k, *types.DefaultGenesis())
+	got := k.GetEpoch(ctx)
+
+	require.Equal(t, blockTime, got.GenesisTime)
+	require.Equal(t, blockTime, got.CurrentEpochStartTime)
+}
+
+func TestDefaultGenesisRejectsMissingConsensusBlockTime(t *testing.T) {
+	k, ctx := keepertest.EpochKeeper(t)
+
+	require.Panics(t, func() {
+		epoch.InitGenesis(ctx, *k, *types.DefaultGenesis())
+	})
+}

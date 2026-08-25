@@ -114,7 +114,9 @@ func (am AppModule) RegisterServices(cfg module.Configurator) {
 	types.RegisterQueryServer(cfg.QueryServer(), am.keeper)
 
 	m := keeper.NewMigrator(am.keeper.(keeper.BaseKeeper))
-	_ = cfg.RegisterMigration(types.ModuleName, 1, m.Migrate1to2)
+	if err := cfg.RegisterMigration(types.ModuleName, 1, m.Migrate1to2); err != nil {
+		panic(fmt.Sprintf("failed to register x/%s migration 1 to 2: %v", types.ModuleName, err))
+	}
 }
 
 // NewAppModule creates a new AppModule object

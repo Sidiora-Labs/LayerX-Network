@@ -86,8 +86,10 @@ func TestMultiHooks_Panic(t *testing.T) {
 	ctx := sdk.NewContext(ms, tmproto.Header{}, false)
 	epoch := types.Epoch{}
 
-	multiHooks.AfterEpochEnd(ctx, epoch)
+	require.Panics(t, func() {
+		multiHooks.AfterEpochEnd(ctx, epoch)
+	})
 	require.True(t, hook1.afterEpochEndCalled)
 	require.False(t, hook2.afterEpochEndCalled) // second hook should panic
-	require.True(t, hook3.afterEpochEndCalled)  // third hook should still run after 2nd
+	require.False(t, hook3.afterEpochEndCalled) // later hooks must not run after a critical failure
 }

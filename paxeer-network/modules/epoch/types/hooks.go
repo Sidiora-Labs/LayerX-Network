@@ -40,9 +40,12 @@ func (h MultiEpochHooks) BeforeEpochStart(ctx sdk.Context, epoch Epoch) {
 func panicCatchingEpochHook(ctx sdk.Context, hookFn func(sdk.Context, Epoch), epoch Epoch) {
 	defer utils.PanicHandler(func(r any) {
 		utils.LogPanicCallback(ctx, r)
+		panic(r)
 	})()
 
-	// cache the context and only write if no panic (which is caught above)
+	// Cache the context and only write if the hook completes. A hook failure is
+	// consensus-critical and must abort the block rather than silently advance
+	// the epoch without the hook's state transition.
 	cacheCtx, write := ctx.CacheContext()
 	hookFn(cacheCtx, epoch)
 	write()

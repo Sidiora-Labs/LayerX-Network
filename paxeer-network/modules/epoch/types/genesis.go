@@ -7,17 +7,20 @@ import "time"
 // DefaultIndex is the default capability global index
 const DefaultIndex uint64 = 1
 
+func DefaultGenesisTime() time.Time {
+	return time.Unix(1, 0).UTC()
+}
+
 // DefaultGenesis returns the default Capability genesis state
 func DefaultGenesis() *GenesisState {
-	now := time.Now()
 	return &GenesisState{
 		// this line is used by starport scaffolding # genesis/types/default
 		Params: DefaultParams(),
 		Epoch: &Epoch{
-			GenesisTime:           now,
+			GenesisTime:           DefaultGenesisTime(),
 			EpochDuration:         time.Minute,
 			CurrentEpoch:          0,
-			CurrentEpochStartTime: now,
+			CurrentEpochStartTime: DefaultGenesisTime(),
 			CurrentEpochHeight:    0,
 		},
 	}

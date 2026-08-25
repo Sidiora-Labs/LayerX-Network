@@ -81,20 +81,31 @@ func (k msgServer) Send(goCtx context.Context, msg *types.MsgSend) (*types.MsgSe
 
 func (k msgServer) MultiSend(goCtx context.Context, msg *types.MsgMultiSend) (*types.MsgMultiSendResponse, error) {
 	ctx := sdk.UnwrapSDKContext(goCtx)
+	if msg == nil {
+		return nil, sdkerrors.Wrap(sdkerrors.ErrInvalidRequest, "multisend message cannot be nil")
+	}
+	if err := msg.ValidateBasic(); err != nil {
+		return nil, err
+	}
 	denomToAllowListCache := make(map[string]AllowedAddresses)
-	// NOTE: totalIn == totalOut should already have been checked
 	for _, in := range msg.Inputs {
 		if err := k.IsSendEnabledCoins(ctx, in.Coins...); err != nil {
 			return nil, err
 		}
-		accAddr := sdk.MustAccAddressFromBech32(in.Address)
+		accAddr, err := sdk.AccAddressFromBech32(in.Address)
+		if err != nil {
+			return nil, sdkerrors.Wrap(err, "invalid input address")
+		}
 		if !k.IsInDenomAllowList(ctx, accAddr, in.Coins, denomToAllowListCache) {
 			return nil, sdkerrors.Wrapf(sdkerrors.ErrUnauthorized, "%s is not allowed to send funds", accAddr)
 		}
 	}
 
 	for _, out := range msg.Outputs {
-		accAddr := sdk.MustAccAddressFromBech32(out.Address)
+		accAddr, err := sdk.AccAddressFromBech32(out.Address)
+		if err != nil {
+			return nil, sdkerrors.Wrap(err, "invalid output address")
+		}
 
 		if k.BlockedAddr(accAddr) || !k.IsInDenomAllowList(ctx, accAddr, out.Coins, denomToAllowListCache) {
 			return nil, sdkerrors.Wrapf(sdkerrors.ErrUnauthorized, "%s is not allowed to receive funds", out.Address)

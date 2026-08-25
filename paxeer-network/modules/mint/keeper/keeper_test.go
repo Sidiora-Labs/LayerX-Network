@@ -146,6 +146,10 @@ func TestGetOrUpdateLatestMinter(t *testing.T) {
 	}
 
 	t.Run("No ongoing release", func(t *testing.T) {
+		params := mintKeeper.GetParams(ctx)
+		params.TokenReleaseSchedule = nil
+		mintKeeper.SetParams(ctx, params)
+		mintKeeper.SetMinter(ctx, mintTypes.DefaultInitialMinter())
 		currentMinter := mintKeeper.GetOrUpdateLatestMinter(ctx, epoch)
 		require.False(t, currentMinter.OngoingRelease())
 	})

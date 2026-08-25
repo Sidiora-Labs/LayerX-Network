@@ -34,3 +34,12 @@ func TestGenesisState_Validate(t *testing.T) {
 		})
 	}
 }
+
+func TestDefaultGenesisIsDeterministic(t *testing.T) {
+	first := types.DefaultGenesis()
+	second := types.DefaultGenesis()
+
+	require.Equal(t, first, second)
+	require.Equal(t, types.DefaultGenesisTime(), first.Epoch.GenesisTime)
+	require.Equal(t, types.DefaultGenesisTime(), first.Epoch.CurrentEpochStartTime)
+}

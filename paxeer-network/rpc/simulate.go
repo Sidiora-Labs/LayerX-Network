@@ -714,6 +714,9 @@ func (b *Backend) GetCustomPrecompiles(h int64) map[common.Address]vm.Precompile
 
 func (b *Backend) PrepareTx(statedb vm.StateDB, tx *ethtypes.Transaction) error {
 	typedStateDB := state.GetDBImpl(statedb)
+	if typedStateDB == nil {
+		return errors.New("unsupported EVM state database")
+	}
 	typedStateDB.CleanupForTracer()
 	ctx, _ := b.keeper.PrepareCtxForEVMTransaction(typedStateDB.Ctx(), tx)
 	ctx = ctx.WithIsEVM(true)
@@ -730,7 +733,9 @@ func (b *Backend) PrepareTx(statedb vm.StateDB, tx *ethtypes.Transaction) error 
 		return fmt.Errorf("transaction cannot be converted to MsgEVMTransaction due to %s", err)
 	}
 	tb := b.txConfigProvider(ctx.BlockHeight()).NewTxBuilder()
-	_ = tb.SetMsgs(msg)
+	if err := tb.SetMsgs(msg); err != nil {
+		return fmt.Errorf("transaction message cannot be set: %w", err)
+	}
 	newCtx, err := b.antehandler(ctx, tb.GetTx(), false)
 	if err != nil {
 		return fmt.Errorf("transaction failed ante handler due to %s", err)
@@ -746,6 +751,9 @@ func (b *Backend) PrepareTx(statedb vm.StateDB, tx *ethtypes.Transaction) error 
 // and cause data races.
 func (b *Backend) PrepareTxNoFlush(statedb vm.StateDB, tx *ethtypes.Transaction) error {
 	typedStateDB := state.GetDBImpl(statedb)
+	if typedStateDB == nil {
+		return errors.New("unsupported EVM state database")
+	}
 	typedStateDB.ResetForTracer()
 	ctx, _ := b.keeper.PrepareCtxForEVMTransaction(typedStateDB.Ctx(), tx)
 	ctx = ctx.WithIsEVM(true)
@@ -761,7 +769,9 @@ func (b *Backend) PrepareTxNoFlush(statedb vm.StateDB, tx *ethtypes.Transaction)
 		return fmt.Errorf("transaction cannot be converted to MsgEVMTransaction due to %s", err)
 	}
 	tb := b.txConfigProvider(ctx.BlockHeight()).NewTxBuilder()
-	_ = tb.SetMsgs(msg)
+	if err := tb.SetMsgs(msg); err != nil {
+		return fmt.Errorf("transaction message cannot be set: %w", err)
+	}
 	newCtx, err := b.antehandler(ctx, tb.GetTx(), false)
 	if err != nil {
 		return fmt.Errorf("transaction failed ante handler due to %s", err)
@@ -771,9 +781,13 @@ func (b *Backend) PrepareTxNoFlush(statedb vm.StateDB, tx *ethtypes.Transaction)
 }
 
 func (b *Backend) GetBlockContext(ctx context.Context, block *ethtypes.Block, statedb vm.StateDB, backend export.ChainContextBackend) (vm.BlockContext, error) {
-	blockCtx, err := b.keeper.GetVMBlockContext(statedb.(*state.DBImpl).Ctx(), b.keeper.GetGasPool())
+	typedStateDB := state.GetDBImpl(statedb)
+	if typedStateDB == nil {
+		return vm.BlockContext{}, errors.New("unsupported EVM state database")
+	}
+	blockCtx, err := b.keeper.GetVMBlockContext(typedStateDB.Ctx(), b.keeper.GetGasPool())
 	if err != nil {
-		return vm.BlockContext{}, nil
+		return vm.BlockContext{}, fmt.Errorf("failed to construct EVM block context: %w", err)
 	}
 	return *blockCtx, nil
 }

@@ -2,7 +2,6 @@ package staking
 
 import (
 	"fmt"
-	"log"
 
 	abci "github.com/sidiora-labs/paxeer-network/consensus/abci/types"
 	tmtypes "github.com/sidiora-labs/paxeer-network/consensus/types"
@@ -26,6 +25,22 @@ func InitGenesis(
 	bondedTokens := sdk.ZeroInt()
 	notBondedTokens := sdk.ZeroInt()
 
+	for _, validator := range data.Validators {
+		if _, err := validator.GetConsAddr(); err != nil {
+			panic(fmt.Errorf("invalid consensus key for validator %s: %w", validator.OperatorAddress, err))
+		}
+	}
+	for _, delegation := range data.Delegations {
+		if _, err := sdk.AccAddressFromBech32(delegation.DelegatorAddress); err != nil {
+			panic(fmt.Errorf("invalid delegation address %q: %w", delegation.DelegatorAddress, err))
+		}
+	}
+	for _, lv := range data.LastValidatorPowers {
+		if _, err := sdk.ValAddressFromBech32(lv.Address); err != nil {
+			panic(fmt.Errorf("invalid last validator power address %q: %w", lv.Address, err))
+		}
+	}
+
 	// We need to pretend to be "n blocks before genesis", where "n" is the
 	// validator update delay, so that e.g. slashing periods are correctly
 	// initialized for the validator set e.g. with a one-block offset - the
@@ -40,7 +55,9 @@ func InitGenesis(
 		keeper.SetValidator(ctx, validator)
 
 		// Manually set indices for the first time
-		_ = keeper.SetValidatorByConsAddr(ctx, validator)
+		if err := keeper.SetValidatorByConsAddr(ctx, validator); err != nil {
+			panic(fmt.Errorf("failed to index validator %s by consensus address: %w", validator.OperatorAddress, err))
+		}
 		keeper.SetValidatorByPowerIndex(ctx, validator)
 
 		// Call the creation hook if not exported
@@ -150,7 +167,7 @@ func InitGenesis(
 		var err error
 		legacyUpdates, err := keeper.ApplyAndReturnValidatorSetUpdates(ctx)
 		if err != nil {
-			log.Fatal(err)
+			panic(fmt.Errorf("failed to apply initial validator set: %w", err))
 		}
 		res = utils.Map(legacyUpdates, func(v abci.ValidatorUpdate) abci.ValidatorUpdate {
 			return abci.ValidatorUpdate{

@@ -395,6 +395,9 @@ func (t *TransactionAPI) getTransactionWithBlock(block *coretypes.ResultBlock, t
 		return nil, errors.New("transaction is not an EVM transaction and thus cannot be represented in _getTransaction* endpoints")
 	}
 	ethtx, _ := evmTx.AsTransaction()
+	if ethtx == nil {
+		return nil, errors.New("transaction contains malformed EVM message data")
+	}
 
 	return t.encodeRPCTransaction(ethtx, block, txIndex)
 }
@@ -481,6 +484,9 @@ func GetEvmTxIndex(ctx sdk.Context, block *coretypes.ResultBlock, msgs []indexed
 		switch m := msg.msg.(type) {
 		case *types.MsgEVMTransaction:
 			etx, _ = m.AsTransaction()
+			if etx == nil {
+				continue
+			}
 			txHash = etx.Hash()
 		case *wasmtypes.MsgExecuteContract:
 			etx = nil

@@ -145,10 +145,18 @@ func (am AppModule) RegisterServices(cfg module.Configurator) {
 	types.RegisterQueryServer(cfg.QueryServer(), am.keeper)
 
 	m := keeper.NewMigrator(am.keeper)
-	_ = cfg.RegisterMigration(types.ModuleName, 1, func(ctx sdk.Context) error { return nil })
-	_ = cfg.RegisterMigration(types.ModuleName, 2, m.Migrate2to3)
-	_ = cfg.RegisterMigration(types.ModuleName, 3, m.Migrate3to4)
-	_ = cfg.RegisterMigration(types.ModuleName, 4, m.Migrate4to5)
+	if err := cfg.RegisterMigration(types.ModuleName, 1, func(ctx sdk.Context) error { return nil }); err != nil {
+		panic(fmt.Sprintf("failed to register x/%s migration 1 to 2: %v", types.ModuleName, err))
+	}
+	if err := cfg.RegisterMigration(types.ModuleName, 2, m.Migrate2to3); err != nil {
+		panic(fmt.Sprintf("failed to register x/%s migration 2 to 3: %v", types.ModuleName, err))
+	}
+	if err := cfg.RegisterMigration(types.ModuleName, 3, m.Migrate3to4); err != nil {
+		panic(fmt.Sprintf("failed to register x/%s migration 3 to 4: %v", types.ModuleName, err))
+	}
+	if err := cfg.RegisterMigration(types.ModuleName, 4, m.Migrate4to5); err != nil {
+		panic(fmt.Sprintf("failed to register x/%s migration 4 to 5: %v", types.ModuleName, err))
+	}
 }
 
 // RegisterInvariants registers the modules/tokenfactory module's invariants.

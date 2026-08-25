@@ -9,12 +9,17 @@ import (
 // InitGenesis initializes the capability module's state from a provided genesis
 // state.
 func InitGenesis(ctx sdk.Context, k keeper.Keeper, genState types.GenesisState) {
+	epoch := *genState.Epoch
+	if epoch.GenesisTime.Equal(types.DefaultGenesisTime()) && epoch.CurrentEpochStartTime.Equal(types.DefaultGenesisTime()) {
+		if ctx.BlockTime().IsZero() {
+			panic("epoch default genesis requires a non-zero consensus block time")
+		}
+		epoch.GenesisTime = ctx.BlockTime()
+		epoch.CurrentEpochStartTime = ctx.BlockTime()
+	}
 	// this line is used by starport scaffolding # genesis/module/init
 	k.SetParams(ctx, genState.Params)
-	k.SetEpoch(
-		ctx,
-		*genState.Epoch,
-	)
+	k.SetEpoch(ctx, epoch)
 }
 
 // ExportGenesis returns the capability module's exported genesis.

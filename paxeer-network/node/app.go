@@ -133,7 +133,6 @@ import (
 	"github.com/sidiora-labs/paxeer-network/node/legacyabci"
 	appparams "github.com/sidiora-labs/paxeer-network/node/params"
 	"github.com/sidiora-labs/paxeer-network/node/upgrades"
-	v0upgrade "github.com/sidiora-labs/paxeer-network/node/upgrades/v0"
 	"github.com/sidiora-labs/paxeer-network/precompiles"
 	putils "github.com/sidiora-labs/paxeer-network/precompiles/utils"
 	"github.com/sidiora-labs/paxeer-network/rpc"
@@ -1084,7 +1083,6 @@ func New(
 	//
 	// example: app.HardForkManager.RegisterHandler(myHandler)
 	app.HardForkManager = upgrades.NewHardForkManager(app.ChainID)
-	app.HardForkManager.RegisterHandler(v0upgrade.NewHardForkUpgradeHandler(100_000, upgrades.ChainIDPaxHardForkTest, app.WasmKeeper))
 
 	app.RegisterDeliverTxHook(app.AddCosmosEventsToEVMReceiptIfApplicable)
 
