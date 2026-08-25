@@ -46,6 +46,8 @@ type GigaRouterConfig struct {
 	GenDoc           *types.GenesisDoc
 }
 
+const defaultGigaHandshakeTimeout = 10 * time.Second
+
 type GigaRouter struct {
 	cfg       *GigaRouterConfig
 	key       NodeSecretKey
@@ -70,8 +72,16 @@ type GigaRouter struct {
 }
 
 func NewGigaRouter(cfg *GigaRouterConfig, key NodeSecretKey) (*GigaRouter, error) {
-	if cfg.HandshakeTimeout <= 0 {
-		return nil, fmt.Errorf("HandshakeTimeout = %v, want >0", cfg.HandshakeTimeout)
+	if cfg.HandshakeTimeout < 0 {
+		return nil, fmt.Errorf("HandshakeTimeout = %v, want >=0", cfg.HandshakeTimeout)
+	}
+	if cfg.HandshakeTimeout == 0 {
+		// Preserve the zero-value programmatic configuration contract while
+		// keeping every connection bounded. Node setup supplies the operator's
+		// configured P2P timeout explicitly.
+		cfgCopy := *cfg
+		cfgCopy.HandshakeTimeout = defaultGigaHandshakeTimeout
+		cfg = &cfgCopy
 	}
 	if cfg.GenDoc.InitialHeight < 1 {
 		return nil, fmt.Errorf("GenDoc.InitialHeight = %v, want >=1", cfg.GenDoc.InitialHeight)
