@@ -224,6 +224,9 @@ fn composition_payload(value: &CompositionRefusal) -> Result<Vec<u8>, i32> {
     let mut out = Vec::new();
     match value {
         CompositionRefusal::NotComposable => out.push(1),
+        CompositionRefusal::ActivityEvidenceRequired => out.push(20),
+        CompositionRefusal::ActivityEvidenceMismatch => out.push(21),
+        CompositionRefusal::ActivityEvidenceReused => out.push(22),
         CompositionRefusal::WrongVersion { expected, actual } => {
             out.extend([2, revision_tag(*expected), revision_tag(*actual)])
         }

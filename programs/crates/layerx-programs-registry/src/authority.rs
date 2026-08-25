@@ -1,10 +1,7 @@
-//! Receipt-verified registry reads over the canonical deployment journal.
+//! Durable deployment records and local registry-projection integrity reads.
 //!
-//! A registry projection is never returned on its own authority. Every read
-//! re-derives the deployment digest from the canonical journal record, checks
-//! that the record commits to exactly the projected identifier, version, code
-//! hash and ABI version, checks that the recorded module still hashes to the
-//! registered code hash, and refuses reads whose observed head is stale.
+//! Cryptographic deployment authority lives in `protocol_evidence`; this
+//! module only rechecks records that production persisted after that boundary.
 
 use core::fmt::{self, Display};
 
@@ -14,9 +11,7 @@ use layerx_programs_runtime::{
 };
 
 use crate::hash::sha256;
-use crate::{
-    ProgramLifecycle, ReadFreshness, RegistryError, RegistryReadAuthority, RegistryVersion,
-};
+use crate::{ReadFreshness, RegistryError, RegistryReadAuthority, RegistryVersion};
 
 const RECORD_DOMAIN: &[u8] = b"LayerX/programs/registry/deployment/v1\0";
 const MAX_MODULE_BYTES: usize = 32 * 1024 * 1024;
@@ -28,68 +23,6 @@ const MAX_OUTPUTS: usize = 256;
 pub struct ObservedHead {
     pub sequence: u64,
     pub observed_at: u64,
-}
-
-/// Opaque callable deployment material admitted from the canonical journal.
-/// Ordinary callers can inspect this evidence but cannot construct it.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct VerifiedDeploymentEvidence {
-    program: ProgramId,
-    version: u32,
-    code_hash: [u8; 32],
-    abi_version: u16,
-    receipt_digest: [u8; 32],
-    freshness: ReadFreshness,
-    lifecycle: ProgramLifecycle,
-    module: Vec<u8>,
-    migration: Option<ExecutionRecord>,
-}
-
-impl VerifiedDeploymentEvidence {
-    #[must_use]
-    pub const fn program(&self) -> ProgramId {
-        self.program
-    }
-
-    #[must_use]
-    pub const fn version(&self) -> u32 {
-        self.version
-    }
-
-    #[must_use]
-    pub const fn code_hash(&self) -> [u8; 32] {
-        self.code_hash
-    }
-
-    #[must_use]
-    pub const fn abi_version(&self) -> u16 {
-        self.abi_version
-    }
-
-    #[must_use]
-    pub const fn receipt_digest(&self) -> [u8; 32] {
-        self.receipt_digest
-    }
-
-    #[must_use]
-    pub const fn freshness(&self) -> ReadFreshness {
-        self.freshness
-    }
-
-    #[must_use]
-    pub const fn lifecycle(&self) -> ProgramLifecycle {
-        self.lifecycle
-    }
-
-    #[must_use]
-    pub fn module(&self) -> &[u8] {
-        &self.module
-    }
-
-    #[must_use]
-    pub const fn migration(&self) -> Option<&ExecutionRecord> {
-        self.migration.as_ref()
-    }
 }
 
 /// One canonical deployment or upgrade record. The record is the durable,
@@ -285,7 +218,8 @@ impl DeploymentRecord {
     }
 }
 
-/// Durable canonical deployment journal maintained by the node boundary.
+/// Durable deployment-record store used for projection integrity. This trait
+/// carries no cryptographic authority and cannot produce executable evidence.
 pub trait DeploymentJournal {
     /// Returns the canonical record bytes named by a deployment digest.
     ///
@@ -315,9 +249,9 @@ where
     }
 }
 
-/// Production registry-read authority. It answers only from journal evidence
-/// it has re-derived itself, and it refuses to answer from an observation
-/// older than the declared freshness bound.
+/// Local registry-projection integrity reader. Production ingestion writes
+/// these records only after protocol evidence verification; this reader does
+/// not turn a caller-implemented journal into receipt authority.
 #[derive(Clone, Copy, Debug)]
 pub struct JournalReadAuthority<J> {
     journal: J,
@@ -348,58 +282,6 @@ impl<J: DeploymentJournal> JournalReadAuthority<J> {
         &self.journal
     }
 
-    pub(crate) fn verify_deployment(
-        &self,
-        program: ProgramId,
-        expected: &RegistryVersion,
-        expected_policy: UpgradePolicy,
-        expected_old_code_hash: Option<[u8; 32]>,
-        lifecycle: ProgramLifecycle,
-    ) -> Result<VerifiedDeploymentEvidence, RegistryError> {
-        let bytes = self
-            .journal
-            .canonical_record(expected.deployment_receipt_digest)?;
-        let record = DeploymentRecord::decode(&bytes)?;
-        record.validate()?;
-        let receipt_digest = record.digest();
-        if receipt_digest != expected.deployment_receipt_digest
-            || record.program != program
-            || record.version != expected.number
-            || record.abi_version != expected.abi_version
-            || record.new_code_hash != expected.code_hash
-            || record.old_code_hash != expected_old_code_hash
-            || record.upgrade_policy != expected_policy
-        {
-            return Err(RegistryError::UnverifiedRead);
-        }
-        let head = self.journal.observed_head()?;
-        if head.sequence == 0
-            || head.observed_at == 0
-            || head.sequence < record.sequence
-            || head.observed_at < record.observed_at
-        {
-            return Err(RegistryError::UnverifiedRead);
-        }
-        if self.now < head.observed_at
-            || self.now.saturating_sub(head.observed_at) > self.staleness_limit
-        {
-            return Err(RegistryError::StaleRead);
-        }
-        Ok(VerifiedDeploymentEvidence {
-            program,
-            version: record.version,
-            code_hash: record.new_code_hash,
-            abi_version: record.abi_version,
-            receipt_digest,
-            freshness: ReadFreshness {
-                observed_sequence: head.sequence,
-                observed_at: head.observed_at,
-            },
-            lifecycle,
-            module: record.module,
-            migration: record.migration,
-        })
-    }
 }
 
 impl<J: DeploymentJournal> RegistryReadAuthority for JournalReadAuthority<J> {
@@ -413,9 +295,7 @@ impl<J: DeploymentJournal> RegistryReadAuthority for JournalReadAuthority<J> {
             .canonical_record(latest.deployment_receipt_digest)?;
         let record = DeploymentRecord::decode(&bytes)?;
         record.validate()?;
-        let digest = record.digest();
-        if digest != latest.deployment_receipt_digest
-            || record.program != program
+        if record.program != program
             || record.version != latest.number
             || record.abi_version != latest.abi_version
             || record.new_code_hash != latest.code_hash
@@ -432,7 +312,7 @@ impl<J: DeploymentJournal> RegistryReadAuthority for JournalReadAuthority<J> {
             return Err(RegistryError::StaleRead);
         }
         Ok((
-            digest,
+            latest.deployment_receipt_digest,
             ReadFreshness {
                 observed_sequence: head.sequence,
                 observed_at: head.observed_at,

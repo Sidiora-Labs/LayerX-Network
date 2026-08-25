@@ -303,7 +303,7 @@ pub fn verify_program_state(
     if protocol.protocol_version() != 2 {
         return Err(VerificationFailure::at(ReceiptCheck::ProtocolVersion));
     }
-    if protocol.module_id() != 9 || protocol.operation() != 0 {
+    if protocol.module_id() != 9 || protocol.module_version() != 2 || protocol.operation() != 0 {
         return Err(VerificationFailure::at(ReceiptCheck::Module));
     }
     if protocol.result_code() != 0 {

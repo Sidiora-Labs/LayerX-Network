@@ -1,14 +1,22 @@
 //! Key custody and disclosure-bound `LayerX` signing.
 
+#[cfg(feature = "custody")]
 pub mod ct;
+#[cfg(feature = "custody")]
 pub mod disclosure;
 pub mod ed25519;
+#[cfg(feature = "custody")]
 pub mod keystore;
+#[cfg(feature = "custody")]
 pub mod local;
+#[cfg(feature = "custody")]
 pub mod redact;
+#[cfg(feature = "custody")]
 pub mod remote;
 pub mod secp256k1;
+#[cfg(feature = "custody")]
 pub mod session;
+#[cfg(feature = "custody")]
 pub mod signer;
 
 use layerx_types::result::{KnownResult, ResultCode};

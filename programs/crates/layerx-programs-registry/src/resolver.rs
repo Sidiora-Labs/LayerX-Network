@@ -1,13 +1,17 @@
 use core::fmt::{self, Display};
+use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use layerx_programs_runtime::{
-    AbiRevision, CompositionContext, CompositionRules, EngineRefusal, ProgramId,
-    ProgramResolver, ValidatedModule, ValidationRefusal, WasmEngine, ABI_VERSION,
+    AbiRevision, ActivityBudgetBinding, CompositionContext, CompositionRefusal, CompositionRules,
+    EngineRefusal, ProgramId, ProgramResolver, ValidatedModule, ValidationRefusal, WasmEngine,
+    ABI_VERSION,
 };
 
-use crate::{ProgramLifecycle, ReadFreshness, VerifiedDeploymentEvidence};
+use crate::{
+    ProgramLifecycle, ReadFreshness, VerifiedDeploymentEvidence, VerifiedProgramHead,
+};
 
 const CANDIDATE_ABI_VERSION: u16 = 2;
 
@@ -26,6 +30,11 @@ pub enum ExecutableAdmissionError {
         declared: u16,
         validated: AbiRevision,
     },
+    MissingCurrentHead { program: ProgramId },
+    DuplicateCurrentHead { program: ProgramId },
+    CurrentDeploymentMismatch { program: ProgramId },
+    CurrentHeadMismatch,
+    EvidenceExpired { program: ProgramId },
     Validation(ValidationRefusal),
 }
 
@@ -52,6 +61,19 @@ impl Display for ExecutableAdmissionError {
                 formatter,
                 "deployment ABI {declared} validated as unexpected revision {validated:?}"
             ),
+            Self::MissingCurrentHead { .. } => {
+                formatter.write_str("an admitted program lacks current lifecycle evidence")
+            }
+            Self::DuplicateCurrentHead { .. } => {
+                formatter.write_str("current lifecycle evidence duplicates a program")
+            }
+            Self::CurrentDeploymentMismatch { .. } => formatter
+                .write_str("current Programs state differs from the admitted deployment"),
+            Self::CurrentHeadMismatch => formatter
+                .write_str("current program proofs do not share one receipt state head"),
+            Self::EvidenceExpired { .. } => {
+                formatter.write_str("current program evidence has expired")
+            }
             Self::Validation(refusal) => write!(formatter, "module validation refusal: {refusal}"),
         }
     }
@@ -65,7 +87,12 @@ impl std::error::Error for ExecutableAdmissionError {
             | Self::NonIncreasingVersion { .. }
             | Self::FreshnessRegression { .. }
             | Self::UnsupportedAbi { .. }
-            | Self::RevisionMismatch { .. } => None,
+            | Self::RevisionMismatch { .. }
+            | Self::MissingCurrentHead { .. }
+            | Self::DuplicateCurrentHead { .. }
+            | Self::CurrentDeploymentMismatch { .. }
+            | Self::CurrentHeadMismatch
+            | Self::EvidenceExpired { .. } => None,
         }
     }
 }
@@ -80,9 +107,9 @@ struct VerifiedProgram {
     module: ValidatedModule,
 }
 
-/// Evidence-backed executable catalog. Its only admission path consumes an
-/// opaque deployment proof and validates the proof-bound bytes under the ABI
-/// recorded by that exact deployment.
+/// Evidence-backed module staging catalog. It is intentionally not a
+/// [`ProgramResolver`]: execution first consumes current lifecycle proofs for
+/// every entry and binds the resulting snapshot to one authenticated activity.
 #[derive(Debug)]
 pub struct VerifiedProgramCatalog {
     engine: WasmEngine,
@@ -214,14 +241,98 @@ impl VerifiedProgramCatalog {
         self.programs.get(&program).map(|entry| entry.freshness)
     }
 
-    /// Consumes this verified resolver into the runtime composition surface.
-    #[must_use]
-    pub fn into_composition_context(self, rules: CompositionRules) -> CompositionContext {
-        CompositionContext::new(Rc::new(self), rules)
+    /// Consumes current state proofs and produces an affine, activity-bound
+    /// resolver. A later lifecycle transition or expired head is refused
+    /// before a runtime composition context exists.
+    pub fn authorize_activity(
+        self,
+        heads: Vec<VerifiedProgramHead>,
+        activity: ActivityBudgetBinding,
+        now_ms: u64,
+        rules: CompositionRules,
+    ) -> Result<CompositionContext, ExecutableAdmissionError> {
+        let mut current = BTreeMap::new();
+        for head in heads {
+            let program = head.program();
+            if current.insert(program, head).is_some() {
+                return Err(ExecutableAdmissionError::DuplicateCurrentHead { program });
+            }
+        }
+        let mut common = None;
+        for (program, admitted) in &self.programs {
+            let head = current
+                .remove(program)
+                .ok_or(ExecutableAdmissionError::MissingCurrentHead { program: *program })?;
+            if now_ms == 0
+                || now_ms < head.freshness().observed_at
+                || now_ms > head.valid_until_ms()
+            {
+                return Err(ExecutableAdmissionError::EvidenceExpired { program: *program });
+            }
+            if head.lifecycle() != ProgramLifecycle::Active {
+                return Err(ExecutableAdmissionError::InactiveLifecycle {
+                    lifecycle: head.lifecycle(),
+                });
+            }
+            if head.version() != admitted.version
+                || head.code_hash() != admitted.code_hash
+                || head.abi_version() != admitted.abi_version
+            {
+                return Err(ExecutableAdmissionError::CurrentDeploymentMismatch {
+                    program: *program,
+                });
+            }
+            let identity = (
+                head.receipt_digest(),
+                head.state_root(),
+                head.programs_root(),
+                head.freshness(),
+            );
+            if common.is_some_and(|expected| expected != identity) {
+                return Err(ExecutableAdmissionError::CurrentHeadMismatch);
+            }
+            common = Some(identity);
+        }
+        if let Some(program) = current.keys().next().copied() {
+            return Err(ExecutableAdmissionError::CurrentDeploymentMismatch {
+                program,
+            });
+        }
+        let catalog = ActivityProgramCatalog {
+            programs: self.programs,
+            activity,
+            consumed: Cell::new(false),
+        };
+        Ok(CompositionContext::new(Rc::new(catalog), rules))
     }
 }
 
-impl ProgramResolver for VerifiedProgramCatalog {
+/// One current deployment snapshot that can authorize exactly one matching
+/// budget-admitted activity.
+#[derive(Debug)]
+struct ActivityProgramCatalog {
+    programs: BTreeMap<ProgramId, VerifiedProgram>,
+    activity: ActivityBudgetBinding,
+    consumed: Cell<bool>,
+}
+
+impl ProgramResolver for ActivityProgramCatalog {
+    fn authorize_activity(
+        &self,
+        binding: Option<ActivityBudgetBinding>,
+    ) -> Result<(), CompositionRefusal> {
+        let Some(binding) = binding else {
+            return Err(CompositionRefusal::ActivityEvidenceRequired);
+        };
+        if binding != self.activity {
+            return Err(CompositionRefusal::ActivityEvidenceMismatch);
+        }
+        if self.consumed.replace(true) {
+            return Err(CompositionRefusal::ActivityEvidenceReused);
+        }
+        Ok(())
+    }
+
     fn program_module(&self, program: ProgramId) -> Option<&ValidatedModule> {
         self.programs.get(&program).map(|entry| &entry.module)
     }

@@ -33,6 +33,7 @@ fn registry() -> ModuleRegistry {
         (ModuleId::Perps, 11),
         (ModuleId::Governance, 1),
         (ModuleId::Bridge, 1),
+        (ModuleId::Programs, 7),
     ];
     let registrations: Vec<_> = module_maximums
         .into_iter()
@@ -165,13 +166,13 @@ fn every_published_activity_and_receipt_round_trips_exactly() {
 }
 
 #[test]
-fn all_eight_module_payload_tags_are_preserved() {
+fn all_nine_module_payload_tags_are_preserved() {
     let Ok(corpus) = Corpus::load(&repository_root()) else {
         panic!("published corpora failed to load");
     };
     let registry = registry();
     let template = &corpus.replay.canonical_activities[0];
-    for module in 1_u32..=8 {
+    for module in 1_u32..=9 {
         let mut bytes = template.clone();
         bytes[14..18].copy_from_slice(&((module << 16) | 1).to_be_bytes());
         let Ok(activity) = decode_signed(&bytes, &registry) else {
@@ -237,7 +238,7 @@ fn unknown_version_activity_and_field_are_deterministic_rejections() {
     );
 
     let mut activity_type = template.clone();
-    activity_type[14..18].copy_from_slice(&0x0009_0001_u32.to_be_bytes());
+    activity_type[14..18].copy_from_slice(&0x000a_0001_u32.to_be_bytes());
     assert_eq!(
         decode_signed(&activity_type, &registry)
             .map_err(|error| error.result)

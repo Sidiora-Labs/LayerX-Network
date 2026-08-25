@@ -7,6 +7,7 @@ mod deprecate;
 mod hash;
 pub mod hex;
 mod pipeline;
+mod protocol_evidence;
 mod resolver;
 
 pub use account_state::{
@@ -14,18 +15,21 @@ pub use account_state::{
     state_leaf_commitment, state_node_commitment, universal_root_commitment, AccountStateError,
     AccountStateHead, AccountStateJournal, CanonicalAccountLeaf, JournalAccountStateAuthority,
     ProgramValueAccountBinding, ProvenAccountLeaf, ProvenProgramBinding, StateProof, ValueAccount,
-    VerifiedAccountSnapshot, MAX_PROGRAM_VALUE_ACCOUNTS,
+    VerifiedAccountSnapshot, verify_state_membership, MAX_PROGRAM_VALUE_ACCOUNTS,
 };
 pub use archive::{ArchiveError, SourceArchive, SourceFile};
 pub use authority::{
     DeploymentJournal, DeploymentRecord, JournalReadAuthority, ObservedHead,
-    VerifiedDeploymentEvidence,
 };
 pub use deprecate::{
     AuthorizedExit, Deprecation, DeprecationRefusal, DeprecationRequest, ExitRoute,
     LegacyDeprecationRequest, WindDownExitActivity, WindDownView,
 };
 pub use pipeline::{BuildAttempt, BuildPlan, BuildRefusal, BuildRunner, SourceVerifier};
+pub use protocol_evidence::{
+    DeploymentProof, ProgramLifecycleProof, ProgramStateProof, ProtocolDeploymentVerifier,
+    ProtocolEvidenceError, StateLeafWitness, VerifiedDeploymentEvidence, VerifiedProgramHead,
+};
 pub use resolver::{ExecutableAdmissionError, VerifiedProgramCatalog};
 
 use core::fmt::{self, Display};
@@ -336,6 +340,25 @@ impl Registry {
         )
     }
 
+    /// Appends one deployment only after the canonical activity, successful
+    /// receipt, signed batch, resulting Programs root and registry leaf were
+    /// verified together.
+    pub fn record_verified_deployment(
+        &mut self,
+        evidence: &VerifiedDeploymentEvidence,
+    ) -> Result<(), RegistryError> {
+        let record = evidence.record();
+        self.record_deployment_version(
+            record.program,
+            record.version,
+            record.old_code_hash,
+            record.new_code_hash,
+            &record.program_version(),
+            record.upgrade_policy,
+            evidence.receipt_digest(),
+        )
+    }
+
     fn record_deployment_version(
         &mut self,
         program: ProgramId,
@@ -477,19 +500,19 @@ impl Registry {
         })
     }
 
-    /// Resolves one historical or latest program version only from its exact
-    /// canonical deployment record and a fresh observed journal head.
+    /// Resolves one historical or latest program version only from opaque
+    /// protocol evidence whose exact claims match the registry projection.
     ///
     /// # Errors
     ///
     /// Refuses unknown versions, corrupt or mismatched records, unavailable
     /// journal state and stale head observations.
-    pub fn resolve_deployment<J: DeploymentJournal>(
+    pub fn resolve_deployment(
         &self,
-        program: ProgramId,
-        version: u32,
-        authority: &JournalReadAuthority<J>,
+        evidence: VerifiedDeploymentEvidence,
     ) -> Result<VerifiedDeploymentEvidence, RegistryError> {
+        let program = evidence.program();
+        let version = evidence.version();
         let entry = self
             .entries
             .get(&program)
@@ -503,17 +526,15 @@ impl Registry {
             .get(index)
             .filter(|candidate| candidate.number == version)
             .ok_or(RegistryError::UnknownVersion)?;
-        let expected_old_code_hash = index
-            .checked_sub(1)
-            .and_then(|prior| entry.versions.get(prior))
-            .map(|prior| prior.code_hash);
-        authority.verify_deployment(
-            program,
-            expected,
-            entry.upgrade_policy,
-            expected_old_code_hash,
-            entry.lifecycle,
-        )
+        if expected.code_hash != evidence.code_hash()
+            || expected.abi_version != evidence.abi_version()
+            || expected.deployment_receipt_digest != evidence.receipt_digest()
+            || entry.upgrade_policy != evidence.record().upgrade_policy
+            || entry.lifecycle != ProgramLifecycle::Active
+        {
+            return Err(RegistryError::UnverifiedRead);
+        }
+        Ok(evidence)
     }
 
     /// Records one receipt-verified ABI-two binding in the program registry's

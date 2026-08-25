@@ -307,6 +307,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "layerx-crypto"
+version = "0.1.0"
+dependencies = [
+ "ed25519-dalek",
+ "k256",
+ "layerx-types",
+ "layerx-wire",
+ "sha2",
+]
+
+[[package]]
 name = "layerx-porting-cosmwasm"
 version = "0.1.0"
 dependencies = [
@@ -361,7 +372,11 @@ dependencies = [
 name = "layerx-programs-registry"
 version = "0.1.0"
 dependencies = [
+ "ed25519-dalek",
  "layerx-programs-runtime",
+ "layerx-proof",
+ "layerx-types",
+ "layerx-wire",
  "sha2",
 ]
 
@@ -380,6 +395,26 @@ dependencies = [
  "sha3",
  "wasmi",
  "wasmparser-nostd",
+]
+
+[[package]]
+name = "layerx-proof"
+version = "0.1.0"
+dependencies = [
+ "layerx-crypto",
+ "layerx-types",
+ "layerx-wire",
+]
+
+[[package]]
+name = "layerx-types"
+version = "0.1.0"
+
+[[package]]
+name = "layerx-wire"
+version = "0.1.0"
+dependencies = [
+ "layerx-types",
 ]
 
 [[package]]

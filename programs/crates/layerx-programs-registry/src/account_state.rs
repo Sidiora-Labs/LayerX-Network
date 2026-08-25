@@ -589,6 +589,21 @@ pub fn state_leaf_commitment(key: &[u8], value: &[u8]) -> [u8; 32] {
     state_leaf_hash(key, value)
 }
 
+/// Verifies one exact key/value membership witness under a canonical protocol
+/// state-tree root.
+///
+/// # Errors
+///
+/// Refuses malformed proof geometry, an excessive path, or a root mismatch.
+pub fn verify_state_membership(
+    key: &[u8],
+    value: &[u8],
+    proof: &StateProof,
+    expected_root: [u8; 32],
+) -> Result<(), AccountStateError> {
+    verify_state_proof(state_leaf_hash(key, value), proof, expected_root)
+}
+
 fn state_node_hash(left: [u8; 32], right: [u8; 32]) -> [u8; 32] {
     let mut material = Vec::with_capacity(STATE_NODE_DOMAIN.len() + 64);
     material.extend_from_slice(STATE_NODE_DOMAIN);

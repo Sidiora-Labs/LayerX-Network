@@ -958,6 +958,9 @@ name = "layerx-programs-registry"
 version = "0.1.0"
 dependencies = [
  "layerx-programs-runtime",
+ "layerx-proof",
+ "layerx-types",
+ "layerx-wire",
 ]
 
 [[package]]

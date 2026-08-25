@@ -1,10 +1,13 @@
 use std::time::Duration;
 
-use layerx_programs::{hex, AccountStateHead, ProgramId, ReadFreshness};
+use layerx_programs::{
+    hex, AccountStateHead, DeploymentProof, ProgramId, ProtocolDeploymentVerifier,
+    ReadFreshness, VerifiedDeploymentEvidence,
+};
 use layerx_proof::inclusion::{verify_receipt as verify_receipt_inclusion, SequencerAuthorization};
 use layerx_proof::merkle::{decode_proof, Proof};
 use layerx_proof::receipt::{verify_program_state, AuthorizedBatch};
-use layerx_wire::hash::receipt_digest;
+use layerx_wire::hash::{execution_batch_id, receipt_digest};
 use layerx_wire::receipt::{decode as decode_receipt, encode_unsigned};
 use serde_json::Value;
 
@@ -40,8 +43,13 @@ pub struct NodeProgramStateSource {
     authority_endpoint: String,
     authority_authorization: String,
     authority_replica_id: [u8; 32],
+    expected_protocol_version: u16,
+    expected_network_id: u32,
+    expected_epoch: u64,
+    revoked_from_batch: Option<u64>,
     sequencer_authorization: SequencerAuthorization,
     sequencer_public_key: [u8; 32],
+    deployment_verifier: ProtocolDeploymentVerifier,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -58,23 +66,35 @@ impl NodeProgramStateSource {
         authority_endpoint: &str,
         authority_authorization: String,
         authority_replica_id: [u8; 32],
+        expected_protocol_version: u16,
+        expected_network_id: u32,
+        expected_epoch: u64,
         sequencer_id: [u8; 32],
         sequencer_public_key: [u8; 32],
         sequencer_first_batch: u64,
         sequencer_last_batch: u64,
+        revoked_from_batch: Option<u64>,
+        staleness_limit_ms: u64,
     ) -> Result<Self, String> {
         let endpoint = endpoint.trim_end_matches('/');
         let authority_endpoint = authority_endpoint.trim_end_matches('/');
         if authorization.is_empty()
             || authority_authorization.is_empty()
             || authority_replica_id == [0; 32]
+            || !matches!(expected_protocol_version, 1 | 2)
+            || expected_network_id == 0
+            || expected_epoch == 0
             || sequencer_id == [0; 32]
             || sequencer_public_key == [0; 32]
             || sequencer_first_batch == 0
             || sequencer_last_batch < sequencer_first_batch
+            || revoked_from_batch
+                .is_some_and(|batch| batch == 0 || batch <= sequencer_first_batch)
+            || staleness_limit_ms == 0
         {
             return Err(
-                "both node and independent receipt authority credentials are required".to_owned(),
+                "node authorities, protocol domain, key window and millisecond freshness are required"
+                    .to_owned(),
             );
         }
         if !(endpoint.starts_with("https://") || loopback_http(endpoint))
@@ -89,6 +109,18 @@ impl NodeProgramStateSource {
             .timeout_global(Some(Duration::from_secs(30)))
             .http_status_as_error(false)
             .build();
+        let deployment_verifier = ProtocolDeploymentVerifier::new(
+            expected_protocol_version,
+            expected_network_id,
+            expected_epoch,
+            sequencer_id,
+            sequencer_public_key,
+            sequencer_first_batch,
+            sequencer_last_batch,
+            revoked_from_batch,
+            staleness_limit_ms,
+        )
+        .map_err(|error| format!("deployment verifier is not configured: {error}"))?;
         Ok(Self {
             agent: config.into(),
             endpoint: endpoint.to_owned(),
@@ -96,6 +128,10 @@ impl NodeProgramStateSource {
             authority_endpoint: authority_endpoint.to_owned(),
             authority_authorization,
             authority_replica_id,
+            expected_protocol_version,
+            expected_network_id,
+            expected_epoch,
+            revoked_from_batch,
             sequencer_authorization: SequencerAuthorization::new(
                 sequencer_id,
                 sequencer_public_key,
@@ -103,7 +139,27 @@ impl NodeProgramStateSource {
                 sequencer_last_batch,
             ),
             sequencer_public_key,
+            deployment_verifier,
         })
+    }
+
+    pub fn verify_deployment(
+        &self,
+        proof: &DeploymentProof,
+        now_ms: u64,
+    ) -> Result<VerifiedDeploymentEvidence, String> {
+        self.deployment_verifier
+            .verify_deployment(proof, now_ms)
+            .map_err(|error| format!("protocol deployment evidence refused: {error}"))
+    }
+
+    pub fn verify_stored_deployment(
+        &self,
+        proof: &DeploymentProof,
+    ) -> Result<VerifiedDeploymentEvidence, String> {
+        self.deployment_verifier
+            .verify_historical_deployment(proof)
+            .map_err(|error| format!("stored protocol deployment evidence refused: {error}"))
     }
 
     pub fn current_head(&self) -> Result<AccountStateHead, String> {
@@ -332,10 +388,32 @@ impl NodeProgramStateSource {
         )
         .map_err(|error| format!("program-state receipt inclusion failed: {error:?}"))?;
         let header = inclusion.header().header();
+        if header.protocol_version() != self.expected_protocol_version
+            || header.network_id() != self.expected_network_id
+            || header.epoch() != self.expected_epoch
+        {
+            return Err("program-state receipt belongs to another protocol domain".to_owned());
+        }
+        if self
+            .revoked_from_batch
+            .is_some_and(|revoked| header.batch_number() >= revoked)
+        {
+            return Err("program-state receipt uses a revoked sequencer key".to_owned());
+        }
         if protocol.global_sequence() < header.first_sequence()
             || protocol.global_sequence() > header.last_sequence()
         {
             return Err("program-state receipt sequence is outside its signed batch".to_owned());
+        }
+        let expected_batch_id = execution_batch_id(
+            header.previous_state_root(),
+            protocol.activity_id(),
+            protocol.global_sequence(),
+            header.batch_number(),
+        )
+        .map_err(|_| "program-state batch identifier could not be derived".to_owned())?;
+        if protocol.batch_id() != expected_batch_id {
+            return Err("program-state receipt carries the wrong batch identifier".to_owned());
         }
         let authorized = AuthorizedBatch::new(
             protocol.batch_id(),
@@ -354,6 +432,14 @@ impl NodeProgramStateSource {
             .receipt()
             .protocol()
             .ok_or_else(|| "verified state receipt lost its protocol body".to_owned())?;
+        if verified_protocol.protocol_version() != header.protocol_version()
+            || verified_protocol.timestamp() != header.timestamp_ms()
+            || verified_protocol.activity_root() != header.activity_merkle_root()
+        {
+            return Err(
+                "program-state receipt disagrees with its signed batch header".to_owned(),
+            );
+        }
         let unsigned = encode_unsigned(verified.receipt())
             .map_err(|_| "verified state receipt could not be encoded unsigned".to_owned())?;
         let verified_digest = receipt_digest(&unsigned)

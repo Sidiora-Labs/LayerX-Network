@@ -7,7 +7,7 @@ use layerx_programs_protocol_adapter::{ProtocolAdapterError, ProtocolProgramStat
 use layerx_proof::inclusion::{verify_receipt as verify_receipt_inclusion, SequencerAuthorization};
 use layerx_proof::merkle::{decode_proof, Proof};
 use layerx_proof::receipt::{verify_program_state, AuthorizedBatch};
-use layerx_wire::hash::receipt_digest;
+use layerx_wire::hash::{execution_batch_id, receipt_digest};
 use layerx_wire::receipt::{decode as decode_receipt, encode_unsigned};
 use serde_json::Value;
 
@@ -29,6 +29,10 @@ pub struct LayerxdProgramBalanceReader {
     authority_endpoint: String,
     authority_authorization: String,
     authority_replica_id: [u8; 32],
+    expected_protocol_version: u16,
+    expected_network_id: u32,
+    expected_epoch: u64,
+    revoked_from_batch: Option<u64>,
     sequencer_authorization: SequencerAuthorization,
     sequencer_public_key: [u8; 32],
     registry: Registry,
@@ -43,23 +47,31 @@ impl LayerxdProgramBalanceReader {
         authority_endpoint: &str,
         authority_authorization: String,
         authority_replica_id: [u8; 32],
+        expected_protocol_version: u16,
+        expected_network_id: u32,
+        expected_epoch: u64,
         sequencer_id: [u8; 32],
         sequencer_public_key: [u8; 32],
         first_batch: u64,
         last_batch: u64,
+        revoked_from_batch: Option<u64>,
         registry: Registry,
-        staleness_limit: u64,
+        staleness_limit_ms: u64,
     ) -> Result<Self, ProtocolAdapterError> {
         let endpoint = endpoint.trim_end_matches('/');
         let authority_endpoint = authority_endpoint.trim_end_matches('/');
         if authorization.is_empty()
             || authority_authorization.is_empty()
             || authority_replica_id == [0; 32]
+            || !matches!(expected_protocol_version, 1 | 2)
+            || expected_network_id == 0
+            || expected_epoch == 0
             || sequencer_id == [0; 32]
             || sequencer_public_key == [0; 32]
             || first_batch == 0
             || last_batch < first_batch
-            || staleness_limit == 0
+            || revoked_from_batch.is_some_and(|batch| batch == 0 || batch <= first_batch)
+            || staleness_limit_ms == 0
             || endpoint == authority_endpoint
             || !secure_endpoint(endpoint)
             || !secure_endpoint(authority_endpoint)
@@ -77,6 +89,10 @@ impl LayerxdProgramBalanceReader {
             authority_endpoint: authority_endpoint.to_owned(),
             authority_authorization,
             authority_replica_id,
+            expected_protocol_version,
+            expected_network_id,
+            expected_epoch,
+            revoked_from_batch,
             sequencer_authorization: SequencerAuthorization::new(
                 sequencer_id,
                 sequencer_public_key,
@@ -85,7 +101,7 @@ impl LayerxdProgramBalanceReader {
             ),
             sequencer_public_key,
             registry,
-            staleness_limit,
+            staleness_limit: staleness_limit_ms,
         })
     }
 
@@ -201,9 +217,28 @@ impl LayerxdProgramBalanceReader {
         )
         .map_err(|_| ProtocolAdapterError::NonCanonicalView)?;
         let header = inclusion.header().header();
+        if header.protocol_version() != self.expected_protocol_version
+            || header.network_id() != self.expected_network_id
+            || header.epoch() != self.expected_epoch
+            || self
+                .revoked_from_batch
+                .is_some_and(|revoked| header.batch_number() >= revoked)
+        {
+            return Err(ProtocolAdapterError::NonCanonicalView);
+        }
         if protocol.global_sequence() < header.first_sequence()
             || protocol.global_sequence() > header.last_sequence()
         {
+            return Err(ProtocolAdapterError::NonCanonicalView);
+        }
+        let expected_batch_id = execution_batch_id(
+            header.previous_state_root(),
+            protocol.activity_id(),
+            protocol.global_sequence(),
+            header.batch_number(),
+        )
+        .map_err(|_| ProtocolAdapterError::NonCanonicalView)?;
+        if protocol.batch_id() != expected_batch_id {
             return Err(ProtocolAdapterError::NonCanonicalView);
         }
         let authorized = AuthorizedBatch::new(
@@ -219,6 +254,12 @@ impl LayerxdProgramBalanceReader {
             .receipt()
             .protocol()
             .ok_or(ProtocolAdapterError::NonCanonicalView)?;
+        if verified_protocol.protocol_version() != header.protocol_version()
+            || verified_protocol.timestamp() != header.timestamp_ms()
+            || verified_protocol.activity_root() != header.activity_merkle_root()
+        {
+            return Err(ProtocolAdapterError::NonCanonicalView);
+        }
         let state_root = hex::decode_digest(field(value, "state_root")?)
             .map_err(|_| ProtocolAdapterError::NonCanonicalView)?;
         if hex::decode_digest(field(value, "receipt_digest")?)

@@ -1,17 +1,18 @@
-//! Durable canonical deployment journal on local disk.
-//!
-//! Every entry is named by the digest of its own canonical encoding, so a
-//! record that has been altered in place can no longer be found under the
-//! digest a registry projection refers to.
+//! Durable protocol deployment proofs and derived registry projections.
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::PathBuf;
 
-use layerx_programs::{hex, DeploymentJournal, DeploymentRecord, ObservedHead, RegistryError};
+use layerx_programs::{
+    hex, DeploymentJournal, DeploymentProof, DeploymentRecord, ObservedHead, RegistryError,
+    VerifiedDeploymentEvidence,
+};
 
 use crate::write_atomic;
 
 const RECORD_SUFFIX: &str = "deployment";
+const ADMISSION_SUFFIX: &str = "admission";
 const HEAD_FILE: &str = "head";
 
 /// Journal of accepted deployments and upgrades observed at the node boundary.
@@ -32,48 +33,69 @@ impl FileDeploymentJournal {
         Ok(Self { root })
     }
 
-    /// Reads every canonical record, refusing entries whose contents no longer
-    /// hash to the digest they are filed under.
+    /// Reads every untrusted protocol proof for cryptographic replay by the
+    /// configured verifier.
     ///
     /// # Errors
     ///
     /// Returns unreadable directories, undecodable records and misfiled
     /// records.
-    pub fn records(&self) -> Result<Vec<DeploymentRecord>, String> {
+    pub fn proofs(&self) -> Result<Vec<DeploymentProof>, String> {
         let mut paths = Vec::new();
+        let mut projections = BTreeSet::new();
         let entries = fs::read_dir(&self.root)
             .map_err(|error| format!("could not read the deployment journal: {error}"))?;
         for entry in entries {
             let path = entry
                 .map_err(|error| format!("could not read the deployment journal: {error}"))?
                 .path();
-            if path.extension().is_some_and(|value| value == RECORD_SUFFIX) {
+            if path.extension().is_some_and(|value| value == ADMISSION_SUFFIX) {
                 paths.push(path);
+            } else if path.extension().is_some_and(|value| value == RECORD_SUFFIX) {
+                let name = path
+                    .file_stem()
+                    .and_then(|value| value.to_str())
+                    .ok_or_else(|| format!("{} has no canonical file name", path.display()))?;
+                projections.insert(name.to_owned());
             }
         }
         paths.sort();
-        let mut records = Vec::with_capacity(paths.len());
+        let admissions = paths
+            .iter()
+            .map(|path| {
+                path.file_stem()
+                    .and_then(|value| value.to_str())
+                    .map(str::to_owned)
+                    .ok_or_else(|| format!("{} has no canonical file name", path.display()))
+            })
+            .collect::<Result<BTreeSet<_>, _>>()?;
+        if admissions != projections {
+            return Err(
+                "every deployment projection must have one protocol admission proof".to_owned(),
+            );
+        }
+        let mut proofs = Vec::with_capacity(paths.len());
         for path in paths {
             let bytes = fs::read(&path)
                 .map_err(|error| format!("could not read {}: {error}", path.display()))?;
-            let record = DeploymentRecord::decode(&bytes)
-                .map_err(|error| format!("{} is corrupt: {error}", path.display()))?;
-            record
-                .validate()
+            let proof = DeploymentProof::decode(&bytes)
                 .map_err(|error| format!("{} is corrupt: {error}", path.display()))?;
             let named = path
                 .file_stem()
                 .and_then(|value| value.to_str())
                 .unwrap_or_default();
-            if named != hex::encode(&record.digest()) {
+            let claimed = proof
+                .claimed_receipt_digest()
+                .map_err(|error| format!("{} has no canonical receipt: {error}", path.display()))?;
+            if named != hex::encode(&claimed) {
                 return Err(format!(
-                    "{} is filed under a digest it does not hash to",
+                    "{} is filed under a different receipt digest",
                     path.display()
                 ));
             }
-            records.push(record);
+            proofs.push(proof);
         }
-        Ok(records)
+        Ok(proofs)
     }
 
     /// Appends one accepted deployment and returns the digest it is filed
@@ -83,17 +105,42 @@ impl FileDeploymentJournal {
     ///
     /// Refuses records that fail their own validation and returns the
     /// filesystem error that prevented durable persistence.
-    pub fn append(&self, record: &DeploymentRecord) -> Result<[u8; 32], String> {
-        record
-            .validate()
-            .map_err(|error| format!("deployment record is not admissible: {error}"))?;
-        let digest = record.digest();
-        let path = self
+    pub fn append(&self, evidence: &VerifiedDeploymentEvidence) -> Result<[u8; 32], String> {
+        let digest = evidence.receipt_digest();
+        let record_path = self
             .root
             .join(format!("{}.{RECORD_SUFFIX}", hex::encode(&digest)));
-        write_atomic(&path, &record.canonical_encoding())
-            .map_err(|error| format!("could not persist {}: {error}", path.display()))?;
+        write_atomic(&record_path, &evidence.record().canonical_encoding())
+            .map_err(|error| format!("could not persist {}: {error}", record_path.display()))?;
+        let proof_path = self
+            .root
+            .join(format!("{}.{ADMISSION_SUFFIX}", hex::encode(&digest)));
+        write_atomic(&proof_path, &evidence.proof().canonical_encoding())
+            .map_err(|error| format!("could not persist {}: {error}", proof_path.display()))?;
         Ok(digest)
+    }
+
+    /// Checks that the local projection sidecar is exactly the record derived
+    /// from cryptographically verified protocol evidence.
+    pub fn audit_projection(&self, evidence: &VerifiedDeploymentEvidence) -> Result<(), String> {
+        let path = self.root.join(format!(
+            "{}.{RECORD_SUFFIX}",
+            hex::encode(&evidence.receipt_digest())
+        ));
+        let bytes = fs::read(&path)
+            .map_err(|error| format!("could not read {}: {error}", path.display()))?;
+        let record = DeploymentRecord::decode(&bytes)
+            .map_err(|error| format!("{} is corrupt: {error}", path.display()))?;
+        record
+            .validate()
+            .map_err(|error| format!("{} is corrupt: {error}", path.display()))?;
+        if &record != evidence.record() {
+            return Err(format!(
+                "{} disagrees with its verified protocol proof",
+                path.display()
+            ));
+        }
+        Ok(())
     }
 
     /// Removes one record that the registry projection refused, so the journal
@@ -103,11 +150,16 @@ impl FileDeploymentJournal {
     ///
     /// Returns the filesystem error that prevented removal.
     pub fn discard(&self, digest: [u8; 32]) -> Result<(), String> {
-        let path = self
+        let proof_path = self
+            .root
+            .join(format!("{}.{ADMISSION_SUFFIX}", hex::encode(&digest)));
+        fs::remove_file(&proof_path)
+            .map_err(|error| format!("could not discard {}: {error}", proof_path.display()))?;
+        let record_path = self
             .root
             .join(format!("{}.{RECORD_SUFFIX}", hex::encode(&digest)));
-        fs::remove_file(&path)
-            .map_err(|error| format!("could not discard {}: {error}", path.display()))
+        fs::remove_file(&record_path)
+            .map_err(|error| format!("could not discard {}: {error}", record_path.display()))
     }
 
     /// Records the protocol head last observed by the node boundary.

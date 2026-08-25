@@ -1443,7 +1443,10 @@ impl Executor {
         )
         .map_err(ExecutionError::Abi)?;
         let composition = Composition::new(
-            request.composition.resolver(),
+            request
+                .composition
+                .claim_resolver(None)
+                .map_err(ExecutionError::Composition)?,
             CallGraph::root(request.composition.rules(), request.program, principal),
             AbiRevision::V1,
         );
@@ -1618,7 +1621,10 @@ impl Executor {
         .map_err(ExecutionError::Abi)?;
         let meter = Meter::new_activity(admitted_budget.resource_budget(), self.prices);
         let composition = Composition::new(
-            request.composition.resolver(),
+            request
+                .composition
+                .claim_resolver(Some(activity_binding))
+                .map_err(ExecutionError::Composition)?,
             CallGraph::root(request.composition.rules(), request.program, principal),
             AbiRevision::V1,
         );
@@ -1764,7 +1770,7 @@ impl Executor {
         storage: &mut Storage,
         request: AuthorizedExecutionRequest<'_>,
     ) -> Result<CandidateAuthorizedExecutionRecord, ExecutionError> {
-        self.execute_authorized_candidate_with_budget(storage, request, self.budget, false)
+        self.execute_authorized_candidate_with_budget(storage, request, self.budget, None)
     }
 
     /// Qualification-only candidate execution under one consumed admitted budget.
@@ -1800,7 +1806,7 @@ impl Executor {
             storage,
             request,
             admitted_budget.resource_budget(),
-            true,
+            Some(activity_binding),
         )
     }
 
@@ -1810,8 +1816,9 @@ impl Executor {
         storage: &mut Storage,
         request: AuthorizedExecutionRequest<'_>,
         active_budget: ResourceBudget,
-        budgeted: bool,
+        activity_binding: Option<ActivityBudgetBinding>,
     ) -> Result<CandidateAuthorizedExecutionRecord, ExecutionError> {
+        let budgeted = activity_binding.is_some();
         if request.module.abi_revision() != AbiRevision::CandidateV2 {
             return Err(ExecutionError::Abi(AbiError::WrongVersion));
         }
@@ -1843,7 +1850,10 @@ impl Executor {
         )
         .map_err(ExecutionError::Abi)?;
         let composition = Composition::new(
-            request.composition.resolver(),
+            request
+                .composition
+                .claim_resolver(activity_binding)
+                .map_err(ExecutionError::Composition)?,
             CallGraph::root(request.composition.rules(), request.program, principal),
             AbiRevision::CandidateV2,
         );

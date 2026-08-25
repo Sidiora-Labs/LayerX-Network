@@ -2,7 +2,7 @@
 
 use crate::limits::{MAX_MODULE_ACTIVITY_TYPES, MAX_PAYLOAD_BYTES};
 
-/// The eight protocol module identifiers accepted by the agent boundary.
+/// The protocol module identifiers accepted by the agent boundary.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[repr(u16)]
 pub enum ModuleId {
@@ -22,6 +22,8 @@ pub enum ModuleId {
     Governance = 7,
     /// Settlement bridge module.
     Bridge = 8,
+    /// Deterministic programs module.
+    Programs = 9,
 }
 
 impl ModuleId {
@@ -40,6 +42,7 @@ impl ModuleId {
             6 => Ok(Self::Perps),
             7 => Ok(Self::Governance),
             8 => Ok(Self::Bridge),
+            9 => Ok(Self::Programs),
             _ => Err(PayloadError::UnknownModule(value)),
         }
     }
@@ -194,6 +197,8 @@ pub enum Payload {
     Governance(ActivityType, Box<[u8]>),
     /// Bridge module payload.
     Bridge(ActivityType, Box<[u8]>),
+    /// Programs module payload.
+    Programs(ActivityType, Box<[u8]>),
 }
 
 impl Payload {
@@ -225,6 +230,7 @@ impl Payload {
             ModuleId::Perps => Self::Perps(activity_type, bytes),
             ModuleId::Governance => Self::Governance(activity_type, bytes),
             ModuleId::Bridge => Self::Bridge(activity_type, bytes),
+            ModuleId::Programs => Self::Programs(activity_type, bytes),
         })
     }
 
@@ -239,7 +245,8 @@ impl Payload {
             | Self::Service(activity_type, _)
             | Self::Perps(activity_type, _)
             | Self::Governance(activity_type, _)
-            | Self::Bridge(activity_type, _) => *activity_type,
+            | Self::Bridge(activity_type, _)
+            | Self::Programs(activity_type, _) => *activity_type,
         }
     }
 
@@ -254,7 +261,8 @@ impl Payload {
             | Self::Service(_, bytes)
             | Self::Perps(_, bytes)
             | Self::Governance(_, bytes)
-            | Self::Bridge(_, bytes) => bytes,
+            | Self::Bridge(_, bytes)
+            | Self::Programs(_, bytes) => bytes,
         }
     }
 }

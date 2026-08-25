@@ -37,16 +37,20 @@ pub struct Config {
     pub builder_path: String,
     pub build_timeout_seconds: u64,
     pub attempts: u32,
-    pub staleness_seconds: u64,
+    pub staleness_ms: u64,
     pub node_endpoint: String,
     pub node_authorization: String,
     pub receipt_authority_endpoint: String,
     pub receipt_authority_authorization: String,
     pub receipt_authority_replica_id: [u8; 32],
+    pub protocol_version: u16,
+    pub network_id: u32,
+    pub epoch: u64,
     pub sequencer_id: [u8; 32],
     pub sequencer_public_key: [u8; 32],
     pub sequencer_first_batch: u64,
     pub sequencer_last_batch: u64,
+    pub sequencer_revoked_from_batch: Option<u64>,
 }
 
 /// Stable graph anchor for the hosted program registry.

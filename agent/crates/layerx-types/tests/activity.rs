@@ -27,6 +27,7 @@ fn registry() -> ModuleRegistry {
         ModuleId::Perps,
         ModuleId::Governance,
         ModuleId::Bridge,
+        ModuleId::Programs,
     ];
     let registrations: Vec<_> = modules
         .into_iter()
@@ -138,6 +139,7 @@ fn every_module_payload_requires_an_exact_registration() {
         ModuleId::Perps,
         ModuleId::Governance,
         ModuleId::Bridge,
+        ModuleId::Programs,
     ] {
         let declared = activity_type(module, 1);
         let Ok(payload) = Payload::new(&registry, declared, &[module as u8]) else {
@@ -156,8 +158,8 @@ fn every_module_payload_requires_an_exact_registration() {
 fn unsigned_and_signed_envelopes_are_distinct_types() {
     assert_ne!(TypeId::of::<UnsignedEnvelope>(), TypeId::of::<Envelope>());
     assert_eq!(
-        ActivityType::from_u32(0x0009_0001),
-        Err(PayloadError::UnknownModule(9))
+        ActivityType::from_u32(0x000a_0001),
+        Err(PayloadError::UnknownModule(10))
     );
     assert_eq!(
         TimestampBound::new(20, 10),

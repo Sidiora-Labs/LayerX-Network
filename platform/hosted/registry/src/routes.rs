@@ -1,8 +1,9 @@
 //! The registry routes the developer CLI calls.
 //!
-//! Reading a program returns the registry projection only after the deployment
-//! receipt behind its latest version has been re-verified against the
-//! canonical journal. Verifying a program's source rebuilds mirrored source in
+//! Deployment ingestion stays unavailable until the authenticated node exposes
+//! canonical activity, signed-batch receipt and Programs-state proof material.
+//! Reading checks the derived local projection and current
+//! independently verified protocol state. Verifying source rebuilds mirrored source in
 //! the pinned toolchain environment and compares the rebuilt artifact with the
 //! registered on-chain code hash, so a mismatch is reported as a mismatch and
 //! never as a verified source.
@@ -10,7 +11,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use layerx_programs::{
-    hex, programs_source_verification, BuildPlan, BuildRefusal, DeploymentRecord,
+    hex, programs_source_verification, BuildPlan, BuildRefusal,
     JournalReadAuthority, LifecycleReceipt, ObservedHead, ProgramId, ProgramLifecycle, Registry,
     RegistryError, RegistryVersion, ReproducibleBuild, SourceArchive, SourceStatus, SourceVerifier,
     UpgradePolicy, VerifiedProgramBalanceRead, VerifiedRegistryRead, WindDownStateAccess,
@@ -67,7 +68,7 @@ pub struct Registrar {
     mirror: SourceMirror,
     verified: VerifiedSourceStore,
     verifier: SourceVerifier<HermeticBuilder>,
-    staleness_seconds: u64,
+    staleness_ms: u64,
     balance_reads: BTreeMap<ProgramId, VerifiedProgramBalanceRead>,
     idempotency: BTreeMap<String, Completed>,
 }
@@ -90,7 +91,7 @@ impl Registrar {
         )?;
         let verifier = SourceVerifier::new(builder, config.attempts)
             .map_err(|refused| format!("the build pipeline is not admissible: {refused}"))?;
-        if config.staleness_seconds == 0 {
+        if config.staleness_ms == 0 {
             return Err("a registry read freshness bound is required".to_owned());
         }
         let mut registrar = Self {
@@ -103,15 +104,20 @@ impl Registrar {
                 &config.receipt_authority_endpoint,
                 config.receipt_authority_authorization.clone(),
                 config.receipt_authority_replica_id,
+                config.protocol_version,
+                config.network_id,
+                config.epoch,
                 config.sequencer_id,
                 config.sequencer_public_key,
                 config.sequencer_first_batch,
                 config.sequencer_last_batch,
+                config.sequencer_revoked_from_batch,
+                config.staleness_ms,
             )?,
             mirror: SourceMirror::open(config.mirror.clone())?,
             verified: VerifiedSourceStore::open(config.verified.clone())?,
             verifier,
-            staleness_seconds: config.staleness_seconds,
+            staleness_ms: config.staleness_ms,
             balance_reads: BTreeMap::new(),
             idempotency: BTreeMap::new(),
         };
@@ -120,15 +126,17 @@ impl Registrar {
         Ok(registrar)
     }
 
-    /// Answers one request at the supplied wall-clock second.
+    /// Answers one request at the supplied wall-clock millisecond.
     pub fn route(&mut self, request: &Request, now: u64) -> Response {
         match (request.method.as_str(), request.path.as_str()) {
             ("GET", "/healthz") => Response {
                 status: 200,
                 body: json!({"status": "ready", "service": "program-registry"}).to_string(),
             },
-            ("POST", "/__registry/deployments") => self.ingest_deployment(&request.body),
-            ("POST", "/__registry/head") => self.ingest_head(&request.body),
+            ("POST", "/__registry/deployments") => {
+                deployment_ingress_unavailable(&request.body)
+            }
+            ("POST", "/__registry/head") => self.ingest_head(),
             ("POST", "/__registry/sources") => self.ingest_source(&request.body),
             (
                 _,
@@ -211,7 +219,7 @@ impl Registrar {
                 record.receipt,
                 current_head,
                 now,
-                self.staleness_seconds,
+                self.staleness_ms,
             )
             .map_err(|error| format!("protocol program-state adapter refused: {error:?}"))?;
             if state.program() != program {
@@ -266,7 +274,7 @@ impl Registrar {
         if let Err(error) = self.synchronize_protocol_state(Some(program), now) {
             return refusal(503, "protocol_state_unavailable", &error);
         }
-        let authority = match JournalReadAuthority::new(&self.journal, now, self.staleness_seconds)
+        let authority = match JournalReadAuthority::new(&self.journal, now, self.staleness_ms)
         {
             Ok(authority) => authority,
             Err(error) => return refusal(503, "read_unverifiable", &error.to_string()),
@@ -309,7 +317,7 @@ impl Registrar {
         };
         let freshness = balances.freshness();
         if now < freshness.observed_at
-            || now.saturating_sub(freshness.observed_at) > self.staleness_seconds
+            || now.saturating_sub(freshness.observed_at) > self.staleness_ms
             || freshness.observed_sequence < read.freshness.observed_sequence
         {
             return refusal(
@@ -455,11 +463,13 @@ impl Registrar {
 
     fn rebuild(&mut self) -> Result<(), String> {
         let mut registry = Registry::new();
-        registry
-            .replay_journal(&self.journal.records()?)
-            .map_err(|error| {
-                format!("the canonical deployment journal is not replayable: {error}")
-            })?;
+        for proof in self.journal.proofs()? {
+            let evidence = self.node_state.verify_stored_deployment(&proof)?;
+            self.journal.audit_projection(&evidence)?;
+            registry
+                .record_verified_deployment(&evidence)
+                .map_err(|error| format!("verified deployment history is not replayable: {error}"))?;
+        }
         for record in self.verified.records()? {
             let build = ReproducibleBuild::from_record(
                 record.source_uri.clone(),
@@ -481,68 +491,26 @@ impl Registrar {
         Ok(())
     }
 
-    fn ingest_deployment(&mut self, body: &[u8]) -> Response {
-        let Some(bytes) = field(body, "record_hex").and_then(|text| hex::decode(&text).ok()) else {
-            return refusal(
-                400,
-                "invalid_argument",
-                "request must carry the canonical record as record_hex",
-            );
-        };
-        let record = match DeploymentRecord::decode(&bytes) {
-            Ok(record) => record,
-            Err(error) => return refusal(400, "invalid_argument", &error.to_string()),
-        };
-        let digest = match self.journal.append(&record) {
-            Ok(digest) => digest,
-            Err(error) => return refusal(503, "persistence_unavailable", &error),
-        };
-        if let Err(error) = self.rebuild() {
-            let mut rollback = self.journal.discard(digest).err();
-            if rollback.is_none() {
-                rollback = self.rebuild().err();
-            }
-            let detail = rollback.map_or_else(
-                || format!("{error}; the journal entry was rolled back"),
-                |failure| format!("{error}; the journal entry could not be rolled back: {failure}"),
-            );
-            return refusal(409, "registry_conflict", &detail);
-        }
-        Response {
-            status: 200,
-            body: json!({
-                "recorded": true,
-                "program_id": hex::encode(&record.program.bytes()),
-                "version": record.version,
-                "deployment_receipt_digest": hex::encode(&digest),
-            })
-            .to_string(),
-        }
-    }
-
-    fn ingest_head(&mut self, body: &[u8]) -> Response {
-        let Ok(document) = serde_json::from_slice::<Value>(body) else {
-            return refusal(400, "invalid_argument", "request body is not JSON");
-        };
-        let (Some(sequence), Some(observed_at)) = (
-            document["sequence"].as_u64(),
-            document["observed_at"].as_u64(),
-        ) else {
-            return refusal(
-                400,
-                "invalid_argument",
-                "request must carry sequence and observed_at",
-            );
+    fn ingest_head(&mut self) -> Response {
+        let verified = match self.node_state.current_head() {
+            Ok(head) => head,
+            Err(error) => return refusal(503, "protocol_state_unavailable", &error),
         };
         let head = ObservedHead {
-            sequence,
-            observed_at,
+            sequence: verified.freshness.observed_sequence,
+            observed_at: verified.freshness.observed_at,
         };
         match self.journal.refresh_head(head) {
             Ok(()) => Response {
                 status: 200,
-                body: json!({"observed": true, "sequence": sequence, "observed_at": observed_at})
-                    .to_string(),
+                body: json!({
+                    "observed": true,
+                    "sequence": head.sequence,
+                    "observed_at": head.observed_at,
+                    "receipt_digest": hex::encode(&verified.receipt_digest),
+                    "state_root": hex::encode(&verified.state_root),
+                })
+                .to_string(),
             },
             Err(error) => refusal(400, "invalid_argument", &error),
         }
@@ -801,6 +769,14 @@ fn field(body: &[u8], name: &str) -> Option<String> {
     Some(document[name].as_str()?.to_owned())
 }
 
+fn deployment_ingress_unavailable(_untrusted_body: &[u8]) -> Response {
+    refusal(
+        503,
+        "deployment_proof_unavailable",
+        "the authenticated node does not expose canonical deployment proof production",
+    )
+}
+
 fn valid_idempotency_key(value: &str) -> bool {
     (16..=128).contains(&value.len())
         && value
@@ -828,4 +804,21 @@ fn request_digest(program: ProgramId, uri: &str, source_digest: &[u8; 32]) -> [u
         .concat(),
     )
     .into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::deployment_ingress_unavailable;
+
+    #[test]
+    fn deployment_ingress_stays_blocked_for_forgeable_record_shape() {
+        let forged = br#"{"record_hex":"4c6179657258"}"#;
+        assert_eq!(deployment_ingress_unavailable(forged).status, 503);
+    }
+
+    #[test]
+    fn deployment_ingress_does_not_accept_caller_proof_bytes() {
+        let untrusted = br#"{"proof_hex":"00"}"#;
+        assert_eq!(deployment_ingress_unavailable(untrusted).status, 503);
+    }
 }

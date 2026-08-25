@@ -93,6 +93,12 @@ impl ProtocolReceipt {
         self.resulting_state_root
     }
 
+    /// Returns the activity-root commitment carried by the receipt.
+    #[must_use]
+    pub const fn activity_root(&self) -> [u8; 32] {
+        self.activity_root
+    }
+
     /// Returns the exact protocol result code.
     #[must_use]
     pub const fn result_code(&self) -> i32 {
@@ -531,6 +537,12 @@ impl BatchHeader {
         self.network_id
     }
 
+    /// Returns the protocol epoch that selects the active key and module set.
+    #[must_use]
+    pub const fn epoch(&self) -> u64 {
+        self.epoch
+    }
+
     /// Returns the monotonically assigned batch number.
     #[must_use]
     pub const fn batch_number(&self) -> u64 {
@@ -589,6 +601,12 @@ impl BatchHeader {
     #[must_use]
     pub const fn oracle_root(&self) -> [u8; 32] {
         self.oracle_root
+    }
+
+    /// Returns the batch timestamp committed by the header.
+    #[must_use]
+    pub const fn timestamp_ms(&self) -> u64 {
+        self.timestamp_ms
     }
 
     /// Returns the sequencer identity committed by the header.

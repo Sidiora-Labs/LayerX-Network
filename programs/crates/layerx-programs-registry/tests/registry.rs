@@ -1,14 +1,22 @@
 use std::collections::BTreeMap;
 
+mod support;
+
 use layerx_programs::{
     BuildEnvironment, DeploymentJournal, DeploymentRecord, ExecutableAdmissionError,
-    JournalReadAuthority, ObservedHead, ProgramLifecycle, PublishedSource, ReadFreshness,
-    Registry, RegistryError,
+    JournalReadAuthority, ObservedHead, ProgramLifecycle, ProtocolDeploymentVerifier,
+    ProtocolEvidenceError, PublishedSource, ReadFreshness, Registry, RegistryError,
     RegistryReadAuthority, ReproducibleBuild, SourceStatus, VerifiedProgramCatalog,
 };
 use layerx_programs_runtime::{
-    hash_bytes, CompositionRules, Deploy, HashAlgorithm, Lifecycle, ProgramId, ProgramResolver,
-    ProgramVersion, UpgradePolicy, ABI_VERSION,
+    hash_bytes, ActivityBudgetBinding, CompositionRules, Deploy, HashAlgorithm, Lifecycle,
+    ProgramId, ProgramVersion, UpgradePolicy, ABI_VERSION,
+};
+
+use support::{
+    code_hash as fixture_code_hash, deploy_fixture, deprecated_state, program as fixture_program,
+    upgrade_fixture, wrong_abi_fixture, wrong_batch_id_fixture, AUTHORITY, NOW,
+    WASM_V1 as PROTOCOL_WASM_V1, WASM_V2 as PROTOCOL_WASM_V2,
 };
 
 const PROGRAM: [u8; 32] = [0x31; 32];
@@ -17,6 +25,7 @@ const WASM_V2: &[u8] = &[0, 97, 115, 109, 1, 0, 0, 0, 0, 3, 2, b'v', b'2'];
 const FOREIGN_WASM: &[u8] = &[
     0, 97, 115, 109, 1, 0, 0, 0, 0, 8, 7, b'f', b'o', b'r', b'e', b'i', b'g', b'n',
 ];
+const INVALID_WASM: &[u8] = &[0, 97, 115, 109, 1, 0, 0, 0, 1, 1, 0xff];
 
 struct WrongAuthority;
 
@@ -68,50 +77,69 @@ impl DeploymentJournal for CanonicalJournal {
 }
 
 #[test]
-fn registry_resolves_latest_and_historical_code_only_from_canonical_journal_evidence() {
-    let program = program();
-    let policy = UpgradePolicy::Authority([0x51; 32]);
-    let first = record(program, 1, None, WASM_V1, policy, 70);
-    let second = record(
-        program,
-        2,
-        Some(first.new_code_hash),
-        WASM_V2,
-        policy,
+fn registry_resolves_historical_and_latest_code_only_from_protocol_evidence() {
+    let program = fixture_program();
+    let policy = UpgradePolicy::Authority(AUTHORITY);
+    let deploy = deploy_fixture(PROTOCOL_WASM_V1, policy, 70, 1_700_000_070);
+    let upgrade = upgrade_fixture(
+        PROTOCOL_WASM_V1,
+        PROTOCOL_WASM_V2,
         71,
+        1_700_000_071,
     );
+    let verifier = ProtocolDeploymentVerifier::new(
+        2,
+        42,
+        2,
+        deploy.sequencer_id,
+        deploy.sequencer_public_key,
+        70,
+        100,
+        None,
+        1_000,
+    )
+    .unwrap_or_else(|error| panic!("protocol verifier: {error}"));
+    let first = verifier
+        .verify_deployment(&deploy.proof, NOW)
+        .unwrap_or_else(|error| panic!("deploy evidence: {error}"));
+    let second = verifier
+        .verify_deployment(&upgrade.proof, NOW)
+        .unwrap_or_else(|error| panic!("upgrade evidence: {error}"));
     let mut registry = Registry::new();
     registry
-        .replay_journal(&[first.clone(), second.clone()])
-        .unwrap_or_else(|error| panic!("journal replay: {error}"));
-
-    let journal = CanonicalJournal::new(
-        &[first.clone(), second.clone()],
-        ObservedHead {
-            sequence: 77,
-            observed_at: 1_700_000_100,
-        },
-    );
-    let authority = JournalReadAuthority::new(journal, 1_700_000_150, 100)
-        .unwrap_or_else(|error| panic!("journal authority: {error}"));
+        .record_verified_deployment(&first)
+        .unwrap_or_else(|error| panic!("verified deploy: {error}"));
+    registry
+        .record_verified_deployment(&second)
+        .unwrap_or_else(|error| panic!("verified upgrade: {error}"));
     let historical = registry
-        .resolve_deployment(program, 1, &authority)
+        .resolve_deployment(first.clone())
         .unwrap_or_else(|error| panic!("historical deployment: {error}"));
     let latest = registry
-        .resolve_deployment(program, 2, &authority)
+        .resolve_deployment(second.clone())
         .unwrap_or_else(|error| panic!("latest deployment: {error}"));
 
     assert_eq!(historical.program(), program);
     assert_eq!(historical.version(), 1);
-    assert_eq!(historical.code_hash(), first.new_code_hash);
-    assert_eq!(historical.receipt_digest(), first.digest());
-    assert_eq!(historical.module(), WASM_V1);
-    assert_eq!(historical.freshness().observed_sequence, 77);
+    assert_eq!(historical.code_hash(), fixture_code_hash(PROTOCOL_WASM_V1));
+    assert_eq!(historical.receipt_digest(), first.receipt_digest());
+    assert_eq!(historical.module(), PROTOCOL_WASM_V1);
+    assert_eq!(historical.freshness().observed_sequence, 70);
     assert_eq!(historical.lifecycle(), ProgramLifecycle::Active);
     assert_eq!(latest.version(), 2);
-    assert_eq!(latest.code_hash(), second.new_code_hash);
-    assert_eq!(latest.receipt_digest(), second.digest());
-    assert_eq!(latest.module(), WASM_V2);
+    assert_eq!(latest.code_hash(), fixture_code_hash(PROTOCOL_WASM_V2));
+    assert_eq!(latest.receipt_digest(), second.receipt_digest());
+    assert_eq!(latest.module(), PROTOCOL_WASM_V2);
+    let alternate = verifier
+        .verify_deployment(
+            &deploy_fixture(PROTOCOL_WASM_V1, policy, 73, 1_700_000_073).proof,
+            NOW,
+        )
+        .unwrap_or_else(|error| panic!("alternate receipt evidence: {error}"));
+    assert_eq!(
+        registry.resolve_deployment(alternate),
+        Err(RegistryError::UnverifiedRead)
+    );
 
     let mut executable = VerifiedProgramCatalog::declared()
         .unwrap_or_else(|error| panic!("verified catalog: {error}"));
@@ -123,183 +151,179 @@ fn registry_resolves_latest_and_historical_code_only_from_canonical_journal_evid
         .admit(latest)
         .unwrap_or_else(|error| panic!("latest admission: {error}"));
     assert_eq!(executable.version(program), Some(2));
-    assert_eq!(executable.code_hash(program), Some(second.new_code_hash));
+    assert_eq!(
+        executable.code_hash(program),
+        Some(fixture_code_hash(PROTOCOL_WASM_V2))
+    );
     assert_eq!(executable.abi_version(program), Some(ABI_VERSION));
-    assert_eq!(executable.receipt_digest(program), Some(second.digest()));
-    assert!(ProgramResolver::program_module(&executable, program).is_some());
-    let composition = executable.into_composition_context(CompositionRules::declared());
-    assert!(composition.resolver().program_module(program).is_some());
-
-    let read = registry
-        .read(program, &authority)
-        .unwrap_or_else(|error| panic!("registry read: {error}"));
-    assert_eq!(read.entry.program, program);
-    assert_eq!(read.entry.upgrade_policy, policy);
-    assert_eq!(read.entry.lifecycle, ProgramLifecycle::Active);
-    assert_eq!(read.entry.versions.len(), 2);
-    assert_eq!(read.entry.versions[0].code_hash, code_hash(WASM_V1));
-    assert_eq!(read.entry.versions[1].code_hash, second.new_code_hash);
+    assert_eq!(
+        executable.receipt_digest(program),
+        Some(second.receipt_digest())
+    );
+    let current = verifier
+        .verify_current_program(&upgrade.proof.state, program, NOW)
+        .unwrap_or_else(|error| panic!("current program head: {error}"));
+    let binding = ActivityBudgetBinding::new([0xa1; 32])
+        .unwrap_or_else(|error| panic!("activity binding: {error}"));
+    let _composition = executable
+        .authorize_activity(
+            vec![current],
+            binding,
+            NOW,
+            CompositionRules::declared(),
+        )
+        .unwrap_or_else(|error| panic!("activity-scoped catalog: {error}"));
 }
 
 #[test]
-fn callable_resolution_preserves_typed_mismatch_and_stale_refusals() {
-    let program = program();
-    let policy = UpgradePolicy::Immutable;
-    let record = record(program, 1, None, WASM_V1, policy, 70);
-    let foreign = record(program, 1, None, FOREIGN_WASM, policy, 70);
-    let mut registry = Registry::new();
-    registry
-        .replay_journal(&[record.clone()])
-        .unwrap_or_else(|error| panic!("journal replay: {error}"));
-
-    let mut mismatched = CanonicalJournal::new(
-        &[record.clone()],
-        ObservedHead {
-            sequence: 77,
-            observed_at: 1_700_000_100,
-        },
-    );
-    mismatched
-        .records
-        .insert(record.digest(), foreign.canonical_encoding());
-    let mismatch_authority = JournalReadAuthority::new(mismatched, 1_700_000_150, 100)
-        .unwrap_or_else(|error| panic!("mismatch authority: {error}"));
-    assert_eq!(
-        registry.resolve_deployment(program, 1, &mismatch_authority),
-        Err(RegistryError::UnverifiedRead)
-    );
-
-    let stale = CanonicalJournal::new(
-        &[record],
-        ObservedHead {
-            sequence: 77,
-            observed_at: 1_700_000_100,
-        },
-    );
-    let stale_authority = JournalReadAuthority::new(stale, 1_700_001_000, 100)
-        .unwrap_or_else(|error| panic!("stale authority: {error}"));
-    assert_eq!(
-        registry.resolve_deployment(program, 1, &stale_authority),
-        Err(RegistryError::StaleRead)
-    );
-}
-
-#[test]
-fn invalid_module_abi_and_receipt_evidence_never_enter_the_verified_resolver() {
-    let program = program();
-    let expected = record(program, 1, None, WASM_V1, UpgradePolicy::Immutable, 70);
-    let wrong_receipt = record(
-        program,
-        1,
-        None,
-        FOREIGN_WASM,
+fn forged_batch_journal_and_stale_evidence_never_create_deployment_authority() {
+    let fixture = deploy_fixture(
+        PROTOCOL_WASM_V1,
         UpgradePolicy::Immutable,
         70,
+        1_700_000_070,
     );
-    let mut receipt_registry = Registry::new();
-    receipt_registry
-        .replay_journal(&[expected.clone()])
-        .unwrap_or_else(|error| panic!("receipt projection: {error}"));
-    let mut receipt_journal = CanonicalJournal::new(
-        &[expected.clone()],
-        ObservedHead {
-            sequence: 77,
-            observed_at: 1_700_000_100,
-        },
-    );
-    receipt_journal
-        .records
-        .insert(expected.digest(), wrong_receipt.canonical_encoding());
-    let receipt_authority = JournalReadAuthority::new(receipt_journal, 1_700_000_150, 100)
-        .unwrap_or_else(|error| panic!("receipt authority: {error}"));
-    assert_eq!(
-        receipt_registry.resolve_deployment(program, 1, &receipt_authority),
-        Err(RegistryError::UnverifiedRead)
-    );
-
-    let wrong_abi = record_with_abi(
-        program,
-        1,
-        None,
-        WASM_V1,
-        UpgradePolicy::Immutable,
-        70,
+    let verifier = ProtocolDeploymentVerifier::new(
         2,
-    );
-    let mut abi_journal = CanonicalJournal::new(
-        &[expected.clone()],
-        ObservedHead {
-            sequence: 77,
-            observed_at: 1_700_000_100,
-        },
-    );
-    abi_journal
-        .records
-        .insert(expected.digest(), wrong_abi.canonical_encoding());
-    let abi_authority = JournalReadAuthority::new(abi_journal, 1_700_000_150, 100)
-        .unwrap_or_else(|error| panic!("ABI authority: {error}"));
-    assert_eq!(
-        receipt_registry.resolve_deployment(program, 1, &abi_authority),
-        Err(RegistryError::UnverifiedRead)
-    );
-
-    let malformed = record(
-        program,
-        1,
+        42,
+        2,
+        fixture.sequencer_id,
+        fixture.sequencer_public_key,
+        70,
+        100,
         None,
+        100,
+    )
+    .unwrap_or_else(|error| panic!("protocol verifier: {error}"));
+    let mut forged = fixture.proof.clone();
+    forged.state.header_signature[0] ^= 1;
+    assert_eq!(
+        verifier.verify_deployment(&forged, NOW),
+        Err(ProtocolEvidenceError::ActivityInclusion)
+    );
+    assert_eq!(
+        verifier.verify_deployment(&fixture.proof, NOW + 100),
+        Err(ProtocolEvidenceError::Stale)
+    );
+    let wrong_batch = wrong_batch_id_fixture(70, 1_700_000_070);
+    assert_eq!(
+        verifier.verify_deployment(&wrong_batch.proof, NOW),
+        Err(ProtocolEvidenceError::BatchIdentifier)
+    );
+    let wrong_abi = wrong_abi_fixture(70, 1_700_000_070);
+    assert_eq!(
+        verifier.verify_deployment(&wrong_abi.proof, NOW),
+        Err(ProtocolEvidenceError::CanonicalActivity)
+    );
+    let impossible_module = deploy_fixture(
         b"not-wasm",
         UpgradePolicy::Immutable,
         70,
+        1_700_000_070,
     );
-    let mut malformed_registry = Registry::new();
-    malformed_registry
-        .replay_journal(&[malformed.clone()])
-        .unwrap_or_else(|error| panic!("malformed projection: {error}"));
-    let malformed_authority = JournalReadAuthority::new(
-        CanonicalJournal::new(
-            &[malformed],
-            ObservedHead {
-                sequence: 77,
-                observed_at: 1_700_000_100,
-            },
-        ),
-        1_700_000_150,
-        100,
-    )
-    .unwrap_or_else(|error| panic!("malformed authority: {error}"));
-    let malformed_evidence = malformed_registry
-        .resolve_deployment(program, 1, &malformed_authority)
-        .unwrap_or_else(|error| panic!("malformed evidence resolution: {error}"));
-
-    let unsupported = record_with_abi(
-        program,
-        1,
-        None,
-        WASM_V1,
-        UpgradePolicy::Immutable,
+    assert_eq!(
+        verifier.verify_deployment(&impossible_module.proof, NOW),
+        Err(ProtocolEvidenceError::CanonicalActivity)
+    );
+    let foreign_network = ProtocolDeploymentVerifier::new(
+        2,
+        43,
+        2,
+        fixture.sequencer_id,
+        fixture.sequencer_public_key,
         70,
-        3,
-    );
-    let mut unsupported_registry = Registry::new();
-    unsupported_registry
-        .replay_journal(&[unsupported.clone()])
-        .unwrap_or_else(|error| panic!("unsupported ABI projection: {error}"));
-    let unsupported_authority = JournalReadAuthority::new(
-        CanonicalJournal::new(
-            &[unsupported],
-            ObservedHead {
-                sequence: 77,
-                observed_at: 1_700_000_100,
-            },
-        ),
-        1_700_000_150,
+        100,
+        None,
         100,
     )
-    .unwrap_or_else(|error| panic!("unsupported ABI authority: {error}"));
-    let unsupported_evidence = unsupported_registry
-        .resolve_deployment(program, 1, &unsupported_authority)
-        .unwrap_or_else(|error| panic!("unsupported ABI evidence: {error}"));
+    .unwrap_or_else(|error| panic!("foreign network verifier: {error}"));
+    assert_eq!(
+        foreign_network.verify_deployment(&fixture.proof, NOW),
+        Err(ProtocolEvidenceError::ProtocolDomain)
+    );
+    for (protocol, epoch) in [(1, 2), (2, 3)] {
+        let foreign_domain = ProtocolDeploymentVerifier::new(
+            protocol,
+            42,
+            epoch,
+            fixture.sequencer_id,
+            fixture.sequencer_public_key,
+            70,
+            100,
+            None,
+            100,
+        )
+        .unwrap_or_else(|error| panic!("foreign protocol domain verifier: {error}"));
+        assert_eq!(
+            foreign_domain.verify_deployment(&fixture.proof, NOW),
+            Err(ProtocolEvidenceError::ProtocolDomain)
+        );
+    }
+    let revoked = ProtocolDeploymentVerifier::new(
+        2,
+        42,
+        2,
+        fixture.sequencer_id,
+        fixture.sequencer_public_key,
+        70,
+        100,
+        Some(71),
+        100,
+    )
+    .unwrap_or_else(|error| panic!("revoked verifier: {error}"));
+    assert_eq!(
+        revoked.verify_deployment(&fixture.proof, NOW),
+        Ok(verifier
+            .verify_deployment(&fixture.proof, NOW)
+            .unwrap_or_else(|error| panic!("pre-revocation evidence: {error}")))
+    );
+    let revoked_fixture = deploy_fixture(
+        PROTOCOL_WASM_V1,
+        UpgradePolicy::Immutable,
+        71,
+        1_700_000_071,
+    );
+    assert_eq!(
+        revoked.verify_deployment(&revoked_fixture.proof, NOW),
+        Err(ProtocolEvidenceError::SequencerRevoked)
+    );
+}
 
+#[test]
+fn mismatched_receipt_invalid_module_stale_head_and_deprecation_are_fail_closed() {
+    let fixture = deploy_fixture(
+        INVALID_WASM,
+        UpgradePolicy::Authority(AUTHORITY),
+        70,
+        1_700_000_070,
+    );
+    let other = deploy_fixture(
+        PROTOCOL_WASM_V1,
+        UpgradePolicy::Authority(AUTHORITY),
+        71,
+        1_700_000_071,
+    );
+    let verifier = ProtocolDeploymentVerifier::new(
+        2,
+        42,
+        2,
+        fixture.sequencer_id,
+        fixture.sequencer_public_key,
+        70,
+        100,
+        None,
+        1_000,
+    )
+    .unwrap_or_else(|error| panic!("protocol verifier: {error}"));
+    let mut swapped_receipt = fixture.proof.clone();
+    swapped_receipt.state.receipt = other.proof.state.receipt.clone();
+    assert!(matches!(
+        verifier.verify_deployment(&swapped_receipt, NOW),
+        Err(ProtocolEvidenceError::ReceiptInclusion | ProtocolEvidenceError::Receipt)
+    ));
+    let malformed_evidence = verifier
+        .verify_deployment(&fixture.proof, NOW)
+        .unwrap_or_else(|error| panic!("malformed module protocol evidence: {error}"));
     let mut executable = VerifiedProgramCatalog::declared()
         .unwrap_or_else(|error| panic!("verified catalog: {error}"));
     assert!(matches!(
@@ -307,11 +331,59 @@ fn invalid_module_abi_and_receipt_evidence_never_enter_the_verified_resolver() {
         Err(ExecutableAdmissionError::Validation(_))
     ));
     assert!(executable.is_empty());
-    assert_eq!(
-        executable.admit(unsupported_evidence),
-        Err(ExecutableAdmissionError::UnsupportedAbi { declared: 3 })
+
+    let valid = deploy_fixture(
+        PROTOCOL_WASM_V1,
+        UpgradePolicy::Authority(AUTHORITY),
+        72,
+        1_700_000_072,
     );
-    assert!(executable.is_empty());
+    let evidence = verifier
+        .verify_deployment(&valid.proof, NOW)
+        .unwrap_or_else(|error| panic!("valid deployment: {error}"));
+    let active = verifier
+        .verify_current_program(&valid.proof.state, fixture_program(), NOW)
+        .unwrap_or_else(|error| panic!("active head: {error}"));
+    let binding = ActivityBudgetBinding::new([0xa2; 32])
+        .unwrap_or_else(|error| panic!("activity binding: {error}"));
+    let mut stale_catalog = VerifiedProgramCatalog::declared()
+        .unwrap_or_else(|error| panic!("stale catalog: {error}"));
+    stale_catalog
+        .admit(evidence.clone())
+        .unwrap_or_else(|error| panic!("catalog admission: {error}"));
+    assert!(matches!(
+        stale_catalog.authorize_activity(
+            vec![active.clone()],
+            binding,
+            active.valid_until_ms() + 1,
+            CompositionRules::declared(),
+        ),
+        Err(ExecutableAdmissionError::EvidenceExpired { .. })
+    ));
+
+    let deprecated = verifier
+        .verify_current_program(
+            &deprecated_state(&valid, 1_700_000_073),
+            fixture_program(),
+            NOW,
+        )
+        .unwrap_or_else(|error| panic!("deprecated head: {error}"));
+    let mut deprecated_catalog = VerifiedProgramCatalog::declared()
+        .unwrap_or_else(|error| panic!("deprecated catalog: {error}"));
+    deprecated_catalog
+        .admit(evidence)
+        .unwrap_or_else(|error| panic!("catalog admission: {error}"));
+    assert!(matches!(
+        deprecated_catalog.authorize_activity(
+            vec![deprecated],
+            binding,
+            NOW,
+            CompositionRules::declared(),
+        ),
+        Err(ExecutableAdmissionError::InactiveLifecycle {
+            lifecycle: ProgramLifecycle::Deprecated,
+        })
+    ));
 }
 
 #[test]

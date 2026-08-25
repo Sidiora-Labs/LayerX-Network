@@ -169,7 +169,7 @@ fn decode_internal(
     }
     field(&mut decoder, 1)?;
     let protocol_version = decoder.u16()?;
-    if protocol_version != 1 {
+    if !matches!(protocol_version, 1 | 2) {
         return Err(WireError::known(
             KnownResult::VersionUnsupported,
             decoder.offset(),

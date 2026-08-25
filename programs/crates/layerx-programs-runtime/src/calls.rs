@@ -425,6 +425,16 @@ impl CallGraph {
 /// Deployed-code boundary consulted to enter a callee. It hands out validated
 /// modules only; it carries no authority of its own.
 pub trait ProgramResolver: fmt::Debug {
+    /// Claims this resolver for one authenticated activity. Raw qualification
+    /// catalogs accept any request; evidence-backed resolvers override this to
+    /// enforce their exact activity binding and affine use.
+    fn authorize_activity(
+        &self,
+        _binding: Option<crate::ActivityBudgetBinding>,
+    ) -> Result<(), CompositionRefusal> {
+        Ok(())
+    }
+
     /// Returns the validated module deployed under a program identifier.
     fn program_module(&self, program: ProgramId) -> Option<&ValidatedModule>;
 }
@@ -523,10 +533,12 @@ impl CompositionContext {
         self.rules
     }
 
-    /// Returns a handle to the deployed-code boundary.
-    #[must_use]
-    pub fn resolver(&self) -> Rc<dyn ProgramResolver> {
-        Rc::clone(&self.resolver)
+    pub(crate) fn claim_resolver(
+        &self,
+        binding: Option<crate::ActivityBudgetBinding>,
+    ) -> Result<Rc<dyn ProgramResolver>, CompositionRefusal> {
+        self.resolver.authorize_activity(binding)?;
+        Ok(Rc::clone(&self.resolver))
     }
 }
 
@@ -543,6 +555,13 @@ impl Default for CompositionContext {
 pub enum CompositionRefusal {
     /// The execution carries no authorization context or no composition state.
     NotComposable,
+    /// A production deployment snapshot was used outside its authenticated
+    /// activity or more than once.
+    ActivityEvidenceRequired,
+    /// The admitted activity differs from the deployment snapshot binding.
+    ActivityEvidenceMismatch,
+    /// The affine deployment snapshot was already consumed by an activity.
+    ActivityEvidenceReused,
     /// A call graph attempted to cross ABI revisions.
     WrongVersion {
         expected: AbiRevision,
@@ -631,6 +650,15 @@ impl Display for CompositionRefusal {
         match self {
             Self::NotComposable => {
                 formatter.write_str("execution carries no composition authority")
+            }
+            Self::ActivityEvidenceRequired => {
+                formatter.write_str("execution lacks current deployment evidence")
+            }
+            Self::ActivityEvidenceMismatch => {
+                formatter.write_str("deployment evidence belongs to a different activity")
+            }
+            Self::ActivityEvidenceReused => {
+                formatter.write_str("deployment evidence was already consumed")
             }
             Self::WrongVersion { expected, actual } => write!(
                 formatter,

@@ -10,7 +10,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use layerx_agentd::read::{
     LayerxdProgramBalanceReader, ProgramBalanceRead, ProgramBalanceReadRoute,
 };
-use layerx_programs::{hex, DeploymentRecord, ProgramId, ProgramLifecycle, Registry};
+use layerx_programs::{
+    hex, DeploymentProof, DeploymentRecord, ProgramId, ProgramLifecycle,
+    ProtocolDeploymentVerifier, Registry,
+};
 
 const HEADER_LIMIT: usize = 16 * 1024;
 
@@ -22,10 +25,14 @@ struct Config {
     authority_endpoint: String,
     authority_bearer: String,
     authority_replica_id: [u8; 32],
+    protocol_version: u16,
+    network_id: u32,
+    epoch: u64,
     sequencer_id: [u8; 32],
     sequencer_public_key: [u8; 32],
     first_batch: u64,
     last_batch: u64,
+    revoked_from_batch: Option<u64>,
     staleness_ms: u64,
     deployment_journal: String,
     probe_program: ProgramId,
@@ -42,6 +49,15 @@ fn parse_u64(name: &str) -> Result<u64, String> {
     required(name)?
         .parse()
         .map_err(|_| format!("{name} must be an unsigned integer"))
+}
+
+fn parse_optional_u64(name: &str) -> Result<Option<u64>, String> {
+    env::var(name).map_or(Ok(None), |value| {
+        value
+            .parse()
+            .map(Some)
+            .map_err(|_| format!("{name} must be an unsigned integer"))
+    })
 }
 
 fn parse_digest(name: &str) -> Result<[u8; 32], String> {
@@ -66,8 +82,21 @@ fn config() -> Result<Config, String> {
     }
     let first_batch = parse_u64("LAYERX_AGENT_SEQUENCER_FIRST_BATCH")?;
     let last_batch = parse_u64("LAYERX_AGENT_SEQUENCER_LAST_BATCH")?;
+    let protocol_version = u16::try_from(parse_u64("LAYERX_AGENT_PROTOCOL_VERSION")?)
+        .map_err(|_| "LAYERX_AGENT_PROTOCOL_VERSION is out of range".to_owned())?;
+    let network_id = u32::try_from(parse_u64("LAYERX_AGENT_NETWORK_ID")?)
+        .map_err(|_| "LAYERX_AGENT_NETWORK_ID is out of range".to_owned())?;
+    let epoch = parse_u64("LAYERX_AGENT_EPOCH")?;
+    let revoked_from_batch = parse_optional_u64("LAYERX_AGENT_SEQUENCER_REVOKED_FROM_BATCH")?;
     let staleness_ms = parse_u64("LAYERX_AGENT_PROGRAM_MAX_STALENESS_MS")?;
-    if first_batch == 0 || last_batch < first_batch || staleness_ms == 0 {
+    if !matches!(protocol_version, 1 | 2)
+        || network_id == 0
+        || epoch == 0
+        || first_batch == 0
+        || last_batch < first_batch
+        || revoked_from_batch.is_some_and(|batch| batch == 0 || batch <= first_batch)
+        || staleness_ms == 0
+    {
         return Err("agent authority range and staleness bound are non-canonical".to_owned());
     }
     Ok(Config {
@@ -78,10 +107,14 @@ fn config() -> Result<Config, String> {
         authority_endpoint: required("LAYERX_AGENT_AUTHORITY_ENDPOINT")?,
         authority_bearer,
         authority_replica_id: parse_digest("LAYERX_AGENT_AUTHORITY_REPLICA_ID")?,
+        protocol_version,
+        network_id,
+        epoch,
         sequencer_id: parse_digest("LAYERX_AGENT_SEQUENCER_ID")?,
         sequencer_public_key: parse_digest("LAYERX_AGENT_SEQUENCER_PUBLIC_KEY")?,
         first_batch,
         last_batch,
+        revoked_from_batch,
         staleness_ms,
         deployment_journal: required("LAYERX_AGENT_DEPLOYMENT_JOURNAL")?,
         probe_program: ProgramId::new(parse_digest("LAYERX_AGENT_PROGRAM_PROBE_ID")?)
@@ -89,39 +122,49 @@ fn config() -> Result<Config, String> {
     })
 }
 
-fn load_registry(root: &Path) -> Result<Registry, String> {
+fn load_registry(
+    root: &Path,
+    verifier: &ProtocolDeploymentVerifier,
+) -> Result<Registry, String> {
     let mut paths = fs::read_dir(root)
         .map_err(|error| format!("deployment journal is unavailable: {error}"))?
         .map(|entry| entry.map(|value| value.path()))
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| format!("deployment journal is unreadable: {error}"))?;
-    paths.retain(|path| path.extension().is_some_and(|value| value == "deployment"));
+    paths.retain(|path| path.extension().is_some_and(|value| value == "admission"));
     paths.sort();
-    let mut records = Vec::with_capacity(paths.len());
+    let mut registry = Registry::new();
     for path in paths {
         let bytes = fs::read(&path)
             .map_err(|error| format!("{} is unreadable: {error}", path.display()))?;
-        let record = DeploymentRecord::decode(&bytes)
+        let proof = DeploymentProof::decode(&bytes)
             .map_err(|error| format!("{} is corrupt: {error}", path.display()))?;
+        let evidence = verifier
+            .verify_historical_deployment(&proof)
+            .map_err(|error| format!("{} is unverified: {error}", path.display()))?;
+        let expected = hex::encode(&evidence.receipt_digest());
+        if path.file_stem().and_then(|value| value.to_str()) != Some(expected.as_str()) {
+            return Err(format!("{} is filed under the wrong receipt", path.display()));
+        }
+        let record_path = root.join(format!("{expected}.deployment"));
+        let record = DeploymentRecord::decode(
+            &fs::read(&record_path)
+                .map_err(|error| format!("{} is unreadable: {error}", record_path.display()))?,
+        )
+        .map_err(|error| format!("{} is corrupt: {error}", record_path.display()))?;
         record
             .validate()
-            .map_err(|error| format!("{} is inadmissible: {error}", path.display()))?;
-        let expected = hex::encode(&record.digest());
-        if path.file_stem().and_then(|value| value.to_str()) != Some(expected.as_str()) {
-            return Err(format!(
-                "{} is filed under the wrong digest",
-                path.display()
-            ));
+            .map_err(|error| format!("{} is inadmissible: {error}", record_path.display()))?;
+        if &record != evidence.record() {
+            return Err(format!("{} disagrees with protocol evidence", record_path.display()));
         }
-        records.push(record);
+        registry
+            .record_verified_deployment(&evidence)
+            .map_err(|error| format!("verified deployment replay failed: {error}"))?;
     }
-    if records.is_empty() {
-        return Err("deployment journal contains no canonical records".to_owned());
+    if registry.program_ids().is_empty() {
+        return Err("deployment journal contains no verified admissions".to_owned());
     }
-    let mut registry = Registry::new();
-    registry
-        .replay_journal(&records)
-        .map_err(|error| format!("deployment journal replay failed: {error}"))?;
     Ok(registry)
 }
 
@@ -246,17 +289,33 @@ fn serve_connection(
 }
 
 fn serve(config: Config) -> Result<(), String> {
-    let registry = load_registry(Path::new(&config.deployment_journal))?;
+    let verifier = ProtocolDeploymentVerifier::new(
+        config.protocol_version,
+        config.network_id,
+        config.epoch,
+        config.sequencer_id,
+        config.sequencer_public_key,
+        config.first_batch,
+        config.last_batch,
+        config.revoked_from_batch,
+        config.staleness_ms,
+    )
+    .map_err(|error| format!("agent deployment verifier is invalid: {error}"))?;
+    let registry = load_registry(Path::new(&config.deployment_journal), &verifier)?;
     let reader = LayerxdProgramBalanceReader::connect(
         &config.node_endpoint,
         config.node_bearer,
         &config.authority_endpoint,
         config.authority_bearer,
         config.authority_replica_id,
+        config.protocol_version,
+        config.network_id,
+        config.epoch,
         config.sequencer_id,
         config.sequencer_public_key,
         config.first_batch,
         config.last_batch,
+        config.revoked_from_batch,
         registry,
         config.staleness_ms,
     )
