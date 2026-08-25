@@ -59,6 +59,9 @@ int main(void)
     lxp_byte_span encoded;
     lxp_byte_span foreign_encoded;
     lxp_paxeer_bond_state bonds;
+    lxp_paxeer_membership_sync_availability membership_sync;
+    lxp_guarantor_bond_state governed_bond;
+    lxp_guarantor_bond_state governed_other;
     lxp_guarantor_bond_state view;
     bool eligible = false;
     if (lxp_arena_init(&arena, arena_storage, sizeof(arena_storage)) != LXP_OK ||
@@ -66,7 +69,12 @@ int main(void)
         key_pair(8U, other_private_key, other_key) != 0 ||
         key_pair(9U, rotated_private_key, rotated_key) != 0 ||
         lxp_paxeer_bond_init(&bonds, 1U, 42U, 31337U, paxeer_contract,
-                             (lxp_u128){0U, 10000U}, 100U) != LXP_OK)
+                             (lxp_u128){0U, 10000U}, 100U) != LXP_OK ||
+        lxp_paxeer_membership_sync_status(&bonds, &membership_sync) !=
+            LXP_OK ||
+        membership_sync != LXP_PAXEER_MEMBERSHIP_SYNC_UNAVAILABLE ||
+        lxp_paxeer_bond_deposit(&bonds, other_id, (lxp_u128){0U, 99U}) !=
+            LXP_ERR_AUTH_SCOPE)
         return 1;
     (void)memset(&guarantor, 0, sizeof(guarantor));
     guarantor.guarantor_id[0] = 7U;
@@ -87,6 +95,16 @@ int main(void)
     first_checkpoint.header.resulting_state_root[0] = 1U;
     second_checkpoint = first_checkpoint;
     second_checkpoint.header.resulting_state_root[0] = 2U;
+    (void)memset(&governed_bond, 0, sizeof(governed_bond));
+    (void)memcpy(governed_bond.guarantor_id, guarantor.guarantor_id, 32U);
+    (void)memcpy(governed_bond.public_key, public_key, 33U);
+    governed_bond.joined_epoch = 1U;
+    governed_bond.active = true;
+    (void)memset(&governed_other, 0, sizeof(governed_other));
+    (void)memcpy(governed_other.guarantor_id, other_id, 32U);
+    (void)memcpy(governed_other.public_key, other_key, 33U);
+    governed_other.joined_epoch = 1U;
+    governed_other.active = true;
     if (lxp_guarantor_attest(&guarantor, &first_checkpoint, true, true, 100U,
                              &arena, &first) != LXP_OK ||
         lxp_guarantor_attest(&guarantor, &second_checkpoint, true, true, 101U,
@@ -94,12 +112,18 @@ int main(void)
         lxp_equivocation_detect(LXP_EQUIVOCATION_GUARANTOR, &first, &second,
                                 public_key, 33U, &evidence) != LXP_OK ||
         lxp_equivocation_encode(&evidence, &arena, &encoded) != LXP_OK ||
-        lxp_paxeer_bond_deposit(&bonds, guarantor.guarantor_id, public_key,
-                                (lxp_u128){0U, 100U}, 1U) != LXP_OK ||
-        lxp_paxeer_bond_deposit(&bonds, other_id, other_key,
-                                (lxp_u128){0U, 99U}, 1U) != LXP_OK ||
-        lxp_paxeer_rotate_guarantor_signer(
-            &bonds, guarantor.guarantor_id, rotated_key, 5U) != LXP_OK ||
+        lxp_guarantor_set_apply(&bonds.guarantors, 1U, true,
+                                &governed_bond) != LXP_OK ||
+        lxp_guarantor_set_apply(&bonds.guarantors, 2U, true,
+                                &governed_other) != LXP_OK ||
+        lxp_paxeer_bond_deposit(&bonds, guarantor.guarantor_id,
+                                (lxp_u128){0U, 100U}) != LXP_OK ||
+        lxp_paxeer_bond_deposit(&bonds, other_id,
+                                (lxp_u128){0U, 99U}) != LXP_OK ||
+        bonds.guarantors.version != 2U ||
+        lxp_guarantor_set_rotate_signer(
+            &bonds.guarantors, 3U, true, guarantor.guarantor_id,
+            rotated_key, 5U) != LXP_OK ||
         lxp_paxeer_bond_state_read(&bonds, other_id, &view, &eligible) !=
             LXP_OK || eligible)
         return 1;
@@ -137,8 +161,14 @@ int main(void)
                                    &view, &eligible) != LXP_OK ||
         eligible || view.active || !view.jailed ||
         !lxp_u128_is_zero(view.bond_amount) || view.removed_epoch != 0U ||
-        view.ejected_at_version == 0U ||
-        lxp_paxeer_jail_guarantor(&bonds, other_id, 5U) != LXP_OK ||
+        view.ejected_at_version == 0U)
+        return 1;
+    governed_other = bonds.guarantors.records[1];
+    governed_other.active = false;
+    governed_other.jailed = true;
+    governed_other.removed_epoch = 5U;
+    if (lxp_guarantor_set_apply(&bonds.guarantors, 4U, true,
+                                &governed_other) != LXP_OK ||
         lxp_paxeer_bond_state_read(&bonds, other_id, &view, &eligible) !=
             LXP_OK || eligible || !view.jailed)
         return 1;

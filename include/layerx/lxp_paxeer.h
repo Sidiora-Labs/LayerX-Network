@@ -81,6 +81,10 @@ typedef struct lxp_paxeer_bond_state {
 } lxp_paxeer_bond_state;
 #define lxp_paxeer_bond_state lxp_paxeer_bond_state
 
+typedef enum lxp_paxeer_membership_sync_availability {
+    LXP_PAXEER_MEMBERSHIP_SYNC_UNAVAILABLE = 1
+} lxp_paxeer_membership_sync_availability;
+
 lxp_result lxp_paxeer_custody_abi_init(lxp_paxeer_custody_abi *abi);
 lxp_result lxp_paxeer_guarantor_attestation_from_core(
     const lxp_guarantor_attestation *source,
@@ -104,18 +108,15 @@ lxp_result lxp_paxeer_bond_init(lxp_paxeer_bond_state *state,
                                  const uint8_t paxeer_contract[20],
                                  lxp_u128 custodied_value,
                                  uint32_t minimum_bond_bps);
+lxp_result lxp_paxeer_membership_sync_status(
+    const lxp_paxeer_bond_state *state,
+    lxp_paxeer_membership_sync_availability *availability);
 lxp_result lxp_paxeer_bond_deposit(
     lxp_paxeer_bond_state *state, const uint8_t guarantor_id[32],
-    const uint8_t public_key[33], lxp_u128 amount, uint64_t joined_epoch);
+    lxp_u128 amount);
 lxp_result lxp_paxeer_bond_state_read(
     const lxp_paxeer_bond_state *state, const uint8_t guarantor_id[32],
     lxp_guarantor_bond_state *bond, bool *threshold_eligible);
-lxp_result lxp_paxeer_rotate_guarantor_signer(
-    lxp_paxeer_bond_state *state, const uint8_t guarantor_id[32],
-    const uint8_t public_key[33], uint64_t activation_epoch);
-lxp_result lxp_paxeer_jail_guarantor(
-    lxp_paxeer_bond_state *state, const uint8_t guarantor_id[32],
-    uint64_t removed_epoch);
 lxp_result lxp_paxeer_slash_submit(
     lxp_paxeer_bond_state *state, const uint8_t *evidence_bytes,
     size_t evidence_length, const lxp_equivocation_evidence *evidence,
