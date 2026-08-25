@@ -11,6 +11,7 @@ _MERKLE_INTERNAL_DOMAIN = b"LXP/v1/merkle-internal\0"
 _BATCH_HEADER_DOMAIN = b"LXP/v1/batch-header\0"
 _RECEIPT_DOMAIN = b"LXP/v1/receipt\0"
 _CHECKPOINT_DOMAIN = b"LXP/v1/checkpoint-certificate\0"
+_GUARANTOR_ATTESTATION_DOMAIN = b"LXP/v1/guarantor-attestation\0"
 _BATCH_HEADER_BYTES = 354
 _MAX_MESSAGE_BYTES = 1_048_576
 _MAX_EFFECTS = 512
@@ -348,6 +349,11 @@ def verify_batch_inclusion(
 
 @dataclass(frozen=True)
 class CheckpointAttestation:
+    protocol_version: int
+    network_id: int
+    paxeer_chain_id: int
+    settlement_contract: bytes
+    epoch: int
     checkpoint_id: bytes
     checkpoint_hash: bytes
     guarantor_id: bytes
@@ -400,6 +406,12 @@ def _u32(value: int) -> bytes:
     return value.to_bytes(4, "big", signed=False)
 
 
+def _u16(value: int) -> bytes:
+    if value < 0 or value > 0xFFFF:
+        _failure()
+    return value.to_bytes(2, "big", signed=False)
+
+
 def _u64(value: int) -> bytes:
     if value < 0 or value > 0xFFFF_FFFF_FFFF_FFFF:
         _failure()
@@ -408,6 +420,11 @@ def _u64(value: int) -> bytes:
 
 def _attestation_message(attestation: CheckpointAttestation) -> bytes:
     return b"".join((
+        _u16(attestation.protocol_version),
+        _u32(attestation.network_id),
+        _u64(attestation.paxeer_chain_id),
+        _exact(attestation.settlement_contract, 20),
+        _u64(attestation.epoch),
         _exact(attestation.checkpoint_id, 32),
         _exact(attestation.checkpoint_hash, 32),
         _exact(attestation.guarantor_id, 32),
@@ -441,11 +458,20 @@ def verify_checkpoint(
     if certificate.threshold <= 0:
         _failure()
     seen: set[bytes] = set()
+    paxeer_chain_id: int | None = None
+    settlement_contract: bytes | None = None
     achieved = 0
     for attestation in certificate.attestations:
         guarantor_id = _exact(attestation.guarantor_id, 32)
         if (
             guarantor_id in seen
+            or attestation.protocol_version != header.protocol_version
+            or attestation.network_id != header.network_id
+            or attestation.epoch != header.epoch
+            or attestation.paxeer_chain_id == 0
+            or not any(_exact(attestation.settlement_contract, 20))
+            or (paxeer_chain_id is not None and attestation.paxeer_chain_id != paxeer_chain_id)
+            or (settlement_contract is not None and not _equal(attestation.settlement_contract, settlement_contract))
             or not _equal(attestation.checkpoint_id, checkpoint_id)
             or not _equal(attestation.checkpoint_hash, checkpoint_id)
             or attestation.batch_number != header.batch_number
@@ -456,6 +482,8 @@ def verify_checkpoint(
             or attestation.attested_at_ms <= 0
         ):
             _failure()
+        paxeer_chain_id = attestation.paxeer_chain_id
+        settlement_contract = _exact(attestation.settlement_contract, 20)
         seen.add(guarantor_id)
         member = next(
             (
@@ -467,7 +495,7 @@ def verify_checkpoint(
         )
         if member is None:
             _failure()
-        digest = _digest(_CHECKPOINT_DOMAIN, _attestation_message(attestation))
+        digest = _digest(_GUARANTOR_ATTESTATION_DOMAIN, _attestation_message(attestation))
         if not signatures.verify_secp256k1(
             _exact(member.public_key, 33),
             _exact(attestation.signature, 64),

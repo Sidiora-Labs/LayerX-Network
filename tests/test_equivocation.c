@@ -53,18 +53,23 @@ int main(void)
     lxp_arena arena_two;
     lxp_checkpoint_certificate first_checkpoint;
     lxp_checkpoint_certificate second_checkpoint;
+    lxp_checkpoint_certificate foreign_checkpoint;
     lxp_guarantor_ctx guarantor;
+    lxp_guarantor_ctx foreign_guarantor;
     lxp_guarantor_attestation first;
     lxp_guarantor_attestation second;
+    lxp_guarantor_attestation foreign;
     lxp_equivocation_evidence evidence;
     lxp_equivocation_evidence second_node;
     lxp_byte_span first_encoding;
     lxp_byte_span second_encoding;
     lxp_guarantor_set set;
+    lxp_guarantor_set unauthorized_set;
     lxp_guarantor_bond_state bond;
     lxp_sequencer_authorization authorization;
     lxp_sealed_header_record first_header;
     lxp_sealed_header_record second_header;
+    lxp_sealed_header_record foreign_header;
     lxp_equivocation_evidence sequencer_evidence;
     if (lxp_arena_init(&arena_one, arena_one_storage,
                        sizeof(arena_one_storage)) != LXP_OK ||
@@ -84,6 +89,10 @@ int main(void)
     guarantor.ready_to_sign = true;
     guarantor.possesses_availability = true;
     guarantor.bond_view.bonded = true;
+    guarantor.protocol_version = 1U;
+    guarantor.network_id = 9U;
+    guarantor.paxeer_chain_id = 31337U;
+    guarantor.paxeer_settlement_contract[0] = 0xa1U;
     if (secp_key(7U, guarantor.paxeer_private_key,
                  guarantor.paxeer_public_key) != 0 ||
         lxp_guarantor_attest(&guarantor, &first_checkpoint, true, true, 100U,
@@ -96,6 +105,52 @@ int main(void)
         lxp_equivocation_verify(&evidence, &arena_one) != LXP_OK ||
         lxp_equivocation_encode(&evidence, &arena_one,
                                 &first_encoding) != LXP_OK)
+        return 1;
+    foreign_checkpoint = second_checkpoint;
+    foreign_checkpoint.header.network_id = 10U;
+    if (lxp_guarantor_attest(&guarantor, &foreign_checkpoint, true, true,
+                             102U, &arena_one, &foreign) !=
+            LXP_ERR_ATTESTATION_THRESHOLD)
+        return 1;
+    foreign_guarantor = guarantor;
+    foreign_guarantor.network_id = 10U;
+    if (lxp_guarantor_attest(&foreign_guarantor, &foreign_checkpoint,
+                             true, true, 102U, &arena_one, &foreign) != LXP_OK ||
+        lxp_equivocation_detect(LXP_EQUIVOCATION_GUARANTOR, &first, &foreign,
+                                guarantor.paxeer_public_key, 33U,
+                                &second_node) != LXP_ERR_NON_CANONICAL)
+        return 1;
+    foreign_checkpoint = second_checkpoint;
+    foreign_checkpoint.header.batch_number = 13U;
+    if (lxp_guarantor_attest(&guarantor, &foreign_checkpoint, true, true,
+                             103U, &arena_one, &foreign) != LXP_OK ||
+        lxp_equivocation_detect(LXP_EQUIVOCATION_GUARANTOR, &first, &foreign,
+                                guarantor.paxeer_public_key, 33U,
+                                &second_node) != LXP_ERR_NON_CANONICAL)
+        return 1;
+    foreign_checkpoint = second_checkpoint;
+    foreign_checkpoint.header.epoch = 5U;
+    if (lxp_guarantor_attest(&guarantor, &foreign_checkpoint, true, true,
+                             104U, &arena_one, &foreign) != LXP_OK ||
+        lxp_equivocation_detect(LXP_EQUIVOCATION_GUARANTOR, &first, &foreign,
+                                guarantor.paxeer_public_key, 33U,
+                                &second_node) != LXP_ERR_NON_CANONICAL)
+        return 1;
+    foreign_guarantor = guarantor;
+    foreign_guarantor.paxeer_chain_id = 31338U;
+    if (lxp_guarantor_attest(&foreign_guarantor, &second_checkpoint,
+                             true, true, 105U, &arena_one, &foreign) != LXP_OK ||
+        lxp_equivocation_detect(LXP_EQUIVOCATION_GUARANTOR, &first, &foreign,
+                                guarantor.paxeer_public_key, 33U,
+                                &second_node) != LXP_ERR_NON_CANONICAL)
+        return 1;
+    foreign_guarantor = guarantor;
+    foreign_guarantor.paxeer_settlement_contract[0] = 0xb2U;
+    if (lxp_guarantor_attest(&foreign_guarantor, &second_checkpoint,
+                             true, true, 106U, &arena_one, &foreign) != LXP_OK ||
+        lxp_equivocation_detect(LXP_EQUIVOCATION_GUARANTOR, &first, &foreign,
+                                guarantor.paxeer_public_key, 33U,
+                                &second_node) != LXP_ERR_NON_CANONICAL)
         return 1;
     second_node = evidence;
     if (lxp_equivocation_verify(&second_node, &arena_two) != LXP_OK ||
@@ -115,11 +170,16 @@ int main(void)
     bond.bond_amount = (lxp_u128){0U, 100U};
     bond.joined_epoch = 1U;
     bond.active = true;
-    if (lxp_guarantor_set_apply(&set, 1U, true, &bond) != LXP_OK ||
-        lxp_slashing_submit(&evidence, &set, 4U, &arena_one) != LXP_OK ||
+    if (lxp_guarantor_set_apply(&set, 1U, true, &bond) != LXP_OK)
+        return 1;
+    unauthorized_set = set;
+    unauthorized_set.records[0].joined_epoch = 5U;
+    if (lxp_slashing_submit(&evidence, &unauthorized_set,
+                            &arena_one) != LXP_ERR_AUTH_SCOPE ||
+        lxp_slashing_submit(&evidence, &set, &arena_one) != LXP_OK ||
         set.records[0].active || !set.records[0].jailed ||
         !lxp_u128_is_zero(set.records[0].bond_amount) ||
-        set.records[0].removed_epoch != 4U)
+        set.records[0].removed_epoch != 0U || set.version != 2U)
         return 1;
 
     (void)memset(&authorization, 0, sizeof(authorization));
@@ -132,10 +192,13 @@ int main(void)
     (void)memset(&first_header, 0, sizeof(first_header));
     first_header.header.protocol_version = 1U;
     first_header.header.network_id = 9U;
+    first_header.header.epoch = 3U;
     first_header.header.batch_number = 15U;
     (void)memcpy(first_header.header.sequencer_id, sequencer_public, 32U);
     second_header.header = first_header.header;
     second_header.header.resulting_state_root[0] = 8U;
+    foreign_header.header = second_header.header;
+    foreign_header.header.network_id = 10U;
     if (lxp_batch_header_hash(&first_header.header, &arena_one,
                               first_header.header_hash) != LXP_OK ||
         lxp_batch_header_hash(&second_header.header, &arena_one,
@@ -144,6 +207,14 @@ int main(void)
                        first_header.signature, &arena_one) != LXP_OK ||
         lxp_batch_sign(&second_header.header, sequencer_private, &authorization,
                        second_header.signature, &arena_one) != LXP_OK ||
+        lxp_batch_header_hash(&foreign_header.header, &arena_one,
+                              foreign_header.header_hash) != LXP_OK ||
+        lxp_batch_sign(&foreign_header.header, sequencer_private,
+                       &authorization, foreign_header.signature,
+                       &arena_one) != LXP_OK ||
+        lxp_equivocation_detect(LXP_EQUIVOCATION_SEQUENCER, &first_header,
+                                &foreign_header, sequencer_public, 32U,
+                                &sequencer_evidence) != LXP_ERR_NON_CANONICAL ||
         lxp_equivocation_detect(LXP_EQUIVOCATION_SEQUENCER, &first_header,
                                 &second_header, sequencer_public, 32U,
                                 &sequencer_evidence) != LXP_OK ||

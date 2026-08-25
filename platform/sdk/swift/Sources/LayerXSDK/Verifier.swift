@@ -6,6 +6,7 @@ private let merkleInternalDomain = Data("LXP/v1/merkle-internal\0".utf8)
 private let batchHeaderDomain = Data("LXP/v1/batch-header\0".utf8)
 private let receiptDomain = Data("LXP/v1/receipt\0".utf8)
 private let checkpointDomain = Data("LXP/v1/checkpoint-certificate\0".utf8)
+private let guarantorAttestationDomain = Data("LXP/v1/guarantor-attestation\0".utf8)
 private let maximumMessageBytes = 1_048_576
 private let maximumEffects: UInt32 = 512
 private let maximumEffectBody: UInt32 = 256
@@ -92,6 +93,11 @@ public struct InclusionVerification: Sendable {
 }
 
 public struct CheckpointAttestation: Sendable {
+    public let protocolVersion: UInt16
+    public let networkID: UInt32
+    public let paxeerChainID: UInt64
+    public let settlementContract: Data
+    public let epoch: UInt64
     public let checkpointID: Data
     public let checkpointHash: Data
     public let guarantorID: Data
@@ -103,7 +109,9 @@ public struct CheckpointAttestation: Sendable {
     public let attestedAtMilliseconds: UInt64
     public let signature: Data
 
-    public init(checkpointID: Data, checkpointHash: Data, guarantorID: Data, batchNumber: UInt64, dataAvailabilityRoot: Data, replayed: Bool, dataPossessed: Bool, availabilityClassMask: UInt8, attestedAtMilliseconds: UInt64, signature: Data) {
+    public init(protocolVersion: UInt16, networkID: UInt32, paxeerChainID: UInt64, settlementContract: Data, epoch: UInt64, checkpointID: Data, checkpointHash: Data, guarantorID: Data, batchNumber: UInt64, dataAvailabilityRoot: Data, replayed: Bool, dataPossessed: Bool, availabilityClassMask: UInt8, attestedAtMilliseconds: UInt64, signature: Data) {
+        self.protocolVersion = protocolVersion; self.networkID = networkID
+        self.paxeerChainID = paxeerChainID; self.settlementContract = settlementContract; self.epoch = epoch
         self.checkpointID = checkpointID; self.checkpointHash = checkpointHash; self.guarantorID = guarantorID
         self.batchNumber = batchNumber; self.dataAvailabilityRoot = dataAvailabilityRoot
         self.replayed = replayed; self.dataPossessed = dataPossessed
@@ -300,9 +308,18 @@ public enum LocalVerifier {
         }
         var seen: Set<Data> = []
         var achieved: UInt32 = 0
+        var paxeerChainID: UInt64?
+        var settlementContract: Data?
         for attestation in certificate.attestations {
             let guarantorID = try exact(attestation.guarantorID, 32)
+            let attestationSettlementContract = try exact(attestation.settlementContract, 20)
             guard seen.insert(guarantorID).inserted,
+                  attestation.protocolVersion == header.protocolVersion,
+                  attestation.networkID == header.networkID,
+                  attestation.epoch == header.epoch,
+                  attestation.paxeerChainID > 0,
+                  !allZero(attestationSettlementContract),
+                  paxeerChainID == nil || (attestation.paxeerChainID == paxeerChainID && attestationSettlementContract == settlementContract),
                   try exact(attestation.checkpointID, 32) == checkpointID,
                   try exact(attestation.checkpointHash, 32) == checkpointID,
                   attestation.batchNumber == header.batchNumber,
@@ -311,12 +328,16 @@ public enum LocalVerifier {
                   attestation.availabilityClassMask == allAvailabilityClasses,
                   attestation.attestedAtMilliseconds > 0,
                   let member = bonded[guarantorID], achieved < UInt32.max else { throw verificationFailure() }
+            paxeerChainID = attestation.paxeerChainID
+            settlementContract = attestationSettlementContract
             let message = try concatenate(
+                encodeUInt16(attestation.protocolVersion), encodeUInt32(attestation.networkID), encodeUInt64(attestation.paxeerChainID),
+                attestationSettlementContract, encodeUInt64(attestation.epoch),
                 exact(attestation.checkpointID, 32), exact(attestation.checkpointHash, 32), guarantorID,
                 encodeUInt64(attestation.batchNumber), exact(attestation.dataAvailabilityRoot, 32),
                 Data([1, 1, attestation.availabilityClassMask]), encodeUInt64(attestation.attestedAtMilliseconds)
             )
-            let attestationDigest = digest(checkpointDomain, message)
+            let attestationDigest = digest(guarantorAttestationDomain, message)
             guard await signatures.verifySecp256k1(
                 publicKey: try exact(member.publicKey, 33),
                 signature: try exact(attestation.signature, 64),
@@ -501,6 +522,10 @@ private func encodeUInt32(_ value: UInt32) -> Data {
         UInt8(truncatingIfNeeded: value >> 24), UInt8(truncatingIfNeeded: value >> 16),
         UInt8(truncatingIfNeeded: value >> 8), UInt8(truncatingIfNeeded: value),
     ])
+}
+
+private func encodeUInt16(_ value: UInt16) -> Data {
+    Data([UInt8(truncatingIfNeeded: value >> 8), UInt8(truncatingIfNeeded: value)])
 }
 
 private func encodeUInt64(_ value: UInt64) -> Data {

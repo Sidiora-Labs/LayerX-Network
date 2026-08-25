@@ -6,6 +6,7 @@ import {Arithmetic} from "./libraries/Arithmetic.sol";
 import {CryptographyPrimitives} from "./libraries/CryptographyPrimitives.sol";
 import {SafeCall} from "./libraries/SafeCall.sol";
 import {Types} from "./libraries/Types.sol";
+import {Constants} from "./libraries/Constants.sol";
 import {IGuarantorEligibility} from "./interfaces/IGuarantorEligibility.sol";
 import {Predeploys} from "./deployment/Predeploys.sol";
 import {LayerXComponent} from "./security/LayerXComponent.sol";
@@ -39,6 +40,8 @@ contract GuarantorBond is IGuarantorEligibility, LayerXComponent {
 
     address public immutable custodyAuthority;
     address public immutable membershipAuthority;
+    uint16 public immutable override protocolVersion;
+    uint32 public immutable override networkId;
     address public override slashingAuthority;
     uint32 public immutable minimumBondBps;
     uint64 public immutable unbondingDelay;
@@ -88,6 +91,8 @@ contract GuarantorBond is IGuarantorEligibility, LayerXComponent {
     constructor(
         address custody,
         address membershipGovernance,
+        uint16 expectedProtocolVersion,
+        uint32 expectedNetworkId,
         uint32 bondBps,
         uint256 initialCustodiedValue,
         uint64 withdrawalDelay,
@@ -96,10 +101,13 @@ contract GuarantorBond is IGuarantorEligibility, LayerXComponent {
     ) LayerXComponent(Predeploys.GUARANTOR_BOND, componentConfigHash, componentRelease) {
         if (
             custody == address(0) || membershipGovernance == address(0) || bondBps == 0 || bondBps > 10_000
-                || withdrawalDelay < 1 days
+                || expectedProtocolVersion == 0 || expectedNetworkId == 0 || withdrawalDelay < 1 days
+                || block.chainid > type(uint64).max
         ) revert InvalidConfiguration();
         custodyAuthority = custody;
         membershipAuthority = membershipGovernance;
+        protocolVersion = expectedProtocolVersion;
+        networkId = expectedNetworkId;
         minimumBondBps = bondBps;
         custodiedValue = initialCustodiedValue;
         unbondingDelay = withdrawalDelay;
@@ -301,16 +309,19 @@ contract GuarantorBond is IGuarantorEligibility, LayerXComponent {
         CanonicalCheckpoint.GuarantorAttestation calldata second
     ) external {
         if (
-            first.guarantorId != second.guarantorId || first.signer != second.signer
+            !_canonicalDomainAttestation(first) || !_canonicalDomainAttestation(second)
+                || first.guarantorId != second.guarantorId || first.signer != second.signer
+                || first.epoch != second.epoch || first.batchNumber != second.batchNumber
                 || first.checkpointHash == second.checkpointHash
-                || (first.batchNumber != second.batchNumber && first.checkpointId != second.checkpointId)
                 || !_validSignature(first) || !_validSignature(second)
         ) {
             revert InvalidEquivocationEvidence();
         }
         BondRecord storage record = records[first.guarantorId];
+        SignerAuthorization storage authorization = signerAuthorization[first.guarantorId][first.signer];
         if (
-            signerAuthorization[first.guarantorId][first.signer].activeFromEpoch == 0
+            authorization.activeFromEpoch == 0 || authorization.activeFromEpoch > first.epoch
+                || (authorization.activeUntilEpoch != 0 && authorization.activeUntilEpoch <= first.epoch)
                 || record.ejectedAtVersion != 0
         ) {
             revert InvalidEquivocationEvidence();
@@ -344,6 +355,20 @@ contract GuarantorBond is IGuarantorEligibility, LayerXComponent {
         return CryptographyPrimitives.recoverOrZero(
             CanonicalCheckpoint.attestationHash(attestation), attestation.r, attestation.s, attestation.v
         ) == attestation.signer;
+    }
+
+    function _canonicalDomainAttestation(CanonicalCheckpoint.GuarantorAttestation calldata attestation)
+        private
+        view
+        returns (bool)
+    {
+        return attestation.protocolVersion == protocolVersion && attestation.networkId == networkId
+            && attestation.paxeerChainId == uint64(block.chainid)
+            && attestation.settlementContract == address(this) && attestation.epoch != 0
+            && attestation.batchNumber != 0 && attestation.checkpointId == attestation.checkpointHash
+            && attestation.replayed && attestation.dataAvailable
+            && attestation.availabilityClassMask == Constants.ALL_AVAILABILITY_CLASSES
+            && attestation.attestedAt != 0;
     }
 
     function _slash(

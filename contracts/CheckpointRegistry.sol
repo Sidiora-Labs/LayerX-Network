@@ -79,6 +79,8 @@ contract CheckpointRegistry is LayerXComponent {
             address(eligibility) == address(0) || expectedProtocolVersion == 0 || expectedNetworkId == 0
                 || certificateThreshold == 0 || attestationLimit < certificateThreshold || attestationLimit > 32
                 || attestationDelay == 0 || futureTimestampDrift == 0 || genesisStateRoot == bytes32(0)
+                || block.chainid > type(uint64).max || eligibility.protocolVersion() != expectedProtocolVersion
+                || eligibility.networkId() != expectedNetworkId
         ) {
             revert InvalidConfiguration();
         }
@@ -123,7 +125,11 @@ contract CheckpointRegistry is LayerXComponent {
         for (uint256 i = 0; i < attestations.length; ++i) {
             CanonicalCheckpoint.GuarantorAttestation calldata attestation = attestations[i];
             if (
-                attestation.guarantorId <= previousGuarantorId || attestation.checkpointId != digest
+                attestation.protocolVersion != header.protocolVersion || attestation.networkId != header.networkId
+                    || attestation.paxeerChainId != uint64(block.chainid)
+                    || attestation.settlementContract != address(guarantorEligibility)
+                    || attestation.epoch != header.epoch || attestation.guarantorId <= previousGuarantorId
+                    || attestation.checkpointId != digest
                     || attestation.checkpointHash != digest || attestation.batchNumber != header.batchNumber
                     || attestation.dataAvailabilityRoot != header.dataAvailabilityRoot || !attestation.replayed
                     || !attestation.dataAvailable
@@ -234,7 +240,11 @@ contract CheckpointRegistry is LayerXComponent {
         for (uint256 i = 0; i < attestations.length; ++i) {
             CanonicalCheckpoint.GuarantorAttestation calldata attestation = attestations[i];
             if (
-                attestation.guarantorId <= previousGuarantorId || attestation.checkpointId != digest
+                attestation.protocolVersion != protocolVersion || attestation.networkId != networkId
+                    || attestation.paxeerChainId != uint64(block.chainid)
+                    || attestation.settlementContract != address(guarantorEligibility)
+                    || attestation.epoch != epoch || attestation.guarantorId <= previousGuarantorId
+                    || attestation.checkpointId != digest
                     || attestation.checkpointHash != digest || attestation.batchNumber != batchNumber
                     || attestation.dataAvailabilityRoot != dataAvailabilityRoot || !attestation.replayed
                     || !attestation.dataAvailable

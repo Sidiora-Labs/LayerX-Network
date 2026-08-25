@@ -7,7 +7,7 @@ import {Constants} from "./Constants.sol";
 library CanonicalCheckpoint {
     error ValidityProofTooLarge(uint256 length);
     bytes internal constant CHECKPOINT_DOMAIN = "LXP/v1/checkpoint-certificate\x00";
-    bytes internal constant ATTESTATION_DOMAIN = "LXP/v1/checkpoint-certificate\x00";
+    bytes internal constant ATTESTATION_DOMAIN = "LXP/v1/guarantor-attestation\x00";
     uint256 internal constant HEADER_LENGTH = 354;
 
     struct HeaderCommitments {
@@ -29,6 +29,11 @@ library CanonicalCheckpoint {
     }
 
     struct GuarantorAttestation {
+        uint16 protocolVersion;
+        uint32 networkId;
+        uint64 paxeerChainId;
+        address settlementContract;
+        uint64 epoch;
         bytes32 checkpointId;
         bytes32 checkpointHash;
         bytes32 guarantorId;
@@ -97,6 +102,11 @@ library CanonicalCheckpoint {
             bytes.concat(
                 ATTESTATION_DOMAIN,
                 abi.encodePacked(
+                    attestation.protocolVersion,
+                    attestation.networkId,
+                    attestation.paxeerChainId,
+                    attestation.settlementContract,
+                    attestation.epoch,
                     attestation.checkpointId,
                     attestation.checkpointHash,
                     attestation.guarantorId,

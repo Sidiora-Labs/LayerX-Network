@@ -2,6 +2,10 @@
 pragma solidity ^0.8.24;
 
 interface IGuarantorEligibility {
+    function protocolVersion() external view returns (uint16);
+
+    function networkId() external view returns (uint32);
+
     function slashingAuthority() external view returns (address);
 
     function membershipVersion() external view returns (uint64);

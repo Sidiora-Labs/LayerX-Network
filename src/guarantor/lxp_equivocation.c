@@ -5,15 +5,27 @@
 #include <string.h>
 
 enum {
-    LXP_ATTESTATION_ENCODED_BYTES = 231,
+    LXP_ATTESTATION_ENCODED_BYTES = 277,
     LXP_SEQUENCER_STATEMENT_BYTES = LXP_BATCH_HEADER_ENCODED_SIZE + 64
 };
 
 static lxp_result encode_attestation(
     lxp_codec_writer *writer, const lxp_guarantor_attestation *attestation)
 {
-    lxp_result status = lxp_codec_write_bytes(
-        writer, attestation->checkpoint_id, 32U, 32U);
+    lxp_result status = lxp_codec_write_u16(
+        writer, attestation->protocol_version);
+    if (status == LXP_OK)
+        status = lxp_codec_write_u32(writer, attestation->network_id);
+    if (status == LXP_OK)
+        status = lxp_codec_write_u64(writer, attestation->paxeer_chain_id);
+    if (status == LXP_OK)
+        status = lxp_codec_write_bytes(
+            writer, attestation->paxeer_settlement_contract, 20U, 20U);
+    if (status == LXP_OK)
+        status = lxp_codec_write_u64(writer, attestation->epoch);
+    if (status == LXP_OK)
+        status = lxp_codec_write_bytes(
+            writer, attestation->checkpoint_id, 32U, 32U);
     if (status == LXP_OK)
         status = lxp_codec_write_bytes(writer, attestation->checkpoint_hash,
                                        32U, 32U);
@@ -63,19 +75,29 @@ static int guarantor_contradiction(
     const lxp_guarantor_attestation *first,
     const lxp_guarantor_attestation *second)
 {
-    int same_height = first->batch_number == second->batch_number;
-    int same_checkpoint = memcmp(first->checkpoint_id,
-                                 second->checkpoint_id, 32U) == 0;
     int different = memcmp(first->checkpoint_hash,
                            second->checkpoint_hash, 32U) != 0;
-    return memcmp(first->guarantor_id, second->guarantor_id, 32U) == 0 &&
-           (same_height || same_checkpoint) && different;
+    return first->protocol_version == second->protocol_version &&
+           first->network_id == second->network_id &&
+           first->paxeer_chain_id == second->paxeer_chain_id &&
+           memcmp(first->paxeer_settlement_contract,
+                  second->paxeer_settlement_contract, 20U) == 0 &&
+           first->epoch == second->epoch &&
+           first->batch_number == second->batch_number &&
+           memcmp(first->guarantor_id, second->guarantor_id, 32U) == 0 &&
+           memcmp(first->checkpoint_id,
+                  first->checkpoint_hash, 32U) == 0 &&
+           memcmp(second->checkpoint_id,
+                  second->checkpoint_hash, 32U) == 0 && different;
 }
 
 static int sequencer_contradiction(const lxp_sealed_header_record *first,
                                    const lxp_sealed_header_record *second)
 {
-    return first->header.batch_number == second->header.batch_number &&
+    return first->header.protocol_version == second->header.protocol_version &&
+        first->header.network_id == second->header.network_id &&
+        first->header.epoch == second->header.epoch &&
+        first->header.batch_number == second->header.batch_number &&
         memcmp(first->header.sequencer_id,
                second->header.sequencer_id, 32U) == 0 &&
         memcmp(first->header_hash, second->header_hash, 32U) != 0;

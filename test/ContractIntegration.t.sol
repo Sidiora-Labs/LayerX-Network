@@ -544,7 +544,7 @@ contract ContractIntegrationTest {
         require(guarantorBond.bondRecord(bytes32(uint256(2))).jailed, "administrative jail absent");
 
         GuarantorBond isolated =
-            new GuarantorBond(address(this), address(this), 100, 100 ether, 7 days, configHash, release);
+            new GuarantorBond(address(this), address(this), 1, 42, 100, 100 ether, 7 days, configHash, release);
         isolated.setSlashingAuthority(address(this));
         address thirdSigner = vm.addr(3);
         isolated.activateGuarantor(bytes32(uint256(3)), thirdSigner, thirdSigner, 1, 1);
@@ -673,6 +673,11 @@ contract ContractIntegrationTest {
         for (uint256 i = 0; i < attestations.length; ++i) {
             uint256 privateKey = i + 1;
             attestations[i] = CanonicalCheckpoint.GuarantorAttestation({
+                protocolVersion: header.protocolVersion,
+                networkId: header.networkId,
+                paxeerChainId: uint64(block.chainid),
+                settlementContract: address(guarantorBond),
+                epoch: header.epoch,
                 checkpointId: digest,
                 checkpointHash: digest,
                 guarantorId: bytes32(privateKey),
@@ -761,10 +766,18 @@ contract ContractIntegrationTest {
 
     function _deployGuarantorBond() private returns (GuarantorBond result) {
         bytes memory arguments = abi.encode(
-            address(this), address(this), uint32(100), uint256(100 ether), uint64(7 days), configHash, release
+            address(this),
+            address(this),
+            uint16(1),
+            uint32(42),
+            uint32(100),
+            uint256(100 ether),
+            uint64(7 days),
+            configHash,
+            release
         );
         GuarantorBond runtimeReference =
-            new GuarantorBond(address(this), address(this), 100, 100 ether, 7 days, configHash, release);
+            new GuarantorBond(address(this), address(this), 1, 42, 100, 100 ether, 7 days, configHash, release);
         result = GuarantorBond(
             payable(_deploy(
                     Predeploys.GUARANTOR_BOND,

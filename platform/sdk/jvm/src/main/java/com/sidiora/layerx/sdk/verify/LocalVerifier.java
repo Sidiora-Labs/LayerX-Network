@@ -29,6 +29,7 @@ public final class LocalVerifier {
     private static final byte[] BATCH_HEADER_DOMAIN = ascii("LXP/v1/batch-header\0");
     private static final byte[] RECEIPT_DOMAIN = ascii("LXP/v1/receipt\0");
     private static final byte[] CHECKPOINT_DOMAIN = ascii("LXP/v1/checkpoint-certificate\0");
+    private static final byte[] GUARANTOR_ATTESTATION_DOMAIN = ascii("LXP/v1/guarantor-attestation\0");
     private static final byte[] ED25519_X509_PREFIX = hex("302a300506032b6570032100");
     private static final int BATCH_HEADER_BYTES = 354;
     private static final int MAX_MESSAGE_BYTES = 1_048_576;
@@ -57,9 +58,10 @@ public final class LocalVerifier {
     }
     public record InclusionVerification(VerificationLevel level, BatchHeader header,
         byte[] headerDigest, byte[] root) {}
-    public record CheckpointAttestation(byte[] checkpointId, byte[] checkpointHash, byte[] guarantorId,
-        BigInteger batchNumber, byte[] dataAvailabilityRoot, boolean replayed, boolean dataPossessed,
-        int availabilityClassMask, BigInteger attestedAtMs, byte[] signature) {}
+    public record CheckpointAttestation(int protocolVersion, long networkId, BigInteger paxeerChainId,
+        byte[] settlementContract, BigInteger epoch, byte[] checkpointId, byte[] checkpointHash,
+        byte[] guarantorId, BigInteger batchNumber, byte[] dataAvailabilityRoot, boolean replayed,
+        boolean dataPossessed, int availabilityClassMask, BigInteger attestedAtMs, byte[] signature) {}
     public record GuarantorKey(byte[] guarantorId, byte[] publicKey, boolean bonded) {}
     public record CheckpointCertificate(byte[] canonicalHeader, byte[] validityProof,
         List<CheckpointAttestation> attestations, int threshold, byte[] settlementReference) {
@@ -169,9 +171,19 @@ public final class LocalVerifier {
         if (!equal(checkpointId, exact(input.registeredCheckpointId(), 32)) || certificate.threshold() <= 0) fail();
         Set<String> seen = new HashSet<>();
         int achieved = 0;
+        BigInteger paxeerChainId = null;
+        byte[] settlementContract = null;
         for (CheckpointAttestation attestation : certificate.attestations()) {
             byte[] guarantorId = exact(attestation.guarantorId(), 32);
+            byte[] attestationSettlementContract = exact(attestation.settlementContract(), 20);
             if (!seen.add(java.util.HexFormat.of().formatHex(guarantorId))
+                    || attestation.protocolVersion() != header.protocolVersion()
+                    || attestation.networkId() != header.networkId()
+                    || !attestation.epoch().equals(header.epoch())
+                    || attestation.paxeerChainId().signum() <= 0
+                    || allZero(attestationSettlementContract)
+                    || (paxeerChainId != null && (!attestation.paxeerChainId().equals(paxeerChainId)
+                        || !equal(attestationSettlementContract, settlementContract)))
                     || !equal(attestation.checkpointId(), checkpointId)
                     || !equal(attestation.checkpointHash(), checkpointId)
                     || !attestation.batchNumber().equals(header.batchNumber())
@@ -179,9 +191,11 @@ public final class LocalVerifier {
                     || !attestation.replayed() || !attestation.dataPossessed()
                     || attestation.availabilityClassMask() != ALL_AVAILABILITY_CLASSES
                     || attestation.attestedAtMs().signum() <= 0) fail();
+            paxeerChainId = attestation.paxeerChainId();
+            settlementContract = attestationSettlementContract;
             GuarantorKey member = input.bondedSet().stream().filter(candidate -> candidate.bonded()
                 && equal(candidate.guarantorId(), guarantorId)).findFirst().orElseThrow(LocalVerifier::failure);
-            byte[] digest = sha256(CHECKPOINT_DOMAIN, attestationMessage(attestation));
+            byte[] digest = sha256(GUARANTOR_ATTESTATION_DOMAIN, attestationMessage(attestation));
             if (!signatures.verifySecp256k1(exact(member.publicKey(), 33),
                     exact(attestation.signature(), 64), digest)) fail();
             achieved++;
@@ -289,7 +303,10 @@ public final class LocalVerifier {
     }
 
     private static byte[] attestationMessage(CheckpointAttestation a) {
-        return concat(exact(a.checkpointId(), 32), exact(a.checkpointHash(), 32), exact(a.guarantorId(), 32),
+        return concat(unsigned(BigInteger.valueOf(a.protocolVersion()), 2),
+            unsigned(BigInteger.valueOf(a.networkId()), 4), unsigned(a.paxeerChainId(), 8),
+            exact(a.settlementContract(), 20), unsigned(a.epoch(), 8),
+            exact(a.checkpointId(), 32), exact(a.checkpointHash(), 32), exact(a.guarantorId(), 32),
             unsigned(a.batchNumber(), 8), exact(a.dataAvailabilityRoot(), 32),
             new byte[]{(byte) (a.replayed() ? 1 : 0), (byte) (a.dataPossessed() ? 1 : 0),
                 (byte) a.availabilityClassMask()}, unsigned(a.attestedAtMs(), 8));

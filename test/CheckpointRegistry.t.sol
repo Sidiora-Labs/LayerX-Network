@@ -26,7 +26,7 @@ contract CheckpointRegistryTest {
 
     function setUp() public {
         vm.warp(1000);
-        bond = new GuarantorBond(address(this), address(this), 100, 200 ether, 7 days, CONFIG, RELEASE);
+        bond = new GuarantorBond(address(this), address(this), 1, 42, 100, 200 ether, 7 days, CONFIG, RELEASE);
         for (uint256 i = 0; i < keys.length; ++i) {
             address signer = vm.addr(keys[i]);
             bond.activateGuarantor(bytes32(i + 1), signer, signer, 1, uint64(i + 1));
@@ -77,6 +77,37 @@ contract CheckpointRegistryTest {
         attestations[1].guarantorId = bytes32(uint256(4));
         attestations[1].signer = vm.addr(4);
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(4, CanonicalCheckpoint.attestationHash(attestations[1]));
+        attestations[1].v = v;
+        attestations[1].r = r;
+        attestations[1].s = s;
+        vm.expectRevert(CheckpointRegistry.InvalidCertificate.selector);
+        registry.registerCheckpoint(header, "", attestations);
+    }
+
+    function testRejectsForeignNetworkAndPaxeerDomainAttestation() public {
+        CanonicalCheckpoint.HeaderCommitments memory header = _header();
+        bytes32 digest = registry.checkpointHash(header, "");
+        CanonicalCheckpoint.GuarantorAttestation[] memory attestations = _attestations(header, digest, 2);
+        attestations[1].networkId = 43;
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(2, CanonicalCheckpoint.attestationHash(attestations[1]));
+        attestations[1].v = v;
+        attestations[1].r = r;
+        attestations[1].s = s;
+        vm.expectRevert(CheckpointRegistry.InvalidCertificate.selector);
+        registry.registerCheckpoint(header, "", attestations);
+
+        attestations = _attestations(header, digest, 2);
+        attestations[1].paxeerChainId += 1;
+        (v, r, s) = vm.sign(2, CanonicalCheckpoint.attestationHash(attestations[1]));
+        attestations[1].v = v;
+        attestations[1].r = r;
+        attestations[1].s = s;
+        vm.expectRevert(CheckpointRegistry.InvalidCertificate.selector);
+        registry.registerCheckpoint(header, "", attestations);
+
+        attestations = _attestations(header, digest, 2);
+        attestations[1].settlementContract = address(0xF0E1);
+        (v, r, s) = vm.sign(2, CanonicalCheckpoint.attestationHash(attestations[1]));
         attestations[1].v = v;
         attestations[1].r = r;
         attestations[1].s = s;
@@ -279,6 +310,7 @@ contract CheckpointRegistryTest {
         bond.rotateGuarantorSigner(guarantorId, rotatedSigner, 4, 8);
         CanonicalCheckpoint.GuarantorAttestation memory second = first;
         second.checkpointHash = keccak256("conflicting-old-signer-checkpoint");
+        second.checkpointId = second.checkpointHash;
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(2, CanonicalCheckpoint.attestationHash(second));
         second.v = v;
         second.r = r;
@@ -295,6 +327,11 @@ contract CheckpointRegistryTest {
         attestations = new CanonicalCheckpoint.GuarantorAttestation[](count);
         for (uint256 i = 0; i < count; ++i) {
             attestations[i] = CanonicalCheckpoint.GuarantorAttestation({
+                protocolVersion: header.protocolVersion,
+                networkId: header.networkId,
+                paxeerChainId: uint64(block.chainid),
+                settlementContract: address(bond),
+                epoch: header.epoch,
                 checkpointId: digest,
                 checkpointHash: digest,
                 guarantorId: bytes32(i + 1),

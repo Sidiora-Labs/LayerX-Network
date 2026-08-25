@@ -25,7 +25,8 @@ static const domain_tag_entry domain_tags[LXP_DOMAIN_TAG_COUNT] = {
     LXP_TAG("LXP/v1/state-root-chain\000"),
     LXP_TAG("LXP/v1/snapshot\000"),
     LXP_TAG("LXP/v1/da-chunk\000"),
-    LXP_TAG("LXP/v1/da-challenge\000")
+    LXP_TAG("LXP/v1/da-challenge\000"),
+    LXP_TAG("LXP/v1/guarantor-attestation\000")
 };
 #undef LXP_TAG
 

@@ -3,7 +3,12 @@
 use crate::batch::BatchHeader;
 
 /// The exact fields signed by one guarantor attestation.
-pub const GUARANTOR_ATTESTATION_FIELDS: [&str; 10] = [
+pub const GUARANTOR_ATTESTATION_FIELDS: [&str; 15] = [
+    "protocol_version",
+    "network_id",
+    "paxeer_chain_id",
+    "paxeer_settlement_contract",
+    "epoch",
     "checkpoint_id",
     "checkpoint_hash",
     "guarantor_id",
@@ -53,6 +58,11 @@ pub struct AvailabilityChunkInclusionProof {
 #[allow(dead_code)]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GuarantorAttestation {
+    protocol_version: u16,
+    network_id: u32,
+    paxeer_chain_id: u64,
+    paxeer_settlement_contract: [u8; 20],
+    epoch: u64,
     checkpoint_id: [u8; 32],
     checkpoint_hash: [u8; 32],
     guarantor_id: [u8; 32],

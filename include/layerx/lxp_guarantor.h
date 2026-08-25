@@ -86,6 +86,10 @@ typedef struct lxp_guarantor_ctx {
     uint8_t guarantor_id[32];
     uint8_t paxeer_private_key[32];
     uint8_t paxeer_public_key[33];
+    uint16_t protocol_version;
+    uint32_t network_id;
+    uint64_t paxeer_chain_id;
+    uint8_t paxeer_settlement_contract[20];
     lxp_guarantor_bond_view bond_view;
     uint8_t independent_state_root[32];
     lxp_replay_engine *replay_engine;
@@ -113,6 +117,11 @@ typedef struct lxp_checkpoint_certificate {
 } lxp_checkpoint_certificate;
 
 typedef struct lxp_guarantor_attestation {
+    uint16_t protocol_version;
+    uint32_t network_id;
+    uint64_t paxeer_chain_id;
+    uint8_t paxeer_settlement_contract[20];
+    uint64_t epoch;
     uint8_t checkpoint_id[32];
     uint8_t checkpoint_hash[32];
     uint8_t guarantor_id[32];
@@ -333,7 +342,7 @@ lxp_result lxp_equivocation_verify(
     const lxp_equivocation_evidence *evidence, lxp_arena *arena);
 lxp_result lxp_slashing_submit(
     const lxp_equivocation_evidence *evidence, lxp_guarantor_set *set,
-    uint64_t removed_epoch, lxp_arena *arena);
+    lxp_arena *arena);
 lxp_result lxp_guarantor_first_divergence(
     uint64_t batch_number, uint64_t first_sequence,
     const lxp_replay_batch_result *published,

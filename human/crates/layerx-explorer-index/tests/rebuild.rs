@@ -157,24 +157,35 @@ fn attestation(
     guarantor_id: [u8; 32],
     signing_key: &SigningKey,
 ) -> Attestation {
-    let mut message = [0_u8; 147];
-    message[..32].copy_from_slice(&identifier);
-    message[32..64].copy_from_slice(&identifier);
-    message[64..96].copy_from_slice(&guarantor_id);
-    message[96..104].copy_from_slice(&8_u64.to_be_bytes());
-    message[104..136].copy_from_slice(&AVAILABILITY_ROOT);
-    message[136] = 1;
-    message[137] = 1;
-    message[138] = 0x1f;
-    message[139..].copy_from_slice(&(1_000 + u64::from(guarantor_id[0])).to_be_bytes());
+    let settlement_contract = [0x55; 20];
+    let mut message = [0_u8; 189];
+    message[..2].copy_from_slice(&1_u16.to_be_bytes());
+    message[2..6].copy_from_slice(&42_u32.to_be_bytes());
+    message[6..14].copy_from_slice(&31_337_u64.to_be_bytes());
+    message[14..34].copy_from_slice(&settlement_contract);
+    message[34..42].copy_from_slice(&7_u64.to_be_bytes());
+    message[42..74].copy_from_slice(&identifier);
+    message[74..106].copy_from_slice(&identifier);
+    message[106..138].copy_from_slice(&guarantor_id);
+    message[138..146].copy_from_slice(&8_u64.to_be_bytes());
+    message[146..178].copy_from_slice(&AVAILABILITY_ROOT);
+    message[178] = 1;
+    message[179] = 1;
+    message[180] = 0x1f;
+    message[181..].copy_from_slice(&(1_000 + u64::from(guarantor_id[0])).to_be_bytes());
     let mut hasher = Sha256::new();
-    hasher.update(b"LXP/v1/checkpoint-certificate\0");
+    hasher.update(b"LXP/v1/guarantor-attestation\0");
     hasher.update(message);
     let digest: [u8; 32] = hasher.finalize().into();
     let signature: Signature = signing_key
         .sign_prehash(&digest)
         .unwrap_or_else(|error| panic!("fixture attestation signing failed: {error}"));
     Attestation::new(
+        1,
+        42,
+        31_337,
+        settlement_contract,
+        7,
         identifier,
         identifier,
         guarantor_id,

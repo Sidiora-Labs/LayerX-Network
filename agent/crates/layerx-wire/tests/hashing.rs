@@ -105,6 +105,7 @@ fn all_domains_separate_identical_canonical_bytes() {
         Domain::Snapshot,
         Domain::DaChunk,
         Domain::DaChallenge,
+        Domain::GuarantorAttestation,
     ];
     let digests: Vec<_> = domains
         .into_iter()

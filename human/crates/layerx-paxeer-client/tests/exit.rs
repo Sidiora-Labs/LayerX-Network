@@ -39,6 +39,7 @@ const GENESIS: [u8; 32] = [0x22; 32];
 const CONFIG_HASH: [u8; 32] = [0x11; 32];
 const DATA_AVAILABILITY_ROOT: [u8; 32] = [0x66; 32];
 const CHECKPOINT_DOMAIN: &[u8] = b"LXP/v1/checkpoint-certificate\x00";
+const ATTESTATION_DOMAIN: &[u8] = b"LXP/v1/guarantor-attestation\x00";
 
 const REGISTER_ASSET: [u8; 4] = [0xea, 0x24, 0x92, 0x88];
 const MINT: [u8; 4] = [0x40, 0xc1, 0x0f, 0x19];
@@ -46,8 +47,9 @@ const APPROVE: [u8; 4] = [0x09, 0x5e, 0xa7, 0xb3];
 const DEPOSIT: [u8; 4] = [0x8a, 0x9e, 0x53, 0x2c];
 const SET_SETTLEMENT_MODULE: [u8; 4] = [0x0f, 0x2f, 0x5f, 0x64];
 const SET_CONSUMER: [u8; 4] = [0x02, 0xc9, 0xef, 0x45];
-const DEPOSIT_BOND: [u8; 4] = [0x5c, 0x37, 0x4a, 0x21];
-const REGISTER_CHECKPOINT: [u8; 4] = [0xf3, 0x89, 0xd8, 0x3f];
+const DEPOSIT_BOND: [u8; 4] = [0xf5, 0x14, 0x8c, 0x24];
+const ACTIVATE_GUARANTOR: [u8; 4] = [0x23, 0x7d, 0xd0, 0x4f];
+const REGISTER_CHECKPOINT: [u8; 4] = [0xc7, 0x2a, 0x88, 0x43];
 const DECLARE_EMERGENCY: [u8; 4] = [0x50, 0xd1, 0x7f, 0xff];
 const BALANCE_OF: [u8; 4] = [0x70, 0xa0, 0x82, 0x31];
 
@@ -230,6 +232,9 @@ impl Topology {
             "GuarantorBond",
             &[
                 address_word(GOVERNANCE),
+                address_word(GOVERNANCE),
+                quantity_word(1),
+                quantity_word(u128::from(NETWORK_ID)),
                 quantity_word(100),
                 quantity_word(0),
                 quantity_word(86_400),
@@ -304,11 +309,26 @@ impl Topology {
         anvil.transact(
             GOVERNANCE,
             self.bond,
-            &static_call(DEPOSIT_BOND, &[quantity_word(1), quantity_word(1)]),
+            &static_call(
+                ACTIVATE_GUARANTOR,
+                &[
+                    quantity_word(1),
+                    address_word(GOVERNANCE),
+                    address_word(GOVERNANCE),
+                    quantity_word(1),
+                    quantity_word(1),
+                ],
+            ),
+            0,
+        );
+        anvil.transact(
+            GOVERNANCE,
+            self.bond,
+            &static_call(DEPOSIT_BOND, &[quantity_word(1)]),
             1,
         );
         let state_root = balance_leaf(&ACCOUNT, &ASSET, BALANCE, RECIPIENT);
-        let (digest, attestation) = signed_checkpoint(state_root);
+        let (digest, attestation) = signed_checkpoint(state_root, self.bond);
         anvil.transact(
             GOVERNANCE,
             self.checkpoint,
@@ -510,9 +530,17 @@ fn exit_client(anvil: &Anvil, contract: EvmAddress) -> EmergencyExit {
     .unwrap_or_else(|error| panic!("emergency exit client: {error:?}"))
 }
 
-fn signed_checkpoint(state_root: [u8; 32]) -> ([u8; 32], GuarantorAttestation) {
+fn signed_checkpoint(
+    state_root: [u8; 32],
+    settlement_contract: EvmAddress,
+) -> ([u8; 32], GuarantorAttestation) {
     let digest = checkpoint_digest(state_root);
     let mut attestation = GuarantorAttestation {
+        protocol_version: 1,
+        network_id: NETWORK_ID,
+        paxeer_chain_id: 31_337,
+        settlement_contract,
+        epoch: 1,
         checkpoint_id: digest,
         checkpoint_hash: digest,
         guarantor_id: quantity_word(1),
@@ -576,8 +604,14 @@ fn checkpoint_digest(state_root: [u8; 32]) -> [u8; 32] {
 }
 
 fn attestation_digest(attestation: &GuarantorAttestation) -> [u8; 32] {
+    let settlement_contract = attestation.settlement_contract.bytes();
     sha256(&[
-        CHECKPOINT_DOMAIN,
+        ATTESTATION_DOMAIN,
+        &attestation.protocol_version.to_be_bytes(),
+        &attestation.network_id.to_be_bytes(),
+        &attestation.paxeer_chain_id.to_be_bytes(),
+        &settlement_contract,
+        &attestation.epoch.to_be_bytes(),
         &attestation.checkpoint_id,
         &attestation.checkpoint_hash,
         &attestation.guarantor_id,
@@ -621,8 +655,13 @@ fn register_checkpoint_calldata(
     static_call(REGISTER_CHECKPOINT, &words)
 }
 
-fn attestation_words(attestation: &GuarantorAttestation) -> [[u8; 32]; 13] {
+fn attestation_words(attestation: &GuarantorAttestation) -> [[u8; 32]; 18] {
     [
+        quantity_word(u128::from(attestation.protocol_version)),
+        quantity_word(u128::from(attestation.network_id)),
+        quantity_word(u128::from(attestation.paxeer_chain_id)),
+        address_word(attestation.settlement_contract),
+        quantity_word(u128::from(attestation.epoch)),
         attestation.checkpoint_id,
         attestation.checkpoint_hash,
         attestation.guarantor_id,

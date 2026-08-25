@@ -78,6 +78,10 @@ int main(void)
         signers[i].ready_to_sign = true;
         signers[i].possesses_availability = true;
         signers[i].bond_view.bonded = true;
+        signers[i].protocol_version = 1U;
+        signers[i].network_id = 5U;
+        signers[i].paxeer_chain_id = 31337U;
+        signers[i].paxeer_settlement_contract[0] = 0xa1U;
         if (key_pair((uint8_t)(i + 1U), signers[i].paxeer_private_key,
                      signers[i].paxeer_public_key) != 0 ||
             lxp_guarantor_attest(&signers[i], &checkpoint, true, true,

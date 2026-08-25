@@ -44,6 +44,10 @@ typedef struct lxp_checkpoint_registration {
 
 typedef struct lxp_paxeer_bond_state {
     lxp_guarantor_set guarantors;
+    uint16_t protocol_version;
+    uint32_t network_id;
+    uint64_t paxeer_chain_id;
+    uint8_t paxeer_settlement_contract[20];
     lxp_u128 custodied_value;
     lxp_u128 minimum_bond;
     uint32_t minimum_bond_bps;
@@ -65,6 +69,10 @@ lxp_result lxp_checkpoint_register(
     const lxp_finalisation_requirements *requirements,
     lxp_arena *arena, lxp_checkpoint_registration *registration);
 lxp_result lxp_paxeer_bond_init(lxp_paxeer_bond_state *state,
+                                 uint16_t protocol_version,
+                                 uint32_t network_id,
+                                 uint64_t paxeer_chain_id,
+                                 const uint8_t paxeer_contract[20],
                                  lxp_u128 custodied_value,
                                  uint32_t minimum_bond_bps);
 lxp_result lxp_paxeer_bond_deposit(
@@ -79,6 +87,6 @@ lxp_result lxp_paxeer_jail_guarantor(
 lxp_result lxp_paxeer_slash_submit(
     lxp_paxeer_bond_state *state, const uint8_t *evidence_bytes,
     size_t evidence_length, const lxp_equivocation_evidence *evidence,
-    uint64_t removed_epoch, lxp_arena *arena);
+    lxp_arena *arena);
 
 #endif

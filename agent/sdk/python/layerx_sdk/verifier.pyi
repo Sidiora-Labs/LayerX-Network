@@ -102,6 +102,11 @@ class InclusionVerification:
 
 @dataclass(frozen=True)
 class CheckpointAttestation:
+    protocol_version: int
+    network_id: int
+    paxeer_chain_id: int
+    settlement_contract: bytes
+    epoch: int
     checkpoint_id: bytes
     checkpoint_hash: bytes
     guarantor_id: bytes

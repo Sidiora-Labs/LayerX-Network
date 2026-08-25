@@ -78,6 +78,10 @@ int main(void)
         guarantors[i].bond_view.bonded = true;
         guarantors[i].ready_to_sign = true;
         guarantors[i].possesses_availability = true;
+        guarantors[i].protocol_version = 1U;
+        guarantors[i].network_id = 4U;
+        guarantors[i].paxeer_chain_id = 31337U;
+        guarantors[i].paxeer_settlement_contract[0] = 0xa1U;
         guarantors[i].publish_dissent = publish_dissent;
         guarantors[i].dissent_context = &sink;
         if (key_pair((uint8_t)(i + 1U), guarantors[i].paxeer_private_key,

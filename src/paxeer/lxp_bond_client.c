@@ -16,11 +16,18 @@ static lxp_guarantor_bond_state *find_bond(
 }
 
 lxp_result lxp_paxeer_bond_init(lxp_paxeer_bond_state *state,
+                                 uint16_t protocol_version,
+                                 uint32_t network_id,
+                                 uint64_t paxeer_chain_id,
+                                 const uint8_t paxeer_contract[20],
                                  lxp_u128 custodied_value,
                                  uint32_t minimum_bond_bps)
 {
     lxp_result status;
-    if (state == NULL || minimum_bond_bps == 0U ||
+    if (state == NULL || paxeer_contract == NULL ||
+        !lxp_protocol_version_supported(protocol_version) || network_id == 0U ||
+        paxeer_chain_id == 0U || lxp_ct_is_zero(paxeer_contract, 20U) ||
+        minimum_bond_bps == 0U ||
         minimum_bond_bps > LXP_BASIS_POINTS_ONE)
         return LXP_ERR_PARAMETER_BOUNDS;
     (void)memset(state, 0, sizeof(*state));
@@ -29,6 +36,10 @@ lxp_result lxp_paxeer_bond_init(lxp_paxeer_bond_state *state,
         status = lxp_u128_mul_bps_ceil(custodied_value, minimum_bond_bps,
                                        &state->minimum_bond);
     if (status != LXP_OK) return status;
+    state->protocol_version = protocol_version;
+    state->network_id = network_id;
+    state->paxeer_chain_id = paxeer_chain_id;
+    (void)memcpy(state->paxeer_settlement_contract, paxeer_contract, 20U);
     state->custodied_value = custodied_value;
     state->minimum_bond_bps = minimum_bond_bps;
     return LXP_OK;
@@ -97,14 +108,23 @@ lxp_result lxp_paxeer_jail_guarantor(
 lxp_result lxp_paxeer_slash_submit(
     lxp_paxeer_bond_state *state, const uint8_t *evidence_bytes,
     size_t evidence_length, const lxp_equivocation_evidence *evidence,
-    uint64_t removed_epoch, lxp_arena *arena)
+    lxp_arena *arena)
 {
     lxp_byte_span canonical;
     size_t mark;
     lxp_result status;
     if (state == NULL || evidence_bytes == NULL || evidence_length == 0U ||
-        evidence == NULL || removed_epoch == 0U || arena == NULL)
+        evidence == NULL || arena == NULL)
         return LXP_ERR_NON_CANONICAL;
+    if (evidence->kind == LXP_EQUIVOCATION_GUARANTOR &&
+        (evidence->guarantor_first.protocol_version !=
+             state->protocol_version ||
+         evidence->guarantor_first.network_id != state->network_id ||
+         evidence->guarantor_first.paxeer_chain_id !=
+             state->paxeer_chain_id ||
+         memcmp(evidence->guarantor_first.paxeer_settlement_contract,
+                state->paxeer_settlement_contract, 20U) != 0))
+        return LXP_ERR_AUTH_SCOPE;
     mark = lxp_arena_mark(arena);
     status = lxp_equivocation_encode(evidence, arena, &canonical);
     if (status == LXP_OK &&
@@ -113,8 +133,7 @@ lxp_result lxp_paxeer_slash_submit(
                        evidence_length) != 0))
         status = LXP_ERR_NON_CANONICAL;
     if (status == LXP_OK)
-        status = lxp_slashing_submit(evidence, &state->guarantors,
-                                     removed_epoch, arena);
+        status = lxp_slashing_submit(evidence, &state->guarantors, arena);
     (void)lxp_arena_reset(arena, mark);
     if (status == LXP_OK) state->mirror_version = state->guarantors.version;
     return status;

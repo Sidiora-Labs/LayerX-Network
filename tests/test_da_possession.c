@@ -85,6 +85,10 @@ int main(void)
     guarantor.guarantor_id[0] = 71U;
     guarantor.ready_to_sign = true;
     guarantor.bond_view.bonded = true;
+    guarantor.protocol_version = 1U;
+    guarantor.network_id = 44U;
+    guarantor.paxeer_chain_id = 31337U;
+    guarantor.paxeer_settlement_contract[0] = 0xa1U;
     if (key_pair(7U, guarantor.paxeer_private_key,
                  guarantor.paxeer_public_key) != 0)
         return 1;

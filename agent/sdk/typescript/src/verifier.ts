@@ -5,6 +5,7 @@ const MERKLE_INTERNAL_DOMAIN = new TextEncoder().encode("LXP/v1/merkle-internal\
 const BATCH_HEADER_DOMAIN = new TextEncoder().encode("LXP/v1/batch-header\0");
 const RECEIPT_DOMAIN = new TextEncoder().encode("LXP/v1/receipt\0");
 const CHECKPOINT_DOMAIN = new TextEncoder().encode("LXP/v1/checkpoint-certificate\0");
+const GUARANTOR_ATTESTATION_DOMAIN = new TextEncoder().encode("LXP/v1/guarantor-attestation\0");
 const BATCH_HEADER_BYTES = 354;
 const MAX_MESSAGE_BYTES = 1_048_576;
 const MAX_EFFECTS = 512;
@@ -53,6 +54,11 @@ export interface InclusionVerification {
 }
 
 export interface CheckpointAttestation {
+  readonly protocolVersion: number;
+  readonly networkId: number;
+  readonly paxeerChainId: bigint;
+  readonly settlementContract: Uint8Array;
+  readonly epoch: bigint;
   readonly checkpointId: Uint8Array;
   readonly checkpointHash: Uint8Array;
   readonly guarantorId: Uint8Array;
@@ -470,6 +476,15 @@ function u32(value: number): Uint8Array {
   return result;
 }
 
+function u16(value: number): Uint8Array {
+  if (!Number.isSafeInteger(value) || value < 0 || value > 0xffff) {
+    return verificationFailure();
+  }
+  const result = new Uint8Array(2);
+  new DataView(result.buffer).setUint16(0, value, false);
+  return result;
+}
+
 function u64(value: bigint): Uint8Array {
   if (value < 0n || value > 0xffff_ffff_ffff_ffffn) {
     return verificationFailure();
@@ -481,6 +496,11 @@ function u64(value: bigint): Uint8Array {
 
 function attestationMessage(attestation: CheckpointAttestation): Uint8Array {
   return concatenate(
+    u16(attestation.protocolVersion),
+    u32(attestation.networkId),
+    u64(attestation.paxeerChainId),
+    exactBytes(attestation.settlementContract, 20),
+    u64(attestation.epoch),
     exactBytes(attestation.checkpointId, 32),
     exactBytes(attestation.checkpointHash, 32),
     exactBytes(attestation.guarantorId, 32),
@@ -517,12 +537,21 @@ export async function verifyCheckpoint(
     return verificationFailure();
   }
   const seen = new Set<string>();
+  let paxeerChainId: bigint | undefined;
+  let settlementContract: Uint8Array | undefined;
   let achieved = 0;
   for (const attestation of certificate.attestations) {
     const guarantorId = exactBytes(attestation.guarantorId, 32);
     const identity = Array.from(guarantorId, (byte) => byte.toString(16).padStart(2, "0")).join("");
     if (
       seen.has(identity)
+      || attestation.protocolVersion !== header.protocolVersion
+      || attestation.networkId !== header.networkId
+      || attestation.epoch !== header.epoch
+      || attestation.paxeerChainId === 0n
+      || exactBytes(attestation.settlementContract, 20).every((byte) => byte === 0)
+      || (paxeerChainId !== undefined && attestation.paxeerChainId !== paxeerChainId)
+      || (settlementContract !== undefined && !equal(attestation.settlementContract, settlementContract))
       || !equal(attestation.checkpointId, checkpointId)
       || !equal(attestation.checkpointHash, checkpointId)
       || attestation.batchNumber !== header.batchNumber
@@ -534,12 +563,14 @@ export async function verifyCheckpoint(
     ) {
       return verificationFailure();
     }
+    paxeerChainId = attestation.paxeerChainId;
+    settlementContract = exactBytes(attestation.settlementContract, 20);
     seen.add(identity);
     const member = input.bondedSet.find((candidate) => candidate.bonded && equal(candidate.guarantorId, guarantorId));
     if (member === undefined) {
       return verificationFailure();
     }
-    const digest = await sha256(CHECKPOINT_DOMAIN, attestationMessage(attestation));
+    const digest = await sha256(GUARANTOR_ATTESTATION_DOMAIN, attestationMessage(attestation));
     if (!await signatures.verifySecp256k1(
       exactBytes(member.publicKey, 33),
       exactBytes(attestation.signature, 64),

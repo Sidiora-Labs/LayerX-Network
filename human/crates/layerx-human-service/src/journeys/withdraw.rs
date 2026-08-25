@@ -316,6 +316,11 @@ impl StoredBatch {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 struct StoredAttestation {
+    protocol_version: u16,
+    network_id: u32,
+    paxeer_chain_id: u64,
+    settlement_contract: [u8; 20],
+    epoch: u64,
     checkpoint_id: [u8; 32],
     checkpoint_hash: [u8; 32],
     guarantor_id: [u8; 32],
@@ -334,6 +339,11 @@ struct StoredAttestation {
 impl StoredAttestation {
     fn from_public(value: &WithdrawalAttestation) -> Self {
         Self {
+            protocol_version: value.protocol_version,
+            network_id: value.network_id,
+            paxeer_chain_id: value.paxeer_chain_id,
+            settlement_contract: value.settlement_contract.bytes(),
+            epoch: value.epoch,
             checkpoint_id: value.checkpoint_id,
             checkpoint_hash: value.checkpoint_hash,
             guarantor_id: value.guarantor_id,
@@ -352,6 +362,11 @@ impl StoredAttestation {
 
     const fn public(&self) -> WithdrawalAttestation {
         WithdrawalAttestation {
+            protocol_version: self.protocol_version,
+            network_id: self.network_id,
+            paxeer_chain_id: self.paxeer_chain_id,
+            settlement_contract: EvmAddress::new(self.settlement_contract),
+            epoch: self.epoch,
             checkpoint_id: self.checkpoint_id,
             checkpoint_hash: self.checkpoint_hash,
             guarantor_id: self.guarantor_id,

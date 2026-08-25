@@ -38,21 +38,30 @@ int main(void)
     uint8_t public_key[33];
     uint8_t other_id[32] = {8U};
     uint8_t other_key[33] = {2U};
+    uint8_t paxeer_contract[20] = {0xa1U};
     uint8_t corrupted[1024];
     lxp_arena arena;
     lxp_checkpoint_certificate first_checkpoint;
     lxp_checkpoint_certificate second_checkpoint;
+    lxp_checkpoint_certificate foreign_first_checkpoint;
+    lxp_checkpoint_certificate foreign_second_checkpoint;
     lxp_guarantor_ctx guarantor;
+    lxp_guarantor_ctx foreign_guarantor;
     lxp_guarantor_attestation first;
     lxp_guarantor_attestation second;
+    lxp_guarantor_attestation foreign_first;
+    lxp_guarantor_attestation foreign_second;
     lxp_equivocation_evidence evidence;
+    lxp_equivocation_evidence foreign_evidence;
     lxp_byte_span encoded;
+    lxp_byte_span foreign_encoded;
     lxp_paxeer_bond_state bonds;
     lxp_guarantor_bond_state view;
     bool eligible = false;
     if (lxp_arena_init(&arena, arena_storage, sizeof(arena_storage)) != LXP_OK ||
         key_pair(7U, private_key, public_key) != 0 ||
-        lxp_paxeer_bond_init(&bonds, (lxp_u128){0U, 10000U}, 100U) != LXP_OK)
+        lxp_paxeer_bond_init(&bonds, 1U, 42U, 31337U, paxeer_contract,
+                             (lxp_u128){0U, 10000U}, 100U) != LXP_OK)
         return 1;
     (void)memset(&guarantor, 0, sizeof(guarantor));
     guarantor.guarantor_id[0] = 7U;
@@ -61,6 +70,10 @@ int main(void)
     guarantor.ready_to_sign = true;
     guarantor.possesses_availability = true;
     guarantor.bond_view.bonded = true;
+    guarantor.protocol_version = 1U;
+    guarantor.network_id = 42U;
+    guarantor.paxeer_chain_id = 31337U;
+    guarantor.paxeer_settlement_contract[0] = 0xa1U;
     (void)memset(&first_checkpoint, 0, sizeof(first_checkpoint));
     first_checkpoint.header.protocol_version = 1U;
     first_checkpoint.header.network_id = 42U;
@@ -83,19 +96,40 @@ int main(void)
         lxp_paxeer_bond_state_read(&bonds, other_id, &view, &eligible) !=
             LXP_OK || eligible)
         return 1;
+    foreign_first_checkpoint = first_checkpoint;
+    foreign_first_checkpoint.header.network_id = 43U;
+    foreign_second_checkpoint = second_checkpoint;
+    foreign_second_checkpoint.header.network_id = 43U;
+    foreign_guarantor = guarantor;
+    foreign_guarantor.network_id = 43U;
+    if (lxp_guarantor_attest(&foreign_guarantor, &foreign_first_checkpoint,
+                             true, true, 102U, &arena,
+                             &foreign_first) != LXP_OK ||
+        lxp_guarantor_attest(&foreign_guarantor, &foreign_second_checkpoint,
+                             true, true, 103U, &arena,
+                             &foreign_second) != LXP_OK ||
+        lxp_equivocation_detect(LXP_EQUIVOCATION_GUARANTOR,
+                                &foreign_first, &foreign_second,
+                                public_key, 33U, &foreign_evidence) != LXP_OK ||
+        lxp_equivocation_encode(&foreign_evidence, &arena,
+                                &foreign_encoded) != LXP_OK ||
+        lxp_paxeer_slash_submit(&bonds, foreign_encoded.bytes,
+                                foreign_encoded.length, &foreign_evidence,
+                                &arena) != LXP_ERR_AUTH_SCOPE)
+        return 1;
     if (encoded.length > sizeof(corrupted)) return 1;
     (void)memcpy(corrupted, encoded.bytes, encoded.length);
     corrupted[0] ^= 1U;
     if (lxp_paxeer_slash_submit(&bonds, corrupted, encoded.length,
-                                &evidence, 4U, &arena) !=
+                                &evidence, &arena) !=
             LXP_ERR_NON_CANONICAL)
         return 1;
     if (lxp_paxeer_slash_submit(&bonds, encoded.bytes, encoded.length,
-                                &evidence, 4U, &arena) != LXP_OK ||
+                                &evidence, &arena) != LXP_OK ||
         lxp_paxeer_bond_state_read(&bonds, guarantor.guarantor_id,
                                    &view, &eligible) != LXP_OK ||
         eligible || view.active || !view.jailed ||
-        !lxp_u128_is_zero(view.bond_amount) || view.removed_epoch != 4U ||
+        !lxp_u128_is_zero(view.bond_amount) || view.removed_epoch != 0U ||
         lxp_paxeer_jail_guarantor(&bonds, other_id, 5U) != LXP_OK ||
         lxp_paxeer_bond_state_read(&bonds, other_id, &view, &eligible) !=
             LXP_OK || eligible || !view.jailed)

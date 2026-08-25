@@ -18,14 +18,14 @@ use crate::rpc::EndpointConfig;
 
 const WORD: usize = 32;
 const MAX_PROOF_DEPTH: usize = 256;
-const ATTESTATION_WORDS: usize = 13;
+const ATTESTATION_WORDS: usize = 18;
 const ALL_AVAILABILITY_CLASSES: u8 = 0x1f;
 
 const WITHDRAWAL_DOMAIN: &[u8] = b"LX:WITHDRAWAL:v1";
 const MERKLE_LEAF_DOMAIN: &[u8] = b"LXP/v1/merkle-leaf\0";
 const MERKLE_NODE_DOMAIN: &[u8] = b"LXP/v1/merkle-node\0";
 
-const SELECTOR_QUEUE_CLAIM: [u8; 4] = [0x67, 0x76, 0x3b, 0x2e];
+const SELECTOR_QUEUE_CLAIM: [u8; 4] = [0x0d, 0x79, 0x92, 0xc8];
 const SELECTOR_FINALISE_CLAIM: [u8; 4] = [0x38, 0x51, 0xa8, 0x61];
 const SELECTOR_CANCEL_CLAIM: [u8; 4] = [0x52, 0xc1, 0xd8, 0x2c];
 const SELECTOR_CLAIM: [u8; 4] = [0xbd, 0x66, 0x52, 0x8a];
@@ -40,7 +40,9 @@ const SELECTOR_BALANCE_OF: [u8; 4] = [0x70, 0xa0, 0x82, 0x31];
 const SELECTOR_WITHDRAWAL_LEAF: [u8; 4] = [0x54, 0x00, 0x16, 0x0a];
 const SELECTOR_WITHDRAWAL_NULLIFIER: [u8; 4] = [0x3e, 0x51, 0xd1, 0x52];
 const SELECTOR_FINALISED_STATE_ROOT: [u8; 4] = [0xdf, 0xd0, 0x60, 0x94];
-const SELECTOR_RECORDED_CERTIFICATE: [u8; 4] = [0x98, 0x6f, 0x94, 0x8b];
+const SELECTOR_RECORDED_CERTIFICATE: [u8; 4] = [0x05, 0xd9, 0x4f, 0x01];
+const SELECTOR_GUARANTOR_ELIGIBILITY: [u8; 4] = [0x9e, 0x2b, 0x11, 0xf1];
+const SELECTOR_PROTOCOL_VERSION: [u8; 4] = [0x2a, 0xe9, 0xc6, 0x00];
 const SELECTOR_NULLIFIER_REGISTRY: [u8; 4] = [0xb8, 0x70, 0x67, 0x6c];
 const SELECTOR_NULLIFIER_STATUS: [u8; 4] = [0x52, 0xad, 0x0d, 0x5e];
 
@@ -195,6 +197,11 @@ impl CommittedWithdrawalDebit {
 /// One EVM guarantor attestation in the exact Paxeer checkpoint ABI.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct WithdrawalAttestation {
+    pub protocol_version: u16,
+    pub network_id: u32,
+    pub paxeer_chain_id: u64,
+    pub settlement_contract: EvmAddress,
+    pub epoch: u64,
     pub checkpoint_id: [u8; 32],
     pub checkpoint_hash: [u8; 32],
     pub guarantor_id: [u8; 32],
@@ -606,6 +613,24 @@ impl WithdrawalBoundary {
             self.claims_contract,
             &call_data(SELECTOR_REGISTRY, &[]),
             "registry",
+        )?;
+        let settlement_contract = self.address_view(
+            registry,
+            &call_data(SELECTOR_GUARANTOR_ELIGIBILITY, &[]),
+            "guarantorEligibility",
+        )?;
+        let protocol_version = self.u32_view(
+            registry,
+            &call_data(SELECTOR_PROTOCOL_VERSION, &[]),
+            "protocolVersion",
+        )?;
+        let chain_id = quantity(&self.rpc("eth_chainId", &[])?, "eth_chainId")?;
+        validate_attestation_domain(
+            &proof,
+            protocol_version,
+            debit.expectation.network_id,
+            chain_id,
+            settlement_contract,
         )?;
         let registered_root = self.word_view(
             registry,
@@ -1397,6 +1422,17 @@ fn validate_checkpoint_proof(
     let mut previous = None;
     for (index, attestation) in proof.attestations.iter().enumerate() {
         for (valid, field) in [
+            (attestation.protocol_version != 0, "protocol_version"),
+            (
+                attestation.network_id == debit.expectation.network_id,
+                "network_id",
+            ),
+            (attestation.paxeer_chain_id != 0, "paxeer_chain_id"),
+            (
+                attestation.settlement_contract.bytes() != [0; 20],
+                "settlement_contract",
+            ),
+            (attestation.epoch == proof.epoch, "epoch"),
             (
                 attestation.checkpoint_id == proof.checkpoint_hash,
                 "checkpoint_id",
@@ -1439,6 +1475,40 @@ fn validate_checkpoint_proof(
             }));
         }
         previous = Some(attestation.guarantor_id);
+    }
+    Ok(())
+}
+
+fn validate_attestation_domain(
+    proof: &CheckpointProof,
+    protocol_version: u32,
+    network_id: u32,
+    paxeer_chain_id: u64,
+    settlement_contract: EvmAddress,
+) -> Result<(), WithdrawalError> {
+    for (index, attestation) in proof.attestations.iter().enumerate() {
+        for (valid, field) in [
+            (
+                u32::from(attestation.protocol_version) == protocol_version,
+                "protocol_version",
+            ),
+            (attestation.network_id == network_id, "network_id"),
+            (
+                attestation.paxeer_chain_id == paxeer_chain_id,
+                "paxeer_chain_id",
+            ),
+            (
+                attestation.settlement_contract == settlement_contract,
+                "settlement_contract",
+            ),
+        ] {
+            if !valid {
+                return Err(WithdrawalError::Refused(ClaimRefusal::InvalidAttestation {
+                    index,
+                    field,
+                }));
+            }
+        }
     }
     Ok(())
 }
@@ -1551,6 +1621,11 @@ fn recorded_certificate_calldata(
 
 fn attestation_words(attestation: &WithdrawalAttestation) -> [[u8; 32]; ATTESTATION_WORDS] {
     [
+        quantity_word(&attestation.protocol_version.to_be_bytes()),
+        quantity_word(&attestation.network_id.to_be_bytes()),
+        quantity_word(&attestation.paxeer_chain_id.to_be_bytes()),
+        address_word(attestation.settlement_contract),
+        quantity_word(&attestation.epoch.to_be_bytes()),
         attestation.checkpoint_id,
         attestation.checkpoint_hash,
         attestation.guarantor_id,

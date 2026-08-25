@@ -9,11 +9,12 @@ import (
 )
 
 var (
-	merkleLeafDomain     = []byte("LXP/v1/merkle-leaf\x00")
-	merkleInternalDomain = []byte("LXP/v1/merkle-internal\x00")
-	batchHeaderDomain    = []byte("LXP/v1/batch-header\x00")
-	receiptDomain        = []byte("LXP/v1/receipt\x00")
-	checkpointDomain     = []byte("LXP/v1/checkpoint-certificate\x00")
+	merkleLeafDomain            = []byte("LXP/v1/merkle-leaf\x00")
+	merkleInternalDomain        = []byte("LXP/v1/merkle-internal\x00")
+	batchHeaderDomain           = []byte("LXP/v1/batch-header\x00")
+	receiptDomain               = []byte("LXP/v1/receipt\x00")
+	checkpointDomain            = []byte("LXP/v1/checkpoint-certificate\x00")
+	guarantorAttestationDomain = []byte("LXP/v1/guarantor-attestation\x00")
 )
 
 const (
@@ -484,6 +485,11 @@ func VerifyBatchInclusion(kind InclusionKind, canonicalLeaf []byte, proof Merkle
 }
 
 type CheckpointAttestation struct {
+	ProtocolVersion       uint16
+	NetworkID             uint32
+	PaxeerChainID         uint64
+	SettlementContract    [20]byte
+	Epoch                 uint64
 	CheckpointID          [32]byte
 	CheckpointHash        [32]byte
 	GuarantorID           [32]byte
@@ -553,11 +559,16 @@ func VerifyCheckpoint(ctx context.Context, input CheckpointVerificationInput, si
 	}
 	seen := make(map[[32]byte]struct{}, len(certificate.Attestations))
 	var achieved uint32
+	var paxeerChainID uint64
+	var settlementContract [20]byte
 	for _, attestation := range certificate.Attestations {
 		if err := ctx.Err(); err != nil {
 			return CheckpointVerification{}, err
 		}
 		if _, duplicate := seen[attestation.GuarantorID]; duplicate ||
+			attestation.ProtocolVersion != header.ProtocolVersion || attestation.NetworkID != header.NetworkID || attestation.Epoch != header.Epoch ||
+			attestation.PaxeerChainID == 0 || attestation.SettlementContract == ([20]byte{}) ||
+			(achieved > 0 && (attestation.PaxeerChainID != paxeerChainID || attestation.SettlementContract != settlementContract)) ||
 			attestation.CheckpointID != checkpointID || attestation.CheckpointHash != checkpointID ||
 			attestation.BatchNumber != header.BatchNumber || attestation.DataAvailabilityRoot != header.DataAvailabilityRoot ||
 			!attestation.Replayed || !attestation.DataPossessed || attestation.AvailabilityClassMask != allAvailabilityClasses || attestation.AttestedAtMillis == 0 {
@@ -568,15 +579,22 @@ func VerifyCheckpoint(ctx context.Context, input CheckpointVerificationInput, si
 			return CheckpointVerification{}, verificationFailure()
 		}
 		seen[attestation.GuarantorID] = struct{}{}
-		message := make([]byte, 0, 179)
+		paxeerChainID = attestation.PaxeerChainID
+		settlementContract = attestation.SettlementContract
+		message := make([]byte, 0, 189)
+		message = appendUint16(message, attestation.ProtocolVersion)
+		message = appendUint32(message, attestation.NetworkID)
+		message = appendUint64(message, attestation.PaxeerChainID)
+		message = append(message, attestation.SettlementContract[:]...)
+		message = appendUint64(message, attestation.Epoch)
 		message = append(message, attestation.CheckpointID[:]...)
 		message = append(message, attestation.CheckpointHash[:]...)
 		message = append(message, attestation.GuarantorID[:]...)
 		message = appendUint64(message, attestation.BatchNumber)
 		message = append(message, attestation.DataAvailabilityRoot[:]...)
-		message = append(message, 1, 1, attestation.AvailabilityClassMask)
+		message = append(message, boolByte(attestation.Replayed), boolByte(attestation.DataPossessed), attestation.AvailabilityClassMask)
 		message = appendUint64(message, attestation.AttestedAtMillis)
-		digest := domainDigest(checkpointDomain, message)
+		digest := domainDigest(guarantorAttestationDomain, message)
 		if !signatures.VerifySecp256k1(ctx, member.PublicKey, attestation.Signature, digest) {
 			return CheckpointVerification{}, verificationFailure()
 		}
@@ -684,8 +702,27 @@ func zero32(value [32]byte) bool { return value == [32]byte{} }
 
 func putUint64(target []byte, value uint64) { binary.BigEndian.PutUint64(target, value) }
 
+func appendUint16(target []byte, value uint16) []byte {
+	var encoded [2]byte
+	binary.BigEndian.PutUint16(encoded[:], value)
+	return append(target, encoded[:]...)
+}
+
+func appendUint32(target []byte, value uint32) []byte {
+	var encoded [4]byte
+	binary.BigEndian.PutUint32(encoded[:], value)
+	return append(target, encoded[:]...)
+}
+
 func appendUint64(target []byte, value uint64) []byte {
 	var encoded [8]byte
 	binary.BigEndian.PutUint64(encoded[:], value)
 	return append(target, encoded[:]...)
+}
+
+func boolByte(value bool) byte {
+	if value {
+		return 1
+	}
+	return 0
 }

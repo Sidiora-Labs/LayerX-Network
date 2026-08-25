@@ -55,6 +55,11 @@ public enum InclusionKind { Activity, Receipt, Event, State }
 public sealed record InclusionVerification(string Level, BatchHeader Header, byte[] HeaderDigest, byte[] Root);
 
 public sealed record CheckpointAttestation(
+    ushort ProtocolVersion,
+    uint NetworkId,
+    ulong PaxeerChainId,
+    byte[] SettlementContract,
+    ulong Epoch,
     byte[] CheckpointId,
     byte[] CheckpointHash,
     byte[] GuarantorId,
@@ -144,6 +149,7 @@ public static class LocalVerifier
     private static readonly byte[] BatchHeaderDomain = Encoding.UTF8.GetBytes("LXP/v1/batch-header\0");
     private static readonly byte[] ReceiptDomain = Encoding.UTF8.GetBytes("LXP/v1/receipt\0");
     private static readonly byte[] CheckpointDomain = Encoding.UTF8.GetBytes("LXP/v1/checkpoint-certificate\0");
+    private static readonly byte[] GuarantorAttestationDomain = Encoding.UTF8.GetBytes("LXP/v1/guarantor-attestation\0");
     private const int MaximumMessageBytes = 1_048_576;
     private const uint MaximumEffects = 512;
     private const uint MaximumEffectBody = 256;
@@ -231,21 +237,31 @@ public static class LocalVerifier
             if (member.Bonded) bonded[Convert.ToHexString(Exact(member.GuarantorId, 32))] = member;
         var seen = new HashSet<string>(StringComparer.Ordinal);
         uint achieved = 0;
+        ulong? paxeerChainId = null;
+        byte[]? settlementContract = null;
         foreach (var attestation in certificate.Attestations)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var guarantorId = Exact(attestation.GuarantorId, 32);
+            var attestationSettlementContract = Exact(attestation.SettlementContract, 20);
             var identity = Convert.ToHexString(guarantorId);
-            if (!seen.Add(identity) || !Equal(Exact(attestation.CheckpointId, 32), checkpointId) || !Equal(Exact(attestation.CheckpointHash, 32), checkpointId) ||
+            if (!seen.Add(identity) || attestation.ProtocolVersion != header.ProtocolVersion || attestation.NetworkId != header.NetworkId || attestation.Epoch != header.Epoch ||
+                attestation.PaxeerChainId == 0 || AllZero(attestationSettlementContract) ||
+                (paxeerChainId.HasValue && (attestation.PaxeerChainId != paxeerChainId.Value || !Equal(attestationSettlementContract, settlementContract!))) ||
+                !Equal(Exact(attestation.CheckpointId, 32), checkpointId) || !Equal(Exact(attestation.CheckpointHash, 32), checkpointId) ||
                 attestation.BatchNumber != header.BatchNumber || !Equal(Exact(attestation.DataAvailabilityRoot, 32), header.DataAvailabilityRoot) ||
                 !attestation.Replayed || !attestation.DataPossessed || attestation.AvailabilityClassMask != AllAvailabilityClasses || attestation.AttestedAtMilliseconds == 0 ||
                 !bonded.TryGetValue(identity, out var member) || achieved == uint.MaxValue)
                 throw VerificationFailure();
+            paxeerChainId = attestation.PaxeerChainId;
+            settlementContract = attestationSettlementContract;
             var message = Concatenate(
+                EncodeUInt16(attestation.ProtocolVersion), EncodeUInt32(attestation.NetworkId), EncodeUInt64(attestation.PaxeerChainId),
+                attestationSettlementContract, EncodeUInt64(attestation.Epoch),
                 Exact(attestation.CheckpointId, 32), Exact(attestation.CheckpointHash, 32), guarantorId,
                 EncodeUInt64(attestation.BatchNumber), Exact(attestation.DataAvailabilityRoot, 32),
                 new byte[] { 1, 1, attestation.AvailabilityClassMask }, EncodeUInt64(attestation.AttestedAtMilliseconds));
-            var attestationDigest = Digest(CheckpointDomain, message);
+            var attestationDigest = Digest(GuarantorAttestationDomain, message);
             if (!await signatures.VerifySecp256k1Async(Exact(member.PublicKey, 33), Exact(attestation.Signature, 64), attestationDigest, cancellationToken).ConfigureAwait(false))
                 throw VerificationFailure();
             achieved++;
@@ -398,6 +414,13 @@ public static class LocalVerifier
     {
         var encoded = new byte[4];
         BinaryPrimitives.WriteUInt32BigEndian(encoded, value);
+        return encoded;
+    }
+
+    private static byte[] EncodeUInt16(ushort value)
+    {
+        var encoded = new byte[2];
+        BinaryPrimitives.WriteUInt16BigEndian(encoded, value);
         return encoded;
     }
 

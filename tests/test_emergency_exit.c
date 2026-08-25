@@ -117,6 +117,10 @@ int main(void)
     guarantor.ready_to_sign = true;
     guarantor.possesses_availability = true;
     guarantor.bond_view.bonded = true;
+    guarantor.protocol_version = LXP_PROTOCOL_VERSION;
+    guarantor.network_id = 42U;
+    guarantor.paxeer_chain_id = 31337U;
+    guarantor.paxeer_settlement_contract[0] = 0xa1U;
     if (key_pair(1U, guarantor.paxeer_private_key,
                  guarantor.paxeer_public_key) != 0 ||
         lxp_guarantor_attest(

@@ -10,7 +10,7 @@ use crate::availability::RootCommitments;
 use crate::evidence::Evidence;
 use crate::level::achieved;
 
-const ATTESTATION_BYTES: usize = 147;
+const ATTESTATION_BYTES: usize = 189;
 const ALL_AVAILABILITY_CLASSES: u8 = 0x1f;
 
 /// Canonical checkpoint body committed by guarantors.
@@ -47,6 +47,11 @@ impl Checkpoint {
 /// One exact replay-and-possession attestation.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Attestation {
+    protocol_version: u16,
+    network_id: u32,
+    paxeer_chain_id: u64,
+    paxeer_settlement_contract: [u8; 20],
+    epoch: u64,
     checkpoint_id: [u8; 32],
     checkpoint_hash: [u8; 32],
     guarantor_id: [u8; 32],
@@ -64,6 +69,11 @@ impl Attestation {
     #[allow(clippy::too_many_arguments)]
     #[must_use]
     pub const fn new(
+        protocol_version: u16,
+        network_id: u32,
+        paxeer_chain_id: u64,
+        paxeer_settlement_contract: [u8; 20],
+        epoch: u64,
         checkpoint_id: [u8; 32],
         checkpoint_hash: [u8; 32],
         guarantor_id: [u8; 32],
@@ -76,6 +86,11 @@ impl Attestation {
         signature: [u8; 64],
     ) -> Self {
         Self {
+            protocol_version,
+            network_id,
+            paxeer_chain_id,
+            paxeer_settlement_contract,
+            epoch,
             checkpoint_id,
             checkpoint_hash,
             guarantor_id,
@@ -101,15 +116,20 @@ impl Attestation {
 
     fn message(&self) -> [u8; ATTESTATION_BYTES] {
         let mut message = [0_u8; ATTESTATION_BYTES];
-        message[..32].copy_from_slice(&self.checkpoint_id);
-        message[32..64].copy_from_slice(&self.checkpoint_hash);
-        message[64..96].copy_from_slice(&self.guarantor_id);
-        message[96..104].copy_from_slice(&self.batch_number.to_be_bytes());
-        message[104..136].copy_from_slice(&self.data_availability_root);
-        message[136] = u8::from(self.replayed);
-        message[137] = u8::from(self.data_possessed);
-        message[138] = self.availability_class_mask;
-        message[139..147].copy_from_slice(&self.attested_at_ms.to_be_bytes());
+        message[..2].copy_from_slice(&self.protocol_version.to_be_bytes());
+        message[2..6].copy_from_slice(&self.network_id.to_be_bytes());
+        message[6..14].copy_from_slice(&self.paxeer_chain_id.to_be_bytes());
+        message[14..34].copy_from_slice(&self.paxeer_settlement_contract);
+        message[34..42].copy_from_slice(&self.epoch.to_be_bytes());
+        message[42..74].copy_from_slice(&self.checkpoint_id);
+        message[74..106].copy_from_slice(&self.checkpoint_hash);
+        message[106..138].copy_from_slice(&self.guarantor_id);
+        message[138..146].copy_from_slice(&self.batch_number.to_be_bytes());
+        message[146..178].copy_from_slice(&self.data_availability_root);
+        message[178] = u8::from(self.replayed);
+        message[179] = u8::from(self.data_possessed);
+        message[180] = self.availability_class_mask;
+        message[181..189].copy_from_slice(&self.attested_at_ms.to_be_bytes());
         message
     }
 }
@@ -317,11 +337,17 @@ pub fn verify_certificate(
     }
     let mut seen = BTreeSet::new();
     let mut achieved = 0;
+    let mut settlement_domain = None;
     for attestation in &certificate.attestations {
         if !seen.insert(attestation.guarantor_id) {
             return Err(CheckpointError::DuplicateSigner(attestation.guarantor_id));
         }
-        if attestation.checkpoint_id != identifier
+        if attestation.protocol_version != header.protocol_version()
+            || attestation.network_id != header.network_id()
+            || attestation.paxeer_chain_id == 0
+            || attestation.paxeer_settlement_contract == [0; 20]
+            || attestation.epoch != header.epoch()
+            || attestation.checkpoint_id != identifier
             || attestation.checkpoint_hash != identifier
             || attestation.batch_number != header.batch_number()
             || attestation.data_availability_root != header.data_availability_root()
@@ -332,6 +358,16 @@ pub fn verify_certificate(
         {
             return Err(CheckpointError::CheckpointFields);
         }
+        let domain = (
+            attestation.paxeer_chain_id,
+            attestation.paxeer_settlement_contract,
+        );
+        if let Some(expected) = settlement_domain {
+            if expected != domain {
+                return Err(CheckpointError::CheckpointFields);
+            }
+        }
+        settlement_domain = Some(domain);
         let key = bonded_set
             .iter()
             .find(|key| key.guarantor_id == attestation.guarantor_id && key.bonded)

@@ -49,6 +49,8 @@ pub enum Domain {
     DaChunk,
     /// Availability challenge digest.
     DaChallenge,
+    /// Domain-bound guarantor checkpoint attestation digest.
+    GuarantorAttestation,
 }
 
 impl Domain {
@@ -75,6 +77,7 @@ impl Domain {
             Self::Snapshot => b"LXP/v1/snapshot\0",
             Self::DaChunk => b"LXP/v1/da-chunk\0",
             Self::DaChallenge => b"LXP/v1/da-challenge\0",
+            Self::GuarantorAttestation => b"LXP/v1/guarantor-attestation\0",
         }
     }
 }
@@ -301,8 +304,7 @@ pub fn checkpoint_id(header: &[u8], validity_proof: &[u8]) -> Result<[u8; 32], W
     )
 }
 
-/// Computes the exact guarantor-attestation digest under the checkpoint
-/// certificate domain.
+/// Computes the exact domain-bound guarantor-attestation digest.
 ///
 /// # Errors
 ///
@@ -310,7 +312,7 @@ pub fn checkpoint_id(header: &[u8], validity_proof: &[u8]) -> Result<[u8; 32], W
 /// represented safely.
 pub fn checkpoint_attestation_digest(message: &[u8]) -> Result<[u8; 32], WireError> {
     domain(
-        Domain::CheckpointCertificate,
+        Domain::GuarantorAttestation,
         &CanonicalBytes::from_wire(message.to_vec()),
     )
 }

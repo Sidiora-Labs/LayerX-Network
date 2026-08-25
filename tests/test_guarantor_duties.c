@@ -323,6 +323,8 @@ int main(void)
     (void)memset(&guarantor, 0, sizeof(guarantor));
     guarantor.guarantor_id[0] = 4U;
     guarantor.paxeer_public_key[0] = 2U;
+    guarantor.protocol_version = 1U;
+    guarantor.network_id = 9U;
     guarantor.bond_view.bonded = true;
     guarantor.bond_view.bonded_amount = (lxp_u128){0U, 100U};
     guarantor.replay_engine = &engine;

@@ -113,7 +113,9 @@ lxp_result lxp_guarantor_process_batch(lxp_guarantor_ctx *ctx,
     lxp_result status;
     if (ctx == NULL || arena == NULL || ready_to_sign == NULL ||
         ctx->download == NULL || ctx->store_availability == NULL ||
-        ctx->replay_engine == NULL || !ctx->bond_view.bonded)
+        ctx->replay_engine == NULL || !ctx->bond_view.bonded ||
+        !lxp_protocol_version_supported(ctx->protocol_version) ||
+        ctx->network_id == 0U)
         return LXP_ERR_NON_CANONICAL;
     *ready_to_sign = false;
     ctx->ready_to_sign = false;
@@ -125,6 +127,10 @@ lxp_result lxp_guarantor_process_batch(lxp_guarantor_ctx *ctx,
     if (status == LXP_OK)
         status = lxp_batch_body_decode(canonical.bytes, canonical.length,
                                        &body);
+    if (status == LXP_OK &&
+        (body.header.protocol_version != ctx->protocol_version ||
+         body.header.network_id != ctx->network_id))
+        status = LXP_ERR_AUTH_SCOPE;
     if (status == LXP_OK && body.header.batch_number != batch_number)
         status = LXP_ERR_BATCH_GAP;
     if (status == LXP_OK)

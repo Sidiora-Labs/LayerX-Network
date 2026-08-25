@@ -21,6 +21,7 @@ from layerx_sdk import (
     ApprovalListRequest,
     ApprovalRejectRequest,
     Client,
+    CheckpointAttestation,
     ErrorClass,
     IdempotentMutation,
     SubmissionFailed,
@@ -98,6 +99,27 @@ class PythonSdkIntegration(unittest.TestCase):
                 parse_amount(invalid)
         with self.assertRaises(OverflowError):
             parse_sequence("18446744073709551616")
+
+    def test_checkpoint_attestation_exposes_canonical_paxeer_binding(self) -> None:
+        attestation = CheckpointAttestation(
+            protocol_version=1,
+            network_id=17,
+            paxeer_chain_id=777,
+            settlement_contract=bytes([1]) * 20,
+            epoch=9,
+            checkpoint_id=bytes(32),
+            checkpoint_hash=bytes(32),
+            guarantor_id=bytes(32),
+            batch_number=12,
+            data_availability_root=bytes(32),
+            replayed=True,
+            data_possessed=True,
+            availability_class_mask=0x1F,
+            attested_at_ms=1,
+            signature=bytes(64),
+        )
+        self.assertEqual(attestation.paxeer_chain_id, 777)
+        self.assertEqual(attestation.settlement_contract, bytes([1]) * 20)
 
     def test_reads_require_the_declared_verification_level(self) -> None:
         read = VerifiedRead(

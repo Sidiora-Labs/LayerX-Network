@@ -83,6 +83,14 @@ lxp_result lxp_guarantor_cert_assemble(
     for (i = 0U; i < attestation_count; ++i) {
         if (!certificate->attestations[i].replayed ||
             !certificate->attestations[i].da_possessed ||
+            certificate->attestations[i].protocol_version !=
+                certificate->checkpoint.header.protocol_version ||
+            certificate->attestations[i].network_id !=
+                certificate->checkpoint.header.network_id ||
+            certificate->attestations[i].epoch !=
+                certificate->checkpoint.header.epoch ||
+            certificate->attestations[i].batch_number !=
+                certificate->checkpoint.header.batch_number ||
             certificate->attestations[i].availability_class_mask !=
                 LXP_GUARANTOR_AVAILABILITY_ALL ||
             (i != 0U && memcmp(certificate->attestations[i - 1U].guarantor_id,
@@ -93,6 +101,11 @@ lxp_result lxp_guarantor_cert_assemble(
                    certificate->attestations[i].checkpoint_id, 32U) != 0 ||
             memcmp(certificate->attestations[0].checkpoint_hash,
                    certificate->attestations[i].checkpoint_hash, 32U) != 0 ||
+            certificate->attestations[0].paxeer_chain_id !=
+                certificate->attestations[i].paxeer_chain_id ||
+            memcmp(certificate->attestations[0].paxeer_settlement_contract,
+                   certificate->attestations[i].paxeer_settlement_contract,
+                   20U) != 0 ||
             memcmp(certificate->checkpoint.header.data_availability_root,
                    certificate->attestations[i].data_availability_root,
                    32U) != 0)
@@ -141,6 +154,19 @@ lxp_result lxp_guarantor_cert_verify(
             return LXP_ERR_ATTESTATION_THRESHOLD;
         if (memcmp(attestation->checkpoint_id, checkpoint_hash, 32U) != 0 ||
             memcmp(attestation->checkpoint_hash, checkpoint_hash, 32U) != 0 ||
+            (i != 0U &&
+             certificate->attestations[0].paxeer_chain_id !=
+                 attestation->paxeer_chain_id) ||
+            (i != 0U &&
+             memcmp(certificate->attestations[0].paxeer_settlement_contract,
+                    attestation->paxeer_settlement_contract, 20U) != 0) ||
+            attestation->protocol_version !=
+                certificate->checkpoint.header.protocol_version ||
+            attestation->network_id !=
+                certificate->checkpoint.header.network_id ||
+            attestation->epoch != certificate->checkpoint.header.epoch ||
+            attestation->batch_number !=
+                certificate->checkpoint.header.batch_number ||
             memcmp(attestation->data_availability_root,
                    certificate->checkpoint.header.data_availability_root,
                    32U) != 0)

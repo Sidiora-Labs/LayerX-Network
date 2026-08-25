@@ -39,8 +39,9 @@ const SET_SLASHING_AUTHORITY: [u8; 4] = [0xef, 0x45, 0x5c, 0x4c];
 const MINT: [u8; 4] = [0x40, 0xc1, 0x0f, 0x19];
 const APPROVE: [u8; 4] = [0x09, 0x5e, 0xa7, 0xb3];
 const DEPOSIT: [u8; 4] = [0x8a, 0x9e, 0x53, 0x2c];
-const DEPOSIT_BOND: [u8; 4] = [0x5c, 0x37, 0x4a, 0x21];
-const REGISTER_CHECKPOINT: [u8; 4] = [0xf3, 0x89, 0xd8, 0x3f];
+const ACTIVATE_GUARANTOR: [u8; 4] = [0x23, 0x7d, 0xd0, 0x4f];
+const DEPOSIT_BOND: [u8; 4] = [0xf5, 0x14, 0x8c, 0x24];
+const REGISTER_CHECKPOINT: [u8; 4] = [0xc7, 0x2a, 0x88, 0x43];
 const RAISE_CHALLENGE: [u8; 4] = [0x0c, 0xfc, 0xd9, 0x2c];
 const RESOLVE_CHALLENGE: [u8; 4] = [0x7d, 0x89, 0x12, 0x2d];
 const BALANCE_OF: [u8; 4] = [0x70, 0xa0, 0x82, 0x31];
@@ -423,7 +424,16 @@ fn final_report(
 }
 
 #[allow(clippy::too_many_lines)]
-fn deploy_suite(anvil: &Anvil) -> (EvmAddress, EvmAddress, EvmAddress, EvmAddress, EvmAddress) {
+fn deploy_suite(
+    anvil: &Anvil,
+) -> (
+    EvmAddress,
+    EvmAddress,
+    EvmAddress,
+    EvmAddress,
+    EvmAddress,
+    EvmAddress,
+) {
     let owner = parse_address(FUNDED);
     let challenger = parse_address(CHALLENGER);
     let token = anvil.deploy("IntegrationToken", &[address_word(owner)]);
@@ -450,6 +460,9 @@ fn deploy_suite(anvil: &Anvil) -> (EvmAddress, EvmAddress, EvmAddress, EvmAddres
         "GuarantorBond",
         &[
             address_word(owner),
+            address_word(owner),
+            quantity_word(&1_u16.to_be_bytes()),
+            quantity_word(&NETWORK_ID.to_be_bytes()),
             quantity_word(&100_u32.to_be_bytes()),
             [0; 32],
             quantity_word(&86_400_u64.to_be_bytes()),
@@ -573,12 +586,31 @@ fn deploy_suite(anvil: &Anvil) -> (EvmAddress, EvmAddress, EvmAddress, EvmAddres
         FUNDED,
         bond,
         &call_data(
-            DEPOSIT_BOND,
-            &[GUARANTOR_ID, quantity_word(&1_u64.to_be_bytes())],
+            ACTIVATE_GUARANTOR,
+            &[
+                GUARANTOR_ID,
+                address_word(owner),
+                address_word(owner),
+                quantity_word(&1_u64.to_be_bytes()),
+                quantity_word(&1_u64.to_be_bytes()),
+            ],
         ),
+        0,
+    );
+    anvil.send_checked(
+        FUNDED,
+        bond,
+        &call_data(DEPOSIT_BOND, &[GUARANTOR_ID]),
         1,
     );
-    (token, vault, checkpoint_registry, challenge_manager, claims)
+    (
+        token,
+        vault,
+        bond,
+        checkpoint_registry,
+        challenge_manager,
+        claims,
+    )
 }
 
 fn debit_expectation(recipient: EvmAddress) -> DebitExpectation {
@@ -688,9 +720,18 @@ fn checkpoint_hash(header: &Header) -> [u8; 32] {
     hasher.finalize().into()
 }
 
-fn signed_attestation(header: &Header, checkpoint: [u8; 32]) -> WithdrawalAttestation {
+fn signed_attestation(
+    header: &Header,
+    checkpoint: [u8; 32],
+    settlement_contract: EvmAddress,
+) -> WithdrawalAttestation {
     let attested_at = header.timestamp.saturating_add(1);
-    let mut message = Vec::with_capacity(147);
+    let mut message = Vec::with_capacity(189);
+    message.extend_from_slice(&header.protocol_version.to_be_bytes());
+    message.extend_from_slice(&header.network_id.to_be_bytes());
+    message.extend_from_slice(&31_337_u64.to_be_bytes());
+    message.extend_from_slice(&settlement_contract.bytes());
+    message.extend_from_slice(&header.epoch.to_be_bytes());
     message.extend_from_slice(&checkpoint);
     message.extend_from_slice(&checkpoint);
     message.extend_from_slice(&GUARANTOR_ID);
@@ -698,9 +739,9 @@ fn signed_attestation(header: &Header, checkpoint: [u8; 32]) -> WithdrawalAttest
     message.extend_from_slice(&header.data_availability_root);
     message.extend_from_slice(&[1, 1, 0x1f]);
     message.extend_from_slice(&attested_at.to_be_bytes());
-    assert_eq!(message.len(), 147);
+    assert_eq!(message.len(), 189);
     let mut hasher = Sha256::new();
-    hasher.update(b"LXP/v1/checkpoint-certificate\0");
+    hasher.update(b"LXP/v1/guarantor-attestation\0");
     hasher.update(message);
     let digest: [u8; 32] = hasher.finalize().into();
     let signature = sign_digest(digest);
@@ -709,6 +750,11 @@ fn signed_attestation(header: &Header, checkpoint: [u8; 32]) -> WithdrawalAttest
     r.copy_from_slice(&signature[..32]);
     s.copy_from_slice(&signature[32..64]);
     WithdrawalAttestation {
+        protocol_version: header.protocol_version,
+        network_id: header.network_id,
+        paxeer_chain_id: 31_337,
+        settlement_contract,
+        epoch: header.epoch,
         checkpoint_id: checkpoint,
         checkpoint_hash: checkpoint,
         guarantor_id: GUARANTOR_ID,
@@ -772,8 +818,13 @@ fn header_words(header: &Header) -> [[u8; 32]; 15] {
     ]
 }
 
-fn attestation_words(attestation: &WithdrawalAttestation) -> [[u8; 32]; 13] {
+fn attestation_words(attestation: &WithdrawalAttestation) -> [[u8; 32]; 18] {
     [
+        quantity_word(&attestation.protocol_version.to_be_bytes()),
+        quantity_word(&attestation.network_id.to_be_bytes()),
+        quantity_word(&attestation.paxeer_chain_id.to_be_bytes()),
+        address_word(attestation.settlement_contract),
+        quantity_word(&attestation.epoch.to_be_bytes()),
         attestation.checkpoint_id,
         attestation.checkpoint_hash,
         attestation.guarantor_id,
@@ -803,14 +854,15 @@ fn register_checkpoint_calldata(header: &Header, attestation: &WithdrawalAttesta
 
 fn fixture() -> Fixture {
     let anvil = Anvil::launch();
-    let (token, vault, checkpoint_registry, challenge_manager, claims) = deploy_suite(&anvil);
+    let (token, vault, bond, checkpoint_registry, challenge_manager, claims) =
+        deploy_suite(&anvil);
     let recipient = parse_address(RECIPIENT);
     let expectation = debit_expectation(recipient);
     let debit = committed_debit(expectation);
     let leaf = withdrawal_leaf(expectation);
     let header = checkpoint_header(leaf, anvil.latest_timestamp());
     let checkpoint_hash = checkpoint_hash(&header);
-    let attestation = signed_attestation(&header, checkpoint_hash);
+    let attestation = signed_attestation(&header, checkpoint_hash, bond);
     anvil.send_checked(
         FUNDED,
         checkpoint_registry,

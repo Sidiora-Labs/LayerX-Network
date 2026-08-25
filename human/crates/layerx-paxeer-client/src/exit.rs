@@ -20,10 +20,10 @@ const SELECTOR_NULLIFIER_REGISTRY: [u8; 4] = [0xb8, 0x70, 0x67, 0x6c];
 const SELECTOR_LIVENESS_BOUND: [u8; 4] = [0xc5, 0x52, 0x72, 0x66];
 const SELECTOR_REQUIRED_WITHDRAWAL_ID: [u8; 4] = [0xce, 0x3c, 0xda, 0x10];
 const SELECTOR_EXIT_NULLIFIER: [u8; 4] = [0xcf, 0x44, 0xf7, 0x74];
-const SELECTOR_EXECUTE_EXIT: [u8; 4] = [0x4a, 0xa3, 0x8d, 0x9e];
+const SELECTOR_EXECUTE_EXIT: [u8; 4] = [0x61, 0xd1, 0x37, 0x35];
 const SELECTOR_FINALISED_STATE_ROOT: [u8; 4] = [0xdf, 0xd0, 0x60, 0x94];
 const SELECTOR_REGISTERED_AT: [u8; 4] = [0x3d, 0xd8, 0xa0, 0x07];
-const SELECTOR_IS_RECORDED_CERTIFICATE: [u8; 4] = [0x98, 0x6f, 0x94, 0x8b];
+const SELECTOR_IS_RECORDED_CERTIFICATE: [u8; 4] = [0x05, 0xd9, 0x4f, 0x01];
 const SELECTOR_NULLIFIER_STATUS: [u8; 4] = [0x52, 0xad, 0x0d, 0x5e];
 const SELECTOR_WITHDRAWAL_ID_USED: [u8; 4] = [0x69, 0x8d, 0xb2, 0x67];
 const SELECTOR_CLAIM_FOR_NULLIFIER: [u8; 4] = [0xb5, 0x7e, 0xa0, 0xa6];
@@ -35,7 +35,7 @@ const MERKLE_NODE_DOMAIN: &[u8] = b"LXP/v1/merkle-node\x00";
 
 const MAX_PROOF_DEPTH: usize = 256;
 const WORD: usize = 32;
-const ATTESTATION_WORDS: usize = 13;
+const ATTESTATION_WORDS: usize = 18;
 
 /// Declared configuration for the emergency-exit path.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -62,6 +62,11 @@ pub enum ExitConfigError {
 /// One recorded guarantor attestation from the published checkpoint certificate.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct GuarantorAttestation {
+    pub protocol_version: u16,
+    pub network_id: u32,
+    pub paxeer_chain_id: u64,
+    pub settlement_contract: EvmAddress,
+    pub epoch: u64,
     pub checkpoint_id: [u8; 32],
     pub checkpoint_hash: [u8; 32],
     pub guarantor_id: [u8; 32],
@@ -798,6 +803,11 @@ fn recorded_certificate_calldata(
 
 fn attestation_words(attestation: &GuarantorAttestation) -> [[u8; 32]; ATTESTATION_WORDS] {
     [
+        quantity_word(&attestation.protocol_version.to_be_bytes()),
+        quantity_word(&attestation.network_id.to_be_bytes()),
+        quantity_word(&attestation.paxeer_chain_id.to_be_bytes()),
+        address_word(attestation.settlement_contract),
+        quantity_word(&attestation.epoch.to_be_bytes()),
         attestation.checkpoint_id,
         attestation.checkpoint_hash,
         attestation.guarantor_id,
