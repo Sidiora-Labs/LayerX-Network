@@ -7,7 +7,15 @@ import (
 	channeltypes "github.com/sidiora-labs/paxeer-network/interchain/modules/core/04-channel/types"
 	wasmvmtypes "github.com/sidiora-labs/paxeer-network/wasm-runtime/types"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+func TestValidateConnectionHops(t *testing.T) {
+	require.Error(t, validateConnectionHops(nil))
+	require.Error(t, validateConnectionHops([]string{"connection-0", "connection-1"}))
+	require.Error(t, validateConnectionHops([]string{"invalid"}))
+	require.NoError(t, validateConnectionHops([]string{"connection-0"}))
+}
 
 func TestMapToWasmVMIBCPacket(t *testing.T) {
 	var myTimestamp uint64 = 1

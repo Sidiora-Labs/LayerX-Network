@@ -42,6 +42,9 @@ func (i IBCHandler) OnChanOpenInit(
 	if err := ValidateChannelParams(channelID); err != nil {
 		return err
 	}
+	if err := validateConnectionHops(connectionHops); err != nil {
+		return err
+	}
 	contractAddr, err := ContractFromPortID(portID)
 	if err != nil {
 		return sdkerrors.Wrapf(err, "contract port id")
@@ -82,6 +85,9 @@ func (i IBCHandler) OnChanOpenTry(
 ) (string, error) {
 	// ensure port, version, capability
 	if err := ValidateChannelParams(channelID); err != nil {
+		return "", err
+	}
+	if err := validateConnectionHops(connectionHops); err != nil {
 		return "", err
 	}
 
@@ -141,6 +147,9 @@ func (i IBCHandler) OnChanOpenAck(
 	if !ok {
 		return sdkerrors.Wrapf(channeltypes.ErrChannelNotFound, "port ID (%s) channel ID (%s)", portID, channelID)
 	}
+	if err := channelInfo.ValidateBasic(); err != nil {
+		return sdkerrors.Wrap(err, "invalid channel state")
+	}
 	channelInfo.Counterparty.ChannelId = counterpartyChannelID
 	// This is a bit ugly, but it is set AFTER the callback is done, yet we want to provide the contract
 	// access to the channel in queries. We can revisit how to better integrate with ibc-go in the future,
@@ -167,6 +176,9 @@ func (i IBCHandler) OnChanOpenConfirm(ctx sdk.Context, portID, channelID string)
 	if !ok {
 		return sdkerrors.Wrapf(channeltypes.ErrChannelNotFound, "port ID (%s) channel ID (%s)", portID, channelID)
 	}
+	if err := channelInfo.ValidateBasic(); err != nil {
+		return sdkerrors.Wrap(err, "invalid channel state")
+	}
 	msg := wasmvmtypes.IBCChannelConnectMsg{
 		OpenConfirm: &wasmvmtypes.IBCOpenConfirm{
 			Channel: toWasmVMChannel(portID, channelID, channelInfo),
@@ -184,6 +196,9 @@ func (i IBCHandler) OnChanCloseInit(ctx sdk.Context, portID, channelID string) e
 	channelInfo, ok := i.channelKeeper.GetChannel(ctx, portID, channelID)
 	if !ok {
 		return sdkerrors.Wrapf(channeltypes.ErrChannelNotFound, "port ID (%s) channel ID (%s)", portID, channelID)
+	}
+	if err := channelInfo.ValidateBasic(); err != nil {
+		return sdkerrors.Wrap(err, "invalid channel state")
 	}
 
 	msg := wasmvmtypes.IBCChannelCloseMsg{
@@ -208,6 +223,9 @@ func (i IBCHandler) OnChanCloseConfirm(ctx sdk.Context, portID, channelID string
 	channelInfo, ok := i.channelKeeper.GetChannel(ctx, portID, channelID)
 	if !ok {
 		return sdkerrors.Wrapf(channeltypes.ErrChannelNotFound, "port ID (%s) channel ID (%s)", portID, channelID)
+	}
+	if err := channelInfo.ValidateBasic(); err != nil {
+		return sdkerrors.Wrap(err, "invalid channel state")
 	}
 
 	msg := wasmvmtypes.IBCChannelCloseMsg{
@@ -339,6 +357,16 @@ func ValidateChannelParams(channelID string) error {
 	}
 	if channelSequence > math.MaxUint32 {
 		return sdkerrors.Wrapf(types.ErrMaxIBCChannels, "channel sequence %d is greater than max allowed transfer channels %d", channelSequence, math.MaxUint32)
+	}
+	return nil
+}
+
+func validateConnectionHops(connectionHops []string) error {
+	if len(connectionHops) != 1 {
+		return sdkerrors.Wrap(channeltypes.ErrTooManyConnectionHops, "current IBC version requires exactly one connection hop")
+	}
+	if err := host.ConnectionIdentifierValidator(connectionHops[0]); err != nil {
+		return sdkerrors.Wrap(err, "invalid connection hop ID")
 	}
 	return nil
 }

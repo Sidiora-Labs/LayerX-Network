@@ -1,6 +1,8 @@
 package keeper_test
 
 import (
+	"encoding/binary"
+	"math"
 	"testing"
 	"time"
 
@@ -72,6 +74,27 @@ func TestCountTxDecorator(t *testing.T) {
 				assert.Equal(t, []byte{0, 0, 0, 0, 0, 0, 0, myCurrentBlockHeight, 0, 0, 0, 1}, bz)
 				return ctx, nil
 			},
+		},
+		"truncated persistent counter rejected": {
+			setupDB: func(t *testing.T, ctx sdk.Context) {
+				ctx.MultiStore().GetKVStore(keyWasm).Set(types.TXCounterPrefix, make([]byte, 11))
+			},
+			expErr: true,
+		},
+		"oversized persistent counter rejected": {
+			setupDB: func(t *testing.T, ctx sdk.Context) {
+				ctx.MultiStore().GetKVStore(keyWasm).Set(types.TXCounterPrefix, make([]byte, 13))
+			},
+			expErr: true,
+		},
+		"counter exhaustion rejected": {
+			setupDB: func(t *testing.T, ctx sdk.Context) {
+				bz := make([]byte, 12)
+				binary.BigEndian.PutUint64(bz, myCurrentBlockHeight)
+				binary.BigEndian.PutUint32(bz[8:], math.MaxUint32)
+				ctx.MultiStore().GetKVStore(keyWasm).Set(types.TXCounterPrefix, bz)
+			},
+			expErr: true,
 		},
 		"simulation not persisted": {
 			setupDB: func(t *testing.T, ctx sdk.Context) {

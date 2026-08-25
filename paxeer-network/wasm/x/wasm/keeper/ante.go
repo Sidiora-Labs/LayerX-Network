@@ -44,6 +44,9 @@ func (a CountTXDecorator) AnteHandle(ctx sdk.Context, tx sdk.Tx, simulate bool, 
 			txCounter = val
 		} // else use `0` from above to start with
 	}
+	if txCounter == math.MaxUint32 {
+		return sdk.Context{}, errors.New("transaction counter exhausted")
+	}
 	// store next counter value for current height
 	h, err := encodeHeightCounter(currentHeight, txCounter+1)
 	if err != nil {
@@ -65,6 +68,9 @@ func encodeHeightCounter(height int64, counter uint32) ([]byte, error) {
 }
 
 func decodeHeightCounter(bz []byte) (int64, uint32, error) {
+	if len(bz) != 12 {
+		return 0, 0, fmt.Errorf("invalid transaction counter length: %d", len(bz))
+	}
 	left := sdk.BigEndianToUint64(bz[0:8])
 	if left > math.MaxInt64 {
 		return 0, 0, errors.New("invalid height")

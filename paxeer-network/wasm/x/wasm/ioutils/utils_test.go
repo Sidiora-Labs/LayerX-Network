@@ -44,6 +44,13 @@ func TestIsGzip(t *testing.T) {
 	require.True(t, IsGzip(gzipData))
 }
 
+func TestFileSignaturesRejectTruncatedInput(t *testing.T) {
+	for _, input := range [][]byte{nil, {}, {0x1f}, {0x1f, 0x8b}, {0x00, 0x61, 0x73}} {
+		require.False(t, IsGzip(input))
+		require.False(t, IsWasm(input))
+	}
+}
+
 func TestGzipIt(t *testing.T) {
 	wasmCode, someRandomStr, _, err := GetTestData()
 	originalGzipData := []byte{
