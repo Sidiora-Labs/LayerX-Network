@@ -12,18 +12,18 @@ use crate::store::TenantId;
 
 use super::{Decision, DecisionReason, Outcome};
 
-/// Exact request fields consumed by policy evaluation.
+/// Current activity intent fields consumed by policy evaluation.
+///
+/// Historical spend, usage counts, and approval status are deliberately absent:
+/// those facts must come from daemon-owned verified context.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PolicyRequest {
     pub activity_type: u16,
     pub counterparty: [u8; 32],
     pub asset: [u8; 32],
     pub amount: u128,
-    pub cumulative_amount: u128,
-    pub cumulative_count: u64,
     pub purpose: String,
     pub core_sequence: u64,
-    pub approval_present: bool,
 }
 
 /// Inclusive deterministic protocol-sequence window.
@@ -76,14 +76,16 @@ pub struct PolicySet {
 
 /// Inputs admitted to deterministic local evaluation.
 ///
-/// The budget context is private: callers either supply an opaque result issued
-/// by protocol reconciliation or explicitly evaluate without one and receive a
+/// The budget and cumulative-count contexts are private. Callers may supply an
+/// opaque budget result issued by protocol reconciliation, but no canonical
+/// cumulative-count producer exists yet, so current evaluation remains a
 /// fail-closed invalid-context denial.
 pub struct EvaluationInput<'a> {
     pub request: &'a PolicyRequest,
     pub session: &'a SessionRecord,
     pub capability: &'a Capability,
     budget: BudgetContext<'a>,
+    cumulative_count: Option<u64>,
 }
 
 #[derive(Clone, Copy)]
@@ -107,10 +109,13 @@ impl<'a> EvaluationInput<'a> {
             session,
             capability,
             budget: BudgetContext::Unavailable,
+            cumulative_count: None,
         }
     }
 
     /// Binds an opaque result issued only by protocol-budget reconciliation.
+    /// Cumulative count and approval evidence remain unavailable, so this input
+    /// cannot currently yield an allow decision.
     #[must_use]
     pub const fn with_verified_protocol_budget(
         request: &'a PolicyRequest,
@@ -123,6 +128,7 @@ impl<'a> EvaluationInput<'a> {
             session,
             capability,
             budget: BudgetContext::Verified(budget),
+            cumulative_count: None,
         }
     }
 
@@ -132,12 +138,18 @@ impl<'a> EvaluationInput<'a> {
             BudgetContext::Verified(budget) => Some(budget),
         }
     }
+
+    const fn authenticated_cumulative_count(&self) -> Option<u64> {
+        self.cumulative_count
+    }
 }
 
 /// Typed internal failure. Every variant maps to a denial.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EvaluationFailure {
     InvalidRule,
+    ProtocolBudgetUnavailable,
+    CumulativeCountUnavailable,
     StepLimitExceeded,
     Internal,
 }
@@ -148,8 +160,9 @@ pub trait RuleMatcher {
     ///
     /// # Errors
     ///
-    /// Returns `EvaluationFailure::InvalidRule` for a malformed rule such as one with an empty
-    /// identifier; every variant is caught by the evaluator and turned into a fail-closed deny.
+    /// Returns typed missing-authority failures for cumulative facts which have
+    /// no daemon-owned producer, or `InvalidRule` for malformed rules. Every
+    /// variant is caught by the evaluator and turned into a fail-closed deny.
     fn matches(&self, rule: &Rule, input: &EvaluationInput<'_>) -> Result<bool, EvaluationFailure>;
 }
 
@@ -163,6 +176,15 @@ impl RuleMatcher for DeterministicMatcher {
         if rule.id.is_empty() {
             return Err(EvaluationFailure::InvalidRule);
         }
+        let cumulative_amount = input
+            .verified_budget()
+            .map(ReconciliationState::protocol_consumed)
+            .ok_or(EvaluationFailure::ProtocolBudgetUnavailable)?;
+        if constraints.maximum_cumulative_count.is_some()
+            && input.authenticated_cumulative_count().is_none()
+        {
+            return Err(EvaluationFailure::CumulativeCountUnavailable);
+        }
         Ok((constraints.activity_types.is_empty()
             || constraints.activity_types.contains(&request.activity_type))
             && (constraints.counterparties.is_empty()
@@ -173,10 +195,14 @@ impl RuleMatcher for DeterministicMatcher {
                 .is_none_or(|maximum| request.amount <= maximum)
             && constraints
                 .maximum_cumulative_amount
-                .is_none_or(|maximum| request.cumulative_amount <= maximum)
+                .is_none_or(|maximum| cumulative_amount <= maximum)
             && constraints
                 .maximum_cumulative_count
-                .is_none_or(|maximum| request.cumulative_count <= maximum)
+                .is_none_or(|maximum| {
+                    input
+                        .authenticated_cumulative_count()
+                        .is_some_and(|count| count <= maximum)
+                })
             && (constraints.purposes.is_empty() || constraints.purposes.contains(&request.purpose))
             && (constraints.capability_ids.is_empty()
                 || constraints.capability_ids.contains(&input.capability.id))
@@ -234,9 +260,7 @@ fn evaluate_inner(
         matched_rules.push(rule.id.clone());
         match rule.effect {
             RuleEffect::Deny => denied.push(rule.id.clone()),
-            RuleEffect::Permit
-                if rule.constraints.required_approval && !input.request.approval_present =>
-            {
+            RuleEffect::Permit if rule.constraints.required_approval => {
                 approval_missing.push(rule.id.clone());
             }
             RuleEffect::Permit => permitted.push(rule.id.clone()),
@@ -277,6 +301,9 @@ fn valid_context(policy: &PolicySet, input: &EvaluationInput<'_>) -> bool {
     let Some(budget) = input.verified_budget() else {
         return false;
     };
+    let Some(cumulative_count) = input.authenticated_cumulative_count() else {
+        return false;
+    };
     let session = &input.session.request;
     if policy.version.is_empty()
         || policy.version != session.policy_version
@@ -293,7 +320,7 @@ fn valid_context(policy: &PolicySet, input: &EvaluationInput<'_>) -> bool {
         amount: input.request.amount,
         purpose: input.request.purpose.clone(),
         core_sequence: input.request.core_sequence,
-        uses_in_window: input.request.cumulative_count,
+        uses_in_window: cumulative_count,
     };
     capability::evaluate(input.capability, &intent) == capability::Decision::Allow
 }

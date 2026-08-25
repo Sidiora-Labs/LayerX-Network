@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -57,10 +58,16 @@ fn source(values: &BTreeMap<String, String>) -> String {
     rendered
 }
 
+fn write_protected(path: &PathBuf, contents: impl AsRef<[u8]>) {
+    fs::write(path, contents).unwrap_or_else(|error| panic!("write: {error}"));
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+        .unwrap_or_else(|error| panic!("permissions: {error}"));
+}
+
 #[test]
 fn explicit_environment_precedence_produces_one_fully_typed_configuration() {
     let path = path("precedence");
-    fs::write(&path, source(&values())).unwrap_or_else(|error| panic!("write: {error}"));
+    write_protected(&path, source(&values()));
     let environment = BTreeMap::from([
         (
             "LAYERX_NODE_ENDPOINT".to_owned(),
@@ -110,7 +117,7 @@ fn duplicate_file_setting_and_unknown_environment_setting_are_refused() {
     let path = path("ambiguous");
     let mut duplicated = source(&values());
     duplicated.push_str("network_id=43\n");
-    fs::write(&path, duplicated).unwrap_or_else(|error| panic!("write: {error}"));
+    write_protected(&path, duplicated);
     assert_eq!(
         load(&path, &BTreeMap::new()),
         Err(ConfigError {
@@ -118,7 +125,7 @@ fn duplicate_file_setting_and_unknown_environment_setting_are_refused() {
             reason: RejectionReason::Duplicate,
         })
     );
-    fs::write(&path, source(&values())).unwrap_or_else(|error| panic!("rewrite: {error}"));
+    write_protected(&path, source(&values()));
     assert_eq!(
         load(
             &path,
@@ -180,7 +187,7 @@ fn unsafe_paths_protocols_maps_and_blank_overrides_name_the_setting() {
     }
 
     let path = path("blank-override");
-    fs::write(&path, source(&values())).unwrap_or_else(|error| panic!("write: {error}"));
+    write_protected(&path, source(&values()));
     assert_eq!(
         load(
             &path,

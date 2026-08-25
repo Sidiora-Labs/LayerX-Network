@@ -73,11 +73,8 @@ fn request() -> PolicyRequest {
         counterparty: [8; 32],
         asset: [9; 32],
         amount: 100,
-        cumulative_amount: 100,
-        cumulative_count: 1,
         purpose: "research".to_owned(),
         core_sequence: 120,
-        approval_present: false,
     }
 }
 

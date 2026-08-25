@@ -7,7 +7,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Display, Formatter};
-use std::fs;
+use std::fs::{self, File, Metadata};
+use std::io::Read;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
 
 use layerx_types::verify::VerificationLevel;
@@ -89,6 +91,7 @@ pub enum RejectionReason {
     TooLarge,
     InvalidEncoding,
     Unavailable,
+    Unprotected,
 }
 
 impl Display for RejectionReason {
@@ -107,6 +110,7 @@ impl Display for RejectionReason {
             Self::TooLarge => "exceeds the configured input bound",
             Self::InvalidEncoding => "is not valid UTF-8",
             Self::Unavailable => "could not be read",
+            Self::Unprotected => "is not a protected regular file owned by this process user",
         };
         formatter.write_str(reason)
     }
@@ -143,11 +147,18 @@ pub fn load(
     file: impl AsRef<Path>,
     environment: &BTreeMap<String, String>,
 ) -> Result<StartupConfig, ConfigError> {
-    let bytes = fs::read(file.as_ref())
-        .map_err(|_| error("configuration_file", RejectionReason::Unavailable))?;
-    if bytes.len() > MAX_CONFIG_BYTES {
-        return Err(error("configuration_file", RejectionReason::TooLarge));
-    }
+    let bytes = read_protected_source(file.as_ref(), MAX_CONFIG_BYTES).map_err(|failure| {
+        error(
+            "configuration_file",
+            match failure {
+                ProtectedSourceError::Unavailable => RejectionReason::Unavailable,
+                ProtectedSourceError::TooLarge => RejectionReason::TooLarge,
+                ProtectedSourceError::Unprotected | ProtectedSourceError::Changed => {
+                    RejectionReason::Unprotected
+                }
+            },
+        )
+    })?;
     let source = std::str::from_utf8(&bytes)
         .map_err(|_| error("configuration_file", RejectionReason::InvalidEncoding))?;
     let mut values = parse_file(source)?;
@@ -162,6 +173,96 @@ pub fn load(
         }
     }
     validate(&values)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ProtectedSourceError {
+    Unavailable,
+    Unprotected,
+    Changed,
+    TooLarge,
+}
+
+/// Reads one operator-trusted source without accepting indirection or mutable
+/// file metadata at the read boundary.
+pub(crate) fn read_protected_source(
+    path: &Path,
+    maximum_bytes: usize,
+) -> Result<Vec<u8>, ProtectedSourceError> {
+    if !path.is_absolute() {
+        return Err(ProtectedSourceError::Unprotected);
+    }
+    let canonical = fs::canonicalize(path).map_err(|_| ProtectedSourceError::Unavailable)?;
+    if canonical != path {
+        return Err(ProtectedSourceError::Unprotected);
+    }
+    let process_uid = fs::metadata("/proc/self")
+        .map_err(|_| ProtectedSourceError::Unavailable)?
+        .uid();
+    let path_before = fs::symlink_metadata(path).map_err(|_| ProtectedSourceError::Unavailable)?;
+    validate_protected_metadata(&path_before, process_uid)?;
+
+    let mut file = File::open(path).map_err(|_| ProtectedSourceError::Unavailable)?;
+    let file_before = file
+        .metadata()
+        .map_err(|_| ProtectedSourceError::Unavailable)?;
+    validate_protected_metadata(&file_before, process_uid)?;
+    if !same_file_snapshot(&path_before, &file_before) {
+        return Err(ProtectedSourceError::Changed);
+    }
+
+    let limit = u64::try_from(maximum_bytes)
+        .ok()
+        .and_then(|value| value.checked_add(1))
+        .ok_or(ProtectedSourceError::TooLarge)?;
+    let mut bytes = Vec::new();
+    file.by_ref()
+        .take(limit)
+        .read_to_end(&mut bytes)
+        .map_err(|_| ProtectedSourceError::Unavailable)?;
+
+    let file_after = file
+        .metadata()
+        .map_err(|_| ProtectedSourceError::Unavailable)?;
+    let path_after =
+        fs::symlink_metadata(path).map_err(|_| ProtectedSourceError::Unavailable)?;
+    if fs::canonicalize(path).map_err(|_| ProtectedSourceError::Changed)? != path
+        || !same_file_snapshot(&file_before, &file_after)
+        || !same_file_snapshot(&file_after, &path_after)
+    {
+        return Err(ProtectedSourceError::Changed);
+    }
+    if bytes.len() > maximum_bytes {
+        return Err(ProtectedSourceError::TooLarge);
+    }
+    Ok(bytes)
+}
+
+fn validate_protected_metadata(
+    metadata: &Metadata,
+    process_uid: u32,
+) -> Result<(), ProtectedSourceError> {
+    if !metadata.file_type().is_file()
+        || metadata.uid() != process_uid
+        || metadata.mode() & 0o077 != 0
+    {
+        return Err(ProtectedSourceError::Unprotected);
+    }
+    Ok(())
+}
+
+fn same_file_snapshot(left: &Metadata, right: &Metadata) -> bool {
+    left.dev() == right.dev()
+        && left.ino() == right.ino()
+        && left.uid() == right.uid()
+        && left.gid() == right.gid()
+        && left.mode() == right.mode()
+        && left.nlink() == right.nlink()
+        && left.size() == right.size()
+        && left.mtime() == right.mtime()
+        && left.mtime_nsec() == right.mtime_nsec()
+        && left.ctime() == right.ctime()
+        && left.ctime_nsec() == right.ctime_nsec()
 }
 
 /// Validates a fully resolved map of file-key names into a typed startup configuration.

@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::os::unix::fs::{symlink, PermissionsExt};
 use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -31,8 +32,7 @@ fn tenant() -> TenantId {
 }
 
 fn config() -> StartupConfig {
-    let tenant = tenant();
-    let authority_source = path("authority");
+    let authority_source = socket_path("authority").with_extension("csv");
     let key = [8; 32];
     fs::write(
         &authority_source,
@@ -43,6 +43,13 @@ fn config() -> StartupConfig {
         ),
     )
     .unwrap_or_else(|error| panic!("authority source: {error}"));
+    fs::set_permissions(&authority_source, fs::Permissions::from_mode(0o600))
+        .unwrap_or_else(|error| panic!("authority source permissions: {error}"));
+    config_with_authority(authority_source)
+}
+
+fn config_with_authority(authority_source: PathBuf) -> StartupConfig {
+    let tenant = tenant();
     StartupConfig {
         network_id: 42,
         node_endpoint: PathBuf::from("/run/layerx/layerxd.sock"),
@@ -59,6 +66,21 @@ fn config() -> StartupConfig {
         verification_defaults: BTreeMap::from([(tenant, VerificationLevel::STATE_PROVEN)]),
         sequencer_authority_source: authority_source,
     }
+}
+
+fn protected_authority(path: &Path) {
+    let key = [8; 32];
+    fs::write(
+        path,
+        format!(
+            "layerx-sequencer-authority-v1\n{},{},0,0,100,active\n",
+            hex::encode(&key),
+            hex::encode(&key)
+        ),
+    )
+    .unwrap_or_else(|error| panic!("authority source: {error}"));
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+        .unwrap_or_else(|error| panic!("authority source permissions: {error}"));
 }
 
 fn node(minor: u16, capabilities: &[&str]) -> NodeInfo {
@@ -86,6 +108,68 @@ fn limits() -> Limits {
         maximum_queued_bytes: 1_048_576,
         deadline: Duration::from_secs(2),
     }
+}
+
+#[test]
+fn authority_source_rejects_leaf_and_ancestor_symlinks() {
+    let leaf_target = socket_path("authority-leaf-target").with_extension("csv");
+    let leaf_link = socket_path("authority-leaf-link").with_extension("csv");
+    protected_authority(&leaf_target);
+    symlink(&leaf_target, &leaf_link).unwrap_or_else(|error| panic!("leaf symlink: {error}"));
+    assert!(matches!(
+        Gate::new(&config_with_authority(leaf_link.clone())),
+        Err(GateError::Evidence(
+            layerx_agentd::protocol_evidence::VerifierPolicyError::AuthoritySourceUnprotected
+        ))
+    ));
+
+    let root = socket_path("authority-ancestor-root").with_extension("directory");
+    let real = root.join("real");
+    let linked = root.join("linked");
+    fs::create_dir(&root).unwrap_or_else(|error| panic!("authority root: {error}"));
+    fs::create_dir(&real).unwrap_or_else(|error| panic!("authority real directory: {error}"));
+    symlink(&real, &linked).unwrap_or_else(|error| panic!("ancestor symlink: {error}"));
+    let real_source = real.join("authorities.csv");
+    protected_authority(&real_source);
+    assert!(matches!(
+        Gate::new(&config_with_authority(linked.join("authorities.csv"))),
+        Err(GateError::Evidence(
+            layerx_agentd::protocol_evidence::VerifierPolicyError::AuthoritySourceUnprotected
+        ))
+    ));
+
+    let _ = fs::remove_file(leaf_link);
+    let _ = fs::remove_file(leaf_target);
+    let _ = fs::remove_file(linked);
+    let _ = fs::remove_file(real_source);
+    let _ = fs::remove_dir(real);
+    let _ = fs::remove_dir(root);
+}
+
+#[test]
+fn authority_source_rejects_permissive_and_non_regular_inputs() {
+    let permissive = socket_path("authority-permissive").with_extension("csv");
+    protected_authority(&permissive);
+    fs::set_permissions(&permissive, fs::Permissions::from_mode(0o640))
+        .unwrap_or_else(|error| panic!("permissive authority permissions: {error}"));
+    assert!(matches!(
+        Gate::new(&config_with_authority(permissive.clone())),
+        Err(GateError::Evidence(
+            layerx_agentd::protocol_evidence::VerifierPolicyError::AuthoritySourceUnprotected
+        ))
+    ));
+
+    let directory = socket_path("authority-directory").with_extension("directory");
+    fs::create_dir(&directory).unwrap_or_else(|error| panic!("authority directory: {error}"));
+    assert!(matches!(
+        Gate::new(&config_with_authority(directory.clone())),
+        Err(GateError::Evidence(
+            layerx_agentd::protocol_evidence::VerifierPolicyError::AuthoritySourceUnprotected
+        ))
+    ));
+
+    let _ = fs::remove_file(permissive);
+    let _ = fs::remove_dir(directory);
 }
 
 fn serve_handshake(path: &PathBuf, info: NodeInfo) -> thread::JoinHandle<()> {

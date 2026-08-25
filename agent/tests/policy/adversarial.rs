@@ -82,8 +82,7 @@ pub fn agent_policy_adversarial_corpus() -> Vec<CorpusCase> {
     cases.push(amount);
 
     let mut cumulative = base.clone();
-    cumulative.name = "cumulative-rate-boundary-plus-one";
-    cumulative.request.cumulative_count = 4;
+    cumulative.name = "cumulative-rate-producer-unavailable";
     deny_for(&mut cumulative, ConstraintDimension::CumulativeRate);
     cases.push(cumulative);
 
@@ -130,8 +129,7 @@ pub fn agent_policy_adversarial_corpus() -> Vec<CorpusCase> {
     cases.push(time);
 
     let mut approval = base;
-    approval.name = "missing-required-approval";
-    approval.request.approval_present = false;
+    approval.name = "approval-evidence-integration-unavailable";
     deny_for(&mut approval, ConstraintDimension::RequiredApproval);
     cases.push(approval);
 
@@ -180,11 +178,8 @@ fn base_case() -> CorpusCase {
         counterparty: [8; 32],
         asset: [9; 32],
         amount: 100,
-        cumulative_amount: 300,
-        cumulative_count: 3,
         purpose: "research".to_owned(),
         core_sequence: 120,
-        approval_present: true,
     };
     let session = SessionRecord {
         request: OpenRequest {

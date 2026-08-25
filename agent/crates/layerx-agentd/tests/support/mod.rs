@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixListener;
 use std::path::PathBuf;
 use std::pin::pin;
@@ -241,6 +242,8 @@ pub fn try_evidence_authority(
     }
     std::fs::write(&authority_path, authority_source)
         .unwrap_or_else(|error| panic!("authority source: {error}"));
+    std::fs::set_permissions(&authority_path, std::fs::Permissions::from_mode(0o600))
+        .unwrap_or_else(|error| panic!("authority source permissions: {error}"));
     let tenant = tenant();
     let config = StartupConfig {
         network_id: policy.network_id,

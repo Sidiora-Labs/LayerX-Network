@@ -65,6 +65,31 @@ fn trusted_policy_issues_state_evidence_only_for_its_exact_identity() {
 }
 
 #[test]
+fn canonical_genesis_batch_zero_is_inside_a_bounded_trusted_range() {
+    let genesis = state(StateHeaderIdentity {
+        signing_seed: [0x4a; 32],
+        protocol_version: 1,
+        network_id: 42,
+        epoch: 0,
+        batch_number: 0,
+    });
+    let verified = verifier(PolicyIdentity {
+        signing_seed: [0x4a; 32],
+        protocol_version: 1,
+        network_id: 42,
+        epoch: 0,
+        first_batch: 0,
+        last_batch: 0,
+        revoked_at_batch: None,
+        handshake_signing_seed: [0x4a; 32],
+        handshake_batch: 0,
+    })
+    .verify_state(&genesis)
+    .unwrap_or_else(|error| panic!("genesis evidence: {error:?}"));
+    assert_eq!(verified.observed_head_sequence(), 50);
+}
+
+#[test]
 fn a_caller_cannot_substitute_a_policy_after_the_daemon_handshake() {
     assert_eq!(
         support::try_evidence_authority(TestAuthorityPolicy {

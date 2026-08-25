@@ -1,7 +1,6 @@
 //! Raw protocol evidence ingress and verifier-owned trusted protocol policy.
 
 use std::collections::BTreeSet;
-use std::fs;
 
 use layerx_programs::hex;
 use layerx_proof::inclusion::{
@@ -17,7 +16,7 @@ use layerx_wire::hash::execution_batch_id;
 use layerx_wire::receipt::{decode, decode_batch_header, BatchHeader};
 use sha2::{Digest, Sha256};
 
-use crate::config::StartupConfig;
+use crate::config::{read_protected_source, ProtectedSourceError, StartupConfig};
 
 const MAX_AUTHORITY_SOURCE_BYTES: usize = 65_536;
 const AUTHORITY_SOURCE_VERSION: &str = "layerx-sequencer-authority-v1";
@@ -53,10 +52,7 @@ impl TrustedSequencer {
         if sequencer_id == [0; 32] || public_key == [0; 32] {
             return Err(VerifierPolicyError::InvalidAuthorization);
         }
-        if first_batch_number == 0
-            || last_batch_number == 0
-            || first_batch_number > last_batch_number
-        {
+        if first_batch_number > last_batch_number {
             return Err(VerifierPolicyError::InvalidBatchRange);
         }
         if revoked_at_batch
@@ -144,9 +140,20 @@ impl ProtocolEvidenceVerifier {
     }
 
     pub(crate) fn load(config: &StartupConfig) -> Result<Self, VerifierPolicyError> {
-        let bytes = fs::read(&config.sequencer_authority_source)
-            .map_err(|_| VerifierPolicyError::AuthoritySourceUnavailable)?;
-        if bytes.is_empty() || bytes.len() > MAX_AUTHORITY_SOURCE_BYTES {
+        let bytes = read_protected_source(
+            &config.sequencer_authority_source,
+            MAX_AUTHORITY_SOURCE_BYTES,
+        )
+        .map_err(|failure| match failure {
+            ProtectedSourceError::Unavailable => {
+                VerifierPolicyError::AuthoritySourceUnavailable
+            }
+            ProtectedSourceError::TooLarge => VerifierPolicyError::AuthoritySourceMalformed,
+            ProtectedSourceError::Unprotected | ProtectedSourceError::Changed => {
+                VerifierPolicyError::AuthoritySourceUnprotected
+            }
+        })?;
+        if bytes.is_empty() {
             return Err(VerifierPolicyError::AuthoritySourceMalformed);
         }
         let source = std::str::from_utf8(&bytes)
@@ -400,6 +407,7 @@ impl ProtocolEvidenceVerifier {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum VerifierPolicyError {
     AuthoritySourceUnavailable,
+    AuthoritySourceUnprotected,
     AuthoritySourceMalformed,
     EmptyPolicy,
     InvalidAuthorization,
