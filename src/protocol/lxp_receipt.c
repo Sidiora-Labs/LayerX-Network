@@ -679,6 +679,20 @@ lxp_result lxp_verified_receipt_index_bind_fallback(
     return LXP_OK;
 }
 
+static bool verified_facts_equal(const lxp_verified_receipt_facts *left,
+                                 const lxp_verified_receipt_facts *right)
+{
+    return lxp_ct_memcmp(left->receipt_digest,
+                         right->receipt_digest, 32U) == 0 &&
+        left->result_code == right->result_code &&
+        left->global_sequence == right->global_sequence &&
+        left->timestamp == right->timestamp &&
+        lxp_ct_memcmp(left->asset, right->asset, 32U) == 0 &&
+        lxp_u128_cmp(left->amount, right->amount) == 0 &&
+        lxp_ct_memcmp(left->resulting_state_root,
+                      right->resulting_state_root, 32U) == 0;
+}
+
 lxp_result lxp_verified_receipt_index_add(
     lxp_verified_receipt_index *index, const lxp_receipt *receipt,
     const uint8_t sequencer_public_key[32], lxp_arena *arena)
@@ -704,7 +718,7 @@ lxp_result lxp_verified_receipt_index_add(
         int order = memcmp(index->entries[at].receipt_digest,
                            facts.receipt_digest, 32U);
         if (order == 0)
-            return memcmp(&index->entries[at], &facts, sizeof(facts)) == 0 ?
+            return verified_facts_equal(&index->entries[at], &facts) ?
                 LXP_OK : LXP_FATAL_INVARIANT;
         if (order > 0) break;
     }

@@ -27,7 +27,8 @@ lxp_result lx_perps_position_lookup(lx_perps_position_store *store,
                                     lx_perps_position **position)
 {
     size_t i;
-    if (store == NULL || position_id == NULL || position == NULL)
+    if (store == NULL || position_id == NULL || position == NULL ||
+        store->count > LX_PERPS_POSITION_CAPACITY)
         return LXP_ERR_NON_CANONICAL;
     for (i = 0U; i < store->count; ++i)
         if (memcmp(store->positions[i].position_id, position_id, 32U) == 0) {

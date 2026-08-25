@@ -11,7 +11,8 @@ static lxp_result withdrawal_record(
     const lx_withdrawal_record **record)
 {
     size_t i;
-    if (store == NULL || nullifier == NULL || record == NULL)
+    if (store == NULL || nullifier == NULL || record == NULL ||
+        store->count > LX_DEPOSIT_NULLIFIER_CAPACITY)
         return LXP_ERR_NON_CANONICAL;
     for (i = 0U; i < store->count; ++i) {
         if (lxp_ct_memcmp(store->records[i].nullifier, nullifier, 32U) == 0) {

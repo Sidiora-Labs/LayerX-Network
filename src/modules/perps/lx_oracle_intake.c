@@ -17,7 +17,8 @@ lxp_result lx_oracle_market_lookup(const lx_oracle_market_store *store,
                                    const lx_oracle_market **market)
 {
     size_t i;
-    if (store == NULL || market_id == NULL || market == NULL)
+    if (store == NULL || market_id == NULL || market == NULL ||
+        store->count > LX_ORACLE_MAX_MARKETS)
         return LXP_ERR_NON_CANONICAL;
     for (i = 0U; i < store->count; ++i)
         if (memcmp(store->markets[i].market_id, market_id, 32U) == 0) {

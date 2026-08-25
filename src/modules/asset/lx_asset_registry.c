@@ -131,7 +131,8 @@ lxp_result lx_asset_register(lx_asset_registry *registry,
         record->decimals > 38U ||
         record->custody_kind != LX_ASSET_CUSTODY_PAXEER ||
         record->custody_reference_length == 0U ||
-        record->custody_reference_length > LX_ASSET_CUSTODY_REFERENCE_MAX)
+        record->custody_reference_length > LX_ASSET_CUSTODY_REFERENCE_MAX ||
+        registry->count > LX_ASSET_REGISTRY_CAPACITY)
         return LXP_ERR_NON_CANONICAL;
     status = lxp_u128_add(registry->fees_charged, fee, &charged);
     if (status != LXP_OK) return status;
@@ -151,7 +152,8 @@ lxp_result lx_asset_lookup(lx_asset_registry *registry,
                            lx_asset_record **record)
 {
     size_t i;
-    if (registry == NULL || asset_id == NULL || record == NULL)
+    if (registry == NULL || asset_id == NULL || record == NULL ||
+        registry->count > LX_ASSET_REGISTRY_CAPACITY)
         return LXP_ERR_NON_CANONICAL;
     for (i = 0U; i < registry->count; ++i) {
         if (memcmp(registry->assets[i].asset_id, asset_id, 32U) == 0) {

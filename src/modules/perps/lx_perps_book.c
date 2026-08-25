@@ -50,7 +50,9 @@ lxp_result lx_perps_book_iter(const lx_perps_book *book,
                               lx_perps_order_visit_fn visit, void *user)
 {
     size_t i;
-    if (book == NULL || visit == NULL) return LXP_ERR_NON_CANONICAL;
+    if (book == NULL || visit == NULL ||
+        book->count > LX_PERPS_BOOK_CAPACITY)
+        return LXP_ERR_NON_CANONICAL;
     for (i = 0U; i < book->count; ++i) {
         lxp_result status = visit(&book->orders[i], user);
         if (status != LXP_OK) return status;
@@ -123,6 +125,7 @@ lxp_result lx_perps_book_match(lx_perps_book *book,
 {
     size_t count = 0U;
     if (book == NULL || incoming == NULL || fill_count == NULL ||
+        book->count > LX_PERPS_BOOK_CAPACITY ||
         (fills == NULL && fill_capacity != 0U))
         return LXP_ERR_NON_CANONICAL;
     while (!lxp_u128_is_zero(incoming->remaining)) {
@@ -233,6 +236,7 @@ lxp_result lx_perps_order_place_execute(
     lxp_u128 required;
     lxp_result status;
     if (ctx == NULL || book == NULL || order == NULL || fill_count == NULL ||
+        book->count > LX_PERPS_BOOK_CAPACITY ||
         transfer_leg_count == NULL || ctx->module_id != LXP_MODULE_PERPS)
         return LXP_ERR_NON_CANONICAL;
     *transfer_leg_count = 0U;
@@ -264,6 +268,7 @@ lxp_result lx_perps_order_cancel_execute(
 {
     size_t i;
     if (ctx == NULL || book == NULL || order_id == NULL ||
+        book->count > LX_PERPS_BOOK_CAPACITY ||
         owner_account_id == NULL || transfer_leg_count == NULL ||
         ctx->module_id != LXP_MODULE_PERPS)
         return LXP_ERR_NON_CANONICAL;

@@ -102,7 +102,8 @@ lxp_result lx_budget_lookup(lx_budget_store *store,
                             lx_budget_record **record)
 {
     size_t i;
-    if (store == NULL || budget_id == NULL || record == NULL)
+    if (store == NULL || budget_id == NULL || record == NULL ||
+        store->count > LX_BUDGET_STORE_CAPACITY)
         return LXP_ERR_NON_CANONICAL;
     for (i = 0U; i < store->count; ++i)
         if (memcmp(store->records[i].budget_id, budget_id, 32U) == 0) {
