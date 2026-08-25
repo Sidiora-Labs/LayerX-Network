@@ -39,6 +39,9 @@ func (m *PrepareQC) View() View {
 // Verify verifies the PrepareQC against the committee.
 // Currently it doesn't require the previous CommitQC.
 func (m *PrepareQC) Verify(c *Committee) error {
+	if err := m.Proposal().Verify(c); err != nil {
+		return fmt.Errorf("proposal: %w", err)
+	}
 	return m.vote.verifyQC(c, c.PrepareQuorum(), m.sigs)
 }
 

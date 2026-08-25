@@ -147,7 +147,7 @@ func (r *GigaRouter) LastCommittedBlockNumber() int64 {
 	// GlobalRange is a half-open [First, Next) interval; the highest
 	// committed block number is Next-1.
 	gr := atypes.GlobalRangeOpt(r.lastCommitQCRecv.Load(), r.data.Committee())
-	return int64(gr.Next) - 1 // nolint:gosec // gr.Next is uint64 but bounded by actual chain height.
+	return utils.Clamp[int64](gr.Next) - 1
 }
 
 // MaxGasEstimatedPerBlock .

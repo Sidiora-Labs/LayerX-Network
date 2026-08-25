@@ -35,6 +35,9 @@ func (m *LaneQC) Next() BlockNumber { return m.Header().Next() }
 
 // Verify verifies LaneQC against the committee.
 func (m *LaneQC) Verify(c *Committee) error {
+	if err := m.vote.Msg().Verify(c); err != nil {
+		return fmt.Errorf("vote: %w", err)
+	}
 	return m.vote.verifyQC(c, c.LaneQuorum(), m.sigs)
 }
 

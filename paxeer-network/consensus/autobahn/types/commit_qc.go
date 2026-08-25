@@ -48,6 +48,9 @@ func (m *CommitQC) GlobalRange(c *Committee) GlobalRange {
 // Verify verifies the CommitQC against the committee.
 // Currently it doesn't require the previous CommitQC.
 func (m *CommitQC) Verify(c *Committee) error {
+	if err := m.Proposal().Verify(c); err != nil {
+		return fmt.Errorf("proposal: %w", err)
+	}
 	return m.vote.verifyQC(c, c.CommitQuorum(), m.sigs)
 }
 
@@ -94,10 +97,17 @@ func (m *FullCommitQC) Verify(c *Committee) error {
 		n += lr.Len()
 		want := lr.LastHash()
 		for i := range lr.Len() {
-			if got := m.headers[n-i-1].Hash(); got != want {
-				return fmt.Errorf("header[%d].Hash() = %v, want %v", i, got, want)
+			header := m.headers[n-i-1]
+			if got := header.Lane(); got != lane {
+				return fmt.Errorf("header[%d].Lane() = %v, want %v", n-i-1, got, lane)
 			}
-			want = m.headers[n-i-1].ParentHash()
+			if got, wantNumber := header.BlockNumber(), lr.Next()-BlockNumber(i)-1; got != wantNumber {
+				return fmt.Errorf("header[%d].BlockNumber() = %v, want %v", n-i-1, got, wantNumber)
+			}
+			if got := header.Hash(); got != want {
+				return fmt.Errorf("header[%d].Hash() = %v, want %v", n-i-1, got, want)
+			}
+			want = header.ParentHash()
 		}
 	}
 	return nil
