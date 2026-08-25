@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Mutex;
 
+use crate::budget::ReconciliationState;
 use crate::protocol_evidence::{
     EvidenceAuthority, RawReceiptEvidence, ReceiptReplayError, ReceiptReplayGuard,
 };
@@ -22,7 +23,7 @@ struct State {
     consumed: u128,
     reservations: BTreeMap<[u8; 32], Reservation>,
     receipt_replay: ReceiptReplayGuard,
-    reconciled: bool,
+    protocol_reconciliation: Option<ReconciliationState>,
 }
 
 /// Thread-safe capability ceiling.
@@ -34,6 +35,10 @@ pub struct Ceiling {
 }
 
 impl Ceiling {
+    /// Creates an empty, explicitly unreconciled cache.
+    ///
+    /// No reservation is admitted until canonical protocol budget evidence can
+    /// issue an opaque reconciliation result.
     #[must_use]
     pub fn new(maximum: u128, verifier: EvidenceAuthority) -> Self {
         let receipt_replay = verifier.receipt_replay_guard();
@@ -44,19 +49,20 @@ impl Ceiling {
                 consumed: 0,
                 reservations: BTreeMap::new(),
                 receipt_replay,
-                reconciled: true,
+                protocol_reconciliation: None,
             }),
         }
     }
 
-    /// Rebuilds consumed value from persisted verified receipts only.
+    /// Rebuilds a receipt-derived cache without claiming protocol reconciliation.
     ///
     /// # Errors
     ///
     /// Returns `UnverifiedReceipt` for any unverified receipt, typed identity or
     /// replay failures for mismatched and repeated evidence, `Overflow` when the
     /// executed amounts do not sum, and `Exceeded` when the rebuilt total passes
-    /// the ceiling.
+    /// the ceiling. A receipt-only rebuild remains unreconciled and cannot admit
+    /// a new reservation without canonical protocol budget state.
     pub fn rebuild(
         maximum: u128,
         verifier: EvidenceAuthority,
@@ -96,7 +102,7 @@ impl Ceiling {
                 consumed,
                 reservations: BTreeMap::new(),
                 receipt_replay,
-                reconciled: true,
+                protocol_reconciliation: None,
             }),
         })
     }
@@ -214,7 +220,7 @@ impl Ceiling {
             consumed: state.consumed,
             held,
             reservations: state.reservations.len(),
-            reconciled: state.reconciled,
+            reconciled: state.protocol_reconciliation.is_some(),
         })
     }
 }
@@ -274,7 +280,7 @@ pub(crate) fn reserve(
         return Err(CeilingError::Expired);
     }
     let mut state = ceiling.state.lock().map_err(|_| CeilingError::Poisoned)?;
-    if !state.reconciled {
+    if state.protocol_reconciliation.is_none() {
         return Err(CeilingError::Unreconciled);
     }
     if state.reservations.contains_key(&reservation_id) {

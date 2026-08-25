@@ -90,6 +90,89 @@ fn canonical_genesis_batch_zero_is_inside_a_bounded_trusted_range() {
 }
 
 #[test]
+fn revocation_handover_selects_only_the_key_active_at_each_batch() {
+    let sequencer_id = [0x91; 32];
+    let authority = support::evidence_authority_for_sequencer(
+        TestAuthorityPolicy {
+            protocol_version: 1,
+            network_id: 42,
+            records: &[
+                TestAuthorityRecord {
+                    signing_seed: [0x4a; 32],
+                    epoch: 2,
+                    first_batch: 0,
+                    last_batch: 10,
+                    revoked_at_batch: Some(5),
+                },
+                TestAuthorityRecord {
+                    signing_seed: [0x5a; 32],
+                    epoch: 2,
+                    first_batch: 5,
+                    last_batch: 10,
+                    revoked_at_batch: None,
+                },
+            ],
+            handshake_signing_seed: [0x5a; 32],
+            handshake_batch: 5,
+        },
+        sequencer_id,
+    );
+    let old_before_handover = support::raw_state_leaf_with_sequencer_id(
+        b"old-before-handover".to_vec(),
+        50,
+        StateHeaderIdentity {
+            signing_seed: [0x4a; 32],
+            protocol_version: 1,
+            network_id: 42,
+            epoch: 2,
+            batch_number: 4,
+        },
+        sequencer_id,
+    );
+    let new_at_handover = support::raw_state_leaf_with_sequencer_id(
+        b"new-at-handover".to_vec(),
+        51,
+        StateHeaderIdentity {
+            signing_seed: [0x5a; 32],
+            protocol_version: 1,
+            network_id: 42,
+            epoch: 2,
+            batch_number: 5,
+        },
+        sequencer_id,
+    );
+    let old_at_handover = support::raw_state_leaf_with_sequencer_id(
+        b"old-at-handover".to_vec(),
+        51,
+        StateHeaderIdentity {
+            signing_seed: [0x4a; 32],
+            protocol_version: 1,
+            network_id: 42,
+            epoch: 2,
+            batch_number: 5,
+        },
+        sequencer_id,
+    );
+
+    assert_eq!(
+        authority
+            .verify_state(&old_before_handover)
+            .map(|verified| verified.observed_head_sequence()),
+        Ok(50)
+    );
+    assert_eq!(
+        authority
+            .verify_state(&new_at_handover)
+            .map(|verified| verified.observed_head_sequence()),
+        Ok(51)
+    );
+    assert!(matches!(
+        authority.verify_state(&old_at_handover),
+        Err(StateEvidenceError::Inclusion(_))
+    ));
+}
+
+#[test]
 fn a_caller_cannot_substitute_a_policy_after_the_daemon_handshake() {
     assert_eq!(
         support::try_evidence_authority(TestAuthorityPolicy {

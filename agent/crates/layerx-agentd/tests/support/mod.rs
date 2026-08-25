@@ -214,8 +214,23 @@ pub fn evidence_authority(policy: TestAuthorityPolicy<'_>) -> EvidenceAuthority 
         .unwrap_or_else(|error| panic!("evidence authority: {error:?}"))
 }
 
+pub fn evidence_authority_for_sequencer(
+    policy: TestAuthorityPolicy<'_>,
+    sequencer_id: [u8; 32],
+) -> EvidenceAuthority {
+    try_evidence_authority_with_sequencer(policy, Some(sequencer_id))
+        .unwrap_or_else(|error| panic!("evidence authority: {error:?}"))
+}
+
 pub fn try_evidence_authority(
     policy: TestAuthorityPolicy<'_>,
+) -> Result<EvidenceAuthority, GateError> {
+    try_evidence_authority_with_sequencer(policy, None)
+}
+
+fn try_evidence_authority_with_sequencer(
+    policy: TestAuthorityPolicy<'_>,
+    sequencer_id: Option<[u8; 32]>,
 ) -> Result<EvidenceAuthority, GateError> {
     let authority_path = directory("evidence-authority").with_extension("csv");
     let mut authority_source = "layerx-sequencer-authority-v1\n".to_owned();
@@ -223,7 +238,7 @@ pub fn try_evidence_authority(
         let public_key = SigningKey::from_bytes(&record.signing_seed)
             .verifying_key()
             .to_bytes();
-        authority_source.push_str(&hex::encode(&public_key));
+        authority_source.push_str(&hex::encode(&sequencer_id.unwrap_or(public_key)));
         authority_source.push(',');
         authority_source.push_str(&hex::encode(&public_key));
         authority_source.push(',');
@@ -530,11 +545,22 @@ pub fn raw_state_leaf_with(
     observed_head: u64,
     identity: StateHeaderIdentity,
 ) -> RawStateEvidence {
+    let sequencer_id = SigningKey::from_bytes(&identity.signing_seed)
+        .verifying_key()
+        .to_bytes();
+    raw_state_leaf_with_sequencer_id(canonical_state, observed_head, identity, sequencer_id)
+}
+
+pub fn raw_state_leaf_with_sequencer_id(
+    canonical_state: Vec<u8>,
+    observed_head: u64,
+    identity: StateHeaderIdentity,
+    sequencer_id: [u8; 32],
+) -> RawStateEvidence {
     let leaves = [canonical_state.as_slice()];
     let (proof, root) = build_proof(&leaves, 0)
         .unwrap_or_else(|error| panic!("state proof: {error:?}"));
     let key = SigningKey::from_bytes(&identity.signing_seed);
-    let sequencer_id = key.verifying_key().to_bytes();
     let mut encoder = Encoder::new(354);
     assert_eq!(encoder.structure_header(0x1701), Ok(()));
     assert_eq!(encoder.u8(15), Ok(()));

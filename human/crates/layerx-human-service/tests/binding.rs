@@ -237,7 +237,7 @@ impl AgentBindingContract for InProcessAgentContract {
         .map_err(|_| AgentBindingError::ContractViolation)?;
         self.accepted = self.accepted.saturating_add(1);
         let submission_id = request.idempotency_key.bytes();
-        let activity_id = verified.audit.activity_id;
+        let activity_id = verified.activity_id();
         self.outbox
             .enqueue(
                 &mut self.store,

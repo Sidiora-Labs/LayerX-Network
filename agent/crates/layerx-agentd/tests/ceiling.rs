@@ -4,7 +4,7 @@ use std::thread;
 use layerx_agentd::capability::{consume, Ceiling, CeilingError, ReceiptApplication};
 
 #[test]
-fn concurrent_reservations_never_exceed_the_ceiling() {
+fn fresh_ceiling_refuses_every_concurrent_reservation_without_protocol_reconciliation() {
     let ceiling = Arc::new(Ceiling::new(1_000, support::evidence_verifier()));
     let mut workers = Vec::new();
     for id in 1_u8..=40 {
@@ -18,19 +18,18 @@ fn concurrent_reservations_never_exceed_the_ceiling() {
         .map(thread::JoinHandle::join)
         .filter(|result| result.as_ref().is_ok_and(Result::is_ok))
         .count();
-    assert_eq!(accepted, 10);
+    assert_eq!(accepted, 0);
     let snapshot = ceiling
         .snapshot()
         .unwrap_or_else(|error| panic!("snapshot: {error:?}"));
-    assert_eq!(snapshot.held, 1_000);
+    assert_eq!(snapshot.held, 0);
     assert_eq!(snapshot.consumed, 0);
+    assert!(!snapshot.reconciled);
 }
 
 #[test]
-fn only_verified_executed_receipts_consume_and_failures_release() {
+fn a_fresh_ceiling_cannot_use_receipts_to_manufacture_a_reservation() {
     let ceiling = Ceiling::new(1_000, support::evidence_verifier());
-    consume(&ceiling, [1; 32], [1; 32], 400, 100, 1)
-        .unwrap_or_else(|error| panic!("reserve: {error:?}"));
     let raw = support::raw_receipt([1; 32], 0, 400);
     let mut corrupted = raw.canonical_receipt().to_vec();
     corrupted[0] ^= 1;
@@ -42,44 +41,28 @@ fn only_verified_executed_receipts_consume_and_failures_release() {
         }),
         Err(CeilingError::UnverifiedReceipt)
     );
-    ceiling
-        .apply_receipt(&ReceiptApplication {
+    assert_eq!(
+        ceiling.apply_receipt(&ReceiptApplication {
             reservation_id: [1; 32],
             expected_activity_id: [1; 32],
             evidence: support::raw_receipt([1; 32], 0, 400),
-        })
-        .unwrap_or_else(|error| panic!("receipt: {error:?}"));
-    consume(&ceiling, [2; 32], [2; 32], 300, 100, 1)
-        .unwrap_or_else(|error| panic!("reserve: {error:?}"));
-    ceiling
-        .apply_receipt(&ReceiptApplication {
-            reservation_id: [2; 32],
-            expected_activity_id: [2; 32],
-            evidence: support::raw_receipt([2; 32], 5, 300),
-        })
-        .unwrap_or_else(|error| panic!("failed receipt: {error:?}"));
+        }),
+        Err(CeilingError::MissingReservation)
+    );
+    assert_eq!(
+        consume(&ceiling, [2; 32], [2; 32], 300, 100, 1),
+        Err(CeilingError::Unreconciled)
+    );
     let snapshot = ceiling
         .snapshot()
         .unwrap_or_else(|error| panic!("snapshot: {error:?}"));
-    assert_eq!(snapshot.consumed, 400);
+    assert_eq!(snapshot.consumed, 0);
     assert_eq!(snapshot.held, 0);
+    assert!(!snapshot.reconciled);
 }
 
 #[test]
-fn unknown_is_held_past_expiry_and_rebuild_uses_verified_receipts() {
-    let ceiling = Ceiling::new(1_000, support::evidence_verifier());
-    consume(&ceiling, [1; 32], [1; 32], 400, 5, 1)
-        .unwrap_or_else(|error| panic!("reserve: {error:?}"));
-    ceiling
-        .mark_unknown([1; 32])
-        .unwrap_or_else(|error| panic!("unknown: {error:?}"));
-    assert_eq!(
-        ceiling.cancel_unsubmitted([1; 32]),
-        Err(CeilingError::Indeterminate)
-    );
-    assert_eq!(ceiling.release_expired(6), Ok(0));
-    assert_eq!(ceiling.snapshot().map(|value| value.held), Ok(400));
-
+fn receipt_rebuild_preserves_consumption_but_not_reconciliation_authority() {
     let rebuilt = Ceiling::rebuild(
         1_000,
         support::evidence_verifier(),
@@ -101,39 +84,27 @@ fn unknown_is_held_past_expiry_and_rebuild_uses_verified_receipts() {
         .snapshot()
         .unwrap_or_else(|error| panic!("snapshot: {error:?}"));
     assert_eq!(snapshot.consumed, 250);
-    assert!(snapshot.reconciled);
+    assert!(!snapshot.reconciled);
+    assert_eq!(
+        consume(&rebuilt, [4; 32], [4; 32], 100, 100, 1),
+        Err(CeilingError::Unreconciled)
+    );
 }
 
 #[test]
-fn receipt_identity_is_bound_to_the_held_activity_and_cannot_be_replayed() {
-    let ceiling = Ceiling::new(1_000, support::evidence_verifier());
-    consume(&ceiling, [1; 32], [1; 32], 100, 100, 1)
-        .unwrap_or_else(|error| panic!("reserve: {error:?}"));
-    let receipt = support::raw_receipt([1; 32], 0, 100);
+fn receipt_identity_is_bound_during_an_unreconciled_rebuild() {
     assert_eq!(
-        ceiling.apply_receipt(&ReceiptApplication {
-            reservation_id: [1; 32],
-            expected_activity_id: [2; 32],
-            evidence: support::raw_receipt([2; 32], 0, 100),
-        }),
+        Ceiling::rebuild(
+            1_000,
+            support::evidence_verifier(),
+            &[ReceiptApplication {
+                reservation_id: [1; 32],
+                expected_activity_id: [2; 32],
+                evidence: support::raw_receipt([1; 32], 0, 100),
+            }],
+        )
+        .map(|_| ()),
         Err(CeilingError::ActivityMismatch)
-    );
-    ceiling
-        .apply_receipt(&ReceiptApplication {
-            reservation_id: [1; 32],
-            expected_activity_id: [1; 32],
-            evidence: receipt.clone(),
-        })
-        .unwrap_or_else(|error| panic!("matching receipt: {error:?}"));
-    consume(&ceiling, [3; 32], [1; 32], 100, 100, 1)
-        .unwrap_or_else(|error| panic!("second reservation: {error:?}"));
-    assert_eq!(
-        ceiling.apply_receipt(&ReceiptApplication {
-            reservation_id: [3; 32],
-            expected_activity_id: [1; 32],
-            evidence: receipt,
-        }),
-        Err(CeilingError::DuplicateReceipt)
     );
 }
 
@@ -185,11 +156,9 @@ fn rebuild_rejects_duplicate_receipts_and_distinct_receipts_for_one_activity() {
 #[test]
 fn one_activity_and_one_reservation_each_have_a_single_ceiling_identity() {
     let ceiling = Ceiling::new(1_000, support::evidence_verifier());
-    consume(&ceiling, [1; 32], [8; 32], 100, 100, 1)
-        .unwrap_or_else(|error| panic!("first reservation: {error:?}"));
     assert_eq!(
-        consume(&ceiling, [2; 32], [8; 32], 100, 100, 1),
-        Err(CeilingError::DuplicateActivity)
+        consume(&ceiling, [1; 32], [8; 32], 100, 100, 1),
+        Err(CeilingError::Unreconciled)
     );
     assert_eq!(
         Ceiling::rebuild(

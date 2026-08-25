@@ -8,7 +8,7 @@ use std::task::{Context, Poll, Wake, Waker};
 use layerx_agentd::budget::{
     reserve, BudgetLimiter, LimitConfig, LimitId, LimitScope, ReservationRequest,
 };
-use layerx_agentd::capability::{consume, Ceiling};
+use layerx_agentd::capability::{consume, Ceiling, CeilingError};
 use layerx_agentd::outbox::{
     resolve_unknown, Outbox, ReceiptLookup, ResendObservation, ResolutionObservation,
     SubmissionState, UnknownBoundaryError,
@@ -281,7 +281,7 @@ fn acknowledgement_loss_is_resolved_only_by_the_existing_receipt() {
 }
 
 #[test]
-fn lost_resend_response_keeps_budget_and_ceiling_held_and_reuses_exact_bytes() {
+fn lost_resend_response_keeps_budget_held_while_unreconciled_ceiling_refuses_admission() {
     let root = directory("response-loss");
     let (mut store, mut outbox, exact) = unknown_outbox(&root, 2);
     let limit_id = LimitId([7; 16]);
@@ -305,11 +305,10 @@ fn lost_resend_response_keeps_budget_and_ceiling_held_and_reuses_exact_bytes() {
     )
     .unwrap_or_else(|error| panic!("budget reserve: {error:?}"));
     let ceiling = Ceiling::new(1_000, support::evidence_verifier());
-    consume(&ceiling, [2; 32], [2; 32], 400, 5, 1)
-        .unwrap_or_else(|error| panic!("ceiling reserve: {error:?}"));
-    ceiling
-        .mark_unknown([2; 32])
-        .unwrap_or_else(|error| panic!("ceiling unknown: {error:?}"));
+    assert_eq!(
+        consume(&ceiling, [2; 32], [2; 32], 400, 5, 1),
+        Err(CeilingError::Unreconciled)
+    );
 
     let late_receipt = receipt(activity_id(&outbox, 2), 0);
     let mut node = FaultInjectedNode {
@@ -332,7 +331,12 @@ fn lost_resend_response_keeps_budget_and_ceiling_held_and_reuses_exact_bytes() {
     assert_eq!(node.transmitted, vec![([2; 32], exact)]);
     assert_eq!(limiter.held_reservations(), Ok(1));
     assert_eq!(ceiling.release_expired(50), Ok(0));
-    assert_eq!(ceiling.snapshot().map(|value| value.held), Ok(400));
+    assert_eq!(
+        ceiling
+            .snapshot()
+            .map(|value| (value.held, value.reconciled)),
+        Ok((0, false))
+    );
 
     let second = resolve_unknown(
         &mut outbox,

@@ -4,7 +4,7 @@ mod support;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 
-use ed25519_dalek::{Signer as _, SigningKey, Verifier as _};
+use ed25519_dalek::{Signer as _, SigningKey};
 use layerx_agentd::budget::{
     create_protocol_budget, reserve, BudgetCreationError, BudgetKind, BudgetLimiter,
     BudgetPipeline, BudgetRequest, CoreBudgetReceipt, LimitConfig, LimitId, LimitRefusal,
@@ -369,16 +369,8 @@ impl AgentCreationContract for RealAgentLayer {
         let receipt = protocol_receipt(action.action_key);
         verify(&receipt.receipt_bytes, &receipt.authorized_batch)
             .map_err(|_| AgentFailure::Refused("receipt verification failed"))?;
-        let activity_digest = Sha256::digest(action.compiled.payload().as_bytes());
-        let activity_signer = SigningKey::from_bytes(&[0x72; 32]);
-        let activity_signature = activity_signer.sign(&activity_digest);
-        activity_signer
-            .verifying_key()
-            .verify(&activity_digest, &activity_signature)
-            .map_err(|_| AgentFailure::Refused("activity signature failed"))?;
         let mut pipeline = ReceiptPipeline {
             receipt: CoreBudgetReceipt {
-                object_id: action.action_key,
                 evidence: support::raw_receipt_evidence(
                     receipt.receipt_bytes.clone(),
                     receipt.authorized_batch,
@@ -398,7 +390,7 @@ impl AgentCreationContract for RealAgentLayer {
                 ceiling: decoded_limit(action.intent.kind())?,
                 expiry_sequence: 50_000,
                 canonical_activity: action.compiled.payload().as_bytes().to_vec(),
-                signature: activity_signature.to_bytes(),
+                verified_submission: None,
             },
             &support::evidence_verifier(&receipt_signer),
             &mut pipeline,

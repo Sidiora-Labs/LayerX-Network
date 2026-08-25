@@ -396,7 +396,7 @@ impl AgentBindingContract for BindingAgent {
         )
         .map_err(|_| AgentBindingError::ContractViolation)?;
         let submission_id = request.idempotency_key.bytes();
-        let activity_id = verified.audit.activity_id;
+        let activity_id = verified.activity_id();
         self.outbox
             .enqueue(
                 &mut self.store,
@@ -805,7 +805,7 @@ impl AgentBoundary for RealCreditAgent {
             .map_err(|_| AgentBoundaryError::Refused)?;
         let verified = verify_before_submit(&signed, prepared, &signer_public_key, &self.registry)
             .map_err(|_| AgentBoundaryError::Refused)?;
-        let activity_id = verified.audit.activity_id;
+        let activity_id = verified.activity_id();
         let material = Self::material(activity_id)?;
         match self
             .outbox

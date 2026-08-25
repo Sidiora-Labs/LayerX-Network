@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -89,6 +90,8 @@ pub fn evidence_verifier(receipt_signer: &SigningKey) -> EvidenceAuthority {
     );
     std::fs::write(&authority_path, authority_source)
         .unwrap_or_else(|error| panic!("authority source: {error}"));
+    std::fs::set_permissions(&authority_path, std::fs::Permissions::from_mode(0o600))
+        .unwrap_or_else(|error| panic!("authority source permissions: {error}"));
     let tenant = TenantId::new("human-evidence")
         .unwrap_or_else(|error| panic!("tenant: {error}"));
     let config = StartupConfig {

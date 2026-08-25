@@ -262,7 +262,6 @@ impl AgentCreationContract for InProcessAgentLayer {
                 let receipt_signer = SigningKey::from_bytes(&receipt_signing_seed);
                 let mut pipeline = ReceiptPipeline {
                     receipt: CoreBudgetReceipt {
-                        object_id: action.action_key,
                         evidence: support::raw_receipt_evidence(
                             receipt.receipt_bytes.clone(),
                             receipt.authorized_batch,
@@ -281,7 +280,7 @@ impl AgentCreationContract for InProcessAgentLayer {
                         ceiling: 1_000,
                         expiry_sequence: 50_000,
                         canonical_activity: action.compiled.payload().as_bytes().to_vec(),
-                        signature: [0x73; 64],
+                        verified_submission: None,
                     },
                     &support::evidence_verifier(&receipt_signer),
                     &mut pipeline,

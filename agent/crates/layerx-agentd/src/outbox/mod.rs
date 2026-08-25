@@ -133,10 +133,10 @@ impl Outbox {
         if self.records.contains_key(&submission_id) {
             return Err(OutboxError::Duplicate);
         }
-        if verified.audit.idempotency_key != submission_id {
+        if verified.idempotency_key() != submission_id {
             return Err(OutboxError::IdempotencyMismatch);
         }
-        let activity_id = verified.audit.activity_id;
+        let activity_id = verified.activity_id();
         let signed_canonical_bytes = verified.into_exact_bytes();
         let transitions = vec![
             StateTransition {

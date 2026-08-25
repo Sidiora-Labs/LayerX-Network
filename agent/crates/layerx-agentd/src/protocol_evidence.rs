@@ -252,6 +252,7 @@ impl ProtocolEvidenceVerifier {
         }
         let mut saw_identity = false;
         let mut saw_epoch = false;
+        let mut saw_revoked = false;
         let mut selected = None;
         for entry in &self.sequencers {
             if entry.sequencer_id != header.sequencer_id() {
@@ -267,6 +268,13 @@ impl ProtocolEvidenceVerifier {
             {
                 continue;
             }
+            if entry
+                .revoked_at_batch
+                .is_some_and(|revoked_at| header.batch_number() >= revoked_at)
+            {
+                saw_revoked = true;
+                continue;
+            }
             if selected.replace(entry).is_some() {
                 return Err(VerifierPolicyError::AmbiguousAuthorization);
             }
@@ -276,23 +284,22 @@ impl ProtocolEvidenceVerifier {
                 VerifierPolicyError::UnknownSequencer
             } else if !saw_epoch {
                 VerifierPolicyError::Epoch
+            } else if saw_revoked {
+                VerifierPolicyError::Revoked
             } else {
                 VerifierPolicyError::BatchRange
             });
         };
-        if entry
-            .revoked_at_batch
-            .is_some_and(|revoked_at| header.batch_number() >= revoked_at)
-        {
-            return Err(VerifierPolicyError::Revoked);
-        }
+        let active_last_batch = entry
+            .active_last_batch()
+            .ok_or(VerifierPolicyError::Revoked)?;
         Ok((
             header,
             SequencerAuthorization::new(
                 entry.sequencer_id,
                 entry.public_key,
                 entry.first_batch_number,
-                entry.last_batch_number,
+                active_last_batch,
             ),
         ))
     }

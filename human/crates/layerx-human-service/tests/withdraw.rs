@@ -399,7 +399,7 @@ impl AgentBoundary for RealWithdrawalAgent {
             .map_err(|_| AgentBoundaryError::Refused)?;
         let verified = verify_before_submit(&signed, &prepared, &signer_public_key, &self.registry)
             .map_err(|_| AgentBoundaryError::Refused)?;
-        let activity_id = verified.audit.activity_id;
+        let activity_id = verified.activity_id();
         match self
             .outbox
             .enqueue(&mut self.store, self.tenant.clone(), key, verified)

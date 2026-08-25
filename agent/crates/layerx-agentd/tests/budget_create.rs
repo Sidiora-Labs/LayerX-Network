@@ -5,7 +5,7 @@ use layerx_agentd::budget::{
     create_protocol_budget, BudgetCreationError, BudgetKind, BudgetPipeline, BudgetRequest,
     CoreBudgetReceipt, LocalLimit,
 };
-use layerx_agentd::store::{ObjectKind, Store, TenantId, TenantKey};
+use layerx_agentd::store::{ObjectKind, Store, TenantId};
 
 static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(1);
 
@@ -33,6 +33,7 @@ fn tenant() -> TenantId {
 }
 
 fn request() -> BudgetRequest {
+    let submission = support::verified_submission(1);
     BudgetRequest {
         tenant: tenant(),
         request_id: [1; 32],
@@ -40,8 +41,8 @@ fn request() -> BudgetRequest {
         asset: [2; 32],
         ceiling: 5_000,
         expiry_sequence: 100,
-        canonical_activity: b"canonical-signed-budget-activity".to_vec(),
-        signature: [3; 64],
+        canonical_activity: submission.exact_bytes().to_vec(),
+        verified_submission: Some(submission),
     }
 }
 
@@ -54,29 +55,33 @@ fn root(label: &str) -> std::path::PathBuf {
 }
 
 #[test]
-fn creation_returns_protocol_object_and_verified_receipt() {
+fn verified_creation_without_a_proven_object_effect_fails_closed() {
     let path = root("success");
     let mut store = Store::open(&path).unwrap_or_else(|error| panic!("store: {error}"));
-    let evidence = support::raw_receipt([1; 32], 0, 25);
-    let expected_receipt = evidence.canonical_receipt().to_vec();
+    let request = request();
+    let activity_id = request
+        .verified_submission
+        .as_ref()
+        .map(layerx_agentd::sign::VerifiedSubmission::activity_id)
+        .unwrap_or_else(|| panic!("verified submission missing"));
+    let evidence = support::raw_receipt(activity_id, 0, 25);
     let mut pipeline = SignedActivityPipeline {
         result: Ok(CoreBudgetReceipt {
-            object_id: [9; 32],
             evidence,
         }),
         submitted_bytes: Vec::new(),
     };
-    let budget = create_protocol_budget(
-        &mut store,
-        &request(),
-        &support::evidence_verifier(),
-        &mut pipeline,
-    )
-        .unwrap_or_else(|error| panic!("creation: {error:?}"));
-    assert_eq!(pipeline.submitted_bytes, request().canonical_activity);
-    assert_eq!(budget.object_id, [9; 32]);
-    assert_eq!(budget.receipt_bytes, expected_receipt);
-    assert_eq!(budget.enforcement, "protocol-enforced");
+    assert_eq!(
+        create_protocol_budget(
+            &mut store,
+            &request,
+            &support::evidence_verifier(),
+            &mut pipeline,
+        ),
+        Err(BudgetCreationError::ProtocolObjectEffectUnavailable)
+    );
+    assert_eq!(pipeline.submitted_bytes, request.canonical_activity);
+    assert!(store.list_object_ids(&tenant(), ObjectKind::Budget).is_empty());
     let _ = fs::remove_dir_all(path);
 }
 
@@ -97,9 +102,57 @@ fn failed_creation_leaves_no_daemon_budget_record() {
         ),
         Err(BudgetCreationError::Submission)
     ));
-    let absent = TenantKey::new(tenant(), ObjectKind::Budget, [9; 32].to_vec())
-        .unwrap_or_else(|error| panic!("key: {error}"));
-    assert!(store.get(&absent).is_none());
+    assert!(store.list_object_ids(&tenant(), ObjectKind::Budget).is_empty());
+    let _ = fs::remove_dir_all(path);
+}
+
+#[test]
+fn unverified_or_substituted_canonical_activity_never_reaches_submission() {
+    let path = root("activity-binding");
+    let mut store = Store::open(&path).unwrap_or_else(|error| panic!("store: {error}"));
+    let mut pipeline = SignedActivityPipeline {
+        result: Err(BudgetCreationError::Submission),
+        submitted_bytes: Vec::new(),
+    };
+    let mut unavailable = request();
+    unavailable.verified_submission = None;
+    assert_eq!(
+        create_protocol_budget(
+            &mut store,
+            &unavailable,
+            &support::evidence_verifier(),
+            &mut pipeline,
+        ),
+        Err(BudgetCreationError::ActivityBindingUnavailable)
+    );
+    assert!(pipeline.submitted_bytes.is_empty());
+
+    let mut substituted = request();
+    substituted.canonical_activity = support::verified_submission(2).exact_bytes().to_vec();
+    assert_eq!(
+        create_protocol_budget(
+            &mut store,
+            &substituted,
+            &support::evidence_verifier(),
+            &mut pipeline,
+        ),
+        Err(BudgetCreationError::ActivityBindingMismatch)
+    );
+    assert!(pipeline.submitted_bytes.is_empty());
+
+    let mut request_substitution = request();
+    request_substitution.request_id = [2; 32];
+    assert_eq!(
+        create_protocol_budget(
+            &mut store,
+            &request_substitution,
+            &support::evidence_verifier(),
+            &mut pipeline,
+        ),
+        Err(BudgetCreationError::ActivityBindingMismatch)
+    );
+    assert!(pipeline.submitted_bytes.is_empty());
+    assert!(store.list_object_ids(&tenant(), ObjectKind::Budget).is_empty());
     let _ = fs::remove_dir_all(path);
 }
 
@@ -112,7 +165,6 @@ fn unverifiable_creation_receipt_leaves_no_protocol_budget_cache() {
     corrupt[0] ^= 1;
     let mut pipeline = SignedActivityPipeline {
         result: Ok(CoreBudgetReceipt {
-            object_id: [9; 32],
             evidence: support::corrupt_raw_receipt(&raw, corrupt),
         }),
         submitted_bytes: Vec::new(),
@@ -126,9 +178,34 @@ fn unverifiable_creation_receipt_leaves_no_protocol_budget_cache() {
         ),
         Err(BudgetCreationError::UnverifiedReceipt)
     ));
-    let absent = TenantKey::new(tenant(), ObjectKind::Budget, [9; 32].to_vec())
-        .unwrap_or_else(|error| panic!("key: {error}"));
-    assert!(store.get(&absent).is_none());
+    assert!(store.list_object_ids(&tenant(), ObjectKind::Budget).is_empty());
+    let _ = fs::remove_dir_all(path);
+}
+
+#[test]
+fn receipt_for_another_canonical_activity_cannot_create_or_cache_a_budget() {
+    let path = root("activity-mismatch");
+    let mut store = Store::open(&path).unwrap_or_else(|error| panic!("store: {error}"));
+    let mut pipeline = SignedActivityPipeline {
+        result: Ok(CoreBudgetReceipt {
+            evidence: support::raw_receipt(
+                support::verified_submission(2).activity_id(),
+                0,
+                25,
+            ),
+        }),
+        submitted_bytes: Vec::new(),
+    };
+    assert_eq!(
+        create_protocol_budget(
+            &mut store,
+            &request(),
+            &support::evidence_verifier(),
+            &mut pipeline,
+        ),
+        Err(BudgetCreationError::ReceiptActivityMismatch)
+    );
+    assert!(store.list_object_ids(&tenant(), ObjectKind::Budget).is_empty());
     let _ = fs::remove_dir_all(path);
 }
 

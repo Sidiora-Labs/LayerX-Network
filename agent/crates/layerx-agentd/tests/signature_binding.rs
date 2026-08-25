@@ -163,8 +163,8 @@ fn verified_wrapper_preserves_the_exact_signed_input_and_activity_id() {
         verify_before_submit(&signed_bytes, &prepared, &signer.public_key(), &registry())
             .unwrap_or_else(|error| panic!("verify: {error:?}"));
     assert_eq!(verified.exact_bytes(), signed_bytes);
-    assert_eq!(verified.audit.signed_byte_length, signed_bytes.len());
-    assert_ne!(verified.audit.activity_id, [0; 32]);
+    assert_eq!(verified.signed_byte_length(), signed_bytes.len());
+    assert_ne!(verified.activity_id(), [0; 32]);
 }
 
 #[test]

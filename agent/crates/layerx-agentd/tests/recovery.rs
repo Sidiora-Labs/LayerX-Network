@@ -3,7 +3,7 @@ mod support;
 use layerx_agentd::budget::{
     hold_unknown, PersistedReceipt, ProtocolBudgetState, UnknownReservation,
 };
-use layerx_agentd::capability::ReceiptApplication as CeilingReceipt;
+use layerx_agentd::capability::{CeilingError, ReceiptApplication as CeilingReceipt};
 use layerx_agentd::outbox::{
     recover, resolve_unknown, Outbox, ReceiptLookup, RecoveryError, RecoveryInputs,
     SubmissionState, UnknownBoundaryError, UnknownCeilingReservation, UnknownResolutionError,
@@ -102,19 +102,27 @@ fn restart_preserves_recovery_actions_but_blocks_writes_without_budget_schema() 
     drop(before);
 
     let mut after = Store::open(&root).unwrap_or_else(|error| panic!("restart: {error}"));
+    assert!(matches!(
+        recover(
+            &mut after,
+            &tenant(),
+            &recovery_inputs(
+                &[[4; 32]],
+                &[],
+                &[UnknownCeilingReservation {
+                    id: [4; 32],
+                    expected_activity_id: unknown_activity_id,
+                    amount: 300,
+                    expiry_sequence: 100,
+                }],
+            ),
+        ),
+        Err(RecoveryError::Ceiling(CeilingError::Unreconciled))
+    ));
     let recovered = recover(
         &mut after,
         &tenant(),
-        &recovery_inputs(
-            &[[4; 32]],
-            &[],
-            &[UnknownCeilingReservation {
-                id: [4; 32],
-                expected_activity_id: unknown_activity_id,
-                amount: 300,
-                expiry_sequence: 100,
-            }],
-        ),
+        &recovery_inputs(&[[4; 32]], &[], &[]),
     )
     .unwrap_or_else(|error| panic!("recover: {error:?}"));
     assert_eq!(recovered.queued_for_transmission, vec![[1; 32]]);
@@ -133,8 +141,11 @@ fn restart_preserves_recovery_actions_but_blocks_writes_without_budget_schema() 
     );
     assert_eq!(recovered.budget_accounting.held_unresolved, 300);
     assert_eq!(
-        recovered.ceiling.snapshot().map(|value| value.held),
-        Ok(300)
+        recovered
+            .ceiling
+            .snapshot()
+            .map(|value| (value.held, value.reconciled)),
+        Ok((0, false))
     );
     assert!(matches!(
         recovered.require_write_ready(),

@@ -1,7 +1,8 @@
 //! Budget creation through the ordinary canonical write pipeline.
 
 use crate::protocol_evidence::{EvidenceAuthority, RawReceiptEvidence};
-use crate::store::{ObjectKind, Store, StoreError, TenantId, TenantKey};
+use crate::sign::VerifiedSubmission;
+use crate::store::{Store, TenantId};
 
 const LOCAL_BYPASS_STATEMENT: &str =
     "daemon-enforced only; bypassing layerx-agentd bypasses this limit";
@@ -23,24 +24,26 @@ pub struct BudgetRequest {
     pub ceiling: u128,
     pub expiry_sequence: u64,
     pub canonical_activity: Vec<u8>,
-    pub signature: [u8; 64],
+    pub verified_submission: Option<VerifiedSubmission>,
 }
 
-/// Core receipt proving creation of a protocol object.
+/// Raw core receipt returned for the submitted creation activity.
+///
+/// This boundary supplies no object identifier; only verified canonical effects
+/// may issue one.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CoreBudgetReceipt {
-    pub object_id: [u8; 32],
     pub evidence: RawReceiptEvidence,
 }
 
-/// The mandatory prepare, sign, submit and raw-evidence seam.
+/// The mandatory exact-submission and raw-evidence seam.
 pub trait BudgetPipeline {
-    /// Prepares, signs and submits one budget creation activity, returning raw core evidence.
+    /// Submits the byte-identical verifier-bound budget activity and returns raw core evidence.
     ///
     /// # Errors
     ///
-    /// Returns `Submission` when the signed canonical activity does not reach core and produce a
-    /// receipt.
+    /// Returns `Submission` when the exact signed canonical activity does not reach core and
+    /// produce a receipt.
     fn submit_budget(
         &mut self,
         request: &BudgetRequest,
@@ -50,10 +53,32 @@ pub trait BudgetPipeline {
 /// Successfully created protocol-backed budget.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProtocolBudget {
-    pub object_id: [u8; 32],
-    pub kind: BudgetKind,
-    pub receipt_bytes: Vec<u8>,
-    pub enforcement: &'static str,
+    object_id: [u8; 32],
+    kind: BudgetKind,
+    receipt_bytes: Vec<u8>,
+    enforcement: &'static str,
+}
+
+impl ProtocolBudget {
+    #[must_use]
+    pub const fn object_id(&self) -> [u8; 32] {
+        self.object_id
+    }
+
+    #[must_use]
+    pub const fn kind(&self) -> BudgetKind {
+        self.kind
+    }
+
+    #[must_use]
+    pub fn receipt_bytes(&self) -> &[u8] {
+        &self.receipt_bytes
+    }
+
+    #[must_use]
+    pub const fn enforcement(&self) -> &'static str {
+        self.enforcement
+    }
 }
 
 /// Honest daemon-only limit.
@@ -81,40 +106,30 @@ impl LocalLimit {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BudgetCreationError {
     EmptyActivity,
     InvalidLimit,
+    ActivityBindingUnavailable,
+    ActivityBindingMismatch,
     Submission,
     UnverifiedReceipt,
+    ReceiptActivityMismatch,
     CoreRejected,
-    Store(StoreError),
+    ProtocolObjectEffectUnavailable,
 }
 
-impl PartialEq for BudgetCreationError {
-    fn eq(&self, other: &Self) -> bool {
-        matches!((self, other), (Self::Store(_), Self::Store(_)))
-            || std::mem::discriminant(self) == std::mem::discriminant(other)
-    }
-}
-
-impl Eq for BudgetCreationError {}
-
-impl From<StoreError> for BudgetCreationError {
-    fn from(value: StoreError) -> Self {
-        Self::Store(value)
-    }
-}
-
-/// Creates a protocol-enforced limit only through signed canonical bytes.
+/// Offers a verifier-bound signed canonical limit activity to core.
 ///
 /// # Errors
 ///
-/// Refuses a zero ceiling or expiry sequence and empty canonical activity bytes, returns
-/// `UnverifiedReceipt` or `CoreRejected` when the core receipt is unverified or unexecuted, and
-/// returns the store failure raised while caching the receipt.
+/// Refuses a zero ceiling or expiry sequence, missing or substituted verifier
+/// binding, a receipt for any activity other than the exact canonical verified
+/// submission, and an unverified or rejected receipt. The current receipt schema
+/// carries no created budget object effect, so a successful activity still fails
+/// closed without caching an object ID.
 pub fn create_protocol_budget(
-    store: &mut Store,
+    _store: &mut Store,
     request: &BudgetRequest,
     verifier: &EvidenceAuthority,
     pipeline: &mut dyn BudgetPipeline,
@@ -125,23 +140,24 @@ pub fn create_protocol_budget(
     if request.canonical_activity.is_empty() {
         return Err(BudgetCreationError::EmptyActivity);
     }
+    let submission = request
+        .verified_submission
+        .as_ref()
+        .ok_or(BudgetCreationError::ActivityBindingUnavailable)?;
+    if submission.exact_bytes() != request.canonical_activity.as_slice()
+        || submission.idempotency_key() != request.request_id
+    {
+        return Err(BudgetCreationError::ActivityBindingMismatch);
+    }
     let receipt = pipeline.submit_budget(request)?;
     let verified = verifier
         .verify_receipt(&receipt.evidence)
         .map_err(|_| BudgetCreationError::UnverifiedReceipt)?;
+    if verified.activity_id() != submission.activity_id() {
+        return Err(BudgetCreationError::ReceiptActivityMismatch);
+    }
     if verified.result_code() != 0 {
         return Err(BudgetCreationError::CoreRejected);
     }
-    let key = TenantKey::new(
-        request.tenant.clone(),
-        ObjectKind::Budget,
-        receipt.object_id.to_vec(),
-    )?;
-    store.put_core_cache(key, verified.canonical_receipt().to_vec())?;
-    Ok(ProtocolBudget {
-        object_id: receipt.object_id,
-        kind: request.kind,
-        receipt_bytes: verified.canonical_receipt().to_vec(),
-        enforcement: "protocol-enforced",
-    })
+    Err(BudgetCreationError::ProtocolObjectEffectUnavailable)
 }

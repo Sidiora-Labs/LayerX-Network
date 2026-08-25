@@ -23,7 +23,7 @@ pub struct SubmissionBindingAudit {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VerifiedSubmission {
     signed_canonical_bytes: Vec<u8>,
-    pub audit: SubmissionBindingAudit,
+    audit: SubmissionBindingAudit,
 }
 
 impl VerifiedSubmission {
@@ -35,6 +35,21 @@ impl VerifiedSubmission {
     #[must_use]
     pub fn into_exact_bytes(self) -> Vec<u8> {
         self.signed_canonical_bytes
+    }
+
+    #[must_use]
+    pub const fn activity_id(&self) -> [u8; 32] {
+        self.audit.activity_id
+    }
+
+    #[must_use]
+    pub const fn idempotency_key(&self) -> [u8; 32] {
+        self.audit.idempotency_key
+    }
+
+    #[must_use]
+    pub const fn signed_byte_length(&self) -> usize {
+        self.audit.signed_byte_length
     }
 }
 
