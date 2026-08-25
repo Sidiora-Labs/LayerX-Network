@@ -249,6 +249,33 @@ pub fn batch_header_digest(header: &[u8]) -> Result<[u8; 32], WireError> {
     )
 }
 
+/// Computes the execution identifier placed in receipts by the current C producer.
+///
+/// The fixed preimage is `previous_state_root || activity_id ||
+/// global_sequence_be || batch_number_be` under the protocol context-hash domain.
+/// This identifier is distinct from the digest of the later sealed batch header.
+///
+/// # Errors
+///
+/// Returns a hash length failure if the domain-prefixed fixed preimage cannot be
+/// represented by the hashing implementation.
+pub fn execution_batch_id(
+    previous_state_root: [u8; 32],
+    activity_id: [u8; 32],
+    global_sequence: u64,
+    batch_number: u64,
+) -> Result<[u8; 32], WireError> {
+    let mut preimage = [0_u8; 80];
+    preimage[..32].copy_from_slice(&previous_state_root);
+    preimage[32..64].copy_from_slice(&activity_id);
+    preimage[64..72].copy_from_slice(&global_sequence.to_be_bytes());
+    preimage[72..].copy_from_slice(&batch_number.to_be_bytes());
+    domain(
+        Domain::ContextHash,
+        &CanonicalBytes::from_wire(preimage.to_vec()),
+    )
+}
+
 /// Computes the exact checkpoint identifier over canonical header bytes,
 /// big-endian validity-proof length, and validity-proof bytes.
 ///
