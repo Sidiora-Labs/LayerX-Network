@@ -47,9 +47,10 @@ use layerx_human_service::notify::JourneyId;
 use layerx_human_service::store::{PrincipalId, PrincipalStore, TenancyDigest};
 use layerx_human_service::trace::TraceId;
 use layerx_paxeer_client::{
-    raw_call, DepositFailure, DepositProof, EndpointConfig, EndpointTransport, ExecutionOutcome,
-    FinalityReport, FinalityStage, FinalityTracker, FinalizedCheckpoint, Json, PaxeerClient,
-    TrackerConfig, TransactionHash, TransactionInclusion,
+    raw_call, DepositFailure, DepositProof, DepositProofConfig, DepositProofVerifier,
+    EndpointConfig, EndpointTransport, ExecutionOutcome, FinalityReport, FinalityStage,
+    FinalityTracker, FinalizedCheckpoint, Json, PaxeerClient, TrackerConfig, TransactionHash,
+    TransactionInclusion,
 };
 use layerx_proof::checkpoint::{checkpoint_id, Attestation, Certificate, Checkpoint, GuarantorKey};
 use layerx_proof::receipt::AuthorizedBatch;
@@ -528,6 +529,7 @@ fn binding_receipt(submission: AgentSubmission, address: EvmAddress) -> AgentBin
 /// after the real transaction was broadcast.
 struct RealDepositRuntime {
     anvil: Anvil,
+    proof_verifier: DepositProofVerifier,
     vault: EvmAddress,
     certificate: Certificate,
     bonded: Vec<GuarantorKey>,
@@ -592,8 +594,15 @@ impl RealDepositRuntime {
             );
         }
         let (checkpoint, certificate, bonded) = checkpoint();
+        let proof_verifier = DepositProofVerifier::new(DepositProofConfig {
+            endpoints: vec![anvil.endpoint.clone()],
+            minimum_endpoint_agreement: 1,
+            required_confirmations: 1,
+        })
+        .unwrap_or_else(|error| panic!("deposit proof verifier: {error:?}"));
         Self {
             anvil,
+            proof_verifier,
             vault,
             certificate,
             bonded,
@@ -675,8 +684,7 @@ impl DepositRuntime for RealDepositRuntime {
         transaction: TransactionHash,
     ) -> Result<DepositProof, DepositFailure> {
         let report = self.final_report(transaction);
-        DepositProof::obtain_from_certificate(
-            &self.anvil.client(),
+        self.proof_verifier.obtain_from_certificate(
             &report,
             self.vault,
             &self.certificate,

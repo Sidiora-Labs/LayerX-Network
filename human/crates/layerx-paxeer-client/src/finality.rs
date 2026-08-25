@@ -477,8 +477,70 @@ pub(crate) fn validate_endpoint_agreement(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::deposit::{
+        DepositFailure, DepositProofConfig, DepositProofVerifier, ProofFault,
+    };
     use crate::rpc::EndpointFault;
     use crate::status::{BoundaryHealth, BoundaryStatus};
+
+    fn endpoint(port: u16) -> EndpointConfig {
+        EndpointConfig {
+            url: format!("http://127.0.0.1:{port}"),
+            request_timeout: Duration::from_secs(1),
+            transport: EndpointTransport::LocalEmulator,
+            expected_chain_id: 31_337,
+        }
+    }
+
+    fn final_report(
+        binding: QuorumBinding,
+        reported_confirmations: u64,
+        reported_required: u64,
+        observed_head: u64,
+    ) -> FinalityReport {
+        let inclusion = TransactionInclusion {
+            block: BlockRef {
+                number: 10,
+                hash: [3; 32],
+            },
+            transaction_index: 0,
+            execution: crate::client::ExecutionOutcome::Succeeded,
+            deployed_contract: None,
+        };
+        FinalityReport {
+            transaction: TransactionHash::new([7; 32]),
+            stage: FinalityStage::Final {
+                inclusion,
+                confirmations: reported_confirmations,
+                required: reported_required,
+            },
+            signal: ChainSignal::Progressing,
+            endpoint: EndpointSignal::Serving,
+            progress: ConfirmationProgress {
+                confirmed: reported_confirmations,
+                required: reported_required,
+            },
+            displacements: 0,
+            polls: 1,
+            evidence: Some(FinalityEvidence {
+                binding,
+                chain_id: 31_337,
+                head: observed_head,
+                transaction: TransactionView::Included(inclusion),
+                canonical_block: Some(inclusion.block),
+                receipt_logs: Some(Vec::new()),
+            }),
+        }
+    }
+
+    fn deposit_verifier(endpoints: &[EndpointConfig]) -> DepositProofVerifier {
+        DepositProofVerifier::new(DepositProofConfig {
+            endpoints: endpoints.to_vec(),
+            minimum_endpoint_agreement: 2,
+            required_confirmations: 12,
+        })
+        .unwrap_or_else(|error| panic!("deposit verifier: {error:?}"))
+    }
 
     #[test]
     fn unreachable_report_maps_to_unavailable_boundary_health() {
@@ -509,6 +571,60 @@ mod tests {
         assert_eq!(
             BoundaryStatus::from_report(&report, Duration::from_secs(2)).health,
             BoundaryHealth::Unavailable
+        );
+    }
+
+    #[test]
+    fn deposit_proof_refuses_report_from_weaker_endpoint_quorum() {
+        let endpoints = vec![endpoint(18_545), endpoint(18_546)];
+        let verifier = deposit_verifier(&endpoints);
+        let client = PaxeerClient::new(endpoints)
+            .unwrap_or_else(|error| panic!("Paxeer client: {error:?}"));
+        let report = final_report(client.quorum_binding(1), 12, 12, 21);
+
+        assert_eq!(
+            verifier.verify_report_policy(&report),
+            Err(DepositFailure::ProofUnavailable(
+                ProofFault::EvidenceSourceMismatch,
+            ))
+        );
+    }
+
+    #[test]
+    fn deposit_proof_refuses_report_from_weaker_confirmation_policy() {
+        let endpoints = vec![endpoint(18_547), endpoint(18_548)];
+        let verifier = deposit_verifier(&endpoints);
+        let client = PaxeerClient::new(endpoints)
+            .unwrap_or_else(|error| panic!("Paxeer client: {error:?}"));
+        let report = final_report(client.quorum_binding(2), 12, 1, 21);
+
+        assert_eq!(
+            verifier.verify_report_policy(&report),
+            Err(DepositFailure::ProofUnavailable(
+                ProofFault::ConfirmationPolicyMismatch {
+                    expected: 12,
+                    reported: 1,
+                },
+            ))
+        );
+    }
+
+    #[test]
+    fn deposit_proof_recomputes_confirmation_depth_from_quorum_evidence() {
+        let endpoints = vec![endpoint(18_549), endpoint(18_550)];
+        let verifier = deposit_verifier(&endpoints);
+        let client = PaxeerClient::new(endpoints)
+            .unwrap_or_else(|error| panic!("Paxeer client: {error:?}"));
+        let report = final_report(client.quorum_binding(2), 12, 12, 10);
+
+        assert_eq!(
+            verifier.verify_report_policy(&report),
+            Err(DepositFailure::ProofUnavailable(
+                ProofFault::ConfirmationEvidenceMismatch {
+                    reported: 12,
+                    observed: 1,
+                },
+            ))
         );
     }
 }

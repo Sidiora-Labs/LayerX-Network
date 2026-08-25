@@ -11,9 +11,9 @@ use layerx_agent_api::prepare::TimestampBound as AgentTimestampBound;
 use layerx_agent_api::{Amount as AgentAmount, Sequence, TimestampSeconds};
 use layerx_paxeer_client::{
     account_address, raw_call, AgentCreditContext, CreditFault, CreditPath, CustodyFault,
-    DepositFailure, DepositProof, EndpointConfig, EndpointTransport, ExecutionOutcome,
-    FinalityReport, FinalityStage, FinalityTracker, FinalizedCheckpoint, Json, PaxeerClient,
-    ProofFault, TrackerConfig,
+    DepositFailure, DepositProofConfig, DepositProofVerifier, EndpointConfig, EndpointTransport,
+    ExecutionOutcome, FinalityReport, FinalityStage, FinalityTracker, FinalizedCheckpoint, Json,
+    PaxeerClient, ProofFault, TrackerConfig,
     TransactionHash, TransactionInclusion,
 };
 use layerx_proof::checkpoint::{
@@ -160,6 +160,15 @@ fn text_member(name: &str, value: &str) -> (String, Json) {
 fn client(anvil: &Anvil) -> PaxeerClient {
     PaxeerClient::new(vec![anvil.endpoint.clone()])
         .unwrap_or_else(|error| panic!("client: {error:?}"))
+}
+
+fn deposit_verifier(anvil: &Anvil, required_confirmations: u64) -> DepositProofVerifier {
+    DepositProofVerifier::new(DepositProofConfig {
+        endpoints: vec![anvil.endpoint.clone()],
+        minimum_endpoint_agreement: 1,
+        required_confirmations,
+    })
+    .unwrap_or_else(|error| panic!("deposit proof verifier: {error:?}"))
 }
 
 fn wait_receipt(reader: &PaxeerClient, transaction: TransactionHash) -> TransactionInclusion {
@@ -460,10 +469,10 @@ fn finalized_custody_is_credited_once_through_the_agent_contract() {
     );
     let report = final_report(&anvil, deposit_transaction);
     let (checkpoint, certificate, bonded) = finalized_checkpoint();
+    let proof_verifier = deposit_verifier(&anvil, 1);
     assert_eq!(checkpoint.network_id(), CORE_NETWORK);
     assert_eq!(checkpoint.state_root(), [8; 32]);
-    let proof = DepositProof::obtain_from_certificate(
-        &client(&anvil),
+    let proof = proof_verifier.obtain_from_certificate(
         &report,
         vault,
         &certificate,
@@ -496,8 +505,7 @@ fn finalized_custody_is_credited_once_through_the_agent_contract() {
         })
     );
     assert!(matches!(
-        DepositProof::obtain_from_certificate(
-            &client(&anvil),
+        proof_verifier.obtain_from_certificate(
             &report,
             vault,
             &insufficient,
@@ -604,8 +612,9 @@ fn deposit_failures_remain_typed_at_each_boundary() {
     );
     let report = final_report(&anvil, reverted_transaction);
     let (checkpoint, _, _) = finalized_checkpoint();
+    let proof_verifier = deposit_verifier(&anvil, 1);
     assert!(matches!(
-        DepositProof::obtain(&client(&anvil), &report, vault, checkpoint.clone()),
+        proof_verifier.obtain(&report, vault, checkpoint.clone()),
         Err(DepositFailure::CustodyFailed(CustodyFault::Reverted { .. }))
     ));
 
@@ -625,8 +634,9 @@ fn deposit_failures_remain_typed_at_each_boundary() {
     )
     .unwrap_or_else(|error| panic!("confirming tracker: {error:?}"));
     let unavailable = confirming.poll();
+    let deeper_verifier = deposit_verifier(&anvil, required.saturating_add(1));
     assert!(matches!(
-        DepositProof::obtain(&client(&anvil), &unavailable, vault, checkpoint),
+        deeper_verifier.obtain(&unavailable, vault, checkpoint),
         Err(DepositFailure::ProofUnavailable(
             ProofFault::NotFinal { .. }
         ))

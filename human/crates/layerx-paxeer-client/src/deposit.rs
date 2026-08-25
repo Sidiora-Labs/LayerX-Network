@@ -22,10 +22,11 @@ use layerx_types::payload::ModuleRegistry;
 use sha2::{Digest as _, Sha256};
 
 use crate::client::{
-    BlockRef, EndpointError, ExecutionOutcome, LogRecord, PaxeerClient, TransactionHash,
-    TransactionInclusion,
+    BlockRef, ClientConfigError, EndpointError, ExecutionOutcome, LogRecord, PaxeerClient,
+    QuorumBinding, TransactionHash, TransactionInclusion,
 };
-use crate::finality::{FinalityReport, FinalityStage};
+use crate::finality::{FinalityReport, FinalityStage, TrackerConfigError};
+use crate::rpc::EndpointConfig;
 
 const CUSTODY_DEPOSIT_TOPIC: [u8; 32] = [
     0x7e, 0xdb, 0x71, 0xc9, 0x10, 0x0c, 0x65, 0x68, 0x47, 0x89, 0x6d, 0x0b, 0x5b, 0x19, 0x4f, 0x69,
@@ -144,6 +145,14 @@ pub enum ProofFault {
     },
     MissingQuorumEvidence,
     EvidenceSourceMismatch,
+    ConfirmationPolicyMismatch {
+        expected: u64,
+        reported: u64,
+    },
+    ConfirmationEvidenceMismatch {
+        reported: u64,
+        observed: u64,
+    },
     MissingCustodyEvent {
         vault: EvmAddress,
     },
@@ -205,25 +214,68 @@ pub enum DepositFailure {
     CreditRefused(CreditFault),
 }
 
-/// The finalized custody proof in the exact form consumed by
-/// `lx_bridge_verify_deposit`.
+/// The exact Paxeer quorum and confirmation policy permitted to mint a
+/// custody proof.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct DepositProof {
-    transaction: TransactionHash,
-    inclusion: TransactionInclusion,
-    confirmations: u64,
-    required: u64,
-    chain_id: u64,
-    vault: EvmAddress,
-    custody: CustodyDeposit,
-    checkpoint: FinalizedCheckpoint,
-    finalized: bool,
-    commitment: [u8; 32],
+pub struct DepositProofConfig {
+    pub endpoints: Vec<EndpointConfig>,
+    pub minimum_endpoint_agreement: usize,
+    pub required_confirmations: u64,
 }
 
-impl DepositProof {
+/// Why a custody-proof authority configuration was refused.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DepositProofConfigError {
+    Endpoints(ClientConfigError),
+    Agreement(TrackerConfigError),
+    ZeroRequiredConfirmations,
+}
+
+/// The configured authority that can mint a [`DepositProof`].
+///
+/// A report supplies opaque quorum evidence, but never selects the quorum or
+/// confirmation policy under which the proof is accepted.
+#[derive(Clone, Debug)]
+pub struct DepositProofVerifier {
+    binding: QuorumBinding,
+    required_confirmations: u64,
+}
+
+struct AdmittedFinality<'a> {
+    inclusion: TransactionInclusion,
+    confirmations: u64,
+    chain_id: u64,
+    logs: &'a [LogRecord],
+}
+
+impl DepositProofVerifier {
+    /// Validates and owns the exact endpoint quorum and confirmation depth
+    /// under which deposit proofs may be minted.
+    ///
+    /// # Errors
+    ///
+    /// Refuses zero confirmation depth, an invalid endpoint agreement, or an
+    /// invalid endpoint declaration.
+    pub fn new(config: DepositProofConfig) -> Result<Self, DepositProofConfigError> {
+        if config.required_confirmations == 0 {
+            return Err(DepositProofConfigError::ZeroRequiredConfirmations);
+        }
+        crate::finality::validate_endpoint_agreement(
+            &config.endpoints,
+            config.minimum_endpoint_agreement,
+        )
+        .map_err(DepositProofConfigError::Agreement)?;
+        let client = PaxeerClient::new(config.endpoints)
+            .map_err(DepositProofConfigError::Endpoints)?;
+        let binding = client.quorum_binding(config.minimum_endpoint_agreement);
+        Ok(Self {
+            binding,
+            required_confirmations: config.required_confirmations,
+        })
+    }
+
     /// Verifies checkpoint evidence and constructs the custody proof as one
-    /// typed operation.
+    /// typed operation under this verifier's policy.
     ///
     /// # Errors
     ///
@@ -231,14 +283,14 @@ impl DepositProof {
     /// returns the same custody and chain failures as [`Self::obtain`].
     #[allow(clippy::too_many_arguments)]
     pub fn obtain_from_certificate(
-        client: &PaxeerClient,
+        &self,
         report: &FinalityReport,
         vault: EvmAddress,
         certificate: &Certificate,
         bonded_set: &[GuarantorKey],
         registered_checkpoint_id: CheckpointId,
         registered_settlement_reference: Option<&[u8]>,
-    ) -> Result<Self, DepositFailure> {
+    ) -> Result<DepositProof, DepositFailure> {
         let checkpoint = FinalizedCheckpoint::verify(
             certificate,
             bonded_set,
@@ -246,26 +298,54 @@ impl DepositProof {
             registered_settlement_reference,
         )
         .map_err(|error| DepositFailure::ProofUnavailable(ProofFault::Checkpoint(error)))?;
-        Self::obtain(client, report, vault, checkpoint)
+        self.obtain(report, vault, checkpoint)
     }
 
-    /// Constructs a finalized custody proof from one tracked transaction and a
-    /// verified core checkpoint. The receipt comes from the tracker's bound
-    /// endpoint quorum and the vault's deposit identifier and core proof
-    /// commitment are re-derived locally.
+    /// Constructs a finalized custody proof from one tracked transaction and
+    /// a verified core checkpoint under this verifier's exact policy.
     ///
     /// # Errors
     ///
     /// Returns [`DepositFailure::CustodyFailed`] for a reverted or displaced
-    /// transaction and [`DepositFailure::ProofUnavailable`] until every chain
-    /// and proof binding is available.
+    /// transaction and [`DepositFailure::ProofUnavailable`] until every chain,
+    /// quorum, policy, and proof binding is available.
     pub fn obtain(
-        client: &PaxeerClient,
+        &self,
         report: &FinalityReport,
         vault: EvmAddress,
         checkpoint: FinalizedCheckpoint,
-    ) -> Result<Self, DepositFailure> {
-        let (inclusion, confirmations, required) = match report.stage() {
+    ) -> Result<DepositProof, DepositFailure> {
+        let admitted = self.admit_finality(report)?;
+        let custody = custody_event(admitted.logs, vault)?;
+        let derived = derive_deposit_id(admitted.chain_id, vault, &custody);
+        if derived != custody.deposit_id {
+            return Err(DepositFailure::ProofUnavailable(
+                ProofFault::UnboundDeposit {
+                    emitted: custody.deposit_id,
+                    derived,
+                },
+            ));
+        }
+        let commitment = proof_commitment(report.transaction(), &custody, &checkpoint);
+        Ok(DepositProof {
+            transaction: report.transaction(),
+            inclusion: admitted.inclusion,
+            confirmations: admitted.confirmations,
+            required: self.required_confirmations,
+            chain_id: admitted.chain_id,
+            vault,
+            custody,
+            checkpoint,
+            finalized: true,
+            commitment,
+        })
+    }
+
+    fn admit_finality<'a>(
+        &self,
+        report: &'a FinalityReport,
+    ) -> Result<AdmittedFinality<'a>, DepositFailure> {
+        let (inclusion, reported_confirmations, reported_required) = match report.stage() {
             FinalityStage::Final {
                 inclusion,
                 confirmations,
@@ -296,9 +376,17 @@ impl DepositProof {
         let evidence = report.evidence().ok_or(DepositFailure::ProofUnavailable(
             ProofFault::MissingQuorumEvidence,
         ))?;
-        if !client.same_sources(evidence.binding()) {
+        if evidence.binding() != &self.binding {
             return Err(DepositFailure::ProofUnavailable(
                 ProofFault::EvidenceSourceMismatch,
+            ));
+        }
+        if reported_required != self.required_confirmations {
+            return Err(DepositFailure::ProofUnavailable(
+                ProofFault::ConfirmationPolicyMismatch {
+                    expected: self.required_confirmations,
+                    reported: reported_required,
+                },
             ));
         }
         let current = match evidence.transaction() {
@@ -332,7 +420,15 @@ impl DepositProof {
             .head()
             .saturating_sub(inclusion.block.number)
             .saturating_add(1);
-        if observed_confirmations < required {
+        if reported_confirmations != observed_confirmations {
+            return Err(DepositFailure::ProofUnavailable(
+                ProofFault::ConfirmationEvidenceMismatch {
+                    reported: reported_confirmations,
+                    observed: observed_confirmations,
+                },
+            ));
+        }
+        if observed_confirmations < self.required_confirmations {
             return Err(DepositFailure::ProofUnavailable(ProofFault::NotFinal {
                 stage: report.stage(),
             }));
@@ -340,32 +436,40 @@ impl DepositProof {
         let logs = evidence.receipt_logs().ok_or(DepositFailure::ProofUnavailable(
             ProofFault::MissingQuorumEvidence,
         ))?;
-        let chain_id = evidence.chain_id();
-        let custody = custody_event(logs, vault)?;
-        let derived = derive_deposit_id(chain_id, vault, &custody);
-        if derived != custody.deposit_id {
-            return Err(DepositFailure::ProofUnavailable(
-                ProofFault::UnboundDeposit {
-                    emitted: custody.deposit_id,
-                    derived,
-                },
-            ));
-        }
-        let commitment = proof_commitment(report.transaction(), &custody, &checkpoint);
-        Ok(Self {
-            transaction: report.transaction(),
+        Ok(AdmittedFinality {
             inclusion,
-            confirmations,
-            required,
-            chain_id,
-            vault,
-            custody,
-            checkpoint,
-            finalized: true,
-            commitment,
+            confirmations: observed_confirmations,
+            chain_id: evidence.chain_id(),
+            logs,
         })
     }
 
+    #[cfg(test)]
+    pub(crate) fn verify_report_policy(
+        &self,
+        report: &FinalityReport,
+    ) -> Result<(), DepositFailure> {
+        self.admit_finality(report).map(|_| ())
+    }
+}
+
+/// The finalized custody proof in the exact form consumed by
+/// `lx_bridge_verify_deposit`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DepositProof {
+    transaction: TransactionHash,
+    inclusion: TransactionInclusion,
+    confirmations: u64,
+    required: u64,
+    chain_id: u64,
+    vault: EvmAddress,
+    custody: CustodyDeposit,
+    checkpoint: FinalizedCheckpoint,
+    finalized: bool,
+    commitment: [u8; 32],
+}
+
+impl DepositProof {
     #[must_use]
     pub const fn transaction(&self) -> TransactionHash {
         self.transaction

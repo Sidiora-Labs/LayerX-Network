@@ -15,7 +15,8 @@ pub use client::{
 };
 pub use deposit::{
     account_address, AgentCreditContext, CreditFault, CreditPath, CreditReceipt, CustodyDeposit,
-    CustodyFault, DepositFailure, DepositProof, FinalizedCheckpoint, ProofFault,
+    CustodyFault, DepositFailure, DepositProof, DepositProofConfig, DepositProofConfigError,
+    DepositProofVerifier, FinalizedCheckpoint, ProofFault,
 };
 pub use exit::{
     balance_leaf, emergency_withdrawal_id, exit_nullifier, merkle_node, EmergencyExit, ExitClaim,

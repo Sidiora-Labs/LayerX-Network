@@ -232,11 +232,6 @@ impl PaxeerClient {
         }
     }
 
-    pub(crate) fn same_sources(&self, binding: &QuorumBinding) -> bool {
-        self.expected_chain_id == binding.chain_id
-            && self.endpoint_sources == binding.endpoint_sources
-    }
-
     fn verify_chain(&self, endpoint: &EndpointConfig) -> Result<(), EndpointFailure> {
         let value = raw_call(endpoint, "eth_chainId", &[])?;
         let actual = quantity(&value).map_err(|detail| EndpointFailure {
