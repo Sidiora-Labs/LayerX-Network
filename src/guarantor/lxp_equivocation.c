@@ -6,7 +6,9 @@
 
 enum {
     LXP_ATTESTATION_ENCODED_BYTES = 306,
-    LXP_SEQUENCER_STATEMENT_BYTES = LXP_BATCH_HEADER_ENCODED_SIZE + 64
+    LXP_SEQUENCER_STATEMENT_BYTES = LXP_BATCH_HEADER_ENCODED_SIZE + 64,
+    LXP_SEQUENCER_ENCODED_BYTES = LXP_SEQUENCER_STATEMENT_BYTES + 8,
+    LXP_EQUIVOCATION_FIXED_BYTES = 10
 };
 
 static lxp_result encode_attestation(
@@ -152,13 +154,26 @@ lxp_result lxp_equivocation_encode(
 {
     lxp_codec_writer writer;
     size_t capacity;
+    size_t offender_public_key_length;
+    size_t statements_capacity;
     lxp_result status;
     if (evidence == NULL || arena == NULL || encoded == NULL)
         return LXP_ERR_NON_CANONICAL;
-    capacity = 5U + 1U + 4U + evidence->offender_public_key_length +
-        (evidence->kind == LXP_EQUIVOCATION_GUARANTOR ?
-         2U * LXP_ATTESTATION_ENCODED_BYTES :
-         2U * LXP_SEQUENCER_STATEMENT_BYTES + 16U);
+    if (evidence->kind == LXP_EQUIVOCATION_GUARANTOR) {
+        if (evidence->offender_public_key_length != 33U)
+            return LXP_ERR_NON_CANONICAL;
+        offender_public_key_length = 33U;
+        statements_capacity = 2U * LXP_ATTESTATION_ENCODED_BYTES;
+    } else if (evidence->kind == LXP_EQUIVOCATION_SEQUENCER) {
+        if (evidence->offender_public_key_length != 32U)
+            return LXP_ERR_NON_CANONICAL;
+        offender_public_key_length = 32U;
+        statements_capacity = 2U * LXP_SEQUENCER_ENCODED_BYTES;
+    } else {
+        return LXP_ERR_NON_CANONICAL;
+    }
+    capacity = LXP_EQUIVOCATION_FIXED_BYTES + offender_public_key_length +
+        statements_capacity;
     status = lxp_codec_writer_init(&writer, arena, capacity);
     if (status == LXP_OK)
         status = lxp_codec_write_struct_header(&writer, 0x1904U);

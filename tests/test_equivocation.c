@@ -73,6 +73,7 @@ int main(void)
     lxp_sealed_header_record second_header;
     lxp_sealed_header_record foreign_header;
     lxp_equivocation_evidence sequencer_evidence;
+    size_t invalid_mark;
     if (lxp_arena_init(&arena_one, arena_one_storage,
                        sizeof(arena_one_storage)) != LXP_OK ||
         lxp_arena_init(&arena_two, arena_two_storage,
@@ -107,6 +108,20 @@ int main(void)
         lxp_equivocation_verify(&evidence, &arena_one) != LXP_OK ||
         lxp_equivocation_encode(&evidence, &arena_one,
                                 &first_encoding) != LXP_OK)
+        return 1;
+    invalid_mark = lxp_arena_mark(&arena_one);
+    second_node = evidence;
+    second_node.kind = (lxp_equivocation_kind)UINT8_MAX;
+    second_node.offender_public_key_length = SIZE_MAX;
+    if (lxp_equivocation_encode(&second_node, &arena_one,
+                                &second_encoding) != LXP_ERR_NON_CANONICAL ||
+        lxp_arena_mark(&arena_one) != invalid_mark)
+        return 1;
+    second_node = evidence;
+    second_node.offender_public_key_length = 32U;
+    if (lxp_equivocation_encode(&second_node, &arena_one,
+                                &second_encoding) != LXP_ERR_NON_CANONICAL ||
+        lxp_arena_mark(&arena_one) != invalid_mark)
         return 1;
     foreign_checkpoint = second_checkpoint;
     foreign_checkpoint.header.network_id = 10U;
@@ -231,6 +246,13 @@ int main(void)
                                 &second_header, sequencer_public, 32U,
                                 &sequencer_evidence) != LXP_OK ||
         lxp_equivocation_verify(&sequencer_evidence, &arena_one) != LXP_OK)
+        return 1;
+    invalid_mark = lxp_arena_mark(&arena_one);
+    second_node = sequencer_evidence;
+    second_node.offender_public_key_length = 33U;
+    if (lxp_equivocation_encode(&second_node, &arena_one,
+                                &second_encoding) != LXP_ERR_NON_CANONICAL ||
+        lxp_arena_mark(&arena_one) != invalid_mark)
         return 1;
     sequencer_evidence.sequencer_second.signature[0] ^= 1U;
     return lxp_equivocation_verify(&sequencer_evidence, &arena_one) ==

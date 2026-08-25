@@ -46,6 +46,14 @@ observed = "Program events are carried as module-namespaced receipt effects, but
 assumption = "Task 19.4 keeps the existing receipt shape and emits only through lxp_ctx_emit_event."
 severity = "note"
 
+[observation.19.4.3]
+task = "19.4"
+file = "src/guarantor/lxp_equivocation.c, tests/test_equivocation.c"
+symbol = "lxp_equivocation_encode"
+observed = "The equivocation encoder previously selected the sequencer capacity branch for an unknown evidence kind and incorporated an arbitrary offender key length before canonical admission. The encoder now admits only exact 33-byte guarantor or 32-byte sequencer evidence before arena allocation and derives capacity solely from fixed per-kind wire sizes."
+assumption = "Human qualification will exercise every rejected kind and key-length boundary and confirm that canonical rejection consumes no arena capacity; this source-only implementation step does not claim those checks pass."
+severity = "qualification-repair"
+
 [observation.29.4.1]
 task = "29.4"
 file = "programs/crates/layerx-programs-runtime/tests/namespace_drop.rs"
