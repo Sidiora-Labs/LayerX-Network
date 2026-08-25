@@ -210,6 +210,7 @@ lxp_result lxp_programs_state_record_encode(
     void *memory = NULL;
     size_t mark;
     size_t index;
+    size_t writer_capacity;
     lxp_result status;
     if (ctx == NULL || program_id == NULL || receipt_digest == NULL ||
         arena == NULL || encoded == NULL || lxp_ct_is_zero(program_id, 32U) ||
@@ -300,14 +301,14 @@ lxp_result lxp_programs_state_record_encode(
         account_order[index] = &values.values[index];
     qsort(account_order, values.count, sizeof(account_order[0]),
           account_pointer_compare);
-    status = lxp_arena_alloc(arena, arena->capacity - arena->offset, 1U,
-                             &memory);
+    writer_capacity = arena->capacity - arena->offset;
+    status = lxp_arena_alloc(arena, writer_capacity, 1U, &memory);
     if (status != LXP_OK) {
         (void)lxp_arena_reset(arena, mark);
         return status;
     }
     writer.bytes = (uint8_t *)memory;
-    writer.capacity = arena->capacity - ((uint8_t *)memory - arena->buffer);
+    writer.capacity = writer_capacity;
     writer.length = 0U;
     writer.status = LXP_OK;
     put(&writer, magic, sizeof(magic));

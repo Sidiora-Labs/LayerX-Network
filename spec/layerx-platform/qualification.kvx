@@ -1190,6 +1190,14 @@ observed = "The wind-down exit must let the ordinary 402LXP ledger synchronously
 assumption = "Protocol qualification must resolve whether 'no new authority kind' prohibits even a transient ledger-consumed representation of the already specified ProgramAuthority. Until a versioned alternative is defined, qualification must retain one-shot exact witness consumption and must not replace it with fabricated OWNER authority or a parallel balance route."
 severity = "spec-conflict"
 
+[observation.30.5.8]
+task = "30.5"
+file = "src/modules/programs/state_record.c"
+symbol = "lxp_programs_state_record_encode"
+observed = "Human qualification reached the ABI-two program state-record encoder and GCC rejected the writer capacity expression because subtracting two byte pointers yields signed ptrdiff_t before conversion to size_t. The repair records the arena's already validated unsigned remaining capacity before allocating that exact alignment-one span and assigns the same value directly to the writer, removing the mixed-sign pointer-distance calculation without widening the buffer."
+assumption = "Human qualification must resume the build and exercise exact-fit and exhausted arena inputs to confirm the encoder retains its original bound and reset behavior."
+severity = "qualification-repair"
+
 [observation.37.1.1]
 task = "37.1"
 file = "paxeer-network/wasm-runtime/internal/api, paxeer-network/wasm/x/wasm/artifacts, paxeer-network/Dockerfile, paxeer-network/hpx"
