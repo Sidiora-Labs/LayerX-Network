@@ -92,3 +92,34 @@ symbol = "lx_checkpoint_registry_register_deposit_root, lx_paxeer_deposit_leaf_h
 observed = "Post-implementation review found deposit credit accepted a caller-declared finalised boolean and a self-computed unkeyed commitment while matching an unrelated LayerX checkpoint state root; no Paxeer deposit-root membership or trusted checkpoint authority was required. The first replay repair also hashed alterable custody and asset fields and mutated a caller-owned nullifier array outside module rollback, permitting the same deposit identifier under another signed asset leaf and permitting rollback to consume without credit. The final repair makes the checkpoint registry opaque and authority-keyed, admits a deposit root only under a canonical Ed25519-signed Paxeer checkpoint registration bound to network, protocol, checkpoint state root and custody settlement, verifies an index-aware canonical leaf path, derives replay identity solely from the globally consumed Paxeer deposit identifier, and stages that nullifier in canonical module KV beside the transfer so failure and outer rollback remove both while commit retains both."
 assumption = "Human qualification must import a real Paxeer-produced signed deposit-root registration and inclusion proof, reject fabricated self-roots and every wrong root, leaf index, sibling, direction, settlement, network, protocol, checkpoint and authority signature, replay the accepted proof under a separately signed leaf with the same deposit identifier and altered asset, exercise the real-kernel insufficient-balance refusal, and roll back a successful activity before retry to prove canonical nullifier and balance coupling. No build, test or live Paxeer result is asserted by this implementation repair."
 severity = "post-implementation-repair"
+[observation.10.1.1]
+task = "10.1"
+file = "src/network/lxp_da_bundle.c, tests/test_da_bundle.c"
+symbol = "lxp_da_chunk_hash, lxp_da_bundle_root"
+observed = "Post-implementation review found public DA chunk hashing dereferenced a null chunk and accepted mismatched declared/present byte lengths, invalid availability classes and overflowing class ranges. Bundle-root verification authenticated each supplied chunk independently but did not enforce contiguous class offsets, exact class ordering or the declared total byte count. The repair validates each chunk before metadata access and requires one ordered contiguous sequence across all five DA classes whose exact accumulated bytes equal the bundle declaration."
+assumption = "Human qualification must run DA bundle, retrieval, possession, challenge and unavailable suites, alter every chunk metadata field independently, and confirm valid bundle roots remain byte-identical. No build or test result is asserted here."
+severity = "post-implementation-repair"
+
+[observation.12.2.1]
+task = "12.2"
+file = "include/layerx/lxp_governance.h, src/modules/governance/lxp_params.c, src/modules/governance/lxp_gov_param.c, tests/test_governance_params.c"
+symbol = "lxp_param_table_validate"
+observed = "Governance parameter APIs traversed caller-visible count, version, proposal, key, history and cohort fields before proving they fit their fixed arrays. A corrupt restored or directly supplied table could therefore read out of bounds in lookup, proposal, activation, enactment, version and state-root paths. The repair centralises structural admission and invokes it before every public traversal or mutation."
+assumption = "Human qualification must corrupt each table and nested count one at a time at exact capacity and capacity plus one, exercise every public parameter and rollout API, and confirm valid activation roots and histories are unchanged. No build or test result is asserted here."
+severity = "post-implementation-repair"
+
+[observation.17.1.1]
+task = "17.1"
+file = "src/modules/budget/lx_budget_create.c, src/modules/asset/lx_asset_registry.c, src/modules/perps/lx_perps_book.c, src/modules/perps/lx_perps_position.c, src/modules/perps/lx_oracle_intake.c, src/modules/bridge/lxp_bridge_withdraw.c"
+symbol = "fixed-capacity public store admission"
+observed = "Several public module lookup, matching and mutation paths trusted caller-visible store counts and iterated fixed arrays before checking capacity. The repair rejects over-capacity budget, asset, order-book, position, oracle-market and withdrawal stores at their public admission boundaries before lookup, sorting, matching, fee mutation or record access."
+assumption = "Human qualification must exercise every repaired API with empty, exact-capacity and over-capacity stores under ASan, confirm rejection leaves outputs and stores unchanged, and retain exact valid matching and lookup results. No build or test result is asserted here."
+severity = "post-implementation-repair"
+
+[observation.14.2.1]
+task = "14.2"
+file = "src/protocol/lxp_receipt.c"
+symbol = "lxp_verified_receipt_index_add"
+observed = "Duplicate verified-receipt admission compared the raw object representation of receipt facts, including padding bytes, to decide whether an identical digest was consistent. The repair compares every canonical field explicitly, so logical equality is independent of compiler layout and indeterminate padding."
+assumption = "Human qualification must admit logically identical facts with deliberately different padding representations and prove a changed canonical field still raises the invariant failure. No build or test result is asserted here."
+severity = "post-implementation-repair"
