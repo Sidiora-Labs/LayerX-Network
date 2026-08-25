@@ -14,7 +14,7 @@ typedef struct gateway_world {
     lxp_transfer_asset_state transfer_asset;
     lxp_send_store sends;
     lxp_send_environment environment;
-    lxp_gateway_invoice_registry invoices;
+    lxp_gateway_invoice_registry *invoices;
     lxp_gateway_settlement_context settlement;
 } gateway_world;
 
@@ -103,6 +103,7 @@ static int world_init(
 {
     const char *payer_name = "agent:did:key:payer:main";
     const char *payee_name = "agent:did:key:service:main";
+    lxp_result registry_status;
     (void)memset(world, 0, sizeof(*world));
     world->asset.asset_id[0] = 3U;
     (void)memcpy(world->asset.symbol, "USD", 4U);
@@ -115,8 +116,6 @@ static int world_init(
             &world->assets, &world->asset, 0U,
             (lxp_u128){0U, 0U}) != LXP_OK ||
         lx_account_registry_init(&world->accounts) != LXP_OK ||
-        lxp_gateway_invoice_registry_init(
-            &world->invoices, &world->accounts) != LXP_OK ||
         lx_asset_account_open(
             &world->assets, &world->accounts, world->asset.asset_id,
             (const uint8_t *)payer_name, strlen(payer_name), 1U,
@@ -134,6 +133,9 @@ static int world_init(
         lx_asset_transfer_state(
             &world->asset, &world->transfer_asset) != LXP_OK)
         return 1;
+    world->invoices = lxp_gateway_invoice_registry_create(
+        &world->accounts, &registry_status);
+    if (world->invoices == NULL || registry_status != LXP_OK) return 1;
     (void)memcpy(world->payer->authority_key, payer_public_key, 32U);
     world->payer->has_authority_key = true;
     world->environment = (lxp_send_environment){
@@ -142,7 +144,7 @@ static int world_init(
     };
     world->settlement.assets = &world->assets;
     world->settlement.send_environment = &world->environment;
-    world->settlement.invoices = &world->invoices;
+    world->settlement.invoices = world->invoices;
     world->settlement.service_public_key = service_public_key;
     world->settlement.sequencer_private_key = sequencer_private_key;
     world->settlement.global_sequence = 1U;
@@ -237,48 +239,56 @@ int main(void)
         return 1;
     {
         lx_account_registry alternate_accounts;
-        lxp_gateway_invoice_registry alternate_invoices;
-        lxp_gateway_invoice_registry competing_invoices;
+        lxp_gateway_invoice_registry *alternate_invoices = NULL;
+        lxp_gateway_invoice_registry *competing_invoices = NULL;
+        lxp_gateway_invoice_registry *destroyed;
         lxp_gateway_settlement_context mismatched = gateway.settlement;
         lxp_receipt unused_receipt;
+        lxp_result create_status;
         bool settled = false;
         (void)memset(&alternate_accounts, 0, sizeof(alternate_accounts));
-        (void)memset(&alternate_invoices, 0, sizeof(alternate_invoices));
-        (void)memset(&competing_invoices, 0, sizeof(competing_invoices));
         if (lxp_gateway_invoice_state(
-                &alternate_invoices, requirement.invoice_id,
+                alternate_invoices, requirement.invoice_id,
                 send.idempotency_key, &unused_receipt,
                 &settled) != LXP_ERR_NON_CANONICAL ||
-            lx_account_registry_init(&alternate_accounts) != LXP_OK ||
-            lxp_gateway_invoice_registry_init(
-                &alternate_invoices, &alternate_accounts) != LXP_OK ||
-            lxp_gateway_invoice_registry_init(
-                &alternate_invoices, &alternate_accounts) !=
-                    LXP_ERR_SEQUENCE_REUSED ||
-            lxp_gateway_invoice_registry_init(
-                &competing_invoices, &alternate_accounts) !=
-                    LXP_ERR_SEQUENCE_REUSED)
+            lx_account_registry_init(&alternate_accounts) != LXP_OK)
             return 1;
-        mismatched.invoices = &alternate_invoices;
+        alternate_invoices = lxp_gateway_invoice_registry_create(
+            &alternate_accounts, &create_status);
+        if (alternate_invoices == NULL || create_status != LXP_OK)
+            return 1;
+        competing_invoices = lxp_gateway_invoice_registry_create(
+            &alternate_accounts, &create_status);
+        if (competing_invoices != NULL ||
+            create_status != LXP_ERR_SEQUENCE_REUSED)
+            return 1;
+        mismatched.invoices = alternate_invoices;
         if (lxp_gateway_send_settle(
                 &requirement, &send, &mismatched,
                 &unused_receipt) != LXP_ERR_NON_CANONICAL ||
             gateway.payer->balance.lo != 100U ||
             gateway.payee->balance.lo != 0U)
             return 1;
-        atomic_store(&alternate_invoices.active_users, 1U);
+        atomic_store(&alternate_invoices->active_users, 1U);
         if (lxp_gateway_invoice_registry_destroy(
                 &alternate_invoices) != LXP_ERR_IO)
             return 1;
-        atomic_store(&alternate_invoices.active_users, 0U);
-        alternate_invoices.records[0].receipt.signature[0] = 0xa5U;
-        alternate_invoices.count = 1U;
+        atomic_store(&alternate_invoices->active_users, 0U);
+        alternate_invoices->records[0].receipt.signature[0] = 0xa5U;
+        alternate_invoices->count = 1U;
+        destroyed = alternate_invoices;
         if (lxp_gateway_invoice_registry_destroy(
                 &alternate_invoices) != LXP_OK ||
-            alternate_invoices.count != 0U ||
-            alternate_invoices.records[0].receipt.signature[0] != 0U ||
+            alternate_invoices != NULL ||
+            destroyed->count != 0U ||
+            destroyed->records[0].receipt.signature[0] != 0U ||
             lxp_gateway_invoice_registry_destroy(
                 &alternate_invoices) != LXP_ERR_NON_CANONICAL)
+            return 1;
+        mismatched.invoices = destroyed;
+        if (lxp_gateway_send_settle(
+                &requirement, &send, &mismatched,
+                &unused_receipt) != LXP_ERR_NON_CANONICAL)
             return 1;
     }
     payer_before = *gateway.payer;
@@ -300,10 +310,10 @@ int main(void)
                 &gateway_receipt) != LXP_ERR_IO ||
             memcmp(gateway.payer, &payer_before, sizeof(payer_before)) != 0 ||
             memcmp(gateway.payee, &payee_before, sizeof(payee_before)) != 0 ||
-            gateway.sends.count != 0U || gateway.invoices.count != 0U ||
+            gateway.sends.count != 0U || gateway.invoices->count != 0U ||
             memcmp(&gateway.sends.records[0], &zero_send,
                    sizeof(zero_send)) != 0 ||
-            memcmp(&gateway.invoices.records[0], &zero_invoice,
+            memcmp(&gateway.invoices->records[0], &zero_invoice,
                    sizeof(zero_invoice)) != 0 ||
             lxp_arena_mark(&arena_a) != mark ||
             memcmp(&gateway_receipt, &zero_receipt,
@@ -324,10 +334,10 @@ int main(void)
                 &gateway_receipt) != LXP_ERR_ARENA_EXHAUSTED ||
             memcmp(gateway.payer, &payer_before, sizeof(payer_before)) != 0 ||
             memcmp(gateway.payee, &payee_before, sizeof(payee_before)) != 0 ||
-            gateway.sends.count != 0U || gateway.invoices.count != 0U ||
+            gateway.sends.count != 0U || gateway.invoices->count != 0U ||
             memcmp(&gateway.sends.records[0], &zero_send,
                    sizeof(zero_send)) != 0 ||
-            memcmp(&gateway.invoices.records[0], &zero_invoice,
+            memcmp(&gateway.invoices->records[0], &zero_invoice,
                    sizeof(zero_invoice)) != 0 ||
             memcmp(&gateway_receipt, &zero_receipt,
                    sizeof(gateway_receipt)) != 0)
@@ -372,7 +382,7 @@ int main(void)
                    sizeof(threads[0].receipt)) != 0 ||
             concurrent.payer->balance.lo != 75U ||
             concurrent.payee->balance.lo != 25U ||
-            concurrent.sends.count != 1U || concurrent.invoices.count != 1U)
+            concurrent.sends.count != 1U || concurrent.invoices->count != 1U)
             return 1;
     }
     arena_a_mark = lxp_arena_mark(&arena_a);

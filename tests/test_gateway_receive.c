@@ -18,7 +18,7 @@ typedef struct receive_world {
     lxp_send_store send_idempotency;
     lxp_receive_environment receive_environment;
     lxp_send_environment send_environment;
-    lxp_gateway_invoice_registry invoices;
+    lxp_gateway_invoice_registry *invoices;
     lxp_gateway_receive_context receive_context;
     lxp_gateway_settlement_context send_context;
 } receive_world;
@@ -145,6 +145,7 @@ static int world_init(
 {
     const char *payer_name = "agent:did:key:payer:main";
     const char *service_name = "agent:did:key:service:main";
+    lxp_result registry_status;
     (void)memset(world, 0, sizeof(*world));
     world->asset.asset_id[0] = 4U;
     (void)memcpy(world->asset.symbol, "USD", 4U);
@@ -156,8 +157,6 @@ static int world_init(
         lx_asset_register(&world->assets, &world->asset, 0U,
                           (lxp_u128){0U, 0U}) != LXP_OK ||
         lx_account_registry_init(&world->accounts) != LXP_OK ||
-        lxp_gateway_invoice_registry_init(
-            &world->invoices, &world->accounts) != LXP_OK ||
         lx_asset_account_open(
             &world->assets, &world->accounts, world->asset.asset_id,
             (const uint8_t *)payer_name, strlen(payer_name), 1U,
@@ -175,6 +174,9 @@ static int world_init(
         lx_asset_transfer_state(
             &world->asset, &world->transfer_asset) != LXP_OK)
         return 1;
+    world->invoices = lxp_gateway_invoice_registry_create(
+        &world->accounts, &registry_status);
+    if (world->invoices == NULL || registry_status != LXP_OK) return 1;
     (void)memcpy(world->payer->authority_key, payer_public_key, 32U);
     world->payer->has_authority_key = true;
     (void)memcpy(world->service->authority_key, service_public_key, 32U);
@@ -189,12 +191,12 @@ static int world_init(
         &world->send_idempotency, 100U, 42U, LXP_PROTOCOL_VERSION
     };
     world->receive_context = (lxp_gateway_receive_context){
-        &world->assets, &world->receive_environment, &world->invoices,
+        &world->assets, &world->receive_environment, world->invoices,
         service_public_key, sequencer_private_key, 7U, {0U}, arena
     };
     world->receive_context.batch_id[0] = 0x88U;
     world->send_context = (lxp_gateway_settlement_context){
-        &world->assets, &world->send_environment, &world->invoices,
+        &world->assets, &world->send_environment, world->invoices,
         service_public_key, sequencer_private_key, 8U, {0U}, arena
     };
     world->send_context.batch_id[0] = 0x89U;
@@ -266,6 +268,54 @@ int main(void)
     grant.revocation_sequence = 5U;
     (void)memcpy(grant.public_key, payer_public_key, 32U);
     if (sign_grant(payer_private_key, &grant) != 0) return 1;
+    {
+        lxp_payer_grant same;
+        size_t account_count = world.accounts.count;
+        (void)memset(&same, 0xa5, sizeof(same));
+        (void)memcpy(same.grant_id, grant.grant_id, 32U);
+        (void)memcpy(same.from, grant.from, 32U);
+        (void)memcpy(same.recipient, grant.recipient, 32U);
+        (void)memcpy(same.asset, grant.asset, 32U);
+        same.per_draw_maximum = grant.per_draw_maximum;
+        same.allowance = grant.allowance;
+        same.recurring = grant.recurring;
+        same.window_length = grant.window_length;
+        same.expiration = grant.expiration;
+        (void)memcpy(same.purpose_hash, grant.purpose_hash, 32U);
+        same.has_reference = grant.has_reference;
+        (void)memcpy(same.reference_hash, grant.reference_hash, 32U);
+        same.revocation_sequence = grant.revocation_sequence;
+        (void)memcpy(same.public_key, grant.public_key, 32U);
+        (void)memcpy(same.signature, grant.signature, 64U);
+        if (memcmp(&same, &grant, sizeof(grant)) == 0 ||
+            lxp_gateway_registry_enter(
+                world.invoices, &world.accounts) != LXP_OK ||
+            lxp_gateway_grant_present_test_locked(
+                &grant, &world.accounts, &world.grants) != LXP_OK ||
+            lxp_gateway_grant_present_test_locked(
+                &same, &world.accounts, &world.grants) != LXP_OK ||
+            world.grants.count != 1U ||
+            lxp_gateway_registry_leave(world.invoices) != LXP_OK)
+            return 1;
+        (void)memset(&world.grants, 0, sizeof(world.grants));
+        if (lxp_gateway_registry_enter(
+                world.invoices, &world.accounts) != LXP_OK)
+            return 1;
+        world.grants.count = LXP_GRANT_STORE_CAPACITY + 1U;
+        if (lxp_gateway_grant_present_test_locked(
+                &grant, &world.accounts, &world.grants) !=
+                    LXP_ERR_MALFORMED_GRANT)
+            return 1;
+        world.grants.count = 0U;
+        world.accounts.count = LX_ACCOUNT_REGISTRY_CAPACITY + 1U;
+        if (lxp_gateway_grant_present_test_locked(
+                &grant, &world.accounts, &world.grants) !=
+                    LXP_ERR_MALFORMED_GRANT)
+            return 1;
+        world.accounts.count = account_count;
+        if (lxp_gateway_registry_leave(world.invoices) != LXP_OK)
+            return 1;
+    }
 
     (void)memset(&receive, 0, sizeof(receive));
     (void)memcpy(receive.from, world.payer->id, 32U);
@@ -322,12 +372,12 @@ int main(void)
             memcmp(world.service, &service_before,
                    sizeof(service_before)) != 0 || world.grants.count != 0U ||
             world.receive_idempotency.count != 0U ||
-            world.invoices.count != 0U || lxp_arena_mark(&arena) != mark ||
+            world.invoices->count != 0U || lxp_arena_mark(&arena) != mark ||
             memcmp(&world.grants.grants[0], &zero_grant,
                    sizeof(zero_grant)) != 0 ||
             memcmp(&world.receive_idempotency.records[0], &zero_idempotency,
                    sizeof(zero_idempotency)) != 0 ||
-            memcmp(&world.invoices.records[0], &zero_invoice,
+            memcmp(&world.invoices->records[0], &zero_invoice,
                    sizeof(zero_invoice)) != 0 ||
             memcmp(&receive_receipt, &zero_receipt,
                    sizeof(receive_receipt)) != 0)
@@ -351,12 +401,12 @@ int main(void)
             memcmp(world.service, &service_before,
                    sizeof(service_before)) != 0 || world.grants.count != 0U ||
             world.receive_idempotency.count != 0U ||
-            world.invoices.count != 0U ||
+            world.invoices->count != 0U ||
             memcmp(&world.grants.grants[0], &zero_grant,
                    sizeof(zero_grant)) != 0 ||
             memcmp(&world.receive_idempotency.records[0], &zero_idempotency,
                    sizeof(zero_idempotency)) != 0 ||
-            memcmp(&world.invoices.records[0], &zero_invoice,
+            memcmp(&world.invoices->records[0], &zero_invoice,
                    sizeof(zero_invoice)) != 0 ||
             memcmp(&receive_receipt, &zero_receipt,
                    sizeof(receive_receipt)) != 0)
@@ -383,7 +433,7 @@ int main(void)
                sizeof(receive_receipt)) != 0 ||
         world.payer->balance.lo != 70U || world.service->balance.lo != 30U ||
         world.grants.grants[0].drawn_total.lo != 30U ||
-        world.receive_idempotency.count != 1U || world.invoices.count != 1U)
+        world.receive_idempotency.count != 1U || world.invoices->count != 1U)
         return 1;
     {
         lxp_grant_state existing = world.grants.grants[0];
@@ -402,7 +452,7 @@ int main(void)
             world.payer->balance.lo != 70U ||
             world.service->balance.lo != 30U ||
             world.receive_idempotency.count != 1U ||
-            world.invoices.count != 1U)
+            world.invoices->count != 1U)
             return 1;
     }
 
@@ -451,7 +501,7 @@ int main(void)
                    sizeof(calls[0].receipt)) != 0 ||
             race_world.payer->balance.lo != 70U ||
             race_world.service->balance.lo != 30U ||
-            race_world.invoices.count != 1U ||
+            race_world.invoices->count != 1U ||
             race_world.receive_idempotency.count +
                 race_world.send_idempotency.count != 1U)
             return 1;

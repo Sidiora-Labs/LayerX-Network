@@ -8,8 +8,6 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-#include <pthread.h>
-#include <stdatomic.h>
 
 enum {
     LXP_GATEWAY_HTTP_PAYMENT_REQUIRED = 402,
@@ -40,14 +38,7 @@ typedef struct lxp_gateway_invoice_record {
     lxp_receipt receipt;
 } lxp_gateway_invoice_record;
 
-typedef struct lxp_gateway_invoice_registry {
-    lxp_gateway_invoice_record records[LXP_GATEWAY_INVOICE_CAPACITY];
-    size_t count;
-    pthread_mutex_t coordination_mutex;
-    lx_account_registry *owner_accounts;
-    atomic_size_t active_users;
-    atomic_uint lifecycle;
-} lxp_gateway_invoice_registry;
+typedef struct lxp_gateway_invoice_registry lxp_gateway_invoice_registry;
 
 typedef struct lxp_gateway_settlement_context {
     lx_asset_registry *assets;
@@ -71,11 +62,11 @@ typedef struct lxp_gateway_receive_context {
     lxp_arena *arena;
 } lxp_gateway_receive_context;
 
-lxp_result lxp_gateway_invoice_registry_init(
-    lxp_gateway_invoice_registry *registry,
-    lx_account_registry *owner_accounts);
+lxp_gateway_invoice_registry *lxp_gateway_invoice_registry_create(
+    lx_account_registry *owner_accounts,
+    lxp_result *status);
 lxp_result lxp_gateway_invoice_registry_destroy(
-    lxp_gateway_invoice_registry *registry);
+    lxp_gateway_invoice_registry **registry);
 
 lxp_result lxp_payment_requirement_encode(
     const lxp_payment_requirement *requirement,
@@ -108,10 +99,6 @@ lxp_result lxp_gateway_receipt_return(
     const lxp_receipt *receipt,
     lxp_arena *arena,
     lxp_byte_span *canonical_receipt);
-lxp_result lxp_gateway_grant_present(
-    const lxp_payer_grant *grant,
-    lx_account_registry *accounts,
-    lxp_grant_store *store);
 lxp_result lxp_gateway_grant_bounds_check(
     const lxp_payment_requirement *requirement,
     const lxp_receive *receive,

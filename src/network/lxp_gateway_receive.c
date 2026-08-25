@@ -97,23 +97,57 @@ static lxp_grant_state *grant_for(
     return NULL;
 }
 
-lxp_result lxp_gateway_grant_present(
+static bool grant_equal(
+    const lxp_payer_grant *left, const lxp_payer_grant *right)
+{
+    return lxp_ct_memcmp(left->grant_id, right->grant_id, 32U) == 0 &&
+           lxp_ct_memcmp(left->from, right->from, 32U) == 0 &&
+           lxp_ct_memcmp(left->recipient, right->recipient, 32U) == 0 &&
+           lxp_ct_memcmp(left->asset, right->asset, 32U) == 0 &&
+           lxp_u128_cmp(left->per_draw_maximum,
+                        right->per_draw_maximum) == 0 &&
+           lxp_u128_cmp(left->allowance, right->allowance) == 0 &&
+           left->recurring == right->recurring &&
+           left->window_length == right->window_length &&
+           left->expiration == right->expiration &&
+           lxp_ct_memcmp(left->purpose_hash, right->purpose_hash, 32U) == 0 &&
+           left->has_reference == right->has_reference &&
+           lxp_ct_memcmp(
+               left->reference_hash, right->reference_hash, 32U) == 0 &&
+           left->revocation_sequence == right->revocation_sequence &&
+           lxp_ct_memcmp(left->public_key, right->public_key, 32U) == 0 &&
+           lxp_ct_memcmp(left->signature, right->signature, 64U) == 0;
+}
+
+static lxp_result gateway_grant_present_locked(
     const lxp_payer_grant *grant,
     lx_account_registry *accounts,
     lxp_grant_store *store)
 {
     lx_account *payer;
     lxp_grant_state *existing;
-    if (grant == NULL || accounts == NULL || store == NULL)
+    if (grant == NULL || accounts == NULL || store == NULL ||
+        accounts->count > LX_ACCOUNT_REGISTRY_CAPACITY ||
+        store->count > LXP_GRANT_STORE_CAPACITY)
         return LXP_ERR_MALFORMED_GRANT;
     payer = account_for(accounts, grant->from);
     if (payer == NULL) return LXP_ERR_NO_PAYER_GRANT;
     existing = grant_for(store, grant->grant_id);
     if (existing != NULL)
-        return memcmp(&existing->grant, grant, sizeof(*grant)) == 0 ?
+        return grant_equal(&existing->grant, grant) ?
             LXP_OK : LXP_ERR_SEQUENCE_REUSED;
     return lxp_grant_store_put(store, grant, payer);
 }
+
+#ifdef LXP_TESTING
+lxp_result lxp_gateway_grant_present_test_locked(
+    const lxp_payer_grant *grant,
+    lx_account_registry *accounts,
+    lxp_grant_store *store)
+{
+    return gateway_grant_present_locked(grant, accounts, store);
+}
+#endif
 
 lxp_result lxp_gateway_grant_bounds_check(
     const lxp_payment_requirement *requirement,
@@ -278,7 +312,7 @@ static lxp_result gateway_receive_claim_locked(
     }
     status = lxp_journal_open(&leg, 1U, &transaction.balances);
     if (status != LXP_OK) return status;
-    status = lxp_gateway_grant_present(
+    status = gateway_grant_present_locked(
         &receive->payer_grant,
         context->receive_environment->accounts,
         context->receive_environment->grants);

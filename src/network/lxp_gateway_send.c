@@ -4,6 +4,7 @@
 #include "layerx/lxp_crypto.h"
 #include "layerx/lxp_hash.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 typedef struct send_transaction {
@@ -94,56 +95,69 @@ lxp_result lxp_gateway_invoice_state_locked(
     return LXP_OK;
 }
 
-lxp_result lxp_gateway_invoice_registry_init(
-    lxp_gateway_invoice_registry *registry,
-    lx_account_registry *owner_accounts)
+lxp_gateway_invoice_registry *lxp_gateway_invoice_registry_create(
+    lx_account_registry *owner_accounts,
+    lxp_result *status)
 {
+    lxp_gateway_invoice_registry *created;
     lxp_gateway_invoice_registry *unowned = NULL;
-    if (registry == NULL || owner_accounts == NULL)
-        return LXP_ERR_NON_CANONICAL;
-    if (atomic_load(&registry->lifecycle) != LXP_GATEWAY_REGISTRY_ZERO ||
-        !atomic_compare_exchange_strong(
-            &owner_accounts->gateway_owner, &unowned, registry))
-        return LXP_ERR_SEQUENCE_REUSED;
-    (void)memset(registry, 0, sizeof(*registry));
-    atomic_init(&registry->active_users, 0U);
-    atomic_init(&registry->lifecycle, LXP_GATEWAY_REGISTRY_ZERO);
-    if (pthread_mutex_init(&registry->coordination_mutex, NULL) != 0) {
-        atomic_store(&owner_accounts->gateway_owner, NULL);
-        return LXP_ERR_IO;
+    if (status == NULL) return NULL;
+    *status = LXP_ERR_NON_CANONICAL;
+    if (owner_accounts == NULL) return NULL;
+    created = (lxp_gateway_invoice_registry *)calloc(1U, sizeof(*created));
+    if (created == NULL) {
+        *status = LXP_ERR_ARENA_EXHAUSTED;
+        return NULL;
     }
-    registry->owner_accounts = owner_accounts;
-    atomic_store(&registry->lifecycle, LXP_GATEWAY_REGISTRY_READY);
-    return LXP_OK;
+    atomic_init(&created->active_users, 0U);
+    atomic_init(&created->lifecycle, LXP_GATEWAY_REGISTRY_ZERO);
+    if (pthread_mutex_init(&created->coordination_mutex, NULL) != 0) {
+        free(created);
+        *status = LXP_ERR_IO;
+        return NULL;
+    }
+    if (!atomic_compare_exchange_strong(
+            &owner_accounts->gateway_owner, &unowned, created)) {
+        (void)pthread_mutex_destroy(&created->coordination_mutex);
+        free(created);
+        *status = LXP_ERR_SEQUENCE_REUSED;
+        return NULL;
+    }
+    created->owner_accounts = owner_accounts;
+    atomic_store(&created->lifecycle, LXP_GATEWAY_REGISTRY_READY);
+    *status = LXP_OK;
+    return created;
 }
 
 lxp_result lxp_gateway_invoice_registry_destroy(
-    lxp_gateway_invoice_registry *registry)
+    lxp_gateway_invoice_registry **registry)
 {
+    lxp_gateway_invoice_registry *owned;
     unsigned expected = LXP_GATEWAY_REGISTRY_READY;
-    if (registry == NULL) return LXP_ERR_NON_CANONICAL;
+    if (registry == NULL || *registry == NULL) return LXP_ERR_NON_CANONICAL;
+    owned = *registry;
     if (!atomic_compare_exchange_strong(
-            &registry->lifecycle, &expected,
+            &owned->lifecycle, &expected,
             LXP_GATEWAY_REGISTRY_DESTROYING))
         return LXP_ERR_NON_CANONICAL;
-    if (atomic_load(&registry->active_users) != 0U) {
-        atomic_store(&registry->lifecycle, LXP_GATEWAY_REGISTRY_READY);
+    if (atomic_load(&owned->active_users) != 0U) {
+        atomic_store(&owned->lifecycle, LXP_GATEWAY_REGISTRY_READY);
         return LXP_ERR_IO;
     }
-    if (registry->owner_accounts == NULL ||
-        atomic_load(&registry->owner_accounts->gateway_owner) != registry) {
-        atomic_store(&registry->lifecycle, LXP_GATEWAY_REGISTRY_READY);
+    if (owned->owner_accounts == NULL ||
+        atomic_load(&owned->owner_accounts->gateway_owner) != owned) {
+        atomic_store(&owned->lifecycle, LXP_GATEWAY_REGISTRY_READY);
         return LXP_FATAL_INVARIANT;
     }
-    if (pthread_mutex_destroy(&registry->coordination_mutex) != 0) {
-        atomic_store(&registry->lifecycle, LXP_GATEWAY_REGISTRY_READY);
+    if (pthread_mutex_destroy(&owned->coordination_mutex) != 0) {
+        atomic_store(&owned->lifecycle, LXP_GATEWAY_REGISTRY_READY);
         return LXP_ERR_IO;
     }
-    atomic_store(&registry->owner_accounts->gateway_owner, NULL);
-    registry->owner_accounts = NULL;
-    (void)memset(registry->records, 0, sizeof(registry->records));
-    registry->count = 0U;
-    atomic_store(&registry->lifecycle, LXP_GATEWAY_REGISTRY_DESTROYED);
+    (void)memset(owned->records, 0, sizeof(owned->records));
+    owned->count = 0U;
+    owned->owner_accounts = NULL;
+    atomic_store(&owned->lifecycle, LXP_GATEWAY_REGISTRY_DESTROYED);
+    *registry = NULL;
     return LXP_OK;
 }
 
