@@ -12,6 +12,7 @@ import (
 )
 
 var ErrIteratorUnsupported = errors.New("unexpected iterator call on cachekv store")
+var ErrWorkingHashUnsupported = errors.New("working hash is unavailable on cachekv store")
 
 // Store wraps an in-memory cache around an underlying types.KVStore.
 type Store struct {
@@ -37,7 +38,7 @@ func NewStore(parent types.KVStore, storeKey types.StoreKey, cacheSize int) *Sto
 }
 
 func (store *Store) GetWorkingHash() ([]byte, error) {
-	panic("should never attempt to get working hash from cache kv store")
+	return nil, ErrWorkingHashUnsupported
 }
 
 // GetStoreType implements Store.

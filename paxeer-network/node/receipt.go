@@ -2,6 +2,7 @@ package app
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/big"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	authsigning "github.com/sidiora-labs/paxeer-network/sdk/x/auth/signing"
 	"github.com/sidiora-labs/paxeer-network/utils"
 	wasmtypes "github.com/sidiora-labs/paxeer-network/wasm/x/wasm/types"
+	receiptstore "github.com/sidiora-labs/paxeer-network/storage/ledger_db/receipt"
 )
 
 var ERC20ApprovalTopic = common.HexToHash("0x8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c3b925")
@@ -117,8 +119,13 @@ func (app *App) AddCosmosEventsToEVMReceiptIfApplicable(ctx sdk.Context, tx sdk.
 		}
 		bloom = ethtypes.CreateBloom(&ethtypes.Receipt{Logs: evmkeeper.GetLogsForTx(r, 0)})
 		r.LogsBloom = bloom[:]
-		_ = app.EvmKeeper.SetTransientReceipt(wasmToEvmEventCtx, txHash, r)
+		if err := app.EvmKeeper.SetTransientReceipt(wasmToEvmEventCtx, txHash, r); err != nil {
+			panic(fmt.Errorf("persist synthetic EVM receipt: %w", err))
+		}
 	} else {
+		if err != nil && !errors.Is(err, receiptstore.ErrNotFound) {
+			panic(fmt.Errorf("load synthetic EVM receipt: %w", err))
+		}
 		bloom = ethtypes.CreateBloom(&ethtypes.Receipt{Logs: logs})
 		receipt := &evmtypes.Receipt{
 			TxType:           evmtypes.ShellEVMTxType,
@@ -135,7 +142,9 @@ func (app *App) AddCosmosEventsToEVMReceiptIfApplicable(ctx sdk.Context, tx sdk.
 			// use the first signer as the `from`
 			receipt.From = app.EvmKeeper.GetEVMAddressOrDefault(wasmToEvmEventCtx, sigTx.GetSigners()[0]).Hex()
 		}
-		_ = app.EvmKeeper.SetTransientReceipt(wasmToEvmEventCtx, txHash, receipt)
+		if err := app.EvmKeeper.SetTransientReceipt(wasmToEvmEventCtx, txHash, receipt); err != nil {
+			panic(fmt.Errorf("persist synthetic EVM receipt: %w", err))
+		}
 	}
 	if d, found := app.EvmKeeper.GetEVMTxDeferredInfo(ctx); found {
 		app.EvmKeeper.AppendToEvmTxDeferredInfo(wasmToEvmEventCtx, bloom, txHash, d.Surplus)

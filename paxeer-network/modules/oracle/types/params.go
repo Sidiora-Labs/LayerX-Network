@@ -2,6 +2,7 @@ package types
 
 import (
 	"fmt"
+	"math"
 
 	"gopkg.in/yaml.v2"
 
@@ -233,9 +234,12 @@ func validateMinValidPerWindow(i interface{}) error {
 }
 
 func validateLookbackDuration(i interface{}) error {
-	_, ok := i.(uint64)
+	v, ok := i.(uint64)
 	if !ok {
 		return fmt.Errorf("invalid parameter type: %T", i)
+	}
+	if v > uint64(math.MaxInt64) {
+		return fmt.Errorf("lookback duration exceeds int64 bounds: %d", v)
 	}
 
 	return nil

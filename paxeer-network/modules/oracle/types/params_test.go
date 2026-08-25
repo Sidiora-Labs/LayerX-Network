@@ -1,6 +1,7 @@
 package types
 
 import (
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -64,4 +65,8 @@ func TestParamsValid(t *testing.T) {
 	p9 := DefaultParams()
 	require.NotNil(t, p9.ParamSetPairs())
 	require.NotNil(t, p9.String())
+
+	p10 := DefaultParams()
+	p10.LookbackDuration = uint64(math.MaxInt64) + 1
+	require.Error(t, p10.Validate())
 }

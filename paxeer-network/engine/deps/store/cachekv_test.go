@@ -20,6 +20,13 @@ func TestIteratorPanicsWithSentinel(t *testing.T) {
 	})
 }
 
+func TestWorkingHashFailsWithSentinel(t *testing.T) {
+	s := gigastore.NewStore(nil, nil, 0)
+	hash, err := s.GetWorkingHash()
+	require.Nil(t, hash)
+	require.ErrorIs(t, err, gigastore.ErrWorkingHashUnsupported)
+}
+
 // TestIteratorPanicDetectableViaErrorsIs mirrors the recover net in app.go: the
 // recovered panic value must be detectable as the sentinel via errors.Is, even
 // once wrapped, so the giga executor can fall back to v2 instead of diverging.

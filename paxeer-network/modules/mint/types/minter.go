@@ -2,6 +2,7 @@ package types
 
 import (
 	fmt "fmt"
+	"math"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -50,11 +51,23 @@ func DefaultInitialMinter() Minter {
 
 // validate minter
 func ValidateMinter(minter Minter) error {
+	if minter.GetTotalMintAmount() > uint64(math.MaxInt64) {
+		return fmt.Errorf("total mint amount exceeds int64 bounds")
+	}
 	if minter.GetTotalMintAmount() < minter.GetRemainingMintAmount() {
 		return fmt.Errorf("total mint amount cannot be less than remaining mint amount")
 	}
-	endDate := minter.GetEndDateTime()
-	startDate := minter.GetStartDateTime()
+	startDate, err := time.Parse(TokenReleaseDateFormat, minter.GetStartDate())
+	if err != nil {
+		return fmt.Errorf("invalid start date: %w", err)
+	}
+	endDate, err := time.Parse(TokenReleaseDateFormat, minter.GetEndDate())
+	if err != nil {
+		return fmt.Errorf("invalid end date: %w", err)
+	}
+	if _, err := time.Parse(TokenReleaseDateFormat, minter.GetLastMintDate()); err != nil {
+		return fmt.Errorf("invalid last mint date: %w", err)
+	}
 	if endDate.Before(startDate) {
 		return fmt.Errorf("end date must be after start date %s < %s", endDate, startDate)
 	}
