@@ -21,9 +21,9 @@ env:
   IMAGE: ghcr.io/sidiora-labs/layerx-protocol/hpx-registry
 
 jobs:
-  publish:
-    name: Publish registry runtime
-    runs-on: ubuntu-latest
+  release:
+    name: Publish registry executables
+    runs-on: macos-latest
     steps:
       - name: Check out source
         uses: actions/checkout@v5
@@ -39,7 +39,7 @@ jobs:
             output="dist/hpx-registry-linux-${arch}"
             CGO_ENABLED=0 GOOS=linux GOARCH="$arch" \
               go build -trimpath -ldflags "-s -w -X main.sourceRevision=${SOURCE_REVISION}" -o "$output" .
-            (cd dist && sha256sum "hpx-registry-linux-${arch}" > "hpx-registry-linux-${arch}.sha256")
+            (cd dist && shasum -a 256 "hpx-registry-linux-${arch}" > "hpx-registry-linux-${arch}.sha256")
           done
 
       - name: Publish immutable public release assets
@@ -60,6 +60,13 @@ jobs:
               --title "HPX Registry ${GITHUB_SHA::12}" \
               --notes "Revision-bound HPX registry runtime for ${GITHUB_SHA}."
           fi
+
+  image:
+    name: Publish registry image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
