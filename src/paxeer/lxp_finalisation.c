@@ -120,7 +120,10 @@ lxp_result lxp_checkpoint_finalisable(
     if (state == NULL || certificate == NULL || set == NULL ||
         requirements == NULL || arena == NULL || finalisable == NULL ||
         requirements->threshold == 0U ||
-        requirements->threshold > LXP_MAX_GUARANTOR_ATTESTATIONS)
+        requirements->threshold > LXP_MAX_GUARANTOR_ATTESTATIONS ||
+        requirements->checkpoint_epoch == 0U ||
+        requirements->checkpoint_epoch !=
+            certificate->checkpoint.header.epoch)
         return LXP_ERR_NON_CANONICAL;
     if (lxp_guarantor_set_validate(set) != LXP_OK)
         return LXP_ERR_NON_CANONICAL;

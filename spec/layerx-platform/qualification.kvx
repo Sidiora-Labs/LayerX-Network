@@ -54,6 +54,14 @@ observed = "The equivocation encoder previously selected the sequencer capacity 
 assumption = "Human qualification will exercise every rejected kind and key-length boundary and confirm that canonical rejection consumes no arena capacity; this source-only implementation step does not claim those checks pass."
 severity = "qualification-repair"
 
+[observation.19.4.4]
+task = "19.4"
+file = "src/paxeer/lxp_finalisation.c, include/layerx/lxp_guarantor.h"
+symbol = "lxp_checkpoint_finalisable, lxp_finalisation_requirements.checkpoint_deadline_ms"
+observed = "Finality now requires the verifier policy checkpoint epoch to equal the certificate header epoch before historical signer or bond traversal. The checkpoint deadline remains an explicit millisecond policy value supplied by the trusted registry integration through lxp_finalisation_requirements; no canonical on-wire field independently proves who configured that deadline."
+assumption = "Human integration qualification must establish that only the registry's trusted finality-policy owner constructs lxp_finalisation_requirements and must fault-inject an unrelated caller epoch and deadline. The C verifier does not derive policy authority from either value."
+severity = "integration-boundary"
+
 [observation.29.4.1]
 task = "29.4"
 file = "programs/crates/layerx-programs-runtime/tests/namespace_drop.rs"

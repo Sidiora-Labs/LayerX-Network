@@ -159,6 +159,10 @@ int main(void)
                checkpoint.header.resulting_state_root, 32U) != 0)
         return 1;
 
+    requirements.checkpoint_epoch = 8U;
+    if (refused(&initial, &certificate, &set, &requirements, &arena) != 0)
+        return 1;
+    requirements.checkpoint_epoch = 7U;
     requirements.challenge_window_end_ms = 1300U;
     if (refused(&initial, &certificate, &set, &requirements, &arena) != 0)
         return 1;
