@@ -1827,7 +1827,7 @@ observed = "Post-implementation review found the local-chain initializer uncondi
 assumption = "Human qualification must run the initializer only in a disposable home; prove unset authorization, HOME itself, parent traversal, missing Python, missing paxd and paths containing spaces are refused safely; then initialize with default and overridden homes and compare the resulting genesis and generated accounts. The script remains intentionally destructive after the explicit local-reset gate and still invokes make install, so it must not be used against a production node home. No shell execution, install, chain start or generated-genesis result is asserted by this source repair."
 severity = "post-implementation-repair"
 
-[observation.37.1.14]
+[observation.37.1.22]
 task = "37.1"
 file = "paxeer-network/storage/state_db/sc/migration/router_kvstore.go, paxeer-network/storage/state_db/sc/migration/router_kvstore_test.go"
 symbol = "RouterCommitKVStore.RootHash"
