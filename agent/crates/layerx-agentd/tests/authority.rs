@@ -50,6 +50,49 @@ fn resolution_cache_has_an_explicit_freshness_bound() {
 }
 
 #[test]
+fn cached_authority_from_a_future_sequence_is_invalidated_and_refused() {
+    let mut boundary = BoundaryAuthority {
+        states: vec![state(1, 12), state(1, 9)],
+        calls: 0,
+    };
+    let mut cache = AuthorityCache::default();
+    let authority = ProtocolAuthority::SessionKey([8; 32]);
+    assert!(resolve(&mut cache, &mut boundary, &authority, 12, 4).is_ok());
+    assert_eq!(
+        resolve(&mut cache, &mut boundary, &authority, 10, 4),
+        Err(AuthorityError::SequenceRegression {
+            current: 10,
+            observed: 12,
+        })
+    );
+    let refreshed = resolve(&mut cache, &mut boundary, &authority, 10, 4)
+        .unwrap_or_else(|error| panic!("invalidated authority did not refresh: {error:?}"));
+    assert_eq!(refreshed.observed_sequence, 9);
+    assert_eq!(boundary.calls, 2);
+}
+
+#[test]
+fn boundary_authority_from_a_future_sequence_is_not_cached() {
+    let mut boundary = BoundaryAuthority {
+        states: vec![state(1, 12), state(1, 10)],
+        calls: 0,
+    };
+    let mut cache = AuthorityCache::default();
+    let authority = ProtocolAuthority::SessionKey([8; 32]);
+    assert_eq!(
+        resolve(&mut cache, &mut boundary, &authority, 10, 4),
+        Err(AuthorityError::SequenceRegression {
+            current: 10,
+            observed: 12,
+        })
+    );
+    let refreshed = resolve(&mut cache, &mut boundary, &authority, 10, 4)
+        .unwrap_or_else(|error| panic!("future observation poisoned cache: {error:?}"));
+    assert_eq!(refreshed.observed_sequence, 10);
+    assert_eq!(boundary.calls, 2);
+}
+
+#[test]
 fn revocation_between_open_and_prepare_is_named_and_refused() {
     let authority = ProtocolAuthority::SessionKey([8; 32]);
     let mut revoked = state(1, 12);

@@ -1,3 +1,4 @@
+use std::io::ErrorKind;
 use std::time::Duration;
 
 use layerx_client::client::{ConnectionError, ConnectionState, ReconnectPolicy};
@@ -6,6 +7,7 @@ use layerx_client::lni::handshake::{
     validate, HandshakeConfig, HandshakeError, NodeInfo, NodeRole,
 };
 use layerx_client::lni::schema::Version;
+use layerx_client::lni::transport::TransportError;
 
 fn node(sequence: u64, batch: u64, key: u8) -> NodeInfo {
     NodeInfo {
@@ -96,4 +98,26 @@ fn unexpected_network_mid_session_is_incompatible() {
         .state(),
         ConnectionState::Incompatible
     );
+}
+
+#[test]
+fn every_reconnect_failure_maps_to_a_non_connected_state() {
+    let failures = [
+        ConnectionError::Transport(TransportError::ConnectionFailure(
+            ErrorKind::ConnectionRefused,
+        )),
+        ConnectionError::Handshake(HandshakeError::Network {
+            expected: 77,
+            peer: 99,
+        }),
+        ConnectionError::Head(HeadError::SequenceRegression {
+            current: 10,
+            peer: 9,
+        }),
+        ConnectionError::AttemptsExhausted,
+    ];
+    assert!(failures.into_iter().all(|error| matches!(
+        error.state(),
+        ConnectionState::Incompatible | ConnectionState::Unreachable
+    )));
 }

@@ -156,6 +156,7 @@ impl Client {
     /// exhaustion after the configured number of transport attempts.
     pub fn reconnect(&mut self) -> Result<(), ConnectionError> {
         self.transport = None;
+        self.state = ConnectionState::Unreachable;
         let endpoint = self.config.endpoint.to_string_lossy();
         for attempt in 0..self.config.reconnect.maximum_attempts {
             if attempt != 0 {
@@ -167,15 +168,23 @@ impl Client {
                 self.state = ConnectionState::Unreachable;
                 continue;
             };
-            let handshake = perform(
+            let handshake = match perform(
                 &mut transport,
                 &self.config.handshake,
                 Some(&self.handshake),
-            )
-            .map_err(ConnectionError::Handshake)?;
-            self.head
-                .update(handshake.node())
-                .map_err(ConnectionError::Head)?;
+            ) {
+                Ok(handshake) => handshake,
+                Err(error) => {
+                    let error = ConnectionError::Handshake(error);
+                    self.state = error.state();
+                    return Err(error);
+                }
+            };
+            if let Err(error) = self.head.update(handshake.node()) {
+                let error = ConnectionError::Head(error);
+                self.state = error.state();
+                return Err(error);
+            }
             self.state = state_for(&handshake);
             self.handshake = handshake;
             self.transport = Some(transport);

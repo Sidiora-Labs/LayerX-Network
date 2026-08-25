@@ -47,6 +47,7 @@ pub struct ResolvedAuthority {
 pub enum AuthorityError {
     BoundaryUnavailable,
     Missing,
+    SequenceRegression { current: u64, observed: u64 },
     Expired,
     Revoked,
     Rotated,
@@ -67,14 +68,28 @@ pub fn resolve(
     maximum_cache_age: u64,
 ) -> Result<AuthorityState, AuthorityError> {
     let key = authority_key(authority);
-    if let Some(cached) = cache.entries.get(&key) {
-        if core_sequence.saturating_sub(cached.observed_sequence) <= maximum_cache_age {
-            return Ok(cached.clone());
+    if let Some(cached) = cache.entries.get(&key).cloned() {
+        if cached.observed_sequence > core_sequence {
+            cache.entries.remove(&key);
+            return Err(AuthorityError::SequenceRegression {
+                current: core_sequence,
+                observed: cached.observed_sequence,
+            });
+        }
+        if core_sequence - cached.observed_sequence <= maximum_cache_age {
+            return Ok(cached);
         }
     }
     let current = resolver
         .authority_state(authority)?
         .ok_or(AuthorityError::Missing)?;
+    if current.observed_sequence > core_sequence {
+        cache.entries.remove(&key);
+        return Err(AuthorityError::SequenceRegression {
+            current: core_sequence,
+            observed: current.observed_sequence,
+        });
+    }
     cache.entries.insert(key, current.clone());
     Ok(current)
 }
