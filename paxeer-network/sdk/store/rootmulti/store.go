@@ -900,7 +900,7 @@ func (rs *Store) Close() error {
 }
 
 func (rs *Store) SetKVStores(handler func(key types.StoreKey, s types.KVStore) types.CacheWrap) types.MultiStore {
-	panic("SetKVStores is not implemented for rootmulti")
+	return rs.CacheMultiStore().SetKVStores(handler)
 }
 
 func (rs *Store) StoreKeys() []types.StoreKey {

@@ -13,3 +13,10 @@ func TestLastCommitID(t *testing.T) {
 	store := NewStore(tree)
 	require.Equal(t, types.CommitID{Hash: tree.RootHash()}, store.LastCommitID())
 }
+
+func TestGetWorkingHashRequiresRootMultiStore(t *testing.T) {
+	store := NewStore(memiavl.New(100))
+	hash, err := store.GetWorkingHash()
+	require.Nil(t, hash)
+	require.ErrorIs(t, err, ErrWorkingHashUnavailable)
+}

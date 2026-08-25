@@ -50,6 +50,22 @@ func TestLastCommitID(t *testing.T) {
 	require.Equal(t, types.CommitID{}, store.LastCommitID())
 }
 
+func TestCompatibilityWrappersRemainUsable(t *testing.T) {
+	key := types.NewKVStoreKey("bank")
+	store := &Store{
+		storeKeys: map[string]types.StoreKey{key.Name(): key},
+		ckvStores: map[types.StoreKey]types.CommitKVStore{key: mem.NewStore()},
+	}
+
+	require.Same(t, store, store.SetTracer(nil))
+	require.Same(t, store, store.SetTracingContext(nil))
+
+	wrapped := store.SetKVStores(func(_ types.StoreKey, kv types.KVStore) types.CacheWrap {
+		return kv.CacheWrap(key)
+	})
+	require.NotNil(t, wrapped.GetKVStore(key))
+}
+
 // waitUntilSSVersion waits until the SS latest version reaches at least target or times out.
 func waitUntilSSVersion(t *testing.T, store *Store, target int64) {
 	ss := store.GetStateStore()

@@ -417,12 +417,12 @@ func (rs *Store) TracingEnabled() bool {
 
 // Implements interface MultiStore
 func (rs *Store) SetTracer(_ io.Writer) types.MultiStore {
-	return nil
+	return rs
 }
 
 // Implements interface MultiStore
 func (rs *Store) SetTracingContext(types.TraceContext) types.MultiStore {
-	return nil
+	return rs
 }
 
 // Implements interface Snapshotter
@@ -1053,8 +1053,8 @@ func (rs *Store) Snapshot(height uint64, protoWriter protoio.Writer) error {
 }
 
 // SetKVStores implements types.CommitMultiStore.
-func (*Store) SetKVStores(handler func(key types.StoreKey, s types.KVStore) types.CacheWrap) types.MultiStore {
-	panic("unimplemented")
+func (rs *Store) SetKVStores(handler func(key types.StoreKey, s types.KVStore) types.CacheWrap) types.MultiStore {
+	return rs.CacheMultiStore().SetKVStores(handler)
 }
 
 // StoreKeys implements types.CommitMultiStore.

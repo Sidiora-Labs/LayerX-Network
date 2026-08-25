@@ -37,6 +37,11 @@ func TestAddress(t *testing.T) {
 	require.Len(t, multisigKey.Address().Bytes(), 20)
 }
 
+func TestVerifySignatureRejectsUnstructuredBytes(t *testing.T) {
+	multisigKey := kmultisig.NewLegacyAminoPubKey(1, generatePubKeys(1))
+	require.False(t, multisigKey.VerifySignature([]byte("message"), []byte("signature")))
+}
+
 func TestEquals(t *testing.T) {
 	pubKey1 := secp256k1.GenPrivKey().PubKey()
 	pubKey2 := secp256k1.GenPrivKey().PubKey()

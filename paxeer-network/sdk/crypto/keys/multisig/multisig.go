@@ -95,11 +95,11 @@ func (m *LegacyAminoPubKey) VerifyMultisignature(getSignBytes multisigtypes.GetS
 	return nil
 }
 
-// VerifySignature implements cryptotypes.PubKey VerifySignature method,
-// it panics because it can't handle MultiSignatureData
-// cf. https://github.com/cosmos/cosmos-sdk/issues/7109#issuecomment-686329936
+// VerifySignature implements cryptotypes.PubKey VerifySignature method.
+// Raw signature bytes cannot represent the sign-mode metadata required by
+// MultiSignatureData, so callers must use VerifyMultisignature.
 func (m *LegacyAminoPubKey) VerifySignature(msg []byte, sig []byte) bool {
-	panic("not implemented")
+	return false
 }
 
 // GetPubKeys implements the PubKey.GetPubKeys method

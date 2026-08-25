@@ -3,6 +3,7 @@ package commitment
 import (
 	"bytes"
 	"context"
+	stderrors "errors"
 	"fmt"
 	"io"
 
@@ -17,6 +18,8 @@ import (
 	paxdbproto "github.com/sidiora-labs/paxeer-network/storage/proto"
 	sctypes "github.com/sidiora-labs/paxeer-network/storage/state_db/sc/types"
 )
+
+var ErrWorkingHashUnavailable = stderrors.New("working hash is only available from the root multi-store")
 
 var (
 	_ types.CommitKVStore = (*Store)(nil)
@@ -60,7 +63,7 @@ func (st *Store) GetPruning() types.PruningOptions {
 }
 
 func (st *Store) GetWorkingHash() ([]byte, error) {
-	panic("not implemented")
+	return nil, ErrWorkingHashUnavailable
 }
 
 // Implements Store.
