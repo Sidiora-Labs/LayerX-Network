@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+package tendermint.p2p;
+
+option go_package = "github.com/sidiora-labs/paxeer-network/consensus/proto/tendermint/p2p";
+
+message PexAddress {
+  reserved 2, 3;
+  string url = 1;
+}
+
+message PexRequest {}
+
+message PexResponse {
+  repeated PexAddress addresses = 1;
+}
+
+message PexMessage {
+  reserved 1, 2;
+  oneof sum {
+    PexRequest pex_request = 3;
+    PexResponse pex_response = 4;
+  }
+}

@@ -606,6 +606,16 @@ ac_3 = "THE fuzz corpora SHALL cover calldata, response bytes, iteration cursors
 ac_4 = "THE monetary law SHALL be re-proven over program-heavy histories including derived-account custody, sandbox escrow and marketplace settlement, with balance conservation holding across every one."
 ac_5 = "THE performance gates SHALL be release gates: cold and warm latency, fuel throughput, parallel speedup and arbiter step cost SHALL each meet their declared threshold or refuse the release."
 ac_6 = "THE programs plane SHALL report its qualification in the platform release report under the same rules as every other pillar, with every unmet gate recorded and the release refused while any remains."
+
+[req.44]
+title = "The Sidiora Labs Ecosystem Monorepo"
+story = "As the organization maintaining LayerX and Paxeer together, I want all first-party ecosystem code in one auditable repository with explicit subsystem boundaries, so that development is coordinated without collapsing distinct trust, build, release or deployment domains."
+ac_1 = "THE repository SHALL contain the Paxeer Network implementation under paxeer-network as a first-class top-level subsystem, and the repository README SHALL identify this checkout as the canonical Sidiora Labs ecosystem monorepo."
+ac_2 = "THE monorepo SHALL preserve the LayerX and Paxeer boundaries: each subsystem keeps its own manifests, dependency graph, build products, release identity and deployment authority, and repository co-location SHALL grant neither subsystem new protocol authority over the other."
+ac_3 = "ALL GitHub Actions workflows SHALL live under the repository-level .github/workflows directory, and Paxeer workflows SHALL execute against paxeer-network through explicit working directories, contexts and artifact paths rather than assuming the Go module is the repository root."
+ac_4 = "PAXEER workflow triggers SHALL be scoped to Paxeer-owned paths wherever the GitHub event model supports path filtering, and workflow, artifact and release names SHALL identify the Paxeer subsystem so they cannot be mistaken for LayerX core outputs."
+ac_5 = "THE root Makefile SHALL expose bounded Paxeer build, lint, test and CI entry points without reusing LayerX build directories, and the Paxeer Makefile SHALL resolve its project root to paxeer-network rather than to the enclosing Git worktree."
+ac_6 = "THE publication boundary SHALL exclude generated binaries, dependency caches, runtime data and credentials from the imported Paxeer tree, and repository auditing SHALL inspect the Git publication set rather than ignored workspace material."
 # --------------------------------------------------------------------------
 # TASKS
 # --------------------------------------------------------------------------
@@ -3845,3 +3855,21 @@ verify_cmd = "make platform-qualify"
 symbols = ["platform_qualification_report","programs_plane_report"]
 touches = ["platform/tools/qualify","platform/docs/content/concepts/programs.md","Makefile"]
 reqs = ["43.6","27.5"]
+
+[task.37]
+section = "Wave 16 - Ecosystem Repository Boundary"
+title = "Consolidate the Sidiora Labs ecosystem in one bounded monorepo"
+status = "pending"
+
+[task.37.1]
+title = "Integrate Paxeer Network and its automation into the LayerX monorepo"
+status = "implemented"
+wave = 16
+do_1 = "Import the current Paxeer Network source under paxeer-network while excluding ignored build products, dependency caches, runtime data and credentials."
+do_2 = "Move Paxeer GitHub Actions workflows to the repository-level .github/workflows directory, namespace them for Paxeer and make every command, action context and artifact path monorepo-aware."
+do_3 = "Scope Paxeer pull-request and push automation to paxeer-network-owned paths wherever GitHub supports path filters, while retaining manual, scheduled and release triggers that cannot use path filtering."
+do_4 = "Add root Makefile entry points for Paxeer build, lint, tests and CI, and bind Paxeer's internal project root to its subsystem directory so its cleanup and Docker mounts cannot touch LayerX build output."
+do_5 = "Update the root README and dependency automation to describe and maintain the ecosystem monorepo and its explicit LayerX/Paxeer trust, build and release boundaries."
+verify_cmd = "make paxeer-ci"
+touches = ["paxeer-network","README.md","Makefile",".gitignore",".github/workflows",".github/dependabot.yml","tools/ci/public-repo-audit.sh","spec/layerx-platform/spec.kvx","spec/layerx-platform/requirements.md","spec/layerx-platform/tasks.md","spec/layerx-platform/qualification.kvx"]
+reqs = ["44.1","44.2","44.3","44.4","44.5","44.6"]

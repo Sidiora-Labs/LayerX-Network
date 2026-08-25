@@ -1,0 +1,21 @@
+package store
+
+import (
+	dbm "github.com/tendermint/tm-db"
+
+	"github.com/sidiora-labs/paxeer-network/sdk/store/cache"
+	"github.com/sidiora-labs/paxeer-network/sdk/store/rootmulti"
+	"github.com/sidiora-labs/paxeer-network/sdk/store/types"
+)
+
+func NewCommitMultiStore(db dbm.DB) types.CommitMultiStore {
+	return rootmulti.NewStore(db)
+}
+
+func NewCommitMultiStoreWithArchival(db dbm.DB, archivalDb dbm.DB, archivalVersion int64) types.CommitMultiStore {
+	return rootmulti.NewStoreWithArchival(db, archivalDb, archivalVersion)
+}
+
+func NewCommitKVStoreCacheManager() types.MultiStorePersistentCache {
+	return cache.NewCommitKVStoreCacheManager(cache.DefaultCommitKVStoreCacheSize, types.DefaultCacheSizeLimit)
+}

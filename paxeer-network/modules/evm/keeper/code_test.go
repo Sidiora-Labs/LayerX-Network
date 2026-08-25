@@ -1,0 +1,57 @@
+package keeper_test
+
+import (
+	"testing"
+
+	"github.com/ethereum/go-ethereum/common"
+	ethtypes "github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/crypto"
+	sdk "github.com/sidiora-labs/paxeer-network/sdk/types"
+	"github.com/sidiora-labs/paxeer-network/testutil/keeper"
+	"github.com/stretchr/testify/require"
+)
+
+func TestCode(t *testing.T) {
+	k := &keeper.EVMTestApp.EvmKeeper
+	ctx := keeper.EVMTestApp.GetContextForDeliverTx([]byte{})
+	_, addr := keeper.MockAddressPair()
+
+	require.Equal(t, common.Hash{}, k.GetCodeHash(ctx, addr))
+
+	k.BankKeeper().MintCoins(ctx, "evm", sdk.NewCoins(sdk.NewCoin("uhpx", sdk.OneInt())))
+	k.BankKeeper().SendCoinsFromModuleToAccount(ctx, "evm", sdk.AccAddress(addr[:]), sdk.NewCoins(sdk.NewCoin("uhpx", sdk.OneInt())))
+	require.Equal(t, ethtypes.EmptyCodeHash, k.GetCodeHash(ctx, addr))
+	require.Nil(t, k.GetCode(ctx, addr))
+	require.Equal(t, 0, k.GetCodeSize(ctx, addr))
+
+	code := []byte{1, 2, 3, 4, 5}
+	k.SetCode(ctx, addr, code)
+	require.Equal(t, crypto.Keccak256Hash(code), k.GetCodeHash(ctx, addr))
+	require.Equal(t, code, k.GetCode(ctx, addr))
+	require.Equal(t, 5, k.GetCodeSize(ctx, addr))
+	require.Equal(t, sdk.AccAddress(addr[:]), k.AccountKeeper().GetAccount(ctx, k.GetPaxAddressOrDefault(ctx, addr)).GetAddress())
+}
+
+func TestNilCode(t *testing.T) {
+	k := &keeper.EVMTestApp.EvmKeeper
+	ctx := keeper.EVMTestApp.GetContextForDeliverTx([]byte{})
+	_, addr := keeper.MockAddressPair()
+
+	k.SetCode(ctx, addr, nil)
+	require.Nil(t, k.GetCode(ctx, addr))
+	require.Equal(t, 0, k.GetCodeSize(ctx, addr))
+	require.Equal(t, ethtypes.EmptyCodeHash, k.GetCodeHash(ctx, addr))
+}
+
+func TestGetCodeHashWithNonceButZeroBalance(t *testing.T) {
+	k := &keeper.EVMTestApp.EvmKeeper
+	ctx := keeper.EVMTestApp.GetContextForDeliverTx([]byte{})
+	_, addr := keeper.MockAddressPair()
+
+	require.Equal(t, common.Hash{}, k.GetCodeHash(ctx, addr))
+
+	k.SetNonce(ctx, addr, 1)
+
+	require.Equal(t, ethtypes.EmptyCodeHash, k.GetCodeHash(ctx, addr))
+	require.True(t, k.GetBalance(ctx, k.GetPaxAddressOrDefault(ctx, addr)).Sign() == 0)
+}

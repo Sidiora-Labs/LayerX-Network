@@ -1,0 +1,26 @@
+- name: Test simulation sending funds
+  inputs:
+    # Create test account
+    - cmd: paxd keys add simulation-test --keyring-backend test
+    - cmd: printf "12345678\n" | paxd keys show -a admin
+      env: ADMIN_ACC
+    - cmd: paxd keys show -a simulation-test --keyring-backend test
+      env: SIMULATION_TEST_ACC
+
+    # Send funds
+    - cmd: printf "12345678\n" | paxd tx bank send $ADMIN_ACC $SIMULATION_TEST_ACC 1pax -b block --fees 2000uhpx --chain-id pax -y
+
+    - cmd: paxd tx bank send $ADMIN_ACC $SIMULATION_TEST_ACC 1000pax --from $ADMIN_ACC  --chain-id pax -b block -y --dry-run --keyring-backend test 2>&1
+      env: GAS_ESIMATE
+
+    # Validate that only the 1pax is sent
+    - cmd: paxd q bank balances $SIMULATION_TEST_ACC --output json | jq -r .balances[0].amount
+      env: SIMULATION_TEST_ACC_BALANCE
+
+  verifiers:
+    # Bank balance should be 1pax
+    - type: eval
+      expr: SIMULATION_TEST_ACC_BALANCE == 1000000
+    - type: regex
+      expr: "^gas estimate.*[0-9]+"
+      result: GAS_ESIMATE

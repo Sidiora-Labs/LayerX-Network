@@ -1,0 +1,34 @@
+package null
+
+import (
+	"context"
+	"errors"
+
+	abci "github.com/sidiora-labs/paxeer-network/consensus/abci/types"
+	"github.com/sidiora-labs/paxeer-network/consensus/internal/pubsub/query"
+	"github.com/sidiora-labs/paxeer-network/consensus/internal/state/indexer"
+)
+
+var _ indexer.TxIndexer = (*TxIndex)(nil)
+
+// TxIndex acts as a /dev/null.
+type TxIndex struct{}
+
+// Get on a TxIndex is disabled and panics when invoked.
+func (txi *TxIndex) Get(hash []byte) (*abci.TxResultV2, error) {
+	return nil, errors.New(`indexing is disabled (set 'tx_index = "kv"' in config)`)
+}
+
+// AddBatch is a noop and always returns nil.
+func (txi *TxIndex) AddBatch(batch *indexer.Batch) error {
+	return nil
+}
+
+// Index is a noop and always returns nil.
+func (txi *TxIndex) Index(results []*abci.TxResultV2) error {
+	return nil
+}
+
+func (txi *TxIndex) Search(ctx context.Context, q *query.Query) ([]*abci.TxResultV2, error) {
+	return []*abci.TxResultV2{}, nil
+}

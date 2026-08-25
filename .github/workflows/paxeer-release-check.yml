@@ -1,0 +1,54 @@
+name: Paxeer / Release Check
+
+on:
+  pull_request:
+    paths:
+      - 'paxeer-network/version.json'
+      - '.github/workflows/paxeer-release-check.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  release-check:
+    name: Validate Paxeer release identity
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code and tags
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Validate version and namespaced tag
+        env:
+          VERSION_FILE: paxeer-network/version.json
+        run: |
+          set -euo pipefail
+          version=$(jq -er '.version' "$VERSION_FILE")
+          semver_re='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
+          if [[ ! "$version" =~ $semver_re ]]; then
+            echo "Invalid Paxeer semantic version: $version"
+            exit 1
+          fi
+
+          tag="paxeer-network/$version"
+          if git rev-parse --verify --quiet "refs/tags/$tag"; then
+            echo "Paxeer release tag already exists: $tag"
+            exit 1
+          fi
+
+          latest=$(git tag --list 'paxeer-network/v*' --sort=-v:refname | head -n 1)
+          if [[ -n "$latest" ]]; then
+            latest_version=${latest#paxeer-network/}
+            greatest=$(printf '%s\n%s\n' "$latest_version" "$version" | sort -V | tail -n 1)
+            if [[ "$greatest" != "$version" || "$latest_version" == "$version" ]]; then
+              echo "Paxeer version $version must be newer than $latest_version"
+              exit 1
+            fi
+          fi
+
+          echo "Paxeer release identity is $tag"

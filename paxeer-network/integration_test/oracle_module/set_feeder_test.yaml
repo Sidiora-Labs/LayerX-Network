@@ -1,0 +1,28 @@
+- name: Test setting a different feeder account
+  inputs:
+    # Get admin addr
+    - cmd: printf "12345678\n" | paxd keys list --output json | jq ".[] | select (.name==\"node_admin\")" | jq -r .address
+      env: ADMIN_ADDR
+    # Get admin val addr
+    - cmd: printf "12345678\n" | paxd keys show node_admin --bech val --output json | jq -r ".address"
+      env: ADMIN_VAL_ADDR
+    # create new feeder addr
+    - cmd: printf "12345678\ny\n" | paxd keys add integration_test_feeder --output json | jq -r ".address"
+      env: NEW_FEEDER_ADDR
+    # get old feeder addr
+    - cmd: paxd q oracle feeder $ADMIN_VAL_ADDR --output json | jq -r ".feeder_addr"
+      env: OLD_FEEDER_ADDR
+    # send bank funds to new feeder to populate account
+    - cmd: paxdbin=paxd; chainid=pax; source integration_test/utils/_tx_helpers.sh && submit_tx_and_wait admin bank send admin $NEW_FEEDER_ADDR 1pax --fees 2000uhpx
+    # set feeder
+    - cmd: paxdbin=paxd; chainid=pax; source integration_test/utils/_tx_helpers.sh && submit_tx_and_wait node_admin oracle set-feeder $NEW_FEEDER_ADDR --fees 2000uhpx
+      env: SET_FEEDER_ERROR_CODE
+    # do a vote and ensure code 0
+    - cmd: paxdbin=paxd; chainid=pax; source integration_test/utils/_tx_helpers.sh && submit_tx_and_wait $NEW_FEEDER_ADDR oracle aggregate-vote 1.5ueth $ADMIN_VAL_ADDR --gas 0
+      env: NEW_FEEDER_VOTE_ERROR_CODE
+    # set old feeder addr again
+    - cmd: paxdbin=paxd; chainid=pax; source integration_test/utils/_tx_helpers.sh && submit_tx_and_wait node_admin oracle set-feeder $OLD_FEEDER_ADDR --fees 2000uhpx
+  verifiers:
+    # verify that error code == 0 for setting feeder AND oracle vote
+    - type: eval
+      expr: SET_FEEDER_ERROR_CODE == 0 and NEW_FEEDER_VOTE_ERROR_CODE == 0

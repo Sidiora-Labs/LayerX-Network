@@ -1,0 +1,30 @@
+- name: Test withdraw rewards
+  inputs:
+    # Create test account
+    - cmd: paxd keys add --keyring-backend test distribution-test
+    - cmd: printf "12345678\n" | paxd keys show -a node_admin
+      env: NODE_ADMIN_ACC
+    - cmd: paxd keys show -a distribution-test --keyring-backend test
+      env: DISTRIBUTION_TEST_ACC
+    # Get current rewards
+    - cmd: paxd q distribution rewards $NODE_ADMIN_ACC -o json | jq -r "(.total[0].amount // 0) | tonumber"
+      env: REWARDS_START
+    # Simple tx to increase rewards
+    - cmd: printf "12345678\n" | paxd tx bank send $NODE_ADMIN_ACC $DISTRIBUTION_TEST_ACC 1pax -b block --fees 2000uhpx --chain-id pax -y
+    # Wait a couple seconds before querying to reduce likelihood of flaky test results
+    - cmd: sleep 1
+    # Get rewards after tx
+    - cmd: paxd q distribution rewards $NODE_ADMIN_ACC -o json | jq -r "(.total[0].amount // 0) | tonumber"
+      env: REWARDS_AFTER_TX
+    # Withdraw all rewards
+    - cmd: printf "12345678\n" | paxd tx distribution withdraw-all-rewards -b block --fees 2000uhpx --chain-id pax -y --from node_admin
+    # Get rewards after withdraw
+    - cmd: paxd q distribution rewards $NODE_ADMIN_ACC -o json | jq -r "(.total[0].amount // 0) | tonumber"
+      env: REWARDS_AFTER_WITHDRAW
+  verifiers:
+    # Rewards should have increased
+    - type: eval
+      expr: REWARDS_AFTER_TX > REWARDS_START
+    - type: eval
+      expr: REWARDS_AFTER_WITHDRAW < REWARDS_AFTER_TX
+

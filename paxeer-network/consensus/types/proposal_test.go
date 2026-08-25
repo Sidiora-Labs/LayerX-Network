@@ -1,0 +1,305 @@
+package types
+
+import (
+	"testing"
+	"time"
+
+	"github.com/sidiora-labs/paxeer-network/consensus/version"
+
+	"github.com/gogo/protobuf/proto"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/sidiora-labs/paxeer-network/consensus/crypto"
+	"github.com/sidiora-labs/paxeer-network/consensus/internal/libs/protoio"
+	tmrand "github.com/sidiora-labs/paxeer-network/consensus/libs/rand"
+	tmtime "github.com/sidiora-labs/paxeer-network/consensus/libs/time"
+	"github.com/sidiora-labs/paxeer-network/consensus/libs/utils"
+	tmproto "github.com/sidiora-labs/paxeer-network/consensus/proto/tendermint/types"
+)
+
+func generateHeader() Header {
+	return Header{
+		Version: version.Consensus{Block: version.BlockProtocol},
+		ChainID: string(make([]byte, MaxChainIDLen)),
+		Height:  1,
+		LastBlockID: BlockID{
+			Hash: make([]byte, crypto.HashSize),
+			PartSetHeader: PartSetHeader{
+				Hash: make([]byte, crypto.HashSize),
+			},
+		},
+		LastCommitHash:     make([]byte, crypto.HashSize),
+		DataHash:           make([]byte, crypto.HashSize),
+		EvidenceHash:       make([]byte, crypto.HashSize),
+		ProposerAddress:    make([]byte, crypto.AddressSize),
+		ValidatorsHash:     make([]byte, crypto.HashSize),
+		NextValidatorsHash: make([]byte, crypto.HashSize),
+		ConsensusHash:      make([]byte, crypto.HashSize),
+		LastResultsHash:    make([]byte, crypto.HashSize),
+	}
+}
+
+func getTestProposal(t testing.TB) *Proposal {
+	t.Helper()
+
+	stamp, err := time.Parse(TimeFormat, "2018-02-11T07:09:22.765Z")
+	require.NoError(t, err)
+
+	return &Proposal{
+		Height: 12345,
+		Round:  23456,
+		BlockID: BlockID{Hash: []byte("--June_15_2020_amino_was_removed"),
+			PartSetHeader: PartSetHeader{Total: MaxBlockPartsCount, Hash: []byte("--June_15_2020_amino_was_removed")}},
+		POLRound:  -1,
+		Timestamp: stamp,
+	}
+}
+
+func TestProposalSignable(t *testing.T) {
+	chainID := "test_chain_id"
+	signBytes := ProposalSignBytes(chainID, getTestProposal(t).ToProto())
+	pb := CanonicalizeProposal(chainID, getTestProposal(t).ToProto())
+
+	expected, err := protoio.MarshalDelimited(&pb)
+	require.NoError(t, err)
+	require.Equal(t, expected, signBytes, "Got unexpected sign bytes for Proposal")
+}
+
+func TestProposalString(t *testing.T) {
+	str := getTestProposal(t).String()
+	expected := `Proposal{12345/23456 (2D2D4A756E655F31355F323032305F616D696E6F5F7761735F72656D6F766564:101:2D2D4A756E65, -1) 000000000000 @ 2018-02-11T07:09:22.765Z}`
+	if str != expected {
+		t.Errorf("got unexpected string for Proposal. Expected:\n%v\nGot:\n%v", expected, str)
+	}
+}
+
+func TestProposalVerifySignature(t *testing.T) {
+	ctx := t.Context()
+
+	privVal := NewMockPV()
+	pubKey, err := privVal.GetPubKey(ctx)
+	require.NoError(t, err)
+
+	txHashes := make([]TxHash, 0)
+	prop := NewProposal(
+		4, 2, 1,
+		BlockID{tmrand.Bytes(crypto.HashSize), PartSetHeader{MaxBlockPartsCount, tmrand.Bytes(crypto.HashSize)}}, tmtime.Now(), txHashes, generateHeader(), &Commit{}, EvidenceList{}, pubKey.Address())
+	p := prop.ToProto()
+	signBytes := ProposalSignBytes("test_chain_id", p)
+
+	// sign it
+	require.NoError(t, privVal.SignProposal(ctx, "test_chain_id", p))
+	prop.Signature = utils.OrPanic1(crypto.SigFromBytes(p.Signature))
+
+	// verify the same proposal
+	require.NoError(t, pubKey.Verify(signBytes, prop.Signature))
+
+	// serialize, deserialize and verify again....
+	newProp := new(tmproto.Proposal)
+	pb := prop.ToProto()
+
+	bs, err := proto.Marshal(pb)
+	require.NoError(t, err)
+
+	err = proto.Unmarshal(bs, newProp)
+	require.NoError(t, err)
+
+	np, err := ProposalFromProto(newProp)
+	require.NoError(t, err)
+
+	// verify the transmitted proposal
+	newSignBytes := ProposalSignBytes("test_chain_id", pb)
+	require.Equal(t, string(signBytes), string(newSignBytes))
+	require.NoError(t, pubKey.Verify(newSignBytes, np.Signature))
+}
+
+func BenchmarkProposalWriteSignBytes(b *testing.B) {
+	pbp := getTestProposal(b).ToProto()
+	for b.Loop() {
+		ProposalSignBytes("test_chain_id", pbp)
+	}
+}
+
+func BenchmarkProposalSign(b *testing.B) {
+	ctx := b.Context()
+	privVal := NewMockPV()
+	pbp := getTestProposal(b).ToProto()
+	for b.Loop() {
+		err := privVal.SignProposal(ctx, "test_chain_id", pbp)
+		if err != nil {
+			b.Error(err)
+		}
+	}
+}
+
+func BenchmarkProposalVerifySignature(b *testing.B) {
+	testProposal := getTestProposal(b)
+	pbp := testProposal.ToProto()
+	ctx := b.Context()
+
+	privVal := NewMockPV()
+	err := privVal.SignProposal(ctx, "test_chain_id", pbp)
+	require.NoError(b, err)
+	pubKey, err := privVal.GetPubKey(ctx)
+	require.NoError(b, err)
+
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		pubKey.Verify(ProposalSignBytes("test_chain_id", pbp), testProposal.Signature)
+	}
+}
+
+func TestProposalValidateBasic(t *testing.T) {
+
+	privVal := NewMockPV()
+	testCases := []struct {
+		testName         string
+		malleateProposal func(*Proposal)
+		expectErr        bool
+	}{
+		{"Good Proposal", func(p *Proposal) {}, false},
+		{"Invalid Type", func(p *Proposal) { p.Type = tmproto.PrecommitType }, true},
+		{"Invalid Height", func(p *Proposal) { p.Height = -1 }, true},
+		{"Invalid Round", func(p *Proposal) { p.Round = -1 }, true},
+		{"Invalid POLRound", func(p *Proposal) { p.POLRound = -2 }, true},
+		{"Invalid BlockId", func(p *Proposal) {
+			p.BlockID = BlockID{[]byte{1, 2, 3}, PartSetHeader{111, []byte("blockparts")}}
+		}, true},
+	}
+	blockID := makeBlockID(crypto.Checksum([]byte("blockhash")).Bytes(), MaxBlockPartsCount, crypto.Checksum([]byte("partshash")).Bytes())
+
+	for _, tc := range testCases {
+		t.Run(tc.testName, func(t *testing.T) {
+			ctx := t.Context()
+
+			txHashes := make([]TxHash, 0)
+			pubKey, err := privVal.GetPubKey(ctx)
+			require.NoError(t, err)
+			prop := NewProposal(
+				4, 2, 1,
+				blockID, tmtime.Now(), txHashes,
+				generateHeader(), &Commit{}, EvidenceList{}, pubKey.Address())
+			p := prop.ToProto()
+			require.NoError(t, privVal.SignProposal(ctx, "test_chain_id", p))
+			prop.Signature = utils.OrPanic1(crypto.SigFromBytes(p.Signature))
+			tc.malleateProposal(prop)
+			err = prop.ValidateBasic()
+			assert.Equal(t, tc.expectErr, err != nil, "Validate Basic had an unexpected result: %v", err)
+		})
+	}
+}
+
+func TestProposalProtoBuf(t *testing.T) {
+	var txHashes []TxHash
+	proposal := NewProposal(1, 3, 2, makeBlockID([]byte("hash"), 2, []byte("part_set_hash")), tmtime.Now(), txHashes, generateHeader(), &Commit{Signatures: []CommitSig{}}, EvidenceList{}, crypto.Address("testaddr"))
+	proposal.Signature = testKey.Sign([]byte("sig"))
+	proposal2 := NewProposal(1, 2, 3, BlockID{}, tmtime.Now(), txHashes, generateHeader(), &Commit{Signatures: []CommitSig{}}, EvidenceList{}, crypto.Address("testaddr"))
+
+	testCases := []struct {
+		msg     string
+		p1      *Proposal
+		expPass bool
+	}{
+		{"success", proposal, true},
+		{"success", proposal2, false}, // blcokID cannot be empty
+		{"empty proposal failure validatebasic", &Proposal{}, false},
+		{"nil proposal", nil, false},
+	}
+	for _, tc := range testCases {
+		protoProposal := tc.p1.ToProto()
+
+		p, err := ProposalFromProto(protoProposal)
+		if tc.expPass {
+			require.NoError(t, err)
+			require.Equal(t, tc.p1, p, tc.msg)
+		} else {
+			require.Error(t, err)
+		}
+	}
+}
+
+func TestIsTimely(t *testing.T) {
+	genesisTime, err := time.Parse(time.RFC3339, "2019-03-13T23:00:00Z")
+	require.NoError(t, err)
+	testCases := []struct {
+		name         string
+		proposalTime time.Time
+		recvTime     time.Time
+		precision    time.Duration
+		msgDelay     time.Duration
+		expectTimely bool
+		round        int32
+	}{
+		// proposalTime - precision <= localTime <= proposalTime + msgDelay + precision
+		{
+			// Checking that the following inequality evaluates to true:
+			// 0 - 2 <= 1 <= 0 + 1 + 2
+			name:         "basic timely",
+			proposalTime: genesisTime,
+			recvTime:     genesisTime.Add(1 * time.Nanosecond),
+			precision:    time.Nanosecond * 2,
+			msgDelay:     time.Nanosecond,
+			expectTimely: true,
+		},
+		{
+			// Checking that the following inequality evaluates to false:
+			// 0 - 2 <= 4 <= 0 + 1 + 2
+			name:         "local time too large",
+			proposalTime: genesisTime,
+			recvTime:     genesisTime.Add(4 * time.Nanosecond),
+			precision:    time.Nanosecond * 2,
+			msgDelay:     time.Nanosecond,
+			expectTimely: false,
+		},
+		{
+			// Checking that the following inequality evaluates to false:
+			// 4 - 2 <= 0 <= 4 + 2 + 1
+			name:         "proposal time too large",
+			proposalTime: genesisTime.Add(4 * time.Nanosecond),
+			recvTime:     genesisTime,
+			precision:    time.Nanosecond * 2,
+			msgDelay:     time.Nanosecond,
+			expectTimely: false,
+		},
+		{
+			// Checking that the following inequality evaluates to true:
+			// 0 - (2 * 2)  <= 4 <= 0 + (1 * 2) + 2
+			name:         "message delay adapts after 10 rounds",
+			proposalTime: genesisTime,
+			recvTime:     genesisTime.Add(4 * time.Nanosecond),
+			precision:    time.Nanosecond * 2,
+			msgDelay:     time.Nanosecond,
+			expectTimely: true,
+			round:        10,
+		},
+		{
+			// check that values that overflow time.Duration still correctly register
+			// as timely when round relaxation applied.
+			name:         "message delay fixed to not overflow time.Duration",
+			proposalTime: genesisTime,
+			recvTime:     genesisTime.Add(4 * time.Nanosecond),
+			precision:    time.Nanosecond * 2,
+			msgDelay:     time.Nanosecond,
+			expectTimely: true,
+			round:        5000,
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			p := Proposal{
+				Timestamp: testCase.proposalTime,
+			}
+
+			sp := SynchronyParams{
+				Precision:    testCase.precision,
+				MessageDelay: testCase.msgDelay,
+			}
+
+			ti := p.IsTimely(testCase.recvTime, sp, testCase.round)
+			assert.Equal(t, testCase.expectTimely, ti)
+		})
+	}
+}

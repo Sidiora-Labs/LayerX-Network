@@ -1,0 +1,54 @@
+name: Paxeer / UCI Backport
+run-name: Paxeer / UCI / Backport
+
+on:
+  pull_request_target:
+    types:
+      - closed
+    paths:
+      - 'paxeer-network/**'
+      - '.github/workflows/paxeer-uci-backport.yml'
+  issue_comment:
+    types:
+      - created
+
+permissions:
+  contents: write
+  issues: read
+  pull-requests: write
+
+jobs:
+  scope:
+    name: Confirm Paxeer scope
+    runs-on: ubuntu-latest
+    outputs:
+      paxeer: ${{ steps.files.outputs.paxeer }}
+    steps:
+      - id: files
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const pull_number = context.issue.number;
+            if (!pull_number) {
+              core.setOutput('paxeer', 'false');
+              return;
+            }
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number,
+              per_page: 100,
+            });
+            const inScope = files.some(({ filename }) =>
+              filename.startsWith('paxeer-network/') ||
+              filename === '.github/workflows/paxeer-uci-backport.yml'
+            );
+            core.setOutput('paxeer', String(inScope));
+  backport:
+    name: Backport
+    needs: scope
+    if: needs.scope.outputs.paxeer == 'true'
+    uses: Paxeer-Network/pax-uci/.github/workflows/backport.yml@v0.0.9
+    secrets: inherit
+    with:
+      backport-team: 'Paxeer-Network/pax-core'

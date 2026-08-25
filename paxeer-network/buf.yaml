@@ -1,0 +1,32 @@
+# For details on buf.yaml configuration, visit https://buf.build/docs/configuration/v2/buf-yaml
+version: v2
+modules:
+  - path: api
+    name: buf.build/pax-protocol/pax-chain
+  - path: sdk/proto
+  - path: sdk/third_party/proto
+  - path: interchain/proto
+  - path: interchain/third_party/proto
+  - path: consensus/proto
+  - path: consensus/internal
+  - path: wasm/proto
+
+lint:
+  use:
+    - BASIC
+    - FILE_LOWER_SNAKE_CASE
+    - UNARY_RPC
+  except:
+    - COMMENT_FIELD
+    - PACKAGE_VERSION_SUFFIX
+    - PACKAGE_SAME_DIRECTORY
+    - PACKAGE_DIRECTORY_MATCH
+    - PACKAGE_SAME_GO_PACKAGE
+  ignore:
+    - wasm/third_party/proto
+    - sdk/third_party/proto
+
+breaking:
+  use:
+    - WIRE
+    - WIRE_JSON

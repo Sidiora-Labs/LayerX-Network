@@ -1,0 +1,143 @@
+package tx
+
+import (
+	"context"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	ctypes "github.com/sidiora-labs/paxeer-network/consensus/rpc/coretypes"
+
+	"github.com/sidiora-labs/paxeer-network/sdk/client"
+	codectypes "github.com/sidiora-labs/paxeer-network/sdk/codec/types"
+	sdk "github.com/sidiora-labs/paxeer-network/sdk/types"
+)
+
+// QueryTxsByEvents performs a search for transactions for a given set of events
+// via the Tendermint RPC. An event takes the form of:
+// "{eventAttribute}.{attributeKey} = '{attributeValue}'". Each event is
+// concatenated with an 'AND' operand. It returns a slice of Info object
+// containing txs and metadata. An error is returned if the query fails.
+// If an empty string is provided it will order txs by asc
+func QueryTxsByEvents(ctx context.Context, node client.Client, txConfig client.TxConfig, events []string, page, limit int, orderBy string) (*sdk.SearchTxsResult, error) {
+	if len(events) == 0 {
+		return nil, errors.New("must declare at least one event to search")
+	}
+
+	if page <= 0 {
+		return nil, errors.New("page must greater than 0")
+	}
+
+	if limit <= 0 {
+		return nil, errors.New("limit must greater than 0")
+	}
+
+	// XXX: implement ANY
+	query := strings.Join(events, " AND ")
+
+	// TODO: this may not always need to be proven
+	// https://github.com/cosmos/cosmos-sdk/issues/6807
+	resTxs, err := node.TxSearch(ctx, query, true, &page, &limit, orderBy)
+	if err != nil {
+		return nil, err
+	}
+	resBlocks, err := getBlocksForTxResults(ctx, node, resTxs.Txs)
+	if err != nil {
+		return nil, err
+	}
+
+	txs, err := formatTxResults(txConfig, resTxs.Txs, resBlocks)
+	if err != nil {
+		return nil, err
+	}
+
+	result := sdk.NewSearchTxsResult(
+		uint64(resTxs.TotalCount), //nolint:gosec // TotalCount from Tendermint is non-negative
+		uint64(len(txs)),          //nolint:gosec // len() is always non-negative
+		uint64(page),              //nolint:gosec // validated positive above
+		uint64(limit),             //nolint:gosec // validated positive above
+		txs,
+	)
+
+	return result, nil
+}
+
+// QueryTx queries for a single transaction by a hash string in hex format. An
+// error is returned if the transaction does not exist or cannot be queried.
+func QueryTx(ctx context.Context, node client.Client, txConfig client.TxConfig, hashHexStr string) (*sdk.TxResponse, error) {
+	hash, err := hex.DecodeString(hashHexStr)
+	if err != nil {
+		return nil, err
+	}
+
+	//TODO: this may not always need to be proven
+	// https://github.com/cosmos/cosmos-sdk/issues/6807
+	resTx, err := node.Tx(ctx, hash, true)
+	if err != nil {
+		return nil, err
+	}
+
+	resBlocks, err := getBlocksForTxResults(ctx, node, []*ctypes.ResultTx{resTx})
+	if err != nil {
+		return nil, err
+	}
+
+	out, err := mkTxResult(txConfig, resTx, resBlocks[resTx.Height])
+	if err != nil {
+		return out, err
+	}
+
+	return out, nil
+}
+
+// formatTxResults parses the indexed txs into a slice of TxResponse objects.
+func formatTxResults(txConfig client.TxConfig, resTxs []*ctypes.ResultTx, resBlocks map[int64]*ctypes.ResultBlock) ([]*sdk.TxResponse, error) {
+	var err error
+	out := make([]*sdk.TxResponse, len(resTxs))
+	for i := range resTxs {
+		out[i], err = mkTxResult(txConfig, resTxs[i], resBlocks[resTxs[i].Height])
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return out, nil
+}
+
+func getBlocksForTxResults(ctx context.Context, node client.Client, resTxs []*ctypes.ResultTx) (map[int64]*ctypes.ResultBlock, error) {
+	resBlocks := make(map[int64]*ctypes.ResultBlock)
+
+	for _, resTx := range resTxs {
+		if _, ok := resBlocks[resTx.Height]; !ok {
+			resBlock, err := node.Block(ctx, &resTx.Height)
+			if err != nil {
+				return nil, err
+			}
+
+			resBlocks[resTx.Height] = resBlock
+		}
+	}
+
+	return resBlocks, nil
+}
+
+func mkTxResult(txConfig client.TxConfig, resTx *ctypes.ResultTx, resBlock *ctypes.ResultBlock) (*sdk.TxResponse, error) {
+	txb, err := txConfig.TxDecoder()(resTx.Tx)
+	if err != nil {
+		return nil, err
+	}
+	p, ok := txb.(intoAny)
+	if !ok {
+		return nil, fmt.Errorf("expecting a type implementing intoAny, got: %T", txb)
+	}
+	any := p.AsAny()
+	return sdk.NewResponseResultTx(resTx, any, resBlock.Block.Time.Format(time.RFC3339)), nil
+}
+
+// Deprecated: this interface is used only internally for scenario we are
+// deprecating (StdTxConfig support)
+type intoAny interface {
+	AsAny() *codectypes.Any
+}

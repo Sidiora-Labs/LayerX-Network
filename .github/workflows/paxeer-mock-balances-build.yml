@@ -1,0 +1,39 @@
+name: Paxeer / Mock Balances Build Check
+
+on:
+  pull_request:
+    branches:
+      - main
+      - release/**
+    paths:
+      - 'paxeer-network/**'
+      - '.github/workflows/paxeer-mock-balances-build.yml'
+  merge_group:
+    branches:
+      - main
+      - release/**
+  push:
+    branches:
+      - main
+      - release/**
+    paths:
+      - 'paxeer-network/**'
+      - '.github/workflows/paxeer-mock-balances-build.yml'
+
+defaults:
+  run:
+    working-directory: paxeer-network
+
+jobs:
+  mock-balances-build:
+    name: Compile with Mock Balances
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25.6'
+          cache-dependency-path: paxeer-network/go.sum
+
+      - name: Build with Mock Balances
+        run: make install-mock-balances

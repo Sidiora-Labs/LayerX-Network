@@ -1,0 +1,525 @@
+package keeper
+
+import (
+	"bytes"
+	"context"
+	"encoding/binary"
+	"fmt"
+	"math"
+	"math/big"
+	"sync"
+
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/consensus"
+	"github.com/ethereum/go-ethereum/consensus/misc/eip4844"
+	"github.com/ethereum/go-ethereum/core"
+	ethstate "github.com/ethereum/go-ethereum/core/state"
+	ethtypes "github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/core/vm"
+	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/ethclient"
+	"github.com/ethereum/go-ethereum/params"
+	"github.com/ethereum/go-ethereum/tests"
+	"github.com/holiman/uint256"
+	abci "github.com/sidiora-labs/paxeer-network/consensus/abci/types"
+	tmtypes "github.com/sidiora-labs/paxeer-network/consensus/types"
+	ibctransferkeeper "github.com/sidiora-labs/paxeer-network/interchain/modules/apps/transfer/keeper"
+	"github.com/sidiora-labs/paxeer-network/sdk/store/prefix"
+	sdk "github.com/sidiora-labs/paxeer-network/sdk/types"
+	authkeeper "github.com/sidiora-labs/paxeer-network/sdk/x/auth/keeper"
+	bankkeeper "github.com/sidiora-labs/paxeer-network/sdk/x/bank/keeper"
+	paramtypes "github.com/sidiora-labs/paxeer-network/sdk/x/params/types"
+	stakingkeeper "github.com/sidiora-labs/paxeer-network/sdk/x/staking/keeper"
+	upgradekeeper "github.com/sidiora-labs/paxeer-network/sdk/x/upgrade/keeper"
+	receipt "github.com/sidiora-labs/paxeer-network/storage/ledger_db/receipt"
+	sctypes "github.com/sidiora-labs/paxeer-network/storage/state_db/sc/types"
+	wasmkeeper "github.com/sidiora-labs/paxeer-network/wasm/x/wasm/keeper"
+
+	"github.com/sidiora-labs/paxeer-network/modules/evm/blocktest"
+	"github.com/sidiora-labs/paxeer-network/modules/evm/querier"
+	"github.com/sidiora-labs/paxeer-network/modules/evm/replay"
+	"github.com/sidiora-labs/paxeer-network/modules/evm/state"
+	"github.com/sidiora-labs/paxeer-network/modules/evm/types"
+	putils "github.com/sidiora-labs/paxeer-network/precompiles/utils"
+	"github.com/sidiora-labs/paxeer-network/utils"
+)
+
+const Pacific1ChainID = "pacific-1"
+const DefaultBlockGasLimit = 10000000
+
+type Keeper struct {
+	storeKey          sdk.StoreKey
+	transientStoreKey sdk.StoreKey
+
+	Paramstore paramtypes.Subspace
+
+	txResults []*abci.ExecTxResult
+	msgs      []*types.MsgEVMTransaction
+
+	bankKeeper     bankkeeper.Keeper
+	accountKeeper  *authkeeper.AccountKeeper
+	stakingKeeper  *stakingkeeper.Keeper
+	transferKeeper ibctransferkeeper.Keeper
+	wasmKeeper     *wasmkeeper.PermissionedKeeper
+	wasmViewKeeper *wasmkeeper.Keeper
+	upgradeKeeper  *upgradekeeper.Keeper
+
+	cachedFeeCollectorAddressMtx *sync.RWMutex
+	cachedFeeCollectorAddress    *common.Address
+
+	QueryConfig *querier.Config
+
+	// only used during ETH replay. Not used in chain critical path.
+	EthClient       *ethclient.Client
+	EthReplayConfig replay.Config
+
+	// only used during blocktest. Not used in chain critical path.
+	EthBlockTestConfig blocktest.Config
+	BlockTest          *tests.BlockTest
+
+	// used for both ETH replay and block tests. Not used in chain critical path.
+	Trie        ethstate.Trie
+	DB          ethstate.Database
+	CachingDB   *ethstate.CachingDB
+	Root        common.Hash
+	ReplayBlock *ethtypes.Block
+
+	receiptStore receipt.ReceiptStore
+
+	customPrecompiles       map[common.Address]putils.VersionedPrecompiles
+	latestCustomPrecompiles map[common.Address]vm.PrecompiledContract
+	latestUpgrade           string
+
+	// traceDB, when non-nil, serves cached debug_trace results and
+	// forwards EndBlock heights to the registered baker. nil-safe.
+	traceDB *TraceDB
+
+	// traceSnapshotStore + traceSnapshotCapture, when set, capture an O(1)
+	// memiavl snapshot of the SC tree at EndBlock so the baker replays
+	// against in-memory state instead of SS-pebble. nil-safe.
+	traceSnapshotStore   *TraceSnapshotStore
+	traceSnapshotCapture func() sctypes.Committer
+}
+
+// only used during ETH replay
+type ReplayChainContext struct {
+	ethClient *ethclient.Client
+	chainID   *big.Int
+	params    types.Params
+}
+
+func (ctx *ReplayChainContext) Engine() consensus.Engine {
+	return nil
+}
+
+func (ctx *ReplayChainContext) GetHeader(hash common.Hash, number uint64) *ethtypes.Header {
+	res, err := ctx.ethClient.BlockByNumber(context.Background(), big.NewInt(int64(number))) //nolint:gosec
+	if err != nil || res.Header_.Hash() != hash {
+		return nil
+	}
+	return res.Header_
+}
+
+func (ctx *ReplayChainContext) Config() *params.ChainConfig {
+	return types.DefaultChainConfig().EthereumConfig(ctx.chainID)
+}
+
+func NewKeeper(
+	storeKey sdk.StoreKey, transientStoreKey sdk.StoreKey, paramstore paramtypes.Subspace, receiptStore receipt.ReceiptStore,
+	bankKeeper bankkeeper.Keeper, accountKeeper *authkeeper.AccountKeeper, stakingKeeper *stakingkeeper.Keeper,
+	transferKeeper ibctransferkeeper.Keeper, wasmKeeper *wasmkeeper.PermissionedKeeper, wasmViewKeeper *wasmkeeper.Keeper, upgradeKeeper *upgradekeeper.Keeper) *Keeper {
+
+	if !paramstore.HasKeyTable() {
+		paramstore = paramstore.WithKeyTable(types.ParamKeyTable())
+	}
+	k := &Keeper{
+		storeKey:                     storeKey,
+		transientStoreKey:            transientStoreKey,
+		Paramstore:                   paramstore,
+		bankKeeper:                   bankKeeper,
+		accountKeeper:                accountKeeper,
+		stakingKeeper:                stakingKeeper,
+		transferKeeper:               transferKeeper,
+		wasmKeeper:                   wasmKeeper,
+		wasmViewKeeper:               wasmViewKeeper,
+		upgradeKeeper:                upgradeKeeper,
+		cachedFeeCollectorAddressMtx: &sync.RWMutex{},
+		receiptStore:                 receiptStore,
+	}
+	return k
+}
+
+func (k *Keeper) SetTraceDB(c *TraceDB) { k.traceDB = c }
+func (k *Keeper) TraceDB() *TraceDB     { return k.traceDB }
+
+func (k *Keeper) SetTraceSnapshotStore(s *TraceSnapshotStore) { k.traceSnapshotStore = s }
+func (k *Keeper) TraceSnapshotStore() *TraceSnapshotStore     { return k.traceSnapshotStore }
+func (k *Keeper) SetTraceSnapshotCapture(f func() sctypes.Committer) {
+	k.traceSnapshotCapture = f
+}
+
+func (k *Keeper) SetCustomPrecompiles(cp map[common.Address]putils.VersionedPrecompiles, latestUpgrade string) {
+	k.customPrecompiles = cp
+	k.latestUpgrade = latestUpgrade
+	k.latestCustomPrecompiles = make(map[common.Address]vm.PrecompiledContract, len(cp))
+	for addr, versioned := range cp {
+		k.latestCustomPrecompiles[addr] = versioned[latestUpgrade]
+	}
+}
+
+func (k *Keeper) CustomPrecompiles(ctx sdk.Context) map[common.Address]vm.PrecompiledContract {
+	if !ctx.IsTracing() {
+		return k.latestCustomPrecompiles
+	}
+	versions := k.GetCustomPrecompilesVersions(ctx)
+	cp := make(map[common.Address]vm.PrecompiledContract, len(k.customPrecompiles))
+	for addr, versioned := range k.customPrecompiles {
+		cp[addr] = versioned[versions[addr]]
+	}
+	return cp
+}
+
+func (k *Keeper) GetCustomPrecompilesVersions(ctx sdk.Context) map[common.Address]string {
+	height := ctx.BlockHeight()
+	cp := make(map[common.Address]string, len(k.customPrecompiles))
+	for addr, versioned := range k.customPrecompiles {
+		mostRecentUpgradeHeight := int64(0)
+		noForkHistory := true
+		for upgrade := range versioned {
+			upgradeHeight := k.upgradeKeeper.GetDoneHeight(ctx, upgrade)
+			if upgradeHeight != 0 {
+				noForkHistory = false
+			}
+			if height < upgradeHeight {
+				// requested height hasn't seen this upgrade version yet.
+				continue
+			}
+			if upgradeHeight > mostRecentUpgradeHeight {
+				mostRecentUpgradeHeight = upgradeHeight
+				cp[addr] = upgrade
+			}
+		}
+		if noForkHistory {
+			cp[addr] = k.latestUpgrade
+		}
+	}
+	return cp
+}
+
+func (k *Keeper) AccountKeeper() *authkeeper.AccountKeeper {
+	return k.accountKeeper
+}
+
+func (k *Keeper) BankKeeper() bankkeeper.Keeper {
+	return k.bankKeeper
+}
+
+func (k *Keeper) ReceiptStore() receipt.ReceiptStore {
+	return k.receiptStore
+}
+
+func (k *Keeper) WasmKeeper() *wasmkeeper.PermissionedKeeper {
+	return k.wasmKeeper
+}
+
+func (k *Keeper) UpgradeKeeper() *upgradekeeper.Keeper {
+	return k.upgradeKeeper
+}
+
+func (k *Keeper) GetStoreKey() sdk.StoreKey {
+	return k.storeKey
+}
+
+func (k *Keeper) IterateAll(ctx sdk.Context, pref []byte, cb func(key, val []byte) bool) {
+	iter := k.PrefixStore(ctx, pref).Iterator(nil, nil)
+	defer func() { _ = iter.Close() }()
+	for ; iter.Valid(); iter.Next() {
+		if cb(iter.Key(), iter.Value()) {
+			break
+		}
+	}
+}
+
+func (k *Keeper) PrefixStore(ctx sdk.Context, pref []byte) sdk.KVStore {
+	store := ctx.KVStore(k.GetStoreKey())
+	return prefix.NewStore(store, pref)
+}
+
+func (k *Keeper) PurgePrefix(ctx sdk.Context, pref []byte) {
+	store := k.PrefixStore(ctx, pref)
+	if err := store.DeleteAll(nil, nil); err != nil {
+		panic(err)
+	}
+}
+
+func (k *Keeper) GetVMBlockContext(ctx sdk.Context, gp core.GasPool) (*vm.BlockContext, error) {
+	if k.EthBlockTestConfig.Enabled {
+		return k.getBlockTestBlockCtx(ctx)
+	}
+	if k.EthReplayConfig.Enabled {
+		return k.getReplayBlockCtx(ctx)
+	}
+	coinbase, err := k.GetFeeCollectorAddress(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	// Use hash of block timestamp as info for PREVRANDAO
+	r, err := ctx.BlockHeader().Time.MarshalBinary()
+	if err != nil {
+		return nil, err
+	}
+	rh := crypto.Keccak256Hash(r)
+
+	txfer := func(db vm.StateDB, sender, recipient common.Address, amount *uint256.Int) {
+		if IsPayablePrecompile(&recipient) {
+			state.TransferWithoutEvents(db, sender, recipient, amount)
+		} else {
+			core.Transfer(db, sender, recipient, amount)
+		}
+	}
+	var baseFee *big.Int
+	if ctx.ChainID() == Pacific1ChainID && ctx.BlockHeight() < 114945913 {
+		baseFee = k.GetBaseFeePerGas(ctx).TruncateInt().BigInt()
+	} else {
+		baseFee = k.GetNextBaseFeePerGas(ctx).TruncateInt().BigInt()
+	}
+
+	return &vm.BlockContext{
+		CanTransfer: core.CanTransfer,
+		Transfer:    txfer,
+		GetHash:     k.GetHashFn(ctx),
+		Coinbase:    coinbase,
+		GasLimit: func() uint64 {
+			if ctx.ConsensusParams() != nil && ctx.ConsensusParams().Block != nil {
+				return uint64(ctx.ConsensusParams().Block.MaxGas) //nolint:gosec
+			}
+			return DefaultBlockGasLimit
+		}(),
+		BlockNumber: big.NewInt(ctx.BlockHeight()),
+		Time:        uint64(ctx.BlockHeader().Time.Unix()), //nolint:gosec
+		Difficulty:  utils.Big0,                            // only needed for PoW
+		BaseFee:     baseFee,
+		BlobBaseFee: utils.Big1, // Cancun not enabled
+		Random:      &rh,
+	}, nil
+}
+
+// returns a function that provides block header hash based on block number
+func (k *Keeper) GetHashFn(ctx sdk.Context) vm.GetHashFunc {
+	return func(height uint64) common.Hash {
+		if height > math.MaxInt64 {
+			logger.Error("Pax block height is bounded by int64 range")
+			return common.Hash{}
+		}
+		h := int64(height)
+		if ctx.BlockHeight() == h {
+			// current header hash is in the context already
+			return common.BytesToHash(ctx.HeaderHash())
+		}
+		if ctx.BlockHeight() < h {
+			// future block doesn't have a hash yet
+			return common.Hash{}
+		}
+		// fetch historical hash from historical info
+		return k.getHistoricalHash(ctx, h)
+	}
+}
+
+func (k *Keeper) getHistoricalHash(ctx sdk.Context, h int64) common.Hash {
+	histInfo, found := k.stakingKeeper.GetHistoricalInfo(ctx, h)
+	if !found {
+		// too old, already pruned
+		return common.Hash{}
+	}
+	header, _ := tmtypes.HeaderFromProto(&histInfo.Header)
+
+	return common.BytesToHash(header.Hash())
+}
+
+func (k *Keeper) SetTxResults(txResults []*abci.ExecTxResult) {
+	k.txResults = txResults
+}
+
+func (k *Keeper) SetMsgs(msgs []*types.MsgEVMTransaction) {
+	k.msgs = msgs
+}
+
+// Only used in ETH replay
+func (k *Keeper) PrepareReplayedAddr(ctx sdk.Context, addr common.Address) {
+	if !k.EthReplayConfig.Enabled {
+		return
+	}
+	store := k.PrefixStore(ctx, types.ReplaySeenAddrPrefix)
+	bz := store.Get(addr[:])
+	if len(bz) > 0 {
+		return
+	}
+	a, err := k.Trie.GetAccount(addr)
+	if err != nil || a == nil {
+		return
+	}
+	store.Set(addr[:], a.Root[:])
+	if a.Balance != nil && a.Balance.CmpBig(utils.Big0) != 0 {
+		uhpx, wei := state.SplitUhpxWeiAmount(a.Balance.ToBig())
+		err = k.BankKeeper().AddCoins(ctx, k.GetPaxAddressOrDefault(ctx, addr), sdk.NewCoins(sdk.NewCoin(k.GetBaseDenom(ctx), uhpx)), true)
+		if err != nil {
+			panic(err)
+		}
+		err = k.BankKeeper().AddWei(ctx, k.GetPaxAddressOrDefault(ctx, addr), wei)
+		if err != nil {
+			panic(err)
+		}
+	}
+	k.SetNonce(ctx, addr, a.Nonce)
+	if !bytes.Equal(a.CodeHash, ethtypes.EmptyCodeHash.Bytes()) {
+		k.PrefixStore(ctx, types.CodeHashKeyPrefix).Set(addr[:], a.CodeHash)
+		code := k.CachingDB.ContractCodeWithPrefix(addr, common.BytesToHash(a.CodeHash))
+		if len(code) > 0 {
+			k.PrefixStore(ctx, types.CodeKeyPrefix).Set(addr[:], code)
+			length := make([]byte, 8)
+			binary.BigEndian.PutUint64(length, uint64(len(code)))
+			k.PrefixStore(ctx, types.CodeSizeKeyPrefix).Set(addr[:], length)
+		}
+	}
+}
+
+func (k *Keeper) GetBaseFee(ctx sdk.Context) *big.Int {
+	if k.EthReplayConfig.Enabled {
+		return k.ReplayBlock.Header_.BaseFee
+	}
+	if k.EthBlockTestConfig.Enabled {
+		bb := k.BlockTest.Json.Blocks[ctx.BlockHeight()-1]
+		b, err := bb.Decode()
+		if err != nil {
+			panic(err)
+		}
+		return b.Header_.BaseFee
+	}
+	if ctx.ChainID() == Pacific1ChainID && ctx.BlockHeight() < k.upgradeKeeper.GetDoneHeight(ctx.WithGasMeter(sdk.NewInfiniteGasMeter(1, 1)), "6.2.0") {
+		return nil
+	}
+	return k.GetNextBaseFeePerGas(ctx).TruncateInt().BigInt()
+}
+
+func (k *Keeper) GetReplayedHeight(ctx sdk.Context) int64 {
+	return k.getInt64State(ctx, types.ReplayedHeight)
+}
+
+func (k *Keeper) SetReplayedHeight(ctx sdk.Context) {
+	k.setInt64State(ctx, types.ReplayedHeight, ctx.BlockHeight())
+}
+
+func (k *Keeper) GetReplayInitialHeight(ctx sdk.Context) int64 {
+	return k.getInt64State(ctx, types.ReplayInitialHeight)
+}
+
+func (k *Keeper) SetReplayInitialHeight(ctx sdk.Context, h int64) {
+	k.setInt64State(ctx, types.ReplayInitialHeight, h)
+}
+
+func (k *Keeper) setInt64State(ctx sdk.Context, key []byte, val int64) {
+	store := ctx.KVStore(k.storeKey)
+	bz := make([]byte, 8)
+	binary.BigEndian.PutUint64(bz, uint64(val)) //nolint:gosec
+	store.Set(key, bz)
+}
+
+func (k *Keeper) getInt64State(ctx sdk.Context, key []byte) int64 {
+	store := ctx.KVStore(k.storeKey)
+	bz := store.Get(key)
+	if bz == nil {
+		return 0
+	}
+	return int64(binary.BigEndian.Uint64(bz)) //nolint:gosec
+}
+
+func (k *Keeper) getBlockTestBlockCtx(ctx sdk.Context) (*vm.BlockContext, error) {
+	bb := k.BlockTest.Json.Blocks[ctx.BlockHeight()-1]
+	b, err := bb.Decode()
+	if err != nil {
+		return nil, err
+	}
+	header := b.Header_
+	getHash := func(height uint64) common.Hash {
+		height = height + 1
+		for i := 0; i < len(k.BlockTest.Json.Blocks); i++ {
+			if k.BlockTest.Json.Blocks[i].BlockHeader.Number.Uint64() == height {
+				return k.BlockTest.Json.Blocks[i].BlockHeader.Hash
+			}
+		}
+		panic(fmt.Sprintf("block hash not found for height %d", height))
+	}
+	var (
+		baseFee     *big.Int
+		blobBaseFee *big.Int
+		random      *common.Hash
+	)
+	if header.BaseFee != nil {
+		baseFee = new(big.Int).Set(header.BaseFee)
+	}
+	chainConfig := types.DefaultChainConfig().EthereumConfig(k.ChainID(ctx))
+	blobBaseFee = eip4844.CalcBlobFee(chainConfig, header)
+	if header.Difficulty.Cmp(common.Big0) == 0 {
+		random = &header.MixDigest
+	}
+	return &vm.BlockContext{
+		CanTransfer: core.CanTransfer,
+		Transfer:    core.Transfer,
+		GetHash:     getHash,
+		Coinbase:    header.Coinbase,
+		GasLimit:    header.GasLimit,
+		BlockNumber: new(big.Int).Set(header.Number),
+		Time:        header.Time,
+		Difficulty:  new(big.Int).Set(header.Difficulty),
+		BaseFee:     baseFee,
+		BlobBaseFee: blobBaseFee,
+		Random:      random,
+	}, nil
+}
+
+func (k *Keeper) getReplayBlockCtx(ctx sdk.Context) (*vm.BlockContext, error) {
+	header := k.ReplayBlock.Header_
+	replayCtx := &ReplayChainContext{ethClient: k.EthClient, chainID: k.ChainID(ctx), params: k.GetParams(ctx)}
+	getHash := core.GetHashFn(header, replayCtx)
+	var (
+		baseFee     *big.Int
+		blobBaseFee *big.Int
+		random      *common.Hash
+	)
+	if header.BaseFee != nil {
+		baseFee = new(big.Int).Set(header.BaseFee)
+	} else {
+		baseFee = big.NewInt(0)
+	}
+	if header.ExcessBlobGas != nil {
+		blobBaseFee = eip4844.CalcBlobFee(replayCtx.Config(), header)
+	} else {
+		blobBaseFee = big.NewInt(0)
+	}
+	if header.Difficulty.Cmp(common.Big0) == 0 {
+		random = &header.MixDigest
+	}
+	return &vm.BlockContext{
+		CanTransfer: core.CanTransfer,
+		Transfer:    core.Transfer,
+		GetHash:     getHash,
+		Coinbase:    header.Coinbase,
+		GasLimit:    header.GasLimit,
+		BlockNumber: new(big.Int).Set(header.Number),
+		Time:        header.Time,
+		Difficulty:  new(big.Int).Set(header.Difficulty),
+		BaseFee:     baseFee,
+		BlobBaseFee: blobBaseFee,
+		Random:      random,
+	}, nil
+}
+
+func uint64Cmp(a, b uint64) int {
+	if a < b {
+		return -1
+	} else if a == b {
+		return 0
+	}
+	return 1
+}

@@ -1,0 +1,64 @@
+package baseapp
+
+import (
+	"crypto/sha256"
+
+	tmproto "github.com/sidiora-labs/paxeer-network/consensus/proto/tendermint/types"
+	sdk "github.com/sidiora-labs/paxeer-network/sdk/types"
+	sdkerrors "github.com/sidiora-labs/paxeer-network/sdk/types/errors"
+)
+
+func (app *BaseApp) Check(txEncoder sdk.TxEncoder, tx sdk.Tx) (sdk.GasInfo, *sdk.Result, error) {
+	// runTx expects tx bytes as argument, so we encode the tx argument into
+	// bytes. Note that runTx will actually decode those bytes again. But since
+	// this helper is only used in tests/simulation, it's fine.
+	bz, err := txEncoder(tx)
+	if err != nil {
+		return sdk.GasInfo{}, nil, sdkerrors.Wrapf(sdkerrors.ErrInvalidRequest, "%s", err)
+	}
+	ctx := app.checkState.ctx.WithTxBytes(bz).WithConsensusParams(app.GetConsensusParams(app.checkState.ctx))
+	runTxRes, err := app.runTx(ctx, runTxModeCheck, tx, sha256.Sum256(bz))
+	return runTxRes.gasInfo, runTxRes.result, err
+}
+
+func (app *BaseApp) Deliver(txEncoder sdk.TxEncoder, tx sdk.Tx) (sdk.GasInfo, *sdk.Result, error) {
+	// See comment for Check().
+	bz, err := txEncoder(tx)
+	if err != nil {
+		return sdk.GasInfo{}, nil, sdkerrors.Wrapf(sdkerrors.ErrInvalidRequest, "%s", err)
+	}
+	ctx := app.deliverState.ctx.WithTxBytes(bz).WithConsensusParams(app.GetConsensusParams(app.deliverState.ctx))
+	decoded, err := app.txDecoder(bz)
+	if err != nil {
+		return sdk.GasInfo{}, &sdk.Result{}, err
+	}
+	runTxRes, err := app.runTx(ctx, runTxModeDeliver, decoded, sha256.Sum256(bz))
+	return runTxRes.gasInfo, runTxRes.result, err
+}
+
+// Context with current {check, deliver}State of the app used by tests.
+func (app *BaseApp) NewContext(isCheckTx bool, header tmproto.Header) sdk.Context {
+	if isCheckTx {
+		return sdk.NewContext(app.checkState.ms, header, true).
+			WithMinGasPrices(app.minGasPrices)
+	}
+
+	return sdk.NewContext(app.deliverState.ms, header, false)
+}
+
+func (app *BaseApp) NewUncachedContext(isCheckTx bool, header tmproto.Header) sdk.Context {
+	return sdk.NewContext(app.cms, header, isCheckTx)
+}
+
+// DeliverContext returns the current deliverState context, or nil if not in a deliver block.
+// Useful for reading uncommitted state (e.g. after InitChain before Commit).
+func (app *BaseApp) DeliverContext() *sdk.Context {
+	if app.deliverState == nil {
+		return nil
+	}
+	return &app.deliverState.ctx
+}
+
+func (app *BaseApp) GetContextForDeliverTx(txBytes []byte) sdk.Context {
+	return app.getContextForTx(runTxModeDeliver, txBytes)
+}

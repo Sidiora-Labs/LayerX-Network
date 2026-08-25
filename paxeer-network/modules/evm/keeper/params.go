@@ -1,0 +1,267 @@
+package keeper
+
+import (
+	"math/big"
+
+	"github.com/sidiora-labs/paxeer-network/modules/evm/config"
+	"github.com/sidiora-labs/paxeer-network/modules/evm/types"
+	sdk "github.com/sidiora-labs/paxeer-network/sdk/types"
+	"github.com/sidiora-labs/paxeer-network/utils"
+	"golang.org/x/mod/semver"
+)
+
+const BaseDenom = "uhpx"
+
+func (k Keeper) SetParams(ctx sdk.Context, params types.Params) {
+	k.Paramstore.SetParamSet(ctx, &params)
+}
+
+func (k *Keeper) GetParams(ctx sdk.Context) (params types.Params) {
+	return k.GetParamsIfExists(ctx)
+}
+
+func (k *Keeper) GetParamsPreV580(ctx sdk.Context) (params types.ParamsPreV580) {
+	return k.GetParamsPreV580IfExists(ctx)
+}
+
+func (k *Keeper) GetParamsPreV600(ctx sdk.Context) (params types.ParamsPreV600) {
+	return k.GetParamsPreV600IfExists(ctx)
+}
+
+func (k *Keeper) GetParamsPreV601(ctx sdk.Context) (params types.ParamsPreV601) {
+	return k.GetParamsPreV601IfExists(ctx)
+}
+
+func (k *Keeper) GetParamsPreV606(ctx sdk.Context) (params types.ParamsPreV606) {
+	return k.GetParamsPreV606IfExists(ctx)
+}
+
+func (k *Keeper) GetParamsIfExists(ctx sdk.Context) types.Params {
+	params := types.Params{}
+	k.Paramstore.GetParamSetIfExists(ctx, &params)
+	return params
+}
+
+func (k *Keeper) GetParamsPreV580IfExists(ctx sdk.Context) types.ParamsPreV580 {
+	params := types.ParamsPreV580{}
+	k.Paramstore.GetParamSetIfExists(ctx, &params)
+	return params
+}
+
+func (k *Keeper) GetParamsPreV600IfExists(ctx sdk.Context) types.ParamsPreV600 {
+	params := types.ParamsPreV600{}
+	k.Paramstore.GetParamSetIfExists(ctx, &params)
+	return params
+}
+
+func (k *Keeper) GetParamsPreV601IfExists(ctx sdk.Context) types.ParamsPreV601 {
+	params := types.ParamsPreV601{}
+	k.Paramstore.GetParamSetIfExists(ctx, &params)
+	return params
+}
+
+func (k *Keeper) GetParamsPreV606IfExists(ctx sdk.Context) types.ParamsPreV606 {
+	params := types.ParamsPreV606{}
+	k.Paramstore.GetParamSetIfExists(ctx, &params)
+	return params
+}
+
+func (k *Keeper) GetBaseDenom(ctx sdk.Context) string {
+	return BaseDenom
+}
+
+func (k *Keeper) GetPriorityNormalizer(ctx sdk.Context) sdk.Dec {
+	if !ctx.IsTracing() {
+		return k.GetParams(ctx).PriorityNormalizer
+	}
+	switch {
+	case semver.Compare(ctx.ClosestUpgradeName(), "v5.8.0") < 0:
+		return k.GetParamsPreV580(ctx).PriorityNormalizer
+	case semver.Compare(ctx.ClosestUpgradeName(), "v6.0.0") < 0:
+		return k.GetParamsPreV600(ctx).PriorityNormalizer
+	case semver.Compare(ctx.ClosestUpgradeName(), "v6.0.1") < 0:
+		return k.GetParamsPreV601(ctx).PriorityNormalizer
+	case semver.Compare(ctx.ClosestUpgradeName(), "v6.0.6") < 0:
+		return k.GetParamsPreV606(ctx).PriorityNormalizer
+	default:
+		return k.GetParams(ctx).PriorityNormalizer
+	}
+}
+
+func (k *Keeper) GetBaseFeePerGas(ctx sdk.Context) sdk.Dec {
+	if !ctx.IsTracing() {
+		return k.GetParams(ctx).BaseFeePerGas
+	}
+	switch {
+	case semver.Compare(ctx.ClosestUpgradeName(), "v5.8.0") < 0:
+		return k.GetParamsPreV580(ctx).BaseFeePerGas
+	case semver.Compare(ctx.ClosestUpgradeName(), "v6.0.0") < 0:
+		return k.GetParamsPreV600(ctx).BaseFeePerGas
+	case semver.Compare(ctx.ClosestUpgradeName(), "v6.0.1") < 0:
+		return k.GetParamsPreV601(ctx).BaseFeePerGas
+	case semver.Compare(ctx.ClosestUpgradeName(), "v6.0.6") < 0:
+		return k.GetParamsPreV606(ctx).BaseFeePerGas
+	default:
+		return k.GetParams(ctx).BaseFeePerGas
+	}
+}
+
+func (k *Keeper) GetMaxDynamicBaseFeeUpwardAdjustment(ctx sdk.Context) sdk.Dec {
+	if !ctx.IsTracing() {
+		return k.GetParams(ctx).MaxDynamicBaseFeeUpwardAdjustment
+	}
+	switch {
+	case semver.Compare(ctx.ClosestUpgradeName(), "v6.0.0") < 0:
+		// Not present in pre-6.0.0 params; use default
+		return types.DefaultMaxDynamicBaseFeeUpwardAdjustment
+	case semver.Compare(ctx.ClosestUpgradeName(), "v6.0.1") < 0:
+		return k.GetParamsPreV601(ctx).MaxDynamicBaseFeeUpwardAdjustment
+	case semver.Compare(ctx.ClosestUpgradeName(), "v6.0.6") < 0:
+		return k.GetParamsPreV606(ctx).MaxDynamicBaseFeeUpwardAdjustment
+	default:
+		return k.GetParams(ctx).MaxDynamicBaseFeeUpwardAdjustment
+	}
+}
+
+func (k *Keeper) GetMaxDynamicBaseFeeDownwardAdjustment(ctx sdk.Context) sdk.Dec {
+	if !ctx.IsTracing() {
+		return k.GetParams(ctx).MaxDynamicBaseFeeDownwardAdjustment
+	}
+	switch {
+	case semver.Compare(ctx.ClosestUpgradeName(), "v6.0.0") < 0:
+		// Not present in pre-6.0.0 params; use default
+		return types.DefaultMaxDynamicBaseFeeDownwardAdjustment
+	case semver.Compare(ctx.ClosestUpgradeName(), "v6.0.1") < 0:
+		return k.GetParamsPreV601(ctx).MaxDynamicBaseFeeDownwardAdjustment
+	case semver.Compare(ctx.ClosestUpgradeName(), "v6.0.6") < 0:
+		return k.GetParamsPreV606(ctx).MaxDynamicBaseFeeDownwardAdjustment
+	default:
+		return k.GetParams(ctx).MaxDynamicBaseFeeDownwardAdjustment
+	}
+}
+
+func (k *Keeper) GetMinimumFeePerGas(ctx sdk.Context) sdk.Dec {
+	if !ctx.IsTracing() {
+		return k.GetParams(ctx).MinimumFeePerGas
+	}
+	switch {
+	case semver.Compare(ctx.ClosestUpgradeName(), "v5.8.0") < 0:
+		return k.GetParamsPreV580(ctx).MinimumFeePerGas
+	case semver.Compare(ctx.ClosestUpgradeName(), "v6.0.0") < 0:
+		return k.GetParamsPreV600(ctx).MinimumFeePerGas
+	case semver.Compare(ctx.ClosestUpgradeName(), "v6.0.1") < 0:
+		return k.GetParamsPreV601(ctx).MinimumFeePerGas
+	case semver.Compare(ctx.ClosestUpgradeName(), "v6.0.6") < 0:
+		return k.GetParamsPreV606(ctx).MinimumFeePerGas
+	default:
+		return k.GetParams(ctx).MinimumFeePerGas
+	}
+}
+
+func (k *Keeper) GetMaximumFeePerGas(ctx sdk.Context) sdk.Dec {
+	if !ctx.IsTracing() {
+		return k.GetParams(ctx).MaximumFeePerGas
+	}
+	switch {
+	case semver.Compare(ctx.ClosestUpgradeName(), "v6.0.1") < 0:
+		// Not present in pre-6.0.1 params; use default
+		return types.DefaultMaxFeePerGas
+	case semver.Compare(ctx.ClosestUpgradeName(), "v6.0.6") < 0:
+		return k.GetParamsPreV606(ctx).MaximumFeePerGas
+	default:
+		return k.GetParams(ctx).MaximumFeePerGas
+	}
+}
+
+func (k *Keeper) GetTargetGasUsedPerBlock(ctx sdk.Context) uint64 {
+	if !ctx.IsTracing() {
+		return k.GetParams(ctx).TargetGasUsedPerBlock
+	}
+	switch {
+	case semver.Compare(ctx.ClosestUpgradeName(), "v6.0.0") < 0:
+		// Not present in pre-6.0.0 params; use default
+		return types.DefaultTargetGasUsedPerBlock
+	case semver.Compare(ctx.ClosestUpgradeName(), "v6.0.1") < 0:
+		return k.GetParamsPreV601(ctx).TargetGasUsedPerBlock
+	case semver.Compare(ctx.ClosestUpgradeName(), "v6.0.6") < 0:
+		return k.GetParamsPreV606(ctx).TargetGasUsedPerBlock
+	default:
+		return k.GetParams(ctx).TargetGasUsedPerBlock
+	}
+}
+
+func (k *Keeper) GetDeliverTxHookWasmGasLimit(ctx sdk.Context) uint64 {
+	if !ctx.IsTracing() {
+		return k.GetParams(ctx).DeliverTxHookWasmGasLimit
+	}
+	switch {
+	case semver.Compare(ctx.ClosestUpgradeName(), "v5.8.0") < 0:
+		// Not present in pre-5.8.0 params; use default
+		return types.DefaultDeliverTxHookWasmGasLimit
+	case semver.Compare(ctx.ClosestUpgradeName(), "v6.0.0") < 0:
+		return k.GetParamsPreV600(ctx).DeliverTxHookWasmGasLimit
+	case semver.Compare(ctx.ClosestUpgradeName(), "v6.0.1") < 0:
+		return k.GetParamsPreV601(ctx).DeliverTxHookWasmGasLimit
+	case semver.Compare(ctx.ClosestUpgradeName(), "v6.0.6") < 0:
+		return k.GetParamsPreV606(ctx).DeliverTxHookWasmGasLimit
+	default:
+		return k.GetParams(ctx).DeliverTxHookWasmGasLimit
+	}
+}
+
+func (k *Keeper) GetRegisterPointerDisabled(ctx sdk.Context) bool {
+	if !ctx.IsTracing() {
+		return k.GetParams(ctx).RegisterPointerDisabled
+	}
+	switch {
+	case semver.Compare(ctx.ClosestUpgradeName(), "v6.0.6") < 0:
+		// Not present in pre-5.8.0 params; use default
+		return types.DefaultRegisterPointerDisabled
+	default:
+		return k.GetParams(ctx).RegisterPointerDisabled
+	}
+}
+
+func (k *Keeper) ChainID(ctx sdk.Context) *big.Int {
+	if k.EthReplayConfig.Enabled || k.EthBlockTestConfig.Enabled {
+		// replay is for eth mainnet so always return 1
+		return utils.Big1
+	}
+	// return mapped chain ID
+	return config.GetEVMChainID(ctx.ChainID())
+
+}
+
+/*
+*
+pax gas = evm gas * multiplier
+pax gas price = fee / pax gas = fee / (evm gas * multiplier) = evm gas / multiplier
+*/
+func (k *Keeper) GetEVMGasLimitFromCtx(ctx sdk.Context) uint64 {
+	return k.getEvmGasLimitFromCtx(ctx)
+}
+
+func (k *Keeper) GetCosmosGasLimitFromEVMGas(ctx sdk.Context, evmGas uint64) uint64 {
+	gasMultipler := k.GetPriorityNormalizer(ctx)
+	gasLimitBigInt := sdk.NewDecFromInt(sdk.NewIntFromUint64(evmGas)).Mul(gasMultipler).TruncateInt().BigInt()
+	if gasLimitBigInt.Cmp(utils.BigMaxU64) > 0 {
+		gasLimitBigInt = utils.BigMaxU64
+	}
+	return gasLimitBigInt.Uint64()
+}
+
+// LegacySstoreSetGasEIP2200 is the original hardcoded SSTORE gas cost used before
+// the SSTORE parameterization was introduced (pre-v6.3.0). For blocks created before
+// the PaxSstoreSetGasEIP2200 param existed, we fall back to this value.
+const LegacySstoreSetGasEIP2200 = uint64(20000)
+
+// GetSstoreSetGasEIP2200 returns the SSTORE gas cost for the given context.
+// If the param is not set (0), it falls back to the legacy hardcoded value of 20000.
+// This ensures consistent gas accounting for blocks created before the param existed.
+func (k *Keeper) GetSstoreSetGasEIP2200(ctx sdk.Context) uint64 {
+	sstore := k.GetParams(ctx).PaxSstoreSetGasEip2200
+	if sstore == 0 {
+		return LegacySstoreSetGasEIP2200
+	}
+	return sstore
+}

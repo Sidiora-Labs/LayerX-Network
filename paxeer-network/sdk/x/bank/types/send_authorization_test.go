@@ -1,0 +1,58 @@
+package types_test
+
+import (
+	"testing"
+
+	tmproto "github.com/sidiora-labs/paxeer-network/consensus/proto/tendermint/types"
+	"github.com/sidiora-labs/paxeer-network/node"
+	"github.com/stretchr/testify/require"
+
+	sdk "github.com/sidiora-labs/paxeer-network/sdk/types"
+	"github.com/sidiora-labs/paxeer-network/sdk/x/bank/types"
+)
+
+var (
+	coins1000 = sdk.NewCoins(sdk.NewCoin("uhpx", sdk.NewInt(1000)))
+	coins500  = sdk.NewCoins(sdk.NewCoin("uhpx", sdk.NewInt(500)))
+	fromAddr  = sdk.AccAddress("_____from _____")
+	toAddr    = sdk.AccAddress("_______to________")
+)
+
+func TestSendAuthorization(t *testing.T) {
+	a := app.Setup(t, false, false, false)
+	ctx := a.BaseApp.NewContext(false, tmproto.Header{})
+	authorization := types.NewSendAuthorization(coins1000)
+
+	t.Log("verify authorization returns valid method name")
+	require.Equal(t, authorization.MsgTypeURL(), "/cosmos.bank.v1beta1.MsgSend")
+	require.NoError(t, authorization.ValidateBasic())
+	send := types.NewMsgSend(fromAddr, toAddr, coins1000)
+
+	require.NoError(t, authorization.ValidateBasic())
+
+	t.Log("verify updated authorization returns nil")
+	resp, err := authorization.Accept(ctx, send)
+	require.NoError(t, err)
+	require.True(t, resp.Delete)
+	require.Nil(t, resp.Updated)
+
+	authorization = types.NewSendAuthorization(coins1000)
+	require.Equal(t, authorization.MsgTypeURL(), "/cosmos.bank.v1beta1.MsgSend")
+	require.NoError(t, authorization.ValidateBasic())
+	send = types.NewMsgSend(fromAddr, toAddr, coins500)
+	require.NoError(t, authorization.ValidateBasic())
+	resp, err = authorization.Accept(ctx, send)
+
+	t.Log("verify updated authorization returns remaining spent limit")
+	require.NoError(t, err)
+	require.False(t, resp.Delete)
+	require.NotNil(t, resp.Updated)
+	sendAuth := types.NewSendAuthorization(coins500)
+	require.Equal(t, sendAuth.String(), resp.Updated.String())
+
+	t.Log("expect updated authorization nil after spending remaining amount")
+	resp, err = resp.Updated.Accept(ctx, send)
+	require.NoError(t, err)
+	require.True(t, resp.Delete)
+	require.Nil(t, resp.Updated)
+}

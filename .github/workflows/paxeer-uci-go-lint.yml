@@ -1,0 +1,69 @@
+name: Paxeer / UCI Go Lint
+run-name: Paxeer / UCI / Go Lint
+
+on:
+  pull_request:
+    paths:
+      - 'paxeer-network/**'
+      - '.github/workflows/paxeer-uci-go-lint.yml'
+  merge_group:
+  push:
+    branches:
+      - main
+      - release/**
+    paths:
+      - 'paxeer-network/**'
+      - '.github/workflows/paxeer-uci-go-lint.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event_name == 'push' && github.sha || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go-lint:
+    name: Go
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: paxeer-network
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.25.6'
+          cache-dependency-path: paxeer-network/go.sum
+      - name: Check module tidiness
+        run: |
+          had_sum=$( [ -f go.sum ] && echo true || echo false )
+          go mod tidy
+          git diff --exit-code -- go.mod
+          if [ -f go.sum ]; then
+            if [ "$had_sum" = true ]; then
+              git diff --exit-code -- go.sum
+            else
+              echo "error: go.sum was created by 'go mod tidy' but is not checked in"
+              exit 1
+            fi
+          fi
+      - name: Vet Go files
+        if: always()
+        run: go vet ./...
+      - name: Check formatting
+        if: always()
+        run: |
+          if out="$(gofmt -s -l .)" && test -n "$out"; then
+            echo "Files not gofmt-ed:"
+            echo "$out"
+            exit 1
+          fi
+      - name: Check generated files
+        if: always()
+        run: |
+          go generate -x ./...
+          git diff --exit-code -- .

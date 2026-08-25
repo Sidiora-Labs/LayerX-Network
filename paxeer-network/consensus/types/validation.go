@@ -1,0 +1,395 @@
+package types
+
+import (
+	"bytes"
+	"errors"
+	"fmt"
+
+	"github.com/sidiora-labs/paxeer-network/consensus/crypto"
+	tmmath "github.com/sidiora-labs/paxeer-network/consensus/libs/math"
+	"github.com/sidiora-labs/paxeer-network/consensus/libs/utils"
+)
+
+const batchVerifyThreshold = 2
+
+func shouldBatchVerify(commit *Commit) bool {
+	return len(commit.Signatures) >= batchVerifyThreshold
+}
+
+// TODO(wbanfield): determine if the following comment is still true regarding Gaia.
+
+// VerifyCommit verifies +2/3 of the set had signed the given commit.
+//
+// It checks all the signatures! While it's safe to exit as soon as we have
+// 2/3+ signatures, doing so would impact incentivization logic in the ABCI
+// application that depends on the LastCommitInfo sent in FinalizeBlock, which
+// includes which validators signed. For instance, Gaia incentivizes proposers
+// with a bonus for including more than +2/3 of the signatures.
+func VerifyCommit(chainID string, vals *ValidatorSet, blockID BlockID,
+	height int64, commit *Commit) error {
+	// run a basic validation of the arguments
+	if err := verifyBasicValsAndCommit(vals, commit, height, blockID); err != nil {
+		return fmt.Errorf("verifyBasicValsAndCommit(): %w", err)
+	}
+
+	// calculate voting power needed. Note that total voting power is capped to
+	// 1/8th of max int64 so this operation should never overflow
+	votingPowerNeeded := vals.TotalVotingPower() * 2 / 3
+
+	// ignore all absent signatures
+	ignore := func(c CommitSig) bool { return c.BlockIDFlag == BlockIDFlagAbsent }
+
+	// only count the signatures that are for the block
+	count := func(c CommitSig) bool { return c.BlockIDFlag == BlockIDFlagCommit }
+
+	// attempt to batch verify
+	if shouldBatchVerify(commit) {
+		return verifyCommitBatch(chainID, vals, commit,
+			votingPowerNeeded, ignore, count, true, true)
+	}
+
+	// if verification failed or is not supported then fallback to single verification
+	return verifyCommitSingle(chainID, vals, commit, votingPowerNeeded,
+		ignore, count, true, true)
+}
+
+// LIGHT CLIENT VERIFICATION METHODS
+
+// VerifyCommitLight verifies +2/3 of the set had signed the given commit.
+//
+// This method is primarily used by the light client and does NOT check all the
+// signatures.
+func VerifyCommitLight(chainID string, vals *ValidatorSet, blockID BlockID,
+	height int64, commit *Commit) error {
+	return verifyCommitLightInternal(chainID, vals, blockID, height, commit, false)
+}
+
+// VerifyCommitLightAllSignatures verifies +2/3 of the set had signed the given commit.
+//
+// This method DOES check all the
+// signatures.
+func VerifyCommitLightAllSignatures(chainID string, vals *ValidatorSet, blockID BlockID,
+	height int64, commit *Commit) error {
+	return verifyCommitLightInternal(chainID, vals, blockID, height, commit, true)
+}
+
+func verifyCommitLightInternal(chainID string, vals *ValidatorSet, blockID BlockID,
+	height int64, commit *Commit, countAllSignatures bool) error {
+	// run a basic validation of the arguments
+	if err := verifyBasicValsAndCommit(vals, commit, height, blockID); err != nil {
+		return err
+	}
+
+	// calculate voting power needed
+	votingPowerNeeded := vals.TotalVotingPower() * 2 / 3
+
+	// ignore all commit signatures that are not for the block
+	ignore := func(c CommitSig) bool { return c.BlockIDFlag != BlockIDFlagCommit }
+
+	// count all the remaining signatures
+	count := func(c CommitSig) bool { return true }
+
+	// attempt to batch verify
+	if shouldBatchVerify(commit) {
+		return verifyCommitBatch(chainID, vals, commit,
+			votingPowerNeeded, ignore, count, countAllSignatures, true)
+	}
+
+	// if verification failed or is not supported then fallback to single verification
+	return verifyCommitSingle(chainID, vals, commit, votingPowerNeeded,
+		ignore, count, countAllSignatures, true)
+}
+
+// VerifyCommitLightTrusting verifies that trustLevel of the validator set signed
+// this commit.
+//
+// NOTE the given validators do not necessarily correspond to the validator set
+// for this commit, but there may be some intersection.
+//
+// This method is primarily used by the light client and does NOT check all the
+// signatures.
+func VerifyCommitLightTrusting(chainID string, vals *ValidatorSet, commit *Commit, trustLevel tmmath.Fraction) error {
+	return verifyCommitLightTrustingInternal(chainID, vals, commit, trustLevel, false)
+}
+
+// VerifyCommitLightTrustingAllSignatures verifies that trustLevel of the validator set signed
+// this commit.
+//
+// NOTE the given validators do not necessarily correspond to the validator set
+// for this commit, but there may be some intersection.
+//
+// This method DOES check all the signatures.
+func VerifyCommitLightTrustingAllSignatures(chainID string, vals *ValidatorSet, commit *Commit, trustLevel tmmath.Fraction) error {
+	return verifyCommitLightTrustingInternal(chainID, vals, commit, trustLevel, true)
+}
+
+func verifyCommitLightTrustingInternal(chainID string, vals *ValidatorSet, commit *Commit, trustLevel tmmath.Fraction, countAllSignatures bool) error {
+	// sanity checks
+	if vals == nil {
+		return errors.New("nil validator set")
+	}
+	if trustLevel.Denominator == 0 {
+		return errors.New("trustLevel has zero Denominator")
+	}
+	if commit == nil {
+		return errors.New("nil commit")
+	}
+
+	// safely calculate voting power needed.
+	totalVotingPowerMulByNumerator, overflow := safeMul(vals.TotalVotingPower(), int64(trustLevel.Numerator)) //nolint:gosec // trustLevel.Numerator is a small trusted config value; no overflow risk
+	if overflow {
+		return errors.New("int64 overflow while calculating voting power needed. please provide smaller trustLevel numerator")
+	}
+	votingPowerNeeded := totalVotingPowerMulByNumerator / int64(trustLevel.Denominator) //nolint:gosec // trustLevel.Denominator is a small trusted config value; no overflow risk
+
+	// ignore all commit signatures that are not for the block
+	ignore := func(c CommitSig) bool { return c.BlockIDFlag != BlockIDFlagCommit }
+
+	// count all the remaining signatures
+	count := func(c CommitSig) bool { return true }
+
+	// attempt to batch verify commit. As the validator set doesn't necessarily
+	// correspond with the validator set that signed the block we need to look
+	// up by address rather than index.
+	if shouldBatchVerify(commit) {
+		return verifyCommitBatch(chainID, vals, commit,
+			votingPowerNeeded, ignore, count, countAllSignatures, false)
+	}
+
+	// attempt with single verification
+	return verifyCommitSingle(chainID, vals, commit, votingPowerNeeded,
+		ignore, count, countAllSignatures, false)
+}
+
+// ValidateHash returns an error if the hash is not empty, but its
+// size != crypto.HashSize.
+func ValidateHash(h []byte) error {
+	if len(h) > 0 && len(h) != crypto.HashSize {
+		return fmt.Errorf("expected size to be %d bytes, got %d bytes",
+			crypto.HashSize,
+			len(h),
+		)
+	}
+	return nil
+}
+
+// Batch verification
+
+// verifyCommitBatch batch verifies commits.  This routine is equivalent
+// to verifyCommitSingle in behavior, just faster iff every signature in the
+// batch is valid.
+//
+// Note: The caller is responsible for checking to see if this routine is
+// usable via `shouldVerifyBatch(vals, commit)`.
+func verifyCommitBatch(
+	chainID string,
+	vals *ValidatorSet,
+	commit *Commit,
+	// misnamed argument - votingPowerNeeded is not enough for commit to be valid.
+	// It has to be MORE than votingPowerNeeded.
+	votingPowerNeeded int64,
+	ignoreSig func(CommitSig) bool,
+	countSig func(CommitSig) bool,
+	countAllSignatures bool,
+	lookUpByIndex bool,
+) error {
+	var (
+		val                *Validator
+		valIdx             int32
+		talliedVotingPower int64
+		seenVals           = make(map[int32]int, len(commit.Signatures))
+		batchSigIdxs       = make([]int, 0, len(commit.Signatures))
+	)
+	if len(commit.Signatures) < batchVerifyThreshold {
+		return fmt.Errorf("insufficient signatures for batch verification")
+	}
+
+	bv := crypto.NewBatchVerifier()
+
+	for idx, commitSig := range commit.Signatures {
+		// skip over signatures that should be ignored
+		if ignoreSig(commitSig) {
+			continue
+		}
+
+		// If the vals and commit have a 1-to-1 correspondance we can retrieve
+		// them by index else we need to retrieve them by address
+		if lookUpByIndex {
+			val = vals.Validators[idx]
+			if !bytes.Equal(val.Address, commitSig.ValidatorAddress) {
+				return fmt.Errorf("commit.Signatures[%v].ValidatorAddress = %v, want %v", idx, commitSig.ValidatorAddress, val.Address)
+			}
+		} else {
+			var ok bool
+			valIdx, val, ok = vals.GetByAddress(commitSig.ValidatorAddress)
+
+			// if the signature doesn't belong to anyone in the validator set
+			// then we just skip over it
+			if !ok {
+				continue
+			}
+
+			// because we are getting validators by address we need to make sure
+			// that the same validator doesn't commit twice
+			if firstIndex, ok := seenVals[valIdx]; ok {
+				secondIndex := idx
+				return fmt.Errorf("double vote from %v (%d and %d)", val, firstIndex, secondIndex)
+			}
+			seenVals[valIdx] = idx
+		}
+
+		// Validate signature.
+		voteSignBytes, ok := commit.VoteSignBytes(chainID, int32(idx)) //nolint:gosec // idx is bounded by len(commit.Signatures) which is validated against validator set size
+		if !ok {
+			panic("VoteSignBytes() failed unexpectedly")
+		}
+
+		// add the key, sig and message to the verifier
+		sig, ok := commitSig.Signature.Get()
+		if !ok {
+			return fmt.Errorf("missing signature at idx %v", idx)
+		}
+		bv.Add(val.PubKey, voteSignBytes, sig)
+		batchSigIdxs = append(batchSigIdxs, idx)
+
+		// If this signature counts then add the voting power of the validator
+		// to the tally
+		if countSig(commitSig) {
+			talliedVotingPower += val.VotingPower
+		}
+
+		// if we don't need to verify all signatures and already have sufficient
+		// voting power we can break from batching and verify all the signatures
+		if !countAllSignatures && talliedVotingPower > votingPowerNeeded {
+			break
+		}
+	}
+
+	// ensure that we have batched together enough signatures to exceed the
+	// voting power needed else there is no need to even verify
+	if got, needed := talliedVotingPower, votingPowerNeeded; got <= needed {
+		return ErrNotEnoughVotingPowerSigned{Got: got, Needed: needed}
+	}
+
+	// attempt to verify the batch.
+	if err := bv.Verify(); err != nil {
+		err := utils.ErrorAs[crypto.ErrBadSig](err).OrPanic("unexpected error type")
+		// go back from the batch index to the commit.Signatures index
+		idx := batchSigIdxs[err.Idx]
+		sig := commit.Signatures[idx]
+		return errBadSig{fmt.Errorf("wrong signature (#%d): %X", idx, sig)}
+	}
+	return nil
+}
+
+// Single Verification
+
+// verifyCommitSingle single verifies commits.
+// If a key does not support batch verification, or batch verification fails this will be used
+// This method is used to check all the signatures included in a commit.
+// It is used in consensus for validating a block LastCommit.
+// CONTRACT: both commit and validator set should have passed validate basic
+func verifyCommitSingle(
+	chainID string,
+	vals *ValidatorSet,
+	commit *Commit,
+	// misnamed argument - votingPowerNeeded is not enough for commit to be valid.
+	// It has to be MORE than votingPowerNeeded.
+	votingPowerNeeded int64,
+	ignoreSig func(CommitSig) bool,
+	countSig func(CommitSig) bool,
+	countAllSignatures bool,
+	lookUpByIndex bool,
+) error {
+	var (
+		val                *Validator
+		valIdx             int32
+		talliedVotingPower int64
+		seenVals           = make(map[int32]int, len(commit.Signatures))
+	)
+	for idx, commitSig := range commit.Signatures {
+		if ignoreSig(commitSig) {
+			continue
+		}
+
+		// If the vals and commit have a 1-to-1 correspondance we can retrieve
+		// them by index else we need to retrieve them by address
+		if lookUpByIndex {
+			val = vals.Validators[idx]
+			if !bytes.Equal(val.Address, commitSig.ValidatorAddress) {
+				return fmt.Errorf("commit.Signatures[%v].ValidatorAddress = %v, want %v", idx, commitSig.ValidatorAddress, val.Address)
+			}
+		} else {
+			var ok bool
+			valIdx, val, ok = vals.GetByAddress(commitSig.ValidatorAddress)
+
+			// if the signature doesn't belong to anyone in the validator set
+			// then we just skip over it
+			if !ok {
+				continue
+			}
+
+			// because we are getting validators by address we need to make sure
+			// that the same validator doesn't commit twice
+			if firstIndex, ok := seenVals[valIdx]; ok {
+				secondIndex := idx
+				return fmt.Errorf("double vote from %v (%d and %d)", val, firstIndex, secondIndex)
+			}
+			seenVals[valIdx] = idx
+		}
+
+		voteSignBytes, ok := commit.VoteSignBytes(chainID, int32(idx)) //nolint:gosec // idx is bounded by len(commit.Signatures) which is validated against validator set size
+		if !ok {
+			panic("VoteSignBytes() failed unexpectedly")
+		}
+		sig, ok := commitSig.Signature.Get()
+		if !ok {
+			return fmt.Errorf("missing signature at idx %v", idx)
+		}
+		if err := val.PubKey.Verify(voteSignBytes, sig); err != nil {
+			return errBadSig{fmt.Errorf("wrong signature (#%d): %v", idx, sig)}
+		}
+
+		// If this signature counts then add the voting power of the validator
+		// to the tally
+		if countSig(commitSig) {
+			talliedVotingPower += val.VotingPower
+		}
+
+		// check if we have enough signatures and can thus exit early
+		if !countAllSignatures && talliedVotingPower > votingPowerNeeded {
+			return nil
+		}
+	}
+
+	if got, needed := talliedVotingPower, votingPowerNeeded; got <= needed {
+		return ErrNotEnoughVotingPowerSigned{Got: got, Needed: needed}
+	}
+
+	return nil
+}
+
+func verifyBasicValsAndCommit(vals *ValidatorSet, commit *Commit, height int64, blockID BlockID) error {
+	if vals == nil {
+		return errors.New("nil validator set")
+	}
+
+	if commit == nil {
+		return errors.New("nil commit")
+	}
+
+	if vals.Size() != len(commit.Signatures) {
+		return NewErrInvalidCommitSignatures(vals.Size(), len(commit.Signatures))
+	}
+
+	// Validate Height and BlockID.
+	if height != commit.Height {
+		return NewErrInvalidCommitHeight(height, commit.Height)
+	}
+	if !blockID.Equals(commit.BlockID) {
+		return errBadBlockID{fmt.Errorf("invalid commit -- wrong block ID: want %v, got %v",
+			blockID, commit.BlockID)}
+	}
+
+	return nil
+}

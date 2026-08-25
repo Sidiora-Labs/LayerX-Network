@@ -1,0 +1,59 @@
+name: Paxeer / Build Docker Image
+
+on:
+  pull_request:
+    branches:
+      - main
+      - release/**
+    paths:
+      - 'paxeer-network/**'
+      - '.github/workflows/paxeer-docker-build.yml'
+  merge_group:
+    branches:
+      - main
+      - release/**
+  push:
+    branches:
+      - main
+      - release/**
+    paths:
+      - 'paxeer-network/**'
+      - '.github/workflows/paxeer-docker-build.yml'
+
+defaults:
+  run:
+    working-directory: paxeer-network
+
+jobs:
+  pax-images:
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+      contents: read
+    steps:
+      -
+        name: Check out the repo
+        uses: actions/checkout@v5
+      -
+        name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        if: env.DOCKERHUB_USERNAME != ''
+        env:
+            DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      -
+        name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      -
+        name: Login Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Validate Docker build (amd64)
+        run: docker build --platform=linux/amd64 --build-arg PAX_CHAIN_REF="${{ github.sha }}" .

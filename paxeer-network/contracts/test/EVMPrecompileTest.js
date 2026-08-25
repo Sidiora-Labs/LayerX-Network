@@ -1,0 +1,569 @@
+const { execSync } = require('child_process');
+const { expect } = require("chai");
+const fs = require('fs');
+const path = require('path');
+
+const { expectRevert } = require('@openzeppelin/test-helpers');
+const { setupSigners, getAdmin, deployWasm, storeWasm, execute, isDocker, ABI, createTokenFactoryTokenAndMint, getPaxBalance, rawHttpDebugTraceWithCallTracer, proposeParamChange} = require("./lib");
+
+function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+describe("EVM Precompile Tester", function () {
+
+    let accounts;
+    let admin;
+
+    before(async function () {
+        accounts = await setupSigners(await hre.ethers.getSigners());
+        admin = await getAdmin();
+    })
+
+    describe("EVM Bank Precompile Tester", function () {
+        const BankPrecompileContract = '0x0000000000000000000000000000000000001001';
+        let bank;
+
+        before(async function () {
+            const signer = accounts[0].signer
+            const contractABIPath = '../../precompiles/bank/abi.json';
+            const contractABI = require(contractABIPath);
+            // Get a contract instance
+            bank = new ethers.Contract(BankPrecompileContract, contractABI, signer);
+        });
+
+        it("Fails with 'execution reverted' not 'panic occurred' when insufficient gas is provided", async function () {
+            try {
+                const bankSendTx = await bank.sendNative(accounts[1].paxAddress, {value: 1, gasLimit: 40000});
+                await bankSendTx.wait();
+            } catch (error) {
+                const txHash = error.receipt.hash
+                // should not get "panic occurred"
+                const trace = await rawHttpDebugTraceWithCallTracer(txHash)
+                expect(trace.result.error).to.not.include("panic")
+                expect(trace.result.error).to.include("execution reverted")
+            }
+        });
+    });
+
+    describe("EVM Addr Precompile Tester", function () {
+        const AddrPrecompileContract = '0x0000000000000000000000000000000000001004';
+        let addr;
+
+        before(async function () {
+            const signer = accounts[0].signer
+            const contractABIPath = '../../precompiles/addr/abi.json';
+            const contractABI = require(contractABIPath);
+            // Get a contract instance
+            addr = new ethers.Contract(AddrPrecompileContract, contractABI, signer);
+        });
+
+        it("Associates successfully", async function () {
+            const unassociatedWallet = hre.ethers.Wallet.createRandom();
+            try {
+                await addr.getPaxAddr(unassociatedWallet.address);
+                expect.fail("Expected an error here since we look up an unassociated address");
+            } catch (error) {
+                expect(error).to.have.property('message').that.includes('execution reverted');
+            }
+            
+            const message = `Please sign this message to link your EVM and Pax addresses. No PAX will be spent as a result of this signature.\n\n`;
+            const messageLength = Buffer.from(message, 'utf8').length;
+            const signatureHex = await unassociatedWallet.signMessage(message);
+
+            const sig = hre.ethers.Signature.from(signatureHex);
+            
+            const appendedMessage = `\x19Ethereum Signed Message:\n${messageLength}${message}`;
+            const associatedAddrs = await addr.associate(`0x${sig.v-27}`, sig.r, sig.s, appendedMessage)
+            const addrs = await associatedAddrs.wait();
+            expect(addrs).to.not.be.null;
+
+            // Verify that addresses are now associated.
+            const paxAddr = await addr.getPaxAddr(unassociatedWallet.address);
+            expect(paxAddr).to.not.be.null;
+        });
+
+        it("Associates with Public Key successfully", async function () {
+            const unassociatedWallet = hre.ethers.Wallet.createRandom();
+            try {
+                await addr.getPaxAddr(unassociatedWallet.address);
+                expect.fail("Expected an error here since we look up an unassociated address");
+            } catch (error) {
+                expect(error).to.have.property('message').that.includes('execution reverted');
+            }
+
+            // Use the PublicKey without the '0x' prefix.
+            const associatedAddrs = await addr.associatePubKey(unassociatedWallet.publicKey.slice(2))
+            const addrs = await associatedAddrs.wait();
+            expect(addrs).to.not.be.null;
+
+            // Verify that addresses are now associated.
+            const paxAddr = await addr.getPaxAddr(unassociatedWallet.address);
+            expect(paxAddr).to.not.be.null;
+        });
+
+        it("Fails with 'execution reverted' not 'panic occurred' when insufficient gas is provided", async function () {
+            const unassociatedWallet = hre.ethers.Wallet.createRandom();
+            try {
+                // provide less than gas than needed to execute the transaction
+                const associatedAddrs = await addr.associatePubKey(unassociatedWallet.publicKey.slice(2), {gasLimit: 52000});
+                await associatedAddrs.wait();
+                expect.fail("Expected an error here since we provided insufficient gas");
+            } catch (error) {
+                const txHash = error.receipt.hash
+                // should not get "panic occurred"
+                const trace = await rawHttpDebugTraceWithCallTracer(txHash)
+                expect(trace.result.error).to.not.include("panic");
+                expect(trace.result.error).to.include("execution reverted");
+            }
+        });
+    });
+
+    describe("EVM Gov Precompile Tester", function () {
+        const GovPrecompileContract = '0x0000000000000000000000000000000000001006';
+        let gov;
+        let govProposal;
+
+        before(async function () {
+            const proposalSpec = require('./param_change_proposal.json');
+            govProposal = await proposeParamChange(
+                proposalSpec.title,
+                proposalSpec.description,
+                proposalSpec.changes,
+                "200000000uhpx",
+                "20000uhpx",
+                "admin",
+                proposalSpec.is_expedited,
+            );
+
+            const signer = accounts[0].signer
+            const contractABIPath = '../../precompiles/gov/abi.json';
+            const contractABI = require(contractABIPath);
+            // Get a contract instance
+            gov = new ethers.Contract(GovPrecompileContract, contractABI, signer);
+        });
+
+        it("Gov deposit", async function () {
+            const depositAmount = ethers.parseEther('0.01');
+            const deposit = await gov.deposit(govProposal, {
+                value: depositAmount,
+            })
+            const receipt = await deposit.wait();
+            expect(receipt.status).to.equal(1);
+        });
+    });
+
+    // TODO: Update when we add distribution query precompiles
+    describe("EVM Distribution Precompile Tester", function () {
+        const DistributionPrecompileContract = '0x0000000000000000000000000000000000001007';
+        let distribution;
+        before(async function () {
+            const signer = accounts[0].signer;
+            const contractABIPath = '../../precompiles/distribution/abi.json';
+            const contractABI = require(contractABIPath);
+            // Get a contract instance
+            distribution = new ethers.Contract(DistributionPrecompileContract, contractABI, signer);
+        });
+
+        it("Distribution set withdraw address", async function () {
+            const setWithdraw = await distribution.setWithdrawAddress(accounts[0].evmAddress)
+            const receipt = await setWithdraw.wait();
+            expect(receipt.status).to.equal(1);
+        });
+        it("Should query rewards and get non null response", async function () {
+            const rewards = await distribution.rewards(accounts[0].evmAddress)
+            expect(rewards).to.not.be.null;
+        });
+    });
+
+    // TODO: Update when we add staking query precompiles
+    describe("EVM Staking Precompile Tester", function () {
+        const StakingPrecompileContract = '0x0000000000000000000000000000000000001005';
+        let validatorAddr;
+        let signer;
+        let staking;
+
+        before(async function () {
+            const validatorsResponse = JSON.parse(await execute("paxd q staking validators -o json"));
+            const validators = Array.isArray(validatorsResponse.validators) ? validatorsResponse.validators : [];
+
+            const isJailed = (validator) => validator?.jailed === true || validator?.jailed === "true";
+            const isBonded = (validator) => {
+                const status = validator?.status;
+                if (typeof status === "number") {
+                    return status === 3;
+                }
+                if (typeof status === "string") {
+                    const normalized = status.toUpperCase();
+                    return normalized === "BOND_STATUS_BONDED" || normalized === "3" || normalized.endsWith("BONDED");
+                }
+                return false;
+            };
+
+            const nonJailedValidators = validators.filter((validator) => !isJailed(validator));
+            const selectedValidator =
+                nonJailedValidators.find(isBonded) ??
+                nonJailedValidators[0] ??
+                validators[0];
+
+            if (!selectedValidator || !selectedValidator.operator_address) {
+                throw new Error("No validator available for staking precompile test");
+            }
+
+            validatorAddr = selectedValidator.operator_address;
+            signer = accounts[0].signer;
+
+            const contractABIPath = '../../precompiles/staking/abi.json';
+            const contractABI = require(contractABIPath);
+
+            staking = new ethers.Contract(StakingPrecompileContract, contractABI, signer);
+        });
+
+        it("Staking delegate", async function () {
+            const delegateAmount = ethers.parseEther('0.01');
+            const delegate = await staking.delegate(validatorAddr, {
+                value: delegateAmount,
+            });
+            const receipt = await delegate.wait();
+            expect(receipt.status).to.equal(1);
+
+            let delegation;
+            for (let attempt = 0; attempt < 10; attempt++) {
+                try {
+                    delegation = await staking.delegation(accounts[0].evmAddress, validatorAddr);
+                    if (delegation && delegation[0] && delegation[0][0] > 0n) {
+                        break;
+                    }
+                } catch (_error) {
+                    // Delegation query can race right after delegate on CI.
+                }
+                await sleep(250);
+            }
+
+            expect(delegation, "delegation should become queryable after delegate").to.not.be.undefined;
+            expect(delegation).to.not.be.null;
+            const delegatedAmount = delegation[0][0];
+            expect(delegatedAmount).to.equal(10000n);
+
+            // Extra-safe undelegate strategy: retry with larger gas ceilings since
+            // staking queue writes can fluctuate block-to-block in CI.
+            const undelegateGasLimits = [1_000_000, 2_000_000, 5_000_000];
+            let undelegateReceipt = null;
+            let undelegateError = null;
+
+            for (const gasLimit of undelegateGasLimits) {
+                try {
+                    const undelegate = await staking.undelegate(validatorAddr, delegatedAmount, {
+                        gasLimit,
+                    });
+                    undelegateReceipt = await undelegate.wait();
+                    if (undelegateReceipt.status === 1) {
+                        break;
+                    }
+                    undelegateError = new Error(`undelegate failed with status=${undelegateReceipt.status} gasLimit=${gasLimit}`);
+                } catch (error) {
+                    undelegateError = error;
+                }
+            }
+
+            if (!undelegateReceipt || undelegateReceipt.status !== 1) {
+                throw undelegateError || new Error("undelegate failed for all gas limits");
+            }
+
+            expect(undelegateReceipt.status).to.equal(1);
+
+            let delegationRemoved = false;
+            for (let attempt = 0; attempt < 10; attempt++) {
+                try {
+                    await staking.delegation(accounts[0].evmAddress, validatorAddr);
+                } catch (error) {
+                    expect(error).to.have.property('message').that.includes('execution reverted');
+                    delegationRemoved = true;
+                    break;
+                }
+                await sleep(250);
+            }
+
+            expect(
+                delegationRemoved,
+                "delegation should eventually disappear after undelegate"
+            ).to.equal(true);
+        });
+    });
+
+    describe("EVM Oracle Precompile Tester", function () {
+        const OraclePrecompileContract = '0x0000000000000000000000000000000000001008';
+        let oracle;
+
+        before(async function() {
+            // Oracle checks are only relevant in docker-based integration runs.
+            if(!await isDocker()) {
+                this.skip()
+                return;
+            }
+
+            const contractABIPath = '../../precompiles/oracle/abi.json';
+            const contractABI = require(contractABIPath);
+            // Get a contract instance
+            oracle = new ethers.Contract(OraclePrecompileContract, contractABI, accounts[0].signer);
+        });
+
+        it("Oracle CLI TWAP query should fail without feeder data", async function () {
+            let error;
+            try {
+                await execute("paxd q oracle twaps 3600 -o json");
+            } catch (e) {
+                error = e;
+            }
+            expect(error, "twaps query should fail when no feeder is running").to.exist;
+            expect(error.message).to.include("No data for the twap calculation");
+        });
+
+        it("Oracle precompile TWAP query should hard-fail without feeder data", async function () {
+            let error;
+            try {
+                await oracle.getOracleTwaps(3600);
+            } catch (e) {
+                error = e;
+            }
+            expect(error, "precompile twaps query should hard-fail when oracle is retired").to.exist;
+            expect(error.message).to.include("oracle precompile is retired");
+        });
+    });
+
+    describe("EVM Wasm Precompile Tester", function () {
+        const WasmPrecompileContract = '0x0000000000000000000000000000000000001002';
+        let wasmCodeID;
+        let wasmContractAddress;
+        let wasmd;
+        let owner;
+        let denom;
+        let admin;
+
+        before(async function () {
+            const counterWasm = '../integration_test/contracts/counter_parallel.wasm';
+            wasmCodeID = await storeWasm(counterWasm);
+
+            const counterParallelWasm = '../integration_test/contracts/counter_parallel.wasm'
+            wasmContractAddress = await deployWasm(counterParallelWasm, accounts[0].paxAddress, "counter", {count: 0});
+            owner = accounts[0].signer;
+
+            const contractABIPath = '../../precompiles/wasmd/abi.json';
+            const contractABI = require(contractABIPath);
+            // Get a contract instance
+            wasmd = new ethers.Contract(WasmPrecompileContract, contractABI, owner);
+
+            accounts = await setupSigners(await hre.ethers.getSigners())
+            admin = await getAdmin()
+            const random_num = Math.floor(Math.random() * 10000)
+            denom = await createTokenFactoryTokenAndMint(`native-pointer-test-${random_num}`, 1000, accounts[0].paxAddress);
+        });
+
+        it("Wasm Precompile Instantiate", async function () {
+            const encoder = new TextEncoder();
+
+            const instantiateMsg = {count: 2};
+            const instantiateStr = JSON.stringify(instantiateMsg);
+            const instantiateBz = encoder.encode(instantiateStr);
+
+            const coins = [];
+            const coinsStr = JSON.stringify(coins);
+            const coinsBz = encoder.encode(coinsStr);
+
+            const instantiate = await wasmd.instantiate(wasmCodeID, "", instantiateBz, "counter-contract", coinsBz);
+            const receipt = await instantiate.wait();
+            expect(receipt.status).to.equal(1);
+        });
+
+        it("Wasm Precompile Execute", async function () {
+            const encoder = new TextEncoder();
+
+            const queryCountMsg = {get_count: {}};
+            const queryStr = JSON.stringify(queryCountMsg);
+            const queryBz = encoder.encode(queryStr);
+            const initialCountBz = await wasmd.query(wasmContractAddress, queryBz);
+            const initialCount = parseHexToJSON(initialCountBz)
+
+            const incrementMsg = {increment: {}};
+            const incrementStr = JSON.stringify(incrementMsg);
+            const incrementBz = encoder.encode(incrementStr);
+
+            const coins = [];
+            const coinsStr = JSON.stringify(coins);
+            const coinsBz = encoder.encode(coinsStr);
+
+            const response = await wasmd.execute(wasmContractAddress, incrementBz, coinsBz);
+            const receipt = await response.wait();
+            expect(receipt.status).to.equal(1);
+
+            const finalCountBz = await wasmd.query(wasmContractAddress, queryBz);
+            const finalCount = parseHexToJSON(finalCountBz)
+            expect(finalCount.count).to.equal(initialCount.count + 1);
+        });
+
+        it("Wasm Precompile Batch Execute", async function () {
+            const encoder = new TextEncoder();
+
+            const queryCountMsg = {get_count: {}};
+            const queryStr = JSON.stringify(queryCountMsg);
+            const queryBz = encoder.encode(queryStr);
+            const initialCountBz = await wasmd.query(wasmContractAddress, queryBz);
+            const initialCount = parseHexToJSON(initialCountBz)
+
+            const incrementMsg = {increment: {}};
+            const incrementStr = JSON.stringify(incrementMsg);
+            const incrementBz = encoder.encode(incrementStr);
+
+            const coins = [];
+            const coinsStr = JSON.stringify(coins);
+            const coinsBz = encoder.encode(coinsStr);
+
+            const executeBatch = [
+                {
+                    contractAddress: wasmContractAddress,
+                    msg: incrementBz,
+                    coins: coinsBz,
+                },
+                {
+                    contractAddress: wasmContractAddress,
+                    msg: incrementBz,
+                    coins: coinsBz,
+                },
+                {
+                    contractAddress: wasmContractAddress,
+                    msg: incrementBz,
+                    coins: coinsBz,
+                },
+                {
+                    contractAddress: wasmContractAddress,
+                    msg: incrementBz,
+                    coins: coinsBz,
+                },
+            ];
+
+            const response = await wasmd.execute_batch(executeBatch);
+            const receipt = await response.wait();
+            expect(receipt.status).to.equal(1);
+
+            const finalCountBz = await wasmd.query(wasmContractAddress, queryBz);
+            const finalCount = parseHexToJSON(finalCountBz)
+            expect(finalCount.count).to.equal(initialCount.count + 4);
+        });
+
+        it("Wasm Precompile Send Coins", async function () {
+            const encoder = new TextEncoder();
+
+            const incrementMsg = {increment: {}};
+            const incrementStr = JSON.stringify(incrementMsg);
+            const incrementBz = encoder.encode(incrementStr);
+
+            const coins = [
+                {
+                    denom: denom,
+                    amount: "10",
+                },
+                {
+                    denom: "uhpx",
+                    amount: "1000000",
+                },
+            ];
+            const coinsStr = JSON.stringify(coins);
+            const coinsBz = encoder.encode(coinsStr);
+
+            const oldBalance = await getPaxBalance(wasmContractAddress);
+            const oldTokenBalance = await getPaxBalance(wasmContractAddress, denom);
+
+            const oldUserTokenBalance = await getPaxBalance(accounts[0].paxAddress, denom);
+
+            const response = await wasmd.execute(wasmContractAddress, incrementBz, coinsBz, {value: ethers.parseUnits('1.0', 18)});
+            const receipt = await response.wait();
+            expect(receipt.status).to.equal(1);
+
+            // uhpx assertions
+            const uhpxBalance = await getPaxBalance(wasmContractAddress);
+            expect(uhpxBalance).to.equal(oldBalance + 1000000);
+
+            // token assertions
+            const contractTokenBalance = await getPaxBalance(wasmContractAddress, denom);
+            expect(contractTokenBalance).to.equal(oldTokenBalance + 10);
+            const userTokenBalance = await getPaxBalance(accounts[0].paxAddress, denom);
+            expect(userTokenBalance).to.equal(oldUserTokenBalance - 10);
+
+        });
+
+        it("Wasm Precompile Batch Execute Send Coins", async function () {
+            const encoder = new TextEncoder();
+
+            const incrementMsg = {increment: {}};
+            const incrementStr = JSON.stringify(incrementMsg);
+            const incrementBz = encoder.encode(incrementStr);
+
+            const coins = [
+                {
+                    denom: denom,
+                    amount: "10",
+                },
+                {
+                    denom: "uhpx",
+                    amount: "1000000",
+                },
+            ];
+            const coinsStr = JSON.stringify(coins);
+            const coinsBz = encoder.encode(coinsStr);
+
+            const oldBalance = await getPaxBalance(wasmContractAddress);
+            const oldTokenBalance = await getPaxBalance(wasmContractAddress, denom);
+
+            const oldUserTokenBalance = await getPaxBalance(accounts[0].paxAddress, denom);
+
+            const executeBatch = [
+                {
+                    contractAddress: wasmContractAddress,
+                    msg: incrementBz,
+                    coins: coinsBz,
+                },
+                {
+                    contractAddress: wasmContractAddress,
+                    msg: incrementBz,
+                    coins: coinsBz,
+                },
+                {
+                    contractAddress: wasmContractAddress,
+                    msg: incrementBz,
+                    coins: coinsBz,
+                },
+                {
+                    contractAddress: wasmContractAddress,
+                    msg: incrementBz,
+                    coins: coinsBz,
+                },
+            ];
+
+            const response = await wasmd.execute_batch(executeBatch, {value: ethers.parseUnits('4.0', 18)});
+            const receipt = await response.wait();
+            expect(receipt.status).to.equal(1);
+
+            // uhpx assertions
+            const uhpxBalance = await getPaxBalance(wasmContractAddress);
+            expect(uhpxBalance).to.equal(oldBalance + 4000000);
+
+            // token assertions
+            const contractTokenBalance = await getPaxBalance(wasmContractAddress, denom);
+            expect(contractTokenBalance).to.equal(oldTokenBalance + 40);
+            const userTokenBalance = await getPaxBalance(accounts[0].paxAddress, denom);
+            expect(userTokenBalance).to.equal(oldUserTokenBalance - 40);
+
+        });
+
+    });
+
+});
+
+function parseHexToJSON(hexStr) {
+    // Remove the 0x prefix
+    hexStr = hexStr.slice(2);
+    // Convert to bytes
+    const bytes = Buffer.from(hexStr, 'hex');
+    // Convert to JSON
+    return JSON.parse(bytes.toString());
+}

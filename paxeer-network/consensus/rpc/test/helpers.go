@@ -1,0 +1,136 @@
+package rpctest
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"testing"
+	"time"
+
+	"github.com/sidiora-labs/paxeer-network/consensus/abci/example/kvstore"
+	abci "github.com/sidiora-labs/paxeer-network/consensus/abci/types"
+	"github.com/sidiora-labs/paxeer-network/consensus/config"
+	tmnet "github.com/sidiora-labs/paxeer-network/consensus/libs/net"
+	"github.com/sidiora-labs/paxeer-network/consensus/libs/service"
+	"github.com/sidiora-labs/paxeer-network/consensus/node"
+	"github.com/sidiora-labs/paxeer-network/consensus/rpc/coretypes"
+	rpcclient "github.com/sidiora-labs/paxeer-network/consensus/rpc/jsonrpc/client"
+	"github.com/sidiora-labs/paxeer-network/consensus/types"
+	"go.opentelemetry.io/otel/sdk/trace"
+)
+
+// Options helps with specifying some parameters for our RPC testing for greater
+// control.
+type Options struct {
+	suppressStdout bool
+}
+
+// waitForRPC connects to the RPC service and blocks until a /status call succeeds.
+func waitForRPC(ctx context.Context, conf *config.Config) {
+	laddr := conf.RPC.ListenAddress
+	client, err := rpcclient.New(laddr)
+	if err != nil {
+		panic(err)
+	}
+	result := new(coretypes.ResultStatus)
+	for {
+		err := client.Call(ctx, "status", map[string]any{}, result)
+		if err == nil {
+			return
+		}
+
+		fmt.Println("error", err)
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func randPort() int {
+	port, err := tmnet.GetFreePort()
+	if err != nil {
+		panic(err)
+	}
+	return port
+}
+
+// makeAddrs constructs local listener addresses for node services.  This
+// implementation uses random ports so test instances can run concurrently.
+func makeAddrs() (p2pAddr, rpcAddr string) {
+	const addrTemplate = "tcp://127.0.0.1:%d"
+	return fmt.Sprintf(addrTemplate, randPort()), fmt.Sprintf(addrTemplate, randPort())
+}
+
+func CreateConfig(t *testing.T, testName string) (*config.Config, error) {
+	c, err := config.ResetTestRoot(t.TempDir(), testName)
+	if err != nil {
+		return nil, err
+	}
+
+	p2pAddr, rpcAddr := makeAddrs()
+	c.P2P.ListenAddress = p2pAddr
+	c.RPC.ListenAddress = rpcAddr
+	c.RPC.EventLogWindowSize = 5 * time.Minute
+	c.Consensus.WalPath = "rpc-test"
+	c.RPC.CORSAllowedOrigins = []string{"https://tendermint.com/"}
+	return c, nil
+}
+
+type ServiceCloser func(context.Context) error
+
+func StartTendermint(
+	ctx context.Context,
+	conf *config.Config,
+	app abci.Application,
+	opts ...func(*Options),
+) (service.Service, ServiceCloser, error) {
+	ctx, cancel := context.WithCancel(ctx)
+
+	if kvApp, ok := app.(*kvstore.Application); ok {
+		genDoc, err := types.GenesisDocFromFile(conf.GenesisFile())
+		if err != nil {
+			return nil, func(_ context.Context) error { cancel(); return nil }, fmt.Errorf("types.GenesisDocFromFile(%q): %w", conf.GenesisFile(), err)
+		}
+		kvApp.SetValidators(genDoc.ValidatorUpdates())
+	}
+
+	nodeOpts := &Options{}
+	for _, opt := range opts {
+		opt(nodeOpts)
+	}
+	tmNode, err := node.New(
+		ctx,
+		conf,
+		func() {},
+		app,
+		nil,
+		[]trace.TracerProviderOption{},
+		node.NoOpMetricsProvider(),
+		types.DefaultConsensusPolicy(),
+	)
+	if err != nil {
+		return nil, func(_ context.Context) error { cancel(); return nil }, fmt.Errorf("node.New(%q): %w", conf.Mode, err)
+	}
+
+	err = tmNode.Start(ctx)
+	if err != nil {
+		return nil, func(_ context.Context) error { cancel(); return nil }, err
+	}
+
+	waitForRPC(ctx, conf)
+
+	if !nodeOpts.suppressStdout {
+		fmt.Println("Tendermint running!")
+	}
+
+	return tmNode, func(ctx context.Context) error {
+		cancel()
+		tmNode.Wait()
+		_ = os.RemoveAll(conf.RootDir)
+		return nil
+	}, nil
+}
+
+// SuppressStdout is an option that tries to make sure the RPC test Tendermint
+// node doesn't log anything to stdout.
+func SuppressStdout(o *Options) {
+	o.suppressStdout = true
+}

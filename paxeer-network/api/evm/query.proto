@@ -1,0 +1,92 @@
+syntax = "proto3";
+package paxprotocol.paxchain.evm;
+
+import "evm/enums.proto";
+import "google/api/annotations.proto";
+
+option go_package = "github.com/sidiora-labs/paxeer-network/modules/evm/types";
+
+// Query defines the gRPC querier service.
+service Query {
+  rpc PaxAddressByEVMAddress(QueryPaxAddressByEVMAddressRequest) returns (QueryPaxAddressByEVMAddressResponse) {
+    option (google.api.http).get = "/pax-protocol/paxchain/evm/pax_address";
+  }
+
+  rpc EVMAddressByPaxAddress(QueryEVMAddressByPaxAddressRequest) returns (QueryEVMAddressByPaxAddressResponse) {
+    option (google.api.http).get = "/pax-protocol/paxchain/evm/evm_address";
+  }
+
+  rpc StaticCall(QueryStaticCallRequest) returns (QueryStaticCallResponse) {
+    option (google.api.http).get = "/pax-protocol/paxchain/evm/static_call";
+  }
+
+  rpc Pointer(QueryPointerRequest) returns (QueryPointerResponse) {
+    option (google.api.http).get = "/pax-protocol/paxchain/evm/pointer";
+  }
+
+  rpc PointerVersion(QueryPointerVersionRequest) returns (QueryPointerVersionResponse) {
+    option (google.api.http).get = "/pax-protocol/paxchain/evm/pointer_version";
+  }
+
+  rpc Pointee(QueryPointeeRequest) returns (QueryPointeeResponse) {
+    option (google.api.http).get = "/pax-protocol/paxchain/evm/pointee";
+  }
+}
+
+message QueryPaxAddressByEVMAddressRequest {
+  string evm_address = 1;
+}
+
+message QueryPaxAddressByEVMAddressResponse {
+  string pax_address = 1;
+  bool associated = 2;
+}
+
+message QueryEVMAddressByPaxAddressRequest {
+  string pax_address = 1;
+}
+
+message QueryEVMAddressByPaxAddressResponse {
+  string evm_address = 1;
+  bool associated = 2;
+}
+
+message QueryStaticCallRequest {
+  bytes data = 1;
+  string to = 2;
+}
+
+message QueryStaticCallResponse {
+  bytes data = 1;
+}
+
+message QueryPointerRequest {
+  PointerType pointer_type = 1;
+  string pointee = 2;
+}
+
+message QueryPointerResponse {
+  string pointer = 1;
+  uint32 version = 2;
+  bool exists = 3;
+}
+
+message QueryPointerVersionRequest {
+  PointerType pointer_type = 1;
+}
+
+message QueryPointerVersionResponse {
+  uint32 version = 1;
+  uint64 cw_code_id = 2;
+}
+
+message QueryPointeeRequest {
+  PointerType pointer_type = 1;
+  string pointer = 2;
+}
+
+message QueryPointeeResponse {
+  string pointee = 1;
+  uint32 version = 2;
+  bool exists = 3;
+}

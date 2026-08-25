@@ -1,0 +1,925 @@
+#!/usr/bin/env bash
+# =============================================================================
+# hpx — HyperPax Node Manager v3
+#
+# Native paxd binary + systemd. One node per host. Everything (binary,
+# libwasmvm, genesis, config variants, peer list) is pulled from the
+# self-hosted registry/mirror. On setup the node registers its CometBFT node id
+# upstream and receives the live peer list, so the mesh grows automatically.
+#
+#   hpx                 interactive menu
+#   hpx setup           guided node install (fullnode or validator)
+#   hpx status|info|logs|start|stop|restart
+#   hpx update          re-pull binary/libs to the published version + restart
+#   hpx peers {show|refresh}
+#   hpx register        (re)announce this node to the registry
+#   hpx remove          stop + uninstall (optionally wipe data)
+# =============================================================================
+set -uo pipefail
+
+readonly VERSION="3.0.0"
+
+# ── Mirror / chain defaults (chain-info.json overrides at runtime) ────────────
+MIRROR="${HPX_MIRROR:-https://node.hyperpaxeer.com}"
+CHAIN_ID="${HPX_CHAIN_ID:-hyperpax_125-1}"
+HPX_TOKEN="${HPX_TOKEN:-}"            # optional registry auth token
+
+# ── Per-host layout ───────────────────────────────────────────────────────────
+readonly HOME_DIR="${HPX_HOME:-/root/.paxeer}"
+readonly CFG_DIR="${HOME_DIR}/config"
+readonly DATA_DIR="${HOME_DIR}/data"
+readonly BIN="/usr/local/bin/paxd"
+readonly UNIT="/etc/systemd/system/paxd.service"
+readonly REFRESH_UNIT="/etc/systemd/system/hpx-peers-refresh.service"
+readonly REFRESH_TIMER="/etc/systemd/system/hpx-peers-refresh.timer"
+readonly STATE_FILE="${HOME_DIR}/.hpx-node.json"
+readonly SERVICE="paxd"
+
+# ── Standard ports ────────────────────────────────────────────────────────────
+readonly P2P_PORT=26656
+readonly RPC_PORT=26657
+readonly REST_PORT=1317
+readonly GRPC_PORT=9090
+readonly EVM_RPC_PORT=8545
+readonly EVM_WS_PORT=8546
+
+# ── UI helpers ────────────────────────────────────────────────────────────────
+readonly C_RST=$'\033[0m' C_BOLD=$'\033[1m' C_DIM=$'\033[2m'
+readonly C_RED=$'\033[0;31m' C_GRN=$'\033[0;32m' C_YLW=$'\033[0;33m'
+readonly C_CYN=$'\033[0;36m' C_WHT=$'\033[1;37m'
+pr()    { printf "%b" "$@"; }
+prn()   { printf "%b\n" "$@"; }
+info()  { prn "${C_CYN}[*]${C_RST} $*"; }
+ok()    { prn "${C_GRN}[+]${C_RST} $*"; }
+warn()  { prn "${C_YLW}[!]${C_RST} $*"; }
+err()   { prn "${C_RED}[-]${C_RST} $*" >&2; }
+die()   { err "$@"; exit 1; }
+hr()    { prn "${C_DIM}$(printf '%.0s-' {1..70})${C_RST}"; }
+blank() { echo; }
+
+prompt() {
+    local msg="$1" var="$2" default="${3:-}" input
+    if [ -n "$default" ]; then
+        pr "${C_WHT}${msg}${C_RST} ${C_DIM}[${default}]${C_RST}: "
+    else
+        pr "${C_WHT}${msg}${C_RST}: "
+    fi
+    read -r input
+    eval "$var=\"${input:-$default}\""
+}
+
+confirm() {
+    local msg="${1:-Continue?}" default_y="${2:-}" yn
+    if [ "$default_y" = "y" ]; then
+        pr "${C_YLW}${msg}${C_RST} ${C_DIM}[Y/n]${C_RST}: "; read -r yn
+        [[ -z "$yn" || "$yn" =~ ^[Yy] ]]
+    else
+        pr "${C_YLW}${msg}${C_RST} ${C_DIM}[y/N]${C_RST}: "; read -r yn
+        [[ "$yn" =~ ^[Yy] ]]
+    fi
+}
+
+menu_select() {
+    # UI must go to stderr — this function is called via $(...) so anything on
+    # stdout would be captured (invisible menu) instead of shown to the user.
+    local title="$1"; shift; local -a items=("$@") choice
+    {
+        blank; prn "${C_BOLD}${title}${C_RST}"; hr
+        local i; for i in "${!items[@]}"; do prn "  ${C_CYN}$((i+1))${C_RST}) ${items[$i]}"; done
+        prn "  ${C_DIM}0${C_RST}) Back / Exit"; hr
+        pr "${C_WHT}Choice${C_RST}: "
+    } >&2
+    read -r choice </dev/tty; echo "$choice"
+}
+
+banner() {
+    clear 2>/dev/null || true
+    prn "${C_BOLD}${C_CYN}"
+    prn '  ██╗  ██╗██████╗ ██╗  ██╗     Paxeer Network Node Manager'
+    prn '  ██║  ██║██╔══██╗╚██╗██╔╝     v'"$VERSION"
+    prn '  ███████║██████╔╝ ╚███╔╝      Chain : '"$CHAIN_ID"
+    prn '  ██╔══██║██╔═══╝  ██╔██╗      Mirror: '"$MIRROR"
+    prn '  ██║  ██║██║     ██╔╝ ██╗     Runtime: native paxd + systemd'
+    prn '  ╚═╝  ╚═╝╚═╝     ╚═╝  ╚═╝'
+    prn "${C_RST}"; hr
+}
+
+# ── Arch / platform ───────────────────────────────────────────────────────────
+arch_suffix() {
+    case "$(uname -m)" in
+        x86_64|amd64)  echo "x86_64" ;;
+        aarch64|arm64) echo "aarch64" ;;
+        *) die "unsupported architecture: $(uname -m)" ;;
+    esac
+}
+lib_dir() {
+    case "$(uname -m)" in
+        x86_64|amd64)  echo "/usr/lib/x86_64-linux-gnu" ;;
+        aarch64|arm64) echo "/usr/lib/aarch64-linux-gnu" ;;
+    esac
+}
+
+require_root() { [ "$(id -u)" -eq 0 ] || die "must run as root (use sudo)"; }
+
+ensure_deps() {
+    local -a missing=()
+    for d in curl jq; do command -v "$d" >/dev/null 2>&1 || missing+=("$d"); done
+    [ ${#missing[@]} -eq 0 ] && return 0
+    info "installing dependencies: ${missing[*]}"
+    if command -v apt-get >/dev/null 2>&1; then
+        DEBIAN_FRONTEND=noninteractive apt-get update -qq
+        DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${missing[@]}"
+    elif command -v yum >/dev/null 2>&1; then
+        yum install -y -q "${missing[@]}"
+    else
+        die "cannot auto-install ${missing[*]} — install manually"
+    fi
+}
+
+# ── Mirror helpers ────────────────────────────────────────────────────────────
+CI_VERSION="" CI_SHA="" CI_CHAIN_ID="" CI_SEEDS=""
+fetch_chain_info() {
+    local j
+    j=$(curl -fsS --max-time 15 "${MIRROR}/chain-info.json" 2>/dev/null) \
+        || die "cannot reach mirror ${MIRROR} (chain-info.json)"
+    CI_CHAIN_ID=$(echo "$j" | jq -r '.chain_id // empty')
+    CI_VERSION=$(echo "$j" | jq -r '.paxd_version // empty')
+    CI_SHA=$(echo "$j" | jq -r '.paxd_sha256 // empty')
+    CI_SEEDS=$(echo "$j" | jq -r '.seeds | join(",") // empty')
+    [ -n "$CI_CHAIN_ID" ] && CHAIN_ID="$CI_CHAIN_ID"
+}
+
+my_ip() {
+    local ip
+    ip=$(curl -fsS --max-time 6 "${MIRROR}/api/myip" 2>/dev/null || true)
+    [ -z "$ip" ] && ip=$(curl -fsS --max-time 6 https://api.ipify.org 2>/dev/null || true)
+    [ -z "$ip" ] && ip=$(hostname -I 2>/dev/null | awk '{print $1}')
+    echo "$ip"
+}
+
+node_id() { "$BIN" tendermint show-node-id --home "$HOME_DIR" 2>/dev/null \
+    || "$BIN" comet show-node-id --home "$HOME_DIR" 2>/dev/null; }
+
+# ── Download install artifacts ────────────────────────────────────────────────
+download_binary() {
+    local arch; arch=$(arch_suffix)
+    info "downloading paxd (${CI_VERSION:-latest})"
+    curl -fL --retry 5 --retry-delay 3 -o "${BIN}.new" "${MIRROR}/paxd" || die "paxd download failed"
+    if [ -n "$CI_SHA" ]; then
+        local got; got=$(sha256sum "${BIN}.new" | awk '{print $1}')
+        [ "$got" = "$CI_SHA" ] || { rm -f "${BIN}.new"; die "paxd sha256 mismatch (got $got want $CI_SHA)"; }
+        ok "paxd sha256 verified"
+    fi
+    chmod +x "${BIN}.new" && mv -f "${BIN}.new" "$BIN"
+
+    local ld; ld=$(lib_dir)
+    info "downloading libwasmvm shared objects -> ${ld}"
+    local f
+    for f in "libwasmvm.${arch}.so" "libwasmvm152.${arch}.so" "libwasmvm155.${arch}.so"; do
+        if curl -fL --retry 3 --max-time 120 -o "${ld}/${f}.new" "${MIRROR}/lib/${f}" 2>/dev/null; then
+            mv -f "${ld}/${f}.new" "${ld}/${f}"
+        else
+            rm -f "${ld}/${f}.new"
+        fi
+    done
+    ldconfig
+    "$BIN" version >/dev/null 2>&1 || die "paxd installed but won't run (libwasmvm/arch issue)"
+    ok "paxd $("$BIN" version 2>/dev/null) ready"
+}
+
+download_chain_files() {
+    local type="$1"
+    mkdir -p "$CFG_DIR" "$DATA_DIR"
+    info "downloading genesis + ${type} config"
+    curl -fL --retry 5 -o "${CFG_DIR}/genesis.json" "${MIRROR}/genesis.json" || die "genesis download failed"
+    curl -fL --retry 5 -o "${CFG_DIR}/config.toml" "${MIRROR}/config/${type}/config.toml" || die "config.toml download failed"
+    curl -fL --retry 5 -o "${CFG_DIR}/app.toml" "${MIRROR}/config/${type}/app.toml" || die "app.toml download failed"
+    write_client_toml
+    ok "genesis + config in place"
+}
+
+# paxd reads the chain id from client.toml (clientCtx.ChainID); it must equal
+# the genesis chain-id or `paxd start` panics. Always (re)write it.
+write_client_toml() {
+    cat > "${CFG_DIR}/client.toml" <<EOF
+# Generated by hpx — chain-id MUST match genesis.json.
+chain-id = "${CHAIN_ID}"
+keyring-backend = "os"
+output = "text"
+node = "tcp://localhost:${RPC_PORT}"
+broadcast-mode = "sync"
+EOF
+}
+
+# ── Keys (generate without clobbering the downloaded genesis) ──────────────────
+ensure_keys() {
+    local type="$1" moniker="$2" tmp
+    if [ -f "${CFG_DIR}/node_key.json" ]; then
+        ok "node identity already present"
+    else
+        info "generating node identity"
+        tmp=$(mktemp -d)
+        "$BIN" init "$moniker" --chain-id "$CHAIN_ID" --home "$tmp" >/dev/null 2>&1 \
+            || { rm -rf "$tmp"; die "paxd init (keygen) failed"; }
+        install -m 600 "${tmp}/config/node_key.json" "${CFG_DIR}/node_key.json"
+        if [ "$type" = "validator" ]; then
+            install -m 600 "${tmp}/config/priv_validator_key.json" "${CFG_DIR}/priv_validator_key.json"
+        fi
+        rm -rf "$tmp"
+    fi
+    # CometBFT always wants a priv_validator_state file.
+    mkdir -p "$DATA_DIR"
+    [ -f "${DATA_DIR}/priv_validator_state.json" ] || \
+        echo '{"height":"0","round":0,"step":0}' > "${DATA_DIR}/priv_validator_state.json"
+    # Full nodes still need a (non-voting) priv_validator_key for boot.
+    if [ "$type" != "validator" ] && [ ! -f "${CFG_DIR}/priv_validator_key.json" ]; then
+        tmp=$(mktemp -d)
+        "$BIN" init "$moniker" --chain-id "$CHAIN_ID" --home "$tmp" >/dev/null 2>&1 || true
+        [ -f "${tmp}/config/priv_validator_key.json" ] && \
+            install -m 600 "${tmp}/config/priv_validator_key.json" "${CFG_DIR}/priv_validator_key.json"
+        rm -rf "$tmp"
+    fi
+}
+
+# ── Configure config.toml (fill placeholders) ─────────────────────────────────
+set_peers_in_config() {
+    # CometBFT v1 / Pax layout uses hyphenated keys. Seed both persistent-peers
+    # (always-connected) and bootstrap-peers (discovery) with the full list.
+    local peers="$1" cfg="${CFG_DIR}/config.toml"
+    sed -i "s|^persistent-peers = .*|persistent-peers = \"${peers}\"|" "$cfg"
+    sed -i "s|^bootstrap-peers = .*|bootstrap-peers = \"${peers}\"|" "$cfg"
+}
+configure_node() {
+    local moniker="$1" ip="$2" peers="$3" cfg="${CFG_DIR}/config.toml"
+    sed -i "s|^moniker = .*|moniker = \"${moniker}\"|" "$cfg"
+    sed -i "s|^external-address = .*|external-address = \"${ip}:${P2P_PORT}\"|" "$cfg"
+    set_peers_in_config "$peers"
+    ok "configured moniker=${moniker} external=${ip}:${P2P_PORT} peers=$(echo "$peers" | tr ',' '\n' | grep -c @ || echo 0)"
+}
+
+fetch_peers() {
+    local self="$1"
+    curl -fsS --max-time 10 "${MIRROR}/api/peers.txt?self=${self}" 2>/dev/null
+}
+
+# The chain is pruned, so a fresh node cannot blocksync from genesis — it must
+# bootstrap from a recent snapshot. Pull trust height/hash from the mirror and
+# fill the pax-tendermint [statesync] section (hyphenated keys). Returns 0 only
+# if state sync was actually enabled.
+configure_statesync() {
+    local cfg="${CFG_DIR}/config.toml" j en rpc th hh tp
+    j=$(curl -fsS --max-time 12 "${MIRROR}/api/statesync" 2>/dev/null) || return 1
+    [ -z "$j" ] && return 1
+    en=$(echo "$j" | jq -r '.enable // false')
+    [ "$en" = "true" ] || { warn "state sync not offered by mirror: $(echo "$j" | jq -r '.reason // "?"')"; return 1; }
+    rpc=$(echo "$j" | jq -r '.rpc_servers // empty')
+    th=$(echo "$j"  | jq -r '.trust_height // 0')
+    hh=$(echo "$j"  | jq -r '.trust_hash // empty')
+    tp=$(echo "$j"  | jq -r '.trust_period // "168h0m0s"')
+    if [ -z "$rpc" ] || [ -z "$hh" ] || [ "$th" = "0" ]; then
+        warn "state sync params incomplete; skipping"; return 1
+    fi
+    sed -i '/^\[statesync\]/,/^\[/{
+        s|^enable = .*|enable = true|
+        s|^rpc-servers = .*|rpc-servers = "'"$rpc"'"|
+        s|^trust-height = .*|trust-height = '"$th"'|
+        s|^trust-hash = .*|trust-hash = "'"$hh"'"|
+        s|^trust-period = .*|trust-period = "'"$tp"'"|
+    }' "$cfg"
+    ok "state sync enabled (trust-height=${th}, rpc=${rpc})"
+    return 0
+}
+
+# ── Registry ──────────────────────────────────────────────────────────────────
+register_node() {
+    local type="$1" moniker="$2" ip="$3" id="$4" ver="${CI_VERSION:-unknown}" resp
+    local body
+    body=$(jq -nc --arg id "$id" --arg m "$moniker" --arg ip "$ip" \
+        --arg t "$type" --arg v "$ver" --argjson p "$P2P_PORT" \
+        '{node_id:$id,moniker:$m,ip:$ip,type:$t,version:$v,p2p_port:$p}')
+    resp=$(curl -fsS --max-time 12 -X POST "${MIRROR}/api/register" \
+        -H "Content-Type: application/json" \
+        ${HPX_TOKEN:+-H "X-HPX-Token: ${HPX_TOKEN}"} \
+        --data "$body" 2>/dev/null) || { warn "registry register failed (will still start; peers from /api/peers)"; echo ""; return 1; }
+    echo "$resp" | jq -r '.persistent_peers // empty' 2>/dev/null
+}
+
+save_state() {
+    local type="$1" moniker="$2" ip="$3" id="$4"
+    mkdir -p "$HOME_DIR"
+    jq -nc --arg t "$type" --arg m "$moniker" --arg ip "$ip" --arg id "$id" --arg c "$CHAIN_ID" \
+        '{type:$t,moniker:$m,ip:$ip,node_id:$id,chain_id:$c}' > "$STATE_FILE"
+}
+state_get() { [ -f "$STATE_FILE" ] && jq -r ".$1 // empty" "$STATE_FILE" 2>/dev/null || echo ""; }
+
+# ── systemd units ─────────────────────────────────────────────────────────────
+write_unit() {
+    local type="$1"
+    cat > "$UNIT" <<UNIT
+[Unit]
+Description=HyperPax ${type} (${CHAIN_ID})
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=${HOME_DIR}
+ExecStart=${BIN} start --home ${HOME_DIR} --chain-id ${CHAIN_ID}
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=180
+KillSignal=SIGTERM
+SendSIGKILL=yes
+LimitNOFILE=1048576
+LimitNPROC=infinity
+LimitMEMLOCK=infinity
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=paxd
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+    systemctl daemon-reload
+    ok "installed systemd unit ${UNIT}"
+}
+
+install_refresh_timer() {
+    cat > "$REFRESH_UNIT" <<UNIT
+[Unit]
+Description=HyperPax peer-list refresh
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/hpx peers refresh --quiet
+UNIT
+    cat > "$REFRESH_TIMER" <<'UNIT'
+[Unit]
+Description=Refresh HyperPax peer list hourly
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+UNIT
+    systemctl daemon-reload
+    systemctl enable --now hpx-peers-refresh.timer >/dev/null 2>&1 || true
+    ok "peer-refresh timer enabled (hourly)"
+}
+
+# ── Setup flow ────────────────────────────────────────────────────────────────
+flow_setup() {
+    require_root
+    banner
+    ensure_deps
+    fetch_chain_info
+    prn "${C_BOLD}Install a HyperPax node${C_RST}"
+    prn "${C_DIM}chain=${CHAIN_ID}  paxd=${CI_VERSION}  mirror=${MIRROR}${C_RST}"
+    blank
+
+    # type
+    local type="${HPX_TYPE:-}"
+    if [ -z "$type" ]; then
+        local c; c=$(menu_select "Node type" "Full node (recommended)" "Validator")
+        case "$c" in
+            1) type="fullnode" ;;
+            2) type="validator" ;;
+            *) warn "cancelled"; return ;;
+        esac
+    fi
+
+    local default_mon moniker ip
+    default_mon="hpx-$(hostname -s 2>/dev/null || echo node)"
+    prompt "Moniker (node name)" moniker "$default_mon"
+    moniker=$(echo "$moniker" | sed 's/[^A-Za-z0-9._-]/-/g')
+    local detected; detected=$(my_ip)
+    prompt "Public IP of this host" ip "$detected"
+    [ -z "$ip" ] && die "public IP required"
+
+    blank; prn "${C_BOLD}Plan${C_RST}"; hr
+    prn "  Type        ${C_WHT}${type}${C_RST}"
+    prn "  Moniker     ${C_WHT}${moniker}${C_RST}"
+    prn "  Public IP   ${C_WHT}${ip}${C_RST}"
+    prn "  Home        ${C_DIM}${HOME_DIR}${C_RST}"
+    prn "  Seeds       ${C_DIM}${CI_SEEDS}${C_RST}"
+    hr
+    confirm "Proceed?" y || { warn "cancelled"; return; }
+
+    download_binary
+    download_chain_files "$type"
+    ensure_keys "$type" "$moniker"
+
+    local id; id=$(node_id)
+    [ ${#id} -eq 40 ] || die "could not derive node id"
+    ok "node id: ${id}"
+
+    info "registering with ${MIRROR} and fetching peer list"
+    local peers; peers=$(register_node "$type" "$moniker" "$ip" "$id")
+    [ -z "$peers" ] && peers=$(fetch_peers "$id")
+    [ -z "$peers" ] && peers="$CI_SEEDS"
+    configure_node "$moniker" "$ip" "$peers"
+    configure_statesync || warn "proceeding without state sync — node may not be able to sync until the mirror offers a snapshot ('hpx statesync' to retry)"
+    save_state "$type" "$moniker" "$ip" "$id"
+
+    write_unit "$type"
+    install_refresh_timer
+    info "starting ${SERVICE}"
+    systemctl enable --now "$SERVICE"
+
+    info "waiting for RPC (up to 60s)"
+    local up=0 i
+    for i in $(seq 1 20); do
+        curl -fsS --max-time 3 "http://localhost:${RPC_PORT}/status" >/dev/null 2>&1 && { up=1; break; }
+        sleep 3
+    done
+    blank
+    if [ "$up" = 1 ]; then ok "node is up and syncing"; else warn "RPC not up yet — check 'hpx logs'"; fi
+    cmd_status
+    blank; prn "${C_BOLD}${C_GRN}Done.${C_RST} Manage with: ${C_WHT}hpx status | hpx logs | hpx peers refresh${C_RST}"; blank
+}
+
+# ── Update ────────────────────────────────────────────────────────────────────
+cmd_update() {
+    require_root; ensure_deps; fetch_chain_info
+    local cur=""; [ -x "$BIN" ] && cur=$(sha256sum "$BIN" | awk '{print $1}')
+    if [ -n "$CI_SHA" ] && [ "$cur" = "$CI_SHA" ]; then
+        ok "paxd already at published version (${CI_VERSION})"
+    else
+        info "updating paxd ${cur:0:12} -> ${CI_SHA:0:12} (${CI_VERSION})"
+        systemctl stop "$SERVICE" 2>/dev/null || true
+        download_binary
+        systemctl start "$SERVICE"
+        ok "updated + restarted"
+    fi
+    cmd_peers refresh
+}
+
+# ── Peers ─────────────────────────────────────────────────────────────────────
+cmd_peers() {
+    local sub="${1:-show}"
+    case "$sub" in
+        show)
+            ensure_deps
+            blank; prn "${C_BOLD}Registry nodes${C_RST}"; hr
+            curl -fsS --max-time 10 "${MIRROR}/api/nodes" 2>/dev/null \
+                | jq -r '.nodes[] | "  \(.type)\t\(.moniker)\t\(.ip)\t\(.node_id)"' 2>/dev/null \
+                | column -t -s $'\t' || warn "registry unreachable"
+            hr; blank
+            ;;
+        refresh)
+            local quiet=""; [ "${2:-}" = "--quiet" ] && quiet=1
+            [ -f "${CFG_DIR}/config.toml" ] || { [ -z "$quiet" ] && warn "no node here"; return 0; }
+            local id; id=$(node_id 2>/dev/null)
+            local peers; peers=$(fetch_peers "$id")
+            if [ -n "$peers" ]; then
+                set_peers_in_config "$peers"
+                systemctl restart "$SERVICE" 2>/dev/null || true
+                [ -z "$quiet" ] && ok "peer list refreshed ($(echo "$peers" | tr ',' '\n' | grep -c @) peers) + restarted"
+            else
+                [ -z "$quiet" ] && warn "no peers returned"
+            fi
+            ;;
+        *) die "usage: hpx peers {show|refresh}" ;;
+    esac
+}
+
+# Re-apply state sync on an existing (e.g. stuck) node: reconfigure + reset
+# local state so paxd bootstraps from a snapshot, then restart.
+cmd_statesync() {
+    require_root; ensure_deps; fetch_chain_info
+    [ -f "${CFG_DIR}/config.toml" ] || die "no node here (run 'hpx setup')"
+    info "stopping ${SERVICE}"
+    systemctl stop "$SERVICE" 2>/dev/null || true
+    configure_statesync || die "state sync not available from the mirror yet — try again shortly"
+    info "resetting local state so state sync can run"
+    "$BIN" tendermint unsafe-reset-all --home "$HOME_DIR" >/dev/null 2>&1 \
+        || "$BIN" comet unsafe-reset-all --home "$HOME_DIR" >/dev/null 2>&1 || true
+    systemctl start "$SERVICE"
+    ok "state sync applied + node restarted — watch 'hpx logs'"
+}
+
+cmd_register() {
+    require_root; ensure_deps; fetch_chain_info
+    [ -f "$STATE_FILE" ] || die "no node state — run 'hpx setup' first"
+    local type moniker ip id
+    type=$(state_get type); moniker=$(state_get moniker); ip=$(state_get ip); id=$(node_id)
+    local peers; peers=$(register_node "$type" "$moniker" "$ip" "$id")
+    [ -n "$peers" ] && { set_peers_in_config "$peers"; systemctl restart "$SERVICE" 2>/dev/null || true; ok "re-registered + peers updated"; } \
+        || warn "register failed"
+}
+
+# ── Status / info / logs / lifecycle ──────────────────────────────────────────
+cmd_status() {
+    local sj h cu p evm
+    sj=$(curl -fsS --max-time 4 "http://localhost:${RPC_PORT}/status" 2>/dev/null || echo "")
+    h=$(echo "$sj"  | jq -r '(.result.sync_info // .sync_info).latest_block_height // "?"' 2>/dev/null || echo "?")
+    cu=$(echo "$sj" | jq -r '((.result.sync_info // .sync_info).catching_up) | if . == null then "?" else tostring end' 2>/dev/null || echo "?")
+    p=$(curl -fsS --max-time 4 "http://localhost:${RPC_PORT}/net_info" 2>/dev/null | jq -r '(.result.n_peers // .n_peers) // "?"' 2>/dev/null || echo "?")
+    local eh; eh=$(curl -fsS --max-time 4 -X POST -H 'content-type: application/json' \
+        --data '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' \
+        "http://localhost:${EVM_RPC_PORT}" 2>/dev/null | jq -r '.result // empty' 2>/dev/null || echo "")
+    [ -n "$eh" ] && [[ "$eh" =~ ^0x ]] && evm=$((16#${eh#0x})) || evm="?"
+    local svc; svc=$(systemctl is-active "$SERVICE" 2>/dev/null || echo "inactive")
+    blank; prn "${C_BOLD}Node: $(state_get moniker)  (${C_DIM}$(state_get type)${C_RST}${C_BOLD})${C_RST}"; hr
+    prn "  Service     $([ "$svc" = active ] && echo "${C_GRN}" || echo "${C_RED}")${svc}${C_RST}"
+    prn "  Node ID     ${C_DIM}$(state_get node_id)${C_RST}"
+    prn "  TM height   ${C_WHT}${h}${C_RST}  ${C_DIM}catching_up=${cu}${C_RST}"
+    prn "  EVM height  ${C_WHT}${evm}${C_RST}"
+    prn "  Peers       ${C_WHT}${p}${C_RST}"
+    hr; blank
+}
+
+cmd_info() {
+    fetch_chain_info 2>/dev/null || true
+    blank; prn "${C_BOLD}Node info${C_RST}"; hr
+    prn "  Chain ID    ${CHAIN_ID}"
+    prn "  Type        $(state_get type)"
+    prn "  Moniker     $(state_get moniker)"
+    prn "  Node ID     $(state_get node_id)"
+    prn "  Public IP   $(state_get ip)"
+    prn "  Home        ${HOME_DIR}"
+    prn "  paxd        $("$BIN" version 2>/dev/null || echo n/a)"
+    blank; prn "  ${C_BOLD}Endpoints${C_RST}"
+    prn "    Tendermint RPC  :${RPC_PORT}"
+    prn "    Cosmos REST     :${REST_PORT}"
+    prn "    gRPC            :${GRPC_PORT}"
+    prn "    EVM JSON-RPC    :${EVM_RPC_PORT}   EVM WS :${EVM_WS_PORT}"
+    prn "    P2P             :${P2P_PORT}"
+    hr; cmd_status
+}
+
+cmd_logs()    { journalctl -u "$SERVICE" -n "${1:-200}" -f --no-pager; }
+cmd_start()   { require_root; systemctl start "$SERVICE"; ok "started"; }
+cmd_stop()    { require_root; systemctl stop "$SERVICE"; ok "stopped"; }
+cmd_restart() { require_root; systemctl restart "$SERVICE"; ok "restarted"; }
+
+cmd_remove() {
+    require_root
+    warn "This stops and uninstalls the paxd node service on THIS host."
+    confirm "Continue?" || { warn "cancelled"; return; }
+    systemctl disable --now "$SERVICE" 2>/dev/null || true
+    systemctl disable --now hpx-peers-refresh.timer 2>/dev/null || true
+    rm -f "$UNIT" "$REFRESH_UNIT" "$REFRESH_TIMER"
+    systemctl daemon-reload; systemctl reset-failed 2>/dev/null || true
+    ok "service + units removed"
+    if confirm "Also DELETE chain data + keys at ${HOME_DIR}? (irreversible)"; then
+        rm -rf "$HOME_DIR"; ok "wiped ${HOME_DIR}"
+    else
+        prn "${C_DIM}kept ${HOME_DIR}${C_RST}"
+    fi
+}
+
+# ── Validator / staking ───────────────────────────────────────────────────────
+# The node already holds a CometBFT consensus key (priv_validator_key.json). To
+# become an ACTIVE, bonded validator it must (1) run in validator mode and (2)
+# have an on-chain create-validator tx that self-delegates stake from an operator
+# account. This chain uses standard cosmos secp256k1 keys (NOT eth_secp256k1);
+# one key yields both a pax1.. account and a paxvaloper.. operator address.
+#
+# Flow (decoupled, so funding is a separate step):
+#   1. hpx validator keygen   → generate this node's operator account; print addr
+#   2. (external) fund every collected pax1 operator address with PAX
+#   3. hpx validator stake     → create-validator from the funded operator account
+readonly OPERATOR_KEY="${HPX_OPERATOR_KEY:-operator}"
+readonly KEYRING_BACKEND="${HPX_KEYRING_BACKEND:-test}"   # non-interactive for automation
+readonly KEYRING_DIR="${HPX_KEYRING_DIR:-${HOME_DIR}/keyring}"
+readonly OPERATOR_FILE="${HOME_DIR}/.hpx-operator.json"
+readonly NODE_RPC="tcp://localhost:${RPC_PORT}"
+readonly BOND_DENOM="uhpx"
+readonly UHPX_PER_PAX=1000000                              # 1 PAX = 10^6 uhpx (6-dec base)
+# Staking defaults (all overridable via env)
+readonly STAKE_MIN_SELF="${HPX_MIN_SELF_DELEGATION:-1}"
+readonly STAKE_COMMISSION="${HPX_COMMISSION_RATE:-0.10}"
+readonly STAKE_COMMISSION_MAX="${HPX_COMMISSION_MAX_RATE:-0.20}"
+readonly STAKE_COMMISSION_CHG="${HPX_COMMISSION_MAX_CHANGE_RATE:-0.01}"
+readonly FEE_RESERVE_UHPX="${HPX_FEE_RESERVE_UHPX:-1000000}"  # 1 PAX kept back for tx fees
+
+# paxd with the operator keyring flags (for key mgmt + signing txs)
+pxk() { "$BIN" "$@" --keyring-backend "$KEYRING_BACKEND" --keyring-dir "$KEYRING_DIR"; }
+
+operator_exists()  { pxk keys show "$OPERATOR_KEY" -a >/dev/null 2>&1; }
+operator_addr()    { pxk keys show "$OPERATOR_KEY" -a 2>/dev/null; }
+operator_valoper() { pxk keys show "$OPERATOR_KEY" -a --bech val 2>/dev/null; }
+operator_hex()     { "$BIN" debug addr "$1" 2>/dev/null | awk -F': ' '/Address \(hex\)/{print "0x"$2}'; }
+
+consensus_pubkey() { "$BIN" tendermint show-validator --home "$HOME_DIR" 2>/dev/null; }
+
+node_synced() {
+    local cu
+    cu=$(curl -fsS --max-time 5 "http://localhost:${RPC_PORT}/status" 2>/dev/null \
+        | jq -r '((.result.sync_info // .sync_info).catching_up) | tostring' 2>/dev/null)
+    [ "$cu" = "false" ]
+}
+
+operator_balance_uhpx() {
+    local acc="$1"
+    "$BIN" q bank balances "$acc" --node "$NODE_RPC" -o json 2>/dev/null \
+        | jq -r --arg d "$BOND_DENOM" '(.balances[]? | select(.denom==$d) | .amount) // "0"' 2>/dev/null \
+        | head -n1
+}
+
+validator_onchain() {
+    # 0 (true) if a validator already exists for this operator's valoper address
+    local val="$1"
+    "$BIN" q staking validator "$val" --node "$NODE_RPC" -o json >/dev/null 2>&1
+}
+
+gas_prices() {
+    local gp="${HPX_GAS_PRICES:-}"
+    if [ -z "$gp" ]; then
+        gp=$(grep -E '^minimum-gas-prices' "${CFG_DIR}/app.toml" 2>/dev/null \
+            | sed -E 's/^[^=]*= *"?([^"]*)"?.*/\1/')
+    fi
+    # A zero (or empty) gas price makes paxd send a 0-fee tx, which the network
+    # rejects ("insufficient fee"). Floor to a safe non-zero price in that case.
+    local num
+    num=$(printf '%s' "$gp" | grep -oE '^[0-9]*\.?[0-9]+' || true)
+    if [ -z "$gp" ] || [ -z "$num" ] || awk -v n="$num" 'BEGIN{exit !(n+0==0)}'; then
+        gp="0.025uhpx"
+    fi
+    echo "$gp"
+}
+
+# Ensure config.toml runs in validator mode; restart if it had to change.
+ensure_validator_mode() {
+    local cfg="${CFG_DIR}/config.toml"
+    [ -f "$cfg" ] || return 0
+    if grep -qE '^mode = "validator"' "$cfg"; then
+        return 0
+    fi
+    info "switching node to validator mode"
+    sed -i 's|^mode = .*|mode = "validator"|' "$cfg"
+    systemctl restart "$SERVICE" 2>/dev/null || true
+    info "waiting for RPC after restart (up to 60s)"
+    local i
+    for i in $(seq 1 20); do
+        curl -fsS --max-time 3 "http://localhost:${RPC_PORT}/status" >/dev/null 2>&1 && return 0
+        sleep 3
+    done
+    warn "RPC not back yet after mode switch — check 'hpx logs'"
+}
+
+cmd_validator_keygen() {
+    require_root; ensure_deps
+    [ -x "$BIN" ] || die "paxd not installed — run 'hpx setup' first"
+    mkdir -p "$KEYRING_DIR"
+    if operator_exists; then
+        ok "operator key '${OPERATOR_KEY}' already present"
+    else
+        info "generating operator account '${OPERATOR_KEY}' (secp256k1)"
+        pxk keys add "$OPERATOR_KEY" >/dev/null 2>&1 || die "operator keygen failed"
+        ok "operator account created"
+    fi
+    local acc val hex mon
+    acc=$(operator_addr); val=$(operator_valoper); hex=$(operator_hex "$acc")
+    mon=$(state_get moniker); [ -z "$mon" ] && mon="hpx-$(hostname -s 2>/dev/null || echo node)"
+    jq -nc --arg k "$OPERATOR_KEY" --arg a "$acc" --arg v "$val" --arg h "$hex" --arg m "$mon" \
+        '{key:$k,account:$a,valoper:$v,hex:$h,moniker:$m}' > "$OPERATOR_FILE" 2>/dev/null || true
+    blank; prn "${C_BOLD}Operator account (fund the account address below)${C_RST}"; hr
+    prn "  Moniker     ${C_WHT}${mon}${C_RST}"
+    prn "  Key name    ${C_DIM}${OPERATOR_KEY}${C_RST} (keyring: ${KEYRING_BACKEND} @ ${KEYRING_DIR})"
+    prn "  Account     ${C_WHT}${acc}${C_RST}"
+    prn "  Valoper     ${C_DIM}${val}${C_RST}"
+    prn "  EVM/hex     ${C_DIM}${hex}${C_RST}"
+    hr
+    # Machine-readable line for collection across the fleet:
+    prn "OPERATOR ${mon} ${acc} ${val} ${hex}"
+    blank; prn "${C_DIM}Next: fund ${acc} with PAX, then run 'hpx validator stake'.${C_RST}"; blank
+}
+
+# ── Staking helpers for the voting-power-ratio ramp ────────────────────────────
+validator_tokens() {  # $1 valoper -> integer uhpx tokens (0 if none)
+    "$BIN" q staking validator "$1" --node "$NODE_RPC" -o json 2>/dev/null \
+        | jq -r '((.validator.tokens // .tokens) // "0")' 2>/dev/null | head -n1
+}
+pool_bonded() {       # -> integer uhpx total bonded across all validators
+    "$BIN" q staking pool --node "$NODE_RPC" -o json 2>/dev/null \
+        | jq -r '((.pool.bonded_tokens // .bonded_tokens) // "0")' 2>/dev/null | head -n1
+}
+vp_ratio_pct() {      # max_voting_power_ratio as integer percent (default 20)
+    local r
+    r=$("$BIN" q staking params --node "$NODE_RPC" -o json 2>/dev/null \
+        | jq -r '((.params.max_voting_power_ratio // .max_voting_power_ratio) // "0.20")' 2>/dev/null)
+    awk -v r="$r" 'BEGIN{v=int(r*100); if(v<=0)v=20; print v}' 2>/dev/null || echo 20
+}
+
+# Ramp toward the target self-stake without breaching max_voting_power_ratio.
+# Each run takes the largest SAFE step (create-validator or delegate). Re-run
+# across the fleet in rounds until every validator reaches its target.
+cmd_validator_stake() {
+    require_root; ensure_deps; fetch_chain_info 2>/dev/null || true
+    [ -x "$BIN" ] || die "paxd not installed — run 'hpx setup' first"
+    operator_exists || die "no operator key — run 'hpx validator keygen' first"
+
+    local acc val pubkey mon bal gp
+    acc=$(operator_addr); val=$(operator_valoper); mon=$(state_get moniker)
+    [ -z "$mon" ] && mon="hpx-$(hostname -s 2>/dev/null || echo node)"
+
+    node_synced || die "node is still catching up — wait until 'hpx status' shows catching_up=false, then retry"
+
+    bal=$(operator_balance_uhpx "$acc"); [ -z "$bal" ] && bal=0
+    gp=$(gas_prices)
+
+    # current self-delegation (validator tokens; 0 if not created yet)
+    local exists=0 cur=0
+    if validator_onchain "$val"; then exists=1; cur=$(validator_tokens "$val"); fi
+    [ -z "$cur" ] && cur=0
+
+    # target self-stake (uhpx): override, else "everything I hold" = cur + (bal - reserve)
+    local avail target
+    avail=$(( bal - FEE_RESERVE_UHPX )); [ "$avail" -lt 0 ] && avail=0
+    if   [ -n "${HPX_STAKE_UHPX:-}" ]; then target="$HPX_STAKE_UHPX"
+    elif [ -n "${HPX_STAKE_PAX:-}"  ]; then target=$(( HPX_STAKE_PAX * UHPX_PER_PAX ))
+    else target=$(( cur + avail )); fi
+
+    if [ "$cur" -ge "$target" ] 2>/dev/null; then
+        ok "validator ${mon} at target (${cur} ${BOND_DENOM}, $(( cur / UHPX_PER_PAX )) PAX) — nothing to do"; return 0
+    fi
+
+    # voting-power-ratio cap: self/(others+self) <= R  =>  self <= others*RS/(100-RS)
+    # use RS = R-1 as a safety margin against boundary rejection.
+    local total others R RS maxstep stepself delta
+    total=$(pool_bonded); [ -z "$total" ] && total=0
+    others=$(( total - cur )); [ "$others" -lt 0 ] && others=0
+    R=$(vp_ratio_pct); RS=$(( R - 1 )); [ "$RS" -le 0 ] && RS=1
+    if [ "$others" -gt 0 ]; then maxstep=$(( others * RS / (100 - RS) )); else maxstep="$target"; fi
+
+    stepself="$target"
+    [ "$stepself" -gt $(( cur + avail )) ] && stepself=$(( cur + avail ))
+    [ "$others" -gt 0 ] && [ "$stepself" -gt "$maxstep" ] && stepself="$maxstep"
+    delta=$(( stepself - cur ))
+
+    if [ "$delta" -le 0 ] 2>/dev/null; then
+        warn "${mon}: ratio cap reached (self=$(( cur/UHPX_PER_PAX )) PAX, cap=$(( maxstep/UHPX_PER_PAX )) PAX of total $(( total/UHPX_PER_PAX )) PAX). Grow other validators, then re-run."
+        return 0
+    fi
+    if [ "$bal" -lt $(( delta + FEE_RESERVE_UHPX )) ] 2>/dev/null; then
+        delta=$(( bal - FEE_RESERVE_UHPX ))
+        [ "$delta" -gt 0 ] 2>/dev/null || die "operator ${acc} balance ${bal} ${BOND_DENOM} too low to stake"
+    fi
+
+    ensure_validator_mode
+    node_synced || die "node not synced after mode switch — retry once 'hpx status' shows catching_up=false"
+
+    if [ "$exists" -eq 0 ]; then
+        pubkey=$(consensus_pubkey); [ -n "$pubkey" ] || die "could not read consensus pubkey (paxd tendermint show-validator)"
+        blank; prn "${C_BOLD}Create validator${C_RST} ${C_DIM}(ramp step)${C_RST}"; hr
+        prn "  Moniker     ${C_WHT}${mon}${C_RST}"
+        prn "  Valoper     ${C_DIM}${val}${C_RST}"
+        prn "  Stake now   ${C_WHT}${delta} ${BOND_DENOM}${C_RST} ${C_DIM}($(( delta/UHPX_PER_PAX )) PAX)  cap=$(( maxstep/UHPX_PER_PAX )) PAX  target=$(( target/UHPX_PER_PAX )) PAX${C_RST}"
+        prn "  Gas prices  ${C_DIM}${gp}${C_RST}"
+        hr
+        [ -z "${HPX_YES:-}" ] && { confirm "Broadcast create-validator?" || { warn "cancelled"; return; }; }
+        info "broadcasting create-validator (${delta} ${BOND_DENOM})"
+        pxk tx staking create-validator \
+            --amount "${delta}${BOND_DENOM}" --pubkey "$pubkey" --moniker "$mon" \
+            --chain-id "$CHAIN_ID" \
+            --commission-rate "$STAKE_COMMISSION" --commission-max-rate "$STAKE_COMMISSION_MAX" \
+            --commission-max-change-rate "$STAKE_COMMISSION_CHG" \
+            --min-self-delegation "$STAKE_MIN_SELF" \
+            --from "$OPERATOR_KEY" --gas auto --gas-adjustment 1.5 --gas-prices "$gp" \
+            --node "$NODE_RPC" -y || die "create-validator tx failed"
+    else
+        blank; prn "${C_BOLD}Delegate${C_RST} ${C_DIM}(ramp step)${C_RST}"; hr
+        prn "  Moniker     ${C_WHT}${mon}${C_RST}"
+        prn "  Add         ${C_WHT}${delta} ${BOND_DENOM}${C_RST} ${C_DIM}($(( delta/UHPX_PER_PAX )) PAX)  self $(( cur/UHPX_PER_PAX ))->$(( stepself/UHPX_PER_PAX )) PAX  cap=$(( maxstep/UHPX_PER_PAX )) PAX${C_RST}"
+        hr
+        [ -z "${HPX_YES:-}" ] && { confirm "Broadcast delegate?" || { warn "cancelled"; return; }; }
+        info "broadcasting delegate (${delta} ${BOND_DENOM})"
+        pxk tx staking delegate "$val" "${delta}${BOND_DENOM}" \
+            --chain-id "$CHAIN_ID" --from "$OPERATOR_KEY" \
+            --gas auto --gas-adjustment 1.5 --gas-prices "$gp" \
+            --node "$NODE_RPC" -y || die "delegate tx failed"
+    fi
+    blank; ok "ramp step done — self $(( cur/UHPX_PER_PAX )) -> $(( stepself/UHPX_PER_PAX )) PAX (target $(( target/UHPX_PER_PAX )) PAX). Re-run after other validators grow."; blank
+}
+
+cmd_validator_status() {
+    ensure_deps
+    if ! operator_exists; then
+        warn "no operator key on this host — run 'hpx validator keygen'"; return 0
+    fi
+    local acc val bal
+    acc=$(operator_addr); val=$(operator_valoper); bal=$(operator_balance_uhpx "$acc"); [ -z "$bal" ] && bal=0
+    blank; prn "${C_BOLD}Validator status${C_RST}"; hr
+    prn "  Moniker     ${C_WHT}$(state_get moniker)${C_RST}"
+    prn "  Operator    ${C_WHT}${acc}${C_RST}"
+    prn "  Valoper     ${C_DIM}${val}${C_RST}"
+    prn "  Balance     ${C_WHT}${bal} ${BOND_DENOM}${C_RST}  ${C_DIM}($(( bal / UHPX_PER_PAX )) PAX)${C_RST}"
+    if validator_onchain "$val"; then
+        local vj
+        vj=$("$BIN" q staking validator "$val" --node "$NODE_RPC" -o json 2>/dev/null)
+        prn "  On-chain    ${C_GRN}registered${C_RST}"
+        prn "  Status      ${C_WHT}$(echo "$vj" | jq -r '.status // "?"')${C_RST}  ${C_DIM}jailed=$(echo "$vj" | jq -r '.jailed // "?"')${C_RST}"
+        prn "  Tokens      ${C_WHT}$(echo "$vj" | jq -r '.tokens // "?"') ${BOND_DENOM}${C_RST}"
+    else
+        prn "  On-chain    ${C_YLW}not a validator yet${C_RST} ${C_DIM}(fund operator + 'hpx validator stake')${C_RST}"
+    fi
+    hr; blank
+}
+
+cmd_validator() {
+    local sub="${1:-status}"
+    case "$sub" in
+        keygen|gen|key) cmd_validator_keygen ;;
+        stake|create)   cmd_validator_stake ;;
+        status|info)    cmd_validator_status ;;
+        *) die "usage: hpx validator {keygen|stake|status}" ;;
+    esac
+}
+
+# ── Interactive menu ──────────────────────────────────────────────────────────
+interactive_main() {
+    while true; do
+        banner
+        if [ -f "$STATE_FILE" ]; then
+            local svc; svc=$(systemctl is-active "$SERVICE" 2>/dev/null || echo inactive)
+            prn "  ${C_DIM}Node:${C_RST} ${C_WHT}$(state_get moniker)${C_RST} ${C_DIM}($(state_get type))${C_RST}  ${C_DIM}service:${C_RST} $([ "$svc" = active ] && echo "${C_GRN}" || echo "${C_RED}")${svc}${C_RST}"
+        else
+            prn "  ${C_DIM}No node installed on this host yet.${C_RST}"
+        fi
+        local choice
+        choice=$(menu_select "Main Menu" \
+            "Setup / install node" \
+            "Status" "Detailed info" \
+            "Restart" "Stop" "Start" \
+            "Update paxd to latest" \
+            "Logs (follow)" \
+            "Peers: show registry" "Peers: refresh + restart" \
+            "Re-register this node" \
+            "Re-bootstrap (state sync)" \
+            "Validator: generate operator account" \
+            "Validator: stake (create-validator)" \
+            "Validator: status" \
+            "Remove node")
+        case "$choice" in
+            1) flow_setup ;;
+            2) cmd_status ;;  3) cmd_info ;;
+            4) cmd_restart ;; 5) cmd_stop ;; 6) cmd_start ;;
+            7) cmd_update ;;
+            8) cmd_logs 200 ;;
+            9) cmd_peers show ;; 10) cmd_peers refresh ;;
+            11) cmd_register ;;
+            12) cmd_statesync ;;
+            13) cmd_validator_keygen ;;
+            14) cmd_validator_stake ;;
+            15) cmd_validator_status ;;
+            16) cmd_remove ;;
+            0) prn "${C_DIM}bye.${C_RST}"; exit 0 ;;
+        esac
+        blank; pr "${C_DIM}Press Enter to continue...${C_RST}"; read -r
+    done
+}
+
+usage() {
+    prn "${C_BOLD}hpx${C_RST} — HyperPax Node Manager v${VERSION}"; blank
+    prn "${C_BOLD}Usage:${C_RST}"
+    prn "  hpx                         interactive menu"
+    prn "  hpx setup                   install a node (fullnode or validator)"
+    prn "  hpx status | info           health + endpoints"
+    prn "  hpx logs [n]                follow journald logs"
+    prn "  hpx start | stop | restart  service lifecycle"
+    prn "  hpx update                  pull published paxd + restart"
+    prn "  hpx peers {show|refresh}    registry peers / refresh persistent_peers"
+    prn "  hpx register                (re)announce this node to the registry"
+    prn "  hpx statesync               (re)bootstrap from a snapshot (for stuck nodes)"
+    prn "  hpx validator keygen        generate this node's operator account (print addr to fund)"
+    prn "  hpx validator stake         create-validator from the funded operator account"
+    prn "  hpx validator status        operator address, balance, and on-chain validator state"
+    prn "  hpx remove                  uninstall (optionally wipe data)"
+    prn "  hpx version | help"; blank
+    prn "${C_DIM}Mirror: ${MIRROR}  (override with HPX_MIRROR)${C_RST}"; blank
+}
+
+main() {
+    local cmd="${1:-}"
+    case "$cmd" in
+        "")                   interactive_main ;;
+        setup|install)        flow_setup ;;
+        status)               cmd_status ;;
+        info)                 cmd_info ;;
+        logs)                 shift; cmd_logs "${1:-200}" ;;
+        start)                cmd_start ;;
+        stop)                 cmd_stop ;;
+        restart)              cmd_restart ;;
+        update|upgrade)       cmd_update ;;
+        peers)                shift; cmd_peers "${1:-show}" "${2:-}" ;;
+        register)             cmd_register ;;
+        statesync)            cmd_statesync ;;
+        validator|val)        shift; cmd_validator "${1:-status}" ;;
+        stake)                cmd_validator stake ;;
+        keygen)               cmd_validator keygen ;;
+        remove|uninstall)     cmd_remove ;;
+        help|--help|-h)       usage ;;
+        version|--version|-v) prn "hpx v${VERSION}" ;;
+        *) err "unknown command: ${cmd}"; usage; exit 1 ;;
+    esac
+}
+
+main "$@"

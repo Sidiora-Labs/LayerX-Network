@@ -1,0 +1,90 @@
+package types
+
+import (
+	"encoding/json"
+	"io"
+	"os"
+	"time"
+
+	"github.com/gogo/protobuf/grpc"
+	abci "github.com/sidiora-labs/paxeer-network/consensus/abci/types"
+	tmcfg "github.com/sidiora-labs/paxeer-network/consensus/config"
+	tmproto "github.com/sidiora-labs/paxeer-network/consensus/proto/tendermint/types"
+	tmtypes "github.com/sidiora-labs/paxeer-network/consensus/types"
+	cryptotypes "github.com/sidiora-labs/paxeer-network/sdk/crypto/types"
+	sdk "github.com/sidiora-labs/paxeer-network/sdk/types"
+	"github.com/spf13/cobra"
+	dbm "github.com/tendermint/tm-db"
+
+	"github.com/sidiora-labs/paxeer-network/sdk/client"
+	"github.com/sidiora-labs/paxeer-network/sdk/server/api"
+	"github.com/sidiora-labs/paxeer-network/sdk/server/config"
+)
+
+// ServerStartTime defines the time duration that the server need to stay running after startup
+// for the startup be considered successful
+const ServerStartTime = 5 * time.Second
+
+type (
+	// AppOptions defines an interface that is passed into an application
+	// constructor, typically used to set BaseApp options that are either supplied
+	// via config file or through CLI arguments/flags. The underlying implementation
+	// is defined by the server package and is typically implemented via a Viper
+	// literal defined on the server Context. Note, casting Get calls may not yield
+	// the expected types and could result in type assertion errors. It is recommend
+	// to either use the cast package or perform manual conversion for safety.
+	AppOptions interface {
+		Get(string) interface{}
+	}
+
+	// Application defines an application interface that wraps abci.Application.
+	// The interface defines the necessary contracts to be implemented in order
+	// to fully bootstrap and start an application.
+	Application interface {
+		abci.Application
+
+		RegisterAPIRoutes(*api.Server, config.APIConfig)
+
+		// RegisterGRPCServer registers gRPC services directly with the gRPC
+		// server.
+		RegisterGRPCServer(grpc.Server)
+
+		// RegisterTxService registers RPCs of the local tendermint node.
+		RegisterLocalServices(node client.LocalClient, txConfig client.TxConfig)
+
+		// CommitMultiStore Returns the multistore instance
+		CommitMultiStore() sdk.CommitMultiStore
+
+		GetValidators() []abci.ValidatorUpdate
+
+		// Close any open resources
+		Close() error
+
+		InplaceTestnetInitialize(cryptotypes.PubKey)
+	}
+
+	// AppCreator is a function that allows us to lazily initialize an
+	// application using various configurations.
+	AppCreator func(dbm.DB, io.Writer, *tmcfg.Config, AppOptions) Application
+
+	// ModuleInitFlags takes a start command and adds modules specific init flags.
+	ModuleInitFlags func(startCmd *cobra.Command)
+
+	// ExportedApp represents an exported app state, along with
+	// validators, consensus params and latest app height.
+	ExportedApp struct {
+		// AppState is the application state as JSON.
+		AppState json.RawMessage
+		// Validators is the exported validator set.
+		Validators []tmtypes.GenesisValidator
+		// Height is the app's latest block height.
+		Height int64
+		// ConsensusParams are the exported consensus params for ABCI.
+		ConsensusParams *tmproto.ConsensusParams
+	}
+
+	// AppExporter is a function that dumps all app state to
+	// JSON-serializable structure and returns the current validator set.
+	// If a file is specified,
+	AppExporter func(dbm.DB, io.Writer, int64, bool, []string, AppOptions, *os.File) (ExportedApp, error)
+)

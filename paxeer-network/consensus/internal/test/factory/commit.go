@@ -1,0 +1,47 @@
+package factory
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/sidiora-labs/paxeer-network/consensus/crypto"
+	"github.com/sidiora-labs/paxeer-network/consensus/libs/utils"
+	tmproto "github.com/sidiora-labs/paxeer-network/consensus/proto/tendermint/types"
+	"github.com/sidiora-labs/paxeer-network/consensus/types"
+)
+
+func MakeCommit(ctx context.Context, blockID types.BlockID, height int64, round int32, voteSet *types.VoteSet, validators []types.PrivValidator, now time.Time) (*types.Commit, error) {
+	// all sign
+	for i := range validators {
+		pubKey, err := validators[i].GetPubKey(ctx)
+		if err != nil {
+			return nil, err
+		}
+		vote := &types.Vote{
+			ValidatorAddress: pubKey.Address(),
+			ValidatorIndex:   int32(i), //nolint:gosec // i is bounded by len(validators) which is bounded by MaxValidators
+			Height:           height,
+			Round:            round,
+			Type:             tmproto.PrecommitType,
+			BlockID:          blockID,
+			Timestamp:        now,
+		}
+
+		v := vote.ToProto()
+
+		if err := validators[i].SignVote(ctx, voteSet.ChainID(), v); err != nil {
+			return nil, err
+		}
+		sig, err := crypto.SigFromBytes(v.Signature)
+		if err != nil {
+			return nil, fmt.Errorf("crypto.SigFromBytes(): %w", err)
+		}
+		vote.Signature = utils.Some(sig)
+		if _, err := voteSet.AddVote(vote); err != nil {
+			return nil, err
+		}
+	}
+
+	return voteSet.MakeCommit(), nil
+}

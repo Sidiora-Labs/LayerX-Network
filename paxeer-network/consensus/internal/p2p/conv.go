@@ -1,0 +1,151 @@
+package p2p
+
+import (
+	"errors"
+	"fmt"
+	"strings"
+
+	"github.com/sidiora-labs/paxeer-network/consensus/crypto/ed25519"
+	"github.com/sidiora-labs/paxeer-network/consensus/internal/p2p/conn"
+	"github.com/sidiora-labs/paxeer-network/consensus/internal/p2p/pb"
+	"github.com/sidiora-labs/paxeer-network/consensus/internal/protoutils"
+	"github.com/sidiora-labs/paxeer-network/consensus/libs/utils"
+	"github.com/sidiora-labs/paxeer-network/consensus/types"
+)
+
+type NodeSecretKey ed25519.SecretKey
+type NodePublicKey ed25519.PublicKey
+
+func (k NodePublicKey) String() string   { return fmt.Sprintf("node:%v", ed25519.PublicKey(k).String()) }
+func (k NodePublicKey) GoString() string { return k.String() }
+
+// NodePublicKeyFromString parses a NodePublicKey from its string representation ("node:ed25519:public:hex").
+func NodePublicKeyFromString(s string) (NodePublicKey, error) {
+	s2 := strings.TrimPrefix(s, "node:")
+	if s == s2 {
+		return NodePublicKey{}, errors.New("bad prefix")
+	}
+	k, err := ed25519.PublicKeyFromString(s2)
+	if err != nil {
+		return NodePublicKey{}, err
+	}
+	return NodePublicKey(k), nil
+}
+
+// MarshalText implements the encoding.TextMarshaler interface.
+func (k NodePublicKey) MarshalText() ([]byte, error) {
+	return []byte(k.String()), nil
+}
+
+// UnmarshalText implements the encoding.TextUnmarshaler interface.
+func (k *NodePublicKey) UnmarshalText(b []byte) error {
+	x, err := NodePublicKeyFromString(string(b))
+	if err != nil {
+		return err
+	}
+	*k = x
+	return nil
+}
+
+func (k NodeSecretKey) String() string   { return fmt.Sprintf("<secret of %v>", k.Public().String()) }
+func (k NodeSecretKey) GoString() string { return k.String() }
+
+type NodeChallengeSig struct {
+	utils.ReadOnly
+	key NodePublicKey
+	sig ed25519.Signature
+}
+
+func (k NodePublicKey) Bytes() []byte         { return ed25519.PublicKey(k).Bytes() }
+func (k NodeSecretKey) Public() NodePublicKey { return NodePublicKey(ed25519.SecretKey(k).Public()) }
+func (k NodeSecretKey) SignChallenge(challenge conn.Challenge) NodeChallengeSig {
+	return NodeChallengeSig{key: k.Public(), sig: ed25519.SecretKey(k).Sign(challenge[:])}
+}
+
+func (s NodeChallengeSig) Key() NodePublicKey { return s.key }
+func (s NodeChallengeSig) Verify(challenge conn.Challenge) error {
+	return ed25519.PublicKey(s.key).Verify(challenge[:], s.sig)
+}
+
+func (k NodePublicKey) NodeID() types.NodeID {
+	return types.NodeIDFromPubKey(ed25519.PublicKey(k))
+}
+
+var nodePublicKeyConv = protoutils.Conv[NodePublicKey, *pb.NodePublicKey]{
+	Encode: func(k NodePublicKey) *pb.NodePublicKey {
+		return &pb.NodePublicKey{Ed25519: k.Bytes()}
+	},
+	Decode: func(p *pb.NodePublicKey) (NodePublicKey, error) {
+		k, err := ed25519.PublicKeyFromBytes(p.Ed25519)
+		if err != nil {
+			return NodePublicKey{}, fmt.Errorf("Ed25519: %w", err)
+		}
+		return NodePublicKey(k), nil
+	},
+}
+
+type handshakeSpec struct {
+	SelfAddr          utils.Option[NodeAddress]
+	PexAddrs          []NodeAddress
+	PaxGigaConnection bool
+}
+
+type handshakeMsg struct {
+	NodeAuth NodeChallengeSig
+	handshakeSpec
+}
+
+var handshakeMsgConv = protoutils.Conv[*handshakeMsg, *pb.Handshake]{
+	Encode: func(m *handshakeMsg) *pb.Handshake {
+		var selfAddr *string
+		if addr, ok := m.SelfAddr.Get(); ok {
+			selfAddr = utils.Alloc(addr.String())
+		}
+		pexAddrs := make([]string, len(m.PexAddrs))
+		for i, addr := range m.PexAddrs {
+			pexAddrs[i] = addr.String()
+		}
+
+		return &pb.Handshake{
+			NodeAuthKey:       nodePublicKeyConv.Encode(m.NodeAuth.Key()),
+			NodeAuthSig:       m.NodeAuth.sig.Bytes(),
+			SelfAddr:          selfAddr,
+			PexAddrs:          pexAddrs,
+			PaxGigaConnection: m.PaxGigaConnection,
+		}
+	},
+	Decode: func(p *pb.Handshake) (*handshakeMsg, error) {
+		nodeAuthKey, err := nodePublicKeyConv.DecodeReq(p.NodeAuthKey)
+		if err != nil {
+			return nil, fmt.Errorf("NodeAuthKey: %w", err)
+		}
+		nodeAuthSig, err := ed25519.SignatureFromBytes(p.NodeAuthSig)
+		if err != nil {
+			return nil, fmt.Errorf("NodeAuthSig: %w", err)
+		}
+		var selfAddr utils.Option[NodeAddress]
+		if p.SelfAddr != nil {
+			addr, err := ParseNodeAddress(*p.SelfAddr)
+			if err != nil {
+				return nil, fmt.Errorf("SelfAddr: %w", err)
+			}
+			selfAddr = utils.Some(addr)
+		}
+		pexAddrs := make([]NodeAddress, len(p.PexAddrs))
+		for i, addrString := range p.PexAddrs {
+			addr, err := ParseNodeAddress(addrString)
+			if err != nil {
+				return nil, fmt.Errorf("PexAddrs[%v]: %w", i, err)
+			}
+			pexAddrs[i] = addr
+		}
+		return &handshakeMsg{
+			NodeAuth: NodeChallengeSig{key: nodeAuthKey, sig: nodeAuthSig},
+			handshakeSpec: handshakeSpec{
+				SelfAddr:          selfAddr,
+				PexAddrs:          pexAddrs,
+				PaxGigaConnection: p.PaxGigaConnection,
+			},
+		}, nil
+	},
+}

@@ -1,0 +1,45 @@
+- name: Test sending funds
+  inputs:
+    # Create test account
+    - cmd: paxd keys add --keyring-backend test bank-test
+    - cmd: printf "12345678\n" | paxd keys show -a admin
+      env: ADMIN_ACC
+    - cmd: paxd keys show -a bank-test --keyring-backend test
+      env: BANK_TEST_ACC
+    - cmd: paxd status | jq -r ".SyncInfo.latest_block_height"
+      env: BEGINNING_BLOCK_HEIGHT
+    - cmd: paxd q bank balances $ADMIN_ACC --denom uhpx --output json | jq -r .amount
+      env: BEGINNING_ADMIN_BALANCE
+    # Send funds. Helper submits via -b sync (the KV indexer that
+    # -b block polls isn't populated under Autobahn) and echoes the
+    # inclusion height.
+    - cmd: paxdbin=paxd; chainid=pax; source integration_test/utils/_tx_helpers.sh && bank_send_and_get_height admin $BANK_TEST_ACC 1pax
+      env: TX_HEIGHT_1
+    # Force the second send into a strictly later block so the
+    # historical balance verifiers below sample distinct states.
+    - cmd: paxdbin=paxd; source integration_test/utils/_tx_helpers.sh && wait_until_height_exceeds $TX_HEIGHT_1
+    # Send more funds
+    - cmd: paxdbin=paxd; chainid=pax; source integration_test/utils/_tx_helpers.sh && bank_send_and_get_height admin $BANK_TEST_ACC 1pax
+      env: TX_HEIGHT_2
+    # Get bank balance at first height
+    - cmd: paxd q bank balances $BANK_TEST_ACC --denom uhpx --height $TX_HEIGHT_1 --output json | jq -r .amount
+      env: FIRST_HISTORICAL_BANK_BAL
+    # Get bank balance at second height
+    - cmd: paxd q bank balances $BANK_TEST_ACC --denom uhpx --height $TX_HEIGHT_2 --output json | jq -r .amount
+      env: SECOND_HISTORICAL_BANK_BAL
+    # Get bank balance at second height - 1
+    - cmd: paxd q bank balances $BANK_TEST_ACC --denom uhpx --height $((TX_HEIGHT_2 - 1)) --output json | jq -r .amount
+      env: BALANCE_BEFORE_SECOND_HEIGHT
+    # Get bank balance for latest height
+    - cmd: paxd q bank balances $BANK_TEST_ACC --denom uhpx --output json | jq -r .amount
+      env: LATEST_BANK_BALANCE
+  verifiers:
+    # Bank balance should be 1pax
+    - type: eval
+      expr: FIRST_HISTORICAL_BANK_BAL == 1000000
+    - type: eval
+      expr: SECOND_HISTORICAL_BANK_BAL == 2000000
+    - type: eval
+      expr: BALANCE_BEFORE_SECOND_HEIGHT == 1000000
+    - type: eval
+      expr: LATEST_BANK_BALANCE == 2000000

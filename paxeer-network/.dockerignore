@@ -1,0 +1,15 @@
+build/
+**/node_modules/
+**/target/
+.github
+assets
+docker
+**/*.md
+**/README*
+**/LICENSE*
+
+# Ignore all go test files as no tests are run during docker build.
+**/*_test.go
+
+# Version comes from version.json; CI supplies the enclosing monorepo commit
+# through the PAX_CHAIN_REF build argument.

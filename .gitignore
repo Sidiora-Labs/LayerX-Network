@@ -21,9 +21,9 @@
 # Qualification corpora, replay ledgers, and crash artifacts
 *.lxq
 *.roots
-core
-core.*
-crash-*
+/core
+/core.*
+/crash-*
 !programs/vendor/**
 node_modules/
 # Runtime state and logs

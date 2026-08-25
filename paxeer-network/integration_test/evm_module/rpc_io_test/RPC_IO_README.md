@@ -1,0 +1,337 @@
+# EVM RPC .io / .iox tests
+
+Integration tests for Pax EVM RPC compatibility with Ethereum JSON-RPC. The suite runs **160** `.io`/`.iox` files from `testdata/` against a live RPC endpoint (**157** after main's explicit-unsupported fixture refresh, plus **three** `pax_legacy_deprecation/*.iox` for gated `pax_*`, deprecation signaling, and **legacy HTTP batch** non-object slot behavior).
+
+### `.io` vs `.iox`
+
+- **`.io`** - vanilla JSON-RPC fixtures (`>>` / `<<`): no Pax-specific harness directives such as `@ expect_body_contains`.
+- **`.iox`** - same line format, plus Pax extensions: `@ bind` / `<< @ ref_pair`, `@ expect_body_contains`, `@ expect_response_header`, `not-supported.iox` (documented `-32000` errors), and other non-vanilla tags the parser accepts.
+
+## How to run
+
+1. Start the local cluster: `make docker-cluster-start` (EVM RPC on port 8545).
+2. Run the script from repo root:
+  ```bash
+   ./integration_test/evm_module/scripts/evm_rpc_tests.sh
+  ```
+
+When the target is localhost, the script sends one EVM tx and deploys one contract inside the node container before `go test`, so data-dependent `.iox` tests have block/tx/contract. Default RPC URL: `http://127.0.0.1:8545` (override with `PAX_EVM_RPC_URL`).
+
+**Legacy `pax_*` / `pax2_*` gating:** The docker localnet `app.toml` enables every gated method except **`pax_sign`** (low partner risk: not reported by Binance/Dune/Alchemy; unused by other fixtures). Deprecation is asserted in `testdata/pax_legacy_deprecation/*.iox`: **gate errors** use `error.data` `legacy_pax_deprecated` and messages mentioning disabled + deprecated; **successful** allowlisted calls use `@ expect_response_header Pax-Legacy-RPC-Deprecation` (JSON body unchanged). **`batch-nonobject-tail-gate.iox`** posts a JSON-RPC **batch** (`pax_sign` + trailing non-object); it asserts `legacy_pax_deprecated`, `Invalid Request`, and `-32600` in the raw body (empty `<<` expected line plus `@ expect_body_contains`). Directives:
+- `@ expect_body_contains substring` - response body must contain the substring.
+- `@ expect_response_header Header-Name` - response must include that HTTP header (case-insensitive lookup).
+
+Production `paxd init` defaults remain the three-method allowlist (`pax_getPaxAddress`, `pax_getEVMAddress`, `pax_getCosmosTx`).
+
+### Comparing legacy vs giga (RPC parity)
+
+To check that **giga** behaves like **legacy** at the spec level (same methods return result vs error):
+
+**How you know which executor you're hitting:** The test suite does **not** detect or label whether the node uses giga or legacy. It only sends JSON-RPC to the URL in `PAX_EVM_RPC_URL`. You determine which executor is under test by how you started the node or which URL you pass. For parity, run once against a node you know is legacy and once against a node you know is giga, then compare.
+
+**Running a local cluster with Giga enabled:** Pass env vars into `make docker-cluster-start` so the nodes start with the giga executor:
+
+```bash
+# All 4 nodes use Giga (and OCC). Foreground:
+GIGA_EXECUTOR=true GIGA_OCC=true make docker-cluster-start
+
+# Same, but run cluster in background so you can run the RPC test script:
+GIGA_EXECUTOR=true GIGA_OCC=true DOCKER_DETACH=true make docker-cluster-start
+# Wait for build/generated/launch.complete (4 lines), then:
+./integration_test/evm_module/scripts/evm_rpc_tests.sh
+```
+
+Without `GIGA_EXECUTOR` and `GIGA_OCC`, the cluster uses the legacy (V2) executor. The Makefile passes these through to `docker compose`; the node image uses them in `docker/localnode/scripts/step4_config_override.sh`.
+
+1. Run the suite against the **legacy** endpoint and record the final report:
+   ```bash
+   PAX_EVM_RPC_URL=<legacy_url> ./integration_test/evm_module/scripts/evm_rpc_tests.sh
+   ```
+   At the end you'll see a block like:
+   ```
+   ========== Pax EVM RPC .io/.iox test report ==========
+     Total:  ...
+     Passed: ...
+     Failed: ...
+     Skipped: ...
+     Pass rate: ...%
+   =======================================================
+   ```
+2. Run the same suite against the **giga** endpoint:
+   ```bash
+   PAX_EVM_RPC_URL=<giga_url> ./integration_test/evm_module/scripts/evm_rpc_tests.sh
+   ```
+3. Compare **Total**, **Passed**, **Failed**, and **Skipped**. Same numbers => spec parity for that run. Any difference indicates a method that returns result on one node and error on the other (or vice versa).
+
+For a fair comparison, both endpoints should serve the **same chain** (same genesis and blocks). If using the script's seed (deploy tx), run the script once to create the seed on one node; for the second run you can point at the other node only if it has the same chain and the same block containing that deploy (e.g. two nodes in the same network).
+
+## Test mix
+
+
+| Kind      | Count | Description                                                                                                                              |
+| --------- | ----- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| **.io**   | 97    | Request/response fixtures; curated from [ethereum/execution-apis](https://github.com/ethereum/execution-apis) plus Pax-added.            |
+| **.iox**  | 63    | Pax-generated; use `@ bind` and optional `@ ref_pair N` so data comes from a first request; includes `not-supported.iox`, `pax_legacy_deprecation/*.iox`. |
+| **Total** | 160   | All under `testdata/`; runner executes every .io and .iox file.                                                                          |
+
+
+Fixtures live in `testdata/`; see `testdata/README.md` (do not overwrite with a raw copy from execution-apis).
+
+### Removed tests
+
+The following fixtures were **removed** (no longer in the suite) because they depended on execution-apis testnet state (fixed contract addresses that do not exist on Pax). Revert/estimateGas behavior is covered by self-contained Pax fixtures instead.
+
+| Removed fixture | Reason | Replacement |
+| ----------------- | ------ | ----------- |
+| `eth_call/call-revert-abi-error.io` | Fixed address `0x0ee3ab...` (reverting contract on execution-apis only) | `eth_call/call-revert-abi-error-pax.iox` (uses `__REVERTER__`, script-deployed) |
+| `eth_call/call-revert-abi-panic.io` | Same fixed address, panic case | `eth_call/call-revert-abi-panic-pax.iox` (uses `__REVERTER__` with input `0x02` for panic) |
+| `eth_estimateGas/estimate-call-abi-error.io` | Same fixed address, expects revert error | `eth_estimateGas/estimate-call-abi-error-pax.iox` (uses `__REVERTER__`) |
+| `eth_estimateGas/estimate-failed-call.io` | Fixed address `0x17e7ee...`, expects revert error | Revert (Error) and panic covered by `estimate-call-abi-error-pax.iox` and `estimate-call-abi-panic-pax.iox` (same `__REVERTER__`, input `0x01` / `0x02`) |
+
+The total count reflects the current `.io`/`.iox` set under `testdata/` (160 files: main baseline plus three pax deprecation `.iox`, including batch regression).
+
+## What is checked
+
+**Spec-only:** For each request/response pair, the runner only checks that the response *kind* matches the expected one: presence of `result` vs `error`. Response values are not compared.
+
+## Outcomes
+
+- **Pass** - Response kind matches expected.
+- **Skip** - A required binding is missing (e.g. `${txHash}`, `${deployTxHash}`). Typical cause: latest block has no transactions when the test runs. Data dependency.
+- **Fail** - Response kind mismatch: node returned `result` when test expects `error`, or `error` when test expects `result`. On each failure the runner logs **actual response**: the node's `error.code` and `error.message` (or a short `result` snippet). Use that to tell **not implemented** (e.g. code -32601), **invalid params** (-32602), **disabled endpoint**, or other spec mismatch.
+
+### What "seed" means here
+
+**Seed** = the block we create before tests run (by sending a deploy tx in the script) so that data-dependent fixtures have deterministic data to query.
+
+1. The script sends one EVM tx and deploys one contract; the **deploy block** is the block that includes that deploy.
+2. The script sets `PAX_EVM_IO_SEED_BLOCK` to that block number (hex) and `PAX_EVM_IO_DEPLOY_TX_HASH` to the deploy tx hash.
+3. In `.iox` fixtures, `__SEED__` in a request is replaced by that block number (or by `"latest"` if the script didn't run / seed isn't set).
+4. Fixtures can bind `${txHash}` from the first request (e.g. `eth_getBlockByNumber(__SEED__, true)` -> `result.transactions.0.hash`) and `${deployTxHash}` is pre-filled from the script when set, so later requests use a known block and known tx hashes instead of "latest" (which might be empty).
+5. The script also deploys a **reverter** contract; it sets `PAX_EVM_IO_REVERTER_ADDRESS`. In fixtures, `__REVERTER__` is replaced by that address. The reverter responds to calldata: empty or `0x01` -> `Error("user error")`; `0x02` -> panic (assert false). Used by `eth_call/call-revert-abi-error-pax.iox`, `eth_call/call-revert-abi-panic-pax.iox`, `eth_estimateGas/estimate-call-abi-error-pax.iox`, and `eth_estimateGas/estimate-call-abi-panic-pax.iox`. If a fixture uses `__REVERTER__` and the env is not set, the test is skipped.
+
+So "seed" = a known-good block (and deploy tx) that the script creates and the runner uses so **SEED** and deploy/tx bindings resolve.
+
+---
+
+## Test results (reference runs)
+
+*Source:* **Eth exec api** = from [ethereum/execution-apis](https://github.com/ethereum/execution-apis) (`.io`); **Pax** = Pax-generated (`.iox` or Pax-added `.io`).
+
+**Latest recorded `TestEVMRPCSpec` (docker localnet, 160 files):** **160** passed, **0** failed, **100.0%** pass rate (**eth parity + legacy batch gate (Mar 2026)** column below). **All `pax_*` and `eth_*` fixtures pass.** There are **no** `pax2_*` fixtures in `testdata/` yet.
+
+**Column guide (Summary table below):** **First run** = historical full suite before trimming. **Post-trim baseline** = early **164**-fixture snapshot. **unsupported-fix** = **157** fixtures: current `testdata/` after `eth_simulateV1` removal and **`not-supported.iox`** explicit errors (see [docs/evm_jsonrpc_unsupported.md](../../../docs/evm_jsonrpc_unsupported.md)). **pax_* fix** = **159** files: **157** + two `pax_legacy_deprecation/*.iox`, docker `enabled_legacy_pax_apis` expanded (all gated `pax_*` / `pax2_*` except `pax_sign`); filter-log lifecycle `.iox` use `latest`->`latest` so they respect `max_blocks_for_log`. **eth_call fix** = same **159** files after fixture updates for **EIP-1559-shaped** `eth_call` and `eth_createAccessList`: `call-callenv-options-eip1559.iox` uses zero `maxFeePerGas`/`maxPriorityFeePerGas` with `from=0x0` (Geth `CallDefaults`/`NoBaseFee` path); `create-al-contract-eip1559.iox` uses deploy receipt `from` + non-zero caps (`setFeeDefaults` + `BuyGas`). **getLogs range fix** = same **159** files after **`eth_getLogs/filter-error-future-block-range.io`** uses a `toBlock` (`0x7fffffffffffffff`) that stays above chain head as the localnet grows (small fixed heights became historical and returned `[]`, causing a spec kind mismatch); RPC behavior unchanged. **eth parity pass (Mar 2026)** = **159** files after RPC + fixture alignment for remaining `eth_*` gaps: `eth_getBlockByNumber` returns **`result: null`** for future numeric heights (Geth-style); `eth_getProof` unwraps `tracekv` / Giga cache / any **`types.Queryable`** leaf; fixtures fix `from`/JSON/`__SEED__` for createAccessList, estimateGas, estimateGasAfterCalls, and tx-by-index-on-seed-block. **eth parity + legacy batch gate (Mar 2026)** = **160** files: adds **`pax_legacy_deprecation/batch-nonobject-tail-gate.iox`** for `wrapPaxLegacyHTTP` batch handling (merge by `id`, `-32600` for non-object slots, no gate bypass); see PLT-227 / `rpc/pax_legacy_http.go`. See `FAILED_TEST_ANALYSIS.md`.
+
+### Passed tests (160 of 160)
+
+
+| Endpoint                               | Test                                                           | Source       |
+| -------------------------------------- | -------------------------------------------------------------- | ------------ |
+| cross_check                            | get-block-by-number-then-by-hash.iox                           | Pax          |
+| debug_getRawBlock                      | not-supported.iox                                              | Pax          |
+| debug_getRawHeader                     | not-supported.iox                                              | Pax          |
+| debug_getRawReceipts                   | not-supported.iox                                              | Pax          |
+| debug_getRawTransaction                | not-supported.iox                                              | Pax          |
+| debug_traceBlockByHash                 | traceBlockByHash.iox                                           | Pax          |
+| debug_traceBlockByNumber               | traceBlockByNumber.iox                                         | Pax          |
+| debug_traceBlockByNumber               | traceBlockByNumber-latest.io                                   | Eth exec api |
+| debug_traceCall                        | traceCall.io                                                   | Eth exec api |
+| debug_traceStateAccess                 | traceStateAccess-not-found.io                                  | Eth exec api |
+| debug_traceStateAccess                 | traceStateAccess.iox                                           | Pax          |
+| debug_traceTransaction                 | traceTransaction-not-found.io                                  | Eth exec api |
+| debug_traceTransaction                 | traceTransaction.iox                                           | Pax          |
+| echo_echo                              | echo.io                                                        | Pax          |
+| eth_accounts                           | accounts.io                                                    | Pax          |
+| eth_blobBaseFee                        | blobs-not-supported-error.iox                                  | Pax          |
+| eth_blockNumber                        | simple-test.io                                                 | Eth exec api |
+| eth_call                               | call-callenv.io                                                | Eth exec api |
+| eth_call                               | call-callenv-options-eip1559.iox                               | Pax          |
+| eth_call                               | call-contract-from-deploy.iox                                  | Pax          |
+| eth_call                               | call-contract.io                                               | Eth exec api |
+| eth_call                               | call-eip7702-delegation.io                                     | Eth exec api |
+| eth_call                               | call-revert-abi-error-pax.iox                                  | Pax          |
+| eth_call                               | call-revert-abi-panic-pax.iox                                  | Pax          |
+| eth_chainId                            | get-chain-id.io                                                | Eth exec api |
+| eth_coinbase                           | coinbase.io                                                    | Pax          |
+| eth_createAccessList                   | create-al-abi-revert.iox                                       | Pax          |
+| eth_createAccessList                   | create-al-contract.iox                                         | Pax          |
+| eth_createAccessList                   | create-al-contract-eip1559.iox                                 | Pax          |
+| eth_createAccessList                   | create-al-value-transfer.iox                                   | Pax          |
+| eth_estimateGas                        | estimate-call-abi-error-pax.iox                                | Pax          |
+| eth_estimateGas                        | estimate-call-abi-panic-pax.iox                                | Pax          |
+| eth_estimateGas                        | estimate-gas-from-deploy.iox                                   | Pax          |
+| eth_estimateGas                        | estimate-simple-transfer.io                                    | Eth exec api |
+| eth_estimateGas                        | estimate-successful-call.io                                    | Eth exec api |
+| eth_estimateGas                        | estimate-with-eip4844.iox                                      | Pax          |
+| eth_estimateGas                        | estimate-with-eip7702.iox                                      | Pax          |
+| eth_estimateGasAfterCalls              | estimateGasAfterCalls.iox                                      | Pax          |
+| eth_feeHistory                         | fee-history.io                                                 | Eth exec api |
+| eth_gasPrice                           | gasPrice.io                                                    | Pax          |
+| eth_getBalance                         | get-balance-blockhash.iox                                      | Pax          |
+| eth_getBalance                         | get-balance-unknown-account.io                                 | Eth exec api |
+| eth_getBalance                         | get-balance.io                                                 | Eth exec api |
+| eth_getBlockByHash                     | get-block-by-empty-hash.iox                                    | Pax          |
+| eth_getBlockByHash                     | get-block-by-hash.iox                                          | Pax          |
+| eth_getBlockByHash                     | get-block-by-notfound-hash.iox                                 | Pax          |
+| eth_getBlockByNumber                   | get-block-cancun-fork.io                                       | Eth exec api |
+| eth_getBlockByNumber                   | get-block-london-fork.io                                       | Eth exec api |
+| eth_getBlockByNumber                   | get-block-merge-fork.io                                        | Eth exec api |
+| eth_getBlockByNumber                   | get-block-notfound.iox                                         | Pax          |
+| eth_getBlockByNumber                   | get-block-prague-fork.io                                       | Eth exec api |
+| eth_getBlockByNumber                   | get-block-shanghai-fork.io                                     | Eth exec api |
+| eth_getBlockByNumber                   | get-finalized.io                                               | Eth exec api |
+| eth_getBlockByNumber                   | get-genesis.io                                                 | Eth exec api |
+| eth_getBlockByNumber                   | get-latest-full-then-by-hash.iox                               | Pax          |
+| eth_getBlockByNumber                   | get-latest.io                                                  | Eth exec api |
+| eth_getBlockByNumber                   | get-safe.io                                                    | Eth exec api |
+| eth_getBlockReceipts                   | get-block-receipts-0.io                                        | Eth exec api |
+| eth_getBlockReceipts                   | get-block-receipts-by-hash.iox                                 | Pax          |
+| eth_getBlockReceipts                   | get-block-receipts-earliest.io                                 | Eth exec api |
+| eth_getBlockReceipts                   | get-block-receipts-future.io                                   | Eth exec api |
+| eth_getBlockReceipts                   | get-block-receipts-latest.io                                   | Eth exec api |
+| eth_getBlockReceipts                   | get-block-receipts-n.io                                        | Eth exec api |
+| eth_getBlockReceipts                   | get-block-receipts-empty.iox                                   | Pax          |
+| eth_getBlockReceipts                   | get-block-receipts-not-found.iox                               | Pax          |
+| eth_getBlockReceipts                   | get-receipts-by-latest-block.iox                               | Pax          |
+| eth_getBlockTransactionCountByHash     | get-block-n.iox                                                | Pax          |
+| eth_getBlockTransactionCountByHash     | get-genesis.iox                                                | Pax          |
+| eth_getBlockTransactionCountByNumber   | get-block-n.io                                                 | Eth exec api |
+| eth_getBlockTransactionCountByNumber   | get-genesis.io                                                 | Eth exec api |
+| eth_getCode                            | get-code-eip7702-delegation.io                                 | Eth exec api |
+| eth_getCode                            | get-code-from-deploy.iox                                       | Pax          |
+| eth_getCode                            | get-code-unknown-account.io                                    | Eth exec api |
+| eth_getCode                            | get-code.io                                                    | Eth exec api |
+| eth_getFilterChanges                   | getFilterChanges-invalid-id.io                                 | Eth exec api |
+| eth_getFilterChanges                   | getFilterChanges-lifecycle.iox                                 | Pax          |
+| eth_getFilterLogs                      | getFilterLogs-invalid-id.io                                    | Eth exec api |
+| eth_getFilterLogs                      | getFilterLogs-lifecycle.iox                                    | Pax          |
+| eth_getLogs                            | contract-addr.io                                               | Eth exec api |
+| eth_getLogs                            | filter-error-future-block-range.io                             | Eth exec api |
+| eth_getLogs                            | filter-error-invalid-blockHash-and-range.io                    | Eth exec api |
+| eth_getLogs                            | filter-error-reversed-block-range.io                           | Eth exec api |
+| eth_getLogs                            | filter-with-blockHash-and-topics.io                            | Eth exec api |
+| eth_getLogs                            | filter-with-blockHash.io                                       | Eth exec api |
+| eth_getLogs                            | no-topics.io                                                   | Eth exec api |
+| eth_getLogs                            | topic-exact-match.io                                           | Eth exec api |
+| eth_getLogs                            | topic-wildcard.io                                              | Eth exec api |
+| eth_getProof                           | get-account-proof-blockhash.iox                                | Pax          |
+| eth_getProof                           | get-account-proof-latest.iox                                   | Pax          |
+| eth_getProof                           | get-account-proof-with-storage.iox                             | Pax          |
+| eth_getStorageAt                       | get-storage-invalid-key-too-large.io                           | Eth exec api |
+| eth_getStorageAt                       | get-storage-invalid-key.io                                     | Eth exec api |
+| eth_getStorageAt                       | get-storage-unknown-account.io                                 | Eth exec api |
+| eth_getStorageAt                       | get-storage.io                                                 | Eth exec api |
+| eth_getTransactionByBlockHashAndIndex   | get-block-n.iox                                                | Pax          |
+| eth_getTransactionByBlockNumberAndIndex | get-block-n.iox                                                | Pax          |
+| eth_getTransactionByHash               | get-access-list.io                                             | Eth exec api |
+| eth_getTransactionByHash               | get-blob-tx.io                                                 | Eth exec api |
+| eth_getTransactionByHash               | get-dynamic-fee.io                                             | Eth exec api |
+| eth_getTransactionByHash               | get-empty-tx.io                                                | Eth exec api |
+| eth_getTransactionByHash               | get-legacy-create.io                                           | Eth exec api |
+| eth_getTransactionByHash               | get-legacy-input.io                                            | Eth exec api |
+| eth_getTransactionByHash               | get-legacy-tx.io                                               | Eth exec api |
+| eth_getTransactionByHash               | get-notfound-tx.io                                             | Eth exec api |
+| eth_getTransactionByHash               | get-setcode-tx.io                                              | Eth exec api |
+| eth_getTransactionByHash               | get-tx-from-latest-block.iox                                   | Pax          |
+| eth_getTransactionCount                | get-nonce-eip7702-account.io                                   | Eth exec api |
+| eth_getTransactionCount                | get-nonce-unknown-account.io                                   | Eth exec api |
+| eth_getTransactionCount                | get-nonce.io                                                   | Eth exec api |
+| eth_getTransactionErrorByHash          | getTransactionErrorByHash-not-found.io                         | Pax          |
+| eth_getTransactionErrorByHash          | getTransactionErrorByHash.io                                   | Pax          |
+| eth_getTransactionReceipt              | get-access-list.io                                             | Eth exec api |
+| eth_getTransactionReceipt              | get-blob-tx.io                                                 | Eth exec api |
+| eth_getTransactionReceipt              | get-dynamic-fee.io                                             | Eth exec api |
+| eth_getTransactionReceipt              | get-empty-tx.io                                                | Eth exec api |
+| eth_getTransactionReceipt              | get-legacy-contract.io                                         | Eth exec api |
+| eth_getTransactionReceipt              | get-legacy-input.io                                            | Eth exec api |
+| eth_getTransactionReceipt              | get-legacy-receipt.io                                          | Eth exec api |
+| eth_getTransactionReceipt              | get-notfound-tx.io                                             | Eth exec api |
+| eth_getTransactionReceipt              | get-receipt-from-latest-block.iox                              | Pax          |
+| eth_getTransactionReceipt              | get-setcode-tx.io                                              | Eth exec api |
+| eth_getVMError                         | getVMError-not-found.io                                        | Pax          |
+| eth_getVMError                         | getVMError.iox                                                 | Pax          |
+| eth_maxPriorityFeePerGas               | maxPriorityFeePerGas.io                                        | Pax          |
+| eth_newBlockFilter                     | newBlockFilter.io                                              | Pax          |
+| eth_newFilter                          | newFilter.io                                                   | Pax          |
+| eth_newPendingTransactionFilter        | not-supported.iox                                              | Pax          |
+| eth_syncing                            | not-supported.iox                                              | Pax          |
+| eth_sendRawTransaction                 | send-access-list-transaction.iox                               | Pax          |
+| eth_sendRawTransaction                 | send-blob-tx.iox                                               | Pax          |
+| eth_sendRawTransaction                 | send-dynamic-fee-access-list-transaction.iox                   | Pax          |
+| eth_sendRawTransaction                 | send-dynamic-fee-transaction.iox                               | Pax          |
+| eth_sendRawTransaction                 | send-legacy-transaction.iox                                    | Pax          |
+| eth_sendTransaction                    | sendTransaction-unsupported.io                                 | Pax          |
+| eth_sign                               | sign-unsupported.io                                            | Pax          |
+| eth_signTransaction                    | signTransaction-unsupported.io                                 | Pax          |
+| eth_uninstallFilter                    | uninstallFilter-invalid-id.io                                  | Eth exec api |
+| eth_uninstallFilter                    | uninstallFilter-lifecycle.io                                   | Eth exec api |
+| net_version                            | get-network-id.io                                              | Eth exec api |
+| pax_associate                          | associate-invalid.io                                           | Pax          |
+| pax_getBlockByHashExcludeTraceFail     | getBlockByHashExcludeTraceFail.iox                             | Pax          |
+| pax_getBlockByNumberExcludeTraceFail   | getBlockByNumberExcludeTraceFail.io                            | Pax          |
+| pax_getCosmosTx                        | getCosmosTx.io                                                 | Pax          |
+| pax_getEVMAddress                      | getEVMAddress-invalid.io                                       | Pax          |
+| pax_getEvmTx                           | getEvmTx-invalid.io                                            | Pax          |
+| pax_getFilterChanges                   | getFilterChanges.iox                                           | Pax          |
+| pax_getFilterLogs                      | getFilterLogs.iox                                              | Pax          |
+| pax_getLogs                            | getLogs.io                                                     | Pax          |
+| pax_getPaxAddress                      | getPaxAddress-not-found.io                                     | Pax          |
+| pax_getTransactionReceiptExcludeTraceFail | getTransactionReceiptExcludeTraceFail.iox                   | Pax          |
+| pax_legacy_deprecation                 | batch-nonobject-tail-gate.iox                                  | Pax          |
+| pax_legacy_deprecation                 | deprecation-success.iox                                        | Pax          |
+| pax_legacy_deprecation                 | pax_sign-disabled.iox                                          | Pax          |
+| pax_newBlockFilter                     | newBlockFilter.io                                              | Pax          |
+| pax_newFilter                          | newFilter.io                                                   | Pax          |
+| pax_traceBlockByHashExcludeTraceFail   | traceBlockByHashExcludeTraceFail.iox                           | Pax          |
+| pax_traceBlockByNumberExcludeTraceFail | traceBlockByNumberExcludeTraceFail.iox                         | Pax          |
+| pax_uninstallFilter                    | uninstallFilter.io                                             | Pax          |
+| txpool_content                         | content.io                                                     | Pax          |
+| web3_clientVersion                     | clientVersion.io                                               | Pax          |
+
+
+### Failed tests (0 on latest reference run)
+
+**Latest docker localnet + `evm_rpc_tests.sh`:** **0** failures (**eth parity + legacy batch gate (Mar 2026)**). Methods that Pax documents as unsupported still use **`not-supported.iox`** (and `eth_blobBaseFee/blobs-not-supported-error.iox`): those fixtures **expect** JSON-RPC **error** `-32000` (not `-32601`). See [docs/evm_jsonrpc_unsupported.md](../../../docs/evm_jsonrpc_unsupported.md).
+
+**Historical (pre–Mar 2026, after getLogs range fix):** 11 `eth_*` rows failed until RPC + fixture fixes (insufficient funds / parse error / `get-block-notfound` shape / `eth_getProof` store unwrap / tx-by-index on empty `latest` block). Details are archived in [FAILED_TEST_ANALYSIS.md](FAILED_TEST_ANALYSIS.md).
+
+
+### Skipped tests (0)
+
+With the script setting **PAX_EVM_IO_SEED_BLOCK** and **PAX_EVM_IO_DEPLOY_TX_HASH**, no tests are skipped in the reference runs above. If you run `go test` without the script, some tests may skip for missing `${txHash}` or `${deployTxHash}`. When a test skips, the runner logs **[SKIP]** lines with bindings and placeholders so you can see why.
+
+**Debug one or a few SEED tests:** Set **`PAX_EVM_IO_DEBUG_FILES`** to a comma-separated list of fixture paths (relative to `testdata/`). When this env var is **non-empty**, the runner enables verbose **`[DEBUG]`** lines: seed block, placeholders, bindings, substituted request, response error or `result.transactions` length, and bindings after each pair. Without it, integration runs stay quiet aside from normal test output and the script’s own messages (e.g. associate / deploy logs).
+
+```bash
+PAX_EVM_IO_RUN_INTEGRATION=1 PAX_EVM_IO_DEBUG_FILES="debug_getRawTransaction/not-supported.iox" go test ./integration_test/evm_module/rpc_io_test/ -v -run TestEVMRPCSpec
+```
+
+Use a comma-separated list to run up to a few files, e.g. `debug_getRawTransaction/not-supported.iox,debug_traceTransaction/traceTransaction.iox`. If the list matches no files, the suite still runs **all** fixtures but **`[DEBUG]`** logging remains on whenever the variable is set.
+
+### Summary (recorded runs)
+
+
+| Metric | First run | Post-trim baseline | unsupported-fix | pax_* fix | eth_call fix | getLogs range fix | eth parity pass (Mar 2026) | eth parity + legacy batch gate (Mar 2026) |
+| ------ | --------- | ------------------- | ---------------- | --------- | ------------ | ----------------- | --------------------------- | ---------------------------------------- |
+| **Total tests** | 255 | 164 | 157 | 159 | 159 | 159 | 159 | 160 |
+| **Passed** | 157 | 135 | 142 | 145 | 147 | 148 | 159 | 160 |
+| **Failed** | 98 | 29 | 15 | 14 | 12 | 11 | 0 | 0 |
+| **Skipped** | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| **Pass rate** | 61.6% | 82.3% | ~90.4% | 91.2% | 92.5% | 93.1% | 100.0% | 100.0% |
+
+(1) **First run** / **Post-trim** = historical snapshots. (2) **unsupported-fix** = **157** fixtures with `not-supported.iox` and related explicit unsupported RPC behavior (see [docs/evm_jsonrpc_unsupported.md](../../../docs/evm_jsonrpc_unsupported.md)); representative run ~142 pass / ~15 fail. (3) **pax_* fix (159)** = **157** + two `pax_legacy_deprecation/*.iox`; docker `enabled_legacy_pax_apis` per `docker/localnode/config/app.toml` (gated `pax_*` / `pax2_*`). Reference `TestEVMRPCSpecSummary`: **145 / 14 / 91.2%**. (4) **eth_call fix (159)** = same docker localnet + script after EIP-1559 fixture updates (`call-callenv-options-eip1559.iox`, `create-al-contract-eip1559.iox`); reference **147 / 12 / 92.5%**. (5) **getLogs range fix (159)** = **`filter-error-future-block-range.io`** updated so `toBlock` stays beyond head on long-lived localnet; reference **148 / 11 / 93.1%** (`TestEVMRPCSpec`, Mar 2026). (6) **eth parity pass (Mar 2026)** = **159 / 0 / 100%** after `evmrpc` + fixture fixes (`eth_getBlockByNumber` null for future height, `eth_getProof` `findQueryableKVStore`, funded `from` / valid `params` / `__SEED__` for remaining `.iox`). (7) **eth parity + legacy batch gate (Mar 2026)** = **160 / 0 / 100%** after adding **`batch-nonobject-tail-gate.iox`** and `pax_legacy_http` batch fixes (PLT-227). Associate setup may log `result: null` or an error for `pax_associate` in the script; deploy still proceeds when the tx succeeds.
+
+**Legacy `pax_*`:** All `pax_*` fixtures pass with expanded allowlist (including `pax_legacy_deprecation/*.iox` and filter lifecycle `.iox`). **All `eth_*` fixtures pass** on the **eth parity + legacy batch gate (Mar 2026)** reference run. **All `eth_getLogs` fixtures pass.**
+
+
+
+| Metric                               | Count                                                                                                                      |
+| ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| **Total endpoint folders**           | 69                                                                                                                         |
+| **Endpoint folders with ≥1 passing test** | 69                                                                                                                  |
+| **Missing / untested endpoints**     | None in this suite. Count = top-level directories under `testdata/` (each has ≥1 `.io`/`.iox`). On **eth parity + legacy batch gate** runs, every folder has at least one passing test. |
+
+**eth_simulateV1**: that folder (1 endpoint, 64 fixtures) is no longer under `testdata/`, it was removed, so the current suite has **69** top-level endpoint folders under `testdata/`.
+
+
+*Re-run `./integration_test/evm_module/scripts/evm_rpc_tests.sh` to refresh counts; **pax_* fix** through **eth parity + legacy batch gate (Mar 2026)** columns assume docker localnet with expanded `[evm].enabled_legacy_pax_apis` (see `docker/localnode/config/app.toml`) and a node image that includes the `evmrpc` parity + legacy batch gate fixes.*

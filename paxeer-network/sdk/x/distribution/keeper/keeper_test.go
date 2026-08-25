@@ -1,0 +1,175 @@
+package keeper_test
+
+import (
+	"testing"
+
+	"github.com/ethereum/go-ethereum/common"
+	tmproto "github.com/sidiora-labs/paxeer-network/consensus/proto/tendermint/types"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	paxapp "github.com/sidiora-labs/paxeer-network/node"
+	"github.com/sidiora-labs/paxeer-network/node/apptesting"
+	sdk "github.com/sidiora-labs/paxeer-network/sdk/types"
+	"github.com/sidiora-labs/paxeer-network/sdk/x/distribution/types"
+)
+
+func TestSetWithdrawAddr(t *testing.T) {
+	app := paxapp.Setup(t, false, false, false)
+	ctx := app.BaseApp.NewContext(false, tmproto.Header{})
+
+	addr := paxapp.AddTestAddrs(app, ctx, 2, sdk.NewInt(1000000000))
+
+	params := app.DistrKeeper.GetParams(ctx)
+	params.WithdrawAddrEnabled = false
+	app.DistrKeeper.SetParams(ctx, params)
+
+	err := app.DistrKeeper.SetWithdrawAddr(ctx, addr[0], addr[1])
+	require.NotNil(t, err)
+
+	params.WithdrawAddrEnabled = true
+	app.DistrKeeper.SetParams(ctx, params)
+
+	err = app.DistrKeeper.SetWithdrawAddr(ctx, addr[0], addr[1])
+	require.Nil(t, err)
+
+	associatedAddr := paxapp.AddTestAddrs(app, ctx, 1, sdk.NewInt(1000000000))[0]
+	evmAddr := common.HexToAddress("0x1111111111111111111111111111111111111111")
+	castAddr := sdk.AccAddress(evmAddr[:])
+	app.EvmKeeper.SetAddressMapping(ctx, associatedAddr, evmAddr)
+	require.Error(t, app.DistrKeeper.SetWithdrawAddr(ctx, addr[0], castAddr))
+
+	require.Error(t, app.DistrKeeper.SetWithdrawAddr(ctx, addr[0], distrAcc.GetAddress()))
+}
+
+func TestAfterValidatorRemovedFallsBackForInvalidWithdrawAddress(t *testing.T) {
+	app := paxapp.Setup(t, false, false, false)
+	ctx := app.BaseApp.NewContext(false, tmproto.Header{})
+
+	params := app.DistrKeeper.GetParams(ctx)
+	params.WithdrawAddrEnabled = true
+	app.DistrKeeper.SetParams(ctx, params)
+
+	addr := paxapp.AddTestAddrs(app, ctx, 2, sdk.NewInt(1000000000))
+	valAddr := paxapp.ConvertAddrsToValAddrs(addr[:1])[0]
+	valAccAddr := sdk.AccAddress(valAddr)
+	associatedAddr := addr[1]
+	evmAddr := common.HexToAddress("0x2222222222222222222222222222222222222222")
+	castAddr := sdk.AccAddress(evmAddr[:])
+
+	require.True(t, app.BankKeeper.CanSendTo(ctx, castAddr))
+	require.NoError(t, app.DistrKeeper.SetWithdrawAddr(ctx, valAccAddr, castAddr))
+	require.Equal(t, castAddr.String(), app.DistrKeeper.GetDelegatorWithdrawAddr(ctx, valAccAddr).String())
+
+	app.EvmKeeper.SetAddressMapping(ctx, associatedAddr, evmAddr)
+	require.False(t, app.BankKeeper.CanSendTo(ctx, castAddr))
+	require.Equal(t, valAccAddr.String(), app.DistrKeeper.GetDelegatorWithdrawAddr(ctx, valAccAddr).String())
+
+	commission := sdk.DecCoins{sdk.NewDecCoin("uhpx", sdk.NewInt(10))}
+	coins := sdk.NewCoins(sdk.NewCoin("uhpx", sdk.NewInt(10)))
+	distrAcc := app.DistrKeeper.GetDistributionAccount(ctx)
+	require.NoError(t, apptesting.FundModuleAccount(app.BankKeeper, ctx, distrAcc.GetName(), coins))
+	app.AccountKeeper.SetModuleAccount(ctx, distrAcc)
+
+	app.DistrKeeper.SetValidatorOutstandingRewards(ctx, valAddr, types.ValidatorOutstandingRewards{Rewards: commission})
+	app.DistrKeeper.SetValidatorAccumulatedCommission(ctx, valAddr, types.ValidatorAccumulatedCommission{Commission: commission})
+
+	balanceBefore := app.BankKeeper.GetBalance(ctx, valAccAddr, "uhpx")
+	require.NotPanics(t, func() {
+		app.DistrKeeper.Hooks().AfterValidatorRemoved(ctx, sdk.ConsAddress{}, valAddr)
+	})
+	balanceAfter := app.BankKeeper.GetBalance(ctx, valAccAddr, "uhpx")
+	require.Equal(t, balanceBefore.Amount.Add(sdk.NewInt(10)), balanceAfter.Amount)
+}
+
+func TestWithdrawValidatorCommission(t *testing.T) {
+	app := paxapp.Setup(t, false, false, false)
+	ctx := app.BaseApp.NewContext(false, tmproto.Header{})
+
+	valCommission := sdk.DecCoins{
+		sdk.NewDecCoinFromDec("mytoken", sdk.NewDec(5).Quo(sdk.NewDec(4))),
+		sdk.NewDecCoinFromDec("uhpx", sdk.NewDec(3).Quo(sdk.NewDec(2))),
+	}
+
+	addr := paxapp.AddTestAddrs(app, ctx, 1, sdk.NewInt(1000000000))
+	valAddrs := paxapp.ConvertAddrsToValAddrs(addr)
+
+	// set module account coins
+	distrAcc := app.DistrKeeper.GetDistributionAccount(ctx)
+	coins := sdk.NewCoins(sdk.NewCoin("mytoken", sdk.NewInt(2)), sdk.NewCoin("uhpx", sdk.NewInt(2)))
+	require.NoError(t, apptesting.FundModuleAccount(app.BankKeeper, ctx, distrAcc.GetName(), coins))
+
+	app.AccountKeeper.SetModuleAccount(ctx, distrAcc)
+
+	// check initial balance
+	balance := app.BankKeeper.GetAllBalances(ctx, sdk.AccAddress(valAddrs[0]))
+	expTokens := app.StakingKeeper.TokensFromConsensusPower(ctx, 1000)
+	expCoins := sdk.NewCoins(sdk.NewCoin("uhpx", expTokens))
+	require.Equal(t, expCoins, balance)
+
+	// set outstanding rewards
+	app.DistrKeeper.SetValidatorOutstandingRewards(ctx, valAddrs[0], types.ValidatorOutstandingRewards{Rewards: valCommission})
+
+	// set commission
+	app.DistrKeeper.SetValidatorAccumulatedCommission(ctx, valAddrs[0], types.ValidatorAccumulatedCommission{Commission: valCommission})
+
+	// withdraw commission
+	_, err := app.DistrKeeper.WithdrawValidatorCommission(ctx, valAddrs[0])
+	require.NoError(t, err)
+
+	// check balance increase
+	balance = app.BankKeeper.GetAllBalances(ctx, sdk.AccAddress(valAddrs[0]))
+	require.Equal(t, sdk.NewCoins(
+		sdk.NewCoin("mytoken", sdk.NewInt(1)),
+		sdk.NewCoin("uhpx", expTokens.AddRaw(1)),
+	), balance)
+
+	// check remainder
+	remainder := app.DistrKeeper.GetValidatorAccumulatedCommission(ctx, valAddrs[0]).Commission
+	require.Equal(t, sdk.DecCoins{
+		sdk.NewDecCoinFromDec("mytoken", sdk.NewDec(1).Quo(sdk.NewDec(4))),
+		sdk.NewDecCoinFromDec("uhpx", sdk.NewDec(1).Quo(sdk.NewDec(2))),
+	}, remainder)
+
+	require.True(t, true)
+}
+
+func TestGetTotalRewards(t *testing.T) {
+	app := paxapp.Setup(t, false, false, false)
+	ctx := app.BaseApp.NewContext(false, tmproto.Header{})
+
+	valCommission := sdk.DecCoins{
+		sdk.NewDecCoinFromDec("mytoken", sdk.NewDec(5).Quo(sdk.NewDec(4))),
+		sdk.NewDecCoinFromDec("uhpx", sdk.NewDec(3).Quo(sdk.NewDec(2))),
+	}
+
+	addr := paxapp.AddTestAddrs(app, ctx, 2, sdk.NewInt(1000000000))
+	valAddrs := paxapp.ConvertAddrsToValAddrs(addr)
+
+	app.DistrKeeper.SetValidatorOutstandingRewards(ctx, valAddrs[0], types.ValidatorOutstandingRewards{Rewards: valCommission})
+	app.DistrKeeper.SetValidatorOutstandingRewards(ctx, valAddrs[1], types.ValidatorOutstandingRewards{Rewards: valCommission})
+
+	expectedRewards := valCommission.MulDec(sdk.NewDec(2))
+	totalRewards := app.DistrKeeper.GetTotalRewards(ctx)
+
+	require.Equal(t, expectedRewards, totalRewards)
+}
+
+func TestFundCommunityPool(t *testing.T) {
+	app := paxapp.Setup(t, false, false, false)
+	ctx := app.BaseApp.NewContext(false, tmproto.Header{})
+
+	addr := paxapp.AddTestAddrs(app, ctx, 2, sdk.ZeroInt())
+
+	amount := sdk.NewCoins(sdk.NewInt64Coin("uhpx", 100))
+	require.NoError(t, apptesting.FundAccount(app.BankKeeper, ctx, addr[0], amount))
+
+	initPool := app.DistrKeeper.GetFeePool(ctx)
+	assert.Empty(t, initPool.CommunityPool)
+
+	err := app.DistrKeeper.FundCommunityPool(ctx, amount, addr[0])
+	assert.Nil(t, err)
+
+	assert.Equal(t, initPool.CommunityPool.Add(sdk.NewDecCoinsFromCoins(amount...)...), app.DistrKeeper.GetFeePool(ctx).CommunityPool)
+	assert.Empty(t, app.BankKeeper.GetAllBalances(ctx, addr[0]))
+}

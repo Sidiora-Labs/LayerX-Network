@@ -1,0 +1,90 @@
+name: Paxeer / ECR
+
+on:
+  push:
+    branches:
+      - main
+      - 'release/**'
+    paths:
+      - 'paxeer-network/**'
+      - '.github/workflows/paxeer-ecr.yml'
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: '`pax-chain` git ref'
+        required: true
+        type: string
+      tag:
+        description: 'Tag'
+        required: false
+
+jobs:
+  publisher:
+    name: Publish Container
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+      - name: AWS Login
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: us-east-2
+          role-to-assume: arn:aws:iam::189176372795:role/common/gha
+          role-duration-seconds: 900
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Build and push paxd with mock balances
+        uses: docker/build-push-action@v6
+        with:
+          context: paxeer-network
+          cache-from: type=registry,ref=${{ steps.login-ecr.outputs.registry }}/pax/build-cache:shared
+          cache-to: type=registry,ref=${{ steps.login-ecr.outputs.registry }}/pax/build-cache:shared,mode=max
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.login-ecr.outputs.registry }}/pax/pax-chain:mock-${{ inputs.tag || inputs.ref || github.sha }}
+          build-args: |
+            PAX_CHAIN_REF=${{ inputs.ref || github.sha }}
+            GO_BUILD_TAGS=mock_balances
+      - name: Build and push paxd with mock block validation
+        uses: docker/build-push-action@v6
+        with:
+          context: paxeer-network
+          cache-from: type=registry,ref=${{ steps.login-ecr.outputs.registry }}/pax/build-cache:shared
+          cache-to: type=registry,ref=${{ steps.login-ecr.outputs.registry }}/pax/build-cache:shared,mode=max
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.login-ecr.outputs.registry }}/pax/pax-chain:mock_block_validation-${{ inputs.tag || inputs.ref || github.sha }}
+          build-args: |
+            PAX_CHAIN_REF=${{ inputs.ref || github.sha }}
+            GO_BUILD_TAGS=mock_block_validation
+      - name: Build and push paxd with mock balances + mock chain validation
+        uses: docker/build-push-action@v6
+        with:
+          context: paxeer-network
+          cache-from: type=registry,ref=${{ steps.login-ecr.outputs.registry }}/pax/build-cache:shared
+          cache-to: type=registry,ref=${{ steps.login-ecr.outputs.registry }}/pax/build-cache:shared,mode=max
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.login-ecr.outputs.registry }}/pax/pax-chain:mock_chain_validation-${{ inputs.tag || inputs.ref || github.sha }}
+          build-args: |
+            PAX_CHAIN_REF=${{ inputs.ref || github.sha }}
+            GO_BUILD_TAGS=mock_balances mock_chain_validation
+      - name: Build and push paxd
+        uses: docker/build-push-action@v6
+        with:
+          context: paxeer-network
+          cache-from: type=registry,ref=${{ steps.login-ecr.outputs.registry }}/pax/build-cache:shared
+          cache-to: type=registry,ref=${{ steps.login-ecr.outputs.registry }}/pax/build-cache:shared,mode=max
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.login-ecr.outputs.registry }}/pax/pax-chain:${{ inputs.tag || inputs.ref || github.sha }}
+          build-args: |
+            PAX_CHAIN_REF=${{ inputs.ref || github.sha }}

@@ -1,0 +1,125 @@
+package tests
+
+import (
+	"encoding/hex"
+	"fmt"
+	"math/big"
+
+	"github.com/ethereum/go-ethereum/common"
+	ethtypes "github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/sidiora-labs/paxeer-network/modules/evm/config"
+	"github.com/sidiora-labs/paxeer-network/modules/evm/types"
+	"github.com/sidiora-labs/paxeer-network/node"
+	clienttx "github.com/sidiora-labs/paxeer-network/sdk/client/tx"
+	"github.com/sidiora-labs/paxeer-network/sdk/crypto/hd"
+	sdk "github.com/sidiora-labs/paxeer-network/sdk/types"
+	"github.com/sidiora-labs/paxeer-network/sdk/types/tx/signing"
+	xauthsigning "github.com/sidiora-labs/paxeer-network/sdk/x/auth/signing"
+	testkeeper "github.com/sidiora-labs/paxeer-network/testutil/keeper"
+)
+
+var chainId = big.NewInt(config.DefaultChainID)
+var mnemonic1 = "fish mention unlock february marble dove vintage sand hub ordinary fade found inject room embark supply fabric improve spike stem give current similar glimpse"
+
+func signTxWithMnemonic(txData ethtypes.TxData, mnemonic string) *ethtypes.Transaction {
+	derivedPriv, _ := hd.Secp256k1.Derive()(mnemonic, "", "")
+	privKey := hd.Secp256k1.Generate()(derivedPriv)
+	testPrivHex := hex.EncodeToString(privKey.Bytes())
+	key, _ := crypto.HexToECDSA(testPrivHex)
+	ethCfg := types.DefaultChainConfig().EthereumConfig(chainId)
+	signer := ethtypes.MakeSigner(ethCfg, big.NewInt(1), 1)
+	tx := ethtypes.NewTx(txData)
+	tx, err := ethtypes.SignTx(tx, signer, key)
+	if err != nil {
+		panic(err)
+	}
+	return tx
+}
+
+func signCosmosTxWithMnemonic(msg sdk.Msg, mnemonic string, accountNumber uint64, sequenceNumber uint64) (sdk.Tx, error) {
+	derivedPriv, err := hd.Secp256k1.Derive()(mnemonic, "", "")
+	if err != nil {
+		return nil, fmt.Errorf("derive: %w", err)
+	}
+	privKey := hd.Secp256k1.Generate()(derivedPriv)
+	txBuilder := testkeeper.EVMTestApp.GetTxConfig().NewTxBuilder()
+	if err := txBuilder.SetMsgs(msg); err != nil {
+		return nil, fmt.Errorf("s: %w", err)
+	}
+	txBuilder.SetFeeAmount(sdk.NewCoins(sdk.NewCoin("uhpx", sdk.NewInt(1000000))))
+	txBuilder.SetGasLimit(300000)
+	sigV2 := signing.SignatureV2{
+		PubKey: privKey.PubKey(),
+		Data: &signing.SingleSignatureData{
+			SignMode:  testkeeper.EVMTestApp.GetTxConfig().SignModeHandler().DefaultMode(),
+			Signature: nil,
+		},
+		Sequence: sequenceNumber,
+	}
+	if err := txBuilder.SetSignatures(sigV2); err != nil {
+		return nil, fmt.Errorf("setSignatures (placeholder): %w", err)
+	}
+	signerData := xauthsigning.SignerData{
+		ChainID:       "pax-test",
+		AccountNumber: accountNumber,
+		Sequence:      sequenceNumber,
+	}
+	sigV2, err = clienttx.SignWithPrivKey(
+		testkeeper.EVMTestApp.GetTxConfig().SignModeHandler().DefaultMode(),
+		signerData,
+		txBuilder,
+		privKey,
+		testkeeper.EVMTestApp.GetTxConfig(),
+		sequenceNumber,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("signWithPrivKey: %w", err)
+	}
+	if err := txBuilder.SetSignatures(sigV2); err != nil {
+		return nil, fmt.Errorf("SetSignatures (final): %w", err)
+	}
+	return txBuilder.GetTx(), nil
+}
+
+func getAddrWithMnemonic(mnemonic string) common.Address {
+	derivedPriv, _ := hd.Secp256k1.Derive()(mnemonic, "", "")
+	privKey := hd.Secp256k1.Generate()(derivedPriv)
+	_, evmAddr := testkeeper.PrivateKeyToAddresses(privKey)
+	return evmAddr
+}
+
+func getPaxAddrWithMnemonic(mnemonic string) sdk.AccAddress {
+	derivedPriv, _ := hd.Secp256k1.Derive()(mnemonic, "", "")
+	privKey := hd.Secp256k1.Generate()(derivedPriv)
+	paxAddr, _ := testkeeper.PrivateKeyToAddresses(privKey)
+	return paxAddr
+}
+
+func mnemonicInitializer(mnemonic string) func(ctx sdk.Context, a *app.App) {
+	return func(ctx sdk.Context, a *app.App) {
+		paxAddr := getPaxAddrWithMnemonic(mnemonic)
+		evmAddr := getAddrWithMnemonic(mnemonic)
+		a.EvmKeeper.SetAddressMapping(ctx, paxAddr, evmAddr)
+		fundPaxAddr(ctx, a, paxAddr)
+	}
+}
+
+func fundPaxAddr(ctx sdk.Context, a *app.App, addr sdk.AccAddress) {
+	amt := sdk.NewCoins(sdk.NewCoin("uhpx", sdk.NewInt(10000000000)))
+	_ = a.BankKeeper.MintCoins(ctx, types.ModuleName, amt)
+	_ = a.BankKeeper.SendCoinsFromModuleToAccount(ctx, types.ModuleName, addr, amt)
+}
+
+const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+func multiCoinInitializer(mnemonic string) func(ctx sdk.Context, a *app.App) {
+	return func(ctx sdk.Context, a *app.App) {
+		amt := sdk.NewCoins()
+		for i := 0; i < 50; i++ {
+			amt = append(amt, sdk.NewCoin(letters[i:i+3], sdk.OneInt()))
+		}
+		_ = a.BankKeeper.MintCoins(ctx, types.ModuleName, amt)
+		_ = a.BankKeeper.SendCoinsFromModuleToAccount(ctx, types.ModuleName, getPaxAddrWithMnemonic(mnemonic), amt)
+	}
+}

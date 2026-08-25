@@ -1,0 +1,1100 @@
+package app_test
+
+import (
+	"context"
+	"encoding/hex"
+	"fmt"
+	"math"
+	"math/big"
+	"reflect"
+	"regexp"
+	"testing"
+	"time"
+
+	"github.com/gorilla/mux"
+	"github.com/grpc-ecosystem/grpc-gateway/runtime"
+	"github.com/sidiora-labs/paxeer-network/sdk/client"
+	"github.com/sidiora-labs/paxeer-network/sdk/server/api"
+	cosmosConfig "github.com/sidiora-labs/paxeer-network/sdk/server/config"
+
+	"github.com/ethereum/go-ethereum/common"
+	ethtypes "github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/crypto"
+	abci "github.com/sidiora-labs/paxeer-network/consensus/abci/types"
+	"github.com/sidiora-labs/paxeer-network/consensus/proto/tendermint/types"
+	tmtypes "github.com/sidiora-labs/paxeer-network/consensus/types"
+	"github.com/sidiora-labs/paxeer-network/modules/evm/config"
+	evmkeeper "github.com/sidiora-labs/paxeer-network/modules/evm/keeper"
+	evmtypes "github.com/sidiora-labs/paxeer-network/modules/evm/types"
+	"github.com/sidiora-labs/paxeer-network/modules/evm/types/ethtx"
+	oracletypes "github.com/sidiora-labs/paxeer-network/modules/oracle/types"
+	"github.com/sidiora-labs/paxeer-network/node"
+	"github.com/sidiora-labs/paxeer-network/rpc"
+	clienttx "github.com/sidiora-labs/paxeer-network/sdk/client/tx"
+	cryptocodec "github.com/sidiora-labs/paxeer-network/sdk/crypto/codec"
+	cosmosed25519 "github.com/sidiora-labs/paxeer-network/sdk/crypto/keys/ed25519"
+	"github.com/sidiora-labs/paxeer-network/sdk/crypto/keys/secp256k1"
+	cryptotypes "github.com/sidiora-labs/paxeer-network/sdk/crypto/types"
+	storev2_rootmulti "github.com/sidiora-labs/paxeer-network/sdk/storev2/rootmulti"
+	sdk "github.com/sidiora-labs/paxeer-network/sdk/types"
+	"github.com/sidiora-labs/paxeer-network/sdk/types/tx/signing"
+	xauthsigning "github.com/sidiora-labs/paxeer-network/sdk/x/auth/signing"
+	authtypes "github.com/sidiora-labs/paxeer-network/sdk/x/auth/types"
+	banktypes "github.com/sidiora-labs/paxeer-network/sdk/x/bank/types"
+	testkeeper "github.com/sidiora-labs/paxeer-network/testutil/keeper"
+	"github.com/stretchr/testify/require"
+)
+
+func TestEmptyBlockIdempotency(t *testing.T) {
+	commitData := [][]byte{}
+	tm := time.Now().UTC()
+	valPub := secp256k1.GenPrivKey().PubKey()
+
+	for i := 1; i <= 10; i++ {
+		testWrapper := app.NewTestWrapper(t, tm, valPub, false)
+		res, _ := testWrapper.App.FinalizeBlock(context.Background(), &abci.RequestFinalizeBlock{Header: &types.Header{ChainID: "pax-test", Height: 1}})
+		testWrapper.App.Commit(context.Background())
+		data := res.AppHash
+		commitData = append(commitData, data)
+	}
+
+	referenceData := commitData[0]
+	for _, data := range commitData[1:] {
+		require.Equal(t, len(referenceData), len(data))
+	}
+}
+
+func TestFinalizeBlockRequiresChainID(t *testing.T) {
+	tm := time.Now().UTC()
+	valPub := secp256k1.GenPrivKey().PubKey()
+
+	testWrapper := app.NewTestWrapper(t, tm, valPub, false)
+	_, err := testWrapper.App.FinalizeBlock(context.Background(), &abci.RequestFinalizeBlock{
+		Header: &types.Header{Height: 1},
+	})
+	require.Error(t, err)
+}
+
+func TestGetValidators(t *testing.T) {
+	tm := time.Now().UTC()
+	valPub := cosmosed25519.GenPrivKey().PubKey()
+	accAddr := sdk.AccAddress(valPub.Address())
+	genAcc := authtypes.NewBaseAccount(accAddr, nil, 0, 0)
+	balance := banktypes.Balance{
+		Address: accAddr.String(),
+		Coins:   sdk.NewCoins(sdk.NewCoin(sdk.DefaultBondDenom, sdk.DefaultPowerReduction)),
+	}
+	tmPub, err := cryptocodec.ToTmPubKeyInterface(valPub)
+	require.NoError(t, err)
+	valSet := tmtypes.NewValidatorSet([]*tmtypes.Validator{tmtypes.NewValidator(tmPub, 1)})
+
+	app := app.SetupWithGenesisValSet(t, valSet, []authtypes.GenesisAccount{genAcc}, balance)
+	ctx := app.NewUncachedContext(false, types.Header{Height: max(1, app.LastBlockHeight()), Time: tm})
+	expectedUpdates := app.StakingKeeper.GetBondedValidators(ctx)
+
+	require.Equal(t, expectedUpdates, abci.Application(app).GetValidators())
+}
+
+func TestProcessOracleAndOtherTxsSuccess(t *testing.T) {
+	tm := time.Now().UTC()
+	valPub := secp256k1.GenPrivKey().PubKey()
+	secondAcc := secp256k1.GenPrivKey().PubKey()
+
+	testWrapper := app.NewTestWrapper(t, tm, valPub, false)
+
+	account := sdk.AccAddress(valPub.Address()).String()
+	account2 := sdk.AccAddress(secondAcc.Address()).String()
+	validator := sdk.ValAddress(valPub.Address()).String()
+
+	oracleMsg := &oracletypes.MsgAggregateExchangeRateVote{
+		ExchangeRates: "1.2uatom",
+		Feeder:        account,
+		Validator:     validator,
+	}
+
+	otherMsg := &banktypes.MsgSend{
+		FromAddress: account,
+		ToAddress:   account2,
+		Amount:      sdk.NewCoins(sdk.NewInt64Coin("uhpx", 2)),
+	}
+
+	oracleTxBuilder := app.MakeEncodingConfig().TxConfig.NewTxBuilder()
+	otherTxBuilder := app.MakeEncodingConfig().TxConfig.NewTxBuilder()
+	txEncoder := app.MakeEncodingConfig().TxConfig.TxEncoder()
+
+	err := oracleTxBuilder.SetMsgs(oracleMsg)
+	require.NoError(t, err)
+	oracleTxBuilder.SetGasLimit(200000)
+	oracleTxBuilder.SetFeeAmount(sdk.NewCoins(sdk.NewInt64Coin("uhpx", 20000)))
+	oracleTx, err := txEncoder(oracleTxBuilder.GetTx())
+	require.NoError(t, err)
+
+	err = otherTxBuilder.SetMsgs(otherMsg)
+	require.NoError(t, err)
+	otherTxBuilder.SetGasLimit(100000)
+	otherTxBuilder.SetFeeAmount(sdk.NewCoins(sdk.NewInt64Coin("uhpx", 10000)))
+	otherTx, err := txEncoder(otherTxBuilder.GetTx())
+	require.NoError(t, err)
+
+	txs := [][]byte{
+		oracleTx,
+		otherTx,
+	}
+
+	req := &abci.RequestFinalizeBlock{
+		Header: &types.Header{ChainID: "pax-test", Height: 1},
+	}
+	_, txResults, _, _ := testWrapper.App.ProcessBlock(
+		testWrapper.Ctx.WithBlockHeight(
+			1,
+		),
+		txs,
+		finalizeToBlockProcessReq(req),
+		req.DecidedLastCommit,
+		false,
+		nil,
+	)
+	fmt.Println("txResults1", txResults)
+
+	require.Equal(t, 2, len(txResults))
+	require.Equal(t, uint32(15), txResults[0].Code)
+	require.Equal(t, uint32(15), txResults[1].Code)
+
+	diffOrderTxs := [][]byte{
+		otherTx,
+		oracleTx,
+	}
+
+	req = &abci.RequestFinalizeBlock{
+		Header: &types.Header{ChainID: "pax-test", Height: 1},
+	}
+	_, txResults2, _, _ := testWrapper.App.ProcessBlock(
+		testWrapper.Ctx.WithBlockHeight(
+			1,
+		),
+		diffOrderTxs,
+		finalizeToBlockProcessReq(req),
+		req.DecidedLastCommit,
+		false,
+		nil,
+	)
+	fmt.Println("txResults2", txResults2)
+
+	require.Equal(t, 2, len(txResults2))
+	// opposite ordering due to true index ordering
+	require.Equal(t, uint32(15), txResults2[0].Code)
+	require.Equal(t, uint32(15), txResults2[1].Code)
+}
+
+// TestProcessBlockWithPreDecoded exercises ProcessBlock when len(preDecoded)==len(txs)
+// so decoded txs are reused instead of DecodeTransactionsConcurrently.
+func TestProcessBlockWithPreDecoded(t *testing.T) {
+	tm := time.Now().UTC()
+	valPub := secp256k1.GenPrivKey().PubKey()
+	secondAcc := secp256k1.GenPrivKey().PubKey()
+
+	testWrapper := app.NewTestWrapper(t, tm, valPub, false)
+
+	account := sdk.AccAddress(valPub.Address()).String()
+	account2 := sdk.AccAddress(secondAcc.Address()).String()
+	validator := sdk.ValAddress(valPub.Address()).String()
+
+	oracleMsg := &oracletypes.MsgAggregateExchangeRateVote{
+		ExchangeRates: "1.2uatom",
+		Feeder:        account,
+		Validator:     validator,
+	}
+
+	otherMsg := &banktypes.MsgSend{
+		FromAddress: account,
+		ToAddress:   account2,
+		Amount:      sdk.NewCoins(sdk.NewInt64Coin("uhpx", 2)),
+	}
+
+	txCfg := testWrapper.App.GetTxConfig()
+	oracleTxBuilder := txCfg.NewTxBuilder()
+	otherTxBuilder := txCfg.NewTxBuilder()
+	txEncoder := txCfg.TxEncoder()
+	txDecoder := txCfg.TxDecoder()
+
+	err := oracleTxBuilder.SetMsgs(oracleMsg)
+	require.NoError(t, err)
+	oracleTxBuilder.SetGasLimit(1000000)
+	oracleTxBuilder.SetFeeAmount(sdk.NewCoins(sdk.NewInt64Coin("uhpx", 20000)))
+	oracleTx, err := txEncoder(oracleTxBuilder.GetTx())
+	require.NoError(t, err)
+
+	err = otherTxBuilder.SetMsgs(otherMsg)
+	require.NoError(t, err)
+	otherTxBuilder.SetGasLimit(100000)
+	otherTxBuilder.SetFeeAmount(sdk.NewCoins(sdk.NewInt64Coin("uhpx", 10000)))
+	otherTx, err := txEncoder(otherTxBuilder.GetTx())
+	require.NoError(t, err)
+
+	txs := [][]byte{
+		oracleTx,
+		otherTx,
+	}
+
+	preDecoded := make([]sdk.Tx, len(txs))
+	for i, txBz := range txs {
+		decoded, decErr := txDecoder(txBz)
+		require.NoError(t, decErr)
+		preDecoded[i] = decoded
+	}
+
+	req := &abci.RequestFinalizeBlock{
+		Header: &types.Header{ChainID: "pax-test", Height: 1},
+	}
+	_, txResults, _, err := testWrapper.App.ProcessBlock(
+		testWrapper.Ctx.WithBlockHeight(1),
+		txs,
+		finalizeToBlockProcessReq(req),
+		req.DecidedLastCommit,
+		false,
+		preDecoded,
+	)
+	require.NoError(t, err)
+	require.Equal(t, 2, len(txResults))
+	require.Equal(t, uint32(15), txResults[0].Code)
+	require.Equal(t, uint32(15), txResults[1].Code)
+}
+
+func TestInvalidProposalWithExcessiveGasWanted(t *testing.T) {
+	tm := time.Now().UTC()
+	valPub := secp256k1.GenPrivKey().PubKey()
+
+	testWrapper := app.NewTestWrapper(t, tm, valPub, false)
+	ap := testWrapper.App
+	deliverCtx := ap.GetContextForDeliverTx([]byte{})
+	ap.StoreConsensusParams(deliverCtx, &types.ConsensusParams{
+		Block: &types.BlockParams{MaxGas: 10},
+	})
+	ap.FinalizeBlock(context.Background(), &abci.RequestFinalizeBlock{
+		Header: &types.Header{ChainID: "pax-test", Height: 1},
+	})
+	ap.SetDeliverStateToCommit()
+	ap.Commit(context.Background())
+
+	emptyTxBuilder := app.MakeEncodingConfig().TxConfig.NewTxBuilder()
+	txEncoder := app.MakeEncodingConfig().TxConfig.TxEncoder()
+	emptyTxBuilder.SetGasLimit(10)
+	emptyTx, _ := txEncoder(emptyTxBuilder.GetTx())
+
+	badProposal := abci.RequestProcessProposal{
+		Txs:    [][]byte{emptyTx, emptyTx},
+		Header: &types.Header{ChainID: "pax-test", Height: 2},
+	}
+	res, err := ap.ProcessProposal(context.Background(), &badProposal)
+	require.Nil(t, err)
+	require.Equal(t, abci.ResponseProcessProposal_REJECT, res.Status)
+}
+
+func TestInvalidProposalWithExcessiveGasEstimates(t *testing.T) {
+	type TxType struct {
+		isEVM       bool
+		gasEstimate uint64
+		gasWanted   uint64
+	}
+	tests := []struct {
+		name              string
+		maxBlockGas       int64
+		maxBlockGasWanted int64
+		txs               []TxType
+		expectedStatus    abci.ResponseProcessProposal_ProposalStatus
+	}{
+		{
+			name:              "reject when total cosmos tx gas estimates exceed block gas limit",
+			maxBlockGas:       20000,
+			maxBlockGasWanted: math.MaxInt64,
+			txs:               []TxType{{isEVM: false, gasEstimate: 0, gasWanted: 30000}},
+			expectedStatus:    abci.ResponseProcessProposal_REJECT,
+		},
+		{
+			name:              "reject when total evm tx gas estimates exceed block gas limit",
+			maxBlockGas:       20000,
+			maxBlockGasWanted: math.MaxInt64,
+			txs:               []TxType{{isEVM: true, gasEstimate: 30000, gasWanted: 30000}},
+			expectedStatus:    abci.ResponseProcessProposal_REJECT,
+		},
+		{
+			name:              "single tx: ignore evm gas estimate above maxBlockGas and use gasWanted (accept)",
+			maxBlockGas:       20000,
+			maxBlockGasWanted: math.MaxInt64,
+			txs:               []TxType{{isEVM: true, gasEstimate: 30000, gasWanted: 15000}},
+			expectedStatus:    abci.ResponseProcessProposal_ACCEPT,
+		},
+		{
+			name:              "accept when total cosmos tx gas limit is below block gas limit",
+			maxBlockGas:       20000,
+			maxBlockGasWanted: math.MaxInt64,
+			txs:               []TxType{{isEVM: false, gasEstimate: 0, gasWanted: 10000}},
+			expectedStatus:    abci.ResponseProcessProposal_ACCEPT,
+		},
+		{
+			name:              "single tx: accept when total evm tx gas estimate is below block gas limit but gas wanted above block gas limit",
+			maxBlockGas:       35000,
+			maxBlockGasWanted: math.MaxInt64,
+			txs:               []TxType{{isEVM: true, gasEstimate: 30000, gasWanted: 100000}},
+			expectedStatus:    abci.ResponseProcessProposal_ACCEPT,
+		},
+		{
+			name:              "multiple txs: accept when total evm tx gas estimate is below block gas limit but gas wanted is above block gas limit",
+			maxBlockGas:       60000,
+			maxBlockGasWanted: math.MaxInt64,
+			txs: []TxType{
+				{isEVM: true, gasEstimate: 30000, gasWanted: 100000},
+				{isEVM: true, gasEstimate: 30000, gasWanted: 100000},
+			},
+			expectedStatus: abci.ResponseProcessProposal_ACCEPT,
+		},
+		{
+			name:              "multiple txs: accept when mix of cosmos txs and evm txs",
+			maxBlockGas:       100000,
+			maxBlockGasWanted: math.MaxInt64,
+			txs: []TxType{
+				{isEVM: false, gasEstimate: 0, gasWanted: 50000},
+				{isEVM: true, gasEstimate: 50000, gasWanted: 100000},
+			},
+			expectedStatus: abci.ResponseProcessProposal_ACCEPT,
+		},
+		{
+			name:              "multiple txs: reject when mix of cosmos txs and evm txs",
+			maxBlockGas:       100000,
+			maxBlockGasWanted: math.MaxInt64,
+			txs: []TxType{
+				{isEVM: false, gasEstimate: 0, gasWanted: 51000},
+				{isEVM: true, gasEstimate: 50000, gasWanted: 100000},
+			},
+			expectedStatus: abci.ResponseProcessProposal_REJECT,
+		},
+		{
+			name:              "single tx: reject when gas wanted is above maxBlockGasWanted",
+			maxBlockGas:       math.MaxInt64,
+			maxBlockGasWanted: 10,
+			txs: []TxType{
+				{isEVM: false, gasEstimate: 0, gasWanted: 11}, // exceed max block gas wanted
+			},
+			expectedStatus: abci.ResponseProcessProposal_REJECT,
+		},
+		{
+			name:              "multiple txs: reject when gas wanted is above maxBlockGasWanted",
+			maxBlockGas:       math.MaxInt64,
+			maxBlockGasWanted: 10,
+			txs: []TxType{
+				// gasWanted combined should exceed maxBlockGasWanted
+				{isEVM: false, gasEstimate: 0, gasWanted: 9},
+				{isEVM: true, gasEstimate: 0, gasWanted: 9},
+			},
+			expectedStatus: abci.ResponseProcessProposal_REJECT,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			tm := time.Now().UTC()
+			valPub := secp256k1.GenPrivKey().PubKey()
+
+			testWrapper := app.NewTestWrapper(t, tm, valPub, false)
+			ap := testWrapper.App
+			// Commit block 1 with custom consensus params so they're in the
+			// committed root store for ProcessProposal at height 2 to read.
+			cp := &types.ConsensusParams{
+				Block: &types.BlockParams{
+					MaxGas:       tc.maxBlockGas,
+					MaxGasWanted: tc.maxBlockGasWanted,
+				},
+			}
+			deliverCtx := ap.GetContextForDeliverTx([]byte{})
+			ap.StoreConsensusParams(deliverCtx, cp)
+			ap.FinalizeBlock(context.Background(), &abci.RequestFinalizeBlock{
+				Header: &types.Header{ChainID: "pax-test", Height: 1},
+			})
+			ap.SetDeliverStateToCommit()
+			ap.Commit(context.Background())
+
+			var txs [][]byte
+			for _, tx := range tc.txs {
+				if tx.isEVM {
+					// Create EVM transaction
+					privKey := testkeeper.MockPrivateKey()
+					key, _ := crypto.HexToECDSA(hex.EncodeToString(privKey.Bytes()))
+					txData := ethtypes.LegacyTx{
+						Nonce:    1,
+						GasPrice: big.NewInt(10),
+						Gas:      tx.gasWanted,
+					}
+					chainCfg := evmtypes.DefaultChainConfig()
+					ethCfg := chainCfg.EthereumConfig(big.NewInt(config.DefaultChainID))
+					signer := ethtypes.MakeSigner(ethCfg, big.NewInt(1), uint64(123))
+					signedTx, err := ethtypes.SignTx(ethtypes.NewTx(&txData), signer, key)
+					require.Nil(t, err)
+					ethtxdata, err := ethtx.NewTxDataFromTx(signedTx)
+					require.Nil(t, err)
+					msg, err := evmtypes.NewMsgEVMTransaction(ethtxdata)
+					require.Nil(t, err)
+					txBuilder := ap.GetTxConfig().NewTxBuilder()
+					txBuilder.SetMsgs(msg)
+					txBuilder.SetGasEstimate(tx.gasEstimate)
+					txbz, _ := ap.GetTxConfig().TxEncoder()(txBuilder.GetTx())
+					// Create two transactions to exceed the block gas limit
+					txs = append(txs, txbz)
+				} else {
+					// Create Cosmos transaction
+					cosmosTxBuilder := app.MakeEncodingConfig().TxConfig.NewTxBuilder()
+					cosmosTxBuilder.SetMsgs(&banktypes.MsgSend{}) // Using a dummy msg since msg is undefined
+					cosmosTxBuilder.SetGasEstimate(tx.gasEstimate)
+					cosmosTxBuilder.SetGasLimit(tx.gasWanted)
+					emptyTx, _ := ap.GetTxConfig().TxEncoder()(cosmosTxBuilder.GetTx())
+					// Create two transactions to exceed the block gas limit
+					txs = append(txs, emptyTx)
+				}
+			}
+
+			proposal := abci.RequestProcessProposal{
+				Txs:    txs,
+				Header: &types.Header{ChainID: "pax-test", Height: 2},
+			}
+			res, err := ap.ProcessProposal(context.Background(), &proposal)
+			require.Nil(t, err)
+			require.Equal(t, tc.expectedStatus, res.Status)
+		})
+	}
+}
+
+func TestOverflowGas(t *testing.T) {
+	tm := time.Now().UTC()
+	valPub := secp256k1.GenPrivKey().PubKey()
+
+	testWrapper := app.NewTestWrapper(t, tm, valPub, false)
+	ap := testWrapper.App
+	deliverCtx := ap.GetContextForDeliverTx([]byte{})
+	ap.StoreConsensusParams(deliverCtx, &types.ConsensusParams{
+		Block: &types.BlockParams{MaxGas: math.MaxInt64},
+	})
+	ap.FinalizeBlock(context.Background(), &abci.RequestFinalizeBlock{
+		Header: &types.Header{ChainID: "pax-test", Height: 1},
+	})
+	ap.SetDeliverStateToCommit()
+	ap.Commit(context.Background())
+
+	emptyTxBuilder := app.MakeEncodingConfig().TxConfig.NewTxBuilder()
+	txEncoder := app.MakeEncodingConfig().TxConfig.TxEncoder()
+	emptyTxBuilder.SetGasLimit(uint64(math.MaxInt64))
+	emptyTx, _ := txEncoder(emptyTxBuilder.GetTx())
+
+	secondEmptyTxBuilder := app.MakeEncodingConfig().TxConfig.NewTxBuilder()
+	secondEmptyTxBuilder.SetGasLimit(10)
+	secondTx, _ := txEncoder(secondEmptyTxBuilder.GetTx())
+
+	proposal := abci.RequestProcessProposal{
+		Txs:    [][]byte{emptyTx, secondTx},
+		Header: &types.Header{ChainID: "pax-test", Height: 2},
+	}
+	res, err := ap.ProcessProposal(context.Background(), &proposal)
+	require.Nil(t, err)
+	require.Equal(t, abci.ResponseProcessProposal_REJECT, res.Status)
+}
+
+func TestDecodeTransactionsConcurrently(t *testing.T) {
+	tm := time.Now().UTC()
+	valPub := secp256k1.GenPrivKey().PubKey()
+
+	testWrapper := app.NewTestWrapper(t, tm, valPub, false)
+	privKey := testkeeper.MockPrivateKey()
+	testPrivHex := hex.EncodeToString(privKey.Bytes())
+	key, _ := crypto.HexToECDSA(testPrivHex)
+	to := new(common.Address)
+	copy(to[:], []byte("0x1234567890abcdef1234567890abcdef12345678"))
+	txData := ethtypes.LegacyTx{
+		Nonce:    1,
+		GasPrice: big.NewInt(10),
+		Gas:      1000,
+		To:       to,
+		Value:    big.NewInt(1000),
+		Data:     []byte("abc"),
+	}
+	chainCfg := evmtypes.DefaultChainConfig()
+	ethCfg := chainCfg.EthereumConfig(big.NewInt(config.DefaultChainID))
+	signer := ethtypes.MakeSigner(ethCfg, big.NewInt(1), uint64(123))
+	tx, err := ethtypes.SignTx(ethtypes.NewTx(&txData), signer, key)
+	ethtxdata, _ := ethtx.NewTxDataFromTx(tx)
+	if err != nil {
+		return
+	}
+	msg, _ := evmtypes.NewMsgEVMTransaction(ethtxdata)
+	txBuilder := testWrapper.App.GetTxConfig().NewTxBuilder()
+	txBuilder.SetMsgs(msg)
+	evmtxbz, _ := testWrapper.App.GetTxConfig().TxEncoder()(txBuilder.GetTx())
+
+	bankMsg := &banktypes.MsgSend{
+		FromAddress: "",
+		ToAddress:   "",
+		Amount:      sdk.NewCoins(sdk.NewInt64Coin("uhpx", 2)),
+	}
+
+	bankTxBuilder := testWrapper.App.GetTxConfig().NewTxBuilder()
+	bankTxBuilder.SetMsgs(bankMsg)
+	bankTxBuilder.SetGasLimit(200000)
+	bankTxBuilder.SetFeeAmount(sdk.NewCoins(sdk.NewInt64Coin("uhpx", 20000)))
+	banktxbz, _ := testWrapper.App.GetTxConfig().TxEncoder()(bankTxBuilder.GetTx())
+
+	invalidbz := []byte("abc")
+
+	typedTxs := testWrapper.App.DecodeTransactionsConcurrently(testWrapper.Ctx, [][]byte{evmtxbz, invalidbz, banktxbz})
+	require.NotNil(t, typedTxs[0])
+	require.NotNil(t, typedTxs[0].GetMsgs()[0].(*evmtypes.MsgEVMTransaction).Derived)
+	require.Nil(t, typedTxs[1])
+	require.NotNil(t, typedTxs[2])
+
+	// test panic handling
+	testWrapper.App.SetTxDecoder(func(txBytes []byte) (sdk.Tx, error) { panic("test") })
+	typedTxs = testWrapper.App.DecodeTransactionsConcurrently(testWrapper.Ctx, [][]byte{evmtxbz, invalidbz, banktxbz})
+	require.Nil(t, typedTxs[0])
+	require.Nil(t, typedTxs[1])
+	require.Nil(t, typedTxs[2])
+}
+
+func TestApp_RegisterAPIRoutes(t *testing.T) {
+	type args struct {
+		apiSvr    *api.Server
+		apiConfig cosmosConfig.APIConfig
+	}
+	tests := []struct {
+		name        string
+		args        args
+		wantSwagger bool
+	}{
+		{
+			name: "swagger added to the router if configured",
+			args: args{
+				apiSvr: &api.Server{
+					ClientCtx:         client.Context{},
+					Router:            &mux.Router{},
+					GRPCGatewayRouter: runtime.NewServeMux(),
+				},
+				apiConfig: cosmosConfig.APIConfig{
+					Swagger: true,
+				},
+			},
+			wantSwagger: true,
+		},
+		{
+			name: "swagger not added to the router if not configured",
+			args: args{
+				apiSvr: &api.Server{
+					ClientCtx:         client.Context{},
+					Router:            &mux.Router{},
+					GRPCGatewayRouter: runtime.NewServeMux(),
+				},
+				apiConfig: cosmosConfig.APIConfig{},
+			},
+			wantSwagger: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			paxApp := &app.App{}
+			paxApp.RegisterAPIRoutes(tt.args.apiSvr, tt.args.apiConfig)
+			routes := tt.args.apiSvr.Router
+			gotSwagger := isSwaggerRouteAdded(routes)
+
+			if !reflect.DeepEqual(gotSwagger, tt.wantSwagger) {
+				t.Errorf("Run() gotSwagger = %v, want %v", gotSwagger, tt.wantSwagger)
+			}
+		})
+
+	}
+}
+
+func TestGetEVMMsg(t *testing.T) {
+	a := &app.App{}
+	require.Nil(t, a.GetEVMMsg(nil))
+	require.Nil(t, a.GetEVMMsg(app.MakeEncodingConfig().TxConfig.NewTxBuilder().GetTx()))
+	tb := app.MakeEncodingConfig().TxConfig.NewTxBuilder()
+	tb.SetMsgs(&evmtypes.MsgEVMTransaction{}) // invalid msg
+	require.Nil(t, a.GetEVMMsg(tb.GetTx()))
+
+	tb = app.MakeEncodingConfig().TxConfig.NewTxBuilder()
+	privKey := testkeeper.MockPrivateKey()
+	testPrivHex := hex.EncodeToString(privKey.Bytes())
+	key, _ := crypto.HexToECDSA(testPrivHex)
+	txData := ethtypes.LegacyTx{}
+	chainCfg := evmtypes.DefaultChainConfig()
+	ethCfg := chainCfg.EthereumConfig(big.NewInt(config.DefaultChainID))
+	signer := ethtypes.MakeSigner(ethCfg, big.NewInt(1), uint64(123))
+	tx, err := ethtypes.SignTx(ethtypes.NewTx(&txData), signer, key)
+	ethtxdata, _ := ethtx.NewTxDataFromTx(tx)
+	if err != nil {
+		return
+	}
+	msg, _ := evmtypes.NewMsgEVMTransaction(ethtxdata)
+	tb.SetMsgs(msg)
+	require.NotNil(t, a.GetEVMMsg(tb.GetTx()))
+}
+
+func TestGetDeliverTxEntry(t *testing.T) {
+	tm := time.Now().UTC()
+	valPub := secp256k1.GenPrivKey().PubKey()
+
+	testWrapper := app.NewTestWrapper(t, tm, valPub, false)
+	ap := testWrapper.App
+	ctx := testWrapper.Ctx.WithConsensusParams(&types.ConsensusParams{
+		Block: &types.BlockParams{MaxGas: 10},
+	})
+	emptyTxBuilder := app.MakeEncodingConfig().TxConfig.NewTxBuilder()
+	txEncoder := app.MakeEncodingConfig().TxConfig.TxEncoder()
+	emptyTxBuilder.SetGasLimit(10)
+	tx := emptyTxBuilder.GetTx()
+	bz, _ := txEncoder(tx)
+
+	require.NotNil(t, ap.GetDeliverTxEntry(ctx, 0, bz, tx))
+
+	require.NotNil(t, ap.GetDeliverTxEntry(ctx, 0, bz, nil))
+}
+
+func isSwaggerRouteAdded(router *mux.Router) bool {
+	var isAdded bool
+	err := router.Walk(func(route *mux.Route, router *mux.Router, ancestors []*mux.Route) error {
+		pathTemplate, err := route.GetPathTemplate()
+		if err == nil && pathTemplate == "/swagger/" {
+			isAdded = true
+		}
+		return nil
+	})
+	if err != nil {
+		return false
+	}
+	return isAdded
+}
+
+func TestGaslessTransactionExtremeGasValue(t *testing.T) {
+	pax := app.Setup(t, false, false, false)
+	ctx := pax.BaseApp.NewContext(false, types.Header{})
+
+	testAddr := sdk.AccAddress([]byte("test_address_1234567"))
+
+	// Create a potentially gasless transaction with extreme gas value
+	attackMsg := &evmtypes.MsgAssociate{
+		Sender:        testAddr.String(),
+		CustomMessage: "overflow_attack",
+	}
+
+	attackTxBuilder := pax.GetTxConfig().NewTxBuilder()
+	attackTxBuilder.SetMsgs(attackMsg)
+	attackTxBuilder.SetGasLimit(uint64(9223372036854775807)) // 2^63-1, extreme value
+	attackTx := attackTxBuilder.GetTx()
+
+	// Encode the transaction
+	attackTxBytes, err := pax.GetTxConfig().TxEncoder()(attackTx)
+	require.NoError(t, err)
+
+	// Gasless transactions skip metrics recording
+	// Non-gasless transactions have overflow protection in IncrGasCounter
+	require.NotPanics(t, func() {
+		result := pax.DeliverTxWithResult(ctx, attackTxBytes, attackTx)
+		require.NotNil(t, result)
+	}, "Extreme gas values should never cause panic due to overflow protection")
+}
+
+// TestProcessProposalHandlerPanicRecovery tests the panic recovery mechanism in ProcessProposalHandler.
+func TestProcessProposalHandlerPanicRecovery(t *testing.T) {
+	tm := time.Now().UTC()
+	valPub := secp256k1.GenPrivKey().PubKey()
+
+	testWrapper := app.NewTestWrapper(t, tm, valPub, false)
+	appInstance := testWrapper.App
+	ctx := testWrapper.Ctx
+
+	// malicious tx with MsgAggregateExchangeRateVote with invalid feeder address
+	maliciousTx := []byte{
+		0x0a, 0x90, 0x01, 0x0a, 0x2f, 0x2f, 0x6f, 0x72, 0x61, 0x63, 0x6c, 0x65, 0x2e, 0x76, 0x31, 0x62, 0x65, 0x74, 0x61, 0x31, 0x2e, 0x4d, 0x73, 0x67, 0x41, 0x67, 0x67, 0x72, 0x65, 0x67, 0x61, 0x74, 0x65, 0x45, 0x78, 0x63, 0x68, 0x61, 0x6e, 0x67, 0x65, 0x52, 0x61, 0x74, 0x65, 0x56, 0x6f, 0x74, 0x65, 0x12, 0x5d, 0x0a, 0x16, 0x31, 0x30, 0x30, 0x30, 0x30, 0x75, 0x73, 0x65, 0x69, 0x3a, 0x31, 0x30, 0x30, 0x30, 0x30, 0x75, 0x61, 0x74, 0x6f, 0x6d, 0x12, 0x04, 0x31, 0x2e, 0x30, 0x30, 0x1a, 0x28, 0x73, 0x65, 0x69, 0x31, 0x71, 0x71, 0x71, 0x71, 0x71, 0x71, 0x71, 0x71, 0x71, 0x71, 0x71, 0x71, 0x71, 0x71, 0x71, 0x71, 0x71, 0x71, 0x71, 0x71, 0x71, 0x71, 0x71, 0x71, 0x71, 0x71, 0x71, 0x71, 0x71, 0x71, 0x71, 0x71, 0x71, 0x71, 0x71, 0x71, 0x71, 0x71, 0x71, 0x22, 0x13, 0x69, 0x6e, 0x76, 0x61, 0x6c, 0x69, 0x64, 0x2d, 0x66, 0x65, 0x65, 0x64, 0x65, 0x72, 0x2d, 0x61, 0x64, 0x64, 0x72,
+	}
+
+	req := &abci.RequestProcessProposal{
+		Header: &types.Header{ChainID: "pax-test", Height: ctx.BlockHeight()},
+		Hash:   []byte("panic-test"),
+		Txs:    [][]byte{maliciousTx}, // Include the malicious transaction
+	}
+
+	// Clear any existing optimistic processing state
+	appInstance.ClearOptimisticProcessingInfo()
+
+	resp, err := appInstance.ProcessProposalHandler(ctx, req)
+	require.NoError(t, err)
+
+	if resp.Status == abci.ResponseProcessProposal_REJECT {
+		t.Log("SECURITY TEST: Precheck caught potential issue and rejected proposal")
+	} else {
+		t.Log("SECURITY TEST: Proposal accepted - no panic detected (expected with current protections)")
+
+		// If accepted, wait for optimistic processing to complete
+		info := appInstance.GetOptimisticProcessingInfo()
+		if info.Completion != nil {
+			select {
+			case <-info.Completion:
+				finalInfo := appInstance.GetOptimisticProcessingInfo()
+				if finalInfo.Aborted {
+					t.Log("Backup panic recovery worked correctly")
+				} else {
+					t.Log("Optimistic processing completed normally")
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("Timeout waiting for completion signal")
+			}
+		}
+	}
+}
+
+// TestProcessBlockUpgradePanicLogic tests the upgrade panic detection logic
+// Since ProcessBlock has multiple panic recovery layers, we test the logic directly
+func TestProcessBlockUpgradePanicLogic(t *testing.T) {
+	// This tests the exact same logic used in ProcessBlock's defer function
+	// We extract and test the core logic to ensure it works correctly
+	testUpgradePanicDetection := func(panicMsg string) (shouldRepanic bool, shouldRecover bool) {
+		// This uses the same regex pattern as ProcessBlock for consistency with Cosmovisor
+		// Matches multiple upgrade-related panic patterns from pax-cosmos
+		upgradeRe := regexp.MustCompile(`^(UPGRADE "[^"]+" NEEDED at height:?\s*\d+|Wrong app version \d+, upgrade handler is missing for .+ upgrade plan|BINARY UPDATED BEFORE TRIGGER! UPGRADE "[^"]+")`)
+		if upgradeRe.MatchString(panicMsg) {
+			return true, false // Should re-panic
+		}
+		return false, true // Should recover
+	}
+
+	testCases := []struct {
+		name          string
+		panicMsg      string
+		shouldRepanic bool
+		shouldRecover bool
+		description   string
+	}{
+		{
+			name:          "legitimate_upgrade_panic",
+			panicMsg:      `UPGRADE "test-version" NEEDED at height: 100: test upgrade`,
+			shouldRepanic: true,
+			shouldRecover: false,
+			description:   "Legitimate upgrade panic should be re-panicked",
+		},
+		{
+			name:          "malicious_upgrade_in_middle",
+			panicMsg:      `malicious attack UPGRADE "fake" NEEDED at height: 100`,
+			shouldRepanic: false,
+			shouldRecover: true,
+			description:   "Malicious message with UPGRADE in middle should be recovered",
+		},
+		{
+			name:          "normal_panic",
+			panicMsg:      "runtime error: index out of range",
+			shouldRepanic: false,
+			shouldRecover: true,
+			description:   "Normal panic should be recovered",
+		},
+		{
+			name:          "upgrade_prefix_wrong_format",
+			panicMsg:      `UPGRADE "fake" but wrong format`,
+			shouldRepanic: false,
+			shouldRecover: true,
+			description:   "UPGRADE prefix but missing 'NEEDED at height' should be recovered",
+		},
+		{
+			name:          "case_sensitive_test",
+			panicMsg:      `upgrade "fake" NEEDED at height: 100`,
+			shouldRepanic: false,
+			shouldRecover: true,
+			description:   "Lowercase 'upgrade' should be recovered (case sensitive)",
+		},
+		{
+			name:          "different_upgrade_format",
+			panicMsg:      `UPGRADE "mainnet-v2" NEEDED at height: 200000: major upgrade`,
+			shouldRepanic: true,
+			shouldRecover: false,
+			description:   "Different upgrade version format should still work",
+		},
+		{
+			name:          "wrong_app_version_panic",
+			panicMsg:      `Wrong app version 5, upgrade handler is missing for v5.9.0 upgrade plan`,
+			shouldRepanic: true,
+			shouldRecover: false,
+			description:   "Wrong app version panic should be re-panicked",
+		},
+		{
+			name:          "binary_updated_early_panic",
+			panicMsg:      `BINARY UPDATED BEFORE TRIGGER! UPGRADE "v6.0.0" - in binary but not executed on chain`,
+			shouldRepanic: true,
+			shouldRecover: false,
+			description:   "Binary updated too early panic should be re-panicked",
+		},
+		{
+			name:          "malicious_wrong_version_format",
+			panicMsg:      `malicious Wrong app version attack`,
+			shouldRepanic: false,
+			shouldRecover: true,
+			description:   "Malicious message mimicking wrong version should be recovered",
+		},
+		{
+			name:          "malicious_binary_updated_format",
+			panicMsg:      `attack BINARY UPDATED BEFORE TRIGGER! fake message`,
+			shouldRepanic: false,
+			shouldRecover: true,
+			description:   "Malicious message mimicking binary update should be recovered",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			shouldRepanic, shouldRecover := testUpgradePanicDetection(tc.panicMsg)
+
+			if tc.shouldRepanic {
+				require.True(t, shouldRepanic, "Expected panic to be re-panicked: %s", tc.description)
+				require.False(t, shouldRecover, "Expected panic NOT to be recovered: %s", tc.description)
+			}
+
+			if tc.shouldRecover {
+				require.False(t, shouldRepanic, "Expected panic NOT to be re-panicked: %s", tc.description)
+				require.True(t, shouldRecover, "Expected panic to be recovered: %s", tc.description)
+			}
+		})
+	}
+}
+
+func TestDeliverTxWithNilTypedTxDoesNotPanic(t *testing.T) {
+	pax := app.Setup(t, false, false, false)
+	ctx := pax.BaseApp.NewContext(false, types.Header{})
+
+	malformedTxBytes := []byte("invalid tx bytes that cannot be decoded")
+
+	require.NotPanics(t, func() {
+		result := pax.DeliverTxWithResult(ctx, malformedTxBytes, nil)
+		require.NotNil(t, result)
+	})
+}
+
+func signCosmosTx(
+	t *testing.T,
+	txCfg client.TxConfig,
+	txBuilder client.TxBuilder,
+	privKey cryptotypes.PrivKey,
+	acc authtypes.AccountI,
+) []byte {
+	// Set signatures with empty sig first to populate SignerInfos
+	sigV2 := signing.SignatureV2{
+		PubKey: privKey.PubKey(),
+		Data: &signing.SingleSignatureData{
+			SignMode:  txCfg.SignModeHandler().DefaultMode(),
+			Signature: nil,
+		},
+		Sequence: acc.GetSequence(),
+	}
+	err := txBuilder.SetSignatures(sigV2)
+	require.NoError(t, err)
+
+	// Sign for real
+	signerData := xauthsigning.SignerData{
+		ChainID:       "pax-test",
+		AccountNumber: acc.GetAccountNumber(),
+		Sequence:      acc.GetSequence(),
+	}
+	sigV2, err = clienttx.SignWithPrivKey(
+		txCfg.SignModeHandler().DefaultMode(),
+		signerData, txBuilder, privKey, txCfg, acc.GetSequence(),
+	)
+	require.NoError(t, err)
+	err = txBuilder.SetSignatures(sigV2)
+	require.NoError(t, err)
+
+	txBytes, err := txCfg.TxEncoder()(txBuilder.GetTx())
+	require.NoError(t, err)
+	return txBytes
+}
+
+func TestDecodeFailureTxReportsZeroGas(t *testing.T) {
+	// Set up app with a funded genesis account
+	senderPriv := secp256k1.GenPrivKey()
+	senderPub := senderPriv.PubKey()
+	senderAddr := sdk.AccAddress(senderPub.Address())
+	receiverAddr := sdk.AccAddress(secp256k1.GenPrivKey().PubKey().Address())
+
+	genAcc := authtypes.NewBaseAccount(senderAddr, senderPub, 0, 0)
+	balance := banktypes.Balance{
+		Address: senderAddr.String(),
+		Coins:   sdk.NewCoins(sdk.NewCoin("uhpx", sdk.NewInt(1_000_000_000))),
+	}
+	tmPub, err := cryptocodec.ToTmPubKeyInterface(cosmosed25519.GenPrivKey().PubKey())
+	require.NoError(t, err)
+	valSet := tmtypes.NewValidatorSet([]*tmtypes.Validator{tmtypes.NewValidator(tmPub, 1)})
+
+	testApp := app.SetupWithGenesisValSet(t, valSet, []authtypes.GenesisAccount{genAcc}, balance)
+	txCfg := testApp.GetTxConfig()
+
+	// Look up the account from committed state so we have the right sequence
+	ctx := testApp.NewUncachedContext(false, types.Header{Height: testApp.LastBlockHeight()})
+	acc := testApp.AccountKeeper.GetAccount(ctx, senderAddr)
+	require.NotNil(t, acc)
+
+	// Build a signed bank send tx (should succeed)
+	txBuilder := txCfg.NewTxBuilder()
+	err = txBuilder.SetMsgs(&banktypes.MsgSend{
+		FromAddress: senderAddr.String(),
+		ToAddress:   receiverAddr.String(),
+		Amount:      sdk.NewCoins(sdk.NewInt64Coin("uhpx", 1)),
+	})
+	require.NoError(t, err)
+	txBuilder.SetGasLimit(200000)
+	txBuilder.SetFeeAmount(sdk.NewCoins(sdk.NewInt64Coin("uhpx", 20000)))
+	normalTx := signCosmosTx(t, txCfg, txBuilder, senderPriv, acc)
+
+	// Build a tx that will decode and pass ante handler but fail in message
+	// execution (insufficient funds). Use same sequence since OCC may run
+	// this tx before tx 0 commits.
+	failAcc := authtypes.NewBaseAccount(senderAddr, senderPub, acc.GetAccountNumber(), acc.GetSequence())
+	failTxBuilder := txCfg.NewTxBuilder()
+	err = failTxBuilder.SetMsgs(&banktypes.MsgSend{
+		FromAddress: senderAddr.String(),
+		ToAddress:   receiverAddr.String(),
+		Amount:      sdk.NewCoins(sdk.NewInt64Coin("uhpx", 999_999_999_999)), // way more than balance
+	})
+	require.NoError(t, err)
+	failTxBuilder.SetGasLimit(200000)
+	failTxBuilder.SetFeeAmount(sdk.NewCoins(sdk.NewInt64Coin("uhpx", 20000)))
+	failMsgTx := signCosmosTx(t, txCfg, failTxBuilder, senderPriv, failAcc)
+
+	malformedTx := []byte("invalid tx bytes that cannot be decoded")
+
+	txs := [][]byte{
+		normalTx,    // tx 0: signed bank send (should succeed, reports gas)
+		malformedTx, // tx 1: decode failure (should report zero gas)
+		failMsgTx,   // tx 2: decoded OK, ante handler runs, but msg execution fails
+	}
+
+	height := testApp.LastBlockHeight() + 1
+	req := &abci.RequestFinalizeBlock{
+		Header: &types.Header{ChainID: "pax-test", Height: height},
+	}
+	_, txResults, _, _ := testApp.ProcessBlock(
+		ctx.WithBlockHeight(height).WithChainID("pax-test"),
+		txs,
+		finalizeToBlockProcessReq(req),
+		req.DecidedLastCommit,
+		false,
+		nil,
+	)
+
+	require.Equal(t, 3, len(txResults))
+
+	// tx 0: signed bank send — should succeed with nonzero gas
+	require.Equal(t, uint32(0), txResults[0].Code, "signed bank send should succeed")
+	require.Greater(t, txResults[0].GasUsed, int64(0), "successful tx should report nonzero GasUsed")
+	require.Greater(t, txResults[0].GasWanted, int64(0), "successful tx should report nonzero GasWanted")
+
+	// tx 1: malformed tx — ante handler never ran, must report zero gas
+	require.NotEqual(t, uint32(0), txResults[1].Code, "malformed tx should fail")
+	require.Equal(t, int64(0), txResults[1].GasUsed, "decode failure must report zero GasUsed")
+	require.Equal(t, int64(0), txResults[1].GasWanted, "decode failure must report zero GasWanted")
+
+	// tx 2: failed execution (insufficient funds) but the ante handler already
+	// installed a per-tx gas meter, so gas is reported correctly.
+	require.NotEqual(t, uint32(0), txResults[2].Code, "insufficient funds tx should fail")
+	require.Greater(t, txResults[2].GasUsed, int64(0), "failed-after-ante tx should report nonzero GasUsed")
+	require.Greater(t, txResults[2].GasWanted, int64(0), "failed-after-ante tx should report nonzero GasWanted")
+}
+
+// TestRPCContextProviderPopulatesConsensusParams verifies the contract that
+// RPCContextProvider returns an SDK context with ConsensusParams populated
+// from the param store, for both LatestCtxHeight and historical heights.
+//
+// Without this, evmrpc handlers that read ctx.ConsensusParams() (e.g.
+// EncodeTmBlock's gasLimit, InfoAPI's CalculateGasUsedRatio) get nil and
+// fall back to zero / hardcoded defaults — diverging from what the EVM
+// runtime sees via modules/evm/keeper's BlockContext.GasLimit.
+func TestRPCContextProviderPopulatesConsensusParams(t *testing.T) {
+	valPub := cosmosed25519.GenPrivKey().PubKey()
+	accAddr := sdk.AccAddress(valPub.Address())
+	genAcc := authtypes.NewBaseAccount(accAddr, nil, 0, 0)
+	balance := banktypes.Balance{
+		Address: accAddr.String(),
+		Coins:   sdk.NewCoins(sdk.NewCoin(sdk.DefaultBondDenom, sdk.DefaultPowerReduction)),
+	}
+	tmPub, err := cryptocodec.ToTmPubKeyInterface(valPub)
+	require.NoError(t, err)
+	valSet := tmtypes.NewValidatorSet([]*tmtypes.Validator{tmtypes.NewValidator(tmPub, 1)})
+
+	testApp := app.SetupWithGenesisValSet(t, valSet, []authtypes.GenesisAccount{genAcc}, balance)
+
+	// SetupWithGenesisValSet calls InitChain with app.DefaultConsensusParams,
+	// so the param store should have those values persisted at genesis.
+	expectedMaxGas := app.DefaultConsensusParams.Block.MaxGas
+	expectedMaxBytes := app.DefaultConsensusParams.Block.MaxBytes
+
+	t.Run("latest height", func(t *testing.T) {
+		ctx := testApp.RPCContextProvider(evmrpc.LatestCtxHeight)
+		cp := ctx.ConsensusParams()
+		require.NotNil(t, cp, "ConsensusParams must be populated on the latest RPC ctx")
+		require.NotNil(t, cp.Block, "Block params must be populated")
+		require.Equal(t, expectedMaxGas, cp.Block.MaxGas)
+		require.Equal(t, expectedMaxBytes, cp.Block.MaxBytes)
+	})
+
+	t.Run("historical height", func(t *testing.T) {
+		// SetupWithGenesisValSet commits genesis (height 1) and then runs
+		// FinalizeBlock for the next block. LastBlockHeight is the last
+		// committed height; query at that height.
+		h := testApp.LastBlockHeight()
+		require.Greater(t, h, int64(0), "test setup expected at least one committed block")
+
+		ctx := testApp.RPCContextProvider(h)
+		cp := ctx.ConsensusParams()
+		require.NotNil(t, cp, "ConsensusParams must be populated on a historical RPC ctx")
+		require.NotNil(t, cp.Block, "Block params must be populated")
+		require.Equal(t, expectedMaxGas, cp.Block.MaxGas)
+		require.Equal(t, expectedMaxBytes, cp.Block.MaxBytes)
+	})
+}
+
+func TestSnapshotAwareRPCContextProviderPopulatesConsensusParams(t *testing.T) {
+	valPub := cosmosed25519.GenPrivKey().PubKey()
+	accAddr := sdk.AccAddress(valPub.Address())
+	genAcc := authtypes.NewBaseAccount(accAddr, nil, 0, 0)
+	balance := banktypes.Balance{
+		Address: accAddr.String(),
+		Coins:   sdk.NewCoins(sdk.NewCoin(sdk.DefaultBondDenom, sdk.DefaultPowerReduction)),
+	}
+	tmPub, err := cryptocodec.ToTmPubKeyInterface(valPub)
+	require.NoError(t, err)
+	valSet := tmtypes.NewValidatorSet([]*tmtypes.Validator{tmtypes.NewValidator(tmPub, 1)})
+
+	testApp := app.SetupWithGenesisValSet(t, valSet, []authtypes.GenesisAccount{genAcc}, balance)
+	rs, ok := testApp.CommitMultiStore().(*storev2_rootmulti.Store)
+	require.True(t, ok)
+	snap := rs.SnapshotSCStore()
+	require.NotNil(t, snap)
+	testApp.EvmKeeper.SetTraceSnapshotStore(evmkeeper.NewTraceSnapshotStore(8))
+	testApp.EvmKeeper.TraceSnapshotStore().Put(snap.Version(), snap)
+
+	ctx, release := testApp.SnapshotAwareRPCContextProvider()(snap.Version())
+	defer release()
+
+	cp := ctx.ConsensusParams()
+	require.NotNil(t, cp, "ConsensusParams must be populated on the snapshot RPC ctx")
+	require.NotNil(t, cp.Block, "Block params must be populated")
+	require.Equal(t, app.DefaultConsensusParams.Block.MaxGas, cp.Block.MaxGas)
+	require.Equal(t, app.DefaultConsensusParams.Block.MaxBytes, cp.Block.MaxBytes)
+
+	rpcCtx := testApp.RPCContextProvider(snap.Version())
+	require.Equal(t, rpcCtx.ChainID(), ctx.ChainID())
+	require.Equal(t, rpcCtx.BlockTime(), ctx.BlockTime())
+}
+
+func finalizeToBlockProcessReq(req *abci.RequestFinalizeBlock) *app.BlockProcessRequest {
+	var height int64
+	var blockTime time.Time
+	if req.Header != nil {
+		height = req.Header.Height
+		blockTime = req.Header.Time
+	}
+	return &app.BlockProcessRequest{
+		Hash:                req.Hash,
+		ByzantineValidators: req.ByzantineValidators,
+		Height:              height,
+		Time:                blockTime,
+	}
+}

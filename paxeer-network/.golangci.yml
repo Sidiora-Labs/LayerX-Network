@@ -1,0 +1,34 @@
+version: "2"
+run:
+  tests: false
+  timeout: 10m
+  build-tags:
+    - codeanalysis
+
+linters:
+  default: none
+  enable:
+    - bodyclose
+    - dogsled
+    - errcheck
+    - goconst
+    - gosec
+    - govet
+    - ineffassign
+    - misspell
+    - prealloc
+    - staticcheck
+    - unconvert
+    - misspell
+  exclusions:
+    paths:
+      - ".*\\.pb\\.go$"
+    rules:
+      - linters:
+          - gosec
+        text: "Use of weak random number generator"
+
+formatters:
+  enable:
+    - gofmt
+    - goimports

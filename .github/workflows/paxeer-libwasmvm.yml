@@ -1,0 +1,55 @@
+name: Paxeer / Build libwasmvm
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Git ref to checkout (branch, tag, or SHA)'
+        required: false
+        type: string
+        default: ''
+  push:
+    branches:
+      - main
+      - release/**
+    paths:
+      - 'paxeer-network/**'
+      - '.github/workflows/paxeer-libwasmvm.yml'
+
+concurrency:
+  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event_name == 'push' && github.sha || github.ref }}
+
+defaults:
+  run:
+    working-directory: paxeer-network/wasm-runtime
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - release-build-alpine
+          - release-build-linux
+          - release-build-macos
+          - release-build-macos-static
+    steps:
+      - uses: actions/checkout@v6
+        with:
+           ref: ${{ inputs.ref || github.sha }}
+      - name: Build
+        run: |
+          mkdir -p libwasmvm/artifacts
+          make ${{ matrix.target }}
+          ls -alh internal/api
+      - name: Upload libraries
+        uses: actions/upload-artifact@v5
+        with:
+          name: paxeer-libwasmvm-${{ matrix.target }}-${{ inputs.ref || github.sha }}
+          path: |
+            paxeer-network/wasm-runtime/internal/api/*.h
+            paxeer-network/wasm-runtime/internal/api/*.so
+            paxeer-network/wasm-runtime/internal/api/*.a
+            paxeer-network/wasm-runtime/internal/api/*.dylib
+          if-no-files-found: warn

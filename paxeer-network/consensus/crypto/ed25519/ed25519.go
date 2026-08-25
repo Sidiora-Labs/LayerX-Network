@@ -1,0 +1,216 @@
+package ed25519
+
+import (
+	"bytes"
+	"crypto/rand"
+	"crypto/sha256"
+	"fmt"
+	"runtime"
+	"slices"
+
+	"github.com/oasisprotocol/curve25519-voi/primitives/ed25519"
+	"github.com/oasisprotocol/curve25519-voi/primitives/ed25519/extra/cache"
+
+	"github.com/sidiora-labs/paxeer-network/consensus/libs/utils"
+)
+
+type ErrBadSig struct {
+	Idx int // Index of the first invalid signature.
+}
+
+func (e ErrBadSig) Error() string {
+	return fmt.Sprintf("invalid %vth signature", e.Idx)
+}
+
+// cacheSize is the number of public keys that will be cached in
+// an expanded format for repeated signature verification.
+//
+// TODO/perf: Either this should exclude single verification, or be
+// tuned to `> validatorSize + maxTxnsPerBlock` to avoid cache
+// thrashing.
+const cacheSize = 4096
+
+// curve25519-voi's Ed25519 implementation supports configurable
+// verification behavior, and tendermint uses the ZIP-215 verification
+// semantics.
+var verifyOptions = ed25519.VerifyOptionsZIP_215
+var cachingVerifier = cache.NewVerifier(cache.NewLRUCache(cacheSize))
+
+// SecretKey represents a secret key in the Ed25519 signature scheme.
+type SecretKey struct {
+	// When using the key make sure to use runtime.KeepAlive, so that key is not zeroized midway.
+	// This is a pointer to avoid copying the secret to stack when used.
+	// This is a pointer to pointer, so that runtime.AddCleanup can actually work:
+	// AddCleanup requires the referenced pointer to be unreachable, even from the cleanup function.
+	// This is a closure returning pointer to pointer , so that secret is not extractable via golang reflection,
+	// because reflection is not able to call closures stored in private fields of types in other modules.
+	// this protects us from reflection-based traversing (like default stringer implementation)
+	// We cannot reuse the closure interface as the outer pointer (i.e. reduce it to func() *[...]byte),
+	// because closure is not a pointer in go.
+	// The cost of dereferencing multiple times is assumed to be dwarfed by the crypto operations.
+	// Secret is not comparable and that's intentional. Compare the public keys instead.
+	key func() **[ed25519.PrivateKeySize]byte
+}
+
+// WARNING: this function should only be used when persisting the private key.
+// WARNING: caller is responsible for zeroizing the returned slice.
+func (k SecretKey) SecretBytes() []byte {
+	defer runtime.KeepAlive(k)
+	return slices.Clone((*k.key())[:])
+}
+
+// SecretKeyFromSecretBytes constructs a secret key from a raw secret material.
+// WARNING: this function zeroes the content of the input slice.
+func SecretKeyFromSecretBytes(b []byte) (SecretKey, error) {
+	if got, want := len(b), ed25519.PrivateKeySize; got != want {
+		return SecretKey{}, fmt.Errorf("ed25519: bad private key length: got %d, want %d", got, want)
+	}
+	type Secret = [ed25519.PrivateKeySize]byte
+	raw := utils.Alloc(Secret(b))
+	runtime.AddCleanup(&raw, func(raw *Secret) {
+		// Zero the memory to avoid leaking the secret.
+		for i := range raw {
+			raw[i] = 0
+		}
+	}, raw)
+	key := SecretKey{key: func() **Secret { return &raw }}
+	// Zero the input slice to avoid leaking the secret.
+	for i := range b {
+		b[i] = 0
+	}
+	return key, nil
+}
+
+// TestSecretKey generates a testonly secret key.
+func TestSecretKey(seed []byte) SecretKey {
+	h := sha256.Sum256(seed)
+	key, err := SecretKeyFromSecretBytes(ed25519.NewKeyFromSeed(h[:]))
+	if err != nil {
+		panic(err)
+	}
+	return key
+}
+
+// GenerateSecretKey generates a new secret key using a cryptographically secure random number generator.
+func GenerateSecretKey() SecretKey {
+	var seed [ed25519.SeedSize]byte
+	// rand.Read is documented to never return an error.
+	if _, err := rand.Read(seed[:]); err != nil {
+		panic(err)
+	}
+	// Generated key is always valid.
+	key, err := SecretKeyFromSecretBytes(ed25519.NewKeyFromSeed(seed[:]))
+	if err != nil {
+		panic(err)
+	}
+	// Zeroize the seed after generation.
+	for i := range seed {
+		seed[i] = 0
+	}
+	return key
+}
+
+// Public returns the public key corresponding to the secret key.
+func (k SecretKey) Public() PublicKey {
+	defer runtime.KeepAlive(k)
+	p := ed25519.PrivateKey((*k.key())[:]).Public().(ed25519.PublicKey)
+	return PublicKey{key: [ed25519.PublicKeySize]byte(p)}
+}
+
+// PublicKey represents a public key in the Ed25519 signature scheme.
+type PublicKey struct {
+	utils.ReadOnly
+	key [ed25519.PublicKeySize]byte
+}
+
+// Signature represents a signature in the Ed25519 signature scheme.
+type Signature struct {
+	utils.ReadOnly
+	sig [ed25519.SignatureSize]byte
+}
+
+// Sign signs a message using the secret key.
+func (k SecretKey) Sign(message []byte) Signature {
+	defer runtime.KeepAlive(k)
+	return Signature{
+		sig: [ed25519.SignatureSize]byte(ed25519.Sign((*k.key())[:], message)),
+	}
+}
+
+// Domain separation tag.
+type Tag struct{ tag string }
+
+func NewTag(tag string) (Tag, error) {
+	if len(tag) > ed25519.ContextMaxSize {
+		return Tag{}, fmt.Errorf("len(%q) = %v, want <= %v", tag, len(tag), ed25519.ContextMaxSize)
+	}
+	return Tag{tag}, nil
+}
+
+// SignWithTag signs a message with a domain separation tag.
+// It is safe to assume that signatures for messages with different tags do not collide.
+// It is also safe to assume that Sign() signatures do not collide with SignWithTag() signatures.
+// It is secure to use the same secret key for signing with both Sign() and SignWithTag() [https://datatracker.ietf.org/doc/html/rfc8032#section-8.6].
+func (k SecretKey) SignWithTag(tag Tag, msg []byte) Signature {
+	defer runtime.KeepAlive(k)
+	opts := &ed25519.Options{Context: tag.tag}
+	// Returns no error if opts.Context is of correct size.
+	sig := utils.OrPanic1(ed25519.PrivateKey((*k.key())[:]).Sign(nil, msg, opts))
+	return Signature{sig: [ed25519.SignatureSize]byte(sig)}
+}
+
+// Compare defines a total order on public keys.
+func (k PublicKey) Compare(other PublicKey) int {
+	return bytes.Compare(k.key[:], other.key[:])
+}
+
+// Verify verifies a signature.
+func (k PublicKey) Verify(msg []byte, sig Signature) error {
+	opts := &ed25519.Options{Verify: verifyOptions}
+	if !cachingVerifier.VerifyWithOptions(k.key[:], msg, sig.sig[:], opts) {
+		return ErrBadSig{}
+	}
+	return nil
+}
+
+// Verify verifies a signature, given domain separation tag.
+func (k PublicKey) VerifyWithTag(tag Tag, msg []byte, sig Signature) error {
+	opts := &ed25519.Options{Context: tag.tag, Verify: verifyOptions}
+	if !cachingVerifier.VerifyWithOptions(k.key[:], msg, sig.sig[:], opts) {
+		return ErrBadSig{}
+	}
+	return nil
+}
+
+// BatchVerifier implements batch verification for ed25519.
+type BatchVerifier struct {
+	inner *ed25519.BatchVerifier
+}
+
+func NewBatchVerifier() *BatchVerifier { return &BatchVerifier{ed25519.NewBatchVerifier()} }
+
+func (b *BatchVerifier) Add(key PublicKey, msg []byte, sig Signature) {
+	opts := &ed25519.Options{Verify: verifyOptions}
+	cachingVerifier.AddWithOptions(b.inner, key.key[:], msg, sig.sig[:], opts)
+}
+
+func (b *BatchVerifier) AddWithTag(key PublicKey, tag Tag, msg []byte, sig Signature) {
+	opts := &ed25519.Options{Context: tag.tag, Verify: verifyOptions}
+	cachingVerifier.AddWithOptions(b.inner, key.key[:], msg, sig.sig[:], opts)
+}
+
+// Verify verifies the batched signatures using OS entropy.
+// If any signature is invalid, returns ErrBadSig with an index
+// of the first invalid signature.
+func (b *BatchVerifier) Verify() error {
+	ok, res := b.inner.Verify(rand.Reader)
+	if ok {
+		return nil
+	}
+	for idx, ok := range res {
+		if !ok {
+			return ErrBadSig{idx}
+		}
+	}
+	panic("unreachable")
+}

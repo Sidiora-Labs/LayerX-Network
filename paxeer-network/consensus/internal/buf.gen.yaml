@@ -1,0 +1,21 @@
+version: v2
+inputs:
+  - directory: ./consensus/internal
+plugins:
+  - remote: buf.build/protocolbuffers/go:v1.36.10
+    out: ./consensus/internal
+    opt: [module=github.com/sidiora-labs/paxeer-network/consensus/internal]
+  - local:
+      - go
+      - run
+      - ./consensus/internal/hashable/plugin
+    strategy: all
+    out: ./consensus/internal
+    opt: [module=github.com/sidiora-labs/paxeer-network/consensus/internal]
+  - local:
+      - go
+      - run
+      - ./consensus/internal/protoutils/wireguard/plugin
+    strategy: all
+    out: ./consensus/internal
+    opt: [module=github.com/sidiora-labs/paxeer-network/consensus/internal]

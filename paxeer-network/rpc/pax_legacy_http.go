@@ -1,0 +1,448 @@
+package evmrpc
+
+import (
+	"bytes"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
+)
+
+// paxLegacyHTTPMaxBody matches github.com/ethereum/go-ethereum/rpc.defaultBodyLimit (5MiB), the
+// default HTTP request body cap used by rpc.Server before ServeHTTP. The legacy gate must not
+// read more than the inner JSON-RPC stack will accept (see rpc.Server.SetHTTPBodyLimit).
+const paxLegacyHTTPMaxBody = 5 * 1024 * 1024
+
+const (
+	invalidRequestCode  = -32600
+	paxLegacyNotEnabled = -32601
+	internalErrorCode   = -32603
+)
+
+// wrapPaxLegacyHTTP wraps the EVM JSON-RPC HTTP handler to enforce [evm].enabled_legacy_pax_apis for
+// gated pax_* and pax2_* methods. Disallowed calls get a JSON-RPC error without invoking the inner handler.
+// Single-object allowed calls pass through unchanged; batches forward a filtered subset and merge inner
+// results back by JSON-RPC id. Deprecation header on successful forwards of gated methods. nil allowlist = no wrap.
+func wrapPaxLegacyHTTP(inner http.Handler, allowlist map[string]struct{}) http.Handler {
+	if allowlist == nil {
+		return inner
+	}
+	return &paxLegacyHTTPGate{inner: inner, allowlist: allowlist}
+}
+
+type paxLegacyHTTPGate struct {
+	inner     http.Handler
+	allowlist map[string]struct{}
+}
+
+func (g *paxLegacyHTTPGate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Read the body once; delegate JSON-RPC validation to the inner handler. We only intercept
+	// when we can parse JSON-RPC and the method is a gated pax_* / pax2_* name.
+	body, err := io.ReadAll(io.LimitReader(r.Body, paxLegacyHTTPMaxBody))
+	_ = r.Body.Close()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	trim := bytes.TrimSpace(body)
+	if len(trim) > 0 && trim[0] == '[' {
+		g.handleBatch(w, r, body)
+		return
+	}
+	g.handleSingle(w, r, body)
+}
+
+func (g *paxLegacyHTTPGate) serveInnerWithBody(w http.ResponseWriter, r *http.Request, body []byte) {
+	sub := r.Clone(r.Context())
+	sub.Body = io.NopCloser(bytes.NewReader(body))
+	sub.ContentLength = int64(len(body))
+	sub.GetBody = func() (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(body)), nil
+	}
+	g.inner.ServeHTTP(w, sub)
+}
+
+func orNullID(id json.RawMessage) json.RawMessage {
+	if len(id) == 0 {
+		return json.RawMessage(`null`)
+	}
+	return id
+}
+
+func (g *paxLegacyHTTPGate) handleSingle(w http.ResponseWriter, r *http.Request, body []byte) {
+	var msg struct {
+		Method string          `json:"method"`
+		ID     json.RawMessage `json:"id"`
+	}
+	if err := json.Unmarshal(body, &msg); err != nil {
+		g.serveInnerWithBody(w, r, body)
+		return
+	}
+	if err := paxLegacyGateError(msg.Method, g.allowlist); err != nil {
+		writePaxLegacyBlocked(w, orNullID(msg.ID), err)
+		return
+	}
+	// Non-gated methods (eth_*, web3_*, net_*, etc.) need no recording or
+	// header injection — pass straight through so the gzip handler writes
+	// directly to the real http.ResponseWriter.
+	if !paxLegacyIsGatedNamespaceMethod(msg.Method) {
+		g.serveInnerWithBody(w, r, body)
+		return
+	}
+	rec := httptest.NewRecorder()
+	sub := r.Clone(r.Context())
+	sub.Body = io.NopCloser(bytes.NewReader(body))
+	sub.ContentLength = int64(len(body))
+	// Prevent the inner gzip handler from compressing into the recorder;
+	// we need plain JSON so copyHTTPHeader does not propagate a stale
+	// Content-Encoding: gzip for a body that is replayed uncompressed.
+	sub.Header.Del("Accept-Encoding")
+	sub.GetBody = func() (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(body)), nil
+	}
+	g.inner.ServeHTTP(rec, sub)
+	if paxLegacyForwardedGatedMethod(msg.Method, g.allowlist) {
+		rec.Header().Set(PaxLegacyDeprecationHTTPHeader, PaxLegacyDeprecationMessage)
+	}
+	copyHTTPHeader(w.Header(), rec.Header())
+	w.WriteHeader(rec.Code)
+	_, _ = w.Write(rec.Body.Bytes())
+}
+
+type jsonrpcMessage struct {
+	Method string          `json:"method"`
+	ID     json.RawMessage `json:"id"`
+}
+
+// logic taken from hasValidID in https://github.com/ethereum/go-ethereum/blob/master/rpc/json.go
+// null is valid: it is used in error responses per JSON-RPC 2.0 §5
+func (m *jsonrpcMessage) hasValidID() bool {
+	return len(m.ID) > 0 && m.ID[0] != '{' && m.ID[0] != '['
+}
+
+func (g *paxLegacyHTTPGate) handleBatch(w http.ResponseWriter, r *http.Request, body []byte) {
+	var msgs []json.RawMessage
+	if err := json.Unmarshal(body, &msgs); err != nil {
+		g.serveInnerWithBody(w, r, body)
+		return
+	}
+	if len(msgs) == 0 {
+		g.serveInnerWithBody(w, r, body)
+		return
+	}
+	methods := make([]string, len(msgs))
+	ids := make([]json.RawMessage, len(msgs))
+	invalidReq := make([]bool, len(msgs))
+	blocked := make([]bool, len(msgs))
+	blockedErr := make([]error, len(msgs))
+	for i, raw := range msgs {
+		var msg jsonrpcMessage
+		if err := json.Unmarshal(raw, &msg); err != nil || (!isJSONRPCNotificationID(msg.ID) && !msg.hasValidID()) {
+			// Batch element is not a JSON object, or has an invalid (object/array) id; synthesize -32600 and do not forward.
+			invalidReq[i] = true
+			continue
+		}
+		methods[i] = msg.Method
+		ids[i] = msg.ID
+		if err := paxLegacyGateError(methods[i], g.allowlist); err != nil {
+			blocked[i] = true
+			blockedErr[i] = err
+		}
+	}
+
+	var forward []json.RawMessage
+	synthIDs := make([]json.RawMessage, len(msgs))
+	forwardLegacy := false
+	synthCounter := 0
+	for i := range msgs {
+		if invalidReq[i] || blocked[i] {
+			continue
+		}
+		msg := msgs[i]
+		if !isJSONRPCNotificationID(ids[i]) {
+			sid := json.RawMessage(strconv.AppendInt(nil, int64(synthCounter), 10))
+			synthIDs[i] = sid
+			synthCounter++
+			msg = setJSONObjectID(msg, sid)
+		}
+		forward = append(forward, msg)
+		if !forwardLegacy && paxLegacyForwardedGatedMethod(methods[i], g.allowlist) {
+			forwardLegacy = true
+		}
+	}
+	if len(forward) == 0 {
+		outArr := paxLegacyBatchResponsesNoForward(invalidReq, blockedErr, ids, len(msgs))
+		writeJSONRPCBatchResponse(w, http.StatusOK, outArr)
+		return
+	}
+	forwardBody, err := json.Marshal(forward)
+	if err != nil {
+		g.serveInnerWithBody(w, r, body)
+		return
+	}
+
+	// Fast path: every element is forwarded (nothing blocked/invalid) and none
+	// are gated pax_*/pax2_* methods.  Skip the recorder so the gzip handler
+	// writes directly to the real http.ResponseWriter — same fix as handleSingle.
+	allForwarded := len(forward) == len(msgs)
+	if allForwarded && !forwardLegacy {
+		g.serveInnerWithBody(w, r, body)
+		return
+	}
+
+	rec := httptest.NewRecorder()
+	sub := r.Clone(r.Context())
+	sub.Body = io.NopCloser(bytes.NewReader(forwardBody))
+	sub.ContentLength = int64(len(forwardBody))
+	// Prevent the inner gzip handler from compressing into the recorder;
+	// mergePaxLegacyHTTPBatch needs plain JSON to unmarshal inner results.
+	sub.Header.Del("Accept-Encoding")
+	sub.GetBody = func() (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(forwardBody)), nil
+	}
+	g.inner.ServeHTTP(rec, sub)
+	outArr := mergePaxLegacyHTTPBatch(invalidReq, blocked, blockedErr, ids, synthIDs, len(msgs), rec.Body.Bytes())
+	copyHTTPHeader(w.Header(), rec.Header())
+	if forwardLegacy {
+		w.Header().Set(PaxLegacyDeprecationHTTPHeader, PaxLegacyDeprecationMessage)
+	}
+	writeJSONRPCBatchResponse(w, rec.Code, outArr)
+}
+
+const paxLegacyBatchInternalErr = "invalid or incomplete JSON-RPC batch response from server"
+
+const paxLegacyBatchInvalidReqMsg = "Invalid Request"
+
+// paxLegacyBatchResponsesNoForward builds the batch JSON-RPC response when nothing is forwarded to the
+// inner server: invalid slots yield -32600, blocked gated methods yield gate errors, and notifications
+// (requests with no "id" member) are omitted (JSON-RPC 2.0: no response for notifications, including in batches).
+func paxLegacyBatchResponsesNoForward(
+	invalidReq []bool,
+	blockedErr []error,
+	ids []json.RawMessage,
+	lenMsgs int,
+) []json.RawMessage {
+	out := make([]json.RawMessage, 0, lenMsgs)
+	for i := range lenMsgs {
+		if invalidReq[i] {
+			out = append(out, marshalJSONRPCError(orNullID(ids[i]), invalidRequestCode, paxLegacyBatchInvalidReqMsg))
+			continue
+		}
+		if isJSONRPCNotificationID(ids[i]) {
+			continue
+		}
+		out = append(out, marshalBlockedResponse(orNullID(ids[i]), blockedErr[i]))
+	}
+	return out
+}
+
+// mergePaxLegacyHTTPBatch merges inner batch results with gate/invalid slots. Output is ordered like the
+// original batch but omits entries for JSON-RPC notifications (no "id" member), per JSON-RPC 2.0 batch rules.
+// synthIDs holds the unique synthetic ID assigned to each forwarded non-notification request (nil for all
+// others). The inner server echoes these synthetic IDs back, so idToIdx is always collision-free regardless
+// of duplicate or null original IDs. Original IDs are restored in the output via patchJSONRPCResponseIDIfNeeded.
+func mergePaxLegacyHTTPBatch(
+	invalidReq []bool,
+	blocked []bool,
+	blockedErr []error,
+	ids []json.RawMessage,
+	synthIDs []json.RawMessage,
+	lenMsgs int,
+	innerBody []byte,
+) []json.RawMessage {
+	appendMergeFailure := func() []json.RawMessage {
+		out := make([]json.RawMessage, 0, lenMsgs)
+		for i := 0; i < lenMsgs; i++ {
+			switch {
+			case invalidReq[i]:
+				out = append(out, json.RawMessage(marshalJSONRPCError(orNullID(ids[i]), invalidRequestCode, paxLegacyBatchInvalidReqMsg)))
+			case isJSONRPCNotificationID(ids[i]):
+				continue
+			case blocked[i]:
+				out = append(out, json.RawMessage(marshalBlockedResponse(orNullID(ids[i]), blockedErr[i])))
+			default:
+				out = append(out, json.RawMessage(marshalJSONRPCError(orNullID(ids[i]), internalErrorCode, paxLegacyBatchInternalErr)))
+			}
+		}
+		return out
+	}
+
+	var unmarshalledInnerBody []json.RawMessage
+	if err := json.Unmarshal(innerBody, &unmarshalledInnerBody); err != nil {
+		return appendMergeFailure()
+	}
+
+	entries := make([]json.RawMessage, len(unmarshalledInnerBody))
+	idToIdx := make(map[string]int, len(unmarshalledInnerBody))
+	for j, raw := range unmarshalledInnerBody {
+		idRaw, hasKey, err := jsonRPCObjectIDKey(raw)
+		if err != nil {
+			// Skip malformed inner entry; the matching slot will fall through to
+			// the internalErrorCode branch in the merge loop below.
+			continue
+		}
+		entries[j] = raw
+		if !hasKey || isJSONRPCNotificationID(idRaw) {
+			continue
+		}
+		k := rpcIDKey(idRaw)
+		if _, ok := idToIdx[k]; !ok {
+			idToIdx[k] = j
+		}
+	}
+
+	out := make([]json.RawMessage, 0, lenMsgs)
+	used := make([]bool, len(unmarshalledInnerBody))
+	for i := 0; i < lenMsgs; i++ {
+		if invalidReq[i] {
+			out = append(out, marshalJSONRPCError(orNullID(ids[i]), invalidRequestCode, paxLegacyBatchInvalidReqMsg))
+			continue
+		}
+		if isJSONRPCNotificationID(ids[i]) {
+			continue
+		}
+		if blocked[i] {
+			out = append(out, marshalBlockedResponse(orNullID(ids[i]), blockedErr[i]))
+			continue
+		}
+		k := rpcIDKey(synthIDs[i])
+		idx, ok := idToIdx[k]
+		if !ok || used[idx] {
+			out = append(out, marshalJSONRPCError(orNullID(ids[i]), internalErrorCode, paxLegacyBatchInternalErr))
+			continue
+		}
+		used[idx] = true
+		out = append(out, patchJSONRPCResponseIDIfNeeded(entries[idx], ids[i]))
+	}
+
+	return out
+}
+
+func rpcIDKey(id json.RawMessage) string {
+	return string(bytes.TrimSpace(id))
+}
+
+// isJSONRPCNotificationID is true when the request omits "id" (JSON-RPC Notification).
+// "id": null is discouraged but valid per JSON-RPC 2.0 and MUST receive a response like any other id.
+func isJSONRPCNotificationID(id json.RawMessage) bool {
+	return len(id) == 0
+}
+
+func jsonRPCObjectIDKey(raw json.RawMessage) (idField json.RawMessage, hasKey bool, err error) {
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return nil, false, err
+	}
+	idField, hasKey = m["id"]
+	return idField, hasKey, nil
+}
+
+func marshalJSONRPCError(id json.RawMessage, code int, message string) []byte {
+	b, _ := json.Marshal(map[string]any{
+		"jsonrpc": "2.0",
+		"id":      id,
+		"error": map[string]any{
+			"code":    code,
+			"message": message,
+		},
+	})
+	return b
+}
+
+// patchJSONRPCResponseIDIfNeeded replaces response "id" with the client's id as raw JSON (avoids float64 rounding).
+func patchJSONRPCResponseIDIfNeeded(resp json.RawMessage, wantID json.RawMessage) []byte {
+	if isJSONRPCNotificationID(wantID) {
+		return resp
+	}
+	got, has, err := jsonRPCObjectIDKey(resp)
+	if err != nil || !has {
+		return resp
+	}
+	wantTrimmed := bytes.TrimSpace(wantID)
+	if bytes.Equal(bytes.TrimSpace(got), wantTrimmed) {
+		return resp
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(resp, &m); err != nil {
+		return resp
+	}
+	m["id"] = json.RawMessage(bytes.Clone(wantTrimmed))
+	b, err := json.Marshal(m)
+	if err != nil {
+		return resp
+	}
+	return b
+}
+
+func copyHTTPHeader(dst, src http.Header) {
+	for k, vv := range src {
+		dst.Del(k)
+		for _, v := range vv {
+			dst.Add(k, v)
+		}
+	}
+}
+
+// writeJSONRPCBatchResponse writes a JSON-RPC batch response. Per JSON-RPC 2.0, if there are no
+// response objects, the server must not return an empty JSON array — use an empty HTTP body instead.
+func writeJSONRPCBatchResponse(w http.ResponseWriter, code int, arr []json.RawMessage) {
+	if len(arr) == 0 {
+		w.WriteHeader(code)
+		return
+	}
+	writeJSONArrayResponse(w, code, arr)
+}
+
+// setJSONObjectID returns obj with its "id" field replaced by newID.
+// Returns obj unchanged if it cannot be parsed as a JSON object.
+func setJSONObjectID(obj json.RawMessage, newID json.RawMessage) json.RawMessage {
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(obj, &m); err != nil {
+		return obj
+	}
+	m["id"] = newID
+	b, err := json.Marshal(m)
+	if err != nil {
+		return obj
+	}
+	return b
+}
+
+func writeJSONArrayResponse(w http.ResponseWriter, code int, arr []json.RawMessage) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	_ = json.NewEncoder(w).Encode(arr)
+}
+
+func writePaxLegacyBlocked(w http.ResponseWriter, id json.RawMessage, gateErr error) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(marshalBlockedResponse(id, gateErr))
+}
+
+func marshalBlockedResponse(id json.RawMessage, gateErr error) []byte {
+	e, ok := gateErr.(*errPaxLegacyNotEnabled)
+	if !ok {
+		fallback, _ := json.Marshal(map[string]interface{}{
+			"jsonrpc": "2.0",
+			"id":      id,
+			"error": map[string]interface{}{
+				"code":    internalErrorCode,
+				"message": gateErr.Error(),
+			},
+		})
+		return fallback
+	}
+	m := map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      id,
+		"error": map[string]interface{}{
+			"code":    e.ErrorCode(),
+			"message": e.Error(),
+			"data":    e.ErrorData(),
+		},
+	}
+	b, _ := json.Marshal(m)
+	return b
+}

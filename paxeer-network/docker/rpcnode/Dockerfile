@@ -1,0 +1,24 @@
+FROM golang:1.25.6-bookworm AS go-dist
+
+FROM ubuntu:latest
+ENV HOME="/root" PATH="/root/go/bin:$PATH"
+RUN apt-get update && \
+    apt-get install -y make git build-essential jq python3 curl vim uuid-runtime
+COPY --from=go-dist /usr/local/go /usr/local/go
+RUN mkdir -p /root/go/pkg/mod && \
+    mkdir -p /root/.cache && \
+    chmod -R a+rwX /root
+SHELL ["/bin/bash", "-c"]
+
+WORKDIR /pax-protocol/pax-chain
+
+EXPOSE 26656 26657 26658 9090 9091
+
+CMD ["/usr/bin/deploy.sh"]
+
+STOPSIGNAL SIGTERM
+
+COPY scripts/deploy.sh /usr/bin/deploy.sh
+COPY scripts/step0_build.sh /usr/bin/build.sh
+COPY scripts/step1_configure_init.sh /usr/bin/configure_init.sh
+COPY scripts/step2_start_pax.sh /usr/bin/start_pax.sh

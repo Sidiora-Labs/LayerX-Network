@@ -1,0 +1,72 @@
+name: Paxeer / Release Publish
+
+on:
+  push:
+    branches:
+      - main
+      - release/**
+    paths:
+      - 'paxeer-network/version.json'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  releaser:
+    name: Publish Paxeer release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code and tags
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - id: release
+        name: Create namespaced Paxeer release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION_FILE: paxeer-network/version.json
+        run: |
+          set -euo pipefail
+          version=$(jq -er '.version' "$VERSION_FILE")
+          semver_re='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
+          if [[ ! "$version" =~ $semver_re ]]; then
+            echo "Invalid Paxeer semantic version: $version"
+            exit 1
+          fi
+
+          tag="paxeer-network/$version"
+          if git rev-parse --verify --quiet "refs/tags/$tag"; then
+            echo "Paxeer release tag already exists: $tag"
+            exit 1
+          fi
+
+          latest=$(git tag --list 'paxeer-network/v*' --sort=-v:refname | head -n 1)
+          if [[ -n "$latest" ]]; then
+            latest_version=${latest#paxeer-network/}
+            greatest=$(printf '%s\n%s\n' "$latest_version" "$version" | sort -V | tail -n 1)
+            if [[ "$greatest" != "$version" || "$latest_version" == "$version" ]]; then
+              echo "Paxeer version $version must be newer than $latest_version"
+              exit 1
+            fi
+          fi
+
+          gh release create "$tag" \
+            --target "$GITHUB_SHA" \
+            --title "Paxeer Network $version" \
+            --generate-notes
+
+          release_url=$(gh release view "$tag" --json url --jq '.url')
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "url=$release_url" >> "$GITHUB_OUTPUT"
+      - name: Publish release summary
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          RELEASE_URL: ${{ steps.release.outputs.url }}
+        run: |
+          echo "### Paxeer Network release" >> "$GITHUB_STEP_SUMMARY"
+          echo "Published [$RELEASE_TAG]($RELEASE_URL)." >> "$GITHUB_STEP_SUMMARY"

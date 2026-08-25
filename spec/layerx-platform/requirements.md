@@ -649,3 +649,16 @@ The LayerX Platform is the complete product surface of LayerX: the human control
 5. THE performance gates SHALL be release gates: cold and warm latency, fuel throughput, parallel speedup and arbiter step cost SHALL each meet their declared threshold or refuse the release.
 6. THE programs plane SHALL report its qualification in the platform release report under the same rules as every other pillar, with every unmet gate recorded and the release refused while any remains.
 
+## Requirement 44: The Sidiora Labs Ecosystem Monorepo
+
+**User Story:** As the organization maintaining LayerX and Paxeer together, I want all first-party ecosystem code in one auditable repository with explicit subsystem boundaries, so that development is coordinated without collapsing distinct trust, build, release or deployment domains.
+
+### Acceptance Criteria
+
+1. THE repository SHALL contain the Paxeer Network implementation under paxeer-network as a first-class top-level subsystem, and the repository README SHALL identify this checkout as the canonical Sidiora Labs ecosystem monorepo.
+2. THE monorepo SHALL preserve the LayerX and Paxeer boundaries: each subsystem keeps its own manifests, dependency graph, build products, release identity and deployment authority, and repository co-location SHALL grant neither subsystem new protocol authority over the other.
+3. ALL GitHub Actions workflows SHALL live under the repository-level .github/workflows directory, and Paxeer workflows SHALL execute against paxeer-network through explicit working directories, contexts and artifact paths rather than assuming the Go module is the repository root.
+4. PAXEER workflow triggers SHALL be scoped to Paxeer-owned paths wherever the GitHub event model supports path filtering, and workflow, artifact and release names SHALL identify the Paxeer subsystem so they cannot be mistaken for LayerX core outputs.
+5. THE root Makefile SHALL expose bounded Paxeer build, lint, test and CI entry points without reusing LayerX build directories, and the Paxeer Makefile SHALL resolve its project root to paxeer-network rather than to the enclosing Git worktree.
+6. THE publication boundary SHALL exclude generated binaries, dependency caches, runtime data and credentials from the imported Paxeer tree, and repository auditing SHALL inspect the Git publication set rather than ignored workspace material.
+

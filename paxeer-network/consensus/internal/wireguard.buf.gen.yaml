@@ -1,0 +1,11 @@
+version: v2
+inputs:
+  - directory: ./consensus/proto
+plugins:
+  - local:
+      - go
+      - run
+      - ./consensus/internal/protoutils/wireguard/plugin
+    strategy: all
+    out: ./consensus
+    opt: [module=github.com/sidiora-labs/paxeer-network/consensus]

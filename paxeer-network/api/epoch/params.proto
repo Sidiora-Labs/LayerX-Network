@@ -1,0 +1,11 @@
+syntax = "proto3";
+package paxprotocol.paxchain.epoch;
+
+import "gogoproto/gogo.proto";
+
+option go_package = "github.com/sidiora-labs/paxeer-network/modules/epoch/types";
+
+// Params defines the parameters for the module.
+message Params {
+  option (gogoproto.goproto_stringer) = false;
+}

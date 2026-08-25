@@ -1,0 +1,55 @@
+name: Paxeer / Forge Test
+
+on:
+  pull_request:
+    paths:
+      - 'paxeer-network/**'
+      - '.github/workflows/paxeer-forge-test.yml'
+  merge_group:
+  push:
+    branches:
+      - main
+      - release/**
+    paths:
+      - 'paxeer-network/**'
+      - '.github/workflows/paxeer-forge-test.yml'
+
+env:
+  FOUNDRY_PROFILE: ci
+
+defaults:
+  run:
+    working-directory: paxeer-network
+
+jobs:
+  check:
+    strategy:
+      fail-fast: true
+
+    name: Foundry project
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          # Pin to stable for predictable CI. If tests fail after a Foundry update,
+          # either fix compatibility or pin to a specific version (e.g., 1.5.1).
+          # See:
+          #  - https://github.com/foundry-rs/foundry/releases
+          #  - https://github.com/foundry-rs/foundry-toolchain
+          version: stable
+
+      - name: Run Forge build
+        run: |
+          forge --version
+          git clone --depth 1 --branch v1.9.6 https://github.com/foundry-rs/forge-std contracts/lib/forge-std
+          git clone --depth 1 --branch v5.3.0 https://github.com/OpenZeppelin/openzeppelin-contracts contracts/lib/openzeppelin-contracts
+          forge build --evm-version=prague
+        id: build
+
+      - name: Run Forge tests
+        run: |
+          forge test -vvv --evm-version=prague
+        id: test

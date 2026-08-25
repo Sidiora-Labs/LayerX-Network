@@ -1,0 +1,33 @@
+- name: Test multi-sig sending funds
+  inputs:
+    # Create 3 wallets that manages 1 multisig wallet
+    - cmd: paxd keys add wallet1 --keyring-backend test --output json | jq -r ".address"
+      env: WALLET_1_ACC
+    - cmd: paxd keys add wallet2 --keyring-backend test --output json | jq -r ".address"
+      env: WALLET_2_ACC
+    - cmd: paxd keys add wallet3 --keyring-backend test --output json | jq -r ".address"
+      env: WALLET_3_ACC
+    - cmd: paxd keys add multisig --multisig-threshold=2 --multisig=wallet1,wallet2,wallet3 --keyring-backend test --output json | jq -r ".address"
+      env: MULTI_SIG_ACC
+
+    # Send funds to the multisig
+    - cmd: printf "12345678\n" | paxd keys show -a admin
+      env: ADMIN_ACC
+    - cmd: printf "12345678\n" | paxd tx bank send $ADMIN_ACC $MULTI_SIG_ACC 11pax -b block --fees 2000uhpx --chain-id pax -y
+
+    # Creat and send multi-sig transaction
+    - cmd: paxd tx bank send $MULTI_SIG_ACC $MULTI_SIG_ACC 1pax -b block -y --fees 1pax -y --from $MULTI_SIG_ACC --generate-only --keyring-backend test > unsigned-tx.json
+    - cmd: paxd tx sign unsigned-tx.json --multisig=$MULTI_SIG_ACC --keyring-backend test --from=wallet1 --output-document=wallet1.json --chain-id pax -b block --fees 1pax
+    - cmd: paxd tx sign unsigned-tx.json --multisig=$MULTI_SIG_ACC --keyring-backend test --from=wallet2 --output-document=wallet2.json --chain-id pax -b block --fees 1pax
+    - cmd: paxd tx multisign unsigned-tx.json multisig wallet1.json wallet2.json --chain-id pax --keyring-backend test > signed-tx.json
+    - cmd: paxd tx broadcast signed-tx.json --chain-id pax -b block -y
+    # cleanup
+    - cmd: rm wallet1.json wallet2.json signed-tx.json unsigned-tx.json
+
+    # Check multi-sig balance
+    - cmd: paxd q bank balances $MULTI_SIG_ACC --output json | jq -r .balances[0].amount
+      env: MULTI_SIG_ACC_BALANCE
+  verifiers:
+    # Bank balance should be 10 pax, 1 pax paid and 10pax sent to self
+    - type: eval
+      expr: MULTI_SIG_ACC_BALANCE == 10000000

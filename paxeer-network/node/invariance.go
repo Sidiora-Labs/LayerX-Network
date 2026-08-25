@@ -1,0 +1,208 @@
+package app
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	armonmetrics "github.com/armon/go-metrics"
+	servertypes "github.com/sidiora-labs/paxeer-network/sdk/server/types"
+	"github.com/sidiora-labs/paxeer-network/sdk/storev2/commitment"
+	"github.com/spf13/cast"
+	"go.opentelemetry.io/otel/attribute"
+	otelmetrics "go.opentelemetry.io/otel/metric"
+
+	sdk "github.com/sidiora-labs/paxeer-network/sdk/types"
+
+	bankkeeper "github.com/sidiora-labs/paxeer-network/sdk/x/bank/keeper"
+	banktypes "github.com/sidiora-labs/paxeer-network/sdk/x/bank/types"
+
+	paxmetrics "github.com/sidiora-labs/paxeer-network/utils/metrics"
+)
+
+type LightInvarianceConfig struct {
+	SupplyEnabled bool `mapstructure:"supply_enabled"`
+}
+
+var DefaultLightInvarianceConfig = LightInvarianceConfig{
+	SupplyEnabled: true,
+}
+
+const (
+	flagSupplyEnabled = "light_invariance.supply_enabled"
+)
+
+func ReadLightInvarianceConfig(opts servertypes.AppOptions) (LightInvarianceConfig, error) {
+	cfg := DefaultLightInvarianceConfig // copy
+	var err error
+	if v := opts.Get(flagSupplyEnabled); v != nil {
+		if cfg.SupplyEnabled, err = cast.ToBoolE(v); err != nil {
+			return cfg, err
+		}
+	}
+	return cfg, nil
+}
+
+func (app *App) LightInvarianceChecks(ctx context.Context, cms sdk.CommitMultiStore, config LightInvarianceConfig) {
+	// Skip invariance checks when mock_balances is enabled since we fake balances
+	// without updating the actual store, which would fail the supply check.
+	if MockBalancesEnabled {
+		return
+	}
+	if config.SupplyEnabled {
+		app.LightInvarianceTotalSupply(ctx, cms)
+	}
+}
+
+func (app *App) LightInvarianceTotalSupply(ctx context.Context, cms sdk.CommitMultiStore) {
+	invarianceStart := time.Now()
+	defer func() {
+		armonmetrics.MeasureSince([]string{"pax", "lightinvariance_supply", "milliseconds"}, invarianceStart.UTC()) // TODO(PLT-327): remove once app_lightinvariance_supply_duration_seconds verified
+		appMetrics.invarianceDuration.Record(ctx, time.Since(invarianceStart).Seconds())
+	}()
+	ckv, ok := cms.GetStore(app.BankKeeper.GetStoreKey()).(*commitment.Store)
+	if !ok {
+		logger.Error("bank store is not a memiavl store; cannot run light invariance check")
+		return
+	}
+	balanceChangePairs := ckv.GetChangedPairs(banktypes.BalancesPrefix)
+	uhpxPostTotal := sdk.ZeroInt()
+	uhpxChangedAddr := []sdk.AccAddress{}
+	for _, p := range balanceChangePairs {
+		if len(p.Key) < 2 {
+			// invalid key; ignore
+			paxmetrics.SafeMetricsIncrCounterWithLabels([]string{"pax", "lightinvariance_supply", "invalid_changed_key"}, 1, []armonmetrics.Label{{Name: "type", Value: "pax"}}) // TODO(PLT-327): remove once app_lightinvariance_supply_invalid_key_total verified
+			appMetrics.invarianceInvalidKey.Add(ctx, 1, otelmetrics.WithAttributes(attribute.String("type", "pax")))
+			logger.Error("invalid changed pair key for uhpx", "key", fmt.Sprintf("%X", p.Key))
+			continue
+		}
+		addrLen := int(p.Key[1])
+		if len(p.Key) < addrLen+2 {
+			// invalid key length; ignore
+			paxmetrics.SafeMetricsIncrCounterWithLabels([]string{"pax", "lightinvariance_supply", "invalid_changed_key"}, 1, []armonmetrics.Label{{Name: "type", Value: "pax"}}) // TODO(PLT-327): remove once app_lightinvariance_supply_invalid_key_total verified
+			appMetrics.invarianceInvalidKey.Add(ctx, 1, otelmetrics.WithAttributes(attribute.String("type", "pax")))
+			logger.Error("invalid changed pair key for uhpx", "key", fmt.Sprintf("%X", p.Key))
+			continue
+		}
+		addr := p.Key[2 : addrLen+2]
+		denom := p.Key[addrLen+2:]
+		if string(denom) != sdk.MustGetBaseDenom() {
+			continue
+		}
+		if !p.Delete {
+			var balance sdk.Coin
+			if err := balance.Unmarshal(p.Value); err != nil {
+				paxmetrics.SafeMetricsIncrCounterWithLabels([]string{"pax", "lightinvariance_supply", "unmarshal_failure"}, 1, []armonmetrics.Label{{Name: "type", Value: "uhpx"}, {Name: "step", Value: "post_block"}}) // TODO(PLT-327): remove once app_lightinvariance_supply_unmarshal_failure_total verified
+				appMetrics.invarianceUnmarshalFail.Add(ctx, 1, otelmetrics.WithAttributes(attribute.String("type", "uhpx"), attribute.String("step", "post_block")))
+				logger.Error("failed to unmarshal balance", "err", err)
+				continue
+			}
+			if balance.Amount.IsNegative() {
+				panic(fmt.Sprintf("negative balance found for addr %s: %s", sdk.AccAddress(addr).String(), balance.String()))
+			}
+			uhpxPostTotal = uhpxPostTotal.Add(balance.Amount)
+		}
+		uhpxChangedAddr = append(uhpxChangedAddr, addr)
+	}
+	uhpxPreTotal := sdk.ZeroInt()
+	for _, a := range uhpxChangedAddr {
+		key := append(banktypes.CreateAccountBalancesPrefix(a), []byte(sdk.MustGetBaseDenom())...)
+		val := ckv.Get(key)
+		if val == nil {
+			continue
+		}
+		var balance sdk.Coin
+		if err := balance.Unmarshal(val); err != nil {
+			paxmetrics.SafeMetricsIncrCounterWithLabels([]string{"pax", "lightinvariance_supply", "unmarshal_failure"}, 1, []armonmetrics.Label{{Name: "type", Value: "uhpx"}, {Name: "step", Value: "pre_block"}}) // TODO(PLT-327): remove once app_lightinvariance_supply_unmarshal_failure_total verified
+			appMetrics.invarianceUnmarshalFail.Add(ctx, 1, otelmetrics.WithAttributes(attribute.String("type", "uhpx"), attribute.String("step", "pre_block")))
+			logger.Error("failed to unmarshal preblock balance", "err", err)
+			continue
+		}
+		uhpxPreTotal = uhpxPreTotal.Add(balance.Amount)
+	}
+	weiChangePairs := ckv.GetChangedPairs(banktypes.WeiBalancesPrefix)
+	weiPostTotal := sdk.ZeroInt()
+	weiChangedAddrs := []sdk.AccAddress{}
+	for _, p := range weiChangePairs {
+		var amt sdk.Int
+		if len(p.Key) < 1 {
+			paxmetrics.SafeMetricsIncrCounterWithLabels([]string{"pax", "lightinvariance_supply", "invalid_changed_key"}, 1, []armonmetrics.Label{{Name: "type", Value: "wei"}}) // TODO(PLT-327): remove once app_lightinvariance_supply_invalid_key_total verified
+			appMetrics.invarianceInvalidKey.Add(ctx, 1, otelmetrics.WithAttributes(attribute.String("type", "wei")))
+			logger.Error("invalid changed pair key", "key", fmt.Sprintf("%X", p.Key))
+			continue
+		}
+		if !p.Delete {
+			if err := amt.Unmarshal(p.Value); err != nil {
+				paxmetrics.SafeMetricsIncrCounterWithLabels([]string{"pax", "lightinvariance_supply", "unmarshal_failure"}, 1, []armonmetrics.Label{{Name: "type", Value: "wei"}, {Name: "step", Value: "post_block"}}) // TODO(PLT-327): remove once app_lightinvariance_supply_unmarshal_failure_total verified
+				appMetrics.invarianceUnmarshalFail.Add(ctx, 1, otelmetrics.WithAttributes(attribute.String("type", "wei"), attribute.String("step", "post_block")))
+				logger.Error("failed to unmarshal wei balance", "err", err)
+				continue
+			}
+			weiPostTotal = weiPostTotal.Add(amt)
+			if amt.IsNegative() {
+				panic(fmt.Sprintf("negative wei balance found for addr %s: %s", sdk.AccAddress(p.Key[1:]).String(), amt.String()))
+			}
+		}
+		weiChangedAddrs = append(weiChangedAddrs, p.Key[1:])
+	}
+	weiPreTotal := sdk.ZeroInt()
+	for _, a := range weiChangedAddrs {
+		key := append(banktypes.WeiBalancesPrefix, a...)
+		val := ckv.Get(key)
+		if val == nil {
+			continue
+		}
+		var amt sdk.Int
+		if err := amt.Unmarshal(val); err != nil {
+			paxmetrics.SafeMetricsIncrCounterWithLabels([]string{"pax", "lightinvariance_supply", "unmarshal_failure"}, 1, []armonmetrics.Label{{Name: "type", Value: "wei"}, {Name: "step", Value: "pre_block"}}) // TODO(PLT-327): remove once app_lightinvariance_supply_unmarshal_failure_total verified
+			appMetrics.invarianceUnmarshalFail.Add(ctx, 1, otelmetrics.WithAttributes(attribute.String("type", "wei"), attribute.String("step", "pre_block")))
+			logger.Error("failed to unmarshal preblock wei balance", "err", err)
+			continue
+		}
+		weiPreTotal = weiPreTotal.Add(amt)
+	}
+	totalSupplyChangePairs := ckv.GetChangedPairs(banktypes.SupplyKey)
+	supplyChanged := sdk.ZeroInt()
+	preTotalSupply := sdk.ZeroInt()
+	if bz := ckv.Get(append(banktypes.SupplyKey, []byte(sdk.MustGetBaseDenom())...)); bz != nil {
+		var amt sdk.Int
+		if err := amt.Unmarshal(bz); err != nil {
+			paxmetrics.SafeMetricsIncrCounterWithLabels([]string{"pax", "lightinvariance_supply", "unmarshal_failure"}, 1, []armonmetrics.Label{{Name: "type", Value: "total_supply"}, {Name: "step", Value: "pre_block"}}) // TODO(PLT-327): remove once app_lightinvariance_supply_unmarshal_failure_total verified
+			appMetrics.invarianceUnmarshalFail.Add(ctx, 1, otelmetrics.WithAttributes(attribute.String("type", "total_supply"), attribute.String("step", "pre_block")))
+			logger.Error("failed to unmarshal pre total supply", "err", err)
+			return
+		}
+		preTotalSupply = amt
+	}
+	for _, p := range totalSupplyChangePairs {
+		if string(p.Key[1:]) == sdk.MustGetBaseDenom() {
+			if p.Delete {
+				supplyChanged = preTotalSupply.Neg()
+			} else {
+				var amt sdk.Int
+				if err := amt.Unmarshal(p.Value); err != nil {
+					paxmetrics.SafeMetricsIncrCounterWithLabels([]string{"pax", "lightinvariance_supply", "unmarshal_failure"}, 1, []armonmetrics.Label{{Name: "type", Value: "total_supply"}, {Name: "step", Value: "post_block"}}) // TODO(PLT-327): remove once app_lightinvariance_supply_unmarshal_failure_total verified
+					appMetrics.invarianceUnmarshalFail.Add(ctx, 1, otelmetrics.WithAttributes(attribute.String("type", "total_supply"), attribute.String("step", "post_block")))
+					logger.Error("failed to unmarshal total supply", "err", err)
+				} else {
+					supplyChanged = amt.Sub(preTotalSupply)
+				}
+			}
+			break
+		}
+	}
+	weiDiff := weiPostTotal.Sub(weiPreTotal)
+	weiDiffInUhpx, weiDiffRemainder := bankkeeper.SplitUhpxWeiAmount(weiDiff)
+	if !weiDiffRemainder.IsZero() {
+		panic(fmt.Sprintf("non-zero wei diff found! Pre-block wei total %s, post-block wei total %s", weiPreTotal, weiPostTotal))
+	}
+	// Formula: uhpxDiff = uhpxPreTotal - uhpxPostTotal - weiDiffInUhpx + supplyChanged
+	// If money is conserved, this should be zero
+	// uhpxPreTotal - uhpxPostTotal = how much uhpx left balances (negative means uhpx entered balances)
+	// weiDiffInUhpx = how much uhpx was moved to wei balances
+	// supplyChanged = how much new uhpx was minted
+	uhpxDiff := uhpxPreTotal.Sub(uhpxPostTotal).Sub(weiDiffInUhpx).Add(supplyChanged)
+	if !uhpxDiff.IsZero() {
+		panic(fmt.Sprintf("unexpected uhpx balance total found! Pre-block uhpx total %s wei total %s total supply %s, post-block uhpx total %s wei total %s total supply %s", uhpxPreTotal, weiPreTotal, preTotalSupply, uhpxPostTotal, weiPostTotal, preTotalSupply.Add(supplyChanged)))
+	}
+}

@@ -1,0 +1,314 @@
+package ante
+
+import (
+	"errors"
+	"math/big"
+
+	"github.com/sidiora-labs/paxeer-network/utils/helpers"
+
+	"github.com/btcsuite/btcd/btcec/v2"
+	"github.com/ethereum/go-ethereum/common"
+	ethtypes "github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/params"
+	"github.com/sidiora-labs/paxeer-network/node/antedecorators"
+	"github.com/sidiora-labs/paxeer-network/sdk/crypto/keys/secp256k1"
+	cryptotypes "github.com/sidiora-labs/paxeer-network/sdk/crypto/types"
+	sdk "github.com/sidiora-labs/paxeer-network/sdk/types"
+	sdkerrors "github.com/sidiora-labs/paxeer-network/sdk/types/errors"
+	accountkeeper "github.com/sidiora-labs/paxeer-network/sdk/x/auth/keeper"
+	authsigning "github.com/sidiora-labs/paxeer-network/sdk/x/auth/signing"
+	"go.opentelemetry.io/otel/attribute"
+	otelmetric "go.opentelemetry.io/otel/metric"
+
+	"github.com/sidiora-labs/paxeer-network/modules/evm/derived"
+	evmkeeper "github.com/sidiora-labs/paxeer-network/modules/evm/keeper"
+	evmtypes "github.com/sidiora-labs/paxeer-network/modules/evm/types"
+	"github.com/sidiora-labs/paxeer-network/modules/evm/types/ethtx"
+	"github.com/sidiora-labs/paxeer-network/utils"
+	utilmetrics "github.com/sidiora-labs/paxeer-network/utils/metrics"
+)
+
+// Accounts need to have at least 1Pax to force association. Note that account won't be charged.
+const BalanceThreshold uint64 = 1000000
+
+var BigBalanceThreshold *big.Int = new(big.Int).SetUint64(BalanceThreshold)
+var BigBalanceThresholdMinus1 *big.Int = new(big.Int).SetUint64(BalanceThreshold - 1)
+
+var SignerMap = map[derived.SignerVersion]func(*big.Int) ethtypes.Signer{
+	derived.London: ethtypes.NewLondonSigner,
+	derived.Cancun: ethtypes.NewCancunSigner,
+	derived.Prague: ethtypes.NewPragueSigner,
+}
+var AllowedTxTypes = map[derived.SignerVersion][]uint8{
+	derived.London: {ethtypes.LegacyTxType, ethtypes.AccessListTxType, ethtypes.DynamicFeeTxType},
+	derived.Cancun: {ethtypes.LegacyTxType, ethtypes.AccessListTxType, ethtypes.DynamicFeeTxType, ethtypes.BlobTxType},
+	derived.Prague: {ethtypes.LegacyTxType, ethtypes.AccessListTxType, ethtypes.DynamicFeeTxType, ethtypes.BlobTxType, ethtypes.SetCodeTxType},
+}
+
+type EVMPreprocessDecorator struct {
+	evmKeeper     *evmkeeper.Keeper
+	accountKeeper *accountkeeper.AccountKeeper
+}
+
+func NewEVMPreprocessDecorator(evmKeeper *evmkeeper.Keeper, accountKeeper *accountkeeper.AccountKeeper) *EVMPreprocessDecorator {
+	return &EVMPreprocessDecorator{evmKeeper: evmKeeper, accountKeeper: accountKeeper}
+}
+
+//nolint:revive
+func (p *EVMPreprocessDecorator) AnteHandle(ctx sdk.Context, tx sdk.Tx, simulate bool, next sdk.AnteHandler) (sdk.Context, error) {
+	msg := evmtypes.MustGetEVMTransactionMessage(tx)
+	if err := Preprocess(ctx, msg, p.evmKeeper.ChainID(ctx), p.evmKeeper.EthBlockTestConfig.Enabled); err != nil {
+		return ctx, err
+	}
+
+	// use infinite gas meter for EVM transaction because EVM handles gas checking from within
+	ctx = ctx.WithGasMeter(sdk.NewInfiniteGasMeterWithMultiplier(ctx))
+
+	derived := msg.Derived
+	paxAddr := derived.SenderPaxAddr
+	evmAddr := derived.SenderEVMAddr
+	ctx.EventManager().EmitEvent(sdk.NewEvent(evmtypes.EventTypeSigner,
+		sdk.NewAttribute(evmtypes.AttributeKeyEvmAddress, evmAddr.Hex()),
+		sdk.NewAttribute(evmtypes.AttributeKeyPaxAddress, paxAddr.String())))
+	pubkey := derived.PubKey
+	isAssociateTx := derived.IsAssociate
+	associateHelper := helpers.NewAssociationHelper(p.evmKeeper, p.evmKeeper.BankKeeper(), p.accountKeeper)
+	_, isAssociated := p.evmKeeper.GetEVMAddress(ctx, paxAddr)
+	if isAssociateTx && isAssociated {
+		return ctx, sdkerrors.Wrap(sdkerrors.ErrInvalidRequest, "account already has association set")
+	} else if isAssociateTx {
+		// check if the account has enough balance (without charging)
+		if !p.IsAccountBalancePositive(ctx, paxAddr, evmAddr) {
+			assocErr := evmtypes.NewAssociationMissingErr(paxAddr.String())
+			utilmetrics.IncrementAssociationError("associate_tx_insufficient_funds", assocErr) // TODO(PLT-330): remove once evm_association_error_total verified
+			evmAnteMetrics.associationError.Add(ctx.Context(), 1, otelmetric.WithAttributes(attribute.String("scenario", "associate_tx_insufficient_funds"), attribute.String("type", assocErr.AddressType())))
+			return ctx, sdkerrors.Wrap(sdkerrors.ErrInsufficientFunds, "account needs to have at least 1 wei to force association")
+		}
+		if err := associateHelper.AssociateAddresses(ctx, paxAddr, evmAddr, pubkey, false); err != nil {
+			return ctx, err
+		}
+
+		return ctx.WithPriority(antedecorators.EVMAssociatePriority), nil // short-circuit without calling next
+	} else if isAssociated {
+		// noop; for readability
+	} else {
+		// not associatedTx and not already associated
+		if err := associateHelper.AssociateAddresses(ctx, paxAddr, evmAddr, pubkey, false); err != nil {
+			return ctx, err
+		}
+		if p.evmKeeper.EthReplayConfig.Enabled {
+			p.evmKeeper.PrepareReplayedAddr(ctx, evmAddr)
+		}
+	}
+
+	return next(ctx, tx, simulate)
+}
+
+func (p *EVMPreprocessDecorator) IsAccountBalancePositive(ctx sdk.Context, paxAddr sdk.AccAddress, evmAddr common.Address) bool {
+	baseDenom := p.evmKeeper.GetBaseDenom(ctx)
+	if amt := p.evmKeeper.BankKeeper().GetBalance(ctx, paxAddr, baseDenom).Amount; amt.IsPositive() {
+		return true
+	}
+	if amt := p.evmKeeper.BankKeeper().GetBalance(ctx, sdk.AccAddress(evmAddr[:]), baseDenom).Amount; amt.IsPositive() {
+		return true
+	}
+	if amt := p.evmKeeper.BankKeeper().GetWeiBalance(ctx, paxAddr); amt.IsPositive() {
+		return true
+	}
+	return p.evmKeeper.BankKeeper().GetWeiBalance(ctx, sdk.AccAddress(evmAddr[:])).IsPositive()
+}
+
+// stateless
+func Preprocess(ctx sdk.Context, msgEVMTransaction *evmtypes.MsgEVMTransaction, chainID *big.Int, isBlockTest bool) error {
+	return PreprocessUnpacked(ctx, msgEVMTransaction, chainID, isBlockTest, nil)
+}
+
+// PreprocessUnpacked does the same thing as Preprocess but accepts already unpacked txData to save computation
+// if txData is nil, it will unpack from msgEVMTransaction.Data.
+func PreprocessUnpacked(ctx sdk.Context, msgEVMTransaction *evmtypes.MsgEVMTransaction, chainID *big.Int, isBlockTest bool, txData ethtx.TxData) error {
+	if msgEVMTransaction.Derived != nil {
+		if msgEVMTransaction.Derived.PubKey == nil {
+			// this means the message has `Derived` set from the outside, in which case we should reject
+			return sdkerrors.ErrInvalidPubKey
+		}
+		// already preprocessed
+		return nil
+	}
+
+	if txData == nil {
+		// TxData not passed in, unpack it.
+		var err error
+		txData, err = evmtypes.UnpackTxData(msgEVMTransaction.Data)
+		if err != nil {
+			return err
+		}
+	}
+
+	if atx, ok := txData.(*ethtx.AssociateTx); ok {
+		V, R, S := atx.GetRawSignatureValues()
+		V = new(big.Int).Add(V, utils.Big27)
+		// Hash custom message passed in
+		customMessageHash := crypto.Keccak256Hash([]byte(atx.CustomMessage))
+		evmAddr, paxAddr, pubkey, err := helpers.GetAddresses(V, R, S, customMessageHash)
+		if err != nil {
+			return err
+		}
+		msgEVMTransaction.Derived = &derived.Derived{
+			SenderEVMAddr: evmAddr,
+			SenderPaxAddr: paxAddr,
+			PubKey:        &secp256k1.PubKey{Key: pubkey.Bytes()},
+			Version:       derived.Cancun,
+			IsAssociate:   true,
+		}
+		return nil
+	}
+
+	ethTx := ethtypes.NewTx(txData.AsEthereumData())
+	if ethTx.Type() != ethtypes.LegacyTxType {
+		chainID = ethTx.ChainId()
+	}
+	chainCfg := evmtypes.DefaultChainConfig()
+	ethCfg := chainCfg.EthereumConfig(chainID)
+	version := GetVersion(ctx, ethCfg)
+	signer := SignerMap[version](chainID)
+	if !IsTxTypeAllowed(version, ethTx.Type()) {
+		return ethtypes.ErrInvalidChainId
+	}
+
+	var txHash common.Hash
+	V, R, S := ethTx.RawSignatureValues()
+	if ethTx.Protected() {
+		V = helpers.AdjustV(V, ethTx.Type(), ethCfg.ChainID)
+		txHash = signer.Hash(ethTx)
+	} else {
+		if isBlockTest {
+			// need to allow unprotected legacy txs in blocktest
+			// to not lose coverage for other parts of the code
+			txHash = ethtypes.FrontierSigner{}.Hash(ethTx)
+		} else {
+			return errors.New("unsupported tx type: unsafe legacy tx")
+		}
+	}
+	evmAddr, paxAddr, paxPubkey, err := helpers.GetAddresses(V, R, S, txHash)
+	if err != nil {
+		return sdkerrors.ErrInvalidChainID
+	}
+	msgEVMTransaction.Derived = &derived.Derived{
+		SenderEVMAddr: evmAddr,
+		SenderPaxAddr: paxAddr,
+		PubKey:        &secp256k1.PubKey{Key: paxPubkey.Bytes()},
+		Version:       version,
+		IsAssociate:   false,
+	}
+	return nil
+}
+
+func IsTxTypeAllowed(version derived.SignerVersion, txType uint8) bool {
+	for _, t := range AllowedTxTypes[version] {
+		if t == txType {
+			return true
+		}
+	}
+	return false
+}
+
+// RecoverSenderFromEthTx recovers the sender's EVM address, Pax address, and public key
+// from a signed Ethereum transaction. This encapsulates the version-based signer selection
+// and signature recovery logic used by both the ante handler and Giga executor.
+//
+// This function rejects unprotected transactions (returns error).
+// For protected transactions, it uses the appropriate signer based on the chain version.
+func RecoverSenderFromEthTx(ctx sdk.Context, ethTx *ethtypes.Transaction, chainID *big.Int) (common.Address, sdk.AccAddress, cryptotypes.PubKey, error) {
+	if !ethTx.Protected() {
+		return common.Address{}, nil, nil, errors.New("unprotected transactions not supported")
+	}
+
+	// Version-based signer selection (same logic as PreprocessUnpacked)
+	chainCfg := evmtypes.DefaultChainConfig()
+	ethCfg := chainCfg.EthereumConfig(chainID)
+	version := GetVersion(ctx, ethCfg)
+	signer := SignerMap[version](chainID)
+
+	if !IsTxTypeAllowed(version, ethTx.Type()) {
+		return common.Address{}, nil, nil, ethtypes.ErrInvalidChainId
+	}
+
+	return helpers.RecoverAddressesFromTx(ethTx, signer, ethCfg.ChainID)
+}
+
+func GetVersion(ctx sdk.Context, ethCfg *params.ChainConfig) derived.SignerVersion {
+	blockNum := big.NewInt(ctx.BlockHeight())
+	ts := uint64(ctx.BlockTime().Unix()) // nolint:gosec
+	switch {
+	case ethCfg.IsPrague(blockNum, ts):
+		return derived.Prague
+	case ethCfg.IsCancun(blockNum, ts):
+		return derived.Cancun
+	default:
+		return derived.London
+	}
+}
+
+type EVMAddressDecorator struct {
+	evmKeeper     *evmkeeper.Keeper
+	accountKeeper *accountkeeper.AccountKeeper
+}
+
+func NewEVMAddressDecorator(evmKeeper *evmkeeper.Keeper, accountKeeper *accountkeeper.AccountKeeper) *EVMAddressDecorator {
+	return &EVMAddressDecorator{evmKeeper: evmKeeper, accountKeeper: accountKeeper}
+}
+
+//nolint:revive
+func (p *EVMAddressDecorator) AnteHandle(ctx sdk.Context, tx sdk.Tx, simulate bool, next sdk.AnteHandler) (sdk.Context, error) {
+	sigTx, ok := tx.(authsigning.SigVerifiableTx)
+	if !ok {
+		return ctx, sdkerrors.Wrap(sdkerrors.ErrTxDecode, "invalid tx type")
+	}
+	signers := sigTx.GetSigners()
+	for _, signer := range signers {
+		if evmAddr, associated := p.evmKeeper.GetEVMAddress(ctx, signer); associated {
+			ctx.EventManager().EmitEvent(sdk.NewEvent(evmtypes.EventTypeSigner,
+				sdk.NewAttribute(evmtypes.AttributeKeyEvmAddress, evmAddr.Hex()),
+				sdk.NewAttribute(evmtypes.AttributeKeyPaxAddress, signer.String())))
+			continue
+		}
+		acc := p.accountKeeper.GetAccount(ctx, signer)
+		if acc.GetPubKey() == nil {
+			logger.Error("missing pubkey for signer", "signer", signer)
+			ctx.EventManager().EmitEvent(sdk.NewEvent(evmtypes.EventTypeSigner,
+				sdk.NewAttribute(evmtypes.AttributeKeyPaxAddress, signer.String())))
+			continue
+		}
+		pk, err := btcec.ParsePubKey(acc.GetPubKey().Bytes())
+		if err != nil {
+			logger.Debug("failed to parse pubkey for account, likely due to the fact that it isn't on secp256k1 curve", "account", acc.GetPubKey(), "err", err)
+			ctx.EventManager().EmitEvent(sdk.NewEvent(evmtypes.EventTypeSigner,
+				sdk.NewAttribute(evmtypes.AttributeKeyPaxAddress, signer.String())))
+			continue
+		}
+		evmAddr, err := helpers.PubkeyToEVMAddress(pk.SerializeUncompressed())
+		if err != nil {
+			logger.Error("failed to get EVM address from pubkey", "err", err)
+			ctx.EventManager().EmitEvent(sdk.NewEvent(evmtypes.EventTypeSigner,
+				sdk.NewAttribute(evmtypes.AttributeKeyPaxAddress, signer.String())))
+			continue
+		}
+		ctx.EventManager().EmitEvent(sdk.NewEvent(evmtypes.EventTypeSigner,
+			sdk.NewAttribute(evmtypes.AttributeKeyEvmAddress, evmAddr.Hex()),
+			sdk.NewAttribute(evmtypes.AttributeKeyPaxAddress, signer.String())))
+		p.evmKeeper.SetAddressMapping(ctx, signer, evmAddr)
+		associationHelper := helpers.NewAssociationHelper(p.evmKeeper, p.evmKeeper.BankKeeper(), p.accountKeeper)
+		if err := associationHelper.MigrateBalance(ctx, evmAddr, signer, false); err != nil {
+			logger.Error("failed to migrate EVM address balance", "address", evmAddr, "err", err)
+			return ctx, err
+		}
+		if evmtypes.IsTxMsgAssociate(tx) {
+			// check if there is non-zero balance
+			if !p.evmKeeper.BankKeeper().GetBalance(ctx, signer, sdk.MustGetBaseDenom()).IsPositive() && !p.evmKeeper.BankKeeper().GetWeiBalance(ctx, signer).IsPositive() {
+				return ctx, sdkerrors.Wrap(sdkerrors.ErrInsufficientFunds, "account needs to have at least 1 wei to force association")
+			}
+		}
+	}
+	return next(ctx, tx, simulate)
+}

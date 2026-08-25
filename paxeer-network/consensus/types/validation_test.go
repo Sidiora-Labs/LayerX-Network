@@ -1,0 +1,361 @@
+package types
+
+import (
+	"errors"
+	"fmt"
+	"strconv"
+	"testing"
+	"time"
+
+	"github.com/sidiora-labs/paxeer-network/consensus/crypto"
+	"github.com/sidiora-labs/paxeer-network/consensus/libs/utils"
+	"github.com/sidiora-labs/paxeer-network/consensus/libs/utils/require"
+	"github.com/stretchr/testify/assert"
+
+	tmmath "github.com/sidiora-labs/paxeer-network/consensus/libs/math"
+	tmproto "github.com/sidiora-labs/paxeer-network/consensus/proto/tendermint/types"
+)
+
+func matchErr[E error](err error) error {
+	var got E
+	if !errors.As(err, &got) {
+		return fmt.Errorf("expected error of type %T, got %#v", got, err)
+	}
+	return nil
+}
+
+func equalErr[E interface {
+	error
+	comparable
+}](want E) func(error) error {
+	return func(err error) error {
+		var got E
+		if !errors.As(err, &got) {
+			return fmt.Errorf("expected error of type %T, got %#v", got, err)
+		}
+		if got != want {
+			return fmt.Errorf("expected error %v, got %v", want, got)
+		}
+		return nil
+	}
+}
+
+// Check VerifyCommit, VerifyCommitLight and VerifyCommitLightTrusting basic
+// verification.
+func TestValidatorSet_VerifyCommit_All(t *testing.T) {
+	var (
+		round  = int32(0)
+		height = int64(100)
+
+		blockID    = makeBlockID([]byte("blockhash"), MaxBlockPartsCount, []byte("partshash"))
+		chainID    = "Lalande21185"
+		trustLevel = tmmath.Fraction{Numerator: 2, Denominator: 3}
+	)
+
+	testCases := []struct {
+		description string
+		// vote chainID
+		chainID string
+		// vote blockID
+		blockID BlockID
+		valSize int
+
+		// height of the commit
+		height int64
+
+		// votes
+		blockVotes  int
+		nilVotes    int
+		absentVotes int
+
+		wantErr func(error) error
+	}{
+		{"good (batch verification)", chainID, blockID, 3, height, 3, 0, 0, nil},
+		{"good (single verification)", chainID, blockID, 1, height, 1, 0, 0, nil},
+
+		{"wrong signature (#0)", "EpsilonEridani", blockID, 2, height, 2, 0, 0, matchErr[errBadSig]},
+		{"wrong block ID", chainID, makeBlockIDRandom(), 2, height, 2, 0, 0, matchErr[errBadBlockID]},
+		{"wrong height", chainID, blockID, 1, height - 1, 1, 0, 0, matchErr[ErrInvalidCommitHeight]},
+
+		{"wrong set size: 4 vs 3", chainID, blockID, 4, height, 3, 0, 0, equalErr(ErrInvalidCommitSignatures{Expected: 4, Actual: 3})},
+		{"wrong set size: 1 vs 2", chainID, blockID, 1, height, 2, 0, 0, equalErr(ErrInvalidCommitSignatures{Expected: 1, Actual: 2})},
+
+		{"insufficient voting power: got 30, needed more than 66", chainID, blockID, 10, height, 3, 2, 5, equalErr(ErrNotEnoughVotingPowerSigned{Got: 30, Needed: 66})},
+		{"insufficient voting power: got 0, needed more than 6", chainID, blockID, 1, height, 0, 0, 1, equalErr(ErrNotEnoughVotingPowerSigned{Got: 0, Needed: 6})},
+		{"insufficient voting power: got 60, needed more than 60", chainID, blockID, 9, height, 6, 3, 0, equalErr(ErrNotEnoughVotingPowerSigned{Got: 60, Needed: 60})},
+	}
+
+	for _, tc := range testCases {
+		for _, countAllSignatures := range []bool{false, true} {
+			t.Run(tc.description+"/"+strconv.FormatBool(countAllSignatures), func(t *testing.T) {
+				ctx := t.Context()
+
+				_, valSet, vals := randVoteSet(ctx, t, tc.height, round, tmproto.PrecommitType, tc.valSize, 10)
+
+				totalVotes := tc.blockVotes + tc.absentVotes + tc.nilVotes
+				sigs := make([]CommitSig, totalVotes)
+				vi := 0
+				// add absent sigs first
+				for i := 0; i < tc.absentVotes; i++ {
+					sigs[vi] = NewCommitSigAbsent()
+					vi++
+				}
+				for i := 0; i < tc.blockVotes+tc.nilVotes; i++ {
+
+					pubKey, err := vals[vi%len(vals)].GetPubKey(ctx)
+					require.NoError(t, err)
+					vote := &Vote{
+						ValidatorAddress: pubKey.Address(),
+						ValidatorIndex:   int32(vi),
+						Height:           tc.height,
+						Round:            round,
+						Type:             tmproto.PrecommitType,
+						BlockID:          tc.blockID,
+						Timestamp:        time.Now(),
+					}
+					if i >= tc.blockVotes {
+						vote.BlockID = BlockID{}
+					}
+
+					v := vote.ToProto()
+
+					require.NoError(t, vals[vi%len(vals)].SignVote(ctx, tc.chainID, v))
+					vote.Signature = utils.Some(utils.OrPanic1(crypto.SigFromBytes(v.Signature)))
+
+					sigs[vi] = vote.CommitSig()
+
+					vi++
+				}
+				commit := &Commit{
+					Height:     tc.height,
+					Round:      round,
+					BlockID:    tc.blockID,
+					Signatures: sigs,
+				}
+
+				err := valSet.VerifyCommit(chainID, blockID, height, commit)
+				if tc.wantErr != nil {
+					assert.NoError(t, tc.wantErr(err), "VerifyCommit")
+				} else {
+					assert.NoError(t, err, "VerifyCommit")
+				}
+
+				if countAllSignatures {
+					err = valSet.VerifyCommitLightAllSignatures(chainID, blockID, height, commit)
+				} else {
+					err = valSet.VerifyCommitLight(chainID, blockID, height, commit)
+				}
+				if tc.wantErr != nil {
+					assert.NoError(t, tc.wantErr(err), "VerifyCommitLight")
+				} else {
+					assert.NoError(t, err, "VerifyCommitLight")
+				}
+
+				// only a subsection of the tests apply to VerifyCommitLightTrusting.
+				// VerifyCommitLightTrusting* does not call verifyBasicValsAndCommit; when
+				// countAllSignatures is true and there are more commit sigs than validators,
+				// it reports "double vote" instead of ErrInvalidCommitSignatures.
+				wantErrTrusting := tc.wantErr
+				trustingExpectDoubleVote := countAllSignatures && totalVotes > tc.valSize && tc.wantErr != nil
+				if (!countAllSignatures && totalVotes != tc.valSize) || totalVotes < tc.valSize || !tc.blockID.Equals(blockID) || tc.height != height {
+					wantErrTrusting = nil
+				}
+				if countAllSignatures {
+					err = valSet.VerifyCommitLightTrustingAllSignatures(chainID, commit, trustLevel)
+				} else {
+					err = valSet.VerifyCommitLightTrusting(chainID, commit, trustLevel)
+				}
+				if trustingExpectDoubleVote {
+					if assert.Error(t, err, "VerifyCommitLightTrusting") {
+						assert.Contains(t, err.Error(), "double vote", "VerifyCommitLightTrusting")
+					}
+				} else if wantErrTrusting != nil {
+					assert.NoError(t, wantErrTrusting(err), "VerifyCommitLightTrusting")
+				} else {
+					assert.NoError(t, err, "VerifyCommitLightTrusting")
+				}
+			})
+		}
+	}
+}
+
+func TestValidatorSet_VerifyCommit_CheckValidatorAddresses(t *testing.T) {
+	const chainID = "test_chain_id"
+	const height = int64(5)
+	blockID := makeBlockIDRandom()
+	ctx := t.Context()
+
+	voteSet, valSet, vals := randVoteSet(ctx, t, height, 0, tmproto.PrecommitType, 3, 10)
+	commit := utils.OrPanic1(MakeCommit(ctx, blockID, height, 0, voteSet, vals, time.Now()))
+	// Set mismatching validator address on some signature.
+	otherVal, _, err := randValidator(ctx, false, 123)
+	require.NoError(t, err)
+	commit.Signatures[1].ValidatorAddress = otherVal.Address
+	// Check that this is detected.
+	ignore := func(c CommitSig) bool { return c.BlockIDFlag == BlockIDFlagAbsent }
+	count := func(c CommitSig) bool { return c.BlockIDFlag == BlockIDFlagCommit }
+	powerNeeded := valSet.TotalVotingPower() - 1
+	for _, countAllSigs := range []bool{true, false} {
+		for _, lookupByIndex := range []bool{true, false} {
+			require.Error(t, verifyCommitSingle(chainID, valSet, commit, powerNeeded, ignore, count, countAllSigs, lookupByIndex))
+			require.Error(t, verifyCommitBatch(chainID, valSet, commit, powerNeeded, ignore, count, countAllSigs, lookupByIndex))
+		}
+	}
+}
+
+func TestValidatorSet_VerifyCommit_CheckAllSignatures(t *testing.T) {
+	var (
+		chainID = "test_chain_id"
+		h       = int64(3)
+		blockID = makeBlockIDRandom()
+	)
+
+	ctx := t.Context()
+
+	voteSet, valSet, vals := randVoteSet(ctx, t, h, 0, tmproto.PrecommitType, 4, 10)
+	commit, err := MakeCommit(ctx, blockID, h, 0, voteSet, vals, time.Now())
+	require.NoError(t, err)
+
+	require.NoError(t, valSet.VerifyCommit(chainID, blockID, h, commit))
+
+	// malleate 4th signature
+	vote, ok := voteSet.GetByIndex(3)
+	require.True(t, ok)
+	v := vote.ToProto()
+	require.NoError(t, vals[3].SignVote(ctx, "CentaurusA", v))
+	vote.Signature = utils.Some(utils.OrPanic1(crypto.SigFromBytes(v.Signature)))
+	commit.Signatures[3] = vote.CommitSig()
+
+	err = valSet.VerifyCommit(chainID, blockID, h, commit)
+	if assert.Error(t, err) {
+		assert.Contains(t, err.Error(), "wrong signature (#3)")
+	}
+
+	err = valSet.VerifyCommitLightAllSignatures(chainID, blockID, h, commit)
+	if assert.Error(t, err) {
+		assert.Contains(t, err.Error(), "wrong signature (#3)")
+	}
+}
+
+func TestValidatorSet_VerifyCommitLight_ReturnsAsSoonAsMajOfVotingPowerSignedIffNotAllSigs(t *testing.T) {
+	var (
+		chainID = "test_chain_id"
+		h       = int64(3)
+		blockID = makeBlockIDRandom()
+	)
+
+	ctx := t.Context()
+
+	voteSet, valSet, vals := randVoteSet(ctx, t, h, 0, tmproto.PrecommitType, 4, 10)
+	commit, err := MakeCommit(ctx, blockID, h, 0, voteSet, vals, time.Now())
+	require.NoError(t, err)
+
+	require.NoError(t, valSet.VerifyCommit(chainID, blockID, h, commit))
+
+	require.NoError(t, valSet.VerifyCommitLightAllSignatures(chainID, blockID, h, commit))
+
+	// malleate 4th signature (3 signatures are enough for 2/3+)
+	vote, ok := voteSet.GetByIndex(3)
+	require.True(t, ok)
+	v := vote.ToProto()
+	require.NoError(t, vals[3].SignVote(ctx, "CentaurusA", v))
+	vote.Signature = utils.Some(utils.OrPanic1(crypto.SigFromBytes(v.Signature)))
+	commit.Signatures[3] = vote.CommitSig()
+
+	err = valSet.VerifyCommitLight(chainID, blockID, h, commit)
+	assert.NoError(t, err)
+
+	err = valSet.VerifyCommitLightAllSignatures(chainID, blockID, h, commit)
+	assert.Error(t, err)
+}
+
+func TestValidatorSet_VerifyCommitLightTrusting_ReturnsAsSoonAsTrustLevelSignedIffNotAllSigs(t *testing.T) {
+	var (
+		chainID = "test_chain_id"
+		h       = int64(3)
+		blockID = makeBlockIDRandom()
+	)
+	ctx := t.Context()
+
+	voteSet, valSet, vals := randVoteSet(ctx, t, h, 0, tmproto.PrecommitType, 4, 10)
+	commit, err := MakeCommit(ctx, blockID, h, 0, voteSet, vals, time.Now())
+	require.NoError(t, err)
+
+	require.NoError(t, valSet.VerifyCommit(chainID, blockID, h, commit))
+
+	require.NoError(t, valSet.VerifyCommitLightTrustingAllSignatures(chainID, commit, tmmath.Fraction{Numerator: 1, Denominator: 3}))
+
+	// malleate 3rd signature (2 signatures are enough for 1/3+ trust level)
+	vote, ok := voteSet.GetByIndex(2)
+	require.True(t, ok)
+	v := vote.ToProto()
+	require.NoError(t, vals[2].SignVote(ctx, "CentaurusA", v))
+	vote.Signature = utils.Some(utils.OrPanic1(crypto.SigFromBytes(v.Signature)))
+	commit.Signatures[2] = vote.CommitSig()
+
+	err = valSet.VerifyCommitLightTrusting(chainID, commit, tmmath.Fraction{Numerator: 1, Denominator: 3})
+	assert.NoError(t, err)
+
+	err = valSet.VerifyCommitLightTrustingAllSignatures(chainID, commit, tmmath.Fraction{Numerator: 1, Denominator: 3})
+	assert.Error(t, err)
+}
+
+func TestValidatorSet_VerifyCommitLightTrusting(t *testing.T) {
+	ctx := t.Context()
+
+	var (
+		blockID                       = makeBlockIDRandom()
+		voteSet, originalValset, vals = randVoteSet(ctx, t, 1, 1, tmproto.PrecommitType, 6, 1)
+		commit, err                   = MakeCommit(ctx, blockID, 1, 1, voteSet, vals, time.Now())
+		newValSet, _                  = randValidatorPrivValSet(ctx, t, 2, 1)
+	)
+	require.NoError(t, err)
+
+	testCases := []struct {
+		valSet *ValidatorSet
+		err    bool
+	}{
+		// good
+		0: {
+			valSet: originalValset,
+			err:    false,
+		},
+		// bad - no overlap between validator sets
+		1: {
+			valSet: newValSet,
+			err:    true,
+		},
+		// good - first two are different but the rest of the same -> >1/3
+		2: {
+			valSet: NewValidatorSet(append(newValSet.Validators, originalValset.Validators...)),
+			err:    false,
+		},
+	}
+
+	for _, tc := range testCases {
+		err = tc.valSet.VerifyCommitLightTrusting("test_chain_id", commit,
+			tmmath.Fraction{Numerator: 1, Denominator: 3})
+		if tc.err {
+			assert.Error(t, err)
+		} else {
+			assert.NoError(t, err)
+		}
+	}
+}
+
+func TestValidatorSet_VerifyCommitLightTrustingErrorsOnOverflow(t *testing.T) {
+	ctx := t.Context()
+
+	var (
+		blockID               = makeBlockIDRandom()
+		voteSet, valSet, vals = randVoteSet(ctx, t, 1, 1, tmproto.PrecommitType, 1, MaxTotalVotingPower)
+		commit, err           = MakeCommit(ctx, blockID, 1, 1, voteSet, vals, time.Now())
+	)
+	require.NoError(t, err)
+
+	err = valSet.VerifyCommitLightTrusting("test_chain_id", commit,
+		tmmath.Fraction{Numerator: 25, Denominator: 55})
+	if assert.Error(t, err) {
+		assert.Contains(t, err.Error(), "int64 overflow")
+	}
+}

@@ -1,0 +1,184 @@
+//go:build rocksdbBackend
+// +build rocksdbBackend
+
+package mvcc
+
+import (
+	"bytes"
+	"sync"
+
+	"github.com/linxGnu/grocksdb"
+	dbm "github.com/tendermint/tm-db"
+)
+
+var _ dbm.Iterator = (*iterator)(nil)
+
+type iterator struct {
+	source             *grocksdb.Iterator
+	readOpts           *grocksdb.ReadOptions
+	prefix, start, end []byte
+	version            int64
+	reverse            bool
+	invalid            bool
+	closeOnce          sync.Once
+}
+
+func NewRocksDBIterator(source *grocksdb.Iterator, readOpts *grocksdb.ReadOptions, prefix, start, end []byte, version int64, earliestVersion int64, reverse bool) *iterator {
+	// Return invalid iterator if requested iterator height is lower than earliest version after pruning
+	if version < earliestVersion {
+		return &iterator{
+			source:   source,
+			readOpts: readOpts,
+			prefix:   prefix,
+			start:    start,
+			end:      end,
+			version:  version,
+			reverse:  reverse,
+			invalid:  true,
+		}
+	}
+
+	if reverse {
+		if end == nil {
+			source.SeekToLast()
+		} else {
+			source.Seek(end)
+
+			if source.Valid() {
+				eoaKey := readOnlySlice(source.Key()) // end or after key
+				if bytes.Compare(end, eoaKey) <= 0 {
+					source.Prev()
+				}
+			} else {
+				source.SeekToLast()
+			}
+		}
+	} else {
+		if start == nil {
+			source.SeekToFirst()
+		} else {
+			source.Seek(start)
+		}
+	}
+
+	return &iterator{
+		source:   source,
+		readOpts: readOpts,
+		prefix:   prefix,
+		start:    start,
+		end:      end,
+		version:  version,
+		reverse:  reverse,
+		invalid:  !source.Valid(),
+	}
+}
+
+// Domain returns the domain of the iterator. The caller must not modify the
+// return values.
+func (itr *iterator) Domain() ([]byte, []byte) {
+	start := itr.start
+	if start != nil {
+		start = start[len(itr.prefix):]
+		if len(start) == 0 {
+			start = nil
+		}
+	}
+
+	end := itr.end
+	if end != nil {
+		end = end[len(itr.prefix):]
+		if len(end) == 0 {
+			end = nil
+		}
+	}
+
+	return start, end
+}
+
+func (itr *iterator) Valid() bool {
+	// once invalid, forever invalid
+	if itr.invalid {
+		return false
+	}
+
+	// if source has error, consider it invalid
+	if err := itr.source.Err(); err != nil {
+		itr.invalid = true
+		return false
+	}
+
+	// if source is invalid, consider it invalid
+	if !itr.source.Valid() {
+		itr.invalid = true
+		return false
+	}
+
+	// if key is at the end or past it, consider it invalid
+	start := itr.start
+	end := itr.end
+	key := readOnlySlice(itr.source.Key())
+
+	if itr.reverse {
+		if start != nil && bytes.Compare(key, start) < 0 {
+			itr.invalid = true
+			return false
+		}
+	} else {
+		if end != nil && bytes.Compare(end, key) <= 0 {
+			itr.invalid = true
+			return false
+		}
+	}
+
+	return true
+}
+
+func (itr *iterator) Key() []byte {
+	itr.assertIsValid()
+	return copyAndFreeSlice(itr.source.Key())[len(itr.prefix):]
+}
+
+func (itr *iterator) Value() []byte {
+	itr.assertIsValid()
+	return copyAndFreeSlice(itr.source.Value())
+}
+
+func (itr *iterator) Next() {
+	if itr.invalid {
+		return
+	}
+
+	if itr.reverse {
+		itr.source.Prev()
+	} else {
+		itr.source.Next()
+	}
+}
+
+func (itr *iterator) Error() error {
+	return itr.source.Err()
+}
+
+func (itr *iterator) Close() error {
+	itr.closeOnce.Do(func() {
+		src := itr.source
+		ro := itr.readOpts
+		itr.source = nil
+		itr.readOpts = nil
+		itr.invalid = true
+
+		if src != nil {
+			src.Close()
+		}
+		if ro != nil {
+			ro.Destroy()
+		}
+	})
+	return nil
+}
+
+func (itr *iterator) assertIsValid() {
+	if itr.invalid {
+		panic("iterator is invalid")
+	}
+}

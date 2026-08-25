@@ -1,0 +1,1408 @@
+package distribution_test
+
+import (
+	"context"
+	"embed"
+	"encoding/hex"
+	"math/big"
+	"reflect"
+	"testing"
+	"time"
+
+	distrtypes "github.com/sidiora-labs/paxeer-network/sdk/x/distribution/types"
+
+	abitypes "github.com/ethereum/go-ethereum/accounts/abi"
+	"github.com/ethereum/go-ethereum/common"
+	ethtypes "github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/core/vm"
+	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/sidiora-labs/paxeer-network/sdk/crypto/keys/secp256k1"
+	crptotypes "github.com/sidiora-labs/paxeer-network/sdk/crypto/types"
+	sdk "github.com/sidiora-labs/paxeer-network/sdk/types"
+	slashingtypes "github.com/sidiora-labs/paxeer-network/sdk/x/slashing/types"
+	"github.com/sidiora-labs/paxeer-network/sdk/x/staking/teststaking"
+	stakingtypes "github.com/sidiora-labs/paxeer-network/sdk/x/staking/types"
+
+	tmtypes "github.com/sidiora-labs/paxeer-network/consensus/proto/tendermint/types"
+	"github.com/sidiora-labs/paxeer-network/modules/evm/ante"
+	"github.com/sidiora-labs/paxeer-network/modules/evm/keeper"
+	"github.com/sidiora-labs/paxeer-network/modules/evm/state"
+	evmtypes "github.com/sidiora-labs/paxeer-network/modules/evm/types"
+	"github.com/sidiora-labs/paxeer-network/modules/evm/types/ethtx"
+	minttypes "github.com/sidiora-labs/paxeer-network/modules/mint/types"
+	"github.com/sidiora-labs/paxeer-network/node"
+	pcommon "github.com/sidiora-labs/paxeer-network/precompiles/common"
+	"github.com/sidiora-labs/paxeer-network/precompiles/distribution"
+	"github.com/sidiora-labs/paxeer-network/precompiles/staking"
+	"github.com/sidiora-labs/paxeer-network/precompiles/utils"
+	testkeeper "github.com/sidiora-labs/paxeer-network/testutil/keeper"
+	"github.com/stretchr/testify/require"
+)
+
+//go:embed abi.json
+//go:embed staking_abi.json
+var f embed.FS
+
+func TestWithdraw(t *testing.T) {
+	testApp := testkeeper.EVMTestApp
+	ctx := testApp.NewContext(false, tmtypes.Header{}).WithBlockHeight(2)
+	distrParams := testApp.DistrKeeper.GetParams(ctx)
+	distrParams.WithdrawAddrEnabled = true
+	testApp.DistrKeeper.SetParams(ctx, distrParams)
+	k := &testApp.EvmKeeper
+	valPub1 := secp256k1.GenPrivKey().PubKey()
+	val := setupValidator(t, ctx, testApp, stakingtypes.Unbonded, valPub1)
+
+	// delegate
+	abi := pcommon.MustGetABI(f, "staking_abi.json")
+	args, err := abi.Pack("delegate", val.String())
+	require.Nil(t, err)
+
+	privKey := testkeeper.MockPrivateKey()
+	testPrivHex := hex.EncodeToString(privKey.Bytes())
+	key, _ := crypto.HexToECDSA(testPrivHex)
+	addr := common.HexToAddress(staking.StakingAddress)
+	txData := ethtypes.LegacyTx{
+		GasPrice: big.NewInt(1000000000000),
+		Gas:      20000000,
+		To:       &addr,
+		Value:    big.NewInt(100_000_000_000_000),
+		Data:     args,
+		Nonce:    0,
+	}
+	chainID := k.ChainID(ctx)
+	chainCfg := evmtypes.DefaultChainConfig()
+	ethCfg := chainCfg.EthereumConfig(chainID)
+	blockNum := big.NewInt(ctx.BlockHeight())
+	signer := ethtypes.MakeSigner(ethCfg, blockNum, uint64(ctx.BlockTime().Unix()))
+	tx, err := ethtypes.SignTx(ethtypes.NewTx(&txData), signer, key)
+	require.Nil(t, err)
+	txwrapper, err := ethtx.NewLegacyTx(tx)
+	require.Nil(t, err)
+	req, err := evmtypes.NewMsgEVMTransaction(txwrapper)
+	require.Nil(t, err)
+
+	paxAddr, evmAddr := testkeeper.PrivateKeyToAddresses(privKey)
+	k.SetAddressMapping(ctx, paxAddr, evmAddr)
+	amt := sdk.NewCoins(sdk.NewCoin(k.GetBaseDenom(ctx), sdk.NewInt(200000000)))
+	require.Nil(t, k.BankKeeper().MintCoins(ctx, evmtypes.ModuleName, sdk.NewCoins(sdk.NewCoin(k.GetBaseDenom(ctx), sdk.NewInt(200000000)))))
+	require.Nil(t, k.BankKeeper().SendCoinsFromModuleToAccount(ctx, evmtypes.ModuleName, paxAddr, amt))
+
+	msgServer := keeper.NewMsgServerImpl(k)
+
+	ante.Preprocess(ctx, req, k.ChainID(ctx), false)
+	res, err := msgServer.EVMTransaction(sdk.WrapSDKContext(ctx), req)
+	require.Nil(t, err)
+	require.Empty(t, res.VmError)
+
+	d, found := testApp.StakingKeeper.GetDelegation(ctx, paxAddr, val)
+	require.True(t, found)
+	require.Equal(t, int64(100), d.Shares.RoundInt().Int64())
+
+	// set withdraw addr
+	withdrawPaxAddr, withdrawAddr := testkeeper.MockAddressPair()
+	k.SetAddressMapping(ctx, withdrawPaxAddr, withdrawAddr)
+	abi = pcommon.MustGetABI(f, "abi.json")
+	args, err = abi.Pack("setWithdrawAddress", withdrawAddr)
+	require.Nil(t, err)
+	addr = common.HexToAddress(distribution.DistrAddress)
+	txData = ethtypes.LegacyTx{
+		GasPrice: big.NewInt(1000000000000),
+		Gas:      20000000,
+		To:       &addr,
+		Value:    big.NewInt(0),
+		Data:     args,
+		Nonce:    1,
+	}
+	tx, err = ethtypes.SignTx(ethtypes.NewTx(&txData), signer, key)
+	require.Nil(t, err)
+	txwrapper, err = ethtx.NewLegacyTx(tx)
+	require.Nil(t, err)
+	req, err = evmtypes.NewMsgEVMTransaction(txwrapper)
+	require.Nil(t, err)
+
+	ante.Preprocess(ctx, req, k.ChainID(ctx), false)
+	res, err = msgServer.EVMTransaction(sdk.WrapSDKContext(ctx), req)
+	require.Nil(t, err)
+	require.Empty(t, res.VmError)
+	require.Equal(t, withdrawPaxAddr.String(), testApp.DistrKeeper.GetDelegatorWithdrawAddr(ctx, paxAddr).String())
+	receipt, err := k.GetTransientReceipt(ctx, tx.Hash(), 0)
+	require.Nil(t, err)
+	require.Equal(t, 1, len(receipt.Logs))
+	require.Equal(t, distribution.SetWithdrawAddressEventSig, common.HexToHash(receipt.Logs[0].Topics[0]))
+	require.Equal(t, common.BytesToHash(evmAddr.Bytes()), common.HexToHash(receipt.Logs[0].Topics[1]))
+	require.NotEmpty(t, receipt.Logs[0].Data)
+
+	// withdraw
+	args, err = abi.Pack("withdrawDelegationRewards", val.String())
+	require.Nil(t, err)
+	txData = ethtypes.LegacyTx{
+		GasPrice: big.NewInt(1000000000000),
+		Gas:      20000000,
+		To:       &addr,
+		Value:    big.NewInt(0),
+		Data:     args,
+		Nonce:    2,
+	}
+	tx, err = ethtypes.SignTx(ethtypes.NewTx(&txData), signer, key)
+	require.Nil(t, err)
+	txwrapper, err = ethtx.NewLegacyTx(tx)
+	require.Nil(t, err)
+	req, err = evmtypes.NewMsgEVMTransaction(txwrapper)
+	require.Nil(t, err)
+
+	ante.Preprocess(ctx, req, k.ChainID(ctx), false)
+	res, err = msgServer.EVMTransaction(sdk.WrapSDKContext(ctx), req)
+	require.Nil(t, err)
+	require.Empty(t, res.VmError)
+	require.Equal(t, uint64(64124), res.GasUsed)
+
+	// reinitialized
+	d, found = testApp.StakingKeeper.GetDelegation(ctx, paxAddr, val)
+	require.True(t, found)
+
+	receipt, err = k.GetTransientReceipt(ctx, tx.Hash(), 0)
+	require.Nil(t, err)
+	require.Equal(t, 1, len(receipt.Logs))
+	require.Equal(t, distribution.DelegationRewardsEventSig, common.HexToHash(receipt.Logs[0].Topics[0]))
+	require.Equal(t, common.BytesToHash(evmAddr.Bytes()), common.HexToHash(receipt.Logs[0].Topics[1]))
+	require.NotEmpty(t, receipt.Logs[0].Data)
+}
+
+func TestWithdrawMultipleDelegationRewards(t *testing.T) {
+	testApp := testkeeper.EVMTestApp
+	ctx := testApp.NewContext(false, tmtypes.Header{}).WithBlockHeight(2)
+	distrParams := testApp.DistrKeeper.GetParams(ctx)
+	distrParams.WithdrawAddrEnabled = true
+	testApp.DistrKeeper.SetParams(ctx, distrParams)
+	k := &testApp.EvmKeeper
+	validators := []sdk.ValAddress{
+		getValidator(t, ctx, testApp),
+		getValidator(t, ctx, testApp),
+		getValidator(t, ctx, testApp)}
+
+	abi := pcommon.MustGetABI(f, "staking_abi.json")
+	privKey := testkeeper.MockPrivateKey()
+	addr := common.HexToAddress(staking.StakingAddress)
+	chainID := k.ChainID(ctx)
+	chainCfg := evmtypes.DefaultChainConfig()
+	ethCfg := chainCfg.EthereumConfig(chainID)
+	blockNum := big.NewInt(ctx.BlockHeight())
+	signer := ethtypes.MakeSigner(ethCfg, blockNum, uint64(ctx.BlockTime().Unix()))
+	msgServer := keeper.NewMsgServerImpl(k)
+	paxAddr, evmAddr := testkeeper.PrivateKeyToAddresses(privKey)
+	k.SetAddressMapping(ctx, paxAddr, evmAddr)
+
+	// delegate
+	for _, val := range validators {
+		delegate(ctx, t, abi, addr, k, val, testApp, privKey, signer, msgServer)
+	}
+
+	// set withdraw addr and withdraw
+	setWithdrawAddressAndWithdraw(ctx, t, addr, validators, k, testApp, privKey, signer, msgServer)
+
+}
+
+func delegate(ctx sdk.Context,
+	t *testing.T,
+	abi abitypes.ABI,
+	addr common.Address,
+	k *keeper.Keeper,
+	val sdk.ValAddress,
+	testApp *app.App,
+	privKey crptotypes.PrivKey,
+	signer ethtypes.Signer,
+	msgServer evmtypes.MsgServer) {
+	args, err := abi.Pack("delegate", val.String())
+	require.Nil(t, err)
+
+	txData := ethtypes.LegacyTx{
+		GasPrice: big.NewInt(1000000000000),
+		Gas:      20000000,
+		To:       &addr,
+		Value:    big.NewInt(100_000_000_000_000),
+		Data:     args,
+		Nonce:    0,
+	}
+	testPrivHex := hex.EncodeToString(privKey.Bytes())
+	key, _ := crypto.HexToECDSA(testPrivHex)
+	tx, err := ethtypes.SignTx(ethtypes.NewTx(&txData), signer, key)
+	require.Nil(t, err)
+	txwrapper, err := ethtx.NewLegacyTx(tx)
+	require.Nil(t, err)
+	req, err := evmtypes.NewMsgEVMTransaction(txwrapper)
+	require.Nil(t, err)
+
+	paxAddr, _ := testkeeper.PrivateKeyToAddresses(privKey)
+	amt := sdk.NewCoins(sdk.NewCoin(k.GetBaseDenom(ctx), sdk.NewInt(200000000)))
+	require.Nil(t, k.BankKeeper().MintCoins(ctx, evmtypes.ModuleName, sdk.NewCoins(sdk.NewCoin(k.GetBaseDenom(ctx), sdk.NewInt(200000000)))))
+	require.Nil(t, k.BankKeeper().SendCoinsFromModuleToAccount(ctx, evmtypes.ModuleName, paxAddr, amt))
+
+	ante.Preprocess(ctx, req, k.ChainID(ctx), false)
+	res, err := msgServer.EVMTransaction(sdk.WrapSDKContext(ctx), req)
+	require.Nil(t, err)
+	require.Empty(t, res.VmError)
+
+	d, found := testApp.StakingKeeper.GetDelegation(ctx, paxAddr, val)
+	require.True(t, found)
+	require.Equal(t, int64(100), d.Shares.RoundInt().Int64())
+}
+
+func setWithdrawAddressAndWithdraw(
+	ctx sdk.Context,
+	t *testing.T,
+	addr common.Address,
+	vals []sdk.ValAddress,
+	k *keeper.Keeper,
+	testApp *app.App,
+	privKey crptotypes.PrivKey,
+	signer ethtypes.Signer,
+	msgServer evmtypes.MsgServer,
+) {
+	withdrawPaxAddr, withdrawAddr := testkeeper.MockAddressPair()
+	k.SetAddressMapping(ctx, withdrawPaxAddr, withdrawAddr)
+	abi := pcommon.MustGetABI(f, "abi.json")
+	args, err := abi.Pack("setWithdrawAddress", withdrawAddr)
+	require.Nil(t, err)
+	addr = common.HexToAddress(distribution.DistrAddress)
+	txData := ethtypes.LegacyTx{
+		GasPrice: big.NewInt(1000000000000),
+		Gas:      20000000,
+		To:       &addr,
+		Value:    big.NewInt(0),
+		Data:     args,
+		Nonce:    1,
+	}
+	testPrivHex := hex.EncodeToString(privKey.Bytes())
+	key, _ := crypto.HexToECDSA(testPrivHex)
+	tx, err := ethtypes.SignTx(ethtypes.NewTx(&txData), signer, key)
+	require.Nil(t, err)
+	txwrapper, err := ethtx.NewLegacyTx(tx)
+	require.Nil(t, err)
+	req, err := evmtypes.NewMsgEVMTransaction(txwrapper)
+	require.Nil(t, err)
+
+	ante.Preprocess(ctx, req, k.ChainID(ctx), false)
+	res, err := msgServer.EVMTransaction(sdk.WrapSDKContext(ctx), req)
+	require.Nil(t, err)
+	require.Empty(t, res.VmError)
+	paxAddr, evmAddr := testkeeper.PrivateKeyToAddresses(privKey)
+	require.Equal(t, withdrawPaxAddr.String(), testApp.DistrKeeper.GetDelegatorWithdrawAddr(ctx, paxAddr).String())
+
+	var validators []string
+	for _, val := range vals {
+		validators = append(validators, val.String())
+	}
+
+	args, err = abi.Pack("withdrawMultipleDelegationRewards", validators)
+	require.Nil(t, err)
+	txData = ethtypes.LegacyTx{
+		GasPrice: big.NewInt(1000000000000),
+		Gas:      20000000,
+		To:       &addr,
+		Value:    big.NewInt(0),
+		Data:     args,
+		Nonce:    2,
+	}
+	tx, err = ethtypes.SignTx(ethtypes.NewTx(&txData), signer, key)
+	require.Nil(t, err)
+	txwrapper, err = ethtx.NewLegacyTx(tx)
+	require.Nil(t, err)
+	r, err := evmtypes.NewMsgEVMTransaction(txwrapper)
+	require.Nil(t, err)
+
+	ante.Preprocess(ctx, r, k.ChainID(ctx), false)
+	res, err = msgServer.EVMTransaction(sdk.WrapSDKContext(ctx), r)
+	require.Nil(t, err)
+	require.Empty(t, res.VmError)
+	require.Equal(t, uint64(148290), res.GasUsed)
+
+	receipt, err := k.GetTransientReceipt(ctx, tx.Hash(), 0)
+	require.Nil(t, err)
+	require.Equal(t, 1, len(receipt.Logs))
+	require.Equal(t, distribution.MultipleDelegationRewardsEventSig, common.HexToHash(receipt.Logs[0].Topics[0]))
+	require.Equal(t, common.BytesToHash(evmAddr.Bytes()), common.HexToHash(receipt.Logs[0].Topics[1]))
+	require.NotEmpty(t, receipt.Logs[0].Data)
+
+	// reinitialized
+	for _, val := range vals {
+		_, found := testApp.StakingKeeper.GetDelegation(ctx, paxAddr, val)
+		require.True(t, found)
+	}
+}
+
+func getValidator(t *testing.T, ctx sdk.Context, testApp *app.App) sdk.ValAddress {
+	return setupValidator(t, ctx, testApp, stakingtypes.Unbonded, secp256k1.GenPrivKey().PubKey())
+}
+
+func setupValidator(t *testing.T, ctx sdk.Context, a *app.App, bondStatus stakingtypes.BondStatus, valPub crptotypes.PubKey) sdk.ValAddress {
+	valAddr := sdk.ValAddress(valPub.Address())
+	bondDenom := a.StakingKeeper.GetParams(ctx).BondDenom
+	selfBond := sdk.NewCoins(sdk.Coin{Amount: sdk.NewInt(100), Denom: bondDenom})
+
+	err := a.BankKeeper.MintCoins(ctx, minttypes.ModuleName, selfBond)
+	require.NoError(t, err)
+
+	err = a.BankKeeper.SendCoinsFromModuleToAccount(ctx, minttypes.ModuleName, sdk.AccAddress(valAddr), selfBond)
+	require.NoError(t, err)
+
+	sh := teststaking.NewHelper(t, ctx, a.StakingKeeper)
+	msg := sh.CreateValidatorMsg(valAddr, valPub, selfBond[0].Amount)
+	sh.Handle(msg, true)
+
+	val, found := a.StakingKeeper.GetValidator(ctx, valAddr)
+	require.True(t, found)
+
+	val = val.UpdateStatus(bondStatus)
+	a.StakingKeeper.SetValidator(ctx, val)
+
+	consAddr, err := val.GetConsAddr()
+	require.NoError(t, err)
+
+	signingInfo := slashingtypes.NewValidatorSigningInfo(
+		consAddr,
+		ctx.BlockHeight(),
+		0,
+		time.Unix(0, 0),
+		false,
+		0,
+	)
+	a.SlashingKeeper.SetValidatorSigningInfo(ctx, consAddr, signingInfo)
+
+	return valAddr
+}
+
+func TestPrecompile_RunAndCalculateGas_WithdrawDelegationRewards(t *testing.T) {
+	_, notAssociatedCallerEvmAddress := testkeeper.MockAddressPair()
+	_, contractEvmAddress := testkeeper.MockAddressPair()
+	validatorAddress := "paxvaloper1reedlc9w8p7jrpqfky4c5k90nea4p6dhj435eh"
+
+	type fields struct {
+		Precompile                          pcommon.Precompile
+		distrKeeper                         utils.DistributionKeeper
+		SetWithdrawAddrID                   []byte
+		WithdrawDelegationRewardsID         []byte
+		WithdrawMultipleDelegationRewardsID []byte
+	}
+	type args struct {
+		caller             common.Address
+		callingContract    common.Address
+		validator          string
+		suppliedGas        uint64
+		value              *big.Int
+		readOnly           bool
+		isFromDelegateCall bool
+	}
+	tests := []struct {
+		name             string
+		fields           fields
+		args             args
+		wantRet          []byte
+		wantRemainingGas uint64
+		wantErr          bool
+		wantErrMsg       string
+	}{
+		{
+			name:   "fails if value is being sent",
+			fields: fields{},
+			args: args{
+				validator: validatorAddress,
+				value:     big.NewInt(10),
+			},
+			wantRet:          nil,
+			wantRemainingGas: 0,
+			wantErr:          true,
+			wantErrMsg:       "sending funds to a non-payable function",
+		},
+		{
+			name:   "fails if delegator is not passed",
+			fields: fields{},
+			args: args{
+				validator:   validatorAddress,
+				suppliedGas: uint64(1000000),
+			},
+			wantRet:          nil,
+			wantRemainingGas: 0,
+			wantErr:          true,
+			wantErrMsg:       evmtypes.NewAssociationMissingErr("0x0000000000000000000000000000000000000000").Error(),
+		},
+		{
+			name:   "fails if delegator is not associated",
+			fields: fields{},
+			args: args{
+				caller:          notAssociatedCallerEvmAddress,
+				callingContract: notAssociatedCallerEvmAddress,
+				validator:       validatorAddress,
+				suppliedGas:     uint64(1000000),
+			},
+			wantRet:          nil,
+			wantRemainingGas: 0,
+			wantErr:          true,
+			wantErrMsg:       evmtypes.NewAssociationMissingErr(notAssociatedCallerEvmAddress.String()).Error(),
+		},
+		{
+			name:             "fails if no args passed",
+			fields:           fields{},
+			args:             args{},
+			wantRet:          nil,
+			wantRemainingGas: 0,
+			wantErr:          true,
+			wantErrMsg:       "{ReadFlat}",
+		},
+		{
+			name:   "fails if caller == callingContract, delegatecall",
+			fields: fields{},
+			args: args{
+				caller:             contractEvmAddress,
+				callingContract:    contractEvmAddress,
+				validator:          validatorAddress,
+				suppliedGas:        uint64(1000000),
+				isFromDelegateCall: true,
+			},
+			wantRet:          nil,
+			wantRemainingGas: 0,
+			wantErr:          true,
+			wantErrMsg:       "cannot delegatecall distr",
+		},
+		{
+			name:   "fails if caller != callingContract and callingContract not set, from a delegatecall",
+			fields: fields{},
+			args: args{
+				caller:             notAssociatedCallerEvmAddress,
+				callingContract:    contractEvmAddress,
+				validator:          validatorAddress,
+				suppliedGas:        uint64(1000000),
+				isFromDelegateCall: true,
+			},
+			wantRet:          nil,
+			wantRemainingGas: 0,
+			wantErr:          true,
+			wantErrMsg:       "cannot delegatecall distr",
+		},
+		{
+			name:   "fails if readOnly",
+			fields: fields{},
+			args: args{
+				caller:          notAssociatedCallerEvmAddress,
+				callingContract: notAssociatedCallerEvmAddress,
+				validator:       validatorAddress,
+				suppliedGas:     uint64(1000000),
+				readOnly:        true,
+			},
+			wantRet:          nil,
+			wantRemainingGas: 0,
+			wantErr:          true,
+			wantErrMsg:       "cannot call distr precompile from staticcall",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			testApp := testkeeper.EVMTestApp
+			ctx := testApp.NewContext(false, tmtypes.Header{}).WithBlockHeight(2)
+			k := &testApp.EvmKeeper
+			stateDb := state.NewDBImpl(ctx, k, true)
+			evm := vm.EVM{
+				StateDB: stateDb,
+			}
+			p, _ := distribution.NewPrecompile(&app.PrecompileKeepers{
+				DistributionKeeper: tt.fields.distrKeeper,
+				EVMKeeper:          k,
+			})
+			withdraw, err := p.ABI.MethodById(p.GetExecutor().(*distribution.PrecompileExecutor).WithdrawDelegationRewardsID)
+			require.Nil(t, err)
+			inputs, err := withdraw.Inputs.Pack(tt.args.validator)
+			require.Nil(t, err)
+			gotRet, gotRemainingGas, err := p.RunAndCalculateGas(&evm, tt.args.caller, tt.args.callingContract, append(p.GetExecutor().(*distribution.PrecompileExecutor).WithdrawDelegationRewardsID, inputs...), tt.args.suppliedGas, tt.args.value, nil, tt.args.readOnly, tt.args.isFromDelegateCall)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("RunAndCalculateGas() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if err != nil {
+				require.Equal(t, vm.ErrExecutionReverted, err)
+				require.Nil(t, gotRet)
+			} else if !reflect.DeepEqual(gotRet, tt.wantRet) {
+				t.Errorf("RunAndCalculateGas() gotRet = %v, want %v", gotRet, tt.wantRet)
+			}
+			if gotRemainingGas != tt.wantRemainingGas {
+				t.Errorf("RunAndCalculateGas() gotRemainingGas = %v, want %v", gotRemainingGas, tt.wantRemainingGas)
+			}
+		})
+	}
+}
+
+func TestPrecompile_RunAndCalculateGas_WithdrawMultipleDelegationRewards(t *testing.T) {
+	_, notAssociatedCallerEvmAddress := testkeeper.MockAddressPair()
+	_, contractEvmAddress := testkeeper.MockAddressPair()
+	validatorAddresses := []string{"paxvaloper1reedlc9w8p7jrpqfky4c5k90nea4p6dhj435eh"}
+
+	type fields struct {
+		Precompile                          pcommon.Precompile
+		distrKeeper                         utils.DistributionKeeper
+		SetWithdrawAddrID                   []byte
+		WithdrawDelegationRewardsID         []byte
+		WithdrawMultipleDelegationRewardsID []byte
+	}
+	type args struct {
+		caller             common.Address
+		callingContract    common.Address
+		validators         []string
+		suppliedGas        uint64
+		value              *big.Int
+		readOnly           bool
+		isFromDelegateCall bool
+	}
+	tests := []struct {
+		name             string
+		fields           fields
+		args             args
+		wantRet          []byte
+		wantRemainingGas uint64
+		wantErr          bool
+		wantErrMsg       string
+	}{
+		{
+			name:   "fails if value is being sent",
+			fields: fields{},
+			args: args{
+				validators: validatorAddresses,
+				value:      big.NewInt(10),
+			},
+			wantRet:          nil,
+			wantRemainingGas: 0,
+			wantErr:          true,
+			wantErrMsg:       "sending funds to a non-payable function",
+		},
+		{
+			name:   "fails if delegator is not passed",
+			fields: fields{},
+			args: args{
+				validators:  validatorAddresses,
+				suppliedGas: uint64(1000000),
+			},
+			wantRet:          nil,
+			wantRemainingGas: 0,
+			wantErr:          true,
+			wantErrMsg:       evmtypes.NewAssociationMissingErr("0x0000000000000000000000000000000000000000").Error(),
+		},
+		{
+			name:   "fails if delegator is not associated",
+			fields: fields{},
+			args: args{
+				caller:          notAssociatedCallerEvmAddress,
+				callingContract: notAssociatedCallerEvmAddress,
+				validators:      validatorAddresses,
+				suppliedGas:     uint64(1000000),
+			},
+			wantRet:          nil,
+			wantRemainingGas: 0,
+			wantErr:          true,
+			wantErrMsg:       evmtypes.NewAssociationMissingErr(notAssociatedCallerEvmAddress.String()).Error(),
+		},
+		{
+			name:             "fails if no args passed",
+			fields:           fields{},
+			args:             args{},
+			wantRet:          nil,
+			wantRemainingGas: 0,
+			wantErr:          true,
+			wantErrMsg:       "{ReadFlat}",
+		},
+		{
+			name:   "fails if caller != callingContract",
+			fields: fields{},
+			args: args{
+				caller:             notAssociatedCallerEvmAddress,
+				callingContract:    contractEvmAddress,
+				validators:         validatorAddresses,
+				suppliedGas:        uint64(1000000),
+				isFromDelegateCall: true,
+			},
+			wantRet:          nil,
+			wantRemainingGas: 0,
+			wantErr:          true,
+			wantErrMsg:       "cannot delegatecall distr",
+		},
+		{
+			name:   "fails if caller != callingContract and callingContract not set",
+			fields: fields{},
+			args: args{
+				caller:             notAssociatedCallerEvmAddress,
+				callingContract:    notAssociatedCallerEvmAddress,
+				validators:         []string{"validator1"},
+				suppliedGas:        uint64(1000000),
+				isFromDelegateCall: true,
+			},
+			wantRet:          nil,
+			wantRemainingGas: 0,
+			wantErr:          true,
+			wantErrMsg:       "cannot delegatecall distr",
+		},
+		{
+			name:   "fails if readOnly",
+			fields: fields{},
+			args: args{
+				caller:          notAssociatedCallerEvmAddress,
+				callingContract: notAssociatedCallerEvmAddress,
+				validators:      []string{"validator1"},
+				suppliedGas:     uint64(1000000),
+				readOnly:        true,
+			},
+			wantRet:          nil,
+			wantRemainingGas: 0,
+			wantErr:          true,
+			wantErrMsg:       "cannot call distr precompile from staticcall",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			testApp := testkeeper.EVMTestApp
+			ctx := testApp.NewContext(false, tmtypes.Header{}).WithBlockHeight(2)
+			k := &testApp.EvmKeeper
+			stateDb := state.NewDBImpl(ctx, k, true)
+			evm := vm.EVM{
+				StateDB: stateDb,
+			}
+			p, _ := distribution.NewPrecompile(&app.PrecompileKeepers{
+				DistributionKeeper: tt.fields.distrKeeper,
+				EVMKeeper:          k,
+			})
+			withdraw, err := p.ABI.MethodById(p.GetExecutor().(*distribution.PrecompileExecutor).WithdrawMultipleDelegationRewardsID)
+			require.Nil(t, err)
+			inputs, err := withdraw.Inputs.Pack(tt.args.validators)
+			require.Nil(t, err)
+			gotRet, gotRemainingGas, err := p.RunAndCalculateGas(&evm, tt.args.caller, tt.args.callingContract, append(p.GetExecutor().(*distribution.PrecompileExecutor).WithdrawMultipleDelegationRewardsID, inputs...), tt.args.suppliedGas, tt.args.value, nil, tt.args.readOnly, tt.args.isFromDelegateCall)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("RunAndCalculateGas() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if err != nil {
+				require.Equal(t, vm.ErrExecutionReverted, err)
+				require.Nil(t, gotRet)
+			} else if !reflect.DeepEqual(gotRet, tt.wantRet) {
+				t.Errorf("RunAndCalculateGas() gotRet = %v, want %v", gotRet, tt.wantRet)
+			}
+			if gotRemainingGas != tt.wantRemainingGas {
+				t.Errorf("RunAndCalculateGas() gotRemainingGas = %v, want %v", gotRemainingGas, tt.wantRemainingGas)
+			}
+		})
+	}
+}
+
+func TestPrecompile_RunAndCalculateGas_SetWithdrawAddress(t *testing.T) {
+	_, notAssociatedCallerEvmAddress := testkeeper.MockAddressPair()
+	callerPaxAddress, callerEvmAddress := testkeeper.MockAddressPair()
+	_, contractEvmAddress := testkeeper.MockAddressPair()
+
+	type fields struct {
+		Precompile                          pcommon.Precompile
+		distrKeeper                         utils.DistributionKeeper
+		SetWithdrawAddrID                   []byte
+		WithdrawDelegationRewardsID         []byte
+		WithdrawMultipleDelegationRewardsID []byte
+	}
+	type args struct {
+		addressToSet       common.Address
+		caller             common.Address
+		callingContract    common.Address
+		suppliedGas        uint64
+		value              *big.Int
+		readOnly           bool
+		isFromDelegateCall bool
+	}
+	tests := []struct {
+		name             string
+		fields           fields
+		args             args
+		wantRet          []byte
+		wantRemainingGas uint64
+		wantErr          bool
+		wantErrMsg       string
+	}{
+		{
+			name:   "fails if value is being sent",
+			fields: fields{},
+			args: args{
+				addressToSet: notAssociatedCallerEvmAddress,
+				value:        big.NewInt(10),
+			},
+			wantRet:          nil,
+			wantRemainingGas: 0,
+			wantErr:          true,
+			wantErrMsg:       "sending funds to a non-payable function",
+		},
+		{
+			name:   "fails if delegator is not passed",
+			fields: fields{},
+			args: args{
+				addressToSet: notAssociatedCallerEvmAddress,
+				suppliedGas:  uint64(1000000),
+			},
+			wantRet:          nil,
+			wantRemainingGas: 0,
+			wantErr:          true,
+			wantErrMsg:       evmtypes.NewAssociationMissingErr("0x0000000000000000000000000000000000000000").Error(),
+		},
+		{
+			name:   "fails if delegator is not associated",
+			fields: fields{},
+			args: args{
+				addressToSet:    notAssociatedCallerEvmAddress,
+				caller:          notAssociatedCallerEvmAddress,
+				callingContract: notAssociatedCallerEvmAddress,
+				suppliedGas:     uint64(1000000),
+			},
+			wantRet:          nil,
+			wantRemainingGas: 0,
+			wantErr:          true,
+			wantErrMsg:       evmtypes.NewAssociationMissingErr(notAssociatedCallerEvmAddress.String()).Error(),
+		},
+		{
+			name:   "fails if address is invalid",
+			fields: fields{},
+			args: args{
+				addressToSet:    common.Address{},
+				caller:          callerEvmAddress,
+				callingContract: callerEvmAddress,
+				suppliedGas:     uint64(1000000),
+			},
+			wantRet:          nil,
+			wantRemainingGas: 0,
+			wantErr:          true,
+			wantErrMsg:       "invalid addr",
+		},
+		{
+			name:             "fails if no args passed",
+			fields:           fields{},
+			args:             args{},
+			wantRet:          nil,
+			wantRemainingGas: 0,
+			wantErr:          true,
+			wantErrMsg:       "{ReadFlat}",
+		},
+		{
+			name:   "fails if caller != callingContract",
+			fields: fields{},
+			args: args{
+				addressToSet:       common.Address{},
+				caller:             callerEvmAddress,
+				callingContract:    contractEvmAddress,
+				suppliedGas:        uint64(1000000),
+				isFromDelegateCall: true,
+			},
+			wantRet:          nil,
+			wantRemainingGas: 0,
+			wantErr:          true,
+			wantErrMsg:       "cannot delegatecall distr",
+		},
+		{
+			name:   "fails if caller != callingContract with callingContract not set",
+			fields: fields{},
+			args: args{
+				addressToSet:       common.Address{},
+				caller:             callerEvmAddress,
+				suppliedGas:        uint64(1000000),
+				isFromDelegateCall: true,
+			},
+			wantRet:          nil,
+			wantRemainingGas: 0,
+			wantErr:          true,
+			wantErrMsg:       "cannot delegatecall distr",
+		},
+		{
+			name:   "fails if readOnly",
+			fields: fields{},
+			args: args{
+				addressToSet:    common.Address{},
+				caller:          callerEvmAddress,
+				callingContract: callerEvmAddress,
+				suppliedGas:     uint64(1000000),
+				readOnly:        true,
+			},
+			wantRet:          nil,
+			wantRemainingGas: 0,
+			wantErr:          true,
+			wantErrMsg:       "cannot call distr precompile from staticcall",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			testApp := testkeeper.EVMTestApp
+			ctx := testApp.NewContext(false, tmtypes.Header{}).WithBlockHeight(2)
+			k := &testApp.EvmKeeper
+			k.SetAddressMapping(ctx, callerPaxAddress, callerEvmAddress)
+			stateDb := state.NewDBImpl(ctx, k, true)
+			evm := vm.EVM{
+				StateDB:   stateDb,
+				TxContext: vm.TxContext{Origin: callerEvmAddress},
+			}
+			p, _ := distribution.NewPrecompile(&app.PrecompileKeepers{
+				DistributionKeeper: tt.fields.distrKeeper,
+				EVMKeeper:          k,
+			})
+			setAddress, err := p.ABI.MethodById(p.GetExecutor().(*distribution.PrecompileExecutor).SetWithdrawAddrID)
+			require.Nil(t, err)
+			inputs, err := setAddress.Inputs.Pack(tt.args.addressToSet)
+			require.Nil(t, err)
+			gotRet, gotRemainingGas, err := p.RunAndCalculateGas(&evm, tt.args.caller, tt.args.callingContract, append(p.GetExecutor().(*distribution.PrecompileExecutor).SetWithdrawAddrID, inputs...), tt.args.suppliedGas, tt.args.value, nil, tt.args.readOnly, tt.args.isFromDelegateCall)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("RunAndCalculateGas() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if err != nil {
+				require.Equal(t, vm.ErrExecutionReverted, err)
+				require.Nil(t, gotRet)
+			} else if !reflect.DeepEqual(gotRet, tt.wantRet) {
+				t.Errorf("RunAndCalculateGas() gotRet = %v, want %v", gotRet, tt.wantRet)
+			}
+			if gotRemainingGas != tt.wantRemainingGas {
+				t.Errorf("RunAndCalculateGas() gotRemainingGas = %v, want %v", gotRemainingGas, tt.wantRemainingGas)
+			}
+		})
+	}
+}
+
+type TestDistributionKeeper struct {
+	paxValAddr sdk.AccAddress
+	t          *testing.T
+}
+
+func (tk *TestDistributionKeeper) SetWithdrawAddr(ctx sdk.Context, delegatorAddr sdk.AccAddress, withdrawAddr sdk.AccAddress) error {
+	return nil
+}
+
+func (tk *TestDistributionKeeper) WithdrawDelegationRewards(ctx sdk.Context, delAddr sdk.AccAddress, valAddr sdk.ValAddress) (sdk.Coins, error) {
+	return sdk.NewCoins(sdk.NewCoin("uhpx", sdk.NewInt(1000000))), nil
+}
+
+func (tk *TestDistributionKeeper) WithdrawValidatorCommission(ctx sdk.Context, valAddr sdk.ValAddress) (sdk.Coins, error) {
+	if tk.paxValAddr != nil && tk.t != nil {
+		require.Equal(tk.t, sdk.ValAddress(tk.paxValAddr), valAddr)
+	}
+
+	return sdk.NewCoins(sdk.NewCoin("uhpx", sdk.NewInt(50000))), nil
+}
+
+func (tk *TestDistributionKeeper) GetDelegatorWithdrawAddr(ctx sdk.Context, delAddr sdk.AccAddress) sdk.AccAddress {
+	return delAddr
+}
+
+func (tk *TestDistributionKeeper) DelegationTotalRewards(ctx context.Context, req *distrtypes.QueryDelegationTotalRewardsRequest) (*distrtypes.QueryDelegationTotalRewardsResponse, error) {
+	uatomCoins := 1
+	val1uhpxCoins := 5
+	val2uhpxCoins := 7
+	rewards := []distrtypes.DelegationDelegatorReward{
+		{
+			ValidatorAddress: "paxvaloper1wuj3xg3yrw4ryxn9vygwuz0necs4klj7kyxf4q",
+			Reward: sdk.NewDecCoins(
+				sdk.NewDecCoin("uatom", sdk.NewInt(int64(uatomCoins))),
+				sdk.NewDecCoin("uhpx", sdk.NewInt(int64(val1uhpxCoins))),
+			),
+		},
+		{
+			ValidatorAddress: "paxvaloper16znh8ktn33dwnxxc9q0jmxmjf6hsz4tlt30chd",
+			Reward:           sdk.NewDecCoins(sdk.NewDecCoin("uhpx", sdk.NewInt(int64(val2uhpxCoins)))),
+		},
+	}
+
+	allDecCoins := sdk.NewDecCoins(sdk.NewDecCoin("uatom", sdk.NewInt(int64(uatomCoins))),
+		sdk.NewDecCoin("uhpx", sdk.NewInt(int64(val1uhpxCoins+val2uhpxCoins))))
+
+	return &distrtypes.QueryDelegationTotalRewardsResponse{Rewards: rewards, Total: allDecCoins}, nil
+}
+
+type TestEmptyRewardsDistributionKeeper struct{}
+
+func (tk *TestEmptyRewardsDistributionKeeper) SetWithdrawAddr(ctx sdk.Context, delegatorAddr sdk.AccAddress, withdrawAddr sdk.AccAddress) error {
+	return nil
+}
+
+func (tk *TestEmptyRewardsDistributionKeeper) WithdrawDelegationRewards(ctx sdk.Context, delAddr sdk.AccAddress, valAddr sdk.ValAddress) (sdk.Coins, error) {
+	return sdk.NewCoins(), nil
+}
+
+func (tk *TestEmptyRewardsDistributionKeeper) WithdrawValidatorCommission(ctx sdk.Context, valAddr sdk.ValAddress) (sdk.Coins, error) {
+	return sdk.NewCoins(), nil
+}
+
+func (tk *TestEmptyRewardsDistributionKeeper) DelegationTotalRewards(ctx context.Context, req *distrtypes.QueryDelegationTotalRewardsRequest) (*distrtypes.QueryDelegationTotalRewardsResponse, error) {
+	response := &distrtypes.QueryDelegationTotalRewardsResponse{
+		Rewards: []distrtypes.DelegationDelegatorReward{},
+		Total:   []sdk.DecCoin{},
+	}
+	return response, nil
+}
+
+func (tk *TestEmptyRewardsDistributionKeeper) GetDelegatorWithdrawAddr(ctx sdk.Context, delAddr sdk.AccAddress) sdk.AccAddress {
+	return delAddr
+}
+
+func TestPrecompile_RunAndCalculateGas_Rewards(t *testing.T) {
+	callerPaxAddress, callerEvmAddress := testkeeper.MockAddressPair()
+	_, notAssociatedCallerEvmAddress := testkeeper.MockAddressPair()
+	_, contractEvmAddress := testkeeper.MockAddressPair()
+	pre, _ := distribution.NewPrecompile(&utils.EmptyKeepers{})
+	rewardsMethod, _ := pre.ABI.MethodById(pre.GetExecutor().(*distribution.PrecompileExecutor).RewardsID)
+	coin1 := distribution.Coin{
+		Amount:   big.NewInt(1_000_000_000_000_000_000),
+		Denom:    "uatom",
+		Decimals: big.NewInt(18),
+	}
+	coin2 := distribution.Coin{
+		Amount:   big.NewInt(5_000_000_000_000_000_000),
+		Denom:    "uhpx",
+		Decimals: big.NewInt(18),
+	}
+
+	coin3 := distribution.Coin{
+		Amount:   big.NewInt(7_000_000_000_000_000_000),
+		Denom:    "uhpx",
+		Decimals: big.NewInt(18),
+	}
+	coinsVal1 := []distribution.Coin{coin1, coin2}
+	coinsVal2 := []distribution.Coin{coin3}
+	rewardVal1 := distribution.Reward{
+		ValidatorAddress: "paxvaloper1wuj3xg3yrw4ryxn9vygwuz0necs4klj7kyxf4q",
+		Coins:            coinsVal1,
+	}
+	rewardVal2 := distribution.Reward{
+		ValidatorAddress: "paxvaloper16znh8ktn33dwnxxc9q0jmxmjf6hsz4tlt30chd",
+		Coins:            coinsVal2,
+	}
+	rewards := []distribution.Reward{rewardVal1, rewardVal2}
+	coin2Amount, _ := new(big.Int).SetString("12000000000000000000", 10)
+	totalCoins := []distribution.Coin{
+		{
+			Amount:   big.NewInt(1_000_000_000_000_000_000),
+			Denom:    "uatom",
+			Decimals: big.NewInt(18),
+		},
+		{
+			Amount:   coin2Amount,
+			Denom:    "uhpx",
+			Decimals: big.NewInt(18),
+		},
+	}
+	rewardsOutput := distribution.Rewards{
+		Rewards: rewards,
+		Total:   totalCoins,
+	}
+
+	happyPathPackedOutput, _ := rewardsMethod.Outputs.Pack(rewardsOutput)
+	emptyCasePackedOutput, _ := rewardsMethod.Outputs.Pack(distribution.Rewards{
+		Rewards: []distribution.Reward{},
+		Total:   []distribution.Coin{},
+	})
+	type fields struct {
+		Precompile                          pcommon.Precompile
+		distrKeeper                         utils.DistributionKeeper
+		SetWithdrawAddrID                   []byte
+		WithdrawDelegationRewardsID         []byte
+		WithdrawMultipleDelegationRewardsID []byte
+	}
+	type args struct {
+		delegatorAddress   common.Address
+		caller             common.Address
+		callingContract    common.Address
+		suppliedGas        uint64
+		value              *big.Int
+		readOnly           bool
+		isFromDelegateCall bool
+	}
+	tests := []struct {
+		name             string
+		fields           fields
+		args             args
+		wantRet          []byte
+		wantRemainingGas uint64
+		wantErr          bool
+		wantErrMsg       string
+	}{
+		{
+			name: "fails if delegator is not passed",
+			fields: fields{
+				distrKeeper: &TestDistributionKeeper{},
+			},
+			args: args{
+				caller:          callerEvmAddress,
+				callingContract: callerEvmAddress,
+				suppliedGas:     uint64(1000000),
+			},
+			wantRet:          nil,
+			wantRemainingGas: 0,
+			wantErr:          true,
+			wantErrMsg:       "invalid addr",
+		},
+		{
+			name: "fails if delegator not associated",
+			fields: fields{
+				distrKeeper: &TestDistributionKeeper{},
+			},
+			args: args{
+				delegatorAddress: notAssociatedCallerEvmAddress,
+				caller:           notAssociatedCallerEvmAddress,
+				callingContract:  notAssociatedCallerEvmAddress,
+				suppliedGas:      uint64(1000000),
+			},
+			wantRemainingGas: 0,
+			wantErr:          true,
+			wantErrMsg:       "cannot use an unassociated address as withdraw address",
+		},
+		{
+			name: "fails if delegator address is invalid",
+			fields: fields{
+				distrKeeper: &TestDistributionKeeper{},
+			},
+			args: args{
+				delegatorAddress: common.Address{},
+				caller:           callerEvmAddress,
+				callingContract:  callerEvmAddress,
+				suppliedGas:      uint64(1000000),
+			},
+			wantRemainingGas: 0,
+			wantErr:          true,
+			wantErrMsg:       "invalid addr",
+		},
+		{
+			name: "fails if caller != callingContract",
+			fields: fields{
+				distrKeeper: &TestDistributionKeeper{},
+			},
+			args: args{
+				delegatorAddress:   common.Address{},
+				caller:             callerEvmAddress,
+				callingContract:    contractEvmAddress,
+				suppliedGas:        uint64(1000000),
+				isFromDelegateCall: true,
+			},
+			wantRemainingGas: 0,
+			wantErr:          true,
+			wantErrMsg:       "cannot delegatecall distr",
+		},
+		{
+			name: "fails if caller != callingContract with callingContract not set",
+			fields: fields{
+				distrKeeper: &TestDistributionKeeper{},
+			},
+			args: args{
+				delegatorAddress:   common.Address{},
+				caller:             callerEvmAddress,
+				suppliedGas:        uint64(1000000),
+				isFromDelegateCall: true,
+			},
+			wantRemainingGas: 0,
+			wantErr:          true,
+			wantErrMsg:       "cannot delegatecall distr",
+		},
+		{
+			name: "should return empty delegator rewards if no rewards",
+			fields: fields{
+				distrKeeper: &TestEmptyRewardsDistributionKeeper{},
+			},
+			args: args{
+				delegatorAddress: callerEvmAddress,
+				readOnly:         true,
+				caller:           callerEvmAddress,
+				callingContract:  callerEvmAddress,
+				suppliedGas:      uint64(1000000),
+			},
+			wantRet:          emptyCasePackedOutput,
+			wantRemainingGas: 998877,
+			wantErr:          false,
+		},
+		{
+			name: "should return delegator rewards",
+			fields: fields{
+				distrKeeper: &TestDistributionKeeper{},
+			},
+			args: args{
+				delegatorAddress: callerEvmAddress,
+				readOnly:         true,
+				caller:           callerEvmAddress,
+				callingContract:  callerEvmAddress,
+				suppliedGas:      uint64(1000000),
+			},
+			wantRet:          happyPathPackedOutput,
+			wantRemainingGas: 998877,
+			wantErr:          false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			testApp := testkeeper.EVMTestApp
+			ctx := testApp.NewContext(false, tmtypes.Header{}).WithBlockHeight(2)
+			k := &testApp.EvmKeeper
+			k.SetAddressMapping(ctx, callerPaxAddress, callerEvmAddress)
+			stateDb := state.NewDBImpl(ctx, k, true)
+			evm := vm.EVM{
+				StateDB:   stateDb,
+				TxContext: vm.TxContext{Origin: callerEvmAddress},
+			}
+			p, _ := distribution.NewPrecompile(&app.PrecompileKeepers{
+				DistributionKeeper: tt.fields.distrKeeper,
+				EVMKeeper:          k,
+			})
+			rewards, err := p.ABI.MethodById(p.GetExecutor().(*distribution.PrecompileExecutor).RewardsID)
+			require.Nil(t, err)
+			inputs, err := rewards.Inputs.Pack(tt.args.delegatorAddress)
+			require.Nil(t, err)
+			gotRet, gotRemainingGas, err := p.RunAndCalculateGas(&evm, tt.args.caller, tt.args.callingContract, append(p.GetExecutor().(*distribution.PrecompileExecutor).RewardsID, inputs...), tt.args.suppliedGas, tt.args.value, nil, tt.args.readOnly, tt.args.isFromDelegateCall)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("RunAndCalculateGas() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if err != nil {
+				require.Equal(t, vm.ErrExecutionReverted, err)
+				require.Nil(t, gotRet)
+			} else if !reflect.DeepEqual(gotRet, tt.wantRet) {
+				t.Errorf("RunAndCalculateGas() gotRet = %v, want %v", gotRet, tt.wantRet)
+			}
+			if gotRemainingGas != tt.wantRemainingGas {
+				t.Errorf("RunAndCalculateGas() gotRemainingGas = %v, want %v", gotRemainingGas, tt.wantRemainingGas)
+			}
+		})
+	}
+}
+
+func TestWithdrawValidatorCommission_noCommissionToWithdrawRightAfterDelegation(t *testing.T) {
+	testApp := testkeeper.EVMTestApp
+	ctx := testApp.NewContext(false, tmtypes.Header{}).WithBlockHeight(2)
+	distrParams := testApp.DistrKeeper.GetParams(ctx)
+	distrParams.WithdrawAddrEnabled = true
+	testApp.DistrKeeper.SetParams(ctx, distrParams)
+	k := &testApp.EvmKeeper
+
+	// Setup a validator
+	valPub1 := secp256k1.GenPrivKey().PubKey()
+	val := setupValidator(t, ctx, testApp, stakingtypes.Bonded, valPub1)
+
+	// Create some commission for the validator by delegating and advancing blocks
+	privKey := testkeeper.MockPrivateKey()
+	paxAddr, evmAddr := testkeeper.PrivateKeyToAddresses(privKey)
+	k.SetAddressMapping(ctx, paxAddr, evmAddr)
+
+	// Fund the account
+	amt := sdk.NewCoins(sdk.NewCoin(k.GetBaseDenom(ctx), sdk.NewInt(200000000)))
+	require.Nil(t, k.BankKeeper().MintCoins(ctx, evmtypes.ModuleName, amt))
+	require.Nil(t, k.BankKeeper().SendCoinsFromModuleToAccount(ctx, evmtypes.ModuleName, paxAddr, amt))
+
+	// Delegate to create some rewards
+	abi := pcommon.MustGetABI(f, "staking_abi.json")
+	args, err := abi.Pack("delegate", val.String())
+	require.Nil(t, err)
+
+	testPrivHex := hex.EncodeToString(privKey.Bytes())
+	key, _ := crypto.HexToECDSA(testPrivHex)
+	addr := common.HexToAddress(staking.StakingAddress)
+	chainID := k.ChainID(ctx)
+	chainCfg := evmtypes.DefaultChainConfig()
+	ethCfg := chainCfg.EthereumConfig(chainID)
+	blockNum := big.NewInt(ctx.BlockHeight())
+	signer := ethtypes.MakeSigner(ethCfg, blockNum, uint64(ctx.BlockTime().Unix()))
+
+	txData := ethtypes.LegacyTx{
+		GasPrice: big.NewInt(1000000000000),
+		Gas:      20000000,
+		To:       &addr,
+		Value:    big.NewInt(100_000_000_000_000),
+		Data:     args,
+		Nonce:    0,
+	}
+
+	tx, err := ethtypes.SignTx(ethtypes.NewTx(&txData), signer, key)
+	require.Nil(t, err)
+	txwrapper, err := ethtx.NewLegacyTx(tx)
+	require.Nil(t, err)
+	req, err := evmtypes.NewMsgEVMTransaction(txwrapper)
+	require.Nil(t, err)
+
+	msgServer := keeper.NewMsgServerImpl(k)
+	ante.Preprocess(ctx, req, k.ChainID(ctx), false)
+	res, err := msgServer.EVMTransaction(sdk.WrapSDKContext(ctx), req)
+	require.Nil(t, err)
+	require.Empty(t, res.VmError)
+
+	// Verify delegation was successful
+	d, found := testApp.StakingKeeper.GetDelegation(ctx, paxAddr, val)
+	require.True(t, found)
+	require.Equal(t, int64(100), d.Shares.RoundInt().Int64())
+
+	// Now test withdrawValidatorCommission
+	abi = pcommon.MustGetABI(f, "abi.json")
+	args, err = abi.Pack("withdrawValidatorCommission")
+	require.Nil(t, err)
+
+	addr = common.HexToAddress(distribution.DistrAddress)
+	txData = ethtypes.LegacyTx{
+		GasPrice: big.NewInt(1000000000000),
+		Gas:      20000000,
+		To:       &addr,
+		Value:    big.NewInt(0),
+		Data:     args,
+		Nonce:    1,
+	}
+
+	tx, err = ethtypes.SignTx(ethtypes.NewTx(&txData), signer, key)
+	require.Nil(t, err)
+	txwrapper, err = ethtx.NewLegacyTx(tx)
+	require.Nil(t, err)
+	req, err = evmtypes.NewMsgEVMTransaction(txwrapper)
+	require.Nil(t, err)
+
+	ante.Preprocess(ctx, req, k.ChainID(ctx), false)
+	res, err = msgServer.EVMTransaction(sdk.WrapSDKContext(ctx), req)
+	require.Nil(t, err)
+	require.Nil(t, res.ReturnData)
+
+}
+
+// TestWithdrawValidatorCommission_UnitTest tests the withdrawValidatorCommission function using a mock
+// distribution keeper. This is necessary because:
+//  1. The integration test above can only test the "no commission" scenario since validators in test
+//     environments don't actually generate commission rewards through normal staking operations
+//  2. To test the successful withdrawal path, we need to mock the DistributionKeeper to return
+//     fake commission data, allowing us to verify the precompile function works correctly when
+//     there is actual commission to withdraw
+//  3. This unit test validates the happy path and ensures proper response formatting/unpacking
+func TestWithdrawValidatorCommission_UnitTest(t *testing.T) {
+	testApp := testkeeper.EVMTestApp
+	ctx := testApp.NewContext(false, tmtypes.Header{}).WithBlockHeight(2)
+	k := &testApp.EvmKeeper
+
+	// Set up caller
+	privKey := testkeeper.MockPrivateKey()
+	paxAddr, evmAddr := testkeeper.PrivateKeyToAddresses(privKey)
+	k.SetAddressMapping(ctx, paxAddr, evmAddr)
+
+	// Set up the mock distribution keeper that always returns commission
+	mockDistrKeeper := &TestDistributionKeeper{t: t, paxValAddr: paxAddr}
+	// Create the precompile with mock keeper
+	p, err := distribution.NewPrecompile(&app.PrecompileKeepers{DistributionKeeper: mockDistrKeeper, EVMKeeper: k})
+	require.Nil(t, err)
+
+	// Get the withdrawValidatorCommission method
+	withdrawMethod, err := p.ABI.MethodById(p.GetExecutor().(*distribution.PrecompileExecutor).WithdrawValidatorCommissionID)
+	require.Nil(t, err)
+
+	// Create EVM state
+	stateDb := state.NewDBImpl(ctx, k, true)
+	evm := vm.EVM{
+		StateDB:   stateDb,
+		TxContext: vm.TxContext{Origin: evmAddr},
+	}
+
+	// Call the precompile
+	ret, remainingGas, err := p.RunAndCalculateGas(
+		&evm,
+		evmAddr, // caller
+		evmAddr, // callingContract
+		p.GetExecutor().(*distribution.PrecompileExecutor).WithdrawValidatorCommissionID, // input
+		1000000,       // suppliedGas
+		big.NewInt(0), // value
+		nil,           // hooks
+		false,         // readOnly
+		false,         // isFromDelegateCall
+	)
+
+	// Should succeed
+	require.Nil(t, err)
+	require.Greater(t, remainingGas, uint64(0))
+
+	// Unpack the result
+	results, err := withdrawMethod.Outputs.Unpack(ret)
+	require.Nil(t, err)
+	success := results[0].(bool)
+	require.True(t, success)
+}
+
+// TestWithdrawValidatorCommission_InputValidation tests various input validation scenarios
+func TestWithdrawValidatorCommission_InputValidation(t *testing.T) {
+	testApp := testkeeper.EVMTestApp
+	ctx := testApp.NewContext(false, tmtypes.Header{}).WithBlockHeight(2)
+	k := &testApp.EvmKeeper
+
+	// Set up caller
+	privKey := testkeeper.MockPrivateKey()
+	paxAddr, evmAddr := testkeeper.PrivateKeyToAddresses(privKey)
+	k.SetAddressMapping(ctx, paxAddr, evmAddr)
+
+	// Create the precompile with mock keeper
+	p, err := distribution.NewPrecompile(&app.PrecompileKeepers{DistributionKeeper: &TestDistributionKeeper{}, EVMKeeper: k})
+	require.Nil(t, err)
+
+	// Get the withdrawValidatorCommission method
+	withdrawMethod, err := p.ABI.MethodById(p.GetExecutor().(*distribution.PrecompileExecutor).WithdrawValidatorCommissionID)
+	require.Nil(t, err)
+
+	// Create EVM state
+	stateDb := state.NewDBImpl(ctx, k, true)
+	baseEvm := vm.EVM{
+		StateDB:   stateDb,
+		TxContext: vm.TxContext{Origin: evmAddr},
+	}
+
+	testCases := []struct {
+		name               string
+		validator          string
+		value              *big.Int
+		readOnly           bool
+		isFromDelegateCall bool
+		wantError          bool
+		wantErrMsg         string
+	}{
+		{
+			name:       "sending value to non-payable function should fail",
+			validator:  "paxvaloper1reedlc9w8p7jrpqfky4c5k90nea4p6dhj435eh",
+			value:      big.NewInt(1),
+			wantError:  true,
+			wantErrMsg: "sending funds to a non-payable function",
+		},
+		{
+			name:       "read-only mode should fail for state-changing function",
+			validator:  "paxvaloper1reedlc9w8p7jrpqfky4c5k90nea4p6dhj435eh",
+			readOnly:   true,
+			wantError:  true,
+			wantErrMsg: "cannot call distr precompile from staticcall",
+		},
+		{
+			name:               "delegatecall should fail for state-changing function",
+			validator:          "paxvaloper1reedlc9w8p7jrpqfky4c5k90nea4p6dhj435eh",
+			isFromDelegateCall: true,
+			wantError:          true,
+			wantErrMsg:         "cannot delegatecall distr",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Pack the arguments
+			require.Nil(t, err)
+
+			// Call the precompile
+			ret, remainingGas, err := p.RunAndCalculateGas(
+				&baseEvm,
+				evmAddr, // caller
+				evmAddr, // callingContract
+				p.GetExecutor().(*distribution.PrecompileExecutor).WithdrawValidatorCommissionID, // input
+				1000000,               // suppliedGas
+				tc.value,              // value
+				nil,                   // hooks
+				tc.readOnly,           // readOnly
+				tc.isFromDelegateCall, // isFromDelegateCall
+			)
+
+			if tc.wantError {
+				require.NotNil(t, err, "Expected error for test case: %s", tc.name)
+				require.Nil(t, ret)
+			} else {
+				require.Nil(t, err, "Expected no error for test case: %s", tc.name)
+				require.Greater(t, remainingGas, uint64(0), "Should have remaining gas")
+
+				// Unpack the result to ensure it's properly formatted
+				results, err := withdrawMethod.Outputs.Unpack(ret)
+				require.Nil(t, err)
+				success := results[0].(bool)
+				require.True(t, success)
+			}
+		})
+	}
+}

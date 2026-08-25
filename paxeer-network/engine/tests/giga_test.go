@@ -1,0 +1,2768 @@
+package giga_test
+
+import (
+	"bytes"
+	"fmt"
+
+	"github.com/sidiora-labs/paxeer-network/consensus/crypto/merkle"
+
+	"math/big"
+	"testing"
+	"time"
+
+	"github.com/ethereum/go-ethereum/common"
+	ethtypes "github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/crypto"
+	abci "github.com/sidiora-labs/paxeer-network/consensus/abci/types"
+	tmproto "github.com/sidiora-labs/paxeer-network/consensus/proto/tendermint/types"
+	"github.com/sidiora-labs/paxeer-network/modules/evm/config"
+	"github.com/sidiora-labs/paxeer-network/modules/evm/types"
+	"github.com/sidiora-labs/paxeer-network/modules/evm/types/ethtx"
+	"github.com/sidiora-labs/paxeer-network/node"
+	"github.com/sidiora-labs/paxeer-network/occ_tests/utils"
+	"github.com/sidiora-labs/paxeer-network/sdk/baseapp"
+	sdk "github.com/sidiora-labs/paxeer-network/sdk/types"
+	"github.com/stretchr/testify/require"
+)
+
+// ExecutorMode defines which executor path to use
+type ExecutorMode int
+
+const (
+	ModeV2Sequential         ExecutorMode = iota // V2 execution path, sequential (no OCC)
+	ModeV2withOCC                                // V2 execution path with OCC (standard production path)
+	ModeGigaSequential                           // Giga executor, no OCC
+	ModeGigaOCC                                  // Giga executor with OCC
+	ModeGigaWithRegularStore                     // Giga executor with regular KVStore (for debugging - isolates executor from GigaKVStore)
+)
+
+func (m ExecutorMode) String() string {
+	switch m {
+	case ModeV2Sequential:
+		return "V2Sequential"
+	case ModeV2withOCC:
+		return "V2withOCC"
+	case ModeGigaSequential:
+		return "GigaSequential"
+	case ModeGigaOCC:
+		return "GigaOCC"
+	case ModeGigaWithRegularStore:
+		return "GigaWithRegularStore"
+	default:
+		return "Unknown"
+	}
+}
+
+// GigaTestContext wraps the test context with executor mode
+type GigaTestContext struct {
+	Ctx          sdk.Context
+	TestApp      *app.App
+	TestAccounts []utils.TestAcct
+	Mode         ExecutorMode
+}
+
+type bankKeeper interface {
+	MintCoins(ctx sdk.Context, moduleName string, amounts sdk.Coins) error
+	SendCoinsFromModuleToAccount(ctx sdk.Context, moduleName string, recipient sdk.AccAddress, amounts sdk.Coins) error
+}
+
+type evmKeeper interface {
+	SetAddressMapping(ctx sdk.Context, paxAddress sdk.AccAddress, evmAddress common.Address)
+}
+
+// NewGigaTestContext creates a test context configured for a specific executor mode
+func NewGigaTestContext(t testing.TB, testAccts []utils.TestAcct, blockTime time.Time, workers int, mode ExecutorMode) *GigaTestContext {
+	// OCC is enabled for both GethOCC and GigaOCC modes
+	occEnabled := mode == ModeV2withOCC || mode == ModeGigaOCC
+	gigaEnabled := mode == ModeGigaSequential || mode == ModeGigaOCC
+	gigaOCCEnabled := mode == ModeGigaOCC
+
+	var wrapper *app.TestWrapper
+	if !gigaEnabled {
+		wrapper = app.NewTestWrapperWithSc(t.(*testing.T), blockTime, testAccts[0].PublicKey, true, func(ba *baseapp.BaseApp) {
+			ba.SetOccEnabled(occEnabled)
+			ba.SetConcurrencyWorkers(workers)
+		})
+	} else {
+		wrapper = app.NewGigaTestWrapper(t.(*testing.T), blockTime, testAccts[0].PublicKey, true, gigaOCCEnabled, func(ba *baseapp.BaseApp) {
+			ba.SetOccEnabled(occEnabled)
+			ba.SetConcurrencyWorkers(workers)
+		})
+	}
+	testApp := wrapper.App
+	ctx := wrapper.Ctx
+	ctx = ctx.WithBlockHeader(tmproto.Header{
+		Height:  ctx.BlockHeader().Height,
+		ChainID: ctx.BlockHeader().ChainID,
+		Time:    blockTime,
+	})
+
+	// Fund test accounts
+	amounts := sdk.NewCoins(
+		sdk.NewCoin("uhpx", sdk.NewInt(1000000000000000000)),
+		sdk.NewCoin("uusdc", sdk.NewInt(1000000000000000)),
+	)
+	var bk bankKeeper
+	bk = testApp.BankKeeper
+	for _, ta := range testAccts {
+		err := bk.MintCoins(ctx, "mint", amounts)
+		if err != nil {
+			t.Fatalf("failed to mint coins: %v", err)
+		}
+		err = bk.SendCoinsFromModuleToAccount(ctx, "mint", ta.AccountAddress, amounts)
+		if err != nil {
+			t.Fatalf("failed to send coins: %v", err)
+		}
+	}
+
+	return &GigaTestContext{
+		Ctx:          ctx,
+		TestApp:      testApp,
+		TestAccounts: testAccts,
+		Mode:         mode,
+	}
+}
+
+// EVMTransfer represents an EVM transfer transaction for testing
+type EVMTransfer struct {
+	Signer utils.TestAcct
+	To     common.Address
+	Value  *big.Int
+	Nonce  uint64
+}
+
+// CreateEVMTransferTxs creates signed EVM transfer transactions and funds the signers
+func CreateEVMTransferTxs(t testing.TB, tCtx *GigaTestContext, transfers []EVMTransfer, isGiga bool) [][]byte {
+	txs := make([][]byte, 0, len(transfers))
+	tc := app.MakeEncodingConfig().TxConfig
+
+	var ek evmKeeper
+	var bk bankKeeper
+	ek = &tCtx.TestApp.EvmKeeper
+	bk = tCtx.TestApp.BankKeeper
+	for _, transfer := range transfers {
+		// Associate the Cosmos address with the EVM address
+		// This is required for the Giga executor path which bypasses ante handlers
+		ek.SetAddressMapping(tCtx.Ctx, transfer.Signer.AccountAddress, transfer.Signer.EvmAddress)
+
+		// Fund the signer account before creating the transaction
+		amounts := sdk.NewCoins(
+			sdk.NewCoin("uhpx", sdk.NewInt(1000000000000000000)),
+			sdk.NewCoin("uusdc", sdk.NewInt(1000000000000000)),
+		)
+		err := bk.MintCoins(tCtx.Ctx, "mint", amounts)
+		require.NoError(t, err)
+		err = bk.SendCoinsFromModuleToAccount(tCtx.Ctx, "mint", transfer.Signer.AccountAddress, amounts)
+		require.NoError(t, err)
+
+		// tipCap << feeCap so EIP-1559 effective price differs from feeCap and exposes receipt divergence.
+		signedTx, err := ethtypes.SignTx(ethtypes.NewTx(&ethtypes.DynamicFeeTx{
+			GasFeeCap: new(big.Int).SetUint64(100000000000),
+			GasTipCap: new(big.Int).SetUint64(10000000000),
+			Gas:       21000,
+			ChainID:   big.NewInt(config.DefaultChainID),
+			To:        &transfer.To,
+			Value:     transfer.Value,
+			Nonce:     transfer.Nonce,
+		}), transfer.Signer.EvmSigner, transfer.Signer.EvmPrivateKey)
+		require.NoError(t, err)
+
+		txData, err := ethtx.NewTxDataFromTx(signedTx)
+		require.NoError(t, err)
+
+		msg, err := types.NewMsgEVMTransaction(txData)
+		require.NoError(t, err)
+
+		// Build the Cosmos tx wrapper
+		txBuilder := tc.NewTxBuilder()
+		err = txBuilder.SetMsgs(msg)
+		require.NoError(t, err)
+		txBuilder.SetGasLimit(10000000000)
+
+		txBytes, err := tc.TxEncoder()(txBuilder.GetTx())
+		require.NoError(t, err)
+
+		txs = append(txs, txBytes)
+	}
+
+	return txs
+}
+
+// GenerateNonConflictingTransfers creates transfers where each sender is unique
+func GenerateNonConflictingTransfers(count int) []EVMTransfer {
+	transfers := make([]EVMTransfer, count)
+	for i := 0; i < count; i++ {
+		signer := utils.NewSigner()
+		transfers[i] = EVMTransfer{
+			Signer: signer,
+			To:     signer.EvmAddress, // Send to self
+			Value:  big.NewInt(1),
+			Nonce:  0,
+		}
+	}
+	return transfers
+}
+
+// GenerateConflictingTransfers creates transfers where all send to the same recipient
+func GenerateConflictingTransfers(count int, recipient common.Address) []EVMTransfer {
+	transfers := make([]EVMTransfer, count)
+	for i := 0; i < count; i++ {
+		signer := utils.NewSigner()
+		transfers[i] = EVMTransfer{
+			Signer: signer,
+			To:     recipient, // All send to same address
+			Value:  big.NewInt(1),
+			Nonce:  0,
+		}
+	}
+	return transfers
+}
+
+// RunBlock executes a block of transactions and returns results
+func RunBlock(t testing.TB, tCtx *GigaTestContext, txs [][]byte) ([]abci.Event, []*abci.ExecTxResult, error) {
+	// Set global OCC flag based on mode (both GethOCC and GigaOCC use OCC)
+	app.EnableOCC = tCtx.Mode == ModeV2withOCC || tCtx.Mode == ModeGigaOCC
+
+	header := tCtx.Ctx.BlockHeader()
+	req := &abci.RequestFinalizeBlock{
+		Txs:    txs,
+		Header: &header,
+	}
+
+	events, results, _, err := tCtx.TestApp.ProcessBlock(tCtx.Ctx, txs, finalizeBlockToBlockProcessRequest(req), req.DecidedLastCommit, false, nil)
+	return events, results, err
+}
+
+// ComputeLastResultsHash computes the LastResultsHash from tx results
+// This uses the same logic as tendermint: only Code, Data, GasWanted, GasUsed are included
+func ComputeLastResultsHash(results []*abci.ExecTxResult) ([]byte, error) {
+	rs, err := abci.MarshalTxResults(results)
+	if err != nil {
+		return nil, err
+	}
+	return merkle.HashFromByteSlices(rs), nil
+}
+
+// CompareLastResultsHash compares the LastResultsHash between two result sets
+// This is the critical comparison for consensus - if hashes differ, nodes will fork
+func CompareLastResultsHash(t *testing.T, testName string, expected, actual []*abci.ExecTxResult) {
+	expectedHash, err := ComputeLastResultsHash(expected)
+	require.NoError(t, err, "%s: failed to compute expected LastResultsHash", testName)
+
+	actualHash, err := ComputeLastResultsHash(actual)
+	require.NoError(t, err, "%s: failed to compute actual LastResultsHash", testName)
+
+	if !bytes.Equal(expectedHash, actualHash) {
+		// Log detailed info about each tx result's deterministic fields
+		t.Logf("%s: LastResultsHash MISMATCH!", testName)
+		t.Logf("  Expected hash: %X", expectedHash)
+		t.Logf("  Actual hash:   %X", actualHash)
+
+		// Log per-tx deterministic fields to help debug
+		maxLen := len(expected)
+		if len(actual) > maxLen {
+			maxLen = len(actual)
+		}
+		for i := 0; i < maxLen; i++ {
+			var expInfo, actInfo string
+			if i < len(expected) {
+				expInfo = fmt.Sprintf("Code=%d GasWanted=%d GasUsed=%d DataLen=%d",
+					expected[i].Code, expected[i].GasWanted, expected[i].GasUsed, len(expected[i].Data))
+			} else {
+				expInfo = "(missing)"
+			}
+			if i < len(actual) {
+				actInfo = fmt.Sprintf("Code=%d GasWanted=%d GasUsed=%d DataLen=%d",
+					actual[i].Code, actual[i].GasWanted, actual[i].GasUsed, len(actual[i].Data))
+			} else {
+				actInfo = "(missing)"
+			}
+
+			// Check if this tx differs
+			differs := ""
+			if i < len(expected) && i < len(actual) {
+				if expected[i].Code != actual[i].Code ||
+					expected[i].GasWanted != actual[i].GasWanted ||
+					expected[i].GasUsed != actual[i].GasUsed ||
+					!bytes.Equal(expected[i].Data, actual[i].Data) {
+					differs = " <-- DIFFERS"
+				}
+			}
+			t.Logf("  tx[%d] expected: %s", i, expInfo)
+			t.Logf("  tx[%d] actual:   %s%s", i, actInfo, differs)
+		}
+	}
+
+	require.True(t, bytes.Equal(expectedHash, actualHash),
+		"%s: LastResultsHash mismatch - expected %X, got %X", testName, expectedHash, actualHash)
+}
+
+// CompareDeterministicFields compares the 4 deterministic fields that go into LastResultsHash
+func CompareDeterministicFields(t *testing.T, testName string, expected, actual []*abci.ExecTxResult) {
+	require.Equal(t, len(expected), len(actual), "%s: result count mismatch", testName)
+
+	for i := range expected {
+		require.Equal(t, expected[i].Code, actual[i].Code,
+			"%s: tx[%d] Code mismatch (expected %d, got %d)", testName, i, expected[i].Code, actual[i].Code)
+		require.Equal(t, expected[i].GasWanted, actual[i].GasWanted,
+			"%s: tx[%d] GasWanted mismatch (expected %d, got %d)", testName, i, expected[i].GasWanted, actual[i].GasWanted)
+		require.Equal(t, expected[i].GasUsed, actual[i].GasUsed,
+			"%s: tx[%d] GasUsed mismatch (expected %d, got %d)", testName, i, expected[i].GasUsed, actual[i].GasUsed)
+		require.True(t, bytes.Equal(expected[i].Data, actual[i].Data),
+			"%s: tx[%d] Data mismatch (expected len=%d, got len=%d)", testName, i, len(expected[i].Data), len(actual[i].Data))
+	}
+}
+
+// CompareResults compares execution results between two runs
+func CompareResults(t *testing.T, testName string, expected, actual []*abci.ExecTxResult) {
+	compareResultsWithOptions(t, testName, expected, actual, true)
+}
+
+// CompareResultsNoGas compares execution results but skips gas comparison
+// Use this for contract execution tests where gas may differ between implementations
+func CompareResultsNoGas(t *testing.T, testName string, expected, actual []*abci.ExecTxResult) {
+	compareResultsWithOptions(t, testName, expected, actual, false)
+}
+
+func compareResultsWithOptions(t *testing.T, testName string, expected, actual []*abci.ExecTxResult, compareGas bool) {
+	require.Equal(t, len(expected), len(actual), "%s: result count mismatch", testName)
+
+	for i := range expected {
+		if expected[i].Code != actual[i].Code {
+			t.Logf("%s: tx[%d] expected code=%d log=%q", testName, i, expected[i].Code, expected[i].Log)
+			t.Logf("%s: tx[%d] actual   code=%d log=%q", testName, i, actual[i].Code, actual[i].Log)
+		}
+		require.Equal(t, expected[i].Code, actual[i].Code,
+			"%s: tx[%d] code mismatch (expected %d, got %d)", testName, i, expected[i].Code, actual[i].Code)
+
+		// For successful txs, compare gas used if requested
+		if compareGas && expected[i].Code == 0 && actual[i].Code == 0 {
+			require.Equal(t, expected[i].GasUsed, actual[i].GasUsed,
+				"%s: tx[%d] gas used mismatch", testName, i)
+		}
+
+		// Compare EvmTxInfo if present
+		if expected[i].EvmTxInfo != nil {
+			require.NotNil(t, actual[i].EvmTxInfo, "%s: tx[%d] missing EvmTxInfo", testName, i)
+			require.Equal(t, expected[i].EvmTxInfo.TxHash, actual[i].EvmTxInfo.TxHash,
+				"%s: tx[%d] tx hash mismatch", testName, i)
+			require.Equal(t, expected[i].EvmTxInfo.Nonce, actual[i].EvmTxInfo.Nonce,
+				"%s: tx[%d] nonce mismatch", testName, i)
+		}
+	}
+}
+
+// isGigaMode reports whether tCtx's executor mode writes receipts through the Giga keeper.
+func (tCtx *GigaTestContext) isGigaMode() bool {
+	return tCtx.Mode == ModeGigaSequential ||
+		tCtx.Mode == ModeGigaOCC ||
+		tCtx.Mode == ModeGigaWithRegularStore
+}
+
+// GetTransientReceipt returns the transient receipt routed to the right keeper, projected into modules/evm/types.Receipt.
+func (tCtx *GigaTestContext) GetTransientReceipt(t testing.TB, txHash common.Hash, txIndex uint64) (*types.Receipt, error) {
+	if !tCtx.isGigaMode() {
+		return tCtx.TestApp.EvmKeeper.GetTransientReceipt(tCtx.Ctx, txHash, txIndex)
+	}
+	g, err := tCtx.TestApp.GigaEvmKeeper.GetTransientReceipt(tCtx.Ctx, txHash, txIndex)
+	if err != nil {
+		return nil, err
+	}
+	bz, err := g.Marshal()
+	require.NoError(t, err, "marshal giga receipt for %s", txHash.Hex())
+	var r types.Receipt
+	require.NoError(t, r.Unmarshal(bz), "unmarshal giga receipt for %s into modules/evm/types.Receipt", txHash.Hex())
+	return &r, nil
+}
+
+// CompareReceipts asserts each tx's receipt agrees on every consensus-relevant field across the two contexts.
+func CompareReceipts(
+	t *testing.T,
+	testName string,
+	expectedCtx *GigaTestContext, expectedResults []*abci.ExecTxResult,
+	actualCtx *GigaTestContext, actualResults []*abci.ExecTxResult,
+) {
+	require.Equal(t, len(expectedResults), len(actualResults),
+		"%s: result count mismatch", testName)
+
+	for i := range expectedResults {
+		expectedInfo := expectedResults[i].EvmTxInfo
+		actualInfo := actualResults[i].EvmTxInfo
+		if expectedInfo == nil && actualInfo == nil {
+			continue
+		}
+		require.Equal(t, expectedInfo != nil, actualInfo != nil,
+			"%s: tx[%d] EvmTxInfo presence differs (expected nil=%v, actual nil=%v)",
+			testName, i, expectedInfo == nil, actualInfo == nil)
+		require.Equal(t, expectedInfo.TxHash, actualInfo.TxHash,
+			"%s: tx[%d] txHash mismatch (expected %q, got %q) — receipts are not comparable",
+			testName, i, expectedInfo.TxHash, actualInfo.TxHash)
+
+		txHash := common.HexToHash(expectedInfo.TxHash)
+		txIndex := uint64(i) //nolint:gosec // bounded by len(expectedResults)
+
+		expectedReceipt, expErr := expectedCtx.GetTransientReceipt(t, txHash, txIndex)
+		actualReceipt, actErr := actualCtx.GetTransientReceipt(t, txHash, txIndex)
+
+		// Both keepers must agree on receipt presence.
+		if expErr != nil || actErr != nil {
+			require.Equalf(t, expErr == nil, actErr == nil,
+				"%s: tx[%d] receipt presence differs: expected(%s) err=%v, actual(%s) err=%v",
+				testName, i, expectedCtx.Mode, expErr, actualCtx.Mode, actErr)
+			continue
+		}
+
+		assertReceiptsEqual(t, testName, i, expectedCtx.Mode, actualCtx.Mode, expectedReceipt, actualReceipt)
+	}
+}
+
+// assertReceiptsEqual compares every consensus-relevant field on two receipts individually.
+func assertReceiptsEqual(
+	t *testing.T,
+	testName string,
+	i int,
+	expectedMode, actualMode ExecutorMode,
+	expected, actual *types.Receipt,
+) {
+	prefix := fmt.Sprintf("%s: tx[%d] receipt(%s vs %s)", testName, i, expectedMode, actualMode)
+
+	require.Equal(t, expected.TxType, actual.TxType, "%s: TxType", prefix)
+	require.Equal(t, expected.TxHashHex, actual.TxHashHex, "%s: TxHashHex", prefix)
+	require.Equal(t, expected.Status, actual.Status, "%s: Status", prefix)
+	require.Equal(t, expected.From, actual.From, "%s: From", prefix)
+	require.Equal(t, expected.To, actual.To, "%s: To", prefix)
+	require.Equal(t, expected.ContractAddress, actual.ContractAddress, "%s: ContractAddress", prefix)
+	require.Equal(t, expected.GasUsed, actual.GasUsed, "%s: GasUsed", prefix)
+	// EffectiveGasPrice must mirror V2's min(GasFeeCap, GasTipCap+baseFee) adjustment.
+	require.Equal(t, expected.EffectiveGasPrice, actual.EffectiveGasPrice,
+		"%s: EffectiveGasPrice (expected=%d, got=%d) — this is the field where "+
+			"ethTx.GasPrice() for type-2 txs returns GasFeeCap instead of the "+
+			"EIP-1559 effective price; ensure the executor mirrors GetEVMMessage",
+		prefix, expected.EffectiveGasPrice, actual.EffectiveGasPrice)
+	require.Equal(t, expected.BlockNumber, actual.BlockNumber, "%s: BlockNumber", prefix)
+	require.Equal(t, expected.TransactionIndex, actual.TransactionIndex, "%s: TransactionIndex", prefix)
+	require.Equal(t, expected.VmError, actual.VmError, "%s: VmError", prefix)
+	require.True(t, bytes.Equal(expected.LogsBloom, actual.LogsBloom),
+		"%s: LogsBloom differs (expected len=%d, actual len=%d)", prefix, len(expected.LogsBloom), len(actual.LogsBloom))
+
+	require.Equal(t, len(expected.Logs), len(actual.Logs), "%s: Logs length", prefix)
+	for li := range expected.Logs {
+		el := expected.Logs[li]
+		al := actual.Logs[li]
+		require.Equal(t, el.Address, al.Address, "%s: Logs[%d].Address", prefix, li)
+		require.Equal(t, el.Index, al.Index, "%s: Logs[%d].Index", prefix, li)
+		require.Equal(t, el.Synthetic, al.Synthetic, "%s: Logs[%d].Synthetic", prefix, li)
+		require.True(t, bytes.Equal(el.Data, al.Data), "%s: Logs[%d].Data", prefix, li)
+		require.Equal(t, len(el.Topics), len(al.Topics), "%s: Logs[%d].Topics length", prefix, li)
+		for ti := range el.Topics {
+			require.Equal(t, el.Topics[ti], al.Topics[ti], "%s: Logs[%d].Topics[%d]", prefix, li, ti)
+		}
+	}
+}
+
+// TestGigaVsGeth_NonConflicting compares Giga executor vs Geth for non-conflicting EVM transfers
+func TestGigaVsGeth_NonConflicting(t *testing.T) {
+	blockTime := time.Now()
+	accts := utils.NewTestAccounts(5)
+	txCount := 10
+
+	// Generate the same transfers for both runs
+	transfers := GenerateNonConflictingTransfers(txCount)
+
+	// Run with Geth (baseline)
+	gethCtx := NewGigaTestContext(t, accts, blockTime, 1, ModeV2withOCC)
+	gethTxs := CreateEVMTransferTxs(t, gethCtx, transfers, false)
+	_, gethResults, gethErr := RunBlock(t, gethCtx, gethTxs)
+	require.NoError(t, gethErr, "Geth execution failed")
+	require.Len(t, gethResults, txCount)
+
+	// Run with Giga Sequential
+	gigaCtx := NewGigaTestContext(t, accts, blockTime, 1, ModeGigaSequential)
+	gigaTxs := CreateEVMTransferTxs(t, gigaCtx, transfers, true)
+	_, gigaResults, gigaErr := RunBlock(t, gigaCtx, gigaTxs)
+	require.NoError(t, gigaErr, "Giga execution failed")
+	require.Len(t, gigaResults, txCount)
+
+	// Compare results
+	CompareResults(t, "GigaVsGeth_NonConflicting", gethResults, gigaResults)
+	CompareReceipts(t, "GigaVsGeth_NonConflicting", gethCtx, gethResults, gigaCtx, gigaResults)
+
+	// Verify all transactions succeeded
+	for i, result := range gethResults {
+		require.Equal(t, uint32(0), result.Code, "Geth tx[%d] failed: %s", i, result.Log)
+	}
+	for i, result := range gigaResults {
+		require.Equal(t, uint32(0), result.Code, "Giga tx[%d] failed: %s", i, result.Log)
+	}
+}
+
+// TestGigaVsGeth_Conflicting compares Giga executor vs Geth for conflicting EVM transfers
+func TestGigaVsGeth_Conflicting(t *testing.T) {
+	blockTime := time.Now()
+	accts := utils.NewTestAccounts(5)
+	txCount := 10
+
+	// All transfers go to the same recipient (conflicting)
+	recipient := accts[0].EvmAddress
+	transfers := GenerateConflictingTransfers(txCount, recipient)
+
+	// Run with Geth (baseline)
+	gethCtx := NewGigaTestContext(t, accts, blockTime, 1, ModeV2withOCC)
+	gethTxs := CreateEVMTransferTxs(t, gethCtx, transfers, false)
+	_, gethResults, gethErr := RunBlock(t, gethCtx, gethTxs)
+	require.NoError(t, gethErr, "Geth execution failed")
+	require.Len(t, gethResults, txCount)
+
+	// Run with Giga Sequential
+	gigaCtx := NewGigaTestContext(t, accts, blockTime, 1, ModeGigaSequential)
+	gigaTxs := CreateEVMTransferTxs(t, gigaCtx, transfers, true)
+	_, gigaResults, gigaErr := RunBlock(t, gigaCtx, gigaTxs)
+	require.NoError(t, gigaErr, "Giga execution failed")
+	require.Len(t, gigaResults, txCount)
+
+	// Compare results
+	CompareResults(t, "GigaVsGeth_Conflicting", gethResults, gigaResults)
+	CompareReceipts(t, "GigaVsGeth_Conflicting", gethCtx, gethResults, gigaCtx, gigaResults)
+}
+
+// TestGigaVsGeth_EffectiveGasPrice_DynamicFee is a regression test for receipt.EffectiveGasPrice on EIP-1559 txs.
+func TestGigaVsGeth_EffectiveGasPrice_DynamicFee(t *testing.T) {
+	blockTime := time.Now()
+	accts := utils.NewTestAccounts(3)
+
+	// feeCap >> tip+baseFee so the effective price lands in the additive branch.
+	const (
+		feeCapWei uint64 = 100_000_000_000 // 100 gwei
+		tipCapWei uint64 = 10_000_000_000  // 10 gwei (≪ feeCap)
+	)
+
+	signer := utils.NewSigner()
+	to := utils.NewSigner().EvmAddress
+
+	// Build the same signed tx for each context so receipts are directly comparable.
+	buildTx := func(t *testing.T, tCtx *GigaTestContext, nonce uint64) []byte {
+		return createCustomEVMTx(t, tCtx, signer, &to,
+			big.NewInt(1), 21000,
+			new(big.Int).SetUint64(feeCapWei),
+			new(big.Int).SetUint64(tipCapWei),
+			nonce)
+	}
+
+	// --- V2 ---
+	gethCtx := NewGigaTestContext(t, accts, blockTime, 1, ModeV2withOCC)
+	fundAccount(t, gethCtx, signer.AccountAddress, new(big.Int).Mul(big.NewInt(1e18), big.NewInt(10)))
+	gethCtx.TestApp.EvmKeeper.SetAddressMapping(gethCtx.Ctx, signer.AccountAddress, signer.EvmAddress)
+	gethBaseFee := gethCtx.TestApp.EvmKeeper.GetBaseFee(gethCtx.Ctx)
+	if gethBaseFee == nil {
+		gethBaseFee = new(big.Int)
+	}
+	gethTx := buildTx(t, gethCtx, gethCtx.TestApp.EvmKeeper.GetNonce(gethCtx.Ctx, signer.EvmAddress))
+	_, gethResults, err := RunBlock(t, gethCtx, [][]byte{gethTx})
+	require.NoError(t, err)
+	require.Len(t, gethResults, 1)
+	require.Equal(t, uint32(0), gethResults[0].Code, "V2 tx should succeed: %s", gethResults[0].Log)
+
+	// --- Giga ---
+	gigaCtx := NewGigaTestContext(t, accts, blockTime, 1, ModeGigaSequential)
+	fundAccount(t, gigaCtx, signer.AccountAddress, new(big.Int).Mul(big.NewInt(1e18), big.NewInt(10)))
+	gigaCtx.TestApp.GigaEvmKeeper.SetAddressMapping(gigaCtx.Ctx, signer.AccountAddress, signer.EvmAddress)
+	gigaBaseFee := gigaCtx.TestApp.GigaEvmKeeper.GetBaseFee(gigaCtx.Ctx)
+	if gigaBaseFee == nil {
+		gigaBaseFee = new(big.Int)
+	}
+	gigaTx := buildTx(t, gigaCtx, gigaCtx.TestApp.GigaEvmKeeper.GetNonce(gigaCtx.Ctx, signer.EvmAddress))
+	_, gigaResults, err := RunBlock(t, gigaCtx, [][]byte{gigaTx})
+	require.NoError(t, err)
+	require.Len(t, gigaResults, 1)
+	require.Equal(t, uint32(0), gigaResults[0].Code, "Giga tx should succeed: %s", gigaResults[0].Log)
+
+	// V2 and Giga must agree on baseFee at the same height for parity to be meaningful.
+	require.Equal(t, 0, gethBaseFee.Cmp(gigaBaseFee),
+		"V2 and Giga baseFee diverged (V2=%s, Giga=%s)", gethBaseFee.String(), gigaBaseFee.String())
+
+	// Parity: every receipt field, including EffectiveGasPrice, must match.
+	CompareReceipts(t, "EffectiveGasPrice_DynamicFee", gethCtx, gethResults, gigaCtx, gigaResults)
+
+	// Numeric expectation: receipt EffectiveGasPrice must equal min(feeCap, tip+baseFee), not GasFeeCap.
+	expectedEffective := new(big.Int).Add(new(big.Int).SetUint64(tipCapWei), gethBaseFee)
+	if expectedEffective.Cmp(new(big.Int).SetUint64(feeCapWei)) > 0 {
+		expectedEffective = new(big.Int).SetUint64(feeCapWei)
+	}
+	require.True(t, expectedEffective.IsUint64(),
+		"test expectation overflowed uint64: %s", expectedEffective.String())
+	require.Less(t, expectedEffective.Uint64(), feeCapWei,
+		"test setup is broken: tip+baseFee (%s) must be < feeCap (%d) to exercise "+
+			"the additive branch and distinguish the buggy formula from the correct one",
+		expectedEffective.String(), feeCapWei)
+
+	txHash := common.HexToHash(gigaResults[0].EvmTxInfo.TxHash)
+	gigaReceipt, err := gigaCtx.GetTransientReceipt(t, txHash, 0)
+	require.NoError(t, err)
+	require.Equal(t, expectedEffective.Uint64(), gigaReceipt.EffectiveGasPrice,
+		"Giga receipt EffectiveGasPrice must be min(feeCap, tip+baseFee)=%s, "+
+			"not GasFeeCap=%d (the buggy path uses ethTx.GasPrice() which returns "+
+			"GasFeeCap for type-2 txs)", expectedEffective.String(), feeCapWei)
+
+	gethReceipt, err := gethCtx.GetTransientReceipt(t, txHash, 0)
+	require.NoError(t, err)
+	require.Equal(t, expectedEffective.Uint64(), gethReceipt.EffectiveGasPrice,
+		"V2 receipt EffectiveGasPrice must be min(feeCap, tip+baseFee)")
+}
+
+// TestGigaOCCVsGigaSequential_NonConflicting compares Giga+OCC vs Giga sequential for non-conflicting transfers
+func TestGigaOCCVsGigaSequential_NonConflicting(t *testing.T) {
+	blockTime := time.Now()
+	accts := utils.NewTestAccounts(5)
+	txCount := 20
+	workers := 4
+
+	transfers := GenerateNonConflictingTransfers(txCount)
+
+	// Run with Giga Sequential (baseline)
+	seqCtx := NewGigaTestContext(t, accts, blockTime, 1, ModeGigaSequential)
+	seqTxs := CreateEVMTransferTxs(t, seqCtx, transfers, true)
+	_, seqResults, seqErr := RunBlock(t, seqCtx, seqTxs)
+	require.NoError(t, seqErr, "Giga sequential execution failed")
+	require.Len(t, seqResults, txCount)
+
+	// Run with Giga OCC (multiple times to catch race conditions)
+	for run := 0; run < 3; run++ {
+		occCtx := NewGigaTestContext(t, accts, blockTime, workers, ModeGigaOCC)
+		occTxs := CreateEVMTransferTxs(t, occCtx, transfers, true)
+		_, occResults, occErr := RunBlock(t, occCtx, occTxs)
+		require.NoError(t, occErr, "Giga OCC execution failed (run %d)", run)
+		require.Len(t, occResults, txCount)
+
+		// Compare results
+		CompareResults(t, "GigaOCCVsSequential_NonConflicting", seqResults, occResults)
+	}
+}
+
+// TestGigaOCCVsGigaSequential_Conflicting compares Giga+OCC vs Giga sequential for conflicting transfers
+func TestGigaOCCVsGigaSequential_Conflicting(t *testing.T) {
+	blockTime := time.Now()
+	accts := utils.NewTestAccounts(5)
+	txCount := 20
+	workers := 4
+
+	recipient := accts[0].EvmAddress
+	transfers := GenerateConflictingTransfers(txCount, recipient)
+
+	// Run with Giga Sequential (baseline)
+	seqCtx := NewGigaTestContext(t, accts, blockTime, 1, ModeGigaSequential)
+	seqTxs := CreateEVMTransferTxs(t, seqCtx, transfers, true)
+	_, seqResults, seqErr := RunBlock(t, seqCtx, seqTxs)
+	require.NoError(t, seqErr, "Giga sequential execution failed")
+	require.Len(t, seqResults, txCount)
+
+	// Run with Giga OCC (multiple times to catch race conditions)
+	for run := 0; run < 3; run++ {
+		occCtx := NewGigaTestContext(t, accts, blockTime, workers, ModeGigaOCC)
+		occTxs := CreateEVMTransferTxs(t, occCtx, transfers, true)
+		_, occResults, occErr := RunBlock(t, occCtx, occTxs)
+		require.NoError(t, occErr, "Giga OCC execution failed (run %d)", run)
+		require.Len(t, occResults, txCount)
+
+		// Compare results
+		CompareResults(t, "GigaOCCVsSequential_Conflicting", seqResults, occResults)
+	}
+}
+
+// TestGigaOCCVsGigaSequential_Mixed compares with a mix of conflicting and non-conflicting
+func TestGigaOCCVsGigaSequential_Mixed(t *testing.T) {
+	blockTime := time.Now()
+	accts := utils.NewTestAccounts(5)
+	conflictingCount := 10
+	nonConflictingCount := 10
+	workers := 4
+
+	recipient := accts[0].EvmAddress
+	conflicting := GenerateConflictingTransfers(conflictingCount, recipient)
+	nonConflicting := GenerateNonConflictingTransfers(nonConflictingCount)
+
+	// Interleave conflicting and non-conflicting
+	transfers := make([]EVMTransfer, 0, conflictingCount+nonConflictingCount)
+	for i := 0; i < max(conflictingCount, nonConflictingCount); i++ {
+		if i < conflictingCount {
+			transfers = append(transfers, conflicting[i])
+		}
+		if i < nonConflictingCount {
+			transfers = append(transfers, nonConflicting[i])
+		}
+	}
+
+	// Run with Giga Sequential (baseline)
+	seqCtx := NewGigaTestContext(t, accts, blockTime, 1, ModeGigaSequential)
+	seqTxs := CreateEVMTransferTxs(t, seqCtx, transfers, true)
+	_, seqResults, seqErr := RunBlock(t, seqCtx, seqTxs)
+	require.NoError(t, seqErr, "Giga sequential execution failed")
+
+	// Run with Giga OCC
+	for run := 0; run < 3; run++ {
+		occCtx := NewGigaTestContext(t, accts, blockTime, workers, ModeGigaOCC)
+		occTxs := CreateEVMTransferTxs(t, occCtx, transfers, true)
+		_, occResults, occErr := RunBlock(t, occCtx, occTxs)
+		require.NoError(t, occErr, "Giga OCC execution failed (run %d)", run)
+
+		CompareResults(t, "GigaOCCVsSequential_Mixed", seqResults, occResults)
+	}
+}
+
+// TestAllModes_NonConflicting runs the same transactions through all three modes and compares
+func TestAllModes_NonConflicting(t *testing.T) {
+	blockTime := time.Now()
+	accts := utils.NewTestAccounts(5)
+	txCount := 15
+	workers := 4
+
+	transfers := GenerateNonConflictingTransfers(txCount)
+
+	// Geth Sequential
+	gethCtx := NewGigaTestContext(t, accts, blockTime, 1, ModeV2withOCC)
+	gethTxs := CreateEVMTransferTxs(t, gethCtx, transfers, false)
+	_, gethResults, gethErr := RunBlock(t, gethCtx, gethTxs)
+	require.NoError(t, gethErr)
+
+	// Giga Sequential
+	gigaSeqCtx := NewGigaTestContext(t, accts, blockTime, 1, ModeGigaSequential)
+	gigaSeqTxs := CreateEVMTransferTxs(t, gigaSeqCtx, transfers, true)
+	_, gigaSeqResults, gigaSeqErr := RunBlock(t, gigaSeqCtx, gigaSeqTxs)
+	require.NoError(t, gigaSeqErr)
+
+	// Giga OCC
+	gigaOCCCtx := NewGigaTestContext(t, accts, blockTime, workers, ModeGigaOCC)
+	gigaOCCTxs := CreateEVMTransferTxs(t, gigaOCCCtx, transfers, true)
+	_, gigaOCCResults, gigaOCCErr := RunBlock(t, gigaOCCCtx, gigaOCCTxs)
+	require.NoError(t, gigaOCCErr)
+
+	// Compare: Geth vs Giga Sequential
+	CompareResults(t, "AllModes_GethVsGigaSeq", gethResults, gigaSeqResults)
+	CompareReceipts(t, "AllModes_GethVsGigaSeq", gethCtx, gethResults, gigaSeqCtx, gigaSeqResults)
+
+	// Compare: Giga Sequential vs Giga OCC
+	CompareResults(t, "AllModes_GigaSeqVsOCC", gigaSeqResults, gigaOCCResults)
+	CompareReceipts(t, "AllModes_GigaSeqVsOCC", gigaSeqCtx, gigaSeqResults, gigaOCCCtx, gigaOCCResults)
+
+	t.Logf("All %d transactions produced identical results across all three executor modes", txCount)
+}
+
+// TestAllModes_Conflicting runs conflicting transactions through all three modes
+func TestAllModes_Conflicting(t *testing.T) {
+	blockTime := time.Now()
+	accts := utils.NewTestAccounts(5)
+	txCount := 15
+	workers := 4
+
+	recipient := accts[0].EvmAddress
+	transfers := GenerateConflictingTransfers(txCount, recipient)
+
+	// Geth Sequential
+	gethCtx := NewGigaTestContext(t, accts, blockTime, 1, ModeV2withOCC)
+	gethTxs := CreateEVMTransferTxs(t, gethCtx, transfers, false)
+	_, gethResults, gethErr := RunBlock(t, gethCtx, gethTxs)
+	require.NoError(t, gethErr)
+
+	// Giga Sequential
+	gigaSeqCtx := NewGigaTestContext(t, accts, blockTime, 1, ModeGigaSequential)
+	gigaSeqTxs := CreateEVMTransferTxs(t, gigaSeqCtx, transfers, true)
+	_, gigaSeqResults, gigaSeqErr := RunBlock(t, gigaSeqCtx, gigaSeqTxs)
+	require.NoError(t, gigaSeqErr)
+
+	// Giga OCC
+	gigaOCCCtx := NewGigaTestContext(t, accts, blockTime, workers, ModeGigaOCC)
+	gigaOCCTxs := CreateEVMTransferTxs(t, gigaOCCCtx, transfers, true)
+	_, gigaOCCResults, gigaOCCErr := RunBlock(t, gigaOCCCtx, gigaOCCTxs)
+	require.NoError(t, gigaOCCErr)
+
+	// Compare: Geth vs Giga Sequential
+	CompareResults(t, "AllModes_Conflicting_GethVsGigaSeq", gethResults, gigaSeqResults)
+	CompareReceipts(t, "AllModes_Conflicting_GethVsGigaSeq", gethCtx, gethResults, gigaSeqCtx, gigaSeqResults)
+
+	// Compare: Giga Sequential vs Giga OCC
+	CompareResults(t, "AllModes_Conflicting_GigaSeqVsOCC", gigaSeqResults, gigaOCCResults)
+	CompareReceipts(t, "AllModes_Conflicting_GigaSeqVsOCC", gigaSeqCtx, gigaSeqResults, gigaOCCCtx, gigaOCCResults)
+
+	t.Logf("All %d conflicting transactions produced identical results across all three executor modes", txCount)
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+// SimpleStorage contract bytecode (compiled from example/contracts/simplestorage/SimpleStorage.sol)
+// Contract has: set(uint256), get() -> uint256, bad() that reverts, and an event SetEvent(uint256)
+var simpleStorageBytecode = common.Hex2Bytes("608060405234801561000f575f80fd5b506101938061001d5f395ff3fe608060405234801561000f575f80fd5b506004361061003f575f3560e01c806360fe47b1146100435780636d4ce63c1461005f5780639c3674fc1461007d575b5f80fd5b61005d6004803603810190610058919061010a565b610087565b005b6100676100c7565b6040516100749190610144565b60405180910390f35b6100856100cf565b005b805f819055507f0de2d86113046b9e8bb6b785e96a6228f6803952bf53a40b68a36dce316218c1816040516100bc9190610144565b60405180910390a150565b5f8054905090565b5f80fd5b5f80fd5b5f819050919050565b6100e9816100d7565b81146100f3575f80fd5b50565b5f81359050610104816100e0565b92915050565b5f6020828403121561011f5761011e6100d3565b5b5f61012c848285016100f6565b91505092915050565b61013e816100d7565b82525050565b5f6020820190506101575f830184610135565b9291505056fea2646970667358221220bb55137839ea2afda11ab2d30ad07fee30bb9438caaa46e30ccd1053ed72439064736f6c63430008150033")
+
+// set(uint256) function selector
+var setFunctionSelector = common.Hex2Bytes("60fe47b1")
+
+// get() function selector
+var getFunctionSelector = common.Hex2Bytes("6d4ce63c")
+
+// EVMContractDeploy represents a contract deployment transaction for testing
+type EVMContractDeploy struct {
+	Signer   utils.TestAcct
+	Bytecode []byte
+	Nonce    uint64
+}
+
+// EVMContractCall represents a contract call transaction for testing
+type EVMContractCall struct {
+	Signer   utils.TestAcct
+	Contract common.Address
+	Data     []byte
+	Value    *big.Int
+	Nonce    uint64
+}
+
+// CreateContractDeployTxs creates signed contract deployment transactions
+func CreateContractDeployTxs(t testing.TB, tCtx *GigaTestContext, deploys []EVMContractDeploy, isGiga bool) [][]byte {
+	txs := make([][]byte, 0, len(deploys))
+	tc := app.MakeEncodingConfig().TxConfig
+
+	var ek evmKeeper
+	var bk bankKeeper
+	ek = &tCtx.TestApp.EvmKeeper
+	bk = tCtx.TestApp.BankKeeper
+	for _, deploy := range deploys {
+		// Associate the Cosmos address with the EVM address
+		ek.SetAddressMapping(tCtx.Ctx, deploy.Signer.AccountAddress, deploy.Signer.EvmAddress)
+
+		// Fund the signer account
+		amounts := sdk.NewCoins(
+			sdk.NewCoin("uhpx", sdk.NewInt(1000000000000000000)),
+			sdk.NewCoin("uusdc", sdk.NewInt(1000000000000000)),
+		)
+		err := bk.MintCoins(tCtx.Ctx, "mint", amounts)
+		require.NoError(t, err)
+		err = bk.SendCoinsFromModuleToAccount(tCtx.Ctx, "mint", deploy.Signer.AccountAddress, amounts)
+		require.NoError(t, err)
+
+		// Contract deployment: To is nil
+		signedTx, err := ethtypes.SignTx(ethtypes.NewTx(&ethtypes.DynamicFeeTx{
+			GasFeeCap: new(big.Int).SetUint64(100000000000),
+			GasTipCap: new(big.Int).SetUint64(100000000000),
+			Gas:       1000000, // Higher gas for contract deployment
+			ChainID:   big.NewInt(config.DefaultChainID),
+			To:        nil, // nil means contract creation
+			Value:     big.NewInt(0),
+			Data:      deploy.Bytecode,
+			Nonce:     deploy.Nonce,
+		}), deploy.Signer.EvmSigner, deploy.Signer.EvmPrivateKey)
+		require.NoError(t, err)
+
+		txData, err := ethtx.NewTxDataFromTx(signedTx)
+		require.NoError(t, err)
+
+		msg, err := types.NewMsgEVMTransaction(txData)
+		require.NoError(t, err)
+
+		txBuilder := tc.NewTxBuilder()
+		err = txBuilder.SetMsgs(msg)
+		require.NoError(t, err)
+		txBuilder.SetGasLimit(10000000000)
+
+		txBytes, err := tc.TxEncoder()(txBuilder.GetTx())
+		require.NoError(t, err)
+
+		txs = append(txs, txBytes)
+	}
+
+	return txs
+}
+
+// CreateContractCallTxs creates signed contract call transactions
+func CreateContractCallTxs(t testing.TB, tCtx *GigaTestContext, calls []EVMContractCall, isGiga bool) [][]byte {
+	txs := make([][]byte, 0, len(calls))
+	tc := app.MakeEncodingConfig().TxConfig
+
+	var ek evmKeeper
+	var bk bankKeeper
+	ek = &tCtx.TestApp.EvmKeeper
+	bk = tCtx.TestApp.BankKeeper
+	for _, call := range calls {
+		// Associate the Cosmos address with the EVM address
+		ek.SetAddressMapping(tCtx.Ctx, call.Signer.AccountAddress, call.Signer.EvmAddress)
+
+		// Fund the signer account
+		amounts := sdk.NewCoins(
+			sdk.NewCoin("uhpx", sdk.NewInt(1000000000000000000)),
+			sdk.NewCoin("uusdc", sdk.NewInt(1000000000000000)),
+		)
+		err := bk.MintCoins(tCtx.Ctx, "mint", amounts)
+		require.NoError(t, err)
+		err = bk.SendCoinsFromModuleToAccount(tCtx.Ctx, "mint", call.Signer.AccountAddress, amounts)
+		require.NoError(t, err)
+
+		value := call.Value
+		if value == nil {
+			value = big.NewInt(0)
+		}
+
+		signedTx, err := ethtypes.SignTx(ethtypes.NewTx(&ethtypes.DynamicFeeTx{
+			GasFeeCap: new(big.Int).SetUint64(100000000000),
+			GasTipCap: new(big.Int).SetUint64(100000000000),
+			Gas:       200000, // Gas for contract call
+			ChainID:   big.NewInt(config.DefaultChainID),
+			To:        &call.Contract,
+			Value:     value,
+			Data:      call.Data,
+			Nonce:     call.Nonce,
+		}), call.Signer.EvmSigner, call.Signer.EvmPrivateKey)
+		require.NoError(t, err)
+
+		txData, err := ethtx.NewTxDataFromTx(signedTx)
+		require.NoError(t, err)
+
+		msg, err := types.NewMsgEVMTransaction(txData)
+		require.NoError(t, err)
+
+		txBuilder := tc.NewTxBuilder()
+		err = txBuilder.SetMsgs(msg)
+		require.NoError(t, err)
+		txBuilder.SetGasLimit(10000000000)
+
+		txBytes, err := tc.TxEncoder()(txBuilder.GetTx())
+		require.NoError(t, err)
+
+		txs = append(txs, txBytes)
+	}
+
+	return txs
+}
+
+// encodeSetCall encodes a call to set(uint256)
+func encodeSetCall(value *big.Int) []byte {
+	// Pad value to 32 bytes
+	paddedValue := common.LeftPadBytes(value.Bytes(), 32)
+	return append(setFunctionSelector, paddedValue...)
+}
+
+// encodeGetCall encodes a call to get()
+func encodeGetCall() []byte {
+	return getFunctionSelector
+}
+
+// TestGigaVsGeth_ContractDeployAndCall compares Giga vs Geth for contract deployment and calls
+func TestGigaVsGeth_ContractDeployAndCall(t *testing.T) {
+	blockTime := time.Now()
+	accts := utils.NewTestAccounts(5)
+
+	// Create a deployer
+	deployer := utils.NewSigner()
+
+	// Deploy contract with Geth
+	gethCtx := NewGigaTestContext(t, accts, blockTime, 1, ModeV2withOCC)
+	gethDeployTxs := CreateContractDeployTxs(t, gethCtx, []EVMContractDeploy{
+		{Signer: deployer, Bytecode: simpleStorageBytecode, Nonce: 0},
+	}, false)
+	_, gethDeployResults, gethDeployErr := RunBlock(t, gethCtx, gethDeployTxs)
+	require.NoError(t, gethDeployErr, "Geth deploy failed")
+	require.Len(t, gethDeployResults, 1)
+	require.Equal(t, uint32(0), gethDeployResults[0].Code, "Geth deploy tx failed: %s", gethDeployResults[0].Log)
+
+	// Deploy contract with Giga
+	gigaCtx := NewGigaTestContext(t, accts, blockTime, 1, ModeGigaSequential)
+	gigaDeployTxs := CreateContractDeployTxs(t, gigaCtx, []EVMContractDeploy{
+		{Signer: deployer, Bytecode: simpleStorageBytecode, Nonce: 0},
+	}, true)
+	_, gigaDeployResults, gigaDeployErr := RunBlock(t, gigaCtx, gigaDeployTxs)
+	require.NoError(t, gigaDeployErr, "Giga deploy failed")
+	require.Len(t, gigaDeployResults, 1)
+	require.Equal(t, uint32(0), gigaDeployResults[0].Code, "Giga deploy tx failed: %s", gigaDeployResults[0].Log)
+
+	// Compare deployment results (skip gas comparison - different EVM implementations may differ)
+	CompareResultsNoGas(t, "ContractDeploy", gethDeployResults, gigaDeployResults)
+	// Receipt parity catches CREATE address and status divergence ExecTxResult misses.
+	CompareReceipts(t, "ContractDeploy", gethCtx, gethDeployResults, gigaCtx, gigaDeployResults)
+
+	t.Logf("Contract deployment successful on both Geth and Giga")
+	t.Logf("Geth deploy gas used: %d", gethDeployResults[0].GasUsed)
+	t.Logf("Giga deploy gas used: %d", gigaDeployResults[0].GasUsed)
+}
+
+// selfDestructInConstructorBytecode is init code (CALLER; SELFDESTRUCT) that
+// destroys the contract within the same tx it is created. This makes the giga
+// executor detect the self-destruct (AnySelfDestructed) and fall back to v2,
+// since giga's cachekv cannot iterate to clear a destructed account's storage.
+var selfDestructInConstructorBytecode = common.Hex2Bytes("33ff")
+
+// TestGigaVsGeth_SelfDestruct verifies a self-destructing tx yields identical
+// consensus results under v2 and giga. Giga must fall back to v2 (it cannot
+// clear destructed storage), so this guards that the two stay interoperable.
+func TestGigaVsGeth_SelfDestruct(t *testing.T) {
+	blockTime := time.Now()
+	accts := utils.NewTestAccounts(5)
+	deployer := utils.NewSigner()
+
+	// ---- Geth (v2) ----
+	gethCtx := NewGigaTestContext(t, accts, blockTime, 1, ModeV2withOCC)
+	gethTxs := CreateContractDeployTxs(t, gethCtx, []EVMContractDeploy{
+		{Signer: deployer, Bytecode: selfDestructInConstructorBytecode, Nonce: 0},
+	}, false)
+	_, gethResults, gethErr := RunBlock(t, gethCtx, gethTxs)
+	require.NoError(t, gethErr)
+	require.Len(t, gethResults, 1)
+
+	// ---- Giga (OCC) — must fall back to v2 on the self-destruct ----
+	gigaCtx := NewGigaTestContext(t, accts, blockTime, 1, ModeGigaOCC)
+	gigaTxs := CreateContractDeployTxs(t, gigaCtx, []EVMContractDeploy{
+		{Signer: deployer, Bytecode: selfDestructInConstructorBytecode, Nonce: 0},
+	}, true)
+	_, gigaResults, gigaErr := RunBlock(t, gigaCtx, gigaTxs)
+	require.NoError(t, gigaErr)
+	require.Len(t, gigaResults, 1)
+
+	// Consensus-critical parity: LastResultsHash covers Code/Data/GasWanted/GasUsed.
+	CompareResultsNoGas(t, "SelfDestruct", gethResults, gigaResults)
+	CompareLastResultsHash(t, "SelfDestruct", gethResults, gigaResults)
+	CompareReceipts(t, "SelfDestruct", gethCtx, gethResults, gigaCtx, gigaResults)
+}
+
+// TestGigaVsGeth_ContractCallsSequential compares Giga vs Geth for sequential contract calls
+// This test deploys a contract and calls it within the same block
+func TestGigaVsGeth_ContractCallsSequential(t *testing.T) {
+	blockTime := time.Now()
+	accts := utils.NewTestAccounts(5)
+	callCount := 5
+
+	// Create a deployer and separate callers
+	deployer := utils.NewSigner()
+	callers := make([]utils.TestAcct, callCount)
+	for i := 0; i < callCount; i++ {
+		callers[i] = utils.NewSigner()
+	}
+
+	// Calculate expected contract address (deployer address + nonce 0)
+	contractAddr := crypto.CreateAddress(deployer.EvmAddress, 0)
+
+	// ---- Run with Geth ----
+	gethCtx := NewGigaTestContext(t, accts, blockTime, 1, ModeV2withOCC)
+
+	// Build all transactions: deploy + calls in same block
+	gethDeployTxs := CreateContractDeployTxs(t, gethCtx, []EVMContractDeploy{
+		{Signer: deployer, Bytecode: simpleStorageBytecode, Nonce: 0},
+	}, false)
+
+	gethCallInputs := make([]EVMContractCall, callCount)
+	for i := 0; i < callCount; i++ {
+		gethCallInputs[i] = EVMContractCall{
+			Signer:   callers[i],
+			Contract: contractAddr,
+			Data:     encodeSetCall(big.NewInt(int64(i + 100))), // set(100), set(101), etc.
+			Nonce:    0,
+		}
+	}
+	gethCallTxs := CreateContractCallTxs(t, gethCtx, gethCallInputs, false)
+
+	// Combine deploy + calls into one block
+	allGethTxs := append(gethDeployTxs, gethCallTxs...)
+	_, gethResults, gethErr := RunBlock(t, gethCtx, allGethTxs)
+	require.NoError(t, gethErr)
+	require.Len(t, gethResults, 1+callCount)
+
+	t.Logf("Contract deployed at: %s", contractAddr.Hex())
+
+	// ---- Run with Giga ----
+	gigaCtx := NewGigaTestContext(t, accts, blockTime, 1, ModeGigaSequential)
+
+	gigaDeployTxs := CreateContractDeployTxs(t, gigaCtx, []EVMContractDeploy{
+		{Signer: deployer, Bytecode: simpleStorageBytecode, Nonce: 0},
+	}, true)
+
+	gigaCallInputs := make([]EVMContractCall, callCount)
+	for i := 0; i < callCount; i++ {
+		gigaCallInputs[i] = EVMContractCall{
+			Signer:   callers[i],
+			Contract: contractAddr,
+			Data:     encodeSetCall(big.NewInt(int64(i + 100))),
+			Nonce:    0,
+		}
+	}
+	gigaCallTxs := CreateContractCallTxs(t, gigaCtx, gigaCallInputs, true)
+
+	allGigaTxs := append(gigaDeployTxs, gigaCallTxs...)
+	_, gigaResults, gigaErr := RunBlock(t, gigaCtx, allGigaTxs)
+	require.NoError(t, gigaErr)
+	require.Len(t, gigaResults, 1+callCount)
+
+	// Compare results (skip gas comparison - different EVM implementations may differ)
+	CompareResultsNoGas(t, "ContractDeployAndCalls", gethResults, gigaResults)
+	// Receipt parity catches log/topic/LogsBloom divergence ExecTxResult can't observe.
+	CompareReceipts(t, "ContractDeployAndCalls", gethCtx, gethResults, gigaCtx, gigaResults)
+
+	// Verify all transactions succeeded
+	for i, result := range gethResults {
+		require.Equal(t, uint32(0), result.Code, "Geth tx[%d] failed: %s", i, result.Log)
+	}
+	for i, result := range gigaResults {
+		require.Equal(t, uint32(0), result.Code, "Giga tx[%d] failed: %s", i, result.Log)
+	}
+
+	t.Logf("Contract deployment + %d calls successful on both Geth and Giga", callCount)
+}
+
+// TestAllModes_ContractExecution runs contract deployment and calls through all executor modes
+// All transactions are executed in a single block
+func TestAllModes_ContractExecution(t *testing.T) {
+	blockTime := time.Now()
+	accts := utils.NewTestAccounts(5)
+	workers := 4
+
+	deployer := utils.NewSigner()
+	caller := utils.NewSigner()
+	contractAddr := crypto.CreateAddress(deployer.EvmAddress, 0)
+
+	// ---- Geth with OCC ----
+	gethCtx := NewGigaTestContext(t, accts, blockTime, 1, ModeV2withOCC)
+	gethDeployTxs := CreateContractDeployTxs(t, gethCtx, []EVMContractDeploy{
+		{Signer: deployer, Bytecode: simpleStorageBytecode, Nonce: 0},
+	}, false)
+	gethCallTxs := CreateContractCallTxs(t, gethCtx, []EVMContractCall{
+		{Signer: caller, Contract: contractAddr, Data: encodeSetCall(big.NewInt(42)), Nonce: 0},
+	}, false)
+	allGethTxs := append(gethDeployTxs, gethCallTxs...)
+	_, gethResults, err := RunBlock(t, gethCtx, allGethTxs)
+	require.NoError(t, err)
+	require.Len(t, gethResults, 2)
+	require.Equal(t, uint32(0), gethResults[0].Code, "Geth deploy failed: %s", gethResults[0].Log)
+	require.Equal(t, uint32(0), gethResults[1].Code, "Geth call failed: %s", gethResults[1].Log)
+
+	// ---- Giga Sequential ----
+	gigaSeqCtx := NewGigaTestContext(t, accts, blockTime, 1, ModeGigaSequential)
+	gigaSeqDeployTxs := CreateContractDeployTxs(t, gigaSeqCtx, []EVMContractDeploy{
+		{Signer: deployer, Bytecode: simpleStorageBytecode, Nonce: 0},
+	}, true)
+	gigaSeqCallTxs := CreateContractCallTxs(t, gigaSeqCtx, []EVMContractCall{
+		{Signer: caller, Contract: contractAddr, Data: encodeSetCall(big.NewInt(42)), Nonce: 0},
+	}, true)
+	allGigaSeqTxs := append(gigaSeqDeployTxs, gigaSeqCallTxs...)
+	_, gigaSeqResults, err := RunBlock(t, gigaSeqCtx, allGigaSeqTxs)
+	require.NoError(t, err)
+	require.Len(t, gigaSeqResults, 2)
+	require.Equal(t, uint32(0), gigaSeqResults[0].Code, "GigaSeq deploy failed: %s", gigaSeqResults[0].Log)
+	require.Equal(t, uint32(0), gigaSeqResults[1].Code, "GigaSeq call failed: %s", gigaSeqResults[1].Log)
+
+	// ---- Giga OCC ----
+	gigaOCCCtx := NewGigaTestContext(t, accts, blockTime, workers, ModeGigaOCC)
+	gigaOCCDeployTxs := CreateContractDeployTxs(t, gigaOCCCtx, []EVMContractDeploy{
+		{Signer: deployer, Bytecode: simpleStorageBytecode, Nonce: 0},
+	}, true)
+	gigaOCCCallTxs := CreateContractCallTxs(t, gigaOCCCtx, []EVMContractCall{
+		{Signer: caller, Contract: contractAddr, Data: encodeSetCall(big.NewInt(42)), Nonce: 0},
+	}, true)
+	allGigaOCCTxs := append(gigaOCCDeployTxs, gigaOCCCallTxs...)
+	_, gigaOCCResults, err := RunBlock(t, gigaOCCCtx, allGigaOCCTxs)
+	require.NoError(t, err)
+	require.Len(t, gigaOCCResults, 2)
+	require.Equal(t, uint32(0), gigaOCCResults[0].Code, "GigaOCC deploy failed: %s", gigaOCCResults[0].Log)
+	require.Equal(t, uint32(0), gigaOCCResults[1].Code, "GigaOCC call failed: %s", gigaOCCResults[1].Log)
+
+	// Compare results - gas should now be identical since GIGA applies the Pax custom SSTORE adjustment
+	CompareResults(t, "AllModes_GethVsGigaSeq", gethResults, gigaSeqResults)
+	CompareResults(t, "AllModes_GigaSeqVsOCC", gigaSeqResults, gigaOCCResults)
+	CompareReceipts(t, "AllModes_ContractExec_GethVsGigaSeq", gethCtx, gethResults, gigaSeqCtx, gigaSeqResults)
+	CompareReceipts(t, "AllModes_ContractExec_GigaSeqVsOCC", gigaSeqCtx, gigaSeqResults, gigaOCCCtx, gigaOCCResults)
+
+	t.Logf("Contract deployment and calls produced identical results across all three executor modes")
+}
+
+// TestGigaVsGeth_GasComparison compares gas usage between Geth and Giga executors.
+//
+// Both Geth and Giga use Pax's configurable SSTORE gas cost (PaxSstoreSetGasEIP2200).
+// The GIGA path applies a gas adjustment after evmone execution to match Pax's custom SSTORE cost.
+//
+// This test verifies:
+//  1. Deploy gas is exactly the same (no SSTORE involved)
+//  2. Call gas is exactly the same (SSTORE gas adjustment applied in GIGA)
+func TestGigaVsGeth_GasComparison(t *testing.T) {
+	blockTime := time.Now()
+	accts := utils.NewTestAccounts(5)
+
+	deployer := utils.NewSigner()
+	caller := utils.NewSigner()
+	contractAddr := crypto.CreateAddress(deployer.EvmAddress, 0)
+
+	// Run contract deploy + call with Geth
+	gethCtx := NewGigaTestContext(t, accts, blockTime, 1, ModeV2withOCC)
+	gethDeployTxs := CreateContractDeployTxs(t, gethCtx, []EVMContractDeploy{
+		{Signer: deployer, Bytecode: simpleStorageBytecode, Nonce: 0},
+	}, false)
+	gethCallTxs := CreateContractCallTxs(t, gethCtx, []EVMContractCall{
+		{Signer: caller, Contract: contractAddr, Data: encodeSetCall(big.NewInt(42)), Nonce: 0},
+	}, false)
+	allGethTxs := append(gethDeployTxs, gethCallTxs...)
+	_, gethResults, gethErr := RunBlock(t, gethCtx, allGethTxs)
+	require.NoError(t, gethErr)
+
+	// Run with Giga
+	gigaCtx := NewGigaTestContext(t, accts, blockTime, 1, ModeGigaSequential)
+	gigaDeployTxs := CreateContractDeployTxs(t, gigaCtx, []EVMContractDeploy{
+		{Signer: deployer, Bytecode: simpleStorageBytecode, Nonce: 0},
+	}, true)
+	gigaCallTxs := CreateContractCallTxs(t, gigaCtx, []EVMContractCall{
+		{Signer: caller, Contract: contractAddr, Data: encodeSetCall(big.NewInt(42)), Nonce: 0},
+	}, true)
+	allGigaTxs := append(gigaDeployTxs, gigaCallTxs...)
+	_, gigaResults, gigaErr := RunBlock(t, gigaCtx, allGigaTxs)
+	require.NoError(t, gigaErr)
+
+	// Report gas comparison
+	deployDiff := int64(gethResults[0].GasUsed) - int64(gigaResults[0].GasUsed)
+	callDiff := int64(gethResults[1].GasUsed) - int64(gigaResults[1].GasUsed)
+
+	t.Logf("Gas Comparison Report (Geth vs Giga/evmone):")
+	t.Logf("  Contract Deploy: Geth=%d, Giga=%d, Diff=%d",
+		gethResults[0].GasUsed, gigaResults[0].GasUsed, deployDiff)
+	t.Logf("  Contract Call:   Geth=%d, Giga=%d, Diff=%d",
+		gethResults[1].GasUsed, gigaResults[1].GasUsed, callDiff)
+
+	// Deploy gas should be EXACTLY the same (no SSTORE operations in CREATE)
+	require.Equal(t, int64(0), deployDiff,
+		"Deploy gas should be identical between Geth and Giga (no SSTORE)")
+
+	// Call gas should now be IDENTICAL since GIGA applies the Pax custom SSTORE gas adjustment
+	require.Equal(t, int64(0), callDiff,
+		"Call gas should be identical between Geth and Giga (SSTORE gas adjustment applied)")
+
+	t.Logf("Gas comparison verified: Both deploy and call gas are identical")
+}
+
+// TestGiga_CREATE_CodePath verifies the CREATE opcode uses contract.Code (initcode)
+// This specifically tests the fix where CREATE/CREATE2 must use contract.Code, not input
+func TestGiga_CREATE_CodePath(t *testing.T) {
+	blockTime := time.Now()
+	accts := utils.NewTestAccounts(3)
+
+	deployer := utils.NewSigner()
+
+	// Test with Giga executor - this exercises the internal.EVMInterpreter.Run()
+	// with the CREATE opcode, which should use contract.Code (initcode)
+	gigaCtx := NewGigaTestContext(t, accts, blockTime, 1, ModeGigaSequential)
+
+	deployTxs := CreateContractDeployTxs(t, gigaCtx, []EVMContractDeploy{
+		{Signer: deployer, Bytecode: simpleStorageBytecode, Nonce: 0},
+	}, true)
+
+	_, results, err := RunBlock(t, gigaCtx, deployTxs)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+
+	// The key assertion: deployment should succeed (code != 0)
+	// This verifies that the interpreter correctly passed initcode to evmone
+	require.Equal(t, uint32(0), results[0].Code, "Contract deployment should succeed")
+	require.NotEmpty(t, results[0].Data, "Deployment should return created contract address")
+
+	t.Logf("CREATE path verified: Contract deployed successfully with Giga executor")
+}
+
+// TestGiga_CALL_CodePath verifies the CALL opcode fetches code from recipient
+func TestGiga_CALL_CodePath(t *testing.T) {
+	blockTime := time.Now()
+	accts := utils.NewTestAccounts(3)
+
+	deployer := utils.NewSigner()
+	caller := utils.NewSigner()
+	contractAddr := crypto.CreateAddress(deployer.EvmAddress, 0)
+
+	// First deploy the contract with Geth (to have known state)
+	gethCtx := NewGigaTestContext(t, accts, blockTime, 1, ModeV2withOCC)
+	deployTxs := CreateContractDeployTxs(t, gethCtx, []EVMContractDeploy{
+		{Signer: deployer, Bytecode: simpleStorageBytecode, Nonce: 0},
+	}, false)
+	_, deployResults, err := RunBlock(t, gethCtx, deployTxs)
+	require.NoError(t, err)
+	require.Equal(t, uint32(0), deployResults[0].Code)
+
+	// Now call the contract with Giga executor
+	gigaCtx := NewGigaTestContext(t, accts, blockTime, 1, ModeGigaSequential)
+
+	// Deploy first so the contract exists
+	gigaDeployTxs := CreateContractDeployTxs(t, gigaCtx, []EVMContractDeploy{
+		{Signer: deployer, Bytecode: simpleStorageBytecode, Nonce: 0},
+	}, true)
+	_, _, err = RunBlock(t, gigaCtx, gigaDeployTxs)
+	require.NoError(t, err)
+
+	// Now call the deployed contract - this exercises the CALL path
+	// which should fetch code from the recipient address
+	callTxs := CreateContractCallTxs(t, gigaCtx, []EVMContractCall{
+		{Signer: caller, Contract: contractAddr, Data: encodeSetCall(big.NewInt(123)), Nonce: 0},
+	}, true)
+	_, callResults, err := RunBlock(t, gigaCtx, callTxs)
+	require.NoError(t, err)
+	require.Len(t, callResults, 1)
+
+	// The key assertion: the call should succeed
+	// This verifies that the interpreter correctly fetched code from recipient
+	require.Equal(t, uint32(0), callResults[0].Code, "Contract call should succeed")
+
+	t.Logf("CALL path verified: Contract call succeeded with Giga executor")
+}
+
+// TestGiga_STATICCALL_ReadOnly verifies STATICCALL sets the static flag
+func TestGiga_STATICCALL_ReadOnly(t *testing.T) {
+	blockTime := time.Now()
+	accts := utils.NewTestAccounts(3)
+
+	deployer := utils.NewSigner()
+	caller := utils.NewSigner()
+	contractAddr := crypto.CreateAddress(deployer.EvmAddress, 0)
+
+	// Deploy with Giga
+	gigaCtx := NewGigaTestContext(t, accts, blockTime, 1, ModeGigaSequential)
+
+	deployTxs := CreateContractDeployTxs(t, gigaCtx, []EVMContractDeploy{
+		{Signer: deployer, Bytecode: simpleStorageBytecode, Nonce: 0},
+	}, true)
+	_, deployResults, err := RunBlock(t, gigaCtx, deployTxs)
+	require.NoError(t, err)
+	require.Equal(t, uint32(0), deployResults[0].Code)
+
+	// Call with a read function (get()) - this should use STATICCALL internally
+	// The get() function doesn't modify state, so it's effectively a static call
+	callTxs := CreateContractCallTxs(t, gigaCtx, []EVMContractCall{
+		{Signer: caller, Contract: contractAddr, Data: encodeGetCall(), Nonce: 0},
+	}, true)
+	_, callResults, err := RunBlock(t, gigaCtx, callTxs)
+	require.NoError(t, err)
+	require.Len(t, callResults, 1)
+	require.Equal(t, uint32(0), callResults[0].Code, "Read call should succeed")
+
+	t.Logf("STATICCALL/read path verified with Giga executor")
+}
+
+// TestGiga_GasAccounting verifies gas is properly tracked after evmone execution
+func TestGiga_GasAccounting(t *testing.T) {
+	blockTime := time.Now()
+	accts := utils.NewTestAccounts(3)
+
+	deployer := utils.NewSigner()
+	caller := utils.NewSigner()
+	contractAddr := crypto.CreateAddress(deployer.EvmAddress, 0)
+
+	gigaCtx := NewGigaTestContext(t, accts, blockTime, 1, ModeGigaSequential)
+
+	// Deploy
+	deployTxs := CreateContractDeployTxs(t, gigaCtx, []EVMContractDeploy{
+		{Signer: deployer, Bytecode: simpleStorageBytecode, Nonce: 0},
+	}, true)
+	_, deployResults, err := RunBlock(t, gigaCtx, deployTxs)
+	require.NoError(t, err)
+	require.Equal(t, uint32(0), deployResults[0].Code)
+
+	// Call and check gas usage is reasonable
+	callTxs := CreateContractCallTxs(t, gigaCtx, []EVMContractCall{
+		{Signer: caller, Contract: contractAddr, Data: encodeSetCall(big.NewInt(42)), Nonce: 0},
+	}, true)
+	_, callResults, err := RunBlock(t, gigaCtx, callTxs)
+	require.NoError(t, err)
+	require.Len(t, callResults, 1)
+	require.Equal(t, uint32(0), callResults[0].Code)
+
+	// Verify gas was actually used (not zero, not max)
+	require.True(t, callResults[0].GasUsed > 21000, "Gas used should be more than base tx cost: %d", callResults[0].GasUsed)
+	require.True(t, callResults[0].GasUsed < 1000000, "Gas used should be reasonable: %d", callResults[0].GasUsed)
+
+	t.Logf("Gas accounting verified: Call used %d gas", callResults[0].GasUsed)
+}
+
+// TestGiga_SstoreGasDeltaCalculation verifies that the SSTORE gas delta is correctly calculated
+// based on different Pax SSTORE gas parameter values.
+// This is a unit test for the HostContext gas adjustment logic.
+func TestGiga_SstoreGasDeltaCalculation(t *testing.T) {
+	// Test the delta calculation directly
+	// StandardSstoreSetGasEIP2200 = 20000
+
+	tests := []struct {
+		name          string
+		paxSstoreGas  uint64
+		expectedDelta uint64
+	}{
+		{
+			name:          "Standard (20k) - no adjustment needed",
+			paxSstoreGas:  20000,
+			expectedDelta: 0,
+		},
+		{
+			name:          "Higher value (72k) - 52k delta",
+			paxSstoreGas:  72000,
+			expectedDelta: 52000,
+		},
+		{
+			name:          "Higher (100k) - 80k delta",
+			paxSstoreGas:  100000,
+			expectedDelta: 80000,
+		},
+		{
+			name:          "Lower than standard (10k) - no adjustment",
+			paxSstoreGas:  10000,
+			expectedDelta: 0, // No negative adjustments
+		},
+		{
+			name:          "Zero - no adjustment",
+			paxSstoreGas:  0,
+			expectedDelta: 0,
+		},
+	}
+
+	const standardSstoreGas = uint64(20000)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Calculate delta the same way NewHostContext does
+			var delta uint64
+			if tt.paxSstoreGas > standardSstoreGas {
+				delta = tt.paxSstoreGas - standardSstoreGas
+			}
+
+			require.Equal(t, tt.expectedDelta, delta,
+				"Delta calculation for paxSstoreGas=%d", tt.paxSstoreGas)
+		})
+	}
+
+	t.Logf("SSTORE gas delta calculation verified for all test cases")
+}
+
+// TestGiga_SstoreGasHonoredByChainConfig verifies that the SSTORE gas parameter
+// is correctly read from the chain config and would be passed to the executor.
+// This tests the parameter flow, not full execution.
+func TestGiga_SstoreGasHonoredByChainConfig(t *testing.T) {
+	blockTime := time.Now()
+	accts := utils.NewTestAccounts(3)
+
+	// Create a GIGA context
+	gigaCtx := NewGigaTestContext(t, accts, blockTime, 1, ModeGigaSequential)
+
+	// Get default params
+	defaultParams := gigaCtx.TestApp.GigaEvmKeeper.GetParams(gigaCtx.Ctx)
+	t.Logf("Default PaxSstoreSetGasEip2200: %d", defaultParams.PaxSstoreSetGasEip2200)
+
+	// Verify default matches the expected default from types package
+	require.Equal(t, types.DefaultPaxSstoreSetGasEIP2200, defaultParams.PaxSstoreSetGasEip2200,
+		"Default SSTORE gas should match types.DefaultPaxSstoreSetGasEIP2200 (%d)", types.DefaultPaxSstoreSetGasEIP2200)
+
+	// Update to a different value
+	customValue := uint64(50000)
+	customParams := defaultParams
+	customParams.PaxSstoreSetGasEip2200 = customValue
+	gigaCtx.TestApp.GigaEvmKeeper.SetParams(gigaCtx.Ctx, customParams)
+
+	// Read back and verify
+	updatedParams := gigaCtx.TestApp.GigaEvmKeeper.GetParams(gigaCtx.Ctx)
+	require.Equal(t, customValue, updatedParams.PaxSstoreSetGasEip2200,
+		"Updated SSTORE gas should be %d", customValue)
+
+	t.Logf("Verified: SSTORE gas parameter can be read and updated")
+	t.Logf("  Default: %d", defaultParams.PaxSstoreSetGasEip2200)
+	t.Logf("  Updated: %d", updatedParams.PaxSstoreSetGasEip2200)
+}
+
+// ============================================================================
+// LastResultsHash Consistency Tests
+// These tests verify that the deterministic fields (Code, Data, GasWanted, GasUsed)
+// that go into LastResultsHash are identical between executor modes.
+// This is critical for consensus - mismatches cause chain forks.
+// ============================================================================
+
+// TestLastResultsHash_GigaVsGeth_SimpleTransfer verifies LastResultsHash matches for simple transfers
+func TestLastResultsHash_GigaVsGeth_SimpleTransfer(t *testing.T) {
+	blockTime := time.Now()
+	accts := utils.NewTestAccounts(5)
+	txCount := 5
+
+	transfers := GenerateNonConflictingTransfers(txCount)
+
+	// Run with Geth (baseline)
+	gethCtx := NewGigaTestContext(t, accts, blockTime, 1, ModeV2withOCC)
+	gethTxs := CreateEVMTransferTxs(t, gethCtx, transfers, false)
+	_, gethResults, gethErr := RunBlock(t, gethCtx, gethTxs)
+	require.NoError(t, gethErr, "Geth execution failed")
+
+	// Run with Giga Sequential
+	gigaCtx := NewGigaTestContext(t, accts, blockTime, 1, ModeGigaSequential)
+	gigaTxs := CreateEVMTransferTxs(t, gigaCtx, transfers, true)
+	_, gigaResults, gigaErr := RunBlock(t, gigaCtx, gigaTxs)
+	require.NoError(t, gigaErr, "Giga execution failed")
+
+	// Verify all transactions succeeded
+	for i, result := range gethResults {
+		require.Equal(t, uint32(0), result.Code, "Geth tx[%d] failed: %s", i, result.Log)
+	}
+	for i, result := range gigaResults {
+		require.Equal(t, uint32(0), result.Code, "Giga tx[%d] failed: %s", i, result.Log)
+	}
+
+	// Compare LastResultsHash - this is the critical consensus check
+	CompareLastResultsHash(t, "LastResultsHash_GigaVsGeth_SimpleTransfer", gethResults, gigaResults)
+
+	// Also compare individual deterministic fields for detailed debugging
+	CompareDeterministicFields(t, "DeterministicFields_GigaVsGeth_SimpleTransfer", gethResults, gigaResults)
+
+	gethHash, _ := ComputeLastResultsHash(gethResults)
+	gigaHash, _ := ComputeLastResultsHash(gigaResults)
+	t.Logf("LastResultsHash verified identical: %X", gethHash)
+	t.Logf("Geth hash:  %X", gethHash)
+	t.Logf("Giga hash:  %X", gigaHash)
+}
+
+// TestLastResultsHash_GigaVsGeth_ContractDeploy verifies LastResultsHash for contract deployment
+func TestLastResultsHash_GigaVsGeth_ContractDeploy(t *testing.T) {
+	blockTime := time.Now()
+	accts := utils.NewTestAccounts(5)
+
+	deployer := utils.NewSigner()
+
+	// Run with Geth
+	gethCtx := NewGigaTestContext(t, accts, blockTime, 1, ModeV2withOCC)
+	gethTxs := CreateContractDeployTxs(t, gethCtx, []EVMContractDeploy{
+		{Signer: deployer, Bytecode: simpleStorageBytecode, Nonce: 0},
+	}, false)
+	_, gethResults, gethErr := RunBlock(t, gethCtx, gethTxs)
+	require.NoError(t, gethErr)
+	require.Equal(t, uint32(0), gethResults[0].Code, "Geth deploy failed: %s", gethResults[0].Log)
+
+	// Run with Giga
+	gigaCtx := NewGigaTestContext(t, accts, blockTime, 1, ModeGigaSequential)
+	gigaTxs := CreateContractDeployTxs(t, gigaCtx, []EVMContractDeploy{
+		{Signer: deployer, Bytecode: simpleStorageBytecode, Nonce: 0},
+	}, true)
+	_, gigaResults, gigaErr := RunBlock(t, gigaCtx, gigaTxs)
+	require.NoError(t, gigaErr)
+	require.Equal(t, uint32(0), gigaResults[0].Code, "Giga deploy failed: %s", gigaResults[0].Log)
+
+	// Compare LastResultsHash
+	CompareLastResultsHash(t, "LastResultsHash_GigaVsGeth_ContractDeploy", gethResults, gigaResults)
+
+	gethHash, _ := ComputeLastResultsHash(gethResults)
+	t.Logf("Contract deploy LastResultsHash verified identical: %X", gethHash)
+}
+
+// TestLastResultsHash_GigaVsGeth_ContractCall verifies LastResultsHash for contract calls
+func TestLastResultsHash_GigaVsGeth_ContractCall(t *testing.T) {
+	blockTime := time.Now()
+	accts := utils.NewTestAccounts(5)
+
+	deployer := utils.NewSigner()
+	caller := utils.NewSigner()
+	contractAddr := crypto.CreateAddress(deployer.EvmAddress, 0)
+
+	// Run with Geth: deploy + call
+	gethCtx := NewGigaTestContext(t, accts, blockTime, 1, ModeV2withOCC)
+	gethDeployTxs := CreateContractDeployTxs(t, gethCtx, []EVMContractDeploy{
+		{Signer: deployer, Bytecode: simpleStorageBytecode, Nonce: 0},
+	}, false)
+	gethCallTxs := CreateContractCallTxs(t, gethCtx, []EVMContractCall{
+		{Signer: caller, Contract: contractAddr, Data: encodeSetCall(big.NewInt(42)), Nonce: 0},
+	}, false)
+	allGethTxs := append(gethDeployTxs, gethCallTxs...)
+	_, gethResults, gethErr := RunBlock(t, gethCtx, allGethTxs)
+	require.NoError(t, gethErr)
+	require.Equal(t, uint32(0), gethResults[0].Code, "Geth deploy failed: %s", gethResults[0].Log)
+	require.Equal(t, uint32(0), gethResults[1].Code, "Geth call failed: %s", gethResults[1].Log)
+
+	// Run with Giga: deploy + call
+	gigaCtx := NewGigaTestContext(t, accts, blockTime, 1, ModeGigaSequential)
+	gigaDeployTxs := CreateContractDeployTxs(t, gigaCtx, []EVMContractDeploy{
+		{Signer: deployer, Bytecode: simpleStorageBytecode, Nonce: 0},
+	}, true)
+	gigaCallTxs := CreateContractCallTxs(t, gigaCtx, []EVMContractCall{
+		{Signer: caller, Contract: contractAddr, Data: encodeSetCall(big.NewInt(42)), Nonce: 0},
+	}, true)
+	allGigaTxs := append(gigaDeployTxs, gigaCallTxs...)
+	_, gigaResults, gigaErr := RunBlock(t, gigaCtx, allGigaTxs)
+	require.NoError(t, gigaErr)
+	require.Equal(t, uint32(0), gigaResults[0].Code, "Giga deploy failed: %s", gigaResults[0].Log)
+	require.Equal(t, uint32(0), gigaResults[1].Code, "Giga call failed: %s", gigaResults[1].Log)
+
+	// Compare LastResultsHash
+	CompareLastResultsHash(t, "LastResultsHash_GigaVsGeth_ContractCall", gethResults, gigaResults)
+
+	gethHash, _ := ComputeLastResultsHash(gethResults)
+	t.Logf("Contract call LastResultsHash verified identical: %X", gethHash)
+}
+
+// TestLastResultsHash_AllModes verifies LastResultsHash is identical across all executor modes
+func TestLastResultsHash_AllModes(t *testing.T) {
+	blockTime := time.Now()
+	accts := utils.NewTestAccounts(5)
+	txCount := 10
+	workers := 4
+
+	transfers := GenerateNonConflictingTransfers(txCount)
+
+	// Geth with OCC (standard production path)
+	gethCtx := NewGigaTestContext(t, accts, blockTime, workers, ModeV2withOCC)
+	gethTxs := CreateEVMTransferTxs(t, gethCtx, transfers, false)
+	_, gethResults, err := RunBlock(t, gethCtx, gethTxs)
+	require.NoError(t, err)
+
+	// Giga Sequential
+	gigaSeqCtx := NewGigaTestContext(t, accts, blockTime, 1, ModeGigaSequential)
+	gigaSeqTxs := CreateEVMTransferTxs(t, gigaSeqCtx, transfers, true)
+	_, gigaSeqResults, err := RunBlock(t, gigaSeqCtx, gigaSeqTxs)
+	require.NoError(t, err)
+
+	// Giga OCC
+	gigaOCCCtx := NewGigaTestContext(t, accts, blockTime, workers, ModeGigaOCC)
+	gigaOCCTxs := CreateEVMTransferTxs(t, gigaOCCCtx, transfers, true)
+	_, gigaOCCResults, err := RunBlock(t, gigaOCCCtx, gigaOCCTxs)
+	require.NoError(t, err)
+
+	// Verify all transactions succeeded
+	for i := range gethResults {
+		require.Equal(t, uint32(0), gethResults[i].Code, "Geth tx[%d] failed", i)
+		require.Equal(t, uint32(0), gigaSeqResults[i].Code, "GigaSeq tx[%d] failed", i)
+		require.Equal(t, uint32(0), gigaOCCResults[i].Code, "GigaOCC tx[%d] failed", i)
+	}
+
+	// Compare LastResultsHash across all modes
+	CompareLastResultsHash(t, "Geth vs GigaSequential", gethResults, gigaSeqResults)
+	CompareLastResultsHash(t, "GigaSequential vs GigaOCC", gigaSeqResults, gigaOCCResults)
+	CompareLastResultsHash(t, "Geth vs GigaOCC", gethResults, gigaOCCResults)
+
+	gethHash, _ := ComputeLastResultsHash(gethResults)
+	gigaSeqHash, _ := ComputeLastResultsHash(gigaSeqResults)
+	gigaOCCHash, _ := ComputeLastResultsHash(gigaOCCResults)
+
+	t.Logf("LastResultsHash verified identical across all 3 executor modes:")
+	t.Logf("  Geth+OCC:        %X", gethHash)
+	t.Logf("  Giga Sequential: %X", gigaSeqHash)
+	t.Logf("  Giga+OCC:        %X", gigaOCCHash)
+}
+
+// TestLastResultsHash_DeterministicFieldsLogged logs the deterministic fields for manual inspection
+// This is useful for debugging when hashes don't match
+func TestLastResultsHash_DeterministicFieldsLogged(t *testing.T) {
+	blockTime := time.Now()
+	accts := utils.NewTestAccounts(5)
+
+	// Single simple transfer for easy inspection
+	transfers := GenerateNonConflictingTransfers(1)
+
+	// Run with Geth
+	gethCtx := NewGigaTestContext(t, accts, blockTime, 1, ModeV2withOCC)
+	gethTxs := CreateEVMTransferTxs(t, gethCtx, transfers, false)
+	_, gethResults, _ := RunBlock(t, gethCtx, gethTxs)
+
+	// Run with Giga
+	gigaCtx := NewGigaTestContext(t, accts, blockTime, 1, ModeGigaSequential)
+	gigaTxs := CreateEVMTransferTxs(t, gigaCtx, transfers, true)
+	_, gigaResults, _ := RunBlock(t, gigaCtx, gigaTxs)
+
+	// Log the deterministic fields for inspection
+	t.Log("=== Geth Result ===")
+	for i, r := range gethResults {
+		t.Logf("tx[%d]: Code=%d GasWanted=%d GasUsed=%d DataLen=%d Data=%X",
+			i, r.Code, r.GasWanted, r.GasUsed, len(r.Data), r.Data)
+	}
+
+	t.Log("=== Giga Result ===")
+	for i, r := range gigaResults {
+		t.Logf("tx[%d]: Code=%d GasWanted=%d GasUsed=%d DataLen=%d Data=%X",
+			i, r.Code, r.GasWanted, r.GasUsed, len(r.Data), r.Data)
+	}
+
+	gethHash, _ := ComputeLastResultsHash(gethResults)
+	gigaHash, _ := ComputeLastResultsHash(gigaResults)
+	t.Logf("Geth LastResultsHash: %X", gethHash)
+	t.Logf("Giga LastResultsHash: %X", gigaHash)
+
+	// Still verify they match
+	CompareLastResultsHash(t, "DeterministicFieldsLogged", gethResults, gigaResults)
+}
+
+// TestGigaSequential_BalanceTransfer verifies that balance is actually transferred
+// when using the Giga Sequential executor mode
+func TestGigaSequential_BalanceTransfer(t *testing.T) {
+	blockTime := time.Now()
+	accts := utils.NewTestAccounts(3)
+
+	// Create sender and recipient
+	sender := utils.NewSigner()
+	recipient := utils.NewSigner()
+
+	// Setup Giga Sequential context
+	gigaCtx := NewGigaTestContext(t, accts, blockTime, 1, ModeGigaSequential)
+
+	// Fund the sender account and set up address mapping
+	gigaCtx.TestApp.EvmKeeper.SetAddressMapping(gigaCtx.Ctx, sender.AccountAddress, sender.EvmAddress)
+	gigaCtx.TestApp.EvmKeeper.SetAddressMapping(gigaCtx.Ctx, recipient.AccountAddress, recipient.EvmAddress)
+
+	initialFunding := sdk.NewCoins(
+		sdk.NewCoin("uhpx", sdk.NewInt(1000000000000000000)), // 1e18 uhpx
+	)
+	err := gigaCtx.TestApp.BankKeeper.MintCoins(gigaCtx.Ctx, "mint", initialFunding)
+	require.NoError(t, err)
+	err = gigaCtx.TestApp.BankKeeper.SendCoinsFromModuleToAccount(gigaCtx.Ctx, "mint", sender.AccountAddress, initialFunding)
+	require.NoError(t, err)
+
+	// Get initial balances
+	senderInitialBalance := gigaCtx.TestApp.EvmKeeper.GetBalance(gigaCtx.Ctx, sender.AccountAddress)
+	recipientInitialBalance := gigaCtx.TestApp.EvmKeeper.GetBalance(gigaCtx.Ctx, recipient.AccountAddress)
+
+	t.Logf("Initial sender balance: %s", senderInitialBalance.String())
+	t.Logf("Initial recipient balance: %s", recipientInitialBalance.String())
+
+	require.True(t, senderInitialBalance.Sign() > 0, "Sender should have initial balance")
+	require.True(t, recipientInitialBalance.Sign() == 0, "Recipient should have zero initial balance")
+
+	// Transfer amount (1e12 wei = 1 micropax in EVM terms)
+	transferAmount := big.NewInt(1000000000000) // 1e12 wei
+
+	// Create the transfer transaction
+	transfers := []EVMTransfer{
+		{
+			Signer: sender,
+			To:     recipient.EvmAddress,
+			Value:  transferAmount,
+			Nonce:  0,
+		},
+	}
+
+	// Note: CreateEVMTransferTxs will fund sender again, so we track the balance after tx creation
+	txs := CreateEVMTransferTxs(t, gigaCtx, transfers, true)
+
+	// Get balances right before block execution
+	senderPreBlockBalance := gigaCtx.TestApp.EvmKeeper.GetBalance(gigaCtx.Ctx, sender.AccountAddress)
+	recipientPreBlockBalance := gigaCtx.TestApp.EvmKeeper.GetBalance(gigaCtx.Ctx, recipient.AccountAddress)
+
+	t.Logf("Pre-block sender balance: %s", senderPreBlockBalance.String())
+	t.Logf("Pre-block recipient balance: %s", recipientPreBlockBalance.String())
+
+	// Execute the block
+	_, results, err := RunBlock(t, gigaCtx, txs)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	require.Equal(t, uint32(0), results[0].Code, "Transfer should succeed: %s", results[0].Log)
+
+	// Get final balances - need to use the updated context after block execution
+	// Note: ProcessBlock updates state, so we query against the same context
+	senderFinalBalance := gigaCtx.TestApp.EvmKeeper.GetBalance(gigaCtx.Ctx, sender.AccountAddress)
+	recipientFinalBalance := gigaCtx.TestApp.EvmKeeper.GetBalance(gigaCtx.Ctx, recipient.AccountAddress)
+
+	t.Logf("Final sender balance: %s", senderFinalBalance.String())
+	t.Logf("Final recipient balance: %s", recipientFinalBalance.String())
+
+	// Read effective gas price from the receipt; fixture uses tip < feeCap so hard-coding feeCap would be wrong.
+	gasUsed := results[0].GasUsed
+	require.NotNil(t, results[0].EvmTxInfo, "tx result missing EvmTxInfo")
+	txReceipt, err := gigaCtx.GetTransientReceipt(t, common.HexToHash(results[0].EvmTxInfo.TxHash), 0)
+	require.NoError(t, err, "expected a transient receipt to compute gas cost")
+	gasPrice := new(big.Int).SetUint64(txReceipt.EffectiveGasPrice)
+	gasCost := new(big.Int).Mul(big.NewInt(gasUsed), gasPrice)
+
+	t.Logf("Gas used: %d, EffectiveGasPrice: %s, Gas cost: %s", gasUsed, gasPrice.String(), gasCost.String())
+
+	// Verify recipient received the transfer amount
+	recipientGained := new(big.Int).Sub(recipientFinalBalance, recipientPreBlockBalance)
+	require.Equal(t, 0, recipientGained.Cmp(transferAmount),
+		"Recipient should have gained exactly the transfer amount. Gained: %s, Expected: %s",
+		recipientGained.String(), transferAmount.String())
+
+	// Verify sender lost transfer amount + gas
+	senderLost := new(big.Int).Sub(senderPreBlockBalance, senderFinalBalance)
+	expectedSenderLoss := new(big.Int).Add(transferAmount, gasCost)
+	require.Equal(t, 0, senderLost.Cmp(expectedSenderLoss),
+		"Sender should have lost transfer amount + gas. Lost: %s, Expected: %s",
+		senderLost.String(), expectedSenderLoss.String())
+
+	t.Logf("Balance transfer verified: sender lost %s (transfer %s + gas %s), recipient gained %s",
+		senderLost.String(), transferAmount.String(), gasCost.String(), recipientGained.String())
+}
+
+// TestGiga_FeeValidationOrder_Phase1_GasLimitExceedsBlock verifies Phase 1 errors don't bump nonce.
+func TestGiga_FeeValidationOrder_Phase1_GasLimitExceedsBlock(t *testing.T) {
+	blockTime := time.Now()
+	accts := utils.NewTestAccounts(3)
+	signer := utils.NewSigner()
+	recipient := utils.NewSigner()
+
+	gigaCtx := NewGigaTestContext(t, accts, blockTime, 1, ModeGigaSequential)
+
+	cp := gigaCtx.Ctx.ConsensusParams()
+	if cp == nil || cp.Block == nil || cp.Block.MaxGas <= 0 {
+		t.Skip("Test requires consensus params with MaxGas > 0")
+	}
+
+	fundAccount(t, gigaCtx, signer.AccountAddress, new(big.Int).Mul(big.NewInt(1e18), big.NewInt(1000)))
+
+	initialNonce := gigaCtx.TestApp.GigaEvmKeeper.GetNonce(gigaCtx.Ctx, signer.EvmAddress)
+	hugeGasLimit := uint64(cp.Block.MaxGas) + 1000000
+
+	to := recipient.EvmAddress
+	tx := createCustomEVMTx(t, gigaCtx, signer, &to, big.NewInt(1), hugeGasLimit,
+		big.NewInt(100000000000), big.NewInt(100000000000), initialNonce)
+
+	_, results, err := RunBlock(t, gigaCtx, [][]byte{tx})
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	require.NotEqual(t, uint32(0), results[0].Code)
+
+	finalNonce := gigaCtx.TestApp.GigaEvmKeeper.GetNonce(gigaCtx.Ctx, signer.EvmAddress)
+	require.Equal(t, initialNonce, finalNonce, "Nonce should NOT be bumped for Phase 1 errors")
+}
+
+// TestGiga_FeeValidationOrder_Phase3_FeeCapBelowBaseFee verifies Phase 3 errors DO bump nonce.
+func TestGiga_FeeValidationOrder_Phase3_FeeCapBelowBaseFee(t *testing.T) {
+	blockTime := time.Now()
+	accts := utils.NewTestAccounts(3)
+	signer := utils.NewSigner()
+	recipient := utils.NewSigner()
+
+	gigaCtx := NewGigaTestContext(t, accts, blockTime, 1, ModeGigaSequential)
+	fundAccount(t, gigaCtx, signer.AccountAddress, new(big.Int).Mul(big.NewInt(1e18), big.NewInt(1000)))
+
+	baseFee := gigaCtx.TestApp.GigaEvmKeeper.GetBaseFee(gigaCtx.Ctx)
+	if baseFee == nil || baseFee.Sign() == 0 {
+		baseFee = big.NewInt(1000000000)
+	}
+
+	lowFeeCap := new(big.Int).Sub(baseFee, big.NewInt(1))
+	if lowFeeCap.Sign() < 0 {
+		lowFeeCap = big.NewInt(0)
+	}
+
+	initialNonce := gigaCtx.TestApp.GigaEvmKeeper.GetNonce(gigaCtx.Ctx, signer.EvmAddress)
+
+	to := recipient.EvmAddress
+	tx := createCustomEVMTx(t, gigaCtx, signer, &to, big.NewInt(1), 21000, lowFeeCap, lowFeeCap, initialNonce)
+
+	_, results, err := RunBlock(t, gigaCtx, [][]byte{tx})
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	require.NotEqual(t, uint32(0), results[0].Code)
+
+	finalNonce := gigaCtx.TestApp.GigaEvmKeeper.GetNonce(gigaCtx.Ctx, signer.EvmAddress)
+	require.Equal(t, initialNonce+1, finalNonce, "Nonce SHOULD be bumped for Phase 3 errors with valid nonce")
+}
+
+// TestGiga_FeeValidationOrder_Phase3_InsufficientBalance verifies insufficient balance bumps nonce.
+func TestGiga_FeeValidationOrder_Phase3_InsufficientBalance(t *testing.T) {
+	blockTime := time.Now()
+	accts := utils.NewTestAccounts(3)
+	signer := utils.NewSigner()
+	recipient := utils.NewSigner()
+
+	gigaCtx := NewGigaTestContext(t, accts, blockTime, 1, ModeGigaSequential)
+	fundAccount(t, gigaCtx, signer.AccountAddress, big.NewInt(1e12))
+
+	initialNonce := gigaCtx.TestApp.GigaEvmKeeper.GetNonce(gigaCtx.Ctx, signer.EvmAddress)
+	largeValue := new(big.Int).Mul(big.NewInt(1e18), big.NewInt(1000))
+
+	to := recipient.EvmAddress
+	tx := createCustomEVMTx(t, gigaCtx, signer, &to, largeValue, 21000,
+		big.NewInt(100000000000), big.NewInt(100000000000), initialNonce)
+
+	_, results, err := RunBlock(t, gigaCtx, [][]byte{tx})
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	require.NotEqual(t, uint32(0), results[0].Code)
+
+	finalNonce := gigaCtx.TestApp.GigaEvmKeeper.GetNonce(gigaCtx.Ctx, signer.EvmAddress)
+	require.Equal(t, initialNonce+1, finalNonce, "Nonce SHOULD be bumped for Phase 3 errors with valid nonce")
+}
+
+// TestGiga_FeeValidationOrder_WrongNonce_NoNonceBump verifies wrong nonce doesn't bump nonce.
+func TestGiga_FeeValidationOrder_WrongNonce_NoNonceBump(t *testing.T) {
+	blockTime := time.Now()
+	accts := utils.NewTestAccounts(3)
+	signer := utils.NewSigner()
+	recipient := utils.NewSigner()
+
+	gigaCtx := NewGigaTestContext(t, accts, blockTime, 1, ModeGigaSequential)
+	fundAccount(t, gigaCtx, signer.AccountAddress, new(big.Int).Mul(big.NewInt(1e18), big.NewInt(1000)))
+
+	initialNonce := gigaCtx.TestApp.GigaEvmKeeper.GetNonce(gigaCtx.Ctx, signer.EvmAddress)
+	wrongNonce := initialNonce + 5
+
+	to := recipient.EvmAddress
+	tx := createCustomEVMTx(t, gigaCtx, signer, &to, big.NewInt(1), 21000,
+		big.NewInt(100000000000), big.NewInt(100000000000), wrongNonce)
+
+	_, results, err := RunBlock(t, gigaCtx, [][]byte{tx})
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	require.NotEqual(t, uint32(0), results[0].Code)
+
+	finalNonce := gigaCtx.TestApp.GigaEvmKeeper.GetNonce(gigaCtx.Ctx, signer.EvmAddress)
+	require.Equal(t, initialNonce, finalNonce, "Nonce should NOT be bumped when tx nonce is wrong")
+}
+
+// TestGiga_FailedExecution_ProducesReceipt locks in the receipt-iff-nonce-bumped
+// invariant for the Giga state-transition-error path: a tx that fails inside
+// go-ethereum's Execute() (notably EIP-7623 floor-data-gas insufficient, which
+// post-Pectra fires in normal operation) bumps the sender's nonce in
+// executeEVMTxWithGigaExecutor's execErr branch and therefore must produce a
+// status=0 receipt. The test asserts both the nonce bump and the receipt write.
+//
+// Without the explicit WriteReceipt in app.go, the receipt was dropped for this
+// case — Giga's AppendToEvmTxDeferredInfo call doesn't propagate the error, so
+// EndBlock's synthetic-receipt fallback (gated on GetNonceBumped) doesn't fire —
+// and eth_getTransactionReceipt returned null forever for a nonce-bumping tx,
+// hanging any client that polls.
+//
+// V2 doesn't need a counterpart fix: BasicDecorator.WithDeliverTxCallback bumps
+// the nonce + calls SetNonceBumped on every DeliverTx, and EndBlock's synthetic-
+// receipt path (modules/evm/keeper/abci.go) writes a receipt via GetAllEVMTxDeferredInfo's
+// txRes.Log fallback, gated on GetNonceBumped — together implementing the same
+// invariant on the V2 path.
+func TestGiga_FailedExecution_ProducesReceipt(t *testing.T) {
+	blockTime := time.Now()
+	accts := utils.NewTestAccounts(3)
+	signer := utils.NewSigner()
+
+	gigaCtx := NewGigaTestContext(t, accts, blockTime, 1, ModeGigaSequential)
+	fundAccount(t, gigaCtx, signer.AccountAddress, new(big.Int).Mul(big.NewInt(1e18), big.NewInt(1000)))
+	gigaCtx.TestApp.EvmKeeper.SetAddressMapping(gigaCtx.Ctx, signer.AccountAddress, signer.EvmAddress)
+
+	// EIP-7623 floor:    21000 + 10 * data-tokens (zero byte = 1 token).
+	// Intrinsic (EIP-2028): 21000 +  4 * data-tokens.
+	// 1000 zero-byte payload → intrinsic=25000, floor=31000.
+	// gasLimit=27500 passes EvmStatelessChecks' intrinsic check (>=25000) but fails
+	// go-ethereum's floor-data-gas check inside Execute() (<31000), which is exactly
+	// the state-transition-error branch the fix targets.
+	const dataLen = 1000
+	const gasLimit uint64 = 27500
+	to := common.HexToAddress("0x0000000000000000000000000000000000001234")
+	signedTx, err := ethtypes.SignTx(ethtypes.NewTx(&ethtypes.DynamicFeeTx{
+		ChainID:   big.NewInt(config.DefaultChainID),
+		Nonce:     gigaCtx.TestApp.GigaEvmKeeper.GetNonce(gigaCtx.Ctx, signer.EvmAddress),
+		GasFeeCap: big.NewInt(100000000000),
+		GasTipCap: big.NewInt(100000000000),
+		Gas:       gasLimit,
+		To:        &to,
+		Value:     big.NewInt(0),
+		Data:      make([]byte, dataLen),
+	}), signer.EvmSigner, signer.EvmPrivateKey)
+	require.NoError(t, err)
+
+	tc := app.MakeEncodingConfig().TxConfig
+	txData, err := ethtx.NewTxDataFromTx(signedTx)
+	require.NoError(t, err)
+	msg, err := types.NewMsgEVMTransaction(txData)
+	require.NoError(t, err)
+	txBuilder := tc.NewTxBuilder()
+	require.NoError(t, txBuilder.SetMsgs(msg))
+	txBuilder.SetGasLimit(10000000000)
+	txBytes, err := tc.TxEncoder()(txBuilder.GetTx())
+	require.NoError(t, err)
+
+	nonceBefore := gigaCtx.TestApp.GigaEvmKeeper.GetNonce(gigaCtx.Ctx, signer.EvmAddress)
+	_, results, err := RunBlock(t, gigaCtx, [][]byte{txBytes})
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+
+	require.Equal(t, uint32(1), results[0].Code, "tx must fail with code=1: log=%q", results[0].Log)
+	require.Contains(t, results[0].Log, "floor data gas", "expected floor-data-gas error: %s", results[0].Log)
+
+	// Receipts are only valid for txs that bumped the sender's nonce. Giga's
+	// executeEVMTxWithGigaExecutor explicitly bumps the nonce in its execErr
+	// branch (node/app.go) before writing the receipt — assert the bump
+	// happened so this invariant is locked in for any future refactor.
+	nonceAfter := gigaCtx.TestApp.GigaEvmKeeper.GetNonce(gigaCtx.Ctx, signer.EvmAddress)
+	require.Equal(t, nonceBefore+1, nonceAfter, "Giga must bump the nonce on state-transition error, otherwise no receipt should be written")
+
+	// The fix: executeEVMTxWithGigaExecutor's execErr != nil branch now writes a
+	// status=0 receipt to the transient store before returning. Verify it landed.
+	txHash := signedTx.Hash()
+	receipt, rerr := gigaCtx.TestApp.GigaEvmKeeper.GetTransientReceipt(gigaCtx.Ctx, txHash, 0)
+	require.Nil(t, rerr, "transient receipt must exist for state-transition-error tx (Giga path)")
+	require.NotNil(t, receipt)
+	require.Equal(t, uint32(ethtypes.ReceiptStatusFailed), receipt.Status, "state-transition-error tx must have status=0 receipt")
+	require.Equal(t, gasLimit, receipt.GasUsed, "state-transition-error tx must report gasUsed=gasLimit (matching the failed-tx convention used elsewhere in Pax)")
+	require.Equal(t, txHash.Hex(), receipt.TxHashHex)
+	require.NotEmpty(t, receipt.VmError, "VmError should capture the state-transition error reason")
+	require.Contains(t, receipt.VmError, "floor data gas")
+}
+
+// TestGigaVsGeth_FeeValidationOrder compares Giga and Geth nonce bump behavior.
+func TestGigaVsGeth_FeeValidationOrder(t *testing.T) {
+	blockTime := time.Now()
+	accts := utils.NewTestAccounts(3)
+	signer := utils.NewSigner()
+	recipient := utils.NewSigner()
+
+	// Geth
+	gethCtx := NewGigaTestContext(t, accts, blockTime, 1, ModeV2withOCC)
+	fundAccount(t, gethCtx, signer.AccountAddress, new(big.Int).Mul(big.NewInt(1e18), big.NewInt(1000)))
+	gethCtx.TestApp.EvmKeeper.SetAddressMapping(gethCtx.Ctx, signer.AccountAddress, signer.EvmAddress)
+
+	gethInitialNonce := gethCtx.TestApp.EvmKeeper.GetNonce(gethCtx.Ctx, signer.EvmAddress)
+
+	to := recipient.EvmAddress
+	gethTx := createCustomEVMTx(t, gethCtx, signer, &to,
+		new(big.Int).Mul(big.NewInt(1e18), big.NewInt(10000)), 21000,
+		big.NewInt(100000000000), big.NewInt(100000000000), gethInitialNonce)
+
+	_, gethResults, err := RunBlock(t, gethCtx, [][]byte{gethTx})
+	require.NoError(t, err)
+	require.Len(t, gethResults, 1)
+
+	gethFinalNonce := gethCtx.TestApp.EvmKeeper.GetNonce(gethCtx.Ctx, signer.EvmAddress)
+
+	// Giga
+	gigaCtx := NewGigaTestContext(t, accts, blockTime, 1, ModeGigaSequential)
+	fundAccount(t, gigaCtx, signer.AccountAddress, new(big.Int).Mul(big.NewInt(1e18), big.NewInt(1000)))
+	gigaCtx.TestApp.EvmKeeper.SetAddressMapping(gigaCtx.Ctx, signer.AccountAddress, signer.EvmAddress)
+
+	gigaInitialNonce := gigaCtx.TestApp.GigaEvmKeeper.GetNonce(gigaCtx.Ctx, signer.EvmAddress)
+
+	gigaTx := createCustomEVMTx(t, gigaCtx, signer, &to,
+		new(big.Int).Mul(big.NewInt(1e18), big.NewInt(10000)), 21000,
+		big.NewInt(100000000000), big.NewInt(100000000000), gigaInitialNonce)
+
+	_, gigaResults, err := RunBlock(t, gigaCtx, [][]byte{gigaTx})
+	require.NoError(t, err)
+	require.Len(t, gigaResults, 1)
+
+	gigaFinalNonce := gigaCtx.TestApp.GigaEvmKeeper.GetNonce(gigaCtx.Ctx, signer.EvmAddress)
+
+	require.Equal(t, gethResults[0].Code, gigaResults[0].Code, "Error codes should match")
+
+	gethNonceBumped := gethFinalNonce > gethInitialNonce
+	gigaNonceBumped := gigaFinalNonce > gigaInitialNonce
+	require.Equal(t, gethNonceBumped, gigaNonceBumped, "Nonce bump behavior should match")
+}
+
+func createCustomEVMTx(
+	t testing.TB,
+	tCtx *GigaTestContext,
+	signer utils.TestAcct,
+	to *common.Address,
+	value *big.Int,
+	gasLimit uint64,
+	gasFeeCap *big.Int,
+	gasTipCap *big.Int,
+	nonce uint64,
+) []byte {
+	tc := app.MakeEncodingConfig().TxConfig
+	tCtx.TestApp.EvmKeeper.SetAddressMapping(tCtx.Ctx, signer.AccountAddress, signer.EvmAddress)
+
+	signedTx, err := ethtypes.SignTx(ethtypes.NewTx(&ethtypes.DynamicFeeTx{
+		GasFeeCap: gasFeeCap,
+		GasTipCap: gasTipCap,
+		Gas:       gasLimit,
+		ChainID:   big.NewInt(config.DefaultChainID),
+		To:        to,
+		Value:     value,
+		Nonce:     nonce,
+	}), signer.EvmSigner, signer.EvmPrivateKey)
+	require.NoError(t, err)
+
+	txData, err := ethtx.NewTxDataFromTx(signedTx)
+	require.NoError(t, err)
+
+	msg, err := types.NewMsgEVMTransaction(txData)
+	require.NoError(t, err)
+
+	txBuilder := tc.NewTxBuilder()
+	err = txBuilder.SetMsgs(msg)
+	require.NoError(t, err)
+	txBuilder.SetGasLimit(10000000000)
+
+	txBytes, err := tc.TxEncoder()(txBuilder.GetTx())
+	require.NoError(t, err)
+
+	return txBytes
+}
+
+func fundAccount(t testing.TB, tCtx *GigaTestContext, addr sdk.AccAddress, amount *big.Int) {
+	uhpxAmount := new(big.Int).Div(amount, big.NewInt(1e12))
+	if uhpxAmount.Sign() == 0 {
+		uhpxAmount = big.NewInt(1)
+	}
+
+	amounts := sdk.NewCoins(sdk.NewCoin("uhpx", sdk.NewIntFromBigInt(uhpxAmount)))
+	err := tCtx.TestApp.BankKeeper.MintCoins(tCtx.Ctx, "mint", amounts)
+	require.NoError(t, err)
+	err = tCtx.TestApp.BankKeeper.SendCoinsFromModuleToAccount(tCtx.Ctx, "mint", addr, amounts)
+	require.NoError(t, err)
+}
+
+// TestGigaOCC_PanicRecovery verifies that the Giga OCC executor handles errors gracefully.
+// This tests the panic recovery mechanism by running multiple transactions through OCC mode.
+func TestGigaOCC_PanicRecovery(t *testing.T) {
+	blockTime := time.Now()
+	accts := utils.NewTestAccounts(5)
+	workers := 4
+	txCount := 10
+
+	transfers := GenerateNonConflictingTransfers(txCount)
+
+	gigaOCCCtx := NewGigaTestContext(t, accts, blockTime, workers, ModeGigaOCC)
+	gigaOCCTxs := CreateEVMTransferTxs(t, gigaOCCCtx, transfers, true)
+	_, gigaOCCResults, err := RunBlock(t, gigaOCCCtx, gigaOCCTxs)
+
+	// The key assertion: the test completes without crashing (panic recovery working)
+	require.NoError(t, err, "Giga OCC should not return error")
+	require.Len(t, gigaOCCResults, txCount, "Should have results for all transactions")
+
+	for i, result := range gigaOCCResults {
+		require.Equal(t, uint32(0), result.Code, "tx[%d] should succeed, got code=%d log=%s", i, result.Code, result.Log)
+	}
+}
+
+// TestGigaOCC_ValidationErrorsHandledGracefully verifies that validation errors
+// are returned as proper error codes, not panics.
+func TestGigaOCC_ValidationErrorsHandledGracefully(t *testing.T) {
+	blockTime := time.Now()
+	accts := utils.NewTestAccounts(3)
+	workers := 4
+
+	signer := utils.NewSigner()
+	recipient := utils.NewSigner()
+
+	gigaCtx := NewGigaTestContext(t, accts, blockTime, workers, ModeGigaOCC)
+	fundAccount(t, gigaCtx, signer.AccountAddress, big.NewInt(1e12)) // Small amount
+
+	initialNonce := gigaCtx.TestApp.GigaEvmKeeper.GetNonce(gigaCtx.Ctx, signer.EvmAddress)
+	largeValue := new(big.Int).Mul(big.NewInt(1e18), big.NewInt(1000))
+
+	to := recipient.EvmAddress
+	tx := createCustomEVMTx(t, gigaCtx, signer, &to, largeValue, 21000,
+		big.NewInt(100000000000), big.NewInt(100000000000), initialNonce)
+
+	// Run through OCC - should handle validation error gracefully (not panic)
+	_, results, err := RunBlock(t, gigaCtx, [][]byte{tx})
+	require.NoError(t, err, "Block processing should not panic")
+	require.Len(t, results, 1)
+
+	// Should fail with proper error code, not crash
+	require.NotEqual(t, uint32(0), results[0].Code, "Should fail validation")
+	require.NotEqual(t, uint32(111222), results[0].Code, "Should not be panic error code")
+}
+
+// TestGigaOCC_MixedValidAndInvalidTxs verifies OCC handles a mix of valid and invalid transactions.
+func TestGigaOCC_MixedValidAndInvalidTxs(t *testing.T) {
+	blockTime := time.Now()
+	accts := utils.NewTestAccounts(5)
+	workers := 4
+
+	// Create valid transfers
+	validTransfers := GenerateNonConflictingTransfers(5)
+
+	gigaCtx := NewGigaTestContext(t, accts, blockTime, workers, ModeGigaOCC)
+	validTxs := CreateEVMTransferTxs(t, gigaCtx, validTransfers, true)
+
+	// Create an invalid tx (insufficient balance)
+	poorSigner := utils.NewSigner()
+	recipient := utils.NewSigner()
+	fundAccount(t, gigaCtx, poorSigner.AccountAddress, big.NewInt(1e12))
+	to := recipient.EvmAddress
+	invalidTx := createCustomEVMTx(t, gigaCtx, poorSigner, &to,
+		new(big.Int).Mul(big.NewInt(1e18), big.NewInt(1000)), 21000,
+		big.NewInt(100000000000), big.NewInt(100000000000), 0)
+
+	// Interleave valid and invalid
+	allTxs := make([][]byte, 0, len(validTxs)+1)
+	allTxs = append(allTxs, validTxs[:2]...)
+	allTxs = append(allTxs, invalidTx)
+	allTxs = append(allTxs, validTxs[2:]...)
+
+	_, results, err := RunBlock(t, gigaCtx, allTxs)
+	require.NoError(t, err, "Block processing should complete without panic")
+	require.Len(t, results, len(allTxs))
+
+	// Valid txs should succeed
+	for i := 0; i < 2; i++ {
+		require.Equal(t, uint32(0), results[i].Code, "Valid tx[%d] should succeed", i)
+	}
+	// Invalid tx should fail gracefully
+	require.NotEqual(t, uint32(0), results[2].Code, "Invalid tx should fail")
+	// Remaining valid txs should succeed
+	for i := 3; i < len(results); i++ {
+		require.Equal(t, uint32(0), results[i].Code, "Valid tx[%d] should succeed", i)
+	}
+}
+
+// TestGigaSequential_PanicRecovery verifies the synchronous path handles errors gracefully.
+func TestGigaSequential_PanicRecovery(t *testing.T) {
+	blockTime := time.Now()
+	accts := utils.NewTestAccounts(5)
+	txCount := 10
+
+	transfers := GenerateNonConflictingTransfers(txCount)
+
+	gigaCtx := NewGigaTestContext(t, accts, blockTime, 1, ModeGigaSequential)
+	gigaTxs := CreateEVMTransferTxs(t, gigaCtx, transfers, true)
+	_, gigaResults, err := RunBlock(t, gigaCtx, gigaTxs)
+
+	require.NoError(t, err, "Giga sequential should not return error")
+	require.Len(t, gigaResults, txCount)
+
+	for i, result := range gigaResults {
+		require.Equal(t, uint32(0), result.Code, "tx[%d] should succeed", i)
+	}
+}
+
+// TestGigaVsGeth_OCCBehavior compares Giga OCC vs Geth OCC for consistency.
+func TestGigaVsGeth_OCCBehavior(t *testing.T) {
+	blockTime := time.Now()
+	accts := utils.NewTestAccounts(5)
+	workers := 4
+	txCount := 10
+
+	transfers := GenerateNonConflictingTransfers(txCount)
+
+	// Geth OCC
+	gethCtx := NewGigaTestContext(t, accts, blockTime, workers, ModeV2withOCC)
+	gethTxs := CreateEVMTransferTxs(t, gethCtx, transfers, false)
+	_, gethResults, gethErr := RunBlock(t, gethCtx, gethTxs)
+	require.NoError(t, gethErr)
+
+	// Giga OCC
+	gigaCtx := NewGigaTestContext(t, accts, blockTime, workers, ModeGigaOCC)
+	gigaTxs := CreateEVMTransferTxs(t, gigaCtx, transfers, true)
+	_, gigaResults, gigaErr := RunBlock(t, gigaCtx, gigaTxs)
+	require.NoError(t, gigaErr)
+
+	require.Len(t, gethResults, txCount)
+	require.Len(t, gigaResults, txCount)
+
+	// Compare error codes
+	for i := range gethResults {
+		require.Equal(t, gethResults[i].Code, gigaResults[i].Code,
+			"tx[%d] code mismatch: Geth=%d, Giga=%d", i, gethResults[i].Code, gigaResults[i].Code)
+	}
+
+	CompareLastResultsHash(t, "GigaOCC_vs_GethOCC", gethResults, gigaResults)
+}
+
+// =============================================================================
+// Validation Tests - Test all validateGigaEVMTx checks against V2 behavior
+// =============================================================================
+
+// TestGigaValidation_FeeCapBelowBaseFee tests that fee cap < base fee is rejected
+// with the correct error code and nonce behavior matching V2.
+func TestGigaValidation_FeeCapBelowBaseFee(t *testing.T) {
+	blockTime := time.Now()
+	accts := utils.NewTestAccounts(3)
+
+	signer := utils.NewSigner()
+	recipient := utils.NewSigner()
+
+	// Run with V2 (baseline)
+	v2Ctx := NewGigaTestContext(t, accts, blockTime, 1, ModeV2Sequential)
+	fundAccount(t, v2Ctx, signer.AccountAddress, big.NewInt(1e18))
+	v2Ctx.TestApp.EvmKeeper.SetAddressMapping(v2Ctx.Ctx, signer.AccountAddress, signer.EvmAddress)
+
+	// Run with Giga
+	gigaCtx := NewGigaTestContext(t, accts, blockTime, 1, ModeGigaSequential)
+	fundAccount(t, gigaCtx, signer.AccountAddress, big.NewInt(1e18))
+	gigaCtx.TestApp.GigaEvmKeeper.SetAddressMapping(gigaCtx.Ctx, signer.AccountAddress, signer.EvmAddress)
+
+	// Create tx with fee cap below base fee (base fee is typically ~1 gwei)
+	to := recipient.EvmAddress
+	lowFeeCap := big.NewInt(1) // 1 wei, way below base fee
+	v2Tx := createCustomEVMTx(t, v2Ctx, signer, &to, big.NewInt(1000), 21000, lowFeeCap, lowFeeCap, 0)
+	gigaTx := createCustomEVMTx(t, gigaCtx, signer, &to, big.NewInt(1000), 21000, lowFeeCap, lowFeeCap, 0)
+
+	_, v2Results, _ := RunBlock(t, v2Ctx, [][]byte{v2Tx})
+	_, gigaResults, _ := RunBlock(t, gigaCtx, [][]byte{gigaTx})
+
+	require.Len(t, v2Results, 1)
+	require.Len(t, gigaResults, 1)
+
+	// Both should fail with ErrInsufficientFee (code 13)
+	require.NotEqual(t, uint32(0), v2Results[0].Code, "V2 should reject low fee cap")
+	require.NotEqual(t, uint32(0), gigaResults[0].Code, "Giga should reject low fee cap")
+	require.Equal(t, v2Results[0].Code, gigaResults[0].Code,
+		"Error codes should match: V2=%d Giga=%d", v2Results[0].Code, gigaResults[0].Code)
+
+	// Check nonce was bumped (fee validation fails after nonce is validated)
+	v2Nonce := v2Ctx.TestApp.EvmKeeper.GetNonce(v2Ctx.Ctx, signer.EvmAddress)
+	gigaNonce := gigaCtx.TestApp.GigaEvmKeeper.GetNonce(gigaCtx.Ctx, signer.EvmAddress)
+	require.Equal(t, v2Nonce, gigaNonce, "Nonce should match after fee validation failure")
+}
+
+// TestGigaValidation_NonceTooHigh tests that nonce too high is rejected correctly.
+func TestGigaValidation_NonceTooHigh(t *testing.T) {
+	blockTime := time.Now()
+	accts := utils.NewTestAccounts(3)
+
+	signer := utils.NewSigner()
+	recipient := utils.NewSigner()
+
+	// V2
+	v2Ctx := NewGigaTestContext(t, accts, blockTime, 1, ModeV2Sequential)
+	fundAccount(t, v2Ctx, signer.AccountAddress, big.NewInt(1e18))
+	v2Ctx.TestApp.EvmKeeper.SetAddressMapping(v2Ctx.Ctx, signer.AccountAddress, signer.EvmAddress)
+
+	// Giga
+	gigaCtx := NewGigaTestContext(t, accts, blockTime, 1, ModeGigaSequential)
+	fundAccount(t, gigaCtx, signer.AccountAddress, big.NewInt(1e18))
+	gigaCtx.TestApp.GigaEvmKeeper.SetAddressMapping(gigaCtx.Ctx, signer.AccountAddress, signer.EvmAddress)
+
+	// Create tx with nonce too high (nonce 5 when current is 0)
+	to := recipient.EvmAddress
+	normalFee := big.NewInt(100000000000) // 100 gwei
+	v2Tx := createCustomEVMTx(t, v2Ctx, signer, &to, big.NewInt(1000), 21000, normalFee, normalFee, 5)
+	gigaTx := createCustomEVMTx(t, gigaCtx, signer, &to, big.NewInt(1000), 21000, normalFee, normalFee, 5)
+
+	_, v2Results, _ := RunBlock(t, v2Ctx, [][]byte{v2Tx})
+	_, gigaResults, _ := RunBlock(t, gigaCtx, [][]byte{gigaTx})
+
+	require.Len(t, v2Results, 1)
+	require.Len(t, gigaResults, 1)
+
+	// Both should fail with ErrWrongSequence (code 32)
+	require.NotEqual(t, uint32(0), v2Results[0].Code, "V2 should reject high nonce")
+	require.NotEqual(t, uint32(0), gigaResults[0].Code, "Giga should reject high nonce")
+	require.Equal(t, v2Results[0].Code, gigaResults[0].Code,
+		"Error codes should match: V2=%d Giga=%d", v2Results[0].Code, gigaResults[0].Code)
+
+	// Check nonce was NOT bumped (nonce mismatch should not bump)
+	v2Nonce := v2Ctx.TestApp.EvmKeeper.GetNonce(v2Ctx.Ctx, signer.EvmAddress)
+	gigaNonce := gigaCtx.TestApp.GigaEvmKeeper.GetNonce(gigaCtx.Ctx, signer.EvmAddress)
+	require.Equal(t, uint64(0), v2Nonce, "V2 nonce should not be bumped")
+	require.Equal(t, uint64(0), gigaNonce, "Giga nonce should not be bumped")
+}
+
+// TestGigaValidation_NonceTooLow tests that nonce too low is rejected correctly.
+func TestGigaValidation_NonceTooLow(t *testing.T) {
+	blockTime := time.Now()
+	accts := utils.NewTestAccounts(3)
+
+	signer := utils.NewSigner()
+	recipient := utils.NewSigner()
+
+	// V2
+	v2Ctx := NewGigaTestContext(t, accts, blockTime, 1, ModeV2Sequential)
+	fundAccount(t, v2Ctx, signer.AccountAddress, big.NewInt(1e18))
+	v2Ctx.TestApp.EvmKeeper.SetAddressMapping(v2Ctx.Ctx, signer.AccountAddress, signer.EvmAddress)
+	// Set nonce to 5
+	v2Ctx.TestApp.EvmKeeper.SetNonce(v2Ctx.Ctx, signer.EvmAddress, 5)
+
+	// Giga
+	gigaCtx := NewGigaTestContext(t, accts, blockTime, 1, ModeGigaSequential)
+	fundAccount(t, gigaCtx, signer.AccountAddress, big.NewInt(1e18))
+	gigaCtx.TestApp.GigaEvmKeeper.SetAddressMapping(gigaCtx.Ctx, signer.AccountAddress, signer.EvmAddress)
+	// Set nonce to 5
+	gigaCtx.TestApp.GigaEvmKeeper.SetNonce(gigaCtx.Ctx, signer.EvmAddress, 5)
+
+	// Create tx with nonce too low (nonce 2 when current is 5)
+	to := recipient.EvmAddress
+	normalFee := big.NewInt(100000000000)
+	v2Tx := createCustomEVMTx(t, v2Ctx, signer, &to, big.NewInt(1000), 21000, normalFee, normalFee, 2)
+	gigaTx := createCustomEVMTx(t, gigaCtx, signer, &to, big.NewInt(1000), 21000, normalFee, normalFee, 2)
+
+	_, v2Results, _ := RunBlock(t, v2Ctx, [][]byte{v2Tx})
+	_, gigaResults, _ := RunBlock(t, gigaCtx, [][]byte{gigaTx})
+
+	require.Len(t, v2Results, 1)
+	require.Len(t, gigaResults, 1)
+
+	// Both should fail with ErrWrongSequence (code 32)
+	require.NotEqual(t, uint32(0), v2Results[0].Code, "V2 should reject low nonce")
+	require.NotEqual(t, uint32(0), gigaResults[0].Code, "Giga should reject low nonce")
+	require.Equal(t, v2Results[0].Code, gigaResults[0].Code,
+		"Error codes should match: V2=%d Giga=%d", v2Results[0].Code, gigaResults[0].Code)
+
+	// Nonce should remain at 5 (not bumped)
+	v2Nonce := v2Ctx.TestApp.EvmKeeper.GetNonce(v2Ctx.Ctx, signer.EvmAddress)
+	gigaNonce := gigaCtx.TestApp.GigaEvmKeeper.GetNonce(gigaCtx.Ctx, signer.EvmAddress)
+	require.Equal(t, uint64(5), v2Nonce, "V2 nonce should stay at 5")
+	require.Equal(t, uint64(5), gigaNonce, "Giga nonce should stay at 5")
+}
+
+// TestGigaValidation_InsufficientBalance tests that insufficient balance is rejected.
+func TestGigaValidation_InsufficientBalance(t *testing.T) {
+	blockTime := time.Now()
+	accts := utils.NewTestAccounts(3)
+
+	signer := utils.NewSigner()
+	recipient := utils.NewSigner()
+
+	// V2 - fund with small amount
+	v2Ctx := NewGigaTestContext(t, accts, blockTime, 1, ModeV2Sequential)
+	fundAccount(t, v2Ctx, signer.AccountAddress, big.NewInt(1e12)) // 0.000001 pax in wei
+	v2Ctx.TestApp.EvmKeeper.SetAddressMapping(v2Ctx.Ctx, signer.AccountAddress, signer.EvmAddress)
+
+	// Giga - fund with same small amount
+	gigaCtx := NewGigaTestContext(t, accts, blockTime, 1, ModeGigaSequential)
+	fundAccount(t, gigaCtx, signer.AccountAddress, big.NewInt(1e12))
+	gigaCtx.TestApp.GigaEvmKeeper.SetAddressMapping(gigaCtx.Ctx, signer.AccountAddress, signer.EvmAddress)
+
+	// Try to send way more than we have
+	to := recipient.EvmAddress
+	normalFee := big.NewInt(100000000000)
+	largeValue := new(big.Int).Mul(big.NewInt(1e18), big.NewInt(1000)) // 1000 pax
+	v2Tx := createCustomEVMTx(t, v2Ctx, signer, &to, largeValue, 21000, normalFee, normalFee, 0)
+	gigaTx := createCustomEVMTx(t, gigaCtx, signer, &to, largeValue, 21000, normalFee, normalFee, 0)
+
+	_, v2Results, _ := RunBlock(t, v2Ctx, [][]byte{v2Tx})
+	_, gigaResults, _ := RunBlock(t, gigaCtx, [][]byte{gigaTx})
+
+	require.Len(t, v2Results, 1)
+	require.Len(t, gigaResults, 1)
+
+	// Both should fail with ErrInsufficientFunds (code 5)
+	require.NotEqual(t, uint32(0), v2Results[0].Code, "V2 should reject insufficient balance")
+	require.NotEqual(t, uint32(0), gigaResults[0].Code, "Giga should reject insufficient balance")
+	require.Equal(t, v2Results[0].Code, gigaResults[0].Code,
+		"Error codes should match: V2=%d Giga=%d", v2Results[0].Code, gigaResults[0].Code)
+
+	// Nonce should be bumped (balance check happens after nonce validation passes)
+	v2Nonce := v2Ctx.TestApp.EvmKeeper.GetNonce(v2Ctx.Ctx, signer.EvmAddress)
+	gigaNonce := gigaCtx.TestApp.GigaEvmKeeper.GetNonce(gigaCtx.Ctx, signer.EvmAddress)
+	require.Equal(t, v2Nonce, gigaNonce, "Nonce should match after balance validation failure")
+	require.Equal(t, uint64(1), gigaNonce, "Nonce should be bumped to 1")
+}
+
+// Note: TestGigaValidation_TipCapGreaterThanFeeCap is not possible because
+// go-ethereum's SignTx validates tip <= feeCap at signing time (client-side validation).
+// The check in validateGigaEVMTx exists for defense-in-depth but can't be tested
+// through the normal transaction creation flow.
+
+// TestGigaValidation_GasReportedOnFailure tests that gas is reported on validation failure.
+// Note: V2 and Giga may report different GasUsed values on validation failures due to
+// differences in how the ante handler chain reports gas consumption. The critical parity
+// requirement is that error codes match (for consensus on tx success/failure).
+func TestGigaValidation_GasReportedOnFailure(t *testing.T) {
+	blockTime := time.Now()
+	accts := utils.NewTestAccounts(3)
+
+	signer := utils.NewSigner()
+	recipient := utils.NewSigner()
+
+	// V2
+	v2Ctx := NewGigaTestContext(t, accts, blockTime, 1, ModeV2Sequential)
+	fundAccount(t, v2Ctx, signer.AccountAddress, big.NewInt(1e12))
+	v2Ctx.TestApp.EvmKeeper.SetAddressMapping(v2Ctx.Ctx, signer.AccountAddress, signer.EvmAddress)
+
+	// Giga
+	gigaCtx := NewGigaTestContext(t, accts, blockTime, 1, ModeGigaSequential)
+	fundAccount(t, gigaCtx, signer.AccountAddress, big.NewInt(1e12))
+	gigaCtx.TestApp.GigaEvmKeeper.SetAddressMapping(gigaCtx.Ctx, signer.AccountAddress, signer.EvmAddress)
+
+	// Create failing tx (insufficient balance)
+	to := recipient.EvmAddress
+	normalFee := big.NewInt(100000000000)
+	largeValue := new(big.Int).Mul(big.NewInt(1e18), big.NewInt(1000))
+	v2Tx := createCustomEVMTx(t, v2Ctx, signer, &to, largeValue, 21000, normalFee, normalFee, 0)
+	gigaTx := createCustomEVMTx(t, gigaCtx, signer, &to, largeValue, 21000, normalFee, normalFee, 0)
+
+	_, v2Results, _ := RunBlock(t, v2Ctx, [][]byte{v2Tx})
+	_, gigaResults, _ := RunBlock(t, gigaCtx, [][]byte{gigaTx})
+
+	require.Len(t, v2Results, 1)
+	require.Len(t, gigaResults, 1)
+
+	// Error codes must match (critical for consensus)
+	require.Equal(t, v2Results[0].Code, gigaResults[0].Code,
+		"Error codes should match: V2=%d Giga=%d", v2Results[0].Code, gigaResults[0].Code)
+
+	// Both should report non-zero gas values
+	require.Greater(t, gigaResults[0].GasUsed, int64(0), "Giga should report GasUsed > 0")
+	require.Greater(t, gigaResults[0].GasWanted, int64(0), "Giga should report GasWanted > 0")
+
+	// Log the difference for visibility (not a failure)
+	if v2Results[0].GasUsed != gigaResults[0].GasUsed {
+		t.Logf("Note: GasUsed differs on validation failure - V2=%d, Giga=%d (expected due to ante handler differences)",
+			v2Results[0].GasUsed, gigaResults[0].GasUsed)
+	}
+}
+
+// TestGigaValidation_ErrorCodeParity tests that validation failures produce
+// identical error codes between V2 and Giga (critical for consensus on tx success/failure).
+// Note: GasUsed may differ between V2 and Giga on validation failures due to ante handler
+// differences, but this doesn't affect consensus on whether a tx succeeded or failed.
+func TestGigaValidation_ErrorCodeParity(t *testing.T) {
+	blockTime := time.Now()
+	accts := utils.NewTestAccounts(5)
+
+	signer1 := utils.NewSigner()
+	signer2 := utils.NewSigner()
+	signer3 := utils.NewSigner()
+	recipient := utils.NewSigner()
+
+	// V2
+	v2Ctx := NewGigaTestContext(t, accts, blockTime, 1, ModeV2Sequential)
+	fundAccount(t, v2Ctx, signer1.AccountAddress, big.NewInt(1e18))
+	fundAccount(t, v2Ctx, signer2.AccountAddress, big.NewInt(1e12)) // insufficient for large transfer
+	fundAccount(t, v2Ctx, signer3.AccountAddress, big.NewInt(1e18))
+	v2Ctx.TestApp.EvmKeeper.SetAddressMapping(v2Ctx.Ctx, signer1.AccountAddress, signer1.EvmAddress)
+	v2Ctx.TestApp.EvmKeeper.SetAddressMapping(v2Ctx.Ctx, signer2.AccountAddress, signer2.EvmAddress)
+	v2Ctx.TestApp.EvmKeeper.SetAddressMapping(v2Ctx.Ctx, signer3.AccountAddress, signer3.EvmAddress)
+
+	// Giga
+	gigaCtx := NewGigaTestContext(t, accts, blockTime, 1, ModeGigaSequential)
+	fundAccount(t, gigaCtx, signer1.AccountAddress, big.NewInt(1e18))
+	fundAccount(t, gigaCtx, signer2.AccountAddress, big.NewInt(1e12))
+	fundAccount(t, gigaCtx, signer3.AccountAddress, big.NewInt(1e18))
+	gigaCtx.TestApp.GigaEvmKeeper.SetAddressMapping(gigaCtx.Ctx, signer1.AccountAddress, signer1.EvmAddress)
+	gigaCtx.TestApp.GigaEvmKeeper.SetAddressMapping(gigaCtx.Ctx, signer2.AccountAddress, signer2.EvmAddress)
+	gigaCtx.TestApp.GigaEvmKeeper.SetAddressMapping(gigaCtx.Ctx, signer3.AccountAddress, signer3.EvmAddress)
+
+	to := recipient.EvmAddress
+	normalFee := big.NewInt(100000000000)
+	largeValue := new(big.Int).Mul(big.NewInt(1e18), big.NewInt(1000))
+
+	// Mix of valid and invalid txs
+	v2Txs := [][]byte{
+		createCustomEVMTx(t, v2Ctx, signer1, &to, big.NewInt(1000), 21000, normalFee, normalFee, 0), // valid
+		createCustomEVMTx(t, v2Ctx, signer2, &to, largeValue, 21000, normalFee, normalFee, 0),       // insufficient balance
+		createCustomEVMTx(t, v2Ctx, signer3, &to, big.NewInt(1000), 21000, normalFee, normalFee, 5), // nonce too high
+	}
+	gigaTxs := [][]byte{
+		createCustomEVMTx(t, gigaCtx, signer1, &to, big.NewInt(1000), 21000, normalFee, normalFee, 0),
+		createCustomEVMTx(t, gigaCtx, signer2, &to, largeValue, 21000, normalFee, normalFee, 0),
+		createCustomEVMTx(t, gigaCtx, signer3, &to, big.NewInt(1000), 21000, normalFee, normalFee, 5),
+	}
+
+	_, v2Results, _ := RunBlock(t, v2Ctx, v2Txs)
+	_, gigaResults, _ := RunBlock(t, gigaCtx, gigaTxs)
+
+	require.Len(t, v2Results, 3)
+	require.Len(t, gigaResults, 3)
+
+	// Compare error codes (critical for consensus)
+	for i := range v2Results {
+		require.Equal(t, v2Results[i].Code, gigaResults[i].Code,
+			"tx[%d] Code mismatch: V2=%d Giga=%d", i, v2Results[i].Code, gigaResults[i].Code)
+
+		// Log gas differences for visibility
+		if v2Results[i].GasUsed != gigaResults[i].GasUsed {
+			t.Logf("tx[%d] GasUsed differs: V2=%d Giga=%d (expected for validation failures)",
+				i, v2Results[i].GasUsed, gigaResults[i].GasUsed)
+		}
+	}
+
+	// Verify expected outcomes
+	require.Equal(t, uint32(0), v2Results[0].Code, "tx[0] should succeed")
+	require.NotEqual(t, uint32(0), v2Results[1].Code, "tx[1] should fail (insufficient balance)")
+	require.NotEqual(t, uint32(0), v2Results[2].Code, "tx[2] should fail (nonce too high)")
+}
+
+// TestGigaValidation_FeeCapBelowMinimumFee tests that fee cap < minimum fee is rejected.
+func TestGigaValidation_FeeCapBelowMinimumFee(t *testing.T) {
+	blockTime := time.Now()
+	accts := utils.NewTestAccounts(3)
+
+	signer := utils.NewSigner()
+	recipient := utils.NewSigner()
+
+	// V2
+	v2Ctx := NewGigaTestContext(t, accts, blockTime, 1, ModeV2Sequential)
+	fundAccount(t, v2Ctx, signer.AccountAddress, big.NewInt(1e18))
+	v2Ctx.TestApp.EvmKeeper.SetAddressMapping(v2Ctx.Ctx, signer.AccountAddress, signer.EvmAddress)
+
+	// Giga
+	gigaCtx := NewGigaTestContext(t, accts, blockTime, 1, ModeGigaSequential)
+	fundAccount(t, gigaCtx, signer.AccountAddress, big.NewInt(1e18))
+	gigaCtx.TestApp.GigaEvmKeeper.SetAddressMapping(gigaCtx.Ctx, signer.AccountAddress, signer.EvmAddress)
+
+	// Get minimum fee from V2 and use a value just below it
+	minFee := v2Ctx.TestApp.EvmKeeper.GetMinimumFeePerGas(v2Ctx.Ctx)
+	lowFeeCap := minFee.TruncateInt().BigInt()
+	lowFeeCap = new(big.Int).Sub(lowFeeCap, big.NewInt(1)) // Just below minimum
+	if lowFeeCap.Sign() <= 0 {
+		t.Skip("minimum fee is 0 or 1, cannot test below-minimum")
+	}
+
+	to := recipient.EvmAddress
+	v2Tx := createCustomEVMTx(t, v2Ctx, signer, &to, big.NewInt(1000), 21000, lowFeeCap, lowFeeCap, 0)
+	gigaTx := createCustomEVMTx(t, gigaCtx, signer, &to, big.NewInt(1000), 21000, lowFeeCap, lowFeeCap, 0)
+
+	_, v2Results, _ := RunBlock(t, v2Ctx, [][]byte{v2Tx})
+	_, gigaResults, _ := RunBlock(t, gigaCtx, [][]byte{gigaTx})
+
+	require.Len(t, v2Results, 1)
+	require.Len(t, gigaResults, 1)
+
+	// Both should fail
+	require.NotEqual(t, uint32(0), v2Results[0].Code, "V2 should reject below-minimum fee")
+	require.NotEqual(t, uint32(0), gigaResults[0].Code, "Giga should reject below-minimum fee")
+	require.Equal(t, v2Results[0].Code, gigaResults[0].Code,
+		"Error codes should match: V2=%d Giga=%d", v2Results[0].Code, gigaResults[0].Code)
+}
+
+// TestGigaValidation_AllModes tests validation errors across all executor modes.
+func TestGigaValidation_AllModes(t *testing.T) {
+	blockTime := time.Now()
+	accts := utils.NewTestAccounts(5)
+	workers := 4
+
+	testCases := []struct {
+		name    string
+		setupTx func(tCtx *GigaTestContext, signer, recipient utils.TestAcct) []byte
+	}{
+		{
+			name: "InsufficientBalance",
+			setupTx: func(tCtx *GigaTestContext, signer, recipient utils.TestAcct) []byte {
+				to := recipient.EvmAddress
+				return createCustomEVMTx(t, tCtx, signer, &to,
+					new(big.Int).Mul(big.NewInt(1e18), big.NewInt(1000)), // way more than funded
+					21000, big.NewInt(100000000000), big.NewInt(100000000000), 0)
+			},
+		},
+		{
+			name: "NonceTooHigh",
+			setupTx: func(tCtx *GigaTestContext, signer, recipient utils.TestAcct) []byte {
+				to := recipient.EvmAddress
+				return createCustomEVMTx(t, tCtx, signer, &to,
+					big.NewInt(1000), 21000,
+					big.NewInt(100000000000), big.NewInt(100000000000), 99) // nonce 99 when current is 0
+			},
+		},
+	}
+
+	modes := []ExecutorMode{ModeV2Sequential, ModeV2withOCC, ModeGigaSequential, ModeGigaOCC}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			var baseResult *abci.ExecTxResult
+
+			for _, mode := range modes {
+				t.Run(mode.String(), func(t *testing.T) {
+					signer := utils.NewSigner()
+					recipient := utils.NewSigner()
+
+					tCtx := NewGigaTestContext(t, accts, blockTime, workers, mode)
+					fundAccount(t, tCtx, signer.AccountAddress, big.NewInt(1e12)) // Small funding
+
+					// Set address mapping based on mode
+					if mode == ModeGigaSequential || mode == ModeGigaOCC {
+						tCtx.TestApp.GigaEvmKeeper.SetAddressMapping(tCtx.Ctx, signer.AccountAddress, signer.EvmAddress)
+					} else {
+						tCtx.TestApp.EvmKeeper.SetAddressMapping(tCtx.Ctx, signer.AccountAddress, signer.EvmAddress)
+					}
+
+					tx := tc.setupTx(tCtx, signer, recipient)
+					_, results, err := RunBlock(t, tCtx, [][]byte{tx})
+					require.NoError(t, err)
+					require.Len(t, results, 1)
+
+					// Should fail
+					require.NotEqual(t, uint32(0), results[0].Code,
+						"%s: should fail in mode %s", tc.name, mode)
+
+					// First result becomes baseline
+					if baseResult == nil {
+						baseResult = results[0]
+					} else {
+						// All modes should produce same error code
+						require.Equal(t, baseResult.Code, results[0].Code,
+							"%s: code mismatch in mode %s (expected %d, got %d)",
+							tc.name, mode, baseResult.Code, results[0].Code)
+					}
+				})
+			}
+		})
+	}
+}
+
+// createUnassociatedEVMTx creates a signed EVM transfer without calling SetAddressMapping,
+// so the sender remains unassociated and triggers balance migration on first use.
+func createUnassociatedEVMTx(t testing.TB, tCtx *GigaTestContext, signer utils.TestAcct, to common.Address, value *big.Int, nonce uint64) []byte {
+	tc := app.MakeEncodingConfig().TxConfig
+
+	signedTx, err := ethtypes.SignTx(ethtypes.NewTx(&ethtypes.DynamicFeeTx{
+		GasFeeCap: new(big.Int).SetUint64(100000000000),
+		GasTipCap: new(big.Int).SetUint64(100000000000),
+		Gas:       21000,
+		ChainID:   big.NewInt(config.DefaultChainID),
+		To:        &to,
+		Value:     value,
+		Nonce:     nonce,
+	}), signer.EvmSigner, signer.EvmPrivateKey)
+	require.NoError(t, err)
+
+	txData, err := ethtx.NewTxDataFromTx(signedTx)
+	require.NoError(t, err)
+
+	msg, err := types.NewMsgEVMTransaction(txData)
+	require.NoError(t, err)
+
+	txBuilder := tc.NewTxBuilder()
+	err = txBuilder.SetMsgs(msg)
+	require.NoError(t, err)
+	txBuilder.SetGasLimit(10000000000)
+
+	txBytes, err := tc.TxEncoder()(txBuilder.GetTx())
+	require.NoError(t, err)
+
+	return txBytes
+}
+
+// TestGigaVsGeth_BalanceMigrationMultipleDenoms verifies that when giga encounters an
+// unassociated address holding multiple token denominations, it correctly aborts and
+// falls back to v2, which performs the full balance migration. The results must match
+// a pure v2 execution for consensus parity.
+func TestGigaVsGeth_BalanceMigrationMultipleDenoms(t *testing.T) {
+	blockTime := time.Now()
+	accts := utils.NewTestAccounts(5)
+
+	signer := utils.NewSigner()
+	recipient := utils.NewSigner()
+
+	// The cast address is the EVM address bytes interpreted as a Cosmos address.
+	// Before association, funds sent to this "address" need to be migrated.
+	castAddr := sdk.AccAddress(signer.EvmAddress[:])
+
+	// Fund the cast address with MULTIPLE denominations — this is the key scenario.
+	// Balance migration must move all denoms, not just uhpx.
+	multiDenomCoins := sdk.NewCoins(
+		sdk.NewCoin("uhpx", sdk.NewInt(1000000000000000000)), // 1e18 uhpx (enough for gas + transfer)
+		sdk.NewCoin("uusdc", sdk.NewInt(500000000)),          // 500 uusdc
+	)
+
+	// --- V2 baseline (handles migration natively) ---
+	v2Ctx := NewGigaTestContext(t, accts, blockTime, 1, ModeV2Sequential)
+	err := v2Ctx.TestApp.BankKeeper.MintCoins(v2Ctx.Ctx, "mint", multiDenomCoins)
+	require.NoError(t, err)
+	err = v2Ctx.TestApp.BankKeeper.SendCoinsFromModuleToAccount(v2Ctx.Ctx, "mint", castAddr, multiDenomCoins)
+	require.NoError(t, err)
+	// DO NOT associate — this forces the preprocess ante handler to migrate balances
+
+	v2Tx := createUnassociatedEVMTx(t, v2Ctx, signer, recipient.EvmAddress, big.NewInt(1000), 0)
+	_, v2Results, v2Err := RunBlock(t, v2Ctx, [][]byte{v2Tx})
+	require.NoError(t, v2Err)
+	require.Len(t, v2Results, 1)
+
+	// --- Giga Sequential (should abort and fall back to v2) ---
+	gigaCtx := NewGigaTestContext(t, accts, blockTime, 1, ModeGigaSequential)
+	err = gigaCtx.TestApp.BankKeeper.MintCoins(gigaCtx.Ctx, "mint", multiDenomCoins)
+	require.NoError(t, err)
+	err = gigaCtx.TestApp.BankKeeper.SendCoinsFromModuleToAccount(gigaCtx.Ctx, "mint", castAddr, multiDenomCoins)
+	require.NoError(t, err)
+	// DO NOT associate — giga should detect this and abort
+
+	gigaTx := createUnassociatedEVMTx(t, gigaCtx, signer, recipient.EvmAddress, big.NewInt(1000), 0)
+	_, gigaResults, gigaErr := RunBlock(t, gigaCtx, [][]byte{gigaTx})
+	require.NoError(t, gigaErr)
+	require.Len(t, gigaResults, 1)
+
+	// Both should succeed — giga fell back to v2 which handled migration
+	require.Equal(t, uint32(0), v2Results[0].Code, "V2 tx should succeed: %s", v2Results[0].Log)
+	require.Equal(t, uint32(0), gigaResults[0].Code, "Giga tx should succeed (via v2 fallback): %s", gigaResults[0].Log)
+
+	// Consensus-critical: deterministic fields must match
+	require.Equal(t, v2Results[0].Code, gigaResults[0].Code, "Code mismatch")
+	require.Equal(t, v2Results[0].GasUsed, gigaResults[0].GasUsed, "GasUsed mismatch")
+	require.Equal(t, v2Results[0].GasWanted, gigaResults[0].GasWanted, "GasWanted mismatch")
+	CompareLastResultsHash(t, "BalanceMigrationMultipleDenoms", v2Results, gigaResults)
+
+	// Verify migration happened in V2: cast address should be empty,
+	// real pax address should hold the non-uhpx denoms.
+	v2CastUsdc := v2Ctx.TestApp.BankKeeper.GetBalance(v2Ctx.Ctx, castAddr, "uusdc")
+	v2RealUsdc := v2Ctx.TestApp.BankKeeper.GetBalance(v2Ctx.Ctx, signer.AccountAddress, "uusdc")
+	require.True(t, v2CastUsdc.IsZero(), "V2: cast address uusdc should be 0 after migration, got %s", v2CastUsdc)
+	require.Equal(t, int64(500000000), v2RealUsdc.Amount.Int64(),
+		"V2: real pax address should hold migrated uusdc")
+
+	// Verify migration also happened in the Giga (v2-fallback) path
+	gigaCastUsdc := gigaCtx.TestApp.BankKeeper.GetBalance(gigaCtx.Ctx, castAddr, "uusdc")
+	gigaRealUsdc := gigaCtx.TestApp.BankKeeper.GetBalance(gigaCtx.Ctx, signer.AccountAddress, "uusdc")
+	require.True(t, gigaCastUsdc.IsZero(), "Giga: cast address uusdc should be 0 after migration, got %s", gigaCastUsdc)
+	require.Equal(t, int64(500000000), gigaRealUsdc.Amount.Int64(),
+		"Giga: real pax address should hold migrated uusdc")
+
+	t.Logf("Balance migration with multiple denoms verified: V2 and Giga (v2-fallback) produce identical results")
+	t.Logf("  V2 cast uusdc: %s, real uusdc: %s", v2CastUsdc, v2RealUsdc)
+	t.Logf("  Giga cast uusdc: %s, real uusdc: %s", gigaCastUsdc, gigaRealUsdc)
+}

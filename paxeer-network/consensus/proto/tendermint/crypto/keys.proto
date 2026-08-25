@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+package tendermint.crypto;
+
+import "gogoproto/gogo.proto";
+
+option go_package = "github.com/sidiora-labs/paxeer-network/consensus/proto/tendermint/crypto";
+
+// PublicKey defines the keys available for use with Tendermint Validators
+message PublicKey {
+  option (gogoproto.compare) = true;
+  option (gogoproto.equal) = true;
+
+  oneof sum {
+    bytes ed25519 = 1;
+  }
+  reserved 2, 3;
+  reserved "secp256k1", "sr25519";
+}

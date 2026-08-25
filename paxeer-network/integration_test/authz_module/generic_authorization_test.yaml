@@ -1,0 +1,31 @@
+- name: Test Authz generic authorization
+  inputs:
+    # Get admin addr
+    - cmd: printf "12345678\n" | paxd keys list --output json | jq ".[] | select (.name==\"admin\")" | jq -r .address
+      env: ADMIN_ADDR
+    # MSG type "/paxprotocol.paxchain.tokenfactory.MsgCreateDenom"
+    # create new grantee addr
+    - cmd: printf "12345678\ny\n" | paxd keys add grantee --output json | jq -r ".address"
+      env: GRANTEE_ADDR
+    # send some funds to grantee for gas
+    - cmd: paxdbin=paxd; chainid=pax; source integration_test/utils/_tx_helpers.sh && submit_tx_and_wait admin bank send admin $GRANTEE_ADDR 1pax --fees 2000uhpx
+    # create an authz grant for tokenfactory create denom
+    - cmd: paxdbin=paxd; chainid=pax; source integration_test/utils/_tx_helpers.sh && submit_tx_and_wait admin authz grant $GRANTEE_ADDR generic --msg-type "/paxprotocol.paxchain.tokenfactory.MsgCreateDenom" --fees 2000uhpx
+    - cmd: uuidgen
+      env: TF_UUID
+    # create TF create-denom tx and write to json
+    - cmd: printf "12345678\n" | paxd tx tokenfactory create-denom $TF_UUID --from $ADMIN_ADDR --generate-only > create_denom_tx.json
+    # execute the authz tx - we want to validate that this succeeds with code 0
+    - cmd: paxdbin=paxd; chainid=pax; source integration_test/utils/_tx_helpers.sh && submit_tx_and_wait $GRANTEE_ADDR authz exec create_denom_tx.json --fees 2000uhpx
+      env: AUTHZ_1_ERROR_CODE
+    # verify that the denom exists
+    - cmd: paxd q tokenfactory denom-authority-metadata factory/$ADMIN_ADDR/$TF_UUID --output json | jq -r ".authority_metadata.admin"
+      env: TF_ADMIN
+    # verify that the admin is ADMIN_ADDR
+  verifiers:
+    # verify that error code == 0 for first authz exec
+    - type: eval
+      expr: AUTHZ_1_ERROR_CODE == 0
+    # verify TF metadata is correct
+    - type: eval
+      expr: TF_ADMIN == ADMIN_ADDR

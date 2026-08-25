@@ -1,0 +1,43 @@
+- name: Test staking proposal should update staking params
+  inputs:
+    # Get the current params
+    - cmd: paxd q params subspace staking UnbondingTime --output json | jq -r .value | tr -d "\""
+      env: OLD_PARAM
+    # Make a new expedited proposal
+    - cmd: paxdbin=paxd; chainid=pax; source integration_test/utils/_tx_helpers.sh && submit_gov_proposal admin "Update Unbonding Time" gov submit-proposal param-change ./integration_test/gov_module/proposal/staking_proposal.json --fees 2000uhpx
+      env: PROPOSAL_ID
+    # Get proposal status
+    - cmd: paxd q gov proposal $PROPOSAL_ID --output json | jq -r .status
+      env: PROPOSAL_STATUS
+    # Make a deposit
+    - cmd: paxdbin=paxd; chainid=pax; source integration_test/utils/_tx_helpers.sh && submit_tx_and_wait admin gov deposit $PROPOSAL_ID 10000000uhpx --fees 2000uhpx
+    # pax-node-0 vote yes
+    - cmd: paxdbin=paxd; chainid=pax; source integration_test/utils/_tx_helpers.sh && submit_tx_and_wait node_admin gov vote $PROPOSAL_ID yes --fees 2000uhpx
+      node: pax-node-0
+    # pax-node-1 vote yes
+    - cmd: paxd q gov proposal $PROPOSAL_ID --output json | jq -r .status
+    - cmd: paxdbin=paxd; chainid=pax; source integration_test/utils/_tx_helpers.sh && submit_tx_and_wait node_admin gov vote $PROPOSAL_ID yes --fees 2000uhpx
+      node: pax-node-1
+    # pax-node-2 vote yes
+    - cmd: paxd q gov proposal $PROPOSAL_ID --output json | jq -r .status
+    - cmd: paxdbin=paxd; chainid=pax; source integration_test/utils/_tx_helpers.sh && submit_tx_and_wait node_admin gov vote $PROPOSAL_ID yes --fees 2000uhpx
+      node: pax-node-2
+    # pax-node-3 vote yes
+    - cmd: paxd q gov proposal $PROPOSAL_ID --output json | jq -r .status
+    - cmd: paxdbin=paxd; chainid=pax; source integration_test/utils/_tx_helpers.sh && submit_tx_and_wait node_admin gov vote $PROPOSAL_ID yes --fees 2000uhpx
+      node: pax-node-3
+    # since expedited quorum is 0.9, we only need 4/4 votes and expect expedited proposal to pass after 20 seconds
+    - cmd: sleep 20
+    - cmd: paxd q gov proposal $PROPOSAL_ID --output json | jq -r .status
+      env: PROPOSAL_STATUS
+    # Get the params again after proposal is passed
+    - cmd: paxd q params subspace staking UnbondingTime --output json | jq -r .value | tr -d "\""
+      env: NEW_PARAM
+    - cmd: paxd q staking params --output json | jq .unbonding_time | tr -d "\""
+      env: NEW_PARAM_FROM_STAKING
+  verifiers:
+    # Check if the new params is the expected value after proposal
+    - type: eval
+      expr: NEW_PARAM == 1814400000000000
+    - type: eval
+      expr: NEW_PARAM_FROM_STAKING == "1814400s"

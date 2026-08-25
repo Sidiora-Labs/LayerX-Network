@@ -1,0 +1,154 @@
+package state
+
+import (
+	"math/big"
+
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/tracing"
+	"github.com/holiman/uint256"
+	"github.com/sidiora-labs/paxeer-network/engine/deps/xevm/types"
+	sdk "github.com/sidiora-labs/paxeer-network/sdk/types"
+)
+
+var ZeroInt = uint256.NewInt(0)
+
+func (s *DBImpl) SubBalance(evmAddr common.Address, amtUint256 *uint256.Int, reason tracing.BalanceChangeReason) uint256.Int {
+	amt := amtUint256.ToBig()
+	if amt.Sign() == 0 {
+		return *ZeroInt
+	}
+	if amt.Sign() < 0 {
+		return s.AddBalance(evmAddr, new(uint256.Int).Neg(amtUint256), reason)
+	}
+
+	ctx := s.ctx
+
+	// this avoids emitting cosmos events for ephemeral bookkeeping transfers like send_native
+	if s.eventsSuppressed {
+		ctx = ctx.WithEventManager(sdk.NewEventManager())
+	}
+
+	// Hook for mock balances (no-op in production builds)
+	s.ensureSufficientBalance(evmAddr, amt)
+
+	uhpx, wei := SplitUhpxWeiAmount(amt)
+	addr := s.getPaxAddress(evmAddr)
+	err := s.k.BankKeeper().SubUnlockedCoins(ctx, addr, sdk.NewCoins(sdk.NewCoin(s.k.GetBaseDenom(s.ctx), uhpx)), true)
+	if err != nil {
+		s.err = err
+		return *ZeroInt
+	}
+	err = s.k.BankKeeper().SubWei(ctx, addr, wei)
+	if err != nil {
+		s.err = err
+		return *ZeroInt
+	}
+
+	if s.logger != nil && s.logger.OnBalanceChange != nil {
+		// We could modify AddWei instead so it returns us the old/new balance directly.
+		newBalance := s.GetBalance(evmAddr).ToBig()
+		oldBalance := new(big.Int).Add(newBalance, amt)
+
+		s.logger.OnBalanceChange(evmAddr, oldBalance, newBalance, reason)
+	}
+
+	surplus := sdk.NewIntFromBigInt(amt)
+	s.tempState.surplus = s.tempState.surplus.Add(surplus)
+	s.journal = append(s.journal, &surplusChange{delta: surplus})
+	return *ZeroInt
+}
+
+func (s *DBImpl) AddBalance(evmAddr common.Address, amtUint256 *uint256.Int, reason tracing.BalanceChangeReason) uint256.Int {
+	amt := amtUint256.ToBig()
+	if amt.Sign() == 0 {
+		return *ZeroInt
+	}
+	if amt.Sign() < 0 {
+		return s.SubBalance(evmAddr, new(uint256.Int).Neg(amtUint256), reason)
+	}
+
+	ctx := s.ctx
+	// this avoids emitting cosmos events for ephemeral bookkeeping transfers like send_native
+	if s.eventsSuppressed {
+		ctx = ctx.WithEventManager(sdk.NewEventManager())
+	}
+
+	uhpx, wei := SplitUhpxWeiAmount(amt)
+	addr := s.getPaxAddress(evmAddr)
+	err := s.k.BankKeeper().AddCoins(ctx, addr, sdk.NewCoins(sdk.NewCoin(s.k.GetBaseDenom(s.ctx), uhpx)), true)
+	if err != nil {
+		s.err = err
+		return *ZeroInt
+	}
+	err = s.k.BankKeeper().AddWei(ctx, addr, wei)
+	if err != nil {
+		s.err = err
+		return *ZeroInt
+	}
+
+	if s.logger != nil && s.logger.OnBalanceChange != nil {
+		// We could modify AddWei instead so it returns us the old/new balance directly.
+		newBalance := s.GetBalance(evmAddr).ToBig()
+		oldBalance := new(big.Int).Sub(newBalance, amt)
+
+		s.logger.OnBalanceChange(evmAddr, oldBalance, newBalance, reason)
+	}
+
+	surplus := sdk.NewIntFromBigInt(amt).Neg()
+	s.tempState.surplus = s.tempState.surplus.Add(surplus)
+	s.journal = append(s.journal, &surplusChange{delta: surplus})
+	return *ZeroInt
+}
+
+func (s *DBImpl) GetBalance(evmAddr common.Address) *uint256.Int {
+	// Hook for mock balances (no-op in production builds)
+	s.ensureMinimumBalance(evmAddr)
+
+	paxAddr := s.getPaxAddress(evmAddr)
+	res, overflow := uint256.FromBig(s.k.GetBalance(s.ctx, paxAddr))
+	if overflow {
+		panic("balance overflow")
+	}
+	if res == nil {
+		return uint256.NewInt(0)
+	}
+	return res
+}
+
+// should only be called during simulation
+func (s *DBImpl) SetBalance(evmAddr common.Address, amtUint256 *uint256.Int, reason tracing.BalanceChangeReason) {
+	if !s.simulation {
+		panic("should never call SetBalance in a non-simulation setting")
+	}
+	amt := amtUint256.ToBig()
+	paxAddr := s.getPaxAddress(evmAddr)
+	moduleAddr := s.k.AccountKeeper().GetModuleAddress(types.ModuleName)
+	s.send(paxAddr, moduleAddr, s.GetBalance(evmAddr).ToBig())
+	if s.err != nil {
+		panic(s.err)
+	}
+	uhpx, _ := SplitUhpxWeiAmount(amt)
+	coinsAmt := sdk.NewCoins(sdk.NewCoin(s.k.GetBaseDenom(s.ctx), uhpx.Add(sdk.OneInt())))
+	if err := s.k.BankKeeper().MintCoins(s.ctx, types.ModuleName, coinsAmt); err != nil {
+		panic(err)
+	}
+	s.send(moduleAddr, paxAddr, amt)
+	if s.err != nil {
+		panic(s.err)
+	}
+}
+
+func (s *DBImpl) getPaxAddress(evmAddr common.Address) sdk.AccAddress {
+	if s.coinbaseEvmAddress.Cmp(evmAddr) == 0 {
+		return s.coinbaseAddress
+	}
+	return s.k.GetPaxAddressOrDefault(s.ctx, evmAddr)
+}
+
+func (s *DBImpl) send(from sdk.AccAddress, to sdk.AccAddress, amt *big.Int) {
+	uhpx, wei := SplitUhpxWeiAmount(amt)
+	err := s.k.BankKeeper().SendCoinsAndWei(s.ctx, from, to, uhpx, wei)
+	if err != nil {
+		s.err = err
+	}
+}

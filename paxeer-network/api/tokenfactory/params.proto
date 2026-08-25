@@ -1,0 +1,9 @@
+syntax = "proto3";
+package paxprotocol.paxchain.tokenfactory;
+
+option go_package = "github.com/sidiora-labs/paxeer-network/modules/tokenfactory/types";
+
+// Params defines the parameters for the tokenfactory module.
+message Params {
+  uint32 denom_allowlist_max_size = 1;
+}

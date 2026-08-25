@@ -1,0 +1,34 @@
+- name: Test Authz Send Authorization
+  inputs:
+    # Get admin addr
+    - cmd: printf "12345678\n" | paxd keys list --output json | jq ".[] | select (.name==\"admin\")" | jq -r .address
+      env: ADMIN_ADDR
+    # create new grantee addr
+    - cmd: printf "12345678\ny\n" | paxd keys add grantee --output json | jq -r ".address"
+      env: GRANTEE_ADDR
+    # create second new addr
+    - cmd: printf "12345678\ny\n" | paxd keys add other-acc --output json | jq -r ".address"
+      env: OTHER_ACC_ADDR
+    # send some funds to grantee for gas
+    - cmd: paxdbin=paxd; chainid=pax; source integration_test/utils/_tx_helpers.sh && submit_tx_and_wait admin bank send admin $GRANTEE_ADDR 1pax --fees 2000uhpx
+    # create an authz grant
+    - cmd: paxdbin=paxd; chainid=pax; source integration_test/utils/_tx_helpers.sh && submit_tx_and_wait admin authz grant $GRANTEE_ADDR send --spend-limit 10pax --fees 2000uhpx
+    # create generate send tx and write to json
+    - cmd: printf "12345678\n" | paxd tx bank send $ADMIN_ADDR $OTHER_ACC_ADDR 6pax --generate-only > send_tx.json
+    # execute the authz tx - we want to validate that this succeeds with code 0
+    - cmd: paxdbin=paxd; chainid=pax; source integration_test/utils/_tx_helpers.sh && submit_tx_and_wait $GRANTEE_ADDR authz exec send_tx.json --fees 2000uhpx
+      env: AUTHZ_1_ERROR_CODE
+    # second exec is rejected at DeliverTx: 4pax left after first 6pax
+    # send is below the 6pax this attempt requests. OTHER_ACC_BALANCE
+    # below verifies the rejection.
+    - cmd: paxdbin=paxd; chainid=pax; source integration_test/utils/_tx_helpers.sh && submit_tx_and_wait $GRANTEE_ADDR authz exec send_tx.json --fees 2000uhpx
+    # query bank balances for the other addr to validate the amount the account has
+    - cmd: paxd q bank balances $OTHER_ACC_ADDR --denom uhpx --output json | jq -r ".amount"
+      env: OTHER_ACC_BALANCE
+  verifiers:
+    # verify that error code == 0 for first authz exec
+    - type: eval
+      expr: AUTHZ_1_ERROR_CODE == 0
+    # verify that other acc balance is 6 pax (second exec rejected at DeliverTx)
+    - type: eval
+      expr: OTHER_ACC_BALANCE == 6000000

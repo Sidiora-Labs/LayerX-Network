@@ -1,0 +1,4 @@
+// Docker localnet: all gated pax_* enabled except pax_sign. Asserts deprecation HTTP header on a successful pax_* call (JSON body unchanged).
+>> {"jsonrpc":"2.0","id":1,"method":"pax_getBlockByNumber","params":["latest",false]}
+<< {"jsonrpc":"2.0","id":1,"result":{}}
+@ expect_response_header Pax-Legacy-RPC-Deprecation

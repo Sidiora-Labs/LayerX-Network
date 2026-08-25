@@ -1,0 +1,138 @@
+package rpc
+
+import (
+	"net/http"
+
+	"github.com/spf13/cobra"
+
+	"github.com/sidiora-labs/paxeer-network/consensus/libs/bytes"
+	ctypes "github.com/sidiora-labs/paxeer-network/consensus/rpc/coretypes"
+	tmproto "github.com/sidiora-labs/paxeer-network/consensus/types"
+
+	"github.com/sidiora-labs/paxeer-network/sdk/client"
+	"github.com/sidiora-labs/paxeer-network/sdk/client/flags"
+	cryptocodec "github.com/sidiora-labs/paxeer-network/sdk/crypto/codec"
+	cryptotypes "github.com/sidiora-labs/paxeer-network/sdk/crypto/types"
+	"github.com/sidiora-labs/paxeer-network/sdk/types/rest"
+	"github.com/sidiora-labs/paxeer-network/sdk/version"
+)
+
+// ValidatorInfo is info about the node's validator, same as Tendermint,
+// except that we use our own PubKey.
+type validatorInfo struct {
+	Address     bytes.HexBytes
+	PubKey      cryptotypes.PubKey
+	VotingPower int64
+}
+
+// ResultStatus is node's info, same as Tendermint, except that we use our own
+// PubKey.
+type resultStatus struct {
+	NodeInfo      tmproto.NodeInfo
+	SyncInfo      ctypes.SyncInfo
+	ValidatorInfo validatorInfo
+}
+
+// StatusCommand returns the command to return the status of the network.
+func StatusCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "status",
+		Short: "Query remote node for status",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			clientCtx, err := client.GetClientQueryContext(cmd)
+			if err != nil {
+				return err
+			}
+			node, err := clientCtx.GetNode()
+			if err != nil {
+				return err
+			}
+			status, err := node.Status(cmd.Context())
+			if err != nil {
+				return err
+			}
+
+			var addr cryptotypes.Address
+			var pk cryptotypes.PubKey
+			// `status` has TM pubkeys, we need to convert them to our pubkeys.
+			if k, ok := status.ValidatorInfo.PubKey.Get(); ok {
+				addr = k.Address()
+				pk, err = cryptocodec.FromTmPubKeyInterface(k)
+				if err != nil {
+					return err
+				}
+			}
+
+			statusWithPk := resultStatus{
+				NodeInfo: status.NodeInfo,
+				SyncInfo: status.SyncInfo,
+				ValidatorInfo: validatorInfo{
+					Address:     addr,
+					PubKey:      pk,
+					VotingPower: status.ValidatorInfo.VotingPower,
+				},
+			}
+
+			output, err := clientCtx.LegacyAmino.MarshalAsJSON(statusWithPk)
+			if err != nil {
+				return err
+			}
+
+			cmd.Println(string(output))
+			return nil
+		},
+	}
+
+	cmd.Flags().StringP(flags.FlagNode, "n", "tcp://localhost:26657", "Node to connect to")
+
+	return cmd
+}
+
+// NodeInfoResponse defines a response type that contains node status and version
+// information.
+type NodeInfoResponse struct {
+	tmproto.NodeInfo `json:"node_info"`
+
+	ApplicationVersion version.Info `json:"application_version"`
+}
+
+// REST handler for node info
+func NodeInfoRequestHandlerFn(clientCtx client.Context) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		node, err := clientCtx.GetNode()
+		if rest.CheckInternalServerError(w, err) {
+			return
+		}
+		status, err := node.Status(r.Context())
+		if rest.CheckInternalServerError(w, err) {
+			return
+		}
+
+		resp := NodeInfoResponse{
+			NodeInfo:           status.NodeInfo,
+			ApplicationVersion: version.NewInfo(),
+		}
+
+		rest.PostProcessResponseBare(w, clientCtx, resp)
+	}
+}
+
+// SyncingResponse defines a response type that contains node syncing information.
+type SyncingResponse struct {
+	Syncing bool `json:"syncing"`
+}
+
+// REST handler for node syncing
+func NodeSyncingRequestHandlerFn(clientCtx client.Context) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		node, err := clientCtx.GetNode()
+		if rest.CheckInternalServerError(w, err) {
+			return
+		}
+		status, err := node.Status(r.Context())
+		if rest.CheckInternalServerError(w, err) {
+			return
+		}
+		rest.PostProcessResponseBare(w, clientCtx, SyncingResponse{Syncing: status.SyncInfo.CatchingUp})
+	}
+}

@@ -1,10 +1,12 @@
-# LayerX
+# LayerX Ecosystem
 
 **A deterministic execution and accounting network built for autonomous agents.**
 
 > **Source-available for inspection and security review.** This repository is not yet licensed for deployment or redistribution. See [License](#license).
 
 [Website](https://layerx.paxeer.app/) · [Protocol design](https://github.com/Sidiora-Labs/LayerX-Protocol/blob/main/spec/layerx-protocol/design.md) · [Contributing](https://github.com/Sidiora-Labs/LayerX-Protocol/blob/main/CONTRIBUTING.md) · [Security](https://github.com/Sidiora-Labs/LayerX-Protocol/blob/main/SECURITY.md)
+
+This is the canonical Sidiora Labs ecosystem monorepo for LayerX and the Paxeer Network. Co-location keeps the protocol, settlement network, contracts, developer surfaces, and their automation auditable in one place while preserving their separate build, release, deployment, and trust boundaries.
 
 LayerX gives autonomous agents a shared place to transact, coordinate work, delegate authority, and produce verifiable records of what happened. It is designed for activity that is too frequent, too granular, or too latency-sensitive to place directly on a settlement chain.
 
@@ -66,13 +68,14 @@ LayerX is intentionally split across trust boundaries. Each part can be tested a
 
 | Path | Purpose |
 | --- | --- |
-| `src/`, `include/` | C17 protocol runtime, state machine, storage, sequencing, replay, and settlement integration |
+| `src/`, `include/` | C17 LayerX protocol runtime, state machine, storage, sequencing, replay, and settlement integration |
 | `agent/` | Rust agent interface, SDK, daemon, MCP server, canonical encoding, cryptography, and proof verification |
 | `human/` | Human control plane, typed intent compiler, custody-boundary client, explorer index, and web application |
 | `platform/` | Developer platform, hosted services, middleware, SDKs, emulator, and release tooling |
 | `programs/` | Programmable LayerX runtime and program tooling |
 | `interop/` | Agent-commerce and cross-network interoperability surfaces |
 | `contracts/` | Solidity contracts for Paxeer custody, checkpoints, guarantor bonding, claims, disputes, and exits |
+| `paxeer-network/` | Paxeer Network node, EVM/RPC compatibility, storage engines, modules, contracts, Docker environments, and subsystem-local build manifests |
 | `spec/` | Normative KVX specifications, generated designs, requirements, and task graphs |
 | `tests/`, `test/`, `fuzz/` | Native, contract, replay, invariant, fault, and fuzz test suites |
 | `migrations/` | Genesis, migration, reconciliation, and shadow-replay work |
@@ -92,7 +95,7 @@ This is more than project planning. Requirements, dependency waves, implementati
 
 ## Building and testing
 
-The core runtime uses a strict C17 build. Paxeer-facing contracts use Solidity `0.8.27`, and the agent, human, and platform workspaces use Rust. Some qualification suites require additional compilers, analysis tools, Docker, QEMU, or architecture-specific runners.
+The LayerX core runtime uses a strict C17 build. LayerX settlement contracts use Solidity `0.8.27`, while the agent, human, and platform workspaces use Rust. Paxeer is a separate Go module with its own Solidity, Rust, Docker, and integration-test dependencies under `paxeer-network/`. Some qualification suites require additional compilers, analysis tools, Docker, QEMU, or architecture-specific runners.
 
 Build the native runtime:
 
@@ -114,9 +117,20 @@ make public-audit
 make ci
 ```
 
+Use the bounded root targets for Paxeer without changing directories:
+
+```sh
+make paxeer-build
+make paxeer-lint
+make paxeer-test
+make paxeer-ci
+```
+
+`make monorepo-ci` composes the existing LayerX gate with the Paxeer gate. All GitHub Actions workflows live in `.github/workflows/`; Paxeer workflows are named `Paxeer / ...` and use explicit `paxeer-network/` paths. LayerX and Paxeer retain independent release identities: Paxeer releases use namespaced `paxeer-network/vX.Y.Z` tags.
+
 Agent and human workspaces have dedicated targets in the root `Makefile`. For arithmetic proofs, deterministic cross-architecture replay, fault injection, fuzzing, and settlement qualification, see [`docs/QUALIFICATION.md`](https://github.com/Sidiora-Labs/LayerX-Protocol/blob/main/docs/QUALIFICATION.md).
 
-A successful local test run is development evidence, not authorization to deploy contracts, move custody, modify validators, or handle real assets.
+A successful local test run is development evidence, not authorization to deploy contracts, move custody, modify validators, or handle real assets. Repository co-location likewise grants neither LayerX nor Paxeer new protocol or deployment authority over the other.
 
 ## Contributing
 

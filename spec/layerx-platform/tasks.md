@@ -1590,6 +1590,17 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Prove the report is generated from measured evidence rather than authored by hand, with a claim that has no backing artifact failing the build.
     - _Requirements: 43.6, 27.5_
 
+## Wave 16 - Ecosystem Repository Boundary
+
+- [ ] 37. Consolidate the Sidiora Labs ecosystem in one bounded monorepo
+  - [ ] 37.1 Integrate Paxeer Network and its automation into the LayerX monorepo — **Implemented - qualification pending**
+    - Import the current Paxeer Network source under paxeer-network while excluding ignored build products, dependency caches, runtime data and credentials.
+    - Move Paxeer GitHub Actions workflows to the repository-level .github/workflows directory, namespace them for Paxeer and make every command, action context and artifact path monorepo-aware.
+    - Scope Paxeer pull-request and push automation to paxeer-network-owned paths wherever GitHub supports path filters, while retaining manual, scheduled and release triggers that cannot use path filtering.
+    - Add root Makefile entry points for Paxeer build, lint, tests and CI, and bind Paxeer's internal project root to its subsystem directory so its cleanup and Docker mounts cannot touch LayerX build output.
+    - Update the root README and dependency automation to describe and maintain the ecosystem monorepo and its explicit LayerX/Paxeer trust, build and release boundaries.
+    - _Requirements: 44.1, 44.2, 44.3, 44.4, 44.5, 44.6_
+
 ## Engineering ground rules
 
 These apply to **every** task in this plan. They are standing conditions for
@@ -1711,7 +1722,7 @@ violation.
     { "id": 12, "tasks": ["25.1", "25.2", "25.3", "26.1", "26.2"] },
     { "id": 14, "tasks": ["28.1", "28.2", "28.3", "28.4", "28.5", "28.6", "28.7", "28.8"] },
     { "id": 15, "tasks": ["29.1", "29.2", "29.3", "29.4", "29.5", "29.6", "29.7"] },
-    { "id": 16, "tasks": ["30.1", "30.2", "30.3", "30.4", "30.5", "30.7"] },
+    { "id": 16, "tasks": ["30.1", "30.2", "30.3", "30.4", "30.5", "30.7", "37.1"] },
     { "id": 17, "tasks": ["31.1", "31.2", "31.3", "31.4", "31.5", "31.6", "31.7"] },
     { "id": 18, "tasks": ["32.1", "32.2", "32.3", "32.4", "32.5", "32.6"] },
     { "id": 19, "tasks": ["33.1", "33.2", "33.3", "33.4", "33.5", "33.6", "33.7"] },

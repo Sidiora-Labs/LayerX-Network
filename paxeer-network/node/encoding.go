@@ -1,0 +1,26 @@
+package app
+
+import (
+	"github.com/sidiora-labs/paxeer-network/node/params"
+	"github.com/sidiora-labs/paxeer-network/sdk/std"
+)
+
+// MakeEncodingConfig creates an EncodingConfig for testing.
+func MakeEncodingConfig() params.EncodingConfig {
+	encodingConfig := params.MakeEncodingConfig()
+	std.RegisterLegacyAminoCodec(encodingConfig.Amino)
+	std.RegisterInterfaces(encodingConfig.InterfaceRegistry)
+	ModuleBasics.RegisterLegacyAminoCodec(encodingConfig.Amino)
+	ModuleBasics.RegisterInterfaces(encodingConfig.InterfaceRegistry)
+	return encodingConfig
+}
+
+// MakeLegacyEncodingConfig creates an EncodingConfig for testing.
+func MakeLegacyEncodingConfig() params.EncodingConfig {
+	encodingConfig := params.MakeLegacyEncodingConfig()
+	std.RegisterLegacyAminoCodec(encodingConfig.Amino)
+	std.RegisterInterfaces(encodingConfig.InterfaceRegistry)
+	ModuleBasics.RegisterLegacyAminoCodec(encodingConfig.Amino)
+	ModuleBasics.RegisterInterfaces(encodingConfig.InterfaceRegistry)
+	return encodingConfig
+}

@@ -1,0 +1,133 @@
+services:
+  node0:
+    platform: ${DOCKER_PLATFORM:-linux/amd64}
+    container_name: pax-node-0
+    image: "pax-chain/localnode"
+    user: "${USERID}:${GROUPID}"
+    ports:
+      - "26656-26658:26656-26658"
+      - "9090-9091:9090-9091"
+      - "8545-8546:8545-8546"
+    environment:
+      - ID=0
+      - CLUSTER_SIZE=4
+      - NUM_ACCOUNTS
+      - SKIP_BUILD
+      - INVARIANT_CHECK_INTERVAL
+      - UPGRADE_VERSION_LIST
+      - MOCK_BALANCES
+      - GIGA_EXECUTOR
+      - GIGA_OCC
+      - RECEIPT_BACKEND
+      - AUTOBAHN
+      - GIGA_STORAGE
+      - GIGA_MIGRATE_FROM_MEMIAVL
+      - GIGA_FLATKV_ONLY
+    volumes:
+      - "${PROJECT_HOME}:/pax-protocol/pax-chain:Z"
+      - "${GO_PKG_PATH}/mod:/root/go/pkg/mod:Z"
+      - "${GOCACHE}:/root/.cache/go-build:Z"
+    networks:
+      localnet:
+        ipv4_address: 192.168.10.10
+
+  node1:
+    platform: ${DOCKER_PLATFORM:-linux/amd64}
+    container_name: pax-node-1
+    image: "pax-chain/localnode"
+    user: "${USERID}:${GROUPID}"
+    ports:
+      - "26659-26661:26656-26658"
+      - "9092-9093:9090-9091"
+      - "8547-8548:8545-8546"
+    environment:
+      - ID=1
+      - CLUSTER_SIZE=4
+      - NUM_ACCOUNTS
+      - SKIP_BUILD
+      - INVARIANT_CHECK_INTERVAL
+      - UPGRADE_VERSION_LIST
+      - GIGA_EXECUTOR
+      - GIGA_OCC
+      - RECEIPT_BACKEND
+      - AUTOBAHN
+      - GIGA_STORAGE
+      - GIGA_MIGRATE_FROM_MEMIAVL
+      - GIGA_FLATKV_ONLY
+    volumes:
+      - "${PROJECT_HOME}:/pax-protocol/pax-chain:Z"
+      - "${GO_PKG_PATH}/mod:/root/go/pkg/mod:Z"
+      - "${GOCACHE}:/root/.cache/go-build:Z"
+    networks:
+      localnet:
+        ipv4_address: 192.168.10.11
+
+  node2:
+    platform: ${DOCKER_PLATFORM:-linux/amd64}
+    container_name: pax-node-2
+    image: "pax-chain/localnode"
+    user: "${USERID}:${GROUPID}"
+    environment:
+      - ID=2
+      - CLUSTER_SIZE=4
+      - NUM_ACCOUNTS
+      - SKIP_BUILD
+      - INVARIANT_CHECK_INTERVAL
+      - UPGRADE_VERSION_LIST
+      - GIGA_EXECUTOR
+      - GIGA_OCC
+      - RECEIPT_BACKEND
+      - AUTOBAHN
+      - GIGA_STORAGE
+      - GIGA_MIGRATE_FROM_MEMIAVL
+      - GIGA_FLATKV_ONLY
+    ports:
+      - "26662-26664:26656-26658"
+      - "9094-9095:9090-9091"
+      - "8549-8550:8545-8546"
+    volumes:
+      - "${PROJECT_HOME}:/pax-protocol/pax-chain:Z"
+      - "${GO_PKG_PATH}/mod:/root/go/pkg/mod:Z"
+      - "${GOCACHE}:/root/.cache/go-build:Z"
+    networks:
+      localnet:
+        ipv4_address: 192.168.10.12
+
+  node3:
+    platform: ${DOCKER_PLATFORM:-linux/amd64}
+    container_name: pax-node-3
+    image: "pax-chain/localnode"
+    user: "${USERID}:${GROUPID}"
+    environment:
+      - ID=3
+      - CLUSTER_SIZE=4
+      - NUM_ACCOUNTS
+      - SKIP_BUILD
+      - INVARIANT_CHECK_INTERVAL
+      - UPGRADE_VERSION_LIST
+      - GIGA_EXECUTOR
+      - GIGA_OCC
+      - RECEIPT_BACKEND
+      - AUTOBAHN
+      - GIGA_STORAGE
+      - GIGA_MIGRATE_FROM_MEMIAVL
+      - GIGA_FLATKV_ONLY
+    ports:
+      - "26665-26667:26656-26658"
+      - "9096-9097:9090-9091"
+      - "8551-8552:8545-8546"
+    volumes:
+      - "${PROJECT_HOME}:/pax-protocol/pax-chain:Z"
+      - "${GO_PKG_PATH}/mod:/root/go/pkg/mod:Z"
+      - "${GOCACHE}:/root/.cache/go-build:Z"
+    networks:
+      localnet:
+        ipv4_address: 192.168.10.13
+
+networks:
+  localnet:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 192.168.10.0/24

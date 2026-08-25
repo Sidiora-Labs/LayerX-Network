@@ -1,0 +1,71 @@
+vue/node_modules
+vue/dist
+release/
+.idea/
+.vscode/
+.cursor/
+.DS_Store
+build/
+cache/
+!sdk/store/cache/
+!sdk/store/cache/cache.go
+./evm_stress
+*.iml
+
+# Local .terraform directories
+**/.terraform
+
+# .tfstate files
+*terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+
+yarn.lock
+# node ignores
+oracle/node_modules/
+node_modules/
+
+# test coverage output
+c.out
+
+# fuzz test data
+**/testdata/fuzz/**
+
+# loadtest contracts build artifact
+loadtest/contracts/**/artifacts/
+loadtest/contracts/**/target/
+loadtest/contracts/**.json
+
+loadtest_results.txt
+
+# parallelization test build artifact
+parallelization/**/artifacts/
+parallelization/**/target/
+parallelization/**/Cargo.lock
+
+# integration test resources
+integration_test/**/*.txt
+
+# Coverage Files
+coverage.html
+coverage.out
+
+# example artifacts
+example/cosmwasm/echo/target
+example/cosmwasm/cw20/target
+example/cosmwasm/cw721/target
+example/cosmwasm/cw1155/target
+example/cosmwasm/iter/target
+
+# Solidity contracts artifacts
+contracts/artifacts
+
+# Integration tests build artifacts
+integration_test/dapp_tests/artifacts
+
+# DB benchmark data and artifacts
+storage/state_db/bench/cryptosim/data/**
+storage/state_db/bench/cryptosim/bin/
+storage/state_db/bench/cryptosim/logs/
+storage/ledger_db/block/blocksim/bin/
+storage/db_engine/litt/bin/

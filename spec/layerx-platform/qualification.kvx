@@ -1165,3 +1165,19 @@ symbol = "LXP_AUTH_PROGRAM_SPEND, layerx_programs_consume_program_spend_authoriz
 observed = "The wind-down exit must let the ordinary 402LXP ledger synchronously consume an unforgeable, one-shot owner-program/frame authorization rather than accept a C-asserted OWNER value. The implementation names that transient consumption marker LXP_AUTH_PROGRAM_SPEND and binds it to the exact source, destination, asset, amount, seed-derived owner frame and transfer-set root. Requirement 30.1 and task 30.3 also say that Programs adds no new authority kind, even though an ordinary OWNER marker cannot encode or consume this program-frame witness. The marker creates no balance primitive and direct single-leg application refuses it, but it is a new closed enum value."
 assumption = "Protocol qualification must resolve whether 'no new authority kind' prohibits even a transient ledger-consumed representation of the already specified ProgramAuthority. Until a versioned alternative is defined, qualification must retain one-shot exact witness consumption and must not replace it with fabricated OWNER authority or a parallel balance route."
 severity = "spec-conflict"
+
+[observation.37.1.1]
+task = "37.1"
+file = "paxeer-network/wasm-runtime/internal/api, paxeer-network/wasm/x/wasm/artifacts, paxeer-network/Dockerfile, paxeer-network/hpx"
+symbol = "Paxeer native libwasmvm publication boundary"
+observed = "The inherited Paxeer checkout carries approximately 761 MB of architecture-specific shared and static libwasmvm and evmone binaries, including individual archives above the repository's 50 MiB publication ceiling. Requirement 44.6 excludes generated binary artifacts from the monorepo import, while Paxeer's CGO link directives and Docker image expect selected shared objects to exist. Those workspace binaries remain ignored and no clean-checkout build result is asserted in this implementation phase. The existing HPX artifact registry is the intended public binary-distribution seam and is being handled as a separate explicitly requested publication task."
+assumption = "Human qualification must exercise a clean checkout after the HPX registry publishes versioned, checksum-bound native artifacts; prove the build obtains the exact x86_64 and aarch64 libraries without committing local build output; and retain failure on missing or mismatched artifacts. Until then, the source import and workflow relocation are implementation evidence only, not a successful Paxeer build claim."
+severity = "phase-boundary"
+
+[observation.37.1.2]
+task = "37.1"
+file = "Makefile, paxeer-network/Makefile, spec/layerx-platform/spec.kvx"
+symbol = "PAXEER_DIR, PAXEER_PROJECT_HOME, paxeer-ci, monorepo-ci"
+observed = "The task initially declared the required Make variables and targets as graph symbols. Codify does not index GNU Make declarations, so all four symbol checks reported not defined even though the exact declarations are written in the task's guarded Makefiles. The non-applicable symbol declarations were removed; the exact Makefile paths remain in the task scope and the verify command remains make paxeer-ci for human qualification."
+assumption = "Qualification must inspect and invoke the Make targets from a clean checkout. Removing unsupported graph symbols does not constitute evidence that the targets parse, execute or pass."
+severity = "tooling-boundary"

@@ -1,0 +1,190 @@
+syntax = "proto3";
+
+package tendermint.abci;
+
+import "gogoproto/gogo.proto";
+import "tendermint/crypto/keys.proto";
+import "tendermint/crypto/proof.proto";
+import "tendermint/types/params.proto";
+
+option go_package = "github.com/sidiora-labs/paxeer-network/consensus/abci/types";
+
+// This file is copied from http://github.com/tendermint/abci
+// NOTE: When using custom types, mind the warnings.
+// https://github.com/gogo/protobuf/blob/master/custom_types.md#warnings-and-issues
+
+//----------------------------------------
+// nondeterministic
+message ResponseInfo {
+  string data = 1; // nondeterministic
+  string version = 2;
+  uint64 app_version = 3;
+  int64 last_block_height = 4;
+  bytes last_block_app_hash = 5;
+  string minimum_gas_prices = 6;
+}
+
+message ResponseQuery {
+  uint32 code = 1;
+  // bytes data = 2; // use "value" instead.
+  string log = 3; // nondeterministic
+  string info = 4; // nondeterministic
+  int64 index = 5;
+  bytes key = 6;
+  bytes value = 7;
+  tendermint.crypto.ProofOps proof_ops = 8;
+  int64 height = 9;
+  string codespace = 10;
+}
+
+message ResponseBeginBlock {
+  repeated Event events = 1 [
+    (gogoproto.nullable) = false,
+    (gogoproto.jsontag) = "events,omitempty"
+  ];
+}
+
+message ResponseCheckTx {
+  uint32 code = 1;
+  bytes data = 2;
+  string log = 3; // nondeterministic
+  int64 gas_wanted = 5;
+  string codespace = 8;
+  int64 priority = 10;
+  int64 gas_estimated = 12;
+
+  reserved 4, 6, 7, 9, 11; // see https://github.com/tendermint/tendermint/issues/8543
+  reserved "sender";
+}
+
+message ResponseDeliverTx {
+  uint32 code = 1;
+  bytes data = 2;
+  string log = 3; // nondeterministic
+  string info = 4; // nondeterministic
+  int64 gas_wanted = 5 [json_name = "gas_wanted"];
+  int64 gas_used = 6 [json_name = "gas_used"];
+  repeated Event events = 7 [
+    (gogoproto.nullable) = false,
+    (gogoproto.jsontag) = "events,omitempty"
+  ]; // nondeterministic
+  string codespace = 8;
+  EvmTxInfo evm_tx_info = 9;
+}
+
+message ResponseEndBlock {
+  repeated ValidatorUpdate validator_updates = 1 [(gogoproto.nullable) = false];
+  ConsensusParams consensus_param_updates = 2;
+  repeated Event events = 3 [
+    (gogoproto.nullable) = false,
+    (gogoproto.jsontag) = "events,omitempty"
+  ];
+}
+
+message ResponseCommit {
+  // reserve 1
+  int64 retain_height = 3;
+}
+
+message ResponseFinalizeBlock {
+  repeated Event events = 1 [
+    (gogoproto.nullable) = false,
+    (gogoproto.jsontag) = "events,omitempty"
+  ];
+  repeated ExecTxResult tx_results = 2;
+  repeated ValidatorUpdate validator_updates = 3 [(gogoproto.nullable) = false];
+  tendermint.types.ConsensusParams consensus_param_updates = 4;
+  bytes app_hash = 5;
+}
+
+//----------------------------------------
+// Misc.
+
+// Event allows application developers to attach additional information to
+// ResponseFinalizeBlock, ResponseDeliverTx, ExecTxResult
+// Later, transactions may be queried using these events.
+message Event {
+  string type = 1;
+  repeated EventAttribute attributes = 2 [
+    (gogoproto.nullable) = false,
+    (gogoproto.jsontag) = "attributes,omitempty"
+  ];
+}
+
+// EventAttribute is a single key-value pair, associated with an event.
+message EventAttribute {
+  bytes key = 1;
+  bytes value = 2;
+  bool index = 3; // nondeterministic
+}
+
+// ExecTxResult contains results of executing one individual transaction.
+//
+// * Its structure is equivalent to #ResponseDeliverTx which will be deprecated/deleted
+message ExecTxResult {
+  uint32 code = 1;
+  bytes data = 2;
+  string log = 3; // nondeterministic
+  string info = 4; // nondeterministic
+  int64 gas_wanted = 5;
+  int64 gas_used = 6;
+  repeated Event events = 7 [
+    (gogoproto.nullable) = false,
+    (gogoproto.jsontag) = "events,omitempty"
+  ]; // nondeterministic
+  string codespace = 8;
+  EvmTxInfo evm_tx_info = 9;
+}
+
+// TxResult contains results of executing the transaction.
+//
+// One usage is indexing transaction results.
+message TxResult {
+  int64 height = 1;
+  uint32 index = 2;
+  bytes tx = 3;
+  ExecTxResult result = 4 [(gogoproto.nullable) = false];
+}
+
+message BlockParams {
+  // Note: must be greater than 0
+  int64 max_bytes = 1;
+  // Note: must be greater or equal to -1
+  int64 max_gas = 2;
+  // Minimum txs to include in a block regardless of gas limit
+  int64 min_txs_in_block = 3;
+  // Maximum gas wanted in a block. Must be greater than or equal to -1
+  int64 max_gas_wanted = 4;
+}
+
+message ConsensusParams {
+  BlockParams block = 1;
+  tendermint.types.EvidenceParams evidence = 2;
+  tendermint.types.ValidatorParams validator = 3;
+  tendermint.types.VersionParams version = 4;
+}
+
+//----------------------------------------
+// Blockchain Types
+
+// ValidatorUpdate
+message ValidatorUpdate {
+  tendermint.crypto.PublicKey pub_key = 1 [(gogoproto.nullable) = false];
+  int64 power = 2;
+}
+
+enum MisbehaviorType {
+  UNKNOWN = 0;
+  DUPLICATE_VOTE = 1;
+  LIGHT_CLIENT_ATTACK = 2;
+}
+
+message EvmTxInfo {
+  // buf:lint:ignore FIELD_LOWER_SNAKE_CASE We have caught this late; keeping to avoid breaking changes.
+  string senderAddress = 1;
+  uint64 nonce = 2;
+  // buf:lint:ignore FIELD_LOWER_SNAKE_CASE We have caught this late; keeping to avoid breaking changes.
+  string txHash = 3;
+  // buf:lint:ignore FIELD_LOWER_SNAKE_CASE We have caught this late; keeping to avoid breaking changes.
+  string vmError = 4;
+}

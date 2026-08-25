@@ -1,0 +1,61 @@
+coverage:
+  precision: 2
+  round: down
+  status:
+    project:
+      default:
+        informational: true # PR fast-path uploads are partial; avoid scary global regressions.
+        target: auto
+        threshold: 3% # allow this much decrease on project
+      pax-chain:
+        target: 40%
+        flags:
+          - pax-chain
+      pax-chain-pr:
+        informational: true
+        flags:
+          - pax-chain-pr
+    patch:
+      default:
+        informational: true   # Show patch coverage, but do not fail CI for it.
+        target: 50%           # Keep displayed goal stable across PRs.
+        threshold: 5%         # Toleration for noisy small diffs.
+
+comment:
+  layout: "reach,diff,flags,tree,betaprofiling"
+  behavior: default # update if exists else create new
+  require_changes: true
+
+ignore:
+  # Common documentation and metadata
+  - "**/docs/**/*"
+  - "**/*.md"
+  - "**/*.rst"
+  - "**/example/**/*"
+  - "**/benchmark/**/*"
+
+  # Generated protobuf files
+  - "**/*.pb.go"
+  - "**/*.pb.gw.go"
+
+  # Tests and test utilities
+  - "**/integration_test/**/*"
+  - "**/testutil/**/*"
+  - "**/x/**/test_common.go"
+  - "**/x/**/testdata/**/*"
+
+  # Scripts, tooling, and contribution helpers
+  - "**/scripts/**/*"
+  - "**/contrib/**/*"
+  - "**/docker/**/*"
+
+  # Project-specific exclusions
+  - "precompiles/**/legacy/**/*"
+  - "**/cli/**/*"
+  - "storage/state_db/bench"
+
+flags:
+  pax-chain:
+    carryforward: true
+  pax-chain-pr:
+    carryforward: false

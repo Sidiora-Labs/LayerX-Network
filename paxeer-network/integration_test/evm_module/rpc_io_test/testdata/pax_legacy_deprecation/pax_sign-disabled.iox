@@ -1,0 +1,6 @@
+// pax_sign is omitted from docker enabled_legacy_pax_apis to exercise the gate (partner-safe: not in Binance/Dune/Alchemy telemetry; no other rpc_io fixtures use it).
+>> {"jsonrpc":"2.0","id":42,"method":"pax_sign","params":[]}
+<< {"jsonrpc":"2.0","id":42,"error":{}}
+@ expect_body_contains legacy_pax_deprecated
+@ expect_body_contains not enabled
+@ expect_body_contains deprecated

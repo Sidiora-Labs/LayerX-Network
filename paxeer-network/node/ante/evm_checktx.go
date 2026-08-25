@@ -1,0 +1,335 @@
+package ante
+
+import (
+	"errors"
+	"fmt"
+	"math"
+	"math/big"
+
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/consensus/misc/eip4844"
+	"github.com/ethereum/go-ethereum/core"
+	ethtypes "github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/core/vm"
+	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/params"
+	"github.com/sidiora-labs/paxeer-network/node/antedecorators"
+	cryptotypes "github.com/sidiora-labs/paxeer-network/sdk/crypto/types"
+	sdk "github.com/sidiora-labs/paxeer-network/sdk/types"
+	sdkerrors "github.com/sidiora-labs/paxeer-network/sdk/types/errors"
+	upgradekeeper "github.com/sidiora-labs/paxeer-network/sdk/x/upgrade/keeper"
+
+	"github.com/paxeer-network/paxlog"
+	evmante "github.com/sidiora-labs/paxeer-network/modules/evm/ante"
+	"github.com/sidiora-labs/paxeer-network/modules/evm/derived"
+	evmkeeper "github.com/sidiora-labs/paxeer-network/modules/evm/keeper"
+	"github.com/sidiora-labs/paxeer-network/modules/evm/state"
+	evmtypes "github.com/sidiora-labs/paxeer-network/modules/evm/types"
+	"github.com/sidiora-labs/paxeer-network/modules/evm/types/ethtx"
+	"github.com/sidiora-labs/paxeer-network/utils"
+	"github.com/sidiora-labs/paxeer-network/utils/helpers"
+)
+
+var logger = paxlog.NewLogger("app", "ante")
+
+func EvmCheckTxAnte(
+	ctx sdk.Context,
+	tx sdk.Tx,
+	upgradeKeeper *upgradekeeper.Keeper,
+	ek *evmkeeper.Keeper,
+) (returnCtx sdk.Context, returnErr error) {
+	chainID := ek.ChainID(ctx)
+	if err := EvmStatelessChecks(ctx, tx, chainID); err != nil {
+		return ctx, err
+	}
+	msg := tx.GetMsgs()[0].(*evmtypes.MsgEVMTransaction)
+
+	txData, _ := evmtypes.UnpackTxData(msg.Data) // cached and validated
+	ctx = ctx.WithGasMeter(sdk.NewInfiniteGasMeterWithMultiplier(ctx))
+	if atx, ok := txData.(*ethtx.AssociateTx); ok {
+		return HandleAssociateTx(ctx, ek, atx, true)
+	}
+	etx := ethtypes.NewTx(txData.AsEthereumData())
+	evmAddr, paxAddr, paxPubkey, version, err := CheckAndDecodeSignature(ctx, txData, chainID, false)
+	if err != nil {
+		return ctx, err
+	}
+	if err := AssociateAddress(ctx, ek, evmAddr, paxAddr, paxPubkey); err != nil {
+		return ctx, err
+	}
+	if _, err := EvmCheckAndChargeFees(ctx, evmAddr, ek, upgradeKeeper, txData, etx, msg, version, false); err != nil {
+		return ctx, err
+	}
+
+	ctx, err = CheckNonce(ctx, ek, etx, evmAddr)
+	if err != nil {
+		return ctx, err
+	}
+
+	return DecorateContext(ctx, ek, tx, txData, etx, evmAddr, paxAddr), nil
+}
+
+func EvmStatelessChecks(ctx sdk.Context, tx sdk.Tx, chainID *big.Int) error {
+	if err := evmante.ValidateNoCosmosTxFields(tx); err != nil {
+		return err
+	}
+
+	if len(tx.GetMsgs()) != 1 {
+		return sdkerrors.Wrap(sdkerrors.ErrInvalidRequest, "EVM transaction must have exactly 1 message")
+	}
+	msg, ok := tx.GetMsgs()[0].(*evmtypes.MsgEVMTransaction)
+	if !ok {
+		return sdkerrors.Wrap(sdkerrors.ErrInvalidRequest, "not EVM message")
+	}
+	if err := msg.ValidateBasic(); err != nil {
+		return err
+	}
+	if msg.Derived != nil && msg.Derived.PubKey == nil {
+		// this means the message has `Derived` set from the outside, in which case we should reject
+		return sdkerrors.ErrInvalidPubKey
+	}
+	txData, err := evmtypes.UnpackTxData(msg.Data)
+	if err != nil {
+		return err
+	}
+	if _, ok := txData.(*ethtx.AssociateTx); ok {
+		return nil
+	}
+	etx, _ := msg.AsTransaction()
+	if etx.To() == nil && len(etx.Data()) > params.MaxInitCodeSize {
+		return fmt.Errorf("%w: code size %v, limit %v", core.ErrMaxInitCodeSizeExceeded, len(etx.Data()), params.MaxInitCodeSize)
+	}
+
+	if etx.Value().Sign() < 0 {
+		return sdkerrors.ErrInvalidCoins
+	}
+
+	intrGas, err := core.IntrinsicGas(etx.Data(), etx.AccessList(), etx.SetCodeAuthorizations(), etx.To() == nil, true, true, true)
+	if err != nil {
+		return err
+	}
+	if etx.Gas() < intrGas {
+		return core.ErrIntrinsicGas
+	}
+
+	if etx.Type() == ethtypes.BlobTxType {
+		return sdkerrors.ErrUnsupportedTxType
+	}
+
+	// Check if gas exceed the limit
+	if cp := ctx.ConsensusParams(); cp != nil && cp.Block != nil {
+		// If there exists a maximum block gas limit, we must ensure that the tx
+		// does not exceed it.
+		if cp.Block.MaxGas > 0 && etx.Gas() > uint64(cp.Block.MaxGas) { //nolint:gosec
+			return sdkerrors.Wrapf(sdkerrors.ErrOutOfGas, "tx gas limit %d exceeds block max gas %d", etx.Gas(), cp.Block.MaxGas)
+		}
+	}
+
+	if txData.GetGasTipCap().Sign() < 0 {
+		return sdkerrors.Wrapf(sdkerrors.ErrInvalidRequest, "gas fee cap cannot be negative")
+	}
+
+	// validate chain ID on the transaction
+	txChainID := etx.ChainId()
+	switch etx.Type() {
+	case ethtypes.LegacyTxType:
+		// legacy either can have a zero or correct chain ID
+		if txChainID.Cmp(big.NewInt(0)) != 0 && txChainID.Cmp(chainID) != 0 {
+			logger.Debug("chainID mismatch", "txChainID", txChainID, "chainID", chainID)
+			return sdkerrors.ErrInvalidChainID
+		}
+	default:
+		// after legacy, all transactions must have the correct chain ID
+		if txChainID.Cmp(chainID) != 0 {
+			logger.Debug("chainID mismatch", "txChainID", txChainID, "chainID", chainID)
+			return sdkerrors.ErrInvalidChainID
+		}
+	}
+
+	txGas := txData.GetGas()
+	if txGas > math.MaxInt64 {
+		return errors.New("tx gas exceeds max")
+	}
+	return nil
+}
+
+func DecorateContext(ctx sdk.Context, ek *evmkeeper.Keeper, tx sdk.Tx, txData ethtx.TxData, etx *ethtypes.Transaction, sender common.Address, paxSender sdk.AccAddress) sdk.Context {
+	ctx = ctx.WithPriority(CalculatePriority(ctx, txData, ek).Int64())
+
+	// set EVM properties
+	ctx = ctx.WithIsEVM(true)
+	ctx = ctx.WithEVMNonce(etx.Nonce())
+	ctx = ctx.WithEVMSenderAddress(sender)
+	ctx = ctx.WithPaxSenderAddress(paxSender)
+	ctx = ctx.WithEVMTxHash(etx.Hash())
+	adjustedGasLimit := ek.GetPriorityNormalizer(ctx).MulInt64(int64(txData.GetGas())) //nolint:gosec
+	gasMeter := sdk.NewGasMeterWithMultiplier(ctx, adjustedGasLimit.TruncateInt().Uint64())
+	ctx = ctx.WithGasMeter(gasMeter)
+	if tx.GetGasEstimate() >= evmante.MinGasEVMTx {
+		ctx = ctx.WithGasEstimate(tx.GetGasEstimate())
+	} else {
+		ctx = ctx.WithGasEstimate(gasMeter.Limit())
+	}
+	return ctx
+}
+
+func HandleAssociateTx(ctx sdk.Context, ek *evmkeeper.Keeper, atx *ethtx.AssociateTx, readOnly bool) (sdk.Context, error) {
+	V, R, S := atx.GetRawSignatureValues()
+	V = new(big.Int).Add(V, utils.Big27)
+	// Hash custom message passed in
+	customMessageHash := crypto.Keccak256Hash([]byte(atx.CustomMessage))
+	evmAddr, paxAddr, paxPubkey, err := helpers.GetAddresses(V, R, S, customMessageHash)
+	if err != nil {
+		return ctx, err
+	}
+	_, isAssociated := ek.GetEVMAddress(ctx, paxAddr)
+	if isAssociated {
+		return ctx, sdkerrors.Wrap(sdkerrors.ErrInvalidRequest, "account already has association set")
+	}
+	if !IsAccountBalancePositive(ctx, ek, paxAddr, evmAddr) {
+		return ctx, sdkerrors.Wrap(sdkerrors.ErrInsufficientFunds, "account needs to have at least 1 wei to force association")
+	}
+	if !readOnly {
+		if err := AssociateAddress(ctx, ek, evmAddr, paxAddr, paxPubkey); err != nil {
+			return ctx, err
+		}
+	}
+	return ctx.WithPriority(antedecorators.EVMAssociatePriority), nil
+}
+
+func CheckAndDecodeSignature(ctx sdk.Context, txData ethtx.TxData, chainID *big.Int, isBlockTest bool) (common.Address, sdk.AccAddress, cryptotypes.PubKey, derived.SignerVersion, error) {
+	ethTx := ethtypes.NewTx(txData.AsEthereumData())
+	if ethTx.Type() != ethtypes.LegacyTxType {
+		chainID = ethTx.ChainId()
+	}
+	chainCfg := evmtypes.DefaultChainConfig()
+	ethCfg := chainCfg.EthereumConfig(chainID)
+	version := evmante.GetVersion(ctx, ethCfg)
+	signer := evmante.SignerMap[version](chainID)
+	if !evmante.IsTxTypeAllowed(version, ethTx.Type()) {
+		return common.Address{}, sdk.AccAddress{}, nil, 0, ethtypes.ErrInvalidChainId
+	}
+
+	var txHash common.Hash
+	V, R, S := ethTx.RawSignatureValues()
+	if ethTx.Protected() {
+		V = helpers.AdjustV(V, ethTx.Type(), ethCfg.ChainID)
+		txHash = signer.Hash(ethTx)
+	} else {
+		if isBlockTest {
+			// need to allow unprotected legacy txs in blocktest
+			// to not lose coverage for other parts of the code
+			txHash = ethtypes.FrontierSigner{}.Hash(ethTx)
+		} else {
+			return common.Address{}, sdk.AccAddress{}, nil, 0, errors.New("unsupported tx type: unsafe legacy tx")
+		}
+	}
+	evmAddr, paxAddr, paxPubkey, err := helpers.GetAddresses(V, R, S, txHash)
+	if err != nil {
+		return common.Address{}, sdk.AccAddress{}, nil, 0, sdkerrors.ErrInvalidChainID
+	}
+	return evmAddr, paxAddr, paxPubkey, version, nil
+}
+
+func AssociateAddress(ctx sdk.Context, ek *evmkeeper.Keeper, evmAddr common.Address, paxAddr sdk.AccAddress, paxPubkey cryptotypes.PubKey) error {
+	_, isAssociated := ek.GetEVMAddress(ctx, paxAddr)
+	if !isAssociated {
+		associateHelper := helpers.NewAssociationHelper(ek, ek.BankKeeper(), ek.AccountKeeper())
+		if err := associateHelper.AssociateAddresses(ctx, paxAddr, evmAddr, paxPubkey, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func EvmCheckAndChargeFees(ctx sdk.Context, sender common.Address, ek *evmkeeper.Keeper, upgradeKeeper *upgradekeeper.Keeper, txData ethtx.TxData, etx *ethtypes.Transaction, msg *evmtypes.MsgEVMTransaction, version derived.SignerVersion, statelessChecks bool) (*state.DBImpl, error) {
+	if txData.GetGasFeeCap().Cmp(GetBaseFee(ctx, ek, upgradeKeeper)) < 0 {
+		return nil, sdkerrors.ErrInsufficientFee
+	}
+	if txData.GetGasFeeCap().Cmp(GetMinimumFee(ctx, ek)) < 0 {
+		return nil, sdkerrors.ErrInsufficientFee
+	}
+	ethCfg := evmtypes.DefaultChainConfig().EthereumConfig(ek.ChainID(ctx))
+	if version >= derived.Cancun && len(txData.GetBlobHashes()) > 0 {
+		// For now we are simply assuming excessive blob gas is 0. In the future we might change it to be
+		// dynamic based on prior block usage.
+		if txData.GetBlobFeeCap().Cmp(eip4844.CalcBlobFee(ethCfg, &ethtypes.Header{Time: uint64(ctx.BlockTime().Unix())})) < 0 { // nolint:gosec
+			return nil, sdkerrors.ErrInsufficientFee
+		}
+	}
+	emsg := ek.GetEVMMessage(ctx, etx, sender)
+	stateDB := state.NewDBImpl(ctx, ek, false)
+	gp := ek.GetGasPool()
+	blockCtx, err := ek.GetVMBlockContext(ctx, gp)
+	if err != nil {
+		return nil, err
+	}
+	txCtx := core.NewEVMTxContext(emsg)
+	evmInstance := vm.NewEVM(*blockCtx, stateDB, ethCfg, vm.Config{}, ek.CustomPrecompiles(ctx))
+	evmInstance.SetTxContext(txCtx)
+	st := core.NewStateTransition(evmInstance, emsg, &gp, true, false)
+	if statelessChecks {
+		if err := st.StatelessChecks(); err != nil {
+			return nil, sdkerrors.Wrap(sdkerrors.ErrWrongSequence, err.Error())
+		}
+	}
+	if err := st.BuyGas(); err != nil {
+		return nil, sdkerrors.Wrap(sdkerrors.ErrInsufficientFunds, err.Error())
+	}
+	return stateDB, nil
+}
+
+func CheckNonce(ctx sdk.Context, ek *evmkeeper.Keeper, etx *ethtypes.Transaction, evmAddr common.Address) (sdk.Context, error) {
+	fee := new(big.Int).Mul(etx.GasPrice(), new(big.Int).SetUint64(etx.Gas()))
+	if etx.Value() != nil {
+		fee = new(big.Int).Add(fee, etx.Value())
+	}
+
+	txNonce := etx.Nonce()
+	nextNonce := ek.GetNonce(ctx, evmAddr)
+	if txNonce < nextNonce {
+		return ctx, sdkerrors.ErrWrongSequence
+	}
+	ctx = ctx.WithEVMRequiredBalance(fee)
+
+	return ctx, nil
+}
+
+func IsAccountBalancePositive(ctx sdk.Context, evmKeeper *evmkeeper.Keeper, paxAddr sdk.AccAddress, evmAddr common.Address) bool {
+	baseDenom := evmKeeper.GetBaseDenom(ctx)
+	if amt := evmKeeper.BankKeeper().GetBalance(ctx, paxAddr, baseDenom).Amount; amt.IsPositive() {
+		return true
+	}
+	if amt := evmKeeper.BankKeeper().GetBalance(ctx, sdk.AccAddress(evmAddr[:]), baseDenom).Amount; amt.IsPositive() {
+		return true
+	}
+	if amt := evmKeeper.BankKeeper().GetWeiBalance(ctx, paxAddr); amt.IsPositive() {
+		return true
+	}
+	return evmKeeper.BankKeeper().GetWeiBalance(ctx, sdk.AccAddress(evmAddr[:])).IsPositive()
+}
+
+// minimum fee per gas required for a tx to be processed
+func GetBaseFee(ctx sdk.Context, evmKeeper *evmkeeper.Keeper, upgradeKeeper *upgradekeeper.Keeper) *big.Int {
+	if ctx.ChainID() == "pacific-1" && ctx.BlockHeight() < 114945913 {
+		return evmKeeper.GetBaseFeePerGas(ctx).TruncateInt().BigInt()
+	}
+	if ctx.ChainID() == "pacific-1" && ctx.BlockHeight() < upgradeKeeper.GetDoneHeight(ctx.WithGasMeter(sdk.NewInfiniteGasMeter(1, 1)), "6.2.0") {
+		return evmKeeper.GetCurrBaseFeePerGas(ctx).TruncateInt().BigInt()
+	}
+	return evmKeeper.GetNextBaseFeePerGas(ctx).TruncateInt().BigInt()
+}
+
+// lowest allowed fee per gas, base fee will not be lower than this
+func GetMinimumFee(ctx sdk.Context, evmKeeper *evmkeeper.Keeper) *big.Int {
+	return evmKeeper.GetMinimumFeePerGas(ctx).TruncateInt().BigInt()
+}
+
+func CalculatePriority(ctx sdk.Context, txData ethtx.TxData, evmKeeper *evmkeeper.Keeper) *big.Int {
+	gp := txData.EffectiveGasPrice(utils.Big0)
+	priority := sdk.NewDecFromBigInt(gp).Quo(evmKeeper.GetPriorityNormalizer(ctx)).TruncateInt().BigInt()
+	if priority.Cmp(big.NewInt(antedecorators.MaxPriority)) > 0 {
+		priority = big.NewInt(antedecorators.MaxPriority)
+	}
+	return priority
+}

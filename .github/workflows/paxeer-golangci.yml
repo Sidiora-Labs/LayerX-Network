@@ -1,0 +1,36 @@
+name: Paxeer / golangci-lint
+on:
+  push:
+    tags:
+      - 'paxeer-network/v*'
+    branches:
+      - main
+      - release/**
+    paths:
+      - 'paxeer-network/**'
+      - '.github/workflows/paxeer-golangci.yml'
+  pull_request:
+    paths:
+      - 'paxeer-network/**'
+      - '.github/workflows/paxeer-golangci.yml'
+  merge_group:
+permissions:
+  contents: read
+  # Optional: allow read access to pull request. Use with `only-new-issues` option.
+  # pull-requests: read
+jobs:
+  golangci:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25.6'
+          cache-dependency-path: paxeer-network/go.sum
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.8.0
+          args: --timeout 10m0s
+          working-directory: paxeer-network

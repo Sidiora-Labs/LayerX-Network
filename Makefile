@@ -19,6 +19,8 @@ HUMAN_WEB_DIR := human/apps/web
 HUMAN_NPM ?= npm --prefix $(HUMAN_WEB_DIR)
 INTEROP_CARGO ?= cargo
 INTEROP_MANIFEST := interop/Cargo.toml
+PAXEER_DIR := $(CURDIR)/paxeer-network
+PAXEER_MAKE := $(MAKE) -C $(PAXEER_DIR)
 
 CPPFLAGS := -Iinclude \
 	-DLXP_BUILD_TARGET_TRIPLE=\"$(shell $(CC) -dumpmachine)\" \
@@ -2347,6 +2349,22 @@ agent-check-secrets:
 	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-crypto --test secrets
 
 ci: public-audit test reproducible scan-consensus test-sanitizers
+
+.PHONY: paxeer-build paxeer-lint paxeer-test paxeer-ci monorepo-ci
+
+paxeer-build:
+	$(PAXEER_MAKE) build
+
+paxeer-lint:
+	$(PAXEER_MAKE) lint
+
+paxeer-test:
+	$(PAXEER_MAKE) test
+
+paxeer-ci:
+	$(PAXEER_MAKE) ci
+
+monorepo-ci: ci paxeer-ci
 
 -include $(LIB_OBJECTS:.o=.d)
 

@@ -1,0 +1,271 @@
+package types
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/gogo/protobuf/jsonpb"
+	"github.com/holiman/uint256"
+	"github.com/sidiora-labs/paxeer-network/consensus/crypto"
+	"github.com/sidiora-labs/paxeer-network/consensus/internal/jsontypes"
+)
+
+const (
+	CodeTypeOK uint32 = 0
+)
+
+// IsOK returns true if Code is OK.
+func (r ResponseCheckTx) IsOK() bool {
+	return r.Code == CodeTypeOK
+}
+
+func (r ResponseCheckTx) Err() error {
+	if r.IsOK() {
+		return nil
+	}
+	return errors.New(r.Log)
+}
+
+// IsErr returns true if Code is something other than OK.
+func (r ResponseCheckTx) IsErr() bool {
+	return r.Code != CodeTypeOK
+}
+
+// IsOK returns true if Code is OK.
+func (r ResponseDeliverTx) IsOK() bool {
+	return r.Code == CodeTypeOK
+}
+
+// IsErr returns true if Code is something other than OK.
+func (r ResponseDeliverTx) IsErr() bool {
+	return r.Code != CodeTypeOK
+}
+
+// IsOK returns true if Code is OK.
+func (r ExecTxResult) IsOK() bool {
+	return r.Code == CodeTypeOK
+}
+
+// IsErr returns true if Code is something other than OK.
+func (r ExecTxResult) IsErr() bool {
+	return r.Code != CodeTypeOK
+}
+
+// IsOK returns true if Code is OK.
+func (r ResponseQuery) IsOK() bool {
+	return r.Code == CodeTypeOK
+}
+
+// IsErr returns true if Code is something other than OK.
+func (r ResponseQuery) IsErr() bool {
+	return r.Code != CodeTypeOK
+}
+
+func (r ResponseProcessProposal) IsAccepted() bool {
+	return r.Status == ResponseProcessProposal_ACCEPT
+}
+
+func (r ResponseProcessProposal) IsStatusUnknown() bool {
+	return r.Status == ResponseProcessProposal_UNKNOWN
+}
+
+//---------------------------------------------------------------------------
+// override JSON marshaling so we emit defaults (ie. disable omitempty)
+
+var (
+	jsonpbMarshaller = jsonpb.Marshaler{
+		EnumsAsInts:  true,
+		EmitDefaults: true,
+	}
+	jsonpbUnmarshaller = jsonpb.Unmarshaler{}
+)
+
+func (r *ResponseCheckTx) MarshalJSON() ([]byte, error) {
+	s, err := jsonpbMarshaller.MarshalToString(r)
+	return []byte(s), err
+}
+
+func (r *ResponseCheckTx) UnmarshalJSON(b []byte) error {
+	reader := bytes.NewBuffer(b)
+	return jsonpbUnmarshaller.Unmarshal(reader, r)
+}
+
+func (r *ResponseDeliverTx) MarshalJSON() ([]byte, error) {
+	s, err := jsonpbMarshaller.MarshalToString(r)
+	return []byte(s), err
+}
+
+func (r *ResponseDeliverTx) UnmarshalJSON(b []byte) error {
+	reader := bytes.NewBuffer(b)
+	return jsonpbUnmarshaller.Unmarshal(reader, r)
+}
+
+func (r *ResponseQuery) MarshalJSON() ([]byte, error) {
+	s, err := jsonpbMarshaller.MarshalToString(r)
+	return []byte(s), err
+}
+
+func (r *ResponseQuery) UnmarshalJSON(b []byte) error {
+	reader := bytes.NewBuffer(b)
+	return jsonpbUnmarshaller.Unmarshal(reader, r)
+}
+
+func (r *ResponseCommit) MarshalJSON() ([]byte, error) {
+	s, err := jsonpbMarshaller.MarshalToString(r)
+	return []byte(s), err
+}
+
+func (r *ResponseCommit) UnmarshalJSON(b []byte) error {
+	reader := bytes.NewBuffer(b)
+	return jsonpbUnmarshaller.Unmarshal(reader, r)
+}
+
+func (r *EventAttribute) MarshalJSON() ([]byte, error) {
+	s, err := jsonpbMarshaller.MarshalToString(r)
+	return []byte(s), err
+}
+
+func (r *EventAttribute) UnmarshalJSON(b []byte) error {
+	reader := bytes.NewBuffer(b)
+	return jsonpbUnmarshaller.Unmarshal(reader, r)
+}
+
+// validatorUpdateJSON is the JSON encoding of a validator update.
+//
+// It handles translation of public keys from the protobuf representation to
+// the legacy Amino-compatible format expected by RPC clients.
+type validatorUpdateJSON struct {
+	PubKey json.RawMessage `json:"pub_key,omitempty"`
+	Power  int64           `json:"power,string"`
+}
+
+func (v *ValidatorUpdate) MarshalJSON() ([]byte, error) {
+	key, err := crypto.PubKeyFromProto(v.PubKey)
+	if err != nil {
+		return nil, err
+	}
+	jkey, err := jsontypes.Marshal(key)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(validatorUpdateJSON{
+		PubKey: jkey,
+		Power:  v.GetPower(),
+	})
+}
+
+func (v *ValidatorUpdate) UnmarshalJSON(data []byte) error {
+	var vu validatorUpdateJSON
+	if err := json.Unmarshal(data, &vu); err != nil {
+		return err
+	}
+	var key crypto.PubKey
+	if err := jsontypes.Unmarshal(vu.PubKey, &key); err != nil {
+		return err
+	}
+	v.PubKey = crypto.PubKeyToProto(key)
+	v.Power = vu.Power
+	return nil
+}
+
+// Some compile time assertions to ensure we don't
+// have accidental runtime surprises later on.
+
+// jsonEncodingRoundTripper ensures that asserted
+// interfaces implement both MarshalJSON and UnmarshalJSON
+type jsonRoundTripper interface {
+	json.Marshaler
+	json.Unmarshaler
+}
+
+var _ jsonRoundTripper = (*ResponseCommit)(nil)
+var _ jsonRoundTripper = (*ResponseQuery)(nil)
+var _ jsonRoundTripper = (*ResponseDeliverTx)(nil)
+var _ jsonRoundTripper = (*ResponseCheckTx)(nil)
+
+var _ jsonRoundTripper = (*EventAttribute)(nil)
+
+// -----------------------------------------------
+// construct Result data
+
+// deterministicExecTxResult constructs a copy of response that omits
+// non-deterministic fields. The input response is not modified.
+func deterministicExecTxResult(response *ExecTxResult) *ExecTxResult {
+	return &ExecTxResult{
+		Code:      response.Code,
+		Data:      response.Data,
+		GasWanted: response.GasWanted,
+		GasUsed:   response.GasUsed,
+	}
+}
+
+// MarshalTxResults encodes the the TxResults as a list of byte
+// slices. It strips off the non-deterministic pieces of the TxResults
+// so that the resulting data can be used for hash comparisons and used
+// in Merkle proofs.
+func MarshalTxResults(r []*ExecTxResult) ([][]byte, error) {
+	s := make([][]byte, len(r))
+	for i, e := range r {
+		d := deterministicExecTxResult(e)
+		b, err := d.Marshal()
+		if err != nil {
+			return nil, err
+		}
+		s[i] = b
+	}
+	return s, nil
+}
+
+type PendingTxCheckerResponse int
+
+const (
+	Accepted PendingTxCheckerResponse = iota
+	Rejected
+	Pending
+)
+
+// ResponseCheckTxV2 response type contains non-protobuf fields, so non-local ABCI clients will not be able
+// to utilize the new fields in V2 type (but still be backwards-compatible)
+type ResponseCheckTxV2 struct {
+	*ResponseCheckTx
+
+	// helper properties for prioritization in mempool
+	IsEVM    bool
+	EVMNonce uint64
+	EVMHash  common.Hash
+	// EVM and pax addresses are both derived from the sender's public key.
+	// TODO(gprusak): include just the secp256k1 public key and let the CheckTx caller derive evm/pax address on their own.
+	EVMSenderAddress   common.Address
+	PaxSenderAddress   []byte
+	EVMRequiredBalance uint256.Int
+}
+
+type CheckTxTypeV2 int32
+
+const (
+	CheckTxTypeV2New CheckTxTypeV2 = iota
+	CheckTxTypeV2Recheck
+)
+
+type RequestCheckTxV2 struct {
+	Tx   []byte
+	Type CheckTxTypeV2
+}
+
+type RequestDeliverTxV2 struct {
+	Tx          []byte
+	SigVerified bool
+}
+
+type RequestGetTxPriorityHintV2 struct {
+	Tx []byte
+}
+
+type TxResultV2 struct {
+	Height int64
+	Index  uint32
+	Tx     []byte
+	Result ExecTxResult
+}
