@@ -1,3 +1,11 @@
+[observation.19.1.1]
+task = "19.1"
+file = "programs/.gitignore, programs/vendor/cc/.cargo-checksum.json, programs/vendor/cc/src/target/generated.rs"
+symbol = "vendored cc 1.4.4 target table"
+observed = "Workspace BUILD log 012 stopped because the vendored cc 1.4.4 checksum manifest declares src/target/generated.rs but the broad Programs target-directory ignore rule had omitted that source file. The file was restored byte-for-byte from Cargo's cached cc 1.4.4 source after its SHA-256 matched the declared f93008829c57e9da3f5d6ac84643c04d8438a319fe9517533604dfe47e9cb8d7 checksum, and the ignore rule now preserves this exact vendored source path."
+assumption = "Human qualification must rerun the offline Programs Cargo build so Cargo checks the complete vendor tree; this implementation step validates the restored file against the existing declaration but does not claim the build passes."
+severity = "qualification-repair"
+
 [observation.19.4.1]
 task = "19.4"
 file = "src/state/lxp_state_root.c"

@@ -1,2 +1,4 @@
 /target/
 /**/target/
+!/vendor/cc/src/target/
+!/vendor/cc/src/target/generated.rs
