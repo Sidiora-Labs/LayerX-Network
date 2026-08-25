@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"sync/atomic"
+	"sync"
 
 	"github.com/ethereum/evmc/v12/bindings/go/evmc"
 	"github.com/ethereum/go-ethereum/common"
@@ -58,9 +58,13 @@ type HostContext struct {
 	vm     *evmc.VM
 	evm    *vm.EVM
 	config HostContextConfig
-	// sstoreGasAdjustment accumulates the total extra gas to charge for SSTORE operations.
-	// This is applied after evmone execution completes.
-	sstoreGasAdjustment atomic.Int64
+	sstoreGasMu     sync.Mutex
+	sstoreGasFrames []sstoreGasFrame
+}
+
+type sstoreGasFrame struct {
+	adjustment int64
+	overflow   bool
 }
 
 // NewHostContext creates a new HostContext with the given configuration.
@@ -72,15 +76,37 @@ func NewHostContext(vm *evmc.VM, evm *vm.EVM, config HostContextConfig) *HostCon
 	}
 }
 
-// GetSstoreGasAdjustment returns the total accumulated SSTORE gas adjustment.
-// This should be called after execution to apply the extra gas charge.
-func (h *HostContext) GetSstoreGasAdjustment() int64 {
-	return h.sstoreGasAdjustment.Load()
+func (h *HostContext) BeginSstoreGasAdjustment() {
+	h.sstoreGasMu.Lock()
+	h.sstoreGasFrames = append(h.sstoreGasFrames, sstoreGasFrame{})
+	h.sstoreGasMu.Unlock()
 }
 
-// ResetSstoreGasAdjustment resets the accumulated SSTORE gas adjustment to zero.
-func (h *HostContext) ResetSstoreGasAdjustment() {
-	h.sstoreGasAdjustment.Store(0)
+func (h *HostContext) addSstoreGasAdjustment(delta int64) {
+	h.sstoreGasMu.Lock()
+	defer h.sstoreGasMu.Unlock()
+	if len(h.sstoreGasFrames) == 0 {
+		return
+	}
+	frame := &h.sstoreGasFrames[len(h.sstoreGasFrames)-1]
+	if (delta > 0 && frame.adjustment > math.MaxInt64-delta) ||
+		(delta < 0 && frame.adjustment < math.MinInt64-delta) {
+		frame.overflow = true
+		return
+	}
+	frame.adjustment += delta
+}
+
+func (h *HostContext) EndSstoreGasAdjustment() (int64, bool) {
+	h.sstoreGasMu.Lock()
+	defer h.sstoreGasMu.Unlock()
+	if len(h.sstoreGasFrames) == 0 {
+		return 0, true
+	}
+	last := len(h.sstoreGasFrames) - 1
+	frame := h.sstoreGasFrames[last]
+	h.sstoreGasFrames = h.sstoreGasFrames[:last]
+	return frame.adjustment, frame.overflow
 }
 
 func (h *HostContext) AccountExists(addr evmc.Address) bool {
@@ -133,7 +159,7 @@ func (h *HostContext) SetStorage(addr evmc.Address, key evmc.Hash, value evmc.Ha
 	// We track the delta here and apply it after execution.
 	// Delta can be positive (higher cost) or negative (lower cost).
 	if status == evmc.StorageAdded && h.config.SstoreGasDelta != 0 {
-		h.sstoreGasAdjustment.Add(h.config.SstoreGasDelta)
+		h.addSstoreGasAdjustment(h.config.SstoreGasDelta)
 	}
 
 	h.evm.StateDB.SetState(gethAddr, gethKey, common.Hash(value))
@@ -169,7 +195,9 @@ func (h *HostContext) Selfdestruct(addr evmc.Address, beneficiary evmc.Address) 
 
 func (h *HostContext) GetTxContext() evmc.TxContext {
 	var gasPrice evmc.Hash
-	h.evm.GasPrice.FillBytes(gasPrice[:])
+	if h.evm.GasPrice != nil {
+		h.evm.GasPrice.FillBytes(gasPrice[:])
+	}
 
 	var prevRandao evmc.Hash
 	if h.evm.Context.Random != nil {
@@ -177,13 +205,19 @@ func (h *HostContext) GetTxContext() evmc.TxContext {
 	}
 
 	var chainID evmc.Hash
-	h.evm.ChainConfig().ChainID.FillBytes(chainID[:])
+	if h.evm.ChainConfig() != nil && h.evm.ChainConfig().ChainID != nil {
+		h.evm.ChainConfig().ChainID.FillBytes(chainID[:])
+	}
 
 	var baseFee evmc.Hash
-	h.evm.Context.BaseFee.FillBytes(baseFee[:])
+	if h.evm.Context.BaseFee != nil {
+		h.evm.Context.BaseFee.FillBytes(baseFee[:])
+	}
 
 	var blobBaseFee evmc.Hash
-	h.evm.Context.BlobBaseFee.FillBytes(blobBaseFee[:])
+	if h.evm.Context.BlobBaseFee != nil {
+		h.evm.Context.BlobBaseFee.FillBytes(blobBaseFee[:])
+	}
 
 	//nolint:gosec // G115: safe integer conversions for Time and GasLimit
 	return evmc.TxContext{
@@ -201,7 +235,9 @@ func (h *HostContext) GetTxContext() evmc.TxContext {
 }
 
 func (h *HostContext) GetBlockHash(number int64) evmc.Hash {
-	//nolint:gosec // G115: safe, block numbers are always positive
+	if number < 0 {
+		return evmc.Hash{}
+	}
 	return evmc.Hash(h.evm.Context.GetHash(uint64(number)))
 }
 
@@ -251,6 +287,9 @@ func (h *HostContext) Call(
 	kind evmc.CallKind, recipient evmc.Address, sender evmc.Address, value evmc.Hash, input []byte, gas int64,
 	_ int, static bool, salt evmc.Hash, _ evmc.Address,
 ) ([]byte, int64, int64, evmc.Address, error) {
+	if gas < 0 {
+		return nil, 0, 0, evmc.Address{}, evmc.Failure
+	}
 	recipientAddr := common.Address(recipient)
 	senderAddr := common.Address(sender)
 	valueUint256 := new(uint256.Int).SetBytes(value[:])
@@ -282,7 +321,7 @@ func (h *HostContext) Call(
 		ret, createAddr, leftoverGas, err = h.evm.Create2(senderAddr, input, uint64(gas), valueUint256, saltUint256)
 		return ret, int64(leftoverGas), 0, evmc.Address(createAddr), toEvmcError(err)
 	default:
-		panic("EofCreate is not supported")
+		return nil, 0, 0, evmc.Address{}, evmc.Failure
 	}
 
 	//nolint:gosec // G115: safe, leftoverGas won't exceed int64 max

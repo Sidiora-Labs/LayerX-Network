@@ -463,14 +463,12 @@ func TestSstoreGasDeltaCalculation(t *testing.T) {
 	}
 }
 
-// TestSstoreGasAdjustmentAccumulation tests the atomic accumulation of gas adjustments
+// TestSstoreGasAdjustmentAccumulation tests bounded, invocation-scoped accumulation.
 func TestSstoreGasAdjustmentAccumulation(t *testing.T) {
 	tests := []struct {
 		name               string
 		deltas             []int64 // deltas to add
 		expectedTotal      int64
-		resetMidway        bool // reset after half the deltas
-		expectedAfterReset int64
 	}{
 		{
 			name:          "Single delta",
@@ -492,50 +490,46 @@ func TestSstoreGasAdjustmentAccumulation(t *testing.T) {
 			deltas:        []int64{},
 			expectedTotal: 0,
 		},
-		{
-			name:               "Reset clears accumulation",
-			deltas:             []int64{52000, 52000, 52000, 52000},
-			resetMidway:        true,
-			expectedAfterReset: 104000, // Only last 2 deltas
-		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Create a minimal HostContext (only need the atomic counter)
+			// Create a minimal HostContext (only need the adjustment frames).
 			hc := &HostContext{}
-
-			// Reset to ensure clean state
-			hc.ResetSstoreGasAdjustment()
-			require.Equal(t, int64(0), hc.GetSstoreGasAdjustment(), "Should start at 0")
-
-			if tt.resetMidway {
-				// Add half the deltas
-				half := len(tt.deltas) / 2
-				for i := 0; i < half; i++ {
-					hc.sstoreGasAdjustment.Add(tt.deltas[i])
-				}
-
-				// Reset
-				hc.ResetSstoreGasAdjustment()
-				require.Equal(t, int64(0), hc.GetSstoreGasAdjustment(), "Should be 0 after reset")
-
-				// Add remaining deltas
-				for i := half; i < len(tt.deltas); i++ {
-					hc.sstoreGasAdjustment.Add(tt.deltas[i])
-				}
-
-				require.Equal(t, tt.expectedAfterReset, hc.GetSstoreGasAdjustment())
-			} else {
-				// Add all deltas
-				for _, delta := range tt.deltas {
-					hc.sstoreGasAdjustment.Add(delta)
-				}
-
-				require.Equal(t, tt.expectedTotal, hc.GetSstoreGasAdjustment())
+			hc.BeginSstoreGasAdjustment()
+			for _, delta := range tt.deltas {
+				hc.addSstoreGasAdjustment(delta)
 			}
+			adjustment, overflow := hc.EndSstoreGasAdjustment()
+			require.False(t, overflow)
+			require.Equal(t, tt.expectedTotal, adjustment)
 		})
 	}
+}
+
+func TestSstoreGasAdjustmentNestedFrames(t *testing.T) {
+	hc := &HostContext{}
+	hc.BeginSstoreGasAdjustment()
+	hc.addSstoreGasAdjustment(11)
+	hc.BeginSstoreGasAdjustment()
+	hc.addSstoreGasAdjustment(7)
+
+	child, childOverflow := hc.EndSstoreGasAdjustment()
+	parent, parentOverflow := hc.EndSstoreGasAdjustment()
+	require.Equal(t, int64(7), child)
+	require.False(t, childOverflow)
+	require.Equal(t, int64(11), parent)
+	require.False(t, parentOverflow)
+}
+
+func TestSstoreGasAdjustmentOverflow(t *testing.T) {
+	hc := &HostContext{}
+	hc.BeginSstoreGasAdjustment()
+	hc.addSstoreGasAdjustment(math.MaxInt64)
+	hc.addSstoreGasAdjustment(1)
+	adjustment, overflow := hc.EndSstoreGasAdjustment()
+	require.Equal(t, int64(math.MaxInt64), adjustment)
+	require.True(t, overflow)
 }
 
 // TestSstoreGasAdjustmentWithStorageStatus tests that only StorageAdded triggers adjustment
@@ -608,35 +602,4 @@ func TestStandardSstoreSetGasConstant(t *testing.T) {
 	// EIP-2200 defines SstoreSetGas as 20000
 	require.Equal(t, uint64(20000), StandardSstoreSetGasEIP2200,
 		"StandardSstoreSetGasEIP2200 should be 20000 per EIP-2200")
-}
-
-// TestSstoreGasAdjustmentConcurrency tests thread-safety of gas adjustment
-func TestSstoreGasAdjustmentConcurrency(t *testing.T) {
-	hc := &HostContext{}
-	hc.ResetSstoreGasAdjustment()
-
-	const numGoroutines = 100
-	const deltasPerGoroutine = 100
-	const deltaValue = int64(52000)
-
-	done := make(chan bool, numGoroutines)
-
-	// Spawn goroutines that concurrently add to the adjustment
-	for i := 0; i < numGoroutines; i++ {
-		go func() {
-			for j := 0; j < deltasPerGoroutine; j++ {
-				hc.sstoreGasAdjustment.Add(deltaValue)
-			}
-			done <- true
-		}()
-	}
-
-	// Wait for all goroutines
-	for i := 0; i < numGoroutines; i++ {
-		<-done
-	}
-
-	expected := int64(numGoroutines * deltasPerGoroutine * deltaValue)
-	require.Equal(t, expected, hc.GetSstoreGasAdjustment(),
-		"Concurrent additions should accumulate correctly")
 }
