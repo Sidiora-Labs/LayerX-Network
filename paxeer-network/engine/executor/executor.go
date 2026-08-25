@@ -35,7 +35,7 @@ func NewGethExecutor(blockCtx vm.BlockContext, stateDB vm.StateDB, chainConfig *
 }
 
 func (e *Executor) ExecuteTransaction(tx *types.Transaction, sender common.Address, baseFee *big.Int, gasPool *core.GasPool) (*core.ExecutionResult, error) {
-	message, err := core.TransactionToMessage(tx, &internal.Signer{From: sender}, baseFee)
+	message, err := internal.TransactionToMessage(tx, sender, baseFee)
 	if err != nil {
 		return nil, err
 	}
@@ -53,7 +53,7 @@ func (e *Executor) ExecuteTransaction(tx *types.Transaction, sender common.Addre
 // This ensures the EVM does NOT charge/refund gas fees during execution, matching V2's behavior
 // where feeAlreadyCharged=true is passed to StateTransition.Execute().
 func (e *Executor) ExecuteTransactionFeeCharged(tx *types.Transaction, sender common.Address, baseFee *big.Int, gasPool *core.GasPool) (*core.ExecutionResult, error) {
-	message, err := core.TransactionToMessage(tx, &internal.Signer{From: sender}, baseFee)
+	message, err := internal.TransactionToMessage(tx, sender, baseFee)
 	if err != nil {
 		return nil, err
 	}
