@@ -543,11 +543,12 @@ struct ReceiptFields {
 
 fn receipt(stage: CreationStage, action_key: [u8; 32]) -> ProtocolEvidence {
     let marker = stage as u8 + 11;
+    let previous_state_root = [marker; 32];
     let fields = ReceiptFields {
         activity_id: action_key,
-        previous_state_root: [marker; 32],
+        previous_state_root,
         resulting_state_root: [marker.saturating_add(1); 32],
-        batch_id: [marker.saturating_add(2); 32],
+        batch_id: support::execution_batch_id(previous_state_root, action_key, CORE_SEQUENCE),
         asset: [0x22; 32],
         operation: match stage {
             CreationStage::DidRegistration | CreationStage::BudgetCreation => 1,

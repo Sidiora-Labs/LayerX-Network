@@ -12,6 +12,7 @@ use layerx_proof::receipt::{
     verify_outcome, AuthorizedBatch, ReceiptCheck, VerificationFailure,
     VerifiedReceipt as ProofVerifiedReceipt,
 };
+use layerx_wire::hash::execution_batch_id;
 use layerx_wire::receipt::{decode, decode_batch_header, BatchHeader};
 use sha2::{Digest, Sha256};
 
@@ -327,12 +328,18 @@ impl ProtocolEvidenceVerifier {
         {
             return Err(ReceiptEvidenceError::SequenceRange);
         }
-        let signed_batch_id = inclusion.header().digest();
-        if protocol.batch_id() != signed_batch_id {
+        let expected_execution_id = execution_batch_id(
+            selected_header.previous_state_root(),
+            protocol.activity_id(),
+            protocol.global_sequence(),
+            selected_header.batch_number(),
+        )
+        .map_err(|_| ReceiptEvidenceError::BatchIdentity)?;
+        if protocol.batch_id() != expected_execution_id {
             return Err(ReceiptEvidenceError::BatchIdentity);
         }
         let authorised = AuthorizedBatch::new(
-            signed_batch_id,
+            expected_execution_id,
             protocol.asset(),
             selected_header.previous_state_root(),
             selected_header.resulting_state_root(),

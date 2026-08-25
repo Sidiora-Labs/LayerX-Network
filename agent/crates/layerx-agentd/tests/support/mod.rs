@@ -36,7 +36,7 @@ use layerx_client::lni::transport::{ConnectionGate, Limits, Uds};
 use layerx_programs::hex;
 use layerx_proof::merkle::build_proof;
 use layerx_types::verify::VerificationLevel;
-use layerx_wire::hash::{batch_header_digest, receipt_digest};
+use layerx_wire::hash::{batch_header_digest, execution_batch_id, receipt_digest};
 use ed25519_dalek::{Signer as _, SigningKey};
 
 static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(1);
@@ -354,10 +354,32 @@ pub fn raw_receipt_at(
     amount: u128,
     global_sequence: u64,
 ) -> RawReceiptEvidence {
+    raw_receipt_for_execution_batch(
+        activity_id,
+        result_code,
+        amount,
+        global_sequence,
+        7,
+    )
+}
+
+pub fn raw_receipt_for_execution_batch(
+    activity_id: [u8; 32],
+    result_code: i32,
+    amount: u128,
+    global_sequence: u64,
+    execution_batch_number: u64,
+) -> RawReceiptEvidence {
     let key = SigningKey::from_bytes(&[0x3a; 32]);
     let previous_state_root = [0x21; 32];
     let resulting_state_root = [0x22; 32];
-    let batch_id = [0x23; 32];
+    let batch_id = execution_batch_id(
+        previous_state_root,
+        activity_id,
+        global_sequence,
+        execution_batch_number,
+    )
+    .unwrap_or_else(|error| panic!("execution batch id: {error:?}"));
     let asset = [0x24; 32];
     let encode = |signature: Option<[u8; 64]>| {
         let mut encoder = Encoder::new(4096);

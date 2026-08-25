@@ -426,12 +426,14 @@ fn signed_receipt(
         .concat(),
     )
     .into();
+    let previous_state_root: [u8; 32] =
+        Sha256::digest([b"before".as_slice(), &activity_id].concat()).into();
     let fields = ReceiptFields {
         activity_id,
         sequence,
-        previous_state_root: Sha256::digest([b"before".as_slice(), &activity_id].concat()).into(),
+        previous_state_root,
         resulting_state_root: Sha256::digest([b"after".as_slice(), &activity_id].concat()).into(),
-        batch_id: Sha256::digest([b"batch".as_slice(), &activity_id].concat()).into(),
+        batch_id: support::execution_batch_id(previous_state_root, activity_id, sequence),
         asset,
         amount,
         counterparty,

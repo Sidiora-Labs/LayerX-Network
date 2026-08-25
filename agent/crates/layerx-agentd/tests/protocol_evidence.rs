@@ -233,8 +233,8 @@ fn revoked_and_out_of_range_keys_cannot_issue_evidence() {
 }
 
 #[test]
-fn receipt_batch_id_must_equal_the_independent_signed_header_digest() {
-    let raw = support::raw_receipt([0x71; 32], 0, 25);
+fn receipt_execution_id_must_bind_the_signed_headers_batch_number() {
+    let raw = support::raw_receipt_for_execution_batch([0x71; 32], 0, 25, 9, 8);
     assert_eq!(
         support::evidence_verifier().verify_receipt(&raw),
         Err(ReceiptEvidenceError::BatchIdentity)

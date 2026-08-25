@@ -697,11 +697,12 @@ struct ReceiptFields {
 }
 
 fn protocol_receipt(action_key: [u8; 32]) -> ProtocolEvidence {
+    let previous_state_root = [0x81; 32];
     let fields = ReceiptFields {
         activity_id: action_key,
-        previous_state_root: [0x81; 32],
+        previous_state_root,
         resulting_state_root: [0x82; 32],
-        batch_id: [0x83; 32],
+        batch_id: support::execution_batch_id(previous_state_root, action_key, 11),
     };
     let signer = SigningKey::from_bytes(&[0x84; 32]);
     let unsigned = encode_receipt(&fields, None);

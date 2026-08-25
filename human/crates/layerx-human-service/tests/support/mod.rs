@@ -25,6 +25,7 @@ use layerx_human_service::store::{
 use layerx_proof::merkle::build_proof;
 use layerx_proof::receipt::AuthorizedBatch;
 use layerx_types::verify::VerificationLevel;
+use layerx_wire::hash::execution_batch_id as wire_execution_batch_id;
 use sha2::{Digest as _, Sha256};
 
 static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(1);
@@ -181,6 +182,15 @@ fn encode_hex(bytes: &[u8]) -> String {
         encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
     }
     encoded
+}
+
+pub fn execution_batch_id(
+    previous_state_root: [u8; 32],
+    activity_id: [u8; 32],
+    global_sequence: u64,
+) -> [u8; 32] {
+    wire_execution_batch_id(previous_state_root, activity_id, global_sequence, 7)
+        .unwrap_or_else(|error| panic!("execution batch id: {error:?}"))
 }
 
 pub fn raw_receipt_evidence(
