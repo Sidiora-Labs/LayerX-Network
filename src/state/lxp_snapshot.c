@@ -642,7 +642,10 @@ lxp_result lxp_snapshot_load(const uint8_t *snapshot, size_t snapshot_length,
     if (status == LXP_OK) {
         if (snapshot_version ==
                 (uint16_t)LXP_PROTOCOL_VERSION_OCCUPANCY) {
+            struct lxp_gateway_invoice_registry *gateway_owner =
+                atomic_load(&live_accounts->gateway_owner);
             *live_accounts = *accounts;
+            atomic_store(&live_accounts->gateway_owner, gateway_owner);
             kernel->state->account_root_required = true;
         }
         kernel->state->count = state->count;

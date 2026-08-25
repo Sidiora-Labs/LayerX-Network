@@ -23,6 +23,33 @@ typedef struct receive_world {
     lxp_gateway_settlement_context send_context;
 } receive_world;
 
+typedef struct gateway_race_call {
+    const lxp_payment_requirement *requirement;
+    const lxp_receive *receive;
+    const lxp_send *send;
+    receive_world *world;
+    lxp_receipt receipt;
+    lxp_result status;
+} gateway_race_call;
+
+static void *claim_concurrently(void *argument)
+{
+    gateway_race_call *call = (gateway_race_call *)argument;
+    call->status = lxp_gateway_receive_claim(
+        call->requirement, call->receive, &call->world->receive_context,
+        &call->receipt);
+    return NULL;
+}
+
+static void *send_concurrently(void *argument)
+{
+    gateway_race_call *call = (gateway_race_call *)argument;
+    call->status = lxp_gateway_send_settle(
+        call->requirement, call->send, &call->world->send_context,
+        &call->receipt);
+    return NULL;
+}
+
 static int public_key_for(
     const uint8_t private_key[32], uint8_t public_key[32])
 {
@@ -119,8 +146,6 @@ static int world_init(
     const char *payer_name = "agent:did:key:payer:main";
     const char *service_name = "agent:did:key:service:main";
     (void)memset(world, 0, sizeof(*world));
-    if (lxp_gateway_invoice_registry_init(&world->invoices) != LXP_OK)
-        return 1;
     world->asset.asset_id[0] = 4U;
     (void)memcpy(world->asset.symbol, "USD", 4U);
     world->asset.symbol_length = 3U;
@@ -131,6 +156,8 @@ static int world_init(
         lx_asset_register(&world->assets, &world->asset, 0U,
                           (lxp_u128){0U, 0U}) != LXP_OK ||
         lx_account_registry_init(&world->accounts) != LXP_OK ||
+        lxp_gateway_invoice_registry_init(
+            &world->invoices, &world->accounts) != LXP_OK ||
         lx_asset_account_open(
             &world->assets, &world->accounts, world->asset.asset_id,
             (const uint8_t *)payer_name, strlen(payer_name), 1U,
@@ -183,8 +210,11 @@ int main(void)
     uint8_t service_public_key[32];
     uint8_t sequencer_public_key[32];
     static uint8_t arena_bytes[LXP_MAX_ACTIVITY_BYTES + 4096U];
+    static uint8_t race_arena_bytes[LXP_MAX_ACTIVITY_BYTES + 4096U];
     lxp_arena arena;
+    lxp_arena race_arena;
     static receive_world world;
+    static receive_world race_world;
     lxp_payment_requirement requirement;
     lxp_payment_requirement altered_requirement;
     lxp_payer_grant grant;
@@ -203,8 +233,13 @@ int main(void)
         public_key_for(service_private_key, service_public_key) != 0 ||
         public_key_for(sequencer_private_key, sequencer_public_key) != 0 ||
         lxp_arena_init(&arena, arena_bytes, sizeof(arena_bytes)) != LXP_OK ||
+        lxp_arena_init(
+            &race_arena, race_arena_bytes, sizeof(race_arena_bytes)) !=
+                LXP_OK ||
         world_init(&world, payer_public_key, service_public_key,
-                   sequencer_private_key, &arena) != 0)
+                   sequencer_private_key, &arena) != 0 ||
+        world_init(&race_world, payer_public_key, service_public_key,
+                   sequencer_private_key, &race_arena) != 0)
         return 1;
     (void)memset(&requirement, 0, sizeof(requirement));
     requirement.network_id = 42U;
@@ -385,8 +420,43 @@ int main(void)
                  send.context_hash, 32U);
     send.authorization.network_id = 42U;
     send.authorization.protocol_version = LXP_PROTOCOL_VERSION;
-    if (sign_send(payer_private_key, &send, payer_public_key) != 0 ||
-        lxp_gateway_send_settle(
+    if (sign_send(payer_private_key, &send, payer_public_key) != 0)
+        return 1;
+    {
+        gateway_race_call calls[2];
+        pthread_t workers[2];
+        size_t successes = 0U;
+        size_t replays = 0U;
+        (void)memset(calls, 0, sizeof(calls));
+        calls[0].requirement = &requirement;
+        calls[0].receive = &receive;
+        calls[0].world = &race_world;
+        calls[1].requirement = &requirement;
+        calls[1].send = &send;
+        calls[1].world = &race_world;
+        if (pthread_create(
+                &workers[0], NULL, claim_concurrently, &calls[0]) != 0 ||
+            pthread_create(
+                &workers[1], NULL, send_concurrently, &calls[1]) != 0)
+            return 1;
+        if (pthread_join(workers[0], NULL) != 0 ||
+            pthread_join(workers[1], NULL) != 0)
+            return 1;
+        successes += calls[0].status == LXP_OK ? 1U : 0U;
+        successes += calls[1].status == LXP_OK ? 1U : 0U;
+        replays += calls[0].status == LXP_ERR_IDEMPOTENT_REPLAY ? 1U : 0U;
+        replays += calls[1].status == LXP_ERR_IDEMPOTENT_REPLAY ? 1U : 0U;
+        if (successes != 1U || replays != 1U ||
+            memcmp(&calls[0].receipt, &calls[1].receipt,
+                   sizeof(calls[0].receipt)) != 0 ||
+            race_world.payer->balance.lo != 70U ||
+            race_world.service->balance.lo != 30U ||
+            race_world.invoices.count != 1U ||
+            race_world.receive_idempotency.count +
+                race_world.send_idempotency.count != 1U)
+            return 1;
+    }
+    if (lxp_gateway_send_settle(
             &requirement, &send, &world.send_context,
             &replay_receipt) != LXP_ERR_IDEMPOTENT_REPLAY ||
         memcmp(&receive_receipt, &replay_receipt,
@@ -442,5 +512,7 @@ int main(void)
             &replay_receipt) != LXP_ERR_GRANT_REVOKED ||
         world.payer->balance.lo != 70U || world.service->balance.lo != 30U)
         return 1;
-    return lxp_gateway_invoice_registry_destroy(&world.invoices) != LXP_OK;
+    return lxp_gateway_invoice_registry_destroy(&world.invoices) != LXP_OK ||
+           lxp_gateway_invoice_registry_destroy(
+               &race_world.invoices) != LXP_OK;
 }

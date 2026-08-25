@@ -50,8 +50,10 @@ typedef struct lxp_transfer_context {
     bool has_client_balance;
     bool protocol_system_capability;
     lx_account *sequence_account;
+#ifdef LXP_TESTING
     bool inject_failure;
     size_t failure_after_leg;
+#endif
     uint16_t origin_module_id;
     lxp_authorization_kind debit_authority_kind;
     const lxp_transfer_source_authority *source_authorities;

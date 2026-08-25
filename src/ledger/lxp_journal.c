@@ -241,8 +241,10 @@ lxp_result lxp_apply_transfer_set(lxp_transfer_leg *legs, size_t leg_count,
         status = lxp_precondition_check(&compact[i], 1U, context);
         if (status == LXP_OK)
             status = lxp_balance_apply_leg(&compact[i], &result->legs[i]);
+#ifdef LXP_TESTING
         if (status == LXP_OK && context->inject_failure &&
             i == context->failure_after_leg) status = LXP_ERR_IO;
+#endif
         if (status != LXP_OK) {
             (void)lxp_journal_rollback(&journal);
             result->failed_leg = original_index[i];

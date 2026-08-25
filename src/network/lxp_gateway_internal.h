@@ -12,15 +12,22 @@ typedef enum lxp_gateway_transaction_boundary {
     LXP_GATEWAY_AFTER_INVOICE_WRITE = 6
 } lxp_gateway_transaction_boundary;
 
+#ifdef LXP_TESTING
 void lxp_gateway_send_test_fail_after(
     lxp_gateway_transaction_boundary boundary);
 void lxp_gateway_receive_test_fail_after(
     lxp_gateway_transaction_boundary boundary);
+#endif
 lxp_result lxp_gateway_invoice_state_locked(
     const lxp_gateway_invoice_registry *registry,
     const uint8_t invoice_id[32],
     const uint8_t idempotency_key[32],
     lxp_receipt *receipt,
     bool *settled);
+lxp_result lxp_gateway_registry_enter(
+    lxp_gateway_invoice_registry *registry,
+    lx_account_registry *accounts);
+lxp_result lxp_gateway_registry_leave(
+    lxp_gateway_invoice_registry *registry);
 
 #endif

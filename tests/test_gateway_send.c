@@ -104,8 +104,6 @@ static int world_init(
     const char *payer_name = "agent:did:key:payer:main";
     const char *payee_name = "agent:did:key:service:main";
     (void)memset(world, 0, sizeof(*world));
-    if (lxp_gateway_invoice_registry_init(&world->invoices) != LXP_OK)
-        return 1;
     world->asset.asset_id[0] = 3U;
     (void)memcpy(world->asset.symbol, "USD", 4U);
     world->asset.symbol_length = 3U;
@@ -117,6 +115,8 @@ static int world_init(
             &world->assets, &world->asset, 0U,
             (lxp_u128){0U, 0U}) != LXP_OK ||
         lx_account_registry_init(&world->accounts) != LXP_OK ||
+        lxp_gateway_invoice_registry_init(
+            &world->invoices, &world->accounts) != LXP_OK ||
         lx_asset_account_open(
             &world->assets, &world->accounts, world->asset.asset_id,
             (const uint8_t *)payer_name, strlen(payer_name), 1U,
@@ -235,6 +235,52 @@ int main(void)
             &encoded_send_length) != LXP_OK ||
         lxp_send_decode(encoded_send, encoded_send_length, &decoded) != LXP_OK)
         return 1;
+    {
+        lx_account_registry alternate_accounts;
+        lxp_gateway_invoice_registry alternate_invoices;
+        lxp_gateway_invoice_registry competing_invoices;
+        lxp_gateway_settlement_context mismatched = gateway.settlement;
+        lxp_receipt unused_receipt;
+        bool settled = false;
+        (void)memset(&alternate_accounts, 0, sizeof(alternate_accounts));
+        (void)memset(&alternate_invoices, 0, sizeof(alternate_invoices));
+        (void)memset(&competing_invoices, 0, sizeof(competing_invoices));
+        if (lxp_gateway_invoice_state(
+                &alternate_invoices, requirement.invoice_id,
+                send.idempotency_key, &unused_receipt,
+                &settled) != LXP_ERR_NON_CANONICAL ||
+            lx_account_registry_init(&alternate_accounts) != LXP_OK ||
+            lxp_gateway_invoice_registry_init(
+                &alternate_invoices, &alternate_accounts) != LXP_OK ||
+            lxp_gateway_invoice_registry_init(
+                &alternate_invoices, &alternate_accounts) !=
+                    LXP_ERR_SEQUENCE_REUSED ||
+            lxp_gateway_invoice_registry_init(
+                &competing_invoices, &alternate_accounts) !=
+                    LXP_ERR_SEQUENCE_REUSED)
+            return 1;
+        mismatched.invoices = &alternate_invoices;
+        if (lxp_gateway_send_settle(
+                &requirement, &send, &mismatched,
+                &unused_receipt) != LXP_ERR_NON_CANONICAL ||
+            gateway.payer->balance.lo != 100U ||
+            gateway.payee->balance.lo != 0U)
+            return 1;
+        atomic_store(&alternate_invoices.active_users, 1U);
+        if (lxp_gateway_invoice_registry_destroy(
+                &alternate_invoices) != LXP_ERR_IO)
+            return 1;
+        atomic_store(&alternate_invoices.active_users, 0U);
+        alternate_invoices.records[0].receipt.signature[0] = 0xa5U;
+        alternate_invoices.count = 1U;
+        if (lxp_gateway_invoice_registry_destroy(
+                &alternate_invoices) != LXP_OK ||
+            alternate_invoices.count != 0U ||
+            alternate_invoices.records[0].receipt.signature[0] != 0U ||
+            lxp_gateway_invoice_registry_destroy(
+                &alternate_invoices) != LXP_ERR_NON_CANONICAL)
+            return 1;
+    }
     payer_before = *gateway.payer;
     payee_before = *gateway.payee;
     for (boundary = LXP_GATEWAY_AFTER_BALANCE_WRITE;

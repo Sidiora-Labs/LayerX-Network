@@ -33,6 +33,8 @@ CFLAGS := -std=c17 -pedantic -Werror -Wall -Wextra -Wconversion -Wshadow -Wvla \
 LIB_SOURCES := $(filter-out src/storage/lxp_projection.c,$(shell find src -type f -name '*.c' -print | LC_ALL=C sort))
 LIB_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(LIB_SOURCES))
 LIBRARY := $(BUILD_DIR)/liblayerx.a
+TEST_LIB_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/test-obj/%.o,$(LIB_SOURCES))
+TEST_LIBRARY := $(BUILD_DIR)/liblayerx-testing.a
 
 .PHONY: all build clean reproducible layerxd test test-harness list-tests \
 	test-result test-protocol test-arena test-sanitizer-smoke \
@@ -184,6 +186,14 @@ $(BUILD_DIR)/obj/%.o: %.c
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -MMD -MP -c $< -o $@
 
+$(TEST_LIBRARY): $(TEST_LIB_OBJECTS)
+	@mkdir -p $(@D)
+	$(AR) rcsD $@ $(TEST_LIB_OBJECTS)
+
+$(BUILD_DIR)/test-obj/%.o: %.c
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) -DLXP_TESTING $(CFLAGS) -MMD -MP -c $< -o $@
+
 clean:
 	rm -rf -- build
 
@@ -321,9 +331,9 @@ test-ledger-transfer: $(BUILD_DIR)/tests/test_apply_transfer
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_apply_transfer
 
 $(BUILD_DIR)/tests/test_transfer_set: tests/ledger/test_transfer_set.c \
-		$(LIBRARY)
+		$(TEST_LIBRARY)
 	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(EXTRA_LDFLAGS) \
+	$(CC) $(CPPFLAGS) -DLXP_TESTING $(CFLAGS) $< $(TEST_LIBRARY) $(EXTRA_LDFLAGS) \
 		-lcrypto -pthread -o $@
 
 test-ledger-set: $(BUILD_DIR)/tests/test_transfer_set
@@ -440,9 +450,9 @@ test-escrow-timeout: $(BUILD_DIR)/tests/test_escrow_timeout
 	tools/lxp_check_sole_writer.sh
 
 $(BUILD_DIR)/tests/test_escrow_dispute: tests/modules/test_escrow_dispute.c \
-		$(LIBRARY)
+		$(TEST_LIBRARY)
 	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(EXTRA_LDFLAGS) \
+	$(CC) $(CPPFLAGS) -DLXP_TESTING $(CFLAGS) $< $(TEST_LIBRARY) $(EXTRA_LDFLAGS) \
 		-lcrypto -pthread -o $@
 
 test-escrow-dispute: $(BUILD_DIR)/tests/test_escrow_dispute
@@ -547,9 +557,9 @@ test-stream-settle: $(BUILD_DIR)/tests/test_stream_settle
 	tools/lxp_check_sole_writer.sh
 
 $(BUILD_DIR)/tests/test_stream_lifecycle: \
-		tests/modules/test_stream_lifecycle.c $(LIBRARY)
+		tests/modules/test_stream_lifecycle.c $(TEST_LIBRARY)
 	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(EXTRA_LDFLAGS) \
+	$(CC) $(CPPFLAGS) -DLXP_TESTING $(CFLAGS) $< $(TEST_LIBRARY) $(EXTRA_LDFLAGS) \
 		-lcrypto -pthread -o $@
 
 test-stream-lifecycle: $(BUILD_DIR)/tests/test_stream_lifecycle
@@ -1059,17 +1069,17 @@ test-gateway: $(BUILD_DIR)/tests/test_gateway_requirement \
 		$(BUILD_DIR)/obj/fuzz/fuzz_gateway_json.o
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_gateway_requirement
 
-$(BUILD_DIR)/tests/test_gateway_send: tests/test_gateway_send.c $(LIBRARY)
+$(BUILD_DIR)/tests/test_gateway_send: tests/test_gateway_send.c $(TEST_LIBRARY)
 	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(EXTRA_LDFLAGS) \
+	$(CC) $(CPPFLAGS) -DLXP_TESTING $(CFLAGS) $< $(TEST_LIBRARY) $(EXTRA_LDFLAGS) \
 		-lcrypto -pthread -o $@
 
 test-gateway-send: $(BUILD_DIR)/tests/test_gateway_send
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_gateway_send
 
-$(BUILD_DIR)/tests/test_gateway_receive: tests/test_gateway_receive.c $(LIBRARY)
+$(BUILD_DIR)/tests/test_gateway_receive: tests/test_gateway_receive.c $(TEST_LIBRARY)
 	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(EXTRA_LDFLAGS) \
+	$(CC) $(CPPFLAGS) -DLXP_TESTING $(CFLAGS) $< $(TEST_LIBRARY) $(EXTRA_LDFLAGS) \
 		-lcrypto -pthread -o $@
 
 test-gateway-receive: $(BUILD_DIR)/tests/test_gateway_receive
@@ -2537,7 +2547,7 @@ hpx-public-check:
 
 monorepo-ci: workspace-ci
 
--include $(LIB_OBJECTS:.o=.d)
+-include $(LIB_OBJECTS:.o=.d) $(TEST_LIB_OBJECTS:.o=.d)
 
 include tools/build/sanitizers.mk
 
@@ -2630,9 +2640,9 @@ $(BUILD_DIR)/tests/programs_lifecycle: tests/programs/test_lifecycle.c \
 		$(EXTRA_LDFLAGS) -lcrypto -pthread -ldl -lm -o $@
 
 $(BUILD_DIR)/tests/programs_monetary_law: tests/programs/test_monetary_law.c \
-		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
+		$(TEST_LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
 	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) \
+	$(CC) $(CPPFLAGS) -DLXP_TESTING $(CFLAGS) $< $(TEST_LIBRARY) $(PROGRAMS_RUNTIME_LIB) \
 		$(EXTRA_LDFLAGS) -lcrypto -pthread -ldl -lm -o $@
 
 $(BUILD_DIR)/tests/programs_call_activity: tests/programs/test_call_activity.c \

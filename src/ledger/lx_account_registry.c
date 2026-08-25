@@ -94,6 +94,7 @@ lxp_result lx_account_registry_init(lx_account_registry *registry)
 {
     if (registry == NULL) return LXP_ERR_NON_CANONICAL;
     (void)memset(registry, 0, sizeof(*registry));
+    atomic_init(&registry->gateway_owner, NULL);
     return LXP_OK;
 }
 

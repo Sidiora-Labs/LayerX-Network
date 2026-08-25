@@ -7,6 +7,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdatomic.h>
 #include <stdint.h>
 
 enum {
@@ -233,6 +234,7 @@ typedef struct lxp_receive_environment {
 struct lx_account_registry {
     lx_account accounts[LX_ACCOUNT_REGISTRY_CAPACITY];
     size_t count;
+    _Atomic(struct lxp_gateway_invoice_registry *) gateway_owner;
 };
 
 enum { LXP_STATE_PROOF_MAX_DEPTH = 32 };

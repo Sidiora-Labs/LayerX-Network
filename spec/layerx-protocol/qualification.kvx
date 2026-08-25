@@ -69,3 +69,18 @@ symbol = "parse_u64"
 observed = "The daemon configuration delegated unsigned parsing directly to strtoull, which accepts a leading minus sign and can map -1 to UINT64_MAX. The repair requires the first value byte to be an ASCII digit before conversion, thereby also refusing plus signs and whitespace-prefixed values."
 assumption = "Human qualification must exercise negative, signed, whitespace, overflow and exact-maximum values and prove invalid configuration is rejected before daemon state is created."
 severity = "post-implementation-repair"
+[observation.23.2.1]
+task = "23.2"
+file = "include/layerx/lxp_gateway.h, include/layerx/lxp_ledger.h, src/network/lxp_gateway_send.c, src/network/lxp_gateway_receive.c, Makefile"
+symbol = "lxp_gateway_send_settle, lxp_gateway_receive_claim, lxp_gateway_invoice_registry_init"
+observed = "Post-implementation review found that gateway settlement could coordinate through caller-selected mutexes or distinct invoice registries while mutating the same canonical account registry, and that public production contexts and transfer contexts exposed deterministic failure switches. The repair gives each account registry one claimed gateway owner, validates that ownership before locking or mutation, serialises SEND, RECEIVE and invoice lookup through that owner, and confines deterministic fault controls to a separately compiled LXP_TESTING archive whose fields and symbols are absent from liblayerx.a."
+assumption = "Human qualification must inspect the shipped archive symbol and type surface, exercise mismatched ownership and concurrent SEND/RECEIVE against one account registry, and run the dedicated fault suites against liblayerx-testing.a. No build or test result is asserted here."
+severity = "post-implementation-repair"
+
+[observation.23.3.1]
+task = "23.3"
+file = "src/network/lxp_gateway_receive.c, src/network/lxp_gateway_send.c, tests/test_gateway_receive.c, tests/test_gateway_send.c"
+symbol = "receive_transaction_abort, send_transaction_abort, lxp_gateway_invoice_registry_destroy"
+observed = "Post-implementation review found that RECEIVE could snapshot one grant identifier while presenting another, rollback cleared only the first appended slot, and invoice-registry lifecycle operations could reach pthread state without a checked owner/lifecycle boundary. The repair rejects mismatched grant identifiers before mutation, clears every appended in-capacity grant, idempotency, send and invoice slot before restoring counts, and makes registry entry, active use, destruction and sensitive receipt zeroing explicit lifecycle operations."
+assumption = "Human qualification must fault every post-mutation seam, force multi-slot count corruption within and above capacity, exercise use-before-init, double-init, active destroy and double-destroy, and confirm destroyed receipt storage is zeroed. No build or test result is asserted here."
+severity = "post-implementation-repair"
