@@ -80,6 +80,7 @@ export {
   CAPABILITY_SHARED_STORAGE_WRITE,
   CAPABILITY_TRANSFER_402,
   Capability,
+  CapabilityEncoding,
   CapabilitySet
 } from "./capability";
 

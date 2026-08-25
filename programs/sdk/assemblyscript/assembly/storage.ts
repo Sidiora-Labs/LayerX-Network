@@ -10,6 +10,7 @@
 import { MAX_STORAGE_KEY_BYTES, MAX_STORAGE_VALUE_BYTES } from "./abi";
 import { pointer } from "./bytes";
 import {
+  ERR_BUFFER_TOO_SMALL,
   ERR_EMPTY_KEY,
   ERR_KEY_TOO_LARGE,
   ERR_VALUE_TOO_LARGE,
@@ -57,7 +58,11 @@ export function readValue(key: StaticArray<u8>, output: StaticArray<u8>): Stored
   const outcome = storageRead(pointer(key), key.length, pointer(output), output.length);
   if (outcome < 0) return new StoredValue(outcome, false, 0);
   if (outcome == 0) return new StoredValue(OK, false, 0);
-  return new StoredValue(OK, true, outcome - 1);
+  const length = outcome - 1;
+  if (length < 0 || length > output.length) {
+    return new StoredValue(ERR_BUFFER_TOO_SMALL, false, 0);
+  }
+  return new StoredValue(OK, true, length);
 }
 
 /** Stages one value in this program's namespace. */

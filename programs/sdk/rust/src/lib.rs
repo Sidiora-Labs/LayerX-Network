@@ -56,7 +56,7 @@ pub use abi::{
     CANDIDATE_REFUSAL_SENTINEL, ENTRYPOINT, HOST_FUNCTIONS, MAX_CALL_INPUT_BYTES,
     MAX_CALL_RESPONSE_BYTES, MAX_CAPABILITIES, MAX_CAPABILITY_ENCODING_BYTES, MAX_EVENT_DATA_BYTES,
     MAX_EVENT_TOPIC_BYTES, MAX_REFUSAL_REASON_BYTES, MAX_STORAGE_KEY_BYTES,
-    MAX_STORAGE_VALUE_BYTES, MEMORY_EXPORT, RECEIPT_ENCODING_BYTES,
+    MAX_STORAGE_VALUE_BYTES, MAX_PROGRAM_ACCOUNT_SEED_BYTES, MEMORY_EXPORT, RECEIPT_ENCODING_BYTES,
 };
 pub use amount::{Amount, ProtocolInteger};
 pub use buffer::Bytes;
@@ -77,4 +77,4 @@ pub use event::{EventData, EventTopic};
 pub use ids::{AccountId, AssetId, ProgramId, ReceiptDigest};
 pub use receipt::Receipt;
 pub use storage::{StorageKey, StorageValue};
-pub use transfer::Payment;
+pub use transfer::{Payment, ProgramAccountPayment, ProgramAccountSeed};

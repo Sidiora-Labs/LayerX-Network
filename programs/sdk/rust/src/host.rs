@@ -94,6 +94,18 @@ mod candidate_raw {
             key_pointer: i32,
             key_length: i32,
         ) -> i32;
+        pub(super) fn transfer_program_402(
+            amount_high: i64,
+            amount_low: i64,
+            seed_pointer: i32,
+            seed_length: i32,
+            source_pointer: i32,
+            source_length: i32,
+            asset_pointer: i32,
+            asset_length: i32,
+            recipient_pointer: i32,
+            recipient_length: i32,
+        ) -> i32;
     }
 }
 
@@ -243,6 +255,31 @@ pub(crate) fn transfer_402(
             asset_length,
             recipient_pointer,
             recipient_length,
+        )
+    };
+    ProgramError::from_status(status)
+}
+
+pub(crate) fn transfer_program_402(
+    amount_high: i64,
+    amount_low: i64,
+    seed: &[u8],
+    source: &[u8],
+    asset: &[u8],
+    recipient: &[u8],
+) -> Result<i32, ProgramError> {
+    let status = unsafe {
+        candidate_raw::transfer_program_402(
+            amount_high,
+            amount_low,
+            pointer(seed)?,
+            length(seed)?,
+            pointer(source)?,
+            length(source)?,
+            pointer(asset)?,
+            length(asset)?,
+            pointer(recipient)?,
+            length(recipient)?,
         )
     };
     ProgramError::from_status(status)

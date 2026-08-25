@@ -15,14 +15,21 @@ import { AccountId, AssetId } from "./ids";
 
 /** Requests one authenticated 402LXP transfer. */
 export function transfer402(asset: AssetId, to: AccountId, amount: Amount): i32 {
+  const assetBytes = asset.bytes;
+  const recipientBytes = to.bytes;
   if (amount.isZero()) return ERR_ZERO_AMOUNT;
-  if (asset.isReserved() || to.isReserved()) return ERR_RESERVED_IDENTIFIER;
+  if (
+    assetBytes.length != IDENTIFIER_BYTES ||
+    recipientBytes.length != IDENTIFIER_BYTES ||
+    asset.isReserved() ||
+    to.isReserved()
+  ) return ERR_RESERVED_IDENTIFIER;
   return hostTransfer402(
     amount.highWord(),
     amount.lowWord(),
-    pointer(asset.bytes),
+    pointer(assetBytes),
     IDENTIFIER_BYTES,
-    pointer(to.bytes),
+    pointer(recipientBytes),
     IDENTIFIER_BYTES
   );
 }

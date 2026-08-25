@@ -93,12 +93,13 @@ export function decodeReceipt(encoded: StaticArray<u8>): ReceiptRead {
 
 /** Reads the verified facts of one receipt named by an explicit grant. */
 export function readReceipt(receiptDigest: ReceiptDigest): ReceiptRead {
-  if (receiptDigest.isReserved()) {
+  const digestBytes = receiptDigest.bytes;
+  if (digestBytes.length != DIGEST_BYTES || receiptDigest.isReserved()) {
     return new ReceiptRead(ERR_RESERVED_IDENTIFIER, Receipt.empty());
   }
   const encoded = new StaticArray<u8>(RECEIPT_ENCODING_BYTES);
   const outcome = receiptRead(
-    pointer(receiptDigest.bytes),
+    pointer(digestBytes),
     DIGEST_BYTES,
     pointer(encoded),
     RECEIPT_ENCODING_BYTES
@@ -109,7 +110,7 @@ export function readReceipt(receiptDigest: ReceiptDigest): ReceiptRead {
   }
   const decoded = decodeReceipt(encoded);
   if (!decoded.ok()) return decoded;
-  if (!equal(decoded.receipt.digest, 0, receiptDigest.bytes, 0, DIGEST_BYTES)) {
+  if (!equal(decoded.receipt.digest, 0, digestBytes, 0, DIGEST_BYTES)) {
     return new ReceiptRead(ERR_EVIDENCE, Receipt.empty());
   }
   return decoded;

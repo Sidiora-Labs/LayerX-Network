@@ -46,6 +46,16 @@ function emptyIdentifier(): StaticArray<u8> {
   return new StaticArray<u8>(IDENTIFIER_BYTES);
 }
 
+function exactIdentifier(value: StaticArray<u8>): bool {
+  return value.length == IDENTIFIER_BYTES;
+}
+
+function cloneIdentifier(value: StaticArray<u8>): StaticArray<u8> {
+  const cloned = new StaticArray<u8>(IDENTIFIER_BYTES);
+  copy(cloned, 0, value, 0, IDENTIFIER_BYTES);
+  return cloned;
+}
+
 /**
  * One explicit authority granted by the invoking activity.
  *
@@ -54,21 +64,21 @@ function emptyIdentifier(): StaticArray<u8> {
  * together with the exact integer ceiling.
  */
 export class Capability {
-  kind: u8;
-  identifier: StaticArray<u8>;
-  recipient: StaticArray<u8>;
-  maximumAmount: Amount;
+  private readonly capabilityKind: u8;
+  private readonly capabilityIdentifier: StaticArray<u8>;
+  private readonly capabilityRecipient: StaticArray<u8>;
+  private readonly capabilityMaximumAmount: Amount;
 
-  constructor(
+  private constructor(
     kind: u8,
     identifier: StaticArray<u8>,
     recipient: StaticArray<u8>,
     maximumAmount: Amount
   ) {
-    this.kind = kind;
-    this.identifier = identifier;
-    this.recipient = recipient;
-    this.maximumAmount = maximumAmount;
+    this.capabilityKind = kind;
+    this.capabilityIdentifier = cloneIdentifier(identifier);
+    this.capabilityRecipient = cloneIdentifier(recipient);
+    this.capabilityMaximumAmount = maximumAmount;
   }
 
   /** Grants read authority over this program's namespaced storage. */
@@ -107,43 +117,70 @@ export class Capability {
     return new Capability(CAPABILITY_RECEIPT_READ, receiptDigest.bytes, emptyIdentifier(), Amount.zero());
   }
 
+  /** Frozen capability tag. */
+  get kind(): u8 {
+    return this.capabilityKind;
+  }
+
+  /** Frozen primary authority key. */
+  get identifier(): StaticArray<u8> {
+    return cloneIdentifier(this.capabilityIdentifier);
+  }
+
+  /** Frozen transfer destination, or the canonical zero payload. */
+  get recipient(): StaticArray<u8> {
+    return cloneIdentifier(this.capabilityRecipient);
+  }
+
+  /** Frozen transfer ceiling. */
+  get maximumAmount(): Amount {
+    return this.capabilityMaximumAmount;
+  }
+
   /** Program a call grant may enter. */
   get program(): StaticArray<u8> {
-    return this.identifier;
+    return cloneIdentifier(this.capabilityIdentifier);
   }
 
   /** Asset a transfer grant may move. */
   get asset(): StaticArray<u8> {
-    return this.identifier;
+    return cloneIdentifier(this.capabilityIdentifier);
   }
 
   /** Account a transfer grant may credit. */
   get to(): StaticArray<u8> {
-    return this.recipient;
+    return cloneIdentifier(this.capabilityRecipient);
   }
 
   /** Digest a receipt grant may read. */
   get receiptDigest(): StaticArray<u8> {
-    return this.identifier;
+    return cloneIdentifier(this.capabilityIdentifier);
   }
 
   /** Refuses a grant the runtime's own law would reject. */
   validate(): i32 {
     if (
-      this.kind == CAPABILITY_STORAGE_READ ||
-      this.kind == CAPABILITY_STORAGE_WRITE ||
-      this.kind == CAPABILITY_SHARED_STORAGE_READ ||
-      this.kind == CAPABILITY_SHARED_STORAGE_WRITE ||
-      this.kind == CAPABILITY_EMIT_EVENT
+      this.capabilityKind == CAPABILITY_STORAGE_READ ||
+      this.capabilityKind == CAPABILITY_STORAGE_WRITE ||
+      this.capabilityKind == CAPABILITY_SHARED_STORAGE_READ ||
+      this.capabilityKind == CAPABILITY_SHARED_STORAGE_WRITE ||
+      this.capabilityKind == CAPABILITY_EMIT_EVENT
     ) {
       return OK;
     }
-    if (this.kind == CAPABILITY_CALL || this.kind == CAPABILITY_RECEIPT_READ) {
-      return isZero(this.identifier) ? ERR_RESERVED_IDENTIFIER : OK;
+    if (this.capabilityKind == CAPABILITY_CALL || this.capabilityKind == CAPABILITY_RECEIPT_READ) {
+      return !exactIdentifier(this.capabilityIdentifier) || isZero(this.capabilityIdentifier)
+        ? ERR_RESERVED_IDENTIFIER
+        : OK;
     }
-    if (this.kind == CAPABILITY_TRANSFER_402) {
-      if (isZero(this.identifier) || isZero(this.recipient)) return ERR_RESERVED_IDENTIFIER;
-      if (this.maximumAmount.isZero()) return ERR_ZERO_AMOUNT;
+    if (this.capabilityKind == CAPABILITY_TRANSFER_402) {
+      if (
+        !exactIdentifier(this.capabilityIdentifier) ||
+        !exactIdentifier(this.capabilityRecipient) ||
+        isZero(this.capabilityIdentifier) ||
+        isZero(this.capabilityRecipient)
+      ) return ERR_RESERVED_IDENTIFIER;
+      if (this.capabilityMaximumAmount.isZero()) return ERR_ZERO_AMOUNT;
       return OK;
     }
     return ERR_INVALID;
@@ -152,18 +189,18 @@ export class Capability {
   /** Bytes this grant occupies in the canonical capability-list encoding. */
   encodedLength(): i32 {
     if (
-      this.kind == CAPABILITY_STORAGE_READ ||
-      this.kind == CAPABILITY_STORAGE_WRITE ||
-      this.kind == CAPABILITY_SHARED_STORAGE_READ ||
-      this.kind == CAPABILITY_SHARED_STORAGE_WRITE ||
-      this.kind == CAPABILITY_EMIT_EVENT
+      this.capabilityKind == CAPABILITY_STORAGE_READ ||
+      this.capabilityKind == CAPABILITY_STORAGE_WRITE ||
+      this.capabilityKind == CAPABILITY_SHARED_STORAGE_READ ||
+      this.capabilityKind == CAPABILITY_SHARED_STORAGE_WRITE ||
+      this.capabilityKind == CAPABILITY_EMIT_EVENT
     ) {
       return TAG_BYTES;
     }
-    if (this.kind == CAPABILITY_CALL || this.kind == CAPABILITY_RECEIPT_READ) {
+    if (this.capabilityKind == CAPABILITY_CALL || this.capabilityKind == CAPABILITY_RECEIPT_READ) {
       return TAG_BYTES + IDENTIFIER_BYTES;
     }
-    if (this.kind == CAPABILITY_TRANSFER_402) {
+    if (this.capabilityKind == CAPABILITY_TRANSFER_402) {
       return TAG_BYTES + IDENTIFIER_BYTES + IDENTIFIER_BYTES + AMOUNT_BYTES;
     }
     return 0;
@@ -171,14 +208,34 @@ export class Capability {
 
   /** Orders two grants by the runtime's own authority key. */
   compareAuthority(right: Capability): i32 {
-    if (this.kind != right.kind) return this.kind < right.kind ? -1 : 1;
-    if (this.kind == CAPABILITY_CALL || this.kind == CAPABILITY_RECEIPT_READ) {
-      return compare(this.identifier, 0, right.identifier, 0, IDENTIFIER_BYTES);
+    if (this.capabilityKind != right.capabilityKind) {
+      return this.capabilityKind < right.capabilityKind ? -1 : 1;
     }
-    if (this.kind == CAPABILITY_TRANSFER_402) {
-      const order = compare(this.identifier, 0, right.identifier, 0, IDENTIFIER_BYTES);
+    if (this.capabilityKind == CAPABILITY_CALL || this.capabilityKind == CAPABILITY_RECEIPT_READ) {
+      return compare(
+        this.capabilityIdentifier,
+        0,
+        right.capabilityIdentifier,
+        0,
+        IDENTIFIER_BYTES
+      );
+    }
+    if (this.capabilityKind == CAPABILITY_TRANSFER_402) {
+      const order = compare(
+        this.capabilityIdentifier,
+        0,
+        right.capabilityIdentifier,
+        0,
+        IDENTIFIER_BYTES
+      );
       if (order != 0) return order;
-      return compare(this.recipient, 0, right.recipient, 0, IDENTIFIER_BYTES);
+      return compare(
+        this.capabilityRecipient,
+        0,
+        right.capabilityRecipient,
+        0,
+        IDENTIFIER_BYTES
+      );
     }
     return 0;
   }
@@ -191,11 +248,20 @@ export class Capability {
  */
 export class CapabilitySet {
   private declaredCapacity: i32;
+  private configurationStatus: i32;
   private grants: Array<Capability>;
 
   constructor(capacity: i32) {
-    this.declaredCapacity = capacity < MAX_CAPABILITIES ? capacity : MAX_CAPABILITIES;
+    this.configurationStatus = capacity < 0 || capacity > MAX_CAPABILITIES
+      ? ERR_CAPABILITY_LIMIT
+      : OK;
+    this.declaredCapacity = this.configurationStatus == OK ? capacity : 0;
     this.grants = new Array<Capability>();
+  }
+
+  /** Reports whether the declared capacity was canonical. */
+  get status(): i32 {
+    return this.configurationStatus;
   }
 
   /** Declared upper bound on the number of grants this set may hold. */
@@ -223,6 +289,7 @@ export class CapabilitySet {
 
   /** Adds one validated grant in authority-key order. */
   insert(grant: Capability): i32 {
+    if (this.configurationStatus != OK) return this.configurationStatus;
     const valid = grant.validate();
     if (valid != OK) return valid;
     if (this.grants.length >= this.declaredCapacity) return ERR_CAPABILITY_LIMIT;
@@ -259,6 +326,7 @@ export class CapabilitySet {
    * negative refusal.
    */
   encode(out: StaticArray<u8>): i32 {
+    if (this.configurationStatus != OK) return this.configurationStatus;
     const required = this.encodedLength();
     if (required > MAX_CAPABILITY_ENCODING_BYTES) return ERR_CAPABILITY_BYTES;
     if (required > out.length) return ERR_BUFFER_TOO_SMALL;
@@ -283,11 +351,31 @@ export class CapabilitySet {
     return cursor;
   }
 
-  /** Encodes this set into a freshly sized array. */
-  toBytes(): StaticArray<u8> {
-    const out = new StaticArray<u8>(this.encodedLength());
+  /** Encodes this set into a freshly sized array with an explicit status. */
+  toBytes(): CapabilityEncoding {
+    if (this.configurationStatus != OK) {
+      return new CapabilityEncoding(this.configurationStatus, new StaticArray<u8>(0));
+    }
+    const required = this.encodedLength();
+    if (required > MAX_CAPABILITY_ENCODING_BYTES) {
+      return new CapabilityEncoding(ERR_CAPABILITY_BYTES, new StaticArray<u8>(0));
+    }
+    const out = new StaticArray<u8>(required);
     const written = this.encode(out);
-    if (written < 0) return new StaticArray<u8>(0);
-    return out;
+    if (written < 0) return new CapabilityEncoding(written, new StaticArray<u8>(0));
+    return new CapabilityEncoding(OK, out);
   }
+}
+
+/** Explicit result of allocating and encoding a capability set. */
+export class CapabilityEncoding {
+  readonly status: i32;
+  readonly bytes: StaticArray<u8>;
+
+  constructor(status: i32, bytes: StaticArray<u8>) {
+    this.status = status;
+    this.bytes = bytes;
+  }
+
+  ok(): bool { return this.status == OK; }
 }

@@ -29,6 +29,8 @@ lxp_program_status lxp_program_storage_read(const uint8_t *key,
         lxp_program_pointer(out), lxp_program_length(capacity));
     if (outcome < 0) return outcome;
     if (outcome == 0) return LXP_PROGRAM_OK;
+    if ((size_t)(uint32_t)(outcome - 1) > capacity)
+        return LXP_PROGRAM_ERR_BUFFER_TOO_SMALL;
     *found = true;
     *length = (size_t)(uint32_t)(outcome - 1);
     return LXP_PROGRAM_OK;

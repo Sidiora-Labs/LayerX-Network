@@ -14,10 +14,10 @@ import { ERR_OVERFLOW, ERR_UNDERFLOW, OK } from "./error";
 
 /** An exact unsigned one hundred and twenty-eight bit protocol amount. */
 export class Amount {
-  hi: u64;
-  lo: u64;
+  private readonly hi: u64;
+  private readonly lo: u64;
 
-  constructor(hi: u64, lo: u64) {
+  private constructor(hi: u64, lo: u64) {
     this.hi = hi;
     this.lo = lo;
   }
@@ -116,8 +116,8 @@ export class Amount {
 
 /** The outcome of one checked monetary operation. */
 export class AmountResult {
-  status: i32;
-  value: Amount;
+  readonly status: i32;
+  readonly value: Amount;
 
   constructor(status: i32, value: Amount) {
     this.status = status;

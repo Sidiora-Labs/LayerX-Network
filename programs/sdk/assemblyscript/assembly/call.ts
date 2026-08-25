@@ -29,12 +29,13 @@ export function callProgram(
   input: StaticArray<u8>,
   capabilities: StaticArray<u8>
 ): i32 {
-  if (callee.isReserved()) return ERR_RESERVED_IDENTIFIER;
+  const calleeBytes = callee.bytes;
+  if (calleeBytes.length != IDENTIFIER_BYTES || callee.isReserved()) return ERR_RESERVED_IDENTIFIER;
   if (input.length > MAX_CALL_INPUT_BYTES) return ERR_INPUT_TOO_LARGE;
   if (capabilities.length < MINIMUM_CAPABILITY_ENCODING_BYTES) return ERR_INVALID;
   if (capabilities.length > MAX_CAPABILITY_ENCODING_BYTES) return ERR_CAPABILITY_BYTES;
   return programCall(
-    pointer(callee.bytes),
+    pointer(calleeBytes),
     IDENTIFIER_BYTES,
     pointer(input),
     input.length,

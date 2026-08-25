@@ -23,7 +23,8 @@
     "layerx-determinism-lint": "tools/determinism-lint.mjs"
   },
   "scripts": {
-    "lint": "node tools/determinism-lint.mjs assembly"
+    "lint": "node tools/determinism-lint.mjs assembly",
+    "test:source": "asc tests/safety.ts --config asconfig.json --target release --outFile build/safety.wasm"
   },
   "devDependencies": {
     "assemblyscript": "0.27.31"

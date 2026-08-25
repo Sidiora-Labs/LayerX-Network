@@ -150,16 +150,18 @@ export function configure(
     <u64>payeeWord3
   );
   if (fee.isZero()) return ERR_ZERO_AMOUNT;
-  if (asset.isReserved() || payee.isReserved()) return ERR_RESERVED_IDENTIFIER;
+  if (asset === null || payee === null) return ERR_RESERVED_IDENTIFIER;
+  const configuredAsset = changetype<AssetId>(asset);
+  const configuredPayee = changetype<AccountId>(payee);
   const configured = new StaticArray<u8>(CONFIGURED_EVENT_BYTES);
   fee.writeBigEndian(configured, 0);
-  copy(configured, 16, asset.bytes, 0, IDENTIFIER_BYTES);
-  copy(configured, 48, payee.bytes, 0, IDENTIFIER_BYTES);
+  copy(configured, 16, configuredAsset.bytes, 0, IDENTIFIER_BYTES);
+  copy(configured, 48, configuredPayee.bytes, 0, IDENTIFIER_BYTES);
   let status = writeValue(keyFee(), fee.toBigEndian());
   if (status != OK) return status;
-  status = writeValue(keyAsset(), asset.bytes);
+  status = writeValue(keyAsset(), configuredAsset.bytes);
   if (status != OK) return status;
-  status = writeValue(keyPayee(), payee.bytes);
+  status = writeValue(keyPayee(), configuredPayee.bytes);
   if (status != OK) return status;
   status = writeValue(keyCount(), new StaticArray<u8>(COUNTER_BYTES));
   if (status != OK) return status;
@@ -185,6 +187,7 @@ export function settle(
     <u64>digestWord2,
     <u64>digestWord3
   );
+  if (digest === null) return <i64>ERR_RESERVED_IDENTIFIER;
   const storedFee = loadExact(keyFee(), AMOUNT_BYTES);
   if (storedFee.status != OK) return <i64>storedFee.status;
   const storedAsset = loadExact(keyAsset(), IDENTIFIER_BYTES);
@@ -192,13 +195,16 @@ export function settle(
   const storedPayee = loadExact(keyPayee(), IDENTIFIER_BYTES);
   if (storedPayee.status != OK) return <i64>storedPayee.status;
   const fee = Amount.fromBigEndian(storedFee.value, 0);
-  const asset = new AssetId(storedAsset.value);
-  const payee = new AccountId(storedPayee.value);
-  const evidence = readReceipt(digest);
+  const asset = AssetId.fromBytes(storedAsset.value, 0);
+  const payee = AccountId.fromBytes(storedPayee.value, 0);
+  if (asset === null || payee === null) return <i64>ERR_RESERVED_IDENTIFIER;
+  const configuredAsset = changetype<AssetId>(asset);
+  const configuredPayee = changetype<AccountId>(payee);
+  const evidence = readReceipt(changetype<ReceiptDigest>(digest));
   if (!evidence.ok()) return <i64>evidence.status;
   const receipt = evidence.receipt;
   if (!receipt.settled()) return <i64>QUICKSTART_ERR_RECEIPT_FAILED;
-  if (!equal(receipt.asset, 0, asset.bytes, 0, IDENTIFIER_BYTES)) {
+  if (!equal(receipt.asset, 0, configuredAsset.bytes, 0, IDENTIFIER_BYTES)) {
     return <i64>QUICKSTART_ERR_ASSET_MISMATCH;
   }
   if (receipt.amount.compare(fee) < 0) return <i64>QUICKSTART_ERR_UNDERPAID;
@@ -209,12 +215,12 @@ export function settle(
   const settled = new StaticArray<u8>(SETTLED_EVENT_BYTES);
   writeU64BE(settled, 0, advanced);
   receipt.amount.writeBigEndian(settled, 8);
-  copy(settled, 24, digest.bytes, 0, IDENTIFIER_BYTES);
+  copy(settled, 24, changetype<ReceiptDigest>(digest).bytes, 0, IDENTIFIER_BYTES);
   const counterBytes = new StaticArray<u8>(COUNTER_BYTES);
   writeU64BE(counterBytes, 0, advanced);
   let status = writeValue(keyCount(), counterBytes);
   if (status != OK) return <i64>status;
-  status = transfer402(asset, payee, fee);
+  status = transfer402(configuredAsset, configuredPayee, fee);
   if (status != OK) return <i64>status;
   status = emitEvent(topicSettled(), settled);
   if (status != OK) return <i64>status;
@@ -235,6 +241,7 @@ export function forward(
     <u64>calleeWord2,
     <u64>calleeWord3
   );
+  if (callee === null) return ERR_RESERVED_IDENTIFIER;
   const narrowed = new CapabilitySet(2);
   let status = narrowed.insert(Capability.storageRead());
   if (status != OK) return status;
@@ -242,7 +249,7 @@ export function forward(
   if (status != OK) return status;
   const input = new StaticArray<u8>(FORWARD_INPUT_BYTES);
   writeU64BE(input, 0, <u64>note);
-  return callProgramWith(callee, input, narrowed);
+  return callProgramWith(changetype<ProgramId>(callee), input, narrowed);
 }
 
 export function reset(): i32 {

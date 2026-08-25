@@ -64,6 +64,22 @@ impl<'a> StorageValue<'a> {
     }
 }
 
+#[cfg(any(target_arch = "wasm32", test))]
+fn decode_read_length(status: i32, capacity: usize) -> Result<Option<usize>, ProgramError> {
+    if status == 0 {
+        return Ok(None);
+    }
+    let reported = usize::try_from(status)
+        .map_err(|_| ProgramError::value(Field::StorageValue, Reason::Malformed))?;
+    let length = reported
+        .checked_sub(1)
+        .ok_or_else(|| ProgramError::value(Field::StorageValue, Reason::Malformed))?;
+    if length > capacity {
+        return Err(ProgramError::value(Field::StorageValue, Reason::Malformed));
+    }
+    Ok(Some(length))
+}
+
 /// Reads one value into a caller-owned buffer, returning its length.
 ///
 /// Returns `None` when the key holds no value.
@@ -75,15 +91,7 @@ impl<'a> StorageValue<'a> {
 #[cfg(target_arch = "wasm32")]
 pub fn read(key: StorageKey<'_>, output: &mut [u8]) -> Result<Option<usize>, ProgramError> {
     let status = host::storage_read(key.bytes(), output)?;
-    if status == 0 {
-        return Ok(None);
-    }
-    let reported = usize::try_from(status)
-        .map_err(|_| ProgramError::value(Field::StorageValue, Reason::Malformed))?;
-    reported
-        .checked_sub(1)
-        .map(Some)
-        .ok_or_else(|| ProgramError::value(Field::StorageValue, Reason::Malformed))
+    decode_read_length(status, output.len())
 }
 
 /// Reads one value into a fixed-capacity buffer, reporting whether the key
@@ -179,15 +187,7 @@ pub mod shared {
         output: &mut [u8],
     ) -> Result<Option<usize>, ProgramError> {
         let status = host::storage_read_shared(key.bytes(), output)?;
-        if status == 0 {
-            return Ok(None);
-        }
-        let reported = usize::try_from(status)
-            .map_err(|_| ProgramError::value(Field::StorageValue, Reason::Malformed))?;
-        reported
-            .checked_sub(1)
-            .map(Some)
-            .ok_or_else(|| ProgramError::value(Field::StorageValue, Reason::Malformed))
+        decode_read_length(status, output.len())
     }
 
     /// Reads one value from shared storage into a fixed-capacity buffer.
@@ -234,5 +234,17 @@ pub mod shared {
     pub fn delete(key: SharedStorageKey<'_>) -> Result<(), ProgramError> {
         host::storage_delete_shared(key.bytes())?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::decode_read_length;
+
+    #[test]
+    fn host_read_length_cannot_exceed_guest_capacity() {
+        assert_eq!(decode_read_length(0, 4), Ok(None));
+        assert_eq!(decode_read_length(5, 4), Ok(Some(4)));
+        assert!(decode_read_length(6, 4).is_err());
     }
 }

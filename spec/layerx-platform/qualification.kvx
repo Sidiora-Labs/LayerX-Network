@@ -1341,3 +1341,27 @@ symbol = "Keeper.GetAnteSurplusSum, Keeper.EndBlock, MigrateERCNativePointers"
 observed = "Post-implementation review found that corrupt transient surplus data was treated as a zero balance, critical EndBlock accounting and persistence failures were logged while block processing continued, and the pointer migration sliced unvalidated keys, trusted unchecked ABI output shapes and discarded EVM call errors. The repair returns the surplus decoding error, makes consensus-critical EndBlock failures deterministic, validates key and ABI result shapes before use, and propagates all one-off EVM and migration errors."
 assumption = "Human qualification must run the EVM EndBlock and upgrade migration suites, inject malformed transient state and ABI results, and prove the block or migration aborts without partial accounting or pointer state. No build, migration replay or passing test result is asserted by this source repair."
 severity = "post-implementation-repair"
+
+[observation.21.4.1]
+task = "21.4"
+file = "programs/sdk/rust/src/abi.rs, programs/sdk/rust/src/host.rs, programs/sdk/rust/src/storage.rs, programs/sdk/rust/src/transfer.rs, programs/sdk/c/src/receipts.c, programs/sdk/c/src/storage.c"
+symbol = "CANDIDATE_ABI_MANIFEST, pay_from_program_account, decode_read_length, lxp_program_receipt_read"
+observed = "Post-implementation review found the Rust program SDK omitted the runtime's candidate program-account transfer import, all three guest bindings trusted a host-reported storage length beyond the caller-owned buffer, and the C receipt reader modified its output before authenticating the returned digest. The repair freezes the exact candidate ABI table, exposes a bounded typed program-account payment without guest authority construction, refuses impossible storage lengths, and publishes a C receipt only after full local decoding and digest verification."
+assumption = "Human qualification must run the Rust and C SDK conformance suites against the real runtime, exercise zero and maximum seeds, wrong derived sources, narrowed spending ceilings, oversized host length reports and mismatched receipt digests, and compare frozen ABI manifests byte for byte. No compile, conformance or runtime result is asserted by this source repair."
+severity = "post-implementation-repair"
+
+[observation.21.5.1]
+task = "21.5"
+file = "programs/sdk/assemblyscript/assembly/amount.ts, programs/sdk/assemblyscript/assembly/capability.ts, programs/sdk/assemblyscript/assembly/ids.ts, programs/sdk/assemblyscript/assembly/storage.ts"
+symbol = "Amount, Capability, CapabilitySet, ProgramId, readValue"
+observed = "Post-implementation review found the AssemblyScript binding accepted malformed identifier widths, silently clamped invalid capability-set capacities, collapsed encoding failure into an ambiguous empty byte array, trusted host storage lengths, and exposed mutable authority and amount fields that could be changed after validation or insertion. The repair makes identifiers exact, nonzero and copy-isolated, returns explicit construction and encoding status, bounds storage results, and makes monetary and capability values immutable with cloned byte views."
+assumption = "Human qualification must compile the AssemblyScript SDK and safety module, compare its encodings with Rust and C vectors, and adversarially attempt post-construction identifier, amount and grant mutation before and after set insertion. No toolchain or byte-equivalence result is asserted by this source repair."
+severity = "post-implementation-repair"
+
+[observation.30.2.1]
+task = "30.2"
+file = "programs/sdk/rust/src/transfer.rs, programs/sdk/rust/src/host.rs, programs/sdk/rust/src/abi.rs"
+symbol = "ProgramAccountSeed, ProgramAccountPayment, pay_from_program_account"
+observed = "The runtime implemented program-authorised transfer legs but the public Rust authoring SDK had no matching candidate ABI import or typed request, forcing guest authors either to omit the feature or hand-declare the raw interface. The repair exposes the runtime's exact ten-argument host signature through a seed-bounded payment value while leaving derivation, frame ownership, cumulative capability checks and opaque authority issuance exclusively inside the runtime."
+assumption = "Human qualification must prove an SDK-built guest can spend only from the current program's correctly derived account and that wrong-source, callee-frame, zero-amount and cumulative-ceiling attempts fail typed and atomically. No successful guest build or transfer execution is asserted by this source repair."
+severity = "post-implementation-repair"

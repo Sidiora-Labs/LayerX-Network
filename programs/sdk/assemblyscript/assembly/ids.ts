@@ -1,106 +1,95 @@
 /**
- * Nonzero protocol identifiers.
+ * Exact, nonzero protocol identifiers.
  *
- * Every identifier the ABI carries is thirty-two bytes wide and reserves the
- * all-zero value for absence. Each binding that hands an identifier to the host
- * refuses the reserved value first, so a program cannot name a program, an
- * asset, an account or a receipt the runtime would have to refuse.
+ * Storage is private and every public byte view is a fresh exact-width copy,
+ * so callers cannot mutate an identifier after validation or hand a host call
+ * a short array whose pointer is advertised as thirty-two bytes.
  */
 
 import { IDENTIFIER_BYTES, identifierFromWords, isZero, slice } from "./bytes";
 
+function canonical(source: StaticArray<u8>, offset: i32): StaticArray<u8> | null {
+  if (offset < 0 || offset > source.length - IDENTIFIER_BYTES) return null;
+  const value = slice(source, offset, IDENTIFIER_BYTES);
+  return isZero(value) ? null : value;
+}
+
+function clone(value: StaticArray<u8>): StaticArray<u8> {
+  return slice(value, 0, IDENTIFIER_BYTES);
+}
+
 /** Stable identifier of a deployed program. */
 export class ProgramId {
-  bytes: StaticArray<u8>;
+  private readonly value: StaticArray<u8>;
 
-  constructor(bytes: StaticArray<u8>) {
-    this.bytes = bytes;
+  private constructor(value: StaticArray<u8>) { this.value = value; }
+
+  static fromWords(word0: u64, word1: u64, word2: u64, word3: u64): ProgramId | null {
+    return ProgramId.fromBytes(identifierFromWords(word0, word1, word2, word3), 0);
   }
 
-  /** Rebuilds a program identifier from four big-endian words. */
-  static fromWords(word0: u64, word1: u64, word2: u64, word3: u64): ProgramId {
-    return new ProgramId(identifierFromWords(word0, word1, word2, word3));
+  static fromBytes(source: StaticArray<u8>, offset: i32): ProgramId | null {
+    const value = canonical(source, offset);
+    return value === null ? null : new ProgramId(value);
   }
 
-  /** Copies a program identifier out of a caller-owned array. */
-  static fromBytes(source: StaticArray<u8>, offset: i32): ProgramId {
-    return new ProgramId(slice(source, offset, IDENTIFIER_BYTES));
-  }
-
-  /** Reports whether this is the all-zero identifier reserved for absence. */
-  isReserved(): bool {
-    return isZero(this.bytes);
-  }
+  get bytes(): StaticArray<u8> { return clone(this.value); }
+  isReserved(): bool { return false; }
 }
 
 /** Stable identifier of a protocol asset. */
 export class AssetId {
-  bytes: StaticArray<u8>;
+  private readonly value: StaticArray<u8>;
 
-  constructor(bytes: StaticArray<u8>) {
-    this.bytes = bytes;
+  private constructor(value: StaticArray<u8>) { this.value = value; }
+
+  static fromWords(word0: u64, word1: u64, word2: u64, word3: u64): AssetId | null {
+    return AssetId.fromBytes(identifierFromWords(word0, word1, word2, word3), 0);
   }
 
-  /** Rebuilds an asset identifier from four big-endian words. */
-  static fromWords(word0: u64, word1: u64, word2: u64, word3: u64): AssetId {
-    return new AssetId(identifierFromWords(word0, word1, word2, word3));
+  static fromBytes(source: StaticArray<u8>, offset: i32): AssetId | null {
+    const value = canonical(source, offset);
+    return value === null ? null : new AssetId(value);
   }
 
-  /** Copies an asset identifier out of a caller-owned array. */
-  static fromBytes(source: StaticArray<u8>, offset: i32): AssetId {
-    return new AssetId(slice(source, offset, IDENTIFIER_BYTES));
-  }
-
-  /** Reports whether this is the all-zero identifier reserved for absence. */
-  isReserved(): bool {
-    return isZero(this.bytes);
-  }
+  get bytes(): StaticArray<u8> { return clone(this.value); }
+  isReserved(): bool { return false; }
 }
 
 /** Stable identifier of an account a 402LXP transfer may credit. */
 export class AccountId {
-  bytes: StaticArray<u8>;
+  private readonly value: StaticArray<u8>;
 
-  constructor(bytes: StaticArray<u8>) {
-    this.bytes = bytes;
+  private constructor(value: StaticArray<u8>) { this.value = value; }
+
+  static fromWords(word0: u64, word1: u64, word2: u64, word3: u64): AccountId | null {
+    return AccountId.fromBytes(identifierFromWords(word0, word1, word2, word3), 0);
   }
 
-  /** Rebuilds an account identifier from four big-endian words. */
-  static fromWords(word0: u64, word1: u64, word2: u64, word3: u64): AccountId {
-    return new AccountId(identifierFromWords(word0, word1, word2, word3));
+  static fromBytes(source: StaticArray<u8>, offset: i32): AccountId | null {
+    const value = canonical(source, offset);
+    return value === null ? null : new AccountId(value);
   }
 
-  /** Copies an account identifier out of a caller-owned array. */
-  static fromBytes(source: StaticArray<u8>, offset: i32): AccountId {
-    return new AccountId(slice(source, offset, IDENTIFIER_BYTES));
-  }
-
-  /** Reports whether this is the all-zero identifier reserved for absence. */
-  isReserved(): bool {
-    return isZero(this.bytes);
-  }
+  get bytes(): StaticArray<u8> { return clone(this.value); }
+  isReserved(): bool { return false; }
 }
 
 /** Digest naming one verified protocol receipt. */
 export class ReceiptDigest {
-  bytes: StaticArray<u8>;
+  private readonly value: StaticArray<u8>;
 
-  constructor(bytes: StaticArray<u8>) {
-    this.bytes = bytes;
+  private constructor(value: StaticArray<u8>) { this.value = value; }
+
+  static fromWords(word0: u64, word1: u64, word2: u64, word3: u64): ReceiptDigest | null {
+    return ReceiptDigest.fromBytes(identifierFromWords(word0, word1, word2, word3), 0);
   }
 
-  /** Rebuilds a receipt digest from four big-endian words. */
-  static fromWords(word0: u64, word1: u64, word2: u64, word3: u64): ReceiptDigest {
-    return new ReceiptDigest(identifierFromWords(word0, word1, word2, word3));
+  static fromBytes(source: StaticArray<u8>, offset: i32): ReceiptDigest | null {
+    const value = canonical(source, offset);
+    return value === null ? null : new ReceiptDigest(value);
   }
 
-  /** Copies a receipt digest out of a caller-owned array. */
-  static fromBytes(source: StaticArray<u8>, offset: i32): ReceiptDigest {
-    return new ReceiptDigest(slice(source, offset, IDENTIFIER_BYTES));
-  }
-
-  /** Reports whether this is the all-zero digest reserved for absence. */
-  isReserved(): bool {
-    return isZero(this.bytes);
-  }
+  get bytes(): StaticArray<u8> { return clone(this.value); }
+  isReserved(): bool { return false; }
 }
