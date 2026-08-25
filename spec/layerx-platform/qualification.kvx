@@ -1470,7 +1470,7 @@ observed = "Post-implementation review found unknown custody stage copy keys inh
 assumption = "Human qualification must run the Human component and custody journey suites, inject unknown stages carrying every verification level, and prove deposit, withdrawal and emergency-exit completion remains locked until the exact known final-stage evidence verifies. No browser, build or passing test result is asserted by this source repair."
 severity = "post-implementation-repair"
 
-[observation.30.2.1]
+[observation.30.2.5]
 task = "30.2"
 file = "programs/sdk/rust/src/transfer.rs, programs/sdk/rust/src/host.rs, programs/sdk/rust/src/abi.rs"
 symbol = "ProgramAccountSeed, ProgramAccountPayment, pay_from_program_account"
@@ -1525,7 +1525,7 @@ observed = "The inherited deposit producer schema supplied a self-hash and calle
 assumption = "Human and ramp qualification must update deposit-proof production to fetch the finalized Paxeer checkpoint authority signature, checkpoint state root, deposit root, custody reference, leaf index/count and ordered siblings; it must preserve all values byte-exactly and prove a locally fabricated root is rejected. No producer build or end-to-end deposit result is asserted here."
 severity = "post-implementation-repair"
 
-[observation.37.1.8]
+[observation.37.1.10]
 task = "37.1"
 file = "paxeer-network/modules/evm/types/ethtx/associate_tx.go, paxeer-network/modules/evm/types/message_evm_transaction.go, paxeer-network/modules/evm/ante/preprocess.go, paxeer-network/node/ante/evm_checktx.go, paxeer-network/modules/evm/state/statedb.go, paxeer-network/engine/deps/xevm"
 symbol = "AssociateTx, TxData, EthereumTxData, MsgEVMTransaction.AsTransaction, DBImpl.Commit, DBImpl.IntermediateRoot"
@@ -1556,7 +1556,7 @@ observed = "Post-implementation review found that durable deployment replay and 
 assumption = "The protected trust-history file is now a required operator input for agentd, Explorer and hosted registry startup. Human qualification must provision it atomically from the canonical sequencer authority source, rotate from an old epoch/key to a new one, restart every consumer with old journal entries present, prove old deployments replay but cannot authorize a current head, and prove omitted, ambiguous, revoked and cross-network anchors prevent readiness. No build, test, daemon restart or rotation result is asserted by this source repair."
 severity = "post-implementation-repair"
 
-[observation.37.1.9]
+[observation.37.1.11]
 task = "37.1"
 file = "paxeer-network/engine/deps/store/cachekv.go, paxeer-network/engine/deps/tasks/scheduler.go, paxeer-network/engine/deps/xbank, paxeer-network/engine/deps/xevm, paxeer-network/engine/executor, paxeer-network/modules/epoch, paxeer-network/modules/evm, paxeer-network/modules/mint, paxeer-network/modules/oracle, paxeer-network/modules/tokenfactory, paxeer-network/node"
 symbol = "production panic TODO FIXME not-implemented placeholder mock fake inventory"
