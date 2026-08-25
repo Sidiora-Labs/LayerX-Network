@@ -266,6 +266,9 @@ func validateBlockExecutionReceipts(
 				if transaction == nil {
 					return fmt.Errorf("consensus transaction %d message %d in block %d contains malformed EVM data", txIndex, messageIndex, block.Block.Height)
 				}
+				if _, err := rpcutils.RecoverEVMSender(transaction, block.Block.Height, block.Block.Time.Unix()); err != nil {
+					return fmt.Errorf("recover consensus transaction %d message %d sender in block %d: %w", txIndex, messageIndex, block.Block.Height, err)
+				}
 				hash = transaction.Hash()
 			case *wasmtypes.MsgExecuteContract:
 				if !includeSynthetic {

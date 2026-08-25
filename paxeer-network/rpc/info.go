@@ -228,37 +228,27 @@ func (i *InfoAPI) FeeHistory(ctx context.Context, blockCount gmath.HexOrDecimal6
 	// avoids appending a child base fee when the last block had no header entry, e.g. pruned base fee).
 	lastBlockHeaderBaseFeeAppended := false
 	// Potentially parallelize the following logic
-	for blockNum := result.OldestBlock.ToInt().Int64(); blockNum <= lastBlockNumber; blockNum++ {
+	for blockNum := result.OldestBlock.ToInt().Int64(); ; blockNum++ {
 		var gasUsedRatio float64
 
 		sdkCtx := i.ctxProvider(blockNum)
 		versionExists := CheckVersion(sdkCtx, i.keeper) == nil
 		if !versionExists {
-			// either height is pruned or before EVM is introduced
-			// For non-EVM blocks or pruned blocks, use 0.0 as gas used ratio
-			gasUsedRatio = 0.0
-		} else {
-			// Calculate actual gas used ratio for this block
-			calculatedRatio, err := i.CalculateGasUsedRatio(ctx, blockNum)
-			if err != nil {
-				return nil, fmt.Errorf("calculate gas-used ratio for block %d: %w", blockNum, err)
-			}
-			gasUsedRatio = calculatedRatio
+			return nil, fmt.Errorf("EVM state is unavailable at height %d", blockNum)
 		}
+		calculatedRatio, err := i.CalculateGasUsedRatio(ctx, blockNum)
+		if err != nil {
+			return nil, fmt.Errorf("calculate gas-used ratio for block %d: %w", blockNum, err)
+		}
+		gasUsedRatio = calculatedRatio
 		result.GasUsedRatio = append(result.GasUsedRatio, gasUsedRatio)
-
-		// Only continue with other fields if EVM state exists
-		if !versionExists {
-			continue
-		}
 
 		baseFee, err := i.getHeaderBaseFee(blockNum)
 		if err != nil {
 			return nil, err
 		}
 		if baseFee == nil {
-			// the block has been pruned
-			continue
+			return nil, fmt.Errorf("base fee is unavailable at height %d", blockNum)
 		}
 		result.BaseFee = append(result.BaseFee, (*hexutil.Big)(baseFee))
 		if blockNum == lastBlockNumber {
@@ -267,28 +257,32 @@ func (i *InfoAPI) FeeHistory(ctx context.Context, blockCount gmath.HexOrDecimal6
 		height := blockNum
 		block, err := blockByNumberRespectingWatermarks(ctx, i.tmClient, i.watermarks, &height, 1)
 		if err != nil {
-			// block pruned from tendermint store. Skipping
-			continue
+			return nil, fmt.Errorf("load canonical block %d: %w", blockNum, err)
 		}
 		rewards, err := i.getRewards(block, baseFee, rewardPercentiles)
 		if err != nil {
 			return nil, err
 		}
 		result.Reward = append(result.Reward, rewards)
+		if blockNum == lastBlockNumber {
+			break
+		}
 	}
 
 	// execution-apis eth_feeHistory / go-ethereum: baseFeePerGas has one more element than gasUsedRatio,
 	// the projected base fee for the child of the newest block in the range.
-	// Note: len(baseFeePerGas) may still differ from len(gasUsedRatio)+1 when some heights skip header
-	// base fees (pruned / partial data) while gasUsedRatio rows exist — same class of partial history as before.
 	if lastBlockHeaderBaseFeeAppended {
 		childBF, err := i.getChildBaseFeeAfter(lastBlockNumber)
 		if err != nil {
 			return nil, err
 		}
-		if childBF != nil {
-			result.BaseFee = append(result.BaseFee, (*hexutil.Big)(childBF))
+		if childBF == nil {
+			return nil, fmt.Errorf("child base fee is unavailable after height %d", lastBlockNumber)
 		}
+		result.BaseFee = append(result.BaseFee, (*hexutil.Big)(childBF))
+	}
+	if len(result.BaseFee) != len(result.GasUsedRatio)+1 || len(result.Reward) != len(result.GasUsedRatio) {
+		return nil, errors.New("fee history is incomplete")
 	}
 
 	return result, nil
@@ -387,6 +381,9 @@ func (i *InfoAPI) getRewards(block *coretypes.ResultBlock, baseFee *big.Int, rew
 	if block == nil || block.Block == nil {
 		return nil, errors.New("cannot calculate rewards without a canonical block")
 	}
+	if block.Block.Height < 0 {
+		return nil, fmt.Errorf("cannot calculate rewards for negative block height %d", block.Block.Height)
+	}
 	if baseFee == nil || baseFee.Sign() < 0 {
 		return nil, errors.New("cannot calculate rewards with an invalid base fee")
 	}
@@ -406,12 +403,15 @@ func (i *InfoAPI) getRewards(block *coretypes.ResultBlock, baseFee *big.Int, rew
 		if receipt == nil {
 			return nil, fmt.Errorf("receipt lookup for %s returned nil", ethtx.Hash().Hex())
 		}
+		if receipt.BlockNumber != uint64(block.Block.Height) {
+			return nil, fmt.Errorf("receipt for %s belongs to block %d, expected %d", ethtx.Hash().Hex(), receipt.BlockNumber, block.Block.Height)
+		}
 		receiptEffectiveGasPrice := new(big.Int).SetUint64(receipt.EffectiveGasPrice)
 		if receiptEffectiveGasPrice.Cmp(baseFee) < 0 {
 			// if effective gas price is 0, it's expected behavior for txs that failed ante.
 			// if it's not zero but still smaller than baseFee then something is wrong.
 			if receiptEffectiveGasPrice.Cmp(common.Big0) != 0 {
-				fmt.Printf("Error: tx %s has an unexpected gas price %s set on its receipt\n", ethtx.Hash().Hex(), receiptEffectiveGasPrice)
+				return nil, fmt.Errorf("receipt for %s has gas price %s below base fee %s", ethtx.Hash().Hex(), receiptEffectiveGasPrice, baseFee)
 			}
 			continue
 		}
@@ -428,7 +428,6 @@ func (i *InfoAPI) getRewards(block *coretypes.ResultBlock, baseFee *big.Int, rew
 func (i *InfoAPI) getCongestionData(ctx context.Context, height *int64) (blockGasUsed uint64, err error) {
 	block, err := blockByNumberRespectingWatermarks(ctx, i.tmClient, i.watermarks, height, 1)
 	if err != nil {
-		// block pruned from tendermint store. Skipping
 		return 0, err
 	}
 	if block == nil || block.Block == nil {
@@ -455,7 +454,7 @@ func (i *InfoAPI) getCongestionData(ctx context.Context, height *int64) (blockGa
 		// We've had issues where is included in a block and fails but then is retried and included in a later block, overwriting the receipt.
 		// This is a temporary fix to ensure we only consider receipts that are included in the block we're querying.
 		if receipt.BlockNumber != uint64(block.Block.Height) { //nolint:gosec
-			continue
+			return 0, fmt.Errorf("receipt for %s belongs to block %d, expected %d", ethtx.Hash().Hex(), receipt.BlockNumber, block.Block.Height)
 		}
 		if math.MaxUint64-totalEVMGasUsed < receipt.GasUsed {
 			return 0, fmt.Errorf("gas-used total overflows for block %d", block.Block.Height)
@@ -509,7 +508,7 @@ func (i *InfoAPI) CalculateGasUsedRatio(ctx context.Context, blockHeight int64) 
 		// We've had issues where tx is included in a block and fails but then is retried and included in a later block, overwriting the receipt.
 		// This is a temporary fix to ensure we only consider receipts that are included in the block we're querying.
 		if receipt.BlockNumber != uint64(block.Block.Height) { //nolint:gosec
-			continue
+			return 0, fmt.Errorf("receipt for %s belongs to block %d, expected %d", ethtx.Hash().Hex(), receipt.BlockNumber, block.Block.Height)
 		}
 		if math.MaxUint64-totalEVMGasUsed < receipt.GasUsed {
 			return 0, fmt.Errorf("gas-used total overflows for block %d", block.Block.Height)

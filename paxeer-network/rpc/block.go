@@ -183,6 +183,9 @@ func (a *BlockAPI) GetBlockTransactionCountByNumber(ctx context.Context, number 
 	if err = a.watermarks.EnsureReceiptHeightAvailable(ctx, block.Block.Height); err != nil {
 		return nil, err
 	}
+	if err = validateBlockExecutionReceipts(a.keeper, a.ctxProvider, a.txConfigProvider, block, a.includeShellReceipts, a.cacheCreationMutex, a.globalBlockCache); err != nil {
+		return nil, err
+	}
 	return a.getEvmTxCount(block), nil
 }
 
@@ -203,6 +206,9 @@ func (a *BlockAPI) GetBlockTransactionCountByHash(ctx context.Context, blockHash
 		return nil, nil
 	}
 	if err = a.watermarks.EnsureReceiptHeightAvailable(ctx, block.Block.Height); err != nil {
+		return nil, err
+	}
+	if err = validateBlockExecutionReceipts(a.keeper, a.ctxProvider, a.txConfigProvider, block, a.includeShellReceipts, a.cacheCreationMutex, a.globalBlockCache); err != nil {
 		return nil, err
 	}
 	return a.getEvmTxCount(block), nil
@@ -456,9 +462,12 @@ func EncodeTmBlock(
 				return nil, fmt.Errorf("block %d contains malformed EVM transaction at index %d", block.Block.Height, msg.index)
 			}
 			hash := ethtx.Hash()
-			receipt, found := getOrSetCachedReceipt(cacheCreationMutex, globalBlockCache, latestCtx, k, block, hash)
-			if !found || receipt == nil {
-				continue
+			receipt, err := getOrSetCachedReceiptErr(cacheCreationMutex, globalBlockCache, latestCtx, k, block, hash)
+			if err != nil {
+				return nil, fmt.Errorf("load block %d transaction %d receipt: %w", block.Block.Height, msg.index, err)
+			}
+			if receipt == nil {
+				return nil, fmt.Errorf("block %d transaction %d receipt lookup returned nil", block.Block.Height, msg.index)
 			}
 			// Untraceable receipt — tx never reached the VM (ante-deferred
 			// stub) or is chain-generated synthetic. filterTransactions's
@@ -489,9 +498,12 @@ func EncodeTmBlock(
 			}
 		case *wasmtypes.MsgExecuteContract:
 			th := sha256.Sum256(block.Block.Txs[msg.index])
-			receipt, found := getOrSetCachedReceipt(cacheCreationMutex, globalBlockCache, latestCtx, k, block, th)
-			if !found || receipt == nil {
-				continue
+			receipt, err := getOrSetCachedReceiptErr(cacheCreationMutex, globalBlockCache, latestCtx, k, block, th)
+			if err != nil {
+				return nil, fmt.Errorf("load block %d transaction %d receipt: %w", block.Block.Height, msg.index, err)
+			}
+			if receipt == nil {
+				return nil, fmt.Errorf("block %d transaction %d receipt lookup returned nil", block.Block.Height, msg.index)
 			}
 			if !fullTx {
 				transactions = append(transactions, "0x"+hex.EncodeToString(th[:]))
@@ -650,16 +662,11 @@ func countBlockTxsLikeEncodeTmBlock(
 	cacheCreationMutex *sync.Mutex,
 	globalBlockCache BlockCache,
 ) int {
-	latestCtx := ctxProvider(LatestCtxHeight)
 	msgs := filterTransactions(k, ctxProvider, txConfigProvider, block, includeShellReceipts, includeBankTransfers, cacheCreationMutex, globalBlockCache)
 	n := 0
 	for _, msg := range msgs {
-		switch m := msg.msg.(type) {
+		switch msg.msg.(type) {
 		case *types.MsgEVMTransaction:
-			ethtx, _ := m.AsTransaction()
-			if _, found := getOrSetCachedReceipt(cacheCreationMutex, globalBlockCache, latestCtx, k, block, ethtx.Hash()); !found {
-				continue
-			}
 			n++
 		case *wasmtypes.MsgExecuteContract:
 			n++
