@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { MirrorDivergentError, MirrorUnavailableError, verifyEvidenceFromMirrors } from "../../../../explorer/mirror-server";
 import { encodeVerificationReport } from "../../../../explorer/model";
+import { MirrorOverloadedError } from "../../../../explorer/mirror-admission";
 
 const MAXIMUM_BODY_BYTES = 1_100_000;
 const MAXIMUM_EVIDENCE_CHARACTERS = 1_050_000;
@@ -71,11 +72,17 @@ export async function POST(request: Request) {
     return NextResponse.json({ status: "invalid" }, { status: 400 });
   }
   try {
-    const report = await verifyEvidenceFromMirrors(valid);
+    const report = await verifyEvidenceFromMirrors(valid, request.signal);
     return NextResponse.json(encodeVerificationReport(report), {
       headers: { "Cache-Control": "no-store" },
     });
   } catch (error) {
+    if (error instanceof MirrorOverloadedError) {
+      return NextResponse.json(
+        { status: "overloaded" },
+        { status: 429, headers: { "Cache-Control": "no-store", "Retry-After": "1" } },
+      );
+    }
     const unavailable = error instanceof MirrorUnavailableError;
     const divergent = error instanceof MirrorDivergentError;
     return NextResponse.json(

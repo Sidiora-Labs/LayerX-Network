@@ -1,7 +1,7 @@
 import { cookies, headers } from "next/headers";
 
 import { copyEntry } from "../../copy/catalog";
-import { APP_SESSION_COOKIE } from "../auth/session";
+import { verifiedWebSession } from "../auth/server-session";
 import { Onboarding } from "../journeys/onboarding/onboarding";
 import { PlaneRouteAction } from "../kit";
 import { selectServerShell } from "../shell/server";
@@ -17,11 +17,12 @@ export default async function RootPage({
     cookies(),
   ]);
   const returnTo = typeof parameters.return_to === "string" ? parameters.return_to : undefined;
+  const session = await verifiedWebSession(requestHeaders.get("cookie") ?? "");
   return (
     <div className="flex flex-col gap-4">
       <Onboarding
         initialSelection={selectServerShell(requestHeaders, requestCookies)}
-        initiallyAuthenticated={requestCookies.get(APP_SESSION_COOKIE) !== undefined}
+        initiallyAuthenticated={session !== undefined}
         {...(returnTo === undefined ? {} : { returnTo })}
       />
       <PlaneRouteAction destination="/explorer">

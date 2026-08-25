@@ -95,15 +95,14 @@ test("authenticated responses use a nonce policy with pinned asset sources", () 
   assert.doesNotMatch(policy, /unsafe-inline|unsafe-eval/u);
 });
 
-test("the app route boundary redirects unsigned requests with the exact destination", () => {
+test("the proxy never promotes cookie presence into authenticated identity", () => {
   const response = proxy(
-    new NextRequest("https://layerx.test/app/activity/act_42?view=details"),
+    new NextRequest("https://layerx.test/app/activity/act_42?view=details", {
+      headers: { cookie: "__Host-layerx-session=forged" },
+    }),
   );
-  assert.equal(response.status, 307);
-  const destination = new URL(response.headers.get("location") ?? "");
-  assert.equal(destination.origin, "https://layerx.test");
-  assert.equal(destination.pathname, "/");
-  assert.equal(destination.searchParams.get("return_to"), "/app/activity/act_42?view=details");
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("x-layerx-authenticated"), null);
   assert.match(response.headers.get("content-security-policy") ?? "", /script-src 'self' 'nonce-/u);
 });
 
@@ -114,7 +113,8 @@ test("the public and authenticated plane roots remain separate", async () => {
     readFile(new URL("../src/proxy.ts", import.meta.url), "utf8"),
   ]);
   assert.match(appLayout, /AuthenticatedShell/u);
-  assert.match(appLayout, /x-layerx-authenticated/u);
+  assert.match(appLayout, /verifiedWebSession/u);
+  assert.doesNotMatch(proxy, /APP_SESSION_COOKIE|x-layerx-authenticated/u);
   assert.match(explorerLayout, /force-static/u);
   assert.match(proxy, /matcher: \["\/app\/:path\*"\]/u);
 });

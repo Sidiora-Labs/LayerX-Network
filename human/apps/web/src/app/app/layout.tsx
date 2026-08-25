@@ -7,17 +7,19 @@ import { NotificationCenterProvider } from "../../journeys/notifications";
 import { selectServerShell } from "../../shell/server";
 import { PrivacyModeProvider } from "../../settings/privacy";
 import { privacyPrincipalScope } from "../../settings/server";
+import { verifiedWebSession } from "../../auth/server-session";
 
 export const dynamic = "force-dynamic";
 
 export default async function AppPlaneLayout({ children }: Readonly<{ children: ReactNode }>) {
   const [requestHeaders, requestCookies] = await Promise.all([headers(), cookies()]);
-  if (requestHeaders.get("x-layerx-authenticated") !== "1") {
+  const session = await verifiedWebSession(requestHeaders.get("cookie") ?? "");
+  if (session === undefined) {
     redirect("/?return_to=%2Fapp");
   }
 
   return (
-    <PrivacyModeProvider principalScope={privacyPrincipalScope(requestHeaders, requestCookies)}>
+    <PrivacyModeProvider principalScope={privacyPrincipalScope(session.principalScope)}>
       <NotificationCenterProvider>
         <AuthenticatedShell initialSelection={selectServerShell(requestHeaders, requestCookies)}>
           {children}

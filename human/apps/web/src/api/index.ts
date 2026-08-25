@@ -1,4 +1,5 @@
 import { createHumanApiClient, type HumanApiClient, type HumanApiClientOptions } from "./generated/index.ts";
+import { csrfTokenFromCookie } from "../auth/session.ts";
 
 export * from "./generated/index.ts";
 
@@ -11,20 +12,11 @@ export function humanApi(options: HumanApiClientOptions = {}): HumanApiClient {
   });
 }
 
-const CSRF_COOKIE = "__Host-layerx_csrf";
-
 function browserCsrfToken(): string | undefined {
   if (typeof document === "undefined") {
     return undefined;
   }
-  for (const entry of document.cookie.split(";")) {
-    const [name, ...value] = entry.trim().split("=");
-    if (name === CSRF_COOKIE) {
-      const encoded = value.join("=");
-      return encoded.length === 0 ? undefined : encoded;
-    }
-  }
-  return undefined;
+  return csrfTokenFromCookie(document.cookie);
 }
 
 function browserTrace(): string | undefined {

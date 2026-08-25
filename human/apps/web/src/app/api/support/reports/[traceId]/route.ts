@@ -1,5 +1,6 @@
 import {
   SupportReportConfigurationError,
+  SupportReportConflictError,
   supportReportRepositoryFromEnvironment,
   supportRetrievalAuthorized,
 } from "../../../../../server/support-reports";
@@ -37,6 +38,9 @@ export async function GET(
   } catch (error) {
     if (error instanceof SupportReportConfigurationError) {
       return problem(503, "REPORT_RETRIEVAL_UNAVAILABLE");
+    }
+    if (error instanceof SupportReportConflictError) {
+      return problem(409, "REPORT_TRACE_CONFLICT");
     }
     if (error instanceof Error && /^Invalid trace/u.test(error.message)) {
       return problem(400, "REPORT_TRACE_INVALID");

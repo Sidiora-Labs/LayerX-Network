@@ -5,6 +5,7 @@ import {
   type SavedReportReceipt,
   type SupportReportRequest,
 } from "./report-schema.ts";
+import { csrfTokenFromCookie } from "../auth/session.ts";
 
 export interface ErrorReportDraft {
   readonly consented: boolean;
@@ -86,10 +87,12 @@ function sameReport(left: SupportReportRequest, right: SupportReportRequest): bo
 }
 
 async function postReport(report: SupportReportRequest): Promise<SavedReportReceipt> {
+  const csrf = csrfTokenFromCookie(document.cookie);
+  if (csrf === undefined) throw new ReportServerError(403);
   const response = await fetch("/api/support/reports", {
     method: "POST",
     credentials: "same-origin",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", "x-layerx-csrf": csrf },
     body: JSON.stringify(report),
   });
   if (!response.ok) {

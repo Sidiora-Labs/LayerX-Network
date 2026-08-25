@@ -4,24 +4,13 @@ import {
   supportReportRepositoryFromEnvironment,
 } from "../../../../server/support-reports";
 import { parseSupportReportRequest } from "../../../../states/report-schema";
+import { validRequestCsrf, verifiedWebSession } from "../../../../auth/server-session";
 
 export const runtime = "nodejs";
 
 const MAX_REQUEST_BYTES = 4_096;
 
 class ReportTooLargeError extends Error {}
-
-function sameOrigin(request: Request): boolean {
-  const origin = request.headers.get("origin");
-  if (origin === null) {
-    return false;
-  }
-  try {
-    return new URL(origin).origin === new URL(request.url).origin;
-  } catch {
-    return false;
-  }
-}
 
 function problem(status: number, code: string): Response {
   return Response.json({ code }, { status, headers: { "cache-control": "no-store" } });
@@ -56,8 +45,12 @@ async function boundedBody(request: Request): Promise<string> {
 }
 
 export async function POST(request: Request): Promise<Response> {
-  if (!sameOrigin(request)) {
-    return problem(403, "REPORT_ORIGIN_REJECTED");
+  const session = await verifiedWebSession(request.headers.get("cookie") ?? "");
+  if (session === undefined) {
+    return problem(401, "REPORT_SESSION_REQUIRED");
+  }
+  if (!validRequestCsrf(request)) {
+    return problem(403, "REPORT_CSRF_REJECTED");
   }
   if (!request.headers.get("content-type")?.toLowerCase().startsWith("application/json")) {
     return problem(415, "REPORT_CONTENT_TYPE_REQUIRED");
@@ -70,7 +63,7 @@ export async function POST(request: Request): Promise<Response> {
   try {
     const body = await boundedBody(request);
     const report = parseSupportReportRequest(JSON.parse(body));
-    const saved = await supportReportRepositoryFromEnvironment().save(report);
+    const saved = await supportReportRepositoryFromEnvironment().save(session.principalScope, report);
     return Response.json(
       { traceId: saved.record.traceId, status: "saved" },
       { status: saved.created ? 201 : 200, headers: { "cache-control": "no-store" } },

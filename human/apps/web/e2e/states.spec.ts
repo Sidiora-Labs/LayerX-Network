@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -56,9 +56,11 @@ test("error reports require consent and retain only the non-sensitive schema", (
   assert.throws(() => parseSupportReportRequest({ ...report, enteredValue: "private" }), /fields/u);
 });
 
-test("support reports are idempotent and retained in a bounded real repository", async () => {
+test("support reports are idempotent and retained independently for each verified principal", async () => {
   const directory = await mkdtemp(join(tmpdir(), "layerx-support-reports-"));
   const repository = new SupportReportRepository(directory, 2);
+  const firstPrincipal = "verified-principal-0001";
+  const secondPrincipal = "verified-principal-0002";
   const first = parseSupportReportRequest({
     traceId: "trc_ui_first",
     machineCode: "UI_UNHANDLED",
@@ -66,22 +68,37 @@ test("support reports are idempotent and retained in a bounded real repository",
     shell: "desktop",
   });
   try {
-    assert.equal((await repository.save(first)).created, true);
-    assert.equal((await repository.save(first)).created, false);
-    await repository.save(parseSupportReportRequest({
+    assert.equal((await repository.save(firstPrincipal, first)).created, true);
+    assert.equal((await repository.save(firstPrincipal, first)).created, false);
+    await repository.save(firstPrincipal, parseSupportReportRequest({
       traceId: "trc_ui_second",
       machineCode: "UI_UNHANDLED",
       route: "/app",
       shell: "mobile",
     }));
-    await repository.save(parseSupportReportRequest({
+    await repository.save(secondPrincipal, parseSupportReportRequest({
+      traceId: "trc_ui_other_first",
+      machineCode: "UI_UNHANDLED",
+      route: "/app",
+      shell: "desktop",
+    }));
+    await repository.save(secondPrincipal, parseSupportReportRequest({
+      traceId: "trc_ui_other_second",
+      machineCode: "UI_UNHANDLED",
+      route: "/app",
+      shell: "mobile",
+    }));
+    await repository.save(firstPrincipal, parseSupportReportRequest({
       traceId: "trc_ui_third",
       machineCode: "UI_UNHANDLED",
       route: "/explorer",
       shell: "desktop",
     }));
-    assert.equal((await readdir(directory)).filter((file) => file.endsWith(".json")).length, 2);
-    assert.equal((await repository.findByTrace("trc_ui_third"))?.route, "/explorer");
+    assert.equal(await repository.findByTrace("trc_ui_first", firstPrincipal), undefined);
+    assert.equal((await repository.findByTrace("trc_ui_second", firstPrincipal))?.shell, "mobile");
+    assert.equal((await repository.findByTrace("trc_ui_third", firstPrincipal))?.route, "/explorer");
+    assert.equal((await repository.findByTrace("trc_ui_other_first", secondPrincipal))?.route, "/app");
+    assert.equal((await repository.findByTrace("trc_ui_other_second", secondPrincipal))?.shell, "mobile");
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

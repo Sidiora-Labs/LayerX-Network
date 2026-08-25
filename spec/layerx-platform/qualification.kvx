@@ -1302,6 +1302,30 @@ observed = "Post-implementation review found that the moved Paxeer documentation
 assumption = "Human qualification must run the package build and browser journeys at mobile and desktop widths, verify focus/keyboard behavior and clipboard output on all 28 pages, and confirm the rendered operator wording against the live chain configuration. No build, browser or visual result is asserted by this source repair."
 severity = "post-implementation-repair"
 
+[observation.11.1.2]
+task = "11.1"
+file = "human/apps/web/src/auth/server-session.ts, human/apps/web/src/auth/session.ts, human/apps/web/src/proxy.ts, human/apps/web/src/app/app/layout.tsx, human/apps/web/e2e/session-boundary.test.ts, human/apps/web/e2e/shell.spec.ts"
+symbol = "verifiedWebSession, singleCurrentSessionId, authenticated app layout"
+observed = "Post-implementation review found the authenticated shell treated presence of the browser session-cookie name as authenticated identity and injected a trusted-looking request header without verifying the cookie with the Human service. The repair removes cookie-presence authority from middleware and derives the shell identity only after server-side account-balance and session-inventory reads agree on exactly one current session; every error, missing identity and ambiguous current-session result fails closed before the app plane renders."
+assumption = "Human qualification must run the application against the production Human service, exercise expired, revoked, forged and ambiguous session cookies, service outage and account/session disagreement, and prove no authenticated shell or privacy preference is exposed. Source regressions were written, but no build, browser or passing test result is asserted by this implementation repair."
+severity = "post-implementation-repair"
+
+[observation.13.4.1]
+task = "13.4"
+file = "human/apps/web/src/app/api/support/reports/route.ts, human/apps/web/src/auth/server-session.ts, human/apps/web/src/server/support-reports.ts, human/apps/web/src/states/report.ts, human/apps/web/e2e/states.spec.ts"
+symbol = "POST, validRequestCsrf, SupportReportRepository"
+observed = "Post-implementation review found support-report ingestion authorized writes from an Origin comparison alone and retained all users in one eviction bucket, allowing unauthenticated same-origin submissions and one principal to evict another principal's reports. The repair requires a server-verified Human session plus a constant-time double-submit anti-forgery token, derives an opaque principal scope only from the server-returned account, and stores and evicts reports in separate hashed principal directories while preserving privileged trace retrieval and detecting cross-principal trace ambiguity."
+assumption = "Human qualification must exercise real browser session and CSRF issuance, revoked sessions, cross-site and missing-token submissions, concurrent same-trace writes, filesystem failure, retention pressure from multiple principals and privileged retrieval. The source repository regression covers principal isolation, but no HTTP, filesystem stress or passing test result is asserted by this implementation repair."
+severity = "post-implementation-repair"
+
+[observation.13.5.3]
+task = "13.5"
+file = "human/apps/web/src/explorer/mirror-admission.ts, human/apps/web/src/explorer/mirror-server.ts, human/apps/web/src/app/api/explorer/verify/route.ts, human/apps/web/e2e/explorer-admission.test.ts"
+symbol = "MirrorVerificationAdmission, verifyEvidenceFromMirrors, POST"
+observed = "Post-implementation review found each public explorer verification request could start an independent mirror child process with a two-minute lifetime and no admission bound or request-cancellation propagation, allowing unbounded process accumulation. The repair admits at most four verifier processes, refuses excess work deterministically with HTTP 429 and Retry-After, constrains input, output and runtime, launches through an explicitly configured prlimit executable with fixed address-space, file-size, descriptor, process and core-dump limits, forwards request cancellation, uses an unconditional kill signal on timeout or abort, and releases the slot on every completion path."
+assumption = "Human qualification must load the public endpoint above and below its limit, abort clients at every child-process phase, force timeout, output overflow, verifier crash and malformed output, and prove every process is reaped and capacity returns without queueing or leaked work. The admission regression is a source artifact only; no process-level or passing test result is asserted by this implementation repair."
+severity = "post-implementation-repair"
+
 [observation.25.1.10]
 task = "25.1"
 file = "interop/crates/layerx-mirror/src/runtime.rs, interop/crates/layerx-mirror/src/store.rs"
