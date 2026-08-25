@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use sha2::{Digest, Sha256};
 
@@ -369,13 +370,24 @@ pub struct SpooledArchive {
 #[derive(Clone, Debug)]
 pub struct ArchiveSpool {
     directory: PathBuf,
+    _lock: Arc<File>,
 }
 
 impl ArchiveSpool {
     pub fn open(directory: impl Into<PathBuf>) -> Result<Self, StoreError> {
         let directory = directory.into();
         fs::create_dir_all(&directory).map_err(StoreError::Io)?;
-        Ok(Self { directory })
+        let lock = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .open(directory.join(".spool.lock"))
+            .map_err(StoreError::Io)?;
+        lock.try_lock().map_err(|_| StoreError::Conflict)?;
+        Ok(Self {
+            directory,
+            _lock: Arc::new(lock),
+        })
     }
 
     /// Writes once by commitment using temp-file sync and atomic rename. An

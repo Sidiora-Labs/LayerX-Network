@@ -1,5 +1,6 @@
 //! Deployable independent-worker mirror publisher runtime.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::{Read, Write};
 use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream};
@@ -18,7 +19,7 @@ use crate::rpc::{RpcCluster, RpcQuorumConfig};
 use crate::signer::{RemoteChainSigner, RemoteSignerConfig, SignerEndpoint, SigningAlgorithm};
 use crate::solana::{SolanaArchiveClient, SolanaError, SolanaProductionConfig, SolanaProgress};
 use crate::store::{ArchiveSpool, PublicationPhase};
-use crate::{Archive, ArchiveData};
+use crate::{Archive, ArchiveCommitment};
 
 const MAX_CONFIG_BYTES: usize = 1024 * 1024;
 const MAX_STATUS_REQUEST_BYTES: usize = 4096;
@@ -134,6 +135,16 @@ pub enum RuntimeError {
     Status,
 }
 
+#[derive(Debug)]
+enum SpoolRecoveryError {
+    Store,
+    Archive,
+    BatchBeforeFirst,
+    DuplicateBatch,
+    BatchGap,
+    SequenceExhausted,
+}
+
 /// Loads one bounded JSON configuration and starts node acquisition, two
 /// independent durable chain workers and a redacted loopback status endpoint.
 pub fn run(config_path: &Path) -> Result<(), RuntimeError> {
@@ -147,11 +158,19 @@ pub fn run(config_path: &Path) -> Result<(), RuntimeError> {
     validate_runtime(&config)?;
     let spool = ArchiveSpool::open(config.state_directory.join("archives"))
         .map_err(|_| RuntimeError::State)?;
+    let next_batch = recover_next_batch(&spool, config.first_batch_number)
+        .map_err(|_| RuntimeError::State)?;
     let status = Arc::new(Mutex::new(RuntimeStatus::default()));
     let poll = Duration::from_millis(config.poll_interval_ms);
 
     spawn_status(config.status_listen, Arc::clone(&status))?;
-    spawn_node(config.clone(), spool.clone(), Arc::clone(&status), poll);
+    spawn_node(
+        config.clone(),
+        spool.clone(),
+        Arc::clone(&status),
+        poll,
+        next_batch,
+    );
     spawn_ethereum(config.clone(), spool.clone(), Arc::clone(&status), poll);
     spawn_solana(config, spool, status, poll);
     loop {
@@ -164,11 +183,11 @@ fn spawn_node(
     spool: ArchiveSpool,
     status: Arc<Mutex<RuntimeStatus>>,
     poll: Duration,
+    mut next_batch: u64,
 ) {
     thread::spawn(move || {
         let source_config = node_config(&config.node);
         let mut source = LniArchiveSource::new(source_config);
-        let mut next_batch = next_batch(&spool, config.first_batch_number);
         loop {
             match source.acquire(next_batch) {
                 Ok(acquired) => {
@@ -180,6 +199,9 @@ fn spawn_node(
                         acquired.head,
                     )
                     .and_then(|archive| {
+                        if archive.data().batch_number != next_batch {
+                            return Err(crate::SourceError::BatchMismatch);
+                        }
                         spool
                             .put(archive.commitment(), archive.bytes(), archive.node_head())
                             .map_err(|_| {
@@ -200,7 +222,14 @@ fn spawn_node(
                                     value.checkpoint_proof_boundary_ready = true;
                                 }
                             });
-                            next_batch = next_batch.saturating_add(1);
+                            let Some(incremented) = next_batch.checked_add(1) else {
+                                update_status(&status, |value| {
+                                    value.node.ready = false;
+                                    value.node.error_class = Some("batch_sequence_exhausted");
+                                });
+                                return;
+                            };
+                            next_batch = incremented;
                         }
                         Err(_) => update_status(&status, |value| {
                             value.node.ready = false;
@@ -315,23 +344,61 @@ fn ordered_archives(spool: &ArchiveSpool) -> Vec<Result<Archive, ()>> {
     archives
 }
 
-fn next_batch(spool: &ArchiveSpool, first: u64) -> u64 {
-    let batches = spool
-        .commitments()
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|commitment| spool.get(commitment).ok())
-        .filter_map(|stored| ArchiveData::decode(&stored.bytes).ok())
-        .map(|archive| archive.batch_number)
-        .collect::<std::collections::BTreeSet<_>>();
-    let mut next = first;
-    while batches.contains(&next) {
-        let Some(incremented) = next.checked_add(1) else {
-            break;
-        };
-        next = incremented;
+fn recover_next_batch(
+    spool: &ArchiveSpool,
+    first: u64,
+) -> Result<u64, SpoolRecoveryError> {
+    recover_spool(
+        first,
+        || {
+            spool
+                .commitments()
+                .map_err(|_| SpoolRecoveryError::Store)
+        },
+        |commitment| {
+            let stored = spool
+                .get(commitment)
+                .map_err(|_| SpoolRecoveryError::Store)?;
+            let archive = Archive::from_spool(stored.bytes, stored.node_head)
+                .map_err(|_| SpoolRecoveryError::Archive)?;
+            Ok(archive.data().batch_number)
+        },
+    )
+}
+
+fn recover_spool(
+    first: u64,
+    inventory: impl FnOnce() -> Result<Vec<ArchiveCommitment>, SpoolRecoveryError>,
+    load_batch: impl FnMut(ArchiveCommitment) -> Result<u64, SpoolRecoveryError>,
+) -> Result<u64, SpoolRecoveryError> {
+    recover_batch_sequence(first, inventory()?, load_batch)
+}
+
+fn recover_batch_sequence(
+    first: u64,
+    commitments: impl IntoIterator<Item = ArchiveCommitment>,
+    mut load_batch: impl FnMut(ArchiveCommitment) -> Result<u64, SpoolRecoveryError>,
+) -> Result<u64, SpoolRecoveryError> {
+    let mut batches = BTreeMap::new();
+    for commitment in commitments {
+        let batch = load_batch(commitment)?;
+        if batch < first {
+            return Err(SpoolRecoveryError::BatchBeforeFirst);
+        }
+        if batches.insert(batch, commitment).is_some() {
+            return Err(SpoolRecoveryError::DuplicateBatch);
+        }
     }
-    next
+    let mut expected = first;
+    for batch in batches.keys().copied() {
+        if batch != expected {
+            return Err(SpoolRecoveryError::BatchGap);
+        }
+        expected = expected
+            .checked_add(1)
+            .ok_or(SpoolRecoveryError::SequenceExhausted)?;
+    }
+    Ok(expected)
 }
 
 fn ethereum_client(config: &RuntimeConfig) -> Result<EthereumArchiveClient, EthereumError> {
@@ -756,4 +823,176 @@ fn base58_decode(value: &str, maximum: usize) -> Result<Vec<u8>, SignerErrorShim
         return Err(SignerErrorShim);
     }
     Ok(decoded)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use super::{
+        hex_bytes, recover_batch_sequence, recover_next_batch, recover_spool, SpoolRecoveryError,
+    };
+    use crate::store::{ArchiveSpool, StoreError};
+    use crate::{archive_commitment, ArchiveCommitment, NodeHead};
+
+    static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
+
+    struct ScratchDirectory(PathBuf);
+
+    impl ScratchDirectory {
+        fn new(label: &str) -> Self {
+            let sequence = NEXT_DIRECTORY.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "layerx-mirror-runtime-{label}-{}-{sequence}",
+                std::process::id()
+            ));
+            std::fs::create_dir(&path)
+                .unwrap_or_else(|error| panic!("create scratch directory: {error}"));
+            Self(path)
+        }
+
+        fn path(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+
+    impl Drop for ScratchDirectory {
+        fn drop(&mut self) {
+            if self.0.is_dir() {
+                let _ = std::fs::remove_dir_all(&self.0);
+            } else {
+                let _ = std::fs::remove_file(&self.0);
+            }
+        }
+    }
+
+    fn commitment(byte: u8) -> ArchiveCommitment {
+        ArchiveCommitment::from_bytes([byte; 32])
+    }
+
+    #[test]
+    fn startup_refuses_unreadable_commitment_inventory() {
+        let result = recover_spool(
+            1,
+            || Err(SpoolRecoveryError::Store),
+            |_| unreachable!("failed inventory cannot load an object"),
+        );
+
+        assert!(matches!(result, Err(SpoolRecoveryError::Store)));
+    }
+
+    #[test]
+    fn startup_refuses_a_second_spool_owner() {
+        let scratch = ScratchDirectory::new("exclusive-owner");
+        let directory = scratch.path().join("archives");
+        let owner = ArchiveSpool::open(&directory)
+            .unwrap_or_else(|error| panic!("open archive spool owner: {error:?}"));
+
+        assert!(matches!(
+            ArchiveSpool::open(&directory),
+            Err(StoreError::Conflict)
+        ));
+
+        drop(owner);
+        ArchiveSpool::open(&directory)
+            .unwrap_or_else(|error| panic!("reopen released archive spool: {error:?}"));
+    }
+
+    #[test]
+    fn startup_refuses_object_missing_after_inventory() {
+        let scratch = ScratchDirectory::new("missing-object");
+        let directory = scratch.path().join("archives");
+        let spool = ArchiveSpool::open(&directory)
+            .unwrap_or_else(|error| panic!("open archive spool: {error:?}"));
+        let bytes = b"inventory object removed before recovery";
+        let missing = archive_commitment(bytes);
+        spool
+            .put(
+                missing,
+                bytes,
+                NodeHead {
+                    latest_sealed_batch: 1,
+                    latest_finalised_checkpoint: None,
+                },
+            )
+            .unwrap_or_else(|error| panic!("spool missing archive fixture: {error:?}"));
+        let commitments = spool
+            .commitments()
+            .unwrap_or_else(|error| panic!("list archive fixture: {error:?}"));
+        let name = hex_bytes(missing.as_bytes());
+        std::fs::remove_file(directory.join(format!("{name}.archive")))
+            .unwrap_or_else(|error| panic!("remove inventoried archive: {error}"));
+        let result = recover_batch_sequence(1, commitments, |value| {
+            spool
+                .get(value)
+                .map(|_| 1)
+                .map_err(|_| SpoolRecoveryError::Store)
+        });
+
+        assert!(matches!(result, Err(SpoolRecoveryError::Store)));
+    }
+
+    #[test]
+    fn startup_refuses_corrupt_archive_bytes() {
+        let scratch = ScratchDirectory::new("corrupt-archive");
+        let spool = ArchiveSpool::open(scratch.path().join("archives"))
+            .unwrap_or_else(|error| panic!("open archive spool: {error:?}"));
+        let bytes = b"not a canonical LayerX mirror archive";
+        spool
+            .put(
+                archive_commitment(bytes),
+                bytes,
+                NodeHead {
+                    latest_sealed_batch: 1,
+                    latest_finalised_checkpoint: None,
+                },
+            )
+            .unwrap_or_else(|error| panic!("spool corrupt archive fixture: {error:?}"));
+
+        assert!(matches!(
+            recover_next_batch(&spool, 1),
+            Err(SpoolRecoveryError::Archive)
+        ));
+    }
+
+    #[test]
+    fn startup_refuses_duplicate_batch_metadata() {
+        let result = recover_batch_sequence(7, [commitment(1), commitment(2)], |_| Ok(7));
+
+        assert!(matches!(
+            result,
+            Err(SpoolRecoveryError::DuplicateBatch)
+        ));
+    }
+
+    #[test]
+    fn startup_refuses_gapped_batch_metadata() {
+        let first = commitment(1);
+        let third = commitment(3);
+        let result = recover_batch_sequence(10, [first, third], |value| {
+            Ok(if value == first { 10 } else { 12 })
+        });
+
+        assert!(matches!(result, Err(SpoolRecoveryError::BatchGap)));
+    }
+
+    #[test]
+    fn clean_restart_resumes_after_the_contiguous_spool_prefix() {
+        let first = commitment(1);
+        let second = commitment(2);
+        let result = recover_batch_sequence(41, [second, first], |value| {
+            Ok(if value == first { 41 } else { 42 })
+        });
+
+        assert_eq!(
+            result.unwrap_or_else(|error| panic!("recover clean spool: {error:?}")),
+            43
+        );
+        assert_eq!(
+            recover_batch_sequence(41, [], |_| unreachable!("empty inventory has no loader calls"))
+                .unwrap_or_else(|error| panic!("recover empty spool: {error:?}")),
+            41
+        );
+    }
 }

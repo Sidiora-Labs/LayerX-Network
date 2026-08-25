@@ -1302,6 +1302,14 @@ observed = "Post-implementation review found that the moved Paxeer documentation
 assumption = "Human qualification must run the package build and browser journeys at mobile and desktop widths, verify focus/keyboard behavior and clipboard output on all 28 pages, and confirm the rendered operator wording against the live chain configuration. No build, browser or visual result is asserted by this source repair."
 severity = "post-implementation-repair"
 
+[observation.25.1.10]
+task = "25.1"
+file = "interop/crates/layerx-mirror/src/runtime.rs, interop/crates/layerx-mirror/src/store.rs"
+symbol = "run, recover_next_batch, recover_batch_sequence, ArchiveSpool::open"
+observed = "Post-implementation review found mirror startup derived its next node batch with lossy defaulting and skipped corrupt or unreadable spool objects, started its status and chain workers before complete recovery, saturated the batch cursor at u64::MAX, accepted a node archive for a different requested batch, and allowed two runtimes to own the same spool. The repair acquires one lifetime advisory spool lock, verifies every inventoried object and its canonical archive before spawning any worker, refuses batches below the configured origin, duplicate metadata, gaps and sequence exhaustion, and advances only after exact requested-batch acquisition with checked arithmetic."
+assumption = "Human qualification must restart the deployable publisher over clean, corrupt, missing, duplicate, gapped and maximum-sequence spools; prove a second process is excluded; inject a node batch mismatch; and show no status or chain publication thread starts after failed recovery. Source tests were written but no build, restart or passing test result is asserted by this implementation repair."
+severity = "post-implementation-repair"
+
 [observation.37.2.1]
 task = "37.2"
 file = ".github/workflows/paxeer-hpx-registry.yml, paxeer-network/hpx/hosting/deploy.sh"
