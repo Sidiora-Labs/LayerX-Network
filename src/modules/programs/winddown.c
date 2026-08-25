@@ -224,7 +224,8 @@ static lxp_result route_decode(const uint8_t program_id[32],
         return LXP_FATAL_INVARIANT;
     seed_length = read_u16(record + 65U);
     if (seed_length > LX_PROGRAMS_ACCOUNT_MAX_SEED_BYTES ||
-        record_length != WIND_DOWN_ROUTE_FIXED_BYTES + seed_length)
+        record_length != (size_t)WIND_DOWN_ROUTE_FIXED_BYTES +
+                         (size_t)seed_length)
         return LXP_FATAL_INVARIANT;
     (void)memset(route, 0, sizeof(*route));
     (void)memcpy(route->program_id, program_id, 32U);

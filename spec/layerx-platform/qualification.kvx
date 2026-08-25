@@ -1198,6 +1198,14 @@ observed = "Human qualification reached the ABI-two program state-record encoder
 assumption = "Human qualification must resume the build and exercise exact-fit and exhausted arena inputs to confirm the encoder retains its original bound and reset behavior."
 severity = "qualification-repair"
 
+[observation.30.5.9]
+task = "30.5"
+file = "src/modules/programs/winddown.c"
+symbol = "route_decode"
+observed = "Human qualification next reached the persisted exit-route decoder and GCC rejected the exact record-length comparison because the enum fixed-byte count and uint16 seed length were promoted to signed int before comparison with size_t. The repair promotes the fixed-byte operand to size_t so the bounded sum and record length are compared in the same unsigned width."
+assumption = "Human qualification must resume the build and retain route-decoder artifacts for exact, truncated and trailing-byte records at both zero and maximum seed length."
+severity = "qualification-repair"
+
 [observation.37.1.1]
 task = "37.1"
 file = "paxeer-network/wasm-runtime/internal/api, paxeer-network/wasm/x/wasm/artifacts, paxeer-network/Dockerfile, paxeer-network/hpx"
