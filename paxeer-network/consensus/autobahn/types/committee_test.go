@@ -52,6 +52,12 @@ func TestNewCommittee_RejectsZeroTotalWeight(t *testing.T) {
 	}
 }
 
+func TestNewCommitteeRejectsEmptyChainID(t *testing.T) {
+	rng := utils.TestRng()
+	_, err := NewCommittee("", map[PublicKey]uint64{GenPublicKey(rng): 1}, 1, time.Unix(1_700_000_000, 0).UTC())
+	require.Error(t, err)
+}
+
 func TestNewCommittee_RejectsWeightOverflow(t *testing.T) {
 	rng := utils.TestRng()
 	firstBlock := GenGlobalBlockNumber(rng)
@@ -76,10 +82,14 @@ func TestSignatureVerificationBindsChainAndCommittee(t *testing.T) {
 	nextEpoch := utils.OrPanic1(NewCommittee("chain-a", weights, 2, genesis))
 	vote := NewLaneVote(NewBlock(key.Public(), 0, GenBlockHeaderHash(rng), GenPayload(rng)).Header())
 	signed := Sign(key.ForCommittee(committeeA), vote)
+	qc := NewLaneQC([]*Signed[*LaneVote]{signed})
 
 	require.NoError(t, signed.VerifySig(committeeA))
 	require.Error(t, signed.VerifySig(committeeB))
 	require.Error(t, signed.VerifySig(nextEpoch))
+	require.NoError(t, qc.Verify(committeeA))
+	require.Error(t, qc.Verify(committeeB))
+	require.Error(t, qc.Verify(nextEpoch))
 }
 
 func TestSignRejectsUnboundValidatorKey(t *testing.T) {
