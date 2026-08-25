@@ -17,7 +17,7 @@ Protected Ethereum, Solana, and rollback-anchor endpoint declarations use this c
 
 Ethereum configuration pins the chain ID, genesis block, custody contract, immutable runtime or explicit proxy implementation, runtime hashes at the source block, ABI selector, event topic, and the location of every custody field. Solana configuration pins the genesis hash, custody program, immutable ProgramData account and code hash, loader, custody and token authorities, account owners, instruction discriminator, account indices, byte offsets, and integer encoding. No default custody schema or deployment identifier exists.
 
-The journal directory is local durable storage protected by an HMAC key file. Its head is additionally reconciled on every read and append against a strict-majority HTTPS authority. That authority must provide linearizable, durable implementations of:
+The journal directory is absolute local durable storage protected by an HMAC key file. The key path must be absolute, resolve directly to a regular file, and have no group or other permissions. The namespace directory must resolve directly to a directory with no group or other permissions; newly created directories and record/seal files use modes `0700` and `0600`. Unsafe or symlinked storage is refused before replay. Its head is additionally reconciled on every read and append against a strict-majority HTTPS authority. That authority must provide linearizable, durable implementations of:
 
 - `layerx_getMigrationJournalHead([anchor_id])`, returning `{sequence,digest}`.
 - `layerx_advanceMigrationJournalHead([{anchor_id,expected_sequence,expected_digest,sequence,digest}])`, performing an authenticated compare-and-swap and returning the committed `{sequence,digest}`.

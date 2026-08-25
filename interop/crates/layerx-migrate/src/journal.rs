@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{ErrorKind, Write};
 use std::path::PathBuf;
+use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _, PermissionsExt as _};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -136,7 +137,18 @@ pub(crate) struct Journal {
 
 impl Journal {
     pub(crate) fn new(config: &JournalConfig) -> Result<Self, MigrationError> {
-        if !valid_name(&config.namespace) || !valid_key(&config.rollback_anchor_id) {
+        if !valid_name(&config.namespace)
+            || !valid_key(&config.rollback_anchor_id)
+            || !config.directory.is_absolute()
+            || !config.authentication_key_file.is_absolute()
+        {
+            return Err(MigrationError::Configuration);
+        }
+        let key_metadata = fs::symlink_metadata(&config.authentication_key_file)
+            .map_err(|_| MigrationError::Configuration)?;
+        if !key_metadata.file_type().is_file()
+            || key_metadata.permissions().mode() & 0o077 != 0
+        {
             return Err(MigrationError::Configuration);
         }
         let mut key =
@@ -149,7 +161,18 @@ impl Journal {
             return Err(MigrationError::Configuration);
         }
         let directory = config.directory.join(&config.namespace);
-        fs::create_dir_all(&directory).map_err(|_| MigrationError::Configuration)?;
+        let mut builder = fs::DirBuilder::new();
+        builder.recursive(true).mode(0o700);
+        builder
+            .create(&directory)
+            .map_err(|_| MigrationError::Configuration)?;
+        let directory_metadata = fs::symlink_metadata(&directory)
+            .map_err(|_| MigrationError::Configuration)?;
+        if !directory_metadata.file_type().is_dir()
+            || directory_metadata.permissions().mode() & 0o077 != 0
+        {
+            return Err(MigrationError::Configuration);
+        }
         let journal = Self {
             directory,
             key: Zeroizing::new(key),
@@ -380,6 +403,7 @@ impl Journal {
             let mut file = match OpenOptions::new()
                 .create_new(true)
                 .write(true)
+                .mode(0o600)
                 .open(&temporary)
             {
                 Ok(file) => file,
@@ -583,6 +607,7 @@ impl Journal {
         let mut file = OpenOptions::new()
             .create_new(true)
             .write(true)
+            .mode(0o600)
             .open(&temporary)
             .map_err(|_| MigrationError::CheckpointIntegrity)?;
         file.write_all(&bytes)

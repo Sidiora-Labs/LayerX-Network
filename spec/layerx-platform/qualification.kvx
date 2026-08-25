@@ -878,6 +878,14 @@ observed = "Post-implementation review found that migration verification rejecte
 assumption = "Operators must audit and provision one identity per genuinely independent Ethereum, Solana and rollback-anchor backend. Human qualification must prove aliases and duplicate operators are refused, credentials with unsafe modes are refused, and a real independent quorum reaches identical migration facts. No passing build or network result is asserted by this source repair."
 severity = "post-implementation-repair"
 
+[observation.24.1.8]
+task = "24.1"
+file = "interop/crates/layerx-migrate/src/journal.rs, interop/crates/layerx-migrate/OPERATIONS.md"
+symbol = "Journal::new, Journal::append, Journal::write_head_seal"
+observed = "Post-implementation source review found the authenticated migration journal accepted relative or symlinked authentication-key paths without checking key permissions, created its namespace under ordinary directory defaults, and created record and head-seal temporaries under ordinary file defaults. Local users or an unintended filesystem target could therefore obtain the HMAC key or durable migration evidence despite the record MAC and rollback anchor. The repair requires absolute paths, a direct regular key file with no group or other permissions, a direct private namespace directory, and explicit 0700 directory and 0600 record/seal creation modes before journal replay."
+assumption = "Operators must provision the key and any existing namespace with the documented ownership and modes; the verifier intentionally refuses insecure legacy permissions rather than silently changing them. Human qualification must exercise relative paths, symlinks, group/world modes, concurrent append, crash recovery, rollback-anchor outage and restart with retained records. No build, test, formatter, filesystem fault injection or live authority call was run during this source repair."
+severity = "post-implementation-repair"
+
 [observation.25.1.3]
 task = "25.1"
 file = "agent/schema/lni/v1.kvx, interop/crates/layerx-mirror/src/node.rs"
