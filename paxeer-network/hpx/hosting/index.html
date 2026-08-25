@@ -3,612 +3,959 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#070a09">
+  <meta name="theme-color" content="#111216">
   <meta name="description" content="The public HPX distribution and peer registry for the HyperPax network.">
   <title>HPX — HyperPax Node Network</title>
   <style>
+    @font-face {
+      font-family: "LTWave";
+      src: url("/fonts/LTWave-Light.otf") format("opentype");
+      font-style: normal;
+      font-weight: 300;
+      font-display: swap;
+    }
+
+    @font-face {
+      font-family: "LTWave";
+      src: url("/fonts/LTWave-Regular.otf") format("opentype");
+      font-style: normal;
+      font-weight: 400;
+      font-display: swap;
+    }
+
+    @font-face {
+      font-family: "LTWave";
+      src: url("/fonts/LTWave-Medium.otf") format("opentype");
+      font-style: normal;
+      font-weight: 500;
+      font-display: swap;
+    }
+
+    @font-face {
+      font-family: "LTWave";
+      src: url("/fonts/LTWave-Bold.otf") format("opentype");
+      font-style: normal;
+      font-weight: 700;
+      font-display: swap;
+    }
+
+    @font-face {
+      font-family: "LTWaveMono";
+      src: url("/fonts/LTWaveMono-Regular.otf") format("opentype");
+      font-style: normal;
+      font-weight: 400;
+      font-display: swap;
+    }
+
+    @font-face {
+      font-family: "LTWaveMono";
+      src: url("/fonts/LTWaveMono-Medium.otf") format("opentype");
+      font-style: normal;
+      font-weight: 500;
+      font-display: swap;
+    }
+
     :root {
       color-scheme: dark;
-      --bg: #070a09;
-      --surface: rgba(19, 25, 22, 0.76);
-      --surface-strong: #121815;
-      --line: rgba(208, 255, 225, 0.12);
-      --line-strong: rgba(147, 255, 188, 0.28);
-      --text: #f1f8f3;
-      --muted: #91a198;
-      --green: #8dffb4;
-      --green-strong: #43e97b;
-      --cyan: #82e9ff;
-      --orange: #ffc77d;
-      --mono: "SFMono-Regular", "Cascadia Code", "Roboto Mono", Consolas, monospace;
-      --sans: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --ink: #2841b8;
+      --ink-press: #1f3294;
+      --ink-text: oklch(0.8196 0.095 262.84);
+      --surface: oklch(0.145 0.006 262.84);
+      --surface-lowest: oklch(0.105 0.005 262.84);
+      --surface-low: oklch(0.175 0.007 262.84);
+      --surface-container: oklch(0.205 0.008 262.84);
+      --surface-high: oklch(0.24 0.009 262.84);
+      --surface-highest: oklch(0.275 0.01 262.84);
+      --surface-bright: oklch(0.33 0.011 262.84);
+      --on-surface: oklch(0.97 0.003 262.84);
+      --on-surface-variant: oklch(0.79 0.011 262.84);
+      --outline: rgb(226 232 255 / 0.2);
+      --outline-variant: rgb(226 232 255 / 0.1);
+      --primary: oklch(0.8196 0.095 262.84);
+      --primary-container: oklch(0.3529 0.145 262.84);
+      --on-primary: oklch(0.1961 0.086 262.84);
+      --on-primary-container: oklch(0.9216 0.05 262.84);
+      --secondary-container: oklch(0.3059 0.035 262.84);
+      --on-secondary-container: oklch(0.9059 0.03 262.84);
+      --success: oklch(0.8196 0.113 154.91);
+      --warning: oklch(0.8588 0.145 86.05);
+      --shape-xs: 4px;
+      --shape-sm: 8px;
+      --shape-md: 12px;
+      --shape-lg: 16px;
+      --shape-xl: 28px;
+      --shape-full: 9999px;
+      --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+      --duration-short: 150ms;
+      --duration-medium: 300ms;
+      --elevation-1: 0 1px 2px rgb(0 0 0 / 0.3), 0 1px 3px 1px rgb(0 0 0 / 0.15);
+      --elevation-2: 0 1px 2px rgb(0 0 0 / 0.3), 0 2px 6px 2px rgb(0 0 0 / 0.15);
+      --elevation-3: 0 1px 3px rgb(0 0 0 / 0.3), 0 4px 8px 3px rgb(0 0 0 / 0.15);
+      --font-sans: "LTWave", "Google Sans", Roboto, ui-sans-serif, system-ui, sans-serif;
+      --font-mono: "LTWaveMono", ui-monospace, "SFMono-Regular", Menlo, monospace;
     }
 
     * { box-sizing: border-box; }
 
-    html { scroll-behavior: smooth; }
+    html {
+      scroll-behavior: smooth;
+      background: var(--surface);
+    }
 
     body {
-      margin: 0;
       min-width: 320px;
+      margin: 0;
       overflow-x: hidden;
-      background:
-        radial-gradient(circle at 74% 0%, rgba(53, 197, 111, 0.16), transparent 31rem),
-        radial-gradient(circle at 8% 42%, rgba(53, 180, 219, 0.09), transparent 28rem),
-        var(--bg);
-      color: var(--text);
-      font-family: var(--sans);
+      background: var(--surface);
+      color: var(--on-surface);
+      font-family: var(--font-sans);
       -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
     }
 
     body::before {
       position: fixed;
       inset: 0;
-      z-index: -1;
-      background-image:
-        linear-gradient(rgba(255,255,255,0.024) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(255,255,255,0.024) 1px, transparent 1px);
-      background-size: 48px 48px;
-      mask-image: linear-gradient(to bottom, black, transparent 80%);
+      z-index: 20;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='4' stitchTiles='stitchTiles'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
       content: "";
+      opacity: 0.014;
       pointer-events: none;
     }
 
     a { color: inherit; text-decoration: none; }
     button { font: inherit; }
 
-    .shell {
-      width: min(1180px, calc(100% - 40px));
-      margin: 0 auto;
+    ::selection {
+      background: var(--primary-container);
+      color: var(--on-primary-container);
     }
 
-    .nav {
+    :where(a, button):focus-visible {
+      border-radius: var(--shape-xs);
+      outline: 3px solid var(--ink-text);
+      outline-offset: 3px;
+    }
+
+    .shell {
+      width: min(1200px, calc(100% - 48px));
+      margin-inline: auto;
+    }
+
+    .overline {
+      margin: 0;
+      color: var(--ink-text);
+      font-family: var(--font-mono);
+      font-size: 0.6875rem;
+      font-weight: 500;
+      letter-spacing: 0.14em;
+      line-height: 1;
+      text-transform: uppercase;
+    }
+
+    .state-layer {
+      position: relative;
+      isolation: isolate;
+    }
+
+    .state-layer::after {
+      position: absolute;
+      inset: 0;
+      z-index: -1;
+      border-radius: inherit;
+      background: currentColor;
+      content: "";
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity var(--duration-short) var(--ease-standard);
+    }
+
+    .state-layer:hover::after { opacity: 0.08; }
+    .state-layer:active::after { opacity: 0.12; }
+
+    .topbar {
+      position: relative;
+      z-index: 10;
       display: flex;
-      min-height: 86px;
+      min-height: 84px;
       align-items: center;
       justify-content: space-between;
-      border-bottom: 1px solid var(--line);
+      gap: 24px;
     }
 
     .brand {
       display: inline-flex;
       align-items: center;
-      gap: 13px;
+      gap: 12px;
     }
 
-    .brand-mark {
-      display: grid;
+    .brand-logo {
       width: 38px;
       height: 38px;
-      place-items: center;
-      border: 1px solid rgba(141,255,180,.42);
-      border-radius: 12px;
-      background: linear-gradient(145deg, rgba(141,255,180,.17), rgba(130,233,255,.05));
-      box-shadow: inset 0 0 24px rgba(141,255,180,.08), 0 8px 30px rgba(0,0,0,.28);
+      object-fit: contain;
     }
-
-    .brand-mark svg { width: 21px; height: 21px; }
 
     .brand-copy { display: grid; gap: 1px; }
-    .brand-name { font-weight: 750; letter-spacing: -.02em; }
-    .brand-sub {
-      color: var(--muted);
-      font-family: var(--mono);
-      font-size: 9px;
-      letter-spacing: .17em;
+    .brand-name { font-size: 1rem; font-weight: 500; letter-spacing: -0.01em; }
+    .brand-meta {
+      color: var(--on-surface-variant);
+      font-family: var(--font-mono);
+      font-size: 0.625rem;
+      letter-spacing: 0.09em;
       text-transform: uppercase;
     }
 
-    .nav-links {
+    .nav {
       display: flex;
       align-items: center;
-      gap: 28px;
-      color: #bdc9c1;
-      font-size: 14px;
+      gap: 6px;
     }
 
-    .nav-links a { transition: color .18s ease; }
-    .nav-links a:hover { color: var(--green); }
+    .nav-link {
+      padding: 10px 16px;
+      border-radius: var(--shape-full);
+      color: var(--on-surface-variant);
+      font-size: 0.875rem;
+      font-weight: 500;
+    }
 
-    .github-link {
+    .nav-link:hover { color: var(--on-surface); }
+
+    .status-chip {
       display: inline-flex;
+      min-height: 36px;
       align-items: center;
       gap: 8px;
-      padding: 10px 14px;
-      border: 1px solid var(--line);
-      border-radius: 999px;
-      background: rgba(255,255,255,.025);
-    }
-
-    .hero {
-      display: grid;
-      grid-template-columns: minmax(0, 1.35fr) minmax(320px, .65fr);
-      gap: clamp(46px, 8vw, 112px);
-      align-items: center;
-      min-height: 650px;
-      padding: 76px 0 86px;
-    }
-
-    .eyebrow {
-      display: inline-flex;
-      align-items: center;
-      gap: 10px;
-      margin-bottom: 24px;
-      color: var(--green);
-      font-family: var(--mono);
-      font-size: 11px;
-      font-weight: 700;
-      letter-spacing: .16em;
+      margin-left: 4px;
+      padding: 0 14px;
+      border-radius: var(--shape-full);
+      background: var(--secondary-container);
+      color: var(--on-secondary-container);
+      font-family: var(--font-mono);
+      font-size: 0.6875rem;
+      font-weight: 500;
+      letter-spacing: 0.04em;
       text-transform: uppercase;
-    }
-
-    .eyebrow::before {
-      width: 28px;
-      height: 1px;
-      background: currentColor;
-      content: "";
-    }
-
-    h1 {
-      max-width: 760px;
-      margin: 0;
-      font-size: clamp(52px, 7.3vw, 96px);
-      font-weight: 720;
-      letter-spacing: -.066em;
-      line-height: .94;
-    }
-
-    h1 span {
-      color: transparent;
-      background: linear-gradient(90deg, var(--green), var(--cyan));
-      -webkit-background-clip: text;
-      background-clip: text;
-    }
-
-    .hero-copy {
-      max-width: 630px;
-      margin: 30px 0 34px;
-      color: #a9b8af;
-      font-size: clamp(17px, 2vw, 20px);
-      line-height: 1.65;
-    }
-
-    .terminal {
-      display: flex;
-      max-width: 690px;
-      min-height: 64px;
-      align-items: center;
-      gap: 14px;
-      padding: 12px 13px 12px 20px;
-      overflow: hidden;
-      border: 1px solid var(--line-strong);
-      border-radius: 16px;
-      background: rgba(5, 8, 7, .84);
-      box-shadow: 0 24px 80px rgba(0,0,0,.34), inset 0 1px rgba(255,255,255,.03);
-    }
-
-    .prompt {
-      flex: 0 0 auto;
-      color: var(--green);
-      font-family: var(--mono);
-      font-weight: 800;
-    }
-
-    .command {
-      min-width: 0;
-      flex: 1;
-      overflow: hidden;
-      color: #d8e4dc;
-      font-family: var(--mono);
-      font-size: 13px;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-
-    .copy {
-      flex: 0 0 auto;
-      padding: 10px 14px;
-      border: 1px solid var(--line);
-      border-radius: 10px;
-      background: #17201b;
-      color: #dce8e0;
-      cursor: pointer;
-      font-family: var(--mono);
-      font-size: 11px;
-      font-weight: 700;
-      letter-spacing: .06em;
-      text-transform: uppercase;
-      transition: border-color .18s ease, color .18s ease, transform .18s ease;
-    }
-
-    .copy:hover { border-color: var(--green); color: var(--green); }
-    .copy:active { transform: translateY(1px); }
-
-    .assurances {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 18px;
-      margin-top: 22px;
-      color: var(--muted);
-      font-family: var(--mono);
-      font-size: 11px;
-    }
-
-    .assurances span { display: inline-flex; align-items: center; gap: 7px; }
-    .assurances span::before {
-      width: 5px;
-      height: 5px;
-      border-radius: 50%;
-      background: var(--green-strong);
-      box-shadow: 0 0 10px rgba(67,233,123,.65);
-      content: "";
-    }
-
-    .pulse-card {
-      position: relative;
-      padding: 1px;
-      border-radius: 24px;
-      background: linear-gradient(145deg, rgba(141,255,180,.42), rgba(130,233,255,.08) 45%, rgba(255,255,255,.05));
-      box-shadow: 0 35px 110px rgba(0,0,0,.38);
-    }
-
-    .pulse-inner {
-      padding: 26px;
-      border-radius: 23px;
-      background: linear-gradient(150deg, rgba(18,25,21,.98), rgba(8,12,10,.98));
-    }
-
-    .pulse-head {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      margin-bottom: 28px;
-    }
-
-    .pulse-title {
-      color: #dce8e0;
-      font-family: var(--mono);
-      font-size: 11px;
-      font-weight: 700;
-      letter-spacing: .13em;
-      text-transform: uppercase;
-    }
-
-    .status {
-      display: inline-flex;
-      align-items: center;
-      gap: 7px;
-      color: var(--orange);
-      font-family: var(--mono);
-      font-size: 10px;
-      text-transform: uppercase;
+      box-shadow: var(--elevation-1);
     }
 
     .status-dot {
       width: 7px;
       height: 7px;
       border-radius: 50%;
-      background: currentColor;
-      box-shadow: 0 0 14px currentColor;
+      background: var(--warning);
+      box-shadow: 0 0 0 4px color-mix(in oklab, var(--warning) 16%, transparent);
     }
 
-    .status.online { color: var(--green); }
-
-    .stat-grid { display: grid; gap: 1px; background: var(--line); }
-
-    .stat {
-      display: grid;
-      grid-template-columns: 1fr auto;
-      gap: 20px;
-      align-items: end;
-      padding: 18px 0;
-      background: #0d1310;
+    .status-chip.is-online .status-dot {
+      background: var(--success);
+      box-shadow: 0 0 0 4px color-mix(in oklab, var(--success) 16%, transparent);
     }
 
-    .stat:first-child { padding-top: 4px; }
-    .stat:last-child { padding-bottom: 4px; }
-    .stat-label { color: var(--muted); font-size: 12px; }
-    .stat-value {
-      max-width: 190px;
+    .hero-wrap {
+      position: relative;
       overflow: hidden;
-      color: #edf7f0;
-      font-family: var(--mono);
-      font-size: 12px;
-      text-align: right;
+      border-radius: 0 0 var(--shape-xl) var(--shape-xl);
+      background:
+        radial-gradient(circle at 82% 38%, color-mix(in oklab, var(--ink) 33%, transparent), transparent 27rem),
+        linear-gradient(180deg, var(--surface-lowest), var(--surface));
+    }
+
+    .hero-wrap::after {
+      position: absolute;
+      inset: 0;
+      background-image:
+        linear-gradient(rgb(226 232 255 / 0.035) 1px, transparent 1px),
+        linear-gradient(90deg, rgb(226 232 255 / 0.035) 1px, transparent 1px);
+      background-size: 64px 64px;
+      mask-image: linear-gradient(to bottom, black, transparent 88%);
+      content: "";
+      pointer-events: none;
+    }
+
+    .hero {
+      position: relative;
+      z-index: 1;
+      display: grid;
+      grid-template-columns: minmax(0, 1.04fr) minmax(360px, 0.96fr);
+      gap: clamp(48px, 7vw, 96px);
+      align-items: center;
+      min-height: 680px;
+      padding: 82px 0 96px;
+    }
+
+    .hero h1 {
+      max-width: 720px;
+      margin: 25px 0 0;
+      font-size: clamp(3.2rem, 6.2vw, 5.6rem);
+      font-weight: 300;
+      letter-spacing: -0.04em;
+      line-height: 0.98;
+    }
+
+    .hero h1 strong {
+      display: block;
+      color: var(--ink-text);
+      font-weight: 400;
+    }
+
+    .hero-copy {
+      max-width: 610px;
+      margin: 28px 0 0;
+      color: var(--on-surface-variant);
+      font-size: 1.0625rem;
+      letter-spacing: 0.003em;
+      line-height: 1.65;
+    }
+
+    .hero-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 34px;
+    }
+
+    .button {
+      display: inline-flex;
+      min-height: 48px;
+      align-items: center;
+      justify-content: center;
+      gap: 9px;
+      padding: 0 22px;
+      border: 0;
+      border-radius: var(--shape-full);
+      cursor: pointer;
+      font-size: 0.875rem;
+      font-weight: 500;
+      letter-spacing: 0.007em;
+    }
+
+    .button-primary {
+      background: var(--primary);
+      color: var(--on-primary);
+      box-shadow: var(--elevation-1);
+    }
+
+    .button-tonal {
+      background: var(--secondary-container);
+      color: var(--on-secondary-container);
+    }
+
+    .button svg { width: 17px; height: 17px; }
+
+    .network-visual {
+      position: relative;
+      display: grid;
+      min-height: 480px;
+      place-items: center;
+    }
+
+    .orbit {
+      position: absolute;
+      width: min(450px, 100%);
+      aspect-ratio: 1;
+      border: 1px solid var(--outline-variant);
+      border-radius: 50%;
+    }
+
+    .orbit::before,
+    .orbit::after {
+      position: absolute;
+      border: 1px solid var(--outline-variant);
+      border-radius: 50%;
+      content: "";
+    }
+
+    .orbit::before { inset: 14%; }
+    .orbit::after { inset: 29%; }
+
+    .orbit-node {
+      position: absolute;
+      top: 48%;
+      left: -5px;
+      width: 11px;
+      height: 11px;
+      border: 2px solid var(--surface-lowest);
+      border-radius: 50%;
+      background: var(--primary);
+      box-shadow: 0 0 24px color-mix(in oklab, var(--primary) 62%, transparent);
+      transform-origin: calc(225px + 5px) center;
+      animation: orbit 24s linear infinite;
+    }
+
+    .logo-core {
+      position: relative;
+      z-index: 2;
+      display: grid;
+      width: 174px;
+      height: 174px;
+      place-items: center;
+      border-radius: 50%;
+      background: var(--surface-container);
+      box-shadow: var(--elevation-3), inset 0 0 0 1px var(--outline-variant);
+    }
+
+    .logo-core::before {
+      position: absolute;
+      inset: 12px;
+      border: 1px solid var(--outline-variant);
+      border-radius: inherit;
+      content: "";
+    }
+
+    .logo-core img {
+      position: relative;
+      z-index: 1;
+      width: 94px;
+      height: 94px;
+      object-fit: contain;
+      filter: saturate(0.92) brightness(1.08);
+    }
+
+    .visual-label {
+      position: absolute;
+      z-index: 3;
+      display: grid;
+      min-width: 160px;
+      gap: 3px;
+      padding: 14px 16px;
+      border-radius: var(--shape-md);
+      background: color-mix(in oklab, var(--surface-high) 92%, transparent);
+      box-shadow: var(--elevation-2);
+      backdrop-filter: blur(16px);
+    }
+
+    .visual-label span {
+      color: var(--on-surface-variant);
+      font-family: var(--font-mono);
+      font-size: 0.625rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .visual-label strong {
+      overflow: hidden;
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      font-weight: 500;
       text-overflow: ellipsis;
       white-space: nowrap;
     }
 
-    .revision {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 16px;
-      margin-top: 24px;
-      padding: 13px 15px;
-      border: 1px solid var(--line);
-      border-radius: 12px;
-      color: var(--muted);
-      font-family: var(--mono);
-      font-size: 10px;
+    .visual-label.chain { top: 58px; right: 0; }
+    .visual-label.release { bottom: 52px; left: 2px; }
+
+    @keyframes orbit { to { transform: rotate(360deg); } }
+
+    .install-panel {
+      position: relative;
+      z-index: 2;
+      margin-top: -38px;
+      padding-bottom: 42px;
     }
 
-    .revision code { color: var(--cyan); }
+    .install-card {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      gap: 17px;
+      align-items: center;
+      min-height: 92px;
+      padding: 18px 20px 18px 24px;
+      border-radius: var(--shape-xl);
+      background: var(--surface-high);
+      box-shadow: var(--elevation-3);
+    }
+
+    .terminal-mark {
+      display: grid;
+      width: 43px;
+      height: 43px;
+      place-items: center;
+      border-radius: var(--shape-md);
+      background: var(--primary-container);
+      color: var(--on-primary-container);
+      font-family: var(--font-mono);
+      font-size: 1rem;
+      font-weight: 500;
+    }
+
+    .install-copy { min-width: 0; }
+    .install-label {
+      display: block;
+      margin-bottom: 7px;
+      color: var(--on-surface-variant);
+      font-size: 0.75rem;
+      letter-spacing: 0.03em;
+    }
+
+    .command {
+      display: block;
+      overflow: hidden;
+      color: var(--on-surface);
+      font-family: var(--font-mono);
+      font-size: clamp(0.6875rem, 1.5vw, 0.8125rem);
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .copy-button { min-width: 94px; }
+
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 12px;
+      padding: 38px 0 96px;
+    }
+
+    .metric {
+      min-width: 0;
+      padding: 24px;
+      border-radius: var(--shape-lg);
+      background: var(--surface-low);
+    }
+
+    .metric-label {
+      display: block;
+      margin-bottom: 14px;
+      color: var(--on-surface-variant);
+      font-size: 0.75rem;
+      letter-spacing: 0.03em;
+    }
+
+    .metric-value {
+      display: block;
+      overflow: hidden;
+      font-family: var(--font-mono);
+      font-size: 0.9375rem;
+      font-weight: 500;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
 
     .section {
-      padding: 98px 0;
-      border-top: 1px solid var(--line);
+      padding: 110px 0;
     }
 
-    .section-head {
-      display: flex;
+    .section-heading {
+      display: grid;
+      grid-template-columns: 1fr minmax(280px, 410px);
+      gap: 40px;
       align-items: end;
-      justify-content: space-between;
-      gap: 30px;
-      margin-bottom: 44px;
+      margin-bottom: 48px;
     }
 
-    .section-kicker {
-      margin: 0 0 13px;
-      color: var(--green);
-      font-family: var(--mono);
-      font-size: 10px;
-      font-weight: 700;
-      letter-spacing: .15em;
-      text-transform: uppercase;
+    .section-heading h2 {
+      max-width: 720px;
+      margin: 17px 0 0;
+      font-size: clamp(2.4rem, 4.6vw, 3.5625rem);
+      font-weight: 400;
+      letter-spacing: -0.02em;
+      line-height: 1.05;
     }
 
-    h2 {
-      max-width: 650px;
+    .section-heading > p {
       margin: 0;
-      font-size: clamp(34px, 4.6vw, 58px);
-      font-weight: 680;
-      letter-spacing: -.045em;
-      line-height: 1.04;
-    }
-
-    .section-note {
-      max-width: 340px;
-      margin: 0;
-      color: var(--muted);
-      font-size: 14px;
+      color: var(--on-surface-variant);
+      font-size: 0.9375rem;
       line-height: 1.65;
     }
 
     .feature-grid {
       display: grid;
-      grid-template-columns: repeat(3, 1fr);
+      grid-template-columns: 1.15fr 0.85fr;
       gap: 16px;
     }
 
-    .feature {
-      min-height: 260px;
-      padding: 26px;
-      border: 1px solid var(--line);
-      border-radius: 18px;
-      background: linear-gradient(145deg, rgba(23,31,27,.74), rgba(11,15,13,.7));
+    .feature-card {
+      position: relative;
+      min-height: 310px;
+      overflow: hidden;
+      padding: 30px;
+      border-radius: var(--shape-xl);
+      background: var(--surface-low);
+      box-shadow: var(--elevation-1);
     }
 
-    .feature-number {
+    .feature-card.primary {
+      grid-row: span 2;
+      min-height: 636px;
+      background: var(--primary-container);
+      color: var(--on-primary-container);
+    }
+
+    .feature-card.primary::after {
+      position: absolute;
+      right: -90px;
+      bottom: -140px;
+      width: 430px;
+      height: 430px;
+      border: 74px solid color-mix(in oklab, var(--primary) 13%, transparent);
+      border-radius: 50%;
+      content: "";
+    }
+
+    .feature-icon {
       display: grid;
-      width: 34px;
-      height: 34px;
+      width: 48px;
+      height: 48px;
       place-items: center;
-      margin-bottom: 48px;
-      border: 1px solid var(--line-strong);
-      border-radius: 10px;
-      color: var(--green);
-      font-family: var(--mono);
-      font-size: 11px;
+      margin-bottom: 72px;
+      border-radius: var(--shape-md);
+      background: var(--surface-high);
+      color: var(--ink-text);
     }
 
-    .feature h3 { margin: 0 0 12px; font-size: 18px; letter-spacing: -.02em; }
-    .feature p { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.65; }
+    .primary .feature-icon {
+      background: color-mix(in oklab, var(--on-primary-container) 11%, transparent);
+      color: var(--on-primary-container);
+    }
 
-    .surface {
+    .feature-icon svg { width: 22px; height: 22px; }
+
+    .feature-card h3 {
+      position: relative;
+      z-index: 1;
+      max-width: 450px;
+      margin: 0 0 13px;
+      font-size: 1.5rem;
+      font-weight: 500;
+      line-height: 1.3;
+    }
+
+    .feature-card p {
+      position: relative;
+      z-index: 1;
+      max-width: 500px;
+      margin: 0;
+      color: var(--on-surface-variant);
+      font-size: 0.875rem;
+      letter-spacing: 0.016em;
+      line-height: 1.65;
+    }
+
+    .primary p { color: color-mix(in oklab, var(--on-primary-container) 78%, transparent); }
+
+    .feature-proof {
+      position: absolute;
+      right: 30px;
+      bottom: 30px;
+      left: 30px;
+      z-index: 1;
       display: grid;
-      grid-template-columns: .8fr 1.2fr;
-      gap: clamp(40px, 8vw, 110px);
-      align-items: start;
+      gap: 10px;
     }
 
-    .surface-copy { position: sticky; top: 40px; }
-    .surface-copy p { color: var(--muted); line-height: 1.7; }
+    .proof-row {
+      display: flex;
+      min-width: 0;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 15px 17px;
+      border-radius: var(--shape-md);
+      background: color-mix(in oklab, var(--surface-lowest) 58%, transparent);
+      font-family: var(--font-mono);
+      font-size: 0.6875rem;
+    }
+
+    .proof-row span { opacity: 0.75; }
+    .proof-row strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    .light-band {
+      color-scheme: light;
+      padding: 112px 0;
+      border-radius: var(--shape-xl) var(--shape-xl) 0 0;
+      background: oklch(0.9863 0.0028 262.84);
+      color: oklch(0.1961 0.011 262.84);
+    }
+
+    .light-band .overline { color: var(--ink); }
+    .light-band .section-heading > p { color: oklch(0.3765 0.014 262.84); }
 
     .endpoint-list {
-      border-top: 1px solid var(--line);
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 12px;
     }
 
     .endpoint {
       display: grid;
-      grid-template-columns: 60px minmax(150px, .9fr) 1.2fr 20px;
-      gap: 18px;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      gap: 15px;
       align-items: center;
-      padding: 19px 0;
-      border-bottom: 1px solid var(--line);
-      transition: color .18s ease, border-color .18s ease;
+      min-height: 82px;
+      padding: 18px 20px;
+      border-radius: var(--shape-lg);
+      background: oklch(0.9569 0.0055 262.84);
+      transition: background var(--duration-short) var(--ease-standard), transform var(--duration-short) var(--ease-standard);
     }
 
-    .endpoint:hover { color: var(--green); border-color: var(--line-strong); }
-    .method { color: var(--green); font-family: var(--mono); font-size: 10px; font-weight: 800; }
-    .path { font-family: var(--mono); font-size: 12px; }
-    .purpose { color: var(--muted); font-size: 13px; }
-    .arrow { color: var(--muted); font-size: 17px; }
+    .endpoint:hover {
+      background: oklch(0.9255 0.0072 262.84);
+      transform: translateY(-2px);
+    }
+
+    .method {
+      display: grid;
+      min-width: 43px;
+      height: 32px;
+      place-items: center;
+      border-radius: var(--shape-sm);
+      background: oklch(0.9216 0.05 262.84);
+      color: oklch(0.2941 0.13 262.84);
+      font-family: var(--font-mono);
+      font-size: 0.625rem;
+      font-weight: 500;
+    }
+
+    .endpoint-copy { min-width: 0; }
+    .endpoint-path {
+      display: block;
+      overflow: hidden;
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      font-weight: 500;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .endpoint-purpose {
+      display: block;
+      margin-top: 4px;
+      color: oklch(0.4667 0.015 262.84);
+      font-size: 0.75rem;
+    }
+
+    .endpoint-arrow { color: var(--ink); font-size: 1.1rem; }
 
     .footer {
+      padding: 84px 0 36px;
+      background: var(--surface-lowest);
+    }
+
+    .footer-wordmark {
+      margin: 0;
+      overflow: hidden;
+      color: var(--surface-bright);
+      font-size: clamp(4rem, 13vw, 10rem);
+      font-weight: 300;
+      letter-spacing: -0.06em;
+      line-height: 0.8;
+      white-space: nowrap;
+    }
+
+    .footer-bottom {
       display: flex;
-      min-height: 120px;
       align-items: center;
       justify-content: space-between;
       gap: 24px;
-      border-top: 1px solid var(--line);
-      color: var(--muted);
-      font-size: 12px;
+      margin-top: 72px;
+      padding-top: 24px;
+      border-top: 1px solid var(--outline-variant);
+      color: var(--on-surface-variant);
+      font-size: 0.75rem;
     }
 
-    .footer code { color: #b8c7be; font-family: var(--mono); }
+    .footer-bottom code { font-family: var(--font-mono); font-size: 0.6875rem; }
 
-    @media (max-width: 900px) {
-      .hero { grid-template-columns: 1fr; min-height: auto; padding-top: 64px; }
-      .pulse-card { max-width: 560px; }
+    @media (max-width: 940px) {
+      .hero { grid-template-columns: 1fr; padding-top: 68px; }
+      .hero-copy { max-width: 700px; }
+      .network-visual { min-height: 430px; }
+      .metrics { grid-template-columns: repeat(2, 1fr); }
+      .section-heading { grid-template-columns: 1fr; }
       .feature-grid { grid-template-columns: 1fr; }
-      .feature { min-height: 0; }
-      .feature-number { margin-bottom: 28px; }
-      .surface { grid-template-columns: 1fr; }
-      .surface-copy { position: static; }
+      .feature-card.primary { grid-row: auto; min-height: 600px; }
     }
 
-    @media (max-width: 640px) {
-      .shell { width: min(100% - 28px, 1180px); }
-      .nav { min-height: 74px; }
-      .nav-links > a:not(.github-link) { display: none; }
-      .github-link span { display: none; }
-      .hero { padding: 52px 0 70px; }
-      h1 { font-size: clamp(49px, 16vw, 70px); }
-      .terminal { align-items: stretch; flex-wrap: wrap; padding: 15px; }
-      .prompt { align-self: center; }
-      .command { align-self: center; font-size: 11px; }
-      .copy { width: 100%; }
-      .section { padding: 72px 0; }
-      .section-head { display: block; }
-      .section-note { margin-top: 20px; }
-      .endpoint { grid-template-columns: 48px 1fr 18px; }
-      .purpose { display: none; }
-      .footer { align-items: flex-start; flex-direction: column; justify-content: center; }
+    @media (max-width: 680px) {
+      .shell { width: min(100% - 28px, 1200px); }
+      .topbar { min-height: 74px; }
+      .brand-meta { display: none; }
+      .nav-link { display: none; }
+      .status-chip { padding: 0 12px; }
+      .status-chip span:last-child { max-width: 72px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .hero { min-height: auto; padding: 58px 0 72px; }
+      .hero h1 { font-size: clamp(3rem, 15vw, 4.6rem); }
+      .network-visual { min-height: 360px; }
+      .orbit { width: 340px; }
+      .orbit-node { transform-origin: 175px center; }
+      .logo-core { width: 142px; height: 142px; }
+      .logo-core img { width: 76px; height: 76px; }
+      .visual-label { min-width: 132px; padding: 12px; }
+      .visual-label.chain { top: 34px; }
+      .visual-label.release { bottom: 25px; }
+      .install-panel { margin-top: -22px; }
+      .install-card { grid-template-columns: auto minmax(0, 1fr); border-radius: var(--shape-lg); }
+      .copy-button { grid-column: 1 / -1; width: 100%; }
+      .metrics { grid-template-columns: 1fr; padding-bottom: 76px; }
+      .section, .light-band { padding: 82px 0; }
+      .feature-card { padding: 24px; }
+      .feature-card.primary { min-height: 620px; }
+      .feature-proof { right: 24px; bottom: 24px; left: 24px; }
+      .endpoint-list { grid-template-columns: 1fr; }
+      .footer-bottom { align-items: flex-start; flex-direction: column; }
     }
 
     @media (prefers-reduced-motion: reduce) {
       html { scroll-behavior: auto; }
-      *, *::before, *::after { animation: none !important; transition: none !important; }
+      *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+      }
     }
   </style>
 </head>
 <body>
-  <header class="shell nav">
-    <a class="brand" href="/" aria-label="HyperPax home">
-      <span class="brand-mark" aria-hidden="true">
-        <svg viewBox="0 0 24 24" fill="none">
-          <path d="M5 7.2 12 3l7 4.2v9.6L12 21l-7-4.2V7.2Z" stroke="#8dffb4" stroke-width="1.4"/>
-          <path d="m8.2 9.1 3.8-2.2 3.8 2.2v5.8L12 17.1l-3.8-2.2V9.1Z" fill="#8dffb4" fill-opacity=".18" stroke="#82e9ff" stroke-width="1.1"/>
-          <circle cx="12" cy="12" r="1.3" fill="#8dffb4"/>
-        </svg>
-      </span>
-      <span class="brand-copy">
-        <span class="brand-name">HyperPax</span>
-        <span class="brand-sub">HPX node network</span>
-      </span>
-    </a>
-    <nav class="nav-links" aria-label="Primary navigation">
-      <a href="#network">Network</a>
-      <a href="#endpoints">Endpoints</a>
-      <a class="github-link" href="https://github.com/Sidiora-Labs/LayerX-Protocol/tree/main/paxeer-network/hpx" rel="noreferrer">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .7A11.5 11.5 0 0 0 8.36 23.1c.58.1.79-.25.79-.56v-2.23c-3.24.7-3.92-1.37-3.92-1.37-.53-1.34-1.29-1.7-1.29-1.7-1.05-.72.08-.71.08-.71 1.16.08 1.78 1.2 1.78 1.2 1.04 1.77 2.71 1.26 3.37.96.1-.75.4-1.26.74-1.55-2.58-.3-5.3-1.29-5.3-5.68 0-1.26.45-2.28 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.16 1.18a10.98 10.98 0 0 1 5.76 0c2.2-1.49 3.16-1.18 3.16-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.83 1.19 3.09 0 4.4-2.72 5.38-5.31 5.67.42.36.79 1.06.79 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .7Z"/></svg>
-        <span>Source</span>
+  <div class="hero-wrap">
+    <header class="shell topbar">
+      <a class="brand" href="/" aria-label="Paxeer Network home">
+        <img class="brand-logo" src="/paxeer-logo.png" alt="">
+        <span class="brand-copy">
+          <span class="brand-name">Paxeer Network</span>
+          <span class="brand-meta">HyperPax public node gateway</span>
+        </span>
       </a>
-    </nav>
-  </header>
+      <nav class="nav" aria-label="Primary navigation">
+        <a class="nav-link state-layer" href="#operations">Operations</a>
+        <a class="nav-link state-layer" href="#endpoints">Endpoints</a>
+        <span class="status-chip" id="registry-status" aria-live="polite">
+          <span class="status-dot"></span>
+          <span id="registry-label">Checking registry</span>
+        </span>
+      </nav>
+    </header>
 
-  <main>
     <section class="shell hero">
       <div>
-        <div class="eyebrow">Paxeer public node gateway</div>
-        <h1>Run the network.<br><span>Own the edge.</span></h1>
-        <p class="hero-copy">Install a checksum-verified Paxeer node, discover the live peer set, and operate HyperPax from one authenticated public origin.</p>
-        <div class="terminal" aria-label="HPX installation command">
-          <span class="prompt">$</span>
-          <code class="command" id="install-command">curl -fsSL https://node.hyperpaxeer.com/get-hpx.sh | sudo bash</code>
-          <button class="copy" id="copy-command" type="button">Copy</button>
-        </div>
-        <div class="assurances" aria-label="Distribution properties">
-          <span>SHA-256 verified</span>
-          <span>x86-64 + ARM64</span>
-          <span>Immutable releases</span>
+        <p class="overline">HPX / Node distribution 3.1</p>
+        <h1>Public infrastructure for the <strong>HyperPax network.</strong></h1>
+        <p class="hero-copy">Install a checksum-bound Paxeer node, discover the live peer set, and bootstrap against current state from one authenticated public origin.</p>
+        <div class="hero-actions">
+          <a class="button button-primary state-layer" href="#install">
+            Install HPX
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M7 17 17 7M8 7h9v9" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </a>
+          <a class="button button-tonal state-layer" href="https://github.com/Sidiora-Labs/LayerX-Protocol/tree/main/paxeer-network/hpx" rel="noreferrer">View source</a>
         </div>
       </div>
 
-      <aside class="pulse-card" aria-label="Live network status">
-        <div class="pulse-inner">
-          <div class="pulse-head">
-            <span class="pulse-title">Network pulse</span>
-            <span class="status" id="registry-status"><span class="status-dot"></span><span id="registry-label">Checking</span></span>
-          </div>
-          <div class="stat-grid">
-            <div class="stat">
-              <span class="stat-label">Chain</span>
-              <strong class="stat-value" id="chain-id">hyperpax_125-1</strong>
-            </div>
-            <div class="stat">
-              <span class="stat-label">EVM chain ID</span>
-              <strong class="stat-value" id="evm-chain-id">125</strong>
-            </div>
-            <div class="stat">
-              <span class="stat-label">Published release</span>
-              <strong class="stat-value" id="release-id">Checking…</strong>
-            </div>
-            <div class="stat">
-              <span class="stat-label">Discoverable peers</span>
-              <strong class="stat-value" id="peer-count">Checking…</strong>
-            </div>
-          </div>
-          <div class="revision">
-            <span>Registry revision</span>
-            <code id="source-revision">checking</code>
-          </div>
+      <div class="network-visual" aria-hidden="true">
+        <div class="orbit"><span class="orbit-node"></span></div>
+        <div class="logo-core"><img src="/paxeer-logo.png" alt=""></div>
+        <div class="visual-label chain">
+          <span>Network</span>
+          <strong id="visual-chain">hyperpax_125-1</strong>
         </div>
-      </aside>
-    </section>
-
-    <section class="section" id="network">
-      <div class="shell">
-        <div class="section-head">
-          <div>
-            <p class="section-kicker">Operator first</p>
-            <h2>Everything required to join HyperPax.</h2>
-          </div>
-          <p class="section-note">HPX keeps node installation, updates, peer discovery, and state-sync configuration behind one stable interface.</p>
-        </div>
-        <div class="feature-grid">
-          <article class="feature">
-            <span class="feature-number">01</span>
-            <h3>Authenticated distribution</h3>
-            <p>Every binary, native runtime, genesis file, and configuration is checked against the release manifest before installation.</p>
-          </article>
-          <article class="feature">
-            <span class="feature-number">02</span>
-            <h3>One-command operations</h3>
-            <p>Set up, inspect, update, register, refresh peers, configure state sync, and remove a node through the HPX manager.</p>
-          </article>
-          <article class="feature">
-            <span class="feature-number">03</span>
-            <h3>Live peer discovery</h3>
-            <p>The public registry observes announced nodes at the trusted proxy boundary and returns the current HyperPax peer mesh.</p>
-          </article>
+        <div class="visual-label release">
+          <span>Published release</span>
+          <strong id="visual-release">Loading…</strong>
         </div>
       </div>
     </section>
+  </div>
 
-    <section class="section" id="endpoints">
-      <div class="shell surface">
-        <div class="surface-copy">
-          <p class="section-kicker">Public surface</p>
-          <h2>Simple endpoints. Exact artifacts.</h2>
-          <p>Directory listings and undeclared filesystem paths stay unavailable. The published manifest names the distribution boundary.</p>
-        </div>
-        <div class="endpoint-list" aria-label="Public HPX endpoints">
-          <a class="endpoint" href="/healthz"><span class="method">GET</span><span class="path">/healthz</span><span class="purpose">Registry health and revision</span><span class="arrow">↗</span></a>
-          <a class="endpoint" href="/chain-info.json"><span class="method">GET</span><span class="path">/chain-info.json</span><span class="purpose">Chain and release metadata</span><span class="arrow">↗</span></a>
-          <a class="endpoint" href="/checksums.txt"><span class="method">GET</span><span class="path">/checksums.txt</span><span class="purpose">Sorted SHA-256 manifest</span><span class="arrow">↗</span></a>
-          <a class="endpoint" href="/api/peers"><span class="method">GET</span><span class="path">/api/peers</span><span class="purpose">Current peer discovery</span><span class="arrow">↗</span></a>
-          <a class="endpoint" href="/api/nodes"><span class="method">GET</span><span class="path">/api/nodes</span><span class="purpose">Registered node set</span><span class="arrow">↗</span></a>
-          <a class="endpoint" href="/api/statesync"><span class="method">GET</span><span class="path">/api/statesync</span><span class="purpose">Fresh trust parameters</span><span class="arrow">↗</span></a>
-        </div>
+  <section class="shell install-panel" id="install">
+    <div class="install-card">
+      <span class="terminal-mark">$_</span>
+      <div class="install-copy">
+        <span class="install-label">Install the checksum-verifying HPX manager</span>
+        <code class="command" id="install-command">curl -fsSL https://node.hyperpaxeer.com/get-hpx.sh | sudo bash</code>
       </div>
-    </section>
-  </main>
+      <button class="button button-primary state-layer copy-button" id="copy-command" type="button">Copy command</button>
+    </div>
+  </section>
 
-  <footer class="shell footer">
-    <span>HyperPax node infrastructure by Sidiora Labs.</span>
-    <code>node.hyperpaxeer.com · TLS secured</code>
+  <section class="shell metrics" aria-label="Live network metrics">
+    <div class="metric">
+      <span class="metric-label">Chain ID</span>
+      <strong class="metric-value" id="chain-id">hyperpax_125-1</strong>
+    </div>
+    <div class="metric">
+      <span class="metric-label">EVM chain</span>
+      <strong class="metric-value" id="evm-chain-id">125</strong>
+    </div>
+    <div class="metric">
+      <span class="metric-label">Discoverable peers</span>
+      <strong class="metric-value" id="peer-count">Loading…</strong>
+    </div>
+    <div class="metric">
+      <span class="metric-label">Latest state height</span>
+      <strong class="metric-value" id="latest-height">Loading…</strong>
+    </div>
+  </section>
+
+  <section class="shell section" id="operations">
+    <div class="section-heading">
+      <div>
+        <p class="overline">Operator first</p>
+        <h2>One public boundary. Every node operation.</h2>
+      </div>
+      <p>HPX connects immutable artifacts, integrity verification, peer discovery, and state sync without requiring a private source checkout.</p>
+    </div>
+
+    <div class="feature-grid">
+      <article class="feature-card primary">
+        <div class="feature-icon">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m12 3 7 3.5v5.25c0 4.13-2.92 7.68-7 8.75-4.08-1.07-7-4.62-7-8.75V6.5L12 3Z" stroke="currentColor" stroke-width="1.7"/><path d="m8.7 12 2.1 2.1 4.6-4.7" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </div>
+        <h3>Integrity is part of installation.</h3>
+        <p>The manager verifies the binary, all native runtimes, genesis, and the selected node configuration against the published SHA-256 manifest before anything is installed.</p>
+        <div class="feature-proof">
+          <div class="proof-row"><span>Artifact release</span><strong id="proof-release">Loading…</strong></div>
+          <div class="proof-row"><span>Registry source</span><strong id="source-revision">Loading…</strong></div>
+          <div class="proof-row"><span>Manifest</span><strong>SHA-256 / sorted</strong></div>
+        </div>
+      </article>
+
+      <article class="feature-card">
+        <div class="feature-icon">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="6" cy="12" r="2.5" stroke="currentColor" stroke-width="1.7"/><circle cx="18" cy="7" r="2.5" stroke="currentColor" stroke-width="1.7"/><circle cx="18" cy="17" r="2.5" stroke="currentColor" stroke-width="1.7"/><path d="m8.3 11 7.3-3M8.3 13l7.3 3" stroke="currentColor" stroke-width="1.7"/></svg>
+        </div>
+        <h3>Live peer discovery</h3>
+        <p>Nodes announce at the trusted proxy boundary and receive the current persistent peer mesh without exposing internal deployment state.</p>
+      </article>
+
+      <article class="feature-card">
+        <div class="feature-icon">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 5.5h14v13H5z" stroke="currentColor" stroke-width="1.7"/><path d="m8 9 2 2-2 2M12.5 14H16" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </div>
+        <h3>Simple node lifecycle</h3>
+        <p>Set up, inspect, update, register, refresh peers, configure state sync, and remove a node through one operator-focused CLI.</p>
+      </article>
+    </div>
+  </section>
+
+  <section class="light-band" id="endpoints">
+    <div class="shell">
+      <div class="section-heading">
+        <div>
+          <p class="overline">Public API</p>
+          <h2>Small surface. Explicit routes.</h2>
+        </div>
+        <p>Only declared artifacts and registry operations are public. Directory indexes and undeclared filesystem paths remain unavailable.</p>
+      </div>
+
+      <div class="endpoint-list">
+        <a class="endpoint" href="/healthz"><span class="method">GET</span><span class="endpoint-copy"><span class="endpoint-path">/healthz</span><span class="endpoint-purpose">Registry health and source revision</span></span><span class="endpoint-arrow">↗</span></a>
+        <a class="endpoint" href="/chain-info.json"><span class="method">GET</span><span class="endpoint-copy"><span class="endpoint-path">/chain-info.json</span><span class="endpoint-purpose">Chain and artifact release metadata</span></span><span class="endpoint-arrow">↗</span></a>
+        <a class="endpoint" href="/checksums.txt"><span class="method">GET</span><span class="endpoint-copy"><span class="endpoint-path">/checksums.txt</span><span class="endpoint-purpose">Sorted artifact checksum manifest</span></span><span class="endpoint-arrow">↗</span></a>
+        <a class="endpoint" href="/api/peers"><span class="method">GET</span><span class="endpoint-copy"><span class="endpoint-path">/api/peers</span><span class="endpoint-purpose">Current HyperPax peer set</span></span><span class="endpoint-arrow">↗</span></a>
+        <a class="endpoint" href="/api/nodes"><span class="method">GET</span><span class="endpoint-copy"><span class="endpoint-path">/api/nodes</span><span class="endpoint-purpose">Registered public nodes</span></span><span class="endpoint-arrow">↗</span></a>
+        <a class="endpoint" href="/api/statesync"><span class="method">GET</span><span class="endpoint-copy"><span class="endpoint-path">/api/statesync</span><span class="endpoint-purpose">Current state-sync trust parameters</span></span><span class="endpoint-arrow">↗</span></a>
+      </div>
+    </div>
+  </section>
+
+  <footer class="footer">
+    <div class="shell">
+      <p class="footer-wordmark">Paxeer Network</p>
+      <div class="footer-bottom">
+        <span>HyperPax node infrastructure by Sidiora Labs.</span>
+        <code>node.hyperpaxeer.com · TLS secured</code>
+      </div>
+    </div>
   </footer>
 
   <script>
@@ -629,53 +976,62 @@
         field.remove();
       }
       copyButton.textContent = 'Copied';
-      window.setTimeout(() => { copyButton.textContent = 'Copy'; }, 1800);
+      window.setTimeout(() => { copyButton.textContent = 'Copy command'; }, 1800);
     });
 
     const readJSON = async (path) => {
       const controller = new AbortController();
-      const timer = window.setTimeout(() => controller.abort(), 4500);
+      const timeout = window.setTimeout(() => controller.abort(), 5000);
       try {
         const response = await fetch(path, { cache: 'no-store', signal: controller.signal });
         if (!response.ok) throw new Error(String(response.status));
         return await response.json();
       } finally {
-        window.clearTimeout(timer);
+        window.clearTimeout(timeout);
       }
     };
 
     Promise.allSettled([
       readJSON('/healthz'),
       readJSON('/chain-info.json'),
-      readJSON('/api/peers')
-    ]).then(([healthResult, chainResult, peersResult]) => {
+      readJSON('/api/peers'),
+      readJSON('/api/statesync')
+    ]).then(([healthResult, chainResult, peersResult, stateSyncResult]) => {
       const status = document.getElementById('registry-status');
       const label = document.getElementById('registry-label');
 
       if (healthResult.status === 'fulfilled' && healthResult.value.ok) {
-        status.classList.add('online');
-        label.textContent = 'Online';
-        document.getElementById('chain-id').textContent = healthResult.value.chain_id || 'hyperpax_125-1';
-        document.getElementById('source-revision').textContent = (healthResult.value.source_revision || 'unknown').slice(0, 12);
+        const health = healthResult.value;
+        status.classList.add('is-online');
+        label.textContent = 'Registry online';
+        document.getElementById('source-revision').textContent = (health.source_revision || 'unknown').slice(0, 12);
+        document.getElementById('chain-id').textContent = health.chain_id || 'hyperpax_125-1';
+        document.getElementById('visual-chain').textContent = health.chain_id || 'hyperpax_125-1';
       } else {
-        label.textContent = 'Unavailable';
+        label.textContent = 'Registry unavailable';
         document.getElementById('source-revision').textContent = 'unavailable';
       }
 
       if (chainResult.status === 'fulfilled') {
         const chain = chainResult.value;
+        const release = chain.release_id || 'unknown';
         document.getElementById('chain-id').textContent = chain.chain_id || 'hyperpax_125-1';
+        document.getElementById('visual-chain').textContent = chain.chain_id || 'hyperpax_125-1';
         document.getElementById('evm-chain-id').textContent = chain.evm_chain_id ?? '125';
-        document.getElementById('release-id').textContent = chain.release_id || 'unknown';
+        document.getElementById('visual-release').textContent = release;
+        document.getElementById('proof-release').textContent = release;
       } else {
-        document.getElementById('release-id').textContent = 'Unavailable';
+        document.getElementById('visual-release').textContent = 'Unavailable';
+        document.getElementById('proof-release').textContent = 'Unavailable';
       }
 
-      if (peersResult.status === 'fulfilled') {
-        document.getElementById('peer-count').textContent = String(peersResult.value.count ?? 0);
-      } else {
-        document.getElementById('peer-count').textContent = 'Unavailable';
-      }
+      document.getElementById('peer-count').textContent = peersResult.status === 'fulfilled'
+        ? String(peersResult.value.count ?? 0)
+        : 'Unavailable';
+
+      document.getElementById('latest-height').textContent = stateSyncResult.status === 'fulfilled' && stateSyncResult.value.latest
+        ? Number(stateSyncResult.value.latest).toLocaleString('en-US')
+        : 'Unavailable';
     });
   </script>
 </body>

@@ -22,12 +22,24 @@ CHAIN_ID="${HPX_CHAIN_ID:-hyperpax_125-1}"
 SEED_PEERS="${HPX_SEED_PEERS:-e9c56cbadc4a96b67f69dcaaa7b4691851e945ca@31.220.74.140:26656}"
 STATESYNC_RPC="${HPX_STATESYNC_RPC:-http://31.220.74.140:26657}"
 STATESYNC_SERVERS="${HPX_STATESYNC_RPC_SERVERS:-31.220.74.140:26657,31.220.74.140:26657}"
+FONT_ORIGIN="https://cdn.usercontent.paxeercode.com/fonts"
+FONT_FILES=(
+  LTWave-Light.otf
+  LTWave-Regular.otf
+  LTWave-Medium.otf
+  LTWave-Bold.otf
+  LTWaveMono-Regular.otf
+  LTWaveMono-Medium.otf
+)
 
 say() { printf '\033[0;36m[deploy]\033[0m %s\n' "$*"; }
 die() { printf '\033[0;31m[deploy] ERROR:\033[0m %s\n' "$*" >&2; exit 1; }
 
 [ "$(id -u)" -eq 0 ] || die "run as root"
 [[ "$SOURCE_REVISION" =~ ^[0-9a-f]{40}$ ]] || die "invalid source revision: $SOURCE_REVISION"
+[ -f "$SCRIPT_DIR/index.html" ] || die "missing landing page: $SCRIPT_DIR/index.html"
+[ -f "$SCRIPT_DIR/fonts.sha256" ] || die "missing font manifest: $SCRIPT_DIR/fonts.sha256"
+[ -f "$PAXEER_ROOT/assets/PaxeerLogo.png" ] || die "missing Paxeer logo"
 if [ -n "${HPX_REGISTER_TOKEN:-}" ] && [[ ! "$HPX_REGISTER_TOKEN" =~ ^[A-Za-z0-9._~-]+$ ]]; then
   die "HPX_REGISTER_TOKEN may contain only letters, digits, dot, underscore, tilde and hyphen"
 fi
@@ -53,12 +65,26 @@ curl -fL --retry 5 --max-time 60 -o "$tmp/$asset.sha256" "$RELEASE_BASE/$asset.s
   sha256sum -c "$asset.sha256"
 )
 
+say "downloading checksum-bound LTWave brand fonts"
+mkdir -p "$tmp/fonts"
+for font in "${FONT_FILES[@]}"; do
+  curl -fL --retry 5 --max-time 60 -o "$tmp/fonts/$font" "$FONT_ORIGIN/$font"
+done
+(
+  cd "$tmp/fonts"
+  sha256sum -c "$SCRIPT_DIR/fonts.sha256"
+)
+
 if ! id hpx-registry >/dev/null 2>&1; then
   useradd --system --home-dir /nonexistent --shell /usr/sbin/nologin hpx-registry
 fi
 install -d -m 0755 /usr/local/libexec "$ARTIFACTS_ROOT" /var/www/certbot
-install -d -m 0755 "$WEB_ROOT"
+install -d -m 0755 "$WEB_ROOT" "$WEB_ROOT/fonts"
 install -m 0644 "$SCRIPT_DIR/index.html" "$WEB_ROOT/index.html"
+install -m 0644 "$PAXEER_ROOT/assets/PaxeerLogo.png" "$WEB_ROOT/paxeer-logo.png"
+for font in "${FONT_FILES[@]}"; do
+  install -m 0644 "$tmp/fonts/$font" "$WEB_ROOT/fonts/$font"
+done
 install -d -o hpx-registry -g hpx-registry -m 0750 "$DATA_DIR"
 install -m 0755 "$tmp/$asset" "${REGISTRY_BIN}.new"
 mv -f "${REGISTRY_BIN}.new" "$REGISTRY_BIN"
