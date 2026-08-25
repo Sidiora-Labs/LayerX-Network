@@ -238,9 +238,13 @@ type Backend struct {
 	globalBlockCache   BlockCache
 	cacheCreationMutex *sync.Mutex
 	watermarks         *WatermarkManager
+	headerMu           sync.RWMutex
+	lastHeader         *ethtypes.Header
 }
 
 type TraceContextProvider func(int64) (sdk.Context, func())
+
+const currentHeaderLookupTimeout = 2 * time.Second
 
 func NewBackend(
 	ctxProvider func(int64) sdk.Context,
@@ -302,8 +306,10 @@ func (b *Backend) StateAndHeaderByNumberOrHash(ctx context.Context, blockNrOrHas
 			return nil, nil, err
 		}
 	}
-	header := b.getHeader(ctx, tmBlock)
-	header.BaseFee = b.keeper.GetNextBaseFeePerGas(b.ctxProvider(LatestCtxHeight)).TruncateInt().BigInt()
+	header, err := b.getHeader(ctx, tmBlock)
+	if err != nil {
+		return nil, nil, err
+	}
 	return state.NewDBImpl(sdkCtx, b.keeper, true), header, nil
 }
 
@@ -343,28 +349,44 @@ func (b *Backend) GetTransaction(ctx context.Context, txHash common.Hash) (found
 }
 
 func (b *Backend) ChainDb() ethdb.Database {
-	panic("implement me")
+	return unsupportedEthereumChainDatabase
 }
 
-func (b Backend) ConvertBlockNumber(bn rpc.BlockNumber) int64 {
+func (b *Backend) ConvertBlockNumber(ctx context.Context, bn rpc.BlockNumber) (int64, error) {
 	blockNum := bn.Int64()
 	switch blockNum {
 	case rpc.SafeBlockNumber.Int64(), rpc.FinalizedBlockNumber.Int64(), rpc.LatestBlockNumber.Int64():
+		if b.ctxProvider == nil {
+			return 0, errors.New("state context provider is not configured")
+		}
 		blockNum = b.ctxProvider(LatestCtxHeight).BlockHeight()
 	case rpc.EarliestBlockNumber.Int64():
-		genesisRes, err := b.tmClient.Genesis(context.Background())
+		if b.tmClient == nil {
+			return 0, errors.New("consensus client is not configured")
+		}
+		genesisRes, err := b.tmClient.Genesis(ctx)
 		if err != nil {
-			panic("could not get genesis info from tendermint")
+			return 0, fmt.Errorf("get genesis information: %w", err)
+		}
+		if genesisRes == nil || genesisRes.Genesis == nil {
+			return 0, errors.New("consensus client returned empty genesis information")
 		}
 		blockNum = genesisRes.Genesis.InitialHeight
 	case rpc.PendingBlockNumber.Int64():
-		panic("tracing on pending block is not supported")
+		return 0, errors.New("tracing on the pending block is not supported")
+	default:
+		if blockNum < 0 {
+			return 0, fmt.Errorf("unsupported block number %d", blockNum)
+		}
 	}
-	return blockNum
+	return blockNum, nil
 }
 
-func (b Backend) BlockByNumber(ctx context.Context, bn rpc.BlockNumber) (*ethtypes.Block, []tracersutils.TraceBlockMetadata, error) {
-	blockNum := b.ConvertBlockNumber(bn)
+func (b *Backend) BlockByNumber(ctx context.Context, bn rpc.BlockNumber) (*ethtypes.Block, []tracersutils.TraceBlockMetadata, error) {
+	blockNum, err := b.ConvertBlockNumber(ctx, bn)
+	if err != nil {
+		return nil, nil, err
+	}
 	tmBlock, err := blockByNumberRespectingWatermarks(ctx, b.tmClient, b.watermarks, &blockNum, 1)
 	if err != nil {
 		return nil, nil, err
@@ -425,7 +447,10 @@ func (b Backend) BlockByNumber(ctx context.Context, bn rpc.BlockNumber) (*ethtyp
 			})
 		}
 	}
-	header := b.getHeader(ctx, tmBlock)
+	header, err := b.getHeader(ctx, tmBlock)
+	if err != nil {
+		return nil, nil, err
+	}
 	block := &ethtypes.Block{
 		Header_: header,
 		Txs:     txs,
@@ -434,7 +459,7 @@ func (b Backend) BlockByNumber(ctx context.Context, bn rpc.BlockNumber) (*ethtyp
 	return block, metadata, nil
 }
 
-func (b Backend) BlockByHash(ctx context.Context, hash common.Hash) (*ethtypes.Block, []tracersutils.TraceBlockMetadata, error) {
+func (b *Backend) BlockByHash(ctx context.Context, hash common.Hash) (*ethtypes.Block, []tracersutils.TraceBlockMetadata, error) {
 	tmBlock, err := blockByHashRespectingWatermarks(ctx, b.tmClient, b.watermarks, hash.Bytes(), 1)
 	if err != nil {
 		return nil, nil, err
@@ -474,7 +499,7 @@ func (b *Backend) HeaderByNumber(ctx context.Context, bn rpc.BlockNumber) (*etht
 	if err != nil {
 		return nil, err
 	}
-	return b.getHeader(ctx, tmBlock), nil
+	return b.getHeader(ctx, tmBlock)
 }
 
 func (b *Backend) StateAtTransaction(ctx context.Context, block *ethtypes.Block, txIndex int, reexec uint64) (*ethtypes.Transaction, vm.BlockContext, vm.StateDB, tracers.StateReleaseFunc, error) {
@@ -499,7 +524,7 @@ func (b *Backend) StateAtTransaction(ctx context.Context, block *ethtypes.Block,
 	tx := txs[txIndex]
 	sdkTx, err := traceCompatTxDecoder(b.txConfigProvider(block.Number().Int64()), b.isV65ActiveAtHeight(block.Number().Int64()))(tx)
 	if err != nil {
-		panic(err)
+		return nil, vm.BlockContext{}, nil, emptyRelease, fmt.Errorf("decode transaction %d at block %d: %w", txIndex, block.Number().Int64(), err)
 	}
 	if utils.IsTxPrioritized(sdkTx) {
 		return nil, vm.BlockContext{}, nil, emptyRelease, errors.New("cannot trace oracle tx")
@@ -512,7 +537,13 @@ func (b *Backend) StateAtTransaction(ctx context.Context, block *ethtypes.Block,
 	} else {
 		evmMsg = msg
 	}
-	ethTx, _ := evmMsg.AsTransaction()
+	ethTx, txData := evmMsg.AsTransaction()
+	if ethTx == nil {
+		if txData == nil {
+			return nil, vm.BlockContext{}, nil, emptyRelease, fmt.Errorf("transaction %d at block %d contains malformed EVM data", txIndex, block.Number().Int64())
+		}
+		return nil, vm.BlockContext{}, nil, emptyRelease, fmt.Errorf("transaction %d at block %d has no Ethereum transaction representation", txIndex, block.Number().Int64())
+	}
 	success = true
 	return ethTx, *blockContext, stateDB, release, nil
 }
@@ -551,7 +582,7 @@ func (b *Backend) replayTransactionTillIndex(ctx context.Context, block *ethtype
 		}
 		sdkTx, err := traceCompatTxDecoder(b.txConfigProvider(block.Number().Int64()), b.isV65ActiveAtHeight(block.Number().Int64()))(tx)
 		if err != nil {
-			panic(err)
+			return nil, nil, emptyRelease, fmt.Errorf("decode transaction %d at block %d: %w", idx, block.Number().Int64(), err)
 		}
 		if utils.IsTxPrioritized(sdkTx) {
 			continue
@@ -582,12 +613,11 @@ func (b *Backend) initializeBlock(ctx context.Context, block *ethtypes.Block, ct
 	if err != nil {
 		return sdk.Context{}, nil, emptyRelease, fmt.Errorf("cannot find block %d from tendermint", blockNumber)
 	}
-	res, err := b.tmClient.Validators(ctx, &prevBlockHeight, nil, nil) // todo: load all
+	validators, err := b.loadAllValidators(ctx, prevBlockHeight)
 	if err != nil {
-		return sdk.Context{}, nil, emptyRelease, fmt.Errorf("failed to load validators for block %d from tendermint", prevBlockHeight)
+		return sdk.Context{}, nil, emptyRelease, fmt.Errorf("failed to load validators for block %d from tendermint: %w", prevBlockHeight, err)
 	}
-	TraceTendermintIfApplicable(ctx, "Validators", []string{stringifyInt64Ptr(&prevBlockHeight)}, res)
-	reqBeginBlock := tmBlock.Block.ToReqBeginBlock(res.Validators)
+	reqBeginBlock := tmBlock.Block.ToReqBeginBlock(validators)
 	reqBeginBlock.Simulate = true
 	baseCtx, baseRelease := ctxProvider(prevBlockHeight)
 	sdkCtx := baseCtx.WithBlockHeight(blockNumber).WithBlockTime(tmBlock.Block.Time)
@@ -603,6 +633,57 @@ func (b *Backend) initializeBlock(ctx context.Context, block *ethtypes.Block, ct
 	}, nil
 }
 
+func (b *Backend) loadAllValidators(ctx context.Context, height int64) ([]*tmtypes.Validator, error) {
+	if b.tmClient == nil {
+		return nil, errors.New("consensus client is not configured")
+	}
+	const (
+		validatorsPerPage = 100
+		maxValidatorPages = 100
+	)
+	validators := make([]*tmtypes.Validator, 0)
+	expectedTotal := -1
+	for page := 1; page <= maxValidatorPages; page++ {
+		perPage := validatorsPerPage
+		res, err := b.tmClient.Validators(ctx, &height, &page, &perPage)
+		if err != nil {
+			return nil, err
+		}
+		if res == nil {
+			return nil, errors.New("consensus client returned an empty validator response")
+		}
+		if err := TraceTendermintIfApplicable(ctx, "Validators", []string{
+			stringifyInt64Ptr(&height), fmt.Sprintf("page=%d", page), fmt.Sprintf("per_page=%d", perPage),
+		}, res); err != nil {
+			return nil, err
+		}
+		if expectedTotal < 0 {
+			expectedTotal = res.Total
+			if expectedTotal <= 0 {
+				return nil, fmt.Errorf("validator set at height %d is empty", height)
+			}
+		} else if res.Total != expectedTotal {
+			return nil, fmt.Errorf("validator total changed while paging height %d: expected %d, got %d", height, expectedTotal, res.Total)
+		}
+		if len(res.Validators) == 0 {
+			return nil, fmt.Errorf("validator page %d at height %d is empty before total %d was reached", page, height, expectedTotal)
+		}
+		for index, validator := range res.Validators {
+			if validator == nil {
+				return nil, fmt.Errorf("validator page %d at height %d contains nil validator %d", page, height, index)
+			}
+		}
+		validators = append(validators, res.Validators...)
+		if len(validators) > expectedTotal {
+			return nil, fmt.Errorf("validator pages at height %d exceeded declared total %d", height, expectedTotal)
+		}
+		if len(validators) == expectedTotal {
+			return validators, nil
+		}
+	}
+	return nil, fmt.Errorf("validator set at height %d exceeds supported page limit of %d validators", height, validatorsPerPage*maxValidatorPages)
+}
+
 func (b *Backend) GetEVM(_ context.Context, msg *core.Message, stateDB vm.StateDB, h *ethtypes.Header, vmConfig *vm.Config, blockCtx *vm.BlockContext) *vm.EVM {
 	txContext := core.NewEVMTxContext(msg)
 	if blockCtx == nil {
@@ -616,16 +697,23 @@ func (b *Backend) GetEVM(_ context.Context, msg *core.Message, stateDB vm.StateD
 }
 
 func (b *Backend) CurrentHeader() *ethtypes.Header {
-	height := b.ctxProvider(LatestCtxHeight).BlockHeight()
-	ctx := context.Background()
-	var header *ethtypes.Header
-	if tmBlock, err := blockByNumberRespectingWatermarks(ctx, b.tmClient, b.watermarks, &height, 1); err == nil {
-		header = b.getHeader(ctx, tmBlock)
-	} else {
-		header = b.fallbackToEthHeaderOnly(height)
+	if b == nil || b.ctxProvider == nil {
+		return nil
 	}
-	header.BaseFee = b.keeper.GetNextBaseFeePerGas(b.ctxProvider(LatestCtxHeight)).TruncateInt().BigInt()
-	return header
+	height := b.ctxProvider(LatestCtxHeight).BlockHeight()
+	ctx, cancel := context.WithTimeout(context.Background(), currentHeaderLookupTimeout)
+	defer cancel()
+	if tmBlock, err := blockByNumberRespectingWatermarks(ctx, b.tmClient, b.watermarks, &height, 1); err == nil {
+		if header, headerErr := b.getHeader(ctx, tmBlock); headerErr == nil {
+			return header
+		}
+	}
+	b.headerMu.RLock()
+	defer b.headerMu.RUnlock()
+	if b.lastHeader == nil {
+		return nil
+	}
+	return ethtypes.CopyHeader(b.lastHeader)
 }
 
 func (b *Backend) SuggestGasTipCap(context.Context) (*big.Int, error) {
@@ -668,44 +756,51 @@ func (b *Backend) getBlockByNumberOrHash(ctx context.Context, blockNrOrHash rpc.
 	return block, isLatestBlock, nil
 }
 
-// fallbackToEthHeaderOnly builds a minimal header when the block cannot be loaded
-// (e.g. CurrentHeader when Block RPC fails). BaseFee is overwritten by CurrentHeader afterward.
-func (b *Backend) fallbackToEthHeaderOnly(height int64) *ethtypes.Header {
-	zeroExcessBlobGas := uint64(0)
-	return &ethtypes.Header{
-		Difficulty:    common.Big0,
-		Number:        big.NewInt(height),
-		GasLimit:      keeper.DefaultBlockGasLimit,
-		Time:          toUint64(time.Now().Unix()), //nolint:gosec
-		ExcessBlobGas: &zeroExcessBlobGas,
+func (b *Backend) getHeader(ctx context.Context, tmBlock *coretypes.ResultBlock) (*ethtypes.Header, error) {
+	if tmBlock == nil || tmBlock.Block == nil {
+		return nil, errors.New("cannot construct EVM header from an empty consensus block")
 	}
-}
-
-func (b *Backend) getHeader(ctx context.Context, tmBlock *coretypes.ResultBlock) *ethtypes.Header {
 	height := tmBlock.Block.Height
+	if height < 0 {
+		return nil, fmt.Errorf("block height %d is negative", height)
+	}
+	if tmBlock.Block.Time.Unix() < 0 {
+		return nil, fmt.Errorf("block %d timestamp predates Unix epoch", height)
+	}
 	zeroExcessBlobGas := uint64(0)
 	baseFee := b.keeper.GetNextBaseFeePerGas(b.ctxProvider(height - 1)).TruncateInt().BigInt()
 	sdkCtx := b.ctxProvider(height)
 	if sdkCtx.ChainID() == "pacific-1" && sdkCtx.BlockHeight() < b.keeper.UpgradeKeeper().GetDoneHeight(sdkCtx.WithGasMeter(sdk.NewInfiniteGasMeter(1, 1)), "6.2.0") {
 		baseFee = nil
 	}
-	var gasLimit uint64
-	if cp := sdkCtx.ConsensusParams(); cp != nil && cp.Block != nil {
-		gasLimit = uint64(cp.Block.MaxGas) //nolint:gosec
-	} else {
-		gasLimit = keeper.DefaultBlockGasLimit
+	cp := sdkCtx.ConsensusParams()
+	if cp == nil || cp.Block == nil {
+		return nil, fmt.Errorf("consensus block parameters are unavailable at height %d", height)
+	}
+	gasLimit, err := encodeHeadGasLimit(cp.Block.MaxGas)
+	if err != nil {
+		return nil, fmt.Errorf("height %d: %w", height, err)
 	}
 
 	header := &ethtypes.Header{
 		Difficulty:    common.Big0,
 		Number:        big.NewInt(height),
 		BaseFee:       baseFee,
-		GasLimit:      gasLimit,
-		Time:          toUint64(tmBlock.Block.Time.Unix()), //nolint:gosec
+		GasLimit:      uint64(gasLimit),
+		Time:          uint64(tmBlock.Block.Time.Unix()),
 		ExcessBlobGas: &zeroExcessBlobGas,
-		ParentHash:    common.BytesToHash(tmBlock.BlockID.Hash),
+		ParentHash:    common.BytesToHash(tmBlock.Block.LastBlockID.Hash),
+		Root:          common.BytesToHash(tmBlock.Block.AppHash),
+		TxHash:        common.BytesToHash(tmBlock.Block.DataHash),
+		ReceiptHash:   common.BytesToHash(tmBlock.Block.LastResultsHash),
+		Coinbase:      common.BytesToAddress(tmBlock.Block.ProposerAddress),
 	}
-	return header
+	b.headerMu.Lock()
+	if b.lastHeader == nil || b.lastHeader.Number.Cmp(header.Number) <= 0 {
+		b.lastHeader = ethtypes.CopyHeader(header)
+	}
+	b.headerMu.Unlock()
+	return header, nil
 }
 
 func (b *Backend) GetCustomPrecompiles(h int64) map[common.Address]vm.PrecompiledContract {

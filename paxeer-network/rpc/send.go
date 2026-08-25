@@ -39,7 +39,8 @@ type SendAPI struct {
 }
 
 type SendConfig struct {
-	slow bool
+	slow           bool
+	keyringEnabled bool
 }
 
 func NewSendAPI(
@@ -204,6 +205,9 @@ func (s *SendAPI) SignTransaction(ctx context.Context, args apitypes.SendTxArgs,
 	defer func() {
 		recordMetricsWithError(ctx, "eth_signTransaction", s.connectionType, startTime, returnErr, recover())
 	}()
+	if s.sendConfig == nil || !s.sendConfig.keyringEnabled {
+		return nil, &ErrEVMNotSupported{Msg: "eth_signTransaction is disabled; submit a locally signed raw transaction"}
+	}
 	unsignedTx, err := args.ToTransaction()
 	if err != nil {
 		return nil, err
@@ -224,6 +228,9 @@ func (s *SendAPI) SendTransaction(ctx context.Context, args export.TransactionAr
 	defer func() {
 		recordMetricsWithError(ctx, "eth_sendTransaction", s.connectionType, startTime, returnErr, recover())
 	}()
+	if s.sendConfig == nil || !s.sendConfig.keyringEnabled {
+		return common.Hash{}, &ErrEVMNotSupported{Msg: "eth_sendTransaction is disabled; submit a locally signed raw transaction"}
+	}
 	if err := args.SetDefaults(ctx, s.backend, false); err != nil {
 		return common.Hash{}, err
 	}

@@ -3,8 +3,10 @@ package evmrpc
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/big"
+	"sync"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
@@ -17,21 +19,33 @@ const tendermintTraceKey contextKey = "tendermintTrace"
 const receiptTraceKey contextKey = "receiptTrace"
 
 type TendermintTraces struct {
+	mu     sync.Mutex
 	Traces []TendermintTrace `json:"traces"`
 }
 
-func (tt *TendermintTraces) MustMarshalToJson() json.RawMessage {
-	bz, _ := json.Marshal(tt)
-	return bz
+func (tt *TendermintTraces) MarshalToJSON() (json.RawMessage, error) {
+	if tt == nil {
+		return nil, errors.New("Tendermint traces are unavailable")
+	}
+	tt.mu.Lock()
+	defer tt.mu.Unlock()
+	bz, err := json.Marshal(tt)
+	return bz, err
 }
 
 type ReceiptTraces struct {
+	mu     sync.Mutex
 	Traces []RawResponseReceipt `json:"traces"`
 }
 
-func (rt *ReceiptTraces) MustMarshalToJson() json.RawMessage {
-	bz, _ := json.Marshal(rt)
-	return bz
+func (rt *ReceiptTraces) MarshalToJSON() (json.RawMessage, error) {
+	if rt == nil {
+		return nil, errors.New("receipt traces are unavailable")
+	}
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	bz, err := json.Marshal(rt)
+	return bz, err
 }
 
 type RawResponseReceipt struct {
@@ -58,22 +72,24 @@ func WithTendermintTraces(ctx context.Context, traces *TendermintTraces) context
 	return context.WithValue(ctx, tendermintTraceKey, traces)
 }
 
-func TraceTendermintIfApplicable(ctx context.Context, endpoint string, arguments []string, response interface{}) {
+func TraceTendermintIfApplicable(ctx context.Context, endpoint string, arguments []string, response interface{}) error {
+	existing, ok := ctx.Value(tendermintTraceKey).(*TendermintTraces)
+	if !ok || existing == nil {
+		return nil
+	}
 	encodedResponse, err := json.Marshal(response)
 	if err != nil {
-		panic(err)
+		return fmt.Errorf("encode Tendermint trace %s: %w", endpoint, err)
 	}
 	trace := TendermintTrace{
 		Endpoint:  endpoint,
 		Arguments: arguments,
 		Response:  encodedResponse,
 	}
-	existing := ctx.Value(tendermintTraceKey)
-	if existing == nil {
-		return
-	}
-	typed := existing.(*TendermintTraces)
-	typed.Traces = append(typed.Traces, trace)
+	existing.mu.Lock()
+	existing.Traces = append(existing.Traces, trace)
+	existing.mu.Unlock()
+	return nil
 }
 
 func TendermintTracesFromContext(ctx context.Context) *TendermintTraces {
@@ -81,7 +97,8 @@ func TendermintTracesFromContext(ctx context.Context) *TendermintTraces {
 	if v == nil {
 		return nil
 	}
-	return v.(*TendermintTraces)
+	traces, _ := v.(*TendermintTraces)
+	return traces
 }
 
 func WithReceiptTraces(ctx context.Context, traces *ReceiptTraces) context.Context {
@@ -89,6 +106,9 @@ func WithReceiptTraces(ctx context.Context, traces *ReceiptTraces) context.Conte
 }
 
 func TraceReceiptIfApplicable(ctx context.Context, receipt *types.Receipt) {
+	if receipt == nil {
+		return
+	}
 	rrr := &RawResponseReceipt{
 		BlockNumber:       hexutil.Uint64(receipt.BlockNumber),
 		CumulativeGasUsed: hexutil.Uint64(receipt.CumulativeGasUsed),
@@ -108,12 +128,13 @@ func TraceReceiptIfApplicable(ctx context.Context, receipt *types.Receipt) {
 		to := common.HexToAddress(receipt.To)
 		rrr.To = &to
 	}
-	existing := ctx.Value(receiptTraceKey)
-	if existing == nil {
+	existing, ok := ctx.Value(receiptTraceKey).(*ReceiptTraces)
+	if !ok || existing == nil {
 		return
 	}
-	typed := existing.(*ReceiptTraces)
-	typed.Traces = append(typed.Traces, *rrr)
+	existing.mu.Lock()
+	existing.Traces = append(existing.Traces, *rrr)
+	existing.mu.Unlock()
 }
 
 func stringifyInt64Ptr(i *int64) string {

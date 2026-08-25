@@ -134,6 +134,38 @@ func TestEncodeWasmExecuteMsg(t *testing.T) {
 	}, txs[0].(*export.RPCTransaction))
 }
 
+func TestEncodeWasmExecuteMsgRequiresCanonicalReceipt(t *testing.T) {
+	k := &testkeeper.EVMTestApp.EvmKeeper
+	ctx := testkeeper.EVMTestApp.GetContextForDeliverTx(nil).WithBlockHeight(MockHeight8)
+	fromPaxAddr, _ := testkeeper.MockAddressPair()
+	toPaxAddr, _ := testkeeper.MockAddressPair()
+	builder := TxConfig.NewTxBuilder()
+	require.NoError(t, builder.SetMsgs(&wasmtypes.MsgExecuteContract{
+		Sender:   fromPaxAddr.String(),
+		Contract: toPaxAddr.String(),
+		Msg:      []byte{9, 8, 7, 6},
+	}))
+	txBytes, err := Encoder(builder.GetTx())
+	require.NoError(t, err)
+	block := &coretypes.ResultBlock{
+		BlockID: MockBlockID,
+		Block: &tmtypes.Block{
+			Header: mockBlockHeader(MockHeight8),
+			Data:   tmtypes.Data{Txs: []tmtypes.Tx{txBytes}},
+			LastCommit: &tmtypes.Commit{
+				Height: MockHeight8 - 1,
+			},
+		},
+	}
+	result, err := evmrpc.EncodeTmBlock(
+		func(int64) sdk.Context { return ctx },
+		func(int64) client.TxConfig { return TxConfig },
+		block, k, true, false, true, false, evmrpc.NewBlockCache(3000), &sync.Mutex{},
+	)
+	require.Nil(t, result)
+	require.ErrorContains(t, err, "has no canonical receipt")
+}
+
 func TestEncodeBankTransferMsg(t *testing.T) {
 	k := &testkeeper.EVMTestApp.EvmKeeper
 	ctx := testkeeper.EVMTestApp.GetContextForDeliverTx(nil)

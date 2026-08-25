@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"math/big"
 	"sync"
 	"time"
@@ -41,7 +42,13 @@ type SubscriptionConfig struct {
 	newHeadLimit         uint64
 }
 
-func NewSubscriptionAPI(tmClient client.LocalClient, k *keeper.Keeper, ctxProvider func(int64) sdk.Context, logFetcher *LogFetcher, subscriptionConfig *SubscriptionConfig, filterConfig *FilterConfig, connectionType ConnectionType, blockHeaderNotifier *BlockHeaderNotifier) *SubscriptionAPI {
+func NewSubscriptionAPI(tmClient client.LocalClient, k *keeper.Keeper, ctxProvider func(int64) sdk.Context, logFetcher *LogFetcher, subscriptionConfig *SubscriptionConfig, filterConfig *FilterConfig, connectionType ConnectionType, blockHeaderNotifier *BlockHeaderNotifier) (*SubscriptionAPI, error) {
+	if k == nil || ctxProvider == nil || logFetcher == nil || subscriptionConfig == nil || filterConfig == nil {
+		return nil, errors.New("subscription API dependencies are not configured")
+	}
+	if blockHeaderNotifier == nil && tmClient == nil {
+		return nil, errors.New("subscription API requires a consensus client or block-header notifier")
+	}
 	logFetcher.filterConfig = filterConfig
 	api := &SubscriptionAPI{
 		tmClient:            tmClient,
@@ -64,19 +71,28 @@ func NewSubscriptionAPI(tmClient client.LocalClient, k *keeper.Keeper, ctxProvid
 		api.subscriptionManager = NewSubscriptionManager(tmClient)
 		id, subCh, err := api.subscriptionManager.Subscribe(context.Background(), NewHeadQueryBuilder(), api.subscriptonConfig.subscriptionCapacity)
 		if err != nil {
-			panic(err)
+			return nil, fmt.Errorf("subscribe to consensus new-head events: %w", err)
 		}
 		go func() {
 			defer recoverAndLog()
 			defer func() {
 				_ = api.subscriptionManager.Unsubscribe(context.Background(), id)
 			}()
-			for {
-				res := <-subCh
-				eventHeader := res.Data.(tmtypes.EventDataNewBlockHeader)
+			for res := range subCh {
+				eventHeader, ok := res.Data.(tmtypes.EventDataNewBlockHeader)
+				if !ok {
+					fmt.Printf("dropping malformed newHeads event of type %T\n", res.Data)
+					continue
+				}
 				ctx := ctxProvider(eventHeader.Header.Height)
 				baseFeePerGas := k.GetNextBaseFeePerGas(ctx).TruncateInt().BigInt()
-				ethHeader, err := encodeTmHeader(eventHeader, baseFeePerGas)
+				cp := ctx.ConsensusParams()
+				if cp == nil || cp.Block == nil {
+					fmt.Printf("dropping newHeads event at height %d: consensus block parameters are unavailable\n", eventHeader.Header.Height)
+					continue
+				}
+				gasLimit := cp.Block.MaxGas
+				ethHeader, err := encodeTmHeader(eventHeader, baseFeePerGas, gasLimit)
 				if err != nil {
 					fmt.Printf("error encoding new head event %#v due to %s\n", res.Data, err)
 					continue
@@ -85,7 +101,7 @@ func NewSubscriptionAPI(tmClient client.LocalClient, k *keeper.Keeper, ctxProvid
 			}
 		}()
 	}
-	return api
+	return api, nil
 }
 
 func (a *SubscriptionAPI) runNewHeadsFromNotifier(notifier *BlockHeaderNotifier, k *keeper.Keeper, ctxProvider func(int64) sdk.Context) {
@@ -104,11 +120,17 @@ func (a *SubscriptionAPI) runNewHeadsFromNotifier(notifier *BlockHeaderNotifier,
 		// evt.response.ConsensusParamUpdates: the latter is only populated
 		// on actual updates (nil for nearly every block). See block.go's
 		// GetBlockByNumber for the same pattern + rationale.
-		var gasLimit int64
-		if cp := ctx.ConsensusParams(); cp != nil && cp.Block != nil {
-			gasLimit = cp.Block.MaxGas
+		cp := ctx.ConsensusParams()
+		if cp == nil || cp.Block == nil {
+			fmt.Printf("dropping newHeads event at height %d: consensus block parameters are unavailable\n", evt.header.Height)
+			continue
 		}
-		ethHeader := encodeCommittedBlock(evt, baseFeePerGas, gasLimit)
+		gasLimit := cp.Block.MaxGas
+		ethHeader, err := encodeCommittedBlock(evt, baseFeePerGas, gasLimit)
+		if err != nil {
+			fmt.Printf("dropping invalid newHeads event at height %d: %v\n", evt.header.Height, err)
+			continue
+		}
 		a.broadcastNewHead(ethHeader)
 	}
 }
@@ -170,7 +192,7 @@ func (a *SubscriptionAPI) NewHeads(ctx context.Context) (s *rpc.Subscription, er
 	listener := make(chan map[string]interface{}, NewHeadsListenerBuffer)
 	a.newHeadListenersMtx.Lock()
 	defer a.newHeadListenersMtx.Unlock()
-	if uint64(len(a.newHeadListeners)) >= a.subscriptonConfig.newHeadLimit {
+	if a.subscriptonConfig.newHeadLimit > 0 && uint64(len(a.newHeadListeners)) >= a.subscriptonConfig.newHeadLimit {
 		return nil, errors.New("no new subscription can be created")
 	}
 	a.newHeadListeners[rpcSub.ID] = listener
@@ -181,10 +203,10 @@ func (a *SubscriptionAPI) NewHeads(ctx context.Context) (s *rpc.Subscription, er
 		for {
 			select {
 			case res, ok := <-listener:
-				if err := notifier.Notify(rpcSub.ID, res); err != nil {
+				if !ok {
 					break OUTER
 				}
-				if !ok {
+				if err := notifier.Notify(rpcSub.ID, res); err != nil {
 					break OUTER
 				}
 			case <-rpcSub.Err():
@@ -278,7 +300,13 @@ func (a *SubscriptionAPI) Logs(ctx context.Context, filter *filters.FilterCriter
 			}
 			begin = lastToHeight
 			filter.FromBlock = big.NewInt(lastToHeight + 1)
-			time.Sleep(SleepInterval)
+			timer := time.NewTimer(SleepInterval)
+			select {
+			case <-timer.C:
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			}
 		}
 	}()
 
@@ -311,9 +339,15 @@ func NewSubscriptionManager(tmClient client.LocalClient) *SubscriptionManager {
 }
 
 func (s *SubscriptionManager) Subscribe(ctx context.Context, q *QueryBuilder, limit int) (SubscriberID, <-chan coretypes.ResultEvent, error) {
+	if s == nil || s.tmClient == nil || q == nil {
+		return 0, nil, errors.New("subscription manager is not configured")
+	}
 	query := q.Build()
 	s.subMu.Lock()
 	defer s.subMu.Unlock()
+	if s.NextID == SubscriberID(math.MaxUint64) {
+		return 0, nil, errors.New("subscription identifier space exhausted")
+	}
 	id := s.NextID
 	// ignore deprecation here since the new endpoint does not support polling
 	//nolint:staticcheck
@@ -327,11 +361,18 @@ func (s *SubscriptionManager) Subscribe(ctx context.Context, q *QueryBuilder, li
 }
 
 func (s *SubscriptionManager) Unsubscribe(ctx context.Context, id SubscriberID) error {
+	if s == nil || s.tmClient == nil {
+		return errors.New("subscription manager is not configured")
+	}
 	s.subMu.Lock()
 	defer s.subMu.Unlock()
+	info, ok := s.SubscriptionInfo[id]
+	if !ok {
+		return fmt.Errorf("subscription %d does not exist", id)
+	}
 	// ignore deprecation here since the new endpoint does not support polling
 	//nolint:staticcheck
-	err := s.tmClient.Unsubscribe(ctx, SubscriberPrefix, s.SubscriptionInfo[id].Query)
+	err := s.tmClient.Unsubscribe(ctx, fmt.Sprintf("%s%d", SubscriberPrefix, id), info.Query)
 	if err != nil {
 		return err
 	}
@@ -339,86 +380,58 @@ func (s *SubscriptionManager) Unsubscribe(ctx context.Context, id SubscriberID) 
 	return nil
 }
 
-// encodeCommittedBlock builds the eth_newHeads payload for an Autobahn-
-// committed block. It differs from encodeTmHeader in two notable ways:
-//
-//  1. "hash" is the explicit Autobahn block-header hash from evt.hash
-//     (the same value the EVM receipt store records as blockHash). See
-//     blockHeaderEvent's doc for the rationale.
-//  2. parentHash, receiptsRoot, and transactionsRoot are zero. The
-//     Autobahn block-execution path does not compute a Tendermint-style
-//     hash chain (LastBlockID / LastResultsHash / DataHash), so there is
-//     nothing meaningful to surface for those fields. Subscribers that
-//     chain-validate the head stream will need a different mechanism
-//     under Autobahn.
-//
-// stateRoot is taken from evt.response.AppHash (the AppHash produced by
-// finalizing *this* block). evt.header.AppHash would be wrong: by
-// Tendermint convention Header.AppHash holds the result of the previous
-// block, not the current one, so the producer leaves it unset.
-//
-// gasLimit is read by the caller from the active SDK ConsensusParams
-// (see runNewHeadsFromNotifier); ConsensusParamUpdates on the response
-// would be nil for the vast majority of blocks.
-func encodeCommittedBlock(evt blockHeaderEvent, baseFee *big.Int, gasLimit int64) map[string]interface{} {
-	blockHash := common.BytesToHash(evt.hash)
-	number := big.NewInt(evt.header.Height)
-	miner := common.BytesToAddress(evt.header.ProposerAddress)
-	appHash := common.BytesToHash(evt.response.AppHash)
-	// TODO(autobahn): TxResult.GasUsed can be wrong for ante-failing EVM
-	// txs; block.go (GetBlockByNumber) sums receipt.GasUsed for that
-	// reason. We approximate here to keep newHeads cheap; subscribers
-	// needing exact gas should call eth_getBlockByNumber.
-	var totalGasUsed int64
-	for _, txRes := range evt.response.TxResults {
-		totalGasUsed += txRes.GasUsed
+// encodeCommittedBlock rejects Autobahn notifications until the producer
+// supplies the canonical parent, transaction, and receipt roots required by
+// an Ethereum newHeads payload. Publishing zero roots makes the stream look
+// cryptographically complete when it is not.
+func encodeCommittedBlock(evt blockHeaderEvent, baseFee *big.Int, gasLimit int64) (map[string]interface{}, error) {
+	if evt.header == nil || evt.response == nil {
+		return nil, errors.New("committed head is missing header or finalize response")
 	}
-	return map[string]interface{}{
-		"difficulty":            (*hexutil.Big)(utils.Big0),   // inapplicable to Pax
-		"extraData":             hexutil.Bytes{},              // inapplicable to Pax
-		"gasLimit":              hexutil.Uint64(gasLimit),     //nolint:gosec
-		"gasUsed":               hexutil.Uint64(totalGasUsed), //nolint:gosec
-		"logsBloom":             ethtypes.Bloom{},             // TODO(autobahn): derive from receipts so newHeads subscribers can pre-filter logs
-		"miner":                 miner,
-		"nonce":                 ethtypes.BlockNonce{}, // inapplicable to Pax
-		"number":                (*hexutil.Big)(number),
-		"parentHash":            common.Hash{}, // see function doc
-		"receiptsRoot":          common.Hash{}, // see function doc
-		"sha3Uncles":            common.Hash{}, // inapplicable to Pax
-		"stateRoot":             appHash,
-		"timestamp":             hexutil.Uint64(evt.header.Time.Unix()), //nolint:gosec
-		"transactionsRoot":      common.Hash{},                          // see function doc
-		"mixHash":               common.Hash{},                          // inapplicable to Pax
-		"excessBlobGas":         hexutil.Uint64(0),                      // inapplicable to Pax
-		"parentBeaconBlockRoot": common.Hash{},                          // inapplicable to Pax
-		"hash":                  blockHash,
-		"baseFeePerGas":         (*hexutil.Big)(baseFee),
-		"withdrawalsRoot":       common.Hash{},     // inapplicable to Pax
-		"blobGasUsed":           hexutil.Uint64(0), // inapplicable to Pax
-	}
+	return nil, fmt.Errorf("Autobahn committed head %d lacks canonical parent, transaction, and receipt roots", evt.header.Height)
 }
 
 func encodeTmHeader(
 	header tmtypes.EventDataNewBlockHeader,
 	baseFee *big.Int,
+	gasLimit int64,
 ) (map[string]interface{}, error) {
+	if header.Header.Height <= 0 {
+		return nil, fmt.Errorf("new head has invalid height %d", header.Header.Height)
+	}
+	if header.Header.Time.Unix() < 0 {
+		return nil, fmt.Errorf("new head %d timestamp predates Unix epoch", header.Header.Height)
+	}
+	if baseFee == nil || baseFee.Sign() < 0 {
+		return nil, errors.New("new head has invalid base fee")
+	}
+	encodedGasLimit, err := encodeHeadGasLimit(gasLimit)
+	if err != nil {
+		return nil, err
+	}
 	blockHash := common.HexToHash(header.Header.Hash().String())
 	number := big.NewInt(header.Header.Height)
 	miner := common.HexToAddress(header.Header.ProposerAddress.String())
-	gasWanted := int64(0)
+	gasWanted := uint64(0)
 	lastHash := common.HexToHash(header.Header.LastBlockID.Hash.String())
 	resultHash := common.HexToHash(header.Header.LastResultsHash.String())
 	appHash := common.HexToHash(header.Header.AppHash.String())
 	txHash := common.HexToHash(header.Header.DataHash.String())
 	for _, txRes := range header.ResultFinalizeBlock.TxResults {
-		gasWanted += txRes.GasUsed
+		if txRes == nil || txRes.GasUsed < 0 {
+			return nil, errors.New("new head contains invalid transaction gas usage")
+		}
+		gasUsed := uint64(txRes.GasUsed)
+		if math.MaxUint64-gasWanted < gasUsed {
+			return nil, errors.New("new head transaction gas usage overflows uint64")
+		}
+		gasWanted += gasUsed
 	}
-	gasLimit := uint64(header.ResultFinalizeBlock.ConsensusParamUpdates.Block.MaxGas) //nolint:gosec
 	result := map[string]interface{}{
 		"difficulty":            (*hexutil.Big)(utils.Big0), // inapplicable to Pax
 		"extraData":             hexutil.Bytes{},            // inapplicable to Pax
-		"gasLimit":              hexutil.Uint64(gasLimit),
-		"gasUsed":               hexutil.Uint64(gasWanted), //nolint:gosec
+		"gasLimit":              encodedGasLimit,
+		"gasUsed":               hexutil.Uint64(gasWanted),
 		"logsBloom":             ethtypes.Bloom{},          // inapplicable to Pax
 		"miner":                 miner,
 		"nonce":                 ethtypes.BlockNonce{}, // inapplicable to Pax
@@ -433,10 +446,19 @@ func encodeTmHeader(
 		"excessBlobGas":         hexutil.Uint64(0), // inapplicable to Pax
 		"parentBeaconBlockRoot": common.Hash{},     // inapplicable to Pax
 		"hash":                  blockHash,
-		"withdrawlsRoot":        common.Hash{}, // inapplicable to Pax
 		"baseFeePerGas":         (*hexutil.Big)(baseFee),
 		"withdrawalsRoot":       common.Hash{},     // inapplicable to Pax
 		"blobGasUsed":           hexutil.Uint64(0), // inapplicable to Pax
 	}
 	return result, nil
+}
+
+func encodeHeadGasLimit(gasLimit int64) (hexutil.Uint64, error) {
+	if gasLimit == -1 {
+		return hexutil.Uint64(math.MaxUint64), nil
+	}
+	if gasLimit < 0 {
+		return 0, fmt.Errorf("new head has invalid gas limit %d", gasLimit)
+	}
+	return hexutil.Uint64(gasLimit), nil
 }

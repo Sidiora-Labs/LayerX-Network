@@ -4,9 +4,10 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"math"
 	"math/big"
-	"strings"
 	"sync"
 	"time"
 
@@ -317,7 +318,10 @@ func (a *BlockAPI) GetBlockReceipts(ctx context.Context, blockNrOrHash rpc.Block
 		block, err = blockByHashOrNullForJSONRPC(ctx, a.tmClient, a.watermarks, blockNrOrHash.BlockHash[:], 1)
 	} else {
 		var numberPtr *int64
-		if numberPtr, err = getBlockNumber(ctx, a.tmClient, *blockNrOrHash.BlockNumber); err == nil {
+		if blockNrOrHash.BlockNumber != nil {
+			numberPtr, err = getBlockNumber(ctx, a.tmClient, *blockNrOrHash.BlockNumber)
+		}
+		if err == nil {
 			block, err = blockByNumberOrNullForJSONRPC(ctx, a.tmClient, a.watermarks, numberPtr, 1)
 		}
 	}
@@ -328,10 +332,13 @@ func (a *BlockAPI) GetBlockReceipts(ctx context.Context, blockNrOrHash rpc.Block
 		return nil, nil
 	}
 
-	// Get all tx hashes for the block
 	height := block.Block.Height
+	includeSynthetic := shouldIncludeSynthetic(a.namespace)
+	if err := validateBlockExecutionReceipts(a.keeper, a.ctxProvider, a.txConfigProvider, block, includeSynthetic, a.cacheCreationMutex, a.globalBlockCache); err != nil {
+		return nil, err
+	}
 
-	txHashes := getTxHashesFromBlock(a.ctxProvider, a.txConfigProvider, a.keeper, block, shouldIncludeSynthetic(a.namespace), a.cacheCreationMutex, a.globalBlockCache)
+	txHashes := getTxHashesFromBlock(a.ctxProvider, a.txConfigProvider, a.keeper, block, includeSynthetic, a.cacheCreationMutex, a.globalBlockCache)
 
 	// Get tx receipts for all hashes in parallel
 	wg := sync.WaitGroup{}
@@ -341,14 +348,24 @@ func (a *BlockAPI) GetBlockReceipts(ctx context.Context, blockNrOrHash rpc.Block
 		wg.Add(1)
 		go func(i int, hash typedTxHash) {
 			defer wg.Done()
-			defer recoverAndLog()
-			receipt, err := getOrSetCachedReceiptErr(a.cacheCreationMutex, a.globalBlockCache, a.ctxProvider(height), a.keeper, block, hash.hash)
-			if err != nil {
-				if !strings.Contains(err.Error(), "not found") {
+			defer func() {
+				if recovered := recover(); recovered != nil {
 					mtx.Lock()
-					returnErr = err
+					returnErr = fmt.Errorf("encode receipt %d: %v", i, recovered)
 					mtx.Unlock()
 				}
+			}()
+			receipt, err := getOrSetCachedReceiptErr(a.cacheCreationMutex, a.globalBlockCache, a.ctxProvider(height), a.keeper, block, hash.hash)
+			if err != nil {
+				mtx.Lock()
+				returnErr = fmt.Errorf("reload receipt %d: %w", i, err)
+				mtx.Unlock()
+				return
+			}
+			if receipt == nil {
+				mtx.Lock()
+				returnErr = fmt.Errorf("receipt %d lookup returned nil", i)
+				mtx.Unlock()
 				return
 			}
 			encodedReceipt, err := encodeReceipt(a.ctxProvider, a.txConfigProvider, receipt, a.keeper, block, a.includeShellReceipts, a.globalBlockCache, a.cacheCreationMutex)
@@ -361,19 +378,16 @@ func (a *BlockAPI) GetBlockReceipts(ctx context.Context, blockNrOrHash rpc.Block
 		}(i, hash)
 	}
 	wg.Wait()
-	compactReceipts := make([]map[string]interface{}, 0)
-	for _, r := range allReceipts {
-		if len(r) > 0 {
-			compactReceipts = append(compactReceipts, r)
-		}
-	}
-	for i, cr := range compactReceipts {
-		cr["transactionIndex"] = hexutil.Uint64(i) //nolint:gosec
-	}
 	if returnErr != nil {
 		return nil, returnErr
 	}
-	return compactReceipts, nil
+	for i, receipt := range allReceipts {
+		if len(receipt) == 0 {
+			return nil, fmt.Errorf("receipt %d was not encoded", i)
+		}
+		receipt["transactionIndex"] = hexutil.Uint64(i) //nolint:gosec
+	}
+	return allReceipts, nil
 }
 
 // EncodeTmBlock renders a tendermint block as an eth_getBlockBy* response.
@@ -399,6 +413,18 @@ func EncodeTmBlock(
 	globalBlockCache BlockCache,
 	cacheCreationMutex *sync.Mutex,
 ) (map[string]interface{}, error) {
+	if block == nil || block.Block == nil {
+		return nil, errors.New("cannot encode an empty consensus block")
+	}
+	if block.Block.Height < 0 {
+		return nil, fmt.Errorf("block height %d is negative", block.Block.Height)
+	}
+	if block.Block.Time.Unix() < 0 {
+		return nil, fmt.Errorf("block %d has a pre-epoch timestamp", block.Block.Height)
+	}
+	if err := validateBlockExecutionReceipts(k, ctxProvider, txConfigProvider, block, includeSyntheticTxs, cacheCreationMutex, globalBlockCache); err != nil {
+		return nil, err
+	}
 	number := big.NewInt(block.Block.Height)
 	blockhash := common.HexToHash(block.BlockID.Hash.String())
 	blockTime := block.Block.Time
@@ -414,7 +440,7 @@ func EncodeTmBlock(
 	} else {
 		baseFeePerGas = types.DefaultMinFeePerGas.TruncateInt().BigInt()
 	}
-	var blockGasUsed int64
+	var blockGasUsed uint64
 	chainConfig := types.DefaultChainConfig().EthereumConfig(k.ChainID(ctx))
 	transactions := []interface{}{}
 	latestCtx := ctxProvider(LatestCtxHeight)
@@ -426,9 +452,12 @@ func EncodeTmBlock(
 		switch m := msg.msg.(type) {
 		case *types.MsgEVMTransaction:
 			ethtx, _ := m.AsTransaction()
+			if ethtx == nil {
+				return nil, fmt.Errorf("block %d contains malformed EVM transaction at index %d", block.Block.Height, msg.index)
+			}
 			hash := ethtx.Hash()
 			receipt, found := getOrSetCachedReceipt(cacheCreationMutex, globalBlockCache, latestCtx, k, block, hash)
-			if !found {
+			if !found || receipt == nil {
 				continue
 			}
 			// Untraceable receipt — tx never reached the VM (ante-deferred
@@ -445,7 +474,7 @@ func EncodeTmBlock(
 			if !fullTx {
 				transactions = append(transactions, hash.Hex())
 			} else {
-				blockUnix := toUint64(blockTime.Unix())
+				blockUnix := uint64(blockTime.Unix())
 				newTx := export.NewRPCTransaction(ethtx, blockhash, number.Uint64(), blockUnix, uint64(len(transactions)), baseFeePerGas, chainConfig)
 				replaceFrom(newTx, receipt)
 				transactions = append(transactions, newTx)
@@ -455,10 +484,15 @@ func EncodeTmBlock(
 			bitutil.ORBytes(blockBloom, blockBloom, bloom[:])
 			// derive gas used from receipt as TxResult.GasUsed may not be accurate
 			// for ante-failing EVM txs.
-			blockGasUsed += int64(receipt.GasUsed) //nolint:gosec
+			if err := addBlockGasUsed(&blockGasUsed, receipt.GasUsed); err != nil {
+				return nil, fmt.Errorf("block %d transaction %d: %w", block.Block.Height, msg.index, err)
+			}
 		case *wasmtypes.MsgExecuteContract:
 			th := sha256.Sum256(block.Block.Txs[msg.index])
-			receipt, _ := getOrSetCachedReceipt(cacheCreationMutex, globalBlockCache, latestCtx, k, block, th)
+			receipt, found := getOrSetCachedReceipt(cacheCreationMutex, globalBlockCache, latestCtx, k, block, th)
+			if !found || receipt == nil {
+				continue
+			}
 			if !fullTx {
 				transactions = append(transactions, "0x"+hex.EncodeToString(th[:]))
 			} else {
@@ -468,7 +502,11 @@ func EncodeTmBlock(
 				if exists {
 					to = ercAddress
 				} else {
-					to = k.GetEVMAddressOrDefault(ctx, sdk.MustAccAddressFromBech32(m.Contract))
+					contractAddress, err := sdk.AccAddressFromBech32(m.Contract)
+					if err != nil {
+						return nil, fmt.Errorf("block %d contains invalid contract address at transaction %d: %w", block.Block.Height, msg.index, err)
+					}
+					to = k.GetEVMAddressOrDefault(ctx, contractAddress)
 				}
 				transactions = append(transactions, &export.RPCTransaction{
 					BlockHash:        &blockhash,
@@ -483,7 +521,9 @@ func EncodeTmBlock(
 			var bloom ethtypes.Bloom
 			bloom.SetBytes(receipt.LogsBloom)
 			bitutil.ORBytes(blockBloom, blockBloom, bloom[:])
-			blockGasUsed += int64(receipt.GasUsed) //nolint:gosec
+			if err := addBlockGasUsed(&blockGasUsed, receipt.GasUsed); err != nil {
+				return nil, fmt.Errorf("block %d transaction %d: %w", block.Block.Height, msg.index, err)
+			}
 		case *banktypes.MsgSend:
 			th := sha256.Sum256(block.Block.Txs[msg.index])
 			receipt, _ := getOrSetCachedReceipt(cacheCreationMutex, globalBlockCache, latestCtx, k, block, th)
@@ -495,9 +535,15 @@ func EncodeTmBlock(
 					BlockNumber: (*hexutil.Big)(number),
 					Hash:        th,
 				}
-				senderPaxAddr, _ := sdk.AccAddressFromBech32(m.FromAddress)
+				senderPaxAddr, err := sdk.AccAddressFromBech32(m.FromAddress)
+				if err != nil {
+					return nil, fmt.Errorf("block %d contains invalid sender address at transaction %d: %w", block.Block.Height, msg.index, err)
+				}
 				rpcTx.From = k.GetEVMAddressOrDefault(ctx, senderPaxAddr)
-				recipientPaxAddr, _ := sdk.AccAddressFromBech32(m.ToAddress)
+				recipientPaxAddr, err := sdk.AccAddressFromBech32(m.ToAddress)
+				if err != nil {
+					return nil, fmt.Errorf("block %d contains invalid recipient address at transaction %d: %w", block.Block.Height, msg.index, err)
+				}
 				recipientEvmAddr := k.GetEVMAddressOrDefault(ctx, recipientPaxAddr)
 				rpcTx.To = &recipientEvmAddr
 				amt := m.Amount.AmountOf("uhpx").Mul(state.SdkUhpxToSweiMultiplier)
@@ -507,7 +553,9 @@ func EncodeTmBlock(
 				transactions = append(transactions, rpcTx)
 			}
 			if receipt != nil {
-				blockGasUsed += int64(receipt.GasUsed) //nolint:gosec
+				if err := addBlockGasUsed(&blockGasUsed, receipt.GasUsed); err != nil {
+					return nil, fmt.Errorf("block %d transaction %d: %w", block.Block.Height, msg.index, err)
+				}
 			}
 		}
 	}
@@ -520,9 +568,13 @@ func EncodeTmBlock(
 	// (modules/evm/keeper/keeper.go's BlockContext.GasLimit), so
 	// eth_getBlockByNumber.gasLimit and the GASLIMIT opcode return the
 	// same number.
-	var gasLimit int64
-	if cp := ctx.ConsensusParams(); cp != nil && cp.Block != nil {
-		gasLimit = cp.Block.MaxGas
+	cp := ctx.ConsensusParams()
+	if cp == nil || cp.Block == nil {
+		return nil, fmt.Errorf("block %d consensus block parameters are unavailable", block.Block.Height)
+	}
+	gasLimit, err := encodeHeadGasLimit(cp.Block.MaxGas)
+	if err != nil {
+		return nil, fmt.Errorf("block %d: %w", block.Block.Height, err)
 	}
 	result := map[string]interface{}{
 		"number":           (*hexutil.Big)(number),
@@ -536,8 +588,8 @@ func EncodeTmBlock(
 		"miner":            miner,
 		"difficulty":       (*hexutil.Big)(big.NewInt(0)),           // inapplicable to Pax
 		"extraData":        hexutil.Bytes{},                         // inapplicable to Pax
-		"gasLimit":         hexutil.Uint64(gasLimit),                //nolint:gosec
-		"gasUsed":          hexutil.Uint64(blockGasUsed),            //nolint:gosec
+		"gasLimit":         gasLimit,
+		"gasUsed":          hexutil.Uint64(blockGasUsed),
 		"timestamp":        hexutil.Uint64(block.Block.Time.Unix()), //nolint:gosec
 		"transactionsRoot": txHash,
 		"receiptsRoot":     resultHash,
@@ -550,6 +602,17 @@ func EncodeTmBlock(
 		result["totalDifficulty"] = (*hexutil.Big)(big.NewInt(0)) // inapplicable to Pax
 	}
 	return result, nil
+}
+
+func addBlockGasUsed(total *uint64, gasUsed uint64) error {
+	if total == nil {
+		return fmt.Errorf("gas accumulator is not configured")
+	}
+	if math.MaxUint64-*total < gasUsed {
+		return fmt.Errorf("gas usage overflows uint64")
+	}
+	*total += gasUsed
+	return nil
 }
 
 func FullBloom() ethtypes.Bloom {

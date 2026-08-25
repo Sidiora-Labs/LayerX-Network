@@ -23,7 +23,6 @@ type AssociationAPI struct {
 	keeper           *keeper.Keeper
 	ctxProvider      func(int64) sdk.Context
 	txConfigProvider func(int64) client.TxConfig
-	sendAPI          *SendAPI
 	connectionType   ConnectionType
 	watermarks       *WatermarkManager
 }
@@ -33,7 +32,6 @@ func NewAssociationAPI(
 	k *keeper.Keeper,
 	ctxProvider func(int64) sdk.Context,
 	txConfigProvider func(int64) client.TxConfig,
-	sendAPI *SendAPI,
 	connectionType ConnectionType,
 	watermarks *WatermarkManager,
 ) *AssociationAPI {
@@ -42,7 +40,6 @@ func NewAssociationAPI(
 		keeper:           k,
 		ctxProvider:      ctxProvider,
 		txConfigProvider: txConfigProvider,
-		sendAPI:          sendAPI,
 		connectionType:   connectionType,
 		watermarks:       watermarks,
 	}
@@ -60,6 +57,12 @@ func (t *AssociationAPI) Associate(ctx context.Context, req *AssociateRequest) (
 	defer func() {
 		recordMetricsWithError(ctx, "pax_associate", t.connectionType, startTime, returnErr, recover())
 	}()
+	if req == nil {
+		return errors.New("association request is required")
+	}
+	if t.tmClient == nil || t.txConfigProvider == nil {
+		return errors.New("association broadcast dependencies are not configured")
+	}
 	rBytes, err := decodeHexString(req.R)
 	if err != nil {
 		return err
@@ -84,11 +87,15 @@ func (t *AssociationAPI) Associate(ctx context.Context, req *AssociateRequest) (
 	if err != nil {
 		return err
 	}
-	txBuilder := t.sendAPI.txConfigProvider(LatestCtxHeight).NewTxBuilder()
+	if err := msg.ValidateBasic(); err != nil {
+		return err
+	}
+	txConfig := t.txConfigProvider(LatestCtxHeight)
+	txBuilder := txConfig.NewTxBuilder()
 	if err = txBuilder.SetMsgs(msg); err != nil {
 		return err
 	}
-	txbz, encodeErr := t.sendAPI.txConfigProvider(LatestCtxHeight).TxEncoder()(txBuilder.GetTx())
+	txbz, encodeErr := txConfig.TxEncoder()(txBuilder.GetTx())
 	if encodeErr != nil {
 		return encodeErr
 	}
@@ -152,6 +159,9 @@ func (t *AssociationAPI) GetCosmosTx(ctx context.Context, ethHash common.Hash) (
 	if err != nil {
 		return "", err
 	}
+	if receipt == nil {
+		return "", errors.New("receipt store returned an empty receipt")
+	}
 	if receipt.BlockNumber > math.MaxInt64 {
 		return "", fmt.Errorf("invalid block number: %d", receipt.BlockNumber)
 	}
@@ -175,10 +185,16 @@ func (t *AssociationAPI) GetEvmTx(ctx context.Context, cosmosHash string) (resul
 	if err != nil {
 		return "", fmt.Errorf("failed to decode cosmosHash: %w", err)
 	}
+	if len(hashBytes) != common.HashLength {
+		return "", fmt.Errorf("cosmosHash must decode to %d bytes", common.HashLength)
+	}
 
 	txResponse, err := t.tmClient.Tx(ctx, hashBytes, false)
 	if err != nil {
 		return "", err
+	}
+	if txResponse == nil {
+		return "", errors.New("consensus client returned an empty transaction response")
 	}
 	if txResponse.TxResult.EvmTxInfo == nil {
 		return "", fmt.Errorf("transaction not found")

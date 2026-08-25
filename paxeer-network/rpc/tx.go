@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"math"
 	"math/big"
-	"strings"
 	"sync"
 	"time"
 
@@ -44,6 +43,7 @@ type TransactionAPI struct {
 	watermarks         *WatermarkManager
 	globalBlockCache   BlockCache
 	cacheCreationMutex *sync.Mutex
+	keyringEnabled     bool
 }
 
 type PaxTransactionAPI struct {
@@ -62,7 +62,9 @@ func NewTransactionAPI(
 	watermarks *WatermarkManager,
 	globalBlockCache BlockCache,
 	cacheCreationMutex *sync.Mutex,
+	enableKeyring ...bool,
 ) *TransactionAPI {
+	keyringEnabled := len(enableKeyring) > 0 && enableKeyring[0]
 	return &TransactionAPI{
 		tmClient:           tmClient,
 		keeper:             k,
@@ -74,6 +76,7 @@ func NewTransactionAPI(
 		watermarks:         watermarks,
 		globalBlockCache:   globalBlockCache,
 		cacheCreationMutex: cacheCreationMutex,
+		keyringEnabled:     keyringEnabled,
 	}
 }
 
@@ -89,8 +92,9 @@ func NewPaxTransactionAPI(
 	watermarks *WatermarkManager,
 	globalBlockCache BlockCache,
 	cacheCreationMutex *sync.Mutex,
+	enableKeyring ...bool,
 ) *PaxTransactionAPI {
-	baseAPI := NewTransactionAPI(tmClient, k, ctxProvider, txConfigProvider, homeDir, connectionType, methodTimeout, watermarks, globalBlockCache, cacheCreationMutex)
+	baseAPI := NewTransactionAPI(tmClient, k, ctxProvider, txConfigProvider, homeDir, connectionType, methodTimeout, watermarks, globalBlockCache, cacheCreationMutex, enableKeyring...)
 	baseAPI.includeSynthetic = true
 	return &PaxTransactionAPI{TransactionAPI: baseAPI, isPanicTx: isPanicTx}
 }
@@ -129,15 +133,21 @@ func getTransactionReceipt(
 
 	receipt, err := t.keeper.GetReceipt(sdkctx, hash)
 	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
+		if errors.Is(err, receiptpkg.ErrNotFound) {
 			// When the transaction doesn't exist, the RPC method should return JSON null
 			// as per specification.
 			return nil, nil
 		}
 		return nil, err
 	}
+	if receipt == nil {
+		return nil, fmt.Errorf("receipt lookup for %s returned nil", hash.Hex())
+	}
+	if receipt.BlockNumber > math.MaxInt64 {
+		return nil, fmt.Errorf("receipt block number %d exceeds int64", receipt.BlockNumber)
+	}
 	// Fetch block once — used both for ante-failure receipt population and encoding.
-	height := int64(receipt.BlockNumber) //nolint:gosec
+	height := int64(receipt.BlockNumber)
 	// Ethereum JSON-RPC: receipt for a block above safe latest => null, not an error.
 	block, err := blockByNumberOrNullForJSONRPC(ctx, t.tmClient, t.watermarks, &height, 1)
 	if err != nil {
@@ -188,6 +198,9 @@ func (t *TransactionAPI) GetVMError(ctx context.Context, hash common.Hash) (resu
 	receipt, err := t.keeper.GetReceipt(t.ctxProvider(LatestCtxHeight), hash)
 	if err != nil {
 		return "", err
+	}
+	if receipt == nil {
+		return "", fmt.Errorf("receipt lookup for %s returned nil", hash.Hex())
 	}
 	return receipt.VmError, nil
 }
@@ -290,12 +303,18 @@ func (t *TransactionAPI) GetTransactionByHash(ctx context.Context, hash common.H
 	// then try get from committed
 	receipt, err := t.keeper.GetReceipt(t.ctxProvider(LatestCtxHeight), hash)
 	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
+		if errors.Is(err, receiptpkg.ErrNotFound) {
 			return nil, nil
 		}
 		return nil, err
 	}
-	blockNumber := int64(receipt.BlockNumber) //nolint:gosec
+	if receipt == nil {
+		return nil, fmt.Errorf("receipt lookup for %s returned nil", hash.Hex())
+	}
+	if receipt.BlockNumber > math.MaxInt64 {
+		return nil, fmt.Errorf("receipt block number %d exceeds int64", receipt.BlockNumber)
+	}
+	blockNumber := int64(receipt.BlockNumber)
 	// Ethereum JSON-RPC: tx whose block isn't safe-latest yet => null (not yet
 	// mined from the caller's perspective). The watermark race here mirrors
 	// the one fixed in getTransactionReceipt; ethers' tx.wait() and similar
@@ -325,10 +344,13 @@ func (t *TransactionAPI) GetTransactionErrorByHash(ctx context.Context, hash com
 	}()
 	receipt, err := t.keeper.GetReceipt(t.ctxProvider(LatestCtxHeight), hash)
 	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
+		if errors.Is(err, receiptpkg.ErrNotFound) {
 			return "", nil
 		}
 		return "", err
+	}
+	if receipt == nil {
+		return "", fmt.Errorf("receipt lookup for %s returned nil", hash.Hex())
 	}
 	return receipt.VmError, nil
 }
@@ -345,7 +367,7 @@ func (t *TransactionAPI) GetTransactionCount(ctx context.Context, address common
 		recordMetricsWithError(ctx, "eth_getTransactionCount", t.connectionType, startTime, returnErr, recover())
 	}()
 
-	if blockNrOrHash.BlockHash == nil && *blockNrOrHash.BlockNumber == rpc.PendingBlockNumber {
+	if blockNrOrHash.BlockHash == nil && blockNrOrHash.BlockNumber != nil && *blockNrOrHash.BlockNumber == rpc.PendingBlockNumber {
 		if url, ok := t.tmClient.EvmProxy(address); ok {
 			recordRedirectedRequest(ctx, "eth_getTransactionCount", string(t.connectionType))
 
@@ -403,11 +425,20 @@ func (t *TransactionAPI) getTransactionWithBlock(block *coretypes.ResultBlock, t
 }
 
 func (t *TransactionAPI) encodeRPCTransaction(ethtx *ethtypes.Transaction, block *coretypes.ResultBlock, txIndex uint32) (*export.RPCTransaction, error) {
+	if block == nil || block.Block == nil {
+		return nil, errors.New("cannot encode transaction without canonical block data")
+	}
 	receipt, found := getOrSetCachedReceipt(t.cacheCreationMutex, t.globalBlockCache, t.ctxProvider(LatestCtxHeight), t.keeper, block, ethtx.Hash())
 	if !found {
 		return nil, fmt.Errorf("%w: for transaction %s", receiptpkg.ErrNotFound, ethtx.Hash().Hex())
 	}
-	height := int64(receipt.BlockNumber) // nolint:gosec
+	if receipt == nil {
+		return nil, fmt.Errorf("receipt cache returned nil for transaction %s", ethtx.Hash().Hex())
+	}
+	if receipt.BlockNumber > math.MaxInt64 {
+		return nil, fmt.Errorf("receipt block number %d exceeds int64", receipt.BlockNumber)
+	}
+	height := int64(receipt.BlockNumber)
 	var baseFeePerGas *big.Int
 	if block.Block.Height > 1 {
 		baseFeePerGas = t.keeper.GetNextBaseFeePerGas(t.ctxProvider(height - 1)).TruncateInt().BigInt()
@@ -416,9 +447,16 @@ func (t *TransactionAPI) encodeRPCTransaction(ethtx *ethtypes.Transaction, block
 	}
 	chainConfig := types.DefaultChainConfig().EthereumConfig(t.keeper.ChainID(t.ctxProvider(height)))
 	blockHash := common.HexToHash(block.BlockID.Hash.String())
-	blockNumber := uint64(block.Block.Height) //nolint:gosec
+	if block.Block.Height < 0 {
+		return nil, fmt.Errorf("block height %d is negative", block.Block.Height)
+	}
+	blockNumber := uint64(block.Block.Height)
 	blockTime := block.Block.Time
-	blockUnix := toUint64(blockTime.Unix())
+	blockUnixSigned := blockTime.Unix()
+	if blockUnixSigned < 0 {
+		return nil, fmt.Errorf("block %d timestamp predates Unix epoch", block.Block.Height)
+	}
+	blockUnix := uint64(blockUnixSigned)
 	res := export.NewRPCTransaction(ethtx, blockHash, blockNumber, blockUnix, uint64(txIndex), baseFeePerGas, chainConfig)
 	replaceFrom(res, receipt)
 	return res, nil
@@ -436,6 +474,9 @@ func (t *TransactionAPI) Sign(ctx context.Context, addr common.Address, data hex
 	defer func() {
 		recordMetricsWithError(ctx, "eth_sign", t.connectionType, startTime, returnErr, recover())
 	}()
+	if !t.keyringEnabled {
+		return nil, &ErrEVMNotSupported{Msg: "eth_sign is disabled; sign with an external wallet"}
+	}
 	kb, err := getTestKeyring(t.homeDir)
 	if err != nil {
 		return nil, err
@@ -544,7 +585,7 @@ func encodeReceipt(
 		"logs":              logs,
 		"logsBloom":         bloom,
 		"type":              hexutil.Uint(receipt.TxType),
-		"effectiveGasPrice": (*hexutil.Big)(big.NewInt(int64(receipt.EffectiveGasPrice))), // nolint:gosec
+		"effectiveGasPrice": (*hexutil.Big)(new(big.Int).SetUint64(receipt.EffectiveGasPrice)),
 		"status":            hexutil.Uint(receipt.Status),
 	}
 	if etx != nil && receipt.From == "" {

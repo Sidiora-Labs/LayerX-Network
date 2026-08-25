@@ -192,7 +192,7 @@ func (h *HTTPServer) Start() error {
 	StartMetricsPrinter(metricsPrinterInterval)
 
 	// Log all handlers mounted on server.
-	paths := make([]string, len(h.handlerNames))
+	paths := make([]string, 0, len(h.handlerNames))
 	for path := range h.handlerNames {
 		paths = append(paths, path)
 	}
@@ -281,8 +281,12 @@ func (h *HTTPServer) doStop() {
 	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 	err := h.server.Shutdown(ctx)
-	if err != nil && err == ctx.Err() {
-		logger.Error("HTTP server graceful shutdown timed out")
+	if err != nil {
+		if errors.Is(err, ctx.Err()) {
+			logger.Error("HTTP server graceful shutdown timed out")
+		} else {
+			logger.Error("HTTP server graceful shutdown failed", "err", err)
+		}
 		_ = h.server.Close()
 	}
 
@@ -445,6 +449,7 @@ func (h *virtualHostHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.next.ServeHTTP(w, r)
 		return
 	}
+	host = strings.ToLower(host)
 	// Not an IP address, but a hostname. Need to validate
 	if _, exist := h.vhosts["*"]; exist {
 		h.next.ServeHTTP(w, r)
@@ -575,7 +580,7 @@ func NewGzipHandler(next http.Handler) http.Handler {
 // and then registers all of the APIs exposed by the services.
 func RegisterApis(apis []rpc.API, modules []string, srv *rpc.Server) error {
 	if bad, available := checkModuleAvailability(modules, apis); len(bad) > 0 {
-		logger.Error("Unavailable modules in HTTP API list", "unavailable", bad, "available", available)
+		return fmt.Errorf("unavailable RPC modules %q; available modules are %q", bad, available)
 	}
 	// Generate the allow list based on the allowed modules
 	allowList := make(map[string]bool)

@@ -746,10 +746,18 @@ func ComputeBlockBounds(latest, earliest, lastToHeight int64, crit filters.Filte
 	end := latest
 
 	if crit.FromBlock != nil {
-		begin = getHeightFromBigIntBlockNumber(latest, crit.FromBlock)
+		var err error
+		begin, err = getHeightFromBigIntBlockNumber(latest, crit.FromBlock)
+		if err != nil {
+			return 0, 0, err
+		}
 	}
 	if crit.ToBlock != nil {
-		end = getHeightFromBigIntBlockNumber(latest, crit.ToBlock)
+		var err error
+		end, err = getHeightFromBigIntBlockNumber(latest, crit.ToBlock)
+		if err != nil {
+			return 0, 0, err
+		}
 		if crit.FromBlock == nil && begin > end {
 			begin = end
 		}

@@ -318,11 +318,23 @@ func TestConvertBlockNumber(t *testing.T) {
 		}
 		return sdk.Context{}
 	}, nil, legacyabci.BeginBlockKeepers{}, nil, &MockClient{}, nil, nil, nil, evmrpc.NewBlockCache(3000), &sync.Mutex{}, watermarks)
-	require.Equal(t, int64(10), backend.ConvertBlockNumber(10))
-	require.Equal(t, int64(1), backend.ConvertBlockNumber(0))
-	require.Equal(t, int64(1000), backend.ConvertBlockNumber(-2))
-	require.Equal(t, int64(1000), backend.ConvertBlockNumber(-3))
-	require.Equal(t, int64(1000), backend.ConvertBlockNumber(-4))
+	converted, err := backend.ConvertBlockNumber(context.Background(), 10)
+	require.NoError(t, err)
+	require.Equal(t, int64(10), converted)
+	converted, err = backend.ConvertBlockNumber(context.Background(), 0)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), converted)
+	converted, err = backend.ConvertBlockNumber(context.Background(), rpc.SafeBlockNumber)
+	require.NoError(t, err)
+	require.Equal(t, int64(1000), converted)
+	converted, err = backend.ConvertBlockNumber(context.Background(), rpc.FinalizedBlockNumber)
+	require.NoError(t, err)
+	require.Equal(t, int64(1000), converted)
+	converted, err = backend.ConvertBlockNumber(context.Background(), rpc.LatestBlockNumber)
+	require.NoError(t, err)
+	require.Equal(t, int64(1000), converted)
+	_, err = backend.ConvertBlockNumber(context.Background(), rpc.PendingBlockNumber)
+	require.ErrorContains(t, err, "pending block")
 }
 
 func TestPreV620UpgradeUsesBaseFeeNil(t *testing.T) {
@@ -439,20 +451,17 @@ func TestGasLimitUsesConsensusOrConfig(t *testing.T) {
 	require.Equal(t, uint64(200_000_000), header2.GasLimit)
 }
 
-// Gas-limit fallback tests
-func TestGasLimitFallbackToDefault(t *testing.T) {
+func TestGasLimitRequiresCanonicalConsensusParams(t *testing.T) {
 	testApp := app.Setup(t, false, false, false)
 	cfg := &evmrpc.SimulateConfig{GasCap: 20_000_000, EVMTimeout: time.Second}
 
-	// Case 1: ConsensusParams is nil → DefaultBlockGasLimit.
 	nilParamsCtx := testApp.GetContextForDeliverTx([]byte{}).WithBlockHeight(1).WithConsensusParams(nil)
 	ctxProvider1 := func(h int64) sdk.Context { return nilParamsCtx.WithBlockHeight(h) }
 	tmClient1 := &MockClient{}
 	watermarks1 := evmrpc.NewWatermarkManager(tmClient1, ctxProvider1, nil, testApp.EvmKeeper.ReceiptStore())
 	backend1 := evmrpc.NewBackend(ctxProvider1, &testApp.EvmKeeper, legacyabci.BeginBlockKeepers{}, func(int64) client.TxConfig { return TxConfig }, tmClient1, cfg, testApp.BaseApp, testApp.TracerAnteHandler, evmrpc.NewBlockCache(3000), &sync.Mutex{}, watermarks1)
-	h1, err := backend1.HeaderByNumber(context.Background(), 1)
-	require.NoError(t, err)
-	require.Equal(t, uint64(10_000_000), h1.GasLimit) // DefaultBlockGasLimit
+	_, err := backend1.HeaderByNumber(context.Background(), 1)
+	require.ErrorContains(t, err, "consensus block parameters are unavailable")
 
 	// Case 2: Block fails — resolution errors out entirely.
 	baseCtx := testApp.GetContextForDeliverTx([]byte{}).WithBlockHeight(1)
@@ -487,20 +496,17 @@ func TestSimulateBackendBlockResolutionCoverage(t *testing.T) {
 		h := backend.CurrentHeader()
 		require.NotNil(t, h)
 		require.Equal(t, int64(1), h.Number.Int64())
-		require.Equal(t, common.BytesToHash(MockBlockID.Hash), h.ParentHash)
+		require.Equal(t, common.BytesToHash(mockBlockHeader(1).LastBlockID.Hash), h.ParentHash)
 	})
 
-	t.Run("CurrentHeader_fallback_gas_limit_when_block_unavailable", func(t *testing.T) {
+	t.Run("CurrentHeader_does_not_fabricate_when_block_unavailable", func(t *testing.T) {
 		bcClient := &bcAlwaysFailClient{MockClient: &MockClient{}}
 		wm := evmrpc.NewWatermarkManager(bcClient, ctxProvider, nil, testApp.EvmKeeper.ReceiptStore())
 		b2 := evmrpc.NewBackend(ctxProvider, &testApp.EvmKeeper,
 			legacyabci.BeginBlockKeepers{}, func(int64) client.TxConfig { return TxConfig },
 			bcClient, cfg, testApp.BaseApp, testApp.TracerAnteHandler, evmrpc.NewBlockCache(3000), &sync.Mutex{}, wm)
 		h := b2.CurrentHeader()
-		require.NotNil(t, h)
-		require.Equal(t, int64(1), h.Number.Int64())
-		require.Equal(t, uint64(10_000_000), h.GasLimit)
-		require.Equal(t, common.Hash{}, h.ParentHash)
+		require.Nil(t, h)
 	})
 }
 

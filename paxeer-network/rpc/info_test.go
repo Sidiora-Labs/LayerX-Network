@@ -44,7 +44,7 @@ func TestChainID(t *testing.T) {
 
 func TestAccounts(t *testing.T) {
 	homeDir := t.TempDir()
-	api := evmrpc.NewInfoAPI(nil, nil, nil, nil, homeDir, 1024, evmrpc.ConnectionTypeHTTP, nil, nil)
+	api := evmrpc.NewInfoAPI(nil, nil, nil, nil, homeDir, 1024, evmrpc.ConnectionTypeHTTP, nil, nil, true)
 	clientCtx := client.Context{}.WithViper("").WithHomeDir(homeDir)
 	clientCtx, err := config.ReadFromClientConfig(clientCtx)
 	require.Nil(t, err)
@@ -412,13 +412,8 @@ func TestCalculateGasUsedRatioConsensusParamsFallback(t *testing.T) {
 
 	api := newInfoAPIWithWatermarks(ctxProviderWithoutConsensusParams)
 
-	// The calculation should still work using fallback gas limit
-	ratio, err := api.CalculateGasUsedRatio(t.Context(), 1)
-	require.NoError(t, err)
-
-	// Should return a valid ratio using the default fallback gas limit (10000000)
-	require.GreaterOrEqual(t, ratio, 0.0)
-	require.LessOrEqual(t, ratio, 1.0)
+	_, err := api.CalculateGasUsedRatio(t.Context(), 1)
+	require.ErrorContains(t, err, "consensus block parameters are unavailable")
 }
 
 func TestCalculateGasUsedRatioConsensusParamsNilBlock(t *testing.T) {
@@ -440,12 +435,8 @@ func TestCalculateGasUsedRatioConsensusParamsNilBlock(t *testing.T) {
 
 	api := newInfoAPIWithWatermarks(ctxProviderWithNilBlock)
 
-	// Should use fallback logic and still work
-	ratio, err := api.CalculateGasUsedRatio(t.Context(), 1)
-	require.NoError(t, err)
-
-	require.GreaterOrEqual(t, ratio, 0.0)
-	require.LessOrEqual(t, ratio, 1.0)
+	_, err := api.CalculateGasUsedRatio(t.Context(), 1)
+	require.ErrorContains(t, err, "consensus block parameters are unavailable")
 }
 
 func TestCalculateGasUsedRatioZeroGasLimit(t *testing.T) {
@@ -467,10 +458,8 @@ func TestCalculateGasUsedRatioZeroGasLimit(t *testing.T) {
 
 	api := newInfoAPIWithWatermarks(ctxProviderWithZeroGasLimit)
 
-	// Should return 0 to avoid division by zero
-	ratio, err := api.CalculateGasUsedRatio(t.Context(), 1)
-	require.NoError(t, err)
-	require.Equal(t, 0.0, ratio, "Should return 0.0 when gas limit is 0 to avoid division by zero")
+	_, err := api.CalculateGasUsedRatio(t.Context(), 1)
+	require.ErrorContains(t, err, "gas limit is zero")
 }
 
 func TestBlockNumberWatermarkDirect(t *testing.T) {
@@ -482,9 +471,8 @@ func TestBlockNumberWatermarkDirect(t *testing.T) {
 	}
 	wm := evmrpc.NewWatermarkManager(&MockClient{}, ctxProvider, nil, EVMKeeper.ReceiptStore())
 	api := evmrpc.NewInfoAPI(&MockClient{}, EVMKeeper, ctxProvider, nil, "", 1024, evmrpc.ConnectionTypeHTTP, nil, wm)
-	require.NotPanics(t, func() {
-		_ = api.BlockNumber(t.Context())
-	})
+	_, err := api.BlockNumber(t.Context())
+	require.NoError(t, err)
 }
 
 func TestWatermarkComputation(t *testing.T) {

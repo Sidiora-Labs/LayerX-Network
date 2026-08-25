@@ -110,6 +110,11 @@ type Config struct {
 	// test api enables certain override apis for integration test situations
 	EnableTestAPI bool `mapstructure:"enable_test_api"`
 
+	// EnableUnsafeKeyringRPC exposes eth_sign, eth_signTransaction, and
+	// eth_sendTransaction against the node's local test keyring. It must remain
+	// disabled on public RPC nodes; raw signed transactions remain available.
+	EnableUnsafeKeyringRPC bool `mapstructure:"enable_unsafe_keyring_rpc"`
+
 	// MaxConcurrentTraceCalls defines the maximum number of concurrent debug_trace calls.
 	// Set to 0 for unlimited.
 	MaxConcurrentTraceCalls uint64 `mapstructure:"max_concurrent_trace_calls"`
@@ -187,6 +192,7 @@ var DefaultConfig = Config{
 	MaxBlocksForLog:              2000,
 	MaxSubscriptionsNewHead:      10000,
 	EnableTestAPI:                false,
+	EnableUnsafeKeyringRPC:       false,
 	MaxConcurrentTraceCalls:      10,
 	MaxConcurrentSimulationCalls: runtime.NumCPU(),
 	MaxTraceLookbackBlocks:       10000,
@@ -233,6 +239,7 @@ const (
 	flagMaxBlocksForLog              = "evm.max_blocks_for_log"
 	flagMaxSubscriptionsNewHead      = "evm.max_subscriptions_new_head"
 	flagEnableTestAPI                = "evm.enable_test_api"
+	flagEnableUnsafeKeyringRPC       = "evm.enable_unsafe_keyring_rpc"
 	flagMaxConcurrentTraceCalls      = "evm.max_concurrent_trace_calls"
 	flagMaxConcurrentSimulationCalls = "evm.max_concurrent_simulation_calls"
 	flagMaxTraceLookbackBlocks       = "evm.max_trace_lookback_blocks"
@@ -358,6 +365,11 @@ func ReadConfig(opts servertypes.AppOptions) (Config, error) {
 	}
 	if v := opts.Get(flagEnableTestAPI); v != nil {
 		if cfg.EnableTestAPI, err = cast.ToBoolE(v); err != nil {
+			return cfg, err
+		}
+	}
+	if v := opts.Get(flagEnableUnsafeKeyringRPC); v != nil {
+		if cfg.EnableUnsafeKeyringRPC, err = cast.ToBoolE(v); err != nil {
 			return cfg, err
 		}
 	}
@@ -517,6 +529,9 @@ checktx_timeout = "{{ .EVM.CheckTxTimeout }}"
 
 # controls whether to have txns go through one by one
 slow = {{ .EVM.Slow }}
+
+# Exposes local test-keyring signing methods. Keep false on every public RPC node.
+enable_unsafe_keyring_rpc = {{ .EVM.EnableUnsafeKeyringRPC }}
 
 # Deny list defines list of methods that EVM RPC should fail fast, e.g ["debug_traceBlockByNumber"]
 deny_list = {{ .EVM.DenyList }}

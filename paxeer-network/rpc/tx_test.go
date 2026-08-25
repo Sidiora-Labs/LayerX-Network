@@ -134,8 +134,8 @@ func TestGetTransactionError(t *testing.T) {
 
 func TestSign(t *testing.T) {
 	homeDir := t.TempDir()
-	txApi := evmrpc.NewTransactionAPI(nil, nil, nil, nil, homeDir, evmrpc.ConnectionTypeHTTP, utils.None[time.Duration](), &evmrpc.WatermarkManager{}, evmrpc.NewBlockCache(3000), &sync.Mutex{})
-	infoApi := evmrpc.NewInfoAPI(nil, nil, nil, nil, homeDir, 1024, evmrpc.ConnectionTypeHTTP, nil, nil)
+	txApi := evmrpc.NewTransactionAPI(nil, nil, nil, nil, homeDir, evmrpc.ConnectionTypeHTTP, utils.None[time.Duration](), &evmrpc.WatermarkManager{}, evmrpc.NewBlockCache(3000), &sync.Mutex{}, true)
+	infoApi := evmrpc.NewInfoAPI(nil, nil, nil, nil, homeDir, 1024, evmrpc.ConnectionTypeHTTP, nil, nil, true)
 	clientCtx := client.Context{}.WithViper("").WithHomeDir(homeDir)
 	clientCtx, err := config.ReadFromClientConfig(clientCtx)
 	require.Nil(t, err)

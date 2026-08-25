@@ -112,5 +112,6 @@ func TestGuardHistoricalDebugTraceByHashUsesTendermintHeight(t *testing.T) {
 	require.Contains(t, err.Error(), "block number 8 is beyond max lookback of 1")
 
 	err = api.guardHistoricalDebugTraceByHash(context.Background(), "debug_traceCall", common.HexToHash("0x1"))
-	require.NoError(t, err)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "resolve trace block policy")
 }

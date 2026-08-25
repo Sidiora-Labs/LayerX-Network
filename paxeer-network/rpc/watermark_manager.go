@@ -47,6 +47,9 @@ func NewWatermarkManager(
 // Watermarks returns the earliest block height, earliest state height, and
 // latest height that are safe to serve. Earliest heights are inclusive.
 func (m *WatermarkManager) Watermarks(ctx context.Context) (int64, int64, int64, error) {
+	if m == nil {
+		return 0, 0, 0, errNoHeightSource
+	}
 	var (
 		latest           int64
 		latestSet        bool
@@ -251,6 +254,9 @@ func blockByNumberRespectingWatermarks(
 	heightPtr *int64,
 	maxRetries int,
 ) (*coretypes.ResultBlock, error) {
+	if wm == nil {
+		return nil, errNoHeightSource
+	}
 	if heightPtr == nil {
 		latest, err := wm.LatestHeight(ctx)
 		if err != nil {
@@ -337,7 +343,12 @@ func (m *WatermarkManager) fetchTendermintWatermarks(ctx context.Context) (int64
 	if err != nil {
 		return 0, 0, err
 	}
-	TraceTendermintIfApplicable(ctx, "Status", []string{}, status)
+	if status == nil {
+		return 0, 0, errors.New("consensus client returned empty status")
+	}
+	if err := TraceTendermintIfApplicable(ctx, "Status", []string{}, status); err != nil {
+		return 0, 0, err
+	}
 	return status.SyncInfo.LatestBlockHeight, status.SyncInfo.EarliestBlockHeight, nil
 }
 

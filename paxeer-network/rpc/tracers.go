@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"runtime/debug"
 	"sync"
 	"time"
@@ -25,6 +26,7 @@ import (
 	"github.com/sidiora-labs/paxeer-network/sdk/baseapp"
 	"github.com/sidiora-labs/paxeer-network/sdk/client"
 	sdk "github.com/sidiora-labs/paxeer-network/sdk/types"
+	receiptstore "github.com/sidiora-labs/paxeer-network/storage/ledger_db/receipt"
 )
 
 const (
@@ -93,12 +95,21 @@ func (api *DebugAPI) prepareTraceContext(ctx context.Context) (context.Context, 
 }
 
 func (api *DebugAPI) guardHistoricalDebugTraceByTxHash(ctx context.Context, endpoint string, hash common.Hash) error {
-	if api.keeper == nil {
-		return nil
+	if api.keeper == nil || api.ctxProvider == nil {
+		return errors.New("trace receipt policy is not configured")
 	}
 	receipt, err := api.keeper.GetReceipt(api.ctxProvider(LatestCtxHeight), hash)
-	if err != nil || receipt == nil {
+	if errors.Is(err, receiptstore.ErrNotFound) {
 		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("resolve trace receipt policy: %w", err)
+	}
+	if receipt == nil {
+		return errors.New("receipt store returned an empty trace receipt")
+	}
+	if receipt.BlockNumber > math.MaxInt64 {
+		return errors.New("trace receipt block number exceeds int64")
 	}
 	return api.guardHistoricalDebugTraceHeight(ctx, endpoint, int64(receipt.BlockNumber)) //nolint:gosec
 }
@@ -113,11 +124,14 @@ func (api *DebugAPI) guardHistoricalDebugTraceByNumber(ctx context.Context, endp
 
 func (api *DebugAPI) guardHistoricalDebugTraceByHash(ctx context.Context, endpoint string, hash common.Hash) error {
 	if api.backend == nil || api.tmClient == nil {
-		return nil
+		return errors.New("trace block policy is not configured")
 	}
 	block, err := blockByHashRespectingWatermarks(ctx, api.tmClient, api.backend.watermarks, hash.Bytes(), 1)
-	if err != nil || block == nil || block.Block == nil {
-		return nil
+	if err != nil {
+		return fmt.Errorf("resolve trace block policy: %w", err)
+	}
+	if block == nil || block.Block == nil {
+		return errors.New("consensus client returned an empty trace block")
 	}
 	return api.guardHistoricalDebugTraceHeight(ctx, endpoint, block.Block.Height)
 }
@@ -133,6 +147,9 @@ func (api *DebugAPI) guardHistoricalDebugTraceByNumberOrHash(ctx context.Context
 }
 
 func (api *DebugAPI) resolveDebugTraceBlockNumber(ctx context.Context, number rpc.BlockNumber) (int64, error) {
+	if api.ctxProvider == nil {
+		return 0, errors.New("trace state context provider is not configured")
+	}
 	switch number {
 	case rpc.SafeBlockNumber, rpc.FinalizedBlockNumber, rpc.LatestBlockNumber, rpc.PendingBlockNumber:
 		return api.ctxProvider(LatestCtxHeight).BlockHeight(), nil
@@ -144,9 +161,16 @@ func (api *DebugAPI) resolveDebugTraceBlockNumber(ctx context.Context, number rp
 		if err != nil {
 			return 0, err
 		}
+		if genesisRes == nil || genesisRes.Genesis == nil {
+			return 0, errors.New("consensus client returned empty genesis information")
+		}
 		return genesisRes.Genesis.InitialHeight, nil
 	default:
-		return number.Int64(), nil
+		resolved := number.Int64()
+		if resolved < 0 {
+			return 0, fmt.Errorf("unsupported block number %d", resolved)
+		}
+		return resolved, nil
 	}
 }
 
@@ -765,10 +789,18 @@ func (api *DebugAPI) TraceStateAccess(ctx context.Context, hash common.Hash) (re
 	if err != nil {
 		return nil, err
 	}
+	tendermintState, err := tendermintTraces.MarshalToJSON()
+	if err != nil {
+		return nil, fmt.Errorf("encode Tendermint state trace: %w", err)
+	}
+	receiptState, err := receiptTraces.MarshalToJSON()
+	if err != nil {
+		return nil, fmt.Errorf("encode receipt trace: %w", err)
+	}
 	response := StateAccessResponse{
 		AppState:        state.GetDBImpl(stateDB).Ctx().StoreTracer().DerivePrestateToJson(),
-		TendermintState: tendermintTraces.MustMarshalToJson(),
-		Receipt:         receiptTraces.MustMarshalToJson(),
+		TendermintState: tendermintState,
+		Receipt:         receiptState,
 	}
 	return response, nil
 }

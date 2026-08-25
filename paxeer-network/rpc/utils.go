@@ -31,6 +31,7 @@ import (
 	"github.com/sidiora-labs/paxeer-network/sdk/crypto/keyring"
 	sdk "github.com/sidiora-labs/paxeer-network/sdk/types"
 	banktypes "github.com/sidiora-labs/paxeer-network/sdk/x/bank/types"
+	receiptstore "github.com/sidiora-labs/paxeer-network/storage/ledger_db/receipt"
 	utilmetrics "github.com/sidiora-labs/paxeer-network/utils/metrics"
 	wasmtypes "github.com/sidiora-labs/paxeer-network/wasm/x/wasm/types"
 	"golang.org/x/mod/semver"
@@ -69,11 +70,19 @@ func getBlockNumber(ctx context.Context, tmClient client.LocalClient, number rpc
 	case rpc.SafeBlockNumber, rpc.FinalizedBlockNumber, rpc.LatestBlockNumber, rpc.PendingBlockNumber:
 		numberPtr = nil // requesting Block with nil means the latest block
 	case rpc.EarliestBlockNumber:
+		if tmClient == nil {
+			return nil, errors.New("consensus client is not configured")
+		}
 		genesisRes, err := tmClient.Genesis(ctx)
 		if err != nil {
 			return nil, err
 		}
-		TraceTendermintIfApplicable(ctx, "Genesis", []string{}, genesisRes)
+		if genesisRes == nil || genesisRes.Genesis == nil {
+			return nil, errors.New("consensus client returned empty genesis information")
+		}
+		if err := TraceTendermintIfApplicable(ctx, "Genesis", []string{}, genesisRes); err != nil {
+			return nil, err
+		}
 		numberPtr = &genesisRes.Genesis.InitialHeight
 	default:
 		numberI64 := number.Int64()
@@ -82,21 +91,20 @@ func getBlockNumber(ctx context.Context, tmClient client.LocalClient, number rpc
 	return numberPtr, nil
 }
 
-func getHeightFromBigIntBlockNumber(latest int64, blockNumber *big.Int) int64 {
-	switch blockNumber.Int64() {
+func getHeightFromBigIntBlockNumber(latest int64, blockNumber *big.Int) (int64, error) {
+	if blockNumber == nil {
+		return 0, errors.New("block number is required")
+	}
+	if !blockNumber.IsInt64() {
+		return 0, fmt.Errorf("block number %s exceeds int64", blockNumber.String())
+	}
+	number := blockNumber.Int64()
+	switch number {
 	case rpc.FinalizedBlockNumber.Int64(), rpc.LatestBlockNumber.Int64(), rpc.SafeBlockNumber.Int64(), rpc.PendingBlockNumber.Int64():
-		return latest
+		return latest, nil
 	default:
-		return blockNumber.Int64()
+		return number, nil
 	}
-}
-
-// this avoids a gosec lint error rather than just casting
-func toUint64(value int64) uint64 {
-	if value < 0 {
-		return 0
-	}
-	return uint64(value)
 }
 
 func getTestKeyring(homeDir string) (keyring.Keyring, error) {
@@ -140,22 +148,29 @@ func getAddressPrivKeyMap(kb keyring.Keyring) map[string]*ecdsa.PrivateKey {
 }
 
 func blockByNumberWithRetry(ctx context.Context, client client.LocalClient, height *int64, maxRetries int) (*coretypes.ResultBlock, error) {
+	if client == nil {
+		return nil, errors.New("consensus client is not configured")
+	}
 	blockRes, err := client.Block(ctx, height)
 	var retryCount = 0
 	for err != nil && retryCount < maxRetries {
 		// retry once, since application DB and block DB are not committed atomically so it's possible for
 		// receipt to exist while block results aren't committed yet
-		time.Sleep(1 * time.Second)
+		if err := waitForRPCRetry(ctx, time.Second); err != nil {
+			return nil, err
+		}
 		blockRes, err = client.Block(ctx, height)
 		retryCount++
 	}
 	if err != nil {
 		return nil, err
 	}
-	if blockRes.Block == nil {
-		return nil, fmt.Errorf("could not find block for height %d", height)
+	if blockRes == nil || blockRes.Block == nil {
+		return nil, fmt.Errorf("could not find block for height %s", stringifyInt64Ptr(height))
 	}
-	TraceTendermintIfApplicable(ctx, "Block", []string{stringifyInt64Ptr(height)}, blockRes)
+	if err := TraceTendermintIfApplicable(ctx, "Block", []string{stringifyInt64Ptr(height)}, blockRes); err != nil {
+		return nil, err
+	}
 	return blockRes, err
 }
 
@@ -164,23 +179,41 @@ func blockByHash(ctx context.Context, client client.LocalClient, hash bytes.HexB
 }
 
 func blockByHashWithRetry(ctx context.Context, client client.LocalClient, hash bytes.HexBytes, maxRetries int) (*coretypes.ResultBlock, error) {
+	if client == nil {
+		return nil, errors.New("consensus client is not configured")
+	}
 	blockRes, err := client.BlockByHash(ctx, hash)
 	var retryCount = 0
 	for err != nil && retryCount < maxRetries {
 		// retry once, since application DB and block DB are not committed atomically so it's possible for
 		// receipt to exist while block results aren't committed yet
-		time.Sleep(1 * time.Second)
+		if err := waitForRPCRetry(ctx, time.Second); err != nil {
+			return nil, err
+		}
 		blockRes, err = client.BlockByHash(ctx, hash)
 		retryCount++
 	}
 	if err != nil {
 		return nil, err
 	}
-	if blockRes.Block == nil {
+	if blockRes == nil || blockRes.Block == nil {
 		return nil, ErrBlockNotFoundByHash
 	}
-	TraceTendermintIfApplicable(ctx, "BlockByHash", []string{hash.String()}, blockRes)
+	if err := TraceTendermintIfApplicable(ctx, "BlockByHash", []string{hash.String()}, blockRes); err != nil {
+		return nil, err
+	}
 	return blockRes, err
+}
+
+func waitForRPCRetry(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // ValidateEVMBlockHeight checks if the requested block height is valid for EVM queries
@@ -198,6 +231,66 @@ func ValidateEVMBlockHeight(chainID string, blockHeight int64) error {
 type indexedMsg struct {
 	msg   sdk.Msg
 	index int
+}
+
+func validateBlockExecutionReceipts(
+	k *keeper.Keeper,
+	ctxProvider func(int64) sdk.Context,
+	txConfigProvider func(int64) client.TxConfig,
+	block *coretypes.ResultBlock,
+	includeSynthetic bool,
+	cacheCreationMutex *sync.Mutex,
+	globalBlockCache BlockCache,
+) error {
+	if block == nil || block.Block == nil {
+		return errors.New("cannot validate receipts for an empty consensus block")
+	}
+	if block.Block.Height < 0 {
+		return fmt.Errorf("cannot validate receipts for negative block height %d", block.Block.Height)
+	}
+	decoder := txConfigProvider(block.Block.Height).TxDecoder()
+	latestCtx := ctxProvider(LatestCtxHeight)
+	for txIndex, txBytes := range block.Block.Txs {
+		tx, err := decoder(txBytes)
+		if err != nil {
+			return fmt.Errorf("decode consensus transaction %d in block %d: %w", txIndex, block.Block.Height, err)
+		}
+		for messageIndex, message := range tx.GetMsgs() {
+			var hash common.Hash
+			switch typed := message.(type) {
+			case *types.MsgEVMTransaction:
+				if typed.IsAssociateTx() {
+					continue
+				}
+				transaction, _ := typed.AsTransaction()
+				if transaction == nil {
+					return fmt.Errorf("consensus transaction %d message %d in block %d contains malformed EVM data", txIndex, messageIndex, block.Block.Height)
+				}
+				hash = transaction.Hash()
+			case *wasmtypes.MsgExecuteContract:
+				if !includeSynthetic {
+					continue
+				}
+				hash = common.Hash(sha256.Sum256(txBytes))
+			default:
+				continue
+			}
+			receipt, err := getOrSetCachedReceiptErr(cacheCreationMutex, globalBlockCache, latestCtx, k, block, hash)
+			if err != nil {
+				if errors.Is(err, receiptstore.ErrNotFound) {
+					return fmt.Errorf("block %d transaction %d message %d has no canonical receipt: %w", block.Block.Height, txIndex, messageIndex, err)
+				}
+				return fmt.Errorf("load block %d transaction %d message %d receipt: %w", block.Block.Height, txIndex, messageIndex, err)
+			}
+			if receipt == nil {
+				return fmt.Errorf("block %d transaction %d message %d receipt lookup returned nil", block.Block.Height, txIndex, messageIndex)
+			}
+			if receipt.BlockNumber != uint64(block.Block.Height) {
+				return fmt.Errorf("block %d transaction %d message %d receipt belongs to block %d", block.Block.Height, txIndex, messageIndex, receipt.BlockNumber)
+			}
+		}
+	}
+	return nil
 }
 
 func filterTransactions(
@@ -229,10 +322,16 @@ func filterTransactions(
 					continue
 				}
 				ethtx, _ := m.AsTransaction()
+				if ethtx == nil {
+					continue
+				}
 				hash := ethtx.Hash()
-				sender, _ := rpcutils.RecoverEVMSender(ethtx, block.Block.Height, block.Block.Time.Unix())
+				sender, err := rpcutils.RecoverEVMSender(ethtx, block.Block.Height, block.Block.Time.Unix())
+				if err != nil {
+					continue
+				}
 				receipt, found := getOrSetCachedReceipt(cacheCreationMutex, globalBlockCache, latestCtx, k, block, hash)
-				if !found || receipt.BlockNumber != uint64(block.Block.Height) || isReceiptFromAnteError(ctx, receipt) { //nolint:gosec
+				if !found || receipt == nil || receipt.BlockNumber != uint64(block.Block.Height) || isReceiptFromAnteError(ctx, receipt) { //nolint:gosec
 					continue
 				}
 				txCount := txCounts[sender.Hex()]

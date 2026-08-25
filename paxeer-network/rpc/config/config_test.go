@@ -31,6 +31,7 @@ type opts struct {
 	maxBlocksForLog              interface{}
 	maxSubscriptionsNewHead      interface{}
 	enableTestAPI                interface{}
+	enableUnsafeKeyringRPC       interface{}
 	maxConcurrentTraceCalls      interface{}
 	maxConcurrentSimulationCalls interface{}
 	maxTraceLookbackBlocks       interface{}
@@ -110,6 +111,9 @@ func (o *opts) Get(k string) interface{} {
 	if k == "evm.enable_test_api" {
 		return o.enableTestAPI
 	}
+	if k == "evm.enable_unsafe_keyring_rpc" {
+		return o.enableUnsafeKeyringRPC
+	}
 	if k == "evm.max_concurrent_trace_calls" {
 		return o.maxConcurrentTraceCalls
 	}
@@ -179,6 +183,7 @@ func getDefaultOpts() opts {
 		20000,
 		1000,
 		10000,
+		false,
 		false,
 		uint64(10),
 		uint64(10),
@@ -264,6 +269,10 @@ func TestReadConfig(t *testing.T) {
 	require.NotNil(t, err)
 	badOpts = goodOpts
 	badOpts.denyList = map[string]interface{}{}
+	_, err = config.ReadConfig(&badOpts)
+	require.NotNil(t, err)
+	badOpts = goodOpts
+	badOpts.enableUnsafeKeyringRPC = "bad"
 	_, err = config.ReadConfig(&badOpts)
 	require.NotNil(t, err)
 
