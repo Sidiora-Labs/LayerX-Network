@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -23,14 +24,19 @@ static REQUEST_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 /// One authenticated HTTPS JSON-RPC endpoint. Credentials are read from the
 /// named file and never accepted inline or retained in debug output.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct RpcEndpointConfig {
     pub url: String,
     pub ca_certificate_der: PathBuf,
     pub bearer_token_file: PathBuf,
+    /// Operator-audited backend identity. DNS aliases and distinct request
+    /// paths backed by one operator must carry the same identity.
+    pub independent_backend: String,
 }
 
 /// Strict majority policy and transport bounds for source-chain RPC reads.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct RpcQuorumConfig {
     pub endpoints: Vec<RpcEndpointConfig>,
     pub quorum: usize,
@@ -43,6 +49,7 @@ struct Endpoint {
     host: String,
     port: u16,
     path: String,
+    backend: String,
     authorization: Zeroizing<String>,
     tls: Arc<ClientConfig>,
 }
@@ -73,17 +80,17 @@ impl RpcCluster {
             .iter()
             .map(Endpoint::new)
             .collect::<Result<Vec<_>, _>>()?;
-        let identities: BTreeSet<_> = endpoints
+        let identities = endpoints
             .iter()
             .map(|endpoint| {
                 (
                     endpoint.host.as_str(),
                     endpoint.port,
-                    endpoint.path.as_str(),
+                    endpoint.backend.as_str(),
                 )
             })
-            .collect();
-        if identities.len() != endpoints.len() {
+            .collect::<Vec<_>>();
+        if !independent_identities(&identities) {
             return Err(MigrationError::Configuration);
         }
         Ok(Self {
@@ -173,8 +180,14 @@ impl RpcCluster {
 
 impl Endpoint {
     fn new(config: &RpcEndpointConfig) -> Result<Self, MigrationError> {
+        validate_credential_paths(config)?;
         let (mut host, port, path) = parse_url(&config.url)?;
         host.make_ascii_lowercase();
+        let mut backend = config.independent_backend.trim().to_ascii_lowercase();
+        if !valid_backend_identity(&backend) {
+            backend.zeroize();
+            return Err(MigrationError::Configuration);
+        }
         let mut token = fs::read_to_string(&config.bearer_token_file)
             .map_err(|_| MigrationError::Configuration)?;
         while matches!(token.as_bytes().last(), Some(b'\r' | b'\n')) {
@@ -200,6 +213,7 @@ impl Endpoint {
             host,
             port,
             path,
+            backend,
             authorization: Zeroizing::new(token),
             tls: Arc::new(tls),
         })
@@ -253,6 +267,38 @@ impl Endpoint {
     }
 }
 
+fn validate_credential_paths(config: &RpcEndpointConfig) -> Result<(), MigrationError> {
+    if !config.ca_certificate_der.is_absolute() || !config.bearer_token_file.is_absolute() {
+        return Err(MigrationError::Configuration);
+    }
+    let metadata =
+        fs::metadata(&config.bearer_token_file).map_err(|_| MigrationError::Configuration)?;
+    if !metadata.is_file() || metadata.permissions().mode() & 0o037 != 0 {
+        return Err(MigrationError::Configuration);
+    }
+    Ok(())
+}
+
+fn valid_backend_identity(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+}
+
+fn independent_identities(identities: &[(&str, u16, &str)]) -> bool {
+    let network_identities: BTreeSet<_> = identities
+        .iter()
+        .map(|(host, port, _)| (*host, *port))
+        .collect();
+    let backend_identities: BTreeSet<_> = identities
+        .iter()
+        .map(|(_, _, backend)| *backend)
+        .collect();
+    network_identities.len() == identities.len() && backend_identities.len() == identities.len()
+}
+
 fn parse_url(value: &str) -> Result<(String, u16, String), MigrationError> {
     if value.is_empty()
         || value.len() > 2048
@@ -284,7 +330,7 @@ fn parse_url(value: &str) -> Result<(String, u16, String), MigrationError> {
             ))
         },
     )?;
-    if !valid_dns(&host) {
+    if !valid_dns(&host) || port == 0 {
         return Err(MigrationError::Configuration);
     }
     Ok((host, port, path))
@@ -460,5 +506,111 @@ fn decode_chunked(wire: &[u8]) -> Result<Vec<u8>, MigrationError> {
             return Err(MigrationError::RpcResponseMismatch);
         }
         offset = end.saturating_add(2);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt as _;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use super::{
+        independent_identities, valid_backend_identity, validate_credential_paths,
+        RpcEndpointConfig,
+    };
+
+    static FIXTURE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+
+    fn credential_fixture() -> (PathBuf, RpcEndpointConfig) {
+        let sequence = FIXTURE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let directory = std::env::temp_dir().join(format!(
+            "layerx-migration-rpc-{}-{sequence}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&directory)
+            .unwrap_or_else(|error| panic!("create credential fixture: {error}"));
+        let token = directory.join("rpc.token");
+        fs::write(&token, b"protected-token")
+            .unwrap_or_else(|error| panic!("write credential fixture: {error}"));
+        fs::set_permissions(&token, fs::Permissions::from_mode(0o600))
+            .unwrap_or_else(|error| panic!("protect credential fixture: {error}"));
+        let config = RpcEndpointConfig {
+            url: "https://rpc-a.example/source".to_owned(),
+            ca_certificate_der: directory.join("rpc-ca.der"),
+            bearer_token_file: token,
+            independent_backend: "operator-a".to_owned(),
+        };
+        (directory, config)
+    }
+
+    #[test]
+    fn endpoint_json_requires_independent_backend_identity() {
+        let missing = serde_json::from_str::<RpcEndpointConfig>(
+            r#"{
+                "url":"https://rpc-a.example/source",
+                "ca_certificate_der":"/run/secrets/rpc-ca.der",
+                "bearer_token_file":"/run/secrets/rpc-a.token"
+            }"#,
+        );
+        assert!(missing.is_err());
+
+        let declared = serde_json::from_str::<RpcEndpointConfig>(
+            r#"{
+                "url":"https://rpc-a.example/source",
+                "ca_certificate_der":"/run/secrets/rpc-ca.der",
+                "bearer_token_file":"/run/secrets/rpc-a.token",
+                "independent_backend":"operator-a"
+            }"#,
+        )
+        .unwrap_or_else(|error| panic!("declared backend identity refused: {error}"));
+        assert_eq!(declared.independent_backend, "operator-a");
+    }
+
+    #[test]
+    fn backend_identity_is_bounded_and_machine_safe() {
+        assert!(valid_backend_identity("operator-a.rpc_1"));
+        assert!(!valid_backend_identity(""));
+        assert!(!valid_backend_identity("operator a"));
+        assert!(!valid_backend_identity(&"a".repeat(129)));
+    }
+
+    #[test]
+    fn quorum_requires_distinct_network_and_backend_identities() {
+        assert!(independent_identities(&[
+            ("rpc-a.example", 443, "operator-a"),
+            ("rpc-b.example", 443, "operator-b"),
+        ]));
+        assert!(!independent_identities(&[
+            ("rpc-a.example", 443, "operator-a"),
+            ("rpc-a.example", 443, "operator-b"),
+        ]));
+        assert!(!independent_identities(&[
+            ("rpc-a.example", 443, "operator-a"),
+            ("rpc-b.example", 443, "operator-a"),
+        ]));
+    }
+
+    #[test]
+    fn credential_paths_must_be_absolute_and_token_must_be_protected() {
+        let (directory, mut config) = credential_fixture();
+        assert_eq!(validate_credential_paths(&config), Ok(()));
+
+        fs::set_permissions(
+            &config.bearer_token_file,
+            fs::Permissions::from_mode(0o640),
+        )
+        .unwrap_or_else(|error| panic!("weaken credential fixture: {error}"));
+        assert!(validate_credential_paths(&config).is_err());
+
+        config.bearer_token_file = PathBuf::from("relative.token");
+        assert!(validate_credential_paths(&config).is_err());
+        config.bearer_token_file = directory.join("rpc.token");
+        config.ca_certificate_der = PathBuf::from("relative-ca.der");
+        assert!(validate_credential_paths(&config).is_err());
+
+        fs::remove_dir_all(directory)
+            .unwrap_or_else(|error| panic!("remove credential fixture: {error}"));
     }
 }

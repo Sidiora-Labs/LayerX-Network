@@ -854,6 +854,14 @@ observed = "The scoped cg guard accepted every implementation, dependency, opera
 assumption = "The lifecycle projections and qualification record remain part of the published task commit; human review will inspect the advisory rather than remove the implementation status or recorded external dependencies."
 severity = "task-scope"
 
+[observation.24.1.7]
+task = "24.1"
+file = "interop/crates/layerx-migrate/src/rpc.rs, interop/crates/layerx-migrate/OPERATIONS.md"
+symbol = "RpcEndpointConfig::independent_backend, RpcCluster::new"
+observed = "Post-implementation review found that migration verification rejected duplicate URL coordinates but had no operator-audited backend identity, so DNS aliases or alternate routes to one source could form a strict majority. The repair requires a bounded canonical independent_backend label on every closed endpoint configuration, independently enforces unique backend identities and host/port coordinates, rejects zero ports, and requires absolute CA/token paths with a regular owner-protected token file before any network request. Missing identities have no compatibility default."
+assumption = "Operators must audit and provision one identity per genuinely independent Ethereum, Solana and rollback-anchor backend. Human qualification must prove aliases and duplicate operators are refused, credentials with unsafe modes are refused, and a real independent quorum reaches identical migration facts. No passing build or network result is asserted by this source repair."
+severity = "post-implementation-repair"
+
 [observation.25.1.3]
 task = "25.1"
 file = "agent/schema/lni/v1.kvx, interop/crates/layerx-mirror/src/node.rs"

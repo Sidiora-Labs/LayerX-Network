@@ -2,7 +2,18 @@
 
 `EthereumVerifier` and `SolanaVerifier` are the production source boundaries used by `MigrationAdapter`. Construct them from `EthereumConfig` or `SolanaConfig`; both configuration types deserialize from JSON. The verifier must remain alive for verification and the subsequent history-cursor commit.
 
-Each source and rollback-anchor quorum requires two to eight independent HTTPS JSON-RPC endpoints and a strict majority. Endpoint URLs must use DNS names and HTTPS. Each endpoint reads its bearer credential and DER trust anchor from operator-owned files. Repeating the same normalized host, port, and path is refused; using aliases backed by the same operator is still a deployment trust error and must be prevented by configuration review.
+Each source and rollback-anchor quorum requires two to eight independent HTTPS JSON-RPC endpoints and a strict majority. Endpoint URLs must use DNS names and HTTPS. Every endpoint declaration requires an `independent_backend` label for the operator-audited backend identity. Both `(host, port)` and normalized backend identities must be unique, so aliases, alternate request paths, and duplicate labels cannot manufacture quorum membership. The DER trust anchor and bearer credential paths must be absolute. Bearer credentials must be regular files with no group or other permissions; invalid paths or permissions refuse construction before any network request.
+
+Protected Ethereum, Solana, and rollback-anchor endpoint declarations use this closed shape; omitting `independent_backend` is a configuration error:
+
+```json
+{
+  "url": "https://rpc-a.example/source",
+  "ca_certificate_der": "${LAYERX_MIGRATION_SECRET_DIR}/rpc-ca.der",
+  "bearer_token_file": "${LAYERX_MIGRATION_SECRET_DIR}/rpc-a.token",
+  "independent_backend": "operator-a"
+}
+```
 
 Ethereum configuration pins the chain ID, genesis block, custody contract, immutable runtime or explicit proxy implementation, runtime hashes at the source block, ABI selector, event topic, and the location of every custody field. Solana configuration pins the genesis hash, custody program, immutable ProgramData account and code hash, loader, custody and token authorities, account owners, instruction discriminator, account indices, byte offsets, and integer encoding. No default custody schema or deployment identifier exists.
 
