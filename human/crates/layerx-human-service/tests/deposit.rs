@@ -619,7 +619,7 @@ impl RealDepositRuntime {
         .unwrap_or_else(|error| panic!("finality tracker: {error:?}"));
         for _ in 0..200 {
             let report = tracker.poll();
-            if matches!(report.stage, FinalityStage::Final { .. }) {
+            if matches!(report.stage(), FinalityStage::Final { .. }) {
                 return report;
             }
             thread::sleep(Duration::from_millis(20));

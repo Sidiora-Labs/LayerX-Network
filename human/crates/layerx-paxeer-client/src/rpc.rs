@@ -87,6 +87,24 @@ pub(crate) fn validate_endpoint(endpoint: &EndpointConfig) -> Result<Target, End
     Ok(target)
 }
 
+pub(crate) fn canonical_endpoint_identity(
+    endpoint: &EndpointConfig,
+) -> Result<String, EndpointFault> {
+    let target = validate_endpoint(endpoint)?;
+    let host = target.host.parse::<std::net::IpAddr>().map_or_else(
+        |_| target.host.trim_end_matches('.').to_ascii_lowercase(),
+        |address| address.to_string(),
+    );
+    let scheme = match target.scheme {
+        Scheme::Http => "http",
+        Scheme::Https => "https",
+    };
+    Ok(format!(
+        "{scheme}://{host}:{}{}",
+        target.port, target.path
+    ))
+}
+
 fn trust_roots(trust_anchor_der: &[u8]) -> Result<RootCertStore, EndpointFault> {
     if trust_anchor_der.is_empty() {
         return Err(EndpointFault::InvalidTrustAnchor);
@@ -144,7 +162,7 @@ fn parse_url(url: &str) -> Option<Target> {
 }
 
 fn loopback(host: &str) -> bool {
-    host == "localhost"
+    host.eq_ignore_ascii_case("localhost")
         || host
             .parse::<std::net::IpAddr>()
             .is_ok_and(|address| address.is_loopback())

@@ -450,7 +450,7 @@ impl InventoryRebalancer<'_> {
             return Err(RampError::Conflict);
         }
         let report = tracker.poll();
-        let (mut stage, block_hash) = match report.stage {
+        let (mut stage, block_hash) = match report.stage() {
             FinalityStage::Announced => ("announced", None),
             FinalityStage::Missing { .. } => ("missing", None),
             FinalityStage::Pooled { .. } => ("pooled", None),
@@ -472,10 +472,10 @@ impl InventoryRebalancer<'_> {
         self.journal.observe_paxeer(
             idempotency_key,
             operation_id,
-            report.transaction.bytes(),
+            report.transaction().bytes(),
             stage,
             block_hash,
-            report.progress.confirmed,
+            report.progress().confirmed,
             now,
         )?;
         Ok(report)

@@ -189,7 +189,7 @@ fn final_report(anvil: &Anvil, transaction: TransactionHash) -> FinalityReport {
     .unwrap_or_else(|error| panic!("tracker: {error:?}"));
     for _ in 0..200 {
         let report = tracker.poll();
-        if matches!(report.stage, FinalityStage::Final { .. }) {
+        if matches!(report.stage(), FinalityStage::Final { .. }) {
             return report;
         }
         thread::sleep(Duration::from_millis(20));
@@ -609,22 +609,22 @@ fn deposit_failures_remain_typed_at_each_boundary() {
         Err(DepositFailure::CustodyFailed(CustodyFault::Reverted { .. }))
     ));
 
-    let FinalityStage::Final {
-        inclusion,
-        confirmations,
-        required,
-    } = report.stage
+    let FinalityStage::Final { required, .. } = report.stage()
     else {
         panic!("expected final report");
     };
-    let unavailable = FinalityReport {
-        stage: FinalityStage::Confirming {
-            inclusion,
-            confirmations,
-            required: required.saturating_add(1),
+    let mut confirming = FinalityTracker::new(
+        TrackerConfig {
+            endpoints: vec![anvil.endpoint.clone()],
+            minimum_endpoint_agreement: 1,
+            required_confirmations: required.saturating_add(1),
+            poll_cadence: Duration::from_millis(20),
+            delayed_after_polls: 100,
         },
-        ..report
-    };
+        reverted_transaction,
+    )
+    .unwrap_or_else(|error| panic!("confirming tracker: {error:?}"));
+    let unavailable = confirming.poll();
     assert!(matches!(
         DepositProof::obtain(&client(&anvil), &unavailable, vault, checkpoint),
         Err(DepositFailure::ProofUnavailable(

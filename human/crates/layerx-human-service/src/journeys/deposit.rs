@@ -497,15 +497,15 @@ impl DepositJourney {
             Phase::Confirming => {
                 let transaction = self.transaction()?;
                 let report = runtime.poll_finality(transaction)?;
-                if report.transaction != transaction {
+                if report.transaction() != transaction {
                     return Err(DepositJourneyError::Boundary(
                         DepositBoundaryError::ContractViolation,
                     ));
                 }
-                self.record.confirmations = report.progress.confirmed;
-                self.record.required = report.progress.required;
-                self.record.delay = delay(&report.signal);
-                match report.stage {
+                self.record.confirmations = report.progress().confirmed;
+                self.record.required = report.progress().required;
+                self.record.delay = delay(&report.signal());
+                match report.stage() {
                     FinalityStage::Final { .. } => {
                         self.transition(scope, Phase::Proving, now)?;
                     }

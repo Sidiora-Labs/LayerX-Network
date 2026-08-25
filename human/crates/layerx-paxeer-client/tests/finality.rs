@@ -166,7 +166,7 @@ fn wait_included(tracked: &mut FinalityTracker) -> FinalityReport {
     for _ in 0..200 {
         let report = tracked.poll();
         if !matches!(
-            report.stage,
+            report.stage(),
             FinalityStage::Pooled { .. } | FinalityStage::Missing { .. }
         ) {
             return report;
@@ -212,21 +212,21 @@ fn staged_progression_reaches_finality_with_confirmation_counts() {
 
     let absent = TransactionHash::new([0xee; 32]);
     let mut absent_tracker = tracker(&anvil, 3, 100, absent);
-    assert_eq!(absent_tracker.latest().stage, FinalityStage::Announced);
-    assert_eq!(absent_tracker.latest().progress, progress(0, 3));
-    assert_eq!(absent_tracker.latest().polls, 0);
+    assert_eq!(absent_tracker.latest().stage(), FinalityStage::Announced);
+    assert_eq!(absent_tracker.latest().progress(), progress(0, 3));
+    assert_eq!(absent_tracker.latest().polls(), 0);
     let report = absent_tracker.poll();
-    assert_eq!(report.stage, FinalityStage::Missing { head: 0 });
-    assert_eq!(report.signal, ChainSignal::Progressing);
-    assert_eq!(report.endpoint, EndpointSignal::Serving);
-    assert_eq!(report.progress, progress(0, 3));
-    assert_eq!(report.displacements, 0);
+    assert_eq!(report.stage(), FinalityStage::Missing { head: 0 });
+    assert_eq!(report.signal(), ChainSignal::Progressing);
+    assert_eq!(report.endpoint(), EndpointSignal::Serving);
+    assert_eq!(report.progress(), progress(0, 3));
+    assert_eq!(report.displacements(), 0);
 
     let transaction = anvil.transfer();
     let mut tracked = tracker(&anvil, 3, 100, transaction);
     let report = tracked.poll();
-    assert_eq!(report.stage, FinalityStage::Pooled { head: 0 });
-    assert_eq!(report.progress, progress(0, 3));
+    assert_eq!(report.stage(), FinalityStage::Pooled { head: 0 });
+    assert_eq!(report.progress(), progress(0, 3));
 
     anvil.mine(1);
     let report = tracked.poll();
@@ -234,26 +234,26 @@ fn staged_progression_reaches_finality_with_confirmation_counts() {
         inclusion,
         confirmations,
         required,
-    } = report.stage
+    } = report.stage()
     else {
-        panic!("expected confirming, got {:?}", report.stage)
+        panic!("expected confirming, got {:?}", report.stage())
     };
     assert_eq!(confirmations, 1);
     assert_eq!(required, 3);
     assert_eq!(inclusion.block.number, 1);
     assert_eq!(inclusion.execution, ExecutionOutcome::Succeeded);
     assert_eq!(inclusion.deployed_contract, None);
-    assert_eq!(report.signal, ChainSignal::Progressing);
-    assert_eq!(report.endpoint, EndpointSignal::Serving);
-    assert_eq!(report.progress, progress(1, 3));
+    assert_eq!(report.signal(), ChainSignal::Progressing);
+    assert_eq!(report.endpoint(), EndpointSignal::Serving);
+    assert_eq!(report.progress(), progress(1, 3));
 
     anvil.mine(1);
     let report = tracked.poll();
-    let FinalityStage::Confirming { confirmations, .. } = report.stage else {
-        panic!("expected confirming, got {:?}", report.stage)
+    let FinalityStage::Confirming { confirmations, .. } = report.stage() else {
+        panic!("expected confirming, got {:?}", report.stage())
     };
     assert_eq!(confirmations, 2);
-    assert_eq!(report.progress, progress(2, 3));
+    assert_eq!(report.progress(), progress(2, 3));
 
     anvil.mine(1);
     let report = tracked.poll();
@@ -261,26 +261,26 @@ fn staged_progression_reaches_finality_with_confirmation_counts() {
         inclusion,
         confirmations,
         required,
-    } = report.stage
+    } = report.stage()
     else {
-        panic!("expected final, got {:?}", report.stage)
+        panic!("expected final, got {:?}", report.stage())
     };
     assert_eq!(confirmations, 3);
     assert_eq!(required, 3);
     assert_eq!(inclusion.block.number, 1);
-    assert_eq!(report.progress, progress(3, 3));
+    assert_eq!(report.progress(), progress(3, 3));
 
     anvil.mine(1);
     let report = tracked.poll();
-    let FinalityStage::Final { confirmations, .. } = report.stage else {
-        panic!("expected final, got {:?}", report.stage)
+    let FinalityStage::Final { confirmations, .. } = report.stage() else {
+        panic!("expected final, got {:?}", report.stage())
     };
     assert_eq!(confirmations, 4);
-    assert_eq!(report.signal, ChainSignal::Progressing);
-    assert_eq!(report.endpoint, EndpointSignal::Serving);
-    assert_eq!(report.progress, progress(4, 3));
-    assert_eq!(report.displacements, 0);
-    assert_eq!(report.polls, 5);
+    assert_eq!(report.signal(), ChainSignal::Progressing);
+    assert_eq!(report.endpoint(), EndpointSignal::Serving);
+    assert_eq!(report.progress(), progress(4, 3));
+    assert_eq!(report.displacements(), 0);
+    assert_eq!(report.polls(), 5);
 }
 
 #[test]
@@ -290,16 +290,16 @@ fn reorg_displacement_is_reported_distinctly() {
     let mut tracked = tracker(&anvil, 10, 100, transaction);
 
     let report = wait_included(&mut tracked);
-    let FinalityStage::Confirming { inclusion, .. } = report.stage else {
-        panic!("expected confirming, got {:?}", report.stage)
+    let FinalityStage::Confirming { inclusion, .. } = report.stage() else {
+        panic!("expected confirming, got {:?}", report.stage())
     };
     assert_eq!(inclusion.block.number, 1);
     let original_hash = inclusion.block.hash;
 
     anvil.mine(3);
     let report = tracked.poll();
-    let FinalityStage::Confirming { confirmations, .. } = report.stage else {
-        panic!("expected confirming, got {:?}", report.stage)
+    let FinalityStage::Confirming { confirmations, .. } = report.stage() else {
+        panic!("expected confirming, got {:?}", report.stage())
     };
     assert_eq!(confirmations, 4);
 
@@ -312,18 +312,18 @@ fn reorg_displacement_is_reported_distinctly() {
         lost,
         head,
         requeued,
-    } = report.stage
+    } = report.stage()
     else {
-        panic!("expected displaced, got {:?}", report.stage)
+        panic!("expected displaced, got {:?}", report.stage())
     };
     assert_eq!(lost.block.number, 1);
     assert_eq!(lost.block.hash, original_hash);
     assert_eq!(head, 4);
     assert!(!requeued);
-    assert_eq!(report.displacements, 1);
-    assert_eq!(report.signal, ChainSignal::Progressing);
-    assert_eq!(report.endpoint, EndpointSignal::Serving);
-    assert_eq!(report.progress, progress(0, 10));
+    assert_eq!(report.displacements(), 1);
+    assert_eq!(report.signal(), ChainSignal::Progressing);
+    assert_eq!(report.endpoint(), EndpointSignal::Serving);
+    assert_eq!(report.progress(), progress(0, 10));
 
     let replaced = client(&anvil)
         .block_by_number(1)
@@ -333,13 +333,13 @@ fn reorg_displacement_is_reported_distinctly() {
 
     let report = tracked.poll();
     assert!(matches!(
-        report.stage,
+        report.stage(),
         FinalityStage::Displaced {
             requeued: false,
             ..
         }
     ));
-    assert_eq!(report.displacements, 1);
+    assert_eq!(report.displacements(), 1);
 }
 
 #[test]
@@ -350,8 +350,8 @@ fn displaced_transaction_requeues_and_reincludes_honestly() {
     let mut tracked = tracker(&anvil, 5, 100, transaction);
 
     let report = wait_included(&mut tracked);
-    let FinalityStage::Confirming { confirmations, .. } = report.stage else {
-        panic!("expected confirming, got {:?}", report.stage)
+    let FinalityStage::Confirming { confirmations, .. } = report.stage() else {
+        panic!("expected confirming, got {:?}", report.stage())
     };
     assert_eq!(confirmations, 1);
 
@@ -362,27 +362,27 @@ fn displaced_transaction_requeues_and_reincludes_honestly() {
     );
     let report = tracked.poll();
     assert!(matches!(
-        report.stage,
+        report.stage(),
         FinalityStage::Displaced {
             requeued: false,
             ..
         }
     ));
-    assert_eq!(report.displacements, 1);
+    assert_eq!(report.displacements(), 1);
 
     let resent = anvil.transfer();
     assert_eq!(resent, transaction);
     let report = tracked.poll();
     let FinalityStage::Displaced {
         lost, requeued, ..
-    } = report.stage
+    } = report.stage()
     else {
-        panic!("expected displaced, got {:?}", report.stage)
+        panic!("expected displaced, got {:?}", report.stage())
     };
     assert!(requeued);
     assert_eq!(lost.block.number, 1);
-    assert_eq!(report.displacements, 1);
-    assert_eq!(report.progress, progress(0, 5));
+    assert_eq!(report.displacements(), 1);
+    assert_eq!(report.progress(), progress(0, 5));
 
     anvil.mine(1);
     let report = tracked.poll();
@@ -390,14 +390,14 @@ fn displaced_transaction_requeues_and_reincludes_honestly() {
         inclusion,
         confirmations,
         ..
-    } = report.stage
+    } = report.stage()
     else {
-        panic!("expected confirming, got {:?}", report.stage)
+        panic!("expected confirming, got {:?}", report.stage())
     };
     assert_eq!(confirmations, 1);
     assert_eq!(inclusion.block.number, 1);
-    assert_eq!(report.displacements, 1);
-    assert_eq!(report.progress, progress(1, 5));
+    assert_eq!(report.displacements(), 1);
+    assert_eq!(report.progress(), progress(1, 5));
 }
 
 #[test]
@@ -409,13 +409,13 @@ fn finality_stall_reads_delayed_not_unreachable() {
 
     let report = tracked.poll();
     assert!(matches!(
-        report.stage,
+        report.stage(),
         FinalityStage::Confirming {
             confirmations: 1,
             ..
         }
     ));
-    assert_eq!(report.signal, ChainSignal::Progressing);
+    assert_eq!(report.signal(), ChainSignal::Progressing);
 
     let mut report = tracked.poll();
     for _ in 0..2 {
@@ -423,7 +423,7 @@ fn finality_stall_reads_delayed_not_unreachable() {
         report = tracked.poll();
     }
     assert_eq!(
-        report.signal,
+        report.signal(),
         ChainSignal::Delayed {
             stalled_polls: 3,
             threshold: 3,
@@ -432,26 +432,26 @@ fn finality_stall_reads_delayed_not_unreachable() {
         }
     );
     assert!(matches!(
-        report.stage,
+        report.stage(),
         FinalityStage::Confirming {
             confirmations: 1,
             ..
         }
     ));
-    assert!(!matches!(report.signal, ChainSignal::Unreachable { .. }));
-    assert_eq!(report.endpoint, EndpointSignal::Serving);
-    assert_eq!(report.progress, progress(1, 5));
+    assert!(!matches!(report.signal(), ChainSignal::Unreachable { .. }));
+    assert_eq!(report.endpoint(), EndpointSignal::Serving);
+    assert_eq!(report.progress(), progress(1, 5));
 
     anvil.mine(1);
     let report = tracked.poll();
     assert!(matches!(
-        report.stage,
+        report.stage(),
         FinalityStage::Confirming {
             confirmations: 2,
             ..
         }
     ));
-    assert_eq!(report.signal, ChainSignal::Progressing);
+    assert_eq!(report.signal(), ChainSignal::Progressing);
 }
 
 #[test]
@@ -463,7 +463,7 @@ fn endpoint_loss_reads_unreachable_with_last_known_stage() {
 
     let report = tracked.poll();
     assert!(matches!(
-        report.stage,
+        report.stage(),
         FinalityStage::Confirming {
             confirmations: 1,
             ..
@@ -474,8 +474,8 @@ fn endpoint_loss_reads_unreachable_with_last_known_stage() {
     anvil.halt();
 
     let report = tracked.poll();
-    let ChainSignal::Unreachable { error } = report.signal else {
-        panic!("expected unreachable, got {:?}", report.signal)
+    let ChainSignal::Unreachable { error } = report.signal() else {
+        panic!("expected unreachable, got {:?}", report.signal())
     };
     let failure = error
         .failures
@@ -483,22 +483,22 @@ fn endpoint_loss_reads_unreachable_with_last_known_stage() {
         .unwrap_or_else(|| panic!("expected at least one endpoint failure"));
     assert_eq!(failure.url, url);
     assert!(matches!(failure.fault, EndpointFault::Connect { .. }));
-    assert_eq!(report.endpoint, EndpointSignal::Unreachable { error });
+    assert_eq!(report.endpoint(), EndpointSignal::Unreachable { error });
     assert!(matches!(
-        report.stage,
+        report.stage(),
         FinalityStage::Confirming {
             confirmations: 1,
             ..
         }
     ));
-    assert_eq!(report.progress, progress(1, 5));
-    assert_eq!(report.displacements, 0);
+    assert_eq!(report.progress(), progress(1, 5));
+    assert_eq!(report.displacements(), 0);
 
     let report = tracked.poll();
-    assert!(matches!(report.signal, ChainSignal::Unreachable { .. }));
-    assert!(matches!(report.endpoint, EndpointSignal::Unreachable { .. }));
-    assert!(matches!(report.stage, FinalityStage::Confirming { .. }));
-    assert_eq!(report.progress, progress(1, 5));
+    assert!(matches!(report.signal(), ChainSignal::Unreachable { .. }));
+    assert!(matches!(report.endpoint(), EndpointSignal::Unreachable { .. }));
+    assert!(matches!(report.stage(), FinalityStage::Confirming { .. }));
+    assert_eq!(report.progress(), progress(1, 5));
 }
 
 #[test]
@@ -525,18 +525,18 @@ fn unreachable_endpoint_fails_over_to_healthy_one() {
     .unwrap_or_else(|error| panic!("tracker: {error:?}"));
 
     let report = wait_included(&mut tracked);
-    assert_eq!(report.signal, ChainSignal::Progressing);
+    assert_eq!(report.signal(), ChainSignal::Progressing);
     assert!(matches!(
-        report.stage,
+        report.stage(),
         FinalityStage::Final {
             confirmations: 1,
             required: 1,
             ..
         }
     ));
-    assert_eq!(report.progress, progress(1, 1));
-    let EndpointSignal::Degraded { failovers } = report.endpoint else {
-        panic!("expected degraded, got {:?}", report.endpoint)
+    assert_eq!(report.progress(), progress(1, 1));
+    let EndpointSignal::Degraded { failovers } = report.endpoint() else {
+        panic!("expected degraded, got {:?}", report.endpoint())
     };
     assert!(!failovers.is_empty());
     assert!(failovers.iter().all(|failover| failover.url == dead_url
@@ -550,18 +550,18 @@ fn pooled_transaction_reads_chain_delayed_while_endpoint_serves() {
     let mut tracked = tracker(&anvil, 3, 2, transaction);
 
     let report = tracked.poll();
-    assert_eq!(report.stage, FinalityStage::Pooled { head: 0 });
-    assert_eq!(report.signal, ChainSignal::Progressing);
-    assert_eq!(report.endpoint, EndpointSignal::Serving);
-    assert_eq!(report.progress, progress(0, 3));
+    assert_eq!(report.stage(), FinalityStage::Pooled { head: 0 });
+    assert_eq!(report.signal(), ChainSignal::Progressing);
+    assert_eq!(report.endpoint(), EndpointSignal::Serving);
+    assert_eq!(report.progress(), progress(0, 3));
 
     thread::sleep(tracked.poll_cadence());
     tracked.poll();
     thread::sleep(tracked.poll_cadence());
     let report = tracked.poll();
-    assert_eq!(report.stage, FinalityStage::Pooled { head: 0 });
+    assert_eq!(report.stage(), FinalityStage::Pooled { head: 0 });
     assert_eq!(
-        report.signal,
+        report.signal(),
         ChainSignal::Delayed {
             stalled_polls: 2,
             threshold: 2,
@@ -569,8 +569,8 @@ fn pooled_transaction_reads_chain_delayed_while_endpoint_serves() {
             delayed_after: tracked.poll_cadence().saturating_mul(2),
         }
     );
-    assert_eq!(report.endpoint, EndpointSignal::Serving);
-    assert_eq!(report.progress, progress(0, 3));
+    assert_eq!(report.endpoint(), EndpointSignal::Serving);
+    assert_eq!(report.progress(), progress(0, 3));
 }
 
 #[test]
@@ -580,8 +580,8 @@ fn displaced_stage_survives_endpoint_loss_with_both_dimensions() {
     let mut tracked = tracker(&anvil, 10, 100, transaction);
 
     let report = wait_included(&mut tracked);
-    let FinalityStage::Confirming { inclusion, .. } = report.stage else {
-        panic!("expected confirming, got {:?}", report.stage)
+    let FinalityStage::Confirming { inclusion, .. } = report.stage() else {
+        panic!("expected confirming, got {:?}", report.stage())
     };
     assert_eq!(inclusion.block.number, 1);
 
@@ -592,25 +592,25 @@ fn displaced_stage_survives_endpoint_loss_with_both_dimensions() {
         &[Json::Number("2".to_owned()), Json::Array(Vec::new())],
     );
     let report = tracked.poll();
-    let FinalityStage::Displaced { lost, requeued, .. } = report.stage else {
-        panic!("expected displaced, got {:?}", report.stage)
+    let FinalityStage::Displaced { lost, requeued, .. } = report.stage() else {
+        panic!("expected displaced, got {:?}", report.stage())
     };
     assert!(!requeued);
     assert_eq!(lost.block.number, 1);
-    assert_eq!(report.displacements, 1);
-    assert_eq!(report.endpoint, EndpointSignal::Serving);
-    assert_eq!(report.progress, progress(0, 10));
+    assert_eq!(report.displacements(), 1);
+    assert_eq!(report.endpoint(), EndpointSignal::Serving);
+    assert_eq!(report.progress(), progress(0, 10));
 
     let url = anvil.endpoint.url.clone();
     anvil.halt();
     let report = tracked.poll();
-    let FinalityStage::Displaced { lost, requeued, .. } = report.stage else {
-        panic!("expected displaced, got {:?}", report.stage)
+    let FinalityStage::Displaced { lost, requeued, .. } = report.stage() else {
+        panic!("expected displaced, got {:?}", report.stage())
     };
     assert!(!requeued);
     assert_eq!(lost.block.number, 1);
-    let EndpointSignal::Unreachable { error } = report.endpoint else {
-        panic!("expected unreachable, got {:?}", report.endpoint)
+    let EndpointSignal::Unreachable { error } = report.endpoint() else {
+        panic!("expected unreachable, got {:?}", report.endpoint())
     };
     let failure = error
         .failures
@@ -618,9 +618,9 @@ fn displaced_stage_survives_endpoint_loss_with_both_dimensions() {
         .unwrap_or_else(|| panic!("expected at least one endpoint failure"));
     assert_eq!(failure.url, url);
     assert!(matches!(failure.fault, EndpointFault::Connect { .. }));
-    assert!(matches!(report.signal, ChainSignal::Unreachable { .. }));
-    assert_eq!(report.displacements, 1);
-    assert_eq!(report.progress, progress(0, 10));
+    assert!(matches!(report.signal(), ChainSignal::Unreachable { .. }));
+    assert_eq!(report.displacements(), 1);
+    assert_eq!(report.progress(), progress(0, 10));
 }
 
 #[test]
@@ -644,8 +644,8 @@ fn reverted_custody_transaction_reports_execution_outcome() {
     ]));
     let mut tracked = tracker(&anvil, 1, 100, transaction);
     let report = wait_included(&mut tracked);
-    let FinalityStage::Final { inclusion, .. } = report.stage else {
-        panic!("expected final, got {:?}", report.stage)
+    let FinalityStage::Final { inclusion, .. } = report.stage() else {
+        panic!("expected final, got {:?}", report.stage())
     };
     assert_eq!(inclusion.execution, ExecutionOutcome::Reverted);
     assert_eq!(inclusion.deployed_contract, None);
@@ -795,6 +795,25 @@ fn plaintext_requires_explicit_loopback_emulator_mode() {
 }
 
 #[test]
+fn canonical_duplicate_endpoint_identities_are_refused() {
+    let first = EndpointConfig {
+        url: "http://LOCALHOST".to_owned(),
+        request_timeout: Duration::from_secs(1),
+        transport: EndpointTransport::LocalEmulator,
+        expected_chain_id: 31_337,
+    };
+    let duplicate = EndpointConfig {
+        url: "http://localhost:80/".to_owned(),
+        ..first.clone()
+    };
+
+    assert!(matches!(
+        PaxeerClient::new(vec![first, duplicate]).err(),
+        Some(ClientConfigError::DuplicateEndpointIdentity { .. })
+    ));
+}
+
+#[test]
 fn response_bounds_and_ambiguous_framing_fail_closed() {
     let oversized = one_response(
         b"HTTP/1.1 200 OK\r\nContent-Length: 2097153\r\nConnection: close\r\n\r\n".to_vec(),
@@ -880,8 +899,8 @@ fn finality_refuses_split_endpoint_observations() {
     )
     .unwrap_or_else(|error| panic!("tracker: {error:?}"));
     let report = tracker.poll();
-    let EndpointSignal::Unreachable { error } = report.endpoint else {
-        panic!("split observations were accepted: {:?}", report.endpoint)
+    let EndpointSignal::Unreachable { error } = report.endpoint() else {
+        panic!("split observations were accepted: {:?}", report.endpoint())
     };
     assert!(error
         .failures

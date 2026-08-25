@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use crate::client::{
-    ClientConfigError, EndpointError, PaxeerClient, TransactionHash, TransactionInclusion,
-    TransactionView,
+    BlockRef, ClientConfigError, EndpointError, FinalityObservation, LogRecord, PaxeerClient,
+    QuorumBinding, TransactionHash, TransactionInclusion, TransactionView,
 };
 use crate::rpc::{EndpointConfig, EndpointFailure, EndpointTransport};
 
@@ -84,15 +84,120 @@ pub struct ConfirmationProgress {
 }
 
 /// One honest poll result: the stage, the signals behind it, and the history.
+///
+/// ```compile_fail
+/// use layerx_paxeer_client::{
+///     ChainSignal, ConfirmationProgress, EndpointSignal, FinalityReport, FinalityStage,
+///     TransactionHash,
+/// };
+/// let _forged = FinalityReport {
+///     transaction: TransactionHash::new([0; 32]),
+///     stage: FinalityStage::Announced,
+///     signal: ChainSignal::Progressing,
+///     endpoint: EndpointSignal::Serving,
+///     progress: ConfirmationProgress { confirmed: 0, required: 1 },
+///     displacements: 0,
+///     polls: 0,
+/// };
+/// ```
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FinalityReport {
-    pub transaction: TransactionHash,
-    pub stage: FinalityStage,
-    pub signal: ChainSignal,
-    pub endpoint: EndpointSignal,
-    pub progress: ConfirmationProgress,
-    pub displacements: u64,
-    pub polls: u64,
+    transaction: TransactionHash,
+    stage: FinalityStage,
+    signal: ChainSignal,
+    endpoint: EndpointSignal,
+    progress: ConfirmationProgress,
+    displacements: u64,
+    polls: u64,
+    evidence: Option<FinalityEvidence>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct FinalityEvidence {
+    binding: QuorumBinding,
+    chain_id: u64,
+    head: u64,
+    transaction: TransactionView,
+    canonical_block: Option<BlockRef>,
+    receipt_logs: Option<Vec<LogRecord>>,
+}
+
+impl FinalityEvidence {
+    fn from_observation(binding: QuorumBinding, observation: &FinalityObservation) -> Self {
+        Self {
+            binding,
+            chain_id: observation.chain_id,
+            head: observation.head,
+            transaction: observation.transaction,
+            canonical_block: observation.canonical_block,
+            receipt_logs: observation.receipt_logs.clone(),
+        }
+    }
+
+    pub(crate) const fn binding(&self) -> &QuorumBinding {
+        &self.binding
+    }
+
+    pub(crate) const fn chain_id(&self) -> u64 {
+        self.chain_id
+    }
+
+    pub(crate) const fn head(&self) -> u64 {
+        self.head
+    }
+
+    pub(crate) const fn transaction(&self) -> TransactionView {
+        self.transaction
+    }
+
+    pub(crate) const fn canonical_block(&self) -> Option<BlockRef> {
+        self.canonical_block
+    }
+
+    pub(crate) fn receipt_logs(&self) -> Option<&[LogRecord]> {
+        self.receipt_logs.as_deref()
+    }
+}
+
+impl FinalityReport {
+    #[must_use]
+    pub const fn transaction(&self) -> TransactionHash {
+        self.transaction
+    }
+
+    #[must_use]
+    pub const fn stage(&self) -> FinalityStage {
+        self.stage
+    }
+
+    #[must_use]
+    pub fn signal(&self) -> ChainSignal {
+        self.signal.clone()
+    }
+
+    #[must_use]
+    pub fn endpoint(&self) -> EndpointSignal {
+        self.endpoint.clone()
+    }
+
+    #[must_use]
+    pub const fn progress(&self) -> ConfirmationProgress {
+        self.progress
+    }
+
+    #[must_use]
+    pub const fn displacements(&self) -> u64 {
+        self.displacements
+    }
+
+    #[must_use]
+    pub const fn polls(&self) -> u64 {
+        self.polls
+    }
+
+    pub(crate) const fn evidence(&self) -> Option<&FinalityEvidence> {
+        self.evidence.as_ref()
+    }
 }
 
 /// Tracks one custody transaction from broadcast to bridge-required finality.
@@ -160,6 +265,7 @@ impl FinalityTracker {
                 },
                 displacements: 0,
                 polls: 0,
+                evidence: None,
             },
         })
     }
@@ -188,7 +294,7 @@ impl FinalityTracker {
         self.polls = self.polls.saturating_add(1);
         let mut failovers = Vec::new();
         match self.observe(&mut failovers) {
-            Ok((head, stage)) => {
+            Ok((head, stage, evidence)) => {
                 let unchanged = self
                     .last_observation
                     .is_some_and(|(last_head, last_stage)| last_head == head && last_stage == stage);
@@ -221,6 +327,7 @@ impl FinalityTracker {
                     progress: self.progress_of(stage),
                     displacements: self.displacements,
                     polls: self.polls,
+                    evidence: Some(evidence),
                 };
             }
             Err(error) => {
@@ -237,6 +344,7 @@ impl FinalityTracker {
                     progress: self.progress_of(stage),
                     displacements: self.displacements,
                     polls: self.polls,
+                    evidence: None,
                 };
             }
         }
@@ -266,13 +374,18 @@ impl FinalityTracker {
     fn observe(
         &mut self,
         failovers: &mut Vec<EndpointFailure>,
-    ) -> Result<(u64, FinalityStage), EndpointError> {
+    ) -> Result<(u64, FinalityStage, FinalityEvidence), EndpointError> {
         let (observation, mut dissent) = self
             .client
             .agreed_finality_observation(self.transaction, self.minimum_endpoint_agreement)?;
         failovers.append(&mut dissent);
         let head = observation.head;
-        match observation.transaction {
+        let evidence = FinalityEvidence::from_observation(
+            self.client
+                .quorum_binding(self.minimum_endpoint_agreement),
+            &observation,
+        );
+        let stage = match observation.transaction {
             TransactionView::Included(included) => {
                 let canonical = observation.canonical_block;
                 if canonical.is_some_and(|block| block.hash == included.block.hash) {
@@ -286,7 +399,7 @@ impl FinalityTracker {
                     let confirmations = head
                         .saturating_sub(included.block.number)
                         .saturating_add(1);
-                    let stage = if confirmations >= self.required_confirmations {
+                    if confirmations >= self.required_confirmations {
                         FinalityStage::Final {
                             inclusion: included,
                             confirmations,
@@ -298,43 +411,34 @@ impl FinalityTracker {
                             confirmations,
                             required: self.required_confirmations,
                         }
-                    };
-                    Ok((head, stage))
+                    }
                 } else {
                     let lost = self.displace(Some(included)).unwrap_or(included);
-                    Ok((
-                        head,
-                        FinalityStage::Displaced {
-                            lost,
-                            head,
-                            requeued: false,
-                        },
-                    ))
-                }
-            }
-            TransactionView::Pending => {
-                let stage = match self.displace(None) {
-                    Some(lost) => FinalityStage::Displaced {
-                        lost,
-                        head,
-                        requeued: true,
-                    },
-                    None => FinalityStage::Pooled { head },
-                };
-                Ok((head, stage))
-            }
-            TransactionView::Unknown => {
-                let stage = match self.displace(None) {
-                    Some(lost) => FinalityStage::Displaced {
+                    FinalityStage::Displaced {
                         lost,
                         head,
                         requeued: false,
-                    },
-                    None => FinalityStage::Missing { head },
-                };
-                Ok((head, stage))
+                    }
+                }
             }
-        }
+            TransactionView::Pending => match self.displace(None) {
+                Some(lost) => FinalityStage::Displaced {
+                    lost,
+                    head,
+                    requeued: true,
+                },
+                None => FinalityStage::Pooled { head },
+            },
+            TransactionView::Unknown => match self.displace(None) {
+                Some(lost) => FinalityStage::Displaced {
+                    lost,
+                    head,
+                    requeued: false,
+                },
+                None => FinalityStage::Missing { head },
+            },
+        };
+        Ok((head, stage, evidence))
     }
 
     fn displace(&mut self, reference: Option<TransactionInclusion>) -> Option<TransactionInclusion> {
@@ -368,4 +472,43 @@ pub(crate) fn validate_endpoint_agreement(
         return Err(TrackerConfigError::ProductionAgreementRequiresTwo);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rpc::EndpointFault;
+    use crate::status::{BoundaryHealth, BoundaryStatus};
+
+    #[test]
+    fn unreachable_report_maps_to_unavailable_boundary_health() {
+        let error = EndpointError {
+            failures: vec![EndpointFailure {
+                url: "http://127.0.0.1:1".to_owned(),
+                fault: EndpointFault::Connect {
+                    detail: "connection refused".to_owned(),
+                },
+            }],
+        };
+        let report = FinalityReport {
+            transaction: TransactionHash::new([7; 32]),
+            stage: FinalityStage::Missing { head: 41 },
+            signal: ChainSignal::Unreachable {
+                error: error.clone(),
+            },
+            endpoint: EndpointSignal::Unreachable { error },
+            progress: ConfirmationProgress {
+                confirmed: 0,
+                required: 3,
+            },
+            displacements: 0,
+            polls: 2,
+            evidence: None,
+        };
+
+        assert_eq!(
+            BoundaryStatus::from_report(&report, Duration::from_secs(2)).health,
+            BoundaryHealth::Unavailable
+        );
+    }
 }

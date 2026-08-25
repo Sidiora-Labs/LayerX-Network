@@ -54,16 +54,12 @@ pub struct BoundaryStatus {
 impl BoundaryStatus {
     #[must_use]
     pub fn from_report(report: &FinalityReport, poll_cadence: Duration) -> Self {
-        let endpoint = match &report.endpoint {
+        let endpoint = match report.endpoint() {
             EndpointSignal::Serving => EndpointStatus::Serving,
-            EndpointSignal::Degraded { failovers } => EndpointStatus::Degraded {
-                failovers: failovers.clone(),
-            },
-            EndpointSignal::Unreachable { error } => EndpointStatus::Failed {
-                error: error.clone(),
-            },
+            EndpointSignal::Degraded { failovers } => EndpointStatus::Degraded { failovers },
+            EndpointSignal::Unreachable { error } => EndpointStatus::Failed { error },
         };
-        let chain = match &report.signal {
+        let chain = match report.signal() {
             ChainSignal::Progressing | ChainSignal::Unreachable { .. } => ChainStatus::Progressing,
             ChainSignal::Delayed {
                 stalled_for,
@@ -72,12 +68,12 @@ impl BoundaryStatus {
             } => {
                 let expectation = DelayExpectation {
                     poll_cadence,
-                    delayed_after: *delayed_after,
-                    stalled_for: *stalled_for,
+                    delayed_after,
+                    stalled_for,
                     next_observation_within: poll_cadence,
                 };
                 if matches!(
-                    report.stage,
+                    report.stage(),
                     FinalityStage::Missing { .. } | FinalityStage::Pooled { .. }
                 ) {
                     ChainStatus::Congested { expectation }
@@ -86,7 +82,7 @@ impl BoundaryStatus {
                 }
             }
         };
-        let contract = match current_execution(report.stage) {
+        let contract = match current_execution(report.stage()) {
             None => ContractStatus::NotObserved,
             Some(ExecutionOutcome::Succeeded) => ContractStatus::Accepted,
             Some(ExecutionOutcome::Reverted) => ContractStatus::Refused,
@@ -101,8 +97,8 @@ impl BoundaryStatus {
             BoundaryHealth::Ready
         };
         Self {
-            transaction: report.transaction,
-            stage: report.stage,
+            transaction: report.transaction(),
+            stage: report.stage(),
             endpoint,
             chain,
             contract,

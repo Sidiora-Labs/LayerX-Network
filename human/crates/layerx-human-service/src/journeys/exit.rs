@@ -617,13 +617,13 @@ impl ExitJourney {
                     .track(transaction)
                     .map_err(ExitJourneyError::TrackerConfig)?;
                 let report = tracker.poll();
-                if report.transaction != transaction {
+                if report.transaction() != transaction {
                     return Err(ExitJourneyError::Boundary(
                         ExitBoundaryError::ContractViolation,
                     ));
                 }
-                self.record.confirmations = report.progress.confirmed;
-                self.record.required = report.progress.required;
+                self.record.confirmations = report.progress().confirmed;
+                self.record.required = report.progress().required;
                 match ExitProgress::of(&report) {
                     ExitProgress::Settled {
                         inclusion,

@@ -14,7 +14,7 @@ use crate::finality::{
     FinalityReport, FinalityStage, FinalityTracker, TrackerConfig, TrackerConfigError,
 };
 use crate::json::Json;
-use crate::rpc::{raw_call, EndpointConfig, EndpointFailure};
+use crate::rpc::EndpointConfig;
 
 const WORD: usize = 32;
 const MAX_PROOF_DEPTH: usize = 256;
@@ -289,6 +289,8 @@ pub enum WithdrawalError {
         tracked: BlockRef,
         observed: Option<BlockRef>,
     },
+    MissingQuorumEvidence,
+    EvidenceSourceMismatch,
     TransactionTarget {
         expected: EvmAddress,
         found: Option<EvmAddress>,
@@ -496,6 +498,7 @@ pub struct CancellationEvidence {
 /// Real Paxeer withdrawal boundary: contract reads, claim construction and evidence verification.
 #[derive(Clone, Debug)]
 pub struct WithdrawalBoundary {
+    client: PaxeerClient,
     endpoints: Vec<EndpointConfig>,
     claims_contract: EvmAddress,
     required_confirmations: u64,
@@ -528,8 +531,10 @@ impl WithdrawalBoundary {
             config.minimum_endpoint_agreement,
         )
         .map_err(WithdrawalConfigError::Agreement)?;
-        PaxeerClient::new(config.endpoints.clone()).map_err(WithdrawalConfigError::Endpoints)?;
+        let client =
+            PaxeerClient::new(config.endpoints.clone()).map_err(WithdrawalConfigError::Endpoints)?;
         Ok(Self {
+            client,
             endpoints: config.endpoints,
             claims_contract: config.claims_contract,
             required_confirmations: config.required_confirmations,
@@ -726,7 +731,7 @@ impl WithdrawalBoundary {
             claim,
             claim_id: event.claim_id,
             available_at: event.available_at,
-            submission_transaction: report.transaction,
+            submission_transaction: report.transaction(),
             submission_inclusion: observed.inclusion,
         })
     }
@@ -866,7 +871,7 @@ impl WithdrawalBoundary {
             debit_receipt_reference: submitted.claim.debit.receipt_reference,
             checkpoint_hash: submitted.claim.proof.checkpoint_hash,
             claim_id: submitted.claim_id,
-            payout_transaction: report.transaction,
+            payout_transaction: report.transaction(),
             payout_inclusion: observed.inclusion,
             vault,
             token,
@@ -940,7 +945,7 @@ impl WithdrawalBoundary {
             debit_receipt_reference: submitted.claim.debit.receipt_reference,
             checkpoint_hash: submitted.claim.proof.checkpoint_hash,
             claim_id: submitted.claim_id,
-            cancellation_transaction: report.transaction,
+            cancellation_transaction: report.transaction(),
             cancellation_inclusion: observed.inclusion,
             disposition,
         })
@@ -952,7 +957,7 @@ impl WithdrawalBoundary {
         expected_target: EvmAddress,
         expected_input: &[u8],
     ) -> Result<ObservedTransaction, WithdrawalError> {
-        let (tracked, confirmations) = match report.stage {
+        let (tracked, confirmations) = match report.stage() {
             FinalityStage::Final {
                 inclusion,
                 confirmations,
@@ -973,57 +978,51 @@ impl WithdrawalBoundary {
         };
         if confirmations < self.required_confirmations {
             return Err(WithdrawalError::NotFinal {
-                stage: report.stage,
+                stage: report.stage(),
             });
         }
         if tracked.execution == ExecutionOutcome::Reverted {
             return Err(WithdrawalError::Reverted { inclusion: tracked });
         }
-        let receipt = self.transaction_receipt(report.transaction)?;
-        let Some(receipt) = receipt else {
-            return Err(WithdrawalError::InclusionChanged {
-                tracked: tracked.block,
-                observed: None,
-            });
+        let evidence = report.evidence().ok_or(WithdrawalError::MissingQuorumEvidence)?;
+        if evidence.binding()
+            != &self
+                .client
+                .quorum_binding(self.minimum_endpoint_agreement)
+        {
+            return Err(WithdrawalError::EvidenceSourceMismatch);
+        }
+        let observed_inclusion = match evidence.transaction() {
+            crate::client::TransactionView::Included(inclusion) => inclusion,
+            crate::client::TransactionView::Unknown | crate::client::TransactionView::Pending => {
+                return Err(WithdrawalError::InclusionChanged {
+                    tracked: tracked.block,
+                    observed: None,
+                });
+            }
         };
-        if receipt.inclusion != tracked {
+        if observed_inclusion != tracked {
             return Err(WithdrawalError::InclusionChanged {
                 tracked: tracked.block,
-                observed: Some(receipt.inclusion.block),
+                observed: Some(observed_inclusion.block),
             });
         }
-        let head = quantity(&self.rpc("eth_blockNumber", &[])?, "head")?;
-        let canonical = self.rpc(
-            "eth_getBlockByNumber",
-            &[
-                Json::Text(format!("0x{:x}", tracked.block.number)),
-                Json::Bool(false),
-            ],
-        )?;
-        let canonical_hash = if canonical.is_null() {
-            None
-        } else {
-            Some(fixed::<32>(
-                required(&canonical, "hash")?,
-                "canonical block hash",
-            )?)
-        };
-        if canonical_hash != Some(tracked.block.hash) {
+        if evidence.canonical_block() != Some(tracked.block) {
             return Err(WithdrawalError::InclusionChanged {
                 tracked: tracked.block,
-                observed: canonical_hash.map(|hash| BlockRef {
-                    number: tracked.block.number,
-                    hash,
-                }),
+                observed: evidence.canonical_block(),
             });
         }
-        let observed_confirmations = head.saturating_sub(tracked.block.number).saturating_add(1);
+        let observed_confirmations = evidence
+            .head()
+            .saturating_sub(tracked.block.number)
+            .saturating_add(1);
         if observed_confirmations < self.required_confirmations {
             return Err(WithdrawalError::NotFinal {
-                stage: report.stage,
+                stage: report.stage(),
             });
         }
-        let transaction = self.transaction(report.transaction)?;
+        let transaction = self.transaction(report.transaction())?;
         if transaction.to != Some(expected_target) {
             return Err(WithdrawalError::TransactionTarget {
                 expected: expected_target,
@@ -1036,9 +1035,19 @@ impl WithdrawalBoundary {
         if transaction.value.iter().any(|byte| *byte != 0) {
             return Err(WithdrawalError::TransactionValue);
         }
+        let logs = evidence
+            .receipt_logs()
+            .ok_or(WithdrawalError::MissingQuorumEvidence)?
+            .iter()
+            .map(|log| LogRecord {
+                address: log.address,
+                topics: log.topics.clone(),
+                data: log.data.clone(),
+            })
+            .collect();
         Ok(ObservedTransaction {
-            inclusion: receipt.inclusion,
-            logs: receipt.logs,
+            inclusion: observed_inclusion,
+            logs,
         })
     }
 
@@ -1153,32 +1162,6 @@ impl WithdrawalBoundary {
         quantity(timestamp, "block.timestamp")
     }
 
-    fn transaction_receipt(
-        &self,
-        transaction: TransactionHash,
-    ) -> Result<Option<ObservedReceipt>, WithdrawalError> {
-        let value = self.rpc(
-            "eth_getTransactionReceipt",
-            &[Json::Text(transaction.to_hex())],
-        )?;
-        if value.is_null() {
-            return Ok(None);
-        }
-        let inclusion = decode_inclusion(&value)?;
-        let logs = match required(&value, "logs")? {
-            Json::Array(items) => items
-                .iter()
-                .map(decode_log)
-                .collect::<Result<Vec<_>, _>>()?,
-            other => {
-                return Err(WithdrawalError::Contract {
-                    detail: format!("receipt.logs: expected array, got {other:?}"),
-                })
-            }
-        };
-        Ok(Some(ObservedReceipt { inclusion, logs }))
-    }
-
     fn transaction(&self, transaction: TransactionHash) -> Result<ObservedCall, WithdrawalError> {
         let value = self.rpc(
             "eth_getTransactionByHash",
@@ -1187,6 +1170,11 @@ impl WithdrawalBoundary {
         if value.is_null() {
             return Err(WithdrawalError::Contract {
                 detail: "transaction disappeared after finality".to_owned(),
+            });
+        }
+        if fixed::<32>(required(&value, "hash")?, "transaction.hash")? != transaction.bytes() {
+            return Err(WithdrawalError::Contract {
+                detail: "transaction hash does not match its request".to_owned(),
             });
         }
         let to = match value.member("to") {
@@ -1215,14 +1203,9 @@ impl WithdrawalBoundary {
     }
 
     fn rpc(&self, method: &str, params: &[Json]) -> Result<Json, WithdrawalError> {
-        let mut failures = Vec::<EndpointFailure>::new();
-        for endpoint in &self.endpoints {
-            match raw_call(endpoint, method, params) {
-                Ok(value) => return Ok(value),
-                Err(failure) => failures.push(failure),
-            }
-        }
-        Err(WithdrawalError::Endpoint(EndpointError { failures }))
+        self.client
+            .agreed_call(method, params, self.minimum_endpoint_agreement)
+            .map_err(WithdrawalError::Endpoint)
     }
 
     fn word_view(
@@ -1313,11 +1296,6 @@ struct LogRecord {
     address: EvmAddress,
     topics: Vec<[u8; 32]>,
     data: Vec<u8>,
-}
-
-struct ObservedReceipt {
-    inclusion: TransactionInclusion,
-    logs: Vec<LogRecord>,
 }
 
 struct ObservedCall {
@@ -1748,57 +1726,6 @@ fn verify_custody_release(
         });
     }
     Ok(())
-}
-
-fn decode_inclusion(value: &Json) -> Result<TransactionInclusion, WithdrawalError> {
-    let number = quantity(required(value, "blockNumber")?, "receipt.blockNumber")?;
-    let hash = fixed::<32>(required(value, "blockHash")?, "receipt.blockHash")?;
-    let transaction_index = quantity(
-        required(value, "transactionIndex")?,
-        "receipt.transactionIndex",
-    )?;
-    let execution = match quantity(required(value, "status")?, "receipt.status")? {
-        0 => ExecutionOutcome::Reverted,
-        1 => ExecutionOutcome::Succeeded,
-        other => {
-            return Err(WithdrawalError::Contract {
-                detail: format!("receipt.status: unknown value {other}"),
-            })
-        }
-    };
-    let deployed_contract = match value.member("contractAddress") {
-        None | Some(Json::Null) => None,
-        Some(address) => Some(EvmAddress::new(fixed::<20>(
-            address,
-            "receipt.contractAddress",
-        )?)),
-    };
-    Ok(TransactionInclusion {
-        block: BlockRef { number, hash },
-        transaction_index,
-        execution,
-        deployed_contract,
-    })
-}
-
-fn decode_log(value: &Json) -> Result<LogRecord, WithdrawalError> {
-    let address = EvmAddress::new(fixed::<20>(required(value, "address")?, "log.address")?);
-    let topics = match required(value, "topics")? {
-        Json::Array(items) => items
-            .iter()
-            .map(|item| fixed::<32>(item, "log.topic"))
-            .collect::<Result<Vec<_>, _>>()?,
-        other => {
-            return Err(WithdrawalError::Contract {
-                detail: format!("log.topics: expected array, got {other:?}"),
-            })
-        }
-    };
-    Ok(LogRecord {
-        address,
-        topics,
-        data: variable_bytes(required(value, "data")?, "log.data")?,
-    })
 }
 
 fn required<'a>(value: &'a Json, name: &str) -> Result<&'a Json, WithdrawalError> {

@@ -121,6 +121,7 @@ pub enum JsonErrorReason {
     InvalidUnicode,
     InvalidUtf8,
     DepthExceeded,
+    DuplicateMember,
     TrailingData,
 }
 
@@ -383,6 +384,9 @@ impl Parser<'_> {
         loop {
             self.skip_whitespace();
             let key = self.text()?;
+            if members.iter().any(|(existing, _)| existing == &key) {
+                return Err(self.defect(JsonErrorReason::DuplicateMember));
+            }
             self.skip_whitespace();
             match self.bump() {
                 Some(b':') => {}
@@ -398,5 +402,19 @@ impl Parser<'_> {
                 None => return Err(self.defect(JsonErrorReason::UnexpectedEnd)),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn duplicate_object_members_are_ambiguous() {
+        let error = parse(r#"{"result":"0x01","result":"0x02"}"#)
+            .err()
+            .unwrap_or_else(|| panic!("duplicate JSON member was accepted"));
+
+        assert_eq!(error.reason, JsonErrorReason::DuplicateMember);
     }
 }

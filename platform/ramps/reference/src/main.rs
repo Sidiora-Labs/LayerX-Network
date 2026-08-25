@@ -756,10 +756,10 @@ fn route(state: &State, request: Request) -> Result<Response, Response> {
                     "operation_id": operation_id,
                     "transaction_hash": transaction_hash,
                     "status": persisted.stage,
-                    "confirmations": report.progress.confirmed,
-                    "required_confirmations": report.progress.required,
-                    "chain": chain_signal(&report.signal),
-                    "endpoints": endpoint_signal(&report.endpoint)
+                    "confirmations": report.progress().confirmed,
+                    "required_confirmations": report.progress().required,
+                    "chain": chain_signal(&report.signal()),
+                    "endpoints": endpoint_signal(&report.endpoint())
                 })))
             }
             Rebalance::Reconcile { idempotency_key } => {

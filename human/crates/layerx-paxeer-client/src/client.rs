@@ -2,7 +2,7 @@ use layerx_types::intent::EvmAddress;
 
 use crate::json::Json;
 use crate::rpc::{
-    raw_call, validate_endpoint, EndpointConfig, EndpointFailure, EndpointFault,
+    canonical_endpoint_identity, raw_call, EndpointConfig, EndpointFailure, EndpointFault,
 };
 
 /// Exact 32-byte Paxeer transaction hash.
@@ -140,7 +140,17 @@ pub enum ClientConfigError {
         actual: u64,
     },
     MixedTransportModes,
-    DuplicateEndpoint { url: String },
+    DuplicateEndpointIdentity {
+        first_url: String,
+        duplicate_url: String,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct QuorumBinding {
+    chain_id: u64,
+    endpoint_sources: Vec<(String, crate::rpc::EndpointTransport)>,
+    minimum_agreement: usize,
 }
 
 /// Read-only Paxeer client over one or more declared endpoints.
@@ -148,6 +158,7 @@ pub enum ClientConfigError {
 pub struct PaxeerClient {
     endpoints: Vec<EndpointConfig>,
     expected_chain_id: u64,
+    endpoint_sources: Vec<(String, crate::rpc::EndpointTransport)>,
 }
 
 impl PaxeerClient {
@@ -165,11 +176,13 @@ impl PaxeerClient {
             &endpoints[0].transport,
             crate::rpc::EndpointTransport::PinnedTls { .. }
         );
-        let mut urls = std::collections::BTreeSet::new();
+        let mut identities = std::collections::BTreeMap::new();
         for endpoint in &endpoints {
-            validate_endpoint(endpoint).map_err(|fault| ClientConfigError::InvalidEndpoint {
-                url: endpoint.url.clone(),
-                fault,
+            let identity = canonical_endpoint_identity(endpoint).map_err(|fault| {
+                ClientConfigError::InvalidEndpoint {
+                    url: endpoint.url.clone(),
+                    fault,
+                }
             })?;
             if endpoint.request_timeout.is_zero() {
                 return Err(ClientConfigError::ZeroRequestTimeout {
@@ -190,16 +203,38 @@ impl PaxeerClient {
             {
                 return Err(ClientConfigError::MixedTransportModes);
             }
-            if !urls.insert(endpoint.url.clone()) {
-                return Err(ClientConfigError::DuplicateEndpoint {
-                    url: endpoint.url.clone(),
+            if let Some((first_url, _)) = identities.insert(
+                identity,
+                (endpoint.url.clone(), endpoint.transport.clone()),
+            ) {
+                return Err(ClientConfigError::DuplicateEndpointIdentity {
+                    first_url,
+                    duplicate_url: endpoint.url.clone(),
                 });
             }
         }
+        let endpoint_sources = identities
+            .into_iter()
+            .map(|(identity, (_, transport))| (identity, transport))
+            .collect();
         Ok(Self {
             endpoints,
             expected_chain_id,
+            endpoint_sources,
         })
+    }
+
+    pub(crate) fn quorum_binding(&self, minimum_agreement: usize) -> QuorumBinding {
+        QuorumBinding {
+            chain_id: self.expected_chain_id,
+            endpoint_sources: self.endpoint_sources.clone(),
+            minimum_agreement,
+        }
+    }
+
+    pub(crate) fn same_sources(&self, binding: &QuorumBinding) -> bool {
+        self.expected_chain_id == binding.chain_id
+            && self.endpoint_sources == binding.endpoint_sources
     }
 
     fn verify_chain(&self, endpoint: &EndpointConfig) -> Result<(), EndpointFailure> {
@@ -254,6 +289,62 @@ impl PaxeerClient {
             }
         }
         Err(EndpointError { failures })
+    }
+
+    pub(crate) fn agreed_call(
+        &self,
+        method: &str,
+        params: &[Json],
+        minimum_agreement: usize,
+    ) -> Result<Json, EndpointError> {
+        let mut failures = Vec::new();
+        let mut observations = Vec::new();
+        for endpoint in &self.endpoints {
+            match self.bound_call(endpoint, method, params) {
+                Ok(value) => observations.push((endpoint.url.clone(), value)),
+                Err(failure) => failures.push(failure),
+            }
+        }
+        if let Some(index) = semantic_quorum_index(&observations, minimum_agreement) {
+            let candidate = observations[index].1.clone();
+            return Ok(candidate);
+        }
+        failures.extend(observations.into_iter().map(|(url, _)| EndpointFailure {
+            url,
+            fault: EndpointFault::InconsistentObservation,
+        }));
+        Err(EndpointError { failures })
+    }
+
+    pub(crate) fn agreed_contract_call(
+        &self,
+        contract: EvmAddress,
+        data: &[u8],
+        minimum_agreement: usize,
+    ) -> Result<Vec<u8>, EndpointError> {
+        let value = self.agreed_call(
+            "eth_call",
+            &[
+                Json::Object(vec![
+                    ("to".to_owned(), Json::Text(bytes_hex(&contract.bytes()))),
+                    ("data".to_owned(), Json::Text(bytes_hex(data))),
+                ]),
+                Json::Text("latest".to_owned()),
+            ],
+            minimum_agreement,
+        )?;
+        variable_bytes(&value).map_err(|detail| EndpointError {
+            failures: self
+                .endpoints
+                .iter()
+                .map(|endpoint| EndpointFailure {
+                    url: endpoint.url.clone(),
+                    fault: EndpointFault::UnexpectedValue {
+                        detail: detail.clone(),
+                    },
+                })
+                .collect(),
+        })
     }
 
     /// Reads the current canonical head number.
@@ -344,7 +435,7 @@ impl PaxeerClient {
             failovers,
             "eth_getTransactionReceipt",
             &[Json::Text(transaction.to_hex())],
-            inclusion_with_logs,
+            |value| inclusion_with_logs(value, transaction),
         )
     }
 
@@ -429,6 +520,8 @@ impl PaxeerClient {
                         head,
                         transaction: candidate.transaction,
                         canonical_block: candidate.canonical_block,
+                        receipt_logs: candidate.receipt_logs.clone(),
+                        chain_id: candidate.chain_id,
                     },
                     failures,
                 ));
@@ -471,43 +564,68 @@ impl PaxeerClient {
             "eth_getTransactionReceipt",
             &[Json::Text(transaction.to_hex())],
         )?;
-        let included = inclusion(&receipt).map_err(|detail| EndpointFailure {
-            url: endpoint.url.clone(),
-            fault: EndpointFault::UnexpectedValue { detail },
-        })?;
-        let (transaction_view, canonical_block) = if let Some(included) = included {
-            if included.block.number > head {
-                return Err(EndpointFailure {
-                    url: endpoint.url.clone(),
-                    fault: EndpointFault::InconsistentObservation,
-                });
-            }
-            let block = raw_call(
-                endpoint,
-                "eth_getBlockByNumber",
-                &[
-                    Json::Text(format!("0x{:x}", included.block.number)),
-                    Json::Bool(false),
-                ],
-            )?;
-            let canonical = block_reference(&block).map_err(|detail| EndpointFailure {
+        let included = inclusion_with_logs(&receipt, transaction).map_err(|detail| {
+            EndpointFailure {
                 url: endpoint.url.clone(),
                 fault: EndpointFault::UnexpectedValue { detail },
-            })?;
-            (TransactionView::Included(included), canonical)
-        } else {
-            let value = raw_call(
-                endpoint,
-                "eth_getTransactionByHash",
-                &[Json::Text(transaction.to_hex())],
-            )?;
-            let view = if value.is_null() {
-                TransactionView::Unknown
+            }
+        })?;
+        let (transaction_view, canonical_block, receipt_logs) =
+            if let Some((included, logs)) = included {
+                if included.block.number > head {
+                    return Err(EndpointFailure {
+                        url: endpoint.url.clone(),
+                        fault: EndpointFault::InconsistentObservation,
+                    });
+                }
+                let block = raw_call(
+                    endpoint,
+                    "eth_getBlockByNumber",
+                    &[
+                        Json::Text(format!("0x{:x}", included.block.number)),
+                        Json::Bool(false),
+                    ],
+                )?;
+                let canonical = block_reference(&block).map_err(|detail| EndpointFailure {
+                    url: endpoint.url.clone(),
+                    fault: EndpointFault::UnexpectedValue { detail },
+                })?;
+                if canonical.is_some_and(|block| block.number != included.block.number) {
+                    return Err(EndpointFailure {
+                        url: endpoint.url.clone(),
+                        fault: EndpointFault::InconsistentObservation,
+                    });
+                }
+                (TransactionView::Included(included), canonical, Some(logs))
             } else {
-                TransactionView::Pending
+                let value = raw_call(
+                    endpoint,
+                    "eth_getTransactionByHash",
+                    &[Json::Text(transaction.to_hex())],
+                )?;
+                if !value.is_null() {
+                    let hash = required(&value, "hash").map_err(|detail| EndpointFailure {
+                        url: endpoint.url.clone(),
+                        fault: EndpointFault::UnexpectedValue { detail },
+                    })?;
+                    let observed_hash = fixed::<32>(hash).map_err(|detail| EndpointFailure {
+                        url: endpoint.url.clone(),
+                        fault: EndpointFault::UnexpectedValue { detail },
+                    })?;
+                    if observed_hash != transaction.bytes() {
+                        return Err(EndpointFailure {
+                            url: endpoint.url.clone(),
+                            fault: EndpointFault::InconsistentObservation,
+                        });
+                    }
+                }
+                let view = if value.is_null() {
+                    TransactionView::Unknown
+                } else {
+                    TransactionView::Pending
+                };
+                (view, None, None)
             };
-            (view, None)
-        };
         let anchor_after = raw_call(endpoint, "eth_getBlockByNumber", &anchor_parameters)
             .and_then(|value| {
                 block_reference(&value).map_err(|detail| EndpointFailure {
@@ -525,6 +643,8 @@ impl PaxeerClient {
             head,
             transaction: transaction_view,
             canonical_block,
+            receipt_logs,
+            chain_id: endpoint.expected_chain_id,
         })
     }
 
@@ -562,17 +682,73 @@ impl PaxeerClient {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct FinalityObservation {
     pub head: u64,
     pub transaction: TransactionView,
     pub canonical_block: Option<BlockRef>,
+    pub receipt_logs: Option<Vec<LogRecord>>,
+    pub chain_id: u64,
 }
 
 impl FinalityObservation {
     fn same_chain_fact(&self, other: &Self) -> bool {
-        self.transaction == other.transaction && self.canonical_block == other.canonical_block
+        self.transaction == other.transaction
+            && self.canonical_block == other.canonical_block
+            && self.receipt_logs == other.receipt_logs
+            && self.chain_id == other.chain_id
     }
+}
+
+fn semantic_quorum_index(
+    observations: &[(String, Json)],
+    minimum_agreement: usize,
+) -> Option<usize> {
+    observations.iter().enumerate().find_map(|(index, (_, candidate))| {
+        let agreeing = observations
+            .iter()
+            .filter(|(_, observed)| semantic_json_eq(observed, candidate))
+            .count();
+        (agreeing >= minimum_agreement).then_some(index)
+    })
+}
+
+fn semantic_json_eq(left: &Json, right: &Json) -> bool {
+    match (left, right) {
+        (Json::Null, Json::Null) => true,
+        (Json::Bool(left), Json::Bool(right)) => left == right,
+        (Json::Number(left), Json::Number(right)) | (Json::Text(left), Json::Text(right)) => {
+            left == right
+        }
+        (Json::Array(left), Json::Array(right)) => {
+            left.len() == right.len()
+                && left
+                    .iter()
+                    .zip(right)
+                    .all(|(left, right)| semantic_json_eq(left, right))
+        }
+        (Json::Object(left), Json::Object(right)) => {
+            unique_members(left)
+                && unique_members(right)
+                && left.len() == right.len()
+                && left.iter().all(|(name, left_value)| {
+                    right
+                        .iter()
+                        .find(|(right_name, _)| right_name == name)
+                        .is_some_and(|(_, right_value)| semantic_json_eq(left_value, right_value))
+                })
+        }
+        _ => false,
+    }
+}
+
+fn unique_members(members: &[(String, Json)]) -> bool {
+    members.iter().enumerate().all(|(index, (name, _))| {
+        members
+            .iter()
+            .skip(index.saturating_add(1))
+            .all(|(other, _)| other != name)
+    })
 }
 
 fn required<'a>(value: &'a Json, name: &str) -> Result<&'a Json, String> {
@@ -660,7 +836,19 @@ fn variable_bytes(value: &Json) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
-fn log_record(value: &Json) -> Result<LogRecord, String> {
+fn log_record(
+    value: &Json,
+    transaction: TransactionHash,
+    inclusion: TransactionInclusion,
+) -> Result<LogRecord, String> {
+    if fixed::<32>(required(value, "transactionHash")?)? != transaction.bytes()
+        || fixed::<32>(required(value, "blockHash")?)? != inclusion.block.hash
+        || quantity(required(value, "blockNumber")?)? != inclusion.block.number
+        || quantity(required(value, "transactionIndex")?)? != inclusion.transaction_index
+        || !matches!(required(value, "removed")?, Json::Bool(false))
+    {
+        return Err("receipt log does not bind to its transaction inclusion".to_owned());
+    }
     let address = EvmAddress::new(fixed::<20>(required(value, "address")?)?);
     let topics = match required(value, "topics")? {
         Json::Array(items) => items
@@ -679,14 +867,18 @@ fn log_record(value: &Json) -> Result<LogRecord, String> {
 
 fn inclusion_with_logs(
     value: &Json,
+    transaction: TransactionHash,
 ) -> Result<Option<(TransactionInclusion, Vec<LogRecord>)>, String> {
     let Some(included) = inclusion(value)? else {
         return Ok(None);
     };
+    if fixed::<32>(required(value, "transactionHash")?)? != transaction.bytes() {
+        return Err("receipt transaction hash does not match its request".to_owned());
+    }
     let logs = match required(value, "logs")? {
         Json::Array(items) => items
             .iter()
-            .map(log_record)
+            .map(|value| log_record(value, transaction, included))
             .collect::<Result<Vec<_>, _>>()?,
         other => return Err(format!("expected logs array, got {other:?}")),
     };
@@ -715,4 +907,71 @@ fn inclusion(value: &Json) -> Result<Option<TransactionInclusion>, String> {
         execution,
         deployed_contract,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn included() -> TransactionInclusion {
+        TransactionInclusion {
+            block: BlockRef {
+                number: 9,
+                hash: [4; 32],
+            },
+            transaction_index: 1,
+            execution: ExecutionOutcome::Succeeded,
+            deployed_contract: None,
+        }
+    }
+
+    #[test]
+    fn quorum_fact_rejects_split_receipt_logs() {
+        let base = FinalityObservation {
+            head: 12,
+            transaction: TransactionView::Included(included()),
+            canonical_block: Some(included().block),
+            receipt_logs: Some(vec![LogRecord {
+                address: EvmAddress::new([7; 20]),
+                topics: vec![[8; 32]],
+                data: vec![1],
+            }]),
+            chain_id: 31_337,
+        };
+        let mut split = base.clone();
+        split.receipt_logs = Some(vec![LogRecord {
+            address: EvmAddress::new([7; 20]),
+            topics: vec![[8; 32]],
+            data: vec![2],
+        }]);
+
+        assert!(!base.same_chain_fact(&split));
+    }
+
+    #[test]
+    fn semantic_quorum_rejects_split_transaction_calldata() {
+        let transaction = |input: &str| {
+            Json::Object(vec![
+                ("to".to_owned(), Json::Text("0x11".to_owned())),
+                ("input".to_owned(), Json::Text(input.to_owned())),
+                ("value".to_owned(), Json::Text("0x0".to_owned())),
+            ])
+        };
+        let observations = vec![
+            ("first".to_owned(), transaction("0x0102")),
+            ("second".to_owned(), transaction("0x0103")),
+        ];
+
+        assert!(semantic_quorum_index(&observations, 2).is_none());
+    }
+
+    #[test]
+    fn semantic_quorum_rejects_split_contract_views() {
+        let observations = vec![
+            ("first".to_owned(), Json::Text("0x01".to_owned())),
+            ("second".to_owned(), Json::Text("0x02".to_owned())),
+        ];
+
+        assert!(semantic_quorum_index(&observations, 2).is_none());
+    }
 }

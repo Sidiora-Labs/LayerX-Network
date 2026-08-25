@@ -411,10 +411,10 @@ fn final_report(
         .unwrap_or_else(|error| panic!("tracker: {error:?}"));
     for _ in 0..300 {
         let report = tracker.poll();
-        if matches!(report.stage, FinalityStage::Final { .. }) {
+        if matches!(report.stage(), FinalityStage::Final { .. }) {
             return report;
         }
-        if matches!(report.stage, FinalityStage::Confirming { .. }) {
+        if matches!(report.stage(), FinalityStage::Confirming { .. }) {
             anvil.mine();
         }
         thread::sleep(Duration::from_millis(20));
@@ -938,7 +938,7 @@ fn real_claim_waits_then_verifies_the_actual_vault_and_token_payout() {
             checkpoint_hash: fixture.checkpoint_hash,
             claim_id: fixture.submitted.claim_id(),
             payout_transaction,
-            payout_inclusion: match report.stage {
+            payout_inclusion: match report.stage() {
                 FinalityStage::Final { inclusion, .. } => inclusion,
                 stage => panic!("expected final payout, got {stage:?}"),
             },

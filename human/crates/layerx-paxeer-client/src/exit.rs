@@ -191,7 +191,7 @@ impl ExitProgress {
     /// settlement reported only on verified Paxeer finality.
     #[must_use]
     pub const fn of(report: &FinalityReport) -> Self {
-        match report.stage {
+        match report.stage() {
             FinalityStage::Announced
             | FinalityStage::Missing { .. }
             | FinalityStage::Pooled { .. } => Self::Pending,
@@ -549,7 +549,7 @@ impl EmergencyExit {
 
     fn view(&self, contract: EvmAddress, data: &[u8]) -> Result<Vec<u8>, ExitError> {
         self.client
-            .call_contract(contract, data)
+            .agreed_contract_call(contract, data, self.minimum_endpoint_agreement)
             .map_err(ExitError::Endpoint)
     }
 

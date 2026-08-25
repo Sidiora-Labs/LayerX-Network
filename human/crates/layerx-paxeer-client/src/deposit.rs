@@ -142,6 +142,8 @@ pub enum ProofFault {
         tracked: BlockRef,
         observed: Option<BlockRef>,
     },
+    MissingQuorumEvidence,
+    EvidenceSourceMismatch,
     MissingCustodyEvent {
         vault: EvmAddress,
     },
@@ -248,8 +250,9 @@ impl DepositProof {
     }
 
     /// Constructs a finalized custody proof from one tracked transaction and a
-    /// verified core checkpoint. The receipt is re-read and the vault's
-    /// deposit identifier and core proof commitment are re-derived locally.
+    /// verified core checkpoint. The receipt comes from the tracker's bound
+    /// endpoint quorum and the vault's deposit identifier and core proof
+    /// commitment are re-derived locally.
     ///
     /// # Errors
     ///
@@ -262,7 +265,7 @@ impl DepositProof {
         vault: EvmAddress,
         checkpoint: FinalizedCheckpoint,
     ) -> Result<Self, DepositFailure> {
-        let (inclusion, confirmations, required) = match report.stage {
+        let (inclusion, confirmations, required) = match report.stage() {
             FinalityStage::Final {
                 inclusion,
                 confirmations,
@@ -290,19 +293,33 @@ impl DepositProof {
                 inclusion,
             }));
         }
-        let unreadable = |error| DepositFailure::ProofUnavailable(ProofFault::Unreadable { error });
-        let chain_id = client.chain_id().map_err(unreadable)?;
-        let observed = client
-            .transaction_logs(report.transaction)
-            .map_err(unreadable)?;
-        let Some((current, logs)) = observed else {
+        let evidence = report.evidence().ok_or(DepositFailure::ProofUnavailable(
+            ProofFault::MissingQuorumEvidence,
+        ))?;
+        if !client.same_sources(evidence.binding()) {
+            return Err(DepositFailure::ProofUnavailable(
+                ProofFault::EvidenceSourceMismatch,
+            ));
+        }
+        let current = match evidence.transaction() {
+            crate::client::TransactionView::Included(current) => current,
+            crate::client::TransactionView::Unknown | crate::client::TransactionView::Pending => {
+                return Err(DepositFailure::ProofUnavailable(
+                    ProofFault::InclusionChanged {
+                        tracked: inclusion.block,
+                        observed: None,
+                    },
+                ));
+            }
+        };
+        if evidence.canonical_block() != Some(inclusion.block) {
             return Err(DepositFailure::ProofUnavailable(
                 ProofFault::InclusionChanged {
                     tracked: inclusion.block,
-                    observed: None,
+                    observed: evidence.canonical_block(),
                 },
             ));
-        };
+        }
         if current != inclusion {
             return Err(DepositFailure::ProofUnavailable(
                 ProofFault::InclusionChanged {
@@ -311,7 +328,20 @@ impl DepositProof {
                 },
             ));
         }
-        let custody = custody_event(&logs, vault)?;
+        let observed_confirmations = evidence
+            .head()
+            .saturating_sub(inclusion.block.number)
+            .saturating_add(1);
+        if observed_confirmations < required {
+            return Err(DepositFailure::ProofUnavailable(ProofFault::NotFinal {
+                stage: report.stage(),
+            }));
+        }
+        let logs = evidence.receipt_logs().ok_or(DepositFailure::ProofUnavailable(
+            ProofFault::MissingQuorumEvidence,
+        ))?;
+        let chain_id = evidence.chain_id();
+        let custody = custody_event(logs, vault)?;
         let derived = derive_deposit_id(chain_id, vault, &custody);
         if derived != custody.deposit_id {
             return Err(DepositFailure::ProofUnavailable(
@@ -321,9 +351,9 @@ impl DepositProof {
                 },
             ));
         }
-        let commitment = proof_commitment(report.transaction, &custody, &checkpoint);
+        let commitment = proof_commitment(report.transaction(), &custody, &checkpoint);
         Ok(Self {
-            transaction: report.transaction,
+            transaction: report.transaction(),
             inclusion,
             confirmations,
             required,

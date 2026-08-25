@@ -229,7 +229,7 @@ fn a_real_contract_revert_is_refused_while_the_boundary_stays_ready() {
     ]));
     let mut deployment_tracker = tracker(vec![anvil.endpoint.clone()], deployment, 1, 20);
     wait_final(&mut deployment_tracker);
-    let FinalityStage::Final { inclusion, .. } = deployment_tracker.latest().stage else {
+    let FinalityStage::Final { inclusion, .. } = deployment_tracker.latest().stage() else {
         panic!("deployment was not final")
     };
     let contract = inclusion

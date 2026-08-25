@@ -1424,7 +1424,7 @@ fn final_report(
 ) -> Result<Option<layerx_paxeer_client::FinalityReport>, WithdrawalJourneyError> {
     let mut tracker = boundary.track(transaction)?;
     let report = tracker.poll();
-    match report.stage {
+    match report.stage() {
         FinalityStage::Final { .. } => Ok(Some(report)),
         FinalityStage::Displaced { .. } => Err(WithdrawalJourneyError::TransactionDisplaced),
         FinalityStage::Announced

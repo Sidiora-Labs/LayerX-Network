@@ -4,26 +4,19 @@ use layerx_human_service::health::{
     ComponentHealth, HealthComponent, ServiceHealth, ServiceReadiness,
 };
 use layerx_paxeer_client::{
-    BoundaryStatus, ChainSignal, ConfirmationProgress, EndpointError, EndpointFailure,
-    EndpointFault, EndpointSignal, FinalityReport, FinalityStage, TransactionHash,
+    BoundaryHealth, BoundaryStatus, ChainStatus, ContractStatus, DelayExpectation, EndpointError,
+    EndpointFailure, EndpointFault, EndpointStatus, FinalityStage, TransactionHash,
 };
 
-fn status(endpoint: EndpointSignal, signal: ChainSignal) -> BoundaryStatus {
-    BoundaryStatus::from_report(
-        &FinalityReport {
-            transaction: TransactionHash::new([7; 32]),
-            stage: FinalityStage::Missing { head: 41 },
-            signal,
-            endpoint,
-            progress: ConfirmationProgress {
-                confirmed: 0,
-                required: 3,
-            },
-            displacements: 0,
-            polls: 2,
-        },
-        Duration::from_secs(2),
-    )
+fn status(endpoint: EndpointStatus, chain: ChainStatus, health: BoundaryHealth) -> BoundaryStatus {
+    BoundaryStatus {
+        transaction: TransactionHash::new([7; 32]),
+        stage: FinalityStage::Missing { head: 41 },
+        endpoint,
+        chain,
+        contract: ContractStatus::NotObserved,
+        health,
+    }
 }
 
 fn ready_components(paxeer: BoundaryStatus) -> ServiceHealth {
@@ -45,10 +38,9 @@ fn readiness_names_paxeer_as_the_unavailable_component() {
         }],
     };
     let health = ready_components(status(
-        EndpointSignal::Unreachable {
-            error: error.clone(),
-        },
-        ChainSignal::Unreachable { error },
+        EndpointStatus::Failed { error },
+        ChainStatus::Progressing,
+        BoundaryHealth::Unavailable,
     ));
 
     assert_eq!(
@@ -63,13 +55,16 @@ fn readiness_names_paxeer_as_the_unavailable_component() {
 #[test]
 fn degraded_paxeer_timing_remains_ready_but_visible() {
     let health = ready_components(status(
-        EndpointSignal::Serving,
-        ChainSignal::Delayed {
-            stalled_polls: 3,
-            threshold: 3,
-            stalled_for: Duration::from_secs(6),
-            delayed_after: Duration::from_secs(6),
+        EndpointStatus::Serving,
+        ChainStatus::FinalityDelayed {
+            expectation: DelayExpectation {
+                poll_cadence: Duration::from_secs(2),
+                delayed_after: Duration::from_secs(6),
+                stalled_for: Duration::from_secs(6),
+                next_observation_within: Duration::from_secs(2),
+            },
         },
+        BoundaryHealth::Degraded,
     ));
 
     assert_eq!(
@@ -94,7 +89,11 @@ fn service_and_agent_failures_are_reported_separately() {
         agent_layer: ComponentHealth::Unavailable {
             reason: "agent boundary unavailable".to_owned(),
         },
-        paxeer: status(EndpointSignal::Serving, ChainSignal::Progressing),
+        paxeer: status(
+            EndpointStatus::Serving,
+            ChainStatus::Progressing,
+            BoundaryHealth::Ready,
+        ),
     };
 
     assert_eq!(
