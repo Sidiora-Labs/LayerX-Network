@@ -30,7 +30,7 @@ contract GuarantorBond is IGuarantorEligibility, LayerXComponent {
     }
 
     address public immutable custodyAuthority;
-    address public slashingAuthority;
+    address public override slashingAuthority;
     uint32 public immutable minimumBondBps;
     uint64 public immutable unbondingDelay;
     uint256 public custodiedValue;

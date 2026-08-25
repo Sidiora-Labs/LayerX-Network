@@ -79,7 +79,8 @@ contract CheckpointChallengeManager is Governed, ReentrancyLock, LayerXComponent
 
     function claimable(bytes32 checkpointHash) external view returns (bool) {
         Challenge storage item = challenge[checkpointHash];
-        return block.timestamp >= windowClosesAt(checkpointHash) && item.status != Status.Pending
+        return registry.isCanonicalCheckpoint(checkpointHash) && block.timestamp >= windowClosesAt(checkpointHash)
+            && item.status != Status.Pending
             && item.status != Status.Upheld;
     }
 
@@ -107,6 +108,7 @@ contract CheckpointChallengeManager is Governed, ReentrancyLock, LayerXComponent
         item.status = upheld ? Status.Upheld : Status.Rejected;
         bytes32[] memory guarantors = registry.guarantorIds(checkpointHash);
         if (upheld) {
+            registry.invalidateCheckpoint(checkpointHash);
             uint64 removedEpoch = Arithmetic.toUint64(uint256(registry.checkpointEpoch(checkpointHash)) + 1);
             for (uint256 i = 0; i < guarantors.length; ++i) {
                 guarantorBond.slashForCheckpoint(guarantors[i], checkpointHash, removedEpoch);

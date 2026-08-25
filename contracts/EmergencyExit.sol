@@ -88,14 +88,13 @@ contract EmergencyExit is Governed, ReentrancyLock, LayerXComponent {
     }
 
     function latestCheckpointHash() public view returns (bytes32) {
-        return registry.checkpointAtBatch(registry.finalisedBatchNumber());
+        return registry.latestCanonicalCheckpointHash();
     }
 
     function eligible() public view returns (bool) {
         bytes32 checkpointHash = latestCheckpointHash();
         if (checkpointHash == bytes32(0)) return false;
-        (,,,,, CheckpointChallengeManager.Status challengeStatus) = challengeManager.challenge(checkpointHash);
-        return governanceEmergency || challengeStatus == CheckpointChallengeManager.Status.Upheld
+        return governanceEmergency || registry.firstInvalidatedBatch() != 0
             || block.timestamp >= uint256(registry.registeredAt(checkpointHash)) + livenessBound;
     }
 

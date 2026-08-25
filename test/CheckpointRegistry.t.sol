@@ -105,6 +105,38 @@ contract CheckpointRegistryTest {
         );
     }
 
+    function testOnlySlashingAuthorityCanInvalidateWithoutErasingHistory() public {
+        CanonicalCheckpoint.HeaderCommitments memory header = _header();
+        bytes32 digest = registry.checkpointHash(header, "");
+        CanonicalCheckpoint.GuarantorAttestation[] memory attestations = _attestations(header, digest, 2);
+        registry.registerCheckpoint(header, "", attestations);
+
+        vm.expectRevert(CheckpointRegistry.ChallengeAuthorityOnly.selector);
+        vm.prank(address(0xBEEF));
+        registry.invalidateCheckpoint(digest);
+
+        bond.setSlashingAuthority(address(this));
+        registry.invalidateCheckpoint(digest);
+        require(registry.explicitlyInvalidated(digest), "invalidation not recorded");
+        require(!registry.isCanonicalCheckpoint(digest), "invalid checkpoint remained canonical");
+        require(registry.finalisedStateRoot(digest) == header.resultingStateRoot, "state-root history erased");
+        require(registry.checkpointAtBatch(header.batchNumber) == digest, "batch history erased");
+        require(registry.latestCanonicalCheckpointHash() == bytes32(0), "nonexistent predecessor invented");
+
+        header.epoch = 2;
+        header.batchNumber = 2;
+        header.firstSequence = header.lastSequence + 1;
+        header.lastSequence = header.firstSequence;
+        header.previousStateRoot = header.resultingStateRoot;
+        header.resultingStateRoot = bytes32(uint256(0x99) << 248);
+        header.timestamp += 1;
+        bytes32 descendantDigest = registry.checkpointHash(header, "");
+        CanonicalCheckpoint.GuarantorAttestation[] memory descendantAttestations =
+            _attestations(header, descendantDigest, 2);
+        vm.expectRevert(CheckpointRegistry.CanonicalChainInvalidated.selector);
+        registry.registerCheckpoint(header, "", descendantAttestations);
+    }
+
     function testPayloadSizeIndependentOfActivityCount() public view {
         CanonicalCheckpoint.HeaderCommitments memory first = _header();
         CanonicalCheckpoint.HeaderCommitments memory second = first;

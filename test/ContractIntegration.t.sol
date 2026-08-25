@@ -155,6 +155,15 @@ contract MessageTypesTest {
 }
 
 contract ContractIntegrationTest {
+    struct EmergencyCheckpointFixture {
+        bytes32 account;
+        address recipient;
+        uint128 balance;
+        bytes32 stateRoot;
+        bytes32 checkpointHash;
+        CanonicalCheckpoint.GuarantorAttestation[] attestations;
+    }
+
     IntegrationVm private constant vm = IntegrationVm(address(uint160(uint256(keccak256("hevm cheat code")))));
 
     bytes32 private constant GENESIS = keccak256("integration-genesis");
@@ -382,6 +391,8 @@ contract ContractIntegrationTest {
             checkpointHash, CheckpointChallengeManager.Kind.DataAvailability, keccak256("missing-shard")
         );
         challengeManager.resolveChallenge(checkpointHash, true);
+        require(checkpointRegistry.explicitlyInvalidated(checkpointHash), "checkpoint invalidation not recorded");
+        require(!checkpointRegistry.isCanonicalCheckpoint(checkpointHash), "challenged checkpoint remained canonical");
         withdrawalClaims.cancelChallengedClaim(claimId);
         require(
             nullifierRegistry.status(withdrawalClaims.withdrawalNullifier(withdrawal))
@@ -435,6 +446,50 @@ contract ContractIntegrationTest {
         require(token.balanceOf(recipient) == balance, "emergency balance unpaid");
         vm.expectPartialRevert(EmergencyExit.ExitAlreadyConsumed.selector);
         emergencyExit.executeExit(exitClaim, stateRoot, proof, attestations);
+    }
+
+    function testUpheldLatestCheckpointCannotAuthorizeEmergencyExit() public {
+        _prepareSettlement(1_000_000_000);
+        bytes32 assetId = keccak256("USDX");
+        EmergencyCheckpointFixture memory safe =
+            _registerEmergencyCheckpoint(assetId, keccak256("safe-emergency-account"), address(0x5AFE), 300_000_000);
+        EmergencyCheckpointFixture memory fraudulent = _registerEmergencyCheckpoint(
+            assetId, keccak256("fraudulent-emergency-account"), address(0xBAD), 900_000_000
+        );
+
+        address challenger = address(0xC0FFEE);
+        vm.deal(challenger, 2 ether);
+        vm.prank(challenger);
+        challengeManager.raiseChallenge{value: 1 ether}(
+            fraudulent.checkpointHash, CheckpointChallengeManager.Kind.Fraud, keccak256("invalid-state-root")
+        );
+        challengeManager.resolveChallenge(fraudulent.checkpointHash, true);
+
+        require(
+            checkpointRegistry.explicitlyInvalidated(fraudulent.checkpointHash), "fraud invalidation not recorded"
+        );
+        require(
+            checkpointRegistry.finalisedStateRoot(fraudulent.checkpointHash) == fraudulent.stateRoot,
+            "audit history was erased"
+        );
+        require(
+            checkpointRegistry.checkpointAtBatch(checkpointRegistry.finalisedBatchNumber()) == fraudulent.checkpointHash,
+            "registration history was rewritten"
+        );
+        require(!checkpointRegistry.isCanonicalCheckpoint(fraudulent.checkpointHash), "fraud remained canonical");
+        require(checkpointRegistry.isCanonicalCheckpoint(safe.checkpointHash), "safe predecessor was invalidated");
+        require(emergencyExit.latestCheckpointHash() == safe.checkpointHash, "exit did not select safe predecessor");
+        require(emergencyExit.eligible(), "upheld fraud did not activate emergency exit");
+
+        EmergencyExit.BalanceProof memory proof = EmergencyExit.BalanceProof({leafIndex: 0, siblings: new bytes32[](0)});
+        vm.expectPartialRevert(EmergencyExit.InvalidExitClaim.selector);
+        emergencyExit.executeExit(
+            _exitClaim(fraudulent, assetId), fraudulent.stateRoot, proof, fraudulent.attestations
+        );
+
+        emergencyExit.executeExit(_exitClaim(safe, assetId), safe.stateRoot, proof, safe.attestations);
+        require(token.balanceOf(safe.recipient) == safe.balance, "safe emergency balance unpaid");
+        require(token.balanceOf(fraudulent.recipient) == 0, "fraudulent checkpoint paid out");
     }
 
     function testReserveReconciliationBindsCertifiedLiabilitiesToCustody() public {
@@ -536,6 +591,35 @@ contract ContractIntegrationTest {
             amount: amount,
             recipient: recipient,
             checkpointHash: bytes32(0)
+        });
+    }
+
+    function _registerEmergencyCheckpoint(bytes32 assetId, bytes32 account, address recipient, uint128 balance)
+        private
+        returns (EmergencyCheckpointFixture memory fixture)
+    {
+        fixture.account = account;
+        fixture.recipient = recipient;
+        fixture.balance = balance;
+        fixture.stateRoot = PaxeerWithdrawalCodec.balanceLeaf(account, assetId, balance, recipient);
+        (bytes32 checkpointHash,, CanonicalCheckpoint.GuarantorAttestation[] memory attestations) =
+            _registerCheckpoint(fixture.stateRoot);
+        fixture.checkpointHash = checkpointHash;
+        fixture.attestations = attestations;
+    }
+
+    function _exitClaim(EmergencyCheckpointFixture memory fixture, bytes32 assetId)
+        private
+        view
+        returns (EmergencyExit.ExitClaim memory)
+    {
+        return EmergencyExit.ExitClaim({
+            withdrawalId: emergencyExit.requiredWithdrawalId(fixture.account, assetId, fixture.checkpointHash),
+            account: fixture.account,
+            assetId: assetId,
+            finalisedBalance: fixture.balance,
+            recipient: fixture.recipient,
+            checkpointHash: fixture.checkpointHash
         });
     }
 

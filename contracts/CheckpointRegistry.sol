@@ -14,6 +14,8 @@ contract CheckpointRegistry is LayerXComponent {
     error InvalidHeader();
     error InvalidCertificate();
     error StateRootDiscontinuity();
+    error ChallengeAuthorityOnly();
+    error CanonicalChainInvalidated();
 
     IGuarantorEligibility public immutable guarantorEligibility;
     uint16 public immutable protocolVersion;
@@ -27,9 +29,12 @@ contract CheckpointRegistry is LayerXComponent {
     mapping(uint64 => bytes32) public checkpointAtBatch;
     mapping(bytes32 => uint64) public registeredAt;
     mapping(bytes32 => uint64) public checkpointEpoch;
+    mapping(bytes32 => uint64) public checkpointBatchNumber;
     mapping(bytes32 => uint64) public checkpointTimestamp;
     mapping(bytes32 => bytes32) public certificateCommitment;
+    mapping(bytes32 => bool) public explicitlyInvalidated;
     mapping(bytes32 => bytes32[]) private checkpointGuarantors;
+    uint64 public firstInvalidatedBatch;
     uint64 public finalisedEpoch;
     uint64 public finalisedBatchNumber;
     uint64 public finalisedLastSequence;
@@ -45,6 +50,12 @@ contract CheckpointRegistry is LayerXComponent {
         bytes32 previousStateRoot,
         bytes32 resultingStateRoot,
         bytes32 dataAvailabilityRoot
+    );
+    event CheckpointInvalidated(
+        bytes32 indexed checkpointHash,
+        uint64 indexed invalidatedBatch,
+        bytes32 indexed lastCanonicalCheckpoint,
+        uint64 lastCanonicalBatch
     );
 
     constructor(
@@ -125,6 +136,7 @@ contract CheckpointRegistry is LayerXComponent {
         checkpointAtBatch[header.batchNumber] = digest;
         registeredAt[digest] = Arithmetic.toUint64(block.timestamp);
         checkpointEpoch[digest] = header.epoch;
+        checkpointBatchNumber[digest] = header.batchNumber;
         checkpointTimestamp[digest] = header.timestamp;
         certificateCommitment[digest] = sha256(abi.encode(attestations));
         for (uint256 i = 0; i < attestations.length; ++i) {
@@ -148,7 +160,39 @@ contract CheckpointRegistry is LayerXComponent {
     }
 
     function isFinalised(bytes32 digest, bytes32 stateRoot) external view returns (bool) {
-        return stateRoot != bytes32(0) && finalisedStateRoot[digest] == stateRoot;
+        return stateRoot != bytes32(0) && finalisedStateRoot[digest] == stateRoot && isCanonicalCheckpoint(digest);
+    }
+
+    function isCanonicalCheckpoint(bytes32 digest) public view returns (bool) {
+        uint64 batchNumber = checkpointBatchNumber[digest];
+        return batchNumber != 0 && checkpointAtBatch[batchNumber] == digest
+            && (firstInvalidatedBatch == 0 || batchNumber < firstInvalidatedBatch);
+    }
+
+    function latestCanonicalCheckpointHash() public view returns (bytes32) {
+        uint64 invalidatedBatch = firstInvalidatedBatch;
+        if (invalidatedBatch == 0) return checkpointAtBatch[finalisedBatchNumber];
+        if (invalidatedBatch == 1) return bytes32(0);
+        return checkpointAtBatch[invalidatedBatch - 1];
+    }
+
+    function invalidateCheckpoint(bytes32 digest) external {
+        if (msg.sender != guarantorEligibility.slashingAuthority()) revert ChallengeAuthorityOnly();
+        uint64 batchNumber = checkpointBatchNumber[digest];
+        if (batchNumber == 0 || checkpointAtBatch[batchNumber] != digest) revert InvalidHeader();
+        explicitlyInvalidated[digest] = true;
+        uint64 invalidatedBatch = firstInvalidatedBatch;
+        if (invalidatedBatch == 0 || batchNumber < invalidatedBatch) {
+            firstInvalidatedBatch = batchNumber;
+            invalidatedBatch = batchNumber;
+        }
+        uint64 lastCanonicalBatch = invalidatedBatch - 1;
+        emit CheckpointInvalidated(
+            digest,
+            batchNumber,
+            lastCanonicalBatch == 0 ? bytes32(0) : checkpointAtBatch[lastCanonicalBatch],
+            lastCanonicalBatch
+        );
     }
 
     function guarantorIds(bytes32 digest) external view returns (bytes32[] memory) {
@@ -165,6 +209,7 @@ contract CheckpointRegistry is LayerXComponent {
     ) external view returns (bool) {
         if (
             stateRoot == bytes32(0) || finalisedStateRoot[digest] != stateRoot
+                || !isCanonicalCheckpoint(digest)
                 || checkpointAtBatch[batchNumber] != digest || attestations.length < threshold
                 || attestations.length > maximumAttestations
                 || certificateCommitment[digest] != sha256(abi.encode(attestations))
@@ -204,6 +249,7 @@ contract CheckpointRegistry is LayerXComponent {
     }
 
     function _validateHeader(CanonicalCheckpoint.HeaderCommitments calldata header) private view {
+        if (firstInvalidatedBatch != 0) revert CanonicalChainInvalidated();
         if (
             header.protocolVersion != protocolVersion || header.networkId != networkId || header.epoch <= finalisedEpoch
                 || header.batchNumber != finalisedBatchNumber + 1 || header.firstSequence != finalisedLastSequence + 1
