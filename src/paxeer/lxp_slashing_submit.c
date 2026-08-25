@@ -10,6 +10,8 @@ lxp_result lxp_slashing_submit(
     lxp_result status;
     if (evidence == NULL || set == NULL || arena == NULL)
         return LXP_ERR_NON_CANONICAL;
+    if (lxp_guarantor_set_validate(set) != LXP_OK)
+        return LXP_ERR_NON_CANONICAL;
     status = lxp_equivocation_verify(evidence, arena);
     if (status != LXP_OK) return status;
     if (evidence->kind != LXP_EQUIVOCATION_GUARANTOR)

@@ -325,6 +325,7 @@ lxp_result lxp_receipt_augment(
     lxp_byte_span paxeer_settlement_reference,
     lxp_augmented_receipt *augmented);
 lxp_result lxp_guarantor_set_init(lxp_guarantor_set *set);
+lxp_result lxp_guarantor_set_validate(const lxp_guarantor_set *set);
 lxp_result lxp_guarantor_set_apply(
     lxp_guarantor_set *set, uint64_t governance_sequence,
     bool ordered_governance_activity,

@@ -116,7 +116,9 @@ class CheckpointAttestation:
     data_possessed: bool
     availability_class_mask: int
     attested_at_ms: int
+    signer: bytes
     signature: bytes
+    signature_v: int
 
 @dataclass(frozen=True)
 class GuarantorKey:

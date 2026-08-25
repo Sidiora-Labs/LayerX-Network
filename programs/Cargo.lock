@@ -315,6 +315,7 @@ dependencies = [
  "layerx-types",
  "layerx-wire",
  "sha2",
+ "sha3",
 ]
 
 [[package]]

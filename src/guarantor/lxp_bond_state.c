@@ -34,6 +34,9 @@ static int valid_signer_history(const lxp_guarantor_bond_state *bond_state)
         if (!valid_public_key(authorization->public_key) ||
             authorization->active_from_epoch == 0U ||
             authorization->set_version == 0U ||
+            (authorization->active_until_epoch != 0U &&
+             authorization->active_until_epoch <=
+                 authorization->active_from_epoch) ||
             (i != 0U &&
              (bond_state->signer_authorizations[i - 1U].active_until_epoch !=
                   authorization->active_from_epoch ||
@@ -56,6 +59,53 @@ static int valid_signer_history(const lxp_guarantor_bond_state *bond_state)
                .active_until_epoch == bond_state->removed_epoch;
 }
 
+lxp_result lxp_guarantor_set_validate(const lxp_guarantor_set *set)
+{
+    size_t i;
+    size_t j;
+    size_t left;
+    size_t right;
+    if (set == NULL || set->count > LXP_MAX_GUARANTOR_ATTESTATIONS ||
+        set->last_governance_sequence > set->version ||
+        (set->count == 0U &&
+         (set->version != 0U || set->last_governance_sequence != 0U)))
+        return LXP_ERR_NON_CANONICAL;
+    for (i = 0U; i < set->count; ++i) {
+        const lxp_guarantor_bond_state *record = &set->records[i];
+        if (lxp_ct_is_zero(record->guarantor_id, 32U) ||
+            record->joined_epoch == 0U || !valid_signer_history(record) ||
+            record->ejected_at_version > set->version ||
+            (record->ejected_at_version != 0U &&
+             (record->active || !record->jailed)) ||
+            (record->removed_epoch != 0U && record->active))
+            return LXP_ERR_NON_CANONICAL;
+        for (j = 0U; j < record->signer_authorization_count; ++j)
+            if (record->signer_authorizations[j].set_version > set->version)
+                return LXP_ERR_NON_CANONICAL;
+    }
+    for (i = 0U; i < set->count; ++i) {
+        const lxp_guarantor_bond_state *record = &set->records[i];
+        for (right = i + 1U; right < set->count; ++right) {
+            if (memcmp(record->guarantor_id,
+                       set->records[right].guarantor_id, 32U) == 0)
+                return LXP_ERR_NON_CANONICAL;
+            for (left = 0U; left < record->signer_authorization_count;
+                 ++left)
+                for (j = 0U;
+                     j < set->records[right].signer_authorization_count;
+                     ++j)
+                    if (memcmp(
+                            record->signer_authorizations[left].public_key,
+                            set->records[right]
+                                .signer_authorizations[j]
+                                .public_key,
+                            33U) == 0)
+                        return LXP_ERR_NON_CANONICAL;
+        }
+    }
+    return LXP_OK;
+}
+
 lxp_result lxp_guarantor_set_init(lxp_guarantor_set *set)
 {
     if (set == NULL) return LXP_ERR_NON_CANONICAL;
@@ -71,6 +121,8 @@ lxp_result lxp_guarantor_set_apply(
     size_t i;
     if (set == NULL || bond_state == NULL || !ordered_governance_activity)
         return LXP_ERR_AUTH_SCOPE;
+    if (lxp_guarantor_set_validate(set) != LXP_OK)
+        return LXP_ERR_NON_CANONICAL;
     if (set->last_governance_sequence == UINT64_MAX ||
         governance_sequence != set->last_governance_sequence + 1U)
         return LXP_ERR_SEQUENCE_MISMATCH;
@@ -91,6 +143,7 @@ lxp_result lxp_guarantor_set_apply(
                  bond_state->removed_epoch != 0U &&
                  (authorization == NULL ||
                   bond_state->removed_epoch <= authorization->active_from_epoch)) ||
+                (bond_state->removed_epoch != 0U && bond_state->active) ||
                 (current->ejected_at_version != 0U && bond_state->active))
                 return LXP_ERR_NON_CANONICAL;
             if (current->removed_epoch == 0U &&
@@ -112,6 +165,19 @@ lxp_result lxp_guarantor_set_apply(
         lxp_ct_is_zero(bond_state->guarantor_id, 32U) ||
         !valid_public_key(bond_state->public_key))
         return LXP_ERR_NON_CANONICAL;
+    for (i = 0U; i < set->count; ++i) {
+        size_t authorization_index;
+        for (authorization_index = 0U;
+             authorization_index <
+                 set->records[i].signer_authorization_count;
+             ++authorization_index)
+            if (memcmp(
+                    set->records[i]
+                        .signer_authorizations[authorization_index]
+                        .public_key,
+                    bond_state->public_key, 33U) == 0)
+                return LXP_ERR_NON_CANONICAL;
+    }
     set->records[set->count] = *bond_state;
     set->records[set->count].signer_authorization_count = 1U;
     (void)memset(set->records[set->count].signer_authorizations, 0,
@@ -139,6 +205,8 @@ lxp_result lxp_guarantor_set_rotate_signer(
     if (set == NULL || guarantor_id == NULL ||
         !ordered_governance_activity || !valid_public_key(public_key))
         return LXP_ERR_AUTH_SCOPE;
+    if (lxp_guarantor_set_validate(set) != LXP_OK)
+        return LXP_ERR_NON_CANONICAL;
     if (set->last_governance_sequence == UINT64_MAX ||
         governance_sequence != set->last_governance_sequence + 1U)
         return LXP_ERR_SEQUENCE_MISMATCH;
@@ -226,10 +294,12 @@ lxp_result lxp_guarantor_eligible(
     const lxp_guarantor_bond_state *bond_state, uint64_t checkpoint_epoch,
     lxp_u128 minimum_bond, bool *eligible)
 {
-    if (bond_state == NULL || eligible == NULL || checkpoint_epoch == 0U)
+    if (bond_state == NULL || eligible == NULL || checkpoint_epoch == 0U ||
+        !valid_signer_history(bond_state))
         return LXP_ERR_NON_CANONICAL;
     *eligible = bond_state->active && !bond_state->jailed &&
         !bond_state->unresolved_slashing &&
+        bond_state->ejected_at_version == 0U &&
         bond_state->joined_epoch <= checkpoint_epoch &&
         (bond_state->removed_epoch == 0U ||
          bond_state->removed_epoch > checkpoint_epoch) &&

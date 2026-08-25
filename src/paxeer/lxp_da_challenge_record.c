@@ -14,20 +14,31 @@ lxp_result lxp_da_challenge_registry_init(
     return LXP_OK;
 }
 
+static lxp_result record_append_admissible(
+    const lxp_da_challenge_registry *registry,
+    const lxp_da_challenge *challenge)
+{
+    size_t i;
+    if (registry == NULL || challenge == NULL ||
+        registry->count > LXP_MAX_DA_CHALLENGE_RECORDS)
+        return LXP_ERR_NON_CANONICAL;
+    if (registry->count == LXP_MAX_DA_CHALLENGE_RECORDS)
+        return LXP_ERR_LENGTH_LIMIT;
+    for (i = 0U; i < registry->count; ++i)
+        if (memcmp(registry->records[i].challenge_id,
+                   challenge->challenge_id, 32U) == 0)
+            return LXP_ERR_NON_CANONICAL;
+    return LXP_OK;
+}
+
 static lxp_result append_record(lxp_da_challenge_registry *registry,
                                 const lxp_da_challenge *challenge,
                                 lxp_result outcome, bool answered,
                                 bool slashable)
 {
     lxp_da_challenge_record *record;
-    size_t i;
-    if (registry == NULL || challenge == NULL ||
-        registry->count == LXP_MAX_DA_CHALLENGE_RECORDS)
-        return LXP_ERR_LENGTH_LIMIT;
-    for (i = 0U; i < registry->count; ++i)
-        if (memcmp(registry->records[i].challenge_id,
-                   challenge->challenge_id, 32U) == 0)
-            return LXP_ERR_NON_CANONICAL;
+    lxp_result status = record_append_admissible(registry, challenge);
+    if (status != LXP_OK) return status;
     record = &registry->records[registry->count++];
     (void)memset(record, 0, sizeof(*record));
     (void)memcpy(record->challenge_id, challenge->challenge_id, 32U);
@@ -56,7 +67,11 @@ lxp_result lxp_da_challenge_record_failure(
     if (registry == NULL || evidence == NULL || set == NULL ||
         registry->publish_evidence == NULL)
         return LXP_ERR_NON_CANONICAL;
+    if (lxp_guarantor_set_validate(set) != LXP_OK)
+        return LXP_ERR_NON_CANONICAL;
     if (set->version == UINT64_MAX) return LXP_ERR_OVERFLOW;
+    status = record_append_admissible(registry, &evidence->challenge);
+    if (status != LXP_OK) return status;
     status = registry->publish_evidence(registry->publish_context, evidence);
     if (status != LXP_OK) return status;
     status = append_record(registry, &evidence->challenge,

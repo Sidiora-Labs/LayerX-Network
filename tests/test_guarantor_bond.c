@@ -120,6 +120,23 @@ int main(void)
     if (lxp_guarantor_set_apply(&set, 5U, true, &bond) !=
             LXP_ERR_NON_CANONICAL || set.version != 4U)
         return 1;
+    changed_set = set;
+    changed_set.count = (size_t)LXP_MAX_GUARANTOR_ATTESTATIONS + 1U;
+    if (lxp_guarantor_set_validate(&changed_set) != LXP_ERR_NON_CANONICAL)
+        return 1;
+    changed_set = set;
+    changed_set.records[0].signer_authorizations[0].active_until_epoch = 1U;
+    if (lxp_guarantor_set_validate(&changed_set) != LXP_ERR_NON_CANONICAL)
+        return 1;
+    (void)memset(&bond, 0, sizeof(bond));
+    bond.guarantor_id[0] = 9U;
+    (void)memcpy(bond.public_key, signers[1].paxeer_public_key, 33U);
+    bond.bond_amount = (lxp_u128){0U, 100U};
+    bond.joined_epoch = 1U;
+    bond.active = true;
+    if (lxp_guarantor_set_apply(&set, 5U, true, &bond) !=
+            LXP_ERR_NON_CANONICAL || set.version != 4U)
+        return 1;
     (void)memset(&initial, 0, sizeof(initial));
     initial.settlement_anchor[0] = 0x11U;
     requirements.checkpoint_epoch = 7U;

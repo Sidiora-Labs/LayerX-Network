@@ -54,6 +54,8 @@ lxp_result lxp_paxeer_bond_deposit(
     lxp_result status;
     if (state == NULL || guarantor_id == NULL || lxp_u128_is_zero(amount))
         return LXP_ERR_NON_CANONICAL;
+    if (lxp_guarantor_set_validate(&state->guarantors) != LXP_OK)
+        return LXP_ERR_NON_CANONICAL;
     bond = find_bond(state, guarantor_id);
     if (bond == NULL || bond->removed_epoch != 0U ||
         bond->ejected_at_version != 0U)
@@ -80,6 +82,8 @@ lxp_result lxp_paxeer_bond_state_read(
     size_t i;
     if (state == NULL || guarantor_id == NULL || bond == NULL ||
         threshold_eligible == NULL)
+        return LXP_ERR_NON_CANONICAL;
+    if (lxp_guarantor_set_validate(&state->guarantors) != LXP_OK)
         return LXP_ERR_NON_CANONICAL;
     for (i = 0U; i < state->guarantors.count; ++i)
         if (memcmp(state->guarantors.records[i].guarantor_id,

@@ -122,6 +122,8 @@ lxp_result lxp_checkpoint_finalisable(
         requirements->threshold == 0U ||
         requirements->threshold > LXP_MAX_GUARANTOR_ATTESTATIONS)
         return LXP_ERR_NON_CANONICAL;
+    if (lxp_guarantor_set_validate(set) != LXP_OK)
+        return LXP_ERR_NON_CANONICAL;
     *finalisable = false;
     if (state->finalisation_halted ||
         (state->unfinalized_checkpoint_blocked &&
