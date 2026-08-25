@@ -229,13 +229,13 @@ int main(void)
         !unchanged(reserve, agent, nullifiers.count)) return 1;
     altered = proof;
     altered.network_id = 8U;
-    if (lxp_deposit_proof_verify(&altered, &checkpoints, 7U,
+    if (lxp_deposit_proof_verify(&altered, checkpoints, 7U,
                                  LXP_PROTOCOL_VERSION) !=
             LXP_ERR_DEPOSIT_PROOF_NOT_FINAL ||
         !unchanged(reserve, agent, nullifiers.count)) return 1;
     altered = proof;
     altered.protocol_version = (uint16_t)(LXP_PROTOCOL_VERSION + 1U);
-    if (lxp_deposit_proof_verify(&altered, &checkpoints, 7U,
+    if (lxp_deposit_proof_verify(&altered, checkpoints, 7U,
                                  LXP_PROTOCOL_VERSION) !=
             LXP_ERR_DEPOSIT_PROOF_NOT_FINAL ||
         !unchanged(reserve, agent, nullifiers.count)) return 1;
@@ -266,6 +266,14 @@ int main(void)
     if (lxp_bridge_deposit_credit(&bridge, &transfer, &altered, &receipt) !=
             LXP_ERR_DEPOSIT_PROOF_NOT_FINAL ||
         !unchanged(reserve, agent, nullifiers.count)) return 1;
+    reserve->balance.lo = 0U;
+    if (lxp_bridge_deposit_credit(&bridge, &transfer, &proof, &receipt) !=
+            LXP_ERR_INSUFFICIENT_BALANCE || reserve->balance.hi != 0U ||
+        reserve->balance.lo != 0U || agent->balance.hi != 0U ||
+        agent->balance.lo != 0U || nullifiers.count != 0U ||
+        !lxp_ct_is_zero(nullifiers.nullifiers[0], 32U))
+        return 1;
+    reserve->balance.lo = 100U;
     if (lxp_bridge_deposit_credit(&bridge, &transfer, &proof, &receipt) !=
             LXP_OK || reserve->balance.lo != 75U || agent->balance.lo != 25U ||
         nullifiers.count != 1U ||
