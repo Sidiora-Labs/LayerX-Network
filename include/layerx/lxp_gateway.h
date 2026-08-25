@@ -8,6 +8,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <pthread.h>
 
 enum {
     LXP_GATEWAY_HTTP_PAYMENT_REQUIRED = 402,
@@ -18,6 +19,15 @@ enum {
 enum {
     LXP_GATEWAY_INVOICE_CAPACITY = 256
 };
+
+typedef enum lxp_gateway_transaction_boundary {
+    LXP_GATEWAY_AFTER_GRANT_WRITE = 1,
+    LXP_GATEWAY_AFTER_BALANCE_WRITE = 2,
+    LXP_GATEWAY_AFTER_STATE_ROOT = 3,
+    LXP_GATEWAY_AFTER_RECEIPT_SIGN = 4,
+    LXP_GATEWAY_AFTER_IDEMPOTENCY_WRITE = 5,
+    LXP_GATEWAY_AFTER_INVOICE_WRITE = 6
+} lxp_gateway_transaction_boundary;
 
 typedef struct lxp_payment_requirement {
     uint32_t network_id;
@@ -52,6 +62,9 @@ typedef struct lxp_gateway_settlement_context {
     uint64_t global_sequence;
     uint8_t batch_id[32];
     lxp_arena *arena;
+    pthread_mutex_t *coordination_mutex;
+    bool inject_failure;
+    lxp_gateway_transaction_boundary failure_after_boundary;
 } lxp_gateway_settlement_context;
 
 typedef struct lxp_gateway_receive_context {
@@ -63,6 +76,9 @@ typedef struct lxp_gateway_receive_context {
     uint64_t global_sequence;
     uint8_t batch_id[32];
     lxp_arena *arena;
+    pthread_mutex_t *coordination_mutex;
+    bool inject_failure;
+    lxp_gateway_transaction_boundary failure_after_boundary;
 } lxp_gateway_receive_context;
 
 lxp_result lxp_payment_requirement_encode(

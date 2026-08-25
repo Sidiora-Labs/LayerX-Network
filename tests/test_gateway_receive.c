@@ -20,6 +20,7 @@ typedef struct receive_world {
     lxp_gateway_invoice_registry invoices;
     lxp_gateway_receive_context receive_context;
     lxp_gateway_settlement_context send_context;
+    pthread_mutex_t coordination_mutex;
 } receive_world;
 
 static int public_key_for(
@@ -118,6 +119,8 @@ static int world_init(
     const char *payer_name = "agent:did:key:payer:main";
     const char *service_name = "agent:did:key:service:main";
     (void)memset(world, 0, sizeof(*world));
+    if (pthread_mutex_init(&world->coordination_mutex, NULL) != 0)
+        return 1;
     world->asset.asset_id[0] = 4U;
     (void)memcpy(world->asset.symbol, "USD", 4U);
     world->asset.symbol_length = 3U;
@@ -163,11 +166,13 @@ static int world_init(
         service_public_key, sequencer_private_key, 7U, {0U}, arena
     };
     world->receive_context.batch_id[0] = 0x88U;
+    world->receive_context.coordination_mutex = &world->coordination_mutex;
     world->send_context = (lxp_gateway_settlement_context){
         &world->assets, &world->send_environment, &world->invoices,
         service_public_key, sequencer_private_key, 8U, {0U}, arena
     };
     world->send_context.batch_id[0] = 0x89U;
+    world->send_context.coordination_mutex = &world->coordination_mutex;
     return 0;
 }
 
@@ -192,6 +197,9 @@ int main(void)
     lxp_receipt replay_receipt;
     uint8_t purpose_preimage[64];
     lxp_result status;
+    lxp_gateway_transaction_boundary boundary;
+    lx_account payer_before;
+    lx_account service_before;
 
     if (public_key_for(payer_private_key, payer_public_key) != 0 ||
         public_key_for(service_private_key, service_public_key) != 0 ||
@@ -250,6 +258,80 @@ int main(void)
     receive.receiver_authorization.protocol_version = LXP_PROTOCOL_VERSION;
     receive.payer_grant = grant;
     if (sign_receive(service_private_key, &receive) != 0) return 1;
+    payer_before = *world.payer;
+    service_before = *world.service;
+    altered_receive = receive;
+    altered_receive.amount.lo = 31U;
+    if (lxp_gateway_receive_claim(
+            &requirement, &altered_receive, &world.receive_context,
+            &replay_receipt) != LXP_ERR_GRANT_SCOPE_VIOLATION ||
+        world.grants.count != 0U || world.payer->balance.lo != 100U ||
+        world.service->balance.lo != 0U)
+        return 1;
+    for (boundary = LXP_GATEWAY_AFTER_GRANT_WRITE;
+         boundary <= LXP_GATEWAY_AFTER_INVOICE_WRITE;
+         boundary = (lxp_gateway_transaction_boundary)((unsigned)boundary + 1U)) {
+        lxp_receipt zero_receipt;
+        lxp_grant_state zero_grant;
+        lxp_send_store_record zero_idempotency;
+        lxp_gateway_invoice_record zero_invoice;
+        size_t mark = lxp_arena_mark(&arena);
+        (void)memset(&zero_receipt, 0, sizeof(zero_receipt));
+        (void)memset(&zero_grant, 0, sizeof(zero_grant));
+        (void)memset(&zero_idempotency, 0, sizeof(zero_idempotency));
+        (void)memset(&zero_invoice, 0, sizeof(zero_invoice));
+        (void)memset(&receive_receipt, 0xa5, sizeof(receive_receipt));
+        world.receive_context.inject_failure = true;
+        world.receive_context.failure_after_boundary = boundary;
+        if (lxp_gateway_receive_claim(
+                &requirement, &receive, &world.receive_context,
+                &receive_receipt) != LXP_ERR_IO ||
+            memcmp(world.payer, &payer_before, sizeof(payer_before)) != 0 ||
+            memcmp(world.service, &service_before,
+                   sizeof(service_before)) != 0 || world.grants.count != 0U ||
+            world.receive_idempotency.count != 0U ||
+            world.invoices.count != 0U || lxp_arena_mark(&arena) != mark ||
+            memcmp(&world.grants.grants[0], &zero_grant,
+                   sizeof(zero_grant)) != 0 ||
+            memcmp(&world.receive_idempotency.records[0], &zero_idempotency,
+                   sizeof(zero_idempotency)) != 0 ||
+            memcmp(&world.invoices.records[0], &zero_invoice,
+                   sizeof(zero_invoice)) != 0 ||
+            memcmp(&receive_receipt, &zero_receipt,
+                   sizeof(receive_receipt)) != 0)
+            return 1;
+    }
+    world.receive_context.inject_failure = false;
+    {
+        size_t capacity = arena.capacity;
+        lxp_receipt zero_receipt;
+        lxp_grant_state zero_grant;
+        lxp_send_store_record zero_idempotency;
+        lxp_gateway_invoice_record zero_invoice;
+        (void)memset(&zero_receipt, 0, sizeof(zero_receipt));
+        (void)memset(&zero_grant, 0, sizeof(zero_grant));
+        (void)memset(&zero_idempotency, 0, sizeof(zero_idempotency));
+        (void)memset(&zero_invoice, 0, sizeof(zero_invoice));
+        arena.capacity = arena.offset;
+        if (lxp_gateway_receive_claim(
+                &requirement, &receive, &world.receive_context,
+                &receive_receipt) != LXP_ERR_ARENA_EXHAUSTED ||
+            memcmp(world.payer, &payer_before, sizeof(payer_before)) != 0 ||
+            memcmp(world.service, &service_before,
+                   sizeof(service_before)) != 0 || world.grants.count != 0U ||
+            world.receive_idempotency.count != 0U ||
+            world.invoices.count != 0U ||
+            memcmp(&world.grants.grants[0], &zero_grant,
+                   sizeof(zero_grant)) != 0 ||
+            memcmp(&world.receive_idempotency.records[0], &zero_idempotency,
+                   sizeof(zero_idempotency)) != 0 ||
+            memcmp(&world.invoices.records[0], &zero_invoice,
+                   sizeof(zero_invoice)) != 0 ||
+            memcmp(&receive_receipt, &zero_receipt,
+                   sizeof(receive_receipt)) != 0)
+            return 1;
+        arena.capacity = capacity;
+    }
     status = lxp_gateway_receive_claim(
         &requirement, &receive, &world.receive_context, &receive_receipt);
     if (status != LXP_OK ||
@@ -263,6 +345,15 @@ int main(void)
         (void)fprintf(stderr, "initial claim failed: %d\n", (int)status);
         return 1;
     }
+    if (lxp_gateway_receive_claim(
+            &requirement, &receive, &world.receive_context,
+            &replay_receipt) != LXP_ERR_IDEMPOTENT_REPLAY ||
+        memcmp(&receive_receipt, &replay_receipt,
+               sizeof(receive_receipt)) != 0 ||
+        world.payer->balance.lo != 70U || world.service->balance.lo != 30U ||
+        world.grants.grants[0].drawn_total.lo != 30U ||
+        world.receive_idempotency.count != 1U || world.invoices.count != 1U)
+        return 1;
 
     (void)memset(&send, 0, sizeof(send));
     (void)memcpy(send.from, world.payer->id, 32U);
@@ -335,5 +426,5 @@ int main(void)
             &replay_receipt) != LXP_ERR_GRANT_REVOKED ||
         world.payer->balance.lo != 70U || world.service->balance.lo != 30U)
         return 1;
-    return 0;
+    return pthread_mutex_destroy(&world.coordination_mutex) != 0;
 }

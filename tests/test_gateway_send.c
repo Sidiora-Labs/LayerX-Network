@@ -15,7 +15,24 @@ typedef struct gateway_world {
     lxp_send_environment environment;
     lxp_gateway_invoice_registry invoices;
     lxp_gateway_settlement_context settlement;
+    pthread_mutex_t coordination_mutex;
 } gateway_world;
+
+typedef struct settlement_thread {
+    const lxp_payment_requirement *requirement;
+    const lxp_send *send;
+    lxp_gateway_settlement_context *context;
+    lxp_receipt receipt;
+    lxp_result status;
+} settlement_thread;
+
+static void *settle_concurrently(void *argument)
+{
+    settlement_thread *thread = (settlement_thread *)argument;
+    thread->status = lxp_gateway_send_settle(
+        thread->requirement, thread->send, thread->context, &thread->receipt);
+    return NULL;
+}
 
 static int public_key_for(
     const uint8_t private_key[32], uint8_t public_key[32])
@@ -87,6 +104,8 @@ static int world_init(
     const char *payer_name = "agent:did:key:payer:main";
     const char *payee_name = "agent:did:key:service:main";
     (void)memset(world, 0, sizeof(*world));
+    if (pthread_mutex_init(&world->coordination_mutex, NULL) != 0)
+        return 1;
     world->asset.asset_id[0] = 3U;
     (void)memcpy(world->asset.symbol, "USD", 4U);
     world->asset.symbol_length = 3U;
@@ -129,6 +148,7 @@ static int world_init(
     world->settlement.global_sequence = 1U;
     world->settlement.batch_id[0] = 0x88U;
     world->settlement.arena = arena;
+    world->settlement.coordination_mutex = &world->coordination_mutex;
     return 0;
 }
 
@@ -141,10 +161,13 @@ int main(void)
     uint8_t service_public_key[32];
     static uint8_t arena_a_bytes[LXP_MAX_ACTIVITY_BYTES + 4096U];
     static uint8_t arena_b_bytes[LXP_MAX_ACTIVITY_BYTES + 4096U];
+    static uint8_t arena_c_bytes[LXP_MAX_ACTIVITY_BYTES + 4096U];
     lxp_arena arena_a;
     lxp_arena arena_b;
+    lxp_arena arena_c;
     static gateway_world gateway;
     static gateway_world direct;
+    static gateway_world concurrent;
     lxp_payment_requirement requirement;
     lxp_send send;
     lxp_send decoded;
@@ -159,6 +182,9 @@ int main(void)
     size_t arena_b_mark;
     lxp_result gateway_status;
     lxp_result direct_status;
+    lxp_gateway_transaction_boundary boundary;
+    lx_account payer_before;
+    lx_account payee_before;
 
     if (public_key_for(payer_private_key, payer_public_key) != 0 ||
         public_key_for(service_private_key, service_public_key) != 0 ||
@@ -166,10 +192,14 @@ int main(void)
             LXP_OK ||
         lxp_arena_init(&arena_b, arena_b_bytes, sizeof(arena_b_bytes)) !=
             LXP_OK ||
+        lxp_arena_init(&arena_c, arena_c_bytes, sizeof(arena_c_bytes)) !=
+            LXP_OK ||
         world_init(&gateway, payer_public_key, service_public_key,
                    sequencer_private_key, &arena_a, 100U) != 0 ||
         world_init(&direct, payer_public_key, service_public_key,
-                   sequencer_private_key, &arena_b, 100U) != 0)
+                   sequencer_private_key, &arena_b, 100U) != 0 ||
+        world_init(&concurrent, payer_public_key, service_public_key,
+                   sequencer_private_key, &arena_c, 100U) != 0)
         return 1;
     (void)memset(&requirement, 0, sizeof(requirement));
     requirement.network_id = 42U;
@@ -206,6 +236,61 @@ int main(void)
             &encoded_send_length) != LXP_OK ||
         lxp_send_decode(encoded_send, encoded_send_length, &decoded) != LXP_OK)
         return 1;
+    payer_before = *gateway.payer;
+    payee_before = *gateway.payee;
+    for (boundary = LXP_GATEWAY_AFTER_BALANCE_WRITE;
+         boundary <= LXP_GATEWAY_AFTER_INVOICE_WRITE;
+         boundary = (lxp_gateway_transaction_boundary)((unsigned)boundary + 1U)) {
+        lxp_receipt zero_receipt;
+        lxp_send_store_record zero_send;
+        lxp_gateway_invoice_record zero_invoice;
+        size_t mark = lxp_arena_mark(&arena_a);
+        (void)memset(&zero_receipt, 0, sizeof(zero_receipt));
+        (void)memset(&zero_send, 0, sizeof(zero_send));
+        (void)memset(&zero_invoice, 0, sizeof(zero_invoice));
+        (void)memset(&gateway_receipt, 0xa5, sizeof(gateway_receipt));
+        gateway.settlement.inject_failure = true;
+        gateway.settlement.failure_after_boundary = boundary;
+        if (lxp_gateway_send_settle(
+                &requirement, &send, &gateway.settlement,
+                &gateway_receipt) != LXP_ERR_IO ||
+            memcmp(gateway.payer, &payer_before, sizeof(payer_before)) != 0 ||
+            memcmp(gateway.payee, &payee_before, sizeof(payee_before)) != 0 ||
+            gateway.sends.count != 0U || gateway.invoices.count != 0U ||
+            memcmp(&gateway.sends.records[0], &zero_send,
+                   sizeof(zero_send)) != 0 ||
+            memcmp(&gateway.invoices.records[0], &zero_invoice,
+                   sizeof(zero_invoice)) != 0 ||
+            lxp_arena_mark(&arena_a) != mark ||
+            memcmp(&gateway_receipt, &zero_receipt,
+                   sizeof(gateway_receipt)) != 0)
+            return 1;
+    }
+    gateway.settlement.inject_failure = false;
+    {
+        size_t capacity = arena_a.capacity;
+        lxp_receipt zero_receipt;
+        lxp_send_store_record zero_send;
+        lxp_gateway_invoice_record zero_invoice;
+        (void)memset(&zero_receipt, 0, sizeof(zero_receipt));
+        (void)memset(&zero_send, 0, sizeof(zero_send));
+        (void)memset(&zero_invoice, 0, sizeof(zero_invoice));
+        arena_a.capacity = arena_a.offset;
+        if (lxp_gateway_send_settle(
+                &requirement, &send, &gateway.settlement,
+                &gateway_receipt) != LXP_ERR_ARENA_EXHAUSTED ||
+            memcmp(gateway.payer, &payer_before, sizeof(payer_before)) != 0 ||
+            memcmp(gateway.payee, &payee_before, sizeof(payee_before)) != 0 ||
+            gateway.sends.count != 0U || gateway.invoices.count != 0U ||
+            memcmp(&gateway.sends.records[0], &zero_send,
+                   sizeof(zero_send)) != 0 ||
+            memcmp(&gateway.invoices.records[0], &zero_invoice,
+                   sizeof(zero_invoice)) != 0 ||
+            memcmp(&gateway_receipt, &zero_receipt,
+                   sizeof(gateway_receipt)) != 0)
+            return 1;
+        arena_a.capacity = capacity;
+    }
     gateway_status = lxp_gateway_send_settle(
         &requirement, &send, &gateway.settlement, &gateway_receipt);
     direct_status = lxp_gateway_send_settle(
@@ -217,6 +302,36 @@ int main(void)
         memcmp(&gateway_receipt, &direct_receipt,
                sizeof(gateway_receipt)) != 0)
         return 1;
+    {
+        settlement_thread threads[2];
+        pthread_t workers[2];
+        size_t index;
+        size_t successes = 0U;
+        size_t replays = 0U;
+        (void)memset(threads, 0, sizeof(threads));
+        for (index = 0U; index < 2U; ++index) {
+            threads[index].requirement = &requirement;
+            threads[index].send = &send;
+            threads[index].context = &concurrent.settlement;
+            if (pthread_create(&workers[index], NULL, settle_concurrently,
+                               &threads[index]) != 0)
+                return 1;
+        }
+        for (index = 0U; index < 2U; ++index) {
+            if (pthread_join(workers[index], NULL) != 0) return 1;
+            if (threads[index].status == LXP_OK) ++successes;
+            else if (threads[index].status == LXP_ERR_IDEMPOTENT_REPLAY)
+                ++replays;
+            else return 1;
+        }
+        if (successes != 1U || replays != 1U ||
+            memcmp(&threads[0].receipt, &threads[1].receipt,
+                   sizeof(threads[0].receipt)) != 0 ||
+            concurrent.payer->balance.lo != 75U ||
+            concurrent.payee->balance.lo != 25U ||
+            concurrent.sends.count != 1U || concurrent.invoices.count != 1U)
+            return 1;
+    }
     arena_a_mark = lxp_arena_mark(&arena_a);
     arena_b_mark = lxp_arena_mark(&arena_b);
     if (lxp_gateway_receipt_return(
@@ -247,5 +362,7 @@ int main(void)
             &direct_receipt) != LXP_ERR_EXPIRED ||
         direct.payer->balance.lo != 75U || direct.payee->balance.lo != 25U)
         return 1;
-    return 0;
+    return pthread_mutex_destroy(&gateway.coordination_mutex) != 0 ||
+           pthread_mutex_destroy(&direct.coordination_mutex) != 0 ||
+           pthread_mutex_destroy(&concurrent.coordination_mutex) != 0;
 }
