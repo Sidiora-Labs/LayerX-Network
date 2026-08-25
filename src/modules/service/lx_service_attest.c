@@ -128,7 +128,8 @@ lxp_result lx_service_attestor_verify(
     uint8_t bytes[384];
     size_t length;
     lxp_result status;
-    if (store == NULL || execution == NULL || grant == NULL ||
+    if (lx_service_store_validate(store) != LXP_OK || execution == NULL ||
+        grant == NULL ||
         lxp_ct_is_zero(execution->attestation_id, 32U) ||
         lxp_ct_is_zero(execution->activity_id, 32U) ||
         lxp_ct_is_zero(execution->agreement_id, 32U) ||
@@ -165,7 +166,7 @@ lxp_result lx_service_execution_put(lx_service_store *store,
                                     const lx_service_execution *execution)
 {
     size_t i;
-    if (store == NULL || execution == NULL)
+    if (lx_service_store_validate(store) != LXP_OK || execution == NULL)
         return LXP_ERR_NON_CANONICAL;
     for (i = 0U; i < store->execution_count; ++i)
         if (memcmp(store->executions[i].attestation_id,

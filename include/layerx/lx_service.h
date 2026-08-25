@@ -171,6 +171,8 @@ typedef struct lx_service_store {
     size_t dispute_count;
 } lx_service_store;
 
+lxp_result lx_service_store_validate(const lx_service_store *store);
+
 typedef struct lx_service_offer_request {
     lx_service_store *store;
     lx_service_offer offer;

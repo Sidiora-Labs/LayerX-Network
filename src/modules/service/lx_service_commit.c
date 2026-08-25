@@ -9,7 +9,8 @@ static lxp_result commitment_lookup(lx_service_store *store,
                                     lx_service_commitment **commitment)
 {
     size_t i;
-    if (store == NULL || commitment_id == NULL || commitment == NULL)
+    if (lx_service_store_validate(store) != LXP_OK ||
+        commitment_id == NULL || commitment == NULL)
         return LXP_ERR_NON_CANONICAL;
     for (i = 0U; i < store->commitment_count; ++i)
         if (memcmp(store->commitments[i].commitment_id,

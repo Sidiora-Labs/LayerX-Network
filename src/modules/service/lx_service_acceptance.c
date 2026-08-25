@@ -104,7 +104,8 @@ lxp_result lx_service_acceptance_default(lx_service_store *store,
                                          uint64_t global_sequence)
 {
     size_t i;
-    if (store == NULL) return LXP_ERR_NON_CANONICAL;
+    if (lx_service_store_validate(store) != LXP_OK)
+        return LXP_ERR_NON_CANONICAL;
     for (i = 0U; i < store->agreement_count; ++i) {
         lx_service_agreement *agreement = &store->agreements[i];
         if (agreement->state != LX_SERVICE_AGREEMENT_DELIVERED ||

@@ -55,6 +55,7 @@ lxp_result lx_perps_deficit_record(
 {
     size_t i;
     if (store == NULL || market_id == NULL || insurance_account_id == NULL ||
+        store->count > LX_PERPS_DEFICIT_CAPACITY ||
         lxp_u128_is_zero(amount) || global_sequence == 0U)
         return LXP_ERR_NON_CANONICAL;
     for (i = 0U; i < store->count; ++i) {

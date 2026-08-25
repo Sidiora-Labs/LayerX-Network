@@ -28,6 +28,10 @@ int main(void)
     uint64_t parameters = 1U;
 
     (void)memset(&store, 0, sizeof(store));
+    store.delivery_count = LX_SERVICE_STORE_CAPACITY + 1U;
+    if (lx_service_store_validate(&store) != LXP_ERR_NON_CANONICAL)
+        return 1;
+    store.delivery_count = 0U;
     (void)memset(&provider, 0, sizeof(provider));
     (void)memset(&stranger, 0, sizeof(stranger));
     provider.principal[0] = 10U;

@@ -98,12 +98,25 @@ const lxp_module_iface *lx_service_module_iface(void)
     return &iface;
 }
 
+lxp_result lx_service_store_validate(const lx_service_store *store)
+{
+    if (store == NULL || store->offer_count > LX_SERVICE_STORE_CAPACITY ||
+        store->agreement_count > LX_SERVICE_STORE_CAPACITY ||
+        store->commitment_count > LX_SERVICE_STORE_CAPACITY ||
+        store->execution_count > LX_SERVICE_STORE_CAPACITY ||
+        store->delivery_count > LX_SERVICE_STORE_CAPACITY ||
+        store->dispute_count > LX_SERVICE_STORE_CAPACITY)
+        return LXP_ERR_NON_CANONICAL;
+    return LXP_OK;
+}
+
 lxp_result lx_service_offer_lookup(lx_service_store *store,
                                    const uint8_t offer_id[32],
                                    lx_service_offer **offer)
 {
     size_t i;
-    if (store == NULL || offer_id == NULL || offer == NULL)
+    if (lx_service_store_validate(store) != LXP_OK || offer_id == NULL ||
+        offer == NULL)
         return LXP_ERR_NON_CANONICAL;
     for (i = 0U; i < store->offer_count; ++i)
         if (memcmp(store->offers[i].offer_id, offer_id, 32U) == 0) {
@@ -118,7 +131,8 @@ lxp_result lx_service_agreement_lookup(lx_service_store *store,
                                        lx_service_agreement **agreement)
 {
     size_t i;
-    if (store == NULL || agreement_id == NULL || agreement == NULL)
+    if (lx_service_store_validate(store) != LXP_OK || agreement_id == NULL ||
+        agreement == NULL)
         return LXP_ERR_NON_CANONICAL;
     for (i = 0U; i < store->agreement_count; ++i)
         if (memcmp(store->agreements[i].agreement_id,

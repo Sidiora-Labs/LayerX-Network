@@ -20,7 +20,8 @@ lxp_result lx_service_deliverable_check(
 {
     const lx_service_offer *offer;
     size_t i;
-    if (store == NULL || agreement == NULL || delivery == NULL ||
+    if (lx_service_store_validate(store) != LXP_OK || agreement == NULL ||
+        delivery == NULL ||
         delivery->deliverable_count == 0U ||
         delivery->deliverable_count > LX_SERVICE_MAX_DELIVERABLES)
         return LXP_ERR_NON_CANONICAL;
@@ -71,7 +72,7 @@ lxp_result lx_service_delivery_put(lx_service_store *store,
                                    const lx_service_delivery *delivery)
 {
     size_t i;
-    if (store == NULL || delivery == NULL ||
+    if (lx_service_store_validate(store) != LXP_OK || delivery == NULL ||
         lxp_ct_is_zero(delivery->delivery_id, 32U))
         return LXP_ERR_NON_CANONICAL;
     for (i = 0U; i < store->delivery_count; ++i)

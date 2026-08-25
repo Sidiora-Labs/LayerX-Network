@@ -100,7 +100,8 @@ lxp_result lx_stream_lookup(lx_stream_store *store,
                             lx_stream_record **record)
 {
     size_t i;
-    if (store == NULL || stream_id == NULL || record == NULL)
+    if (store == NULL || stream_id == NULL || record == NULL ||
+        store->count > LX_STREAM_STORE_CAPACITY)
         return LXP_ERR_NON_CANONICAL;
     for (i = 0U; i < store->count; ++i)
         if (memcmp(store->records[i].stream_id, stream_id, 32U) == 0) {

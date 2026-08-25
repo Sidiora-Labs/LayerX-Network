@@ -110,9 +110,9 @@ severity = "post-implementation-repair"
 
 [observation.17.1.1]
 task = "17.1"
-file = "src/modules/budget/lx_budget_create.c, src/modules/asset/lx_asset_registry.c, src/modules/perps/lx_perps_book.c, src/modules/perps/lx_perps_position.c, src/modules/perps/lx_oracle_intake.c, src/modules/bridge/lxp_bridge_withdraw.c"
+file = "src/modules/budget/lx_budget_create.c, src/modules/asset/lx_asset_registry.c, src/modules/escrow/lx_escrow_open.c, src/modules/stream/lx_stream_open.c, src/modules/service, src/modules/perps/lx_perps_book.c, src/modules/perps/lx_perps_position.c, src/modules/perps/lx_perps_insurance.c, src/modules/perps/lx_oracle_intake.c, src/modules/bridge/lxp_bridge_withdraw.c"
 symbol = "fixed-capacity public store admission"
-observed = "Several public module lookup, matching and mutation paths trusted caller-visible store counts and iterated fixed arrays before checking capacity. The repair rejects over-capacity budget, asset, order-book, position, oracle-market and withdrawal stores at their public admission boundaries before lookup, sorting, matching, fee mutation or record access."
+observed = "Several public module lookup, matching and mutation paths trusted caller-visible store counts and iterated fixed arrays before checking capacity. The repair rejects over-capacity budget, asset, escrow, stream, service, order-book, position, deficit, oracle-market and withdrawal stores at their public admission boundaries before lookup, sorting, matching, fee mutation or record access. Service admission is centralised across all six parallel fixed record arrays so one corrupt nested count cannot bypass through another activity path."
 assumption = "Human qualification must exercise every repaired API with empty, exact-capacity and over-capacity stores under ASan, confirm rejection leaves outputs and stores unchanged, and retain exact valid matching and lookup results. No build or test result is asserted here."
 severity = "post-implementation-repair"
 

@@ -105,7 +105,8 @@ lxp_result lx_escrow_lookup(lx_escrow_store *store,
                             lx_escrow_record **record)
 {
     size_t i;
-    if (store == NULL || escrow_id == NULL || record == NULL)
+    if (store == NULL || escrow_id == NULL || record == NULL ||
+        store->count > LX_ESCROW_STORE_CAPACITY)
         return LXP_ERR_NON_CANONICAL;
     for (i = 0U; i < store->count; ++i) {
         if (memcmp(store->records[i].escrow_id, escrow_id, 32U) == 0) {

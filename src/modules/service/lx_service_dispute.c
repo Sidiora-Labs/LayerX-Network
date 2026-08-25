@@ -46,7 +46,8 @@ lxp_result lx_service_dispute_open_execute(
     lx_service_dispute dispute;
     size_t i;
     lxp_result status;
-    if (ctx == NULL || request == NULL || request->store == NULL ||
+    if (ctx == NULL || request == NULL ||
+        lx_service_store_validate(request->store) != LXP_OK ||
         request->authority == NULL || result == NULL ||
         lxp_ct_is_zero(request->dispute.dispute_id, 32U) ||
         lxp_ct_is_zero(request->dispute.activity_id, 32U) ||
@@ -94,7 +95,8 @@ lxp_result lx_service_dispute_resolve_execute(
     lx_service_dispute *dispute;
     lx_service_agreement *agreement;
     lxp_result status;
-    if (ctx == NULL || request == NULL || request->store == NULL ||
+    if (ctx == NULL || request == NULL ||
+        lx_service_store_validate(request->store) != LXP_OK ||
         request->authority == NULL || result == NULL)
         return LXP_ERR_NON_CANONICAL;
     if (request->attempts_balance_mutation)
