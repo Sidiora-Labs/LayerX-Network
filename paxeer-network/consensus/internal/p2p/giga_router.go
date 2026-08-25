@@ -73,6 +73,7 @@ func NewGigaRouter(cfg *GigaRouterConfig, key NodeSecretKey) (*GigaRouter, error
 		return nil, fmt.Errorf("GenDoc.InitialHeight = %v, want >=1", cfg.GenDoc.InitialHeight)
 	}
 	committee, err := atypes.NewRoundRobinElection(
+		cfg.GenDoc.ChainID,
 		slices.Collect(maps.Keys(cfg.ValidatorAddrs)),
 		atypes.GlobalBlockNumber(cfg.GenDoc.InitialHeight), // nolint:gosec // verified to be positive.
 		cfg.GenDoc.GenesisTime,
@@ -80,6 +81,7 @@ func NewGigaRouter(cfg *GigaRouterConfig, key NodeSecretKey) (*GigaRouter, error
 	if err != nil {
 		return nil, fmt.Errorf("atypes.NewRoundRobinElection(): %w", err)
 	}
+	cfg.Consensus.Key = cfg.Consensus.Key.ForCommittee(committee)
 	// Automated pruning is disabled, because it is controlled by the application.
 	// The data WAL piggybacks on Consensus.PersistentStateDir: the two layers
 	// share the same on-disk root and write to distinct subdirectories under

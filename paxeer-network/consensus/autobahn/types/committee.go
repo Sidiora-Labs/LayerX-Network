@@ -24,6 +24,8 @@ func (s ImSlice[T]) All() iter.Seq[T] { return slices.Values(s.s) }
 
 // Committee represents the consensus committee.
 type Committee struct {
+	chainID     string
+	domain      [sha256.Size]byte
 	replicas    ImSlice[PublicKey]
 	weights     map[PublicKey]uint64
 	totalWeight uint64
@@ -59,6 +61,25 @@ func (c *Committee) FirstBlock() GlobalBlockNumber { return c.firstBlock }
 // GenesisTimestamp is the timestamp at genesis.
 func (c *Committee) GenesisTimestamp() time.Time { return c.genesisTimestamp }
 
+// ChainID is the network whose messages this committee is authorized to verify.
+func (c *Committee) ChainID() string { return c.chainID }
+
+func committeeDomain(chainID string, replicas []PublicKey, weights map[PublicKey]uint64, firstBlock GlobalBlockNumber, genesisTimestamp time.Time) [sha256.Size]byte {
+	material := append([]byte("pax/autobahn/committee/v1\x00"), binary.BigEndian.AppendUint64(nil, uint64(len(chainID)))...)
+	material = append(material, chainID...)
+	material = binary.BigEndian.AppendUint64(material, uint64(firstBlock))
+	material = binary.BigEndian.AppendUint64(material, uint64(genesisTimestamp.Unix()))
+	material = binary.BigEndian.AppendUint32(material, uint32(genesisTimestamp.Nanosecond()))
+	material = binary.BigEndian.AppendUint64(material, uint64(len(replicas)))
+	for _, replica := range replicas {
+		key := replica.Bytes()
+		material = binary.BigEndian.AppendUint64(material, uint64(len(key)))
+		material = append(material, key...)
+		material = binary.BigEndian.AppendUint64(material, weights[replica])
+	}
+	return sha256.Sum256(material)
+}
+
 // Deterministic random oracle selecting a replica with probability proportional to the weight.
 func (c *Committee) randomReplica(seed []byte) PublicKey {
 	h := sha256.Sum256(seed[:])
@@ -86,13 +107,14 @@ func (c *Committee) EvmShard(addr common.Address) PublicKey {
 	// from correctness perspective if doesn't matter if shards are proportional to weights.
 	// For private testnet we need the load on each validator to be the same.
 	// For mainnet we need to resolve this issue somehow differently.
-	return c.randomReplica(addr[:])
+	seed := append([]byte("pax/autobahn/evm-shard/v1\x00"), c.domain[:]...)
+	return c.randomReplica(append(seed, addr[:]...))
 }
 
 // Leader for the consensus round with the given index.
 func (c *Committee) Leader(view View) PublicKey {
-	// TODO(gprusak): this needs domain separation.
-	d := binary.BigEndian.AppendUint64(nil, uint64(view.Index))
+	d := append([]byte("pax/autobahn/leader/v1\x00"), c.domain[:]...)
+	d = binary.BigEndian.AppendUint64(d, uint64(view.Index))
 	d = binary.BigEndian.AppendUint64(d, uint64(view.Number))
 	return c.randomReplica(d)
 }
@@ -129,7 +151,10 @@ func (c *Committee) LaneQuorum() uint64 {
 	return c.Faulty() + 1
 }
 
-func NewCommittee(weights map[PublicKey]uint64, firstBlock GlobalBlockNumber, genesisTimestamp time.Time) (*Committee, error) {
+func NewCommittee(chainID string, weights map[PublicKey]uint64, firstBlock GlobalBlockNumber, genesisTimestamp time.Time) (*Committee, error) {
+	if chainID == "" {
+		return nil, errors.New("chain ID is empty")
+	}
 	weights = maps.Clone(weights)
 	totalWeight := uint64(0)
 	for k, w := range weights {
@@ -146,6 +171,8 @@ func NewCommittee(weights map[PublicKey]uint64, firstBlock GlobalBlockNumber, ge
 	}
 	replicas := slices.SortedFunc(maps.Keys(weights), func(a, b PublicKey) int { return a.Compare(b) })
 	return &Committee{
+		chainID:          chainID,
+		domain:           committeeDomain(chainID, replicas, weights, firstBlock, genesisTimestamp),
 		replicas:         ImSlice[PublicKey]{replicas},
 		weights:          weights,
 		totalWeight:      totalWeight,
@@ -155,10 +182,10 @@ func NewCommittee(weights map[PublicKey]uint64, firstBlock GlobalBlockNumber, ge
 }
 
 // NewRoundRobinElection creates a Committee with round robin election starting at firstBlock.
-func NewRoundRobinElection(replicas []PublicKey, firstBlock GlobalBlockNumber, genesisTimestamp time.Time) (*Committee, error) {
+func NewRoundRobinElection(chainID string, replicas []PublicKey, firstBlock GlobalBlockNumber, genesisTimestamp time.Time) (*Committee, error) {
 	weights := map[PublicKey]uint64{}
 	for _, k := range replicas {
 		weights[k] = 1
 	}
-	return NewCommittee(weights, firstBlock, genesisTimestamp)
+	return NewCommittee(chainID, weights, firstBlock, genesisTimestamp)
 }

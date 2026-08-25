@@ -71,7 +71,11 @@ func NewHashed[T Msg](msg T) *Hashed[T] {
 }
 
 // SecretKey is the secret key of the validator.
-type SecretKey struct{ key ed25519.SecretKey }
+type SecretKey struct {
+	key    ed25519.SecretKey
+	domain [32]byte
+	bound  bool
+}
 
 // SecretKeyFromED25519 constructs a SecretKey from an ed25519.SecretKey.
 func SecretKeyFromED25519(key ed25519.SecretKey) SecretKey {
@@ -81,6 +85,13 @@ func SecretKeyFromED25519(key ed25519.SecretKey) SecretKey {
 // Public returns the public key corresponding to the secret key.
 func (k SecretKey) Public() PublicKey {
 	return PublicKey{key: k.key.Public()}
+}
+
+// ForCommittee binds a validator key to the verifier-owned network and committee context.
+func (k SecretKey) ForCommittee(c *Committee) SecretKey {
+	k.domain = c.domain
+	k.bound = true
+	return k
 }
 
 // PublicKey is the public key of the validator.
@@ -152,12 +163,17 @@ func (k SecretKey) GoString() string { return k.String() }
 
 // Sign signs a message.
 func Sign[T Msg](key SecretKey, msg T) *Signed[T] {
+	if !key.bound {
+		panic("autobahn signing key is not bound to a committee")
+	}
 	hMsg := NewHashed(msg)
+	preimage := append([]byte("pax/autobahn/signature/v1\x00"), key.domain[:]...)
+	preimage = append(preimage, hMsg.hash[:]...)
 	return &Signed[T]{
 		hashed: hMsg,
 		sig: &Signature{
 			key: key.Public(),
-			sig: key.key.SignWithTag(autobahnTag, hMsg.hash[:]),
+			sig: key.key.SignWithTag(autobahnTag, preimage),
 		},
 	}
 }
@@ -193,7 +209,9 @@ func (m *Signed[T]) VerifySig(c *Committee) error {
 	if !c.HasReplica(m.sig.key) {
 		return fmt.Errorf("%q is not a replica", m.sig.key)
 	}
-	return m.sig.key.key.VerifyWithTag(autobahnTag, m.hashed.hash[:], m.sig.sig)
+	preimage := append([]byte("pax/autobahn/signature/v1\x00"), c.domain[:]...)
+	preimage = append(preimage, m.hashed.hash[:]...)
+	return m.sig.key.key.VerifyWithTag(autobahnTag, preimage, m.sig.sig)
 }
 
 // verifyQC verifies a slice of signatures and checks if they form a quorum.

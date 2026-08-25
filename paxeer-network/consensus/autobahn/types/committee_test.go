@@ -16,7 +16,7 @@ func TestNewCommittee_FiltersOutZeroWeightValidators(t *testing.T) {
 	zeroWeightKey := GenPublicKey(rng)
 	nonZeroWeightKey := GenPublicKey(rng)
 
-	committee, err := NewCommittee(map[PublicKey]uint64{
+	committee, err := NewCommittee("test-chain", map[PublicKey]uint64{
 		zeroWeightKey:    0,
 		nonZeroWeightKey: 7,
 	}, firstBlock, genesisTimestamp)
@@ -43,7 +43,7 @@ func TestNewCommittee_RejectsZeroTotalWeight(t *testing.T) {
 	firstBlock := GenGlobalBlockNumber(rng)
 	genesisTimestamp := time.Now()
 
-	_, err := NewCommittee(map[PublicKey]uint64{
+	_, err := NewCommittee("test-chain", map[PublicKey]uint64{
 		GenPublicKey(rng): 0,
 		GenPublicKey(rng): 0,
 	}, firstBlock, genesisTimestamp)
@@ -57,7 +57,7 @@ func TestNewCommittee_RejectsWeightOverflow(t *testing.T) {
 	firstBlock := GenGlobalBlockNumber(rng)
 	genesisTimestamp := time.Now()
 
-	_, err := NewCommittee(map[PublicKey]uint64{
+	_, err := NewCommittee("test-chain", map[PublicKey]uint64{
 		GenPublicKey(rng): math.MaxUint64,
 		GenPublicKey(rng): 1,
 	}, firstBlock, genesisTimestamp)
@@ -66,17 +66,63 @@ func TestNewCommittee_RejectsWeightOverflow(t *testing.T) {
 	}
 }
 
+func TestSignatureVerificationBindsChainAndCommittee(t *testing.T) {
+	rng := utils.TestRng()
+	key := GenSecretKey(rng)
+	weights := map[PublicKey]uint64{key.Public(): 1}
+	genesis := time.Unix(1_700_000_000, 0).UTC()
+	committeeA := utils.OrPanic1(NewCommittee("chain-a", weights, 1, genesis))
+	committeeB := utils.OrPanic1(NewCommittee("chain-b", weights, 1, genesis))
+	nextEpoch := utils.OrPanic1(NewCommittee("chain-a", weights, 2, genesis))
+	vote := NewLaneVote(NewBlock(key.Public(), 0, GenBlockHeaderHash(rng), GenPayload(rng)).Header())
+	signed := Sign(key.ForCommittee(committeeA), vote)
+
+	require.NoError(t, signed.VerifySig(committeeA))
+	require.Error(t, signed.VerifySig(committeeB))
+	require.Error(t, signed.VerifySig(nextEpoch))
+}
+
+func TestSignRejectsUnboundValidatorKey(t *testing.T) {
+	rng := utils.TestRng()
+	key := GenSecretKey(rng)
+	vote := NewLaneVote(NewBlock(key.Public(), 0, GenBlockHeaderHash(rng), GenPayload(rng)).Header())
+	require.Panics(t, func() { Sign(key, vote) })
+}
+
+func TestLeaderElectionUsesCommitteeDomain(t *testing.T) {
+	rng := utils.TestRng()
+	keys := []SecretKey{GenSecretKey(rng), GenSecretKey(rng), GenSecretKey(rng), GenSecretKey(rng)}
+	weights := map[PublicKey]uint64{}
+	for _, key := range keys {
+		weights[key.Public()] = 1
+	}
+	a := utils.OrPanic1(NewCommittee("chain-a", weights, 1, time.Unix(1_700_000_000, 0).UTC()))
+	b := utils.OrPanic1(NewCommittee("chain-b", weights, 1, time.Unix(1_700_000_000, 0).UTC()))
+	different := false
+	for number := ViewNumber(0); number < 64; number++ {
+		if a.Leader(View{Index: 7, Number: number}) != b.Leader(View{Index: 7, Number: number}) {
+			different = true
+			break
+		}
+	}
+	require.True(t, different)
+}
+
 func makeCommittee() (*Committee, []SecretKey) {
 	keys := []SecretKey{
 		TestSecretKey("heavy"),
 		TestSecretKey("light1"),
 		TestSecretKey("light2"),
 	}
-	return utils.OrPanic1(NewCommittee(map[PublicKey]uint64{
+	committee := utils.OrPanic1(NewCommittee("test-chain", map[PublicKey]uint64{
 		keys[0].Public(): 5,
 		keys[1].Public(): 1,
 		keys[2].Public(): 1,
-	}, 0, time.Now())), keys
+	}, 0, time.Now()))
+	for i := range keys {
+		keys[i] = keys[i].ForCommittee(committee)
+	}
+	return committee, keys
 }
 
 func TestLaneQCVerifyChecksWeight(t *testing.T) {

@@ -97,7 +97,7 @@ func TestNewRoundRobinElection_GenesisTimestamp(t *testing.T) {
 	firstBlock := GenGlobalBlockNumber(rng)
 	genesisTimestamp := time.Now()
 
-	committee, err := NewRoundRobinElection(replicas, firstBlock, genesisTimestamp)
+	committee, err := NewRoundRobinElection("test-chain", replicas, firstBlock, genesisTimestamp)
 	if err != nil {
 		t.Fatalf("NewRoundRobinElection(): %v", err)
 	}

@@ -2,6 +2,7 @@ package types
 
 import (
 	"cmp"
+	"crypto/sha256"
 	"slices"
 	"time"
 
@@ -37,7 +38,11 @@ func GenCommittee(rng utils.Rng, size int) (*Committee, []SecretKey) {
 	slices.SortStableFunc(sks, func(a, b SecretKey) int {
 		return -cmp.Compare(pks[a.Public()], pks[b.Public()])
 	})
-	return utils.OrPanic1(NewCommittee(pks, GenGlobalBlockNumber(rng)%1000000, time.Now())), sks
+	committee := utils.OrPanic1(NewCommittee("test-chain", pks, GenGlobalBlockNumber(rng)%1000000, time.Now()))
+	for i := range sks {
+		sks[i] = sks[i].ForCommittee(committee)
+	}
+	return committee, sks
 }
 
 // TestKeysWithWeight returns a deterministic subset of keys whose committee weight reaches the requested threshold.
@@ -126,7 +131,10 @@ func GenBlock(rng utils.Rng) *Block {
 
 // GenSigned generates a random Signed.
 func GenSigned[T Msg](rng utils.Rng, msg T) *Signed[T] {
-	return Sign(GenSecretKey(rng), msg)
+	key := GenSecretKey(rng)
+	key.domain = sha256.Sum256([]byte("pax/autobahn/test-signing-domain/v1"))
+	key.bound = true
+	return Sign(key, msg)
 }
 
 // GenLaneProposal generates a random LaneProposal.
