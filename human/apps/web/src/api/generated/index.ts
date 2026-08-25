@@ -520,28 +520,6 @@ export function decodeVerificationLevel(value: JsonValue | undefined, at: string
   throw new HumanApiDecodeError(at + " must be a declared VerificationLevel variant");
 }
 
-export interface AccountCreateRequest {
-  email: EmailAddress;
-  display_name: string;
-}
-
-export function decodeAccountCreateRequest(value: JsonValue | undefined, at: string): AccountCreateRequest {
-  const object = expectObject(value, at);
-  const result: AccountCreateRequest = {
-    email: expectString(object["email"], at + ".email"),
-    display_name: expectString(object["display_name"], at + ".display_name"),
-  };
-  return result;
-}
-
-export function encodeAccountCreateRequest(value: AccountCreateRequest): JsonValue {
-  const result: JsonObject = {
-    email: value.email,
-    display_name: value.display_name,
-  };
-  return result;
-}
-
 export interface AccountBalance {
   account_id: AccountId;
   money: Money;
@@ -569,6 +547,28 @@ export function encodeAccountBalance(value: AccountBalance): JsonValue {
     verification: value.verification,
     freshness: encodeProtocolFreshness(value.freshness),
     evidence: value.evidence.map(encodeEvidenceRef),
+  };
+  return result;
+}
+
+export interface AccountCreateRequest {
+  email: EmailAddress;
+  display_name: string;
+}
+
+export function decodeAccountCreateRequest(value: JsonValue | undefined, at: string): AccountCreateRequest {
+  const object = expectObject(value, at);
+  const result: AccountCreateRequest = {
+    email: expectString(object["email"], at + ".email"),
+    display_name: expectString(object["display_name"], at + ".display_name"),
+  };
+  return result;
+}
+
+export function encodeAccountCreateRequest(value: AccountCreateRequest): JsonValue {
+  const result: JsonObject = {
+    email: value.email,
+    display_name: value.display_name,
   };
   return result;
 }

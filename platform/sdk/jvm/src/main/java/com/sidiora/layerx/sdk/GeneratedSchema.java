@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 54688)
-Total output lines: 3192
-
 // Code generated from the LayerX Agent API and Human API schemas. DO NOT EDIT.
 
 package com.sidiora.layerx.sdk;
@@ -1687,7 +1684,265 @@ public final class GeneratedSchema {
                 Objects.requireNonNull(freshness, "freshness");
             }
         }
-        public static final SchemaTypes.TypedOperation<ExportOfflineRequest, ExportOfflineResponse> EXPORT_OFFLINE = new SchemaTypes.TypedOperati…4688 tokens truncated… SchemaTypes.GeneratedRequest {
+        public static final SchemaTypes.TypedOperation<ExportOfflineRequest, ExportOfflineResponse> EXPORT_OFFLINE = new SchemaTypes.TypedOperation<>(OperationCatalog.Plane.AGENT, "export.offline", false, ExportOfflineRequest.class, ExportOfflineResponse.class);
+        public record PrepareRequest(JsonNode actor, JsonNode authority, JsonNode account_sequence, JsonNode timestamp_bound, JsonNode idempotency_key, JsonNode fee_limit, JsonNode payload, JsonNode payload_hash) implements SchemaTypes.GeneratedRequest {
+            public PrepareRequest {
+                Objects.requireNonNull(actor, "actor");
+                Objects.requireNonNull(authority, "authority");
+                Objects.requireNonNull(account_sequence, "account_sequence");
+                Objects.requireNonNull(timestamp_bound, "timestamp_bound");
+                Objects.requireNonNull(idempotency_key, "idempotency_key");
+                Objects.requireNonNull(fee_limit, "fee_limit");
+                Objects.requireNonNull(payload, "payload");
+                Objects.requireNonNull(payload_hash, "payload_hash");
+            }
+        }
+        public record PrepareResponse(JsonNode preparation_ref, JsonNode unsigned_canonical_bytes, JsonNode signing_preimage, JsonNode disclosure, JsonNode expiry) implements SchemaTypes.GeneratedResponse {
+            public PrepareResponse {
+                Objects.requireNonNull(preparation_ref, "preparation_ref");
+                Objects.requireNonNull(unsigned_canonical_bytes, "unsigned_canonical_bytes");
+                Objects.requireNonNull(signing_preimage, "signing_preimage");
+                Objects.requireNonNull(disclosure, "disclosure");
+                Objects.requireNonNull(expiry, "expiry");
+            }
+        }
+        public static final SchemaTypes.TypedOperation<PrepareRequest, PrepareResponse> PREPARE = new SchemaTypes.TypedOperation<>(OperationCatalog.Plane.AGENT, "prepare", true, PrepareRequest.class, PrepareResponse.class);
+        public record ProjectRequest() implements SchemaTypes.GeneratedRequest {
+        }
+        public record ProjectResponse(JsonNode value) implements SchemaTypes.GeneratedResponse {
+            @JsonCreator(mode = JsonCreator.Mode.DELEGATING)
+            public ProjectResponse {
+                Objects.requireNonNull(value, "value");
+            }
+            @JsonValue public JsonNode wireValue() { return value; }
+        }
+        public static final SchemaTypes.TypedOperation<ProjectRequest, ProjectResponse> PROJECT = new SchemaTypes.TypedOperation<>(OperationCatalog.Plane.AGENT, "project", false, ProjectRequest.class, ProjectResponse.class);
+        public record ReadAccountRequest(JsonNode account, JsonNode requested_verification_level) implements SchemaTypes.GeneratedRequest {
+            public ReadAccountRequest {
+                Objects.requireNonNull(account, "account");
+                Objects.requireNonNull(requested_verification_level, "requested_verification_level");
+            }
+        }
+        public record ReadAccountResponse(JsonNode value, JsonNode achieved_verification_level, JsonNode freshness) implements SchemaTypes.GeneratedResponse {
+            public ReadAccountResponse {
+                Objects.requireNonNull(value, "value");
+                Objects.requireNonNull(achieved_verification_level, "achieved_verification_level");
+                Objects.requireNonNull(freshness, "freshness");
+            }
+        }
+        public static final SchemaTypes.TypedOperation<ReadAccountRequest, ReadAccountResponse> READ_ACCOUNT = new SchemaTypes.TypedOperation<>(OperationCatalog.Plane.AGENT, "read.account", false, ReadAccountRequest.class, ReadAccountResponse.class);
+        public record ReadBalanceRequest(JsonNode account, JsonNode asset, JsonNode requested_verification_level) implements SchemaTypes.GeneratedRequest {
+            public ReadBalanceRequest {
+                Objects.requireNonNull(account, "account");
+                Objects.requireNonNull(asset, "asset");
+                Objects.requireNonNull(requested_verification_level, "requested_verification_level");
+            }
+        }
+        public record ReadBalanceResponse(JsonNode value, JsonNode achieved_verification_level, JsonNode freshness) implements SchemaTypes.GeneratedResponse {
+            public ReadBalanceResponse {
+                Objects.requireNonNull(value, "value");
+                Objects.requireNonNull(achieved_verification_level, "achieved_verification_level");
+                Objects.requireNonNull(freshness, "freshness");
+            }
+        }
+        public static final SchemaTypes.TypedOperation<ReadBalanceRequest, ReadBalanceResponse> READ_BALANCE = new SchemaTypes.TypedOperation<>(OperationCatalog.Plane.AGENT, "read.balance", false, ReadBalanceRequest.class, ReadBalanceResponse.class);
+        public record ReadBatchRequest(JsonNode batch, JsonNode requested_verification_level) implements SchemaTypes.GeneratedRequest {
+            public ReadBatchRequest {
+                Objects.requireNonNull(batch, "batch");
+                Objects.requireNonNull(requested_verification_level, "requested_verification_level");
+            }
+        }
+        public record ReadBatchResponse(JsonNode value, JsonNode achieved_verification_level, JsonNode freshness) implements SchemaTypes.GeneratedResponse {
+            public ReadBatchResponse {
+                Objects.requireNonNull(value, "value");
+                Objects.requireNonNull(achieved_verification_level, "achieved_verification_level");
+                Objects.requireNonNull(freshness, "freshness");
+            }
+        }
+        public static final SchemaTypes.TypedOperation<ReadBatchRequest, ReadBatchResponse> READ_BATCH = new SchemaTypes.TypedOperation<>(OperationCatalog.Plane.AGENT, "read.batch", false, ReadBatchRequest.class, ReadBatchResponse.class);
+        public record ReadCheckpointRequest(JsonNode checkpoint, JsonNode requested_verification_level) implements SchemaTypes.GeneratedRequest {
+            public ReadCheckpointRequest {
+                Objects.requireNonNull(checkpoint, "checkpoint");
+                Objects.requireNonNull(requested_verification_level, "requested_verification_level");
+            }
+        }
+        public record ReadCheckpointResponse(JsonNode value, JsonNode achieved_verification_level, JsonNode freshness) implements SchemaTypes.GeneratedResponse {
+            public ReadCheckpointResponse {
+                Objects.requireNonNull(value, "value");
+                Objects.requireNonNull(achieved_verification_level, "achieved_verification_level");
+                Objects.requireNonNull(freshness, "freshness");
+            }
+        }
+        public static final SchemaTypes.TypedOperation<ReadCheckpointRequest, ReadCheckpointResponse> READ_CHECKPOINT = new SchemaTypes.TypedOperation<>(OperationCatalog.Plane.AGENT, "read.checkpoint", false, ReadCheckpointRequest.class, ReadCheckpointResponse.class);
+        public record ReadHistoryRequest(JsonNode range, JsonNode cursor, JsonNode page_limit, JsonNode requested_verification_level) implements SchemaTypes.GeneratedRequest {
+            public ReadHistoryRequest {
+                Objects.requireNonNull(range, "range");
+                Objects.requireNonNull(cursor, "cursor");
+                Objects.requireNonNull(page_limit, "page_limit");
+                Objects.requireNonNull(requested_verification_level, "requested_verification_level");
+            }
+        }
+        public record ReadHistoryResponse(JsonNode value, JsonNode achieved_verification_level, JsonNode freshness) implements SchemaTypes.GeneratedResponse {
+            public ReadHistoryResponse {
+                Objects.requireNonNull(value, "value");
+                Objects.requireNonNull(achieved_verification_level, "achieved_verification_level");
+                Objects.requireNonNull(freshness, "freshness");
+            }
+        }
+        public static final SchemaTypes.TypedOperation<ReadHistoryRequest, ReadHistoryResponse> READ_HISTORY = new SchemaTypes.TypedOperation<>(OperationCatalog.Plane.AGENT, "read.history", false, ReadHistoryRequest.class, ReadHistoryResponse.class);
+        public record ReadModuleStateRequest(JsonNode module, JsonNode key, JsonNode requested_verification_level) implements SchemaTypes.GeneratedRequest {
+            public ReadModuleStateRequest {
+                Objects.requireNonNull(module, "module");
+                Objects.requireNonNull(key, "key");
+                Objects.requireNonNull(requested_verification_level, "requested_verification_level");
+            }
+        }
+        public record ReadModuleStateResponse(JsonNode value, JsonNode achieved_verification_level, JsonNode freshness) implements SchemaTypes.GeneratedResponse {
+            public ReadModuleStateResponse {
+                Objects.requireNonNull(value, "value");
+                Objects.requireNonNull(achieved_verification_level, "achieved_verification_level");
+                Objects.requireNonNull(freshness, "freshness");
+            }
+        }
+        public static final SchemaTypes.TypedOperation<ReadModuleStateRequest, ReadModuleStateResponse> READ_MODULE_STATE = new SchemaTypes.TypedOperation<>(OperationCatalog.Plane.AGENT, "read.module_state", false, ReadModuleStateRequest.class, ReadModuleStateResponse.class);
+        public record ReadProofBundleRequest(JsonNode target, JsonNode requested_verification_level) implements SchemaTypes.GeneratedRequest {
+            public ReadProofBundleRequest {
+                Objects.requireNonNull(target, "target");
+                Objects.requireNonNull(requested_verification_level, "requested_verification_level");
+            }
+        }
+        public record ReadProofBundleResponse(JsonNode value, JsonNode achieved_verification_level, JsonNode freshness) implements SchemaTypes.GeneratedResponse {
+            public ReadProofBundleResponse {
+                Objects.requireNonNull(value, "value");
+                Objects.requireNonNull(achieved_verification_level, "achieved_verification_level");
+                Objects.requireNonNull(freshness, "freshness");
+            }
+        }
+        public static final SchemaTypes.TypedOperation<ReadProofBundleRequest, ReadProofBundleResponse> READ_PROOF_BUNDLE = new SchemaTypes.TypedOperation<>(OperationCatalog.Plane.AGENT, "read.proof_bundle", false, ReadProofBundleRequest.class, ReadProofBundleResponse.class);
+        public record SessionCloseRequest(JsonNode session_id, JsonNode context) implements SchemaTypes.GeneratedRequest {
+            public SessionCloseRequest {
+                Objects.requireNonNull(session_id, "session_id");
+                Objects.requireNonNull(context, "context");
+            }
+        }
+        public record SessionCloseResponse(JsonNode authority, JsonNode value) implements SchemaTypes.GeneratedResponse {
+            public SessionCloseResponse {
+                Objects.requireNonNull(authority, "authority");
+                Objects.requireNonNull(value, "value");
+            }
+        }
+        public static final SchemaTypes.TypedOperation<SessionCloseRequest, SessionCloseResponse> SESSION_CLOSE = new SchemaTypes.TypedOperation<>(OperationCatalog.Plane.AGENT, "session.close", true, SessionCloseRequest.class, SessionCloseResponse.class);
+        public record SessionListRequest(JsonNode context) implements SchemaTypes.GeneratedRequest {
+            public SessionListRequest {
+                Objects.requireNonNull(context, "context");
+            }
+        }
+        public record SessionListResponse(JsonNode authority, JsonNode value) implements SchemaTypes.GeneratedResponse {
+            public SessionListResponse {
+                Objects.requireNonNull(authority, "authority");
+                Objects.requireNonNull(value, "value");
+            }
+        }
+        public static final SchemaTypes.TypedOperation<SessionListRequest, SessionListResponse> SESSION_LIST = new SchemaTypes.TypedOperation<>(OperationCatalog.Plane.AGENT, "session.list", false, SessionListRequest.class, SessionListResponse.class);
+        public record SessionOpenRequest(JsonNode context) implements SchemaTypes.GeneratedRequest {
+            public SessionOpenRequest {
+                Objects.requireNonNull(context, "context");
+            }
+        }
+        public record SessionOpenResponse(JsonNode authority, JsonNode value) implements SchemaTypes.GeneratedResponse {
+            public SessionOpenResponse {
+                Objects.requireNonNull(authority, "authority");
+                Objects.requireNonNull(value, "value");
+            }
+        }
+        public static final SchemaTypes.TypedOperation<SessionOpenRequest, SessionOpenResponse> SESSION_OPEN = new SchemaTypes.TypedOperation<>(OperationCatalog.Plane.AGENT, "session.open", true, SessionOpenRequest.class, SessionOpenResponse.class);
+        public record SessionRefreshRequest(JsonNode session_id, JsonNode context) implements SchemaTypes.GeneratedRequest {
+            public SessionRefreshRequest {
+                Objects.requireNonNull(session_id, "session_id");
+                Objects.requireNonNull(context, "context");
+            }
+        }
+        public record SessionRefreshResponse(JsonNode authority, JsonNode value) implements SchemaTypes.GeneratedResponse {
+            public SessionRefreshResponse {
+                Objects.requireNonNull(authority, "authority");
+                Objects.requireNonNull(value, "value");
+            }
+        }
+        public static final SchemaTypes.TypedOperation<SessionRefreshRequest, SessionRefreshResponse> SESSION_REFRESH = new SchemaTypes.TypedOperation<>(OperationCatalog.Plane.AGENT, "session.refresh", true, SessionRefreshRequest.class, SessionRefreshResponse.class);
+        public record SignRequest(JsonNode preparation_ref, JsonNode signature) implements SchemaTypes.GeneratedRequest {
+            public SignRequest {
+                Objects.requireNonNull(preparation_ref, "preparation_ref");
+                Objects.requireNonNull(signature, "signature");
+            }
+        }
+        public record SignResponse(JsonNode value) implements SchemaTypes.GeneratedResponse {
+            @JsonCreator(mode = JsonCreator.Mode.DELEGATING)
+            public SignResponse {
+                Objects.requireNonNull(value, "value");
+            }
+            @JsonValue public JsonNode wireValue() { return value; }
+        }
+        public static final SchemaTypes.TypedOperation<SignRequest, SignResponse> SIGN = new SchemaTypes.TypedOperation<>(OperationCatalog.Plane.AGENT, "sign", true, SignRequest.class, SignResponse.class);
+        public record SubmitRequest(JsonNode preparation_ref, JsonNode signature) implements SchemaTypes.GeneratedRequest {
+            public SubmitRequest {
+                Objects.requireNonNull(preparation_ref, "preparation_ref");
+                Objects.requireNonNull(signature, "signature");
+            }
+        }
+        public record SubmitResponse(JsonNode value) implements SchemaTypes.GeneratedResponse {
+            @JsonCreator(mode = JsonCreator.Mode.DELEGATING)
+            public SubmitResponse {
+                Objects.requireNonNull(value, "value");
+            }
+            @JsonValue public JsonNode wireValue() { return value; }
+        }
+        public static final SchemaTypes.TypedOperation<SubmitRequest, SubmitResponse> SUBMIT = new SchemaTypes.TypedOperation<>(OperationCatalog.Plane.AGENT, "submit", true, SubmitRequest.class, SubmitResponse.class);
+        public record SubscriptionAcknowledgeRequest(JsonNode scope, JsonNode subscription_id, JsonNode cursor) implements SchemaTypes.GeneratedRequest {
+            public SubscriptionAcknowledgeRequest {
+                Objects.requireNonNull(scope, "scope");
+                Objects.requireNonNull(subscription_id, "subscription_id");
+                Objects.requireNonNull(cursor, "cursor");
+            }
+        }
+        public record SubscriptionAcknowledgeResponse(JsonNode value) implements SchemaTypes.GeneratedResponse {
+            @JsonCreator(mode = JsonCreator.Mode.DELEGATING)
+            public SubscriptionAcknowledgeResponse {
+                Objects.requireNonNull(value, "value");
+            }
+            @JsonValue public JsonNode wireValue() { return value; }
+        }
+        public static final SchemaTypes.TypedOperation<SubscriptionAcknowledgeRequest, SubscriptionAcknowledgeResponse> SUBSCRIPTION_ACKNOWLEDGE = new SchemaTypes.TypedOperation<>(OperationCatalog.Plane.AGENT, "subscription.acknowledge", true, SubscriptionAcknowledgeRequest.class, SubscriptionAcknowledgeResponse.class);
+        public record SubscriptionCreateRequest(JsonNode scope, JsonNode filter, JsonNode start, JsonNode delivery_target) implements SchemaTypes.GeneratedRequest {
+            public SubscriptionCreateRequest {
+                Objects.requireNonNull(scope, "scope");
+                Objects.requireNonNull(filter, "filter");
+                Objects.requireNonNull(start, "start");
+                Objects.requireNonNull(delivery_target, "delivery_target");
+            }
+        }
+        public record SubscriptionCreateResponse(JsonNode value) implements SchemaTypes.GeneratedResponse {
+            @JsonCreator(mode = JsonCreator.Mode.DELEGATING)
+            public SubscriptionCreateResponse {
+                Objects.requireNonNull(value, "value");
+            }
+            @JsonValue public JsonNode wireValue() { return value; }
+        }
+        public static final SchemaTypes.TypedOperation<SubscriptionCreateRequest, SubscriptionCreateResponse> SUBSCRIPTION_CREATE = new SchemaTypes.TypedOperation<>(OperationCatalog.Plane.AGENT, "subscription.create", true, SubscriptionCreateRequest.class, SubscriptionCreateResponse.class);
+        public record SubscriptionDeleteRequest(JsonNode scope, JsonNode subscription_id) implements SchemaTypes.GeneratedRequest {
+            public SubscriptionDeleteRequest {
+                Objects.requireNonNull(scope, "scope");
+                Objects.requireNonNull(subscription_id, "subscription_id");
+            }
+        }
+        public record SubscriptionDeleteResponse(JsonNode value) implements SchemaTypes.GeneratedResponse {
+            @JsonCreator(mode = JsonCreator.Mode.DELEGATING)
+            public SubscriptionDeleteResponse {
+                Objects.requireNonNull(value, "value");
+            }
+            @JsonValue public JsonNode wireValue() { return value; }
+        }
+        public static final SchemaTypes.TypedOperation<SubscriptionDeleteRequest, SubscriptionDeleteResponse> SUBSCRIPTION_DELETE = new SchemaTypes.TypedOperation<>(OperationCatalog.Plane.AGENT, "subscription.delete", true, SubscriptionDeleteRequest.class, SubscriptionDeleteResponse.class);
+        public record SubscriptionHealthRequest(JsonNode scope, JsonNode subscription_id) implements SchemaTypes.GeneratedRequest {
             public SubscriptionHealthRequest {
                 Objects.requireNonNull(scope, "scope");
                 Objects.requireNonNull(subscription_id, "subscription_id");

@@ -510,6 +510,22 @@ observed = "The inherited task declared only platform/sdk/jvm and platform/sdk/c
 assumption = "The expansion is limited to JVM generation, packaging and conformance wiring; it does not implement or qualify SDKs in any other language."
 severity = "scope-clarification"
 
+[observation.4.6.1]
+task = "4.6"
+file = "human/apps/web/src/api/generated/index.ts, platform/sdk/pipeline.kvx"
+symbol = "Human TypeScript API generation"
+observed = "Workspace BUILD log 004 reported stale Human TypeScript generation. The authoritative human/tools/api-gen generator rewrote the TypeScript index from the live Human schema containing 78 operations and 173 types; the shared SDK pipeline writer then recorded the resulting source and file digests. The generated conformance source was already byte-identical, while its inherited pipeline digest was stale."
+assumption = "Human qualification must rerun the Human generation check and consuming TypeScript build after the workspace INSTALL action; this implementation step records generator output and does not claim either check passes."
+severity = "qualification-repair"
+
+[observation.15.4.5]
+task = "15.4"
+file = "platform/sdk/generators/generate_jvm.py, platform/sdk/jvm/src/main/java/com/sidiora/layerx/sdk/GeneratedSchema.java, platform/sdk/go/generated.go, platform/sdk/pipeline.kvx, platform/Cargo.lock"
+symbol = "JVM and shared SDK pipeline generation"
+observed = "The committed JVM GeneratedSchema began with a truncation warning and contained a literal token-truncation marker in place of generated operation records. Running the authoritative JVM generator removed those non-source fragments and restored the missing records. The shared SDK pipeline writer updated the JVM and Human digests, added the two live Human operations account.balance and home.summary to the Go catalogue, and refreshed the platform lockfile to the current workspace manifests, including the generator's base64 0.22.1 dependency."
+assumption = "Human qualification must rerun the JVM generation gate, compile the JVM artifact and exercise cross-language operation parity. No generated source was repaired by hand and this implementation step does not claim those qualification actions pass."
+severity = "qualification-repair"
+
 [observation.16.2.1]
 task = "16.2"
 file = "platform/examples/merchant-checkout, platform/examples/merchant-shop"

@@ -118,6 +118,7 @@ func (operation AgentOperation) RequiresIdempotency() bool {
 type HumanOperation string
 
 const (
+	HumanOperationAccountBalance                HumanOperation = "account.balance"
 	HumanOperationAccountCreate                 HumanOperation = "account.create"
 	HumanOperationActivityEntry                 HumanOperation = "activity.entry"
 	HumanOperationActivityExportEvidence        HumanOperation = "activity.export.evidence"
@@ -152,6 +153,7 @@ const (
 	HumanOperationEvidenceGet                   HumanOperation = "evidence.get"
 	HumanOperationExitEligibility               HumanOperation = "exit.eligibility"
 	HumanOperationExitStart                     HumanOperation = "exit.start"
+	HumanOperationHomeSummary                   HumanOperation = "home.summary"
 	HumanOperationJourneyGet                    HumanOperation = "journey.get"
 	HumanOperationJourneyList                   HumanOperation = "journey.list"
 	HumanOperationMoveCommit                    HumanOperation = "move.commit"
@@ -198,6 +200,7 @@ const (
 
 func AllHumanOperations() []HumanOperation {
 	return []HumanOperation{
+		HumanOperationAccountBalance,
 		HumanOperationAccountCreate,
 		HumanOperationActivityEntry,
 		HumanOperationActivityExportEvidence,
@@ -232,6 +235,7 @@ func AllHumanOperations() []HumanOperation {
 		HumanOperationEvidenceGet,
 		HumanOperationExitEligibility,
 		HumanOperationExitStart,
+		HumanOperationHomeSummary,
 		HumanOperationJourneyGet,
 		HumanOperationJourneyList,
 		HumanOperationMoveCommit,
@@ -279,7 +283,7 @@ func AllHumanOperations() []HumanOperation {
 
 func (operation HumanOperation) Valid() bool {
 	switch operation {
-	case HumanOperationAccountCreate, HumanOperationActivityEntry, HumanOperationActivityExportEvidence, HumanOperationActivityExportStatement, HumanOperationActivityQuery, HumanOperationAgentArchive, HumanOperationAgentCreate, HumanOperationAgentGet, HumanOperationAgentLimit, HumanOperationAgentList, HumanOperationAgentPause, HumanOperationAgentReclaim, HumanOperationAgentRecover, HumanOperationAgentResume, HumanOperationAgentRotate, HumanOperationApprovalApprove, HumanOperationApprovalGet, HumanOperationApprovalList, HumanOperationApprovalReject, HumanOperationAuthenticatorBackupRotate, HumanOperationAuthenticatorDisable, HumanOperationAuthenticatorSetupBegin, HumanOperationAuthenticatorSetupFinish, HumanOperationAuthenticatorStatus, HumanOperationBindingRebind, HumanOperationBindingRebindAction, HumanOperationBindingStatement, HumanOperationBindingStatus, HumanOperationBindingSubmit, HumanOperationDepositConfirm, HumanOperationDepositStart, HumanOperationEvidenceGet, HumanOperationExitEligibility, HumanOperationExitStart, HumanOperationJourneyGet, HumanOperationJourneyList, HumanOperationMoveCommit, HumanOperationMoveQuote, HumanOperationNotificationList, HumanOperationNotificationPreferencesGet, HumanOperationNotificationPreferencesSet, HumanOperationNotificationRead, HumanOperationOnboardingResume, HumanOperationOnboardingStatus, HumanOperationPasskeyAssertBegin, HumanOperationPasskeyAssertFinish, HumanOperationPasskeyRegisterBegin, HumanOperationPasskeyRegisterFinish, HumanOperationProfileGet, HumanOperationProfileUpdate, HumanOperationSecurityAction, HumanOperationSecurityPasskeyList, HumanOperationSecurityPasskeyRegisterBegin, HumanOperationSecurityPasskeyRegisterFinish, HumanOperationSecurityPasskeyRevoke, HumanOperationSecurityRecoveryReveal, HumanOperationSecuritySessionRevoke, HumanOperationSecuritySessionRevokeAll, HumanOperationSessionList, HumanOperationSessionOpen, HumanOperationSessionRefresh, HumanOperationSessionRevoke, HumanOperationSessionRevokeAll, HumanOperationStepupBegin, HumanOperationStepupFinish, HumanOperationStreamNext, HumanOperationStreamOpen, HumanOperationSupportCreate, HumanOperationSupportFeedback, HumanOperationSupportList, HumanOperationSupportRead, HumanOperationSupportReply, HumanOperationSupportStatus, HumanOperationVersion, HumanOperationWithdrawClaim, HumanOperationWithdrawStart:
+	case HumanOperationAccountBalance, HumanOperationAccountCreate, HumanOperationActivityEntry, HumanOperationActivityExportEvidence, HumanOperationActivityExportStatement, HumanOperationActivityQuery, HumanOperationAgentArchive, HumanOperationAgentCreate, HumanOperationAgentGet, HumanOperationAgentLimit, HumanOperationAgentList, HumanOperationAgentPause, HumanOperationAgentReclaim, HumanOperationAgentRecover, HumanOperationAgentResume, HumanOperationAgentRotate, HumanOperationApprovalApprove, HumanOperationApprovalGet, HumanOperationApprovalList, HumanOperationApprovalReject, HumanOperationAuthenticatorBackupRotate, HumanOperationAuthenticatorDisable, HumanOperationAuthenticatorSetupBegin, HumanOperationAuthenticatorSetupFinish, HumanOperationAuthenticatorStatus, HumanOperationBindingRebind, HumanOperationBindingRebindAction, HumanOperationBindingStatement, HumanOperationBindingStatus, HumanOperationBindingSubmit, HumanOperationDepositConfirm, HumanOperationDepositStart, HumanOperationEvidenceGet, HumanOperationExitEligibility, HumanOperationExitStart, HumanOperationHomeSummary, HumanOperationJourneyGet, HumanOperationJourneyList, HumanOperationMoveCommit, HumanOperationMoveQuote, HumanOperationNotificationList, HumanOperationNotificationPreferencesGet, HumanOperationNotificationPreferencesSet, HumanOperationNotificationRead, HumanOperationOnboardingResume, HumanOperationOnboardingStatus, HumanOperationPasskeyAssertBegin, HumanOperationPasskeyAssertFinish, HumanOperationPasskeyRegisterBegin, HumanOperationPasskeyRegisterFinish, HumanOperationProfileGet, HumanOperationProfileUpdate, HumanOperationSecurityAction, HumanOperationSecurityPasskeyList, HumanOperationSecurityPasskeyRegisterBegin, HumanOperationSecurityPasskeyRegisterFinish, HumanOperationSecurityPasskeyRevoke, HumanOperationSecurityRecoveryReveal, HumanOperationSecuritySessionRevoke, HumanOperationSecuritySessionRevokeAll, HumanOperationSessionList, HumanOperationSessionOpen, HumanOperationSessionRefresh, HumanOperationSessionRevoke, HumanOperationSessionRevokeAll, HumanOperationStepupBegin, HumanOperationStepupFinish, HumanOperationStreamNext, HumanOperationStreamOpen, HumanOperationSupportCreate, HumanOperationSupportFeedback, HumanOperationSupportList, HumanOperationSupportRead, HumanOperationSupportReply, HumanOperationSupportStatus, HumanOperationVersion, HumanOperationWithdrawClaim, HumanOperationWithdrawStart:
 		return true
 	default:
 		return false
@@ -304,6 +308,8 @@ type HumanOperationMetadata struct {
 
 func (operation HumanOperation) Metadata() (HumanOperationMetadata, bool) {
 	switch operation {
+	case HumanOperationAccountBalance:
+		return HumanOperationMetadata{Method: "GET", Path: "/v1/account/balance", Request: "Empty", Response: "AccountBalance"}, true
 	case HumanOperationAccountCreate:
 		return HumanOperationMetadata{Method: "POST", Path: "/v1/accounts", Request: "AccountCreateRequest", Response: "AccountCreation"}, true
 	case HumanOperationActivityEntry:
@@ -372,6 +378,8 @@ func (operation HumanOperation) Metadata() (HumanOperationMetadata, bool) {
 		return HumanOperationMetadata{Method: "GET", Path: "/v1/exit/eligibility", Request: "Empty", Response: "ExitEligibility"}, true
 	case HumanOperationExitStart:
 		return HumanOperationMetadata{Method: "POST", Path: "/v1/exit", Request: "ExitStartRequest", Response: "Journey"}, true
+	case HumanOperationHomeSummary:
+		return HumanOperationMetadata{Method: "GET", Path: "/v1/home", Request: "Empty", Response: "HomeSummary"}, true
 	case HumanOperationJourneyGet:
 		return HumanOperationMetadata{Method: "GET", Path: "/v1/journeys/{journey_id}", Request: "Empty", Response: "Journey"}, true
 	case HumanOperationJourneyList:

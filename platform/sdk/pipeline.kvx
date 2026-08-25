@@ -8,7 +8,7 @@ digest = "f6a35f783071efd1664be305734e912a6f4848c60b53e17a58fca4d4c6f830d2"
 
 [source.human-api]
 root = "human/schema/human-api"
-digest = "c55280b4fd62e3e152b24156c82ceb2e8e2a55cc5cf8e6245997e1bf12e34cf3"
+digest = "40b02242ff6570acf3182a23e3a977db4f20c2e90f61b183831e1fb307788193"
 
 [source.mirror-v2]
 root = "platform/sdk/schema"
@@ -54,15 +54,15 @@ language = "typescript"
 root = "human/apps/web/src/api/generated"
 
 [files.human-typescript]
-"conformance.ts" = "ab94ec719d14a099b6ece1a15930adf4c2045dc37e66466e2caf637963867cd0"
-"index.ts" = "bae1005f98596b81c50e412ebfdee4b3994701df0e43cef3f8a0fc3b7582fa15"
+"conformance.ts" = "efc3577911673069314d5e560706705652a90247ef48d1cb58d34fa84b9837ef"
+"index.ts" = "9c0042eb55127f1b478cf4de1d9c35943952c77fec5773cb9ecf26af4f09deb8"
 
 [output.platform-go]
 language = "go"
 root = "platform/sdk/go"
 
 [files.platform-go]
-"generated.go" = "06f6b4718f66c60a89a462c0c055ff73a174a2ec48850e0065f3ae4aab4ee8ba"
+"generated.go" = "034f5860cc2a75b02856914db701f04c1cd0b3b8cd188a02387970bca8a8d103"
 "mirror_generated.go" = "50e24c574ac570b429db96116f52b4279e66a5e92f2fb273d847988067c45876"
 
 [output.platform-jvm]
@@ -73,7 +73,7 @@ root = "platform/sdk/jvm"
 "pom.xml" = "43d9af46728bf4507ea4eaa2ba6b6cc779559085f27862b78f26d01a09e975a1"
 "src/main/java/com/sidiora/layerx/sdk/HttpProductionTransport.java" = "fea16f98514adb524e6115f958f6ed608bad5aa5b57b79dcbe2dfe65fe5578fd"
 "src/main/java/com/sidiora/layerx/sdk/GeneratedContract.java" = "1c21c4a8727c611b1c23ca4cf88bfd2cc313f09a4e265358f41068f1266902af"
-"src/main/java/com/sidiora/layerx/sdk/GeneratedSchema.java" = "e5d4b0a5514235b532261f917bb196798db61451a05d0cf6be271d4dda9dd77b"
+"src/main/java/com/sidiora/layerx/sdk/GeneratedSchema.java" = "a2ce05f7e7c4df5c08a1bdae9e4668935490e99726fb9a6f4b2b57690b436970"
 "src/main/java/com/sidiora/layerx/sdk/GeneratedMirror.java" = "facf45b2da6828d41371b36bc0f2119f643d7b45003dead0c9590a9b0f0b6b8f"
 "src/main/java/com/sidiora/layerx/sdk/IdempotencyKey.java" = "2cfba7826e4bb7a6f0d4af63530f43c7aece547cf9f64ff1664b781cc431f6a4"
 "src/main/java/com/sidiora/layerx/sdk/OperationCatalog.java" = "477843c32935ffbc9ecff6dd6a35b78693b059c3d29a59aa021349b4a868e8e3"
