@@ -1381,3 +1381,27 @@ symbol = "ProgramAccountSeed, ProgramAccountPayment, pay_from_program_account"
 observed = "The runtime implemented program-authorised transfer legs but the public Rust authoring SDK had no matching candidate ABI import or typed request, forcing guest authors either to omit the feature or hand-declare the raw interface. The repair exposes the runtime's exact ten-argument host signature through a seed-bounded payment value while leaving derivation, frame ownership, cumulative capability checks and opaque authority issuance exclusively inside the runtime."
 assumption = "Human qualification must prove an SDK-built guest can spend only from the current program's correctly derived account and that wrong-source, callee-frame, zero-amount and cumulative-ceiling attempts fail typed and atomically. No successful guest build or transfer execution is asserted by this source repair."
 severity = "post-implementation-repair"
+
+[observation.17.2.1]
+task = "17.2"
+file = "platform/emulator/src/main.rs"
+symbol = "parse_config, parse_request, health"
+observed = "Post-implementation review found the unauthenticated emulator prefund, time, fault and snapshot control routes could be bound to a non-loopback address, one slow client could block the single transition worker without an I/O deadline, request headers shared the 64 MiB snapshot-body allowance and duplicate framing headers were accepted, and /healthz reported ready without reading the embedded core. The repair makes the listener a loopback-only SocketAddr, installs bounded I/O and header framing, rejects ambiguous request framing, and derives readiness from a real core inspection."
+assumption = "Human qualification must exercise IPv4 and IPv6 loopback startup, prove wildcard and non-loopback listeners are refused, send slow and ambiguous requests, and inject a core inspection failure to observe a 503 health response. Source tests were written but no emulator build, listener run or passing test result is asserted by this implementation repair."
+severity = "post-implementation-repair"
+
+[observation.17.5.7]
+task = "17.5"
+file = "platform/hosted/webhooks/src/boundary.rs"
+symbol = "public_ip, resolve"
+observed = "Post-implementation review found the webhook public-destination guard excluded ordinary private and link-local addresses but admitted IPv6 NAT64, 6to4, Teredo, discard, benchmarking, ORCHID and deprecated site-local ranges. A developer-controlled HTTPS hostname could therefore resolve through a translation or tunnel prefix that reaches a non-public target despite registration and per-delivery DNS checks. The repair rejects those special-use ranges on every resolution while retaining ordinary globally routed IPv4 and IPv6 destinations."
+assumption = "Human qualification must resolve controlled webhook hostnames to each refused range, including DNS changes between registration and delivery, prove that no connection is attempted, and confirm a valid global dual-stack receiver still accepts a signed delivery. Source tests were written but no network or test result is asserted by this implementation repair."
+severity = "post-implementation-repair"
+
+[observation.26.1.6]
+task = "26.1"
+file = "platform/ramps/reference/src/main.rs"
+symbol = "ConnectionGate, run"
+observed = "Post-implementation review found the publicly exposed reference ramp created an operating-system thread for every accepted TLS connection without a process-side concurrency bound. An unauthenticated client could retain many handshakes or requests and exhaust threads before identity, provider-callback signature or operator authorization ran. The repair acquires a fixed-capacity RAII permit before spawning, drops excess connections before TLS work, and releases capacity on request completion and worker-spawn failure."
+assumption = "Human qualification must hold 128 concurrent TLS/request workers, prove the next connection is dropped without creating another worker, release capacity and observe recovery, and monitor descriptor, memory and thread bounds under sustained churn. Source tests were written but no service build, load test or passing result is asserted by this implementation repair."
+severity = "post-implementation-repair"

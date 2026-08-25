@@ -2,14 +2,17 @@ use std::collections::HashMap;
 use std::ffi::{c_char, c_int, c_uchar, c_uint, c_ulonglong, c_void, CStr};
 use std::fmt::Write as _;
 use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::ptr;
 use std::slice;
+use std::time::Duration;
 
-const DEFAULT_LISTEN: &str = "127.0.0.1:9402";
+const DEFAULT_PORT: u16 = 9402;
 const DEFAULT_NETWORK_ID: u32 = 402;
 const DEFAULT_TIME_MS: u64 = 1_700_000_000_000;
+const MAX_HEADER_BYTES: usize = 32 * 1024;
 const MAX_REQUEST_BYTES: usize = 64 * 1024 * 1024;
+const IO_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[repr(C)]
 struct CoreReceipt {
@@ -99,7 +102,7 @@ impl Drop for Emulator {
 }
 
 struct Config {
-    listen: String,
+    listen: SocketAddr,
     network_id: u32,
     timestamp_ms: u64,
     prefunds: Vec<Prefund>,
@@ -238,11 +241,14 @@ fn parse_request(stream: &mut TcpStream) -> Result<Request, String> {
             return Err("connection closed before request headers".into());
         }
         bytes.extend_from_slice(&chunk[..read]);
-        if bytes.len() > MAX_REQUEST_BYTES {
-            return Err("request exceeds emulator limit".into());
-        }
         if let Some(position) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
+            if position.saturating_add(4) > MAX_HEADER_BYTES {
+                return Err("request headers exceed emulator limit".into());
+            }
             break position + 4;
+        }
+        if bytes.len() > MAX_HEADER_BYTES {
+            return Err("request headers exceed emulator limit".into());
         }
     };
     let headers = std::str::from_utf8(&bytes[..header_end]).map_err(|_| "headers are not UTF-8")?;
@@ -252,23 +258,48 @@ fn parse_request(stream: &mut TcpStream) -> Result<Request, String> {
         .ok_or("missing request line")?
         .split_whitespace();
     let method = request_line.next().ok_or("missing method")?.to_string();
-    let path = request_line
-        .next()
-        .ok_or("missing path")?
-        .split('?')
-        .next()
-        .unwrap_or("/")
-        .to_string();
+    let target = request_line.next().ok_or("missing path")?;
+    if request_line.next() != Some("HTTP/1.1")
+        || request_line.next().is_some()
+        || !target.starts_with('/')
+        || target.contains(['#', '\\', '\0'])
+    {
+        return Err("invalid request line".into());
+    }
+    let path = target.split('?').next().unwrap_or("/").to_string();
     let mut content_length = 0_usize;
+    let mut has_content_length = false;
     let mut content_type = String::new();
-    for line in lines {
-        if let Some((name, value)) = line.split_once(':') {
-            if name.eq_ignore_ascii_case("content-length") {
-                content_length = value.trim().parse().map_err(|_| "invalid content length")?;
-            } else if name.eq_ignore_ascii_case("content-type") {
-                content_type = value.trim().to_ascii_lowercase();
+    let mut has_content_type = false;
+    let mut has_host = false;
+    for line in lines.filter(|line| !line.is_empty()) {
+        let (name, value) = line
+            .split_once(':')
+            .ok_or_else(|| "invalid request header".to_string())?;
+        let value = value.trim();
+        if name.eq_ignore_ascii_case("content-length") {
+            if has_content_length {
+                return Err("duplicate content length".into());
             }
+            content_length = value.parse().map_err(|_| "invalid content length")?;
+            has_content_length = true;
+        } else if name.eq_ignore_ascii_case("content-type") {
+            if has_content_type {
+                return Err("duplicate content type".into());
+            }
+            content_type = value.to_ascii_lowercase();
+            has_content_type = true;
+        } else if name.eq_ignore_ascii_case("host") {
+            if has_host || value.is_empty() {
+                return Err("invalid host header".into());
+            }
+            has_host = true;
+        } else if name.eq_ignore_ascii_case("transfer-encoding") {
+            return Err("transfer encoding is not supported".into());
         }
+    }
+    if !has_host {
+        return Err("missing host header".into());
     }
     if content_length > MAX_REQUEST_BYTES {
         return Err("request body exceeds emulator limit".into());
@@ -488,6 +519,27 @@ fn inspect(emulator: &Emulator, trace: u64) -> Response {
     success(trace, &format!("{{\"network_mode\":\"emulator\",\"batch_cadence\":\"instant\",\"state_root\":\"{}\",\"next_sequence\":{},\"batch_number\":{},\"timestamp_ms\":{},\"cells\":[{cells}],\"accounts\":[{accounts}]}}", hex_encode(&state.state_root), state.next_sequence, state.batch_number, state.timestamp_ms))
 }
 
+fn health(emulator: &Emulator, trace: u64) -> Response {
+    let mut state = CoreState {
+        state_root: [0; 32],
+        next_sequence: 0,
+        batch_number: 0,
+        timestamp_ms: 0,
+        cell_count: 0,
+        account_count: 0,
+    };
+    let code = unsafe { platform_emulator_inspect(emulator.core, &raw mut state) };
+    if code != 0 {
+        return refusal(
+            trace,
+            503,
+            "core_unavailable",
+            "the LayerX core did not return a readable state",
+        );
+    }
+    success(trace, "{\"status\":\"ready\",\"core\":\"layerx\"}")
+}
+
 fn prefund(emulator: &mut Emulator, body: &[u8], trace: u64) -> Response {
     let Some(did) = json_string(body, "did") else {
         return refusal(trace, 400, "invalid_argument", "missing did");
@@ -596,7 +648,7 @@ fn route(emulator: &mut Emulator, request: &Request) -> Response {
     emulator.trace += 1;
     let trace = emulator.trace;
     match (request.method.as_str(), request.path.as_str()) {
-        ("GET", "/healthz") => success(trace, "{\"status\":\"ready\",\"core\":\"layerx\"}"),
+        ("GET", "/healthz") => health(emulator, trace),
         ("POST", "/v1/activities") => submit(emulator, request, trace),
         ("POST", "/v1/programs/call") => program_call(emulator, request, trace),
         ("GET", "/v1/state") => inspect(emulator, trace),
@@ -680,7 +732,7 @@ fn parse_config(arguments: impl IntoIterator<Item = String>) -> Result<Config, S
         return Err("usage: layerx emulator up [--listen ADDRESS] [--network-id ID] [--time-ms MS] [--prefund DID,PUBLIC_KEY,AMOUNT]".into());
     }
     let mut config = Config {
-        listen: DEFAULT_LISTEN.into(),
+        listen: SocketAddr::from(([127, 0, 0, 1], DEFAULT_PORT)),
         network_id: DEFAULT_NETWORK_ID,
         timestamp_ms: DEFAULT_TIME_MS,
         prefunds: Vec::new(),
@@ -690,7 +742,15 @@ fn parse_config(arguments: impl IntoIterator<Item = String>) -> Result<Config, S
             .next()
             .ok_or_else(|| format!("missing value for {argument}"))?;
         match argument.as_str() {
-            "--listen" => config.listen = value,
+            "--listen" => {
+                let listen = value
+                    .parse::<SocketAddr>()
+                    .map_err(|_| "listen address must be an IP socket address")?;
+                if !listen.ip().is_loopback() {
+                    return Err("emulator control routes may listen only on loopback".into());
+                }
+                config.listen = listen;
+            }
             "--network-id" => {
                 config.network_id = value.parse().map_err(|_| "network id must be an integer")?;
             }
@@ -734,7 +794,7 @@ fn platform_emulator(config: Config) -> Result<(), String> {
             ));
         }
     }
-    let listener = TcpListener::bind(&config.listen)
+    let listener = TcpListener::bind(config.listen)
         .map_err(|error| format!("cannot listen on {}: {error}", config.listen))?;
     eprintln!(
         "LayerX emulator ready on http://{} (network {}, deterministic time {})",
@@ -743,6 +803,13 @@ fn platform_emulator(config: Config) -> Result<(), String> {
     for connection in listener.incoming() {
         match connection {
             Ok(mut stream) => {
+                if stream
+                    .set_read_timeout(Some(IO_TIMEOUT))
+                    .and_then(|()| stream.set_write_timeout(Some(IO_TIMEOUT)))
+                    .is_err()
+                {
+                    continue;
+                }
                 let response = match parse_request(&mut stream) {
                     Ok(request) => route(&mut emulator, &request),
                     Err(error) => {
@@ -766,6 +833,23 @@ fn platform_emulator(config: Config) -> Result<(), String> {
 /// terminating the owning CLI process.
 pub fn run(arguments: impl IntoIterator<Item = String>) -> Result<(), String> {
     parse_config(arguments).and_then(platform_emulator)
+}
+
+#[cfg(test)]
+mod boundary_tests {
+    use super::parse_config;
+
+    #[test]
+    fn control_surface_refuses_non_loopback_listeners() {
+        assert!(parse_config(["up".to_owned(), "--listen".to_owned(), "0.0.0.0:9402".to_owned()]).is_err());
+        assert!(parse_config(["up".to_owned(), "--listen".to_owned(), "192.0.2.1:9402".to_owned()]).is_err());
+    }
+
+    #[test]
+    fn control_surface_accepts_ipv4_and_ipv6_loopback() {
+        assert!(parse_config(["up".to_owned(), "--listen".to_owned(), "127.0.0.1:0".to_owned()]).is_ok());
+        assert!(parse_config(["up".to_owned(), "--listen".to_owned(), "[::1]:0".to_owned()]).is_ok());
+    }
 }
 
 #[cfg(test)]

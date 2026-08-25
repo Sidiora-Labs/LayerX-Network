@@ -116,12 +116,33 @@ fn public_ip(address: IpAddr) -> bool {
             if let Some(mapped) = value.to_ipv4_mapped() {
                 return public_ip(IpAddr::V4(mapped));
             }
+            let segments = value.segments();
+            let ipv4_compatible = segments[..6].iter().all(|segment| *segment == 0);
+            let translation = segments[0] == 0x0064 && segments[1] == 0xff9b;
+            let discard_only = segments[0] == 0x0100
+                && segments[1..4].iter().all(|segment| *segment == 0);
+            let teredo = segments[0] == 0x2001 && segments[1] == 0;
+            let benchmarking = segments[0] == 0x2001 && segments[1] == 2;
+            let orchid = segments[0] == 0x2001
+                && matches!(segments[1] & 0xfff0, 0x0010 | 0x0020);
+            let six_to_four = segments[0] == 0x2002;
+            let documentation = (segments[0] == 0x2001 && segments[1] == 0x0db8)
+                || (segments[0] == 0x3fff && segments[1] & 0xf000 == 0);
+            let deprecated_site_local = segments[0] & 0xffc0 == 0xfec0;
             !(value.is_loopback()
                 || value.is_unspecified()
                 || value.is_multicast()
                 || (value.segments()[0] & 0xfe00) == 0xfc00
                 || (value.segments()[0] & 0xffc0) == 0xfe80
-                || (value.segments()[0] == 0x2001 && value.segments()[1] == 0x0db8))
+                || ipv4_compatible
+                || translation
+                || discard_only
+                || teredo
+                || benchmarking
+                || orchid
+                || six_to_four
+                || documentation
+                || deprecated_site_local)
         }
     }
 }
@@ -329,4 +350,35 @@ fn read_response(stream: &mut impl Read) -> Result<Response, String> {
         content_type: headers.get("content-type").cloned().unwrap_or_default(),
         body: bytes[header_end..header_end + content_length].to_vec(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
+    use super::public_ip;
+
+    #[test]
+    fn public_destination_guard_rejects_translation_and_tunnel_ranges() {
+        assert!(!public_ip(IpAddr::V6(Ipv6Addr::new(
+            0x0064, 0xff9b, 0, 0, 0, 0, 0xc0a8, 1,
+        ))));
+        assert!(!public_ip(IpAddr::V6(Ipv6Addr::new(
+            0x2002, 0xc0a8, 1, 0, 0, 0, 0, 1,
+        ))));
+        assert!(!public_ip(IpAddr::V6(Ipv6Addr::new(
+            0x2001, 0, 0, 0, 0, 0, 0, 1,
+        ))));
+        assert!(!public_ip(IpAddr::V6(Ipv6Addr::new(
+            0x0100, 0, 0, 0, 0, 0, 0, 1,
+        ))));
+    }
+
+    #[test]
+    fn public_destination_guard_preserves_global_addresses() {
+        assert!(public_ip(IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1))));
+        assert!(public_ip(IpAddr::V6(Ipv6Addr::new(
+            0x2606, 0x4700, 0x4700, 0, 0, 0, 0, 0x1111,
+        ))));
+    }
 }

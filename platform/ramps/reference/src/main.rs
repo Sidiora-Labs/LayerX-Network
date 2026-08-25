@@ -5,6 +5,7 @@ use std::fs;
 use std::io::{Read as _, Write as _};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -31,6 +32,7 @@ use subtle::ConstantTimeEq as _;
 
 const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 const MAX_HEADERS: usize = 32 * 1024;
+const MAX_CONNECTIONS: usize = 128;
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -139,6 +141,37 @@ struct State {
     operator_control_token: String,
 }
 
+struct ConnectionGate {
+    active: AtomicUsize,
+    maximum: usize,
+}
+
+impl ConnectionGate {
+    const fn new(maximum: usize) -> Self {
+        Self {
+            active: AtomicUsize::new(0),
+            maximum,
+        }
+    }
+
+    fn try_acquire(self: &Arc<Self>) -> Option<ConnectionPermit> {
+        self.active
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |active| {
+                (active < self.maximum).then_some(active + 1)
+            })
+            .ok()
+            .map(|_| ConnectionPermit(Arc::clone(self)))
+    }
+}
+
+struct ConnectionPermit(Arc<ConnectionGate>);
+
+impl Drop for ConnectionPermit {
+    fn drop(&mut self) {
+        self.0.active.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
 fn main() {
     if let Err(error) = run() {
         eprintln!("layerx-reference-ramp refused startup: {error}");
@@ -165,6 +198,7 @@ fn run() -> Result<(), String> {
         .map_err(|error| format!("start reconciler: {error}"))?;
     let listener = TcpListener::bind(&config.listen)
         .map_err(|error| format!("bind {}: {error}", config.listen))?;
+    let connection_gate = Arc::new(ConnectionGate::new(MAX_CONNECTIONS));
     println!("{}", platform_ramp_toolkit());
     println!("{EXTERNAL_CUSTODY_LABEL}");
     for stream in listener.incoming() {
@@ -175,11 +209,18 @@ fn run() -> Result<(), String> {
                 continue;
             }
         };
+        let Some(permit) = connection_gate.try_acquire() else {
+            eprintln!("ramp connection limit reached");
+            continue;
+        };
         let state = Arc::clone(&state);
         let acceptor = acceptor.clone();
         if thread::Builder::new()
             .name("ramp-request".to_owned())
-            .spawn(move || serve(stream, &acceptor, &state))
+            .spawn(move || {
+                let _permit = permit;
+                serve(stream, &acceptor, &state);
+            })
             .is_err()
         {
             eprintln!("ramp request worker unavailable");
@@ -955,4 +996,32 @@ fn map_error(error_value: RampError) -> Response {
 #[must_use]
 pub const fn platform_reference_ramp() -> &'static str {
     "receipt-backed-reference-market-maker"
+}
+
+#[cfg(test)]
+mod boundary_tests {
+    use std::sync::atomic::Ordering;
+    use std::sync::Arc;
+
+    use super::ConnectionGate;
+
+    #[test]
+    fn connection_gate_refuses_work_above_the_bound_and_releases_capacity() {
+        let gate = Arc::new(ConnectionGate::new(2));
+        let Some(first) = gate.try_acquire() else {
+            panic!("first permit was refused");
+        };
+        let Some(second) = gate.try_acquire() else {
+            panic!("second permit was refused");
+        };
+        assert!(gate.try_acquire().is_none());
+        drop(first);
+        let Some(replacement) = gate.try_acquire() else {
+            panic!("released capacity was not reusable");
+        };
+        assert_eq!(gate.active.load(Ordering::Acquire), 2);
+        drop(second);
+        drop(replacement);
+        assert_eq!(gate.active.load(Ordering::Acquire), 0);
+    }
 }
