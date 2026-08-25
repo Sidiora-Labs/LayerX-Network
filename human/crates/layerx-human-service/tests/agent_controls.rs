@@ -379,9 +379,12 @@ impl AgentCreationContract for RealAgentLayer {
         let mut pipeline = ReceiptPipeline {
             receipt: CoreBudgetReceipt {
                 object_id: action.action_key,
-                canonical_receipt: receipt.receipt_bytes.clone(),
-                verified: true,
-                executed: true,
+                evidence: support::raw_receipt_evidence(
+                    receipt.receipt_bytes.clone(),
+                    receipt.authorized_batch,
+                    11,
+                    &SigningKey::from_bytes(&[0x84; 32]),
+                ),
             },
         };
         create_protocol_budget(

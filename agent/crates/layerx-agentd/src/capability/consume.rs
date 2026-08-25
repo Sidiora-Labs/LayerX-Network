@@ -3,6 +3,8 @@
 use std::collections::BTreeMap;
 use std::sync::Mutex;
 
+use crate::protocol_evidence::{verify_receipt, RawReceiptEvidence};
+
 /// One held amount awaiting a verified terminal receipt.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Reservation {
@@ -46,13 +48,13 @@ impl Ceiling {
     /// Returns `UnverifiedReceipt` for any unverified receipt, `Overflow` when the
     /// executed amounts do not sum, and `Exceeded` when the rebuilt total passes the
     /// ceiling.
-    pub fn rebuild(maximum: u128, receipts: &[VerifiedReceipt]) -> Result<Self, CeilingError> {
+    pub fn rebuild(maximum: u128, receipts: &[ReceiptApplication]) -> Result<Self, CeilingError> {
         let mut consumed = 0_u128;
         for receipt in receipts {
-            if !receipt.verified {
-                return Err(CeilingError::UnverifiedReceipt);
-            }
-            if let ReceiptOutcome::Executed(amount) = receipt.outcome {
+            let verified = verify_receipt(&receipt.evidence)
+                .map_err(|_| CeilingError::UnverifiedReceipt)?;
+            if verified.result_code() == 0 {
+                let amount = verified.amount();
                 consumed = consumed.checked_add(amount).ok_or(CeilingError::Overflow)?;
             }
         }
@@ -77,28 +79,48 @@ impl Ceiling {
     /// when no held reservation matches, `AmountMismatch` when the executed amount
     /// differs from the held amount, `Overflow` when consumption does not sum, and
     /// `Poisoned` when the state lock is poisoned.
-    pub fn apply_receipt(&self, receipt: &VerifiedReceipt) -> Result<(), CeilingError> {
-        if !receipt.verified {
-            return Err(CeilingError::UnverifiedReceipt);
-        }
+    pub fn apply_receipt(&self, receipt: &ReceiptApplication) -> Result<(), CeilingError> {
+        let verified = verify_receipt(&receipt.evidence)
+            .map_err(|_| CeilingError::UnverifiedReceipt)?;
         let mut state = self.state.lock().map_err(|_| CeilingError::Poisoned)?;
         let reservation = state
             .reservations
-            .remove(&receipt.reservation_id)
+            .get(&receipt.reservation_id)
             .ok_or(CeilingError::MissingReservation)?;
-        match receipt.outcome {
-            ReceiptOutcome::Executed(amount) => {
-                if amount != reservation.amount {
-                    state.reservations.insert(reservation.id, reservation);
-                    return Err(CeilingError::AmountMismatch);
-                }
-                state.consumed = state
-                    .consumed
-                    .checked_add(amount)
-                    .ok_or(CeilingError::Overflow)?;
+        let updated_consumed = if verified.result_code() == 0 {
+            let amount = verified.amount();
+            if amount != reservation.amount {
+                return Err(CeilingError::AmountMismatch);
             }
-            ReceiptOutcome::Failed => {}
+            state
+                .consumed
+                .checked_add(amount)
+                .ok_or(CeilingError::Overflow)?
+        } else {
+            state.consumed
+        };
+        state.reservations.remove(&receipt.reservation_id);
+        state.consumed = updated_consumed;
+        Ok(())
+    }
+
+    /// Cancels a reservation only while its activity is known not to have been submitted.
+    ///
+    /// # Errors
+    ///
+    /// Returns `MissingReservation` when the identifier is not held, `Indeterminate` when the
+    /// reservation has crossed into unknown outcome state, and `Poisoned` for a poisoned lock.
+    pub fn cancel_unsubmitted(&self, id: [u8; 32]) -> Result<(), CeilingError> {
+        let mut state = self.state.lock().map_err(|_| CeilingError::Poisoned)?;
+        if state
+            .reservations
+            .get(&id)
+            .ok_or(CeilingError::MissingReservation)?
+            .unknown
+        {
+            return Err(CeilingError::Indeterminate);
         }
+        state.reservations.remove(&id);
         Ok(())
     }
 
@@ -155,19 +177,11 @@ impl Ceiling {
     }
 }
 
-/// Persisted receipt outcome.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ReceiptOutcome {
-    Executed(u128),
-    Failed,
-}
-
-/// Receipt record with independent verification status.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct VerifiedReceipt {
+/// Raw boundary receipt paired with the reservation it is expected to settle.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReceiptApplication {
     pub reservation_id: [u8; 32],
-    pub outcome: ReceiptOutcome,
-    pub verified: bool,
+    pub evidence: RawReceiptEvidence,
 }
 
 /// Atomic ceiling snapshot.
@@ -189,6 +203,7 @@ pub enum CeilingError {
     Unreconciled,
     UnverifiedReceipt,
     MissingReservation,
+    Indeterminate,
     AmountMismatch,
     Overflow,
     Poisoned,

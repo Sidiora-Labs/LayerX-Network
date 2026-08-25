@@ -1,7 +1,7 @@
 //! Fail-closed restart recovery for durable submissions and spend accounting.
 
 use crate::budget::{self, PersistedReceipt, ProtocolBudgetState, RestartAccounting, RestartError};
-use crate::capability::{self, Ceiling, CeilingError, VerifiedReceipt as CeilingReceipt};
+use crate::capability::{self, Ceiling, CeilingError, ReceiptApplication as CeilingReceipt};
 use crate::store::{ObjectKind, Store, StoreError, TenantId};
 
 use super::{Outbox, OutboxError, SubmissionState};
@@ -90,7 +90,7 @@ pub fn recover(
         tenant,
         inputs.unknown_budget_ids,
         inputs.budget_receipts,
-        inputs.protocol_budget,
+        inputs.protocol_budget.clone(),
     )
     .map_err(RecoveryError::Budget)?;
     let ceiling = Ceiling::rebuild(inputs.ceiling_maximum, inputs.ceiling_receipts)

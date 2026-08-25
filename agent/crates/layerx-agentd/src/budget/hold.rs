@@ -1,7 +1,9 @@
 //! Durable unknown reservations and fail-closed restart accounting.
 
+use crate::protocol_evidence::{verify_receipt, RawReceiptEvidence};
 use crate::store::{ObjectKind, Store, StoreError, TenantId, TenantKey};
 
+use super::accounting::verify_protocol_budget_state;
 use super::ProtocolBudgetState;
 
 /// Reservation kept unavailable until a receipt resolves it.
@@ -21,12 +23,9 @@ pub enum UnknownOutcome {
 }
 
 /// Persisted verified receipt used to rebuild consumed accounting.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PersistedReceipt {
-    pub id: [u8; 32],
-    pub amount: u128,
-    pub executed: bool,
-    pub verified: bool,
+    pub evidence: RawReceiptEvidence,
 }
 
 /// Operator-visible restart accounting.
@@ -87,17 +86,21 @@ pub(crate) fn rebuild_accounting(
     receipts: &[PersistedReceipt],
     protocol: ProtocolBudgetState,
 ) -> Result<RestartAccounting, RestartError> {
-    if !protocol.verified {
-        return Err(RestartError::UnverifiedProtocol);
-    }
+    let protocol = verify_protocol_budget_state(&protocol)
+        .map_err(|_| RestartError::UnverifiedProtocol)?;
     let mut receipt_consumed = 0_u128;
     for receipt in receipts {
-        if !receipt.verified {
+        let verified = verify_receipt(&receipt.evidence)
+            .map_err(|_| RestartError::UnverifiedReceipt)?;
+        if verified.global_sequence() < protocol.window_start_sequence
+            || verified.global_sequence() > protocol.window_end_sequence
+            || verified.global_sequence() > protocol.observed_head_sequence
+        {
             return Err(RestartError::UnverifiedReceipt);
         }
-        if receipt.executed {
+        if verified.result_code() == 0 {
             receipt_consumed = receipt_consumed
-                .checked_add(receipt.amount)
+                .checked_add(verified.amount())
                 .ok_or(RestartError::Arithmetic)?;
         }
     }

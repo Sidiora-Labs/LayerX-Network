@@ -57,12 +57,12 @@ fn root(label: &str) -> std::path::PathBuf {
 fn creation_returns_protocol_object_and_verified_receipt() {
     let path = root("success");
     let mut store = Store::open(&path).unwrap_or_else(|error| panic!("store: {error}"));
+    let evidence = support::raw_receipt([1; 32], 0, 25);
+    let expected_receipt = evidence.canonical_receipt().to_vec();
     let mut pipeline = SignedActivityPipeline {
         result: Ok(CoreBudgetReceipt {
             object_id: [9; 32],
-            canonical_receipt: b"core-receipt".to_vec(),
-            verified: true,
-            executed: true,
+            evidence,
         }),
         submitted_bytes: Vec::new(),
     };
@@ -70,7 +70,7 @@ fn creation_returns_protocol_object_and_verified_receipt() {
         .unwrap_or_else(|error| panic!("creation: {error:?}"));
     assert_eq!(pipeline.submitted_bytes, request().canonical_activity);
     assert_eq!(budget.object_id, [9; 32]);
-    assert_eq!(budget.receipt_bytes, b"core-receipt");
+    assert_eq!(budget.receipt_bytes, expected_receipt);
     assert_eq!(budget.enforcement, "protocol-enforced");
     let _ = fs::remove_dir_all(path);
 }
@@ -94,6 +94,30 @@ fn failed_creation_leaves_no_daemon_budget_record() {
 }
 
 #[test]
+fn unverifiable_creation_receipt_leaves_no_protocol_budget_cache() {
+    let path = root("unverified");
+    let mut store = Store::open(&path).unwrap_or_else(|error| panic!("store: {error}"));
+    let raw = support::raw_receipt([1; 32], 0, 25);
+    let mut corrupt = raw.canonical_receipt().to_vec();
+    corrupt[0] ^= 1;
+    let mut pipeline = SignedActivityPipeline {
+        result: Ok(CoreBudgetReceipt {
+            object_id: [9; 32],
+            evidence: support::corrupt_raw_receipt(&raw, corrupt),
+        }),
+        submitted_bytes: Vec::new(),
+    };
+    assert!(matches!(
+        create_protocol_budget(&mut store, &request(), &mut pipeline),
+        Err(BudgetCreationError::UnverifiedReceipt)
+    ));
+    let absent = TenantKey::new(tenant(), ObjectKind::Budget, [9; 32].to_vec())
+        .unwrap_or_else(|error| panic!("key: {error}"));
+    assert!(store.get(&absent).is_none());
+    let _ = fs::remove_dir_all(path);
+}
+
+#[test]
 fn local_limit_is_never_described_as_protocol_equivalent() {
     let limit = LocalLimit::new(tenant(), [4; 32], [2; 32], 500);
     assert_eq!(limit.enforcement, "daemon-enforced");
@@ -102,3 +126,4 @@ fn local_limit_is_never_described_as_protocol_equivalent() {
         .contains("bypassing layerx-agentd bypasses"));
     assert!(!limit.bypass_statement.contains("equivalent"));
 }
+mod support;

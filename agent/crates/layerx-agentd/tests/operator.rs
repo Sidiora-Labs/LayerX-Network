@@ -8,7 +8,7 @@ use layerx_agentd::admin::{
 };
 use layerx_agentd::audit::verify_chain;
 use layerx_agentd::budget::{
-    divergence_alert, LocalAccounting, ProtocolBudgetState, VerifiedSpendReceipt,
+    divergence_alert, LocalAccounting, ProtocolBudgetState, SpendReceiptEvidence,
 };
 use layerx_agentd::outbox::{Outbox, SubmissionState};
 use layerx_agentd::store::{ObjectKind, Store, TenantKey};
@@ -109,18 +109,11 @@ fn inspections_and_verified_budget_reconciliation_are_audited_before_action() {
         last_receipt: None,
     };
     let protocol = ProtocolBudgetState {
-        consumed: 7,
-        remaining: 93,
-        window_start_sequence: 80,
-        window_end_sequence: 120,
-        observed_head_sequence: 99,
-        verified: true,
+        evidence: support::raw_budget_state(7, 93, 80, 120, 99),
     };
-    let receipts = [VerifiedSpendReceipt {
-        receipt_id: [0x44; 32],
-        amount: 7,
+    let receipts = [SpendReceiptEvidence {
         window_start_sequence: 80,
-        verified: true,
+        evidence: support::raw_receipt_at([0x44; 32], 0, 7, 90),
     }];
     let reconciled = surface
         .reconcile_budget_divergence(&context(2), [2; 32], &mut local, protocol, &receipts)

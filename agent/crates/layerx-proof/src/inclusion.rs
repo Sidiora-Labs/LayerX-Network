@@ -33,6 +33,12 @@ impl SequencerAuthorization {
             last_batch_number,
         }
     }
+
+    /// Returns the authorised sequencer verification key.
+    #[must_use]
+    pub const fn public_key(&self) -> [u8; 32] {
+        self.public_key
+    }
 }
 
 /// Exact failure class for header and inclusion verification.

@@ -1,23 +1,22 @@
 //! Receipt- and protocol-state-authoritative budget reconciliation.
 
-/// Core-produced budget state for one deterministic window.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+use crate::protocol_evidence::{
+    verify_receipt, verify_state_evidence, RawReceiptEvidence, RawStateEvidence,
+};
+
+const BUDGET_STATE_MAGIC: &[u8; 4] = b"LXBS";
+
+/// Raw proof-bearing protocol budget state for one deterministic window.
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProtocolBudgetState {
-    pub consumed: u128,
-    pub remaining: u128,
-    pub window_start_sequence: u64,
-    pub window_end_sequence: u64,
-    pub observed_head_sequence: u64,
-    pub verified: bool,
+    pub evidence: RawStateEvidence,
 }
 
-/// Persisted receipt applied to the local cache.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct VerifiedSpendReceipt {
-    pub receipt_id: [u8; 32],
-    pub amount: u128,
+/// Raw receipt evidence applied to one declared protocol budget window.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SpendReceiptEvidence {
     pub window_start_sequence: u64,
-    pub verified: bool,
+    pub evidence: RawReceiptEvidence,
 }
 
 /// Rebuildable local cache, never authority.
@@ -54,24 +53,29 @@ pub enum ReconcileError {
 pub(crate) fn reconcile_state(
     local: &mut LocalAccounting,
     protocol: ProtocolBudgetState,
-    receipts: &[VerifiedSpendReceipt],
+    receipts: &[SpendReceiptEvidence],
 ) -> Result<ReconciliationState, ReconcileError> {
-    if !protocol.verified {
-        return Err(ReconcileError::UnverifiedProtocolState);
-    }
+    let protocol = verify_protocol_budget_state(&protocol)?;
     let mut receipt_total = 0_u128;
     let mut last_receipt = None;
     for receipt in receipts {
-        if !receipt.verified {
-            return Err(ReconcileError::UnverifiedReceipt);
-        }
+        let verified = verify_receipt(&receipt.evidence)
+            .map_err(|_| ReconcileError::UnverifiedReceipt)?;
         if receipt.window_start_sequence != protocol.window_start_sequence {
             return Err(ReconcileError::ReceiptFromOtherWindow);
         }
-        receipt_total = receipt_total
-            .checked_add(receipt.amount)
-            .ok_or(ReconcileError::Arithmetic)?;
-        last_receipt = Some(receipt.receipt_id);
+        if verified.global_sequence() < protocol.window_start_sequence
+            || verified.global_sequence() > protocol.window_end_sequence
+            || verified.global_sequence() > protocol.observed_head_sequence
+        {
+            return Err(ReconcileError::ReceiptFromOtherWindow);
+        }
+        if verified.result_code() == 0 {
+            receipt_total = receipt_total
+                .checked_add(verified.amount())
+                .ok_or(ReconcileError::Arithmetic)?;
+            last_receipt = Some(verified.receipt_ref());
+        }
     }
     if receipt_total > protocol.consumed {
         return Err(ReconcileError::Arithmetic);
@@ -98,5 +102,68 @@ pub(crate) fn reconcile_state(
         window_end_sequence: protocol.window_end_sequence,
         remaining: protocol.remaining,
         observed_head_sequence: protocol.observed_head_sequence,
+    })
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct DecodedBudgetState {
+    pub(crate) consumed: u128,
+    pub(crate) remaining: u128,
+    pub(crate) window_start_sequence: u64,
+    pub(crate) window_end_sequence: u64,
+    pub(crate) observed_head_sequence: u64,
+}
+
+pub(crate) fn verify_protocol_budget_state(
+    state: &ProtocolBudgetState,
+) -> Result<DecodedBudgetState, ReconcileError> {
+    let verified = verify_state_evidence(&state.evidence)
+        .map_err(|_| ReconcileError::UnverifiedProtocolState)?;
+    decode_budget_state(
+        verified.canonical_state(),
+        verified.observed_head_sequence(),
+    )
+}
+
+fn decode_budget_state(
+    bytes: &[u8],
+    observed_head_sequence: u64,
+) -> Result<DecodedBudgetState, ReconcileError> {
+    if bytes.len() != 52 || &bytes[..4] != BUDGET_STATE_MAGIC {
+        return Err(ReconcileError::UnverifiedProtocolState);
+    }
+    let consumed = u128::from_be_bytes(
+        bytes[4..20]
+            .try_into()
+            .map_err(|_| ReconcileError::UnverifiedProtocolState)?,
+    );
+    let remaining = u128::from_be_bytes(
+        bytes[20..36]
+            .try_into()
+            .map_err(|_| ReconcileError::UnverifiedProtocolState)?,
+    );
+    let window_start_sequence = u64::from_be_bytes(
+        bytes[36..44]
+            .try_into()
+            .map_err(|_| ReconcileError::UnverifiedProtocolState)?,
+    );
+    let window_end_sequence = u64::from_be_bytes(
+        bytes[44..52]
+            .try_into()
+            .map_err(|_| ReconcileError::UnverifiedProtocolState)?,
+    );
+    if window_start_sequence == 0
+        || window_end_sequence < window_start_sequence
+        || observed_head_sequence < window_start_sequence
+        || consumed.checked_add(remaining).is_none()
+    {
+        return Err(ReconcileError::UnverifiedProtocolState);
+    }
+    Ok(DecodedBudgetState {
+        consumed,
+        remaining,
+        window_start_sequence,
+        window_end_sequence,
+        observed_head_sequence,
     })
 }

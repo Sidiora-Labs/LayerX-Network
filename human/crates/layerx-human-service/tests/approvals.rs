@@ -135,12 +135,7 @@ impl ApprovalBoundary for AgentdBoundary<'_> {
         let state = reconcile(
             &mut self.local_budget,
             ProtocolBudgetState {
-                consumed: 25,
-                remaining: 975,
-                window_start_sequence: 1,
-                window_end_sequence: 1_000,
-                observed_head_sequence: at_sequence,
-                verified: true,
+                evidence: support::raw_budget_state(25, 975, 1, 1_000, at_sequence),
             },
             &[],
         )

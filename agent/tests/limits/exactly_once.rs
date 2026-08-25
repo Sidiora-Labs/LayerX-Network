@@ -22,7 +22,8 @@ use layerx_agentd::limits::{
     cancel, shed, CounterLedger, LimitConfig, LimitId, LimitScope, Quota, RateLimiter, RateRequest,
     Refusal,
 };
-use layerx_agentd::outbox::{Outbox, ReceiptEvidence, SubmissionState};
+use layerx_agentd::outbox::{Outbox, SubmissionState};
+use layerx_agentd::protocol_evidence::{verify_receipt, VerifiedReceiptEvidence};
 use layerx_agentd::prepare::{
     prepare_activity, CorePreparationBoundary, CorePreparationState, CoreStateError,
     PreparationDefaults, PrepareRequest,
@@ -39,7 +40,6 @@ use layerx_wire::encode::Encoder;
 
 static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(1);
 const INTENT: [u8; 32] = [0x17; 32];
-const RECEIPT: [u8; 32] = [0x91; 32];
 
 type AttemptRecord = ([u8; 32], Vec<u8>, bool);
 type AttemptHistory = Mutex<Vec<AttemptRecord>>;
@@ -186,6 +186,13 @@ pub fn agent_limits_exactly_once_suite() -> Result<SuiteReport, SuiteFailure> {
 
     let (mut durable, mut outbox, idempotency) =
         restore_after_process_loss(&workspace, &tenant, retention, &quota, &limiter, &history)?;
+    let activity_id = outbox
+        .status(INTENT)
+        .map(|status| status.activity_id)
+        .ok_or_else(|| failure("authoritative outbox activity is missing", &history))?;
+    let receipt = verify_receipt(&agentd_support::raw_receipt(activity_id, 0, 25))
+        .map_err(|error| failure(format!("receipt verification: {error:?}"), &history))?;
+    let receipt_ref = receipt.receipt_ref();
 
     let economic_effects = Arc::new(AtomicUsize::new(0));
     let convergence = converge_concurrent_duplicates(
@@ -193,10 +200,11 @@ pub fn agent_limits_exactly_once_suite() -> Result<SuiteReport, SuiteFailure> {
         &exact_signed_bytes,
         &economic_effects,
         &initial_attempts,
+        receipt_ref,
         &history,
     )?;
 
-    settle_from_authoritative_receipt(&mut outbox, &mut durable, &mut history)?;
+    settle_from_authoritative_receipt(&mut outbox, &mut durable, receipt, &mut history)?;
 
     drop(idempotency);
     refuse_post_restart_duplicate(
@@ -528,6 +536,7 @@ fn converge_concurrent_duplicates(
     exact_signed_bytes: &[u8],
     economic_effects: &Arc<AtomicUsize>,
     initial_attempts: &Arc<AttemptHistory>,
+    receipt_ref: [u8; 32],
     history: &[String],
 ) -> Result<DuplicateConvergence, SuiteFailure> {
     let successful_attempts: Arc<AttemptHistory> = Arc::new(Mutex::new(Vec::new()));
@@ -543,7 +552,7 @@ fn converge_concurrent_duplicates(
                 effects.fetch_add(1, Ordering::SeqCst);
                 Ok(EconomicResult {
                     response_bytes: b"executed".to_vec(),
-                    receipt_ref: Some(RECEIPT),
+                    receipt_ref: Some(receipt_ref),
                 })
             })
         }));
@@ -591,7 +600,7 @@ fn converge_concurrent_duplicates(
         })
         .collect::<BTreeSet<_>>();
     ensure(
-        receipts == BTreeSet::from([RECEIPT]),
+        receipts == BTreeSet::from([receipt_ref]),
         "duplicates did not converge on one authoritative receipt",
         history,
     )?;
@@ -604,6 +613,7 @@ fn converge_concurrent_duplicates(
 fn settle_from_authoritative_receipt(
     outbox: &mut Outbox,
     durable: &mut Store,
+    evidence: VerifiedReceiptEvidence,
     history: &mut Vec<String>,
 ) -> Result<(), SuiteFailure> {
     step(
@@ -612,10 +622,7 @@ fn settle_from_authoritative_receipt(
             INTENT,
             SubmissionState::Executed,
             "verified receipt returned for original idempotency key",
-            Some(ReceiptEvidence {
-                receipt_ref: RECEIPT,
-                verified: true,
-            }),
+            Some(evidence),
         ),
         "settle outbox from authoritative receipt",
         history,
@@ -943,3 +950,5 @@ fn send_payload() -> Result<Vec<u8>, SuiteFailure> {
         .map_err(|error| failure(format!("payload version: {error:?}"), &[]))?;
     Ok(encoder.finish())
 }
+#[path = "../../crates/layerx-agentd/tests/support/mod.rs"]
+mod agentd_support;

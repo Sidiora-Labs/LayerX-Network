@@ -11,8 +11,9 @@ use layerx_agentd::budget::{
 use layerx_agentd::capability::{consume, Ceiling};
 use layerx_agentd::outbox::{
     resolve_unknown, Outbox, ReceiptLookup, ResendObservation, ResolutionObservation,
-    ResolvedReceipt, ResolvedReceiptOutcome, SubmissionState, UnknownBoundaryError,
+    SubmissionState, UnknownBoundaryError,
 };
+use layerx_agentd::protocol_evidence::RawReceiptEvidence;
 use layerx_agentd::prepare::{
     prepare_activity, CorePreparationBoundary, CorePreparationState, CoreStateError,
     PreparationDefaults, PrepareRequest,
@@ -55,22 +56,22 @@ impl CorePreparationBoundary for RecordedCore {
 
 #[derive(Default)]
 struct FaultInjectedNode {
-    receipts: BTreeMap<[u8; 32], ResolvedReceipt>,
+    receipts: BTreeMap<[u8; 32], RawReceiptEvidence>,
     transmitted: Vec<([u8; 32], Vec<u8>)>,
     lookup_unavailable: bool,
     lose_resend_response: bool,
-    receipt_on_resend: Option<ResolvedReceipt>,
+    receipt_on_resend: Option<RawReceiptEvidence>,
 }
 
 impl ReceiptLookup for FaultInjectedNode {
     fn receipt_by_idempotency_key(
         &mut self,
         idempotency_key: [u8; 32],
-    ) -> Result<Option<ResolvedReceipt>, UnknownBoundaryError> {
+    ) -> Result<Option<RawReceiptEvidence>, UnknownBoundaryError> {
         if self.lookup_unavailable {
             return Err(UnknownBoundaryError::Unavailable);
         }
-        Ok(self.receipts.get(&idempotency_key).copied())
+        Ok(self.receipts.get(&idempotency_key).cloned())
     }
 
     fn resend_exact(
@@ -245,12 +246,15 @@ fn unknown_outbox(root: &std::path::Path, id: u8) -> (Store, Outbox, Vec<u8>) {
     (store, outbox, exact)
 }
 
-fn receipt(byte: u8, outcome: ResolvedReceiptOutcome) -> ResolvedReceipt {
-    ResolvedReceipt {
-        outcome,
-        receipt_ref: [byte; 32],
-        verified: true,
-    }
+fn receipt(activity_id: [u8; 32], result_code: i32) -> RawReceiptEvidence {
+    support::raw_receipt(activity_id, result_code, 25)
+}
+
+fn activity_id(outbox: &Outbox, id: u8) -> [u8; 32] {
+    outbox
+        .status([id; 32])
+        .map(|status| status.activity_id)
+        .unwrap_or_else(|| panic!("outbox activity missing"))
 }
 
 #[test]
@@ -258,8 +262,7 @@ fn acknowledgement_loss_is_resolved_only_by_the_existing_receipt() {
     let root = directory("ack-loss");
     let (mut store, mut outbox, _) = unknown_outbox(&root, 1);
     let mut node = FaultInjectedNode::default();
-    node.receipts
-        .insert([1; 32], receipt(0x91, ResolvedReceiptOutcome::Executed));
+    node.receipts.insert([1; 32], receipt(activity_id(&outbox, 1), 0));
 
     let result = resolve_unknown(&mut outbox, &mut store, [1; 32], 10_000, &mut node)
         .unwrap_or_else(|error| panic!("resolve: {error:?}"));
@@ -301,9 +304,10 @@ fn lost_resend_response_keeps_budget_and_ceiling_held_and_reuses_exact_bytes() {
         .mark_unknown([2; 32])
         .unwrap_or_else(|error| panic!("ceiling unknown: {error:?}"));
 
+    let late_receipt = receipt(activity_id(&outbox, 2), 0);
     let mut node = FaultInjectedNode {
         lose_resend_response: true,
-        receipt_on_resend: Some(receipt(0x92, ResolvedReceiptOutcome::Executed)),
+        receipt_on_resend: Some(late_receipt),
         ..FaultInjectedNode::default()
     };
     let first = resolve_unknown(&mut outbox, &mut store, [2; 32], 20_000, &mut node)
@@ -358,7 +362,7 @@ fn restart_preserves_backoff_age_and_a_receipt_can_appear_minutes_later() {
     assert_eq!(deferred.age.attempt_count, 1);
 
     node.receipts
-        .insert([3; 32], receipt(0x93, ResolvedReceiptOutcome::Failed));
+        .insert([3; 32], receipt(activity_id(&restored, 3), 5));
     let later = resolve_unknown(&mut restored, &mut reopened, [3; 32], 210_000, &mut node)
         .unwrap_or_else(|error| panic!("later: {error:?}"));
     assert_eq!(later.state, SubmissionState::Failed);
@@ -382,14 +386,11 @@ fn lookup_failure_and_unverified_receipt_never_infer_a_terminal_outcome() {
     assert!(node.transmitted.is_empty());
 
     node.lookup_unavailable = false;
-    node.receipts.insert(
-        [4; 32],
-        ResolvedReceipt {
-            outcome: ResolvedReceiptOutcome::Executed,
-            receipt_ref: [0x94; 32],
-            verified: false,
-        },
-    );
+    let raw = support::raw_receipt(activity_id(&outbox, 4), 0, 25);
+    let mut corrupt = raw.canonical_receipt().to_vec();
+    corrupt[0] ^= 1;
+    node.receipts
+        .insert([4; 32], support::corrupt_raw_receipt(&raw, corrupt));
     let second = resolve_unknown(
         &mut outbox,
         &mut store,
@@ -402,3 +403,4 @@ fn lookup_failure_and_unverified_receipt_never_infer_a_terminal_outcome() {
     assert_eq!(second.observation, ResolutionObservation::UnverifiedReceipt);
     let _ = std::fs::remove_dir_all(root);
 }
+mod support;

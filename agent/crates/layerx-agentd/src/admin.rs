@@ -9,7 +9,7 @@ use sha2::{Digest, Sha256};
 use crate::audit::{AuditError, Log};
 use crate::budget::{
     self, BudgetDivergenceAlert, LocalAccounting, ProtocolBudgetState, ReconcileError,
-    ReconciliationState, VerifiedSpendReceipt,
+    ReconciliationState, SpendReceiptEvidence,
 };
 use crate::events::subscription::{Continuity, Store as SubscriptionStore, SubscriptionError};
 use crate::finality::{self, FinalityError, VerificationProgress, WaitResult};
@@ -450,7 +450,7 @@ impl Surface {
         budget_id: [u8; 32],
         local: &mut LocalAccounting,
         protocol: ProtocolBudgetState,
-        receipts: &[VerifiedSpendReceipt],
+        receipts: &[SpendReceiptEvidence],
     ) -> Result<ReconciliationState, AdminError> {
         self.dispatch(
             context,

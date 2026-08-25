@@ -10,12 +10,7 @@ static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(1);
 
 fn protocol(consumed: u128) -> ProtocolBudgetState {
     ProtocolBudgetState {
-        consumed,
-        remaining: 1_000 - consumed,
-        window_start_sequence: 1,
-        window_end_sequence: 100,
-        observed_head_sequence: 50,
-        verified: true,
+        evidence: support::raw_budget_state(consumed, 1_000 - consumed, 1, 100, 50),
     }
 }
 
@@ -64,10 +59,7 @@ fn writes_are_refused_until_receipts_and_protocol_state_reconcile() {
         &tenant,
         &[],
         &[PersistedReceipt {
-            id: [2; 32],
-            amount: 100,
-            executed: true,
-            verified: true,
+            evidence: support::raw_receipt([2; 32], 0, 100),
         }],
         protocol(200),
     )
@@ -80,3 +72,4 @@ fn writes_are_refused_until_receipts_and_protocol_state_reconcile() {
     ));
     let _ = fs::remove_dir_all(root);
 }
+mod support;

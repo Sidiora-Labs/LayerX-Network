@@ -246,12 +246,13 @@ fn verified_budget(remaining: u128, observed_at_sequence: u64) -> VerifiedBudget
     let state = reconcile(
         &mut local,
         ProtocolBudgetState {
-            consumed: 25,
-            remaining,
-            window_start_sequence: 1,
-            window_end_sequence: 10_000,
-            observed_head_sequence: observed_at_sequence,
-            verified: true,
+            evidence: support::raw_budget_state(
+                25,
+                remaining,
+                1,
+                10_000,
+                observed_at_sequence,
+            ),
         },
         &[],
     )

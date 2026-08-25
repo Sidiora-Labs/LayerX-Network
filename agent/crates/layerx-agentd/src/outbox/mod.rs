@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 
+use crate::protocol_evidence::VerifiedReceiptEvidence;
 use crate::sign::VerifiedSubmission;
 use crate::store::{ObjectKind, Store, StoreError, TenantId, TenantKey};
 
@@ -11,9 +12,8 @@ mod resolution;
 mod restart;
 
 pub use resolution::{
-    resolve_unknown, ReceiptLookup, ResendObservation, ResolutionObservation, ResolvedReceipt,
-    ResolvedReceiptOutcome, UnknownAge, UnknownBoundaryError, UnknownResolution,
-    UnknownResolutionError,
+    resolve_unknown, ReceiptLookup, ResendObservation, ResolutionObservation, UnknownAge,
+    UnknownBoundaryError, UnknownResolution, UnknownResolutionError,
 };
 pub use restart::{
     recover, RecoveredOutbox, RecoveryError, RecoveryInputs, UnknownCeilingReservation,
@@ -76,8 +76,14 @@ impl SubmissionState {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ReceiptEvidence {
-    pub receipt_ref: [u8; 32],
-    pub verified: bool,
+    receipt_ref: [u8; 32],
+}
+
+impl ReceiptEvidence {
+    #[must_use]
+    pub const fn receipt_ref(self) -> [u8; 32] {
+        self.receipt_ref
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -224,15 +230,15 @@ impl Outbox {
     ///
     /// Returns `EmptyCause` for a blank cause, `NotFound` for an untracked submission,
     /// `InvalidTransition` for a move `legal_transition` forbids, `SuccessWithoutVerifiedReceipt`
-    /// for `Executed` without verified evidence, and `Corrupt` or `Store` when the updated record
-    /// cannot be encoded or persisted.
+    /// for `Executed` without verified evidence, `ReceiptMismatch` for evidence naming another
+    /// activity, and `Corrupt` or `Store` when the updated record cannot be encoded or persisted.
     pub fn transition(
         &mut self,
         store: &mut Store,
         submission_id: [u8; 32],
         to: SubmissionState,
         cause: impl Into<String>,
-        receipt: Option<ReceiptEvidence>,
+        receipt: Option<VerifiedReceiptEvidence>,
     ) -> Result<SubmissionStatus, OutboxError> {
         let cause = cause.into();
         if cause.is_empty() {
@@ -247,9 +253,18 @@ impl Outbox {
         if !legal_transition(from, to) {
             return Err(OutboxError::InvalidTransition { from, to });
         }
-        if to == SubmissionState::Executed && !receipt.is_some_and(|evidence| evidence.verified) {
+        if to == SubmissionState::Executed && receipt.is_none() {
             return Err(OutboxError::SuccessWithoutVerifiedReceipt);
         }
+        if receipt
+            .as_ref()
+            .is_some_and(|evidence| evidence.activity_id() != current.status.activity_id)
+        {
+            return Err(OutboxError::ReceiptMismatch);
+        }
+        let receipt = receipt.map(|evidence| ReceiptEvidence {
+            receipt_ref: evidence.receipt_ref(),
+        });
         let mut updated = current;
         updated.status.state = to;
         updated.status.evidence = receipt;
@@ -290,6 +305,7 @@ pub enum OutboxError {
     EmptyCause,
     Corrupt,
     SuccessWithoutVerifiedReceipt,
+    ReceiptMismatch,
     InvalidTransition {
         from: SubmissionState,
         to: SubmissionState,
@@ -319,7 +335,7 @@ fn legal_transition(from: SubmissionState, to: SubmissionState) -> bool {
 fn encode_record(record: &OutboxRecord) -> Result<Vec<u8>, OutboxError> {
     let mut bytes = Vec::new();
     bytes.extend_from_slice(b"LXOB");
-    bytes.push(1);
+    bytes.push(2);
     bytes.extend_from_slice(&record.status.submission_id);
     bytes.push(record.status.state.code());
     bytes.extend_from_slice(&record.status.activity_id);
@@ -336,7 +352,7 @@ fn encode_record(record: &OutboxRecord) -> Result<Vec<u8>, OutboxError> {
 
 fn decode_record(bytes: &[u8], tenant: TenantId) -> Result<OutboxRecord, OutboxError> {
     let mut decoder = RecordDecoder { bytes, offset: 0 };
-    if decoder.take(4)? != b"LXOB" || decoder.u8()? != 1 {
+    if decoder.take(4)? != b"LXOB" || decoder.u8()? != 2 {
         return Err(OutboxError::Corrupt);
     }
     let submission_id = decoder.fixed()?;
@@ -382,7 +398,6 @@ fn encode_receipt(bytes: &mut Vec<u8>, receipt: Option<ReceiptEvidence>) {
         Some(receipt) => {
             bytes.push(1);
             bytes.extend_from_slice(&receipt.receipt_ref);
-            bytes.push(u8::from(receipt.verified));
         }
         None => bytes.push(0),
     }
@@ -448,11 +463,6 @@ impl<'a> RecordDecoder<'a> {
             0 => Ok(None),
             1 => Ok(Some(ReceiptEvidence {
                 receipt_ref: self.fixed()?,
-                verified: match self.u8()? {
-                    0 => false,
-                    1 => true,
-                    _ => return Err(OutboxError::Corrupt),
-                },
             })),
             _ => Err(OutboxError::Corrupt),
         }

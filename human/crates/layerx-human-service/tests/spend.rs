@@ -1,3 +1,5 @@
+mod support;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -8,13 +10,13 @@ use ed25519_dalek::{Signer as _, SigningKey};
 use layerx_agentd::budget::{
     reconcile, release, reserve, BudgetLimiter, LimitConfig, LimitId, LimitRefusal, LimitScope,
     LocalAccounting, ProtocolBudgetState, ReconcileError, ReleaseKind, ReservationRequest,
-    VerifiedSpendReceipt,
+    SpendReceiptEvidence as BudgetReceiptEvidence,
 };
 use layerx_agentd::capability::{
     consume, evaluate, Capability, CapabilityDimensions, CapabilityId, Ceiling, CeilingError,
-    Decision, Dimension, PreparedIntent, RateCeiling, ReceiptOutcome,
-    VerifiedReceipt as CapabilityReceipt,
+    Decision, Dimension, PreparedIntent, RateCeiling, ReceiptApplication,
 };
+use layerx_agentd::protocol_evidence::RawReceiptEvidence;
 use layerx_agentd::receipt::{self as daemon_receipt, ReceiptLookupKey};
 use layerx_agentd::store::{Store, TenantId};
 use layerx_human_service::agents::{
@@ -76,6 +78,7 @@ impl SpendAgentContract for AgentBoundary {
 struct ReceiptRecord {
     idempotency_key: [u8; 32],
     authorized_batch: AuthorizedBatch,
+    evidence: RawReceiptEvidence,
 }
 
 struct DurableReceipts {
@@ -182,6 +185,13 @@ impl RealAgentLayer {
             }
         }
 
+        let reservation = ReservationRequest {
+            id: idempotency_key,
+            amount,
+            expiry_sequence: sequence + 100,
+            current_sequence: sequence,
+            applicable_limits: vec![self.budget_limit_id],
+        };
         consume(
             &self.capability_ceiling,
             idempotency_key,
@@ -190,20 +200,9 @@ impl RealAgentLayer {
             sequence,
         )
         .map_err(SubmitRefusal::CapabilityCeiling)?;
-        let reservation = ReservationRequest {
-            id: idempotency_key,
-            amount,
-            expiry_sequence: sequence + 100,
-            current_sequence: sequence,
-            applicable_limits: vec![self.budget_limit_id],
-        };
         if let Err(error) = reserve(&self.budget, &reservation) {
             self.capability_ceiling
-                .apply_receipt(&CapabilityReceipt {
-                    reservation_id: idempotency_key,
-                    outcome: ReceiptOutcome::Failed,
-                    verified: true,
-                })
+                .cancel_unsubmitted(idempotency_key)
                 .unwrap_or_else(|failure| panic!("release capability hold: {failure:?}"));
             return Err(SubmitRefusal::Budget(error));
         }
@@ -232,6 +231,7 @@ impl RealAgentLayer {
                         ReceiptRecord {
                             idempotency_key,
                             authorized_batch: material.authorized_batch,
+                            evidence: material.evidence.clone(),
                         },
                     );
                     Ok(())
@@ -239,23 +239,10 @@ impl RealAgentLayer {
                 Err(_) => Err(()),
             }
         };
-        if store_result.is_err() {
-            self.capability_ceiling
-                .apply_receipt(&CapabilityReceipt {
-                    reservation_id: idempotency_key,
-                    outcome: ReceiptOutcome::Failed,
-                    verified: true,
-                })
-                .unwrap_or_else(|error| panic!("failed receipt capability release: {error:?}"));
-            release(&self.budget, idempotency_key, ReleaseKind::Failed, sequence)
-                .unwrap_or_else(|error| panic!("failed receipt budget release: {error:?}"));
-            return Err(SubmitRefusal::ReceiptStore);
-        }
         self.capability_ceiling
-            .apply_receipt(&CapabilityReceipt {
+            .apply_receipt(&ReceiptApplication {
                 reservation_id: idempotency_key,
-                outcome: ReceiptOutcome::Executed(amount),
-                verified: true,
+                evidence: material.evidence,
             })
             .unwrap_or_else(|error| panic!("apply capability receipt: {error:?}"));
         release(
@@ -265,7 +252,11 @@ impl RealAgentLayer {
             sequence,
         )
         .unwrap_or_else(|error| panic!("apply budget receipt: {error:?}"));
-        Ok(())
+        if store_result.is_err() {
+            Err(SubmitRefusal::ReceiptStore)
+        } else {
+            Ok(())
+        }
     }
 
     fn snapshot(
@@ -310,11 +301,9 @@ impl RealAgentLayer {
                 .checked_add(protocol.amount())
                 .ok_or(SpendBoundaryError::CorruptResponse)?;
             last_receipt = Some(protocol.activity_id());
-            accounting_receipts.push(VerifiedSpendReceipt {
-                receipt_id: protocol.activity_id(),
-                amount: protocol.amount(),
+            accounting_receipts.push(BudgetReceiptEvidence {
                 window_start_sequence: WINDOW_START,
-                verified: true,
+                evidence: record.evidence.clone(),
             });
             receipts.push(SpendReceiptEvidence {
                 canonical_receipt: served.canonical_bytes,
@@ -331,12 +320,13 @@ impl RealAgentLayer {
             .saturating_sub(1)
             .max(WINDOW_START);
         let protocol = ProtocolBudgetState {
-            consumed,
-            remaining: self.budget_limit - consumed,
-            window_start_sequence: WINDOW_START,
-            window_end_sequence: WINDOW_END,
-            observed_head_sequence,
-            verified: true,
+            evidence: support::raw_budget_state(
+                consumed,
+                self.budget_limit - consumed,
+                WINDOW_START,
+                WINDOW_END,
+                observed_head_sequence,
+            ),
         };
         let mut local = LocalAccounting {
             consumed: receipt_total,
@@ -398,6 +388,7 @@ enum SubmitRefusal {
 struct ReceiptMaterial {
     canonical_receipt: Vec<u8>,
     authorized_batch: AuthorizedBatch,
+    evidence: RawReceiptEvidence,
 }
 
 struct ReceiptFields {
@@ -445,15 +436,24 @@ fn signed_receipt(
     digest.update(b"LXP/v1/receipt\0");
     digest.update(&unsigned);
     let signature = signer.sign(&<[u8; 32]>::from(digest.finalize()));
+    let canonical_receipt = encode_receipt(&fields, Some(signature.to_bytes()));
+    let authorized_batch = AuthorizedBatch::new(
+        fields.batch_id,
+        fields.asset,
+        fields.previous_state_root,
+        fields.resulting_state_root,
+        signer.verifying_key().to_bytes(),
+    );
+    let evidence = support::raw_receipt_evidence(
+        canonical_receipt.clone(),
+        authorized_batch,
+        sequence,
+        &signer,
+    );
     ReceiptMaterial {
-        canonical_receipt: encode_receipt(&fields, Some(signature.to_bytes())),
-        authorized_batch: AuthorizedBatch::new(
-            fields.batch_id,
-            fields.asset,
-            fields.previous_state_root,
-            fields.resulting_state_root,
-            signer.verifying_key().to_bytes(),
-        ),
+        canonical_receipt,
+        authorized_batch,
+        evidence,
     }
 }
 

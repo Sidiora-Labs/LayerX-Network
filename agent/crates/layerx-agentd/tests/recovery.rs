@@ -3,12 +3,12 @@ mod support;
 use layerx_agentd::budget::{
     hold_unknown, PersistedReceipt, ProtocolBudgetState, UnknownReservation,
 };
-use layerx_agentd::capability::VerifiedReceipt as CeilingReceipt;
+use layerx_agentd::capability::ReceiptApplication as CeilingReceipt;
 use layerx_agentd::outbox::{
-    recover, resolve_unknown, Outbox, ReceiptEvidence, ReceiptLookup, RecoveryError,
-    RecoveryInputs, ResolvedReceipt, ResolvedReceiptOutcome, SubmissionState, UnknownBoundaryError,
-    UnknownCeilingReservation, UnknownResolutionError,
+    recover, resolve_unknown, Outbox, ReceiptLookup, RecoveryError, RecoveryInputs,
+    SubmissionState, UnknownBoundaryError, UnknownCeilingReservation, UnknownResolutionError,
 };
+use layerx_agentd::protocol_evidence::RawReceiptEvidence;
 use layerx_agentd::shutdown::{graceful, DaemonLifecycle, ShutdownError};
 use layerx_agentd::store::{ObjectKind, Store};
 
@@ -16,12 +16,7 @@ use support::{directory, tenant, verified_submission};
 
 fn protocol(consumed: u128) -> ProtocolBudgetState {
     ProtocolBudgetState {
-        consumed,
-        remaining: 1_000 - consumed,
-        window_start_sequence: 1,
-        window_end_sequence: 100,
-        observed_head_sequence: 50,
-        verified: true,
+        evidence: support::raw_budget_state(consumed, 1_000 - consumed, 1, 100, 50),
     }
 }
 
@@ -33,13 +28,7 @@ fn recovery_inputs<'a>(
     RecoveryInputs {
         unknown_budget_ids,
         budget_receipts,
-        protocol_budget: protocol(
-            budget_receipts
-                .iter()
-                .filter(|receipt| receipt.executed)
-                .map(|receipt| receipt.amount)
-                .sum(),
-        ),
+        protocol_budget: protocol(0),
         ceiling_maximum: 1_000,
         ceiling_receipts: &[] as &[CeilingReceipt],
         unknown_ceiling_reservations: unknown_ceilings,
@@ -58,10 +47,13 @@ fn enqueue(outbox: &mut Outbox, store: &mut Store, id: u8) -> Vec<u8> {
 
 fn transition(outbox: &mut Outbox, store: &mut Store, id: u8, to: SubmissionState) {
     let evidence = if to == SubmissionState::Executed {
-        Some(ReceiptEvidence {
-            receipt_ref: [id.wrapping_add(100); 32],
-            verified: true,
-        })
+        let activity_id = outbox
+            .status([id; 32])
+            .map(|status| status.activity_id)
+            .unwrap_or_else(|| panic!("activity missing"));
+        Some(layerx_agentd::protocol_evidence::verify_receipt(
+            &support::raw_receipt(activity_id, 0, 25),
+        ).unwrap_or_else(|error| panic!("receipt: {error:?}")))
     } else {
         None
     };
@@ -143,19 +135,16 @@ fn restart_at_every_write_stage_preserves_exactly_one_recovery_action() {
 struct ExistingReceipts {
     lookups: usize,
     resends: usize,
+    receipts: std::collections::BTreeMap<[u8; 32], RawReceiptEvidence>,
 }
 
 impl ReceiptLookup for ExistingReceipts {
     fn receipt_by_idempotency_key(
         &mut self,
         idempotency_key: [u8; 32],
-    ) -> Result<Option<ResolvedReceipt>, UnknownBoundaryError> {
+    ) -> Result<Option<RawReceiptEvidence>, UnknownBoundaryError> {
         self.lookups += 1;
-        Ok(Some(ResolvedReceipt {
-            outcome: ResolvedReceiptOutcome::Executed,
-            receipt_ref: idempotency_key,
-            verified: true,
-        }))
+        Ok(self.receipts.get(&idempotency_key).cloned())
     }
 
     fn resend_exact(
@@ -178,9 +167,21 @@ fn restart_resolution_uses_receipts_without_duplicate_delivery() {
     let mut recovered = recover(&mut reopened, &tenant(), &recovery_inputs(&[], &[], &[]))
         .unwrap_or_else(|error| panic!("recover: {error:?}"));
     let pending = recovered.awaiting_receipt_resolution.clone();
+    let receipts = pending
+        .iter()
+        .map(|submission_id| {
+            let activity_id = recovered
+                .outbox
+                .status(*submission_id)
+                .map(|status| status.activity_id)
+                .unwrap_or_else(|| panic!("activity missing"));
+            (*submission_id, support::raw_receipt(activity_id, 0, 25))
+        })
+        .collect();
     let mut core = ExistingReceipts {
         lookups: 0,
         resends: 0,
+        receipts,
     };
     for (attempt, submission_id) in pending.into_iter().enumerate() {
         resolve_unknown(
@@ -266,7 +267,7 @@ impl ReceiptLookup for NoReceipt {
     fn receipt_by_idempotency_key(
         &mut self,
         _idempotency_key: [u8; 32],
-    ) -> Result<Option<ResolvedReceipt>, UnknownBoundaryError> {
+    ) -> Result<Option<RawReceiptEvidence>, UnknownBoundaryError> {
         Ok(None)
     }
 

@@ -2,9 +2,10 @@
 
 use sha2::{Digest, Sha256};
 
+use crate::protocol_evidence::{verify_receipt, RawReceiptEvidence};
 use crate::store::{ObjectKind, Store, StoreError, TenantId, TenantKey};
 
-use super::{Outbox, OutboxError, ReceiptEvidence, SubmissionState};
+use super::{Outbox, OutboxError, SubmissionState};
 
 const STATE_MAGIC: &[u8; 4] = b"LXUR";
 const INITIAL_BACKOFF_MS: u64 = 1_000;
@@ -17,21 +18,6 @@ pub struct UnknownAge {
     pub age_ms: u64,
     pub attempt_count: u32,
     pub next_attempt_at_ms: u64,
-}
-
-/// Terminal receipt outcome returned by the node interface.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ResolvedReceiptOutcome {
-    Executed,
-    Failed,
-}
-
-/// Receipt evidence located by the original idempotency key.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ResolvedReceipt {
-    pub outcome: ResolvedReceiptOutcome,
-    pub receipt_ref: [u8; 32],
-    pub verified: bool,
 }
 
 /// A stable failure classification for receipt lookup and exact-byte resend.
@@ -52,7 +38,7 @@ pub trait ReceiptLookup {
     fn receipt_by_idempotency_key(
         &mut self,
         idempotency_key: [u8; 32],
-    ) -> Result<Option<ResolvedReceipt>, UnknownBoundaryError>;
+    ) -> Result<Option<RawReceiptEvidence>, UnknownBoundaryError>;
 
     /// Resends the stored signed bytes unchanged under their original idempotency key.
     ///
@@ -180,35 +166,36 @@ pub fn resolve_unknown<B: ReceiptLookup>(
     };
 
     if let Some(receipt) = receipt {
-        if !receipt.verified {
-            return Ok(UnknownResolution {
-                state: SubmissionState::Unknown,
-                age,
-                observation: ResolutionObservation::UnverifiedReceipt,
-                resend: ResendObservation::NotWarranted,
-            });
-        }
-        let (state, observation, cause) = match receipt.outcome {
-            ResolvedReceiptOutcome::Executed => (
+        let verified = match verify_receipt(&receipt) {
+            Ok(verified) if verified.activity_id() == record.status.activity_id => verified,
+            Ok(_) | Err(_) => {
+                return Ok(UnknownResolution {
+                    state: SubmissionState::Unknown,
+                    age,
+                    observation: ResolutionObservation::UnverifiedReceipt,
+                    resend: ResendObservation::NotWarranted,
+                });
+            }
+        };
+        let (state, observation, cause) = if verified.result_code() == 0 {
+            (
                 SubmissionState::Executed,
                 ResolutionObservation::ExecutedReceipt,
                 "verified receipt found by idempotency key",
-            ),
-            ResolvedReceiptOutcome::Failed => (
+            )
+        } else {
+            (
                 SubmissionState::Failed,
                 ResolutionObservation::FailedReceipt,
                 "verified failure receipt found by idempotency key",
-            ),
+            )
         };
         outbox.transition(
             store,
             submission_id,
             state,
             cause,
-            Some(ReceiptEvidence {
-                receipt_ref: receipt.receipt_ref,
-                verified: true,
-            }),
+            Some(verified),
         )?;
         store.remove_local(&key)?;
         return Ok(UnknownResolution {

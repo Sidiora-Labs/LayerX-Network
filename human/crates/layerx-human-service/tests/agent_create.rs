@@ -255,12 +255,20 @@ impl AgentCreationContract for InProcessAgentLayer {
             .map_err(|_| AgentFailure::Refused("core receipt verification failed"))?;
         match action.stage {
             CreationStage::BudgetCreation => {
+                let receipt_signing_seed: [u8; 32] = Sha256::digest(
+                    [b"agent-create-receipt".as_slice(), &action.action_key].concat(),
+                )
+                .into();
+                let receipt_signer = SigningKey::from_bytes(&receipt_signing_seed);
                 let mut pipeline = ReceiptPipeline {
                     receipt: CoreBudgetReceipt {
                         object_id: action.action_key,
-                        canonical_receipt: receipt.receipt_bytes.clone(),
-                        verified: true,
-                        executed: true,
+                        evidence: support::raw_receipt_evidence(
+                            receipt.receipt_bytes.clone(),
+                            receipt.authorized_batch,
+                            CORE_SEQUENCE,
+                            &receipt_signer,
+                        ),
                     },
                 };
                 create_protocol_budget(

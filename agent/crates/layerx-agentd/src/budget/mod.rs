@@ -11,7 +11,8 @@ mod recovery;
 mod reservations;
 
 pub use accounting::{
-    LocalAccounting, ProtocolBudgetState, ReconcileError, ReconciliationState, VerifiedSpendReceipt,
+    LocalAccounting, ProtocolBudgetState, ReconcileError, ReconciliationState,
+    SpendReceiptEvidence,
 };
 pub use create::{
     create_protocol_budget, BudgetCreationError, BudgetKind, BudgetPipeline, BudgetRequest,
@@ -36,7 +37,7 @@ pub use reservations::{
 pub fn reconcile(
     local: &mut LocalAccounting,
     protocol: ProtocolBudgetState,
-    receipts: &[VerifiedSpendReceipt],
+    receipts: &[SpendReceiptEvidence],
 ) -> Result<ReconciliationState, ReconcileError> {
     accounting::reconcile_state(local, protocol, receipts)
 }

@@ -1,5 +1,6 @@
 //! Budget creation through the ordinary canonical write pipeline.
 
+use crate::protocol_evidence::{verify_receipt, RawReceiptEvidence};
 use crate::store::{ObjectKind, Store, StoreError, TenantId, TenantKey};
 
 const LOCAL_BYPASS_STATEMENT: &str =
@@ -29,14 +30,12 @@ pub struct BudgetRequest {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CoreBudgetReceipt {
     pub object_id: [u8; 32],
-    pub canonical_receipt: Vec<u8>,
-    pub verified: bool,
-    pub executed: bool,
+    pub evidence: RawReceiptEvidence,
 }
 
-/// The mandatory prepare, sign, submit and verify seam.
+/// The mandatory prepare, sign, submit and raw-evidence seam.
 pub trait BudgetPipeline {
-    /// Prepares, signs, submits and verifies one budget creation activity.
+    /// Prepares, signs and submits one budget creation activity, returning raw core evidence.
     ///
     /// # Errors
     ///
@@ -126,10 +125,9 @@ pub fn create_protocol_budget(
         return Err(BudgetCreationError::EmptyActivity);
     }
     let receipt = pipeline.submit_budget(request)?;
-    if !receipt.verified {
-        return Err(BudgetCreationError::UnverifiedReceipt);
-    }
-    if !receipt.executed {
+    let verified = verify_receipt(&receipt.evidence)
+        .map_err(|_| BudgetCreationError::UnverifiedReceipt)?;
+    if verified.result_code() != 0 {
         return Err(BudgetCreationError::CoreRejected);
     }
     let key = TenantKey::new(
@@ -137,11 +135,11 @@ pub fn create_protocol_budget(
         ObjectKind::Budget,
         receipt.object_id.to_vec(),
     )?;
-    store.put_core_cache(key, receipt.canonical_receipt.clone())?;
+    store.put_core_cache(key, verified.canonical_receipt().to_vec())?;
     Ok(ProtocolBudget {
         object_id: receipt.object_id,
         kind: request.kind,
-        receipt_bytes: receipt.canonical_receipt,
+        receipt_bytes: verified.canonical_receipt().to_vec(),
         enforcement: "protocol-enforced",
     })
 }

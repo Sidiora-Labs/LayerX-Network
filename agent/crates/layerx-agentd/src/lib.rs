@@ -21,6 +21,7 @@ pub mod obs;
 pub mod outbox;
 pub mod policy;
 pub mod prepare;
+pub mod protocol_evidence;
 pub mod read;
 pub mod receipt;
 pub mod session;

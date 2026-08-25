@@ -4,13 +4,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
 
-use layerx_agentd::outbox::{Outbox, OutboxError, ReceiptEvidence, SubmissionState};
+use layerx_agentd::outbox::{Outbox, OutboxError, SubmissionState};
+use layerx_agentd::protocol_evidence::{verify_receipt, VerifiedReceiptEvidence};
 use layerx_agentd::prepare::{
     prepare_activity, CorePreparationBoundary, CorePreparationState, CoreStateError,
     PreparationDefaults, PrepareRequest,
 };
 use layerx_agentd::sign::{attach_external_signature, verify_before_submit, VerifiedSubmission};
-use layerx_agentd::store::{Store, TenantId};
+use layerx_agentd::store::{ObjectKind, Store, TenantId, TenantKey};
 use layerx_crypto::local::LocalSigner;
 use layerx_crypto::signer::{sign_disclosed, Signer};
 use layerx_types::activity::{Authority, TimestampBound};
@@ -182,7 +183,7 @@ fn transition(
     store: &mut Store,
     id: u8,
     state: SubmissionState,
-    receipt: Option<ReceiptEvidence>,
+    receipt: Option<VerifiedReceiptEvidence>,
 ) {
     outbox
         .transition(store, [id; 32], state, format!("to {state:?}"), receipt)
@@ -257,10 +258,16 @@ fn every_legal_terminal_path_is_recorded_and_illegal_transitions_fail() {
         None,
     );
     transition(&mut outbox, &mut store, 1, SubmissionState::Unknown, None);
-    let receipt = ReceiptEvidence {
-        receipt_ref: [0x55; 32],
-        verified: true,
-    };
+    let activity_id = outbox
+        .status([1; 32])
+        .map(|status| status.activity_id)
+        .unwrap_or_else(|| panic!("activity missing"));
+    let receipt = verify_receipt(&support::raw_receipt(activity_id, 0, 1))
+        .unwrap_or_else(|error| panic!("receipt verification: {error:?}"));
+    assert_eq!(
+        receipt.level(),
+        layerx_types::verify::VerificationLevel::BATCH_INCLUDED
+    );
     transition(
         &mut outbox,
         &mut store,
@@ -369,22 +376,51 @@ fn executed_is_impossible_without_a_verified_receipt_reference() {
         ),
         Err(OutboxError::SuccessWithoutVerifiedReceipt)
     ));
-    assert!(matches!(
+    let wrong_activity = verify_receipt(&support::raw_receipt([8; 32], 0, 1))
+        .unwrap_or_else(|error| panic!("receipt verification: {error:?}"));
+    assert_eq!(
         outbox.transition(
             &mut store,
             [1; 32],
             SubmissionState::Executed,
-            "unverified receipt",
-            Some(ReceiptEvidence {
-                receipt_ref: [8; 32],
-                verified: false,
-            }),
+            "receipt for another activity",
+            Some(wrong_activity),
         ),
-        Err(OutboxError::SuccessWithoutVerifiedReceipt)
-    ));
+        Err(OutboxError::ReceiptMismatch)
+    );
+    let raw = support::raw_receipt([8; 32], 0, 1);
+    let mut corrupt = raw.canonical_receipt().to_vec();
+    corrupt[0] ^= 1;
+    assert!(verify_receipt(&support::corrupt_raw_receipt(&raw, corrupt)).is_err());
     assert_eq!(
         outbox.status([1; 32]).map(|status| status.state),
         Some(SubmissionState::Acknowledged)
     );
     let _ = std::fs::remove_dir_all(root);
 }
+
+#[test]
+fn legacy_boolean_receipt_records_fail_closed() {
+    let root = directory();
+    let verified = verified_submission(1);
+    let mut store = Store::open(&root).unwrap_or_else(|error| panic!("store: {error}"));
+    let mut outbox = Outbox::default();
+    enqueue(&mut outbox, &mut store, 1, &verified);
+    let key = TenantKey::new(tenant(), ObjectKind::Outbox, [1; 32].to_vec())
+        .unwrap_or_else(|error| panic!("outbox key: {error}"));
+    let mut legacy = store
+        .get(&key)
+        .map(|value| value.bytes().to_vec())
+        .unwrap_or_else(|| panic!("outbox record missing"));
+    legacy[4] = 1;
+    store
+        .put_local(key, legacy)
+        .unwrap_or_else(|error| panic!("legacy record: {error}"));
+    let mut restored = Outbox::default();
+    assert_eq!(
+        restored.restore(&store, tenant(), [1; 32]),
+        Err(OutboxError::Corrupt)
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+mod support;
