@@ -8,7 +8,7 @@ PAXEER_ROOT="$(cd "${HPX_DIR}/.." && pwd)"
 MONOREPO_ROOT="$(cd "${PAXEER_ROOT}/.." && pwd)"
 
 DOMAIN="node.hyperpaxeer.com"
-SOURCE_REVISION="${HPX_SOURCE_REVISION:-$(git -C "$MONOREPO_ROOT" rev-parse HEAD)}"
+SOURCE_REVISION="${HPX_SOURCE_REVISION:-$(git -C "$MONOREPO_ROOT" log -1 --format=%H -- paxeer-network/hpx/registry .github/workflows/paxeer-hpx-registry.yml)}"
 ARTIFACTS_ROOT="${HPX_ARTIFACTS_ROOT:-/srv/hpx/artifacts}"
 DATA_DIR="${HPX_DATA_DIR:-/srv/hpx/data}"
 WEB_ROOT="${HPX_WEB_ROOT:-/var/www/hpx}"

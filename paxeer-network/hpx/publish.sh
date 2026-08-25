@@ -132,6 +132,7 @@ say "writing sorted SHA-256 manifest"
 
 release_dir="$RELEASES_DIR/$release_id"
 [ ! -e "$release_dir" ] || die "release already exists: $release_dir"
+chmod 0755 "$stage"
 mv "$stage" "$release_dir"
 stage=""
 
