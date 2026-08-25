@@ -403,6 +403,16 @@ func TestValidateMinterRejectsMalformedDatesAndOverflow(t *testing.T) {
 
 	minter = types.NewMinter("2023-04-01", "2023-04-10", sdk.DefaultBondDenom, uint64(math.MaxInt64)+1)
 	require.Error(t, types.ValidateMinter(minter))
+
+	minter = types.NewMinter("2023-04-01", "2023-04-10", sdk.DefaultBondDenom, 1000)
+	minter.LastMintAmount = uint64(math.MaxInt64) + 1
+	require.Error(t, types.ValidateMinter(minter))
+
+	minter.LastMintAmount = 1001
+	require.Error(t, types.ValidateMinter(minter))
+
+	minter.LastMintAmount = 1
+	require.Error(t, types.ValidateMinter(minter))
 }
 
 func TestGetLastMintDateTime(t *testing.T) {

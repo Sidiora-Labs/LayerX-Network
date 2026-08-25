@@ -54,8 +54,17 @@ func ValidateMinter(minter Minter) error {
 	if minter.GetTotalMintAmount() > uint64(math.MaxInt64) {
 		return fmt.Errorf("total mint amount exceeds int64 bounds")
 	}
+	if minter.GetLastMintAmount() > uint64(math.MaxInt64) {
+		return fmt.Errorf("last mint amount exceeds int64 bounds")
+	}
 	if minter.GetTotalMintAmount() < minter.GetRemainingMintAmount() {
 		return fmt.Errorf("total mint amount cannot be less than remaining mint amount")
+	}
+	if minter.GetLastMintAmount() > minter.GetTotalMintAmount() {
+		return fmt.Errorf("last mint amount cannot exceed total mint amount")
+	}
+	if minter.GetLastMintAmount() > minter.GetTotalMintAmount()-minter.GetRemainingMintAmount() {
+		return fmt.Errorf("last mint amount cannot exceed cumulative minted amount")
 	}
 	startDate, err := time.Parse(TokenReleaseDateFormat, minter.GetStartDate())
 	if err != nil {

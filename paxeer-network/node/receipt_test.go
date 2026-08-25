@@ -18,6 +18,7 @@ import (
 	"github.com/sidiora-labs/paxeer-network/modules/evm/artifacts/cw1155"
 	evmtypes "github.com/sidiora-labs/paxeer-network/modules/evm/types"
 	"github.com/sidiora-labs/paxeer-network/modules/evm/types/ethtx"
+	app "github.com/sidiora-labs/paxeer-network/node"
 	pcommon "github.com/sidiora-labs/paxeer-network/precompiles/common"
 	"github.com/sidiora-labs/paxeer-network/precompiles/wasmd"
 	"github.com/sidiora-labs/paxeer-network/sdk/client"
@@ -31,6 +32,13 @@ import (
 	wasmtypes "github.com/sidiora-labs/paxeer-network/wasm/x/wasm/types"
 	"github.com/stretchr/testify/require"
 )
+
+func TestSyntheticReceiptActionRejectsMalformedAddress(t *testing.T) {
+	ctx := testkeeper.EVMTestApp.GetContextForDeliverTx(nil)
+	address, err := testkeeper.EVMTestApp.GetEvmAddressHash(ctx, "not-a-pax-address")
+	require.ErrorIs(t, err, app.ErrSyntheticReceiptTranslation)
+	require.Equal(t, common.Hash{}, address)
+}
 
 //go:embed wasm_abi.json
 var f embed.FS
@@ -506,6 +514,22 @@ func TestEvmEventsForMultipleCW721Transfers(t *testing.T) {
 
 	testkeeper.EVMTestApp.AddCosmosEventsToEVMReceiptIfApplicable(ctx, tx, sum, sdk.DeliverTxHookInput{
 		Events: []abci.Event{
+			{
+				Type: wasmtypes.EventTypeCW721PreTransferOwner,
+				Attributes: []abci.EventAttribute{
+					{Key: []byte(wasmtypes.AttributeKeyContractAddr), Value: []byte(contractAddr.String())},
+					{Key: []byte(wasmtypes.AttributeKeyTokenId), Value: []byte("0")},
+					{Key: []byte(wasmtypes.AttributeKeyOwner), Value: []byte("pax1n5n56lvfsda29hm38a2tn5pnf6nx84a38346yx")},
+				},
+			},
+			{
+				Type: wasmtypes.EventTypeCW721PreTransferOwner,
+				Attributes: []abci.EventAttribute{
+					{Key: []byte(wasmtypes.AttributeKeyContractAddr), Value: []byte(contractAddr.String())},
+					{Key: []byte(wasmtypes.AttributeKeyTokenId), Value: []byte("1")},
+					{Key: []byte(wasmtypes.AttributeKeyOwner), Value: []byte("pax1xj2la8suyhfxjzdv3fc2w4upag32mc635fuj3q")},
+				},
+			},
 			{
 				Type: "wasm",
 				Attributes: []abci.EventAttribute{

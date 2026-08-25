@@ -32,6 +32,8 @@ var ERC1155URITopic = common.HexToHash("0x6bb7ff708619ba0610cba295a58592e0451dee
 var EmptyHash = common.HexToHash("0x0")
 var TrueHash = common.HexToHash("0x1")
 
+var ErrSyntheticReceiptTranslation = errors.New("synthetic EVM receipt translation failed")
+
 type AllowanceResponse struct {
 	Allowance sdk.Int         `json:"allowance"`
 	Expires   json.RawMessage `json:"expires"`
@@ -58,18 +60,9 @@ func (app *App) AddCosmosEventsToEVMReceiptIfApplicable(ctx sdk.Context, tx sdk.
 	// event emitted before the transfer and use that instead to populate the
 	// synthetic ERC721 event.
 	ownerEvents := GetEventsOfType(response, wasmtypes.EventTypeCW721PreTransferOwner)
-	ownerEventsMap := map[string][]abci.Event{}
-	for _, ownerEvent := range ownerEvents {
-		if len(ownerEvent.Attributes) != 3 {
-			logger.Error("received owner event with number of attributes != 3")
-			continue
-		}
-		ownerEventKey := getOwnerEventKey(string(ownerEvent.Attributes[0].Value), string(ownerEvent.Attributes[1].Value))
-		if events, ok := ownerEventsMap[ownerEventKey]; ok {
-			ownerEventsMap[ownerEventKey] = append(events, ownerEvent)
-		} else {
-			ownerEventsMap[ownerEventKey] = []abci.Event{ownerEvent}
-		}
+	ownerEventsMap, err := indexCW721OwnerEvents(ownerEvents)
+	if err != nil {
+		panic(err)
 	}
 	cw721TransferCounterMap := map[string]int{}
 	for _, wasmEvent := range wasmEvents {
@@ -79,7 +72,11 @@ func (app *App) AddCosmosEventsToEVMReceiptIfApplicable(ctx sdk.Context, tx sdk.
 		}
 		pointerAddr, _, exists := app.EvmKeeper.GetERC20CW20Pointer(wasmToEvmEventCtx, contractAddr)
 		if exists {
-			for _, log := range app.translateCW20Event(wasmToEvmEventCtx, wasmEvent, pointerAddr, contractAddr) {
+			translated, err := app.translateCW20Event(wasmToEvmEventCtx, wasmEvent, pointerAddr, contractAddr)
+			if err != nil {
+				panic(err)
+			}
+			for _, log := range translated {
 				log.Index = uint(len(logs))
 				logs = append(logs, log)
 			}
@@ -88,7 +85,11 @@ func (app *App) AddCosmosEventsToEVMReceiptIfApplicable(ctx sdk.Context, tx sdk.
 		// check if there is a ERC721 pointer to contract Addr
 		pointerAddr, _, exists = app.EvmKeeper.GetERC721CW721Pointer(wasmToEvmEventCtx, contractAddr)
 		if exists {
-			for _, log := range app.translateCW721Event(wasmToEvmEventCtx, wasmEvent, pointerAddr, contractAddr, ownerEventsMap, cw721TransferCounterMap) {
+			translated, err := app.translateCW721Event(wasmToEvmEventCtx, wasmEvent, pointerAddr, contractAddr, ownerEventsMap, cw721TransferCounterMap)
+			if err != nil {
+				panic(err)
+			}
+			for _, log := range translated {
 				log.Index = uint(len(logs))
 				logs = append(logs, log)
 			}
@@ -97,7 +98,11 @@ func (app *App) AddCosmosEventsToEVMReceiptIfApplicable(ctx sdk.Context, tx sdk.
 		// check if there is a ERC1155 pointer to contract Addr
 		pointerAddr, _, exists = app.EvmKeeper.GetERC1155CW1155Pointer(wasmToEvmEventCtx, contractAddr)
 		if exists {
-			for _, log := range app.translateCW1155Event(wasmToEvmEventCtx, wasmEvent, pointerAddr, contractAddr) {
+			translated, err := app.translateCW1155Event(wasmToEvmEventCtx, wasmEvent, pointerAddr, contractAddr)
+			if err != nil {
+				panic(err)
+			}
+			for _, log := range translated {
 				log.Index = uint(len(logs))
 				logs = append(logs, log)
 			}
@@ -153,18 +158,57 @@ func (app *App) AddCosmosEventsToEVMReceiptIfApplicable(ctx sdk.Context, tx sdk.
 	}
 }
 
-func (app *App) translateCW20Event(ctx sdk.Context, wasmEvent abci.Event, pointerAddr common.Address, contractAddr string) (res []*ethtypes.Log) {
-	defer func() {
-		if r := recover(); r != nil {
-			fmt.Printf("[Error] Panic caught during translateCW20Event: type=%T, value=%+v\n", r, r)
+func indexCW721OwnerEvents(ownerEvents []abci.Event) (map[string][]abci.Event, error) {
+	ownerEventsMap := map[string][]abci.Event{}
+	for _, ownerEvent := range ownerEvents {
+		if len(ownerEvent.Attributes) != 3 {
+			return nil, fmt.Errorf("%w: CW721 owner event must have exactly three attributes", ErrSyntheticReceiptTranslation)
 		}
-	}()
+		contractAddr, contractFound := GetAttributeValue(ownerEvent, wasmtypes.AttributeKeyContractAddr)
+		tokenID, tokenFound := GetAttributeValue(ownerEvent, wasmtypes.AttributeKeyTokenId)
+		owner, ownerFound := GetAttributeValue(ownerEvent, wasmtypes.AttributeKeyOwner)
+		if !contractFound || !tokenFound || !ownerFound || contractAddr == "" || tokenID == "" || owner == "" {
+			return nil, fmt.Errorf("%w: malformed CW721 owner event", ErrSyntheticReceiptTranslation)
+		}
+		if _, err := sdk.AccAddressFromBech32(contractAddr); err != nil {
+			return nil, fmt.Errorf("%w: invalid CW721 owner-event contract: %v", ErrSyntheticReceiptTranslation, err)
+		}
+		if err := validateUint256("CW721 owner-event token ID", safeBigIntFromString(tokenID)); err != nil {
+			return nil, err
+		}
+		if _, err := sdk.AccAddressFromBech32(owner); err != nil {
+			return nil, fmt.Errorf("%w: invalid CW721 owner-event owner: %v", ErrSyntheticReceiptTranslation, err)
+		}
+		ownerEventKey := getOwnerEventKey(contractAddr, tokenID)
+		ownerEventsMap[ownerEventKey] = append(ownerEventsMap[ownerEventKey], ownerEvent)
+	}
+	return ownerEventsMap, nil
+}
 
-	for _, action := range app.GetActionsFromWasmEvent(ctx, wasmEvent) {
+func (app *App) translateCW20Event(ctx sdk.Context, wasmEvent abci.Event, pointerAddr common.Address, contractAddr string) (res []*ethtypes.Log, err error) {
+	actions, err := app.GetActionsFromWasmEvent(ctx, wasmEvent)
+	if err != nil {
+		return nil, err
+	}
+	for _, action := range actions {
 		switch action.Type {
 		case "mint", "burn", "send", "transfer", "transfer_from", "send_from", "burn_from":
-			if action.Amount == nil {
-				continue
+			if action.Err != nil {
+				return nil, action.Err
+			}
+			if err := validateUint256("CW20 amount", action.Amount); err != nil {
+				return nil, err
+			}
+			if action.Type == "mint" {
+				if action.To == EmptyHash {
+					return nil, fmt.Errorf("%w: CW20 mint recipient is missing", ErrSyntheticReceiptTranslation)
+				}
+			} else if action.Type == "burn" || action.Type == "burn_from" {
+				if action.From == EmptyHash {
+					return nil, fmt.Errorf("%w: CW20 burn source is missing", ErrSyntheticReceiptTranslation)
+				}
+			} else if action.From == EmptyHash || action.To == EmptyHash {
+				return nil, fmt.Errorf("%w: CW20 transfer endpoint is missing", ErrSyntheticReceiptTranslation)
 			}
 			res = append(res, &ethtypes.Log{
 				Address: pointerAddr,
@@ -176,25 +220,38 @@ func (app *App) translateCW20Event(ctx sdk.Context, wasmEvent abci.Event, pointe
 				Data: common.BigToHash(action.Amount).Bytes(),
 			})
 		case "increase_allowance", "decrease_allowance":
+			if action.Err != nil {
+				return nil, action.Err
+			}
+			if action.Owner == EmptyHash || action.Spender == EmptyHash {
+				return nil, fmt.Errorf("%w: CW20 allowance endpoint is missing", ErrSyntheticReceiptTranslation)
+			}
 			topics := []common.Hash{
 				ERC20ApprovalTopic,
 				action.Owner,
 				action.Spender,
 			}
+			contract, err := sdk.AccAddressFromBech32(contractAddr)
+			if err != nil {
+				return nil, fmt.Errorf("%w: invalid CW20 contract address: %v", ErrSyntheticReceiptTranslation, err)
+			}
 			ret, err := app.WasmKeeper.QuerySmart(
 				ctx,
-				sdk.MustAccAddressFromBech32(contractAddr),
+				contract,
 				[]byte(fmt.Sprintf(
 					"{\"allowance\":{\"owner\":\"%s\",\"spender\":\"%s\"}}",
 					app.EvmKeeper.GetPaxAddressOrDefault(ctx, common.BytesToAddress(action.Owner[:])).String(),
 					app.EvmKeeper.GetPaxAddressOrDefault(ctx, common.BytesToAddress(action.Spender[:])).String())),
 			)
 			if err != nil {
-				continue
+				return nil, fmt.Errorf("%w: query CW20 allowance: %v", ErrSyntheticReceiptTranslation, err)
 			}
 			allowanceResponse := &AllowanceResponse{}
 			if err := json.Unmarshal(ret, allowanceResponse); err != nil {
-				continue
+				return nil, fmt.Errorf("%w: decode CW20 allowance: %v", ErrSyntheticReceiptTranslation, err)
+			}
+			if allowanceResponse.Allowance.IsNil() || allowanceResponse.Allowance.IsNegative() {
+				return nil, fmt.Errorf("%w: invalid CW20 allowance", ErrSyntheticReceiptTranslation)
 			}
 			res = append(res, &ethtypes.Log{
 				Address: pointerAddr,
@@ -203,39 +260,47 @@ func (app *App) translateCW20Event(ctx sdk.Context, wasmEvent abci.Event, pointe
 			})
 		}
 	}
-	return
+	return res, nil
 }
 
 func (app *App) translateCW721Event(ctx sdk.Context, wasmEvent abci.Event, pointerAddr common.Address, contractAddr string,
-	ownerEventsMap map[string][]abci.Event, cw721TransferCounterMap map[string]int) (res []*ethtypes.Log) {
-	for _, action := range app.GetActionsFromWasmEvent(ctx, wasmEvent) {
+	ownerEventsMap map[string][]abci.Event, cw721TransferCounterMap map[string]int) (res []*ethtypes.Log, err error) {
+	actions, err := app.GetActionsFromWasmEvent(ctx, wasmEvent)
+	if err != nil {
+		return nil, err
+	}
+	for _, action := range actions {
 		switch action.Type {
 		case "transfer_nft", "send_nft", "burn":
-			if action.TokenId == nil {
-				continue
+			if action.Err != nil {
+				return nil, action.Err
 			}
-			sender := action.Sender
+			if err := validateUint256("CW721 token ID", action.TokenId); err != nil {
+				return nil, err
+			}
+			if action.Type != "burn" && action.Recipient == EmptyHash {
+				return nil, fmt.Errorf("%w: CW721 transfer recipient is missing", ErrSyntheticReceiptTranslation)
+			}
 			ownerEventKey := getOwnerEventKey(contractAddr, action.TokenId.String())
 			var currentCounter int
 			if c, ok := cw721TransferCounterMap[ownerEventKey]; ok {
 				currentCounter = c
 			}
 			cw721TransferCounterMap[ownerEventKey] = currentCounter + 1
-			if ownerEvents, ok := ownerEventsMap[ownerEventKey]; ok {
-				if len(ownerEvents) > currentCounter {
-					ownerPaxAddrStr := string(ownerEvents[currentCounter].Attributes[2].Value)
-					if ownerPaxAddr, err := sdk.AccAddressFromBech32(ownerPaxAddrStr); err == nil {
-						ownerEvmAddr := app.EvmKeeper.GetEVMAddressOrDefault(ctx, ownerPaxAddr)
-						sender = common.BytesToHash(ownerEvmAddr[:])
-					} else {
-						logger.Error("Translate CW721 error: invalid bech32 owner", "address", ownerPaxAddrStr, "err", err)
-					}
-				} else {
-					logger.Error("Translate CW721 error: insufficient owner events", "key", ownerEventKey, "counter", currentCounter, "events", len(ownerEvents))
-				}
-			} else {
-				logger.Error("Translate CW721 error: owner event not found", "key", ownerEventKey)
+			ownerEvents, ok := ownerEventsMap[ownerEventKey]
+			if !ok || len(ownerEvents) <= currentCounter {
+				return nil, fmt.Errorf("%w: missing CW721 owner event for %s", ErrSyntheticReceiptTranslation, ownerEventKey)
 			}
+			ownerPaxAddrStr, found := GetAttributeValue(ownerEvents[currentCounter], wasmtypes.AttributeKeyOwner)
+			if !found {
+				return nil, fmt.Errorf("%w: CW721 owner attribute is missing", ErrSyntheticReceiptTranslation)
+			}
+			ownerPaxAddr, err := sdk.AccAddressFromBech32(ownerPaxAddrStr)
+			if err != nil {
+				return nil, fmt.Errorf("%w: invalid CW721 owner: %v", ErrSyntheticReceiptTranslation, err)
+			}
+			ownerEvmAddr := app.EvmKeeper.GetEVMAddressOrDefault(ctx, ownerPaxAddr)
+			sender := common.BytesToHash(ownerEvmAddr[:])
 			res = append(res, &ethtypes.Log{
 				Address: pointerAddr,
 				Topics: []common.Hash{
@@ -247,8 +312,14 @@ func (app *App) translateCW721Event(ctx sdk.Context, wasmEvent abci.Event, point
 				Data: EmptyHash.Bytes(),
 			})
 		case "mint":
-			if action.TokenId == nil {
-				continue
+			if action.Err != nil {
+				return nil, action.Err
+			}
+			if err := validateUint256("CW721 token ID", action.TokenId); err != nil {
+				return nil, err
+			}
+			if action.Owner == EmptyHash {
+				return nil, fmt.Errorf("%w: CW721 mint owner is missing", ErrSyntheticReceiptTranslation)
 			}
 			res = append(res, &ethtypes.Log{
 				Address: pointerAddr,
@@ -261,8 +332,14 @@ func (app *App) translateCW721Event(ctx sdk.Context, wasmEvent abci.Event, point
 				Data: EmptyHash.Bytes(),
 			})
 		case "approve":
-			if action.TokenId == nil {
-				continue
+			if action.Err != nil {
+				return nil, action.Err
+			}
+			if err := validateUint256("CW721 token ID", action.TokenId); err != nil {
+				return nil, err
+			}
+			if action.Sender == EmptyHash || action.Spender == EmptyHash {
+				return nil, fmt.Errorf("%w: CW721 approval endpoint is missing", ErrSyntheticReceiptTranslation)
 			}
 			res = append(res, &ethtypes.Log{
 				Address: pointerAddr,
@@ -275,8 +352,14 @@ func (app *App) translateCW721Event(ctx sdk.Context, wasmEvent abci.Event, point
 				Data: EmptyHash.Bytes(),
 			})
 		case "revoke":
-			if action.TokenId == nil {
-				continue
+			if action.Err != nil {
+				return nil, action.Err
+			}
+			if err := validateUint256("CW721 token ID", action.TokenId); err != nil {
+				return nil, err
+			}
+			if action.Sender == EmptyHash {
+				return nil, fmt.Errorf("%w: CW721 revoke owner is missing", ErrSyntheticReceiptTranslation)
 			}
 			res = append(res, &ethtypes.Log{
 				Address: pointerAddr,
@@ -289,6 +372,12 @@ func (app *App) translateCW721Event(ctx sdk.Context, wasmEvent abci.Event, point
 				Data: EmptyHash.Bytes(),
 			})
 		case "approve_all":
+			if action.Err != nil {
+				return nil, action.Err
+			}
+			if action.Sender == EmptyHash || action.Operator == EmptyHash {
+				return nil, fmt.Errorf("%w: CW721 approval-for-all endpoint is missing", ErrSyntheticReceiptTranslation)
+			}
 			res = append(res, &ethtypes.Log{
 				Address: pointerAddr,
 				Topics: []common.Hash{
@@ -299,6 +388,12 @@ func (app *App) translateCW721Event(ctx sdk.Context, wasmEvent abci.Event, point
 				Data: TrueHash.Bytes(),
 			})
 		case "revoke_all":
+			if action.Err != nil {
+				return nil, action.Err
+			}
+			if action.Sender == EmptyHash || action.Operator == EmptyHash {
+				return nil, fmt.Errorf("%w: CW721 revoke-all endpoint is missing", ErrSyntheticReceiptTranslation)
+			}
 			res = append(res, &ethtypes.Log{
 				Address: pointerAddr,
 				Topics: []common.Hash{
@@ -310,13 +405,20 @@ func (app *App) translateCW721Event(ctx sdk.Context, wasmEvent abci.Event, point
 			})
 		}
 	}
-	return
+	return res, nil
 }
 
-func (app *App) translateCW1155Event(ctx sdk.Context, wasmEvent abci.Event, pointerAddr common.Address, contractAddr string) (res []*ethtypes.Log) {
-	for _, action := range app.GetActionsFromWasmEvent(ctx, wasmEvent) {
+func (app *App) translateCW1155Event(ctx sdk.Context, wasmEvent abci.Event, pointerAddr common.Address, contractAddr string) (res []*ethtypes.Log, err error) {
+	actions, err := app.GetActionsFromWasmEvent(ctx, wasmEvent)
+	if err != nil {
+		return nil, err
+	}
+	for _, action := range actions {
 		switch action.Type {
 		case "transfer_single", "mint_single", "burn_single":
+			if action.Err != nil {
+				return nil, action.Err
+			}
 			fromHash := EmptyHash
 			toHash := EmptyHash
 			if action.Type != "mint_single" {
@@ -325,11 +427,14 @@ func (app *App) translateCW1155Event(ctx sdk.Context, wasmEvent abci.Event, poin
 			if action.Type != "burn_single" {
 				toHash = action.Recipient
 			}
-			if action.TokenId == nil {
-				continue
+			if err := validateUint256("CW1155 token ID", action.TokenId); err != nil {
+				return nil, err
 			}
-			if action.Amount == nil {
-				continue
+			if err := validateUint256("CW1155 amount", action.Amount); err != nil {
+				return nil, err
+			}
+			if action.Sender == EmptyHash || (action.Type != "mint_single" && action.Owner == EmptyHash) || (action.Type != "burn_single" && action.Recipient == EmptyHash) {
+				return nil, fmt.Errorf("%w: CW1155 transfer endpoint is missing", ErrSyntheticReceiptTranslation)
 			}
 			dataHash1 := common.BigToHash(action.TokenId).Bytes()
 			dataHash2 := common.BigToHash(action.Amount).Bytes()
@@ -344,6 +449,9 @@ func (app *App) translateCW1155Event(ctx sdk.Context, wasmEvent abci.Event, poin
 				Data: append(dataHash1, dataHash2...),
 			})
 		case "transfer_batch", "mint_batch", "burn_batch":
+			if action.Err != nil {
+				return nil, action.Err
+			}
 			fromHash := EmptyHash
 			toHash := EmptyHash
 			if action.Type != "mint_batch" {
@@ -352,17 +460,26 @@ func (app *App) translateCW1155Event(ctx sdk.Context, wasmEvent abci.Event, poin
 			if action.Type != "burn_batch" {
 				toHash = action.Recipient
 			}
-			if len(action.TokenIds) == 0 {
-				continue
+			if len(action.TokenIds) == 0 || len(action.TokenIds) != len(action.Amounts) {
+				return nil, fmt.Errorf("%w: CW1155 batch token and amount lengths differ", ErrSyntheticReceiptTranslation)
 			}
-			if len(action.Amounts) == 0 {
-				continue
+			for _, tokenID := range action.TokenIds {
+				if err := validateUint256("CW1155 token ID", tokenID); err != nil {
+					return nil, err
+				}
+			}
+			for _, amount := range action.Amounts {
+				if err := validateUint256("CW1155 amount", amount); err != nil {
+					return nil, err
+				}
+			}
+			if action.Sender == EmptyHash || (action.Type != "mint_batch" && action.Owner == EmptyHash) || (action.Type != "burn_batch" && action.Recipient == EmptyHash) {
+				return nil, fmt.Errorf("%w: CW1155 batch endpoint is missing", ErrSyntheticReceiptTranslation)
 			}
 			dataArgs := cw1155.GetParsedABI().Events["TransferBatch"].Inputs.NonIndexed()
 			value, err := dataArgs.Pack(action.TokenIds, action.Amounts)
 			if err != nil {
-				logger.Error("Failed to parse TransferBatch event data", "err", err)
-				continue
+				return nil, fmt.Errorf("%w: encode CW1155 batch: %v", ErrSyntheticReceiptTranslation, err)
 			}
 			res = append(res, &ethtypes.Log{
 				Address: pointerAddr,
@@ -375,6 +492,12 @@ func (app *App) translateCW1155Event(ctx sdk.Context, wasmEvent abci.Event, poin
 				Data: value,
 			})
 		case "approve_all":
+			if action.Err != nil {
+				return nil, action.Err
+			}
+			if action.Sender == EmptyHash || action.Operator == EmptyHash {
+				return nil, fmt.Errorf("%w: CW1155 approval-for-all endpoint is missing", ErrSyntheticReceiptTranslation)
+			}
 			res = append(res, &ethtypes.Log{
 				Address: pointerAddr,
 				Topics: []common.Hash{
@@ -385,6 +508,12 @@ func (app *App) translateCW1155Event(ctx sdk.Context, wasmEvent abci.Event, poin
 				Data: TrueHash.Bytes(),
 			})
 		case "revoke_all":
+			if action.Err != nil {
+				return nil, action.Err
+			}
+			if action.Sender == EmptyHash || action.Operator == EmptyHash {
+				return nil, fmt.Errorf("%w: CW1155 revoke-all endpoint is missing", ErrSyntheticReceiptTranslation)
+			}
 			res = append(res, &ethtypes.Log{
 				Address: pointerAddr,
 				Topics: []common.Hash{
@@ -396,17 +525,16 @@ func (app *App) translateCW1155Event(ctx sdk.Context, wasmEvent abci.Event, poin
 			})
 		}
 	}
-	return
+	return res, nil
 }
 
-func (app *App) GetEvmAddressHash(ctx sdk.Context, addrStr string) common.Hash {
+func (app *App) GetEvmAddressHash(ctx sdk.Context, addrStr string) (common.Hash, error) {
 	paxAddr, err := sdk.AccAddressFromBech32(addrStr)
-	if err == nil {
-		evmAddr := app.EvmKeeper.GetEVMAddressOrDefault(ctx, paxAddr)
-		evmAddrHash := common.BytesToHash(evmAddr[:])
-		return evmAddrHash
+	if err != nil {
+		return common.Hash{}, fmt.Errorf("%w: invalid Pax address: %v", ErrSyntheticReceiptTranslation, err)
 	}
-	return EmptyHash
+	evmAddr := app.EvmKeeper.GetEVMAddressOrDefault(ctx, paxAddr)
+	return common.BytesToHash(evmAddr[:]), nil
 }
 
 func GetEventsOfType(rdtx sdk.DeliverTxHookInput, ty string) (res []abci.Event) {
@@ -427,7 +555,8 @@ func GetAttributeValue(event abci.Event, attribute string) (string, bool) {
 	return "", false
 }
 
-func (app *App) GetActionsFromWasmEvent(ctx sdk.Context, event abci.Event) (actions []*Action) {
+func (app *App) GetActionsFromWasmEvent(ctx sdk.Context, event abci.Event) ([]*Action, error) {
+	actions := []*Action{}
 	for _, attr := range event.Attributes {
 		key := string(attr.Key)
 		value := string(attr.Value)
@@ -439,32 +568,47 @@ func (app *App) GetActionsFromWasmEvent(ctx sdk.Context, event abci.Event) (acti
 			continue
 		}
 		curAction := actions[len(actions)-1]
+		var parseErr error
 		switch key {
 		case "amount":
 			curAction.Amount = safeBigIntFromString(value)
 		case "amounts":
-			curAction.Amounts = utils.Map(strings.Split(value, ","), safeBigIntFromString)
+			curAction.Amounts = parseBigInts(value)
 		case "token_id":
 			curAction.TokenId = safeBigIntFromString(value)
 		case "token_ids":
-			curAction.TokenIds = utils.Map(strings.Split(value, ","), safeBigIntFromString)
+			curAction.TokenIds = parseBigInts(value)
 		case "sender":
-			curAction.Sender = app.GetEvmAddressHash(ctx, value)
+			curAction.Sender, parseErr = app.GetEvmAddressHash(ctx, value)
 		case "recipient":
-			curAction.Recipient = app.GetEvmAddressHash(ctx, value)
+			curAction.Recipient, parseErr = app.GetEvmAddressHash(ctx, value)
 		case "spender":
-			curAction.Spender = app.GetEvmAddressHash(ctx, value)
+			curAction.Spender, parseErr = app.GetEvmAddressHash(ctx, value)
 		case "operator":
-			curAction.Operator = app.GetEvmAddressHash(ctx, value)
+			curAction.Operator, parseErr = app.GetEvmAddressHash(ctx, value)
 		case "owner":
-			curAction.Owner = app.GetEvmAddressHash(ctx, value)
+			curAction.Owner, parseErr = app.GetEvmAddressHash(ctx, value)
 		case "from":
-			curAction.From = app.GetEvmAddressHash(ctx, value)
+			curAction.From, parseErr = app.GetEvmAddressHash(ctx, value)
 		case "to":
-			curAction.To = app.GetEvmAddressHash(ctx, value)
+			curAction.To, parseErr = app.GetEvmAddressHash(ctx, value)
+		}
+		if parseErr != nil && curAction.Err == nil {
+			curAction.Err = parseErr
 		}
 	}
-	return
+	return actions, nil
+}
+
+func parseBigInts(value string) []*big.Int {
+	return utils.Map(strings.Split(value, ","), safeBigIntFromString)
+}
+
+func validateUint256(field string, value *big.Int) error {
+	if value == nil || value.Sign() < 0 || value.BitLen() > 256 {
+		return fmt.Errorf("%w: invalid %s", ErrSyntheticReceiptTranslation, field)
+	}
+	return nil
 }
 
 func safeBigIntFromString(s string) *big.Int {
@@ -488,4 +632,5 @@ type Action struct {
 	Owner     common.Hash
 	From      common.Hash
 	To        common.Hash
+	Err       error
 }
