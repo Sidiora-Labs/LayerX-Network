@@ -17,6 +17,11 @@ while IFS='|' read -r kind path classification; do
     test -s "$path"
     case "$classification" in
         build_test_lint|build_static_live_test_blocked|build_static) ;;
+        vendored_source_checksum_bound)
+            test "$path" = paxeer-network/loadtest/contracts/evm/lib/openzeppelin-contracts/contracts/package.json
+            test -s paxeer-network/loadtest/contracts/evm/VENDORING.md
+            test -x paxeer-network/loadtest/contracts/evm/setup.sh
+            ;;
         *) echo "unknown Paxeer manifest classification: $classification" >&2; exit 1 ;;
     esac
     if test "$kind" = rust; then

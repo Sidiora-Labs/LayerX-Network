@@ -23,6 +23,7 @@ PAXEER_PROJECT_HOME := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 export PROJECT_HOME := $(PAXEER_PROJECT_HOME)
 export GO_PKG_PATH=$(HOME)/go/pkg
 export GO111MODULE = on
+GOLANGCI_LINT ?= golangci-lint
 
 # process build tags
 
@@ -128,22 +129,21 @@ install-with-race-detector: go.sum
 # 2. Install paxd with RocksDB: make install-rocksdb
 ###############################################################################
 
-# Build and install RocksDB from source (one time setup)
-build-rocksdb:
-	@echo "Building RocksDB v8.9.1..."
-	@if [ -d "rocksdb" ]; then \
-		echo "rocksdb directory already exists, removing..."; \
-		rm -rf rocksdb; \
-	fi
-	git clone https://github.com/facebook/rocksdb.git
-	cd rocksdb && \
-		git checkout v8.9.1 && \
-		make clean && \
-		CXXFLAGS='-march=native -DNDEBUG' make -j"$$(nproc)" shared_lib && \
-		sudo make install-shared
-	@echo '/usr/local/lib' | sudo tee /etc/ld.so.conf.d/rocksdb.conf
-	@sudo ldconfig
-	@echo "RocksDB installation complete!"
+# Source acquisition is an explicit INSTALL concern. BUILD accepts only an
+# already acquired checkout bound to a full reviewed commit revision.
+rocksdb-source-check:
+	@set -eu; \
+		source_dir=$${ROCKSDB_SOURCE_DIR:?ROCKSDB_SOURCE_DIR is required}; \
+		revision=$${ROCKSDB_REVISION:?ROCKSDB_REVISION is required}; \
+		case "$$revision" in *[!0-9a-fA-F]*) echo "ROCKSDB_REVISION must be hexadecimal" >&2; exit 1 ;; esac; \
+		test "$${#revision}" -eq 40 || { echo "ROCKSDB_REVISION must contain 40 hexadecimal characters" >&2; exit 1; }; \
+		test -d "$$source_dir/.git" || { echo "ROCKSDB_SOURCE_DIR must be a Git checkout" >&2; exit 1; }; \
+		test "$$(git -C "$$source_dir" rev-parse HEAD)" = "$$revision" || { echo "RocksDB checkout revision mismatch" >&2; exit 1; }; \
+		test -z "$$(git -C "$$source_dir" status --porcelain)" || { echo "RocksDB checkout must be clean" >&2; exit 1; }
+
+build-rocksdb: rocksdb-source-check
+	@set -eu; source_dir=$${ROCKSDB_SOURCE_DIR:?ROCKSDB_SOURCE_DIR is required}; \
+		CXXFLAGS='-march=native -DNDEBUG' $(MAKE) -C "$$source_dir" -j"$$(nproc)" shared_lib
 
 # Install paxd with RocksDB backend support
 install-rocksdb: go.sum
@@ -166,18 +166,20 @@ go.sum: go.mod
 		@go mod verify
 
 lint:
-	go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.8.0 run
-	go fmt ./...
-	go vet ./...
-	go mod tidy
+	@command -v "$(GOLANGCI_LINT)" >/dev/null || { echo "golangci-lint is required; run make workspace-install" >&2; exit 1; }
+	GOPROXY=off "$(GOLANGCI_LINT)" run
+	@test -z "$$(gofmt -l .)"
+	GOPROXY=off go vet ./...
+	GOPROXY=off go mod tidy -diff
 	go mod verify
 
 # Run lint on the pax-db package. Much faster than running lint on the entire project.
 # Makes life easier for storage team when iterating on changes inside the pax-db package.
 dblint:
-	go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.8.0 run ./storage/...
-	go fmt ./storage/...
-	go vet ./storage/...
+	@command -v "$(GOLANGCI_LINT)" >/dev/null || { echo "golangci-lint is required; run make workspace-install" >&2; exit 1; }
+	GOPROXY=off "$(GOLANGCI_LINT)" run ./storage/...
+	@test -z "$$(gofmt -l ./storage)"
+	GOPROXY=off go vet ./storage/...
 
 build:
 	go build $(BUILD_FLAGS) -o ./build/paxd ./daemon/paxd

@@ -1000,7 +1000,7 @@ $(BUILD_DIR)/tests/test_paxeer_custody: tests/test_paxeer_custody.c $(LIBRARY)
 $(BUILD_DIR)/contracts/.paxeer-built: contracts/LayerXCustody.sol \
 		contracts/CheckpointRegistry.sol contracts/GuarantorBond.sol
 	@mkdir -p $(@D)
-	forge build --root . --contracts contracts --out $(BUILD_DIR)/contracts
+	forge build --offline --root . --contracts contracts --out $(BUILD_DIR)/contracts
 	@touch $@
 
 test-paxeer: $(BUILD_DIR)/tests/test_paxeer_custody \
@@ -1198,7 +1198,7 @@ test-contract-state-surface:
 	tools/ci/solidity-state-surface.sh
 
 test-contracts: test-contract-state-surface
-	forge test --root .
+	forge test --offline --root .
 
 qualify-replay:
 	tools/lxp_qual_replay_matrix.sh
@@ -1687,36 +1687,18 @@ human-test-service:
 human-test-agents: test-rotation
 	$(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test agent_create
 	$(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test agent_controls
-	@if [ -f human/crates/layerx-human-service/tests/spend.rs ]; then \
-		$(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test spend; \
-	fi
-	@if [ -f human/crates/layerx-human-service/tests/reclaim.rs ]; then \
-		$(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test reclaim; \
-	fi
-	@if [ -f human/crates/layerx-human-service/tests/archive.rs ]; then \
-		$(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test archive; \
-	fi
-	@if [ -f human/crates/layerx-human-service/tests/agent_recovery.rs ]; then \
-		$(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test agent_recovery; \
-	fi
+	$(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test spend
+	$(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test reclaim
+	$(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test archive
+	$(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test agent_recovery
 
 human-test-journeys:
 	$(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test resolver
-	@if [ -f human/crates/layerx-human-service/tests/journey_faults.rs ]; then \
-		$(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test journey_faults; \
-	fi
-	@if [ -f human/crates/layerx-human-service/tests/deposit.rs ]; then \
-		$(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test deposit; \
-	fi
-	@if [ -f human/crates/layerx-human-service/tests/withdraw.rs ]; then \
-		$(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test withdraw; \
-	fi
-	@if [ -f human/crates/layerx-human-service/tests/exit.rs ]; then \
-		$(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test exit; \
-	fi
-	@if [ -f human/crates/layerx-human-service/tests/move_money.rs ]; then \
-		$(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test move_money; \
-	fi
+	$(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test journey_faults
+	$(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test deposit
+	$(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test withdraw
+	$(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test exit
+	$(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test move_money
 
 human-test-explorer: $(BUILD_DIR)/tests/explorer_fixture
 	LAYERX_EXPLORER_CORE_FIXTURE=$(abspath $<) \
@@ -1729,12 +1711,8 @@ human-test-notify:
 
 human-test-approvals:
 	$(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test approvals
-	@if [ -f human/crates/layerx-human-service/tests/render.rs ]; then \
-		$(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test render; \
-	fi
-	@if [ -f human/crates/layerx-human-service/tests/decide.rs ]; then \
-		$(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test decide; \
-	fi
+	$(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test render
+	$(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test decide
 
 human-test-activity:
 	$(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test activity
@@ -2356,7 +2334,7 @@ ci: public-audit test reproducible scan-consensus test-sanitizers
 	workspace-lint workspace-inventory-check workspace-ci hpx-public-check monorepo-ci \
 	paxeer-manifest-install paxeer-manifest-build paxeer-manifest-test \
 	paxeer-manifest-lint paxeer-npm-install paxeer-npm-build paxeer-npm-static-test \
-	workspace-node-preflight paxeer-node-preflight paxeer-npm-dependencies-ready core-qualification-environment
+	paxeer-tools-install paxeer-hardhat-compilers-ready workspace-node-preflight paxeer-node-preflight paxeer-npm-dependencies-ready core-qualification-environment
 
 workspace-node-preflight:
 	@node -e 'const major=Number(process.versions.node.split(".")[0]); if (major < 24) { console.error(`Node >=24 required by workspace packages; found $${process.version}`); process.exit(1); }'
@@ -2378,18 +2356,20 @@ PAXEER_LOCKED_RUST_MANIFESTS := \
 
 PAXEER_NESTED_GO_DIRS := paxeer-network/hpx/registry \
 	paxeer-network/sdk/cosmovisor paxeer-network/sdk/ics23
+PAXEER_TOOLS_DIR := $(CURDIR)/build/paxeer-tools
+PAXEER_GOLANGCI_LINT := $(PAXEER_TOOLS_DIR)/golangci-lint
 
 paxeer-build:
 	GOPROXY=off $(PAXEER_MAKE) build
 
 paxeer-lint:
-	$(PAXEER_MAKE) lint
+	$(PAXEER_MAKE) GOLANGCI_LINT=$(PAXEER_GOLANGCI_LINT) lint
 
 paxeer-test:
 	GOPROXY=off $(PAXEER_MAKE) test
 
 paxeer-ci:
-	$(PAXEER_MAKE) ci
+	GOPROXY=off $(PAXEER_MAKE) GOLANGCI_LINT=$(PAXEER_GOLANGCI_LINT) ci
 
 workspace-inventory-check:
 	sh tools/workspace/check-paxeer-manifests.sh
@@ -2411,7 +2391,10 @@ paxeer-npm-dependencies-ready:
 	@test -d paxeer-network/integration_test/rpc_tests/node_modules
 	@test -d paxeer-network/paxeer-docs/node_modules
 
-paxeer-npm-build: paxeer-npm-dependencies-ready
+paxeer-hardhat-compilers-ready: paxeer-npm-dependencies-ready
+	node tools/workspace/check-hardhat-compilers.mjs
+
+paxeer-npm-build: paxeer-hardhat-compilers-ready
 	npm --prefix paxeer-network/contracts exec -- hardhat compile
 	npm --prefix paxeer-network/integration_test/dapp_tests exec -- hardhat compile
 	npm --prefix paxeer-network/integration_test/rpc_tests run compile
@@ -2419,25 +2402,29 @@ paxeer-npm-build: paxeer-npm-dependencies-ready
 
 paxeer-npm-static-test: paxeer-npm-dependencies-ready
 	npm --prefix paxeer-network/contracts exec -- tsc --noEmit
-	find paxeer-network/integration_test/dapp_tests -type f -name '*.js' -print0 | xargs -0 -n 1 node --check
+	find paxeer-network/integration_test/dapp_tests -type f -name '*.js' -exec node --check {} +
 	npm --prefix paxeer-network/integration_test/rpc_tests exec -- tsc --noEmit
 	$(MAKE) paxeer-docs-static-test
 
-paxeer-manifest-install: workspace-inventory-check paxeer-npm-install
+paxeer-tools-install:
+	mkdir -p $(PAXEER_TOOLS_DIR)
+	GOBIN=$(PAXEER_TOOLS_DIR) go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.8.0
+
+paxeer-manifest-install: workspace-inventory-check paxeer-npm-install paxeer-tools-install
 	@set -eu; for manifest in $(PAXEER_LOCKED_RUST_MANIFESTS); do cargo fetch --manifest-path "$$manifest" --locked; done
 	@set -eu; for directory in $(PAXEER_NESTED_GO_DIRS); do (cd "$$directory" && go mod download); done
 
 paxeer-manifest-build: workspace-inventory-check paxeer-npm-build
-	forge build --root paxeer-network
+	forge build --offline --root paxeer-network
 	sh paxeer-network/loadtest/contracts/evm/setup.sh
-	forge build --root paxeer-network/loadtest/contracts/evm
+	forge build --offline --root paxeer-network/loadtest/contracts/evm
 	@set -eu; for manifest in $(PAXEER_LOCKED_RUST_MANIFESTS); do cargo build --manifest-path "$$manifest" --locked --offline; done
 	@set -eu; for directory in $(PAXEER_NESTED_GO_DIRS); do (cd "$$directory" && GOPROXY=off go build ./...); done
 
 paxeer-manifest-test: workspace-inventory-check paxeer-npm-static-test
-	forge test --root paxeer-network
+	forge test --offline --root paxeer-network
 	sh paxeer-network/loadtest/contracts/evm/setup.sh
-	forge test --root paxeer-network/loadtest/contracts/evm
+	forge test --offline --root paxeer-network/loadtest/contracts/evm
 	@set -eu; for manifest in $(PAXEER_LOCKED_RUST_MANIFESTS); do cargo test --manifest-path "$$manifest" --locked --offline; done
 	@set -eu; for directory in $(PAXEER_NESTED_GO_DIRS); do (cd "$$directory" && GOPROXY=off go test ./...); done
 
@@ -2447,7 +2434,7 @@ paxeer-manifest-lint: workspace-inventory-check paxeer-npm-static-test
 	forge fmt --check --root paxeer-network/loadtest/contracts/evm
 	@set -eu; for manifest in $(PAXEER_LOCKED_RUST_MANIFESTS); do cargo clippy --manifest-path "$$manifest" --locked --offline --all-targets -- -D warnings; done
 	@test -z "$$(cd paxeer-network && gofmt -l .)"
-	cd paxeer-network && GOPROXY=off go vet ./... && go mod verify
+	$(PAXEER_MAKE) GOLANGCI_LINT=$(PAXEER_GOLANGCI_LINT) lint
 	@set -eu; for directory in $(PAXEER_NESTED_GO_DIRS); do (cd "$$directory" && test -z "$$(gofmt -l .)" && GOPROXY=off go vet ./... && go mod verify); done
 
 paxeer-docs-install:
@@ -2516,13 +2503,13 @@ workspace-install:
 
 workspace-build: build agent-build human-build platform-build-all programs-build interop-build \
 	paxeer-build paxeer-manifest-build developer-dashboard-build specgen-build
-	forge build
+	forge build --offline
 
 workspace-test: core-test-all agent-test human-test platform-test platform-verify-sdks \
 	platform-test-tooling platform-test-middleware platform-test-reference-apps \
 	platform-test-docs programs-test interop-test paxeer-test \
 	paxeer-manifest-test developer-dashboard-static-test specgen-test
-	forge test
+	forge test --offline
 
 workspace-lint: agent-lint human-lint platform-lint programs-lint interop-lint \
 	paxeer-manifest-lint developer-dashboard-static-test specgen-lint

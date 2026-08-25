@@ -113,13 +113,6 @@ platform-test-tooling:
 	sh -n platform/hosted/testnet/run-testnet.sh platform/hosted/testnet/reset-testnet.sh \
 		platform/hosted/testnet/render-status.sh platform/hosted/testnet/tests/hosted-smoke.sh
 	bash -n platform/cli/tests/install-journey.sh
-	@if test -n "$${LAYERX_TESTNET_URL:-}" && test -n "$${LAYERX_CONFORMANCE_ACTIVITIES:-}"; then \
-		sh platform/emulator/tests/conformance.sh \
-			"$${LAYERX_EMULATOR_URL:-http://127.0.0.1:9402}" \
-			"$$LAYERX_TESTNET_URL" "$${LAYERX_CONFORMANCE_ACTIVITIES}"; \
-	else \
-		echo "emulator/testnet differential skipped: set LAYERX_TESTNET_URL and LAYERX_CONFORMANCE_ACTIVITIES"; \
-	fi
 
 platform-hosted-smoke:
 	@test -n "$${LAYERX_TESTNET_URL:-}"

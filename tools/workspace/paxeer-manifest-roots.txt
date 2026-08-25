@@ -1,6 +1,7 @@
 # kind|path|classification
 foundry|paxeer-network/foundry.toml|build_test_lint
 foundry|paxeer-network/loadtest/contracts/evm/foundry.toml|build_test_lint
+npm|paxeer-network/loadtest/contracts/evm/lib/openzeppelin-contracts/contracts/package.json|vendored_source_checksum_bound
 go|paxeer-network/go.mod|build_test_lint
 go|paxeer-network/hpx/registry/go.mod|build_test_lint
 go|paxeer-network/sdk/cosmovisor/go.mod|build_test_lint

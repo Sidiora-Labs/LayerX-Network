@@ -28,6 +28,9 @@ if (!UPSTREAM) {
 const FORK_BLOCK = process.env.ETH_MAINNET_FORK_BLOCK
     ? Number(process.env.ETH_MAINNET_FORK_BLOCK)
     : undefined;
+if (!Number.isSafeInteger(FORK_BLOCK) || (FORK_BLOCK ?? 0) <= 0) {
+    throw new Error('ETH_MAINNET_FORK_BLOCK must be a positive pinned block number');
+}
 
 const config: HardhatUserConfig = {
     solidity: '0.8.28',
