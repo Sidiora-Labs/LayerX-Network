@@ -1,9 +1,8 @@
 {
   "description": "Invalid signature - checkout mandate signature does not verify",
   "test_case_id": "refusal-002-invalid-signature",
-  "checkout_presentation": "eyJhbGciOiJFUzI1NiIsImtpZCI6Imlzc3Vlci0wMDEifQ.eyJ2Y3QiOiJtYW5kYXRlLmNoZWNrb3V0LjEiLCJjaGVja291dF9qd3QiOiJleGFtcGxlIiwiY2hlY2tvdXRfaGFzaCI6ImV4YW1wbGUiLCJpYXQiOjE3MDAwMDAwMDAsImV4cCI6MTgwMDAwMDAwMH0.aW52YWxpZC1zaWduYXR1cmUtYnl0ZXM~",
-  "payment_presentation": "placeholder-for-payment~",
-  "merchant_checkout_jwt": "placeholder-for-merchant-checkout-jwt",
+  "generator": "mandates::direct_pair",
+  "mutation": "replace the first base64url character of the authentic checkout signature",
   "verification_context": {
     "now": 1700000000,
     "clock_skew_seconds": 300,
@@ -13,5 +12,5 @@
     "usage": null
   },
   "expected_outcome": "InvalidSignature",
-  "notes": "Signature bytes are syntactically valid base64url but cryptographically invalid for the payload."
+  "notes": "The negative case starts from a complete authentic pair and changes one signature character, preserving compact-JWS shape and signature length while invalidating the cryptographic proof."
 }

@@ -1,9 +1,8 @@
 {
   "description": "Checkout and payment binding mismatch - transaction_id does not match checkout hash",
   "test_case_id": "refusal-003-binding-mismatch",
-  "checkout_presentation": "placeholder-for-checkout~",
-  "payment_presentation": "placeholder-for-payment-with-wrong-hash~",
-  "merchant_checkout_jwt": "placeholder-for-merchant-checkout-jwt",
+  "generator": "mandates::direct_pair",
+  "mutation": "replace transaction_id with the base64url encoding of 32 zero bytes before signing",
   "verification_context": {
     "now": 1700000000,
     "clock_skew_seconds": 300,
@@ -13,5 +12,5 @@
     "usage": null
   },
   "expected_outcome": "PaymentBindingMismatch",
-  "notes": "Payment mandate transaction_id must equal hash of checkout_jwt from checkout mandate. This vector shows a mismatch."
+  "notes": "The mutated payment mandate is re-signed with the authentic issuer key, proving that PaymentBindingMismatch follows successful signature and schema verification."
 }

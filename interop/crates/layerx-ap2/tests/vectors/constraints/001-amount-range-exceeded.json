@@ -1,14 +1,14 @@
 {
   "description": "Payment mandate violates amount_range constraint - amount exceeds maximum",
   "test_case_id": "constraint-001-amount-range-exceeded",
-  "checkout_presentation": "placeholder-open-checkout~~placeholder-closed-checkout~",
-  "payment_presentation": "placeholder-open-payment~~placeholder-closed-payment~",
-  "merchant_checkout_jwt": "placeholder-for-merchant-checkout-jwt",
+  "generator": "mandates::autonomous_pair",
+  "authentic_amount_minor_units": 10000,
+  "constraint_max_minor_units": 5000,
   "verification_context": {
     "now": 1700000000,
     "clock_skew_seconds": 300,
     "expected_audience": "test-merchant-api",
-    "expected_nonce": "nonce-def456uvw",
+    "expected_nonce": "nonce-abc123xyz",
     "currency_minor_exponent": 2,
     "usage": null
   },

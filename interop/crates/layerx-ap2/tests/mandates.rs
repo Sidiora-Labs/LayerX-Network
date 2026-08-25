@@ -1,398 +1,247 @@
-use layerx_ap2::{
-    Ap2Error, KeyResolver, KeyUse, MandateMode, MandateVerifier, ProtectedHeader,
-    VerificationContext,
-};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
+use layerx_ap2::{Ap2Error, KeyResolver, KeyUse, MandateMode, MandateVerifier, ProtectedHeader, VerificationContext};
 use p256::ecdsa::signature::Signer as _;
 use p256::ecdsa::{Signature, SigningKey, VerifyingKey};
-use serde_json::json;
+use p256::elliptic_curve::sec1::ToEncodedPoint as _;
+use serde_json::{json, Value};
+use sha2::{Digest as _, Sha256};
 
+const NOW: u64 = 1_700_000_000;
+const ISSUER_KID: &str = "issuer-001";
+const MERCHANT_KID: &str = "merchant-001";
+const ALTERNATE_ISSUER_KID: &str = "issuer-002";
 
-/// Test key resolver that maps key IDs to known public keys for testing.
-struct TestKeyResolver {
-    keys: Vec<(KeyUse, String, VerifyingKey)>,
-}
+struct TestKeyResolver { issuer: VerifyingKey, merchant: VerifyingKey }
 
 impl TestKeyResolver {
-    fn new() -> Self {
-        let mut keys = Vec::new();
-
-        let issuer_signing = test_signing_key();
-        let issuer_key = *issuer_signing.verifying_key();
-        
-        keys.push((
-            KeyUse::CheckoutMandateIssuer,
-            "issuer-001".to_string(),
-            issuer_key,
-        ));
-        keys.push((
-            KeyUse::PaymentMandateIssuer,
-            "issuer-001".to_string(),
-            issuer_key,
-        ));
-
-        let merchant_key = *issuer_signing.verifying_key();
-
-        keys.push((
-            KeyUse::MerchantCheckout,
-            "merchant-001".to_string(),
-            merchant_key,
-        ));
-
-        Self { keys }
-    }
-
-    fn with_key(mut self, usage: KeyUse, kid: &str, key: VerifyingKey) -> Self {
-        self.keys.push((usage, kid.to_string(), key));
-        self
+    fn authentic() -> Self {
+        Self { issuer: *issuer_key().verifying_key(), merchant: *merchant_key().verifying_key() }
     }
 }
 
 impl KeyResolver for TestKeyResolver {
     fn resolve(&self, usage: KeyUse, header: &ProtectedHeader) -> Result<VerifyingKey, Ap2Error> {
-        let kid = header
-            .key_id()
-            .ok_or(Ap2Error::KeyResolution)?;
-        self.keys
-            .iter()
-            .find(|(stored_usage, stored_kid, _)| *stored_usage == usage && stored_kid == kid)
-            .map(|(_, _, key)| *key)
-            .ok_or(Ap2Error::KeyResolution)
+        match (usage, header.key_id()) {
+            (KeyUse::CheckoutMandateIssuer | KeyUse::PaymentMandateIssuer, Some(ISSUER_KID)) => Ok(self.issuer),
+            (KeyUse::PaymentMandateIssuer, Some(ALTERNATE_ISSUER_KID)) => Ok(*alternate_issuer_key().verifying_key()),
+            (KeyUse::MerchantCheckout, Some(MERCHANT_KID)) => Ok(self.merchant),
+            _ => Err(Ap2Error::KeyResolution),
+        }
     }
 }
 
+fn issuer_key() -> SigningKey { SigningKey::from_bytes((&[7_u8; 32]).into()).expect("valid issuer scalar") }
+fn merchant_key() -> SigningKey { SigningKey::from_bytes((&[11_u8; 32]).into()).expect("valid merchant scalar") }
+fn agent_key() -> SigningKey { SigningKey::from_bytes((&[19_u8; 32]).into()).expect("valid agent scalar") }
+fn alternate_issuer_key() -> SigningKey { SigningKey::from_bytes((&[23_u8; 32]).into()).expect("valid alternate issuer scalar") }
 
-fn test_signing_key() -> SigningKey {
-    SigningKey::from_bytes((&[7u8; 32]).into()).unwrap()
+fn context() -> VerificationContext<'static> {
+    VerificationContext { now: NOW, clock_skew_seconds: 300, expected_audience: "test-merchant-api", expected_nonce: "nonce-abc123xyz", currency_minor_exponent: 2, usage: None }
 }
 
-fn signed_time_bounded_checkout(iat: u64, exp: u64) -> String {
-    let header = json!({"alg": "ES256", "kid": "issuer-001"});
-    let payload = json!({
-        "iat": iat,
-        "exp": exp,
-        "delegate_payload": [{
-            "vct": "mandate.checkout.1",
-            "checkout_jwt": "placeholder",
-            "checkout_hash": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-        }]
-    });
-    let header = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&header).unwrap());
-    let payload = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload).unwrap());
+fn vector(source: &str, expected_generator: &str) -> Value {
+    let value: Value = serde_json::from_str(source).expect("golden vector specification is valid JSON");
+    assert_eq!(value["generator"], expected_generator);
+    assert!(!source.to_ascii_lowercase().contains("placeholder"));
+    value
+}
+
+fn jws(header: Value, payload: &Value, key: &SigningKey) -> String {
+    let header = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&header).expect("serializable header"));
+    let payload = URL_SAFE_NO_PAD.encode(serde_json::to_vec(payload).expect("serializable payload"));
     let signing_input = format!("{header}.{payload}");
-    let signature: Signature = test_signing_key().sign(signing_input.as_bytes());
-    format!("{signing_input}.{}~", URL_SAFE_NO_PAD.encode(signature.to_bytes()))
+    let signature: Signature = key.sign(signing_input.as_bytes());
+    format!("{signing_input}.{}", URL_SAFE_NO_PAD.encode(signature.to_bytes()))
 }
 
-fn test_context() -> VerificationContext<'static> {
-    VerificationContext {
-        now: 1700000000,
-        clock_skew_seconds: 300,
-        expected_audience: "test-merchant",
-        expected_nonce: "test-nonce-12345",
-        currency_minor_exponent: 2,
-        usage: None,
-    }
+fn root(mandate: Value) -> String {
+    let payload = json!({"iat": NOW - 60, "exp": NOW + 3_600, "delegate_payload": [mandate]});
+    format!("{}~", jws(json!({"alg":"ES256","typ":"dc+sd-jwt","kid":ISSUER_KID}), &payload, &issuer_key()))
+}
+
+fn alternate_root(mandate: Value) -> String {
+    let payload = json!({"iat": NOW - 60, "exp": NOW + 3_600, "delegate_payload": [mandate]});
+    format!("{}~", jws(json!({"alg":"ES256","typ":"dc+sd-jwt","kid":ALTERNATE_ISSUER_KID}), &payload, &alternate_issuer_key()))
+}
+
+fn agent_jwk() -> Value {
+    let key = agent_key();
+    let point = key.verifying_key().to_encoded_point(false);
+    json!({"kty":"EC","crv":"P-256","x":URL_SAFE_NO_PAD.encode(point.x().expect("x coordinate")),"y":URL_SAFE_NO_PAD.encode(point.y().expect("y coordinate"))})
+}
+
+fn key_bound(open: &str, mandate: Value) -> String {
+    let payload = json!({"iat":NOW-30,"exp":NOW+1_800,"aud":"test-merchant-api","nonce":"nonce-abc123xyz","sd_hash":URL_SAFE_NO_PAD.encode(Sha256::digest(open.as_bytes())),"delegate_payload":[mandate]});
+    format!("{}~", jws(json!({"alg":"ES256","typ":"kb+sd-jwt"}), &payload, &agent_key()))
+}
+
+fn merchant_checkout(amount: u128, id: &str) -> String {
+    jws(json!({"alg":"ES256","typ":"JWT","kid":MERCHANT_KID}), &json!({
+        "id":id,"merchant":{"id":"merchant-001","name":"Test Merchant"},
+        "line_items":[{"id":"line-001","item":{"id":"sku-001","title":"LayerX node credit","price":amount},"quantity":1,"totals":[{"type":"total","amount":amount}]}],
+        "status":"completed","currency":"USD","totals":[{"type":"total","amount":amount}],"links":[]
+    }), &merchant_key())
+}
+
+fn closed_checkout(checkout_jwt: &str) -> Value {
+    json!({"vct":"mandate.checkout.1","checkout_jwt":checkout_jwt,"checkout_hash":URL_SAFE_NO_PAD.encode(Sha256::digest(checkout_jwt.as_bytes())),"iat":NOW-30,"exp":NOW+1_800})
+}
+
+fn closed_payment(checkout_jwt: &str, amount: u128) -> Value {
+    json!({"vct":"mandate.payment.1","transaction_id":URL_SAFE_NO_PAD.encode(Sha256::digest(checkout_jwt.as_bytes())),"payee":{"id":"merchant-001","name":"Test Merchant"},"payment_amount":{"amount":amount,"currency":"USD"},"payment_instrument":{"id":"card-001","type":"card"},"iat":NOW-30,"exp":NOW+1_800})
+}
+
+fn direct_pair(amount: u128) -> (String, String) {
+    let checkout_jwt = merchant_checkout(amount, "checkout-12345");
+    (root(closed_checkout(&checkout_jwt)), root(closed_payment(&checkout_jwt, amount)))
+}
+
+fn autonomous_pair(amount: u128, maximum: u128) -> (String, String) {
+    let open_checkout = root(json!({"vct":"mandate.checkout.open.1","constraints":[{"type":"checkout.line_items","items":[{"id":"requested-credit","acceptable_items":[{"id":"sku-001","title":"LayerX node credit"}],"quantity":1}]}],"cnf":{"jwk":agent_jwk()},"iat":NOW-60,"exp":NOW+3_600}));
+    let reference = URL_SAFE_NO_PAD.encode(Sha256::digest(open_checkout.as_bytes()));
+    let open_payment = root(json!({"vct":"mandate.payment.open.1","constraints":[{"type":"payment.reference","conditional_transaction_id":reference},{"type":"payment.amount_range","currency":"USD","min":1,"max":maximum}],"cnf":{"jwk":agent_jwk()},"iat":NOW-60,"exp":NOW+3_600}));
+    let checkout_jwt = merchant_checkout(amount, "checkout-67890");
+    let checkout = key_bound(&open_checkout, closed_checkout(&checkout_jwt));
+    let payment = key_bound(&open_payment, closed_payment(&checkout_jwt, amount));
+    (format!("{open_checkout}~~{checkout}"), format!("{open_payment}~~{payment}"))
+}
+
+fn corrupt_signature(presentation: &str) -> String {
+    let first = presentation.find('.').expect("header separator");
+    let start = presentation[first + 1..].find('.').map(|next| first + next + 2).expect("payload separator");
+    let mut bytes = presentation.as_bytes().to_vec();
+    bytes[start] = if bytes[start] == b'A' { b'B' } else { b'A' };
+    String::from_utf8(bytes).expect("base64url mutation is UTF-8")
 }
 
 #[test]
-fn mandate_verification_refuses_empty_presentations() {
-    let resolver = TestKeyResolver::new();
-    let verifier = MandateVerifier::new(&resolver);
-    let context = test_context();
-
-    let result = verifier.verify("", "", &context);
-    assert!(matches!(result, Err(Ap2Error::Bounds)));
+fn authentic_direct_vector_verifies_expected_values() {
+    let spec = vector(include_str!("vectors/direct/001-minimal-valid.json"), "mandates::direct_pair");
+    let amount = u128::from(spec["expected_values"]["amount_minor_units"].as_u64().expect("minor-unit amount"));
+    let (checkout, payment) = direct_pair(amount);
+    let resolver = TestKeyResolver::authentic();
+    let verified = MandateVerifier::new(&resolver).verify(&checkout, &payment, &context()).expect("authentic direct pair verifies");
+    assert_eq!(verified.mode(), MandateMode::Direct);
+    assert_eq!(verified.checkout_id(), spec["expected_values"]["checkout_id"].as_str().expect("checkout id"));
+    assert_eq!(verified.payee().id(), spec["expected_values"]["payee_id"].as_str().expect("payee id"));
+    assert_eq!(verified.amount().minor_units(), amount);
+    assert_eq!(verified.amount().currency(), spec["expected_values"]["currency"].as_str().expect("currency"));
 }
 
 #[test]
-fn mandate_verification_refuses_invalid_signatures() {
-    let resolver = TestKeyResolver::new();
-    let verifier = MandateVerifier::new(&resolver);
-    let context = test_context();
+fn authentic_autonomous_vector_verifies_key_binding_and_constraints() {
+    let _spec = vector(include_str!("vectors/autonomous/001-line-items.json"), "mandates::autonomous_pair");
+    let (checkout, payment) = autonomous_pair(15_000, 20_000);
+    let resolver = TestKeyResolver::authentic();
+    let verified = MandateVerifier::new(&resolver).verify(&checkout, &payment, &context()).expect("authentic autonomous pair verifies");
+    assert_eq!(verified.mode(), MandateMode::Autonomous);
+    assert_eq!(verified.checkout_id(), "checkout-67890");
+    assert_eq!(verified.amount().minor_units(), 15_000);
+}
 
-    // Syntactically valid but cryptographically invalid SD-JWT
-    let invalid_jwt = "eyJhbGciOiJFUzI1NiIsImtpZCI6Imlzc3Vlci0wMDEifQ.\
-        eyJ2Y3QiOiJtYW5kYXRlLmNoZWNrb3V0LjEiLCJfcyI6W119.\
-        aW52YWxpZC1zaWduYXR1cmUtZGF0YS1oZXJl~";
-
-    let result = verifier.verify(invalid_jwt, invalid_jwt, &context);
+#[test]
+fn authentic_signature_corruption_is_refused_cryptographically() {
+    let _spec = vector(include_str!("vectors/refusals/002-invalid-signature.json"), "mandates::direct_pair");
+    let (checkout, payment) = direct_pair(10_000);
+    let resolver = TestKeyResolver::authentic();
+    let result = MandateVerifier::new(&resolver).verify(&corrupt_signature(&checkout), &payment, &context());
     assert!(matches!(result, Err(Ap2Error::InvalidSignature)));
 }
 
 #[test]
-fn mandate_verification_refuses_mismatched_issuers() {
-    let resolver = TestKeyResolver::new();
-    let verifier = MandateVerifier::new(&resolver);
-    let context = test_context();
-
-    // Two mandates with different issuer keys would fail
-    // This would be caught by the same-key check in verify_chain
-    // For now we test structure with identical presentations
-    let checkout = create_minimal_closed_checkout_mandate();
-    let payment = create_minimal_closed_payment_mandate_different_issuer();
-
-    let result = verifier.verify(&checkout, &payment, &context);
-    assert!(matches!(
-        result,
-        Err(Ap2Error::InvalidSignature | Ap2Error::KeyResolution)
-    ));
+fn authentic_payment_binding_corruption_is_refused_after_signature_verification() {
+    let _spec = vector(include_str!("vectors/refusals/003-binding-mismatch.json"), "mandates::direct_pair");
+    let checkout_jwt = merchant_checkout(10_000, "checkout-12345");
+    let checkout = root(closed_checkout(&checkout_jwt));
+    let mut mandate = closed_payment(&checkout_jwt, 10_000);
+    mandate["transaction_id"] = Value::String(URL_SAFE_NO_PAD.encode([0_u8; 32]));
+    let resolver = TestKeyResolver::authentic();
+    let result = MandateVerifier::new(&resolver).verify(&checkout, &root(mandate), &context());
+    assert!(matches!(result, Err(Ap2Error::PaymentBindingMismatch)));
 }
 
 #[test]
-fn mandate_verification_refuses_expired_mandates() {
-    let resolver = TestKeyResolver::new();
-    let verifier = MandateVerifier::new(&resolver);
-    
-    let mut context = test_context();
-    context.now = 2000000000; // Far in the future
-
-    let checkout = signed_time_bounded_checkout(1_700_000_000, 1_800_000_000);
-    let payment = create_minimal_closed_payment_mandate();
-
-    let result = verifier.verify(&checkout, &payment, &context);
+fn authentic_expired_vector_is_refused_after_signature_verification() {
+    let _spec = vector(include_str!("vectors/refusals/001-expired.json"), "mandates::root");
+    let checkout_jwt = merchant_checkout(10_000, "checkout-12345");
+    let mut mandate = closed_checkout(&checkout_jwt);
+    mandate["iat"] = json!(NOW - 7_200);
+    mandate["exp"] = json!(NOW - 3_600);
+    let resolver = TestKeyResolver::authentic();
+    let result = MandateVerifier::new(&resolver).verify(&root(mandate), &root(closed_payment(&checkout_jwt, 10_000)), &context());
     assert!(matches!(result, Err(Ap2Error::Expired)));
 }
 
 #[test]
-fn mandate_verification_refuses_not_yet_valid_mandates() {
-    let resolver = TestKeyResolver::new();
-    let verifier = MandateVerifier::new(&resolver);
-    
-    let mut context = test_context();
-    context.now = 1000000000; // Far in the past
+fn authentic_amount_violation_reaches_constraint_evaluation() {
+    let spec = vector(include_str!("vectors/constraints/001-amount-range-exceeded.json"), "mandates::autonomous_pair");
+    let amount = u128::from(spec["authentic_amount_minor_units"].as_u64().expect("authentic amount"));
+    let maximum = u128::from(spec["constraint_max_minor_units"].as_u64().expect("constraint maximum"));
+    let (checkout, payment) = autonomous_pair(amount, maximum);
+    let resolver = TestKeyResolver::authentic();
+    let result = MandateVerifier::new(&resolver).verify(&checkout, &payment, &context());
+    assert!(matches!(result, Err(Ap2Error::ConstraintViolated("payment.amount_range"))));
+}
 
-    let checkout = signed_time_bounded_checkout(1_700_000_000, 1_800_000_000);
-    let payment = create_minimal_closed_payment_mandate();
+#[test]
+fn presentation_bounds_are_enforced_before_parsing() {
+    let resolver = TestKeyResolver::authentic();
+    let oversized = "a".repeat(300_000);
+    let result = MandateVerifier::new(&resolver).verify(&oversized, &oversized, &context());
+    assert!(matches!(result, Err(Ap2Error::Bounds)));
+}
 
-    let result = verifier.verify(&checkout, &payment, &context);
+#[test]
+fn empty_presentations_are_refused_at_the_bound() {
+    let resolver = TestKeyResolver::authentic();
+    let result = MandateVerifier::new(&resolver).verify("", "", &context());
+    assert!(matches!(result, Err(Ap2Error::Bounds)));
+}
+
+#[test]
+fn authentic_mismatched_issuers_are_refused() {
+    let checkout_jwt = merchant_checkout(10_000, "checkout-12345");
+    let checkout = root(closed_checkout(&checkout_jwt));
+    let payment = alternate_root(closed_payment(&checkout_jwt, 10_000));
+    let resolver = TestKeyResolver::authentic();
+    let result = MandateVerifier::new(&resolver).verify(&checkout, &payment, &context());
+    assert!(matches!(result, Err(Ap2Error::InvalidSignature)));
+}
+
+#[test]
+fn authentic_not_yet_valid_mandate_is_refused() {
+    let checkout_jwt = merchant_checkout(10_000, "checkout-12345");
+    let mut mandate = closed_checkout(&checkout_jwt);
+    mandate["iat"] = json!(NOW + 3_600);
+    mandate["exp"] = json!(NOW + 7_200);
+    let resolver = TestKeyResolver::authentic();
+    let result = MandateVerifier::new(&resolver).verify(&root(mandate), &root(closed_payment(&checkout_jwt, 10_000)), &context());
     assert!(matches!(result, Err(Ap2Error::NotYetValid)));
 }
 
 #[test]
-fn mandate_verification_refuses_audience_mismatch() {
-    let resolver = TestKeyResolver::new();
-    let verifier = MandateVerifier::new(&resolver);
-    
-    let mut context = test_context();
-    context.expected_audience = "wrong-audience";
-
-    let checkout = create_minimal_closed_checkout_mandate();
-    let payment = create_minimal_closed_payment_mandate();
-
-    // This would fail if the mandate included autonomous delegation with audience
-    let result = verifier.verify(&checkout, &payment, &context);
-    // Direct mandates don't check audience, autonomous ones do
-    assert!(result.is_err());
+fn authentic_autonomous_audience_mismatch_is_refused() {
+    let (checkout, payment) = autonomous_pair(15_000, 20_000);
+    let resolver = TestKeyResolver::authentic();
+    let mut wrong_context = context();
+    wrong_context.expected_audience = "other-merchant-api";
+    let result = MandateVerifier::new(&resolver).verify(&checkout, &payment, &wrong_context);
+    assert!(matches!(result, Err(Ap2Error::AudienceMismatch)));
 }
 
 #[test]
-fn mandate_verification_refuses_unsupported_algorithms() {
-    // AP2 adapter only supports ES256
-    // Any other algorithm should be rejected during header validation
-    let resolver = TestKeyResolver::new();
-    let verifier = MandateVerifier::new(&resolver);
-    let context = test_context();
-
-    // A mandate with RS256 or HS256 would be rejected
-    let result = verifier.verify(
-        "eyJhbGciOiJSUzI1NiJ9.e30.sig~",
-        "eyJhbGciOiJSUzI1NiJ9.e30.sig~",
-        &context,
-    );
-    assert!(matches!(result, Err(Ap2Error::UnsupportedAlgorithm | Ap2Error::Malformed(_))));
+fn signed_payment_amount_mismatch_is_refused() {
+    let checkout_jwt = merchant_checkout(10_000, "checkout-12345");
+    let resolver = TestKeyResolver::authentic();
+    let result = MandateVerifier::new(&resolver).verify(&root(closed_checkout(&checkout_jwt)), &root(closed_payment(&checkout_jwt, 20_000)), &context());
+    assert!(matches!(result, Err(Ap2Error::PaymentBindingMismatch)));
 }
 
 #[test]
-fn mandate_verification_direct_mode_minimal() {
-    let resolver = TestKeyResolver::new();
-    let verifier = MandateVerifier::new(&resolver);
-    let context = test_context();
-
-    let checkout = create_minimal_closed_checkout_mandate();
-    let payment = create_minimal_closed_payment_mandate();
-
-    // This will fail because the signatures are synthetic
-    // In a real implementation with proper golden vectors, this would succeed
-    let result = verifier.verify(&checkout, &payment, &context);
-    
-    // We expect failure because these are minimal test fixtures without real signatures
-    assert!(result.is_err());
-}
-
-#[test]
-fn mandate_verification_constraint_checkout_binding_mismatch() {
-    let resolver = TestKeyResolver::new();
-    let verifier = MandateVerifier::new(&resolver);
-    let context = test_context();
-
-    // Payment mandate referencing a different checkout would fail
-    let checkout = create_minimal_closed_checkout_mandate();
-    let payment = create_payment_with_wrong_checkout_hash();
-
-    let result = verifier.verify(&checkout, &payment, &context);
-    assert!(result.is_err());
-}
-
-#[test]
-fn mandate_verification_constraint_amount_mismatch() {
-    let resolver = TestKeyResolver::new();
-    let verifier = MandateVerifier::new(&resolver);
-    let context = test_context();
-
-    // Checkout with 100 USD but payment claiming 200 USD
-    let checkout = create_checkout_with_amount(10000); // 100.00 USD
-    let payment = create_payment_with_amount(20000); // 200.00 USD
-
-    let result = verifier.verify(&checkout, &payment, &context);
-    assert!(result.is_err());
-}
-
-// Helper functions to create minimal test mandates
-// These are placeholders - real golden vectors would have proper signatures
-
-fn create_minimal_closed_checkout_mandate() -> String {
-    // Minimal closed checkout mandate structure
-    // In production, this would be a real SD-JWT with valid signature
-    "eyJhbGciOiJFUzI1NiIsImtpZCI6Imlzc3Vlci0wMDEifQ.\
-     eyJ2Y3QiOiJtYW5kYXRlLmNoZWNrb3V0LjEiLCJjaGVja291dF9qd3QiOiJleGFtcGxlIiwiY2hlY2tvdXRfaGFzaCI6ImV4YW1wbGUiLCJpYXQiOjE3MDAwMDAwMDAsImV4cCI6MTgwMDAwMDAwMH0.\
-     c3ludGhldGljLXNpZ25hdHVyZS1wbGFjZWhvbGRlcg~".to_string()
-}
-
-fn create_minimal_closed_payment_mandate() -> String {
-    "eyJhbGciOiJFUzI1NiIsImtpZCI6Imlzc3Vlci0wMDEifQ.\
-     eyJ2Y3QiOiJtYW5kYXRlLnBheW1lbnQuMSIsInRyYW5zYWN0aW9uX2lkIjoiZXhhbXBsZSIsInBheWVlIjp7ImlkIjoibWVyY2hhbnQiLCJuYW1lIjoiVGVzdCJ9LCJwYXltZW50X2Ftb3VudCI6eyJhbW91bnQiOjEwMDAwLCJjdXJyZW5jeSI6IlVTRCJ9LCJwYXltZW50X2luc3RydW1lbnQiOnsiaWQiOiJwaSIsInR5cGUiOiJjYXJkIn0sImlhdCI6MTcwMDAwMDAwMCwiZXhwIjoxODAwMDAwMDAwfQ.\
-     c3ludGhldGljLXNpZ25hdHVyZS1wbGFjZWhvbGRlcg~".to_string()
-}
-
-fn create_minimal_closed_payment_mandate_different_issuer() -> String {
-    "eyJhbGciOiJFUzI1NiIsImtpZCI6ImRpZmZlcmVudC1pc3N1ZXIifQ.\
-     eyJ2Y3QiOiJtYW5kYXRlLnBheW1lbnQuMSIsInRyYW5zYWN0aW9uX2lkIjoiZXhhbXBsZSIsInBheWVlIjp7ImlkIjoibWVyY2hhbnQiLCJuYW1lIjoiVGVzdCJ9LCJwYXltZW50X2Ftb3VudCI6eyJhbW91bnQiOjEwMDAwLCJjdXJyZW5jeSI6IlVTRCJ9LCJwYXltZW50X2luc3RydW1lbnQiOnsiaWQiOiJwaSIsInR5cGUiOiJjYXJkIn0sImlhdCI6MTcwMDAwMDAwMCwiZXhwIjoxODAwMDAwMDAwfQ.\
-     c3ludGhldGljLXNpZ25hdHVyZS1wbGFjZWhvbGRlcg~".to_string()
-}
-
-fn create_payment_with_wrong_checkout_hash() -> String {
-    "eyJhbGciOiJFUzI1NiIsImtpZCI6Imlzc3Vlci0wMDEifQ.\
-     eyJ2Y3QiOiJtYW5kYXRlLnBheW1lbnQuMSIsInRyYW5zYWN0aW9uX2lkIjoid3JvbmctaGFzaCIsInBheWVlIjp7ImlkIjoibWVyY2hhbnQiLCJuYW1lIjoiVGVzdCJ9LCJwYXltZW50X2Ftb3VudCI6eyJhbW91bnQiOjEwMDAwLCJjdXJyZW5jeSI6IlVTRCJ9LCJwYXltZW50X2luc3RydW1lbnQiOnsiaWQiOiJwaSIsInR5cGUiOiJjYXJkIn0sImlhdCI6MTcwMDAwMDAwMCwiZXhwIjoxODAwMDAwMDAwfQ.\
-     c3ludGhldGljLXNpZ25hdHVyZS1wbGFjZWhvbGRlcg~".to_string()
-}
-
-fn create_checkout_with_amount(_amount: u128) -> String {
-    create_minimal_closed_checkout_mandate()
-}
-
-fn create_payment_with_amount(_amount: u128) -> String {
-    create_minimal_closed_payment_mandate()
-}
-
-#[test]
-fn mandate_mode_detection() {
-    // Test that direct mandates (1 segment) are detected correctly
-    // Test that autonomous mandates (2 segments with ~~) are detected correctly
-    
-    // This would be tested with proper golden vectors showing the structure
-    let direct_checkout = "segment1~";
-    let autonomous_checkout = "segment1~~segment2~";
-    
-    assert_eq!(direct_checkout.matches("~~").count(), 0);
-    assert_eq!(autonomous_checkout.matches("~~").count(), 1);
-}
-
-#[test]
-fn golden_vector_structure_bounds() {
-    // Test that the verifier enforces declared bounds
-    let resolver = TestKeyResolver::new();
-    let verifier = MandateVerifier::new(&resolver);
-    let context = test_context();
-    
-    // Presentation exceeding TOKEN_LIMIT (256 KB) should be refused
-    let oversized = "a".repeat(300_000);
-    let result = verifier.verify(&oversized, &oversized, &context);
-    assert!(matches!(result, Err(Ap2Error::Bounds)));
-    
-    // Collection sizes should be bounded
-    // Disclosure counts should be bounded
-    // These would be tested with crafted golden vectors
-}
-
-#[test]
-fn golden_vector_checkout_line_items() {
-    // Test that checkout line items are validated correctly
-    // Test that line item constraints are enforced
-    // Test that the bipartite matching algorithm works correctly
-    
-    // This would use golden vectors showing valid and invalid line item scenarios
-}
-
-#[test]
-fn golden_vector_payment_constraints() {
-    // Test allowed_payees constraint
-    // Test allowed_payment_instruments constraint
-    // Test amount_range constraint
-    // Test execution_date constraint
-    // Test agent_recurrence constraint
-    // Test budget constraint
-    
-    // Each would have golden vectors showing valid and violating cases
-}
-
-#[test]
-fn golden_vector_conformance_full_direct_flow() {
-    // Full golden vector test for direct mandates
-    // This would include:
-    // - Valid checkout JWT from merchant
-    // - Valid closed checkout mandate from issuer
-    // - Valid closed payment mandate from issuer
-    // - All signatures verify
-    // - All constraints pass
-    // - Result includes correct parsed values
-    
-    // Placeholder: real golden vectors would be loaded from files
-}
-
-#[test]
-fn golden_vector_conformance_full_autonomous_flow() {
-    // Full golden vector test for autonomous (delegated) mandates
-    // This would include:
-    // - Open checkout mandate with constraints
-    // - Open payment mandate with constraints  
-    // - Closed checkout mandate (key-bound to agent)
-    // - Closed payment mandate (key-bound to agent)
-    // - Key binding verification
-    // - Constraint evaluation
-    // - All signatures verify
-    
-    // Placeholder: real golden vectors would be loaded from files
-}
-
-#[test]
-fn evidence_export_format() {
-    // Test that LayerX-side evidence exports in the correct format
-    // Test that portable receipts are structured correctly
-    // Test that AP2 counterparties can verify the evidence
-    
-    // This would verify the SignedAp2Evidence structure
-}
-
-#[test]
-fn typed_refusals_are_specific() {
-    // Test that each failure mode produces a distinct error variant
-    // Test that error messages don't leak sensitive data
-    
-    let resolver = TestKeyResolver::new();
-    let verifier = MandateVerifier::new(&resolver);
-    let context = test_context();
-    
-    // Each of these should produce a specific error
-    let test_cases = vec![
-        ("", Ap2Error::Bounds),
-        // Add more test cases for each error variant
-    ];
-    
-    for (input, expected_error) in test_cases {
-        let result = verifier.verify(input, input, &context);
-        assert!(result.is_err());
-        // In real tests, we'd match the specific error variant
-    }
+fn unsupported_algorithm_is_refused_before_key_resolution() {
+    let token = format!("{}~", jws(json!({"alg":"RS256","kid":ISSUER_KID}), &json!({"delegate_payload":[]}), &issuer_key()));
+    let resolver = TestKeyResolver::authentic();
+    let result = MandateVerifier::new(&resolver).verify(&token, &token, &context());
+    assert!(matches!(result, Err(Ap2Error::UnsupportedAlgorithm)));
 }

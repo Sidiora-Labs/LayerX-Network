@@ -1,9 +1,10 @@
 {
   "description": "Autonomous mandate with line items constraint - fully disclosed",
   "test_case_id": "autonomous-001-line-items",
-  "checkout_presentation": "placeholder-open-checkout~~placeholder-closed-checkout~",
-  "payment_presentation": "placeholder-open-payment~~placeholder-closed-payment~",
-  "merchant_checkout_jwt": "placeholder-for-merchant-checkout-jwt",
+  "generator": "mandates::autonomous_pair",
+  "issuer_key_scalar": 7,
+  "merchant_key_scalar": 11,
+  "agent_key_scalar": 19,
   "verification_context": {
     "now": 1700000000,
     "clock_skew_seconds": 300,
@@ -15,12 +16,12 @@
   "expected_outcome": "success",
   "expected_values": {
     "mode": "Autonomous",
-    "transaction_id": "example-transaction-id",
+    "transaction_id_derivation": "base64url(sha256(merchant_checkout_jwt))",
     "checkout_id": "checkout-67890",
-    "payee_id": "merchant-002",
-    "payee_name": "Autonomous Test Merchant",
+    "payee_id": "merchant-001",
+    "payee_name": "Test Merchant",
     "amount_minor_units": 15000,
     "currency": "USD"
   },
-  "notes": "This is a placeholder. Real golden vectors would show open mandates with constraints, key-bound closed mandates, and full constraint evaluation."
+  "notes": "The test generator signs open mandates with the issuer key and terminal KB-SD-JWTs with the JWK-bound agent key. The complete presentations exercise signature, sd_hash, audience, nonce, checkout, line-item, reference, and amount-range verification."
 }

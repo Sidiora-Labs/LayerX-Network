@@ -152,11 +152,11 @@ severity = "note"
 
 [observation.23.1.1]
 task = "23.1"
-file = "interop/crates/layerx-ap2/tests/mandates.rs"
-symbol = "golden_vector_conformance"
-observed = "Task 23.1 implemented a complete mandate verification test harness with structures for golden vectors conforming to AP2 spec commit e1ea56db72a6385bce3e5c1112b3a56ce60acb43, but the actual cryptographic test material (properly signed SD-JWTs with real keys) is placeholder-only until the published AP2 specification test suite is integrated."
-assumption = "Human qualification will fetch the official AP2 reference test vectors from the pinned specification commit and populate interop/crates/layerx-ap2/tests/vectors/ with real signed mandate pairs before production use."
-severity = "dependency-boundary"
+file = "interop/crates/layerx-ap2/tests/mandates.rs, interop/crates/layerx-ap2/tests/vectors"
+symbol = "direct_pair, autonomous_pair, corrupt_signature"
+observed = "Post-implementation review found the AP2 conformance tests used synthetic compact strings that never carried valid signatures, success cases asserted only that verification failed, helper amount arguments were ignored, several constraint and evidence tests had empty bodies, and the JSON vectors advertised success while containing placeholder tokens. The repair derives fixed valid P-256 issuer, merchant and delegated-agent keys, signs canonical merchant JWS, issuer SD-JWT and key-bound terminal presentations, exercises direct and autonomous success through the production MandateVerifier, and derives signature, binding, expiry and amount-range refusals from authentic signed evidence. The JSON records now describe the exact deterministic generator, key scalars, semantic inputs and minimal mutation instead of pretending placeholder strings are golden evidence."
+assumption = "Human qualification must run the layerx-ap2 test target and independently replay the deterministic vectors against the pinned AP2 revision. The fixed keys are public test material only and are not production trust roots. No build, test, formatter or external AP2 conformance command was run during this source repair, so no passing result or upstream certification is asserted."
+severity = "post-implementation-repair"
 
 [observation.23.1.2]
 task = "23.1"
