@@ -4,7 +4,7 @@ use layerx_programs_runtime::test_support::{
 };
 use layerx_programs_runtime::{
     hash_bytes, Deploy, HashAlgorithm, Lifecycle, LifecycleRefusal, Migration, ProgramId, Upgrade,
-    UpgradePolicy, ValidatedModule, WasmEngine, WasmValue, ABI_VERSION,
+    UpgradePolicy, ABI_VERSION,
 };
 
 fn program(byte: u8) -> ProgramId {
@@ -14,20 +14,6 @@ fn program(byte: u8) -> ProgramId {
 fn code_hash(wasm: &[u8]) -> [u8; 32] {
     hash_bytes(HashAlgorithm::Sha256, wasm)
         .unwrap_or_else(|error| panic!("program code hash refused: {error}"))
-}
-
-fn call_deployed(wasm: &[u8], export: &str, args: &[WasmValue]) -> Vec<WasmValue> {
-    let engine =
-        WasmEngine::declared().unwrap_or_else(|error| panic!("engine construction refused: {error}"));
-    let validated: ValidatedModule = engine
-        .validate(wasm)
-        .unwrap_or_else(|error| panic!("deployed module refused: {error}"));
-    let mut instance = validated
-        .instantiate()
-        .unwrap_or_else(|fault| panic!("deployed module instantiation faulted: {fault}"));
-    instance
-        .call(export, args)
-        .unwrap_or_else(|fault| panic!("deployed export faulted: {fault}"))
 }
 
 fn migration_module() -> Vec<u8> {
@@ -40,7 +26,7 @@ fn migration_module() -> Vec<u8> {
 }
 
 #[test]
-fn deploy_becomes_callable_only_with_verified_receipt() {
+fn deploy_returns_an_opaque_receipt_without_a_runtime_trust_bypass() {
     let mut lifecycle = Lifecycle::declared()
         .unwrap_or_else(|error| panic!("lifecycle construction refused: {error}"));
     let wasm = add_module();
@@ -54,14 +40,11 @@ fn deploy_becomes_callable_only_with_verified_receipt() {
             upgrade_policy: UpgradePolicy::default(),
         })
         .unwrap_or_else(|error| panic!("deployment refused: {error}"));
-    assert_eq!(
-        lifecycle.callable(&receipt, false),
-        Err(LifecycleRefusal::UnverifiedReceipt)
-    );
-    let callable = lifecycle
-        .callable(&receipt, true)
-        .unwrap_or_else(|error| panic!("verified deployment not callable: {error}"));
-    assert_eq!(callable.code_hash, expected_code_hash);
+    assert_eq!(receipt.program(), program(1));
+    assert_eq!(receipt.version(), 1);
+    assert_eq!(receipt.new_code_hash(), expected_code_hash);
+    assert_eq!(receipt.old_code_hash(), None);
+    assert!(receipt.migration().is_none());
 }
 
 #[test]
@@ -117,13 +100,13 @@ fn immutable_is_default_and_upgrade_records_hash_history() {
             }),
         })
         .unwrap_or_else(|error| panic!("upgrade refused: {error}"));
-    assert_eq!(receipt.version, 2);
-    assert_eq!(receipt.old_code_hash, Some(deployed_hash));
-    assert!(receipt.migration.is_some());
+    assert_eq!(receipt.version(), 2);
+    assert_eq!(receipt.old_code_hash(), Some(deployed_hash));
+    assert!(receipt.migration().is_some());
 }
 
 #[test]
-fn deploy_call_upgrade_and_migration_run_end_to_end() {
+fn deploy_and_upgrade_record_exact_hashes_and_migration_outcome() {
     let mut lifecycle = Lifecycle::declared()
         .unwrap_or_else(|error| panic!("lifecycle construction refused: {error}"));
 
@@ -138,27 +121,9 @@ fn deploy_call_upgrade_and_migration_run_end_to_end() {
             upgrade_policy: UpgradePolicy::Authority([22; 32]),
         })
         .unwrap_or_else(|error| panic!("deployment refused: {error}"));
-    assert_eq!(deploy_receipt.version, 1);
-    assert_eq!(deploy_receipt.old_code_hash, None);
-    assert!(deploy_receipt.migration.is_none());
-
-    assert_eq!(
-        lifecycle.callable(&deploy_receipt, false),
-        Err(LifecycleRefusal::UnverifiedReceipt)
-    );
-    let deployed = lifecycle
-        .callable(&deploy_receipt, true)
-        .unwrap_or_else(|error| panic!("verified deployment not callable: {error}"));
-    assert_eq!(deployed.code_hash, deploy_hash);
-    assert_eq!(
-        call_deployed(
-            &deployed.wasm,
-            "add",
-            &[WasmValue::I32(19), WasmValue::I32(23)],
-        ),
-        vec![WasmValue::I32(42)]
-    );
-
+    assert_eq!(deploy_receipt.version(), 1);
+    assert_eq!(deploy_receipt.old_code_hash(), None);
+    assert!(deploy_receipt.migration().is_none());
     let upgrade_wasm = migration_module();
     let upgrade_hash = code_hash(&upgrade_wasm);
     let upgrade_receipt = lifecycle
@@ -173,24 +138,10 @@ fn deploy_call_upgrade_and_migration_run_end_to_end() {
             }),
         })
         .unwrap_or_else(|error| panic!("upgrade refused: {error}"));
-    assert_eq!(upgrade_receipt.version, 2);
-    assert_eq!(upgrade_receipt.old_code_hash, Some(deploy_hash));
-    assert_eq!(upgrade_receipt.new_code_hash, upgrade_hash);
-    assert!(upgrade_receipt.migration.is_some());
-
-    let upgraded = lifecycle
-        .callable(&upgrade_receipt, true)
-        .unwrap_or_else(|error| panic!("verified upgrade not callable: {error}"));
-    assert_eq!(upgraded.code_hash, upgrade_hash);
-    assert_eq!(
-        call_deployed(&upgraded.wasm, "migrate", &[]),
-        vec![WasmValue::I32(0)]
-    );
-
-    let original = lifecycle
-        .callable(&deploy_receipt, true)
-        .unwrap_or_else(|error| panic!("original version not callable: {error}"));
-    assert_eq!(original.code_hash, deploy_hash);
+    assert_eq!(upgrade_receipt.version(), 2);
+    assert_eq!(upgrade_receipt.old_code_hash(), Some(deploy_hash));
+    assert_eq!(upgrade_receipt.new_code_hash(), upgrade_hash);
+    assert!(upgrade_receipt.migration().is_some());
 }
 
 #[test]
@@ -222,7 +173,7 @@ fn deploy_refuses_a_mismatched_code_hash_without_installing_the_program() {
             upgrade_policy: UpgradePolicy::Immutable,
         })
         .unwrap_or_else(|error| panic!("matching deployment refused: {error}"));
-    assert_eq!(receipt.version, 1);
+    assert_eq!(receipt.version(), 1);
 }
 
 #[test]
@@ -267,8 +218,8 @@ fn upgrade_refuses_a_mismatched_code_hash_without_advancing_history() {
             migration: None,
         })
         .unwrap_or_else(|error| panic!("matching upgrade refused: {error}"));
-    assert_eq!(receipt.version, 2);
-    assert_eq!(receipt.old_code_hash, Some(deployed_hash));
+    assert_eq!(receipt.version(), 2);
+    assert_eq!(receipt.old_code_hash(), Some(deployed_hash));
 }
 
 #[test]

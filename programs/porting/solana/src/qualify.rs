@@ -264,7 +264,7 @@ pub fn deploy_and_verify(
     registry.replay_journal(core::slice::from_ref(&record))?;
     let verifier = SourceVerifier::new(PortBuildRunner, REBUILD_ATTEMPTS)?;
     let build = verifier.reproduce(source, &build_plan())?;
-    let status = registry.verify_source(publication.program, receipt.version, &build)?;
+    let status = registry.verify_source(publication.program, receipt.version(), &build)?;
     if !matches!(status, SourceStatus::Verified { .. }) {
         return Err(PortRefusal::UnverifiedSource);
     }

@@ -28,6 +28,62 @@ pub struct ObservedHead {
     pub observed_at: u64,
 }
 
+/// Opaque callable deployment material admitted from the canonical journal.
+/// Ordinary callers can inspect this evidence but cannot construct it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VerifiedDeploymentEvidence {
+    program: ProgramId,
+    version: u32,
+    code_hash: [u8; 32],
+    abi_version: u16,
+    receipt_digest: [u8; 32],
+    freshness: ReadFreshness,
+    module: Vec<u8>,
+    migration: Option<ExecutionRecord>,
+}
+
+impl VerifiedDeploymentEvidence {
+    #[must_use]
+    pub const fn program(&self) -> ProgramId {
+        self.program
+    }
+
+    #[must_use]
+    pub const fn version(&self) -> u32 {
+        self.version
+    }
+
+    #[must_use]
+    pub const fn code_hash(&self) -> [u8; 32] {
+        self.code_hash
+    }
+
+    #[must_use]
+    pub const fn abi_version(&self) -> u16 {
+        self.abi_version
+    }
+
+    #[must_use]
+    pub const fn receipt_digest(&self) -> [u8; 32] {
+        self.receipt_digest
+    }
+
+    #[must_use]
+    pub const fn freshness(&self) -> ReadFreshness {
+        self.freshness
+    }
+
+    #[must_use]
+    pub fn module(&self) -> &[u8] {
+        &self.module
+    }
+
+    #[must_use]
+    pub const fn migration(&self) -> Option<&ExecutionRecord> {
+        self.migration.as_ref()
+    }
+}
+
 /// One canonical deployment or upgrade record. The record is the durable,
 /// digest-addressed evidence a registry read is verified against.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -57,20 +113,20 @@ impl DeploymentRecord {
         sequence: u64,
         observed_at: u64,
     ) -> Result<Self, RegistryError> {
-        if receipt.new_code_hash != version.code_hash {
+        if receipt.new_code_hash() != version.code_hash {
             return Err(RegistryError::DeploymentMismatch);
         }
         let record = Self {
-            program: receipt.program,
-            version: receipt.version,
+            program: receipt.program(),
+            version: receipt.version(),
             abi_version: version.abi_version,
             upgrade_policy,
-            old_code_hash: receipt.old_code_hash,
-            new_code_hash: receipt.new_code_hash,
+            old_code_hash: receipt.old_code_hash(),
+            new_code_hash: receipt.new_code_hash(),
             sequence,
             observed_at,
             module: version.wasm.clone(),
-            migration: receipt.migration.clone(),
+            migration: receipt.migration().cloned(),
         };
         record.validate()?;
         Ok(record)
@@ -80,8 +136,9 @@ impl DeploymentRecord {
     ///
     /// # Errors
     ///
-    /// Refuses zero versions, absent code, oversized modules, modules that do
-    /// not hash to the recorded code hash, and inconsistent version history.
+    /// Refuses zero versions, absent code, reserved authorities, oversized
+    /// modules, modules that do not hash to the recorded code hash, and
+    /// inconsistent version history.
     pub fn validate(&self) -> Result<(), RegistryError> {
         if self.version == 0
             || self.new_code_hash == [0; 32]
@@ -89,6 +146,7 @@ impl DeploymentRecord {
             || self.observed_at == 0
             || self.module.is_empty()
             || self.module.len() > MAX_MODULE_BYTES
+            || matches!(self.upgrade_policy, UpgradePolicy::Authority([0; 32]))
         {
             return Err(RegistryError::CorruptRecord);
         }
@@ -206,18 +264,6 @@ impl DeploymentRecord {
         sha256(&self.canonical_encoding())
     }
 
-    /// Rebuilds the protocol deployment receipt this record captured.
-    #[must_use]
-    pub fn deployment_receipt(&self) -> DeploymentReceipt {
-        DeploymentReceipt {
-            program: self.program,
-            version: self.version,
-            old_code_hash: self.old_code_hash,
-            new_code_hash: self.new_code_hash,
-            migration: self.migration.clone(),
-        }
-    }
-
     /// Rebuilds the immutable program version this record captured.
     #[must_use]
     pub fn program_version(&self) -> ProgramVersion {
@@ -290,6 +336,57 @@ impl<J: DeploymentJournal> JournalReadAuthority<J> {
     #[must_use]
     pub const fn journal(&self) -> &J {
         &self.journal
+    }
+
+    pub(crate) fn verify_deployment(
+        &self,
+        program: ProgramId,
+        expected: &RegistryVersion,
+        expected_policy: UpgradePolicy,
+        expected_old_code_hash: Option<[u8; 32]>,
+    ) -> Result<VerifiedDeploymentEvidence, RegistryError> {
+        let bytes = self
+            .journal
+            .canonical_record(expected.deployment_receipt_digest)?;
+        let record = DeploymentRecord::decode(&bytes)?;
+        record.validate()?;
+        let receipt_digest = record.digest();
+        if receipt_digest != expected.deployment_receipt_digest
+            || record.program != program
+            || record.version != expected.number
+            || record.abi_version != expected.abi_version
+            || record.new_code_hash != expected.code_hash
+            || record.old_code_hash != expected_old_code_hash
+            || record.upgrade_policy != expected_policy
+        {
+            return Err(RegistryError::UnverifiedRead);
+        }
+        let head = self.journal.observed_head()?;
+        if head.sequence == 0
+            || head.observed_at == 0
+            || head.sequence < record.sequence
+            || head.observed_at < record.observed_at
+        {
+            return Err(RegistryError::UnverifiedRead);
+        }
+        if self.now < head.observed_at
+            || self.now.saturating_sub(head.observed_at) > self.staleness_limit
+        {
+            return Err(RegistryError::StaleRead);
+        }
+        Ok(VerifiedDeploymentEvidence {
+            program,
+            version: record.version,
+            code_hash: record.new_code_hash,
+            abi_version: record.abi_version,
+            receipt_digest,
+            freshness: ReadFreshness {
+                observed_sequence: head.sequence,
+                observed_at: head.observed_at,
+            },
+            module: record.module,
+            migration: record.migration,
+        })
     }
 }
 

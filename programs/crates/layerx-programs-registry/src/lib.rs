@@ -16,7 +16,10 @@ pub use account_state::{
     VerifiedAccountSnapshot, MAX_PROGRAM_VALUE_ACCOUNTS,
 };
 pub use archive::{ArchiveError, SourceArchive, SourceFile};
-pub use authority::{DeploymentJournal, DeploymentRecord, JournalReadAuthority, ObservedHead};
+pub use authority::{
+    DeploymentJournal, DeploymentRecord, JournalReadAuthority, ObservedHead,
+    VerifiedDeploymentEvidence,
+};
 pub use deprecate::{
     AuthorizedExit, Deprecation, DeprecationRefusal, DeprecationRequest, ExitRoute,
     LegacyDeprecationRequest, WindDownExitActivity, WindDownView,
@@ -320,17 +323,35 @@ impl Registry {
         policy: UpgradePolicy,
         receipt_digest: [u8; 32],
     ) -> Result<(), RegistryError> {
-        if receipt_digest == [0; 32]
-            || receipt.new_code_hash != version.code_hash
-            || receipt.version == 0
-        {
+        self.record_deployment_version(
+            receipt.program(),
+            receipt.version(),
+            receipt.old_code_hash(),
+            receipt.new_code_hash(),
+            version,
+            policy,
+            receipt_digest,
+        )
+    }
+
+    fn record_deployment_version(
+        &mut self,
+        program: ProgramId,
+        number: u32,
+        old_code_hash: Option<[u8; 32]>,
+        new_code_hash: [u8; 32],
+        version: &ProgramVersion,
+        policy: UpgradePolicy,
+        receipt_digest: [u8; 32],
+    ) -> Result<(), RegistryError> {
+        if receipt_digest == [0; 32] || new_code_hash != version.code_hash || number == 0 {
             return Err(RegistryError::DeploymentMismatch);
         }
         let entry = self
             .entries
-            .entry(receipt.program)
+            .entry(program)
             .or_insert_with(|| RegistryEntry {
-                program: receipt.program,
+                program,
                 upgrade_policy: policy,
                 lifecycle: ProgramLifecycle::Active,
                 versions: Vec::new(),
@@ -339,13 +360,13 @@ impl Registry {
                 exit_routes: Vec::new(),
             });
         if entry.upgrade_policy != policy
-            || usize::try_from(receipt.version).ok() != Some(entry.versions.len() + 1)
-            || receipt.old_code_hash != entry.versions.last().map(|prior| prior.code_hash)
+            || usize::try_from(number).ok() != Some(entry.versions.len() + 1)
+            || old_code_hash != entry.versions.last().map(|prior| prior.code_hash)
         {
             return Err(RegistryError::VersionHistoryMismatch);
         }
         entry.versions.push(RegistryVersion {
-            number: receipt.version,
+            number,
             code_hash: version.code_hash,
             abi_version: version.abi_version,
             deployment_receipt_digest: receipt_digest,
@@ -366,8 +387,11 @@ impl Registry {
         ordered.sort_by_key(|record| (record.program.bytes(), record.version));
         for record in ordered {
             record.validate()?;
-            self.record_deployment(
-                &record.deployment_receipt(),
+            self.record_deployment_version(
+                record.program,
+                record.version,
+                record.old_code_hash,
+                record.new_code_hash,
                 &record.program_version(),
                 record.upgrade_policy,
                 record.digest(),
@@ -446,6 +470,44 @@ impl Registry {
             receipt_digest,
             freshness,
         })
+    }
+
+    /// Resolves one historical or latest program version only from its exact
+    /// canonical deployment record and a fresh observed journal head.
+    ///
+    /// # Errors
+    ///
+    /// Refuses unknown versions, corrupt or mismatched records, unavailable
+    /// journal state and stale head observations.
+    pub fn resolve_deployment<J: DeploymentJournal>(
+        &self,
+        program: ProgramId,
+        version: u32,
+        authority: &JournalReadAuthority<J>,
+    ) -> Result<VerifiedDeploymentEvidence, RegistryError> {
+        let entry = self
+            .entries
+            .get(&program)
+            .ok_or(RegistryError::UnknownProgram)?;
+        let index = version
+            .checked_sub(1)
+            .and_then(|value| usize::try_from(value).ok())
+            .ok_or(RegistryError::UnknownVersion)?;
+        let expected = entry
+            .versions
+            .get(index)
+            .filter(|candidate| candidate.number == version)
+            .ok_or(RegistryError::UnknownVersion)?;
+        let expected_old_code_hash = index
+            .checked_sub(1)
+            .and_then(|prior| entry.versions.get(prior))
+            .map(|prior| prior.code_hash);
+        authority.verify_deployment(
+            program,
+            expected,
+            entry.upgrade_policy,
+            expected_old_code_hash,
+        )
     }
 
     /// Records one receipt-verified ABI-two binding in the program registry's

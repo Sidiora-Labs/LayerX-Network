@@ -2,13 +2,13 @@ use layerx_programs::{
     account_tree_commitment, program_account_registration_commitment, programs_root_commitment,
     state_leaf_commitment, state_node_commitment, universal_root_commitment, AccountStateError,
     AccountStateHead, AccountStateJournal, CanonicalAccountLeaf, Deprecation, DeprecationRefusal,
-    DeprecationRequest, ExitRoute, JournalAccountStateAuthority, LegacyDeprecationRequest,
-    ProgramLifecycle, ProgramValueAccountBinding, ProvenAccountLeaf, ProvenProgramBinding,
-    ReadFreshness, Registry, RegistryError, StateProof, VerifiedAccountSnapshot, WindDownPolicy,
-    WindDownStateAccess, MAX_PROGRAM_VALUE_ACCOUNTS,
+    DeprecationRequest, DeploymentRecord, ExitRoute, JournalAccountStateAuthority,
+    LegacyDeprecationRequest, ProgramLifecycle, ProgramValueAccountBinding, ProvenAccountLeaf,
+    ProvenProgramBinding, ReadFreshness, Registry, RegistryError, StateProof,
+    VerifiedAccountSnapshot, WindDownPolicy, WindDownStateAccess, MAX_PROGRAM_VALUE_ACCOUNTS,
 };
 use layerx_programs_runtime::{
-    derive_program_account, DeploymentReceipt, ProgramId, ProgramVersion, UpgradePolicy,
+    derive_program_account, hash_bytes, HashAlgorithm, ProgramId, UpgradePolicy,
 };
 
 const ACCOUNT_STATE_VECTORS: &str =
@@ -156,48 +156,33 @@ fn program(byte: u8) -> ProgramId {
 }
 
 fn deployed_registry(id: ProgramId) -> Registry {
-    let mut registry = Registry::new();
-    registry
-        .record_deployment(
-            &DeploymentReceipt {
-                program: id,
-                version: 1,
-                old_code_hash: None,
-                new_code_hash: [2; 32],
-                migration: None,
-            },
-            &ProgramVersion {
-                code_hash: [2; 32],
-                wasm: vec![0, 97, 115, 109, 1, 0, 0, 0],
-                abi_version: 2,
-            },
-            UpgradePolicy::Authority([4; 32]),
-            [3; 32],
-        )
-        .unwrap_or_else(|error| panic!("registry deployment: {error}"));
-    registry
+    replayed_registry(id, 2)
 }
 
 fn legacy_registry(id: ProgramId) -> Registry {
+    replayed_registry(id, 1)
+}
+
+fn replayed_registry(id: ProgramId, abi_version: u16) -> Registry {
+    let module = vec![0, 97, 115, 109, 1, 0, 0, 0];
+    let code_hash = hash_bytes(HashAlgorithm::Sha256, &module)
+        .unwrap_or_else(|error| panic!("program code hash: {error}"));
+    let record = DeploymentRecord {
+        program: id,
+        version: 1,
+        abi_version,
+        upgrade_policy: UpgradePolicy::Authority([4; 32]),
+        old_code_hash: None,
+        new_code_hash: code_hash,
+        sequence: 1,
+        observed_at: 1,
+        module,
+        migration: None,
+    };
     let mut registry = Registry::new();
     registry
-        .record_deployment(
-            &DeploymentReceipt {
-                program: id,
-                version: 1,
-                old_code_hash: None,
-                new_code_hash: [2; 32],
-                migration: None,
-            },
-            &ProgramVersion {
-                code_hash: [2; 32],
-                wasm: vec![0, 97, 115, 109, 1, 0, 0, 0],
-                abi_version: 1,
-            },
-            UpgradePolicy::Authority([4; 32]),
-            [3; 32],
-        )
-        .unwrap_or_else(|error| panic!("legacy deployment: {error}"));
+        .replay_journal(&[record])
+        .unwrap_or_else(|error| panic!("registry deployment replay: {error}"));
     registry
 }
 

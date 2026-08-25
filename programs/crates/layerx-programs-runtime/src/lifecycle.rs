@@ -56,14 +56,43 @@ pub struct ProgramVersion {
     pub abi_version: u16,
 }
 
-/// Receipt evidence making a successfully deployed version callable.
+/// Lifecycle outcome used to append an accepted deployment to the canonical
+/// journal. Call authorization is established separately from verified
+/// journal evidence.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DeploymentReceipt {
-    pub program: ProgramId,
-    pub version: u32,
-    pub old_code_hash: Option<CodeHash>,
-    pub new_code_hash: CodeHash,
-    pub migration: Option<ExecutionRecord>,
+    program: ProgramId,
+    version: u32,
+    old_code_hash: Option<CodeHash>,
+    new_code_hash: CodeHash,
+    migration: Option<ExecutionRecord>,
+}
+
+impl DeploymentReceipt {
+    #[must_use]
+    pub const fn program(&self) -> ProgramId {
+        self.program
+    }
+
+    #[must_use]
+    pub const fn version(&self) -> u32 {
+        self.version
+    }
+
+    #[must_use]
+    pub const fn old_code_hash(&self) -> Option<CodeHash> {
+        self.old_code_hash
+    }
+
+    #[must_use]
+    pub const fn new_code_hash(&self) -> CodeHash {
+        self.new_code_hash
+    }
+
+    #[must_use]
+    pub const fn migration(&self) -> Option<&ExecutionRecord> {
+        self.migration.as_ref()
+    }
 }
 
 /// Rejected artifact retained outside executable program state for diagnosis.
@@ -88,7 +117,6 @@ pub enum LifecycleRefusal {
     IncompatibleAbi { requested: u16, supported: u16 },
     Validation(ValidationRefusal),
     Migration(ExecutionError),
-    UnverifiedReceipt,
     VersionOverflow,
 }
 
@@ -111,7 +139,6 @@ impl Display for LifecycleRefusal {
             ),
             Self::Validation(refusal) => write!(formatter, "validation refusal: {refusal}"),
             Self::Migration(error) => write!(formatter, "migration refusal: {error}"),
-            Self::UnverifiedReceipt => write!(formatter, "deployment receipt is not verified"),
             Self::VersionOverflow => write!(formatter, "program version overflow"),
         }
     }
@@ -264,38 +291,6 @@ impl Lifecycle {
             new_code_hash: activity.code_hash,
             migration,
         })
-    }
-
-    /// Resolves only a version named by verified deployment evidence.
-    ///
-    /// # Errors
-    ///
-    /// Refuses unverified, unknown or mismatching receipt evidence.
-    pub fn callable(
-        &self,
-        receipt: &DeploymentReceipt,
-        receipt_verified: bool,
-    ) -> Result<&ProgramVersion, LifecycleRefusal> {
-        if !receipt_verified {
-            return Err(LifecycleRefusal::UnverifiedReceipt);
-        }
-        let record = self
-            .programs
-            .get(&receipt.program)
-            .ok_or(LifecycleRefusal::UnknownProgram)?;
-        let version_index = receipt
-            .version
-            .checked_sub(1)
-            .and_then(|value| usize::try_from(value).ok())
-            .ok_or(LifecycleRefusal::UnknownProgram)?;
-        let version = record
-            .versions
-            .get(version_index)
-            .ok_or(LifecycleRefusal::UnknownProgram)?;
-        if version.code_hash != receipt.new_code_hash {
-            return Err(LifecycleRefusal::UnverifiedReceipt);
-        }
-        Ok(version)
     }
 
     #[must_use]
