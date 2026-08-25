@@ -20,6 +20,7 @@ contract GuarantorBond is IGuarantorEligibility, LayerXComponent {
 
     struct BondRecord {
         address signer;
+        address bondController;
         uint256 amount;
         uint64 joinedEpoch;
         uint64 removedEpoch;
@@ -29,37 +30,75 @@ contract GuarantorBond is IGuarantorEligibility, LayerXComponent {
         bool unresolvedSlashing;
     }
 
+    struct SignerAuthorization {
+        uint64 activeFromEpoch;
+        uint64 activeUntilEpoch;
+        uint64 setVersion;
+    }
+
     address public immutable custodyAuthority;
+    address public immutable membershipAuthority;
     address public override slashingAuthority;
     uint32 public immutable minimumBondBps;
     uint64 public immutable unbondingDelay;
     uint256 public custodiedValue;
     uint256 public slashedBalance;
+    uint64 public override membershipVersion;
+    uint64 public lastGovernanceSequence;
     uint256 private lockState = 1;
     mapping(bytes32 => BondRecord) private records;
     mapping(address => bytes32) public guarantorIdForSigner;
+    mapping(bytes32 => mapping(address => SignerAuthorization)) public signerAuthorization;
 
-    event BondDeposited(bytes32 indexed guarantorId, address indexed signer, uint256 amount, uint64 joinedEpoch);
+    event GuarantorActivated(
+        bytes32 indexed guarantorId,
+        address indexed signer,
+        address indexed bondController,
+        uint64 joinedEpoch,
+        uint64 setVersion,
+        uint64 governanceSequence
+    );
+    event GuarantorSignerRotated(
+        bytes32 indexed guarantorId,
+        address indexed previousSigner,
+        address indexed newSigner,
+        uint64 activationEpoch,
+        uint64 setVersion,
+        uint64 governanceSequence
+    );
+    event GuarantorRemoved(
+        bytes32 indexed guarantorId, uint64 removedEpoch, uint64 setVersion, uint64 governanceSequence
+    );
+    event GuarantorJailStatusSet(
+        bytes32 indexed guarantorId, bool jailed, uint64 setVersion, uint64 governanceSequence
+    );
+    event BondDeposited(bytes32 indexed guarantorId, address indexed payer, uint256 amount, uint256 totalBond);
     event UnbondingStarted(bytes32 indexed guarantorId, uint256 amount, uint64 availableAt);
     event GuarantorSlashed(
         bytes32 indexed guarantorId,
         address indexed signer,
         bytes32 firstCheckpoint,
         bytes32 secondCheckpoint,
-        uint256 amount
+        uint256 amount,
+        uint64 setVersion
     );
     event SlashingAuthoritySet(address indexed authority);
 
     constructor(
-        address authority,
+        address custody,
+        address membershipGovernance,
         uint32 bondBps,
         uint256 initialCustodiedValue,
         uint64 withdrawalDelay,
         bytes32 componentConfigHash,
         uint192 componentRelease
     ) LayerXComponent(Predeploys.GUARANTOR_BOND, componentConfigHash, componentRelease) {
-        if (authority == address(0) || bondBps == 0 || bondBps > 10_000 || withdrawalDelay < 1 days) revert InvalidConfiguration();
-        custodyAuthority = authority;
+        if (
+            custody == address(0) || membershipGovernance == address(0) || bondBps == 0 || bondBps > 10_000
+                || withdrawalDelay < 1 days
+        ) revert InvalidConfiguration();
+        custodyAuthority = custody;
+        membershipAuthority = membershipGovernance;
         minimumBondBps = bondBps;
         custodiedValue = initialCustodiedValue;
         unbondingDelay = withdrawalDelay;
@@ -70,6 +109,11 @@ contract GuarantorBond is IGuarantorEligibility, LayerXComponent {
         lockState = 2;
         _;
         lockState = 1;
+    }
+
+    modifier onlyMembershipAuthority() {
+        if (msg.sender != membershipAuthority) revert Unauthorized();
+        _;
     }
 
     function minimumBond() public view returns (uint256) {
@@ -94,34 +138,105 @@ contract GuarantorBond is IGuarantorEligibility, LayerXComponent {
         emit SlashingAuthoritySet(authority);
     }
 
-    function depositBond(bytes32 guarantorId, uint64 joinedEpoch) external payable {
-        if (guarantorId == bytes32(0) || msg.value == 0 || joinedEpoch == 0) {
-            revert InvalidBondAction();
-        }
-        BondRecord storage record = records[guarantorId];
-        bytes32 existingId = guarantorIdForSigner[msg.sender];
+    function activateGuarantor(
+        bytes32 guarantorId,
+        address signer,
+        address bondController,
+        uint64 joinedEpoch,
+        uint64 governanceSequence
+    ) external onlyMembershipAuthority {
         if (
-            (record.signer != address(0) && record.signer != msg.sender)
-                || (existingId != bytes32(0) && existingId != guarantorId) || record.jailed || record.removedEpoch != 0
-        ) {
+            guarantorId == bytes32(0) || signer == address(0) || bondController == address(0) || joinedEpoch == 0
+                || records[guarantorId].signer != address(0) || guarantorIdForSigner[signer] != bytes32(0)
+        ) revert InvalidBondAction();
+        uint64 version = _advanceMembership(governanceSequence);
+        records[guarantorId] = BondRecord({
+            signer: signer,
+            bondController: bondController,
+            amount: 0,
+            joinedEpoch: joinedEpoch,
+            removedEpoch: 0,
+            withdrawalAvailableAt: 0,
+            pendingWithdrawal: 0,
+            jailed: false,
+            unresolvedSlashing: false
+        });
+        guarantorIdForSigner[signer] = guarantorId;
+        signerAuthorization[guarantorId][signer] = SignerAuthorization({
+            activeFromEpoch: joinedEpoch, activeUntilEpoch: 0, setVersion: version
+        });
+        emit GuarantorActivated(
+            guarantorId, signer, bondController, joinedEpoch, version, governanceSequence
+        );
+    }
+
+    function rotateGuarantorSigner(
+        bytes32 guarantorId,
+        address newSigner,
+        uint64 activationEpoch,
+        uint64 governanceSequence
+    ) external onlyMembershipAuthority {
+        BondRecord storage record = records[guarantorId];
+        if (
+            record.signer == address(0) || newSigner == address(0) || newSigner == record.signer
+                || guarantorIdForSigner[newSigner] != bytes32(0) || record.removedEpoch != 0 || record.jailed
+        ) revert InvalidBondAction();
+        SignerAuthorization storage previous = signerAuthorization[guarantorId][record.signer];
+        if (activationEpoch <= previous.activeFromEpoch || previous.activeUntilEpoch != 0) revert InvalidBondAction();
+        uint64 version = _advanceMembership(governanceSequence);
+        address previousSigner = record.signer;
+        previous.activeUntilEpoch = activationEpoch;
+        record.signer = newSigner;
+        guarantorIdForSigner[newSigner] = guarantorId;
+        signerAuthorization[guarantorId][newSigner] = SignerAuthorization({
+            activeFromEpoch: activationEpoch, activeUntilEpoch: 0, setVersion: version
+        });
+        emit GuarantorSignerRotated(
+            guarantorId, previousSigner, newSigner, activationEpoch, version, governanceSequence
+        );
+    }
+
+    function removeGuarantor(bytes32 guarantorId, uint64 removedEpoch, uint64 governanceSequence)
+        external
+        onlyMembershipAuthority
+    {
+        BondRecord storage record = records[guarantorId];
+        SignerAuthorization storage current = signerAuthorization[guarantorId][record.signer];
+        if (
+            record.signer == address(0) || record.removedEpoch != 0 || removedEpoch <= current.activeFromEpoch
+                || current.activeUntilEpoch != 0
+        ) revert InvalidBondAction();
+        uint64 version = _advanceMembership(governanceSequence);
+        record.removedEpoch = removedEpoch;
+        current.activeUntilEpoch = removedEpoch;
+        emit GuarantorRemoved(guarantorId, removedEpoch, version, governanceSequence);
+    }
+
+    function setGuarantorJailStatus(bytes32 guarantorId, bool jailed, uint64 governanceSequence)
+        external
+        onlyMembershipAuthority
+    {
+        BondRecord storage record = records[guarantorId];
+        if (record.signer == address(0) || record.removedEpoch != 0 || record.jailed == jailed) {
             revert InvalidBondAction();
         }
-        if (record.signer == address(0)) {
-            record.signer = msg.sender;
-            record.joinedEpoch = joinedEpoch;
-            guarantorIdForSigner[msg.sender] = guarantorId;
-        } else if (record.joinedEpoch != joinedEpoch) {
-            revert InvalidBondAction();
-        }
+        uint64 version = _advanceMembership(governanceSequence);
+        record.jailed = jailed;
+        emit GuarantorJailStatusSet(guarantorId, jailed, version, governanceSequence);
+    }
+
+    function depositBond(bytes32 guarantorId) external payable {
+        BondRecord storage record = records[guarantorId];
+        if (record.signer == address(0) || msg.value == 0 || record.removedEpoch != 0) revert InvalidBondAction();
         record.amount = Arithmetic.add(record.amount, msg.value);
-        emit BondDeposited(guarantorId, msg.sender, msg.value, joinedEpoch);
+        emit BondDeposited(guarantorId, msg.sender, msg.value, record.amount);
     }
 
     function beginUnbond(bytes32 guarantorId, uint256 amount) external {
         BondRecord storage record = records[guarantorId];
         if (
-            record.signer != msg.sender || amount == 0 || amount > record.amount || record.pendingWithdrawal != 0
-                || record.jailed || record.unresolvedSlashing
+            record.bondController != msg.sender || amount == 0 || amount > record.amount
+                || record.pendingWithdrawal != 0 || record.removedEpoch == 0 || record.unresolvedSlashing
         ) {
             revert InvalidBondAction();
         }
@@ -132,7 +247,7 @@ contract GuarantorBond is IGuarantorEligibility, LayerXComponent {
 
     function cancelUnbond(bytes32 guarantorId) external {
         BondRecord storage record = records[guarantorId];
-        if (record.signer != msg.sender || record.pendingWithdrawal == 0) {
+        if (record.bondController != msg.sender || record.pendingWithdrawal == 0) {
             revert InvalidBondAction();
         }
         record.pendingWithdrawal = 0;
@@ -143,7 +258,7 @@ contract GuarantorBond is IGuarantorEligibility, LayerXComponent {
         BondRecord storage record = records[guarantorId];
         uint256 amount = record.pendingWithdrawal;
         if (
-            record.signer != msg.sender || amount == 0 || record.jailed || record.unresolvedSlashing
+            record.bondController != msg.sender || amount == 0 || record.unresolvedSlashing
                 || block.timestamp < record.withdrawalAvailableAt
         ) {
             revert InvalidBondAction();
@@ -157,8 +272,11 @@ contract GuarantorBond is IGuarantorEligibility, LayerXComponent {
 
     function bondedActive(bytes32 guarantorId, address signer, uint64 checkpointEpoch) external view returns (bool) {
         BondRecord storage record = records[guarantorId];
-        return record.signer == signer && !record.jailed && !record.unresolvedSlashing && record.pendingWithdrawal == 0
-            && record.joinedEpoch != 0 && record.joinedEpoch <= checkpointEpoch
+        SignerAuthorization storage authorization = signerAuthorization[guarantorId][signer];
+        return authorization.activeFromEpoch != 0 && authorization.activeFromEpoch <= checkpointEpoch
+            && (authorization.activeUntilEpoch == 0 || authorization.activeUntilEpoch > checkpointEpoch)
+            && !record.jailed && !record.unresolvedSlashing && record.joinedEpoch != 0
+            && record.joinedEpoch <= checkpointEpoch
             && (record.removedEpoch == 0 || record.removedEpoch > checkpointEpoch) && record.amount >= minimumBond();
     }
 
@@ -167,18 +285,6 @@ contract GuarantorBond is IGuarantorEligibility, LayerXComponent {
         BondRecord storage record = records[guarantorId];
         if (record.signer == address(0)) revert InvalidBondAction();
         record.unresolvedSlashing = unresolved;
-    }
-
-    function jailGuarantor(bytes32 guarantorId, uint64 removedEpoch) external {
-        if (msg.sender != custodyAuthority) revert Unauthorized();
-        BondRecord storage record = records[guarantorId];
-        if (record.signer == address(0) || removedEpoch == 0) {
-            revert InvalidBondAction();
-        }
-        record.jailed = true;
-        record.removedEpoch = removedEpoch;
-        record.pendingWithdrawal = 0;
-        record.withdrawalAvailableAt = 0;
     }
 
     function submitEquivocation(
@@ -195,10 +301,12 @@ contract GuarantorBond is IGuarantorEligibility, LayerXComponent {
             revert InvalidEquivocationEvidence();
         }
         BondRecord storage record = records[first.guarantorId];
-        if (record.signer != first.signer || record.jailed) {
+        if (signerAuthorization[first.guarantorId][first.signer].activeFromEpoch == 0 || record.jailed) {
             revert InvalidEquivocationEvidence();
         }
-        _slash(first.guarantorId, record, removedEpoch, first.checkpointHash, second.checkpointHash);
+        _slash(
+            first.guarantorId, record, first.signer, removedEpoch, first.checkpointHash, second.checkpointHash
+        );
     }
 
     function slashForCheckpoint(bytes32 guarantorId, bytes32 checkpointHash, uint64 removedEpoch) external {
@@ -208,7 +316,7 @@ contract GuarantorBond is IGuarantorEligibility, LayerXComponent {
         BondRecord storage record = records[guarantorId];
         if (record.signer == address(0)) revert InvalidBondAction();
         if (record.jailed) return;
-        _slash(guarantorId, record, removedEpoch, checkpointHash, checkpointHash);
+        _slash(guarantorId, record, record.signer, removedEpoch, checkpointHash, checkpointHash);
     }
 
     function sweepSlashed(address payable recipient, uint256 amount) external nonReentrant {
@@ -234,10 +342,14 @@ contract GuarantorBond is IGuarantorEligibility, LayerXComponent {
     function _slash(
         bytes32 guarantorId,
         BondRecord storage record,
+        address offendingSigner,
         uint64 removedEpoch,
         bytes32 firstCheckpoint,
         bytes32 secondCheckpoint
     ) private {
+        if (removedEpoch <= record.joinedEpoch || membershipVersion == type(uint64).max) {
+            revert InvalidBondAction();
+        }
         uint256 amount = record.amount;
         record.amount = 0;
         record.pendingWithdrawal = 0;
@@ -245,7 +357,23 @@ contract GuarantorBond is IGuarantorEligibility, LayerXComponent {
         record.jailed = true;
         record.unresolvedSlashing = false;
         record.removedEpoch = removedEpoch;
+        SignerAuthorization storage current = signerAuthorization[guarantorId][record.signer];
+        if (current.activeUntilEpoch == 0 && removedEpoch > current.activeFromEpoch) {
+            current.activeUntilEpoch = removedEpoch;
+        }
+        uint64 version = membershipVersion + 1;
+        membershipVersion = version;
         slashedBalance = Arithmetic.add(slashedBalance, amount);
-        emit GuarantorSlashed(guarantorId, record.signer, firstCheckpoint, secondCheckpoint, amount);
+        emit GuarantorSlashed(guarantorId, offendingSigner, firstCheckpoint, secondCheckpoint, amount, version);
+    }
+
+    function _advanceMembership(uint64 governanceSequence) private returns (uint64 version) {
+        if (lastGovernanceSequence == type(uint64).max || membershipVersion == type(uint64).max) {
+            revert InvalidBondAction();
+        }
+        if (governanceSequence != lastGovernanceSequence + 1) revert InvalidBondAction();
+        lastGovernanceSequence = governanceSequence;
+        version = membershipVersion + 1;
+        membershipVersion = version;
     }
 }

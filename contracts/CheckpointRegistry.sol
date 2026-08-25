@@ -30,6 +30,7 @@ contract CheckpointRegistry is LayerXComponent {
     mapping(bytes32 => uint64) public registeredAt;
     mapping(bytes32 => uint64) public checkpointEpoch;
     mapping(bytes32 => uint64) public checkpointBatchNumber;
+    mapping(bytes32 => uint64) public checkpointGuarantorSetVersion;
     mapping(bytes32 => uint64) public checkpointTimestamp;
     mapping(bytes32 => bytes32) public certificateCommitment;
     mapping(bytes32 => bool) public explicitlyInvalidated;
@@ -49,7 +50,8 @@ contract CheckpointRegistry is LayerXComponent {
         uint64 lastSequence,
         bytes32 previousStateRoot,
         bytes32 resultingStateRoot,
-        bytes32 dataAvailabilityRoot
+        bytes32 dataAvailabilityRoot,
+        uint64 guarantorSetVersion
     );
     event CheckpointInvalidated(
         bytes32 indexed checkpointHash,
@@ -137,6 +139,7 @@ contract CheckpointRegistry is LayerXComponent {
         registeredAt[digest] = Arithmetic.toUint64(block.timestamp);
         checkpointEpoch[digest] = header.epoch;
         checkpointBatchNumber[digest] = header.batchNumber;
+        checkpointGuarantorSetVersion[digest] = guarantorEligibility.membershipVersion();
         checkpointTimestamp[digest] = header.timestamp;
         certificateCommitment[digest] = sha256(abi.encode(attestations));
         for (uint256 i = 0; i < attestations.length; ++i) {
@@ -155,7 +158,8 @@ contract CheckpointRegistry is LayerXComponent {
             header.lastSequence,
             header.previousStateRoot,
             header.resultingStateRoot,
-            header.dataAvailabilityRoot
+            header.dataAvailabilityRoot,
+            checkpointGuarantorSetVersion[digest]
         );
     }
 
@@ -210,7 +214,8 @@ contract CheckpointRegistry is LayerXComponent {
         if (
             stateRoot == bytes32(0) || finalisedStateRoot[digest] != stateRoot
                 || !isCanonicalCheckpoint(digest)
-                || checkpointAtBatch[batchNumber] != digest || attestations.length < threshold
+                || checkpointAtBatch[batchNumber] != digest || checkpointEpoch[digest] != epoch
+                || attestations.length < threshold
                 || attestations.length > maximumAttestations
                 || certificateCommitment[digest] != sha256(abi.encode(attestations))
         ) {

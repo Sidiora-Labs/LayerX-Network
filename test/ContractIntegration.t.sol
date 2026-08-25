@@ -525,6 +525,7 @@ contract ContractIntegrationTest {
         _fundGuarantors();
         guarantorBond.updateCustodiedValue(50 ether);
         address firstSigner = vm.addr(1);
+        guarantorBond.removeGuarantor(bytes32(uint256(1)), 2, 3);
         vm.prank(firstSigner);
         guarantorBond.beginUnbond(bytes32(uint256(1)), 1 ether);
         vm.prank(firstSigner);
@@ -539,15 +540,17 @@ contract ContractIntegrationTest {
 
         guarantorBond.setUnresolvedSlashing(bytes32(uint256(2)), true);
         guarantorBond.setUnresolvedSlashing(bytes32(uint256(2)), false);
-        guarantorBond.jailGuarantor(bytes32(uint256(2)), 9);
+        guarantorBond.setGuarantorJailStatus(bytes32(uint256(2)), true, 4);
         require(guarantorBond.bondRecord(bytes32(uint256(2))).jailed, "administrative jail absent");
 
-        GuarantorBond isolated = new GuarantorBond(address(this), 100, 100 ether, 7 days, configHash, release);
+        GuarantorBond isolated =
+            new GuarantorBond(address(this), address(this), 100, 100 ether, 7 days, configHash, release);
         isolated.setSlashingAuthority(address(this));
         address thirdSigner = vm.addr(3);
+        isolated.activateGuarantor(bytes32(uint256(3)), thirdSigner, thirdSigner, 1, 1);
         vm.deal(thirdSigner, 3 ether);
         vm.prank(thirdSigner);
-        isolated.depositBond{value: 2 ether}(bytes32(uint256(3)), 1);
+        isolated.depositBond{value: 2 ether}(bytes32(uint256(3)));
         isolated.slashForCheckpoint(bytes32(uint256(3)), keccak256("faulted-checkpoint"), 2);
         address payable recipient = payable(address(0x51A5));
         isolated.sweepSlashed(recipient, 2 ether);
@@ -573,9 +576,12 @@ contract ContractIntegrationTest {
     function _fundGuarantors() private {
         for (uint256 privateKey = 1; privateKey <= 2; ++privateKey) {
             address signer = vm.addr(privateKey);
+            guarantorBond.activateGuarantor(
+                bytes32(privateKey), signer, signer, 1, uint64(privateKey)
+            );
             vm.deal(signer, 3 ether);
             vm.prank(signer);
-            guarantorBond.depositBond{value: 2 ether}(bytes32(privateKey), 1);
+            guarantorBond.depositBond{value: 2 ether}(bytes32(privateKey));
         }
     }
 
@@ -653,6 +659,10 @@ contract ContractIntegrationTest {
         digest = checkpointRegistry.checkpointHash(header, "");
         attestations = _checkpointAttestations(header, digest);
         checkpointRegistry.registerCheckpoint(header, "", attestations);
+        require(
+            checkpointRegistry.checkpointGuarantorSetVersion(digest) == guarantorBond.membershipVersion(),
+            "checkpoint omitted guarantor-set version"
+        );
     }
 
     function _checkpointAttestations(CanonicalCheckpoint.HeaderCommitments memory header, bytes32 digest)
@@ -750,9 +760,11 @@ contract ContractIntegrationTest {
     }
 
     function _deployGuarantorBond() private returns (GuarantorBond result) {
-        bytes memory arguments =
-            abi.encode(address(this), uint32(100), uint256(100 ether), uint64(7 days), configHash, release);
-        GuarantorBond runtimeReference = new GuarantorBond(address(this), 100, 100 ether, 7 days, configHash, release);
+        bytes memory arguments = abi.encode(
+            address(this), address(this), uint32(100), uint256(100 ether), uint64(7 days), configHash, release
+        );
+        GuarantorBond runtimeReference =
+            new GuarantorBond(address(this), address(this), 100, 100 ether, 7 days, configHash, release);
         result = GuarantorBond(
             payable(_deploy(
                     Predeploys.GUARANTOR_BOND,

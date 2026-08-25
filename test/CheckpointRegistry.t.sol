@@ -26,12 +26,13 @@ contract CheckpointRegistryTest {
 
     function setUp() public {
         vm.warp(1000);
-        bond = new GuarantorBond(address(this), 100, 200 ether, 7 days, CONFIG, RELEASE);
+        bond = new GuarantorBond(address(this), address(this), 100, 200 ether, 7 days, CONFIG, RELEASE);
         for (uint256 i = 0; i < keys.length; ++i) {
             address signer = vm.addr(keys[i]);
+            bond.activateGuarantor(bytes32(i + 1), signer, signer, 1, uint64(i + 1));
             vm.deal(signer, 3 ether);
             vm.prank(signer);
-            bond.depositBond{value: 2 ether}(bytes32(i + 1), 1);
+            bond.depositBond{value: 2 ether}(bytes32(i + 1));
         }
         registry = new CheckpointRegistry(bond, 1, 42, 2, 4, 1 hours, 5 minutes, GENESIS, CONFIG, RELEASE);
     }
@@ -53,6 +54,21 @@ contract CheckpointRegistryTest {
         registry.registerCheckpoint(header, "", attestations);
         require(registry.latestFinalisedStateRoot() == header.resultingStateRoot, "root not advanced");
         require(registry.checkpointAtBatch(1) == digest, "batch checkpoint absent");
+        require(registry.checkpointGuarantorSetVersion(digest) == 3, "guarantor-set version absent");
+    }
+
+    function testRejectsSignatureOutsideGovernedMembership() public {
+        CanonicalCheckpoint.HeaderCommitments memory header = _header();
+        bytes32 digest = registry.checkpointHash(header, "");
+        CanonicalCheckpoint.GuarantorAttestation[] memory attestations = _attestations(header, digest, 2);
+        attestations[1].guarantorId = bytes32(uint256(4));
+        attestations[1].signer = vm.addr(4);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(4, CanonicalCheckpoint.attestationHash(attestations[1]));
+        attestations[1].v = v;
+        attestations[1].r = r;
+        attestations[1].s = s;
+        vm.expectRevert(CheckpointRegistry.InvalidCertificate.selector);
+        registry.registerCheckpoint(header, "", attestations);
     }
 
     function testRejectsDuplicateGuarantor() public {
@@ -89,6 +105,17 @@ contract CheckpointRegistryTest {
                 attestations
             ),
             "recorded certificate rejected"
+        );
+        require(
+            !registry.verifyRegisteredCertificate(
+                digest,
+                header.resultingStateRoot,
+                header.epoch + 1,
+                header.batchNumber,
+                header.dataAvailabilityRoot,
+                attestations
+            ),
+            "caller-selected membership epoch accepted"
         );
 
         attestations[0].attestedAt += 1;
