@@ -646,6 +646,14 @@ observed = "The scoped cg guard accepted every gateway implementation and test p
 assumption = "These are lifecycle and workspace integration paths required by the implementation; human qualification will review the advisory rather than removing dependency locking or the auditable task records."
 severity = "task-scope"
 
+[observation.17.4.6]
+task = "17.4"
+file = "platform/hosted/gateway/src/lib.rs"
+symbol = "IssuedKey Debug"
+observed = "Post-implementation source review found IssuedKey derived Debug while retaining the newly issued live gateway credential, so any diagnostic formatting of the issuance result disclosed the full bearer despite the existing drop-time zeroization. The repair replaces derived formatting with an explicit representation that exposes the non-secret key id and a fixed redaction marker only; a source regression compares the formatted value against the live secret."
+assumption = "Human qualification must compile the gateway tests and inspect structured application and panic logging paths to prove no wrapper serializes or formats the secret through another surface. No build, test, log capture or passing result is asserted by this source repair."
+severity = "post-implementation-repair"
+
 [observation.18.2.1]
 task = "18.2"
 file = "platform/hosted/gateway/src/lib.rs, platform/emulator/src/main.rs"
@@ -1547,6 +1555,94 @@ file = "include/layerx/lx_asset.h, src/modules/asset/lx_asset_custody.c, tests/t
 symbol = "lx_paxeer_deposit_root_registration, lx_deposit_proof"
 observed = "The inherited deposit producer schema supplied a self-hash and caller finality flag but no authority-signed Paxeer deposit-root registration or index-aware inclusion path, so a ramp could manufacture the evidence consumed by LayerX. The protocol repair replaces that shape with a signed checkpoint/root registration plus canonical leaf and Merkle proof fields."
 assumption = "Human and ramp qualification must update deposit-proof production to fetch the finalized Paxeer checkpoint authority signature, checkpoint state root, deposit root, custody reference, leaf index/count and ordered siblings; it must preserve all values byte-exactly and prove a locally fabricated root is rejected. No producer build or end-to-end deposit result is asserted here."
+severity = "post-implementation-repair"
+
+[observation.17.1.5]
+task = "17.1"
+file = "platform/cli/src/credential.rs, platform/cli/src/http.rs, platform/cli/src/install/mod.rs, platform/cli/Cargo.toml, platform/Makefile.inc"
+symbol = "read_secret_from, validate_bearer_secret, validate_gateway_credential, read_response_body, FileTransaction"
+observed = "Post-implementation source review found the CLI silently truncated an oversized standard-input credential, allowed stored bearer material containing HTTP control bytes, kept signing seeds and installation snapshots in ordinary buffers, admitted an in-memory credential backend through a production environment override, followed non-regular installation targets, and retained unbounded HTTP response bodies. The repair refuses truncation and malformed stored credentials, zeroizes secret and rollback buffers, compiles the in-memory store only behind an explicit test feature, rejects symlink and non-file snapshots, and bounds every CLI HTTP response before JSON decoding."
+assumption = "Human qualification must exercise native keychains on every supported operating system, oversized and malformed secret input, poisoned stored values, symlinked installation targets, response overflow and rollback failure. The test targets explicitly select the test-only credential feature; no CLI build, keychain operation or passing result is asserted by this source repair."
+severity = "post-implementation-repair"
+
+[observation.17.2.2]
+task = "17.2"
+file = "platform/emulator/src/main.rs, platform/emulator/Cargo.toml, platform/Cargo.lock"
+symbol = "decode_json, parse_request, platform_emulator, remember_receipt"
+observed = "A second emulator source pass found control bodies were decoded by substring search rather than a JSON parser, duplicate or attacker-shaped fields could be interpreted as trusted control values, accepted connections and transition submissions had no bounded admission, the receipt cache grew without limit, trace accounting could wrap or panic at u64 exhaustion, and FFI-owned receipt, snapshot and account-name pointers were dereferenced without validating their length contract. The repair uses exact deny-unknown serde bodies, canonical bounded HTTP framing, fixed parser and transition queues with overload refusal, a finite receipt cache, checked fail-closed trace exhaustion, bounded control values and explicit pointer/length validation before every slice construction."
+assumption = "Human qualification must run the real embedded core under concurrent slow clients and transition saturation, send duplicate and unknown JSON fields, malformed content types and surplus bytes, force the trace counter to its terminal value, return null and oversized buffers from an instrumented core, and import/export maximum snapshots. No emulator build, listener run, FFI execution or passing test result is asserted."
+severity = "post-implementation-repair"
+
+[observation.17.6.7]
+task = "17.6"
+file = "platform/cli/src/a2a.rs, platform/cli/src/install/a2a.rs, platform/cli/src/main.rs, platform/cli/tests/install-journey.sh, platform/docs/content/install.md"
+symbol = "serve, read_request, authorized, prepare_authorization, agent_card"
+observed = "Post-implementation source review found the installed A2A listener exposed every read and payment tool to any local caller, accepted ambiguous HTTP framing and query aliases, served connections serially, held an unbounded task ledger, and could let a slow request or long tool call block the whole runtime. The repair generates a separate owner-only local bearer, publishes its security scheme in the Agent Card, leaves only the Agent Card public, authenticates every JSON-RPC POST in constant time, uses strict bounded HTTP/1.1 parsing and I/O deadlines, admits work through a fixed worker pool, bounds task retention, and avoids holding the task lock during tool invocation. A follow-up rejects relative or symlink-ancestor credential paths, requires a current-owner private parent and leaf, and binds the opened authorization inode to stable pre- and post-open metadata."
+assumption = "Human qualification must exercise absent, incorrect, exact and rotated bearers, public Agent Card reads, slowloris and overload, query and framing attacks, concurrent long payment calls, task eviction, relative and symlink-ancestor credentials, owner and mode changes, concurrent leaf replacement and process restart from the installed manifest. The journey source carries the bearer but no runtime, build or passing journey result is asserted."
+severity = "post-implementation-repair"
+
+[observation.15.3.1]
+task = "15.3"
+file = "platform/sdk/go/mirror.go"
+symbol = "MirrorVerifier.verify, boundedMirrorOutput, NewMirrorVerifier"
+observed = "Post-implementation source review found the Go mirror SDK could expand caller evidence into an unbounded request, buffer arbitrary verifier output, accept a symlinked or non-executable verifier path, and trust a successful-looking response for a different requested batch or impossible policy counts. The repair freezes request and evidence bounds before hex expansion, drains output while retaining a fixed maximum, rejects non-canonical paths, symlink ancestors, group/world-writable components and non-executable process inputs, fingerprints bounded executable and configuration files before and after execution, requires successful child termination, validates the error vocabulary, and binds the response batch and policy invariants to the request."
+assumption = "Human qualification must run the real verifier with maximum evidence, stdout overflow, timeout, nonzero exit, unsafe directory modes, symlink and concurrent path replacement, malformed errors and altered batch, provenance and source counts. Go's portable os/exec boundary cannot execute an already-open inode, so a replacement restored entirely between the pre/post fingerprints remains a narrow residual requiring an immutable deployment mount or platform sandbox. No Go compile, process execution or passing conformance result is asserted."
+severity = "post-implementation-repair"
+
+[observation.15.4.6]
+task = "15.4"
+file = "platform/sdk/jvm/src/main/java/com/sidiora/layerx/sdk/verify/MirrorSourceVerifier.java"
+symbol = "MirrorSourceVerifier.verify, read, write"
+observed = "Post-implementation source review found the JVM mirror adapter used a process boundary without complete request pre-bounds, simultaneous pipe drainage, retained-output bounds, strict executable/configuration files, nonzero-exit enforcement, or response binding to the requested batch and policy. The rewritten adapter starts only canonical regular inputs with no symlink or writable ancestors, fingerprints bounded inputs before and after execution, writes and drains concurrently under one deadline, discards stderr, retains a bounded stdout prefix while draining the rest, requires zero exit, and validates canonical response fields, errors and policy invariants."
+assumption = "Human qualification must run the Maven artifact against the real executable and adversarial helpers that stop reading stdin, fill stdout, write stderr, hang, exit nonzero, replace trusted inputs, return deep or malformed JSON and alter the requested batch. ProcessBuilder cannot execute an already-open inode portably, so immutable deployment storage remains required against a replace-and-restore race wholly inside the fingerprint interval. No JVM compile, virtual-thread execution or passing conformance result is asserted."
+severity = "post-implementation-repair"
+
+[observation.15.5.1]
+task = "15.5"
+file = "platform/sdk/swift/Sources/LayerXSDK/MirrorSource.swift, platform/sdk/dotnet/MirrorSource.cs"
+symbol = "LocalMirrorExecutableVerifier, MirrorSourceVerifier"
+observed = "Post-implementation source review found the Swift and C# mirror adapters lacked complete process-path, request, output, timeout and response-integrity boundaries. The repair rejects non-canonical inputs with symlink or writable ancestors, fingerprints bounded executable and configuration files before and after the child, pre-bounds evidence before expansion, drains child pipes without unbounded retention or deadlock, kills timed-out work, requires successful exit, constrains JSON depth where the runtime exposes it, validates the declared error vocabulary, and binds verification fields and counts to the exact requested batch and policy."
+assumption = "Human qualification must run both artifacts against the real mirror verifier and hostile child fixtures for pipe backpressure, timeout, cancellation, output overflow, nonzero exit, unsafe ownership and modes, concurrent replacement, malformed JSON and request-response substitution. Neither portable Process API executes a retained inode, so an immutable deployment mount remains required against a complete replace-and-restore inside the fingerprint interval. Swift remains environment-blocked on hosts without its declared toolchain; no compile or passing result is asserted."
+severity = "post-implementation-repair"
+
+[observation.16.3.1]
+task = "16.3"
+file = "platform/integrations/spring/src/main/java/com/sidiora/layerx/spring/DurableStores.java, platform/integrations/spring/src/main/java/com/sidiora/layerx/spring/LayerXAutoConfiguration.java, platform/integrations/spring/src/main/java/com/sidiora/layerx/spring/LayerXProperties.java, platform/integrations/spring/example/src/main/resources/application.yaml, platform/docs/samples/paid-endpoint-spring/src/main/resources/application.yaml"
+symbol = "DurableStores, layerXFulfillmentRepository, layerXWebhookDeliveryStore"
+observed = "Post-implementation source review found Spring auto-configuration silently installed process-local fulfillment and webhook replay stores, so restart could release the same paid resource again and reprocess a completed signed delivery. The repair makes a declared storage directory mandatory, installs process-locked owner-protected file stores, publishes records through unique synchronized atomic replacement, syncs files and directories, binds stored fulfillment material to the exact receipt and authority, and retains completed webhook claims durably. The in-memory classes remain available only when an application explicitly selects them."
+assumption = "Human qualification must run both Spring samples with a durable local and deployment volume, restart and crash around release, record publication and webhook completion, contend from multiple processes, tamper with and symlink records, exhaust the volume, and prove exact retries return the original resource while changed material conflicts. No Maven compile, application start or passing test result is asserted."
+severity = "post-implementation-repair"
+
+[observation.16.4.6]
+task = "16.4"
+file = "platform/integrations/agents/src/mcp.ts, platform/integrations/agents/src/webhooks.ts"
+symbol = "FileVerifiedEventQueue, FileWebhookDeliveryStore, readBoundedRegularFile"
+observed = "A fresh review of the Node agent integration found both durable ledgers read an entire file before enforcing their declared size, followed symlinked ledger paths, and treated a lock file older than two minutes as abandoned even when a live long operation still held it. That stale unlink could create two concurrent writers and corrupt replay or verified-event state. The repair opens ledger files with no-follow semantics, validates regular files and streams only a fixed retained bound, and removes time-based lock stealing so uncertain ownership fails closed instead of admitting a second writer. Node's standard cross-platform filesystem API exposes no advisory lock or inode-conditional unlink, so automatic identity-safe stale-lock recovery cannot be written here without a native dependency or changing the public store contract."
+assumption = "Human qualification must force long operations beyond the former stale threshold, crash while holding a lock, supply oversized and symlinked ledgers, and prove no concurrent writer is admitted. These file stores are safe only with an operator-owned stale-lock recovery procedure after independently proving the owner dead; deployments requiring unattended crash recovery or multiple processes must inject the already-supported external VerifiedEventBuffer and WebhookDeliveryStore backed by a transactional service. No Node build, process test or passing result is asserted."
+severity = "post-implementation-repair"
+
+[observation.16.4.7]
+task = "16.4"
+file = "platform/integrations/agents/src/a2a.ts, platform/integrations/agents/package.json, platform/integrations/agents/examples/agent-runtime/index.mjs"
+symbol = "createA2AIntegration, InMemoryTaskStore, LayerXA2AIntegration.requestHandler"
+observed = "The current agent-framework A2A package constructs the official SDK request handler with an in-memory task store, declares an empty security scheme, and ships no authenticated HTTP executable or mount example. Its direct executeToolRequest helper is an in-process adapter, not a runnable network ingress. This remains distinct from the now-authenticated CLI-installed A2A service and was not replaced with an invented store or unaudited transport during this source pass."
+assumption = "Before task 16.4 can be treated as deployable A2A integration, implementation must require a caller-supplied durable TaskStore or ship a real one, define and enforce the advertised authentication at an executable bounded HTTP boundary, and add a runnable example. Human qualification must then prove restart, replay, auth and overload behavior."
+severity = "implementation-gap"
+
+[observation.16.1.5]
+task = "16.1"
+file = "platform/middleware/buyer/src/index.ts"
+symbol = "LayerXPaymentHttpTransport, readBoundedJson"
+observed = "Post-implementation source review found the buyer middleware's production payment transport accepted credential-bearing base URLs with embedded user information, had no request deadline, and called Response.json before enforcing any response-size bound. The repair admits plaintext only on exact loopback hosts, rejects URL credentials and fragments, installs a finite request deadline, streams a fixed maximum response with strict UTF-8, and only then parses JSON."
+assumption = "Human qualification must exercise remote HTTPS and IPv4/IPv6 loopback URLs, credential-bearing and malformed URLs, timeout and cancellation, chunked and declared response overflow, invalid UTF-8 and malformed success and error envelopes. No TypeScript build, fetch execution or passing conformance result is asserted."
+severity = "post-implementation-repair"
+
+[observation.16.3.2]
+task = "16.3"
+file = "platform/integrations/next/src/index.ts"
+symbol = "readRawBody"
+observed = "Post-implementation source review found the Next.js webhook endpoint called Request.arrayBuffer and checked its size only after the runtime had buffered the complete untrusted delivery. The repair drains the request stream incrementally, cancels it as soon as the one-megabyte webhook limit is crossed, and parses or verifies only the bounded retained bytes."
+assumption = "Human qualification must send declared-length and chunked bodies at and above the limit, abort during streaming, and prove no event handler or delivery claim runs on overflow. No Next build, server execution or passing conformance result is asserted."
 severity = "post-implementation-repair"
 
 [observation.37.1.10]
