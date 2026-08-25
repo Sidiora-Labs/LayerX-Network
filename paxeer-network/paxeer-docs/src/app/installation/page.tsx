@@ -3,16 +3,13 @@ import Link from 'next/link'
 
 export default function Installation() {
   return (
-    <DocsLayout>
-      <div className="page-header">
-        <h1 className="page-title">Installation & Build</h1>
-        <p className="page-description">
-          How to build and install the paxd node binary.
-        </p>
-      </div>
+    <DocsLayout pageTitle="Installation & Build">
+      <p className="text-on-surface-variant mb-6">
+        How to build and install the paxd node binary.
+      </p>
 
-      <div className="source-note">
-        <strong>Source:</strong> <code>paxeer-network/Makefile</code> and <code>paxeer-network/README.md</code>
+      <div className="bg-surface-high border border-outline-variant rounded-lg px-4 py-3 mb-6">
+        <strong className="text-on-surface">Source:</strong> <code>paxeer-network/Makefile</code> and <code>paxeer-network/README.md</code>
       </div>
 
       <h2>Prerequisites</h2>

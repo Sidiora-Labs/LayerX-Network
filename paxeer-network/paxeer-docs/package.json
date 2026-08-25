@@ -12,7 +12,8 @@
   "dependencies": {
     "next": "^14.2.0",
     "react": "^18.3.0",
-    "react-dom": "^18.3.0"
+    "react-dom": "^18.3.0",
+    "tailwindcss": "^4.0.0-alpha.25"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
