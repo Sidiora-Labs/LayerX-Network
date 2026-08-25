@@ -6,13 +6,10 @@ use layerx_agent_api::prepare::{
     TimestampBound as AgentTimestampBound,
 };
 use layerx_agent_api::{Amount as AgentAmount, Sequence};
-use layerx_intents::{
-    compile, BridgeDepositCredit, CompileError, CompiledIntent, Intent, IntentError, IntentKind,
-};
-use layerx_proof::checkpoint::{verify_certificate, Certificate, CheckpointError, GuarantorKey};
-use layerx_proof::receipt::{
-    verify_outcome, AuthorizedBatch, ReceiptCheck, VerificationFailure, VerifiedReceipt,
-};
+use ed25519_dalek::{Signature, VerifyingKey};
+use layerx_intents::{CompiledIntent, Intent};
+use layerx_proof::merkle::{leaf_hash, verify_leaf_hash, MerkleError, Proof};
+use layerx_proof::receipt::AuthorizedBatch;
 use layerx_sdk::{Call, Client as AgentClient};
 use layerx_types::account::{AccountId, AccountNamespace};
 use layerx_types::amount::Amount;
@@ -35,8 +32,9 @@ const CUSTODY_DEPOSIT_TOPIC: [u8; 32] = [
 
 const CUSTODY_DEPOSIT_DOMAIN: &[u8] = b"LXP/Paxeer/custody-deposit/v1";
 const ACCOUNT_ID_DOMAIN: &[u8] = b"LXP/v1/account-id\0";
-const CREDIT_KEY_DOMAIN: &[u8] = b"LXP/human/deposit-credit-key/v1\0";
-const PROOF_COMMITMENT_DOMAIN: &[u8] = b"LX:DEPOSIT:PROOF:v1";
+const DEPOSIT_ROOT_DOMAIN: &[u8] = b"LX:PAXEER:DEPOSIT:ROOT:v1";
+const DEPOSIT_LEAF_DOMAIN: &[u8] = b"LX:PAXEER:DEPOSIT:LEAF:v1";
+const DEPOSIT_NULLIFIER_DOMAIN: &[u8] = b"LX:DEPOSIT:NULLIFIER:v1";
 
 /// Derives the exact 32-byte account address custody names as beneficiary.
 #[must_use]
@@ -58,63 +56,24 @@ pub struct CustodyDeposit {
     pub nonce: u64,
 }
 
-/// A checkpoint admitted only after its canonical header, bonded signatures,
-/// threshold, and optional settlement registration have verified.
+/// The exact untrusted Paxeer custody-root registration published to Core.
+/// Trust is conferred only by [`DepositProofVerifier::obtain`].
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct FinalizedCheckpoint {
-    id: CheckpointId,
-    state_root: [u8; 32],
-    network_id: u32,
-    protocol_version: u16,
+pub struct DepositRootRegistration {
+    pub checkpoint_id: [u8; 32],
+    pub checkpoint_state_root: [u8; 32],
+    pub deposit_root: [u8; 32],
+    pub custody_reference: [u8; 32],
+    pub network_id: u32,
+    pub protocol_version: u16,
+    pub signature: [u8; 64],
 }
 
-impl FinalizedCheckpoint {
-    /// Verifies core-produced checkpoint evidence and extracts the exact bridge
-    /// proof fields from the signed canonical batch header.
-    ///
-    /// # Errors
-    ///
-    /// Returns the proof verifier's exact certificate or canonical-header
-    /// failure. A value cannot be constructed from an unverified identifier.
-    pub fn verify(
-        certificate: &Certificate,
-        bonded_set: &[GuarantorKey],
-        registered_checkpoint_id: CheckpointId,
-        registered_settlement_reference: Option<&[u8]>,
-    ) -> Result<Self, CheckpointError> {
-        let report = verify_certificate(
-            certificate,
-            bonded_set,
-            &registered_checkpoint_id.bytes(),
-            registered_settlement_reference,
-        )?;
-        Ok(Self {
-            id: registered_checkpoint_id,
-            state_root: report.resulting_state_root(),
-            network_id: report.network_id(),
-            protocol_version: report.protocol_version(),
-        })
-    }
-
-    #[must_use]
-    pub const fn id(&self) -> CheckpointId {
-        self.id
-    }
-
-    #[must_use]
-    pub const fn state_root(&self) -> [u8; 32] {
-        self.state_root
-    }
-
-    #[must_use]
-    pub const fn network_id(&self) -> u32 {
-        self.network_id
-    }
-
-    #[must_use]
-    pub const fn protocol_version(&self) -> u16 {
-        self.protocol_version
-    }
+/// Untrusted index-aware inclusion material published beside a custody root.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PublishedDepositProof {
+    pub registration: DepositRootRegistration,
+    pub inclusion_proof: Proof,
 }
 
 /// Why the custody transaction itself failed.
@@ -133,6 +92,9 @@ pub enum CustodyFault {
 /// Why the finalised custody proof is not available right now.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ProofFault {
+    /// No authentic producer for the signed registration and inclusion path is
+    /// configured at the Paxeer boundary.
+    ProducerUnavailable,
     NotFinal {
         stage: FinalityStage,
     },
@@ -166,7 +128,26 @@ pub enum ProofFault {
         emitted: [u8; 32],
         derived: [u8; 32],
     },
-    Checkpoint(CheckpointError),
+    NonCanonicalRegistration {
+        field: &'static str,
+    },
+    RegistrationNetworkMismatch {
+        expected: u32,
+        found: u32,
+    },
+    RegistrationProtocolMismatch {
+        expected: u16,
+        found: u16,
+    },
+    CustodyReferenceMismatch {
+        expected: [u8; 32],
+        found: [u8; 32],
+    },
+    InvalidDepositRootSignature,
+    NonCanonicalDepositLeaf {
+        field: &'static str,
+    },
+    DepositInclusion(MerkleError),
 }
 
 /// Why the credit submission or its receipt was refused.
@@ -177,33 +158,9 @@ pub enum CreditFault {
         recipient: [u8; 32],
     },
     ReserveNamespace,
-    Intent(IntentError),
-    Compile(CompileError),
+    /// Core exposes no activity ingress carrying the complete C custody proof.
+    BridgeProofIngressUnavailable,
     AgentContract(ContractError),
-    Unverifiable(VerificationFailure),
-    Refused {
-        result_code: i32,
-    },
-    WrongActivity {
-        expected: [u8; 32],
-        found: [u8; 32],
-    },
-    WrongAsset {
-        expected: AssetId,
-        found: [u8; 32],
-    },
-    WrongAmount {
-        expected: Amount,
-        found: u128,
-    },
-    WrongReserve {
-        expected: [u8; 32],
-        found: [u8; 32],
-    },
-    WrongRecipient {
-        expected: [u8; 32],
-        found: [u8; 32],
-    },
 }
 
 /// The three deposit failure classes the journey engine consumes.
@@ -221,6 +178,10 @@ pub struct DepositProofConfig {
     pub endpoints: Vec<EndpointConfig>,
     pub minimum_endpoint_agreement: usize,
     pub required_confirmations: u64,
+    pub paxeer_checkpoint_authority: [u8; 32],
+    pub custody_reference: [u8; 32],
+    pub layerx_network_id: u32,
+    pub layerx_protocol_version: u16,
 }
 
 /// Why a custody-proof authority configuration was refused.
@@ -229,6 +190,10 @@ pub enum DepositProofConfigError {
     Endpoints(ClientConfigError),
     Agreement(TrackerConfigError),
     ZeroRequiredConfirmations,
+    InvalidCheckpointAuthority,
+    ZeroCustodyReference,
+    ZeroNetworkId,
+    ZeroProtocolVersion,
 }
 
 /// The configured authority that can mint a [`DepositProof`].
@@ -239,6 +204,10 @@ pub enum DepositProofConfigError {
 pub struct DepositProofVerifier {
     binding: QuorumBinding,
     required_confirmations: u64,
+    checkpoint_authority: VerifyingKey,
+    custody_reference: [u8; 32],
+    layerx_network_id: u32,
+    layerx_protocol_version: u16,
 }
 
 struct AdmittedFinality<'a> {
@@ -260,6 +229,20 @@ impl DepositProofVerifier {
         if config.required_confirmations == 0 {
             return Err(DepositProofConfigError::ZeroRequiredConfirmations);
         }
+        if config.custody_reference == [0; 32] {
+            return Err(DepositProofConfigError::ZeroCustodyReference);
+        }
+        if config.layerx_network_id == 0 {
+            return Err(DepositProofConfigError::ZeroNetworkId);
+        }
+        if config.layerx_protocol_version == 0 {
+            return Err(DepositProofConfigError::ZeroProtocolVersion);
+        }
+        let checkpoint_authority = VerifyingKey::from_bytes(&config.paxeer_checkpoint_authority)
+            .map_err(|_| DepositProofConfigError::InvalidCheckpointAuthority)?;
+        if checkpoint_authority.is_weak() {
+            return Err(DepositProofConfigError::InvalidCheckpointAuthority);
+        }
         crate::finality::validate_endpoint_agreement(
             &config.endpoints,
             config.minimum_endpoint_agreement,
@@ -271,38 +254,15 @@ impl DepositProofVerifier {
         Ok(Self {
             binding,
             required_confirmations: config.required_confirmations,
+            checkpoint_authority,
+            custody_reference: config.custody_reference,
+            layerx_network_id: config.layerx_network_id,
+            layerx_protocol_version: config.layerx_protocol_version,
         })
     }
 
-    /// Verifies checkpoint evidence and constructs the custody proof as one
-    /// typed operation under this verifier's policy.
-    ///
-    /// # Errors
-    ///
-    /// Classifies certificate failures as proof-unavailable and otherwise
-    /// returns the same custody and chain failures as [`Self::obtain`].
-    #[allow(clippy::too_many_arguments)]
-    pub fn obtain_from_certificate(
-        &self,
-        report: &FinalityReport,
-        vault: EvmAddress,
-        certificate: &Certificate,
-        bonded_set: &[GuarantorKey],
-        registered_checkpoint_id: CheckpointId,
-        registered_settlement_reference: Option<&[u8]>,
-    ) -> Result<DepositProof, DepositFailure> {
-        let checkpoint = FinalizedCheckpoint::verify(
-            certificate,
-            bonded_set,
-            registered_checkpoint_id,
-            registered_settlement_reference,
-        )
-        .map_err(|error| DepositFailure::ProofUnavailable(ProofFault::Checkpoint(error)))?;
-        self.obtain(report, vault, checkpoint)
-    }
-
     /// Constructs a finalized custody proof from one tracked transaction and
-    /// a verified core checkpoint under this verifier's exact policy.
+    /// the exact signed Paxeer custody-root registration and index-aware path.
     ///
     /// # Errors
     ///
@@ -313,7 +273,7 @@ impl DepositProofVerifier {
         &self,
         report: &FinalityReport,
         vault: EvmAddress,
-        checkpoint: FinalizedCheckpoint,
+        published: PublishedDepositProof,
     ) -> Result<DepositProof, DepositFailure> {
         let admitted = self.admit_finality(report)?;
         let custody = custody_event(admitted.logs, vault)?;
@@ -326,7 +286,25 @@ impl DepositProofVerifier {
                 },
             ));
         }
-        let commitment = proof_commitment(report.transaction(), &custody, &checkpoint);
+        self.verify_registration(&published.registration)?;
+        let leaf_bytes = deposit_leaf_bytes(
+            custody.deposit_id,
+            published.registration.custody_reference,
+            custody.asset,
+            custody.amount,
+            published.registration.checkpoint_id,
+            published.registration.network_id,
+            published.registration.protocol_version,
+        )
+        .map_err(DepositFailure::ProofUnavailable)?;
+        let leaf = leaf_hash(&leaf_bytes).map_err(deposit_inclusion)?;
+        verify_leaf_hash(
+            &leaf,
+            &published.inclusion_proof,
+            &published.registration.deposit_root,
+        )
+        .map_err(deposit_inclusion)?;
+        let nullifier = deposit_nullifier(custody.deposit_id);
         Ok(DepositProof {
             transaction: report.transaction(),
             inclusion: admitted.inclusion,
@@ -335,10 +313,55 @@ impl DepositProofVerifier {
             chain_id: admitted.chain_id,
             vault,
             custody,
-            checkpoint,
-            finalized: true,
-            commitment,
+            checkpoint_id: CheckpointId::new(published.registration.checkpoint_id),
+            checkpoint_state_root: published.registration.checkpoint_state_root,
+            deposit_root: published.registration.deposit_root,
+            custody_reference: published.registration.custody_reference,
+            network_id: published.registration.network_id,
+            protocol_version: published.registration.protocol_version,
+            registration_signature: published.registration.signature,
+            inclusion_proof: published.inclusion_proof,
+            leaf_hash: leaf,
+            nullifier,
         })
+    }
+
+    fn verify_registration(
+        &self,
+        registration: &DepositRootRegistration,
+    ) -> Result<(), DepositFailure> {
+        if registration.network_id != self.layerx_network_id {
+            return Err(DepositFailure::ProofUnavailable(
+                ProofFault::RegistrationNetworkMismatch {
+                    expected: self.layerx_network_id,
+                    found: registration.network_id,
+                },
+            ));
+        }
+        if registration.protocol_version != self.layerx_protocol_version {
+            return Err(DepositFailure::ProofUnavailable(
+                ProofFault::RegistrationProtocolMismatch {
+                    expected: self.layerx_protocol_version,
+                    found: registration.protocol_version,
+                },
+            ));
+        }
+        if registration.custody_reference != self.custody_reference {
+            return Err(DepositFailure::ProofUnavailable(
+                ProofFault::CustodyReferenceMismatch {
+                    expected: self.custody_reference,
+                    found: registration.custody_reference,
+                },
+            ));
+        }
+        let message = deposit_root_registration_message(registration)
+            .map_err(DepositFailure::ProofUnavailable)?;
+        let signature = Signature::from_bytes(&registration.signature);
+        self.checkpoint_authority
+            .verify_strict(&message, &signature)
+            .map_err(|_| {
+                DepositFailure::ProofUnavailable(ProofFault::InvalidDepositRootSignature)
+            })
     }
 
     fn admit_finality<'a>(
@@ -464,9 +487,16 @@ pub struct DepositProof {
     chain_id: u64,
     vault: EvmAddress,
     custody: CustodyDeposit,
-    checkpoint: FinalizedCheckpoint,
-    finalized: bool,
-    commitment: [u8; 32],
+    checkpoint_id: CheckpointId,
+    checkpoint_state_root: [u8; 32],
+    deposit_root: [u8; 32],
+    custody_reference: [u8; 32],
+    network_id: u32,
+    protocol_version: u16,
+    registration_signature: [u8; 64],
+    inclusion_proof: Proof,
+    leaf_hash: [u8; 32],
+    nullifier: [u8; 32],
 }
 
 impl DepositProof {
@@ -506,23 +536,53 @@ impl DepositProof {
     }
 
     #[must_use]
-    pub const fn checkpoint(&self) -> &FinalizedCheckpoint {
-        &self.checkpoint
+    pub const fn checkpoint_id(&self) -> CheckpointId {
+        self.checkpoint_id
+    }
+
+    #[must_use]
+    pub const fn checkpoint_state_root(&self) -> [u8; 32] {
+        self.checkpoint_state_root
+    }
+
+    #[must_use]
+    pub const fn deposit_root(&self) -> [u8; 32] {
+        self.deposit_root
     }
 
     #[must_use]
     pub const fn custody_reference(&self) -> [u8; 32] {
-        self.transaction.bytes()
+        self.custody_reference
     }
 
     #[must_use]
-    pub const fn commitment(&self) -> [u8; 32] {
-        self.commitment
+    pub const fn network_id(&self) -> u32 {
+        self.network_id
     }
 
     #[must_use]
-    pub const fn finalized(&self) -> bool {
-        self.finalized
+    pub const fn protocol_version(&self) -> u16 {
+        self.protocol_version
+    }
+
+    #[must_use]
+    pub const fn registration_signature(&self) -> [u8; 64] {
+        self.registration_signature
+    }
+
+    #[must_use]
+    pub const fn inclusion_proof(&self) -> &Proof {
+        &self.inclusion_proof
+    }
+
+    #[must_use]
+    pub const fn leaf_hash(&self) -> [u8; 32] {
+        self.leaf_hash
+    }
+
+    #[must_use]
+    pub const fn nullifier(&self) -> [u8; 32] {
+        self.nullifier
     }
 
     #[must_use]
@@ -534,10 +594,7 @@ impl DepositProof {
     /// transaction can ever submit under.
     #[must_use]
     pub fn idempotency_key(&self) -> IdempotencyKey {
-        let mut hasher = Sha256::new();
-        hasher.update(CREDIT_KEY_DOMAIN);
-        hasher.update(self.custody.deposit_id);
-        IdempotencyKey::new(hasher.finalize().into())
+        IdempotencyKey::new(self.nullifier)
     }
 
     /// Feeds this proof into the typed bridge deposit-credit intent.
@@ -545,7 +602,9 @@ impl DepositProof {
     /// # Errors
     ///
     /// Refuses a reserve outside `system:paxeer-reserve`, a recipient that is
-    /// not the custody beneficiary, and any intent-vocabulary rejection.
+    /// not the custody beneficiary, and the currently unavailable complete
+    /// C proof ingress. The existing seven-field intent is not an equivalent
+    /// substitute for `lx_deposit_proof`.
     pub fn credit_intent(
         &self,
         reserve: &AccountId,
@@ -563,17 +622,9 @@ impl DepositProof {
                 },
             ));
         }
-        let credit = BridgeDepositCredit::new(
-            self.deposit_id(),
-            self.checkpoint.id(),
-            reserve.clone(),
-            recipient.clone(),
-            self.custody.asset,
-            self.custody.amount,
-            self.idempotency_key(),
-        )
-        .map_err(|error| DepositFailure::CreditRefused(CreditFault::Intent(error)))?;
-        Ok(Intent::v1(IntentKind::BridgeDepositCredit(credit)))
+        Err(DepositFailure::CreditRefused(
+            CreditFault::BridgeProofIngressUnavailable,
+        ))
     }
 
     /// Compiles the deposit-credit intent into the canonical payload admitted
@@ -581,25 +632,28 @@ impl DepositProof {
     ///
     /// # Errors
     ///
-    /// Returns a typed refusal for an invalid intent or undeclared payload.
+    /// Returns the typed complete-proof ingress refusal before compilation.
     pub fn compile_credit(
         &self,
         reserve: &AccountId,
         recipient: &AccountId,
         registry: &ModuleRegistry,
     ) -> Result<CompiledIntent, DepositFailure> {
-        let intent = self.credit_intent(reserve, recipient)?;
-        compile(&intent, registry)
-            .map_err(|error| DepositFailure::CreditRefused(CreditFault::Compile(error)))
+        let _ = registry;
+        self.credit_intent(reserve, recipient).and_then(|_| {
+            Err(DepositFailure::CreditRefused(
+                CreditFault::BridgeProofIngressUnavailable,
+            ))
+        })
     }
 
-    /// Accepts a canonical credit receipt only when it verifies and binds to
-    /// this deposit, the exact submitted activity, reserve, and recipient.
+    /// Refuses receipt acceptance until Core exposes a complete-proof activity
+    /// whose receipt can bind this deposit nullifier and exact submitted proof.
     ///
     /// # Errors
     ///
-    /// Returns the precise verifier, result-code, activity, or transfer binding
-    /// that refused the receipt.
+    /// Returns the same typed proof-ingress refusal as credit preparation after
+    /// checking the reserve and beneficiary boundary.
     pub fn accept_credit(
         &self,
         receipt_bytes: &[u8],
@@ -607,94 +661,23 @@ impl DepositProof {
         expected_activity_id: [u8; 32],
         reserve: &AccountId,
         recipient: &AccountId,
-    ) -> Result<CreditReceipt, DepositFailure> {
-        let verified = verify_outcome(receipt_bytes, batch)
-            .map_err(|failure| DepositFailure::CreditRefused(CreditFault::Unverifiable(failure)))?;
-        let (activity_id, result_code, asset, amount, from, to) =
-            match verified.receipt().protocol() {
-                Some(protocol) => (
-                    protocol.activity_id(),
-                    protocol.result_code(),
-                    protocol.asset(),
-                    protocol.amount(),
-                    protocol.from(),
-                    protocol.to(),
-                ),
-                None => {
-                    return Err(DepositFailure::CreditRefused(CreditFault::Unverifiable(
-                        VerificationFailure {
-                            check: ReceiptCheck::ReceiptShape,
-                        },
-                    )));
-                }
-            };
-        if activity_id != expected_activity_id {
-            return Err(DepositFailure::CreditRefused(CreditFault::WrongActivity {
-                expected: expected_activity_id,
-                found: activity_id,
-            }));
-        }
-        if result_code != 0 {
-            return Err(DepositFailure::CreditRefused(CreditFault::Refused {
-                result_code,
-            }));
-        }
-        if asset != self.custody.asset.bytes() {
-            return Err(DepositFailure::CreditRefused(CreditFault::WrongAsset {
-                expected: self.custody.asset,
-                found: asset,
-            }));
-        }
-        if amount != self.custody.amount.value() {
-            return Err(DepositFailure::CreditRefused(CreditFault::WrongAmount {
-                expected: self.custody.amount,
-                found: amount,
-            }));
-        }
-        let reserve_address = account_address(reserve);
-        if from != reserve_address {
-            return Err(DepositFailure::CreditRefused(CreditFault::WrongReserve {
-                expected: reserve_address,
-                found: from,
-            }));
+    ) -> Result<(), DepositFailure> {
+        let _ = (receipt_bytes, batch, expected_activity_id);
+        if reserve.namespace() != AccountNamespace::SystemPaxeerReserve {
+            return Err(DepositFailure::CreditRefused(CreditFault::ReserveNamespace));
         }
         let recipient_address = account_address(recipient);
-        if recipient_address != self.custody.beneficiary || to != recipient_address {
-            return Err(DepositFailure::CreditRefused(CreditFault::WrongRecipient {
-                expected: self.custody.beneficiary,
-                found: to,
-            }));
+        if recipient_address != self.custody.beneficiary {
+            return Err(DepositFailure::CreditRefused(
+                CreditFault::BeneficiaryMismatch {
+                    beneficiary: self.custody.beneficiary,
+                    recipient: recipient_address,
+                },
+            ));
         }
-        Ok(CreditReceipt { verified })
-    }
-}
-
-/// The verified credit receipt that completes one deposit.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CreditReceipt {
-    verified: VerifiedReceipt,
-}
-
-impl CreditReceipt {
-    #[must_use]
-    pub const fn verified(&self) -> &VerifiedReceipt {
-        &self.verified
-    }
-
-    #[must_use]
-    pub fn activity_id(&self) -> [u8; 32] {
-        match self.verified.receipt().protocol() {
-            Some(receipt) => receipt.activity_id(),
-            None => [0; 32],
-        }
-    }
-
-    #[must_use]
-    pub fn amount(&self) -> u128 {
-        match self.verified.receipt().protocol() {
-            Some(receipt) => receipt.amount(),
-            None => 0,
-        }
+        Err(DepositFailure::CreditRefused(
+            CreditFault::BridgeProofIngressUnavailable,
+        ))
     }
 }
 
@@ -946,21 +929,105 @@ fn derive_deposit_id(chain_id: u64, vault: EvmAddress, custody: &CustodyDeposit)
     hasher.finalize().into()
 }
 
-fn proof_commitment(
-    transaction: TransactionHash,
-    custody: &CustodyDeposit,
-    checkpoint: &FinalizedCheckpoint,
-) -> [u8; 32] {
+/// Serializes the exact bytes signed by the Paxeer checkpoint authority for a
+/// deposit-root registration.
+///
+/// # Errors
+///
+/// Refuses every zero field rejected by `lx_paxeer_deposit_root_message`.
+pub fn deposit_root_registration_message(
+    registration: &DepositRootRegistration,
+) -> Result<Vec<u8>, ProofFault> {
+    for (field, value) in [
+        ("checkpoint_id", registration.checkpoint_id),
+        ("checkpoint_state_root", registration.checkpoint_state_root),
+        ("deposit_root", registration.deposit_root),
+        ("custody_reference", registration.custody_reference),
+    ] {
+        if value == [0; 32] {
+            return Err(ProofFault::NonCanonicalRegistration { field });
+        }
+    }
+    if registration.network_id == 0 {
+        return Err(ProofFault::NonCanonicalRegistration {
+            field: "network_id",
+        });
+    }
+    if registration.protocol_version == 0 {
+        return Err(ProofFault::NonCanonicalRegistration {
+            field: "protocol_version",
+        });
+    }
+    let mut message = Vec::with_capacity(DEPOSIT_ROOT_DOMAIN.len() + 32 * 4 + 4 + 2);
+    message.extend_from_slice(DEPOSIT_ROOT_DOMAIN);
+    message.extend_from_slice(&registration.checkpoint_id);
+    message.extend_from_slice(&registration.checkpoint_state_root);
+    message.extend_from_slice(&registration.deposit_root);
+    message.extend_from_slice(&registration.custody_reference);
+    message.extend_from_slice(&registration.network_id.to_be_bytes());
+    message.extend_from_slice(&registration.protocol_version.to_be_bytes());
+    Ok(message)
+}
+
+/// Serializes one canonical C `lx_deposit_proof` leaf before Merkle leaf-domain
+/// hashing.
+///
+/// # Errors
+///
+/// Refuses every zero economic or checkpoint field rejected by
+/// `lx_paxeer_deposit_leaf_hash`.
+#[allow(clippy::too_many_arguments)]
+pub fn deposit_leaf_bytes(
+    deposit_id: [u8; 32],
+    custody_reference: [u8; 32],
+    asset: AssetId,
+    amount: Amount,
+    checkpoint_id: [u8; 32],
+    network_id: u32,
+    protocol_version: u16,
+) -> Result<Vec<u8>, ProofFault> {
+    for (field, value) in [
+        ("deposit_id", deposit_id),
+        ("custody_reference", custody_reference),
+        ("asset_id", asset.bytes()),
+        ("checkpoint_id", checkpoint_id),
+    ] {
+        if value == [0; 32] {
+            return Err(ProofFault::NonCanonicalDepositLeaf { field });
+        }
+    }
+    if amount.value() == 0 {
+        return Err(ProofFault::NonCanonicalDepositLeaf { field: "amount" });
+    }
+    if network_id == 0 {
+        return Err(ProofFault::NonCanonicalDepositLeaf {
+            field: "network_id",
+        });
+    }
+    if protocol_version == 0 {
+        return Err(ProofFault::NonCanonicalDepositLeaf {
+            field: "protocol_version",
+        });
+    }
+    let mut bytes = Vec::with_capacity(DEPOSIT_LEAF_DOMAIN.len() + 32 * 4 + 16 + 4 + 2);
+    bytes.extend_from_slice(DEPOSIT_LEAF_DOMAIN);
+    bytes.extend_from_slice(&deposit_id);
+    bytes.extend_from_slice(&custody_reference);
+    bytes.extend_from_slice(&asset.bytes());
+    bytes.extend_from_slice(&amount.to_be_bytes());
+    bytes.extend_from_slice(&checkpoint_id);
+    bytes.extend_from_slice(&network_id.to_be_bytes());
+    bytes.extend_from_slice(&protocol_version.to_be_bytes());
+    Ok(bytes)
+}
+
+fn deposit_nullifier(deposit_id: [u8; 32]) -> [u8; 32] {
     let mut hasher = Sha256::new();
-    hasher.update(PROOF_COMMITMENT_DOMAIN);
-    hasher.update(custody.deposit_id);
-    hasher.update(transaction.bytes());
-    hasher.update(custody.asset.bytes());
-    hasher.update(custody.amount.to_be_bytes());
-    hasher.update(checkpoint.id().bytes());
-    hasher.update(checkpoint.state_root());
-    hasher.update(checkpoint.network_id().to_be_bytes());
-    hasher.update(checkpoint.protocol_version().to_be_bytes());
-    hasher.update([1]);
+    hasher.update(DEPOSIT_NULLIFIER_DOMAIN);
+    hasher.update(deposit_id);
     hasher.finalize().into()
+}
+
+fn deposit_inclusion(error: MerkleError) -> DepositFailure {
+    DepositFailure::ProofUnavailable(ProofFault::DepositInclusion(error))
 }

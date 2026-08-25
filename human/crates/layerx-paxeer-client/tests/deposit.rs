@@ -4,28 +4,22 @@ use std::sync::atomic::{AtomicU16, Ordering};
 use std::thread;
 use std::time::Duration;
 
-use ed25519_dalek::SigningKey as ReceiptSigningKey;
-use layerx_agent_api::error::RequestId;
-use layerx_agent_api::identity::{AgentDid, AuthorityRef};
-use layerx_agent_api::prepare::TimestampBound as AgentTimestampBound;
-use layerx_agent_api::{Amount as AgentAmount, Sequence, TimestampSeconds};
+use ed25519_dalek::{Signer as _, SigningKey};
 use layerx_paxeer_client::{
-    account_address, raw_call, AgentCreditContext, CreditFault, CreditPath, CustodyFault,
-    DepositFailure, DepositProofConfig, DepositProofVerifier, EndpointConfig, EndpointTransport,
-    ExecutionOutcome, FinalityReport, FinalityStage, FinalityTracker, FinalizedCheckpoint, Json,
-    PaxeerClient, ProofFault, TrackerConfig,
-    TransactionHash, TransactionInclusion,
+    account_address, deposit_leaf_bytes, deposit_root_registration_message, raw_call, CreditFault,
+    CreditPath, CustodyFault, DepositFailure, DepositProofConfig, DepositProofVerifier,
+    DepositRootRegistration, EndpointConfig, EndpointTransport, ExecutionOutcome, FinalityReport,
+    FinalityStage, FinalityTracker, Json, PaxeerClient, ProofFault, PublishedDepositProof,
+    TrackerConfig, TransactionHash, TransactionInclusion,
 };
-use layerx_proof::checkpoint::{
-    checkpoint_id, Attestation, Certificate, Checkpoint, CheckpointError, GuarantorKey,
-};
+use layerx_proof::merkle::{leaf_hash, node_hash, Proof};
 use layerx_proof::receipt::AuthorizedBatch;
-use layerx_sdk::{Client as AgentClient, Deployment, Operation};
 use layerx_types::account::AccountId;
 use layerx_types::amount::Amount;
-use layerx_types::ids::{AssetId, CheckpointId};
+use layerx_types::ids::AssetId;
 use layerx_types::intent::EvmAddress;
 use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry};
+use sha2::{Digest as _, Sha256};
 
 const FUNDED: &str = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266";
 const EMERGENCY: &str = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8";
@@ -35,21 +29,11 @@ const VAULT_CREATION: &str = include_str!("contracts/LayerXVault.hex");
 const ASSET: [u8; 32] = [0x42; 32];
 const AMOUNT: u128 = 25;
 const CORE_NETWORK: u32 = 17;
-const CHECKPOINT_HEADER_HEX: &str = "000117010f010001020000001103000000000000000704000000000000000805000000000000000b0600000000000000130700000020070707070707070707070707070707070707070707070707070707070707070708000000200808080808080808080808080808080808080808080808080808080808080808090000002009090909090909090909090909090909090909090909090909090909090909090a000000200a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0b000000200b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0c000000200c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0d000000200d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0e00000000000003e80f000000200f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f";
 const CHECKPOINT_ID_HEX: &str = "5cd43e8c1a6a0ba5594d75846fe40bd851909368fc0a7439657180c5fb8b9572";
 const CREDIT_ACTIVITY_ID_HEX: &str =
     "3ad4f279bd6297c488fbf76c0802a3fb20c5060d955a7648e6417f8653f8fa11";
 const CREDIT_RECEIPT_HEX: &str = "000152010001000000203ad4f279bd6297c488fbf76c0802a3fb20c5060d955a7648e6417f8653f8fa110000000000000009000000200707070707070707070707070707070707070707070707070707070707070707000000200808080808080808080808080808080808080808080808080808080808080808000000200808080808080808080808080808080808080808080808080808080808080808000000000000000000000000000000000000000000000001000000205cd43e8c1a6a0ba5594d75846fe40bd851909368fc0a7439657180c5fb8b957200080000000100000001010000002042424242424242424242424242424242424242424242424242424242424242420000000000000000000000000000001900000020f94d2cc01cae556915267bc3d1ad7c58034009ea25cbe56906be12b9ca876de0000000000000000000000000000000640000000000000000000000000000004b00000000000000010000002042de0bc2f3c75fd9995e3ad3d57efaf06530b93679d956ddf17fa9d325e1d60d0000000000000000000000000000000a00000000000000000000000000000023000000200909090909090909090909090909090909090909090909090909090909090909000000200a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a000000200b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b00000000000003e80100000040d8bdb7a072cdbc700f7390c482c40823192d2bfc983749456a20e08dc42f54526e153909c707f05d141c20ec9a728f6358fe1a460f6bf7ca7171758511b02e0d";
-const GUARANTOR_PUBLIC_KEYS: [&str; 3] = [
-    "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
-    "02c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
-    "02f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9",
-];
-const GUARANTOR_SIGNATURES: [&str; 3] = [
-    "f9ea8b1dc2d6f6db15ac68bf2ac645081310822839fe31e40fca5f37665d8e2224a16055357219970908e922b785542548f2406ac2bfae1a8d420b613d3c701e",
-    "ee20fdb15279bda8a90b66b5b3817ed294ec8362948665bc066c8b90a95366cb34902aa1845f66e66c97889b0039a7115463760ce0eb7a7620d8d3d857342aad",
-    "cdaac951fb38f3e4d713fcb46a19d41caa60811be4532acdab7b7dc99d2d1de47afbd9349d93eaf98cf464a16b3a0b08229200f403048230d164c3abed716389",
-];
+const CUSTODY_REFERENCE: [u8; 32] = [0x71; 32];
 
 static NEXT_PORT: AtomicU16 = AtomicU16::new(0);
 
@@ -162,11 +146,19 @@ fn client(anvil: &Anvil) -> PaxeerClient {
         .unwrap_or_else(|error| panic!("client: {error:?}"))
 }
 
-fn deposit_verifier(anvil: &Anvil, required_confirmations: u64) -> DepositProofVerifier {
+fn deposit_verifier(
+    anvil: &Anvil,
+    required_confirmations: u64,
+    authority: &SigningKey,
+) -> DepositProofVerifier {
     DepositProofVerifier::new(DepositProofConfig {
         endpoints: vec![anvil.endpoint.clone()],
         minimum_endpoint_agreement: 1,
         required_confirmations,
+        paxeer_checkpoint_authority: authority.verifying_key().to_bytes(),
+        custody_reference: CUSTODY_REFERENCE,
+        layerx_network_id: CORE_NETWORK,
+        layerx_protocol_version: 1,
     })
     .unwrap_or_else(|error| panic!("deposit proof verifier: {error:?}"))
 }
@@ -344,50 +336,97 @@ fn deploy_custody(anvil: &Anvil) -> (EvmAddress, EvmAddress) {
     (token, vault)
 }
 
-fn checkpoint_header() -> Vec<u8> {
-    hex_bytes(CHECKPOINT_HEADER_HEX)
-}
-
-fn guarantor(value: u8) -> (Attestation, GuarantorKey) {
-    let index = usize::from(value.saturating_sub(1));
-    let identifier = hex_array(CHECKPOINT_ID_HEX);
-    let mut id = [0_u8; 32];
-    id[0] = value;
-    let public = hex_array(GUARANTOR_PUBLIC_KEYS[index]);
-    (
-        Attestation::new(
-            identifier,
-            identifier,
-            id,
-            8,
-            [12; 32],
-            true,
-            true,
-            0x1f,
-            1_000 + u64::from(value),
-            hex_array(GUARANTOR_SIGNATURES[index]),
-        ),
-        GuarantorKey::new(id, public, true),
-    )
-}
-
-fn finalized_checkpoint() -> (FinalizedCheckpoint, Certificate, Vec<GuarantorKey>) {
-    let checkpoint = Checkpoint::new(checkpoint_header(), b"REAL-CORE-PROOF".to_vec());
-    let identifier = checkpoint_id(&checkpoint)
-        .unwrap_or_else(|error| panic!("checkpoint identifier: {error:?}"));
-    assert_eq!(identifier, hex_array(CHECKPOINT_ID_HEX));
-    let mut attestations = Vec::new();
-    let mut bonded = Vec::new();
-    for value in 1..=3 {
-        let (attestation, key) = guarantor(value);
-        attestations.push(attestation);
-        bonded.push(key);
+fn deposit_id_from_receipt(
+    anvil: &Anvil,
+    transaction: TransactionHash,
+    vault: EvmAddress,
+) -> [u8; 32] {
+    let receipt = anvil.call(
+        "eth_getTransactionReceipt",
+        &[Json::Text(transaction.to_hex())],
+    );
+    let logs = match receipt.member("logs") {
+        Some(Json::Array(logs)) => logs,
+        _ => panic!("receipt logs are missing"),
+    };
+    for log in logs {
+        let Some(address) = log.member("address").and_then(Json::as_text) else {
+            continue;
+        };
+        if parse_address(address) != vault {
+            continue;
+        }
+        let topics = match log.member("topics") {
+            Some(Json::Array(topics)) => topics,
+            _ => panic!("custody log topics are missing"),
+        };
+        let topic = topics
+            .get(1)
+            .and_then(Json::as_text)
+            .and_then(|value| value.strip_prefix("0x"))
+            .unwrap_or_else(|| panic!("custody deposit id is missing"));
+        return hex_array(topic);
     }
-    let certificate = Certificate::new(checkpoint, attestations, 2, None);
-    let finalized =
-        FinalizedCheckpoint::verify(&certificate, &bonded, CheckpointId::new(identifier), None)
-            .unwrap_or_else(|error| panic!("finalized checkpoint: {error:?}"));
-    (finalized, certificate, bonded)
+    panic!("custody event is missing")
+}
+
+fn published_proof(
+    anvil: &Anvil,
+    transaction: TransactionHash,
+    vault: EvmAddress,
+    authority: &SigningKey,
+) -> PublishedDepositProof {
+    let deposit_id = deposit_id_from_receipt(anvil, transaction, vault);
+    let checkpoint_id = hex_array(CHECKPOINT_ID_HEX);
+    let leaf_bytes = deposit_leaf_bytes(
+        deposit_id,
+        CUSTODY_REFERENCE,
+        AssetId::new(ASSET),
+        Amount::from_u128(AMOUNT),
+        checkpoint_id,
+        CORE_NETWORK,
+        1,
+    )
+    .unwrap_or_else(|error| panic!("deposit leaf: {error:?}"));
+    let deposit_root = leaf_hash(&leaf_bytes)
+        .unwrap_or_else(|error| panic!("deposit leaf hash: {error:?}"));
+    let mut registration = DepositRootRegistration {
+        checkpoint_id,
+        checkpoint_state_root: [8; 32],
+        deposit_root,
+        custody_reference: CUSTODY_REFERENCE,
+        network_id: CORE_NETWORK,
+        protocol_version: 1,
+        signature: [0; 64],
+    };
+    let message = deposit_root_registration_message(&registration)
+        .unwrap_or_else(|error| panic!("deposit root message: {error:?}"));
+    registration.signature = authority.sign(&message).to_bytes();
+    PublishedDepositProof {
+        registration,
+        inclusion_proof: Proof::new(0, 1, Vec::new())
+            .unwrap_or_else(|error| panic!("deposit proof path: {error:?}")),
+    }
+}
+
+fn dummy_published_proof(authority: &SigningKey) -> PublishedDepositProof {
+    let mut registration = DepositRootRegistration {
+        checkpoint_id: hex_array(CHECKPOINT_ID_HEX),
+        checkpoint_state_root: [8; 32],
+        deposit_root: [9; 32],
+        custody_reference: CUSTODY_REFERENCE,
+        network_id: CORE_NETWORK,
+        protocol_version: 1,
+        signature: [0; 64],
+    };
+    let message = deposit_root_registration_message(&registration)
+        .unwrap_or_else(|error| panic!("deposit root message: {error:?}"));
+    registration.signature = authority.sign(&message).to_bytes();
+    PublishedDepositProof {
+        registration,
+        inclusion_proof: Proof::new(0, 1, Vec::new())
+            .unwrap_or_else(|error| panic!("deposit proof path: {error:?}")),
+    }
 }
 
 fn bridge_registry() -> ModuleRegistry {
@@ -397,22 +436,6 @@ fn bridge_registry() -> ModuleRegistry {
         .unwrap_or_else(|error| panic!("bridge registration: {error:?}"));
     ModuleRegistry::new(&[registration])
         .unwrap_or_else(|error| panic!("module registry: {error:?}"))
-}
-
-fn agent_context() -> AgentCreditContext {
-    AgentCreditContext {
-        request_id: RequestId(41),
-        actor: AgentDid::new("did:layerx:deposit-recipient")
-            .unwrap_or_else(|error| panic!("actor DID: {error:?}")),
-        authority: AuthorityRef::new("owner:deposit-owner")
-            .unwrap_or_else(|error| panic!("owner authority: {error:?}")),
-        account_sequence: Sequence(5),
-        timestamp_bound: AgentTimestampBound {
-            not_before: TimestampSeconds(995),
-            not_after: TimestampSeconds(1_010),
-        },
-        fee_limit: AgentAmount(7),
-    }
 }
 
 #[derive(Clone)]
@@ -429,7 +452,7 @@ struct ReceiptFields {
 
 fn signed_receipt(
     fields: &ReceiptFields,
-    signing: &ReceiptSigningKey,
+    signing: &SigningKey,
 ) -> (Vec<u8>, AuthorizedBatch) {
     assert_eq!(fields.activity_id, hex_array(CREDIT_ACTIVITY_ID_HEX));
     assert_eq!(fields.previous_state_root, [7; 32]);
@@ -452,7 +475,7 @@ fn signed_receipt(
 
 #[test]
 #[allow(clippy::too_many_lines)]
-fn finalized_custody_is_credited_once_through_the_agent_contract() {
+fn signed_custody_root_mints_an_opaque_proof_but_credit_ingress_fails_closed() {
     let anvil = Anvil::launch();
     let (_token, vault) = deploy_custody(&anvil);
     let reserve = AccountId::parse("system:paxeer-reserve")
@@ -468,103 +491,120 @@ fn finalized_custody_is_credited_once_through_the_agent_contract() {
         ),
     );
     let report = final_report(&anvil, deposit_transaction);
-    let (checkpoint, certificate, bonded) = finalized_checkpoint();
-    let proof_verifier = deposit_verifier(&anvil, 1);
-    assert_eq!(checkpoint.network_id(), CORE_NETWORK);
-    assert_eq!(checkpoint.state_root(), [8; 32]);
-    let proof = proof_verifier.obtain_from_certificate(
-        &report,
-        vault,
-        &certificate,
-        &bonded,
-        checkpoint.id(),
-        None,
-    )
-    .unwrap_or_else(|error| panic!("deposit proof: {error:?}"));
+    let authority = SigningKey::from_bytes(&[11; 32]);
+    let published = published_proof(&anvil, deposit_transaction, vault, &authority);
+    let signed_message = deposit_root_registration_message(&published.registration)
+        .unwrap_or_else(|error| panic!("signed root message: {error:?}"));
+    assert!(signed_message.starts_with(b"LX:PAXEER:DEPOSIT:ROOT:v1"));
+    assert!(signed_message.ends_with(&[0, 0, 0, 17, 0, 1]));
+    let proof_verifier = deposit_verifier(&anvil, 1, &authority);
+    let proof = proof_verifier
+        .obtain(&report, vault, published.clone())
+        .unwrap_or_else(|error| panic!("deposit proof: {error:?}"));
     assert_eq!(proof.transaction(), deposit_transaction);
-    assert_eq!(proof.custody_reference(), deposit_transaction.bytes());
+    assert_eq!(proof.custody_reference(), CUSTODY_REFERENCE);
     assert_eq!(proof.custody().asset, AssetId::new(ASSET));
     assert_eq!(proof.custody().amount, Amount::from_u128(AMOUNT));
     assert_eq!(proof.custody().beneficiary, account_address(&recipient));
-    assert_eq!(proof.checkpoint(), &checkpoint);
-    assert!(proof.finalized());
-    assert_ne!(proof.commitment(), [0; 32]);
+    assert_eq!(proof.checkpoint_id().bytes(), hex_array(CHECKPOINT_ID_HEX));
+    assert_eq!(proof.checkpoint_state_root(), [8; 32]);
+    assert_eq!(proof.deposit_root(), proof.leaf_hash());
+    assert_eq!(proof.inclusion_proof().leaf_index(), 0);
+    assert_eq!(proof.inclusion_proof().leaf_count(), 1);
+    assert_eq!(proof.network_id(), CORE_NETWORK);
+    assert_eq!(proof.protocol_version(), 1);
+    let mut nullifier = Sha256::new();
+    nullifier.update(b"LX:DEPOSIT:NULLIFIER:v1");
+    nullifier.update(proof.custody().deposit_id);
+    assert_eq!(proof.nullifier(), <[u8; 32]>::from(nullifier.finalize()));
+    assert_eq!(proof.idempotency_key().bytes(), proof.nullifier());
 
-    let mut insufficient = certificate.clone();
-    insufficient = Certificate::new(
-        insufficient.checkpoint().clone(),
-        insufficient.attestations()[..1].to_vec(),
-        2,
-        None,
-    );
-    assert_eq!(
-        FinalizedCheckpoint::verify(&insufficient, &bonded, checkpoint.id(), None),
-        Err(CheckpointError::Threshold {
-            achieved: 1,
-            required: 2,
-        })
-    );
+    let decoy = leaf_hash(b"another canonical deposit leaf")
+        .unwrap_or_else(|error| panic!("decoy leaf: {error:?}"));
+    let mut indexed = published.clone();
+    indexed.inclusion_proof = Proof::new(1, 2, vec![decoy])
+        .unwrap_or_else(|error| panic!("index-aware path: {error:?}"));
+    indexed.registration.deposit_root = node_hash(&decoy, &proof.leaf_hash())
+        .unwrap_or_else(|error| panic!("index-aware root: {error:?}"));
+    let message = deposit_root_registration_message(&indexed.registration)
+        .unwrap_or_else(|error| panic!("indexed root message: {error:?}"));
+    indexed.registration.signature = authority.sign(&message).to_bytes();
+    let indexed_proof = proof_verifier
+        .obtain(&report, vault, indexed.clone())
+        .unwrap_or_else(|error| panic!("index-aware deposit proof: {error:?}"));
+    assert_eq!(indexed_proof.inclusion_proof().leaf_index(), 1);
+    assert_eq!(indexed_proof.inclusion_proof().leaf_count(), 2);
+
+    let mut wrong_index = indexed;
+    wrong_index.inclusion_proof = Proof::new(0, 2, vec![decoy])
+        .unwrap_or_else(|error| panic!("wrong index path: {error:?}"));
     assert!(matches!(
-        proof_verifier.obtain_from_certificate(
-            &report,
-            vault,
-            &insufficient,
-            &bonded,
-            checkpoint.id(),
-            None,
-        ),
-        Err(DepositFailure::ProofUnavailable(ProofFault::Checkpoint(
-            CheckpointError::Threshold {
-                achieved: 1,
-                required: 2,
+        proof_verifier.obtain(&report, vault, wrong_index),
+        Err(DepositFailure::ProofUnavailable(
+            ProofFault::DepositInclusion(_)
+        ))
+    ));
+
+    let mut bad_signature = published.clone();
+    bad_signature.registration.signature[0] ^= 1;
+    assert!(matches!(
+        proof_verifier.obtain(&report, vault, bad_signature),
+        Err(DepositFailure::ProofUnavailable(
+            ProofFault::InvalidDepositRootSignature
+        ))
+    ));
+
+    let mut wrong_network = published.clone();
+    wrong_network.registration.network_id = CORE_NETWORK.saturating_add(1);
+    assert_eq!(
+        proof_verifier.obtain(&report, vault, wrong_network),
+        Err(DepositFailure::ProofUnavailable(
+            ProofFault::RegistrationNetworkMismatch {
+                expected: CORE_NETWORK,
+                found: CORE_NETWORK.saturating_add(1),
             }
-        )))
+        ))
+    );
+
+    let mut wrong_custody_reference = published.clone();
+    wrong_custody_reference.registration.custody_reference = [0x72; 32];
+    assert_eq!(
+        proof_verifier.obtain(&report, vault, wrong_custody_reference),
+        Err(DepositFailure::ProofUnavailable(
+            ProofFault::CustodyReferenceMismatch {
+                expected: CUSTODY_REFERENCE,
+                found: [0x72; 32],
+            }
+        ))
+    );
+
+    let mut wrong_root = published.clone();
+    wrong_root.registration.deposit_root = [0x55; 32];
+    let message = deposit_root_registration_message(&wrong_root.registration)
+        .unwrap_or_else(|error| panic!("wrong root message: {error:?}"));
+    wrong_root.registration.signature = authority.sign(&message).to_bytes();
+    assert!(matches!(
+        proof_verifier.obtain(&report, vault, wrong_root),
+        Err(DepositFailure::ProofUnavailable(
+            ProofFault::DepositInclusion(_)
+        ))
     ));
 
     let registry = bridge_registry();
-    let path = CreditPath::prepare(&proof, &reserve, &recipient, &registry)
-        .unwrap_or_else(|error| panic!("credit path: {error:?}"));
-    assert_eq!(path.deposit(), proof.deposit_id());
-    assert_eq!(path.compiled().activity_type().module(), ModuleId::Bridge);
-    assert_eq!(path.compiled().activity_type().ordinal(), 1);
-    let agent = AgentClient::daemon(
-        "/run/layerx/agent.sock",
-        layerx_agent_api::agent_api_schema_v1().version,
-    )
-    .unwrap_or_else(|error| panic!("agent client: {error:?}"));
-    let call = path
-        .agent_call(&agent, agent_context())
-        .unwrap_or_else(|error| panic!("agent credit call: {error:?}"));
-    assert_eq!(call.deployment(), Deployment::Daemon);
-    assert_eq!(call.operation(), Operation::Prepare);
-    let mutation = call.request();
-    assert_eq!(mutation.request_id, RequestId(41));
-    assert_eq!(mutation.key.bytes(), path.idempotency_key().bytes());
-    assert_ne!(mutation.body_digest.0, [0; 32]);
-    assert_eq!(
-        hex_bytes(mutation.operation.idempotency_key.as_str()),
-        path.idempotency_key().bytes()
-    );
-    assert_eq!(
-        mutation.operation.payload.as_bytes(),
-        path.compiled().payload().as_bytes()
-    );
-    assert_eq!(
-        mutation.operation.payload_hash,
-        path.compiled().payload_hash()
-    );
-    let repeated = path
-        .agent_call(&agent, agent_context())
-        .unwrap_or_else(|error| panic!("repeated agent credit call: {error:?}"));
-    assert_eq!(repeated.request(), mutation);
+    assert!(matches!(
+        CreditPath::prepare(&proof, &reserve, &recipient, &registry),
+        Err(DepositFailure::CreditRefused(
+            CreditFault::BridgeProofIngressUnavailable
+        ))
+    ));
 
-    let signing = ReceiptSigningKey::from_bytes(&[3; 32]);
+    let signing = SigningKey::from_bytes(&[3; 32]);
     let activity_id = hex_array(CREDIT_ACTIVITY_ID_HEX);
     let fields = ReceiptFields {
         activity_id,
         previous_state_root: [7; 32],
-        resulting_state_root: checkpoint.state_root(),
-        batch_id: checkpoint.id().bytes(),
+        resulting_state_root: proof.checkpoint_state_root(),
+        batch_id: proof.checkpoint_id().bytes(),
         asset: ASSET,
         amount: AMOUNT,
         from: account_address(&reserve),
@@ -575,26 +615,14 @@ fn finalized_custody_is_credited_once_through_the_agent_contract() {
         proof.accept_credit(
             &receipt_bytes,
             &authorized,
-            [0x91; 32],
+            activity_id,
             &reserve,
             &recipient,
         ),
         Err(DepositFailure::CreditRefused(
-            CreditFault::WrongActivity { .. }
+            CreditFault::BridgeProofIngressUnavailable
         ))
     ));
-
-    let credit = proof
-        .accept_credit(
-            &receipt_bytes,
-            &authorized,
-            activity_id,
-            &reserve,
-            &recipient,
-        )
-        .unwrap_or_else(|error| panic!("verified credit receipt: {error:?}"));
-    assert_eq!(credit.activity_id(), activity_id);
-    assert_eq!(credit.amount(), AMOUNT);
 }
 
 #[test]
@@ -611,10 +639,11 @@ fn deposit_failures_remain_typed_at_each_boundary() {
         ),
     );
     let report = final_report(&anvil, reverted_transaction);
-    let (checkpoint, _, _) = finalized_checkpoint();
-    let proof_verifier = deposit_verifier(&anvil, 1);
+    let authority = SigningKey::from_bytes(&[11; 32]);
+    let published = dummy_published_proof(&authority);
+    let proof_verifier = deposit_verifier(&anvil, 1, &authority);
     assert!(matches!(
-        proof_verifier.obtain(&report, vault, checkpoint.clone()),
+        proof_verifier.obtain(&report, vault, published.clone()),
         Err(DepositFailure::CustodyFailed(CustodyFault::Reverted { .. }))
     ));
 
@@ -634,9 +663,10 @@ fn deposit_failures_remain_typed_at_each_boundary() {
     )
     .unwrap_or_else(|error| panic!("confirming tracker: {error:?}"));
     let unavailable = confirming.poll();
-    let deeper_verifier = deposit_verifier(&anvil, required.saturating_add(1));
+    let deeper_verifier =
+        deposit_verifier(&anvil, required.saturating_add(1), &authority);
     assert!(matches!(
-        deeper_verifier.obtain(&unavailable, vault, checkpoint),
+        deeper_verifier.obtain(&unavailable, vault, published),
         Err(DepositFailure::ProofUnavailable(
             ProofFault::NotFinal { .. }
         ))

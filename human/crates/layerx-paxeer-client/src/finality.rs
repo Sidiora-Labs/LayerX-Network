@@ -534,10 +534,15 @@ mod tests {
     }
 
     fn deposit_verifier(endpoints: &[EndpointConfig]) -> DepositProofVerifier {
+        let authority = ed25519_dalek::SigningKey::from_bytes(&[9; 32]);
         DepositProofVerifier::new(DepositProofConfig {
             endpoints: endpoints.to_vec(),
             minimum_endpoint_agreement: 2,
             required_confirmations: 12,
+            paxeer_checkpoint_authority: authority.verifying_key().to_bytes(),
+            custody_reference: [10; 32],
+            layerx_network_id: 17,
+            layerx_protocol_version: 1,
         })
         .unwrap_or_else(|error| panic!("deposit verifier: {error:?}"))
     }

@@ -47,18 +47,16 @@ use layerx_human_service::notify::JourneyId;
 use layerx_human_service::store::{PrincipalId, PrincipalStore, TenancyDigest};
 use layerx_human_service::trace::TraceId;
 use layerx_paxeer_client::{
-    raw_call, DepositFailure, DepositProof, DepositProofConfig, DepositProofVerifier,
-    EndpointConfig, EndpointTransport, ExecutionOutcome, FinalityReport, FinalityStage,
-    FinalityTracker, FinalizedCheckpoint, Json, PaxeerClient, TrackerConfig, TransactionHash,
-    TransactionInclusion,
+    raw_call, DepositFailure, DepositProof, EndpointConfig, EndpointTransport, ExecutionOutcome,
+    FinalityReport, FinalityStage, FinalityTracker, Json, PaxeerClient, ProofFault, TrackerConfig,
+    TransactionHash, TransactionInclusion,
 };
-use layerx_proof::checkpoint::{checkpoint_id, Attestation, Certificate, Checkpoint, GuarantorKey};
 use layerx_proof::receipt::AuthorizedBatch;
 use layerx_sdk::{Call, Client as AgentClient};
 use layerx_types::account::AccountId;
 use layerx_types::activity::{Authority, TimestampBound};
 use layerx_types::amount::Amount;
-use layerx_types::ids::{AssetId, CheckpointId, Did, IdempotencyKey};
+use layerx_types::ids::{AssetId, Did, IdempotencyKey};
 use layerx_types::intent::{EvmAddress, NetworkId};
 use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry};
 use sha2::{Digest as _, Sha256};
@@ -78,19 +76,8 @@ const VAULT_CREATION: &str =
 const ASSET: [u8; 32] = [0x42; 32];
 const AMOUNT: u128 = 25;
 const NETWORK_ID: u32 = 17;
-const CHECKPOINT_HEADER_HEX: &str = "000117010f010001020000001103000000000000000704000000000000000805000000000000000b0600000000000000130700000020070707070707070707070707070707070707070707070707070707070707070708000000200808080808080808080808080808080808080808080808080808080808080808090000002009090909090909090909090909090909090909090909090909090909090909090a000000200a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0b000000200b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0c000000200c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0d000000200d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0e00000000000003e80f000000200f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f";
 const CHECKPOINT_ID_HEX: &str = "5cd43e8c1a6a0ba5594d75846fe40bd851909368fc0a7439657180c5fb8b9572";
 const CREDIT_RECEIPT_HEX: &str = "000152010001000000203ad4f279bd6297c488fbf76c0802a3fb20c5060d955a7648e6417f8653f8fa110000000000000009000000200707070707070707070707070707070707070707070707070707070707070707000000200808080808080808080808080808080808080808080808080808080808080808000000200808080808080808080808080808080808080808080808080808080808080808000000000000000000000000000000000000000000000001000000205cd43e8c1a6a0ba5594d75846fe40bd851909368fc0a7439657180c5fb8b957200080000000100000001010000002042424242424242424242424242424242424242424242424242424242424242420000000000000000000000000000001900000020f94d2cc01cae556915267bc3d1ad7c58034009ea25cbe56906be12b9ca876de0000000000000000000000000000000640000000000000000000000000000004b00000000000000010000002042de0bc2f3c75fd9995e3ad3d57efaf06530b93679d956ddf17fa9d325e1d60d0000000000000000000000000000000a00000000000000000000000000000023000000200909090909090909090909090909090909090909090909090909090909090909000000200a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a000000200b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b00000000000003e80100000040d8bdb7a072cdbc700f7390c482c40823192d2bfc983749456a20e08dc42f54526e153909c707f05d141c20ec9a728f6358fe1a460f6bf7ca7171758511b02e0d";
-const GUARANTOR_PUBLIC_KEYS: [&str; 3] = [
-    "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
-    "02c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
-    "02f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9",
-];
-const GUARANTOR_SIGNATURES: [&str; 3] = [
-    "f9ea8b1dc2d6f6db15ac68bf2ac645081310822839fe31e40fca5f37665d8e2224a16055357219970908e922b785542548f2406ac2bfae1a8d420b613d3c701e",
-    "ee20fdb15279bda8a90b66b5b3817ed294ec8362948665bc066c8b90a95366cb34902aa1845f66e66c97889b0039a7115463760ce0eb7a7620d8d3d857342aad",
-    "cdaac951fb38f3e4d713fcb46a19d41caa60811be4532acdab7b7dc99d2d1de47afbd9349d93eaf98cf464a16b3a0b08229200f403048230d164c3abed716389",
-];
 
 static NEXT_PORT: AtomicU16 = AtomicU16::new(0);
 
@@ -289,45 +276,6 @@ fn registry() -> ModuleRegistry {
             .unwrap_or_else(|error| panic!("bridge registration: {error:?}")),
     ])
     .unwrap_or_else(|error| panic!("registry: {error:?}"))
-}
-
-fn checkpoint() -> (FinalizedCheckpoint, Certificate, Vec<GuarantorKey>) {
-    let checkpoint = Checkpoint::new(
-        hex_bytes(CHECKPOINT_HEADER_HEX),
-        b"REAL-CORE-PROOF".to_vec(),
-    );
-    let identifier =
-        checkpoint_id(&checkpoint).unwrap_or_else(|error| panic!("checkpoint id: {error:?}"));
-    assert_eq!(identifier, hex_array(CHECKPOINT_ID_HEX));
-    let mut attestations = Vec::new();
-    let mut bonded = Vec::new();
-    for value in 1_u8..=3 {
-        let index = usize::from(value - 1);
-        let mut guarantor_id = [0_u8; 32];
-        guarantor_id[0] = value;
-        attestations.push(Attestation::new(
-            identifier,
-            identifier,
-            guarantor_id,
-            8,
-            [12; 32],
-            true,
-            true,
-            0x1f,
-            1_000 + u64::from(value),
-            hex_array(GUARANTOR_SIGNATURES[index]),
-        ));
-        bonded.push(GuarantorKey::new(
-            guarantor_id,
-            hex_array(GUARANTOR_PUBLIC_KEYS[index]),
-            true,
-        ));
-    }
-    let certificate = Certificate::new(checkpoint, attestations, 2, None);
-    let finalized =
-        FinalizedCheckpoint::verify(&certificate, &bonded, CheckpointId::new(identifier), None)
-            .unwrap_or_else(|error| panic!("checkpoint verification: {error:?}"));
-    (finalized, certificate, bonded)
 }
 
 fn evm_key() -> EvmSigningKey {
@@ -529,11 +477,7 @@ fn binding_receipt(submission: AgentSubmission, address: EvmAddress) -> AgentBin
 /// after the real transaction was broadcast.
 struct RealDepositRuntime {
     anvil: Anvil,
-    proof_verifier: DepositProofVerifier,
     vault: EvmAddress,
-    certificate: Certificate,
-    bonded: Vec<GuarantorKey>,
-    checkpoint: FinalizedCheckpoint,
     wallet_actions: BTreeMap<[u8; 32], TransactionHash>,
     wallet_opens: u32,
     fail_wallet_ack_once: bool,
@@ -593,20 +537,9 @@ impl RealDepositRuntime {
                 ExecutionOutcome::Succeeded
             );
         }
-        let (checkpoint, certificate, bonded) = checkpoint();
-        let proof_verifier = DepositProofVerifier::new(DepositProofConfig {
-            endpoints: vec![anvil.endpoint.clone()],
-            minimum_endpoint_agreement: 1,
-            required_confirmations: 1,
-        })
-        .unwrap_or_else(|error| panic!("deposit proof verifier: {error:?}"));
         Self {
             anvil,
-            proof_verifier,
             vault,
-            certificate,
-            bonded,
-            checkpoint,
             wallet_actions: BTreeMap::new(),
             wallet_opens: 0,
             fail_wallet_ack_once: true,
@@ -681,17 +614,11 @@ impl DepositRuntime for RealDepositRuntime {
 
     fn obtain_proof(
         &mut self,
-        transaction: TransactionHash,
+        _transaction: TransactionHash,
     ) -> Result<DepositProof, DepositFailure> {
-        let report = self.final_report(transaction);
-        self.proof_verifier.obtain_from_certificate(
-            &report,
-            self.vault,
-            &self.certificate,
-            &self.bonded,
-            self.checkpoint.id(),
-            None,
-        )
+        Err(DepositFailure::ProofUnavailable(
+            ProofFault::ProducerUnavailable,
+        ))
     }
 }
 
@@ -1062,6 +989,8 @@ impl Fixture {
             idempotency_key: [0x61; 32],
             wallet,
             network,
+            layerx_network: network,
+            layerx_protocol_version: 1,
             vault: runtime.vault,
             asset: AssetId::new(ASSET),
             amount: Amount::from_u128(AMOUNT),
@@ -1128,7 +1057,7 @@ impl Drop for Fixture {
 
 #[test]
 #[allow(clippy::too_many_lines)]
-fn real_deposit_resumes_every_stage_with_one_custody_and_credit_effect() {
+fn real_deposit_resumes_custody_then_fails_closed_without_a_proof_producer() {
     let mut runtime = RealDepositRuntime::new();
     let fixture = Fixture::new(&runtime);
     let mut store = fixture.store();
@@ -1186,33 +1115,39 @@ fn real_deposit_resumes_every_stage_with_one_custody_and_credit_effect() {
         let status = journey
             .status()
             .unwrap_or_else(|error| panic!("deposit status: {error}"));
-        if matches!(status.stage(), DepositStage::Done) {
+        if matches!(
+            status.stage(),
+            DepositStage::Failed(
+                layerx_human_service::journeys::DepositFailureKind::ProofUnavailable
+            )
+        ) {
             assert_eq!(status.in_flight_amount(), None);
-            let activity = status
-                .activity()
-                .unwrap_or_else(|| panic!("joined activity missing"));
-            assert_ne!(activity.proof_commitment, [0; 32]);
-            assert_ne!(activity.credit_receipt_digest, [0; 32]);
+            assert_eq!(status.activity(), None);
             break;
         }
         assert_eq!(status.in_flight_amount(), Some(AMOUNT));
-        assert!(offset != 39, "deposit did not complete");
+        assert!(offset != 39, "deposit did not fail closed");
     }
     assert_eq!(runtime.wallet_opens, 1);
     assert_eq!(runtime.wallet_actions.len(), 1);
-    assert_eq!(credit_agent.effects.len(), 1);
-    assert_eq!(credit_agent.effects.values().next(), Some(&1));
+    assert!(credit_agent.effects.is_empty());
     let final_status = journey
         .status()
         .unwrap_or_else(|error| panic!("final status: {error}"));
-    assert!(matches!(final_status.stage(), DepositStage::Done));
+    assert!(matches!(
+        final_status.stage(),
+        DepositStage::Failed(
+            layerx_human_service::journeys::DepositFailureKind::ProofUnavailable
+        )
+    ));
     let final_scope = store
         .principal(&fixture.principal)
         .unwrap_or_else(|error| panic!("notification scope: {error}"));
     let notification = DepositJourney::notification(&final_scope, &fixture.plan.journey_id)
         .unwrap_or_else(|error| panic!("notification: {error}"))
         .unwrap_or_else(|| panic!("terminal notification missing"));
-    assert!(notification.completed);
+    assert!(!notification.completed);
+    assert_eq!(notification.failure.as_deref(), Some("proof-unavailable"));
     assert_eq!(notification.deep_link, "/app/journeys/jrn_depositcrash");
 }
 

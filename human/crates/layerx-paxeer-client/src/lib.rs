@@ -14,9 +14,10 @@ pub use client::{
     TransactionHash, TransactionHashError, TransactionInclusion, TransactionView,
 };
 pub use deposit::{
-    account_address, AgentCreditContext, CreditFault, CreditPath, CreditReceipt, CustodyDeposit,
-    CustodyFault, DepositFailure, DepositProof, DepositProofConfig, DepositProofConfigError,
-    DepositProofVerifier, FinalizedCheckpoint, ProofFault,
+    account_address, deposit_leaf_bytes, deposit_root_registration_message, AgentCreditContext,
+    CreditFault, CreditPath, CustodyDeposit, CustodyFault, DepositFailure, DepositProof,
+    DepositProofConfig, DepositProofConfigError, DepositProofVerifier, DepositRootRegistration,
+    ProofFault, PublishedDepositProof,
 };
 pub use exit::{
     balance_leaf, emergency_withdrawal_id, exit_nullifier, merkle_node, EmergencyExit, ExitClaim,

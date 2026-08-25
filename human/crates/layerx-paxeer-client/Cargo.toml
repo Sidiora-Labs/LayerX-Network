@@ -13,11 +13,11 @@ layerx-proof.workspace = true
 layerx-client.workspace = true
 layerx-sdk.workspace = true
 layerx-intents = { path = "../layerx-intents" }
+ed25519-dalek = "=2.2.0"
 sha2 = "=0.10.9"
 rustls = { version = "=0.23.43", default-features = false, features = ["ring", "std", "tls12"] }
 
 [dev-dependencies]
-ed25519-dalek = "=2.2.0"
 k256.workspace = true
 
 [lints]

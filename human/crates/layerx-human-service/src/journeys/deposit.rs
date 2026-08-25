@@ -26,7 +26,7 @@ use crate::notify::JourneyId;
 use crate::store::{PrincipalScope, RowKey, StoreError, Table};
 use crate::trace::TraceId;
 
-const RECORD_VERSION: u8 = 1;
+const RECORD_VERSION: u8 = 2;
 const RECORD_PREFIX: &str = "deposit-journey-";
 const NOTIFICATION_PREFIX: &str = "deposit-notification-";
 const WALLET_ACTION_DOMAIN: &[u8] = b"layerx-human-deposit-wallet/v1\0";
@@ -53,6 +53,8 @@ pub struct DepositPlan {
     pub idempotency_key: [u8; 32],
     pub wallet: EvmAddress,
     pub network: NetworkId,
+    pub layerx_network: NetworkId,
+    pub layerx_protocol_version: u16,
     pub vault: EvmAddress,
     pub asset: AssetId,
     pub amount: Amount,
@@ -114,8 +116,9 @@ pub trait DepositRuntime {
         transaction: TransactionHash,
     ) -> Result<FinalityReport, DepositBoundaryError>;
 
-    /// Reconstructs and verifies the finalized custody/core proof. Repeating
-    /// this call is read-only and must reproduce the same proof commitment.
+    /// Obtains authentic Paxeer-published root material and reconstructs the
+    /// verifier-owned custody proof. Repeating this call is read-only and must
+    /// preserve the same canonical deposit nullifier.
     ///
     /// # Errors
     ///
@@ -181,7 +184,7 @@ pub enum DepositStage {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct DepositActivity {
     pub custody_transaction: [u8; 32],
-    pub proof_commitment: [u8; 32],
+    pub deposit_nullifier: [u8; 32],
     pub credit_activity_id: [u8; 32],
     pub credit_receipt_digest: [u8; 32],
 }
@@ -312,6 +315,8 @@ struct Record {
     plan_digest: [u8; 32],
     wallet: [u8; 20],
     network_id: u32,
+    layerx_network_id: u32,
+    layerx_protocol_version: u16,
     binding_receipt_digest: [u8; 32],
     vault: [u8; 20],
     asset: [u8; 32],
@@ -334,7 +339,7 @@ struct Record {
     confirmations: u64,
     required: u64,
     delay: Option<StoredDelay>,
-    proof_commitment: Option<[u8; 32]>,
+    deposit_nullifier: Option<[u8; 32]>,
     activity: Option<DepositActivity>,
     failure: Option<StoredFailure>,
     started_at: u64,
@@ -389,6 +394,8 @@ impl DepositJourney {
             plan_digest: digest,
             wallet: plan.wallet.bytes(),
             network_id: plan.network.value(),
+            layerx_network_id: plan.layerx_network.value(),
+            layerx_protocol_version: plan.layerx_protocol_version,
             binding_receipt_digest: active.receipt_digest(),
             vault: plan.vault.bytes(),
             asset: plan.asset.bytes(),
@@ -411,7 +418,7 @@ impl DepositJourney {
             confirmations: 0,
             required: 0,
             delay: None,
-            proof_commitment: None,
+            deposit_nullifier: None,
             activity: None,
             failure: None,
             started_at: now,
@@ -562,8 +569,15 @@ impl DepositJourney {
                     }
                 };
                 self.validate_proof(&proof)?;
-                self.record.proof_commitment = Some(proof.commitment());
-                let inner = self.credit_plan(&proof)?;
+                self.record.deposit_nullifier = Some(proof.nullifier());
+                let inner = match self.credit_plan(&proof) {
+                    Ok(plan) => plan,
+                    Err(DepositJourneyError::Deposit(DepositFailure::CreditRefused(_))) => {
+                        self.fail(scope, StoredFailure::CreditRefused, now)?;
+                        return self.status();
+                    }
+                    Err(error) => return Err(error),
+                };
                 let _ = JourneyEngine::start(scope, &inner, registry, now)?;
                 self.transition(scope, Phase::Crediting, now)?;
             }
@@ -638,7 +652,7 @@ impl DepositJourney {
                     }
                     self.record.activity = Some(DepositActivity {
                         custody_transaction: self.transaction()?.bytes(),
-                        proof_commitment: proof.commitment(),
+                        deposit_nullifier: proof.nullifier(),
                         credit_activity_id: evidence.activity_id,
                         credit_receipt_digest: evidence.receipt_digest,
                     });
@@ -752,18 +766,19 @@ impl DepositJourney {
 
     fn validate_proof(&self, proof: &DepositProof) -> Result<(), DepositJourneyError> {
         let recipient = self.recipient()?;
-        if !proof.finalized()
-            || proof.transaction() != self.transaction()?
+        if proof.transaction() != self.transaction()?
             || proof.vault().bytes() != self.record.vault
-            || proof.checkpoint().network_id() != self.record.network_id
+            || proof.chain_id() != u64::from(self.record.network_id)
+            || proof.network_id() != self.record.layerx_network_id
+            || proof.protocol_version() != self.record.layerx_protocol_version
             || proof.custody().payer.bytes() != self.record.wallet
             || proof.custody().asset.bytes() != self.record.asset
             || proof.custody().amount.value() != self.record.amount
             || proof.custody().beneficiary != account_address(&recipient)
             || self
                 .record
-                .proof_commitment
-                .is_some_and(|stored| stored != proof.commitment())
+                .deposit_nullifier
+                .is_some_and(|stored| stored != proof.nullifier())
         {
             return Err(DepositJourneyError::ProofMismatch);
         }
@@ -879,6 +894,7 @@ impl DepositJourney {
 fn validate_plan(plan: &DepositPlan) -> Result<(), DepositJourneyError> {
     if plan.idempotency_key == [0; 32]
         || plan.amount.value() == 0
+        || plan.layerx_protocol_version == 0
         || plan.currency.is_empty()
         || plan.currency.len() > 12
         || !plan
@@ -902,6 +918,8 @@ fn validate_record(record: &Record) -> Result<(), DepositJourneyError> {
         || record.wallet == [0; 20]
         || record.vault == [0; 20]
         || record.network_id == 0
+        || record.layerx_network_id == 0
+        || record.layerx_protocol_version == 0
         || record.amount == 0
         || record.updated_at < record.started_at
         || (matches!(
@@ -961,6 +979,8 @@ fn plan_digest(plan: &DepositPlan) -> [u8; 32] {
     digest.update(plan.idempotency_key);
     digest.update(plan.wallet.bytes());
     digest.update(plan.network.value().to_be_bytes());
+    digest.update(plan.layerx_network.value().to_be_bytes());
+    digest.update(plan.layerx_protocol_version.to_be_bytes());
     digest.update(plan.vault.bytes());
     digest.update(plan.asset.bytes());
     digest.update(plan.amount.value().to_be_bytes());
