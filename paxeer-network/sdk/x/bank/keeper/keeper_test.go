@@ -126,6 +126,11 @@ func (suite *IntegrationTestSuite) TestSendCoinsAndWei() {
 	addr3 := sdk.AccAddress([]byte("addr3_______________"))
 	require.NoError(keeper.SendCoinsFromModuleToAccount(ctx, authtypes.Minter, addr1, amt))
 	eventsBeforeInvalidTransfers := len(ctx.EventManager().Events())
+	var uninitialized sdk.Int
+	require.Error(keeper.SubWei(ctx, addr1, uninitialized))
+	require.Error(keeper.AddWei(ctx, addr2, uninitialized))
+	require.Error(keeper.SendCoinsAndWei(ctx, addr1, addr2, uninitialized, sdk.ZeroInt()))
+	require.Error(keeper.SendCoinsAndWei(ctx, addr1, addr2, sdk.ZeroInt(), uninitialized))
 	require.Error(keeper.SubWei(ctx, addr1, sdk.NewInt(-1)))
 	require.Error(keeper.AddWei(ctx, addr2, sdk.NewInt(-1)))
 	require.Error(keeper.SendCoinsAndWei(ctx, addr1, addr2, sdk.NewInt(-1), sdk.ZeroInt()))
@@ -142,7 +147,9 @@ func (suite *IntegrationTestSuite) TestSendCoinsAndWei() {
 	require.Equal(sdk.ZeroInt(), keeper.GetWeiBalance(ctx, addr2))
 	require.Len(ctx.EventManager().Events(), eventsBeforeInvalidTransfers)
 	// should no-op if sending zero
-	require.NoError(keeper.SendCoinsAndWei(ctx, addr1, addr2, sdk.ZeroInt(), sdk.ZeroInt()))
+	blockedAddr := sdk.AccAddress(append([]byte("evm_coinbase"), make([]byte, 8)...))
+	require.NoError(keeper.AddWei(ctx, blockedAddr, sdk.ZeroInt()))
+	require.NoError(keeper.SendCoinsAndWei(ctx, addr1, blockedAddr, sdk.ZeroInt(), sdk.ZeroInt()))
 	require.Equal(sdk.ZeroInt(), keeper.GetWeiBalance(ctx, addr1))
 	require.Equal(sdk.ZeroInt(), keeper.GetWeiBalance(ctx, addr2))
 	require.Equal(sdk.NewInt(100), keeper.GetBalance(ctx, addr1, sdk.DefaultBondDenom).Amount)
@@ -1217,11 +1224,13 @@ func (suite *IntegrationTestSuite) TestMsgMultiSendEvents() {
 	suite.Require().Equal(abci.Event(event4), events[27])
 }
 
-func (suite *IntegrationTestSuite) TestMsgMultiSendRejectsInvalidDirectCalls() {
+func (suite *IntegrationTestSuite) TestMsgServerRejectsInvalidDirectCalls() {
 	server := keeper.NewMsgServerImpl(suite.app.BankKeeper)
 	ctx := sdk.WrapSDKContext(suite.ctx)
 
 	_, err := server.MultiSend(ctx, nil)
+	suite.Require().Error(err)
+	_, err = server.Send(ctx, nil)
 	suite.Require().Error(err)
 
 	_, err = server.MultiSend(ctx, &types.MsgMultiSend{

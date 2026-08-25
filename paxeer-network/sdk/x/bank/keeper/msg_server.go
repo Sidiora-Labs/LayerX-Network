@@ -27,6 +27,9 @@ var _ types.MsgServer = msgServer{}
 
 func (k msgServer) Send(goCtx context.Context, msg *types.MsgSend) (*types.MsgSendResponse, error) {
 	ctx := sdk.UnwrapSDKContext(goCtx)
+	if msg == nil {
+		return nil, sdkerrors.Wrap(sdkerrors.ErrInvalidRequest, "send message cannot be nil")
+	}
 
 	if err := k.IsSendEnabledCoins(ctx, msg.Amount...); err != nil {
 		return nil, err

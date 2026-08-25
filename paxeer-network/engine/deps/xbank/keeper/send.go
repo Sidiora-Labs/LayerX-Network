@@ -356,6 +356,9 @@ func (k BaseSendKeeper) BlockedAddr(addr sdk.AccAddress) bool {
 }
 
 func (k BaseSendKeeper) SubWei(ctx sdk.Context, addr sdk.AccAddress, amt sdk.Int) (err error) {
+	if amt.IsNil() {
+		return sdkerrors.Wrap(sdkerrors.ErrInvalidCoins, "wei amount cannot be uninitialized")
+	}
 	if amt.IsNegative() {
 		return sdkerrors.Wrap(sdkerrors.ErrInvalidCoins, "wei amount cannot be negative")
 	}
@@ -388,14 +391,17 @@ func (k BaseSendKeeper) SubWei(ctx sdk.Context, addr sdk.AccAddress, amt sdk.Int
 }
 
 func (k BaseSendKeeper) AddWei(ctx sdk.Context, addr sdk.AccAddress, amt sdk.Int) (err error) {
+	if amt.IsNil() {
+		return sdkerrors.Wrap(sdkerrors.ErrInvalidCoins, "wei amount cannot be uninitialized")
+	}
 	if amt.IsNegative() {
 		return sdkerrors.Wrap(sdkerrors.ErrInvalidCoins, "wei amount cannot be negative")
 	}
-	if !k.CanSendTo(ctx, addr) {
-		return sdkerrors.ErrInvalidRecipient
-	}
 	if amt.Equal(sdk.ZeroInt()) {
 		return nil
+	}
+	if !k.CanSendTo(ctx, addr) {
+		return sdkerrors.ErrInvalidRecipient
 	}
 	defer func() {
 		if err == nil {
@@ -419,8 +425,14 @@ func (k BaseSendKeeper) AddWei(ctx sdk.Context, addr sdk.AccAddress, amt sdk.Int
 }
 
 func (k BaseSendKeeper) SendCoinsAndWei(ctx sdk.Context, from sdk.AccAddress, to sdk.AccAddress, amt sdk.Int, wei sdk.Int) error {
+	if amt.IsNil() || wei.IsNil() {
+		return sdkerrors.Wrap(sdkerrors.ErrInvalidCoins, "transfer amounts cannot be uninitialized")
+	}
 	if amt.IsNegative() || wei.IsNegative() {
 		return sdkerrors.Wrap(sdkerrors.ErrInvalidCoins, "transfer amounts cannot be negative")
+	}
+	if amt.IsZero() && wei.IsZero() {
+		return nil
 	}
 	cacheCtx, write := ctx.CacheContext()
 	if err := k.SubWei(cacheCtx, from, wei); err != nil {
