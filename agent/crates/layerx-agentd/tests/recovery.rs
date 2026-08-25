@@ -26,6 +26,7 @@ fn recovery_inputs<'a>(
     unknown_ceilings: &'a [UnknownCeilingReservation],
 ) -> RecoveryInputs<'a> {
     RecoveryInputs {
+        verifier: support::evidence_verifier(),
         unknown_budget_ids,
         budget_receipts,
         protocol_budget: protocol(0),
@@ -51,9 +52,11 @@ fn transition(outbox: &mut Outbox, store: &mut Store, id: u8, to: SubmissionStat
             .status([id; 32])
             .map(|status| status.activity_id)
             .unwrap_or_else(|| panic!("activity missing"));
-        Some(layerx_agentd::protocol_evidence::verify_receipt(
-            &support::raw_receipt(activity_id, 0, 25),
-        ).unwrap_or_else(|error| panic!("receipt: {error:?}")))
+        Some(
+            support::evidence_verifier()
+                .verify_receipt(&support::raw_receipt(activity_id, 0, 25))
+                .unwrap_or_else(|error| panic!("receipt: {error:?}")),
+        )
     } else {
         None
     };
@@ -189,6 +192,7 @@ fn restart_resolution_uses_receipts_without_duplicate_delivery() {
             &mut reopened,
             submission_id,
             10_000 + u64::try_from(attempt).unwrap_or(0),
+            &support::evidence_verifier(),
             &mut core,
         )
         .unwrap_or_else(|error| panic!("resolve {submission_id:?}: {error:?}"));
@@ -208,6 +212,7 @@ fn unreconciled_accounting_blocks_writes_after_outbox_recovery() {
     let mut store = Store::open(&root).unwrap_or_else(|error| panic!("store: {error}"));
     let _ = populate_every_stage(&mut store);
     let inputs = RecoveryInputs {
+        verifier: support::evidence_verifier(),
         unknown_budget_ids: &[],
         budget_receipts: &[],
         protocol_budget: protocol(100),
@@ -289,7 +294,14 @@ fn clock_regression_during_restarted_resolution_fails_closed() {
     transition(&mut outbox, &mut store, 1, SubmissionState::Submitted);
     transition(&mut outbox, &mut store, 1, SubmissionState::Unknown);
     let mut core = NoReceipt;
-    let _ = resolve_unknown(&mut outbox, &mut store, [1; 32], 10_000, &mut core)
+    let _ = resolve_unknown(
+        &mut outbox,
+        &mut store,
+        [1; 32],
+        10_000,
+        &support::evidence_verifier(),
+        &mut core,
+    )
         .unwrap_or_else(|error| panic!("initial resolution: {error:?}"));
     drop(outbox);
     drop(store);
@@ -302,6 +314,7 @@ fn clock_regression_during_restarted_resolution_fails_closed() {
             &mut reopened,
             [1; 32],
             9_999,
+            &support::evidence_verifier(),
             &mut core
         ),
         Err(UnknownResolutionError::TimeRegressed)

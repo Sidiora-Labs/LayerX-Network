@@ -66,7 +66,12 @@ fn creation_returns_protocol_object_and_verified_receipt() {
         }),
         submitted_bytes: Vec::new(),
     };
-    let budget = create_protocol_budget(&mut store, &request(), &mut pipeline)
+    let budget = create_protocol_budget(
+        &mut store,
+        &request(),
+        &support::evidence_verifier(),
+        &mut pipeline,
+    )
         .unwrap_or_else(|error| panic!("creation: {error:?}"));
     assert_eq!(pipeline.submitted_bytes, request().canonical_activity);
     assert_eq!(budget.object_id, [9; 32]);
@@ -84,7 +89,12 @@ fn failed_creation_leaves_no_daemon_budget_record() {
         submitted_bytes: Vec::new(),
     };
     assert!(matches!(
-        create_protocol_budget(&mut store, &request(), &mut pipeline),
+        create_protocol_budget(
+            &mut store,
+            &request(),
+            &support::evidence_verifier(),
+            &mut pipeline,
+        ),
         Err(BudgetCreationError::Submission)
     ));
     let absent = TenantKey::new(tenant(), ObjectKind::Budget, [9; 32].to_vec())
@@ -108,7 +118,12 @@ fn unverifiable_creation_receipt_leaves_no_protocol_budget_cache() {
         submitted_bytes: Vec::new(),
     };
     assert!(matches!(
-        create_protocol_budget(&mut store, &request(), &mut pipeline),
+        create_protocol_budget(
+            &mut store,
+            &request(),
+            &support::evidence_verifier(),
+            &mut pipeline,
+        ),
         Err(BudgetCreationError::UnverifiedReceipt)
     ));
     let absent = TenantKey::new(tenant(), ObjectKind::Budget, [9; 32].to_vec())

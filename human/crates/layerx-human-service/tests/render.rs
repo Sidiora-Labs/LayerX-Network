@@ -3,6 +3,7 @@ mod support;
 
 use std::fmt::Write as _;
 
+use ed25519_dalek::SigningKey;
 use layerx_agent_api::identity::{
     ActivityType as ApiActivityType, AgentDid, Asset, AuthorityRef, ExplicitSet,
 };
@@ -255,6 +256,7 @@ fn verified_budget(remaining: u128, observed_at_sequence: u64) -> VerifiedBudget
             ),
         },
         &[],
+        &support::evidence_verifier(&SigningKey::from_bytes(&[0x84; 32])),
     )
     .unwrap_or_else(|error| panic!("verified budget reconciliation: {error:?}"));
     budget_from_state(state)

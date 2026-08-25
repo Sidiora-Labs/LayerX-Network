@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
 
 use layerx_agentd::outbox::{Outbox, OutboxError, SubmissionState};
-use layerx_agentd::protocol_evidence::{verify_receipt, VerifiedReceiptEvidence};
+use layerx_agentd::protocol_evidence::VerifiedReceiptEvidence;
 use layerx_agentd::prepare::{
     prepare_activity, CorePreparationBoundary, CorePreparationState, CoreStateError,
     PreparationDefaults, PrepareRequest,
@@ -262,7 +262,8 @@ fn every_legal_terminal_path_is_recorded_and_illegal_transitions_fail() {
         .status([1; 32])
         .map(|status| status.activity_id)
         .unwrap_or_else(|| panic!("activity missing"));
-    let receipt = verify_receipt(&support::raw_receipt(activity_id, 0, 1))
+    let receipt = support::evidence_verifier()
+        .verify_receipt(&support::raw_receipt(activity_id, 0, 1))
         .unwrap_or_else(|error| panic!("receipt verification: {error:?}"));
     assert_eq!(
         receipt.level(),
@@ -376,7 +377,8 @@ fn executed_is_impossible_without_a_verified_receipt_reference() {
         ),
         Err(OutboxError::SuccessWithoutVerifiedReceipt)
     ));
-    let wrong_activity = verify_receipt(&support::raw_receipt([8; 32], 0, 1))
+    let wrong_activity = support::evidence_verifier()
+        .verify_receipt(&support::raw_receipt([8; 32], 0, 1))
         .unwrap_or_else(|error| panic!("receipt verification: {error:?}"));
     assert_eq!(
         outbox.transition(
@@ -391,7 +393,9 @@ fn executed_is_impossible_without_a_verified_receipt_reference() {
     let raw = support::raw_receipt([8; 32], 0, 1);
     let mut corrupt = raw.canonical_receipt().to_vec();
     corrupt[0] ^= 1;
-    assert!(verify_receipt(&support::corrupt_raw_receipt(&raw, corrupt)).is_err());
+    assert!(support::evidence_verifier()
+        .verify_receipt(&support::corrupt_raw_receipt(&raw, corrupt))
+        .is_err());
     assert_eq!(
         outbox.status([1; 32]).map(|status| status.state),
         Some(SubmissionState::Acknowledged)

@@ -1,6 +1,6 @@
 //! Durable unknown reservations and fail-closed restart accounting.
 
-use crate::protocol_evidence::{verify_receipt, RawReceiptEvidence};
+use crate::protocol_evidence::{EvidenceAuthority, RawReceiptEvidence};
 use crate::store::{ObjectKind, Store, StoreError, TenantId, TenantKey};
 
 use super::accounting::verify_protocol_budget_state;
@@ -85,12 +85,14 @@ pub(crate) fn rebuild_accounting(
     unknown_ids: &[[u8; 32]],
     receipts: &[PersistedReceipt],
     protocol: ProtocolBudgetState,
+    verifier: &EvidenceAuthority,
 ) -> Result<RestartAccounting, RestartError> {
-    let protocol = verify_protocol_budget_state(&protocol)
+    let protocol = verify_protocol_budget_state(&protocol, verifier)
         .map_err(|_| RestartError::UnverifiedProtocol)?;
     let mut receipt_consumed = 0_u128;
     for receipt in receipts {
-        let verified = verify_receipt(&receipt.evidence)
+        let verified = verifier
+            .verify_receipt(&receipt.evidence)
             .map_err(|_| RestartError::UnverifiedReceipt)?;
         if verified.global_sequence() < protocol.window_start_sequence
             || verified.global_sequence() > protocol.window_end_sequence

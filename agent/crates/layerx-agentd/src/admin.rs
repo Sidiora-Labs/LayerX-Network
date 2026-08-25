@@ -18,6 +18,7 @@ use crate::outbox::{
     UnknownResolutionError,
 };
 use crate::prepare::PrepareRequest;
+use crate::protocol_evidence::EvidenceAuthority;
 use crate::store::TenantId;
 
 /// Stable operator commands exposed by the daemon.
@@ -361,11 +362,19 @@ impl Surface {
         store: &mut crate::store::Store,
         submission_id: [u8; 32],
         observed_at_ms: u64,
+        verifier: &EvidenceAuthority,
         boundary: &mut B,
     ) -> Result<UnknownResolution, AdminError> {
         self.dispatch(context, OperatorCommand::ResolveUnknown(submission_id))?;
-        outbox::resolve_unknown(outbox, store, submission_id, observed_at_ms, boundary)
-            .map_err(AdminError::UnknownResolution)
+        outbox::resolve_unknown(
+            outbox,
+            store,
+            submission_id,
+            observed_at_ms,
+            verifier,
+            boundary,
+        )
+        .map_err(AdminError::UnknownResolution)
     }
 
     /// Reads an exact-scope subscription only when it is paused or continuity-blocked.
@@ -451,12 +460,14 @@ impl Surface {
         local: &mut LocalAccounting,
         protocol: ProtocolBudgetState,
         receipts: &[SpendReceiptEvidence],
+        verifier: &EvidenceAuthority,
     ) -> Result<ReconciliationState, AdminError> {
         self.dispatch(
             context,
             OperatorCommand::ReconcileBudgetDivergence(budget_id),
         )?;
-        budget::reconcile(local, protocol, receipts).map_err(AdminError::BudgetReconciliation)
+        budget::reconcile(local, protocol, receipts, verifier)
+            .map_err(AdminError::BudgetReconciliation)
     }
 
     /// Audits and returns a genuine backlog observation without changing its levels.

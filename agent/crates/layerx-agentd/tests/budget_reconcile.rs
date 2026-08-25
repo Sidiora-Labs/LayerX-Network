@@ -3,7 +3,6 @@ mod support;
 use layerx_agentd::budget::{
     reconcile, LocalAccounting, ProtocolBudgetState, SpendReceiptEvidence,
 };
-use layerx_agentd::protocol_evidence::verify_state_evidence;
 
 fn protocol(consumed: u128, start: u64) -> ProtocolBudgetState {
     ProtocolBudgetState {
@@ -25,13 +24,15 @@ fn rollover_comes_only_from_protocol_state() {
         last_receipt: Some([1; 32]),
     };
     let protocol = protocol(0, 100);
-    let verified = verify_state_evidence(&protocol.evidence)
+    let verifier = support::evidence_verifier();
+    let verified = verifier
+        .verify_state(&protocol.evidence)
         .unwrap_or_else(|error| panic!("state verification: {error:?}"));
     assert_eq!(
         verified.level(),
         layerx_types::verify::VerificationLevel::STATE_PROVEN
     );
-    let state = reconcile(&mut local, protocol, &[])
+    let state = reconcile(&mut local, protocol, &[], &verifier)
         .unwrap_or_else(|error| panic!("reconcile: {error:?}"));
     assert_eq!(state.window_start_sequence, 100);
     assert_eq!(state.window_end_sequence, 199);
@@ -51,7 +52,12 @@ fn missed_receipt_divergence_is_exposed_and_cache_is_corrected() {
         window_start_sequence: 100,
         evidence: support::raw_receipt_at([2; 32], 0, 200, 120),
     }];
-    let state = reconcile(&mut local, protocol(350, 100), &receipts)
+    let state = reconcile(
+        &mut local,
+        protocol(350, 100),
+        &receipts,
+        &support::evidence_verifier(),
+    )
         .unwrap_or_else(|error| panic!("reconcile: {error:?}"));
     assert_eq!(state.local_before, 200);
     assert_eq!(state.protocol_consumed, 350);
@@ -77,7 +83,12 @@ fn verified_failed_receipt_does_not_consume_budget() {
             evidence: support::raw_receipt_at([3; 32], 5, 900, 121),
         },
     ];
-    let state = reconcile(&mut local, protocol(200, 100), &receipts)
+    let state = reconcile(
+        &mut local,
+        protocol(200, 100),
+        &receipts,
+        &support::evidence_verifier(),
+    )
         .unwrap_or_else(|error| panic!("reconcile: {error:?}"));
     assert_eq!(state.protocol_consumed, 200);
     assert_eq!(local.consumed, 200);
@@ -97,7 +108,13 @@ fn unverified_inputs_never_correct_the_cache() {
         window_start_sequence: 100,
         evidence: support::corrupt_raw_receipt(&raw, corrupted),
     }];
-    assert!(reconcile(&mut local, protocol(350, 100), &unverified_receipt).is_err());
+    assert!(reconcile(
+        &mut local,
+        protocol(350, 100),
+        &unverified_receipt,
+        &support::evidence_verifier(),
+    )
+    .is_err());
     assert_eq!(local.consumed, 200);
 
     let state = protocol(350, 100);
@@ -109,6 +126,7 @@ fn unverified_inputs_never_correct_the_cache() {
             evidence: support::corrupt_raw_state(&state.evidence, corrupt_state),
         },
         &[],
+        &support::evidence_verifier(),
     )
     .is_err());
     assert_eq!(local.consumed, 200);

@@ -23,7 +23,7 @@ use layerx_agentd::limits::{
     Refusal,
 };
 use layerx_agentd::outbox::{Outbox, SubmissionState};
-use layerx_agentd::protocol_evidence::{verify_receipt, VerifiedReceiptEvidence};
+use layerx_agentd::protocol_evidence::VerifiedReceiptEvidence;
 use layerx_agentd::prepare::{
     prepare_activity, CorePreparationBoundary, CorePreparationState, CoreStateError,
     PreparationDefaults, PrepareRequest,
@@ -190,7 +190,8 @@ pub fn agent_limits_exactly_once_suite() -> Result<SuiteReport, SuiteFailure> {
         .status(INTENT)
         .map(|status| status.activity_id)
         .ok_or_else(|| failure("authoritative outbox activity is missing", &history))?;
-    let receipt = verify_receipt(&agentd_support::raw_receipt(activity_id, 0, 25))
+    let receipt = agentd_support::evidence_verifier()
+        .verify_receipt(&agentd_support::raw_receipt(activity_id, 0, 25))
         .map_err(|error| failure(format!("receipt verification: {error:?}"), &history))?;
     let receipt_ref = receipt.receipt_ref();
 

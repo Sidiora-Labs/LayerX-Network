@@ -24,7 +24,7 @@ pub struct RequiredSetting {
     pub environment_key: &'static str,
 }
 
-pub const SECURITY_RELEVANT_SETTINGS: [RequiredSetting; 7] = [
+pub const SECURITY_RELEVANT_SETTINGS: [RequiredSetting; 8] = [
     RequiredSetting {
         file_key: "network_id",
         environment_key: "LAYERX_NETWORK_ID",
@@ -53,6 +53,10 @@ pub const SECURITY_RELEVANT_SETTINGS: [RequiredSetting; 7] = [
         file_key: "verification_defaults",
         environment_key: "LAYERX_VERIFICATION_DEFAULTS",
     },
+    RequiredSetting {
+        file_key: "sequencer_authority_source",
+        environment_key: "LAYERX_SEQUENCER_AUTHORITY_SOURCE",
+    },
 ];
 
 pub const PRECEDENCE: &str =
@@ -67,6 +71,7 @@ pub struct StartupConfig {
     pub policy_sources: BTreeMap<TenantId, PathBuf>,
     pub signer_configurations: BTreeMap<TenantId, PathBuf>,
     pub verification_defaults: BTreeMap<TenantId, VerificationLevel>,
+    pub sequencer_authority_source: PathBuf,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -205,6 +210,10 @@ pub fn validate(values: &BTreeMap<String, String>) -> Result<StartupConfig, Conf
     )?;
     let verification_defaults =
         parse_verification_defaults(required(values, "verification_defaults")?, &tenants)?;
+    let sequencer_authority_source = parse_path(
+        required(values, "sequencer_authority_source")?,
+        "sequencer_authority_source",
+    )?;
     Ok(StartupConfig {
         network_id,
         node_endpoint,
@@ -213,6 +222,7 @@ pub fn validate(values: &BTreeMap<String, String>) -> Result<StartupConfig, Conf
         policy_sources,
         signer_configurations,
         verification_defaults,
+        sequencer_authority_source,
     })
 }
 

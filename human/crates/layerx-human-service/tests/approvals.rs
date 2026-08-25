@@ -4,6 +4,7 @@ mod support;
 use std::collections::BTreeMap;
 use std::fs;
 
+use ed25519_dalek::SigningKey;
 use layerx_agent_api::identity::{ActivityType, AgentDid, Asset, AuthorityRef, ExplicitSet};
 use layerx_agent_api::prepare::{
     CanonicalBytes, DisclosedAmount, Disclosure, IdempotencyRef, PreparationRef, Prepared,
@@ -138,6 +139,7 @@ impl ApprovalBoundary for AgentdBoundary<'_> {
                 evidence: support::raw_budget_state(25, 975, 1, 1_000, at_sequence),
             },
             &[],
+            &support::evidence_verifier(&SigningKey::from_bytes(&[0x84; 32])),
         )
         .map_err(|_| ApprovalBoundaryError::VerificationFailed)?;
         let mut evidence = Sha256::new();

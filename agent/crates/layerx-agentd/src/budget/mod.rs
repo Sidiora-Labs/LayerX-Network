@@ -38,8 +38,9 @@ pub fn reconcile(
     local: &mut LocalAccounting,
     protocol: ProtocolBudgetState,
     receipts: &[SpendReceiptEvidence],
+    verifier: &crate::protocol_evidence::EvidenceAuthority,
 ) -> Result<ReconciliationState, ReconcileError> {
-    accounting::reconcile_state(local, protocol, receipts)
+    accounting::reconcile_state(local, protocol, receipts, verifier)
 }
 
 /// Atomically reserves against every applicable scope.
@@ -97,8 +98,9 @@ pub fn rebuild(
     unknown_ids: &[[u8; 32]],
     receipts: &[PersistedReceipt],
     protocol: ProtocolBudgetState,
+    verifier: &crate::protocol_evidence::EvidenceAuthority,
 ) -> Result<RestartAccounting, RestartError> {
-    recovery::rebuild_accounting(store, tenant, unknown_ids, receipts, protocol)
+    recovery::rebuild_accounting(store, tenant, unknown_ids, receipts, protocol, verifier)
 }
 
 /// Raises an explicit alert for a local/protocol mismatch.

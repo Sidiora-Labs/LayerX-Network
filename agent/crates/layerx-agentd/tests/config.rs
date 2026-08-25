@@ -39,6 +39,10 @@ fn values() -> BTreeMap<String, String> {
             "verification_defaults".to_owned(),
             "tenant-a:state-proven,tenant-b:checkpoint-finalised".to_owned(),
         ),
+        (
+            "sequencer_authority_source".to_owned(),
+            "/etc/layerx/sequencer-authorities.csv".to_owned(),
+        ),
     ])
 }
 
@@ -78,12 +82,16 @@ fn explicit_environment_precedence_produces_one_fully_typed_configuration() {
         .any(|level| *level == VerificationLevel::STATE_PROVEN));
     assert_eq!(loaded.policy_sources.len(), loaded.tenants.len());
     assert_eq!(loaded.signer_configurations.len(), loaded.tenants.len());
+    assert_eq!(
+        loaded.sequencer_authority_source,
+        PathBuf::from("/etc/layerx/sequencer-authorities.csv")
+    );
     let _ = fs::remove_file(path);
 }
 
 #[test]
 fn every_security_relevant_setting_is_required_without_a_default() {
-    assert_eq!(SECURITY_RELEVANT_SETTINGS.len(), 7);
+    assert_eq!(SECURITY_RELEVANT_SETTINGS.len(), 8);
     for setting in SECURITY_RELEVANT_SETTINGS {
         let mut incomplete = values();
         incomplete.remove(setting.file_key);
@@ -152,6 +160,11 @@ fn unsafe_paths_protocols_maps_and_blank_overrides_name_the_setting() {
             "verification_defaults",
             "tenant-a:unverified,tenant-b:state-proven",
             RejectionReason::InvalidVerificationLevel,
+        ),
+        (
+            "sequencer_authority_source",
+            "relative.csv",
+            RejectionReason::InvalidPath,
         ),
     ];
     for (setting, value, reason) in cases {

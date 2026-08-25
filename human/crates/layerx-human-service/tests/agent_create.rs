@@ -283,6 +283,7 @@ impl AgentCreationContract for InProcessAgentLayer {
                         canonical_activity: action.compiled.payload().as_bytes().to_vec(),
                         signature: [0x73; 64],
                     },
+                    &support::evidence_verifier(&receipt_signer),
                     &mut pipeline,
                 )
                 .map_err(|_| AgentFailure::Refused("protocol budget creation failed"))?;

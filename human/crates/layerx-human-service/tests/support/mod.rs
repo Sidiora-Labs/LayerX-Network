@@ -1,15 +1,30 @@
+use std::collections::{BTreeMap, BTreeSet};
+use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::thread;
+use std::time::Duration;
 
 use ed25519_dalek::{Signer as _, SigningKey};
-use layerx_agentd::protocol_evidence::{RawReceiptEvidence, RawStateEvidence};
+use layerx_agentd::boot::{handshake_gate, Gate};
+use layerx_agentd::config::StartupConfig;
+use layerx_agentd::protocol_evidence::{
+    EvidenceAuthority, RawReceiptEvidence, RawStateEvidence,
+};
+use layerx_agentd::store::TenantId;
+use layerx_client::lni::framing::{read_frame, write_frame};
+use layerx_client::lni::handshake::{encode_node_info, NodeInfo, NodeRole};
+use layerx_client::lni::schema::{
+    decode_envelope, encode_envelope, Envelope, Version,
+};
+use layerx_client::lni::transport::{ConnectionGate, Limits, Uds};
 use layerx_human_service::store::{
     AgentTenantId, PrincipalId, PrincipalStore, RetentionPeriod, RetentionPolicy, RowKey,
     TenancyDigest, TenancyMap,
 };
-use layerx_proof::inclusion::SequencerAuthorization;
 use layerx_proof::merkle::build_proof;
 use layerx_proof::receipt::AuthorizedBatch;
+use layerx_types::verify::VerificationLevel;
 use sha2::{Digest as _, Sha256};
 
 static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(1);
@@ -63,6 +78,111 @@ pub fn install_and_open(
     (store, digest)
 }
 
+pub fn evidence_verifier(receipt_signer: &SigningKey) -> EvidenceAuthority {
+    let receipt_key = receipt_signer.verifying_key().to_bytes();
+    let authority_path = directory("evidence-authority").with_extension("csv");
+    let authority_source = format!(
+        "layerx-sequencer-authority-v1\n{},{},2,7,7,active\n",
+        encode_hex(&receipt_key),
+        encode_hex(&receipt_key),
+    );
+    std::fs::write(&authority_path, authority_source)
+        .unwrap_or_else(|error| panic!("authority source: {error}"));
+    let tenant = TenantId::new("human-evidence")
+        .unwrap_or_else(|error| panic!("tenant: {error}"));
+    let config = StartupConfig {
+        network_id: 42,
+        node_endpoint: PathBuf::from("/run/layerx/layerxd.sock"),
+        expected_protocol_version: 1,
+        tenants: BTreeSet::from([tenant.clone()]),
+        policy_sources: BTreeMap::from([(
+            tenant.clone(),
+            PathBuf::from("/etc/layerx/human-policy.kvx"),
+        )]),
+        signer_configurations: BTreeMap::from([(
+            tenant.clone(),
+            PathBuf::from("/etc/layerx/human-signer.kvx"),
+        )]),
+        verification_defaults: BTreeMap::from([(
+            tenant,
+            VerificationLevel::STATE_PROVEN,
+        )]),
+        sequencer_authority_source: authority_path,
+    };
+    let mut gate = Gate::new(&config)
+        .unwrap_or_else(|error| panic!("authority gate: {error:?}"));
+    let socket_path = directory("evidence-handshake").with_extension("sock");
+    let listener = UnixListener::bind(&socket_path)
+        .unwrap_or_else(|error| panic!("bind evidence handshake: {error}"));
+    let node = NodeInfo {
+        interface_version: Version::V1_0,
+        protocol_version: 1,
+        network_id: 42,
+        role: NodeRole::Sequencer,
+        chain_head_sequence: 50,
+        latest_sealed_batch: 7,
+        latest_finalised_checkpoint: [0x91; 32],
+        authorised_sequencer_key: receipt_key,
+        advertised_capabilities: vec!["submit".to_owned()],
+    };
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener
+            .accept()
+            .unwrap_or_else(|error| panic!("accept evidence handshake: {error}"));
+        let request = read_frame(&mut stream, 1_048_576)
+            .unwrap_or_else(|error| panic!("read evidence handshake: {error:?}"));
+        let request = decode_envelope(&request)
+            .unwrap_or_else(|error| panic!("decode evidence handshake: {error:?}"));
+        assert_eq!(request.message_tag, 1);
+        assert_eq!(request.correlation_id, 0);
+        assert!(request.canonical_payload.is_empty());
+        assert!(request.proof_material.is_empty());
+        let payload = encode_node_info(&node)
+            .unwrap_or_else(|error| panic!("encode evidence node information: {error:?}"));
+        let response = encode_envelope(Envelope {
+            version: node.interface_version,
+            message_tag: 2,
+            correlation_id: 0,
+            canonical_payload: &payload,
+            proof_material: &[],
+        })
+        .unwrap_or_else(|error| panic!("encode evidence handshake response: {error:?}"));
+        write_frame(&mut stream, &response, 1_048_576)
+            .unwrap_or_else(|error| panic!("write evidence handshake: {error:?}"));
+    });
+    let mut transport = Uds::connect(
+        &socket_path,
+        &ConnectionGate::new(1),
+        Limits {
+            maximum_frame_bytes: 1_048_576,
+            maximum_connections: 1,
+            maximum_streams: 1,
+            maximum_queued_bytes: 1_048_576,
+            deadline: Duration::from_secs(2),
+        },
+    )
+    .unwrap_or_else(|error| panic!("connect evidence handshake: {error:?}"));
+    handshake_gate(&mut gate, &mut transport)
+        .unwrap_or_else(|error| panic!("accepted handshake: {error:?}"));
+    server
+        .join()
+        .unwrap_or_else(|_| panic!("evidence handshake server panicked"));
+    let _ = std::fs::remove_file(socket_path);
+    gate.evidence_authority()
+        .unwrap_or_else(|error| panic!("evidence authority: {error:?}"))
+        .clone()
+}
+
+fn encode_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        encoded.push(char::from(HEX[usize::from(byte >> 4)]));
+        encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    encoded
+}
+
 pub fn raw_receipt_evidence(
     canonical_receipt: Vec<u8>,
     authorised_batch: AuthorizedBatch,
@@ -91,7 +211,6 @@ pub fn raw_receipt_evidence(
         proof,
         header,
         signer.sign(&digest).to_bytes(),
-        SequencerAuthorization::new(sequencer_id, sequencer_id, 7, 7),
     )
 }
 
@@ -111,7 +230,7 @@ pub fn raw_budget_state(
     let leaves = [state.as_slice()];
     let (proof, state_root) = build_proof(&leaves, 0)
         .unwrap_or_else(|error| panic!("state proof: {error:?}"));
-    let signer = SigningKey::from_bytes(&[0x4a; 32]);
+    let signer = SigningKey::from_bytes(&[0x84; 32]);
     let sequencer_id = signer.verifying_key().to_bytes();
     let header = canonical_header(
         [0x31; 32],
@@ -128,7 +247,6 @@ pub fn raw_budget_state(
         state_root,
         header,
         signer.sign(&digest).to_bytes(),
-        SequencerAuthorization::new(sequencer_id, sequencer_id, 7, 7),
     )
 }
 

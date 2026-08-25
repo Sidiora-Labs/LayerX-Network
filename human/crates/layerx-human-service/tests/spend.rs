@@ -147,7 +147,10 @@ impl RealAgentLayer {
             principal: principal("alice"),
             tenant,
             capability,
-            capability_ceiling: Ceiling::new(capability_total),
+            capability_ceiling: Ceiling::new(
+                capability_total,
+                support::evidence_verifier(&SigningKey::from_bytes(&[0x84; 32])),
+            ),
             budget,
             budget_limit_id,
             budget_limit,
@@ -333,7 +336,12 @@ impl RealAgentLayer {
             window_start_sequence: WINDOW_START,
             last_receipt,
         };
-        let reconciled = reconcile(&mut local, protocol, &accounting_receipts)
+        let reconciled = reconcile(
+            &mut local,
+            protocol,
+            &accounting_receipts,
+            &support::evidence_verifier(&SigningKey::from_bytes(&[0x84; 32])),
+        )
             .map_err(map_reconciliation_failure)?;
         let evidence_digest: [u8; 32] = Sha256::digest(
             [
@@ -428,9 +436,7 @@ fn signed_receipt(
         amount,
         counterparty,
     };
-    let signing_seed: [u8; 32] =
-        Sha256::digest([b"spend-sequencer".as_slice(), &activity_id].concat()).into();
-    let signer = SigningKey::from_bytes(&signing_seed);
+    let signer = SigningKey::from_bytes(&[0x84; 32]);
     let unsigned = encode_receipt(&fields, None);
     let mut digest = Sha256::new();
     digest.update(b"LXP/v1/receipt\0");

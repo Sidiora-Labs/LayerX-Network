@@ -116,7 +116,14 @@ fn inspections_and_verified_budget_reconciliation_are_audited_before_action() {
         evidence: support::raw_receipt_at([0x44; 32], 0, 7, 90),
     }];
     let reconciled = surface
-        .reconcile_budget_divergence(&context(2), [2; 32], &mut local, protocol, &receipts)
+        .reconcile_budget_divergence(
+            &context(2),
+            [2; 32],
+            &mut local,
+            protocol,
+            &receipts,
+            &support::evidence_verifier(),
+        )
         .unwrap_or_else(|error| panic!("reconcile: {error:?}"));
     let alert =
         divergence_alert(&reconciled, 100).unwrap_or_else(|| panic!("divergence alert absent"));

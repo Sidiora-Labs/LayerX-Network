@@ -10,6 +10,9 @@ use layerx_client::lni::schema::{Capability, Version};
 use layerx_client::lni::transport::FrameTransport;
 
 use crate::config::StartupConfig;
+use crate::protocol_evidence::{
+    EvidenceAuthority, ProtocolEvidenceVerifier, VerifierPolicyError,
+};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HandshakeStatus {
@@ -33,6 +36,7 @@ pub enum Status {
     AwaitingHandshake,
     Ready(HandshakeStatus),
     Refused(HandshakeError),
+    EvidenceRefused(VerifierPolicyError),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -44,6 +48,7 @@ pub enum WriteGateError {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GateError {
     Handshake(HandshakeError),
+    Evidence(VerifierPolicyError),
 }
 
 impl From<HandshakeError> for GateError {
@@ -58,12 +63,19 @@ pub struct Gate {
     last_accepted: Option<Handshake>,
     status: Status,
     generation: u64,
+    evidence: EvidenceAuthority,
 }
 
 impl Gate {
-    #[must_use]
-    pub fn new(config: &StartupConfig) -> Self {
-        Self {
+    /// Loads the trusted sequencer registry before opening any write gate.
+    ///
+    /// # Errors
+    ///
+    /// Refuses an unavailable or malformed configured authority source.
+    pub fn new(config: &StartupConfig) -> Result<Self, GateError> {
+        let verifier =
+            ProtocolEvidenceVerifier::load(config).map_err(GateError::Evidence)?;
+        Ok(Self {
             config: HandshakeConfig {
                 built_interface_version: Version::V1_0,
                 expected_protocol_version: config.expected_protocol_version,
@@ -72,7 +84,8 @@ impl Gate {
             last_accepted: None,
             status: Status::AwaitingHandshake,
             generation: 0,
-        }
+            evidence: EvidenceAuthority::new(verifier),
+        })
     }
 
     #[must_use]
@@ -102,7 +115,25 @@ impl Gate {
         match &self.status {
             Status::Ready(status) if status.writes_ready => Ok(operation()),
             Status::Ready(_) => Err(WriteGateError::MissingCapability(Capability::Submit)),
-            Status::AwaitingHandshake | Status::Refused(_) => Err(WriteGateError::NotReady),
+            Status::AwaitingHandshake | Status::Refused(_) | Status::EvidenceRefused(_) => {
+                Err(WriteGateError::NotReady)
+            }
+        }
+    }
+
+    /// Returns daemon-owned evidence authority only while the current handshake is write-ready.
+    ///
+    /// # Errors
+    ///
+    /// Refuses startup, disconnect, handshake refusal, authority refusal, or a node
+    /// lacking submission capability.
+    pub fn evidence_authority(&self) -> Result<&EvidenceAuthority, WriteGateError> {
+        match &self.status {
+            Status::Ready(status) if status.writes_ready => Ok(&self.evidence),
+            Status::Ready(_) => Err(WriteGateError::MissingCapability(Capability::Submit)),
+            Status::AwaitingHandshake | Status::Refused(_) | Status::EvidenceRefused(_) => {
+                Err(WriteGateError::NotReady)
+            }
         }
     }
 }
@@ -124,8 +155,31 @@ pub fn handshake_gate<'a, T: FrameTransport>(
             return Err(GateError::Handshake(error));
         }
     };
-    gate.generation = gate.generation.saturating_add(1);
+    apply_handshake(gate, accepted)
+}
+
+fn apply_handshake(
+    gate: &mut Gate,
+    accepted: Handshake,
+) -> Result<&HandshakeStatus, GateError> {
     let node = accepted.node();
+    if node.protocol_version != gate.config.expected_protocol_version {
+        gate.status = Status::EvidenceRefused(VerifierPolicyError::ProtocolVersion);
+        return Err(GateError::Evidence(VerifierPolicyError::ProtocolVersion));
+    }
+    if node.network_id != gate.config.expected_network_id {
+        gate.status = Status::EvidenceRefused(VerifierPolicyError::Network);
+        return Err(GateError::Evidence(VerifierPolicyError::Network));
+    }
+    if !gate
+        .evidence
+        .verifier()
+        .accepts_handshake_key(node.latest_sealed_batch, node.authorised_sequencer_key)
+    {
+        gate.status = Status::EvidenceRefused(VerifierPolicyError::HandshakeKey);
+        return Err(GateError::Evidence(VerifierPolicyError::HandshakeKey));
+    }
+    gate.generation = gate.generation.saturating_add(1);
     let capabilities = accepted.capabilities();
     let status = HandshakeStatus {
         generation: gate.generation,
@@ -146,6 +200,8 @@ pub fn handshake_gate<'a, T: FrameTransport>(
     gate.status = Status::Ready(status);
     match &gate.status {
         Status::Ready(status) => Ok(status),
-        Status::AwaitingHandshake | Status::Refused(_) => unreachable!(),
+        Status::AwaitingHandshake | Status::Refused(_) | Status::EvidenceRefused(_) => {
+            unreachable!()
+        }
     }
 }

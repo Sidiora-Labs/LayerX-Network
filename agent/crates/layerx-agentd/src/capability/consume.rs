@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::sync::Mutex;
 
-use crate::protocol_evidence::{verify_receipt, RawReceiptEvidence};
+use crate::protocol_evidence::{EvidenceAuthority, RawReceiptEvidence};
 
 /// One held amount awaiting a verified terminal receipt.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -25,14 +25,16 @@ struct State {
 #[derive(Debug)]
 pub struct Ceiling {
     maximum: u128,
+    verifier: EvidenceAuthority,
     state: Mutex<State>,
 }
 
 impl Ceiling {
     #[must_use]
-    pub fn new(maximum: u128) -> Self {
+    pub fn new(maximum: u128, verifier: EvidenceAuthority) -> Self {
         Self {
             maximum,
+            verifier,
             state: Mutex::new(State {
                 consumed: 0,
                 reservations: BTreeMap::new(),
@@ -48,10 +50,15 @@ impl Ceiling {
     /// Returns `UnverifiedReceipt` for any unverified receipt, `Overflow` when the
     /// executed amounts do not sum, and `Exceeded` when the rebuilt total passes the
     /// ceiling.
-    pub fn rebuild(maximum: u128, receipts: &[ReceiptApplication]) -> Result<Self, CeilingError> {
+    pub fn rebuild(
+        maximum: u128,
+        verifier: EvidenceAuthority,
+        receipts: &[ReceiptApplication],
+    ) -> Result<Self, CeilingError> {
         let mut consumed = 0_u128;
         for receipt in receipts {
-            let verified = verify_receipt(&receipt.evidence)
+            let verified = verifier
+                .verify_receipt(&receipt.evidence)
                 .map_err(|_| CeilingError::UnverifiedReceipt)?;
             if verified.result_code() == 0 {
                 let amount = verified.amount();
@@ -63,6 +70,7 @@ impl Ceiling {
         }
         Ok(Self {
             maximum,
+            verifier,
             state: Mutex::new(State {
                 consumed,
                 reservations: BTreeMap::new(),
@@ -80,7 +88,9 @@ impl Ceiling {
     /// differs from the held amount, `Overflow` when consumption does not sum, and
     /// `Poisoned` when the state lock is poisoned.
     pub fn apply_receipt(&self, receipt: &ReceiptApplication) -> Result<(), CeilingError> {
-        let verified = verify_receipt(&receipt.evidence)
+        let verified = self
+            .verifier
+            .verify_receipt(&receipt.evidence)
             .map_err(|_| CeilingError::UnverifiedReceipt)?;
         let mut state = self.state.lock().map_err(|_| CeilingError::Poisoned)?;
         let reservation = state

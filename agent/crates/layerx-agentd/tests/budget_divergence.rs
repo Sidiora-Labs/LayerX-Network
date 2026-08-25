@@ -21,7 +21,12 @@ fn divergence_is_audited_unhealthy_and_conservatively_enforced() {
         window_start_sequence: 100,
         evidence: support::raw_receipt_at([7; 32], 0, 300, 120),
     }];
-    let state = reconcile(&mut local, protocol(350, 650, 128), &receipts)
+    let state = reconcile(
+        &mut local,
+        protocol(350, 650, 128),
+        &receipts,
+        &support::evidence_verifier(),
+    )
         .unwrap_or_else(|error| panic!("reconcile: {error:?}"));
     let alert =
         divergence_alert(&state, 1_000).unwrap_or_else(|| panic!("divergence alert is missing"));
@@ -48,11 +53,21 @@ fn a_verified_missing_receipt_closes_the_alert() {
         window_start_sequence: 100,
         evidence: support::raw_receipt_at([3; 32], 0, 200, 120),
     }];
-    let divergent = reconcile(&mut local, protocol(350, 650, 120), &missing)
+    let divergent = reconcile(
+        &mut local,
+        protocol(350, 650, 120),
+        &missing,
+        &support::evidence_verifier(),
+    )
         .unwrap_or_else(|error| panic!("reconcile: {error:?}"));
     assert!(divergence_alert(&divergent, 1_000).is_some());
 
-    let resolved = reconcile(&mut local, protocol(350, 650, 121), &missing)
+    let resolved = reconcile(
+        &mut local,
+        protocol(350, 650, 121),
+        &missing,
+        &support::evidence_verifier(),
+    )
         .unwrap_or_else(|error| panic!("reconcile: {error:?}"));
     assert!(divergence_alert(&resolved, 1_000).is_none());
 }
@@ -64,7 +79,12 @@ fn protocol_overage_is_also_the_restrictive_figure() {
         window_start_sequence: 100,
         last_receipt: None,
     };
-    let state = reconcile(&mut local, protocol(700, 300, 130), &[])
+    let state = reconcile(
+        &mut local,
+        protocol(700, 300, 130),
+        &[],
+        &support::evidence_verifier(),
+    )
         .unwrap_or_else(|error| panic!("reconcile: {error:?}"));
     let alert =
         divergence_alert(&state, 1_000).unwrap_or_else(|| panic!("divergence alert is missing"));

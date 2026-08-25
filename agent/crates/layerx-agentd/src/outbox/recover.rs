@@ -2,6 +2,7 @@
 
 use crate::budget::{self, PersistedReceipt, ProtocolBudgetState, RestartAccounting, RestartError};
 use crate::capability::{self, Ceiling, CeilingError, ReceiptApplication as CeilingReceipt};
+use crate::protocol_evidence::EvidenceAuthority;
 use crate::store::{ObjectKind, Store, StoreError, TenantId};
 
 use super::{Outbox, OutboxError, SubmissionState};
@@ -14,6 +15,7 @@ pub struct UnknownCeilingReservation {
 }
 
 pub struct RecoveryInputs<'a> {
+    pub verifier: EvidenceAuthority,
     pub unknown_budget_ids: &'a [[u8; 32]],
     pub budget_receipts: &'a [PersistedReceipt],
     pub protocol_budget: ProtocolBudgetState,
@@ -91,10 +93,15 @@ pub fn recover(
         inputs.unknown_budget_ids,
         inputs.budget_receipts,
         inputs.protocol_budget.clone(),
+        &inputs.verifier,
     )
     .map_err(RecoveryError::Budget)?;
-    let ceiling = Ceiling::rebuild(inputs.ceiling_maximum, inputs.ceiling_receipts)
-        .map_err(RecoveryError::Ceiling)?;
+    let ceiling = Ceiling::rebuild(
+        inputs.ceiling_maximum,
+        inputs.verifier.clone(),
+        inputs.ceiling_receipts,
+    )
+    .map_err(RecoveryError::Ceiling)?;
     for reservation in inputs.unknown_ceiling_reservations {
         capability::consume(
             &ceiling,

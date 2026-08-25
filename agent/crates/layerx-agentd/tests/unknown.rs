@@ -264,7 +264,14 @@ fn acknowledgement_loss_is_resolved_only_by_the_existing_receipt() {
     let mut node = FaultInjectedNode::default();
     node.receipts.insert([1; 32], receipt(activity_id(&outbox, 1), 0));
 
-    let result = resolve_unknown(&mut outbox, &mut store, [1; 32], 10_000, &mut node)
+    let result = resolve_unknown(
+        &mut outbox,
+        &mut store,
+        [1; 32],
+        10_000,
+        &support::evidence_verifier(),
+        &mut node,
+    )
         .unwrap_or_else(|error| panic!("resolve: {error:?}"));
     assert_eq!(result.state, SubmissionState::Executed);
     assert_eq!(result.observation, ResolutionObservation::ExecutedReceipt);
@@ -297,7 +304,7 @@ fn lost_resend_response_keeps_budget_and_ceiling_held_and_reuses_exact_bytes() {
         },
     )
     .unwrap_or_else(|error| panic!("budget reserve: {error:?}"));
-    let ceiling = Ceiling::new(1_000);
+    let ceiling = Ceiling::new(1_000, support::evidence_verifier());
     consume(&ceiling, [2; 32], 400, 5, 1)
         .unwrap_or_else(|error| panic!("ceiling reserve: {error:?}"));
     ceiling
@@ -310,7 +317,14 @@ fn lost_resend_response_keeps_budget_and_ceiling_held_and_reuses_exact_bytes() {
         receipt_on_resend: Some(late_receipt),
         ..FaultInjectedNode::default()
     };
-    let first = resolve_unknown(&mut outbox, &mut store, [2; 32], 20_000, &mut node)
+    let first = resolve_unknown(
+        &mut outbox,
+        &mut store,
+        [2; 32],
+        20_000,
+        &support::evidence_verifier(),
+        &mut node,
+    )
         .unwrap_or_else(|error| panic!("first resolve: {error:?}"));
     assert_eq!(first.state, SubmissionState::Unknown);
     assert_eq!(first.observation, ResolutionObservation::ReceiptMissing);
@@ -325,6 +339,7 @@ fn lost_resend_response_keeps_budget_and_ceiling_held_and_reuses_exact_bytes() {
         &mut store,
         [2; 32],
         first.age.next_attempt_at_ms,
+        &support::evidence_verifier(),
         &mut node,
     )
     .unwrap_or_else(|error| panic!("second resolve: {error:?}"));
@@ -338,7 +353,14 @@ fn restart_preserves_backoff_age_and_a_receipt_can_appear_minutes_later() {
     let root = directory("restart");
     let (mut store, mut outbox, exact) = unknown_outbox(&root, 3);
     let mut node = FaultInjectedNode::default();
-    let first = resolve_unknown(&mut outbox, &mut store, [3; 32], 30_000, &mut node)
+    let first = resolve_unknown(
+        &mut outbox,
+        &mut store,
+        [3; 32],
+        30_000,
+        &support::evidence_verifier(),
+        &mut node,
+    )
         .unwrap_or_else(|error| panic!("first resolve: {error:?}"));
     assert_eq!(first.age.attempt_count, 1);
     assert_eq!(node.transmitted, vec![([3; 32], exact)]);
@@ -355,6 +377,7 @@ fn restart_preserves_backoff_age_and_a_receipt_can_appear_minutes_later() {
         &mut reopened,
         [3; 32],
         first.age.next_attempt_at_ms - 1,
+        &support::evidence_verifier(),
         &mut node,
     )
     .unwrap_or_else(|error| panic!("deferred: {error:?}"));
@@ -363,7 +386,14 @@ fn restart_preserves_backoff_age_and_a_receipt_can_appear_minutes_later() {
 
     node.receipts
         .insert([3; 32], receipt(activity_id(&restored, 3), 5));
-    let later = resolve_unknown(&mut restored, &mut reopened, [3; 32], 210_000, &mut node)
+    let later = resolve_unknown(
+        &mut restored,
+        &mut reopened,
+        [3; 32],
+        210_000,
+        &support::evidence_verifier(),
+        &mut node,
+    )
         .unwrap_or_else(|error| panic!("later: {error:?}"));
     assert_eq!(later.state, SubmissionState::Failed);
     assert_eq!(later.age.age_ms, 180_000);
@@ -379,7 +409,14 @@ fn lookup_failure_and_unverified_receipt_never_infer_a_terminal_outcome() {
         lookup_unavailable: true,
         ..FaultInjectedNode::default()
     };
-    let first = resolve_unknown(&mut outbox, &mut store, [4; 32], 40_000, &mut node)
+    let first = resolve_unknown(
+        &mut outbox,
+        &mut store,
+        [4; 32],
+        40_000,
+        &support::evidence_verifier(),
+        &mut node,
+    )
         .unwrap_or_else(|error| panic!("lookup loss: {error:?}"));
     assert_eq!(first.state, SubmissionState::Unknown);
     assert_eq!(first.observation, ResolutionObservation::LookupUnavailable);
@@ -396,6 +433,7 @@ fn lookup_failure_and_unverified_receipt_never_infer_a_terminal_outcome() {
         &mut store,
         [4; 32],
         first.age.next_attempt_at_ms,
+        &support::evidence_verifier(),
         &mut node,
     )
     .unwrap_or_else(|error| panic!("unverified: {error:?}"));

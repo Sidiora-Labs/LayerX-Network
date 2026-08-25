@@ -5,7 +5,7 @@ use layerx_agentd::capability::{consume, Ceiling, CeilingError, ReceiptApplicati
 
 #[test]
 fn concurrent_reservations_never_exceed_the_ceiling() {
-    let ceiling = Arc::new(Ceiling::new(1_000));
+    let ceiling = Arc::new(Ceiling::new(1_000, support::evidence_verifier()));
     let mut workers = Vec::new();
     for id in 0_u8..40 {
         let ceiling = Arc::clone(&ceiling);
@@ -28,7 +28,7 @@ fn concurrent_reservations_never_exceed_the_ceiling() {
 
 #[test]
 fn only_verified_executed_receipts_consume_and_failures_release() {
-    let ceiling = Ceiling::new(1_000);
+    let ceiling = Ceiling::new(1_000, support::evidence_verifier());
     consume(&ceiling, [1; 32], 400, 100, 1).unwrap_or_else(|error| panic!("reserve: {error:?}"));
     let raw = support::raw_receipt([1; 32], 0, 400);
     let mut corrupted = raw.canonical_receipt().to_vec();
@@ -62,7 +62,7 @@ fn only_verified_executed_receipts_consume_and_failures_release() {
 
 #[test]
 fn unknown_is_held_past_expiry_and_rebuild_uses_verified_receipts() {
-    let ceiling = Ceiling::new(1_000);
+    let ceiling = Ceiling::new(1_000, support::evidence_verifier());
     consume(&ceiling, [1; 32], 400, 5, 1).unwrap_or_else(|error| panic!("reserve: {error:?}"));
     ceiling
         .mark_unknown([1; 32])
@@ -76,6 +76,7 @@ fn unknown_is_held_past_expiry_and_rebuild_uses_verified_receipts() {
 
     let rebuilt = Ceiling::rebuild(
         1_000,
+        support::evidence_verifier(),
         &[
             ReceiptApplication {
                 reservation_id: [2; 32],

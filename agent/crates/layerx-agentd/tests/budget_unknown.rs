@@ -37,7 +37,14 @@ fn process_loss_between_submission_and_receipt_preserves_unknown_hold() {
     drop(before_kill);
 
     let after_restart = Store::open(&root).unwrap_or_else(|error| panic!("restart: {error}"));
-    let accounting = rebuild(&after_restart, &tenant, &[[1; 32]], &[], protocol(0))
+    let accounting = rebuild(
+        &after_restart,
+        &tenant,
+        &[[1; 32]],
+        &[],
+        protocol(0),
+        &support::evidence_verifier(),
+    )
         .unwrap_or_else(|error| panic!("rebuild: {error:?}"));
     assert_eq!(accounting.held_unresolved, 400);
     assert_eq!(accounting.unresolved_count, 1);
@@ -62,6 +69,7 @@ fn writes_are_refused_until_receipts_and_protocol_state_reconcile() {
             evidence: support::raw_receipt([2; 32], 0, 100),
         }],
         protocol(200),
+        &support::evidence_verifier(),
     )
     .unwrap_or_else(|error| panic!("rebuild: {error:?}"));
     assert_eq!(accounting.protocol_consumed, 200);

@@ -2,7 +2,7 @@
 
 use sha2::{Digest, Sha256};
 
-use crate::protocol_evidence::{verify_receipt, RawReceiptEvidence};
+use crate::protocol_evidence::{EvidenceAuthority, RawReceiptEvidence};
 use crate::store::{ObjectKind, Store, StoreError, TenantId, TenantKey};
 
 use super::{Outbox, OutboxError, SubmissionState};
@@ -113,6 +113,7 @@ pub fn resolve_unknown<B: ReceiptLookup>(
     store: &mut Store,
     submission_id: [u8; 32],
     observed_at_ms: u64,
+    verifier: &EvidenceAuthority,
     boundary: &mut B,
 ) -> Result<UnknownResolution, UnknownResolutionError> {
     let record = outbox
@@ -166,7 +167,7 @@ pub fn resolve_unknown<B: ReceiptLookup>(
     };
 
     if let Some(receipt) = receipt {
-        let verified = match verify_receipt(&receipt) {
+        let verified = match verifier.verify_receipt(&receipt) {
             Ok(verified) if verified.activity_id() == record.status.activity_id => verified,
             Ok(_) | Err(_) => {
                 return Ok(UnknownResolution {

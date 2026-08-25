@@ -1,7 +1,7 @@
 //! Receipt- and protocol-state-authoritative budget reconciliation.
 
 use crate::protocol_evidence::{
-    verify_receipt, verify_state_evidence, RawReceiptEvidence, RawStateEvidence,
+    EvidenceAuthority, RawReceiptEvidence, RawStateEvidence,
 };
 
 const BUDGET_STATE_MAGIC: &[u8; 4] = b"LXBS";
@@ -54,12 +54,14 @@ pub(crate) fn reconcile_state(
     local: &mut LocalAccounting,
     protocol: ProtocolBudgetState,
     receipts: &[SpendReceiptEvidence],
+    verifier: &EvidenceAuthority,
 ) -> Result<ReconciliationState, ReconcileError> {
-    let protocol = verify_protocol_budget_state(&protocol)?;
+    let protocol = verify_protocol_budget_state(&protocol, verifier)?;
     let mut receipt_total = 0_u128;
     let mut last_receipt = None;
     for receipt in receipts {
-        let verified = verify_receipt(&receipt.evidence)
+        let verified = verifier
+            .verify_receipt(&receipt.evidence)
             .map_err(|_| ReconcileError::UnverifiedReceipt)?;
         if receipt.window_start_sequence != protocol.window_start_sequence {
             return Err(ReconcileError::ReceiptFromOtherWindow);
@@ -116,8 +118,10 @@ pub(crate) struct DecodedBudgetState {
 
 pub(crate) fn verify_protocol_budget_state(
     state: &ProtocolBudgetState,
+    verifier: &EvidenceAuthority,
 ) -> Result<DecodedBudgetState, ReconcileError> {
-    let verified = verify_state_evidence(&state.evidence)
+    let verified = verifier
+        .verify_state(&state.evidence)
         .map_err(|_| ReconcileError::UnverifiedProtocolState)?;
     decode_budget_state(
         verified.canonical_state(),

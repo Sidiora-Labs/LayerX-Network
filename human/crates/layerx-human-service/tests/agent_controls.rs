@@ -387,6 +387,7 @@ impl AgentCreationContract for RealAgentLayer {
                 ),
             },
         };
+        let receipt_signer = SigningKey::from_bytes(&[0x84; 32]);
         create_protocol_budget(
             &mut self.store,
             &BudgetRequest {
@@ -399,6 +400,7 @@ impl AgentCreationContract for RealAgentLayer {
                 canonical_activity: action.compiled.payload().as_bytes().to_vec(),
                 signature: activity_signature.to_bytes(),
             },
+            &support::evidence_verifier(&receipt_signer),
             &mut pipeline,
         )
         .map_err(|_| AgentFailure::Refused("protocol budget change failed"))?;

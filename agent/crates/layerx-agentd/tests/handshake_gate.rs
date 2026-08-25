@@ -13,6 +13,7 @@ use layerx_client::lni::framing::{read_frame, write_frame};
 use layerx_client::lni::handshake::{encode_node_info, HandshakeError, NodeInfo, NodeRole};
 use layerx_client::lni::schema::{decode_envelope, encode_envelope, Capability, Envelope, Version};
 use layerx_client::lni::transport::{ConnectionGate, Limits, Uds};
+use layerx_programs::hex;
 use layerx_types::verify::VerificationLevel;
 
 static NEXT_SOCKET: AtomicU64 = AtomicU64::new(1);
@@ -31,6 +32,17 @@ fn tenant() -> TenantId {
 
 fn config() -> StartupConfig {
     let tenant = tenant();
+    let authority_source = path("authority");
+    let key = [8; 32];
+    fs::write(
+        &authority_source,
+        format!(
+            "layerx-sequencer-authority-v1\n{},{},0,1,100,active\n",
+            hex::encode(&key),
+            hex::encode(&key)
+        ),
+    )
+    .unwrap_or_else(|error| panic!("authority source: {error}"));
     StartupConfig {
         network_id: 42,
         node_endpoint: PathBuf::from("/run/layerx/layerxd.sock"),
@@ -45,6 +57,7 @@ fn config() -> StartupConfig {
             PathBuf::from("/etc/layerx/signer-a.kvx"),
         )]),
         verification_defaults: BTreeMap::from([(tenant, VerificationLevel::STATE_PROVEN)]),
+        sequencer_authority_source: authority_source,
     }
 }
 
@@ -112,7 +125,8 @@ fn connect(path: &Path) -> Uds {
 
 #[test]
 fn startup_is_not_ready_until_real_framed_handshake_reports_the_full_intersection() {
-    let mut gate = Gate::new(&config());
+    let mut gate =
+        Gate::new(&config()).unwrap_or_else(|error| panic!("startup gate: {error:?}"));
     let operation_ran = std::cell::Cell::new(false);
     assert_eq!(
         gate.guard_write(|| operation_ran.set(true)),
@@ -155,7 +169,8 @@ fn startup_is_not_ready_until_real_framed_handshake_reports_the_full_intersectio
 
 #[test]
 fn reconnect_repeats_handshake_for_node_upgrade_and_disappearing_capability() {
-    let mut gate = Gate::new(&config());
+    let mut gate =
+        Gate::new(&config()).unwrap_or_else(|error| panic!("startup gate: {error:?}"));
     let first_path = socket_path("reconnect-first");
     let first_server = serve_handshake(&first_path, node(0, &["node_info", "submit"]));
     let mut first_transport = connect(&first_path);
@@ -231,7 +246,8 @@ fn network_protocol_and_major_upgrade_mismatches_refuse_operation() {
         let path = socket_path(label);
         let server = serve_handshake(&path, info);
         let mut transport = connect(&path);
-        let mut gate = Gate::new(&config());
+        let mut gate =
+            Gate::new(&config()).unwrap_or_else(|error| panic!("startup gate: {error:?}"));
         assert_eq!(
             handshake_gate(&mut gate, &mut transport),
             Err(GateError::Handshake(expected))

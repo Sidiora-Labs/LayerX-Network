@@ -1,6 +1,6 @@
 //! Budget creation through the ordinary canonical write pipeline.
 
-use crate::protocol_evidence::{verify_receipt, RawReceiptEvidence};
+use crate::protocol_evidence::{EvidenceAuthority, RawReceiptEvidence};
 use crate::store::{ObjectKind, Store, StoreError, TenantId, TenantKey};
 
 const LOCAL_BYPASS_STATEMENT: &str =
@@ -116,6 +116,7 @@ impl From<StoreError> for BudgetCreationError {
 pub fn create_protocol_budget(
     store: &mut Store,
     request: &BudgetRequest,
+    verifier: &EvidenceAuthority,
     pipeline: &mut dyn BudgetPipeline,
 ) -> Result<ProtocolBudget, BudgetCreationError> {
     if request.ceiling == 0 || request.expiry_sequence == 0 {
@@ -125,7 +126,8 @@ pub fn create_protocol_budget(
         return Err(BudgetCreationError::EmptyActivity);
     }
     let receipt = pipeline.submit_budget(request)?;
-    let verified = verify_receipt(&receipt.evidence)
+    let verified = verifier
+        .verify_receipt(&receipt.evidence)
         .map_err(|_| BudgetCreationError::UnverifiedReceipt)?;
     if verified.result_code() != 0 {
         return Err(BudgetCreationError::CoreRejected);
