@@ -588,7 +588,10 @@ fn replay(
     StoreError,
 > {
     log.seek(SeekFrom::Start(0)).map_err(StoreError::Io)?;
-    let mut records = BTreeMap::new();
+    let mut records: BTreeMap<
+        (ArchiveCommitment, PublicationStageKey),
+        PublicationRecord,
+    > = BTreeMap::new();
     let mut head = JournalHead {
         sequence: 0,
         offset: 0,

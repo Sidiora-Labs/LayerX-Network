@@ -433,9 +433,13 @@ impl MirrorSources {
                         selected = Some(archive);
                     }
                 }
-                Ok(None) => first_error.get_or_insert(MirrorSourceError::Missing),
-                Err(error) => first_error.get_or_insert(error),
-            };
+                Ok(None) => {
+                    first_error.get_or_insert(MirrorSourceError::Missing);
+                }
+                Err(error) => {
+                    first_error.get_or_insert(error);
+                }
+            }
         }
         if exact && success_count == 0 {
             return Err(first_error.unwrap_or(MirrorSourceError::Unavailable));

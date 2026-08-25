@@ -12,7 +12,7 @@ use crate::store::{
     FinalityPosition, MirrorChain, PublicationJournal, PublicationPhase, PublicationRecord,
     PublicationStage, StoreError, TransactionIdentity,
 };
-use crate::{archive_commitment, Archive, ArchiveCommitment, CheckpointCoordinate, MirrorCursor};
+use crate::{archive_commitment, Archive, ArchiveCommitment, MirrorCursor};
 
 const ETHEREUM_TX_TYPE: u8 = 2;
 const MAX_CALL_DATA_BYTES: usize = 128 * 1024;

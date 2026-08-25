@@ -894,6 +894,14 @@ observed = "The scoped cg guard accepted every explicit product, protocol, deplo
 assumption = "The lifecycle projection and qualification observations remain in the single published task commit; human review will inspect the advisory rather than remove the implementation state or external dependency record."
 severity = "task-scope"
 
+[observation.25.1.9]
+task = "25.1"
+file = "interop/crates/layerx-mirror/src/ethereum.rs, interop/crates/layerx-mirror/src/source.rs, interop/crates/layerx-mirror/src/store.rs"
+symbol = "MirrorSources::read, store::replay"
+observed = "Human BUILD reached three strict Rust integration failures in the mirror workspace: an unused checkpoint-coordinate import, source-selection match arms returning the mutable value produced by get_or_insert where unit was required, and a replay map whose key and value could not be inferred before later journal operations. The repair removes only the unused import, retains first-error selection while making both arms explicitly unit-valued, and declares the exact durable publication-record map type."
+assumption = "Human qualification must resume the Interop and Agent builds and exercise source disagreement, all-source failure, empty and multi-stage journal replay, and Ethereum publication recovery. No behavior or verification level was weakened and no passing build is asserted here."
+severity = "qualification-repair"
+
 [observation.26.1.1]
 task = "26.1"
 file = "platform/ramps/toolkit/src/clients.rs, platform/ramps/config.example.json, platform/ramps/OPERATIONS.md"
