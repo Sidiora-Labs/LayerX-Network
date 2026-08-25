@@ -1001,15 +1001,15 @@ append_paxeer_steps() {
   case "$1" in
     INSTALL)
       add_step paxeer INSTALL "Download locked Paxeer Go modules" "paxeer-network" "go" "go mod download"
-      add_step paxeer INSTALL "Install locked Paxeer documentation packages" "." "make npm" "make paxeer-docs-install"
+      add_step paxeer INSTALL "Install every locked nested Paxeer manifest" "." "make cargo go npm" "make paxeer-manifest-install"
       ;;
     BUILD)
       add_step paxeer BUILD "Build the Paxeer chain" "." "make go cc" "make paxeer-build"
-      add_step paxeer BUILD "Build the Paxeer documentation site" "." "make npm" "make paxeer-docs-build"
+      add_step paxeer BUILD "Build nested Paxeer contracts, SDKs, examples and documentation" "." "make cargo forge go npm" "make paxeer-manifest-build"
       ;;
     TEST)
       add_step paxeer TEST "Run the Paxeer chain test suite" "." "make go cc" "make paxeer-test"
-      add_step paxeer TEST "Run Paxeer documentation static checks" "." "make npm" "make paxeer-docs-static-test"
+      add_step paxeer TEST "Test nested Paxeer contracts, SDKs, examples and documentation" "." "make cargo forge go npm" "make paxeer-manifest-test"
       ;;
   esac
 }

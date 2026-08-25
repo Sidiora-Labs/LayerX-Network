@@ -1,0 +1,24 @@
+# kind|path|classification
+foundry|paxeer-network/foundry.toml|build_test_lint
+foundry|paxeer-network/loadtest/contracts/evm/foundry.toml|non_buildable_fixture_missing_foundry_libs
+go|paxeer-network/go.mod|build_test_lint
+go|paxeer-network/hpx/registry/go.mod|build_test_lint
+go|paxeer-network/sdk/cosmovisor/go.mod|build_test_lint
+go|paxeer-network/sdk/ics23/go.mod|build_test_lint
+npm|paxeer-network/contracts/package.json|build_static_live_test_blocked
+npm|paxeer-network/integration_test/dapp_tests/package.json|build_static_live_test_blocked
+npm|paxeer-network/integration_test/rpc_tests/package.json|build_static_live_test_blocked
+npm|paxeer-network/paxeer-docs/package.json|build_static
+rust|paxeer-network/example/cosmwasm/cw1155/Cargo.toml|build_test_lint
+rust|paxeer-network/example/cosmwasm/cw20/Cargo.toml|build_test_lint
+rust|paxeer-network/example/cosmwasm/cw721/Cargo.toml|build_test_lint
+rust|paxeer-network/example/cosmwasm/echo/Cargo.toml|build_test_lint
+rust|paxeer-network/example/cosmwasm/iter/Cargo.toml|build_test_lint
+rust|paxeer-network/loadtest/contracts/jupiter/Cargo.toml|build_test_lint
+rust|paxeer-network/loadtest/contracts/mars/Cargo.toml|build_test_lint
+rust|paxeer-network/loadtest/contracts/saturn/Cargo.toml|build_test_lint
+rust|paxeer-network/loadtest/contracts/venus/Cargo.toml|build_test_lint
+rust|paxeer-network/parallelization/bank/Cargo.toml|non_buildable_fixture_missing_lock
+rust|paxeer-network/parallelization/staking/Cargo.toml|non_buildable_fixture_missing_lock
+rust|paxeer-network/parallelization/wasm/Cargo.toml|non_buildable_fixture_missing_lock
+rust|paxeer-network/wasm-runtime/libwasmvm/Cargo.toml|build_test_lint

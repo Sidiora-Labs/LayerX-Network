@@ -2342,20 +2342,87 @@ ci: public-audit test reproducible scan-consensus test-sanitizers
 .PHONY: paxeer-build paxeer-lint paxeer-test paxeer-ci paxeer-docs-install \
 	paxeer-docs-build paxeer-docs-static-test developer-dashboard-install \
 	developer-dashboard-build developer-dashboard-static-test specgen-build \
-	specgen-test core-test-all workspace-install workspace-build workspace-test \
-	workspace-ci hpx-public-check monorepo-ci
+	specgen-test specgen-lint core-test-all workspace-install workspace-build workspace-test \
+	workspace-lint workspace-inventory-check workspace-ci hpx-public-check monorepo-ci \
+	paxeer-manifest-install paxeer-manifest-build paxeer-manifest-test \
+	paxeer-manifest-lint paxeer-npm-install paxeer-npm-build paxeer-npm-static-test \
+	paxeer-npm-dependencies-ready core-qualification-environment
+
+PAXEER_LOCKED_RUST_MANIFESTS := \
+	paxeer-network/example/cosmwasm/cw1155/Cargo.toml \
+	paxeer-network/example/cosmwasm/cw20/Cargo.toml \
+	paxeer-network/example/cosmwasm/cw721/Cargo.toml \
+	paxeer-network/example/cosmwasm/echo/Cargo.toml \
+	paxeer-network/example/cosmwasm/iter/Cargo.toml \
+	paxeer-network/loadtest/contracts/jupiter/Cargo.toml \
+	paxeer-network/loadtest/contracts/mars/Cargo.toml \
+	paxeer-network/loadtest/contracts/saturn/Cargo.toml \
+	paxeer-network/loadtest/contracts/venus/Cargo.toml \
+	paxeer-network/wasm-runtime/libwasmvm/Cargo.toml
+
+PAXEER_NESTED_GO_DIRS := paxeer-network/hpx/registry \
+	paxeer-network/sdk/cosmovisor paxeer-network/sdk/ics23
 
 paxeer-build:
-	$(PAXEER_MAKE) build
+	GOPROXY=off $(PAXEER_MAKE) build
 
 paxeer-lint:
 	$(PAXEER_MAKE) lint
 
 paxeer-test:
-	$(PAXEER_MAKE) test
+	GOPROXY=off $(PAXEER_MAKE) test
 
 paxeer-ci:
 	$(PAXEER_MAKE) ci
+
+workspace-inventory-check:
+	sh tools/workspace/check-paxeer-manifests.sh
+	sh tools/workspace/check-core-gates.sh
+
+paxeer-npm-install:
+	npm --prefix paxeer-network/contracts ci --ignore-scripts --no-audit --no-fund
+	npm --prefix paxeer-network/integration_test/dapp_tests ci --ignore-scripts --no-audit --no-fund
+	npm --prefix paxeer-network/integration_test/rpc_tests ci --ignore-scripts --no-audit --no-fund
+	$(MAKE) paxeer-docs-install
+
+paxeer-npm-dependencies-ready:
+	@test -d paxeer-network/contracts/node_modules
+	@test -d paxeer-network/integration_test/dapp_tests/node_modules
+	@test -d paxeer-network/integration_test/rpc_tests/node_modules
+	@test -d paxeer-network/paxeer-docs/node_modules
+
+paxeer-npm-build: paxeer-npm-dependencies-ready
+	npm --prefix paxeer-network/contracts exec hardhat compile
+	npm --prefix paxeer-network/integration_test/dapp_tests exec hardhat compile
+	npm --prefix paxeer-network/integration_test/rpc_tests run compile
+	$(MAKE) paxeer-docs-build
+
+paxeer-npm-static-test: paxeer-npm-dependencies-ready
+	npm --prefix paxeer-network/contracts exec tsc -- --noEmit
+	find paxeer-network/integration_test/dapp_tests -type f -name '*.js' -print0 | xargs -0 -n 1 node --check
+	npm --prefix paxeer-network/integration_test/rpc_tests exec tsc -- --noEmit
+	$(MAKE) paxeer-docs-static-test
+
+paxeer-manifest-install: workspace-inventory-check paxeer-npm-install
+	@set -eu; for manifest in $(PAXEER_LOCKED_RUST_MANIFESTS); do cargo fetch --manifest-path "$$manifest" --locked; done
+	@set -eu; for directory in $(PAXEER_NESTED_GO_DIRS); do (cd "$$directory" && go mod download); done
+
+paxeer-manifest-build: workspace-inventory-check paxeer-npm-build
+	forge build --root paxeer-network
+	@set -eu; for manifest in $(PAXEER_LOCKED_RUST_MANIFESTS); do cargo build --manifest-path "$$manifest" --locked --offline; done
+	@set -eu; for directory in $(PAXEER_NESTED_GO_DIRS); do (cd "$$directory" && GOPROXY=off go build ./...); done
+
+paxeer-manifest-test: workspace-inventory-check paxeer-npm-static-test
+	forge test --root paxeer-network
+	@set -eu; for manifest in $(PAXEER_LOCKED_RUST_MANIFESTS); do cargo test --manifest-path "$$manifest" --locked --offline; done
+	@set -eu; for directory in $(PAXEER_NESTED_GO_DIRS); do (cd "$$directory" && GOPROXY=off go test ./...); done
+
+paxeer-manifest-lint: workspace-inventory-check paxeer-npm-static-test
+	forge fmt --check --root paxeer-network
+	@set -eu; for manifest in $(PAXEER_LOCKED_RUST_MANIFESTS); do cargo clippy --manifest-path "$$manifest" --locked --offline --all-targets -- -D warnings; done
+	@test -z "$$(cd paxeer-network && gofmt -l .)"
+	cd paxeer-network && GOPROXY=off go vet ./... && go mod verify
+	@set -eu; for directory in $(PAXEER_NESTED_GO_DIRS); do (cd "$$directory" && test -z "$$(gofmt -l .)" && GOPROXY=off go vet ./... && go mod verify); done
 
 paxeer-docs-install:
 	npm --prefix paxeer-network/paxeer-docs ci --ignore-scripts --no-audit --no-fund
@@ -2387,6 +2454,10 @@ specgen-build:
 specgen-test:
 	cd spec/specgen && go test ./...
 
+specgen-lint:
+	cd spec/specgen && go vet ./...
+	cd spec/specgen && go run . -check
+
 core-test-all: test test-kernel test-module-ctx test-dispatch test-receipts \
 	test-state-root test-ledger-accounts test-ledger-transfer test-ledger-set \
 	test-ledger-send test-ledger-receive test-ledger-receipt test-asset-registry \
@@ -2399,7 +2470,11 @@ core-test-all: test test-kernel test-module-ctx test-dispatch test-receipts \
 	test-paxeer-bond test-bridge-deposit test-bridge-withdraw test-emergency-exit \
 	test-reserve test-gateway test-gateway-send test-gateway-receive \
 	test-receipt-offline test-layerxd test-tools test-genesis test-genesis-import \
-	test-genesis-reconcile test-legacy-readonly test-shadow
+	test-genesis-reconcile test-legacy-readonly test-shadow \
+	test-replay-golden-local test-contracts qualify-faults qualify-arith \
+	reproducible scan-consensus test-sanitizers test-crypto-sanitizers
+
+core-qualification-environment: test-replay-golden qualify-replay qualify-fuzz
 
 workspace-install:
 	cargo fetch --manifest-path agent/Cargo.toml --locked
@@ -2408,7 +2483,7 @@ workspace-install:
 	cd programs && cargo fetch --locked
 	cargo fetch --manifest-path interop/Cargo.toml --locked
 	$(MAKE) platform-js-install programs-js-install
-	$(MAKE) developer-dashboard-install paxeer-docs-install
+	$(MAKE) developer-dashboard-install paxeer-manifest-install
 	cd platform/sdk/go && go mod download
 	cd platform/sdk/jvm && mvn -q dependency:go-offline
 	cd platform/sdk/dotnet && dotnet restore LayerX.Sdk.csproj --nologo
@@ -2417,16 +2492,19 @@ workspace-install:
 	cd spec/specgen && go mod download
 
 workspace-build: build agent-build human-build platform-build programs-build interop-build \
-	paxeer-build paxeer-docs-build developer-dashboard-build specgen-build
+	paxeer-build paxeer-manifest-build developer-dashboard-build specgen-build
 	forge build
 
 workspace-test: core-test-all agent-test human-test platform-test platform-verify-sdks \
 	platform-test-tooling platform-test-middleware platform-test-reference-apps \
 	platform-test-docs programs-test interop-test paxeer-test \
-	paxeer-docs-static-test developer-dashboard-static-test specgen-test
+	paxeer-manifest-test developer-dashboard-static-test specgen-test
 	forge test
 
-workspace-ci: public-audit workspace-build workspace-test
+workspace-lint: agent-lint human-lint platform-lint programs-lint interop-lint \
+	paxeer-manifest-lint developer-dashboard-static-test specgen-lint
+
+workspace-ci: public-audit workspace-inventory-check workspace-build workspace-test workspace-lint
 
 hpx-public-check:
 	@set -eu; \

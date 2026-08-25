@@ -33,15 +33,15 @@ for expected in core contracts agent human platform programs interop paxeer spec
 done
 
 paxeer_chain_build=0
-paxeer_docs_install=0
+paxeer_manifest_install=0
 truthful_sdk_label=0
 for index in "${!STEP_MODULE[@]}"; do
   [[ "${STEP_COMMAND[index]}" == "make paxeer-build" ]] && paxeer_chain_build=1
-  [[ "${STEP_COMMAND[index]}" == "make paxeer-docs-install" ]] && paxeer_docs_install=1
+  [[ "${STEP_COMMAND[index]}" == "make paxeer-manifest-install" ]] && paxeer_manifest_install=1
   [[ "${STEP_LABEL[index]}" == "Conformance-test Go and JVM SDKs; compile Swift and C sharp SDKs" ]] && truthful_sdk_label=1
 done
 [[ $paxeer_chain_build -eq 1 ]] || fail "full plan omitted the Paxeer chain build"
-[[ $paxeer_docs_install -eq 1 ]] || fail "full plan omitted the locked Paxeer docs install"
+[[ $paxeer_manifest_install -eq 1 ]] || fail "full plan omitted the locked Paxeer manifest install"
 [[ $truthful_sdk_label -eq 1 ]] || fail "SDK plan overstates Swift or C sharp verification"
 
 set_all_modules 0
