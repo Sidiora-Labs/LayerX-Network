@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/eth/filters"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/sidiora-labs/paxeer-network/consensus/libs/bytes"
@@ -222,71 +221,33 @@ func TestBlockAPILatestTagResolves(t *testing.T) {
 	}
 }
 
-// TestGetBlockTransactionCountByHashGenesis verifies that the genesis block hash returned by
-// eth_getBlockByNumber("0x0") is accepted by eth_getBlockTransactionCountByHash (consistency).
-func TestGetBlockTransactionCountByHashGenesis(t *testing.T) {
+func TestSyntheticGenesisIsNotFabricatedWithoutCanonicalConsensus(t *testing.T) {
 	t.Parallel()
 
 	api := NewBlockAPI(nil, nil, testCtxProvider, testTxConfigProvider, ConnectionTypeHTTP, nil, nil, nil)
-	count, err := api.GetBlockTransactionCountByHash(context.Background(), genesisBlockHash)
-	require.NoError(t, err)
-	require.NotNil(t, count)
-	require.Equal(t, hexutil.Uint(0), *count)
-}
+	retiredSyntheticHash := common.HexToHash("0xF9D3845DF25B43B1C6926F3CEDA6845C17F5624E12212FD8847D0BA01DA1AB9E")
 
-func TestGetBlockTransactionCountByNumberGenesis(t *testing.T) {
-	t.Parallel()
-
-	api := NewBlockAPI(nil, nil, testCtxProvider, testTxConfigProvider, ConnectionTypeHTTP, nil, nil, nil)
 	count, err := api.GetBlockTransactionCountByNumber(context.Background(), 0)
-	require.NoError(t, err)
-	require.NotNil(t, count)
-	require.Equal(t, hexutil.Uint(0), *count)
-}
+	require.Error(t, err)
+	require.Nil(t, count)
 
-func TestGetBlockReceiptsGenesis(t *testing.T) {
-	t.Parallel()
+	receipts, err := api.GetBlockReceipts(context.Background(), rpc.BlockNumberOrHashWithNumber(0))
+	require.Error(t, err)
+	require.Nil(t, receipts)
 
-	api := NewBlockAPI(nil, nil, testCtxProvider, testTxConfigProvider, ConnectionTypeHTTP, nil, nil, nil)
-	receipts, err := api.GetBlockReceipts(context.Background(), rpc.BlockNumberOrHashWithHash(genesisBlockHash, true))
-	require.NoError(t, err)
-	require.NotNil(t, receipts)
-	require.Empty(t, receipts)
-}
-
-func TestGetBlockReceiptsGenesisByNumber(t *testing.T) {
-	t.Parallel()
-
-	api := NewBlockAPI(nil, nil, testCtxProvider, testTxConfigProvider, ConnectionTypeHTTP, nil, nil, nil)
-	n := rpc.BlockNumber(0)
-	receipts, err := api.GetBlockReceipts(context.Background(), rpc.BlockNumberOrHashWithNumber(n))
-	require.NoError(t, err)
-	require.NotNil(t, receipts)
-	require.Empty(t, receipts)
-}
-
-func TestGetBlockByNumberExcludeTraceFailGenesis(t *testing.T) {
-	t.Parallel()
-
-	api := NewPaxBlockAPI(nil, nil, testCtxProvider, testTxConfigProvider, ConnectionTypeHTTP, nil, nil, nil)
-	block, err := api.GetBlockByNumberExcludeTraceFail(context.Background(), 0, false)
-	require.NoError(t, err)
-	require.NotNil(t, block)
-	require.Equal(t, genesisBlockHashHex, block["hash"])
-}
-
-func TestGetBlockNumberByNrOrHashGenesis(t *testing.T) {
-	t.Parallel()
+	paxAPI := NewPaxBlockAPI(nil, nil, testCtxProvider, testTxConfigProvider, ConnectionTypeHTTP, nil, nil, nil)
+	block, err := paxAPI.GetBlockByNumberExcludeTraceFail(context.Background(), 0, false)
+	require.Error(t, err)
+	require.Nil(t, block)
 
 	height, err := GetBlockNumberByNrOrHash(
 		context.Background(),
 		nil,
 		nil,
-		rpc.BlockNumberOrHashWithHash(genesisBlockHash, true),
+		rpc.BlockNumberOrHashWithHash(retiredSyntheticHash, true),
 	)
-	require.NoError(t, err)
-	require.NotNil(t, height)
-	require.Equal(t, int64(0), *height)
+	require.Error(t, err)
+	require.Nil(t, height)
 }
 
 func TestLogFetcherSkipsUnavailableCachedBlock(t *testing.T) {

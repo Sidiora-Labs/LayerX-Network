@@ -45,8 +45,12 @@ func TestGetBlockByNumber(t *testing.T) {
 	SetupTestServer(t, [][][]byte{{txBz1}, {txBz2}, {txBz3}}, mnemonicInitializer(mnemonic1)).Run(
 		func(port int) {
 			res := sendRequestWithNamespace("eth", port, "getBlockByNumber", "earliest", true)
-			blockHash := res["result"].(map[string]interface{})["hash"]
-			require.Equal(t, "0xF9D3845DF25B43B1C6926F3CEDA6845C17F5624E12212FD8847D0BA01DA1AB9E", blockHash.(string))
+			earliestBlock := res["result"].(map[string]interface{})
+			blockHash := earliestBlock["hash"]
+			require.NotEqual(t, common.Hash{}.Hex(), blockHash.(string))
+			require.NotEqual(t, common.Hash{}.Hex(), earliestBlock["stateRoot"].(string))
+			require.NotEqual(t, common.Hash{}.Hex(), earliestBlock["transactionsRoot"].(string))
+			require.NotEqual(t, common.Hash{}.Hex(), earliestBlock["receiptsRoot"].(string))
 			res = sendRequestWithNamespace("eth", port, "getBlockByNumber", "safe", true)
 			blockHash = res["result"].(map[string]interface{})["hash"]
 			require.Equal(t, "0x8ace0b4e9ced0ef792034128d37eb19b9b2b06bf016d51d533216a9afd7c0e8f", blockHash.(string))

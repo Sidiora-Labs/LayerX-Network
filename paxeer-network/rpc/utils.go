@@ -49,11 +49,6 @@ var ErrBlockNotFoundByHash = errors.New("block not found by hash")
 // GetBlockNumberByNrOrHash returns the height of the block with the given number or hash.
 func GetBlockNumberByNrOrHash(ctx context.Context, tmClient client.LocalClient, wm *WatermarkManager, blockNrOrHash rpc.BlockNumberOrHash) (*int64, error) {
 	if blockNrOrHash.BlockHash != nil {
-		// Synthetic genesis from eth_getBlockByNumber("0x0") is not stored under this hash in Tendermint.
-		if *blockNrOrHash.BlockHash == genesisBlockHash {
-			z := int64(0)
-			return &z, nil
-		}
 		block, err := blockByHashRespectingWatermarks(ctx, tmClient, wm, blockNrOrHash.BlockHash[:], 1)
 		if err != nil {
 			return nil, err

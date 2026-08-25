@@ -1881,6 +1881,14 @@ observed = "Post-implementation review found the scheduler's version-indexed cac
 assumption = "Human qualification must run OCC scheduler retries, aborts, nested message caches, iterator conflicts and repeated Write calls; verify one publication per incarnation; exercise old and store-v2 nested caches across pruning and historical export; and prove only root multistores produce working hashes or historical export views. VersionIndexedStore.CacheWrap and CacheWrapWithTrace remain explicit unsupported invariants because the scheduler installs the version store beneath a newly created cachekv branch and no production caller recursively wraps it directly; qualification must preserve that topology. No build, test, format or runtime result is asserted by this source repair."
 severity = "consensus-safety"
 
+[observation.37.1.21]
+task = "37.1"
+file = "paxeer-network/rpc/block.go, paxeer-network/rpc/utils.go"
+symbol = "BlockAPI.GetBlockByNumber, BlockAPI.GetBlockByHash, BlockAPI.GetBlockReceipts, GetBlockNumberByNrOrHash"
+observed = "Post-implementation review found block zero bypassed consensus and receipt storage to return a hard-coded synthetic hash with zero state, transaction and receipt roots, while related hash, count and receipt methods treated that invented object as canonical for Graph compatibility. The repair removes the synthetic object and every special lookup: block zero and earliest requests now follow the same bounded consensus, watermark, receipt and root validation paths as every other height, returning null or an error when no canonical block exists. Source regressions now require a live earliest block to carry non-zero backend-derived commitments and reject the retired synthetic hash when no consensus producer is configured."
+assumption = "Human qualification must query explicit block zero, earliest and the retired synthetic hash on fresh and historical Paxeer chains, verify the exact response follows the chain's configured initial height, and prove Graph consumers handle canonical null or error results rather than depending on fabricated commitments. No build, RPC execution, Graph replay, test, format or passing result is asserted by this source repair."
+severity = "consensus-safety"
+
 [observation.11.1.1]
 task = "11.1"
 file = "agent/crates/layerx-agentd/src/budget/create.rs, agent/crates/layerx-agentd/src/sign_verify.rs, agent/crates/layerx-agentd/tests/budget_create.rs, human/crates/layerx-human-service/tests/agent_create.rs, human/crates/layerx-human-service/tests/agent_controls.rs"

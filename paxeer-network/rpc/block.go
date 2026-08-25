@@ -33,40 +33,6 @@ const (
 	Pax2Namespace = "pax2"
 )
 
-// genesisBlockHashHex is the block hash returned by GetBlockByNumber("0x0"). Hash-based lookups
-// must recognize this so that count/block-by-hash stay consistent with block-by-number.
-const genesisBlockHashHex = "0xF9D3845DF25B43B1C6926F3CEDA6845C17F5624E12212FD8847D0BA01DA1AB9E"
-
-var genesisBlockHash = common.HexToHash(genesisBlockHashHex)
-
-// genesisBlockTxCount is the transaction count for the synthetic genesis block (eth_getBlockTransactionCountByHash/ByNumber for genesis).
-var genesisBlockTxCount = func() *hexutil.Uint { u := hexutil.Uint(0); return &u }()
-
-func encodeGenesisBlock() map[string]any {
-	return map[string]any{
-		"number":           (*hexutil.Big)(big.NewInt(0)),
-		"hash":             genesisBlockHashHex,
-		"parentHash":       common.Hash{},
-		"nonce":            ethtypes.BlockNonce{},   // inapplicable to Pax
-		"mixHash":          common.Hash{},           // inapplicable to Pax
-		"sha3Uncles":       ethtypes.EmptyUncleHash, // inapplicable to Pax
-		"logsBloom":        ethtypes.Bloom{},
-		"stateRoot":        common.Hash{},
-		"miner":            common.Address{},
-		"difficulty":       (*hexutil.Big)(big.NewInt(0)), // inapplicable to Pax
-		"extraData":        hexutil.Bytes{},               // inapplicable to Pax
-		"gasLimit":         hexutil.Uint64(0),
-		"gasUsed":          hexutil.Uint64(0),
-		"timestamp":        hexutil.Uint64(0),
-		"transactionsRoot": common.Hash{},
-		"receiptsRoot":     common.Hash{},
-		"size":             hexutil.Uint64(0),
-		"uncles":           []common.Hash{}, // inapplicable to Pax
-		"transactions":     []any{},
-		"baseFeePerGas":    (*hexutil.Big)(big.NewInt(0)),
-	}
-}
-
 type BlockAPI struct {
 	tmClient             client.LocalClient
 	keeper               *keeper.Keeper
@@ -146,10 +112,6 @@ func NewPax2BlockAPI(
 }
 
 func (a *PaxBlockAPI) GetBlockByNumberExcludeTraceFail(ctx context.Context, number rpc.BlockNumber, fullTx bool) (result map[string]interface{}, returnErr error) {
-	// Match eth_getBlockByNumber("0x0"): synthetic genesis, not the Tendermint block at height 0.
-	if number == 0 {
-		return encodeGenesisBlock(), nil
-	}
 	// Exclude synthetic txs (filterTransactions drops them) and ante-failure
 	// stub receipts (EncodeTmBlock drops them via excludeUntraceable).
 	return a.getBlockByNumber(ctx, number, fullTx, false, true)
@@ -165,9 +127,6 @@ func (a *BlockAPI) GetBlockTransactionCountByNumber(ctx context.Context, number 
 	defer func() {
 		recordMetricsWithError(ctx, fmt.Sprintf("%s_getBlockTransactionCountByNumber", a.namespace), a.connectionType, startTime, returnErr, recover())
 	}()
-	if number == 0 {
-		return genesisBlockTxCount, nil
-	}
 	numberPtr, err := getBlockNumber(ctx, a.tmClient, number)
 	if err != nil {
 		return nil, err
@@ -194,9 +153,6 @@ func (a *BlockAPI) GetBlockTransactionCountByHash(ctx context.Context, blockHash
 	defer func() {
 		recordMetricsWithError(ctx, fmt.Sprintf("%s_getBlockTransactionCountByHash", a.namespace), a.connectionType, startTime, returnErr, recover())
 	}()
-	if blockHash == genesisBlockHash {
-		return genesisBlockTxCount, nil
-	}
 	// Ethereum JSON-RPC: non-existent block hash => null, not an error.
 	block, err := blockByHashOrNullForJSONRPC(ctx, a.tmClient, a.watermarks, blockHash[:], 1)
 	if err != nil {
@@ -229,9 +185,6 @@ func (a *BlockAPI) getBlockByHash(ctx context.Context, blockHash common.Hash, fu
 	if blockHash == (common.Hash{}) {
 		return nil, nil
 	}
-	if blockHash == genesisBlockHash {
-		return encodeGenesisBlock(), nil
-	}
 	// Ethereum JSON-RPC: non-existent block hash (unknown OR above safe latest)
 	// => null, not an error. The helper handles both cases.
 	block, err := blockByHashOrNullForJSONRPC(ctx, a.tmClient, a.watermarks, blockHash[:], 1)
@@ -256,10 +209,6 @@ func (a *BlockAPI) GetBlockByNumber(ctx context.Context, number rpc.BlockNumber,
 	defer func() {
 		recordMetricsWithError(ctx, fmt.Sprintf("%s_getBlockByNumber", a.namespace), a.connectionType, startTime, returnErr, recover())
 	}()
-	if number == 0 {
-		// for compatibility with the graph, always return genesis block
-		return encodeGenesisBlock(), nil
-	}
 	return a.getBlockByNumber(ctx, number, fullTx, a.includeShellReceipts, false)
 }
 
@@ -302,14 +251,6 @@ func (a *BlockAPI) GetBlockReceipts(ctx context.Context, blockNrOrHash rpc.Block
 	// Ethereum spec: empty or non-existent block hash returns result=null, not error.
 	if blockNrOrHash.BlockHash != nil && *blockNrOrHash.BlockHash == (common.Hash{}) {
 		return nil, nil
-	}
-	// Synthetic genesis (eth_getBlockByNumber("0x0")): empty receipts without TM/watermarks.
-	// Callers may pass the genesis hash or the literal block number 0x0 (parsed as number, not hash).
-	if blockNrOrHash.BlockHash != nil && *blockNrOrHash.BlockHash == genesisBlockHash {
-		return []map[string]any{}, nil
-	}
-	if blockNrOrHash.BlockNumber != nil && *blockNrOrHash.BlockNumber == 0 {
-		return []map[string]any{}, nil
 	}
 	// Ethereum JSON-RPC: non-existent / above-watermark block => null, not an error.
 	// Dispatch on hash vs number directly so a nil heightPtr from getBlockNumber
