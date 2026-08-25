@@ -10,7 +10,6 @@ struct lxp_gateway_invoice_registry {
     lxp_gateway_invoice_record records[LXP_GATEWAY_INVOICE_CAPACITY];
     size_t count;
     pthread_mutex_t coordination_mutex;
-    _Atomic(lx_account_registry *) owner_accounts;
     atomic_size_t active_users;
     atomic_uint lifecycle;
 };

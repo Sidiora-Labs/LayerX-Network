@@ -66,6 +66,7 @@ lxp_gateway_invoice_registry *lxp_gateway_invoice_registry_create(
     lx_account_registry *owner_accounts,
     lxp_result *status);
 lxp_result lxp_gateway_invoice_registry_destroy(
+    lx_account_registry *owner_accounts,
     lxp_gateway_invoice_registry **registry);
 
 lxp_result lxp_payment_requirement_encode(
@@ -85,6 +86,7 @@ lxp_result lxp_gateway_translate(
     uint8_t canonical[LXP_PAYMENT_REQUIREMENT_ENCODED_SIZE],
     size_t *canonical_length);
 lxp_result lxp_gateway_invoice_state(
+    lx_account_registry *owner_accounts,
     lxp_gateway_invoice_registry *registry,
     const uint8_t invoice_id[32],
     const uint8_t idempotency_key[32],

@@ -562,7 +562,8 @@ int main(void)
             &replay_receipt) != LXP_ERR_GRANT_REVOKED ||
         world.payer->balance.lo != 70U || world.service->balance.lo != 30U)
         return 1;
-    return lxp_gateway_invoice_registry_destroy(&world.invoices) != LXP_OK ||
+    return lxp_gateway_invoice_registry_destroy(
+               &world.accounts, &world.invoices) != LXP_OK ||
            lxp_gateway_invoice_registry_destroy(
-               &race_world.invoices) != LXP_OK;
+               &race_world.accounts, &race_world.invoices) != LXP_OK;
 }

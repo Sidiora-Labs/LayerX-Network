@@ -28,6 +28,7 @@ typedef struct settlement_thread {
 } settlement_thread;
 
 typedef struct invoice_lookup_thread {
+    lx_account_registry *accounts;
     lxp_gateway_invoice_registry *registry;
     uint8_t invoice_id[32];
     uint8_t idempotency_key[32];
@@ -48,7 +49,8 @@ static void *lookup_concurrently(void *argument)
 {
     invoice_lookup_thread *thread = (invoice_lookup_thread *)argument;
     thread->status = lxp_gateway_invoice_state(
-        thread->registry, thread->invoice_id, thread->idempotency_key,
+        thread->accounts, thread->registry, thread->invoice_id,
+        thread->idempotency_key,
         &thread->receipt, &thread->settled);
     return NULL;
 }
@@ -262,7 +264,7 @@ int main(void)
         lxp_gateway_invoice_registry *alternate_invoices = NULL;
         lxp_gateway_invoice_registry *competing_invoices = NULL;
         lxp_gateway_invoice_registry *race_invoices = NULL;
-        lxp_gateway_invoice_registry *destroyed;
+        lxp_gateway_invoice_registry *replacement_invoices = NULL;
         lxp_gateway_settlement_context mismatched = gateway.settlement;
         invoice_lookup_thread lookup;
         pthread_t lookup_worker;
@@ -273,7 +275,7 @@ int main(void)
         (void)memset(&race_accounts, 0, sizeof(race_accounts));
         (void)memset(&lookup, 0, sizeof(lookup));
         if (lxp_gateway_invoice_state(
-                alternate_invoices, requirement.invoice_id,
+                NULL, alternate_invoices, requirement.invoice_id,
                 send.idempotency_key, &unused_receipt,
                 &settled) != LXP_ERR_NON_CANONICAL ||
             lx_account_registry_init(&alternate_accounts) != LXP_OK)
@@ -293,6 +295,7 @@ int main(void)
             &race_accounts, &create_status);
         if (race_invoices == NULL || create_status != LXP_OK)
             return 1;
+        lookup.accounts = &race_accounts;
         lookup.registry = race_invoices;
         lxp_gateway_registry_test_pause_before_activation();
         if (pthread_create(
@@ -300,12 +303,22 @@ int main(void)
             return 1;
         while (!lxp_gateway_registry_test_activation_paused())
             (void)sched_yield();
-        if (lxp_gateway_invoice_registry_destroy(&race_invoices) != LXP_OK ||
-            race_invoices != NULL)
+        if (lxp_gateway_invoice_registry_destroy(
+                &race_accounts, &race_invoices) != LXP_ERR_IO ||
+            race_invoices == NULL)
             return 1;
         lxp_gateway_registry_test_release_activation();
         if (pthread_join(lookup_worker, NULL) != 0 ||
-            lookup.status != LXP_ERR_IO)
+            lookup.status != LXP_OK || lookup.settled ||
+            lxp_gateway_invoice_registry_destroy(
+                &race_accounts, &race_invoices) != LXP_OK ||
+            race_invoices != NULL)
+            return 1;
+        replacement_invoices = lxp_gateway_invoice_registry_create(
+            &race_accounts, &create_status);
+        if (replacement_invoices == NULL || create_status != LXP_OK ||
+            lxp_gateway_invoice_registry_destroy(
+                &race_accounts, &replacement_invoices) != LXP_OK)
             return 1;
         mismatched.invoices = alternate_invoices;
         if (lxp_gateway_send_settle(
@@ -314,26 +327,27 @@ int main(void)
             gateway.payer->balance.lo != 100U ||
             gateway.payee->balance.lo != 0U)
             return 1;
-        atomic_store(&alternate_invoices->active_users, 1U);
-        if (lxp_gateway_invoice_registry_destroy(
-                &alternate_invoices) != LXP_ERR_IO)
+        if (lxp_gateway_registry_enter(
+                alternate_invoices, &alternate_accounts) != LXP_OK)
             return 1;
-        atomic_store(&alternate_invoices->active_users, 0U);
+        if (lxp_gateway_invoice_registry_destroy(
+                &alternate_accounts, &alternate_invoices) != LXP_ERR_IO ||
+            lxp_gateway_registry_leave(alternate_invoices) != LXP_OK)
+            return 1;
         alternate_invoices->records[0].receipt.signature[0] = 0xa5U;
         alternate_invoices->count = 1U;
-        destroyed = alternate_invoices;
         if (lxp_gateway_invoice_registry_destroy(
-                &alternate_invoices) != LXP_OK ||
-            alternate_invoices != NULL ||
-            destroyed->count != 0U ||
-            destroyed->records[0].receipt.signature[0] != 0U ||
+                &alternate_accounts, &alternate_invoices) != LXP_OK ||
+                alternate_invoices != NULL ||
             lxp_gateway_invoice_registry_destroy(
+                &alternate_accounts,
                 &alternate_invoices) != LXP_ERR_NON_CANONICAL)
             return 1;
-        mismatched.invoices = destroyed;
-        if (lxp_gateway_send_settle(
-                &requirement, &send, &mismatched,
-                &unused_receipt) != LXP_ERR_NON_CANONICAL)
+        replacement_invoices = lxp_gateway_invoice_registry_create(
+            &alternate_accounts, &create_status);
+        if (replacement_invoices == NULL || create_status != LXP_OK ||
+            lxp_gateway_invoice_registry_destroy(
+                &alternate_accounts, &replacement_invoices) != LXP_OK)
             return 1;
     }
     payer_before = *gateway.payer;
@@ -460,7 +474,10 @@ int main(void)
             &direct_receipt) != LXP_ERR_EXPIRED ||
         direct.payer->balance.lo != 75U || direct.payee->balance.lo != 25U)
         return 1;
-    return lxp_gateway_invoice_registry_destroy(&gateway.invoices) != LXP_OK ||
-           lxp_gateway_invoice_registry_destroy(&direct.invoices) != LXP_OK ||
-           lxp_gateway_invoice_registry_destroy(&concurrent.invoices) != LXP_OK;
+    return lxp_gateway_invoice_registry_destroy(
+               &gateway.accounts, &gateway.invoices) != LXP_OK ||
+           lxp_gateway_invoice_registry_destroy(
+               &direct.accounts, &direct.invoices) != LXP_OK ||
+           lxp_gateway_invoice_registry_destroy(
+               &concurrent.accounts, &concurrent.invoices) != LXP_OK;
 }

@@ -644,8 +644,16 @@ lxp_result lxp_snapshot_load(const uint8_t *snapshot, size_t snapshot_length,
                 (uint16_t)LXP_PROTOCOL_VERSION_OCCUPANCY) {
             struct lxp_gateway_invoice_registry *gateway_owner =
                 atomic_load(&live_accounts->gateway_owner);
+            size_t gateway_acquirers =
+                atomic_load(&live_accounts->gateway_acquirers);
+            bool gateway_transition =
+                atomic_load(&live_accounts->gateway_transition);
             *live_accounts = *accounts;
             atomic_store(&live_accounts->gateway_owner, gateway_owner);
+            atomic_store(&live_accounts->gateway_acquirers,
+                         gateway_acquirers);
+            atomic_store(&live_accounts->gateway_transition,
+                         gateway_transition);
             kernel->state->account_root_required = true;
         }
         kernel->state->count = state->count;
