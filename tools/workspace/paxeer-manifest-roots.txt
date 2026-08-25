@@ -1,6 +1,6 @@
 # kind|path|classification
 foundry|paxeer-network/foundry.toml|build_test_lint
-foundry|paxeer-network/loadtest/contracts/evm/foundry.toml|non_buildable_fixture_missing_foundry_libs
+foundry|paxeer-network/loadtest/contracts/evm/foundry.toml|build_test_lint
 go|paxeer-network/go.mod|build_test_lint
 go|paxeer-network/hpx/registry/go.mod|build_test_lint
 go|paxeer-network/sdk/cosmovisor/go.mod|build_test_lint
@@ -18,7 +18,7 @@ rust|paxeer-network/loadtest/contracts/jupiter/Cargo.toml|build_test_lint
 rust|paxeer-network/loadtest/contracts/mars/Cargo.toml|build_test_lint
 rust|paxeer-network/loadtest/contracts/saturn/Cargo.toml|build_test_lint
 rust|paxeer-network/loadtest/contracts/venus/Cargo.toml|build_test_lint
-rust|paxeer-network/parallelization/bank/Cargo.toml|non_buildable_fixture_missing_lock
-rust|paxeer-network/parallelization/staking/Cargo.toml|non_buildable_fixture_missing_lock
-rust|paxeer-network/parallelization/wasm/Cargo.toml|non_buildable_fixture_missing_lock
+rust|paxeer-network/parallelization/bank/Cargo.toml|build_test_lint
+rust|paxeer-network/parallelization/staking/Cargo.toml|build_test_lint
+rust|paxeer-network/parallelization/wasm/Cargo.toml|build_test_lint
 rust|paxeer-network/wasm-runtime/libwasmvm/Cargo.toml|build_test_lint

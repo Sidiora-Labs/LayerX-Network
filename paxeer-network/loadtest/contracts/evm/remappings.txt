@@ -1,5 +1,3 @@
-@openzeppelin/=lib/openzeppelin-contracts/
-ds-test/=lib/forge-std/lib/ds-test/src/
-erc4626-tests/=lib/openzeppelin-contracts/lib/erc4626-tests/
-forge-std/=lib/forge-std/src/
-openzeppelin-contracts/=lib/openzeppelin-contracts/
+@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/
+@openzeppelin/proxy/=lib/openzeppelin-contracts/contracts/proxy/
+solmate/=lib/solmate/src/

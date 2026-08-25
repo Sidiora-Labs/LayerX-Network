@@ -15,11 +15,9 @@ optimizer_runs = 1_000
 fuzz_runs = 1_000
 # Configure remappings
 remappings = [
-  "@ds=lib/ds-test/src/",
-  "@std=lib/forge-std/src/",
-  "@solmate=lib/solmate/src/",
-  "@clones=lib/clones-with-immutable-args/src/",
-  "@openzeppelin=lib/openzeppelin-contracts/contracts/"
+  "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/",
+  "@openzeppelin/proxy/=lib/openzeppelin-contracts/contracts/proxy/",
+  "solmate/=lib/solmate/src/"
 ]
 
 src = "src"

@@ -17,14 +17,9 @@ while IFS='|' read -r kind path classification; do
     test -s "$path"
     case "$classification" in
         build_test_lint|build_static_live_test_blocked|build_static) ;;
-        non_buildable_fixture_missing_foundry_libs)
-            test "$kind" = foundry
-            test ! -d "${path%/foundry.toml}/lib"
-            ;;
-        non_buildable_fixture_missing_lock)
-            test "$kind" = rust
-            test ! -e "${path%/Cargo.toml}/Cargo.lock"
-            ;;
         *) echo "unknown Paxeer manifest classification: $classification" >&2; exit 1 ;;
     esac
+    if test "$kind" = rust; then
+        test -s "${path%/Cargo.toml}/Cargo.lock"
+    fi
 done < "$inventory"

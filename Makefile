@@ -2346,7 +2346,7 @@ ci: public-audit test reproducible scan-consensus test-sanitizers
 	workspace-lint workspace-inventory-check workspace-ci hpx-public-check monorepo-ci \
 	paxeer-manifest-install paxeer-manifest-build paxeer-manifest-test \
 	paxeer-manifest-lint paxeer-npm-install paxeer-npm-build paxeer-npm-static-test \
-	paxeer-npm-dependencies-ready core-qualification-environment
+	paxeer-node-preflight paxeer-npm-dependencies-ready core-qualification-environment
 
 PAXEER_LOCKED_RUST_MANIFESTS := \
 	paxeer-network/example/cosmwasm/cw1155/Cargo.toml \
@@ -2358,6 +2358,9 @@ PAXEER_LOCKED_RUST_MANIFESTS := \
 	paxeer-network/loadtest/contracts/mars/Cargo.toml \
 	paxeer-network/loadtest/contracts/saturn/Cargo.toml \
 	paxeer-network/loadtest/contracts/venus/Cargo.toml \
+	paxeer-network/parallelization/bank/Cargo.toml \
+	paxeer-network/parallelization/staking/Cargo.toml \
+	paxeer-network/parallelization/wasm/Cargo.toml \
 	paxeer-network/wasm-runtime/libwasmvm/Cargo.toml
 
 PAXEER_NESTED_GO_DIRS := paxeer-network/hpx/registry \
@@ -2379,7 +2382,10 @@ workspace-inventory-check:
 	sh tools/workspace/check-paxeer-manifests.sh
 	sh tools/workspace/check-core-gates.sh
 
-paxeer-npm-install:
+paxeer-node-preflight:
+	@node -e 'const major=Number(process.versions.node.split(".")[0]); if (major < 20) { console.error(`Node >=20 required; found $${process.version}`); process.exit(1); }'
+
+paxeer-npm-install: paxeer-node-preflight
 	npm --prefix paxeer-network/contracts ci --ignore-scripts --no-audit --no-fund
 	npm --prefix paxeer-network/integration_test/dapp_tests ci --ignore-scripts --no-audit --no-fund
 	npm --prefix paxeer-network/integration_test/rpc_tests ci --ignore-scripts --no-audit --no-fund
@@ -2392,15 +2398,15 @@ paxeer-npm-dependencies-ready:
 	@test -d paxeer-network/paxeer-docs/node_modules
 
 paxeer-npm-build: paxeer-npm-dependencies-ready
-	npm --prefix paxeer-network/contracts exec hardhat compile
-	npm --prefix paxeer-network/integration_test/dapp_tests exec hardhat compile
+	npm --prefix paxeer-network/contracts exec -- hardhat compile
+	npm --prefix paxeer-network/integration_test/dapp_tests exec -- hardhat compile
 	npm --prefix paxeer-network/integration_test/rpc_tests run compile
 	$(MAKE) paxeer-docs-build
 
 paxeer-npm-static-test: paxeer-npm-dependencies-ready
-	npm --prefix paxeer-network/contracts exec tsc -- --noEmit
+	npm --prefix paxeer-network/contracts exec -- tsc --noEmit
 	find paxeer-network/integration_test/dapp_tests -type f -name '*.js' -print0 | xargs -0 -n 1 node --check
-	npm --prefix paxeer-network/integration_test/rpc_tests exec tsc -- --noEmit
+	npm --prefix paxeer-network/integration_test/rpc_tests exec -- tsc --noEmit
 	$(MAKE) paxeer-docs-static-test
 
 paxeer-manifest-install: workspace-inventory-check paxeer-npm-install
@@ -2409,16 +2415,22 @@ paxeer-manifest-install: workspace-inventory-check paxeer-npm-install
 
 paxeer-manifest-build: workspace-inventory-check paxeer-npm-build
 	forge build --root paxeer-network
+	sh paxeer-network/loadtest/contracts/evm/setup.sh
+	forge build --root paxeer-network/loadtest/contracts/evm
 	@set -eu; for manifest in $(PAXEER_LOCKED_RUST_MANIFESTS); do cargo build --manifest-path "$$manifest" --locked --offline; done
 	@set -eu; for directory in $(PAXEER_NESTED_GO_DIRS); do (cd "$$directory" && GOPROXY=off go build ./...); done
 
 paxeer-manifest-test: workspace-inventory-check paxeer-npm-static-test
 	forge test --root paxeer-network
+	sh paxeer-network/loadtest/contracts/evm/setup.sh
+	forge test --root paxeer-network/loadtest/contracts/evm
 	@set -eu; for manifest in $(PAXEER_LOCKED_RUST_MANIFESTS); do cargo test --manifest-path "$$manifest" --locked --offline; done
 	@set -eu; for directory in $(PAXEER_NESTED_GO_DIRS); do (cd "$$directory" && GOPROXY=off go test ./...); done
 
 paxeer-manifest-lint: workspace-inventory-check paxeer-npm-static-test
 	forge fmt --check --root paxeer-network
+	sh paxeer-network/loadtest/contracts/evm/setup.sh
+	forge fmt --check --root paxeer-network/loadtest/contracts/evm
 	@set -eu; for manifest in $(PAXEER_LOCKED_RUST_MANIFESTS); do cargo clippy --manifest-path "$$manifest" --locked --offline --all-targets -- -D warnings; done
 	@test -z "$$(cd paxeer-network && gofmt -l .)"
 	cd paxeer-network && GOPROXY=off go vet ./... && go mod verify
