@@ -214,7 +214,11 @@ static lxp_result account_registry_preview(
     live = ctx->kernel->state->accounts;
     if (live == NULL || live->count > LX_ACCOUNT_REGISTRY_CAPACITY)
         return LXP_ERR_NON_CANONICAL;
-    *preview = *live;
+    status = lx_account_registry_init(preview);
+    if (status != LXP_OK) return status;
+    preview->count = live->count;
+    (void)memcpy(preview->accounts, live->accounts,
+                 live->count * sizeof(live->accounts[0]));
     for (i = 0U; i < ctx->staged_account_count; ++i) {
         lx_account *committed;
         status = lx_account_registration_commit(

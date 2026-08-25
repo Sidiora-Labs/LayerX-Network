@@ -488,7 +488,7 @@ lxp_result lxp_snapshot_load(const uint8_t *snapshot, size_t snapshot_length,
         accounts = malloc(sizeof(*accounts));
         if (accounts == NULL) status = LXP_ERR_IO;
         else {
-            (void)memset(accounts, 0, sizeof(*accounts));
+            status = lx_account_registry_init(accounts);
             state->accounts = accounts;
             state->account_root_required = true;
         }
@@ -642,18 +642,11 @@ lxp_result lxp_snapshot_load(const uint8_t *snapshot, size_t snapshot_length,
     if (status == LXP_OK) {
         if (snapshot_version ==
                 (uint16_t)LXP_PROTOCOL_VERSION_OCCUPANCY) {
-            struct lxp_gateway_invoice_registry *gateway_owner =
-                atomic_load(&live_accounts->gateway_owner);
-            size_t gateway_acquirers =
-                atomic_load(&live_accounts->gateway_acquirers);
-            bool gateway_transition =
-                atomic_load(&live_accounts->gateway_transition);
-            *live_accounts = *accounts;
-            atomic_store(&live_accounts->gateway_owner, gateway_owner);
-            atomic_store(&live_accounts->gateway_acquirers,
-                         gateway_acquirers);
-            atomic_store(&live_accounts->gateway_transition,
-                         gateway_transition);
+            live_accounts->count = accounts->count;
+            (void)memset(live_accounts->accounts, 0,
+                         sizeof(live_accounts->accounts));
+            (void)memcpy(live_accounts->accounts, accounts->accounts,
+                         accounts->count * sizeof(accounts->accounts[0]));
             kernel->state->account_root_required = true;
         }
         kernel->state->count = state->count;
