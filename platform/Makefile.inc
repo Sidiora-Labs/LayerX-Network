@@ -10,7 +10,7 @@ PLATFORM_MANIFEST := platform/Cargo.toml
 	platform-real-ios-integration platform-real-android-integration \
 	platform-test-docs platform-hosted-smoke platform-test-agent-install \
 	platform-policy-install platform-sample-preflight platform-sample-install platform-sample-dependencies-ready \
-	platform-install-local-artifacts platform-dependencies-install
+	platform-install-local-artifacts platform-dependencies-install platform-gradle-qualification
 
 PLATFORM_PYTHON_ENV := $(CURDIR)/build/platform-python
 PLATFORM_MAVEN_REPOSITORY ?= $(HOME)/.m2/repository
@@ -24,7 +24,6 @@ platform-sample-preflight:
 	@command -v go >/dev/null || { echo "Go is required for Platform samples" >&2; exit 1; }
 	@command -v cargo >/dev/null || { echo "Cargo is required for Platform samples" >&2; exit 1; }
 	@command -v mvn >/dev/null || { echo "Maven is required for Platform samples" >&2; exit 1; }
-	@command -v gradle >/dev/null || { echo "Gradle is required for the Android sample" >&2; exit 1; }
 	@command -v swift >/dev/null || { echo "Swift is required for Platform SDK and sample dependency resolution" >&2; exit 1; }
 	@command -v dotnet >/dev/null || { echo "dotnet is required for the C sharp sample" >&2; exit 1; }
 
@@ -35,15 +34,20 @@ platform-sample-install: platform-sample-preflight
 	cd platform/sdk/go && go mod download
 	cd platform/docs/samples/first-payment-go && go mod download
 	cargo fetch --manifest-path platform/docs/samples/verify-receipt-rust/Cargo.toml --locked
+	cargo fetch --manifest-path platform/examples/marketplace/program/Cargo.toml --locked
 	@set -eu; for pom in platform/sdk/jvm/pom.xml platform/integrations/spring/pom.xml platform/integrations/android/pom.xml \
+		platform/integrations/spring/example/pom.xml \
 		platform/docs/samples/first-payment-jvm/pom.xml platform/docs/samples/paid-endpoint-spring/pom.xml \
 		platform/docs/samples/mobile-payment-android/pom.xml; do \
 		mvn -q -f "$$pom" dependency:go-offline -DexcludeGroupIds=com.sidiora.layerx; \
 	done
-	swift package resolve --package-path platform/sdk/swift
-	swift package resolve --package-path platform/integrations/ios
-	swift package resolve --package-path platform/docs/samples/first-payment-swift
-	swift package resolve --package-path platform/docs/samples/mobile-payment-ios
+	@set -eu; \
+		sdk_lock=$$(sha256sum platform/sdk/swift/Package.resolved | awk '{print $$1}'); \
+		ios_lock=$$(sha256sum platform/integrations/ios/Package.resolved | awk '{print $$1}'); \
+		swift package --package-path platform/sdk/swift --force-resolved-versions resolve; \
+		swift package --package-path platform/integrations/ios --force-resolved-versions resolve; \
+		test "$$(sha256sum platform/sdk/swift/Package.resolved | awk '{print $$1}')" = "$$sdk_lock"; \
+		test "$$(sha256sum platform/integrations/ios/Package.resolved | awk '{print $$1}')" = "$$ios_lock"
 	dotnet restore platform/sdk/dotnet/LayerX.Sdk.csproj --nologo
 	dotnet restore platform/docs/samples/first-payment-csharp/FirstPayment.csproj --nologo
 
@@ -52,7 +56,6 @@ platform-sample-dependencies-ready:
 	@$(PLATFORM_PYTHON_ENV)/bin/python -c 'import importlib.metadata as m; assert m.version("layerx-sdk") == "0.1.0"; assert m.version("layerx-fastapi") == "0.1.0"'
 	@test -s platform/docs/samples/verify-receipt-rust/Cargo.lock
 	@command -v mvn >/dev/null || { echo "Maven is required for Platform samples" >&2; exit 1; }
-	@command -v gradle >/dev/null || { echo "Gradle is required for the Android sample" >&2; exit 1; }
 	@command -v swift >/dev/null || { echo "Swift is required for Platform SDK and samples" >&2; exit 1; }
 	@command -v dotnet >/dev/null || { echo "dotnet is required for the C sharp sample" >&2; exit 1; }
 	@test -s $(PLATFORM_MAVEN_REPOSITORY)/com/sidiora/layerx/layerx-sdk/0.1.0/layerx-sdk-0.1.0.jar || { echo "run make platform-dependencies-install to install the local JVM SDK" >&2; exit 1; }
@@ -69,7 +72,10 @@ platform-dependencies-install: platform-sample-preflight
 	$(MAKE) platform-policy-install
 	$(MAKE) platform-sample-install
 	$(MAKE) platform-install-local-artifacts
-	gradle --no-daemon -p platform/integrations/android/sample-app dependencies
+
+platform-gradle-qualification:
+	@echo "Android Gradle sample is qualification-blocked: commit a checksum-pinned wrapper and dependency verification metadata" >&2
+	@exit 1
 
 platform-js-install:
 	npm ci --workspaces --include-workspace-root --ignore-scripts --no-audit --no-fund
@@ -82,7 +88,9 @@ platform-build:
 platform-build-all: platform-build platform-sample-dependencies-ready
 	npm run build --workspaces --if-present
 	cd platform/sdk/go && GOPROXY=off go build ./...
+	cargo build --offline --locked --manifest-path platform/examples/marketplace/program/Cargo.toml --release
 	mvn -o -q -f platform/sdk/jvm/pom.xml -DskipTests package
+	mvn -o -q -f platform/integrations/spring/example/pom.xml -DskipTests package
 	dotnet build platform/sdk/dotnet/LayerX.Sdk.csproj --no-restore --configuration Release --nologo
 	swift build --disable-automatic-resolution --package-path platform/sdk/swift
 	$(PLATFORM_PYTHON_ENV)/bin/python -m compileall -q agent/sdk/python platform/integrations/fastapi
@@ -90,6 +98,7 @@ platform-build-all: platform-build platform-sample-dependencies-ready
 platform-lint:
 	$(PLATFORM_CARGO) clippy --offline --manifest-path $(PLATFORM_MANIFEST) --locked --workspace --all-targets -- -D warnings
 	$(PLATFORM_CARGO) run --offline --manifest-path $(PLATFORM_MANIFEST) --locked -p layerx-platform-workspace-gate -- platform/workspace.kvx .
+	cargo clippy --offline --locked --manifest-path platform/examples/marketplace/program/Cargo.toml --all-targets -- -D warnings
 	sh platform/tools/dependency-policy.sh
 	cargo deny --disable-fetch --manifest-path $(PLATFORM_MANIFEST) check advisories bans sources
 
@@ -202,7 +211,7 @@ platform-test-reference-apps:
 
 platform-test-mobile-artifacts: platform-test-android-artifact platform-test-ios-artifact
 
-platform-test-android-artifact: platform-sample-dependencies-ready
+platform-test-android-artifact: platform-sample-dependencies-ready platform-gradle-qualification
 	gradle --offline --no-daemon -p platform/integrations/android/sample-app layerxSecretScanRelease \
 		-Playerx.serviceUrl=https://platform.example.com \
 		-Playerx.sessionBrokerUrl=https://app-backend.example.com/layerx/session \

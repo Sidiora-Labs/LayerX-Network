@@ -2346,7 +2346,10 @@ ci: public-audit test reproducible scan-consensus test-sanitizers
 	workspace-lint workspace-inventory-check workspace-ci hpx-public-check monorepo-ci \
 	paxeer-manifest-install paxeer-manifest-build paxeer-manifest-test \
 	paxeer-manifest-lint paxeer-npm-install paxeer-npm-build paxeer-npm-static-test \
-	paxeer-node-preflight paxeer-npm-dependencies-ready core-qualification-environment
+	workspace-node-preflight paxeer-node-preflight paxeer-npm-dependencies-ready core-qualification-environment
+
+workspace-node-preflight:
+	@node -e 'const major=Number(process.versions.node.split(".")[0]); if (major < 24) { console.error(`Node >=24 required by workspace packages; found $${process.version}`); process.exit(1); }'
 
 PAXEER_LOCKED_RUST_MANIFESTS := \
 	paxeer-network/example/cosmwasm/cw1155/Cargo.toml \
@@ -2490,6 +2493,7 @@ core-test-all: test test-kernel test-module-ctx test-dispatch test-receipts \
 core-qualification-environment: test-replay-golden qualify-replay qualify-fuzz
 
 workspace-install:
+	$(MAKE) workspace-node-preflight
 	cargo fetch --manifest-path agent/Cargo.toml --locked
 	cargo fetch --manifest-path human/Cargo.toml --locked
 	cargo fetch --manifest-path platform/Cargo.toml --locked
