@@ -1,14 +1,17 @@
 PLATFORM_CARGO ?= cargo
 PLATFORM_MANIFEST := platform/Cargo.toml
 
-.PHONY: platform-build platform-lint platform-test platform-sdk-check \
-	platform-sdk-generate platform-test-sdks platform-release-check platform-release-plan \
+.PHONY: platform-js-install platform-build platform-lint platform-test platform-sdk-check \
+	platform-sdk-generate platform-verify-sdks platform-test-sdks platform-release-check platform-release-plan \
 	platform-test-tooling platform-emulator-conformance platform-test-middleware \
 	platform-test-reference-apps platform-test-mobile-artifacts \
 	platform-test-android-artifact platform-test-ios-artifact \
 	platform-real-agent-integration \
 	platform-real-ios-integration platform-real-android-integration \
 	platform-test-docs platform-hosted-smoke platform-test-agent-install
+
+platform-js-install:
+	npm ci --workspaces --include-workspace-root --ignore-scripts --no-audit --no-fund
 
 platform-build:
 	$(PLATFORM_CARGO) build --manifest-path $(PLATFORM_MANIFEST) --locked --workspace
@@ -84,13 +87,15 @@ platform-sdk-generate:
 	python3 platform/sdk/generators/generate_jvm.py $(CURDIR)
 	$(PLATFORM_CARGO) run --manifest-path $(PLATFORM_MANIFEST) --locked -p layerx-platform-sdkgen -- --write
 
-platform-test-sdks: platform-sdk-check
+platform-verify-sdks: platform-sdk-check
 	sh platform/sdk/conformance/run-go.sh $(CURDIR)
 	sh platform/sdk/conformance/run-jvm.sh $(CURDIR)
 	command -v swift >/dev/null
 	swift build --package-path platform/sdk/swift
 	command -v dotnet >/dev/null
 	dotnet build platform/sdk/dotnet/LayerX.Sdk.csproj --configuration Release --nologo
+
+platform-test-sdks: platform-verify-sdks
 
 platform-release-check:
 	$(PLATFORM_CARGO) run --manifest-path $(PLATFORM_MANIFEST) --locked -p layerx-platform-release -- --check platform/release/registries.kvx
@@ -99,11 +104,12 @@ platform-release-plan:
 	$(PLATFORM_CARGO) run --manifest-path $(PLATFORM_MANIFEST) --locked -p layerx-platform-release -- --plan platform/release/registries.kvx
 
 platform-test-middleware:
-	cd platform/middleware/seller && npm install --no-audit --no-fund && npm run build
-	cd platform/middleware/buyer && npm install --no-audit --no-fund && npm run build
-	cd platform/middleware/merchant && npm install --no-audit --no-fund && npm run build
-	cd platform/middleware/agent && npm install --no-audit --no-fund && npm run build
-	cd platform/middleware/conformance && npm install --no-audit --no-fund && npm run build && npm run conformance
+	npm run build --workspace @sidiora/layerx-seller-middleware
+	npm run build --workspace @sidiora/layerx-buyer-middleware
+	npm run build --workspace @sidiora/layerx-merchant-middleware
+	npm run build --workspace @sidiora/layerx-agent-middleware
+	npm run build --workspace @sidiora/layerx-middleware-conformance
+	npm run conformance --workspace @sidiora/layerx-middleware-conformance
 	node --check platform/examples/merchant-shop/index.mjs
 	node --check platform/examples/merchant-checkout/index.mjs
 	node --check platform/examples/buyer-agent/index.mjs
@@ -112,16 +118,15 @@ platform-test-middleware:
 	node --check platform/examples/support/runtime.mjs
 	node --check platform/examples/support/merchant-app.mjs
 	node --check platform/examples/agent-spend/index.mjs
-	cd platform/integrations/express && npm install --no-audit --no-fund && npm run build
-	cd platform/integrations/next && npm install --no-audit --no-fund && npm run build
-	npm install --no-audit --no-fund --workspace @sidiora/layerx-example-next
+	npm run build --workspace @sidiora/layerx-express
+	npm run build --workspace @sidiora/layerx-next
 	npm run build --workspace @sidiora/layerx-example-next
 	npm run scan --workspace @sidiora/layerx-example-next
 	PYTHONPATH=agent/sdk/python:platform/integrations/fastapi python3 -m compileall -q \
 		platform/integrations/fastapi/layerx_fastapi platform/integrations/fastapi/examples
 	mvn -q -f platform/sdk/jvm/pom.xml -DskipTests install
 	mvn -q -f platform/integrations/spring/pom.xml -DskipTests install
-	cd platform/integrations/agents && npm install --no-audit --no-fund && npm run build
+	npm run build --workspace @sidiora/layerx-agent-integrations
 	mvn -q -f platform/integrations/android/pom.xml -DskipTests verify
 	command -v swift >/dev/null
 	swift build --package-path platform/integrations/ios
@@ -167,10 +172,6 @@ platform-real-android-integration:
 platform-test-docs: platform-test-reference-apps
 	sh platform/tools/docs-gate $(CURDIR)
 	command -v node >/dev/null
-	npm install --no-audit --no-fund \
-		--workspace @sidiora/layerx-doc-first-payment-typescript \
-		--workspace @sidiora/layerx-doc-paid-endpoint-express \
-		--workspace @sidiora/layerx-doc-paid-route-next
 	python3 -m pip install --quiet -r platform/docs/samples/first-payment-python/requirements.txt
 	python3 -m pip install --quiet -r platform/docs/samples/paid-endpoint-fastapi/requirements.txt
 	python3 -m compileall -q platform/docs/samples/first-payment-python platform/docs/samples/paid-endpoint-fastapi

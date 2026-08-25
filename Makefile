@@ -1643,6 +1643,10 @@ public-audit:
 agent-build:
 	$(AGENT_CARGO) build --manifest-path $(AGENT_MANIFEST) --locked --workspace
 
+.PHONY: human-js-install
+human-js-install:
+	$(HUMAN_NPM) ci --ignore-scripts --no-audit --no-fund
+
 human-gen-api:
 	$(HUMAN_CARGO) run --manifest-path human/tools/api-gen/Cargo.toml --locked -- human/schema/human-api human/apps/web/src/api/generated
 
@@ -1650,13 +1654,11 @@ human-build:
 	$(HUMAN_CARGO) test --manifest-path human/tools/api-gen/Cargo.toml --locked
 	$(HUMAN_CARGO) run --manifest-path human/tools/api-gen/Cargo.toml --locked -- --check human/schema/human-api human/apps/web/src/api/generated
 	$(HUMAN_CARGO) build --manifest-path $(HUMAN_MANIFEST) --locked --workspace
-	$(HUMAN_NPM) ci
 	$(HUMAN_NPM) run build
 
 human-test: $(BUILD_DIR)/tests/explorer_fixture
 	LAYERX_EXPLORER_CORE_FIXTURE=$(abspath $(BUILD_DIR)/tests/explorer_fixture) \
 		$(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked --workspace
-	$(HUMAN_NPM) ci
 	$(HUMAN_NPM) test
 
 human-test-unit:
@@ -1743,16 +1745,13 @@ human-test-fault:
 	$(HUMAN_CARGO) test --manifest-path $(HUMAN_MANIFEST) --locked -p layerx-human-service --test move_money
 
 human-test-component:
-	$(HUMAN_NPM) ci
 	$(HUMAN_NPM) run test:component
 
 human-e2e-foundation:
-	$(HUMAN_NPM) ci
 	$(HUMAN_NPM) run test:foundation
 	$(HUMAN_NPM) run build
 
 human-e2e-perf:
-	$(HUMAN_NPM) ci
 	$(HUMAN_NPM) run build
 	HUMAN_E2E_REAL_STACK=1 \
 	HUMAN_E2E_LOCAL_PRODUCTION=1 \
@@ -1761,11 +1760,9 @@ human-e2e-perf:
 		$(HUMAN_NPM) run test:perf
 
 human-test-journey:
-	$(HUMAN_NPM) ci
 	$(HUMAN_NPM) run test:journey
 
 human-e2e-journeys:
-	$(HUMAN_NPM) ci
 	$(HUMAN_NPM) run build
 	HUMAN_E2E_REAL_STACK=1 \
 	HUMAN_E2E_LOCAL_PRODUCTION=1 \
@@ -1773,7 +1770,6 @@ human-e2e-journeys:
 		$(HUMAN_NPM) run test:journey
 
 human-e2e-settings:
-	$(HUMAN_NPM) ci
 	$(HUMAN_NPM) run build
 	HUMAN_E2E_REAL_STACK=1 \
 	HUMAN_E2E_LOCAL_PRODUCTION=1 \
@@ -1781,7 +1777,6 @@ human-e2e-settings:
 		$(HUMAN_NPM) run test:settings
 
 human-e2e-explorer:
-	$(HUMAN_NPM) ci
 	$(HUMAN_NPM) run build
 	HUMAN_E2E_REAL_STACK=1 \
 	HUMAN_E2E_LOCAL_PRODUCTION=1 \
@@ -1789,15 +1784,12 @@ human-e2e-explorer:
 		$(HUMAN_NPM) run test:explorer
 
 human-test-e2e:
-	$(HUMAN_NPM) ci
 	$(HUMAN_NPM) run test:e2e
 
 human-test-visual:
-	$(HUMAN_NPM) ci
 	$(HUMAN_NPM) run test:visual
 
 human-test-e2e-long:
-	$(HUMAN_NPM) ci
 	$(HUMAN_NPM) run test:e2e -- --repeat-each=5
 
 human-lint: human-lint-copy
@@ -1806,7 +1798,6 @@ human-lint: human-lint-copy
 	$(HUMAN_CARGO) run --manifest-path human/tools/boundary-check/Cargo.toml --locked -- human/crates
 	sh human/tools/dependency-policy.sh
 	cargo deny --manifest-path $(HUMAN_MANIFEST) check advisories bans sources
-	$(HUMAN_NPM) ci
 	$(HUMAN_NPM) run lint
 
 human-lint-copy:
@@ -1820,7 +1811,6 @@ human-check-ui:
 	$(HUMAN_CARGO) clippy --manifest-path human/tools/ui-gate/Cargo.toml --locked --all-targets -- -D warnings
 	$(HUMAN_CARGO) test --manifest-path human/tools/ui-gate/Cargo.toml --locked
 	$(HUMAN_CARGO) run --manifest-path human/tools/ui-gate/Cargo.toml --locked -- human/apps/web
-	$(HUMAN_NPM) ci
 	$(HUMAN_NPM) run build:ui
 	$(HUMAN_NPM) run typecheck
 	$(HUMAN_NPM) test
@@ -1831,11 +1821,9 @@ human-check:
 	$(HUMAN_CARGO) run --manifest-path human/tools/boundary-check/Cargo.toml --locked -- human/crates
 	$(HUMAN_CARGO) test --manifest-path human/tools/schema-check/Cargo.toml --locked
 	$(HUMAN_CARGO) run --manifest-path human/tools/schema-check/Cargo.toml --locked -- human/schema/human-api
-	$(HUMAN_NPM) ci
 	$(HUMAN_NPM) run typecheck
 
 human-check-bundle:
-	$(HUMAN_NPM) ci
 	$(HUMAN_NPM) run build
 	$(HUMAN_CARGO) run --manifest-path human/tools/boundary-check/Cargo.toml --locked -- --web-bundle human/apps/web/.next
 
@@ -2351,7 +2339,11 @@ agent-check-secrets:
 
 ci: public-audit test reproducible scan-consensus test-sanitizers
 
-.PHONY: paxeer-build paxeer-lint paxeer-test paxeer-ci hpx-public-check monorepo-ci
+.PHONY: paxeer-build paxeer-lint paxeer-test paxeer-ci paxeer-docs-install \
+	paxeer-docs-build paxeer-docs-static-test developer-dashboard-install \
+	developer-dashboard-build developer-dashboard-static-test specgen-build \
+	specgen-test core-test-all workspace-install workspace-build workspace-test \
+	workspace-ci hpx-public-check monorepo-ci
 
 paxeer-build:
 	$(PAXEER_MAKE) build
@@ -2364,6 +2356,77 @@ paxeer-test:
 
 paxeer-ci:
 	$(PAXEER_MAKE) ci
+
+paxeer-docs-install:
+	npm --prefix paxeer-network/paxeer-docs ci --ignore-scripts --no-audit --no-fund
+
+paxeer-docs-build:
+	npm --prefix paxeer-network/paxeer-docs run build
+
+paxeer-docs-static-test:
+	npm --prefix paxeer-network/paxeer-docs run test:static
+
+developer-dashboard-install:
+	node tools/ci/developer-dashboard-lock.mjs
+	$(MAKE) human-js-install
+	@test ! -e platform/hosted/dashboard/web/node_modules || \
+		test "$$(readlink platform/hosted/dashboard/web/node_modules)" = "../../../../human/apps/web/node_modules"
+	@test -e platform/hosted/dashboard/web/node_modules || \
+		ln -s ../../../../human/apps/web/node_modules platform/hosted/dashboard/web/node_modules
+
+developer-dashboard-build:
+	npm --prefix human/apps/web run build --workspace @layerx/ui
+	npm --prefix platform/hosted/dashboard/web run build
+
+developer-dashboard-static-test:
+	npm --prefix platform/hosted/dashboard/web run test:static
+
+specgen-build:
+	cd spec/specgen && go build ./...
+
+specgen-test:
+	cd spec/specgen && go test ./...
+
+core-test-all: test test-kernel test-module-ctx test-dispatch test-receipts \
+	test-state-root test-ledger-accounts test-ledger-transfer test-ledger-set \
+	test-ledger-send test-ledger-receive test-ledger-receipt test-asset-registry \
+	test-asset-balance test-asset-transfer test-asset-deposit test-asset-withdraw \
+	test-asset-reserve test-escrow-open test-escrow-capture test-escrow-timeout \
+	test-escrow-dispute test-escrow-invariants test-budget-create test-budget-period \
+	test-budget-spend test-budget-delegate test-budget-revoke test-stream-open \
+	test-stream-accrual test-stream-meter test-stream-settle test-stream-lifecycle \
+	test-wave-8 test-wave-9 test-wave-10 test-wave-11 test-wave-12 test-paxeer \
+	test-paxeer-bond test-bridge-deposit test-bridge-withdraw test-emergency-exit \
+	test-reserve test-gateway test-gateway-send test-gateway-receive \
+	test-receipt-offline test-layerxd test-tools test-genesis test-genesis-import \
+	test-genesis-reconcile test-legacy-readonly test-shadow
+
+workspace-install:
+	cargo fetch --manifest-path agent/Cargo.toml --locked
+	cargo fetch --manifest-path human/Cargo.toml --locked
+	cargo fetch --manifest-path platform/Cargo.toml --locked
+	cd programs && cargo fetch --locked
+	cargo fetch --manifest-path interop/Cargo.toml --locked
+	$(MAKE) platform-js-install programs-js-install
+	$(MAKE) developer-dashboard-install paxeer-docs-install
+	cd platform/sdk/go && go mod download
+	cd platform/sdk/jvm && mvn -q dependency:go-offline
+	cd platform/sdk/dotnet && dotnet restore LayerX.Sdk.csproj --nologo
+	cd platform/sdk/swift && swift package resolve
+	cd paxeer-network && go mod download
+	cd spec/specgen && go mod download
+
+workspace-build: build agent-build human-build platform-build programs-build interop-build \
+	paxeer-build paxeer-docs-build developer-dashboard-build specgen-build
+	forge build
+
+workspace-test: core-test-all agent-test human-test platform-test platform-verify-sdks \
+	platform-test-tooling platform-test-middleware platform-test-reference-apps \
+	platform-test-docs programs-test interop-test paxeer-test \
+	paxeer-docs-static-test developer-dashboard-static-test specgen-test
+	forge test
+
+workspace-ci: public-audit workspace-build workspace-test
 
 hpx-public-check:
 	@set -eu; \
@@ -2381,7 +2444,7 @@ hpx-public-check:
 	[ "$$(curl -sS -o /dev/null -w '%{http_code}' "$(HPX_ORIGIN)/")" = 404 ]; \
 	[ "$$(curl -sS -o /dev/null -w '%{http_code}' "$(HPX_ORIGIN)/not-a-public-artifact")" = 404 ]
 
-monorepo-ci: ci paxeer-ci
+monorepo-ci: workspace-ci
 
 -include $(LIB_OBJECTS:.o=.d)
 
@@ -2443,6 +2506,11 @@ PROGRAMS_RUNTIME_LIB := programs/target/debug/liblayerx_programs_runtime.a
 
 .PHONY: programs-build programs-lint programs-test programs-core-test programs-protocol-regression programs-adversarial programs-module-boundaries \
 	programs-fuzz-smoke programs-differential programs-quickstart programs-sdk-rust programs-sdk-c programs-sdk-assemblyscript
+
+.PHONY: programs-js-install
+programs-js-install:
+	npm --prefix programs/sdk/assemblyscript ci --ignore-scripts --no-audit --no-fund
+	npm --prefix programs/sdk/assemblyscript/examples/paid-counter ci --ignore-scripts --no-audit --no-fund
 
 $(PROGRAMS_RUNTIME_LIB):
 	cd programs && $(PROGRAMS_CARGO) build --locked --workspace
@@ -2540,7 +2608,7 @@ programs-sdk-rust:
 	sh programs/sdk/rust/response-fixture/build.sh
 
 programs-sdk-assemblyscript:
-	cd programs/sdk/assemblyscript/examples/paid-counter && npm install --no-audit --no-fund && npm run build && npm run lint
+	cd programs/sdk/assemblyscript/examples/paid-counter && npm run build && npm run lint
 
 programs-quickstart:
 	sh programs/sdk/rust/quickstart/build.sh all

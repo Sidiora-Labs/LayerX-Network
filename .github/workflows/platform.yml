@@ -33,14 +33,16 @@ jobs:
         run: >-
           rustup toolchain install 1.91.1 --profile minimal --component clippy &&
           cargo install cargo-deny --locked --version 0.19.0
+      - name: Install locked platform JavaScript dependencies
+        run: make platform-js-install
       - name: Enforce workspace, dependency, license and audit policies
         run: make platform-lint
       - name: Build the platform workspace and run its drift and release gates
         run: make platform-build
       - name: Test the platform workspace
         run: make platform-test
-      - name: Run generated SDK schema and golden-vector conformance
-        run: make platform-test-sdks
+      - name: Run Go and JVM conformance and compile Swift and C sharp SDKs
+        run: make platform-verify-sdks
       - name: Exercise the developer CLI end to end against the emulator
         run: make platform-test-tooling
       - name: Build the framework integrations and scan client bundles for secrets

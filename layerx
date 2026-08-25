@@ -22,7 +22,7 @@ fi
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-MODULE_IDS=(core contracts agent human platform programs interop specgen)
+MODULE_IDS=(core contracts agent human platform programs interop paxeer specgen)
 MODULE_NAMES=(
   "Protocol core"
   "Paxeer contracts"
@@ -31,6 +31,7 @@ MODULE_NAMES=(
   "Developer platform"
   "Programs"
   "Interop gateway"
+  "Paxeer network"
   "Spec generator"
 )
 MODULE_DESCRIPTIONS=(
@@ -41,6 +42,7 @@ MODULE_DESCRIPTIONS=(
   "CLI, hosted tooling, SDKs and middleware"
   "Deterministic runtime and authoring SDKs"
   "x402, mandates, fiat, mirrors and ramps"
+  "Paxeer chain, node services and documentation"
   "KVX renderer and workflow tooling"
 )
 MODULE_TOOLS=(
@@ -51,9 +53,10 @@ MODULE_TOOLS=(
   "make cargo npm python3 go java mvn dotnet swift"
   "make cargo npm cc"
   "make cargo"
+  "make go npm"
   "go"
 )
-SELECTED=(1 1 1 1 1 1 1 1)
+SELECTED=(1 1 1 1 1 1 1 1 1)
 
 ENV_NAMES=(emulator testnet production)
 ENV_LABELS=(Emulator Testnet Production)
@@ -936,7 +939,7 @@ append_human_steps() {
   case "$1" in
     INSTALL)
       add_step human INSTALL "Fetch locked human workspace crates" "." "cargo" "cargo fetch --manifest-path human/Cargo.toml --locked"
-      add_step human INSTALL "Install locked human web packages" "." "npm" "npm --prefix human/apps/web ci --no-audit --no-fund"
+      add_step human INSTALL "Install locked human web packages" "." "make npm" "make human-js-install"
       ;;
     BUILD) add_step human BUILD "Build the human service and web application" "." "make cargo npm" "make human-build" ;;
     TEST) add_step human TEST "Test the human service and web application" "." "make cargo npm" "make human-test" ;;
@@ -947,7 +950,7 @@ append_platform_steps() {
   case "$1" in
     INSTALL)
       add_step platform INSTALL "Fetch locked platform workspace crates" "." "cargo" "cargo fetch --manifest-path platform/Cargo.toml --locked"
-      add_step platform INSTALL "Install locked JavaScript workspaces" "." "npm" "npm ci --workspaces --include-workspace-root --no-audit --no-fund"
+      add_step platform INSTALL "Install locked JavaScript workspaces" "." "make npm" "make platform-js-install"
       add_step platform INSTALL "Download Go SDK modules" "platform/sdk/go" "go" "go mod download"
       add_step platform INSTALL "Resolve JVM SDK modules" "platform/sdk/jvm" "mvn java" "mvn -q dependency:go-offline"
       add_step platform INSTALL "Restore the C sharp SDK" "platform/sdk/dotnet" "dotnet" "dotnet restore LayerX.Sdk.csproj --nologo"
@@ -964,7 +967,7 @@ append_platform_steps() {
       ;;
     TEST)
       add_step platform TEST "Test the platform Rust workspace" "." "make cargo" "make platform-test"
-      add_step platform TEST "Test every generated SDK" "." "make cargo python3 go mvn java dotnet swift" "make platform-test-sdks"
+      add_step platform TEST "Conformance-test Go and JVM SDKs; compile Swift and C sharp SDKs" "." "make cargo python3 go mvn java dotnet swift" "make platform-verify-sdks"
       add_step platform TEST "Test middleware and framework integrations" "." "make npm python3 mvn java swift" "make platform-test-middleware"
       add_step platform TEST "Test CLI, emulator and hosted tooling" "." "make cargo" "make platform-test-tooling"
       add_step platform TEST "Build and execute documentation samples" "." "make cargo npm python3 go mvn java dotnet swift" "make platform-test-docs"
@@ -975,9 +978,8 @@ append_platform_steps() {
 append_programs_steps() {
   case "$1" in
     INSTALL)
-      add_step programs INSTALL "Fetch locked programs workspace crates" "." "cargo" "cargo fetch --manifest-path programs/Cargo.toml --locked"
-      add_step programs INSTALL "Install locked AssemblyScript SDK packages" "programs/sdk/assemblyscript" "npm" "npm ci --no-audit --no-fund"
-      add_step programs INSTALL "Install locked AssemblyScript example packages" "programs/sdk/assemblyscript/examples/paid-counter" "npm" "npm ci --no-audit --no-fund"
+      add_step programs INSTALL "Validate vendored programs workspace crates" "programs" "cargo" "cargo fetch --locked"
+      add_step programs INSTALL "Install locked AssemblyScript SDK and example packages" "." "make npm" "make programs-js-install"
       ;;
     BUILD)
       add_step programs BUILD "Build deterministic programs workspace" "." "make cargo cc" "make programs-build"
@@ -992,6 +994,23 @@ append_interop_steps() {
     INSTALL) add_step interop INSTALL "Fetch locked interop workspace crates" "." "cargo" "cargo fetch --manifest-path interop/Cargo.toml --locked" ;;
     BUILD) add_step interop BUILD "Build every interop adapter" "." "make cargo" "make interop-build" ;;
     TEST) add_step interop TEST "Test every interop adapter" "." "make cargo" "make interop-test" ;;
+  esac
+}
+
+append_paxeer_steps() {
+  case "$1" in
+    INSTALL)
+      add_step paxeer INSTALL "Download locked Paxeer Go modules" "paxeer-network" "go" "go mod download"
+      add_step paxeer INSTALL "Install locked Paxeer documentation packages" "." "make npm" "make paxeer-docs-install"
+      ;;
+    BUILD)
+      add_step paxeer BUILD "Build the Paxeer chain" "." "make go cc" "make paxeer-build"
+      add_step paxeer BUILD "Build the Paxeer documentation site" "." "make npm" "make paxeer-docs-build"
+      ;;
+    TEST)
+      add_step paxeer TEST "Run the Paxeer chain test suite" "." "make go cc" "make paxeer-test"
+      add_step paxeer TEST "Run Paxeer documentation static checks" "." "make npm" "make paxeer-docs-static-test"
+      ;;
   esac
 }
 
@@ -1012,6 +1031,7 @@ append_module_steps() {
     platform) append_platform_steps "$2" ;;
     programs) append_programs_steps "$2" ;;
     interop) append_interop_steps "$2" ;;
+    paxeer) append_paxeer_steps "$2" ;;
     specgen) append_specgen_steps "$2" ;;
   esac
 }

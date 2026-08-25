@@ -6,6 +6,7 @@
   "engines": { "node": ">=24.0.0" },
   "scripts": {
     "build": "next build",
+    "test:static": "node tests/ui-contract.mjs && tsc --noEmit",
     "start": "next start"
   },
   "dependencies": {

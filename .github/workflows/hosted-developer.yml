@@ -30,9 +30,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: 24.6.0 }
-      - run: node platform/hosted/dashboard/web/tests/ui-contract.mjs
-      - working-directory: platform/hosted/dashboard/web
-        run: npm install --ignore-scripts --no-audit --no-fund && npm run build
+      - run: make developer-dashboard-install developer-dashboard-static-test developer-dashboard-build
   deployment-render:
     runs-on: ubuntu-latest
     steps:

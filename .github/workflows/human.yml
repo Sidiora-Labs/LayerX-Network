@@ -35,6 +35,8 @@ jobs:
           cargo install cargo-deny --locked --version 0.19.0
       - name: Install pinned Foundry toolchain
         uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09 # v1.9.1
+      - name: Install locked Human web dependencies
+        run: make human-js-install
       - name: Enforce component-library integrity, copy, policies, and strict lints
         run: make human-check-ui human-lint human-check
       - name: Build and test the isolated human workspace
