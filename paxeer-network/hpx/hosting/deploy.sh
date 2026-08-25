@@ -11,6 +11,7 @@ DOMAIN="node.hyperpaxeer.com"
 SOURCE_REVISION="${HPX_SOURCE_REVISION:-$(git -C "$MONOREPO_ROOT" rev-parse HEAD)}"
 ARTIFACTS_ROOT="${HPX_ARTIFACTS_ROOT:-/srv/hpx/artifacts}"
 DATA_DIR="${HPX_DATA_DIR:-/srv/hpx/data}"
+WEB_ROOT="${HPX_WEB_ROOT:-/var/www/hpx}"
 REGISTRY_BIN="${HPX_REGISTRY_BIN:-/usr/local/libexec/hpx-registry}"
 ENV_FILE="${HPX_REGISTRY_ENV:-/etc/hpx-registry.env}"
 UNIT_FILE="/etc/systemd/system/hpx-registry.service"
@@ -56,6 +57,8 @@ if ! id hpx-registry >/dev/null 2>&1; then
   useradd --system --home-dir /nonexistent --shell /usr/sbin/nologin hpx-registry
 fi
 install -d -m 0755 /usr/local/libexec "$ARTIFACTS_ROOT" /var/www/certbot
+install -d -m 0755 "$WEB_ROOT"
+install -m 0644 "$SCRIPT_DIR/index.html" "$WEB_ROOT/index.html"
 install -d -o hpx-registry -g hpx-registry -m 0750 "$DATA_DIR"
 install -m 0755 "$tmp/$asset" "${REGISTRY_BIN}.new"
 mv -f "${REGISTRY_BIN}.new" "$REGISTRY_BIN"

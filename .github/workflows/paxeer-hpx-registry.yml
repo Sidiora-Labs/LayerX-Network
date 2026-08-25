@@ -28,6 +28,12 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v5
 
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: paxeer-network/hpx/registry/go.mod
+          cache-dependency-path: paxeer-network/hpx/registry/go.mod
+
       - name: Build revision-bound registry executables
         working-directory: paxeer-network/hpx/registry
         env:

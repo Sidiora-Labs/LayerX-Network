@@ -1,0 +1,682 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#070a09">
+  <meta name="description" content="The public HPX distribution and peer registry for the HyperPax network.">
+  <title>HPX — HyperPax Node Network</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #070a09;
+      --surface: rgba(19, 25, 22, 0.76);
+      --surface-strong: #121815;
+      --line: rgba(208, 255, 225, 0.12);
+      --line-strong: rgba(147, 255, 188, 0.28);
+      --text: #f1f8f3;
+      --muted: #91a198;
+      --green: #8dffb4;
+      --green-strong: #43e97b;
+      --cyan: #82e9ff;
+      --orange: #ffc77d;
+      --mono: "SFMono-Regular", "Cascadia Code", "Roboto Mono", Consolas, monospace;
+      --sans: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      margin: 0;
+      min-width: 320px;
+      overflow-x: hidden;
+      background:
+        radial-gradient(circle at 74% 0%, rgba(53, 197, 111, 0.16), transparent 31rem),
+        radial-gradient(circle at 8% 42%, rgba(53, 180, 219, 0.09), transparent 28rem),
+        var(--bg);
+      color: var(--text);
+      font-family: var(--sans);
+      -webkit-font-smoothing: antialiased;
+    }
+
+    body::before {
+      position: fixed;
+      inset: 0;
+      z-index: -1;
+      background-image:
+        linear-gradient(rgba(255,255,255,0.024) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.024) 1px, transparent 1px);
+      background-size: 48px 48px;
+      mask-image: linear-gradient(to bottom, black, transparent 80%);
+      content: "";
+      pointer-events: none;
+    }
+
+    a { color: inherit; text-decoration: none; }
+    button { font: inherit; }
+
+    .shell {
+      width: min(1180px, calc(100% - 40px));
+      margin: 0 auto;
+    }
+
+    .nav {
+      display: flex;
+      min-height: 86px;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 13px;
+    }
+
+    .brand-mark {
+      display: grid;
+      width: 38px;
+      height: 38px;
+      place-items: center;
+      border: 1px solid rgba(141,255,180,.42);
+      border-radius: 12px;
+      background: linear-gradient(145deg, rgba(141,255,180,.17), rgba(130,233,255,.05));
+      box-shadow: inset 0 0 24px rgba(141,255,180,.08), 0 8px 30px rgba(0,0,0,.28);
+    }
+
+    .brand-mark svg { width: 21px; height: 21px; }
+
+    .brand-copy { display: grid; gap: 1px; }
+    .brand-name { font-weight: 750; letter-spacing: -.02em; }
+    .brand-sub {
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 9px;
+      letter-spacing: .17em;
+      text-transform: uppercase;
+    }
+
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 28px;
+      color: #bdc9c1;
+      font-size: 14px;
+    }
+
+    .nav-links a { transition: color .18s ease; }
+    .nav-links a:hover { color: var(--green); }
+
+    .github-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 14px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(255,255,255,.025);
+    }
+
+    .hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1.35fr) minmax(320px, .65fr);
+      gap: clamp(46px, 8vw, 112px);
+      align-items: center;
+      min-height: 650px;
+      padding: 76px 0 86px;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 24px;
+      color: var(--green);
+      font-family: var(--mono);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .16em;
+      text-transform: uppercase;
+    }
+
+    .eyebrow::before {
+      width: 28px;
+      height: 1px;
+      background: currentColor;
+      content: "";
+    }
+
+    h1 {
+      max-width: 760px;
+      margin: 0;
+      font-size: clamp(52px, 7.3vw, 96px);
+      font-weight: 720;
+      letter-spacing: -.066em;
+      line-height: .94;
+    }
+
+    h1 span {
+      color: transparent;
+      background: linear-gradient(90deg, var(--green), var(--cyan));
+      -webkit-background-clip: text;
+      background-clip: text;
+    }
+
+    .hero-copy {
+      max-width: 630px;
+      margin: 30px 0 34px;
+      color: #a9b8af;
+      font-size: clamp(17px, 2vw, 20px);
+      line-height: 1.65;
+    }
+
+    .terminal {
+      display: flex;
+      max-width: 690px;
+      min-height: 64px;
+      align-items: center;
+      gap: 14px;
+      padding: 12px 13px 12px 20px;
+      overflow: hidden;
+      border: 1px solid var(--line-strong);
+      border-radius: 16px;
+      background: rgba(5, 8, 7, .84);
+      box-shadow: 0 24px 80px rgba(0,0,0,.34), inset 0 1px rgba(255,255,255,.03);
+    }
+
+    .prompt {
+      flex: 0 0 auto;
+      color: var(--green);
+      font-family: var(--mono);
+      font-weight: 800;
+    }
+
+    .command {
+      min-width: 0;
+      flex: 1;
+      overflow: hidden;
+      color: #d8e4dc;
+      font-family: var(--mono);
+      font-size: 13px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .copy {
+      flex: 0 0 auto;
+      padding: 10px 14px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #17201b;
+      color: #dce8e0;
+      cursor: pointer;
+      font-family: var(--mono);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+      transition: border-color .18s ease, color .18s ease, transform .18s ease;
+    }
+
+    .copy:hover { border-color: var(--green); color: var(--green); }
+    .copy:active { transform: translateY(1px); }
+
+    .assurances {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 18px;
+      margin-top: 22px;
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 11px;
+    }
+
+    .assurances span { display: inline-flex; align-items: center; gap: 7px; }
+    .assurances span::before {
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: var(--green-strong);
+      box-shadow: 0 0 10px rgba(67,233,123,.65);
+      content: "";
+    }
+
+    .pulse-card {
+      position: relative;
+      padding: 1px;
+      border-radius: 24px;
+      background: linear-gradient(145deg, rgba(141,255,180,.42), rgba(130,233,255,.08) 45%, rgba(255,255,255,.05));
+      box-shadow: 0 35px 110px rgba(0,0,0,.38);
+    }
+
+    .pulse-inner {
+      padding: 26px;
+      border-radius: 23px;
+      background: linear-gradient(150deg, rgba(18,25,21,.98), rgba(8,12,10,.98));
+    }
+
+    .pulse-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 28px;
+    }
+
+    .pulse-title {
+      color: #dce8e0;
+      font-family: var(--mono);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .13em;
+      text-transform: uppercase;
+    }
+
+    .status {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      color: var(--orange);
+      font-family: var(--mono);
+      font-size: 10px;
+      text-transform: uppercase;
+    }
+
+    .status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: currentColor;
+      box-shadow: 0 0 14px currentColor;
+    }
+
+    .status.online { color: var(--green); }
+
+    .stat-grid { display: grid; gap: 1px; background: var(--line); }
+
+    .stat {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 20px;
+      align-items: end;
+      padding: 18px 0;
+      background: #0d1310;
+    }
+
+    .stat:first-child { padding-top: 4px; }
+    .stat:last-child { padding-bottom: 4px; }
+    .stat-label { color: var(--muted); font-size: 12px; }
+    .stat-value {
+      max-width: 190px;
+      overflow: hidden;
+      color: #edf7f0;
+      font-family: var(--mono);
+      font-size: 12px;
+      text-align: right;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .revision {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      margin-top: 24px;
+      padding: 13px 15px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 10px;
+    }
+
+    .revision code { color: var(--cyan); }
+
+    .section {
+      padding: 98px 0;
+      border-top: 1px solid var(--line);
+    }
+
+    .section-head {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 30px;
+      margin-bottom: 44px;
+    }
+
+    .section-kicker {
+      margin: 0 0 13px;
+      color: var(--green);
+      font-family: var(--mono);
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: .15em;
+      text-transform: uppercase;
+    }
+
+    h2 {
+      max-width: 650px;
+      margin: 0;
+      font-size: clamp(34px, 4.6vw, 58px);
+      font-weight: 680;
+      letter-spacing: -.045em;
+      line-height: 1.04;
+    }
+
+    .section-note {
+      max-width: 340px;
+      margin: 0;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.65;
+    }
+
+    .feature-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 16px;
+    }
+
+    .feature {
+      min-height: 260px;
+      padding: 26px;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: linear-gradient(145deg, rgba(23,31,27,.74), rgba(11,15,13,.7));
+    }
+
+    .feature-number {
+      display: grid;
+      width: 34px;
+      height: 34px;
+      place-items: center;
+      margin-bottom: 48px;
+      border: 1px solid var(--line-strong);
+      border-radius: 10px;
+      color: var(--green);
+      font-family: var(--mono);
+      font-size: 11px;
+    }
+
+    .feature h3 { margin: 0 0 12px; font-size: 18px; letter-spacing: -.02em; }
+    .feature p { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.65; }
+
+    .surface {
+      display: grid;
+      grid-template-columns: .8fr 1.2fr;
+      gap: clamp(40px, 8vw, 110px);
+      align-items: start;
+    }
+
+    .surface-copy { position: sticky; top: 40px; }
+    .surface-copy p { color: var(--muted); line-height: 1.7; }
+
+    .endpoint-list {
+      border-top: 1px solid var(--line);
+    }
+
+    .endpoint {
+      display: grid;
+      grid-template-columns: 60px minmax(150px, .9fr) 1.2fr 20px;
+      gap: 18px;
+      align-items: center;
+      padding: 19px 0;
+      border-bottom: 1px solid var(--line);
+      transition: color .18s ease, border-color .18s ease;
+    }
+
+    .endpoint:hover { color: var(--green); border-color: var(--line-strong); }
+    .method { color: var(--green); font-family: var(--mono); font-size: 10px; font-weight: 800; }
+    .path { font-family: var(--mono); font-size: 12px; }
+    .purpose { color: var(--muted); font-size: 13px; }
+    .arrow { color: var(--muted); font-size: 17px; }
+
+    .footer {
+      display: flex;
+      min-height: 120px;
+      align-items: center;
+      justify-content: space-between;
+      gap: 24px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .footer code { color: #b8c7be; font-family: var(--mono); }
+
+    @media (max-width: 900px) {
+      .hero { grid-template-columns: 1fr; min-height: auto; padding-top: 64px; }
+      .pulse-card { max-width: 560px; }
+      .feature-grid { grid-template-columns: 1fr; }
+      .feature { min-height: 0; }
+      .feature-number { margin-bottom: 28px; }
+      .surface { grid-template-columns: 1fr; }
+      .surface-copy { position: static; }
+    }
+
+    @media (max-width: 640px) {
+      .shell { width: min(100% - 28px, 1180px); }
+      .nav { min-height: 74px; }
+      .nav-links > a:not(.github-link) { display: none; }
+      .github-link span { display: none; }
+      .hero { padding: 52px 0 70px; }
+      h1 { font-size: clamp(49px, 16vw, 70px); }
+      .terminal { align-items: stretch; flex-wrap: wrap; padding: 15px; }
+      .prompt { align-self: center; }
+      .command { align-self: center; font-size: 11px; }
+      .copy { width: 100%; }
+      .section { padding: 72px 0; }
+      .section-head { display: block; }
+      .section-note { margin-top: 20px; }
+      .endpoint { grid-template-columns: 48px 1fr 18px; }
+      .purpose { display: none; }
+      .footer { align-items: flex-start; flex-direction: column; justify-content: center; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      *, *::before, *::after { animation: none !important; transition: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <header class="shell nav">
+    <a class="brand" href="/" aria-label="HyperPax home">
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none">
+          <path d="M5 7.2 12 3l7 4.2v9.6L12 21l-7-4.2V7.2Z" stroke="#8dffb4" stroke-width="1.4"/>
+          <path d="m8.2 9.1 3.8-2.2 3.8 2.2v5.8L12 17.1l-3.8-2.2V9.1Z" fill="#8dffb4" fill-opacity=".18" stroke="#82e9ff" stroke-width="1.1"/>
+          <circle cx="12" cy="12" r="1.3" fill="#8dffb4"/>
+        </svg>
+      </span>
+      <span class="brand-copy">
+        <span class="brand-name">HyperPax</span>
+        <span class="brand-sub">HPX node network</span>
+      </span>
+    </a>
+    <nav class="nav-links" aria-label="Primary navigation">
+      <a href="#network">Network</a>
+      <a href="#endpoints">Endpoints</a>
+      <a class="github-link" href="https://github.com/Sidiora-Labs/LayerX-Protocol/tree/main/paxeer-network/hpx" rel="noreferrer">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .7A11.5 11.5 0 0 0 8.36 23.1c.58.1.79-.25.79-.56v-2.23c-3.24.7-3.92-1.37-3.92-1.37-.53-1.34-1.29-1.7-1.29-1.7-1.05-.72.08-.71.08-.71 1.16.08 1.78 1.2 1.78 1.2 1.04 1.77 2.71 1.26 3.37.96.1-.75.4-1.26.74-1.55-2.58-.3-5.3-1.29-5.3-5.68 0-1.26.45-2.28 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.16 1.18a10.98 10.98 0 0 1 5.76 0c2.2-1.49 3.16-1.18 3.16-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.83 1.19 3.09 0 4.4-2.72 5.38-5.31 5.67.42.36.79 1.06.79 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .7Z"/></svg>
+        <span>Source</span>
+      </a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="shell hero">
+      <div>
+        <div class="eyebrow">Paxeer public node gateway</div>
+        <h1>Run the network.<br><span>Own the edge.</span></h1>
+        <p class="hero-copy">Install a checksum-verified Paxeer node, discover the live peer set, and operate HyperPax from one authenticated public origin.</p>
+        <div class="terminal" aria-label="HPX installation command">
+          <span class="prompt">$</span>
+          <code class="command" id="install-command">curl -fsSL https://node.hyperpaxeer.com/get-hpx.sh | sudo bash</code>
+          <button class="copy" id="copy-command" type="button">Copy</button>
+        </div>
+        <div class="assurances" aria-label="Distribution properties">
+          <span>SHA-256 verified</span>
+          <span>x86-64 + ARM64</span>
+          <span>Immutable releases</span>
+        </div>
+      </div>
+
+      <aside class="pulse-card" aria-label="Live network status">
+        <div class="pulse-inner">
+          <div class="pulse-head">
+            <span class="pulse-title">Network pulse</span>
+            <span class="status" id="registry-status"><span class="status-dot"></span><span id="registry-label">Checking</span></span>
+          </div>
+          <div class="stat-grid">
+            <div class="stat">
+              <span class="stat-label">Chain</span>
+              <strong class="stat-value" id="chain-id">hyperpax_125-1</strong>
+            </div>
+            <div class="stat">
+              <span class="stat-label">EVM chain ID</span>
+              <strong class="stat-value" id="evm-chain-id">125</strong>
+            </div>
+            <div class="stat">
+              <span class="stat-label">Published release</span>
+              <strong class="stat-value" id="release-id">Checking…</strong>
+            </div>
+            <div class="stat">
+              <span class="stat-label">Discoverable peers</span>
+              <strong class="stat-value" id="peer-count">Checking…</strong>
+            </div>
+          </div>
+          <div class="revision">
+            <span>Registry revision</span>
+            <code id="source-revision">checking</code>
+          </div>
+        </div>
+      </aside>
+    </section>
+
+    <section class="section" id="network">
+      <div class="shell">
+        <div class="section-head">
+          <div>
+            <p class="section-kicker">Operator first</p>
+            <h2>Everything required to join HyperPax.</h2>
+          </div>
+          <p class="section-note">HPX keeps node installation, updates, peer discovery, and state-sync configuration behind one stable interface.</p>
+        </div>
+        <div class="feature-grid">
+          <article class="feature">
+            <span class="feature-number">01</span>
+            <h3>Authenticated distribution</h3>
+            <p>Every binary, native runtime, genesis file, and configuration is checked against the release manifest before installation.</p>
+          </article>
+          <article class="feature">
+            <span class="feature-number">02</span>
+            <h3>One-command operations</h3>
+            <p>Set up, inspect, update, register, refresh peers, configure state sync, and remove a node through the HPX manager.</p>
+          </article>
+          <article class="feature">
+            <span class="feature-number">03</span>
+            <h3>Live peer discovery</h3>
+            <p>The public registry observes announced nodes at the trusted proxy boundary and returns the current HyperPax peer mesh.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="endpoints">
+      <div class="shell surface">
+        <div class="surface-copy">
+          <p class="section-kicker">Public surface</p>
+          <h2>Simple endpoints. Exact artifacts.</h2>
+          <p>Directory listings and undeclared filesystem paths stay unavailable. The published manifest names the distribution boundary.</p>
+        </div>
+        <div class="endpoint-list" aria-label="Public HPX endpoints">
+          <a class="endpoint" href="/healthz"><span class="method">GET</span><span class="path">/healthz</span><span class="purpose">Registry health and revision</span><span class="arrow">↗</span></a>
+          <a class="endpoint" href="/chain-info.json"><span class="method">GET</span><span class="path">/chain-info.json</span><span class="purpose">Chain and release metadata</span><span class="arrow">↗</span></a>
+          <a class="endpoint" href="/checksums.txt"><span class="method">GET</span><span class="path">/checksums.txt</span><span class="purpose">Sorted SHA-256 manifest</span><span class="arrow">↗</span></a>
+          <a class="endpoint" href="/api/peers"><span class="method">GET</span><span class="path">/api/peers</span><span class="purpose">Current peer discovery</span><span class="arrow">↗</span></a>
+          <a class="endpoint" href="/api/nodes"><span class="method">GET</span><span class="path">/api/nodes</span><span class="purpose">Registered node set</span><span class="arrow">↗</span></a>
+          <a class="endpoint" href="/api/statesync"><span class="method">GET</span><span class="path">/api/statesync</span><span class="purpose">Fresh trust parameters</span><span class="arrow">↗</span></a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="shell footer">
+    <span>HyperPax node infrastructure by Sidiora Labs.</span>
+    <code>node.hyperpaxeer.com · TLS secured</code>
+  </footer>
+
+  <script>
+    const command = document.getElementById('install-command').textContent;
+    const copyButton = document.getElementById('copy-command');
+
+    copyButton.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(command);
+      } catch (_) {
+        const field = document.createElement('textarea');
+        field.value = command;
+        field.style.position = 'fixed';
+        field.style.opacity = '0';
+        document.body.appendChild(field);
+        field.select();
+        document.execCommand('copy');
+        field.remove();
+      }
+      copyButton.textContent = 'Copied';
+      window.setTimeout(() => { copyButton.textContent = 'Copy'; }, 1800);
+    });
+
+    const readJSON = async (path) => {
+      const controller = new AbortController();
+      const timer = window.setTimeout(() => controller.abort(), 4500);
+      try {
+        const response = await fetch(path, { cache: 'no-store', signal: controller.signal });
+        if (!response.ok) throw new Error(String(response.status));
+        return await response.json();
+      } finally {
+        window.clearTimeout(timer);
+      }
+    };
+
+    Promise.allSettled([
+      readJSON('/healthz'),
+      readJSON('/chain-info.json'),
+      readJSON('/api/peers')
+    ]).then(([healthResult, chainResult, peersResult]) => {
+      const status = document.getElementById('registry-status');
+      const label = document.getElementById('registry-label');
+
+      if (healthResult.status === 'fulfilled' && healthResult.value.ok) {
+        status.classList.add('online');
+        label.textContent = 'Online';
+        document.getElementById('chain-id').textContent = healthResult.value.chain_id || 'hyperpax_125-1';
+        document.getElementById('source-revision').textContent = (healthResult.value.source_revision || 'unknown').slice(0, 12);
+      } else {
+        label.textContent = 'Unavailable';
+        document.getElementById('source-revision').textContent = 'unavailable';
+      }
+
+      if (chainResult.status === 'fulfilled') {
+        const chain = chainResult.value;
+        document.getElementById('chain-id').textContent = chain.chain_id || 'hyperpax_125-1';
+        document.getElementById('evm-chain-id').textContent = chain.evm_chain_id ?? '125';
+        document.getElementById('release-id').textContent = chain.release_id || 'unknown';
+      } else {
+        document.getElementById('release-id').textContent = 'Unavailable';
+      }
+
+      if (peersResult.status === 'fulfilled') {
+        document.getElementById('peer-count').textContent = String(peersResult.value.count ?? 0);
+      } else {
+        document.getElementById('peer-count').textContent = 'Unavailable';
+      }
+    });
+  </script>
+</body>
+</html>
