@@ -3,8 +3,8 @@ pub mod mcp;
 
 use std::collections::BTreeMap;
 use std::env;
-use std::fs::{self, DirBuilder, Metadata, OpenOptions};
-use std::io::Write as _;
+use std::fs::{self, DirBuilder, File, Metadata, OpenOptions};
+use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
@@ -30,6 +30,7 @@ const SECRET_MARKERS: [&str; 9] = [
     "authorization",
     "credential",
 ];
+const MAX_INSTALLATION_SNAPSHOT_BYTES: usize = 16 * 1024 * 1024;
 
 const HOSTS: [Host; 5] = [
     Host::Layerx,
@@ -131,7 +132,9 @@ pub struct Outcome {
 struct Snapshot {
     path: PathBuf,
     bytes: Option<Zeroizing<Vec<u8>>>,
-    permissions: Option<fs::Permissions>,
+    original: Option<Metadata>,
+    published: Option<Metadata>,
+    publication_in_progress: bool,
 }
 
 pub struct FileTransaction {
@@ -148,81 +151,147 @@ impl FileTransaction {
             {
                 continue;
             }
-            validate_existing_ancestors(path, false)?;
-            let metadata = match fs::symlink_metadata(path) {
-                Ok(metadata) => Some(metadata),
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-                Err(error) => {
-                    return Err(format!("could not inspect {}: {error}", path.display()))
-                }
-            };
-            if metadata
-                .as_ref()
-                .is_some_and(|metadata| metadata.file_type().is_symlink() || !metadata.is_file())
-            {
-                return Err(format!(
-                    "installation target {} must be a regular non-symlink file",
-                    path.display()
-                ));
-            }
-            match fs::read(path) {
-                Ok(bytes) => snapshots.push(Snapshot {
-                    path: path.clone(),
-                    bytes: Some(Zeroizing::new(bytes)),
-                    permissions: Some(
-                        fs::metadata(path)
-                            .map_err(|error| {
-                                format!("could not inspect {}: {error}", path.display())
-                            })?
-                            .permissions(),
-                    ),
-                }),
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            match open_stable_installation_file(path)? {
+                Some((file, metadata)) => {
+                    let mut bytes = Vec::new();
+                    let mut source = file.take((MAX_INSTALLATION_SNAPSHOT_BYTES + 1) as u64);
+                    source
+                        .read_to_end(&mut bytes)
+                        .map_err(|error| {
+                            format!("could not snapshot {}: {error}", path.display())
+                        })?;
+                    if bytes.len() > MAX_INSTALLATION_SNAPSHOT_BYTES {
+                        bytes.zeroize();
+                        return Err(format!(
+                            "installation target {} exceeds its snapshot bound",
+                            path.display()
+                        ));
+                    }
+                    let file = source.into_inner();
+                    let opened = file.metadata().map_err(|error| {
+                        format!("could not inspect opened {}: {error}", path.display())
+                    })?;
+                    let current = fs::symlink_metadata(path).map_err(|error| {
+                        format!("could not re-inspect {}: {error}", path.display())
+                    })?;
+                    if !stable_installation_metadata(&metadata, &opened)
+                        || !stable_installation_metadata(&opened, &current)
+                    {
+                        bytes.zeroize();
+                        return Err(format!("{} changed while it was read", path.display()));
+                    }
                     snapshots.push(Snapshot {
                         path: path.clone(),
-                        bytes: None,
-                        permissions: None,
+                        bytes: Some(Zeroizing::new(bytes)),
+                        original: Some(metadata),
+                        published: None,
+                        publication_in_progress: false,
                     });
                 }
-                Err(error) => {
-                    return Err(format!("could not snapshot {}: {error}", path.display()))
-                }
+                None => snapshots.push(Snapshot {
+                    path: path.clone(),
+                    bytes: None,
+                    original: None,
+                    published: None,
+                    publication_in_progress: false,
+                }),
             }
         }
         Ok(Self { snapshots })
     }
 
+    pub fn begin_publication(&mut self, path: &Path) -> Result<(), String> {
+        let snapshot = self
+            .snapshots
+            .iter_mut()
+            .find(|snapshot| snapshot.path == path)
+            .ok_or_else(|| format!("{} is outside the installation transaction", path.display()))?;
+        if snapshot.publication_in_progress {
+            return Err(format!("{} already has an unresolved publication", path.display()));
+        }
+        snapshot.publication_in_progress = true;
+        Ok(())
+    }
+
+    pub fn finish_publication(&mut self, path: &Path, changed: bool) -> Result<(), String> {
+        let observed = open_stable_installation_file(path)?.map(|(_, metadata)| metadata);
+        let snapshot = self
+            .snapshots
+            .iter_mut()
+            .find(|snapshot| snapshot.path == path)
+            .ok_or_else(|| format!("{} is outside the installation transaction", path.display()))?;
+        if !snapshot.publication_in_progress {
+            return Err(format!("{} has no pending installation publication", path.display()));
+        }
+        if changed {
+            snapshot.published = Some(observed.ok_or_else(|| {
+                format!("{} vanished after installation publication", path.display())
+            })?);
+        } else {
+            let expected = snapshot.published.as_ref().or(snapshot.original.as_ref());
+            if !same_optional_installation_metadata(expected, observed.as_ref()) {
+                return Err(format!("{} changed despite an unchanged publication", path.display()));
+            }
+        }
+        snapshot.publication_in_progress = false;
+        Ok(())
+    }
+
     pub fn rollback(self) -> Result<(), String> {
         let mut failures = Vec::new();
         for snapshot in self.snapshots.into_iter().rev() {
-            match snapshot.bytes {
-                Some(bytes) => {
-                    if let Err(error) = fs::write(&snapshot.path, bytes.as_slice()) {
+            if snapshot.publication_in_progress {
+                failures.push(format!(
+                    "could not safely roll back {}: publication identity is unresolved",
+                    snapshot.path.display()
+                ));
+                continue;
+            }
+            match (snapshot.bytes, snapshot.original, snapshot.published) {
+                (Some(bytes), Some(original), Some(published)) => {
+                    if let Err(error) = restore_snapshot(
+                        &snapshot.path,
+                        bytes.as_slice(),
+                        &published,
+                        original.permissions(),
+                    ) {
                         failures.push(format!(
                             "could not restore {}: {error}",
                             snapshot.path.display()
                         ));
-                        continue;
-                    }
-                    if let Some(permissions) = snapshot.permissions {
-                        if let Err(error) = fs::set_permissions(&snapshot.path, permissions) {
-                            failures.push(format!(
-                                "could not restore permissions on {}: {error}",
-                                snapshot.path.display()
-                            ));
-                        }
                     }
                 }
-                None => match fs::remove_file(&snapshot.path) {
-                    Ok(()) => {}
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(error) => {
+                (Some(_), Some(original), None) => {
+                    if let Err(error) = require_expected_installation_leaf(
+                        &snapshot.path,
+                        Some(&original),
+                    ) {
+                        failures.push(format!(
+                            "could not preserve unchanged {}: {error}",
+                            snapshot.path.display()
+                        ));
+                    }
+                }
+                (None, None, Some(published)) => {
+                    if let Err(error) = remove_created_file(&snapshot.path, &published) {
                         failures.push(format!(
                             "could not remove rolled-back {}: {error}",
                             snapshot.path.display()
                         ));
                     }
-                },
+                }
+                (None, None, None) => {
+                    if let Err(error) = require_expected_installation_leaf(&snapshot.path, None) {
+                        failures.push(format!(
+                            "could not preserve absent {}: {error}",
+                            snapshot.path.display()
+                        ));
+                    }
+                }
+                _ => failures.push(format!(
+                    "could not safely roll back {}: captured state is inconsistent",
+                    snapshot.path.display()
+                )),
             }
         }
         if failures.is_empty() {
@@ -231,6 +300,171 @@ impl FileTransaction {
             Err(failures.join("; "))
         }
     }
+}
+
+fn open_stable_installation_file(path: &Path) -> Result<Option<(File, Metadata)>, String> {
+    validate_existing_ancestors(path, false)?;
+    let expected = match fs::symlink_metadata(path) {
+        Ok(metadata)
+            if metadata.is_file()
+                && !metadata.file_type().is_symlink()
+                && owned_by_current_user(&metadata) => metadata,
+        Ok(_) => {
+            return Err(format!(
+                "installation target {} must be a current-owner regular non-symlink file",
+                path.display()
+            ))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("could not inspect {}: {error}", path.display())),
+    };
+    #[cfg(unix)]
+    let file = {
+        use rustix::fs::{open, Mode, OFlags};
+        File::from(
+            open(
+                path,
+                OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+                Mode::empty(),
+            )
+            .map_err(|error| format!("could not securely open {}: {error}", path.display()))?,
+        )
+    };
+    #[cfg(not(unix))]
+    let file = File::open(path)
+        .map_err(|error| format!("could not open {}: {error}", path.display()))?;
+    let opened = file
+        .metadata()
+        .map_err(|error| format!("could not inspect opened {}: {error}", path.display()))?;
+    let current = fs::symlink_metadata(path)
+        .map_err(|error| format!("could not re-inspect {}: {error}", path.display()))?;
+    if !stable_installation_metadata(&expected, &opened)
+        || !stable_installation_metadata(&opened, &current)
+    {
+        return Err(format!("{} changed while it was opened", path.display()));
+    }
+    Ok(Some((file, expected)))
+}
+
+fn restore_snapshot(
+    path: &Path,
+    bytes: &[u8],
+    expected_current: &Metadata,
+    permissions: fs::Permissions,
+) -> Result<(), String> {
+    validate_existing_ancestors(path, false)?;
+    require_expected_installation_leaf(path, Some(expected_current))?;
+    let temporary = unique_temporary_path(path)?;
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+    let result = (|| {
+        let mut file = options
+            .open(&temporary)
+            .map_err(|error| format!("could not create {}: {error}", temporary.display()))?;
+        file.write_all(bytes)
+            .map_err(|error| format!("could not write {}: {error}", temporary.display()))?;
+        file.set_permissions(permissions)
+            .map_err(|error| format!("could not protect {}: {error}", temporary.display()))?;
+        file.sync_all()
+            .map_err(|error| format!("could not synchronize {}: {error}", temporary.display()))?;
+        let temporary_metadata = file
+            .metadata()
+            .map_err(|error| format!("could not inspect {}: {error}", temporary.display()))?;
+        validate_existing_ancestors(path, false)?;
+        require_expected_installation_leaf(path, Some(expected_current))?;
+        fs::rename(&temporary, path)
+            .map_err(|error| format!("could not atomically restore {}: {error}", path.display()))?;
+        let published = fs::symlink_metadata(path)
+            .map_err(|error| format!("could not inspect restored {}: {error}", path.display()))?;
+        if !stable_installation_metadata(&temporary_metadata, &published) {
+            return Err(format!("{} changed during rollback publication", path.display()));
+        }
+        sync_parent(path)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
+}
+
+fn remove_created_file(path: &Path, expected: &Metadata) -> Result<(), String> {
+    validate_existing_ancestors(path, false)?;
+    require_expected_installation_leaf(path, Some(expected))?;
+    validate_existing_ancestors(path, false)?;
+    require_expected_installation_leaf(path, Some(expected))?;
+    fs::remove_file(path)
+        .map_err(|error| format!("could not remove {}: {error}", path.display()))?;
+    sync_parent(path)
+}
+
+fn installation_leaf_metadata(path: &Path) -> Result<Option<Metadata>, String> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata)
+            if metadata.is_file()
+                && !metadata.file_type().is_symlink()
+                && owned_by_current_user(&metadata) => Ok(Some(metadata)),
+        Ok(_) => Err(format!(
+            "{} is not a current-owner regular non-symlink file",
+            path.display()
+        )),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!("could not inspect {}: {error}", path.display())),
+    }
+}
+
+fn same_optional_installation_metadata(left: Option<&Metadata>, right: Option<&Metadata>) -> bool {
+    match (left, right) {
+        (Some(left), Some(right)) => stable_installation_metadata(left, right),
+        (None, None) => true,
+        _ => false,
+    }
+}
+
+fn require_expected_installation_leaf(
+    path: &Path,
+    expected: Option<&Metadata>,
+) -> Result<(), String> {
+    let observed = installation_leaf_metadata(path)?;
+    if same_optional_installation_metadata(expected, observed.as_ref()) {
+        Ok(())
+    } else {
+        Err(format!("{} changed since its transaction publication", path.display()))
+    }
+}
+
+#[cfg(unix)]
+fn stable_installation_metadata(left: &Metadata, right: &Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+    left.dev() == right.dev()
+        && left.ino() == right.ino()
+        && left.uid() == right.uid()
+        && left.mode() == right.mode()
+}
+
+#[cfg(not(unix))]
+fn stable_installation_metadata(left: &Metadata, right: &Metadata) -> bool {
+    same_file(left, right) && left.permissions().readonly() == right.permissions().readonly()
+}
+
+fn unique_temporary_path(path: &Path) -> Result<PathBuf, String> {
+    let mut random = [0_u8; 16];
+    getrandom::fill(&mut random)
+        .map_err(|error| format!("could not name a private temporary file: {error}"))?;
+    Ok(path.with_extension(format!("tmp-{}", hex_encode(&random))))
+}
+
+fn sync_parent(path: &Path) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("{} has no parent directory", path.display()))?;
+    File::open(parent)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|error| format!("could not synchronize {}: {error}", parent.display()))
 }
 
 pub struct Selection {
@@ -623,7 +857,7 @@ fn write_private(path: &Path, contents: &str) -> Result<(), String> {
     fs::set_permissions(parent, std::os::unix::fs::PermissionsExt::from_mode(0o700))
         .map_err(|error| format!("could not protect {}: {error}", parent.display()))?;
     validate_existing_ancestors(path, true)?;
-    let temporary = path.with_extension(format!("tmp-{}", std::process::id()));
+    let temporary = unique_temporary_path(path)?;
     let result = write_temporary(&temporary, path, contents);
     if result.is_err() {
         let _ = fs::remove_file(&temporary);
@@ -640,6 +874,7 @@ fn write_private(path: &Path, contents: &str) -> Result<(), String> {
 }
 
 fn write_temporary(temporary: &Path, path: &Path, contents: &str) -> Result<(), String> {
+    let before = installation_leaf_metadata(path)?;
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -654,8 +889,22 @@ fn write_temporary(temporary: &Path, path: &Path, contents: &str) -> Result<(), 
         .and_then(|()| file.write_all(b"\n"))
         .and_then(|()| file.sync_all())
         .map_err(|error| format!("could not write {}: {error}", temporary.display()))?;
+    let temporary_metadata = file
+        .metadata()
+        .map_err(|error| format!("could not inspect {}: {error}", temporary.display()))?;
+    validate_existing_ancestors(path, true)?;
+    let after = installation_leaf_metadata(path)?;
+    if !same_optional_installation_metadata(before.as_ref(), after.as_ref()) {
+        return Err(format!("{} changed while publication was prepared", path.display()));
+    }
     fs::rename(temporary, path)
-        .map_err(|error| format!("could not replace {}: {error}", path.display()))
+        .map_err(|error| format!("could not replace {}: {error}", path.display()))?;
+    let published = fs::symlink_metadata(path)
+        .map_err(|error| format!("could not inspect published {}: {error}", path.display()))?;
+    if !stable_installation_metadata(&temporary_metadata, &published) {
+        return Err(format!("{} changed during publication", path.display()));
+    }
+    sync_parent(path)
 }
 
 fn ensure_directory(path: &Path) -> Result<(), String> {

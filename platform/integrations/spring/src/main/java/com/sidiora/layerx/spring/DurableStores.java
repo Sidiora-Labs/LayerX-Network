@@ -10,18 +10,24 @@ import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.channels.FileLock;
 import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.PosixFileAttributeView;
+import java.nio.file.attribute.PosixFilePermissions;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.EnumSet;
+import java.util.List;
 import java.util.Set;
 
 /** Durable, process-safe stores for payment fulfillment and webhook replay state. */
@@ -32,6 +38,7 @@ public final class DurableStores {
         PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE, PosixFilePermission.OWNER_EXECUTE);
     private static final Set<PosixFilePermission> FILE_PERMISSIONS = EnumSet.of(
         PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE);
+    private static final String CURRENT_OWNER = currentOwner();
 
     private DurableStores() {}
 
@@ -43,19 +50,27 @@ public final class DurableStores {
         return new FileDeliveryStore(prepare(root.resolve("webhooks")));
     }
 
-    private static final class FileFulfillmentRepository implements Fulfillments.FulfillmentRepository {
-        private final Path directory;
+    private record DirectoryIdentity(Path path, Object fileKey, String owner,
+                                     Set<PosixFilePermission> permissions) {}
 
-        private FileFulfillmentRepository(Path directory) { this.directory = directory; }
+    private record TrustedDirectory(Path path, List<DirectoryIdentity> ancestors) {}
+
+    private record TrustedFile(Object fileKey, String owner, Set<PosixFilePermission> permissions,
+                               long size) {}
+
+    private static final class FileFulfillmentRepository implements Fulfillments.FulfillmentRepository {
+        private final TrustedDirectory directory;
+
+        private FileFulfillmentRepository(TrustedDirectory directory) { this.directory = directory; }
 
         @Override
         public Fulfillments.StoredFulfillment fulfill(Fulfillments.ProposedFulfillment proposed,
                                                        ResourceRelease release) throws IOException {
             if (proposed == null || release == null) throw new IOException("invalid fulfillment request");
             return locked(directory, () -> {
-                Path path = record(directory, proposed.idempotencyKey());
+                Path path = record(directory.path(), proposed.idempotencyKey());
                 if (Files.exists(path, LinkOption.NOFOLLOW_LINKS)) {
-                    return readFulfillment(path, proposed);
+                    return readFulfillment(directory, path, proposed);
                 }
                 LayerXResource resource = release.release();
                 Fulfillments.StoredFulfillment stored = new Fulfillments.StoredFulfillment(
@@ -68,20 +83,20 @@ public final class DurableStores {
     }
 
     private static final class FileDeliveryStore implements Webhooks.DeliveryStore {
-        private final Path directory;
+        private final TrustedDirectory directory;
 
-        private FileDeliveryStore(Path directory) { this.directory = directory; }
+        private FileDeliveryStore(TrustedDirectory directory) { this.directory = directory; }
 
         @Override
         public Webhooks.ClaimResult claim(Webhooks.DeliveryClaim claim) {
             try {
                 return locked(directory, () -> {
-                    Path path = record(directory, claim.deliveryId());
+                    Path path = record(directory.path(), claim.deliveryId());
                     if (!Files.exists(path, LinkOption.NOFOLLOW_LINKS)) {
                         writeAtomic(directory, path, delivery(claim.payloadDigest(), claim.leaseUntilMs(), false));
                         return Webhooks.ClaimResult.CLAIMED;
                     }
-                    JsonNode stored = readObject(path);
+                    JsonNode stored = readObject(directory, path);
                     String digest = text(stored, "payloadDigest", 128);
                     if (!digest.equals(claim.payloadDigest())) return Webhooks.ClaimResult.CONFLICT;
                     if (stored.path("completed").asBoolean(false)) return Webhooks.ClaimResult.COMPLETED;
@@ -104,13 +119,21 @@ public final class DurableStores {
         public void release(String deliveryId, String payloadDigest) {
             try {
                 locked(directory, () -> {
-                    Path path = record(directory, deliveryId);
+                    Path path = record(directory.path(), deliveryId);
                     if (!Files.exists(path, LinkOption.NOFOLLOW_LINKS)) return null;
-                    JsonNode stored = readObject(path);
+                    JsonNode stored = readObject(directory, path);
                     if (!text(stored, "payloadDigest", 128).equals(payloadDigest)
                             || stored.path("completed").asBoolean(false)) return null;
+                    TrustedFile deleting = trustedFile(path);
+                    if (!sameFile(deleting, trustedFile(path))) {
+                        throw new IOException("durable record changed before deletion");
+                    }
                     Files.delete(path);
-                    syncDirectory(directory);
+                    requireTrustedDirectory(directory);
+                    if (Files.exists(path, LinkOption.NOFOLLOW_LINKS)) {
+                        throw new IOException("durable record remained after deletion");
+                    }
+                    syncDirectory(directory.path());
                     return null;
                 });
             } catch (IOException error) {
@@ -121,11 +144,11 @@ public final class DurableStores {
         private void update(String deliveryId, String payloadDigest, boolean completed) {
             try {
                 locked(directory, () -> {
-                    Path path = record(directory, deliveryId);
+                    Path path = record(directory.path(), deliveryId);
                     if (!Files.exists(path, LinkOption.NOFOLLOW_LINKS)) {
                         throw new IOException("webhook delivery state is missing");
                     }
-                    JsonNode stored = readObject(path);
+                    JsonNode stored = readObject(directory, path);
                     if (!text(stored, "payloadDigest", 128).equals(payloadDigest)) {
                         throw new IOException("webhook delivery digest changed");
                     }
@@ -139,8 +162,9 @@ public final class DurableStores {
     }
 
     private static Fulfillments.StoredFulfillment readFulfillment(
-            Path path, Fulfillments.ProposedFulfillment proposed) throws IOException {
-        JsonNode stored = readObject(path);
+            TrustedDirectory directory, Path path,
+            Fulfillments.ProposedFulfillment proposed) throws IOException {
+        JsonNode stored = readObject(directory, path);
         String idempotencyKey = text(stored, "idempotencyKey", 256);
         String requestDigest = text(stored, "requestDigest", 256);
         byte[] receipt = bytes(stored, "canonicalReceipt", 1_048_576);
@@ -186,18 +210,38 @@ public final class DurableStores {
         return MAPPER.writeValueAsBytes(root);
     }
 
-    private static Path prepare(Path requested) throws IOException {
-        Path directory = requested.toAbsolutePath().normalize();
-        Files.createDirectories(directory);
-        if (Files.isSymbolicLink(directory) || !Files.isDirectory(directory, LinkOption.NOFOLLOW_LINKS)) {
-            throw new IOException("durable store is not a regular directory: " + directory);
+    private static TrustedDirectory prepare(Path requested) throws IOException {
+        if (!requested.isAbsolute() || !requested.normalize().equals(requested)
+                || requested.getRoot() == null) {
+            throw new IOException("durable store path must be absolute and canonical");
         }
-        if (Files.getFileAttributeView(directory, PosixFileAttributeView.class,
-                LinkOption.NOFOLLOW_LINKS) == null) {
-            throw new IOException("durable store requires owner-protected POSIX storage");
+        Path directory = requested;
+        Path current = directory.getRoot();
+        inspectDirectory(current, false);
+        for (Path component : current.relativize(directory)) {
+            Path next = current.resolve(component);
+            try {
+                inspectDirectory(next, next.equals(directory));
+            } catch (NoSuchFileException missing) {
+                DirectoryIdentity parentBefore = inspectDirectory(current, false);
+                try {
+                    Files.createDirectory(next,
+                        PosixFilePermissions.asFileAttribute(DIRECTORY_PERMISSIONS));
+                } catch (FileAlreadyExistsException raced) {}
+                DirectoryIdentity parentAfter = inspectDirectory(current, false);
+                if (!sameDirectory(parentBefore, parentAfter)) {
+                    throw new IOException("durable store parent changed during creation: " + current);
+                }
+                DirectoryIdentity created = inspectDirectory(next, true);
+                if (!sameDirectory(created, inspectDirectory(next, true))) {
+                    throw new IOException("durable store owner changed during creation: " + next);
+                }
+            }
+            current = next;
         }
-        Files.setPosixFilePermissions(directory, DIRECTORY_PERMISSIONS);
-        return directory;
+        TrustedDirectory trusted = captureTrustedDirectory(directory);
+        requireTrustedDirectory(trusted);
+        return trusted;
     }
 
     private static Path record(Path directory, String identity) throws IOException {
@@ -209,23 +253,38 @@ public final class DurableStores {
 
     private interface LockedOperation<T> { T run() throws IOException; }
 
-    private static <T> T locked(Path directory, LockedOperation<T> operation) throws IOException {
-        Path lockPath = directory.resolve(".lock");
-        if (Files.exists(lockPath, LinkOption.NOFOLLOW_LINKS)
-                && (Files.isSymbolicLink(lockPath) || !Files.isRegularFile(lockPath, LinkOption.NOFOLLOW_LINKS))) {
-            throw new IOException("durable store lock is not a regular file");
-        }
-        try (FileChannel channel = FileChannel.open(lockPath, StandardOpenOption.CREATE,
-                 StandardOpenOption.READ, StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS);
+    private static <T> T locked(TrustedDirectory directory, LockedOperation<T> operation)
+            throws IOException {
+        requireTrustedDirectory(directory);
+        Path lockPath = directory.path().resolve(".lock");
+        TrustedFile before = optionalTrustedFile(lockPath);
+        try (FileChannel channel = FileChannel.open(lockPath,
+                 Set.of(StandardOpenOption.CREATE, StandardOpenOption.READ,
+                    StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS),
+                 PosixFilePermissions.asFileAttribute(FILE_PERMISSIONS));
              FileLock ignored = channel.lock()) {
             permissions(lockPath);
-            return operation.run();
+            TrustedFile opened = trustedFile(lockPath);
+            if (before != null && !sameFile(before, opened)) {
+                throw new IOException("durable store lock changed while it was opened");
+            }
+            requireTrustedDirectory(directory);
+            T result = operation.run();
+            requireTrustedDirectory(directory);
+            if (!sameFile(opened, trustedFile(lockPath))) {
+                throw new IOException("durable store lock changed while held");
+            }
+            return result;
         }
     }
 
-    private static void writeAtomic(Path directory, Path path, byte[] encoded) throws IOException {
+    private static void writeAtomic(TrustedDirectory directory, Path path, byte[] encoded)
+            throws IOException {
         if (encoded.length > MAX_RECORD_BYTES) throw new IOException("durable record exceeds its bound");
-        Path temporary = Files.createTempFile(directory, ".layerx-", ".tmp");
+        requireTrustedDirectory(directory);
+        TrustedFile before = optionalTrustedFile(path);
+        Path temporary = Files.createTempFile(directory.path(), ".layerx-", ".tmp",
+            PosixFilePermissions.asFileAttribute(FILE_PERMISSIONS));
         boolean published = false;
         try {
             permissions(temporary);
@@ -235,40 +294,190 @@ public final class DurableStores {
                 while (buffer.hasRemaining()) output.write(buffer);
                 output.force(true);
             }
+            TrustedFile temporaryIdentity = trustedFile(temporary);
+            requireTrustedDirectory(directory);
+            TrustedFile current = optionalTrustedFile(path);
+            if (!sameOptionalFile(before, current)) {
+                throw new IOException("durable record changed while publication was prepared");
+            }
             try {
                 Files.move(temporary, path, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
             } catch (AtomicMoveNotSupportedException error) {
                 throw new IOException("durable store does not support atomic publication", error);
             }
             published = true;
-            permissions(path);
-            syncDirectory(directory);
+            if (!sameFile(temporaryIdentity, trustedFile(path))) {
+                throw new IOException("durable record identity changed during publication");
+            }
+            requireTrustedDirectory(directory);
+            syncDirectory(directory.path());
         } finally {
             if (!published) Files.deleteIfExists(temporary);
         }
     }
 
-    private static JsonNode readObject(Path path) throws IOException {
-        if (Files.isSymbolicLink(path) || !Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)) {
-            throw new IOException("durable record is not a regular file");
-        }
+    private static JsonNode readObject(TrustedDirectory directory, Path path) throws IOException {
+        requireTrustedDirectory(directory);
+        TrustedFile before = trustedFile(path);
+        if (before.size() > MAX_RECORD_BYTES) throw new IOException("durable record exceeds its bound");
         byte[] encoded;
         try (InputStream input = Files.newInputStream(path, StandardOpenOption.READ,
                  LinkOption.NOFOLLOW_LINKS)) {
             encoded = input.readNBytes(MAX_RECORD_BYTES + 1);
         }
         if (encoded.length > MAX_RECORD_BYTES) throw new IOException("durable record exceeds its bound");
+        TrustedFile after = trustedFile(path);
+        if (!sameFile(before, after) || after.size() != encoded.length) {
+            throw new IOException("durable record changed while it was read");
+        }
+        requireTrustedDirectory(directory);
         JsonNode value = MAPPER.readTree(encoded);
         if (value == null || !value.isObject()) throw new IOException("durable record is not an object");
         return value;
     }
 
     private static void permissions(Path path) throws IOException {
-        if (Files.getFileAttributeView(path, PosixFileAttributeView.class,
-                LinkOption.NOFOLLOW_LINKS) == null) {
+        PosixFileAttributeView view = Files.getFileAttributeView(
+            path, PosixFileAttributeView.class, LinkOption.NOFOLLOW_LINKS);
+        if (view == null) {
             throw new IOException("durable store requires owner-protected POSIX storage");
         }
-        Files.setPosixFilePermissions(path, FILE_PERMISSIONS);
+        view.setPermissions(FILE_PERMISSIONS);
+        trustedFile(path);
+    }
+
+    private static DirectoryIdentity inspectDirectory(Path path, boolean requireCurrentOwner)
+            throws IOException {
+        BasicFileAttributes attributes = Files.readAttributes(
+            path, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+        if (!attributes.isDirectory() || Files.isSymbolicLink(path)
+                || attributes.fileKey() == null) {
+            throw new IOException("durable store ancestor is not a stable directory: " + path);
+        }
+        PosixFileAttributeView view = Files.getFileAttributeView(
+            path, PosixFileAttributeView.class, LinkOption.NOFOLLOW_LINKS);
+        if (view == null) throw new IOException("durable store requires POSIX storage: " + path);
+        Set<PosixFilePermission> modes = Files.getPosixFilePermissions(
+            path, LinkOption.NOFOLLOW_LINKS);
+        if (modes.contains(PosixFilePermission.GROUP_WRITE)
+                || modes.contains(PosixFilePermission.OTHERS_WRITE)) {
+            throw new IOException("durable store ancestor is group/world writable: " + path);
+        }
+        if (requireCurrentOwner && (modes.contains(PosixFilePermission.GROUP_READ)
+                || modes.contains(PosixFilePermission.GROUP_EXECUTE)
+                || modes.contains(PosixFilePermission.OTHERS_READ)
+                || modes.contains(PosixFilePermission.OTHERS_EXECUTE))) {
+            throw new IOException("durable store directory is accessible beyond its owner: " + path);
+        }
+        String pathOwner = owner(path);
+        if (!ownerAllowed(pathOwner) || (requireCurrentOwner && !ownerIsCurrent(pathOwner))) {
+            throw new IOException("durable store ancestor has an unsafe owner: " + path);
+        }
+        return new DirectoryIdentity(path, attributes.fileKey(), pathOwner, Set.copyOf(modes));
+    }
+
+    private static TrustedDirectory captureTrustedDirectory(Path directory) throws IOException {
+        List<DirectoryIdentity> ancestors = new ArrayList<>();
+        Path current = directory.getRoot();
+        ancestors.add(inspectDirectory(current, false));
+        for (Path component : current.relativize(directory)) {
+            current = current.resolve(component);
+            ancestors.add(inspectDirectory(current, current.equals(directory)));
+        }
+        return new TrustedDirectory(directory, List.copyOf(ancestors));
+    }
+
+    private static void requireTrustedDirectory(TrustedDirectory trusted) throws IOException {
+        Path current = trusted.path().getRoot();
+        int index = 0;
+        if (trusted.ancestors().isEmpty()
+                || !sameDirectory(trusted.ancestors().get(index++), inspectDirectory(current, false))) {
+            throw new IOException("durable store ancestor identity changed: " + current);
+        }
+        for (Path component : current.relativize(trusted.path())) {
+            current = current.resolve(component);
+            if (index >= trusted.ancestors().size()
+                    || !sameDirectory(trusted.ancestors().get(index++),
+                        inspectDirectory(current, current.equals(trusted.path())))) {
+                throw new IOException("durable store ancestor identity changed: " + current);
+            }
+        }
+        if (index != trusted.ancestors().size()) {
+            throw new IOException("durable store ancestor chain changed: " + trusted.path());
+        }
+    }
+
+    private static boolean sameDirectory(DirectoryIdentity left, DirectoryIdentity right) {
+        return left.path().equals(right.path()) && left.fileKey().equals(right.fileKey())
+            && left.owner().equals(right.owner()) && left.permissions().equals(right.permissions());
+    }
+
+    private static TrustedFile optionalTrustedFile(Path path) throws IOException {
+        try { return trustedFile(path); }
+        catch (NoSuchFileException missing) { return null; }
+    }
+
+    private static TrustedFile trustedFile(Path path) throws IOException {
+        BasicFileAttributes attributes = Files.readAttributes(
+            path, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+        if (!attributes.isRegularFile() || Files.isSymbolicLink(path)
+                || attributes.fileKey() == null) {
+            throw new IOException("durable store record is not a stable regular file: " + path);
+        }
+        String pathOwner = owner(path);
+        if (!ownerIsCurrent(pathOwner)) {
+            throw new IOException("durable store record has an unsafe owner: " + path);
+        }
+        Set<PosixFilePermission> modes = Files.getPosixFilePermissions(
+            path, LinkOption.NOFOLLOW_LINKS);
+        if (modes.contains(PosixFilePermission.GROUP_READ)
+                || modes.contains(PosixFilePermission.GROUP_WRITE)
+                || modes.contains(PosixFilePermission.GROUP_EXECUTE)
+                || modes.contains(PosixFilePermission.OTHERS_READ)
+                || modes.contains(PosixFilePermission.OTHERS_WRITE)
+                || modes.contains(PosixFilePermission.OTHERS_EXECUTE)) {
+            throw new IOException("durable store record is accessible beyond its owner: " + path);
+        }
+        return new TrustedFile(attributes.fileKey(), pathOwner, Set.copyOf(modes), attributes.size());
+    }
+
+    private static boolean sameFile(TrustedFile left, TrustedFile right) {
+        return left.fileKey().equals(right.fileKey()) && left.owner().equals(right.owner())
+            && left.permissions().equals(right.permissions()) && left.size() == right.size();
+    }
+
+    private static boolean sameOptionalFile(TrustedFile left, TrustedFile right) {
+        return left == null ? right == null : right != null && sameFile(left, right);
+    }
+
+    private static String owner(Path path) throws IOException {
+        return Files.getOwner(path, LinkOption.NOFOLLOW_LINKS).getName();
+    }
+
+    private static boolean ownerAllowed(String owner) {
+        return owner.equals("root") || ownerIsCurrent(owner);
+    }
+
+    private static boolean ownerIsCurrent(String owner) {
+        return owner.equals(CURRENT_OWNER);
+    }
+
+    private static String currentOwner() {
+        Path probe = null;
+        try {
+            probe = Files.createTempFile("layerx-owner-", ".probe",
+                PosixFilePermissions.asFileAttribute(FILE_PERMISSIONS));
+            String owner = Files.getOwner(probe, LinkOption.NOFOLLOW_LINKS).getName();
+            if (owner.isEmpty()) throw new IOException("current owner is empty");
+            return owner;
+        } catch (IOException error) {
+            throw new ExceptionInInitializerError(error);
+        } finally {
+            if (probe != null) {
+                try { Files.deleteIfExists(probe); }
+                catch (IOException error) { throw new ExceptionInInitializerError(error); }
+            }
+        }
     }
 
     private static void syncDirectory(Path directory) throws IOException {

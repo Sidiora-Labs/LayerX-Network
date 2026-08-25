@@ -80,7 +80,7 @@ pub fn platform_install_mcp(
         .iter()
         .map(|(_, registration)| registration.path.clone())
         .collect::<Vec<_>>();
-    let transaction = match FileTransaction::capture(&paths) {
+    let mut transaction = match FileTransaction::capture(&paths) {
         Ok(value) => value,
         Err(error) => return Err(error),
     };
@@ -88,7 +88,9 @@ pub fn platform_install_mcp(
     let mut changed = false;
     let applied = (|| {
         for (host, registration) in &pending {
+            transaction.begin_publication(&registration.path)?;
             let outcome = apply(registration)?;
+            transaction.finish_publication(&registration.path, outcome.changed)?;
             if outcome.changed {
                 changed = true;
             }

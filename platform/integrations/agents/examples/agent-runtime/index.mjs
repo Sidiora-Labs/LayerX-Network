@@ -1,6 +1,5 @@
 import { readFile } from "node:fs/promises";
 import { AGENT_FRAMEWORKS } from "@sidiora/layerx-agent-integrations";
-import { createA2AIntegration } from "@sidiora/layerx-agent-integrations/a2a";
 import { createAnthropicIntegration } from "@sidiora/layerx-agent-integrations/anthropic";
 import { createLangChainIntegration } from "@sidiora/layerx-agent-integrations/langchain";
 import { createOpenAiIntegration } from "@sidiora/layerx-agent-integrations/openai";
@@ -38,17 +37,7 @@ const integrations = {
     };
   },
   a2a: () => {
-    const integration = createA2AIntegration(options);
-    return {
-      integration,
-      tools: integration.tools.definitions.map((candidate) => candidate.name),
-      async spend(input) {
-        const outcome = await integration.executeToolRequest({ tool: "layerx_spend", arguments: input });
-        return outcome.ok
-          ? { ok: true, tool: outcome.tool, result: outcome.result }
-          : { ok: false, tool: outcome.tool, code: outcome.code };
-      },
-    };
+    throw new Error("a2a_requires_durable_task_store_and_authenticated_request_context_verifier");
   },
   openai: () => {
     const integration = createOpenAiIntegration(options);

@@ -108,21 +108,29 @@ pub fn platform_install_a2a(
     if let Some(root) = &request.well_known {
         paths.push(root.join(".well-known").join(CARD_FILE));
     }
-    let transaction = match FileTransaction::capture(&paths) {
+    let mut transaction = match FileTransaction::capture(&paths) {
         Ok(value) => value,
         Err(error) => return Err(error),
     };
     let mut published: Vec<Value> = Vec::new();
     let applied = (|| {
         if authorization.changed {
+            transaction.begin_publication(&authorization_path)?;
             super::write_private(&authorization_path, authorization.value.as_str())?;
+            transaction.finish_publication(&authorization_path, true)?;
         }
+        transaction.begin_publication(&card_path)?;
         let card_outcome = publish(&card_path, &card)?;
+        transaction.finish_publication(&card_path, card_outcome.changed)?;
+        transaction.begin_publication(&registration.path)?;
         let registry_outcome = apply(&registration)?;
+        transaction.finish_publication(&registration.path, registry_outcome.changed)?;
         let mut changed = authorization.changed || card_outcome.changed || registry_outcome.changed;
         if let Some(root) = &request.well_known {
             let path = root.join(".well-known").join(CARD_FILE);
+            transaction.begin_publication(&path)?;
             let outcome = publish(&path, &card)?;
+            transaction.finish_publication(&path, outcome.changed)?;
             if outcome.changed {
                 changed = true;
             }
