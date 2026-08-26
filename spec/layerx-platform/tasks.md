@@ -1261,7 +1261,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
 
 - [ ] 31. Give programs self-knowledge and the primitives every chain provides
   - Code-only lanes: 31.3, 31.4 and 31.5 are complete. Tasks 31.1 and 31.2 run in parallel; 31.6 joins them into ABI version two and 31.7 binds the result into the SDK and porting kits.
-  - [-] 31.1 Expose the execution context to guest code
+  - [ ] 31.1 Expose the execution context to guest code — **Implemented - qualification pending**
     - Add a single field-addressed context host function exposing the executing program, the immediate calling program, the invoking principal, the activity sequence, the batch height, the runtime and ABI versions, the remaining fuel and the effective fee schedule version.
     - Derive every field from protocol state only, with no wall-clock time, host entropy or node-local value reachable through any field, and refuse an unknown field identifier rather than returning a zero.
     - Make the caller field honest at every frame: a callee observes its own identifier and its immediate caller's, set by the runtime when the frame is entered and never writable by guest code.
