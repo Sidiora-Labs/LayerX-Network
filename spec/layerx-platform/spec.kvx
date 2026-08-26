@@ -3270,7 +3270,7 @@ reqs = ["38.7","28.4"]
 
 [task.31.7]
 title = "Bind the context and the primitives in the SDK and the porting kits"
-status = "in_progress"
+status = "done"
 wave = 17
 requires = ["31.6"]
 do_1 = "Bind every new host function in the Rust SDK with types that make a refusal representable and a malformed call unconstructable."

@@ -2024,3 +2024,11 @@ symbol = "msg_sender, address_this"
 observed = "LayerX program and principal identifiers are canonical 32-byte values while an EVM address is 20 bytes. The direct vocabulary mapping takes the low 20 bytes, matching EVM word narrowing, and distinguishes nested msg.sender from root invocation by using immediate_caller when present and invoking_principal only at the root."
 assumption = "Human migration qualification must reject deployments whose participating 32-byte identifiers collide after low-20-byte narrowing, or the protocol must publish a collision-resistant canonical address allocation rule before those identifiers are exposed to unmodified Solidity address comparisons."
 severity = "migration-boundary"
+
+[observation.31.7.3]
+task = "31.7"
+file = "programs/porting/evm/src/keccak.rs, programs/porting/evm/guest/src/lib.rs, programs/porting/solana/src/anchor.rs, programs/porting/cosmwasm/src/messages.rs"
+symbol = "host migration planning, guest keccak256, AnchorContext, MessageInfo"
+observed = "Running EVM guest code now computes keccak256 through the ABI-two host primitive, including the digest used by ecrecover. Host-side migration planning still computes storage-slot addresses, selectors and event topics before a guest execution context exists; removing that tooling computation would make byte-identical migration artifacts impossible rather than moving contract computation into the guest. ABI two also has no authenticated producer for an enumerable Anchor account list or CosmWasm attached funds, so the porting kits expose only the context fields the runtime can prove and refuse to invent the unavailable values."
+assumption = "Human qualification must distinguish pre-execution migration planning from running contract computation, compare the planned selectors, topics and slots with guest-produced values, and confirm the Solana and CosmWasm kits refuse unavailable account and funds patterns. A future ABI may add canonical producers for those fields; this implementation does not fabricate them. No build, test, formatting or runtime result is asserted."
+severity = "porting-boundary"

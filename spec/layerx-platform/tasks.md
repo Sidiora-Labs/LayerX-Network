@@ -1303,7 +1303,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Record the ABI version alongside the runtime version and the fee schedule version in every execution receipt.
     - Test a simulated upgrade replaying version one and version two activities under their own recorded versions in one history.
     - _Requirements: 38.7, 28.4_
-  - [-] 31.7 Bind the context and the primitives in the SDK and the porting kits
+  - [x] 31.7 Bind the context and the primitives in the SDK and the porting kits
     - Bind every new host function in the Rust SDK with types that make a refusal representable and a malformed call unconstructable.
     - Map the EVM vocabulary directly in the EVM kit: msg.sender and address(this) onto context fields, block.number onto batch height, keccak256 onto the hash primitive, and ecrecover onto secp256k1 recovery.
     - Map the Solana and CosmWasm equivalents in their own kits, including the account and message-info patterns their contracts already use.
