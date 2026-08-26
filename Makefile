@@ -2630,6 +2630,7 @@ programs-module-boundaries:
 
 programs-abi-drift:
 	programs/tools/check-abi-drift.sh
+	cd programs && $(PROGRAMS_CARGO) test --locked -p layerx-programs-runtime --test abi_linker
 
 $(BUILD_DIR)/tests/programs_registration: tests/programs/test_registration.c \
 		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build

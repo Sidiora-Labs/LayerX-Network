@@ -6,7 +6,7 @@ use layerx_programs_runtime::{
     AbiError, AuthorizationContext, AuthorizedExecutionRequest, Capability, CapabilitySet,
     CompositionContext, ExecutionError, ExecutionFault, Executor, FeeSchedule, Meter, MeterRefusal,
     PrincipalId, ProgramId, ReceiptOracle, ReceiptView, ResourceBudget, ResourceKind, Storage,
-    StorageNamespace, ValidationLimits, WasmEngine, WasmValue, ABI_VERSION, RUNTIME_VERSION,
+    StorageNamespace, ValidationLimits, WasmEngine, WasmValue, ABI_V1_VERSION, RUNTIME_VERSION,
 };
 
 const EXECUTION_V1_GOLDEN: &str = include_str!("../vectors/execution-v1.hex");
@@ -169,7 +169,7 @@ fn hex_nibble(byte: u8) -> u8 {
 fn execution_evidence_matches_the_architecture_independent_golden() {
     let record = execute_add(19, 23);
     assert_eq!(record.runtime_version, RUNTIME_VERSION);
-    assert_eq!(record.abi_version, ABI_VERSION);
+    assert_eq!(record.abi_version, ABI_V1_VERSION);
     assert_eq!(record.outputs, vec![WasmValue::I32(42)]);
     assert_eq!(record.canonical_evidence(), decode_hex(EXECUTION_V1_GOLDEN));
 }

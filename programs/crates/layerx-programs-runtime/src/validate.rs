@@ -1,6 +1,7 @@
 //! Module validation against the deterministic subset and the declared limits.
 
 use core::fmt::{self, Display};
+use std::collections::BTreeSet;
 
 use wasmparser_nostd::{
     BlockType, FuncType, FunctionBody, Import, Operator, Parser, Payload, Type, TypeRef, ValType,
@@ -47,6 +48,8 @@ pub enum ValidationRefusal {
         /// The name field of the refused import.
         import_name: String,
     },
+    /// A module imports the same ABI function more than once.
+    DuplicateImport { import_module: String, import_name: String },
     /// A declared ABI name was imported as a non-function item.
     WrongImportKind { import_name: String },
     /// A declared ABI function was imported with the wrong type.
@@ -95,6 +98,9 @@ impl Display for ValidationRefusal {
                 import_name,
             } => {
                 write!(f, "forbidden import {import_module}::{import_name}")
+            }
+            Self::DuplicateImport { import_module, import_name } => {
+                write!(f, "duplicate import {import_module}::{import_name}")
             }
             Self::WrongImportKind { import_name } => {
                 write!(f, "ABI import {import_name} is not a function")
@@ -349,6 +355,7 @@ pub(crate) fn validate_module(
     }
     let mut function_count: u32 = 0;
     let mut function_types = Vec::new();
+    let mut imports = BTreeSet::new();
     for payload in Parser::new(0).parse_all(wasm) {
         let payload = payload.map_err(|error| ValidationRefusal::MalformedModule {
             reason: error.to_string(),
@@ -372,6 +379,12 @@ pub(crate) fn validate_module(
                         reason: error.to_string(),
                     })?;
                     refuse_import(&entry, &function_types, revision)?;
+                    if !imports.insert((entry.module.to_string(), entry.name.to_string())) {
+                        return Err(ValidationRefusal::DuplicateImport {
+                            import_module: entry.module.to_string(),
+                            import_name: entry.name.to_string(),
+                        });
+                    }
                 }
             }
             Payload::FunctionSection(reader) => {

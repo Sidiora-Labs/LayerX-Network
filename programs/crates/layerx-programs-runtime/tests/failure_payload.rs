@@ -3,9 +3,9 @@ use layerx_programs_runtime::{
 };
 
 #[test]
-fn candidate_failure_import_is_exactly_appended() {
+fn frozen_v2_alias_contains_the_complete_host_table() {
     let table = layerx_programs_runtime::abi::response::CANDIDATE_HOST_FUNCTIONS;
-    assert_eq!(table.len(), 8);
+    assert_eq!(table.len(), 19);
     assert_eq!(table[2].name, "refusal_write");
     assert_eq!(table[2].signature, "(i32,i32,i32)->i32");
     assert_eq!(table[3].name, "storage_read_scoped");
@@ -21,6 +21,9 @@ fn candidate_failure_import_is_exactly_appended() {
         table[7].signature,
         "(i32,i32,i32,i32,i32,i32,i32,i32,i32)->i32"
     );
+    assert_eq!(table[10].name, "context_read");
+    assert_eq!(table[11].name, "balance_read");
+    assert_eq!(table[18].name, "bigint_modexp_256");
 }
 
 #[test]

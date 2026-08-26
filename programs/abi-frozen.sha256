@@ -1,0 +1,4 @@
+# Frozen ABI vector checksums. This file is reviewed and updated separately
+# only when a newly allocated ABI version is frozen.
+1 09fcad46aeea9659d7d555a4a09ec151bd36d60b85bfd052d1f7a43cf71d58a3
+2 8827869bf1324c3e82c60baf7360b1c3e2baa84d8591e49eb6b73c2cea6c8b69

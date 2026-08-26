@@ -4,154 +4,15 @@ use core::fmt::{self, Display};
 
 use crate::meter::MeterRefusal;
 
-use super::{AbiValueType, HostFunction, HostFunctionType};
+use super::HostFunction;
 
 /// Explicitly non-current module carrying candidate response operations.
 pub const CANDIDATE_ABI_MODULE: &str = super::manifest::ABI_V2_MODULE;
 pub const CANDIDATE_ABI_MANIFEST: &str = super::manifest::ABI_V2_MANIFEST;
 
-/// Exact qualification-only response extension table.
-pub const CANDIDATE_HOST_FUNCTIONS: [HostFunction; 12] = [
-    HostFunction {
-        name: "response_write",
-        signature: "(i32,i32,i32)->i32",
-    },
-    HostFunction {
-        name: "program_call_response",
-        signature: "(i32,i32,i32,i32,i32,i32,i32,i32)->i64",
-    },
-    HostFunction {
-        name: "refusal_write",
-        signature: "(i32,i32,i32)->i32",
-    },
-    HostFunction {
-        name: "storage_read_scoped",
-        signature: "(i32,i32,i32,i32,i32)->i32",
-    },
-    HostFunction {
-        name: "storage_write_scoped",
-        signature: "(i32,i32,i32,i32,i32)->i32",
-    },
-    HostFunction {
-        name: "storage_delete_scoped",
-        signature: "(i32,i32,i32)->i32",
-    },
-    HostFunction {
-        name: "storage_drop_scoped",
-        signature: "(i32)->i32",
-    },
-    HostFunction {
-        name: "storage_scan_scoped",
-        signature: "(i32,i32,i32,i32,i32,i32,i32,i32,i32)->i32",
-    },
-    HostFunction {
-        name: "transfer_program_402",
-        signature: "(i64,i64,i32,i32,i32,i32,i32,i32,i32,i32)->i32",
-    },
-    HostFunction {
-        name: "fund_program_402",
-        signature: "(i64,i64,i32,i32,i32,i32,i32,i32)->i32",
-    },
-    HostFunction {
-        name: "context_read",
-        signature: "(i32,i32,i32)->i32",
-    },
-    HostFunction {
-        name: "balance_read",
-        signature: "(i32,i32,i32,i32,i32,i32)->i32",
-    },
-];
-
-const RESPONSE_WRITE_PARAMS: &[AbiValueType] =
-    &[AbiValueType::I32, AbiValueType::I32, AbiValueType::I32];
-const PROGRAM_CALL_RESPONSE_PARAMS: &[AbiValueType] = &[AbiValueType::I32; 8];
-const STORAGE_SCOPED_PARAMS: &[AbiValueType] = &[AbiValueType::I32; 5];
-const STORAGE_SCAN_SCOPED_PARAMS: &[AbiValueType] = &[AbiValueType::I32; 9];
-const PROGRAM_TRANSFER_PARAMS: &[AbiValueType] = &[
-    AbiValueType::I64,
-    AbiValueType::I64,
-    AbiValueType::I32,
-    AbiValueType::I32,
-    AbiValueType::I32,
-    AbiValueType::I32,
-    AbiValueType::I32,
-    AbiValueType::I32,
-    AbiValueType::I32,
-    AbiValueType::I32,
-];
-const PROGRAM_FUNDING_PARAMS: &[AbiValueType] = &[
-    AbiValueType::I64,
-    AbiValueType::I64,
-    AbiValueType::I32,
-    AbiValueType::I32,
-    AbiValueType::I32,
-    AbiValueType::I32,
-    AbiValueType::I32,
-    AbiValueType::I32,
-];
-const I32_RESULT: &[AbiValueType] = &[AbiValueType::I32];
-const I64_RESULT: &[AbiValueType] = &[AbiValueType::I64];
-const RESPONSE_WRITE_TYPE: HostFunctionType = HostFunctionType {
-    params: RESPONSE_WRITE_PARAMS,
-    results: I32_RESULT,
-};
-const PROGRAM_CALL_RESPONSE_TYPE: HostFunctionType = HostFunctionType {
-    params: PROGRAM_CALL_RESPONSE_PARAMS,
-    results: I64_RESULT,
-};
-const REFUSAL_WRITE_TYPE: HostFunctionType = HostFunctionType {
-    params: RESPONSE_WRITE_PARAMS,
-    results: I32_RESULT,
-};
-const CONTEXT_READ_TYPE: HostFunctionType = HostFunctionType {
-    params: RESPONSE_WRITE_PARAMS,
-    results: I32_RESULT,
-};
-const STORAGE_SCOPED_TYPE: HostFunctionType = HostFunctionType {
-    params: STORAGE_SCOPED_PARAMS,
-    results: I32_RESULT,
-};
-const STORAGE_SCAN_SCOPED_TYPE: HostFunctionType = HostFunctionType {
-    params: STORAGE_SCAN_SCOPED_PARAMS,
-    results: I32_RESULT,
-};
-const STORAGE_DELETE_SCOPED_TYPE: HostFunctionType = HostFunctionType {
-    params: RESPONSE_WRITE_PARAMS,
-    results: I32_RESULT,
-};
-const STORAGE_DROP_SCOPED_TYPE: HostFunctionType = HostFunctionType {
-    params: &[AbiValueType::I32],
-    results: I32_RESULT,
-};
-const PROGRAM_TRANSFER_TYPE: HostFunctionType = HostFunctionType {
-    params: PROGRAM_TRANSFER_PARAMS,
-    results: I32_RESULT,
-};
-const PROGRAM_FUNDING_TYPE: HostFunctionType = HostFunctionType {
-    params: PROGRAM_FUNDING_PARAMS,
-    results: I32_RESULT,
-};
-const BALANCE_READ_TYPE: HostFunctionType = HostFunctionType {
-    params: &[AbiValueType::I32; 6],
-    results: I32_RESULT,
-};
-
-pub(crate) fn candidate_function_type(name: &str) -> Option<&'static HostFunctionType> {
-    match name {
-        "response_write" => Some(&RESPONSE_WRITE_TYPE),
-        "program_call_response" => Some(&PROGRAM_CALL_RESPONSE_TYPE),
-        "refusal_write" => Some(&REFUSAL_WRITE_TYPE),
-        "context_read" => Some(&CONTEXT_READ_TYPE),
-        "storage_read_scoped" | "storage_write_scoped" => Some(&STORAGE_SCOPED_TYPE),
-        "storage_delete_scoped" => Some(&STORAGE_DELETE_SCOPED_TYPE),
-        "storage_drop_scoped" => Some(&STORAGE_DROP_SCOPED_TYPE),
-        "storage_scan_scoped" => Some(&STORAGE_SCAN_SCOPED_TYPE),
-        "transfer_program_402" => Some(&PROGRAM_TRANSFER_TYPE),
-        "fund_program_402" => Some(&PROGRAM_FUNDING_TYPE),
-        "balance_read" => Some(&BALANCE_READ_TYPE),
-        _ => None,
-    }
-}
+/// Compatibility alias for the complete frozen ABI-v2 host table.
+pub const CANDIDATE_HOST_FUNCTIONS: [HostFunction; 19] =
+    super::manifest::ABI_V2_HOST_FUNCTIONS;
 
 /// Maximum successful response payload crossing one call boundary.
 pub const MAX_CALL_RESPONSE_BYTES: usize = 1_048_576;

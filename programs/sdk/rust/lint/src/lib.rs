@@ -645,6 +645,11 @@ fn engine_violations(wasm: &[u8], candidate: bool) -> Vec<DeterminismViolation> 
 
 fn from_validation(refusal: &ValidationRefusal) -> DeterminismViolation {
     match refusal {
+        ValidationRefusal::UnsupportedAbiVersion { abi_version } => {
+            DeterminismViolation::RejectedByEngine {
+                reason: format!("unsupported LayerX ABI version {abi_version}"),
+            }
+        }
         ValidationRefusal::ModuleTooLarge { byte_size, limit } => {
             DeterminismViolation::ModuleTooLarge {
                 byte_size: *byte_size,
@@ -662,6 +667,12 @@ fn from_validation(refusal: &ValidationRefusal) -> DeterminismViolation {
             import_module,
             import_name,
         } => classify_import(import_module, import_name),
+        ValidationRefusal::DuplicateImport {
+            import_module,
+            import_name,
+        } => DeterminismViolation::RejectedByEngine {
+            reason: format!("duplicate LayerX ABI import {import_module}::{import_name}"),
+        },
         ValidationRefusal::WrongImportKind { import_name }
         | ValidationRefusal::WrongImportSignature { import_name } => {
             DeterminismViolation::RejectedByEngine {

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Audit and generate immutable Programs ABI vectors from canonical source."""
-import argparse, ast, pathlib, re, sys
+import argparse, ast, hashlib, pathlib, re, sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 RUNTIME = ROOT / "programs/crates/layerx-programs-runtime/src"
@@ -8,6 +8,7 @@ MANIFEST = RUNTIME / "abi/manifest.rs"
 ABI_MOD = RUNTIME / "abi/mod.rs"
 SDK_ABI = ROOT / "programs/sdk/rust/src/abi.rs"
 OUTPUT = ROOT / "programs/crates/layerx-programs-runtime/vectors"
+FROZEN = ROOT / "programs/abi-frozen.sha256"
 
 def rust_string(source, name):
     match = re.search(rf'^pub const {name}: &str = (".*");$', source, re.MULTILINE)
@@ -29,15 +30,6 @@ def manifest_surface(encoded):
         name, signature = item.split("(", 1)
         surface.append((module, name, "(" + signature))
     return surface
-
-def linker_registrations():
-    files = ["host/mod.rs", "host/events.rs", "host/calls.rs", "host/context.rs", "host/scan.rs", "host/storage.rs", "host/transfer.rs", "host/balance.rs", "host/crypto.rs", "host/signature.rs", "crypto/bigint.rs"]
-    registrations = {}
-    for relative in files:
-        source = (RUNTIME / relative).read_text()
-        for module, name in re.findall(r'\.func_wrap\(\s*([^,]+),\s*"([^"]+)"', source, re.DOTALL):
-            registrations.setdefault(name, set()).add(module.strip())
-    return registrations
 
 def audit_surface(runtime_source):
     v1_manifest = rust_string(runtime_source, "ABI_V1_MANIFEST")
@@ -71,21 +63,6 @@ def audit_surface(runtime_source):
         raise ValueError("ABI v2 signatures and function types diverge")
     validate = (RUNTIME / "validate.rs").read_text()
     if "manifest::permitted_import" not in validate or "pub(crate) fn permitted_import" not in runtime_source: raise ValueError("validator does not derive its allowlist from the frozen table")
-    registrations = linker_registrations()
-    missing_v1 = [name for name, _ in v1 if name not in registrations]
-    if missing_v1: raise ValueError("ABI v1 functions absent from linker: " + ", ".join(missing_v1))
-    wrong_v1_module = [
-        name for name, _ in v1
-        if not any(module == "ABI_MODULE" for module in registrations[name])
-    ]
-    if wrong_v1_module: raise ValueError("ABI v1 functions registered under the wrong module: " + ", ".join(wrong_v1_module))
-    missing = [name for name, _ in v2 if name not in registrations]
-    if missing: raise ValueError("ABI v2 functions absent from linker: " + ", ".join(missing))
-    wrong_module = [
-        name for name, _ in v2
-        if not any("ABI_V2_MODULE" in module or "CANDIDATE_ABI_MODULE" in module for module in registrations[name])
-    ]
-    if wrong_module: raise ValueError("ABI v2 functions registered under the wrong module: " + ", ".join(wrong_module))
     sdk = SDK_ABI.read_text()
     if rust_string(sdk, "CANDIDATE_ABI_MANIFEST") != v2_manifest: raise ValueError("Rust SDK ABI v2 manifest diverges")
     if table(sdk, "CANDIDATE_HOST_FUNCTIONS") != v2: raise ValueError("Rust SDK ABI v2 table diverges")
@@ -98,13 +75,26 @@ def main():
     try: manifests = audit_surface(MANIFEST.read_text())
     except (ValueError, OSError) as error:
         print(f"ABI surface drift: {error}", file=sys.stderr); return 1
+    frozen = {}
+    for line in FROZEN.read_text().splitlines():
+        if not line or line.startswith("#"): continue
+        version, digest = line.split()
+        frozen[int(version)] = digest
     for version, manifest in manifests.items():
         path = OUTPUT / f"abi-v{version}.hex"
         generated = (version.to_bytes(2, "big") + manifest.encode()).hex() + "\n"
-        if path.exists() and path.read_text() != generated:
-            print(f"immutable ABI v{version} vector drift; allocate a new ABI version", file=sys.stderr); return 1
-        elif not path.exists():
-            if args.check: print(f"missing ABI v{version} vector", file=sys.stderr); return 1
+        if version in frozen:
+            if not path.exists():
+                print(f"frozen ABI v{version} vector is missing and cannot be recreated", file=sys.stderr); return 1
+            if hashlib.sha256(path.read_bytes()).hexdigest() != frozen[version]:
+                print(f"frozen ABI v{version} checksum differs from independent baseline", file=sys.stderr); return 1
+            if path.read_text() != generated:
+                print(f"immutable ABI v{version} surface drift; allocate a new ABI version", file=sys.stderr); return 1
+        elif path.exists():
+            print(f"unfrozen ABI v{version} vector exists; review and add its checksum baseline", file=sys.stderr); return 1
+        elif args.check:
+            print(f"new ABI v{version} has no generated vector", file=sys.stderr); return 1
+        else:
             path.write_text(generated)
     return 0
 
