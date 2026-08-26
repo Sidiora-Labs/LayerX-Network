@@ -170,7 +170,17 @@ platform-receipt-fixture: $(BUILD_DIR)/tools/generate_receipt_fixture
 	$(RUN_PREFIX) $(BUILD_DIR)/tools/generate_receipt_fixture \
 		platform/sdk/conformance/fixtures/receipt-positive-v1.json
 
-platform-verify-sdks: platform-sdk-check platform-sample-dependencies-ready
+platform-verify-sdks: platform-sdk-check platform-sample-dependencies-ready platform-js-install
+	@python3 -c 'import pytest' || { echo "pytest is required for Python SDK conformance" >&2; exit 1; }
+	npm run build --workspace @sidiora/layerx-sdk
+	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-sdk --tests
+	./node_modules/.bin/tsc -p platform/sdk/conformance-runner/tsconfig.json
+	node --import ./platform/sdk/conformance-runner/register.mjs --test \
+		build/platform-sdk-conformance/platform/sdk/conformance/secret-hygiene.test.js \
+		build/platform-sdk-conformance/platform/sdk/conformance/streaming-resumability.test.js
+	PYTHONPATH=agent/sdk/python python3 -m pytest \
+		platform/sdk/conformance/secret-hygiene.test.py \
+		platform/sdk/conformance/streaming-resumability.test.py
 	sh platform/sdk/conformance/run-go.sh $(CURDIR)
 	sh platform/sdk/conformance/run-jvm.sh $(CURDIR)
 	command -v swift >/dev/null

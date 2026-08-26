@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "baseUrl": "../../..",
+    "paths": {
+      "@jest/globals": ["platform/sdk/conformance-runner/node-test.ts"]
+    },
+    "rootDir": "../../..",
+    "outDir": "../../../build/platform-sdk-conformance"
+  },
+  "include": ["../conformance/*.test.ts", "node-test.ts"]
+}
