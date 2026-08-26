@@ -5,6 +5,7 @@
 #include "layerx/lxp_crypto.h"
 #include "layerx/lxp_hash.h"
 #include "layerx/lxp_receipt.h"
+#include "layerx/lxp_kernel.h"
 
 #include <stdlib.h>
 #include <string.h>

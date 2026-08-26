@@ -2,6 +2,7 @@
 
 #include "layerx/lxp_crypto.h"
 #include "layerx/lxp_hash.h"
+#include "layerx/lxp_kernel.h"
 
 #include <string.h>
 
