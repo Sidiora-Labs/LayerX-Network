@@ -719,8 +719,12 @@ static int qualify_porting_reference(const char *path, uint8_t marker)
     lxp_receipt receipt;
     uint64_t parameters = 1U;
     artifact = fopen(path, "rb");
-    if (artifact == NULL || fseek(artifact, 0L, SEEK_END) != 0)
+    if (artifact == NULL)
         return 1;
+    if (fseek(artifact, 0L, SEEK_END) != 0) {
+        (void)fclose(artifact);
+        return 1;
+    }
     file_length = ftell(artifact);
     if (file_length <= 0L ||
         (unsigned long)file_length > sizeof(wasm) - DEPLOY_FIXED_BYTES ||
@@ -729,9 +733,11 @@ static int qualify_porting_reference(const char *path, uint8_t marker)
         return 1;
     }
     wasm_length = (size_t)file_length;
-    if (fread(wasm, 1U, wasm_length, artifact) != wasm_length ||
-        fclose(artifact) != 0)
+    if (fread(wasm, 1U, wasm_length, artifact) != wasm_length) {
+        (void)fclose(artifact);
         return 1;
+    }
+    if (fclose(artifact) != 0) return 1;
     (void)memset(program_id, marker, sizeof(program_id));
     (void)memset(&authority, 0, sizeof(authority));
     if (lx_account_registry_init(&accounts) != LXP_OK ||
