@@ -131,9 +131,9 @@ pub const fn programs_wasm_engine() -> &'static str {
     "wasmi 0.31.2 vendored at programs/vendor/wasmi"
 }
 pub use abi::{
-    Abi, AbiCommit, AbiEffects, AbiError, AuthorizationContext, CallFrameId, Capability,
-    CapabilitySet, HostFunction, ProgramCall, ProgramEvent, ReceiptOracle, ReceiptView,
-    StorageSelector, TransferRequest, ABI_MANIFEST, ABI_MODULE, HOST_FUNCTIONS,
+    Abi, AbiCommit, AbiEffects, AbiError, AuthorizationContext, BalanceView, CallFrameId,
+    Capability, CapabilitySet, HostFunction, ProgramCall, ProgramEvent, ReceiptOracle,
+    ReceiptView, StorageSelector, TransferRequest, ABI_MANIFEST, ABI_MODULE, HOST_FUNCTIONS,
 };
 pub use crypto::bigint::{WideIntegerOp, WideIntegerRefusal, WideIntegerRefusalReason};
 pub use crypto::{

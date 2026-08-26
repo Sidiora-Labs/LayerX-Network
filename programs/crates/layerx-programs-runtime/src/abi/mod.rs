@@ -5,12 +5,14 @@
 use core::fmt::{self, Display};
 use std::collections::BTreeMap;
 
+pub mod balance;
 pub(crate) mod capability;
 pub mod codec;
 pub mod context;
 pub mod response;
 mod storage_ops;
 
+pub use balance::{BalanceView, MAX_BALANCE_VIEW_GRANTS};
 use capability::CapabilityKey;
 pub use capability::{Capability, CapabilitySet};
 pub use codec::{
@@ -251,6 +253,17 @@ pub trait ReceiptOracle {
     ///
     /// Returns an evidence refusal when the named digest is absent or invalid.
     fn verified_receipt(&self, receipt_digest: [u8; 32]) -> Result<ReceiptView, AbiError>;
+
+    /// Returns a balance only after Core has verified the named receipt and
+    /// the account proof against its resulting state root.
+    fn verified_balance(
+        &self,
+        _account: [u8; 32],
+        _asset: [u8; 32],
+        _receipt_digest: [u8; 32],
+    ) -> Result<BalanceView, AbiError> {
+        Err(AbiError::BalanceEvidenceUnavailable)
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -366,6 +379,8 @@ pub enum AbiError {
     CallBounds,
     AmountBounds,
     ReceiptMismatch,
+    BalanceAbsent,
+    BalanceEvidenceUnavailable,
     InvalidEncoding,
     Storage(StorageError),
     Meter(MeterRefusal),
@@ -383,6 +398,10 @@ impl Display for AbiError {
             Self::CallBounds => formatter.write_str("program call exceeds ABI bounds"),
             Self::AmountBounds => formatter.write_str("402LXP transfer amount is invalid"),
             Self::ReceiptMismatch => formatter.write_str("verified receipt facts do not match"),
+            Self::BalanceAbsent => formatter.write_str("verified account or asset is absent"),
+            Self::BalanceEvidenceUnavailable => {
+                formatter.write_str("verified balance evidence is unavailable")
+            }
             Self::InvalidEncoding => formatter.write_str("program ABI input encoding is invalid"),
             Self::Storage(error) => write!(formatter, "storage refusal: {error}"),
             Self::Meter(error) => write!(formatter, "meter refusal: {error}"),
@@ -415,6 +434,7 @@ pub struct Abi {
     shared_namespace: StorageNamespace,
     storage: Storage,
     receipts: BTreeMap<[u8; 32], ReceiptView>,
+    balances: BTreeMap<([u8; 32], [u8; 32]), Result<BalanceView, AbiError>>,
     effects: AbiEffects,
 }
 
@@ -450,6 +470,24 @@ impl Abi {
             }
             verified.insert(digest, view);
         }
+        let mut balances = BTreeMap::new();
+        for (account, asset, receipt_digest) in authorization.capabilities().balance_grants() {
+            let evidence = receipts
+                .verified_balance(account, asset, receipt_digest)
+                .and_then(|view| {
+                    if view.account != account
+                        || view.asset != asset
+                        || view.receipt_digest != receipt_digest
+                        || view.state_root == [0; 32]
+                        || view.observed_sequence == 0
+                    {
+                        Err(AbiError::ReceiptMismatch)
+                    } else {
+                        Ok(view)
+                    }
+                });
+            balances.insert((account, asset), evidence);
+        }
         Ok(Self {
             version,
             program,
@@ -458,6 +496,7 @@ impl Abi {
             shared_namespace,
             storage,
             receipts: verified,
+            balances,
             effects: AbiEffects::default(),
         })
     }
@@ -468,6 +507,7 @@ impl Abi {
         authorization: AuthorizationContext,
         storage: Storage,
         receipts: BTreeMap<[u8; 32], ReceiptView>,
+        balances: BTreeMap<([u8; 32], [u8; 32]), Result<BalanceView, AbiError>>,
     ) -> Result<Self, AbiError> {
         if version != ABI_VERSION {
             return Err(AbiError::WrongVersion);
@@ -479,6 +519,14 @@ impl Abi {
                 return Err(AbiError::ReceiptMismatch);
             }
         }
+        for (account, asset, receipt_digest) in authorization.capabilities().balance_grants() {
+            let Some(view) = balances.get(&(account, asset)) else {
+                return Err(AbiError::BalanceEvidenceUnavailable);
+            };
+            if matches!(view, Ok(view) if view.receipt_digest != receipt_digest) {
+                return Err(AbiError::ReceiptMismatch);
+            }
+        }
         Ok(Self {
             version,
             program,
@@ -487,6 +535,7 @@ impl Abi {
             shared_namespace,
             storage,
             receipts,
+            balances,
             effects: AbiEffects::default(),
         })
     }
@@ -530,6 +579,12 @@ impl Abi {
 
     pub(crate) fn verified_receipts(&self) -> BTreeMap<[u8; 32], ReceiptView> {
         self.receipts.clone()
+    }
+
+    pub(crate) fn verified_balances(
+        &self,
+    ) -> BTreeMap<([u8; 32], [u8; 32]), Result<BalanceView, AbiError>> {
+        self.balances.clone()
     }
 
     pub(crate) fn absorb(&mut self, effects: AbiEffects) {
@@ -785,6 +840,22 @@ impl Abi {
             .get(&receipt_digest)
             .cloned()
             .ok_or(AbiError::ReceiptMismatch)
+    }
+
+    /// Reads one proof-bound balance. The sight grant is structurally absent
+    /// from both transfer-authority paths.
+    pub fn balance_read(
+        &self,
+        account: [u8; 32],
+        asset: [u8; 32],
+    ) -> Result<BalanceView, AbiError> {
+        self.authorization
+            .capabilities()
+            .grant(&CapabilityKey::BalanceView { account, asset })?;
+        self.balances
+            .get(&(account, asset))
+            .cloned()
+            .ok_or(AbiError::BalanceAbsent)?
     }
 
     /// Atomically commits storage and returns effects for the kernel. Dropping

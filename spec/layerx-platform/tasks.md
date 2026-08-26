@@ -1268,7 +1268,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Meter the context read per byte returned and freeze the field identifiers and their encodings behind golden vectors.
     - Prove across the composition suite that the caller field cannot be forged on any edge, at any depth, or by re-entry.
     - _Requirements: 38.1, 38.2_
-  - [ ] 31.2 Expose receipt-verified balance reads
+  - [-] 31.2 Expose receipt-verified balance reads
     - Add a balance read host function returning a balance for an account and asset the invoking activity explicitly granted sight of, through a capability distinct from every spending grant.
     - Serve the read through the core receipt-verification authority so a program observes only verified protocol facts, never raw kernel state.
     - Refuse a read for an account outside the grant with a typed denial rather than a zero balance, so absence and denial are distinguishable.

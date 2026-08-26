@@ -82,6 +82,15 @@ struct lxp_programs_call_activity {
     bool receipt_view_active;
     lxp_verified_receipt_facts receipt_view;
     struct {
+        bool active;
+        uint8_t account[32];
+        uint8_t asset[32];
+        lxp_u128 balance;
+        uint8_t receipt_digest[32];
+        uint8_t state_root[32];
+        uint64_t observed_sequence;
+    } balance_view;
+    struct {
         lxp_programs_storage_cell *cells;
         uint32_t count;
         bool begun;
@@ -551,6 +560,91 @@ lxp_result layerx_programs_call_receipt_view_byte(
         return LXP_ERR_UNKNOWN_FIELD;
     }
     if (offset >= length) return LXP_ERR_TRUNCATED;
+    return (lxp_result)bytes[offset];
+}
+
+lxp_result layerx_programs_call_balance_view_begin(
+    uint64_t token,
+    uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3,
+    uint64_t s0, uint64_t s1, uint64_t s2, uint64_t s3,
+    uint64_t d0, uint64_t d1, uint64_t d2, uint64_t d3)
+{
+    lxp_programs_call_activity *value =
+        (lxp_programs_call_activity *)(uintptr_t)token;
+    uint8_t account[32];
+    uint8_t asset[32];
+    uint8_t digest[32];
+    lx_programs_value_account_view verified;
+    lxp_result status;
+    if (value == NULL || value->ctx == NULL) return LXP_ERR_NON_CANONICAL;
+    (void)memset(&value->balance_view, 0, sizeof(value->balance_view));
+    write_u64(account, a0);
+    write_u64(account + 8U, a1);
+    write_u64(account + 16U, a2);
+    write_u64(account + 24U, a3);
+    write_u64(asset, s0);
+    write_u64(asset + 8U, s1);
+    write_u64(asset + 16U, s2);
+    write_u64(asset + 24U, s3);
+    write_u64(digest, d0);
+    write_u64(digest + 8U, d1);
+    write_u64(digest + 16U, d2);
+    write_u64(digest + 24U, d3);
+    status = lxp_programs_value_account_read(
+        value->ctx, account, digest, &verified);
+    if (status != LXP_OK) return status;
+    if (lxp_ct_memcmp(verified.account.id, account, 32U) != 0 ||
+        lxp_ct_memcmp(verified.account.asset_id, asset, 32U) != 0 ||
+        lxp_ct_memcmp(verified.receipt_digest, digest, 32U) != 0 ||
+        lxp_ct_is_zero(verified.state_root, 32U) ||
+        verified.observed_sequence == 0U)
+        return LXP_ERR_ROOT_MISMATCH;
+    (void)memcpy(value->balance_view.account, verified.account.id, 32U);
+    (void)memcpy(value->balance_view.asset, verified.account.asset_id, 32U);
+    value->balance_view.balance = verified.balance;
+    (void)memcpy(value->balance_view.receipt_digest,
+                 verified.receipt_digest, 32U);
+    (void)memcpy(value->balance_view.state_root, verified.state_root, 32U);
+    value->balance_view.observed_sequence = verified.observed_sequence;
+    value->balance_view.active = true;
+    return LXP_OK;
+}
+
+lxp_result layerx_programs_call_balance_view_byte(
+    uint64_t token, uint16_t section, uint32_t offset)
+{
+    lxp_programs_call_activity *value =
+        (lxp_programs_call_activity *)(uintptr_t)token;
+    uint8_t balance[16];
+    uint8_t sequence[8];
+    const uint8_t *bytes;
+    size_t length;
+    if (value == NULL || !value->balance_view.active)
+        return LXP_ERR_UNKNOWN_FIELD;
+    if (section == 0U) {
+        bytes = value->balance_view.account;
+        length = 32U;
+    } else if (section == 1U) {
+        bytes = value->balance_view.asset;
+        length = 32U;
+    } else if (section == 2U) {
+        lxp_u128_to_be(value->balance_view.balance, balance);
+        bytes = balance;
+        length = sizeof(balance);
+    } else if (section == 3U) {
+        bytes = value->balance_view.receipt_digest;
+        length = 32U;
+    } else if (section == 4U) {
+        bytes = value->balance_view.state_root;
+        length = 32U;
+    } else if (section == 5U) {
+        write_u64(sequence, value->balance_view.observed_sequence);
+        bytes = sequence;
+        length = sizeof(sequence);
+    } else {
+        return LXP_ERR_UNKNOWN_FIELD;
+    }
+    if ((size_t)offset >= length) return LXP_ERR_TRUNCATED;
     return (lxp_result)bytes[offset];
 }
 

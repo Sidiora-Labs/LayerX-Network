@@ -8,10 +8,10 @@ use super::{AbiValueType, HostFunction, HostFunctionType};
 
 /// Explicitly non-current module carrying candidate response operations.
 pub const CANDIDATE_ABI_MODULE: &str = "layerx_v2_candidate";
-pub const CANDIDATE_ABI_MANIFEST: &str = "layerx_v2_candidate\0response_write(i32,i32,i32)->i32\0program_call_response(i32,i32,i32,i32,i32,i32,i32,i32)->i64\0refusal_write(i32,i32,i32)->i32\0storage_read_scoped(i32,i32,i32,i32,i32)->i32\0storage_write_scoped(i32,i32,i32,i32,i32)->i32\0storage_delete_scoped(i32,i32,i32)->i32\0storage_drop_scoped(i32)->i32\0storage_scan_scoped(i32,i32,i32,i32,i32,i32,i32,i32,i32)->i32\0transfer_program_402(i64,i64,i32,i32,i32,i32,i32,i32,i32,i32)->i32\0fund_program_402(i64,i64,i32,i32,i32,i32,i32,i32)->i32\0context_read(i32,i32,i32)->i32\0";
+pub const CANDIDATE_ABI_MANIFEST: &str = "layerx_v2_candidate\0response_write(i32,i32,i32)->i32\0program_call_response(i32,i32,i32,i32,i32,i32,i32,i32)->i64\0refusal_write(i32,i32,i32)->i32\0storage_read_scoped(i32,i32,i32,i32,i32)->i32\0storage_write_scoped(i32,i32,i32,i32,i32)->i32\0storage_delete_scoped(i32,i32,i32)->i32\0storage_drop_scoped(i32)->i32\0storage_scan_scoped(i32,i32,i32,i32,i32,i32,i32,i32,i32)->i32\0transfer_program_402(i64,i64,i32,i32,i32,i32,i32,i32,i32,i32)->i32\0fund_program_402(i64,i64,i32,i32,i32,i32,i32,i32)->i32\0context_read(i32,i32,i32)->i32\0balance_read(i32,i32,i32,i32,i32,i32)->i32\0";
 
 /// Exact qualification-only response extension table.
-pub const CANDIDATE_HOST_FUNCTIONS: [HostFunction; 11] = [
+pub const CANDIDATE_HOST_FUNCTIONS: [HostFunction; 12] = [
     HostFunction {
         name: "response_write",
         signature: "(i32,i32,i32)->i32",
@@ -55,6 +55,10 @@ pub const CANDIDATE_HOST_FUNCTIONS: [HostFunction; 11] = [
     HostFunction {
         name: "context_read",
         signature: "(i32,i32,i32)->i32",
+    },
+    HostFunction {
+        name: "balance_read",
+        signature: "(i32,i32,i32,i32,i32,i32)->i32",
     },
 ];
 
@@ -127,6 +131,10 @@ const PROGRAM_FUNDING_TYPE: HostFunctionType = HostFunctionType {
     params: PROGRAM_FUNDING_PARAMS,
     results: I32_RESULT,
 };
+const BALANCE_READ_TYPE: HostFunctionType = HostFunctionType {
+    params: &[AbiValueType::I32; 6],
+    results: I32_RESULT,
+};
 
 pub(crate) fn candidate_function_type(name: &str) -> Option<&'static HostFunctionType> {
     match name {
@@ -140,6 +148,7 @@ pub(crate) fn candidate_function_type(name: &str) -> Option<&'static HostFunctio
         "storage_scan_scoped" => Some(&STORAGE_SCAN_SCOPED_TYPE),
         "transfer_program_402" => Some(&PROGRAM_TRANSFER_TYPE),
         "fund_program_402" => Some(&PROGRAM_FUNDING_TYPE),
+        "balance_read" => Some(&BALANCE_READ_TYPE),
         _ => None,
     }
 }

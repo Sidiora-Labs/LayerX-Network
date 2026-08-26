@@ -14,8 +14,8 @@ use crate::{
     CompositionRules, DeclaredBudget, EntrypointRefusal, ExecutionFault, Executor,
     KernelTransferEvidence, KernelTransferPrimitive, MeterRefusal, MeteredUsage,
     PreparedAuthorizedActivityOutcome, PrincipalId, ProgramCatalog, ProgramEvent, ProgramId,
-    ReceiptOracle, ReceiptView, ResourceKind, ResponseRefusal, SettlementFailure, Storage,
-    StorageNamespace, TransferCapability, TransferLawError, TransferSource, WasmEngine,
+    BalanceView, ReceiptOracle, ReceiptView, ResourceKind, ResponseRefusal, SettlementFailure,
+    Storage, StorageNamespace, TransferCapability, TransferLawError, TransferSource, WasmEngine,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -117,6 +117,8 @@ fn abi_payload(value: &AbiError) -> Vec<u8> {
         AbiError::CallBounds => vec![7],
         AbiError::AmountBounds => vec![8],
         AbiError::ReceiptMismatch => vec![9],
+        AbiError::BalanceAbsent => vec![13],
+        AbiError::BalanceEvidenceUnavailable => vec![14],
         AbiError::InvalidEncoding => vec![10],
         AbiError::Storage(error) => vec![11, storage_tag(*error)],
         AbiError::Meter(error) => {
@@ -405,6 +407,13 @@ unsafe extern "C" {
         d3: u64,
     ) -> i32;
     fn layerx_programs_call_receipt_view_byte(token: u64, section: u16, offset: u32) -> i32;
+    fn layerx_programs_call_balance_view_begin(
+        token: u64,
+        a0: u64, a1: u64, a2: u64, a3: u64,
+        s0: u64, s1: u64, s2: u64, s3: u64,
+        d0: u64, d1: u64, d2: u64, d3: u64,
+    ) -> i32;
+    fn layerx_programs_call_balance_view_byte(token: u64, section: u16, offset: u32) -> i32;
     fn layerx_programs_call_catalog_storage_cell_count(
         token: u64,
         index: u32,
@@ -803,6 +812,56 @@ impl ReceiptOracle for CReceiptOracle {
             asset,
             amount: u128::from_be_bytes(amount),
             state_root,
+        })
+    }
+
+    fn verified_balance(
+        &self,
+        account: [u8; 32],
+        asset: [u8; 32],
+        digest: [u8; 32],
+    ) -> Result<BalanceView, AbiError> {
+        let account_words = words(account);
+        let asset_words = words(asset);
+        let digest_words = words(digest);
+        let status = unsafe {
+            layerx_programs_call_balance_view_begin(
+                self.token,
+                account_words[0], account_words[1], account_words[2], account_words[3],
+                asset_words[0], asset_words[1], asset_words[2], asset_words[3],
+                digest_words[0], digest_words[1], digest_words[2], digest_words[3],
+            )
+        };
+        if status == -208 || status == -402 {
+            return Err(AbiError::BalanceAbsent);
+        }
+        c_ok(status).map_err(|_| AbiError::BalanceEvidenceUnavailable)?;
+        let read = |section, length| {
+            scalar_bytes(length, |offset| unsafe {
+                layerx_programs_call_balance_view_byte(self.token, section, offset)
+            })
+            .map_err(|_| AbiError::BalanceEvidenceUnavailable)
+        };
+        let returned_account = read(0, 32)?.try_into().map_err(|_| AbiError::ReceiptMismatch)?;
+        let returned_asset = read(1, 32)?.try_into().map_err(|_| AbiError::ReceiptMismatch)?;
+        let balance = <[u8; 16]>::try_from(read(2, 16)?)
+            .map(u128::from_be_bytes)
+            .map_err(|_| AbiError::ReceiptMismatch)?;
+        let returned_digest = read(3, 32)?.try_into().map_err(|_| AbiError::ReceiptMismatch)?;
+        let state_root = read(4, 32)?.try_into().map_err(|_| AbiError::ReceiptMismatch)?;
+        let sequence = <[u8; 8]>::try_from(read(5, 8)?)
+            .map(u64::from_be_bytes)
+            .map_err(|_| AbiError::ReceiptMismatch)?;
+        if returned_account != account || returned_asset != asset || returned_digest != digest {
+            return Err(AbiError::ReceiptMismatch);
+        }
+        Ok(BalanceView {
+            account,
+            asset,
+            balance,
+            receipt_digest: digest,
+            state_root,
+            observed_sequence: sequence,
         })
     }
 }

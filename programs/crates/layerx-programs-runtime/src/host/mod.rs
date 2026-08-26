@@ -1,5 +1,6 @@
 //! Concrete `wasmi` bindings for the version-one capability ABI.
 
+mod balance;
 mod calls;
 mod context;
 mod crypto;
@@ -29,6 +30,7 @@ pub(super) const STATUS_INVALID: i32 = -2;
 pub(super) const STATUS_BOUNDS: i32 = -3;
 pub(super) const STATUS_METER: i32 = -4;
 pub(super) const STATUS_EVIDENCE: i32 = -5;
+pub(super) const STATUS_ABSENT: i32 = -7;
 pub(super) const FUEL_METERING_DISABLED: &str = "programs runtime fuel metering is disabled";
 pub(super) const COMPOSITION_REFUSED: &str = "program composition refused the call graph";
 
@@ -347,6 +349,7 @@ pub(crate) fn linker(
         scan::register_candidate(&mut linker)?;
         storage::register_candidate(&mut linker)?;
         transfer::register_candidate(&mut linker)?;
+        balance::register_candidate(&mut linker)?;
     }
     transfer::register(&mut linker)?;
     linker
@@ -402,7 +405,8 @@ pub(crate) const fn error_status(error: AbiError) -> i32 {
     match error {
         AbiError::CapabilityDenied | AbiError::CapabilityEscalation => STATUS_DENIED,
         AbiError::Meter(_) => STATUS_METER,
-        AbiError::ReceiptMismatch => STATUS_EVIDENCE,
+        AbiError::ReceiptMismatch | AbiError::BalanceEvidenceUnavailable => STATUS_EVIDENCE,
+        AbiError::BalanceAbsent => STATUS_ABSENT,
         AbiError::Storage(
             crate::storage::StorageError::InvalidScanCursor
             | crate::storage::StorageError::InvalidScanLimits,

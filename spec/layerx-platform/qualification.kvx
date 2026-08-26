@@ -1811,6 +1811,14 @@ observed = "Fresh and receipt-rebuilt capability ceilings set reconciled=true ev
 assumption = "There is intentionally no positive capability-ceiling admission path until core defines and produces a canonical budget key/value proof that can issue identity-bound ReconciliationState. Qualification must later bind that state to the exact tenant, capability, asset, ceiling and protocol window before installing it, then restore concurrency, unknown-hold, expiry and receipt-settlement coverage. No build or passing result is asserted."
 severity = "missing-canonical-producer"
 
+[observation.31.2.1]
+task = "31.2"
+file = "src/modules/programs/accounts.c, src/modules/programs/call.c, programs/crates/layerx-programs-runtime/src/ffi_call.rs"
+symbol = "lxp_programs_value_account_read, layerx_programs_call_balance_view_begin, CReceiptOracle::verified_balance"
+observed = "The canonical Core producer available to Programs can prove a current balance only for a registered ABI-two program value account: it binds the account and asset, account-registry proof, Programs binding proof, receipt digest, observed sequence and resulting state root. The BalanceView ingress uses exactly that producer. Core exposes no equivalent proof producer here for arbitrary principal accounts or unregistered accounts, so those sight grants return typed absent or evidence-unavailable results instead of reading raw kernel state or inventing a verified balance."
+assumption = "If Programs must observe balances outside registered program value accounts, a later protocol task must add a canonical Core account-and-asset proof producer with the same receipt/state-root binding. Qualification must exercise zero balance, missing account, wrong asset, stale receipt, proof mismatch, sight denial, grant-count bounds, per-read metering and the absence of transfer authority."
+severity = "dependency-boundary"
+
 [observation.30.7.1]
 task = "30.7"
 file = "programs/sdk/rust/examples/escrow/src/lib.rs, programs/sdk/rust/src/receipt.rs"

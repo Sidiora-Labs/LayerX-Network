@@ -25,6 +25,10 @@ pub(super) enum CapabilityKey {
         to: [u8; 32],
     },
     ReceiptRead([u8; 32]),
+    BalanceView {
+        account: [u8; 32],
+        asset: [u8; 32],
+    },
     SharedStorageRead,
     SharedStorageWrite,
 }
@@ -54,6 +58,13 @@ pub enum Capability {
         maximum_amount: u128,
     },
     ReceiptRead {
+        receipt_digest: [u8; 32],
+    },
+    /// Sight of one exact account/asset fact at one verified receipt. This
+    /// grant is never consulted by either spending-authority path.
+    BalanceView {
+        account: [u8; 32],
+        asset: [u8; 32],
         receipt_digest: [u8; 32],
     },
 }
@@ -97,6 +108,10 @@ impl Capability {
                 to: *to,
             },
             Self::ReceiptRead { receipt_digest } => CapabilityKey::ReceiptRead(*receipt_digest),
+            Self::BalanceView { account, asset, .. } => CapabilityKey::BalanceView {
+                account: *account,
+                asset: *asset,
+            },
         }
     }
 
@@ -123,6 +138,11 @@ impl Capability {
                         .is_ok_and(|derived| derived.matches(source_account))
             }
             Self::ReceiptRead { receipt_digest } => receipt_digest != &[0; 32],
+            Self::BalanceView {
+                account,
+                asset,
+                receipt_digest,
+            } => account != &[0; 32] && asset != &[0; 32] && receipt_digest != &[0; 32],
             Self::StorageRead
             | Self::StorageWrite
             | Self::SharedStorageRead
@@ -146,12 +166,19 @@ impl CapabilitySet {
     /// Refuses invalid or duplicate grants.
     pub fn new(grants: impl IntoIterator<Item = Capability>) -> Result<Self, AbiError> {
         let mut capabilities = BTreeMap::new();
+        let mut balance_views = 0usize;
         for grant in grants {
             if capabilities.len() == MAX_CAPABILITIES {
                 return Err(AbiError::InvalidCapability);
             }
             if !grant.valid() {
                 return Err(AbiError::InvalidCapability);
+            }
+            if matches!(grant, Capability::BalanceView { .. }) {
+                balance_views = balance_views.saturating_add(1);
+                if balance_views > super::MAX_BALANCE_VIEW_GRANTS {
+                    return Err(AbiError::InvalidCapability);
+                }
             }
             if capabilities.insert(grant.key(), grant).is_some() {
                 return Err(AbiError::DuplicateCapability);
@@ -208,6 +235,16 @@ impl CapabilitySet {
                 }
                 Capability::ReceiptRead { receipt_digest } => {
                     encoded.push(6);
+                    encoded.extend_from_slice(receipt_digest);
+                }
+                Capability::BalanceView {
+                    account,
+                    asset,
+                    receipt_digest,
+                } => {
+                    encoded.push(10);
+                    encoded.extend_from_slice(account);
+                    encoded.extend_from_slice(asset);
                     encoded.extend_from_slice(receipt_digest);
                 }
             }
@@ -283,6 +320,16 @@ impl CapabilitySet {
                         ..
                     },
                 ) if requested > granted => return Err(AbiError::CapabilityEscalation),
+                (
+                    Capability::BalanceView {
+                        receipt_digest: requested,
+                        ..
+                    },
+                    Capability::BalanceView {
+                        receipt_digest: granted,
+                        ..
+                    },
+                ) if requested != granted => return Err(AbiError::CapabilityEscalation),
                 _ => {}
             }
         }
@@ -384,6 +431,16 @@ impl CapabilitySet {
                         ..
                     },
                 ) => child <= parent,
+                (
+                    Some(Capability::BalanceView {
+                        receipt_digest: parent,
+                        ..
+                    }),
+                    Capability::BalanceView {
+                        receipt_digest: child,
+                        ..
+                    },
+                ) => child == parent,
                 (Some(_), _) => true,
                 (None, _) => false,
             }
@@ -448,6 +505,11 @@ impl CapabilitySet {
                         maximum_amount: u128::from_be_bytes(take_array::<16>(bytes, &mut cursor)?),
                     }
                 }
+                10 if candidate_v2 => Capability::BalanceView {
+                    account: take_array::<32>(bytes, &mut cursor)?,
+                    asset: take_array::<32>(bytes, &mut cursor)?,
+                    receipt_digest: take_array::<32>(bytes, &mut cursor)?,
+                },
                 _ => return Err(AbiError::InvalidEncoding),
             };
             grants.push(grant);
@@ -465,6 +527,19 @@ impl CapabilitySet {
     pub(super) fn receipt_digests(&self) -> impl Iterator<Item = [u8; 32]> + '_ {
         self.0.values().filter_map(|capability| match capability {
             Capability::ReceiptRead { receipt_digest } => Some(*receipt_digest),
+            _ => None,
+        })
+    }
+
+    pub(super) fn balance_grants(
+        &self,
+    ) -> impl Iterator<Item = ([u8; 32], [u8; 32], [u8; 32])> + '_ {
+        self.0.values().filter_map(|capability| match capability {
+            Capability::BalanceView {
+                account,
+                asset,
+                receipt_digest,
+            } => Some((*account, *asset, *receipt_digest)),
             _ => None,
         })
     }
@@ -504,6 +579,61 @@ mod tests {
     use crate::execute::ABI_VERSION;
     use crate::storage::{PrincipalId, ProgramId, Storage};
 
+    #[test]
+    fn balance_sight_is_exact_and_confers_no_spending_authority() {
+        let account = [41; 32];
+        let asset = [42; 32];
+        let receipt = [43; 32];
+        let sight = Capability::BalanceView {
+            account,
+            asset,
+            receipt_digest: receipt,
+        };
+        let grants = CapabilitySet::new([sight.clone()])
+            .unwrap_or_else(|error| panic!("sight grant: {error}"));
+        assert!(!grants.permits_transfer(asset, account, 1));
+        assert!(!grants.has_program_spend());
+        assert!(grants.narrow([sight]).is_ok());
+        assert_eq!(
+            grants.narrow([Capability::BalanceView {
+                account,
+                asset,
+                receipt_digest: [44; 32],
+            }]),
+            Err(AbiError::CapabilityEscalation)
+        );
+    }
+
+    #[test]
+    fn balance_sight_count_and_candidate_encoding_are_bounded() {
+        assert_eq!(super::super::MAX_BALANCE_VIEW_GRANTS, 32);
+        let grants = (1_u8..=32).map(|index| {
+            Capability::BalanceView {
+                account: [index; 32],
+                asset: [100; 32],
+                receipt_digest: [101; 32],
+            }
+        });
+        let bounded = CapabilitySet::new(grants)
+            .unwrap_or_else(|error| panic!("bounded sight grants: {error}"));
+        let encoded = bounded.canonical_encoding();
+        assert!(CapabilitySet::decode_candidate_canonical(&encoded).is_ok());
+        assert_eq!(
+            CapabilitySet::decode_canonical(&encoded),
+            Err(AbiError::InvalidEncoding)
+        );
+        let over_limit = (1_u8..=33).map(
+            |index| Capability::BalanceView {
+                account: [index; 32],
+                asset: [102; 32],
+                receipt_digest: [103; 32],
+            },
+        );
+        assert_eq!(
+            CapabilitySet::new(over_limit),
+            Err(AbiError::InvalidCapability)
+        );
+    }
     struct NoReceipts;
 
     impl ReceiptOracle for NoReceipts {
@@ -726,6 +856,7 @@ mod tests {
             child,
             AuthorizationContext::nested(actor, child_grants, child_frame),
             Storage::new(),
+            BTreeMap::new(),
             BTreeMap::new(),
         )
         .unwrap_or_else(|error| panic!("nested ABI: {error}"));
