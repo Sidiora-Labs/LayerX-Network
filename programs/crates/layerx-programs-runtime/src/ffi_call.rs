@@ -842,13 +842,17 @@ impl ReceiptOracle for CReceiptOracle {
             })
             .map_err(|_| AbiError::BalanceEvidenceUnavailable)
         };
-        let returned_account = read(0, 32)?.try_into().map_err(|_| AbiError::ReceiptMismatch)?;
-        let returned_asset = read(1, 32)?.try_into().map_err(|_| AbiError::ReceiptMismatch)?;
+        let returned_account = <[u8; 32]>::try_from(read(0, 32)?)
+            .map_err(|_| AbiError::ReceiptMismatch)?;
+        let returned_asset = <[u8; 32]>::try_from(read(1, 32)?)
+            .map_err(|_| AbiError::ReceiptMismatch)?;
         let balance = <[u8; 16]>::try_from(read(2, 16)?)
             .map(u128::from_be_bytes)
             .map_err(|_| AbiError::ReceiptMismatch)?;
-        let returned_digest = read(3, 32)?.try_into().map_err(|_| AbiError::ReceiptMismatch)?;
-        let state_root = read(4, 32)?.try_into().map_err(|_| AbiError::ReceiptMismatch)?;
+        let returned_digest = <[u8; 32]>::try_from(read(3, 32)?)
+            .map_err(|_| AbiError::ReceiptMismatch)?;
+        let state_root = <[u8; 32]>::try_from(read(4, 32)?)
+            .map_err(|_| AbiError::ReceiptMismatch)?;
         let sequence = <[u8; 8]>::try_from(read(5, 8)?)
             .map(u64::from_be_bytes)
             .map_err(|_| AbiError::ReceiptMismatch)?;

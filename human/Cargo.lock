@@ -884,6 +884,7 @@ dependencies = [
  "layerx-proof",
  "layerx-sdk",
  "layerx-types",
+ "layerx-wire",
  "passkey-auth",
  "proptest",
  "rustls",

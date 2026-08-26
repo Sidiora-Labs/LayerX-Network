@@ -81,7 +81,10 @@ impl DeploymentRecord {
     /// modules, modules that do not hash to the recorded code hash, and
     /// inconsistent version history.
     pub fn validate(&self) -> Result<(), RegistryError> {
-        if matches!(self.upgrade_policy, UpgradePolicy::Authority([0; 32])) {
+        if matches!(
+            self.upgrade_policy,
+            UpgradePolicy::Authority(authority) if authority == [0; 32]
+        ) {
             return Err(RegistryError::InvalidUpgradeAuthority);
         }
         if self.version == 0

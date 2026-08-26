@@ -191,7 +191,10 @@ impl Lifecycle {
         if self.programs.contains_key(&activity.program) {
             return Err(LifecycleRefusal::AlreadyDeployed);
         }
-        if matches!(activity.upgrade_policy, UpgradePolicy::Authority([0; 32])) {
+        if matches!(
+            activity.upgrade_policy,
+            UpgradePolicy::Authority(authority) if authority == [0; 32]
+        ) {
             return Err(LifecycleRefusal::InvalidAuthority);
         }
         Self::check_abi(activity.abi_version)?;

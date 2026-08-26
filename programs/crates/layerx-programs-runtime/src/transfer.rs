@@ -8,8 +8,9 @@ use std::collections::BTreeMap;
 
 use crate::abi::{
     AbiEffects, AuthorizationContext, CallFrameId, CapabilitySet, TransferRequest,
-    MAX_EVENT_DATA_BYTES, MAX_EVENT_TOPIC_BYTES,
 };
+#[cfg(test)]
+use crate::abi::{MAX_EVENT_DATA_BYTES, MAX_EVENT_TOPIC_BYTES};
 use crate::accounts::{derive_program_account, MAX_PROGRAM_ACCOUNT_SEED_BYTES};
 use crate::calls::CallGraph;
 use crate::crypto::{hash_bytes, HashAlgorithm};
