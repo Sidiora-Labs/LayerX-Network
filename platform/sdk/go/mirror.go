@@ -46,18 +46,18 @@ func (e MirrorVerificationError) Error() string {
 }
 
 type MirrorVerifier struct {
-	executable    string
-	configuration string
-	executableDigest [32]byte
+	executable          string
+	configuration       string
+	executableDigest    [32]byte
 	configurationDigest [32]byte
-	timeout       time.Duration
+	timeout             time.Duration
 }
 
 const (
-	maxMirrorRequestBytes  = 40 * 1024 * 1024
-	maxMirrorResponseBytes = 1024 * 1024
-	maxMirrorEvidenceBytes = (maxMirrorRequestBytes - 64*1024) / 2
-	maxMirrorExecutableBytes = 512 * 1024 * 1024
+	maxMirrorRequestBytes       = 40 * 1024 * 1024
+	maxMirrorResponseBytes      = 1024 * 1024
+	maxMirrorEvidenceBytes      = (maxMirrorRequestBytes - 64*1024) / 2
+	maxMirrorExecutableBytes    = 512 * 1024 * 1024
 	maxMirrorConfigurationBytes = 16 * 1024 * 1024
 )
 
@@ -279,24 +279,24 @@ func (v *MirrorVerifier) verify(parent context.Context, batch uint64, policy Mir
 	if err != nil {
 		return zero, err
 	}
-	if verifiedBatch != batch
-		|| response.Verification.Level == ""
-		|| len(response.Verification.Level) > 64
-		|| response.Verification.SourceID == ""
-		|| len(response.Verification.SourceID) > 64
-		|| response.Verification.Target == ""
-		|| len(response.Verification.Target) > 2048
-		|| response.Verification.CanonicalPosition == ""
-		|| len(response.Verification.CanonicalPosition) > 2048
-		|| (response.Verification.Provenance != "Canonical" && response.Verification.Provenance != "Reorged")
-		|| response.Verification.BatchLag == ""
-		|| len(response.Verification.BatchLag) > 64
-		|| response.Verification.FailoverCount < 0
-		|| response.Verification.FailoverCount >= len(policy.Candidates)
-		|| response.Verification.AgreeingSources < 1
-		|| response.Verification.AgreeingSources > len(policy.Candidates)
-		|| (policy.Kind == MirrorAgreement && response.Verification.AgreeingSources < policy.Minimum)
-		|| response.Verification.CheckpointLevel != "unavailable" {
+	if verifiedBatch != batch ||
+		response.Verification.Level == "" ||
+		len(response.Verification.Level) > 64 ||
+		response.Verification.SourceID == "" ||
+		len(response.Verification.SourceID) > 64 ||
+		response.Verification.Target == "" ||
+		len(response.Verification.Target) > 2048 ||
+		response.Verification.CanonicalPosition == "" ||
+		len(response.Verification.CanonicalPosition) > 2048 ||
+		(response.Verification.Provenance != "Canonical" && response.Verification.Provenance != "Reorged") ||
+		response.Verification.BatchLag == "" ||
+		len(response.Verification.BatchLag) > 64 ||
+		response.Verification.FailoverCount < 0 ||
+		response.Verification.FailoverCount >= len(policy.Candidates) ||
+		response.Verification.AgreeingSources < 1 ||
+		response.Verification.AgreeingSources > len(policy.Candidates) ||
+		(policy.Kind == MirrorAgreement && response.Verification.AgreeingSources < policy.Minimum) ||
+		response.Verification.CheckpointLevel != "unavailable" {
 		return zero, MirrorVerificationError{MirrorMalformed}
 	}
 	evidenceDigest, err := fixedDigest(response.Verification.EvidenceDigest)

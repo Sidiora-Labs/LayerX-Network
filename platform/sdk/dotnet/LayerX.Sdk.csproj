@@ -4,6 +4,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <DefaultItemExcludes>$(DefaultItemExcludes);tests/**</DefaultItemExcludes>
     <PackageId>LayerX.Sdk</PackageId>
     <Version>0.1.0</Version>
     <Description>Production LayerX Agent and Human API SDK.</Description>

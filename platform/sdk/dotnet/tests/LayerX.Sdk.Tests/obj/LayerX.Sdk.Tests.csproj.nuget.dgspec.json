@@ -1,0 +1,140 @@
+{
+  "format": 1,
+  "restore": {
+    "/root/Layerx-protocol/platform/sdk/dotnet/tests/LayerX.Sdk.Tests/LayerX.Sdk.Tests.csproj": {}
+  },
+  "projects": {
+    "/root/Layerx-protocol/platform/sdk/dotnet/LayerX.Sdk.csproj": {
+      "version": "0.1.0",
+      "restore": {
+        "projectUniqueName": "/root/Layerx-protocol/platform/sdk/dotnet/LayerX.Sdk.csproj",
+        "projectName": "LayerX.Sdk",
+        "projectPath": "/root/Layerx-protocol/platform/sdk/dotnet/LayerX.Sdk.csproj",
+        "packagesPath": "/root/.nuget/packages/",
+        "outputPath": "/root/Layerx-protocol/platform/sdk/dotnet/obj/",
+        "projectStyle": "PackageReference",
+        "configFilePaths": [
+          "/root/.nuget/NuGet/NuGet.Config"
+        ],
+        "originalTargetFrameworks": [
+          "net8.0"
+        ],
+        "sources": {
+          "https://api.nuget.org/v3/index.json": {}
+        },
+        "frameworks": {
+          "net8.0": {
+            "targetAlias": "net8.0",
+            "projectReferences": {}
+          }
+        },
+        "warningProperties": {
+          "allWarningsAsErrors": true,
+          "warnAsError": [
+            "NU1605"
+          ]
+        }
+      },
+      "frameworks": {
+        "net8.0": {
+          "targetAlias": "net8.0",
+          "dependencies": {
+            "BouncyCastle.Cryptography": {
+              "target": "Package",
+              "version": "[2.7.0, )"
+            }
+          },
+          "imports": [
+            "net461",
+            "net462",
+            "net47",
+            "net471",
+            "net472",
+            "net48",
+            "net481"
+          ],
+          "assetTargetFallback": true,
+          "warn": true,
+          "frameworkReferences": {
+            "Microsoft.NETCore.App": {
+              "privateAssets": "all"
+            }
+          },
+          "runtimeIdentifierGraphPath": "/usr/lib/dotnet/sdk/8.0.130/PortableRuntimeIdentifierGraph.json"
+        }
+      }
+    },
+    "/root/Layerx-protocol/platform/sdk/dotnet/tests/LayerX.Sdk.Tests/LayerX.Sdk.Tests.csproj": {
+      "version": "1.0.0",
+      "restore": {
+        "projectUniqueName": "/root/Layerx-protocol/platform/sdk/dotnet/tests/LayerX.Sdk.Tests/LayerX.Sdk.Tests.csproj",
+        "projectName": "LayerX.Sdk.Tests",
+        "projectPath": "/root/Layerx-protocol/platform/sdk/dotnet/tests/LayerX.Sdk.Tests/LayerX.Sdk.Tests.csproj",
+        "packagesPath": "/root/.nuget/packages/",
+        "outputPath": "/root/Layerx-protocol/platform/sdk/dotnet/tests/LayerX.Sdk.Tests/obj/",
+        "projectStyle": "PackageReference",
+        "configFilePaths": [
+          "/root/.nuget/NuGet/NuGet.Config"
+        ],
+        "originalTargetFrameworks": [
+          "net8.0"
+        ],
+        "sources": {
+          "https://api.nuget.org/v3/index.json": {}
+        },
+        "frameworks": {
+          "net8.0": {
+            "targetAlias": "net8.0",
+            "projectReferences": {
+              "/root/Layerx-protocol/platform/sdk/dotnet/LayerX.Sdk.csproj": {
+                "projectPath": "/root/Layerx-protocol/platform/sdk/dotnet/LayerX.Sdk.csproj"
+              }
+            }
+          }
+        },
+        "warningProperties": {
+          "allWarningsAsErrors": true,
+          "warnAsError": [
+            "NU1605"
+          ]
+        }
+      },
+      "frameworks": {
+        "net8.0": {
+          "targetAlias": "net8.0",
+          "dependencies": {
+            "Microsoft.NET.Test.Sdk": {
+              "target": "Package",
+              "version": "[17.10.0, )"
+            },
+            "xunit": {
+              "target": "Package",
+              "version": "[2.8.1, )"
+            },
+            "xunit.runner.visualstudio": {
+              "target": "Package",
+              "version": "[2.8.2, )"
+            }
+          },
+          "imports": [
+            "net461",
+            "net462",
+            "net47",
+            "net471",
+            "net472",
+            "net48",
+            "net481"
+          ],
+          "assetTargetFallback": true,
+          "warn": true,
+          "frameworkReferences": {
+            "Microsoft.NETCore.App": {
+              "privateAssets": "all"
+            }
+          },
+          "runtimeIdentifierGraphPath": "/usr/lib/dotnet/sdk/8.0.130/PortableRuntimeIdentifierGraph.json"
+        }
+      }
+    }
+  }
+}

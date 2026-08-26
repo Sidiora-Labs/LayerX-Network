@@ -6,6 +6,8 @@
 
 use std::fmt::{Display, Formatter};
 
+use sha2::{Digest as _, Sha256};
+
 const IDENTIFIER_LIMIT: usize = 64;
 const VERSION_LIMIT: usize = 32;
 
@@ -129,6 +131,23 @@ impl PinnedSpec {
     pub const fn document_digest(&self) -> [u8; 32] {
         self.document_digest
     }
+
+    /// Verifies exact specification document bytes against this pin.
+    ///
+    /// # Errors
+    ///
+    /// Refuses empty documents and any document whose SHA-256 digest differs
+    /// from the pinned content digest.
+    pub fn verify_document(&self, document: &[u8]) -> Result<(), AdapterError> {
+        if document.is_empty() {
+            return Err(AdapterError::DocumentDigestMismatch);
+        }
+        let digest: [u8; 32] = Sha256::digest(document).into();
+        if digest != self.document_digest {
+            return Err(AdapterError::DocumentDigestMismatch);
+        }
+        Ok(())
+    }
 }
 
 /// The conformance suite an adapter declares at registration: its identifier,
@@ -231,6 +250,7 @@ pub enum AdapterError {
     InvalidIdentifier,
     UnpinnedVersion,
     UnpinnedDocument,
+    DocumentDigestMismatch,
     EmptyConformanceSuite,
     UnpinnedConformanceSuite,
 }
@@ -244,6 +264,9 @@ impl Display for AdapterError {
             }
             Self::UnpinnedDocument => {
                 formatter.write_str("adapter must pin the upstream specification content")
+            }
+            Self::DocumentDigestMismatch => {
+                formatter.write_str("specification document does not match the pinned digest")
             }
             Self::EmptyConformanceSuite => {
                 formatter.write_str("adapter conformance suite declares no vectors")
@@ -278,6 +301,25 @@ mod tests {
                 "{unpinned} must be refused"
             );
         }
+    }
+
+    #[test]
+    fn pinned_documents_verify_by_content_and_refuse_altered_bytes() {
+        use sha2::{Digest as _, Sha256};
+        let document = b"upstream specification bytes";
+        let digest: [u8; 32] = Sha256::digest(document).into();
+        let version = SpecVersion::parse("2").unwrap_or_else(|error| panic!("version: {error}"));
+        let pin = PinnedSpec::new(identifier("x402"), version, digest)
+            .unwrap_or_else(|error| panic!("pin: {error}"));
+        assert!(pin.verify_document(document).is_ok());
+        assert_eq!(
+            pin.verify_document(b"upstream specification bytes altered"),
+            Err(AdapterError::DocumentDigestMismatch)
+        );
+        assert_eq!(
+            pin.verify_document(&[]),
+            Err(AdapterError::DocumentDigestMismatch)
+        );
     }
 
     #[test]

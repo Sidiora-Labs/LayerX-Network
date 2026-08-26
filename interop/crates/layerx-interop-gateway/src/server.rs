@@ -180,7 +180,10 @@ impl ExternalState {
 ///
 /// # Errors
 /// Refuses unknown methods, paths, transports and unbounded operation keys.
-pub fn interop_gateway_routes(method: &str, path: &str) -> Result<InteropRoute<'_>, RouteError> {
+pub fn interop_gateway_routes<'a>(
+    method: &str,
+    path: &'a str,
+) -> Result<InteropRoute<'a>, RouteError> {
     match (method, path) {
         ("GET", "/livez") => return Ok(InteropRoute::Live),
         ("GET", "/readyz") => return Ok(InteropRoute::Ready),

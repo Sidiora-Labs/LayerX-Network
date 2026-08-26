@@ -29,6 +29,16 @@ const VALUE_LIMIT: usize = 512;
 const SIGNATURE_LIMIT: usize = 16 * 1024;
 const BINDING_DOMAIN: &[u8] = b"LayerX/interop/visa-tap/binding/v1\0";
 
+/// Exact official Visa Trusted Agent Protocol repository revision used by
+/// this adapter. Visa publishes no standalone specification document; the
+/// pinned repository `README.md` is the published protocol description.
+pub const VISA_TAP_SPEC_COMMIT: &str = "16d59bdf3f8a542bc538d0962edbb80ea30a02af";
+/// SHA-256 of `README.md` at [`VISA_TAP_SPEC_COMMIT`].
+pub const VISA_TAP_SPEC_SHA256: [u8; 32] = [
+    0x5f, 0x5f, 0xba, 0xef, 0x32, 0xd5, 0x75, 0xd1, 0xf8, 0x3a, 0x0a, 0x2c, 0x80, 0x51, 0x33, 0x8c,
+    0x37, 0xf7, 0x22, 0x4c, 0xd6, 0xaf, 0xd4, 0x64, 0xd6, 0x38, 0xb8, 0xf2, 0x86, 0x3c, 0xad, 0xa5,
+];
+
 /// Trusted Agent Protocol interaction asserted by the message signature tag.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AgentIntent {

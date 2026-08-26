@@ -255,6 +255,7 @@ dependencies = [
  "rand_core",
  "serde",
  "sha2",
+ "signature",
  "subtle",
  "zeroize",
 ]

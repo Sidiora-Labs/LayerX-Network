@@ -5,7 +5,8 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use ed25519_dalek::{Signature, Verifier as _, VerifyingKey as Ed25519Key};
 use layerx_ap2::{
-    KeyResolver, KeyUse, MandateMode, MandateVerifier, ProtectedHeader, VerificationContext,
+    authorize_payment, Ap2Error, KeyResolver, KeyUse, LayerXAssetBinding, MandateMode,
+    MandateVerifier, Merchant, ProtectedHeader, VerificationContext,
 };
 use layerx_fiat::{
     EvidenceClass, ExternalId, FiatAdapter, FiatJourneyState, FiatRail, ProviderEvidence,
@@ -16,18 +17,20 @@ use layerx_interop_gateway::server::{
     interop_gateway_routes, ExternalState, HostedAdapter, IngressTransport, InteropRoute,
 };
 use layerx_interop_gateway::trace::TraceId;
+use layerx_interop_gateway::GatewayCore;
 use layerx_platform_gateway::http::{IncomingRequest, OutgoingResponse};
 use layerx_platform_gateway::store::{
     KeyRecord, Reservation, TapCredentialRecord, TapNonceConsumption,
 };
 use layerx_platform_gateway::{
     authenticate_gateway_key, gateway_audit_event, gateway_digest, verify_activity_operation,
-    verify_submission, AccessError, AuthorityFacts,
+    verify_submission, AccessError, AuthorityFacts, ModuleRegistry,
 };
 use layerx_proof::receipt::{verify, AuthorizedBatch};
 use layerx_ucp::{
-    Capability, CheckoutSubmission, NegotiatedCapabilities, PaymentHandler, PlatformProfile,
-    UcpIdempotencyKey,
+    Capability, CheckoutStatus, CheckoutSubmission, ExecutedUcpPayment, NegotiatedCapabilities,
+    OrderMetadata, PaymentHandler, PlatformProfile, UcpAdapter, UcpError, UcpIdempotencyKey,
+    UcpPaymentIntent, UcpPaymentPlane, UcpPlaneResult,
 };
 use layerx_visa_tap::{
     prepare_trusted_intent, AgentIntent, AgentPublicKey, CredentialBinding,
@@ -35,10 +38,15 @@ use layerx_visa_tap::{
     TrustedAgentRegistry,
 };
 use layerx_x402::buyer::{BuyerPaymentPlane, PaymentBuildRequest, SupportedKind};
-use layerx_x402::facilitator::FacilitatorRequest;
+use layerx_x402::facilitator::{
+    FacilitatorPaymentRequest, FacilitatorPlane, FacilitatorRequest, FacilitatorSettlementOutcome,
+    PlaneVerifyOutcome, SettlementStep,
+};
+use layerx_x402::model::X402Error;
+use layerx_x402::seller::ExecutedPayment as X402ExecutedPayment;
 use layerx_x402::transport::encode_payment_required;
 use layerx_x402::transport::{decode_facilitator_request, TransportKind, TransportValue};
-use layerx_x402::{Buyer, Facilitator, PaymentRequired, Seller, SettlementResponse};
+use layerx_x402::{Buyer, Facilitator, PaymentRequired, Seller};
 use p256::ecdsa::VerifyingKey as P256Key;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -50,7 +58,6 @@ use subtle::ConstantTimeEq;
 const MAX_BODY: usize = 512 * 1024;
 const FIAT_EVIDENCE_SIGNATURE_DOMAIN: &[u8] =
     b"LayerX/interop/fiat/provider-evidence/v1\0";
-const AP2_EXECUTION_KEY_DOMAIN: &[u8] = b"LayerX/interop/ap2/execution-key/v1\0";
 
 pub fn route(config: &Config, request: &IncomingRequest) -> OutgoingResponse {
     if request.headers.contains_key("x-layerx-principal")
@@ -294,13 +301,15 @@ fn dispatch(
         }
         InteropRoute::X402SellerOffer { transport } => x402_seller(request, transport),
         InteropRoute::X402Verify { transport } => {
-            x402_verify(config, request, transport, principal, trace)
+            x402_verify(config, request, transport, record, principal, trace)
         }
-        InteropRoute::X402Settle { transport } => x402_settle(
-            config, request, transport, record, principal, trace, operation,
-        ),
-        InteropRoute::Ap2VerifyMandates => ap2(config, request, record, trace, operation, false),
-        InteropRoute::Ap2Execute => ap2(config, request, record, trace, operation, true),
+        InteropRoute::X402Settle { transport } => {
+            x402_settle(config, request, transport, record, principal, trace)
+        }
+        InteropRoute::Ap2VerifyMandates => {
+            ap2(config, request, record, principal, trace, operation, false)
+        }
+        InteropRoute::Ap2Execute => ap2(config, request, record, principal, trace, operation, true),
         InteropRoute::UcpComplete => ucp(config, request, record, principal, trace, operation),
         InteropRoute::VisaVerifyIntent => {
             visa(config, request, record, principal, trace, operation, false)
@@ -435,10 +444,80 @@ fn x402_request(
         .map_err(|_| ())
 }
 
+fn gateway_core(config: &Config, trace: &TraceId, now: u64) -> Result<GatewayCore, ()> {
+    let mut gateway = GatewayCore::new();
+    for registered in config.manifest.adapters.values() {
+        gateway
+            .register_adapter(registered.descriptor.clone(), trace, now)
+            .map_err(|_| ())?;
+    }
+    Ok(gateway)
+}
+
+struct X402VerifyPlane<'a> {
+    modules: &'a ModuleRegistry,
+    protocol_version: u16,
+    protocol_network_id: u32,
+    expected_signer: [u8; 32],
+}
+
+impl FacilitatorPlane for X402VerifyPlane<'_> {
+    fn verify(
+        &mut self,
+        request: &FacilitatorPaymentRequest,
+        _trace: &TraceId,
+    ) -> Result<PlaneVerifyOutcome, X402Error> {
+        if request.payment_requirements.layerx_facts().is_err() {
+            return Ok(PlaneVerifyOutcome::Invalid {
+                reason: "unsupported_offer",
+                payer: None,
+            });
+        }
+        let activity = request
+            .payment_payload
+            .payload
+            .get("layerxActivity")
+            .and_then(Value::as_str)
+            .and_then(|value| decode_hex(value, MAX_BODY).ok())
+            .filter(|value| !value.is_empty());
+        let Some(activity) = activity else {
+            return Ok(PlaneVerifyOutcome::Invalid {
+                reason: "typed_intent_required",
+                payer: None,
+            });
+        };
+        match verify_submission(
+            &activity,
+            self.modules,
+            self.protocol_version,
+            self.protocol_network_id,
+            &self.expected_signer,
+        ) {
+            Ok(submission) => Ok(PlaneVerifyOutcome::Valid {
+                payer: Some(hex(&self.expected_signer)),
+                extra: Some(json!({ "layerxActivityId": hex(&submission.activity_id()) })),
+            }),
+            Err(_) => Ok(PlaneVerifyOutcome::Invalid {
+                reason: "activity_authorization_refused",
+                payer: None,
+            }),
+        }
+    }
+
+    fn settle(
+        &mut self,
+        _request: FacilitatorPaymentRequest,
+        _trace: &TraceId,
+    ) -> Result<FacilitatorSettlementOutcome, X402Error> {
+        Err(X402Error::PaymentRefused)
+    }
+}
+
 fn x402_verify(
     config: &Config,
     request: &IncomingRequest,
     transport: IngressTransport,
+    record: &KeyRecord,
     principal: &PrincipalId,
     trace: &TraceId,
 ) -> Dispatch {
@@ -450,26 +529,105 @@ fn x402_verify(
         Ok(value) => value,
         Err(_) => return Dispatch::error(503, "pending", "adapter_configuration_invalid"),
     };
-    let supported = facilitator.supported().kinds.iter().any(|kind| {
-        kind.scheme == parsed.payment_requirements.scheme
-            && kind.network == parsed.payment_requirements.network
-    });
-    let intent_bound = parsed
-        .payment_payload
-        .payload
-        .get("layerxActivity")
-        .and_then(Value::as_str)
-        .is_some();
-    Dispatch::result(
-        200,
-        "completed",
-        json!({
-            "isValid": supported && intent_bound,
-            "invalidReason": if supported && intent_bound { Value::Null } else if supported { json!("typed_intent_required") } else { json!("unsupported_offer") },
-            "trace": trace.as_str(),
-            "principal": principal.as_str()
-        }),
-    )
+    let expected_signer = match parse_hex32(&record.signer_public_key) {
+        Ok(value) => value,
+        Err(_) => return Dispatch::error(503, "pending", "authenticated_signer_invalid"),
+    };
+    let server_now = match now() {
+        Ok(value) => value,
+        Err(_) => return Dispatch::error(503, "pending", "clock_unavailable"),
+    };
+    let mut gateway = match gateway_core(config, trace, server_now) {
+        Ok(value) => value,
+        Err(()) => return Dispatch::error(503, "pending", "adapter_configuration_invalid"),
+    };
+    let mut plane = X402VerifyPlane {
+        modules: &config.modules,
+        protocol_version: config.protocol_version,
+        protocol_network_id: config.protocol_network_id,
+        expected_signer,
+    };
+    match facilitator.verify(&mut gateway, principal, &parsed, &mut plane, trace, server_now) {
+        Ok(response) => Dispatch::result(200, "completed", json!(response)),
+        Err(traced) => match traced.into_error() {
+            X402Error::UnsupportedOffer => {
+                Dispatch::error(400, "refused", "unsupported_x402_offer")
+            }
+            X402Error::Gateway(_) => Dispatch::error(503, "pending", "settlement_unavailable"),
+            _ => Dispatch::error(400, "refused", "invalid_x402_request"),
+        },
+    }
+}
+
+struct X402SettlePlane<'a> {
+    config: &'a Config,
+    authorization: &'a str,
+    expected_signer: &'a str,
+    trace: &'a TraceId,
+    receipt_hex: Option<String>,
+    activity_id: Option<String>,
+    unavailable: bool,
+}
+
+impl FacilitatorPlane for X402SettlePlane<'_> {
+    fn verify(
+        &mut self,
+        _request: &FacilitatorPaymentRequest,
+        _trace: &TraceId,
+    ) -> Result<PlaneVerifyOutcome, X402Error> {
+        Err(X402Error::PaymentRefused)
+    }
+
+    fn settle(
+        &mut self,
+        request: FacilitatorPaymentRequest,
+        _trace: &TraceId,
+    ) -> Result<FacilitatorSettlementOutcome, X402Error> {
+        let activity = request
+            .payment_payload
+            .payload
+            .get("layerxActivity")
+            .and_then(Value::as_str)
+            .and_then(|value| decode_hex(value, MAX_BODY).ok())
+            .filter(|value| !value.is_empty());
+        let Some(activity) = activity else {
+            return Ok(FacilitatorSettlementOutcome::Refused {
+                reason: "typed_intent_required",
+                payer: None,
+            });
+        };
+        let idempotency = hex(&request.idempotency_key);
+        let execution = Execution {
+            config: self.config,
+            authorization: self.authorization,
+            activity,
+            idempotency: &idempotency,
+            expected_signer: self.expected_signer,
+            submitted_activity_id: None,
+            trace: self.trace,
+        };
+        match execution.submit() {
+            Ok(PlaneOutcome::Pending) => Ok(FacilitatorSettlementOutcome::Pending {
+                transaction: idempotency,
+            }),
+            Ok(PlaneOutcome::Refused) => Ok(FacilitatorSettlementOutcome::Refused {
+                reason: "payment_refused",
+                payer: None,
+            }),
+            Ok(PlaneOutcome::Executed(evidence)) => {
+                self.receipt_hex = Some(hex(&evidence.receipt));
+                self.activity_id = Some(hex(&evidence.verified.activity_id()));
+                Ok(FacilitatorSettlementOutcome::Executed(X402ExecutedPayment {
+                    canonical_receipt: evidence.receipt,
+                    authorised_batch: evidence.authorized,
+                }))
+            }
+            Err(_) => {
+                self.unavailable = true;
+                Err(X402Error::PaymentRefused)
+            }
+        }
+    }
 }
 
 fn x402_settle(
@@ -477,30 +635,20 @@ fn x402_settle(
     request: &IncomingRequest,
     transport: IngressTransport,
     record: &KeyRecord,
-    _principal: &PrincipalId,
+    principal: &PrincipalId,
     trace: &TraceId,
-    operation: &str,
 ) -> Dispatch {
     let parsed = match x402_request(request, transport) {
         Ok(value) => value,
         Err(()) => return Dispatch::error(400, "refused", "invalid_x402_request"),
     };
-    let activity = parsed
-        .payment_payload
-        .payload
-        .get("layerxActivity")
-        .and_then(Value::as_str)
-        .and_then(|value| decode_hex(value, MAX_BODY).ok());
-    let protocol_idempotency = parsed
+    let stable_identity = parsed
         .payment_payload
         .payload
         .get("layerxIdempotencyKey")
         .and_then(Value::as_str)
-        .filter(|value| value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit()));
-    let Some(activity) = activity else {
-        return Dispatch::error(400, "refused", "typed_intent_required");
-    };
-    let Some(protocol_idempotency) = protocol_idempotency else {
+        .and_then(|value| parse_hex32(value).ok());
+    let Some(stable_identity) = stable_identity else {
         return Dispatch::error(400, "refused", "protocol_idempotency_required");
     };
     let authorization = match request.headers.get("authorization") {
@@ -511,92 +659,61 @@ fn x402_settle(
         Ok(value) => value,
         Err(_) => return Dispatch::error(503, "pending", "adapter_configuration_invalid"),
     };
-    if !facilitator.supported().kinds.iter().any(|kind| {
-        kind.scheme == parsed.payment_requirements.scheme
-            && kind.network == parsed.payment_requirements.network
-    }) {
-        return Dispatch::error(400, "refused", "unsupported_x402_offer");
-    }
-    let execution = Execution {
+    let server_now = match now() {
+        Ok(value) => value,
+        Err(_) => return Dispatch::error(503, "pending", "clock_unavailable"),
+    };
+    let mut gateway = match gateway_core(config, trace, server_now) {
+        Ok(value) => value,
+        Err(()) => return Dispatch::error(503, "pending", "adapter_configuration_invalid"),
+    };
+    let mut plane = X402SettlePlane {
         config,
         authorization,
-        activity,
-        idempotency: protocol_idempotency,
         expected_signer: &record.signer_public_key,
-        submitted_activity_id: None,
         trace,
+        receipt_hex: None,
+        activity_id: None,
+        unavailable: false,
     };
-    match execution.submit() {
-        Ok(PlaneOutcome::Pending) => {
-            let response = SettlementResponse {
-                success: false,
-                error_reason: Some("settlement_pending".to_owned()),
-                payer: None,
-                transaction: operation.to_owned(),
-                network: parsed.payment_requirements.network,
-                amount: None,
-                extensions: BTreeMap::new(),
-            };
-            Dispatch::result(202, "pending", json!(response))
-        }
-        Ok(PlaneOutcome::Refused) => {
-            let response = SettlementResponse {
-                success: false,
-                error_reason: Some("payment_refused".to_owned()),
-                payer: None,
-                transaction: String::new(),
-                network: parsed.payment_requirements.network,
-                amount: None,
-                extensions: BTreeMap::new(),
-            };
-            Dispatch::result(200, "refused", json!(response))
-        }
-        Ok(PlaneOutcome::Executed(evidence)) => {
-            let verified = match verify(&evidence.receipt, &evidence.authorized) {
-                Ok(value) => value,
-                Err(_) => return Dispatch::error(503, "pending", "receipt_verification_failed"),
-            };
-            let Some(protocol) = verified.receipt().protocol() else {
-                return Dispatch::error(503, "pending", "receipt_verification_failed");
-            };
-            let (asset, recipient) = match parsed.payment_requirements.layerx_facts() {
-                Ok(value) => value,
-                Err(_) => return Dispatch::error(400, "refused", "unsupported_x402_offer"),
-            };
-            if protocol.asset() != asset
-                || protocol.to() != recipient
-                || protocol.amount() != parsed.payment_requirements.amount.value()
-            {
-                return Dispatch::error(503, "pending", "receipt_intent_mismatch");
+    let settled = facilitator.settle(
+        &mut gateway,
+        principal,
+        &parsed,
+        stable_identity,
+        SettlementStep::Single,
+        &mut plane,
+        trace,
+        server_now,
+    );
+    match settled {
+        Ok(response) => {
+            if response.success {
+                let mut result = Dispatch::result(200, "completed", json!(response));
+                result.receipt_hex = plane.receipt_hex;
+                result.activity_id = plane.activity_id;
+                result
+            } else if response.error_reason.as_deref() == Some("settlement_pending") {
+                Dispatch::result(202, "pending", json!(response))
+            } else {
+                Dispatch::result(200, "refused", json!(response))
             }
-            let receipt_digest = evidence.verified.receipt_digest();
-            let mut extensions = BTreeMap::new();
-            extensions.insert(
-                "layerx".to_owned(),
-                json!({
-                    "receipt": STANDARD.encode(&evidence.receipt),
-                    "receiptDigest": hex(&receipt_digest),
-                    "verificationLevel": evidence.verified.verification_level()
-                }),
-            );
-            let response = SettlementResponse {
-                success: true,
-                error_reason: None,
-                payer: Some(hex(&protocol.from())),
-                transaction: format!("lxp:{}", hex(&receipt_digest)),
-                network: parsed.payment_requirements.network,
-                amount: Some(parsed.payment_requirements.amount),
-                extensions,
-            };
-            if response.validate_wire().is_err() {
-                return Dispatch::error(503, "pending", "settlement_encoding_failed");
-            }
-            let mut result = Dispatch::result(200, "completed", json!(response));
-            result.receipt_hex = Some(hex(&evidence.receipt));
-            result.activity_id = Some(hex(&evidence.verified.activity_id()));
-            result
         }
-        Err(_) => Dispatch::error(503, "pending", "settlement_unavailable"),
+        Err(traced) => {
+            if plane.unavailable {
+                return Dispatch::error(503, "pending", "settlement_unavailable");
+            }
+            match traced.into_error() {
+                X402Error::UnsupportedOffer => {
+                    Dispatch::error(400, "refused", "unsupported_x402_offer")
+                }
+                X402Error::EvidenceMismatch | X402Error::EvidenceMissing => {
+                    Dispatch::error(503, "pending", "receipt_intent_mismatch")
+                }
+                X402Error::Gateway(_) => Dispatch::error(503, "pending", "settlement_unavailable"),
+                _ => Dispatch::error(400, "refused", "invalid_x402_request"),
+            }
+        }
     }
 }
 
@@ -614,6 +731,7 @@ fn ap2(
     config: &Config,
     request: &IncomingRequest,
     record: &KeyRecord,
+    principal: &PrincipalId,
     trace: &TraceId,
     _operation: &str,
     execute: bool,
@@ -704,12 +822,48 @@ fn ap2(
         Ok(value) => value,
         Err(_) => return Dispatch::error(400, "refused", "account_binding_invalid"),
     };
+    let atomic_units = match binding.atomic_units_per_minor_unit.parse::<u128>() {
+        Ok(value) => value,
+        Err(_) => return Dispatch::error(503, "pending", "adapter_configuration_invalid"),
+    };
+    let payee_merchant = match Merchant::new(
+        binding.payee_merchant_id.clone(),
+        binding.payee_merchant_name.clone(),
+        binding.payee_merchant_website.clone(),
+    ) {
+        Ok(value) => value,
+        Err(_) => return Dispatch::error(503, "pending", "adapter_configuration_invalid"),
+    };
+    let layerx_binding = LayerXAssetBinding {
+        currency: binding.currency.clone(),
+        minor_unit_exponent: binding.minor_unit_exponent,
+        atomic_units_per_minor_unit: atomic_units,
+        asset,
+        payer_receipt_account: payer,
+        payee_receipt_account: payee,
+        payee_merchant,
+    };
+    let context = VerificationContext {
+        now: server_now,
+        clock_skew_seconds: 0,
+        expected_audience: &binding.audience,
+        expected_nonce: &body.nonce,
+        currency_minor_exponent: binding.minor_unit_exponent,
+        usage: None,
+    };
+    let payment = match authorize_payment(principal, &verified, &context, &layerx_binding) {
+        Ok(value) => value,
+        Err(Ap2Error::ConstraintViolated(_)) => {
+            return Dispatch::error(400, "refused", "mandate_merchant_mismatch")
+        }
+        Err(_) => return Dispatch::error(400, "refused", "asset_binding_invalid"),
+    };
     let authorization = request
         .headers
         .get("authorization")
         .map(String::as_str)
         .unwrap_or("");
-    let activity_idempotency_key = ap2_execution_key(record, &verified);
+    let activity_idempotency_key = hex(&payment.idempotency_key());
     let execution = Execution {
         config,
         authorization,
@@ -738,18 +892,10 @@ fn ap2(
             let Some(protocol) = receipt.receipt().protocol() else {
                 return Dispatch::error(503, "pending", "receipt_verification_failed");
             };
-            let atomic_units = match binding.atomic_units_per_minor_unit.parse::<u128>() {
-                Ok(value) => value,
-                Err(_) => return Dispatch::error(503, "pending", "adapter_configuration_invalid"),
-            };
-            let amount = match verified.amount().minor_units().checked_mul(atomic_units) {
-                Some(value) if value > 0 => value,
-                _ => return Dispatch::error(400, "refused", "asset_binding_invalid"),
-            };
-            if protocol.asset() != asset
-                || protocol.from() != payer
-                || protocol.to() != payee
-                || protocol.amount() != amount
+            if protocol.asset() != payment.asset()
+                || protocol.from() != payment.payer_receipt_account()
+                || protocol.to() != payment.payee_receipt_account()
+                || protocol.amount() != payment.amount()
             {
                 return Dispatch::error(503, "pending", "receipt_intent_mismatch");
             }
@@ -758,8 +904,8 @@ fn ap2(
                 "completed",
                 json!({
                     "state": ExternalState::ReceiptVerified.label(),
-                    "transaction_id": verified.transaction_id(),
-                    "checkout_id": verified.checkout_id(),
+                    "transaction_id": payment.transaction_id(),
+                    "checkout_id": payment.checkout_id(),
                     "receipt_digest": hex(&evidence.verified.receipt_digest())
                 }),
             );
@@ -769,17 +915,6 @@ fn ap2(
         }
         Err(_) => Dispatch::error(503, "pending", "settlement_unavailable"),
     }
-}
-
-fn ap2_execution_key(record: &KeyRecord, verified: &layerx_ap2::VerifiedMandates) -> String {
-    let mut digest = Sha256::new();
-    digest.update(AP2_EXECUTION_KEY_DOMAIN);
-    digest.update(record.principal_digest.as_bytes());
-    digest.update([0]);
-    digest.update(verified.checkout_receipt_reference().as_bytes());
-    digest.update([0]);
-    digest.update(verified.payment_receipt_reference().as_bytes());
-    hex(&digest.finalize())
 }
 
 struct Ap2Resolver<'a> {
@@ -814,6 +949,24 @@ impl KeyResolver for Ap2Resolver<'_> {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct UcpCapabilityWire {
+    name: String,
+    version: String,
+    spec: String,
+    schema: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UcpHandlerWire {
+    id: String,
+    version: String,
+    spec: String,
+    schema: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct UcpRequest {
     checkout_id: String,
     currency: String,
@@ -822,20 +975,99 @@ struct UcpRequest {
     recipient: String,
     idempotency_key: String,
     profile_url: String,
-    handler_id: String,
-    handler_version: String,
-    handler_spec: String,
-    handler_schema: String,
+    capabilities: Vec<UcpCapabilityWire>,
+    payment_handlers: Vec<UcpHandlerWire>,
     activity: String,
     order_id: String,
     permalink_url: String,
+}
+
+fn ucp_client_profile(body: &UcpRequest) -> Result<PlatformProfile, ()> {
+    if body.capabilities.len() > 32 || body.payment_handlers.len() > 32 {
+        return Err(());
+    }
+    let mut capabilities = Vec::with_capacity(body.capabilities.len());
+    for capability in &body.capabilities {
+        capabilities.push(
+            Capability::new(
+                &capability.name,
+                &capability.version,
+                &capability.spec,
+                &capability.schema,
+            )
+            .map_err(|_| ())?,
+        );
+    }
+    let mut payment_handlers = Vec::with_capacity(body.payment_handlers.len());
+    for handler in &body.payment_handlers {
+        payment_handlers.push(
+            PaymentHandler::new(&handler.id, &handler.version, &handler.spec, &handler.schema)
+                .map_err(|_| ())?,
+        );
+    }
+    Ok(PlatformProfile {
+        profile_url: body.profile_url.clone(),
+        capabilities,
+        payment_handlers,
+    })
+}
+
+struct UcpServicePlane<'a> {
+    config: &'a Config,
+    authorization: &'a str,
+    expected_signer: &'a str,
+    activity: Vec<u8>,
+    order_id: String,
+    permalink_url: String,
+    receipt_hex: Option<String>,
+    activity_id: Option<String>,
+    unavailable: bool,
+}
+
+impl UcpPaymentPlane for UcpServicePlane<'_> {
+    fn execute(
+        &mut self,
+        intent: &UcpPaymentIntent,
+        trace: &TraceId,
+    ) -> Result<UcpPlaneResult, UcpError> {
+        let idempotency = hex(&intent.idempotency_key);
+        let execution = Execution {
+            config: self.config,
+            authorization: self.authorization,
+            activity: self.activity.clone(),
+            idempotency: &idempotency,
+            expected_signer: self.expected_signer,
+            submitted_activity_id: None,
+            trace,
+        };
+        match execution.submit() {
+            Ok(PlaneOutcome::Pending) => Ok(UcpPlaneResult::Pending),
+            Ok(PlaneOutcome::Refused) => Ok(UcpPlaneResult::Refused),
+            Ok(PlaneOutcome::Executed(evidence)) => {
+                self.receipt_hex = Some(hex(&evidence.receipt));
+                self.activity_id = Some(hex(&evidence.verified.activity_id()));
+                Ok(UcpPlaneResult::Executed(Box::new(ExecutedUcpPayment {
+                    metadata: OrderMetadata {
+                        order_id: self.order_id.clone(),
+                        permalink_url: self.permalink_url.clone(),
+                    },
+                    canonical_receipt: evidence.receipt,
+                    authorised_batch: evidence.authorized,
+                })))
+            }
+            Err(_) => {
+                self.unavailable = true;
+                Err(UcpError::PlaneRefused)
+            }
+        }
+    }
 }
 
 fn ucp(
     config: &Config,
     request: &IncomingRequest,
     record: &KeyRecord,
-    _principal: &PrincipalId,
+    principal: &PrincipalId,
     trace: &TraceId,
     _operation: &str,
 ) -> Dispatch {
@@ -843,39 +1075,14 @@ fn ucp(
         Ok(value) => value,
         Err(_) => return Dispatch::error(400, "refused", "invalid_ucp_request"),
     };
-    let handler = match PaymentHandler::new(
-        &body.handler_id,
-        &body.handler_version,
-        &body.handler_spec,
-        &body.handler_schema,
-    ) {
+    let client_platform = match ucp_client_profile(&body) {
         Ok(value) => value,
-        Err(_) => return Dispatch::error(400, "refused", "ucp_profile_refused"),
+        Err(()) => return Dispatch::error(400, "refused", "ucp_profile_refused"),
     };
-    let checkout = match Capability::new(
-        "dev.ucp.shopping.checkout",
-        "2026-04-08",
-        "https://ucp.dev/2026-04-08/specification/checkout",
-        "https://ucp.dev/2026-04-08/schemas/shopping/checkout.json",
+    let negotiated = match NegotiatedCapabilities::negotiate(
+        &client_platform,
+        &config.manifest.ucp_payment_handler,
     ) {
-        Ok(value) => value,
-        Err(_) => return Dispatch::error(503, "pending", "adapter_configuration_invalid"),
-    };
-    let order = match Capability::new(
-        "dev.ucp.shopping.order",
-        "2026-04-08",
-        "https://ucp.dev/2026-04-08/specification/order",
-        "https://ucp.dev/2026-04-08/schemas/shopping/order.json",
-    ) {
-        Ok(value) => value,
-        Err(_) => return Dispatch::error(503, "pending", "adapter_configuration_invalid"),
-    };
-    let platform = PlatformProfile {
-        profile_url: body.profile_url,
-        capabilities: vec![checkout, order],
-        payment_handlers: vec![handler.clone()],
-    };
-    let negotiated = match NegotiatedCapabilities::negotiate(&platform, &handler) {
         Ok(value) => value,
         Err(_) => return Dispatch::error(400, "refused", "ucp_capability_refused"),
     };
@@ -884,7 +1091,7 @@ fn ucp(
         Err(_) => return Dispatch::error(400, "refused", "ucp_currency_invalid"),
     };
     let submission = CheckoutSubmission {
-        checkout_id: body.checkout_id,
+        checkout_id: body.checkout_id.clone(),
         currency,
         total_minor: match body.total_minor.parse::<u128>() {
             Ok(value) => value,
@@ -904,77 +1111,95 @@ fn ucp(
         },
         negotiated,
     };
+    if body.activity.is_empty() {
+        return Dispatch::error(400, "refused", "typed_intent_required");
+    }
     let activity = match decode_hex(&body.activity, MAX_BODY) {
         Ok(value) => value,
         Err(_) => return Dispatch::error(400, "refused", "typed_intent_required"),
+    };
+    let server_now = match now() {
+        Ok(value) => value,
+        Err(_) => return Dispatch::error(503, "pending", "clock_unavailable"),
+    };
+    let mut gateway = match gateway_core(config, trace, server_now) {
+        Ok(value) => value,
+        Err(()) => return Dispatch::error(503, "pending", "adapter_configuration_invalid"),
     };
     let authorization = request
         .headers
         .get("authorization")
         .map(String::as_str)
         .unwrap_or("");
-    let protocol_idempotency = hex(&submission.idempotency_key.gateway_key());
-    let execution = Execution {
+    let mut plane = UcpServicePlane {
         config,
         authorization,
-        activity,
-        idempotency: &protocol_idempotency,
         expected_signer: &record.signer_public_key,
-        submitted_activity_id: None,
-        trace,
+        activity,
+        order_id: body.order_id,
+        permalink_url: body.permalink_url,
+        receipt_hex: None,
+        activity_id: None,
+        unavailable: false,
     };
-    match execution.submit() {
-        Ok(PlaneOutcome::Pending) => Dispatch::result(
-            202,
-            "pending",
-            json!({ "state": ExternalState::Pending.label() }),
-        ),
-        Ok(PlaneOutcome::Refused) => Dispatch::result(
-            200,
-            "refused",
-            json!({ "state": ExternalState::Refused.label() }),
-        ),
-        Ok(PlaneOutcome::Executed(evidence)) => {
-            let verified = match verify(&evidence.receipt, &evidence.authorized) {
-                Ok(value) => value,
-                Err(_) => return Dispatch::error(503, "pending", "receipt_verification_failed"),
-            };
-            let Some(protocol) = verified.receipt().protocol() else {
-                return Dispatch::error(503, "pending", "receipt_verification_failed");
-            };
-            if protocol.asset() != submission.layerx_asset
-                || protocol.to() != submission.layerx_recipient
-                || protocol.amount() != submission.total_minor
-            {
-                return Dispatch::error(503, "pending", "receipt_intent_mismatch");
+    let completed = UcpAdapter::complete_checkout(
+        &mut gateway,
+        principal,
+        &submission,
+        &mut plane,
+        trace,
+        server_now,
+    );
+    match completed {
+        Ok(outcome) => match outcome.status {
+            CheckoutStatus::Completed => {
+                let Some(order) = outcome.order else {
+                    return Dispatch::error(503, "pending", "receipt_intent_mismatch");
+                };
+                let mut result = Dispatch::result(
+                    200,
+                    "completed",
+                    json!({
+                        "state": ExternalState::ReceiptVerified.label(),
+                        "order": {
+                            "id": order.id, "checkout_id": order.checkout_id,
+                            "permalink_url": order.permalink_url,
+                            "currency": String::from_utf8_lossy(&order.currency),
+                            "total_minor": order.total_minor.to_string(),
+                            "receipt_digest": hex(&order.receipt_digest)
+                        }
+                    }),
+                );
+                result.receipt_hex = plane.receipt_hex;
+                result.activity_id = plane.activity_id;
+                result
             }
-            if body.order_id.is_empty()
-                || body.order_id.len() > 256
-                || !body.permalink_url.starts_with("https://")
-                || body.permalink_url.len() > 256
-            {
-                return Dispatch::error(400, "refused", "ucp_order_invalid");
-            }
-            let receipt_digest = evidence.verified.receipt_digest();
-            let mut result = Dispatch::result(
+            CheckoutStatus::CompleteInProgress => Dispatch::result(
+                202,
+                "pending",
+                json!({ "state": ExternalState::Pending.label() }),
+            ),
+            _ => Dispatch::result(
                 200,
-                "completed",
-                json!({
-                    "state": ExternalState::ReceiptVerified.label(),
-                    "order": {
-                        "id": body.order_id, "checkout_id": submission.checkout_id,
-                        "permalink_url": body.permalink_url,
-                        "currency": String::from_utf8_lossy(&submission.currency),
-                        "total_minor": submission.total_minor.to_string(),
-                        "receipt_digest": hex(&receipt_digest)
-                    }
-                }),
-            );
-            result.receipt_hex = Some(hex(&evidence.receipt));
-            result.activity_id = Some(hex(&evidence.verified.activity_id()));
-            result
+                "refused",
+                json!({ "state": ExternalState::Refused.label() }),
+            ),
+        },
+        Err(traced) => {
+            if plane.unavailable {
+                return Dispatch::error(503, "pending", "settlement_unavailable");
+            }
+            match traced.into_error() {
+                UcpError::InvalidOrder => Dispatch::error(400, "refused", "ucp_order_invalid"),
+                UcpError::ReceiptMismatch
+                | UcpError::ReceiptRequired
+                | UcpError::OrderEvidenceRequired => {
+                    Dispatch::error(503, "pending", "receipt_intent_mismatch")
+                }
+                UcpError::Gateway(_) => Dispatch::error(503, "pending", "settlement_unavailable"),
+                _ => Dispatch::error(400, "refused", "invalid_ucp_request"),
+            }
         }
-        Err(_) => Dispatch::error(503, "pending", "settlement_unavailable"),
     }
 }
 
@@ -2049,6 +2274,10 @@ fn hex(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
     use ed25519_dalek::{Signer as _, SigningKey};
+    use layerx_interop_gateway::adapter::{AdapterId, ConformanceSuite};
+    use layerx_x402::facilitator::{FacilitatorKind, SupportedResponse};
+    use layerx_x402::model::AtomicAmount;
+    use layerx_x402::x402_adapter_descriptor;
 
     fn parsed_tap(authority: &str, path: &str) -> TapRequest {
         TapRequest::parse(
@@ -2239,6 +2468,168 @@ mod tests {
             "activity_idempotency_key": "33".repeat(32)
         });
         assert!(serde_json::from_value::<FiatCallback>(callback).is_err());
+    }
+
+    fn x402_fixture_request(payload: Value) -> FacilitatorRequest {
+        let requirements = PaymentRequirements {
+            scheme: "exact".to_owned(),
+            network: "layerx:testnet".to_owned(),
+            amount: AtomicAmount::parse("1000").expect("fixture amount is canonical"),
+            asset: "44".repeat(32),
+            pay_to: "45".repeat(32),
+            max_timeout_seconds: 60,
+            extra: None,
+        };
+        FacilitatorRequest {
+            x402_version: 2,
+            payment_payload: PaymentPayload {
+                x402_version: 2,
+                resource: None,
+                payload,
+                accepted: requirements.clone(),
+                extensions: BTreeMap::new(),
+            },
+            payment_requirements: requirements,
+        }
+    }
+
+    fn x402_fixture_gateway(trace: &TraceId) -> GatewayCore {
+        let conformance = ConformanceSuite::new(
+            AdapterId::new("x402-v2-local-matrix").expect("suite id is valid"),
+            1,
+            [0x11; 32],
+        )
+        .expect("conformance suite is declared");
+        let mut gateway = GatewayCore::new();
+        gateway
+            .register_adapter(
+                x402_adapter_descriptor(conformance).expect("x402 descriptor is valid"),
+                trace,
+                10,
+            )
+            .expect("x402 adapter registers");
+        gateway
+    }
+
+    #[test]
+    fn x402_verify_refuses_unsigned_and_unverifiable_payments_through_the_facilitator() {
+        let facilitator = Facilitator::new(SupportedResponse {
+            kinds: vec![FacilitatorKind {
+                x402_version: 2,
+                scheme: "exact".to_owned(),
+                network: "layerx:testnet".to_owned(),
+                extra: None,
+            }],
+            extensions: vec![],
+            signers: BTreeMap::new(),
+        })
+        .expect("facilitator supports the layerx exact kind");
+        let trace = TraceId::mint([0x71; 16]);
+        let principal = PrincipalId::new("principal-x402-verify").expect("principal id is valid");
+        let modules = ModuleRegistry::new(&[]).expect("empty module registry is valid");
+        let mut plane = X402VerifyPlane {
+            modules: &modules,
+            protocol_version: 1,
+            protocol_network_id: 1,
+            expected_signer: [0x21; 32],
+        };
+        let mut gateway = x402_fixture_gateway(&trace);
+        let unsigned = facilitator
+            .verify(
+                &mut gateway,
+                &principal,
+                &x402_fixture_request(serde_json::json!({})),
+                &mut plane,
+                &trace,
+                10,
+            )
+            .expect("verify renders a refusal for a payment without a typed activity");
+        assert!(!unsigned.is_valid);
+        assert_eq!(
+            unsigned.invalid_reason.as_deref(),
+            Some("typed_intent_required")
+        );
+        let unverifiable = facilitator
+            .verify(
+                &mut gateway,
+                &principal,
+                &x402_fixture_request(serde_json::json!({ "layerxActivity": "deadbeef" })),
+                &mut plane,
+                &trace,
+                10,
+            )
+            .expect("verify renders a refusal for unverifiable activity bytes");
+        assert!(!unverifiable.is_valid);
+        assert_eq!(
+            unverifiable.invalid_reason.as_deref(),
+            Some("activity_authorization_refused")
+        );
+    }
+
+    fn ucp_wire(capabilities: Value, payment_handlers: Value) -> UcpRequest {
+        serde_json::from_value(serde_json::json!({
+            "checkout_id": "checkout-1",
+            "currency": "USD",
+            "total_minor": "1000",
+            "asset": "44".repeat(32),
+            "recipient": "45".repeat(32),
+            "idempotency_key": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+            "profile_url": "https://client.example/profile",
+            "capabilities": capabilities,
+            "payment_handlers": payment_handlers,
+            "activity": "00",
+            "order_id": "order-1",
+            "permalink_url": "https://merchant.example/orders/1"
+        }))
+        .expect("UCP wire request parses")
+    }
+
+    #[test]
+    fn ucp_negotiation_refuses_incompatible_client_profiles() {
+        let platform_handler = PaymentHandler::new(
+            "dev.layerx.payment",
+            "2026-04-08",
+            "https://interop.layerx.example/specs/payment-handler",
+            "https://interop.layerx.example/schemas/payment-handler.json",
+        )
+        .expect("platform payment handler is valid");
+        let handler_wire = serde_json::json!([{
+            "id": "dev.layerx.payment",
+            "version": "2026-04-08",
+            "spec": "https://interop.layerx.example/specs/payment-handler",
+            "schema": "https://interop.layerx.example/schemas/payment-handler.json"
+        }]);
+        let checkout_wire = serde_json::json!([{
+            "name": "dev.ucp.shopping.checkout",
+            "version": "2026-04-08",
+            "spec": "https://ucp.dev/2026-04-08/specification/checkout",
+            "schema": "https://ucp.dev/2026-04-08/schemas/shopping/checkout.json"
+        }]);
+        let without_checkout =
+            ucp_client_profile(&ucp_wire(serde_json::json!([]), handler_wire.clone()))
+                .expect("client profile without checkout parses");
+        assert_eq!(
+            NegotiatedCapabilities::negotiate(&without_checkout, &platform_handler),
+            Err(UcpError::CapabilityUnavailable)
+        );
+        let foreign_handler_wire = serde_json::json!([{
+            "id": "dev.other.payment",
+            "version": "2026-04-08",
+            "spec": "https://other.example/specs/payment-handler",
+            "schema": "https://other.example/schemas/payment-handler.json"
+        }]);
+        let foreign_handler =
+            ucp_client_profile(&ucp_wire(checkout_wire.clone(), foreign_handler_wire))
+                .expect("client profile with a foreign handler parses");
+        assert_eq!(
+            NegotiatedCapabilities::negotiate(&foreign_handler, &platform_handler),
+            Err(UcpError::PaymentHandlerUnavailable)
+        );
+        let compatible = ucp_client_profile(&ucp_wire(checkout_wire, handler_wire))
+            .expect("compatible client profile parses");
+        let negotiated = NegotiatedCapabilities::negotiate(&compatible, &platform_handler)
+            .expect("compatible client profile negotiates");
+        assert!(negotiated.checkout());
     }
 
     #[test]

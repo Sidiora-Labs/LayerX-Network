@@ -8,8 +8,9 @@ mod portable;
 mod verify;
 
 pub use adapter::{
-    AdapterOutcome, Ap2Adapter, AuthorizedPayment, ExecutedPayment, LayerXAssetBinding,
-    LayerXIntentPlane, PlaneOutcome, PortableLayerXEvidence, ReceiptSigner, SignedAp2Evidence,
+    authorize_payment, AdapterOutcome, Ap2Adapter, AuthorizedPayment, ExecutedPayment,
+    LayerXAssetBinding, LayerXIntentPlane, PlaneOutcome, PortableLayerXEvidence, ReceiptSigner,
+    SignedAp2Evidence,
 };
 pub use error::Ap2Error;
 pub use jose::{KeyResolver, KeyUse, ProtectedHeader};

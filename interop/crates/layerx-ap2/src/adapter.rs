@@ -15,6 +15,7 @@ use sha2::{Digest as _, Sha256};
 
 use crate::error::Ap2Error;
 use crate::jose::{verify_signature, KeyResolver};
+use crate::model::Merchant;
 use crate::verify::{MandateVerifier, VerificationContext, VerifiedMandates};
 
 const ADAPTER_ID: &str = "ap2";
@@ -33,6 +34,7 @@ pub struct LayerXAssetBinding {
     pub asset: [u8; 32],
     pub payer_receipt_account: [u8; 32],
     pub payee_receipt_account: [u8; 32],
+    pub payee_merchant: Merchant,
 }
 
 impl LayerXAssetBinding {
@@ -48,7 +50,7 @@ impl LayerXAssetBinding {
         {
             return Err(Ap2Error::AmountConversion);
         }
-        Ok(())
+        self.payee_merchant.validate()
     }
 }
 
@@ -354,6 +356,7 @@ impl<'a, R: KeyResolver> Ap2Adapter<'a, R> {
         let TranslationStatus::ReceiptVerified { receipt_digest } = status else {
             return Err(fail(Ap2Error::EvidenceMissing));
         };
+        let status_label = settled_status_label(&status).map_err(fail)?;
         let layerx =
             PortableReceipt::export(&executed.canonical_receipt, &executed.authorised_batch)
                 .map_err(|_| fail(Ap2Error::EvidenceMismatch))?;
@@ -365,6 +368,7 @@ impl<'a, R: KeyResolver> Ap2Adapter<'a, R> {
             &executed.order_id,
             layerx.clone(),
             receipt_digest,
+            status_label,
             payment_signer,
             checkout_signer,
             now,
@@ -379,6 +383,21 @@ impl<'a, R: KeyResolver> Ap2Adapter<'a, R> {
     }
 }
 
+/// Binds one verified mandate pair to deployment asset policy, refusing any
+/// mandate whose verified payee does not match the pinned execution merchant.
+///
+/// # Errors
+///
+/// Returns a typed merchant-binding or amount-conversion refusal.
+pub fn authorize_payment(
+    principal: &PrincipalId,
+    mandates: &VerifiedMandates,
+    verification: &VerificationContext<'_>,
+    binding: &LayerXAssetBinding,
+) -> Result<AuthorizedPayment, Ap2Error> {
+    prepare_payment(principal, mandates, verification, binding)
+}
+
 fn prepare_payment(
     principal: &PrincipalId,
     mandates: &VerifiedMandates,
@@ -386,6 +405,9 @@ fn prepare_payment(
     binding: &LayerXAssetBinding,
 ) -> Result<AuthorizedPayment, Ap2Error> {
     binding.validate()?;
+    if !binding.payee_merchant.matches(mandates.payee()) {
+        return Err(Ap2Error::ConstraintViolated("payee_merchant_binding"));
+    }
     if mandates.amount().currency() != binding.currency
         || verification.currency_minor_exponent != binding.minor_unit_exponent
     {
@@ -449,9 +471,11 @@ struct PaymentReceipt {
     iss: String,
     iat: u64,
     reference: String,
-    payment_id: String,
-    psp_confirmation_id: String,
-    network_confirmation_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    psp_confirmation_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    network_confirmation_id: Option<String>,
+    layerx_receipt_reference: String,
     layerx_evidence: PortableLayerXEvidence,
 }
 
@@ -462,7 +486,17 @@ struct CheckoutReceipt {
     iat: u64,
     reference: String,
     order_id: String,
+    layerx_receipt_reference: String,
     layerx_evidence: PortableLayerXEvidence,
+}
+
+fn settled_status_label(status: &TranslationStatus) -> Result<&'static str, Ap2Error> {
+    match status {
+        TranslationStatus::ReceiptVerified { .. } => Ok("Success"),
+        TranslationStatus::Pending | TranslationStatus::Refused | TranslationStatus::Translated => {
+            Err(Ap2Error::EvidenceMissing)
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -471,28 +505,30 @@ fn sign_evidence(
     order_id: &str,
     layerx: PortableLayerXEvidence,
     receipt_digest: [u8; 32],
+    status_label: &'static str,
     payment_signer: &mut impl ReceiptSigner,
     checkout_signer: &mut impl ReceiptSigner,
     now: u64,
 ) -> Result<SignedAp2Evidence, Ap2Error> {
-    let confirmation = format!("lxp:{}", URL_SAFE_NO_PAD.encode(receipt_digest));
+    let layerx_receipt_reference = format!("lxp:{}", URL_SAFE_NO_PAD.encode(receipt_digest));
     let payment_receipt = PaymentReceipt {
-        status: "Success",
+        status: status_label,
         iss: payment_signer.issuer().to_owned(),
         iat: now,
         reference: mandates.payment_receipt_reference(),
-        payment_id: confirmation.clone(),
-        psp_confirmation_id: confirmation.clone(),
-        network_confirmation_id: confirmation,
+        psp_confirmation_id: None,
+        network_confirmation_id: None,
+        layerx_receipt_reference: layerx_receipt_reference.clone(),
         layerx_evidence: layerx.clone(),
     };
     let payment_receipt_jwt = sign_receipt(&payment_receipt, payment_signer)?;
     let checkout_receipt = CheckoutReceipt {
-        status: "Success",
+        status: status_label,
         iss: checkout_signer.issuer().to_owned(),
         iat: now,
         reference: mandates.checkout_receipt_reference(),
         order_id: order_id.to_owned(),
+        layerx_receipt_reference,
         layerx_evidence: layerx.clone(),
     };
     let checkout_receipt_jwt = sign_receipt(&checkout_receipt, checkout_signer)?;

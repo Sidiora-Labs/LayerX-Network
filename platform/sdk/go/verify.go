@@ -9,11 +9,11 @@ import (
 )
 
 var (
-	merkleLeafDomain            = []byte("LXP/v1/merkle-leaf\x00")
-	merkleInternalDomain        = []byte("LXP/v1/merkle-internal\x00")
-	batchHeaderDomain           = []byte("LXP/v1/batch-header\x00")
-	receiptDomain               = []byte("LXP/v1/receipt\x00")
-	checkpointDomain            = []byte("LXP/v1/checkpoint-certificate\x00")
+	merkleLeafDomain           = []byte("LXP/v1/merkle-leaf\x00")
+	merkleInternalDomain       = []byte("LXP/v1/merkle-internal\x00")
+	batchHeaderDomain          = []byte("LXP/v1/batch-header\x00")
+	receiptDomain              = []byte("LXP/v1/receipt\x00")
+	checkpointDomain           = []byte("LXP/v1/checkpoint-certificate\x00")
 	guarantorAttestationDomain = []byte("LXP/v1/guarantor-attestation\x00")
 )
 
@@ -522,7 +522,7 @@ type CheckpointVerificationInput struct {
 	Certificate                   CheckpointCertificate
 	BondedSet                     []GuarantorKey
 	RegisteredCheckpointID        [32]byte
-	ExpectedPaxeerChainID          uint64
+	ExpectedPaxeerChainID         uint64
 	ExpectedSettlementContract    [20]byte
 	RegisteredSettlementReference []byte
 	AvailabilityObtained          bool

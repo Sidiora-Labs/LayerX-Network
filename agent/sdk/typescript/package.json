@@ -17,7 +17,7 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "npm run build && node dist/test/integration.test.js"
+    "test": "npm run build && node dist/test/integration.test.js && node dist/test/receipt-fixture.test.js"
   },
   "engines": {
     "node": ">=22"

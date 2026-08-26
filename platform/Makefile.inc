@@ -2,7 +2,7 @@ PLATFORM_CARGO ?= cargo
 PLATFORM_MANIFEST := platform/Cargo.toml
 
 .PHONY: platform-js-install platform-build platform-build-all platform-lint platform-test platform-sdk-check \
-	platform-sdk-generate platform-verify-sdks platform-test-sdks platform-release-check platform-release-plan \
+	platform-sdk-generate platform-receipt-fixture platform-verify-sdks platform-test-sdks platform-release-check platform-release-plan \
 	platform-test-tooling platform-emulator-conformance platform-test-middleware \
 	platform-test-reference-apps platform-test-mobile-artifacts \
 	platform-test-android-artifact platform-test-ios-artifact \
@@ -49,6 +49,7 @@ platform-sample-install: platform-sample-preflight
 		test "$$(sha256sum platform/sdk/swift/Package.resolved | awk '{print $$1}')" = "$$sdk_lock"; \
 		test "$$(sha256sum platform/integrations/ios/Package.resolved | awk '{print $$1}')" = "$$ios_lock"
 	dotnet restore platform/sdk/dotnet/LayerX.Sdk.csproj --nologo
+	dotnet restore platform/sdk/dotnet/tests/LayerX.Sdk.Tests/LayerX.Sdk.Tests.csproj --nologo
 	dotnet restore platform/docs/samples/first-payment-csharp/FirstPayment.csproj --nologo
 
 platform-sample-dependencies-ready:
@@ -158,13 +159,26 @@ platform-sdk-generate:
 	python3 platform/sdk/generators/generate_jvm.py $(CURDIR)
 	$(PLATFORM_CARGO) run --manifest-path $(PLATFORM_MANIFEST) --locked -p layerx-platform-sdkgen -- --write
 
+$(BUILD_DIR)/tools/generate_receipt_fixture: \
+		platform/sdk/conformance/fixtures/generate_receipt_fixture.c \
+		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) \
+		$(EXTRA_LDFLAGS) -lcrypto -pthread -o $@
+
+platform-receipt-fixture: $(BUILD_DIR)/tools/generate_receipt_fixture
+	$(RUN_PREFIX) $(BUILD_DIR)/tools/generate_receipt_fixture \
+		platform/sdk/conformance/fixtures/receipt-positive-v1.json
+
 platform-verify-sdks: platform-sdk-check platform-sample-dependencies-ready
 	sh platform/sdk/conformance/run-go.sh $(CURDIR)
 	sh platform/sdk/conformance/run-jvm.sh $(CURDIR)
 	command -v swift >/dev/null
 	swift build --disable-automatic-resolution --package-path platform/sdk/swift
+	swift test --disable-automatic-resolution --package-path platform/sdk/swift
 	command -v dotnet >/dev/null
 	dotnet build platform/sdk/dotnet/LayerX.Sdk.csproj --no-restore --configuration Release --nologo
+	dotnet test platform/sdk/dotnet/tests/LayerX.Sdk.Tests/LayerX.Sdk.Tests.csproj --no-restore --nologo
 
 platform-test-sdks: platform-verify-sdks
 

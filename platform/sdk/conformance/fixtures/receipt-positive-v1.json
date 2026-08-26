@@ -1,0 +1,35 @@
+{
+  "name": "receipt-positive-v1",
+  "provenance": {
+    "generator": "platform/sdk/conformance/fixtures/generate_receipt_fixture.c",
+    "command": "make platform-receipt-fixture",
+    "description": "Canonical protocol receipt produced by the real LayerX C core: lxp_gateway_send_settle executed a signed transfer against real ledger accounts, then lxp_receipt_sign and lxp_receipt_encode produced these exact bytes. Regenerate with the command above; do not edit by hand."
+  },
+  "canonical_receipt_hex": "0001520100010000002053d33a514fd1feb9e9c17afd4f4507a5239277784d50e73ea100fe2015880b08000000000000000100000020acf6d7cc6817cef1a0b77dce68646b919284d51fe74c8fe1b5d114fd55def5ca000000203dbc78ca11b10fb621deeb5dbcf65bbe667232418a279b4d1af17c6ce3e01f1e000000200000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000204486764c3b2d0850bd0b874654a7801e4c6e659a282f7f1ae2ceec85e01d86500001000000010000000105000000200300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000061a800000020d3cc758efcc208be7b260b4f23b6e6d3d4aeb0c634c21ee9651f5d758a55a5c1000000000000000000000000000f4240000000000000000000000000000ee09800000000000000000000002033c79d4de1950af8f2079dbfa23d26f2ee4fe5e5386529737be0325513d0b2ac00000000000000000000000000000000000000000000000000000000000061a8000000209af46bda8dcf50b22b6242fbbdecc82c4f1e068fe0a8188f8ae7ecaa09d56fa300000020ebd12851ef3ef4771c8a9ebeeaeb9a964745e14482b1cc8f899ddcc55f8e10c8000000203ea6fe1a50ad5807e0443199b096c9fcc90ab4e90e2d1567669b11b33f0c548500000191dd9dec000100000040c518795022203547dc5ca7c47b3b3bcdf3b665bc860a0bd219ec09f9507d3c60f1bc9a25417071650a8e1a19a0abfb2bb47937f611406caedde264e034a2a701",
+  "authorized_batch": {
+    "batch_id_hex": "4486764c3b2d0850bd0b874654a7801e4c6e659a282f7f1ae2ceec85e01d8650",
+    "asset_hex": "0300000000000000000000000000000000000000000000000000000000000000",
+    "previous_state_root_hex": "acf6d7cc6817cef1a0b77dce68646b919284d51fe74c8fe1b5d114fd55def5ca",
+    "resulting_state_root_hex": "3dbc78ca11b10fb621deeb5dbcf65bbe667232418a279b4d1af17c6ce3e01f1e",
+    "sequencer_public_key_hex": "17cb79fb2b4120f2b1ec65e4198d6e08b28e813feb01e4a400839b85e18080ce"
+  },
+  "expected": {
+    "level": "sequencer-signed",
+    "result_code": 0,
+    "protocol_version": 1,
+    "operation": 5,
+    "module_id": 1,
+    "global_sequence": 1,
+    "timestamp_ms": 1726000000000,
+    "amount": "25000",
+    "fee_charged": "0",
+    "from_balance_before": "1000000",
+    "from_balance_after": "975000",
+    "to_balance_before": "0",
+    "to_balance_after": "25000",
+    "activity_id_hex": "53d33a514fd1feb9e9c17afd4f4507a5239277784d50e73ea100fe2015880b08",
+    "from_hex": "d3cc758efcc208be7b260b4f23b6e6d3d4aeb0c634c21ee9651f5d758a55a5c1",
+    "to_hex": "33c79d4de1950af8f2079dbfa23d26f2ee4fe5e5386529737be0325513d0b2ac",
+    "receipt_digest_hex": "4f5843fcbd5f14f0c827f3cf158a13751ee6f0124a99537e7320aea7660ae4c6"
+  }
+}

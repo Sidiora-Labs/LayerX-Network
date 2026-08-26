@@ -1,4 +1,4 @@
-use layerx_ap2::{ap2_adapter_descriptor, AP2_SPEC_SHA256};
+use layerx_ap2::{ap2_adapter_descriptor, Merchant, AP2_SPEC_SHA256};
 use layerx_fiat::fiat_adapter_descriptor;
 use layerx_interop_gateway::adapter::{
     AdapterDescriptor, AdapterId, ConformanceSuite, PinnedSpec, SpecVersion,
@@ -9,10 +9,10 @@ use layerx_interop_gateway::GatewayCore;
 use layerx_platform_gateway::http::{Client, Endpoint};
 use layerx_platform_gateway::store::{RedisEndpoint, RedisStore};
 use layerx_platform_gateway::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry};
-use layerx_ucp::ucp_adapter_descriptor;
+use layerx_ucp::{ucp_adapter_descriptor, PaymentHandler, UCP_CHECKOUT_SPEC_SHA256};
 use layerx_visa_tap::{
     canonical_tap_authority, canonical_tap_path, visa_tap_adapter_descriptor,
-    MAX_CLOCK_SKEW_SECONDS,
+    MAX_CLOCK_SKEW_SECONDS, VISA_TAP_SPEC_SHA256,
 };
 use layerx_x402::facilitator::SupportedResponse;
 use layerx_x402::{x402_adapter_descriptor, X402_SPEC_SHA256};
@@ -58,6 +58,7 @@ pub struct RuntimeManifest {
     pub x402_supported: SupportedResponse,
     pub ap2_keys: Vec<Ap2KeyPin>,
     pub ap2_assets: Vec<Ap2AssetBinding>,
+    pub ucp_payment_handler: PaymentHandler,
     pub visa_agents: Vec<VisaAgentPin>,
     pub visa_targets: Vec<VisaTargetPin>,
     pub fiat_providers: Vec<FiatProviderPin>,
@@ -86,9 +87,19 @@ struct ManifestFile {
     x402_supported: SupportedResponse,
     ap2_keys: Vec<Ap2KeyPin>,
     ap2_assets: Vec<Ap2AssetBinding>,
+    ucp_payment_handler: UcpHandlerPin,
     visa_agents: Vec<VisaAgentPin>,
     visa_targets: Vec<VisaTargetPin>,
     fiat_providers: Vec<FiatProviderPin>,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UcpHandlerPin {
+    id: String,
+    version: String,
+    spec: String,
+    schema: String,
 }
 
 #[derive(Clone, Deserialize)]
@@ -110,6 +121,10 @@ pub struct Ap2AssetBinding {
     pub asset: String,
     pub payer_account: String,
     pub payee_account: String,
+    pub payee_merchant_id: String,
+    pub payee_merchant_name: String,
+    #[serde(default)]
+    pub payee_merchant_website: Option<String>,
 }
 
 #[derive(Clone, Deserialize)]
@@ -367,6 +382,12 @@ fn runtime_manifest(file: ManifestFile) -> Result<RuntimeManifest, String> {
             || parse_hex32(&binding.asset).is_err()
             || parse_hex32(&binding.payer_account).is_err()
             || parse_hex32(&binding.payee_account).is_err()
+            || Merchant::new(
+                binding.payee_merchant_id.clone(),
+                binding.payee_merchant_name.clone(),
+                binding.payee_merchant_website.clone(),
+            )
+            .is_err()
             || !ap2_asset_identities
                 .insert((binding.principal_digest.as_str(), binding.currency.as_str()))
         {
@@ -414,12 +435,20 @@ fn runtime_manifest(file: ManifestFile) -> Result<RuntimeManifest, String> {
             return Err("fiat provider trust-root declaration is invalid".to_owned());
         }
     }
+    let ucp_payment_handler = PaymentHandler::new(
+        file.ucp_payment_handler.id,
+        file.ucp_payment_handler.version,
+        file.ucp_payment_handler.spec,
+        file.ucp_payment_handler.schema,
+    )
+    .map_err(|error| format!("UCP payment-handler declaration is invalid: {error}"))?;
     let manifest = RuntimeManifest {
         adapters,
         transports,
         x402_supported: file.x402_supported,
         ap2_keys: file.ap2_keys,
         ap2_assets: file.ap2_assets,
+        ucp_payment_handler,
         visa_agents: file.visa_agents,
         visa_targets: file.visa_targets,
         fiat_providers: file.fiat_providers,
@@ -456,10 +485,26 @@ fn descriptor(pin: &AdapterPin) -> Result<AdapterDescriptor, String> {
             ap2_adapter_descriptor(suite).map_err(|error| error.to_string())
         }
         "ucp" | "visa-tap" | "fiat" => {
+            let specification_sha256 = parse_hex32(&pin.specification_sha256)?;
+            match pin.id.as_str() {
+                "ucp" if specification_sha256 != UCP_CHECKOUT_SPEC_SHA256 => {
+                    return Err(
+                        "UCP configuration does not match the compiled checkout specification pin"
+                            .to_owned(),
+                    );
+                }
+                "visa-tap" if specification_sha256 != VISA_TAP_SPEC_SHA256 => {
+                    return Err(
+                        "Visa TAP configuration does not match the compiled specification pin"
+                            .to_owned(),
+                    );
+                }
+                _ => {}
+            }
             let spec = PinnedSpec::new(
                 AdapterId::new(pin.specification.clone()).map_err(|error| error.to_string())?,
                 SpecVersion::parse(&pin.version).map_err(|error| error.to_string())?,
-                parse_hex32(&pin.specification_sha256)?,
+                specification_sha256,
             )
             .map_err(|error| error.to_string())?;
             match pin.id.as_str() {

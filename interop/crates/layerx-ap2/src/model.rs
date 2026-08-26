@@ -8,7 +8,7 @@ const TEXT_LIMIT: usize = 1_024;
 const URI_LIMIT: usize = 2_048;
 const COLLECTION_LIMIT: usize = 512;
 
-#[derive(Clone, Eq, PartialEq, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
 pub struct Merchant {
     pub(crate) id: String,
     pub(crate) name: String,
@@ -17,6 +17,26 @@ pub struct Merchant {
 }
 
 impl Merchant {
+    /// Declares one deployment-pinned merchant identity used to bind verified
+    /// mandate payees to execution policy.
+    ///
+    /// # Errors
+    ///
+    /// Refuses empty, oversize and control-character fields.
+    pub fn new(
+        id: impl Into<String>,
+        name: impl Into<String>,
+        website: Option<String>,
+    ) -> Result<Self, Ap2Error> {
+        let merchant = Self {
+            id: id.into(),
+            name: name.into(),
+            website,
+        };
+        merchant.validate()?;
+        Ok(merchant)
+    }
+
     pub(crate) fn validate(&self) -> Result<(), Ap2Error> {
         bounded(&self.id, TEXT_LIMIT)?;
         bounded(&self.name, TEXT_LIMIT)?;

@@ -191,7 +191,7 @@ pub(crate) fn split_presentation(value: &str) -> Result<Vec<&str>, Ap2Error> {
     if value.is_empty() || value.len() > TOKEN_LIMIT {
         return Err(Ap2Error::Bounds);
     }
-    let parts: Vec<_> = value.split("~~").collect();
+    let parts: Vec<_> = value.split("~~~").collect();
     if parts.is_empty() || parts.iter().any(|part| part.is_empty()) {
         return Err(Ap2Error::Malformed("mandate presentation"));
     }

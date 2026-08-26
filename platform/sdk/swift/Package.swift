@@ -13,6 +13,11 @@ let package = Package(
             name: "LayerXSDK",
             dependencies: [.product(name: "Crypto", package: "swift-crypto")],
             path: "Sources/LayerXSDK"
+        ),
+        .testTarget(
+            name: "LayerXSDKTests",
+            dependencies: ["LayerXSDK"],
+            path: "Tests/LayerXSDKTests"
         )
     ]
 )

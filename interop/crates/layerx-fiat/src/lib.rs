@@ -351,7 +351,6 @@ impl FiatAdapter {
         trace: &TraceId,
         now: u64,
     ) -> Result<FiatJourneyState, Traced<FiatError>> {
-        let fail = |error| trace.wrap(error);
         let facts = Self::verify_evidence(token, evidence, verifier, trace)?;
         match facts.class {
             EvidenceClass::Authorised | EvidenceClass::Clearing => {
