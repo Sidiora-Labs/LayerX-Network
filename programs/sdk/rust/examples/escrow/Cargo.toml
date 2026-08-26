@@ -2,7 +2,11 @@
 name = "layerx-reference-escrow"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.91.1"
 license = "LicenseRef-Centra-ai-Protocol"
+publish = false
+
+[workspace]
 
 [lib]
 crate-type = ["cdylib"]
@@ -18,3 +22,14 @@ lto = true
 codegen-units = 1
 panic = "abort"
 strip = true
+
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+float_arithmetic = "deny"
+lossy_float_literal = "deny"

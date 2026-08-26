@@ -7,7 +7,7 @@
   "build": {
     "command": "cargo",
     "args": ["build", "--release", "--target", "wasm32-unknown-unknown", "--locked"],
-    "artifact": "../../../../target/wasm32-unknown-unknown/release/layerx_reference_vault.wasm"
+    "artifact": "target/wasm32-unknown-unknown/release/layerx_reference_vault.wasm"
   },
   "entry": {"call": "layerx_call", "reserve": "layerx_reserve", "interface": "interface.kvx"},
   "capabilities": ["storage_read", "storage_write", "shared_storage_read", "shared_storage_write", "emit_event", "transfer_402", "program_spend_tag_9"]

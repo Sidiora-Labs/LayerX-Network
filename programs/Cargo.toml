@@ -8,11 +8,14 @@ members = [
     "porting/evm",
     "porting/solana",
     "sdk/rust",
-    "sdk/rust/examples/escrow",
-    "sdk/rust/examples/vault",
     "sdk/rust/lint",
 ]
-exclude = ["sdk/rust/quickstart", "sdk/rust/response-fixture"]
+exclude = [
+    "sdk/rust/examples/escrow",
+    "sdk/rust/examples/vault",
+    "sdk/rust/quickstart",
+    "sdk/rust/response-fixture",
+]
 resolver = "2"
 
 [workspace.package]
