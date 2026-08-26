@@ -585,7 +585,7 @@ mod tests {
         Abi, AbiError, AuthorizationContext, CallFrameId, ReceiptOracle, ReceiptView,
     };
     use crate::accounts::{derive_program_account, MAX_PROGRAM_ACCOUNT_SEED_BYTES};
-    use crate::ABI_VERSION;
+    use crate::execute::ABI_VERSION;
     use crate::storage::{PrincipalId, ProgramId, Storage};
 
     #[test]

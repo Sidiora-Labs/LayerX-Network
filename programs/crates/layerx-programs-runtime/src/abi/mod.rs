@@ -29,6 +29,7 @@ use crate::storage::{
 };
 use crate::transfer::{ProgramAuthority, ProgramFundingBinding, TransferLawError, TransferSource};
 
+pub use crate::ABI_MANIFEST;
 pub const ABI_MODULE: &str = manifest::ABI_V1_MODULE;
 pub const ABI_V2_MODULE: &str = manifest::ABI_V2_MODULE;
 pub const MAX_EVENT_TOPIC_BYTES: usize = 64;
