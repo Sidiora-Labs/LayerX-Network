@@ -5,8 +5,15 @@ import { SHELL_PROFILES, human_test_harness } from "./e2e/harness.ts";
 const harness = human_test_harness(process.env);
 
 export default defineConfig({
-  testDir: "./e2e/browser",
-  testMatch: ["**/*.spec.ts"],
+  testDir: "./e2e",
+  testMatch: [
+    "browser/**/*.spec.ts",
+    "approvals.spec.ts",
+    "explorer.spec.ts",
+    "move.spec.ts",
+    "onboarding.spec.ts",
+    "support.spec.ts",
+  ],
   outputDir: harness.traceDirectory,
   fullyParallel: false,
   forbidOnly: true,
@@ -40,7 +47,7 @@ export default defineConfig({
     })),
     {
       name: "touch-tablet-shell",
-      testMatch: "**/a11y.spec.ts",
+      testMatch: "browser/a11y.spec.ts",
       use: {
         viewport: { width: 1024, height: 1366 },
         hasTouch: true,

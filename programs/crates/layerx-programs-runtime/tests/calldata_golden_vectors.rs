@@ -37,9 +37,9 @@ fn load_vectors(path: &Path) -> Vec<TestVector> {
         .unwrap_or_else(|error| panic!("failed to parse {}: {}", path.display(), error))
 }
 
-fn run_vector(vector: &TestVector) {
+fn run_vector(vector: &TestVector) -> bool {
     if vector.hex_generator.is_some() {
-        return;
+        return false;
     }
 
     let bytes = hex_decode(&vector.hex);
@@ -73,48 +73,63 @@ fn run_vector(vector: &TestVector) {
         }
         other => panic!("Invalid expected value: {}", other),
     }
+
+    true
 }
 
-fn test_vector_directory(dir: &str) {
-    let base = Path::new("programs/tests/vectors/calldata").join(dir);
+fn test_vector_directory(dir: &str, expected_executed: usize) {
+    let base = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/vectors/calldata")
+        .join(dir);
     if !base.exists() {
         panic!("Vector directory does not exist: {}", base.display());
     }
 
-    let mut count = 0;
+    let mut executed = 0;
+    let mut skipped = 0;
     for entry in fs::read_dir(&base).expect("read directory") {
         let entry = entry.expect("directory entry");
         let path = entry.path();
         if path.extension().and_then(|s| s.to_str()) == Some("json") {
             let vectors = load_vectors(&path);
             for vector in &vectors {
-                run_vector(vector);
-                count += 1;
+                if run_vector(vector) {
+                    executed += 1;
+                } else {
+                    skipped += 1;
+                }
             }
         }
     }
 
-    assert!(count > 0, "No vectors found in {}", base.display());
+    assert!(executed > 0, "No vectors executed in {}", base.display());
+    assert_eq!(
+        executed,
+        expected_executed,
+        "Executed vector count mismatch in {} ({} skipped)",
+        base.display(),
+        skipped
+    );
 }
 
 #[test]
 fn valid_primitives() {
-    test_vector_directory("valid");
+    test_vector_directory("valid", 43);
 }
 
 #[test]
 fn invalid_malformed() {
-    test_vector_directory("invalid");
+    test_vector_directory("invalid", 22);
 }
 
 #[test]
 fn boundaries_depth_and_size() {
-    test_vector_directory("boundaries");
+    test_vector_directory("boundaries", 10);
 }
 
 #[test]
 fn evm_head_only_layout() {
-    test_vector_directory("evm");
+    test_vector_directory("evm", 10);
 }
 
 #[test]
