@@ -38,6 +38,14 @@ observed = "Task 5.8 requires replacing the mounted-root-secret production path 
 assumption = "Before production cutover, human qualification will define and exercise a protocol key-rotation ceremony from every legacy primary key to a remotely generated KMS/HSM key, then confirm no legacy envelope is needed by production startup."
 severity = "migration-boundary"
 
+[observation.31.7.3]
+task = "31.7"
+file = "programs/porting/solana/guest/src/lib.rs, programs/porting/cosmwasm/guest/src/lib.rs, programs/crates/layerx-programs-runtime/src/abi/context.rs"
+symbol = "AnchorContext account list, MessageInfo.funds"
+observed = "The frozen ABI-v2 context exposes the executing program, immediate caller, invoking principal and protocol sequence/version facts, but exposes neither an authenticated Solana instruction account list nor CosmWasm attached funds. Capabilities are enforced by the host but are not enumerable by the guest, and 402LXP effects do not identify an attached-funds message value. The guest kits therefore map the authenticated signer/program/slot and sender/contract/height subsets without inventing account metadata or funds from calldata."
+assumption = "A future ABI revision or production call envelope must add canonical bounded account metadata and authenticated attached-funds facts before Anchor Accounts validation and MessageInfo.funds can be represented as complete native patterns. Human qualification must treat those fields as unavailable, not empty, and must not claim complete source-ecosystem parity from ABI v2."
+severity = "missing-canonical-producer"
+
 [observation.19.4.2]
 task = "19.4"
 file = "include/layerx/lxp_receipt.h"
@@ -1992,3 +2000,19 @@ symbol = "current_abi_version, current_abi_manifest"
 observed = "Two full Codify 0.3 indexes could not resolve task 31.6's crate-root ABI_VERSION and ABI_MANIFEST symbols even though direct source inspection showed authoritative public constants, because the Rust index records functions, types and modules but omits const items. The semantic ABI contract remains expressed by those constants and their historical reexport paths. The graph contract now names public const accessor functions which return the exact authoritative values without copying or reconstructing them, giving Codify indexable crate-root symbols while preserving the original public constant API."
 assumption = "Root must render generated spec projections and rerun full graph indexing after cherry-pick. Human qualification must confirm the accessors return the same version and manifest as the public constants and compatibility reexports. No acceptance criterion, touch set or task status was changed, and no build, test, format, qualification or graph result is asserted by this source repair."
 severity = "tooling-representation"
+
+[observation.31.7.1]
+task = "31.7"
+file = "src/modules/programs/call.c, programs/crates/layerx-programs-runtime/src/ffi_call.rs, programs/porting/evm/reference-v2/src/lib.rs, programs/porting/solana/reference-v2/src/lib.rs, programs/porting/cosmwasm/reference-v2/src/lib.rs"
+symbol = "lxp_programs_call_activity, layerx_programs_call_activity, ABI-v2 porting reference guests"
+observed = "The only production owner that can supply authenticated activity sequence, batch height, runtime, recorded ABI, effective fee schedule, payer coverage and verified receipt facts to an ABI-v2 guest is the C Programs CALL transition through the Rust FFI bridge. A local Rust executor seam cannot honestly manufacture those facts. The earlier local qualifier and its fabricated context and fake receipt oracle were removed. The Programs call-activity test now accepts the three locked artifacts, deploys each through lxp_kernel_execute_activity, invokes each through the production CALL transition and requires canonical ABI-v2 success receipt evidence; each guest traps unless its kit-owned mapped context and crypto results satisfy its source assertions."
+assumption = "Human qualification must run programs-porting-v2-references and inspect all three production-transition receipts. This implementation writes that real route but does not claim it has executed."
+severity = "qualification-required"
+
+[observation.31.7.2]
+task = "31.7"
+file = "programs/porting/evm/guest/src/lib.rs"
+symbol = "msg_sender, address_this"
+observed = "LayerX program and principal identifiers are canonical 32-byte values while an EVM address is 20 bytes. The direct vocabulary mapping takes the low 20 bytes, matching EVM word narrowing, and distinguishes nested msg.sender from root invocation by using immediate_caller when present and invoking_principal only at the root."
+assumption = "Human migration qualification must reject deployments whose participating 32-byte identifiers collide after low-20-byte narrowing, or the protocol must publish a collision-resistant canonical address allocation rule before those identifiers are exposed to unmodified Solidity address comparisons."
+severity = "migration-boundary"

@@ -2704,16 +2704,19 @@ programs-differential:
 	cd programs && $(PROGRAMS_CARGO) test --locked -p layerx-programs-runtime --test replay --test determinism
 
 programs-test: programs-module-boundaries programs-abi-drift programs-core-test programs-protocol-regression programs-adversarial programs-fuzz-smoke programs-differential programs-sdk-rust programs-sdk-c programs-sdk-assemblyscript programs-porting-v2-references
+	cd programs && $(PROGRAMS_CARGO) test --locked --workspace
 
-programs-porting-v2-references:
-	$(PROGRAMS_CARGO) build --manifest-path programs/porting/evm/reference-v2/Cargo.toml --target wasm32-unknown-unknown --release
-	$(PROGRAMS_CARGO) build --manifest-path programs/porting/solana/reference-v2/Cargo.toml --target wasm32-unknown-unknown --release
-	$(PROGRAMS_CARGO) build --manifest-path programs/porting/cosmwasm/reference-v2/Cargo.toml --target wasm32-unknown-unknown --release
-	$(PROGRAMS_CARGO) run --manifest-path programs/porting/evm/reference-v2/Cargo.toml --example qualify -- \
+programs-porting-v2-references: $(BUILD_DIR)/tests/programs_call_activity
+	$(PROGRAMS_CARGO) build --locked --manifest-path programs/porting/evm/reference-v2/Cargo.toml --target wasm32-unknown-unknown --release
+	$(PROGRAMS_CARGO) build --locked --manifest-path programs/porting/solana/reference-v2/Cargo.toml --target wasm32-unknown-unknown --release
+	$(PROGRAMS_CARGO) build --locked --manifest-path programs/porting/cosmwasm/reference-v2/Cargo.toml --target wasm32-unknown-unknown --release
+	cd programs && $(PROGRAMS_CARGO) run --locked --quiet -p layerx-program-lint --bin layerx-program-lint -- --abi-version 2 porting/evm/reference-v2 porting/evm/reference-v2/target/wasm32-unknown-unknown/release/layerx_evm_context_reference.wasm
+	cd programs && $(PROGRAMS_CARGO) run --locked --quiet -p layerx-program-lint --bin layerx-program-lint -- --abi-version 2 porting/solana/reference-v2 porting/solana/reference-v2/target/wasm32-unknown-unknown/release/layerx_anchor_context_reference.wasm
+	cd programs && $(PROGRAMS_CARGO) run --locked --quiet -p layerx-program-lint --bin layerx-program-lint -- --abi-version 2 porting/cosmwasm/reference-v2 porting/cosmwasm/reference-v2/target/wasm32-unknown-unknown/release/layerx_cosmwasm_context_reference.wasm
+	$(RUN_PREFIX) $(BUILD_DIR)/tests/programs_call_activity \
 		programs/porting/evm/reference-v2/target/wasm32-unknown-unknown/release/layerx_evm_context_reference.wasm \
 		programs/porting/solana/reference-v2/target/wasm32-unknown-unknown/release/layerx_anchor_context_reference.wasm \
 		programs/porting/cosmwasm/reference-v2/target/wasm32-unknown-unknown/release/layerx_cosmwasm_context_reference.wasm
-	cd programs && $(PROGRAMS_CARGO) test --locked --workspace
 
 programs-sdk-c:
 	STRICT=1 sh programs/sdk/c/examples/paid-counter/build.sh all

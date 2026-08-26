@@ -5,6 +5,7 @@
 #include "layerx/lxp_kernel.h"
 
 #include <string.h>
+#include <stdio.h>
 
 static lxp_result occupancy_parameters(
     void *context, uint32_t version, lx_programs_fee_schedule *schedule,
@@ -682,8 +683,144 @@ static int deploy_and_upgrade_persist_exact_artifacts(void)
     return lxp_state_store_destroy(&state) == LXP_OK ? 0 : 1;
 }
 
-int main(void)
+static int qualify_porting_reference(const char *path, uint8_t marker)
+{
+    static const uint8_t did[] = "did:lxp:porting-v2";
+    static const uint8_t actor_name[] = "agent:porting-v2:main";
+    static const uint8_t treasury_name[] = "system:fees";
+    static uint8_t wasm[LXP_MAX_ACTIVITY_BYTES];
+    static uint8_t payload[LXP_MAX_ACTIVITY_BYTES];
+    static uint8_t arena_bytes[LXP_MAX_ACTIVITY_BYTES + 4096U];
+    uint8_t program_id[32];
+    uint8_t primary_key[32] = {1U};
+    uint8_t code_hash[32];
+    uint8_t actor_id[32];
+    uint8_t treasury_id[32];
+    uint8_t fee_asset[32] = {9U};
+    FILE *artifact;
+    long file_length;
+    size_t wasm_length;
+    size_t payload_length;
+    lxp_arena arena;
+    lxp_state_store state;
+    lxp_state_journal journal;
+    lxp_kernel kernel;
+    lxp_identity_store identities = {0};
+    lxp_identity *identity;
+    lxp_authority_resolved authority;
+    lxp_kernel_execution execution;
+    lxp_fee_params fees = {0};
+    lx_account_registry accounts;
+    lx_account *actor;
+    lx_account *treasury;
+    lxp_transfer_asset_state fee_asset_state;
+    lx_programs_transfer_runtime runtime;
+    lxp_activity activity;
+    lxp_receipt receipt;
+    uint64_t parameters = 1U;
+    artifact = fopen(path, "rb");
+    if (artifact == NULL || fseek(artifact, 0L, SEEK_END) != 0)
+        return 1;
+    file_length = ftell(artifact);
+    if (file_length <= 0L ||
+        (unsigned long)file_length > sizeof(wasm) - DEPLOY_FIXED_BYTES ||
+        fseek(artifact, 0L, SEEK_SET) != 0) {
+        (void)fclose(artifact);
+        return 1;
+    }
+    wasm_length = (size_t)file_length;
+    if (fread(wasm, 1U, wasm_length, artifact) != wasm_length ||
+        fclose(artifact) != 0)
+        return 1;
+    (void)memset(program_id, marker, sizeof(program_id));
+    (void)memset(&authority, 0, sizeof(authority));
+    if (lx_account_registry_init(&accounts) != LXP_OK ||
+        lx_account_id_from_string(actor_name, sizeof(actor_name) - 1U,
+                                  actor_id) != LXP_OK ||
+        lx_account_id_from_string(treasury_name, sizeof(treasury_name) - 1U,
+                                  treasury_id) != LXP_OK ||
+        lx_account_open(&accounts, actor_name, sizeof(actor_name) - 1U,
+                        actor_id, 1U, LX_ACCOUNT_OPEN_GENESIS, NULL, &actor) != LXP_OK ||
+        lx_account_open(&accounts, treasury_name, sizeof(treasury_name) - 1U,
+                        treasury_id, 2U, LX_ACCOUNT_OPEN_GENESIS, NULL,
+                        &treasury) != LXP_OK ||
+        lxp_ledger_bootstrap_balance(actor, fee_asset,
+                                     (lxp_u128){0U, UINT64_MAX}, 1U) != LXP_OK ||
+        lxp_ledger_bootstrap_balance(treasury, fee_asset,
+                                     (lxp_u128){0U, 0U}, 0U) != LXP_OK)
+        return 1;
+    (void)memcpy(authority.principal, actor_id, sizeof(actor_id));
+    (void)memset(authority.authority_hash, 0x55, 32U);
+    (void)memset(&fee_asset_state, 0, sizeof(fee_asset_state));
+    (void)memcpy(fee_asset_state.asset_id, fee_asset, sizeof(fee_asset));
+    fee_asset_state.registered = true;
+    (void)memset(&runtime, 0, sizeof(runtime));
+    runtime.accounts = &accounts;
+    runtime.assets = &fee_asset_state;
+    runtime.asset_count = 1U;
+    runtime.fee_schedule = (lx_programs_fee_schedule){1U, 1U, 1U, 2U, 4U, 1U, 1U, 1U};
+    (void)memcpy(runtime.occupancy_asset_id, fee_asset, 32U);
+    runtime.resolve_occupancy_parameters = occupancy_parameters;
+    runtime.occupancy_parameter_context = &runtime;
+    payload_length = deploy_payload(payload, program_id, authority.principal,
+                                    wasm, wasm_length, code_hash);
+    fill_activity(&activity, LX_PROGRAMS_DEPLOY, payload, payload_length,
+                  did, sizeof(did) - 1U, primary_key);
+    fees.version = 1U;
+    fees.multiplier_basis_points = 10000U;
+    if (lxp_state_store_init(&state, 0U) != LXP_OK ||
+        lxp_identity_register(&identities, did, sizeof(did) - 1U,
+                              primary_key, &identity) != LXP_OK ||
+        lxp_kernel_create(&kernel, &state, &journal, &parameters, 0U) != LXP_OK ||
+        lxp_kernel_register_module(&kernel, programs_module_registration()) != LXP_OK ||
+        lxp_kernel_bind_module_runtime(&kernel, LXP_MODULE_PROGRAMS, &runtime) != LXP_OK ||
+        lxp_programs_bind_fee_transaction(&kernel) != LXP_OK ||
+        lxp_arena_init(&arena, arena_bytes, sizeof(arena_bytes)) != LXP_OK)
+        return 1;
+    (void)memset(&execution, 0, sizeof(execution));
+    execution.network_id = 7U;
+    execution.batch_number = 1U;
+    execution.batch_timestamp_ms = 10U;
+    execution.maximum_timestamp_window = 100U;
+    execution.global_sequence = 1U;
+    execution.recorded_module_version = LX_PROGRAMS_ABI_VERSION;
+    execution.parameter_version = 1U;
+    execution.signature_valid = true;
+    execution.identities = &identities;
+    execution.authority = &authority;
+    execution.fee_parameters = &fees;
+    execution.gas_limit = 1000000U;
+    execution.arena = &arena;
+    if (lxp_kernel_execute_activity(&kernel, &activity, &execution, &receipt) != LXP_OK ||
+        receipt.result_code != LXP_OK || receipt.module_version != LX_PROGRAMS_ABI_VERSION)
+        return 1;
+    payload_length = call_payload(payload, program_id);
+    fill_activity(&activity, LX_PROGRAMS_CALL, payload, payload_length,
+                  did, sizeof(did) - 1U, primary_key);
+    activity.account_sequence = 1U;
+    activity.idempotency_key[31] = 2U;
+    activity.fee_limit = (lxp_u128){0U, UINT64_MAX};
+    execution.global_sequence = 2U;
+    execution.fee_balance = (lxp_u128){0U, UINT64_MAX};
+    if (lxp_arena_reset(&arena, 0U) != LXP_OK ||
+        lxp_kernel_execute_activity(&kernel, &activity, &execution, &receipt) != LXP_OK ||
+        receipt.result_code != LXP_OK || !receipt.program_outcome.present ||
+        receipt.program_outcome.terminal_kind != LXP_PROGRAM_TERMINAL_SUCCESS ||
+        receipt.program_outcome.runtime_version == 0U ||
+        receipt.program_outcome.abi_version != LX_PROGRAMS_ABI_VERSION ||
+        receipt.program_outcome.fee_schedule_version != 1U ||
+        lxp_ct_is_zero(receipt.program_outcome.terminal_payload_root, 32U))
+        return 1;
+    return lxp_state_store_destroy(&state) == LXP_OK ? 0 : 1;
+}
+
+int main(int argc, char **argv)
 {
     if (malformed_call_payloads() != 0) return 1;
-    return deploy_and_upgrade_persist_exact_artifacts();
+    if (deploy_and_upgrade_persist_exact_artifacts() != 0) return 1;
+    if (argc == 1) return 0;
+    if (argc != 4) return 1;
+    if (qualify_porting_reference(argv[1], 0x41U) != 0) return 1;
+    if (qualify_porting_reference(argv[2], 0x42U) != 0) return 1;
+    return qualify_porting_reference(argv[3], 0x43U);
 }
