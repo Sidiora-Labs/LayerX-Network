@@ -348,6 +348,8 @@ version = "0.1.0"
 dependencies = [
  "layerx-program-sdk",
  "layerx-programs-runtime",
+ "serde",
+ "serde_json",
  "wasmparser-nostd",
 ]
 

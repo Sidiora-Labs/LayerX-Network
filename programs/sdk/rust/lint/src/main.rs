@@ -14,6 +14,7 @@ use layerx_program_lint::{
     abi_surface_violations, lint_artifact_for_abi, lint_project_for_abi,
     DeterminismViolation,
 };
+use serde::de::{self, Deserialize, Deserializer, IgnoredAny, MapAccess, Visitor};
 
 const USAGE: &str = "usage: layerx-program-lint <project-directory> [artifact.wasm]\n       layerx-program-lint --abi-version <1|2> <project-directory> [artifact.wasm]\n       layerx-program-lint --abi-version <1|2> --artifact <artifact.wasm>\n       layerx-program-lint --abi";
 const USAGE_STATUS: u8 = 2;
@@ -89,33 +90,58 @@ fn project_violations(
     lint_project_for_abi(project, artifact, recorded)
 }
 
-fn recorded_abi_version(project: &Path) -> Result<u16, &'static str> {
-    let manifest = fs::read_to_string(project.join("layerx-program.json"))
-        .map_err(|_| "missing or unreadable layerx-program.json")?;
-    let mut recorded = None;
-    for (offset, _) in manifest.match_indices("\"abi_version\"") {
-        let value = manifest[offset + "\"abi_version\"".len()..]
-            .trim_start()
-            .strip_prefix(':')
-            .ok_or("malformed abi_version field")?
-            .trim_start();
-        let length = value.bytes().take_while(|byte| byte.is_ascii_digit()).count();
-        let (value, remainder) = value.split_at(length);
-        if value.is_empty()
-            || !matches!(remainder.trim_start().bytes().next(), Some(b',') | Some(b'}'))
-        {
-            return Err("malformed abi_version field");
+struct ProgramManifestAbi {
+    abi_version: u16,
+}
+
+impl<'de> Deserialize<'de> for ProgramManifestAbi {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct ManifestVisitor;
+
+        impl<'de> Visitor<'de> for ManifestVisitor {
+            type Value = ProgramManifestAbi;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("a program manifest object with one integer abi_version")
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                let mut abi_version = None;
+                while let Some(key) = map.next_key::<String>()? {
+                    if key == "abi_version" {
+                        if abi_version.is_some() {
+                            return Err(de::Error::duplicate_field("abi_version"));
+                        }
+                        abi_version = Some(map.next_value::<u16>()?);
+                    } else {
+                        map.next_value::<IgnoredAny>()?;
+                    }
+                }
+                Ok(ProgramManifestAbi {
+                    abi_version: abi_version
+                        .ok_or_else(|| de::Error::missing_field("abi_version"))?,
+                })
+            }
         }
-        let version = value
-            .parse::<u16>()
-            .ok()
-            .and_then(|version| parse_version_number(version))
-            .ok_or("ABI version must be exactly 1 or 2")?;
-        if recorded.replace(version).is_some() {
-            return Err("duplicate abi_version fields");
-        }
+
+        deserializer.deserialize_map(ManifestVisitor)
     }
-    recorded.ok_or("missing abi_version field")
+}
+
+fn recorded_abi_version(project: &Path) -> Result<u16, String> {
+    let manifest = fs::read_to_string(project.join("layerx-program.json"))
+        .map_err(|error| format!("missing or unreadable layerx-program.json: {error}"))?;
+    let recorded = serde_json::from_str::<ProgramManifestAbi>(&manifest)
+        .map_err(|error| format!("invalid layerx-program.json: {error}"))?
+        .abi_version;
+    parse_version_number(recorded)
+        .ok_or_else(|| format!("unsupported LayerX ABI version {recorded}"))
 }
 
 fn parse_version(value: &str) -> Option<u16> {
@@ -130,10 +156,10 @@ const fn parse_version_number(value: u16) -> Option<u16> {
     }
 }
 
-fn metadata_refusal(project: &Path, reason: &'static str) -> DeterminismViolation {
+fn metadata_refusal(project: &Path, reason: impl Into<String>) -> DeterminismViolation {
     DeterminismViolation::UnreadablePath {
         path: project.join("layerx-program.json"),
-        reason: reason.to_string(),
+        reason: reason.into(),
     }
 }
 
@@ -166,6 +192,33 @@ mod tests {
             "{\"abi_version\":1,\"abi_version\":2}\n",
         )
         .unwrap_or_else(|error| panic!("duplicate fixture manifest: {error}"));
+        assert!(recorded_abi_version(&root).is_err());
+        fs::write(root.join("layerx-program.json"), "{\"abi_version\":2\n")
+            .unwrap_or_else(|error| panic!("malformed fixture manifest: {error}"));
+        assert!(recorded_abi_version(&root).is_err());
+        fs::write(
+            root.join("layerx-program.json"),
+            "{\"description\":\"\\\"abi_version\\\":2\"}\n",
+        )
+        .unwrap_or_else(|error| panic!("embedded fixture manifest: {error}"));
+        assert!(recorded_abi_version(&root).is_err());
+        fs::write(
+            root.join("layerx-program.json"),
+            "{\"metadata\":{\"abi_version\":2}}\n",
+        )
+        .unwrap_or_else(|error| panic!("nested fixture manifest: {error}"));
+        assert!(recorded_abi_version(&root).is_err());
+        fs::write(root.join("layerx-program.json"), "{\"abi_version\":\"2\"}\n")
+            .unwrap_or_else(|error| panic!("string fixture manifest: {error}"));
+        assert!(recorded_abi_version(&root).is_err());
+        fs::write(root.join("layerx-program.json"), "{\"abi_version\":2.0}\n")
+            .unwrap_or_else(|error| panic!("floating fixture manifest: {error}"));
+        assert!(recorded_abi_version(&root).is_err());
+        fs::write(root.join("layerx-program.json"), "{\"abi_version\":-1}\n")
+            .unwrap_or_else(|error| panic!("negative fixture manifest: {error}"));
+        assert!(recorded_abi_version(&root).is_err());
+        fs::write(root.join("layerx-program.json"), "{\"abi_version\":3}\n")
+            .unwrap_or_else(|error| panic!("unknown fixture manifest: {error}"));
         assert!(recorded_abi_version(&root).is_err());
         fs::write(root.join("layerx-program.json"), "{}\n")
             .unwrap_or_else(|error| panic!("fixture manifest: {error}"));
