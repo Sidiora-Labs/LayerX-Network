@@ -281,6 +281,7 @@ lxp_result layerx_programs_call_begin(
     uint64_t fee_storage_read_byte, uint64_t fee_storage_write_byte,
     uint64_t fee_output_value, uint64_t fee_output_byte,
     uint64_t fee_occupancy_byte_batch, uint64_t batch_number,
+    uint64_t activity_sequence,
     uint16_t protocol_version,
     uint16_t abi_version, uint16_t entrypoint_length,
     uint32_t wasm_length, uint32_t calldata_length, uint16_t capabilities_length,

@@ -1,6 +1,7 @@
 //! Concrete `wasmi` bindings for the version-one capability ABI.
 
 mod calls;
+mod context;
 mod crypto;
 mod events;
 pub(crate) mod memory;
@@ -11,6 +12,7 @@ mod transfer;
 
 use wasmi::{Caller, Engine, Linker};
 
+use crate::abi::context::{ContextField, ContextRefusal, ExecutionContext};
 use crate::abi::response::{CallResponse, ResponseRefusal, ResponseRegion};
 use crate::abi::{Abi, AbiError, ReceiptView, ABI_MODULE};
 use crate::calls::{CallGraph, Composition, CompositionRefusal};
@@ -39,6 +41,7 @@ pub(crate) struct RuntimeState {
     outcome: Option<CandidateOutcomeRegion>,
     failure_subtree_fuel: Option<u64>,
     failure_graph: Option<CallGraph>,
+    protocol_context: Option<ExecutionContext>,
 }
 
 #[derive(Debug)]
@@ -57,6 +60,7 @@ impl RuntimeState {
             outcome: None,
             failure_subtree_fuel: None,
             failure_graph: None,
+            protocol_context: None,
         }
     }
 
@@ -69,6 +73,7 @@ impl RuntimeState {
             outcome: None,
             failure_subtree_fuel: None,
             failure_graph: None,
+            protocol_context: None,
         }
     }
 
@@ -88,6 +93,7 @@ impl RuntimeState {
             )?)),
             failure_subtree_fuel: None,
             failure_graph: None,
+            protocol_context: None,
         })
     }
 
@@ -185,6 +191,53 @@ impl RuntimeState {
 
     pub(crate) fn failure_graph(&self) -> Option<&CallGraph> {
         self.failure_graph.as_ref()
+    }
+
+    pub(crate) fn authenticate_protocol_context(
+        &mut self,
+        context: ExecutionContext,
+    ) {
+        self.protocol_context = Some(context);
+    }
+
+    pub(crate) fn context_field(
+        &self,
+        field: ContextField,
+        frame_fuel_consumed: u64,
+    ) -> Result<Vec<u8>, ContextRefusal> {
+        let context = self
+            .protocol_context
+            .ok_or(ContextRefusal::Unauthenticated)?;
+        let abi = self.abi.as_ref().ok_or(ContextRefusal::Unauthenticated)?;
+        let graph = self
+            .composition
+            .as_ref()
+            .ok_or(ContextRefusal::Unauthenticated)?
+            .graph();
+        let current = graph.current().ok_or(ContextRefusal::FrameMismatch)?;
+        if current.program() != abi.program()
+            || current.principal() != abi.principal()
+            || current.id() != abi.frame()
+        {
+            return Err(ContextRefusal::FrameMismatch);
+        }
+        let immediate_caller = graph.immediate_caller();
+        let remaining_fuel = self
+            .meter
+            .cpu_remaining()
+            .checked_sub(frame_fuel_consumed)
+            .ok_or(ContextRefusal::FrameMismatch)?;
+        Ok(context.encode(
+            field,
+            current.program(),
+            immediate_caller,
+            current.principal(),
+            remaining_fuel,
+        ))
+    }
+
+    pub(crate) const fn protocol_context(&self) -> Option<ExecutionContext> {
+        self.protocol_context
     }
 
     pub(super) fn publish_response_status(&mut self, response: CallResponse) -> i32 {
@@ -290,6 +343,7 @@ pub(crate) fn linker(
     bigint::register(&mut linker)?;
     if revision == AbiRevision::CandidateV2 {
         calls::register_candidate(&mut linker)?;
+        context::register_candidate(&mut linker)?;
         scan::register_candidate(&mut linker)?;
         storage::register_candidate(&mut linker)?;
         transfer::register_candidate(&mut linker)?;

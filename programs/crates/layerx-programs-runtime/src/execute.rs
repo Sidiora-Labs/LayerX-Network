@@ -5,6 +5,7 @@ use core::fmt::{self, Display};
 use wasmi::core::TrapCode;
 use wasmi::{Extern, Instance, Memory, Store, Value};
 
+use crate::abi::context::ExecutionContext;
 use crate::abi::response::{CallResponse, ResponseRefusal};
 use crate::abi::{Abi, AbiEffects, AbiError, AuthorizationContext, ReceiptOracle};
 use crate::budget::{
@@ -1138,6 +1139,7 @@ pub struct BudgetedAuthorizedExecutionRequest<'a> {
     admitted_budget: AdmittedBudget,
     payer: PrincipalId,
     activity_binding: ActivityBudgetBinding,
+    execution_context: Option<ExecutionContext>,
 }
 
 impl<'a> BudgetedAuthorizedExecutionRequest<'a> {
@@ -1154,7 +1156,16 @@ impl<'a> BudgetedAuthorizedExecutionRequest<'a> {
             admitted_budget,
             payer,
             activity_binding,
+            execution_context: None,
         }
+    }
+
+    pub(crate) fn with_authenticated_execution_context(
+        mut self,
+        execution_context: ExecutionContext,
+    ) -> Self {
+        self.execution_context = Some(execution_context);
+        self
     }
 }
 
@@ -1580,6 +1591,7 @@ impl Executor {
             admitted_budget,
             payer,
             activity_binding,
+            execution_context: _,
         } = budgeted;
         self.validate_budget_token(&admitted_budget, payer, activity_binding)?;
         if request.module.abi_revision() != AbiRevision::V1 {
@@ -1750,7 +1762,7 @@ impl Executor {
         storage: &mut Storage,
         request: AuthorizedExecutionRequest<'_>,
     ) -> Result<CandidateAuthorizedExecutionRecord, ExecutionError> {
-        self.execute_authorized_candidate_with_budget(storage, request, self.budget, None)
+        self.execute_authorized_candidate_with_budget(storage, request, self.budget, None, None)
     }
 
     /// Qualification-only candidate execution under one consumed admitted budget.
@@ -1780,6 +1792,7 @@ impl Executor {
             admitted_budget,
             payer,
             activity_binding,
+            execution_context,
         } = budgeted;
         self.validate_budget_token(&admitted_budget, payer, activity_binding)?;
         self.execute_authorized_candidate_with_budget(
@@ -1787,6 +1800,7 @@ impl Executor {
             request,
             admitted_budget.resource_budget(),
             Some(activity_binding),
+            execution_context,
         )
     }
 
@@ -1797,6 +1811,7 @@ impl Executor {
         request: AuthorizedExecutionRequest<'_>,
         active_budget: ResourceBudget,
         activity_binding: Option<ActivityBudgetBinding>,
+        execution_context: Option<ExecutionContext>,
     ) -> Result<CandidateAuthorizedExecutionRecord, ExecutionError> {
         let budgeted = activity_binding.is_some();
         if request.module.abi_revision() != AbiRevision::CandidateV2 {
@@ -1839,11 +1854,12 @@ impl Executor {
         );
         let retained = request
             .module
-            .instantiate_composed_response_retained(
+            .instantiate_composed_response_context_retained(
                 meter,
                 abi,
                 composition,
                 request.response_capacity,
+                execution_context,
             )
             .map_err(ExecutionError::Response)?;
         let mut instance = match retained {

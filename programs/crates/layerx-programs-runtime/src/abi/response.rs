@@ -8,10 +8,10 @@ use super::{AbiValueType, HostFunction, HostFunctionType};
 
 /// Explicitly non-current module carrying candidate response operations.
 pub const CANDIDATE_ABI_MODULE: &str = "layerx_v2_candidate";
-pub const CANDIDATE_ABI_MANIFEST: &str = "layerx_v2_candidate\0response_write(i32,i32,i32)->i32\0program_call_response(i32,i32,i32,i32,i32,i32,i32,i32)->i64\0refusal_write(i32,i32,i32)->i32\0storage_read_scoped(i32,i32,i32,i32,i32)->i32\0storage_write_scoped(i32,i32,i32,i32,i32)->i32\0storage_delete_scoped(i32,i32,i32)->i32\0storage_drop_scoped(i32)->i32\0storage_scan_scoped(i32,i32,i32,i32,i32,i32,i32,i32,i32)->i32\0transfer_program_402(i64,i64,i32,i32,i32,i32,i32,i32,i32,i32)->i32\0fund_program_402(i64,i64,i32,i32,i32,i32,i32,i32)->i32\0";
+pub const CANDIDATE_ABI_MANIFEST: &str = "layerx_v2_candidate\0response_write(i32,i32,i32)->i32\0program_call_response(i32,i32,i32,i32,i32,i32,i32,i32)->i64\0refusal_write(i32,i32,i32)->i32\0storage_read_scoped(i32,i32,i32,i32,i32)->i32\0storage_write_scoped(i32,i32,i32,i32,i32)->i32\0storage_delete_scoped(i32,i32,i32)->i32\0storage_drop_scoped(i32)->i32\0storage_scan_scoped(i32,i32,i32,i32,i32,i32,i32,i32,i32)->i32\0transfer_program_402(i64,i64,i32,i32,i32,i32,i32,i32,i32,i32)->i32\0fund_program_402(i64,i64,i32,i32,i32,i32,i32,i32)->i32\0context_read(i32,i32,i32)->i32\0";
 
 /// Exact qualification-only response extension table.
-pub const CANDIDATE_HOST_FUNCTIONS: [HostFunction; 10] = [
+pub const CANDIDATE_HOST_FUNCTIONS: [HostFunction; 11] = [
     HostFunction {
         name: "response_write",
         signature: "(i32,i32,i32)->i32",
@@ -51,6 +51,10 @@ pub const CANDIDATE_HOST_FUNCTIONS: [HostFunction; 10] = [
     HostFunction {
         name: "fund_program_402",
         signature: "(i64,i64,i32,i32,i32,i32,i32,i32)->i32",
+    },
+    HostFunction {
+        name: "context_read",
+        signature: "(i32,i32,i32)->i32",
     },
 ];
 
@@ -95,6 +99,10 @@ const REFUSAL_WRITE_TYPE: HostFunctionType = HostFunctionType {
     params: RESPONSE_WRITE_PARAMS,
     results: I32_RESULT,
 };
+const CONTEXT_READ_TYPE: HostFunctionType = HostFunctionType {
+    params: RESPONSE_WRITE_PARAMS,
+    results: I32_RESULT,
+};
 const STORAGE_SCOPED_TYPE: HostFunctionType = HostFunctionType {
     params: STORAGE_SCOPED_PARAMS,
     results: I32_RESULT,
@@ -125,6 +133,7 @@ pub(crate) fn candidate_function_type(name: &str) -> Option<&'static HostFunctio
         "response_write" => Some(&RESPONSE_WRITE_TYPE),
         "program_call_response" => Some(&PROGRAM_CALL_RESPONSE_TYPE),
         "refusal_write" => Some(&REFUSAL_WRITE_TYPE),
+        "context_read" => Some(&CONTEXT_READ_TYPE),
         "storage_read_scoped" | "storage_write_scoped" => Some(&STORAGE_SCOPED_TYPE),
         "storage_delete_scoped" => Some(&STORAGE_DELETE_SCOPED_TYPE),
         "storage_drop_scoped" => Some(&STORAGE_DROP_SCOPED_TYPE),

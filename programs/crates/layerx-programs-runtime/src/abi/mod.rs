@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 
 pub(crate) mod capability;
 pub mod codec;
+pub mod context;
 pub mod response;
 mod storage_ops;
 
@@ -501,6 +502,10 @@ impl Abi {
 
     pub(crate) const fn program(&self) -> ProgramId {
         self.program
+    }
+
+    pub(crate) const fn frame(&self) -> CallFrameId {
+        self.authorization.frame()
     }
 
     /// Returns the principal-scoped namespace fixed before guest entry.

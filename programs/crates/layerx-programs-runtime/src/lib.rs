@@ -57,6 +57,7 @@ pub mod transfer;
 #[deny(unsafe_code)]
 pub mod validate;
 
+pub use abi::context::{ContextField, ContextRefusal, ExecutionContext};
 pub use abi::response::{CallResponse, ResponseRefusal, MAX_CALL_RESPONSE_BYTES};
 pub use accounts::{
     derive_program_account, program_account_preimage, ProgramAccount, ProgramAccountError,

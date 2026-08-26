@@ -302,6 +302,13 @@ impl CallGraph {
         self.frames.last().copied()
     }
 
+    /// Returns the immediate caller of the active frame. The root frame has no
+    /// caller; absence is not represented by a program identifier.
+    #[must_use]
+    pub fn immediate_caller(&self) -> Option<ProgramId> {
+        self.frames.iter().rev().nth(1).map(|frame| frame.program)
+    }
+
     /// Returns the nesting depth of the frame currently executing.
     #[must_use]
     pub fn depth(&self) -> u32 {
@@ -866,6 +873,7 @@ fn execute_nested(
             .map_err(|refusal| preflight_entry_refusal(callee, refusal))?;
     }
     let carried = state.meter().cpu_carried();
+    let protocol_context = state.protocol_context();
     let mut admitted_graph = state
         .composition()
         .ok_or(CompositionRefusal::NotComposable)?
@@ -912,11 +920,12 @@ fn execute_nested(
     let child_composition = Composition::new(Rc::clone(&resolver), child_graph, expected);
     let mut instance = if expected == AbiRevision::CandidateV2 {
         let retained = module
-            .instantiate_composed_response_retained(
+            .instantiate_composed_response_context_retained(
                 child_meter,
                 child_abi,
                 child_composition,
                 response_capacity.unwrap_or(0),
+                protocol_context,
             )
             .map_err(response_refusal)?;
         match retained {
@@ -1218,5 +1227,40 @@ fn instantiation_refusal(
     match fault {
         ExecutionFault::Resource { refusal } => CompositionRefusal::Resource(refusal),
         other => CompositionRefusal::Fault(other),
+    }
+}
+
+#[cfg(test)]
+mod context_tests {
+    use super::{CallGraph, CompositionRefusal, CompositionRules};
+    use crate::{PrincipalId, ProgramId};
+
+    #[test]
+    fn immediate_caller_is_owned_by_each_active_edge() {
+        let root = ProgramId::new([1; 32]).expect("root");
+        let middle = ProgramId::new([2; 32]).expect("middle");
+        let leaf = ProgramId::new([3; 32]).expect("leaf");
+        let principal = PrincipalId::new([4; 32]).expect("principal");
+        let mut graph = CallGraph::root(CompositionRules::declared(), root, principal);
+        assert_eq!(graph.current().map(|frame| frame.program()), Some(root));
+        assert_eq!(graph.immediate_caller(), None);
+
+        graph.enter(middle).expect("middle edge");
+        assert_eq!(graph.current().map(|frame| frame.program()), Some(middle));
+        assert_eq!(graph.immediate_caller(), Some(root));
+
+        graph.enter(leaf).expect("leaf edge");
+        assert_eq!(graph.current().map(|frame| frame.program()), Some(leaf));
+        assert_eq!(graph.immediate_caller(), Some(middle));
+        assert!(matches!(
+            graph.enter(root),
+            Err(CompositionRefusal::Reentrancy { program }) if program == root
+        ));
+        assert_eq!(graph.current().map(|frame| frame.program()), Some(leaf));
+        assert_eq!(graph.immediate_caller(), Some(middle));
+
+        graph.leave();
+        assert_eq!(graph.current().map(|frame| frame.program()), Some(middle));
+        assert_eq!(graph.immediate_caller(), Some(root));
     }
 }

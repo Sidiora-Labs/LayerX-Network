@@ -3180,7 +3180,7 @@ note = "Code-only lanes: 31.3, 31.4 and 31.5 are complete. Tasks 31.1 and 31.2 r
 
 [task.31.1]
 title = "Expose the execution context to guest code"
-status = "pending"
+status = "in_progress"
 wave = 17
 requires = ["28.7"]
 do_1 = "Add a single field-addressed context host function exposing the executing program, the immediate calling program, the invoking principal, the activity sequence, the batch height, the runtime and ABI versions, the remaining fuel and the effective fee schedule version."

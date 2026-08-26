@@ -232,7 +232,30 @@ impl ValidatedModule {
         Result<ProgramInstance, Box<(ExecutionFault, RuntimeState)>>,
         crate::abi::response::ResponseRefusal,
     > {
-        let state = RuntimeState::composed_with_response(meter, abi, composition, capacity)?;
+        self.instantiate_composed_response_context_retained(
+            meter,
+            abi,
+            composition,
+            capacity,
+            None,
+        )
+    }
+
+    pub(crate) fn instantiate_composed_response_context_retained(
+        &self,
+        meter: Meter,
+        abi: Abi,
+        composition: Composition,
+        capacity: usize,
+        context: Option<crate::abi::context::ExecutionContext>,
+    ) -> Result<
+        Result<ProgramInstance, Box<(ExecutionFault, RuntimeState)>>,
+        crate::abi::response::ResponseRefusal,
+    > {
+        let mut state = RuntimeState::composed_with_response(meter, abi, composition, capacity)?;
+        if let Some(context) = context {
+            state.authenticate_protocol_context(context);
+        }
         Ok(self.instantiate_state_retained(state))
     }
 

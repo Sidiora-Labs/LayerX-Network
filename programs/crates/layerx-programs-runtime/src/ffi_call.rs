@@ -1499,6 +1499,7 @@ pub extern "C" fn layerx_programs_call_begin(
     fee_output_byte: u64,
     fee_occupancy_byte_batch: u64,
     batch_number: u64,
+    activity_sequence: u64,
     protocol_version: u16,
     abi_version: u16,
     entrypoint_length: u16,
@@ -1518,6 +1519,7 @@ pub extern "C" fn layerx_programs_call_begin(
         if token == 0
             || occupancy_token == 0
             || batch_number == 0
+            || activity_sequence == 0
             || !matches!(protocol_version, 1 | 2)
             || parameter_version == 0
             || fee_schedule_version == 0
@@ -1716,11 +1718,20 @@ pub extern "C" fn layerx_programs_call_begin(
             response_capacity: usize::try_from(response_capacity).map_err(|_| LENGTH_LIMIT)?,
         };
         if root_module.abi_revision() == AbiRevision::CandidateV2 {
+            let execution_context = crate::abi::context::ExecutionContext::authenticated(
+                activity_sequence,
+                batch_number,
+                crate::execute::RUNTIME_VERSION,
+                abi_version,
+                fee_schedule_version,
+            )
+            .map_err(|_| NON_CANONICAL)?;
             let mut final_storage = storage.clone();
             let record = executor
                 .execute_authorized_candidate_budgeted(
                     &mut final_storage,
-                    BudgetedAuthorizedExecutionRequest::new(request, admitted, payer, binding),
+                    BudgetedAuthorizedExecutionRequest::new(request, admitted, payer, binding)
+                        .with_authenticated_execution_context(execution_context),
                 )
                 .map_err(|_| NON_CANONICAL)?;
             match record.outcome() {
