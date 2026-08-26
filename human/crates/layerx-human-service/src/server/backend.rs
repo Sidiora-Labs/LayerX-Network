@@ -7,8 +7,7 @@ use layerx_client::lni::transport::{ConnectionGate, FrameTransport, Limits, Uds}
 use serde_json::{json, Map, Value};
 use zeroize::Zeroize;
 
-use crate::store::tenancy::AgentTenantId;
-use crate::store::PrincipalId;
+use crate::store::{AgentTenantId, PrincipalId};
 
 use super::schema::Operation;
 

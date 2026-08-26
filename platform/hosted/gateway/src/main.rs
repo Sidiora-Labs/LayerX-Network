@@ -179,8 +179,10 @@ fn decode_hex(value: &str, maximum: usize) -> Result<Vec<u8>, String> {
         .as_bytes()
         .chunks_exact(2)
         .map(|pair| {
-            let text = std::str::from_utf8(pair).map_err(|_| "hexadecimal payload is invalid")?;
-            u8::from_str_radix(text, 16).map_err(|_| "hexadecimal payload is invalid")
+            let text = std::str::from_utf8(pair)
+                .map_err(|_| "hexadecimal payload is invalid".to_owned())?;
+            u8::from_str_radix(text, 16)
+                .map_err(|_| "hexadecimal payload is invalid".to_owned())
         })
         .collect()
 }
@@ -201,7 +203,7 @@ fn digest(parts: &[&[u8]]) -> String {
         hash.update((part.len() as u64).to_be_bytes());
         hash.update(part);
     }
-    format!("{hash:x}")
+    format!("{:x}", hash.finalize())
 }
 
 fn valid_identifier(value: &str, maximum: usize) -> bool {

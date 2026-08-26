@@ -919,6 +919,10 @@ pub unsafe fn read_program_state(
     }
     proven_bindings.sort_by_key(|value| value.binding.primary_key());
     proven_accounts.sort_by_key(|value| value.leaf.account_id);
+    let live_count = proven_accounts
+        .iter()
+        .filter(|account| account.leaf.balance != 0)
+        .count();
     let snapshot = VerifiedAccountSnapshot {
         protocol_version: PROTOCOL_VERSION_ACCOUNT_TREE,
         receipt_digest,
@@ -947,10 +951,6 @@ pub unsafe fn read_program_state(
     };
     let status =
         unsafe { lxp_programs_wind_down_read(context, program.bytes().as_ptr(), &mut status_view) };
-    let live_count = proven_accounts
-        .iter()
-        .filter(|account| account.leaf.balance != 0)
-        .count();
     let program_lifecycle = if status == RESULT_UNKNOWN_FIELD {
         ProgramLifecycle::Active
     } else if status == RESULT_OK
