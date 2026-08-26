@@ -11,8 +11,8 @@ use layerx_programs_runtime::{
     ABI_V2_HOST_FUNCTIONS, ABI_V2_MANIFEST, ABI_V2_VERSION, CALL_ENTRY_EXPORT, HOST_FUNCTIONS,
 };
 
-const ABI_V1_GOLDEN: &str = include_str!("../vectors/abi-v1.hex");
-const ABI_V2_GOLDEN: &str = include_str!("../vectors/abi-v2.hex");
+const ABI_V1_GOLDEN: &str = include_str!("../../../tests/vectors/abi-v1.hex");
+const ABI_V2_GOLDEN: &str = include_str!("../../../tests/vectors/abi-v2.hex");
 const ATTACK_INVENTORY: &str = include_str!("../../../tests/gauntlet/attack-inventory.tsv");
 #[path = "../../../tests/gauntlet/state.rs"]
 mod state_gauntlet;

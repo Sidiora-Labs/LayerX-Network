@@ -57,6 +57,11 @@ pub mod transfer;
 #[deny(unsafe_code)]
 pub mod validate;
 
+/// Current ABI revision recorded in new execution evidence.
+pub const ABI_VERSION: u16 = 2;
+/// Canonical manifest bytes for the current ABI revision.
+pub const ABI_MANIFEST: &str = "layerx_v1\0storage_read(i32,i32,i32,i32)->i32\0storage_write(i32,i32,i32,i32)->i32\0storage_delete(i32,i32)->i32\0event_emit(i32,i32,i32,i32)->i32\0program_call(i32,i32,i32,i32,i32,i32)->i32\0transfer_402(i64,i64,i32,i32,i32,i32)->i32\0receipt_read(i32,i32,i32,i32)->i32\0layerx_v2\0response_write(i32,i32,i32)->i32\0program_call_response(i32,i32,i32,i32,i32,i32,i32,i32)->i64\0refusal_write(i32,i32,i32)->i32\0storage_read_scoped(i32,i32,i32,i32,i32)->i32\0storage_write_scoped(i32,i32,i32,i32,i32)->i32\0storage_delete_scoped(i32,i32,i32)->i32\0storage_drop_scoped(i32)->i32\0storage_scan_scoped(i32,i32,i32,i32,i32,i32,i32,i32,i32)->i32\0transfer_program_402(i64,i64,i32,i32,i32,i32,i32,i32,i32,i32)->i32\0fund_program_402(i64,i64,i32,i32,i32,i32,i32,i32)->i32\0context_read(i32,i32,i32)->i32\0balance_read(i32,i32,i32,i32,i32,i32)->i32\0hash(i32,i32,i32,i32)->i32\0signature_verify(i32,i32,i32,i32,i32,i32,i32)->i32\0signature_recover(i32,i32,i32,i32,i32,i32,i32)->i32\0bigint_mul_256(i32,i32,i32,i32,i32,i32)->i32\0bigint_div_256(i32,i32,i32,i32,i32,i32)->i32\0bigint_rem_256(i32,i32,i32,i32,i32,i32)->i32\0bigint_modexp_256(i32,i32,i32,i32,i32,i32,i32,i32)->i32\0";
+
 pub use abi::context::{ContextField, ContextRefusal, ExecutionContext};
 pub use abi::response::{CallResponse, ResponseRefusal, MAX_CALL_RESPONSE_BYTES};
 pub use accounts::{
@@ -83,8 +88,8 @@ pub use execute::{
     CandidateAuthorizedExecutionRecord, CandidateExecutionRecord, CandidateReceiptOutcome,
     ExecutionError, ExecutionFault, ExecutionRecord, Executor, PreparedAuthorizedActivity,
     PreparedAuthorizedActivityOutcome, PreparedMonetarySummary, PreparedTransferLegSummary,
-    ProgramInstance, SettlementFailure, VerifiedStorageAssignment, WasmValue, ABI_VERSION,
-    RUNTIME_VERSION, V2ActivityOutcome, V2ActivityReceipt, V2AuthorizedExecutionRecord,
+    ProgramInstance, SettlementFailure, VerifiedStorageAssignment, WasmValue, RUNTIME_VERSION,
+    V2ActivityOutcome, V2ActivityReceipt, V2AuthorizedExecutionRecord,
     V2ExecutionRecord, V2ReceiptOutcome,
 };
 pub use fault::{
@@ -134,7 +139,7 @@ pub const fn programs_wasm_engine() -> &'static str {
 pub use abi::{
     Abi, AbiCommit, AbiEffects, AbiError, AuthorizationContext, BalanceView, CallFrameId,
     Capability, CapabilitySet, HostFunction, ProgramCall, ProgramEvent, ReceiptOracle,
-    ReceiptView, StorageSelector, TransferRequest, ABI_MANIFEST, ABI_MODULE, HOST_FUNCTIONS,
+    ReceiptView, StorageSelector, TransferRequest, ABI_MODULE, HOST_FUNCTIONS,
 };
 pub use abi::manifest::{
     manifest as abi_manifest, ABI_V1_MANIFEST, ABI_V1_MODULE, ABI_V1_VERSION,

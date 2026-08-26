@@ -6,14 +6,20 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 RUNTIME = ROOT / "programs/crates/layerx-programs-runtime/src"
 MANIFEST = RUNTIME / "abi/manifest.rs"
 ABI_MOD = RUNTIME / "abi/mod.rs"
+CRATE_ROOT = RUNTIME / "lib.rs"
 SDK_ABI = ROOT / "programs/sdk/rust/src/abi.rs"
-OUTPUT = ROOT / "programs/crates/layerx-programs-runtime/vectors"
+OUTPUT = ROOT / "programs/tests/vectors"
 FROZEN = ROOT / "programs/abi-frozen.sha256"
 
 def rust_string(source, name):
     match = re.search(rf'^pub const {name}: &str = (".*");$', source, re.MULTILINE)
     if match is None: raise ValueError(f"{name} is absent")
     return ast.literal_eval(match.group(1))
+
+def rust_u16(source, name):
+    match = re.search(rf'^pub const {name}: u16 = ([0-9]+);$', source, re.MULTILINE)
+    if match is None: raise ValueError(f"{name} is absent")
+    return int(match.group(1))
 
 def table(source, name):
     start = source.index(f"pub const {name}:")
@@ -33,7 +39,14 @@ def manifest_surface(encoded):
 
 def audit_surface(runtime_source):
     v1_manifest = rust_string(runtime_source, "ABI_V1_MANIFEST")
-    v2_manifest = rust_string(runtime_source, "ABI_V2_MANIFEST")
+    crate_root = CRATE_ROOT.read_text()
+    current_version = rust_u16(crate_root, "ABI_VERSION")
+    if current_version != 2: raise ValueError("crate-root ABI_VERSION does not identify ABI v2")
+    v2_manifest = rust_string(crate_root, "ABI_MANIFEST")
+    if "pub const ABI_V2_MANIFEST: &str = crate::ABI_MANIFEST;" not in runtime_source:
+        raise ValueError("ABI v2 manifest is not owned by the crate-root ABI_MANIFEST")
+    if "pub const ABI_V2_VERSION: u16 = crate::ABI_VERSION;" not in runtime_source:
+        raise ValueError("ABI v2 version is not owned by the crate-root ABI_VERSION")
     v1 = table(ABI_MOD.read_text(), "HOST_FUNCTIONS")
     v2 = table(runtime_source, "ABI_V2_HOST_FUNCTIONS")
     expected_v1 = [("layerx_v1", name, signature) for name, signature in v1]
@@ -66,7 +79,7 @@ def audit_surface(runtime_source):
     sdk = SDK_ABI.read_text()
     if rust_string(sdk, "CANDIDATE_ABI_MANIFEST") != v2_manifest: raise ValueError("Rust SDK ABI v2 manifest diverges")
     if table(sdk, "CANDIDATE_HOST_FUNCTIONS") != v2: raise ValueError("Rust SDK ABI v2 table diverges")
-    return {1: v1_manifest, 2: v2_manifest}
+    return {1: v1_manifest, current_version: v2_manifest}
 
 def main():
     parser = argparse.ArgumentParser()

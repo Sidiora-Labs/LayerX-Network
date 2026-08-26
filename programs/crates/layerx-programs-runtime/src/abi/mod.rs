@@ -36,12 +36,6 @@ pub const MAX_EVENT_DATA_BYTES: usize = 65_536;
 pub const MAX_CALL_INPUT_BYTES: usize = 1_048_576;
 pub const MAX_CAPABILITIES: usize = 256;
 
-/// Frozen version-one host-function surface. Signatures use WebAssembly value
-/// names, and all values are integer-only.
-/// Manifest of the current ABI revision. Historical v1 bytes remain available
-/// through [`manifest::ABI_V1_MANIFEST`].
-pub const ABI_MANIFEST: &str = manifest::ABI_V2_MANIFEST;
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct HostFunction {
     pub name: &'static str,

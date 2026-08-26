@@ -29,8 +29,6 @@ use crate::validate::{AbiRevision, ValidatedModule};
 
 /// Runtime version recorded for versioned replay of every execution.
 pub const RUNTIME_VERSION: u16 = 1;
-/// ABI version recorded alongside the runtime version in execution evidence.
-pub const ABI_VERSION: u16 = crate::abi::manifest::ABI_V2_VERSION;
 
 /// An integer-only value crossing the program boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
