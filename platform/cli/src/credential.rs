@@ -1,4 +1,4 @@
-use std::io::{self, Read as _};
+use std::io::{self, Read};
 use std::sync::OnceLock;
 
 use ed25519_dalek::SigningKey;

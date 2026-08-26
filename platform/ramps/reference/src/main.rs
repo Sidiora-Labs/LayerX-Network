@@ -567,6 +567,8 @@ fn read_request(stream: &mut TlsStream<TcpStream>) -> Result<Request, Response> 
     if length > MAX_REQUEST_BYTES {
         return Err(error(400, "body_too_large"));
     }
+    let method = method.to_owned();
+    let path = path.to_owned();
     let body_offset = boundary.saturating_add(4);
     while bytes.len().saturating_sub(body_offset) < length {
         let read = stream
@@ -578,8 +580,8 @@ fn read_request(stream: &mut TlsStream<TcpStream>) -> Result<Request, Response> 
         bytes.extend_from_slice(&chunk[..read]);
     }
     Ok(Request {
-        method: method.to_owned(),
-        path: path.to_owned(),
+        method,
+        path,
         headers: map,
         body: bytes[body_offset..body_offset + length].to_vec(),
     })
