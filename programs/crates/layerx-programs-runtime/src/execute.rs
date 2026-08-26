@@ -737,7 +737,10 @@ impl CandidateAuthorizedExecutionRecord {
     pub fn receipt_projection(&self) -> CandidateActivityReceipt {
         CandidateActivityReceipt {
             root_program: self.root_program,
-            abi_revision: 2,
+            abi_revision: match self.abi_revision {
+                AbiRevision::V1 => crate::ABI_V1_VERSION,
+                AbiRevision::V2 => crate::ABI_V2_VERSION,
+            },
             runtime_version: self.execution.runtime_version,
             fee_schedule_version: self.execution.fee_schedule_version,
             usage: self.execution.usage,
@@ -1312,6 +1315,14 @@ impl Executor {
         Self { abi_version, ..self }
     }
 
+    fn selected_revision(&self) -> Result<AbiRevision, ExecutionError> {
+        match self.abi_version {
+            crate::ABI_V1_VERSION => Ok(AbiRevision::V1),
+            crate::ABI_V2_VERSION => Ok(AbiRevision::V2),
+            _ => Err(ExecutionError::Abi(AbiError::WrongVersion)),
+        }
+    }
+
     /// Constructs the declared production executor.
     #[must_use]
     pub const fn declared() -> Self {
@@ -1810,7 +1821,14 @@ impl Executor {
         storage: &mut Storage,
         request: AuthorizedExecutionRequest<'_>,
     ) -> Result<CandidateAuthorizedExecutionRecord, ExecutionError> {
-        self.execute_authorized_candidate_with_budget(storage, request, self.budget, None, None)
+        let executor = self.for_abi(crate::ABI_V2_VERSION);
+        executor.execute_authorized_candidate_with_budget(
+            storage,
+            request,
+            executor.budget,
+            None,
+            None,
+        )
     }
 
     /// Qualification-only candidate execution under one consumed admitted budget.
@@ -1834,8 +1852,9 @@ impl Executor {
             activity_binding,
             execution_context,
         } = budgeted;
-        self.validate_budget_token(&admitted_budget, payer, activity_binding)?;
-        self.execute_authorized_candidate_with_budget(
+        let executor = self.for_abi(crate::ABI_V2_VERSION);
+        executor.validate_budget_token(&admitted_budget, payer, activity_binding)?;
+        executor.execute_authorized_candidate_with_budget(
             storage,
             request,
             admitted_budget.resource_budget(),
@@ -1861,7 +1880,7 @@ impl Executor {
             .ok_or(ExecutionError::Context(crate::abi::context::ContextRefusal::Unauthenticated))?;
         if !execution_context.authenticates_versions(
             self.runtime_version,
-            crate::ABI_V2_VERSION,
+            self.abi_version,
             self.prices.version(),
         ) {
             return Err(ExecutionError::Context(
@@ -1887,7 +1906,9 @@ impl Executor {
         execution_context: Option<ExecutionContext>,
     ) -> Result<CandidateAuthorizedExecutionRecord, ExecutionError> {
         let budgeted = activity_binding.is_some();
-        if request.module.abi_revision() != AbiRevision::V2 {
+        if self.abi_version != crate::ABI_V2_VERSION
+            || request.module.abi_revision() != AbiRevision::V2
+        {
             return Err(ExecutionError::Abi(AbiError::WrongVersion));
         }
         if request.response_capacity > crate::abi::response::MAX_CALL_RESPONSE_BYTES {
@@ -1923,7 +1944,7 @@ impl Executor {
                 .claim_resolver(activity_binding)
                 .map_err(ExecutionError::Composition)?,
             CallGraph::root(request.composition.rules(), request.program, principal),
-            AbiRevision::V2,
+            self.selected_revision()?,
         );
         let retained = request
             .module
@@ -2075,7 +2096,7 @@ impl Executor {
                 ))?;
             return Ok(CandidateAuthorizedExecutionRecord {
                 root_program: request.program,
-                abi_revision: AbiRevision::V2,
+                abi_revision: request.module.abi_revision(),
                 execution: CandidateExecutionRecord {
                     runtime_version: self.runtime_version,
                     fee_schedule_version: self.prices.version(),
@@ -2119,7 +2140,7 @@ impl Executor {
         *storage = committed.storage;
         Ok(CandidateAuthorizedExecutionRecord {
             root_program: request.program,
-            abi_revision: AbiRevision::V2,
+            abi_revision: request.module.abi_revision(),
             execution: CandidateExecutionRecord {
                 runtime_version: self.runtime_version,
                 fee_schedule_version: self.prices.version(),
@@ -2193,7 +2214,7 @@ impl Executor {
             ))?;
         Ok(CandidateAuthorizedExecutionRecord {
             root_program: program,
-            abi_revision: AbiRevision::V2,
+            abi_revision: self.selected_revision()?,
             execution: CandidateExecutionRecord {
                 runtime_version: self.runtime_version,
                 fee_schedule_version: self.prices.version(),
@@ -2224,7 +2245,7 @@ impl Executor {
             ))?;
         Ok(CandidateAuthorizedExecutionRecord {
             root_program: program,
-            abi_revision: AbiRevision::V2,
+            abi_revision: self.selected_revision()?,
             execution: CandidateExecutionRecord {
                 runtime_version: self.runtime_version,
                 fee_schedule_version: self.prices.version(),

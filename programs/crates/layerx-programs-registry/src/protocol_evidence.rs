@@ -5,7 +5,9 @@ use std::fs::{self, File};
 use std::io::Read as _;
 use std::path::Path;
 
-use layerx_programs_runtime::{ProgramId, UpgradePolicy, ABI_VERSION};
+use layerx_programs_runtime::{
+    ProgramId, UpgradePolicy, ABI_V1_VERSION, ABI_V2_VERSION,
+};
 use layerx_proof::inclusion::{
     verify_activity, verify_receipt as verify_receipt_inclusion, SequencerAuthorization,
 };
@@ -1038,7 +1040,7 @@ fn parse_lifecycle_activity(
     let program = ProgramId::new(array::<32>(payload, 0)?)
         .map_err(|_| ProtocolEvidenceError::CanonicalActivity)?;
     let abi_version = u16::from_be_bytes(array::<2>(payload, 32)?);
-    if abi_version != ABI_VERSION {
+    if !matches!(abi_version, ABI_V1_VERSION | ABI_V2_VERSION) {
         return Err(ProtocolEvidenceError::CanonicalActivity);
     }
     match ordinal {
@@ -1212,7 +1214,10 @@ fn decode_program_record(
             .try_into()
             .map_err(|_| ProtocolEvidenceError::ProgramRecord)?,
     );
-    if code_hash == [0; 32] || abi_version != ABI_VERSION || version == 0 {
+    if code_hash == [0; 32]
+        || !matches!(abi_version, ABI_V1_VERSION | ABI_V2_VERSION)
+        || version == 0
+    {
         return Err(ProtocolEvidenceError::ProgramRecord);
     }
     Ok(ProgramRecord {

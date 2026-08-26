@@ -238,6 +238,19 @@ impl Lifecycle {
             .programs
             .get(&activity.program)
             .ok_or(LifecycleRefusal::UnknownProgram)?;
+        if record
+            .versions
+            .last()
+            .is_some_and(|version| {
+                version.abi_version == crate::ABI_V2_VERSION
+                    && activity.abi_version == crate::ABI_V1_VERSION
+            })
+        {
+            return Err(LifecycleRefusal::IncompatibleAbi {
+                requested: activity.abi_version,
+                supported: crate::ABI_V2_VERSION,
+            });
+        }
         match record.policy {
             UpgradePolicy::Immutable => return Err(LifecycleRefusal::Immutable),
             UpgradePolicy::Authority(expected) if expected != activity.authority => {

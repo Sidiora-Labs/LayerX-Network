@@ -6,7 +6,7 @@ artifact="$fixture_dir/target/wasm32-unknown-unknown/release/layerx_response_fix
 CARGO=${CARGO:-cargo}
 
 (cd "$fixture_dir" && "$CARGO" build --locked --release --target wasm32-unknown-unknown)
-for symbol in layerx_v2_candidate response_write program_call_response refusal_write layerx_call layerx_reserve
+for symbol in layerx_v2 response_write program_call_response refusal_write layerx_call layerx_reserve
 do
 	if ! strings "$artifact" | grep -F "$symbol" >/dev/null
 	then

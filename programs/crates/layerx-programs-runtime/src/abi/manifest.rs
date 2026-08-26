@@ -12,7 +12,7 @@ pub const ABI_V2_MODULE: &str = "layerx_v2";
 // contain more functions.
 pub const ABI_V1_MANIFEST: &str = "layerx_v1\0storage_read(i32,i32,i32,i32)->i32\0storage_write(i32,i32,i32,i32)->i32\0storage_delete(i32,i32)->i32\0event_emit(i32,i32,i32,i32)->i32\0program_call(i32,i32,i32,i32,i32,i32)->i32\0transfer_402(i64,i64,i32,i32,i32,i32)->i32\0receipt_read(i32,i32,i32,i32)->i32\0";
 
-pub const ABI_V2_MANIFEST: &str = "layerx_v2\0response_write(i32,i32,i32)->i32\0program_call_response(i32,i32,i32,i32,i32,i32,i32,i32)->i64\0refusal_write(i32,i32,i32)->i32\0storage_read_scoped(i32,i32,i32,i32,i32)->i32\0storage_write_scoped(i32,i32,i32,i32,i32)->i32\0storage_delete_scoped(i32,i32,i32)->i32\0storage_drop_scoped(i32)->i32\0storage_scan_scoped(i32,i32,i32,i32,i32,i32,i32,i32,i32)->i32\0transfer_program_402(i64,i64,i32,i32,i32,i32,i32,i32,i32,i32)->i32\0fund_program_402(i64,i64,i32,i32,i32,i32,i32,i32)->i32\0context_read(i32,i32,i32)->i32\0balance_read(i32,i32,i32,i32,i32,i32)->i32\0hash(i32,i32,i32,i32)->i32\0signature_verify(i32,i32,i32,i32,i32,i32,i32)->i32\0signature_recover(i32,i32,i32,i32,i32,i32,i32)->i32\0bigint_mul_256(i32,i32,i32,i32,i32,i32)->i32\0bigint_div_256(i32,i32,i32,i32,i32,i32)->i32\0bigint_rem_256(i32,i32,i32,i32,i32,i32)->i32\0bigint_modexp_256(i32,i32,i32,i32,i32,i32,i32,i32)->i32\0";
+pub const ABI_V2_MANIFEST: &str = "layerx_v1\0storage_read(i32,i32,i32,i32)->i32\0storage_write(i32,i32,i32,i32)->i32\0storage_delete(i32,i32)->i32\0event_emit(i32,i32,i32,i32)->i32\0program_call(i32,i32,i32,i32,i32,i32)->i32\0transfer_402(i64,i64,i32,i32,i32,i32)->i32\0receipt_read(i32,i32,i32,i32)->i32\0layerx_v2\0response_write(i32,i32,i32)->i32\0program_call_response(i32,i32,i32,i32,i32,i32,i32,i32)->i64\0refusal_write(i32,i32,i32)->i32\0storage_read_scoped(i32,i32,i32,i32,i32)->i32\0storage_write_scoped(i32,i32,i32,i32,i32)->i32\0storage_delete_scoped(i32,i32,i32)->i32\0storage_drop_scoped(i32)->i32\0storage_scan_scoped(i32,i32,i32,i32,i32,i32,i32,i32,i32)->i32\0transfer_program_402(i64,i64,i32,i32,i32,i32,i32,i32,i32,i32)->i32\0fund_program_402(i64,i64,i32,i32,i32,i32,i32,i32)->i32\0context_read(i32,i32,i32)->i32\0balance_read(i32,i32,i32,i32,i32,i32)->i32\0hash(i32,i32,i32,i32)->i32\0signature_verify(i32,i32,i32,i32,i32,i32,i32)->i32\0signature_recover(i32,i32,i32,i32,i32,i32,i32)->i32\0bigint_mul_256(i32,i32,i32,i32,i32,i32)->i32\0bigint_div_256(i32,i32,i32,i32,i32,i32)->i32\0bigint_rem_256(i32,i32,i32,i32,i32,i32)->i32\0bigint_modexp_256(i32,i32,i32,i32,i32,i32,i32,i32)->i32\0";
 
 pub const ABI_V2_HOST_FUNCTIONS: [HostFunction; 19] = [
     host("response_write", "(i32,i32,i32)->i32"),
@@ -55,21 +55,40 @@ const I32_9: &[AbiValueType] = &[I32; 9];
 const TRANSFER: &[AbiValueType] = &[I64, I64, I32, I32, I32, I32, I32, I32, I32, I32];
 const FUND: &[AbiValueType] = &[I64, I64, I32, I32, I32, I32, I32, I32];
 
+const ABI_V2_FUNCTION_TYPES: [HostFunctionType; 19] = [
+    function_type(I32_3, I32_RESULT),
+    function_type(I32_8, I64_RESULT),
+    function_type(I32_3, I32_RESULT),
+    function_type(I32_5, I32_RESULT),
+    function_type(I32_5, I32_RESULT),
+    function_type(I32_3, I32_RESULT),
+    function_type(I32_1, I32_RESULT),
+    function_type(I32_9, I32_RESULT),
+    function_type(TRANSFER, I32_RESULT),
+    function_type(FUND, I32_RESULT),
+    function_type(I32_3, I32_RESULT),
+    function_type(I32_6, I32_RESULT),
+    function_type(I32_4, I32_RESULT),
+    function_type(I32_7, I32_RESULT),
+    function_type(I32_7, I32_RESULT),
+    function_type(I32_6, I32_RESULT),
+    function_type(I32_6, I32_RESULT),
+    function_type(I32_6, I32_RESULT),
+    function_type(I32_8, I32_RESULT),
+];
+
+const fn function_type(
+    params: &'static [AbiValueType],
+    results: &'static [AbiValueType],
+) -> HostFunctionType {
+    HostFunctionType { params, results }
+}
+
 pub(crate) fn v2_function_type(name: &str) -> Option<HostFunctionType> {
-    let (params, results) = match name {
-        "storage_drop_scoped" => (I32_1, I32_RESULT),
-        "response_write" | "refusal_write" | "context_read" | "storage_delete_scoped" => (I32_3, I32_RESULT),
-        "hash" => (I32_4, I32_RESULT),
-        "storage_read_scoped" | "storage_write_scoped" => (I32_5, I32_RESULT),
-        "balance_read" | "bigint_mul_256" | "bigint_div_256" | "bigint_rem_256" => (I32_6, I32_RESULT),
-        "signature_verify" | "signature_recover" => (I32_7, I32_RESULT),
-        "program_call_response" => (I32_8, I64_RESULT),
-        "fund_program_402" | "bigint_modexp_256" => (I32_8, I32_RESULT),
-        "storage_scan_scoped" => (I32_9, I32_RESULT),
-        "transfer_program_402" => (TRANSFER, I32_RESULT),
-        _ => return None,
-    };
-    Some(HostFunctionType { params, results })
+    ABI_V2_HOST_FUNCTIONS
+        .iter()
+        .position(|function| function.name == name)
+        .map(|index| ABI_V2_FUNCTION_TYPES[index])
 }
 
 /// Returns the exact permitted import declaration for a recorded ABI. V2

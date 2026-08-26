@@ -61,7 +61,7 @@ mod raw {
 }
 
 mod candidate_raw {
-    #[link(wasm_import_module = "layerx_v2_candidate")]
+    #[link(wasm_import_module = "layerx_v2")]
     unsafe extern "C" {
         pub(super) fn response_write(code: i32, pointer: i32, length: i32) -> i32;
         pub(super) fn program_call_response(

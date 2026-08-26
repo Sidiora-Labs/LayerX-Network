@@ -1,7 +1,24 @@
 use layerx_programs_runtime::test_support::{
-    add_module, code_section, func_body, function_section, module, padding_section, type_section,
-    OP_END,
+    add_module, code_section, export_section, func_body, function_section, import_section, module,
+    padding_section, type_section, OP_END, OP_I32_ADD, OP_LOCAL_GET, TYPE_I32,
 };
+
+fn imported_add(abi_module: &str, import: &str, import_arity: usize) -> Vec<u8> {
+    let import_params = vec![TYPE_I32; import_arity];
+    module(&[
+        type_section(&[
+            (&import_params, &[TYPE_I32]),
+            (&[TYPE_I32, TYPE_I32], &[TYPE_I32]),
+        ]),
+        import_section(&[(abi_module, import, 0)]),
+        function_section(&[1]),
+        export_section(&[("add", 1)]),
+        code_section(&[func_body(
+            &[],
+            &[OP_LOCAL_GET, 0, OP_LOCAL_GET, 1, OP_I32_ADD, OP_END],
+        )]),
+    ])
+}
 use layerx_programs_runtime::{
     hash_bytes, programs_differential_gate, replay_recorded_execution, Deploy, Executor,
     HashAlgorithm, Lifecycle, LifecycleRefusal, ProgramId, RecordedExecution, ReplayRefusal,
@@ -35,14 +52,15 @@ fn recorded_v1_replays_identically_after_a_simulated_upgrade() {
 
 #[test]
 fn mixed_v1_v2_history_selects_each_recorded_abi_and_fee_schedule() {
-    let wasm = add_module();
+    let v1_wasm = imported_add("layerx_v1", "storage_delete", 2);
+    let v2_wasm = imported_add("layerx_v2", "context_read", 3);
     let schedule = layerx_programs_runtime::FeeSchedule::declared().version();
     let history = [
         RecordedExecution {
             runtime_version: RUNTIME_VERSION,
             abi_version: layerx_programs_runtime::ABI_V1_VERSION,
             fee_schedule_version: schedule,
-            wasm: &wasm,
+            wasm: &v1_wasm,
             export: "add",
             args: &[WasmValue::I32(1), WasmValue::I32(2)],
         },
@@ -50,7 +68,7 @@ fn mixed_v1_v2_history_selects_each_recorded_abi_and_fee_schedule() {
             runtime_version: RUNTIME_VERSION,
             abi_version: layerx_programs_runtime::ABI_V2_VERSION,
             fee_schedule_version: schedule,
-            wasm: &wasm,
+            wasm: &v2_wasm,
             export: "add",
             args: &[WasmValue::I32(3), WasmValue::I32(4)],
         },

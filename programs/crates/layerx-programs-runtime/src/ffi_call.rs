@@ -25,7 +25,7 @@ const LENGTH_LIMIT: i32 = -5;
 const MODULE_DISABLED: i32 = -103;
 const INSUFFICIENT_BALANCE: i32 = -400;
 const FATAL_INVARIANT: i32 = -1001;
-const ABI_VERSION: u16 = 1;
+const ABI_V1_VERSION: u16 = 1;
 const WASM: u16 = 1;
 const ENTRYPOINT: u16 = 3;
 const CALLDATA: u16 = 4;
@@ -1585,7 +1585,7 @@ pub extern "C" fn layerx_programs_call_begin(
             || (protocol_version == 2 && fee_schedule_version != parameter_version)
             || !matches!(
                 (protocol_version, abi_version),
-                (1 | 2, ABI_VERSION) | (2, 2)
+                (1 | 2, ABI_V1_VERSION) | (2, 2)
             )
             || entrypoint_length == 0
             || entrypoint_length > 128
@@ -1623,7 +1623,12 @@ pub extern "C" fn layerx_programs_call_begin(
             fee_output_byte,
             fee_occupancy_byte_batch,
         );
-        let executor = Executor::new(crate::ResourceBudget::declared(), fee_schedule);
+        let executor = Executor::new_versioned(
+            crate::ResourceBudget::declared(),
+            fee_schedule,
+            crate::RUNTIME_VERSION,
+            abi_version,
+        );
         let signed_fee = (u128::from(signed_fee_hi) << 64) | u128::from(signed_fee_lo);
         let available_fee = (u128::from(available_fee_hi) << 64) | u128::from(available_fee_lo);
         if crate::budget::maximum_fee_units(declared.resource_budget(), fee_schedule)
@@ -1666,8 +1671,8 @@ pub extern "C" fn layerx_programs_call_begin(
             |offset| unsafe { layerx_programs_call_activity_byte(token, WASM, offset) },
         )?;
         let root_module = match abi_version {
-            ABI_VERSION => engine.validate(&root_wasm),
-            2 => engine.validate_candidate_v2(&root_wasm),
+            ABI_V1_VERSION => engine.validate(&root_wasm),
+            2 => engine.validate_v2(&root_wasm),
             _ => return Err(NON_CANONICAL),
         }
         .map_err(|_| NON_CANONICAL)?;
@@ -1706,8 +1711,8 @@ pub extern "C" fn layerx_programs_call_begin(
                 return Err(NON_CANONICAL);
             }
             let module = match catalog_abi {
-                ABI_VERSION => engine.validate(&wasm),
-                2 if protocol_version == 2 => engine.validate_candidate_v2(&wasm),
+                ABI_V1_VERSION => engine.validate(&wasm),
+                2 if protocol_version == 2 => engine.validate_v2(&wasm),
                 _ => return Err(NON_CANONICAL),
             }
             .map_err(|_| NON_CANONICAL)?;

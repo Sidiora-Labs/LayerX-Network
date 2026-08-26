@@ -85,6 +85,11 @@ impl DeploymentRecord {
             return Err(RegistryError::InvalidUpgradeAuthority);
         }
         if self.version == 0
+            || !matches!(
+                self.abi_version,
+                layerx_programs_runtime::ABI_V1_VERSION
+                    | layerx_programs_runtime::ABI_V2_VERSION
+            )
             || self.new_code_hash == [0; 32]
             || self.sequence == 0
             || self.observed_at == 0

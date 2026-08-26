@@ -272,7 +272,7 @@ pub fn abi_surface_violations() -> Vec<DeterminismViolation> {
         .iter()
         .map(|function| (function.name, function.signature))
         .collect();
-    let host_candidate: Vec<_> = layerx_programs_runtime::abi::response::CANDIDATE_HOST_FUNCTIONS
+    let host_candidate: Vec<_> = layerx_programs_runtime::ABI_V2_HOST_FUNCTIONS
         .iter()
         .map(|function| (function.name, function.signature))
         .collect();
@@ -525,7 +525,7 @@ fn permitted_import(import_module: &str, import_name: &str, candidate: bool) -> 
             .any(|function| function.name == import_name))
         || (candidate
             && import_module == layerx_programs_runtime::abi::response::CANDIDATE_ABI_MODULE
-            && layerx_programs_runtime::abi::response::CANDIDATE_HOST_FUNCTIONS
+            && layerx_programs_runtime::ABI_V2_HOST_FUNCTIONS
                 .iter()
                 .any(|function| function.name == import_name))
 }
@@ -808,8 +808,8 @@ mod abi_surface_tests {
             "layerx_v1",
             &guest_v1,
             &host_v1,
-            "layerx_v2_candidate",
-            "layerx_v2_candidate",
+            "layerx_v2",
+            "layerx_v2",
             8,
             8,
             &[],
@@ -828,8 +828,8 @@ mod abi_surface_tests {
             "layerx_v1",
             &[],
             &[],
-            "layerx_v2_candidate",
-            "layerx_v2_candidate",
+            "layerx_v2",
+            "layerx_v2",
             8,
             8,
             &guest_candidate,
@@ -860,15 +860,15 @@ mod abi_surface_tests {
     #[test]
     fn candidate_imports_require_explicit_revision_and_exact_declaration() {
         assert!(!permitted_import(
-            "layerx_v2_candidate",
+            "layerx_v2",
             "refusal_write",
             false
         ));
         assert!(permitted_import(
-            "layerx_v2_candidate",
+            "layerx_v2",
             "refusal_write",
             true
         ));
-        assert!(!permitted_import("layerx_v2_candidate", "undeclared", true));
+        assert!(!permitted_import("layerx_v2", "undeclared", true));
     }
 }

@@ -6,14 +6,12 @@ use std::rc::Rc;
 use layerx_programs_runtime::{
     AbiRevision, ActivityBudgetBinding, CompositionContext, CompositionRefusal, CompositionRules,
     EngineRefusal, ProgramId, ProgramResolver, ValidatedModule, ValidationRefusal, WasmEngine,
-    ABI_VERSION,
+    ABI_V1_VERSION, ABI_V2_VERSION,
 };
 
 use crate::{
     ProgramLifecycle, ReadFreshness, VerifiedDeploymentEvidence, VerifiedProgramHead,
 };
-
-const CANDIDATE_ABI_VERSION: u16 = 2;
 
 /// Typed refusal returned before any deployment enters the executable
 /// resolver.
@@ -26,6 +24,7 @@ pub enum ExecutableAdmissionError {
         requested: ReadFreshness,
     },
     UnsupportedAbi { declared: u16 },
+    AbiDowngrade { current: u16, requested: u16 },
     RevisionMismatch {
         declared: u16,
         validated: AbiRevision,
@@ -54,6 +53,10 @@ impl Display for ExecutableAdmissionError {
             Self::UnsupportedAbi { declared } => {
                 write!(formatter, "deployment ABI {declared} is not executable")
             }
+            Self::AbiDowngrade { current, requested } => write!(
+                formatter,
+                "deployment ABI {requested} downgrades admitted ABI {current}"
+            ),
             Self::RevisionMismatch {
                 declared,
                 validated,
@@ -87,6 +90,7 @@ impl std::error::Error for ExecutableAdmissionError {
             | Self::NonIncreasingVersion { .. }
             | Self::FreshnessRegression { .. }
             | Self::UnsupportedAbi { .. }
+            | Self::AbiDowngrade { .. }
             | Self::RevisionMismatch { .. }
             | Self::MissingCurrentHead { .. }
             | Self::DuplicateCurrentHead { .. }
@@ -160,15 +164,23 @@ impl VerifiedProgramCatalog {
                     requested: evidence.freshness(),
                 });
             }
+            if current.abi_version == ABI_V2_VERSION
+                && evidence.abi_version() == ABI_V1_VERSION
+            {
+                return Err(ExecutableAdmissionError::AbiDowngrade {
+                    current: current.abi_version,
+                    requested: evidence.abi_version(),
+                });
+            }
         }
         let expected_revision = match evidence.abi_version() {
-            ABI_VERSION => AbiRevision::V1,
-            CANDIDATE_ABI_VERSION => AbiRevision::CandidateV2,
+            ABI_V1_VERSION => AbiRevision::V1,
+            ABI_V2_VERSION => AbiRevision::V2,
             declared => return Err(ExecutableAdmissionError::UnsupportedAbi { declared }),
         };
         let module = match expected_revision {
             AbiRevision::V1 => self.engine.validate(evidence.module()),
-            AbiRevision::CandidateV2 => self.engine.validate_candidate_v2(evidence.module()),
+            AbiRevision::V2 => self.engine.validate_v2(evidence.module()),
         }
         .map_err(ExecutableAdmissionError::Validation)?;
         if module.abi_revision() != expected_revision {
