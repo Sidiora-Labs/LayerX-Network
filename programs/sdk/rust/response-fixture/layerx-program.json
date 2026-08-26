@@ -1,0 +1,10 @@
+{
+  "schema": 1,
+  "abi_version": 2,
+  "language": "rust",
+  "name": "response-fixture",
+  "sdk": "..",
+  "build": {
+    "artifact": "target/wasm32-unknown-unknown/release/layerx_response_fixture.wasm"
+  }
+}

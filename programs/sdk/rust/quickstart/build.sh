@@ -16,7 +16,7 @@ compile() {
 
 lint() {
 	(cd "$programs_dir" && "$CARGO" run --quiet -p layerx-program-lint \
-		--bin layerx-program-lint -- "$program_dir" "$artifact")
+		--bin layerx-program-lint -- --abi-version 1 "$program_dir" "$artifact")
 }
 
 case "${1:-all}" in

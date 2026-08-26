@@ -428,6 +428,18 @@ pub fn lint_candidate_artifact(wasm: &[u8]) -> Vec<DeterminismViolation> {
     violations
 }
 
+/// Lints one artifact against the explicitly recorded ABI revision.
+#[must_use]
+pub fn lint_artifact_for_abi(wasm: &[u8], abi_version: u16) -> Vec<DeterminismViolation> {
+    match abi_version {
+        layerx_programs_runtime::ABI_V1_VERSION => lint_artifact(wasm),
+        layerx_programs_runtime::ABI_V2_VERSION => lint_candidate_artifact(wasm),
+        _ => vec![DeterminismViolation::RejectedByEngine {
+            reason: format!("unsupported LayerX ABI version {abi_version}"),
+        }],
+    }
+}
+
 /// Lints the source and manifests of one program project.
 #[must_use]
 pub fn lint_sources(project: &Path) -> Vec<DeterminismViolation> {
@@ -462,6 +474,20 @@ pub fn lint_sources(project: &Path) -> Vec<DeterminismViolation> {
 /// and manifests, and the compiled artifact.
 #[must_use]
 pub fn lint_project(project: &Path, artifact: Option<&Path>) -> Vec<DeterminismViolation> {
+    lint_project_for_abi(
+        project,
+        artifact,
+        layerx_programs_runtime::ABI_V1_VERSION,
+    )
+}
+
+/// Lints one program project against its explicitly recorded ABI revision.
+#[must_use]
+pub fn lint_project_for_abi(
+    project: &Path,
+    artifact: Option<&Path>,
+    abi_version: u16,
+) -> Vec<DeterminismViolation> {
     let mut violations = abi_surface_violations();
     violations.extend(lint_sources(project));
     let path = match artifact.map(Path::to_path_buf).map_or_else(
@@ -475,7 +501,7 @@ pub fn lint_project(project: &Path, artifact: Option<&Path>) -> Vec<DeterminismV
         }
     };
     match fs::read(&path) {
-        Ok(wasm) => violations.extend(lint_artifact(&wasm)),
+        Ok(wasm) => violations.extend(lint_artifact_for_abi(&wasm, abi_version)),
         Err(error) => violations.push(DeterminismViolation::UnreadablePath {
             path,
             reason: error.to_string(),
