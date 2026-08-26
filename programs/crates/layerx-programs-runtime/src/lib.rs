@@ -113,7 +113,8 @@ pub use storage::{
 };
 pub use transfer::{
     AtomicTransferSet, KernelTransferEvidence, KernelTransferPrimitive, ProgramAuthority,
-    TransferCapability, TransferLawError, TransferSource, VerifiedProgramSettlement,
+    ProgramFundingBinding, TransferCapability, TransferLawError, TransferSource,
+    VerifiedProgramSettlement,
 };
 pub use validate::{AbiRevision, ValidatedModule, ValidationRefusal};
 

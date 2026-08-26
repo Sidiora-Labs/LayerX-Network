@@ -12,11 +12,11 @@
 use std::collections::BTreeMap;
 
 use layerx_programs::hex;
-use layerx_programs_runtime::{Capability, CapabilitySet, ABI_MODULE};
+use layerx_programs_runtime::{Capability, CapabilitySet, ProgramId, ABI_MODULE};
 
 use crate::error::PortRefusal;
 use crate::layout::caller_indexed_key;
-use crate::monetary::Transfer402Plan;
+use crate::monetary::{ProgramAccountTransferPlan, Transfer402Plan};
 use crate::semantics::EventAbi;
 use crate::value::Word;
 use crate::wasm::{
@@ -39,6 +39,30 @@ pub const DEPENDENCY_LOCK_PATH: &str = "toolchain/porting-evm.lock";
 pub const ARTIFACT_PATH: &str = "build/public-lock.wasm";
 /// The pinned build command, whose last word names the descriptor to compile.
 pub const BUILD_COMMAND: &str = "layerx-porting-evm emit port/public-lock.port";
+
+/// Maps `address(this).balance` custody onto one public, rederivable LayerX account.
+///
+/// # Errors
+///
+/// Refuses any owner, seed, source or monetary field that does not form the
+/// exact bounded contract payout.
+pub fn contract_funded_payout(
+    owner_program: ProgramId,
+    seed: &[u8],
+    derived_account: [u8; 32],
+    asset: [u8; 32],
+    recipient: [u8; 32],
+    amount: u128,
+) -> Result<ProgramAccountTransferPlan, PortRefusal> {
+    ProgramAccountTransferPlan::new(
+        owner_program,
+        seed,
+        derived_account,
+        asset,
+        recipient,
+        amount,
+    )
+}
 
 /// Canonical signature of the mint event, kept so an existing `ERC-721`
 /// indexer's `topic0` filter still matches the ported program.

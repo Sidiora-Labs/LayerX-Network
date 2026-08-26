@@ -13,12 +13,12 @@
 use std::collections::BTreeMap;
 
 use layerx_programs::hex;
-use layerx_programs_runtime::{Capability, CapabilitySet, ABI_MODULE};
+use layerx_programs_runtime::{Capability, CapabilitySet, ProgramId, ABI_MODULE};
 
 use crate::error::PortRefusal;
 use crate::json::{FieldSchema, FieldValue, RecordSchema, ValueType};
 use crate::messages::{ContractEvent, EntryPoint, MessageVariant};
-use crate::monetary::Transfer402Plan;
+use crate::monetary::{ProgramAccountTransferPlan, Transfer402Plan};
 use crate::storage::{item_key, map_prefix};
 use crate::wasm::{
     Code, ModuleBuilder, ELSE, I32, I32_EQZ, I32_GT_S, I32_LT_S, I32_NE, I32_WRAP_I64, I64,
@@ -40,6 +40,30 @@ pub const DEPENDENCY_LOCK_PATH: &str = "toolchain/porting-cosmwasm.lock";
 pub const ARTIFACT_PATH: &str = "build/donation.wasm";
 /// The pinned build command, whose last word names the descriptor to compile.
 pub const BUILD_COMMAND: &str = "layerx-porting-cosmwasm emit port/donation.port";
+
+/// Maps a contract-funded `BankMsg::Send` onto one public, rederivable LayerX account.
+///
+/// # Errors
+///
+/// Refuses any owner, seed, source or monetary field that does not form the
+/// exact bounded contract payout.
+pub fn contract_bank_send(
+    owner_program: ProgramId,
+    seed: &[u8],
+    derived_account: [u8; 32],
+    asset: [u8; 32],
+    recipient: [u8; 32],
+    amount: u128,
+) -> Result<ProgramAccountTransferPlan, PortRefusal> {
+    ProgramAccountTransferPlan::new(
+        owner_program,
+        seed,
+        derived_account,
+        asset,
+        recipient,
+        amount,
+    )
+}
 
 /// Namespace of the configuration `Item`, whose raw key the port keeps.
 pub const CONFIG_ITEM: &str = "config";

@@ -55,6 +55,56 @@ pub struct ProgramAccountPayment<'a> {
     amount: Amount,
 }
 
+/// Principal-funded deposit into the current program's derived value account.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProgramDeposit<'a> {
+    seed: ProgramAccountSeed<'a>,
+    destination: AccountId,
+    asset: AssetId,
+    amount: Amount,
+}
+
+impl<'a> ProgramDeposit<'a> {
+    /// Builds a bounded deposit request. The host rederives the destination and
+    /// the kernel verifies its current registry and asset binding before commit.
+    pub const fn new(
+        seed: ProgramAccountSeed<'a>,
+        destination: AccountId,
+        asset: AssetId,
+        amount: Amount,
+    ) -> Result<Self, ProgramError> {
+        if amount.is_zero() {
+            return Err(ProgramError::value(Field::Amount, Reason::Zero));
+        }
+        Ok(Self {
+            seed,
+            destination,
+            asset,
+            amount,
+        })
+    }
+    /// Returns the public derivation seed.
+    #[must_use]
+    pub const fn seed(self) -> ProgramAccountSeed<'a> {
+        self.seed
+    }
+    /// Returns the exact derived destination.
+    #[must_use]
+    pub const fn destination(self) -> AccountId {
+        self.destination
+    }
+    /// Returns the registry-bound asset.
+    #[must_use]
+    pub const fn asset(self) -> AssetId {
+        self.asset
+    }
+    /// Returns the exact deposit amount.
+    #[must_use]
+    pub const fn amount(self) -> Amount {
+        self.amount
+    }
+}
+
 impl<'a> ProgramAccountPayment<'a> {
     /// Builds a bounded program-account payment request without constructing authority.
     ///
@@ -155,6 +205,20 @@ pub fn pay(payment: Payment) -> Result<(), ProgramError> {
     let asset = payment.asset().bytes();
     let recipient = payment.to().bytes();
     host::transfer_402(amount_high, amount_low, &asset, &recipient)?;
+    Ok(())
+}
+
+/// Funds the current program's exact registered derived account.
+#[cfg(target_arch = "wasm32")]
+pub fn fund_program_account(deposit: ProgramDeposit<'_>) -> Result<(), ProgramError> {
+    let (high, low) = deposit.amount().split();
+    host::fund_program_402(
+        high,
+        low,
+        deposit.seed().bytes(),
+        &deposit.destination().bytes(),
+        &deposit.asset().bytes(),
+    )?;
     Ok(())
 }
 

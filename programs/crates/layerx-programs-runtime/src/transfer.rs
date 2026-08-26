@@ -18,10 +18,12 @@ use crate::storage::{PrincipalId, ProgramId};
 const SET_DOMAIN_V1: &[u8] = b"LayerX/programs/402LXP/transfer-set/v1\0";
 const SET_DOMAIN_V2: &[u8] = b"LayerX/programs/402LXP/transfer-set/v2\0";
 const PROGRAM_AUTHORITY_DOMAIN: &[u8] = b"LayerX/programs/402LXP/program-authority/v1\0";
+const PROGRAM_FUNDING_DOMAIN: &[u8] = b"LayerX/programs/402LXP/program-funding/v1\0";
 const MERKLE_LEAF_DOMAIN: &[u8] = b"LXP/v1/merkle-leaf\0";
 const MERKLE_INTERNAL_DOMAIN: &[u8] = b"LXP/v1/merkle-internal\0";
 const SOURCE_PRINCIPAL: u8 = 1;
 const SOURCE_PROGRAM: u8 = 2;
+const SOURCE_PROGRAM_FUNDING: u8 = 3;
 const MAX_TRANSFER_LEGS: usize = 256;
 
 /// Exact, owner-frame authority for one program-account debit.
@@ -41,6 +43,81 @@ pub struct ProgramAuthority {
     asset: [u8; 32],
     to: [u8; 32],
     amount: u128,
+}
+
+/// Host-issued proof that a principal is funding an account derived by the
+/// currently executing program. The kernel bridge independently checks the
+/// same owner, seed, account and asset against the protocol registry.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProgramFundingBinding {
+    owner_program: ProgramId,
+    seed: Vec<u8>,
+    destination_account: [u8; 32],
+    asset: [u8; 32],
+}
+
+impl ProgramFundingBinding {
+    pub(crate) fn issue(
+        owner_program: ProgramId,
+        seed: &[u8],
+        destination_account: [u8; 32],
+        asset: [u8; 32],
+    ) -> Result<Self, TransferLawError> {
+        if asset == [0; 32]
+            || destination_account == [0; 32]
+            || seed.len() > MAX_PROGRAM_ACCOUNT_SEED_BYTES
+        {
+            return Err(TransferLawError::InvalidProgramFunding);
+        }
+        let derived = derive_program_account(owner_program, seed)
+            .map_err(|_| TransferLawError::InvalidProgramFunding)?;
+        if !derived.matches(&destination_account) {
+            return Err(TransferLawError::InvalidProgramFunding);
+        }
+        Ok(Self {
+            owner_program,
+            seed: seed.to_vec(),
+            destination_account,
+            asset,
+        })
+    }
+    /// Returns the program fixed by the executing frame.
+    #[must_use]
+    pub const fn owner_program(&self) -> ProgramId {
+        self.owner_program
+    }
+    /// Returns the public derivation seed.
+    #[must_use]
+    pub fn seed(&self) -> &[u8] {
+        &self.seed
+    }
+    /// Returns the account the principal funds.
+    #[must_use]
+    pub const fn destination_account(&self) -> [u8; 32] {
+        self.destination_account
+    }
+    /// Returns the account's registry-bound asset.
+    #[must_use]
+    pub const fn asset(&self) -> [u8; 32] {
+        self.asset
+    }
+    fn canonical_encoding(&self) -> Result<Vec<u8>, TransferLawError> {
+        let length = u16::try_from(self.seed.len())
+            .map_err(|_| TransferLawError::InvalidProgramFunding)?;
+        let capacity = PROGRAM_FUNDING_DOMAIN
+            .len()
+            .checked_add(98)
+            .and_then(|value| value.checked_add(self.seed.len()))
+            .ok_or(TransferLawError::InvalidProgramFunding)?;
+        let mut encoded = Vec::with_capacity(capacity);
+        encoded.extend_from_slice(PROGRAM_FUNDING_DOMAIN);
+        encoded.extend_from_slice(&self.owner_program.bytes());
+        encoded.extend_from_slice(&length.to_be_bytes());
+        encoded.extend_from_slice(&self.seed);
+        encoded.extend_from_slice(&self.destination_account);
+        encoded.extend_from_slice(&self.asset);
+        Ok(encoded)
+    }
 }
 
 impl ProgramAuthority {
@@ -192,6 +269,11 @@ impl ProgramAuthority {
 pub enum TransferSource {
     /// The protocol-authenticated principal that invoked the activity.
     Principal(PrincipalId),
+    /// A principal funding the current program's verified derived account.
+    ProgramFunding {
+        principal: PrincipalId,
+        binding: ProgramFundingBinding,
+    },
     /// An exact account derived by the program that staged this leg.
     Program(ProgramAuthority),
 }
@@ -201,6 +283,7 @@ impl TransferSource {
     pub const fn account(&self) -> [u8; 32] {
         match self {
             Self::Principal(principal) => principal.bytes(),
+            Self::ProgramFunding { principal, .. } => principal.bytes(),
             Self::Program(authority) => authority.source_account(),
         }
     }
@@ -260,7 +343,12 @@ impl TransferCapability {
             || effects
                 .transfers
                 .iter()
-                .any(|transfer| matches!(&transfer.source, TransferSource::Program(_)));
+                .any(|transfer| {
+                    matches!(
+                        &transfer.source,
+                        TransferSource::Program(_) | TransferSource::ProgramFunding { .. }
+                    )
+                });
         let set_domain = if candidate_v2 {
             SET_DOMAIN_V2
         } else {
@@ -323,9 +411,22 @@ impl TransferCapability {
                 .checked_add(transfer.amount)
                 .ok_or(TransferLawError::AmountOverflow)?;
             match &transfer.source {
-                TransferSource::Principal(source) => {
+                TransferSource::Principal(source)
+                | TransferSource::ProgramFunding { principal: source, .. } => {
                     if *source != self.principal {
                         return Err(TransferLawError::UnverifiedAuthority);
+                    }
+                    if let TransferSource::ProgramFunding { binding, .. } = &transfer.source {
+                        if binding.owner_program != *program
+                            || binding.owner_program != transfer.program
+                            || binding.destination_account != transfer.to
+                            || binding.asset != transfer.asset
+                            || derive_program_account(binding.owner_program, &binding.seed)
+                                .map_err(|_| TransferLawError::InvalidProgramFunding)?
+                                .bytes() != binding.destination_account
+                        {
+                            return Err(TransferLawError::InvalidProgramFunding);
+                        }
                     }
                     let frame_key = (transfer.frame, transfer.asset, transfer.to);
                     let frame_amount = principal_frame_totals
@@ -433,6 +534,15 @@ impl TransferCapability {
                     TransferSource::Principal(source) => {
                         canonical.push(SOURCE_PRINCIPAL);
                         canonical.extend_from_slice(&source.bytes());
+                    }
+                    TransferSource::ProgramFunding { principal, binding } => {
+                        canonical.push(SOURCE_PROGRAM_FUNDING);
+                        canonical.extend_from_slice(&principal.bytes());
+                        let encoded = binding.canonical_encoding()?;
+                        let length = u32::try_from(encoded.len())
+                            .map_err(|_| TransferLawError::InvalidProgramFunding)?;
+                        canonical.extend_from_slice(&length.to_be_bytes());
+                        canonical.extend_from_slice(&encoded);
                     }
                     TransferSource::Program(authority) => {
                         canonical.push(SOURCE_PROGRAM);
@@ -699,6 +809,18 @@ impl AtomicTransferSet {
                         let authority = decode_program_authority(cursor.take(authority_length)?)?;
                         TransferSource::Program(authority)
                     }
+                    SOURCE_PROGRAM_FUNDING => {
+                        let source = PrincipalId::new(cursor.array()?)
+                            .map_err(|_| TransferLawError::InvalidTransferSet)?;
+                        if source != principal {
+                            return Err(TransferLawError::UnverifiedAuthority);
+                        }
+                        let length = u32::from_be_bytes(cursor.array()?) as usize;
+                        TransferSource::ProgramFunding {
+                            principal: source,
+                            binding: decode_program_funding(cursor.take(length)?)?,
+                        }
+                    }
                     _ => return Err(TransferLawError::InvalidTransferSet),
                 }
             } else {
@@ -722,6 +844,14 @@ impl AtomicTransferSet {
                     return Err(TransferLawError::InvalidProgramAuthority);
                 }
             }
+            if let TransferSource::ProgramFunding { binding, .. } = &source {
+                if binding.owner_program != leg_program
+                    || binding.destination_account != to
+                    || binding.asset != asset
+                {
+                    return Err(TransferLawError::InvalidProgramFunding);
+                }
+            }
             total = total
                 .checked_add(amount)
                 .ok_or(TransferLawError::AmountOverflow)?;
@@ -742,6 +872,15 @@ impl AtomicTransferSet {
                     TransferSource::Principal(source) => {
                         canonical.push(SOURCE_PRINCIPAL);
                         canonical.extend_from_slice(&source.bytes());
+                    }
+                    TransferSource::ProgramFunding { principal, binding } => {
+                        canonical.push(SOURCE_PROGRAM_FUNDING);
+                        canonical.extend_from_slice(&principal.bytes());
+                        let encoded = binding.canonical_encoding()?;
+                        let length = u32::try_from(encoded.len())
+                            .map_err(|_| TransferLawError::InvalidProgramFunding)?;
+                        canonical.extend_from_slice(&length.to_be_bytes());
+                        canonical.extend_from_slice(&encoded);
                     }
                     TransferSource::Program(authority) => {
                         canonical.push(SOURCE_PROGRAM);
@@ -811,6 +950,31 @@ fn decode_program_authority(encoded: &[u8]) -> Result<ProgramAuthority, Transfer
         return Err(TransferLawError::InvalidProgramAuthority);
     }
     Ok(authority)
+}
+
+#[cfg(test)]
+fn decode_program_funding(encoded: &[u8]) -> Result<ProgramFundingBinding, TransferLawError> {
+    let mut cursor = TransferCursor::new(encoded);
+    if cursor.take(PROGRAM_FUNDING_DOMAIN.len())? != PROGRAM_FUNDING_DOMAIN {
+        return Err(TransferLawError::InvalidProgramFunding);
+    }
+    let owner = ProgramId::new(cursor.array()?)
+        .map_err(|_| TransferLawError::InvalidProgramFunding)?;
+    let seed_length = usize::from(u16::from_be_bytes(cursor.array()?));
+    if seed_length > MAX_PROGRAM_ACCOUNT_SEED_BYTES {
+        return Err(TransferLawError::InvalidProgramFunding);
+    }
+    let seed = cursor.take(seed_length)?;
+    let destination = cursor.array()?;
+    let asset = cursor.array()?;
+    if !cursor.is_empty() {
+        return Err(TransferLawError::InvalidProgramFunding);
+    }
+    let binding = ProgramFundingBinding::issue(owner, seed, destination, asset)?;
+    if binding.canonical_encoding()? != encoded {
+        return Err(TransferLawError::InvalidProgramFunding);
+    }
+    Ok(binding)
 }
 
 fn canonical_kernel_legs(legs: &[TransferRequest]) -> Result<Vec<u8>, TransferLawError> {
@@ -1011,6 +1175,7 @@ impl VerifiedProgramSettlement {
 pub enum TransferLawError {
     UnverifiedAuthority,
     InvalidProgramAuthority,
+    InvalidProgramFunding,
     InvalidTransfer,
     InvalidTransferSet,
     AmountOverflow,
@@ -1029,6 +1194,7 @@ impl Display for TransferLawError {
             Self::InvalidProgramAuthority => {
                 formatter.write_str("program transfer authority is invalid")
             }
+            Self::InvalidProgramFunding => formatter.write_str("program funding destination is invalid"),
             Self::InvalidTransfer => formatter.write_str("402LXP transfer request is invalid"),
             Self::InvalidTransferSet => formatter.write_str("402LXP transfer set is invalid"),
             Self::AmountOverflow => formatter.write_str("402LXP transfer total overflowed"),

@@ -127,7 +127,7 @@ transaction, one namespace per holder, carrying the bytes across untouched.
 
 | Solana | Why it cannot carry over |
 | --- | --- |
-| lamports on an account | a program holds no balance; see **Money** |
+| lamports on a PDA | a registered program-derived value account; see **Money** |
 | rent and rent exemption | there is no rent; a cell costs its bytes against the declared value bound |
 | `#[account(mut, realloc = ...)]` | a value is written whole, up to the declared bound |
 | `#[account(close = recipient)]` | delete the cell; the rent sweep is **refused**, `LamportMutation` |
@@ -198,17 +198,17 @@ ambient reach, and never a PDA signature borrowed from the caller.
 
 This is the part of the port that bends least, so read it before you plan one.
 
-A LayerX program **holds no balance and writes no balance**. It can only
-request an authenticated 402LXP transfer that debits the invoking principal;
-the kernel applies the whole requested set atomically or none of it. There is
-no path from program code to a balance, and the kit does not provide one.
+A LayerX program **writes no balance**. A PDA that holds value maps to a real
+account derived from the LayerX program and the PDA seed path. The owner frame
+can request a bounded 402LXP debit from that account; the kernel rederives the
+source and remains the only balance writer.
 
 | Solana | Port |
 | --- | --- |
 | `system_program::transfer` from a `Signer` | `ValueFlow::SignerFunded` - carried over |
 | `**account.try_borrow_mut_lamports()? -= x` | `ValueFlow::LamportWrite` - **refused**, `LamportMutation` |
-| `invoke_signed` paying from a PDA the program controls | `ValueFlow::ProgramAuthorityFunded` - **refused**, `LamportMutation` |
-| `#[account(close = recipient)]` rent sweep | `ValueFlow::RentSweep` - **refused**, `LamportMutation` |
+| `invoke_signed` paying from a PDA the program controls | `translate_with_program_account` and a rederived program account |
+| `#[account(close = recipient)]` rent sweep | **refused**, `UnboundedRentSweep`; no exact bounded amount is declared |
 | SPL token `transfer` whose authority is the signer | `ValueFlow::TokenTransfer` - carried over |
 | SPL token `transfer` under a delegate authority | `ValueFlow::TokenTransfer` - **refused**, `DelegatedSpend` |
 

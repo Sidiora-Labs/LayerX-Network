@@ -24,7 +24,7 @@ use crate::meter::MeterRefusal;
 use crate::storage::{
     NamespaceDrop, PrincipalId, ProgramId, Storage, StorageError, StorageNamespace,
 };
-use crate::transfer::{ProgramAuthority, TransferLawError, TransferSource};
+use crate::transfer::{ProgramAuthority, ProgramFundingBinding, TransferLawError, TransferSource};
 
 pub const ABI_MODULE: &str = "layerx_v1";
 pub const MAX_EVENT_TOPIC_BYTES: usize = 64;
@@ -648,6 +648,49 @@ impl Abi {
             source: TransferSource::Principal(self.authorization.principal()),
             asset,
             to,
+            amount,
+        });
+        Ok(())
+    }
+
+    /// Requests a principal-funded transfer into the exact account derived by
+    /// the currently executing program. Registry and asset binding are checked
+    /// again by the kernel before any transfer or guest state commits.
+    pub(crate) fn request_program_funding(
+        &mut self,
+        seed: &[u8],
+        destination_account: [u8; 32],
+        asset: [u8; 32],
+        amount: u128,
+    ) -> Result<(), AbiError> {
+        if amount == 0 {
+            return Err(AbiError::AmountBounds);
+        }
+        let grant = self
+            .authorization
+            .capabilities()
+            .grant(&CapabilityKey::Transfer {
+                asset,
+                to: destination_account,
+            })?;
+        let Capability::Transfer402 { maximum_amount, .. } = grant else {
+            return Err(AbiError::CapabilityDenied);
+        };
+        if amount > *maximum_amount {
+            return Err(AbiError::CapabilityEscalation);
+        }
+        let binding = ProgramFundingBinding::issue(self.program, seed, destination_account, asset)
+            .map_err(|_| AbiError::CapabilityDenied)?;
+        self.effects.transfers.push(TransferRequest {
+            program: self.program,
+            principal: self.authorization.principal(),
+            frame: self.authorization.frame(),
+            source: TransferSource::ProgramFunding {
+                principal: self.authorization.principal(),
+                binding,
+            },
+            asset,
+            to: destination_account,
             amount,
         });
         Ok(())

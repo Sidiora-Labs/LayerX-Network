@@ -96,5 +96,52 @@ pub(super) fn register_candidate(linker: &mut Linker<RuntimeState>) -> Result<()
             },
         )
         .map_err(|error| linker_fault(&error))?;
+    linker
+        .func_wrap(
+            crate::abi::response::CANDIDATE_ABI_MODULE,
+            "fund_program_402",
+            |mut caller: Caller<'_, RuntimeState>,
+             amount_high: i64,
+             amount_low: i64,
+             seed_pointer: i32,
+             seed_length: i32,
+             destination_pointer: i32,
+             destination_length: i32,
+             asset_pointer: i32,
+             asset_length: i32|
+             -> i32 {
+                let seed = match read_guest(
+                    &caller,
+                    seed_pointer,
+                    seed_length,
+                    crate::MAX_PROGRAM_ACCOUNT_SEED_BYTES,
+                ) {
+                    Ok(value) => value,
+                    Err(status) => return status,
+                };
+                let destination = match read_fixed::<32>(
+                    &caller,
+                    destination_pointer,
+                    destination_length,
+                ) {
+                    Ok(value) => value,
+                    Err(status) => return status,
+                };
+                let asset = match read_fixed::<32>(&caller, asset_pointer, asset_length) {
+                    Ok(value) => value,
+                    Err(status) => return status,
+                };
+                let high = u64::from_be_bytes(amount_high.to_be_bytes());
+                let low = u64::from_be_bytes(amount_low.to_be_bytes());
+                let amount = u128::from(high) << 64 | u128::from(low);
+                match caller.data_mut().with_abi(|abi, _| {
+                    abi.request_program_funding(&seed, destination, asset, amount)
+                }) {
+                    Ok(()) => 0,
+                    Err(error) => error_status(error),
+                }
+            },
+        )
+        .map_err(|error| linker_fault(&error))?;
     Ok(())
 }

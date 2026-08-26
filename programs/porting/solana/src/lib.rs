@@ -37,7 +37,9 @@ pub use anchor::{
     RuntimeOutcome,
 };
 pub use error::PortRefusal;
-pub use monetary::{translate_all, Transfer402Plan, ValueFlow};
+pub use monetary::{
+    translate_all, ProgramAccountTransferPlan, Transfer402Plan, TranslatedValueFlow, ValueFlow,
+};
 pub use pubkey::{per_signer_import, AccountHolder, MigrationCell, Pubkey, SeedPath};
 pub use qualify::{
     build_plan, deploy_and_verify, execute_mint, execute_mint_count, execute_mint_remaining,

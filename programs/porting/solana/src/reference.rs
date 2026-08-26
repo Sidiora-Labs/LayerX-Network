@@ -14,14 +14,14 @@
 use std::collections::BTreeMap;
 
 use layerx_programs::hex;
-use layerx_programs_runtime::{Capability, CapabilitySet, ABI_MODULE};
+use layerx_programs_runtime::{Capability, CapabilitySet, ProgramId, ABI_MODULE};
 
 use crate::account::{AccountSchema, Field, FieldType, FieldValue};
 use crate::anchor::{
     account_discriminator, instruction_discriminator, AnchorEvent, InstructionAbi,
 };
 use crate::error::PortRefusal;
-use crate::monetary::Transfer402Plan;
+use crate::monetary::{ProgramAccountTransferPlan, Transfer402Plan};
 use crate::pubkey::{Pubkey, SeedPath, PUBKEY_BYTES};
 use crate::wasm::{
     Code, ModuleBuilder, ELSE, I32, I32_EQZ, I32_GT_S, I32_LOAD16_U, I32_LT_S, I32_NE, I32_STORE16,
@@ -43,6 +43,30 @@ pub const DEPENDENCY_LOCK_PATH: &str = "toolchain/porting-solana.lock";
 pub const ARTIFACT_PATH: &str = "build/mint-limit.wasm";
 /// The pinned build command, whose last word names the descriptor to compile.
 pub const BUILD_COMMAND: &str = "layerx-porting-solana emit port/mint-limit.port";
+
+/// Maps an `invoke_signed` PDA payout onto one public, rederivable LayerX account.
+///
+/// # Errors
+///
+/// Refuses any owner, seed, source or monetary field that does not form the
+/// exact bounded PDA payout.
+pub fn program_account_payout(
+    owner_program: ProgramId,
+    seed: &[u8],
+    derived_account: [u8; 32],
+    asset: [u8; 32],
+    recipient: [u8; 32],
+    amount: u128,
+) -> Result<ProgramAccountTransferPlan, PortRefusal> {
+    ProgramAccountTransferPlan::new(
+        owner_program,
+        seed,
+        derived_account,
+        asset,
+        recipient,
+        amount,
+    )
+}
 
 /// Name of the counter account, whose Anchor discriminator the ported cell
 /// keeps byte for byte.

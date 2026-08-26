@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "abi_version": 2,
+  "language": "rust",
+  "name": "reference-escrow",
+  "sdk": "../..",
+  "build": {
+    "command": "cargo",
+    "args": ["build", "--release", "--target", "wasm32-unknown-unknown", "--locked"],
+    "artifact": "../../../../target/wasm32-unknown-unknown/release/layerx_reference_escrow.wasm"
+  },
+  "entry": {"call": "layerx_call", "reserve": "layerx_reserve", "interface": "interface.kvx"},
+  "capabilities": ["shared_storage_read", "shared_storage_write", "emit_event", "transfer_402", "receipt_read", "program_spend_tag_9"]
+}

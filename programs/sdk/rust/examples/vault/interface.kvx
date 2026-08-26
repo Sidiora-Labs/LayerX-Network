@@ -1,0 +1,23 @@
+[interface]
+schema = 1
+name = "layerx.reference.vault"
+version = 1
+abi = 2
+calldata = "version:u8 || operation:u8 || seed_length:u16 || seed || derived_account:bytes32 || asset:bytes32 || destination:bytes32 || amount:u128be"
+response = "CallResult"
+
+[entry.deposit]
+discriminator = 1
+law = "the invoking principal funds the derived account; its principal-scoped position and the program-shared pool total advance atomically"
+
+[entry.withdraw]
+discriminator = 2
+law = "only the invoking principal's position is debited; the owner frame spends the same amount from the rederived program account"
+
+[state.participant]
+key = "principal:'lx.ref.vault.position/' || derived_account || asset"
+value = "amount:u128be"
+
+[state.total]
+key = "shared:'lx.ref.vault.total/' || derived_account || asset"
+value = "amount:u128be"

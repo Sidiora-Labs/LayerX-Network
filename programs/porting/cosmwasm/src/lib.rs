@@ -39,7 +39,9 @@ pub use messages::{
     execute_submessage, variant_tag, CallRequest, ContractEvent, EntryPoint, FailureMapping,
     MessageVariant, RuntimeOutcome,
 };
-pub use monetary::{translate_all, Transfer402Plan, ValueFlow};
+pub use monetary::{
+    translate_all, ProgramAccountTransferPlan, Transfer402Plan, TranslatedValueFlow, ValueFlow,
+};
 pub use qualify::{
     build_plan, deploy_and_verify, execute_donate, execute_donations, execute_remaining,
     import_state, published_source, settle, source_archive, validated_module, AbsentReceipts,

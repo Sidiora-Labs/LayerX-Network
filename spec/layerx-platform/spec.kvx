@@ -3159,7 +3159,7 @@ reqs = ["37.6","30.7"]
 
 [task.30.7]
 title = "Ship escrow and vault reference programs"
-status = "pending"
+status = "implemented"
 wave = 16
 requires = ["30.4"]
 do_1 = "Write an escrow reference program taking custody of a payment and releasing it on a declared condition, deployed, source-verified and exercised end to end."

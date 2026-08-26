@@ -2708,6 +2708,8 @@ programs-sdk-c:
 programs-sdk-rust:
 	sh programs/sdk/rust/quickstart/build.sh all
 	sh programs/sdk/rust/response-fixture/build.sh
+	sh programs/sdk/rust/examples/escrow/build.sh
+	sh programs/sdk/rust/examples/vault/build.sh
 
 programs-sdk-assemblyscript:
 	cd programs/sdk/assemblyscript/examples/paid-counter && npm run build && npm run lint

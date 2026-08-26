@@ -31,9 +31,13 @@ pub enum PortRefusal {
     /// A `JSON` document is malformed, carries an unknown field, repeats a
     /// field, omits a declared field or exceeds the declared bounds.
     InvalidJson,
-    /// The construct pays out of the contract's own balance. No program holds
-    /// balance-writing authority on `LayerX`.
+    /// The construct pays from a contract balance without supplying the
+    /// corresponding registered derived-account context.
     ContractHeldBalance,
+    /// The supplied owner, seed and source do not identify one derived account.
+    InvalidProgramAccount,
+    /// Burning would mutate supply rather than transfer conserved value.
+    SupplyMutation,
     /// The construct spends another account's funds under an allowance the
     /// contract stored. Delegated spending is a capability grant.
     DelegatedSpend,
@@ -89,7 +93,13 @@ impl Display for PortRefusal {
             Self::SchemaMismatch => formatter.write_str("values do not match the declared schema"),
             Self::InvalidJson => formatter.write_str("JSON document is malformed or unexpected"),
             Self::ContractHeldBalance => {
-                formatter.write_str("a program holds no balance to pay out of")
+                formatter.write_str("contract-funded flow requires derived-account context")
+            }
+            Self::InvalidProgramAccount => {
+                formatter.write_str("contract account does not match the program and seed")
+            }
+            Self::SupplyMutation => {
+                formatter.write_str("BankMsg::Burn has no conserved 402LXP transfer equivalent")
             }
             Self::DelegatedSpend => {
                 formatter.write_str("delegated spending is a 402LXP capability grant")

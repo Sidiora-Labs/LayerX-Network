@@ -77,4 +77,18 @@ pub use event::{EventData, EventTopic};
 pub use ids::{AccountId, AssetId, ProgramId, ReceiptDigest};
 pub use receipt::Receipt;
 pub use storage::{StorageKey, StorageValue};
-pub use transfer::{Payment, ProgramAccountPayment, ProgramAccountSeed};
+pub use transfer::{Payment, ProgramAccountPayment, ProgramAccountSeed, ProgramDeposit};
+
+/// Returns the repository path of the escrow reference program shipped with
+/// this SDK.
+#[must_use]
+pub const fn programs_escrow_reference() -> &'static str {
+    "programs/sdk/rust/examples/escrow"
+}
+
+/// Returns the repository path of the pooled-vault reference program shipped
+/// with this SDK.
+#[must_use]
+pub const fn programs_vault_reference() -> &'static str {
+    "programs/sdk/rust/examples/vault"
+}

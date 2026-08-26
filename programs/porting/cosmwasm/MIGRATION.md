@@ -155,7 +155,7 @@ framing on the way in.
 | `IndexedMap` secondary indexes | an index is shared state; see above |
 | `Item` used as a global aggregate | an `Item` becomes one cell per principal, not one cell |
 | storage read of another contract's namespace | structural: another program cannot reach your namespace at all |
-| a contract's own balance as state | a program holds no balance; see **Money** |
+| a contract's own balance | a registered program-derived value account; see **Money** |
 
 ## Messages and dispatch
 
@@ -238,17 +238,17 @@ immediately, rather than in a separate handler reached by a reply id.
 
 This is the part of the port that bends least, so read it before you plan one.
 
-A LayerX program **holds no balance and writes no balance**. It can only
-request an authenticated 402LXP transfer that debits the invoking principal;
-the kernel applies the whole requested set atomically or none of it. There is
-no path from program code to a balance, and the kit does not provide one.
+A LayerX program **writes no balance**. A contract balance maps to a real
+account derived from the LayerX program and a public seed. Contract-funded
+messages become bounded owner-frame 402LXP requests from that account, and the
+kernel remains the only balance writer.
 
 | CosmWasm | Port |
 | --- | --- |
 | `info.funds` forwarded on in the same invocation | `ValueFlow::SentFunds` - carried over |
-| `BankMsg::Send` paid from the contract's balance | `ValueFlow::BankSend` - **refused**, `ContractHeldBalance` |
-| `BankMsg::Burn` | `ValueFlow::BankBurn` - **refused**, `ContractHeldBalance` |
-| `WasmMsg::Execute { funds, .. }` | `ValueFlow::SubMessageFunds` - **refused**, `ContractHeldBalance` |
+| `BankMsg::Send` paid from the contract's balance | `translate_with_program_account` and a rederived contract account |
+| `BankMsg::Burn` | **refused**, `SupplyMutation`; a conserved transfer cannot burn supply |
+| `WasmMsg::Execute { funds, .. }` | `translate_with_program_account` and a rederived contract account |
 | `cw20` `TransferFrom` where the owner is the caller | `ValueFlow::AllowanceSpend` - carried over |
 | `cw20` `TransferFrom` on a third party's allowance | `ValueFlow::AllowanceSpend` - **refused**, `DelegatedSpend` |
 | `IbcMsg::Transfer` | `ValueFlow::IbcTransfer` - **refused**, `ChainQuery` |

@@ -1,12 +1,41 @@
 # Programs
 
-A LayerX program is deterministic WASM that runs against protocol state. It can compute, it can read and write its own storage namespace, it can call other programs - and it cannot move money.
+A LayerX program is deterministic WASM that runs against protocol state. It can compute, use principal-scoped and shared storage, call other programs, and request transfers through explicitly granted authority. It never writes a balance.
 
 ## The monetary law
 
 This is the single most important thing about programs, and it is structural rather than advisory.
 
 Guest code never mutates a balance. What guest code can produce is a typed 402LXP transfer request, and it can only produce one through a `TransferCapability` it was actually granted. The capability authorises the effect set; the kernel transfer primitive applies it.
+
+## Program-owned value
+
+A program may hold value in an ordinary protocol account derived from its
+program identifier and a public seed. Anyone can reproduce the account
+identifier; nobody can turn that identifier into authority. Funding is an
+ordinary principal-funded 402LXP transfer to the derived account. Spending is
+a separate `ProgramSpend` grant binding the owner program, seed, rederived
+source, asset, destination and cumulative amount ceiling. Only the deriving
+program's own frame can stage that debit, and the kernel transfer primitive is
+still the only balance writer.
+
+The Rust SDK examples are complete custody patterns:
+
+- `programs/sdk/rust/examples/escrow` records distinct immutable release and
+  refund receipt digests in shared state, takes payment into its derived
+  account, and pays exactly once after the selected receipt verifies a
+  successful settlement for the escrow's exact asset and amount.
+- `programs/sdk/rust/examples/vault` credits each caller in principal-scoped
+  storage while maintaining the pooled total in shared storage. A withdrawal
+  debits both ledgers and the real derived account in one atomic execution.
+
+A program cannot derive another program's authority, stage a derived-account
+debit from a callee frame, write balances, mint or burn value, perform an
+unbounded whole-balance sweep, or treat bookkeeping storage as money. EVM
+contract balances, Solana PDA-held value and CosmWasm contract balances map to
+the same derived-account pattern. Allowances over third-party funds, direct
+lamport writes, supply-burning messages and cross-chain transfers remain named
+refusals where their source semantics are not representable.
 
 ```
 guest program  ->  AbiEffects

@@ -22,7 +22,8 @@ enum {
 
 enum {
     PROGRAM_TRANSFER_SOURCE_PRINCIPAL = 1,
-    PROGRAM_TRANSFER_SOURCE_PROGRAM = 2
+    PROGRAM_TRANSFER_SOURCE_PROGRAM = 2,
+    PROGRAM_TRANSFER_SOURCE_PROGRAM_FUNDING = 3
 };
 
 typedef struct lxp_programs_call_transfer_source {
@@ -1212,7 +1213,8 @@ lxp_result layerx_programs_call_transfer_leg(
         index >= value->transfer_set->leg_count || value->transfer_leg_written[index])
         return LXP_ERR_NON_CANONICAL;
     if ((source_kind != PROGRAM_TRANSFER_SOURCE_PRINCIPAL &&
-         source_kind != PROGRAM_TRANSFER_SOURCE_PROGRAM) ||
+         source_kind != PROGRAM_TRANSFER_SOURCE_PROGRAM &&
+         source_kind != PROGRAM_TRANSFER_SOURCE_PROGRAM_FUNDING) ||
         frame_depth > 8U || seed_length > 128U)
         return LXP_ERR_NON_CANONICAL;
     runtime = (lx_programs_transfer_runtime *)lxp_ctx_module_runtime(value->ctx);
@@ -1273,7 +1275,8 @@ lxp_result layerx_programs_call_transfer_seed_byte(
         !value->transfer_leg_written[index])
         return LXP_ERR_NON_CANONICAL;
     source = &value->transfer_sources[index];
-    if (source->kind != PROGRAM_TRANSFER_SOURCE_PROGRAM ||
+    if ((source->kind != PROGRAM_TRANSFER_SOURCE_PROGRAM &&
+         source->kind != PROGRAM_TRANSFER_SOURCE_PROGRAM_FUNDING) ||
         source->seed == NULL || offset != source->seed_written ||
         offset >= source->seed_length)
         return LXP_ERR_NON_CANONICAL;
@@ -1333,6 +1336,30 @@ static lxp_result transfer_source_validate(
             source->seed != NULL || source->seed_length != 0U ||
             source->seed_written != 0U ||
             lxp_ct_memcmp(leg->from->id, value->authority->principal, 32U) != 0)
+            return LXP_ERR_AUTH_SCOPE;
+        return LXP_OK;
+    }
+    if (source->kind == PROGRAM_TRANSFER_SOURCE_PROGRAM_FUNDING) {
+        if (value->abi_version != LX_PROGRAMS_ACCOUNT_ABI_VERSION ||
+            lxp_ct_is_zero(source->owner_program, 32U) ||
+            lxp_ct_memcmp(source->owner_program, source->staging_program, 32U) != 0 ||
+            source->seed_written != source->seed_length ||
+            (source->seed_length != 0U && source->seed == NULL) ||
+            lxp_ct_memcmp(leg->from->id, value->authority->principal, 32U) != 0)
+            return LXP_ERR_AUTH_SCOPE;
+        status = lxp_programs_account_lookup(value->ctx, source->owner_program,
+                                             source->seed, source->seed_length,
+                                             &binding, &bound_account);
+        if (status != LXP_OK || bound_account == NULL || bound_account != leg->to ||
+            lxp_ct_memcmp(binding.program_id, source->owner_program, 32U) != 0 ||
+            binding.seed_length != source->seed_length ||
+            (source->seed_length != 0U &&
+             memcmp(binding.seed, source->seed, source->seed_length) != 0) ||
+            lxp_ct_memcmp(binding.account_id, leg->to->id, 32U) != 0 ||
+            lxp_ct_memcmp(binding.asset_id, leg->asset_id, 32U) != 0 ||
+            leg->to->kind != LX_ACCOUNT_MODULE_VALUE || !leg->to->has_asset ||
+            leg->to->has_authority_key ||
+            lxp_ct_memcmp(leg->to->asset_id, binding.asset_id, 32U) != 0)
             return LXP_ERR_AUTH_SCOPE;
         return LXP_OK;
     }

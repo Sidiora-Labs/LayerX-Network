@@ -32,7 +32,9 @@ pub use layout::{
     array_slot, caller_indexed_import, caller_indexed_key, mapping_slot, member_slot,
     nested_mapping_slot, shared_key, storage_key, value_slot, MigrationCell, StateVariable,
 };
-pub use monetary::{translate_all, Transfer402Plan, ValueFlow};
+pub use monetary::{
+    translate_all, ProgramAccountTransferPlan, Transfer402Plan, TranslatedValueFlow, ValueFlow,
+};
 pub use qualify::{
     build_plan, deploy_and_verify, execute_has_valid_key, execute_purchase,
     execute_remaining_periods, import_state, published_source, settle, source_archive,

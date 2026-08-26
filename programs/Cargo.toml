@@ -8,6 +8,8 @@ members = [
     "porting/evm",
     "porting/solana",
     "sdk/rust",
+    "sdk/rust/examples/escrow",
+    "sdk/rust/examples/vault",
     "sdk/rust/lint",
 ]
 exclude = ["sdk/rust/quickstart", "sdk/rust/response-fixture"]

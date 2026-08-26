@@ -1249,7 +1249,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Prove every attack defeated by construction, with an escape a build-breaking defect.
     - Extend the recorded attack inventory rather than replacing it.
     - _Requirements: 37.6, 30.7_
-  - [ ] 30.7 Ship escrow and vault reference programs
+  - [ ] 30.7 Ship escrow and vault reference programs — **Implemented - qualification pending**
     - Write an escrow reference program taking custody of a payment and releasing it on a declared condition, deployed, source-verified and exercised end to end.
     - Write a vault reference program holding pooled value with per-participant accounting across the shared and principal-scoped namespaces together.
     - Retire the EVM kit refusal of contract-funded value flows where a derived account now carries them honestly, and keep refusing by name what still has no representation.

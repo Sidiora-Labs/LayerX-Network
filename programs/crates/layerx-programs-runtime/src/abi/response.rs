@@ -8,10 +8,10 @@ use super::{AbiValueType, HostFunction, HostFunctionType};
 
 /// Explicitly non-current module carrying candidate response operations.
 pub const CANDIDATE_ABI_MODULE: &str = "layerx_v2_candidate";
-pub const CANDIDATE_ABI_MANIFEST: &str = "layerx_v2_candidate\0response_write(i32,i32,i32)->i32\0program_call_response(i32,i32,i32,i32,i32,i32,i32,i32)->i64\0refusal_write(i32,i32,i32)->i32\0storage_read_scoped(i32,i32,i32,i32,i32)->i32\0storage_write_scoped(i32,i32,i32,i32,i32)->i32\0storage_delete_scoped(i32,i32,i32)->i32\0storage_drop_scoped(i32)->i32\0storage_scan_scoped(i32,i32,i32,i32,i32,i32,i32,i32,i32)->i32\0transfer_program_402(i64,i64,i32,i32,i32,i32,i32,i32,i32,i32)->i32\0";
+pub const CANDIDATE_ABI_MANIFEST: &str = "layerx_v2_candidate\0response_write(i32,i32,i32)->i32\0program_call_response(i32,i32,i32,i32,i32,i32,i32,i32)->i64\0refusal_write(i32,i32,i32)->i32\0storage_read_scoped(i32,i32,i32,i32,i32)->i32\0storage_write_scoped(i32,i32,i32,i32,i32)->i32\0storage_delete_scoped(i32,i32,i32)->i32\0storage_drop_scoped(i32)->i32\0storage_scan_scoped(i32,i32,i32,i32,i32,i32,i32,i32,i32)->i32\0transfer_program_402(i64,i64,i32,i32,i32,i32,i32,i32,i32,i32)->i32\0fund_program_402(i64,i64,i32,i32,i32,i32,i32,i32)->i32\0";
 
 /// Exact qualification-only response extension table.
-pub const CANDIDATE_HOST_FUNCTIONS: [HostFunction; 9] = [
+pub const CANDIDATE_HOST_FUNCTIONS: [HostFunction; 10] = [
     HostFunction {
         name: "response_write",
         signature: "(i32,i32,i32)->i32",
@@ -48,6 +48,10 @@ pub const CANDIDATE_HOST_FUNCTIONS: [HostFunction; 9] = [
         name: "transfer_program_402",
         signature: "(i64,i64,i32,i32,i32,i32,i32,i32,i32,i32)->i32",
     },
+    HostFunction {
+        name: "fund_program_402",
+        signature: "(i64,i64,i32,i32,i32,i32,i32,i32)->i32",
+    },
 ];
 
 const RESPONSE_WRITE_PARAMS: &[AbiValueType] =
@@ -60,6 +64,16 @@ const PROGRAM_TRANSFER_PARAMS: &[AbiValueType] = &[
     AbiValueType::I64,
     AbiValueType::I32,
     AbiValueType::I32,
+    AbiValueType::I32,
+    AbiValueType::I32,
+    AbiValueType::I32,
+    AbiValueType::I32,
+    AbiValueType::I32,
+    AbiValueType::I32,
+];
+const PROGRAM_FUNDING_PARAMS: &[AbiValueType] = &[
+    AbiValueType::I64,
+    AbiValueType::I64,
     AbiValueType::I32,
     AbiValueType::I32,
     AbiValueType::I32,
@@ -101,6 +115,10 @@ const PROGRAM_TRANSFER_TYPE: HostFunctionType = HostFunctionType {
     params: PROGRAM_TRANSFER_PARAMS,
     results: I32_RESULT,
 };
+const PROGRAM_FUNDING_TYPE: HostFunctionType = HostFunctionType {
+    params: PROGRAM_FUNDING_PARAMS,
+    results: I32_RESULT,
+};
 
 pub(crate) fn candidate_function_type(name: &str) -> Option<&'static HostFunctionType> {
     match name {
@@ -112,6 +130,7 @@ pub(crate) fn candidate_function_type(name: &str) -> Option<&'static HostFunctio
         "storage_drop_scoped" => Some(&STORAGE_DROP_SCOPED_TYPE),
         "storage_scan_scoped" => Some(&STORAGE_SCAN_SCOPED_TYPE),
         "transfer_program_402" => Some(&PROGRAM_TRANSFER_TYPE),
+        "fund_program_402" => Some(&PROGRAM_FUNDING_TYPE),
         _ => None,
     }
 }

@@ -25,9 +25,13 @@ pub enum PortRefusal {
     EventDataTooLarge,
     /// Encoded calldata exceeds the version-one call-input bound.
     CalldataTooLarge,
-    /// The construct pays out of a balance the contract itself holds. No
-    /// program may hold balance-writing authority on `LayerX`.
+    /// The construct pays from a contract balance without supplying the
+    /// corresponding registered derived-account context.
     ContractHeldBalance,
+    /// The supplied owner, seed and source do not identify one derived account.
+    InvalidProgramAccount,
+    /// A whole-balance sweep has no exact bounded amount to authorize.
+    UnboundedBalanceSweep,
     /// The construct spends a third party's balance from an allowance the
     /// contract stores. Delegated spending is a capability grant.
     DelegatedSpend,
@@ -73,7 +77,13 @@ impl Display for PortRefusal {
             Self::EventDataTooLarge => formatter.write_str("event data exceeds the ABI bound"),
             Self::CalldataTooLarge => formatter.write_str("calldata exceeds the ABI bound"),
             Self::ContractHeldBalance => {
-                formatter.write_str("a program may not pay out of a balance it holds")
+                formatter.write_str("contract-funded flow requires derived-account context")
+            }
+            Self::InvalidProgramAccount => {
+                formatter.write_str("contract account does not match the program and seed")
+            }
+            Self::UnboundedBalanceSweep => {
+                formatter.write_str("selfdestruct sweep has no bounded program-spend amount")
             }
             Self::DelegatedSpend => {
                 formatter.write_str("delegated spending is a 402LXP capability grant")

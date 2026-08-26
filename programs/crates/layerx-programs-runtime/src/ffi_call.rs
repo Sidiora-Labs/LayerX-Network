@@ -359,6 +359,7 @@ fn transfer_error_tag(error: TransferLawError) -> u8 {
     match error {
         TransferLawError::UnverifiedAuthority => 1,
         TransferLawError::InvalidProgramAuthority => 11,
+        TransferLawError::InvalidProgramFunding => 12,
         TransferLawError::InvalidTransfer => 2,
         TransferLawError::InvalidTransferSet => 3,
         TransferLawError::AmountOverflow => 4,
@@ -827,6 +828,12 @@ impl KernelTransferPrimitive for CKernel {
                 TransferSource::Principal(principal) => {
                     (1_u8, words(principal.bytes()), [0_u64; 4], &[][..])
                 }
+                TransferSource::ProgramFunding { principal, binding } => (
+                    3_u8,
+                    words(principal.bytes()),
+                    words(binding.owner_program().bytes()),
+                    binding.seed(),
+                ),
                 TransferSource::Program(authority) => (
                     2_u8,
                     words(authority.source_account()),

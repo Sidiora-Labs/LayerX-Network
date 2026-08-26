@@ -5,18 +5,17 @@
 //! address gives a program its own signing authority, so a program can also
 //! pay out of an account it controls with `invoke_signed`.
 //!
-//! `LayerX` gives a program neither. A program holds no balance and writes no
-//! balance; it can only request an authenticated 402LXP transfer that debits
-//! the invoking principal, and the kernel applies the whole requested set
-//! atomically or none of it.
+//! `LayerX` gives a program no balance-writing primitive. PDA-held value maps
+//! to a real derived account and leaves through a bounded owner-frame 402LXP
+//! request that the kernel rederives and applies atomically.
 //!
-//! So a `system_program::transfer` signed by the payer carries over exactly,
-//! and a lamport write, an `invoke_signed` payout and a `close = recipient`
-//! rent sweep do not. Each of those is refused by name here rather than
+//! So a payer-signed transfer and a bounded `invoke_signed` payout carry over.
+//! Direct lamport writes and an amount-less `close = recipient` rent sweep do
+//! not. Each is refused by name rather than
 //! emulated with a shadow balance, because a shadow balance would be a second,
 //! unauthenticated money supply.
 
-use layerx_programs_runtime::Capability;
+use layerx_programs_runtime::{derive_program_account, Capability, ProgramId};
 
 use crate::error::PortRefusal;
 
@@ -27,6 +26,94 @@ pub struct Transfer402Plan {
     asset: [u8; 32],
     to: [u8; 32],
     amount: u128,
+}
+
+/// A payout signed by the program through its LayerX-derived value account.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProgramAccountTransferPlan {
+    owner_program: ProgramId,
+    seed: Vec<u8>,
+    source: [u8; 32],
+    asset: [u8; 32],
+    to: [u8; 32],
+    amount: u128,
+}
+
+impl ProgramAccountTransferPlan {
+    /// Builds an owner-frame payout from an exact rederived program account.
+    ///
+    /// # Errors
+    ///
+    /// Refuses reserved monetary fields, an oversized seed, or a source that
+    /// does not match the owner program and seed.
+    pub fn new(
+        owner_program: ProgramId,
+        seed: &[u8],
+        source: [u8; 32],
+        asset: [u8; 32],
+        to: [u8; 32],
+        amount: u128,
+    ) -> Result<Self, PortRefusal> {
+        if asset == [0; 32]
+            || to == [0; 32]
+            || amount == 0
+            || derive_program_account(owner_program, seed)
+                .map_err(|_| PortRefusal::InvalidProgramAccount)?
+                .bytes() != source
+        {
+            return Err(PortRefusal::InvalidProgramAccount);
+        }
+        Ok(Self {
+            owner_program,
+            seed: seed.to_vec(),
+            source,
+            asset,
+            to,
+            amount,
+        })
+    }
+    /// Returns the program that owns the source.
+    #[must_use]
+    pub const fn owner_program(&self) -> ProgramId {
+        self.owner_program
+    }
+    /// Returns the public account-derivation seed.
+    #[must_use]
+    pub fn seed(&self) -> &[u8] {
+        &self.seed
+    }
+    /// Returns the rederived source account.
+    #[must_use]
+    pub const fn source(&self) -> [u8; 32] {
+        self.source
+    }
+    /// Returns the transferred asset.
+    #[must_use]
+    pub const fn asset(&self) -> [u8; 32] {
+        self.asset
+    }
+    /// Returns the credited account.
+    #[must_use]
+    pub const fn to(&self) -> [u8; 32] {
+        self.to
+    }
+    /// Returns the exact amount.
+    #[must_use]
+    pub const fn amount(&self) -> u128 {
+        self.amount
+    }
+    /// Returns the exact owner-bound runtime capability.
+    #[must_use]
+    pub fn capability(&self) -> Capability {
+        Capability::ProgramSpend {
+            owner_program: self.owner_program,
+            seed: self.seed.clone(),
+            source_account: self.source,
+            asset: self.asset,
+            to: self.to,
+            maximum_amount: self.amount,
+        }
+    }
 }
 
 impl Transfer402Plan {
@@ -133,6 +220,38 @@ pub enum ValueFlow {
 }
 
 impl ValueFlow {
+    /// Translates an Anchor/PDA flow with the LayerX derived account that
+    /// replaces the PDA's value-holding role.
+    ///
+    /// # Errors
+    ///
+    /// Refuses invalid derived-account context, direct lamport writes and
+    /// amount-less rent sweeps.
+    pub fn translate_with_program_account(
+        &self,
+        asset: [u8; 32],
+        principal: [u8; 32],
+        owner_program: ProgramId,
+        seed: &[u8],
+        source: [u8; 32],
+    ) -> Result<TranslatedValueFlow, PortRefusal> {
+        match self {
+            Self::ProgramAuthorityFunded { authority, recipient, amount } => {
+                if authority != &source {
+                    return Err(PortRefusal::InvalidProgramAccount);
+                }
+                ProgramAccountTransferPlan::new(
+                    owner_program, seed, source, asset, *recipient, *amount,
+                )
+                .map(TranslatedValueFlow::ProgramAccount)
+            }
+            Self::LamportWrite { .. } => Err(PortRefusal::LamportMutation),
+            Self::RentSweep { .. } => Err(PortRefusal::UnboundedRentSweep),
+            _ => self
+                .translate(asset, principal)
+                .map(TranslatedValueFlow::Principal),
+        }
+    }
     /// Translates one Solana value flow into a 402LXP transfer leg paid by the
     /// invoking principal.
     ///
@@ -180,6 +299,15 @@ impl ValueFlow {
     }
 }
 
+/// The authentic monetary source selected for one translated Solana flow.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum TranslatedValueFlow {
+    /// Debits the invoking principal through ordinary transfer authority.
+    Principal(Transfer402Plan),
+    /// Debits the rederived account owned by the current program.
+    ProgramAccount(ProgramAccountTransferPlan),
+}
+
 /// Translates a whole instruction handler's value flow, keeping declaration
 /// order so the emitted transfer set matches the order the Anchor source pays
 /// in.
@@ -198,4 +326,30 @@ pub fn translate_all(
         plans.push(flow.translate(asset, principal)?);
     }
     Ok(plans)
+}
+
+#[cfg(test)]
+mod custody_tests {
+    use super::*;
+
+    #[test]
+    fn invoke_signed_uses_derived_account_authority() {
+        let owner = ProgramId::new([7; 32]).unwrap_or_else(|error| panic!("owner: {error}"));
+        let source = derive_program_account(owner, b"pool")
+            .unwrap_or_else(|error| panic!("derive: {error}"))
+            .bytes();
+        let translated = (ValueFlow::ProgramAuthorityFunded {
+            authority: source,
+            recipient: [4; 32],
+            amount: 9,
+        })
+            .translate_with_program_account([3; 32], [2; 32], owner, b"pool", source)
+            .unwrap_or_else(|error| panic!("translate: {error}"));
+        assert!(matches!(translated, TranslatedValueFlow::ProgramAccount(_)));
+        assert_eq!(
+            (ValueFlow::RentSweep { recipient: [4; 32] })
+                .translate_with_program_account([3; 32], [2; 32], owner, b"pool", source),
+            Err(PortRefusal::UnboundedRentSweep)
+        );
+    }
 }

@@ -156,22 +156,25 @@ for direct activity invocation.
 
 This is the part of the port that is not negotiable.
 
-**No program holds a balance and no program writes one.** A program's only
-monetary act is to request a 402LXP transfer; the kernel authenticates it,
-applies the whole set atomically and issues the receipt. The payer is always
-the invoking principal.
+**No program writes a balance.** Value held for a contract lives in a real
+account derived from the LayerX program identifier and a public seed. Guest
+code can only request a bounded 402LXP transfer; the kernel rederives the
+source, verifies owner-frame `ProgramSpend` authority, applies the whole set
+atomically and issues the receipt.
 
 | Solidity | Port |
 | --- | --- |
 | `payable` function funded by `msg.value` | `transfer_402` debiting the caller in the same invocation |
 | `recipient.transfer(msg.value)` (forwarding what just arrived) | `ValueFlow::CallerFunded` - carried over |
-| `recipient.transfer(x)` out of accumulated balance | `ValueFlow::ContractFunded` - **refused**, `ContractHeldBalance` |
-| `selfdestruct(recipient)` | `ValueFlow::SelfDestructSweep` - **refused**, `ContractHeldBalance` |
+| `recipient.transfer(x)` out of accumulated balance | `translate_with_program_account` and a rederived contract account |
+| `selfdestruct(recipient)` | **refused**, `UnboundedBalanceSweep`; the source does not declare an exact bounded amount |
 | `transferFrom(msg.sender, to, x)` | `ValueFlow::AllowanceSpend` with `owner == caller` - carried over |
 | `transferFrom(other, to, x)` under an allowance | `ValueFlow::AllowanceSpend` - **refused**, `DelegatedSpend` |
 
-`ValueFlow::translate` performs the mapping and `translate_all` reports a whole
-function body at once. The refusals are not a limitation to work around: a
+`ValueFlow::translate_with_program_account` carries contract-funded payouts;
+`ValueFlow::translate` remains the context-free principal-only mapping and
+refuses a contract payout when no owner, seed and source were supplied. The
+remaining refusals are not a limitation to work around: a
 shadow ledger inside program storage that tracks "balances" would be a second,
 unauthenticated money supply, and the monetary law exists to make that
 impossible. Delegated spending is expressed the LayerX way - the payer grants a

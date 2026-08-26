@@ -1811,6 +1811,22 @@ observed = "Fresh and receipt-rebuilt capability ceilings set reconciled=true ev
 assumption = "There is intentionally no positive capability-ceiling admission path until core defines and produces a canonical budget key/value proof that can issue identity-bound ReconciliationState. Qualification must later bind that state to the exact tenant, capability, asset, ceiling and protocol window before installing it, then restore concurrency, unknown-hold, expiry and receipt-settlement coverage. No build or passing result is asserted."
 severity = "missing-canonical-producer"
 
+[observation.30.7.1]
+task = "30.7"
+file = "programs/sdk/rust/examples/escrow/src/lib.rs, programs/sdk/rust/src/receipt.rs"
+symbol = "escrow::settle, Receipt"
+observed = "The frozen verified receipt view exposes digest, result code, asset, amount and state root but no activity kind, module, payer, beneficiary or effect identity. The escrow therefore implements the strongest honest predicate currently representable: distinct predeclared release and refund digests, successful result, and exact escrow asset and amount. It does not infer business semantics from a digest label or claim that an arbitrary richer oracle condition was proved. A richer escrow condition must fail closed until the verified receipt ABI carries its canonical subject and effect identity."
+assumption = "Human qualification must exercise distinct and identical condition digests, failed results, wrong asset, wrong amount, replay after settlement, release/refund races and malformed stored records. Product documentation must describe this reference as successful-settlement-receipt escrow unless a later ABI task adds and verifies richer canonical condition facts. No build, deployment, call or passing result is asserted."
+severity = "abi-evidence-boundary"
+
+[observation.30.7.2]
+task = "30.7"
+file = "programs/sdk/rust/examples/escrow, programs/sdk/rust/examples/vault, platform/cli/src/programs.rs, platform/hosted"
+symbol = "reference custody source verification and end-to-end qualification"
+observed = "The repository now contains complete Rust escrow and vault program sources, deterministic manifests and source-verifiable build inputs, but the current public CLI capability vocabulary cannot encode the exact ProgramSpend owner, seed, source, asset, destination and ceiling grant required by these calls, and the hosted deployment/call producer path is not currently an authenticated positive qualification route. The implementation phase therefore cannot honestly add a script that claims to deploy, source-verify and exercise custody end to end without inventing authority or evidence."
+assumption = "Qualification must use an owner-published authenticated activity producer that can encode exact candidate-ABI ProgramSpend grants, register both derived MODULE_VALUE accounts, deploy both artifacts, verify their published sources against reproduced code hashes, fund and settle escrow release/refund and multi-participant vault deposit/withdraw calls, and verify receipts plus state and balances from protocol proofs. Until that route exists, task 30.7 is implemented source, not qualified or done."
+severity = "missing-qualification-producer"
+
 [observation.37.1.12]
 task = "37.1"
 file = "paxeer-network/rpc"

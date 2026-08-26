@@ -106,6 +106,16 @@ mod candidate_raw {
             recipient_pointer: i32,
             recipient_length: i32,
         ) -> i32;
+        pub(super) fn fund_program_402(
+            amount_high: i64,
+            amount_low: i64,
+            seed_pointer: i32,
+            seed_length: i32,
+            destination_pointer: i32,
+            destination_length: i32,
+            asset_pointer: i32,
+            asset_length: i32,
+        ) -> i32;
     }
 }
 
@@ -280,6 +290,28 @@ pub(crate) fn transfer_program_402(
             length(asset)?,
             pointer(recipient)?,
             length(recipient)?,
+        )
+    };
+    ProgramError::from_status(status)
+}
+
+pub(crate) fn fund_program_402(
+    amount_high: i64,
+    amount_low: i64,
+    seed: &[u8],
+    destination: &[u8],
+    asset: &[u8],
+) -> Result<i32, ProgramError> {
+    let status = unsafe {
+        candidate_raw::fund_program_402(
+            amount_high,
+            amount_low,
+            pointer(seed)?,
+            length(seed)?,
+            pointer(destination)?,
+            length(destination)?,
+            pointer(asset)?,
+            length(asset)?,
         )
     };
     ProgramError::from_status(status)

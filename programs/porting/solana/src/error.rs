@@ -31,6 +31,10 @@ pub enum PortRefusal {
     /// The construct writes lamports directly. No program holds balance-writing
     /// authority on `LayerX`.
     LamportMutation,
+    /// The PDA-shaped authority does not match the LayerX program and seed.
+    InvalidProgramAccount,
+    /// Rent sweeping has no exact bounded amount in the source instruction.
+    UnboundedRentSweep,
     /// The construct signs for a third party's funds with a program-derived
     /// authority. Delegated spending is a capability grant.
     DelegatedSpend,
@@ -84,7 +88,13 @@ impl Display for PortRefusal {
                 formatter.write_str("field values do not match the account schema")
             }
             Self::LamportMutation => {
-                formatter.write_str("a program may not write lamports it holds")
+                formatter.write_str("direct lamport mutation has no transfer-law equivalent")
+            }
+            Self::InvalidProgramAccount => {
+                formatter.write_str("program account does not match the program and seed")
+            }
+            Self::UnboundedRentSweep => {
+                formatter.write_str("account close has no bounded program-spend amount")
             }
             Self::DelegatedSpend => {
                 formatter.write_str("delegated spending is a 402LXP capability grant")

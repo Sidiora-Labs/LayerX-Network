@@ -1,0 +1,20 @@
+[package]
+name = "layerx-reference-escrow"
+version = "0.1.0"
+edition = "2021"
+license = "LicenseRef-Centra-ai-Protocol"
+
+[lib]
+crate-type = ["cdylib"]
+test = false
+doctest = false
+
+[dependencies]
+layerx-program-sdk = { path = "../.." }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
