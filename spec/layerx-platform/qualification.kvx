@@ -46,6 +46,14 @@ observed = "The frozen ABI-v2 context exposes the executing program, immediate c
 assumption = "A future ABI revision or production call envelope must add canonical bounded account metadata and authenticated attached-funds facts before Anchor Accounts validation and MessageInfo.funds can be represented as complete native patterns. Human qualification must treat those fields as unavailable, not empty, and must not claim complete source-ecosystem parity from ABI v2."
 severity = "missing-canonical-producer"
 
+[observation.31.7.4]
+task = "31.7"
+file = "programs/Cargo.lock, tests/programs/test_call_activity.c"
+symbol = "ABI-v2 reference workspace resolution and production qualification runner"
+observed = "Post-implementation review found that generating the Programs workspace lock had re-resolved two unrelated registry packages and that the new production reference runner encoded and registered ABI one while its reference guests imported ABI two. The lock repair preserves the exact pre-task registry versions and checksums while adding only the three local guest package records and dependency edges. The runner repair leaves the historical ABI-one deploy, upgrade and call path unchanged, while the three porting references now encode ABI two in both deploy and call payloads, register the ABI-two Programs module, execute against recorded module version two and require ABI-two deployment and terminal receipt evidence."
+assumption = "Human qualification must resolve the locked workspace without changing registry packages, build the three target-separated guests and execute their artifacts through the ABI-two production runner. No build, test, format, lock resolution, runner execution or passing result is asserted by this source repair."
+severity = "post-implementation-repair"
+
 [observation.19.4.2]
 task = "19.4"
 file = "include/layerx/lxp_receipt.h"

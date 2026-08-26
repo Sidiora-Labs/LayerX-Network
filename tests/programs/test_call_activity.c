@@ -363,6 +363,24 @@ static size_t upgrade_payload(uint8_t *out, const uint8_t program_id[32],
     return UPGRADE_FIXED_BYTES + wasm_length;
 }
 
+static size_t reference_deploy_payload(
+    uint8_t *out, const uint8_t program_id[32], const uint8_t authority[32],
+    const uint8_t *wasm, size_t wasm_length, uint8_t code_hash[32])
+{
+    size_t length = deploy_payload(out, program_id, authority, wasm,
+                                   wasm_length, code_hash);
+    write_u16(out + 32U, LX_PROGRAMS_ACCOUNT_ABI_VERSION);
+    return length;
+}
+
+static size_t reference_call_payload(uint8_t *out,
+                                     const uint8_t program_id[32])
+{
+    size_t length = call_payload(out, program_id);
+    write_u16(out + 32U, LX_PROGRAMS_ACCOUNT_ABI_VERSION);
+    return length;
+}
+
 static void fill_activity(lxp_activity *activity, uint32_t activity_type,
                           const uint8_t *payload, size_t payload_length,
                           const uint8_t *did, size_t did_length,
@@ -768,8 +786,8 @@ static int qualify_porting_reference(const char *path, uint8_t marker)
     (void)memcpy(runtime.occupancy_asset_id, fee_asset, 32U);
     runtime.resolve_occupancy_parameters = occupancy_parameters;
     runtime.occupancy_parameter_context = &runtime;
-    payload_length = deploy_payload(payload, program_id, authority.principal,
-                                    wasm, wasm_length, code_hash);
+    payload_length = reference_deploy_payload(
+        payload, program_id, authority.principal, wasm, wasm_length, code_hash);
     fill_activity(&activity, LX_PROGRAMS_DEPLOY, payload, payload_length,
                   did, sizeof(did) - 1U, primary_key);
     fees.version = 1U;
@@ -778,7 +796,7 @@ static int qualify_porting_reference(const char *path, uint8_t marker)
         lxp_identity_register(&identities, did, sizeof(did) - 1U,
                               primary_key, &identity) != LXP_OK ||
         lxp_kernel_create(&kernel, &state, &journal, &parameters, 0U) != LXP_OK ||
-        lxp_kernel_register_module(&kernel, programs_module_registration()) != LXP_OK ||
+        lxp_kernel_register_module(&kernel, programs_module_registration_v2()) != LXP_OK ||
         lxp_kernel_bind_module_runtime(&kernel, LXP_MODULE_PROGRAMS, &runtime) != LXP_OK ||
         lxp_programs_bind_fee_transaction(&kernel) != LXP_OK ||
         lxp_arena_init(&arena, arena_bytes, sizeof(arena_bytes)) != LXP_OK)
@@ -789,7 +807,7 @@ static int qualify_porting_reference(const char *path, uint8_t marker)
     execution.batch_timestamp_ms = 10U;
     execution.maximum_timestamp_window = 100U;
     execution.global_sequence = 1U;
-    execution.recorded_module_version = LX_PROGRAMS_ABI_VERSION;
+    execution.recorded_module_version = LX_PROGRAMS_ACCOUNT_ABI_VERSION;
     execution.parameter_version = 1U;
     execution.signature_valid = true;
     execution.identities = &identities;
@@ -798,9 +816,10 @@ static int qualify_porting_reference(const char *path, uint8_t marker)
     execution.gas_limit = 1000000U;
     execution.arena = &arena;
     if (lxp_kernel_execute_activity(&kernel, &activity, &execution, &receipt) != LXP_OK ||
-        receipt.result_code != LXP_OK || receipt.module_version != LX_PROGRAMS_ABI_VERSION)
+        receipt.result_code != LXP_OK ||
+        receipt.module_version != LX_PROGRAMS_ACCOUNT_ABI_VERSION)
         return 1;
-    payload_length = call_payload(payload, program_id);
+    payload_length = reference_call_payload(payload, program_id);
     fill_activity(&activity, LX_PROGRAMS_CALL, payload, payload_length,
                   did, sizeof(did) - 1U, primary_key);
     activity.account_sequence = 1U;
@@ -813,7 +832,7 @@ static int qualify_porting_reference(const char *path, uint8_t marker)
         receipt.result_code != LXP_OK || !receipt.program_outcome.present ||
         receipt.program_outcome.terminal_kind != LXP_PROGRAM_TERMINAL_SUCCESS ||
         receipt.program_outcome.runtime_version == 0U ||
-        receipt.program_outcome.abi_version != LX_PROGRAMS_ABI_VERSION ||
+        receipt.program_outcome.abi_version != LX_PROGRAMS_ACCOUNT_ABI_VERSION ||
         receipt.program_outcome.fee_schedule_version != 1U ||
         lxp_ct_is_zero(receipt.program_outcome.terminal_payload_root, 32U))
         return 1;
