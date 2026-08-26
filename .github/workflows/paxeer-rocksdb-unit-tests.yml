@@ -27,9 +27,12 @@ jobs:
   tests-rocksdb:
     name: RocksDB Tests
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version: '1.25.6'
           cache-dependency-path: paxeer-network/go.sum
@@ -41,7 +44,7 @@ jobs:
 
       - name: Cache RocksDB
         id: cache-rocksdb
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             /usr/local/lib/librocksdb.*
@@ -73,7 +76,7 @@ jobs:
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         with:
           files: paxeer-network/rdb-profile.out
-          token: ${{ secrets.CODECOV_TOKEN }}
+          use_oidc: true
           fail_ci_if_error: true
           flags: pax-db
           disable_search: true

@@ -2040,3 +2040,35 @@ symbol = "host migration planning, guest keccak256, AnchorContext, MessageInfo"
 observed = "Running EVM guest code now computes keccak256 through the ABI-two host primitive, including the digest used by ecrecover. Host-side migration planning still computes storage-slot addresses, selectors and event topics before a guest execution context exists; removing that tooling computation would make byte-identical migration artifacts impossible rather than moving contract computation into the guest. ABI two also has no authenticated producer for an enumerable Anchor account list or CosmWasm attached funds, so the porting kits expose only the context fields the runtime can prove and refuse to invent the unavailable values."
 assumption = "Human qualification must distinguish pre-execution migration planning from running contract computation, compare the planned selectors, topics and slots with guest-produced values, and confirm the Solana and CosmWasm kits refuse unavailable account and funds patterns. A future ABI may add canonical producers for those fields; this implementation does not fabricate them. No build, test, formatting or runtime result is asserted."
 severity = "porting-boundary"
+
+[observation.37.1.23]
+task = "37.1"
+file = ".worktrees, .gitignore, tools/ci/public-repo-audit.sh, .github/workflows, platform/sdk/dotnet"
+symbol = "monorepo checkout and immutable workflow inputs"
+observed = "CI at revision 47d2df5b failed before executing nineteen jobs because two local audit worktrees were tracked as undeclared gitlinks, while Platform referenced nonexistent setup-node and setup-gradle commits. The repair removes the local gitlinks and tracked .NET build output, scopes ignores for those generated paths, rejects future tracked worktrees and undeclared gitlinks, replaces every external workflow action tag with a verified immutable commit, and rejects future mutable action or Docker-action references. Platform now uses upstream-resolving immutable setup-node v6 and setup-gradle v5 commits."
+assumption = "Human qualification must perform clean checkouts on Linux, macOS and Windows, run the public repository audit, and allow every affected workflow to proceed past action resolution and checkout. No workflow, build, test or runtime result is asserted by this source repair."
+severity = "clean-host-reproducibility"
+
+[observation.37.1.24]
+task = "37.1"
+file = "paxeer-network/Dockerfile, paxeer-network/wasm-runtime/libwasmvm-linux.sha256, .github/workflows/paxeer-libwasmvm.yml"
+symbol = "Paxeer Docker native runtime acquisition"
+observed = "The Docker build copied six ignored native shared libraries that existed only in the developer checkout, so a clean GitHub checkout could not build the image. The repair downloads only the three target-architecture libraries from the public HPX artifact surface, verifies each against a checked-in SHA-256 digest before placing it in the cgo package and runtime library paths, makes missing build artifacts fatal, and adds explicit public-artifact verification for amd64 and arm64. No native binary is added to Git and a changed download is refused rather than accepted."
+assumption = "Human qualification must build both Docker architectures from a clean checkout, compare all downloaded bytes with the committed digest manifest and published HPX checksums, exercise cgo linkage for the current, v1.5.2 and v1.5.5 runtimes, and prove missing or altered artifacts fail before compilation. Availability of node.hyperpaxeer.com remains a declared build input; no download, image build or runtime result is asserted by this source repair."
+severity = "supply-chain-reproducibility"
+
+[observation.37.1.25]
+task = "37.1"
+file = ".github/workflows/paxeer-db-tests.yml, .github/workflows/paxeer-go-test.yml, .github/workflows/paxeer-rocksdb-unit-tests.yml, .github/workflows/paxeer-ecr.yml, .github/workflows/paxeer-nightly-ecr.yml"
+symbol = "Codecov and AWS workload identity"
+observed = "Coverage uploads failed because the repository was not accepted for tokenless upload, while ECR publication failed because AWS denied sts:AssumeRoleWithWebIdentity. The repository-side coverage repair grants only contents read and id-token write, uses the pinned Codecov action's supported OIDC exchange, removes the absent static token dependency and keeps every attempted upload fatal. Both ECR workflows already request the correct GitHub OIDC permission and contain no repository-side credential fallback, so the AWS denial is an external trust-policy gate rather than a code path that can honestly be bypassed here."
+assumption = "The repository owner must authorize this repository in Codecov and update AWS role common/gha trust for the exact Sidiora-Labs/LayerX-Protocol repository, event, ref and environment subjects. Human qualification must prove Codecov accepts the GitHub OIDC token and that AWS issues only the intended least-privilege session before any publication. No external configuration change, coverage upload, role assumption or publication result is asserted."
+severity = "external-identity-gate"
+
+[observation.37.1.26]
+task = "37.1"
+file = ".github/workflows/paxeer-integration-test.yml"
+symbol = "ubuntu-large integration runner capacity"
+observed = "The Docker integration workflow's prepare job did not lose a concurrency race: recent runs queued on the ubuntu-large label for exactly twenty-four hours, executed no step and were cancelled by GitHub. The workflow has no shared cancellation group, and its aggregate job correctly fails when preparation is cancelled. Changing that result to success or deleting the aggregate refusal would hide an unexecuted integration suite, so the workflow remains strict and unchanged apart from immutable action pins."
+assumption = "The repository owner must provision an online runner with the exact ubuntu-large label and adequate Docker resources, or explicitly qualify a replacement hosted runner class against the full cluster workload. Human qualification must then execute every integration matrix row at one fixed revision. No runner capacity or integration result is asserted."
+severity = "runner-capacity-gate"

@@ -7,19 +7,33 @@ RUN GOBIN=/usr/bin go install github.com/Paxeer-Network/paxctl@${PAXCTL_VERSION}
 FROM docker.io/golang:1.25.6-bookworm@sha256:2f768d462dbffbb0f0b3a5171009f162945b086f326e0b2a8fd5d29c3219ff14 AS builder
 WORKDIR /go/src/pax-chain
 
-COPY wasm/x/wasm/artifacts/v152/api/*.so /tmp/wasmd-libs/
-COPY wasm/x/wasm/artifacts/v155/api/*.so /tmp/wasmd-libs/
-COPY wasm-runtime/internal/api/*.so /tmp/wasmvm-libs/
 ARG TARGETARCH
-RUN mkdir -p /go/lib && \
+COPY wasm-runtime/libwasmvm-linux.sha256 /tmp/libwasmvm-linux.sha256
+RUN set -eu; \
     case "${TARGETARCH}" in \
       amd64) ARCH_SUFFIX="x86_64" ;; \
       arm64) ARCH_SUFFIX="aarch64" ;; \
       *) echo "Unsupported architecture: ${TARGETARCH}" && exit 1 ;; \
-    esac && \
-    cp /tmp/wasmd-libs/libwasmvm152.${ARCH_SUFFIX}.so /go/lib/ && \
-    cp /tmp/wasmd-libs/libwasmvm155.${ARCH_SUFFIX}.so /go/lib/ && \
-    cp /tmp/wasmvm-libs/libwasmvm.${ARCH_SUFFIX}.so /go/lib/
+    esac; \
+    mkdir -p /go/lib; \
+    for library in \
+      "libwasmvm.${ARCH_SUFFIX}.so" \
+      "libwasmvm152.${ARCH_SUFFIX}.so" \
+      "libwasmvm155.${ARCH_SUFFIX}.so"; do \
+        expected=$(awk -v name="${library}" '$2 == name { print $1 }' /tmp/libwasmvm-linux.sha256); \
+        test -n "${expected}"; \
+        curl --fail --location --proto '=https' --tlsv1.2 --retry 5 \
+          --output "/go/lib/${library}" \
+          "https://node.hyperpaxeer.com/lib/${library}"; \
+        echo "${expected}  /go/lib/${library}" | sha256sum --check --strict; \
+    done; \
+    mkdir -p \
+      wasm-runtime/internal/api \
+      wasm/x/wasm/artifacts/v152/api \
+      wasm/x/wasm/artifacts/v155/api; \
+    cp "/go/lib/libwasmvm.${ARCH_SUFFIX}.so" wasm-runtime/internal/api/; \
+    cp "/go/lib/libwasmvm152.${ARCH_SUFFIX}.so" wasm/x/wasm/artifacts/v152/api/; \
+    cp "/go/lib/libwasmvm155.${ARCH_SUFFIX}.so" wasm/x/wasm/artifacts/v155/api/
 
 COPY go.* ./
 RUN --mount=type=cache,target=/go/pkg/mod \

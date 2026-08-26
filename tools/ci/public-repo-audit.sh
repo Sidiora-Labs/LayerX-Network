@@ -6,7 +6,10 @@ cd "$root"
 
 publication_files=$(mktemp)
 publication_files_nul=$(mktemp)
-trap 'rm -f "$publication_files" "$publication_files_nul"' EXIT HUP INT TERM
+gitlinks=$(mktemp)
+declared_submodules=$(mktemp)
+undeclared_gitlinks=$(mktemp)
+trap 'rm -f "$publication_files" "$publication_files_nul" "$gitlinks" "$declared_submodules" "$undeclared_gitlinks"' EXIT HUP INT TERM
 
 git ls-files --cached --others --exclude-standard > "$publication_files"
 while IFS= read -r publication_file; do
@@ -14,6 +17,55 @@ while IFS= read -r publication_file; do
         printf '%s\0' "$publication_file" >> "$publication_files_nul"
     fi
 done < "$publication_files"
+
+tracked_worktrees=$(git ls-files --cached | awk '/^\.worktrees\// { print }')
+if [ -n "$tracked_worktrees" ]; then
+    echo "local worktree paths must not be tracked:" >&2
+    printf '%s\n' "$tracked_worktrees" >&2
+    exit 1
+fi
+
+git ls-files --stage | awk '$1 == "160000" { sub(/^[^\t]*\t/, ""); print }' | sort -u > "$gitlinks"
+if [ -f .gitmodules ]; then
+    git config -f .gitmodules --get-regexp '^submodule\..*\.path$' 2>/dev/null \
+        | cut -d ' ' -f 2- \
+        | sort -u > "$declared_submodules" || true
+fi
+comm -23 "$gitlinks" "$declared_submodules" > "$undeclared_gitlinks"
+if [ -s "$undeclared_gitlinks" ]; then
+    echo "tracked gitlinks must be declared in .gitmodules:" >&2
+    cat "$undeclared_gitlinks" >&2
+    exit 1
+fi
+
+mutable_action_refs=$(find .github/workflows -type f \( -name '*.yml' -o -name '*.yaml' \) -exec awk '
+    /^[[:space:]]*(-[[:space:]]*)?uses:[[:space:]]*/ {
+        ref = $0
+        sub(/^[[:space:]]*(-[[:space:]]*)?uses:[[:space:]]*/, "", ref)
+        sub(/[[:space:]#].*$/, "", ref)
+        if (ref ~ /^\.\//) {
+            next
+        }
+        if (ref ~ /^docker:\/\//) {
+            digest = ref
+            sub(/^.*@sha256:/, "", digest)
+            if (ref !~ /@sha256:/ || length(digest) != 64 || digest ~ /[^0-9A-Fa-f]/) {
+                print FILENAME ":" FNR ": " ref
+            }
+            next
+        }
+        revision = ref
+        sub(/^.*@/, "", revision)
+        if (index(ref, "@") == 0 || length(revision) != 40 || revision ~ /[^0-9A-Fa-f]/) {
+            print FILENAME ":" FNR ": " ref
+        }
+    }
+' {} +)
+if [ -n "$mutable_action_refs" ]; then
+    echo "external GitHub Actions must use immutable commit pins and Docker actions must use sha256 digests:" >&2
+    printf '%s\n' "$mutable_action_refs" >&2
+    exit 1
+fi
 
 required_files=".editorconfig .gitattributes .gitignore CHANGELOG.md \
 CONTRIBUTING.md LICENSE LICENSE_NOTICE.md README.md SECURITY.md SUPPORT.md \
@@ -36,6 +88,7 @@ done <<'EOF'
 /.codegraph/
 /.logs/
 /cache/
+/.worktrees/
 .env
 *.pem
 *.key

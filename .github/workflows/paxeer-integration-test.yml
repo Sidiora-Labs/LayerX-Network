@@ -46,9 +46,9 @@ jobs:
       GHCR_LOCALNODE: ghcr.io/paxeer-network/pax-chain-integration-test-localnode
       GHCR_RPCNODE: ghcr.io/paxeer-network/pax-chain-integration-test-rpcnode
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - name: Login to Docker Hub
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         if: env.DOCKERHUB_USERNAME != ''
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -56,15 +56,15 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
       - name: Build localnode image (cached)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: paxeer-network/docker/localnode
           file: paxeer-network/docker/localnode/Dockerfile
@@ -79,7 +79,7 @@ jobs:
           cache-from: type=registry,ref=${{ env.GHCR_LOCALNODE }}:cache
           cache-to: ${{ github.event_name == 'push' && format('type=registry,ref={0}:cache,mode=max', env.GHCR_LOCALNODE) || '' }}
       - name: Build rpcnode image (cached)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: paxeer-network/docker/rpcnode
           file: paxeer-network/docker/rpcnode/Dockerfile
@@ -90,7 +90,7 @@ jobs:
           labels: pax-chain.ci-run-id=${{ github.run_id }}
           cache-from: type=registry,ref=${{ env.GHCR_RPCNODE }}:cache
           cache-to: ${{ github.event_name == 'push' && format('type=registry,ref={0}:cache,mode=max', env.GHCR_RPCNODE) || '' }}
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version: '1.25.6'
           cache-dependency-path: paxeer-network/go.sum
@@ -108,7 +108,7 @@ jobs:
       - name: Package CI artifacts
         run: tar -czf integration-build.tar.gz build/paxd
       - name: Upload integration CI artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: paxeer-integration-ci-artifacts
           path: paxeer-network/integration-build.tar.gz
@@ -425,11 +425,11 @@ jobs:
           },
         ]
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-python@7f4fc3e22c37d6ff65e88745f38bd3157c663f7c # v4
         with:
           python-version: '3.10'
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
 
@@ -441,12 +441,12 @@ jobs:
         run: sudo apt-get install -y jq
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version: '1.25.6'
           cache-dependency-path: paxeer-network/go.sum
       - name: Login to Docker Hub
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         if: env.DOCKERHUB_USERNAME != ''
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -454,13 +454,13 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Download integration CI artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: paxeer-integration-ci-artifacts
           path: paxeer-network
@@ -538,7 +538,7 @@ jobs:
 
       - name: Upload logs directory
         if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: paxeer-integration-logs-${{ steps.log_artifact_meta.outputs.artifact_name }}
           path: paxeer-network/artifacts/pax-${{ steps.log_artifact_meta.outputs.artifact_name }}
@@ -546,7 +546,7 @@ jobs:
 
       - name: Upload RPC parity test report
         if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: paxeer-rpc-parity-report-${{ steps.log_artifact_meta.outputs.artifact_name }}
           path: paxeer-network/integration_test/rpc_tests/reports/merged

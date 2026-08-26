@@ -485,7 +485,8 @@ func (i *InfoAPI) CalculateGasUsedRatio(ctx context.Context, blockHeight int64) 
 	if err != nil {
 		return 0, fmt.Errorf("invalid gas limit at height %d: %w", blockHeight, err)
 	}
-	if gasLimit == 0 {
+	gasLimitValue := uint64(gasLimit)
+	if gasLimitValue == 0 {
 		return 0, fmt.Errorf("gas limit is zero at height %d", blockHeight)
 	}
 
@@ -516,10 +517,10 @@ func (i *InfoAPI) CalculateGasUsedRatio(ctx context.Context, blockHeight int64) 
 		totalEVMGasUsed += receipt.GasUsed
 	}
 
-	if totalEVMGasUsed > gasLimit {
-		return 0, fmt.Errorf("gas used %d exceeds block gas limit %d at height %d", totalEVMGasUsed, gasLimit, blockHeight)
+	if totalEVMGasUsed > gasLimitValue {
+		return 0, fmt.Errorf("gas used %d exceeds block gas limit %d at height %d", totalEVMGasUsed, gasLimitValue, blockHeight)
 	}
-	return float64(totalEVMGasUsed) / float64(gasLimit), nil
+	return float64(totalEVMGasUsed) / float64(gasLimitValue), nil
 }
 
 func (i *InfoAPI) latestHeight(ctx context.Context) (int64, error) {
@@ -568,12 +569,14 @@ func (i *InfoAPI) isChainCongested(totalGasUsed uint64) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if gasLimit == 0 {
+	gasLimitValue := uint64(gasLimit)
+	if gasLimitValue == 0 {
 		return false, errors.New("current block gas limit is zero")
 	}
-	if gasLimit > math.MaxUint64/uint64(defaultThresholdPercentage) {
+	thresholdPercentage := uint64(defaultThresholdPercentage)
+	if gasLimitValue > math.MaxUint64/thresholdPercentage {
 		return false, errors.New("current block gas limit is too large to calculate congestion threshold")
 	}
-	threshold := gasLimit * uint64(defaultThresholdPercentage) / 100
+	threshold := gasLimitValue * thresholdPercentage / 100
 	return totalGasUsed > threshold, nil
 }

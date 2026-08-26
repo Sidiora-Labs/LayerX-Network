@@ -7,6 +7,19 @@ block_tests_path=$1
 runner_index=$2
 runner_total=$3
 
+if [ -n "${PAX_CI_TEMP_ROOT:-}" ]; then
+    if [ "${PAX_LOCAL_RESET:-0}" != "1" ]; then
+        echo "PAX_LOCAL_RESET=1 is required for CI blocktests" >&2
+        exit 1
+    fi
+    ci_temp_root=$(realpath -e "$PAX_CI_TEMP_ROOT")
+    pax_home=$(realpath -e "${PAX_HOME:?PAX_HOME is required for CI blocktests}")
+    case "$pax_home" in
+        "$ci_temp_root"/pax-blocktests-*) ;;
+        *) echo "PAX_HOME must resolve to a blocktest directory below PAX_CI_TEMP_ROOT" >&2; exit 1 ;;
+    esac
+fi
+
 if [ -z "$runner_index" ]; then
     runner_index=0
     runner_total=1
@@ -165,7 +178,6 @@ for test_path in $block_tests; do
     echo "Running block test: $test_path"
     echo "test name: ${test_name}_Prague"
     echo -e "\n*********************************************************\n"
-    rm -rf ~/.pax || true
     NO_RUN=1 ./scripts/initialize_local_chain.sh
-    paxd blocktest --block-test $test_path --test-name "${test_name}_Prague"
+    paxd blocktest --home "${PAX_HOME:-$HOME/.pax}" --block-test "$test_path" --test-name "${test_name}_Prague"
 done

@@ -25,7 +25,7 @@ jobs:
       paxeer: ${{ steps.files.outputs.paxeer }}
     steps:
       - id: files
-        uses: actions/github-script@v8
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         with:
           script: |
             const pull_number = context.issue.number;
@@ -48,7 +48,7 @@ jobs:
     name: Backport
     needs: scope
     if: needs.scope.outputs.paxeer == 'true'
-    uses: Paxeer-Network/pax-uci/.github/workflows/backport.yml@v0.0.9
+    uses: Paxeer-Network/pax-uci/.github/workflows/backport.yml@5acbd8eef65336b0619b46de3bfddfe84841a7fb # v0.0.9
     secrets: inherit
     with:
       backport-team: 'Paxeer-Network/pax-core'

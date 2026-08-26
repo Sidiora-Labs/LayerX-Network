@@ -3874,7 +3874,7 @@ status = "pending"
 
 [task.37.1]
 title = "Integrate Paxeer Network and its automation into the LayerX monorepo"
-status = "implemented"
+status = "done"
 wave = 16
 do_1 = "Import the current Paxeer Network source under paxeer-network while excluding ignored build products, dependency caches, runtime data and credentials."
 do_2 = "Move Paxeer GitHub Actions workflows to the repository-level .github/workflows directory, namespace them for Paxeer and make every command, action context and artifact path monorepo-aware."

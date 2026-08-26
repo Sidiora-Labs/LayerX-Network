@@ -25,7 +25,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install Node.js for middleware conformance
-        uses: actions/setup-node@1e60f620b9541d6140a364a9ae8c74a2b0e1afe6
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
         with:
           node-version: 22
           cache: npm
@@ -66,7 +66,7 @@ jobs:
           distribution: temurin
           java-version: "21"
       - name: Install pinned Gradle
-        uses: gradle/actions/setup-gradle@da187c8e6ffbd3802e00f2477aa5a822b25f2dda
+        uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5
         with:
           gradle-version: "8.7"
       - name: Build the Android application and scan the APK for embedded secrets
@@ -107,7 +107,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install Node.js
-        uses: actions/setup-node@1e60f620b9541d6140a364a9ae8c74a2b0e1afe6
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
         with:
           node-version: 22
           cache: npm
@@ -242,7 +242,7 @@ jobs:
       - name: Install pinned Rust toolchain
         run: rustup toolchain install 1.91.1 --profile minimal
       - name: Install Node.js for npm middleware publication
-        uses: actions/setup-node@1e60f620b9541d6140a364a9ae8c74a2b0e1afe6
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
@@ -281,7 +281,7 @@ jobs:
           persist-credentials: false
       - name: Install Node.js for hosted reference applications
         if: ${{ vars.LAYERX_REFERENCE_APPS_ENABLED == 'true' }}
-        uses: actions/setup-node@1e60f620b9541d6140a364a9ae8c74a2b0e1afe6
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
         with:
           node-version: 22
           cache: npm
