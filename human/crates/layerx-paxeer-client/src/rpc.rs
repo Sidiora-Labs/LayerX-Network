@@ -1,4 +1,4 @@
-use std::io::{Read as _, Write as _};
+use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs as _};
 use std::sync::Arc;
 use std::time::Duration;

@@ -370,7 +370,10 @@ impl Registry {
         policy: UpgradePolicy,
         receipt_digest: [u8; 32],
     ) -> Result<(), RegistryError> {
-        if matches!(policy, UpgradePolicy::Authority([0; 32])) {
+        if matches!(
+            policy,
+            UpgradePolicy::Authority(authority) if authority == [0; 32]
+        ) {
             return Err(RegistryError::InvalidUpgradeAuthority);
         }
         if receipt_digest == [0; 32] || new_code_hash != version.code_hash || number == 0 {

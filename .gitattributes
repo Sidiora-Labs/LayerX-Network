@@ -18,3 +18,4 @@ Makefile text eol=lf
 *.lxv binary
 *.vsix binary
 
+programs/vendor/** -text -eol

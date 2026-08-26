@@ -393,6 +393,7 @@ fn parse_request(stream: &mut TcpStream) -> Result<Request, String> {
     if content_length > MAX_REQUEST_BYTES {
         return Err("request body exceeds emulator limit".into());
     }
+    let method = method.to_owned();
     while bytes.len() - header_end < content_length {
         let read = stream.read(&mut chunk).map_err(|error| error.to_string())?;
         if read == 0 {
@@ -407,7 +408,7 @@ fn parse_request(stream: &mut TcpStream) -> Result<Request, String> {
         return Err("request carries bytes beyond its declared body".into());
     }
     Ok(Request {
-        method: method.to_string(),
+        method,
         path,
         content_type,
         body: bytes[header_end..header_end + content_length].to_vec(),

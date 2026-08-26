@@ -174,7 +174,7 @@ fn sha256(parts: &[&str]) -> String {
         digest.update(part.as_bytes());
         digest.update([0]);
     }
-    format!("{digest:x}")
+    format!("{:x}", digest.finalize())
 }
 
 fn valid_identifier(value: &str, max: usize) -> bool {
