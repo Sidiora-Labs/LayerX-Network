@@ -1,13 +1,16 @@
 #![no_std]
-use layerx_program_sdk::{Context,EntryResponse,CallResult,ProgramRefusal,trap_on_panic};
-use layerx_program_sdk::crypto::{self,HashAlgorithm,HashInput,RecoveryId};
+use layerx_program_sdk::{EntryResponse,CallResult,ProgramRefusal,trap_on_panic};
+use layerx_program_sdk::crypto::{HashInput,RecoveryId};
+use layerx_porting_evm_guest as evm;
 trap_on_panic!();
 fn execute(input:&[u8])->Result<EntryResponse<'_>,ProgramRefusal<'static>>{
-    let digest=crypto::hash(HashAlgorithm::Keccak256,HashInput::new(input).unwrap_or_else(|_|panic!("bounded calldata"))).unwrap_or_else(|_|panic!("keccak refusal"));
-    let _digest=digest;
-    let recovery=RecoveryId::new(0).unwrap_or_else(|_|panic!("recovery id"));
-    let _typed_recovery=crypto::secp256k1_recover(&digest,&[0u8;64],recovery);
-    let _sender=Context::invoking_principal().unwrap_or_else(|_|panic!("msg.sender"));let _contract=Context::executing_program().unwrap_or_else(|_|panic!("address(this)"));let _height=Context::batch_height().unwrap_or_else(|_|panic!("block.number"));
-    Ok(EntryResponse::new(CallResult::OK,input))
+    let digest=evm::keccak256(HashInput::new(input).unwrap_or_else(|_|panic!("bounded calldata"))).unwrap_or_else(|_|panic!("keccak refusal"));
+    let recovery=RecoveryId::new(1).unwrap_or_else(|_|panic!("recovery id"));
+    const SIGNATURE:[u8;64]=[0x46,0xc0,0x5b,0x63,0x68,0xa4,0x4b,0x88,0x10,0xd7,0x98,0x59,0x44,0x1d,0x81,0x9b,0x8e,0x7c,0xdc,0x8b,0xfd,0x37,0x1e,0x35,0xc5,0x31,0x96,0xf4,0xbc,0xac,0xdb,0x51,0x35,0xc7,0xfa,0xcc,0xe2,0xa9,0x7b,0x95,0xea,0xcb,0xa8,0xa5,0x86,0xd8,0x7b,0x79,0x58,0xaa,0xf8,0x36,0x8a,0xb2,0x9c,0xee,0x48,0x1f,0x76,0xe8,0x71,0xdb,0xd9,0xcb];
+    let recovered=evm::ecrecover(&[0x17,0x78,0x5b,0x60,0x64,0x2b,0xe7,0x0d,0xf0,0x14,0xc6,0xb3,0x4c,0x0e,0xe4,0x37,0x4a,0x8d,0x75,0x57,0x61,0xec,0xf2,0xdd,0xe5,0x56,0x4f,0x59,0x35,0xb5,0x40,0xa9],&SIGNATURE,recovery).unwrap_or_else(|_|panic!("ecrecover refusal"));
+    let sender=evm::msg_sender().unwrap_or_else(|_|panic!("msg.sender"));let contract=evm::address_this().unwrap_or_else(|_|panic!("address(this)"));let height=evm::block_number().unwrap_or_else(|_|panic!("block.number"));
+    if recovered!=[0x5f,0x6b,0x42,0x44,0x62,0x81,0x86,0xff,0x21,0xc6,0xfa,0xcb,0x9d,0xee,0x41,0x83,0x5d,0xdc,0x1b,0x10]||sender==[0;20]||contract==[0;20]||height==0{panic!("mapped result");}
+    let code=u32::from(digest[0]^recovered[0]^sender[19]^contract[19]^height.to_be_bytes()[7]);
+    Ok(EntryResponse::new(CallResult::new(code).unwrap_or_else(|_|panic!("result code")),input))
 }
 layerx_program_sdk::failure_entrypoint!(execute);

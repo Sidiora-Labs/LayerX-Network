@@ -8,13 +8,19 @@ the deterministic clock slot. Hashes and signature checks must use
 `layerx_program_sdk::crypto`; fixed key and signature types prevent malformed
 syscall shapes from being constructed and refusals remain typed.
 
+ABI v2 does not expose an enumerable authenticated instruction account list.
+Keep declared account authority in explicit capabilities; do not reconstruct
+an Anchor `Accounts` list from guest calldata. This missing canonical producer
+is recorded in `qualification.kvx` rather than represented as an empty list.
+
 The executable reference is `reference-v2/src/lib.rs`. The
-`programs-porting-v2-references` qualification path builds its ABI v2 guest,
-validates it with the real engine and executes its signer/slot/SHA-256 path.
+`programs-porting-v2-references` path builds its locked ABI v2 guest. Runtime
+execution uses the production C transition's authenticated context; the
+remaining qualification gate is recorded rather than replaced by local facts.
 
 This guide is written for someone who knows Anchor and has never written a
 LayerX program. It maps the Solana account vocabulary you already use onto the
-version-one programs ABI, and it is explicit about the constructs that do not
+programs ABI, and it is explicit about the constructs that do not
 carry over, because the kit refuses those by name rather than emulating them.
 
 The worked example is `programs/mint-limit/src/lib.rs` in the published
@@ -259,11 +265,12 @@ behaviour. `FailureMapping::outcome` returns the mapping.
 The ported module checks every host status and traps unless it is zero, so a
 refused write or a refused transfer can never be silently skipped.
 
-## Constructs with no equivalent
+## Context mappings and unavailable constructs
 
 | Solana | Why it cannot carry over |
 | --- | --- |
-| `Clock::get()`, `slot`, `unix_timestamp` | the deterministic runtime has no clock; count instead, as the reference port does |
+| `Clock::get()?.slot` | `AnchorContext::current()?.slot`, backed by authenticated batch height |
+| `unix_timestamp` and other wall-clock fields | unavailable; use explicit protocol facts or a counted quantity |
 | `recent_blockhashes`, `SlotHashes` | there is no chain view inside an execution |
 | `invoke_signed` PDA authority | a program signs for nothing; authority is a capability the caller grants |
 | account reallocation and closure for rent | there is no rent |
@@ -350,7 +357,7 @@ primitive, which stays a caller-supplied boundary.
    refused has to be redesigned, not worked around.
 5. Keep the account, instruction and event discriminators. If you rename a
    struct or a handler, every existing client and indexer breaks.
-6. Replace every clock read with a counted quantity, and say so in your
-   published source.
+6. Map slot reads to authenticated batch height. Replace wall-clock reads with
+   explicit protocol facts or a counted quantity and say so in published source.
 7. Publish the source, the descriptor, the toolchain manifest and the lock, and
    verify the deployment reproduces before you announce it.

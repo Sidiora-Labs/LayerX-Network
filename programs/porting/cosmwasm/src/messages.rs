@@ -24,12 +24,7 @@ use crate::json::{FieldSchema, FieldValue, RecordSchema};
 
 /// `Env` and `MessageInfo` values sourced from authenticated ABI v2 context.
 #[cfg(target_arch="wasm32")]
-pub mod context {
-    use layerx_program_sdk::{Context, Principal, ProgramError, ProgramId};
-    pub struct Env { pub contract:ProgramId, pub block_height:u64 }
-    pub struct MessageInfo { pub sender:Principal }
-    pub fn current()->Result<(Env,MessageInfo),ProgramError>{Ok((Env{contract:Context::executing_program()?,block_height:Context::batch_height()?},MessageInfo{sender:Context::invoking_principal()?}))}
-}
+pub use layerx_porting_cosmwasm_guest as context;
 
 /// The width of every ported message variant tag.
 pub const VARIANT_TAG_BYTES: usize = 8;

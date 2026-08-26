@@ -20,7 +20,8 @@ pub struct Context;
 impl Context {
     fn read<const N: usize>(field: Field) -> Result<[u8; N], ProgramError> {
         let mut output=[0u8;N];
-        crate::host::context_read(field as i32, &mut output)?;
+        let length=crate::host::context_read(field as i32, &mut output)?;
+        if length != i32::try_from(N).map_err(|_|ProgramError::value(crate::Field::Buffer,crate::Reason::TooLarge))? { return Err(ProgramError::value(crate::Field::Buffer,crate::Reason::Malformed)); }
         Ok(output)
     }
     /// Returns `address(this)`. # Errors Refuses unauthenticated context.

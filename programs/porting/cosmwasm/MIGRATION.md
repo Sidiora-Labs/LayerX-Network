@@ -7,13 +7,19 @@
 authenticated batch height. Contracts call `layerx_program_sdk::crypto`
 instead of a native host library, retaining typed refusals and bounded inputs.
 
+ABI v2 has no authenticated attached-funds field, so `MessageInfo.funds` is
+unavailable rather than an empty vector. Monetary input remains an explicit
+402LXP capability/effect. The missing canonical producer is recorded in
+`qualification.kvx`; a contract must not trust funds encoded in its calldata.
+
 `reference-v2/src/lib.rs` is the executable message-info and BLAKE3 reference.
-`make programs-porting-v2-references` builds, validates and executes it through
-the production ABI v2 engine alongside the EVM and Anchor references.
+`make programs-porting-v2-references` builds its locked ABI v2 guest alongside
+the EVM and Anchor references. Production-transition execution remains an
+explicit qualification gate and is not substituted with fabricated context.
 
 This guide is written for someone who knows `cosmwasm_std` and
 `cw-storage-plus` and has never written a LayerX program. It maps the contract
-vocabulary you already use onto the version-one programs ABI, and it is
+vocabulary you already use onto the programs ABI, and it is
 explicit about the constructs that do not carry over, because the kit refuses
 those by name rather than emulating them.
 
@@ -312,11 +318,12 @@ difference from a status code: a host function returning a nonzero status is
 *not* an error the program may ignore, and `Code::trap_unless_ok` is what the
 emitter writes for every `?` in the original handler.
 
-## Constructs with no equivalent
+## Context mappings and unavailable constructs
 
 | CosmWasm | Why it cannot carry over |
 | --- | --- |
-| `env.block.height`, `env.block.time` | the deterministic runtime has no clock; count instead, as the reference port does |
+| `env.block.height` | `messages::context::current()?.0.block_height`, backed by authenticated batch height |
+| `env.block.time` | unavailable; use explicit protocol facts or a counted quantity |
 | `env.contract.address` | the program identifier travels in the effect envelope already |
 | `deps.api.addr_validate`, `addr_humanize` | an address is a 32-byte identifier the runtime authenticates; there is no bech32 to validate |
 | `deps.querier` bank, smart and staking queries | there is no chain view inside an execution |

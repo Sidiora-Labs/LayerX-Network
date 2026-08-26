@@ -11,7 +11,9 @@ name = "programs_porting_evm"
 [dependencies]
 layerx-programs-registry = { path = "../../crates/layerx-programs-registry" }
 layerx-programs-runtime = { path = "../../crates/layerx-programs-runtime" }
-layerx-program-sdk = { path = "../../sdk/rust" }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+layerx-porting-evm-guest = { path = "guest" }
 
 [lints]
 workspace = true

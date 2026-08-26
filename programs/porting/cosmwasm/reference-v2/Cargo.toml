@@ -8,6 +8,7 @@ publish=false
 crate-type=["cdylib"]
 [dependencies]
 layerx-program-sdk={path="../../../sdk/rust"}
+layerx-porting-cosmwasm-guest={path="../guest"}
 [profile.release]
 opt-level="z"
 lto=true

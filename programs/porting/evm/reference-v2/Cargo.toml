@@ -8,8 +8,7 @@ publish=false
 crate-type=["cdylib"]
 [dependencies]
 layerx-program-sdk={path="../../../sdk/rust"}
-[dev-dependencies]
-layerx-programs-runtime={path="../../../crates/layerx-programs-runtime"}
+layerx-porting-evm-guest={path="../guest"}
 [profile.release]
 opt-level="z"
 lto=true

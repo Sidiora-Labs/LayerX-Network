@@ -5,8 +5,11 @@ members = [
     "crates/layerx-programs-runtime",
     "fuzz",
     "porting/cosmwasm",
+    "porting/cosmwasm/guest",
     "porting/evm",
+    "porting/evm/guest",
     "porting/solana",
+    "porting/solana/guest",
     "sdk/rust",
     "sdk/rust/lint",
 ]

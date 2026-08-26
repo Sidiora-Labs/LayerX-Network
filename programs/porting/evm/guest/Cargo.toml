@@ -1,0 +1,11 @@
+[package]
+name="layerx-porting-evm-guest"
+version.workspace=true
+edition.workspace=true
+rust-version.workspace=true
+license.workspace=true
+publish=false
+[dependencies]
+layerx-program-sdk={path="../../../sdk/rust"}
+[lints]
+workspace=true

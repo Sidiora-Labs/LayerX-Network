@@ -1,24 +1,26 @@
 # Porting a Solidity contract to LayerX programs
 
 This guide is written for someone who knows Solidity and has never written a
-LayerX program. It maps the EVM vocabulary you already use onto the version-one
-programs ABI, and it is explicit about the constructs that do not carry over,
+LayerX program. It maps the EVM vocabulary you already use onto the programs
+ABI, and it is explicit about the constructs that do not carry over,
 because the kit refuses those by name rather than emulating them.
 
 ## ABI v2 context and precompiles
 
-New ports target ABI v2. `semantics::context` maps `msg.sender` to the invoking
-principal, `address(this)` to the executing program, and `block.number` to the
+New ports target ABI v2. `semantics::context` maps `msg.sender` to the immediate
+calling program in a nested frame and to the invoking principal at the root,
+`address(this)` to the executing program, and `block.number` to the
 authenticated batch height. Its `keccak256` and `ecrecover` functions call the
 guest-reachable hash and secp256k1-recovery imports; the host-side Keccak code
 in this kit remains only for migration planning over exported state and never
 stands in for a digest computed by a running contract. Inputs use bounded or
 fixed-width SDK types, and every runtime refusal remains a `ProgramError`.
 
-`reference-v2/src/lib.rs` is the real contract path exercising all five
-mappings. `make programs-porting-v2-references` builds it as an ABI v2 guest,
-validates it with the production engine, executes it with authenticated
-context, and checks its receipt and response.
+`reference-v2/src/lib.rs` is the real guest source path requiring all five
+mappings. `make programs-porting-v2-references` builds its locked ABI v2 guest.
+Execution and receipt qualification require the production C transition that
+supplies authenticated context; that gate is recorded in `qualification.kvx`
+and is not represented by a fabricated local context.
 
 The worked example is `contracts/PublicLock.sol` in the published archive: a
 paid-membership lock in the shape Unlock Protocol uses. Its complete port lives
@@ -110,7 +112,7 @@ anywhere, which is exactly why the mapping key was redundant.
 
 ## Events
 
-The version-one event shape is one topic plus a data payload:
+The inherited event shape is one topic plus a data payload:
 
 ```text
 event_emit(topic_pointer, topic_length, data_pointer, data_length)
@@ -134,8 +136,8 @@ envelope, so `EventAbi::envelope_derived(TRANSFER_EVENT, 2)` declares them and
 the payload carries only `tokenId`. For an event with nothing derivable, use
 `EventAbi::new`, which carries every argument in declaration order.
 
-Solidity's *additional* indexed topics have no version-one equivalent: version
-one has one topic. Indexed arguments become payload words in declaration order.
+Solidity's *additional* indexed topics have no programs equivalent: the ABI has
+one topic. Indexed arguments become payload words in declaration order.
 An indexer filtering on `topic0` is unaffected; an indexer filtering on an
 indexed argument reads it out of the payload instead.
 
@@ -229,22 +231,23 @@ Gas is deterministic fuel. There is no `gasleft()`, no gas stipend, and no
 reentrancy window created by a 2300-gas transfer, because a transfer is a typed
 request applied after your code returns rather than a call into the recipient.
 
-## Constructs with no equivalent
+## Context mappings and unavailable constructs
 
 | Solidity | Why it cannot carry over |
 | --- | --- |
-| `block.timestamp`, `block.number`, `blockhash` | the deterministic runtime has no clock and no chain view; use counted periods, as the reference port does |
-| `tx.origin` | there is one authenticated principal, and it is `msg.sender` |
+| `block.number` | `context::block_number`, backed by authenticated batch height |
+| `block.timestamp`, `blockhash` | no wall clock or ambient chain view; use explicit protocol facts or counted periods |
+| `tx.origin` | the authenticated invoking principal; unlike `msg.sender`, it does not change at nested program frames |
 | `address(this).balance` | a program has no account |
 | `delegatecall` | there is no shared storage frame; every call runs in the callee's own namespace |
 | `create`/`create2` | programs are deployed through the lifecycle, not from inside an execution |
-| `ecrecover` | signature verification is protocol authority, not program logic |
+| `ecrecover` | `context::ecrecover`, backed by typed secp256k1 recovery and guest-reachable Keccak-256 |
 | floating point, randomness, `block.prevrandao` | refused at validation as non-deterministic |
 
-`keccak256` inside a contract is not forbidden, but the reference port shows the
-better answer: every hash a port needs - slot addresses, topics, selectors - is
-constant, so the kit computes them at port time and the emitted module carries
-them as data. No hash function runs at execution time at all.
+`keccak256` inside an ABI-v2 contract calls the guest-reachable primitive. The
+historical PublicLock port can still precompute its constant slot addresses,
+topics and selectors at migration time; dynamic contract input must never be
+hashed by host-side port tooling.
 
 ## The reference port, line by line
 
