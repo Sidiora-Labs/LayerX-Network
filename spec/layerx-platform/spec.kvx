@@ -2524,7 +2524,7 @@ reqs = ["32.2","32.8"]
 
 [task.22.4]
 title = "Serve the interoperability adapters through an executable gateway"
-status = "implemented"
+status = "done"
 wave = 11
 requires = ["17.4","22.3","23.1","23.2","23.3","24.2"]
 work_kind = "implementation"

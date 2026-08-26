@@ -38,6 +38,7 @@ pub const VISA_TAP_SPEC_SHA256: [u8; 32] = [
     0x5f, 0x5f, 0xba, 0xef, 0x32, 0xd5, 0x75, 0xd1, 0xf8, 0x3a, 0x0a, 0x2c, 0x80, 0x51, 0x33, 0x8c,
     0x37, 0xf7, 0x22, 0x4c, 0xd6, 0xaf, 0xd4, 0x64, 0xd6, 0x38, 0xb8, 0xf2, 0x86, 0x3c, 0xad, 0xa5,
 ];
+const VISA_TAP_SPEC_DOCUMENT: &[u8] = include_bytes!("../../../specs/vendor/visa-tap/README.md");
 
 /// Trusted Agent Protocol interaction asserted by the message signature tag.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -851,6 +852,8 @@ pub fn visa_tap_adapter_descriptor(
     spec: PinnedSpec,
     conformance: ConformanceSuite,
 ) -> Result<AdapterDescriptor, TapError> {
+    spec.verify_document(VISA_TAP_SPEC_DOCUMENT)
+        .map_err(|error| TapError::Gateway(error.into()))?;
     Ok(AdapterDescriptor::new(adapter_id()?, spec, conformance))
 }
 

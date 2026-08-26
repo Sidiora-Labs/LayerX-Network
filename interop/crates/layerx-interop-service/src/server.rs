@@ -24,7 +24,8 @@ use layerx_platform_gateway::store::{
 };
 use layerx_platform_gateway::{
     authenticate_gateway_key, gateway_audit_event, gateway_digest, verify_activity_operation,
-    verify_submission, AccessError, AuthorityFacts, ModuleRegistry,
+    verify_submission, AccessError, AuthorityFacts, ModuleRegistry, VerifiedSubmission,
+    VerifiedTransfer,
 };
 use layerx_proof::receipt::{verify, AuthorizedBatch};
 use layerx_ucp::{
@@ -42,7 +43,7 @@ use layerx_x402::facilitator::{
     FacilitatorPaymentRequest, FacilitatorPlane, FacilitatorRequest, FacilitatorSettlementOutcome,
     PlaneVerifyOutcome, SettlementStep,
 };
-use layerx_x402::model::X402Error;
+use layerx_x402::model::{PaymentRequirements, X402Error};
 use layerx_x402::seller::ExecutedPayment as X402ExecutedPayment;
 use layerx_x402::transport::encode_payment_required;
 use layerx_x402::transport::{decode_facilitator_request, TransportKind, TransportValue};
@@ -107,7 +108,19 @@ fn authenticated(
                     .unwrap_u8()
                     == 1 =>
             {
-                stored_response(&stored.state, &stored.response, &trace, operation)
+                if stored.state == "pending" && !stored.continuation.is_empty() {
+                    match resumed_request(&stored.continuation, authorization) {
+                        Ok(resumed) => match interop_gateway_routes(&resumed.method, &resumed.path) {
+                            Ok(resumed_route) if !matches!(resumed_route, InteropRoute::Resume { .. }) => {
+                                authenticated(config, &resumed, resumed_route)
+                            }
+                            _ => failure(503, "continuation_invalid", Some(5)),
+                        },
+                        Err(()) => failure(503, "continuation_invalid", Some(5)),
+                    }
+                } else {
+                    stored_response(&stored.state, &stored.response, &trace, operation)
+                }
             }
             Ok(Some(_)) | Ok(None) => failure(404, "operation_not_found", None),
             Err(_) => failure(503, "persistence_unavailable", Some(5)),
@@ -150,6 +163,10 @@ fn authenticated(
         "attempted",
         observed_at,
     );
+    let continuation = match continuation(request) {
+        Ok(value) => value,
+        Err(()) => return failure(400, "request_too_large", None),
+    };
     match config.store.reserve(
         &record,
         &scope,
@@ -159,6 +176,7 @@ fn authenticated(
         &request_digest,
         &record.principal_digest,
         &audit,
+        &continuation,
     ) {
         Ok(Reservation::Revoked) => return failure(401, "api_key_required", None),
         Ok(Reservation::RateLimited {
@@ -199,9 +217,6 @@ fn authenticated(
         Err(_) => return failure(503, "persistence_unavailable", Some(5)),
     };
     let dispatched = dispatch(config, request, route, &record, &principal, &trace, &scope);
-    if dispatched.durable_state == "pending" || dispatched.status == 503 {
-        return dispatched.response(&trace, &scope);
-    }
     let body = dispatched.body(&trace, &scope);
     let completion_audit = gateway_audit_event(
         &record.principal_digest,
@@ -242,6 +257,49 @@ struct Dispatch {
     activity_id: Option<String>,
 }
 
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct DurableContinuation {
+    method: String,
+    path: String,
+    content_type: String,
+    idempotency_key: Option<String>,
+    body: String,
+}
+
+fn continuation(request: &IncomingRequest) -> Result<String, ()> {
+    serde_json::to_string(&DurableContinuation {
+        method: request.method.clone(),
+        path: request.path.clone(),
+        content_type: request.headers.get("content-type").cloned().unwrap_or_default(),
+        idempotency_key: request.headers.get("idempotency-key").cloned(),
+        body: hex(&request.body),
+    })
+    .map_err(|_| ())
+}
+
+fn resumed_request(encoded: &str, authorization: &str) -> Result<IncomingRequest, ()> {
+    let continuation: DurableContinuation = serde_json::from_str(encoded).map_err(|_| ())?;
+    if !matches!(continuation.method.as_str(), "GET" | "POST")
+        || !continuation.path.starts_with("/v1/")
+        || continuation.path.starts_with("/v1/operations/")
+    {
+        return Err(());
+    }
+    let mut headers = BTreeMap::new();
+    headers.insert("authorization".to_owned(), authorization.to_owned());
+    headers.insert("content-type".to_owned(), continuation.content_type);
+    if let Some(idempotency) = continuation.idempotency_key {
+        headers.insert("idempotency-key".to_owned(), idempotency);
+    }
+    Ok(IncomingRequest {
+        method: continuation.method,
+        path: continuation.path,
+        headers,
+        body: decode_hex(&continuation.body, MAX_BODY).map_err(|_| ())?,
+    })
+}
+
 impl Dispatch {
     fn result(status: u16, state: &'static str, result: Value) -> Self {
         Self {
@@ -273,13 +331,6 @@ impl Dispatch {
         value.to_string().into_bytes()
     }
 
-    fn response(&self, trace: &TraceId, operation: &str) -> OutgoingResponse {
-        OutgoingResponse {
-            status: self.status,
-            body: self.body(trace, operation),
-            retry_after: None,
-        }
-    }
 }
 
 fn dispatch(
@@ -459,6 +510,62 @@ struct X402VerifyPlane<'a> {
     protocol_version: u16,
     protocol_network_id: u32,
     expected_signer: [u8; 32],
+    observed_at: u64,
+}
+
+fn verified_x402_transfer(
+    request: &FacilitatorPaymentRequest,
+    modules: &ModuleRegistry,
+    protocol_version: u16,
+    protocol_network_id: u32,
+    expected_signer: &[u8; 32],
+    observed_at: u64,
+) -> Result<(VerifiedSubmission, VerifiedTransfer), &'static str> {
+    let activity = request
+        .payment_payload
+        .payload
+        .get("layerxActivity")
+        .and_then(Value::as_str)
+        .and_then(|value| decode_hex(value, MAX_BODY).ok())
+        .filter(|value| !value.is_empty())
+        .ok_or("typed_intent_required")?;
+    let declared_idempotency = request
+        .payment_payload
+        .payload
+        .get("layerxIdempotencyKey")
+        .and_then(Value::as_str)
+        .and_then(|value| parse_hex32(value).ok())
+        .ok_or("protocol_idempotency_required")?;
+    let submission = verify_submission(
+        &activity,
+        modules,
+        protocol_version,
+        protocol_network_id,
+        expected_signer,
+    )
+    .map_err(|_| "activity_authorization_refused")?;
+    if submission.idempotency_key() != declared_idempotency {
+        return Err("protocol_idempotency_mismatch");
+    }
+    let transfer = submission.transfer().ok_or("typed_transfer_required")?;
+    let (asset, recipient) = x402_facts(&request.payment_requirements)?;
+    if transfer.asset() != asset
+        || transfer.recipient() != recipient
+        || transfer.amount() != request.payment_requirements.amount.value()
+    {
+        return Err("payment_requirements_mismatch");
+    }
+    if observed_at < transfer.not_before()
+        || observed_at > transfer.not_after()
+        || observed_at > transfer.expires_at()
+    {
+        return Err("activity_time_window_refused");
+    }
+    Ok((submission, transfer))
+}
+
+fn x402_facts(requirements: &PaymentRequirements) -> Result<([u8; 32], [u8; 32]), &'static str> {
+    requirements.layerx_facts().map_err(|_| "unsupported_offer")
 }
 
 impl FacilitatorPlane for X402VerifyPlane<'_> {
@@ -467,38 +574,20 @@ impl FacilitatorPlane for X402VerifyPlane<'_> {
         request: &FacilitatorPaymentRequest,
         _trace: &TraceId,
     ) -> Result<PlaneVerifyOutcome, X402Error> {
-        if request.payment_requirements.layerx_facts().is_err() {
-            return Ok(PlaneVerifyOutcome::Invalid {
-                reason: "unsupported_offer",
-                payer: None,
-            });
-        }
-        let activity = request
-            .payment_payload
-            .payload
-            .get("layerxActivity")
-            .and_then(Value::as_str)
-            .and_then(|value| decode_hex(value, MAX_BODY).ok())
-            .filter(|value| !value.is_empty());
-        let Some(activity) = activity else {
-            return Ok(PlaneVerifyOutcome::Invalid {
-                reason: "typed_intent_required",
-                payer: None,
-            });
-        };
-        match verify_submission(
-            &activity,
+        match verified_x402_transfer(
+            request,
             self.modules,
             self.protocol_version,
             self.protocol_network_id,
             &self.expected_signer,
+            self.observed_at,
         ) {
-            Ok(submission) => Ok(PlaneVerifyOutcome::Valid {
-                payer: Some(hex(&self.expected_signer)),
+            Ok((submission, transfer)) => Ok(PlaneVerifyOutcome::Valid {
+                payer: Some(hex(&transfer.payer())),
                 extra: Some(json!({ "layerxActivityId": hex(&submission.activity_id()) })),
             }),
-            Err(_) => Ok(PlaneVerifyOutcome::Invalid {
-                reason: "activity_authorization_refused",
+            Err(reason) => Ok(PlaneVerifyOutcome::Invalid {
+                reason,
                 payer: None,
             }),
         }
@@ -546,6 +635,7 @@ fn x402_verify(
         protocol_version: config.protocol_version,
         protocol_network_id: config.protocol_network_id,
         expected_signer,
+        observed_at: server_now,
     };
     match facilitator.verify(&mut gateway, principal, &parsed, &mut plane, trace, server_now) {
         Ok(response) => Dispatch::result(200, "completed", json!(response)),
@@ -567,6 +657,7 @@ struct X402SettlePlane<'a> {
     receipt_hex: Option<String>,
     activity_id: Option<String>,
     unavailable: bool,
+    observed_at: u64,
 }
 
 impl FacilitatorPlane for X402SettlePlane<'_> {
@@ -596,14 +687,34 @@ impl FacilitatorPlane for X402SettlePlane<'_> {
                 payer: None,
             });
         };
-        let idempotency = hex(&request.idempotency_key);
+        let expected_signer = match parse_hex32(self.expected_signer) {
+            Ok(value) => value,
+            Err(_) => return Err(X402Error::PaymentRefused),
+        };
+        let (submission, _) = match verified_x402_transfer(
+            &request,
+            &self.config.modules,
+            self.config.protocol_version,
+            self.config.protocol_network_id,
+            &expected_signer,
+            self.observed_at,
+        ) {
+            Ok(value) => value,
+            Err(reason) => {
+                return Ok(FacilitatorSettlementOutcome::Refused {
+                    reason,
+                    payer: None,
+                })
+            }
+        };
+        let idempotency = hex(&submission.idempotency_key());
         let execution = Execution {
             config: self.config,
             authorization: self.authorization,
             activity,
             idempotency: &idempotency,
             expected_signer: self.expected_signer,
-            submitted_activity_id: None,
+            submitted_activity_id: Some(submission.activity_id()),
             trace: self.trace,
         };
         match execution.submit() {
@@ -675,6 +786,7 @@ fn x402_settle(
         receipt_hex: None,
         activity_id: None,
         unavailable: false,
+        observed_at: server_now,
     };
     let settled = facilitator.settle(
         &mut gateway,
@@ -2030,45 +2142,11 @@ fn direct_body<T: DeserializeOwned>(request: &IncomingRequest) -> Result<T, ()> 
     serde_json::from_slice(&request.body).map_err(|_| ())
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct McpEnvelope<T> {
-    jsonrpc: String,
-    method: String,
-    params: T,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct A2aEnvelope<T> {
-    task_id: String,
-    context_id: String,
-    input: T,
-}
-
 fn typed_body<T: DeserializeOwned>(
     request: &IncomingRequest,
-    transport: IngressTransport,
+    _transport: IngressTransport,
 ) -> Result<T, ()> {
-    match transport {
-        IngressTransport::Http => direct_body(request),
-        IngressTransport::Mcp => {
-            let envelope: McpEnvelope<T> = direct_body(request)?;
-            if envelope.jsonrpc != "2.0" || !envelope.method.starts_with("layerx.x402.") {
-                return Err(());
-            }
-            Ok(envelope.params)
-        }
-        IngressTransport::A2a => {
-            let envelope: A2aEnvelope<T> = direct_body(request)?;
-            if !valid_identifier(&envelope.task_id, 128)
-                || !valid_identifier(&envelope.context_id, 128)
-            {
-                return Err(());
-            }
-            Ok(envelope.input)
-        }
-    }
+    direct_body(request)
 }
 
 fn transport_kind(transport: IngressTransport) -> TransportKind {
@@ -2114,12 +2192,34 @@ fn metadata(config: &Config) -> OutgoingResponse {
     );
     let adapters: Vec<_> = config.manifest.adapters.values().map(|registered| {
         let descriptor = &registered.descriptor;
+        let configured = match descriptor.id().as_str() {
+            "x402" => !config.manifest.x402_supported.kinds.is_empty(),
+            "ap2" => !config.manifest.ap2_keys.is_empty() && !config.manifest.ap2_assets.is_empty(),
+            "ucp" => true,
+            "visa-tap" => !config.manifest.visa_agents.is_empty() && !config.manifest.visa_targets.is_empty(),
+            "fiat" => !config.manifest.fiat_providers.is_empty(),
+            _ => false,
+        };
+        let verification_boundary = match descriptor.id().as_str() {
+            "x402" => "signed-402lxp-transfer-requirements-pre-settlement",
+            "ap2" => "verified-mandate-and-layerx-receipt",
+            "ucp" => "negotiated-checkout-and-layerx-receipt",
+            "visa-tap" => "trusted-agent-credential-and-layerx-receipt-on-execution",
+            "fiat" => "verified-provider-settlement-and-layerx-receipt",
+            _ => "unavailable",
+        };
         json!({
             "id": descriptor.id().as_str(), "specification": descriptor.spec().protocol().as_str(),
             "version": descriptor.spec().version().as_str(), "specification_sha256": hex(&descriptor.spec().document_digest()),
             "conformance_suite": descriptor.conformance().suite().as_str(), "conformance_vectors": descriptor.conformance().vector_count(),
             "conformance_sha256": hex(&descriptor.conformance().suite_digest()), "evidence_policy": registered.evidence.label(),
-            "readiness": { "ingress": readiness(durable), "settlement": readiness(hosted), "receipt_verification": readiness(authority) }
+            "verification_boundary": verification_boundary,
+            "readiness": {
+                "configuration": readiness(configured),
+                "ingress": readiness(durable && configured),
+                "settlement": readiness(hosted && configured),
+                "receipt_verification": readiness(authority && configured)
+            }
         })
     }).collect();
     let transports: Vec<_> = config.manifest.transports.values().map(|pin| json!({
@@ -2152,34 +2252,18 @@ fn dependency_ready(
 }
 
 fn hosted_ready(config: &Config) -> bool {
-    let Ok(response) = config.client.request(
-        &config.hosted_gateway,
-        "GET",
-        "/v1/status",
-        "readiness",
-        None,
-        "application/json",
-        &[],
-    ) else {
-        return false;
-    };
-    let Ok(status) = serde_json::from_slice::<Value>(&response.body) else {
-        return false;
-    };
-    response.status == 200
-        && response.content_type == "application/json"
-        && status
-            .pointer("/services/hosted_gateway")
-            .and_then(Value::as_str)
-            != Some("unavailable")
-        && status
-            .pointer("/services/testnet_core")
-            .and_then(Value::as_str)
-            == Some("available")
-        && status
-            .pointer("/services/receipt_authority")
-            .and_then(Value::as_str)
-            == Some("available")
+    config
+        .client
+        .request(
+            &config.hosted_gateway,
+            "GET",
+            "/readyz",
+            "readiness",
+            None,
+            "application/json",
+            &[],
+        )
+        .is_ok_and(|response| response.status == 200 && response.content_type == "application/json")
 }
 
 const fn readiness(value: bool) -> &'static str {
@@ -2198,7 +2282,7 @@ fn stored_response(
 ) -> OutgoingResponse {
     match decode_hex(stored, MAX_BODY) {
         Ok(body) if !body.is_empty() => OutgoingResponse {
-            status: 200,
+            status: if state == "pending" { 202 } else { 200 },
             body,
             retry_after: None,
         },
@@ -2532,6 +2616,7 @@ mod tests {
             protocol_version: 1,
             protocol_network_id: 1,
             expected_signer: [0x21; 32],
+            observed_at: 10,
         };
         let mut gateway = x402_fixture_gateway(&trace);
         let unsigned = facilitator

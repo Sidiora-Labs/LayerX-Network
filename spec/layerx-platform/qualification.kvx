@@ -822,6 +822,14 @@ observed = "Durable operation resumption requires binding every idempotency reco
 assumption = "Deployment qualification will drain or explicitly migrate pre-field pending Redis records and regenerate/review interop/Cargo.lock using the pinned dependency graph before building. It must exercise restart, replay and cross-principal resume against Redis AOF persistence."
 severity = "phase-boundary"
 
+[observation.22.4.4]
+task = "22.4"
+file = "interop/crates/layerx-x402/src/lib.rs, interop/crates/layerx-interop-service/src/server.rs, platform/hosted/gateway/src/lib.rs, platform/hosted/gateway/src/store.rs"
+symbol = "PinnedSpec::verify_document, verified_x402_transfer, VerifiedTransfer, DurableContinuation"
+observed = "Adapter registration embeds each vendored upstream document and refuses a digest mismatch before serving. x402 verification now accepts only a canonical signed Asset SEND or RECEIVE activity from the authenticated signer whose disclosed 402LXP asset, recipient, amount and protocol idempotency key exactly match the payment requirements; settlement submits under that activity idempotency key, binds the returned receipt to the submitted activity and independently matches the receipt transfer facts. Pending operations persist the original bounded request as Redis bulk-safe chunks and redispatch it under a current credential and the same principal-scoped idempotency identity after restart."
+assumption = "Human qualification must alter each embedded vendor document, substitute signer, asset, recipient, amount, activity and idempotency fields, exercise MCP and A2A x402 values without private envelopes, and replay pending GET and POST operations across Redis AOF restart, credential rotation, conflicting retries and cross-principal access. No build, test, format or runtime result is asserted by this implementation task."
+severity = "qualification-required"
+
 [observation.17.6.1]
 task = "17.6"
 file = "platform/hosted/gateway/src/main.rs, platform/integrations/agents/src/integration.ts, platform/cli/src/toolset.rs"

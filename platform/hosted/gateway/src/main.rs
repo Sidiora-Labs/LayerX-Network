@@ -901,6 +901,7 @@ fn activity(
         &submitted_activity_id,
         &record.principal_digest,
         &audit,
+        "",
     ) {
         Ok(value) => value,
         Err(_) => return response(503, "persistence_unavailable", Some(5)),

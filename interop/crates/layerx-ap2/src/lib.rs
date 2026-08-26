@@ -31,6 +31,7 @@ pub const AP2_SPEC_SHA256: [u8; 32] = [
     0x32, 0xc3, 0xbe, 0x50, 0x11, 0xf4, 0x81, 0xd2, 0x76, 0x0e, 0x56, 0xe7, 0xb9, 0x93, 0x5b, 0x08,
     0x42, 0xc3, 0xda, 0x0d, 0x5f, 0x7d, 0x7b, 0x8a, 0x68, 0x40, 0x2a, 0x59, 0x9f, 0x1e, 0x6a, 0xa3,
 ];
+const AP2_SPEC_DOCUMENT: &[u8] = include_bytes!("../../../specs/vendor/ap2/specification.md");
 
 /// Builds the gateway descriptor for AP2 mandate schema version 1 and a real,
 /// caller-supplied conformance suite. No synthetic vector digest is embedded.
@@ -45,6 +46,8 @@ pub fn ap2_adapter_descriptor(
     let protocol = AdapterId::new("ap2").map_err(|error| Ap2Error::Gateway(error.into()))?;
     let version = SpecVersion::parse("1.0.0").map_err(|error| Ap2Error::Gateway(error.into()))?;
     let spec = PinnedSpec::new(protocol, version, AP2_SPEC_SHA256)
+        .map_err(|error| Ap2Error::Gateway(error.into()))?;
+    spec.verify_document(AP2_SPEC_DOCUMENT)
         .map_err(|error| Ap2Error::Gateway(error.into()))?;
     Ok(AdapterDescriptor::new(id, spec, conformance))
 }

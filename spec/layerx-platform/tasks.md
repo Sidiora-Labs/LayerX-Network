@@ -280,7 +280,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Implement rebinding under step-up, keeping the old binding effective until the new receipt verifies, with the security notification.
     - Enforce the single-active-binding invariant, record every binding with its receipts in the audit trail, and test binding and rebinding end to end against a real core.
     - _Requirements: 5.1, 5.4, 5.6, 5.8_
-  - [ ] 5.8 Replace the mounted root secret with a production KMS boundary — **Implemented - qualification pending**
+  - [ ] 5.8 Replace the mounted root secret with a production KMS boundary
     - Refactor custody around a public provider boundary whose production implementation creates, describes, rotates and destroys human and managed-agent keys in a remote KMS or HSM without exporting private key material.
     - Move disclosure-bound signing into that provider so the service submits the exact canonical digest and receives only a signature; no production path may unseal a primary key into application memory.
     - Bind provider key references to principal-scoped records and preserve step-up, audit, rate-limit and typed-refusal semantics across provider failures.
@@ -522,7 +522,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Enforce required contrast across the package's text and semantic token combinations through automated checks.
     - Wire automated accessibility checks into the browser suites, including 1.5x text-expansion layout checks and locale-aware amount rendering with explicit currency codes.
     - _Requirements: 20.1, 20.2, 20.6, 17.3_
-  - [ ] 11.5 Build the performance machinery — **Implemented - qualification pending**
+  - [ ] 11.5 Build the performance machinery
     - Code-split by route with declared per-route script budgets enforced in CI.
     - Render the explorer plane server-side cacheable.
     - Enforce the paint, interaction and layout-shift budgets in CI on representative pages.
@@ -554,7 +554,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Build the guided emergency exit under Settings with typed confirmation and degraded-mode operability.
     - Run deposit and withdrawal end to end in both shells against the test network.
     - _Requirements: 10.3, 11.2, 18.7_
-  - [ ] 12.4 Build the agent surfaces — **Implemented - qualification pending**
+  - [ ] 12.4 Build the agent surfaces
     - Build agent creation - name, purpose, limit - with the honest creation-journey progress, in both shells.
     - Build the agent list and detail: the desktop master-detail and the mobile stacked screens, with spend-versus-limit from receipts.
     - Build the controls with the confirmation grammar: fund, return, change limit, pause reversible, archive destructive with disposition-first and typed confirmation.
@@ -577,7 +577,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - _Requirements: 14.3, 14.4, 18.9_
 
 - [ ] 13. Build settings, security, support and the explorer plane
-  - [ ] 13.1 Build settings and preferences — **Implemented - qualification pending**
+  - [ ] 13.1 Build settings and preferences
     - Build the settings hub sectioned as profile, security, linked wallet, notifications, advanced and help, with current values on rows.
     - Build notification preferences: per-event classes under channel toggles, the notification detail level, and the non-suppressible security classes presented as such.
     - Build privacy mode masking balances and every derived figure across both shells, persisted per user.
@@ -612,7 +612,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Link the app's Technical details surfaces to these pages.
     - Run the explorer against a real core end to end including the verifier with altered evidence.
     - _Requirements: 15.1, 15.6, 15.7_
-  - [ ] 13.6 Serve human-api through a production service boundary — **Implemented - qualification pending**
+  - [ ] 13.6 Serve human-api through a production service boundary
     - Build the layerx-human-service executable and versioned HTTPS+JSON router for every human-api v1 operation and resumable event stream, decoding and encoding only schema-owned types.
     - Bind handlers to the real custody, journey, approval, activity, notification and explorer services and to the agent boundary; do not introduce an in-memory, fake or second protocol-write path.
     - Add the missing receipt-verified account-balance and home-summary read contract with freshness and verification level, regenerate the TypeScript client, and bind the home surface to it.
@@ -697,7 +697,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Enforce integer-only money, idempotency keys and secret hygiene per the SDK conformance rules.
     - Run the golden vectors and the conformance suite against the live schema in CI.
     - _Requirements: 24.1, 24.3, 24.4_
-  - [ ] 15.4 Build the JVM SDK for Java and Kotlin — **Implemented - qualification pending**
+  - [ ] 15.4 Build the JVM SDK for Java and Kotlin
     - Generate the JVM SDK from the same schemas with a Java-first API and Kotlin-friendly overloads, published as one Maven artifact.
     - Implement the local receipt and proof verification path.
     - Implement streaming with resumable cursors on virtual-thread-friendly primitives.
@@ -727,7 +727,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Ship a runnable example for each role, exercised in CI against a real service.
     - Publish both to the package registries through the release pipeline.
     - _Requirements: 25.1, 25.3, 25.4, 25.5_
-  - [ ] 16.2 Build the merchant and agent middleware — **Implemented - qualification pending**
+  - [ ] 16.2 Build the merchant and agent middleware
     - Build merchant middleware: catalog and checkout hooks, order-to-payment mapping, settlement webhooks and receipt-backed order state.
     - Build agent middleware: budget-aware spending, approval-hold awareness, receipt verification and typed refusal handling for agent frameworks.
     - Keep every rendered state receipt-backed or honestly pending, per the conformance suite.
@@ -741,7 +741,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Scan every browser-facing artifact in CI to prove no API secret or key material ships to a client bundle.
     - Exercise each integration's example end to end in CI against a real service.
     - _Requirements: 25.2, 25.7, 25.5_
-  - [ ] 16.4 Build the mobile bindings and agent-framework integrations — **Implemented - qualification pending**
+  - [ ] 16.4 Build the mobile bindings and agent-framework integrations
     - Ship iOS bindings over the Swift SDK and Android bindings over the JVM SDK, each with a runnable sample app.
     - Ship integrations for the major agent frameworks over the agent middleware, each installable as one dependency.
     - Verify webhook consumption, signature verification and replay protection in every integration's default path.
@@ -771,28 +771,28 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Ship time-control and fault-injection hooks for integration testing, clearly outside the deterministic transition path.
     - Make one command start it: layerx emulator up.
     - _Requirements: 26.2_
-  - [ ] 17.3 Build the deployable hosted testnet and faucet — **Implemented - qualification pending**
+  - [ ] 17.3 Build the deployable hosted testnet and faucet
     - Stand up the hosted testnet running the pending-release protocol version with declared reset schedule and public status.
     - Build the faucet with per-identity and per-address rate limits and abuse resistance.
     - Publish testnet endpoints, chain parameters and reset calendar in the docs.
     - Monitor testnet health on the status page, distinguishing testnet, gateway and core degradation.
     - Exercise the faucet and a full test payment through the hosted surface in the scheduled CI run.
     - _Requirements: 26.3, 26.7_
-  - [ ] 17.4 Build the deployable hosted gateway with keys and quotas — **Implemented - qualification pending**
+  - [ ] 17.4 Build the deployable hosted gateway with keys and quotas
     - Stand up the hosted gateway and RPC surface with self-service API key issuance and rotation.
     - Enforce per-key quotas with typed rate-limit refusals carrying retry timing.
     - Prove no gateway path weakens protocol authorisation or verification rules, by the boundary conformance suite.
     - Apply the human service's principal isolation, redaction and audit rules to every gateway store and log.
     - Load-test the gateway against declared throughput and latency budgets.
     - _Requirements: 26.4, 26.7_
-  - [ ] 17.5 Deliver webhooks and developer dashboards — **Implemented - qualification pending**
+  - [ ] 17.5 Deliver webhooks and developer dashboards
     - Implement webhook delivery for journey, payment, approval and program events: signed payloads, ordered per subject, at-least-once with replay protection.
     - Build the redelivery surface for missed events with stable cursors.
     - Build the developer dashboard: keys, usage, request logs, webhook delivery logs, test payments and receipts.
     - Carry verification status on every displayed protocol fact, exactly as the human plane requires.
     - Test webhook delivery semantics under fault injection: drops, duplicates and out-of-order delivery.
     - _Requirements: 26.5, 26.6_
-  - [ ] 17.6 Ship one-command MCP and A2A installation — **Implemented - qualification pending**
+  - [ ] 17.6 Ship one-command MCP and A2A installation
     - Build layerx install mcp: one command installing a working payment-capable MCP server configuration against the chosen environment.
     - Build layerx install a2a with the same one-command rule for A2A.
     - Verify both installations end to end in CI against a real agent runtime completing a test payment.
@@ -808,7 +808,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Keep quickstarts free of protocol vocabulary and free of manual key or byte handling.
     - Wire the docs build and sample execution into make platform-test-docs and CI.
     - _Requirements: 27.1, 27.5, 27.6_
-  - [ ] 18.2 Ship the reference applications — **Implemented - qualification pending**
+  - [ ] 18.2 Ship the reference applications
     - Ship the buyer agent reference: an agent paying for a metered API through the buyer middleware.
     - Ship the paid API seller reference over the seller middleware.
     - Ship the merchant checkout reference over the merchant middleware.
@@ -833,21 +833,21 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Apply the workspace dependency, license and lint policy, including the integer-only rule in every consensus-adjacent path.
     - Prove existing builds are untouched with the programs workspace present.
     - _Requirements: 28.2, 28.7_
-  - [ ] 19.2 Implement deterministic execution and metering — **Implemented - qualification pending**
+  - [ ] 19.2 Implement deterministic execution and metering
     - Implement instruction-level CPU metering, memory accounting and storage accounting, charged through the existing fee mechanism.
     - Fail an execution exceeding its budget with a typed resource result and full rollback, never a stall or node fault.
     - Record the runtime and ABI version per execution for receipt carriage and versioned replay.
     - Prove byte-identical execution across operating systems, architectures and optimisation levels on the conformance vector set.
     - Property-test that metering is deterministic: equal executions consume equal budgets everywhere.
     - _Requirements: 28.3, 28.4, 28.2_
-  - [ ] 19.3 Implement the capability ABI and namespaced storage — **Implemented - qualification pending**
+  - [ ] 19.3 Implement the capability ABI and namespaced storage
     - Define the versioned program ABI: capability-based host functions for storage, events, program calls, 402LXP transfer requests and receipt-verified reads, with no ambient authority.
     - Implement namespaced persistent storage per program with storage metering and isolation from every other namespace.
     - Bind every capability to the invoking activity's authorisation context, with downward-only narrowing.
     - Prove isolation adversarially: no guest can reach kernel state, another program's namespace or another principal's data outside declared capabilities.
     - Freeze the ABI behind golden vectors so an ABI change without a version bump fails the build.
     - _Requirements: 30.1, 29.2, 28.6_
-  - [ ] 19.4 Register the programs module in the core — **Implemented - qualification pending**
+  - [ ] 19.4 Register the programs module in the core
     - Register the programs module through the existing module system as a versioned transition-function change, declaring its activity types: deploy, upgrade, call, and registry operations.
     - Keep the kernel unchanged: no new balance-mutation primitive, no new authority model, module-namespace writes only.
     - Apply module failure semantics exactly: failed program activities consume sequence, charge fees, roll back writes and emit typed-failure receipts.
@@ -886,7 +886,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - _Requirements: 29.6_
 
 - [ ] 21. Enforce the monetary law, composition and multi-language authoring
-  - [ ] 21.1 Enforce the 402LXP-only monetary law for programs — **Implemented - qualification pending**
+  - [ ] 21.1 Enforce the 402LXP-only monetary law for programs
     - Route every program monetary effect through 402LXP transfer requests applied by the kernel transfer primitive within the invoking activity's authority.
     - Make a direct balance write by a program impossible by construction, with INVARIANT 1 aborting any violation.
     - Execute multi-call, multi-transfer program activities as one atomic transfer set with a single receipt and full rollback on any failed leg.
@@ -953,7 +953,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Publish the facilitator conformance results in the compatibility matrix.
     - Test facilitator settlement under fault injection with exactly-once economic effect.
     - _Requirements: 32.2, 32.8_
-  - [ ] 22.4 Serve the interoperability adapters through an executable gateway — **Implemented - qualification pending**
+  - [x] 22.4 Serve the interoperability adapters through an executable gateway
     - Build the interop gateway executable and configuration layer, registering only version-pinned adapters and refusing startup when an adapter has no declared evidence policy.
     - Expose the x402, AP2, UCP, Visa, fiat, HTTP, MCP and A2A ingress surfaces through typed transport handlers backed by the hosted gateway's real authentication, quota, idempotency and audit stores.
     - Bind every state-changing translation to the real typed intent and receipt-verification path, with external pending, reversal and refusal states preserved at the boundary.
@@ -985,7 +985,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - _Requirements: 32.5_
 
 - [ ] 24. Ship migration tooling and off-platform settlement
-  - [ ] 24.1 Build the Ethereum and Solana migration tooling — **Implemented - qualification pending**
+  - [ ] 24.1 Build the Ethereum and Solana migration tooling
     - Build account mapping: external addresses associated to LayerX identities through the protocol's binding mechanisms.
     - Build asset migration through the custody boundary, credited only against verified source-chain finality.
     - Build transaction-history import labelled as external provenance, never as LayerX receipts.
@@ -1010,14 +1010,14 @@ surface makes the evidence portable while custody never leaves Paxeer.
 ## Wave 12 - The Multichain Surface
 
 - [ ] 25. Publish and verify batch mirrors
-  - [ ] 25.1 Build the mirror publisher — **Implemented - qualification pending**
+  - [ ] 25.1 Build the mirror publisher
     - Build the mirror publisher anchoring batch commitments to Ethereum and Solana with batch data retrievable per mirror, fed exclusively through the node boundary.
     - Publish as pure archives: no vault, portal or custody semantics of any kind on the mirror chains.
     - Track and expose per-mirror freshness - latest batch and checkpoint mirrored - with lag stated honestly.
     - Handle mirror-chain unavailability as a typed degradation state, never blocking LayerX operation.
     - Test publication and retrieval against both test networks including stall and reorg scenarios.
     - _Requirements: 34.1, 34.3_
-  - [ ] 25.2 Verify from mirrors in the explorer and the SDKs — **Implemented - qualification pending**
+  - [ ] 25.2 Verify from mirrors in the explorer and the SDKs
     - Extend the explorer verifier to verify receipts and state against mirror data alone.
     - Extend the SDK verification paths to accept mirror sources.
     - Prove in the qualification suite that a receipt verifies from a mirror with LayerX infrastructure unavailable.
@@ -1033,14 +1033,14 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - _Requirements: 34.7, 34.4_
 
 - [ ] 26. Ship the ramp toolkit
-  - [ ] 26.1 Build the market-maker ramp kit and reference ramp — **Implemented - qualification pending**
+  - [ ] 26.1 Build the market-maker ramp kit and reference ramp
     - Build the ramp toolkit letting third parties operate on and off ramps as ordinary LayerX principals over agent accounts, 402LXP transfers and payer grants.
     - Grant no special protocol authority, no reserved vocabulary and no custody claims to any ramp.
     - Ship a runnable reference ramp with rebalancing through the Paxeer boundary on the operator's own account.
     - Document ramp operation, risk boundaries and the external-custody labelling obligations.
     - Exercise the reference ramp end to end in CI against the testnet.
     - _Requirements: 34.5_
-  - [ ] 26.2 Enforce external-custody labelling — **Implemented - qualification pending**
+  - [ ] 26.2 Enforce external-custody labelling
     - Keep third-party ramps off the human plane's default surfaces by rule and by the copy lint.
     - Label any surfaced ramp as external custody in plain language from the copy catalog.
     - Render ramp outcomes as Done only against the verified LayerX receipt of the LayerX-side leg.
@@ -1091,42 +1091,42 @@ surface makes the evidence portable while custody never leaves Paxeer.
 
 - [ ] 28. Make deployed programs callable on the network
   - Parallel lanes: 28.1 lands first and alone because it reshapes the ABI and host surface every later lane edits. Once it lands, 28.2 through 28.6 are five independent agents on disjoint files. 28.7 joins them and 28.8 follows it.
-  - [ ] 28.1 Modularize the ABI and host surface into per-capability units — **Implemented - qualification pending**
+  - [ ] 28.1 Modularize the ABI and host surface into per-capability units
     - Split src/abi.rs into an abi module: mod.rs holding the Abi transaction, effects and commit; capability.rs holding Capability, CapabilitySet and narrowing; storage_ops.rs holding the storage operations; leaving room for context, crypto, response and balance units later waves add without collision.
     - Split src/host.rs into a host module: mod.rs holding linker construction and RuntimeState; memory.rs holding the guest read and write helpers; storage.rs, events.rs, calls.rs and transfer.rs holding one host-function family each.
     - Keep the change strictly behaviour-preserving: the frozen ABI manifest, the host-function table, every status code and every refusal taxonomy stay byte-identical, and the existing test suites pass unchanged with no edits to their assertions.
     - Add a module-boundary lint proving no host-function family reaches another family's state except through RuntimeState, so later waves can add a host function without reading the whole file.
     - Record the module map in the runtime crate documentation so a parallel agent can find its lane without reading every file.
     - _Requirements: 28.6, 30.1_
-  - [ ] 28.2 Carry calldata into the invoked entry point — **Implemented - qualification pending**
+  - [ ] 28.2 Carry calldata into the invoked entry point
     - Add bounded calldata to AuthorizedExecutionRequest so an activity supplies input bytes rather than only integer arguments, routed through the same reserve-and-write protocol the composition path already uses to enter a callee.
     - Unify the entry protocol: the activity boundary and a program-to-program edge enter a program the same way, so a program has one entry contract rather than two.
     - Meter the calldata copy on the same per-byte basis composition already charges, and refuse input past the declared ABI bound with a typed result before any guest code runs.
     - Extend the Rust SDK entry plumbing so a program declares its entry point once and receives calldata identically at both boundaries.
     - Test an activity-level call with calldata against a real module, including the empty, maximum and one-past-maximum cases.
     - _Requirements: 35.2_
-  - [ ] 28.3 Return response bytes across the call boundary — **Implemented - qualification pending**
+  - [ ] 28.3 Return response bytes across the call boundary
     - Add a response region to the call protocol: a callee writes bounded response bytes, the runtime copies them into a caller-declared buffer, and the caller reads them through a response host function rather than through storage.
     - Carry the response to the activity boundary too, so an authorized execution returns bytes as well as integer outputs and metered usage.
     - Meter the response copy per byte and account it against the output resource class, refusing a response past the caller's declared capacity with a typed result rather than truncating.
     - Bind the response to the exact call edge so a stale or foreign response can never be read, and prove it across a fan-out of sibling calls.
     - Extend the Rust SDK call surface with a typed response and test the empty, maximum and over-capacity cases.
     - _Requirements: 35.3_
-  - [ ] 28.4 Carry typed failure payloads and program refusal reasons — **Implemented - qualification pending**
+  - [ ] 28.4 Carry typed failure payloads and program refusal reasons
     - Extend the refusal taxonomy so a guest refusal carries the refusing program, the refusal class and bounded program-supplied reason bytes, replacing the bare negative result code as the only failure signal.
     - Propagate a nested refusal to the activity boundary unchanged, naming the frame that refused rather than the frame that observed it, so a deep call graph reports its actual cause.
     - Meter the reason bytes and bound them, so a failure path cannot be used to move unmetered data or to grow a receipt without limit.
     - Carry the failure payload into the activity receipt under the standard receipt shape so every consumer renders a program failure with the same rigor as a success.
     - Extend the Rust SDK error vocabulary to construct and decode a reason, and test refusal propagation from depth one and from the declared maximum depth.
     - _Requirements: 35.4, 35.6_
-  - [ ] 28.5 Admit a caller-declared execution budget — **Implemented - qualification pending**
+  - [ ] 28.5 Admit a caller-declared execution budget
     - Replace the compiled-constant execution budget with a budget declared by the invoking activity, bounded above by the protocol maximum and below by the declared minimum viable execution.
     - Charge only the metered usage actually consumed inside the declared ceiling, so a caller that over-declares is not billed for headroom it did not use.
     - Refuse an execution whose declared budget exceeds the protocol maximum, or whose payer cannot cover the ceiling, before any guest code runs and with a typed result.
     - Keep the whole call graph inside one declared budget exactly as the carried-fuel accounting already does, so composition cannot multiply a ceiling.
     - Property-test that declared budget and consumed usage are independent: equal executions under different ceilings consume identical usage and produce identical evidence.
     - _Requirements: 35.5, 28.3_
-  - [ ] 28.6 Ship the isolation and composition adversarial suites — **Implemented - qualification pending**
+  - [ ] 28.6 Ship the isolation and composition adversarial suites
     - Write the isolation suite the capability ABI claims: guests attempting to reach kernel state, another program's namespace, another principal's cells, the host linker and memory outside their own instance, each defeated by construction.
     - Write the composition suite the call rules claim: depth, fan-out, edge-count, visit-count and reentrancy violations, each refused typed with no partial call graph, no surviving storage write and no staged transfer.
     - Prove atomicity across the graph: a refusal at any depth discards every write and every effect of every frame, asserted on storage contents rather than on return codes alone.
@@ -1153,42 +1153,42 @@ surface makes the evidence portable while custody never leaves Paxeer.
 
 - [ ] 29. Give programs shared state, iteration and bounded state lifetimes
   - Reconciled code lane: 29.1 through 29.4, 29.6 and 29.7 have code present. Task 29.5 remains because its Rust occupancy ledger is not integrated with protocol charging, state roots, snapshots and receipts.
-  - [ ] 29.1 Extend the namespace model with a program-shared namespace — **Implemented - qualification pending**
+  - [ ] 29.1 Extend the namespace model with a program-shared namespace
     - Model StorageNamespace as a closed enum over a principal-scoped namespace and a program-shared namespace, both carrying the owning program, so a namespace names its scope in the type rather than by convention.
     - Fix both namespaces before guest code runs exactly as the principal-scoped namespace is fixed today, so no guest-visible operation can choose, widen or construct a namespace.
     - Keep the address ordering canonical and stable across both variants so state roots and iteration order are deterministic everywhere.
     - Migrate the existing storage plane and its tests to the enum with no behavioural change to principal-scoped access.
     - Prove by construction that no program can name another program's namespace of either kind, with the type system carrying the guarantee rather than a runtime check.
     - _Requirements: 36.1_
-  - [ ] 29.2 Grant and enforce shared-namespace access through explicit capabilities — **Implemented - qualification pending**
+  - [ ] 29.2 Grant and enforce shared-namespace access through explicit capabilities
     - Add distinct shared-read and shared-write capabilities so an activity can invoke a program with read-only access to shared state, and keep principal-scoped grants conferring no shared access whatsoever.
     - Extend the storage host functions with a namespace selector, refusing an unselected or out-of-range selector with a typed invalid result before any access occurs.
     - Keep narrowing downward only across a program-to-program edge for the new grants exactly as it holds for the existing ones, with an attempted widening failing typed.
     - Meter shared access on the same per-byte basis as principal-scoped access so no namespace is cheaper to abuse.
     - Test a two-participant program end to end - a shared total mutated by two different principals - which has no representation before this task.
     - _Requirements: 36.2, 30.1, 30.3_
-  - [ ] 29.3 Implement ordered iteration with a resumable cursor — **Implemented - qualification pending**
+  - [ ] 29.3 Implement ordered iteration with a resumable cursor
     - Add a storage scan host function taking a namespace selector, a bounded key prefix and a cursor, returning entries in canonical key order with a resumable cursor.
     - Meter every returned byte against the storage read class and enforce a declared per-call entry and byte ceiling so iteration can never outrun the budget.
     - Refuse a scan into a namespace the program holds no read grant for, and refuse a cursor that does not belong to the scan that issued it.
     - Make iteration order independent of insertion order, host allocator and platform, proven on the determinism differential.
     - Test iteration over an empty prefix, a single entry, a prefix spanning the per-call ceiling, and a resumption across two activities.
     - _Requirements: 36.3_
-  - [ ] 29.4 Implement namespace drop and reclamation — **Implemented - qualification pending**
+  - [ ] 29.4 Implement namespace drop and reclamation
     - Add a namespace drop operation removing every cell of one namespace as a single committed change, refusing a namespace the program does not own.
     - Meter the drop by the bytes and cells reclaimed rather than as a constant, so the cost tracks the work, and credit the released occupancy against the rent class.
     - Keep the drop atomic with the rest of the activity: a later refusal discards the drop exactly as it discards a write.
     - Prove no cell survives a drop and no adjacent namespace is touched by it, asserted on storage contents across a plane holding several namespaces.
     - Test drop of an empty namespace, a namespace at the declared cell ceiling, and a drop followed by a write in the same activity.
     - _Requirements: 36.4_
-  - [ ] 29.5 Charge storage occupancy over time as its own resource class — **Implemented - qualification pending**
+  - [ ] 29.5 Charge storage occupancy over time as its own resource class
     - Add an occupancy resource class measured as namespace bytes held across batches, distinct from the one-off read and write classes the meter already enforces.
     - Price occupancy through the fee schedule and charge it to the account declared responsible for the namespace, so persistent state is paid for as long as it persists.
     - Account occupancy deterministically from protocol state - the batch sequence and the recorded namespace size - with no wall-clock input anywhere.
     - Record occupancy in the metered usage and the canonical evidence so it replays identically under a recorded fee schedule.
     - Property-test that occupancy is monotone in bytes and in batches held, and that a dropped namespace stops accruing at the batch it was dropped in.
     - _Requirements: 36.5_
-  - [ ] 29.6 Extend the isolation gauntlet to the shared namespace — **Implemented - qualification pending**
+  - [ ] 29.6 Extend the isolation gauntlet to the shared namespace
     - Add hostile programs attempting to read and write another program's shared namespace by every reachable route: forged selector, forged capability encoding, crafted key, and a narrowed grant across a call edge.
     - Add hostile programs attempting to reach principal-scoped cells of a principal other than the invoker through the shared surface.
     - Add hostile programs attempting to escape the budget through iteration and through repeated drop and rewrite.
@@ -1214,28 +1214,28 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Freeze the derivation behind golden vectors, because a change to it would silently relocate every program-held balance.
     - Test derivation determinism across operating systems, architectures and optimisation levels on the conformance vector set.
     - _Requirements: 37.1_
-  - [ ] 30.2 Authorise transfer legs under program authority — **Implemented - qualification pending**
+  - [ ] 30.2 Authorise transfer legs under program authority
     - Extend the transfer law with a second authorization root beside the invoking principal: a leg whose source is an account the staging program derives, bound to the deriving program and the exact derivation seed.
     - Refuse any program-authorised leg whose source account the staging program cannot derive, and refuse any such leg staged by a frame of the call graph other than the deriving program itself.
     - Keep the kernel transfer primitive the only balance mutation and add no new balance-writing primitive anywhere: INVARIANT 1 applies to program-authorised legs unchanged.
     - Carry both authorization roots into one atomic transfer set with one canonical encoding and one receipt, so a mixed activity settles whole or not at all.
     - Test the law against programs attempting to spend from an account they cannot derive, from a callee frame, and past the total of legs the set conserves.
     - _Requirements: 37.2, 37.3_
-  - [ ] 30.3 Wire program-owned accounts into the kernel account registry — **Implemented - qualification pending**
+  - [ ] 30.3 Wire program-owned accounts into the kernel account registry
     - Register program-owned accounts through the existing account registry with the same derivation the runtime uses, so the C side and the Rust side agree byte for byte.
     - Keep the kernel unchanged: no new authority kind, no new balance-mutation primitive, no kernel type gaining program-specific fields, with program authority resolved as an ordinary authority the existing model already expresses.
     - Fund, hold and disburse through the existing 402LXP leg authorization path, adding no second monetary route.
     - Emit program account events through the kernel event stream under the module namespace, committed in the batch event root.
     - Run the protocol conformance suite proving no existing balance, receipt or state-root behaviour changed with program accounts registered.
     - _Requirements: 37.2, 28.1_
-  - [ ] 30.4 Add the program spending capability with downward-only narrowing — **Implemented - qualification pending**
+  - [ ] 30.4 Add the program spending capability with downward-only narrowing
     - Add a capability conveying a bounded spending grant over accounts the granting program itself derives, distinct from the existing transfer grant over the invoking principal's balance.
     - Narrow the new grant downward only across a program-to-program edge, refusing any widening of asset, destination or amount with the same typed escalation refusal the existing grants use.
     - Include the new grant in the canonical capability encoding with its own tag so an existing encoding stays valid and an unknown tag is refused rather than ignored.
     - Bind the grant to the deriving program so a callee holding it can spend only what the caller actually owns, never what the callee derives for itself.
     - Test escalation adversarially across depth, fan-out and repeated visits, with every attempt refused typed and no partial transfer set surviving.
     - _Requirements: 37.4, 30.3_
-  - [ ] 30.5 Bind registry value accounts to real program balances — **Implemented - qualification pending**
+  - [ ] 30.5 Bind registry value accounts to real program balances
     - Replace the registry's declared value-account bookkeeping with real derived accounts carrying real balances read from protocol state.
     - Prove the wind-down rules against live balances: every derived account of a deprecated program has an authorised exit path, and a deprecation that would strand value is refused.
     - Keep a tombstoned program's history readable and its state reachable under the declared wind-down rules with the exit path intact.
@@ -1249,7 +1249,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Prove every attack defeated by construction, with an escape a build-breaking defect.
     - Extend the recorded attack inventory rather than replacing it.
     - _Requirements: 37.6, 30.7_
-  - [ ] 30.7 Ship escrow and vault reference programs — **Implemented - qualification pending**
+  - [ ] 30.7 Ship escrow and vault reference programs
     - Write an escrow reference program taking custody of a payment and releasing it on a declared condition, deployed, source-verified and exercised end to end.
     - Write a vault reference program holding pooled value with per-participant accounting across the shared and principal-scoped namespaces together.
     - Retire the EVM kit refusal of contract-funded value flows where a derived account now carries them honestly, and keep refusing by name what still has no representation.
@@ -1261,14 +1261,14 @@ surface makes the evidence portable while custody never leaves Paxeer.
 
 - [ ] 31. Give programs self-knowledge and the primitives every chain provides
   - Code-only lanes: 31.3, 31.4 and 31.5 are complete. Tasks 31.1 and 31.2 run in parallel; 31.6 joins them into ABI version two and 31.7 binds the result into the SDK and porting kits.
-  - [ ] 31.1 Expose the execution context to guest code — **Implemented - qualification pending**
+  - [ ] 31.1 Expose the execution context to guest code
     - Add a single field-addressed context host function exposing the executing program, the immediate calling program, the invoking principal, the activity sequence, the batch height, the runtime and ABI versions, the remaining fuel and the effective fee schedule version.
     - Derive every field from protocol state only, with no wall-clock time, host entropy or node-local value reachable through any field, and refuse an unknown field identifier rather than returning a zero.
     - Make the caller field honest at every frame: a callee observes its own identifier and its immediate caller's, set by the runtime when the frame is entered and never writable by guest code.
     - Meter the context read per byte returned and freeze the field identifiers and their encodings behind golden vectors.
     - Prove across the composition suite that the caller field cannot be forged on any edge, at any depth, or by re-entry.
     - _Requirements: 38.1, 38.2_
-  - [ ] 31.2 Expose receipt-verified balance reads — **Implemented - qualification pending**
+  - [ ] 31.2 Expose receipt-verified balance reads
     - Add a balance read host function returning a balance for an account and asset the invoking activity explicitly granted sight of, through a capability distinct from every spending grant.
     - Serve the read through the core receipt-verification authority so a program observes only verified protocol facts, never raw kernel state.
     - Refuse a read for an account outside the grant with a typed denial rather than a zero balance, so absence and denial are distinguishable.
@@ -1296,7 +1296,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Implement integer-only with bounded allocation, honouring the workspace deny on floating-point arithmetic and lossy float literals.
     - Freeze behind golden vectors covering identity, overflow boundary, maximum-width and zero-modulus cases, and prove determinism across tiers.
     - _Requirements: 38.6_
-  - [ ] 31.6 Freeze ABI version two — **Implemented - qualification pending**
+  - [ ] 31.6 Freeze ABI version two
     - Bump the ABI version once for the whole set of additions from waves 14 through 17, moving the frozen manifest, the host-function table and the permitted-import list together in one change.
     - Keep version one modules executing under their recorded version, with replay selecting the ABI by the version the receipt records rather than by the version the node runs.
     - Regenerate golden vectors for both versions and add the build gate that fails on any ABI change without a version bump.
@@ -1593,14 +1593,14 @@ surface makes the evidence portable while custody never leaves Paxeer.
 ## Wave 16 - Ecosystem Repository Boundary
 
 - [ ] 37. Consolidate the Sidiora Labs ecosystem in one bounded monorepo
-  - [ ] 37.1 Integrate Paxeer Network and its automation into the LayerX monorepo — **Implemented - qualification pending**
+  - [ ] 37.1 Integrate Paxeer Network and its automation into the LayerX monorepo
     - Import the current Paxeer Network source under paxeer-network while excluding ignored build products, dependency caches, runtime data and credentials.
     - Move Paxeer GitHub Actions workflows to the repository-level .github/workflows directory, namespace them for Paxeer and make every command, action context and artifact path monorepo-aware.
     - Scope Paxeer pull-request and push automation to paxeer-network-owned paths wherever GitHub supports path filters, while retaining manual, scheduled and release triggers that cannot use path filtering.
     - Add root Makefile entry points for Paxeer build, lint, tests and CI, and bind Paxeer's internal project root to its subsystem directory so its cleanup and Docker mounts cannot touch LayerX build output.
     - Update the root README and dependency automation to describe and maintain the ecosystem monorepo and its explicit LayerX/Paxeer trust, build and release boundaries.
     - _Requirements: 44.1, 44.2, 44.3, 44.4, 44.5, 44.6_
-  - [ ] 37.2 Publish the monorepo-native HPX registry and node distribution — **Implemented - qualification pending**
+  - [ ] 37.2 Publish the monorepo-native HPX registry and node distribution
     - Replace obsolete HPX domains, private fleet examples and project-Quorum source paths with the canonical node.hyperpaxeer.com origin and paths derived from paxeer-network inside this monorepo.
     - Make the artifact publisher stage a complete versioned release, require the Paxeer binary and all supported native libraries, write the chain metadata and sorted SHA-256 manifest, and atomically switch the served current-release pointer only after assembly completes.
     - Harden the registry's static artifact surface and public registration boundary, package it through root repository automation, and provide a durable loopback-only production service plus Nginx HTTPS reverse-proxy configuration for node.hyperpaxeer.com.

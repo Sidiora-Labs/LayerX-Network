@@ -52,6 +52,8 @@ pub const UCP_REST_SCHEMA_SHA256: [u8; 32] = [
     0xe5, 0x0a, 0x19, 0x54, 0x41, 0x4d, 0xe2, 0x33, 0x44, 0x4f, 0x72, 0x62, 0xf6, 0x57, 0x06, 0x46,
     0xd9, 0x41, 0xcb, 0xc1, 0xc9, 0xf3, 0x2b, 0x87, 0x60, 0x84, 0xdb, 0x7f, 0x01, 0xe8, 0x99, 0x7f,
 ];
+const UCP_CHECKOUT_SPEC_DOCUMENT: &[u8] =
+    include_bytes!("../../../specs/vendor/ucp/specification-checkout.html");
 
 /// One exact UCP capability declaration from a discovery profile.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -720,6 +722,8 @@ pub fn ucp_adapter_descriptor(
     spec: PinnedSpec,
     conformance: ConformanceSuite,
 ) -> Result<AdapterDescriptor, UcpError> {
+    spec.verify_document(UCP_CHECKOUT_SPEC_DOCUMENT)
+        .map_err(|error| UcpError::Gateway(error.into()))?;
     Ok(AdapterDescriptor::new(adapter_id()?, spec, conformance))
 }
 

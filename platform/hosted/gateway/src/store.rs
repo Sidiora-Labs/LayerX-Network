@@ -9,6 +9,9 @@ use zeroize::Zeroizing;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const IO_TIMEOUT: Duration = Duration::from_secs(8);
 const MAX_RESPONSE: usize = 256 * 1024;
+const CONTINUATION_CHUNK_BYTES: usize = 128 * 1024;
+const MAX_CONTINUATION_BYTES: usize = 17 * 65_536;
+const MAX_CONTINUATION_CHUNKS: usize = 9;
 const AUDIT_ATTEMPTS: usize = 8;
 const MAX_KEYS_PER_PRINCIPAL: u64 = 128;
 const MAX_TAP_REPLAY_SECONDS: u64 = 3_600;
@@ -88,6 +91,7 @@ pub struct OperationRecord {
     pub response: String,
     pub receipt: String,
     pub principal: String,
+    pub continuation: String,
 }
 
 /// Durable evidence binding written when a cryptographically verified TAP
@@ -311,7 +315,9 @@ impl RedisStore {
         activity_id: &str,
         principal_digest: &str,
         audit_event: &str,
+        continuation: &str,
     ) -> Result<Reservation, String> {
+        let continuation_chunks = continuation_chunks(continuation)?;
         let key = format!("gateway:key:{}", record.key_id);
         let window = now / record.quota_window_seconds;
         let usage = format!("gateway:quota:{}:{window}", record.key_id);
@@ -320,28 +326,35 @@ impl RedisStore {
         let retry = record.quota_window_seconds - now % record.quota_window_seconds;
         for _ in 0..AUDIT_ATTEMPTS {
             let (head, chain) = self.audit_values(audit_event)?;
-            let response = self.command(&[
+            let epoch = record.epoch.to_string();
+            let quota_requests = record.quota_requests.to_string();
+            let retry = retry.to_string();
+            let retention_seconds = retention_seconds.to_string();
+            let now = now.to_string();
+            let mut arguments = vec![
                 "EVAL",
                 RESERVE_SCRIPT,
                 "7",
-                &key,
-                &usage,
-                &idem,
+                key.as_str(),
+                usage.as_str(),
+                idem.as_str(),
                 "gateway:audit",
                 "gateway:audit:head",
                 "gateway:pending",
-                &owner,
-                &record.epoch.to_string(),
-                &record.quota_requests.to_string(),
-                &retry.to_string(),
-                &retention_seconds.to_string(),
+                owner.as_str(),
+                epoch.as_str(),
+                quota_requests.as_str(),
+                retry.as_str(),
+                retention_seconds.as_str(),
                 request_digest,
                 audit_event,
-                &now.to_string(),
-                &head,
-                &chain,
+                now.as_str(),
+                head.as_str(),
+                chain.as_str(),
                 principal_digest,
-            ])?;
+            ];
+            arguments.extend(continuation_chunks.iter().copied());
+            let response = self.command(&arguments)?;
             let Resp::Array(values) = response else {
                 return Err("gateway reservation response is invalid".to_owned());
             };
@@ -379,12 +392,14 @@ impl RedisStore {
             Resp::Array(values) if values.is_empty() => Ok(None),
             Resp::Array(values) => {
                 let fields = pairs(&values)?;
+                let continuation = durable_continuation(&fields)?;
                 Ok(Some(OperationRecord {
                     digest: required(&fields, "digest")?,
                     state: required(&fields, "state")?,
                     response: fields.get("response").cloned().unwrap_or_default(),
                     receipt: fields.get("receipt").cloned().unwrap_or_default(),
                     principal: required(&fields, "principal")?,
+                    continuation,
                 }))
             }
             _ => Err("gateway operation response is invalid".to_owned()),
@@ -618,7 +633,7 @@ impl RedisStore {
         digest.update(head.as_bytes());
         digest.update((event.len() as u64).to_be_bytes());
         digest.update(event.as_bytes());
-        Ok((head, format!("{digest:x}")))
+        Ok((head, format!("{:x}", digest.finalize())))
     }
 
     fn command(&self, arguments: &[&str]) -> Result<Resp, String> {
@@ -711,7 +726,10 @@ if used >= tonumber(ARGV[2]) then
  return {'rate_limited', ARGV[3]}
 end
 redis.call('INCR', KEYS[2]); redis.call('EXPIRE', KEYS[2], ARGV[3])
-redis.call('HSET', KEYS[3], 'digest', ARGV[5], 'state', 'pending', 'started_at', ARGV[7], 'principal', ARGV[10]); redis.call('EXPIRE', KEYS[3], ARGV[4]); redis.call('SADD', KEYS[6], KEYS[3])
+local continuation_count = #ARGV - 10
+redis.call('HSET', KEYS[3], 'digest', ARGV[5], 'state', 'pending', 'started_at', ARGV[7], 'principal', ARGV[10], 'continuation_count', continuation_count)
+for index = 1, continuation_count do redis.call('HSET', KEYS[3], 'continuation_' .. tostring(index - 1), ARGV[10 + index]) end
+redis.call('EXPIRE', KEYS[3], ARGV[4]); redis.call('SADD', KEYS[6], KEYS[3])
 redis.call('SET', KEYS[7], ARGV[10])
 redis.call('XADD', KEYS[4], '*', 'previous', ARGV[8], 'chain', ARGV[9], 'event', ARGV[6], 'outcome', 'pending'); redis.call('SET', KEYS[5], ARGV[9])
 return {'reserved'}
@@ -738,7 +756,7 @@ if ARGV[8] == '1' then
  if owner and owner ~= ARGV[9] then return {'conflict'} end
  redis.call('SET', KEYS[5], ARGV[9])
 end
-redis.call('HSET', KEYS[1], 'state', ARGV[2], 'response', ARGV[3], 'receipt', ARGV[4]); redis.call('SREM', KEYS[2], KEYS[1])
+redis.call('HSET', KEYS[1], 'state', ARGV[2], 'response', ARGV[3], 'receipt', ARGV[4]); if ARGV[2] ~= 'pending' then redis.call('SREM', KEYS[2], KEYS[1]) end
 redis.call('XADD', KEYS[3], '*', 'previous', ARGV[6], 'chain', ARGV[7], 'event', ARGV[5], 'outcome', ARGV[2]); redis.call('SET', KEYS[4], ARGV[7])
 return {'completed'}
 "#;
@@ -903,7 +921,7 @@ fn digest(parts: &[&[u8]]) -> String {
         digest.update((part.len() as u64).to_be_bytes());
         digest.update(part);
     }
-    format!("{digest:x}")
+    format!("{:x}", digest.finalize())
 }
 
 fn write_command(stream: &mut impl Write, arguments: &[&str]) -> Result<(), String> {
@@ -1018,6 +1036,50 @@ fn required(fields: &BTreeMap<String, String>, name: &str) -> Result<String, Str
         .get(name)
         .cloned()
         .ok_or_else(|| format!("gateway key omitted {name}"))
+}
+
+fn continuation_chunks(value: &str) -> Result<Vec<&str>, String> {
+    if value.len() > MAX_CONTINUATION_BYTES {
+        return Err("gateway continuation exceeds its bound".to_owned());
+    }
+    let mut chunks = Vec::new();
+    let mut start = 0;
+    while start < value.len() {
+        let mut end = (start + CONTINUATION_CHUNK_BYTES).min(value.len());
+        while end > start && !value.is_char_boundary(end) {
+            end -= 1;
+        }
+        if end == start || chunks.len() == MAX_CONTINUATION_CHUNKS {
+            return Err("gateway continuation chunking failed".to_owned());
+        }
+        chunks.push(&value[start..end]);
+        start = end;
+    }
+    Ok(chunks)
+}
+
+fn durable_continuation(fields: &BTreeMap<String, String>) -> Result<String, String> {
+    if let Some(value) = fields.get("continuation") {
+        if value.len() > MAX_CONTINUATION_BYTES {
+            return Err("gateway continuation exceeds its bound".to_owned());
+        }
+        return Ok(value.clone());
+    }
+    let count = fields
+        .get("continuation_count")
+        .map_or(Ok(0), |value| value.parse::<usize>())
+        .map_err(|_| "gateway continuation count is invalid".to_owned())?;
+    if count > MAX_CONTINUATION_CHUNKS {
+        return Err("gateway continuation count exceeds its bound".to_owned());
+    }
+    let mut continuation = String::new();
+    for index in 0..count {
+        continuation.push_str(required(fields, &format!("continuation_{index}"))?.as_str());
+        if continuation.len() > MAX_CONTINUATION_BYTES {
+            return Err("gateway continuation exceeds its bound".to_owned());
+        }
+    }
+    Ok(continuation)
 }
 
 fn number(fields: &BTreeMap<String, String>, name: &str) -> Result<u64, String> {
