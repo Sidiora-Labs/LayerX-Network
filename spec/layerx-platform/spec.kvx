@@ -3195,7 +3195,7 @@ reqs = ["38.1","38.2"]
 
 [task.31.2]
 title = "Expose receipt-verified balance reads"
-status = "in_progress"
+status = "implemented"
 wave = 17
 requires = ["30.1"]
 do_1 = "Add a balance read host function returning a balance for an account and asset the invoking activity explicitly granted sight of, through a capability distinct from every spending grant."
