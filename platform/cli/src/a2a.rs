@@ -534,6 +534,8 @@ fn read_request(stream: &mut TcpStream) -> Result<Request, String> {
     if length > MAX_REQUEST_BYTES {
         return Err("the request body exceeds the transport limit".into());
     }
+    let method = method.to_owned();
+    let path = path.to_owned();
     while bytes.len() - header_end < length {
         let read = stream
             .read(&mut chunk)
@@ -551,8 +553,8 @@ fn read_request(stream: &mut TcpStream) -> Result<Request, String> {
     }
     let body = bytes[header_end..header_end + length].to_vec();
     Ok(Request {
-        method: method.to_owned(),
-        path: path.to_owned(),
+        method,
+        path,
         authorization,
         body,
     })

@@ -123,7 +123,7 @@ fn import_seed(
     if did.is_empty() || did.len() > 255 {
         return Err("DID must contain between 1 and 255 bytes".into());
     }
-    let mut encoded = Zeroizing::new(hex_encode(&seed));
+    let mut encoded = Zeroizing::new(hex_encode(&seed[..]));
     entry("key", name)?
         .set_password(&encoded)
         .map_err(|error| {
