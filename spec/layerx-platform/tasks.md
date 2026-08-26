@@ -1296,7 +1296,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Implement integer-only with bounded allocation, honouring the workspace deny on floating-point arithmetic and lossy float literals.
     - Freeze behind golden vectors covering identity, overflow boundary, maximum-width and zero-modulus cases, and prove determinism across tiers.
     - _Requirements: 38.6_
-  - [-] 31.6 Freeze ABI version two
+  - [ ] 31.6 Freeze ABI version two — **Implemented - qualification pending**
     - Bump the ABI version once for the whole set of additions from waves 14 through 17, moving the frozen manifest, the host-function table and the permitted-import list together in one change.
     - Keep version one modules executing under their recorded version, with replay selecting the ABI by the version the receipt records rather than by the version the node runs.
     - Regenerate golden vectors for both versions and add the build gate that fails on any ABI change without a version bump.
