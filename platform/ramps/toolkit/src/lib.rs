@@ -255,7 +255,7 @@ fn validate_opaque(value: &str, maximum: usize) -> Result<(), RampError> {
 }
 
 fn field(hasher: &mut Sha256, bytes: &[u8]) {
-    let length = u128::from(bytes.len());
+    let length = bytes.len() as u128;
     hasher.update(length.to_be_bytes());
     hasher.update(bytes);
 }

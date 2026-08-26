@@ -1202,7 +1202,7 @@ fn verify_detached(public_key: &[u8; 32], message: &[u8], signature: &str) -> Re
 }
 
 fn push(output: &mut Vec<u8>, value: &[u8]) {
-    output.extend_from_slice(&u128::from(value.len()).to_be_bytes());
+    output.extend_from_slice(&(value.len() as u128).to_be_bytes());
     output.extend_from_slice(value);
 }
 
