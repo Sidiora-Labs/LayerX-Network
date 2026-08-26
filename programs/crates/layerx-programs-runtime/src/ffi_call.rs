@@ -60,7 +60,7 @@ fn put_text(out: &mut Vec<u8>, value: &str) -> Result<(), i32> {
 const fn revision_tag(value: AbiRevision) -> u8 {
     match value {
         AbiRevision::V1 => 1,
-        AbiRevision::CandidateV2 => 2,
+        AbiRevision::V2 => 2,
     }
 }
 const fn meter_kind(value: ResourceKind) -> u8 {
@@ -1673,7 +1673,7 @@ pub extern "C" fn layerx_programs_call_begin(
         .map_err(|_| NON_CANONICAL)?;
         let grants = match root_module.abi_revision() {
             AbiRevision::V1 => CapabilitySet::decode_canonical(&encoded_capabilities),
-            AbiRevision::CandidateV2 => {
+            AbiRevision::V2 => {
                 CapabilitySet::decode_candidate_canonical(&encoded_capabilities)
             }
         }
@@ -1754,7 +1754,7 @@ pub extern "C" fn layerx_programs_call_begin(
             .collect();
         let receipts = CReceiptOracle { token };
         let authorization = AuthorizationContext::new(payer, capabilities);
-        let candidate_transfer = if root_module.abi_revision() == AbiRevision::CandidateV2 {
+        let candidate_transfer = if root_module.abi_revision() == AbiRevision::V2 {
             Some(
                 TransferCapability::from_root_authorization(
                     program,
@@ -1776,7 +1776,7 @@ pub extern "C" fn layerx_programs_call_begin(
             composition: CompositionContext::catalog(catalog, CompositionRules::declared()),
             response_capacity: usize::try_from(response_capacity).map_err(|_| LENGTH_LIMIT)?,
         };
-        if root_module.abi_revision() == AbiRevision::CandidateV2 {
+        if root_module.abi_revision() == AbiRevision::V2 {
             let execution_context = crate::abi::context::ExecutionContext::authenticated(
                 activity_sequence,
                 batch_number,
@@ -2086,7 +2086,7 @@ pub extern "C" fn layerx_programs_call_begin(
                     FAILURE,
                     PROGRAM_REFUSED,
                     crate::RUNTIME_VERSION,
-                    crate::ABI_VERSION,
+                    abi_version,
                     fee_schedule_version,
                     failure.usage(),
                     [0; 32],
@@ -2102,7 +2102,7 @@ pub extern "C" fn layerx_programs_call_begin(
                     RESOURCE,
                     GAS_EXHAUSTED,
                     crate::RUNTIME_VERSION,
-                    crate::ABI_VERSION,
+                    abi_version,
                     fee_schedule_version,
                     resource.usage(),
                     [0; 32],

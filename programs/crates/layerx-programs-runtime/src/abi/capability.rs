@@ -351,6 +351,15 @@ impl CapabilitySet {
             .any(|capability| matches!(capability, Capability::ProgramSpend { .. }))
     }
 
+    pub(crate) fn has_v2_only_grant(&self) -> bool {
+        self.0.values().any(|capability| {
+            matches!(
+                capability,
+                Capability::ProgramSpend { .. } | Capability::BalanceView { .. }
+            )
+        })
+    }
+
     pub(super) fn grant(&self, key: &CapabilityKey) -> Result<&Capability, AbiError> {
         self.0.get(key).ok_or(AbiError::CapabilityDenied)
     }

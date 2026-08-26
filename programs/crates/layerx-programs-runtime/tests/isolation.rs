@@ -7,11 +7,12 @@ use layerx_programs_runtime::{
     derive_program_account, Abi, AbiError, AuthorizationContext, AuthorizedExecutionRequest,
     Capability, CapabilitySet, CompositionContext, CompositionRules, ExecutionError, Executor,
     PrincipalId, ProgramCatalog, ProgramId, ReceiptOracle, ReceiptView, ResponseRefusal, Storage,
-    StorageNamespace, ValidationRefusal, WasmEngine, WasmValue, ABI_MODULE, ABI_VERSION,
-    CALL_ENTRY_EXPORT, HOST_FUNCTIONS,
+    StorageNamespace, ValidationRefusal, WasmEngine, WasmValue, ABI_MODULE, ABI_VERSION, ABI_V1_VERSION,
+    ABI_V2_HOST_FUNCTIONS, ABI_V2_MANIFEST, ABI_V2_VERSION, CALL_ENTRY_EXPORT, HOST_FUNCTIONS,
 };
 
 const ABI_V1_GOLDEN: &str = include_str!("../vectors/abi-v1.hex");
+const ABI_V2_GOLDEN: &str = include_str!("../vectors/abi-v2.hex");
 const ATTACK_INVENTORY: &str = include_str!("../../../tests/gauntlet/attack-inventory.tsv");
 #[path = "../../../tests/gauntlet/state.rs"]
 mod state_gauntlet;
@@ -515,9 +516,23 @@ fn abi_v1_manifest_matches_typed_declarations_and_golden() {
         regenerated.push(0);
     }
     assert_eq!(regenerated, Abi::canonical_manifest());
-    let mut versioned = ABI_VERSION.to_be_bytes().to_vec();
+    let mut versioned = ABI_V1_VERSION.to_be_bytes().to_vec();
     versioned.extend_from_slice(&regenerated);
     assert_eq!(versioned, decode_hex(ABI_V1_GOLDEN));
+}
+
+#[test]
+fn abi_v2_manifest_matches_typed_declarations_and_golden() {
+    let mut regenerated = ABI_V2_VERSION.to_be_bytes().to_vec();
+    regenerated.extend_from_slice(ABI_V2_MANIFEST.as_bytes());
+    assert_eq!(regenerated, decode_hex(ABI_V2_GOLDEN));
+    let names = ABI_V2_HOST_FUNCTIONS
+        .iter()
+        .map(|function| function.name)
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(names.len(), ABI_V2_HOST_FUNCTIONS.len());
+    assert!(names.contains("context_read"));
+    assert!(names.contains("balance_read"));
 }
 
 #[test]

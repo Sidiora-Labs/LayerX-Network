@@ -22,7 +22,8 @@ fn recorded_v1_replays_identically_after_a_simulated_upgrade() {
     let wasm = add_module();
     let record = RecordedExecution {
         runtime_version: RUNTIME_VERSION,
-        abi_version: ABI_VERSION,
+        abi_version: layerx_programs_runtime::ABI_V1_VERSION,
+        fee_schedule_version: layerx_programs_runtime::FeeSchedule::declared().version(),
         wasm: &wasm,
         export: "add",
         args: &[WasmValue::I32(20), WasmValue::I32(22)],
@@ -33,11 +34,53 @@ fn recorded_v1_replays_identically_after_a_simulated_upgrade() {
 }
 
 #[test]
+fn mixed_v1_v2_history_selects_each_recorded_abi_and_fee_schedule() {
+    let wasm = add_module();
+    let schedule = layerx_programs_runtime::FeeSchedule::declared().version();
+    let history = [
+        RecordedExecution {
+            runtime_version: RUNTIME_VERSION,
+            abi_version: layerx_programs_runtime::ABI_V1_VERSION,
+            fee_schedule_version: schedule,
+            wasm: &wasm,
+            export: "add",
+            args: &[WasmValue::I32(1), WasmValue::I32(2)],
+        },
+        RecordedExecution {
+            runtime_version: RUNTIME_VERSION,
+            abi_version: layerx_programs_runtime::ABI_V2_VERSION,
+            fee_schedule_version: schedule,
+            wasm: &wasm,
+            export: "add",
+            args: &[WasmValue::I32(3), WasmValue::I32(4)],
+        },
+    ];
+    let evidence = history
+        .iter()
+        .map(replay_recorded_execution)
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap_or_else(|refusal| panic!("mixed-version replay refused: {refusal}"));
+    assert_ne!(evidence[0], evidence[1]);
+
+    let wrong_schedule = RecordedExecution {
+        fee_schedule_version: schedule + 1,
+        ..history[1].clone()
+    };
+    assert_eq!(
+        replay_recorded_execution(&wrong_schedule),
+        Err(ReplayRefusal::UnknownFeeScheduleVersion {
+            version: schedule + 1
+        })
+    );
+}
+
+#[test]
 fn unknown_runtime_and_abi_artifacts_are_preserved_without_execution() {
     let wasm = add_module();
     let runtime = RecordedExecution {
         runtime_version: RUNTIME_VERSION + 1,
         abi_version: ABI_VERSION,
+        fee_schedule_version: layerx_programs_runtime::FeeSchedule::declared().version(),
         wasm: &wasm,
         export: "add",
         args: &[],

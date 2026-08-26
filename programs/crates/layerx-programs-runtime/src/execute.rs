@@ -30,7 +30,7 @@ use crate::validate::{AbiRevision, ValidatedModule};
 /// Runtime version recorded for versioned replay of every execution.
 pub const RUNTIME_VERSION: u16 = 1;
 /// ABI version recorded alongside the runtime version in execution evidence.
-pub const ABI_VERSION: u16 = 1;
+pub const ABI_VERSION: u16 = crate::abi::manifest::ABI_V2_VERSION;
 
 /// An integer-only value crossing the program boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -675,6 +675,7 @@ pub struct CandidateActivityReceipt {
     root_program: ProgramId,
     abi_revision: u16,
     runtime_version: u16,
+    fee_schedule_version: u32,
     usage: MeteredUsage,
     graph_evidence: Vec<u8>,
     outcome: CandidateReceiptOutcome,
@@ -693,9 +694,18 @@ pub enum CandidateReceiptOutcome {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CandidateExecutionRecord {
     runtime_version: u16,
+    fee_schedule_version: u32,
     outputs: Vec<WasmValue>,
     usage: MeteredUsage,
 }
+
+/// Frozen ABI-v2 execution and receipt vocabulary. The candidate spellings
+/// remain aliases until task 31.7 migrates SDK and porting-kit ownership.
+pub type V2AuthorizedExecutionRecord = CandidateAuthorizedExecutionRecord;
+pub type V2ActivityOutcome = CandidateActivityOutcome;
+pub type V2ActivityReceipt = CandidateActivityReceipt;
+pub type V2ExecutionRecord = CandidateExecutionRecord;
+pub type V2ReceiptOutcome = CandidateReceiptOutcome;
 
 impl CandidateAuthorizedExecutionRecord {
     #[must_use]
@@ -729,6 +739,7 @@ impl CandidateAuthorizedExecutionRecord {
             root_program: self.root_program,
             abi_revision: 2,
             runtime_version: self.execution.runtime_version,
+            fee_schedule_version: self.execution.fee_schedule_version,
             usage: self.execution.usage,
             graph_evidence: self.call_graph.canonical_evidence(),
             outcome: match &self.outcome {
@@ -780,8 +791,9 @@ impl CandidateAuthorizedExecutionRecord {
 
     #[must_use]
     pub fn canonical_evidence(&self) -> Vec<u8> {
-        let mut evidence = b"LXP/program-execution/v2-candidate\0".to_vec();
+        let mut evidence = b"LXP/program-execution/v2\0".to_vec();
         evidence.extend_from_slice(&self.execution.runtime_version.to_be_bytes());
+        evidence.extend_from_slice(&self.execution.fee_schedule_version.to_be_bytes());
         evidence.extend_from_slice(&(self.execution.outputs.len() as u64).to_be_bytes());
         for output in &self.execution.outputs {
             match output {
@@ -804,8 +816,8 @@ impl CandidateAuthorizedExecutionRecord {
         evidence.extend_from_slice(&self.execution.usage.fee_units.to_be_bytes());
         evidence.extend_from_slice(&self.root_program.bytes());
         let abi_revision = match self.abi_revision {
-            AbiRevision::V1 => ABI_VERSION,
-            AbiRevision::CandidateV2 => 2,
+            AbiRevision::V1 => crate::abi::manifest::ABI_V1_VERSION,
+            AbiRevision::V2 => 2,
         };
         evidence.extend_from_slice(&abi_revision.to_be_bytes());
         match &self.outcome {
@@ -840,6 +852,11 @@ impl CandidateExecutionRecord {
     }
 
     #[must_use]
+    pub const fn fee_schedule_version(&self) -> u32 {
+        self.fee_schedule_version
+    }
+
+    #[must_use]
     pub fn outputs(&self) -> &[WasmValue] {
         &self.outputs
     }
@@ -851,7 +868,7 @@ impl CandidateExecutionRecord {
 }
 
 impl CandidateActivityReceipt {
-    const DOMAIN: &'static [u8] = b"LXP/candidate-activity-receipt/v2\0";
+    const DOMAIN: &'static [u8] = b"LXP/program-activity-receipt/v2\0";
     const MAX_GRAPH_EVIDENCE_BYTES: usize = b"LayerX/programs/call-graph/v1\0".len()
         + 32
         + 16
@@ -871,6 +888,11 @@ impl CandidateActivityReceipt {
     #[must_use]
     pub const fn runtime_version(&self) -> u16 {
         self.runtime_version
+    }
+
+    #[must_use]
+    pub const fn fee_schedule_version(&self) -> u32 {
+        self.fee_schedule_version
     }
 
     #[must_use]
@@ -894,6 +916,7 @@ impl CandidateActivityReceipt {
         encoded.extend_from_slice(&self.root_program.bytes());
         encoded.extend_from_slice(&self.abi_revision.to_be_bytes());
         encoded.extend_from_slice(&self.runtime_version.to_be_bytes());
+        encoded.extend_from_slice(&self.fee_schedule_version.to_be_bytes());
         for value in [
             self.usage.cpu_fuel,
             self.usage.memory_bytes,
@@ -958,6 +981,10 @@ impl CandidateActivityReceipt {
             return Err(Error::Malformed);
         }
         let runtime_version = u16::from_be_bytes(cursor.array()?);
+        let fee_schedule_version = u32::from_be_bytes(cursor.array()?);
+        if runtime_version == 0 || fee_schedule_version == 0 {
+            return Err(Error::Malformed);
+        }
         let usage = MeteredUsage {
             cpu_fuel: u64::from_be_bytes(cursor.array()?),
             memory_bytes: u64::from_be_bytes(cursor.array()?),
@@ -1006,6 +1033,7 @@ impl CandidateActivityReceipt {
             root_program,
             abi_revision,
             runtime_version,
+            fee_schedule_version,
             usage,
             graph_evidence,
             outcome,
@@ -1228,6 +1256,8 @@ pub enum ExecutionError {
     Budget(BudgetAdmissionRefusal),
     /// Monetary-law refusal while sealing a successful guest activity.
     Transfer(TransferLawError),
+    /// Protocol-owned execution versions were absent or disagreed with the executor.
+    Context(crate::abi::context::ContextRefusal),
 }
 
 impl Display for ExecutionError {
@@ -1241,6 +1271,7 @@ impl Display for ExecutionError {
             Self::Response(refusal) => write!(formatter, "response refusal: {refusal}"),
             Self::Budget(refusal) => write!(formatter, "budget admission refusal: {refusal}"),
             Self::Transfer(refusal) => write!(formatter, "transfer-law refusal: {refusal}"),
+            Self::Context(refusal) => write!(formatter, "execution-context refusal: {refusal:?}"),
         }
     }
 }
@@ -1264,8 +1295,21 @@ impl Executor {
             budget,
             prices,
             runtime_version: RUNTIME_VERSION,
-            abi_version: ABI_VERSION,
+            abi_version: crate::abi::manifest::ABI_V1_VERSION,
         }
+    }
+
+    pub(crate) const fn new_versioned(
+        budget: ResourceBudget,
+        prices: FeeSchedule,
+        runtime_version: u16,
+        abi_version: u16,
+    ) -> Self {
+        Self { budget, prices, runtime_version, abi_version }
+    }
+
+    pub(crate) const fn for_abi(self, abi_version: u16) -> Self {
+        Self { abi_version, ..self }
     }
 
     /// Constructs the declared production executor.
@@ -1401,7 +1445,11 @@ impl Executor {
         export: &str,
         args: &[WasmValue],
     ) -> Result<ExecutionRecord, ExecutionError> {
-        if module.abi_revision() != AbiRevision::V1 {
+        let selected = match module.abi_revision() {
+            AbiRevision::V1 => crate::ABI_V1_VERSION,
+            AbiRevision::V2 => crate::ABI_V2_VERSION,
+        };
+        if selected != self.abi_version {
             return Err(ExecutionError::Abi(AbiError::WrongVersion));
         }
         let meter = Meter::new(self.budget, self.prices);
@@ -1779,14 +1827,6 @@ impl Executor {
         storage: &mut Storage,
         budgeted: BudgetedAuthorizedExecutionRequest<'_>,
     ) -> Result<CandidateAuthorizedExecutionRecord, ExecutionError> {
-        self.execute_authorized_candidate_budgeted(storage, budgeted)
-    }
-
-    pub(crate) fn execute_authorized_candidate_budgeted(
-        &self,
-        storage: &mut Storage,
-        budgeted: BudgetedAuthorizedExecutionRequest<'_>,
-    ) -> Result<CandidateAuthorizedExecutionRecord, ExecutionError> {
         let BudgetedAuthorizedExecutionRequest {
             request,
             admitted_budget,
@@ -1804,6 +1844,39 @@ impl Executor {
         )
     }
 
+    pub(crate) fn execute_authorized_candidate_budgeted(
+        &self,
+        storage: &mut Storage,
+        budgeted: BudgetedAuthorizedExecutionRequest<'_>,
+    ) -> Result<CandidateAuthorizedExecutionRecord, ExecutionError> {
+        let BudgetedAuthorizedExecutionRequest {
+            request,
+            admitted_budget,
+            payer,
+            activity_binding,
+            execution_context,
+        } = budgeted;
+        self.validate_budget_token(&admitted_budget, payer, activity_binding)?;
+        let execution_context = execution_context
+            .ok_or(ExecutionError::Context(crate::abi::context::ContextRefusal::Unauthenticated))?;
+        if !execution_context.authenticates_versions(
+            self.runtime_version,
+            crate::ABI_V2_VERSION,
+            self.prices.version(),
+        ) {
+            return Err(ExecutionError::Context(
+                crate::abi::context::ContextRefusal::Unauthenticated,
+            ));
+        }
+        self.execute_authorized_candidate_with_budget(
+            storage,
+            request,
+            admitted_budget.resource_budget(),
+            Some(activity_binding),
+            Some(execution_context),
+        )
+    }
+
     #[allow(clippy::too_many_lines)]
     fn execute_authorized_candidate_with_budget(
         &self,
@@ -1814,7 +1887,7 @@ impl Executor {
         execution_context: Option<ExecutionContext>,
     ) -> Result<CandidateAuthorizedExecutionRecord, ExecutionError> {
         let budgeted = activity_binding.is_some();
-        if request.module.abi_revision() != AbiRevision::CandidateV2 {
+        if request.module.abi_revision() != AbiRevision::V2 {
             return Err(ExecutionError::Abi(AbiError::WrongVersion));
         }
         if request.response_capacity > crate::abi::response::MAX_CALL_RESPONSE_BYTES {
@@ -1850,7 +1923,7 @@ impl Executor {
                 .claim_resolver(activity_binding)
                 .map_err(ExecutionError::Composition)?,
             CallGraph::root(request.composition.rules(), request.program, principal),
-            AbiRevision::CandidateV2,
+            AbiRevision::V2,
         );
         let retained = request
             .module
@@ -2002,9 +2075,10 @@ impl Executor {
                 ))?;
             return Ok(CandidateAuthorizedExecutionRecord {
                 root_program: request.program,
-                abi_revision: AbiRevision::CandidateV2,
+                abi_revision: AbiRevision::V2,
                 execution: CandidateExecutionRecord {
                     runtime_version: self.runtime_version,
+                    fee_schedule_version: self.prices.version(),
                     outputs: vec![WasmValue::I32(code)],
                     usage,
                 },
@@ -2045,9 +2119,10 @@ impl Executor {
         *storage = committed.storage;
         Ok(CandidateAuthorizedExecutionRecord {
             root_program: request.program,
-            abi_revision: AbiRevision::CandidateV2,
+            abi_revision: AbiRevision::V2,
             execution: CandidateExecutionRecord {
                 runtime_version: self.runtime_version,
+                fee_schedule_version: self.prices.version(),
                 outputs: vec![WasmValue::I32(code)],
                 usage,
             },
@@ -2118,9 +2193,10 @@ impl Executor {
             ))?;
         Ok(CandidateAuthorizedExecutionRecord {
             root_program: program,
-            abi_revision: AbiRevision::CandidateV2,
+            abi_revision: AbiRevision::V2,
             execution: CandidateExecutionRecord {
                 runtime_version: self.runtime_version,
+                fee_schedule_version: self.prices.version(),
                 outputs: vec![WasmValue::I32(CANDIDATE_REFUSAL_SENTINEL)],
                 usage,
             },
@@ -2148,9 +2224,10 @@ impl Executor {
             ))?;
         Ok(CandidateAuthorizedExecutionRecord {
             root_program: program,
-            abi_revision: AbiRevision::CandidateV2,
+            abi_revision: AbiRevision::V2,
             execution: CandidateExecutionRecord {
                 runtime_version: self.runtime_version,
+                fee_schedule_version: self.prices.version(),
                 outputs: Vec::new(),
                 usage,
             },

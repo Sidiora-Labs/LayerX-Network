@@ -97,13 +97,31 @@ impl WasmEngine {
         validate::validate_module(self, wasm, AbiRevision::V1)
     }
 
-    /// Validates against the explicitly selected, non-current candidate ABI.
+    /// Compatibility spelling for callers developed while v2 was a candidate.
     ///
     /// # Errors
     ///
     /// Returns the same deterministic validation refusals as [`Self::validate`].
     pub fn validate_candidate_v2(&self, wasm: &[u8]) -> Result<ValidatedModule, ValidationRefusal> {
-        validate::validate_module(self, wasm, AbiRevision::CandidateV2)
+        self.validate_v2(wasm)
+    }
+
+    /// Validates against the frozen version-two ABI.
+    pub fn validate_v2(&self, wasm: &[u8]) -> Result<ValidatedModule, ValidationRefusal> {
+        validate::validate_module(self, wasm, AbiRevision::V2)
+    }
+
+    /// Selects validation from the ABI version recorded with the deployment.
+    pub fn validate_versioned(
+        &self,
+        abi_version: u16,
+        wasm: &[u8],
+    ) -> Result<ValidatedModule, ValidationRefusal> {
+        match abi_version {
+            crate::abi::manifest::ABI_V1_VERSION => self.validate(wasm),
+            crate::abi::manifest::ABI_V2_VERSION => self.validate_v2(wasm),
+            _ => Err(ValidationRefusal::UnsupportedAbiVersion { abi_version }),
+        }
     }
 
     /// Returns the declared validation limits of this engine.

@@ -7,7 +7,7 @@ use crate::meter::MeterRefusal;
 
 use super::super::host::memory::{nonnegative, read_guest, write_guest};
 use super::super::host::{linker_fault, RuntimeState};
-use crate::abi::ABI_MODULE;
+use crate::abi::ABI_V2_MODULE;
 
 const STATUS_BOUNDS: i32 = -3;
 const STATUS_METER: i32 = -4;
@@ -177,7 +177,7 @@ fn read_fixed_256(caller: &Caller<'_, RuntimeState>, ptr: i32, len: i32) -> Resu
 pub(crate) fn register(linker: &mut Linker<RuntimeState>) -> Result<(), ExecutionFault> {
     linker
         .func_wrap(
-            ABI_MODULE,
+            ABI_V2_MODULE,
             "bigint_mul_256",
             |mut caller: Caller<'_, RuntimeState>,
              a_ptr: i32,
@@ -225,7 +225,7 @@ pub(crate) fn register(linker: &mut Linker<RuntimeState>) -> Result<(), Executio
     
     linker
         .func_wrap(
-            ABI_MODULE,
+            ABI_V2_MODULE,
             "bigint_div_256",
             |mut caller: Caller<'_, RuntimeState>,
              a_ptr: i32,
@@ -276,7 +276,7 @@ pub(crate) fn register(linker: &mut Linker<RuntimeState>) -> Result<(), Executio
     
     linker
         .func_wrap(
-            ABI_MODULE,
+            ABI_V2_MODULE,
             "bigint_rem_256",
             |mut caller: Caller<'_, RuntimeState>,
              a_ptr: i32,
@@ -327,7 +327,7 @@ pub(crate) fn register(linker: &mut Linker<RuntimeState>) -> Result<(), Executio
     
     linker
         .func_wrap(
-            ABI_MODULE,
+            ABI_V2_MODULE,
             "bigint_modexp_256",
             |mut caller: Caller<'_, RuntimeState>,
              base_ptr: i32,

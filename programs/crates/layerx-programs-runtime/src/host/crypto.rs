@@ -6,12 +6,12 @@ use crate::crypto::{hash_bytes, HashAlgorithm, HashRefusal};
 use crate::execute::ExecutionFault;
 
 use super::memory::{nonnegative, read_slice, write_guest};
-use super::{linker_fault, RuntimeState, STATUS_BOUNDS, STATUS_INVALID, STATUS_METER, ABI_MODULE};
+use super::{linker_fault, RuntimeState, STATUS_BOUNDS, STATUS_INVALID, STATUS_METER};
 
 pub(super) fn register(linker: &mut Linker<RuntimeState>) -> Result<(), ExecutionFault> {
     linker
         .func_wrap(
-            ABI_MODULE,
+            crate::abi::ABI_V2_MODULE,
             "hash",
             |mut caller: Caller<'_, RuntimeState>,
              algorithm_id: i32,

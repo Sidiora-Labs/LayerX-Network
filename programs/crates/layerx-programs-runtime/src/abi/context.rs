@@ -130,6 +130,17 @@ impl ExecutionContext {
             ContextField::FeeScheduleVersion => self.fee_schedule_version.to_be_bytes().to_vec(),
         }
     }
+
+    pub(crate) const fn authenticates_versions(
+        self,
+        runtime_version: u16,
+        abi_version: u16,
+        fee_schedule_version: u32,
+    ) -> bool {
+        self.runtime_version == runtime_version
+            && self.abi_version == abi_version
+            && self.fee_schedule_version == fee_schedule_version
+    }
 }
 
 #[cfg(test)]

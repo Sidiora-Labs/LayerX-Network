@@ -26,6 +26,7 @@ pub enum FuzzTarget {
 pub struct RecordedExecution<'a> {
     pub runtime_version: u16,
     pub abi_version: u16,
+    pub fee_schedule_version: u32,
     pub wasm: &'a [u8],
     pub export: &'a str,
     pub args: &'a [WasmValue],
@@ -36,6 +37,7 @@ pub struct RecordedExecution<'a> {
 pub enum ReplayRefusal {
     UnknownRuntimeVersion { version: u16 },
     UnknownAbiVersion { version: u16 },
+    UnknownFeeScheduleVersion { version: u32 },
     Engine(String),
     Validation(ValidationRefusal),
     Execution(ExecutionError),
@@ -48,6 +50,9 @@ impl Display for ReplayRefusal {
                 write!(f, "unknown runtime version {version}")
             }
             Self::UnknownAbiVersion { version } => write!(f, "unknown ABI version {version}"),
+            Self::UnknownFeeScheduleVersion { version } => {
+                write!(f, "unknown fee schedule version {version}")
+            }
             Self::Engine(reason) => write!(f, "engine refusal: {reason}"),
             Self::Validation(reason) => write!(f, "validation refusal: {reason}"),
             Self::Execution(reason) => write!(f, "execution refusal: {reason}"),
@@ -76,19 +81,18 @@ impl ExecutorRevision {
     const fn v1() -> Self {
         Self {
             runtime_version: crate::RUNTIME_VERSION,
-            abi_version: crate::ABI_VERSION,
+            abi_version: crate::ABI_V1_VERSION,
             budget: ResourceBudget::declared(),
             prices: FeeSchedule::declared(),
         }
     }
 
-    #[cfg(test)]
-    const fn test_v2() -> Self {
+    const fn v2() -> Self {
         Self {
-            runtime_version: crate::RUNTIME_VERSION + 1,
-            abi_version: crate::ABI_VERSION,
+            runtime_version: crate::RUNTIME_VERSION,
+            abi_version: crate::ABI_V2_VERSION,
             budget: ResourceBudget::declared(),
-            prices: FeeSchedule::new(2, 1, 2, 4, 1),
+            prices: FeeSchedule::declared(),
         }
     }
 
@@ -96,9 +100,14 @@ impl ExecutorRevision {
         let engine =
             WasmEngine::declared().map_err(|error| ReplayRefusal::Engine(error.to_string()))?;
         let module = engine
-            .validate(record.wasm)
+            .validate_versioned(record.abi_version, record.wasm)
             .map_err(ReplayRefusal::Validation)?;
-        let mut result = Executor::new(self.budget, self.prices)
+        let mut result = Executor::new_versioned(
+            self.budget,
+            self.prices,
+            self.runtime_version,
+            self.abi_version,
+        )
             .execute(&module, record.export, record.args)
             .map_err(ReplayRefusal::Execution)?;
         result.runtime_version = self.runtime_version;
@@ -107,7 +116,7 @@ impl ExecutorRevision {
     }
 }
 
-const DECLARED_REVISIONS: [ExecutorRevision; 1] = [ExecutorRevision::v1()];
+const DECLARED_REVISIONS: [ExecutorRevision; 2] = [ExecutorRevision::v1(), ExecutorRevision::v2()];
 
 fn replay_with_revisions(
     record: &RecordedExecution<'_>,
@@ -129,6 +138,11 @@ fn replay_with_revisions(
             version: record.abi_version,
         });
     };
+    if revision.prices.version() != record.fee_schedule_version {
+        return Err(ReplayRefusal::UnknownFeeScheduleVersion {
+            version: record.fee_schedule_version,
+        });
+    }
     revision.replay(record)
 }
 
@@ -273,18 +287,19 @@ mod tests {
         let wasm = add_module();
         let v1_record = RecordedExecution {
             runtime_version: RUNTIME_VERSION,
-            abi_version: ABI_VERSION,
+            abi_version: crate::ABI_V1_VERSION,
+            fee_schedule_version: FeeSchedule::declared().version(),
             wasm: &wasm,
             export: "add",
             args: &[WasmValue::I32(20), WasmValue::I32(22)],
         };
         let before = replay_with_revisions(&v1_record, &[ExecutorRevision::v1()]);
-        let upgraded = [ExecutorRevision::v1(), ExecutorRevision::test_v2()];
+        let upgraded = [ExecutorRevision::v1(), ExecutorRevision::v2()];
         let after = replay_with_revisions(&v1_record, &upgraded);
         assert_eq!(before, after);
 
         let v2_record = RecordedExecution {
-            runtime_version: RUNTIME_VERSION + 1,
+            runtime_version: RUNTIME_VERSION,
             abi_version: ABI_VERSION,
             ..v1_record
         };
@@ -302,10 +317,11 @@ mod tests {
     #[test]
     fn dispatcher_refuses_unknown_runtime_and_unsupported_abi() {
         let wasm = add_module();
-        let revisions = [ExecutorRevision::v1(), ExecutorRevision::test_v2()];
+        let revisions = [ExecutorRevision::v1(), ExecutorRevision::v2()];
         let unknown_runtime = RecordedExecution {
             runtime_version: RUNTIME_VERSION + 2,
             abi_version: ABI_VERSION,
+            fee_schedule_version: FeeSchedule::declared().version(),
             wasm: &wasm,
             export: "add",
             args: &[],
@@ -331,7 +347,7 @@ mod tests {
 
     #[test]
     fn v2_is_a_distinct_executor_configuration() {
-        assert_ne!(ExecutorRevision::v1(), ExecutorRevision::test_v2());
+        assert_ne!(ExecutorRevision::v1(), ExecutorRevision::v2());
         assert_eq!(ExecutorRevision::v1().budget, ResourceBudget::declared());
         assert_eq!(ExecutorRevision::v1().prices, FeeSchedule::declared());
     }

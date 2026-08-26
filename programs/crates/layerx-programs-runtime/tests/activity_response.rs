@@ -599,15 +599,15 @@ fn v1_refuses_candidate_import_and_candidate_returns_binary_response() {
     assert_eq!(record.execution().usage().output_bytes, bytes.len() as u64);
     assert!(record
         .canonical_evidence()
-        .starts_with(b"LXP/program-execution/v2-candidate\0"));
+        .starts_with(b"LXP/program-execution/v2\0"));
     let projection = record.receipt_projection();
     let encoded = projection.canonical_encode();
     let decoded = layerx_programs_runtime::CandidateActivityReceipt::canonical_decode(&encoded)
         .unwrap_or_else(|error| panic!("success receipt decode: {error}"));
     assert_eq!(decoded, projection);
     assert_eq!(decoded.canonical_encode(), encoded);
-    let domain = b"LXP/candidate-activity-receipt/v2\0".len();
-    let graph_length_offset = domain + 32 + 2 + 2 + 5 * 8 + 4 + 16;
+    let domain = b"LXP/program-activity-receipt/v2\0".len();
+    let graph_length_offset = domain + 32 + 2 + 2 + 4 + 5 * 8 + 4 + 16;
     let graph_length = projection.graph_evidence().len();
     let outcome_offset = graph_length_offset + 4 + graph_length;
     let mut negative_success = encoded.clone();
@@ -1235,7 +1235,7 @@ fn composition_rejects_both_cross_revision_directions_before_child_start() {
         Err(ExecutionError::Composition(
             layerx_programs_runtime::CompositionRefusal::WrongVersion {
                 expected: layerx_programs_runtime::AbiRevision::V1,
-                actual: layerx_programs_runtime::AbiRevision::CandidateV2,
+                actual: layerx_programs_runtime::AbiRevision::V2,
             }
         ))
     );
@@ -1269,7 +1269,7 @@ fn composition_rejects_both_cross_revision_directions_before_child_start() {
         ),
         Err(ExecutionError::Composition(
             layerx_programs_runtime::CompositionRefusal::WrongVersion {
-                expected: layerx_programs_runtime::AbiRevision::CandidateV2,
+                expected: layerx_programs_runtime::AbiRevision::V2,
                 actual: layerx_programs_runtime::AbiRevision::V1,
             }
         ))

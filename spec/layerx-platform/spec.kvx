@@ -3255,7 +3255,7 @@ reqs = ["38.6"]
 
 [task.31.6]
 title = "Freeze ABI version two"
-status = "pending"
+status = "in_progress"
 wave = 17
 requires = ["31.1","31.2","31.3","31.4","31.5"]
 do_1 = "Bump the ABI version once for the whole set of additions from waves 14 through 17, moving the frozen manifest, the host-function table and the permitted-import list together in one change."

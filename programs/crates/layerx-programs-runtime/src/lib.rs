@@ -84,7 +84,8 @@ pub use execute::{
     ExecutionError, ExecutionFault, ExecutionRecord, Executor, PreparedAuthorizedActivity,
     PreparedAuthorizedActivityOutcome, PreparedMonetarySummary, PreparedTransferLegSummary,
     ProgramInstance, SettlementFailure, VerifiedStorageAssignment, WasmValue, ABI_VERSION,
-    RUNTIME_VERSION,
+    RUNTIME_VERSION, V2ActivityOutcome, V2ActivityReceipt, V2AuthorizedExecutionRecord,
+    V2ExecutionRecord, V2ReceiptOutcome,
 };
 pub use fault::{
     FailureEncodingError, ProgramFailure, RefusalClass, RefusalReason, CANDIDATE_REFUSAL_SENTINEL,
@@ -134,6 +135,10 @@ pub use abi::{
     Abi, AbiCommit, AbiEffects, AbiError, AuthorizationContext, BalanceView, CallFrameId,
     Capability, CapabilitySet, HostFunction, ProgramCall, ProgramEvent, ReceiptOracle,
     ReceiptView, StorageSelector, TransferRequest, ABI_MANIFEST, ABI_MODULE, HOST_FUNCTIONS,
+};
+pub use abi::manifest::{
+    manifest as abi_manifest, ABI_V1_MANIFEST, ABI_V1_MODULE, ABI_V1_VERSION,
+    ABI_V2_HOST_FUNCTIONS, ABI_V2_MANIFEST, ABI_V2_MODULE, ABI_V2_VERSION,
 };
 pub use crypto::bigint::{WideIntegerOp, WideIntegerRefusal, WideIntegerRefusalReason};
 pub use crypto::{

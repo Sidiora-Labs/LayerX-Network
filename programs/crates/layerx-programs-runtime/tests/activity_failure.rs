@@ -773,15 +773,15 @@ fn root_binary_refusal_is_receipt_carriable_with_usage() {
         layerx_programs_runtime::CandidateActivityReceipt::canonical_decode(&trailing).is_err()
     );
     let mut wrong_revision = encoded.clone();
-    let revision_offset = b"LXP/candidate-activity-receipt/v2\0".len() + 32;
+    let revision_offset = b"LXP/program-activity-receipt/v2\0".len() + 32;
     wrong_revision[revision_offset..revision_offset + 2].copy_from_slice(&1u16.to_be_bytes());
     assert!(
         layerx_programs_runtime::CandidateActivityReceipt::canonical_decode(&wrong_revision)
             .is_err()
     );
 
-    let domain = b"LXP/candidate-activity-receipt/v2\0".len();
-    let graph_length_offset = domain + 32 + 2 + 2 + 5 * 8 + 4 + 16;
+    let domain = b"LXP/program-activity-receipt/v2\0".len();
+    let graph_length_offset = domain + 32 + 2 + 2 + 4 + 5 * 8 + 4 + 16;
     let outcome_offset = graph_length_offset + 4 + projection.graph_evidence().len();
     let failure_offset = outcome_offset + 1 + 4;
     let decode = |bytes: &[u8]| {
@@ -832,7 +832,7 @@ fn root_binary_refusal_is_receipt_carriable_with_usage() {
     assert_ne!(changed_reason_receipt, projection);
     assert_eq!(changed_reason_receipt.canonical_encode(), changed_reason);
 
-    let usage_offset = domain + 32 + 2 + 2;
+    let usage_offset = domain + 32 + 2 + 2 + 4;
     let mut changed_usage = encoded.clone();
     changed_usage[usage_offset + 7] ^= 1;
     let changed_usage_receipt = decode(&changed_usage);

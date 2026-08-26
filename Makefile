@@ -2606,7 +2606,7 @@ interop-lint:
 PROGRAMS_CARGO ?= cargo
 PROGRAMS_RUNTIME_LIB := programs/target/debug/liblayerx_programs_runtime.a
 
-.PHONY: programs-build programs-lint programs-test programs-core-test programs-protocol-regression programs-adversarial programs-module-boundaries \
+.PHONY: programs-build programs-lint programs-test programs-core-test programs-protocol-regression programs-adversarial programs-module-boundaries programs-abi-drift \
 	programs-fuzz-smoke programs-differential programs-quickstart programs-sdk-rust programs-sdk-c programs-sdk-assemblyscript
 
 .PHONY: programs-js-install
@@ -2627,6 +2627,9 @@ programs-lint: programs-module-boundaries
 
 programs-module-boundaries:
 	sh programs/tools/runtime-module-boundaries.sh
+
+programs-abi-drift:
+	programs/tools/check-abi-drift.sh
 
 $(BUILD_DIR)/tests/programs_registration: tests/programs/test_registration.c \
 		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
@@ -2699,7 +2702,7 @@ programs-adversarial:
 programs-differential:
 	cd programs && $(PROGRAMS_CARGO) test --locked -p layerx-programs-runtime --test replay --test determinism
 
-programs-test: programs-module-boundaries programs-core-test programs-protocol-regression programs-adversarial programs-fuzz-smoke programs-differential programs-sdk-rust programs-sdk-c programs-sdk-assemblyscript
+programs-test: programs-module-boundaries programs-abi-drift programs-core-test programs-protocol-regression programs-adversarial programs-fuzz-smoke programs-differential programs-sdk-rust programs-sdk-c programs-sdk-assemblyscript
 	cd programs && $(PROGRAMS_CARGO) test --locked --workspace
 
 programs-sdk-c:

@@ -9,7 +9,7 @@ use crate::crypto::signature::{
 use crate::execute::ExecutionFault;
 
 use super::memory::{read_guest, write_guest};
-use super::{linker_fault, RuntimeState, ABI_MODULE, STATUS_BOUNDS, STATUS_INVALID, STATUS_METER};
+use super::{linker_fault, RuntimeState, STATUS_BOUNDS, STATUS_INVALID, STATUS_METER};
 
 /// Status code returned when signature verification fails.
 const STATUS_VERIFY_FAILED: i32 = -6;
@@ -17,7 +17,7 @@ const STATUS_VERIFY_FAILED: i32 = -6;
 pub(super) fn register(linker: &mut Linker<RuntimeState>) -> Result<(), ExecutionFault> {
     linker
         .func_wrap(
-            ABI_MODULE,
+            crate::abi::ABI_V2_MODULE,
             "signature_verify",
             |mut caller: Caller<'_, RuntimeState>,
              algorithm: i32,
@@ -80,7 +80,7 @@ pub(super) fn register(linker: &mut Linker<RuntimeState>) -> Result<(), Executio
 
     linker
         .func_wrap(
-            ABI_MODULE,
+            crate::abi::ABI_V2_MODULE,
             "signature_recover",
             |mut caller: Caller<'_, RuntimeState>,
              message_digest_pointer: i32,

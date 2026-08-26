@@ -195,7 +195,7 @@ impl Lifecycle {
             return Err(LifecycleRefusal::InvalidAuthority);
         }
         Self::check_abi(activity.abi_version)?;
-        if let Err(refusal) = self.engine.validate(&activity.wasm) {
+        if let Err(refusal) = self.engine.validate_versioned(activity.abi_version, &activity.wasm) {
             self.retain(&activity, &refusal.to_string());
             return Err(LifecycleRefusal::Validation(refusal));
         }
@@ -245,7 +245,7 @@ impl Lifecycle {
             }
             UpgradePolicy::Authority(_) => {}
         }
-        let validated = match self.engine.validate(&activity.wasm) {
+        let validated = match self.engine.validate_versioned(activity.abi_version, &activity.wasm) {
             Ok(module) => module,
             Err(refusal) => {
                 self.retain_upgrade(&activity, &refusal.to_string());
@@ -256,8 +256,9 @@ impl Lifecycle {
             self.retain_upgrade(&activity, &refusal.to_string());
             return Err(refusal);
         }
+        let migration_executor = self.executor.for_abi(activity.abi_version);
         let migration = match &activity.migration {
-            Some(migration) => match self.executor.execute(&validated, &migration.export, &[]) {
+            Some(migration) => match migration_executor.execute(&validated, &migration.export, &[]) {
                 Ok(record) => Some(record),
                 Err(error) => {
                     self.retain_upgrade(&activity, &error.to_string());
@@ -299,7 +300,7 @@ impl Lifecycle {
     }
 
     fn check_abi(requested: u16) -> Result<(), LifecycleRefusal> {
-        if requested == ABI_VERSION {
+        if crate::abi::manifest::manifest(requested).is_some() {
             Ok(())
         } else {
             Err(LifecycleRefusal::IncompatibleAbi {

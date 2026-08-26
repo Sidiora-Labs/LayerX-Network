@@ -9,6 +9,7 @@ pub mod balance;
 pub(crate) mod capability;
 pub mod codec;
 pub mod context;
+pub mod manifest;
 pub mod response;
 mod storage_ops;
 
@@ -22,14 +23,14 @@ pub use codec::{
 pub use response::{CallResponse, ResponseRefusal, MAX_CALL_RESPONSE_BYTES};
 pub use storage_ops::StorageSelector;
 
-use crate::execute::ABI_VERSION;
 use crate::meter::MeterRefusal;
 use crate::storage::{
     NamespaceDrop, PrincipalId, ProgramId, Storage, StorageError, StorageNamespace,
 };
 use crate::transfer::{ProgramAuthority, ProgramFundingBinding, TransferLawError, TransferSource};
 
-pub const ABI_MODULE: &str = "layerx_v1";
+pub const ABI_MODULE: &str = manifest::ABI_V1_MODULE;
+pub const ABI_V2_MODULE: &str = manifest::ABI_V2_MODULE;
 pub const MAX_EVENT_TOPIC_BYTES: usize = 64;
 pub const MAX_EVENT_DATA_BYTES: usize = 65_536;
 pub const MAX_CALL_INPUT_BYTES: usize = 1_048_576;
@@ -37,7 +38,9 @@ pub const MAX_CAPABILITIES: usize = 256;
 
 /// Frozen version-one host-function surface. Signatures use WebAssembly value
 /// names, and all values are integer-only.
-pub const ABI_MANIFEST: &str = "layerx_v1\0storage_read(i32,i32,i32,i32)->i32\0storage_write(i32,i32,i32,i32)->i32\0storage_delete(i32,i32)->i32\0event_emit(i32,i32,i32,i32)->i32\0program_call(i32,i32,i32,i32,i32,i32)->i32\0transfer_402(i64,i64,i32,i32,i32,i32)->i32\0receipt_read(i32,i32,i32,i32)->i32\0";
+/// Manifest of the current ABI revision. Historical v1 bytes remain available
+/// through [`manifest::ABI_V1_MANIFEST`].
+pub const ABI_MANIFEST: &str = manifest::ABI_V2_MANIFEST;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct HostFunction {
@@ -51,6 +54,7 @@ pub(crate) enum AbiValueType {
     I64,
 }
 
+#[derive(Clone, Copy)]
 pub(crate) struct HostFunctionType {
     pub params: &'static [AbiValueType],
     pub results: &'static [AbiValueType],
@@ -451,8 +455,13 @@ impl Abi {
         storage: Storage,
         receipts: &dyn ReceiptOracle,
     ) -> Result<Self, AbiError> {
-        if version != ABI_VERSION {
+        if manifest::manifest(version).is_none() {
             return Err(AbiError::WrongVersion);
+        }
+        if version == manifest::ABI_V1_VERSION
+            && authorization.capabilities().has_v2_only_grant()
+        {
+            return Err(AbiError::InvalidCapability);
         }
         if !authorization
             .capabilities()
@@ -509,8 +518,13 @@ impl Abi {
         receipts: BTreeMap<[u8; 32], ReceiptView>,
         balances: BTreeMap<([u8; 32], [u8; 32]), Result<BalanceView, AbiError>>,
     ) -> Result<Self, AbiError> {
-        if version != ABI_VERSION {
+        if manifest::manifest(version).is_none() {
             return Err(AbiError::WrongVersion);
+        }
+        if version == manifest::ABI_V1_VERSION
+            && authorization.capabilities().has_v2_only_grant()
+        {
+            return Err(AbiError::InvalidCapability);
         }
         let principal_namespace = StorageNamespace::principal(program, authorization.principal());
         let shared_namespace = StorageNamespace::shared(program);
@@ -601,7 +615,7 @@ impl Abi {
 
     #[must_use]
     pub const fn canonical_manifest() -> &'static [u8] {
-        ABI_MANIFEST.as_bytes()
+        manifest::ABI_V1_MANIFEST.as_bytes()
     }
 
     /// Emits one event under the current program namespace.

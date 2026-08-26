@@ -288,8 +288,8 @@ fn response_forwarder(callee: ProgramId, capacity: u8) -> Vec<u8> {
         (&[TYPE_I32, TYPE_I32], &[TYPE_I32]),
     ]);
     let imports = import_section(&[
-        ("layerx_v2_candidate", "response_write", 0),
-        ("layerx_v2_candidate", "program_call_response", 1),
+        ("layerx_v2", "response_write", 0),
+        ("layerx_v2", "program_call_response", 1),
     ]);
     let functions = function_section(&[2, 3]);
     let memory = section(5, &[1, 1, 1, 1]);
@@ -618,7 +618,7 @@ fn response_candidate(bytes: &[u8], exhausts_cpu_after_publish: bool) -> Vec<u8>
         (&[TYPE_I32], &[TYPE_I32]),
         (&[TYPE_I32, TYPE_I32], &[TYPE_I32]),
     ]);
-    let imports = import_section(&[("layerx_v2_candidate", "response_write", 0)]);
+    let imports = import_section(&[("layerx_v2", "response_write", 0)]);
     let functions = function_section(&[1, 2]);
     let memory = section(5, &[1, 1, 1, 1]);
     let mut exports = unsigned_leb(3);
@@ -663,7 +663,7 @@ fn refusal_then_loop_candidate() -> Vec<u8> {
         (&[TYPE_I32], &[TYPE_I32]),
         (&[TYPE_I32, TYPE_I32], &[TYPE_I32]),
     ]);
-    let imports = import_section(&[("layerx_v2_candidate", "refusal_write", 0)]);
+    let imports = import_section(&[("layerx_v2", "refusal_write", 0)]);
     let functions = function_section(&[1, 2]);
     let memory = section(5, &[1, 1, 1, 1]);
     let mut exports = unsigned_leb(3);
@@ -1724,7 +1724,7 @@ fn budgeted_candidate_cpu_exhaustion_is_a_receipt_resource_outcome() {
             .is_err()
     );
     let mut usage_past_limit = encoded.clone();
-    let usage_offset = b"LXP/candidate-activity-receipt/v2\0".len() + 32 + 2 + 2;
+    let usage_offset = b"LXP/program-activity-receipt/v2\0".len() + 32 + 2 + 2 + 4;
     usage_past_limit[usage_offset..usage_offset + 8].copy_from_slice(&101_u64.to_be_bytes());
     assert!(
         layerx_programs_runtime::CandidateActivityReceipt::canonical_decode(&usage_past_limit)

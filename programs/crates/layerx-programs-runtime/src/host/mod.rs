@@ -340,10 +340,10 @@ pub(crate) fn linker(
     storage::register(&mut linker)?;
     events::register(&mut linker)?;
     calls::register(&mut linker)?;
-    crypto::register(&mut linker)?;
-    signature::register(&mut linker)?;
-    bigint::register(&mut linker)?;
-    if revision == AbiRevision::CandidateV2 {
+    if revision == AbiRevision::V2 {
+        crypto::register(&mut linker)?;
+        signature::register(&mut linker)?;
+        bigint::register(&mut linker)?;
         calls::register_candidate(&mut linker)?;
         context::register_candidate(&mut linker)?;
         scan::register_candidate(&mut linker)?;

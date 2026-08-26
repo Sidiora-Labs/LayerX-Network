@@ -6,7 +6,7 @@ use wasmparser_nostd::{
     BlockType, FuncType, FunctionBody, Import, Operator, Parser, Payload, Type, TypeRef, ValType,
 };
 
-use crate::abi::{Abi, AbiValueType, ABI_MODULE, HOST_FUNCTIONS, HOST_FUNCTION_TYPES};
+use crate::abi::{Abi, AbiValueType};
 use crate::calls::Composition;
 use crate::engine::WasmEngine;
 use crate::entrypoint::EntrypointRefusal;
@@ -18,12 +18,14 @@ use crate::meter::Meter;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AbiRevision {
     V1,
-    CandidateV2,
+    V2,
 }
 
 /// A typed refusal produced while validating a module.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ValidationRefusal {
+    /// The deployment names an ABI revision this runtime cannot replay.
+    UnsupportedAbiVersion { abi_version: u16 },
     /// The module exceeds the declared byte-size limit.
     ModuleTooLarge {
         /// The byte size of the refused module.
@@ -70,6 +72,9 @@ pub enum ValidationRefusal {
 impl Display for ValidationRefusal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::UnsupportedAbiVersion { abi_version } => {
+                write!(f, "unsupported ABI version {abi_version}")
+            }
             Self::ModuleTooLarge { byte_size, limit } => {
                 write!(
                     f,
@@ -416,26 +421,19 @@ fn refuse_import(
     types: &[FuncType],
     revision: AbiRevision,
 ) -> Result<(), ValidationRefusal> {
-    let declaration = if let Some(index) = HOST_FUNCTIONS
-        .iter()
-        .position(|function| import.module == ABI_MODULE && import.name == function.name)
-    {
-        &HOST_FUNCTION_TYPES[index]
-    } else if revision == AbiRevision::CandidateV2
-        && import.module == crate::abi::response::CANDIDATE_ABI_MODULE
-    {
-        crate::abi::response::candidate_function_type(import.name).ok_or_else(|| {
-            ValidationRefusal::ForbiddenImport {
-                import_module: import.module.to_string(),
-                import_name: import.name.to_string(),
-            }
-        })?
-    } else {
-        return Err(ValidationRefusal::ForbiddenImport {
+    let version = match revision {
+        AbiRevision::V1 => crate::abi::manifest::ABI_V1_VERSION,
+        AbiRevision::V2 => crate::abi::manifest::ABI_V2_VERSION,
+    };
+    let declaration = crate::abi::manifest::permitted_import(
+        version,
+        import.module,
+        import.name,
+    )
+    .ok_or_else(|| ValidationRefusal::ForbiddenImport {
             import_module: import.module.to_string(),
             import_name: import.name.to_string(),
-        });
-    };
+        })?;
     let TypeRef::Func(type_index) = import.ty else {
         return Err(ValidationRefusal::WrongImportKind {
             import_name: import.name.to_string(),

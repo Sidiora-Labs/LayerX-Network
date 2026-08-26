@@ -13,7 +13,7 @@ use crate::abi::{
     Abi, AbiCommit, AbiError, AuthorizationContext, CallFrameId, Capability, MAX_CALL_INPUT_BYTES,
 };
 use crate::entrypoint::{self, EntrypointRefusal};
-use crate::execute::{ExecutionFault, ABI_VERSION};
+use crate::execute::ExecutionFault;
 use crate::fault::{ProgramFailure, RefusalClass, RefusalReason, CANDIDATE_REFUSAL_SENTINEL};
 use crate::host::RuntimeState;
 use crate::limits::{DeclaredLimit, LimitsRefusal};
@@ -913,7 +913,10 @@ fn execute_nested(
     }
     let authorization = AuthorizationContext::nested(principal, capabilities, callee_frame);
     let child_abi = Abi::nested(
-        ABI_VERSION,
+        match expected {
+            AbiRevision::V1 => crate::abi::manifest::ABI_V1_VERSION,
+            AbiRevision::V2 => crate::abi::manifest::ABI_V2_VERSION,
+        },
         callee,
         authorization,
         storage,
@@ -926,7 +929,7 @@ fn execute_nested(
         .graph()
         .clone();
     let child_composition = Composition::new(Rc::clone(&resolver), child_graph, expected);
-    let mut instance = if expected == AbiRevision::CandidateV2 {
+    let mut instance = if expected == AbiRevision::V2 {
         let retained = module
             .instantiate_composed_response_context_retained(
                 child_meter,
@@ -1138,7 +1141,7 @@ fn entry_refusal(
         EntrypointRefusal::AllocationRefused { .. }
             if instance.meter().is_activity()
                 && instance.state().composition().is_some_and(|composition| {
-                    composition.revision() == AbiRevision::CandidateV2
+                    composition.revision() == AbiRevision::V2
                 }) =>
         {
             legacy_failure(program)
@@ -1150,7 +1153,7 @@ fn entry_refusal(
             if instance
                 .state()
                 .composition()
-                .is_some_and(|composition| composition.revision() == AbiRevision::CandidateV2) =>
+                .is_some_and(|composition| composition.revision() == AbiRevision::V2) =>
         {
             match instance.state().failure().cloned() {
                 Some(failure) if code == CANDIDATE_REFUSAL_SENTINEL => {
@@ -1173,7 +1176,7 @@ fn entry_refusal(
             if instance
                 .state()
                 .composition()
-                .is_some_and(|composition| composition.revision() == AbiRevision::CandidateV2)
+                .is_some_and(|composition| composition.revision() == AbiRevision::V2)
                 && candidate_runtime_fault(&fault) =>
         {
             instance.state().failure().cloned().map_or_else(
@@ -1186,7 +1189,7 @@ fn entry_refusal(
             if instance
                 .state()
                 .composition()
-                .is_some_and(|composition| composition.revision() == AbiRevision::CandidateV2)
+                .is_some_and(|composition| composition.revision() == AbiRevision::V2)
                 && instance.state().failure().is_some() =>
         {
             CompositionRefusal::Program(
