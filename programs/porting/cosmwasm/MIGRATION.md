@@ -1,5 +1,16 @@
 # Porting a CosmWasm contract to LayerX programs
 
+## ABI v2 `Env`, `MessageInfo` and crypto
+
+`messages::context::current` maps `info.sender` to the invoking principal,
+`env.contract.address` to the executing program and `env.block.height` to the
+authenticated batch height. Contracts call `layerx_program_sdk::crypto`
+instead of a native host library, retaining typed refusals and bounded inputs.
+
+`reference-v2/src/lib.rs` is the executable message-info and BLAKE3 reference.
+`make programs-porting-v2-references` builds, validates and executes it through
+the production ABI v2 engine alongside the EVM and Anchor references.
+
 This guide is written for someone who knows `cosmwasm_std` and
 `cw-storage-plus` and has never written a LayerX program. It maps the contract
 vocabulary you already use onto the version-one programs ABI, and it is

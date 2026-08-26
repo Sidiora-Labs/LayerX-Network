@@ -11,6 +11,7 @@ name = "programs_porting_cosmwasm"
 [dependencies]
 layerx-programs-registry = { path = "../../crates/layerx-programs-registry" }
 layerx-programs-runtime = { path = "../../crates/layerx-programs-runtime" }
+layerx-program-sdk = { path = "../../sdk/rust" }
 
 [lints]
 workspace = true

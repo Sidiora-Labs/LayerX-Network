@@ -56,5 +56,5 @@ pub use storage::{
 /// Identifies the `CosmWasm` porting kit and the ABI version it targets.
 #[must_use]
 pub const fn programs_porting_cosmwasm() -> &'static str {
-    "programs/porting/cosmwasm targeting layerx_v1 ABI version 1"
+    "programs/porting/cosmwasm targeting layerx_v2 ABI version 2"
 }

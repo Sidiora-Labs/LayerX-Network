@@ -25,6 +25,8 @@ pub const STATUS_BOUNDS: i32 = -3;
 pub const STATUS_METER: i32 = -4;
 /// Status returned when receipt evidence is absent or does not match.
 pub const STATUS_EVIDENCE: i32 = -5;
+/// Status returned when a well-formed signature does not verify or recover.
+pub const STATUS_VERIFY_FAILED: i32 = -6;
 
 /// Status reserved for authoring languages whose bindings admit an absent
 /// argument. These bindings make absence unrepresentable, so the number is
@@ -76,6 +78,8 @@ pub enum HostRefusal {
     Meter,
     /// The named receipt evidence is absent or does not match.
     Evidence,
+    /// A well-formed signature failed verification or public-key recovery.
+    VerificationFailed,
     /// The host reported a status outside the frozen refusal set.
     Unknown(i32),
 }
@@ -90,6 +94,7 @@ impl HostRefusal {
             STATUS_BOUNDS => Self::Bounds,
             STATUS_METER => Self::Meter,
             STATUS_EVIDENCE => Self::Evidence,
+            STATUS_VERIFY_FAILED => Self::VerificationFailed,
             other => Self::Unknown(other),
         }
     }
@@ -103,6 +108,7 @@ impl HostRefusal {
             Self::Bounds => STATUS_BOUNDS,
             Self::Meter => STATUS_METER,
             Self::Evidence => STATUS_EVIDENCE,
+            Self::VerificationFailed => STATUS_VERIFY_FAILED,
             Self::Unknown(status) => status,
         }
     }
@@ -116,6 +122,7 @@ impl Display for HostRefusal {
             Self::Bounds => formatter.write_str("operation exceeds an ABI bound"),
             Self::Meter => formatter.write_str("deterministic meter refused the operation"),
             Self::Evidence => formatter.write_str("verified receipt facts do not match"),
+            Self::VerificationFailed => formatter.write_str("signature verification failed"),
             Self::Unknown(status) => write!(formatter, "unclassified host status {status}"),
         }
     }

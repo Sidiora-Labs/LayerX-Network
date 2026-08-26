@@ -2606,7 +2606,7 @@ interop-lint:
 PROGRAMS_CARGO ?= cargo
 PROGRAMS_RUNTIME_LIB := programs/target/debug/liblayerx_programs_runtime.a
 
-.PHONY: programs-build programs-lint programs-test programs-core-test programs-protocol-regression programs-adversarial programs-module-boundaries programs-abi-drift \
+.PHONY: programs-build programs-lint programs-test programs-core-test programs-protocol-regression programs-adversarial programs-module-boundaries programs-abi-drift programs-porting-v2-references \
 	programs-fuzz-smoke programs-differential programs-quickstart programs-sdk-rust programs-sdk-c programs-sdk-assemblyscript
 
 .PHONY: programs-js-install
@@ -2703,7 +2703,16 @@ programs-adversarial:
 programs-differential:
 	cd programs && $(PROGRAMS_CARGO) test --locked -p layerx-programs-runtime --test replay --test determinism
 
-programs-test: programs-module-boundaries programs-abi-drift programs-core-test programs-protocol-regression programs-adversarial programs-fuzz-smoke programs-differential programs-sdk-rust programs-sdk-c programs-sdk-assemblyscript
+programs-test: programs-module-boundaries programs-abi-drift programs-core-test programs-protocol-regression programs-adversarial programs-fuzz-smoke programs-differential programs-sdk-rust programs-sdk-c programs-sdk-assemblyscript programs-porting-v2-references
+
+programs-porting-v2-references:
+	$(PROGRAMS_CARGO) build --manifest-path programs/porting/evm/reference-v2/Cargo.toml --target wasm32-unknown-unknown --release
+	$(PROGRAMS_CARGO) build --manifest-path programs/porting/solana/reference-v2/Cargo.toml --target wasm32-unknown-unknown --release
+	$(PROGRAMS_CARGO) build --manifest-path programs/porting/cosmwasm/reference-v2/Cargo.toml --target wasm32-unknown-unknown --release
+	$(PROGRAMS_CARGO) run --manifest-path programs/porting/evm/reference-v2/Cargo.toml --example qualify -- \
+		programs/porting/evm/reference-v2/target/wasm32-unknown-unknown/release/layerx_evm_context_reference.wasm \
+		programs/porting/solana/reference-v2/target/wasm32-unknown-unknown/release/layerx_anchor_context_reference.wasm \
+		programs/porting/cosmwasm/reference-v2/target/wasm32-unknown-unknown/release/layerx_cosmwasm_context_reference.wasm
 	cd programs && $(PROGRAMS_CARGO) test --locked --workspace
 
 programs-sdk-c:

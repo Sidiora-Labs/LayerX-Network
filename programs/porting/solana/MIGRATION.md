@@ -1,5 +1,17 @@
 # Porting a Solana program to LayerX programs
 
+## ABI v2 account context and native crypto
+
+`anchor::context::AnchorContext::current` supplies the executing program as
+`program_id`, the invoking principal as the signer account, and batch height as
+the deterministic clock slot. Hashes and signature checks must use
+`layerx_program_sdk::crypto`; fixed key and signature types prevent malformed
+syscall shapes from being constructed and refusals remain typed.
+
+The executable reference is `reference-v2/src/lib.rs`. The
+`programs-porting-v2-references` qualification path builds its ABI v2 guest,
+validates it with the real engine and executes its signer/slot/SHA-256 path.
+
 This guide is written for someone who knows Anchor and has never written a
 LayerX program. It maps the Solana account vocabulary you already use onto the
 version-one programs ABI, and it is explicit about the constructs that do not

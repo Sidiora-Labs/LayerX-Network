@@ -1,7 +1,7 @@
-//! Guest-side bindings for the version-one `LayerX` programs ABI.
+//! Guest-side bindings for the frozen `LayerX` programs ABI.
 //!
-//! A program compiles to WASM and imports the seven `layerx_v1` host functions
-//! the runtime freezes. This crate binds each of them with types that make the
+//! A program compiles to WASM and imports the frozen version-one compatibility
+//! surface plus the version-two host functions. This crate binds them with types that make the
 //! runtime's laws unrepresentable rather than merely discouraged:
 //!
 //! - money crosses the boundary only as [`Amount`], an exact unsigned 128-bit
@@ -32,9 +32,12 @@ extern crate std;
 
 pub mod abi;
 pub mod amount;
+pub mod balance;
 pub mod buffer;
 pub mod call;
 pub mod capability;
+pub mod context;
+pub mod crypto;
 pub mod error;
 pub mod event;
 pub mod ids;
@@ -62,6 +65,7 @@ pub use amount::{Amount, ProtocolInteger};
 pub use buffer::Bytes;
 pub use call::{CallInput, CallResponse, CallResult, GrantedCapabilities};
 pub use capability::{Capability, CapabilitySet};
+pub use context::{Context, Principal};
 #[cfg(target_arch = "wasm32")]
 pub use entry::EntryResponse;
 pub use error::{
@@ -69,7 +73,7 @@ pub use error::{
     ValueError, REFUSAL_CLASS_MANIFEST, STATUS_BOUNDS, STATUS_BUFFER_TOO_SMALL,
     STATUS_CAPABILITY_BYTES, STATUS_CAPABILITY_LIMIT, STATUS_DATA_TOO_LARGE, STATUS_DENIED,
     STATUS_DUPLICATE_CAPABILITY, STATUS_EMPTY_KEY, STATUS_EMPTY_TOPIC, STATUS_EVIDENCE,
-    STATUS_INPUT_TOO_LARGE, STATUS_INVALID, STATUS_KEY_TOO_LARGE, STATUS_METER,
+    STATUS_INPUT_TOO_LARGE, STATUS_INVALID, STATUS_KEY_TOO_LARGE, STATUS_METER, STATUS_VERIFY_FAILED,
     STATUS_NULL_ARGUMENT, STATUS_OVERFLOW, STATUS_RECEIPT_ENCODING, STATUS_RESERVED_IDENTIFIER,
     STATUS_TOPIC_TOO_LARGE, STATUS_UNDERFLOW, STATUS_VALUE_TOO_LARGE, STATUS_ZERO_AMOUNT,
 };

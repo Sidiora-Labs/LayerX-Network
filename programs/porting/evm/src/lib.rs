@@ -49,5 +49,5 @@ pub use value::{Address, Word};
 /// Identifies the `EVM` porting kit and the ABI version it targets.
 #[must_use]
 pub const fn programs_porting_evm() -> &'static str {
-    "programs/porting/evm targeting layerx_v1 ABI version 1"
+    "programs/porting/evm targeting layerx_v2 ABI version 2"
 }

@@ -116,7 +116,54 @@ mod candidate_raw {
             asset_pointer: i32,
             asset_length: i32,
         ) -> i32;
+        pub(super) fn context_read(field: i32, output_pointer: i32, output_capacity: i32) -> i32;
+        pub(super) fn balance_read(account_pointer: i32, account_length: i32, asset_pointer: i32, asset_length: i32, output_pointer: i32, output_capacity: i32) -> i32;
+        pub(super) fn hash(algorithm: i32, input_pointer: i32, input_length: i32, output_pointer: i32) -> i32;
+        pub(super) fn signature_verify(algorithm: i32, message_pointer: i32, message_length: i32, public_key_pointer: i32, public_key_length: i32, signature_pointer: i32, signature_length: i32) -> i32;
+        pub(super) fn signature_recover(message_pointer: i32, message_length: i32, signature_pointer: i32, signature_length: i32, recovery_id: i32, output_pointer: i32, output_capacity: i32) -> i32;
+        pub(super) fn bigint_mul_256(left_pointer: i32, left_length: i32, right_pointer: i32, right_length: i32, output_pointer: i32, output_capacity: i32) -> i32;
+        pub(super) fn bigint_div_256(left_pointer: i32, left_length: i32, right_pointer: i32, right_length: i32, output_pointer: i32, output_capacity: i32) -> i32;
+        pub(super) fn bigint_rem_256(left_pointer: i32, left_length: i32, right_pointer: i32, right_length: i32, output_pointer: i32, output_capacity: i32) -> i32;
+        pub(super) fn bigint_modexp_256(base_pointer: i32, base_length: i32, exponent_pointer: i32, exponent_length: i32, modulus_pointer: i32, modulus_length: i32, output_pointer: i32, output_capacity: i32) -> i32;
     }
+}
+
+pub(crate) fn context_read(field: i32, output: &mut [u8]) -> Result<i32, ProgramError> {
+    let status = unsafe { candidate_raw::context_read(field, pointer_mut(output)?, length(output)?) };
+    ProgramError::from_status(status)
+}
+
+pub(crate) fn balance_read(account: &[u8; 32], asset: &[u8; 32], output: &mut [u8; 16]) -> Result<i32, ProgramError> {
+    let status = unsafe { candidate_raw::balance_read(pointer(account)?, 32, pointer(asset)?, 32, pointer_mut(output)?, 16) };
+    ProgramError::from_status(status)
+}
+
+pub(crate) fn hash(algorithm: i32, input: &[u8], output: &mut [u8; 32]) -> Result<i32, ProgramError> {
+    let status = unsafe { candidate_raw::hash(algorithm, pointer(input)?, length(input)?, pointer_mut(output)?) };
+    ProgramError::from_status(status)
+}
+
+pub(crate) fn signature_verify(algorithm: i32, message: &[u8], public_key: &[u8], signature: &[u8]) -> Result<i32, ProgramError> {
+    let status = unsafe { candidate_raw::signature_verify(algorithm, pointer(message)?, length(message)?, pointer(public_key)?, length(public_key)?, pointer(signature)?, length(signature)?) };
+    ProgramError::from_status(status)
+}
+
+pub(crate) fn signature_recover(message: &[u8; 32], signature: &[u8; 64], recovery_id: i32, output: &mut [u8; 65]) -> Result<i32, ProgramError> {
+    let status = unsafe { candidate_raw::signature_recover(pointer(message)?, 32, pointer(signature)?, 64, recovery_id, pointer_mut(output)?, 65) };
+    ProgramError::from_status(status)
+}
+
+pub(crate) fn bigint_binary(operation: unsafe extern "C" fn(i32,i32,i32,i32,i32,i32)->i32, left: &[u8;32], right: &[u8;32], output: &mut [u8;32]) -> Result<i32, ProgramError> {
+    let status = unsafe { operation(pointer(left)?, 32, pointer(right)?, 32, pointer_mut(output)?, 32) };
+    ProgramError::from_status(status)
+}
+
+pub(crate) fn bigint_mul(left: &[u8;32], right: &[u8;32], output: &mut [u8;64]) -> Result<i32, ProgramError> { let status=unsafe{candidate_raw::bigint_mul_256(pointer(left)?,32,pointer(right)?,32,pointer_mut(output)?,64)};ProgramError::from_status(status) }
+pub(crate) fn bigint_div(left: &[u8;32], right: &[u8;32], output: &mut [u8;32]) -> Result<i32, ProgramError> { bigint_binary(candidate_raw::bigint_div_256, left, right, output) }
+pub(crate) fn bigint_rem(left: &[u8;32], right: &[u8;32], output: &mut [u8;32]) -> Result<i32, ProgramError> { bigint_binary(candidate_raw::bigint_rem_256, left, right, output) }
+pub(crate) fn bigint_modexp(base: &[u8;32], exponent: &[u8;32], modulus: &[u8;32], output: &mut [u8;32]) -> Result<i32, ProgramError> {
+    let status = unsafe { candidate_raw::bigint_modexp_256(pointer(base)?,32,pointer(exponent)?,32,pointer(modulus)?,32,pointer_mut(output)?,32) };
+    ProgramError::from_status(status)
 }
 
 fn pointer(bytes: &[u8]) -> Result<i32, ProgramError> {

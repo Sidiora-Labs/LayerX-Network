@@ -10,6 +10,24 @@ use crate::error::PortRefusal;
 use crate::keccak::{keccak256, selector};
 use crate::value::Word;
 
+/// Solidity execution vocabulary read directly from authenticated ABI v2 facts.
+#[cfg(target_arch="wasm32")]
+pub mod context {
+    use layerx_program_sdk::{Context, ProgramError};
+    use layerx_program_sdk::crypto::{self, HashAlgorithm, HashInput, RecoveryId};
+
+    fn address(bytes:[u8;32])->[u8;20]{let mut out=[0u8;20];out.copy_from_slice(&bytes[12..]);out}
+    pub fn msg_sender()->Result<[u8;20],ProgramError>{Ok(address(Context::invoking_principal()?.bytes()))}
+    pub fn address_this()->Result<[u8;20],ProgramError>{Ok(address(Context::executing_program()?.bytes()))}
+    pub fn block_number()->Result<u64,ProgramError>{Context::batch_height()}
+    pub fn keccak256(input:HashInput<'_>)->Result<[u8;32],ProgramError>{crypto::hash(HashAlgorithm::Keccak256,input)}
+    pub fn ecrecover(digest:&[u8;32],signature:&[u8;64],recovery_id:RecoveryId)->Result<[u8;20],ProgramError>{
+        let key=crypto::secp256k1_recover(digest,signature,recovery_id)?;
+        let digest=crypto::hash(HashAlgorithm::Keccak256,HashInput::new(&key[1..])?)?;
+        Ok(address(digest))
+    }
+}
+
 const MAX_SIGNATURE_BYTES: usize = 256;
 
 fn parameter_count(signature: &str) -> Result<usize, PortRefusal> {

@@ -51,5 +51,5 @@ pub use reference::{GuardTerms, MintLimitPort};
 /// Identifies the Solana porting kit and the ABI version it targets.
 #[must_use]
 pub const fn programs_porting_solana() -> &'static str {
-    "programs/porting/solana targeting layerx_v1 ABI version 1"
+    "programs/porting/solana targeting layerx_v2 ABI version 2"
 }

@@ -1197,6 +1197,13 @@ impl<'a> BudgetedAuthorizedExecutionRequest<'a> {
         self.execution_context = Some(execution_context);
         self
     }
+
+    /// Supplies authenticated context to the public qualification-only executor.
+    #[must_use]
+    pub fn with_execution_context_for_qualification(mut self, execution_context:ExecutionContext)->Self{
+        self.execution_context=Some(execution_context);
+        self
+    }
 }
 
 impl ExecutionRecord {

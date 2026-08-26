@@ -14,6 +14,14 @@ use crate::account::{FieldType, FieldValue};
 use crate::error::PortRefusal;
 use crate::hash::sha256;
 
+/// Native Solana/Anchor names backed by authenticated ABI v2 context.
+#[cfg(target_arch="wasm32")]
+pub mod context {
+    use layerx_program_sdk::{Context, Principal, ProgramError, ProgramId};
+    pub struct AnchorContext { pub program_id:ProgramId, pub signer:Principal, pub slot:u64 }
+    impl AnchorContext { pub fn current()->Result<Self,ProgramError>{Ok(Self{program_id:Context::executing_program()?,signer:Context::invoking_principal()?,slot:Context::batch_height()?})} }
+}
+
 /// The width of every Anchor discriminator.
 pub const DISCRIMINATOR_BYTES: usize = 8;
 

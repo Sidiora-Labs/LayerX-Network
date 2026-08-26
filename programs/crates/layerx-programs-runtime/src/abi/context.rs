@@ -78,6 +78,14 @@ pub struct ExecutionContext {
 }
 
 impl ExecutionContext {
+    /// Constructs authenticated facts for the public qualification-only
+    /// execution seam. Production transitions use the crate-owned constructor.
+    ///
+    /// # Errors
+    /// Refuses zero-valued protocol facts.
+    pub fn for_qualification(activity_sequence:u64,batch_height:u64,runtime_version:u16,abi_version:u16,fee_schedule_version:u32)->Result<Self,ContextRefusal>{
+        Self::authenticated(activity_sequence,batch_height,runtime_version,abi_version,fee_schedule_version)
+    }
     pub(crate) const fn authenticated(
         activity_sequence: u64,
         batch_height: u64,

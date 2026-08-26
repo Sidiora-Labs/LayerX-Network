@@ -5,6 +5,21 @@ LayerX program. It maps the EVM vocabulary you already use onto the version-one
 programs ABI, and it is explicit about the constructs that do not carry over,
 because the kit refuses those by name rather than emulating them.
 
+## ABI v2 context and precompiles
+
+New ports target ABI v2. `semantics::context` maps `msg.sender` to the invoking
+principal, `address(this)` to the executing program, and `block.number` to the
+authenticated batch height. Its `keccak256` and `ecrecover` functions call the
+guest-reachable hash and secp256k1-recovery imports; the host-side Keccak code
+in this kit remains only for migration planning over exported state and never
+stands in for a digest computed by a running contract. Inputs use bounded or
+fixed-width SDK types, and every runtime refusal remains a `ProgramError`.
+
+`reference-v2/src/lib.rs` is the real contract path exercising all five
+mappings. `make programs-porting-v2-references` builds it as an ABI v2 guest,
+validates it with the production engine, executes it with authenticated
+context, and checks its receipt and response.
+
 The worked example is `contracts/PublicLock.sol` in the published archive: a
 paid-membership lock in the shape Unlock Protocol uses. Its complete port lives
 in `src/reference.rs` and is deployed, source-verified and executed by
