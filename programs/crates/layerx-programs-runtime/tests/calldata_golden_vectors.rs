@@ -77,7 +77,7 @@ fn run_vector(vector: &TestVector) -> bool {
     true
 }
 
-fn test_vector_directory(dir: &str, expected_executed: usize) {
+fn test_vector_directory(dir: &str, expected_executed: usize, expected_skipped: usize) {
     let base = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/vectors/calldata")
         .join(dir);
@@ -110,26 +110,33 @@ fn test_vector_directory(dir: &str, expected_executed: usize) {
         base.display(),
         skipped
     );
+    assert_eq!(
+        skipped,
+        expected_skipped,
+        "Skipped vector count mismatch in {} ({} executed)",
+        base.display(),
+        executed
+    );
 }
 
 #[test]
 fn valid_primitives() {
-    test_vector_directory("valid", 43);
+    test_vector_directory("valid", 43, 0);
 }
 
 #[test]
 fn invalid_malformed() {
-    test_vector_directory("invalid", 22);
+    test_vector_directory("invalid", 22, 0);
 }
 
 #[test]
 fn boundaries_depth_and_size() {
-    test_vector_directory("boundaries", 10);
+    test_vector_directory("boundaries", 10, 1);
 }
 
 #[test]
 fn evm_head_only_layout() {
-    test_vector_directory("evm", 10);
+    test_vector_directory("evm", 10, 0);
 }
 
 #[test]
