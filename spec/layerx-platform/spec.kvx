@@ -3264,7 +3264,7 @@ do_3 = "Regenerate golden vectors for both versions and add the build gate that 
 do_4 = "Record the ABI version alongside the runtime version and the fee schedule version in every execution receipt."
 do_5 = "Test a simulated upgrade replaying version one and version two activities under their own recorded versions in one history."
 verify_cmd = "make programs-test"
-symbols = ["layerx_programs_runtime::ABI_MANIFEST","layerx_programs_runtime::ABI_VERSION"]
+symbols = ["layerx_programs_runtime::current_abi_manifest","layerx_programs_runtime::current_abi_version"]
 touches = ["programs/crates/layerx-programs-runtime/src/abi/manifest.rs","programs/crates/layerx-programs-runtime/tests/replay.rs","programs/tests/vectors"]
 reqs = ["38.7","28.4"]
 

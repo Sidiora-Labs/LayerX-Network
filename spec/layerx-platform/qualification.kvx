@@ -1984,3 +1984,11 @@ symbol = "ABI_VERSION, ABI_MANIFEST compatibility paths"
 observed = "Review of the graph-gate repair found that moving current ABI ownership to crate-root definitions removed the established execute::ABI_VERSION and abi::ABI_MANIFEST public paths. The compatibility repair retains crate-root constants as the only definitions and restores both module paths as direct public reexports; an existing internal reference again resolves through execute::ABI_VERSION to keep that compatibility path represented without adding a second value source."
 assumption = "Human qualification must compile downstream imports through the crate-root and both historical module paths and confirm they resolve to identical constants. No build, test, format, qualification or graph result is asserted by this source repair."
 severity = "public-api-compatibility"
+
+[observation.31.6.8]
+task = "31.6"
+file = "programs/crates/layerx-programs-runtime/src/lib.rs, spec/layerx-platform/spec.kvx"
+symbol = "current_abi_version, current_abi_manifest"
+observed = "Two full Codify 0.3 indexes could not resolve task 31.6's crate-root ABI_VERSION and ABI_MANIFEST symbols even though direct source inspection showed authoritative public constants, because the Rust index records functions, types and modules but omits const items. The semantic ABI contract remains expressed by those constants and their historical reexport paths. The graph contract now names public const accessor functions which return the exact authoritative values without copying or reconstructing them, giving Codify indexable crate-root symbols while preserving the original public constant API."
+assumption = "Root must render generated spec projections and rerun full graph indexing after cherry-pick. Human qualification must confirm the accessors return the same version and manifest as the public constants and compatibility reexports. No acceptance criterion, touch set or task status was changed, and no build, test, format, qualification or graph result is asserted by this source repair."
+severity = "tooling-representation"
