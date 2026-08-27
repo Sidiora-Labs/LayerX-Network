@@ -166,7 +166,7 @@ pub struct SettlementDomain {
 }
 
 impl SettlementDomain {
-    /// Creates the exact Paxeer chain and GuarantorBond contract expected by
+    /// Creates the exact Paxeer chain and `GuarantorBond` contract expected by
     /// the verifier.
     #[must_use]
     pub const fn new(paxeer_chain_id: u64, settlement_contract: [u8; 20]) -> Self {

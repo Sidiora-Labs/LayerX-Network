@@ -280,7 +280,7 @@ pub fn verify_outcome(
 }
 
 /// Verifies one successful ABI-two Programs state receipt without imposing
-/// ledger-transfer fields on an ACCOUNT or WIND_DOWN transition.
+/// ledger-transfer fields on an ACCOUNT or `WIND_DOWN` transition.
 ///
 /// # Errors
 ///

@@ -98,7 +98,7 @@ export function EvidenceVerifier() {
       {report === undefined ? null : (
         <div className="flex flex-col gap-3">
           {report.mirror === undefined
-            ? <FreshnessDisplay freshness={report.freshness} />
+            ? <FreshnessDisplay {...(report.freshness === undefined ? {} : { freshness: report.freshness })} />
             : <MirrorFreshnessDisplay mirror={report.mirror} />}
           <ExplorerTable
             caption={copyEntry("explorer.verify.result.table").message}
