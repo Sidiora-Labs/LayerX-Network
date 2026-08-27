@@ -1,0 +1,6 @@
+version = 1
+
+[[exceptions]]
+path = "crates/layerx-agentd/src/main.rs"
+reason = "The daemon binary is the single process boundary where ambient wall-clock time may enter; it stamps each request before calling the deterministic, now-parameterised read routes."
+safety = "The clock is read once per request through a fallible epoch conversion, is passed only as an explicit `now` argument into library APIs that refuse zero or stale values, and no library crate reads ambient time itself."

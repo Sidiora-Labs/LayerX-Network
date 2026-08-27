@@ -24,6 +24,11 @@ impl Fixture {
         )
         .expect("write unsafe allowlist");
         fs::write(
+            path.join("nondeterminism-allowlist.toml"),
+            "version = 1\nexceptions = []\n",
+        )
+        .expect("write nondeterminism allowlist");
+        fs::write(
             path.join("crates/sample/Cargo.toml"),
             "[package]\nname = \"sample\"\nversion = \"0.1.0\"\n",
         )
@@ -122,6 +127,35 @@ fn unapproved_unsafe_fails() {
     let output = fixture.run();
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("unapproved-unsafe"));
+}
+
+#[test]
+fn ambient_clock_outside_allowlist_fails() {
+    let fixture = Fixture::new();
+    fs::write(
+        fixture.path().join("crates/sample/src/lib.rs"),
+        "pub fn now() -> std::time::SystemTime { std::time::SystemTime::now() }\n",
+    )
+    .expect("write violation");
+    let output = fixture.run();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("ambient-nondeterminism"));
+}
+
+#[test]
+fn allowlisted_ambient_clock_passes() {
+    let fixture = Fixture::new();
+    fs::write(
+        fixture.path().join("nondeterminism-allowlist.toml"),
+        "version = 1\n\n[[exceptions]]\npath = \"crates/sample/src/lib.rs\"\n",
+    )
+    .expect("write nondeterminism allowlist");
+    fs::write(
+        fixture.path().join("crates/sample/src/lib.rs"),
+        "pub fn now() -> std::time::SystemTime { std::time::SystemTime::now() }\n",
+    )
+    .expect("write source");
+    assert!(fixture.run().status.success());
 }
 
 #[test]

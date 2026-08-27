@@ -121,7 +121,7 @@ fn inspections_and_unavailable_budget_reconciliation_are_audited_before_refusal(
             &context(2),
             [2; 32],
             &mut local,
-            protocol,
+            &protocol,
             &receipts,
             &support::evidence_verifier(),
         ),

@@ -167,8 +167,8 @@ pub fn resolve_unknown<B: ReceiptLookup>(
     };
 
     if let Some(receipt) = receipt {
-        let verified = match verifier.verify_receipt(&receipt) {
-            Ok(verified) if verified.activity_id() == record.status.activity_id => verified,
+        let verified_receipt = match verifier.verify_receipt(&receipt) {
+            Ok(candidate) if candidate.activity_id() == record.status.activity_id => candidate,
             Ok(_) | Err(_) => {
                 return Ok(UnknownResolution {
                     state: SubmissionState::Unknown,
@@ -178,7 +178,7 @@ pub fn resolve_unknown<B: ReceiptLookup>(
                 });
             }
         };
-        let (state, observation, cause) = if verified.result_code() == 0 {
+        let (state, observation, cause) = if verified_receipt.result_code() == 0 {
             (
                 SubmissionState::Executed,
                 ResolutionObservation::ExecutedReceipt,
@@ -196,7 +196,7 @@ pub fn resolve_unknown<B: ReceiptLookup>(
             submission_id,
             state,
             cause,
-            Some(verified),
+            Some(verified_receipt),
         )?;
         store.remove_local(&key)?;
         return Ok(UnknownResolution {

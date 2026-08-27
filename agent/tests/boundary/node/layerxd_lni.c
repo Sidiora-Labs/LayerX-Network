@@ -364,8 +364,10 @@ static int fixture_init(node_fixture *fixture, lxp_arena *arena)
             LXP_DOMAIN_MERKLE_LEAF, fixture->event,
             sizeof(fixture->event), fixture->event_root) != LXP_OK ||
         lxp_arena_reset(arena, 0U) != LXP_OK ||
-        lxp_effect_buffer_init(&effects) != LXP_OK ||
-        lxp_receipt_build(
+        lxp_effect_buffer_init(&effects) != LXP_OK) return 1;
+    (void)memset(&receipt, 0, sizeof(receipt));
+    receipt.protocol_version = activity.protocol_version;
+    if (lxp_receipt_build(
             &receipt, fixture->activity_id, 10U, state_root,
             state_root, state_root, LXP_OK, &effects,
             (lxp_u128){0U, 0U}, batch_id, 1U, 1U, 1U) != LXP_OK)

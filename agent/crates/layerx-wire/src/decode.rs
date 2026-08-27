@@ -2,7 +2,7 @@
 
 use layerx_types::result::KnownResult;
 
-use crate::limits::PROTOCOL_VERSION;
+use crate::limits::{MAX_PROTOCOL_VERSION, PROTOCOL_VERSION};
 use crate::WireError;
 
 /// A borrowed decoder with an explicit cumulative owned-allocation budget.
@@ -218,6 +218,25 @@ impl<'a> Decoder<'a> {
             return Err(WireError::known(KnownResult::VersionUnsupported, offset));
         }
         Ok(())
+    }
+
+    /// Reads a version-carrying structure header and returns its version.
+    ///
+    /// # Errors
+    ///
+    /// Returns version-unsupported for an unsupported version or a
+    /// structure-tag mismatch.
+    pub fn structure_header_version(&mut self, expected_tag: u16) -> Result<u16, WireError> {
+        let offset = self.offset;
+        let version = self.u16()?;
+        let actual_tag = self.u16()?;
+        if !(PROTOCOL_VERSION..=MAX_PROTOCOL_VERSION).contains(&version)
+            || expected_tag == 0
+            || actual_tag != expected_tag
+        {
+            return Err(WireError::known(KnownResult::VersionUnsupported, offset));
+        }
+        Ok(version)
     }
 
     /// Rejects zero and out-of-range field identifiers.

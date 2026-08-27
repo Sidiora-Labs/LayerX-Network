@@ -15,6 +15,11 @@ pub struct ProtocolProgramBalanceReader {
 impl ProtocolProgramBalanceReader {
     /// Binds the agent route to a node-owned live Programs read context.
     ///
+    /// # Errors
+    ///
+    /// Refuses a null context or a zero staleness limit as a non-canonical
+    /// view.
+    ///
     /// # Safety
     ///
     /// `context` must remain the synchronous live node Programs context for
@@ -44,6 +49,11 @@ impl ProtocolProgramBalanceReader {
     ///
     /// Refuses unavailable, stale, historical or identity-mismatched protocol
     /// evidence and never substitutes a cached or caller-supplied balance.
+    ///
+    /// # Safety
+    ///
+    /// The bound context must still be the live node Programs context for the
+    /// duration of this synchronous call.
     #[allow(unsafe_code)]
     pub unsafe fn read(
         &mut self,
@@ -99,7 +109,7 @@ pub struct ProgramBalanceRead {
 }
 
 pub(super) fn program_balances(
-    read: VerifiedProgramBalanceRead,
+    read: &VerifiedProgramBalanceRead,
     staleness_limit: u64,
 ) -> Result<ProgramBalanceRead, ProtocolAdapterError> {
     let valid_through = read
@@ -133,6 +143,11 @@ pub(super) fn program_balances(
 /// Reads the production C Programs/account-state adapter and immediately
 /// projects its opaque verified result onto the agent surface.
 ///
+/// # Errors
+///
+/// Propagates every adapter refusal from the underlying state read and the
+/// freshness-window projection unchanged.
+///
 /// # Safety
 ///
 /// `context` must be the live read-only module context supplied by the node
@@ -156,5 +171,5 @@ pub unsafe fn program_balances_from_protocol(
             staleness_limit,
         )
     }?;
-    program_balances(read.into_balances(), staleness_limit)
+    program_balances(&read.into_balances(), staleness_limit)
 }

@@ -7,6 +7,7 @@ use std::net::{TcpListener, TcpStream};
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use layerx_agentd::audit::Redacted;
 use layerx_agentd::read::{
     LayerxdProgramBalanceReader, ProgramBalanceRead, ProgramBalanceReadRoute,
 };
@@ -291,7 +292,7 @@ fn serve(config: Config) -> Result<(), String> {
 
 fn main() {
     if let Err(error) = config().and_then(serve) {
-        eprintln!("layerx-agentd: {error}");
+        eprintln!("layerx-agentd: {}", Redacted::boot_diagnostic(&error));
         std::process::exit(2);
     }
 }

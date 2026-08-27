@@ -8,7 +8,7 @@ use super::{
 pub const LOCAL_ALLOW_NOTICE: &str =
     "local policy has no objection; this is a local restriction result, not protocol authorisation";
 pub const LOCAL_DENY_NOTICE: &str =
-    "local policy restriction refused the request; protocol authorisation was not evaluated";
+    "local restriction refused the request; this is not protocol authorisation and the protocol was not consulted";
 
 /// Whether an explanation was produced for live or dry-run evaluation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

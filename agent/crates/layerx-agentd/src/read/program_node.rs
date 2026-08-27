@@ -36,6 +36,11 @@ pub struct LayerxdProgramBalanceReader {
 
 impl LayerxdProgramBalanceReader {
     /// Connects the running agent route to the production node pair.
+    ///
+    /// # Errors
+    ///
+    /// Refuses empty authorizations, a zero replica id, identical or insecure
+    /// endpoints as a non-canonical view.
     pub fn connect(
         endpoint: &str,
         authorization: String,
@@ -74,6 +79,11 @@ impl LayerxdProgramBalanceReader {
     }
 
     /// Reads and locally re-verifies one complete current protocol state.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a zero clock as a non-canonical view and surfaces transport,
+    /// decode, and verification refusals from the node pair unchanged.
     pub fn read_protocol_state(
         &mut self,
         program: ProgramId,
@@ -116,13 +126,18 @@ impl LayerxdProgramBalanceReader {
     }
 
     /// Serves the agent's balance model only from the verified protocol read.
+    ///
+    /// # Errors
+    ///
+    /// Propagates every protocol-state refusal and the freshness-window
+    /// projection failure unchanged.
     pub fn read(
         &mut self,
         program: ProgramId,
         now: u64,
     ) -> Result<ProgramBalanceRead, ProtocolAdapterError> {
         let state = self.read_protocol_state(program, now)?;
-        program_balances(state.into_balances(), self.staleness_limit)
+        program_balances(&state.into_balances(), self.staleness_limit)
     }
 
     #[must_use]
@@ -242,6 +257,11 @@ impl ProgramBalanceReadRoute {
         Self { reader }
     }
 
+    /// Serves one verified balance read through the connected reader.
+    ///
+    /// # Errors
+    ///
+    /// Propagates every reader refusal unchanged.
     pub fn read(
         &mut self,
         program: ProgramId,

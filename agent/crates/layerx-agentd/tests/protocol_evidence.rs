@@ -9,6 +9,7 @@ use support::{
     StateHeaderIdentity, TestAuthorityPolicy, TestAuthorityRecord,
 };
 
+#[derive(Clone, Copy)]
 struct PolicyIdentity {
     signing_seed: [u8; 32],
     protocol_version: u16,

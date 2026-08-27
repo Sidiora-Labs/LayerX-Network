@@ -1826,7 +1826,7 @@ static lxp_result open_process(lxp_daemon_process *process,
                         process->authority_replica_token_length) == 0) ||
          (process->next_batch != 0U &&
           process->sequencer_authorization.last_batch_number <
-              process->next_batch))
+              process->next_batch)))
         status = LXP_ERR_NON_CANONICAL;
     return status;
 }

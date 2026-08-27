@@ -299,9 +299,9 @@ fn decode_effect(decoder: &mut Decoder<'_>) -> Result<Effect, WireError> {
 
 fn decode_protocol(bytes: &[u8]) -> Result<Receipt, WireError> {
     let mut decoder = Decoder::new(bytes, MAX_MESSAGE_BYTES);
-    decoder.structure_header(RECEIPT_TAG)?;
+    let envelope_version = decoder.structure_header_version(RECEIPT_TAG)?;
     let protocol_version = decoder.u16()?;
-    if protocol_version != 1 && protocol_version != 2 {
+    if protocol_version != envelope_version {
         return Err(WireError::known(
             KnownResult::VersionUnsupported,
             decoder.offset(),
@@ -409,7 +409,7 @@ fn decode_replay(bytes: &[u8]) -> Result<Receipt, WireError> {
 ///
 /// Returns a typed canonical rejection with no panic path.
 pub fn decode(bytes: &[u8]) -> Result<Receipt, WireError> {
-    if bytes.len() >= 4 && bytes[..4] == [0, 1, 0x52, 1] {
+    if bytes.len() >= 4 && (bytes[..4] == [0, 1, 0x52, 1] || bytes[..4] == [0, 2, 0x52, 1]) {
         decode_protocol(bytes)
     } else {
         decode_replay(bytes)
@@ -428,7 +428,7 @@ fn encode_effect(encoder: &mut Encoder, effect: &Effect) -> Result<(), WireError
 
 fn encode_protocol(receipt: &ProtocolReceipt) -> Result<Vec<u8>, WireError> {
     let mut encoder = Encoder::new(MAX_MESSAGE_BYTES);
-    encoder.structure_header(RECEIPT_TAG)?;
+    encoder.structure_header_version(RECEIPT_TAG, receipt.protocol_version)?;
     encoder.u16(receipt.protocol_version)?;
     encoder.bytes(&receipt.activity_id, 32)?;
     encoder.u64(receipt.global_sequence)?;

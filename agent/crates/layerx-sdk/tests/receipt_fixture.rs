@@ -48,7 +48,7 @@ fn u128_field(json: &str, key: &str) -> u128 {
 }
 
 fn hex_bytes(value: &str) -> Vec<u8> {
-    assert!(value.len() % 2 == 0, "odd hex length");
+    assert!(value.len().is_multiple_of(2), "odd hex length");
     (0..value.len() / 2)
         .map(|index| {
             u8::from_str_radix(&value[2 * index..2 * index + 2], 16)
@@ -123,8 +123,8 @@ fn core_fixture_receipt_byte_flip_fails() {
     let mut mutated = hex_bytes(&string_field(&json, "canonical_receipt_hex"));
     let last = mutated.len() - 1;
     mutated[last] ^= 0x01;
-    let failure = verify_receipt(&mutated, &authorised_batch(&json))
-        .map(|_| ())
-        .expect_err("mutated receipt verified; a flipped signature byte must fail");
+    let Err(failure) = verify_receipt(&mutated, &authorised_batch(&json)) else {
+        panic!("mutated receipt verified; a flipped signature byte must fail")
+    };
     assert_eq!(failure.check, ReceiptCheck::SequencerSignature);
 }

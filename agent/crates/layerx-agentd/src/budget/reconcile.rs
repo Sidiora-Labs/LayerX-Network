@@ -103,19 +103,19 @@ pub enum ReconcileError {
 /// because no canonical protocol budget state schema exists.
 pub(crate) fn reconcile_state(
     local: &mut LocalAccounting,
-    protocol: ProtocolBudgetState,
+    protocol: &ProtocolBudgetState,
     receipts: &[SpendReceiptEvidence],
     verifier: &EvidenceAuthority,
 ) -> Result<ReconciliationState, ReconcileError> {
-    let mut replay = verifier.receipt_replay_guard();
+    let mut replay = EvidenceAuthority::receipt_replay_guard();
     for receipt in receipts {
-        let verified = verifier
+        let verified_receipt = verifier
             .verify_receipt(&receipt.evidence)
             .map_err(|_| ReconcileError::UnverifiedReceipt)?;
-        if verified.activity_id() != receipt.expected_activity_id {
+        if verified_receipt.activity_id() != receipt.expected_activity_id {
             return Err(ReconcileError::ReceiptActivityMismatch);
         }
-        replay.admit(&verified).map_err(map_replay_error)?;
+        replay.admit(&verified_receipt).map_err(map_replay_error)?;
     }
     let _ = local;
     let _verified = verifier

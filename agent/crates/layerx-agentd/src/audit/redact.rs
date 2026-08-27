@@ -52,6 +52,20 @@ impl Redacted {
         validate_public(&value)?;
         Ok(Self(value))
     }
+
+    /// Renders one operator-facing boot diagnostic before any tenant exists.
+    ///
+    /// Startup errors name missing configuration and refused protocol
+    /// evidence; the text is still held to the public-text bounds, and
+    /// anything outside them renders as the redaction marker instead.
+    #[must_use]
+    pub fn boot_diagnostic(value: &str) -> Self {
+        if validate_public(value).is_ok() {
+            Self(value.to_owned())
+        } else {
+            Self(REDACTED.to_owned())
+        }
+    }
 }
 
 impl Debug for Redacted {

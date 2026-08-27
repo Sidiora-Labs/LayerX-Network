@@ -1,3 +1,5 @@
+#define _POSIX_C_SOURCE 200809L
+
 #include "layerx/lxp_daemon.h"
 
 #include "layerx/lxp_crypto.h"

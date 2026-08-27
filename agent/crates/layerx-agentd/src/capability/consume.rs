@@ -41,7 +41,7 @@ impl Ceiling {
     /// issue an opaque reconciliation result.
     #[must_use]
     pub fn new(maximum: u128, verifier: EvidenceAuthority) -> Self {
-        let receipt_replay = verifier.receipt_replay_guard();
+        let receipt_replay = EvidenceAuthority::receipt_replay_guard();
         Self {
             maximum,
             verifier,
@@ -69,7 +69,7 @@ impl Ceiling {
         receipts: &[ReceiptApplication],
     ) -> Result<Self, CeilingError> {
         let mut consumed = 0_u128;
-        let mut receipt_replay = verifier.receipt_replay_guard();
+        let mut receipt_replay = EvidenceAuthority::receipt_replay_guard();
         let mut settled_reservations = BTreeSet::new();
         for receipt in receipts {
             if receipt.reservation_id == [0; 32] || receipt.expected_activity_id == [0; 32] {
@@ -78,17 +78,17 @@ impl Ceiling {
             if !settled_reservations.insert(receipt.reservation_id) {
                 return Err(CeilingError::Duplicate);
             }
-            let verified = verifier
+            let verified_receipt = verifier
                 .verify_receipt(&receipt.evidence)
                 .map_err(|_| CeilingError::UnverifiedReceipt)?;
-            if verified.activity_id() != receipt.expected_activity_id {
+            if verified_receipt.activity_id() != receipt.expected_activity_id {
                 return Err(CeilingError::ActivityMismatch);
             }
             receipt_replay
-                .admit(&verified)
+                .admit(&verified_receipt)
                 .map_err(map_replay_error)?;
-            if verified.result_code() == 0 {
-                let amount = verified.amount();
+            if verified_receipt.result_code() == 0 {
+                let amount = verified_receipt.amount();
                 consumed = consumed.checked_add(amount).ok_or(CeilingError::Overflow)?;
             }
         }

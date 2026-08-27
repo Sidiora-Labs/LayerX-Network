@@ -190,6 +190,15 @@ fn transition(
         .unwrap_or_else(|error| panic!("transition {id} to {state:?}: {error:?}"));
 }
 
+fn verified_receipt_for(outbox: &Outbox, id: u8) -> VerifiedReceiptEvidence {
+    let activity_id = outbox
+        .status([id; 32])
+        .map_or_else(|| panic!("activity missing"), |status| status.activity_id);
+    support::evidence_verifier()
+        .verify_receipt(&support::raw_receipt(activity_id, 0, 1))
+        .unwrap_or_else(|error| panic!("receipt verification: {error:?}"))
+}
+
 #[test]
 fn outbox_is_durable_before_transmission_and_unknown_is_a_real_state() {
     let root = directory();
@@ -241,6 +250,7 @@ fn outbox_is_durable_before_transmission_and_unknown_is_a_real_state() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn every_legal_terminal_path_is_recorded_and_illegal_transitions_fail() {
     let root = directory();
     let mut store = Store::open(&root).unwrap_or_else(|error| panic!("store: {error}"));
@@ -260,8 +270,7 @@ fn every_legal_terminal_path_is_recorded_and_illegal_transitions_fail() {
     transition(&mut outbox, &mut store, 1, SubmissionState::Unknown, None);
     let activity_id = outbox
         .status([1; 32])
-        .map(|status| status.activity_id)
-        .unwrap_or_else(|| panic!("activity missing"));
+        .map_or_else(|| panic!("activity missing"), |status| status.activity_id);
     let receipt = support::evidence_verifier()
         .verify_receipt(&support::raw_receipt(activity_id, 0, 1))
         .unwrap_or_else(|error| panic!("receipt verification: {error:?}"));
@@ -286,12 +295,13 @@ fn every_legal_terminal_path_is_recorded_and_illegal_transitions_fail() {
     );
     transition(&mut outbox, &mut store, 4, SubmissionState::Submitted, None);
     transition(&mut outbox, &mut store, 4, SubmissionState::Unknown, None);
+    let receipt_for_four = verified_receipt_for(&outbox, 4);
     transition(
         &mut outbox,
         &mut store,
         4,
         SubmissionState::Failed,
-        Some(receipt),
+        Some(receipt_for_four),
     );
     transition(&mut outbox, &mut store, 5, SubmissionState::Submitted, None);
     transition(
@@ -301,12 +311,13 @@ fn every_legal_terminal_path_is_recorded_and_illegal_transitions_fail() {
         SubmissionState::Acknowledged,
         None,
     );
+    let receipt_for_five = verified_receipt_for(&outbox, 5);
     transition(
         &mut outbox,
         &mut store,
         5,
         SubmissionState::Executed,
-        Some(receipt),
+        Some(receipt_for_five),
     );
     transition(&mut outbox, &mut store, 6, SubmissionState::Submitted, None);
     transition(
@@ -316,12 +327,13 @@ fn every_legal_terminal_path_is_recorded_and_illegal_transitions_fail() {
         SubmissionState::Acknowledged,
         None,
     );
+    let receipt_for_six = verified_receipt_for(&outbox, 6);
     transition(
         &mut outbox,
         &mut store,
         6,
         SubmissionState::Failed,
-        Some(receipt),
+        Some(receipt_for_six),
     );
 
     for id in 1_u8..=6 {
@@ -380,7 +392,7 @@ fn executed_is_impossible_without_a_verified_receipt_reference() {
     let wrong_activity = support::evidence_verifier()
         .verify_receipt(&support::raw_receipt([8; 32], 0, 1))
         .unwrap_or_else(|error| panic!("receipt verification: {error:?}"));
-    assert_eq!(
+    assert!(matches!(
         outbox.transition(
             &mut store,
             [1; 32],
@@ -389,7 +401,7 @@ fn executed_is_impossible_without_a_verified_receipt_reference() {
             Some(wrong_activity),
         ),
         Err(OutboxError::ReceiptMismatch)
-    );
+    ));
     let raw = support::raw_receipt([8; 32], 0, 1);
     let mut corrupt = raw.canonical_receipt().to_vec();
     corrupt[0] ^= 1;
@@ -414,17 +426,16 @@ fn legacy_boolean_receipt_records_fail_closed() {
         .unwrap_or_else(|error| panic!("outbox key: {error}"));
     let mut legacy = store
         .get(&key)
-        .map(|value| value.bytes().to_vec())
-        .unwrap_or_else(|| panic!("outbox record missing"));
+        .map_or_else(|| panic!("outbox record missing"), |value| value.bytes().to_vec());
     legacy[4] = 1;
     store
         .put_local(key, legacy)
         .unwrap_or_else(|error| panic!("legacy record: {error}"));
     let mut restored = Outbox::default();
-    assert_eq!(
+    assert!(matches!(
         restored.restore(&store, tenant(), [1; 32]),
         Err(OutboxError::Corrupt)
-    );
+    ));
     let _ = std::fs::remove_dir_all(root);
 }
 mod support;

@@ -62,8 +62,10 @@ fn verified_creation_without_a_proven_object_effect_fails_closed() {
     let activity_id = request
         .verified_submission
         .as_ref()
-        .map(layerx_agentd::sign::VerifiedSubmission::activity_id)
-        .unwrap_or_else(|| panic!("verified submission missing"));
+        .map_or_else(
+            || panic!("verified submission missing"),
+            layerx_agentd::sign::VerifiedSubmission::activity_id,
+        );
     let evidence = support::raw_receipt(activity_id, 0, 25);
     let mut pipeline = SignedActivityPipeline {
         result: Ok(CoreBudgetReceipt {

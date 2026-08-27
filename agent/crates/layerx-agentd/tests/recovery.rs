@@ -50,8 +50,7 @@ fn transition(outbox: &mut Outbox, store: &mut Store, id: u8, to: SubmissionStat
     let evidence = if to == SubmissionState::Executed {
         let activity_id = outbox
             .status([id; 32])
-            .map(|status| status.activity_id)
-            .unwrap_or_else(|| panic!("activity missing"));
+            .map_or_else(|| panic!("activity missing"), |status| status.activity_id);
         Some(
             support::evidence_verifier()
                 .verify_receipt(&support::raw_receipt(activity_id, 0, 25))
@@ -86,8 +85,7 @@ fn restart_preserves_recovery_actions_but_blocks_writes_without_budget_schema() 
     let (before_outbox, queued_exact) = populate_every_stage(&mut before);
     let unknown_activity_id = before_outbox
         .status([4; 32])
-        .map(|status| status.activity_id)
-        .unwrap_or_else(|| panic!("unknown activity missing"));
+        .map_or_else(|| panic!("unknown activity missing"), |status| status.activity_id);
     hold_unknown(
         &mut before,
         &UnknownReservation {
@@ -195,8 +193,7 @@ fn restart_resolution_uses_receipts_without_duplicate_delivery() {
             let activity_id = recovered
                 .outbox
                 .status(*submission_id)
-                .map(|status| status.activity_id)
-                .unwrap_or_else(|| panic!("activity missing"));
+                .map_or_else(|| panic!("activity missing"), |status| status.activity_id);
             (*submission_id, support::raw_receipt(activity_id, 0, 25))
         })
         .collect();

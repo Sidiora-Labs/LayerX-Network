@@ -470,7 +470,7 @@ impl EvidenceAuthority {
         self.verifier.verify_state(raw)
     }
 
-    pub(crate) fn receipt_replay_guard(&self) -> ReceiptReplayGuard {
+    pub(crate) fn receipt_replay_guard() -> ReceiptReplayGuard {
         ReceiptReplayGuard::default()
     }
 }

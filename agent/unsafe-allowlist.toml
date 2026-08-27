@@ -4,3 +4,8 @@ version = 1
 path = "crates/layerx-client/src/lni/abi.rs"
 reason = "The optional stable ABI must call operator-supplied C function pointers and copy their returned byte buffer."
 safety = "The module accepts only an opaque non-null handle, bounds every buffer before slice creation, copies returned bytes before calling the required release function, and exposes no C protocol layout."
+
+[[exceptions]]
+path = "crates/layerx-agentd/src/read/program_balances.rs"
+reason = "The receipt-bound program balance route must read the node-owned C Programs adapter context through the production FFI entry point."
+safety = "The reader binds only a non-null opaque context whose owner is documented as the live node Programs context, keeps every call synchronous, forwards the pointer solely to the adapter's own unsafe read entry point, and projects the returned proof-verified balances into owned agent types before returning."

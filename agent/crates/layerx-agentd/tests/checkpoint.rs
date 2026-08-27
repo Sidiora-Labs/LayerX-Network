@@ -6,6 +6,7 @@ use layerx_agentd::read::{
 };
 use layerx_proof::checkpoint::{
     checkpoint_id, Attestation, Certificate, Checkpoint, CheckpointError, GuarantorKey,
+    SettlementDomain,
 };
 use layerx_proof::inclusion::SequencerAuthorization;
 use layerx_proof::merkle::{build_proof, Proof};
@@ -39,6 +40,10 @@ fn header_bytes(state_root: [u8; 32], activity_root: [u8; 32], sequencer_id: [u8
         }
     }
     encoder.finish()
+}
+
+fn settlement_domain() -> SettlementDomain {
+    SettlementDomain::new(31_337, [0x55; 20])
 }
 
 fn guarantor_key(value: u8) -> (SigningKey, [u8; 33], [u8; 32]) {
@@ -175,6 +180,7 @@ fn verified_checkpoint_derives_commitments_signers_threshold_and_settlement() {
         &certificate,
         &bonded,
         identifier,
+        settlement_domain(),
         Some(b"paxeer-anchor"),
         true,
     )
@@ -216,7 +222,7 @@ fn unavailable_subthreshold_duplicate_and_settlement_mismatch_are_refused() {
     let fixture = inclusion_fixture();
     let (valid, bonded, identifier) = certificate(&fixture.header, 2, 2, None, false);
     assert_eq!(
-        checkpoint(&valid, &bonded, identifier, None, false),
+        checkpoint(&valid, &bonded, identifier, settlement_domain(), None, false),
         Err(CheckpointReadError::AvailabilityUnavailable {
             checkpoint_id: identifier
         })
@@ -224,7 +230,7 @@ fn unavailable_subthreshold_duplicate_and_settlement_mismatch_are_refused() {
 
     let (subthreshold, keys, identifier) = certificate(&fixture.header, 1, 2, None, false);
     assert!(matches!(
-        checkpoint(&subthreshold, &keys, identifier, None, true),
+        checkpoint(&subthreshold, &keys, identifier, settlement_domain(), None, true),
         Err(CheckpointReadError::Certificate(
             CheckpointError::Threshold {
                 achieved: 1,
@@ -235,7 +241,7 @@ fn unavailable_subthreshold_duplicate_and_settlement_mismatch_are_refused() {
 
     let (duplicate, keys, identifier) = certificate(&fixture.header, 1, 2, None, true);
     assert!(matches!(
-        checkpoint(&duplicate, &keys, identifier, None, true),
+        checkpoint(&duplicate, &keys, identifier, settlement_domain(), None, true),
         Err(CheckpointReadError::Certificate(
             CheckpointError::DuplicateSigner(_)
         ))
@@ -244,7 +250,14 @@ fn unavailable_subthreshold_duplicate_and_settlement_mismatch_are_refused() {
     let (settlement, keys, identifier) =
         certificate(&fixture.header, 2, 2, Some(b"registered".to_vec()), false);
     assert_eq!(
-        checkpoint(&settlement, &keys, identifier, Some(b"mismatch"), true),
+        checkpoint(
+            &settlement,
+            &keys,
+            identifier,
+            settlement_domain(),
+            Some(b"mismatch"),
+            true,
+        ),
         Err(CheckpointReadError::Certificate(
             CheckpointError::Settlement
         ))

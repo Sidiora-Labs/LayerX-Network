@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::os::unix::fs::PermissionsExt;
@@ -201,6 +203,7 @@ pub struct TestAuthorityRecord {
     pub revoked_at_batch: Option<u64>,
 }
 
+#[derive(Clone, Copy)]
 pub struct TestAuthorityPolicy<'a> {
     pub protocol_version: u16,
     pub network_id: u32,
@@ -228,6 +231,7 @@ pub fn try_evidence_authority(
     try_evidence_authority_with_sequencer(policy, None)
 }
 
+#[allow(clippy::too_many_lines)]
 fn try_evidence_authority_with_sequencer(
     policy: TestAuthorityPolicy<'_>,
     sequencer_id: Option<[u8; 32]>,
@@ -381,6 +385,7 @@ pub fn raw_receipt_at(
     )
 }
 
+#[allow(clippy::too_many_lines)]
 pub fn raw_receipt_for_execution_batch(
     activity_id: [u8; 32],
     result_code: i32,

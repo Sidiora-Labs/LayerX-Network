@@ -65,7 +65,11 @@ fn dependency_violation(body: &str) -> bool {
     })
 }
 
-fn source_rule(body: &str, allow_c_layout: bool) -> Option<&'static str> {
+fn source_rule(
+    body: &str,
+    allow_c_layout: bool,
+    allow_ambient_clock: bool,
+) -> Option<&'static str> {
     if body.contains("include!(") && body.contains("include/layerx")
         || body.contains("include_bytes!(") && body.contains("include/layerx")
         || body.contains("bindgen::")
@@ -82,9 +86,10 @@ fn source_rule(body: &str, allow_c_layout: bool) -> Option<&'static str> {
     if PRIVATE_PATHS.iter().any(|private| body.contains(private)) {
         return Some("node-private-path");
     }
-    if AMBIENT_NONDETERMINISM
-        .iter()
-        .any(|ambient| body.contains(ambient))
+    if !allow_ambient_clock
+        && AMBIENT_NONDETERMINISM
+            .iter()
+            .any(|ambient| body.contains(ambient))
     {
         return Some("ambient-nondeterminism");
     }
@@ -130,6 +135,13 @@ fn agent_boundary_purity_check(agent_root: &Path) -> Result<(), Vec<Violation>> 
             rule: "missing-unsafe-allowlist",
         }]);
     };
+    let Ok(clock_allowlist) = allowlisted_paths(agent_root, "nondeterminism-allowlist.toml")
+    else {
+        return Err(vec![Violation {
+            path: agent_root.join("nondeterminism-allowlist.toml"),
+            rule: "missing-nondeterminism-allowlist",
+        }]);
+    };
     let mut files = Vec::new();
     if visit_files(&crate_root, &mut files).is_err() {
         return Err(vec![Violation {
@@ -154,7 +166,11 @@ fn agent_boundary_purity_check(agent_root: &Path) -> Result<(), Vec<Violation>> 
                 });
             }
         } else {
-            if let Some(rule) = source_rule(&body, allowlist.contains(&path)) {
+            if let Some(rule) = source_rule(
+                &body,
+                allowlist.contains(&path),
+                clock_allowlist.contains(&path),
+            ) {
                 violations.push(Violation {
                     path: path.clone(),
                     rule,

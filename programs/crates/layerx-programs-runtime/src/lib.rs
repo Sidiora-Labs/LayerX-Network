@@ -30,10 +30,13 @@ pub mod entrypoint;
 pub mod execute;
 #[deny(unsafe_code)]
 pub mod fault;
+#[cfg(feature = "host-ffi")]
 #[allow(unsafe_code)]
 mod ffi;
+#[cfg(feature = "host-ffi")]
 #[allow(unsafe_code)]
 mod ffi_call;
+#[cfg(feature = "host-ffi")]
 #[allow(unsafe_code)]
 mod ffi_transfer;
 #[deny(unsafe_code)]

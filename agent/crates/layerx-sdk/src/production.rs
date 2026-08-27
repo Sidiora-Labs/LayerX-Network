@@ -611,6 +611,10 @@ impl From<MirrorVerifyError> for MirrorSdkError {
 
 /// Resolves a pinned source policy and verifies the receipt without composing
 /// chain, archive or freshness evidence across sources.
+///
+/// # Errors
+///
+/// Returns the exact source read failure or receipt verification failure.
 pub fn verify_mirror_receipt_from_sources(
     sources: &MirrorSources,
     batch_number: u64,
@@ -622,6 +626,12 @@ pub fn verify_mirror_receipt_from_sources(
     Ok(MirrorVerifier::from_source(archive, trust)?.receipt(canonical_receipt)?)
 }
 
+/// Resolves a pinned source policy and verifies state inclusion without
+/// composing chain, archive or freshness evidence across sources.
+///
+/// # Errors
+///
+/// Returns the exact source read failure or state verification failure.
 pub fn verify_mirror_state_from_sources(
     sources: &MirrorSources,
     batch_number: u64,

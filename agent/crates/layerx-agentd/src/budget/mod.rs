@@ -37,7 +37,7 @@ pub use reservations::{
 /// that fail-closed result.
 pub fn reconcile(
     local: &mut LocalAccounting,
-    protocol: ProtocolBudgetState,
+    protocol: &ProtocolBudgetState,
     receipts: &[SpendReceiptEvidence],
     verifier: &crate::protocol_evidence::EvidenceAuthority,
 ) -> Result<ReconciliationState, ReconcileError> {
@@ -100,7 +100,7 @@ pub fn rebuild(
     tenant: &crate::store::TenantId,
     unknown_ids: &[[u8; 32]],
     receipts: &[PersistedReceipt],
-    protocol: ProtocolBudgetState,
+    protocol: &ProtocolBudgetState,
     verifier: &crate::protocol_evidence::EvidenceAuthority,
 ) -> Result<RestartAccounting, RestartError> {
     recovery::rebuild_accounting(store, tenant, unknown_ids, receipts, protocol, verifier)

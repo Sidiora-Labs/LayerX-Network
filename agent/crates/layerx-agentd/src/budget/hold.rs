@@ -93,22 +93,22 @@ pub(crate) fn rebuild_accounting(
     tenant: &TenantId,
     unknown_ids: &[[u8; 32]],
     receipts: &[PersistedReceipt],
-    protocol: ProtocolBudgetState,
+    protocol: &ProtocolBudgetState,
     verifier: &EvidenceAuthority,
 ) -> Result<RestartAccounting, RestartError> {
-    let mut replay = verifier.receipt_replay_guard();
+    let mut replay = EvidenceAuthority::receipt_replay_guard();
     let mut receipt_consumed = 0_u128;
     for receipt in receipts {
-        let verified = verifier
+        let verified_receipt = verifier
             .verify_receipt(&receipt.evidence)
             .map_err(|_| RestartError::UnverifiedReceipt)?;
-        if verified.activity_id() != receipt.expected_activity_id {
+        if verified_receipt.activity_id() != receipt.expected_activity_id {
             return Err(RestartError::ReceiptActivityMismatch);
         }
-        replay.admit(&verified).map_err(map_replay_error)?;
-        if verified.result_code() == 0 {
+        replay.admit(&verified_receipt).map_err(map_replay_error)?;
+        if verified_receipt.result_code() == 0 {
             receipt_consumed = receipt_consumed
-                .checked_add(verified.amount())
+                .checked_add(verified_receipt.amount())
                 .ok_or(RestartError::Arithmetic)?;
         }
     }

@@ -93,7 +93,7 @@ pub fn recover(
         tenant,
         inputs.unknown_budget_ids,
         inputs.budget_receipts,
-        inputs.protocol_budget.clone(),
+        &inputs.protocol_budget,
         &inputs.verifier,
     )
     .map_err(RecoveryError::Budget)?;

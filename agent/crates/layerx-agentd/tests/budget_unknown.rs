@@ -42,7 +42,7 @@ fn process_loss_between_submission_and_receipt_preserves_unknown_hold() {
         &tenant,
         &[[1; 32]],
         &[],
-        protocol(0),
+        &protocol(0),
         &support::evidence_verifier(),
     )
         .unwrap_or_else(|error| panic!("rebuild: {error:?}"));
@@ -73,7 +73,7 @@ fn writes_are_refused_when_no_canonical_protocol_budget_schema_exists() {
             expected_activity_id: [2; 32],
             evidence: support::raw_receipt([2; 32], 0, 100),
         }],
-        protocol(200),
+        &protocol(200),
         &support::evidence_verifier(),
     )
     .unwrap_or_else(|error| panic!("rebuild: {error:?}"));
@@ -111,7 +111,7 @@ fn restart_rejects_duplicate_receipt_and_activity_evidence() {
                     evidence: receipt,
                 },
             ],
-            protocol(200),
+            &protocol(200),
             &support::evidence_verifier(),
         ),
         Err(RestartError::DuplicateReceipt)
@@ -131,7 +131,7 @@ fn restart_rejects_duplicate_receipt_and_activity_evidence() {
                     evidence: support::raw_receipt_at([4; 32], 0, 100, 10),
                 },
             ],
-            protocol(200),
+            &protocol(200),
             &support::evidence_verifier(),
         ),
         Err(RestartError::DuplicateActivity)

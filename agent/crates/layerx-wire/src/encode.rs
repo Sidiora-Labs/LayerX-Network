@@ -2,7 +2,7 @@
 
 use layerx_types::result::KnownResult;
 
-use crate::limits::PROTOCOL_VERSION;
+use crate::limits::{MAX_PROTOCOL_VERSION, PROTOCOL_VERSION};
 use crate::{check_ordered_keys, WireError};
 
 /// A capacity-bounded canonical byte encoder.
@@ -175,6 +175,30 @@ impl Encoder {
             return Err(WireError::known(KnownResult::InvalidTag, self.bytes.len()));
         }
         self.u16(PROTOCOL_VERSION)?;
+        self.u16(structure_tag)
+    }
+
+    /// Writes a version-carrying structure header for a non-zero tag.
+    ///
+    /// # Errors
+    ///
+    /// Returns invalid-tag for a zero tag, version-unsupported for a version
+    /// outside the supported range, and length-limit on budget exhaustion.
+    pub fn structure_header_version(
+        &mut self,
+        structure_tag: u16,
+        protocol_version: u16,
+    ) -> Result<(), WireError> {
+        if structure_tag == 0 {
+            return Err(WireError::known(KnownResult::InvalidTag, self.bytes.len()));
+        }
+        if !(PROTOCOL_VERSION..=MAX_PROTOCOL_VERSION).contains(&protocol_version) {
+            return Err(WireError::known(
+                KnownResult::VersionUnsupported,
+                self.bytes.len(),
+            ));
+        }
+        self.u16(protocol_version)?;
         self.u16(structure_tag)
     }
 

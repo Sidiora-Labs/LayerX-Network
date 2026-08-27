@@ -27,7 +27,7 @@ fn divergence_cannot_be_derived_from_an_untyped_included_leaf() {
     assert_eq!(
         reconcile(
             &mut local,
-            protocol(350, 650, 128),
+            &protocol(350, 650, 128),
             &receipts,
             &support::evidence_verifier(),
         ),
@@ -51,7 +51,7 @@ fn repeated_attempts_cannot_turn_an_untyped_leaf_into_authority() {
         assert_eq!(
             reconcile(
                 &mut local,
-                protocol(350, 650, head),
+                &protocol(350, 650, head),
                 &missing,
                 &support::evidence_verifier(),
             ),
@@ -71,7 +71,7 @@ fn an_untyped_overage_candidate_never_replaces_local_accounting() {
     assert_eq!(
         reconcile(
             &mut local,
-            protocol(700, 300, 130),
+            &protocol(700, 300, 130),
             &[],
             &support::evidence_verifier(),
         ),

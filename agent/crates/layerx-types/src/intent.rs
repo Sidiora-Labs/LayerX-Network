@@ -683,21 +683,15 @@ mod program_call_tests {
     /// string for the same operation, so the same call yields the same receipt.
     pub(crate) const GOLDEN_PAYLOAD_HEX: &str = "4c61796572582f70726f6772616d732f63616c6c2f763100111111111111111111111111111111111111111111111111111111111111111100000000000003e8000000000000000000000000000000fa0002010300000002aabb";
 
-    fn golden_call() -> ProgramCall {
+    fn golden_call() -> Result<ProgramCall, ProgramCallError> {
         let callee = ProgramId::new([0x11; 32]);
-        let Ok(calldata) = Calldata::new(&[0xAA, 0xBB]) else {
-            panic!("bounded calldata rejected");
-        };
-        let Ok(budget) = CallBudget::new(1000, Amount::from_u128(250)) else {
-            panic!("non-zero fuel rejected");
-        };
-        let Ok(capabilities) = RequestedCapabilities::new(&[
+        let calldata = Calldata::new(&[0xAA, 0xBB])?;
+        let budget = CallBudget::new(1000, Amount::from_u128(250))?;
+        let capabilities = RequestedCapabilities::new(&[
             CapabilityRequest::Transfer,
             CapabilityRequest::StorageRead,
-        ]) else {
-            panic!("unique capabilities rejected");
-        };
-        ProgramCall::new(callee, calldata, budget, capabilities)
+        ])?;
+        Ok(ProgramCall::new(callee, calldata, budget, capabilities))
     }
 
     fn hex(bytes: &[u8]) -> String {
@@ -711,31 +705,32 @@ mod program_call_tests {
     }
 
     #[test]
-    fn canonical_payload_matches_shared_golden_vector() {
-        assert_eq!(hex(&golden_call().canonical_payload()), GOLDEN_PAYLOAD_HEX);
+    fn canonical_payload_matches_shared_golden_vector() -> Result<(), ProgramCallError> {
+        assert_eq!(hex(&golden_call()?.canonical_payload()), GOLDEN_PAYLOAD_HEX);
+        Ok(())
     }
 
     #[test]
-    fn canonical_payload_is_deterministic() {
+    fn canonical_payload_is_deterministic() -> Result<(), ProgramCallError> {
         assert_eq!(
-            golden_call().canonical_payload(),
-            golden_call().canonical_payload()
+            golden_call()?.canonical_payload(),
+            golden_call()?.canonical_payload()
         );
+        Ok(())
     }
 
     #[test]
-    fn capabilities_are_sorted_and_unique() {
-        let Ok(capabilities) = RequestedCapabilities::new(&[
+    fn capabilities_are_sorted_and_unique() -> Result<(), ProgramCallError> {
+        let capabilities = RequestedCapabilities::new(&[
             CapabilityRequest::Compose,
             CapabilityRequest::StorageRead,
-        ]) else {
-            panic!("unique capabilities rejected");
-        };
+        ])?;
         assert_eq!(
             capabilities.as_slice(),
             &[CapabilityRequest::StorageRead, CapabilityRequest::Compose]
         );
         assert!(capabilities.contains(CapabilityRequest::Compose));
+        Ok(())
     }
 
     #[test]
@@ -782,16 +777,15 @@ mod program_call_tests {
     }
 
     #[test]
-    fn typed_outcome_carries_response_or_failure() {
-        let Ok(response) = ProgramCallResponse::new(0, &[1, 2, 3]) else {
-            panic!("bounded response rejected");
-        };
+    fn typed_outcome_carries_response_or_failure() -> Result<(), ProgramCallError> {
+        let response = ProgramCallResponse::new(0, &[1, 2, 3])?;
         let completed = ProgramCallOutcome::Completed(response);
         assert!(completed.is_completed());
         assert_eq!(completed.response().map(ProgramCallResponse::code), Some(0));
         let refused = ProgramCallOutcome::Refused(ProgramCallFailure::UnknownProgram);
         assert_eq!(refused.failure(), Some(ProgramCallFailure::UnknownProgram));
         assert_eq!(ProgramCallFailure::UnknownProgram.class_tag(), 1);
+        Ok(())
     }
 
     #[test]

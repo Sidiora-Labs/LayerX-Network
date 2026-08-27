@@ -355,6 +355,7 @@ impl Surface {
     /// Returns `InvalidOperator` or `Audit` when the attempt cannot be audited, then
     /// `UnknownResolution` for an unknown submission id, a non-`Unknown` state, an
     /// observation time before the first sighting, or a failed durable backoff write.
+    #[allow(clippy::too_many_arguments)]
     pub fn resolve_unknown<B: ReceiptLookup>(
         &mut self,
         context: &OperatorContext,
@@ -458,7 +459,7 @@ impl Surface {
         context: &OperatorContext,
         budget_id: [u8; 32],
         local: &mut LocalAccounting,
-        protocol: ProtocolBudgetState,
+        protocol: &ProtocolBudgetState,
         receipts: &[SpendReceiptEvidence],
         verifier: &EvidenceAuthority,
     ) -> Result<ReconciliationState, AdminError> {

@@ -253,8 +253,7 @@ fn receipt(activity_id: [u8; 32], result_code: i32) -> RawReceiptEvidence {
 fn activity_id(outbox: &Outbox, id: u8) -> [u8; 32] {
     outbox
         .status([id; 32])
-        .map(|status| status.activity_id)
-        .unwrap_or_else(|| panic!("outbox activity missing"))
+        .map_or_else(|| panic!("outbox activity missing"), |status| status.activity_id)
 }
 
 #[test]

@@ -150,13 +150,13 @@ pub fn create_protocol_budget(
         return Err(BudgetCreationError::ActivityBindingMismatch);
     }
     let receipt = pipeline.submit_budget(request)?;
-    let verified = verifier
+    let verified_receipt = verifier
         .verify_receipt(&receipt.evidence)
         .map_err(|_| BudgetCreationError::UnverifiedReceipt)?;
-    if verified.activity_id() != submission.activity_id() {
+    if verified_receipt.activity_id() != submission.activity_id() {
         return Err(BudgetCreationError::ReceiptActivityMismatch);
     }
-    if verified.result_code() != 0 {
+    if verified_receipt.result_code() != 0 {
         return Err(BudgetCreationError::CoreRejected);
     }
     Err(BudgetCreationError::ProtocolObjectEffectUnavailable)

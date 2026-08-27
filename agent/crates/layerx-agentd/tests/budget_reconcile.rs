@@ -22,15 +22,15 @@ fn merkle_inclusion_without_a_canonical_budget_schema_cannot_correct_the_cache()
     };
     let protocol = protocol(0, 100);
     let verifier = support::evidence_verifier();
-    let verified = verifier
+    let verified_state = verifier
         .verify_state(&protocol.evidence)
         .unwrap_or_else(|error| panic!("state verification: {error:?}"));
     assert_eq!(
-        verified.level(),
+        verified_state.level(),
         layerx_types::verify::VerificationLevel::STATE_PROVEN
     );
     assert_eq!(
-        reconcile(&mut local, protocol, &[], &verifier),
+        reconcile(&mut local, &protocol, &[], &verifier),
         Err(ReconcileError::ProtocolStateSchemaUnavailable)
     );
     assert_eq!(local.consumed, 900);
@@ -59,7 +59,7 @@ fn duplicate_receipt_and_activity_evidence_are_rejected_before_reconciliation() 
     assert_eq!(
         reconcile(
             &mut local,
-            protocol(350, 100),
+            &protocol(350, 100),
             &duplicates,
             &support::evidence_verifier(),
         ),
@@ -78,7 +78,7 @@ fn duplicate_receipt_and_activity_evidence_are_rejected_before_reconciliation() 
     assert_eq!(
         reconcile(
             &mut local,
-            protocol(350, 100),
+            &protocol(350, 100),
             &same_activity,
             &support::evidence_verifier(),
         ),
@@ -101,7 +101,7 @@ fn receipts_are_bound_to_the_expected_activity_before_reconciliation() {
     assert_eq!(
         reconcile(
             &mut local,
-            protocol(350, 100),
+            &protocol(350, 100),
             &receipts,
             &support::evidence_verifier(),
         ),
@@ -126,7 +126,7 @@ fn unverified_inputs_never_correct_the_cache() {
     }];
     assert!(reconcile(
         &mut local,
-        protocol(350, 100),
+        &protocol(350, 100),
         &unverified_receipt,
         &support::evidence_verifier(),
     )
@@ -138,7 +138,7 @@ fn unverified_inputs_never_correct_the_cache() {
     corrupt_state[4] ^= 1;
     assert!(reconcile(
         &mut local,
-        ProtocolBudgetState {
+        &ProtocolBudgetState {
             evidence: support::corrupt_raw_state(&state.evidence, corrupt_state),
         },
         &[],

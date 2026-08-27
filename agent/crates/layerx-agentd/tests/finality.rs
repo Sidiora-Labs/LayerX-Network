@@ -178,7 +178,7 @@ fn attestation(checkpoint: [u8; 32], guarantor_id: [u8; 32], key: &SigningKey) -
     message[2..6].copy_from_slice(&42_u32.to_be_bytes());
     message[6..14].copy_from_slice(&31_337_u64.to_be_bytes());
     message[14..34].copy_from_slice(&settlement_contract);
-    message[34..42].copy_from_slice(&7_u64.to_be_bytes());
+    message[34..42].copy_from_slice(&2_u64.to_be_bytes());
     message[42..74].copy_from_slice(&checkpoint);
     message[74..106].copy_from_slice(&checkpoint);
     message[106..138].copy_from_slice(&guarantor_id);
@@ -202,7 +202,7 @@ fn attestation(checkpoint: [u8; 32], guarantor_id: [u8; 32], key: &SigningKey) -
         42,
         31_337,
         settlement_contract,
-        7,
+        2,
         checkpoint,
         checkpoint,
         guarantor_id,
