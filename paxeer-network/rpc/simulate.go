@@ -801,13 +801,17 @@ func (b *Backend) getHeader(ctx context.Context, tmBlock *coretypes.ResultBlock)
 	if err != nil {
 		return nil, fmt.Errorf("height %d: %w", height, err)
 	}
+	blockTimeUnix := tmBlock.Block.Time.Unix()
+	if blockTimeUnix < 0 {
+		return nil, fmt.Errorf("block %d has a pre-epoch timestamp", height)
+	}
 
 	header := &ethtypes.Header{
 		Difficulty:    common.Big0,
 		Number:        big.NewInt(height),
 		BaseFee:       baseFee,
 		GasLimit:      uint64(gasLimit),
-		Time:          uint64(tmBlock.Block.Time.Unix()),
+		Time:          uint64(blockTimeUnix),
 		ExcessBlobGas: &zeroExcessBlobGas,
 		ParentHash:    common.BytesToHash(tmBlock.Block.LastBlockID.Hash),
 		Root:          common.BytesToHash(tmBlock.Block.AppHash),

@@ -240,10 +240,11 @@ func validateBlockExecutionReceipts(
 	if block == nil || block.Block == nil {
 		return errors.New("cannot validate receipts for an empty consensus block")
 	}
-	if block.Block.Height < 0 {
-		return fmt.Errorf("cannot validate receipts for negative block height %d", block.Block.Height)
+	blockHeight := block.Block.Height
+	if blockHeight < 0 {
+		return fmt.Errorf("cannot validate receipts for negative block height %d", blockHeight)
 	}
-	decoder := txConfigProvider(block.Block.Height).TxDecoder()
+	decoder := txConfigProvider(blockHeight).TxDecoder()
 	latestCtx := ctxProvider(LatestCtxHeight)
 	for txIndex, txBytes := range block.Block.Txs {
 		tx, err := decoder(txBytes)
@@ -283,7 +284,7 @@ func validateBlockExecutionReceipts(
 			if receipt == nil {
 				return fmt.Errorf("block %d transaction %d message %d receipt lookup returned nil", block.Block.Height, txIndex, messageIndex)
 			}
-			if receipt.BlockNumber != uint64(block.Block.Height) {
+			if receipt.BlockNumber != uint64(blockHeight) {
 				return fmt.Errorf("block %d transaction %d message %d receipt belongs to block %d", block.Block.Height, txIndex, messageIndex, receipt.BlockNumber)
 			}
 		}

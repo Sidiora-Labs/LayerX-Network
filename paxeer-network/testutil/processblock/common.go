@@ -11,7 +11,7 @@ import (
 	"github.com/sidiora-labs/paxeer-network/consensus/abci/types"
 	tmproto "github.com/sidiora-labs/paxeer-network/consensus/proto/tendermint/types"
 	tmtypes "github.com/sidiora-labs/paxeer-network/consensus/types"
-	"github.com/sidiora-labs/paxeer-network/node"
+	app "github.com/sidiora-labs/paxeer-network/node"
 	"github.com/sidiora-labs/paxeer-network/sdk/codec"
 	codectypes "github.com/sidiora-labs/paxeer-network/sdk/codec/types"
 	"github.com/sidiora-labs/paxeer-network/sdk/crypto/hd"

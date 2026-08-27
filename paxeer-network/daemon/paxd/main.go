@@ -6,7 +6,7 @@ import (
 	"github.com/sidiora-labs/paxeer-network/daemon/paxd/cmd"
 	"github.com/sidiora-labs/paxeer-network/node/params"
 
-	"github.com/sidiora-labs/paxeer-network/node"
+	app "github.com/sidiora-labs/paxeer-network/node"
 	svrcmd "github.com/sidiora-labs/paxeer-network/sdk/server/cmd"
 )
 

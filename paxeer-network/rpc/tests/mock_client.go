@@ -19,7 +19,7 @@ import (
 	"github.com/sidiora-labs/paxeer-network/consensus/rpc/client/mock"
 	"github.com/sidiora-labs/paxeer-network/consensus/rpc/coretypes"
 	tmtypes "github.com/sidiora-labs/paxeer-network/consensus/types"
-	"github.com/sidiora-labs/paxeer-network/rpc"
+	evmrpc "github.com/sidiora-labs/paxeer-network/rpc"
 	paxutils "github.com/sidiora-labs/paxeer-network/utils"
 )
 

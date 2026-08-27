@@ -34,7 +34,7 @@ import (
 	"github.com/sidiora-labs/paxeer-network/modules/evm/config"
 	types2 "github.com/sidiora-labs/paxeer-network/modules/evm/types"
 	minttypes "github.com/sidiora-labs/paxeer-network/modules/mint/types"
-	"github.com/sidiora-labs/paxeer-network/node"
+	app "github.com/sidiora-labs/paxeer-network/node"
 	utils2 "github.com/sidiora-labs/paxeer-network/utils"
 )
 

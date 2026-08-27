@@ -94,11 +94,12 @@ func (s *State) Run(ctx context.Context) error {
 			if l, ok := s.cfg.MaxTxsPerSecond.Get(); ok {
 				maxBurst := uint64(^uint(0) >> 1)
 				blockTxs := s.cfg.maxTxsPerBlock()
-				if l == 0 || l > maxBurst || blockTxs > maxBurst-l {
+				totalBurst := l + blockTxs
+				if l == 0 || totalBurst < l || totalBurst > maxBurst {
 					return fmt.Errorf("invalid max transactions per second %d", l)
 				}
 				limit = rate.Limit(l)
-				burst = int(l + blockTxs)
+				burst = int(totalBurst)
 			}
 			limiter := rate.NewLimiter(limit, burst)
 			lastBlockTime := time.Now()

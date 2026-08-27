@@ -25,7 +25,7 @@ type TendermintTraces struct {
 
 func (tt *TendermintTraces) MarshalToJSON() (json.RawMessage, error) {
 	if tt == nil {
-		return nil, errors.New("Tendermint traces are unavailable")
+		return nil, errors.New("traces from Tendermint are unavailable")
 	}
 	tt.mu.Lock()
 	defer tt.mu.Unlock()

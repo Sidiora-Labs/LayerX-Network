@@ -381,8 +381,9 @@ func (i *InfoAPI) getRewards(block *coretypes.ResultBlock, baseFee *big.Int, rew
 	if block == nil || block.Block == nil {
 		return nil, errors.New("cannot calculate rewards without a canonical block")
 	}
-	if block.Block.Height < 0 {
-		return nil, fmt.Errorf("cannot calculate rewards for negative block height %d", block.Block.Height)
+	blockHeight := block.Block.Height
+	if blockHeight < 0 {
+		return nil, fmt.Errorf("cannot calculate rewards for negative block height %d", blockHeight)
 	}
 	if baseFee == nil || baseFee.Sign() < 0 {
 		return nil, errors.New("cannot calculate rewards with an invalid base fee")
@@ -403,8 +404,8 @@ func (i *InfoAPI) getRewards(block *coretypes.ResultBlock, baseFee *big.Int, rew
 		if receipt == nil {
 			return nil, fmt.Errorf("receipt lookup for %s returned nil", ethtx.Hash().Hex())
 		}
-		if receipt.BlockNumber != uint64(block.Block.Height) {
-			return nil, fmt.Errorf("receipt for %s belongs to block %d, expected %d", ethtx.Hash().Hex(), receipt.BlockNumber, block.Block.Height)
+		if receipt.BlockNumber != uint64(blockHeight) {
+			return nil, fmt.Errorf("receipt for %s belongs to block %d, expected %d", ethtx.Hash().Hex(), receipt.BlockNumber, blockHeight)
 		}
 		receiptEffectiveGasPrice := new(big.Int).SetUint64(receipt.EffectiveGasPrice)
 		if receiptEffectiveGasPrice.Cmp(baseFee) < 0 {

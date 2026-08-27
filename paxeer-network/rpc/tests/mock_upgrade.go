@@ -1,7 +1,7 @@
 package tests
 
 import (
-	"github.com/sidiora-labs/paxeer-network/node"
+	app "github.com/sidiora-labs/paxeer-network/node"
 	sdk "github.com/sidiora-labs/paxeer-network/sdk/types"
 )
 

@@ -15,7 +15,7 @@ import (
 
 	evmkeeper "github.com/sidiora-labs/paxeer-network/modules/evm/keeper"
 	evmtypes "github.com/sidiora-labs/paxeer-network/modules/evm/types"
-	"github.com/sidiora-labs/paxeer-network/node"
+	app "github.com/sidiora-labs/paxeer-network/node"
 	"github.com/stretchr/testify/require"
 )
 

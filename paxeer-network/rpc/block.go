@@ -366,7 +366,8 @@ func EncodeTmBlock(
 	if block.Block.Height < 0 {
 		return nil, fmt.Errorf("block height %d is negative", block.Block.Height)
 	}
-	if block.Block.Time.Unix() < 0 {
+	blockTimeUnix := block.Block.Time.Unix()
+	if blockTimeUnix < 0 {
 		return nil, fmt.Errorf("block %d has a pre-epoch timestamp", block.Block.Height)
 	}
 	if err := validateBlockExecutionReceipts(k, ctxProvider, txConfigProvider, block, includeSyntheticTxs, cacheCreationMutex, globalBlockCache); err != nil {
@@ -374,7 +375,6 @@ func EncodeTmBlock(
 	}
 	number := big.NewInt(block.Block.Height)
 	blockhash := common.HexToHash(block.BlockID.Hash.String())
-	blockTime := block.Block.Time
 	lastHash := common.HexToHash(block.Block.LastBlockID.Hash.String())
 	appHash := common.HexToHash(block.Block.AppHash.String())
 	txHash := common.HexToHash(block.Block.DataHash.String())
@@ -424,7 +424,7 @@ func EncodeTmBlock(
 			if !fullTx {
 				transactions = append(transactions, hash.Hex())
 			} else {
-				blockUnix := uint64(blockTime.Unix())
+				blockUnix := uint64(blockTimeUnix)
 				newTx := export.NewRPCTransaction(ethtx, blockhash, number.Uint64(), blockUnix, uint64(len(transactions)), baseFeePerGas, chainConfig)
 				replaceFrom(newTx, receipt)
 				transactions = append(transactions, newTx)

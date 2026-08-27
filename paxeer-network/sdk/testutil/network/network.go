@@ -18,7 +18,7 @@ import (
 	"github.com/sidiora-labs/paxeer-network/consensus/config"
 	tmservice "github.com/sidiora-labs/paxeer-network/consensus/libs/service"
 	tmclient "github.com/sidiora-labs/paxeer-network/consensus/rpc/client"
-	"github.com/sidiora-labs/paxeer-network/node"
+	app "github.com/sidiora-labs/paxeer-network/node"
 	"github.com/sidiora-labs/paxeer-network/node/params"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"

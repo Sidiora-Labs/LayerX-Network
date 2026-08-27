@@ -11,8 +11,8 @@ import (
 
 	"github.com/sidiora-labs/paxeer-network/consensus/rpc/coretypes"
 	"github.com/sidiora-labs/paxeer-network/modules/evm/types"
-	"github.com/sidiora-labs/paxeer-network/node"
-	"github.com/sidiora-labs/paxeer-network/rpc"
+	app "github.com/sidiora-labs/paxeer-network/node"
+	evmrpc "github.com/sidiora-labs/paxeer-network/rpc"
 	sdk "github.com/sidiora-labs/paxeer-network/sdk/types"
 	wasmtypes "github.com/sidiora-labs/paxeer-network/wasm/x/wasm/types"
 )

@@ -34,6 +34,15 @@ var TrueHash = common.HexToHash("0x1")
 
 var ErrSyntheticReceiptTranslation = errors.New("synthetic EVM receipt translation failed")
 
+const (
+	actionMint       = "mint"
+	actionMintSingle = "mint_single"
+	actionMintBatch  = "mint_batch"
+	actionBurn       = "burn"
+	actionBurnSingle = "burn_single"
+	actionBurnBatch  = "burn_batch"
+)
+
 type AllowanceResponse struct {
 	Allowance sdk.Int         `json:"allowance"`
 	Expires   json.RawMessage `json:"expires"`
@@ -193,18 +202,18 @@ func (app *App) translateCW20Event(ctx sdk.Context, wasmEvent abci.Event, pointe
 	}
 	for _, action := range actions {
 		switch action.Type {
-		case "mint", "burn", "send", "transfer", "transfer_from", "send_from", "burn_from":
+		case actionMint, actionBurn, "send", "transfer", "transfer_from", "send_from", "burn_from":
 			if action.Err != nil {
 				return nil, action.Err
 			}
 			if err := validateUint256("CW20 amount", action.Amount); err != nil {
 				return nil, err
 			}
-			if action.Type == "mint" {
+			if action.Type == actionMint {
 				if action.To == EmptyHash {
 					return nil, fmt.Errorf("%w: CW20 mint recipient is missing", ErrSyntheticReceiptTranslation)
 				}
-			} else if action.Type == "burn" || action.Type == "burn_from" {
+			} else if action.Type == actionBurn || action.Type == "burn_from" {
 				if action.From == EmptyHash {
 					return nil, fmt.Errorf("%w: CW20 burn source is missing", ErrSyntheticReceiptTranslation)
 				}
@@ -272,14 +281,14 @@ func (app *App) translateCW721Event(ctx sdk.Context, wasmEvent abci.Event, point
 	}
 	for _, action := range actions {
 		switch action.Type {
-		case "transfer_nft", "send_nft", "burn":
+		case "transfer_nft", "send_nft", actionBurn:
 			if action.Err != nil {
 				return nil, action.Err
 			}
 			if err := validateUint256("CW721 token ID", action.TokenId); err != nil {
 				return nil, err
 			}
-			if action.Type != "burn" && action.Recipient == EmptyHash {
+			if action.Type != actionBurn && action.Recipient == EmptyHash {
 				return nil, fmt.Errorf("%w: CW721 transfer recipient is missing", ErrSyntheticReceiptTranslation)
 			}
 			ownerEventKey := getOwnerEventKey(contractAddr, action.TokenId.String())
@@ -312,7 +321,7 @@ func (app *App) translateCW721Event(ctx sdk.Context, wasmEvent abci.Event, point
 				},
 				Data: EmptyHash.Bytes(),
 			})
-		case "mint":
+		case actionMint:
 			if action.Err != nil {
 				return nil, action.Err
 			}
@@ -416,16 +425,16 @@ func (app *App) translateCW1155Event(ctx sdk.Context, wasmEvent abci.Event, poin
 	}
 	for _, action := range actions {
 		switch action.Type {
-		case "transfer_single", "mint_single", "burn_single":
+		case "transfer_single", actionMintSingle, actionBurnSingle:
 			if action.Err != nil {
 				return nil, action.Err
 			}
 			fromHash := EmptyHash
 			toHash := EmptyHash
-			if action.Type != "mint_single" {
+			if action.Type != actionMintSingle {
 				fromHash = action.Owner
 			}
-			if action.Type != "burn_single" {
+			if action.Type != actionBurnSingle {
 				toHash = action.Recipient
 			}
 			if err := validateUint256("CW1155 token ID", action.TokenId); err != nil {
@@ -434,7 +443,7 @@ func (app *App) translateCW1155Event(ctx sdk.Context, wasmEvent abci.Event, poin
 			if err := validateUint256("CW1155 amount", action.Amount); err != nil {
 				return nil, err
 			}
-			if action.Sender == EmptyHash || (action.Type != "mint_single" && action.Owner == EmptyHash) || (action.Type != "burn_single" && action.Recipient == EmptyHash) {
+			if action.Sender == EmptyHash || (action.Type != actionMintSingle && action.Owner == EmptyHash) || (action.Type != actionBurnSingle && action.Recipient == EmptyHash) {
 				return nil, fmt.Errorf("%w: CW1155 transfer endpoint is missing", ErrSyntheticReceiptTranslation)
 			}
 			dataHash1 := common.BigToHash(action.TokenId).Bytes()
@@ -449,16 +458,16 @@ func (app *App) translateCW1155Event(ctx sdk.Context, wasmEvent abci.Event, poin
 				},
 				Data: append(dataHash1, dataHash2...),
 			})
-		case "transfer_batch", "mint_batch", "burn_batch":
+		case "transfer_batch", actionMintBatch, actionBurnBatch:
 			if action.Err != nil {
 				return nil, action.Err
 			}
 			fromHash := EmptyHash
 			toHash := EmptyHash
-			if action.Type != "mint_batch" {
+			if action.Type != actionMintBatch {
 				fromHash = action.Owner
 			}
-			if action.Type != "burn_batch" {
+			if action.Type != actionBurnBatch {
 				toHash = action.Recipient
 			}
 			if len(action.TokenIds) == 0 || len(action.TokenIds) != len(action.Amounts) {
@@ -474,7 +483,7 @@ func (app *App) translateCW1155Event(ctx sdk.Context, wasmEvent abci.Event, poin
 					return nil, err
 				}
 			}
-			if action.Sender == EmptyHash || (action.Type != "mint_batch" && action.Owner == EmptyHash) || (action.Type != "burn_batch" && action.Recipient == EmptyHash) {
+			if action.Sender == EmptyHash || (action.Type != actionMintBatch && action.Owner == EmptyHash) || (action.Type != actionBurnBatch && action.Recipient == EmptyHash) {
 				return nil, fmt.Errorf("%w: CW1155 batch endpoint is missing", ErrSyntheticReceiptTranslation)
 			}
 			dataArgs := cw1155.GetParsedABI().Events["TransferBatch"].Inputs.NonIndexed()

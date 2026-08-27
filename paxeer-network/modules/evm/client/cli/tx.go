@@ -28,7 +28,7 @@ import (
 	"github.com/sidiora-labs/paxeer-network/modules/evm/types"
 	"github.com/sidiora-labs/paxeer-network/modules/evm/types/ethtx"
 	"github.com/sidiora-labs/paxeer-network/precompiles"
-	"github.com/sidiora-labs/paxeer-network/rpc"
+	evmrpc "github.com/sidiora-labs/paxeer-network/rpc"
 	"github.com/sidiora-labs/paxeer-network/sdk/client"
 	"github.com/sidiora-labs/paxeer-network/sdk/client/flags"
 	"github.com/sidiora-labs/paxeer-network/sdk/client/tx"

@@ -13,7 +13,7 @@ import (
 
 	"github.com/sidiora-labs/paxeer-network/admin"
 	gigaconfig "github.com/sidiora-labs/paxeer-network/engine/executor/config"
-	"github.com/sidiora-labs/paxeer-network/node"
+	app "github.com/sidiora-labs/paxeer-network/node"
 	"github.com/sidiora-labs/paxeer-network/node/params"
 	evmrpcconfig "github.com/sidiora-labs/paxeer-network/rpc/config"
 	"github.com/sidiora-labs/paxeer-network/sdk/baseapp"

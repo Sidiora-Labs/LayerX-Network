@@ -16,7 +16,7 @@ import (
 	ethtests "github.com/ethereum/go-ethereum/tests"
 	gigaconfig "github.com/sidiora-labs/paxeer-network/engine/executor/config"
 	evmtypes "github.com/sidiora-labs/paxeer-network/modules/evm/types"
-	"github.com/sidiora-labs/paxeer-network/node"
+	app "github.com/sidiora-labs/paxeer-network/node"
 	"github.com/sidiora-labs/paxeer-network/sdk/baseapp"
 	"github.com/sidiora-labs/paxeer-network/sdk/client/flags"
 	"github.com/sidiora-labs/paxeer-network/sdk/server"

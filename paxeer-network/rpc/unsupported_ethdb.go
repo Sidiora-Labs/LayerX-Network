@@ -7,7 +7,7 @@ import (
 	"github.com/ethereum/go-ethereum/ethdb"
 )
 
-var errEthereumChainDatabaseUnavailable = errors.New("Paxeer does not expose an Ethereum chain database")
+var errEthereumChainDatabaseUnavailable = errors.New("no Ethereum chain database is exposed by Paxeer")
 
 var unsupportedEthereumChainDatabase = rawdb.NewDatabase(unsupportedEthereumKeyValueStore{})
 

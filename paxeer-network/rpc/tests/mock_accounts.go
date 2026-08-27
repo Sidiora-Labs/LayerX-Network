@@ -10,7 +10,7 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/sidiora-labs/paxeer-network/modules/evm/config"
 	"github.com/sidiora-labs/paxeer-network/modules/evm/types"
-	"github.com/sidiora-labs/paxeer-network/node"
+	app "github.com/sidiora-labs/paxeer-network/node"
 	clienttx "github.com/sidiora-labs/paxeer-network/sdk/client/tx"
 	"github.com/sidiora-labs/paxeer-network/sdk/crypto/hd"
 	sdk "github.com/sidiora-labs/paxeer-network/sdk/types"

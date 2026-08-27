@@ -6,7 +6,7 @@ import (
 	tmproto "github.com/sidiora-labs/paxeer-network/consensus/proto/tendermint/types"
 	"github.com/sidiora-labs/paxeer-network/modules/epoch/keeper"
 	"github.com/sidiora-labs/paxeer-network/modules/epoch/types"
-	"github.com/sidiora-labs/paxeer-network/node"
+	app "github.com/sidiora-labs/paxeer-network/node"
 	"github.com/sidiora-labs/paxeer-network/sdk/codec"
 	codectypes "github.com/sidiora-labs/paxeer-network/sdk/codec/types"
 	"github.com/sidiora-labs/paxeer-network/sdk/store"

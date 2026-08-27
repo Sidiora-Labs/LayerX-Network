@@ -3,7 +3,7 @@ package upgrades
 import (
 	"fmt"
 
-	"github.com/paxeer-network/pax-utils"
+	goutils "github.com/paxeer-network/pax-utils"
 	"github.com/paxeer-network/paxlog"
 	sdk "github.com/sidiora-labs/paxeer-network/sdk/types"
 )

@@ -191,7 +191,8 @@ func (r *GigaRouter) MaxGasEstimatedPerBlock() uint64 {
 // BlockDB has the right shape (height + hash indexes, async pruning) and
 // is the long-term home for this read path.
 func (r *GigaRouter) BlockByNumber(ctx context.Context, n atypes.GlobalBlockNumber) (*coretypes.ResultBlock, error) {
-	if uint64(n) > math.MaxInt64 {
+	height := uint64(n)
+	if height > math.MaxInt64 {
 		return nil, fmt.Errorf("block height %d exceeds maximum executable height %d", n, int64(math.MaxInt64))
 	}
 	gb, err := r.data.GlobalBlock(ctx, n)
@@ -202,7 +203,7 @@ func (r *GigaRouter) BlockByNumber(ctx context.Context, n atypes.GlobalBlockNumb
 		// active lower bound (data.State.inner.first) is internal to
 		// data.State; both call sites format through the same helper.
 		if errors.Is(err, data.ErrPruned) {
-			return nil, coretypes.WrapErrHeightNotAvailable(int64(n), utils.None[int64]())
+			return nil, coretypes.WrapErrHeightNotAvailable(int64(height), utils.None[int64]())
 		}
 		return nil, fmt.Errorf("data.GlobalBlock(%v): %w", n, err)
 	}

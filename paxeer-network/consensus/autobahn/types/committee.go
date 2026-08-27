@@ -64,12 +64,12 @@ func (c *Committee) GenesisTimestamp() time.Time { return c.genesisTimestamp }
 // ChainID is the network whose messages this committee is authorized to verify.
 func (c *Committee) ChainID() string { return c.chainID }
 
-func committeeDomain(chainID string, replicas []PublicKey, weights map[PublicKey]uint64, firstBlock GlobalBlockNumber, genesisTimestamp time.Time) [sha256.Size]byte {
+func committeeDomain(chainID string, replicas []PublicKey, weights map[PublicKey]uint64, firstBlock GlobalBlockNumber, genesisUnix uint64, genesisNanos uint32) [sha256.Size]byte {
 	material := append([]byte("pax/autobahn/committee/v1\x00"), binary.BigEndian.AppendUint64(nil, uint64(len(chainID)))...)
 	material = append(material, chainID...)
 	material = binary.BigEndian.AppendUint64(material, uint64(firstBlock))
-	material = binary.BigEndian.AppendUint64(material, uint64(genesisTimestamp.Unix()))
-	material = binary.BigEndian.AppendUint32(material, uint32(genesisTimestamp.Nanosecond()))
+	material = binary.BigEndian.AppendUint64(material, genesisUnix)
+	material = binary.BigEndian.AppendUint32(material, genesisNanos)
 	material = binary.BigEndian.AppendUint64(material, uint64(len(replicas)))
 	for _, replica := range replicas {
 		key := replica.Bytes()
@@ -155,6 +155,16 @@ func NewCommittee(chainID string, weights map[PublicKey]uint64, firstBlock Globa
 	if chainID == "" {
 		return nil, errors.New("chain ID is empty")
 	}
+	genesisUnix := genesisTimestamp.Unix()
+	if genesisUnix < 0 {
+		return nil, fmt.Errorf("genesis timestamp %s precedes the Unix epoch", genesisTimestamp)
+	}
+	genesisNanos := genesisTimestamp.Nanosecond()
+	if genesisNanos < 0 || genesisNanos > 999_999_999 {
+		return nil, fmt.Errorf("genesis timestamp %s has a nanosecond component outside one second", genesisTimestamp)
+	}
+	genesisSeconds := uint64(genesisUnix)
+	genesisNanoOffset := uint32(genesisNanos)
 	weights = maps.Clone(weights)
 	totalWeight := uint64(0)
 	for k, w := range weights {
@@ -172,7 +182,7 @@ func NewCommittee(chainID string, weights map[PublicKey]uint64, firstBlock Globa
 	replicas := slices.SortedFunc(maps.Keys(weights), func(a, b PublicKey) int { return a.Compare(b) })
 	return &Committee{
 		chainID:          chainID,
-		domain:           committeeDomain(chainID, replicas, weights, firstBlock, genesisTimestamp),
+		domain:           committeeDomain(chainID, replicas, weights, firstBlock, genesisSeconds, genesisNanoOffset),
 		replicas:         ImSlice[PublicKey]{replicas},
 		weights:          weights,
 		totalWeight:      totalWeight,

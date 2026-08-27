@@ -39,7 +39,7 @@ import (
 	"golang.org/x/time/rate"
 
 	tokenfactorytypes "github.com/sidiora-labs/paxeer-network/modules/tokenfactory/types"
-	"github.com/sidiora-labs/paxeer-network/node"
+	app "github.com/sidiora-labs/paxeer-network/node"
 	"go.opentelemetry.io/otel/attribute"
 	otelmetric "go.opentelemetry.io/otel/metric"
 )

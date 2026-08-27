@@ -11,7 +11,7 @@ import (
 	"github.com/sidiora-labs/paxeer-network/modules/evm/config"
 	"github.com/sidiora-labs/paxeer-network/modules/evm/types"
 	"github.com/sidiora-labs/paxeer-network/modules/evm/types/ethtx"
-	"github.com/sidiora-labs/paxeer-network/node"
+	app "github.com/sidiora-labs/paxeer-network/node"
 )
 
 // BuildTransaction creates an Ethereum transaction from state test data

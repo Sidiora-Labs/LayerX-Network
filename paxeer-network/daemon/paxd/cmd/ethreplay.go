@@ -10,7 +10,7 @@ import (
 	"github.com/spf13/cast"
 	"github.com/spf13/cobra"
 
-	"github.com/sidiora-labs/paxeer-network/node"
+	app "github.com/sidiora-labs/paxeer-network/node"
 	"github.com/sidiora-labs/paxeer-network/sdk/baseapp"
 	"github.com/sidiora-labs/paxeer-network/sdk/client/flags"
 	"github.com/sidiora-labs/paxeer-network/sdk/server"

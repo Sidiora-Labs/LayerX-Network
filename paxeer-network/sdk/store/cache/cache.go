@@ -2,6 +2,7 @@ package cache
 
 import (
 	"fmt"
+	"math"
 	"sync"
 
 	"github.com/sidiora-labs/paxeer-network/sdk/store/cachekv"
@@ -48,6 +49,9 @@ type (
 )
 
 func NewCommitKVStoreCache(store types.CommitKVStore, size uint, cacheKVSize int) *CommitKVStoreCache {
+	if size > math.MaxInt {
+		panic(fmt.Errorf("KVStore cache size %d exceeds the addressable maximum %d", size, math.MaxInt))
+	}
 	cache, err := lru.New2Q[string, []byte](int(size))
 	if err != nil {
 		panic(fmt.Errorf("failed to create KVStore cache: %s", err))

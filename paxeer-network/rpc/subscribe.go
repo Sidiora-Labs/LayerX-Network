@@ -388,7 +388,7 @@ func encodeCommittedBlock(evt blockHeaderEvent, baseFee *big.Int, gasLimit int64
 	if evt.header == nil || evt.response == nil {
 		return nil, errors.New("committed head is missing header or finalize response")
 	}
-	return nil, fmt.Errorf("Autobahn committed head %d lacks canonical parent, transaction, and receipt roots", evt.header.Height)
+	return nil, fmt.Errorf("committed Autobahn head %d lacks canonical parent, transaction, and receipt roots", evt.header.Height)
 }
 
 func encodeTmHeader(

@@ -447,10 +447,11 @@ func (t *TransactionAPI) encodeRPCTransaction(ethtx *ethtypes.Transaction, block
 	}
 	chainConfig := types.DefaultChainConfig().EthereumConfig(t.keeper.ChainID(t.ctxProvider(height)))
 	blockHash := common.HexToHash(block.BlockID.Hash.String())
-	if block.Block.Height < 0 {
-		return nil, fmt.Errorf("block height %d is negative", block.Block.Height)
+	blockHeight := block.Block.Height
+	if blockHeight < 0 {
+		return nil, fmt.Errorf("block height %d is negative", blockHeight)
 	}
-	blockNumber := uint64(block.Block.Height)
+	blockNumber := uint64(blockHeight)
 	blockTime := block.Block.Time
 	blockUnixSigned := blockTime.Unix()
 	if blockUnixSigned < 0 {

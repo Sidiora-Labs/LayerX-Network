@@ -16,7 +16,7 @@ import (
 	"github.com/spf13/cobra"
 	dbm "github.com/tendermint/tm-db"
 
-	"github.com/sidiora-labs/paxeer-network/node"
+	app "github.com/sidiora-labs/paxeer-network/node"
 )
 
 // SnapshotCmd creates a new command to trigger snapshot creation

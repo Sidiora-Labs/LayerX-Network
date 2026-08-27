@@ -17,6 +17,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/export"
+	evmrpc "github.com/sidiora-labs/paxeer-network/rpc"
 	sdk "github.com/sidiora-labs/paxeer-network/sdk/types"
 
 	"github.com/spf13/cobra"
@@ -26,7 +27,6 @@ import (
 	"github.com/sidiora-labs/paxeer-network/modules/evm/artifacts/cw721"
 	"github.com/sidiora-labs/paxeer-network/modules/evm/artifacts/native"
 	"github.com/sidiora-labs/paxeer-network/modules/evm/types"
-	"github.com/sidiora-labs/paxeer-network/rpc"
 	"github.com/sidiora-labs/paxeer-network/sdk/client"
 	"github.com/sidiora-labs/paxeer-network/sdk/client/flags"
 )
