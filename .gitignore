@@ -13,6 +13,20 @@
 *.exe
 *.gcda
 *.gcno
+# Vendored wasmvm shared libraries ship with the module sources
+!/paxeer-network/wasm-runtime/internal/api/libwasmvm.*.so
+!/paxeer-network/wasm-runtime/internal/api/libwasmvm.dylib
+!/paxeer-network/wasm/x/wasm/artifacts/v152/api/libwasmvm152.*.so
+!/paxeer-network/wasm/x/wasm/artifacts/v152/api/libwasmvm152.dylib
+!/paxeer-network/wasm/x/wasm/artifacts/v155/api/libwasmvm155.*.so
+!/paxeer-network/wasm/x/wasm/artifacts/v155/api/libwasmvm155.dylib
+# Vendored wasmvm static archives back the muslc and darwin-static link directives
+!/paxeer-network/wasm-runtime/internal/api/libwasmvm_muslc*.a
+!/paxeer-network/wasm-runtime/internal/api/libwasmvmstatic_darwin.a
+!/paxeer-network/wasm/x/wasm/artifacts/v152/api/libwasmvm152_muslc*.a
+!/paxeer-network/wasm/x/wasm/artifacts/v152/api/libwasmvm152static_darwin.a
+!/paxeer-network/wasm/x/wasm/artifacts/v155/api/libwasmvm155_muslc*.a
+!/paxeer-network/wasm/x/wasm/artifacts/v155/api/libwasmvm155static_darwin.a
 *.profraw
 *.profdata
 /lcov.info

@@ -70,7 +70,7 @@ release-build-alpine:
 	rm -rf libwasmvm/target/aarch64-unknown-linux-musl/release
 	rm -rf libwasmvm/target/x86_64-unknown-linux-musl/release
 	# build the muslc *.a file
-	docker run --rm -u $(USER_ID):$(USER_GROUP) -v $(shell pwd)/libwasmvm:/code $(BUILDERS_PREFIX)-alpine
+	docker run --rm -v $(shell pwd)/libwasmvm:/code $(BUILDERS_PREFIX)-alpine
 	cp libwasmvm/artifacts/libwasmvm_muslc.a internal/api
 	cp libwasmvm/artifacts/libwasmvm_muslc.aarch64.a internal/api
 	make update-bindings
@@ -80,7 +80,7 @@ release-build-linux:
 	# Builders should not write their target folder into the host file system (https://github.com/CosmWasm/wasmvm/issues/437)
 	rm -rf libwasmvm/target/x86_64-unknown-linux-gnu/release
 	rm -rf libwasmvm/target/aarch64-unknown-linux-gnu/release
-	docker run --rm -u $(USER_ID):$(USER_GROUP) -v $(shell pwd)/libwasmvm:/code $(BUILDERS_PREFIX)-debian build_linux.sh
+	docker run --rm -v $(shell pwd)/libwasmvm:/code $(BUILDERS_PREFIX)-debian build_linux.sh
 	cp libwasmvm/artifacts/libwasmvm.x86_64.so internal/api
 	cp libwasmvm/artifacts/libwasmvm.aarch64.so internal/api
 	make update-bindings
@@ -90,7 +90,7 @@ release-build-macos:
 	# Builders should not write their target folder into the host file system (https://github.com/CosmWasm/wasmvm/issues/437)
 	rm -rf libwasmvm/target/x86_64-apple-darwin/release
 	rm -rf libwasmvm/target/aarch64-apple-darwin/release
-	docker run --rm -u $(USER_ID):$(USER_GROUP) -v $(shell pwd)/libwasmvm:/code $(BUILDERS_PREFIX)-cross build_macos.sh
+	docker run --rm -v $(shell pwd)/libwasmvm:/code $(BUILDERS_PREFIX)-cross build_macos.sh
 	cp libwasmvm/artifacts/libwasmvm.dylib internal/api
 	make update-bindings
 
@@ -99,7 +99,7 @@ release-build-macos-static:
 	# Builders should not write their target folder into the host file system (https://github.com/CosmWasm/wasmvm/issues/437)
 	rm -rf libwasmvm/target/x86_64-apple-darwin/release
 	rm -rf libwasmvm/target/aarch64-apple-darwin/release
-	docker run --rm -u $(USER_ID):$(USER_GROUP) -v $(shell pwd)/libwasmvm:/code $(BUILDERS_PREFIX)-cross build_macos_static.sh
+	docker run --rm -v $(shell pwd)/libwasmvm:/code $(BUILDERS_PREFIX)-cross build_macos_static.sh
 	cp libwasmvm/artifacts/libwasmvmstatic_darwin.a internal/api/libwasmvmstatic_darwin.a
 	make update-bindings
 
@@ -107,8 +107,8 @@ release-build-macos-static:
 release-build-windows:
 	# Builders should not write their target folder into the host file system (https://github.com/CosmWasm/wasmvm/issues/437)
 	rm -rf libwasmvm/target/x86_64-pc-windows-gnu/release
-	docker run --rm -u $(USER_ID):$(USER_GROUP) -v $(shell pwd)/libwasmvm:/code $(BUILDERS_PREFIX)-cross build_windows.sh
-	cp libwasmvm/target/x86_64-pc-windows-gnu/release/wasmvm.dll internal/api
+	docker run --rm -v $(shell pwd)/libwasmvm:/code $(BUILDERS_PREFIX)-cross build_windows.sh
+	cp libwasmvm/artifacts/wasmvm.dll internal/api
 	make update-bindings
 
 update-bindings:
