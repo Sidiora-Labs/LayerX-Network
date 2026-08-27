@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod streaming_resumability_tests {
     use layerx_sdk::production::{
-        ProductionError, ResumableStream, SdkErrorCode, StreamCursor, StreamEvent, StreamPage,
+        ResumableStream, SdkErrorCode, StreamCursor, StreamEvent, StreamPage,
     };
 
     #[test]
@@ -13,8 +13,10 @@ mod streaming_resumability_tests {
     #[test]
     fn stream_cursor_refuses_empty_cursors() {
         let cursor = StreamCursor::new("");
-        assert!(cursor.is_err());
-        assert_eq!(cursor.unwrap_err().code, SdkErrorCode::InvalidArgument);
+        let Err(refusal) = cursor else {
+            panic!("empty cursor accepted")
+        };
+        assert_eq!(refusal.code, SdkErrorCode::InvalidArgument);
     }
 
     #[test]
@@ -32,23 +34,23 @@ mod streaming_resumability_tests {
 
     #[test]
     fn resumable_stream_accepts_empty_page() {
-        let initial_cursor = StreamCursor::new("c0").unwrap();
+        let initial_cursor = StreamCursor::new("c0").unwrap_or_else(|error| panic!("cursor: {error:?}"));
         let mut stream = ResumableStream::new(initial_cursor.clone());
-        let page = StreamPage {
+        let page: StreamPage<StreamEvent<&str>> = StreamPage {
             requested_cursor: initial_cursor.clone(),
             events: vec![],
             next_cursor: initial_cursor.clone(),
         };
-        let accepted = stream.accept(page).unwrap();
+        let accepted = stream.accept(page).unwrap_or_else(|error| panic!("accept: {error:?}"));
         assert_eq!(accepted.len(), 0);
         assert_eq!(stream.cursor().as_str(), "c0");
     }
 
     #[test]
     fn resumable_stream_accepts_single_event() {
-        let initial_cursor = StreamCursor::new("c0").unwrap();
+        let initial_cursor = StreamCursor::new("c0").unwrap_or_else(|error| panic!("cursor: {error:?}"));
         let mut stream = ResumableStream::new(initial_cursor.clone());
-        let next_cursor = StreamCursor::new("c1").unwrap();
+        let next_cursor = StreamCursor::new("c1").unwrap_or_else(|error| panic!("cursor: {error:?}"));
         let page = StreamPage {
             requested_cursor: initial_cursor.clone(),
             events: vec![StreamEvent {
@@ -59,7 +61,7 @@ mod streaming_resumability_tests {
             }],
             next_cursor: next_cursor.clone(),
         };
-        let accepted = stream.accept(page).unwrap();
+        let accepted = stream.accept(page).unwrap_or_else(|error| panic!("accept: {error:?}"));
         assert_eq!(accepted.len(), 1);
         assert_eq!(accepted[0].value, "first");
         assert_eq!(stream.cursor().as_str(), "c1");
@@ -67,11 +69,11 @@ mod streaming_resumability_tests {
 
     #[test]
     fn resumable_stream_accepts_multiple_events_forming_chain() {
-        let initial_cursor = StreamCursor::new("c0").unwrap();
+        let initial_cursor = StreamCursor::new("c0").unwrap_or_else(|error| panic!("cursor: {error:?}"));
         let mut stream = ResumableStream::new(initial_cursor.clone());
-        let c1 = StreamCursor::new("c1").unwrap();
-        let c2 = StreamCursor::new("c2").unwrap();
-        let c3 = StreamCursor::new("c3").unwrap();
+        let c1 = StreamCursor::new("c1").unwrap_or_else(|error| panic!("cursor: {error:?}"));
+        let c2 = StreamCursor::new("c2").unwrap_or_else(|error| panic!("cursor: {error:?}"));
+        let c3 = StreamCursor::new("c3").unwrap_or_else(|error| panic!("cursor: {error:?}"));
         let page = StreamPage {
             requested_cursor: initial_cursor.clone(),
             events: vec![
@@ -96,32 +98,34 @@ mod streaming_resumability_tests {
             ],
             next_cursor: c3.clone(),
         };
-        let accepted = stream.accept(page).unwrap();
+        let accepted = stream.accept(page).unwrap_or_else(|error| panic!("accept: {error:?}"));
         assert_eq!(accepted.len(), 3);
         assert_eq!(stream.cursor().as_str(), "c3");
     }
 
     #[test]
     fn resumable_stream_refuses_page_with_wrong_requested_cursor() {
-        let initial_cursor = StreamCursor::new("c0").unwrap();
+        let initial_cursor = StreamCursor::new("c0").unwrap_or_else(|error| panic!("cursor: {error:?}"));
         let mut stream = ResumableStream::new(initial_cursor.clone());
-        let wrong_cursor = StreamCursor::new("c-wrong").unwrap();
-        let page = StreamPage {
+        let wrong_cursor = StreamCursor::new("c-wrong").unwrap_or_else(|error| panic!("cursor: {error:?}"));
+        let page: StreamPage<StreamEvent<&str>> = StreamPage {
             requested_cursor: wrong_cursor.clone(),
             events: vec![],
             next_cursor: wrong_cursor.clone(),
         };
         let result = stream.accept(page);
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err().code, SdkErrorCode::DecodeFailure);
+        let Err(refusal) = result else {
+            panic!("page with wrong requested cursor accepted")
+        };
+        assert_eq!(refusal.code, SdkErrorCode::DecodeFailure);
     }
 
     #[test]
     fn resumable_stream_refuses_gap_in_cursor_chain() {
-        let initial_cursor = StreamCursor::new("c0").unwrap();
+        let initial_cursor = StreamCursor::new("c0").unwrap_or_else(|error| panic!("cursor: {error:?}"));
         let mut stream = ResumableStream::new(initial_cursor.clone());
-        let c1 = StreamCursor::new("c1").unwrap();
-        let c2 = StreamCursor::new("c2").unwrap();
+        let c1 = StreamCursor::new("c1").unwrap_or_else(|error| panic!("cursor: {error:?}"));
+        let c2 = StreamCursor::new("c2").unwrap_or_else(|error| panic!("cursor: {error:?}"));
         let page = StreamPage {
             requested_cursor: initial_cursor.clone(),
             events: vec![StreamEvent {
@@ -138,10 +142,10 @@ mod streaming_resumability_tests {
 
     #[test]
     fn resumable_stream_refuses_duplicate_event_ids_across_pages() {
-        let initial_cursor = StreamCursor::new("c0").unwrap();
+        let initial_cursor = StreamCursor::new("c0").unwrap_or_else(|error| panic!("cursor: {error:?}"));
         let mut stream = ResumableStream::new(initial_cursor.clone());
-        let c1 = StreamCursor::new("c1").unwrap();
-        let c2 = StreamCursor::new("c2").unwrap();
+        let c1 = StreamCursor::new("c1").unwrap_or_else(|error| panic!("cursor: {error:?}"));
+        let c2 = StreamCursor::new("c2").unwrap_or_else(|error| panic!("cursor: {error:?}"));
         let first_page = StreamPage {
             requested_cursor: initial_cursor.clone(),
             events: vec![StreamEvent {
@@ -152,7 +156,7 @@ mod streaming_resumability_tests {
             }],
             next_cursor: c1.clone(),
         };
-        stream.accept(first_page).unwrap();
+        stream.accept(first_page).unwrap_or_else(|error| panic!("accept: {error:?}"));
         let duplicate_page = StreamPage {
             requested_cursor: c1.clone(),
             events: vec![StreamEvent {
@@ -169,10 +173,10 @@ mod streaming_resumability_tests {
 
     #[test]
     fn resumable_stream_refuses_duplicate_event_ids_within_page() {
-        let initial_cursor = StreamCursor::new("c0").unwrap();
+        let initial_cursor = StreamCursor::new("c0").unwrap_or_else(|error| panic!("cursor: {error:?}"));
         let mut stream = ResumableStream::new(initial_cursor.clone());
-        let c1 = StreamCursor::new("c1").unwrap();
-        let c2 = StreamCursor::new("c2").unwrap();
+        let c1 = StreamCursor::new("c1").unwrap_or_else(|error| panic!("cursor: {error:?}"));
+        let c2 = StreamCursor::new("c2").unwrap_or_else(|error| panic!("cursor: {error:?}"));
         let page = StreamPage {
             requested_cursor: initial_cursor.clone(),
             events: vec![
@@ -197,9 +201,9 @@ mod streaming_resumability_tests {
 
     #[test]
     fn resumable_stream_refuses_empty_event_id() {
-        let initial_cursor = StreamCursor::new("c0").unwrap();
+        let initial_cursor = StreamCursor::new("c0").unwrap_or_else(|error| panic!("cursor: {error:?}"));
         let mut stream = ResumableStream::new(initial_cursor.clone());
-        let c1 = StreamCursor::new("c1").unwrap();
+        let c1 = StreamCursor::new("c1").unwrap_or_else(|error| panic!("cursor: {error:?}"));
         let page = StreamPage {
             requested_cursor: initial_cursor.clone(),
             events: vec![StreamEvent {
@@ -216,10 +220,10 @@ mod streaming_resumability_tests {
 
     #[test]
     fn resumable_stream_refuses_mismatched_next_cursor() {
-        let initial_cursor = StreamCursor::new("c0").unwrap();
+        let initial_cursor = StreamCursor::new("c0").unwrap_or_else(|error| panic!("cursor: {error:?}"));
         let mut stream = ResumableStream::new(initial_cursor.clone());
-        let c1 = StreamCursor::new("c1").unwrap();
-        let c2 = StreamCursor::new("c2").unwrap();
+        let c1 = StreamCursor::new("c1").unwrap_or_else(|error| panic!("cursor: {error:?}"));
+        let c2 = StreamCursor::new("c2").unwrap_or_else(|error| panic!("cursor: {error:?}"));
         let page = StreamPage {
             requested_cursor: initial_cursor.clone(),
             events: vec![StreamEvent {
@@ -236,10 +240,10 @@ mod streaming_resumability_tests {
 
     #[test]
     fn resumable_stream_supports_resumption_after_disconnection() {
-        let initial_cursor = StreamCursor::new("c0").unwrap();
+        let initial_cursor = StreamCursor::new("c0").unwrap_or_else(|error| panic!("cursor: {error:?}"));
         let mut stream = ResumableStream::new(initial_cursor.clone());
-        let c1 = StreamCursor::new("c1").unwrap();
-        let c2 = StreamCursor::new("c2").unwrap();
+        let c1 = StreamCursor::new("c1").unwrap_or_else(|error| panic!("cursor: {error:?}"));
+        let c2 = StreamCursor::new("c2").unwrap_or_else(|error| panic!("cursor: {error:?}"));
         let first_page = StreamPage {
             requested_cursor: initial_cursor.clone(),
             events: vec![StreamEvent {
@@ -250,7 +254,7 @@ mod streaming_resumability_tests {
             }],
             next_cursor: c1.clone(),
         };
-        stream.accept(first_page).unwrap();
+        stream.accept(first_page).unwrap_or_else(|error| panic!("accept: {error:?}"));
         let resumed_page = StreamPage {
             requested_cursor: c1.clone(),
             events: vec![StreamEvent {
@@ -261,7 +265,7 @@ mod streaming_resumability_tests {
             }],
             next_cursor: c2.clone(),
         };
-        let accepted = stream.accept(resumed_page).unwrap();
+        let accepted = stream.accept(resumed_page).unwrap_or_else(|error| panic!("accept: {error:?}"));
         assert_eq!(accepted.len(), 1);
         assert_eq!(accepted[0].value, "after-reconnect");
         assert_eq!(stream.cursor().as_str(), "c2");

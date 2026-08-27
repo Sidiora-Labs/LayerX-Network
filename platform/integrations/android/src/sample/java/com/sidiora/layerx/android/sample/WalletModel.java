@@ -125,6 +125,14 @@ public final class WalletModel {
         while (deliveries.size() > 64) deliveries.remove(0);
     }
 
+    private static String text(JsonNode event, String... fields) {
+        for (String field : fields) {
+            JsonNode value = event.path(field);
+            if (value.isTextual() && !value.textValue().isEmpty()) return value.textValue();
+        }
+        return "";
+    }
+
     private static <T> T await(java.util.concurrent.CompletionStage<T> stage) {
         try {
             return stage.toCompletableFuture().join();

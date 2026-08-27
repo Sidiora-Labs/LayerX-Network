@@ -60,7 +60,7 @@ platform-sample-dependencies-ready:
 	@command -v swift >/dev/null || { echo "Swift is required for Platform SDK and samples" >&2; exit 1; }
 	@command -v dotnet >/dev/null || { echo "dotnet is required for the C sharp sample" >&2; exit 1; }
 	@test -s $(PLATFORM_MAVEN_REPOSITORY)/com/sidiora/layerx/layerx-sdk/0.1.0/layerx-sdk-0.1.0.jar || { echo "run make platform-dependencies-install to install the local JVM SDK" >&2; exit 1; }
-	@test -s $(PLATFORM_MAVEN_REPOSITORY)/com/sidiora/layerx/layerx-spring/0.1.0/layerx-spring-0.1.0.jar || { echo "run make platform-dependencies-install to install the local Spring integration" >&2; exit 1; }
+	@test -s $(PLATFORM_MAVEN_REPOSITORY)/com/sidiora/layerx/layerx-spring-boot-starter/0.1.0/layerx-spring-boot-starter-0.1.0.jar || { echo "run make platform-dependencies-install to install the local Spring integration" >&2; exit 1; }
 	@test -s $(PLATFORM_MAVEN_REPOSITORY)/com/sidiora/layerx/layerx-android/0.1.0/layerx-android-0.1.0.jar || { echo "run make platform-dependencies-install to install the local Android integration" >&2; exit 1; }
 
 platform-install-local-artifacts:
@@ -75,8 +75,9 @@ platform-dependencies-install: platform-sample-preflight
 	$(MAKE) platform-install-local-artifacts
 
 platform-gradle-qualification:
-	@echo "Android Gradle sample is qualification-blocked: commit a checksum-pinned wrapper and dependency verification metadata" >&2
-	@exit 1
+	@grep -q '^distributionSha256Sum=' platform/integrations/android/sample-app/gradle/wrapper/gradle-wrapper.properties || { echo "Android Gradle wrapper distribution is not checksum-pinned" >&2; exit 1; }
+	@test -s platform/integrations/android/sample-app/gradle/wrapper/gradle-wrapper.jar || { echo "Android Gradle wrapper jar is missing" >&2; exit 1; }
+	@test -s platform/integrations/android/sample-app/gradle/verification-metadata.xml || { echo "Android Gradle dependency verification metadata is missing" >&2; exit 1; }
 
 platform-js-install:
 	npm ci --workspaces --include-workspace-root --ignore-scripts --no-audit --no-fund
@@ -227,6 +228,13 @@ platform-test-reference-apps:
 	node platform/examples/run-reference-apps.mjs --check
 
 platform-test-mobile-artifacts: platform-test-android-artifact platform-test-ios-artifact
+
+platform-prime-android-dependencies: platform-gradle-qualification
+	gradle --no-daemon -p platform/integrations/android/sample-app layerxSecretScanRelease \
+		-Playerx.serviceUrl=https://platform.example.com \
+		-Playerx.sessionBrokerUrl=https://app-backend.example.com/layerx/session \
+		-Playerx.eventKeyId=relay-2026 \
+		-Playerx.eventPublicKey=d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a
 
 platform-test-android-artifact: platform-sample-dependencies-ready platform-gradle-qualification
 	gradle --offline --no-daemon -p platform/integrations/android/sample-app layerxSecretScanRelease \

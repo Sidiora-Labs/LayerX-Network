@@ -6,16 +6,16 @@ mod secret_hygiene_tests {
 
     #[test]
     fn secret_bytes_redacts_debug() {
-        let secret = SecretBytes::new(&[1, 2, 3, 4]).unwrap();
+        let secret = SecretBytes::new(&[1, 2, 3, 4]).unwrap_or_else(|error| panic!("secret: {error:?}"));
         let debug = format!("{secret:?}");
         assert_eq!(debug, "SecretBytes([REDACTED])");
-        assert!(!debug.contains("1"));
-        assert!(!debug.contains("2"));
+        assert!(!debug.contains('1'));
+        assert!(!debug.contains('2'));
     }
 
     #[test]
     fn secret_bytes_zeroizes_on_drop() {
-        let secret = SecretBytes::new(&[42, 43, 44]).unwrap();
+        let secret = SecretBytes::new(&[42, 43, 44]).unwrap_or_else(|error| panic!("secret: {error:?}"));
         let mut captured = vec![];
         secret.expose_to(|bytes| captured.extend_from_slice(bytes));
         assert_eq!(captured[0], 42);
@@ -25,13 +25,15 @@ mod secret_hygiene_tests {
     #[test]
     fn secret_bytes_refuses_empty_input() {
         let result = SecretBytes::new(&[]);
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err().code, SdkErrorCode::InvalidArgument);
+        let Err(refusal) = result else {
+            panic!("empty secret accepted")
+        };
+        assert_eq!(refusal.code, SdkErrorCode::InvalidArgument);
     }
 
     #[test]
     fn secret_bytes_never_exposes_material_through_error_serialization() {
-        let secret = SecretBytes::new(&[0xde, 0xad, 0xbe, 0xef]).unwrap();
+        let secret = SecretBytes::new(&[0xde, 0xad, 0xbe, 0xef]).unwrap_or_else(|error| panic!("secret: {error:?}"));
         drop(secret);
         let error = ProductionError::new(SdkErrorCode::InternalFault, RetryClass::Never);
         let serialized = format!("{error}");
@@ -45,7 +47,7 @@ mod secret_hygiene_tests {
 
     #[test]
     fn secret_bytes_never_logs_key_material_when_formatted() {
-        let secret = SecretBytes::new(&[0x01, 0x02, 0xff]).unwrap();
+        let secret = SecretBytes::new(&[0x01, 0x02, 0xff]).unwrap_or_else(|error| panic!("secret: {error:?}"));
         let log_output = format!("operation: sign, key: {secret:?}");
         assert!(log_output.contains("sign"));
         assert!(log_output.contains("[REDACTED]"));
@@ -56,16 +58,18 @@ mod secret_hygiene_tests {
 
     #[test]
     fn idempotency_key_constructs_valid_keys() {
-        let key = IdempotencyKey::new("valid-key-123");
-        assert!(key.is_ok());
-        assert_eq!(key.unwrap().as_str(), "valid-key-123");
+        let key = IdempotencyKey::new("valid-key-123")
+            .unwrap_or_else(|error| panic!("key: {error:?}"));
+        assert_eq!(key.as_str(), "valid-key-123");
     }
 
     #[test]
     fn idempotency_key_refuses_empty_keys() {
         let key = IdempotencyKey::new("");
-        assert!(key.is_err());
-        assert_eq!(key.unwrap_err().code, SdkErrorCode::InvalidArgument);
+        let Err(refusal) = key else {
+            panic!("empty key accepted")
+        };
+        assert_eq!(refusal.code, SdkErrorCode::InvalidArgument);
     }
 
     #[test]
@@ -84,8 +88,9 @@ mod secret_hygiene_tests {
     #[test]
     fn idempotency_key_never_leaks_key_material_through_error_serialization() {
         let result = IdempotencyKey::new("");
-        assert!(result.is_err());
-        let error = result.unwrap_err();
+        let Err(error) = result else {
+            panic!("empty key accepted")
+        };
         let serialized = error.code.machine_code();
         assert_eq!(serialized, "invalid-argument");
     }

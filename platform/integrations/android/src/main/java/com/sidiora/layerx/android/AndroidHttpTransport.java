@@ -67,12 +67,12 @@ public final class AndroidHttpTransport implements ProductionTransport, AutoClos
     public <T> CompletionStage<T> call(Call call, JavaType responseType) {
         Objects.requireNonNull(call, "call");
         Objects.requireNonNull(responseType, "responseType");
-        if (call.plane() != OperationCatalog.Plane.HUMAN) {
+        if (call.operation().plane() != OperationCatalog.Plane.HUMAN) {
             return CompletableFuture.failedFuture(new PlatformSdkException(
                 PlatformSdkException.Code.UNAVAILABLE_CAPABILITY, PlatformSdkException.Retry.NEVER, null, null, null));
         }
-        OperationCatalog.requireKnown(call.plane(), call.operation());
-        OperationCatalog.Route route = OperationCatalog.HUMAN_ROUTES.get(call.operation());
+        OperationCatalog.requireKnown(call.operation().plane(), call.operation().wireName());
+        OperationCatalog.Route route = OperationCatalog.HUMAN_ROUTES.get(call.operation().wireName());
         CompletableFuture<T> completion = new CompletableFuture<>();
         executor.execute(() -> {
             try {
@@ -146,8 +146,7 @@ public final class AndroidHttpTransport implements ProductionTransport, AutoClos
     private URI resolve(OperationCatalog.Route route, Call call) {
         String path = route.path();
         for (String parameter : route.pathParameters()) {
-            String value = call.pathParameters().get(parameter);
-            if (value == null || value.isEmpty()) throw PlatformSdkException.invalidArgument();
+            String value = call.pathParameters().require(parameter);
             path = path.replace("{" + parameter + "}", encodePath(value));
         }
         String prefix = humanBaseUri.toString();
