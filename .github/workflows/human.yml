@@ -47,7 +47,7 @@ jobs:
           --locked -- --web-bundle human/apps/web/.next
 
   browser-real-stack:
-    if: github.event_name == 'schedule' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    if: vars.HUMAN_E2E_BASE_URL != '' && (github.event_name == 'schedule' || (github.event_name == 'push' && github.ref == 'refs/heads/main'))
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:

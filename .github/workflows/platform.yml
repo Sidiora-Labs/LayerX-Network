@@ -18,7 +18,7 @@ env:
 jobs:
   build-lint-test:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -33,8 +33,16 @@ jobs:
         run: >-
           rustup toolchain install 1.91.1 --profile minimal --component clippy &&
           cargo install cargo-deny --locked --version 0.19.0
+      - name: Install pinned Swift toolchain
+        uses: swift-actions/setup-swift@7ca6abe6b3b0e8b5421b88be48feee39cbf52c6a # v2.4.0
+        with:
+          swift-version: "6.0.3"
       - name: Install locked platform JavaScript dependencies
         run: make platform-js-install
+      - name: Fetch locked platform workspace crates
+        run: cargo fetch --locked --manifest-path platform/Cargo.toml
+      - name: Install platform sample and policy dependencies
+        run: make platform-dependencies-install
       - name: Enforce workspace, dependency, license and audit policies
         run: make platform-lint
       - name: Build the platform workspace and run its drift and release gates
@@ -69,6 +77,12 @@ jobs:
         uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5
         with:
           gradle-version: "8.7"
+      - name: Install pinned Swift toolchain
+        uses: swift-actions/setup-swift@7ca6abe6b3b0e8b5421b88be48feee39cbf52c6a # v2.4.0
+        with:
+          swift-version: "6.0.3"
+      - name: Install platform sample and policy dependencies
+        run: make platform-dependencies-install
       - name: Build the Android application and scan the APK for embedded secrets
         run: make platform-test-android-artifact
 

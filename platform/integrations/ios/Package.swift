@@ -18,19 +18,19 @@ let package = Package(
         .target(
             name: "LayerXMobile",
             dependencies: [
-                "LayerXSDK",
+                .product(name: "LayerXSDK", package: "swift"),
                 .product(name: "Crypto", package: "swift-crypto"),
             ],
             path: "Sources/LayerXMobile"
         ),
         .target(
             name: "LayerXMobileSampleKit",
-            dependencies: ["LayerXMobile", "LayerXSDK"],
+            dependencies: ["LayerXMobile", .product(name: "LayerXSDK", package: "swift")],
             path: "Sources/LayerXMobileSampleKit"
         ),
         .executableTarget(
             name: "LayerXMobileSample",
-            dependencies: ["LayerXMobile", "LayerXMobileSampleKit", "LayerXSDK"],
+            dependencies: ["LayerXMobile", "LayerXMobileSampleKit", .product(name: "LayerXSDK", package: "swift")],
             path: "Sources/LayerXMobileSample"
         ),
         .executableTarget(

@@ -33,7 +33,7 @@ jobs:
   # from GHCR (tagged with the run id) and download paxd as a small artifact.
   prepare-cluster:
     name: Prepare integration test cluster
-    runs-on: ubuntu-large
+    runs-on: ubuntu-latest
     timeout-minutes: 45
     # packages:write required to push images and buildx cache to GHCR. Fork PRs
     # cannot publish org packages, so integration tests cannot run from forks; a
@@ -117,7 +117,7 @@ jobs:
   integration-tests:
     name: Integration Test (${{ matrix.test.name }})
     needs: prepare-cluster
-    runs-on: ubuntu-large
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
       packages: read
