@@ -184,6 +184,15 @@ func GenProposalAt(rng utils.Rng, view View) *Proposal {
 	return newProposal(view, time.Now(), utils.GenSlice(rng, GenLaneRange), utils.Some(GenAppProposal(rng)))
 }
 
+// GenProposalForAt generates a Proposal at a specific view that verifies against the committee.
+func GenProposalForAt(rng utils.Rng, c *Committee, view View) *Proposal {
+	var laneRanges []*LaneRange
+	for lane := range c.Lanes().All() {
+		laneRanges = append(laneRanges, NewLaneRange(lane, 0, utils.None[*BlockHeader]()))
+	}
+	return newProposal(view, time.Now(), laneRanges, utils.Some(GenAppProposal(rng)))
+}
+
 // GenAppHash generates a random AppHash.
 func GenAppHash(rng utils.Rng) AppHash {
 	return AppHash(utils.GenBytes(rng, 32))
@@ -279,7 +288,10 @@ func GenTimeoutVote(rng utils.Rng) *TimeoutVote {
 
 // GenFullTimeoutVote generates a random FullTimeoutVote.
 func GenFullTimeoutVote(rng utils.Rng) *FullTimeoutVote {
-	return NewFullTimeoutVote(GenSecretKey(rng), GenView(rng), utils.Some(GenPrepareQC(rng)))
+	key := GenSecretKey(rng)
+	key.domain = sha256.Sum256([]byte("pax/autobahn/test-signing-domain/v1"))
+	key.bound = true
+	return NewFullTimeoutVote(key, GenView(rng), utils.Some(GenPrepareQC(rng)))
 }
 
 // GenTimeoutQC generates a random TimeoutQC.

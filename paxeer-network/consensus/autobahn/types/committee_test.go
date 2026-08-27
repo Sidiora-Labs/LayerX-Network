@@ -152,9 +152,10 @@ func TestLaneQCVerifyChecksWeight(t *testing.T) {
 }
 
 func TestPrepareQCVerifyChecksWeight(t *testing.T) {
-	rng := utils.TestRng()
 	committee, keys := makeCommittee()
-	vote := NewPrepareVote(GenProposalAt(rng, View{}))
+	vs := ViewSpec{}
+	fp := utils.OrPanic1(NewProposal(leaderKey(committee, keys, vs.View()), committee, vs, committee.GenesisTimestamp(), nil, utils.None[*AppQC]()))
+	vote := NewPrepareVote(fp.Proposal().Msg())
 
 	heavyOnly := NewPrepareQC([]*Signed[*PrepareVote]{
 		Sign(keys[0], vote),
@@ -168,9 +169,10 @@ func TestPrepareQCVerifyChecksWeight(t *testing.T) {
 }
 
 func TestCommitQCVerifyChecksWeight(t *testing.T) {
-	rng := utils.TestRng()
 	committee, keys := makeCommittee()
-	vote := NewCommitVote(GenProposalAt(rng, View{}))
+	vs := ViewSpec{}
+	fp := utils.OrPanic1(NewProposal(leaderKey(committee, keys, vs.View()), committee, vs, committee.GenesisTimestamp(), nil, utils.None[*AppQC]()))
+	vote := NewCommitVote(fp.Proposal().Msg())
 
 	heavyOnly := NewCommitQC([]*Signed[*CommitVote]{
 		Sign(keys[0], vote),

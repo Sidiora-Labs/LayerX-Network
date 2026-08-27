@@ -135,7 +135,7 @@ import (
 	"github.com/sidiora-labs/paxeer-network/node/upgrades"
 	"github.com/sidiora-labs/paxeer-network/precompiles"
 	putils "github.com/sidiora-labs/paxeer-network/precompiles/utils"
-	"github.com/sidiora-labs/paxeer-network/rpc"
+	evmrpc "github.com/sidiora-labs/paxeer-network/rpc"
 	evmrpcconfig "github.com/sidiora-labs/paxeer-network/rpc/config"
 	wasmkeeper "github.com/sidiora-labs/paxeer-network/wasm/x/wasm/keeper"
 
@@ -2324,6 +2324,9 @@ func (app *App) GetEVMMsg(tx sdk.Tx) (res *evmtypes.MsgEVMTransaction) {
 	if tx == nil {
 		return nil
 	} else if emsg := evmtypes.GetEVMTransactionMessage(tx); emsg != nil && !emsg.IsAssociateTx() {
+		if _, err := evmtypes.UnpackTxData(emsg.Data); err != nil {
+			return nil
+		}
 		return emsg
 	} else {
 		return nil

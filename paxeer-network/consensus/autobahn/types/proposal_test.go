@@ -476,7 +476,7 @@ func TestProposalVerifyRejectsInvalidLaneQCSignature(t *testing.T) {
 	// Build a LaneQC signed by NON-committee keys.
 	otherKeys := make([]SecretKey, len(TestKeysWithWeight(committee, keys, committee.LaneQuorum())))
 	for i := range otherKeys {
-		otherKeys[i] = GenSecretKey(rng)
+		otherKeys[i] = GenSecretKey(rng).ForCommittee(committee)
 	}
 	var badVotes []*Signed[*LaneVote]
 	for _, k := range otherKeys {
@@ -625,7 +625,7 @@ func TestProposalVerifyRejectsInvalidAppQCSignature(t *testing.T) {
 	// Swap in an AppQC signed by NON-committee keys (same hash).
 	otherKeys := make([]SecretKey, len(keys))
 	for i := range otherKeys {
-		otherKeys[i] = GenSecretKey(rng)
+		otherKeys[i] = GenSecretKey(rng).ForCommittee(committee)
 	}
 	badAppQC := makeAppQCFor(otherKeys, initialBlock, 0, appHash)
 	tamperedFP := &FullProposal{
@@ -779,7 +779,7 @@ func TestProposalVerifyRejectsInvalidTimeoutQCSignature(t *testing.T) {
 	// Build a TimeoutQC signed by NON-committee keys.
 	otherKeys := make([]SecretKey, len(keys))
 	for i := range otherKeys {
-		otherKeys[i] = GenSecretKey(rng)
+		otherKeys[i] = GenSecretKey(rng).ForCommittee(committee)
 	}
 	var timeoutVotes []*FullTimeoutVote
 	for _, k := range otherKeys {

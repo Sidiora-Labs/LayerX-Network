@@ -159,8 +159,12 @@ func TestNewTimeoutQC_MixedPrepareQCs(t *testing.T) {
 	committee, keys := GenCommittee(rng, 4)
 	view := View{Index: 0, Number: 0}
 
+	var laneRanges []*LaneRange
+	for lane := range committee.Lanes().All() {
+		laneRanges = append(laneRanges, NewLaneRange(lane, 0, utils.None[*BlockHeader]()))
+	}
 	pqc := makePrepareQC(keys, NewPrepareVote(
-		newProposal(view, time.Now(), utils.GenSlice(rng, GenLaneRange), utils.Some(GenAppProposal(rng))),
+		newProposal(view, time.Now(), laneRanges, utils.Some(GenAppProposal(rng))),
 	))
 
 	// Only keys[0] carries the PrepareQC; the rest carry None.
@@ -211,10 +215,14 @@ func TestTimeoutQCVerify_HighestPrepareQCSelected(t *testing.T) {
 	committee, keys := GenCommittee(rng, 4)
 	view := View{Index: 0, Number: 5}
 
+	var laneRanges []*LaneRange
+	for lane := range committee.Lanes().All() {
+		laneRanges = append(laneRanges, NewLaneRange(lane, 0, utils.None[*BlockHeader]()))
+	}
 	makePQCAt := func(vn ViewNumber) *PrepareQC {
 		pView := View{Index: view.Index, Number: vn}
 		return makePrepareQC(keys, NewPrepareVote(
-			newProposal(pView, time.Now(), utils.GenSlice(rng, GenLaneRange), utils.Some(GenAppProposal(rng))),
+			newProposal(pView, time.Now(), laneRanges, utils.Some(GenAppProposal(rng))),
 		))
 	}
 

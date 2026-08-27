@@ -171,7 +171,7 @@ func TestNewInnerLoadedBlocksUnknownLane(t *testing.T) {
 	rng := utils.TestRng()
 	committee, keys := types.GenCommittee(rng, 4)
 
-	unknownKey := types.GenSecretKey(rng)
+	unknownKey := types.GenSecretKey(rng).ForCommittee(committee)
 	unknownLane := unknownKey.Public()
 
 	b := testSignedBlock(unknownKey, unknownLane, 0, types.BlockHeaderHash{}, rng)
