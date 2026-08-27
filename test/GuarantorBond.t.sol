@@ -252,11 +252,7 @@ contract GuarantorBondTest {
         bytes32 checkpointHash,
         address settlementContract,
         uint64 epoch
-    )
-        private
-        view
-        returns (CanonicalCheckpoint.GuarantorAttestation memory statement)
-    {
+    ) private view returns (CanonicalCheckpoint.GuarantorAttestation memory statement) {
         statement = CanonicalCheckpoint.GuarantorAttestation({
             protocolVersion: 1,
             networkId: 42,

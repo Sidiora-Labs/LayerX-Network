@@ -80,8 +80,7 @@ contract CheckpointChallengeManager is Governed, ReentrancyLock, LayerXComponent
     function claimable(bytes32 checkpointHash) external view returns (bool) {
         Challenge storage item = challenge[checkpointHash];
         return registry.isCanonicalCheckpoint(checkpointHash) && block.timestamp >= windowClosesAt(checkpointHash)
-            && item.status != Status.Pending
-            && item.status != Status.Upheld;
+            && item.status != Status.Pending && item.status != Status.Upheld;
     }
 
     function raiseChallenge(bytes32 checkpointHash, Kind kind, bytes32 evidenceHash) external payable nonReentrant {

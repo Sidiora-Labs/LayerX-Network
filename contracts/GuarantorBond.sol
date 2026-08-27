@@ -172,12 +172,9 @@ contract GuarantorBond is IGuarantorEligibility, LayerXComponent {
             unresolvedSlashing: false
         });
         guarantorIdForSigner[signer] = guarantorId;
-        signerAuthorization[guarantorId][signer] = SignerAuthorization({
-            activeFromEpoch: joinedEpoch, activeUntilEpoch: 0, setVersion: version
-        });
-        emit GuarantorActivated(
-            guarantorId, signer, bondController, joinedEpoch, version, governanceSequence
-        );
+        signerAuthorization[guarantorId][signer] =
+            SignerAuthorization({activeFromEpoch: joinedEpoch, activeUntilEpoch: 0, setVersion: version});
+        emit GuarantorActivated(guarantorId, signer, bondController, joinedEpoch, version, governanceSequence);
     }
 
     function rotateGuarantorSigner(
@@ -198,9 +195,8 @@ contract GuarantorBond is IGuarantorEligibility, LayerXComponent {
         previous.activeUntilEpoch = activationEpoch;
         record.signer = newSigner;
         guarantorIdForSigner[newSigner] = guarantorId;
-        signerAuthorization[guarantorId][newSigner] = SignerAuthorization({
-            activeFromEpoch: activationEpoch, activeUntilEpoch: 0, setVersion: version
-        });
+        signerAuthorization[guarantorId][newSigner] =
+            SignerAuthorization({activeFromEpoch: activationEpoch, activeUntilEpoch: 0, setVersion: version});
         emit GuarantorSignerRotated(
             guarantorId, previousSigner, newSigner, activationEpoch, version, governanceSequence
         );
@@ -240,10 +236,9 @@ contract GuarantorBond is IGuarantorEligibility, LayerXComponent {
 
     function depositBond(bytes32 guarantorId) external payable {
         BondRecord storage record = records[guarantorId];
-        if (
-            record.signer == address(0) || msg.value == 0 || record.removedEpoch != 0
-                || record.ejectedAtVersion != 0
-        ) revert InvalidBondAction();
+        if (record.signer == address(0) || msg.value == 0 || record.removedEpoch != 0 || record.ejectedAtVersion != 0) {
+            revert InvalidBondAction();
+        }
         record.amount = Arithmetic.add(record.amount, msg.value);
         emit BondDeposited(guarantorId, msg.sender, msg.value, record.amount);
     }
@@ -291,8 +286,7 @@ contract GuarantorBond is IGuarantorEligibility, LayerXComponent {
         SignerAuthorization storage authorization = signerAuthorization[guarantorId][signer];
         return authorization.activeFromEpoch != 0 && authorization.activeFromEpoch <= checkpointEpoch
             && (authorization.activeUntilEpoch == 0 || authorization.activeUntilEpoch > checkpointEpoch)
-            && !record.jailed && !record.unresolvedSlashing && record.joinedEpoch != 0
-            && record.ejectedAtVersion == 0
+            && !record.jailed && !record.unresolvedSlashing && record.joinedEpoch != 0 && record.ejectedAtVersion == 0
             && record.joinedEpoch <= checkpointEpoch
             && (record.removedEpoch == 0 || record.removedEpoch > checkpointEpoch) && record.amount >= minimumBond();
     }
@@ -312,8 +306,7 @@ contract GuarantorBond is IGuarantorEligibility, LayerXComponent {
             !_canonicalDomainAttestation(first) || !_canonicalDomainAttestation(second)
                 || first.guarantorId != second.guarantorId || first.signer != second.signer
                 || first.epoch != second.epoch || first.batchNumber != second.batchNumber
-                || first.checkpointHash == second.checkpointHash
-                || !_validSignature(first) || !_validSignature(second)
+                || first.checkpointHash == second.checkpointHash || !_validSignature(first) || !_validSignature(second)
         ) {
             revert InvalidEquivocationEvidence();
         }
@@ -363,11 +356,10 @@ contract GuarantorBond is IGuarantorEligibility, LayerXComponent {
         returns (bool)
     {
         return attestation.protocolVersion == protocolVersion && attestation.networkId == networkId
-            && attestation.paxeerChainId == uint64(block.chainid)
-            && attestation.settlementContract == address(this) && attestation.epoch != 0
-            && attestation.batchNumber != 0 && attestation.checkpointId == attestation.checkpointHash
-            && attestation.replayed && attestation.dataAvailable
-            && attestation.availabilityClassMask == Constants.ALL_AVAILABILITY_CLASSES
+            && attestation.paxeerChainId == uint64(block.chainid) && attestation.settlementContract == address(this)
+            && attestation.epoch != 0 && attestation.batchNumber != 0
+            && attestation.checkpointId == attestation.checkpointHash && attestation.replayed
+            && attestation.dataAvailable && attestation.availabilityClassMask == Constants.ALL_AVAILABILITY_CLASSES
             && attestation.attestedAt != 0;
     }
 

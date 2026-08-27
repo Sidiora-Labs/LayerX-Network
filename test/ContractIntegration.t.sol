@@ -465,15 +465,14 @@ contract ContractIntegrationTest {
         );
         challengeManager.resolveChallenge(fraudulent.checkpointHash, true);
 
-        require(
-            checkpointRegistry.explicitlyInvalidated(fraudulent.checkpointHash), "fraud invalidation not recorded"
-        );
+        require(checkpointRegistry.explicitlyInvalidated(fraudulent.checkpointHash), "fraud invalidation not recorded");
         require(
             checkpointRegistry.finalisedStateRoot(fraudulent.checkpointHash) == fraudulent.stateRoot,
             "audit history was erased"
         );
         require(
-            checkpointRegistry.checkpointAtBatch(checkpointRegistry.finalisedBatchNumber()) == fraudulent.checkpointHash,
+            checkpointRegistry.checkpointAtBatch(checkpointRegistry.finalisedBatchNumber())
+                == fraudulent.checkpointHash,
             "registration history was rewritten"
         );
         require(!checkpointRegistry.isCanonicalCheckpoint(fraudulent.checkpointHash), "fraud remained canonical");
@@ -483,9 +482,7 @@ contract ContractIntegrationTest {
 
         EmergencyExit.BalanceProof memory proof = EmergencyExit.BalanceProof({leafIndex: 0, siblings: new bytes32[](0)});
         vm.expectPartialRevert(EmergencyExit.InvalidExitClaim.selector);
-        emergencyExit.executeExit(
-            _exitClaim(fraudulent, assetId), fraudulent.stateRoot, proof, fraudulent.attestations
-        );
+        emergencyExit.executeExit(_exitClaim(fraudulent, assetId), fraudulent.stateRoot, proof, fraudulent.attestations);
 
         emergencyExit.executeExit(_exitClaim(safe, assetId), safe.stateRoot, proof, safe.attestations);
         require(token.balanceOf(safe.recipient) == safe.balance, "safe emergency balance unpaid");
@@ -576,9 +573,7 @@ contract ContractIntegrationTest {
     function _fundGuarantors() private {
         for (uint256 privateKey = 1; privateKey <= 2; ++privateKey) {
             address signer = vm.addr(privateKey);
-            guarantorBond.activateGuarantor(
-                bytes32(privateKey), signer, signer, 1, uint64(privateKey)
-            );
+            guarantorBond.activateGuarantor(bytes32(privateKey), signer, signer, 1, uint64(privateKey));
             vm.deal(signer, 3 ether);
             vm.prank(signer);
             guarantorBond.depositBond{value: 2 ether}(bytes32(privateKey));

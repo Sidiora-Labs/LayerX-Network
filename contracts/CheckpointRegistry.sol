@@ -17,8 +17,7 @@ contract CheckpointRegistry is LayerXComponent {
     error ChallengeAuthorityOnly();
     error CanonicalChainInvalidated();
 
-    bytes32 private constant REGISTERED_CERTIFICATE_DOMAIN =
-        keccak256("LXP1/registered-guarantor-certificate/v1");
+    bytes32 private constant REGISTERED_CERTIFICATE_DOMAIN = keccak256("LXP1/registered-guarantor-certificate/v1");
     uint64 private constant MILLISECONDS_PER_SECOND = 1_000;
 
     IGuarantorEligibility public immutable guarantorEligibility;
@@ -83,8 +82,8 @@ contract CheckpointRegistry is LayerXComponent {
                 || certificateThreshold == 0 || attestationLimit < certificateThreshold || attestationLimit > 32
                 || attestationDelay == 0 || futureTimestampDrift == 0 || genesisStateRoot == bytes32(0)
                 || attestationDelay > type(uint64).max / MILLISECONDS_PER_SECOND
-                || futureTimestampDrift > type(uint64).max / MILLISECONDS_PER_SECOND
-                || block.chainid > type(uint64).max || eligibility.protocolVersion() != expectedProtocolVersion
+                || futureTimestampDrift > type(uint64).max / MILLISECONDS_PER_SECOND || block.chainid > type(uint64).max
+                || eligibility.protocolVersion() != expectedProtocolVersion
                 || eligibility.networkId() != expectedNetworkId
         ) {
             revert InvalidConfiguration();
@@ -136,14 +135,13 @@ contract CheckpointRegistry is LayerXComponent {
                     || attestation.paxeerChainId != uint64(block.chainid)
                     || attestation.settlementContract != address(guarantorEligibility)
                     || attestation.epoch != header.epoch || attestation.guarantorId <= previousGuarantorId
-                    || attestation.checkpointId != digest
-                    || attestation.checkpointHash != digest || attestation.batchNumber != header.batchNumber
+                    || attestation.checkpointId != digest || attestation.checkpointHash != digest
+                    || attestation.batchNumber != header.batchNumber
                     || attestation.dataAvailabilityRoot != header.dataAvailabilityRoot || !attestation.replayed
                     || !attestation.dataAvailable
                     || attestation.availabilityClassMask != Constants.ALL_AVAILABILITY_CLASSES
                     || attestation.attestedAt < header.timestamp
-                    || uint256(attestation.attestedAt)
-                        > uint256(header.timestamp) + maximumAttestationDelayMilliseconds
+                    || uint256(attestation.attestedAt) > uint256(header.timestamp) + maximumAttestationDelayMilliseconds
                     || !_validSignature(attestation)
                     || !guarantorEligibility.bondedActive(attestation.guarantorId, attestation.signer, header.epoch)
             ) revert InvalidCertificate();
@@ -158,9 +156,8 @@ contract CheckpointRegistry is LayerXComponent {
         checkpointBatchNumber[digest] = header.batchNumber;
         checkpointGuarantorSetVersion[digest] = guarantorEligibility.membershipVersion();
         checkpointTimestamp[digest] = header.timestamp;
-        certificateCommitment[digest] = _registeredCertificateCommitment(
-            digest, header.epoch, checkpointGuarantorSetVersion[digest], attestations
-        );
+        certificateCommitment[digest] =
+            _registeredCertificateCommitment(digest, header.epoch, checkpointGuarantorSetVersion[digest], attestations);
         for (uint256 i = 0; i < attestations.length; ++i) {
             checkpointGuarantors[digest].push(attestations[i].guarantorId);
         }
@@ -231,11 +228,9 @@ contract CheckpointRegistry is LayerXComponent {
         CanonicalCheckpoint.GuarantorAttestation[] calldata attestations
     ) external view returns (bool) {
         if (
-            stateRoot == bytes32(0) || finalisedStateRoot[digest] != stateRoot
-                || !isCanonicalCheckpoint(digest)
+            stateRoot == bytes32(0) || finalisedStateRoot[digest] != stateRoot || !isCanonicalCheckpoint(digest)
                 || checkpointAtBatch[batchNumber] != digest || checkpointEpoch[digest] != epoch
-                || attestations.length < threshold
-                || attestations.length > maximumAttestations
+                || attestations.length < threshold || attestations.length > maximumAttestations
                 || certificateCommitment[digest]
                     != _registeredCertificateCommitment(
                         digest, epoch, checkpointGuarantorSetVersion[digest], attestations
@@ -250,16 +245,14 @@ contract CheckpointRegistry is LayerXComponent {
             if (
                 attestation.protocolVersion != protocolVersion || attestation.networkId != networkId
                     || attestation.paxeerChainId != uint64(block.chainid)
-                    || attestation.settlementContract != address(guarantorEligibility)
-                    || attestation.epoch != epoch || attestation.guarantorId <= previousGuarantorId
-                    || attestation.checkpointId != digest
+                    || attestation.settlementContract != address(guarantorEligibility) || attestation.epoch != epoch
+                    || attestation.guarantorId <= previousGuarantorId || attestation.checkpointId != digest
                     || attestation.checkpointHash != digest || attestation.batchNumber != batchNumber
                     || attestation.dataAvailabilityRoot != dataAvailabilityRoot || !attestation.replayed
                     || !attestation.dataAvailable
                     || attestation.availabilityClassMask != Constants.ALL_AVAILABILITY_CLASSES
                     || attestation.attestedAt < timestamp
-                    || uint256(attestation.attestedAt)
-                        > uint256(timestamp) + maximumAttestationDelayMilliseconds
+                    || uint256(attestation.attestedAt) > uint256(timestamp) + maximumAttestationDelayMilliseconds
                     || !_validSignature(attestation)
             ) {
                 return false;
@@ -274,15 +267,11 @@ contract CheckpointRegistry is LayerXComponent {
         view
         returns (bool)
     {
-        return
-            finalisedStateRoot[digest] != bytes32(0)
-                && certificateCommitment[digest]
-                    == _registeredCertificateCommitment(
-                        digest,
-                        checkpointEpoch[digest],
-                        checkpointGuarantorSetVersion[digest],
-                        attestations
-                    );
+        return finalisedStateRoot[digest] != bytes32(0)
+            && certificateCommitment[digest]
+                == _registeredCertificateCommitment(
+                digest, checkpointEpoch[digest], checkpointGuarantorSetVersion[digest], attestations
+            );
     }
 
     function _validateHeader(CanonicalCheckpoint.HeaderCommitments calldata header) private view {
@@ -325,8 +314,6 @@ contract CheckpointRegistry is LayerXComponent {
         uint64 guarantorSetVersion,
         CanonicalCheckpoint.GuarantorAttestation[] calldata attestations
     ) private pure returns (bytes32) {
-        return sha256(
-            abi.encode(REGISTERED_CERTIFICATE_DOMAIN, digest, epoch, guarantorSetVersion, attestations)
-        );
+        return sha256(abi.encode(REGISTERED_CERTIFICATE_DOMAIN, digest, epoch, guarantorSetVersion, attestations));
     }
 }

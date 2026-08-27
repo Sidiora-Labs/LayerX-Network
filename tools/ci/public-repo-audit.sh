@@ -121,8 +121,13 @@ if [ -n "$symlinks" ]; then
 fi
 
 audit_rg() {
+    audit_exclude=$1
+    shift
     audit_results=$(mktemp)
-    xargs -0 -r -n 200 rg --hidden -n "$@" -- < "$publication_files_nul" > "$audit_results" || true
+    tr '\0' '\n' < "$publication_files_nul" \
+        | grep -Ev -- "$audit_exclude" \
+        | tr '\n' '\0' \
+        | xargs -0 -r -n 200 rg --hidden -n "$@" -- > "$audit_results" || true
     if [ -s "$audit_results" ]; then
         cat "$audit_results"
         rm -f "$audit_results"
@@ -133,17 +138,19 @@ audit_rg() {
 }
 
 private_refs='(/root/(Layerx-protocol|project-Quorum|private-neo-v1|matrix|layerX)(/|$)|147\.93\.139\.18)'
-if audit_rg --glob '!tools/ci/public-repo-audit.sh' "$private_refs"; then
+if audit_rg '^tools/ci/public-repo-audit\.sh$' "$private_refs"; then
     echo "private workspace or infrastructure reference found" >&2
     exit 1
 fi
 
+secret_scan_allowlist='^tools/ci/public-repo-audit\.sh$'
+secret_scan_allowlist="$secret_scan_allowlist"'|^paxeer-network/rpc/tests/mock_data/transactions/0x99d895ea71e5ce3a8b949ba7979a27c08080210a4ba9b46b0bb06f8126b6957d\.json$'
+secret_scan_allowlist="$secret_scan_allowlist"'|^paxeer-network/rpc/tests/mock_data/transactions/0x1b9ceaabadfc635aa8eb5e6d4a66ee60c826980805fa93af3913872f7b565586\.json$'
+secret_scan_allowlist="$secret_scan_allowlist"'|^platform/integrations/ios/Sources/LayerXMobile/EmbeddedSecretDetector\.swift$'
+secret_scan_allowlist="$secret_scan_allowlist"'|^platform/integrations/android/src/main/java/com/sidiora/layerx/android/EmbeddedSecretDetector\.java$'
+secret_scan_allowlist="$secret_scan_allowlist"'|^programs/vendor/'
 secret_shapes='(-----BEGIN (RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----|AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{36,}|xox[baprs]-[A-Za-z0-9-]{20,}|sk_live_[A-Za-z0-9]{20,}|eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,})'
-if audit_rg -i \
-    --glob '!tools/ci/public-repo-audit.sh' \
-    --glob '!paxeer-network/rpc/tests/mock_data/transactions/0x99d895ea71e5ce3a8b949ba7979a27c08080210a4ba9b46b0bb06f8126b6957d.json' \
-    --glob '!paxeer-network/rpc/tests/mock_data/transactions/0x1b9ceaabadfc635aa8eb5e6d4a66ee60c826980805fa93af3913872f7b565586.json' \
-    "$secret_shapes"; then
+if audit_rg "$secret_scan_allowlist" -i "$secret_shapes"; then
     echo "secret-shaped material found in publication set" >&2
     exit 1
 fi

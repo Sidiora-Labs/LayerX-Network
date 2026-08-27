@@ -255,10 +255,11 @@ test: test-result test-protocol test-arena test-harness test-codec \
 	test-idempotency test-fee-gate test-identity test-grants \
 	test-authority-resolve test-allowance test-revocation test-rotation
 
-$(BUILD_DIR)/tests/lxp_test_kernel: tests/protocol/lxp_test_kernel.c $(LIBRARY)
+$(BUILD_DIR)/tests/lxp_test_kernel: tests/protocol/lxp_test_kernel.c \
+		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
 	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(EXTRA_LDFLAGS) \
-		-lcrypto -pthread -o $@
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) \
+		$(LIBRARY) $(EXTRA_LDFLAGS) -lcrypto -pthread -ldl -lm -o $@
 
 test-kernel: $(BUILD_DIR)/tests/lxp_test_kernel
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/lxp_test_kernel
@@ -1577,10 +1578,10 @@ test-idempotency: $(BUILD_DIR)/tests/lxp_test_idempotency
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/lxp_test_idempotency
 
 $(BUILD_DIR)/tests/lxp_test_fee_gate: tests/protocol/lxp_test_fee_gate.c \
-		$(LIBRARY)
+		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
 	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(EXTRA_LDFLAGS) \
-		-lcrypto -o $@
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) \
+		$(LIBRARY) $(EXTRA_LDFLAGS) -lcrypto -pthread -ldl -lm -o $@
 
 test-fee-gate: $(BUILD_DIR)/tests/lxp_test_fee_gate
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/lxp_test_fee_gate
