@@ -65,6 +65,8 @@ jobs:
         with:
           version: v1.7.1
           cache: false
+      - name: Install state surface tooling
+        run: sudo apt-get update && sudo apt-get install --yes ripgrep
       - name: Check formatting and state surface
         run: forge fmt --check && tools/ci/solidity-state-surface.sh
       - name: Build contracts

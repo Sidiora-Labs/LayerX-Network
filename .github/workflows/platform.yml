@@ -62,7 +62,7 @@ jobs:
 
   android-application-artifact:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 45
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -81,8 +81,14 @@ jobs:
         uses: swift-actions/setup-swift@7ca6abe6b3b0e8b5421b88be48feee39cbf52c6a # v2.4.0
         with:
           swift-version: "6.0.3"
+      - name: Install pinned Rust toolchain and policy auditor
+        run: >-
+          rustup toolchain install 1.91.1 --profile minimal &&
+          cargo install cargo-deny --locked --version 0.19.0
       - name: Install platform sample and policy dependencies
         run: make platform-dependencies-install
+      - name: Prime the Gradle cache under dependency verification
+        run: make platform-prime-android-dependencies
       - name: Build the Android application and scan the APK for embedded secrets
         run: make platform-test-android-artifact
 

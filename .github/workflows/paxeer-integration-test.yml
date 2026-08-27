@@ -43,8 +43,8 @@ jobs:
       packages: write
       contents: read
     env:
-      GHCR_LOCALNODE: ghcr.io/paxeer-network/pax-chain-integration-test-localnode
-      GHCR_RPCNODE: ghcr.io/paxeer-network/pax-chain-integration-test-rpcnode
+      GHCR_LOCALNODE: ghcr.io/sidiora-labs/pax-chain-integration-test-localnode
+      GHCR_RPCNODE: ghcr.io/sidiora-labs/pax-chain-integration-test-rpcnode
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - name: Login to Docker Hub
@@ -124,8 +124,8 @@ jobs:
       contents: read
     env:
       JOB_TIMEOUT: 28m
-      GHCR_LOCALNODE: ghcr.io/paxeer-network/pax-chain-integration-test-localnode
-      GHCR_RPCNODE: ghcr.io/paxeer-network/pax-chain-integration-test-rpcnode
+      GHCR_LOCALNODE: ghcr.io/sidiora-labs/pax-chain-integration-test-localnode
+      GHCR_RPCNODE: ghcr.io/sidiora-labs/pax-chain-integration-test-rpcnode
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
       DAPP_TESTS_MNEMONIC: ${{ secrets.DAPP_TESTS_MNEMONIC }}

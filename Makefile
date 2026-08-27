@@ -1976,7 +1976,7 @@ $(BUILD_DIR)/agent/layerxd-lni: agent/tests/boundary/node/layerxd_lni.c \
 	mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) agent/tests/boundary/node/layerxd_lni.c \
 		$(LAYERXD_SOURCES) $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) \
-		$(EXTRA_LDFLAGS) -lcrypto -pthread -ldl -lm -o $@
+		$(EXTRA_LDFLAGS) -lcrypto -lsqlite3 -pthread -ldl -lm -o $@
 
 agent-test-boundary: $(BUILD_DIR)/agent/layerxd-lni
 	$(AGENT_CARGO) run --manifest-path agent/tests/boundary/Cargo.toml --locked -- \
@@ -2616,13 +2616,13 @@ programs-js-install:
 	npm --prefix programs/sdk/assemblyscript/examples/paid-counter ci --ignore-scripts --no-audit --no-fund
 
 $(PROGRAMS_RUNTIME_LIB):
-	cd programs && $(PROGRAMS_CARGO) build --locked --workspace
+	cd programs && $(PROGRAMS_CARGO) build --locked --workspace --features layerx-programs-runtime/host-ffi
 
 programs-build:
-	cd programs && $(PROGRAMS_CARGO) build --locked --workspace
+	cd programs && $(PROGRAMS_CARGO) build --locked --workspace --features layerx-programs-runtime/host-ffi
 
 programs-lint: programs-module-boundaries
-	cd programs && $(PROGRAMS_CARGO) clippy --locked --workspace --all-targets -- -D warnings
+	cd programs && $(PROGRAMS_CARGO) clippy --locked --workspace --all-targets --features layerx-programs-runtime/host-ffi -- -D warnings
 	sh programs/tools/dependency-policy.sh
 	cd programs && $(PROGRAMS_CARGO) deny check advisories bans sources
 
