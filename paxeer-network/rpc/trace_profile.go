@@ -134,11 +134,9 @@ func (api *DebugAPI) TraceTransactionProfile(ctx context.Context, hash common.Ha
 }
 
 func (api *DebugAPI) newProfileTracingBackend() *Backend {
-	tracingBackend := *api.backend
-	tracingBackend.ctxProvider = func(height int64) sdk.Context {
+	return api.backend.withCtxProvider(func(height int64) sdk.Context {
 		return api.ctxProvider(height).WithIsTracing(true)
-	}
-	return &tracingBackend
+	})
 }
 
 func dumpStoreTrace(statedb vm.StateDB) *sdk.StoreTraceDump {

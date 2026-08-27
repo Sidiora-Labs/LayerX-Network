@@ -10,6 +10,7 @@ import (
 	"github.com/sidiora-labs/paxeer-network/modules/evm/derived"
 	evmkeeper "github.com/sidiora-labs/paxeer-network/modules/evm/keeper"
 	evmtypes "github.com/sidiora-labs/paxeer-network/modules/evm/types"
+	"github.com/sidiora-labs/paxeer-network/modules/evm/types/ethtx"
 	oracletypes "github.com/sidiora-labs/paxeer-network/modules/oracle/types"
 	"github.com/sidiora-labs/paxeer-network/node/antedecorators"
 	sdk "github.com/sidiora-labs/paxeer-network/sdk/types"

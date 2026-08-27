@@ -466,9 +466,9 @@ func TestSstoreGasDeltaCalculation(t *testing.T) {
 // TestSstoreGasAdjustmentAccumulation tests bounded, invocation-scoped accumulation.
 func TestSstoreGasAdjustmentAccumulation(t *testing.T) {
 	tests := []struct {
-		name               string
-		deltas             []int64 // deltas to add
-		expectedTotal      int64
+		name          string
+		deltas        []int64 // deltas to add
+		expectedTotal int64
 	}{
 		{
 			name:          "Single delta",

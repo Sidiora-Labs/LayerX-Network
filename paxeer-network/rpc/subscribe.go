@@ -432,7 +432,7 @@ func encodeTmHeader(
 		"extraData":             hexutil.Bytes{},            // inapplicable to Pax
 		"gasLimit":              encodedGasLimit,
 		"gasUsed":               hexutil.Uint64(gasWanted),
-		"logsBloom":             ethtypes.Bloom{},          // inapplicable to Pax
+		"logsBloom":             ethtypes.Bloom{}, // inapplicable to Pax
 		"miner":                 miner,
 		"nonce":                 ethtypes.BlockNonce{}, // inapplicable to Pax
 		"number":                (*hexutil.Big)(number),

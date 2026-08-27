@@ -275,6 +275,26 @@ func NewBackend(
 	}
 }
 
+// withCtxProvider derives a backend that shares every dependency except the
+// context provider and the header cache; headerMu must not be copied.
+func (b *Backend) withCtxProvider(ctxProvider func(int64) sdk.Context) *Backend {
+	return &Backend{
+		EthAPIBackend:      b.EthAPIBackend,
+		ctxProvider:        ctxProvider,
+		traceCtxProvider:   b.traceCtxProvider,
+		txConfigProvider:   b.txConfigProvider,
+		keeper:             b.keeper,
+		tmClient:           b.tmClient,
+		config:             b.config,
+		app:                b.app,
+		beginBlockKeepers:  b.beginBlockKeepers,
+		antehandler:        b.antehandler,
+		globalBlockCache:   b.globalBlockCache,
+		cacheCreationMutex: b.cacheCreationMutex,
+		watermarks:         b.watermarks,
+	}
+}
+
 func defaultTraceContextProvider(ctxProvider func(int64) sdk.Context) TraceContextProvider {
 	return func(height int64) (sdk.Context, func()) {
 		return ctxProvider(height), func() {}

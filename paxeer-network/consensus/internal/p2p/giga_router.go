@@ -268,8 +268,8 @@ func (r *GigaRouter) translateGlobalBlock(gb *atypes.GlobalBlock) *coretypes.Res
 		Block: &types.Block{
 			Header: types.Header{
 				ChainID: r.cfg.GenDoc.ChainID,
-				Height: int64(gb.GlobalNumber), //nolint:gosec // data.State rejects certificates above the executable int64 height range.
-				Time:   gb.Timestamp,
+				Height:  int64(gb.GlobalNumber), //nolint:gosec // data.State rejects certificates above the executable int64 height range.
+				Time:    gb.Timestamp,
 			},
 			Data:       types.Data{Txs: tmTxs},
 			LastCommit: &types.Commit{},

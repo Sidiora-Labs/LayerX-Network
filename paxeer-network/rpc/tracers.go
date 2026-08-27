@@ -764,10 +764,9 @@ func (api *DebugAPI) TraceStateAccess(ctx context.Context, hash common.Hash) (re
 	tendermintTraces := &TendermintTraces{Traces: []TendermintTrace{}}
 	ctx = WithTendermintTraces(ctx, tendermintTraces)
 	receiptTraces := &ReceiptTraces{Traces: []RawResponseReceipt{}}
-	tracingBackend := *api.backend
-	tracingBackend.ctxProvider = func(height int64) sdk.Context {
+	tracingBackend := api.backend.withCtxProvider(func(height int64) sdk.Context {
 		return api.ctxProvider(height).WithIsTracing(true)
-	}
+	})
 	ctx = WithReceiptTraces(ctx, receiptTraces)
 	_, tx, blockHash, blockNumber, index, err := tracingBackend.GetTransaction(ctx, hash)
 	if err != nil {

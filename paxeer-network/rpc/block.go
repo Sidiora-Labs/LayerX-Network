@@ -539,8 +539,8 @@ func EncodeTmBlock(
 		"logsBloom":        ethtypes.BytesToBloom(blockBloom),
 		"stateRoot":        appHash,
 		"miner":            miner,
-		"difficulty":       (*hexutil.Big)(big.NewInt(0)),           // inapplicable to Pax
-		"extraData":        hexutil.Bytes{},                         // inapplicable to Pax
+		"difficulty":       (*hexutil.Big)(big.NewInt(0)), // inapplicable to Pax
+		"extraData":        hexutil.Bytes{},               // inapplicable to Pax
 		"gasLimit":         gasLimit,
 		"gasUsed":          hexutil.Uint64(blockGasUsed),
 		"timestamp":        hexutil.Uint64(block.Block.Time.Unix()), //nolint:gosec

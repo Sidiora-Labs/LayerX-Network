@@ -55,9 +55,9 @@ func NewHostContextConfig(chainConfig *params.ChainConfig) HostContextConfig {
 }
 
 type HostContext struct {
-	vm     *evmc.VM
-	evm    *vm.EVM
-	config HostContextConfig
+	vm              *evmc.VM
+	evm             *vm.EVM
+	config          HostContextConfig
 	sstoreGasMu     sync.Mutex
 	sstoreGasFrames []sstoreGasFrame
 }

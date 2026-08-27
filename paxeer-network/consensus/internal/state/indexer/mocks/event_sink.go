@@ -5,12 +5,13 @@ package mocks
 import (
 	context "context"
 
+	consensustypes "github.com/sidiora-labs/paxeer-network/consensus/types"
+
 	indexer "github.com/sidiora-labs/paxeer-network/consensus/internal/state/indexer"
+
 	mock "github.com/stretchr/testify/mock"
 
 	query "github.com/sidiora-labs/paxeer-network/consensus/internal/pubsub/query"
-
-	pax_tenderminttypes "github.com/sidiora-labs/paxeer-network/consensus/types"
 
 	types "github.com/sidiora-labs/paxeer-network/consensus/abci/types"
 )
@@ -79,7 +80,7 @@ func (_m *EventSink) HasBlock(_a0 int64) (bool, error) {
 }
 
 // IndexBlockEvents provides a mock function with given fields: _a0
-func (_m *EventSink) IndexBlockEvents(_a0 pax_tenderminttypes.EventDataNewBlockHeader) error {
+func (_m *EventSink) IndexBlockEvents(_a0 consensustypes.EventDataNewBlockHeader) error {
 	ret := _m.Called(_a0)
 
 	if len(ret) == 0 {
@@ -87,7 +88,7 @@ func (_m *EventSink) IndexBlockEvents(_a0 pax_tenderminttypes.EventDataNewBlockH
 	}
 
 	var r0 error
-	if rf, ok := ret.Get(0).(func(pax_tenderminttypes.EventDataNewBlockHeader) error); ok {
+	if rf, ok := ret.Get(0).(func(consensustypes.EventDataNewBlockHeader) error); ok {
 		r0 = rf(_a0)
 	} else {
 		r0 = ret.Error(0)

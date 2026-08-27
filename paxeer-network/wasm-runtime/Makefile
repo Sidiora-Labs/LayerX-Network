@@ -1,9 +1,9 @@
 .PHONY: all build build-rust build-go test
 
 # Builds the Rust library libwasmvm
-BUILDERS_PREFIX := cosmwasm/go-ext-builder:0017
+BUILDERS_PREFIX := cosmwasm/libwasmvm-builder:0103
 # Contains a full Go dev environment in order to run Go tests on the built library
-ALPINE_TESTER := cosmwasm/go-ext-builder:0017-alpine
+ALPINE_TESTER := cosmwasm/libwasmvm-builder:0103-alpine
 
 USER_ID := $(shell id -u)
 USER_GROUP = $(shell id -g)
@@ -80,7 +80,7 @@ release-build-linux:
 	# Builders should not write their target folder into the host file system (https://github.com/CosmWasm/wasmvm/issues/437)
 	rm -rf libwasmvm/target/x86_64-unknown-linux-gnu/release
 	rm -rf libwasmvm/target/aarch64-unknown-linux-gnu/release
-	docker run --rm -u $(USER_ID):$(USER_GROUP) -v $(shell pwd)/libwasmvm:/code $(BUILDERS_PREFIX)-centos7 build_linux.sh
+	docker run --rm -u $(USER_ID):$(USER_GROUP) -v $(shell pwd)/libwasmvm:/code $(BUILDERS_PREFIX)-debian build_linux.sh
 	cp libwasmvm/artifacts/libwasmvm.x86_64.so internal/api
 	cp libwasmvm/artifacts/libwasmvm.aarch64.so internal/api
 	make update-bindings
