@@ -1485,6 +1485,10 @@ fn encode_namespace(encoded: &mut Vec<u8>, namespace: StorageNamespace) {
             encoded.extend_from_slice(&principal.bytes());
         }
         StorageNamespace::ProgramShared { .. } => encoded.push(SHARED_NAMESPACE_TAG),
+        StorageNamespace::ProtocolPrivate { scope, .. } => {
+            encoded.push(2);
+            encoded.extend_from_slice(&scope);
+        }
     }
 }
 
@@ -1527,6 +1531,7 @@ fn decode_namespace(cursor: &mut AccessCursor<'_>) -> Result<StorageNamespace, A
             Ok(StorageNamespace::principal(program, principal))
         }
         SHARED_NAMESPACE_TAG => Ok(StorageNamespace::shared(program)),
+        2 => Ok(StorageNamespace::protocol_private(program, cursor.take_array()?)),
         _ => Err(AccessRefusal::MalformedCanonicalBytes),
     }
 }

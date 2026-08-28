@@ -3607,7 +3607,7 @@ reqs = ["41.5"]
 
 [task.34.6]
 title = "Snapshot and restore sandbox state under the renter's authority"
-status = "pending"
+status = "implemented"
 wave = 20
 requires = ["34.1","29.3"]
 do_1 = "Let a renter commit a digest of the lease's state at a point in execution, computed deterministically from the lease's namespaces alone."

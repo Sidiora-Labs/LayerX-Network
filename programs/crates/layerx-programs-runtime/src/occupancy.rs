@@ -840,6 +840,8 @@ fn decode_namespace(cursor: &mut Cursor<'_>) -> Result<StorageNamespace, Occupan
     match (bytes[32], length) {
         (0, 65) => Ok(StorageNamespace::principal(program, PrincipalId::new(bytes[33..65].try_into().map_err(|_| OccupancyError::MalformedEvidence)?).map_err(|_| OccupancyError::MalformedEvidence)?)),
         (1, 33) => Ok(StorageNamespace::shared(program)),
+        (2, 65) => Ok(StorageNamespace::protocol_private(program,
+            bytes[33..65].try_into().map_err(|_| OccupancyError::MalformedEvidence)?)),
         _ => Err(OccupancyError::MalformedEvidence),
     }
 }

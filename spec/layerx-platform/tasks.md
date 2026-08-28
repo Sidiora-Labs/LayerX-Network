@@ -1460,7 +1460,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Make destruction final: after it, the lease's state is unreadable by any party, and no activity can reference the lease except to read its terminal record.
     - Test destruction under a full escrow, an exhausted escrow, an active-at-expiry execution and a cohort large enough to span several batches.
     - _Requirements: 41.5_
-  - [ ] 34.6 Snapshot and restore sandbox state under the renter's authority
+  - [ ] 34.6 Snapshot and restore sandbox state under the renter's authority — **Implemented - qualification pending**
     - Let a renter commit a digest of the lease's state at a point in execution, computed deterministically from the lease's namespaces alone.
     - Let a renter restore a new lease from a prior snapshot digest by supplying the state, verified against the committed digest before the lease becomes active.
     - Charge snapshotting and restoration by bytes committed and bytes restored, through the ordinary meter.

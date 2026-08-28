@@ -114,6 +114,12 @@ impl RuntimeState {
         }
     }
 
+    pub(crate) fn sandbox(meter: Meter, abi: Abi) -> Self {
+        let mut state = Self::isolated(meter);
+        state.abi = Some(abi);
+        state
+    }
+
     pub(crate) fn composed_with_response(
         meter: Meter,
         abi: Abi,

@@ -127,7 +127,8 @@ pub use execute::{
     CandidateAuthorizedExecutionRecord, CandidateExecutionRecord, CandidateReceiptOutcome,
     ExecutionError, ExecutionFault, ExecutionRecord, Executor, PreparedAuthorizedActivity,
     PreparedAuthorizedActivityOutcome, PreparedMonetarySummary, PreparedTransferLegSummary,
-    ProgramInstance, SettlementFailure, VerifiedStorageAssignment, WasmValue, RUNTIME_VERSION,
+    ProgramInstance, RuntimeContinuation, RuntimeGlobal, SettlementFailure,
+    VerifiedStorageAssignment, WasmValue, RUNTIME_VERSION,
     V2ActivityOutcome, V2ActivityReceipt, V2AuthorizedExecutionRecord,
     V2ExecutionRecord, V2ReceiptOutcome,
 };

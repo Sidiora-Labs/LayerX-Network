@@ -135,6 +135,7 @@ pub struct ValidatedModule {
     revision: AbiRevision,
     meter_injection: MeterInjection,
     interface_entry_capability_masks: BTreeMap<String, u16>,
+    resumable_globals: Option<Vec<String>>,
 }
 
 impl ValidatedModule {
@@ -212,6 +213,9 @@ impl ValidatedModule {
     pub const fn meter_injection(&self) -> &MeterInjection { &self.meter_injection }
 
     #[must_use]
+    pub const fn code_hash(&self) -> [u8; 32] { self.meter_injection.original_code_hash() }
+
+    #[must_use]
     pub const fn metering_schedule_version(&self) -> u32 {
         self.meter_injection.schedule().version()
     }
@@ -264,6 +268,12 @@ impl ValidatedModule {
     pub fn instantiate(&self) -> Result<ProgramInstance, ExecutionFault> {
         self.instantiate_metered(Meter::declared())
             .map_err(|(fault, _)| fault)
+    }
+
+    pub fn instantiate_sandbox(
+        &self, meter: Meter, abi: Abi,
+    ) -> Result<ProgramInstance, ExecutionFault> {
+        self.instantiate_state(RuntimeState::sandbox(meter, abi)).map_err(|(fault, _)| fault)
     }
 
     pub(crate) fn instantiate_metered(
@@ -356,7 +366,10 @@ impl ValidatedModule {
                 return Err(Box::new(retained_failure(store, fault)));
             }
         };
-        Ok(ProgramInstance::new(store, instance))
+        let mut instance = ProgramInstance::new(store, instance);
+        instance.declare_resumable_globals(self.resumable_globals.clone());
+        instance.bind_validated_code_hash(self.code_hash());
+        Ok(instance)
     }
 
     fn instantiate_state(
@@ -373,7 +386,10 @@ impl ValidatedModule {
         let instance = pre
             .start(&mut store)
             .map_err(|error| (fault_from_error(&error), store.data().meter().exhaustion()))?;
-        Ok(ProgramInstance::new(store, instance))
+        let mut instance = ProgramInstance::new(store, instance);
+        instance.declare_resumable_globals(self.resumable_globals.clone());
+        instance.bind_validated_code_hash(self.code_hash());
+        Ok(instance)
     }
 }
 
@@ -418,6 +434,7 @@ pub(crate) fn validate_module_metered(
         revision,
         meter_injection,
         interface_entry_capability_masks: original.interface_entry_capability_masks,
+        resumable_globals: original.resumable_globals,
     })
 }
 
@@ -426,6 +443,7 @@ struct OriginalValidation {
     byte_size: u64,
     function_count: u32,
     interface_entry_capability_masks: BTreeMap<String, u16>,
+    resumable_globals: Option<Vec<String>>,
 }
 
 fn validate_original_module(
@@ -447,6 +465,8 @@ fn validate_original_module(
     let mut imported_function_masks = Vec::new();
     let mut all_imported_capability_mask = 0_u16;
     let mut exported_functions = BTreeMap::new();
+    let mut exported_globals = BTreeMap::<u32, Vec<String>>::new();
+    let mut mutable_globals = Vec::new();
     let mut function_calls: Vec<(Vec<u32>, bool)> = Vec::new();
     for payload in Parser::new(0).parse_all(wasm) {
         let payload = payload.map_err(|error| ValidationRefusal::MalformedModule {
@@ -500,6 +520,8 @@ fn validate_original_module(
                     })?;
                     if entry.kind == wasmparser_nostd::ExternalKind::Func {
                         exported_functions.insert(entry.name.to_string(), entry.index);
+                    } else if entry.kind == wasmparser_nostd::ExternalKind::Global {
+                        exported_globals.entry(entry.index).or_default().push(entry.name.to_string());
                     }
                 }
             }
@@ -509,6 +531,7 @@ fn validate_original_module(
                         reason: error.to_string(),
                     })?;
                     refuse_value_type(entry.ty.content_type)?;
+                    mutable_globals.push(entry.ty.mutable);
                 }
             }
             Payload::CodeSectionEntry(body) => {
@@ -541,11 +564,24 @@ fn validate_original_module(
             (name, mask)
         })
         .collect();
+    let mut resumable_globals = Vec::new();
+    let mut complete = true;
+    for (index, mutable) in mutable_globals.into_iter().enumerate() {
+        if !mutable { continue; }
+        let names = exported_globals.get(&(index as u32));
+        if let Some(names) = names.filter(|names| names.len() == 1) {
+            resumable_globals.push(names[0].clone());
+        } else {
+            complete = false;
+        }
+    }
+    resumable_globals.sort();
     Ok(OriginalValidation {
         module,
         byte_size,
         function_count,
         interface_entry_capability_masks,
+        resumable_globals: complete.then_some(resumable_globals),
     })
 }
 

@@ -6,7 +6,12 @@ use layerx_programs_sandbox::{
     LeaseRefusal, LeaseState, LeaseTransition, LeaseUsage, TransitionEvidence, UsageOutcome,
     MAX_CONCURRENT_LEASES_PER_PRINCIPAL,
 };
-use layerx_programs_runtime::{AuthorizationContext, CapabilitySet, PrincipalId, ProgramId};
+use layerx_programs_runtime::{AuthorizationContext, CapabilitySet, FeeSchedule, Meter, PrincipalId,
+    ProgramId, ResourceBudget, Storage};
+
+fn storage_meter() -> Meter {
+    Meter::new(ResourceBudget::declared(), FeeSchedule::declared())
+}
 
 const ENTRYPOINT: &[u8] = b"sandbox_transition";
 const CALL_PREFIX: usize = 106;
@@ -122,9 +127,19 @@ fn real_receipts_drive_every_lifecycle_edge_and_destroyed_never_revives() {
         let current = book.get(LeaseId::new([1; 32]).unwrap_or_else(|error| panic!("id: {error}")))
             .unwrap_or_else(|| panic!("stored lease")).clone();
         let (declared, evidence) = transition(&current, activity, from, to, [0; 32], batch);
-        book.transition(current.id(), declared, evidence)
-            .unwrap_or_else(|error| panic!("transition: {error}"));
-        assert_eq!(book.transition(current.id(), declared, evidence), Err(LeaseRefusal::ReplayedEvidence));
+        if activity == LeaseActivity::Destroy {
+            book.destroy(current.id(), &mut Storage::new(), &mut storage_meter(), declared, evidence)
+                .unwrap_or_else(|error| panic!("destroy: {error}"));
+        } else {
+            book.transition(current.id(), declared, evidence)
+                .unwrap_or_else(|error| panic!("transition: {error}"));
+        }
+        if activity == LeaseActivity::Destroy {
+            assert_eq!(book.destroy(current.id(), &mut Storage::new(), &mut storage_meter(),
+                declared, evidence), Err(LeaseRefusal::ReplayedEvidence));
+        } else {
+            assert_eq!(book.transition(current.id(), declared, evidence), Err(LeaseRefusal::ReplayedEvidence));
+        }
     }
     let destroyed = book.get(LeaseId::new([1; 32]).unwrap_or_else(|error| panic!("id: {error}")))
         .unwrap_or_else(|| panic!("destroyed lease")).clone();
@@ -220,7 +235,8 @@ fn real_request_evidence_enforces_principal_concurrency_and_expiry() {
     let current = book.get(first).unwrap_or_else(|| panic!("expired lease")).clone();
     let (destroy, evidence) = transition(&current, LeaseActivity::Destroy,
         LeaseState::Expired, LeaseState::Destroyed, [0; 32], 21);
-    book.transition(first, destroy, evidence).unwrap_or_else(|error| panic!("destroy: {error}"));
+    book.destroy(first, &mut Storage::new(), &mut storage_meter(), destroy, evidence)
+        .unwrap_or_else(|error| panic!("destroy: {error}"));
     let lease = candidate(33, 9, 22, 30);
     let digest = lease.request_binding_digest().unwrap_or_else(|error| panic!("digest: {error}"));
     let (request, evidence) = transition(&lease, LeaseActivity::Request,

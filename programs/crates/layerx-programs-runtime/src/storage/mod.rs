@@ -234,6 +234,67 @@ impl Storage {
         Ok(sizes.into_iter().collect())
     }
 
+    /// Returns canonical copies of every cell in one protocol-owned namespace.
+    pub fn protocol_namespace_entries(
+        &self, namespace: StorageNamespace,
+    ) -> Result<Vec<(Vec<u8>, Vec<u8>)>, StorageError> {
+        self.ensure_accessible(namespace)?;
+        Ok(self.namespace_entries(namespace))
+    }
+
+    /// Atomically replaces one protocol-owned namespace with an exact canonical cell set.
+    pub fn replace_protocol_namespace(
+        &mut self, namespace: StorageNamespace, entries: &[(Vec<u8>, Vec<u8>)],
+    ) -> Result<(), StorageError> {
+        if entries.windows(2).any(|pair| pair[0].0 >= pair[1].0) {
+            return Err(StorageError::PrefixTooLarge);
+        }
+        let existing = self.protocol_namespace_entries(namespace)?;
+        let mut transaction = self.transaction(namespace);
+        for (key, _) in existing { transaction.delete(&key)?; }
+        for (key, value) in entries { transaction.write(key, value)?; }
+        transaction.commit();
+        Ok(())
+    }
+
+    /// Returns canonical copies of cells beneath one protocol-owned key prefix.
+    pub fn protocol_prefix_entries(
+        &self, namespace: StorageNamespace, prefix: &[u8],
+    ) -> Result<Vec<(Vec<u8>, Vec<u8>)>, StorageError> {
+        self.ensure_accessible(namespace)?;
+        validate_key(prefix)?;
+        Ok(self.cells.iter()
+            .filter(|(address, _)| address.namespace == namespace && address.key.starts_with(prefix))
+            .map(|(address, value)| (address.key.clone(), value.clone())).collect())
+    }
+
+    /// Returns exact key-plus-value occupancy beneath one protocol-owned prefix.
+    pub fn protocol_prefix_bytes(
+        &self, namespace: StorageNamespace, prefix: &[u8],
+    ) -> Result<u64, StorageError> {
+        self.protocol_prefix_entries(namespace, prefix)?.iter().try_fold(0u64,
+            |total, (key, value)| total.checked_add(metered_bytes(key, Some(value))?)
+                .ok_or(StorageError::SizeOverflow))
+    }
+
+    /// Atomically replaces one protocol-owned prefix with an exact canonical cell set.
+    pub fn replace_protocol_prefix(
+        &mut self, namespace: StorageNamespace, prefix: &[u8],
+        entries: &[(Vec<u8>, Vec<u8>)],
+    ) -> Result<(), StorageError> {
+        validate_key(prefix)?;
+        if entries.windows(2).any(|pair| pair[0].0 >= pair[1].0)
+            || entries.iter().any(|(key, _)| !key.starts_with(prefix)) {
+            return Err(StorageError::PrefixTooLarge);
+        }
+        let existing = self.protocol_prefix_entries(namespace, prefix)?;
+        let mut transaction = self.transaction(namespace);
+        for (key, _) in existing { transaction.delete(&key)?; }
+        for (key, value) in entries { transaction.write(key, value)?; }
+        transaction.commit();
+        Ok(())
+    }
+
     /// Computes exact facts for dropping one namespace without mutating this
     /// storage snapshot. The caller charges this preview before committing the
     /// corresponding reclamation.
