@@ -1398,7 +1398,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Give the interpreter no authority the ordinary ABI does not: it is an ordinary program, subject to the same monetary law, the same namespaces and the same composition bounds.
     - Freeze the instruction set behind golden vectors and prove determinism across the differential.
     - _Requirements: 40.4_
-  - [ ] 33.5 Price interpretation honestly against compilation
+  - [ ] 33.5 Price interpretation honestly against compilation — **Implemented - qualification pending**
     - Meter interpreted execution by the work the interpreter actually performs, so an interpreted script and an equivalent compiled program are priced by cost rather than by authoring route.
     - Measure the interpretation overhead on a representative script set and publish the multiplier rather than implying parity.
     - Document when to interpret and when to compile, with the tradeoff stated in cost terms an agent can act on.

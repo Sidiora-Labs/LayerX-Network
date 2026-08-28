@@ -2609,7 +2609,7 @@ PROGRAMS_CARGO ?= cargo
 PROGRAMS_RUNTIME_LIB := programs/target/debug/liblayerx_programs_runtime.a
 
 .PHONY: programs-build programs-lint programs-test programs-core-test programs-protocol-regression programs-adversarial programs-module-boundaries programs-abi-drift programs-porting-v2-references \
-	programs-fuzz-smoke programs-differential programs-interpreter-conformance programs-quickstart programs-sdk-rust programs-sdk-c programs-sdk-assemblyscript
+	programs-fuzz-smoke programs-differential programs-interpreter-conformance programs-bench programs-interpreter-bench programs-quickstart programs-sdk-rust programs-sdk-c programs-sdk-assemblyscript
 
 .PHONY: programs-js-install
 programs-js-install:
@@ -2735,6 +2735,13 @@ programs-differential: $(BUILD_DIR)/tests/programs_parallel_differential
 programs-interpreter-conformance:
 	cd programs && $(PROGRAMS_CARGO) build --locked --release --target wasm32-unknown-unknown -p layerx-programs-interpreter
 	cd programs && LAYERX_INTERPRETER_WASM=$$(pwd)/target/wasm32-unknown-unknown/release/layerx_programs_interpreter.wasm $(PROGRAMS_CARGO) test --locked -p layerx-programs-runtime --test interpreter_program
+
+programs-bench: programs-interpreter-bench
+
+programs-interpreter-bench:
+	cd programs && $(PROGRAMS_CARGO) build --locked --release --target wasm32-unknown-unknown -p layerx-programs-interpreter
+	cd programs && $(PROGRAMS_CARGO) build --locked --release --target wasm32-unknown-unknown -p layerx-interpreter-compiled-equivalent
+	cd programs && LAYERX_INTERPRETER_WASM=$$(pwd)/target/wasm32-unknown-unknown/release/layerx_programs_interpreter.wasm LAYERX_COMPILED_EQUIVALENT_WASM=$$(pwd)/target/wasm32-unknown-unknown/release/layerx_interpreter_compiled_equivalent.wasm $(PROGRAMS_CARGO) bench --locked -p layerx-programs-runtime --bench interpreter
 
 programs-test: programs-module-boundaries programs-abi-drift programs-core-test programs-protocol-regression programs-adversarial programs-fuzz-smoke programs-differential programs-interpreter-conformance programs-sdk-rust programs-sdk-c programs-sdk-assemblyscript programs-porting-v2-references
 	cd programs && LAYERX_INTERPRETER_WASM=$$(pwd)/target/wasm32-unknown-unknown/release/layerx_programs_interpreter.wasm $(PROGRAMS_CARGO) test --locked --workspace

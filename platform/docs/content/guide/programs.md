@@ -78,6 +78,48 @@ layerx program registry verify-source <program-id> --source-uri <uri> --source-d
 
 `deploy` validates the artifact and submits it for receipt-backed deployment. It takes an idempotency key, because deploying is a money-adjacent state change and deploying twice by accident is not acceptable.
 
+## Interpret or compile
+
+The deterministic interpreter is an authoring convenience, not a cheaper or
+equivalent execution tier. It is an ordinary ABI-v2 program: the outer Wasm
+engine meters its instruction fuel, memory, storage reads, storage writes,
+output values, output bytes and persistent occupancy through the same
+protocol-owned `ResourceBudget` and `FeeSchedule` used for compiled programs.
+The script decoder, bounds checks, register operations and control-flow loop
+are therefore real metered work in addition to the host operations the script
+requests.
+
+The published release ceilings for the representative v1 arithmetic, storage,
+transfer and bounded-control workload set are **12.00x compiled protocol fee**
+and, separately, **12.00x compiled execution time**, each with a **15%
+regression tolerance** (hard gates at 13.80x). These are declared release
+thresholds, not observed results. Protocol fee is the economic comparison an
+agent uses; wall-clock time is an operator performance signal and is never
+presented as protocol price. `make programs-bench` builds the
+real interpreter and its real compiled ABI-v2 equivalents, executes both
+through the production candidate executor, reports median integer nanoseconds
+and every metered resource and fee class, and refuses the release if either
+aggregate ratio exceeds its gate. Human qualification records observed results
+and the fixed hardware and software conditions; this guide does not invent
+them. The broader cold/warm execution baseline and performance ledger remain
+the qualification-owned task 32.7 component of this aggregate Make entry.
+
+Use interpretation when removing a compiler from an agent's deployment path
+is worth a potentially material execution premium: small policies, bounded
+automation, infrequent jobs, or logic expected to change before its execution
+cost dominates. Compile repeated, compute-heavy, latency-sensitive or
+high-volume logic. An agent can make that choice mechanically: estimate the
+expected invocation count, multiply the compiled protocol-fee estimate by 12 for
+admission planning, and compile when that conservative lifetime premium costs
+more than operating the toolchain. Both routes have identical authority and
+isolation rules; changing routes cannot grant capabilities.
+
+The benchmark additionally refuses any workload whose committed storage,
+effects, receipt identity, runtime/schedule versions, call graph or receipt
+outcome differs between the interpreted and compiled routes. Only metered
+usage and the fee derived from it may differ. This equivalence check uses real
+runtime types and the fail-closed receipt oracle; it is not a mock guest.
+
 ## The registry
 
 The registry is the record of what is deployed, and it is receipt-backed rather than self-asserted. Source verification binds a program's code hash to a build environment - builder image digest, toolchain digest, dependency lock digest, `SOURCE_DATE_EPOCH`, and the exact command - so a third party can reproduce the artifact and check the binding themselves. A registry record with unverified source says so.

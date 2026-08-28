@@ -1,0 +1,24 @@
+[package]
+name = "layerx-interpreter-compiled-equivalent"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.91.1"
+license = "LicenseRef-Centra-ai-Protocol"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+layerx-program-sdk = { path = "../../sdk/rust" }
+
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+float_arithmetic = "deny"
+lossy_float_literal = "deny"

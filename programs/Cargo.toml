@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "benches/compiled-equivalent",
     "crates/layerx-programs-registry",
     "crates/layerx-programs-protocol-adapter",
     "crates/layerx-programs-interpreter",
@@ -21,6 +22,13 @@ exclude = [
     "sdk/rust/response-fixture",
 ]
 resolver = "2"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
 
 [workspace.package]
 edition = "2021"

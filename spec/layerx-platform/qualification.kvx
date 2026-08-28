@@ -510,6 +510,14 @@ observed = "The task do clauses say to prove the p75 budgets and 3G journey beha
 assumption = "Human qualification under task 14.5 will execute make human-e2e-perf against representative production pages and the real journey stack and will record the p75 and 3G evidence."
 severity = "phase-boundary"
 
+[observation.33.5.1]
+task = "33.5"
+file = "programs/benches/interpreter.rs, programs/benches/compiled-equivalent, platform/docs/content/guide/programs.md, Makefile"
+symbol = "programs_interpreter_bench"
+observed = "The source separately declares 12.00x protocol-fee and 12.00x execution-time interpreter ceilings with 15 percent tolerance, builds a real ABI-v2 compiled counterpart performing equivalent arithmetic, storage, transfer and bounded-control work across four representative interpreter workloads, executes both artifacts through the production candidate executor, reports integer median timing and every MeteredUsage resource and fee class, and fails the benchmark entry point on either overhead regression or on state, effects, receipt identity, schedule, call-graph or outcome divergence modulo metered usage and fee. The published values are release policy, not fabricated measurements."
+assumption = "Human qualification owns make programs-bench, must record fixed hardware and software conditions beside every observed number, examine per-workload and aggregate distributions for noise, confirm both declared thresholds remain economically and operationally appropriate, and investigate any equivalence or overhead refusal without weakening the gate. Task 32.7 is still pending and owns the broader cold/warm execution baseline and performance ledger that must be added beside programs-interpreter-bench under the aggregate programs-bench entry; task 33.5 cannot truthfully supply or claim that unperformed qualification artifact. No build, test, benchmark, timing, resource-use or passing result is asserted by this implementation-phase source work."
+severity = "qualification-required"
+
 [observation.13.1.1]
 task = "13.1"
 file = "human/apps/web/e2e/browser/settings.spec.ts, human/apps/web/package.json, Makefile"

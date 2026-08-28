@@ -8,6 +8,11 @@ license.workspace = true
 [lib]
 crate-type = ["rlib", "staticlib"]
 
+[[bench]]
+name = "interpreter"
+path = "../../benches/interpreter.rs"
+harness = false
+
 [features]
 host-ffi = []
 

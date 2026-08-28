@@ -3464,7 +3464,7 @@ reqs = ["40.4"]
 
 [task.33.5]
 title = "Price interpretation honestly against compilation"
-status = "pending"
+status = "implemented"
 wave = 19
 requires = ["33.4"]
 do_1 = "Meter interpreted execution by the work the interpreter actually performs, so an interpreted script and an equivalent compiled program are priced by cost rather than by authoring route."
