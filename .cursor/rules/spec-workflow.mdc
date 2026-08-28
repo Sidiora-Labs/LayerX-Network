@@ -16,11 +16,11 @@ This file is a GENERATED pointer to it. Do not hand-edit it; edit `spec/workflow
 
 - **Task Driven**: Work is driven by the active feature's spec.kvx task list — not ad-hoc. Pick the next eligible task by dependency wave, do it, mark it, move on.
 - **One In Progress**: At most 12 tasks are in_progress at a time. Sub-agents may work tasks in parallel within any non-conflicting wave. Set a task to in_progress before starting, to done only when its implementation genuinely meets the bar.
-- **Phase Separation**: Work runs in two phases and agents own exactly one of them. Implementation phase: agents write the complete task set straight through. Qualification phase: human engineers compile, test, replay, fault-inject, integrate, harden, and repair. An agent never crosses into qualification.
-- **No Repair**: During implementation, do not stop to build, run tests, or repair breakage — neither your own nor breakage you inherited. A red tree mid-implementation is the expected intermediate state, not a failure. It is the input to qualification, not a problem to solve now.
+- **Phase Separation**: Each task runs in two ordered stages owned by the same agent. First finish the entire task implementation without building or testing. Only after the task implementation is complete, enter task qualification: format, build, test, replay, fault-inject where required, fix task-scoped failures, and rerun until the task gates pass. Never interleave partial implementation with qualification.
+- **No Repair**: Do not build, test, or repair while a task is only partially implemented. After the entire task implementation is written, repair failures caused by that task during task qualification. Record unrelated or pre-existing failures without expanding scope.
 - **No Weakening**: Never relax an assertion, loosen a bound, widen a type, add a silent fallback, skip or delete a test, or disable a check to make anything pass. If the code and the check disagree, leave BOTH intact exactly as written and record the conflict.
-- **Record Dont Fix**: An error, ambiguity, or contradiction is something you WRITE DOWN, not something you resolve. Append it to the feature's qualification log with file, symbol, and what you observed, then continue to the next task.
-- **No False Success**: In the implementation phase, done means the task's code is written to its acceptance criteria — it does NOT mean it compiles or passes. Never attest to a build, a test result, or a verification you did not and cannot perform in this phase. Surface honest partials.
+- **Record Dont Fix**: Fix task-scoped implementation, compile, test, and runtime failures during task qualification. Record unrelated failures, cross-task contradictions, missing external authority, and any change that would require weakening a check in the feature qualification log.
+- **No False Success**: A task remains in_progress through implementation and task qualification. Mark it done only after its verify_cmd and required graph, render, build, test, replay, and fault-injection gates genuinely pass. Surface honest partials and external blockers.
 - **Read Full**: When a tool output is flagged truncated/paginated with a way to get the rest, retrieve the full content before reasoning. An information gap is a stop condition.
 - **Deliver Complete**: Deliver complete, runnable artifacts, not diffs. Follow existing repo style; add no comments/docs unless asked.
 
@@ -29,10 +29,11 @@ This file is a GENERATED pointer to it. Do not hand-edit it; edit `spec/workflow
 1. Read spec/<active_feature>/spec.kvx — the [meta] status, [req.*] (acceptance criteria), and the [task.*] list with status + wave + requires.
 2. Select the next eligible task: lowest wave whose every 'requires' task is done and whose status is pending. Set its status to in_progress in spec.kvx.
 3. Before any destructive/irreversible/prod/secret/network-write action, run cortex_guard and self-check against HARD rules; stop for explicit user YES if it risks a HARD rule.
-4. Implement the task fully against its referenced acceptance criteria (the 'reqs' clause ids in [req.*]). Real code paths, real types, no stubs. Do NOT build, do NOT run tests, do NOT repair breakage — yours or inherited. Compilation and verification belong to the qualification phase.
-5. On implementation completion: set the task status to done in spec.kvx, then cortex_note_outcome (success|partial|failure) with a terse summary of what was WRITTEN — never a claim about what passes.
-6. If the task surfaced an error, ambiguity, contradiction, or forced assumption, append it to spec/<feature>/qualification.kvx before moving on. Then continue to the next eligible task without pausing to resolve it.
-7. Immediately publish the step: from the repository root, git add -A, commit with a natural-sounding message describing what actually changed, and push. Commit messages state what was implemented; they never assert that it builds or passes. Every development step is pushed publicly so the work is auditable in the open. Never batch several tasks into one commit and never leave a completed task unpushed.
+4. Implementation stage: write the entire task against every referenced acceptance criterion using real code paths and types. Write specified tests, but do not format, build, run tests, or repair failures until the entire task implementation is complete. Keep status in_progress.
+5. Task qualification stage: after the entire implementation is written, format touched files; run focused then aggregate build, test, replay, sanitizer, fault-injection, graph, render, and task verify_cmd gates as required; fix task-scoped failures and rerun until green without weakening anything.
+6. If qualification exposes an unrelated or pre-existing failure, cross-task contradiction, missing external interface, or repair requiring wider authority, append it to spec/<feature>/qualification.kvx with evidence. Do not use the log to avoid fixing task-scoped failures.
+7. Run cg spec done <id> without --force only after the task's required gates pass. Record exact commands and outcomes; never claim a gate that did not run.
+8. Immediately publish the qualified task: from the repository root, git add -A, commit with a natural-sounding message describing the implementation and verified gates, and push. Never batch several tasks into one commit and never leave a completed task unpushed.
 
 ## Persistent project memory (when configured)
 
@@ -43,11 +44,11 @@ This file is a GENERATED pointer to it. Do not hand-edit it; edit `spec/workflow
 
 ## Hard rules
 
-- **Task Durability**: Once a task is dispatched, keep at least one agent alive until it is implemented to the highest standard; decouple task lifecycle from the user's connection; on failure, bring up a fresh agent and continue. 'Done' means the implementation genuinely meets the spec — not that it has been verified.
-- **Phase Boundary**: Agents implement. Humans qualify. Never enter a compile/test/fix loop, never gate your own work on a green build, never repair breakage you did not have an explicit human instruction to repair.
+- **Task Durability**: Once a task is dispatched, keep at least one agent alive through complete implementation and task qualification; on agent failure, resume from durable state. Done means implementation and every task gate genuinely pass.
+- **Phase Boundary**: Finish the entire task implementation before qualification. After implementation is complete, the same agent may format, build, test, fix task-scoped failures, and rerun gates. Never interleave partial implementation with qualification or expand into unrelated repair.
 - **No Weakening**: Never weaken the system to produce a passing signal. No relaxed assertions, loosened bounds, widened types, silent fallbacks, skipped or deleted tests, disabled checks, or lowered thresholds. Leave the conflict standing and log it.
 - **No Fakes**: Never write stub/mock/fake test doubles or placeholder implementations. Test REAL code paths with REAL types.
-- **No False Claims**: Never state or imply that code compiles, tests pass, or behavior is verified in the implementation phase. You did not run it. Say what you wrote.
+- **No False Claims**: Never claim code compiles, tests pass, or behavior is verified before the exact gate runs successfully. Preserve exact failed commands and distinguish task qualification from final release qualification.
 - **Read Full**: When tool output is truncated and the rest is retrievable, fetch the full content before reasoning or answering.
-- **Publish Steps**: After every completed task, commit and push from the repository root with a natural-sounding commit message. Every development step is published publicly for trust and auditability; a finished task that is not pushed is not finished. Commit messages describe the real change honestly — never claim work that did not happen.
+- **Publish Steps**: After every task passes task qualification and cg spec done without force, commit and push from the repository root with a natural-sounding message. A finished task that is not pushed is not finished.
 - **Ui Component Library**: Client UI uses the exact styling and component API of the owner-supplied @layerx/ui package. Its borders, dividers, shadows, gradients, palette, radii and interaction states are authoritative; application code consumes the package instead of restyling its primitives.

@@ -13,7 +13,7 @@
 [meta]
 name            = "LayerX Spec Workflow"
 kind            = "portable-agent-operating-contract"
-version         = "1.1.0"
+version         = "1.2.0"
 status          = "active"
 source_of_truth = "spec/ (kvx). Per-IDE rule files are GENERATED pointers — never hand-edit; run cg spec render && cg commit -m \"Specgen re-render\" to regenerate."
 active_feature  = "layerx-platform"
@@ -21,11 +21,11 @@ active_feature  = "layerx-platform"
 [principle]
 task_driven      = "Work is driven by the active feature's spec.kvx task list — not ad-hoc. Pick the next eligible task by dependency wave, do it, mark it, move on."
 one_in_progress  = "At most 12 tasks are in_progress at a time. Sub-agents may work tasks in parallel within any non-conflicting wave. Set a task to in_progress before starting, to done only when its implementation genuinely meets the bar."
-phase_separation = "Work runs in two phases and agents own exactly one of them. Implementation phase: agents write the complete task set straight through. Qualification phase: human engineers compile, test, replay, fault-inject, integrate, harden, and repair. An agent never crosses into qualification."
-no_repair        = "During implementation, do not stop to build, run tests, or repair breakage — neither your own nor breakage you inherited. A red tree mid-implementation is the expected intermediate state, not a failure. It is the input to qualification, not a problem to solve now."
+phase_separation = "Each task runs in two ordered stages owned by the same agent. First finish the entire task implementation without building or testing. Only after the task implementation is complete, enter task qualification: format, build, test, replay, fault-inject where required, fix task-scoped failures, and rerun until the task gates pass. Never interleave partial implementation with qualification."
+no_repair        = "Do not build, test, or repair while a task is only partially implemented. After the entire task implementation is written, repair failures caused by that task during task qualification. Record unrelated or pre-existing failures without expanding scope."
 no_weakening     = "Never relax an assertion, loosen a bound, widen a type, add a silent fallback, skip or delete a test, or disable a check to make anything pass. If the code and the check disagree, leave BOTH intact exactly as written and record the conflict."
-record_dont_fix  = "An error, ambiguity, or contradiction is something you WRITE DOWN, not something you resolve. Append it to the feature's qualification log with file, symbol, and what you observed, then continue to the next task."
-no_false_success = "In the implementation phase, done means the task's code is written to its acceptance criteria — it does NOT mean it compiles or passes. Never attest to a build, a test result, or a verification you did not and cannot perform in this phase. Surface honest partials."
+record_dont_fix  = "Fix task-scoped implementation, compile, test, and runtime failures during task qualification. Record unrelated failures, cross-task contradictions, missing external authority, and any change that would require weakening a check in the feature qualification log."
+no_false_success = "A task remains in_progress through implementation and task qualification. Mark it done only after its verify_cmd and required graph, render, build, test, replay, and fault-injection gates genuinely pass. Surface honest partials and external blockers."
 read_full        = "When a tool output is flagged truncated/paginated with a way to get the rest, retrieve the full content before reasoning. An information gap is a stop condition."
 deliver_complete = "Deliver complete, runnable artifacts, not diffs. Follow existing repo style; add no comments/docs unless asked."
 
@@ -34,35 +34,43 @@ max_in_progress = 12
 
 [phase.implementation]
 owner        = "agents"
-goal         = "Land the full task set for the wave — complete, real implementations against real types, written to the acceptance criteria."
+goal         = "Write the entire current task as a complete real implementation against real types and its acceptance criteria before running qualification commands."
 entry        = "Feature spec.kvx has eligible pending tasks."
-exit         = "Every task in scope is status done, committed, and pushed. Qualification log carries every observation worth a human's attention."
-allowed      = ["read the codebase", "write implementation code", "write tests as specified by a task", "update spec.kvx task status", "append to the qualification log", "commit and push"]
-forbidden    = ["running builds or test suites to gate your own work", "fixing compile errors", "fixing failing tests", "refactoring unrelated code to make something link", "weakening or disabling any check", "claiming anything builds, passes, or is verified"]
-inherited    = "You will encounter code that does not compile because a sibling agent in your wave has not landed its half yet. Write to the interface the spec declares and move on. Do not chase it."
+exit         = "The entire task implementation and its specified tests are written, internally reviewed against every acceptance criterion, and ready for task qualification while status remains in_progress."
+allowed      = ["read the codebase", "write the entire task implementation", "write tests specified by the task", "update the task to in_progress", "append unrelated contradictions to the qualification log"]
+forbidden    = ["building or testing before the entire task implementation is written", "repairing failures before implementation is complete", "weakening or disabling any check", "marking the task done", "claiming anything passes before task qualification"]
+inherited    = "A partially implemented sibling may leave the tree red. Finish the current task to its declared interfaces first; task qualification begins only after the entire task implementation is complete."
 
-[phase.qualification]
+[phase.task_qualification]
+owner        = "agents"
+goal         = "Qualify the fully implemented task, fix task-scoped failures without weakening the system, and produce real evidence for every required gate."
+entry        = "The entire task implementation and its specified tests are written while the task remains in_progress."
+allowed      = ["format task-touched files", "build", "run focused and aggregate tests", "run replay and fault injection required by the task", "fix task-scoped compile, test, runtime, and integration failures", "rerun gates", "run cg spec done", "commit and push"]
+forbidden    = ["starting another task before this task qualifies", "weakening assertions or bounds", "skipping or deleting tests", "fixing unrelated inherited failures", "claiming green without exact command evidence", "using cg spec done --force"]
+exit         = "The task verify_cmd and every required graph, render, build, test, replay, and fault-injection gate pass; cg spec done succeeds without force; the accepted task commit is pushed."
+
+[phase.release_qualification]
 owner        = "human engineers"
-goal         = "Compile, test, replay, fault-inject, integrate, harden, and repair the accumulated implementation."
-entry        = "Implementation phase exit conditions met for the wave."
-rationale    = "Repair is where a model takes the cheap path — a disabled assertion, a widened bound, a skipped case — and produces green output over a weaker system. Humans do not take that path. Agents supply throughput; humans supply the quality gate."
-agent_role   = "None by default. An agent participates in qualification only on an explicit, per-task human instruction naming the failure to address."
+goal         = "Perform final cross-task integration, production, economic, security, and release acceptance beyond an individual task's declared gates."
+entry        = "All tasks in the release scope have independently passed task qualification."
+agent_role   = "Agents may assist only under explicit release authority and must preserve production and destructive-action gates."
 
 [qualification_log]
 path       = "spec/<feature>/qualification.kvx"
-append_when= "You hit a compile-time impossibility, a contradiction between two requirements, a missing interface, an assumption you had to make, a suspect pre-existing behavior, or anything you would have fixed if you were allowed to."
+append_when= "You hit an unrelated or pre-existing failure, a contradiction between requirements or tasks, a missing external interface, an assumption, or a repair that would require expanding scope or weakening a check."
 entry_keys = ["task", "file", "symbol", "observed", "assumption", "severity"]
 severity   = ["blocker", "suspect", "assumption", "note"]
-never      = "Do not use the log as a to-do list for yourself. It is a handoff to the humans running qualification."
+never      = "Do not log a task-scoped failure as an excuse to skip repair. Fix task-scoped failures during task qualification; the log is for unrelated, cross-task, external, or unsafe-to-resolve findings."
 
 [loop]
 step_1 = "Read spec/<active_feature>/spec.kvx — the [meta] status, [req.*] (acceptance criteria), and the [task.*] list with status + wave + requires."
 step_2 = "Select the next eligible task: lowest wave whose every 'requires' task is done and whose status is pending. Set its status to in_progress in spec.kvx."
 step_3 = "Before any destructive/irreversible/prod/secret/network-write action, run cortex_guard and self-check against HARD rules; stop for explicit user YES if it risks a HARD rule."
-step_4 = "Implement the task fully against its referenced acceptance criteria (the 'reqs' clause ids in [req.*]). Real code paths, real types, no stubs. Do NOT build, do NOT run tests, do NOT repair breakage — yours or inherited. Compilation and verification belong to the qualification phase."
-step_5 = "On implementation completion: set the task status to done in spec.kvx, then cortex_note_outcome (success|partial|failure) with a terse summary of what was WRITTEN — never a claim about what passes."
-step_6 = "If the task surfaced an error, ambiguity, contradiction, or forced assumption, append it to spec/<feature>/qualification.kvx before moving on. Then continue to the next eligible task without pausing to resolve it."
-step_7 = "Immediately publish the step: from the repository root, git add -A, commit with a natural-sounding message describing what actually changed, and push. Commit messages state what was implemented; they never assert that it builds or passes. Every development step is pushed publicly so the work is auditable in the open. Never batch several tasks into one commit and never leave a completed task unpushed."
+step_4 = "Implementation stage: write the entire task against every referenced acceptance criterion using real code paths and types. Write specified tests, but do not format, build, run tests, or repair failures until the entire task implementation is complete. Keep status in_progress."
+step_5 = "Task qualification stage: after the entire implementation is written, format touched files; run focused then aggregate build, test, replay, sanitizer, fault-injection, graph, render, and task verify_cmd gates as required; fix task-scoped failures and rerun until green without weakening anything."
+step_6 = "If qualification exposes an unrelated or pre-existing failure, cross-task contradiction, missing external interface, or repair requiring wider authority, append it to spec/<feature>/qualification.kvx with evidence. Do not use the log to avoid fixing task-scoped failures."
+step_7 = "Run cg spec done <id> without --force only after the task's required gates pass. Record exact commands and outcomes; never claim a gate that did not run."
+step_8 = "Immediately publish the qualified task: from the repository root, git add -A, commit with a natural-sounding message describing the implementation and verified gates, and push. Never batch several tasks into one commit and never leave a completed task unpushed."
 
 [status_values]
 task    = ["pending", "in_progress", "done"]
@@ -71,13 +79,13 @@ feature = ["draft", "in_progress", "paused", "blocked", "complete"]
 # HARD rules mirrored in-repo so an agent without cortex still sees them.
 # These mirror the cortex HARD ruleset; cortex_recall is still authoritative.
 [hard_rules]
-task_durability = "Once a task is dispatched, keep at least one agent alive until it is implemented to the highest standard; decouple task lifecycle from the user's connection; on failure, bring up a fresh agent and continue. 'Done' means the implementation genuinely meets the spec — not that it has been verified."
-phase_boundary  = "Agents implement. Humans qualify. Never enter a compile/test/fix loop, never gate your own work on a green build, never repair breakage you did not have an explicit human instruction to repair."
+task_durability = "Once a task is dispatched, keep at least one agent alive through complete implementation and task qualification; on agent failure, resume from durable state. Done means implementation and every task gate genuinely pass."
+phase_boundary  = "Finish the entire task implementation before qualification. After implementation is complete, the same agent may format, build, test, fix task-scoped failures, and rerun gates. Never interleave partial implementation with qualification or expand into unrelated repair."
 no_weakening    = "Never weaken the system to produce a passing signal. No relaxed assertions, loosened bounds, widened types, silent fallbacks, skipped or deleted tests, disabled checks, or lowered thresholds. Leave the conflict standing and log it."
 no_fakes        = "Never write stub/mock/fake test doubles or placeholder implementations. Test REAL code paths with REAL types."
-no_false_claims = "Never state or imply that code compiles, tests pass, or behavior is verified in the implementation phase. You did not run it. Say what you wrote."
+no_false_claims = "Never claim code compiles, tests pass, or behavior is verified before the exact gate runs successfully. Preserve exact failed commands and distinguish task qualification from final release qualification."
 read_full       = "When tool output is truncated and the rest is retrievable, fetch the full content before reasoning or answering."
-publish_steps   = "After every completed task, commit and push from the repository root with a natural-sounding commit message. Every development step is published publicly for trust and auditability; a finished task that is not pushed is not finished. Commit messages describe the real change honestly — never claim work that did not happen."
+publish_steps   = "After every task passes task qualification and cg spec done without force, commit and push from the repository root with a natural-sounding message. A finished task that is not pushed is not finished."
 ui_component_library = "Client UI uses the exact styling and component API of the owner-supplied @layerx/ui package. Its borders, dividers, shadows, gradients, palette, radii and interaction states are authoritative; application code consumes the package instead of restyling its primitives."
 
 # Generation config: which IDE adapter files specgen emits, and where the
@@ -86,8 +94,8 @@ ui_component_library = "Client UI uses the exact styling and component API of th
 markdown_mirror  = true   # render requirements.md / design.md / tasks.md from spec.kvx (into spec/<feature>/ only)
 mirror_to_kiro   = false  # NEVER write into .kiro/specs/<feature>/ — those are hand-authored sources, not generated output
 banner           = "GENERATED by spec/specgen from spec/ kvx — DO NOT EDIT. Edit the .kvx source and regenerate."
-adapter_sections = ["principle", "phase.implementation", "phase.qualification", "qualification_log", "loop", "limits", "hard_rules"]
-adapter_lead     = "You are in the IMPLEMENTATION phase. Write the full task set. Do not compile, do not test, do not fix. Human engineers own qualification."
+adapter_sections = ["principle", "phase.implementation", "phase.task_qualification", "phase.release_qualification", "qualification_log", "loop", "limits", "hard_rules"]
+adapter_lead     = "For each task, finish the entire implementation first without building or testing. Then qualify that completed task: format, build, test, fix task-scoped failures, rerun gates, and call cg spec done only when green."
 
 [adapters]
 # label = "output path"   (specgen wraps the shared brief in each IDE's native shape)
