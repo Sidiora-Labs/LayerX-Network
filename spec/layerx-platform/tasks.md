@@ -1446,7 +1446,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Return typed refusals for ceiling exhaustion distinguishable from program failure, so a renter can tell a budget end from a bug.
     - Test a hostile sandbox image attempting each escape and prove every attempt refused with no state escaping the lease.
     - _Requirements: 41.3, 41.7_
-  - [ ] 34.4 Settle usage incrementally as work is performed
+  - [ ] 34.4 Settle usage incrementally as work is performed — **Implemented - qualification pending**
     - Debit the escrow per sandbox activity in the same atomic settlement that applies the activity's effects, so usage and payment cannot diverge.
     - Emit a per-activity usage receipt naming the resources consumed and the price applied, verifiable offline like every other receipt.
     - Make the running total readable from protocol state so a renter can see spend accrue without trusting the sandbox operator.

@@ -45,6 +45,9 @@ mod ffi;
 #[allow(unsafe_code)]
 mod ffi_call;
 #[cfg(feature = "host-ffi")]
+pub use ffi_call::{settle_host_sandbox_escrow_charge,
+    settle_reserved_host_sandbox_escrow_charge};
+#[cfg(feature = "host-ffi")]
 #[allow(unsafe_code)]
 mod ffi_transfer;
 #[cfg(feature = "host-ffi")]
@@ -137,8 +140,9 @@ pub use execute::{
     CandidateAuthorizedExecutionRecord, CandidateExecutionRecord, CandidateReceiptOutcome,
     ExecutionError, ExecutionFault, ExecutionRecord, Executor, PreparedAuthorizedActivity,
     PreparedAuthorizedActivityOutcome, PreparedMonetarySummary, PreparedTransferLegSummary,
-    ProgramInstance, RuntimeContinuation, RuntimeGlobal, SettlementFailure,
-    TracedExecutionRecord, VerifiedStorageAssignment, WasmValue, RUNTIME_VERSION,
+    ProgramInstance, ProtocolStateCas, ProtocolStateCasRefusal, RuntimeContinuation,
+    RuntimeGlobal, SettlementFailure, TracedExecutionRecord, VerifiedStorageAssignment,
+    WasmValue, RUNTIME_VERSION,
     V2ActivityOutcome, V2ActivityReceipt, V2AuthorizedExecutionRecord,
     V2ExecutionRecord, V2ReceiptOutcome,
 };
@@ -180,7 +184,8 @@ pub use storage::{
 pub use transfer::{
     AtomicTransferSet, KernelTransferEvidence, KernelTransferPrimitive, ProgramAuthority,
     ProgramFundingBinding, TransferCapability, TransferLawError, TransferSource,
-    VerifiedProgramSettlement,
+    reserve_host_sandbox_escrow_charge, sandbox_escrow_charge_root,
+    ReservedSandboxEscrowCharge, VerifiedProgramSettlement,
 };
 pub use validate::{AbiRevision, ValidatedModule, ValidationRefusal};
 

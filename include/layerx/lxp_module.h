@@ -32,6 +32,17 @@ typedef struct lxp_receipt lxp_receipt;
 typedef struct lxp_verified_receipt_facts lxp_verified_receipt_facts;
 typedef struct lxp_prepared_module_transition lxp_prepared_module_transition;
 typedef struct lx_account lx_account;
+typedef struct lxp_module_savepoint {
+    size_t arena_mark;
+    size_t staged_count;
+    size_t staged_account_count;
+    size_t transfer_snapshot_count;
+    size_t staged_blob_count;
+    size_t effect_count;
+    uint16_t next_effect_ordinal;
+    bool transfer_applied;
+    bool active;
+} lxp_module_savepoint;
 #define lxp_module_ctx lxp_module_ctx
 #define lxp_effect_buffer lxp_effect_buffer
 #define lxp_transfer_set lxp_transfer_set
@@ -112,6 +123,14 @@ lxp_result lxp_ctx_read_param(const lxp_module_ctx *ctx, uint32_t parameter_id,
 lxp_result lxp_ctx_charge_gas(lxp_module_ctx *ctx, uint64_t units);
 lxp_result lxp_ctx_arena_alloc(lxp_module_ctx *ctx, size_t size,
                                size_t alignment, void **allocation);
+lxp_result lxp_module_savepoint_begin(lxp_module_ctx *ctx,
+                                      lxp_module_savepoint *savepoint);
+lxp_result lxp_module_savepoint_discard(lxp_module_ctx *ctx,
+                                        lxp_module_savepoint *savepoint);
+lxp_result lxp_module_savepoint_accept(lxp_module_ctx *ctx,
+                                       lxp_module_savepoint *savepoint);
+lxp_result lxp_module_staged_reserve(lxp_module_ctx *ctx, size_t count);
+lxp_result lxp_module_staged_release(lxp_module_ctx *ctx, size_t count);
 void *lxp_ctx_module_runtime(const lxp_module_ctx *ctx);
 lxp_result lxp_ctx_verified_receipt_facts(
     const lxp_module_ctx *ctx, const uint8_t receipt_digest[32],

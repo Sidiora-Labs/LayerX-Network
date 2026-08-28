@@ -8,14 +8,14 @@ use crate::storage::StorageError;
 use crate::validate::AbiRevision;
 use crate::{
     AbiError, AccessSet, ActivityBudgetBinding, AtomicTransferSet, AuthorizationContext,
-    AuthorizedExecutionRecord, BudgetMeterRefusal, BudgetResourceKind,
+    BudgetMeterRefusal, BudgetResourceKind,
     BudgetedAuthorizedExecutionRequest, BudgetedV1FailureCause, CandidateActivityOutcome,
     CandidateAuthorizedExecutionRecord, CapabilitySet, CompiledModule, CompositionContext,
     CompositionRefusal, CompositionRules, DeclaredBudget, EntrypointRefusal, ExecutionFault,
     Executor, KernelTransferEvidence, KernelTransferPrimitive, MeterRefusal, MeteredUsage,
     ModuleCacheKey, PreparedAuthorizedActivityOutcome, PrincipalId, ProgramEvent, ProgramId,
     ProgramResolver, BalanceView, ReceiptOracle, ReceiptView, ResourceKind, ResponseRefusal,
-    RuntimeArtifactOwnerRefusal, SettlementFailure, Storage, StorageNamespace, TransferCapability,
+    RuntimeArtifactOwnerRefusal, Storage, StorageNamespace, TransferCapability,
     TransferLawError, TransferSource,
 };
 use std::collections::{BTreeMap, BTreeSet};
@@ -765,14 +765,11 @@ const fn resource_tag(resource: BudgetResourceKind) -> u8 {
     }
 }
 
-fn typed_resource_detail(refusal: BudgetMeterRefusal) -> Vec<u8> {
-    let mut encoded = b"LXP/programs/resource-detail/v1\0".to_vec();
+fn write_typed_resource_detail(encoded: &mut Vec<u8>, refusal: BudgetMeterRefusal) {
+    encoded.clear();
+    encoded.extend_from_slice(b"LXP/programs/resource-detail/v1\0");
     match refusal {
-        BudgetMeterRefusal::BudgetExceeded {
-            resource,
-            limit,
-            attempted,
-        } => {
+        BudgetMeterRefusal::BudgetExceeded { resource, limit, attempted } => {
             encoded.push(1);
             encoded.push(resource_tag(resource));
             encoded.extend_from_slice(&limit.to_be_bytes());
@@ -783,7 +780,6 @@ fn typed_resource_detail(refusal: BudgetMeterRefusal) -> Vec<u8> {
             encoded.push(resource_tag(resource));
         }
     }
-    encoded
 }
 
 fn transfer_error_tag(error: TransferLawError) -> u8 {
@@ -803,17 +799,17 @@ fn transfer_error_tag(error: TransferLawError) -> u8 {
     }
 }
 
-fn settlement_detail(error: TransferLawError) -> Vec<u8> {
-    let mut encoded = b"LXP/programs/settlement-failure/v1\0".to_vec();
+fn write_settlement_detail(encoded: &mut Vec<u8>, error: TransferLawError) {
+    encoded.clear();
+    encoded.extend_from_slice(b"LXP/programs/settlement-failure/v1\0");
     encoded.push(transfer_error_tag(error));
-    encoded
 }
 
-fn callback_detail(stage: u8, status: i32) -> Vec<u8> {
-    let mut encoded = b"LXP/programs/callback-failure/v1\0".to_vec();
+fn write_callback_detail(encoded: &mut Vec<u8>, stage: u8, status: i32) {
+    encoded.clear();
+    encoded.extend_from_slice(b"LXP/programs/callback-failure/v1\0");
     encoded.push(stage);
     encoded.extend_from_slice(&status.to_be_bytes());
-    encoded
 }
 
 unsafe extern "C" {
@@ -892,6 +888,54 @@ unsafe extern "C" {
         selector: u16,
     ) -> i32;
     fn layerx_programs_call_storage_final_authorize(token: u64) -> i32;
+    fn layerx_programs_call_sandbox_guest_seal(token: u64, success: u8) -> i32;
+    fn layerx_programs_call_sandbox_context(token: u64) -> i32;
+    fn layerx_programs_call_sandbox_admit(
+        token: u64, observed_batch: u64,
+        maximum_fee_hi: u64, maximum_fee_lo: u64,
+    ) -> i32;
+    fn layerx_programs_call_sandbox_context_byte(
+        token: u64,
+        section: u16,
+        offset: u32,
+    ) -> i32;
+    fn layerx_programs_call_sandbox_fee_schedule(
+        token: u64,
+        version: u32,
+        cpu: u64,
+        memory_byte: u64,
+        storage_read_byte: u64,
+        storage_write_byte: u64,
+        output_value: u64,
+        output_byte: u64,
+        occupancy_byte_batch: u64,
+    ) -> i32;
+    fn layerx_programs_call_sandbox_usage_result_length(token: u64, section: u16) -> i32;
+    fn layerx_programs_call_sandbox_usage_result_byte(
+        token: u64,
+        section: u16,
+        offset: u32,
+    ) -> i32;
+    fn layerx_programs_sandbox_settle_call_rust(
+        token: u64,
+        outcome: u8,
+        observed_batch: u64,
+        h0: u64,
+        h1: u64,
+        h2: u64,
+        h3: u64,
+        b0: u64,
+        b1: u64,
+        b2: u64,
+        b3: u64,
+        cpu: u64,
+        memory: u64,
+        storage_read: u64,
+        storage_write: u64,
+        output_values: u32,
+        output_bytes: u64,
+        final_namespace_bytes: u64,
+    ) -> i32;
     fn layerx_programs_occupancy_ledger_length(token: u64) -> i32;
     fn layerx_programs_occupancy_ledger_byte(token: u64, offset: u32) -> i32;
     fn layerx_programs_occupancy_activation_count(token: u64) -> i32;
@@ -970,6 +1014,10 @@ unsafe extern "C" {
         detail_length: u32,
         events_length: u32,
     ) -> i32;
+    fn layerx_programs_call_terminal_reserve(
+        token: u64, graph_capacity: u32,
+        terminal_capacity: u32, events_capacity: u32,
+    ) -> i32;
     fn layerx_programs_call_terminal_byte(token: u64, section: u16, offset: u32, byte: u8) -> i32;
     fn layerx_programs_call_terminal_publish(token: u64) -> i32;
     fn layerx_programs_call_event_begin(
@@ -1029,6 +1077,169 @@ unsafe extern "C" {
     ) -> i32;
     fn layerx_programs_call_transfer_apply(token: u64) -> i32;
     fn layerx_programs_call_transfer_root_byte(token: u64, offset: u32) -> i32;
+}
+
+fn sandbox_context_field(token: u64, section: u16) -> Result<[u8; 32], i32> {
+    scalar_bytes(32, |offset| unsafe {
+        layerx_programs_call_sandbox_context_byte(token, section, offset)
+    })?
+    .try_into()
+    .map_err(|_| NON_CANONICAL)
+}
+
+fn sandbox_execution_principal(
+    token: u64,
+    host_program: ProgramId,
+) -> Result<Option<PrincipalId>, i32> {
+    if unsafe { layerx_programs_call_sandbox_context(token) } != OK {
+        return Ok(None);
+    }
+    derive_sandbox_execution_principal(host_program, sandbox_context_field(token, 0)?).map(Some)
+}
+
+fn derive_sandbox_execution_principal(
+    host_program: ProgramId,
+    lease_id: [u8; 32],
+) -> Result<PrincipalId, i32> {
+    let mut preimage = b"LayerX/programs/sandbox/namespace/v1\0".to_vec();
+    preimage.extend_from_slice(&host_program.bytes());
+    preimage.extend_from_slice(&lease_id);
+    let principal = crate::hash_bytes(crate::HashAlgorithm::Sha256, &preimage)
+        .map_err(|_| NON_CANONICAL)?;
+    PrincipalId::new(principal).map_err(|_| NON_CANONICAL)
+}
+
+struct SandboxCallSettlement {
+    usage: MeteredUsage,
+    transfer_root: [u8; 32],
+    receipt: [u8; 4096],
+    receipt_length: usize,
+}
+
+fn sandbox_result_array<const N: usize>(token: u64, section: u16) -> Result<[u8; N], i32> {
+    let length = c_count(unsafe {
+        layerx_programs_call_sandbox_usage_result_length(token, section)
+    })?;
+    if usize::try_from(length).map_err(|_| LENGTH_LIMIT)? != N { return Err(NON_CANONICAL); }
+    let mut result = [0u8; N];
+    for (offset, byte) in result.iter_mut().enumerate() {
+        *byte = u8::try_from(unsafe { layerx_programs_call_sandbox_usage_result_byte(
+            token, section, u32::try_from(offset).map_err(|_| LENGTH_LIMIT)?)
+        }).map_err(|_| NON_CANONICAL)?;
+    }
+    Ok(result)
+}
+
+fn sandbox_orchestrated_settlement(
+    token: u64,
+    host_program: ProgramId,
+    binding: ActivityBudgetBinding,
+    outcome: u8,
+    observed_batch: u64,
+    usage: MeteredUsage,
+    final_namespace_bytes: u64,
+    occupancy_price: u64,
+) -> Result<Option<SandboxCallSettlement>, i32> {
+    if unsafe { layerx_programs_call_sandbox_context(token) } != OK {
+        return Ok(None);
+    }
+    let host = words(host_program.bytes());
+    let activity = words(binding.bytes());
+    c_ok(unsafe {
+        layerx_programs_sandbox_settle_call_rust(
+            token, outcome, observed_batch,
+            host[0], host[1], host[2], host[3],
+            activity[0], activity[1], activity[2], activity[3],
+            usage.cpu_fuel, usage.memory_bytes, usage.storage_read_bytes,
+            usage.storage_write_bytes, usage.output_values, usage.output_bytes,
+            final_namespace_bytes,
+        )
+    })?;
+    let encoded_usage = sandbox_result_array::<64>(token, 4)?;
+    let value = |index: usize| -> Result<u64, i32> {
+        encoded_usage[index * 8..index * 8 + 8]
+            .try_into().map(u64::from_be_bytes).map_err(|_| NON_CANONICAL)
+    };
+    let occupancy = u128::from_be_bytes(
+        sandbox_result_array::<16>(token, 0)?,
+    );
+    let occupancy_fee = u128::from_be_bytes(
+        sandbox_result_array::<16>(token, 1)?,
+    );
+    let execution_fee = (u128::from(value(6)?) << 64) | u128::from(value(7)?);
+    let settled_usage = MeteredUsage {
+        cpu_fuel: value(0)?, memory_bytes: value(1)?, storage_read_bytes: value(2)?,
+        storage_write_bytes: value(3)?,
+        output_values: u32::try_from(value(4)?).map_err(|_| NON_CANONICAL)?,
+        output_bytes: value(5)?, occupancy_byte_batches: occupancy,
+        occupancy_fee_units: occupancy_fee, fee_units: execution_fee,
+    };
+    if settled_usage.cpu_fuel != usage.cpu_fuel
+        || settled_usage.memory_bytes != usage.memory_bytes
+        || settled_usage.storage_read_bytes != usage.storage_read_bytes
+        || settled_usage.storage_write_bytes != usage.storage_write_bytes
+        || settled_usage.output_values != usage.output_values
+        || settled_usage.output_bytes != usage.output_bytes
+        || execution_fee != usage.fee_units
+        || occupancy.checked_mul(u128::from(occupancy_price)).ok_or(NON_CANONICAL)?
+            != occupancy_fee
+    {
+        return Err(NON_CANONICAL);
+    }
+    let transfer_root = sandbox_result_array::<32>(token, 2)?;
+    let receipt_length = usize::try_from(c_count(unsafe {
+        layerx_programs_call_sandbox_usage_result_length(token, 3)
+    })?).map_err(|_| LENGTH_LIMIT)?;
+    if receipt_length == 0 || receipt_length > 4096 { return Err(NON_CANONICAL); }
+    let mut receipt = [0u8; 4096];
+    for (offset, byte) in receipt[..receipt_length].iter_mut().enumerate() {
+        *byte = u8::try_from(unsafe { layerx_programs_call_sandbox_usage_result_byte(
+            token, 3, u32::try_from(offset).map_err(|_| LENGTH_LIMIT)?)
+        }).map_err(|_| NON_CANONICAL)?;
+    }
+    Ok(Some(SandboxCallSettlement { usage: settled_usage, transfer_root,
+        receipt, receipt_length }))
+}
+
+/// Seals and applies one protocol-owned sandbox escrow fee leg through the
+/// active CALL kernel journal. This host-only API does not issue or consume a
+/// guest capability.
+pub fn settle_host_sandbox_escrow_charge(
+    call_token: u64,
+    host_program: ProgramId,
+    execution_principal: PrincipalId,
+    invocation_authority: [u8; 32],
+    lease_id: [u8; 32],
+    expected_lease_digest: [u8; 32],
+    escrow_account: [u8; 32],
+    asset: [u8; 32],
+    fee_destination: [u8; 32],
+    exact_fee: u128,
+) -> Result<(crate::VerifiedProgramSettlement, Vec<u8>), TransferLawError> {
+    let set = AtomicTransferSet::sandbox_escrow_charge(
+        host_program,
+        execution_principal,
+        invocation_authority,
+        lease_id,
+        expected_lease_digest,
+        escrow_account,
+        asset,
+        fee_destination,
+        exact_fee,
+    )?;
+    let mut kernel = CKernel { token: call_token };
+    let authorization = set.canonical().to_vec();
+    let settlement = set.settle_sandbox_escrow_charge(&mut kernel)?;
+    Ok((settlement, authorization))
+}
+
+pub fn settle_reserved_host_sandbox_escrow_charge(
+    call_token: u64, reserved: &mut crate::ReservedSandboxEscrowCharge,
+    exact_fee: u128,
+) -> Result<crate::VerifiedProgramSettlement, TransferLawError> {
+    let mut kernel = CKernel { token: call_token };
+    crate::transfer::settle_reserved_sandbox_escrow_charge(
+        reserved, exact_fee, &mut kernel)
 }
 
 fn bytes(words: [u64; 4]) -> [u8; 32] {
@@ -1534,79 +1745,26 @@ fn terminal(
     Ok(result)
 }
 
-fn terminal_record_failure(
-    token: u64,
-    schedule: u32,
-    record: &AuthorizedExecutionRecord,
-    detail: &[u8],
+#[allow(clippy::too_many_arguments)]
+fn terminal_sandbox_postexecution_failure(
+    token: u64, schedule: u32, record: &CandidateAuthorizedExecutionRecord,
+    program: ProgramId, binding: ActivityBudgetBinding, batch: u64,
+    prior_namespace_bytes: u64, occupancy_price: u64,
+    graph: &[u8], mut detail: Vec<u8>,
 ) -> Result<i32, i32> {
+    c_ok(unsafe { layerx_programs_call_sandbox_guest_seal(token, 0) })?;
+    let settlement = sandbox_orchestrated_settlement(
+        token, program, binding, 2, batch, record.execution().usage(),
+        prior_namespace_bytes, occupancy_price,
+    )?.ok_or(NON_CANONICAL)?;
+    execution_with_sandbox_receipt(&mut detail,
+        &settlement.receipt[..settlement.receipt_length], settlement.transfer_root)?;
     terminal(
-        token,
-        FAILURE,
-        PROGRAM_REFUSED,
-        record.execution.runtime_version,
-        record.execution.abi_version,
-        schedule,
-        record.execution.metering_schedule_version,
-        record.execution.usage,
-        [0; 32],
-        &record.call_graph.canonical_evidence(),
-        detail,
+        token, FAILURE, PROGRAM_REFUSED, record.execution().runtime_version(), 2,
+        schedule, record.execution().metering_schedule_version(), settlement.usage,
+        [0; 32], graph, &detail,
         b"LXP/programs/events/v1\0\0\0\0\0",
     )
-}
-
-fn terminal_settlement_failure(
-    token: u64,
-    schedule: u32,
-    failure: SettlementFailure,
-) -> Result<i32, i32> {
-    let detail = settlement_detail(failure.error());
-    terminal(
-        token,
-        FAILURE,
-        PROGRAM_REFUSED,
-        failure.execution().runtime_version,
-        failure.execution().abi_version,
-        schedule,
-        failure.execution().metering_schedule_version,
-        failure.execution().usage,
-        [0; 32],
-        &failure.call_graph().canonical_evidence(),
-        &detail,
-        b"LXP/programs/events/v1\0\0\0\0\0",
-    )
-}
-
-fn terminal_candidate_record_failure(
-    token: u64,
-    schedule: u32,
-    record: &CandidateAuthorizedExecutionRecord,
-    detail: &[u8],
-) -> Result<i32, i32> {
-    terminal(
-        token,
-        FAILURE,
-        PROGRAM_REFUSED,
-        record.execution().runtime_version(),
-        2,
-        schedule,
-        record.execution().metering_schedule_version(),
-        record.execution().usage(),
-        [0; 32],
-        &record.call_graph().canonical_evidence(),
-        detail,
-        b"LXP/programs/events/v1\0\0\0\0\0",
-    )
-}
-
-fn terminal_candidate_settlement_failure(
-    token: u64,
-    schedule: u32,
-    record: &CandidateAuthorizedExecutionRecord,
-    error: TransferLawError,
-) -> Result<i32, i32> {
-    terminal_candidate_record_failure(token, schedule, record, &settlement_detail(error))
 }
 
 fn split_u128(value: u128) -> (u64, u64) {
@@ -1962,6 +2120,58 @@ fn execution_with_program_authority_evidence(
     Ok(evidence)
 }
 
+fn wrap_reserved_evidence(
+    evidence: &mut Vec<u8>, domain: &[u8], attachment: &[u8], suffix: &[u8],
+) -> Result<(), i32> {
+    let original = evidence.len();
+    let prefix = domain.len() + 4;
+    let final_length = prefix.checked_add(original).and_then(|value| value.checked_add(4))
+        .and_then(|value| value.checked_add(attachment.len()))
+        .and_then(|value| value.checked_add(suffix.len())).ok_or(LENGTH_LIMIT)?;
+    if final_length > evidence.capacity() { return Err(FATAL_INVARIANT); }
+    evidence.resize(final_length, 0);
+    evidence.copy_within(0..original, prefix);
+    evidence[..domain.len()].copy_from_slice(domain);
+    evidence[domain.len()..prefix].copy_from_slice(
+        &u32::try_from(original).map_err(|_| LENGTH_LIMIT)?.to_be_bytes());
+    let mut offset = prefix + original;
+    evidence[offset..offset + 4].copy_from_slice(
+        &u32::try_from(attachment.len()).map_err(|_| LENGTH_LIMIT)?.to_be_bytes());
+    offset += 4;
+    evidence[offset..offset + attachment.len()].copy_from_slice(attachment);
+    offset += attachment.len();
+    evidence[offset..offset + suffix.len()].copy_from_slice(suffix);
+    Ok(())
+}
+
+fn execution_with_sandbox_receipt(
+    execution: &mut Vec<u8>,
+    receipt: &[u8],
+    transfer_root: [u8; 32],
+) -> Result<(), i32> {
+    const DOMAIN: &[u8] = b"LXP/programs/sandbox-settlement/v1\0";
+    let execution_length = execution.len();
+    let prefix = DOMAIN.len() + 4;
+    let added = prefix.checked_add(4).and_then(|value| value.checked_add(receipt.len()))
+        .and_then(|value| value.checked_add(32)).ok_or(LENGTH_LIMIT)?;
+    let final_length = execution_length.checked_add(added).ok_or(LENGTH_LIMIT)?;
+    if final_length > execution.capacity() { return Err(FATAL_INVARIANT); }
+    execution.resize(final_length, 0);
+    execution.copy_within(0..execution_length, prefix);
+    execution[..DOMAIN.len()].copy_from_slice(DOMAIN);
+    execution[DOMAIN.len()..prefix].copy_from_slice(
+        &u32::try_from(execution_length).map_err(|_| LENGTH_LIMIT)?.to_be_bytes());
+    let mut offset = prefix + execution_length;
+    execution[offset..offset + 4].copy_from_slice(
+        &u32::try_from(receipt.len()).map_err(|_| LENGTH_LIMIT)?.to_be_bytes());
+    offset += 4;
+    execution[offset..offset + receipt.len()].copy_from_slice(receipt);
+    offset += receipt.len();
+    execution[offset..offset + 32].copy_from_slice(&transfer_root);
+    Ok(())
+}
+
+
 #[no_mangle]
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 pub extern "C" fn layerx_programs_call_begin(
@@ -2048,6 +2258,28 @@ pub extern "C" fn layerx_programs_call_begin(
         {
             return Err(NON_CANONICAL);
         }
+        if unsafe { layerx_programs_call_sandbox_context(token) } == OK
+            && (protocol_version != 2 || abi_version != 2)
+        {
+            return Err(NON_CANONICAL);
+        }
+        if unsafe { layerx_programs_call_sandbox_context(token) } == OK
+            && unsafe {
+                layerx_programs_call_sandbox_fee_schedule(
+                    token,
+                    fee_schedule_version,
+                    fee_cpu,
+                    fee_memory_byte,
+                    fee_storage_read_byte,
+                    fee_storage_write_byte,
+                    fee_output_value,
+                    fee_output_byte,
+                    fee_occupancy_byte_batch,
+                )
+            } != OK
+        {
+            return Err(NON_CANONICAL);
+        }
         let mut metering_schedule_bytes = [0_u8; 76];
         metering_schedule_bytes[0..4]
             .copy_from_slice(&metering_schedule_version.to_be_bytes());
@@ -2071,6 +2303,7 @@ pub extern "C" fn layerx_programs_call_begin(
         ).map_err(|_| NON_CANONICAL)?;
         let program = ProgramId::new(bytes([p0, p1, p2, p3])).map_err(|_| NON_CANONICAL)?;
         let payer = PrincipalId::new(bytes([r0, r1, r2, r3])).map_err(|_| NON_CANONICAL)?;
+        let execution_principal = sandbox_execution_principal(token, program)?.unwrap_or(payer);
         let authority = bytes([h0, h1, h2, h3]);
         if authority == [0; 32] {
             return Err(NON_CANONICAL);
@@ -2105,19 +2338,29 @@ pub extern "C" fn layerx_programs_call_begin(
         );
         let signed_fee = (u128::from(signed_fee_hi) << 64) | u128::from(signed_fee_lo);
         let available_fee = (u128::from(available_fee_hi) << 64) | u128::from(available_fee_lo);
-        if crate::budget::maximum_fee_units(declared.resource_budget(), fee_schedule)
-            .map_err(|_| NON_CANONICAL)?
-            > signed_fee
-        {
+        let maximum_fee = crate::budget::maximum_fee_units(
+            declared.resource_budget(), fee_schedule).map_err(|_| NON_CANONICAL)?;
+        let sandbox = unsafe { layerx_programs_call_sandbox_context(token) } == OK;
+        if sandbox {
+            if unsafe { layerx_programs_call_sandbox_admit(
+                token, batch_number, (maximum_fee >> 64) as u64, maximum_fee as u64,
+            ) } != OK { return Err(NON_CANONICAL); }
+        } else if maximum_fee > signed_fee {
             return Err(NON_CANONICAL);
         }
         let admitted = executor
             .admit_activity_budget(
                 declared,
-                crate::budget::PayerCoverage::new(payer, binding, available_fee),
+                crate::budget::PayerCoverage::new(
+                    payer, binding, if sandbox { maximum_fee } else { available_fee }),
             )
             .map_err(|_| NON_CANONICAL)?;
-        let occupancy_authority = if protocol_version == 2 {
+        c_ok(unsafe { layerx_programs_call_terminal_reserve(
+            token, 65_536, 70_000_000, 5_242_880,
+        ) })?;
+        let occupancy_authority = if protocol_version == 2
+            && !sandbox
+        {
             Some(
                 OccupancyAuthority::from_admitted(&admitted, signed_fee, fee_schedule, program)
                     .map_err(|_| NON_CANONICAL)?,
@@ -2208,7 +2451,7 @@ pub extern "C" fn layerx_programs_call_begin(
             if program_owners.insert(entry_program, owner).is_some() {
                 return Err(NON_CANONICAL);
             }
-            import_catalog_storage(token, index, entry_program, payer, &mut storage)?;
+            import_catalog_storage(token, index, entry_program, execution_principal, &mut storage)?;
             entries.push((index, entry_program));
         }
         if !catalog.contains(program) {
@@ -2223,6 +2466,10 @@ pub extern "C" fn layerx_programs_call_begin(
         }
         .map_err(|_| NON_CANONICAL)?;
         let capabilities = CapabilitySet::new(grants).map_err(|_| NON_CANONICAL)?;
+        if sandbox && capabilities.has_program_spend()
+        {
+            return Err(NON_CANONICAL);
+        }
         storage.clear_access_log();
         let mut occupancy_ledger = if protocol_version == 2 {
             let mut ledger = occupancy_ledger(occupancy_token, batch_number)?;
@@ -2239,8 +2486,8 @@ pub extern "C" fn layerx_programs_call_begin(
                     return true;
                 }
                 match namespace.principal_scope() {
-                    Some(principal) => principal != payer,
-                    None => program_owners.get(&program).copied() != Some(payer),
+                    Some(principal) => principal != execution_principal,
+                    None => program_owners.get(&program).copied() != Some(execution_principal),
                 }
             }));
         }
@@ -2250,7 +2497,7 @@ pub extern "C" fn layerx_programs_call_begin(
             .into_iter()
             .collect();
         let receipts = CReceiptOracle { token };
-        let authorization = AuthorizationContext::new(payer, capabilities);
+        let authorization = AuthorizationContext::new(execution_principal, capabilities);
         let candidate_transfer = if root_module.validated().abi_revision() == AbiRevision::V2 {
             Some(
                 TransferCapability::from_root_authorization(
@@ -2273,6 +2520,14 @@ pub extern "C" fn layerx_programs_call_begin(
             composition: CompositionContext::new(Rc::new(catalog), CompositionRules::declared()),
             response_capacity: usize::try_from(response_capacity).map_err(|_| LENGTH_LIMIT)?,
         };
+        let mut terminal_graph = Vec::new();
+        let mut record_graph = Vec::new();
+        let mut terminal_detail = Vec::new();
+        let mut terminal_events = Vec::new();
+        terminal_graph.try_reserve_exact(65_536).map_err(|_| LENGTH_LIMIT)?;
+        record_graph.try_reserve_exact(65_536).map_err(|_| LENGTH_LIMIT)?;
+        terminal_detail.try_reserve_exact(70_000_000).map_err(|_| LENGTH_LIMIT)?;
+        terminal_events.try_reserve_exact(5_242_880).map_err(|_| LENGTH_LIMIT)?;
         if root_module.validated().abi_revision() == AbiRevision::V2 {
             let execution_context = crate::abi::context::ExecutionContext::authenticated(
                 activity_sequence,
@@ -2293,6 +2548,9 @@ pub extern "C" fn layerx_programs_call_begin(
                 .map_err(|_| NON_CANONICAL)?;
             match record.outcome() {
                 CandidateActivityOutcome::Success { effects, .. } => {
+                    if sandbox && !effects.transfers.is_empty() {
+                        return Err(NON_CANONICAL);
+                    }
                     let transfer = candidate_transfer.ok_or(FATAL_INVARIANT)?;
                     let transfer_set = if effects.transfers.is_empty() {
                         None
@@ -2300,12 +2558,13 @@ pub extern "C" fn layerx_programs_call_begin(
                         match transfer.authorize_for_graph(effects, record.call_graph()) {
                             Ok(set) => Some(set),
                             Err(error) => {
-                                return terminal_candidate_settlement_failure(
-                                    token,
-                                    fee_schedule_version,
-                                    &record,
-                                    error,
-                                )
+                                write_settlement_detail(&mut terminal_detail, error);
+                                record.call_graph().write_canonical_evidence(&mut terminal_graph);
+                                return terminal(token, FAILURE, PROGRAM_REFUSED,
+                                    record.execution().runtime_version(), 2, fee_schedule_version,
+                                    record.execution().metering_schedule_version(), record.execution().usage(),
+                                    [0; 32], &terminal_graph, &terminal_detail,
+                                    b"LXP/programs/events/v1\0\0\0\0\0")
                             }
                         }
                     };
@@ -2318,12 +2577,13 @@ pub extern "C" fn layerx_programs_call_begin(
                         match transfer.settle_authorized_set(set, &mut kernel) {
                             Ok(settlement) => Some(settlement),
                             Err(error) => {
-                                return terminal_candidate_settlement_failure(
-                                    token,
-                                    fee_schedule_version,
-                                    &record,
-                                    error,
-                                )
+                                write_settlement_detail(&mut terminal_detail, error);
+                                record.call_graph().write_canonical_evidence(&mut terminal_graph);
+                                return terminal(token, FAILURE, PROGRAM_REFUSED,
+                                    record.execution().runtime_version(), 2, fee_schedule_version,
+                                    record.execution().metering_schedule_version(), record.execution().usage(),
+                                    [0; 32], &terminal_graph, &terminal_detail,
+                                    b"LXP/programs/events/v1\0\0\0\0\0")
                             }
                         }
                     } else {
@@ -2345,65 +2605,117 @@ pub extern "C" fn layerx_programs_call_begin(
                         ) {
                             Ok(usage) => usage,
                             Err(status) => {
-                                return terminal_candidate_record_failure(
-                                    token,
-                                    fee_schedule_version,
-                                    &record,
-                                    &callback_detail(5, status),
-                                )
+                                write_callback_detail(&mut terminal_detail, 5, status);
+                                record.call_graph().write_canonical_evidence(&mut terminal_graph);
+                                return terminal(token, FAILURE, PROGRAM_REFUSED,
+                                    record.execution().runtime_version(), 2, fee_schedule_version,
+                                    record.execution().metering_schedule_version(),
+                                    record.execution().usage(), [0; 32], &terminal_graph,
+                                    &terminal_detail, b"LXP/programs/events/v1\0\0\0\0\0")
                             }
                         }
                     } else {
                         (OccupancyUsage::default(), Vec::new())
                     };
+                    let base_terminal_usage = MeteredUsage {
+                        occupancy_byte_batches: occupancy.byte_batches,
+                        occupancy_fee_units: occupancy.fee_units,
+                        ..record.execution().usage()
+                    };
+                    let final_namespace_bytes = final_storage
+                        .namespace_persistent_bytes(StorageNamespace::principal(
+                            program,
+                            execution_principal,
+                        ))
+                        .map_err(|_| NON_CANONICAL)?;
+                    let prior_namespace_bytes = initial_sizes
+                        .get(&StorageNamespace::principal(program, execution_principal))
+                        .copied().unwrap_or(0);
                     if let Err(status) =
                         c_ok(unsafe { layerx_programs_call_storage_final_authorize(token) })
                     {
-                        return terminal_candidate_record_failure(
-                            token,
-                            fee_schedule_version,
-                            &record,
-                            &callback_detail(1, status),
-                        );
+                        write_callback_detail(&mut terminal_detail, 1, status);
+                        record.call_graph().write_canonical_evidence(&mut terminal_graph);
+                        if sandbox {
+                            return terminal_sandbox_postexecution_failure(
+                                token, fee_schedule_version, &record, program, binding,
+                                batch_number, prior_namespace_bytes,
+                                fee_schedule.occupancy_byte_batch_price(), &terminal_graph,
+                                core::mem::take(&mut terminal_detail),
+                            );
+                        }
+                        return terminal(token, FAILURE, PROGRAM_REFUSED,
+                            record.execution().runtime_version(), 2, fee_schedule_version,
+                            record.execution().metering_schedule_version(), record.execution().usage(),
+                            [0; 32], &terminal_graph, &terminal_detail,
+                            b"LXP/programs/events/v1\0\0\0\0\0");
                     }
                     for (index, entry_program) in &entries {
                         if let Err(status) = export_catalog_storage(
                             token,
                             *index,
                             *entry_program,
-                            payer,
+                            execution_principal,
                             &final_storage,
                         ) {
-                            return terminal_candidate_record_failure(
-                                token,
-                                fee_schedule_version,
-                                &record,
-                                &callback_detail(2, status),
-                            );
+                            write_callback_detail(&mut terminal_detail, 2, status);
+                            record.call_graph().write_canonical_evidence(&mut terminal_graph);
+                            if sandbox {
+                                return terminal_sandbox_postexecution_failure(
+                                    token, fee_schedule_version, &record, program, binding,
+                                    batch_number, prior_namespace_bytes,
+                                    fee_schedule.occupancy_byte_batch_price(), &terminal_graph,
+                                    core::mem::take(&mut terminal_detail),
+                                );
+                            }
+                            return terminal(token, FAILURE, PROGRAM_REFUSED,
+                                record.execution().runtime_version(), 2, fee_schedule_version,
+                                record.execution().metering_schedule_version(), record.execution().usage(),
+                                [0; 32], &terminal_graph, &terminal_detail,
+                                b"LXP/programs/events/v1\0\0\0\0\0");
                         }
                     }
-                    let graph = record.call_graph().canonical_evidence();
-                    let mut detail = execution_with_occupancy_evidence(
-                        &record.canonical_evidence(),
-                        &occupancy_evidence,
-                    )?;
+                    record.call_graph().write_canonical_evidence(&mut terminal_graph);
+                    record.write_canonical_evidence(&mut terminal_detail, &mut record_graph);
+                    wrap_reserved_evidence(&mut terminal_detail,
+                        b"LXP/program-execution-with-occupancy/v1\0",
+                        &occupancy_evidence, &[])?;
                     if let Some((authorization, transfer_root)) = program_authority_evidence {
-                        detail = execution_with_program_authority_evidence(
-                            &detail,
-                            &authorization,
-                            transfer_root,
-                        )?;
+                        wrap_reserved_evidence(&mut terminal_detail,
+                            b"LXP/program-execution-with-transfer-authority/v2\0",
+                            &authorization, &transfer_root)?;
                     }
-                    let events = effects
-                        .canonical_program_event_envelope()
+                    effects.write_canonical_program_event_envelope(&mut terminal_events)
                         .map_err(|_| NON_CANONICAL)?;
                     if let Err(status) = emit_events(token, &effects.events) {
-                        return terminal_candidate_record_failure(
-                            token,
-                            fee_schedule_version,
-                            &record,
-                            &callback_detail(4, status),
-                        );
+                        write_callback_detail(&mut terminal_detail, 4, status);
+                        record.call_graph().write_canonical_evidence(&mut terminal_graph);
+                        if sandbox {
+                            return terminal_sandbox_postexecution_failure(
+                                token, fee_schedule_version, &record, program, binding,
+                                batch_number, prior_namespace_bytes,
+                                fee_schedule.occupancy_byte_batch_price(), &terminal_graph,
+                                core::mem::take(&mut terminal_detail),
+                            );
+                        }
+                        return terminal(token, FAILURE, PROGRAM_REFUSED,
+                            record.execution().runtime_version(), 2, fee_schedule_version,
+                            record.execution().metering_schedule_version(), record.execution().usage(),
+                            [0; 32], &terminal_graph, &terminal_detail,
+                            b"LXP/programs/events/v1\0\0\0\0\0");
+                    }
+                    if sandbox {
+                        c_ok(unsafe { layerx_programs_call_sandbox_guest_seal(token, 1) })?;
+                    }
+                    let sandbox_settlement = sandbox_orchestrated_settlement(
+                        token, program, binding, 1, batch_number, base_terminal_usage,
+                        final_namespace_bytes, fee_schedule.occupancy_byte_batch_price(),
+                    )?;
+                    let terminal_usage = sandbox_settlement.as_ref()
+                        .map_or(base_terminal_usage, |value| value.usage);
+                    if let Some(settlement) = sandbox_settlement.as_ref() {
+                        execution_with_sandbox_receipt(&mut terminal_detail,
+                            &settlement.receipt[..settlement.receipt_length], settlement.transfer_root)?;
                     }
                     return terminal(
                         token,
@@ -2413,30 +2725,76 @@ pub extern "C" fn layerx_programs_call_begin(
                         2,
                         fee_schedule_version,
                         record.execution().metering_schedule_version(),
-                        MeteredUsage {
-                            occupancy_byte_batches: occupancy.byte_batches,
-                            occupancy_fee_units: occupancy.fee_units,
-                            ..record.execution().usage()
-                        },
-                        settlement
+                        terminal_usage,
+                        sandbox_settlement
                             .as_ref()
-                            .map_or([0; 32], |value| value.transfer_set_root()),
-                        &graph,
-                        &detail,
-                        &events,
+                            .map(|value| value.transfer_root)
+                            .or_else(|| settlement.as_ref().map(|value| value.transfer_set_root()))
+                            .unwrap_or([0; 32]),
+                        &terminal_graph,
+                        &terminal_detail,
+                        &terminal_events,
                     );
                 }
                 CandidateActivityOutcome::Failure(_) => {
-                    let detail = record.canonical_evidence();
-                    return terminal_candidate_record_failure(
+                    record.call_graph().write_canonical_evidence(&mut terminal_graph);
+                    record.write_canonical_evidence(&mut terminal_detail, &mut record_graph);
+                    let mut detail = core::mem::take(&mut terminal_detail);
+                    let prior_namespace_bytes = initial_sizes
+                        .get(&StorageNamespace::principal(program, execution_principal))
+                        .copied().unwrap_or(0);
+                    if sandbox {
+                        c_ok(unsafe { layerx_programs_call_sandbox_guest_seal(token, 0) })?;
+                    }
+                    let settlement = sandbox_orchestrated_settlement(
                         token,
-                        fee_schedule_version,
-                        &record,
-                        &detail,
+                        program,
+                        binding,
+                        2,
+                        batch_number,
+                        record.execution().usage(),
+                        prior_namespace_bytes,
+                        fee_schedule.occupancy_byte_batch_price(),
+                    )?;
+                    if let Some(settlement) = settlement.as_ref() {
+                        execution_with_sandbox_receipt(&mut detail,
+                            &settlement.receipt[..settlement.receipt_length], settlement.transfer_root)?;
+                    }
+                    let terminal_usage = settlement.as_ref().map_or(record.execution().usage(), |value| value.usage);
+                    return terminal(
+                        token, FAILURE, PROGRAM_REFUSED,
+                        record.execution().runtime_version(), 2, fee_schedule_version,
+                        record.execution().metering_schedule_version(), terminal_usage,
+                        [0; 32],
+                        &terminal_graph, &detail,
+                        b"LXP/programs/events/v1\0\0\0\0\0",
                     );
                 }
                 CandidateActivityOutcome::Resource(_) => {
-                    let detail = record.canonical_evidence();
+                    record.call_graph().write_canonical_evidence(&mut terminal_graph);
+                    record.write_canonical_evidence(&mut terminal_detail, &mut record_graph);
+                    let mut detail = core::mem::take(&mut terminal_detail);
+                    let prior_namespace_bytes = initial_sizes
+                        .get(&StorageNamespace::principal(program, execution_principal))
+                        .copied().unwrap_or(0);
+                    if sandbox {
+                        c_ok(unsafe { layerx_programs_call_sandbox_guest_seal(token, 0) })?;
+                    }
+                    let settlement = sandbox_orchestrated_settlement(
+                        token,
+                        program,
+                        binding,
+                        3,
+                        batch_number,
+                        record.execution().usage(),
+                        prior_namespace_bytes,
+                        fee_schedule.occupancy_byte_batch_price(),
+                    )?;
+                    if let Some(settlement) = settlement.as_ref() {
+                        execution_with_sandbox_receipt(&mut detail,
+                            &settlement.receipt[..settlement.receipt_length], settlement.transfer_root)?;
+                    }
+                    let terminal_usage = settlement.as_ref().map_or(record.execution().usage(), |value| value.usage);
                     return terminal(
                         token,
                         RESOURCE,
@@ -2445,9 +2803,9 @@ pub extern "C" fn layerx_programs_call_begin(
                         2,
                         fee_schedule_version,
                         record.execution().metering_schedule_version(),
-                        record.execution().usage(),
+                        terminal_usage,
                         [0; 32],
-                        &record.call_graph().canonical_evidence(),
+                        &terminal_graph,
                         &detail,
                         b"LXP/programs/events/v1\0\0\0\0\0",
                     );
@@ -2472,7 +2830,13 @@ pub extern "C" fn layerx_programs_call_begin(
                 let assignment = match prepared.strict_settle(&mut final_storage, &mut kernel) {
                     Ok(assignment) => assignment,
                     Err(failure) => {
-                        return terminal_settlement_failure(token, fee_schedule_version, failure)
+                        write_settlement_detail(&mut terminal_detail, failure.error());
+                        failure.call_graph().write_canonical_evidence(&mut terminal_graph);
+                        return terminal(token, FAILURE, PROGRAM_REFUSED,
+                            failure.execution().runtime_version, failure.execution().abi_version,
+                            fee_schedule_version, failure.execution().metering_schedule_version,
+                            failure.execution().usage, [0; 32], &terminal_graph,
+                            &terminal_detail, b"LXP/programs/events/v1\0\0\0\0\0")
                     }
                 };
                 let record = assignment.record();
@@ -2492,12 +2856,13 @@ pub extern "C" fn layerx_programs_call_begin(
                     ) {
                         Ok(usage) => usage,
                         Err(status) => {
-                            return terminal_record_failure(
-                                token,
-                                fee_schedule_version,
-                                record,
-                                &callback_detail(5, status),
-                            )
+                            write_callback_detail(&mut terminal_detail, 5, status);
+                            record.call_graph.write_canonical_evidence(&mut terminal_graph);
+                            return terminal(token, FAILURE, PROGRAM_REFUSED,
+                                record.execution.runtime_version, record.execution.abi_version,
+                                fee_schedule_version, record.execution.metering_schedule_version,
+                                record.execution.usage, [0; 32], &terminal_graph,
+                                &terminal_detail, b"LXP/programs/events/v1\0\0\0\0\0")
                         }
                     }
                 } else {
@@ -2506,59 +2871,47 @@ pub extern "C" fn layerx_programs_call_begin(
                 if let Err(status) =
                     c_ok(unsafe { layerx_programs_call_storage_final_authorize(token) })
                 {
-                    return terminal_record_failure(
-                        token,
-                        fee_schedule_version,
-                        record,
-                        &callback_detail(1, status),
-                    );
+                    write_callback_detail(&mut terminal_detail, 1, status);
+                    record.call_graph.write_canonical_evidence(&mut terminal_graph);
+                    return terminal(token, FAILURE, PROGRAM_REFUSED,
+                        record.execution.runtime_version, record.execution.abi_version,
+                        fee_schedule_version, record.execution.metering_schedule_version,
+                        record.execution.usage, [0; 32], &terminal_graph,
+                        &terminal_detail, b"LXP/programs/events/v1\0\0\0\0\0");
                 }
                 for (index, entry_program) in &entries {
                     if let Err(status) =
-                        export_catalog_storage(token, *index, *entry_program, payer, &final_storage)
+                            export_catalog_storage(token, *index, *entry_program, execution_principal, &final_storage)
                     {
-                        return terminal_record_failure(
-                            token,
-                            fee_schedule_version,
-                            record,
-                            &callback_detail(2, status),
-                        );
+                        write_callback_detail(&mut terminal_detail, 2, status);
+                        record.call_graph.write_canonical_evidence(&mut terminal_graph);
+                        return terminal(token, FAILURE, PROGRAM_REFUSED,
+                            record.execution.runtime_version, record.execution.abi_version,
+                            fee_schedule_version, record.execution.metering_schedule_version,
+                            record.execution.usage, [0; 32], &terminal_graph,
+                            &terminal_detail, b"LXP/programs/events/v1\0\0\0\0\0");
                     }
                 }
-                let graph = record.call_graph.canonical_evidence();
-                let mut detail = if protocol_version == 2 {
-                    execution_with_occupancy_evidence(
-                        &record.execution.canonical_evidence(),
-                        &occupancy_evidence,
-                    )?
-                } else {
-                    record.execution.canonical_evidence()
-                };
+                record.call_graph.write_canonical_evidence(&mut terminal_graph);
+                record.execution.write_canonical_evidence(&mut terminal_detail);
+                if protocol_version == 2 {
+                    wrap_reserved_evidence(&mut terminal_detail,
+                        b"LXP/programs/execution-occupancy/v1\0", &occupancy_evidence, &[])?;
+                }
                 if let Some((authorization, transfer_root)) = program_authority_evidence {
-                    detail = execution_with_program_authority_evidence(
-                        &detail,
-                        &authorization,
-                        transfer_root,
-                    )?;
+                    wrap_reserved_evidence(&mut terminal_detail,
+                        b"LXP/programs/execution-authority/v1\0", &authorization,
+                        &transfer_root)?;
                 }
-                let events = match record.effects.canonical_program_event_envelope() {
-                    Ok(events) => events,
-                    Err(_) => {
-                        return terminal_record_failure(
-                            token,
-                            fee_schedule_version,
-                            record,
-                            &callback_detail(3, NON_CANONICAL),
-                        )
-                    }
-                };
+                record.effects.write_canonical_program_event_envelope(&mut terminal_events)
+                    .map_err(|_| NON_CANONICAL)?;
                 if let Err(status) = emit_events(token, &record.effects.events) {
-                    return terminal_record_failure(
-                        token,
-                        fee_schedule_version,
-                        record,
-                        &callback_detail(4, status),
-                    );
+                    write_callback_detail(&mut terminal_detail, 4, status);
+                    return terminal(token, FAILURE, PROGRAM_REFUSED,
+                        record.execution.runtime_version, record.execution.abi_version,
+                        fee_schedule_version, record.execution.metering_schedule_version,
+                        record.execution.usage, [0; 32], &terminal_graph,
+                        &terminal_detail, b"LXP/programs/events/v1\0\0\0\0\0");
                 }
                 terminal(
                     token,
@@ -2576,13 +2929,14 @@ pub extern "C" fn layerx_programs_call_begin(
                     assignment
                         .settlement()
                         .map_or([0; 32], |settlement| settlement.transfer_set_root()),
-                    &graph,
-                    &detail,
-                    &events,
+                    &terminal_graph,
+                    &terminal_detail,
+                    &terminal_events,
                 )
             }
             PreparedAuthorizedActivityOutcome::Failure(failure) => {
                 let detail = typed_failure_detail(failure.cause())?;
+                failure.call_graph().write_canonical_evidence(&mut terminal_graph);
                 terminal(
                     token,
                     FAILURE,
@@ -2593,13 +2947,14 @@ pub extern "C" fn layerx_programs_call_begin(
                     metering_schedule_version,
                     failure.usage(),
                     [0; 32],
-                    &failure.call_graph().canonical_evidence(),
+                    &terminal_graph,
                     &detail,
                     b"LXP/programs/events/v1\0\0\0\0\0",
                 )
             }
             PreparedAuthorizedActivityOutcome::Resource(resource) => {
-                let detail = typed_resource_detail(resource.refusal());
+                write_typed_resource_detail(&mut terminal_detail, resource.refusal());
+                resource.call_graph().write_canonical_evidence(&mut terminal_graph);
                 terminal(
                     token,
                     RESOURCE,
@@ -2610,8 +2965,8 @@ pub extern "C" fn layerx_programs_call_begin(
                     metering_schedule_version,
                     resource.usage(),
                     [0; 32],
-                    &resource.call_graph().canonical_evidence(),
-                    &detail,
+                    &terminal_graph,
+                    &terminal_detail,
                     b"LXP/programs/events/v1\0\0\0\0\0",
                 )
             }
@@ -2679,5 +3034,27 @@ pub extern "C" fn layerx_programs_occupancy_finalize_rust(
     };
     match run() {
         Ok(status) | Err(status) => status,
+    }
+}
+
+#[cfg(test)]
+mod sandbox_source_cases {
+    use super::derive_sandbox_execution_principal;
+    use crate::ProgramId;
+
+    #[test]
+    fn ephemeral_execution_principal_is_domain_bound_to_host_and_lease() {
+        let host = ProgramId::new([1; 32]).unwrap_or_else(|error| panic!("host: {error}"));
+        let first = derive_sandbox_execution_principal(host, [2; 32])
+            .unwrap_or_else(|status| panic!("principal status: {status}"));
+        let another_lease = derive_sandbox_execution_principal(host, [3; 32])
+            .unwrap_or_else(|status| panic!("principal status: {status}"));
+        let another_host = derive_sandbox_execution_principal(
+            ProgramId::new([4; 32]).unwrap_or_else(|error| panic!("host: {error}")),
+            [2; 32],
+        )
+        .unwrap_or_else(|status| panic!("principal status: {status}"));
+        assert_ne!(first, another_lease);
+        assert_ne!(first, another_host);
     }
 }

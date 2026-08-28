@@ -27,6 +27,14 @@ pub struct Escrow {
 }
 
 impl Escrow {
+    pub(crate) fn funded_genesis(lease: &Lease, funding_root: [u8; 32]) -> Result<Self, EscrowRefusal> {
+        if lease.state() != LeaseState::Funded || funding_root == [0; 32] {
+            return Err(EscrowRefusal::FundingMismatch);
+        }
+        Ok(Self { lease: lease.id(), account: lease.escrow_account(), asset: lease.escrow_asset(),
+            funded: lease.escrow_amount(), spent: 0, refunded: 0, funding_root,
+            settlement_root: None, finalized: false })
+    }
     #[must_use] pub const fn lease(self) -> LeaseId { self.lease }
     #[must_use] pub const fn account(self) -> [u8; 32] { self.account }
     #[must_use] pub const fn asset(self) -> [u8; 32] { self.asset }
@@ -39,6 +47,12 @@ impl Escrow {
     #[must_use]
     pub fn canonical_state(self) -> Vec<u8> {
         let mut state = Vec::with_capacity(ESCROW_STATE_DOMAIN.len() + 210);
+        self.write_canonical_state(&mut state);
+        state
+    }
+
+    pub(crate) fn write_canonical_state(self, state: &mut Vec<u8>) {
+        state.clear();
         state.extend_from_slice(ESCROW_STATE_DOMAIN);
         state.extend_from_slice(&self.lease.bytes());
         state.extend_from_slice(&self.account);
@@ -52,7 +66,6 @@ impl Escrow {
             Some(root) => { state.push(1); state.extend_from_slice(&root); }
         }
         state.push(u8::from(self.finalized));
-        state
     }
 
     pub fn decode_state(lease: &Lease, state: &[u8]) -> Result<Self, EscrowRefusal> {
@@ -123,23 +136,32 @@ impl Escrow {
     pub fn spend(
         &mut self,
         lease: &Lease,
-        maximum_charge: u128,
+        exact_charge: u128,
         prepared: PreparedAuthorizedActivity,
         storage: &mut Storage,
         kernel: &mut impl KernelTransferPrimitive,
     ) -> Result<EscrowOutcome, EscrowRefusal> {
-        self.permits_execution(lease, maximum_charge)?;
+        self.permits_execution(lease, exact_charge)?;
         let summary = prepared.monetary_summary().ok_or(EscrowRefusal::MissingTransferSet)?;
-        let charged = validate_program_debits(self, lease, &summary, None)?;
-        if charged == 0 || charged > maximum_charge {
-            return Err(EscrowRefusal::ChargeMismatch { maximum: maximum_charge, actual: charged });
-        }
+        let charged = validate_program_debits(
+            self, lease, &summary, Some((lease.fee_destination(), exact_charge)),
+        )?;
+        ensure_exact_charge(exact_charge, charged)?;
         let assignment = prepared.strict_settle(storage, kernel)
             .map_err(|failure| EscrowRefusal::Transfer(failure.error()))?;
         let settlement = assignment.settlement().copied().ok_or(EscrowRefusal::MissingTransferSet)?;
         self.spent = self.spent.checked_add(charged).ok_or(EscrowRefusal::ConservationViolation)?;
         if self.spent > self.funded { return Err(EscrowRefusal::ConservationViolation); }
         Ok(EscrowOutcome { assignment, settlement: Some(settlement), amount: charged })
+    }
+
+    pub(crate) fn projected_spend(self, lease: &Lease, exact_charge: u128) -> Result<Self, EscrowRefusal> {
+        self.permits_execution(lease, exact_charge)?;
+        let mut projected = self;
+        projected.spent = projected.spent.checked_add(exact_charge)
+            .ok_or(EscrowRefusal::ConservationViolation)?;
+        if projected.spent > projected.funded { return Err(EscrowRefusal::ConservationViolation); }
+        Ok(projected)
     }
 
     fn binds(self, lease: &Lease) -> Result<(), EscrowRefusal> {
@@ -163,44 +185,6 @@ impl EscrowOutcome {
     #[must_use] pub const fn assignment(&self) -> &VerifiedStorageAssignment { &self.assignment }
     #[must_use] pub const fn settlement(&self) -> Option<&VerifiedProgramSettlement> { self.settlement.as_ref() }
     #[must_use] pub const fn amount(&self) -> u128 { self.amount }
-}
-
-pub fn fund(
-    lease: &Lease,
-    prepared: PreparedAuthorizedActivity,
-    storage: &mut Storage,
-    kernel: &mut impl KernelTransferPrimitive,
-) -> Result<(Escrow, EscrowOutcome), EscrowRefusal> {
-    if lease.state() != LeaseState::Requested { return Err(EscrowRefusal::LeaseNotRequested); }
-    let summary = prepared.monetary_summary().ok_or(EscrowRefusal::MissingTransferSet)?;
-    if summary.program() != lease.host_program() || summary.principal() != lease.tenant()
-        || summary.total_amount() != lease.escrow_amount() || summary.legs().len() != 1
-    {
-        return Err(EscrowRefusal::FundingMismatch);
-    }
-    let leg = &summary.legs()[0];
-    let TransferSource::ProgramFunding { principal, binding } = leg.source() else {
-        return Err(EscrowRefusal::FundingMismatch);
-    };
-    let seed = escrow_seed(lease.id());
-    if *principal != lease.tenant() || binding.owner_program() != lease.host_program()
-        || binding.seed() != seed || binding.destination_account() != lease.escrow_account()
-        || binding.asset() != lease.escrow_asset() || leg.program() != lease.host_program()
-        || leg.principal() != lease.tenant() || leg.asset() != lease.escrow_asset()
-        || leg.to() != lease.escrow_account() || leg.amount() != lease.escrow_amount()
-    {
-        return Err(EscrowRefusal::FundingMismatch);
-    }
-    let assignment = prepared.strict_settle(storage, kernel)
-        .map_err(|failure| EscrowRefusal::Transfer(failure.error()))?;
-    let settlement = assignment.settlement().copied().ok_or(EscrowRefusal::MissingTransferSet)?;
-    if settlement.leg_count() != 1 || settlement.total_amount() != lease.escrow_amount() {
-        return Err(EscrowRefusal::FundingMismatch);
-    }
-    let escrow = Escrow { lease: lease.id(), account: lease.escrow_account(),
-        asset: lease.escrow_asset(), funded: lease.escrow_amount(), spent: 0, refunded: 0,
-        funding_root: settlement.transfer_set_root(), settlement_root: None, finalized: false };
-    Ok((escrow, EscrowOutcome { assignment, settlement: Some(settlement), amount: lease.escrow_amount() }))
 }
 
 pub fn settle(
@@ -251,6 +235,12 @@ fn ensure_charge(requested: u128, remaining: u128) -> Result<(), EscrowRefusal> 
     }
 }
 
+fn ensure_exact_charge(expected: u128, actual: u128) -> Result<(), EscrowRefusal> {
+    if expected == 0 || actual != expected {
+        Err(EscrowRefusal::ChargeMismatch { expected, actual })
+    } else { Ok(()) }
+}
+
 fn validate_program_debits(
     escrow: &Escrow,
     lease: &Lease,
@@ -272,8 +262,9 @@ fn validate_program_debits(
             return Err(EscrowRefusal::TransferSetMismatch);
         }
         if let Some((destination, amount)) = exact_destination {
-            if leg.to() != destination || leg.amount() != amount {
-                return Err(EscrowRefusal::RefundMismatch { expected: amount, actual: leg.amount() });
+            if leg.to() != destination { return Err(EscrowRefusal::TransferSetMismatch); }
+            if leg.amount() != amount {
+                return Err(EscrowRefusal::ChargeMismatch { expected: amount, actual: leg.amount() });
             }
         }
         total = total.checked_add(leg.amount()).ok_or(EscrowRefusal::ConservationViolation)?;
@@ -312,7 +303,8 @@ pub enum EscrowRefusal {
     TransferSetMismatch,
     MissingTransferSet,
     EscrowExhausted { requested: u128, remaining: u128 },
-    ChargeMismatch { maximum: u128, actual: u128 },
+    ChargeMismatch { expected: u128, actual: u128 },
+    CanonicalState,
     RefundMismatch { expected: u128, actual: u128 },
     AlreadySettled,
     ConservationViolation,
@@ -354,6 +346,15 @@ mod tests {
         assert_eq!(escrow.remaining(), Ok(0));
         assert_eq!(ensure_charge(1, escrow.remaining().expect("remainder")),
             Err(EscrowRefusal::EscrowExhausted { requested: 1, remaining: 0 }));
+    }
+
+    #[test]
+    fn underpayment_and_overpayment_are_refused_before_kernel_commit() {
+        assert_eq!(ensure_exact_charge(10, 9),
+            Err(EscrowRefusal::ChargeMismatch { expected: 10, actual: 9 }));
+        assert_eq!(ensure_exact_charge(10, 11),
+            Err(EscrowRefusal::ChargeMismatch { expected: 10, actual: 11 }));
+        assert_eq!(ensure_exact_charge(10, 10), Ok(()));
     }
 
     #[test]

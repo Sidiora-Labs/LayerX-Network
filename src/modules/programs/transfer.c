@@ -114,10 +114,10 @@ lxp_result lxp_programs_transfer_validate(
     return lxp_ctx_charge_gas(ctx, (uint64_t)value->leg_count * 112U);
 }
 
-lxp_result lxp_programs_transfer_execute(
+lxp_result lxp_programs_transfer_execute_root(
     lxp_module_ctx *ctx, const lxp_activity *activity,
     const lxp_authority_resolved *authority, const void *decoded,
-    lxp_effect_buffer *effects)
+    lxp_effect_buffer *effects, uint8_t transfer_root[32])
 {
     const programs_transfer_activity *value =
         (const programs_transfer_activity *)decoded;
@@ -128,7 +128,7 @@ lxp_result lxp_programs_transfer_execute(
     lxp_result status;
     (void)activity;
     (void)effects;
-    if (ctx == NULL || authority == NULL || value == NULL)
+    if (ctx == NULL || authority == NULL || value == NULL || transfer_root == NULL)
         return LXP_ERR_NON_CANONICAL;
     runtime = (lx_programs_transfer_runtime *)lxp_ctx_module_runtime(ctx);
     if (runtime == NULL || runtime->accounts == NULL || runtime->assets == NULL)
@@ -157,6 +157,18 @@ lxp_result lxp_programs_transfer_execute(
     (void)memset(&receipt, 0, sizeof(receipt));
     status = lxp_ctx_emit_transfer_set(ctx, &set, &receipt);
     if (status != LXP_OK) return status;
+    (void)memcpy(transfer_root, receipt.transfer_set_root, 32U);
     return lxp_ctx_emit_event(ctx, LX_PROGRAMS_EVENT_TRANSFERRED,
                               receipt.transfer_set_root, 32U);
+}
+
+lxp_result lxp_programs_transfer_execute(
+    lxp_module_ctx *ctx, const lxp_activity *activity,
+    const lxp_authority_resolved *authority, const void *decoded,
+    lxp_effect_buffer *effects)
+{
+    uint8_t transfer_root[32];
+    return lxp_programs_transfer_execute_root(ctx, activity, authority,
+                                               decoded, effects,
+                                               transfer_root);
 }

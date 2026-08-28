@@ -1852,6 +1852,7 @@ lxp_result lxp_kernel_prepare_activity(
     lxp_program_outcome synthetic_outcome;
     lxp_byte_span encoded;
     bool module_ctx_initialized = false;
+    bool sandbox_call;
     if (snapshot == NULL || activity == NULL || execution == NULL ||
         worker_arena == NULL || prepared_out == NULL ||
         execution->authority == NULL || execution->fee_parameters == NULL ||
@@ -1859,9 +1860,12 @@ lxp_result lxp_kernel_prepare_activity(
         lxp_ct_is_zero(snapshot->active_level_token, 32U) ||
         lxp_activity_module_id(activity->activity_type) !=
             LXP_MODULE_PROGRAMS ||
-        lxp_activity_type_ordinal(activity->activity_type) != 3U)
+        (lxp_activity_type_ordinal(activity->activity_type) != 3U &&
+         (lxp_activity_type_ordinal(activity->activity_type) != 9U ||
+          activity->payload.length < 2U || activity->payload.bytes[1] != 1U)))
         return LXP_ERR_NON_CANONICAL;
     *prepared_out = NULL;
+    sandbox_call = lxp_activity_type_ordinal(activity->activity_type) == 9U;
     status = lxp_kernel_batch_snapshot_clone(snapshot, &work);
     if (status != LXP_OK) return status;
     prepared = (lxp_prepared_transition *)calloc(1U, sizeof(*prepared));
@@ -1966,7 +1970,7 @@ lxp_result lxp_kernel_prepare_activity(
         } else if (status == LXP_OK && program_outcome == NULL) {
             status = LXP_FATAL_INVARIANT;
         }
-        if (status == LXP_OK) {
+        if (status == LXP_OK && !sandbox_call) {
             actual_fee_meter = execution->fee_meter;
             actual_fee_meter.exact_program_fee_present = true;
             actual_fee_meter.program_fee_schedule_version =
@@ -3239,13 +3243,18 @@ lxp_result lxp_kernel_execute_activity(lxp_kernel *kernel,
     if (kernel->publication_poisoned) return LXP_FATAL_INVARIANT;
     if (lxp_activity_module_id(activity->activity_type) ==
             LXP_MODULE_PROGRAMS &&
-        lxp_activity_type_ordinal(activity->activity_type) == 3U)
+        (lxp_activity_type_ordinal(activity->activity_type) == 3U ||
+         (lxp_activity_type_ordinal(activity->activity_type) == 9U &&
+          activity->payload.length >= 2U && activity->payload.bytes[1] == 1U)))
         return kernel_execute_prepared_call(kernel, activity, execution,
                                             receipt);
     arena_mark = lxp_arena_mark(execution->arena);
     programs_call = lxp_activity_module_id(activity->activity_type) ==
                         LXP_MODULE_PROGRAMS &&
-                    lxp_activity_type_ordinal(activity->activity_type) == 3U;
+                    (lxp_activity_type_ordinal(activity->activity_type) == 3U ||
+                     (lxp_activity_type_ordinal(activity->activity_type) == 9U &&
+                      activity->payload.length >= 2U &&
+                      activity->payload.bytes[1] == 1U));
     programs_state_activity =
         activity->activity_type == LX_PROGRAMS_ACCOUNT ||
         activity->activity_type == LX_PROGRAMS_WIND_DOWN;

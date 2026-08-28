@@ -5,6 +5,12 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[lib]
+crate-type = ["rlib", "staticlib"]
+
+[features]
+host-ffi = ["layerx-programs-runtime/host-ffi"]
+
 [dependencies]
 layerx-programs-runtime = { path = "../layerx-programs-runtime" }
 layerx-programs = { path = "../layerx-programs-registry", package = "layerx-programs-registry" }
@@ -15,5 +21,13 @@ layerx-wire = { path = "../../../agent/crates/layerx-wire" }
 ed25519-dalek = { version = "=2.2.0", default-features = false, features = ["digest"] }
 sha2.workspace = true
 
-[lints]
-workspace = true
+[lints.rust]
+unsafe_code = "allow"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+float_arithmetic = "deny"
+lossy_float_literal = "deny"

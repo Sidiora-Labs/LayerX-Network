@@ -6,13 +6,26 @@ pub mod lease;
 pub mod snapshot;
 pub mod escrow;
 pub mod execute;
-mod runner;
+pub mod usage;
+pub mod activity;
+#[cfg(feature = "host-ffi")]
+mod host_ffi;
 
-pub use escrow::{fund, settle, Escrow, EscrowOutcome, EscrowRefusal};
+pub use activity::{canonical_activate, canonical_execute, canonical_fund,
+    canonical_submission_digest, execute, fund_lease, activate_lease,
+    SandboxActivityPlane, SandboxActivityRefusal, SandboxExecuteRefusal,
+    SandboxProtocolContext, SandboxReceiptEvidence, SandboxSubmission, SandboxSubmissionReceipt,
+    PROGRAMS_SANDBOX_ACTIVITY_TYPE};
+
+pub use escrow::{settle, Escrow, EscrowOutcome, EscrowRefusal};
 pub use execute::{
     LeaseCapabilities, SandboxExecutionRecord, SandboxExecutionRequest, SandboxRefusal,
 };
-pub use runner::execute;
+pub use usage::{
+    ActivityOutcome, AuthenticatedUsageReceipt, DurableUsageState, UsageLedger, UsageObservation, UsagePrices,
+    UsageReceipt, UsageRefusal, MAX_USAGE_RECEIPTS,
+    MAX_USAGE_STATE_VALUE_BYTES,
+};
 
 pub use lease::{
     usage_observation_digest, BoundKind, EphemeralNamespace, Lease, LeaseActivity, LeaseBook, LeaseId, LeaseLimits,

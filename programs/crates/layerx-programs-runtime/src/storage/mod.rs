@@ -305,6 +305,16 @@ impl Storage {
             })
     }
 
+    /// Reads one protocol-owned canonical state cell. This host-side seam is
+    /// not linked into either guest ABI and grants no write authority.
+    pub fn protocol_state_value(
+        &self,
+        namespace: StorageNamespace,
+        key: &[u8],
+    ) -> Result<Option<Vec<u8>>, StorageError> {
+        self.read(namespace, key)
+    }
+
     /// Returns every nonempty namespace and its exact persistent bytes in
     /// canonical namespace order. Protocol state transitions use this to prove
     /// that no occupied namespace escaped responsibility accounting.

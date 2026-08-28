@@ -265,7 +265,8 @@ static lxp_result stage_change(lxp_module_ctx *ctx, const uint8_t *key,
         return value == NULL ? LXP_ERR_NON_CANONICAL : LXP_ERR_LENGTH_LIMIT;
     location = staged_find(ctx, key, key_length);
     if (location == ctx->staged_count) {
-        if (ctx->staged_count == LXP_MODULE_MAX_STAGED_WRITES)
+        if (ctx->staged_reserve > LXP_MODULE_MAX_STAGED_WRITES ||
+            ctx->staged_count >= LXP_MODULE_MAX_STAGED_WRITES - ctx->staged_reserve)
             return LXP_ERR_ARENA_EXHAUSTED;
         ++ctx->staged_count;
         (void)memset(&ctx->staged[location], 0, sizeof(ctx->staged[location]));
@@ -1040,6 +1041,7 @@ lxp_result lxp_module_ctx_export_prepared(
         ctx->effects != effects || ctx->next_effect_ordinal != effects->count ||
         !effects_are_canonical(ctx->module_id, effects) ||
         ctx->staged_count > LXP_MODULE_MAX_STAGED_WRITES ||
+        ctx->staged_reserve != 0U ||
         ctx->staged_account_count > LXP_MODULE_MAX_STAGED_ACCOUNTS ||
         ctx->transfer_snapshot_count >
             LXP_MAX_TRANSFER_SET_LEGS * 2U + 1U ||
@@ -1311,6 +1313,74 @@ lxp_result lxp_ctx_arena_alloc(lxp_module_ctx *ctx, size_t size,
 {
     if (ctx == NULL) return LXP_ERR_NON_CANONICAL;
     return lxp_arena_alloc(ctx->arena, size, alignment, allocation);
+}
+
+lxp_result lxp_module_savepoint_begin(lxp_module_ctx *ctx,
+                                      lxp_module_savepoint *savepoint)
+{
+    if (ctx == NULL || savepoint == NULL || savepoint->active ||
+        ctx->effects == NULL || ctx->commit_prepared)
+        return LXP_ERR_NON_CANONICAL;
+    *savepoint = (lxp_module_savepoint){
+        lxp_arena_mark(ctx->arena), ctx->staged_count,
+        ctx->staged_account_count, ctx->transfer_snapshot_count,
+        ctx->staged_blob_count, ctx->effects->count,
+        ctx->next_effect_ordinal, ctx->transfer_applied, true
+    };
+    return LXP_OK;
+}
+
+lxp_result lxp_module_savepoint_discard(lxp_module_ctx *ctx,
+                                        lxp_module_savepoint *savepoint)
+{
+    size_t index;
+    lxp_result status;
+    if (ctx == NULL || savepoint == NULL || !savepoint->active ||
+        ctx->effects == NULL ||
+        ctx->staged_account_count != savepoint->staged_account_count ||
+        ctx->transfer_snapshot_count != savepoint->transfer_snapshot_count ||
+        ctx->transfer_applied != savepoint->transfer_applied)
+        return LXP_FATAL_INVARIANT;
+    for (index = savepoint->staged_blob_count;
+         index < ctx->staged_blob_count; ++index) {
+        free(ctx->staged_blobs[index].bytes);
+        (void)memset(&ctx->staged_blobs[index], 0,
+                     sizeof(ctx->staged_blobs[index]));
+    }
+    ctx->staged_blob_count = savepoint->staged_blob_count;
+    ctx->staged_count = savepoint->staged_count;
+    ctx->effects->count = savepoint->effect_count;
+    ctx->next_effect_ordinal = savepoint->next_effect_ordinal;
+    status = lxp_arena_reset(ctx->arena, savepoint->arena_mark);
+    if (status == LXP_OK) savepoint->active = false;
+    return status;
+}
+
+lxp_result lxp_module_savepoint_accept(lxp_module_ctx *ctx,
+                                       lxp_module_savepoint *savepoint)
+{
+    if (ctx == NULL || savepoint == NULL || !savepoint->active)
+        return LXP_ERR_NON_CANONICAL;
+    savepoint->active = false;
+    return LXP_OK;
+}
+
+lxp_result lxp_module_staged_reserve(lxp_module_ctx *ctx, size_t count)
+{
+    if (ctx == NULL || count == 0U || ctx->commit_prepared ||
+        ctx->staged_reserve != 0U || count > LXP_MODULE_MAX_STAGED_WRITES ||
+        ctx->staged_count > LXP_MODULE_MAX_STAGED_WRITES - count)
+        return LXP_ERR_ARENA_EXHAUSTED;
+    ctx->staged_reserve = count;
+    return LXP_OK;
+}
+
+lxp_result lxp_module_staged_release(lxp_module_ctx *ctx, size_t count)
+{
+    if (ctx == NULL || count == 0U || ctx->staged_reserve != count)
+        return LXP_FATAL_INVARIANT;
+    ctx->staged_reserve = 0U;
+    return LXP_OK;
 }
 
 void *lxp_ctx_module_runtime(const lxp_module_ctx *ctx)

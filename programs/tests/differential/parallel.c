@@ -394,7 +394,7 @@ static int differential_fixture_init_balanced(
         fixture->scopes[index].module_mask =
             UINT64_C(1) << LXP_MODULE_PROGRAMS;
         fixture->scopes[index].activity_ordinal_min = 1U;
-        fixture->scopes[index].activity_ordinal_max = 8U;
+        fixture->scopes[index].activity_ordinal_max = 9U;
         fixture->scopes[index].maximum_per_activity =
             (lxp_u128){UINT64_MAX, UINT64_MAX};
         fixture->scopes[index].maximum_total =

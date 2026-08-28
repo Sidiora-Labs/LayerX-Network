@@ -20,6 +20,8 @@ const SET_DOMAIN_V1: &[u8] = b"LayerX/programs/402LXP/transfer-set/v1\0";
 const SET_DOMAIN_V2: &[u8] = b"LayerX/programs/402LXP/transfer-set/v2\0";
 const PROGRAM_AUTHORITY_DOMAIN: &[u8] = b"LayerX/programs/402LXP/program-authority/v1\0";
 const PROGRAM_FUNDING_DOMAIN: &[u8] = b"LayerX/programs/402LXP/program-funding/v1\0";
+const SANDBOX_ESCROW_CHARGE_DOMAIN: &[u8] =
+    b"LayerX/programs/402LXP/sandbox-escrow-charge/v1\0";
 const MERKLE_LEAF_DOMAIN: &[u8] = b"LXP/v1/merkle-leaf\0";
 const MERKLE_INTERNAL_DOMAIN: &[u8] = b"LXP/v1/merkle-internal\0";
 const SOURCE_PRINCIPAL: u8 = 1;
@@ -665,6 +667,137 @@ pub struct AtomicTransferSet {
 }
 
 impl AtomicTransferSet {
+    fn retarget_sandbox_escrow_charge(&mut self, amount: u128) -> Result<(), TransferLawError> {
+        if !self.candidate_v2 || self.legs.len() != 1 || amount == 0 {
+            return Err(TransferLawError::InvalidTransferSet);
+        }
+        self.total_amount = amount;
+        self.legs[0].amount = amount;
+        let TransferSource::Program(authority) = &mut self.legs[0].source else {
+            return Err(TransferLawError::InvariantViolation);
+        };
+        authority.amount = amount;
+        if self.kernel_canonical.len() != 115 {
+            return Err(TransferLawError::InvariantViolation);
+        }
+        self.kernel_canonical[97..113].copy_from_slice(&amount.to_be_bytes());
+        let mut leaf = [0u8; 160];
+        let length = MERKLE_LEAF_DOMAIN.len().checked_add(115)
+            .ok_or(TransferLawError::InvariantViolation)?;
+        if length > leaf.len() { return Err(TransferLawError::InvariantViolation); }
+        leaf[..MERKLE_LEAF_DOMAIN.len()].copy_from_slice(MERKLE_LEAF_DOMAIN);
+        leaf[MERKLE_LEAF_DOMAIN.len()..length].copy_from_slice(&self.kernel_canonical);
+        self.kernel_root = hash_bytes(HashAlgorithm::Sha256, &leaf[..length])
+            .map_err(|_| TransferLawError::InvariantViolation)?;
+        let amount_offset = SANDBOX_ESCROW_CHARGE_DOMAIN.len() + 32 * 8;
+        let root_offset = amount_offset + 16;
+        if self.authorization_evidence.len() < root_offset + 32 + 16 {
+            return Err(TransferLawError::InvariantViolation);
+        }
+        self.authorization_evidence[amount_offset..root_offset]
+            .copy_from_slice(&amount.to_be_bytes());
+        self.authorization_evidence[root_offset..root_offset + 32]
+            .copy_from_slice(&self.kernel_root);
+        let authority_amount = self.authorization_evidence.len() - 16;
+        self.authorization_evidence[authority_amount..]
+            .copy_from_slice(&amount.to_be_bytes());
+        Ok(())
+    }
+    /// Seals the protocol-owned fee leg for one metered sandbox activity.
+    ///
+    /// This constructor is deliberately crate-private and does not consume a
+    /// guest capability. The source must be the canonical lease escrow account
+    /// and the invocation authority is the admitted activity binding.
+    pub(crate) fn sandbox_escrow_charge(
+        host_program: ProgramId,
+        execution_principal: PrincipalId,
+        invocation_authority: [u8; 32],
+        lease_id: [u8; 32],
+        expected_lease_digest: [u8; 32],
+        escrow_account: [u8; 32],
+        asset: [u8; 32],
+        fee_destination: [u8; 32],
+        amount: u128,
+    ) -> Result<Self, TransferLawError> {
+        if invocation_authority == [0; 32]
+            || lease_id == [0; 32]
+            || expected_lease_digest == [0; 32]
+        {
+            return Err(TransferLawError::UnverifiedAuthority);
+        }
+        let mut seed = b"sandbox-lease-escrow/v1\0".to_vec();
+        seed.extend_from_slice(&lease_id);
+        let authority = ProgramAuthority::for_owner_frame(
+            host_program,
+            &seed,
+            escrow_account,
+            asset,
+            fee_destination,
+            amount,
+        )?;
+        let leg = TransferRequest {
+            program: host_program,
+            principal: execution_principal,
+            frame: CallFrameId::root(),
+            source: TransferSource::Program(authority),
+            asset,
+            to: fee_destination,
+            amount,
+        };
+        let legs = vec![leg];
+        let kernel_canonical = canonical_kernel_legs(&legs)?;
+        let kernel_root = canonical_kernel_root(&kernel_canonical, legs.len())?;
+        let authority_encoding = match &legs[0].source {
+            TransferSource::Program(authority) => authority.canonical_encoding()?,
+            _ => return Err(TransferLawError::InvariantViolation),
+        };
+        let mut authorization_evidence = Vec::with_capacity(
+            SANDBOX_ESCROW_CHARGE_DOMAIN.len() + 32 * 7 + 16 + authority_encoding.len(),
+        );
+        authorization_evidence.extend_from_slice(SANDBOX_ESCROW_CHARGE_DOMAIN);
+        authorization_evidence.extend_from_slice(&host_program.bytes());
+        authorization_evidence.extend_from_slice(&execution_principal.bytes());
+        authorization_evidence.extend_from_slice(&invocation_authority);
+        authorization_evidence.extend_from_slice(&lease_id);
+        authorization_evidence.extend_from_slice(&expected_lease_digest);
+        authorization_evidence.extend_from_slice(&escrow_account);
+        authorization_evidence.extend_from_slice(&asset);
+        authorization_evidence.extend_from_slice(&fee_destination);
+        authorization_evidence.extend_from_slice(&amount.to_be_bytes());
+        authorization_evidence.extend_from_slice(&kernel_root);
+        authorization_evidence.extend_from_slice(&authority_encoding);
+        Ok(Self {
+            program: host_program,
+            principal: execution_principal,
+            invocation_authority,
+            authorization_evidence,
+            kernel_canonical,
+            kernel_root,
+            total_amount: amount,
+            legs,
+            candidate_v2: true,
+        })
+    }
+
+    pub(crate) fn settle_sandbox_escrow_charge(
+        &self,
+        kernel: &mut impl KernelTransferPrimitive,
+    ) -> Result<VerifiedProgramSettlement, TransferLawError> {
+        let evidence = kernel.apply_and_verify_402lxp_set(self)?;
+        kernel.verify_402lxp_transfer_set_root(self, &evidence)?;
+        if evidence.transfer_set_root != self.kernel_root
+            || evidence.leg_count != 1
+            || evidence.total_amount != self.total_amount
+        {
+            return Err(TransferLawError::ReceiptMismatch);
+        }
+        Ok(VerifiedProgramSettlement {
+            transfer_set_root: evidence.transfer_set_root,
+            leg_count: evidence.leg_count,
+            total_amount: evidence.total_amount,
+        })
+    }
+
     #[must_use]
     pub const fn program(&self) -> ProgramId {
         self.program
@@ -915,6 +1048,59 @@ impl AtomicTransferSet {
             candidate_v2,
         })
     }
+}
+
+pub struct ReservedSandboxEscrowCharge { set: AtomicTransferSet }
+
+pub fn reserve_host_sandbox_escrow_charge(
+    host_program: ProgramId, execution_principal: PrincipalId,
+    invocation_authority: [u8; 32], lease_id: [u8; 32],
+    expected_lease_digest: [u8; 32], escrow_account: [u8; 32], asset: [u8; 32],
+    fee_destination: [u8; 32], maximum_fee: u128,
+) -> Result<ReservedSandboxEscrowCharge, TransferLawError> {
+    AtomicTransferSet::sandbox_escrow_charge(host_program, execution_principal,
+        invocation_authority, lease_id, expected_lease_digest, escrow_account, asset,
+        fee_destination, maximum_fee).map(|set| ReservedSandboxEscrowCharge { set })
+}
+
+pub(crate) fn settle_reserved_sandbox_escrow_charge(
+    reserved: &mut ReservedSandboxEscrowCharge, exact_fee: u128,
+    kernel: &mut impl KernelTransferPrimitive,
+) -> Result<VerifiedProgramSettlement, TransferLawError> {
+    reserved.set.retarget_sandbox_escrow_charge(exact_fee)?;
+    reserved.set.settle_sandbox_escrow_charge(kernel)
+}
+
+/// Reproduces the canonical kernel root for one protocol-owned sandbox fee
+/// leg without issuing guest authority or mutating kernel state.
+///
+/// # Errors
+///
+/// Refuses any reserved binding, lease/state digest, invalid escrow account,
+/// monetary field, or non-canonical program-account derivation.
+pub fn sandbox_escrow_charge_root(
+    host_program: ProgramId,
+    execution_principal: PrincipalId,
+    invocation_authority: [u8; 32],
+    lease_id: [u8; 32],
+    expected_lease_digest: [u8; 32],
+    escrow_account: [u8; 32],
+    asset: [u8; 32],
+    fee_destination: [u8; 32],
+    exact_fee: u128,
+) -> Result<[u8; 32], TransferLawError> {
+    AtomicTransferSet::sandbox_escrow_charge(
+        host_program,
+        execution_principal,
+        invocation_authority,
+        lease_id,
+        expected_lease_digest,
+        escrow_account,
+        asset,
+        fee_destination,
+        exact_fee,
+    )
+    .map(|set| set.kernel_root())
 }
 
 #[cfg(test)]
@@ -1791,5 +1977,64 @@ mod tests {
             }),
             Err(TransferLawError::InvalidProgramAuthority)
         );
+    }
+
+    #[test]
+    fn sandbox_escrow_charge_is_host_sealed_without_guest_program_spend() {
+        let host = program_id(1);
+        let principal = principal_id(2);
+        let lease = [3; 32];
+        let mut seed = b"sandbox-lease-escrow/v1\0".to_vec();
+        seed.extend_from_slice(&lease);
+        let escrow = derive_program_account(host, &seed)
+            .unwrap_or_else(|error| panic!("escrow: {error}"))
+            .bytes();
+        let set = AtomicTransferSet::sandbox_escrow_charge(
+            host,
+            principal,
+            [4; 32],
+            lease,
+            [5; 32],
+            escrow,
+            [6; 32],
+            [7; 32],
+            11,
+        )
+        .unwrap_or_else(|error| panic!("charge: {error}"));
+        assert_eq!(set.legs().len(), 1);
+        assert_eq!(set.total_amount(), 11);
+        assert!(matches!(set.legs()[0].source, TransferSource::Program(_)));
+        assert!(set.canonical().starts_with(SANDBOX_ESCROW_CHARGE_DOMAIN));
+        assert_eq!(
+            sandbox_escrow_charge_root(
+                host, principal, [4; 32], lease, [5; 32], escrow, [6; 32], [7; 32], 11,
+            ),
+            Ok(set.kernel_root()),
+        );
+    }
+
+    #[test]
+    fn sandbox_escrow_charge_binds_activity_and_expected_lease_state() {
+        let host = program_id(1);
+        let principal = principal_id(2);
+        let lease = [3; 32];
+        let mut seed = b"sandbox-lease-escrow/v1\0".to_vec();
+        seed.extend_from_slice(&lease);
+        let escrow = derive_program_account(host, &seed)
+            .unwrap_or_else(|error| panic!("escrow: {error}"))
+            .bytes();
+        let charge = |binding, digest| {
+            AtomicTransferSet::sandbox_escrow_charge(
+                host, principal, binding, lease, digest, escrow, [6; 32], [7; 32], 11,
+            )
+            .unwrap_or_else(|error| panic!("charge: {error}"))
+        };
+        let first = charge([4; 32], [5; 32]);
+        let different_activity = charge([8; 32], [5; 32]);
+        let different_state = charge([4; 32], [9; 32]);
+        assert_ne!(first.canonical(), different_activity.canonical());
+        assert_ne!(first.canonical(), different_state.canonical());
+        assert_eq!(first.kernel_root(), different_activity.kernel_root());
+        assert_eq!(first.kernel_root(), different_state.kernel_root());
     }
 }

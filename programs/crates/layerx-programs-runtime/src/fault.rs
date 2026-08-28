@@ -186,6 +186,14 @@ impl ProgramFailure {
         encoded
     }
 
+    pub(crate) fn append_canonical(&self, encoded: &mut Vec<u8>) {
+        encoded.extend_from_slice(&self.program.bytes());
+        encoded.extend_from_slice(&self.class.code().to_be_bytes());
+        encoded.extend_from_slice(&u32::try_from(self.reason.bytes().len())
+            .unwrap_or(u32::MAX).to_be_bytes());
+        encoded.extend_from_slice(self.reason.bytes());
+    }
+
     /// Strictly decodes a host-authenticated failure payload.
     ///
     /// # Errors

@@ -12,6 +12,7 @@
 #include "layerx/lxp_receipt.h"
 
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 
 enum {
@@ -121,6 +122,10 @@ struct lxp_programs_call_activity {
         uint32_t terminal_length;
         uint8_t *events;
         uint32_t events_length;
+        uint32_t graph_capacity;
+        uint32_t terminal_capacity;
+        uint32_t events_capacity;
+        bool reserved;
     } terminal;
     struct {
         bool active;
@@ -139,7 +144,14 @@ struct lxp_programs_call_activity {
 
 static void call_activity_release(void *state)
 {
-    (void)state;
+    lxp_programs_call_activity *value = state;
+    if (value == NULL) return;
+    free(value->terminal.graph);
+    free(value->terminal.terminal);
+    free(value->terminal.events);
+    value->terminal.graph = NULL;
+    value->terminal.terminal = NULL;
+    value->terminal.events = NULL;
 }
 
 static lxp_result call_namespace_for_program(const lxp_programs_call_activity *value,
@@ -879,9 +891,7 @@ lxp_result layerx_programs_call_terminal_begin(
     lxp_programs_call_activity *value =
         (lxp_programs_call_activity *)(uintptr_t)token;
     const lxp_call_admission_facts *admission;
-    void *graph, *terminal, *events;
     uint8_t transfer_root[32];
-    lxp_result status;
     write_u64(transfer_root, transfer0);
     write_u64(transfer_root + 8U, transfer1);
     write_u64(transfer_root + 16U, transfer2);
@@ -902,7 +912,10 @@ lxp_result layerx_programs_call_terminal_begin(
         !lxp_program_metering_schedule_available(
             metering_schedule_version) ||
         metering_schedule_version != admission->metering_schedule_version ||
-        graph_length == 0U || terminal_length == 0U || events_length == 0U)
+        !value->terminal.reserved || graph_length == 0U || terminal_length == 0U ||
+        events_length == 0U || graph_length > value->terminal.graph_capacity ||
+        terminal_length > value->terminal.terminal_capacity ||
+        events_length > value->terminal.events_capacity)
         return LXP_ERR_NON_CANONICAL;
     if (value->ctx->protocol_version == LXP_PROTOCOL_VERSION_OCCUPANCY &&
         terminal_kind == LXP_PROGRAM_TERMINAL_SUCCESS &&
@@ -918,12 +931,6 @@ lxp_result layerx_programs_call_terminal_begin(
     } else if (!lxp_ct_is_zero(transfer_root, sizeof(transfer_root))) {
         return LXP_ERR_NON_CANONICAL;
     }
-    status = lxp_ctx_arena_alloc(value->ctx, graph_length, 1U, &graph);
-    if (status != LXP_OK) return status;
-    status = lxp_ctx_arena_alloc(value->ctx, terminal_length, 1U, &terminal);
-    if (status != LXP_OK) return status;
-    status = lxp_ctx_arena_alloc(value->ctx, events_length, 1U, &events);
-    if (status != LXP_OK) return status;
     value->terminal.active = true;
     value->terminal.terminal_kind = terminal_kind;
     value->terminal.result_code = result_code;
@@ -940,9 +947,36 @@ lxp_result layerx_programs_call_terminal_begin(
     value->terminal.fee_units = (lxp_u128){fee_hi, fee_lo};
     (void)memcpy(value->terminal.transfer_root, transfer_root,
                  sizeof(transfer_root));
-    value->terminal.graph = graph; value->terminal.graph_length = graph_length;
-    value->terminal.terminal = terminal; value->terminal.terminal_length = terminal_length;
-    value->terminal.events = events; value->terminal.events_length = events_length;
+    value->terminal.graph_length = graph_length;
+    value->terminal.terminal_length = terminal_length;
+    value->terminal.events_length = events_length;
+    return LXP_OK;
+}
+
+lxp_result layerx_programs_call_terminal_reserve(
+    uint64_t token, uint32_t graph_capacity,
+    uint32_t terminal_capacity, uint32_t events_capacity)
+{
+    lxp_programs_call_activity *value =
+        (lxp_programs_call_activity *)(uintptr_t)token;
+    if (value == NULL || value->ctx == NULL || value->terminal.reserved ||
+        graph_capacity == 0U || terminal_capacity == 0U || events_capacity == 0U)
+        return LXP_ERR_NON_CANONICAL;
+    value->terminal.graph = malloc(graph_capacity);
+    value->terminal.terminal = malloc(terminal_capacity);
+    value->terminal.events = malloc(events_capacity);
+    if (value->terminal.graph == NULL || value->terminal.terminal == NULL ||
+        value->terminal.events == NULL) {
+        free(value->terminal.graph); free(value->terminal.terminal);
+        free(value->terminal.events);
+        value->terminal.graph = NULL; value->terminal.terminal = NULL;
+        value->terminal.events = NULL;
+        return LXP_ERR_ARENA_EXHAUSTED;
+    }
+    value->terminal.graph_capacity = graph_capacity;
+    value->terminal.terminal_capacity = terminal_capacity;
+    value->terminal.events_capacity = events_capacity;
+    value->terminal.reserved = true;
     return LXP_OK;
 }
 

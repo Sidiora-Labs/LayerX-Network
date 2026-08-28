@@ -119,6 +119,7 @@ struct lxp_module_ctx {
     bool mutable;
     lxp_module_kv_change staged[LXP_MODULE_MAX_STAGED_WRITES];
     size_t staged_count;
+    size_t staged_reserve;
     lx_account_registration staged_accounts[
         LXP_MODULE_MAX_STAGED_ACCOUNTS];
     size_t staged_account_count;

@@ -63,6 +63,8 @@ pub struct ProtocolReceipt {
 }
 
 impl ProtocolReceipt {
+    #[must_use]
+    pub fn effects(&self) -> &[Effect] { &self.effects }
     /// Returns the receipt protocol version.
     #[must_use]
     pub const fn protocol_version(&self) -> u16 {
@@ -212,6 +214,13 @@ impl ProtocolReceipt {
     pub const fn sequencer_signature(&self) -> Option<[u8; 64]> {
         self.sequencer_signature
     }
+}
+
+impl Effect {
+    #[must_use] pub const fn module_id(&self) -> u16 { self.module_id }
+    #[must_use] pub const fn event_type(&self) -> u16 { self.event_type }
+    #[must_use] pub const fn kind(&self) -> u8 { self.kind }
+    #[must_use] pub fn body(&self) -> &[u8] { &self.body }
 }
 
 /// Compact activity receipt carried by the published replay corpus.

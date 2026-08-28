@@ -170,8 +170,10 @@ enum {
     LX_PROGRAMS_ACCOUNT = 0x00090006,
     LX_PROGRAMS_WIND_DOWN = 0x00090007,
     LX_PROGRAMS_FEE_GOVERNANCE = 0x00090008,
+    LX_PROGRAMS_SANDBOX = 0x00090009,
     LX_PROGRAMS_ABI_VERSION = 1,
     LX_PROGRAMS_ACCOUNT_ABI_VERSION = 2,
+    LX_PROGRAMS_SANDBOX_ABI_VERSION = 3,
     LX_PROGRAMS_EVENT_DEPLOYED = 1,
     LX_PROGRAMS_EVENT_UPGRADED = 2,
     LX_PROGRAMS_EVENT_CALLED = 3,
@@ -434,6 +436,7 @@ enum {
 
 const lxp_module_iface *programs_module_registration(void);
 const lxp_module_iface *programs_module_registration_v2(void);
+const lxp_module_iface *programs_module_registration_v3(void);
 const lxp_module_iface *lx_programs_module_iface(void);
 
 lxp_result lxp_programs_lifecycle_decode(lxp_module_ctx *ctx,
@@ -574,6 +577,9 @@ lxp_result layerx_programs_call_terminal_begin(
     uint64_t fee_hi, uint64_t fee_lo,
     uint64_t transfer0, uint64_t transfer1, uint64_t transfer2, uint64_t transfer3,
     uint32_t graph_length, uint32_t terminal_length, uint32_t events_length);
+lxp_result layerx_programs_call_terminal_reserve(
+    uint64_t token, uint32_t graph_capacity,
+    uint32_t terminal_capacity, uint32_t events_capacity);
 lxp_result layerx_programs_call_terminal_byte(uint64_t token, uint16_t section,
                                                uint32_t offset, uint8_t byte);
 lxp_result layerx_programs_call_terminal_publish(uint64_t token);
@@ -668,6 +674,74 @@ lxp_result lxp_programs_call_execute(
     lxp_module_ctx *ctx, const lxp_activity *activity,
     const lxp_authority_resolved *authority, const void *decoded,
     lxp_effect_buffer *effects);
+
+/* Canonical Programs ordinal-nine sandbox envelope. The inner CALL is decoded
+ * by the ordinary CALL decoder and executed synchronously through the same
+ * scalar runtime bridge. */
+lxp_result lxp_programs_sandbox_decode(lxp_module_ctx *ctx,
+                                       const uint8_t *payload,
+                                       size_t payload_length,
+                                       void **decoded);
+lxp_result lxp_programs_sandbox_validate(
+    lxp_module_ctx *ctx, const lxp_activity *activity,
+    const lxp_authority_resolved *authority, const void *decoded);
+lxp_result lxp_programs_sandbox_execute(
+    lxp_module_ctx *ctx, const lxp_activity *activity,
+    const lxp_authority_resolved *authority, const void *decoded,
+    lxp_effect_buffer *effects);
+
+enum {
+    LX_PROGRAMS_SANDBOX_CONTEXT_LEASE_ID = 0,
+    LX_PROGRAMS_SANDBOX_CONTEXT_ESCROW_ACCOUNT = 1,
+    LX_PROGRAMS_SANDBOX_CONTEXT_ASSET = 2,
+    LX_PROGRAMS_SANDBOX_CONTEXT_FEE_DESTINATION = 3,
+    LX_PROGRAMS_SANDBOX_CONTEXT_EXPECTED_LEASE_DIGEST = 4
+};
+lxp_result layerx_programs_call_sandbox_context(uint64_t call_token);
+lxp_result layerx_programs_call_sandbox_guest_seal(uint64_t call_token,
+                                                    uint8_t success);
+lxp_result layerx_programs_call_sandbox_admit(
+    uint64_t call_token, uint64_t observed_batch,
+    uint64_t maximum_fee_hi, uint64_t maximum_fee_lo);
+lxp_result layerx_programs_call_sandbox_context_byte(
+    uint64_t call_token, uint16_t section, uint32_t offset);
+lxp_result layerx_programs_call_sandbox_expected_sequence(
+    uint64_t call_token, uint64_t expected_sequence);
+lxp_result layerx_programs_call_sandbox_fee_schedule(
+    uint64_t call_token, uint32_t version, uint64_t cpu,
+    uint64_t memory_byte, uint64_t storage_read_byte,
+    uint64_t storage_write_byte, uint64_t output_value,
+    uint64_t output_byte, uint64_t occupancy_byte_batch);
+lxp_result layerx_programs_call_sandbox_state_length(uint64_t call_token,
+                                                      uint16_t kind);
+lxp_result layerx_programs_call_sandbox_state_byte(
+    uint64_t call_token, uint16_t kind, uint32_t offset);
+lxp_result layerx_programs_call_sandbox_state_stage_begin(
+    uint64_t call_token, uint16_t kind, uint32_t length);
+lxp_result layerx_programs_call_sandbox_state_stage_byte(
+    uint64_t call_token, uint16_t kind, uint32_t offset, uint8_t byte);
+lxp_result layerx_programs_call_sandbox_state_stage_apply(
+    uint64_t call_token, uint16_t kind);
+lxp_result layerx_programs_sandbox_lifecycle_validate(uint64_t token,
+                                                       uint8_t operation);
+lxp_result layerx_programs_sandbox_lifecycle_length(
+    uint64_t token, uint16_t section);
+lxp_result layerx_programs_sandbox_lifecycle_byte(
+    uint64_t token, uint16_t section, uint32_t offset);
+lxp_result layerx_programs_call_sandbox_usage_result_begin(
+    uint64_t token, uint64_t occupancy_hi, uint64_t occupancy_lo,
+    uint64_t occupancy_fee_hi, uint64_t occupancy_fee_lo,
+    uint64_t transfer0, uint64_t transfer1, uint64_t transfer2,
+    uint64_t transfer3, uint32_t receipt_length);
+lxp_result layerx_programs_call_sandbox_usage_result_receipt_byte(
+    uint64_t token, uint32_t offset, uint8_t byte);
+lxp_result layerx_programs_call_sandbox_usage_result_field(
+    uint64_t token, uint16_t index, uint64_t value);
+lxp_result layerx_programs_call_sandbox_usage_result_publish(uint64_t token);
+lxp_result layerx_programs_call_sandbox_usage_result_length(
+    uint64_t token, uint16_t section);
+lxp_result layerx_programs_call_sandbox_usage_result_byte(
+    uint64_t token, uint16_t section, uint32_t offset);
 
 lxp_result lxp_programs_account_derive(
     const uint8_t program_id[32], const uint8_t *seed, size_t seed_length,
@@ -829,6 +903,10 @@ lxp_result lxp_programs_transfer_execute(
     lxp_module_ctx *ctx, const lxp_activity *activity,
     const lxp_authority_resolved *authority, const void *decoded,
     lxp_effect_buffer *effects);
+lxp_result lxp_programs_transfer_execute_root(
+    lxp_module_ctx *ctx, const lxp_activity *activity,
+    const lxp_authority_resolved *authority, const void *decoded,
+    lxp_effect_buffer *effects, uint8_t transfer_root[32]);
 
 lxp_result layerx_programs_authorize_402lxp_leg(
     uint64_t p0, uint64_t p1, uint64_t p2, uint64_t p3,

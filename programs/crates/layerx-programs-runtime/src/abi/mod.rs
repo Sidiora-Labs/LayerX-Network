@@ -382,6 +382,32 @@ impl AbiEffects {
         }
         Ok(encoded)
     }
+
+    pub(crate) fn write_canonical_program_event_envelope(
+        &self, encoded: &mut Vec<u8>,
+    ) -> Result<(), AbiError> {
+        if self.events.len() > MAX_EVENTS_PER_ACTIVITY { return Err(AbiError::EventBounds); }
+        encoded.clear();
+        encoded.extend_from_slice(b"LayerX/programs/events/v1\0");
+        encoded.extend_from_slice(&u32::try_from(self.events.len())
+            .map_err(|_| AbiError::EventBounds)?.to_be_bytes());
+        for event in &self.events {
+            if event.topic.len() > MAX_EVENT_TOPIC_BYTES || event.data.len() > MAX_EVENT_DATA_BYTES {
+                return Err(AbiError::EventBounds);
+            }
+            encoded.extend_from_slice(&event.program.bytes());
+            encoded.extend_from_slice(&event.principal.bytes());
+            let (path, depth) = event.frame.canonical_bytes();
+            encoded.extend_from_slice(&path); encoded.push(depth);
+            encoded.extend_from_slice(&u32::try_from(event.topic.len())
+                .map_err(|_| AbiError::EventBounds)?.to_be_bytes());
+            encoded.extend_from_slice(&event.topic);
+            encoded.extend_from_slice(&u32::try_from(event.data.len())
+                .map_err(|_| AbiError::EventBounds)?.to_be_bytes());
+            encoded.extend_from_slice(&event.data);
+        }
+        Ok(())
+    }
 }
 
 /// Successful atomic ABI state returned to the executor for durable commit.

@@ -353,6 +353,22 @@ impl CallGraph {
         evidence
     }
 
+    pub(crate) fn write_canonical_evidence(&self, evidence: &mut Vec<u8>) {
+        evidence.clear();
+        evidence.extend_from_slice(GRAPH_DOMAIN);
+        evidence.extend_from_slice(&self.principal.bytes());
+        evidence.extend_from_slice(&self.rules.depth.to_be_bytes());
+        evidence.extend_from_slice(&self.rules.edges.to_be_bytes());
+        evidence.extend_from_slice(&self.rules.fanout.to_be_bytes());
+        evidence.extend_from_slice(&self.rules.visits.to_be_bytes());
+        evidence.extend_from_slice(&u64::try_from(self.edges.len()).unwrap_or(u64::MAX).to_be_bytes());
+        for edge in &self.edges {
+            evidence.extend_from_slice(&edge.caller.bytes());
+            evidence.extend_from_slice(&edge.callee.bytes());
+            evidence.extend_from_slice(&edge.depth.to_be_bytes());
+        }
+    }
+
     pub(crate) fn enter(&mut self, callee: ProgramId) -> Result<(), CompositionRefusal> {
         let origin = self
             .frames

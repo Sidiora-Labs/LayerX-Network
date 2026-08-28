@@ -3577,7 +3577,7 @@ reqs = ["41.3","41.7"]
 
 [task.34.4]
 title = "Settle usage incrementally as work is performed"
-status = "pending"
+status = "implemented"
 wave = 20
 requires = ["34.2","34.3"]
 do_1 = "Debit the escrow per sandbox activity in the same atomic settlement that applies the activity's effects, so usage and payment cannot diverge."
@@ -3586,8 +3586,8 @@ do_3 = "Make the running total readable from protocol state so a renter can see 
 do_4 = "Prove that a failed sandbox activity still charges for the work performed before the failure, and charges nothing beyond it."
 do_5 = "Test settlement across a long lease with many activities, asserting the sum of usage receipts equals the escrow debit exactly."
 verify_cmd = "make programs-test"
-symbols = ["layerx_programs_sandbox::UsageReceipt","layerx_programs_sandbox::debit"]
-touches = ["programs/crates/layerx-programs-sandbox/src/usage.rs"]
+symbols = ["layerx_programs_sandbox::UsageReceipt","layerx_programs_sandbox::execute","lxp_programs_sandbox_execute"]
+touches = ["Makefile","agent/crates/layerx-wire/src/receipt.rs","cmd/layerxd/lxp_daemon_process.c","include/layerx/lxp_kernel.h","include/layerx/lxp_module.h","include/layerx/programs.h","programs/crates/layerx-programs-runtime/src/ffi_call.rs","programs/crates/layerx-programs-runtime/src/lib.rs","programs/crates/layerx-programs-runtime/src/transfer.rs","programs/crates/layerx-programs-sandbox/Cargo.toml","programs/crates/layerx-programs-sandbox/src/activity.rs","programs/crates/layerx-programs-sandbox/src/escrow.rs","programs/crates/layerx-programs-sandbox/src/host_ffi.rs","programs/crates/layerx-programs-sandbox/src/lease.rs","programs/crates/layerx-programs-sandbox/src/lib.rs","programs/crates/layerx-programs-sandbox/src/usage.rs","programs/tests/differential/parallel.c","src/modules/programs/call.c","src/modules/programs/registration.c","src/modules/programs/sandbox.c","src/modules/programs/sandbox.h","src/modules/programs/transfer.c","src/protocol/lxp_kernel.c","src/protocol/lxp_module_ctx.c","tests/programs/test_registration.c"]
 reqs = ["41.4"]
 
 [task.34.5]

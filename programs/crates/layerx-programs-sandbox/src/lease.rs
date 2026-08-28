@@ -4,7 +4,8 @@ use core::fmt::{self, Display};
 use std::collections::BTreeMap;
 
 use layerx_programs_runtime::{derive_program_account, hash_bytes, AuthorizationContext, CodeHash,
-    HashAlgorithm, Meter, PrincipalId, ProgramId, ResourceBudget, Storage, StorageNamespace};
+    FeeSchedule, HashAlgorithm, Meter, PrincipalId, ProgramId, ResourceBudget, Storage,
+    StorageNamespace};
 use layerx_programs::VerifiedProtocolHead;
 use layerx_proof::merkle::{verify_path, Proof};
 use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry};
@@ -19,7 +20,9 @@ const PROGRAMS_CALL_ORDINAL: u16 = 3;
 const PROGRAMS_CALL_FIXED_BYTES: usize = 106;
 const TRANSITION_CALLDATA_BYTES: usize = 101;
 const ESCROW_SEED_DOMAIN: &[u8] = b"sandbox-lease-escrow/v1\0";
-const LEASE_STATE_DOMAIN: &[u8] = b"LayerX/programs/sandbox/lease-state/v1\0";
+const LEASE_STATE_DOMAIN: &[u8] = b"LayerX/programs/sandbox/lease-state/v3\0";
+const ACCOUNT_ID_DOMAIN: &[u8] = b"LX:ACCOUNT:v1";
+const SYSTEM_FEE_ACCOUNT: &[u8] = b"system:fees";
 const MAX_LEASE_TRANSITIONS: usize = 70;
 const MAX_LEASE_SNAPSHOTS: usize = 64;
 
@@ -164,7 +167,6 @@ impl LeaseUsage {
             || self.output_values < prior.output_values
             || self.output_bytes < prior.output_bytes
             || self.table_elements < prior.table_elements
-            || self.namespace_bytes < prior.namespace_bytes
     }
 }
 
@@ -362,8 +364,10 @@ pub struct Lease {
     namespace: EphemeralNamespace,
     escrow_asset: [u8; 32],
     escrow_account: [u8; 32],
+    fee_destination: [u8; 32],
     escrow_amount: u128,
     limits: LeaseLimits,
+    fee_schedule: FeeSchedule,
     opened_at: u64,
     expiry: u64,
     state: LeaseState,
@@ -409,11 +413,48 @@ impl LeaseStateWitness {
 }
 
 impl Lease {
+    pub(crate) fn apply_host_activity(
+        &mut self, activity: LeaseActivity, activity_id: [u8; 32], batch_sequence: u64,
+    ) -> Result<(), LeaseRefusal> {
+        let to = match (activity, self.state) {
+            (LeaseActivity::Fund, LeaseState::Requested) => LeaseState::Funded,
+            (LeaseActivity::Activate, LeaseState::Funded) => LeaseState::Active,
+            _ => return Err(LeaseRefusal::InvalidTransition),
+        };
+        if activity_id == [0; 32] || batch_sequence < self.opened_at || batch_sequence >= self.expiry {
+            return Err(LeaseRefusal::InvalidSequence);
+        }
+        let mut commitment = b"LayerX/programs/sandbox/intrinsic-transition/v1\0".to_vec();
+        commitment.extend_from_slice(&self.state_digest()?);
+        commitment.extend_from_slice(&activity_id);
+        commitment.push(activity as u8);
+        commitment.extend_from_slice(&batch_sequence.to_be_bytes());
+        let receipt_digest = hash_bytes(HashAlgorithm::Sha256, &commitment)
+            .map_err(|_| LeaseRefusal::HashRefusal)?;
+        let transition = LeaseTransition { lease: self.id, tenant: self.tenant, activity,
+            from: self.state, to, activity_id, usage_observation_digest: [0; 32] };
+        self.state = to;
+        self.history.push(LeaseTransitionReceipt {
+            lease: self.id, transition, receipt_digest, batch_sequence,
+        });
+        Ok(())
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn request(
         id: LeaseId, tenant: PrincipalId, host_program: ProgramId, image_code_hash: CodeHash,
         escrow_asset: [u8; 32], escrow_amount: u128, limits: LeaseLimits,
         opened_at: u64, expiry: u64,
+    ) -> Result<Self, LeaseRefusal> {
+        Self::request_with_schedule(id, tenant, host_program, image_code_hash, escrow_asset,
+            escrow_amount, limits, opened_at, expiry, FeeSchedule::declared())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn request_with_schedule(
+        id: LeaseId, tenant: PrincipalId, host_program: ProgramId, image_code_hash: CodeHash,
+        escrow_asset: [u8; 32], escrow_amount: u128, limits: LeaseLimits,
+        opened_at: u64, expiry: u64, fee_schedule: FeeSchedule,
     ) -> Result<Self, LeaseRefusal> {
         if image_code_hash == [0; 32] || escrow_asset == [0; 32] {
             return Err(LeaseRefusal::ReservedIdentifier);
@@ -421,6 +462,7 @@ impl Lease {
         if escrow_amount == 0 || escrow_amount > MAX_LEASE_ESCROW {
             return Err(LeaseRefusal::InvalidEscrow { declared: escrow_amount, maximum: MAX_LEASE_ESCROW });
         }
+        if !fee_schedule.is_valid() { return Err(LeaseRefusal::InvalidFeeSchedule); }
         let lifetime = expiry.checked_sub(opened_at).ok_or(LeaseRefusal::InvalidExpiry)?;
         if lifetime == 0 || lifetime > MAX_LEASE_LIFETIME_BATCHES {
             return Err(LeaseRefusal::InvalidLifetime { declared: lifetime, maximum: MAX_LEASE_LIFETIME_BATCHES });
@@ -431,9 +473,11 @@ impl Lease {
         let escrow_account = derive_program_account(host_program, &escrow_seed)
             .map_err(|_| LeaseRefusal::EscrowAccountDerivation)?
             .bytes();
+        let fee_destination = system_fee_destination()?;
         Ok(Self {
             id, tenant, host_program, image_code_hash, namespace: EphemeralNamespace::derive(host_program, id)?,
-            escrow_asset, escrow_account, escrow_amount, limits: limits.validate()?, opened_at, expiry,
+            escrow_asset, escrow_account, fee_destination, escrow_amount, limits: limits.validate()?, fee_schedule,
+            opened_at, expiry,
             state: LeaseState::Requested, usage: LeaseUsage::default(), escrow_consumed: 0,
             history: Vec::new(), snapshot_records: Vec::new(), restored_from: None,
         })
@@ -446,8 +490,10 @@ impl Lease {
     #[must_use] pub const fn namespace(&self) -> EphemeralNamespace { self.namespace }
     #[must_use] pub const fn escrow_asset(&self) -> [u8; 32] { self.escrow_asset }
     #[must_use] pub const fn escrow_account(&self) -> [u8; 32] { self.escrow_account }
+    #[must_use] pub const fn fee_destination(&self) -> [u8; 32] { self.fee_destination }
     #[must_use] pub const fn escrow_amount(&self) -> u128 { self.escrow_amount }
     #[must_use] pub const fn limits(&self) -> LeaseLimits { self.limits }
+    #[must_use] pub const fn fee_schedule(&self) -> FeeSchedule { self.fee_schedule }
     #[must_use] pub const fn opened_at(&self) -> u64 { self.opened_at }
     #[must_use] pub const fn expiry(&self) -> u64 { self.expiry }
     #[must_use] pub const fn state(&self) -> LeaseState { self.state }
@@ -484,9 +530,10 @@ impl Lease {
     #[must_use]
     pub fn request_binding_digest(&self) -> Result<[u8; 32], LeaseRefusal> {
         let mut preimage = Vec::new();
-        preimage.extend_from_slice(b"LayerX/programs/sandbox/request/v1\0");
+        preimage.extend_from_slice(b"LayerX/programs/sandbox/request/v3\0");
         for value in [self.id.bytes(), self.tenant.bytes(), self.host_program.bytes(),
-            self.image_code_hash, self.namespace.bytes(), self.escrow_asset, self.escrow_account] {
+            self.image_code_hash, self.namespace.bytes(), self.escrow_asset, self.escrow_account,
+            self.fee_destination] {
             preimage.extend_from_slice(&value);
         }
         preimage.extend_from_slice(&self.escrow_amount.to_be_bytes());
@@ -497,14 +544,22 @@ impl Lease {
             self.opened_at, self.expiry] {
             preimage.extend_from_slice(&value.to_be_bytes());
         }
+        encode_fee_schedule(&mut preimage, self.fee_schedule);
         hash_bytes(HashAlgorithm::Sha256, &preimage).map_err(|_| LeaseRefusal::HashRefusal)
     }
 
     pub fn canonical_state_bytes(&self) -> Result<Vec<u8>, LeaseRefusal> {
         let mut out = Vec::new();
+        self.write_canonical_state(&mut out)?;
+        Ok(out)
+    }
+
+    pub(crate) fn write_canonical_state(&self, out: &mut Vec<u8>) -> Result<(), LeaseRefusal> {
+        out.clear();
         out.extend_from_slice(LEASE_STATE_DOMAIN);
         for value in [self.id.bytes(), self.tenant.bytes(), self.host_program.bytes(),
-            self.image_code_hash, self.namespace.bytes(), self.escrow_asset, self.escrow_account] {
+            self.image_code_hash, self.namespace.bytes(), self.escrow_asset, self.escrow_account,
+            self.fee_destination] {
             out.extend_from_slice(&value);
         }
         out.extend_from_slice(&self.escrow_amount.to_be_bytes());
@@ -518,6 +573,7 @@ impl Lease {
             self.usage.namespace_bytes] {
             out.extend_from_slice(&value.to_be_bytes());
         }
+        encode_fee_schedule(&mut out, self.fee_schedule);
         out.extend_from_slice(&self.escrow_consumed.to_be_bytes());
         out.push(self.state as u8);
         out.push(u8::try_from(self.history.len()).map_err(|_| LeaseRefusal::HistoryOverflow)?);
@@ -546,12 +602,24 @@ impl Lease {
             Some(digest) => { out.push(1); out.extend_from_slice(&digest); }
             None => out.push(0),
         }
-        Ok(out)
+        Ok(())
     }
 
     pub fn state_digest(&self) -> Result<[u8; 32], LeaseRefusal> {
         hash_bytes(HashAlgorithm::Sha256, &self.canonical_state_bytes()?)
             .map_err(|_| LeaseRefusal::HashRefusal)
+    }
+
+    pub(crate) fn state_digest_for_usage(
+        &self, usage: LeaseUsage, escrow_consumed: u128,
+    ) -> Result<[u8; 32], LeaseRefusal> {
+        if usage.first_exceeded(self.limits).is_some() || escrow_consumed > self.escrow_amount {
+            return Err(LeaseRefusal::InvalidStateEncoding);
+        }
+        let mut projected = self.clone();
+        projected.usage = usage;
+        projected.escrow_consumed = escrow_consumed;
+        projected.state_digest()
     }
 
     #[must_use]
@@ -580,6 +648,7 @@ impl Lease {
         let encoded_namespace = cursor.array()?;
         let asset = cursor.array()?;
         let encoded_account = cursor.array()?;
+        let encoded_fee_destination = cursor.array()?;
         let amount = cursor.u128()?;
         let limits = LeaseLimits {
             cpu_fuel: cursor.u64()?, memory_bytes: cursor.u64()?,
@@ -595,12 +664,16 @@ impl Lease {
             output_values: cursor.u64()?, output_bytes: cursor.u64()?,
             table_elements: cursor.u64()?, namespace_bytes: cursor.u64()?,
         };
+        let fee_schedule = FeeSchedule::new_complete(cursor.u32()?, cursor.u64()?, cursor.u64()?,
+            cursor.u64()?, cursor.u64()?, cursor.u64()?, cursor.u64()?, cursor.u64()?);
         let escrow_consumed = cursor.u128()?;
         let state = state_from_tag(cursor.u8()?)?;
         let history_length = usize::from(cursor.u8()?);
         if history_length > MAX_LEASE_TRANSITIONS { return Err(LeaseRefusal::HistoryOverflow); }
-        let mut lease = Self::request(id, tenant, host, image, asset, amount, limits, opened_at, expiry)?;
-        if lease.namespace.bytes() != encoded_namespace || lease.escrow_account != encoded_account {
+        let mut lease = Self::request_with_schedule(id, tenant, host, image, asset, amount, limits,
+            opened_at, expiry, fee_schedule)?;
+        if lease.namespace.bytes() != encoded_namespace || lease.escrow_account != encoded_account
+            || lease.fee_destination != encoded_fee_destination {
             return Err(LeaseRefusal::InvalidStateEncoding);
         }
         let mut prior_state = LeaseState::Requested;
@@ -895,6 +968,25 @@ fn ensure_principal_capacity(count: u32) -> Result<(), LeaseRefusal> {
     }
 }
 
+fn encode_fee_schedule(bytes: &mut Vec<u8>, schedule: FeeSchedule) {
+    bytes.extend_from_slice(&schedule.version().to_be_bytes());
+    for value in [schedule.cpu_price(), schedule.memory_byte_price(),
+        schedule.storage_read_byte_price(), schedule.storage_write_byte_price(),
+        schedule.output_value_price(), schedule.output_byte_price(),
+        schedule.occupancy_byte_batch_price()] {
+        bytes.extend_from_slice(&value.to_be_bytes());
+    }
+}
+
+fn system_fee_destination() -> Result<[u8; 32], LeaseRefusal> {
+    let mut preimage = Vec::with_capacity(ACCOUNT_ID_DOMAIN.len() + 4 + SYSTEM_FEE_ACCOUNT.len());
+    preimage.extend_from_slice(ACCOUNT_ID_DOMAIN);
+    preimage.extend_from_slice(&u32::try_from(SYSTEM_FEE_ACCOUNT.len())
+        .map_err(|_| LeaseRefusal::HashRefusal)?.to_be_bytes());
+    preimage.extend_from_slice(SYSTEM_FEE_ACCOUNT);
+    hash_bytes(HashAlgorithm::Sha256, &preimage).map_err(|_| LeaseRefusal::HashRefusal)
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LeaseRefusal {
     ReservedIdentifier,
@@ -902,6 +994,7 @@ pub enum LeaseRefusal {
     InvalidEscrow { declared: u128, maximum: u128 },
     InvalidLifetime { declared: u64, maximum: u64 },
     InvalidExpiry,
+    InvalidFeeSchedule,
     EscrowAccountDerivation,
     ActivityReceiptMismatch,
     LeaseMismatch,
@@ -999,6 +1092,35 @@ mod tests {
         assert_eq!(left.namespace().storage_namespace().map(StorageNamespace::program), Ok(left.host_program()));
         assert_eq!(LeaseUsage { cpu_fuel: 11, ..LeaseUsage::default() }.first_exceeded(left.limits()),
             Some((BoundKind::CpuFuel, 11, 10)));
+    }
+
+    #[test]
+    fn fee_schedule_is_frozen_in_canonical_lease_state() {
+        let schedule = FeeSchedule::new_complete(9, 2, 3, 5, 7, 11, 13, 17);
+        let lease = Lease::request_with_schedule(
+            LeaseId::new([8; 32]).expect("lease id"),
+            PrincipalId::new([2; 32]).expect("tenant"),
+            ProgramId::new([3; 32]).expect("program"), [4; 32], [5; 32], 100,
+            LeaseLimits { cpu_fuel: 10, memory_bytes: 10, storage_read_bytes: 10,
+                storage_write_bytes: 10, output_values: 10, output_bytes: 10,
+                table_elements: 10, namespace_bytes: 10 }, 10, 20, schedule,
+        ).expect("lease");
+        let declared = Lease::request(
+            LeaseId::new([8; 32]).expect("lease id"),
+            PrincipalId::new([2; 32]).expect("tenant"),
+            ProgramId::new([3; 32]).expect("program"), [4; 32], [5; 32], 100,
+            LeaseLimits { cpu_fuel: 10, memory_bytes: 10, storage_read_bytes: 10,
+                storage_write_bytes: 10, output_values: 10, output_bytes: 10,
+                table_elements: 10, namespace_bytes: 10 }, 10, 20,
+        ).expect("declared lease");
+        assert_eq!(lease.fee_schedule(), schedule);
+        assert_ne!(lease.canonical_state_bytes().expect("scheduled canonical"),
+            declared.canonical_state_bytes().expect("declared canonical"));
+        assert_eq!(lease.fee_destination(), system_fee_destination().expect("fee account"));
+        let mut substituted = lease.clone();
+        substituted.fee_destination = [9; 32];
+        assert_eq!(Lease::decode_state(&substituted.canonical_state_bytes().expect("state")),
+            Err(LeaseRefusal::InvalidStateEncoding));
     }
 
     #[test]

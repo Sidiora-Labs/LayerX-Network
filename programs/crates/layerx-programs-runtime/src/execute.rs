@@ -1,6 +1,7 @@
 //! Typed execution surface over instantiated deterministic programs.
 
 use core::fmt::{self, Display};
+use std::collections::BTreeSet;
 
 use wasmi::core::{Pages, TrapCode};
 use wasmi::{
@@ -778,6 +779,23 @@ pub struct PreparedAuthorizedActivity {
     transfer_set: Option<AtomicTransferSet>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProtocolStateCas {
+    key: Vec<u8>,
+    expected: Option<Vec<u8>>,
+    replacement: Vec<u8>,
+}
+
+impl ProtocolStateCas {
+    #[must_use]
+    pub fn new(key: Vec<u8>, expected: Option<Vec<u8>>, replacement: Vec<u8>) -> Self {
+        Self { key, expected, replacement }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProtocolStateCasRefusal { Empty, Duplicate, Limit, Stale, Storage(crate::storage::StorageError) }
+
 impl PreparedAuthorizedActivity {
     /// Returns execution-only receipt diagnostics. Staged effects and held
     /// storage remain inaccessible until affine settlement succeeds.
@@ -823,6 +841,52 @@ impl PreparedAuthorizedActivity {
                     })
                     .collect(),
             })
+    }
+
+    /// Returns the deterministic root of the exact sealed transfer set before
+    /// kernel application. The root carries no authority to execute the set.
+    #[must_use]
+    pub fn expected_transfer_set_root(&self) -> Option<[u8; 32]> {
+        self.transfer_set.as_ref().map(AtomicTransferSet::kernel_root)
+    }
+
+    /// Measures one namespace in the held post-execution snapshot without
+    /// releasing or mutating that snapshot.
+    pub fn held_namespace_persistent_bytes(
+        &self,
+        namespace: crate::StorageNamespace,
+    ) -> Result<u64, crate::storage::StorageError> {
+        self.held_storage.namespace_persistent_bytes(namespace)
+    }
+
+    /// Stages protocol-owned canonical state in the same held storage snapshot
+    /// as guest effects, after comparing every expected value to prior state.
+    pub fn stage_protocol_state_cas(
+        &mut self,
+        namespace: crate::StorageNamespace,
+        changes: Vec<ProtocolStateCas>,
+    ) -> Result<(), ProtocolStateCasRefusal> {
+        if changes.is_empty() { return Err(ProtocolStateCasRefusal::Empty); }
+        if changes.len() > 16 { return Err(ProtocolStateCasRefusal::Limit); }
+        let prior = self.prior_storage.namespace_entries(namespace);
+        let mut keys = BTreeSet::new();
+        for change in &changes {
+            if change.key.is_empty() || !keys.insert(change.key.clone()) {
+                return Err(ProtocolStateCasRefusal::Duplicate);
+            }
+            let actual = prior.iter().find_map(|(key, value)|
+                (key == &change.key).then_some(value));
+            if actual.map(Vec::as_slice) != change.expected.as_deref() {
+                return Err(ProtocolStateCasRefusal::Stale);
+            }
+        }
+        let mut transaction = self.held_storage.transaction(namespace);
+        for change in changes {
+            transaction.write(&change.key, &change.replacement)
+                .map_err(ProtocolStateCasRefusal::Storage)?;
+        }
+        let _ = transaction.commit();
+        Ok(())
     }
 
     /// Consumes the held activity, performs its single kernel settlement, and
@@ -1026,6 +1090,7 @@ pub enum PreparedAuthorizedActivityOutcome {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BudgetedV1FailureRecord {
     root_program: ProgramId,
+    activity_binding: ActivityBudgetBinding,
     cause: BudgetedV1FailureCause,
     usage: MeteredUsage,
     call_graph: CallGraph,
@@ -1050,6 +1115,7 @@ impl BudgetedV1FailureRecord {
     pub const fn root_program(&self) -> ProgramId {
         self.root_program
     }
+    #[must_use] pub const fn activity_binding(&self) -> ActivityBudgetBinding { self.activity_binding }
 
     #[must_use]
     pub const fn cause(&self) -> &BudgetedV1FailureCause {
@@ -1079,6 +1145,7 @@ impl BudgetedV1FailureRecord {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BudgetedResourceFailureRecord {
     root_program: ProgramId,
+    activity_binding: ActivityBudgetBinding,
     refusal: BudgetMeterRefusal,
     usage: MeteredUsage,
     call_graph: CallGraph,
@@ -1089,6 +1156,7 @@ impl BudgetedResourceFailureRecord {
     pub const fn root_program(&self) -> ProgramId {
         self.root_program
     }
+    #[must_use] pub const fn activity_binding(&self) -> ActivityBudgetBinding { self.activity_binding }
 
     #[must_use]
     pub const fn refusal(&self) -> BudgetMeterRefusal {
@@ -1320,6 +1388,74 @@ impl CandidateAuthorizedExecutionRecord {
         evidence.extend_from_slice(&(graph.len() as u64).to_be_bytes());
         evidence.extend_from_slice(&graph);
         evidence
+    }
+
+    pub(crate) fn write_canonical_evidence(
+        &self, evidence: &mut Vec<u8>, graph: &mut Vec<u8>,
+    ) {
+        evidence.clear();
+        evidence.extend_from_slice(b"LXP/program-execution/v4\0");
+        evidence.extend_from_slice(&self.execution.runtime_version.to_be_bytes());
+        evidence.extend_from_slice(&self.execution.fee_schedule_version.to_be_bytes());
+        evidence.extend_from_slice(&self.execution.metering_schedule_version.to_be_bytes());
+        evidence.extend_from_slice(&(self.execution.outputs.len() as u64).to_be_bytes());
+        for output in &self.execution.outputs {
+            match output {
+                WasmValue::I32(value) => { evidence.push(1); evidence.extend_from_slice(&value.to_be_bytes()); }
+                WasmValue::I64(value) => { evidence.push(2); evidence.extend_from_slice(&value.to_be_bytes()); }
+            }
+        }
+        evidence.extend_from_slice(&self.execution.usage.cpu_fuel.to_be_bytes());
+        evidence.extend_from_slice(&self.execution.usage.memory_bytes.to_be_bytes());
+        evidence.extend_from_slice(&self.execution.usage.storage_read_bytes.to_be_bytes());
+        evidence.extend_from_slice(&self.execution.usage.storage_write_bytes.to_be_bytes());
+        evidence.extend_from_slice(&self.execution.usage.output_values.to_be_bytes());
+        evidence.extend_from_slice(&self.execution.usage.output_bytes.to_be_bytes());
+        evidence.extend_from_slice(&self.execution.usage.fee_units.to_be_bytes());
+        match &self.execution.trace {
+            Some(trace) => {
+                evidence.push(1);
+                let length_offset = evidence.len(); evidence.extend_from_slice(&[0; 8]);
+                let start = evidence.len();
+                evidence.extend_from_slice(&crate::STEP_COMMITMENT_VERSION.to_be_bytes());
+                evidence.extend_from_slice(&trace.policy().canonical_bytes());
+                evidence.extend_from_slice(&(trace.commitments().len() as u32).to_be_bytes());
+                for commitment in trace.commitments() {
+                    evidence.extend_from_slice(&commitment.step_index.to_be_bytes());
+                    evidence.extend_from_slice(&commitment.digest);
+                    evidence.extend_from_slice(&commitment.encoded_state_bytes.to_be_bytes());
+                    evidence.extend_from_slice(&commitment.commitment_fuel.to_be_bytes());
+                }
+                evidence.extend_from_slice(&trace.total_commitment_fuel().to_be_bytes());
+                evidence.extend_from_slice(&trace.total_state_bytes().to_be_bytes());
+                let length = (evidence.len() - start) as u64;
+                evidence[length_offset..length_offset + 8].copy_from_slice(&length.to_be_bytes());
+            }
+            None => evidence.push(0),
+        }
+        evidence.extend_from_slice(&self.root_program.bytes());
+        evidence.extend_from_slice(&match self.abi_revision {
+            AbiRevision::V1 => crate::abi::manifest::ABI_V1_VERSION, AbiRevision::V2 => 2,
+        }.to_be_bytes());
+        match &self.outcome {
+            CandidateActivityOutcome::Failure(failure) => {
+                evidence.push(1); let length_offset = evidence.len(); evidence.extend_from_slice(&[0; 8]);
+                let start = evidence.len(); failure.append_canonical(evidence);
+                let length = (evidence.len() - start) as u64;
+                evidence[length_offset..length_offset + 8].copy_from_slice(&length.to_be_bytes());
+            }
+            CandidateActivityOutcome::Success { response, .. } => {
+                evidence.push(0); evidence.extend_from_slice(&response.code.to_be_bytes());
+                evidence.extend_from_slice(&(response.bytes.len() as u64).to_be_bytes());
+                evidence.extend_from_slice(&response.bytes);
+            }
+            CandidateActivityOutcome::Resource(refusal) => {
+                evidence.push(2); encode_meter_refusal(evidence, refusal);
+            }
+        }
+        self.call_graph.write_canonical_evidence(graph);
+        evidence.extend_from_slice(&(graph.len() as u64).to_be_bytes());
+        evidence.extend_from_slice(graph);
     }
 }
 
@@ -1828,6 +1964,49 @@ impl ExecutionRecord {
             None => {}
         }
         evidence
+    }
+
+    pub(crate) fn write_canonical_evidence(&self, evidence: &mut Vec<u8>) {
+        evidence.clear();
+        evidence.extend_from_slice(if self.trace.is_some() {
+            b"LXP/program-execution/v3\0"
+        } else {
+            b"LXP/program-execution/v2\0"
+        });
+        evidence.extend_from_slice(&self.runtime_version.to_be_bytes());
+        evidence.extend_from_slice(&self.abi_version.to_be_bytes());
+        evidence.extend_from_slice(&self.metering_schedule_version.to_be_bytes());
+        let native_output_count = self.outputs.len().to_be_bytes();
+        let mut output_count = [0u8; 16];
+        let count_offset = output_count.len() - native_output_count.len();
+        output_count[count_offset..].copy_from_slice(&native_output_count);
+        evidence.extend_from_slice(&output_count);
+        for output in &self.outputs {
+            match output {
+                WasmValue::I32(value) => { evidence.push(1); evidence.extend_from_slice(&value.to_be_bytes()); }
+                WasmValue::I64(value) => { evidence.push(2); evidence.extend_from_slice(&value.to_be_bytes()); }
+            }
+        }
+        evidence.extend_from_slice(&self.usage.cpu_fuel.to_be_bytes());
+        evidence.extend_from_slice(&self.usage.memory_bytes.to_be_bytes());
+        evidence.extend_from_slice(&self.usage.storage_read_bytes.to_be_bytes());
+        evidence.extend_from_slice(&self.usage.storage_write_bytes.to_be_bytes());
+        evidence.extend_from_slice(&self.usage.output_values.to_be_bytes());
+        evidence.extend_from_slice(&self.usage.fee_units.to_be_bytes());
+        if let Some(trace) = &self.trace {
+            evidence.push(1);
+            let length_offset = evidence.len(); evidence.extend_from_slice(&[0; 8]);
+            let start = evidence.len();
+            evidence.extend_from_slice(&crate::STEP_COMMITMENT_VERSION.to_be_bytes());
+            evidence.extend_from_slice(&trace.policy().canonical_bytes());
+            evidence.extend_from_slice(&(trace.commitments().len() as u32).to_be_bytes());
+            for commitment in trace.commitments() {
+                evidence.extend_from_slice(&commitment.step_index.to_be_bytes());
+                evidence.extend_from_slice(&commitment.digest);
+            }
+            let length = (evidence.len() - start) as u64;
+            evidence[length_offset..length_offset + 8].copy_from_slice(&length.to_be_bytes());
+        }
     }
 }
 
@@ -2383,16 +2562,17 @@ impl Executor {
                 Err(error) => {
                     let (fault, state) = *error;
                     if let Some(refusal) = state.meter().budget_exhaustion() {
-                        return Self::budgeted_v1_resource(request.program, refusal, state);
+                        return Self::budgeted_v1_resource(request.program, activity_binding, refusal, state);
                     }
                     if let Some(refusal) = state.refusal().cloned() {
                         if let Some(resource) = composition_meter_refusal(&refusal)
                             .and_then(|resource| BudgetMeterRefusal::try_from(resource).ok())
                         {
-                            return Self::budgeted_v1_resource(request.program, resource, state);
+                            return Self::budgeted_v1_resource(request.program, activity_binding, resource, state);
                         }
                         return Self::budgeted_v1_composition_failure(
                             request.program,
+                            activity_binding,
                             refusal,
                             state,
                         );
@@ -2400,6 +2580,7 @@ impl Executor {
                     if is_candidate_runtime_fault(&fault) {
                         return Self::budgeted_v1_program_failure(
                             request.program,
+                            activity_binding,
                             request.program,
                             RefusalClass::RuntimeFault,
                             state,
@@ -2438,15 +2619,16 @@ impl Executor {
                     .and_then(|refusal| BudgetMeterRefusal::try_from(refusal).ok());
                 let state = instance.into_state();
                 if let Some(resource) = exhaustion.or(carried_resource) {
-                    return Self::budgeted_v1_resource(request.program, resource, state);
+                    return Self::budgeted_v1_resource(request.program, activity_binding, resource, state);
                 }
                 if let Some(carried) = carried {
-                    return Self::budgeted_v1_composition_failure(request.program, carried, state);
+                    return Self::budgeted_v1_composition_failure(request.program, activity_binding, carried, state);
                 }
                 match refusal {
                     EntrypointRefusal::GuestRefused { .. } => {
                         return Self::budgeted_v1_program_failure(
                             request.program,
+                            activity_binding,
                             request.program,
                             RefusalClass::Legacy,
                             state,
@@ -2455,6 +2637,7 @@ impl Executor {
                     EntrypointRefusal::Fault(fault) if is_candidate_runtime_fault(&fault) => {
                         return Self::budgeted_v1_program_failure(
                             request.program,
+                            activity_binding,
                             request.program,
                             RefusalClass::RuntimeFault,
                             state,
@@ -2470,11 +2653,12 @@ impl Executor {
                     EntrypointRefusal::Resource(resource) => {
                         let resource = BudgetMeterRefusal::try_from(resource)
                             .map_err(ExecutionError::Resource)?;
-                        return Self::budgeted_v1_resource(request.program, resource, state);
+                        return Self::budgeted_v1_resource(request.program, activity_binding, resource, state);
                     }
                     other => {
                         return Self::budgeted_v1_failure(
                             request.program,
+                            activity_binding,
                             BudgetedV1FailureCause::Entrypoint(other),
                             state,
                         );
@@ -2486,16 +2670,16 @@ impl Executor {
             return Err(ExecutionError::Fault(observer));
         }
         if let Some(resource) = instance.meter().budget_exhaustion() {
-            return Self::budgeted_v1_resource(request.program, resource, instance.into_state());
+            return Self::budgeted_v1_resource(request.program, activity_binding, resource, instance.into_state());
         }
         if let Some(refusal) = instance.state().refusal().cloned() {
             let state = instance.into_state();
             if let Some(resource) = composition_meter_refusal(&refusal)
                 .and_then(|resource| BudgetMeterRefusal::try_from(resource).ok())
             {
-                return Self::budgeted_v1_resource(request.program, resource, state);
+                return Self::budgeted_v1_resource(request.program, activity_binding, resource, state);
             }
-            return Self::budgeted_v1_composition_failure(request.program, refusal, state);
+            return Self::budgeted_v1_composition_failure(request.program, activity_binding, refusal, state);
         }
         let usage = match instance.meter().finish() {
             Ok(usage) => usage,
@@ -3072,6 +3256,7 @@ impl Executor {
 
     fn budgeted_v1_resource(
         root_program: ProgramId,
+        activity_binding: ActivityBudgetBinding,
         refusal: BudgetMeterRefusal,
         mut state: RuntimeState,
     ) -> Result<BudgetedV1ActivityOutcome, ExecutionError> {
@@ -3089,6 +3274,7 @@ impl Executor {
         Ok(BudgetedV1ActivityOutcome::Resource(
             BudgetedResourceFailureRecord {
                 root_program,
+                activity_binding,
                 refusal,
                 usage,
                 call_graph,
@@ -3098,12 +3284,14 @@ impl Executor {
 
     fn budgeted_v1_program_failure(
         root_program: ProgramId,
+        activity_binding: ActivityBudgetBinding,
         refusing_program: ProgramId,
         class: RefusalClass,
         state: RuntimeState,
     ) -> Result<BudgetedV1ActivityOutcome, ExecutionError> {
         Self::budgeted_v1_failure(
             root_program,
+            activity_binding,
             BudgetedV1FailureCause::Program(ProgramFailure::authenticated(
                 refusing_program,
                 class,
@@ -3115,6 +3303,7 @@ impl Executor {
 
     fn budgeted_v1_composition_failure(
         root_program: ProgramId,
+        activity_binding: ActivityBudgetBinding,
         refusal: CompositionRefusal,
         state: RuntimeState,
     ) -> Result<BudgetedV1ActivityOutcome, ExecutionError> {
@@ -3142,11 +3331,12 @@ impl Executor {
             CompositionRefusal::Fault(fault) => return Err(ExecutionError::Fault(fault)),
             other => BudgetedV1FailureCause::Composition(other),
         };
-        Self::budgeted_v1_failure(root_program, cause, state)
+        Self::budgeted_v1_failure(root_program, activity_binding, cause, state)
     }
 
     fn budgeted_v1_failure(
         root_program: ProgramId,
+        activity_binding: ActivityBudgetBinding,
         cause: BudgetedV1FailureCause,
         mut state: RuntimeState,
     ) -> Result<BudgetedV1ActivityOutcome, ExecutionError> {
@@ -3163,6 +3353,7 @@ impl Executor {
             ))?;
         Ok(Self::budgeted_v1_failure_with_usage(
             root_program,
+            activity_binding,
             cause,
             usage,
             call_graph,
@@ -3171,12 +3362,14 @@ impl Executor {
 
     fn budgeted_v1_failure_with_usage(
         root_program: ProgramId,
+        activity_binding: ActivityBudgetBinding,
         cause: BudgetedV1FailureCause,
         usage: MeteredUsage,
         call_graph: CallGraph,
     ) -> BudgetedV1ActivityOutcome {
         BudgetedV1ActivityOutcome::Failure(BudgetedV1FailureRecord {
             root_program,
+            activity_binding,
             cause,
             usage,
             call_graph,
@@ -3282,6 +3475,7 @@ mod budgeted_v1_invariant_tests {
         assert_eq!(
             Executor::budgeted_v1_resource(
                 program,
+                ActivityBudgetBinding::new([7; 32]).unwrap_or_else(|error| panic!("binding: {error}")),
                 BudgetMeterRefusal::BudgetExceeded {
                     resource: BudgetResourceKind::Cpu,
                     limit: 3,
@@ -3296,6 +3490,7 @@ mod budgeted_v1_invariant_tests {
         assert_eq!(
             Executor::budgeted_v1_failure(
                 program,
+                ActivityBudgetBinding::new([7; 32]).unwrap_or_else(|error| panic!("binding: {error}")),
                 BudgetedV1FailureCause::Abi(AbiError::CapabilityDenied),
                 isolated_activity_state(),
             ),

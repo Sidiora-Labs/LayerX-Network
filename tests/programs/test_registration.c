@@ -18,6 +18,7 @@ static int registration_contract(void)
     lxp_kernel kernel;
     const lxp_module_iface *current = programs_module_registration();
     const lxp_module_iface *next = programs_module_registration_v2();
+    const lxp_module_iface *sandbox = programs_module_registration_v3();
     const lxp_module_registration *resolved;
     uint64_t parameters = 1U;
     size_t i;
@@ -37,6 +38,14 @@ static int registration_contract(void)
         strcmp(next->name, "programs") != 0 ||
         next->activity_type_count !=
             sizeof(expected_types) / sizeof(expected_types[0]) + 2U)
+        return 1;
+    if (sandbox == NULL || sandbox->module_id != LXP_MODULE_PROGRAMS ||
+        sandbox->abi_version != LX_PROGRAMS_SANDBOX_ABI_VERSION ||
+        strcmp(sandbox->name, "programs") != 0 ||
+        sandbox->activity_type_count !=
+            sizeof(expected_types) / sizeof(expected_types[0]) + 4U ||
+        sandbox->activity_types[sandbox->activity_type_count - 1U] !=
+            LX_PROGRAMS_SANDBOX)
         return 1;
     for (i = 0U; i < current->activity_type_count; ++i)
         if (current->activity_types[i] != expected_types[i] ||
@@ -80,6 +89,13 @@ static int registration_contract(void)
         lxp_module_version_for_epoch(&kernel, LXP_MODULE_PROGRAMS, 1U,
                                      LX_PROGRAMS_ABI_VERSION, &resolved) !=
             LXP_ERR_VERSION_UNSUPPORTED)
+        return 1;
+    if (lxp_kernel_set_epoch(&kernel, 2U) != LXP_OK ||
+        lxp_kernel_register_module(&kernel, sandbox) != LXP_OK ||
+        lxp_kernel_module_for_activity(&kernel, LX_PROGRAMS_SANDBOX, 2U,
+                                       &resolved) != LXP_OK ||
+        resolved->iface != sandbox ||
+        resolved->abi_version != LX_PROGRAMS_SANDBOX_ABI_VERSION)
         return 1;
     return lxp_state_store_destroy(&store) == LXP_OK ? 0 : 1;
 }
