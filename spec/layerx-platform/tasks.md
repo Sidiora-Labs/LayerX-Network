@@ -1391,7 +1391,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Wire generation into the CLI beside build and deploy, and into the SDK build so bindings regenerate as part of an ordinary build.
     - Test round-tripping across every type in the convention and prove a stale binding is refused.
     - _Requirements: 40.2_
-  - [ ] 33.4 Ship a deterministic interpreter program
+  - [ ] 33.4 Ship a deterministic interpreter program — **Implemented - qualification pending**
     - Write an interpreter program executing a bounded, deterministic instruction set submitted as data, so an agent can deploy behaviour without a compiler in the loop.
     - Give the instruction set integer arithmetic, comparison, bounded control flow, storage access through the interpreter's own namespaces, and the ability to stage transfer requests through capabilities the invocation actually granted.
     - Bound every loop and every allocation statically so an interpreted script cannot exceed the budget its caller declared, and refuse an unbounded construct at submission rather than at execution.

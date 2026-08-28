@@ -179,7 +179,8 @@ pub const fn programs_wasm_engine() -> &'static str {
 pub use abi::{
     Abi, AbiCommit, AbiEffects, AbiError, AuthorizationContext, BalanceView, CallFrameId,
     Capability, CapabilitySet, HostFunction, ProgramCall, ProgramEvent, ReceiptOracle,
-    ReceiptView, StorageSelector, TransferRequest, ABI_MODULE, HOST_FUNCTIONS,
+    ReceiptView, StorageSelector, TransferRequest, UnavailableReceiptOracle, ABI_MODULE,
+    HOST_FUNCTIONS,
 };
 pub use abi::manifest::{
     manifest as abi_manifest, ABI_V1_MANIFEST, ABI_V1_MODULE, ABI_V1_VERSION,

@@ -2,6 +2,7 @@
 members = [
     "crates/layerx-programs-registry",
     "crates/layerx-programs-protocol-adapter",
+    "crates/layerx-programs-interpreter",
     "crates/layerx-programs-runtime",
     "fuzz",
     "porting/cosmwasm",

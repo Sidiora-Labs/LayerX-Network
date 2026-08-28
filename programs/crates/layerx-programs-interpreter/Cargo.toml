@@ -1,0 +1,17 @@
+[package]
+name = "layerx-programs-interpreter"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+doctest = false
+
+[dependencies]
+layerx-program-sdk = { path = "../../sdk/rust" }
+
+[lints]
+workspace = true

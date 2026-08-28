@@ -3449,7 +3449,7 @@ reqs = ["40.2"]
 
 [task.33.4]
 title = "Ship a deterministic interpreter program"
-status = "pending"
+status = "implemented"
 wave = 19
 requires = ["31.6"]
 do_1 = "Write an interpreter program executing a bounded, deterministic instruction set submitted as data, so an agent can deploy behaviour without a compiler in the loop."
@@ -3459,7 +3459,7 @@ do_4 = "Give the interpreter no authority the ordinary ABI does not: it is an or
 do_5 = "Freeze the instruction set behind golden vectors and prove determinism across the differential."
 verify_cmd = "make programs-test"
 symbols = ["layerx_programs_interpreter::Interpreter","layerx_programs_interpreter::Instruction"]
-touches = ["programs/crates/layerx-programs-interpreter/src/lib.rs"]
+touches = ["Makefile","programs/Cargo.toml","programs/Cargo.lock","programs/crates/layerx-programs-interpreter/Cargo.toml","programs/crates/layerx-programs-interpreter/src/lib.rs","programs/crates/layerx-programs-interpreter/interface.kvx","programs/crates/layerx-programs-interpreter/layerx-program.json","programs/crates/layerx-programs-interpreter/vectors","programs/crates/layerx-programs-interpreter/tests/conformance.rs","programs/crates/layerx-programs-runtime/src/abi/mod.rs","programs/crates/layerx-programs-runtime/src/lib.rs","programs/crates/layerx-programs-runtime/tests/interpreter_program.rs","spec/layerx-platform/qualification.kvx"]
 reqs = ["40.4"]
 
 [task.33.5]

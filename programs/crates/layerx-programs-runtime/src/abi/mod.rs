@@ -265,6 +265,17 @@ pub trait ReceiptOracle {
     }
 }
 
+/// Fail-closed production receipt boundary for executions whose declared
+/// capability set contains no receipt or balance read authority.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct UnavailableReceiptOracle;
+
+impl ReceiptOracle for UnavailableReceiptOracle {
+    fn verified_receipt(&self, _: [u8; 32]) -> Result<ReceiptView, AbiError> {
+        Err(AbiError::ReceiptMismatch)
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProgramEvent {
     pub program: ProgramId,

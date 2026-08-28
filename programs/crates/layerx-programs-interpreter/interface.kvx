@@ -1,0 +1,22 @@
+[interface]
+schema = 1
+name = "layerx.programs.interpreter"
+version = 1
+abi = 2
+calldata = "magic:'LXSI' || instruction_version:u8 || register_count:u8 || maximum_steps:u16be || code_length:u16be || canonical_code"
+response = "CallResult || interpreted_steps:u32be"
+
+[bounds]
+script_bytes = 4096
+registers = 16
+expanded_steps = 4096
+repeat_depth = 4
+integer = "signed i64, checked arithmetic only"
+allocation = "one fixed 16-register file plus fixed 8-byte storage read buffer"
+
+[instruction.v1]
+opcodes = ["halt=00","constant=01","add=02","subtract=03","multiply=04","divide=05","equal=06","less_than=07","load=08","store=09","delete=0a","transfer_402=0b","repeat=0c"]
+storage = "principal-scoped namespace of this interpreter deployment; keys are canonical bounded SDK StorageKey values and values are exactly one big-endian i64"
+control = "repeat carries a positive u16 count and a length-delimited canonical body; the validator expands all nested work before executing any instruction"
+transfer = "amount is read from a register and passed to the ordinary ABI transfer_402 host function, which enforces the invocation's existing grant"
+authority = "none beyond storage and transfer capabilities explicitly granted to this ordinary program invocation"

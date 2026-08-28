@@ -2609,7 +2609,7 @@ PROGRAMS_CARGO ?= cargo
 PROGRAMS_RUNTIME_LIB := programs/target/debug/liblayerx_programs_runtime.a
 
 .PHONY: programs-build programs-lint programs-test programs-core-test programs-protocol-regression programs-adversarial programs-module-boundaries programs-abi-drift programs-porting-v2-references \
-	programs-fuzz-smoke programs-differential programs-quickstart programs-sdk-rust programs-sdk-c programs-sdk-assemblyscript
+	programs-fuzz-smoke programs-differential programs-interpreter-conformance programs-quickstart programs-sdk-rust programs-sdk-c programs-sdk-assemblyscript
 
 .PHONY: programs-js-install
 programs-js-install:
@@ -2732,8 +2732,12 @@ programs-differential: $(BUILD_DIR)/tests/programs_parallel_differential
 	cd programs && $(PROGRAMS_CARGO) test --locked -p layerx-programs-runtime --test replay --test determinism
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/programs_parallel_differential
 
-programs-test: programs-module-boundaries programs-abi-drift programs-core-test programs-protocol-regression programs-adversarial programs-fuzz-smoke programs-differential programs-sdk-rust programs-sdk-c programs-sdk-assemblyscript programs-porting-v2-references
-	cd programs && $(PROGRAMS_CARGO) test --locked --workspace
+programs-interpreter-conformance:
+	cd programs && $(PROGRAMS_CARGO) build --locked --release --target wasm32-unknown-unknown -p layerx-programs-interpreter
+	cd programs && LAYERX_INTERPRETER_WASM=$$(pwd)/target/wasm32-unknown-unknown/release/layerx_programs_interpreter.wasm $(PROGRAMS_CARGO) test --locked -p layerx-programs-runtime --test interpreter_program
+
+programs-test: programs-module-boundaries programs-abi-drift programs-core-test programs-protocol-regression programs-adversarial programs-fuzz-smoke programs-differential programs-interpreter-conformance programs-sdk-rust programs-sdk-c programs-sdk-assemblyscript programs-porting-v2-references
+	cd programs && LAYERX_INTERPRETER_WASM=$$(pwd)/target/wasm32-unknown-unknown/release/layerx_programs_interpreter.wasm $(PROGRAMS_CARGO) test --locked --workspace
 
 programs-porting-v2-references: $(BUILD_DIR)/tests/programs_call_activity
 	$(PROGRAMS_CARGO) build --locked --manifest-path programs/porting/evm/reference-v2/Cargo.toml --target wasm32-unknown-unknown --release
