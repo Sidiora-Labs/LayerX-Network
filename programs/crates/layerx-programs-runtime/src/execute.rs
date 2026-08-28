@@ -3,7 +3,11 @@
 use core::fmt::{self, Display};
 
 use wasmi::core::{Pages, TrapCode};
-use wasmi::{Extern, Instance, Memory, Store, Value};
+use wasmi::{
+    ExecutionControlKind as WasmiControlKind, ExecutionSnapshot as WasmiExecutionSnapshot,
+    ExecutionTraceValue as WasmiExecutionValue, ExecutionValueType as WasmiExecutionValueType,
+    Extern, Instance, Memory, Store, Value,
+};
 
 use crate::abi::context::ExecutionContext;
 use crate::abi::response::{CallResponse, ResponseRefusal};
@@ -173,6 +177,157 @@ pub struct ProgramInstance {
     validated_code_hash: [u8; 32],
 }
 
+fn commitment_fault(error: crate::CommitmentError) -> ExecutionFault {
+    ExecutionFault::EngineFault {
+        reason: format!("deterministic execution commitment refused: {error}"),
+    }
+}
+
+fn trace_identity(
+    module: &ValidatedModule,
+    entrypoint: &str,
+    inputs: &[u8],
+    runtime_version: u16,
+    abi_version: u16,
+    fee_schedule_version: u32,
+    policy: crate::TracePolicy,
+) -> Result<crate::ExecutionTraceIdentity, ExecutionFault> {
+    let mut input_preimage = b"LXP/program-trace-input/v1\0".to_vec();
+    let entrypoint_length = u32::try_from(entrypoint.len()).map_err(|_| ExecutionFault::EngineFault {
+        reason: "trace entry point length is unrepresentable".to_string(),
+    })?;
+    input_preimage.extend_from_slice(&entrypoint_length.to_be_bytes());
+    input_preimage.extend_from_slice(entrypoint.as_bytes());
+    let input_length = u64::try_from(inputs.len()).map_err(|_| ExecutionFault::EngineFault {
+        reason: "trace input length is unrepresentable".to_string(),
+    })?;
+    input_preimage.extend_from_slice(&input_length.to_be_bytes());
+    input_preimage.extend_from_slice(inputs);
+    let input_digest = crate::hash_bytes(crate::HashAlgorithm::Sha256, &input_preimage)
+        .map_err(|error| ExecutionFault::EngineFault { reason: error.to_string() })?;
+    let mut parameters = b"LXP/program-trace-parameters/v1\0".to_vec();
+    parameters.extend_from_slice(&runtime_version.to_be_bytes());
+    parameters.extend_from_slice(&abi_version.to_be_bytes());
+    parameters.extend_from_slice(&fee_schedule_version.to_be_bytes());
+    parameters.extend_from_slice(&module.metering_schedule_version().to_be_bytes());
+    parameters.extend_from_slice(&policy.canonical_bytes());
+    let execution_parameters_digest = crate::hash_bytes(crate::HashAlgorithm::Sha256, &parameters)
+        .map_err(|error| ExecutionFault::EngineFault { reason: error.to_string() })?;
+    Ok(crate::ExecutionTraceIdentity {
+        module_code_hash: module.code_hash(),
+        input_digest,
+        execution_parameters_digest,
+    })
+}
+
+fn canonical_trace_bytes(trace: &crate::ExecutionTrace) -> Vec<u8> {
+    let commitments = trace.commitments();
+    let mut bytes = Vec::with_capacity(32_usize.saturating_add(commitments.len().saturating_mul(52)));
+    bytes.extend_from_slice(&crate::STEP_COMMITMENT_VERSION.to_be_bytes());
+    bytes.extend_from_slice(&trace.policy().canonical_bytes());
+    bytes.extend_from_slice(&(commitments.len() as u32).to_be_bytes());
+    for commitment in commitments {
+        bytes.extend_from_slice(&commitment.step_index.to_be_bytes());
+        bytes.extend_from_slice(&commitment.digest);
+        bytes.extend_from_slice(&commitment.encoded_state_bytes.to_be_bytes());
+        bytes.extend_from_slice(&commitment.commitment_fuel.to_be_bytes());
+    }
+    bytes.extend_from_slice(&trace.total_commitment_fuel().to_be_bytes());
+    bytes.extend_from_slice(&trace.total_state_bytes().to_be_bytes());
+    bytes
+}
+
+fn canonical_wasm_arguments(args: &[WasmValue]) -> Vec<u8> {
+    let mut encoded = Vec::with_capacity(8_usize.saturating_add(args.len().saturating_mul(9)));
+    encoded.extend_from_slice(&(args.len() as u64).to_be_bytes());
+    for argument in args {
+        match argument {
+            WasmValue::I32(value) => {
+                encoded.push(0);
+                encoded.extend_from_slice(&value.to_be_bytes());
+            }
+            WasmValue::I64(value) => {
+                encoded.push(1);
+                encoded.extend_from_slice(&value.to_be_bytes());
+            }
+        }
+    }
+    encoded
+}
+
+fn execution_value(value: WasmiExecutionValue) -> crate::ExecutionValue {
+    match value.value_type {
+        WasmiExecutionValueType::I32 => crate::ExecutionValue::I32(value.bits as u32 as i32),
+        WasmiExecutionValueType::I64 => crate::ExecutionValue::I64(value.bits as i64),
+    }
+}
+
+fn execution_state_from_snapshot(
+    snapshot: &WasmiExecutionSnapshot,
+    identity: crate::ExecutionTraceIdentity,
+) -> Result<crate::ExecutionState, ExecutionFault> {
+    let usage = &snapshot.supplement.authoritative_usage;
+    let mut storage_overlay = Vec::with_capacity(snapshot.supplement.storage_overlay.len());
+    let mut previous_key: Option<&[u8]> = None;
+    for (key, value) in &snapshot.supplement.storage_overlay {
+        if key.is_empty() || previous_key.is_some_and(|previous| previous >= key.as_slice()) {
+            return Err(ExecutionFault::EngineFault {
+                reason: "deterministic execution storage overlay is not canonically ordered".to_string(),
+            });
+        }
+        previous_key = Some(key);
+        storage_overlay.push(match value {
+            Some(value) => crate::StorageOverlayEntry::Write {
+                key: key.clone(),
+                value: value.clone(),
+            },
+            None => crate::StorageOverlayEntry::Delete { key: key.clone() },
+        });
+    }
+    Ok(crate::ExecutionState {
+        module_code_hash: identity.module_code_hash,
+        input_digest: identity.input_digest,
+        execution_parameters_digest: identity.execution_parameters_digest,
+        step_index: snapshot.step_index,
+        program_counter: snapshot.program_counter,
+        value_stack: snapshot.value_stack.iter().copied().map(execution_value).collect(),
+        call_frames: snapshot.call_frames.iter().map(|frame| crate::ExecutionFrame {
+            function_index: frame.function_index,
+            return_program_counter: frame.return_program_counter,
+            locals: frame.locals.iter().copied().map(execution_value).collect(),
+        }).collect(),
+        control_stack: snapshot.control_stack.iter().map(|frame| crate::ExecutionControlFrame {
+            kind: match frame.kind {
+                WasmiControlKind::Block => 0,
+                WasmiControlKind::If => 1,
+                WasmiControlKind::Else => 2,
+                WasmiControlKind::Loop => 3,
+            },
+            operand_stack_height: frame.operand_stack_height,
+            unreachable: frame.unreachable,
+        }).collect(),
+        linear_memory: snapshot.linear_memory.clone(),
+        globals: snapshot.globals.iter().map(|global| crate::ExecutionGlobal {
+            global_index: global.global_index,
+            mutable: global.mutable,
+            value: execution_value(global.value),
+        }).collect(),
+        storage_overlay,
+        fuel_remaining: snapshot.supplement.authoritative_fuel,
+        metered_usage: MeteredUsage {
+            cpu_fuel: usage.cpu_fuel,
+            memory_bytes: usage.memory_bytes,
+            storage_read_bytes: usage.storage_read_bytes,
+            storage_write_bytes: usage.storage_write_bytes,
+            output_values: usage.output_values,
+            output_bytes: usage.output_bytes,
+            occupancy_byte_batches: usage.occupancy_byte_batches,
+            occupancy_fee_units: usage.occupancy_fee_units,
+            fee_units: usage.fee_units,
+        },
+    })
+}
+
 impl ProgramInstance {
     pub(crate) const fn new(store: Store<RuntimeState>, instance: Instance) -> Self {
         Self { store, instance, resumable_globals: None, validated_code_hash: [0; 32] }
@@ -209,6 +364,118 @@ impl ProgramInstance {
         })?.adopt_storage(storage);
         state.set_meter(meter);
         Ok(())
+    }
+
+    pub(crate) fn enable_execution_trace(
+        &mut self,
+        policy: crate::TracePolicy,
+    ) -> Result<(), ExecutionFault> {
+        let maximum_snapshots = usize::try_from(policy.maximum_commitments())
+            .ok()
+            .ok_or_else(|| ExecutionFault::EngineFault {
+                reason: "execution trace snapshot bound overflowed".to_string(),
+            })?;
+        self.store.enable_execution_observer_with_limits(
+            policy.interval(),
+            maximum_snapshots,
+            crate::MAX_TRACE_STATE_BYTES,
+            crate::MAX_TRACE_STATE_BYTES,
+        );
+        self.store.set_execution_supplement(RuntimeState::execution_supplement);
+        Ok(())
+    }
+
+    pub(crate) fn take_execution_trace(
+        &mut self,
+        policy: crate::TracePolicy,
+        identity: crate::ExecutionTraceIdentity,
+    ) -> Result<crate::ExecutionTrace, ExecutionFault> {
+        if let Some(error) = self.store.execution_observer_error() {
+            return Err(ExecutionFault::EngineFault {
+                reason: format!("deterministic execution observer refused: {error:?}"),
+            });
+        }
+        let transitions = self.store.take_execution_transitions();
+        let mut retained_snapshot_bytes = 0_u64;
+        let mut maximum_encoding_bytes = 0_u64;
+        let mut previous_post: Option<&std::sync::Arc<wasmi::ExecutionSnapshot>> = None;
+        for transition in &transitions {
+            if previous_post.map_or(true, |post| !std::sync::Arc::ptr_eq(post, &transition.pre)) {
+                let state_bytes = transition.pre.supplement.canonical_state_bytes;
+                retained_snapshot_bytes = retained_snapshot_bytes.checked_add(state_bytes)
+                    .and_then(|bytes| bytes.checked_add(u64::try_from(transition.pre.canonical_instruction.len()).ok()?))
+                    .ok_or_else(|| ExecutionFault::EngineFault { reason: "execution trace peak-byte accounting overflowed".to_string() })?;
+                maximum_encoding_bytes = maximum_encoding_bytes.max(state_bytes);
+            }
+            let state_bytes = transition.post.supplement.canonical_state_bytes;
+            retained_snapshot_bytes = retained_snapshot_bytes.checked_add(state_bytes)
+                .and_then(|bytes| bytes.checked_add(u64::try_from(transition.post.canonical_instruction.len()).ok()?))
+                .ok_or_else(|| ExecutionFault::EngineFault { reason: "execution trace peak-byte accounting overflowed".to_string() })?;
+            maximum_encoding_bytes = maximum_encoding_bytes.max(state_bytes);
+            previous_post = Some(&transition.post);
+        }
+        let peak_bytes = retained_snapshot_bytes.checked_mul(2)
+            .and_then(|bytes| bytes.checked_add(maximum_encoding_bytes))
+            .ok_or_else(|| ExecutionFault::EngineFault { reason: "execution trace peak-byte accounting overflowed".to_string() })?;
+        if peak_bytes > crate::MAX_TRACE_STATE_BYTES {
+            return Err(ExecutionFault::EngineFault {
+                reason: format!("execution trace peak retained bytes {peak_bytes} exceed {}", crate::MAX_TRACE_STATE_BYTES),
+            });
+        }
+        let mut trace = crate::ExecutionTrace::new(policy);
+        let mut last_recorded_step = None;
+        let mut last_state: Option<std::sync::Arc<crate::ExecutionState>> = None;
+        let mut last_snapshot: Option<std::sync::Arc<wasmi::ExecutionSnapshot>> = None;
+        for transition in transitions {
+            let pre_state = match (&last_snapshot, &last_state) {
+                (Some(snapshot), Some(state)) if std::sync::Arc::ptr_eq(snapshot, &transition.pre) => std::sync::Arc::clone(state),
+                _ => std::sync::Arc::new(execution_state_from_snapshot(&transition.pre, identity)?),
+            };
+            let post_state = std::sync::Arc::new(execution_state_from_snapshot(&transition.post, identity)?);
+            let pre_commitment = crate::StepCommitment::from_state(pre_state.as_ref())
+                .map_err(commitment_fault)?;
+            let post_commitment = crate::StepCommitment::from_state(post_state.as_ref())
+                .map_err(commitment_fault)?;
+            for (snapshot, commitment) in [
+                (transition.pre.as_ref(), pre_commitment),
+                (transition.post.as_ref(), post_commitment),
+            ] {
+                if u64::from(commitment.encoded_state_bytes) != snapshot.supplement.canonical_state_bytes
+                    || commitment.commitment_fuel != snapshot.supplement.commitment_fuel
+                {
+                    return Err(ExecutionFault::EngineFault {
+                        reason: "preauthorized execution commitment accounting diverged from canonical state".to_string(),
+                    });
+                }
+                if last_recorded_step != Some(commitment.step_index) {
+                    trace.record_commitment(commitment).map_err(commitment_fault)?;
+                    last_recorded_step = Some(commitment.step_index);
+                }
+            }
+            last_state = Some(std::sync::Arc::clone(&post_state));
+            last_snapshot = Some(std::sync::Arc::clone(&transition.post));
+            trace.record_step(crate::ExecutionStep {
+                instruction: transition.pre.canonical_instruction.clone(),
+                instruction_fuel: transition.pre.instruction_fuel,
+                memory_expansion_bytes: transition.memory_expansion_bytes,
+                pre_state,
+                post_state,
+                pre_commitment,
+                post_commitment,
+            }).map_err(commitment_fault)?;
+        }
+        Ok(trace)
+    }
+
+    pub(crate) fn execution_observer_fault(&self) -> Option<ExecutionFault> {
+        self.store.execution_observer_error().map(|error| {
+            self.store.data().meter().exhaustion().map_or_else(
+                || ExecutionFault::EngineFault {
+                    reason: format!("deterministic execution observer refused: {error:?}"),
+                },
+                |refusal| ExecutionFault::Resource { refusal },
+            )
+        })
     }
 
     /// Reconciles trailing legacy Wasmi guest-instruction fuel into the meter.
@@ -457,6 +724,36 @@ pub struct ExecutionRecord {
     pub outputs: Vec<WasmValue>,
     /// Exact deterministic resource use and fee units.
     pub usage: MeteredUsage,
+    /// Receipt-bound deterministic trace when the executor declared a policy.
+    pub trace: Option<crate::ExecutionTrace>,
+}
+
+/// Ordinary execution together with its receipt-bindable deterministic step evidence.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TracedExecutionRecord {
+    pub execution: ExecutionRecord,
+    pub trace: crate::ExecutionTrace,
+}
+
+impl TracedExecutionRecord {
+    /// Canonical receipt evidence binding the ordinary result and declared trace policy.
+    pub fn canonical_evidence(&self) -> Result<Vec<u8>, crate::CommitmentError> {
+        let execution = self.execution.canonical_evidence();
+        let trace = self.trace.canonical_bytes()?;
+        let mut evidence = Vec::with_capacity(
+            32_usize.saturating_add(execution.len()).saturating_add(trace.len()),
+        );
+        evidence.extend_from_slice(b"LXP/program-traced-execution/v1\0");
+        let execution_length = u32::try_from(execution.len())
+            .map_err(|_| crate::CommitmentError::LengthOutOfRange { bytes: execution.len() })?;
+        evidence.extend_from_slice(&execution_length.to_be_bytes());
+        evidence.extend_from_slice(&execution);
+        let trace_length = u32::try_from(trace.len())
+            .map_err(|_| crate::CommitmentError::LengthOutOfRange { bytes: trace.len() })?;
+        evidence.extend_from_slice(&trace_length.to_be_bytes());
+        evidence.extend_from_slice(&trace);
+        Ok(evidence)
+    }
 }
 
 /// Successful authorized execution plus effects awaiting the kernel's atomic
@@ -841,6 +1138,7 @@ pub struct CandidateActivityReceipt {
     metering_schedule_version: u32,
     usage: MeteredUsage,
     graph_evidence: Vec<u8>,
+    trace_evidence: Option<Vec<u8>>,
     outcome: CandidateReceiptOutcome,
 }
 
@@ -861,6 +1159,7 @@ pub struct CandidateExecutionRecord {
     metering_schedule_version: u32,
     outputs: Vec<WasmValue>,
     usage: MeteredUsage,
+    trace: Option<crate::ExecutionTrace>,
 }
 
 /// Frozen ABI-v2 execution and receipt vocabulary. The candidate spellings
@@ -910,6 +1209,7 @@ impl CandidateAuthorizedExecutionRecord {
             metering_schedule_version: self.execution.metering_schedule_version,
             usage: self.execution.usage,
             graph_evidence: self.call_graph.canonical_evidence(),
+            trace_evidence: self.execution.trace.as_ref().map(canonical_trace_bytes),
             outcome: match &self.outcome {
                 CandidateActivityOutcome::Success { response, .. } => {
                     CandidateReceiptOutcome::Success(response.clone())
@@ -959,7 +1259,7 @@ impl CandidateAuthorizedExecutionRecord {
 
     #[must_use]
     pub fn canonical_evidence(&self) -> Vec<u8> {
-        let mut evidence = b"LXP/program-execution/v3\0".to_vec();
+        let mut evidence = b"LXP/program-execution/v4\0".to_vec();
         evidence.extend_from_slice(&self.execution.runtime_version.to_be_bytes());
         evidence.extend_from_slice(&self.execution.fee_schedule_version.to_be_bytes());
         evidence.extend_from_slice(&self.execution.metering_schedule_version.to_be_bytes());
@@ -983,6 +1283,15 @@ impl CandidateAuthorizedExecutionRecord {
         evidence.extend_from_slice(&self.execution.usage.output_values.to_be_bytes());
         evidence.extend_from_slice(&self.execution.usage.output_bytes.to_be_bytes());
         evidence.extend_from_slice(&self.execution.usage.fee_units.to_be_bytes());
+        match &self.execution.trace {
+            Some(trace) => {
+                evidence.push(1);
+                let trace = canonical_trace_bytes(trace);
+                evidence.extend_from_slice(&(trace.len() as u64).to_be_bytes());
+                evidence.extend_from_slice(&trace);
+            }
+            None => evidence.push(0),
+        }
         evidence.extend_from_slice(&self.root_program.bytes());
         let abi_revision = match self.abi_revision {
             AbiRevision::V1 => crate::abi::manifest::ABI_V1_VERSION,
@@ -1039,16 +1348,24 @@ impl CandidateExecutionRecord {
     pub const fn usage(&self) -> MeteredUsage {
         self.usage
     }
+
+    #[must_use]
+    pub const fn trace(&self) -> Option<&crate::ExecutionTrace> {
+        self.trace.as_ref()
+    }
 }
 
 impl CandidateActivityReceipt {
-    const DOMAIN: &'static [u8] = b"LXP/program-activity-receipt/v3\0";
+    const DOMAIN: &'static [u8] = b"LXP/program-activity-receipt/v4\0";
+    const LEGACY_V3_DOMAIN: &'static [u8] = b"LXP/program-activity-receipt/v3\0";
     const LEGACY_V2_DOMAIN: &'static [u8] = b"LXP/program-activity-receipt/v2\0";
     const MAX_GRAPH_EVIDENCE_BYTES: usize = b"LayerX/programs/call-graph/v1\0".len()
         + 32
         + 16
         + 8
         + (crate::calls::DEFAULT_MAX_CALL_GRAPH_EDGES as usize * 68);
+    const MAX_TRACE_EVIDENCE_BYTES: usize = 34
+        + (crate::MAX_TRACE_COMMITMENTS * 52);
 
     #[must_use]
     pub const fn root_program(&self) -> ProgramId {
@@ -1086,6 +1403,12 @@ impl CandidateActivityReceipt {
         &self.graph_evidence
     }
 
+
+    #[must_use]
+    pub fn trace_evidence(&self) -> Option<&[u8]> {
+        self.trace_evidence.as_deref()
+    }
+
     #[must_use]
     pub const fn outcome(&self) -> &CandidateReceiptOutcome {
         &self.outcome
@@ -1116,6 +1439,14 @@ impl CandidateActivityReceipt {
                 .to_be_bytes(),
         );
         encoded.extend_from_slice(&self.graph_evidence);
+        match &self.trace_evidence {
+            Some(trace) => {
+                encoded.push(1);
+                encoded.extend_from_slice(&(trace.len() as u32).to_be_bytes());
+                encoded.extend_from_slice(trace);
+            }
+            None => encoded.push(0),
+        }
         match &self.outcome {
             CandidateReceiptOutcome::Success(response) => {
                 encoded.push(0);
@@ -1155,7 +1486,8 @@ impl CandidateActivityReceipt {
         let mut cursor = ReceiptCursor::new(encoded);
         let domain = cursor.take(Self::DOMAIN.len())?;
         let legacy_v2 = domain == Self::LEGACY_V2_DOMAIN;
-        if domain != Self::DOMAIN && !legacy_v2 {
+        let legacy_v3 = domain == Self::LEGACY_V3_DOMAIN;
+        if domain != Self::DOMAIN && !legacy_v2 && !legacy_v3 {
             return Err(Error::Malformed);
         }
         let root_program =
@@ -1190,6 +1522,18 @@ impl CandidateActivityReceipt {
             return Err(Error::Malformed);
         }
         let graph_evidence = cursor.take(graph_length)?.to_vec();
+        let trace_evidence = if legacy_v2 || legacy_v3 {
+            None
+        } else {
+            match cursor.take(1)?[0] {
+                0 => None,
+                1 => {
+                    let length = u32::from_be_bytes(cursor.array()?) as usize;
+                    Some(cursor.take(length)?.to_vec())
+                }
+                _ => return Err(Error::Malformed),
+            }
+        };
         let tag = cursor.take(1)?[0];
         let outcome = match tag {
             0 => {
@@ -1198,6 +1542,9 @@ impl CandidateActivityReceipt {
                     return Err(Error::Malformed);
                 }
                 let length = u32::from_be_bytes(cursor.array()?) as usize;
+                if length > Self::MAX_TRACE_EVIDENCE_BYTES {
+                    return Err(Error::Malformed);
+                }
                 if length > crate::MAX_CALL_RESPONSE_BYTES {
                     return Err(Error::Malformed);
                 }
@@ -1226,6 +1573,7 @@ impl CandidateActivityReceipt {
             metering_schedule_version,
             usage,
             graph_evidence,
+            trace_evidence,
             outcome,
         })
     }
@@ -1439,7 +1787,11 @@ impl ExecutionRecord {
     #[must_use]
     pub fn canonical_evidence(&self) -> Vec<u8> {
         let mut evidence = Vec::with_capacity(64 + self.outputs.len().saturating_mul(9));
-        evidence.extend_from_slice(b"LXP/program-execution/v2\0");
+        evidence.extend_from_slice(if self.trace.is_some() {
+            b"LXP/program-execution/v3\0"
+        } else {
+            b"LXP/program-execution/v2\0"
+        });
         evidence.extend_from_slice(&self.runtime_version.to_be_bytes());
         evidence.extend_from_slice(&self.abi_version.to_be_bytes());
         evidence.extend_from_slice(&self.metering_schedule_version.to_be_bytes());
@@ -1466,6 +1818,15 @@ impl ExecutionRecord {
         evidence.extend_from_slice(&self.usage.storage_write_bytes.to_be_bytes());
         evidence.extend_from_slice(&self.usage.output_values.to_be_bytes());
         evidence.extend_from_slice(&self.usage.fee_units.to_be_bytes());
+        match &self.trace {
+            Some(trace) => {
+                evidence.push(1);
+                let trace = canonical_trace_bytes(trace);
+                evidence.extend_from_slice(&(trace.len() as u64).to_be_bytes());
+                evidence.extend_from_slice(&trace);
+            }
+            None => {}
+        }
         evidence
     }
 }
@@ -1519,6 +1880,7 @@ pub struct Executor {
     prices: FeeSchedule,
     runtime_version: u16,
     abi_version: u16,
+    trace_policy: Option<crate::TracePolicy>,
 }
 
 impl Executor {
@@ -1530,6 +1892,7 @@ impl Executor {
             prices,
             runtime_version: RUNTIME_VERSION,
             abi_version: crate::abi::manifest::ABI_V1_VERSION,
+            trace_policy: None,
         }
     }
 
@@ -1539,11 +1902,22 @@ impl Executor {
         runtime_version: u16,
         abi_version: u16,
     ) -> Self {
-        Self { budget, prices, runtime_version, abi_version }
+        Self { budget, prices, runtime_version, abi_version, trace_policy: None }
     }
 
     pub(crate) const fn for_abi(self, abi_version: u16) -> Self {
         Self { abi_version, ..self }
+    }
+
+    /// Declares the receipt-recorded deterministic execution trace policy.
+    #[must_use]
+    pub const fn with_trace_policy(self, trace_policy: crate::TracePolicy) -> Self {
+        Self { trace_policy: Some(trace_policy), ..self }
+    }
+
+    #[must_use]
+    pub const fn trace_policy(&self) -> Option<crate::TracePolicy> {
+        self.trace_policy
     }
 
     fn selected_revision(&self) -> Result<AbiRevision, ExecutionError> {
@@ -1698,9 +2072,26 @@ impl Executor {
         let mut instance = module
             .instantiate_metered(meter)
             .map_err(|(fault, exhausted)| self.classify_fault(fault, exhausted))?;
+        let identity = self.trace_policy.map(|policy| {
+            trace_identity(
+                module,
+                export,
+                &canonical_wasm_arguments(args),
+                self.runtime_version,
+                self.abi_version,
+                self.prices.version(),
+                policy,
+            )
+        }).transpose().map_err(ExecutionError::Fault)?;
+        if let Some(policy) = self.trace_policy {
+            instance.enable_execution_trace(policy).map_err(ExecutionError::Fault)?;
+        }
         let outputs = match instance.call(export, args) {
             Ok(outputs) => outputs,
             Err(fault) => {
+                if let Some(observer) = instance.execution_observer_fault() {
+                    return Err(ExecutionError::Fault(observer));
+                }
                 return Err(self.classify_fault(fault, instance.meter().exhaustion()));
             }
         };
@@ -1708,12 +2099,47 @@ impl Executor {
             .meter()
             .finish()
             .map_err(ExecutionError::Resource)?;
+        let trace = match (self.trace_policy, identity) {
+            (Some(policy), Some(identity)) => Some(
+                instance.take_execution_trace(policy, identity).map_err(ExecutionError::Fault)?,
+            ),
+            (None, None) => None,
+            _ => return Err(ExecutionError::Fault(ExecutionFault::EngineFault {
+                reason: "execution trace identity and policy diverged".to_string(),
+            })),
+        };
         Ok(ExecutionRecord {
             runtime_version: self.runtime_version,
             abi_version: self.abi_version,
             metering_schedule_version: module.metering_schedule_version(),
             outputs,
             usage,
+            trace,
+        })
+    }
+
+    /// Executes an ordinary validated call while retaining exact per-step evidence.
+    ///
+    /// The configured policy is part of the returned trace. Observation or state
+    /// conversion failures refuse the call instead of returning partial evidence.
+    pub fn execute_traced(
+        &self,
+        module: &ValidatedModule,
+        export: &str,
+        args: &[WasmValue],
+    ) -> Result<TracedExecutionRecord, ExecutionError> {
+        self.trace_policy.ok_or_else(|| ExecutionError::Fault(
+            ExecutionFault::EngineFault {
+                reason: "deterministic execution trace policy is not configured".to_string(),
+            },
+        ))?;
+        let execution = self.execute(module, export, args)?;
+        let trace = execution.trace.clone().ok_or_else(|| ExecutionError::Fault(
+            ExecutionFault::EngineFault { reason: "configured trace was not recorded".to_string() },
+        ))?;
+        Ok(TracedExecutionRecord {
+            execution,
+            trace,
         })
     }
 
@@ -1756,9 +2182,24 @@ impl Executor {
             .module
             .instantiate_composed(meter, abi, composition)
             .map_err(|(fault, exhausted)| self.classify_fault(fault, exhausted))?;
+        let identity = self.trace_policy.map(|policy| trace_identity(
+            request.module,
+            request.entrypoint,
+            request.calldata,
+            self.runtime_version,
+            self.abi_version,
+            self.prices.version(),
+            policy,
+        )).transpose().map_err(ExecutionError::Fault)?;
+        if let Some(policy) = self.trace_policy {
+            instance.enable_execution_trace(policy).map_err(ExecutionError::Fault)?;
+        }
         let code = match entrypoint::invoke(&mut instance, request.entrypoint, request.calldata) {
             Ok(code) => code,
             Err(EntrypointRefusal::Fault(fault)) => {
+                if let Some(observer) = instance.execution_observer_fault() {
+                    return Err(ExecutionError::Fault(observer));
+                }
                 if let Some(refusal) = instance.state().refusal() {
                     return Err(ExecutionError::Composition(refusal.clone()));
                 }
@@ -1773,10 +2214,22 @@ impl Executor {
             }
             Err(refusal) => return Err(ExecutionError::Entrypoint(refusal)),
         };
+        if let Some(observer) = instance.execution_observer_fault() {
+            return Err(ExecutionError::Fault(observer));
+        }
         let usage = instance
             .meter()
             .finish()
             .map_err(ExecutionError::Resource)?;
+        let trace = match (self.trace_policy, identity) {
+            (Some(policy), Some(identity)) => Some(
+                instance.take_execution_trace(policy, identity).map_err(ExecutionError::Fault)?,
+            ),
+            (None, None) => None,
+            _ => return Err(ExecutionError::Fault(ExecutionFault::EngineFault {
+                reason: "execution trace identity and policy diverged".to_string(),
+            })),
+        };
         let (_, abi, composition) = instance.into_state().into_parts();
         let committed = abi
             .ok_or(ExecutionError::Abi(AbiError::CapabilityDenied))?
@@ -1794,6 +2247,7 @@ impl Executor {
                 metering_schedule_version: request.module.metering_schedule_version(),
                 outputs: vec![WasmValue::I32(code)],
                 usage,
+                trace,
             },
             effects: committed.effects,
             call_graph,
@@ -1958,9 +2412,24 @@ impl Executor {
                     ));
                 }
             };
+        let identity = self.trace_policy.map(|policy| trace_identity(
+            request.module,
+            request.entrypoint,
+            request.calldata,
+            self.runtime_version,
+            self.abi_version,
+            self.prices.version(),
+            policy,
+        )).transpose().map_err(ExecutionError::Fault)?;
+        if let Some(policy) = self.trace_policy {
+            instance.enable_execution_trace(policy).map_err(ExecutionError::Fault)?;
+        }
         let code = match entrypoint::invoke(&mut instance, request.entrypoint, request.calldata) {
             Ok(code) => code,
             Err(refusal) => {
+                if let Some(observer) = instance.execution_observer_fault() {
+                    return Err(ExecutionError::Fault(observer));
+                }
                 let exhaustion = instance.meter().budget_exhaustion();
                 let carried = instance.state().refusal().cloned();
                 let carried_resource = carried
@@ -2013,6 +2482,9 @@ impl Executor {
                 }
             }
         };
+        if let Some(observer) = instance.execution_observer_fault() {
+            return Err(ExecutionError::Fault(observer));
+        }
         if let Some(resource) = instance.meter().budget_exhaustion() {
             return Self::budgeted_v1_resource(request.program, resource, instance.into_state());
         }
@@ -2028,6 +2500,15 @@ impl Executor {
         let usage = match instance.meter().finish() {
             Ok(usage) => usage,
             Err(resource) => return Err(ExecutionError::Resource(resource)),
+        };
+        let trace = match (self.trace_policy, identity) {
+            (Some(policy), Some(identity)) => Some(
+                instance.take_execution_trace(policy, identity).map_err(ExecutionError::Fault)?,
+            ),
+            (None, None) => None,
+            _ => return Err(ExecutionError::Fault(ExecutionFault::EngineFault {
+                reason: "execution trace identity and policy diverged".to_string(),
+            })),
         };
         let (_, abi, composition) = instance.into_state().into_parts();
         let abi = abi.ok_or(ExecutionError::Abi(AbiError::CapabilityDenied))?;
@@ -2045,6 +2526,7 @@ impl Executor {
                     metering_schedule_version: request.module.metering_schedule_version(),
                     outputs: vec![WasmValue::I32(code)],
                     usage,
+                    trace,
                 },
                 effects: committed.effects,
                 call_graph,
@@ -2226,17 +2708,42 @@ impl Executor {
                 );
             }
         };
+        let identity = self.trace_policy.map(|policy| trace_identity(
+            request.module,
+            request.entrypoint,
+            request.calldata,
+            self.runtime_version,
+            self.abi_version,
+            self.prices.version(),
+            policy,
+        )).transpose().map_err(ExecutionError::Fault)?;
+        if let Some(policy) = self.trace_policy {
+            instance.enable_execution_trace(policy).map_err(ExecutionError::Fault)?;
+        }
         let invocation = entrypoint::invoke(&mut instance, request.entrypoint, request.calldata);
+        if let Some(observer) = instance.execution_observer_fault() {
+            return Err(ExecutionError::Fault(observer));
+        }
         if budgeted {
             if let Some(resource) = instance
                 .meter()
                 .budget_exhaustion()
                 .or_else(|| candidate_composition_budget_refusal(instance.state()))
             {
+                let trace = match (self.trace_policy, identity) {
+                    (Some(policy), Some(identity)) => Some(instance
+                        .take_execution_trace(policy, identity)
+                        .map_err(ExecutionError::Fault)?),
+                    (None, None) => None,
+                    _ => return Err(ExecutionError::Fault(ExecutionFault::EngineFault {
+                        reason: "execution trace identity and policy diverged".to_string(),
+                    })),
+                };
                 return self.candidate_resource_from_state(
                     request.program,
                     resource,
                     instance.into_state(),
+                    trace,
                 );
             }
         }
@@ -2314,10 +2821,20 @@ impl Executor {
                         .budget_exhaustion()
                         .or_else(|| BudgetMeterRefusal::try_from(refusal).ok())
                         .ok_or(ExecutionError::Resource(refusal))?;
+                    let trace = match (self.trace_policy, identity) {
+                        (Some(policy), Some(identity)) => Some(instance
+                            .take_execution_trace(policy, identity)
+                            .map_err(ExecutionError::Fault)?),
+                        (None, None) => None,
+                        _ => return Err(ExecutionError::Fault(ExecutionFault::EngineFault {
+                            reason: "execution trace identity and policy diverged".to_string(),
+                        })),
+                    };
                     return self.candidate_resource_from_state(
                         request.program,
                         refusal,
                         instance.into_state(),
+                        trace,
                     );
                 }
                 if let Some(CompositionRefusal::Program(failure)) = instance.state().refusal() {
@@ -2343,6 +2860,15 @@ impl Executor {
                 .meter()
                 .finish_published_failure()
                 .map_err(ExecutionError::Resource)?;
+            let trace = match (self.trace_policy, identity) {
+                (Some(policy), Some(identity)) => Some(
+                    instance.take_execution_trace(policy, identity).map_err(ExecutionError::Fault)?,
+                ),
+                (None, None) => None,
+                _ => return Err(ExecutionError::Fault(ExecutionFault::EngineFault {
+                    reason: "execution trace identity and policy diverged".to_string(),
+                })),
+            };
             let mut state = instance.into_state();
             let failure_graph = state.take_failure_graph();
             let (_, _, composition) = state.into_parts();
@@ -2360,6 +2886,7 @@ impl Executor {
                     metering_schedule_version: request.module.metering_schedule_version(),
                     outputs: vec![WasmValue::I32(code)],
                     usage,
+                    trace,
                 },
                 outcome: CandidateActivityOutcome::Failure(failure),
                 call_graph,
@@ -2373,10 +2900,20 @@ impl Executor {
                     .budget_exhaustion()
                     .or_else(|| BudgetMeterRefusal::try_from(refusal).ok())
                     .ok_or(ExecutionError::Resource(refusal))?;
+                let trace = match (self.trace_policy, identity) {
+                    (Some(policy), Some(identity)) => Some(instance
+                        .take_execution_trace(policy, identity)
+                        .map_err(ExecutionError::Fault)?),
+                    (None, None) => None,
+                    _ => return Err(ExecutionError::Fault(ExecutionFault::EngineFault {
+                        reason: "execution trace identity and policy diverged".to_string(),
+                    })),
+                };
                 return self.candidate_resource_from_state(
                     request.program,
                     refusal,
                     instance.into_state(),
+                    trace,
                 );
             }
             Err(ResponseRefusal::Meter(refusal)) => return Err(ExecutionError::Resource(refusal)),
@@ -2386,6 +2923,15 @@ impl Executor {
             .meter()
             .finish()
             .map_err(ExecutionError::Resource)?;
+        let trace = match (self.trace_policy, identity) {
+            (Some(policy), Some(identity)) => Some(
+                instance.take_execution_trace(policy, identity).map_err(ExecutionError::Fault)?,
+            ),
+            (None, None) => None,
+            _ => return Err(ExecutionError::Fault(ExecutionFault::EngineFault {
+                reason: "execution trace identity and policy diverged".to_string(),
+            })),
+        };
         let (_, abi, composition) = instance.into_state().into_parts();
         let committed = abi
             .ok_or(ExecutionError::Abi(AbiError::CapabilityDenied))?
@@ -2405,6 +2951,7 @@ impl Executor {
                 metering_schedule_version: request.module.metering_schedule_version(),
                 outputs: vec![WasmValue::I32(code)],
                 usage,
+                trace,
             },
             outcome: CandidateActivityOutcome::Success {
                 response,
@@ -2428,7 +2975,7 @@ impl Executor {
                 .budget_exhaustion()
                 .or_else(|| candidate_composition_budget_refusal(&state))
             {
-                return self.candidate_resource_from_state(program, resource, state);
+                return self.candidate_resource_from_state(program, resource, state, None);
             }
         }
         if let Some(refusal) = state.refusal() {
@@ -2481,6 +3028,7 @@ impl Executor {
                 metering_schedule_version,
                 outputs: vec![WasmValue::I32(CANDIDATE_REFUSAL_SENTINEL)],
                 usage,
+                trace: None,
             },
             outcome: CandidateActivityOutcome::Failure(failure),
             call_graph,
@@ -2492,6 +3040,7 @@ impl Executor {
         program: ProgramId,
         refusal: BudgetMeterRefusal,
         mut state: RuntimeState,
+        trace: Option<crate::ExecutionTrace>,
     ) -> Result<CandidateAuthorizedExecutionRecord, ExecutionError> {
         let usage = state
             .meter()
@@ -2514,6 +3063,7 @@ impl Executor {
                 metering_schedule_version,
                 outputs: Vec::new(),
                 usage,
+                trace,
             },
             outcome: CandidateActivityOutcome::Resource(refusal),
             call_graph,

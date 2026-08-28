@@ -81,6 +81,26 @@ impl StorageNamespace {
         }
         bytes
     }
+
+    pub(crate) fn write_canonical(self, output: &mut [u8; 65]) -> usize {
+        output[..32].copy_from_slice(&self.program().bytes());
+        match self {
+            Self::PrincipalScoped { principal, .. } => {
+                output[32] = PRINCIPAL_SCOPED_TAG;
+                output[33..65].copy_from_slice(&principal.bytes());
+                65
+            }
+            Self::ProgramShared { .. } => {
+                output[32] = PROGRAM_SHARED_TAG;
+                33
+            }
+            Self::ProtocolPrivate { scope, .. } => {
+                output[32] = PROTOCOL_PRIVATE_TAG;
+                output[33..65].copy_from_slice(&scope);
+                65
+            }
+        }
+    }
 }
 
 impl Ord for StorageNamespace {

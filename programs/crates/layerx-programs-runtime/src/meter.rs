@@ -1081,6 +1081,10 @@ impl Meter {
         }
     }
 
+    pub(crate) fn execution_trace_usage(&self) -> Result<MeteredUsage, MeterRefusal> {
+        self.finish_bounded_usage(self.cpu_fuel)
+    }
+
     pub(crate) fn carry_cpu(&mut self, consumed: u64) -> Result<(), MeterRefusal> {
         let attempted = self.counter_add(ResourceKind::Cpu, self.cpu_carried, consumed)?;
         self.admit(ResourceKind::Cpu, self.budget.cpu_fuel, attempted)?;

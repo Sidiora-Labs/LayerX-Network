@@ -3660,7 +3660,7 @@ note = "Code-only lanes: 35.1, 35.4 and 35.7 start independently. Task 35.2 foll
 
 [task.35.1]
 title = "Commit to execution state per step"
-status = "pending"
+status = "implemented"
 wave = 21
 requires = ["32.3"]
 do_1 = "Define a canonical commitment to the complete execution state at a step boundary, covering the instruction pointer, the value stack, the call frames, linear memory, the storage overlay and the fuel remaining."

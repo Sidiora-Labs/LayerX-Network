@@ -1486,7 +1486,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
 
 - [ ] 35. Settle rented compute the platform did not execute, without trusting the provider
   - Code-only lanes: 35.1, 35.4 and 35.7 start independently. Task 35.2 follows 35.1, task 35.5 follows 35.4, task 35.3 follows 35.2, and task 35.6 joins the dispute and marketplace lanes. Task 35.8 is deferred documentation.
-  - [ ] 35.1 Commit to execution state per step
+  - [ ] 35.1 Commit to execution state per step — **Implemented - qualification pending**
     - Define a canonical commitment to the complete execution state at a step boundary, covering the instruction pointer, the value stack, the call frames, linear memory, the storage overlay and the fuel remaining.
     - Make the commitment reproducible by any party from the module, the inputs and the step index alone, with no node-local input reachable in the digest.
     - Emit commitments at declared step intervals during ordinary execution so a recorded run carries its own commitment chain.

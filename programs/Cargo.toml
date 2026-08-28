@@ -39,7 +39,7 @@ version = "0.1.0"
 license = "LicenseRef-Centra-ai-Protocol"
 
 [workspace.dependencies]
-wasmi = "=0.31.2"
+wasmi = { path = "vendor/wasmi-0.31.2", version = "=0.31.2" }
 wasmparser-nostd = "=0.100.2"
 wasm-instrument = { path = "vendor/wasm-instrument", default-features = false, features = ["bulk", "reference_types", "sign_ext"] }
 sha2 = { version = "=0.10.9", default-features = false }

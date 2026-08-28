@@ -261,6 +261,208 @@ pub fn programs_fuzz_targets(target: FuzzTarget, input: &[u8]) {
     let _ = programs_fuzz_observation(target, input);
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TraceRunnerArtifact {
+    platform_identity: Vec<u8>,
+    workload_identity: [u8; 32],
+    executable_identity: [u8; 32],
+    build_manifest_identity: [u8; 32],
+    canonical_evidence: Vec<u8>,
+    attestation_signature: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TraceRunnerTrust {
+    pub platform_identity: Vec<u8>,
+    pub executable_identity: [u8; 32],
+    pub build_manifest_identity: [u8; 32],
+    pub attestation_public_key: [u8; 32],
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TraceRunnerSubmission {
+    pub artifact: TraceRunnerArtifact,
+    pub executable_bytes: Vec<u8>,
+    pub build_manifest_bytes: Vec<u8>,
+}
+
+impl TraceRunnerArtifact {
+    pub fn attach_attestation_signature(mut self, signature: &[u8]) -> Result<Self, String> {
+        if signature.len() != 64 { return Err("trace artifact attestation signature length is invalid".to_string()) }
+        self.attestation_signature.copy_from_slice(signature);
+        Ok(self)
+    }
+
+    pub fn canonical_bytes(&self) -> Result<Vec<u8>, String> {
+        if self.executable_identity == [0; 32] || self.build_manifest_identity == [0; 32]
+            || self.platform_identity.is_empty() || self.attestation_signature.len() != 64 {
+            return Err("trace artifact runner provenance is empty".to_string())
+        }
+        let platform_len = u16::try_from(self.platform_identity.len())
+            .map_err(|_| "trace artifact platform identity exceeds u16".to_string())?;
+        let evidence_len = u64::try_from(self.canonical_evidence.len())
+            .map_err(|_| "trace artifact evidence length exceeds u64".to_string())?;
+        let mut bytes = b"LXP/trace-runner-artifact/v1\0".to_vec();
+        bytes.extend_from_slice(&self.executable_identity);
+        bytes.extend_from_slice(&self.build_manifest_identity);
+        bytes.extend_from_slice(&self.workload_identity);
+        bytes.extend_from_slice(&platform_len.to_be_bytes());
+        bytes.extend_from_slice(&self.platform_identity);
+        bytes.extend_from_slice(&evidence_len.to_be_bytes());
+        bytes.extend_from_slice(&self.canonical_evidence);
+        bytes.extend_from_slice(&self.attestation_signature);
+        Ok(bytes)
+    }
+
+    pub fn from_canonical_bytes(bytes: &[u8]) -> Result<Self, String> {
+        const DOMAIN: &[u8] = b"LXP/trace-runner-artifact/v1\0";
+        let mut cursor = DOMAIN.len();
+        if !bytes.starts_with(DOMAIN) { return Err("trace artifact domain mismatch".to_string()) }
+        let executable_identity = bytes.get(cursor..cursor + 32)
+            .and_then(|value| value.try_into().ok()).ok_or_else(|| "trace artifact executable identity truncated".to_string())?;
+        cursor += 32;
+        let build_manifest_identity = bytes.get(cursor..cursor + 32)
+            .and_then(|value| value.try_into().ok()).ok_or_else(|| "trace artifact build manifest identity truncated".to_string())?;
+        cursor += 32;
+        let workload_identity = bytes.get(cursor..cursor + 32)
+            .and_then(|value| value.try_into().ok()).ok_or_else(|| "trace artifact workload identity truncated".to_string())?;
+        cursor += 32;
+        let platform_len = bytes.get(cursor..cursor + 2)
+            .and_then(|value| value.try_into().ok()).map(u16::from_be_bytes)
+            .ok_or_else(|| "trace artifact platform length truncated".to_string())?;
+        cursor += 2;
+        let platform_end = cursor.checked_add(usize::from(platform_len)).ok_or_else(|| "trace artifact platform length overflow".to_string())?;
+        let platform_identity = bytes.get(cursor..platform_end).ok_or_else(|| "trace artifact platform identity truncated".to_string())?.to_vec();
+        cursor = platform_end;
+        let evidence_len = bytes.get(cursor..cursor + 8)
+            .and_then(|value| value.try_into().ok()).map(u64::from_be_bytes)
+            .and_then(|value| usize::try_from(value).ok())
+            .ok_or_else(|| "trace artifact evidence length invalid".to_string())?;
+        if evidence_len > 128 * 1_024 * 1_024 { return Err("trace artifact evidence exceeds bound".to_string()) }
+        cursor += 8;
+        let evidence_end = cursor.checked_add(evidence_len).ok_or_else(|| "trace artifact evidence length overflow".to_string())?;
+        let canonical_evidence = bytes.get(cursor..evidence_end).ok_or_else(|| "trace artifact evidence truncated".to_string())?.to_vec();
+        let signature_end = evidence_end.checked_add(64).ok_or_else(|| "trace artifact signature overflow".to_string())?;
+        let attestation_signature = bytes.get(evidence_end..signature_end).ok_or_else(|| "trace artifact signature truncated".to_string())?.to_vec();
+        if signature_end != bytes.len() { return Err("trace artifact has trailing bytes".to_string()) }
+        let artifact = Self { platform_identity, workload_identity, executable_identity, build_manifest_identity, canonical_evidence, attestation_signature };
+        artifact.canonical_bytes()?;
+        Ok(artifact)
+    }
+
+    pub fn attestation_digest(&self) -> Result<[u8; 32], String> {
+        let mut unsigned = self.clone();
+        unsigned.attestation_signature = vec![0; 64];
+        let bytes = unsigned.canonical_bytes()?;
+        crate::hash_bytes(crate::HashAlgorithm::Sha256, &bytes[..bytes.len() - 64])
+            .map_err(|error| error.to_string())
+    }
+}
+
+pub fn programs_trace_runner_artifact(
+    platform_identity: &[u8],
+    executable_bytes: &[u8],
+    build_manifest_bytes: &[u8],
+    wasm: &[u8],
+    export: &str,
+    args: &[WasmValue],
+    policy: crate::TracePolicy,
+) -> Result<TraceRunnerArtifact, String> {
+    if platform_identity.is_empty() || executable_bytes.is_empty() || build_manifest_bytes.is_empty() {
+        return Err("trace runner provenance is empty".to_string())
+    }
+    let executable_identity = crate::hash_bytes(crate::HashAlgorithm::Sha256, executable_bytes).map_err(|error| error.to_string())?;
+    let build_manifest_identity = crate::hash_bytes(crate::HashAlgorithm::Sha256, build_manifest_bytes).map_err(|error| error.to_string())?;
+    let mut workload = b"LXP/program-trace-runner-workload/v1\0".to_vec();
+    workload.extend_from_slice(&u64::try_from(wasm.len()).map_err(|_| "trace workload module length exceeds u64".to_string())?.to_be_bytes());
+    workload.extend_from_slice(wasm);
+    workload.extend_from_slice(&u64::try_from(export.len()).map_err(|_| "trace workload export length exceeds u64".to_string())?.to_be_bytes());
+    workload.extend_from_slice(export.as_bytes());
+    workload.extend_from_slice(&u64::try_from(args.len()).map_err(|_| "trace workload argument count exceeds u64".to_string())?.to_be_bytes());
+    for argument in args {
+        match argument {
+            WasmValue::I32(value) => { workload.push(0); workload.extend_from_slice(&value.to_be_bytes()); }
+            WasmValue::I64(value) => { workload.push(1); workload.extend_from_slice(&value.to_be_bytes()); }
+        }
+    }
+    workload.extend_from_slice(&policy.canonical_bytes());
+    workload.extend_from_slice(&crate::RUNTIME_VERSION.to_be_bytes());
+    let workload_identity = crate::hash_bytes(crate::HashAlgorithm::Sha256, &workload)
+        .map_err(|error| error.to_string())?;
+    let result = WasmEngine::declared()
+            .map_err(|error| error.to_string())
+            .and_then(|engine| engine.validate(wasm).map_err(|error| error.to_string()))
+            .and_then(|module| {
+                Executor::declared()
+                    .with_trace_policy(policy)
+                    .execute_traced(&module, export, args)
+                    .map_err(|error| error.to_string())?
+                    .canonical_evidence()
+                    .map_err(|error| error.to_string())
+            });
+    let canonical_evidence = match result {
+            Ok(evidence) => {
+                let mut observed = vec![0];
+                observed.extend_from_slice(&evidence);
+                observed
+            }
+            Err(reason) => {
+                let mut observed = vec![1];
+                observed.extend_from_slice(&(reason.len() as u64).to_be_bytes());
+                observed.extend_from_slice(reason.as_bytes());
+                observed
+            }
+        };
+    Ok(TraceRunnerArtifact {
+        platform_identity: platform_identity.to_vec(),
+        workload_identity,
+        executable_identity,
+        build_manifest_identity,
+        canonical_evidence,
+        attestation_signature: vec![0; 64],
+    })
+}
+
+pub fn programs_trace_differential_gate(
+    first_submission: TraceRunnerSubmission,
+    first_trust: &TraceRunnerTrust,
+    second_submission: TraceRunnerSubmission,
+    second_trust: &TraceRunnerTrust,
+) -> Result<Vec<u8>, DifferentialMismatch> {
+    let first_artifact = first_submission.artifact.clone();
+    let second_artifact = second_submission.artifact.clone();
+    let verify = |artifact: &TraceRunnerArtifact, submission: &TraceRunnerSubmission, trust: &TraceRunnerTrust| {
+        let executable = crate::hash_bytes(crate::HashAlgorithm::Sha256, &submission.executable_bytes).ok();
+        let manifest = crate::hash_bytes(crate::HashAlgorithm::Sha256, &submission.build_manifest_bytes).ok();
+        executable == Some(artifact.executable_identity)
+            && manifest == Some(artifact.build_manifest_identity)
+            && artifact.executable_identity == trust.executable_identity
+            && artifact.build_manifest_identity == trust.build_manifest_identity
+            && artifact.platform_identity == trust.platform_identity
+            && artifact.attestation_digest().ok().is_some_and(|digest| {
+                crate::verify_ed25519(&digest, &trust.attestation_public_key, &artifact.attestation_signature).is_ok()
+            })
+    };
+    let structurally_valid = first_artifact.canonical_bytes().is_ok()
+        && second_artifact.canonical_bytes().is_ok()
+        && verify(&first_artifact, &first_submission, first_trust)
+        && verify(&second_artifact, &second_submission, second_trust);
+    let independent = first_artifact.platform_identity != second_artifact.platform_identity
+        && first_trust.attestation_public_key != second_trust.attestation_public_key;
+    if !structurally_valid || !independent || first_artifact.workload_identity != second_artifact.workload_identity {
+        return Err(DifferentialMismatch {
+            first: first_artifact.canonical_evidence,
+            second: second_artifact.canonical_evidence,
+        });
+    };
+    let first = first_artifact.canonical_evidence;
+    let second = second_artifact.canonical_evidence;
+    if first != second {
+        return Err(DifferentialMismatch { first, second });
+    }
+    Ok(first)
+}
+
 fn differential_observation(
     module: &crate::ValidatedModule,
     export: &str,
@@ -424,6 +626,7 @@ fn success_observation(
                 metering_schedule_version,
                 outputs,
                 usage,
+                trace: None,
             };
             let mut observation = vec![OBSERVE_EXECUTED];
             observation.extend_from_slice(&record.canonical_evidence());

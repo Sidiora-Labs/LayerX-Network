@@ -615,6 +615,29 @@ impl Abi {
         self.storage.clone()
     }
 
+    pub(crate) fn for_each_storage_commitment_entry(
+        &self,
+        visit: impl FnMut(Vec<u8>, &[u8]),
+    ) {
+        self.storage.for_each_commitment_entry(visit);
+    }
+
+
+    pub(crate) fn for_each_storage_commitment_delta(
+        &self,
+        baseline: &Storage,
+        visit: impl FnMut(Vec<u8>, Option<&[u8]>),
+    ) {
+        self.storage.for_each_commitment_delta(baseline, visit);
+    }
+
+    pub(crate) fn storage_commitment_delta_metrics(
+        &self,
+        baseline: &Storage,
+    ) -> Option<(usize, u64)> {
+        self.storage.commitment_delta_metrics(baseline)
+    }
+
     pub(crate) fn adopt_storage(&mut self, storage: Storage) {
         self.storage = storage;
     }

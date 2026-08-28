@@ -27,6 +27,8 @@ pub mod cache;
 #[deny(unsafe_code)]
 pub mod calls;
 #[deny(unsafe_code)]
+pub mod commit;
+#[deny(unsafe_code)]
 pub mod crypto;
 #[deny(unsafe_code)]
 pub mod engine;
@@ -117,6 +119,14 @@ pub use calls::{
     CALL_INPUT_FUEL_PER_BYTE, CALL_RESERVE_EXPORT, DEFAULT_MAX_CALL_FANOUT,
     DEFAULT_MAX_CALL_GRAPH_EDGES, DEFAULT_MAX_COMPOSITION_DEPTH, DEFAULT_MAX_PROGRAM_VISITS,
 };
+pub use commit::{
+    step_commitment_fuel, CommitmentError, ExecutionControlFrame, ExecutionFrame, ExecutionGlobal, ExecutionState,
+    ExecutionStep, ExecutionTrace, ExecutionTraceIdentity, ExecutionValue, StepCommitment,
+    StorageOverlayEntry, TracePolicy,
+    MAX_STEP_INSTRUCTION_BYTES, MAX_STEP_STATE_BYTES, MAX_TRACE_COMMITMENTS,
+    MAX_TRACE_STATE_BYTES, STEP_COMMITMENT_BASE_FUEL,
+    STEP_COMMITMENT_DOMAIN, STEP_COMMITMENT_FUEL_PER_BYTE, STEP_COMMITMENT_VERSION,
+};
 pub use crypto::{hash_bytes, HashAlgorithm};
 pub use engine::{EngineRefusal, WasmEngine};
 pub use entrypoint::EntrypointRefusal;
@@ -128,7 +138,7 @@ pub use execute::{
     ExecutionError, ExecutionFault, ExecutionRecord, Executor, PreparedAuthorizedActivity,
     PreparedAuthorizedActivityOutcome, PreparedMonetarySummary, PreparedTransferLegSummary,
     ProgramInstance, RuntimeContinuation, RuntimeGlobal, SettlementFailure,
-    VerifiedStorageAssignment, WasmValue, RUNTIME_VERSION,
+    TracedExecutionRecord, VerifiedStorageAssignment, WasmValue, RUNTIME_VERSION,
     V2ActivityOutcome, V2ActivityReceipt, V2AuthorizedExecutionRecord,
     V2ExecutionRecord, V2ReceiptOutcome,
 };
@@ -153,9 +163,11 @@ pub use occupancy::{
     MAX_OCCUPANCY_EVIDENCE_BYTES, MAX_OCCUPANCY_LEDGER_BYTES, MAX_OCCUPANCY_POSITIONS,
 };
 pub use qualification::{
-    programs_differential_gate, programs_differential_gate_versioned, programs_fuzz_observation, programs_fuzz_targets,
+    programs_differential_gate, programs_differential_gate_versioned, programs_fuzz_observation,
+    programs_fuzz_targets, programs_trace_differential_gate, programs_trace_runner_artifact,
     replay_recorded_execution, replay_recorded_execution_with_fee_history, DifferentialMismatch,
-    FuzzTarget, RecordedExecution, ReplayRefusal,
+    FuzzTarget, RecordedExecution, ReplayRefusal, TraceRunnerArtifact, TraceRunnerSubmission,
+    TraceRunnerTrust,
 };
 pub use schedule::{
     ConflictGraph, ParallelScheduler, ScheduleAccess, ScheduleError, SchedulePlan,

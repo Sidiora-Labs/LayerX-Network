@@ -1,0 +1,11 @@
+[vector]
+format = "layerx_programs_runtime::TracedExecutionRecord::canonical_evidence"
+source_case = "tests/execution_trace.rs::ordinary_observer_trace_is_the_complete_canonical_record"
+module_factory = "tests/execution_trace.rs::state_rich_module"
+entrypoint = "run"
+arguments = ["i32:7"]
+trace_interval = 3
+maximum_commitments = 256
+expected_outputs = ["i32:18"]
+evidence_hex_status = "qualification-required"
+evidence_hex = ""

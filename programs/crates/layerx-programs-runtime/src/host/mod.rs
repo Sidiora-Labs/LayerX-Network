@@ -11,6 +11,8 @@ mod signature;
 mod storage;
 mod transfer;
 
+use std::collections::BTreeMap;
+
 use wasmi::{Caller, Engine, InstancePre, Linker, Module, Store};
 
 use crate::abi::context::{ContextField, ContextRefusal, ExecutionContext};
@@ -33,6 +35,29 @@ pub(super) const STATUS_EVIDENCE: i32 = -5;
 pub(super) const STATUS_ABSENT: i32 = -7;
 pub(super) const COMPOSITION_REFUSED: &str = "program composition refused the call graph";
 
+fn storage_overlay_entry_bytes(key: &[u8], value: Option<&[u8]>) -> Option<u64> {
+    let key_bytes = u64::try_from(key.len()).ok()?;
+    match value {
+        Some(value) => 9_u64.checked_add(key_bytes)?
+            .checked_add(u64::try_from(value.len()).ok()?),
+        None => 5_u64.checked_add(key_bytes),
+    }
+}
+
+fn wasmi_usage(meter: crate::MeteredUsage) -> wasmi::ExecutionMeteredUsage {
+    wasmi::ExecutionMeteredUsage {
+        cpu_fuel: meter.cpu_fuel,
+        memory_bytes: meter.memory_bytes,
+        storage_read_bytes: meter.storage_read_bytes,
+        storage_write_bytes: meter.storage_write_bytes,
+        output_values: meter.output_values,
+        output_bytes: meter.output_bytes,
+        occupancy_byte_batches: meter.occupancy_byte_batches,
+        occupancy_fee_units: meter.occupancy_fee_units,
+        fee_units: meter.fee_units,
+    }
+}
+
 /// Per-execution host state owned by a `Store`; the shared linker holds none of it.
 #[derive(Debug)]
 pub(crate) struct RuntimeState {
@@ -47,6 +72,7 @@ pub(crate) struct RuntimeState {
     metering_schedule: crate::FuelSchedule,
     legacy_reference_fuel: bool,
     legacy_reference_engine_committed: u64,
+    trace_storage_baseline: crate::storage::Storage,
 }
 
 #[derive(Debug)]
@@ -82,6 +108,82 @@ impl HostLinker {
 }
 
 impl RuntimeState {
+    fn trace_storage_entries(abi: &Abi) -> crate::storage::Storage {
+        abi.storage_snapshot()
+    }
+
+    pub(crate) fn execution_supplement(
+        &mut self,
+        charge: &mut wasmi::ObservationCharge,
+        remaining_bytes: u64,
+        remaining_work: u64,
+    ) -> Result<wasmi::ExecutionSupplement, wasmi::ExecutionObserverError> {
+        if !charge.collect {
+            let meter = self.meter.execution_trace_usage()
+                .map_err(|_| wasmi::ExecutionObserverError::SupplementRejected)?;
+            return Ok(wasmi::ExecutionSupplement {
+                storage_overlay: Vec::new(),
+                authoritative_fuel: self.meter.cpu_remaining(),
+                authoritative_usage: wasmi_usage(meter),
+                canonical_state_bytes: 0,
+                commitment_fuel: 0,
+            });
+        }
+        let (overlay_entries, overlay_bytes) = if let Some(abi) = self.abi.as_ref() {
+            abi.storage_commitment_delta_metrics(&self.trace_storage_baseline)
+                .ok_or(wasmi::ExecutionObserverError::SupplementRejected)?
+        } else {
+            crate::storage::Storage::new().commitment_delta_metrics(&self.trace_storage_baseline)
+                .ok_or(wasmi::ExecutionObserverError::SupplementRejected)?
+        };
+        charge.storage_overlay_bytes = overlay_bytes;
+        let retained_instruction_bytes = charge.retained_instruction_bytes;
+        let engine_bytes = charge.total_bytes()
+            .and_then(|bytes| bytes.checked_sub(retained_instruction_bytes))
+            .ok_or(wasmi::ExecutionObserverError::SupplementRejected)?;
+        let snapshot_bytes = 214_u64.checked_add(engine_bytes)
+            .ok_or(wasmi::ExecutionObserverError::SupplementRejected)?;
+        let retained_bytes = snapshot_bytes.checked_add(retained_instruction_bytes)
+            .ok_or(wasmi::ExecutionObserverError::SupplementRejected)?;
+        if retained_bytes > remaining_bytes || retained_bytes > remaining_work {
+            return Err(wasmi::ExecutionObserverError::SnapshotLimitExceeded);
+        }
+        let snapshot_fuel = crate::step_commitment_fuel(snapshot_bytes)
+            .map_err(|_| wasmi::ExecutionObserverError::SupplementRejected)?;
+        self.meter.charge_cpu(snapshot_fuel)
+            .map_err(|_| wasmi::ExecutionObserverError::SupplementRejected)?;
+        charge.value_bytes = snapshot_bytes.checked_add(retained_instruction_bytes)
+            .ok_or(wasmi::ExecutionObserverError::SupplementRejected)?;
+        charge.frame_bytes = 0;
+        charge.local_bytes = 0;
+        charge.global_bytes = 0;
+        charge.memory_bytes = 0;
+        charge.storage_overlay_bytes = 0;
+        charge.instruction_bytes = 0;
+        charge.retained_instruction_bytes = 0;
+        let meter = self.meter.execution_trace_usage()
+            .map_err(|_| wasmi::ExecutionObserverError::SupplementRejected)?;
+        let mut storage_overlay = Vec::with_capacity(overlay_entries);
+        if let Some(abi) = self.abi.as_ref() {
+            abi.for_each_storage_commitment_delta(&self.trace_storage_baseline, |key, value| {
+                storage_overlay.push((key, value.map(<[u8]>::to_vec)));
+            });
+        } else {
+            crate::storage::Storage::new().for_each_commitment_delta(
+                &self.trace_storage_baseline,
+                |key, value| storage_overlay.push((key, value.map(<[u8]>::to_vec))),
+            );
+        }
+        storage_overlay.sort_by(|left, right| left.0.cmp(&right.0));
+        Ok(wasmi::ExecutionSupplement {
+            storage_overlay,
+            authoritative_fuel: self.meter.cpu_remaining(),
+            authoritative_usage: wasmi_usage(meter),
+            canonical_state_bytes: snapshot_bytes,
+            commitment_fuel: snapshot_fuel,
+        })
+    }
+
     pub(crate) const fn isolated(meter: Meter) -> Self {
         Self {
             meter,
@@ -95,10 +197,12 @@ impl RuntimeState {
             metering_schedule: crate::FuelSchedule::WASMI_0_31_2,
             legacy_reference_fuel: false,
             legacy_reference_engine_committed: 0,
+            trace_storage_baseline: crate::storage::Storage::new(),
         }
     }
 
     pub(crate) fn composed(meter: Meter, abi: Abi, composition: Composition) -> Self {
+        let trace_storage_baseline = Self::trace_storage_entries(&abi);
         Self {
             meter,
             abi: Some(abi),
@@ -111,11 +215,13 @@ impl RuntimeState {
             metering_schedule: crate::FuelSchedule::WASMI_0_31_2,
             legacy_reference_fuel: false,
             legacy_reference_engine_committed: 0,
+            trace_storage_baseline,
         }
     }
 
     pub(crate) fn sandbox(meter: Meter, abi: Abi) -> Self {
         let mut state = Self::isolated(meter);
+        state.trace_storage_baseline = Self::trace_storage_entries(&abi);
         state.abi = Some(abi);
         state
     }
@@ -126,6 +232,7 @@ impl RuntimeState {
         composition: Composition,
         capacity: usize,
     ) -> Result<Self, ResponseRefusal> {
+        let trace_storage_baseline = Self::trace_storage_entries(&abi);
         Ok(Self {
             meter,
             abi: Some(abi),
@@ -140,6 +247,7 @@ impl RuntimeState {
             metering_schedule: crate::FuelSchedule::WASMI_0_31_2,
             legacy_reference_fuel: false,
             legacy_reference_engine_committed: 0,
+            trace_storage_baseline,
         })
     }
 

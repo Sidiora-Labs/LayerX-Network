@@ -136,9 +136,15 @@ pub struct ValidatedModule {
     meter_injection: MeterInjection,
     interface_entry_capability_masks: BTreeMap<String, u16>,
     resumable_globals: Option<Vec<String>>,
+    code_hash: [u8; 32],
 }
 
 impl ValidatedModule {
+    /// Domain-independent SHA-256 identity of the exact validated source module.
+    #[must_use]
+    pub const fn code_hash(&self) -> [u8; 32] {
+        self.code_hash
+    }
     /// Reports whether the module exports an ABI-callable program entry point.
     ///
     /// Interface publication uses this after ordinary deterministic module
@@ -435,6 +441,8 @@ pub(crate) fn validate_module_metered(
         meter_injection,
         interface_entry_capability_masks: original.interface_entry_capability_masks,
         resumable_globals: original.resumable_globals,
+        code_hash: crate::hash_bytes(crate::HashAlgorithm::Sha256, wasm)
+            .map_err(|error| ValidationRefusal::MalformedModule { reason: error.to_string() })?,
     })
 }
 

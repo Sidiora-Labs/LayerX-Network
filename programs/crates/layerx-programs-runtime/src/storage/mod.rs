@@ -136,6 +136,23 @@ impl PartialEq for Storage {
 impl Eq for Storage {}
 
 impl Storage {
+    fn commitment_key_len(address: &StorageAddress) -> Option<u64> {
+        let mut namespace = [0_u8; 65];
+        let namespace_len = address.namespace.write_canonical(&mut namespace);
+        u64::try_from(2_usize.checked_add(namespace_len)?.checked_add(address.key.len())?).ok()
+    }
+    fn commitment_key(address: &StorageAddress) -> Vec<u8> {
+        let namespace = address.namespace.canonical_bytes();
+        let namespace_length = u16::try_from(namespace.len())
+            .unwrap_or_else(|_| unreachable!("closed storage namespace length is bounded"));
+        let mut key = Vec::with_capacity(
+            2_usize.saturating_add(namespace.len()).saturating_add(address.key.len()),
+        );
+        key.extend_from_slice(&namespace_length.to_be_bytes());
+        key.extend_from_slice(&namespace);
+        key.extend_from_slice(&address.key);
+        key
+    }
     /// Creates an empty storage plane.
     #[must_use]
     pub const fn new() -> Self {
@@ -168,6 +185,73 @@ impl Storage {
 
     pub(crate) fn was_accessed(&self, namespace: StorageNamespace) -> bool {
         self.accessed_namespaces.borrow().contains(&namespace)
+    }
+
+    pub(crate) fn commitment_entries(&self) -> Vec<(Vec<u8>, Vec<u8>)> {
+        self.cells.iter().map(|(address, value)| {
+            (Self::commitment_key(address), value.clone())
+        }).collect()
+    }
+
+    pub(crate) fn for_each_commitment_entry(
+        &self,
+        mut visit: impl FnMut(Vec<u8>, &[u8]),
+    ) {
+        for (address, value) in &self.cells {
+            visit(Self::commitment_key(address), value);
+        }
+    }
+
+    pub(crate) fn for_each_commitment_delta(
+        &self,
+        baseline: &Self,
+        mut visit: impl FnMut(Vec<u8>, Option<&[u8]>),
+    ) {
+        let mut current = self.cells.iter().peekable();
+        let mut baseline = baseline.cells.iter().peekable();
+        loop {
+            match (current.peek(), baseline.peek()) {
+                (Some((address, value)), Some((baseline_address, baseline_value))) => match address.cmp(baseline_address) {
+                    core::cmp::Ordering::Less => { visit(Self::commitment_key(address), Some(value)); current.next(); }
+                    core::cmp::Ordering::Greater => { visit(Self::commitment_key(baseline_address), None); baseline.next(); }
+                    core::cmp::Ordering::Equal => {
+                        if value.as_slice() != baseline_value.as_slice() { visit(Self::commitment_key(address), Some(value)); }
+                        current.next(); baseline.next();
+                    }
+                },
+                (Some((address, value)), None) => { visit(Self::commitment_key(address), Some(value)); current.next(); }
+                (None, Some((address, _))) => { visit(Self::commitment_key(address), None); baseline.next(); }
+                (None, None) => break,
+            }
+        }
+    }
+
+    pub(crate) fn commitment_delta_metrics(&self, baseline: &Self) -> Option<(usize, u64)> {
+        let mut current = self.cells.iter().peekable();
+        let mut baseline = baseline.cells.iter().peekable();
+        let mut entries = 0_usize;
+        let mut bytes = 4_u64;
+        loop {
+            let (key_bytes, value_bytes, advance_current, advance_baseline) = match (current.peek(), baseline.peek()) {
+                (Some((address, value)), Some((baseline_address, baseline_value))) => match address.cmp(baseline_address) {
+                    core::cmp::Ordering::Less => (Self::commitment_key_len(address)?, Some(u64::try_from(value.len()).ok()?), true, false),
+                    core::cmp::Ordering::Greater => (Self::commitment_key_len(baseline_address)?, None, false, true),
+                    core::cmp::Ordering::Equal if value.as_slice() != baseline_value.as_slice() => (Self::commitment_key_len(address)?, Some(u64::try_from(value.len()).ok()?), true, true),
+                    core::cmp::Ordering::Equal => { current.next(); baseline.next(); continue },
+                },
+                (Some((address, value)), None) => (Self::commitment_key_len(address)?, Some(u64::try_from(value.len()).ok()?), true, false),
+                (None, Some((baseline_address, _))) => (Self::commitment_key_len(baseline_address)?, None, false, true),
+                (None, None) => break,
+            };
+            entries = entries.checked_add(1)?;
+            bytes = bytes.checked_add(match value_bytes {
+                Some(value_bytes) => 9_u64.checked_add(key_bytes)?.checked_add(value_bytes)?,
+                None => 5_u64.checked_add(key_bytes)?,
+            })?;
+            if advance_current { current.next(); }
+            if advance_baseline { baseline.next(); }
+        }
+        Some((entries, bytes))
     }
 
     /// Begins an isolated write transaction. Dropping it without commit leaves
