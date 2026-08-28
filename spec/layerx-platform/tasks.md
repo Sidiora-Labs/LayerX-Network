@@ -1507,7 +1507,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Make the game safe for the honest party: an honest defender with a correct execution always wins, and an honest challenger facing a wrong execution always wins, with the argument recorded.
     - Test the game against a lying defender, a lying challenger, an absent party, a dispute over a host call and a dispute over a trap.
     - _Requirements: 42.3_
-  - [ ] 35.4 Build the compute marketplace program
+  - [ ] 35.4 Build the compute marketplace program — **Implemented - qualification pending**
     - Write a marketplace program in which a provider registers capacity and a price, a renter opens a funded lease, and both parties' obligations are protocol state rather than an agreement off-platform.
     - Escrow renter funds and provider stake in program-owned accounts, released only through the declared settlement paths.
     - Publish the offer, the lease and the settlement as readable protocol state so a third party can audit the market without the operator.

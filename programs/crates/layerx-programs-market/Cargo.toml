@@ -1,0 +1,16 @@
+[package]
+name = "layerx-programs-market"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+layerx-program-sdk = { path = "../../sdk/rust" }
+
+[lints]
+workspace = true

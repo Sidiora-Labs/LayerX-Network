@@ -385,6 +385,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "layerx-programs-market"
+version = "0.1.0"
+dependencies = [
+ "layerx-program-sdk",
+]
+
+[[package]]
 name = "layerx-interpreter-compiled-equivalent"
 version = "0.1.0"
 dependencies = [

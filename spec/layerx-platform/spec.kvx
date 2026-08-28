@@ -3705,7 +3705,7 @@ reqs = ["42.3"]
 
 [task.35.4]
 title = "Build the compute marketplace program"
-status = "pending"
+status = "implemented"
 wave = 21
 requires = ["30.4","33.1"]
 do_1 = "Write a marketplace program in which a provider registers capacity and a price, a renter opens a funded lease, and both parties' obligations are protocol state rather than an agreement off-platform."

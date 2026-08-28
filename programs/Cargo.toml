@@ -4,6 +4,7 @@ members = [
     "crates/layerx-programs-registry",
     "crates/layerx-programs-protocol-adapter",
     "crates/layerx-programs-interpreter",
+    "crates/layerx-programs-market",
     "crates/layerx-programs-runtime",
     "crates/layerx-programs-sandbox",
     "fuzz",

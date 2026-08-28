@@ -2367,3 +2367,19 @@ symbol = "fund, Escrow::spend, settle"
 observed = "Lease funding, usage debits and refunds consume PreparedAuthorizedActivity, the runtime's affine authenticated execution artifact, and reach balances only through strict_settle and KernelTransferPrimitive. The sandbox validates the exact program-funding or program-authority source, derived lease seed, account, asset, principal, destination and amount before consuming that artifact. Escrow protocol state records only kernel transfer roots and exact funded, spent and refunded conservation counters; it is not a balance ledger. An exhausted lease settles through a non-monetary authenticated activity because the ordinary transfer law correctly refuses zero-value legs. Task 34.4 still owns pricing and per-activity usage receipts; this task accepts an already-priced maximum charge and enforces that the kernel-settled debit cannot exceed it or the funded remainder."
 assumption = "Human qualification must drive real candidate-v2 funding, partial spend, exact exhaustion, zero-usage refund and repeated settlement activities through the production C kernel and prove storage commits atomically with each transfer set. It must also confirm task 34.4 supplies prices and receipt bindings before calling Escrow::spend. No build, test, formatter, kernel execution or passing result is asserted."
 severity = "qualification-required"
+
+[observation.35.4.1]
+task = "35.4"
+file = "programs/crates/layerx-programs-market/src/lib.rs"
+symbol = "Offer, ComputeLease"
+observed = "The ordinary marketplace program stores offers and funded leases in program-shared state, binds provider and tenant mutations to the runtime-authenticated invoking principal, and stages renter escrow, provider stake, settlement, expiry refund and stake return only through the SDK's canonical program-account funding and spending host operations. Task 35.4 has no usage-proof or arbiter verdict input, so successful settlement pays the exact full lease prepayment before expiry and provider non-delivery refunds it at expiry; metered claims, challenge windows and slashing remain explicitly owned by dependent tasks 35.5 and 35.6 rather than being guessed here."
+assumption = "Human qualification must execute the checked-in lifecycle cases through the production ABI with exact derived accounts and grants, prove shared state is externally readable through the canonical state surface, and verify atomic rollback for every refused funding or spend. Tasks 35.5 and 35.6 must replace the simple pre-challenge success path with commitment-gated settlement and arbiter-directed slashing without weakening these principal and custody bindings. No build, test or runtime result is asserted."
+severity = "qualification-required"
+
+[observation.35.4.2]
+task = "35.4"
+file = "programs/crates/layerx-programs-market/src/lib.rs, programs/Cargo.lock"
+symbol = "ProgramDeposit, ProgramAccountPayment"
+observed = "Offer stake and each lease escrow use caller-supplied public derivation seeds and claimed derived account identifiers because the guest ABI intentionally cannot derive or manufacture an account. The host rederives each account from the executing program, verifies the registry and asset binding, sources funding from the authenticated invoking principal, and issues program spend authority only inside the granted ceiling."
+assumption = "Human qualification must derive accounts independently with the canonical runtime helper, submit altered program, seed, account, asset, principal and ceiling combinations, and prove every mismatch refuses before state or balance mutation. The checked-in programs lockfile package entry was written as implementation metadata; no dependency resolution command was run."
+severity = "qualification-required"
