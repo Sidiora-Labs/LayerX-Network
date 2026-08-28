@@ -2,6 +2,8 @@
 
 use layerx_program_sdk::{AccountId, Amount, AssetId, Field, ProgramError, Reason};
 
+pub mod attest;
+
 #[cfg(target_arch = "wasm32")]
 use layerx_program_sdk::{
     context::Context,
@@ -18,6 +20,10 @@ const OPEN_LEASE: u8 = 2;
 const SETTLE_LEASE: u8 = 3;
 const EXPIRE_LEASE: u8 = 4;
 const CLOSE_OFFER: u8 = 5;
+const CONFIGURE_ATTESTERS: u8 = 6;
+const COMMIT_EXTERNAL_INPUT: u8 = 7;
+const SEAL_EXTERNAL_INPUTS: u8 = 8;
+const SUBMIT_ATTESTATION: u8 = 9;
 const OFFER_PREFIX: &[u8] = b"lx.market.offer/";
 const LEASE_PREFIX: &[u8] = b"lx.market.lease/";
 const TOPIC_OFFER: &[u8] = b"lx.market.offer";
@@ -303,6 +309,7 @@ impl<'a> Cursor<'a> {
         if length == 0 { return Err(malformed()); }
         self.take(length)
     }
+    fn remainder(self) -> &'a [u8] { &self.bytes[self.offset..] }
     fn finish(self) -> Result<(), ProgramError> {
         if self.offset == self.bytes.len() { Ok(()) } else { Err(malformed()) }
     }
@@ -477,6 +484,9 @@ fn invoke(input: &[u8]) -> Result<CallResult, ProgramError> {
             let mut offer_bytes = [0; OFFER_CAPACITY];
             let offer = decode_offer(read_state(OFFER_PREFIX, lease.offer_id, &mut offer_bytes)?)?;
             let (offer, lease, destination) = if operation == SETTLE_LEASE {
+                if lease.verification == VerificationModel::Attested {
+                    attest::require_ready(lease.id)?;
+                }
                 let (offer, lease) = settle(offer, lease, caller, height)?;
                 let destination = lease.provider_payout;
                 (offer, lease, destination)
@@ -505,6 +515,68 @@ fn invoke(input: &[u8]) -> Result<CallResult, ProgramError> {
             let written = encode_offer(offer, &mut output)?;
             write_state(OFFER_PREFIX, offer.id, &output[..written])?;
             emit(TOPIC_OFFER, &output[..written])?;
+            Ok(CallResult::OK)
+        }
+        CONFIGURE_ATTESTERS => {
+            let lease_id = cursor.array()?;
+            let revision = cursor.u64()?;
+            let count = usize::from(cursor.byte()?);
+            if count == 0 || count > attest::MAX_ATTESTERS { return Err(malformed()); }
+            let mut entries = [None; attest::MAX_ATTESTERS];
+            for entry in entries.iter_mut().take(count) {
+                let name_length = usize::from(cursor.byte()?);
+                let name = cursor.take(name_length)?;
+                *entry = Some(attest::Attester { name, ed25519_key: cursor.array()? });
+            }
+            cursor.finish()?;
+            let mut lease_bytes = [0; LEASE_CAPACITY];
+            let lease = decode_lease(read_state(LEASE_PREFIX, lease_id, &mut lease_bytes)?)?;
+            if lease.tenant != caller || lease.verification != VerificationModel::Attested || lease.status != LeaseStatus::Funded {
+                return Err(malformed());
+            }
+            let mut scratch = [0; attest::ATTESTER_SET_CAPACITY];
+            attest::configure(lease_id, caller, revision, entries, &mut scratch)?;
+            Ok(CallResult::OK)
+        }
+        COMMIT_EXTERNAL_INPUT => {
+            let commitment = attest::InputCommitment {
+                lease_id: cursor.array()?, input_id: cursor.array()?, payload_digest: cursor.array()?,
+                payload_length: cursor.u64()?, source: match cursor.byte()? {
+                    1 => attest::ExternalInputSource::HttpsApi,
+                    2 => attest::ExternalInputSource::HardwareSensor,
+                    3 => attest::ExternalInputSource::ConfidentialCompute,
+                    4 => attest::ExternalInputSource::HumanOperator,
+                    _ => return Err(malformed()),
+                }, source_locator_digest: cursor.array()?,
+            };
+            cursor.finish()?;
+            let mut lease_bytes = [0; LEASE_CAPACITY];
+            let lease = decode_lease(read_state(LEASE_PREFIX, commitment.lease_id, &mut lease_bytes)?)?;
+            if lease.tenant != caller || lease.verification != VerificationModel::Attested || lease.status != LeaseStatus::Funded {
+                return Err(malformed());
+            }
+            attest::commit(commitment, caller)?;
+            Ok(CallResult::OK)
+        }
+        SEAL_EXTERNAL_INPUTS => {
+            let lease_id = cursor.array()?;
+            cursor.finish()?;
+            let mut lease_bytes = [0; LEASE_CAPACITY];
+            let lease = decode_lease(read_state(LEASE_PREFIX, lease_id, &mut lease_bytes)?)?;
+            if lease.tenant != caller || lease.verification != VerificationModel::Attested || lease.status != LeaseStatus::Funded {
+                return Err(malformed());
+            }
+            attest::seal(lease_id, caller, height)?;
+            Ok(CallResult::OK)
+        }
+        SUBMIT_ATTESTATION => {
+            let attestation = attest::decode_attestation(cursor.remainder())?;
+            let mut lease_bytes = [0; LEASE_CAPACITY];
+            let lease = decode_lease(read_state(LEASE_PREFIX, attestation.input.lease_id, &mut lease_bytes)?)?;
+            if lease.provider != caller || lease.verification != VerificationModel::Attested || lease.status != LeaseStatus::Funded {
+                return Err(malformed());
+            }
+            attest::admit(attestation, height)?;
             Ok(CallResult::OK)
         }
         _ => Err(malformed()),

@@ -3750,7 +3750,7 @@ reqs = ["42.5","42.8"]
 
 [task.35.7]
 title = "Accept attested inputs from non-deterministic work"
-status = "pending"
+status = "implemented"
 wave = 21
 requires = ["31.4"]
 do_1 = "Define an attested-input record carrying a signed statement from a named attester about work performed off-platform, verified on-platform through the signature primitives."

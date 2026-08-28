@@ -1528,7 +1528,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Never create or destroy value in a slash: every slashed unit lands somewhere, proven by the conservation suite over dispute-heavy histories.
     - Test stake locking, partial slashing, unlock at window close and slashing against a provider with several concurrent leases.
     - _Requirements: 42.5, 42.8_
-  - [ ] 35.7 Accept attested inputs from non-deterministic work
+  - [ ] 35.7 Accept attested inputs from non-deterministic work — **Implemented - qualification pending**
     - Define an attested-input record carrying a signed statement from a named attester about work performed off-platform, verified on-platform through the signature primitives.
     - Let a program declare which attesters it accepts and refuse an attestation from any other, so trust is explicit protocol state rather than an implicit default.
     - Distinguish attested inputs from verified execution everywhere they appear, so no interface can present a trusted claim as a proven one.

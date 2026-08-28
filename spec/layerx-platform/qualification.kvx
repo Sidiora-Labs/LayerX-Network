@@ -254,6 +254,14 @@ observed = "Task 31.5 requires metering by operand wide and exponent bit length.
 assumption = "Human qualification will profile actual execution costs across representative inputs and adjust the metering formula if the charge significantly underprices or overprices actual work. The freeze behind golden vectors ensures any metering adjustment does not change operation semantics."
 severity = "assumption"
 
+[observation.35.7.1]
+task = "35.7"
+file = "programs/crates/layerx-programs-market/src/attest.rs, programs/crates/layerx-programs-market/src/lib.rs"
+symbol = "attest::admit, invoke"
+observed = "Task 35.7 declares only attest.rs in its touch list, but a standalone module would not be reachable by the production no_std guest. The implementation necessarily extends the marketplace entrypoint with authenticated configure, commit, seal and submit operations and gates the existing settle operation on complete attested-input admission. The persisted policy and input encodings are version one and therefore consensus-visible program state."
+assumption = "Human qualification must freeze and independently replay the operation ordinals, policy/input encodings, SHA-256 domains, Ed25519 statement vector, persistent replay key and settlement refusal before this guest is deployed; later marketplace tasks must extend these encodings additively rather than silently reinterpret version one."
+severity = "task-scope"
+
 [observation.12.2.1]
 task = "12.2"
 file = "human/apps/web/src/journeys/home/home.tsx"
