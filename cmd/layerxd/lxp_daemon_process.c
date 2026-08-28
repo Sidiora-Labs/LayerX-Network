@@ -29,6 +29,7 @@ enum {
 
 typedef struct lxp_daemon_process {
     lxp_daemon daemon;
+    lxp_daemon_lni_server lni;
     lxp_daemon_protocol_owner owner;
     lxp_state_store state;
     lxp_state_journal journal;
@@ -70,6 +71,7 @@ typedef struct lxp_daemon_process {
     bool authority_open;
     bool batch_open;
     bool daemon_started;
+    bool lni_started;
     bool checkpoint_selected;
 } lxp_daemon_process;
 
@@ -2623,6 +2625,10 @@ static lxp_result project_bootstrap_metering(
 
 static void close_process(lxp_daemon_process *process)
 {
+    if (process->lni_started) {
+        (void)lxp_daemon_lni_stop(&process->lni);
+        process->lni_started = false;
+    }
     if (process->daemon_started) {
         (void)lxp_daemon_shutdown(&process->daemon);
         process->daemon_started = false;
@@ -2646,9 +2652,9 @@ static void close_process(lxp_daemon_process *process)
 static lxp_result open_process(lxp_daemon_process *process,
                                const char *configuration_path,
                                lxp_daemon_configuration *configuration,
-                               const char **activity_fifo,
                                const char **listener_address,
-                               uint16_t *listener_port)
+                               uint16_t *listener_port,
+                               lxp_daemon_lni_configuration *lni_configuration)
 {
     lxp_snapshot_manifest_record manifest;
     lxp_byte_span snapshot;
@@ -2860,9 +2866,8 @@ static lxp_result open_process(lxp_daemon_process *process,
         status = LXP_ERR_NON_CANONICAL;
     if (status == LXP_OK) *listener_port = (uint16_t)value;
     *listener_address = required_environment("LAYERX_NODE_PROGRAM_ADDRESS");
-    *activity_fifo = required_environment("LAYERX_NODE_ACTIVITY_FIFO");
     if (status == LXP_OK &&
-        (*listener_address == NULL || *activity_fifo == NULL ||
+        (*listener_address == NULL ||
          (strcmp(*listener_address, process->authority_replica_address) == 0 &&
           *listener_port == process->authority_replica_port) ||
          (bearer != NULL && strlen(bearer) ==
@@ -2873,33 +2878,67 @@ static lxp_result open_process(lxp_daemon_process *process,
           process->sequencer_authorization.last_batch_number <
               process->next_batch)))
         status = LXP_ERR_NON_CANONICAL;
+    if (status == LXP_OK) {
+        const char *lni_socket = required_environment("LAYERX_NODE_LNI_SOCKET");
+        (void)memset(lni_configuration, 0, sizeof(*lni_configuration));
+        lni_configuration->socket_path = lni_socket;
+        lni_configuration->socket_mode = 0660U;
+        status = parse_u64_text(
+            required_environment("LAYERX_NODE_LNI_ALLOWED_UID"), &value);
+        if (status == LXP_OK && value > UINT32_MAX)
+            status = LXP_ERR_NON_CANONICAL;
+        if (status == LXP_OK)
+            lni_configuration->allowed_peer_uid = (uint32_t)value;
+        if (status == LXP_OK)
+            status = parse_u64_text(
+                required_environment("LAYERX_NODE_LNI_ALLOWED_GID"), &value);
+        if (status == LXP_OK && value > UINT32_MAX)
+            status = LXP_ERR_NON_CANONICAL;
+        if (status == LXP_OK)
+            lni_configuration->allowed_peer_gid = (uint32_t)value;
+        if (status == LXP_OK)
+            status = parse_u64_text(
+                required_environment("LAYERX_NODE_LNI_FRAME_BYTES"), &value);
+        if (status == LXP_OK && value != LXP_DAEMON_LNI_MAX_FRAME_BYTES)
+            status = LXP_ERR_LENGTH_LIMIT;
+        if (status == LXP_OK)
+            lni_configuration->frame_bytes = (uint32_t)value;
+        if (status == LXP_OK)
+            status = parse_u64_text(
+                required_environment("LAYERX_NODE_LNI_DEADLINE_MS"), &value);
+        if (status == LXP_OK && (value == 0U || value > 60000U))
+            status = LXP_ERR_LENGTH_LIMIT;
+        if (status == LXP_OK)
+            lni_configuration->deadline_milliseconds = (uint32_t)value;
+        if (status == LXP_OK && lni_socket == NULL)
+            status = LXP_ERR_NON_CANONICAL;
+    }
     return status;
-}
-
-static lxp_result read_frame(FILE *input, uint8_t bytes[4])
-{
-    size_t count = fread(bytes, 1U, 4U, input);
-    if (count == 4U) return LXP_OK;
-    return ferror(input) ? LXP_ERR_IO : LXP_ERR_TRUNCATED;
 }
 
 lxp_result lxp_daemon_serve(const char *configuration_path)
 {
     lxp_daemon_process *process;
     lxp_daemon_configuration configuration;
-    const char *activity_fifo = NULL;
     const char *listener_address = NULL;
     uint16_t listener_port = 0U;
+    lxp_daemon_lni_configuration lni_configuration;
     lxp_result status;
     process = (lxp_daemon_process *)calloc(1U, sizeof(*process));
     if (process == NULL) return LXP_ERR_IO;
     status = open_process(process, configuration_path, &configuration,
-                          &activity_fifo, &listener_address, &listener_port);
+                          &listener_address, &listener_port,
+                          &lni_configuration);
     if (status == LXP_OK)
         status = lxp_daemon_start_protocol_batch(
             &process->daemon, &configuration, apply_canonical_batch,
             process, &process->owner, listener_address, listener_port);
     process->daemon_started = status == LXP_OK;
+    if (status == LXP_OK)
+        status = lxp_daemon_lni_serve(
+            &process->lni, &process->daemon, &process->owner,
+            &lni_configuration);
+    process->lni_started = status == LXP_OK;
     if (status == LXP_OK && process->next_batch == 0U) {
         if (pthread_mutex_lock(&process->daemon.mutex) != 0)
             status = LXP_ERR_IO;
@@ -2920,30 +2959,11 @@ lxp_result lxp_daemon_serve(const char *configuration_path)
             status = LXP_ERR_IO;
     }
     while (status == LXP_OK && !stop_requested) {
-        FILE *input = fopen(activity_fifo, "rb");
-        if (input == NULL) { status = LXP_ERR_IO; break; }
-        while (status == LXP_OK && !stop_requested) {
-            uint8_t length_bytes[4];
-            uint8_t activity[LXP_DAEMON_ACTIVITY_BYTES];
-            uint32_t length;
-            status = read_frame(input, length_bytes);
-            if (status == LXP_ERR_TRUNCATED && feof(input)) {
-                status = LXP_OK;
-                break;
-            }
-            if (status != LXP_OK) break;
-            length = ((uint32_t)length_bytes[0] << 24U) |
-                     ((uint32_t)length_bytes[1] << 16U) |
-                     ((uint32_t)length_bytes[2] << 8U) |
-                     length_bytes[3];
-            if (length == 0U || length > sizeof(activity) ||
-                fread(activity, 1U, length, input) != length) {
-                status = LXP_ERR_TRUNCATED;
-                break;
-            }
-            status = lxp_daemon_submit(&process->daemon, activity, length);
-        }
-        if (fclose(input) != 0 && status == LXP_OK) status = LXP_ERR_IO;
+        struct timespec interval = {0, 100000000L};
+        status = lxp_daemon_lni_status(&process->lni);
+        if (status == LXP_OK && nanosleep(&interval, NULL) != 0 &&
+            errno != EINTR)
+            status = LXP_ERR_IO;
     }
     close_process(process);
     free(process);

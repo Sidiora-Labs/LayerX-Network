@@ -1108,6 +1108,7 @@ LAYERXD_SOURCES = \
 	cmd/layerxd/lxp_daemon_receipt_authority.c \
 	cmd/layerxd/lxp_daemon_protocol.c \
 	cmd/layerxd/lxp_daemon_listener.c \
+	cmd/layerxd/lxp_daemon_lni.c \
 	cmd/layerxd/lxp_daemon_batch_wal.c \
 	cmd/layerxd/lxp_daemon_process.c \
 	cmd/layerxd/lxp_daemon_authority_replica.c \

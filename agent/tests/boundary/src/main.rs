@@ -1,5 +1,6 @@
 mod cases;
 mod gaps;
+mod production;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -22,6 +23,14 @@ fn main() -> ExitCode {
     match cases::agent_boundary_conformance_suite(&node, &repository) {
         Ok(report) => {
             println!("{report}");
+            match production::run_if_configured() {
+                Ok(Some(production)) => println!("{production}"),
+                Ok(None) => {}
+                Err(error) => {
+                    eprintln!("production boundary qualification failed: {error}");
+                    return ExitCode::FAILURE;
+                }
+            }
             ExitCode::SUCCESS
         }
         Err(error) => {

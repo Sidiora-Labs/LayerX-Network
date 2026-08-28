@@ -1,6 +1,26 @@
 #include "layerx/lxp_daemon.h"
+#include "layerx/lxp_crypto.h"
 
+#include <stdlib.h>
 #include <string.h>
+
+static void release_queue_locked(lxp_daemon *daemon)
+{
+    size_t index;
+    for (index = 0U; index < daemon->queue_count; ++index) {
+        size_t at = (daemon->queue_head + index) % LXP_DAEMON_QUEUE_CAPACITY;
+        if (daemon->queue[at].bytes != NULL) {
+            lxp_secure_zero(daemon->queue[at].bytes,
+                            daemon->queue[at].length);
+            free(daemon->queue[at].bytes);
+        }
+        daemon->queue[at].bytes = NULL;
+        daemon->queue[at].length = 0U;
+    }
+    daemon->queue_head = 0U;
+    daemon->queue_count = 0U;
+    daemon->queue_bytes = 0U;
+}
 
 static void *executor_run(void *argument)
 {
@@ -27,7 +47,7 @@ static void *executor_run(void *argument)
             daemon->failure = LXP_ERR_SEQUENCE_GAP;
             daemon->accepting = false;
             daemon->stop_requested = true;
-            daemon->queue_count = 0U;
+            release_queue_locked(daemon);
             (void)pthread_cond_broadcast(&daemon->queue_changed);
             (void)pthread_mutex_unlock(&daemon->mutex);
             break;
@@ -56,15 +76,25 @@ static void *executor_run(void *argument)
             daemon->failure = status;
             daemon->accepting = false;
             daemon->stop_requested = true;
-            daemon->queue_count = 0U;
+            release_queue_locked(daemon);
         } else {
+            for (i = 0U; i < consumed_count; ++i) {
+                size_t at = (daemon->queue_head + i) %
+                    LXP_DAEMON_QUEUE_CAPACITY;
+                daemon->queue_bytes -= daemon->queue[at].length;
+                lxp_secure_zero(daemon->queue[at].bytes,
+                                daemon->queue[at].length);
+                free(daemon->queue[at].bytes);
+                daemon->queue[at].bytes = NULL;
+                daemon->queue[at].length = 0U;
+            }
             daemon->queue_head = (daemon->queue_head + consumed_count) %
                 LXP_DAEMON_QUEUE_CAPACITY;
             daemon->queue_count -= consumed_count;
             daemon->next_sequence += consumed_count;
             if (!daemon->accepting) {
                 daemon->stop_requested = true;
-                daemon->queue_count = 0U;
+                release_queue_locked(daemon);
             }
         }
         (void)pthread_cond_broadcast(&daemon->queue_changed);
@@ -194,24 +224,34 @@ lxp_result lxp_daemon_submit(
     lxp_daemon *daemon, const uint8_t *activity, size_t activity_length)
 {
     size_t tail;
+    uint8_t *retained;
     if (daemon == NULL || activity == NULL || activity_length == 0U ||
-        activity_length > LXP_DAEMON_ACTIVITY_BYTES)
+        activity_length > LXP_MAX_ACTIVITY_BYTES)
         return LXP_ERR_LENGTH_LIMIT;
     (void)pthread_mutex_lock(&daemon->mutex);
-    while (daemon->queue_count == LXP_DAEMON_QUEUE_CAPACITY &&
-           daemon->accepting)
-        (void)pthread_cond_wait(&daemon->queue_changed, &daemon->mutex);
     if (!daemon->accepting) {
         lxp_result failure = daemon->failure == LXP_OK ?
             LXP_ERR_MODULE_DISABLED : daemon->failure;
         (void)pthread_mutex_unlock(&daemon->mutex);
         return failure;
     }
+    if (daemon->queue_count == LXP_DAEMON_QUEUE_CAPACITY ||
+        activity_length > LXP_DAEMON_QUEUE_MAX_BYTES - daemon->queue_bytes) {
+        (void)pthread_mutex_unlock(&daemon->mutex);
+        return LXP_ERR_LENGTH_LIMIT;
+    }
+    retained = (uint8_t *)malloc(activity_length);
+    if (retained == NULL) {
+        (void)pthread_mutex_unlock(&daemon->mutex);
+        return LXP_ERR_ARENA_EXHAUSTED;
+    }
+    (void)memcpy(retained, activity, activity_length);
     tail = (daemon->queue_head + daemon->queue_count) %
         LXP_DAEMON_QUEUE_CAPACITY;
-    (void)memcpy(daemon->queue[tail].bytes, activity, activity_length);
+    daemon->queue[tail].bytes = retained;
     daemon->queue[tail].length = activity_length;
     ++daemon->queue_count;
+    daemon->queue_bytes += activity_length;
     (void)pthread_cond_signal(&daemon->queue_changed);
     (void)pthread_mutex_unlock(&daemon->mutex);
     return LXP_OK;

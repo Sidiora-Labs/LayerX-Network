@@ -2,6 +2,7 @@
 #define LAYERX_LXP_DAEMON_H
 
 #include "layerx/lxp_result.h"
+#include "layerx/lxp_activity.h"
 #include "layerx/lxp_batch.h"
 #include "layerx/lxp_history.h"
 #include "layerx/lxp_kernel.h"
@@ -13,15 +14,19 @@
 #include <stddef.h>
 #include <stdint.h>
 
+typedef struct lxp_daemon lxp_daemon;
+
 enum {
     LXP_DAEMON_MAX_WORKERS = 16,
     LXP_DAEMON_MAX_BATCH_ACTIVITIES = 64,
     LXP_DAEMON_QUEUE_CAPACITY = 4096,
-    LXP_DAEMON_ACTIVITY_BYTES = 256,
+    LXP_DAEMON_QUEUE_MAX_BYTES = 64 * LXP_MAX_ACTIVITY_BYTES,
     LXP_DAEMON_AUTHORITY_CACHE_RECEIPTS = 256,
     LXP_DAEMON_BEARER_MAX_BYTES = 128,
     LXP_DAEMON_PROTOCOL_MAX_CONNECTIONS = 4,
-    LXP_DAEMON_PROTOCOL_SCRATCH_MIN_BYTES = 48 * 1024 * 1024
+    LXP_DAEMON_PROTOCOL_SCRATCH_MIN_BYTES = 48 * 1024 * 1024,
+    LXP_DAEMON_LNI_MAX_FRAME_BYTES = LXP_MAX_ACTIVITY_BYTES + 22 + 32,
+    LXP_DAEMON_LNI_SOCKET_PATH_BYTES = 108
 };
 
 typedef struct lxp_daemon_receipt_authority_entry {
@@ -86,6 +91,42 @@ typedef struct lxp_daemon_protocol_response {
     lxp_byte_span body;
 } lxp_daemon_protocol_response;
 
+typedef struct lxp_daemon_lni_configuration {
+    const char *socket_path;
+    uint32_t allowed_peer_uid;
+    uint32_t allowed_peer_gid;
+    uint32_t frame_bytes;
+    uint32_t deadline_milliseconds;
+    uint32_t socket_mode;
+} lxp_daemon_lni_configuration;
+
+typedef struct lxp_daemon_lni_server {
+    lxp_daemon *daemon;
+    lxp_daemon_protocol_owner *owner;
+    char socket_path[LXP_DAEMON_LNI_SOCKET_PATH_BYTES];
+    char parent_path[LXP_DAEMON_LNI_SOCKET_PATH_BYTES];
+    uint32_t allowed_peer_uid;
+    uint32_t allowed_peer_gid;
+    uint32_t frame_bytes;
+    uint32_t deadline_milliseconds;
+    pthread_t thread;
+    pthread_mutex_t mutex;
+    int listener_descriptor;
+    int connection_descriptor;
+    int parent_descriptor;
+    int lifetime_lock_descriptor;
+    uint64_t parent_device;
+    uint64_t parent_inode;
+    uint64_t socket_device;
+    uint64_t socket_inode;
+    uint64_t lifetime_lock_device;
+    uint64_t lifetime_lock_inode;
+    lxp_result failure;
+    bool started;
+    bool stopping;
+    bool mutex_initialized;
+} lxp_daemon_lni_server;
+
 typedef lxp_result (*lxp_daemon_protocol_replay_fn)(
     void *context, lxp_daemon_protocol_owner *owner);
 
@@ -132,6 +173,12 @@ lxp_result lxp_daemon_protocol_listener_start(
     uint16_t port);
 lxp_result lxp_daemon_protocol_listener_stop(
     lxp_daemon_protocol_owner *owner);
+lxp_result lxp_daemon_lni_serve(
+    lxp_daemon_lni_server *server, lxp_daemon *daemon,
+    lxp_daemon_protocol_owner *owner,
+    const lxp_daemon_lni_configuration *configuration);
+lxp_result lxp_daemon_lni_stop(lxp_daemon_lni_server *server);
+lxp_result lxp_daemon_lni_status(lxp_daemon_lni_server *server);
 
 typedef enum lxp_daemon_role_kind {
     LXP_DAEMON_SEQUENCER = 1,
@@ -151,7 +198,7 @@ typedef struct lxp_daemon_configuration {
 } lxp_daemon_configuration;
 
 typedef struct lxp_daemon_activity {
-    uint8_t bytes[LXP_DAEMON_ACTIVITY_BYTES];
+    uint8_t *bytes;
     size_t length;
 } lxp_daemon_activity;
 
@@ -164,7 +211,7 @@ typedef lxp_result (*lxp_daemon_apply_batch_fn)(
     const lxp_daemon_activity *activities, size_t offered_count,
     size_t *consumed_count);
 
-typedef struct lxp_daemon {
+struct lxp_daemon {
     lxp_daemon_configuration config;
     lxp_daemon_apply_fn apply;
     lxp_daemon_apply_batch_fn apply_batch;
@@ -178,13 +225,14 @@ typedef struct lxp_daemon {
     lxp_daemon_activity queue[LXP_DAEMON_QUEUE_CAPACITY];
     size_t queue_head;
     size_t queue_count;
+    size_t queue_bytes;
     uint64_t next_sequence;
     lxp_result failure;
     bool accepting;
     bool stop_requested;
     bool executor_started;
     bool primitives_initialized;
-} lxp_daemon;
+};
 
 lxp_result lxp_daemon_config_load(
     const char *path, lxp_daemon_configuration *config);

@@ -95,7 +95,7 @@ impl Drop for NodeProcess {
 
 fn limits() -> Limits {
     Limits {
-        maximum_frame_bytes: 1_048_576,
+        maximum_frame_bytes: 1_048_630,
         maximum_connections: 4,
         maximum_streams: 32,
         maximum_queued_bytes: 4_194_304,
@@ -103,7 +103,7 @@ fn limits() -> Limits {
     }
 }
 
-fn connect(socket: &Path) -> Result<Uds, String> {
+pub(crate) fn connect(socket: &Path) -> Result<Uds, String> {
     Uds::connect(socket, &ConnectionGate::new(4), limits())
         .map_err(|error| format!("LNI connect failed: {error:?}"))
 }

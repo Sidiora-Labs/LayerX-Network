@@ -7,10 +7,12 @@ use layerx_wire::hash::{activity_id, Domain};
 use layerx_wire::WireError;
 
 use crate::lni::schema::{decode_envelope, encode_envelope, Envelope, SchemaError, Version};
+use crate::lni::refusal::decode_core_refusal;
 use crate::lni::transport::{FrameTransport, TransportError};
 
 const SUBMIT_REQUEST_TAG: u16 = 3;
 const SUBMIT_RESPONSE_TAG: u16 = 4;
+const ERROR_RESPONSE_TAG: u16 = 25;
 
 /// Immutable scope and identity for one transmission attempt.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -142,6 +144,10 @@ pub enum SubmitError {
     ProtocolVersion { expected: u16, actual: u16 },
     Network { expected: u32, actual: u32 },
     Envelope(SchemaError),
+    CoreRefusal {
+        class: u8,
+        result: layerx_types::result::ResultCode,
+    },
     UnavailableCapability,
     Disconnected,
 }
@@ -249,6 +255,19 @@ pub fn submit_signed(
             UnknownCause::IndeterminateResponse,
         )));
     };
+    if response.version.major == context.interface_version.major
+        && response.message_tag == ERROR_RESPONSE_TAG
+        && response.correlation_id == context.correlation_id
+        && response.canonical_payload.len() == 5
+        && response.proof_material.is_empty()
+    {
+        let refusal = decode_core_refusal(response.canonical_payload)
+            .ok_or(SubmitError::Envelope(SchemaError::MalformedEnvelope))?;
+        return Err(SubmitError::CoreRefusal {
+            class: refusal.class,
+            result: refusal.result,
+        });
+    }
     if response.version.major != context.interface_version.major
         || response.message_tag != SUBMIT_RESPONSE_TAG
         || response.correlation_id != context.correlation_id

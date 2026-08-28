@@ -1,0 +1,38 @@
+[meta]
+subject = "production layerxd LNI filesystem and allocation boundary"
+execution_owner = "human qualification"
+
+[case.queue-allocation-bound]
+given = "The executor is held while concurrent canonical submit callers offer maximum-size activities."
+when = "The sum of queued and allocating activity bytes reaches exactly 67108864 bytes."
+then = "The exact boundary is accepted without exceeding 67108864 resident activity bytes; the next request receives a typed length refusal, and shutdown releases every accepted allocation exactly once."
+
+[case.stale-owned-socket]
+given = "A mode-0750 canonical parent owned by layerxd and grouped to the client contains a disconnected Unix socket inode owned by layerxd from a SIGKILL crash."
+when = "The same configured layerxd service starts."
+then = "It proves no listener is live, pins and removes only that stale inode, binds a new mode-0660 socket, and accepts the exact configured peer uid/gid."
+
+[case.live-socket-refusal]
+given = "The canonical socket path belongs to a live listener."
+when = "A second layerxd service starts with the same path."
+then = "Startup refuses without unlinking, rebinding, signalling or otherwise disrupting the live listener."
+
+[case.bind-before-listen-concurrency]
+given = "One layerxd process holds the pinned daemon-owned lifetime lock and has bound the canonical socket inode but has not called listen."
+when = "A second layerxd process starts against the same trusted parent and socket path."
+then = "The second process fails closed on the nonblocking lifetime lock without probing or unlinking the first socket; the first process revalidates the inode after chown and chmod and becomes the only listener."
+
+[case.crash-releases-lifetime-lock]
+given = "A layerxd process crashes after bind or while serving, leaving its pinned socket and persistent mode-0600 daemon-owned regular lock file in the trusted parent."
+when = "The replacement layerxd process opens and pins the same lock inode after the kernel releases the crashed process advisory lock."
+then = "It exclusively acquires the lock before stale inspection, removes only the disconnected daemon-owned socket inode, and holds the lock through listener cleanup without replacing or unlinking the lock file."
+
+[case.foreign-path-refusal]
+given = "The canonical path is a regular file, symlink, foreign-owned socket, or a socket beneath a replaced or client-writable parent."
+when = "layerxd starts or stops."
+then = "The operation refuses without unlinking the entry; a connected client identity cannot rename or replace any entry in the daemon-owned parent."
+
+[case.peer-separation]
+given = "The socket owner is the layerxd uid, its group is the configured client gid, its mode is 0660, and the parent mode is 0750."
+when = "Peers with the allowed uid/gid, daemon uid, wrong uid, or wrong gid connect."
+then = "Only the exact allowed client uid/gid passes SO_PEERCRED before framing, while no accepted client has directory write permission."

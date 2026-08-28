@@ -18,7 +18,7 @@ static lxp_result apply_activity(
     const uint8_t *activity, size_t activity_length)
 {
     apply_state *state = (apply_state *)context;
-    uint8_t preimage[32U + 8U + LXP_DAEMON_ACTIVITY_BYTES];
+    uint8_t preimage[32U + 8U + LXP_MAX_ACTIVITY_BYTES];
     size_t i;
     if (state == NULL || activity == NULL ||
         global_sequence != state->expected_sequence)

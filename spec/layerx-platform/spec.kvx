@@ -3935,7 +3935,7 @@ reqs = ["46.1"]
 
 [task.38.2]
 title = "Ship the production node submission and LNI server boundary"
-status = "pending"
+status = "implemented"
 wave = 19
 requires = ["28.8"]
 do_1 = "Implement the frozen LNI handshake, submission and receipt-lookup request contract as a production daemon boundary rather than a test-only adapter."
@@ -3944,7 +3944,7 @@ do_3 = "Enforce bounded frames, deadlines, loopback UDS or authenticated mTLS tr
 do_4 = "Serve typed refusals and indeterminate submission outcomes without inventing success, retrying different bytes or exposing daemon internals."
 do_5 = "Write the real-client boundary cases and operator configuration contract without executing qualification."
 verify_cmd = "make agent-test-boundary"
-symbols = ["lxp_daemon_lni_serve","layerx_client::submit_signed"]
+symbols = ["lxp_daemon_lni_serve","submit_signed"]
 touches = ["cmd/layerxd","include/layerx/lxp_daemon.h","agent/crates/layerx-client/src/lni","agent/tests/boundary/node","Makefile","spec/layerx-platform/qualification.kvx"]
 reqs = ["46.2","1.1","1.10"]
 

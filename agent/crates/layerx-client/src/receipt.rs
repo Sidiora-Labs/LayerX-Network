@@ -6,11 +6,13 @@ use layerx_proof::receipt::{verify, AuthorizedBatch, VerificationFailure, Verifi
 
 use crate::client::ReconnectPolicy;
 use crate::lni::schema::{decode_envelope, encode_envelope, Envelope, SchemaError, Version};
+use crate::lni::refusal::decode_core_refusal;
 use crate::lni::transport::{FrameTransport, TransportError};
 use crate::submit::Unknown;
 
 const RECEIPT_LOOKUP_REQUEST_TAG: u16 = 5;
 const RECEIPT_LOOKUP_RESPONSE_TAG: u16 = 6;
+const ERROR_RESPONSE_TAG: u16 = 25;
 
 /// One and only one canonical receipt lookup key.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -71,6 +73,10 @@ pub enum ReceiptError {
     Transport(TransportError),
     Envelope(SchemaError),
     UnexpectedResponse,
+    CoreRefusal {
+        class: u8,
+        result: layerx_types::result::ResultCode,
+    },
     Verification(VerificationFailure),
     ActivityMismatch {
         expected: [u8; 32],
@@ -126,6 +132,18 @@ pub fn lookup(
     transport.send(&request)?;
     let response_bytes = transport.receive()?;
     let response = decode_envelope(&response_bytes)?;
+    if response.version.major == context.interface_version.major
+        && response.message_tag == ERROR_RESPONSE_TAG
+        && response.correlation_id == context.correlation_id
+        && response.proof_material.is_empty()
+    {
+        let refusal = decode_core_refusal(response.canonical_payload)
+            .ok_or(ReceiptError::UnexpectedResponse)?;
+        return Err(ReceiptError::CoreRefusal {
+            class: refusal.class,
+            result: refusal.result,
+        });
+    }
     if response.version.major != context.interface_version.major
         || response.message_tag != RECEIPT_LOOKUP_RESPONSE_TAG
         || response.correlation_id != context.correlation_id

@@ -1619,7 +1619,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Write restart regression cases covering a checkpointed canonical log and an existing batch log without executing them during implementation.
     - Record the exact crash and qualification matrix still required in the feature qualification log.
     - _Requirements: 46.1_
-  - [ ] 38.2 Ship the production node submission and LNI server boundary
+  - [ ] 38.2 Ship the production node submission and LNI server boundary — **Implemented - qualification pending**
     - Implement the frozen LNI handshake, submission and receipt-lookup request contract as a production daemon boundary rather than a test-only adapter.
     - Feed accepted canonical activity bytes into lxp_daemon_submit exactly once and preserve the retained-byte unknown-outcome semantics the agent client requires.
     - Enforce bounded frames, deadlines, loopback UDS or authenticated mTLS transport, peer identity and constant-time credential comparison before parsing a state-changing request.

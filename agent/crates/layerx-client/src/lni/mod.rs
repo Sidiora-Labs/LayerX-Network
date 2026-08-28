@@ -5,6 +5,7 @@ pub mod capabilities;
 pub mod framing;
 pub mod handshake;
 pub mod report;
+pub mod refusal;
 pub mod schema;
 pub mod transport;
 
