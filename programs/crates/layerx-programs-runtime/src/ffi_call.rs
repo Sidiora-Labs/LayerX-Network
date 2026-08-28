@@ -33,6 +33,7 @@ const WASM: u16 = 1;
 const ENTRYPOINT: u16 = 3;
 const CALLDATA: u16 = 4;
 const CAPABILITIES: u16 = 5;
+const ACCESS_DECLARATION: u16 = 6;
 const PRINCIPAL: u16 = 0;
 const SHARED: u16 = 1;
 const KEY: u16 = 0;
@@ -210,6 +211,7 @@ fn abi_payload(value: &AbiError) -> Vec<u8> {
         AbiError::ReceiptMismatch => vec![9],
         AbiError::BalanceAbsent => vec![13],
         AbiError::BalanceEvidenceUnavailable => vec![14],
+        AbiError::AccessDeclaration => vec![15],
         AbiError::InvalidEncoding => vec![10],
         AbiError::Storage(error) => vec![11, storage_tag(*error)],
         AbiError::Meter(error) => {
@@ -1681,6 +1683,7 @@ pub extern "C" fn layerx_programs_call_begin(
     wasm_length: u32,
     calldata_length: u32,
     capabilities_length: u16,
+    access_declaration_length: u32,
     response_capacity: u32,
     cpu_fuel: u64,
     memory_bytes: u64,
@@ -1691,6 +1694,8 @@ pub extern "C" fn layerx_programs_call_begin(
     table_elements: u64,
 ) -> i32 {
     let run = || -> Result<i32, i32> {
+        let access_declaration_length =
+            usize::try_from(access_declaration_length).map_err(|_| LENGTH_LIMIT)?;
         if token == 0
             || occupancy_token == 0
             || batch_number == 0
@@ -1707,6 +1712,7 @@ pub extern "C" fn layerx_programs_call_begin(
             || entrypoint_length > 128
             || calldata_length > 1_048_576
             || capabilities_length > 4_096
+            || access_declaration_length > crate::MAX_ACCESS_DECLARATION_BYTES
             || response_capacity > 1_048_576
         {
             return Err(NON_CANONICAL);
@@ -1801,6 +1807,15 @@ pub extern "C" fn layerx_programs_call_begin(
             scalar_bytes(usize::from(capabilities_length), |offset| unsafe {
                 layerx_programs_call_activity_byte(token, CAPABILITIES, offset)
             })?;
+        let encoded_access_declaration = scalar_bytes(
+            access_declaration_length,
+            |offset| unsafe {
+                layerx_programs_call_activity_byte(token, ACCESS_DECLARATION, offset)
+            },
+        )?;
+        let access_declaration = crate::AccessDeclaration::canonical_decode(
+            &encoded_access_declaration,
+        ).map_err(|_| NON_CANONICAL)?;
         crate::entrypoint::preflight(&calldata).map_err(|_| NON_CANONICAL)?;
         let root_wasm = scalar_bytes(
             usize::try_from(wasm_length).map_err(|_| LENGTH_LIMIT)?,
@@ -1941,6 +1956,7 @@ pub extern "C" fn layerx_programs_call_begin(
                 .execute_authorized_candidate_budgeted(
                     &mut final_storage,
                     BudgetedAuthorizedExecutionRequest::new(request, admitted, payer, binding)
+                        .with_access_declaration(access_declaration.clone())
                         .with_authenticated_execution_context(execution_context),
                 )
                 .map_err(|_| NON_CANONICAL)?;
@@ -2110,7 +2126,8 @@ pub extern "C" fn layerx_programs_call_begin(
         match executor
             .prepare_authorized_activity_budgeted(
                 &storage,
-                BudgetedAuthorizedExecutionRequest::new(request, admitted, payer, binding),
+                BudgetedAuthorizedExecutionRequest::new(request, admitted, payer, binding)
+                    .with_access_declaration(access_declaration),
             )
             .map_err(|_| NON_CANONICAL)?
         {

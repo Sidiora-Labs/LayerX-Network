@@ -1,6 +1,7 @@
 //! Namespaced storage operations exposed by the ABI transaction.
 
 use crate::meter::Meter;
+use crate::AccessMode;
 use crate::storage::{metered_bytes, NamespaceDrop, ScanLimits, StorageNamespace, StorageScan};
 
 use super::capability::CapabilityKey;
@@ -53,6 +54,9 @@ impl Abi {
     ) -> Result<Option<Vec<u8>>, AbiError> {
         let (capability, namespace) = self.storage_access(selector, false);
         self.authorization.capabilities().grant(&capability)?;
+        self.access_declaration
+            .enforce_storage_key(namespace, AccessMode::Read, key)
+            .map_err(|_| AbiError::AccessDeclaration)?;
         let value = self.storage.read(namespace, key)?;
         meter.charge_storage_read(metered_bytes(key, value.as_deref())?)?;
         Ok(value)
@@ -86,6 +90,9 @@ impl Abi {
     ) -> Result<(), AbiError> {
         let (capability, namespace) = self.storage_access(selector, true);
         self.authorization.capabilities().grant(&capability)?;
+        self.access_declaration
+            .enforce_storage_key(namespace, AccessMode::Write, key)
+            .map_err(|_| AbiError::AccessDeclaration)?;
         let bytes = metered_bytes(key, Some(value))?;
         meter.charge_storage_write(bytes)?;
         self.storage.write(namespace, key, value)?;
@@ -114,6 +121,9 @@ impl Abi {
     ) -> Result<(), AbiError> {
         let (capability, namespace) = self.storage_access(selector, true);
         self.authorization.capabilities().grant(&capability)?;
+        self.access_declaration
+            .enforce_storage_key(namespace, AccessMode::Write, key)
+            .map_err(|_| AbiError::AccessDeclaration)?;
         meter.charge_storage_write(metered_bytes(key, None)?)?;
         self.storage.delete(namespace, key)?;
         Ok(())
@@ -135,6 +145,9 @@ impl Abi {
     ) -> Result<NamespaceDrop, AbiError> {
         let (capability, namespace) = self.storage_access(selector, true);
         self.authorization.capabilities().grant(&capability)?;
+        self.access_declaration
+            .enforce_storage_prefix(namespace, AccessMode::Write, &[])
+            .map_err(|_| AbiError::AccessDeclaration)?;
         let drop = self.storage.namespace_drop_preview(namespace)?;
         meter.charge_storage_write(drop.metered_work())?;
         self.storage.reclaim_namespace(drop);
@@ -175,6 +188,9 @@ impl Abi {
     ) -> Result<StorageScan, AbiError> {
         let (capability, namespace) = self.storage_access(selector, false);
         self.authorization.capabilities().grant(&capability)?;
+        self.access_declaration
+            .enforce_storage_prefix(namespace, AccessMode::Read, prefix)
+            .map_err(|_| AbiError::AccessDeclaration)?;
         Ok(self.storage.scan(namespace, prefix, cursor, limits)?)
     }
 

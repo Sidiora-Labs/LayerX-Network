@@ -159,6 +159,52 @@ impl Capability {
 pub struct CapabilitySet(BTreeMap<CapabilityKey, Capability>);
 
 impl CapabilitySet {
+    pub(crate) fn reachable_accesses(
+        &self,
+        program: ProgramId,
+        principal: crate::PrincipalId,
+    ) -> Result<crate::AccessSet, crate::AccessRefusal> {
+        let mut storage = std::collections::BTreeSet::new();
+        let mut accounts = std::collections::BTreeSet::new();
+        let mut callees = std::collections::BTreeSet::new();
+        let mut reachable_programs = std::collections::BTreeSet::from([program]);
+        for capability in self.0.values() {
+            if let Capability::Call { program } = capability {
+                reachable_programs.insert(*program);
+            }
+        }
+        for capability in self.0.values() {
+            match capability {
+                Capability::StorageRead => {
+                    for reachable in &reachable_programs { storage.insert(crate::StorageAccess::new(crate::StorageNamespace::principal(*reachable, principal), crate::AccessMode::Read, crate::KeyAccess::prefix([])?)?); }
+                }
+                Capability::StorageWrite => {
+                    for reachable in &reachable_programs { storage.insert(crate::StorageAccess::new(crate::StorageNamespace::principal(*reachable, principal), crate::AccessMode::Write, crate::KeyAccess::prefix([])?)?); }
+                }
+                Capability::SharedStorageRead => {
+                    for reachable in &reachable_programs { storage.insert(crate::StorageAccess::new(crate::StorageNamespace::shared(*reachable), crate::AccessMode::Read, crate::KeyAccess::prefix([])?)?); }
+                }
+                Capability::SharedStorageWrite => {
+                    for reachable in &reachable_programs { storage.insert(crate::StorageAccess::new(crate::StorageNamespace::shared(*reachable), crate::AccessMode::Write, crate::KeyAccess::prefix([])?)?); }
+                }
+                Capability::Transfer402 { asset, to, .. } => {
+                    accounts.insert(crate::AccountAccess::new(principal.bytes(), *asset, crate::AccessMode::Write)?);
+                    accounts.insert(crate::AccountAccess::new(*to, *asset, crate::AccessMode::Write)?);
+                }
+                Capability::ProgramSpend { source_account, asset, to, .. } => {
+                    accounts.insert(crate::AccountAccess::new(*source_account, *asset, crate::AccessMode::Write)?);
+                    accounts.insert(crate::AccountAccess::new(*to, *asset, crate::AccessMode::Write)?);
+                }
+                Capability::BalanceView { account, asset, .. } => {
+                    accounts.insert(crate::AccountAccess::new(*account, *asset, crate::AccessMode::Read)?);
+                }
+                Capability::Call { program } => { callees.insert(*program); }
+                Capability::EmitEvent | Capability::ReceiptRead { .. } => {}
+            }
+        }
+        crate::AccessSet::new_with_callees(storage, accounts, callees)
+    }
+
     /// Constructs a validated capability set.
     ///
     /// # Errors

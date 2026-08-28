@@ -1343,7 +1343,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Add a demand-responsive component adjusting a base price per unit of the scarce resource by a deterministic rule over recent batch occupancy, computed from protocol state alone with no node-local input.
     - Prove monotonic bounds on the adjustment so the price cannot move more than a declared fraction per batch, and prove replay of a multi-schedule history reprices every activity correctly.
     - _Requirements: 39.4_
-  - [ ] 32.5 Declare access sets ahead of execution
+  - [ ] 32.5 Declare access sets ahead of execution — **Implemented - qualification pending**
     - Extend the call activity with a declared access set naming the namespaces, keys and accounts the execution may touch, in a canonical encoding covered by the activity digest.
     - Enforce the declaration at execution: a read or write outside the declared set is a typed refusal, not a silent widening, so the declaration is a commitment rather than a hint.
     - Allow a conservative over-declaration and charge for it, so declaring broadly is safe but not free.

@@ -1214,6 +1214,7 @@ pub struct BudgetedAuthorizedExecutionRequest<'a> {
     payer: PrincipalId,
     activity_binding: ActivityBudgetBinding,
     execution_context: Option<ExecutionContext>,
+    access_declaration: crate::AccessDeclaration,
 }
 
 impl<'a> BudgetedAuthorizedExecutionRequest<'a> {
@@ -1231,7 +1232,48 @@ impl<'a> BudgetedAuthorizedExecutionRequest<'a> {
             payer,
             activity_binding,
             execution_context: None,
+            access_declaration: crate::AccessDeclaration::absent(),
         }
+    }
+
+    /// Attaches the declaration already committed by the canonical activity
+    /// binding. Explicit declarations are enforced in every call frame.
+    #[must_use]
+    pub(crate) fn with_access_declaration(mut self, declaration: crate::AccessDeclaration) -> Self {
+        self.access_declaration = declaration;
+        self
+    }
+
+    /// Attaches an explicit declaration only after reproducing the kernel's
+    /// canonical activity-id hash and proving the named activity byte range is
+    /// exactly that declaration's canonical encoding.
+    pub fn with_bound_access_declaration(
+        mut self,
+        declaration: crate::AccessDeclaration,
+        canonical_activity: &[u8],
+        declaration_offset: usize,
+    ) -> Result<Self, BudgetAdmissionRefusal> {
+        if canonical_activity.len() > 1_048_576 {
+            return Err(BudgetAdmissionRefusal::MalformedCanonicalBytes);
+        }
+        let declaration_bytes = declaration
+            .canonical_bytes()
+            .map_err(|_| BudgetAdmissionRefusal::MalformedCanonicalBytes)?;
+        let end = declaration_offset
+            .checked_add(declaration_bytes.len())
+            .ok_or(BudgetAdmissionRefusal::MalformedCanonicalBytes)?;
+        if canonical_activity.get(declaration_offset..end) != Some(declaration_bytes.as_slice()) {
+            return Err(BudgetAdmissionRefusal::ActivityBindingMismatch);
+        }
+        let mut preimage = b"LXP/v1/activity-id\0".to_vec();
+        preimage.extend_from_slice(canonical_activity);
+        let digest = crate::hash_bytes(crate::HashAlgorithm::Sha256, &preimage)
+            .map_err(|_| BudgetAdmissionRefusal::MalformedCanonicalBytes)?;
+        if digest != self.activity_binding.bytes() {
+            return Err(BudgetAdmissionRefusal::ActivityBindingMismatch);
+        }
+        self.access_declaration = declaration;
+        Ok(self)
     }
 
     pub(crate) fn with_authenticated_execution_context(
@@ -1698,6 +1740,7 @@ impl Executor {
             payer,
             activity_binding,
             execution_context: _,
+            access_declaration,
         } = budgeted;
         self.validate_budget_token(&admitted_budget, payer, activity_binding)?;
         if request.module.abi_revision() != AbiRevision::V1 {
@@ -1709,7 +1752,12 @@ impl Executor {
             .preflight_entrypoint(request.entrypoint, request.calldata.is_empty())
             .map_err(ExecutionError::Entrypoint)?;
         let principal = request.authorization.principal();
-        let abi = Abi::new(
+        let reachable = request.authorization.capabilities()
+            .reachable_accesses(request.program, principal)
+            .map_err(|_| ExecutionError::Abi(AbiError::AccessDeclaration))?;
+        let declaration_charge = access_declaration.charge(&reachable)
+            .map_err(|_| ExecutionError::Abi(AbiError::AccessDeclaration))?;
+        let mut abi = Abi::new(
             self.abi_version,
             request.program,
             request.authorization,
@@ -1717,7 +1765,9 @@ impl Executor {
             request.receipts,
         )
         .map_err(ExecutionError::Abi)?;
-        let meter = Meter::new_activity(admitted_budget.resource_budget(), self.prices);
+        abi.set_access_declaration(access_declaration);
+        let mut meter = Meter::new_activity(admitted_budget.resource_budget(), self.prices);
+        meter.charge_cpu(declaration_charge.total_units()).map_err(ExecutionError::Resource)?;
         let composition = Composition::new(
             request
                 .composition
@@ -1876,6 +1926,7 @@ impl Executor {
             executor.budget,
             None,
             None,
+            crate::AccessDeclaration::absent(),
         )
     }
 
@@ -1899,6 +1950,7 @@ impl Executor {
             payer,
             activity_binding,
             execution_context,
+            access_declaration,
         } = budgeted;
         let executor = self.for_abi(crate::ABI_V2_VERSION);
         executor.validate_budget_token(&admitted_budget, payer, activity_binding)?;
@@ -1908,6 +1960,7 @@ impl Executor {
             admitted_budget.resource_budget(),
             Some(activity_binding),
             execution_context,
+            access_declaration,
         )
     }
 
@@ -1922,6 +1975,7 @@ impl Executor {
             payer,
             activity_binding,
             execution_context,
+            access_declaration,
         } = budgeted;
         self.validate_budget_token(&admitted_budget, payer, activity_binding)?;
         let execution_context = execution_context
@@ -1941,6 +1995,7 @@ impl Executor {
             admitted_budget.resource_budget(),
             Some(activity_binding),
             Some(execution_context),
+            access_declaration,
         )
     }
 
@@ -1952,6 +2007,7 @@ impl Executor {
         active_budget: ResourceBudget,
         activity_binding: Option<ActivityBudgetBinding>,
         execution_context: Option<ExecutionContext>,
+        access_declaration: crate::AccessDeclaration,
     ) -> Result<CandidateAuthorizedExecutionRecord, ExecutionError> {
         let budgeted = activity_binding.is_some();
         if self.abi_version != crate::ABI_V2_VERSION
@@ -1972,13 +2028,21 @@ impl Executor {
                 .preflight_entrypoint(request.entrypoint, request.calldata.is_empty())
                 .map_err(ExecutionError::Entrypoint)?;
         }
-        let meter = if budgeted {
+        let mut meter = if budgeted {
             Meter::new_activity(active_budget, self.prices)
         } else {
             Meter::new(active_budget, self.prices)
         };
         let principal = request.authorization.principal();
-        let abi = Abi::new(
+        let reachable = request.authorization.capabilities()
+            .reachable_accesses(request.program, principal)
+            .map_err(|_| ExecutionError::Abi(AbiError::AccessDeclaration))?;
+        let declaration_charge = access_declaration
+            .charge(&reachable)
+            .map_err(|_| ExecutionError::Abi(AbiError::AccessDeclaration))?;
+        meter.charge_cpu(declaration_charge.total_units())
+            .map_err(ExecutionError::Resource)?;
+        let mut abi = Abi::new(
             self.abi_version,
             request.program,
             request.authorization,
@@ -1986,6 +2050,7 @@ impl Executor {
             request.receipts,
         )
         .map_err(ExecutionError::Abi)?;
+        abi.set_access_declaration(access_declaration);
         let composition = Composition::new(
             request
                 .composition

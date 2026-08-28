@@ -22,7 +22,7 @@ static lxp_result occupancy_parameters(
 }
 
 enum {
-    CALL_FIXED_BYTES = 32 + 2 + 2 + 4 + 2 + 4 +
+    CALL_FIXED_BYTES = 32 + 2 + 2 + 4 + 2 + 4 + 4 +
                        LX_PROGRAMS_CALL_BUDGET_FIELDS * 8,
     DEPLOY_FIXED_BYTES = 104,
     UPGRADE_FIXED_BYTES = 106
@@ -248,9 +248,10 @@ static int exact_fee_applied(lxp_u128 actor_before, lxp_u128 treasury_before,
            lxp_u128_cmp(treasury->balance, expected_treasury) == 0 ? 0 : 1;
 }
 
-static size_t call_payload_with_capabilities(
+static size_t call_payload_with_access(
     uint8_t *out, const uint8_t program_id[32],
-    const uint8_t *capabilities, size_t capabilities_length)
+    const uint8_t *capabilities, size_t capabilities_length,
+    const uint8_t *access_declaration, size_t access_declaration_length)
 {
     static const uint8_t entrypoint[] = "run";
     const uint64_t budget[LX_PROGRAMS_CALL_BUDGET_FIELDS] = {
@@ -268,6 +269,8 @@ static size_t call_payload_with_capabilities(
     cursor += 4U;
     write_u16(out + cursor, (uint16_t)capabilities_length);
     cursor += 2U;
+    write_u32(out + cursor, (uint32_t)access_declaration_length);
+    cursor += 4U;
     write_u32(out + cursor, 16U);
     cursor += 4U;
     for (index = 0U; index < LX_PROGRAMS_CALL_BUDGET_FIELDS; ++index) {
@@ -277,7 +280,20 @@ static size_t call_payload_with_capabilities(
     (void)memcpy(out + cursor, entrypoint, sizeof(entrypoint) - 1U);
     cursor += sizeof(entrypoint) - 1U;
     (void)memcpy(out + cursor, capabilities, capabilities_length);
-    return cursor + capabilities_length;
+    cursor += capabilities_length;
+    (void)memcpy(out + cursor, access_declaration, access_declaration_length);
+    return cursor + access_declaration_length;
+}
+
+static size_t call_payload_with_capabilities(
+    uint8_t *out, const uint8_t program_id[32],
+    const uint8_t *capabilities, size_t capabilities_length)
+{
+    static const uint8_t absent_access[] =
+        "LayerX/programs/access-declaration/v1\0";
+    return call_payload_with_access(out, program_id, capabilities,
+                                    capabilities_length, absent_access,
+                                    sizeof(absent_access));
 }
 
 static size_t call_payload(uint8_t *out, const uint8_t program_id[32])
@@ -308,7 +324,7 @@ static size_t staged_call_payload(uint8_t *out, const uint8_t program_id[32])
 static int malformed_call_payloads(void)
 {
     uint8_t arena_bytes[8192];
-    uint8_t payload[CALL_FIXED_BYTES + LX_PROGRAMS_MAX_ENTRYPOINT_BYTES + 4U];
+    uint8_t payload[CALL_FIXED_BYTES + LX_PROGRAMS_MAX_ENTRYPOINT_BYTES + 64U];
     uint8_t program_id[32];
     lxp_arena arena;
     lxp_state_store state;
@@ -365,7 +381,12 @@ static int malformed_call_payloads(void)
         LXP_ERR_NON_CANONICAL)
         return 1;
     length = call_payload(payload, program_id);
-    write_u32(payload + 42U, LX_PROGRAMS_MAX_RESPONSE_BYTES + 1U);
+    write_u32(payload + 42U, LX_PROGRAMS_MAX_ACCESS_DECLARATION_BYTES + 1U);
+    if (lxp_programs_call_decode(&ctx, payload, length, &decoded) !=
+        LXP_ERR_NON_CANONICAL)
+        return 1;
+    length = call_payload(payload, program_id);
+    write_u32(payload + 46U, LX_PROGRAMS_MAX_RESPONSE_BYTES + 1U);
     if (lxp_programs_call_decode(&ctx, payload, length, &decoded) !=
         LXP_ERR_NON_CANONICAL)
         return 1;
@@ -438,6 +459,72 @@ static void fill_activity(lxp_activity *activity, uint32_t activity_type,
     activity->idempotency_key[31] = 1U;
     activity->payload = (lxp_byte_span){payload, payload_length};
     (void)lxp_hash_payload(payload, payload_length, activity->payload_hash);
+}
+
+static int call_access_declaration_is_activity_bound(void)
+{
+    static const uint8_t did[] = "did:lxp:access-binding";
+    static const uint8_t absent_access[] =
+        "LayerX/programs/access-declaration/v1\0";
+    uint8_t original[CALL_FIXED_BYTES + 128U];
+    uint8_t mutated[CALL_FIXED_BYTES + 128U];
+    uint8_t mutation[sizeof(absent_access)];
+    uint8_t program_id[32];
+    uint8_t authority[32];
+    uint8_t original_arena_bytes[2048];
+    uint8_t mutated_arena_bytes[2048];
+    uint8_t original_id[32];
+    uint8_t mutated_id[32];
+    lxp_activity original_activity;
+    lxp_activity mutated_activity;
+    lxp_arena original_arena;
+    lxp_arena mutated_arena;
+    lxp_byte_span original_encoded;
+    lxp_byte_span mutated_encoded;
+    const uint8_t capabilities[] = {0U, 0U};
+    size_t original_length;
+    size_t mutated_length;
+    (void)memset(program_id, 0x61, sizeof(program_id));
+    (void)memset(authority, 0x62, sizeof(authority));
+    (void)memcpy(mutation, absent_access, sizeof(mutation));
+    mutation[sizeof(mutation) - 1U] = 1U;
+    original_length = call_payload_with_access(
+        original, program_id, capabilities, sizeof(capabilities),
+        absent_access, sizeof(absent_access));
+    mutated_length = call_payload_with_access(
+        mutated, program_id, capabilities, sizeof(capabilities),
+        mutation, sizeof(mutation));
+    fill_activity(&original_activity, LX_PROGRAMS_CALL, original,
+                  original_length, did, sizeof(did) - 1U, authority);
+    fill_activity(&mutated_activity, LX_PROGRAMS_CALL, mutated,
+                  mutated_length, did, sizeof(did) - 1U, authority);
+    if (original_length != mutated_length ||
+        lxp_ct_memcmp(original_activity.payload_hash,
+                      mutated_activity.payload_hash, 32U) == 0 ||
+        lxp_activity_verify_payload_hash(&original_activity) != LXP_OK ||
+        lxp_activity_verify_payload_hash(&mutated_activity) != LXP_OK)
+        return 1;
+    (void)memcpy(mutated_activity.payload_hash,
+                 original_activity.payload_hash, 32U);
+    if (lxp_activity_verify_payload_hash(&mutated_activity) == LXP_OK)
+        return 1;
+    (void)lxp_hash_payload(mutated, mutated_length,
+                          mutated_activity.payload_hash);
+    if (lxp_arena_init(&original_arena, original_arena_bytes,
+                       sizeof(original_arena_bytes)) != LXP_OK ||
+        lxp_arena_init(&mutated_arena, mutated_arena_bytes,
+                       sizeof(mutated_arena_bytes)) != LXP_OK ||
+        lxp_activity_encode(&original_activity, &original_arena,
+                            &original_encoded) != LXP_OK ||
+        lxp_activity_encode(&mutated_activity, &mutated_arena,
+                            &mutated_encoded) != LXP_OK ||
+        lxp_activity_id(original_encoded.bytes, original_encoded.length,
+                        original_id) != LXP_OK ||
+        lxp_activity_id(mutated_encoded.bytes, mutated_encoded.length,
+                        mutated_id) != LXP_OK ||
+        lxp_ct_memcmp(original_id, mutated_id, 32U) == 0)
+        return 1;
+    return 0;
 }
 
 static int deploy_and_upgrade_persist_exact_artifacts(void)
@@ -896,6 +983,7 @@ static int qualify_porting_reference(const char *path, uint8_t marker)
 int main(int argc, char **argv)
 {
     if (malformed_call_payloads() != 0) return 1;
+    if (call_access_declaration_is_activity_bound() != 0) return 1;
     if (deploy_and_upgrade_persist_exact_artifacts() != 0) return 1;
     if (argc == 1) return 0;
     if (argc != 4) return 1;

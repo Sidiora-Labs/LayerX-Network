@@ -131,7 +131,7 @@ pub const HOST_FUNCTIONS: [HostFunction; 7] = [
 ];
 
 /// Exact authority fixed for one invocation.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AuthorizationContext {
     principal: PrincipalId,
     capabilities: CapabilitySet,
@@ -367,7 +367,7 @@ pub struct AbiCommit {
 }
 
 /// Stable capability-ABI refusal taxonomy.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AbiError {
     WrongVersion,
     InvalidCapability,
@@ -383,6 +383,7 @@ pub enum AbiError {
     InvalidEncoding,
     Storage(StorageError),
     Meter(MeterRefusal),
+    AccessDeclaration,
 }
 
 impl Display for AbiError {
@@ -404,6 +405,7 @@ impl Display for AbiError {
             Self::InvalidEncoding => formatter.write_str("program ABI input encoding is invalid"),
             Self::Storage(error) => write!(formatter, "storage refusal: {error}"),
             Self::Meter(error) => write!(formatter, "meter refusal: {error}"),
+            Self::AccessDeclaration => formatter.write_str("access falls outside the activity declaration"),
         }
     }
 }
@@ -435,6 +437,7 @@ pub struct Abi {
     receipts: BTreeMap<[u8; 32], ReceiptView>,
     balances: BTreeMap<([u8; 32], [u8; 32]), Result<BalanceView, AbiError>>,
     effects: AbiEffects,
+    access_declaration: crate::AccessDeclaration,
 }
 
 impl Abi {
@@ -502,6 +505,7 @@ impl Abi {
             receipts: verified,
             balances,
             effects: AbiEffects::default(),
+            access_declaration: crate::AccessDeclaration::absent(),
         })
     }
 
@@ -546,6 +550,7 @@ impl Abi {
             receipts,
             balances,
             effects: AbiEffects::default(),
+            access_declaration: crate::AccessDeclaration::absent(),
         })
     }
 
@@ -601,6 +606,14 @@ impl Abi {
         self.effects.calls.extend(effects.calls);
         self.effects.transfers.extend(effects.transfers);
         self.effects.namespace_drops.extend(effects.namespace_drops);
+    }
+
+    pub(crate) fn set_access_declaration(&mut self, declaration: crate::AccessDeclaration) {
+        self.access_declaration = declaration;
+    }
+
+    pub(crate) const fn access_declaration(&self) -> &crate::AccessDeclaration {
+        &self.access_declaration
     }
 
     #[must_use]
@@ -667,6 +680,9 @@ impl Abi {
         self.authorization
             .capabilities()
             .grant(&CapabilityKey::Call(callee))?;
+        self.access_declaration
+            .enforce_call(callee)
+            .map_err(|_| AbiError::AccessDeclaration)?;
         if input.len() > MAX_CALL_INPUT_BYTES {
             return Err(AbiError::CallBounds);
         }
@@ -710,6 +726,10 @@ impl Abi {
         if amount > *maximum_amount {
             return Err(AbiError::CapabilityEscalation);
         }
+        self.access_declaration
+            .enforce_account(self.authorization.principal().bytes(), asset, crate::AccessMode::Write)
+            .and_then(|()| self.access_declaration.enforce_account(to, asset, crate::AccessMode::Write))
+            .map_err(|_| AbiError::AccessDeclaration)?;
         self.effects.transfers.push(TransferRequest {
             program: self.program,
             principal: self.authorization.principal(),
@@ -750,6 +770,10 @@ impl Abi {
         }
         let binding = ProgramFundingBinding::issue(self.program, seed, destination_account, asset)
             .map_err(|_| AbiError::CapabilityDenied)?;
+        self.access_declaration
+            .enforce_account(self.authorization.principal().bytes(), asset, crate::AccessMode::Write)
+            .and_then(|()| self.access_declaration.enforce_account(destination_account, asset, crate::AccessMode::Write))
+            .map_err(|_| AbiError::AccessDeclaration)?;
         self.effects.transfers.push(TransferRequest {
             program: self.program,
             principal: self.authorization.principal(),
@@ -824,6 +848,10 @@ impl Abi {
             TransferLawError::InvalidProgramAuthority => AbiError::CapabilityDenied,
             _ => AbiError::InvalidEncoding,
         })?;
+        self.access_declaration
+            .enforce_account(source_account, asset, crate::AccessMode::Write)
+            .and_then(|()| self.access_declaration.enforce_account(to, asset, crate::AccessMode::Write))
+            .map_err(|_| AbiError::AccessDeclaration)?;
         self.effects.transfers.push(TransferRequest {
             program: self.program,
             principal: self.authorization.principal(),
@@ -861,6 +889,9 @@ impl Abi {
         self.authorization
             .capabilities()
             .grant(&CapabilityKey::BalanceView { account, asset })?;
+        self.access_declaration
+            .enforce_account(account, asset, crate::AccessMode::Read)
+            .map_err(|_| AbiError::AccessDeclaration)?;
         self.balances
             .get(&(account, asset))
             .cloned()

@@ -3351,7 +3351,7 @@ reqs = ["39.4"]
 
 [task.32.5]
 title = "Declare access sets ahead of execution"
-status = "pending"
+status = "implemented"
 wave = 18
 requires = ["29.1"]
 do_1 = "Extend the call activity with a declared access set naming the namespaces, keys and accounts the execution may touch, in a canonical encoding covered by the activity digest."

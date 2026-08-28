@@ -11,7 +11,19 @@ enum Field { ExecutingProgram=1, ImmediateCaller=2, InvokingPrincipal=3, Activit
 /// Opaque canonical identifier of the principal that invoked this activity.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Principal([u8; PROGRAM_BYTES]);
-impl Principal { #[must_use] pub const fn bytes(self) -> [u8; PROGRAM_BYTES] { self.0 } }
+impl Principal {
+    /// Constructs an ahead-of-execution principal identifier.
+    /// # Errors Refuses the all-zero reserved identifier.
+    pub const fn new(bytes: [u8; PROGRAM_BYTES]) -> Result<Self, ProgramError> {
+        let mut index = 0;
+        while index < bytes.len() {
+            if bytes[index] != 0 { return Ok(Self(bytes)); }
+            index += 1;
+        }
+        Err(ProgramError::value(crate::Field::Account, crate::Reason::Zero))
+    }
+    #[must_use] pub const fn bytes(self) -> [u8; PROGRAM_BYTES] { self.0 }
+}
 
 /// Protocol-authenticated facts for the active call frame.
 pub struct Context;
@@ -33,7 +45,7 @@ impl Context {
         match length { 1 if output[0]==0 => Ok(None), 33 if output[0]==1 => { let mut id=[0u8;32]; id.copy_from_slice(&output[1..]); Ok(Some(ProgramId::new(id)?)) }, _ => Err(ProgramError::value(crate::Field::Buffer, crate::Reason::Malformed)) }
     }
     /// Returns the activity principal. # Errors Refuses unauthenticated context.
-    pub fn invoking_principal() -> Result<Principal, ProgramError> { Ok(Principal(Self::read::<32>(Field::InvokingPrincipal)?)) }
+    pub fn invoking_principal() -> Result<Principal, ProgramError> { Principal::new(Self::read::<32>(Field::InvokingPrincipal)?) }
     /// Returns the activity sequence. # Errors Refuses unauthenticated context.
     pub fn activity_sequence() -> Result<u64, ProgramError> { Ok(u64::from_be_bytes(Self::read::<8>(Field::ActivitySequence)?)) }
     /// Returns the batch height. # Errors Refuses unauthenticated context.

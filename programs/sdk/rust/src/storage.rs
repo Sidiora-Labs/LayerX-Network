@@ -14,7 +14,7 @@ use crate::buffer::Bytes;
 use crate::host;
 
 /// A key inside this program's own namespace.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct StorageKey<'a>(&'a [u8]);
 
 impl<'a> StorageKey<'a> {

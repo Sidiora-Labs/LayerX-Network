@@ -14,7 +14,7 @@
 #include <string.h>
 
 enum {
-    PROGRAM_CALL_FIXED_BYTES = 32 + 2 + 2 + 4 + 2 + 4 +
+    PROGRAM_CALL_FIXED_BYTES = 32 + 2 + 2 + 4 + 2 + 4 + 4 +
                                LX_PROGRAMS_CALL_BUDGET_FIELDS * 8,
     PROGRAM_RECORD_BYTES = 71,
     PROGRAM_KEY_BYTES = 40
@@ -63,6 +63,8 @@ struct lxp_programs_call_activity {
     const uint8_t *calldata;
     uint16_t capabilities_length;
     const uint8_t *capabilities;
+    uint32_t access_declaration_length;
+    const uint8_t *access_declaration;
     uint32_t response_capacity;
     uint64_t budget[LX_PROGRAMS_CALL_BUDGET_FIELDS];
     const lxp_authority_resolved *authority;
@@ -1222,7 +1224,8 @@ static lxp_result call_scalar_begin(const lxp_programs_call_activity *value,
         value->ctx->protocol_version,
         value->abi_version, value->entrypoint_length, value->wasm_length,
         value->calldata_length,
-        value->capabilities_length, value->response_capacity,
+        value->capabilities_length, value->access_declaration_length,
+        value->response_capacity,
         value->budget[0], value->budget[1], value->budget[2], value->budget[3],
         value->budget[4], value->budget[5], value->budget[6]);
 }
@@ -1258,6 +1261,10 @@ lxp_result layerx_programs_call_activity_byte(uint64_t token, uint16_t section,
     case LX_PROGRAMS_ACTIVITY_BYTES_CAPABILITIES:
         bytes = value->capabilities;
         length = value->capabilities_length;
+        break;
+    case LX_PROGRAMS_ACTIVITY_BYTES_ACCESS_DECLARATION:
+        bytes = value->access_declaration;
+        length = value->access_declaration_length;
         break;
     default:
         return LXP_ERR_UNKNOWN_FIELD;
@@ -1619,6 +1626,8 @@ lxp_result lxp_programs_call_decode(lxp_module_ctx *ctx,
     cursor += 4U;
     value->capabilities_length = read_u16(payload + cursor);
     cursor += 2U;
+    value->access_declaration_length = read_u32(payload + cursor);
+    cursor += 4U;
     value->response_capacity = read_u32(payload + cursor);
     cursor += 4U;
     for (index = 0U; index < LX_PROGRAMS_CALL_BUDGET_FIELDS; ++index) {
@@ -1632,6 +1641,7 @@ lxp_result lxp_programs_call_decode(lxp_module_ctx *ctx,
         value->abi_version == 0U ||
         value->calldata_length > LX_PROGRAMS_MAX_CALLDATA_BYTES ||
         value->capabilities_length > LX_PROGRAMS_MAX_CAPABILITY_BYTES ||
+        value->access_declaration_length > LX_PROGRAMS_MAX_ACCESS_DECLARATION_BYTES ||
         value->response_capacity > LX_PROGRAMS_MAX_RESPONSE_BYTES)
         return LXP_ERR_NON_CANONICAL;
     if (value->abi_version > registration->abi_version ||
@@ -1648,6 +1658,9 @@ lxp_result lxp_programs_call_decode(lxp_module_ctx *ctx,
     if ((size_t)value->capabilities_length > SIZE_MAX - expected)
         return LXP_ERR_LENGTH_LIMIT;
     expected += (size_t)value->capabilities_length;
+    if ((size_t)value->access_declaration_length > SIZE_MAX - expected)
+        return LXP_ERR_LENGTH_LIMIT;
+    expected += (size_t)value->access_declaration_length;
     if (expected != payload_length ||
         !valid_entrypoint(payload + cursor, value->entrypoint_length))
         return LXP_ERR_NON_CANONICAL;
@@ -1656,6 +1669,8 @@ lxp_result lxp_programs_call_decode(lxp_module_ctx *ctx,
     value->calldata = payload + cursor;
     cursor += value->calldata_length;
     value->capabilities = payload + cursor;
+    cursor += value->capabilities_length;
+    value->access_declaration = payload + cursor;
     *decoded = value;
     return LXP_OK;
 }
@@ -1692,7 +1707,8 @@ lxp_result lxp_programs_call_validate(
     value->wasm_length = (uint32_t)wasm_length;
     return lxp_ctx_charge_gas(ctx, (uint64_t)PROGRAM_CALL_FIXED_BYTES +
                               value->entrypoint_length + value->calldata_length +
-                              value->capabilities_length);
+                              value->capabilities_length +
+                              value->access_declaration_length);
 }
 
 lxp_result lxp_programs_call_execute(

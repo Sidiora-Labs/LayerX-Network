@@ -898,7 +898,7 @@ fn execute_nested(
         .graph()
         .clone();
     admitted_graph.enter(callee)?;
-    let (principal, capabilities, storage, receipts, balances, callee_frame) = {
+    let (principal, capabilities, storage, receipts, balances, access_declaration, callee_frame) = {
         let abi = state.abi_mut().ok_or(CompositionRefusal::NotComposable)?;
         let callee_frame = admitted_graph
             .current()
@@ -911,6 +911,7 @@ fn execute_nested(
             abi.storage_snapshot(),
             abi.verified_receipts(),
             abi.verified_balances(),
+            abi.access_declaration().clone(),
             callee_frame,
         )
     };
@@ -929,7 +930,7 @@ fn execute_nested(
         }));
     }
     let authorization = AuthorizationContext::nested(principal, capabilities, callee_frame);
-    let child_abi = Abi::nested(
+    let mut child_abi = Abi::nested(
         match expected {
             AbiRevision::V1 => crate::abi::manifest::ABI_V1_VERSION,
             AbiRevision::V2 => crate::abi::manifest::ABI_V2_VERSION,
@@ -940,6 +941,7 @@ fn execute_nested(
         receipts,
         balances,
     )?;
+    child_abi.set_access_declaration(access_declaration);
     let child_graph = state
         .composition()
         .ok_or(CompositionRefusal::NotComposable)?

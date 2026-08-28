@@ -17,6 +17,8 @@ pub mod abi;
 #[deny(unsafe_code)]
 pub mod accounts;
 #[deny(unsafe_code)]
+pub mod access;
+#[deny(unsafe_code)]
 pub mod budget;
 #[deny(unsafe_code)]
 pub mod cache;
@@ -84,6 +86,12 @@ pub use abi::response::{CallResponse, ResponseRefusal, MAX_CALL_RESPONSE_BYTES};
 pub use accounts::{
     derive_program_account, program_account_preimage, ProgramAccount, ProgramAccountError,
     MAX_PROGRAM_ACCOUNT_SEED_BYTES, PROGRAM_ACCOUNT_BYTES, PROGRAM_ACCOUNT_DOMAIN,
+};
+pub use access::{
+    AccessCharge, AccessDeclaration, AccessMode, AccessRefusal, AccessSet, AccessSetBuilder,
+    AccountAccess, KeyAccess, StorageAccess, ACCESS_DECLARATION_DOMAIN, ACCESS_SET_DOMAIN,
+    MAX_ACCESS_ACCOUNT_ENTRIES, MAX_ACCESS_DECLARATION_BYTES, MAX_ACCESS_SET_BYTES,
+    MAX_ACCESS_STORAGE_ENTRIES, MAX_ACCESS_CALLEE_ENTRIES,
 };
 pub use budget::{
     ActivityBudgetBinding, AdmittedBudget, BudgetAdmissionRefusal, BudgetDimension, DeclaredBudget,

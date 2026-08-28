@@ -331,11 +331,14 @@ lxp_result lxp_programs_metering_genesis_project(
     lxp_kernel *kernel);
 
 /* Canonical CALL payload limits. The activity names a UTF-8 export, carries
- * opaque ABI calldata, and has no ambient or process-global staging state. */
+ * opaque ABI calldata, and has no ambient or process-global staging state.
+ * The length-delimited access declaration is part of these payload bytes and
+ * therefore part of the kernel's canonical activity digest. */
 enum {
     LX_PROGRAMS_MAX_ENTRYPOINT_BYTES = 128,
     LX_PROGRAMS_MAX_CAPABILITY_BYTES = 4096,
     LX_PROGRAMS_MAX_CALLDATA_BYTES = 1048576,
+    LX_PROGRAMS_MAX_ACCESS_DECLARATION_BYTES = 1048576,
     LX_PROGRAMS_MAX_RESPONSE_BYTES = 1048576,
     LX_PROGRAMS_CALL_BUDGET_FIELDS = 7
 };
@@ -345,7 +348,8 @@ enum {
     LX_PROGRAMS_ACTIVITY_BYTES_MIGRATION_HOOK = 2,
     LX_PROGRAMS_ACTIVITY_BYTES_ENTRYPOINT = 3,
     LX_PROGRAMS_ACTIVITY_BYTES_CALLDATA = 4,
-    LX_PROGRAMS_ACTIVITY_BYTES_CAPABILITIES = 5
+    LX_PROGRAMS_ACTIVITY_BYTES_CAPABILITIES = 5,
+    LX_PROGRAMS_ACTIVITY_BYTES_ACCESS_DECLARATION = 6
 };
 
 enum {
@@ -403,7 +407,7 @@ lxp_result layerx_programs_call_begin(
     uint16_t protocol_version,
     uint16_t abi_version, uint16_t entrypoint_length,
     uint32_t wasm_length, uint32_t calldata_length, uint16_t capabilities_length,
-    uint32_t response_capacity,
+    uint32_t access_declaration_length, uint32_t response_capacity,
     uint64_t cpu_fuel, uint64_t memory_bytes,
     uint64_t storage_read_bytes, uint64_t storage_write_bytes,
     uint64_t output_values, uint64_t output_bytes,

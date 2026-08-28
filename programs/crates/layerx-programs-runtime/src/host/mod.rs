@@ -549,7 +549,9 @@ fn encode_receipt(view: &ReceiptView) -> Vec<u8> {
 
 pub(crate) const fn error_status(error: AbiError) -> i32 {
     match error {
-        AbiError::CapabilityDenied | AbiError::CapabilityEscalation => STATUS_DENIED,
+        AbiError::CapabilityDenied
+        | AbiError::CapabilityEscalation
+        | AbiError::AccessDeclaration => STATUS_DENIED,
         AbiError::Meter(_) => STATUS_METER,
         AbiError::ReceiptMismatch | AbiError::BalanceEvidenceUnavailable => STATUS_EVIDENCE,
         AbiError::BalanceAbsent => STATUS_ABSENT,
