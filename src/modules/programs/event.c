@@ -15,7 +15,10 @@ enum {
 };
 
 static const uint8_t guest_domain[GUEST_DOMAIN_BYTES] = { 'L', 'X', 'G', 'E' };
-static const uint8_t outcome_domain[OUTCOME_DOMAIN_BYTES] = { 'L', 'X', 'C', 'O' };
+static const uint8_t legacy_outcome_domain[OUTCOME_DOMAIN_BYTES] = {
+    'L', 'X', 'C', 'O'
+};
+static const uint8_t outcome_domain[OUTCOME_DOMAIN_BYTES] = { 'L', 'X', 'M', 'O' };
 static const uint8_t topic_domain[TOPIC_DOMAIN_BYTES] =
     "LayerX/programs/event-topic/v1";
 static const uint8_t data_domain[DATA_DOMAIN_BYTES] =
@@ -33,6 +36,17 @@ static void write_u32(uint8_t out[4], uint32_t value)
     out[1] = (uint8_t)(value >> 16U);
     out[2] = (uint8_t)(value >> 8U);
     out[3] = (uint8_t)value;
+}
+
+static uint16_t read_u16(const uint8_t in[2])
+{
+    return (uint16_t)(((uint16_t)in[0] << 8U) | in[1]);
+}
+
+static uint32_t read_u32(const uint8_t in[4])
+{
+    return ((uint32_t)in[0] << 24U) | ((uint32_t)in[1] << 16U) |
+           ((uint32_t)in[2] << 8U) | in[3];
 }
 
 static lxp_result digest(const uint8_t *domain, size_t domain_length,
@@ -78,12 +92,61 @@ static bool envelope_effect_valid(const lxp_effect *effect)
                effect->body[sizeof(guest_domain)] ==
                    LXP_PROGRAMS_EVENT_ENVELOPE_VERSION &&
                effect->body[sizeof(guest_domain) + 1U] == GUEST_KIND;
-    if (effect->event_type == LX_PROGRAMS_EVENT_CALL_OUTCOME)
-        return effect->body_length == LXP_PROGRAMS_EVENT_OUTCOME_BODY_BYTES &&
-               memcmp(effect->body, outcome_domain, sizeof(outcome_domain)) == 0 &&
-               effect->body[sizeof(outcome_domain)] ==
-                   LXP_PROGRAMS_EVENT_ENVELOPE_VERSION &&
-               effect->body[sizeof(outcome_domain) + 1U] == OUTCOME_KIND;
+    if (effect->event_type == LX_PROGRAMS_EVENT_CALL_OUTCOME) {
+        const bool legacy =
+            effect->body_length == LXP_PROGRAMS_EVENT_OUTCOME_BODY_V1_BYTES &&
+            memcmp(effect->body, legacy_outcome_domain,
+                   sizeof(legacy_outcome_domain)) == 0 &&
+            effect->body[sizeof(legacy_outcome_domain)] ==
+                LXP_PROGRAMS_EVENT_ENVELOPE_VERSION;
+        const bool metered =
+            effect->body_length == LXP_PROGRAMS_EVENT_OUTCOME_BODY_BYTES &&
+            memcmp(effect->body, outcome_domain,
+                   sizeof(outcome_domain)) == 0 &&
+            effect->body[sizeof(outcome_domain)] ==
+                LXP_PROGRAMS_OUTCOME_ENVELOPE_VERSION;
+        size_t offset = 6U;
+        uint16_t runtime_version;
+        uint16_t abi_version;
+        uint32_t fee_schedule_version;
+        uint32_t metering_schedule_version =
+            LXP_PROGRAM_METERING_SCHEDULE_VERSION_V1;
+        lxp_result terminal_result;
+        if ((!legacy && !metered) ||
+            effect->body[sizeof(outcome_domain) + 1U] != OUTCOME_KIND ||
+            !required_id(effect->body + offset) ||
+            !required_id(effect->body + offset + 32U) ||
+            !required_id(effect->body + offset + 64U))
+            return false;
+        offset += 96U;
+        if (!valid_frame(effect->body + offset,
+                         effect->body[offset +
+                             LXP_PROGRAMS_EVENT_FRAME_BYTES]))
+            return false;
+        offset += LXP_PROGRAMS_EVENT_FRAME_BYTES + 1U;
+        runtime_version = read_u16(effect->body + offset); offset += 2U;
+        abi_version = read_u16(effect->body + offset); offset += 2U;
+        fee_schedule_version = read_u32(effect->body + offset); offset += 4U;
+        if (metered) {
+            metering_schedule_version = read_u32(effect->body + offset);
+            offset += 4U;
+        }
+        terminal_result = (lxp_result)(int32_t)read_u32(
+            effect->body + offset);
+        offset += 4U;
+        if (runtime_version == 0U || abi_version == 0U ||
+            fee_schedule_version == 0U ||
+            !lxp_program_metering_schedule_available(
+                metering_schedule_version) ||
+            terminal_result != LXP_OK)
+            return false;
+        offset += 32U;
+        if (!required_id(effect->body + offset) ||
+            !required_id(effect->body + offset + 32U) ||
+            !required_id(effect->body + offset + 64U))
+            return false;
+        return offset + 96U == effect->body_length;
+    }
     return false;
 }
 
@@ -141,11 +204,16 @@ lxp_result lxp_programs_emit_call_outcome(
         !valid_frame(outcome->frame_path, outcome->frame_depth) ||
         outcome->transfer_set_root == NULL || outcome->call_graph_digest == NULL ||
         outcome->terminal_detail_digest == NULL ||
-        outcome->event_envelope_digest == NULL)
+        outcome->event_envelope_digest == NULL ||
+        outcome->runtime_version == 0U || outcome->abi_version == 0U ||
+        outcome->fee_schedule_version == 0U ||
+        !lxp_program_metering_schedule_available(
+            outcome->metering_schedule_version) ||
+        outcome->terminal_result != LXP_OK)
         return LXP_ERR_NON_CANONICAL;
     (void)memcpy(body + offset, outcome_domain, sizeof(outcome_domain));
     offset += sizeof(outcome_domain);
-    body[offset++] = LXP_PROGRAMS_EVENT_ENVELOPE_VERSION;
+    body[offset++] = LXP_PROGRAMS_OUTCOME_ENVELOPE_VERSION;
     body[offset++] = OUTCOME_KIND;
     (void)memcpy(body + offset, outcome->program_id, 32U); offset += 32U;
     (void)memcpy(body + offset, outcome->principal, 32U); offset += 32U;
@@ -156,6 +224,7 @@ lxp_result lxp_programs_emit_call_outcome(
     write_u16(body + offset, outcome->runtime_version); offset += 2U;
     write_u16(body + offset, outcome->abi_version); offset += 2U;
     write_u32(body + offset, outcome->fee_schedule_version); offset += 4U;
+    write_u32(body + offset, outcome->metering_schedule_version); offset += 4U;
     write_u32(body + offset, (uint32_t)outcome->terminal_result); offset += 4U;
     (void)memcpy(body + offset, outcome->transfer_set_root, 32U); offset += 32U;
     (void)memcpy(body + offset, outcome->call_graph_digest, 32U); offset += 32U;

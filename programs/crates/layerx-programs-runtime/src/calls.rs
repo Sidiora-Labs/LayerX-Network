@@ -574,6 +574,11 @@ pub enum CompositionRefusal {
         expected: AbiRevision,
         actual: AbiRevision,
     },
+    /// A call graph attempted to combine distinct instruction-cost plans.
+    MeteringPlanMismatch {
+        expected: [u8; 76],
+        actual: [u8; 76],
+    },
     /// The callee identifier resolves to no deployed module.
     UnknownProgram {
         /// The unresolved callee.
@@ -671,6 +676,11 @@ impl Display for CompositionRefusal {
                 formatter,
                 "composition ABI revision {actual:?} differs from root {expected:?}"
             ),
+            Self::MeteringPlanMismatch { expected, actual } => {
+                let expected_version = u32::from_be_bytes(expected[..4].try_into().unwrap_or([0; 4]));
+                let actual_version = u32::from_be_bytes(actual[..4].try_into().unwrap_or([0; 4]));
+                write!(formatter, "composition metering schedule {actual_version} differs from root schedule {expected_version}")
+            }
             Self::UnknownProgram { .. } => formatter.write_str("callee program is not deployed"),
             Self::Reentrancy { .. } => {
                 formatter.write_str("callee is already active on the call stack")
@@ -867,6 +877,14 @@ fn execute_nested(
     if actual != expected {
         return Err(CompositionRefusal::WrongVersion { expected, actual });
     }
+    let expected_metering = state.metering_schedule();
+    let actual_metering = module.meter_injection().schedule();
+    if actual_metering != expected_metering {
+        return Err(CompositionRefusal::MeteringPlanMismatch {
+            expected: expected_metering.canonical_bytes(),
+            actual: actual_metering.canonical_bytes(),
+        });
+    }
     if state.meter().is_activity() {
         module
             .preflight_entrypoint(CALL_ENTRY_EXPORT, input.is_empty())
@@ -902,7 +920,6 @@ fn execute_nested(
         .set_graph(admitted_graph);
     let mut child_meter = state.meter().clone();
     child_meter.carry_cpu(consumed)?;
-    child_meter.record_cpu(0);
     let activity_meter = child_meter.is_activity();
     if child_meter.cpu_remaining() == 0 {
         return Err(CompositionRefusal::Resource(MeterRefusal::BudgetExceeded {

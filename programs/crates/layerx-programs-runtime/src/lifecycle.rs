@@ -152,8 +152,8 @@ struct ProgramRecord {
     versions: Vec<ProgramVersion>,
 }
 
-/// Programs-module lifecycle state. Program changes are committed only after
-/// validation and migration complete successfully.
+/// Qualification and historical schedule-one lifecycle model. The production
+/// C lifecycle resolves protocol metering state before crossing the Rust bridge.
 #[derive(Debug)]
 pub struct Lifecycle {
     engine: WasmEngine,

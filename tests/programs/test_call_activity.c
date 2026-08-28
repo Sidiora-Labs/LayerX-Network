@@ -49,6 +49,48 @@ static void write_u64(uint8_t *out, uint64_t value)
         out[index] = (uint8_t)(value >> ((7U - index) * 8U));
 }
 
+static lxp_result install_metering_v1(lxp_kernel *kernel)
+{
+    static const uint8_t active_key[] = "progmet/active/v1";
+    static const uint8_t history_key[] = {
+        'p', 'r', 'o', 'g', 'm', 'e', 't', '/', 'h', 'i', 's', 't', 'o',
+        'r', 'y', '/', 'v', '1', '/', 0U, 0U, 0U, 1U
+    };
+    static const uint64_t coefficients[9] = {1U, 1U, 1U, 1U, 1U,
+                                              8U, 8U, 64U, 8U};
+    uint8_t record[LX_PROGRAMS_METERING_RECORD_BYTES] = {0U};
+    size_t offset = 0U;
+    size_t index;
+    if (kernel == NULL || kernel->module_kv_count != 0U)
+        return LXP_ERR_NON_CANONICAL;
+    (void)memcpy(record + offset, "LXMR1", 5U);
+    offset += 5U;
+    write_u32(record + offset, 1U);
+    offset += 4U;
+    for (index = 0U; index < 9U; ++index) {
+        write_u64(record + offset, coefficients[index]);
+        offset += 8U;
+    }
+    write_u64(record + offset, 1U);
+    offset += 8U;
+    record[offset++] = LX_PROGRAMS_METERING_AUTHORITY_GENESIS;
+    (void)memset(record + offset, 0xa5, 32U);
+    if (offset + 32U != sizeof(record)) return LXP_FATAL_INVARIANT;
+    kernel->module_kv[0].module_id = LXP_MODULE_PROGRAMS;
+    kernel->module_kv[0].key_length = sizeof(active_key) - 1U;
+    kernel->module_kv[0].value_length = sizeof(record);
+    (void)memcpy(kernel->module_kv[0].key, active_key,
+                 sizeof(active_key) - 1U);
+    (void)memcpy(kernel->module_kv[0].value, record, sizeof(record));
+    kernel->module_kv[1].module_id = LXP_MODULE_PROGRAMS;
+    kernel->module_kv[1].key_length = sizeof(history_key);
+    kernel->module_kv[1].value_length = sizeof(record);
+    (void)memcpy(kernel->module_kv[1].key, history_key, sizeof(history_key));
+    (void)memcpy(kernel->module_kv[1].value, record, sizeof(record));
+    kernel->module_kv_count = 2U;
+    return LXP_OK;
+}
+
 static void append_u32_leb(uint8_t *out, size_t *cursor, uint32_t value)
 {
     do {
@@ -478,6 +520,9 @@ static int deploy_and_upgrade_persist_exact_artifacts(void)
     runtime.fee_schedule = (lx_programs_fee_schedule){
         1U, 1U, 1U, 2U, 4U, 1U, 1U, 1U
     };
+    runtime.resolve_metering_schedule =
+        lxp_programs_metering_resolve_runtime;
+    runtime.metering_schedule_context = &kernel;
     (void)memcpy(runtime.occupancy_asset_id, fee_asset, 32U);
     runtime.resolve_occupancy_parameters = occupancy_parameters;
     runtime.occupancy_parameter_context = &runtime;
@@ -491,6 +536,7 @@ static int deploy_and_upgrade_persist_exact_artifacts(void)
         lxp_identity_register(&identities, did, sizeof(did) - 1U,
                               primary_key, &identity) != LXP_OK ||
         lxp_kernel_create(&kernel, &state, &journal, &parameters, 0U) != LXP_OK ||
+        install_metering_v1(&kernel) != LXP_OK ||
         lxp_kernel_register_module(&kernel, programs_module_registration()) !=
             LXP_OK ||
         lxp_kernel_bind_module_runtime(&kernel, LXP_MODULE_PROGRAMS, &runtime) !=
@@ -543,10 +589,12 @@ static int deploy_and_upgrade_persist_exact_artifacts(void)
             LXP_OK || receipt.result_code != LXP_OK ||
         !receipt.program_outcome.present ||
         receipt.program_outcome.terminal_kind != LXP_PROGRAM_TERMINAL_SUCCESS ||
-        receipt.program_outcome.encoding_version != 2U ||
+        receipt.program_outcome.encoding_version != 3U ||
         receipt.program_outcome.runtime_version == 0U ||
         receipt.program_outcome.abi_version != LX_PROGRAMS_ABI_VERSION ||
         receipt.program_outcome.fee_schedule_version != 1U ||
+        receipt.program_outcome.metering_schedule_version !=
+            LXP_PROGRAM_METERING_SCHEDULE_VERSION_V1 ||
         receipt.effects.count != 1U ||
         receipt.effects.effects[0].event_type != LX_PROGRAMS_EVENT_CALL_OUTCOME ||
         receipt.effects.effects[0].body_length == 0U ||
@@ -783,6 +831,9 @@ static int qualify_porting_reference(const char *path, uint8_t marker)
     runtime.assets = &fee_asset_state;
     runtime.asset_count = 1U;
     runtime.fee_schedule = (lx_programs_fee_schedule){1U, 1U, 1U, 2U, 4U, 1U, 1U, 1U};
+    runtime.resolve_metering_schedule =
+        lxp_programs_metering_resolve_runtime;
+    runtime.metering_schedule_context = &kernel;
     (void)memcpy(runtime.occupancy_asset_id, fee_asset, 32U);
     runtime.resolve_occupancy_parameters = occupancy_parameters;
     runtime.occupancy_parameter_context = &runtime;
@@ -796,6 +847,7 @@ static int qualify_porting_reference(const char *path, uint8_t marker)
         lxp_identity_register(&identities, did, sizeof(did) - 1U,
                               primary_key, &identity) != LXP_OK ||
         lxp_kernel_create(&kernel, &state, &journal, &parameters, 0U) != LXP_OK ||
+        install_metering_v1(&kernel) != LXP_OK ||
         lxp_kernel_register_module(&kernel, programs_module_registration_v2()) != LXP_OK ||
         lxp_kernel_bind_module_runtime(&kernel, LXP_MODULE_PROGRAMS, &runtime) != LXP_OK ||
         lxp_programs_bind_fee_transaction(&kernel) != LXP_OK ||
@@ -834,6 +886,8 @@ static int qualify_porting_reference(const char *path, uint8_t marker)
         receipt.program_outcome.runtime_version == 0U ||
         receipt.program_outcome.abi_version != LX_PROGRAMS_ACCOUNT_ABI_VERSION ||
         receipt.program_outcome.fee_schedule_version != 1U ||
+        receipt.program_outcome.metering_schedule_version !=
+            LXP_PROGRAM_METERING_SCHEDULE_VERSION_V1 ||
         lxp_ct_is_zero(receipt.program_outcome.terminal_payload_root, 32U))
         return 1;
     return lxp_state_store_destroy(&state) == LXP_OK ? 0 : 1;

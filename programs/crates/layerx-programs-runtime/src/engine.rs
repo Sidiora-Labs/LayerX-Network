@@ -80,7 +80,9 @@ impl WasmEngine {
             .wasm_reference_types(false)
             .wasm_tail_call(false)
             .wasm_extended_const(false)
-            .consume_fuel(true)
+            // Consensus CPU accounting is injected into the module and routed
+            // through RuntimeState::Meter; engine fuel is not authoritative.
+            .consume_fuel(false)
             .floats(false);
         let engine = Engine::new(&config);
         let linker = construct_host_linker(&engine)?;
@@ -101,7 +103,9 @@ impl WasmEngine {
         Self::new(ValidationLimits::declared())
     }
 
-    /// Validates a module against the deterministic subset and declared limits.
+    /// Validates a legacy-v1/qualification module under historical metering schedule one.
+    /// Consensus admission must use [`Self::validate_versioned_metered`] with
+    /// the exact protocol-state schedule selected for the activity.
     ///
     /// # Errors
     ///
@@ -121,20 +125,36 @@ impl WasmEngine {
         self.validate_v2(wasm)
     }
 
-    /// Validates against the frozen version-two ABI.
+    /// Validates the frozen version-two ABI for qualification under historical
+    /// metering schedule one. Consensus admission supplies its schedule explicitly.
     pub fn validate_v2(&self, wasm: &[u8]) -> Result<ValidatedModule, ValidationRefusal> {
         validate::validate_module(self, wasm, AbiRevision::V2)
     }
 
-    /// Selects validation from the ABI version recorded with the deployment.
+    /// Replays legacy schedule-one validation from the recorded ABI version.
+    /// New protocol execution must use [`Self::validate_versioned_metered`].
     pub fn validate_versioned(
         &self,
         abi_version: u16,
         wasm: &[u8],
     ) -> Result<ValidatedModule, ValidationRefusal> {
+        self.validate_versioned_metered(abi_version, wasm, crate::FuelSchedule::WASMI_0_31_2)
+    }
+
+    /// Validates and instruments under the exact protocol-resolved schedule.
+    pub fn validate_versioned_metered(
+        &self,
+        abi_version: u16,
+        wasm: &[u8],
+        schedule: crate::FuelSchedule,
+    ) -> Result<ValidatedModule, ValidationRefusal> {
         match abi_version {
-            crate::abi::manifest::ABI_V1_VERSION => self.validate(wasm),
-            crate::abi::manifest::ABI_V2_VERSION => self.validate_v2(wasm),
+            crate::abi::manifest::ABI_V1_VERSION => {
+                validate::validate_module_metered(self, wasm, AbiRevision::V1, schedule)
+            }
+            crate::abi::manifest::ABI_V2_VERSION => {
+                validate::validate_module_metered(self, wasm, AbiRevision::V2, schedule)
+            }
             _ => Err(ValidationRefusal::UnsupportedAbiVersion { abi_version }),
         }
     }

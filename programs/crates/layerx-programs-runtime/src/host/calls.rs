@@ -9,10 +9,8 @@ use crate::execute::ExecutionFault;
 use crate::storage::ProgramId;
 
 use super::memory::{read_fixed, read_guest, validate_output};
-use super::{
-    error_status, linker_fault, RuntimeState, ABI_MODULE, COMPOSITION_REFUSED,
-    FUEL_METERING_DISABLED, STATUS_BOUNDS, STATUS_DENIED, STATUS_INVALID,
-};
+use super::{error_status, linker_fault, RuntimeState, ABI_MODULE, COMPOSITION_REFUSED,
+    STATUS_BOUNDS, STATUS_DENIED, STATUS_INVALID};
 
 pub(super) fn register(linker: &mut Linker<RuntimeState>) -> Result<(), ExecutionFault> {
     linker
@@ -52,16 +50,12 @@ pub(super) fn register(linker: &mut Linker<RuntimeState>) -> Result<(), Executio
                 {
                     return Ok(STATUS_DENIED);
                 }
-                if caller
-                    .consume_fuel(crate::calls::CALL_ADMISSION_FUEL)
-                    .is_err()
-                {
-                    caller.data_mut().meter_mut().mark_cpu_exhausted();
+                if super::charge_host_cpu(&mut caller, crate::calls::CALL_ADMISSION_FUEL).is_err() {
                     return Err(Trap::from(TrapCode::OutOfFuel));
                 }
-                let Some(consumed) = caller.fuel_consumed() else {
-                    return Err(Trap::new(FUEL_METERING_DISABLED));
-                };
+                let consumed = caller.data().frame_cpu_consumed().map_err(|_| {
+                    Trap::from(TrapCode::OutOfFuel)
+                })?;
                 let outcome = runtime_calls::execute_nested_call(
                     caller.data_mut(),
                     consumed,
@@ -70,20 +64,9 @@ pub(super) fn register(linker: &mut Linker<RuntimeState>) -> Result<(), Executio
                     capabilities,
                 );
                 match outcome {
-                    Ok(outcome) => {
-                        if caller.consume_fuel(outcome.subtree_fuel).is_err() {
-                            caller.data_mut().meter_mut().mark_cpu_exhausted();
-                            return Err(Trap::from(TrapCode::OutOfFuel));
-                        }
-                        Ok(outcome.code)
-                    }
+                    Ok(outcome) => Ok(outcome.code),
                     Err(refusal) => {
-                        if let Some(fuel) = caller.data_mut().take_failure_subtree_fuel() {
-                            if caller.consume_fuel(fuel).is_err() {
-                                caller.data_mut().meter_mut().mark_cpu_exhausted();
-                                return Err(Trap::from(TrapCode::OutOfFuel));
-                            }
-                        }
+                        let _ = caller.data_mut().take_failure_subtree_fuel();
                         caller.data_mut().record_refusal(refusal);
                         Err(Trap::new(COMPOSITION_REFUSED))
                     }
@@ -186,16 +169,12 @@ pub(super) fn register_candidate(linker: &mut Linker<RuntimeState>) -> Result<()
                 {
                     return Ok(i64::from(STATUS_DENIED));
                 }
-                if caller
-                    .consume_fuel(crate::calls::CALL_ADMISSION_FUEL)
-                    .is_err()
-                {
-                    caller.data_mut().meter_mut().mark_cpu_exhausted();
+                if super::charge_host_cpu(&mut caller, crate::calls::CALL_ADMISSION_FUEL).is_err() {
                     return Err(Trap::from(TrapCode::OutOfFuel));
                 }
-                let Some(consumed) = caller.fuel_consumed() else {
-                    return Err(Trap::new(FUEL_METERING_DISABLED));
-                };
+                let consumed = caller.data().frame_cpu_consumed().map_err(|_| {
+                    Trap::from(TrapCode::OutOfFuel)
+                })?;
                 let outcome = runtime_calls::execute_nested_call_response(
                     caller.data_mut(),
                     consumed,
@@ -217,22 +196,13 @@ pub(super) fn register_candidate(linker: &mut Linker<RuntimeState>) -> Result<()
                                     return Err(Trap::new(COMPOSITION_REFUSED));
                                 }
                             };
-                        if caller.consume_fuel(outcome.subtree_fuel).is_err() {
-                            caller.data_mut().meter_mut().mark_cpu_exhausted();
-                            return Err(Trap::from(TrapCode::OutOfFuel));
-                        }
                         let code = u64::try_from(outcome.code).unwrap_or(0);
                         let length =
                             u64::try_from(outcome.response.bytes.len()).unwrap_or(u64::MAX);
                         Ok(((code << 32) | length).cast_signed())
                     }
                     Err(refusal) => {
-                        if let Some(fuel) = caller.data_mut().take_failure_subtree_fuel() {
-                            if caller.consume_fuel(fuel).is_err() {
-                                caller.data_mut().meter_mut().mark_cpu_exhausted();
-                                return Err(Trap::from(TrapCode::OutOfFuel));
-                            }
-                        }
+                        let _ = caller.data_mut().take_failure_subtree_fuel();
                         caller.data_mut().record_refusal(refusal);
                         Err(Trap::new(COMPOSITION_REFUSED))
                     }

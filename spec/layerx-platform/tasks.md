@@ -1329,7 +1329,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Measure the improvement on the deep-composition benchmark, where the per-nested-call rebuild costs the most.
     - Add the invariant test that a nested call reuses the engine's linker rather than constructing one.
     - _Requirements: 39.2_
-  - [ ] 32.3 Make metering an engine-independent property of the module
+  - [ ] 32.3 Make metering an engine-independent property of the module — **Implemented - qualification pending**
     - Move fuel accounting from an engine configuration flag onto an explicit, deterministic instrumentation of the module: charge points injected at function entry and at every loop back edge, with the schedule recorded in protocol state.
     - Make the charge a property of the validated artifact so metered cost is identical under any execution strategy, and record the metering schedule version in every receipt.
     - Keep byte-for-byte cost parity with the current schedule on the whole conformance corpus, so the change is a refactor of mechanism and not a repricing.

@@ -15,6 +15,7 @@ use crate::entrypoint::EntrypointRefusal;
 use crate::execute::{fault_from_error, ExecutionFault, ProgramInstance};
 use crate::host::{self, RuntimeState};
 use crate::meter::Meter;
+use crate::meter::inject::{FuelSchedule, InjectionRefusal, MeterInjection};
 
 /// Explicitly selected ABI surface used to validate and instantiate a module.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -71,6 +72,7 @@ pub enum ValidationRefusal {
         /// The engine's reason for refusing the module.
         reason: String,
     },
+    MeterInjection { reason: String },
 }
 
 impl Display for ValidationRefusal {
@@ -116,6 +118,7 @@ impl Display for ValidationRefusal {
             Self::ForbiddenVectorType => write!(f, "vector types are forbidden"),
             Self::MalformedModule { reason } => write!(f, "malformed module: {reason}"),
             Self::RejectedByEngine { reason } => write!(f, "rejected by engine: {reason}"),
+            Self::MeterInjection { reason } => write!(f, "meter injection refused: {reason}"),
         }
     }
 }
@@ -130,6 +133,7 @@ pub struct ValidatedModule {
     byte_size: u64,
     function_count: u32,
     revision: AbiRevision,
+    meter_injection: MeterInjection,
 }
 
 impl ValidatedModule {
@@ -162,6 +166,14 @@ impl ValidatedModule {
     #[must_use]
     pub const fn abi_revision(&self) -> AbiRevision {
         self.revision
+    }
+
+    #[must_use]
+    pub const fn meter_injection(&self) -> &MeterInjection { &self.meter_injection }
+
+    #[must_use]
+    pub const fn metering_schedule_version(&self) -> u32 {
+        self.meter_injection.schedule().version()
     }
 
     /// Returns how many times the owning engine built its versioned linker.
@@ -228,6 +240,13 @@ impl ValidatedModule {
         self.instantiate_state(RuntimeState::isolated(meter))
     }
 
+    pub(crate) fn instantiate_metered_retained_for_qualification(
+        &self,
+        meter: Meter,
+    ) -> Result<ProgramInstance, Box<(ExecutionFault, RuntimeState)>> {
+        self.instantiate_state_retained(RuntimeState::isolated(meter))
+    }
+
     pub(crate) fn instantiate_composed(
         &self,
         meter: Meter,
@@ -285,17 +304,11 @@ impl ValidatedModule {
 
     fn instantiate_state_retained(
         &self,
-        state: RuntimeState,
+        mut state: RuntimeState,
     ) -> Result<ProgramInstance, Box<(ExecutionFault, RuntimeState)>> {
-        let fuel = state.meter().cpu_remaining();
+        state.bind_metering_schedule(self.meter_injection.schedule());
         let mut store = wasmi::Store::new(self.module.engine(), state);
         store.limiter(|state| state.meter_mut() as &mut dyn wasmi::ResourceLimiter);
-        if let Err(error) = store.add_fuel(fuel) {
-            let fault = ExecutionFault::EngineFault {
-                reason: error.to_string(),
-            };
-            return Err(Box::new(retained_failure(store, fault)));
-        }
         let pre = match self.linker.instantiate(&mut store, &self.module) {
             Ok(pre) => pre,
             Err(error) => {
@@ -315,19 +328,11 @@ impl ValidatedModule {
 
     fn instantiate_state(
         &self,
-        state: RuntimeState,
+        mut state: RuntimeState,
     ) -> Result<ProgramInstance, (ExecutionFault, Option<crate::meter::MeterRefusal>)> {
-        let fuel = state.meter().cpu_remaining();
+        state.bind_metering_schedule(self.meter_injection.schedule());
         let mut store = wasmi::Store::new(self.module.engine(), state);
         store.limiter(|state| state.meter_mut() as &mut dyn wasmi::ResourceLimiter);
-        store.add_fuel(fuel).map_err(|error| {
-            (
-                ExecutionFault::EngineFault {
-                    reason: error.to_string(),
-                },
-                store.data().meter().exhaustion(),
-            )
-        })?;
         let pre = self
             .linker
             .instantiate(&mut store, &self.module)
@@ -343,9 +348,6 @@ fn retained_failure(
     mut store: wasmi::Store<RuntimeState>,
     fault: ExecutionFault,
 ) -> (ExecutionFault, RuntimeState) {
-    if let Some(consumed) = store.fuel_consumed() {
-        store.data_mut().meter_mut().record_cpu(consumed);
-    }
     if fault == ExecutionFault::OutOfFuel {
         store.data_mut().meter_mut().mark_cpu_exhausted();
     }
@@ -357,7 +359,46 @@ pub(crate) fn validate_module(
     wasm: &[u8],
     revision: AbiRevision,
 ) -> Result<ValidatedModule, ValidationRefusal> {
+    validate_module_metered(engine, wasm, revision, FuelSchedule::WASMI_0_31_2)
+}
+
+pub(crate) fn validate_module_metered(
+    engine: &WasmEngine,
+    wasm: &[u8],
+    revision: AbiRevision,
+    schedule: FuelSchedule,
+) -> Result<ValidatedModule, ValidationRefusal> {
     let limits = engine.limits();
+    let original = validate_original_module(engine.inner(), limits, wasm, revision)?;
+    let meter_injection = MeterInjection::instrument(wasm, schedule)
+        .map_err(|refusal: InjectionRefusal| ValidationRefusal::MeterInjection {
+            reason: refusal.to_string(),
+        })?;
+    let module = wasmi::Module::new(engine.inner(), meter_injection.instrumented_wasm())
+        .map_err(|error| ValidationRefusal::RejectedByEngine { reason: error.to_string() })?;
+    let linker = engine.host_linker();
+    Ok(ValidatedModule {
+        module,
+        linker,
+        byte_size: original.byte_size,
+        function_count: original.function_count,
+        revision,
+        meter_injection,
+    })
+}
+
+struct OriginalValidation {
+    module: wasmi::Module,
+    byte_size: u64,
+    function_count: u32,
+}
+
+fn validate_original_module(
+    engine: &wasmi::Engine,
+    limits: crate::ValidationLimits,
+    wasm: &[u8],
+    revision: AbiRevision,
+) -> Result<OriginalValidation, ValidationRefusal> {
     let byte_size = wasm.len() as u64;
     if byte_size > limits.max_module_bytes() {
         return Err(ValidationRefusal::ModuleTooLarge {
@@ -422,19 +463,27 @@ pub(crate) fn validate_module(
             _ => {}
         }
     }
-    let module = wasmi::Module::new(engine.inner(), wasm).map_err(|error| {
+    // Only after the original guest has passed the public ABI and deterministic
+    // subset checks may the runtime-private import be introduced.
+    let module = wasmi::Module::new(engine, wasm).map_err(|error| {
         ValidationRefusal::RejectedByEngine {
             reason: error.to_string(),
         }
     })?;
-    let linker = engine.host_linker();
-    Ok(ValidatedModule {
+    Ok(OriginalValidation {
         module,
-        linker,
         byte_size,
         function_count,
-        revision,
     })
+}
+
+pub(crate) fn validate_original_for_qualification(
+    engine: &wasmi::Engine,
+    limits: crate::ValidationLimits,
+    wasm: &[u8],
+    revision: AbiRevision,
+) -> Result<wasmi::Module, ValidationRefusal> {
+    validate_original_module(engine, limits, wasm, revision).map(|validated| validated.module)
 }
 
 fn refuse_import(

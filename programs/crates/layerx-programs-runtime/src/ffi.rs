@@ -51,6 +51,16 @@ pub extern "C" fn layerx_programs_migration_execute_activity(
     wasm_length: u32,
     hook_length: u16,
     abi_version: u16,
+    metering_schedule_version: u32,
+    meter_base: u64,
+    meter_entity: u64,
+    meter_load: u64,
+    meter_store: u64,
+    meter_call: u64,
+    meter_branch_kept_per_fuel: u64,
+    meter_func_locals_per_fuel: u64,
+    meter_memory_bytes_per_fuel: u64,
+    meter_table_elements_per_fuel: u64,
     h0: u64,
     h1: u64,
     h2: u64,
@@ -63,6 +73,7 @@ pub extern "C" fn layerx_programs_migration_execute_activity(
         || wasm_length > MAX_MODULE_BYTES
         || hook_length == 0
         || hook_length > MAX_HOOK_BYTES
+        || metering_schedule_version == 0
     {
         return RESULT_NON_CANONICAL;
     }
@@ -85,8 +96,38 @@ pub extern "C" fn layerx_programs_migration_execute_activity(
         Ok(owner) => owner,
         Err(_) => return RESULT_FATAL_INVARIANT,
     };
+    let mut schedule_bytes = [0_u8; 76];
+    schedule_bytes[..4].copy_from_slice(&metering_schedule_version.to_be_bytes());
+    for (index, coefficient) in [
+        meter_base,
+        meter_entity,
+        meter_load,
+        meter_store,
+        meter_call,
+        meter_branch_kept_per_fuel,
+        meter_func_locals_per_fuel,
+        meter_memory_bytes_per_fuel,
+        meter_table_elements_per_fuel,
+    ].into_iter().enumerate() {
+        let start = 4 + index * 8;
+        schedule_bytes[start..start + 8].copy_from_slice(&coefficient.to_be_bytes());
+    }
+    let schedule = match crate::FuelSchedule::from_protocol_bytes(&schedule_bytes) {
+        Ok(schedule) => schedule,
+        Err(_) => return RESULT_NON_CANONICAL,
+    };
+    let cache_key = match ModuleCacheKey::for_wasm_with_schedule(
+        code_hash,
+        crate::RUNTIME_VERSION,
+        abi_version,
+        &wasm,
+        schedule,
+    ) {
+        Ok(key) => key,
+        Err(_) => return RESULT_NON_CANONICAL,
+    };
     let module = match owner.get_or_compile(
-        ModuleCacheKey::new(code_hash, crate::RUNTIME_VERSION, abi_version),
+        cache_key,
         &wasm,
     ) {
         Ok(module) => module,

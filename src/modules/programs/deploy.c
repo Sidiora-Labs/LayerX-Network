@@ -221,6 +221,7 @@ static lxp_result execute_upgrade(lxp_module_ctx *ctx,
     const uint8_t *current;
     size_t current_length;
     uint32_t version;
+    lx_programs_metering_schedule metering_schedule;
     lxp_result status;
     program_key(value->program_id, key);
     status = lxp_ctx_kv_get(ctx, key, sizeof(key), &current, &current_length);
@@ -235,9 +236,22 @@ static lxp_result execute_upgrade(lxp_module_ctx *ctx,
     if (lxp_ct_memcmp(current + 33U, value->old_hash, 32U) != 0)
         return LXP_ERR_CONTEXT_MISMATCH;
     if ((value->policy_or_flags & 1U) != 0U) {
+        status = lxp_programs_metering_schedule_current(
+            ctx->kernel, lxp_ctx_batch_number(ctx), &metering_schedule);
+        if (status != LXP_OK) return status;
         status = layerx_programs_migration_execute_activity(
             (uint64_t)(uintptr_t)value, value->wasm_length,
             value->migration_hook_length, value->abi_version,
+            metering_schedule.version,
+            metering_schedule.coefficients[0],
+            metering_schedule.coefficients[1],
+            metering_schedule.coefficients[2],
+            metering_schedule.coefficients[3],
+            metering_schedule.coefficients[4],
+            metering_schedule.coefficients[5],
+            metering_schedule.coefficients[6],
+            metering_schedule.coefficients[7],
+            metering_schedule.coefficients[8],
             read_u64(value->new_hash), read_u64(value->new_hash + 8U),
             read_u64(value->new_hash + 16U), read_u64(value->new_hash + 24U));
         if (status != LXP_OK) return status;

@@ -103,6 +103,7 @@ struct lxp_programs_call_activity {
         uint16_t runtime_version;
         uint16_t abi_version;
         uint32_t fee_schedule_version;
+        uint32_t metering_schedule_version;
         uint64_t cpu_fuel;
         uint64_t memory_bytes;
         uint64_t storage_read_bytes;
@@ -865,6 +866,7 @@ lxp_result layerx_programs_call_terminal_begin(
     uint64_t token, uint8_t terminal_kind, lxp_result result_code,
     uint16_t runtime_version,
     uint16_t abi_version, uint32_t fee_schedule_version,
+    uint32_t metering_schedule_version,
     uint64_t cpu_fuel, uint64_t memory_bytes, uint64_t storage_read_bytes,
     uint64_t storage_write_bytes, uint32_t output_values, uint64_t output_bytes,
     uint64_t fee_hi, uint64_t fee_lo,
@@ -873,6 +875,7 @@ lxp_result layerx_programs_call_terminal_begin(
 {
     lxp_programs_call_activity *value =
         (lxp_programs_call_activity *)(uintptr_t)token;
+    const lxp_call_admission_facts *admission;
     void *graph, *terminal, *events;
     uint8_t transfer_root[32];
     lxp_result status;
@@ -880,7 +883,10 @@ lxp_result layerx_programs_call_terminal_begin(
     write_u64(transfer_root + 8U, transfer1);
     write_u64(transfer_root + 16U, transfer2);
     write_u64(transfer_root + 24U, transfer3);
+    admission = value == NULL || value->ctx == NULL ? NULL :
+        lxp_ctx_call_admission(value->ctx);
     if (value == NULL || value->ctx == NULL || value->terminal.active ||
+        admission == NULL ||
         (terminal_kind != LXP_PROGRAM_TERMINAL_SUCCESS &&
          terminal_kind != LXP_PROGRAM_TERMINAL_FAILURE &&
          terminal_kind != LXP_PROGRAM_TERMINAL_RESOURCE) ||
@@ -889,6 +895,10 @@ lxp_result layerx_programs_call_terminal_begin(
          (result_code == LXP_OK || lxp_result_is_fatal(result_code))) ||
         runtime_version == 0U || abi_version == 0U ||
         abi_version != value->abi_version || fee_schedule_version == 0U ||
+        fee_schedule_version != admission->fee_schedule_version ||
+        !lxp_program_metering_schedule_available(
+            metering_schedule_version) ||
+        metering_schedule_version != admission->metering_schedule_version ||
         graph_length == 0U || terminal_length == 0U || events_length == 0U)
         return LXP_ERR_NON_CANONICAL;
     if (value->ctx->protocol_version == LXP_PROTOCOL_VERSION_OCCUPANCY &&
@@ -917,6 +927,7 @@ lxp_result layerx_programs_call_terminal_begin(
     value->terminal.runtime_version = runtime_version;
     value->terminal.abi_version = abi_version;
     value->terminal.fee_schedule_version = fee_schedule_version;
+    value->terminal.metering_schedule_version = metering_schedule_version;
     value->terminal.cpu_fuel = cpu_fuel;
     value->terminal.memory_bytes = memory_bytes;
     value->terminal.storage_read_bytes = storage_read_bytes;
@@ -971,13 +982,14 @@ lxp_result layerx_programs_call_terminal_publish(uint64_t token)
     if (status != LXP_OK) return status;
     (void)memset(&outcome, 0, sizeof(outcome));
     outcome.present = true;
-    outcome.encoding_version = value->ctx->protocol_version ==
-        LXP_PROTOCOL_VERSION_OCCUPANCY ? 2U : 1U;
+    outcome.encoding_version = 3U;
     outcome.terminal_kind = value->terminal.terminal_kind;
     outcome.result_code = value->terminal.result_code;
     outcome.runtime_version = value->terminal.runtime_version;
     outcome.abi_version = value->terminal.abi_version;
     outcome.fee_schedule_version = value->terminal.fee_schedule_version;
+    outcome.metering_schedule_version =
+        value->terminal.metering_schedule_version;
     outcome.cpu_fuel = value->terminal.cpu_fuel;
     outcome.memory_bytes = value->terminal.memory_bytes;
     outcome.storage_read_bytes = value->terminal.storage_read_bytes;
@@ -985,11 +997,11 @@ lxp_result layerx_programs_call_terminal_publish(uint64_t token)
     outcome.output_values = value->terminal.output_values;
     outcome.output_bytes = value->terminal.output_bytes;
     outcome.fee_units = value->terminal.fee_units;
-    if (outcome.encoding_version == 2U)
+    if (outcome.encoding_version >= 2U)
         (void)memcpy(outcome.fee_schedule_prices,
                      admission->fee_schedule_prices,
                      sizeof(outcome.fee_schedule_prices));
-    if (outcome.encoding_version == 2U &&
+    if (outcome.encoding_version >= 2U &&
         outcome.terminal_kind == LXP_PROGRAM_TERMINAL_SUCCESS) {
         outcome.occupancy_byte_batches =
             value->occupancy->receipt.byte_batches;
@@ -1017,6 +1029,7 @@ lxp_result layerx_programs_call_terminal_publish(uint64_t token)
     event.runtime_version = outcome.runtime_version;
     event.abi_version = outcome.abi_version;
     event.fee_schedule_version = outcome.fee_schedule_version;
+    event.metering_schedule_version = outcome.metering_schedule_version;
     event.terminal_result = outcome.result_code;
     event.transfer_set_root = outcome.transfer_root;
     event.call_graph_digest = outcome.call_graph_root;
@@ -1171,6 +1184,8 @@ static lxp_result call_scalar_begin(const lxp_programs_call_activity *value,
     uint64_t binding[4];
     size_t index;
     if (admission == NULL || admission->fee_schedule_version == 0U ||
+        !lxp_program_metering_schedule_available(
+            admission->metering_schedule_version) ||
         admission->parameter_version == 0U)
         return LXP_FATAL_INVARIANT;
     for (index = 0U; index < 4U; ++index) {
@@ -1188,7 +1203,17 @@ static lxp_result call_scalar_begin(const lxp_programs_call_activity *value,
         binding[0], binding[1], binding[2], binding[3],
         admission->signed_fee_limit.hi, admission->signed_fee_limit.lo,
         admission->available_fee_units.hi, admission->available_fee_units.lo,
-        admission->fee_schedule_version, admission->parameter_version,
+        admission->fee_schedule_version, admission->metering_schedule_version,
+        admission->parameter_version,
+        admission->metering_schedule_coefficients[0],
+        admission->metering_schedule_coefficients[1],
+        admission->metering_schedule_coefficients[2],
+        admission->metering_schedule_coefficients[3],
+        admission->metering_schedule_coefficients[4],
+        admission->metering_schedule_coefficients[5],
+        admission->metering_schedule_coefficients[6],
+        admission->metering_schedule_coefficients[7],
+        admission->metering_schedule_coefficients[8],
         admission->fee_schedule_prices[0], admission->fee_schedule_prices[1],
         admission->fee_schedule_prices[2], admission->fee_schedule_prices[3],
         admission->fee_schedule_prices[4], admission->fee_schedule_prices[5],

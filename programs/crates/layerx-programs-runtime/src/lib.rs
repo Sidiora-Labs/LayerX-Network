@@ -128,13 +128,14 @@ pub use meter::{
     BudgetMeterRefusal, BudgetResourceKind, FeeSchedule, Meter, MeterRefusal, MeteredUsage,
     ResourceBudget, ResourceKind,
 };
+pub use meter::inject::{FuelSchedule, InjectionRefusal, MeterInjection};
 pub use occupancy::{
     OccupancyCharge, OccupancyDisposition, OccupancyError, OccupancyLedger,
     OccupancyResponsibility, OccupancySettlement, OccupancyUsage, PreparedOccupancySettlement,
     MAX_OCCUPANCY_EVIDENCE_BYTES, MAX_OCCUPANCY_LEDGER_BYTES, MAX_OCCUPANCY_POSITIONS,
 };
 pub use qualification::{
-    programs_differential_gate, programs_fuzz_observation, programs_fuzz_targets,
+    programs_differential_gate, programs_differential_gate_versioned, programs_fuzz_observation, programs_fuzz_targets,
     replay_recorded_execution, DifferentialMismatch, FuzzTarget, RecordedExecution, ReplayRefusal,
 };
 pub use storage::{

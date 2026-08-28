@@ -38,6 +38,8 @@ typedef enum lxp_program_terminal_kind {
     LXP_PROGRAM_TERMINAL_RESOURCE = 3
 } lxp_program_terminal_kind;
 
+enum { LXP_PROGRAM_METERING_SCHEDULE_VERSION_V1 = 1 };
+
 /* Receipt-native Programs outcome evidence.  These fields describe one
  * terminal runtime outcome; they are not a second receipt or a version alias. */
 typedef struct lxp_program_outcome {
@@ -48,6 +50,7 @@ typedef struct lxp_program_outcome {
     uint16_t runtime_version;
     uint16_t abi_version;
     uint32_t fee_schedule_version;
+    uint32_t metering_schedule_version;
     uint64_t cpu_fuel;
     uint64_t memory_bytes;
     uint64_t storage_read_bytes;
@@ -167,6 +170,10 @@ lxp_result lxp_receipt_build(lxp_receipt *receipt,
                              uint32_t parameter_version);
 lxp_result lxp_receipt_bind_program_outcome(
     lxp_receipt *receipt, const lxp_program_outcome *outcome);
+lxp_result lxp_program_outcome_validate(const lxp_program_outcome *outcome);
+lxp_result lxp_program_outcome_validate_for_protocol(
+    const lxp_program_outcome *outcome, uint16_t protocol_version);
+bool lxp_program_metering_schedule_available(uint32_t schedule_version);
 lxp_result lxp_receipt_encode(const lxp_receipt *receipt,
                               bool include_signature, lxp_arena *arena,
                               lxp_byte_span *encoded);

@@ -33,16 +33,60 @@ pub struct ModuleCacheKey {
     runtime_version: u16,
     abi_version: u16,
     code_hash: CodeHash,
+    metering_schedule_version: u32,
+    meter_artifact_digest: [u8; 32],
+    metering_schedule_bytes: [u8; 76],
 }
 
 impl ModuleCacheKey {
     #[must_use]
-    pub const fn new(code_hash: CodeHash, runtime_version: u16, abi_version: u16) -> Self {
+    pub(crate) const fn new(code_hash: CodeHash, runtime_version: u16, abi_version: u16) -> Self {
         Self {
             runtime_version,
             abi_version,
             code_hash,
+            metering_schedule_version: crate::meter::inject::GENESIS_METERING_SCHEDULE_VERSION,
+            meter_artifact_digest: [0; 32],
+            metering_schedule_bytes: [0; 76],
         }
+    }
+
+    #[must_use]
+    const fn with_meter_artifact(mut self, version: u32, digest: [u8; 32]) -> Self {
+        self.metering_schedule_version = version;
+        self.meter_artifact_digest = digest;
+        self
+    }
+
+    /// Constructs the complete cache identity from authenticated source bytes.
+    #[cfg(test)]
+    pub(crate) fn for_legacy_v1_wasm(
+        code_hash: CodeHash,
+        runtime_version: u16,
+        abi_version: u16,
+        wasm: &[u8],
+    ) -> Result<Self, crate::meter::inject::InjectionRefusal> {
+        Self::for_wasm_with_schedule(
+            code_hash, runtime_version, abi_version, wasm, crate::FuelSchedule::WASMI_0_31_2,
+        )
+    }
+
+    pub fn for_wasm_with_schedule(
+        code_hash: CodeHash,
+        runtime_version: u16,
+        abi_version: u16,
+        wasm: &[u8],
+        schedule: crate::FuelSchedule,
+    ) -> Result<Self, crate::meter::inject::InjectionRefusal> {
+        let injection = crate::meter::inject::MeterInjection::instrument(
+            wasm, schedule,
+        )?;
+        let mut key = Self::new(code_hash, runtime_version, abi_version).with_meter_artifact(
+            injection.schedule().version(),
+            injection.digest(),
+        );
+        key.metering_schedule_bytes = schedule.canonical_bytes();
+        Ok(key)
     }
 
     #[must_use]
@@ -59,6 +103,12 @@ impl ModuleCacheKey {
     pub const fn abi_version(self) -> u16 {
         self.abi_version
     }
+
+    #[must_use]
+    pub const fn metering_schedule_version(self) -> u32 { self.metering_schedule_version }
+
+    #[must_use]
+    pub const fn meter_artifact_digest(self) -> [u8; 32] { self.meter_artifact_digest }
 
     fn expected_revision(self) -> Result<AbiRevision, CompiledModuleRefusal> {
         if self.runtime_version != crate::RUNTIME_VERSION {
@@ -175,6 +225,7 @@ pub enum CompiledModuleRefusal {
         requested: u16,
         compiled: AbiRevision,
     },
+    MeterArtifactMismatch,
     Validation(ValidationRefusal),
 }
 
@@ -201,6 +252,9 @@ impl Display for CompiledModuleRefusal {
                 formatter,
                 "ABI version {requested} compiled as unexpected revision {compiled:?}"
             ),
+            Self::MeterArtifactMismatch => formatter.write_str(
+                "compiled metering artifact does not match the recorded schedule and digest",
+            ),
             Self::Validation(refusal) => write!(formatter, "module validation refusal: {refusal}"),
         }
     }
@@ -213,7 +267,8 @@ impl std::error::Error for CompiledModuleRefusal {
             Self::UnsupportedRuntimeVersion { .. }
             | Self::UnsupportedAbiVersion { .. }
             | Self::CodeHashMismatch { .. }
-            | Self::AbiArtifactMismatch { .. } => None,
+            | Self::AbiArtifactMismatch { .. }
+            | Self::MeterArtifactMismatch => None,
         }
     }
 }
@@ -257,7 +312,16 @@ impl CompiledModule {
         wasm: &[u8],
         expected_revision: AbiRevision,
     ) -> Result<Self, CompiledModuleRefusal> {
-        let artifact = engine.validate_versioned(key.abi_version, wasm)?;
+        let schedule = crate::FuelSchedule::from_protocol_bytes(&key.metering_schedule_bytes)
+            .map_err(|refusal| CompiledModuleRefusal::Validation(
+                ValidationRefusal::MeterInjection { reason: refusal.to_string() },
+            ))?;
+        let artifact = engine.validate_versioned_metered(key.abi_version, wasm, schedule)?;
+        if key.metering_schedule_version != artifact.metering_schedule_version()
+            || key.meter_artifact_digest != artifact.meter_injection().digest()
+        {
+            return Err(CompiledModuleRefusal::MeterArtifactMismatch);
+        }
         if artifact.abi_revision() != expected_revision {
             return Err(CompiledModuleRefusal::AbiArtifactMismatch {
                 requested: key.abi_version,
@@ -652,11 +716,9 @@ mod tests {
     }
 
     fn key(wasm: &[u8], abi_version: u16) -> ModuleCacheKey {
-        ModuleCacheKey::new(
-            Sha256::digest(wasm).into(),
-            crate::RUNTIME_VERSION,
-            abi_version,
-        )
+        ModuleCacheKey::for_legacy_v1_wasm(
+            Sha256::digest(wasm).into(), crate::RUNTIME_VERSION, abi_version, wasm,
+        ).unwrap_or_else(|refusal| panic!("metering key refused: {refusal}"))
     }
 
     fn padded_add(padding: usize) -> Vec<u8> {

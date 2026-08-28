@@ -162,6 +162,31 @@ impl ProgramInstance {
         Self { store, instance }
     }
 
+    /// Reconciles trailing legacy Wasmi guest-instruction fuel into the meter.
+    /// Host work is mirrored into both counters at its execution boundary and
+    /// advances the committed engine baseline, so it is not charged twice.
+    pub(crate) fn commit_reference_fuel(&mut self) -> Result<u64, ExecutionFault> {
+        let consumed = self
+            .store
+            .fuel_consumed()
+            .ok_or_else(|| ExecutionFault::EngineFault {
+                reason: "legacy reference engine fuel is disabled".to_string(),
+            })?;
+        let committed = self.store.data().legacy_reference_engine_committed();
+        let guest = consumed.checked_sub(committed).ok_or_else(|| {
+            ExecutionFault::EngineFault {
+                reason: "legacy reference host fuel exceeded engine fuel".to_string(),
+            }
+        })?;
+        self.store
+            .data_mut()
+            .meter_mut()
+            .charge_cpu(guest)
+            .map_err(|refusal| ExecutionFault::Resource { refusal })?;
+        self.store.data_mut().set_legacy_reference_engine_committed(consumed);
+        Ok(consumed)
+    }
+
     /// Calls an exported function with integer arguments.
     ///
     /// # Errors
@@ -185,12 +210,6 @@ impl ProgramInstance {
             });
         };
         let result_count = func.ty(&self.store).results().len();
-        let Some(consumed) = self.store.fuel_consumed() else {
-            return Err(ExecutionFault::EngineFault {
-                reason: "fuel metering disabled".to_string(),
-            });
-        };
-        self.store.data_mut().meter_mut().record_cpu(consumed);
         self.store
             .data_mut()
             .meter_mut()
@@ -199,12 +218,6 @@ impl ProgramInstance {
         let inputs: Vec<Value> = args.iter().copied().map(Value::from).collect();
         let mut outputs = vec![Value::I64(0); result_count];
         let result = func.call(&mut self.store, &inputs, &mut outputs);
-        let Some(consumed) = self.store.fuel_consumed() else {
-            return Err(ExecutionFault::EngineFault {
-                reason: "fuel metering disabled".to_string(),
-            });
-        };
-        self.store.data_mut().meter_mut().record_cpu(consumed);
         if let Err(error) = result {
             let fault = fault_from_error(&error);
             if fault == ExecutionFault::OutOfFuel {
@@ -252,28 +265,32 @@ impl ProgramInstance {
     }
 
     pub(crate) fn consume_copy_fuel(&mut self, fuel: u64) -> Result<(), EntrypointRefusal> {
-        let activity = self.meter().is_activity();
-        let result = self.store.consume_fuel(fuel);
-        if activity {
-            let consumed = self.store.fuel_consumed().ok_or_else(|| {
-                EntrypointRefusal::Fault(ExecutionFault::EngineFault {
-                    reason: "fuel metering disabled".to_string(),
-                })
-            })?;
-            self.store.data_mut().meter_mut().record_cpu(consumed);
+        if self.store.data().uses_legacy_reference_fuel() {
+            let consumed = self.store.fuel_consumed().ok_or_else(|| EntrypointRefusal::Fault(
+                ExecutionFault::EngineFault { reason: "legacy reference engine fuel is disabled".to_string() }
+            ))?;
+            let committed = self.store.data().legacy_reference_engine_committed();
+            let guest = consumed.checked_sub(committed).ok_or_else(|| EntrypointRefusal::Fault(
+                ExecutionFault::EngineFault { reason: "legacy reference host fuel exceeded engine fuel".to_string() }
+            ))?;
+            self.store.data_mut().meter_mut().charge_cpu(guest).map_err(EntrypointRefusal::Resource)?;
+            self.store.data_mut().set_legacy_reference_engine_committed(consumed);
         }
-        if result.is_err() {
+        if self.store.data().uses_legacy_reference_fuel() && self.store.consume_fuel(fuel).is_err() {
             self.store.data_mut().meter_mut().mark_cpu_exhausted();
-            let refusal = if activity {
-                self.meter().exhaustion().unwrap_or_else(|| unreachable!())
-            } else {
-                MeterRefusal::BudgetExceeded {
+            return Err(EntrypointRefusal::Resource(
+                self.store.data().meter().exhaustion().unwrap_or(MeterRefusal::BudgetExceeded {
                     resource: ResourceKind::Cpu,
-                    limit: self.meter().cpu_budget(),
-                    attempted: self.meter().cpu_budget().saturating_add(1),
-                }
-            };
-            return Err(EntrypointRefusal::Resource(refusal));
+                    limit: self.store.data().meter().cpu_budget(),
+                    attempted: self.store.data().meter().cpu_budget().saturating_add(1),
+                }),
+            ));
+        }
+        self.store.data_mut().meter_mut().charge_cpu(fuel)
+            .map_err(EntrypointRefusal::Resource)?;
+        if self.store.data().uses_legacy_reference_fuel() {
+            let consumed = self.store.fuel_consumed().unwrap_or_else(|| unreachable!());
+            self.store.data_mut().set_legacy_reference_engine_committed(consumed);
         }
         Ok(())
     }
@@ -290,6 +307,8 @@ pub struct ExecutionRecord {
     pub runtime_version: u16,
     /// ABI version under which the program executed.
     pub abi_version: u16,
+    /// Engine-neutral instruction schedule selected by the validated artifact.
+    pub metering_schedule_version: u32,
     /// Integer-only guest outputs.
     pub outputs: Vec<WasmValue>,
     /// Exact deterministic resource use and fee units.
@@ -675,6 +694,7 @@ pub struct CandidateActivityReceipt {
     abi_revision: u16,
     runtime_version: u16,
     fee_schedule_version: u32,
+    metering_schedule_version: u32,
     usage: MeteredUsage,
     graph_evidence: Vec<u8>,
     outcome: CandidateReceiptOutcome,
@@ -694,6 +714,7 @@ pub enum CandidateReceiptOutcome {
 pub struct CandidateExecutionRecord {
     runtime_version: u16,
     fee_schedule_version: u32,
+    metering_schedule_version: u32,
     outputs: Vec<WasmValue>,
     usage: MeteredUsage,
 }
@@ -742,6 +763,7 @@ impl CandidateAuthorizedExecutionRecord {
             },
             runtime_version: self.execution.runtime_version,
             fee_schedule_version: self.execution.fee_schedule_version,
+            metering_schedule_version: self.execution.metering_schedule_version,
             usage: self.execution.usage,
             graph_evidence: self.call_graph.canonical_evidence(),
             outcome: match &self.outcome {
@@ -793,9 +815,10 @@ impl CandidateAuthorizedExecutionRecord {
 
     #[must_use]
     pub fn canonical_evidence(&self) -> Vec<u8> {
-        let mut evidence = b"LXP/program-execution/v2\0".to_vec();
+        let mut evidence = b"LXP/program-execution/v3\0".to_vec();
         evidence.extend_from_slice(&self.execution.runtime_version.to_be_bytes());
         evidence.extend_from_slice(&self.execution.fee_schedule_version.to_be_bytes());
+        evidence.extend_from_slice(&self.execution.metering_schedule_version.to_be_bytes());
         evidence.extend_from_slice(&(self.execution.outputs.len() as u64).to_be_bytes());
         for output in &self.execution.outputs {
             match output {
@@ -859,6 +882,11 @@ impl CandidateExecutionRecord {
     }
 
     #[must_use]
+    pub const fn metering_schedule_version(&self) -> u32 {
+        self.metering_schedule_version
+    }
+
+    #[must_use]
     pub fn outputs(&self) -> &[WasmValue] {
         &self.outputs
     }
@@ -870,7 +898,8 @@ impl CandidateExecutionRecord {
 }
 
 impl CandidateActivityReceipt {
-    const DOMAIN: &'static [u8] = b"LXP/program-activity-receipt/v2\0";
+    const DOMAIN: &'static [u8] = b"LXP/program-activity-receipt/v3\0";
+    const LEGACY_V2_DOMAIN: &'static [u8] = b"LXP/program-activity-receipt/v2\0";
     const MAX_GRAPH_EVIDENCE_BYTES: usize = b"LayerX/programs/call-graph/v1\0".len()
         + 32
         + 16
@@ -897,6 +926,12 @@ impl CandidateActivityReceipt {
         self.fee_schedule_version
     }
 
+
+    #[must_use]
+    pub const fn metering_schedule_version(&self) -> u32 {
+        self.metering_schedule_version
+    }
+
     #[must_use]
     pub const fn usage(&self) -> MeteredUsage {
         self.usage
@@ -919,6 +954,7 @@ impl CandidateActivityReceipt {
         encoded.extend_from_slice(&self.abi_revision.to_be_bytes());
         encoded.extend_from_slice(&self.runtime_version.to_be_bytes());
         encoded.extend_from_slice(&self.fee_schedule_version.to_be_bytes());
+        encoded.extend_from_slice(&self.metering_schedule_version.to_be_bytes());
         for value in [
             self.usage.cpu_fuel,
             self.usage.memory_bytes,
@@ -973,7 +1009,9 @@ impl CandidateActivityReceipt {
     pub fn canonical_decode(encoded: &[u8]) -> Result<Self, crate::fault::FailureEncodingError> {
         use crate::fault::FailureEncodingError as Error;
         let mut cursor = ReceiptCursor::new(encoded);
-        if cursor.take(Self::DOMAIN.len())? != Self::DOMAIN {
+        let domain = cursor.take(Self::DOMAIN.len())?;
+        let legacy_v2 = domain == Self::LEGACY_V2_DOMAIN;
+        if domain != Self::DOMAIN && !legacy_v2 {
             return Err(Error::Malformed);
         }
         let root_program =
@@ -984,7 +1022,12 @@ impl CandidateActivityReceipt {
         }
         let runtime_version = u16::from_be_bytes(cursor.array()?);
         let fee_schedule_version = u32::from_be_bytes(cursor.array()?);
-        if runtime_version == 0 || fee_schedule_version == 0 {
+        let metering_schedule_version = if legacy_v2 {
+            crate::meter::inject::GENESIS_METERING_SCHEDULE_VERSION
+        } else {
+            u32::from_be_bytes(cursor.array()?)
+        };
+        if runtime_version == 0 || fee_schedule_version == 0 || metering_schedule_version == 0 {
             return Err(Error::Malformed);
         }
         let usage = MeteredUsage {
@@ -1036,6 +1079,7 @@ impl CandidateActivityReceipt {
             abi_revision,
             runtime_version,
             fee_schedule_version,
+            metering_schedule_version,
             usage,
             graph_evidence,
             outcome,
@@ -1209,9 +1253,10 @@ impl ExecutionRecord {
     #[must_use]
     pub fn canonical_evidence(&self) -> Vec<u8> {
         let mut evidence = Vec::with_capacity(64 + self.outputs.len().saturating_mul(9));
-        evidence.extend_from_slice(b"LXP/program-execution\0");
+        evidence.extend_from_slice(b"LXP/program-execution/v2\0");
         evidence.extend_from_slice(&self.runtime_version.to_be_bytes());
         evidence.extend_from_slice(&self.abi_version.to_be_bytes());
+        evidence.extend_from_slice(&self.metering_schedule_version.to_be_bytes());
         let native_output_count = self.outputs.len().to_be_bytes();
         let mut output_count = [0u8; 16];
         let count_offset = output_count.len() - native_output_count.len();
@@ -1480,6 +1525,7 @@ impl Executor {
         Ok(ExecutionRecord {
             runtime_version: self.runtime_version,
             abi_version: self.abi_version,
+            metering_schedule_version: module.metering_schedule_version(),
             outputs,
             usage,
         })
@@ -1559,6 +1605,7 @@ impl Executor {
             execution: ExecutionRecord {
                 runtime_version: self.runtime_version,
                 abi_version: self.abi_version,
+                metering_schedule_version: request.module.metering_schedule_version(),
                 outputs: vec![WasmValue::I32(code)],
                 usage,
             },
@@ -1801,6 +1848,7 @@ impl Executor {
                 execution: ExecutionRecord {
                     runtime_version: self.runtime_version,
                     abi_version: self.abi_version,
+                    metering_schedule_version: request.module.metering_schedule_version(),
                     outputs: vec![WasmValue::I32(code)],
                     usage,
                 },
@@ -2100,6 +2148,7 @@ impl Executor {
                 execution: CandidateExecutionRecord {
                     runtime_version: self.runtime_version,
                     fee_schedule_version: self.prices.version(),
+                    metering_schedule_version: request.module.metering_schedule_version(),
                     outputs: vec![WasmValue::I32(code)],
                     usage,
                 },
@@ -2144,6 +2193,7 @@ impl Executor {
             execution: CandidateExecutionRecord {
                 runtime_version: self.runtime_version,
                 fee_schedule_version: self.prices.version(),
+                metering_schedule_version: request.module.metering_schedule_version(),
                 outputs: vec![WasmValue::I32(code)],
                 usage,
             },
@@ -2205,6 +2255,7 @@ impl Executor {
             .meter()
             .finish_published_failure()
             .map_err(ExecutionError::Resource)?;
+        let metering_schedule_version = state.metering_schedule_version();
         let failure_graph = state.take_failure_graph();
         let (_, _, composition) = state.into_parts();
         let call_graph = failure_graph
@@ -2218,6 +2269,7 @@ impl Executor {
             execution: CandidateExecutionRecord {
                 runtime_version: self.runtime_version,
                 fee_schedule_version: self.prices.version(),
+                metering_schedule_version,
                 outputs: vec![WasmValue::I32(CANDIDATE_REFUSAL_SENTINEL)],
                 usage,
             },
@@ -2236,6 +2288,7 @@ impl Executor {
             .meter()
             .finish_resource_failure()
             .map_err(ExecutionError::Resource)?;
+        let metering_schedule_version = state.metering_schedule_version();
         let failure_graph = state.take_failure_graph();
         let (_, _, composition) = state.into_parts();
         let call_graph = failure_graph
@@ -2249,6 +2302,7 @@ impl Executor {
             execution: CandidateExecutionRecord {
                 runtime_version: self.runtime_version,
                 fee_schedule_version: self.prices.version(),
+                metering_schedule_version,
                 outputs: Vec::new(),
                 usage,
             },

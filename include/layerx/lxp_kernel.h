@@ -64,6 +64,8 @@ typedef struct lxp_call_admission_facts {
     lxp_u128 available_fee_units;
     lxp_u128 signed_fee_limit;
     uint32_t fee_schedule_version;
+    uint32_t metering_schedule_version;
+    uint64_t metering_schedule_coefficients[9];
     uint64_t fee_schedule_prices[7];
     uint32_t parameter_version;
     bool present;
@@ -253,6 +255,7 @@ typedef struct lxp_kernel_execution {
     uint64_t epoch;
     uint64_t global_sequence;
     uint32_t recorded_module_version;
+    uint32_t recorded_metering_schedule_version;
     uint32_t parameter_version;
     bool signature_valid;
     lxp_identity_store *identities;

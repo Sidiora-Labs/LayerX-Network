@@ -748,10 +748,20 @@ const lxp_call_admission_facts *lxp_ctx_call_admission(
 lxp_result lxp_ctx_bind_program_outcome(
     lxp_module_ctx *ctx, const lxp_program_outcome *outcome)
 {
+    lxp_result status;
     if (ctx == NULL || outcome == NULL || !outcome->present ||
         ctx->module_id != LXP_MODULE_PROGRAMS ||
         ctx->program_outcome.present)
         return LXP_ERR_NON_CANONICAL;
+    status = lxp_program_outcome_validate_for_protocol(
+        outcome, ctx->protocol_version);
+    if (status != LXP_OK) return status;
+    if (!ctx->call_admission.present ||
+        outcome->fee_schedule_version !=
+            ctx->call_admission.fee_schedule_version ||
+        outcome->metering_schedule_version !=
+            ctx->call_admission.metering_schedule_version)
+        return LXP_FATAL_INVARIANT;
     ctx->program_outcome = *outcome;
     return LXP_OK;
 }

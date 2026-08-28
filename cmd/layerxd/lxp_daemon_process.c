@@ -6,6 +6,7 @@
 #include "layerx/lxp_crypto.h"
 #include "layerx/lxp_fee.h"
 #include "layerx/lxp_hash.h"
+#include "layerx/lxp_genesis.h"
 #include "layerx/lxp_snapshot.h"
 
 #include <errno.h>
@@ -676,6 +677,9 @@ static lxp_result replay_execute_activity(
     execution.epoch = process->kernel.epoch;
     execution.global_sequence = global_sequence;
     execution.recorded_module_version = expected->module_version;
+    execution.recorded_metering_schedule_version =
+        expected->program_outcome.present ?
+            expected->program_outcome.metering_schedule_version : 0U;
     execution.parameter_version = expected->parameter_version;
     execution.signature_valid = true;
     execution.identities = &process->identities;
@@ -927,6 +931,14 @@ static lxp_result replay_canonical_group(
          lxp_ct_memcmp(expected.previous_state_root,
                        process->kernel.current_state_root, 32U) != 0))
         status = LXP_FATAL_REPLAY_DIVERGENCE;
+    if (status == LXP_OK && expected.program_outcome.present) {
+        lx_programs_metering_schedule metering_schedule;
+        status = lxp_programs_metering_schedule_at(
+            &process->kernel,
+            expected.program_outcome.metering_schedule_version,
+            batch_number,
+            &metering_schedule);
+    }
     if (status == LXP_OK)
         status = replay_execute_activity(
             process, expected.global_sequence, canonical_activity,
@@ -1599,6 +1611,66 @@ static lxp_result load_schedule(lxp_daemon_process *process)
                       process->programs.occupancy_asset_id, 32U);
 }
 
+static lxp_result project_bootstrap_metering(
+    lxp_daemon_process *process, const lxp_snapshot_manifest_record *snapshot)
+{
+    const char *path = required_environment("LAYERX_NODE_GENESIS_MANIFEST");
+    lxp_genesis_manifest *genesis;
+    lxp_kernel *candidate;
+    uint8_t *bytes;
+    uint8_t projected_root[32];
+    FILE *file;
+    long length;
+    lxp_result status;
+    if (process == NULL || snapshot == NULL || path == NULL)
+        return LXP_ERR_NON_CANONICAL;
+    file = fopen(path, "rb");
+    if (file == NULL || fseek(file, 0L, SEEK_END) != 0 ||
+        (length = ftell(file)) <= 0 || fseek(file, 0L, SEEK_SET) != 0) {
+        if (file != NULL) (void)fclose(file);
+        return LXP_ERR_IO;
+    }
+    bytes = (uint8_t *)malloc((size_t)length);
+    genesis = (lxp_genesis_manifest *)malloc(sizeof(*genesis));
+    candidate = (lxp_kernel *)malloc(sizeof(*candidate));
+    if (bytes == NULL || genesis == NULL || candidate == NULL) {
+        free(bytes);
+        free(genesis);
+        free(candidate);
+        (void)fclose(file);
+        return LXP_ERR_IO;
+    }
+    if (fread(bytes, 1U, (size_t)length, file) != (size_t)length ||
+        fclose(file) != 0)
+        status = LXP_ERR_IO;
+    else
+        status = lxp_genesis_parse(bytes, (size_t)length,
+                                   LXP_GENESIS_INPUT_MANIFEST, genesis);
+    if (status == LXP_OK && lxp_ct_memcmp(
+            genesis->genesis_state_root, snapshot->state_root, 32U) != 0)
+        status = LXP_ERR_ROOT_MISMATCH;
+    if (status == LXP_OK) {
+        *candidate = process->kernel;
+        status = lxp_programs_metering_genesis_project(
+            genesis, &process->owner_scratch, candidate);
+    }
+    if (status == LXP_OK)
+        status = lxp_state_root(candidate, projected_root);
+    if (status == LXP_OK && lxp_ct_memcmp(
+            projected_root, snapshot->state_root, 32U) != 0)
+        status = LXP_ERR_ROOT_MISMATCH;
+    if (status == LXP_OK) {
+        process->kernel.module_kv_count = candidate->module_kv_count;
+        (void)memcpy(process->kernel.module_kv, candidate->module_kv,
+                     candidate->module_kv_count *
+                         sizeof(candidate->module_kv[0]));
+    }
+    free(bytes);
+    free(genesis);
+    free(candidate);
+    return status;
+}
+
 static void close_process(lxp_daemon_process *process)
 {
     if (process->daemon_started) {
@@ -1699,6 +1771,8 @@ static lxp_result open_process(lxp_daemon_process *process,
         status = lxp_snapshot_load(snapshot.bytes, snapshot.length,
                                    &manifest, manifest.state_root,
                                    &process->kernel);
+    if (status == LXP_OK && !checkpoint_selected)
+        status = project_bootstrap_metering(process, &manifest);
     free(snapshot_bytes);
     if (status == LXP_OK &&
         configuration->start_sequence > process->state.next_sequence)
@@ -1713,6 +1787,9 @@ static lxp_result open_process(lxp_daemon_process *process,
         process->programs.asset_count = process->asset_count;
         process->programs.resolve_occupancy_parameters = occupancy_parameters;
         process->programs.occupancy_parameter_context = process;
+        process->programs.resolve_metering_schedule =
+            lxp_programs_metering_resolve_runtime;
+        process->programs.metering_schedule_context = &process->kernel;
     }
     if (status == LXP_OK)
         status = load_identities(
@@ -1798,6 +1875,14 @@ static lxp_result open_process(lxp_daemon_process *process,
                      process->authority_replica_token_length);
     }
     if (status == LXP_OK) status = resume_batch_number(process);
+    if (status == LXP_OK) {
+        lx_programs_metering_schedule metering_schedule;
+        status = lxp_programs_metering_schedule_current(
+            &process->kernel,
+            process->next_batch != 0U ? process->next_batch :
+                process->sequencer_authorization.last_batch_number,
+            &metering_schedule);
+    }
     if (status == LXP_OK) status = replicate_authority_history(process);
     bearer = required_environment("LAYERX_NODE_PROGRAM_BEARER_TOKEN");
     if (status == LXP_OK)

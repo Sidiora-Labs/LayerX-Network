@@ -2096,3 +2096,99 @@ symbol = "layerx_programs_runtime::host::linker, layerx_programs_runtime::valida
 observed = "The non-executing Codify implementation gate resolved host::linker and validate.rs but refused lifecycle advancement because the declared module symbol layerx_programs_runtime::validate is not represented as a definition by the graph and the stale pre-modularization host.rs touch path cannot match a change. No runtime or acceptance failure was reported. After recording both metadata contradictions, the source-complete task was advanced manually to implemented rather than inventing a dummy symbol or recreating an obsolete file solely to satisfy tooling."
 assumption = "A later spec-maintenance pass should replace the stale graph symbol and touch path with indexable post-28.1 ownership. Human qualification still owns every compile, conformance and benchmark result; this lifecycle label asserts source implementation only."
 severity = "graph-gate-metadata"
+
+[observation.32.3.1]
+task = "32.3"
+file = "programs/crates/layerx-programs-runtime/src/engine.rs, programs/vendor/wasmi/src/engine/func_builder/translator.rs, programs/crates/layerx-programs-runtime/Cargo.toml"
+symbol = "MeterInjection, FuelSchedule, WasmEngine"
+observed = "The current runtime enables Config::consume_fuel and therefore delegates instruction charge-point placement and pricing to Wasmi's private translator and FuelCosts. A module-side digest or parsed charge-point manifest would describe intended metering but would not enforce it and would still permit a future engine tier to charge differently. The workspace contains no executable WASM instrumentation/re-encoding dependency and the task's sole declared touch path does not exist. Source work stopped rather than labeling metadata as engine-independent metering or silently changing current prices."
+assumption = "Implementation requires either a fully owned deterministic WASM binary rewriter that injects runtime-private charge operations while preserving every index-bearing section, or a frozen engine-neutral executable IR consumed identically by every tier. Its schedule must reproduce the current Wasmi 0.31.2 dynamic instruction, branch-stack, call, bulk-memory and table costs exactly before engine fuel can be demoted to a qualification-only reference path. Human qualification must then differential-run both mechanisms over the complete conformance corpus and golden vectors."
+severity = "implementation-blocker"
+
+[observation.32.3.2]
+task = "32.3"
+file = "spec/layerx-platform/spec.kvx, programs/crates/layerx-programs-runtime/src/validate.rs, programs/crates/layerx-programs-runtime/src/cache.rs, programs/crates/layerx-programs-runtime/src/execute.rs, programs/crates/layerx-programs-runtime/src/qualification.rs"
+symbol = "task.32.3.touches, MeterInjection, FuelSchedule"
+observed = "Task 32.3 names only programs/crates/layerx-programs-runtime/src/meter/inject.rs, but a real implementation must also make validation compile the instrumented artifact, bind metering schedule identity into compiled-cache keys, record that identity in every receipt and canonical evidence, and make replay select and refuse metering versions independently of fee schedule versions. Restricting work to the declared path cannot meet do_2 or prevent a stale cached instrumented artifact."
+assumption = "The task touch set must be expanded to the actual validation, cache, execution, receipt and replay ownership before implementation. Metering schedule version remains a distinct consensus field from fee schedule version and must not be exposed as a guest-callable ABI import."
+severity = "task-scope-drift"
+
+[observation.32.3.3]
+task = "32.3"
+file = "wasm-instrument 0.4.0 src/gas_metering/mod.rs, programs/vendor/wasmi/src/engine/config.rs, programs/vendor/wasmi/src/engine/executor.rs, programs/vendor/wasmi/src/engine/func_builder/translator.rs"
+symbol = "wasm_instrument::gas_metering::Rules, FuelCosts, FuelConsumptionMode::Lazy"
+observed = "The pinned upstream wasm-instrument rewriter can inject static metered blocks, a per-local call surcharge and eager pre-operation memory.grow cost only. Wasmi 0.31.2's current schedule additionally charges typed branch DropKeep values, entity/load/store/call categories, successful bulk-memory bytes, successful table elements and memory/table growth using lazy semantics. Rules::instruction_cost receives only an untyped parity-wasm instruction, so it cannot derive Wasmi's branch keep count; the upstream dynamic rewrite covers only memory.grow and charges before the operation, which changes failed-operation usage relative to Wasmi's default lazy mode. Using the crate unchanged would silently reprice existing programs and violate req.39 ac_3."
+assumption = "A suitable extension must include validating operand/control-stack analysis to derive every Wasmi DropKeep charge and must rewrite memory.grow, memory.copy, memory.fill, memory.init, table.grow, table.copy, table.fill and table.init so the dynamic charge executes only after a successful operation while preserving operands/results and trap behavior. The extension itself needs independently frozen transformation vectors. Vendoring the upstream crates before those semantics exist would create a partial dependency footprint rather than an executable parity implementation, so no vendor or manifest changes were retained."
+severity = "instrumenter-semantics-blocker"
+
+[observation.32.3.4]
+task = "32.3"
+file = "include/layerx/lxp_receipt.h, src/protocol/lxp_receipt.c, src/protocol/lxp_kernel.c"
+symbol = "lxp_program_outcome, PRG3, LXRC3"
+observed = "The active protocol has only legacy version one and occupancy version two, and both versions already have deployed canonical Programs outcome and idempotency layouts that contain no metering schedule identity. Appending a field to PRG1, PRG2, the raw legacy structs or fixed LXRC2 would reinterpret historical bytes. The implementation therefore introduces explicit PRG3 and LXRC3 layouts for newly produced outcomes and maps every decoded PRG1, PRG2, LXRC2 and raw legacy Programs outcome strictly to the protocol-defined metering schedule version one."
+assumption = "Metering schedule version one is the exact historical Wasmi schedule required by task 32.3 cost parity. Human qualification must replay archived PRG1, PRG2, raw legacy and LXRC2 bytes and prove their canonical bytes and interpreted cost identity remain unchanged, then prove PRG3 and LXRC3 refuse zero or unavailable schedule identities. No replay or byte-compatibility result is asserted."
+severity = "receipt-version-boundary"
+
+[observation.32.3.5]
+task = "32.3"
+file = "src/modules/programs/event.h, src/modules/programs/event.c"
+symbol = "LX_PROGRAMS_EVENT_CALL_OUTCOME, LXMO"
+observed = "The committed CALL outcome event version one uses the LXCO domain and a fixed 251-byte body with no metering identity. Reusing that domain or body length would make old and new evidence ambiguous. Newly emitted outcomes therefore use event envelope version two, the LXMO domain and a fixed 255-byte body containing the distinct metering schedule version, while committed-event projection continues to recognize the exact historical LXCO version-one form."
+assumption = "Historical LXCO evidence is interpreted as metering schedule version one. Human qualification must replay both envelope generations, freeze their exact bytes and digests, and verify that a receipt outcome and committed event cannot disagree about the schedule selected for execution. No projection, digest or runtime result is asserted."
+severity = "evidence-version-boundary"
+
+[observation.32.3.6]
+task = "32.3"
+file = "include/layerx/programs.h, src/modules/programs/call.c, src/protocol/lxp_kernel.c, src/protocol/lxp_module_ctx.c, cmd/layerxd/lxp_daemon_process.c"
+symbol = "layerx_programs_call_begin, layerx_programs_call_terminal_begin, lxp_call_admission_facts"
+observed = "A metering schedule version cannot be derived from the fee schedule or parameter version without coupling two independently governed histories. The kernel currently accepts only the protocol-defined historical version one from an owner-supplied runtime admission field, passes it independently across the scalar runtime boundary and requires terminal evidence to return the exact admitted value. That mutable runtime field is not consensus authority and no receipt/state-backed resolver or historical activation registry exists in the current C protocol surface."
+assumption = "The runtime bridge must consume the added admission scalar and return the validated artifact's metering schedule version through the added terminal scalar. Before any version beyond one can activate, the state-integration owner must replace the authenticated-input seam with an explicit receipt/state-backed resolver and historical registry rather than aliasing fee_schedule_version, parameter_version, environment or node configuration. Unknown versions already fail closed. Human qualification must exercise mismatched and unavailable schedule refusals; no FFI or runtime execution result is asserted."
+severity = "protocol-state-assumption"
+
+[observation.32.3.7]
+task = "32.3"
+file = "src/protocol/lxp_receipt.c, src/protocol/lxp_kernel.c, src/protocol/lxp_module_ctx.c, src/modules/programs/call.c, src/modules/programs/event.c"
+symbol = "lxp_program_metering_schedule_available, lxp_program_outcome_validate_for_protocol, envelope_effect_valid"
+observed = "Adversarial source review found that the first receipt implementation treated every nonzero PRG3 metering identity as available, canonical decode did not reapply protocol-to-outcome layout rules, module-context binding collapsed validator failures to non-canonical and LXMO projection checked only its outer framing. The repair centralizes the version-one availability registry, applies protocol-aware validation to canonical and compact encode/decode, preserves validator result precedence at module binding, and parses every fixed LXMO field during projection to refuse unknown schedules, zero required identities or digests, invalid frames, zero runtime/ABI/fee versions and any terminal result other than success. CALL_OUTCOME is emitted only by the successful terminal branch, so both its constructor and historical/new projectors now enforce LXP_OK rather than accepting unrelated nonfatal refusals with no encoded terminal-kind discriminator."
+assumption = "Human qualification must exercise each rejected construction and replay form, including unknown nonzero schedules, PRG1 under protocol two, PRG2 under protocol one, invalid PRG3 occupancy evidence and malformed LXMO fixed fields. Historical byte encodings remain unchanged; no build, test, replay or runtime result is asserted."
+severity = "adversarial-repair"
+
+[observation.32.3.8]
+task = "32.3"
+file = "src/modules/programs/metering.c, include/layerx/programs.h, src/protocol/lxp_kernel.c, cmd/layerxd/lxp_daemon_process.c"
+symbol = "progmet/active/v1, progmet/history/v1, lx_programs_metering_schedule"
+observed = "The implementation replaces the daemon-owned metering scalar with a Programs protocol-state resolver. Signed genesis carries identical LXMR1 active and version-one history records, snapshots retain those module-state records, admission selects the active record by activation batch, and exact-version lookup is available for receipt replay. The canonical record contains nine separately named Wasmi-parity coefficients and an authority digest; it is deliberately independent of fee and generic parameter versions. The task metadata names only the Rust injection file even though consensus authority necessarily spans genesis projection, module state, kernel admission, daemon binding and the scalar runtime boundary."
+assumption = "Genesis tooling must call lxp_programs_metering_genesis_append before signing and lxp_programs_metering_genesis_project only after signature verification when constructing initial kernel state; genesis acceptance now rejects manifests without the signer-bound records and normal layerxd restart consumes and validates the already-rooted snapshot projection. Human qualification must freeze the 122-byte LXMR1 and 76-byte runtime schedule vectors, exercise malformed, gapped and missing active/history state, replay receipt version one from exact history, and prove fee/parameter version changes do not select metering history. No later-version activation API is claimed by this task. No build, test, replay or signature result is asserted."
+severity = "task-scope-drift"
+
+[observation.32.3.9]
+task = "32.3"
+file = "src/modules/programs/metering.c, src/protocol/lxp_receipt.c, src/modules/programs/event.c"
+symbol = "lxp_program_metering_schedule_available, lxp_programs_metering_schedule_current"
+observed = "Task 32.3 freezes the historical Wasmi-parity schedule as protocol version one and does not define a governed activity, receipt schema or activation authority for later metering schedules. Receipt and event validation are context-free and intentionally recognize only version one. An earlier draft exposed an activation helper that could only reject version two, so that dead governance API was removed. The state resolver still walks a consecutive append-only history and selects the record active as of a requested batch, preserving the exact replay contract without pretending that a future schedule can currently be authorized or executed."
+assumption = "A future task that introduces metering evolution must jointly specify its governed activity, authority receipt, context-aware receipt/event availability, runtime coefficient support and activation migration. It must not reuse fee-schedule governance or silently make an unknown metering version executable. Human qualification for task 32.3 is limited to signed-genesis version one, malformed/gapped history refusal and exact version-one replay."
+severity = "future-governance-boundary"
+
+[observation.32.3.11]
+task = "32.3"
+file = "cmd/layerxd/lxp_daemon_process.c, src/protocol/lxp_genesis.c, src/modules/programs/metering.c"
+symbol = "LAYERX_NODE_GENESIS_MANIFEST, lxp_programs_metering_genesis_project"
+observed = "Genesis acceptance now refuses a signed manifest unless it contains identical signer-bound LXMR1 active and version-one history records. On the production bootstrap-snapshot path, layerxd requires the same canonical genesis manifest, binds its genesis root to the bootstrap snapshot root and transactionally projects or exactly matches those records in the live kernel module state before enabling Programs. Checkpoint restart does not reproject genesis; it requires the rooted snapshot history and validates the active schedule before attaching the protocol owner."
+assumption = "Operators must provide LAYERX_NODE_GENESIS_MANIFEST when starting from the configured bootstrap snapshot. Existing bootstrap fixtures and deployment configuration need that explicit immutable input. Human qualification must prove a missing, differently signed, root-mismatched, partially projected or lineage-invalid manifest prevents startup and leaves live module state unchanged. No startup or rollback result is asserted by this implementation-phase source change."
+severity = "bootstrap-input"
+
+[observation.32.3.10]
+task = "32.3"
+file = "programs/crates/layerx-programs-runtime/src/meter/inject.rs, programs/vendor/wasm-instrument/src/gas_metering/mod.rs, programs/vendor/parity-wasm/src/elements/ops.rs"
+symbol = "MeterInjection, WasmiParityRules, BranchCost"
+observed = "The implementation now derives position-specific total branch prices from wasmparser's validated operand and control stacks, rewrites executable Wasm with a versioned runtime-private charge/check surface, preserves shifted function and reference indices, and wraps dynamic memory and table operations with precheck, original operation and successful-only commit. Source vectors freeze a manually audited minimal transformed module, the canonical big-endian schedule, selector-aware br_table cost, loop entry and backedge placement, indexed memory.grow invalid-delta/check/grow/success-commit ordering and indexed memory.copy check/operation/commit ordering. The implementation phase cannot execute the transformer or either engine to capture the full byte and cross-engine corpus."
+assumption = "Human qualification must independently capture and review transformed-byte vectors for nested loops, typed br/br_if, maximum-arm br_table, locals, calls, loads/stores, memory grow/copy/fill/init and table grow/copy/fill/init; include both successful and trapping dynamic operations; then differential-run legacy Wasmi fuel and private-hook metering over the complete conformance corpus. No build, test, transformed-byte result, cost parity or cross-engine equivalence is asserted by the source implementation."
+severity = "qualification-required"
+
+[observation.32.3.12]
+task = "32.3"
+file = "programs/crates/layerx-programs-runtime/src/qualification.rs, programs/crates/layerx-programs-runtime/tests/replay.rs, programs/crates/layerx-programs-runtime/src/engine.rs"
+symbol = "programs_differential_gate_versioned, DifferentialVector, WasmEngine"
+observed = "The source now retains an independent Wasmi 0.31.2 internal-fuel execution over the original validated module beside the production instrumented execution, compares exact typed outcomes and all metered usage, and supplies ABI-aware expected-result vectors for function entry, control flow, start and execution traps, memory growth and bulk copy, MVP table copy, a real v2 host hash, missing exports and validation refusals. The runtime currently has no second production execution strategy: task do_5 says engine-neutral instrumentation enables a faster strategy later rather than authorizing a fabricated tier now. The differential harness deliberately uses isolated state because no authenticated receipt-backed execution context or original-byte nested resolver is available at this qualification entry point."
+assumption = "Human qualification must execute the complete legacy-versus-instrumented corpus, capture the golden transformed bytes and investigate any divergence without weakening either oracle. Authenticated context and nested composition require a human-owned fixture with real authority and resolver inputs. When a genuinely distinct faster execution strategy is introduced, it must be added to this same differential evidence contract before activation. No build, test, corpus result, cross-engine parity or faster-tier result is asserted by this implementation-phase source."
+severity = "qualification-required"

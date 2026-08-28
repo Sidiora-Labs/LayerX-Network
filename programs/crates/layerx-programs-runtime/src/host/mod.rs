@@ -21,6 +21,7 @@ use crate::crypto::bigint;
 use crate::execute::ExecutionFault;
 use crate::fault::{ProgramFailure, RefusalClass, RefusalReason};
 use crate::meter::Meter;
+use crate::meter::inject::{PRIVATE_CHARGE_FUNCTION, PRIVATE_CHECK_FUNCTION, PRIVATE_METER_MODULE};
 
 use self::memory::{nonnegative, read_fixed, write_guest};
 
@@ -30,7 +31,6 @@ pub(super) const STATUS_BOUNDS: i32 = -3;
 pub(super) const STATUS_METER: i32 = -4;
 pub(super) const STATUS_EVIDENCE: i32 = -5;
 pub(super) const STATUS_ABSENT: i32 = -7;
-pub(super) const FUEL_METERING_DISABLED: &str = "programs runtime fuel metering is disabled";
 pub(super) const COMPOSITION_REFUSED: &str = "program composition refused the call graph";
 
 /// Per-execution host state owned by a `Store`; the shared linker holds none of it.
@@ -44,6 +44,9 @@ pub(crate) struct RuntimeState {
     failure_subtree_fuel: Option<u64>,
     failure_graph: Option<CallGraph>,
     protocol_context: Option<ExecutionContext>,
+    metering_schedule: crate::FuelSchedule,
+    legacy_reference_fuel: bool,
+    legacy_reference_engine_committed: u64,
 }
 
 #[derive(Debug)]
@@ -89,6 +92,9 @@ impl RuntimeState {
             failure_subtree_fuel: None,
             failure_graph: None,
             protocol_context: None,
+            metering_schedule: crate::FuelSchedule::WASMI_0_31_2,
+            legacy_reference_fuel: false,
+            legacy_reference_engine_committed: 0,
         }
     }
 
@@ -102,6 +108,9 @@ impl RuntimeState {
             failure_subtree_fuel: None,
             failure_graph: None,
             protocol_context: None,
+            metering_schedule: crate::FuelSchedule::WASMI_0_31_2,
+            legacy_reference_fuel: false,
+            legacy_reference_engine_committed: 0,
         }
     }
 
@@ -122,7 +131,28 @@ impl RuntimeState {
             failure_subtree_fuel: None,
             failure_graph: None,
             protocol_context: None,
+            metering_schedule: crate::FuelSchedule::WASMI_0_31_2,
+            legacy_reference_fuel: false,
+            legacy_reference_engine_committed: 0,
         })
+    }
+
+    pub(crate) const fn isolated_legacy_reference(meter: Meter) -> Self {
+        let mut state = Self::isolated(meter);
+        state.legacy_reference_fuel = true;
+        state
+    }
+
+    pub(crate) const fn uses_legacy_reference_fuel(&self) -> bool {
+        self.legacy_reference_fuel
+    }
+
+    pub(crate) const fn legacy_reference_engine_committed(&self) -> u64 {
+        self.legacy_reference_engine_committed
+    }
+
+    pub(crate) fn set_legacy_reference_engine_committed(&mut self, consumed: u64) {
+        self.legacy_reference_engine_committed = consumed;
     }
 
     pub(crate) fn publish_response(
@@ -231,7 +261,6 @@ impl RuntimeState {
     pub(crate) fn context_field(
         &self,
         field: ContextField,
-        frame_fuel_consumed: u64,
     ) -> Result<Vec<u8>, ContextRefusal> {
         let context = self
             .protocol_context
@@ -250,11 +279,7 @@ impl RuntimeState {
             return Err(ContextRefusal::FrameMismatch);
         }
         let immediate_caller = graph.immediate_caller();
-        let remaining_fuel = self
-            .meter
-            .cpu_remaining()
-            .checked_sub(frame_fuel_consumed)
-            .ok_or(ContextRefusal::FrameMismatch)?;
+        let remaining_fuel = self.meter.cpu_remaining();
         Ok(context.encode(
             field,
             current.program(),
@@ -305,8 +330,28 @@ impl RuntimeState {
         &mut self.meter
     }
 
+    pub(crate) fn frame_cpu_consumed(&self) -> Result<u64, crate::meter::MeterRefusal> {
+        self.meter.cpu_total().checked_sub(self.meter.cpu_carried()).ok_or(
+            crate::meter::MeterRefusal::CounterOverflow {
+                resource: crate::meter::ResourceKind::Cpu,
+            },
+        )
+    }
+
     pub(crate) fn set_meter(&mut self, meter: Meter) {
         self.meter = meter;
+    }
+
+    pub(crate) fn bind_metering_schedule(&mut self, schedule: crate::FuelSchedule) {
+        self.metering_schedule = schedule;
+    }
+
+    pub(crate) const fn metering_schedule_version(&self) -> u32 {
+        self.metering_schedule.version()
+    }
+
+    pub(crate) const fn metering_schedule(&self) -> crate::FuelSchedule {
+        self.metering_schedule
     }
 
     pub(crate) fn authorization_abi(&self) -> Option<&Abi> {
@@ -357,11 +402,83 @@ impl RuntimeState {
     }
 }
 
+pub(crate) fn charge_host_cpu(
+    caller: &mut Caller<'_, RuntimeState>,
+    fuel: u64,
+) -> Result<(), crate::meter::MeterRefusal> {
+    if caller.data().uses_legacy_reference_fuel() {
+        reconcile_reference_guest_cpu(caller)?;
+        if caller.consume_fuel(fuel).is_err() {
+            caller.data_mut().meter_mut().mark_cpu_exhausted();
+            return Err(caller.data().meter().exhaustion().unwrap_or(
+                crate::meter::MeterRefusal::BudgetExceeded {
+                    resource: crate::meter::ResourceKind::Cpu,
+                    limit: caller.data().meter().cpu_budget(),
+                    attempted: caller.data().meter().cpu_budget().saturating_add(1),
+                },
+            ));
+        }
+        caller.data_mut().meter_mut().charge_cpu(fuel)?;
+        let consumed = caller.fuel_consumed().unwrap_or_else(|| unreachable!());
+        caller.data_mut().set_legacy_reference_engine_committed(consumed);
+        return Ok(());
+    }
+    caller.data_mut().meter_mut().charge_cpu(fuel)
+}
+
+pub(crate) fn reconcile_reference_guest_cpu(
+    caller: &mut Caller<'_, RuntimeState>,
+) -> Result<(), crate::meter::MeterRefusal> {
+    if !caller.data().uses_legacy_reference_fuel() {
+        return Ok(());
+    }
+    let consumed = caller.fuel_consumed().unwrap_or(0);
+    let committed = caller.data().legacy_reference_engine_committed();
+    let guest = consumed.checked_sub(committed).ok_or(
+        crate::meter::MeterRefusal::CounterOverflow {
+            resource: crate::meter::ResourceKind::Cpu,
+        },
+    )?;
+    caller.data_mut().meter_mut().charge_cpu(guest)?;
+    caller.data_mut().set_legacy_reference_engine_committed(consumed);
+    Ok(())
+}
+
 #[allow(clippy::too_many_lines)]
 pub(crate) fn linker(
     engine: &Engine,
 ) -> Result<HostLinker, ExecutionFault> {
     let mut linker = Linker::new(engine);
+    linker
+        .func_wrap(
+            PRIVATE_METER_MODULE,
+            PRIVATE_CHECK_FUNCTION,
+            |caller: Caller<'_, RuntimeState>, raw_charge: i64| -> Result<(), wasmi::core::Trap> {
+                let charge = u64::try_from(raw_charge)
+                    .map_err(|_| wasmi::core::Trap::from(wasmi::core::TrapCode::OutOfFuel))?;
+                let meter = caller.data().meter();
+                match meter.cpu_total().checked_add(charge) {
+                    Some(attempted) if attempted <= meter.cpu_budget() => Ok(()),
+                    _ => Err(wasmi::core::Trap::from(wasmi::core::TrapCode::OutOfFuel)),
+                }
+            },
+        )
+        .map_err(|error| linker_fault(&error))?;
+    linker
+        .func_wrap(
+            PRIVATE_METER_MODULE,
+            PRIVATE_CHARGE_FUNCTION,
+            |mut caller: Caller<'_, RuntimeState>, raw_charge: i64| -> Result<(), wasmi::core::Trap> {
+                let charge = u64::try_from(raw_charge)
+                    .map_err(|_| wasmi::core::Trap::from(wasmi::core::TrapCode::OutOfFuel))?;
+                caller
+                    .data_mut()
+                    .meter_mut()
+                    .charge_cpu(charge)
+                    .map_err(|_| wasmi::core::Trap::from(wasmi::core::TrapCode::OutOfFuel))
+            },
+        )
+        .map_err(|error| linker_fault(&error))?;
     storage::register(&mut linker)?;
     events::register(&mut linker)?;
     calls::register(&mut linker)?;

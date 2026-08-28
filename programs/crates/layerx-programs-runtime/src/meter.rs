@@ -1,5 +1,7 @@
 //! Deterministic resource accounting for guest execution.
 
+pub mod inject;
+
 use core::fmt::{self, Display};
 
 use wasmi::errors::{MemoryError, TableError};
@@ -358,6 +360,16 @@ pub struct MeteredUsage {
     pub fee_units: u128,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct QualificationMeterSnapshot {
+    pub(crate) cpu_fuel: u64,
+    pub(crate) memory_bytes: u64,
+    pub(crate) storage_read_bytes: u64,
+    pub(crate) storage_write_bytes: u64,
+    pub(crate) output_values: u32,
+    pub(crate) output_bytes: u64,
+}
+
 /// Typed resource refusal with exact limit and attempted use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MeterRefusal {
@@ -544,17 +556,27 @@ impl Meter {
         self.cpu_carried
     }
 
-    /// Returns the fuel to install into the interpreter store of the next
-    /// frame, so a whole call graph never exceeds one declared budget.
+    /// Returns the unconsumed CPU budget of the whole call graph.
     #[must_use]
     pub const fn cpu_remaining(&self) -> u64 {
-        self.budget.cpu_fuel.saturating_sub(self.cpu_carried)
+        self.budget.cpu_fuel.saturating_sub(self.cpu_fuel)
     }
 
     /// Returns the fuel attributed to this meter by the last recorded frame.
     #[must_use]
     pub const fn cpu_total(&self) -> u64 {
         self.cpu_fuel
+    }
+
+    pub(crate) const fn qualification_snapshot(&self) -> QualificationMeterSnapshot {
+        QualificationMeterSnapshot {
+            cpu_fuel: self.cpu_fuel,
+            memory_bytes: self.memory_bytes,
+            storage_read_bytes: self.storage_read_bytes,
+            storage_write_bytes: self.storage_write_bytes,
+            output_values: self.output_values,
+            output_bytes: self.output_bytes,
+        }
     }
 
     pub(crate) fn carry_cpu(&mut self, consumed: u64) -> Result<(), MeterRefusal> {
@@ -566,7 +588,6 @@ impl Meter {
 
     pub(crate) fn restore_cpu_carry(&mut self, carried: u64) {
         self.cpu_carried = carried;
-        self.cpu_fuel = 0;
     }
 
     pub(crate) const fn active_frame_resources(&self) -> (u64, u64) {
@@ -626,17 +647,6 @@ impl Meter {
         self.admit(ResourceKind::Cpu, self.budget.cpu_fuel, attempted)?;
         self.cpu_fuel = attempted;
         Ok(())
-    }
-
-    pub(crate) fn record_cpu(&mut self, consumed: u64) {
-        match self.cpu_carried.checked_add(consumed) {
-            Some(total) => self.cpu_fuel = total,
-            None => {
-                self.record_exhaustion(MeterRefusal::CounterOverflow {
-                    resource: ResourceKind::Cpu,
-                });
-            }
-        }
     }
 
     pub(crate) fn mark_cpu_exhausted(&mut self) {

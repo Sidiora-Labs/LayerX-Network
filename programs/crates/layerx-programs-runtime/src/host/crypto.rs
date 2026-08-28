@@ -42,8 +42,7 @@ pub(super) fn register(linker: &mut Linker<RuntimeState>) -> Result<(), Executio
                     Some(fuel) => fuel,
                     None => return STATUS_BOUNDS,
                 };
-                let meter = caller.data_mut().meter_mut();
-                if let Err(refusal) = meter.carry_cpu(fuel_cost) {
+                if let Err(refusal) = super::charge_host_cpu(&mut caller, fuel_cost) {
                     caller.data_mut().record_refusal(
                         crate::calls::CompositionRefusal::Resource(refusal),
                     );

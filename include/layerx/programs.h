@@ -12,6 +12,7 @@
 typedef struct lxp_kernel lxp_kernel;
 typedef struct lxp_log lxp_log;
 typedef struct lxp_history lxp_history;
+typedef struct lxp_genesis_manifest lxp_genesis_manifest;
 
 /* Node-owned durable account-state feed. `append` must commit the notice and
  * its canonical receipt reference before returning. The node binds the feed
@@ -219,6 +220,53 @@ typedef struct lx_programs_fee_schedule {
     uint64_t occupancy_byte_batch;
 } lx_programs_fee_schedule;
 
+enum {
+    LX_PROGRAMS_METER_BASE = 0,
+    LX_PROGRAMS_METER_ENTITY = 1,
+    LX_PROGRAMS_METER_LOAD = 2,
+    LX_PROGRAMS_METER_STORE = 3,
+    LX_PROGRAMS_METER_CALL = 4,
+    LX_PROGRAMS_METER_BRANCH_KEPT_PER_FUEL = 5,
+    LX_PROGRAMS_METER_FUNC_LOCALS_PER_FUEL = 6,
+    LX_PROGRAMS_METER_MEMORY_BYTES_PER_FUEL = 7,
+    LX_PROGRAMS_METER_TABLE_ELEMENTS_PER_FUEL = 8,
+    LX_PROGRAMS_METERING_COEFFICIENTS = 9,
+    LX_PROGRAMS_METERING_RECORD_BYTES = 122,
+    LX_PROGRAMS_METERING_AUTHORITY_GENESIS = 1,
+    LX_PROGRAMS_METERING_AUTHORITY_GOVERNANCE = 2
+};
+
+typedef struct lx_programs_metering_schedule {
+    uint32_t version;
+    uint64_t coefficients[LX_PROGRAMS_METERING_COEFFICIENTS];
+    uint64_t activation_batch;
+    uint8_t authority_kind;
+    uint8_t authority_digest[32];
+} lx_programs_metering_schedule;
+
+typedef lxp_result (*lx_programs_metering_schedule_fn)(
+    void *context, uint32_t recorded_version, uint64_t batch_number,
+    lx_programs_metering_schedule *schedule);
+
+lxp_result lxp_programs_metering_schedule_current(
+    const lxp_kernel *kernel, uint64_t batch_number,
+    lx_programs_metering_schedule *schedule);
+lxp_result lxp_programs_metering_schedule_at(
+    const lxp_kernel *kernel, uint32_t recorded_version,
+    uint64_t receipt_batch_number,
+    lx_programs_metering_schedule *schedule);
+lxp_result lxp_programs_metering_resolve_runtime(
+    void *context, uint32_t recorded_version, uint64_t batch_number,
+    lx_programs_metering_schedule *schedule);
+lxp_result lxp_programs_metering_genesis_append(
+    lxp_genesis_manifest *manifest,
+    const lx_programs_metering_schedule *schedule);
+lxp_result lxp_programs_metering_genesis_validate(
+    const lxp_genesis_manifest *manifest);
+lxp_result lxp_programs_metering_genesis_project(
+    const lxp_genesis_manifest *manifest, lxp_arena *arena,
+    lxp_kernel *kernel);
+
 /* Canonical CALL payload limits. The activity names a UTF-8 export, carries
  * opaque ABI calldata, and has no ambient or process-global staging state. */
 enum {
@@ -276,7 +324,14 @@ lxp_result layerx_programs_call_begin(
     uint64_t b0, uint64_t b1, uint64_t b2, uint64_t b3,
     uint64_t signed_fee_hi, uint64_t signed_fee_lo,
     uint64_t available_fee_hi, uint64_t available_fee_lo,
-    uint32_t fee_schedule_version, uint32_t parameter_version,
+    uint32_t fee_schedule_version, uint32_t metering_schedule_version,
+    uint32_t parameter_version,
+    uint64_t meter_base, uint64_t meter_entity, uint64_t meter_load,
+    uint64_t meter_store, uint64_t meter_call,
+    uint64_t meter_branch_kept_per_fuel,
+    uint64_t meter_func_locals_per_fuel,
+    uint64_t meter_memory_bytes_per_fuel,
+    uint64_t meter_table_elements_per_fuel,
     uint64_t fee_cpu, uint64_t fee_memory_byte,
     uint64_t fee_storage_read_byte, uint64_t fee_storage_write_byte,
     uint64_t fee_output_value, uint64_t fee_output_byte,
@@ -372,6 +427,7 @@ lxp_result layerx_programs_call_terminal_begin(
     uint64_t token, uint8_t terminal_kind, lxp_result result_code,
     uint16_t runtime_version,
     uint16_t abi_version, uint32_t fee_schedule_version,
+    uint32_t metering_schedule_version,
     uint64_t cpu_fuel, uint64_t memory_bytes, uint64_t storage_read_bytes,
     uint64_t storage_write_bytes, uint32_t output_values, uint64_t output_bytes,
     uint64_t fee_hi, uint64_t fee_lo,
@@ -421,6 +477,16 @@ lxp_result layerx_programs_migration_execute_activity(uint64_t token,
                                                        uint32_t wasm_length,
                                                        uint16_t hook_length,
                                                        uint16_t abi_version,
+                                                       uint32_t metering_schedule_version,
+                                                       uint64_t meter_base,
+                                                       uint64_t meter_entity,
+                                                       uint64_t meter_load,
+                                                       uint64_t meter_store,
+                                                       uint64_t meter_call,
+                                                       uint64_t meter_branch_kept_per_fuel,
+                                                       uint64_t meter_func_locals_per_fuel,
+                                                       uint64_t meter_memory_bytes_per_fuel,
+                                                       uint64_t meter_table_elements_per_fuel,
                                                        uint64_t h0, uint64_t h1,
                                                        uint64_t h2, uint64_t h3);
 
@@ -533,6 +599,8 @@ typedef struct lx_programs_transfer_runtime {
     lx_programs_occupancy_parameters_fn resolve_occupancy_parameters;
     void *occupancy_parameter_context;
     const lx_programs_state_feed *state_feed;
+    lx_programs_metering_schedule_fn resolve_metering_schedule;
+    void *metering_schedule_context;
 } lx_programs_transfer_runtime;
 
 enum { LXP_PROGRAMS_OCCUPANCY_MAX_PAYERS = LXP_MAX_TRANSFER_SET_LEGS };

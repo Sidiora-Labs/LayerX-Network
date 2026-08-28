@@ -8,10 +8,7 @@ use crate::abi::response::CANDIDATE_ABI_MODULE;
 use crate::execute::ExecutionFault;
 
 use super::memory::validate_output;
-use super::{
-    linker_fault, RuntimeState, FUEL_METERING_DISABLED, STATUS_BOUNDS, STATUS_DENIED,
-    STATUS_INVALID,
-};
+use super::{linker_fault, RuntimeState, STATUS_BOUNDS, STATUS_DENIED, STATUS_INVALID};
 
 pub(super) fn register_candidate(linker: &mut Linker<RuntimeState>) -> Result<(), ExecutionFault> {
     linker
@@ -32,10 +29,10 @@ pub(super) fn register_candidate(linker: &mut Linker<RuntimeState>) -> Result<()
                     Ok(output) => output,
                     Err(status) => return Ok(status),
                 };
-                let Some(consumed) = caller.fuel_consumed() else {
-                    return Err(Trap::new(FUEL_METERING_DISABLED));
-                };
-                let initial = match caller.data().context_field(field, consumed) {
+                if super::reconcile_reference_guest_cpu(&mut caller).is_err() {
+                    return Err(Trap::from(TrapCode::OutOfFuel));
+                }
+                let initial = match caller.data().context_field(field) {
                     Ok(value) => value,
                     Err(ContextRefusal::UnknownField) => return Ok(STATUS_INVALID),
                     Err(ContextRefusal::Unauthenticated | ContextRefusal::FrameMismatch) => {
@@ -49,14 +46,10 @@ pub(super) fn register_candidate(linker: &mut Linker<RuntimeState>) -> Result<()
                     .ok()
                     .and_then(|bytes| bytes.checked_mul(CONTEXT_FUEL_PER_BYTE))
                     .ok_or_else(|| Trap::from(TrapCode::OutOfFuel))?;
-                if caller.consume_fuel(fuel).is_err() {
-                    caller.data_mut().meter_mut().mark_cpu_exhausted();
+                if super::charge_host_cpu(&mut caller, fuel).is_err() {
                     return Err(Trap::from(TrapCode::OutOfFuel));
                 }
-                let Some(consumed) = caller.fuel_consumed() else {
-                    return Err(Trap::new(FUEL_METERING_DISABLED));
-                };
-                let value = match caller.data().context_field(field, consumed) {
+                let value = match caller.data().context_field(field) {
                     Ok(value) => value,
                     Err(_) => return Ok(STATUS_DENIED),
                 };

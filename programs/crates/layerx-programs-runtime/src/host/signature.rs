@@ -146,9 +146,5 @@ fn charge_signature_fuel(
     algorithm: SignatureAlgorithm,
 ) -> Result<(), i32> {
     let fuel = algorithm.fuel_coefficient();
-    caller
-        .data_mut()
-        .meter_mut()
-        .charge_cpu(fuel)
-        .map_err(|_| STATUS_METER)
+    super::charge_host_cpu(caller, fuel).map_err(|_| STATUS_METER)
 }

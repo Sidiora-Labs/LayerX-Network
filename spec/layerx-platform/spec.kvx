@@ -3321,7 +3321,7 @@ reqs = ["39.2"]
 
 [task.32.3]
 title = "Make metering an engine-independent property of the module"
-status = "pending"
+status = "implemented"
 wave = 18
 requires = ["28.1"]
 do_1 = "Move fuel accounting from an engine configuration flag onto an explicit, deterministic instrumentation of the module: charge points injected at function entry and at every loop back edge, with the schedule recorded in protocol state."

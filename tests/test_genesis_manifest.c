@@ -1,6 +1,8 @@
 #include "layerx/lxp_genesis.h"
 
 #include "layerx/lxp_hash.h"
+#include "layerx/lxp_kernel.h"
+#include "layerx/programs.h"
 
 #include <openssl/evp.h>
 #include <string.h>
@@ -61,6 +63,8 @@ int main(void)
     lxp_byte_span encoded;
     lxp_byte_span reencoded;
     lxp_genesis_registration registration;
+    lx_programs_metering_schedule metering;
+    lxp_kernel projected;
     bool enabled = false;
     size_t encoded_length;
 
@@ -100,7 +104,24 @@ int main(void)
     manifest.module_values[0].value[0] = 9U;
     manifest.module_values[0].value_length = 1U;
     if (public_key_for(
-            signer_private_key, manifest.signer_public_key) != 0 ||
+            signer_private_key, manifest.signer_public_key) != 0)
+        return 1;
+    (void)memset(&metering, 0, sizeof(metering));
+    metering.version = 1U;
+    metering.coefficients[0] = 1U;
+    metering.coefficients[1] = 1U;
+    metering.coefficients[2] = 1U;
+    metering.coefficients[3] = 1U;
+    metering.coefficients[4] = 1U;
+    metering.coefficients[5] = 8U;
+    metering.coefficients[6] = 8U;
+    metering.coefficients[7] = 64U;
+    metering.coefficients[8] = 8U;
+    metering.activation_batch = 1U;
+    metering.authority_kind = LX_PROGRAMS_METERING_AUTHORITY_GENESIS;
+    if (lxp_hash_payload(manifest.signer_public_key, 32U,
+                         metering.authority_digest) != LXP_OK ||
+        lxp_programs_metering_genesis_append(&manifest, &metering) != LXP_OK ||
         lxp_genesis_state_root(
             &manifest, &arena, manifest.genesis_state_root) != LXP_OK ||
         checkpoint_id(
@@ -121,6 +142,7 @@ int main(void)
             encoded_copy, encoded_length,
             LXP_GENESIS_INPUT_MANIFEST, &decoded) != LXP_OK ||
         lxp_genesis_verify_signature(&decoded, &arena) != LXP_OK ||
+        lxp_programs_metering_genesis_validate(&decoded) != LXP_OK ||
         decoded.accounts[1].subaccount_kind != 4U ||
         lxp_arena_reset(&arena, 0U) != LXP_OK ||
         lxp_genesis_encode(
@@ -131,6 +153,45 @@ int main(void)
             encoded_copy, encoded_length,
             LXP_GENESIS_INPUT_DATABASE, &decoded) != LXP_ERR_NON_CANONICAL)
         return 1;
+    if (lxp_genesis_parse(
+            encoded_copy, encoded_length,
+            LXP_GENESIS_INPUT_MANIFEST, &decoded) != LXP_OK ||
+        lxp_arena_reset(&arena, 0U) != LXP_OK)
+        return 1;
+    (void)memset(&projected, 0, sizeof(projected));
+    if (lxp_programs_metering_genesis_project(
+            &decoded, &arena, &projected) != LXP_OK ||
+        projected.module_kv_count != 2U)
+        return 1;
+    projected.module_kv[0]
+        .value[LX_PROGRAMS_METERING_RECORD_BYTES - 1U] ^= 1U;
+    {
+        uint8_t preserved = projected.module_kv[0]
+            .value[LX_PROGRAMS_METERING_RECORD_BYTES - 1U];
+        if (lxp_programs_metering_genesis_project(
+                &decoded, &arena, &projected) == LXP_OK ||
+            projected.module_kv_count != 2U ||
+            projected.module_kv[0]
+                .value[LX_PROGRAMS_METERING_RECORD_BYTES - 1U] != preserved)
+            return 1;
+    }
+    {
+        size_t index;
+        bool corrupted = false;
+        for (index = 0U; index < decoded.module_value_count; ++index) {
+            if (decoded.module_values[index].value_length ==
+                    LX_PROGRAMS_METERING_RECORD_BYTES &&
+                memcmp(decoded.module_values[index].value, "LXMR1", 5U) == 0) {
+                decoded.module_values[index]
+                    .value[LX_PROGRAMS_METERING_RECORD_BYTES - 1U] ^= 1U;
+                corrupted = true;
+                break;
+            }
+        }
+        if (!corrupted ||
+            lxp_programs_metering_genesis_validate(&decoded) == LXP_OK)
+            return 1;
+    }
     (void)memset(&registration, 0, sizeof(registration));
     registration.network_id = manifest.network_id;
     (void)memcpy(registration.checkpoint_id,

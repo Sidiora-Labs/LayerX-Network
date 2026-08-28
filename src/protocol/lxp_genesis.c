@@ -1,5 +1,7 @@
 #include "layerx/lxp_genesis.h"
 
+#include "layerx/programs.h"
+
 #include "layerx/lxp_crypto.h"
 #include "layerx/lxp_hash.h"
 #include "layerx/lxp_protocol.h"
@@ -372,6 +374,8 @@ lxp_result lxp_genesis_accept(
                       manifest->paxeer_genesis_checkpoint_id, 32U) != 0)
         return LXP_ERR_ROOT_MISMATCH;
     status = lxp_genesis_verify_signature(manifest, arena);
+    if (status == LXP_OK)
+        status = lxp_programs_metering_genesis_validate(manifest);
     if (status == LXP_OK) *activities_enabled = true;
     return status;
 }

@@ -1,0 +1,19 @@
+{
+  "files": {
+    ".cargo_vcs_info.json": "e1f1bdb923ca5805c245433f44daa4ec98345da6d8fbfc231a82c5483c6610c2",
+    "Cargo.toml": "19cf4fc158ec5f751703decce821695ccf051ba398b8de1e81860778d18e4e23",
+    "Cargo.toml.orig": "0670e6ed3f3908e8ca5c227025c184c322a800a8d1f168f8ee2757690ee5e5e4",
+    "LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+    "LICENSE-MIT": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+    "README.md": "361e14f4f10be92f2bfffc78b55d8c85bcc486a9465d740782029a40738efa2c",
+    "src/export_globals.rs": "d7d44d2cdfdf807254eb883755228043ea703f8f1551a4fdf23d03750266c5b5",
+    "src/gas_metering/backend.rs": "1a98d8a1f7b00ff604785f771d3a77c1635def386493a0b16c6fd0c33369f611",
+    "src/gas_metering/mod.rs": "814d758d67e92b12df3aad7c7f159dec446f33d315b0eeb7ad0402bdbd2b3496",
+    "src/gas_metering/validation.rs": "c326c1aa03aab395a38db417b8d82ef733d72a55217ac8a07aee1ad9a7bd7b7a",
+    "src/lib.rs": "23790106abb31e84dcd257df29ca428677e588c73d986fa57961502c58a60e7b",
+    "src/stack_limiter/max_height.rs": "ce32e02cb3cd99669995482c030c3fefadfa17d46ccb1150b6e0d8a72cd904bb",
+    "src/stack_limiter/mod.rs": "1a7ac2fae1b884ad04d53cd7b562ccf55cb12696c7c6a9a88d297e71d3f3dc7a",
+    "src/stack_limiter/thunk.rs": "4c931c6b13ba1e252702be1d833aa5b1af5d115c3fc7ea1f455fd4e59d9b99e6"
+  },
+  "package": "2a47ecb37b9734d1085eaa5ae1a81e60801fd8c28d4cabdd8aedb982021918bc"
+}

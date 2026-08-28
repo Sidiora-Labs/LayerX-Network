@@ -14,6 +14,7 @@ host-ffi = []
 [dependencies]
 wasmi.workspace = true
 wasmparser-nostd.workspace = true
+wasm-instrument.workspace = true
 sha2.workspace = true
 sha3.workspace = true
 blake3.workspace = true

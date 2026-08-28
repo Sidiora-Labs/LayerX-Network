@@ -323,6 +323,11 @@ fn composition_payload(value: &CompositionRefusal) -> Result<Vec<u8>, i32> {
         CompositionRefusal::WrongVersion { expected, actual } => {
             out.extend([2, revision_tag(*expected), revision_tag(*actual)])
         }
+        CompositionRefusal::MeteringPlanMismatch { expected, actual } => {
+            out.push(23);
+            out.extend_from_slice(expected);
+            out.extend_from_slice(actual);
+        }
         CompositionRefusal::UnknownProgram { program } => {
             out.push(3);
             out.extend_from_slice(&program.bytes())
@@ -615,6 +620,7 @@ unsafe extern "C" {
         runtime: u16,
         abi: u16,
         schedule: u32,
+        metering_schedule: u32,
         cpu: u64,
         memory: u64,
         storage_read: u64,
@@ -1142,6 +1148,7 @@ fn terminal(
     runtime: u16,
     abi: u16,
     schedule: u32,
+    metering_schedule: u32,
     usage: MeteredUsage,
     root: [u8; 32],
     graph: &[u8],
@@ -1160,6 +1167,7 @@ fn terminal(
             runtime,
             abi,
             schedule,
+            metering_schedule,
             usage.cpu_fuel,
             usage.memory_bytes,
             usage.storage_read_bytes,
@@ -1206,6 +1214,7 @@ fn terminal_record_failure(
         record.execution.runtime_version,
         record.execution.abi_version,
         schedule,
+        record.execution.metering_schedule_version,
         record.execution.usage,
         [0; 32],
         &record.call_graph.canonical_evidence(),
@@ -1227,6 +1236,7 @@ fn terminal_settlement_failure(
         failure.execution().runtime_version,
         failure.execution().abi_version,
         schedule,
+        failure.execution().metering_schedule_version,
         failure.execution().usage,
         [0; 32],
         &failure.call_graph().canonical_evidence(),
@@ -1248,6 +1258,7 @@ fn terminal_candidate_record_failure(
         record.execution().runtime_version(),
         2,
         schedule,
+        record.execution().metering_schedule_version(),
         record.execution().usage(),
         [0; 32],
         &record.call_graph().canonical_evidence(),
@@ -1644,7 +1655,17 @@ pub extern "C" fn layerx_programs_call_begin(
     available_fee_hi: u64,
     available_fee_lo: u64,
     fee_schedule_version: u32,
+    metering_schedule_version: u32,
     parameter_version: u32,
+    meter_base: u64,
+    meter_entity: u64,
+    meter_load: u64,
+    meter_store: u64,
+    meter_call: u64,
+    meter_branch_kept_per_fuel: u64,
+    meter_func_locals_per_fuel: u64,
+    meter_memory_bytes_per_fuel: u64,
+    meter_table_elements_per_fuel: u64,
     fee_cpu: u64,
     fee_memory_byte: u64,
     fee_storage_read_byte: u64,
@@ -1678,6 +1699,7 @@ pub extern "C" fn layerx_programs_call_begin(
             || parameter_version == 0
             || fee_schedule_version == 0
             || (protocol_version == 2 && fee_schedule_version != parameter_version)
+            || metering_schedule_version == 0
             || !matches!(
                 (protocol_version, abi_version),
                 (1 | 2, ABI_V1_VERSION) | (2, 2)
@@ -1690,6 +1712,27 @@ pub extern "C" fn layerx_programs_call_begin(
         {
             return Err(NON_CANONICAL);
         }
+        let mut metering_schedule_bytes = [0_u8; 76];
+        metering_schedule_bytes[0..4]
+            .copy_from_slice(&metering_schedule_version.to_be_bytes());
+        for (index, coefficient) in [
+            meter_base,
+            meter_entity,
+            meter_load,
+            meter_store,
+            meter_call,
+            meter_branch_kept_per_fuel,
+            meter_func_locals_per_fuel,
+            meter_memory_bytes_per_fuel,
+            meter_table_elements_per_fuel,
+        ].into_iter().enumerate() {
+            let start = 4 + index * 8;
+            metering_schedule_bytes[start..start + 8]
+                .copy_from_slice(&coefficient.to_be_bytes());
+        }
+        let metering_schedule = crate::FuelSchedule::from_protocol_bytes(
+            &metering_schedule_bytes,
+        ).map_err(|_| NON_CANONICAL)?;
         let program = ProgramId::new(bytes([p0, p1, p2, p3])).map_err(|_| NON_CANONICAL)?;
         let payer = PrincipalId::new(bytes([r0, r1, r2, r3])).map_err(|_| NON_CANONICAL)?;
         let authority = bytes([h0, h1, h2, h3]);
@@ -1800,7 +1843,10 @@ pub extern "C" fn layerx_programs_call_begin(
                 return Err(NON_CANONICAL);
             }
             let module = compiled_module(
-                ModuleCacheKey::new(hash, crate::RUNTIME_VERSION, catalog_abi),
+                ModuleCacheKey::for_wasm_with_schedule(
+                    hash, crate::RUNTIME_VERSION, catalog_abi, &wasm, metering_schedule,
+                )
+                    .map_err(|_| NON_CANONICAL)?,
                 &wasm,
             )?;
             let root_candidate = if entry_program == program {
@@ -2020,6 +2066,7 @@ pub extern "C" fn layerx_programs_call_begin(
                         record.execution().runtime_version(),
                         2,
                         fee_schedule_version,
+                        record.execution().metering_schedule_version(),
                         MeteredUsage {
                             occupancy_byte_batches: occupancy.byte_batches,
                             occupancy_fee_units: occupancy.fee_units,
@@ -2051,6 +2098,7 @@ pub extern "C" fn layerx_programs_call_begin(
                         record.execution().runtime_version(),
                         2,
                         fee_schedule_version,
+                        record.execution().metering_schedule_version(),
                         record.execution().usage(),
                         [0; 32],
                         &record.call_graph().canonical_evidence(),
@@ -2172,6 +2220,7 @@ pub extern "C" fn layerx_programs_call_begin(
                     record.execution.runtime_version,
                     record.execution.abi_version,
                     fee_schedule_version,
+                    record.execution.metering_schedule_version,
                     MeteredUsage {
                         occupancy_byte_batches: occupancy.byte_batches,
                         occupancy_fee_units: occupancy.fee_units,
@@ -2194,6 +2243,7 @@ pub extern "C" fn layerx_programs_call_begin(
                     crate::RUNTIME_VERSION,
                     abi_version,
                     fee_schedule_version,
+                    metering_schedule_version,
                     failure.usage(),
                     [0; 32],
                     &failure.call_graph().canonical_evidence(),
@@ -2210,6 +2260,7 @@ pub extern "C" fn layerx_programs_call_begin(
                     crate::RUNTIME_VERSION,
                     abi_version,
                     fee_schedule_version,
+                    metering_schedule_version,
                     resource.usage(),
                     [0; 32],
                     &resource.call_graph().canonical_evidence(),

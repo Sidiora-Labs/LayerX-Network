@@ -65,6 +65,15 @@ fn section(id: u8, payload: &[u8]) -> Vec<u8> {
     bytes
 }
 
+/// Encodes a section from its numeric identifier and already assembled payload.
+///
+/// This is intentionally low-level so committed execution corpora can exercise
+/// proposal instructions without adding production dependencies on a WAT parser.
+#[must_use]
+pub fn raw_section(id: u8, payload: &[u8]) -> Vec<u8> {
+    section(id, payload)
+}
+
 /// Encodes a type section from `(params, results)` value type code pairs.
 #[must_use]
 pub fn type_section(types: &[(&[u8], &[u8])]) -> Vec<u8> {

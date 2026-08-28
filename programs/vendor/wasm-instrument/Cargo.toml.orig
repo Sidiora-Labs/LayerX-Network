@@ -1,0 +1,25 @@
+[package]
+name = "wasm-instrument"
+version = "0.4.0"
+edition = "2021"
+rust-version = "1.56.1"
+authors = ["Parity Technologies <admin@parity.io>"]
+license = "MIT OR Apache-2.0"
+description = "Instrument and transform wasm modules."
+keywords = ["wasm", "webassembly", "blockchain", "gas-metering", "parity"]
+categories = ["wasm", "no-std"]
+repository = "https://github.com/paritytech/wasm-instrument"
+include = ["src/**/*", "LICENSE-*", "README.md"]
+
+[dependencies]
+parity-wasm = { version = "0.45", default-features = false, features = ["bulk", "multi_value", "reference_types"] }
+
+[features]
+default = ["std"]
+std = ["parity-wasm/std"]
+sign_ext = ["parity-wasm/sign_ext"]
+bulk = ["parity-wasm/bulk"]
+reference_types = ["bulk", "parity-wasm/reference_types"]
+
+[lib]
+bench = false
