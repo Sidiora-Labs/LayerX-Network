@@ -277,17 +277,14 @@ static lxp_result collect_assets(lxp_daemon_process *process)
 }
 
 static lxp_result occupancy_parameters(
-    void *context, uint32_t parameter_version,
+    void *context, uint32_t recorded_fee_schedule_version,
     lx_programs_fee_schedule *schedule, uint8_t occupancy_asset_id[32])
 {
     lxp_daemon_process *process = (lxp_daemon_process *)context;
-    if (process == NULL || schedule == NULL || occupancy_asset_id == NULL ||
-        parameter_version != process->parameter_version)
-        return LXP_ERR_VERSION_UNSUPPORTED;
-    *schedule = process->programs.fee_schedule;
-    (void)memcpy(occupancy_asset_id,
-                 process->programs.occupancy_asset_id, 32U);
-    return LXP_OK;
+    if (process == NULL) return LXP_ERR_NON_CANONICAL;
+    return lxp_programs_fee_governance_resolve_runtime(
+        &process->kernel, recorded_fee_schedule_version, schedule,
+        occupancy_asset_id);
 }
 
 static lx_account *principal_account(lxp_daemon_process *process,
@@ -648,7 +645,7 @@ static lxp_result replay_execute_activity(
     (void)memset(&scope, 0, sizeof(scope));
     scope.module_mask = UINT64_C(1) << LXP_MODULE_PROGRAMS;
     scope.activity_ordinal_min = 1U;
-    scope.activity_ordinal_max = 7U;
+    scope.activity_ordinal_max = 8U;
     scope.maximum_per_activity = (lxp_u128){UINT64_MAX, UINT64_MAX};
     scope.maximum_total = (lxp_u128){UINT64_MAX, UINT64_MAX};
     scope.maximum_per_period = (lxp_u128){UINT64_MAX, UINT64_MAX};
@@ -680,6 +677,9 @@ static lxp_result replay_execute_activity(
     execution.recorded_metering_schedule_version =
         expected->program_outcome.present ?
             expected->program_outcome.metering_schedule_version : 0U;
+    execution.recorded_fee_schedule_version =
+        expected->program_outcome.present ?
+            expected->program_outcome.fee_schedule_version : 0U;
     execution.parameter_version = expected->parameter_version;
     execution.signature_valid = true;
     execution.identities = &process->identities;
@@ -1376,7 +1376,7 @@ static lxp_result apply_canonical_activity(
     (void)memset(&scope, 0, sizeof(scope));
     scope.module_mask = UINT64_C(1) << LXP_MODULE_PROGRAMS;
     scope.activity_ordinal_min = 1U;
-    scope.activity_ordinal_max = 7U;
+    scope.activity_ordinal_max = 8U;
     scope.maximum_per_activity = (lxp_u128){UINT64_MAX, UINT64_MAX};
     scope.maximum_total = (lxp_u128){UINT64_MAX, UINT64_MAX};
     scope.maximum_per_period = (lxp_u128){UINT64_MAX, UINT64_MAX};
@@ -1405,6 +1405,7 @@ static lxp_result apply_canonical_activity(
     execution.epoch = process->kernel.epoch;
     execution.global_sequence = global_sequence;
     execution.recorded_module_version = LX_PROGRAMS_ACCOUNT_ABI_VERSION;
+    execution.recorded_fee_schedule_version = 0U;
     execution.parameter_version = process->parameter_version;
     execution.signature_valid = true;
     execution.identities = &process->identities;
@@ -1576,39 +1577,19 @@ static lxp_result replicate_authority_history(lxp_daemon_process *process)
 
 static lxp_result load_schedule(lxp_daemon_process *process)
 {
-    static const char *const names[7] = {
-        "LAYERX_NODE_PROGRAM_CPU_PRICE",
-        "LAYERX_NODE_PROGRAM_MEMORY_PRICE",
-        "LAYERX_NODE_PROGRAM_STORAGE_READ_PRICE",
-        "LAYERX_NODE_PROGRAM_STORAGE_WRITE_PRICE",
-        "LAYERX_NODE_PROGRAM_OUTPUT_VALUE_PRICE",
-        "LAYERX_NODE_PROGRAM_OUTPUT_BYTE_PRICE",
-        "LAYERX_NODE_PROGRAM_OCCUPANCY_PRICE"
-    };
-    uint64_t values[7];
     uint64_t parameter_version;
-    size_t index;
     lxp_result status = parse_u64_text(
         required_environment("LAYERX_NODE_PARAMETER_VERSION"),
         &parameter_version);
     if (status != LXP_OK || parameter_version == 0U ||
         parameter_version > UINT16_MAX)
         return LXP_ERR_VERSION_UNSUPPORTED;
-    for (index = 0U; status == LXP_OK && index < 7U; ++index)
-        status = parse_u64_text(required_environment(names[index]),
-                                &values[index]);
-    if (status != LXP_OK) return status;
     process->parameter_version = (uint32_t)parameter_version;
-    process->programs.fee_schedule = (lx_programs_fee_schedule){
-        (uint32_t)parameter_version, values[0], values[1], values[2],
-        values[3], values[4], values[5], values[6]
-    };
     process->fees = (lxp_fee_params){
         (uint16_t)parameter_version, {0U, 0U}, {0U, 0U}, {0U, 0U},
         {0U, 0U}, {0U, 0U}, 10000U
     };
-    return decode_hex(required_environment("LAYERX_NODE_OCCUPANCY_ASSET"),
-                      process->programs.occupancy_asset_id, 32U);
+    return LXP_OK;
 }
 
 static lxp_result project_bootstrap_metering(
@@ -1653,6 +1634,9 @@ static lxp_result project_bootstrap_metering(
         *candidate = process->kernel;
         status = lxp_programs_metering_genesis_project(
             genesis, &process->owner_scratch, candidate);
+        if (status == LXP_OK)
+            status = lxp_programs_fee_genesis_project(
+                genesis, &process->owner_scratch, candidate);
     }
     if (status == LXP_OK)
         status = lxp_state_root(candidate, projected_root);
@@ -1882,6 +1866,12 @@ static lxp_result open_process(lxp_daemon_process *process,
             process->next_batch != 0U ? process->next_batch :
                 process->sequencer_authorization.last_batch_number,
             &metering_schedule);
+    }
+    if (status == LXP_OK) {
+        lx_programs_fee_schedule fee_schedule;
+        uint8_t occupancy_asset_id[32];
+        status = lxp_programs_fee_governance_resolve_runtime(
+            &process->kernel, 0U, &fee_schedule, occupancy_asset_id);
     }
     if (status == LXP_OK) status = replicate_authority_history(process);
     bearer = required_environment("LAYERX_NODE_PROGRAM_BEARER_TOKEN");

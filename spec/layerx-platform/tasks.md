@@ -1336,7 +1336,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Prove the injected instrumentation cannot itself be a divergence source: the same module yields the same charge points on every platform, frozen behind golden vectors.
     - Document that this is what makes a faster execution strategy possible later without changing what anything costs.
     - _Requirements: 39.3_
-  - [ ] 32.4 Move the fee schedule into governed protocol state
+  - [ ] 32.4 Move the fee schedule into governed protocol state — **Implemented - qualification pending**
     - Replace the hardcoded declared fee schedule with a versioned schedule read from protocol state, with every coefficient named and every unit stated.
     - Record the schedule version in every execution receipt so a historical activity reprices under the schedule that was live when it ran, and replay selects by receipt rather than by node.
     - Change the schedule only through a governed activity that is itself receipt-backed, with the change visible in state before it takes effect.

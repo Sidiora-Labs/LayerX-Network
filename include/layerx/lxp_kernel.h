@@ -256,6 +256,7 @@ typedef struct lxp_kernel_execution {
     uint64_t global_sequence;
     uint32_t recorded_module_version;
     uint32_t recorded_metering_schedule_version;
+    uint32_t recorded_fee_schedule_version;
     uint32_t parameter_version;
     bool signature_valid;
     lxp_identity_store *identities;

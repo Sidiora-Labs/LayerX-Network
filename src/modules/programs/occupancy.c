@@ -74,21 +74,21 @@ static void schedule_prices(const lx_programs_fee_schedule *schedule,
 }
 
 static lxp_result resolve_parameters(
-    const lx_programs_transfer_runtime *runtime, uint32_t parameter_version,
+    const lx_programs_transfer_runtime *runtime, uint32_t schedule_version,
     lx_programs_fee_schedule *schedule, uint8_t asset_id[32])
 {
     lxp_result status;
     if (runtime == NULL || schedule == NULL || asset_id == NULL ||
-        parameter_version == 0U ||
         runtime->resolve_occupancy_parameters == NULL)
         return LXP_ERR_MODULE_DISABLED;
     (void)memset(schedule, 0, sizeof(*schedule));
     (void)memset(asset_id, 0, 32U);
     status = runtime->resolve_occupancy_parameters(
-        runtime->occupancy_parameter_context, parameter_version,
+        runtime->occupancy_parameter_context, schedule_version,
         schedule, asset_id);
     if (status != LXP_OK) return status;
-    if (schedule->version != parameter_version ||
+    if (schedule->version == 0U ||
+        (schedule_version != 0U && schedule->version != schedule_version) ||
         schedule->occupancy_byte_batch == 0U ||
         lxp_ct_is_zero(asset_id, 32U))
         return LXP_ERR_VERSION_UNSUPPORTED;
@@ -420,7 +420,7 @@ lxp_result layerx_programs_occupancy_output_begin(
         return LXP_ERR_NON_CANONICAL;
     runtime = (lx_programs_transfer_runtime *)
         lxp_ctx_module_runtime(bridge->ctx);
-    status = resolve_parameters(runtime, parameter_version, &schedule,
+    status = resolve_parameters(runtime, schedule_version, &schedule,
                                 asset_id);
     if (status != LXP_OK) return status;
     status = lxp_state_store_bind_accounts(bridge->ctx->kernel->state,
@@ -854,7 +854,7 @@ lxp_result lxp_programs_finalize_occupancy_batch(
         return LXP_ERR_NON_CANONICAL;
     runtime = (lx_programs_transfer_runtime *)
         kernel->module_runtime[LXP_MODULE_PROGRAMS];
-    status = resolve_parameters(runtime, parameter_version, &schedule,
+    status = resolve_parameters(runtime, 0U, &schedule,
                                 occupancy_asset_id);
     if (status != LXP_OK) return status;
     status = lxp_state_store_bind_accounts(kernel->state, runtime->accounts);
@@ -896,6 +896,9 @@ lxp_result lxp_programs_finalize_occupancy_batch(
             schedule.output_value, schedule.output_byte,
             schedule.occupancy_byte_batch);
     if (status == LXP_OK && !bridge.applied) status = LXP_FATAL_INVARIANT;
+    if (status == LXP_OK)
+        status = lxp_programs_fee_governance_observe_batch(
+            &ctx, &bridge.receipt);
     if (status == LXP_OK) status = lxp_module_ctx_prepare_commit(&ctx);
     if (status != LXP_OK) {
         lxp_module_ctx_rollback(&ctx);
@@ -967,7 +970,7 @@ static lxp_result receipt_validate_fields(
     lxp_result status;
     if (receipt == NULL || receipt->batch_number == 0U ||
         receipt->parameter_version == 0U ||
-        receipt->schedule_version != receipt->parameter_version ||
+        receipt->schedule_version == 0U ||
         lxp_ct_is_zero(receipt->occupancy_asset_id, 32U) ||
         lxp_ct_is_zero(receipt->schedule_commitment, 32U) ||
         lxp_ct_is_zero(receipt->settlement_evidence_digest, 32U) ||
@@ -1190,7 +1193,7 @@ lxp_result lxp_programs_occupancy_receipt_decode(
     if (status != LXP_OK) return status;
     if (offset != length || receipt->batch_number == 0U ||
         receipt->parameter_version == 0U ||
-        receipt->schedule_version != receipt->parameter_version ||
+        receipt->schedule_version == 0U ||
         lxp_ct_is_zero(receipt->occupancy_asset_id, 32U) ||
         lxp_ct_is_zero(receipt->ledger_root, 32U) ||
         lxp_ct_is_zero(receipt->resulting_state_root, 32U) ||

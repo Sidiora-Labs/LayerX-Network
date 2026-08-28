@@ -2669,6 +2669,12 @@ $(BUILD_DIR)/tests/programs_metering_schedule: tests/programs/test_metering_sche
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) \
 		$(EXTRA_LDFLAGS) -lcrypto -pthread -ldl -lm -o $@
 
+$(BUILD_DIR)/tests/programs_fee_governance: tests/programs/test_fee_governance.c \
+		$(LIBRARY)
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) \
+		$(EXTRA_LDFLAGS) -lcrypto -pthread -ldl -lm -o $@
+
 $(BUILD_DIR)/tests/programs_accounts: tests/programs/test_accounts.c \
 		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
 	@mkdir -p $(@D)
@@ -2687,6 +2693,7 @@ programs-core-test: $(BUILD_DIR)/tests/programs_registration \
 		$(BUILD_DIR)/tests/programs_call_activity \
 		$(BUILD_DIR)/tests/programs_occupancy_batch \
 		$(BUILD_DIR)/tests/programs_metering_schedule \
+		$(BUILD_DIR)/tests/programs_fee_governance \
 		$(BUILD_DIR)/tests/programs_accounts \
 		$(BUILD_DIR)/tests/programs_winddown
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/programs_registration
@@ -2695,6 +2702,7 @@ programs-core-test: $(BUILD_DIR)/tests/programs_registration \
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/programs_call_activity
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/programs_occupancy_batch
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/programs_metering_schedule
+	$(RUN_PREFIX) $(BUILD_DIR)/tests/programs_fee_governance
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/programs_accounts
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/programs_winddown
 

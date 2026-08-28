@@ -64,6 +64,7 @@ int main(void)
     lxp_byte_span reencoded;
     lxp_genesis_registration registration;
     lx_programs_metering_schedule metering;
+    lx_programs_fee_genesis_parameters fee_genesis;
     lxp_kernel projected;
     bool enabled = false;
     size_t encoded_length;
@@ -119,9 +120,21 @@ int main(void)
     metering.coefficients[8] = 8U;
     metering.activation_batch = 1U;
     metering.authority_kind = LX_PROGRAMS_METERING_AUTHORITY_GENESIS;
+    (void)memset(&fee_genesis, 0, sizeof(fee_genesis));
+    fee_genesis.schedule = (lx_programs_fee_schedule){
+        1U, 1U, 1U, 2U, 4U, 1U, 1U, 100U
+    };
+    fee_genesis.occupancy_asset_id[0] = 1U;
+    fee_genesis.target_occupancy_byte_batches = 100U;
+    fee_genesis.response_denominator = 1U;
+    fee_genesis.maximum_change_numerator = 1U;
+    fee_genesis.maximum_change_denominator = 10U;
+    fee_genesis.minimum_fee_units_per_occupancy_byte_batch = 1U;
+    fee_genesis.maximum_fee_units_per_occupancy_byte_batch = 1000U;
     if (lxp_hash_payload(manifest.signer_public_key, 32U,
                          metering.authority_digest) != LXP_OK ||
         lxp_programs_metering_genesis_append(&manifest, &metering) != LXP_OK ||
+        lxp_programs_fee_genesis_append(&manifest, &fee_genesis) != LXP_OK ||
         lxp_genesis_state_root(
             &manifest, &arena, manifest.genesis_state_root) != LXP_OK ||
         checkpoint_id(
@@ -143,6 +156,7 @@ int main(void)
             LXP_GENESIS_INPUT_MANIFEST, &decoded) != LXP_OK ||
         lxp_genesis_verify_signature(&decoded, &arena) != LXP_OK ||
         lxp_programs_metering_genesis_validate(&decoded) != LXP_OK ||
+        lxp_programs_fee_genesis_validate(&decoded) != LXP_OK ||
         decoded.accounts[1].subaccount_kind != 4U ||
         lxp_arena_reset(&arena, 0U) != LXP_OK ||
         lxp_genesis_encode(
@@ -161,17 +175,30 @@ int main(void)
     (void)memset(&projected, 0, sizeof(projected));
     if (lxp_programs_metering_genesis_project(
             &decoded, &arena, &projected) != LXP_OK ||
-        projected.module_kv_count != 2U)
+        lxp_programs_fee_genesis_project(
+            &decoded, &arena, &projected) != LXP_OK ||
+        projected.module_kv_count != 4U)
         return 1;
-    projected.module_kv[0]
-        .value[LX_PROGRAMS_METERING_RECORD_BYTES - 1U] ^= 1U;
     {
-        uint8_t preserved = projected.module_kv[0]
+        size_t index;
+        size_t metering_index = projected.module_kv_count;
+        uint8_t preserved;
+        for (index = 0U; index < projected.module_kv_count; ++index)
+            if (projected.module_kv[index].value_length ==
+                    LX_PROGRAMS_METERING_RECORD_BYTES &&
+                memcmp(projected.module_kv[index].value, "LXMR1", 5U) == 0) {
+                metering_index = index;
+                break;
+            }
+        if (metering_index == projected.module_kv_count) return 1;
+        projected.module_kv[metering_index]
+            .value[LX_PROGRAMS_METERING_RECORD_BYTES - 1U] ^= 1U;
+        preserved = projected.module_kv[metering_index]
             .value[LX_PROGRAMS_METERING_RECORD_BYTES - 1U];
         if (lxp_programs_metering_genesis_project(
                 &decoded, &arena, &projected) == LXP_OK ||
-            projected.module_kv_count != 2U ||
-            projected.module_kv[0]
+            projected.module_kv_count != 4U ||
+            projected.module_kv[metering_index]
                 .value[LX_PROGRAMS_METERING_RECORD_BYTES - 1U] != preserved)
             return 1;
     }

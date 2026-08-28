@@ -13,6 +13,7 @@ typedef struct lxp_kernel lxp_kernel;
 typedef struct lxp_log lxp_log;
 typedef struct lxp_history lxp_history;
 typedef struct lxp_genesis_manifest lxp_genesis_manifest;
+typedef struct lxp_programs_occupancy_receipt lxp_programs_occupancy_receipt;
 
 /* Node-owned durable account-state feed. `append` must commit the notice and
  * its canonical receipt reference before returning. The node binds the feed
@@ -95,6 +96,7 @@ enum {
     LX_PROGRAMS_TRANSFER = 0x00090005,
     LX_PROGRAMS_ACCOUNT = 0x00090006,
     LX_PROGRAMS_WIND_DOWN = 0x00090007,
+    LX_PROGRAMS_FEE_GOVERNANCE = 0x00090008,
     LX_PROGRAMS_ABI_VERSION = 1,
     LX_PROGRAMS_ACCOUNT_ABI_VERSION = 2,
     LX_PROGRAMS_EVENT_DEPLOYED = 1,
@@ -219,6 +221,67 @@ typedef struct lx_programs_fee_schedule {
     uint64_t output_byte;
     uint64_t occupancy_byte_batch;
 } lx_programs_fee_schedule;
+
+typedef struct lx_programs_fee_genesis_parameters {
+    lx_programs_fee_schedule schedule;
+    uint8_t occupancy_asset_id[32];
+    uint64_t target_occupancy_byte_batches;
+    uint64_t response_denominator;
+    uint64_t maximum_change_numerator;
+    uint64_t maximum_change_denominator;
+    uint64_t minimum_fee_units_per_occupancy_byte_batch;
+    uint64_t maximum_fee_units_per_occupancy_byte_batch;
+} lx_programs_fee_genesis_parameters;
+
+enum {
+    LX_PROGRAMS_FEE_PRICE_FIELDS = 7,
+    LX_PROGRAMS_FEE_GOVERNANCE_PROPOSAL_BYTES = 149
+};
+
+lxp_result lxp_programs_fee_governance_decode(
+    lxp_module_ctx *ctx, const uint8_t *payload, size_t payload_length,
+    void **decoded);
+lxp_result lxp_programs_fee_governance_validate(
+    lxp_module_ctx *ctx, const lxp_activity *activity,
+    const lxp_authority_resolved *authority, const void *decoded);
+lxp_result lxp_programs_fee_governance_execute(
+    lxp_module_ctx *ctx, const lxp_activity *activity,
+    const lxp_authority_resolved *authority, const void *decoded,
+    lxp_effect_buffer *effects);
+lxp_result lxp_programs_fee_governance_stage(
+    lxp_module_ctx *ctx, const lx_programs_fee_schedule *proposed,
+    const uint8_t occupancy_asset_id[32],
+    uint64_t target_occupancy_byte_batches,
+    uint64_t response_denominator,
+    uint64_t maximum_change_numerator,
+    uint64_t maximum_change_denominator,
+    uint64_t minimum_fee_units_per_occupancy_byte_batch,
+    uint64_t maximum_fee_units_per_occupancy_byte_batch,
+    uint64_t activation_batch, const lxp_receipt *governance_receipt);
+lxp_result lxp_programs_fee_governance_pending(
+    lxp_module_ctx *ctx, lx_programs_fee_schedule *proposed,
+    uint64_t *activation_batch, uint8_t governance_receipt_digest[32]);
+lxp_result lxp_programs_fee_governance_activate(
+    lxp_module_ctx *ctx, uint64_t batch_number);
+lxp_result lxp_programs_fee_schedule_at(
+    lxp_module_ctx *ctx, uint32_t recorded_version,
+    lx_programs_fee_schedule *schedule, uint8_t occupancy_asset_id[32]);
+lxp_result lxp_programs_fee_schedule_current(
+    lxp_module_ctx *ctx, lx_programs_fee_schedule *schedule,
+    uint8_t occupancy_asset_id[32]);
+lxp_result lxp_programs_fee_governance_observe_batch(
+    lxp_module_ctx *ctx, const lxp_programs_occupancy_receipt *receipt);
+lxp_result lxp_programs_fee_governance_resolve_runtime(
+    void *context, uint32_t version, lx_programs_fee_schedule *schedule,
+    uint8_t occupancy_asset_id[32]);
+lxp_result lxp_programs_fee_genesis_append(
+    lxp_genesis_manifest *manifest,
+    const lx_programs_fee_genesis_parameters *parameters);
+lxp_result lxp_programs_fee_genesis_validate(
+    const lxp_genesis_manifest *manifest);
+lxp_result lxp_programs_fee_genesis_project(
+    const lxp_genesis_manifest *manifest, lxp_arena *arena,
+    lxp_kernel *kernel);
 
 enum {
     LX_PROGRAMS_METER_BASE = 0,
@@ -587,7 +650,7 @@ lxp_result lxp_programs_account_execute(
     lxp_effect_buffer *effects);
 
 typedef lxp_result (*lx_programs_occupancy_parameters_fn)(
-    void *context, uint32_t parameter_version,
+    void *context, uint32_t recorded_fee_schedule_version,
     lx_programs_fee_schedule *schedule, uint8_t occupancy_asset_id[32]);
 
 typedef struct lx_programs_transfer_runtime {

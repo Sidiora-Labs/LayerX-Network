@@ -376,6 +376,8 @@ lxp_result lxp_genesis_accept(
     status = lxp_genesis_verify_signature(manifest, arena);
     if (status == LXP_OK)
         status = lxp_programs_metering_genesis_validate(manifest);
+    if (status == LXP_OK)
+        status = lxp_programs_fee_genesis_validate(manifest);
     if (status == LXP_OK) *activities_enabled = true;
     return status;
 }

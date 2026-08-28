@@ -1698,7 +1698,6 @@ pub extern "C" fn layerx_programs_call_begin(
             || !matches!(protocol_version, 1 | 2)
             || parameter_version == 0
             || fee_schedule_version == 0
-            || (protocol_version == 2 && fee_schedule_version != parameter_version)
             || metering_schedule_version == 0
             || !matches!(
                 (protocol_version, abi_version),
@@ -2294,7 +2293,7 @@ pub extern "C" fn layerx_programs_occupancy_finalize_rust(
         if token == 0
             || batch_number == 0
             || parameter_version == 0
-            || schedule_version != parameter_version
+            || schedule_version == 0
         {
             return Err(NON_CANONICAL);
         }
@@ -2308,6 +2307,9 @@ pub extern "C" fn layerx_programs_occupancy_finalize_rust(
             fee_output_byte,
             fee_occupancy_byte_batch,
         );
+        if !schedule.is_valid() {
+            return Err(NON_CANONICAL);
+        }
         let mut ledger = occupancy_ledger(token, batch_number)?;
         import_occupancy_activation_positions(token, &mut ledger)?;
         let mut prepared = ledger

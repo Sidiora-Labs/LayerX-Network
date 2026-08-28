@@ -125,7 +125,8 @@ pub use lifecycle::{
 };
 pub use limits::{DeclaredLimit, LimitsRefusal, ValidationLimits};
 pub use meter::{
-    BudgetMeterRefusal, BudgetResourceKind, FeeSchedule, Meter, MeterRefusal, MeteredUsage,
+    BudgetMeterRefusal, BudgetResourceKind, DemandPriceAdjustment, DemandPricePolicy,
+    FeeGovernance, FeeSchedule, FeeScheduleError, FeeScheduleHistory, Meter, MeterRefusal, MeteredUsage,
     ResourceBudget, ResourceKind,
 };
 pub use meter::inject::{FuelSchedule, InjectionRefusal, MeterInjection};
@@ -136,7 +137,8 @@ pub use occupancy::{
 };
 pub use qualification::{
     programs_differential_gate, programs_differential_gate_versioned, programs_fuzz_observation, programs_fuzz_targets,
-    replay_recorded_execution, DifferentialMismatch, FuzzTarget, RecordedExecution, ReplayRefusal,
+    replay_recorded_execution, replay_recorded_execution_with_fee_history, DifferentialMismatch,
+    FuzzTarget, RecordedExecution, ReplayRefusal,
 };
 pub use storage::{
     NamespaceDrop, PrincipalId, ProgramId, ScanEntry, ScanLimits, Storage, StorageError,

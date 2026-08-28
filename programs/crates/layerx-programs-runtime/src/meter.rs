@@ -21,8 +21,25 @@ pub const DEFAULT_OUTPUT_VALUES: u32 = 64;
 pub const DEFAULT_OUTPUT_BYTES: u64 = 1_048_576;
 /// Default table-element limit per execution.
 pub const DEFAULT_TABLE_ELEMENTS: u32 = 4_096;
-/// Default fee-unit price for one namespace byte held across one batch.
-pub const DEFAULT_OCCUPANCY_BYTE_BATCH_PRICE: u64 = 1;
+/// Version of the schedule installed into protocol state at genesis.
+pub const GENESIS_FEE_SCHEDULE_VERSION: u32 = 1;
+/// Genesis fee units charged per interpreter CPU fuel unit.
+pub const GENESIS_CPU_FUEL_PRICE: u64 = 1;
+/// Genesis fee units charged per peak linear-memory byte.
+pub const GENESIS_MEMORY_BYTE_PRICE: u64 = 1;
+/// Genesis fee units charged per storage byte read.
+pub const GENESIS_STORAGE_READ_BYTE_PRICE: u64 = 2;
+/// Genesis fee units charged per storage byte written.
+pub const GENESIS_STORAGE_WRITE_BYTE_PRICE: u64 = 4;
+/// Genesis fee units charged per integer result value.
+pub const GENESIS_OUTPUT_VALUE_PRICE: u64 = 1;
+/// Genesis fee units charged per response byte.
+pub const GENESIS_OUTPUT_BYTE_PRICE: u64 = 1;
+/// Genesis fee units charged per namespace byte held for one protocol batch.
+pub const GENESIS_OCCUPANCY_BYTE_BATCH_PRICE: u64 = 1;
+/// Legacy name for the genesis occupancy price.
+pub const DEFAULT_OCCUPANCY_BYTE_BATCH_PRICE: u64 =
+    GENESIS_OCCUPANCY_BYTE_BATCH_PRICE;
 
 /// One independently enforced deterministic resource class.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -217,34 +234,48 @@ impl Default for ResourceBudget {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FeeSchedule {
     version: u32,
-    cpu: u64,
-    memory_byte: u64,
-    storage_read_byte: u64,
-    storage_write_byte: u64,
-    output_value: u64,
-    output_byte: u64,
-    occupancy_byte_batch: u64,
+    fee_units_per_cpu_fuel: u64,
+    fee_units_per_memory_byte: u64,
+    fee_units_per_storage_read_byte: u64,
+    fee_units_per_storage_write_byte: u64,
+    fee_units_per_output_value: u64,
+    fee_units_per_output_byte: u64,
+    fee_units_per_occupancy_byte_batch: u64,
 }
 
 impl FeeSchedule {
+    /// Returns whether the schedule has a version and a nonzero coefficient
+    /// for every priced resource.
+    #[must_use]
+    pub const fn is_valid(self) -> bool {
+        self.version != 0
+            && self.fee_units_per_cpu_fuel != 0
+            && self.fee_units_per_memory_byte != 0
+            && self.fee_units_per_storage_read_byte != 0
+            && self.fee_units_per_storage_write_byte != 0
+            && self.fee_units_per_output_value != 0
+            && self.fee_units_per_output_byte != 0
+            && self.fee_units_per_occupancy_byte_batch != 0
+    }
+
     /// Constructs an explicit integer fee schedule.
     #[must_use]
     pub const fn new(
-        cpu: u64,
-        memory_byte: u64,
-        storage_read_byte: u64,
-        storage_write_byte: u64,
-        output_value: u64,
+        fee_units_per_cpu_fuel: u64,
+        fee_units_per_memory_byte: u64,
+        fee_units_per_storage_read_byte: u64,
+        fee_units_per_storage_write_byte: u64,
+        fee_units_per_output_value: u64,
     ) -> Self {
         Self {
-            version: 1,
-            cpu,
-            memory_byte,
-            storage_read_byte,
-            storage_write_byte,
-            output_value,
-            output_byte: 1,
-            occupancy_byte_batch: DEFAULT_OCCUPANCY_BYTE_BATCH_PRICE,
+            version: GENESIS_FEE_SCHEDULE_VERSION,
+            fee_units_per_cpu_fuel,
+            fee_units_per_memory_byte,
+            fee_units_per_storage_read_byte,
+            fee_units_per_storage_write_byte,
+            fee_units_per_output_value,
+            fee_units_per_output_byte: GENESIS_OUTPUT_BYTE_PRICE,
+            fee_units_per_occupancy_byte_batch: GENESIS_OCCUPANCY_BYTE_BATCH_PRICE,
         }
     }
 
@@ -252,83 +283,554 @@ impl FeeSchedule {
     #[must_use]
     pub const fn new_complete(
         version: u32,
-        cpu: u64,
-        memory_byte: u64,
-        storage_read_byte: u64,
-        storage_write_byte: u64,
-        output_value: u64,
-        output_byte: u64,
-        occupancy_byte_batch: u64,
+        fee_units_per_cpu_fuel: u64,
+        fee_units_per_memory_byte: u64,
+        fee_units_per_storage_read_byte: u64,
+        fee_units_per_storage_write_byte: u64,
+        fee_units_per_output_value: u64,
+        fee_units_per_output_byte: u64,
+        fee_units_per_occupancy_byte_batch: u64,
     ) -> Self {
         Self {
             version,
-            cpu,
-            memory_byte,
-            storage_read_byte,
-            storage_write_byte,
-            output_value,
-            output_byte,
-            occupancy_byte_batch,
+            fee_units_per_cpu_fuel,
+            fee_units_per_memory_byte,
+            fee_units_per_storage_read_byte,
+            fee_units_per_storage_write_byte,
+            fee_units_per_output_value,
+            fee_units_per_output_byte,
+            fee_units_per_occupancy_byte_batch,
         }
     }
 
+    /// Returns the governed protocol-state version of this schedule.
     #[must_use]
     pub const fn version(self) -> u32 {
         self.version
     }
 
+    /// Replaces the response-byte coefficient without changing the version.
     #[must_use]
-    pub const fn with_output_byte_price(mut self, output_byte: u64) -> Self {
-        self.output_byte = output_byte;
+    pub const fn with_output_byte_price(mut self, fee_units_per_output_byte: u64) -> Self {
+        self.fee_units_per_output_byte = fee_units_per_output_byte;
         self
     }
 
+    /// Replaces the occupancy coefficient without changing the version.
     #[must_use]
-    pub const fn with_occupancy_byte_batch_price(mut self, price: u64) -> Self {
-        self.occupancy_byte_batch = price;
+    pub const fn with_occupancy_byte_batch_price(
+        mut self,
+        fee_units_per_occupancy_byte_batch: u64,
+    ) -> Self {
+        self.fee_units_per_occupancy_byte_batch = fee_units_per_occupancy_byte_batch;
         self
     }
 
-    /// Returns the runtime's version-one fee-unit schedule.
+    /// Returns the schedule installed into protocol state at genesis.
+    ///
+    /// Protocol execution and replay must resolve a schedule from governed
+    /// state by recorded version; this value is only the genesis input.
     #[must_use]
     pub const fn declared() -> Self {
-        Self::new(1, 1, 2, 4, 1)
+        Self::new_complete(
+            GENESIS_FEE_SCHEDULE_VERSION,
+            GENESIS_CPU_FUEL_PRICE,
+            GENESIS_MEMORY_BYTE_PRICE,
+            GENESIS_STORAGE_READ_BYTE_PRICE,
+            GENESIS_STORAGE_WRITE_BYTE_PRICE,
+            GENESIS_OUTPUT_VALUE_PRICE,
+            GENESIS_OUTPUT_BYTE_PRICE,
+            GENESIS_OCCUPANCY_BYTE_BATCH_PRICE,
+        )
     }
 
+    /// Returns fee units per interpreter CPU fuel unit.
     #[must_use]
     pub const fn cpu_price(self) -> u64 {
-        self.cpu
+        self.fee_units_per_cpu_fuel
     }
 
+    /// Returns fee units per peak linear-memory byte.
     #[must_use]
     pub const fn memory_byte_price(self) -> u64 {
-        self.memory_byte
+        self.fee_units_per_memory_byte
     }
 
+    /// Returns fee units per storage byte read.
     #[must_use]
     pub const fn storage_read_byte_price(self) -> u64 {
-        self.storage_read_byte
+        self.fee_units_per_storage_read_byte
     }
 
+    /// Returns fee units per storage byte written.
     #[must_use]
     pub const fn storage_write_byte_price(self) -> u64 {
-        self.storage_write_byte
+        self.fee_units_per_storage_write_byte
     }
 
+    /// Returns fee units per integer result value.
     #[must_use]
     pub const fn output_value_price(self) -> u64 {
-        self.output_value
+        self.fee_units_per_output_value
     }
 
+    /// Returns fee units per response byte.
     #[must_use]
     pub const fn output_byte_price(self) -> u64 {
-        self.output_byte
+        self.fee_units_per_output_byte
     }
 
+    /// Returns fee units per namespace byte held for one protocol batch.
     #[must_use]
     pub const fn occupancy_byte_batch_price(self) -> u64 {
-        self.occupancy_byte_batch
+        self.fee_units_per_occupancy_byte_batch
     }
+
+    /// Derives the next effective scarce-resource price from canonical batch
+    /// occupancy, bounded by the governed per-batch fraction.
+    ///
+    /// The returned schedule advances to `next_version` only when its price
+    /// changes. Callers persist that version before admitting another batch.
+    ///
+    /// # Errors
+    ///
+    /// Refuses invalid policy, non-consecutive versions, or arithmetic that
+    /// cannot be represented exactly. It never substitutes a current price.
+    pub fn adjust_occupancy_base_price(
+        self,
+        observed_occupancy_byte_batches: u128,
+        policy: DemandPricePolicy,
+        next_version: u32,
+    ) -> Result<DemandPriceAdjustment, FeeScheduleError> {
+        policy.validate()?;
+        if !self.is_valid()
+            || self.fee_units_per_occupancy_byte_batch < policy.minimum_price
+            || self.fee_units_per_occupancy_byte_batch > policy.maximum_price
+        {
+            return Err(FeeScheduleError::InvalidSchedule);
+        }
+        if self.version.checked_add(1) != Some(next_version) {
+            return Err(FeeScheduleError::NonConsecutiveVersion {
+                previous: self.version,
+                attempted: next_version,
+            });
+        }
+        let target = u128::from(policy.target_occupancy_byte_batches);
+        let deviation = observed_occupancy_byte_batches.abs_diff(target);
+        let current = u128::from(self.fee_units_per_occupancy_byte_batch);
+        let response_divisor = target
+            .checked_mul(u128::from(policy.response_denominator))
+            .ok_or(FeeScheduleError::ArithmeticOverflow)?;
+        let maximum_change = current
+            .checked_mul(u128::from(policy.maximum_change_numerator))
+            .ok_or(FeeScheduleError::ArithmeticOverflow)?
+            / u128::from(policy.maximum_change_denominator);
+        let maximum_change =
+            u64::try_from(maximum_change).map_err(|_| FeeScheduleError::ArithmeticOverflow)?;
+        let bounded_change = u128::from(capped_proportional_change(
+            self.fee_units_per_occupancy_byte_batch,
+            deviation,
+            response_divisor,
+            maximum_change,
+        )?);
+        let proposed = if observed_occupancy_byte_batches > target {
+            current
+                .checked_add(bounded_change)
+                .ok_or(FeeScheduleError::ArithmeticOverflow)?
+                .min(u128::from(policy.maximum_price))
+        } else if observed_occupancy_byte_batches < target {
+            current
+                .checked_sub(bounded_change)
+                .ok_or(FeeScheduleError::ArithmeticOverflow)?
+                .max(u128::from(policy.minimum_price))
+        } else {
+            current
+        };
+        let applied_change = current.abs_diff(proposed);
+        if applied_change > u128::from(maximum_change) {
+            return Err(FeeScheduleError::AdjustmentBoundExceeded);
+        }
+        let price = u64::try_from(proposed).map_err(|_| FeeScheduleError::ArithmeticOverflow)?;
+        let applied_change =
+            u64::try_from(applied_change).map_err(|_| FeeScheduleError::ArithmeticOverflow)?;
+        let mut resulting_schedule = self;
+        if price != self.fee_units_per_occupancy_byte_batch {
+            resulting_schedule.version = next_version;
+            resulting_schedule.fee_units_per_occupancy_byte_batch = price;
+        }
+        Ok(DemandPriceAdjustment {
+            observed_occupancy_byte_batches,
+            target_occupancy_byte_batches: policy.target_occupancy_byte_batches,
+            maximum_change,
+            applied_change,
+            resulting_schedule,
+        })
+    }
+}
+
+/// Governed integer coefficients for demand-responsive occupancy pricing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DemandPricePolicy {
+    target_occupancy_byte_batches: u64,
+    response_denominator: u64,
+    maximum_change_numerator: u64,
+    maximum_change_denominator: u64,
+    minimum_price: u64,
+    maximum_price: u64,
+}
+
+impl DemandPricePolicy {
+    /// Constructs the complete policy. Prices are fee units per occupancy
+    /// byte-batch; the maximum per-batch movement is `numerator / denominator`.
+    ///
+    /// # Errors
+    ///
+    /// Refuses zero divisors, an improper movement fraction, or invalid bounds.
+    pub const fn new(
+        target_occupancy_byte_batches: u64,
+        response_denominator: u64,
+        maximum_change_numerator: u64,
+        maximum_change_denominator: u64,
+        minimum_price: u64,
+        maximum_price: u64,
+    ) -> Result<Self, FeeScheduleError> {
+        let policy = Self {
+            target_occupancy_byte_batches,
+            response_denominator,
+            maximum_change_numerator,
+            maximum_change_denominator,
+            minimum_price,
+            maximum_price,
+        };
+        match policy.validate() {
+            Ok(()) => Ok(policy),
+            Err(error) => Err(error),
+        }
+    }
+
+    const fn validate(self) -> Result<(), FeeScheduleError> {
+        if self.target_occupancy_byte_batches == 0
+            || self.response_denominator == 0
+            || self.maximum_change_numerator == 0
+            || self.maximum_change_denominator == 0
+            || self.maximum_change_numerator > self.maximum_change_denominator
+            || self.minimum_price == 0
+            || self.minimum_price > self.maximum_price
+        {
+            Err(FeeScheduleError::InvalidDemandPolicy)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Returns the governed occupancy target in byte-batches.
+    #[must_use]
+    pub const fn target_occupancy_byte_batches(self) -> u64 {
+        self.target_occupancy_byte_batches
+    }
+
+    /// Returns the divisor damping deviation-driven price movement.
+    #[must_use]
+    pub const fn response_denominator(self) -> u64 {
+        self.response_denominator
+    }
+
+    /// Returns the numerator of the maximum per-batch movement fraction.
+    #[must_use]
+    pub const fn maximum_change_numerator(self) -> u64 {
+        self.maximum_change_numerator
+    }
+
+    /// Returns the denominator of the maximum per-batch movement fraction.
+    #[must_use]
+    pub const fn maximum_change_denominator(self) -> u64 {
+        self.maximum_change_denominator
+    }
+
+    /// Returns the inclusive occupancy-price floor in fee units.
+    #[must_use]
+    pub const fn minimum_price(self) -> u64 {
+        self.minimum_price
+    }
+
+    /// Returns the inclusive occupancy-price ceiling in fee units.
+    #[must_use]
+    pub const fn maximum_price(self) -> u64 {
+        self.maximum_price
+    }
+}
+
+/// Receipt-ready evidence of one deterministic occupancy-price transition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DemandPriceAdjustment {
+    observed_occupancy_byte_batches: u128,
+    target_occupancy_byte_batches: u64,
+    maximum_change: u64,
+    applied_change: u64,
+    resulting_schedule: FeeSchedule,
+}
+
+impl DemandPriceAdjustment {
+    /// Returns the canonical completed-batch occupancy used by the transition.
+    #[must_use]
+    pub const fn observed_occupancy_byte_batches(self) -> u128 {
+        self.observed_occupancy_byte_batches
+    }
+
+    /// Returns the governed occupancy target used by the transition.
+    #[must_use]
+    pub const fn target_occupancy_byte_batches(self) -> u64 {
+        self.target_occupancy_byte_batches
+    }
+
+    /// Returns the maximum fee-unit movement admitted for this batch.
+    #[must_use]
+    pub const fn maximum_change(self) -> u64 {
+        self.maximum_change
+    }
+
+    /// Returns the actual absolute fee-unit movement for this batch.
+    #[must_use]
+    pub const fn applied_change(self) -> u64 {
+        self.applied_change
+    }
+
+    /// Returns the effective schedule after this transition.
+    #[must_use]
+    pub const fn resulting_schedule(self) -> FeeSchedule {
+        self.resulting_schedule
+    }
+}
+
+/// Fail-closed schedule selection or demand-transition refusal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FeeScheduleError {
+    /// The schedule is unversioned or lies outside its governed price bounds.
+    InvalidSchedule,
+    /// A demand coefficient, divisor, fraction, or price bound is invalid.
+    InvalidDemandPolicy,
+    /// An effective version did not immediately follow the previous version.
+    NonConsecutiveVersion {
+        /// Last effective version retained in protocol state.
+        previous: u32,
+        /// Version proposed for the next effective schedule.
+        attempted: u32,
+    },
+    /// The receipt-recorded version is absent from governed history.
+    UnknownVersion {
+        /// Exact version requested by replay.
+        version: u32,
+    },
+    /// Exact integer arithmetic exceeded its declared representation.
+    ArithmeticOverflow,
+    /// A postcondition found movement above the governed per-batch fraction.
+    AdjustmentBoundExceeded,
+}
+
+impl Display for FeeScheduleError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidSchedule => formatter.write_str("invalid fee schedule"),
+            Self::InvalidDemandPolicy => formatter.write_str("invalid demand-price policy"),
+            Self::NonConsecutiveVersion {
+                previous,
+                attempted,
+            } => write!(
+                formatter,
+                "fee schedule version {attempted} does not follow {previous}"
+            ),
+            Self::UnknownVersion { version } => {
+                write!(formatter, "unknown fee schedule version {version}")
+            }
+            Self::ArithmeticOverflow => formatter.write_str("fee schedule arithmetic overflowed"),
+            Self::AdjustmentBoundExceeded => {
+                formatter.write_str("fee schedule adjustment exceeded its per-batch bound")
+            }
+        }
+    }
+}
+
+impl std::error::Error for FeeScheduleError {}
+
+/// Append-only governed schedule history used for canonical receipt replay.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FeeScheduleHistory {
+    schedules: Vec<FeeSchedule>,
+}
+
+impl FeeScheduleHistory {
+    /// Starts history from a protocol-state schedule.
+    ///
+    /// # Errors
+    ///
+    /// Refuses an unversioned schedule or a zero coefficient.
+    pub fn new(initial: FeeSchedule) -> Result<Self, FeeScheduleError> {
+        if !initial.is_valid() {
+            return Err(FeeScheduleError::InvalidSchedule);
+        }
+        Ok(Self {
+            schedules: vec![initial],
+        })
+    }
+
+    /// Appends the next governed or demand-derived effective schedule without
+    /// replacing any historical version.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a gap, duplicate, regression, or unversioned schedule.
+    pub fn record(&mut self, schedule: FeeSchedule) -> Result<(), FeeScheduleError> {
+        let previous = self
+            .schedules
+            .last()
+            .copied()
+            .ok_or(FeeScheduleError::InvalidSchedule)?;
+        if !schedule.is_valid() {
+            return Err(FeeScheduleError::InvalidSchedule);
+        }
+        if previous.version.checked_add(1) != Some(schedule.version) {
+            return Err(FeeScheduleError::NonConsecutiveVersion {
+                previous: previous.version,
+                attempted: schedule.version,
+            });
+        }
+        self.schedules.push(schedule);
+        Ok(())
+    }
+
+    /// Selects exactly the schedule version recorded by a receipt.
+    ///
+    /// # Errors
+    ///
+    /// Unknown versions are refused; node-current or latest schedules are never
+    /// considered as a fallback.
+    pub fn select_recorded(&self, version: u32) -> Result<FeeSchedule, FeeScheduleError> {
+        self.schedules
+            .binary_search_by_key(&version, |schedule| schedule.version())
+            .map(|index| self.schedules[index])
+            .map_err(|_| FeeScheduleError::UnknownVersion { version })
+    }
+
+    /// Returns append-only schedule history in effective-version order.
+    #[must_use]
+    pub fn schedules(&self) -> &[FeeSchedule] {
+        &self.schedules
+    }
+}
+
+/// Deterministic fee-governance projection used by replay tooling and the
+/// scalar runtime boundary. Protocol authority and receipt verification remain
+/// owned by the C Programs transition; this type applies only schedules that
+/// transition has admitted into append-only history.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FeeGovernance {
+    history: FeeScheduleHistory,
+    demand_policy: DemandPricePolicy,
+}
+
+impl FeeGovernance {
+    /// Constructs the runtime projection from authenticated protocol state.
+    pub fn new(
+        initial: FeeSchedule,
+        demand_policy: DemandPricePolicy,
+    ) -> Result<Self, FeeScheduleError> {
+        demand_policy.validate()?;
+        Ok(Self {
+            history: FeeScheduleHistory::new(initial)?,
+            demand_policy,
+        })
+    }
+
+    /// Appends one receipt-authorized schedule already made effective by the
+    /// protocol transition.
+    pub fn record_governed(&mut self, schedule: FeeSchedule) -> Result<(), FeeScheduleError> {
+        self.history.record(schedule)
+    }
+
+    /// Applies one canonical completed-batch occupancy observation and records
+    /// the resulting schedule only when its bounded price changes.
+    pub fn observe_batch(
+        &mut self,
+        observed_occupancy_byte_batches: u128,
+    ) -> Result<DemandPriceAdjustment, FeeScheduleError> {
+        let current = self.current()?;
+        let next_version = current
+            .version()
+            .checked_add(1)
+            .ok_or(FeeScheduleError::ArithmeticOverflow)?;
+        let adjustment = current.adjust_occupancy_base_price(
+            observed_occupancy_byte_batches,
+            self.demand_policy,
+            next_version,
+        )?;
+        if adjustment.resulting_schedule().version() != current.version() {
+            self.history.record(adjustment.resulting_schedule())?;
+        }
+        Ok(adjustment)
+    }
+
+    /// Returns the effective protocol-state schedule.
+    pub fn current(&self) -> Result<FeeSchedule, FeeScheduleError> {
+        self.history
+            .schedules()
+            .last()
+            .copied()
+            .ok_or(FeeScheduleError::InvalidSchedule)
+    }
+
+    /// Returns append-only history for receipt-recorded replay selection.
+    #[must_use]
+    pub const fn history(&self) -> &FeeScheduleHistory {
+        &self.history
+    }
+}
+
+fn ceil_scaled_fraction(
+    multiplier: u64,
+    value: u128,
+    divisor: u64,
+) -> Result<u128, FeeScheduleError> {
+    if divisor == 0 || multiplier > divisor {
+        return Err(FeeScheduleError::ArithmeticOverflow);
+    }
+    let divisor = u128::from(divisor);
+    let multiplier = u128::from(multiplier);
+    let whole = value / divisor;
+    let remainder = value % divisor;
+    let scaled_whole = multiplier
+        .checked_mul(whole)
+        .ok_or(FeeScheduleError::ArithmeticOverflow)?;
+    let scaled_remainder = multiplier
+        .checked_mul(remainder)
+        .ok_or(FeeScheduleError::ArithmeticOverflow)?
+        .div_ceil(divisor);
+    scaled_whole
+        .checked_add(scaled_remainder)
+        .ok_or(FeeScheduleError::ArithmeticOverflow)
+}
+
+fn capped_proportional_change(
+    current_price: u64,
+    deviation: u128,
+    response_divisor: u128,
+    maximum_change: u64,
+) -> Result<u64, FeeScheduleError> {
+    // Search the governed cap using division thresholds so full-range u128
+    // occupancy never requires a potentially overflowing u192 product.
+    let mut lower = 0;
+    let mut upper = maximum_change;
+    while lower < upper {
+        let distance = upper - lower;
+        let candidate = lower + distance.div_ceil(2);
+        let required_deviation =
+            ceil_scaled_fraction(candidate, response_divisor, current_price)?;
+        if deviation >= required_deviation {
+            lower = candidate;
+        } else {
+            upper = candidate - 1;
+        }
+    }
+    Ok(lower)
 }
 
 impl Default for FeeSchedule {
@@ -755,18 +1257,30 @@ impl Meter {
 
     fn finish_bounded_usage(&self, cpu_fuel: u64) -> Result<MeteredUsage, MeterRefusal> {
         let priced = [
-            (u128::from(cpu_fuel), self.prices.cpu),
-            (u128::from(self.memory_bytes), self.prices.memory_byte),
+            (
+                u128::from(cpu_fuel),
+                self.prices.fee_units_per_cpu_fuel,
+            ),
+            (
+                u128::from(self.memory_bytes),
+                self.prices.fee_units_per_memory_byte,
+            ),
             (
                 u128::from(self.storage_read_bytes),
-                self.prices.storage_read_byte,
+                self.prices.fee_units_per_storage_read_byte,
             ),
             (
                 u128::from(self.storage_write_bytes),
-                self.prices.storage_write_byte,
+                self.prices.fee_units_per_storage_write_byte,
             ),
-            (u128::from(self.output_values), self.prices.output_value),
-            (u128::from(self.output_bytes), self.prices.output_byte),
+            (
+                u128::from(self.output_values),
+                self.prices.fee_units_per_output_value,
+            ),
+            (
+                u128::from(self.output_bytes),
+                self.prices.fee_units_per_output_byte,
+            ),
         ];
         let mut fee_units = 0u128;
         for (use_units, price) in priced {

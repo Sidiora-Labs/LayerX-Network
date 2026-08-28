@@ -37,8 +37,7 @@ lxp_result lxp_fee_compute(const lxp_fee_params *parameters,
         if (lxp_activity_module_id(activity_type) != LXP_MODULE_PROGRAMS ||
             lxp_activity_type_ordinal(activity_type) != 3U)
             return LXP_ERR_NON_CANONICAL;
-        if (meter.program_fee_schedule_version == 0U ||
-            meter.program_fee_schedule_version != parameters->version)
+        if (meter.program_fee_schedule_version == 0U)
             return LXP_ERR_VERSION_UNSUPPORTED;
         *fee = meter.exact_program_fee_units;
         return LXP_OK;

@@ -3336,7 +3336,7 @@ reqs = ["39.3"]
 
 [task.32.4]
 title = "Move the fee schedule into governed protocol state"
-status = "pending"
+status = "implemented"
 wave = 18
 requires = ["28.7"]
 do_1 = "Replace the hardcoded declared fee schedule with a versioned schedule read from protocol state, with every coefficient named and every unit stated."

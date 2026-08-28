@@ -3,8 +3,8 @@
 use core::fmt::{self, Display};
 
 use crate::{
-    ExecutionError, ExecutionFault, ExecutionRecord, Executor, FeeSchedule, Meter, ResourceBudget,
-    ValidationLimits, ValidationRefusal, WasmEngine, WasmValue,
+    ExecutionError, ExecutionFault, ExecutionRecord, Executor, FeeSchedule, FeeScheduleHistory,
+    Meter, ResourceBudget, ValidationLimits, ValidationRefusal, WasmEngine, WasmValue,
 };
 
 /// Maximum input accepted by the in-process fuzz targets.
@@ -144,6 +144,7 @@ const DECLARED_REVISIONS: [ExecutorRevision; 2] = [ExecutorRevision::v1(), Execu
 fn replay_with_revisions(
     record: &RecordedExecution<'_>,
     revisions: &[ExecutorRevision],
+    governed_schedule: Option<FeeSchedule>,
 ) -> Result<Vec<u8>, ReplayRefusal> {
     if !revisions
         .iter()
@@ -161,12 +162,13 @@ fn replay_with_revisions(
             version: record.abi_version,
         });
     };
-    if revision.prices.version() != record.fee_schedule_version {
+    let prices = governed_schedule.unwrap_or(revision.prices);
+    if prices.version() != record.fee_schedule_version {
         return Err(ReplayRefusal::UnknownFeeScheduleVersion {
             version: record.fee_schedule_version,
         });
     }
-    revision.replay(record)
+    ExecutorRevision { prices, ..revision }.replay(record)
 }
 
 /// Observation tag bytes prefixing a canonical fuzz observation. The tag makes
@@ -556,7 +558,22 @@ pub fn programs_differential_gate_versioned(
 /// Returns a typed refusal for unknown versions, invalid modules, or failed
 /// execution.
 pub fn replay_recorded_execution(record: &RecordedExecution<'_>) -> Result<Vec<u8>, ReplayRefusal> {
-    replay_with_revisions(record, &DECLARED_REVISIONS)
+    replay_with_revisions(record, &DECLARED_REVISIONS, None)
+}
+
+/// Replays using the exact append-only governed schedule version recorded by
+/// the execution receipt. Unknown versions refuse rather than selecting the
+/// node's current schedule.
+pub fn replay_recorded_execution_with_fee_history(
+    record: &RecordedExecution<'_>,
+    history: &FeeScheduleHistory,
+) -> Result<Vec<u8>, ReplayRefusal> {
+    let schedule = history
+        .select_recorded(record.fee_schedule_version)
+        .map_err(|_| ReplayRefusal::UnknownFeeScheduleVersion {
+            version: record.fee_schedule_version,
+        })?;
+    replay_with_revisions(record, &DECLARED_REVISIONS, Some(schedule))
 }
 
 #[cfg(test)]
@@ -577,9 +594,9 @@ mod tests {
             export: "add",
             args: &[WasmValue::I32(20), WasmValue::I32(22)],
         };
-        let before = replay_with_revisions(&v1_record, &[ExecutorRevision::v1()]);
+        let before = replay_with_revisions(&v1_record, &[ExecutorRevision::v1()], None);
         let upgraded = [ExecutorRevision::v1(), ExecutorRevision::v2()];
-        let after = replay_with_revisions(&v1_record, &upgraded);
+        let after = replay_with_revisions(&v1_record, &upgraded, None);
         assert_eq!(before, after);
 
         let v2_record = RecordedExecution {
@@ -587,7 +604,7 @@ mod tests {
             abi_version: ABI_VERSION,
             ..v1_record
         };
-        let v2 = match replay_with_revisions(&v2_record, &upgraded) {
+        let v2 = match replay_with_revisions(&v2_record, &upgraded, None) {
             Ok(evidence) => evidence,
             Err(refusal) => panic!("real v2 replay refused: {refusal}"),
         };
@@ -612,7 +629,7 @@ mod tests {
             args: &[],
         };
         assert_eq!(
-            replay_with_revisions(&unknown_runtime, &revisions),
+            replay_with_revisions(&unknown_runtime, &revisions, None),
             Err(ReplayRefusal::UnknownRuntimeVersion {
                 version: RUNTIME_VERSION + 2,
             })
@@ -623,7 +640,7 @@ mod tests {
             ..unknown_runtime
         };
         assert_eq!(
-            replay_with_revisions(&unsupported_abi, &revisions),
+            replay_with_revisions(&unsupported_abi, &revisions, None),
             Err(ReplayRefusal::UnknownAbiVersion {
                 version: ABI_VERSION + 1,
             })

@@ -22,7 +22,8 @@ fn imported_add(abi_module: &str, import: &str, import_arity: usize) -> Vec<u8> 
 }
 use layerx_programs_runtime::{
     hash_bytes, programs_differential_gate, programs_differential_gate_versioned,
-    replay_recorded_execution, Deploy, Executor, HashAlgorithm, Lifecycle, LifecycleRefusal,
+    replay_recorded_execution, replay_recorded_execution_with_fee_history, Deploy, Executor,
+    FeeSchedule, FeeScheduleHistory, HashAlgorithm, Lifecycle, LifecycleRefusal,
     ProgramId, RecordedExecution, ReplayRefusal, UpgradePolicy, ValidationLimits,
     ValidationRefusal, WasmEngine, WasmValue, ABI_V1_VERSION, ABI_V2_VERSION, ABI_VERSION,
     RUNTIME_VERSION,
@@ -34,6 +35,46 @@ fn independent_engines_produce_identical_evidence() {
     let evidence =
         programs_differential_gate(&wasm, "add", &[WasmValue::I32(20), WasmValue::I32(22)]);
     assert!(evidence.is_ok(), "independent runtime builds diverged");
+}
+
+#[test]
+fn governed_fee_history_reprices_each_recorded_version_exactly() {
+    let wasm = add_module();
+    let genesis = FeeSchedule::declared();
+    let revised = FeeSchedule::new_complete(2, 3, 5, 7, 11, 13, 17, 19);
+    let mut schedules = FeeScheduleHistory::new(genesis)
+        .unwrap_or_else(|error| panic!("genesis schedule refused: {error}"));
+    schedules
+        .record(revised)
+        .unwrap_or_else(|error| panic!("governed schedule refused: {error}"));
+    let base = RecordedExecution {
+        runtime_version: RUNTIME_VERSION,
+        abi_version: ABI_V2_VERSION,
+        fee_schedule_version: genesis.version(),
+        metering_schedule_version: layerx_programs_runtime::meter::inject::GENESIS_METERING_SCHEDULE_VERSION,
+        wasm: &wasm,
+        export: "add",
+        args: &[WasmValue::I32(20), WasmValue::I32(22)],
+    };
+    let genesis_evidence = replay_recorded_execution_with_fee_history(&base, &schedules)
+        .unwrap_or_else(|error| panic!("genesis replay refused: {error}"));
+    let revised_record = RecordedExecution {
+        fee_schedule_version: revised.version(),
+        ..base.clone()
+    };
+    let revised_evidence = replay_recorded_execution_with_fee_history(
+        &revised_record,
+        &schedules,
+    )
+    .unwrap_or_else(|error| panic!("revised replay refused: {error}"));
+    assert_ne!(genesis_evidence, revised_evidence);
+    assert_eq!(
+        replay_recorded_execution_with_fee_history(
+            &RecordedExecution { fee_schedule_version: 3, ..base },
+            &schedules,
+        ),
+        Err(ReplayRefusal::UnknownFeeScheduleVersion { version: 3 })
+    );
 }
 
 #[test]

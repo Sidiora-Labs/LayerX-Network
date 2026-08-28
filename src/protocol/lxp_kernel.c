@@ -1092,7 +1092,8 @@ static void store_u32(uint8_t bytes[4], uint32_t value)
 static lxp_result synthesize_program_call_failure(
     const lxp_activity *activity, const uint8_t activity_id[32],
     const lxp_kernel_execution *execution, lxp_result module_result,
-    lxp_u128 pre_runtime_fee, uint32_t metering_schedule_version,
+    lxp_u128 pre_runtime_fee, uint32_t fee_schedule_version,
+    uint32_t metering_schedule_version,
     lxp_program_outcome *outcome)
 {
     static const uint8_t graph_domain[] =
@@ -1123,7 +1124,7 @@ static lxp_result synthesize_program_call_failure(
                        activity->payload.bytes[33]);
         if (requested_abi != 0U) outcome->abi_version = requested_abi;
     }
-    outcome->fee_schedule_version = execution->fee_parameters->version;
+    outcome->fee_schedule_version = fee_schedule_version;
     outcome->metering_schedule_version = metering_schedule_version;
     outcome->cpu_fuel = execution->fee_meter.execution_units;
     outcome->storage_write_bytes = execution->fee_meter.storage_units;
@@ -1224,27 +1225,19 @@ lxp_result lxp_kernel_execute_activity(lxp_kernel *kernel,
         if (!lxp_program_metering_schedule_available(
                 programs_metering_schedule.version))
             return LXP_ERR_VERSION_UNSUPPORTED;
-        if (activity->protocol_version == LXP_PROTOCOL_VERSION_OCCUPANCY) {
-            if (programs_runtime->resolve_occupancy_parameters == NULL)
-                return LXP_ERR_MODULE_DISABLED;
-            (void)memset(&programs_fee_schedule, 0,
-                         sizeof(programs_fee_schedule));
-            (void)memset(programs_occupancy_asset_id, 0,
-                         sizeof(programs_occupancy_asset_id));
-            status = programs_runtime->resolve_occupancy_parameters(
-                programs_runtime->occupancy_parameter_context,
-                execution->parameter_version, &programs_fee_schedule,
-                programs_occupancy_asset_id);
-            if (status != LXP_OK) return status;
-        } else {
-            programs_fee_schedule = programs_runtime->fee_schedule;
-            (void)memcpy(programs_occupancy_asset_id,
-                         programs_runtime->occupancy_asset_id, 32U);
-        }
+        if (programs_runtime->resolve_occupancy_parameters == NULL)
+            return LXP_ERR_MODULE_DISABLED;
+        (void)memset(&programs_fee_schedule, 0,
+                     sizeof(programs_fee_schedule));
+        (void)memset(programs_occupancy_asset_id, 0,
+                     sizeof(programs_occupancy_asset_id));
+        status = programs_runtime->resolve_occupancy_parameters(
+            programs_runtime->occupancy_parameter_context,
+            execution->recorded_fee_schedule_version,
+            &programs_fee_schedule,
+            programs_occupancy_asset_id);
+        if (status != LXP_OK) return status;
         if (programs_fee_schedule.version == 0U ||
-            programs_fee_schedule.version != execution->fee_parameters->version ||
-            (activity->protocol_version == LXP_PROTOCOL_VERSION_OCCUPANCY &&
-             programs_fee_schedule.version != execution->parameter_version) ||
             lxp_ct_is_zero(programs_occupancy_asset_id, 32U))
             return LXP_ERR_VERSION_UNSUPPORTED;
     }
@@ -1383,6 +1376,7 @@ lxp_result lxp_kernel_execute_activity(lxp_kernel *kernel,
                 status = synthesize_program_call_failure(
                     activity, canonical_activity_id, execution,
                     module_result, pre_runtime_fee,
+                    programs_fee_schedule.version,
                     programs_metering_schedule.version,
                     &synthetic_program_outcome);
                 if (status == LXP_OK) {
