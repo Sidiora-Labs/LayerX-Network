@@ -440,6 +440,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "layerx-programs-sandbox"
+version = "0.1.0"
+dependencies = [
+ "ed25519-dalek",
+ "layerx-proof",
+ "layerx-programs-registry",
+ "layerx-programs-runtime",
+ "layerx-types",
+ "layerx-wire",
+ "sha2",
+]
+
+[[package]]
 name = "layerx-proof"
 version = "0.1.0"
 dependencies = [

@@ -1,0 +1,19 @@
+[package]
+name = "layerx-programs-sandbox"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+layerx-programs-runtime = { path = "../layerx-programs-runtime" }
+layerx-programs = { path = "../layerx-programs-registry", package = "layerx-programs-registry" }
+layerx-proof = { path = "../../../agent/crates/layerx-proof" }
+layerx-types = { path = "../../../agent/crates/layerx-types" }
+layerx-wire = { path = "../../../agent/crates/layerx-wire" }
+[dev-dependencies]
+ed25519-dalek = { version = "=2.2.0", default-features = false, features = ["digest"] }
+sha2.workspace = true
+
+[lints]
+workspace = true

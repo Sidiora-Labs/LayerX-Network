@@ -3518,7 +3518,7 @@ note = "Code-only lanes: 34.1 defines the lease record. Then 34.2, 34.3 and 34.6
 
 [task.34.1]
 title = "Model the sandbox lease as protocol state"
-status = "pending"
+status = "implemented"
 wave = 20
 requires = ["29.4","30.2"]
 do_1 = "Define a lease record naming the renting principal, the sandbox program image by code hash, the funded escrow amount and asset, the resource ceilings, the expiry height and the current lifecycle state."
@@ -3528,7 +3528,7 @@ do_4 = "Bound the number of concurrent leases per principal and the total resour
 do_5 = "Test every transition, every refused transition and the impossibility of reviving a destroyed lease."
 verify_cmd = "make programs-test"
 symbols = ["layerx_programs_sandbox::Lease","layerx_programs_sandbox::LeaseState"]
-touches = ["programs/crates/layerx-programs-sandbox/src/lease.rs"]
+touches = ["programs/Cargo.toml","programs/Cargo.lock","programs/crates/layerx-programs-registry/tests/support/mod.rs","programs/crates/layerx-programs-sandbox/Cargo.toml","programs/crates/layerx-programs-sandbox/src/lib.rs","programs/crates/layerx-programs-sandbox/src/lease.rs","programs/crates/layerx-programs-sandbox/tests/lease.rs","spec/layerx-platform/qualification.kvx"]
 reqs = ["41.1","41.7"]
 
 [task.34.2]

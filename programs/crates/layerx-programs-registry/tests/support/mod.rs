@@ -175,6 +175,22 @@ pub fn legacy_deploy_fixture(
     fixture(payload, 1, wasm, policy, 1, batch_number, timestamp, false, false)
 }
 
+pub fn programs_call_fixture(
+    payload: Vec<u8>, batch_number: u64, timestamp: u64,
+) -> ProtocolFixture {
+    fixture(
+        payload,
+        3,
+        WASM_V1,
+        UpgradePolicy::Authority(AUTHORITY),
+        1,
+        batch_number,
+        timestamp,
+        false,
+        false,
+    )
+}
+
 pub fn deploy_fixture_in_epoch(
     wasm: &[u8],
     policy: UpgradePolicy,
@@ -546,7 +562,9 @@ fn canonical_activity_id(bytes: &[u8]) -> [u8; 32] {
         .unwrap_or_else(|error| panic!("deploy type: {error:?}"));
     let upgrade = ActivityType::new(ModuleId::Programs, 2)
         .unwrap_or_else(|error| panic!("upgrade type: {error:?}"));
-    let registration = ModuleRegistration::new(ModuleId::Programs, &[deploy, upgrade])
+    let call = ActivityType::new(ModuleId::Programs, 3)
+        .unwrap_or_else(|error| panic!("call type: {error:?}"));
+    let registration = ModuleRegistration::new(ModuleId::Programs, &[deploy, upgrade, call])
         .unwrap_or_else(|error| panic!("program registration: {error:?}"));
     let registry = ModuleRegistry::new(&[registration])
         .unwrap_or_else(|error| panic!("module registry: {error:?}"));

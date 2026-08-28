@@ -2304,6 +2304,38 @@ symbol = "cg spec implemented touch graph"
 observed = "Git records the interpreter package entry in programs/Cargo.lock, but cg sync reports the lockfile among skipped paths and cg spec implemented cannot observe its declared touch even after a successful incremental graph sync. Every indexed task symbol and every other declared touch passed the graph check."
 assumption = "Codify 0.6.0 does not support a force option for the implemented transition, so the authoritative spec status is advanced directly only after cg accepted both declared symbols and every indexed touch and the unindexable lockfile diff was inspected separately. Human qualification must use the checked-in lockfile through the declared --locked build and test commands; no dependency resolution, build or test was run in this implementation phase."
 severity = "phase-boundary"
+[observation.34.1.1]
+task = "34.1"
+file = "programs/crates/layerx-programs-sandbox/src/lease.rs"
+symbol = "LeaseLimits, TransitionEvidence, MAX_CONCURRENT_LEASES_PER_PRINCIPAL"
+observed = "Requirements 41.1 and 41.7 require protocol maxima but do not assign their numeric values. The implementation freezes explicit conservative integer maxima for each lease dimension and the per-principal concurrent lease count. Request and later transitions consume only the registry verifier's opaque VerifiedProtocolHead plus canonical signed Programs CALL and activity-inclusion evidence, bind its activity id, receipt digest and batch sequence to the exact host, entry point, declared lease edge and request or usage digest, and refuse evidence replay. The escrow account uses the existing program-account derivation, while canonical state witnesses carry every bound, usage counter, state and transition receipt."
+assumption = "Human qualification must confirm or govern the numeric policy values before release, exercise every exact boundary, and replay canonical sandbox activities through ProtocolDeploymentVerifier with valid and altered receipt inclusion material. No build, test, receipt verification or runtime result is asserted."
+severity = "qualification-required"
+
+[observation.34.1.2]
+task = "34.1"
+file = "programs/crates/layerx-programs-sandbox/src/lease.rs, src/modules/programs/call.c"
+symbol = "TransitionEvidence::verify_call, PROGRAMS_CALL_FIXED_BYTES"
+observed = "The Rust evidence verifier must parse the production Programs CALL payload to bind the sandbox host, entry point and calldata, but the authoritative C decoder does not expose a shared Rust framing descriptor. The implementation freezes the current 106-byte prefix and independently checks canonical envelope and payload round trips, signed-header identity and activity inclusion before parsing it."
+assumption = "Human qualification must differential-test the Rust evidence parser against lxp_programs_call_decode for every length and framing boundary and fail release on drift. No parser execution or conformance result is asserted."
+severity = "qualification-required"
+
+[observation.34.1.3]
+task = "34.1"
+file = "programs/crates/layerx-programs-sandbox/src/lease.rs"
+symbol = "LeaseTransition::tenant, TransitionEvidence::verify_call"
+observed = "The canonical sandbox transition calldata binds the tenant principal, and transition evidence additionally consumes the runtime AuthorizationContext fixed for that execution and requires its invoking principal to equal both calldata and stored tenant. The generic receipt head proves the signed Programs CALL and its inclusion; DID-to-principal resolution remains owned by the production Programs CALL admission boundary rather than re-derived from envelope bytes."
+assumption = "Human qualification must submit signed calls whose resolved invoking principal differs from the calldata tenant and prove the production boundary supplies that resolved AuthorizationContext and refuses the transition before state mutation. No authority-resolution runtime result is asserted."
+severity = "qualification-required"
+
+[observation.34.1.4]
+task = "34.1"
+file = "programs/crates/layerx-programs-sandbox/src/lease.rs"
+symbol = "EphemeralNamespace"
+observed = "A lease namespace is the real host program shared namespace plus a domain-separated host-and-lease key prefix, so ordinary execution retains the actual host identity while every lease key is isolated and the whole lease remains addressable by one exact prefix. Raw Storage reclamation is deliberately not exposed because it would bypass capability, access-declaration, metering and occupancy-effect laws; task 34.5 owns authorized teardown through the existing ABI transaction boundary."
+assumption = "Human qualification must exercise adjacent-prefix access refusal and prove task 34.5 scans, meters and deletes exactly this prefix atomically while preserving adjacent host state. No runtime reclamation result is asserted by task 34.1."
+severity = "qualification-required"
+
 [observation.33.3.1]
 task = "33.3"
 file = "programs/sdk/rust/src/bindgen.rs, programs/sdk/rust/build.rs, platform/cli/src/programs.rs"
@@ -2319,3 +2351,11 @@ symbol = "req.40.2 and task.33.3 SDK language scope"
 observed = "The task explicitly requires generated Rust and TypeScript client bindings, while the broader requirement text refers to every SDK language. This implementation ships the two languages named by the task and does not fabricate generators for the repository's additional SDK languages."
 assumption = "The specification owner must decide whether bindings for Python, Go, JVM, Swift and C sharp belong to a later task or expand this acceptance boundary before production certification. Human qualification must not represent Rust and TypeScript coverage as every repository SDK language."
 severity = "acceptance-ambiguity"
+
+[observation.34.1.5]
+task = "34.1"
+file = "programs/Cargo.lock"
+symbol = "cg spec implemented touch graph"
+observed = "Git records the layerx-programs-sandbox package and its exact dependency set in programs/Cargo.lock, but Codify 0.6.0 reports the lockfile as an unobservable declared touch. The task's Lease and LeaseState symbols and every other declared source and qualification touch passed the graph check."
+assumption = "The authoritative task status is advanced only after the lockfile diff was inspected and every graph-observable contract passed. Human qualification must consume the checked-in lockfile through the declared locked build and test commands; no dependency resolution, build or test was run in this implementation phase."
+severity = "phase-boundary"
