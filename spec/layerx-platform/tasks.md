@@ -1612,7 +1612,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
 
 - [ ] 38. Close the source-level blockers before human qualification
   - These tasks are implementation work explicitly requested after the 2026-08-28 refreshed audit. They write production artifacts only; compilation, replay, fault injection and certification remain human qualification work.
-  - [ ] 38.1 Recover canonical and batch logs before daemon reconciliation
+  - [ ] 38.1 Recover canonical and batch logs before daemon reconciliation — **Implemented - qualification pending**
     - Recover the canonical and batch logs immediately after opening them and before history construction, checkpoint reconciliation or batch-WAL recovery reads their offsets.
     - Keep authority and feed recovery single-owned by their existing components and refuse double replay or ambiguous recovery ownership.
     - Propagate torn-tail, corrupt-chain and IO failures without resetting durable offsets or silently starting from an empty log.

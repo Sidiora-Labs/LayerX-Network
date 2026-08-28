@@ -510,6 +510,14 @@ observed = "The task do clauses say to prove the p75 budgets and 3G journey beha
 assumption = "Human qualification under task 14.5 will execute make human-e2e-perf against representative production pages and the real journey stack and will record the p75 and 3G evidence."
 severity = "phase-boundary"
 
+[observation.38.1.1]
+task = "38.1"
+file = "cmd/layerxd/lxp_daemon_process.c, src/storage/lxp_log_recover.c, tests/storage/lxp_test_recovery.c"
+symbol = "open_process, lxp_log_recover"
+observed = "The daemon now recovers the canonical log immediately after open and before history construction, and recovers the batch log immediately after open and before checkpoint reconciliation or prepared batch-WAL consumption. Authority and Programs feed logs remain single-owned by their existing component recovery paths and explicitly select complete-record recovery, while canonical and sequencer recovery select canonical transaction policy. Canonical policy retains checkpoint-only logs, retains only durable activity transactions once activity records exist, and refuses receipt-only or state-only logs as corrupt instead of dynamically treating them as another log family. Complete-record policy retains batch, authority and feed records without applying activity/receipt transaction rules. Corrupt chains fail closed, negative non-EINTR reads propagate as IO, and physical EOF or short tails alone retain the existing truncate-to-last-complete-record policy. Recovery errors propagate through open_process without replacing durable offsets or continuing with an empty projection. Source regression cases reopen a durable checkpoint-bearing canonical log and an existing batch-header log, recover each, require the durable offset, next sequence and record bytes to remain visible, classify EBADF as IO and refuse a receipt-only canonical log."
+assumption = "Human qualification must execute the restart cases and the full crash matrix: clean shutdown and abrupt termination before and after each canonical and batch write boundary; torn header, torn body and undurable tail truncation; corrupt CRC, invalid kind, broken previous-record link and non-monotonic sequence before and after the durable head; read, truncate, sync and close IO failures; checkpoint present and absent; prepared, committed and retired batch-WAL states; repeated restart after successful recovery; and authority/feed attachment alongside canonical/batch recovery to prove there is no double replay. It must compare recovered offsets, next sequences, history rows, checkpoint state, batch headers, receipts and publication counts exactly. No build, test, replay or fault injection was run during implementation."
+severity = "qualification-required"
+
 [observation.33.5.1]
 task = "33.5"
 file = "programs/benches/interpreter.rs, programs/benches/compiled-equivalent, platform/docs/content/guide/programs.md, Makefile"

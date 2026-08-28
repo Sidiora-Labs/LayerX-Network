@@ -267,7 +267,8 @@ lxp_result lxp_daemon_receipt_authority_open(
     store->log = log;
     store->authorization = *authorization;
     {
-        lxp_result status = lxp_log_recover(log, replay_authority, store);
+        lxp_result status = lxp_log_recover_complete_records(
+            log, replay_authority, store);
         store->replay_offset = 0U;
         return status;
     }

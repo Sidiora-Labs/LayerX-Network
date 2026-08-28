@@ -35,6 +35,83 @@ static lxp_result replay(void *opaque, const lxp_log_record_header *header,
     return LXP_OK;
 }
 
+static int recover_existing_log(const char *prefix,
+                                lxp_log_record_kind kind,
+                                uint64_t sequence, uint8_t value)
+{
+    char directory[64];
+    char path[128];
+    lxp_log log;
+    lxp_log_record_header header;
+    uint8_t recovered = 0U;
+    uint64_t durable_end;
+    lxp_result recovery_status;
+    int length;
+    length = snprintf(directory, sizeof(directory), "/tmp/%s-XXXXXX", prefix);
+    if (length < 0 || (size_t)length >= sizeof(directory) ||
+        mkdtemp(directory) == NULL ||
+        lxp_log_segment_create(&log, directory, 0U, 4096U) != LXP_OK)
+        return 1;
+    if (lxp_log_append(&log, kind, sequence, &value, 1U, NULL) != LXP_OK ||
+        lxp_log_write_boundary(&log) != LXP_OK) return 1;
+    durable_end = log.write_offset;
+    if (lxp_log_close(&log) != LXP_OK ||
+        snprintf(path, sizeof(path), "%s/%020u.lxp", directory, 0U) < 0 ||
+        lxp_log_open(&log, path) != LXP_OK || log.write_offset != 0U)
+        return 1;
+    recovery_status = kind == LXP_LOG_CHECKPOINT ?
+        lxp_log_recover(&log, NULL, NULL) :
+        lxp_log_recover_complete_records(&log, NULL, NULL);
+    if (recovery_status != LXP_OK ||
+        log.write_offset != durable_end ||
+        lxp_log_resume_sequence(&log) != sequence + 1U ||
+        lxp_log_read(&log, 0U, &header, &recovered, sizeof(recovered)) !=
+            LXP_OK ||
+        header.record_kind != (uint8_t)kind ||
+        header.global_sequence != sequence || recovered != value ||
+        lxp_log_close(&log) != LXP_OK || unlink(path) != 0 ||
+        rmdir(directory) != 0) return 1;
+    return 0;
+}
+
+static int classify_read_failure(void)
+{
+    char directory[] = "/tmp/lxp-read-io-XXXXXX";
+    char path[128];
+    lxp_log log;
+    uint64_t valid_end;
+    uint64_t last;
+    uint64_t next;
+    if (mkdtemp(directory) == NULL ||
+        lxp_log_segment_create(&log, directory, 0U, 4096U) != LXP_OK ||
+        snprintf(path, sizeof(path), "%s/%020u.lxp", directory, 0U) < 0)
+        return 1;
+    if (close(log.descriptor) != 0 ||
+        lxp_log_scan_tail(&log, &valid_end, &last, &next) != LXP_ERR_IO)
+        return 1;
+    log.descriptor = -1;
+    return unlink(path) == 0 && rmdir(directory) == 0 ? 0 : 1;
+}
+
+static int refuse_receipt_only_canonical(void)
+{
+    char directory[] = "/tmp/lxp-receipt-only-XXXXXX";
+    char path[128];
+    uint8_t body = 0x63U;
+    lxp_log log;
+    if (mkdtemp(directory) == NULL ||
+        lxp_log_segment_create(&log, directory, 0U, 4096U) != LXP_OK ||
+        lxp_log_append(&log, LXP_LOG_RECEIPT, 9U, &body, 1U, NULL) != LXP_OK ||
+        lxp_log_write_boundary(&log) != LXP_OK ||
+        lxp_log_close(&log) != LXP_OK ||
+        snprintf(path, sizeof(path), "%s/%020u.lxp", directory, 0U) < 0 ||
+        lxp_log_open(&log, path) != LXP_OK ||
+        lxp_log_recover(&log, NULL, NULL) != LXP_ERR_LOG_CORRUPT ||
+        log.write_offset != 0U || lxp_log_close(&log) != LXP_OK ||
+        unlink(path) != 0 || rmdir(directory) != 0) return 1;
+    return 0;
+}
+
 int main(void)
 {
     char directory[] = "/tmp/lxp-recovery-XXXXXX";
@@ -97,5 +174,17 @@ int main(void)
     }
     if (lxp_log_close(&log) != LXP_OK || unlink(path) != 0 ||
         rmdir(directory) != 0) return 1;
+    if (recover_existing_log("lxp-canonical-restart", LXP_LOG_CHECKPOINT,
+                             7U, 0x41U) != 0 ||
+        recover_existing_log("lxp-batch-restart", LXP_LOG_BATCH_HEADER,
+                             11U, 0x52U) != 0) {
+        (void)fprintf(stderr, "durable restart recovery failed\n");
+        return 1;
+    }
+    if (classify_read_failure() != 0 ||
+        refuse_receipt_only_canonical() != 0) {
+        (void)fprintf(stderr, "recovery classification failed\n");
+        return 1;
+    }
     return 0;
 }

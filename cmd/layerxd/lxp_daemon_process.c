@@ -2755,11 +2755,16 @@ static lxp_result open_process(lxp_daemon_process *process,
     if (status == LXP_OK) status = open_log(
         &process->canonical_log, "LAYERX_NODE_CANONICAL_LOG",
         &process->canonical_open);
+    if (status == LXP_OK)
+        status = lxp_log_recover(&process->canonical_log, NULL, NULL);
     if (status == LXP_OK) status = open_log(
         &process->authority_log, "LAYERX_NODE_RECEIPT_AUTHORITY_LOG",
         &process->authority_open);
     if (status == LXP_OK) status = open_log(
         &process->batch_log, "LAYERX_NODE_BATCH_LOG", &process->batch_open);
+    if (status == LXP_OK)
+        status = lxp_log_recover_complete_records(
+            &process->batch_log, NULL, NULL);
     if (status == LXP_OK)
         status = lxp_history_open(
             &process->history, &process->canonical_log,

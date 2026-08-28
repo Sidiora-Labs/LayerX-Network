@@ -3,6 +3,7 @@
 #include "layerx/lxp_storage.h"
 
 #include <errno.h>
+#include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
@@ -44,7 +45,8 @@ static lxp_result pread_exact(int descriptor, uint8_t *bytes, size_t length,
         ssize_t count = pread(descriptor, bytes + consumed, length - consumed,
                               (off_t)(offset + consumed));
         if (count < 0 && errno == EINTR) continue;
-        if (count <= 0) return LXP_ERR_LOG_TRUNCATED;
+        if (count < 0) return LXP_ERR_IO;
+        if (count == 0) return LXP_ERR_LOG_TRUNCATED;
         consumed += (size_t)count;
     }
     return LXP_OK;
@@ -162,18 +164,27 @@ lxp_result lxp_log_truncate_partial(lxp_log *log, uint64_t valid_end)
 
 static lxp_result find_recovery_window(const lxp_log *log, uint64_t valid_end,
                                        uint64_t durable, uint64_t *start,
-                                       uint64_t *end, uint64_t *last_offset)
+                                       uint64_t *end, uint64_t *last_offset,
+                                       bool complete_records)
 {
     uint64_t offset = 0U;
     uint64_t checkpoint = 0U;
     uint64_t durable_end = 0U;
     uint64_t last = 0U;
+    uint64_t complete_last = 0U;
+    bool have_activity = false;
+    bool have_non_checkpoint = false;
     while (offset < valid_end) {
         lxp_log_record_header header;
         uint8_t *body;
         lxp_result status = load_record(log, offset, &header, &body);
         free(body);
         if (status != LXP_OK) return status;
+        complete_last = offset;
+        if (header.record_kind == (uint8_t)LXP_LOG_ACTIVITY)
+            have_activity = true;
+        if (header.record_kind != (uint8_t)LXP_LOG_CHECKPOINT)
+            have_non_checkpoint = true;
         if (header.record_kind == (uint8_t)LXP_LOG_CHECKPOINT &&
             durable != UINT64_MAX && header.global_sequence <= durable)
             checkpoint = offset;
@@ -184,13 +195,15 @@ static lxp_result find_recovery_window(const lxp_log *log, uint64_t valid_end,
         offset += LXP_LOG_HEADER_BYTES + header.body_length;
     }
     *start = checkpoint;
-    *end = durable_end;
-    *last_offset = last;
+    if (!complete_records && !have_activity && have_non_checkpoint)
+        return LXP_ERR_LOG_CORRUPT;
+    *end = complete_records || !have_activity ? valid_end : durable_end;
+    *last_offset = complete_records || !have_activity ? complete_last : last;
     return LXP_OK;
 }
 
-lxp_result lxp_log_recover(lxp_log *log, lxp_log_replay_fn replay,
-                           void *context)
+static lxp_result recover(lxp_log *log, lxp_log_replay_fn replay,
+                          void *context, bool complete_records)
 {
     uint64_t valid_end;
     uint64_t last;
@@ -201,14 +214,14 @@ lxp_result lxp_log_recover(lxp_log *log, lxp_log_replay_fn replay,
     lxp_result status;
     if (log == NULL) return LXP_ERR_NON_CANONICAL;
     status = lxp_log_scan_tail(log, &valid_end, &last, &scanned_next);
-    if (status == LXP_ERR_LOG_TRUNCATED || status == LXP_ERR_LOG_CORRUPT) {
+    if (status == LXP_ERR_LOG_TRUNCATED) {
         status = lxp_log_truncate_partial(log, valid_end);
         if (status != LXP_OK) return status;
     } else if (status != LXP_OK) return status;
     status = lxp_log_durable_head(log, &durable);
     if (status != LXP_OK) return status;
     status = find_recovery_window(log, valid_end, durable, &start,
-                                  &recovery_end, &last);
+                                  &recovery_end, &last, complete_records);
     if (status != LXP_OK) return status;
     if (valid_end != recovery_end) {
         status = lxp_log_truncate_partial(log, recovery_end);
@@ -228,8 +241,23 @@ lxp_result lxp_log_recover(lxp_log *log, lxp_log_replay_fn replay,
     }
     log->write_offset = recovery_end;
     log->previous_record_offset = last;
-    log->next_sequence = durable == UINT64_MAX ? 0U : durable + 1U;
+    log->next_sequence = durable == UINT64_MAX && recovery_end == valid_end ?
+                         scanned_next : durable == UINT64_MAX ? 0U :
+                         durable + 1U;
     return LXP_OK;
+}
+
+lxp_result lxp_log_recover(lxp_log *log, lxp_log_replay_fn replay,
+                           void *context)
+{
+    return recover(log, replay, context, false);
+}
+
+lxp_result lxp_log_recover_complete_records(lxp_log *log,
+                                            lxp_log_replay_fn replay,
+                                            void *context)
+{
+    return recover(log, replay, context, true);
 }
 
 uint64_t lxp_log_resume_sequence(const lxp_log *log)

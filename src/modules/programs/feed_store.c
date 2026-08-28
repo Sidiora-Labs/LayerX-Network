@@ -837,7 +837,7 @@ lxp_result lxp_programs_state_feed_store_open(
     store->history = history;
     store->scratch = scratch;
     store->coordination_mutex = coordination_mutex;
-    status = lxp_log_recover(log, replay_feed, store);
+    status = lxp_log_recover_complete_records(log, replay_feed, store);
     store->feed.begin = store_begin;
     store->feed.append = store_append;
     store->feed.advance = store_advance;

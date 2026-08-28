@@ -68,6 +68,9 @@ lxp_result lxp_log_scan_tail(const lxp_log *log, uint64_t *valid_end,
 lxp_result lxp_log_truncate_partial(lxp_log *log, uint64_t valid_end);
 lxp_result lxp_log_recover(lxp_log *log, lxp_log_replay_fn replay,
                            void *context);
+lxp_result lxp_log_recover_complete_records(lxp_log *log,
+                                            lxp_log_replay_fn replay,
+                                            void *context);
 uint64_t lxp_log_resume_sequence(const lxp_log *log);
 
 #endif
