@@ -312,7 +312,8 @@ static int differential_fixture_init_balanced(
 {
     static const uint8_t treasury_name[] = "system:fees";
     uint8_t wasm[128];
-    uint8_t payload[DEPLOY_FIXED_BYTES + sizeof(wasm)];
+    uint8_t payload[DEPLOY_FIXED_BYTES + INTERFACE_MAX_FIXTURE_BYTES +
+                    sizeof(wasm)];
     uint8_t deployment_signature[64];
     uint8_t code_hash[32];
     uint8_t treasury_id[32];

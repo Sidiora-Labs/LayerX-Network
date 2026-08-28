@@ -1370,7 +1370,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
 
 - [ ] 33. Make programs discoverable, callable and authorable without a compiler
   - Code-only lanes: 33.1 and 33.4 start independently because 33.2 is already complete. Task 33.3 follows 33.1, task 33.5 follows 33.4, task 33.6 joins those lanes, and task 33.7 finishes hosted and SDK exposure.
-  - [ ] 33.1 Publish program interfaces as protocol state
+  - [ ] 33.1 Publish program interfaces as protocol state — **Implemented - qualification pending**
     - Define an interface description naming each callable entry point, its parameters, its return shape, its typed failures and the capabilities it requires, in a canonical encoding with a stable digest.
     - Bind the description to the deployed code hash at deployment so an interface cannot drift from the program it describes, and refuse a deployment whose declared entry points the module does not export.
     - Make the description readable from protocol state under the receipt-verification path, so an agent discovers what a program accepts without a side channel or an off-platform registry.

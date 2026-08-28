@@ -5,6 +5,7 @@ mod archive;
 mod authority;
 mod deprecate;
 mod hash;
+mod interface;
 pub mod hex;
 mod pipeline;
 mod protocol_evidence;
@@ -24,6 +25,12 @@ pub use authority::{
 pub use deprecate::{
     AuthorizedExit, Deprecation, DeprecationRefusal, DeprecationRequest, ExitRoute,
     LegacyDeprecationRequest, WindDownExitActivity, WindDownView,
+};
+pub use interface::{
+    interface_state_key, interface_state_value, verify_interface_read, InterfaceCapability,
+    InterfaceDigest, InterfaceEntryPoint, InterfaceRefusal, InterfaceStateWitness,
+    ProgramInterface, SchemaVariant, TypedFailure, ValueSchema, ValueType,
+    VerifiedInterfaceRead,
 };
 pub use pipeline::{BuildAttempt, BuildPlan, BuildRefusal, BuildRunner, SourceVerifier};
 pub use protocol_evidence::{

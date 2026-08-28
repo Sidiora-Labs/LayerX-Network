@@ -43,6 +43,9 @@ mod ffi_call;
 #[cfg(feature = "host-ffi")]
 #[allow(unsafe_code)]
 mod ffi_transfer;
+#[cfg(feature = "host-ffi")]
+#[allow(unsafe_code)]
+mod ffi_interface;
 #[deny(unsafe_code)]
 mod host;
 #[deny(unsafe_code)]

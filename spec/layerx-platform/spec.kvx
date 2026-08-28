@@ -3404,7 +3404,7 @@ note = "Code-only lanes: 33.1 and 33.4 start independently because 33.2 is alrea
 
 [task.33.1]
 title = "Publish program interfaces as protocol state"
-status = "pending"
+status = "implemented"
 wave = 19
 requires = ["28.7"]
 do_1 = "Define an interface description naming each callable entry point, its parameters, its return shape, its typed failures and the capabilities it requires, in a canonical encoding with a stable digest."
@@ -3414,7 +3414,7 @@ do_4 = "Carry interface changes through the upgrade path with the compatibility 
 do_5 = "Test interface binding, drift refusal and upgrade compatibility across the registry conformance suite."
 verify_cmd = "make programs-test"
 symbols = ["layerx_programs::ProgramInterface","layerx_programs::InterfaceDigest"]
-touches = ["programs/crates/layerx-programs-registry/src/interface.rs"]
+touches = ["src/modules/programs/deploy.c","include/layerx/programs.h","programs/crates/layerx-programs-runtime/src/ffi_interface.rs","programs/crates/layerx-programs-runtime/src/lib.rs","programs/crates/layerx-programs-runtime/src/validate.rs","programs/crates/layerx-programs-registry/src/interface.rs","programs/crates/layerx-programs-registry/src/lib.rs","programs/crates/layerx-programs-registry/src/protocol_evidence.rs","programs/crates/layerx-programs-registry/tests/interface.rs","programs/crates/layerx-programs-registry/tests/support/mod.rs","tests/programs/test_call_activity.c","tests/programs/test_lifecycle.c","programs/tests/differential/parallel.c","spec/layerx-platform/qualification.kvx"]
 reqs = ["40.1"]
 
 [task.33.2]

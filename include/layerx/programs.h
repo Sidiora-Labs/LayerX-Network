@@ -607,6 +607,13 @@ lxp_result layerx_programs_call_transfer_root_byte(uint64_t token,
 lxp_result layerx_programs_migration_activity_byte(uint64_t token,
                                                    uint16_t section,
                                                    uint32_t offset);
+lxp_result layerx_programs_interface_activity_byte(uint64_t token,
+                                                   uint16_t section,
+                                                   uint32_t offset);
+lxp_result layerx_programs_interface_validate(
+    uint64_t token, uint32_t wasm_length, uint32_t interface_length,
+    uint32_t prior_interface_length, uint16_t abi_version, uint8_t breaking,
+    uint64_t h0, uint64_t h1, uint64_t h2, uint64_t h3);
 
 /* Synchronous lifecycle bridge matching the same arena-token rule. */
 lxp_result layerx_programs_migration_execute_activity(uint64_t token,

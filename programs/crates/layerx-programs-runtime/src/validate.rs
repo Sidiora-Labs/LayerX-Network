@@ -1,7 +1,7 @@
 //! Module validation against the deterministic subset and the declared limits.
 
 use core::fmt::{self, Display};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use wasmparser_nostd::{
@@ -134,9 +134,49 @@ pub struct ValidatedModule {
     function_count: u32,
     revision: AbiRevision,
     meter_injection: MeterInjection,
+    interface_entry_capability_masks: BTreeMap<String, u16>,
 }
 
 impl ValidatedModule {
+    /// Reports whether the module exports an ABI-callable program entry point.
+    ///
+    /// Interface publication uses this after ordinary deterministic module
+    /// validation, so a description cannot name a function that deployment
+    /// cannot call with the frozen `(i32, i32) -> i32` convention.
+    #[must_use]
+    pub fn exports_callable_entrypoint(&self, entrypoint: &str) -> bool {
+        use wasmi::core::ValueType;
+
+        self.module
+            .get_export(entrypoint)
+            .and_then(|export| export.func().cloned())
+            .is_some_and(|function| {
+                function.params() == [ValueType::I32, ValueType::I32]
+                    && function.results() == [ValueType::I32]
+            })
+    }
+
+    /// Reports whether a published interface entry can accept its mandatory
+    /// discriminator-prefixed calldata through the complete production call
+    /// preflight, including allocator and memory exports.
+    #[must_use]
+    pub fn supports_interface_entrypoint(&self, entrypoint: &str) -> bool {
+        self.preflight_entrypoint(entrypoint, false).is_ok()
+    }
+
+    #[must_use]
+    pub fn required_interface_capability_mask(&self, entrypoint: &str) -> Option<u16> {
+        self.interface_entry_capability_masks.get(entrypoint).copied()
+    }
+
+    #[must_use]
+    pub fn interface_capability_mask_matches(&self, entrypoint: &str, declared: u16) -> bool {
+        exact_interface_capability_mask(
+            self.required_interface_capability_mask(entrypoint),
+            declared,
+        )
+    }
+
     /// Instantiates the validated module for qualification without invoking it.
     ///
     /// # Errors
@@ -193,16 +233,9 @@ impl ValidatedModule {
         entrypoint: &str,
         calldata_is_empty: bool,
     ) -> Result<(), EntrypointRefusal> {
-        use wasmi::core::ValueType;
-
-        self.module
-            .get_export(entrypoint)
-            .and_then(|export| export.func().cloned())
-            .filter(|function| {
-                function.params() == [ValueType::I32, ValueType::I32]
-                    && function.results() == [ValueType::I32]
-            })
-            .ok_or(EntrypointRefusal::MissingEntry)?;
+        if !self.exports_callable_entrypoint(entrypoint) {
+            return Err(EntrypointRefusal::MissingEntry);
+        }
         if calldata_is_empty {
             return Ok(());
         }
@@ -384,6 +417,7 @@ pub(crate) fn validate_module_metered(
         function_count: original.function_count,
         revision,
         meter_injection,
+        interface_entry_capability_masks: original.interface_entry_capability_masks,
     })
 }
 
@@ -391,6 +425,7 @@ struct OriginalValidation {
     module: wasmi::Module,
     byte_size: u64,
     function_count: u32,
+    interface_entry_capability_masks: BTreeMap<String, u16>,
 }
 
 fn validate_original_module(
@@ -409,6 +444,10 @@ fn validate_original_module(
     let mut function_count: u32 = 0;
     let mut function_types = Vec::new();
     let mut imports = BTreeSet::new();
+    let mut imported_function_masks = Vec::new();
+    let mut all_imported_capability_mask = 0_u16;
+    let mut exported_functions = BTreeMap::new();
+    let mut function_calls: Vec<(Vec<u32>, bool)> = Vec::new();
     for payload in Parser::new(0).parse_all(wasm) {
         let payload = payload.map_err(|error| ValidationRefusal::MalformedModule {
             reason: error.to_string(),
@@ -432,6 +471,11 @@ fn validate_original_module(
                         reason: error.to_string(),
                     })?;
                     refuse_import(&entry, &function_types, revision)?;
+                    if matches!(entry.ty, TypeRef::Func(_)) {
+                        let mask = interface_capability_for_import(entry.name);
+                        imported_function_masks.push(mask);
+                        all_imported_capability_mask |= mask;
+                    }
                     if !imports.insert((entry.module.to_string(), entry.name.to_string())) {
                         return Err(ValidationRefusal::DuplicateImport {
                             import_module: entry.module.to_string(),
@@ -449,6 +493,16 @@ fn validate_original_module(
                     });
                 }
             }
+            Payload::ExportSection(reader) => {
+                for entry in reader {
+                    let entry = entry.map_err(|error| ValidationRefusal::MalformedModule {
+                        reason: error.to_string(),
+                    })?;
+                    if entry.kind == wasmparser_nostd::ExternalKind::Func {
+                        exported_functions.insert(entry.name.to_string(), entry.index);
+                    }
+                }
+            }
             Payload::GlobalSection(reader) => {
                 for entry in reader {
                     let entry = entry.map_err(|error| ValidationRefusal::MalformedModule {
@@ -459,6 +513,7 @@ fn validate_original_module(
             }
             Payload::CodeSectionEntry(body) => {
                 refuse_float_code(&body)?;
+                function_calls.push(interface_calls(&body)?);
             }
             _ => {}
         }
@@ -470,11 +525,103 @@ fn validate_original_module(
             reason: error.to_string(),
         }
     })?;
+    let imported_function_count = u32::try_from(imported_function_masks.len()).map_err(|_| {
+        ValidationRefusal::MalformedModule { reason: "imported function count exceeds u32".into() }
+    })?;
+    let interface_entry_capability_masks = exported_functions
+        .into_iter()
+        .map(|(name, function_index)| {
+            let mask = reachable_interface_capabilities(
+                function_index,
+                imported_function_count,
+                &imported_function_masks,
+                &function_calls,
+                all_imported_capability_mask,
+            );
+            (name, mask)
+        })
+        .collect();
     Ok(OriginalValidation {
         module,
         byte_size,
         function_count,
+        interface_entry_capability_masks,
     })
+}
+
+fn interface_calls(body: &FunctionBody<'_>) -> Result<(Vec<u32>, bool), ValidationRefusal> {
+    let mut direct = Vec::new();
+    let mut ambiguous_indirect = false;
+    let reader = body.get_operators_reader().map_err(|error| ValidationRefusal::MalformedModule {
+        reason: error.to_string(),
+    })?;
+    for operator in reader {
+        match operator.map_err(|error| ValidationRefusal::MalformedModule {
+            reason: error.to_string(),
+        })? {
+            Operator::Call { function_index } | Operator::ReturnCall { function_index } => {
+                direct.push(function_index);
+            }
+            Operator::CallIndirect { .. } | Operator::ReturnCallIndirect { .. } => {
+                ambiguous_indirect = true;
+            }
+            _ => {}
+        }
+    }
+    Ok((direct, ambiguous_indirect))
+}
+
+fn reachable_interface_capabilities(
+    root: u32,
+    imported_count: u32,
+    imported_masks: &[u16],
+    defined_calls: &[(Vec<u32>, bool)],
+    all_imported_mask: u16,
+) -> u16 {
+    let mut required = 0_u16;
+    let mut pending = vec![root];
+    let mut visited = BTreeSet::new();
+    while let Some(function_index) = pending.pop() {
+        if !visited.insert(function_index) {
+            continue;
+        }
+        if function_index < imported_count {
+            required |= imported_masks[function_index as usize];
+            continue;
+        }
+        let Some((calls, ambiguous_indirect)) = defined_calls
+            .get((function_index - imported_count) as usize)
+        else {
+            // A malformed index is rejected by the engine below; fail closed here too.
+            required |= all_imported_mask;
+            continue;
+        };
+        if *ambiguous_indirect {
+            required |= all_imported_mask;
+        }
+        pending.extend(calls.iter().copied());
+    }
+    required
+}
+
+fn exact_interface_capability_mask(required: Option<u16>, declared: u16) -> bool {
+    required == Some(declared)
+}
+
+fn interface_capability_for_import(name: &str) -> u16 {
+    match name {
+        "storage_read" => 1 << 0,
+        "storage_write" | "storage_delete" => 1 << 1,
+        "storage_read_scoped" | "storage_scan_scoped" => (1 << 0) | (1 << 2),
+        "storage_write_scoped" | "storage_delete_scoped" | "storage_drop_scoped" => (1 << 1) | (1 << 3),
+        "event_emit" => 1 << 4,
+        "program_call" | "program_call_response" => 1 << 5,
+        "transfer_402" | "fund_program_402" => 1 << 6,
+        "transfer_program_402" => 1 << 7,
+        "receipt_read" => 1 << 8,
+        "balance_read" => 1 << 9,
+        _ => 0,
+    }
 }
 
 pub(crate) fn validate_original_for_qualification(
@@ -677,6 +824,78 @@ mod linker_invariant_tests {
     use crate::calls::{ProgramCatalog, ProgramResolver};
     use crate::test_support::add_module;
     use crate::ProgramId;
+
+    #[test]
+    fn interface_capabilities_are_export_specific_and_transitive() {
+        use crate::test_support::{
+            code_section, export_section, func_body, function_section, import_section, module,
+            type_section, OP_CALL, OP_DROP, OP_END, OP_I32_CONST, OP_LOCAL_GET, TYPE_I32,
+        };
+
+        let host_call = [TYPE_I32, TYPE_I32, TYPE_I32, TYPE_I32];
+        let entry = [TYPE_I32, TYPE_I32];
+        let direct = |import: u8| {
+            func_body(
+                &[],
+                &[
+                    OP_I32_CONST, 0, OP_I32_CONST, 0, OP_I32_CONST, 0, OP_I32_CONST, 0,
+                    OP_CALL, import, OP_DROP, OP_I32_CONST, 0, OP_END,
+                ],
+            )
+        };
+        let wasm = module(&[
+            type_section(&[(&host_call, &[TYPE_I32]), (&entry, &[TYPE_I32])]),
+            import_section(&[
+                ("layerx_v1", "storage_read", 0),
+                ("layerx_v1", "event_emit", 0),
+            ]),
+            function_section(&[1, 1, 1]),
+            export_section(&[("read", 2), ("emit", 3), ("transitive", 4)]),
+            code_section(&[
+                direct(0),
+                direct(1),
+                func_body(
+                    &[],
+                    &[
+                        OP_LOCAL_GET, 0, OP_LOCAL_GET, 1, OP_CALL, 2, OP_DROP, OP_I32_CONST, 0,
+                        OP_END,
+                    ],
+                ),
+            ]),
+        ]);
+        let engine = WasmEngine::declared()
+            .unwrap_or_else(|error| panic!("declared engine refused: {error}"));
+        let validated = engine
+            .validate(&wasm)
+            .unwrap_or_else(|error| panic!("reachability module refused: {error}"));
+
+        assert_eq!(validated.required_interface_capability_mask("read"), Some(1 << 0));
+        assert_eq!(validated.required_interface_capability_mask("emit"), Some(1 << 4));
+        assert_eq!(
+            validated.required_interface_capability_mask("transitive"),
+            Some(1 << 0)
+        );
+    }
+
+    #[test]
+    fn reachable_indirect_call_requires_every_imported_capability_class() {
+        let imports = [1 << 0, 1 << 5, 0];
+        let calls = vec![(Vec::new(), true)];
+        assert_eq!(
+            reachable_interface_capabilities(3, 3, &imports, &calls, (1 << 0) | (1 << 5)),
+            (1 << 0) | (1 << 5)
+        );
+    }
+
+    #[test]
+    fn exact_interface_capability_match_refuses_irrelevant_overclaim() {
+        assert!(exact_interface_capability_mask(Some(1 << 0), 1 << 0));
+        assert!(!exact_interface_capability_mask(
+            Some(1 << 0),
+            (1 << 0) | (1 << 4)
+        ));
+        assert!(!exact_interface_capability_mask(None, 1 << 0));
+    }
 
     #[test]
     fn nested_resolution_reuses_the_engine_owned_linker() {

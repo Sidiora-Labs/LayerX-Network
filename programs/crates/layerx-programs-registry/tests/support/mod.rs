@@ -1,7 +1,9 @@
 use ed25519_dalek::{Signer as _, SigningKey};
 use layerx_programs::{
-    programs_root_commitment, state_leaf_commitment, DeploymentProof, ProgramLifecycleProof,
-    ProgramStateProof, ProtocolDeploymentVerifier, StateLeafWitness, StateProof,
+    interface_state_key, interface_state_value, programs_root_commitment, state_leaf_commitment,
+    DeploymentProof, InterfaceCapability, InterfaceEntryPoint, InterfaceStateWitness,
+    ProgramInterface, ProgramLifecycleProof, ProgramStateProof, ProtocolDeploymentVerifier,
+    StateLeafWitness, StateProof, ValueSchema, ValueType,
 };
 use layerx_programs_runtime::{hash_bytes, HashAlgorithm, ProgramId, UpgradePolicy};
 use layerx_proof::merkle::{build_leaf_hash_proof, build_proof, Proof};
@@ -15,12 +17,17 @@ use layerx_wire::hash::{
 pub const NOW: u64 = 1_700_000_150;
 pub const PROGRAM_BYTES: [u8; 32] = [0x31; 32];
 pub const AUTHORITY: [u8; 32] = [0x51; 32];
-pub const WASM_V1: &[u8] = &[0, 97, 115, 109, 1, 0, 0, 0];
-pub const WASM_V2: &[u8] = &[0, 97, 115, 109, 1, 0, 0, 0, 0, 3, 2, b'v', b'2'];
+pub const WASM_V1: &[u8] = &[
+    0,97,115,109,1,0,0,0,1,12,2,96,2,127,127,1,127,96,1,127,1,127,3,3,2,0,1,5,3,1,0,1,7,34,3,4,b'c',b'a',b'l',b'l',0,0,14,b'l',b'a',b'y',b'e',b'r',b'x',b'_',b'r',b'e',b's',b'e',b'r',b'v',b'e',0,1,6,b'm',b'e',b'm',b'o',b'r',b'y',2,0,10,11,2,4,0,65,0,11,4,0,65,0,11,
+];
+pub const WASM_V2: &[u8] = &[
+    0,97,115,109,1,0,0,0,1,12,2,96,2,127,127,1,127,96,1,127,1,127,3,3,2,0,1,5,3,1,0,1,7,34,3,4,b'c',b'a',b'l',b'l',0,0,14,b'l',b'a',b'y',b'e',b'r',b'x',b'_',b'r',b'e',b's',b'e',b'r',b'v',b'e',0,1,6,b'm',b'e',b'm',b'o',b'r',b'y',2,0,10,11,2,4,0,65,1,11,4,0,65,0,11,
+];
 const TRUST_HISTORY_DOMAIN: &[u8] = b"LayerX/sequencer-trust-history/v1\0";
 
 pub struct ProtocolFixture {
     pub proof: DeploymentProof,
+    pub interface_witness: InterfaceStateWitness,
     pub sequencer_id: [u8; 32],
     pub sequencer_public_key: [u8; 32],
     pub batch_number: u64,
@@ -157,6 +164,17 @@ pub fn deploy_fixture(
     deploy_fixture_in_epoch(wasm, policy, batch_number, timestamp, 2, [7; 32])
 }
 
+pub fn legacy_deploy_fixture(
+    wasm: &[u8], policy: UpgradePolicy, batch_number: u64, timestamp: u64,
+) -> ProtocolFixture {
+    let mut payload = deploy_payload(wasm, policy);
+    let interface_length = usize::try_from(u32::from_be_bytes(
+        payload[104..108].try_into().unwrap_or_else(|_| panic!("interface length")),
+    )).unwrap_or_else(|_| panic!("interface length usize"));
+    payload.drain(104..108 + interface_length);
+    fixture(payload, 1, wasm, policy, 1, batch_number, timestamp, false, false)
+}
+
 pub fn deploy_fixture_in_epoch(
     wasm: &[u8],
     policy: UpgradePolicy,
@@ -199,7 +217,8 @@ pub fn wrong_batch_id_fixture(batch_number: u64, timestamp: u64) -> ProtocolFixt
 pub fn wrong_abi_fixture(batch_number: u64, timestamp: u64) -> ProtocolFixture {
     let policy = UpgradePolicy::Authority(AUTHORITY);
     let mut payload = deploy_payload(WASM_V1, policy);
-    payload[32..34].copy_from_slice(&2_u16.to_be_bytes());
+    payload[32..34].copy_from_slice(&3_u16.to_be_bytes());
+    payload[168..170].copy_from_slice(&3_u16.to_be_bytes());
     fixture(
         payload,
         1,
@@ -290,7 +309,7 @@ fn fixture_in_epoch(
     let activity = encode_activity(&payload, ordinal);
     let key = SigningKey::from_bytes(&signing_key);
     let sequencer_id = key.verifying_key().to_bytes();
-    let (state, header_signature) = state_fixture_with_key(
+    let (state, header_signature, interface_witness) = state_fixture_with_key(
         &activity,
         &key,
         batch_number,
@@ -312,6 +331,7 @@ fn fixture_in_epoch(
             activity_proof,
             state,
         },
+        interface_witness,
         sequencer_id,
         sequencer_public_key: key.verifying_key().to_bytes(),
         batch_number,
@@ -331,7 +351,7 @@ fn state_fixture(
 ) -> (ProgramStateProof, [u8; 64]) {
     let key = SigningKey::from_bytes(&[7; 32]);
     assert_eq!(key.verifying_key().to_bytes(), sequencer_id);
-    state_fixture_with_key(
+    let (state, signature, _) = state_fixture_with_key(
         activity,
         &key,
         batch_number,
@@ -342,7 +362,8 @@ fn state_fixture(
         deprecated,
         wrong_batch_id,
         2,
-    )
+    );
+    (state, signature)
 }
 
 fn state_fixture_with_key(
@@ -356,10 +377,17 @@ fn state_fixture_with_key(
     deprecated: bool,
     wrong_batch_id: bool,
     epoch: u64,
-) -> (ProgramStateProof, [u8; 64]) {
+) -> (ProgramStateProof, [u8; 64], InterfaceStateWitness) {
     let program_key = program_key();
     let program_value = program_record(wasm, policy, version);
-    let mut leaves = vec![(program_key.clone(), program_value.clone())];
+    let interface = fixture_interface(wasm);
+    let interface_key = interface_state_key(program());
+    let interface_value = interface_state_value(program(), version, &interface)
+        .unwrap_or_else(|error| panic!("interface state value: {error}"));
+    let mut leaves = vec![
+        (program_key.clone(), program_value.clone()),
+        (interface_key.clone(), interface_value.clone()),
+    ];
     if deprecated {
         leaves.push((status_key(), status_record()));
     }
@@ -378,6 +406,19 @@ fn state_fixture_with_key(
         key: program_key,
         value: program_value,
         proof: state_proof(&program_proof),
+    };
+    let interface_index = leaves
+        .iter()
+        .position(|(key, _)| key == &interface_key)
+        .unwrap_or_else(|| panic!("interface leaf absent"));
+    let (interface_proof, interface_root) =
+        build_leaf_hash_proof(&leaf_hashes, interface_index)
+            .unwrap_or_else(|error| panic!("interface proof: {error:?}"));
+    assert_eq!(interface_root, programs_root);
+    let interface_witness = InterfaceStateWitness {
+        key: interface_key,
+        value: interface_value,
+        proof: state_proof(&interface_proof),
     };
     let lifecycle = if deprecated {
         let status_index = leaves
@@ -464,6 +505,7 @@ fn state_fixture_with_key(
             lifecycle,
         },
         header_signature,
+        interface_witness,
     )
 }
 
@@ -604,6 +646,7 @@ fn encode_header(
 }
 
 fn deploy_payload(wasm: &[u8], policy: UpgradePolicy) -> Vec<u8> {
+    let interface_encoding = fixture_interface_encoding(wasm);
     let mut payload = Vec::new();
     payload.extend_from_slice(&PROGRAM_BYTES);
     payload.extend_from_slice(&1_u16.to_be_bytes());
@@ -623,11 +666,18 @@ fn deploy_payload(wasm: &[u8], policy: UpgradePolicy) -> Vec<u8> {
             .unwrap_or_else(|_| panic!("WASM length"))
             .to_be_bytes(),
     );
+    payload.extend_from_slice(
+        &u32::try_from(interface_encoding.len())
+            .unwrap_or_else(|_| panic!("interface length"))
+            .to_be_bytes(),
+    );
+    payload.extend_from_slice(&interface_encoding);
     payload.extend_from_slice(wasm);
     payload
 }
 
 fn upgrade_payload(old_wasm: &[u8], new_wasm: &[u8]) -> Vec<u8> {
+    let interface_encoding = fixture_interface_encoding(new_wasm);
     let mut payload = Vec::new();
     payload.extend_from_slice(&PROGRAM_BYTES);
     payload.extend_from_slice(&1_u16.to_be_bytes());
@@ -640,8 +690,48 @@ fn upgrade_payload(old_wasm: &[u8], new_wasm: &[u8]) -> Vec<u8> {
             .unwrap_or_else(|_| panic!("WASM length"))
             .to_be_bytes(),
     );
+    payload.extend_from_slice(
+        &u32::try_from(interface_encoding.len())
+            .unwrap_or_else(|_| panic!("interface length"))
+            .to_be_bytes(),
+    );
+    payload.extend_from_slice(&interface_encoding);
     payload.extend_from_slice(new_wasm);
     payload
+}
+
+pub fn fixture_interface(wasm: &[u8]) -> ProgramInterface {
+    let entries = || vec![InterfaceEntryPoint {
+        name: "call".to_owned(),
+        discriminator: [0x10, 0x20, 0x30, 0x40],
+        calldata: ValueSchema::layerx(ValueType::Bytes { max_len: 64 }),
+        response: ValueSchema::layerx(ValueType::Bytes { max_len: 64 }),
+        capabilities: vec![InterfaceCapability::StorageRead],
+        event_topics: vec![[0x44; 32]],
+        failures: Vec::new(),
+    }];
+    ProgramInterface::bind(
+        wasm,
+        1,
+        entries(),
+    )
+    .unwrap_or_else(|_| {
+        ProgramInterface::bind(WASM_V1, 1, entries())
+            .unwrap_or_else(|error| panic!("fallback program interface: {error}"))
+    })
+}
+
+fn fixture_interface_encoding(wasm: &[u8]) -> Vec<u8> {
+    if let Ok(interface) = ProgramInterface::bind(
+        wasm,
+        1,
+        fixture_interface(WASM_V1).entries().to_vec(),
+    ) {
+        return interface.canonical_encoding().to_vec();
+    }
+    let mut encoding = fixture_interface(WASM_V1).canonical_encoding().to_vec();
+    encoding[28..60].copy_from_slice(&code_hash(wasm));
+    encoding
 }
 
 fn program_key() -> Vec<u8> {

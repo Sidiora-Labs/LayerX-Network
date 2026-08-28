@@ -24,8 +24,9 @@ static lxp_result occupancy_parameters(
 enum {
     CALL_FIXED_BYTES = 32 + 2 + 2 + 4 + 2 + 4 + 4 +
                        LX_PROGRAMS_CALL_BUDGET_FIELDS * 8,
-    DEPLOY_FIXED_BYTES = 104,
-    UPGRADE_FIXED_BYTES = 106
+    DEPLOY_FIXED_BYTES = 108,
+    UPGRADE_FIXED_BYTES = 110,
+    INTERFACE_MAX_FIXTURE_BYTES = 256
 };
 
 static void write_u16(uint8_t *out, uint16_t value)
@@ -393,10 +394,47 @@ static int malformed_call_payloads(void)
     return lxp_state_store_destroy(&state) == LXP_OK ? 0 : 1;
 }
 
+static size_t interface_payload(uint8_t *out, const uint8_t code_hash[32],
+                                uint16_t abi_version)
+{
+    static const uint8_t domain[] = "LayerX/program-interface/v1";
+    size_t offset = 0U;
+    (void)memcpy(out + offset, domain, sizeof(domain));
+    offset += sizeof(domain);
+    (void)memcpy(out + offset, code_hash, 32U);
+    offset += 32U;
+    write_u16(out + offset, abi_version);
+    offset += 2U;
+    write_u16(out + offset, 1U);
+    offset += 2U;
+    write_u16(out + offset, 11U);
+    offset += 2U;
+    (void)memcpy(out + offset, "layerx_call", 11U);
+    offset += 11U;
+    (void)memset(out + offset, 0, 4U);
+    offset += 4U;
+    out[offset++] = 1U;
+    out[offset++] = 0x20U;
+    write_u32(out + offset, 64U);
+    offset += 4U;
+    out[offset++] = 1U;
+    out[offset++] = 0x20U;
+    write_u32(out + offset, 64U);
+    offset += 4U;
+    write_u16(out + offset, 1U);
+    offset += 2U;
+    out[offset++] = 0U;
+    write_u16(out + offset, 0U);
+    offset += 2U;
+    write_u16(out + offset, 0U);
+    return offset + 2U;
+}
+
 static size_t deploy_payload(uint8_t *out, const uint8_t program_id[32],
                              const uint8_t authority[32], const uint8_t *wasm,
                              size_t wasm_length, uint8_t code_hash[32])
 {
+    size_t interface_length;
     (void)lxp_hash_sha256(wasm, wasm_length, code_hash);
     (void)memcpy(out, program_id, 32U);
     write_u16(out + 32U, LX_PROGRAMS_ABI_VERSION);
@@ -405,14 +443,19 @@ static size_t deploy_payload(uint8_t *out, const uint8_t program_id[32],
     (void)memcpy(out + 36U, authority, 32U);
     (void)memcpy(out + 68U, code_hash, 32U);
     write_u32(out + 100U, (uint32_t)wasm_length);
-    (void)memcpy(out + DEPLOY_FIXED_BYTES, wasm, wasm_length);
-    return DEPLOY_FIXED_BYTES + wasm_length;
+    interface_length = interface_payload(out + DEPLOY_FIXED_BYTES, code_hash,
+                                         LX_PROGRAMS_ABI_VERSION);
+    write_u32(out + 104U, (uint32_t)interface_length);
+    (void)memcpy(out + DEPLOY_FIXED_BYTES + interface_length, wasm,
+                 wasm_length);
+    return DEPLOY_FIXED_BYTES + interface_length + wasm_length;
 }
 
 static size_t upgrade_payload(uint8_t *out, const uint8_t program_id[32],
                               const uint8_t old_hash[32], const uint8_t *wasm,
                               size_t wasm_length, uint8_t new_hash[32])
 {
+    size_t interface_length;
     (void)lxp_hash_sha256(wasm, wasm_length, new_hash);
     (void)memcpy(out, program_id, 32U);
     write_u16(out + 32U, LX_PROGRAMS_ABI_VERSION);
@@ -422,8 +465,12 @@ static size_t upgrade_payload(uint8_t *out, const uint8_t program_id[32],
     (void)memcpy(out + 68U, new_hash, 32U);
     write_u16(out + 100U, 0U);
     write_u32(out + 102U, (uint32_t)wasm_length);
-    (void)memcpy(out + UPGRADE_FIXED_BYTES, wasm, wasm_length);
-    return UPGRADE_FIXED_BYTES + wasm_length;
+    interface_length = interface_payload(out + UPGRADE_FIXED_BYTES, new_hash,
+                                         LX_PROGRAMS_ABI_VERSION);
+    write_u32(out + 106U, (uint32_t)interface_length);
+    (void)memcpy(out + UPGRADE_FIXED_BYTES + interface_length, wasm,
+                 wasm_length);
+    return UPGRADE_FIXED_BYTES + interface_length + wasm_length;
 }
 
 static size_t reference_deploy_payload(
@@ -540,7 +587,8 @@ static int deploy_and_upgrade_persist_exact_artifacts(void)
     uint8_t upgraded_wasm[128];
     uint8_t failure_wasm[1024];
     uint8_t resource_wasm[1024];
-    uint8_t payload[UPGRADE_FIXED_BYTES + sizeof(failure_wasm)];
+    uint8_t payload[UPGRADE_FIXED_BYTES + INTERFACE_MAX_FIXTURE_BYTES +
+                    sizeof(failure_wasm)];
     uint8_t call[CALL_FIXED_BYTES + 128U];
     uint8_t code_hash[32];
     uint8_t upgraded_hash[32];
