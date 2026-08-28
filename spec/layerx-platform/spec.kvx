@@ -3720,7 +3720,7 @@ reqs = ["42.1","42.8"]
 
 [task.35.5]
 title = "Settle usage against commitments inside a challenge window"
-status = "pending"
+status = "implemented"
 wave = 21
 requires = ["35.4"]
 do_1 = "Have the provider commit to a usage claim and an output commitment, and settle it optimistically after a declared challenge window measured in batch heights."

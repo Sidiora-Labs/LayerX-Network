@@ -11,8 +11,8 @@ use layerx_program_sdk::{
 pub const MAX_ATTESTERS: usize = 8;
 pub const MAX_ATTESTER_NAME_BYTES: usize = 32;
 pub const MAX_INPUTS_PER_LEASE: u32 = 1_024;
-pub const ATTESTER_SET_CAPACITY: usize = 91 + MAX_ATTESTERS * (33 + MAX_ATTESTER_NAME_BYTES);
-pub const ATTESTED_INPUT_CAPACITY: usize = 212;
+pub const ATTESTER_SET_CAPACITY: usize = 252 + MAX_ATTESTERS * (33 + MAX_ATTESTER_NAME_BYTES);
+pub const ATTESTED_INPUT_CAPACITY: usize = 244;
 pub const ATTESTATION_STATEMENT_CAPACITY: usize = 256;
 pub const ATTESTATION_REQUEST_CAPACITY: usize = 242;
 pub const ATTESTATION_SIGNATURE_BYTES: usize = 64;
@@ -20,6 +20,10 @@ pub const ATTESTATION_SIGNATURE_BYTES: usize = 64;
 const VERSION: u8 = 1;
 const POLICY_DOMAIN: &[u8] = b"LXP/market-attesters/v1\0";
 const STATEMENT_DOMAIN: &[u8] = b"LXP/market-attested-input/v1\0";
+const COMMITTED_INPUT_DOMAIN: &[u8] = b"LXP/market-committed-set/v1\0";
+const ADMITTED_INPUT_DOMAIN: &[u8] = b"LXP/market-admitted-set/v1\0";
+const ACCUMULATOR_DOMAIN: &[u8] = b"LXP/market-input-accumulator/v1\0";
+const SETTLEMENT_INPUT_DOMAIN: &[u8] = b"LXP/market-settlement-inputs/v1\0";
 const POLICY_PREFIX: &[u8] = b"lx.market.attesters/";
 const INPUT_PREFIX: &[u8] = b"lx.market.input/";
 const REPLAY_PREFIX: &[u8] = b"lx.market.attested/";
@@ -76,6 +80,11 @@ pub struct AttesterSet<'a> {
     pub sealed_at: Option<u64>,
     pub committed_inputs: u32,
     pub admitted_inputs: u32,
+    pub last_committed_input: [u8; 32],
+    pub last_admitted_input: [u8; 32],
+    pub committed_root: [u8; 32],
+    pub admitted_root: [u8; 32],
+    pub settlement_commitment: Option<[u8; 32]>,
     pub entries: [Option<Attester<'a>>; MAX_ATTESTERS],
 }
 
@@ -112,6 +121,11 @@ impl<'a> AttesterSet<'a> {
             sealed_at: None,
             committed_inputs: 0,
             admitted_inputs: 0,
+            last_committed_input: [0; 32],
+            last_admitted_input: [0; 32],
+            committed_root: [0; 32],
+            admitted_root: [0; 32],
+            settlement_commitment: None,
             entries,
         })
     }
@@ -129,6 +143,12 @@ impl<'a> AttesterSet<'a> {
         self.sealed_at.is_some()
             && self.committed_inputs > 0
             && self.admitted_inputs == self.committed_inputs
+            && self.settlement_commitment.is_some()
+    }
+
+    pub fn settlement_input_commitment(&self) -> Result<[u8; 32], ProgramError> {
+        if !self.ready_for_settlement() { return Err(malformed()); }
+        self.settlement_commitment.ok_or_else(malformed)
     }
 }
 
@@ -153,6 +173,7 @@ pub struct Attestation<'a> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AttestedInput {
     pub commitment: InputCommitment,
+    pub predecessor_input_id: [u8; 32],
     pub observed_at: u64,
     pub attester_name_digest: [u8; 32],
     pub statement_digest: [u8; 32],
@@ -208,12 +229,17 @@ pub fn commit_input(
         || commitment.payload_length == 0
         || commitment.source_locator_digest == [0; 32]
         || policy.committed_inputs >= MAX_INPUTS_PER_LEASE
+        || (policy.last_committed_input != [0; 32]
+            && commitment.input_id <= policy.last_committed_input)
     {
         return Err(malformed());
     }
     policy.committed_inputs = policy.committed_inputs.checked_add(1).ok_or_else(malformed)?;
+    let predecessor_input_id = policy.last_committed_input;
+    policy.last_committed_input = commitment.input_id;
     Ok(AttestedInput {
         commitment,
+        predecessor_input_id,
         observed_at: 0,
         attester_name_digest: [0; 32],
         statement_digest: [0; 32],
@@ -298,6 +324,14 @@ pub fn encode_policy(policy: AttesterSet<'_>, output: &mut [u8]) -> Result<usize
     }
     append(output, &mut offset, &policy.committed_inputs.to_be_bytes())?;
     append(output, &mut offset, &policy.admitted_inputs.to_be_bytes())?;
+    append(output, &mut offset, &policy.last_committed_input)?;
+    append(output, &mut offset, &policy.last_admitted_input)?;
+    append(output, &mut offset, &policy.committed_root)?;
+    append(output, &mut offset, &policy.admitted_root)?;
+    match policy.settlement_commitment {
+        Some(root) => { append(output, &mut offset, &[1])?; append(output, &mut offset, &root)?; }
+        None => append(output, &mut offset, &[0])?,
+    }
     let count = policy.entries.iter().flatten().count();
     append(output, &mut offset, &[u8::try_from(count).map_err(|_| malformed())?])?;
     for attester in policy.entries.iter().flatten() {
@@ -318,6 +352,13 @@ pub fn decode_policy(input: &[u8]) -> Result<AttesterSet<'_>, ProgramError> {
     let committed_inputs = cursor.u32()?;
     let admitted_inputs = cursor.u32()?;
     if admitted_inputs > committed_inputs { return Err(malformed()); }
+    let last_committed_input = cursor.array()?;
+    let last_admitted_input = cursor.array()?;
+    let committed_root = cursor.array()?;
+    let admitted_root = cursor.array()?;
+    let settlement_commitment = match cursor.byte()? {
+        0 => None, 1 => Some(cursor.array()?), _ => return Err(malformed()),
+    };
     let count = usize::from(cursor.byte()?);
     if count == 0 || count > MAX_ATTESTERS { return Err(malformed()); }
     let mut entries = [None; MAX_ATTESTERS];
@@ -329,6 +370,18 @@ pub fn decode_policy(input: &[u8]) -> Result<AttesterSet<'_>, ProgramError> {
     policy.sealed_at = sealed_at;
     policy.committed_inputs = committed_inputs;
     policy.admitted_inputs = admitted_inputs;
+    policy.last_committed_input = last_committed_input;
+    policy.last_admitted_input = last_admitted_input;
+    policy.committed_root = committed_root;
+    policy.admitted_root = admitted_root;
+    policy.settlement_commitment = settlement_commitment;
+    if (policy.committed_inputs == 0) != (policy.last_committed_input == [0; 32])
+        || (policy.admitted_inputs == 0) != (policy.last_admitted_input == [0; 32])
+        || policy.settlement_commitment.is_some() != policy.ready_for_settlement()
+        || policy.settlement_commitment == Some([0; 32])
+    {
+        return Err(malformed());
+    }
     Ok(policy)
 }
 
@@ -340,6 +393,7 @@ pub fn encode_input(input: AttestedInput, output: &mut [u8]) -> Result<usize, Pr
     append(output, &mut offset, &input.commitment.payload_digest)?;
     append(output, &mut offset, &input.commitment.payload_length.to_be_bytes())?;
     append(output, &mut offset, &input.commitment.source_locator_digest)?;
+    append(output, &mut offset, &input.predecessor_input_id)?;
     append(output, &mut offset, &input.observed_at.to_be_bytes())?;
     append(output, &mut offset, &input.attester_name_digest)?;
     append(output, &mut offset, &input.statement_digest)?;
@@ -357,6 +411,7 @@ pub fn decode_input(input: &[u8]) -> Result<AttestedInput, ProgramError> {
             lease_id: cursor.array()?, input_id: cursor.array()?, payload_digest: cursor.array()?,
             payload_length: cursor.u64()?, source, source_locator_digest: cursor.array()?,
         },
+        predecessor_input_id: cursor.array()?,
         observed_at: cursor.u64()?, attester_name_digest: cursor.array()?, statement_digest: cursor.array()?,
         evidence, status,
     };
@@ -444,6 +499,65 @@ fn digest(bytes: &[u8]) -> Result<[u8; 32], ProgramError> {
 }
 
 #[cfg(target_arch = "wasm32")]
+fn committed_leaf(commitment: InputCommitment) -> Result<[u8; 32], ProgramError> {
+    let mut bytes = [0; 192];
+    let mut offset = 0;
+    append(&mut bytes, &mut offset, COMMITTED_INPUT_DOMAIN)?;
+    append(&mut bytes, &mut offset, &commitment.lease_id)?;
+    append(&mut bytes, &mut offset, &commitment.input_id)?;
+    append(&mut bytes, &mut offset, &commitment.payload_digest)?;
+    append(&mut bytes, &mut offset, &commitment.payload_length.to_be_bytes())?;
+    append(&mut bytes, &mut offset, &[commitment.source as u8])?;
+    append(&mut bytes, &mut offset, &commitment.source_locator_digest)?;
+    digest(&bytes[..offset])
+}
+
+#[cfg(target_arch = "wasm32")]
+fn admitted_leaf(input: AttestedInput) -> Result<[u8; 32], ProgramError> {
+    let mut canonical = [0; ATTESTED_INPUT_CAPACITY];
+    let canonical_length = encode_input(input, &mut canonical)?;
+    let mut bytes = [0; 320];
+    let mut offset = 0;
+    append(&mut bytes, &mut offset, ADMITTED_INPUT_DOMAIN)?;
+    append(&mut bytes, &mut offset, &canonical[..canonical_length])?;
+    digest(&bytes[..offset])
+}
+
+#[cfg(target_arch = "wasm32")]
+fn accumulate(prior: [u8; 32], leaf: [u8; 32]) -> Result<[u8; 32], ProgramError> {
+    let mut bytes = [0; 128];
+    let mut offset = 0;
+    append(&mut bytes, &mut offset, ACCUMULATOR_DOMAIN)?;
+    append(&mut bytes, &mut offset, &prior)?;
+    append(&mut bytes, &mut offset, &leaf)?;
+    digest(&bytes[..offset])
+}
+
+#[cfg(target_arch = "wasm32")]
+fn freeze_settlement_commitment(policy: AttesterSet<'_>) -> Result<[u8; 32], ProgramError> {
+    if policy.sealed_at.is_none() || policy.committed_inputs == 0
+        || policy.admitted_inputs != policy.committed_inputs
+        || policy.last_admitted_input != policy.last_committed_input
+        || policy.committed_root == [0; 32] || policy.admitted_root == [0; 32]
+    {
+        return Err(malformed());
+    }
+    let mut policy_bytes = [0; ATTESTER_SET_CAPACITY];
+    let policy_length = encode_policy_commitment(policy, &mut policy_bytes)?;
+    let policy_root = digest(&policy_bytes[..policy_length])?;
+    let mut bytes = [0; 192];
+    let mut offset = 0;
+    append(&mut bytes, &mut offset, SETTLEMENT_INPUT_DOMAIN)?;
+    append(&mut bytes, &mut offset, &policy.lease_id)?;
+    append(&mut bytes, &mut offset, &policy.revision.to_be_bytes())?;
+    append(&mut bytes, &mut offset, &policy_root)?;
+    append(&mut bytes, &mut offset, &policy.committed_inputs.to_be_bytes())?;
+    append(&mut bytes, &mut offset, &policy.committed_root)?;
+    append(&mut bytes, &mut offset, &policy.admitted_root)?;
+    digest(&bytes[..offset])
+}
+
+#[cfg(target_arch = "wasm32")]
 pub fn configure(
     lease_id: LeaseId,
     tenant: AccountId,
@@ -468,6 +582,8 @@ pub fn commit(
     let mut input_bytes = [0; ATTESTED_INPUT_CAPACITY];
     absent(INPUT_PREFIX, commitment.lease_id, Some(commitment.input_id), &mut input_bytes)?;
     let input = commit_input(&mut policy, commitment, principal)?;
+    policy.committed_root = accumulate(policy.committed_root,
+        committed_leaf(commitment)?)?;
     let input_length = encode_input(input, &mut input_bytes)?;
     let mut policy_output = [0; ATTESTER_SET_CAPACITY];
     let policy_written = encode_policy(policy, &mut policy_output)?;
@@ -508,6 +624,9 @@ pub fn admit(attestation: Attestation<'_>, height: u64) -> Result<(), ProgramErr
     if committed.status == InputStatus::Attested {
         return Err(ProgramError::value(Field::CallInput, Reason::Duplicate));
     }
+    if committed.predecessor_input_id != policy.last_admitted_input {
+        return Err(malformed());
+    }
     let mut policy_canonical = [0; ATTESTER_SET_CAPACITY];
     let canonical_length = encode_policy_commitment(policy, &mut policy_canonical)?;
     let policy_root = digest(&policy_canonical[..canonical_length])?;
@@ -525,15 +644,21 @@ pub fn admit(attestation: Attestation<'_>, height: u64) -> Result<(), ProgramErr
     absent(REPLAY_PREFIX, attestation.input.lease_id, Some(statement_digest), &mut input_bytes)?;
     let key = policy.named_key(attestation.attester_name)?;
     crypto::ed25519_verify(Ed25519Message::new(&statement_digest)?, &key, &attestation.signature)?;
-    policy.admitted_inputs = policy.admitted_inputs.checked_add(1).ok_or_else(malformed)?;
     let admitted = AttestedInput {
         commitment: attestation.input,
+        predecessor_input_id: committed.predecessor_input_id,
         observed_at: attestation.observed_at,
         attester_name_digest: name_digest,
         statement_digest,
         evidence: EvidenceClass::Attested,
         status: InputStatus::Attested,
     };
+    policy.admitted_inputs = policy.admitted_inputs.checked_add(1).ok_or_else(malformed)?;
+    policy.last_admitted_input = admitted.commitment.input_id;
+    policy.admitted_root = accumulate(policy.admitted_root, admitted_leaf(admitted)?)?;
+    if policy.admitted_inputs == policy.committed_inputs {
+        policy.settlement_commitment = Some(freeze_settlement_commitment(policy)?);
+    }
     let input_written = encode_input(admitted, &mut input_bytes)?;
     let mut policy_output = [0; ATTESTER_SET_CAPACITY];
     let policy_written = encode_policy(policy, &mut policy_output)?;
@@ -544,10 +669,11 @@ pub fn admit(attestation: Attestation<'_>, height: u64) -> Result<(), ProgramErr
 }
 
 #[cfg(target_arch = "wasm32")]
-pub fn require_ready(lease_id: LeaseId) -> Result<(), ProgramError> {
+pub fn require_ready_commitment(lease_id: LeaseId) -> Result<[u8; 32], ProgramError> {
     let mut bytes = [0; ATTESTER_SET_CAPACITY];
     let length = read(POLICY_PREFIX, lease_id, None, &mut bytes)?;
-    if decode_policy(&bytes[..length])?.ready_for_settlement() { Ok(()) } else { Err(malformed()) }
+    let policy = decode_policy(&bytes[..length])?;
+    policy.settlement_input_commitment()
 }
 
 #[cfg(test)]
@@ -652,5 +778,30 @@ mod tests {
             .unwrap_or_else(|error| panic!("attestation: {error}"));
         assert_eq!(decode_attestation(&wire[..length]), Ok(attestation));
         assert!(decode_attestation(&wire[..length - 1]).is_err());
+    }
+
+    #[test]
+    fn input_order_replay_missing_and_exact_frozen_root_are_explicit() {
+        let tenant = account(3);
+        let mut policy = AttesterSet::new([7; 32], tenant, 11,
+            entries(b"weather-oracle.eu", [11; 32]))
+            .unwrap_or_else(|error| panic!("policy: {error}"));
+        let first = weather();
+        commit_input(&mut policy, first, tenant)
+            .unwrap_or_else(|error| panic!("first: {error}"));
+        assert!(commit_input(&mut policy, first, tenant).is_err());
+        let mut earlier = first;
+        earlier.input_id = [7; 32];
+        assert!(commit_input(&mut policy, earlier, tenant).is_err());
+        seal_inputs(&mut policy, tenant, 1_201)
+            .unwrap_or_else(|error| panic!("seal: {error}"));
+        assert!(policy.settlement_input_commitment().is_err());
+        policy.admitted_inputs = policy.committed_inputs;
+        policy.last_admitted_input = policy.last_committed_input;
+        policy.committed_root = [21; 32];
+        policy.admitted_root = [22; 32];
+        policy.settlement_commitment = Some([23; 32]);
+        assert_eq!(policy.settlement_input_commitment(), Ok([23; 32]));
+        assert_ne!(policy.settlement_input_commitment(), Ok([24; 32]));
     }
 }

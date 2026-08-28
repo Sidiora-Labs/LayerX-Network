@@ -1514,7 +1514,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Keep the marketplace an ordinary program with no privileged authority, subject to the same monetary law and the same composition bounds as any other.
     - Test the full lifecycle including a provider that never delivers, a renter that never funds and a lease that expires mid-work.
     - _Requirements: 42.1, 42.8_
-  - [ ] 35.5 Settle usage against commitments inside a challenge window
+  - [ ] 35.5 Settle usage against commitments inside a challenge window — **Implemented - qualification pending**
     - Have the provider commit to a usage claim and an output commitment, and settle it optimistically after a declared challenge window measured in batch heights.
     - Let any party open a dispute inside the window by posting a stake and a contradicting commitment, freezing settlement until the dispute resolves.
     - Make an unchallenged claim final and its settlement irreversible, so finality is a declared property rather than an indefinite maybe.

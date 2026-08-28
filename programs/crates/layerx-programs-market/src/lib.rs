@@ -1,5 +1,8 @@
 #![no_std]
 
+pub mod settle;
+pub use settle::{ChallengeWindow, UsageClaim};
+
 use layerx_program_sdk::{AccountId, Amount, AssetId, Field, ProgramError, Reason};
 
 pub mod attest;
@@ -24,10 +27,19 @@ const CONFIGURE_ATTESTERS: u8 = 6;
 const COMMIT_EXTERNAL_INPUT: u8 = 7;
 const SEAL_EXTERNAL_INPUTS: u8 = 8;
 const SUBMIT_ATTESTATION: u8 = 9;
+const COMMIT_USAGE: u8 = 10;
+const CHALLENGE_USAGE: u8 = 11;
+const FINALIZE_USAGE: u8 = 12;
 const OFFER_PREFIX: &[u8] = b"lx.market.offer/";
 const LEASE_PREFIX: &[u8] = b"lx.market.lease/";
+const CLAIM_PREFIX: &[u8] = b"lx.market.claim/";
+const CHALLENGE_PREFIX: &[u8] = b"lx.market.challenge/";
+const CLAIM_ID_PREFIX: &[u8] = b"lx.market.claim-id/";
+const CHALLENGE_ID_PREFIX: &[u8] = b"lx.market.challenge-id/";
 const TOPIC_OFFER: &[u8] = b"lx.market.offer";
 const TOPIC_LEASE: &[u8] = b"lx.market.lease";
+const TOPIC_CLAIM: &[u8] = b"lx.market.claim";
+const TOPIC_CHALLENGE: &[u8] = b"lx.market.challenge";
 const ID_BYTES: usize = 32;
 const MAX_SEED_BYTES: usize = layerx_program_sdk::MAX_PROGRAM_ACCOUNT_SEED_BYTES;
 const OFFER_CAPACITY: usize = 263 + MAX_SEED_BYTES;
@@ -221,29 +233,6 @@ pub fn open<'a>(
     Ok((updated, lease))
 }
 
-pub fn settle<'a>(
-    offer: Offer<'a>,
-    mut lease: ComputeLease<'a>,
-    principal: AccountId,
-    height: u64,
-) -> Result<(Offer<'a>, ComputeLease<'a>), ProgramError> {
-    if lease.offer_id != offer.id
-        || lease.provider != principal
-        || lease.status != LeaseStatus::Funded
-        || height >= lease.expires_at
-    {
-        return Err(malformed());
-    }
-    let mut updated = offer;
-    updated.available_capacity = updated
-        .available_capacity
-        .checked_add(lease.units)
-        .filter(|capacity| *capacity <= updated.total_capacity)
-        .ok_or_else(malformed)?;
-    lease.status = LeaseStatus::Settled;
-    Ok((updated, lease))
-}
-
 pub fn expire<'a>(
     offer: Offer<'a>,
     mut lease: ComputeLease<'a>,
@@ -409,6 +398,16 @@ fn read_state<'a>(prefix: &[u8], id: [u8; 32], output: &'a mut [u8]) -> Result<&
 }
 
 #[cfg(target_arch = "wasm32")]
+fn read_optional_state<'a>(prefix: &[u8], id: [u8; 32], output: &'a mut [u8])
+    -> Result<Option<&'a [u8]>, ProgramError> {
+    let (key, length) = state_key(prefix, id)?;
+    match shared::read(shared::SharedStorageKey::new(&key[..length])?, output)? {
+        Some(written) => Ok(Some(output.get(..written).ok_or_else(malformed)?)),
+        None => Ok(None),
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
 fn write_state(prefix: &[u8], id: [u8; 32], value: &[u8]) -> Result<(), ProgramError> {
     let (key, length) = state_key(prefix, id)?;
     shared::write(shared::SharedStorageKey::new(&key[..length])?, StorageValue::new(value)?)
@@ -476,33 +475,137 @@ fn invoke(input: &[u8]) -> Result<CallResult, ProgramError> {
             emit(TOPIC_LEASE, &lease_bytes[..lease_written])?;
             Ok(CallResult::OK)
         }
-        SETTLE_LEASE | EXPIRE_LEASE => {
+        SETTLE_LEASE => Err(malformed()),
+        COMMIT_USAGE => {
+            let commitment = settle::ProviderCommitment { id: cursor.array()?,
+                lease_id: cursor.array()?, input_commitment: cursor.array()?,
+                output_digest: cursor.array()?, execution_state_root: cursor.array()?,
+                usage: settle::MeteredUsageClaim { compute_units: cursor.u64()?,
+                    memory_byte_batches: cursor.u64()?, storage_read_bytes: cursor.u64()?,
+                    storage_written_bytes: cursor.u64()?, ingress_bytes: cursor.u64()?,
+                    egress_bytes: cursor.u64()? }, payable: cursor.amount()?,
+                challenger_stake: cursor.amount()?, challenge_window_batches: cursor.u64()? };
+            cursor.finish()?;
+            let mut lease_bytes = [0; LEASE_CAPACITY];
+            let lease = decode_lease(read_state(LEASE_PREFIX, commitment.lease_id, &mut lease_bytes)?)?;
+            let mut offer_bytes = [0; OFFER_CAPACITY];
+            let offer = decode_offer(read_state(OFFER_PREFIX, lease.offer_id, &mut offer_bytes)?)?;
+            if lease.verification == VerificationModel::Attested
+                && attest::require_ready_commitment(lease.id)?
+                    != commitment.input_commitment
+            {
+                return Err(malformed());
+            }
+            let mut claim_bytes = [0; settle::CLAIM_CAPACITY];
+            absent(CLAIM_PREFIX, lease.id, &mut claim_bytes)?;
+            let mut identity = [0; ID_BYTES];
+            absent(CLAIM_ID_PREFIX, commitment.id, &mut identity)?;
+            let (claim, _) = settle::commit_usage(offer, lease, commitment, caller, height)?;
+            let written = settle::encode_claim(claim, &mut claim_bytes)?;
+            write_state(CLAIM_PREFIX, lease.id, &claim_bytes[..written])?;
+            write_state(CLAIM_ID_PREFIX, claim.id, &lease.id)?;
+            emit(TOPIC_CLAIM, &claim_bytes[..written])?;
+            Ok(CallResult::OK)
+        }
+        CHALLENGE_USAGE => {
+            let lease_id = cursor.array()?;
+            let challenge_id = cursor.array()?;
+            let stake_account = cursor.account()?;
+            let stake_seed = cursor.seed()?;
+            let stake = cursor.amount()?;
+            let contradictory = settle::ContradictingCommitment {
+                input_commitment: cursor.array()?, output_digest: cursor.array()?,
+                execution_state_root: cursor.array()?,
+                usage: settle::MeteredUsageClaim { compute_units: cursor.u64()?,
+                    memory_byte_batches: cursor.u64()?, storage_read_bytes: cursor.u64()?,
+                    storage_written_bytes: cursor.u64()?, ingress_bytes: cursor.u64()?,
+                    egress_bytes: cursor.u64()? } };
+            cursor.finish()?;
+            let mut lease_bytes = [0; LEASE_CAPACITY];
+            let lease = decode_lease(read_state(LEASE_PREFIX, lease_id, &mut lease_bytes)?)?;
+            let mut offer_bytes = [0; OFFER_CAPACITY];
+            let offer = decode_offer(read_state(OFFER_PREFIX, lease.offer_id, &mut offer_bytes)?)?;
+            let mut claim_bytes = [0; settle::CLAIM_CAPACITY];
+            let claim = settle::decode_claim(read_state(CLAIM_PREFIX, lease.id, &mut claim_bytes)?)?;
+            let mut challenge_bytes = [0; settle::CHALLENGE_CAPACITY];
+            absent(CHALLENGE_PREFIX, lease.id, &mut challenge_bytes)?;
+            let mut identity = [0; ID_BYTES];
+            absent(CHALLENGE_ID_PREFIX, challenge_id, &mut identity)?;
+            let (claim, challenge) = settle::challenge(offer, lease, claim, challenge_id,
+                caller, stake_account, stake_seed, stake, contradictory, height)?;
+            settle::fund_challenge(challenge, lease.asset)?;
+            let claim_written = settle::encode_claim(claim, &mut claim_bytes)?;
+            let challenge_written = settle::encode_challenge(challenge, &mut challenge_bytes)?;
+            write_state(CLAIM_PREFIX, lease.id, &claim_bytes[..claim_written])?;
+            write_state(CHALLENGE_PREFIX, lease.id, &challenge_bytes[..challenge_written])?;
+            write_state(CHALLENGE_ID_PREFIX, challenge.id, &lease.id)?;
+            emit(TOPIC_CLAIM, &claim_bytes[..claim_written])?;
+            emit(TOPIC_CHALLENGE, &challenge_bytes[..challenge_written])?;
+            Ok(CallResult::OK)
+        }
+        FINALIZE_USAGE => {
             let lease_id = cursor.array()?;
             cursor.finish()?;
             let mut lease_bytes = [0; LEASE_CAPACITY];
             let lease = decode_lease(read_state(LEASE_PREFIX, lease_id, &mut lease_bytes)?)?;
             let mut offer_bytes = [0; OFFER_CAPACITY];
             let offer = decode_offer(read_state(OFFER_PREFIX, lease.offer_id, &mut offer_bytes)?)?;
-            let (offer, lease, destination) = if operation == SETTLE_LEASE {
-                if lease.verification == VerificationModel::Attested {
-                    attest::require_ready(lease.id)?;
-                }
-                let (offer, lease) = settle(offer, lease, caller, height)?;
-                let destination = lease.provider_payout;
-                (offer, lease, destination)
-            } else {
-                let (offer, lease) = expire(offer, lease, height)?;
-                let destination = lease.tenant_refund;
-                (offer, lease, destination)
-            };
-            transfer::pay_from_program_account(ProgramAccountPayment::new(ProgramAccountSeed::new(lease.escrow_seed)?, lease.escrow_account, lease.asset, destination, lease.funded)?)?;
+            let mut claim_bytes = [0; settle::CLAIM_CAPACITY];
+            let claim = settle::decode_claim(read_state(CLAIM_PREFIX, lease.id, &mut claim_bytes)?)?;
+            let (offer, lease, claim, plan) =
+                settle::finalize_unchallenged(offer, lease, claim, height)?;
+            settle::execute_settlement(lease, None, plan)?;
             let mut offer_output = [0; OFFER_CAPACITY];
             let mut lease_output = [0; LEASE_CAPACITY];
             let offer_written = encode_offer(offer, &mut offer_output)?;
             let lease_written = encode_lease(lease, &mut lease_output)?;
+            let claim_written = settle::encode_claim(claim, &mut claim_bytes)?;
             write_state(OFFER_PREFIX, offer.id, &offer_output[..offer_written])?;
             write_state(LEASE_PREFIX, lease.id, &lease_output[..lease_written])?;
+            write_state(CLAIM_PREFIX, lease.id, &claim_bytes[..claim_written])?;
+            emit(TOPIC_OFFER, &offer_output[..offer_written])?;
             emit(TOPIC_LEASE, &lease_output[..lease_written])?;
+            emit(TOPIC_CLAIM, &claim_bytes[..claim_written])?;
+            Ok(CallResult::OK)
+        }
+        EXPIRE_LEASE => {
+            let lease_id = cursor.array()?;
+            cursor.finish()?;
+            let mut lease_bytes = [0; LEASE_CAPACITY];
+            let lease = decode_lease(read_state(LEASE_PREFIX, lease_id, &mut lease_bytes)?)?;
+            let mut offer_bytes = [0; OFFER_CAPACITY];
+            let offer = decode_offer(read_state(OFFER_PREFIX, lease.offer_id, &mut offer_bytes)?)?;
+            let mut claim_bytes = [0; settle::CLAIM_CAPACITY];
+            if let Some(bytes) = read_optional_state(CLAIM_PREFIX, lease.id, &mut claim_bytes)? {
+                let claim = settle::decode_claim(bytes)?;
+                let (offer, lease, claim, plan) =
+                    settle::finalize_unchallenged(offer, lease, claim, height)?;
+                settle::execute_settlement(lease, None, plan)?;
+                let mut offer_output = [0; OFFER_CAPACITY];
+                let mut lease_output = [0; LEASE_CAPACITY];
+                let offer_written = encode_offer(offer, &mut offer_output)?;
+                let lease_written = encode_lease(lease, &mut lease_output)?;
+                let claim_written = settle::encode_claim(claim, &mut claim_bytes)?;
+                write_state(OFFER_PREFIX, offer.id, &offer_output[..offer_written])?;
+                write_state(LEASE_PREFIX, lease.id, &lease_output[..lease_written])?;
+                write_state(CLAIM_PREFIX, lease.id, &claim_bytes[..claim_written])?;
+                emit(TOPIC_OFFER, &offer_output[..offer_written])?;
+                emit(TOPIC_LEASE, &lease_output[..lease_written])?;
+                emit(TOPIC_CLAIM, &claim_bytes[..claim_written])?;
+            } else {
+                let (offer, lease) = expire(offer, lease, height)?;
+                transfer::pay_from_program_account(ProgramAccountPayment::new(
+                    ProgramAccountSeed::new(lease.escrow_seed)?, lease.escrow_account,
+                    lease.asset, lease.tenant_refund, lease.funded)?)?;
+                let mut offer_output = [0; OFFER_CAPACITY];
+                let mut lease_output = [0; LEASE_CAPACITY];
+                let offer_written = encode_offer(offer, &mut offer_output)?;
+                let lease_written = encode_lease(lease, &mut lease_output)?;
+                write_state(OFFER_PREFIX, offer.id, &offer_output[..offer_written])?;
+                write_state(LEASE_PREFIX, lease.id, &lease_output[..lease_written])?;
+                emit(TOPIC_OFFER, &offer_output[..offer_written])?;
+                emit(TOPIC_LEASE, &lease_output[..lease_written])?;
+            }
             Ok(CallResult::OK)
         }
         CLOSE_OFFER => {
@@ -597,16 +700,16 @@ mod tests {
     }
 
     #[test]
-    fn funded_lease_settles_and_releases_capacity() {
+    fn funded_lease_holds_capacity_until_expiry_without_direct_settlement() {
         let provider = account(1);
         let tenant = account(4);
         let offer = offer(provider, b"stake/offer-1");
         let request = OpenLease { id: [5; 32], offer_id: offer.id, tenant, refund: tenant, escrow_account: account(6), escrow_seed: b"lease/5", units: 10, funded: Amount::from_integer(40u64), expires_at: 20 };
         let (offer, lease) = open(offer, request, tenant, 2).unwrap_or_else(|error| panic!("open: {error}"));
         assert_eq!(offer.available_capacity, 90);
-        let (offer, lease) = settle(offer, lease, provider, 19).unwrap_or_else(|error| panic!("settle: {error}"));
+        let (offer, lease) = expire(offer, lease, 20).unwrap_or_else(|error| panic!("expire: {error}"));
         assert_eq!(offer.available_capacity, 100);
-        assert_eq!(lease.status, LeaseStatus::Settled);
+        assert_eq!(lease.status, LeaseStatus::ExpiredRefunded);
     }
 
     #[test]
@@ -616,7 +719,6 @@ mod tests {
         let offer = offer(provider, b"stake/offer-1");
         let request = OpenLease { id: [5; 32], offer_id: offer.id, tenant, refund: tenant, escrow_account: account(6), escrow_seed: b"lease/5", units: 10, funded: Amount::from_integer(40u64), expires_at: 20 };
         let (offer, lease) = open(offer, request, tenant, 2).unwrap_or_else(|error| panic!("open: {error}"));
-        assert!(settle(offer, lease, provider, 20).is_err());
         let (offer, lease) = expire(offer, lease, 20).unwrap_or_else(|error| panic!("expire: {error}"));
         assert_eq!(offer.available_capacity, 100);
         assert_eq!(lease.status, LeaseStatus::ExpiredRefunded);
@@ -632,6 +734,5 @@ mod tests {
         let funded = OpenLease { funded: Amount::from_integer(40u64), ..request };
         let (offer, lease) = open(offer, funded, tenant, 2).unwrap_or_else(|error| panic!("open: {error}"));
         assert!(expire(offer, lease, 19).is_err());
-        assert!(settle(offer, lease, provider, 20).is_err());
     }
 }
