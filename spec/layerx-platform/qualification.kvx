@@ -2072,3 +2072,27 @@ symbol = "ubuntu-large integration runner capacity"
 observed = "The Docker integration workflow's prepare job did not lose a concurrency race: recent runs queued on the ubuntu-large label for exactly twenty-four hours, executed no step and were cancelled by GitHub. The workflow has no shared cancellation group, and its aggregate job correctly fails when preparation is cancelled. Changing that result to success or deleting the aggregate refusal would hide an unexecuted integration suite, so the workflow remains strict and unchanged apart from immutable action pins."
 assumption = "The repository owner must provision an online runner with the exact ubuntu-large label and adequate Docker resources, or explicitly qualify a replacement hosted runner class against the full cluster workload. Human qualification must then execute every integration matrix row at one fixed revision. No runner capacity or integration result is asserted."
 severity = "runner-capacity-gate"
+
+[observation.32.2.1]
+task = "32.2"
+file = "programs/crates/layerx-programs-runtime/src/engine.rs, programs/crates/layerx-programs-runtime/src/host/mod.rs, programs/crates/layerx-programs-runtime/src/validate.rs"
+symbol = "WasmEngine, HostLinker, ValidatedModule"
+observed = "The implementation hoists the complete versioned host-function table into one immutable engine-owned linker and gives every validated module, including modules resolved for nested frames, a shared reference to that same linker. All execution-varying meter, authority, composition, refusal and outcome state remains owned by a newly created Store. A source invariant records one linker construction, the frozen registration count and pointer identity across v1 root, nested-resolved and v2 modules."
+assumption = "Task 32.2 also requires conformance equivalence and a measured deep-composition improvement. The implementation phase forbids running tests or benchmarks, so human qualification must run make programs-test, compare receipts, fuel and refusals with the pre-hoist baseline, and publish cold and warm maximum-depth measurements. No build, test, benchmark, performance improvement or runtime result is asserted by this source implementation."
+severity = "qualification-required"
+
+[observation.32.2.2]
+task = "32.2"
+file = "spec/layerx-platform/spec.kvx, programs/crates/layerx-programs-runtime/src/engine.rs, programs/crates/layerx-programs-runtime/src/host/mod.rs"
+symbol = "task.32.2.touches, WasmEngine, HostLinker"
+observed = "The task touch set still names the pre-modularization path programs/crates/layerx-programs-runtime/src/host.rs and omits engine.rs, but task 28.1 moved the host surface to host/mod.rs and an engine-owned linker necessarily requires WasmEngine to retain it. The implementation therefore changes engine.rs and host/mod.rs in addition to the still-declared validate.rs path."
+assumption = "The source paths are treated as the necessary post-28.1 implementation scope rather than silently recreating host.rs. The task touch set should be reconciled in a later spec-maintenance step; no acceptance criterion is weakened."
+severity = "task-scope-drift"
+
+[observation.32.2.3]
+task = "32.2"
+file = "spec/layerx-platform/spec.kvx, programs/crates/layerx-programs-runtime/src/host/mod.rs, programs/crates/layerx-programs-runtime/src/validate.rs"
+symbol = "layerx_programs_runtime::host::linker, layerx_programs_runtime::validate"
+observed = "The non-executing Codify implementation gate resolved host::linker and validate.rs but refused lifecycle advancement because the declared module symbol layerx_programs_runtime::validate is not represented as a definition by the graph and the stale pre-modularization host.rs touch path cannot match a change. No runtime or acceptance failure was reported. After recording both metadata contradictions, the source-complete task was advanced manually to implemented rather than inventing a dummy symbol or recreating an obsolete file solely to satisfy tooling."
+assumption = "A later spec-maintenance pass should replace the stale graph symbol and touch path with indexable post-28.1 ownership. Human qualification still owns every compile, conformance and benchmark result; this lifecycle label asserts source implementation only."
+severity = "graph-gate-metadata"

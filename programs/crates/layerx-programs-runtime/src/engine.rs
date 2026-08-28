@@ -1,9 +1,11 @@
 //! Construction of the vendored WASM engine stripped to the deterministic subset.
 
 use core::fmt::{self, Display};
+use std::sync::Arc;
 
 use wasmi::{Config, Engine, StackLimits};
 
+use crate::host::{self, HostLinker};
 use crate::limits::ValidationLimits;
 use crate::validate::{self, AbiRevision, ValidatedModule, ValidationRefusal};
 
@@ -17,6 +19,11 @@ pub enum EngineRefusal {
         /// The engine's reason for rejecting the stack limits.
         reason: String,
     },
+    /// The immutable versioned host surface could not be registered.
+    HostLinkerConstruction {
+        /// The engine's reason for refusing the host definition.
+        reason: String,
+    },
 }
 
 impl Display for EngineRefusal {
@@ -24,6 +31,9 @@ impl Display for EngineRefusal {
         match self {
             Self::StackConfiguration { reason } => {
                 write!(f, "stack configuration refused: {reason}")
+            }
+            Self::HostLinkerConstruction { reason } => {
+                write!(f, "versioned host linker construction refused: {reason}")
             }
         }
     }
@@ -38,6 +48,7 @@ impl std::error::Error for EngineRefusal {}
 pub struct WasmEngine {
     engine: Engine,
     limits: ValidationLimits,
+    linker: Arc<HostLinker>,
 }
 
 impl WasmEngine {
@@ -46,7 +57,8 @@ impl WasmEngine {
     /// # Errors
     ///
     /// Returns [`EngineRefusal::StackConfiguration`] when the engine rejects
-    /// the declared stack limits.
+    /// the declared stack limits, or [`EngineRefusal::HostLinkerConstruction`]
+    /// when an ABI host surface cannot be sealed.
     pub fn new(limits: ValidationLimits) -> Result<Self, EngineRefusal> {
         let initial_height = INITIAL_VALUE_STACK_HEIGHT.min(limits.max_value_stack_height());
         let stack_limits = StackLimits::new(
@@ -70,9 +82,12 @@ impl WasmEngine {
             .wasm_extended_const(false)
             .consume_fuel(true)
             .floats(false);
+        let engine = Engine::new(&config);
+        let linker = construct_host_linker(&engine)?;
         Ok(Self {
-            engine: Engine::new(&config),
+            engine,
             limits,
+            linker,
         })
     }
 
@@ -80,8 +95,8 @@ impl WasmEngine {
     ///
     /// # Errors
     ///
-    /// Returns [`EngineRefusal::StackConfiguration`] when the engine rejects
-    /// the declared stack limits.
+    /// Returns an [`EngineRefusal`] when the stack limits or an ABI host
+    /// surface cannot be constructed.
     pub fn declared() -> Result<Self, EngineRefusal> {
         Self::new(ValidationLimits::declared())
     }
@@ -130,7 +145,31 @@ impl WasmEngine {
         self.limits
     }
 
+    /// Returns how many times this engine built its versioned host linker.
+    #[must_use]
+    pub fn host_linker_construction_count(&self) -> usize {
+        self.linker.construction_count()
+    }
+
+    /// Returns the frozen number of host functions registered in the linker.
+    #[must_use]
+    pub fn host_function_registration_count(&self) -> usize {
+        self.linker.registered_function_count()
+    }
+
     pub(crate) const fn inner(&self) -> &Engine {
         &self.engine
     }
+
+    pub(crate) fn host_linker(&self) -> Arc<HostLinker> {
+        Arc::clone(&self.linker)
+    }
+}
+
+fn construct_host_linker(engine: &Engine) -> Result<Arc<HostLinker>, EngineRefusal> {
+    host::linker(engine)
+        .map(Arc::new)
+        .map_err(|error| EngineRefusal::HostLinkerConstruction {
+            reason: error.to_string(),
+        })
 }

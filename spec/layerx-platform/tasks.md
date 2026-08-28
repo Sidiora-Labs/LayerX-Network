@@ -1322,7 +1322,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Invalidate on runtime version change, on ABI version change and on upgrade, and never serve an artifact compiled under a version other than the one the receipt records.
     - Prove equivalence with a differential harness executing a large activity mix twice, once with the cache disabled and once enabled, asserting identical receipts, identical state roots and identical fuel.
     - _Requirements: 39.1_
-  - [ ] 32.2 Build the host linker once per engine
+  - [ ] 32.2 Build the host linker once per engine — **Implemented - qualification pending**
     - Hoist linker construction out of the per-instantiation path so the host function table is built once per engine rather than once per instantiation and once per nested call.
     - Keep the linker immutable after construction, with per-execution state carried in the store rather than in the linker, so no execution can observe or mutate another's host state.
     - Prove the hoist changes no observable behaviour: identical receipts, identical fuel and identical refusals across the whole conformance suite.

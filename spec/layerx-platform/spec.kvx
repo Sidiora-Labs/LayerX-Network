@@ -3306,7 +3306,7 @@ reqs = ["39.1"]
 
 [task.32.2]
 title = "Build the host linker once per engine"
-status = "pending"
+status = "implemented"
 wave = 18
 requires = ["28.1"]
 do_1 = "Hoist linker construction out of the per-instantiation path so the host function table is built once per engine rather than once per instantiation and once per nested call."

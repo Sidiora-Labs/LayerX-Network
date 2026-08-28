@@ -11,7 +11,7 @@ mod signature;
 mod storage;
 mod transfer;
 
-use wasmi::{Caller, Engine, Linker};
+use wasmi::{Caller, Engine, InstancePre, Linker, Module, Store};
 
 use crate::abi::context::{ContextField, ContextRefusal, ExecutionContext};
 use crate::abi::response::{CallResponse, ResponseRefusal, ResponseRegion};
@@ -21,7 +21,6 @@ use crate::crypto::bigint;
 use crate::execute::ExecutionFault;
 use crate::fault::{ProgramFailure, RefusalClass, RefusalReason};
 use crate::meter::Meter;
-use crate::validate::AbiRevision;
 
 use self::memory::{nonnegative, read_fixed, write_guest};
 
@@ -34,6 +33,7 @@ pub(super) const STATUS_ABSENT: i32 = -7;
 pub(super) const FUEL_METERING_DISABLED: &str = "programs runtime fuel metering is disabled";
 pub(super) const COMPOSITION_REFUSED: &str = "program composition refused the call graph";
 
+/// Per-execution host state owned by a `Store`; the shared linker holds none of it.
 #[derive(Debug)]
 pub(crate) struct RuntimeState {
     meter: Meter,
@@ -50,6 +50,32 @@ pub(crate) struct RuntimeState {
 enum CandidateOutcomeRegion {
     Response(ResponseRegion),
     Failure(ProgramFailure),
+}
+
+/// The versioned host surface sealed after its one construction for an engine.
+#[derive(Debug)]
+pub(crate) struct HostLinker {
+    linker: Linker<RuntimeState>,
+    construction_count: usize,
+    registered_function_count: usize,
+}
+
+impl HostLinker {
+    pub(crate) fn instantiate(
+        &self,
+        store: &mut Store<RuntimeState>,
+        module: &Module,
+    ) -> Result<InstancePre, wasmi::Error> {
+        self.linker.instantiate(store, module)
+    }
+
+    pub(crate) const fn construction_count(&self) -> usize {
+        self.construction_count
+    }
+
+    pub(crate) const fn registered_function_count(&self) -> usize {
+        self.registered_function_count
+    }
 }
 
 impl RuntimeState {
@@ -334,23 +360,20 @@ impl RuntimeState {
 #[allow(clippy::too_many_lines)]
 pub(crate) fn linker(
     engine: &Engine,
-    revision: AbiRevision,
-) -> Result<Linker<RuntimeState>, ExecutionFault> {
+) -> Result<HostLinker, ExecutionFault> {
     let mut linker = Linker::new(engine);
     storage::register(&mut linker)?;
     events::register(&mut linker)?;
     calls::register(&mut linker)?;
-    if revision == AbiRevision::V2 {
-        crypto::register(&mut linker)?;
-        signature::register(&mut linker)?;
-        bigint::register(&mut linker)?;
-        calls::register_candidate(&mut linker)?;
-        context::register_candidate(&mut linker)?;
-        scan::register_candidate(&mut linker)?;
-        storage::register_candidate(&mut linker)?;
-        transfer::register_candidate(&mut linker)?;
-        balance::register_candidate(&mut linker)?;
-    }
+    crypto::register(&mut linker)?;
+    signature::register(&mut linker)?;
+    bigint::register(&mut linker)?;
+    calls::register_candidate(&mut linker)?;
+    context::register_candidate(&mut linker)?;
+    scan::register_candidate(&mut linker)?;
+    storage::register_candidate(&mut linker)?;
+    transfer::register_candidate(&mut linker)?;
+    balance::register_candidate(&mut linker)?;
     transfer::register(&mut linker)?;
     linker
         .func_wrap(
@@ -388,7 +411,13 @@ pub(crate) fn linker(
             },
         )
         .map_err(|error| linker_fault(&error))?;
-    Ok(linker)
+    let registered_function_count =
+        crate::abi::HOST_FUNCTIONS.len() + crate::abi::manifest::ABI_V2_HOST_FUNCTIONS.len();
+    Ok(HostLinker {
+        linker,
+        construction_count: 1,
+        registered_function_count,
+    })
 }
 
 fn encode_receipt(view: &ReceiptView) -> Vec<u8> {

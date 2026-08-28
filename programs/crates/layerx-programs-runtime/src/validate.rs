@@ -2,6 +2,7 @@
 
 use core::fmt::{self, Display};
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use wasmparser_nostd::{
     BlockType, FuncType, FunctionBody, Import, Operator, Parser, Payload, Type, TypeRef, ValType,
@@ -125,7 +126,7 @@ impl std::error::Error for ValidationRefusal {}
 #[derive(Debug)]
 pub struct ValidatedModule {
     module: wasmi::Module,
-    linker: wasmi::Linker<RuntimeState>,
+    linker: Arc<host::HostLinker>,
     byte_size: u64,
     function_count: u32,
     revision: AbiRevision,
@@ -161,6 +162,18 @@ impl ValidatedModule {
     #[must_use]
     pub const fn abi_revision(&self) -> AbiRevision {
         self.revision
+    }
+
+    /// Returns how many times the owning engine built its versioned linker.
+    #[must_use]
+    pub fn host_linker_construction_count(&self) -> usize {
+        self.linker.construction_count()
+    }
+
+    /// Returns the number of frozen host functions in this module's shared linker.
+    #[must_use]
+    pub fn host_function_registration_count(&self) -> usize {
+        self.linker.registered_function_count()
     }
 
     pub(crate) fn preflight_entrypoint(
@@ -283,7 +296,7 @@ impl ValidatedModule {
             };
             return Err(Box::new(retained_failure(store, fault)));
         }
-        let pre = match self.linker.clone().instantiate(&mut store, &self.module) {
+        let pre = match self.linker.instantiate(&mut store, &self.module) {
             Ok(pre) => pre,
             Err(error) => {
                 let fault = fault_from_error(&error);
@@ -317,7 +330,6 @@ impl ValidatedModule {
         })?;
         let pre = self
             .linker
-            .clone()
             .instantiate(&mut store, &self.module)
             .map_err(|error| (fault_from_error(&error), store.data().meter().exhaustion()))?;
         let instance = pre
@@ -415,11 +427,7 @@ pub(crate) fn validate_module(
             reason: error.to_string(),
         }
     })?;
-    let linker = host::linker(engine.inner(), revision).map_err(|error| {
-        ValidationRefusal::RejectedByEngine {
-            reason: error.to_string(),
-        }
-    })?;
+    let linker = engine.host_linker();
     Ok(ValidatedModule {
         module,
         linker,
@@ -610,4 +618,55 @@ fn operator_uses_float(operator: &Operator<'_>) -> bool {
             | Operator::I64TruncSatF64S
             | Operator::I64TruncSatF64U
     )
+}
+
+#[cfg(test)]
+mod linker_invariant_tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::calls::{ProgramCatalog, ProgramResolver};
+    use crate::test_support::add_module;
+    use crate::ProgramId;
+
+    #[test]
+    fn nested_resolution_reuses_the_engine_owned_linker() {
+        let engine = WasmEngine::declared()
+            .unwrap_or_else(|error| panic!("declared engine refused: {error}"));
+        assert_eq!(engine.host_linker_construction_count(), 1);
+        assert_eq!(
+            engine.host_function_registration_count(),
+            crate::abi::HOST_FUNCTIONS.len()
+                + crate::abi::manifest::ABI_V2_HOST_FUNCTIONS.len()
+        );
+
+        let wasm = add_module();
+        let root = engine
+            .validate(&wasm)
+            .unwrap_or_else(|error| panic!("root validation refused: {error}"));
+        let child = engine
+            .validate(&wasm)
+            .unwrap_or_else(|error| panic!("child validation refused: {error}"));
+        let candidate = engine
+            .validate_v2(&wasm)
+            .unwrap_or_else(|error| panic!("candidate validation refused: {error}"));
+        let child_program = ProgramId::new([0x42; 32])
+            .unwrap_or_else(|error| panic!("child program refused: {error}"));
+        let mut catalog = ProgramCatalog::new();
+        assert!(catalog.insert(child_program, child).is_none());
+        let resolved = match catalog.program_module(child_program) {
+            Some(module) => module,
+            None => panic!("nested resolver lost the child module"),
+        };
+
+        assert!(Arc::ptr_eq(&root.linker, &resolved.linker));
+        assert!(Arc::ptr_eq(&root.linker, &candidate.linker));
+        root.instantiate_for_qualification()
+            .unwrap_or_else(|error| panic!("root instantiation refused: {error}"));
+        resolved
+            .instantiate_for_qualification()
+            .unwrap_or_else(|error| panic!("nested instantiation refused: {error}"));
+        assert_eq!(root.host_linker_construction_count(), 1);
+        assert_eq!(resolved.host_linker_construction_count(), 1);
+    }
 }
