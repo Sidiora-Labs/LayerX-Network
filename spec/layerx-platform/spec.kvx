@@ -4025,7 +4025,7 @@ reqs = ["46.7","24.1","24.2"]
 
 [task.38.8]
 title = "Repair frozen interpreter refusal-vector stage fidelity"
-status = "pending"
+status = "implemented"
 wave = 19
 requires = ["33.4"]
 do_1 = "Correct the overflow and division refusal vectors so their declared register file admits every encoded operand."

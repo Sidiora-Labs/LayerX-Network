@@ -14,6 +14,16 @@ const REFUSAL_VECTORS: &[u8] =
 const ASSET: [u8; 32] = [1; 32];
 const RECIPIENT: [u8; 32] = [2; 32];
 
+#[derive(Clone, Copy, Debug)]
+enum RefusalStage {
+    StepCeiling,
+    NonCanonicalRepeat,
+    NestingDepth,
+    ArithmeticOverflow,
+    DivisionByZero,
+    InvalidTransferAmount,
+}
+
 fn vectors(source: &[u8]) -> Vec<Vec<u8>> {
     fn nibble(byte: u8) -> u8 {
         match byte {
@@ -137,11 +147,24 @@ fn built_interpreter_runs_success_vectors_through_the_real_candidate_runtime() {
 #[test]
 fn built_interpreter_refusals_leave_real_runtime_state_and_effects_empty() {
     let wasm = artifact();
-    for (index, script) in vectors(REFUSAL_VECTORS).iter().enumerate() {
+    let expected = [
+        RefusalStage::StepCeiling,
+        RefusalStage::NonCanonicalRepeat,
+        RefusalStage::ArithmeticOverflow,
+        RefusalStage::DivisionByZero,
+        RefusalStage::ArithmeticOverflow,
+        RefusalStage::InvalidTransferAmount,
+        RefusalStage::NestingDepth,
+        RefusalStage::ArithmeticOverflow,
+    ];
+    for (index, (script, expected_stage)) in vectors(REFUSAL_VECTORS).iter().zip(expected).enumerate() {
+        if matches!(expected_stage, RefusalStage::ArithmeticOverflow | RefusalStage::DivisionByZero) {
+            assert_eq!(script[5], 3, "{expected_stage:?} vector {index} register cardinality");
+        }
         let mut storage = Storage::new();
         let before = storage.clone();
         let record = execute(&wasm, script, &mut storage);
-        assert!(matches!(record.outcome(), CandidateActivityOutcome::Failure(_)), "vector {index}");
-        assert_eq!(storage, before, "vector {index}");
+        assert!(matches!(record.outcome(), CandidateActivityOutcome::Failure(_)), "{expected_stage:?} vector {index}");
+        assert_eq!(storage, before, "{expected_stage:?} vector {index}");
     }
 }

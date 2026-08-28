@@ -1661,7 +1661,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Keep schema inputs, generator revision and every output digest in one atomic lock update.
     - Record the current mismatch as superseded only after the canonical source and lock agree.
     - _Requirements: 46.7, 24.1, 24.2_
-  - [ ] 38.8 Repair frozen interpreter refusal-vector stage fidelity
+  - [ ] 38.8 Repair frozen interpreter refusal-vector stage fidelity — **Implemented - qualification pending**
     - Correct the overflow and division refusal vectors so their declared register file admits every encoded operand.
     - Keep each vector's intended arithmetic refusal and expected no-effect outcome unchanged.
     - Make the conformance oracle name and assert the expected refusal stage rather than accepting any earlier error.

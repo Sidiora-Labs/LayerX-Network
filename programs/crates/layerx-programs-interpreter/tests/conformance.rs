@@ -9,6 +9,17 @@ struct OracleState {
     transfers: Vec<([u8; 32], [u8; 32], i64)>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RefusalStage {
+    StepCeiling,
+    NonCanonicalRepeat,
+    NestingDepth,
+    StructuralEncoding,
+    ArithmeticOverflow,
+    DivisionByZero,
+    InvalidTransferAmount,
+}
+
 fn nibble(byte: u8) -> Option<u8> {
     match byte {
         b'0'..=b'9' => Some(byte - b'0'),
@@ -48,47 +59,59 @@ fn register(bytes: &[u8], offset: &mut usize, count: usize) -> Result<usize, ()>
     if value < count { Ok(value) } else { Err(()) }
 }
 
-fn inspect(code: &[u8], registers: usize, depth: u8, remaining: &mut u32) -> Result<(), ()> {
-    if depth > 4 { return Err(()); }
+fn inspect(code: &[u8], registers: usize, depth: u8, remaining: &mut u32) -> Result<(), RefusalStage> {
+    if depth > 4 { return Err(RefusalStage::NestingDepth); }
     let mut offset = 0;
     while offset < code.len() {
-        *remaining = remaining.checked_sub(1).ok_or(())?;
-        match take(code, &mut offset, 1)?[0] {
+        *remaining = remaining.checked_sub(1).ok_or(RefusalStage::StepCeiling)?;
+        match take(code, &mut offset, 1).map_err(|_| RefusalStage::StructuralEncoding)?[0] {
             0x00 => {}
-            0x01 => { register(code, &mut offset, registers)?; take(code, &mut offset, 8)?; }
+            0x01 => {
+                register(code, &mut offset, registers).map_err(|_| RefusalStage::StructuralEncoding)?;
+                take(code, &mut offset, 8).map_err(|_| RefusalStage::StructuralEncoding)?;
+            }
             0x02..=0x07 => {
-                register(code, &mut offset, registers)?;
-                register(code, &mut offset, registers)?;
-                register(code, &mut offset, registers)?;
+                register(code, &mut offset, registers).map_err(|_| RefusalStage::StructuralEncoding)?;
+                register(code, &mut offset, registers).map_err(|_| RefusalStage::StructuralEncoding)?;
+                register(code, &mut offset, registers).map_err(|_| RefusalStage::StructuralEncoding)?;
             }
             0x08 | 0x09 => {
-                register(code, &mut offset, registers)?;
-                let length = usize::from(take(code, &mut offset, 1)?[0]);
-                if length == 0 { return Err(()); }
-                take(code, &mut offset, length)?;
+                register(code, &mut offset, registers).map_err(|_| RefusalStage::StructuralEncoding)?;
+                let length = usize::from(take(code, &mut offset, 1).map_err(|_| RefusalStage::StructuralEncoding)?[0]);
+                if length == 0 { return Err(RefusalStage::StructuralEncoding); }
+                take(code, &mut offset, length).map_err(|_| RefusalStage::StructuralEncoding)?;
             }
             0x0a => {
-                let length = usize::from(take(code, &mut offset, 1)?[0]);
-                if length == 0 { return Err(()); }
-                take(code, &mut offset, length)?;
+                let length = usize::from(take(code, &mut offset, 1).map_err(|_| RefusalStage::StructuralEncoding)?[0]);
+                if length == 0 { return Err(RefusalStage::StructuralEncoding); }
+                take(code, &mut offset, length).map_err(|_| RefusalStage::StructuralEncoding)?;
             }
             0x0b => {
-                register(code, &mut offset, registers)?;
-                let asset = take(code, &mut offset, 32)?;
-                let recipient = take(code, &mut offset, 32)?;
-                if asset.iter().all(|byte| *byte == 0) || recipient.iter().all(|byte| *byte == 0) { return Err(()); }
+                register(code, &mut offset, registers).map_err(|_| RefusalStage::StructuralEncoding)?;
+                let asset = take(code, &mut offset, 32).map_err(|_| RefusalStage::StructuralEncoding)?;
+                let recipient = take(code, &mut offset, 32).map_err(|_| RefusalStage::StructuralEncoding)?;
+                if asset.iter().all(|byte| *byte == 0) || recipient.iter().all(|byte| *byte == 0) {
+                    return Err(RefusalStage::StructuralEncoding);
+                }
             }
             0x0c => {
-                let count = u16::from_be_bytes(take(code, &mut offset, 2)?.try_into().map_err(|_| ())?);
-                let length = usize::from(u16::from_be_bytes(take(code, &mut offset, 2)?.try_into().map_err(|_| ())?));
-                if count == 0 || length == 0 { return Err(()); }
-                let body = take(code, &mut offset, length)?;
+                let count = u16::from_be_bytes(take(code, &mut offset, 2).map_err(|_| RefusalStage::StructuralEncoding)?
+                    .try_into().map_err(|_| RefusalStage::StructuralEncoding)?);
+                let length = usize::from(u16::from_be_bytes(
+                    take(code, &mut offset, 2).map_err(|_| RefusalStage::StructuralEncoding)?
+                        .try_into().map_err(|_| RefusalStage::StructuralEncoding)?,
+                ));
+                if count == 0 { return Err(RefusalStage::NonCanonicalRepeat); }
+                if length == 0 { return Err(RefusalStage::StructuralEncoding); }
+                let body = take(code, &mut offset, length).map_err(|_| RefusalStage::StructuralEncoding)?;
                 let mut body_remaining = 4_096;
-                inspect(body, registers, depth.checked_add(1).ok_or(())?, &mut body_remaining)?;
-                let body_steps = 4_096_u32.checked_sub(body_remaining).ok_or(())?;
-                *remaining = remaining.checked_sub(body_steps.checked_mul(u32::from(count)).ok_or(())?).ok_or(())?;
+                inspect(body, registers, depth.checked_add(1).ok_or(RefusalStage::NestingDepth)?, &mut body_remaining)?;
+                let body_steps = 4_096_u32.checked_sub(body_remaining).ok_or(RefusalStage::StepCeiling)?;
+                *remaining = remaining.checked_sub(
+                    body_steps.checked_mul(u32::from(count)).ok_or(RefusalStage::StepCeiling)?,
+                ).ok_or(RefusalStage::StepCeiling)?;
             }
-            _ => return Err(()),
+            _ => return Err(RefusalStage::StructuralEncoding),
         }
     }
     Ok(())
@@ -101,35 +124,39 @@ fn execute_block(
     state: &mut OracleState,
     steps: &mut u32,
     ceiling: u32,
-) -> Result<bool, ()> {
+) -> Result<bool, RefusalStage> {
     let mut offset = 0;
     while offset < code.len() {
-        *steps = steps.checked_add(1).ok_or(())?;
-        if *steps > ceiling { return Err(()); }
-        match take(code, &mut offset, 1)?[0] {
+        *steps = steps.checked_add(1).ok_or(RefusalStage::StepCeiling)?;
+        if *steps > ceiling { return Err(RefusalStage::StepCeiling); }
+        match take(code, &mut offset, 1).map_err(|_| RefusalStage::StructuralEncoding)?[0] {
             0x00 => return Ok(true),
             0x01 => {
-                let destination = register(code, &mut offset, register_count)?;
-                registers[destination] = i64::from_be_bytes(take(code, &mut offset, 8)?.try_into().map_err(|_| ())?);
+                let destination = register(code, &mut offset, register_count).map_err(|_| RefusalStage::StructuralEncoding)?;
+                registers[destination] = i64::from_be_bytes(
+                    take(code, &mut offset, 8).map_err(|_| RefusalStage::StructuralEncoding)?
+                        .try_into().map_err(|_| RefusalStage::StructuralEncoding)?,
+                );
             }
             opcode @ 0x02..=0x07 => {
-                let destination = register(code, &mut offset, register_count)?;
-                let left = register(code, &mut offset, register_count)?;
-                let right = register(code, &mut offset, register_count)?;
+                let destination = register(code, &mut offset, register_count).map_err(|_| RefusalStage::StructuralEncoding)?;
+                let left = register(code, &mut offset, register_count).map_err(|_| RefusalStage::StructuralEncoding)?;
+                let right = register(code, &mut offset, register_count).map_err(|_| RefusalStage::StructuralEncoding)?;
                 registers[destination] = match opcode {
-                    0x02 => registers[left].checked_add(registers[right]).ok_or(())?,
-                    0x03 => registers[left].checked_sub(registers[right]).ok_or(())?,
-                    0x04 => registers[left].checked_mul(registers[right]).ok_or(())?,
-                    0x05 => registers[left].checked_div(registers[right]).ok_or(())?,
+                    0x02 => registers[left].checked_add(registers[right]).ok_or(RefusalStage::ArithmeticOverflow)?,
+                    0x03 => registers[left].checked_sub(registers[right]).ok_or(RefusalStage::ArithmeticOverflow)?,
+                    0x04 => registers[left].checked_mul(registers[right]).ok_or(RefusalStage::ArithmeticOverflow)?,
+                    0x05 if registers[right] == 0 => return Err(RefusalStage::DivisionByZero),
+                    0x05 => registers[left].checked_div(registers[right]).ok_or(RefusalStage::ArithmeticOverflow)?,
                     0x06 => i64::from(registers[left] == registers[right]),
                     0x07 => i64::from(registers[left] < registers[right]),
-                    _ => return Err(()),
+                    _ => return Err(RefusalStage::StructuralEncoding),
                 };
             }
             opcode @ (0x08 | 0x09) => {
-                let selected = register(code, &mut offset, register_count)?;
-                let length = usize::from(take(code, &mut offset, 1)?[0]);
-                let key = take(code, &mut offset, length)?;
+                let selected = register(code, &mut offset, register_count).map_err(|_| RefusalStage::StructuralEncoding)?;
+                let length = usize::from(take(code, &mut offset, 1).map_err(|_| RefusalStage::StructuralEncoding)?[0]);
+                let key = take(code, &mut offset, length).map_err(|_| RefusalStage::StructuralEncoding)?;
                 if opcode == 0x08 {
                     registers[selected] = state.storage.iter()
                         .find(|(candidate, _)| candidate == key).map_or(0, |(_, value)| *value);
@@ -140,26 +167,32 @@ fn execute_block(
                 }
             }
             0x0a => {
-                let length = usize::from(take(code, &mut offset, 1)?[0]);
-                let key = take(code, &mut offset, length)?;
+                let length = usize::from(take(code, &mut offset, 1).map_err(|_| RefusalStage::StructuralEncoding)?[0]);
+                let key = take(code, &mut offset, length).map_err(|_| RefusalStage::StructuralEncoding)?;
                 state.storage.retain(|(candidate, _)| candidate != key);
             }
             0x0b => {
-                let amount = register(code, &mut offset, register_count)?;
-                let asset = take(code, &mut offset, 32)?.try_into().map_err(|_| ())?;
-                let recipient = take(code, &mut offset, 32)?.try_into().map_err(|_| ())?;
-                if registers[amount] <= 0 { return Err(()); }
+                let amount = register(code, &mut offset, register_count).map_err(|_| RefusalStage::StructuralEncoding)?;
+                let asset = take(code, &mut offset, 32).map_err(|_| RefusalStage::StructuralEncoding)?
+                    .try_into().map_err(|_| RefusalStage::StructuralEncoding)?;
+                let recipient = take(code, &mut offset, 32).map_err(|_| RefusalStage::StructuralEncoding)?
+                    .try_into().map_err(|_| RefusalStage::StructuralEncoding)?;
+                if registers[amount] <= 0 { return Err(RefusalStage::InvalidTransferAmount); }
                 state.transfers.push((asset, recipient, registers[amount]));
             }
             0x0c => {
-                let count = u16::from_be_bytes(take(code, &mut offset, 2)?.try_into().map_err(|_| ())?);
-                let length = usize::from(u16::from_be_bytes(take(code, &mut offset, 2)?.try_into().map_err(|_| ())?));
-                let body = take(code, &mut offset, length)?;
+                let count = u16::from_be_bytes(take(code, &mut offset, 2).map_err(|_| RefusalStage::StructuralEncoding)?
+                    .try_into().map_err(|_| RefusalStage::StructuralEncoding)?);
+                let length = usize::from(u16::from_be_bytes(
+                    take(code, &mut offset, 2).map_err(|_| RefusalStage::StructuralEncoding)?
+                        .try_into().map_err(|_| RefusalStage::StructuralEncoding)?,
+                ));
+                let body = take(code, &mut offset, length).map_err(|_| RefusalStage::StructuralEncoding)?;
                 for _ in 0..count {
                     if execute_block(body, register_count, registers, state, steps, ceiling)? { return Ok(true); }
                 }
             }
-            _ => return Err(()),
+            _ => return Err(RefusalStage::StructuralEncoding),
         }
     }
     Ok(false)
@@ -174,12 +207,37 @@ fn oracle(script: &[u8]) -> Result<(OracleState, u32), ()> {
     if ceiling == 0 || ceiling > 4_096 || length == 0 || 10_usize.checked_add(length) != Some(script.len()) { return Err(()); }
     let code = &script[10..];
     let mut remaining = ceiling;
-    inspect(code, registers, 0, &mut remaining)?;
+    inspect(code, registers, 0, &mut remaining).map_err(|_| ())?;
     let mut state = OracleState::default();
     let mut values = [0_i64; 16];
     let mut steps = 0;
-    execute_block(code, registers, &mut values, &mut state, &mut steps, ceiling)?;
+    execute_block(code, registers, &mut values, &mut state, &mut steps, ceiling).map_err(|_| ())?;
     Ok((state, steps))
+}
+
+fn refusal_stage(script: &[u8]) -> (RefusalStage, OracleState) {
+    if script.len() < 10 || script.len() > 4_096 || &script[..4] != b"LXSI" || script[4] != 1 {
+        return (RefusalStage::StructuralEncoding, OracleState::default());
+    }
+    let registers = usize::from(script[5]);
+    let ceiling = u32::from(u16::from_be_bytes([script[6], script[7]]));
+    let length = usize::from(u16::from_be_bytes([script[8], script[9]]));
+    if registers == 0 || registers > 16 || ceiling == 0 || ceiling > 4_096 || length == 0
+        || 10_usize.checked_add(length) != Some(script.len())
+    {
+        return (RefusalStage::StructuralEncoding, OracleState::default());
+    }
+    let code = &script[10..];
+    let mut remaining = ceiling;
+    if let Err(stage) = inspect(code, registers, 0, &mut remaining) {
+        return (stage, OracleState::default());
+    }
+    let mut staged = OracleState::default();
+    let mut values = [0_i64; 16];
+    let mut steps = 0;
+    let stage = execute_block(code, registers, &mut values, &mut staged, &mut steps, ceiling)
+        .expect_err("refusal vector unexpectedly succeeded");
+    (stage, OracleState::default())
 }
 
 #[test]
@@ -208,13 +266,23 @@ fn fixed_opcode_oracle_freezes_every_success_effect_and_step() {
 fn fixed_refusals_cover_structure_arithmetic_amount_and_depth_without_effects() {
     let scripts = vectors(REFUSALS);
     assert_eq!(scripts.len(), 8);
-    for (index, script) in scripts.iter().enumerate() {
+    let expected = [
+        RefusalStage::StepCeiling,
+        RefusalStage::NonCanonicalRepeat,
+        RefusalStage::ArithmeticOverflow,
+        RefusalStage::DivisionByZero,
+        RefusalStage::ArithmeticOverflow,
+        RefusalStage::InvalidTransferAmount,
+        RefusalStage::NestingDepth,
+        RefusalStage::ArithmeticOverflow,
+    ];
+    for (index, (script, expected_stage)) in scripts.iter().zip(expected).enumerate() {
         let production_submission = Interpreter::validate(script);
         if matches!(index, 0 | 1 | 6) {
             assert!(production_submission.is_err());
         } else {
             production_submission.unwrap_or_else(|error| panic!("runtime refusal vector {index}: {error}"));
         }
-        assert!(oracle(script).is_err());
+        assert_eq!(refusal_stage(script), (expected_stage, OracleState::default()), "vector {index}");
     }
 }
