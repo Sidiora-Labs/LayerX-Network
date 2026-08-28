@@ -131,6 +131,11 @@ impl ElementSegmentEntity {
             .unwrap_or(&[])
     }
 
+    /// Returns whether this instantiated segment has been dropped.
+    pub(crate) fn is_dropped(&self) -> bool {
+        self.items.is_none()
+    }
+
     /// Drops the items of the [`ElementSegmentEntity`].
     pub fn drop_items(&mut self) {
         self.items = None;

@@ -1,0 +1,23 @@
+[vector]
+format = "layerx_programs_runtime::ArbitrationExecutionState::canonical_bytes"
+commitment_domain = "layerx-programs-arbitration-step-commitment-v2\\0"
+commitment_version = 2
+legacy_version = 1
+legacy_arbitration_eligible = false
+source_case = "tests/execution_trace.rs::ordinary_observer_emits_complete_v2_arbitration_state"
+evidence_hex_status = "qualification-required"
+evidence_hex = ""
+
+[coverage.engine]
+source = "ordinary-runtime-observer"
+cases = ["table.get", "table.set", "table.grow", "table.fill", "table.copy", "call_indirect", "return_call_indirect", "memory.init", "data.drop", "table.init", "elem.drop"]
+
+[coverage.host]
+source = "ordinary-authorized-runtime"
+cases = ["storage-baseline", "storage-overlay", "receipt-oracle", "balance-oracle", "authorization", "protocol-context", "access-declaration", "events", "program-calls", "transfers", "namespace-drops", "response", "refusal", "composition"]
+
+[coverage.identity]
+cases = ["module-code", "input", "runtime-version", "abi-version", "fee-schedule", "metering-schedule", "trace-policy", "host-base-root", "receipt-oracle-root", "balance-oracle-root"]
+
+[qualification]
+required = "Populate evidence_hex only by executing the named ordinary observer source case, then compare exact bytes across separately attested supported runners."

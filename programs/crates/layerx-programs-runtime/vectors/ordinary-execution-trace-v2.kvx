@@ -1,5 +1,5 @@
 [vector]
-format = "layerx_programs_runtime::TracedExecutionRecord::canonical_evidence"
+format = "layerx_programs_runtime::TracedExecutionRecord::canonical_evidence-v2"
 source_case = "tests/execution_trace.rs::ordinary_observer_trace_is_the_complete_canonical_record"
 module_factory = "tests/execution_trace.rs::state_rich_module"
 entrypoint = "run"

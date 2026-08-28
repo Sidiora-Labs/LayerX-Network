@@ -90,6 +90,11 @@ impl DataSegmentEntity {
             .unwrap_or_else(|| &[])
     }
 
+    /// Returns whether this instantiated segment has been dropped.
+    pub(crate) fn is_dropped(&self) -> bool {
+        self.bytes.is_none()
+    }
+
     /// Drops the bytes of the [`DataSegmentEntity`].
     pub fn drop_bytes(&mut self) {
         self.bytes = None;

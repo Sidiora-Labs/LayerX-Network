@@ -150,9 +150,9 @@ fn ordinary_observer_trace_is_the_complete_canonical_record() {
     let evidence = record.canonical_evidence()
         .unwrap_or_else(|error| panic!("ordinary trace evidence refused: {error}"));
     let execution = record.execution.canonical_evidence();
-    let trace = record.trace.canonical_bytes()
+    let trace = record.trace.canonical_arbitration_bytes()
         .unwrap_or_else(|error| panic!("ordinary trace encoding refused: {error}"));
-    let mut complete = b"LXP/program-traced-execution/v1\0".to_vec();
+    let mut complete = b"LXP/program-traced-execution/v2\0".to_vec();
     complete.extend_from_slice(&u32::try_from(execution.len())
         .unwrap_or_else(|_| panic!("execution evidence exceeds u32")).to_be_bytes());
     complete.extend_from_slice(&execution);
@@ -160,6 +160,36 @@ fn ordinary_observer_trace_is_the_complete_canonical_record() {
         .unwrap_or_else(|_| panic!("trace evidence exceeds u32")).to_be_bytes());
     complete.extend_from_slice(&trace);
     assert_eq!(evidence, complete);
+}
+
+#[test]
+fn ordinary_observer_emits_complete_v2_arbitration_state() {
+    let record = traced_state_rich_call();
+    assert!(record.trace.is_arbitration_eligible());
+    assert_eq!(
+        record.trace.arbitration_steps().len(),
+        record.trace.steps().len(),
+    );
+    for step in record.trace.arbitration_steps() {
+        assert!(step.pre_commitment.arbitration_eligible());
+        assert!(step.post_commitment.arbitration_eligible());
+        assert!(!step.pre_state.engine_state.is_empty());
+        assert!(!step.post_state.engine_state.is_empty());
+        assert_ne!(step.pre_state.identity.module_code_hash, [0; 32]);
+        assert_ne!(step.pre_state.identity.input_digest, [0; 32]);
+        assert_eq!(
+            step.pre_commitment,
+            layerx_programs_runtime::ArbitrationStepCommitment::from_state(
+                step.pre_state.as_ref(),
+            ).unwrap_or_else(|error| panic!("pre-state v2 commitment refused: {error}")),
+        );
+        assert_eq!(
+            step.post_commitment,
+            layerx_programs_runtime::ArbitrationStepCommitment::from_state(
+                step.post_state.as_ref(),
+            ).unwrap_or_else(|error| panic!("post-state v2 commitment refused: {error}")),
+        );
+    }
 }
 
 #[test]

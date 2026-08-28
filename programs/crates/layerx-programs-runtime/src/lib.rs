@@ -125,11 +125,17 @@ pub use calls::{
     DEFAULT_MAX_CALL_GRAPH_EDGES, DEFAULT_MAX_COMPOSITION_DEPTH, DEFAULT_MAX_PROGRAM_VISITS,
 };
 pub use commit::{
-    step_commitment_fuel, CommitmentError, ExecutionControlFrame, ExecutionFrame, ExecutionGlobal, ExecutionState,
-    ExecutionStep, ExecutionTrace, ExecutionTraceIdentity, ExecutionValue, StepCommitment,
+    arbitration_step_commitment_fuel, arbitration_step_commitment_fuel_with_host,
+    arbitration_step_state_bytes, step_commitment_fuel,
+    ArbitrationExecutionIdentity, ArbitrationExecutionState,
+    ArbitrationExecutionStep, ArbitrationStepCommitment, CommitmentError, ExecutionControlFrame,
+    ExecutionFrame, ExecutionGlobal, ExecutionState, ExecutionStep, ExecutionTrace,
+    ExecutionTraceIdentity, ExecutionValue, StepCommitment,
     StorageOverlayEntry, TracePolicy,
-    MAX_STEP_INSTRUCTION_BYTES, MAX_STEP_STATE_BYTES, MAX_TRACE_COMMITMENTS,
-    MAX_TRACE_STATE_BYTES, STEP_COMMITMENT_BASE_FUEL,
+    ARBITRATION_STEP_COMMITMENT_DOMAIN, ARBITRATION_STEP_COMMITMENT_VERSION,
+    MAX_ARBITRATION_ENGINE_STATE_BYTES, MAX_ARBITRATION_HOST_STATE_BYTES,
+    MAX_ARBITRATION_STATE_BYTES, MAX_STEP_INSTRUCTION_BYTES, MAX_STEP_STATE_BYTES,
+    MAX_TRACE_COMMITMENTS, MAX_TRACE_STATE_BYTES, STEP_COMMITMENT_BASE_FUEL,
     STEP_COMMITMENT_DOMAIN, STEP_COMMITMENT_FUEL_PER_BYTE, STEP_COMMITMENT_VERSION,
 };
 pub use crypto::{hash_bytes, HashAlgorithm};

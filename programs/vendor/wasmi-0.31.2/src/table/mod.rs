@@ -296,6 +296,11 @@ impl TableEntity {
         self.elements.get(index as usize).copied()
     }
 
+    /// Returns all table entries in canonical index order.
+    pub(crate) fn elements(&self) -> &[UntypedValue] {
+        &self.elements
+    }
+
     /// Sets the [`Value`] of this [`Table`] at `index`.
     ///
     /// # Errors

@@ -11,6 +11,12 @@ use crate::meter::MeteredUsage;
 pub const STEP_COMMITMENT_DOMAIN: &[u8] = b"layerx-programs-step-commitment-v1\0";
 /// Version of the frozen canonical execution-state encoding.
 pub const STEP_COMMITMENT_VERSION: u16 = 1;
+/// Arbitration-capable execution-state encoding. Version one remains frozen
+/// receipt evidence but is not a complete single-step pre-state.
+pub const ARBITRATION_STEP_COMMITMENT_VERSION: u16 = 2;
+/// Domain separating complete arbitration commitments from legacy v1 state.
+pub const ARBITRATION_STEP_COMMITMENT_DOMAIN: &[u8] =
+    b"layerx-programs-arbitration-step-commitment-v2\0";
 /// Fuel charged for the fixed work of producing one commitment.
 pub const STEP_COMMITMENT_BASE_FUEL: u64 = 32;
 /// Fuel charged for each byte in the committed canonical state.
@@ -23,6 +29,12 @@ pub const MAX_TRACE_COMMITMENTS: usize = 65_536;
 pub const MAX_STEP_INSTRUCTION_BYTES: usize = 65_536;
 /// Aggregate canonical state bytes retained by one trace.
 pub const MAX_TRACE_STATE_BYTES: u64 = 64 * 1_024 * 1_024;
+/// Maximum canonical engine-owned extension in one arbitration state.
+pub const MAX_ARBITRATION_ENGINE_STATE_BYTES: usize = 32 * 1_024 * 1_024;
+/// Maximum canonical host-owned extension in one arbitration state.
+pub const MAX_ARBITRATION_HOST_STATE_BYTES: usize = 32 * 1_024 * 1_024;
+/// Maximum complete v2 state evidence retained or encoded for one boundary.
+pub const MAX_ARBITRATION_STATE_BYTES: usize = 64 * 1_024 * 1_024;
 
 /// Immutable execution identity bound into every state commitment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,6 +42,45 @@ pub struct ExecutionTraceIdentity {
     pub module_code_hash: [u8; 32],
     pub input_digest: [u8; 32],
     pub execution_parameters_digest: [u8; 32],
+}
+
+/// Version-addressed identity for a state that is eligible for arbitration.
+/// Immutable host inputs are authenticated here instead of copied into every
+/// mutable boundary snapshot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ArbitrationExecutionIdentity {
+    pub module_code_hash: [u8; 32],
+    pub input_digest: [u8; 32],
+    pub runtime_version: u16,
+    pub abi_version: u16,
+    pub fee_schedule_version: u32,
+    pub metering_schedule_version: u32,
+    pub trace_policy: TracePolicy,
+    pub host_base_state_root: [u8; 32],
+    pub receipt_oracle_root: [u8; 32],
+    pub balance_oracle_root: [u8; 32],
+}
+
+/// Complete version-two arbitration pre-state. `legacy` preserves the frozen
+/// v1 fields while the canonical engine and host extensions cover every
+/// transition-determining component that v1 omitted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArbitrationExecutionState {
+    pub identity: ArbitrationExecutionIdentity,
+    pub legacy: Arc<ExecutionState>,
+    pub engine_state: Vec<u8>,
+    pub host_state_root: [u8; 32],
+    pub host_state_bytes: u64,
+}
+
+/// Digest and exact accounting metadata for an arbitration-capable boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ArbitrationStepCommitment {
+    pub version: u16,
+    pub step_index: u64,
+    pub digest: [u8; 32],
+    pub encoded_state_bytes: u32,
+    pub commitment_fuel: u64,
 }
 
 /// Integer value admitted by the deterministic Programs execution subset.
@@ -108,6 +159,18 @@ pub struct ExecutionStep {
     pub post_commitment: StepCommitment,
 }
 
+/// One exact source transition with complete v2 arbitration state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArbitrationExecutionStep {
+    pub instruction: Vec<u8>,
+    pub instruction_fuel: u64,
+    pub memory_expansion_bytes: u64,
+    pub pre_state: Arc<ArbitrationExecutionState>,
+    pub post_state: Arc<ArbitrationExecutionState>,
+    pub pre_commitment: ArbitrationStepCommitment,
+    pub post_commitment: ArbitrationStepCommitment,
+}
+
 /// Digest and exact accounting metadata for one committed step boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StepCommitment {
@@ -162,6 +225,10 @@ pub struct ExecutionTrace {
     steps: Vec<ExecutionStep>,
     total_commitment_fuel: u64,
     total_state_bytes: u64,
+    arbitration_commitments: Vec<ArbitrationStepCommitment>,
+    arbitration_steps: Vec<ArbitrationExecutionStep>,
+    total_arbitration_commitment_fuel: u64,
+    total_arbitration_state_bytes: u64,
 }
 
 impl ExecutionTrace {
@@ -173,6 +240,24 @@ impl ExecutionTrace {
             steps: Vec::new(),
             total_commitment_fuel: 0,
             total_state_bytes: 0,
+            arbitration_commitments: Vec::new(),
+            arbitration_steps: Vec::new(),
+            total_arbitration_commitment_fuel: 0,
+            total_arbitration_state_bytes: 0,
+        }
+    }
+
+    pub(crate) fn with_exact_capacity(policy: TracePolicy, steps: usize, states: usize) -> Self {
+        Self {
+            policy,
+            commitments: Vec::with_capacity(states),
+            steps: Vec::with_capacity(steps),
+            total_commitment_fuel: 0,
+            total_state_bytes: 0,
+            arbitration_commitments: Vec::with_capacity(states),
+            arbitration_steps: Vec::with_capacity(steps),
+            total_arbitration_commitment_fuel: 0,
+            total_arbitration_state_bytes: 0,
         }
     }
 
@@ -190,6 +275,31 @@ impl ExecutionTrace {
 
     #[must_use]
     pub const fn total_state_bytes(&self) -> u64 { self.total_state_bytes }
+
+    #[must_use]
+    pub const fn total_arbitration_commitment_fuel(&self) -> u64 {
+        self.total_arbitration_commitment_fuel
+    }
+
+    #[must_use]
+    pub const fn total_arbitration_state_bytes(&self) -> u64 {
+        self.total_arbitration_state_bytes
+    }
+
+    #[must_use]
+    pub fn arbitration_commitments(&self) -> &[ArbitrationStepCommitment] {
+        &self.arbitration_commitments
+    }
+
+    #[must_use]
+    pub fn arbitration_steps(&self) -> &[ArbitrationExecutionStep] {
+        &self.arbitration_steps
+    }
+
+    #[must_use]
+    pub const fn is_arbitration_eligible(&self) -> bool {
+        !self.arbitration_steps.is_empty()
+    }
 
     pub fn record(&mut self, state: &ExecutionState) -> Result<Option<StepCommitment>, CommitmentError> {
         if state.step_index % self.policy.interval != 0 {
@@ -256,6 +366,79 @@ impl ExecutionTrace {
         Ok(())
     }
 
+    pub(crate) fn record_arbitration_step(
+        &mut self,
+        step: ArbitrationExecutionStep,
+    ) -> Result<(), CommitmentError> {
+        let expected_post = step.pre_state.legacy.step_index.checked_add(1)
+            .ok_or(CommitmentError::InvalidStepTransition)?;
+        if step.instruction.is_empty() || step.instruction.len() > MAX_STEP_INSTRUCTION_BYTES {
+            return Err(CommitmentError::InvalidInstructionEncoding);
+        }
+        if step.post_state.legacy.step_index != expected_post
+            || step.pre_commitment.step_index != step.pre_state.legacy.step_index
+            || step.post_commitment.step_index != step.post_state.legacy.step_index
+            || !step.pre_commitment.arbitration_eligible()
+            || !step.post_commitment.arbitration_eligible()
+        {
+            return Err(CommitmentError::InvalidStepTransition);
+        }
+        if self.arbitration_steps.len() >= MAX_TRACE_COMMITMENTS {
+            return Err(CommitmentError::CommitmentLimit { limit: MAX_TRACE_COMMITMENTS });
+        }
+        let mut additions = [None, None];
+        let mut addition_count = 0_usize;
+        let mut next_fuel = self.total_arbitration_commitment_fuel;
+        let mut next_bytes = self.total_arbitration_state_bytes;
+        for commitment in [step.pre_commitment, step.post_commitment] {
+            if self.arbitration_commitments.last().map_or(
+                false,
+                |previous| previous.step_index == commitment.step_index,
+            ) || additions[..addition_count].iter().flatten().any(
+                |previous: &ArbitrationStepCommitment| previous.step_index == commitment.step_index,
+            ) {
+                continue;
+            }
+            let previous_index = additions[..addition_count].iter().flatten().last()
+                .map(|previous| previous.step_index)
+                .or_else(|| self.arbitration_commitments.last().map(|previous| previous.step_index));
+            if previous_index.is_some_and(|previous| previous >= commitment.step_index) {
+                return Err(CommitmentError::InvalidStepTransition);
+            }
+            next_fuel = next_fuel
+                .checked_add(commitment.commitment_fuel)
+                .ok_or(CommitmentError::CostOverflow)?;
+            next_bytes = next_bytes
+                .checked_add(u64::from(commitment.encoded_state_bytes))
+                .ok_or(CommitmentError::CostOverflow)?;
+            if next_bytes > MAX_TRACE_STATE_BYTES {
+                return Err(CommitmentError::TraceByteLimit {
+                    attempted: next_bytes,
+                    limit: MAX_TRACE_STATE_BYTES,
+                });
+            }
+            additions[addition_count] = Some(commitment);
+            addition_count += 1;
+        }
+        next_bytes = next_bytes
+            .checked_add(
+                u64::try_from(step.instruction.len())
+                    .map_err(|_| CommitmentError::CostOverflow)?,
+            )
+            .ok_or(CommitmentError::CostOverflow)?;
+        if next_bytes > MAX_TRACE_STATE_BYTES {
+            return Err(CommitmentError::TraceByteLimit {
+                attempted: next_bytes,
+                limit: MAX_TRACE_STATE_BYTES,
+            });
+        }
+        self.total_arbitration_commitment_fuel = next_fuel;
+        self.total_arbitration_state_bytes = next_bytes;
+        self.arbitration_commitments.extend(additions.into_iter().flatten());
+        self.arbitration_steps.push(step);
+        Ok(())
+    }
+
     /// Receipt encoding binds both declared policy and the ordered chain.
     pub fn canonical_bytes(&self) -> Result<Vec<u8>, CommitmentError> {
         let mut bytes = Vec::with_capacity(20 + self.commitments.len() * 52);
@@ -270,6 +453,46 @@ impl ExecutionTrace {
         }
         bytes.extend_from_slice(&self.total_commitment_fuel.to_be_bytes());
         bytes.extend_from_slice(&self.total_state_bytes.to_be_bytes());
+        Ok(bytes)
+    }
+
+
+    /// Canonical arbitration evidence. Legacy commitments remain embedded for
+    /// receipt compatibility, but eligibility is established only by the
+    /// complete v2 chain appended here.
+    pub fn canonical_arbitration_bytes(&self) -> Result<Vec<u8>, CommitmentError> {
+        if self.arbitration_commitments.is_empty() || self.arbitration_steps.is_empty() {
+            return Err(CommitmentError::LegacyCommitmentNotArbitrable);
+        }
+        let legacy = self.canonical_bytes()?;
+        let per_commitment = 2_usize + 8 + 32 + 4 + 8;
+        let commitment_bytes = self.arbitration_commitments.len()
+            .checked_mul(per_commitment)
+            .ok_or(CommitmentError::CostOverflow)?;
+        let capacity = 2_usize.checked_add(4).and_then(|bytes| bytes.checked_add(legacy.len()))
+            .and_then(|bytes| bytes.checked_add(4))
+            .and_then(|bytes| bytes.checked_add(commitment_bytes))
+            .and_then(|bytes| bytes.checked_add(16))
+            .ok_or(CommitmentError::CostOverflow)?;
+        if capacity > MAX_ARBITRATION_STATE_BYTES {
+            return Err(CommitmentError::ArbitrationStateTooLarge {
+                bytes: capacity,
+                limit: MAX_ARBITRATION_STATE_BYTES,
+            });
+        }
+        let mut bytes = Vec::with_capacity(capacity);
+        bytes.extend_from_slice(&ARBITRATION_STEP_COMMITMENT_VERSION.to_be_bytes());
+        put_bytes(&mut bytes, &legacy)?;
+        put_len(&mut bytes, self.arbitration_commitments.len())?;
+        for commitment in &self.arbitration_commitments {
+            bytes.extend_from_slice(&commitment.version.to_be_bytes());
+            bytes.extend_from_slice(&commitment.step_index.to_be_bytes());
+            bytes.extend_from_slice(&commitment.digest);
+            bytes.extend_from_slice(&commitment.encoded_state_bytes.to_be_bytes());
+            bytes.extend_from_slice(&commitment.commitment_fuel.to_be_bytes());
+        }
+        bytes.extend_from_slice(&self.total_arbitration_commitment_fuel.to_be_bytes());
+        bytes.extend_from_slice(&self.total_arbitration_state_bytes.to_be_bytes());
         Ok(bytes)
     }
 }
@@ -290,6 +513,59 @@ impl StepCommitment {
             commitment_fuel,
         })
     }
+
+    /// Version-one commitments are retained for receipt compatibility only.
+    /// They omit transition-determining state and cannot be used by the
+    /// single-step arbiter.
+    #[must_use]
+    pub const fn arbitration_eligible(self) -> bool { false }
+}
+
+impl ArbitrationStepCommitment {
+    pub fn from_state(state: &ArbitrationExecutionState) -> Result<Self, CommitmentError> {
+        let encoded = state.canonical_bytes()?;
+        let encoded_state_bytes = u32::try_from(encoded.len()).map_err(|_| {
+            CommitmentError::ArbitrationStateTooLarge {
+                bytes: encoded.len(),
+                limit: MAX_ARBITRATION_STATE_BYTES,
+            }
+        })?;
+        let legacy_state_bytes = u64::try_from(state.legacy.canonical_bytes()?.len())
+            .map_err(|_| CommitmentError::CostOverflow)?;
+        let engine_state_bytes = u64::try_from(state.engine_state.len())
+            .map_err(|_| CommitmentError::CostOverflow)?;
+        let commitment_fuel = arbitration_step_commitment_fuel_with_host(
+            legacy_state_bytes,
+            engine_state_bytes,
+            state.host_state_bytes,
+        )?;
+        if state.host_state_bytes == 0
+            && commitment_fuel != step_commitment_fuel(u64::from(encoded_state_bytes))?
+        {
+            return Err(CommitmentError::CanonicalLengthMismatch {
+                measured: usize::try_from(arbitration_step_state_bytes(
+                    legacy_state_bytes,
+                    engine_state_bytes,
+                )?).unwrap_or(usize::MAX),
+                encoded: encoded.len(),
+            });
+        }
+        let mut hasher = Sha256::new();
+        hasher.update(ARBITRATION_STEP_COMMITMENT_DOMAIN);
+        hasher.update(&encoded);
+        Ok(Self {
+            version: ARBITRATION_STEP_COMMITMENT_VERSION,
+            step_index: state.legacy.step_index,
+            digest: hasher.finalize().into(),
+            encoded_state_bytes,
+            commitment_fuel,
+        })
+    }
+
+    #[must_use]
+    pub const fn arbitration_eligible(self) -> bool {
+        self.version == ARBITRATION_STEP_COMMITMENT_VERSION
+    }
 }
 
 pub fn step_commitment_fuel(encoded_state_bytes: u64) -> Result<u64, CommitmentError> {
@@ -297,6 +573,40 @@ pub fn step_commitment_fuel(encoded_state_bytes: u64) -> Result<u64, CommitmentE
         encoded_state_bytes.checked_mul(STEP_COMMITMENT_FUEL_PER_BYTE)
             .ok_or(CommitmentError::CostOverflow)?,
     ).ok_or(CommitmentError::CostOverflow)
+}
+
+/// Exact v2 state length shared by observer authorization, commitment hashing
+/// and receipt accounting. The fixed portion contains the v2 identity, three
+/// length/root fields and the host-state length.
+pub fn arbitration_step_state_bytes(
+    legacy_state_bytes: u64,
+    engine_state_bytes: u64,
+) -> Result<u64, CommitmentError> {
+    218_u64.checked_add(4).and_then(|bytes| bytes.checked_add(legacy_state_bytes))
+        .and_then(|bytes| bytes.checked_add(4))
+        .and_then(|bytes| bytes.checked_add(engine_state_bytes))
+        .and_then(|bytes| bytes.checked_add(40))
+        .ok_or(CommitmentError::CostOverflow)
+}
+
+pub fn arbitration_step_commitment_fuel(
+    legacy_state_bytes: u64,
+    engine_state_bytes: u64,
+) -> Result<u64, CommitmentError> {
+    arbitration_step_commitment_fuel_with_host(legacy_state_bytes, engine_state_bytes, 0)
+}
+
+pub fn arbitration_step_commitment_fuel_with_host(
+    legacy_state_bytes: u64,
+    engine_state_bytes: u64,
+    host_state_bytes: u64,
+) -> Result<u64, CommitmentError> {
+    let host_work = host_state_bytes.checked_mul(3).ok_or(CommitmentError::CostOverflow)?;
+    let work = arbitration_step_state_bytes(
+        legacy_state_bytes,
+        engine_state_bytes,
+    )?.checked_add(host_work).ok_or(CommitmentError::CostOverflow)?;
+    step_commitment_fuel(work)
 }
 
 impl ExecutionState {
@@ -357,6 +667,90 @@ impl ExecutionState {
     }
 }
 
+impl ArbitrationExecutionState {
+    /// Produces the separately versioned, endian-independent arbitration
+    /// encoding after checking every component and the aggregate before the
+    /// output allocation.
+    pub fn canonical_bytes(&self) -> Result<Vec<u8>, CommitmentError> {
+        if self.legacy.module_code_hash != self.identity.module_code_hash
+            || self.legacy.input_digest != self.identity.input_digest
+        {
+            return Err(CommitmentError::ArbitrationIdentityMismatch);
+        }
+        if self.engine_state.len() > MAX_ARBITRATION_ENGINE_STATE_BYTES {
+            return Err(CommitmentError::ArbitrationComponentTooLarge {
+                component: "engine",
+                bytes: self.engine_state.len(),
+                limit: MAX_ARBITRATION_ENGINE_STATE_BYTES,
+            });
+        }
+        let host_state_bytes = usize::try_from(self.host_state_bytes)
+            .map_err(|_| CommitmentError::ArbitrationComponentTooLarge {
+                component: "host",
+                bytes: usize::MAX,
+                limit: MAX_ARBITRATION_HOST_STATE_BYTES,
+            })?;
+        if host_state_bytes > MAX_ARBITRATION_HOST_STATE_BYTES {
+            return Err(CommitmentError::ArbitrationComponentTooLarge {
+                component: "host",
+                bytes: host_state_bytes,
+                limit: MAX_ARBITRATION_HOST_STATE_BYTES,
+            });
+        }
+        let legacy = self.legacy.canonical_bytes()?;
+        let identity_bytes = 2_usize
+            .checked_add(2).and_then(|bytes| bytes.checked_add(2))
+            .and_then(|bytes| bytes.checked_add(4)).and_then(|bytes| bytes.checked_add(4))
+            .and_then(|bytes| bytes.checked_add(12)).and_then(|bytes| bytes.checked_add(32 * 6))
+            .ok_or(CommitmentError::CostOverflow)?;
+        let total = identity_bytes
+            .checked_add(4).and_then(|bytes| bytes.checked_add(legacy.len()))
+            .and_then(|bytes| bytes.checked_add(4)).and_then(|bytes| bytes.checked_add(self.engine_state.len()))
+            .and_then(|bytes| bytes.checked_add(32 + 8))
+            .ok_or(CommitmentError::CostOverflow)?;
+        let shared_total = arbitration_step_state_bytes(
+            u64::try_from(legacy.len()).map_err(|_| CommitmentError::CostOverflow)?,
+            u64::try_from(self.engine_state.len()).map_err(|_| CommitmentError::CostOverflow)?,
+        )?;
+        if u64::try_from(total).map_err(|_| CommitmentError::CostOverflow)? != shared_total {
+            return Err(CommitmentError::CanonicalLengthMismatch {
+                measured: usize::try_from(shared_total).unwrap_or(usize::MAX),
+                encoded: total,
+            });
+        }
+        if total > MAX_ARBITRATION_STATE_BYTES {
+            return Err(CommitmentError::ArbitrationStateTooLarge {
+                bytes: total,
+                limit: MAX_ARBITRATION_STATE_BYTES,
+            });
+        }
+        let mut bytes = Vec::with_capacity(total);
+        bytes.extend_from_slice(&ARBITRATION_STEP_COMMITMENT_VERSION.to_be_bytes());
+        bytes.extend_from_slice(&self.identity.runtime_version.to_be_bytes());
+        bytes.extend_from_slice(&self.identity.abi_version.to_be_bytes());
+        bytes.extend_from_slice(&self.identity.fee_schedule_version.to_be_bytes());
+        bytes.extend_from_slice(&self.identity.metering_schedule_version.to_be_bytes());
+        bytes.extend_from_slice(&self.identity.trace_policy.canonical_bytes());
+        bytes.extend_from_slice(&self.identity.module_code_hash);
+        bytes.extend_from_slice(&self.identity.input_digest);
+        bytes.extend_from_slice(&self.legacy.execution_parameters_digest);
+        bytes.extend_from_slice(&self.identity.host_base_state_root);
+        bytes.extend_from_slice(&self.identity.receipt_oracle_root);
+        bytes.extend_from_slice(&self.identity.balance_oracle_root);
+        put_bytes(&mut bytes, &legacy)?;
+        put_bytes(&mut bytes, &self.engine_state)?;
+        bytes.extend_from_slice(&self.host_state_root);
+        bytes.extend_from_slice(&self.host_state_bytes.to_be_bytes());
+        if bytes.len() != total {
+            return Err(CommitmentError::CanonicalLengthMismatch {
+                measured: total,
+                encoded: bytes.len(),
+            });
+        }
+        Ok(bytes)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CommitmentError {
     ZeroInterval,
@@ -370,6 +764,11 @@ pub enum CommitmentError {
     InvalidStepTransition,
     InvalidInstructionEncoding,
     TraceByteLimit { attempted: u64, limit: u64 },
+    ArbitrationIdentityMismatch,
+    ArbitrationComponentTooLarge { component: &'static str, bytes: usize, limit: usize },
+    ArbitrationStateTooLarge { bytes: usize, limit: usize },
+    CanonicalLengthMismatch { measured: usize, encoded: usize },
+    LegacyCommitmentNotArbitrable,
 }
 
 impl Display for CommitmentError {
@@ -386,6 +785,11 @@ impl Display for CommitmentError {
             Self::InvalidStepTransition => formatter.write_str("execution step evidence is not a consecutive committed transition"),
             Self::InvalidInstructionEncoding => formatter.write_str("execution step instruction encoding is empty or exceeds its bound"),
             Self::TraceByteLimit { attempted, limit } => write!(formatter, "execution trace state bytes {attempted} exceed {limit}"),
+            Self::ArbitrationIdentityMismatch => formatter.write_str("arbitration state identity does not match its frozen v1 state"),
+            Self::ArbitrationComponentTooLarge { component, bytes, limit } => write!(formatter, "arbitration {component} state {bytes} exceeds {limit}"),
+            Self::ArbitrationStateTooLarge { bytes, limit } => write!(formatter, "encoded arbitration state {bytes} exceeds {limit}"),
+            Self::CanonicalLengthMismatch { measured, encoded } => write!(formatter, "canonical state measured {measured} bytes but encoded {encoded}"),
+            Self::LegacyCommitmentNotArbitrable => formatter.write_str("version-one execution commitment is not eligible for arbitration"),
         }
     }
 }
@@ -533,6 +937,63 @@ mod tests {
             hex(&trace.canonical_bytes().expect("golden trace encodes")),
             include_str!("../vectors/step-commitment-trace-v1.hex").trim(),
         );
+    }
+
+    #[test]
+    fn legacy_commitment_is_not_an_arbitration_pre_state() {
+        let commitment = StepCommitment::from_state(&golden_state())
+            .expect("legacy golden state commits");
+        assert!(!commitment.arbitration_eligible());
+        let trace = ExecutionTrace::new(TracePolicy::new(1, 2).expect("valid policy"));
+        assert_eq!(
+            trace.canonical_arbitration_bytes(),
+            Err(CommitmentError::LegacyCommitmentNotArbitrable),
+        );
+    }
+
+    #[test]
+    fn arbitration_commitment_separates_engine_host_and_base_state() {
+        let policy = TracePolicy::new(1, 2).expect("valid policy");
+        let identity = ArbitrationExecutionIdentity {
+            module_code_hash: [0x11; 32],
+            input_digest: [0x22; 32],
+            runtime_version: 1,
+            abi_version: 2,
+            fee_schedule_version: 3,
+            metering_schedule_version: 4,
+            trace_policy: policy,
+            host_base_state_root: [0x44; 32],
+            receipt_oracle_root: [0x55; 32],
+            balance_oracle_root: [0x66; 32],
+        };
+        let state = ArbitrationExecutionState {
+            identity,
+            legacy: Arc::new(golden_state()),
+            engine_state: vec![0x01, 0x02],
+            host_state_root: [0x77; 32],
+            host_state_bytes: 9,
+        };
+        let original = ArbitrationStepCommitment::from_state(&state)
+            .expect("complete state commits");
+        assert!(original.arbitration_eligible());
+        for changed in [
+            ArbitrationExecutionState { engine_state: vec![0x01, 0x03], ..state.clone() },
+            ArbitrationExecutionState { host_state_root: [0x78; 32], ..state.clone() },
+            ArbitrationExecutionState {
+                identity: ArbitrationExecutionIdentity {
+                    host_base_state_root: [0x45; 32],
+                    ..identity
+                },
+                ..state.clone()
+            },
+        ] {
+            assert_ne!(
+                original.digest,
+                ArbitrationStepCommitment::from_state(&changed)
+                    .expect("distinct complete state commits")
+                    .digest,
+            );
+        }
     }
 
     fn hex(bytes: &[u8]) -> String {

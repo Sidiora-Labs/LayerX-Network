@@ -539,6 +539,12 @@ impl<'ctx, 'engine> Executor<'ctx, 'engine> {
         for &value_type in &metadata.operand_types {
             value_bytes = value_bytes.checked_add(encoded_value_bytes(value_type)).ok_or(TrapCode::UnreachableCodeReached)?;
         }
+        let instance_state_bytes = self.ctx
+            .measure_execution_instance_states(*self.cache.instance())
+            .map_err(|_| TrapCode::UnreachableCodeReached)?;
+        let arbitration_engine_canonical_bytes = self.ctx
+            .measure_execution_instance_canonical_bytes(*self.cache.instance())
+            .map_err(|_| TrapCode::UnreachableCodeReached)?;
         Ok(ObservationCharge {
             collect: true,
             value_bytes,
@@ -546,6 +552,9 @@ impl<'ctx, 'engine> Executor<'ctx, 'engine> {
             local_bytes: 0,
             global_bytes,
             memory_bytes: 4_u64.checked_add(u64::try_from(memory_bytes).map_err(|_| TrapCode::UnreachableCodeReached)?).ok_or(TrapCode::UnreachableCodeReached)?,
+            instance_state_bytes,
+            arbitration_engine_canonical_bytes,
+            host_state_bytes: 0,
             storage_overlay_bytes: 0,
             instruction_bytes: 4_u64.checked_add(u64::try_from(metadata.control_stack.len()).map_err(|_| TrapCode::UnreachableCodeReached)?.checked_mul(6).ok_or(TrapCode::UnreachableCodeReached)?).ok_or(TrapCode::UnreachableCodeReached)?,
             retained_instruction_bytes: u64::try_from(metadata.canonical_instruction.len()).map_err(|_| TrapCode::UnreachableCodeReached)?,
@@ -601,6 +610,11 @@ impl<'ctx, 'engine> Executor<'ctx, 'engine> {
             }
             index = index.checked_add(1).ok_or(TrapCode::UnreachableCodeReached)?;
         }
+        let root_instance = *self.cache.instance();
+        let instance_state_bytes = self.ctx.measure_execution_instance_states(root_instance)
+            .map_err(|_| TrapCode::UnreachableCodeReached)?;
+        let arbitration_instances = self.ctx.capture_execution_instance_states(root_instance, instance_state_bytes)
+            .map_err(|_| TrapCode::UnreachableCodeReached)?;
         Ok(ExecutionSnapshot {
             step_index: self.ctx.execution_step_index().saturating_sub(1),
             program_counter: metadata.program_counter,
@@ -608,6 +622,7 @@ impl<'ctx, 'engine> Executor<'ctx, 'engine> {
             call_frames,
             linear_memory,
             globals,
+            arbitration_instances,
             control_stack: metadata.control_stack.clone(),
             canonical_instruction: metadata.canonical_instruction.clone(),
             instruction_fuel: metadata.instruction_fuel,

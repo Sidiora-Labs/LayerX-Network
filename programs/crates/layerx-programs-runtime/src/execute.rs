@@ -184,6 +184,15 @@ fn commitment_fault(error: crate::CommitmentError) -> ExecutionFault {
     }
 }
 
+#[derive(Clone, Copy)]
+struct TraceIdentities {
+    legacy: crate::ExecutionTraceIdentity,
+    runtime_version: u16,
+    abi_version: u16,
+    fee_schedule_version: u32,
+    metering_schedule_version: u32,
+}
+
 fn trace_identity(
     module: &ValidatedModule,
     entrypoint: &str,
@@ -192,7 +201,7 @@ fn trace_identity(
     abi_version: u16,
     fee_schedule_version: u32,
     policy: crate::TracePolicy,
-) -> Result<crate::ExecutionTraceIdentity, ExecutionFault> {
+) -> Result<TraceIdentities, ExecutionFault> {
     let mut input_preimage = b"LXP/program-trace-input/v1\0".to_vec();
     let entrypoint_length = u32::try_from(entrypoint.len()).map_err(|_| ExecutionFault::EngineFault {
         reason: "trace entry point length is unrepresentable".to_string(),
@@ -214,28 +223,23 @@ fn trace_identity(
     parameters.extend_from_slice(&policy.canonical_bytes());
     let execution_parameters_digest = crate::hash_bytes(crate::HashAlgorithm::Sha256, &parameters)
         .map_err(|error| ExecutionFault::EngineFault { reason: error.to_string() })?;
-    Ok(crate::ExecutionTraceIdentity {
-        module_code_hash: module.code_hash(),
-        input_digest,
-        execution_parameters_digest,
+    Ok(TraceIdentities {
+        legacy: crate::ExecutionTraceIdentity {
+            module_code_hash: module.code_hash(),
+            input_digest,
+            execution_parameters_digest,
+        },
+        runtime_version,
+        abi_version,
+        fee_schedule_version,
+        metering_schedule_version: module.metering_schedule_version(),
     })
 }
 
 fn canonical_trace_bytes(trace: &crate::ExecutionTrace) -> Vec<u8> {
-    let commitments = trace.commitments();
-    let mut bytes = Vec::with_capacity(32_usize.saturating_add(commitments.len().saturating_mul(52)));
-    bytes.extend_from_slice(&crate::STEP_COMMITMENT_VERSION.to_be_bytes());
-    bytes.extend_from_slice(&trace.policy().canonical_bytes());
-    bytes.extend_from_slice(&(commitments.len() as u32).to_be_bytes());
-    for commitment in commitments {
-        bytes.extend_from_slice(&commitment.step_index.to_be_bytes());
-        bytes.extend_from_slice(&commitment.digest);
-        bytes.extend_from_slice(&commitment.encoded_state_bytes.to_be_bytes());
-        bytes.extend_from_slice(&commitment.commitment_fuel.to_be_bytes());
-    }
-    bytes.extend_from_slice(&trace.total_commitment_fuel().to_be_bytes());
-    bytes.extend_from_slice(&trace.total_state_bytes().to_be_bytes());
-    bytes
+    trace.canonical_arbitration_bytes().unwrap_or_else(|_| {
+        unreachable!("ordinary traced execution is constructed with a validated v2 chain")
+    })
 }
 
 fn canonical_wasm_arguments(args: &[WasmValue]) -> Vec<u8> {
@@ -261,6 +265,26 @@ fn execution_value(value: WasmiExecutionValue) -> crate::ExecutionValue {
         WasmiExecutionValueType::I32 => crate::ExecutionValue::I32(value.bits as u32 as i32),
         WasmiExecutionValueType::I64 => crate::ExecutionValue::I64(value.bits as i64),
     }
+}
+
+fn converted_state_retained_bytes(snapshot: &WasmiExecutionSnapshot) -> Option<u64> {
+    fn allocation<T>(count: usize) -> Option<u64> {
+        u64::try_from(count.checked_mul(std::mem::size_of::<T>())?).ok()
+    }
+    let mut bytes = (std::mem::size_of::<crate::ExecutionState>() + 2 * std::mem::size_of::<usize>()) as u64;
+    bytes = bytes.checked_add(allocation::<crate::ExecutionValue>(snapshot.value_stack.len())?)?
+        .checked_add(allocation::<crate::ExecutionFrame>(snapshot.call_frames.len())?)?
+        .checked_add(u64::try_from(snapshot.linear_memory.len()).ok()?)?
+        .checked_add(allocation::<crate::ExecutionGlobal>(snapshot.globals.len())?)?
+        .checked_add(allocation::<crate::ExecutionControlFrame>(snapshot.control_stack.len())?)?
+        .checked_add(allocation::<crate::StorageOverlayEntry>(snapshot.supplement.storage_overlay.len())?)?;
+    for frame in &snapshot.call_frames { bytes = bytes.checked_add(allocation::<crate::ExecutionValue>(frame.locals.len())?)?; }
+    for (key, value) in &snapshot.supplement.storage_overlay {
+        bytes = bytes.checked_add(u64::try_from(key.len()).ok()?)?;
+        if let Some(value) = value { bytes = bytes.checked_add(u64::try_from(value.len()).ok()?)?; }
+    }
+    bytes.checked_add((std::mem::size_of::<crate::ArbitrationExecutionState>() + 2 * std::mem::size_of::<usize>()) as u64)?
+        .checked_add(snapshot.supplement.arbitration_engine_canonical_bytes)
 }
 
 fn execution_state_from_snapshot(
@@ -291,12 +315,12 @@ fn execution_state_from_snapshot(
         execution_parameters_digest: identity.execution_parameters_digest,
         step_index: snapshot.step_index,
         program_counter: snapshot.program_counter,
-        value_stack: snapshot.value_stack.iter().copied().map(execution_value).collect(),
+        value_stack: snapshot.value_stack.iter().copied().map(execution_value).collect::<Vec<_>>(),
         call_frames: snapshot.call_frames.iter().map(|frame| crate::ExecutionFrame {
             function_index: frame.function_index,
             return_program_counter: frame.return_program_counter,
             locals: frame.locals.iter().copied().map(execution_value).collect(),
-        }).collect(),
+        }).collect::<Vec<_>>(),
         control_stack: snapshot.control_stack.iter().map(|frame| crate::ExecutionControlFrame {
             kind: match frame.kind {
                 WasmiControlKind::Block => 0,
@@ -306,13 +330,13 @@ fn execution_state_from_snapshot(
             },
             operand_stack_height: frame.operand_stack_height,
             unreachable: frame.unreachable,
-        }).collect(),
+        }).collect::<Vec<_>>(),
         linear_memory: snapshot.linear_memory.clone(),
         globals: snapshot.globals.iter().map(|global| crate::ExecutionGlobal {
             global_index: global.global_index,
             mutable: global.mutable,
             value: execution_value(global.value),
-        }).collect(),
+        }).collect::<Vec<_>>(),
         storage_overlay,
         fuel_remaining: snapshot.supplement.authoritative_fuel,
         metered_usage: MeteredUsage {
@@ -326,6 +350,161 @@ fn execution_state_from_snapshot(
             occupancy_fee_units: usage.occupancy_fee_units,
             fee_units: usage.fee_units,
         },
+    })
+}
+
+fn arbitration_engine_state_bytes(
+    snapshot: &WasmiExecutionSnapshot,
+) -> Result<Vec<u8>, ExecutionFault> {
+    fn add(total: &mut usize, amount: usize) -> Result<(), ExecutionFault> {
+        *total = total.checked_add(amount).ok_or_else(|| ExecutionFault::EngineFault {
+            reason: "arbitration engine-state length overflowed".to_string(),
+        })?;
+        if *total > crate::MAX_ARBITRATION_ENGINE_STATE_BYTES {
+            return Err(ExecutionFault::EngineFault {
+                reason: "arbitration engine state exceeds its canonical bound".to_string(),
+            });
+        }
+        Ok(())
+    }
+    fn ref_bytes(reference: Option<wasmi::ExecutionFunctionRef>) -> usize {
+        if reference.is_some() { 9 } else { 1 }
+    }
+    let mut measured = 4_usize;
+    for instance in &snapshot.arbitration_instances {
+        add(&mut measured, 4 + 4)?;
+        for memory in &instance.memories {
+            add(&mut measured, 4 + 4 + 1 + memory.maximum_pages.map_or(0, |_| 4) + 4)?;
+            add(&mut measured, memory.bytes.len())?;
+        }
+        add(&mut measured, 4)?;
+        for global in &instance.globals {
+            add(&mut measured, 4 + 1 + 1 + match global.value.value_type {
+                WasmiExecutionValueType::I32 => 4,
+                WasmiExecutionValueType::I64 => 8,
+            })?;
+        }
+        add(&mut measured, 4)?;
+        for table in &instance.tables {
+            add(&mut measured, 4 + 4 + 1 + table.maximum.map_or(0, |_| 4) + 4)?;
+            for reference in &table.elements { add(&mut measured, ref_bytes(*reference))?; }
+        }
+        add(&mut measured, 4)?;
+        for segment in &instance.data_segments {
+            add(&mut measured, 4 + 1 + 4)?;
+            add(&mut measured, segment.bytes.len())?;
+        }
+        add(&mut measured, 4)?;
+        for segment in &instance.element_segments {
+            add(&mut measured, 4 + 1 + 4)?;
+            for reference in &segment.elements { add(&mut measured, ref_bytes(*reference))?; }
+        }
+    }
+    fn put_len(bytes: &mut Vec<u8>, len: usize) -> Result<(), ExecutionFault> {
+        let len = u32::try_from(len).map_err(|_| ExecutionFault::EngineFault {
+            reason: "arbitration engine-state collection exceeds u32".to_string(),
+        })?;
+        bytes.extend_from_slice(&len.to_be_bytes());
+        Ok(())
+    }
+    fn put_ref(bytes: &mut Vec<u8>, reference: Option<wasmi::ExecutionFunctionRef>) {
+        match reference {
+            None => bytes.push(0),
+            Some(reference) => {
+                bytes.push(1);
+                bytes.extend_from_slice(&reference.instance_index.to_be_bytes());
+                bytes.extend_from_slice(&reference.function_index.to_be_bytes());
+            }
+        }
+    }
+    let mut bytes = Vec::with_capacity(measured);
+    put_len(&mut bytes, snapshot.arbitration_instances.len())?;
+    for instance in &snapshot.arbitration_instances {
+        bytes.extend_from_slice(&instance.instance_index.to_be_bytes());
+        put_len(&mut bytes, instance.memories.len())?;
+        for memory in &instance.memories {
+            bytes.extend_from_slice(&memory.memory_index.to_be_bytes());
+            bytes.extend_from_slice(&memory.initial_pages.to_be_bytes());
+            match memory.maximum_pages {
+                None => bytes.push(0),
+                Some(maximum) => { bytes.push(1); bytes.extend_from_slice(&maximum.to_be_bytes()); }
+            }
+            put_len(&mut bytes, memory.bytes.len())?;
+            bytes.extend_from_slice(&memory.bytes);
+        }
+        put_len(&mut bytes, instance.globals.len())?;
+        for global in &instance.globals {
+            bytes.extend_from_slice(&global.global_index.to_be_bytes());
+            bytes.push(u8::from(global.mutable));
+            match global.value.value_type {
+                WasmiExecutionValueType::I32 => {
+                    bytes.push(0);
+                    bytes.extend_from_slice(&(global.value.bits as u32).to_be_bytes());
+                }
+                WasmiExecutionValueType::I64 => {
+                    bytes.push(1);
+                    bytes.extend_from_slice(&global.value.bits.to_be_bytes());
+                }
+            }
+        }
+        put_len(&mut bytes, instance.tables.len())?;
+        for table in &instance.tables {
+            bytes.extend_from_slice(&table.table_index.to_be_bytes());
+            bytes.extend_from_slice(&table.minimum.to_be_bytes());
+            match table.maximum {
+                None => bytes.push(0),
+                Some(maximum) => { bytes.push(1); bytes.extend_from_slice(&maximum.to_be_bytes()); }
+            }
+            put_len(&mut bytes, table.elements.len())?;
+            for reference in &table.elements { put_ref(&mut bytes, *reference); }
+        }
+        put_len(&mut bytes, instance.data_segments.len())?;
+        for segment in &instance.data_segments {
+            bytes.extend_from_slice(&segment.segment_index.to_be_bytes());
+            bytes.push(u8::from(segment.dropped));
+            put_len(&mut bytes, segment.bytes.len())?;
+            bytes.extend_from_slice(&segment.bytes);
+        }
+        put_len(&mut bytes, instance.element_segments.len())?;
+        for segment in &instance.element_segments {
+            bytes.extend_from_slice(&segment.segment_index.to_be_bytes());
+            bytes.push(u8::from(segment.dropped));
+            put_len(&mut bytes, segment.elements.len())?;
+            for reference in &segment.elements { put_ref(&mut bytes, *reference); }
+        }
+    }
+    if bytes.len() != measured {
+        return Err(ExecutionFault::EngineFault {
+            reason: "arbitration engine-state measurement diverged from encoding".to_string(),
+        });
+    }
+    Ok(bytes)
+}
+
+fn arbitration_state_from_snapshot(
+    snapshot: &WasmiExecutionSnapshot,
+    identities: TraceIdentities,
+    policy: crate::TracePolicy,
+    legacy: std::sync::Arc<crate::ExecutionState>,
+) -> Result<crate::ArbitrationExecutionState, ExecutionFault> {
+    let supplement = &snapshot.supplement;
+    Ok(crate::ArbitrationExecutionState {
+        identity: crate::ArbitrationExecutionIdentity {
+            module_code_hash: identities.legacy.module_code_hash,
+            input_digest: identities.legacy.input_digest,
+            runtime_version: identities.runtime_version,
+            abi_version: identities.abi_version,
+            fee_schedule_version: identities.fee_schedule_version,
+            metering_schedule_version: identities.metering_schedule_version,
+            trace_policy: policy,
+            host_base_state_root: supplement.arbitration_base_state_root,
+            receipt_oracle_root: supplement.arbitration_receipt_oracle_root,
+            balance_oracle_root: supplement.arbitration_balance_oracle_root,
+        },
+        legacy,
+        engine_state: arbitration_engine_state_bytes(snapshot)?,
+        host_state_root: supplement.arbitration_host_state_root,
+        host_state_bytes: supplement.arbitration_host_state_bytes,
     })
 }
 
@@ -389,7 +568,7 @@ impl ProgramInstance {
     pub(crate) fn take_execution_trace(
         &mut self,
         policy: crate::TracePolicy,
-        identity: crate::ExecutionTraceIdentity,
+        identities: TraceIdentities,
     ) -> Result<crate::ExecutionTrace, ExecutionFault> {
         if let Some(error) = self.store.execution_observer_error() {
             return Err(ExecutionFault::EngineFault {
@@ -398,41 +577,92 @@ impl ProgramInstance {
         }
         let transitions = self.store.take_execution_transitions();
         let mut retained_snapshot_bytes = 0_u64;
+        let mut converted_snapshot_bytes = 0_u64;
         let mut maximum_encoding_bytes = 0_u64;
+        let mut maximum_nested_legacy_encoding_bytes = 0_u64;
+        let mut duplicated_instruction_bytes = 0_u64;
+        let transition_count = transitions.len();
+        let transition_backing_bytes = transitions.capacity().checked_mul(std::mem::size_of::<wasmi::ExecutionTransition>())
+            .and_then(|bytes| u64::try_from(bytes).ok())
+            .ok_or_else(|| ExecutionFault::EngineFault { reason: "execution trace transition allocation accounting overflowed".to_string() })?;
+        let mut unique_state_count = 0_usize;
         let mut previous_post: Option<&std::sync::Arc<wasmi::ExecutionSnapshot>> = None;
         for transition in &transitions {
+            duplicated_instruction_bytes = duplicated_instruction_bytes.checked_add(
+                u64::try_from(transition.pre.canonical_instruction.len()).ok()
+                    .and_then(|bytes| bytes.checked_mul(2))
+                    .ok_or_else(|| ExecutionFault::EngineFault { reason: "execution trace instruction allocation accounting overflowed".to_string() })?,
+            ).ok_or_else(|| ExecutionFault::EngineFault { reason: "execution trace instruction allocation accounting overflowed".to_string() })?;
             if previous_post.map_or(true, |post| !std::sync::Arc::ptr_eq(post, &transition.pre)) {
+                unique_state_count = unique_state_count.checked_add(1)
+                    .ok_or_else(|| ExecutionFault::EngineFault { reason: "execution trace state cardinality overflowed".to_string() })?;
                 let state_bytes = transition.pre.supplement.canonical_state_bytes;
-                retained_snapshot_bytes = retained_snapshot_bytes.checked_add(state_bytes)
-                    .and_then(|bytes| bytes.checked_add(u64::try_from(transition.pre.canonical_instruction.len()).ok()?))
+                retained_snapshot_bytes = retained_snapshot_bytes.checked_add(transition.pre.retained_vec_bytes().ok_or_else(|| ExecutionFault::EngineFault { reason: "execution trace snapshot allocation accounting overflowed".to_string() })?)
+                    .and_then(|bytes| bytes.checked_add(std::mem::size_of::<wasmi::ExecutionSnapshot>() as u64 + 2 * std::mem::size_of::<usize>() as u64))
                     .ok_or_else(|| ExecutionFault::EngineFault { reason: "execution trace peak-byte accounting overflowed".to_string() })?;
-                maximum_encoding_bytes = maximum_encoding_bytes.max(state_bytes);
+                converted_snapshot_bytes = converted_snapshot_bytes.checked_add(
+                    converted_state_retained_bytes(&transition.pre).ok_or_else(|| ExecutionFault::EngineFault { reason: "execution trace converted allocation accounting overflowed".to_string() })?
+                )
+                    .ok_or_else(|| ExecutionFault::EngineFault { reason: "execution trace converted-byte accounting overflowed".to_string() })?;
+                maximum_encoding_bytes = maximum_encoding_bytes.max(
+                    transition.pre.supplement.arbitration_canonical_state_bytes,
+                );
+                maximum_nested_legacy_encoding_bytes = maximum_nested_legacy_encoding_bytes
+                    .max(state_bytes);
             }
+            unique_state_count = unique_state_count.checked_add(1)
+                .ok_or_else(|| ExecutionFault::EngineFault { reason: "execution trace state cardinality overflowed".to_string() })?;
             let state_bytes = transition.post.supplement.canonical_state_bytes;
-            retained_snapshot_bytes = retained_snapshot_bytes.checked_add(state_bytes)
-                .and_then(|bytes| bytes.checked_add(u64::try_from(transition.post.canonical_instruction.len()).ok()?))
+            retained_snapshot_bytes = retained_snapshot_bytes.checked_add(transition.post.retained_vec_bytes().ok_or_else(|| ExecutionFault::EngineFault { reason: "execution trace snapshot allocation accounting overflowed".to_string() })?)
+                .and_then(|bytes| bytes.checked_add(std::mem::size_of::<wasmi::ExecutionSnapshot>() as u64 + 2 * std::mem::size_of::<usize>() as u64))
                 .ok_or_else(|| ExecutionFault::EngineFault { reason: "execution trace peak-byte accounting overflowed".to_string() })?;
-            maximum_encoding_bytes = maximum_encoding_bytes.max(state_bytes);
+            converted_snapshot_bytes = converted_snapshot_bytes.checked_add(
+                converted_state_retained_bytes(&transition.post).ok_or_else(|| ExecutionFault::EngineFault { reason: "execution trace converted allocation accounting overflowed".to_string() })?
+            )
+                .ok_or_else(|| ExecutionFault::EngineFault { reason: "execution trace converted-byte accounting overflowed".to_string() })?;
+            maximum_encoding_bytes = maximum_encoding_bytes.max(
+                transition.post.supplement.arbitration_canonical_state_bytes,
+            );
+            maximum_nested_legacy_encoding_bytes = maximum_nested_legacy_encoding_bytes
+                .max(state_bytes);
             previous_post = Some(&transition.post);
         }
-        let peak_bytes = retained_snapshot_bytes.checked_mul(2)
+        let state_count = unique_state_count;
+        let collection_bytes = transition_count.checked_mul(std::mem::size_of::<crate::ExecutionStep>())
+            .and_then(|bytes| bytes.checked_add(transition_count.checked_mul(std::mem::size_of::<crate::ArbitrationExecutionStep>())?))
+            .and_then(|bytes| bytes.checked_add(state_count.checked_mul(std::mem::size_of::<crate::StepCommitment>())?))
+            .and_then(|bytes| bytes.checked_add(state_count.checked_mul(std::mem::size_of::<crate::ArbitrationStepCommitment>())?))
+            .and_then(|bytes| bytes.checked_add(state_count.checked_mul(std::mem::size_of::<crate::ExecutionState>() + 2 * std::mem::size_of::<usize>())?))
+            .and_then(|bytes| bytes.checked_add(state_count.checked_mul(std::mem::size_of::<crate::ArbitrationExecutionState>() + 2 * std::mem::size_of::<usize>())?))
+            .and_then(|bytes| u64::try_from(bytes).ok())
+            .ok_or_else(|| ExecutionFault::EngineFault { reason: "execution trace collection accounting overflowed".to_string() })?;
+        let peak_bytes = retained_snapshot_bytes.checked_add(transition_backing_bytes)
+            .and_then(|bytes| bytes.checked_add(converted_snapshot_bytes))
+            .and_then(|bytes| bytes.checked_add(duplicated_instruction_bytes))
+            .and_then(|bytes| bytes.checked_add(collection_bytes))
             .and_then(|bytes| bytes.checked_add(maximum_encoding_bytes))
+            .and_then(|bytes| bytes.checked_add(maximum_nested_legacy_encoding_bytes))
             .ok_or_else(|| ExecutionFault::EngineFault { reason: "execution trace peak-byte accounting overflowed".to_string() })?;
         if peak_bytes > crate::MAX_TRACE_STATE_BYTES {
             return Err(ExecutionFault::EngineFault {
                 reason: format!("execution trace peak retained bytes {peak_bytes} exceed {}", crate::MAX_TRACE_STATE_BYTES),
             });
         }
-        let mut trace = crate::ExecutionTrace::new(policy);
+        let mut trace = crate::ExecutionTrace::with_exact_capacity(
+            policy,
+            transition_count,
+            state_count,
+        );
         let mut last_recorded_step = None;
         let mut last_state: Option<std::sync::Arc<crate::ExecutionState>> = None;
+        let mut last_arbitration_state: Option<std::sync::Arc<crate::ArbitrationExecutionState>> = None;
         let mut last_snapshot: Option<std::sync::Arc<wasmi::ExecutionSnapshot>> = None;
         for transition in transitions {
             let pre_state = match (&last_snapshot, &last_state) {
                 (Some(snapshot), Some(state)) if std::sync::Arc::ptr_eq(snapshot, &transition.pre) => std::sync::Arc::clone(state),
-                _ => std::sync::Arc::new(execution_state_from_snapshot(&transition.pre, identity)?),
+                _ => std::sync::Arc::new(execution_state_from_snapshot(&transition.pre, identities.legacy)?),
             };
-            let post_state = std::sync::Arc::new(execution_state_from_snapshot(&transition.post, identity)?);
+            let post_state = std::sync::Arc::new(execution_state_from_snapshot(&transition.post, identities.legacy)?);
             let pre_commitment = crate::StepCommitment::from_state(pre_state.as_ref())
                 .map_err(commitment_fault)?;
             let post_commitment = crate::StepCommitment::from_state(post_state.as_ref())
@@ -453,17 +683,70 @@ impl ProgramInstance {
                     last_recorded_step = Some(commitment.step_index);
                 }
             }
-            last_state = Some(std::sync::Arc::clone(&post_state));
-            last_snapshot = Some(std::sync::Arc::clone(&transition.post));
+            let arbitration_pre_state = match (&last_snapshot, &last_arbitration_state) {
+                (Some(snapshot), Some(state)) if std::sync::Arc::ptr_eq(snapshot, &transition.pre) => {
+                    std::sync::Arc::clone(state)
+                }
+                _ => std::sync::Arc::new(arbitration_state_from_snapshot(
+                    &transition.pre,
+                    identities,
+                    policy,
+                    std::sync::Arc::clone(&pre_state),
+                )?),
+            };
+            let arbitration_post_state = std::sync::Arc::new(arbitration_state_from_snapshot(
+                &transition.post,
+                identities,
+                policy,
+                std::sync::Arc::clone(&post_state),
+            )?);
+            let arbitration_pre_commitment = crate::ArbitrationStepCommitment::from_state(
+                arbitration_pre_state.as_ref(),
+            ).map_err(commitment_fault)?;
+            let arbitration_post_commitment = crate::ArbitrationStepCommitment::from_state(
+                arbitration_post_state.as_ref(),
+            ).map_err(commitment_fault)?;
+            for (snapshot, state, commitment) in [
+                (transition.pre.as_ref(), arbitration_pre_state.as_ref(), arbitration_pre_commitment),
+                (transition.post.as_ref(), arbitration_post_state.as_ref(), arbitration_post_commitment),
+            ] {
+                let engine_bytes = u64::try_from(state.engine_state.len()).map_err(|_| {
+                    ExecutionFault::EngineFault {
+                        reason: "arbitration engine-state length is unrepresentable".to_string(),
+                    }
+                })?;
+                if engine_bytes != snapshot.supplement.arbitration_engine_canonical_bytes
+                    || u64::from(commitment.encoded_state_bytes)
+                        != snapshot.supplement.arbitration_canonical_state_bytes
+                    || commitment.commitment_fuel
+                        != snapshot.supplement.arbitration_commitment_fuel
+                {
+                    return Err(ExecutionFault::EngineFault {
+                        reason: "preauthorized v2 arbitration commitment accounting diverged from canonical state".to_string(),
+                    });
+                }
+            }
             trace.record_step(crate::ExecutionStep {
                 instruction: transition.pre.canonical_instruction.clone(),
                 instruction_fuel: transition.pre.instruction_fuel,
                 memory_expansion_bytes: transition.memory_expansion_bytes,
-                pre_state,
-                post_state,
+                pre_state: std::sync::Arc::clone(&pre_state),
+                post_state: std::sync::Arc::clone(&post_state),
                 pre_commitment,
                 post_commitment,
             }).map_err(commitment_fault)?;
+            trace.record_arbitration_step(crate::ArbitrationExecutionStep {
+                instruction: transition.pre.canonical_instruction.clone(),
+                instruction_fuel: transition.pre.instruction_fuel,
+                memory_expansion_bytes: transition.memory_expansion_bytes,
+                pre_state: arbitration_pre_state,
+                post_state: std::sync::Arc::clone(&arbitration_post_state),
+                pre_commitment: arbitration_pre_commitment,
+                post_commitment: arbitration_post_commitment,
+            }).map_err(commitment_fault)?;
+            last_state = Some(std::sync::Arc::clone(&post_state));
+            last_arbitration_state = Some(arbitration_post_state);
+            last_snapshot = Some(std::sync::Arc::clone(&transition.post));
         }
         Ok(trace)
     }
@@ -737,14 +1020,41 @@ pub struct TracedExecutionRecord {
 }
 
 impl TracedExecutionRecord {
-    /// Canonical receipt evidence binding the ordinary result and declared trace policy.
-    pub fn canonical_evidence(&self) -> Result<Vec<u8>, crate::CommitmentError> {
+    /// Frozen legacy receipt evidence. It remains decodable but is explicitly
+    /// ineligible as a single-step arbitration pre-state.
+    pub fn canonical_legacy_evidence(&self) -> Result<Vec<u8>, crate::CommitmentError> {
         let execution = self.execution.canonical_evidence();
         let trace = self.trace.canonical_bytes()?;
         let mut evidence = Vec::with_capacity(
             32_usize.saturating_add(execution.len()).saturating_add(trace.len()),
         );
         evidence.extend_from_slice(b"LXP/program-traced-execution/v1\0");
+        let execution_length = u32::try_from(execution.len())
+            .map_err(|_| crate::CommitmentError::LengthOutOfRange { bytes: execution.len() })?;
+        evidence.extend_from_slice(&execution_length.to_be_bytes());
+        evidence.extend_from_slice(&execution);
+        let trace_length = u32::try_from(trace.len())
+            .map_err(|_| crate::CommitmentError::LengthOutOfRange { bytes: trace.len() })?;
+        evidence.extend_from_slice(&trace_length.to_be_bytes());
+        evidence.extend_from_slice(&trace);
+        Ok(evidence)
+    }
+
+    /// Canonical v2 receipt evidence binding the complete arbitration chain.
+    pub fn canonical_evidence(&self) -> Result<Vec<u8>, crate::CommitmentError> {
+        let execution = self.execution.canonical_evidence();
+        let trace = self.trace.canonical_arbitration_bytes()?;
+        let capacity = 32_usize.checked_add(execution.len())
+            .and_then(|bytes| bytes.checked_add(trace.len()))
+            .ok_or(crate::CommitmentError::CostOverflow)?;
+        if capacity > crate::MAX_ARBITRATION_STATE_BYTES {
+            return Err(crate::CommitmentError::ArbitrationStateTooLarge {
+                bytes: capacity,
+                limit: crate::MAX_ARBITRATION_STATE_BYTES,
+            });
+        }
+        let mut evidence = Vec::with_capacity(capacity);
+        evidence.extend_from_slice(b"LXP/program-traced-execution/v2\0");
         let execution_length = u32::try_from(execution.len())
             .map_err(|_| crate::CommitmentError::LengthOutOfRange { bytes: execution.len() })?;
         evidence.extend_from_slice(&execution_length.to_be_bytes());

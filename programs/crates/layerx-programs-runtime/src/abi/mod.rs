@@ -12,6 +12,7 @@ pub mod context;
 pub mod manifest;
 pub mod response;
 mod storage_ops;
+mod host_state;
 #[cfg(test)]
 mod event_tests;
 
@@ -24,6 +25,7 @@ pub use codec::{
 };
 pub use response::{CallResponse, ResponseRefusal, MAX_CALL_RESPONSE_BYTES};
 pub use storage_ops::StorageSelector;
+pub(crate) use host_state::{abi_error_bytes, HostStateCommitment, HostStateIdentity};
 
 use crate::meter::MeterRefusal;
 use crate::storage::{
@@ -676,6 +678,25 @@ impl Abi {
         &self,
     ) -> BTreeMap<([u8; 32], [u8; 32]), Result<BalanceView, AbiError>> {
         self.balances.clone()
+    }
+
+    pub(crate) fn v2_host_state_commitment(
+        &self,
+    ) -> Result<HostStateCommitment, AbiError> {
+        host_state::commit(self, true)
+    }
+
+    pub(crate) fn v2_host_state_measurement(
+        &self,
+    ) -> Result<HostStateCommitment, AbiError> {
+        host_state::commit(self, false)
+    }
+
+    pub(crate) fn v2_host_state_identity(
+        &self,
+        storage_baseline: &Storage,
+    ) -> Result<HostStateIdentity, AbiError> {
+        host_state::identity(self, storage_baseline)
     }
 
     pub(crate) fn absorb(&mut self, effects: AbiEffects) {

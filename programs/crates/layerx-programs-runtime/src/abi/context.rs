@@ -78,6 +78,16 @@ pub struct ExecutionContext {
 }
 
 impl ExecutionContext {
+    pub(crate) fn canonical_bytes(self) -> [u8; 24] {
+        let mut bytes = [0_u8; 24];
+        bytes[..8].copy_from_slice(&self.activity_sequence.to_be_bytes());
+        bytes[8..16].copy_from_slice(&self.batch_height.to_be_bytes());
+        bytes[16..18].copy_from_slice(&self.runtime_version.to_be_bytes());
+        bytes[18..20].copy_from_slice(&self.abi_version.to_be_bytes());
+        bytes[20..].copy_from_slice(&self.fee_schedule_version.to_be_bytes());
+        bytes
+    }
+
     pub(crate) const fn authenticated(
         activity_sequence: u64,
         batch_height: u64,
