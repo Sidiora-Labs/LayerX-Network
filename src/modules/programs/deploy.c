@@ -81,6 +81,18 @@ static void write_u32(uint8_t *bytes, uint32_t value)
     bytes[3] = (uint8_t)value;
 }
 
+lxp_result lxp_programs_abi_transition_validate(uint16_t current,
+                                                uint16_t requested)
+{
+    if ((current != 0U && current != LX_PROGRAMS_ABI_VERSION &&
+         current != LX_PROGRAMS_ACCOUNT_ABI_VERSION) ||
+        (requested != LX_PROGRAMS_ABI_VERSION &&
+         requested != LX_PROGRAMS_ACCOUNT_ABI_VERSION) ||
+        (current != 0U && requested < current))
+        return LXP_ERR_VERSION_UNSUPPORTED;
+    return LXP_OK;
+}
+
 static void program_key(const uint8_t program_id[32], uint8_t key[40])
 {
     (void)memcpy(key, program_prefix, PROGRAM_KEY_PREFIX_LENGTH);
@@ -326,8 +338,21 @@ lxp_result lxp_programs_lifecycle_validate(
     lxp_result status;
     if (ctx == NULL || activity == NULL || authority == NULL || value == NULL)
         return LXP_ERR_UNKNOWN_ACTIVITY;
-    if (value->abi_version != 1U && value->abi_version != 2U)
-        return LXP_ERR_VERSION_UNSUPPORTED;
+    if (value->ordinal == 1U) {
+        status = lxp_programs_abi_transition_validate(0U, value->abi_version);
+    } else {
+        uint8_t key[40];
+        const uint8_t *current;
+        size_t current_length;
+        program_key(value->program_id, key);
+        status = lxp_ctx_kv_get(ctx, key, sizeof(key), &current,
+                                &current_length);
+        if (status != LXP_OK) return LXP_ERR_UNKNOWN_FIELD;
+        if (current_length != PROGRAM_RECORD_LENGTH) return LXP_FATAL_INVARIANT;
+        status = lxp_programs_abi_transition_validate(
+            read_u16(current + 65U), value->abi_version);
+    }
+    if (status != LXP_OK) return status;
     status = validate_wasm(value);
     if (status != LXP_OK) return status;
     status = validate_interface(ctx, (programs_lifecycle_decoded *)value);
@@ -411,6 +436,9 @@ static lxp_result execute_upgrade(lxp_module_ctx *ctx,
         return LXP_ERR_AUTH_SCOPE;
     if (lxp_ct_memcmp(current + 33U, value->old_hash, 32U) != 0)
         return LXP_ERR_CONTEXT_MISMATCH;
+    status = lxp_programs_abi_transition_validate(
+        read_u16(current + 65U), value->abi_version);
+    if (status != LXP_OK) return status;
     if ((value->policy_or_flags & 1U) != 0U) {
         status = lxp_programs_metering_schedule_current(
             ctx->kernel, lxp_ctx_batch_number(ctx), &metering_schedule);

@@ -1668,7 +1668,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Keep the runtime integration vector expectations aligned with the independent interpreter oracle.
     - Record that execution of the repaired vectors remains a human qualification gate.
     - _Requirements: 46.8, 40.5_
-  - [ ] 38.9 Unify Programs ABI upgrade policy across consensus and projections
+  - [ ] 38.9 Unify Programs ABI upgrade policy across consensus and projections — **Implemented - qualification pending**
     - Freeze one ABI transition policy and enforce it in the C deploy and upgrade transition before any artifact or state mutation.
     - Apply the identical rule in registry replay, executable admission and receipt-backed interface evidence.
     - Return one typed version refusal for a downgrade rather than allowing consensus state that projections cannot ingest.

@@ -298,9 +298,30 @@ fn unknown_program_and_incompatible_abi_are_typed() {
     });
     assert_eq!(
         incompatible,
-        Err(LifecycleRefusal::IncompatibleAbi {
-            requested: ABI_VERSION + 1,
-            supported: ABI_VERSION,
+        Err(LifecycleRefusal::AbiVersion(
+            layerx_programs_runtime::AbiVersionRefusal::Unsupported {
+                requested: ABI_VERSION + 1,
+            },
+        ))
+    );
+}
+
+#[test]
+fn abi_upgrades_are_monotonic_and_historical_versions_remain_admitted() {
+    use layerx_programs_runtime::{
+        admit_abi_upgrade, admit_abi_version, AbiVersionRefusal, ABI_V1_VERSION,
+        ABI_V2_VERSION,
+    };
+
+    assert_eq!(admit_abi_version(ABI_V1_VERSION), Ok(()));
+    assert_eq!(admit_abi_version(ABI_V2_VERSION), Ok(()));
+    assert_eq!(admit_abi_upgrade(ABI_V1_VERSION, ABI_V2_VERSION), Ok(()));
+    assert_eq!(admit_abi_upgrade(ABI_V2_VERSION, ABI_V2_VERSION), Ok(()));
+    assert_eq!(
+        admit_abi_upgrade(ABI_V2_VERSION, ABI_V1_VERSION),
+        Err(AbiVersionRefusal::Downgrade {
+            current: ABI_V2_VERSION,
+            requested: ABI_V1_VERSION,
         })
     );
 }

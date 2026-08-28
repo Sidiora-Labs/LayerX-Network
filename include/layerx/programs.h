@@ -44,6 +44,10 @@ enum {
     LXP_PROGRAMS_SCHEDULE_MAX_ACTIVITIES = 64,
     LXP_PROGRAMS_SCHEDULE_MAX_PROTOCOL_ACCOUNTS = LXP_MAX_TRANSFER_SET_LEGS
 };
+
+/* Frozen Programs ABI policy: deployments use current=0, upgrades are monotonic. */
+lxp_result lxp_programs_abi_transition_validate(uint16_t current,
+                                                uint16_t requested);
 typedef struct lxp_programs_schedule_account_effect {
     uint8_t account[32];
     uint8_t asset[32];

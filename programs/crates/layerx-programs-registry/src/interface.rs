@@ -2,7 +2,7 @@ use core::fmt::{self, Display};
 use std::collections::BTreeSet;
 
 use layerx_programs_runtime::abi::{EncodingConvention, TypeTag};
-use layerx_programs_runtime::{ProgramId, WasmEngine, ABI_V1_VERSION, ABI_V2_VERSION};
+use layerx_programs_runtime::{admit_abi_upgrade, AbiVersionRefusal, ProgramId, WasmEngine, ABI_V1_VERSION, ABI_V2_VERSION};
 
 use crate::account_state::{verify_state_membership, StateProof};
 use crate::hash::sha256;
@@ -138,7 +138,7 @@ pub enum InterfaceRefusal {
     Invalid,
     NonCanonical,
     CodeHashMismatch,
-    UnsupportedAbi,
+    AbiVersion(AbiVersionRefusal),
     ModuleRejected,
     MissingExport,
     StateProof,
@@ -150,11 +150,14 @@ pub enum InterfaceRefusal {
 
 impl Display for InterfaceRefusal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Self::AbiVersion(refusal) = self {
+            return Display::fmt(refusal, f);
+        }
         f.write_str(match self {
             Self::Invalid => "program interface is invalid",
             Self::NonCanonical => "program interface encoding is not canonical",
             Self::CodeHashMismatch => "program interface is bound to a different code hash",
-            Self::UnsupportedAbi => "program interface uses an unsupported ABI",
+            Self::AbiVersion(_) => unreachable!(),
             Self::ModuleRejected => "program module was rejected before interface binding",
             Self::MissingExport => "declared interface entry point is not exported by the module",
             Self::StateProof => "program interface is not proven in the receipt state root",
@@ -204,7 +207,7 @@ impl ProgramInterface {
         let validated = match abi_version {
             ABI_V1_VERSION => engine.validate(module),
             ABI_V2_VERSION => engine.validate_v2(module),
-            _ => return Err(InterfaceRefusal::UnsupportedAbi),
+            _ => return Err(InterfaceRefusal::AbiVersion(AbiVersionRefusal::Unsupported { requested: abi_version })),
         }
         .map_err(|_| InterfaceRefusal::ModuleRejected)?;
         validate_entries(&entries)?;
@@ -313,6 +316,8 @@ impl ProgramInterface {
     }
 
     pub fn authorize_upgrade(&self, prior: &Self, breaking: bool) -> Result<(), InterfaceRefusal> {
+        admit_abi_upgrade(prior.abi_version, self.abi_version)
+            .map_err(InterfaceRefusal::AbiVersion)?;
         if self.is_widening_of(prior) || breaking { Ok(()) } else { Err(InterfaceRefusal::NarrowingUpgrade) }
     }
 }

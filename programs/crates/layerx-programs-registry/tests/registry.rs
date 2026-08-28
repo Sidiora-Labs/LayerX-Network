@@ -10,7 +10,7 @@ use layerx_programs::{
 };
 use layerx_programs_runtime::{
     hash_bytes, ActivityBudgetBinding, CompositionRules, Deploy, HashAlgorithm, Lifecycle,
-    ProgramId, ProgramVersion, UpgradePolicy, ABI_VERSION,
+    ProgramId, ProgramVersion, UpgradePolicy, ABI_V1_VERSION, ABI_V2_VERSION, ABI_VERSION,
 };
 
 use support::{
@@ -493,6 +493,46 @@ fn direct_deployment_insertion_refuses_the_reserved_upgrade_authority() {
     assert_eq!(
         registry.latest_version(program),
         Err(RegistryError::UnknownProgram)
+    );
+}
+
+#[test]
+fn registry_replay_refuses_downgrade_without_rewriting_historical_version() {
+    let program = program();
+    let first = record_with_abi(
+        program,
+        1,
+        None,
+        WASM_V1,
+        UpgradePolicy::Authority([0x51; 32]),
+        80,
+        ABI_V2_VERSION,
+    );
+    let downgrade = record_with_abi(
+        program,
+        2,
+        Some(first.new_code_hash),
+        WASM_V2,
+        UpgradePolicy::Authority([0x51; 32]),
+        81,
+        ABI_V1_VERSION,
+    );
+    let mut registry = Registry::new();
+    assert_eq!(
+        registry.replay_journal(&[first.clone(), downgrade]),
+        Err(RegistryError::AbiVersion(
+            layerx_programs_runtime::AbiVersionRefusal::Downgrade {
+                current: ABI_V2_VERSION,
+                requested: ABI_V1_VERSION,
+            },
+        )),
+    );
+    assert_eq!(registry.latest_version(program), Ok(1));
+    assert_eq!(
+        registry
+            .entry_for_wind_down(program)
+            .map(|entry| entry.versions[0].abi_version),
+        Ok(ABI_V2_VERSION),
     );
 }
 

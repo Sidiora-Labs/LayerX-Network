@@ -4040,7 +4040,7 @@ reqs = ["46.8","40.5"]
 
 [task.38.9]
 title = "Unify Programs ABI upgrade policy across consensus and projections"
-status = "pending"
+status = "implemented"
 wave = 19
 requires = ["33.1"]
 do_1 = "Freeze one ABI transition policy and enforce it in the C deploy and upgrade transition before any artifact or state mutation."
@@ -4050,7 +4050,7 @@ do_4 = "Keep historical ABI replay under the version recorded in the receipt and
 do_5 = "Write cross-language upgrade and downgrade cases for human qualification."
 verify_cmd = "make programs-test"
 symbols = ["execute_upgrade","Registry::record_deployment_version"]
-touches = ["src/modules/programs/deploy.c","programs/crates/layerx-programs-registry/src","programs/crates/layerx-programs-registry/tests","spec/layerx-platform/qualification.kvx"]
+touches = ["include/layerx/programs.h","src/modules/programs/deploy.c","tests/programs/test_registration.c","programs/crates/layerx-programs-runtime/src/abi_policy.rs","programs/crates/layerx-programs-runtime/src/lib.rs","programs/crates/layerx-programs-runtime/src/lifecycle.rs","programs/crates/layerx-programs-runtime/tests/lifecycle.rs","programs/crates/layerx-programs-registry/src","programs/crates/layerx-programs-registry/tests","spec/layerx-platform/qualification.kvx"]
 reqs = ["46.9","29.4","29.7"]
 
 [task.38.10]

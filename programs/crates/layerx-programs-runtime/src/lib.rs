@@ -15,6 +15,8 @@
 #[deny(unsafe_code)]
 pub mod abi;
 #[deny(unsafe_code)]
+pub mod abi_policy;
+#[deny(unsafe_code)]
 pub mod accounts;
 #[deny(unsafe_code)]
 pub mod access;
@@ -87,6 +89,7 @@ pub const fn current_abi_manifest() -> &'static str {
 }
 
 pub use abi::context::{ContextField, ContextRefusal, ExecutionContext};
+pub use abi_policy::{admit_abi_upgrade, admit_abi_version, AbiVersionRefusal};
 pub use abi::response::{CallResponse, ResponseRefusal, MAX_CALL_RESPONSE_BYTES};
 pub use accounts::{
     derive_program_account, program_account_preimage, ProgramAccount, ProgramAccountError,

@@ -404,15 +404,12 @@ impl Registry {
         {
             return Err(RegistryError::VersionHistoryMismatch);
         }
-        if entry
-            .versions
-            .last()
-            .is_some_and(|prior| {
-                prior.abi_version == layerx_programs_runtime::ABI_V2_VERSION
-                    && version.abi_version == layerx_programs_runtime::ABI_V1_VERSION
-            })
-        {
-            return Err(RegistryError::AbiDowngrade);
+        if let Some(prior) = entry.versions.last() {
+            layerx_programs_runtime::admit_abi_upgrade(prior.abi_version, version.abi_version)
+                .map_err(RegistryError::AbiVersion)?;
+        } else {
+            layerx_programs_runtime::admit_abi_version(version.abi_version)
+                .map_err(RegistryError::AbiVersion)?;
         }
         entry.versions.push(RegistryVersion {
             number,
@@ -867,7 +864,7 @@ pub enum RegistryError {
     DeploymentMismatch,
     InvalidUpgradeAuthority,
     VersionHistoryMismatch,
-    AbiDowngrade,
+    AbiVersion(layerx_programs_runtime::AbiVersionRefusal),
     UnverifiedRead,
     StaleRead,
     CorruptRecord,
@@ -889,7 +886,7 @@ impl Display for RegistryError {
             Self::DeploymentMismatch => "deployment receipt and program version do not match",
             Self::InvalidUpgradeAuthority => "upgrade authority uses the reserved zero identifier",
             Self::VersionHistoryMismatch => "program version history is not contiguous",
-            Self::AbiDowngrade => "program ABI version cannot be downgraded",
+            Self::AbiVersion(_) => "program ABI version transition was refused",
             Self::UnverifiedRead => "registry read lacks matching receipt evidence",
             Self::StaleRead => "registry read is older than the declared freshness bound",
             Self::CorruptRecord => "canonical deployment record is corrupt",

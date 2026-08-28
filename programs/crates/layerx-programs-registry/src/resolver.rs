@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use layerx_programs_runtime::{
-    AbiRevision, ActivityBudgetBinding, CompositionContext, CompositionRefusal, CompositionRules,
+    admit_abi_upgrade, admit_abi_version, AbiRevision, ActivityBudgetBinding, CompositionContext, CompositionRefusal, CompositionRules,
     EngineRefusal, ProgramId, ProgramResolver, ValidatedModule, ValidationRefusal, WasmEngine,
     ABI_V1_VERSION, ABI_V2_VERSION,
 };
@@ -23,8 +23,7 @@ pub enum ExecutableAdmissionError {
         current: ReadFreshness,
         requested: ReadFreshness,
     },
-    UnsupportedAbi { declared: u16 },
-    AbiDowngrade { current: u16, requested: u16 },
+    AbiVersion(layerx_programs_runtime::AbiVersionRefusal),
     RevisionMismatch {
         declared: u16,
         validated: AbiRevision,
@@ -50,13 +49,7 @@ impl Display for ExecutableAdmissionError {
             Self::FreshnessRegression { .. } => {
                 formatter.write_str("deployment evidence freshness regressed")
             }
-            Self::UnsupportedAbi { declared } => {
-                write!(formatter, "deployment ABI {declared} is not executable")
-            }
-            Self::AbiDowngrade { current, requested } => write!(
-                formatter,
-                "deployment ABI {requested} downgrades admitted ABI {current}"
-            ),
+            Self::AbiVersion(refusal) => Display::fmt(refusal, formatter),
             Self::RevisionMismatch {
                 declared,
                 validated,
@@ -89,8 +82,7 @@ impl std::error::Error for ExecutableAdmissionError {
             Self::InactiveLifecycle { .. }
             | Self::NonIncreasingVersion { .. }
             | Self::FreshnessRegression { .. }
-            | Self::UnsupportedAbi { .. }
-            | Self::AbiDowngrade { .. }
+            | Self::AbiVersion(_)
             | Self::RevisionMismatch { .. }
             | Self::MissingCurrentHead { .. }
             | Self::DuplicateCurrentHead { .. }
@@ -164,19 +156,18 @@ impl VerifiedProgramCatalog {
                     requested: evidence.freshness(),
                 });
             }
-            if current.abi_version == ABI_V2_VERSION
-                && evidence.abi_version() == ABI_V1_VERSION
-            {
-                return Err(ExecutableAdmissionError::AbiDowngrade {
-                    current: current.abi_version,
-                    requested: evidence.abi_version(),
-                });
-            }
+            admit_abi_upgrade(current.abi_version, evidence.abi_version())
+                .map_err(ExecutableAdmissionError::AbiVersion)?;
+        } else {
+            admit_abi_version(evidence.abi_version())
+                .map_err(ExecutableAdmissionError::AbiVersion)?;
         }
         let expected_revision = match evidence.abi_version() {
             ABI_V1_VERSION => AbiRevision::V1,
             ABI_V2_VERSION => AbiRevision::V2,
-            declared => return Err(ExecutableAdmissionError::UnsupportedAbi { declared }),
+            declared => return Err(ExecutableAdmissionError::AbiVersion(
+                layerx_programs_runtime::AbiVersionRefusal::Unsupported { requested: declared },
+            )),
         };
         let module = match expected_revision {
             AbiRevision::V1 => self.engine.validate(evidence.module()),

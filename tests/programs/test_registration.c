@@ -138,6 +138,17 @@ static int exercise(uint16_t ordinal, size_t payload_length,
 
 int main(void)
 {
+    if (lxp_programs_abi_transition_validate(0U, LX_PROGRAMS_ABI_VERSION) != LXP_OK ||
+        lxp_programs_abi_transition_validate(0U, LX_PROGRAMS_ACCOUNT_ABI_VERSION) != LXP_OK ||
+        lxp_programs_abi_transition_validate(LX_PROGRAMS_ABI_VERSION,
+                                             LX_PROGRAMS_ACCOUNT_ABI_VERSION) != LXP_OK ||
+        lxp_programs_abi_transition_validate(LX_PROGRAMS_ACCOUNT_ABI_VERSION,
+                                             LX_PROGRAMS_ABI_VERSION) !=
+            LXP_ERR_VERSION_UNSUPPORTED ||
+        lxp_programs_abi_transition_validate(0U,
+                                             LX_PROGRAMS_ACCOUNT_ABI_VERSION + 1U) !=
+            LXP_ERR_VERSION_UNSUPPORTED)
+        return 1;
     if (registration_contract() != 0) return 1;
     if (exercise(lxp_activity_type_ordinal(LX_PROGRAMS_CALL), 40U,
                  LXP_ERR_MODULE_DISABLED, 0U) != 0) return 1;

@@ -6,8 +6,8 @@ use std::collections::BTreeMap;
 use sha2::{Digest, Sha256};
 
 use crate::{
-    ExecutionError, ExecutionRecord, Executor, ProgramId, ValidationRefusal, WasmEngine,
-    ABI_VERSION,
+    admit_abi_upgrade, admit_abi_version, AbiVersionRefusal, ExecutionError, ExecutionRecord,
+    Executor, ProgramId, ValidationRefusal, WasmEngine,
 };
 
 /// Code digest authenticated by the programs activity envelope.
@@ -114,7 +114,7 @@ pub enum LifecycleRefusal {
         declared: CodeHash,
         computed: CodeHash,
     },
-    IncompatibleAbi { requested: u16, supported: u16 },
+    AbiVersion(AbiVersionRefusal),
     Validation(ValidationRefusal),
     Migration(ExecutionError),
     VersionOverflow,
@@ -130,13 +130,7 @@ impl Display for LifecycleRefusal {
             Self::CodeHashMismatch { .. } => {
                 formatter.write_str("declared program code hash does not match exact WASM bytes")
             }
-            Self::IncompatibleAbi {
-                requested,
-                supported,
-            } => write!(
-                formatter,
-                "ABI version {requested} is incompatible with supported version {supported}"
-            ),
+            Self::AbiVersion(refusal) => Display::fmt(refusal, formatter),
             Self::Validation(refusal) => write!(formatter, "validation refusal: {refusal}"),
             Self::Migration(error) => write!(formatter, "migration refusal: {error}"),
             Self::VersionOverflow => write!(formatter, "program version overflow"),
@@ -241,19 +235,9 @@ impl Lifecycle {
             .programs
             .get(&activity.program)
             .ok_or(LifecycleRefusal::UnknownProgram)?;
-        if record
-            .versions
-            .last()
-            .is_some_and(|version| {
-                version.abi_version == crate::ABI_V2_VERSION
-                    && activity.abi_version == crate::ABI_V1_VERSION
-            })
-        {
-            return Err(LifecycleRefusal::IncompatibleAbi {
-                requested: activity.abi_version,
-                supported: crate::ABI_V2_VERSION,
-            });
-        }
+        let current_abi = record.versions.last().ok_or(LifecycleRefusal::UnknownProgram)?.abi_version;
+        admit_abi_upgrade(current_abi, activity.abi_version)
+            .map_err(LifecycleRefusal::AbiVersion)?;
         match record.policy {
             UpgradePolicy::Immutable => return Err(LifecycleRefusal::Immutable),
             UpgradePolicy::Authority(expected) if expected != activity.authority => {
@@ -316,14 +300,7 @@ impl Lifecycle {
     }
 
     fn check_abi(requested: u16) -> Result<(), LifecycleRefusal> {
-        if crate::abi::manifest::manifest(requested).is_some() {
-            Ok(())
-        } else {
-            Err(LifecycleRefusal::IncompatibleAbi {
-                requested,
-                supported: ABI_VERSION,
-            })
-        }
+        admit_abi_version(requested).map_err(LifecycleRefusal::AbiVersion)
     }
 
     fn retain(&mut self, activity: &Deploy, refusal: &str) {
