@@ -235,6 +235,16 @@ impl OccupancySettlement {
     #[must_use]
     pub fn charges(&self) -> &[OccupancyCharge] { &self.charges }
 
+    pub fn transfer_root(&self,asset:[u8;32])->Result<[u8;32],OccupancyError>{
+        const LEAF:&[u8]=b"LXP/v1/merkle-leaf\0";const INTERNAL:&[u8]=b"LXP/v1/merkle-internal\0";
+        if asset==[0;32]{return Err(OccupancyError::MalformedEvidence)}
+        let mut treasury_preimage=b"LX:ACCOUNT:v1".to_vec();treasury_preimage.extend_from_slice(&11_u32.to_be_bytes());treasury_preimage.extend_from_slice(b"system:fees");
+        let treasury:[u8;32]=Sha256::digest(treasury_preimage).into();
+        let payers=self.payer_dispositions()?;let mut level=Vec::new();
+        for (payer,(_,paid,_,_)) in payers {if paid==0{continue}let mut leg=Vec::with_capacity(115);leg.push(0);leg.extend_from_slice(&payer.bytes());leg.extend_from_slice(&treasury);leg.extend_from_slice(&asset);leg.extend_from_slice(&paid.to_be_bytes());leg.extend_from_slice(&23_u16.to_be_bytes());let mut leaf=LEAF.to_vec();leaf.extend_from_slice(&leg);level.push(<[u8;32]>::from(Sha256::digest(leaf)));}
+        if level.is_empty(){return Ok([0;32])}while level.len()>1{let mut next=Vec::with_capacity(level.len().div_ceil(2));for pair in level.chunks(2){let right=pair.get(1).unwrap_or(&pair[0]);let mut preimage=INTERNAL.to_vec();preimage.extend_from_slice(&pair[0]);preimage.extend_from_slice(right);next.push(<[u8;32]>::from(Sha256::digest(preimage)));}level=next;}Ok(level[0])
+    }
+
     pub fn payer_dispositions(
         &self,
     ) -> Result<BTreeMap<PrincipalId, (u128, u128, u128, bool)>, OccupancyError> {

@@ -70,6 +70,8 @@ pub mod schedule;
 #[deny(unsafe_code)]
 pub mod storage;
 #[deny(unsafe_code)]
+pub mod terminal;
+#[deny(unsafe_code)]
 pub mod test_support;
 #[deny(unsafe_code)]
 pub mod transfer;

@@ -13,6 +13,7 @@ layerx-crypto = { path = "../layerx-crypto" }
 layerx-proof = { path = "../layerx-proof" }
 layerx-wire = { path = "../layerx-wire" }
 layerx-programs = { package = "layerx-programs-registry", path = "../../../programs/crates/layerx-programs-registry" }
+layerx-programs-runtime = { path = "../../../programs/crates/layerx-programs-runtime" }
 layerx-programs-protocol-adapter = { path = "../../../programs/crates/layerx-programs-protocol-adapter" }
 sha2 = "=0.10.9"
 serde_json = "=1.0.149"

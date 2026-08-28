@@ -18,6 +18,7 @@ pub mod idempotency;
 pub mod identity;
 pub mod limits;
 pub mod obs;
+pub mod ops;
 pub mod outbox;
 pub mod policy;
 pub mod prepare;

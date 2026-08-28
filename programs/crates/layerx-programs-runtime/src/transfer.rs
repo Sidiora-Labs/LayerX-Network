@@ -9,7 +9,6 @@ use std::collections::BTreeMap;
 use crate::abi::{
     AbiEffects, AuthorizationContext, CallFrameId, CapabilitySet, TransferRequest,
 };
-#[cfg(test)]
 use crate::abi::{MAX_EVENT_DATA_BYTES, MAX_EVENT_TOPIC_BYTES};
 use crate::accounts::{derive_program_account, MAX_PROGRAM_ACCOUNT_SEED_BYTES};
 use crate::calls::CallGraph;
@@ -837,8 +836,7 @@ impl AtomicTransferSet {
     }
 
     /// Strictly decodes and validates a persisted authorisation artifact.
-    #[cfg(test)]
-    pub(crate) fn canonical_decode(encoded: &[u8]) -> Result<Self, TransferLawError> {
+    fn canonical_decode(encoded: &[u8]) -> Result<Self, TransferLawError> {
         let mut cursor = TransferCursor::new(encoded);
         let candidate_v2 = if encoded.starts_with(SET_DOMAIN_V1) {
             false
@@ -1103,7 +1101,11 @@ pub fn sandbox_escrow_charge_root(
     .map(|set| set.kernel_root())
 }
 
-#[cfg(test)]
+pub fn verify_authorization_root(encoded:&[u8],expected:[u8;32])->Result<(),TransferLawError>{
+    let decoded=AtomicTransferSet::canonical_decode(encoded)?;
+    if decoded.kernel_root()!=expected{return Err(TransferLawError::ReceiptMismatch)}
+    Ok(())
+}
 fn decode_program_authority(encoded: &[u8]) -> Result<ProgramAuthority, TransferLawError> {
     let mut cursor = TransferCursor::new(encoded);
     if cursor.take(PROGRAM_AUTHORITY_DOMAIN.len())? != PROGRAM_AUTHORITY_DOMAIN {
@@ -1139,7 +1141,6 @@ fn decode_program_authority(encoded: &[u8]) -> Result<ProgramAuthority, Transfer
     Ok(authority)
 }
 
-#[cfg(test)]
 fn decode_program_funding(encoded: &[u8]) -> Result<ProgramFundingBinding, TransferLawError> {
     let mut cursor = TransferCursor::new(encoded);
     if cursor.take(PROGRAM_FUNDING_DOMAIN.len())? != PROGRAM_FUNDING_DOMAIN {
@@ -1216,7 +1217,6 @@ fn domain_hash(domain: &[u8], bytes: &[u8]) -> Result<[u8; 32], TransferLawError
     hash_bytes(HashAlgorithm::Sha256, &preimage).map_err(|_| TransferLawError::InvariantViolation)
 }
 
-#[cfg(test)]
 fn parse_event_envelope(encoded: &[u8]) -> Result<Vec<u8>, TransferLawError> {
     const DOMAIN: &[u8] = b"LayerX/programs/events/v1\0";
     let mut cursor = TransferCursor::new(encoded);
@@ -1263,18 +1263,15 @@ fn parse_event_envelope(encoded: &[u8]) -> Result<Vec<u8>, TransferLawError> {
     }
 }
 
-#[cfg(test)]
 fn frame_from_cursor(cursor: &mut TransferCursor<'_>) -> Result<CallFrameId, TransferLawError> {
     let path = cursor.array()?;
     let depth = cursor.take(1)?[0];
     CallFrameId::from_canonical(path, depth).map_err(|_| TransferLawError::InvalidTransferSet)
 }
 
-#[cfg(test)]
 struct TransferCursor<'a> {
     remaining: &'a [u8],
 }
-#[cfg(test)]
 impl<'a> TransferCursor<'a> {
     const fn new(remaining: &'a [u8]) -> Self {
         Self { remaining }

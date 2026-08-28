@@ -16,6 +16,63 @@ const MAX_EFFECT_BODY: usize = 256;
 const MAX_PROOF_DEPTH: usize = 32;
 const BATCH_ENCODED_BYTES: usize = 354;
 const REPLAY_RECEIPT_BYTES: usize = 106;
+const PROGRAM_OUTCOME_V1: u32 = 0x5052_4731;
+const PROGRAM_OUTCOME_V2: u32 = 0x5052_4732;
+const PROGRAM_OUTCOME_V3: u32 = 0x5052_4733;
+
+/// Canonical Programs execution facts embedded in a core receipt.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProgramOutcome {
+    encoding_version: u8,
+    terminal_kind: u8,
+    result_code: i32,
+    runtime_version: u16,
+    abi_version: u16,
+    fee_schedule_version: u32,
+    metering_schedule_version: u32,
+    cpu_fuel: u64,
+    memory_bytes: u64,
+    storage_read_bytes: u64,
+    storage_write_bytes: u64,
+    output_values: u32,
+    output_bytes: u64,
+    occupancy_byte_batches: u128,
+    occupancy_fee_units: u128,
+    fee_schedule_prices: [u64; 7],
+    occupancy_asset_id: [u8; 32],
+    occupancy_evidence_digest: [u8; 32],
+    occupancy_transfer_root: [u8; 32],
+    fee_units: u128,
+    call_graph_root: [u8; 32],
+    terminal_payload_root: [u8; 32],
+    transfer_root: [u8; 32],
+}
+
+impl ProgramOutcome {
+    #[must_use] pub const fn encoding_version(&self) -> u8 { self.encoding_version }
+    #[must_use] pub const fn terminal_kind(&self) -> u8 { self.terminal_kind }
+    #[must_use] pub const fn result_code(&self) -> i32 { self.result_code }
+    #[must_use] pub const fn runtime_version(&self) -> u16 { self.runtime_version }
+    #[must_use] pub const fn abi_version(&self) -> u16 { self.abi_version }
+    #[must_use] pub const fn fee_schedule_version(&self) -> u32 { self.fee_schedule_version }
+    #[must_use] pub const fn metering_schedule_version(&self) -> u32 { self.metering_schedule_version }
+    #[must_use] pub const fn cpu_fuel(&self) -> u64 { self.cpu_fuel }
+    #[must_use] pub const fn memory_bytes(&self) -> u64 { self.memory_bytes }
+    #[must_use] pub const fn storage_read_bytes(&self) -> u64 { self.storage_read_bytes }
+    #[must_use] pub const fn storage_write_bytes(&self) -> u64 { self.storage_write_bytes }
+    #[must_use] pub const fn output_values(&self) -> u32 { self.output_values }
+    #[must_use] pub const fn output_bytes(&self) -> u64 { self.output_bytes }
+    #[must_use] pub const fn occupancy_byte_batches(&self) -> u128 { self.occupancy_byte_batches }
+    #[must_use] pub const fn occupancy_fee_units(&self) -> u128 { self.occupancy_fee_units }
+    #[must_use] pub const fn fee_schedule_prices(&self) -> [u64; 7] { self.fee_schedule_prices }
+    #[must_use] pub const fn occupancy_asset_id(&self) -> [u8; 32] { self.occupancy_asset_id }
+    #[must_use] pub const fn occupancy_evidence_digest(&self) -> [u8; 32] { self.occupancy_evidence_digest }
+    #[must_use] pub const fn occupancy_transfer_root(&self) -> [u8; 32] { self.occupancy_transfer_root }
+    #[must_use] pub const fn fee_units(&self) -> u128 { self.fee_units }
+    #[must_use] pub const fn call_graph_root(&self) -> [u8; 32] { self.call_graph_root }
+    #[must_use] pub const fn terminal_payload_root(&self) -> [u8; 32] { self.terminal_payload_root }
+    #[must_use] pub const fn transfer_root(&self) -> [u8; 32] { self.transfer_root }
+}
 
 /// One canonical receipt effect.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -59,6 +116,7 @@ pub struct ProtocolReceipt {
     authorization_hash: [u8; 32],
     context_hash: [u8; 32],
     timestamp: u64,
+    program_outcome: Option<ProgramOutcome>,
     sequencer_signature: Option<[u8; 64]>,
 }
 
@@ -214,6 +272,9 @@ impl ProtocolReceipt {
     pub const fn sequencer_signature(&self) -> Option<[u8; 64]> {
         self.sequencer_signature
     }
+
+    #[must_use]
+    pub const fn program_outcome(&self) -> Option<&ProgramOutcome> { self.program_outcome.as_ref() }
 }
 
 impl Effect {
@@ -306,6 +367,81 @@ fn decode_effect(decoder: &mut Decoder<'_>) -> Result<Effect, WireError> {
     })
 }
 
+fn validate_program_outcome(outcome: &ProgramOutcome, protocol: u16, offset: usize) -> Result<(), WireError> {
+    let zero = [0_u8; 32];
+    if !(1..=3).contains(&outcome.terminal_kind)
+        || outcome.runtime_version == 0 || outcome.abi_version == 0
+        || outcome.fee_schedule_version == 0 || outcome.metering_schedule_version != 1
+        || outcome.terminal_payload_root == zero
+        || (outcome.terminal_kind == 1 && outcome.result_code != 0)
+        || (outcome.terminal_kind != 1 && (outcome.result_code == 0 || outcome.result_code <= -1000))
+        || (outcome.terminal_kind != 1 && outcome.transfer_root != zero)
+    {
+        return Err(WireError::known(KnownResult::FatalInvariant, offset));
+    }
+    if !matches!((protocol, outcome.encoding_version), (1, 1 | 3) | (2, 2 | 3)) {
+        return Err(WireError::known(KnownResult::VersionUnsupported, offset));
+    }
+    let occupancy_zero = outcome.occupancy_byte_batches == 0
+        && outcome.occupancy_fee_units == 0
+        && outcome.occupancy_asset_id == zero
+        && outcome.occupancy_evidence_digest == zero
+        && outcome.occupancy_transfer_root == zero;
+    if outcome.encoding_version == 1 && !occupancy_zero
+        || outcome.encoding_version >= 2 && outcome.terminal_kind != 1 && !occupancy_zero
+        || outcome.encoding_version == 2 && outcome.terminal_kind == 1
+            && (outcome.occupancy_asset_id == zero || outcome.occupancy_evidence_digest == zero)
+        || outcome.encoding_version == 3
+            && ((outcome.occupancy_asset_id == zero) != (outcome.occupancy_evidence_digest == zero))
+        || protocol == 1 && outcome.encoding_version == 3 && !occupancy_zero
+        || protocol == 2 && outcome.encoding_version == 3 && outcome.terminal_kind == 1
+            && (outcome.occupancy_asset_id == zero || outcome.occupancy_evidence_digest == zero)
+    {
+        return Err(WireError::known(KnownResult::NonCanonical, offset));
+    }
+    Ok(())
+}
+
+fn decode_program_outcome(decoder: &mut Decoder<'_>, protocol: u16) -> Result<ProgramOutcome, WireError> {
+    let offset = decoder.offset();
+    let encoding_version = match decoder.u32()? {
+        PROGRAM_OUTCOME_V1 => 1,
+        PROGRAM_OUTCOME_V2 => 2,
+        PROGRAM_OUTCOME_V3 => 3,
+        _ => return Err(WireError::known(KnownResult::NonCanonical, offset)),
+    };
+    let terminal_kind = decoder.u8()?;
+    let result_code = decoder.i32()?;
+    let runtime_version = decoder.u16()?;
+    let abi_version = decoder.u16()?;
+    let fee_schedule_version = decoder.u32()?;
+    let metering_schedule_version = if encoding_version == 3 { decoder.u32()? } else { 1 };
+    let cpu_fuel = decoder.u64()?;
+    let memory_bytes = decoder.u64()?;
+    let storage_read_bytes = decoder.u64()?;
+    let storage_write_bytes = decoder.u64()?;
+    let output_values = decoder.u32()?;
+    let output_bytes = decoder.u64()?;
+    let occupancy_byte_batches = if encoding_version >= 2 { decoder.u128()? } else { 0 };
+    let occupancy_fee_units = if encoding_version >= 2 { decoder.u128()? } else { 0 };
+    let mut fee_schedule_prices = [0; 7];
+    if encoding_version >= 2 { for price in &mut fee_schedule_prices { *price = decoder.u64()?; } }
+    let occupancy_asset_id = if encoding_version >= 2 { bounded_array(decoder)? } else { [0; 32] };
+    let occupancy_evidence_digest = if encoding_version >= 2 { bounded_array(decoder)? } else { [0; 32] };
+    let occupancy_transfer_root = if encoding_version >= 2 { bounded_array(decoder)? } else { [0; 32] };
+    let outcome = ProgramOutcome {
+        encoding_version, terminal_kind, result_code, runtime_version, abi_version,
+        fee_schedule_version, metering_schedule_version, cpu_fuel, memory_bytes,
+        storage_read_bytes, storage_write_bytes, output_values, output_bytes,
+        occupancy_byte_batches, occupancy_fee_units, fee_schedule_prices,
+        occupancy_asset_id, occupancy_evidence_digest, occupancy_transfer_root,
+        fee_units: decoder.u128()?, call_graph_root: bounded_array(decoder)?,
+        terminal_payload_root: bounded_array(decoder)?, transfer_root: bounded_array(decoder)?,
+    };
+    validate_program_outcome(&outcome, protocol, offset)?;
+    Ok(outcome)
+}
+
 fn decode_protocol(bytes: &[u8]) -> Result<Receipt, WireError> {
     let mut decoder = Decoder::new(bytes, MAX_MESSAGE_BYTES);
     let envelope_version = decoder.structure_header_version(RECEIPT_TAG)?;
@@ -346,6 +482,17 @@ fn decode_protocol(bytes: &[u8]) -> Result<Receipt, WireError> {
     let authorization_hash = bounded_array(&mut decoder)?;
     let context_hash = bounded_array(&mut decoder)?;
     let timestamp = decoder.u64()?;
+    let program_outcome = if decoder.remaining() > 69 {
+        Some(decode_program_outcome(&mut decoder, protocol_version)?)
+    } else { None };
+    if let Some(outcome) = &program_outcome {
+        if module_id != 9 || outcome.result_code != result_code
+            || (outcome.terminal_kind == 1 && outcome.transfer_root != transfer_set_root)
+            || (outcome.terminal_kind != 1 && transfer_set_root != [0; 32])
+        {
+            return Err(WireError::known(KnownResult::FatalInvariant, decoder.offset()));
+        }
+    }
     let sequencer_signature = match decoder.u8()? {
         0 => None,
         1 => Some(bounded_array(&mut decoder)?),
@@ -385,6 +532,7 @@ fn decode_protocol(bytes: &[u8]) -> Result<Receipt, WireError> {
         authorization_hash,
         context_hash,
         timestamp,
+        program_outcome,
         sequencer_signature,
     })))
 }
@@ -435,6 +583,38 @@ fn encode_effect(encoder: &mut Encoder, effect: &Effect) -> Result<(), WireError
     encoder.bytes(&effect.body, MAX_EFFECT_BODY)
 }
 
+fn encode_program_outcome(encoder: &mut Encoder, outcome: &ProgramOutcome, protocol: u16) -> Result<(), WireError> {
+    validate_program_outcome(outcome, protocol, 0)?;
+    encoder.u32(match outcome.encoding_version {
+        1 => PROGRAM_OUTCOME_V1, 2 => PROGRAM_OUTCOME_V2, 3 => PROGRAM_OUTCOME_V3,
+        _ => return Err(WireError::known(KnownResult::VersionUnsupported, 0)),
+    })?;
+    encoder.u8(outcome.terminal_kind)?;
+    encoder.i32(outcome.result_code)?;
+    encoder.u16(outcome.runtime_version)?;
+    encoder.u16(outcome.abi_version)?;
+    encoder.u32(outcome.fee_schedule_version)?;
+    if outcome.encoding_version == 3 { encoder.u32(outcome.metering_schedule_version)?; }
+    encoder.u64(outcome.cpu_fuel)?;
+    encoder.u64(outcome.memory_bytes)?;
+    encoder.u64(outcome.storage_read_bytes)?;
+    encoder.u64(outcome.storage_write_bytes)?;
+    encoder.u32(outcome.output_values)?;
+    encoder.u64(outcome.output_bytes)?;
+    if outcome.encoding_version >= 2 {
+        encoder.u128(outcome.occupancy_byte_batches)?;
+        encoder.u128(outcome.occupancy_fee_units)?;
+        for price in outcome.fee_schedule_prices { encoder.u64(price)?; }
+        encoder.bytes(&outcome.occupancy_asset_id, 32)?;
+        encoder.bytes(&outcome.occupancy_evidence_digest, 32)?;
+        encoder.bytes(&outcome.occupancy_transfer_root, 32)?;
+    }
+    encoder.u128(outcome.fee_units)?;
+    encoder.bytes(&outcome.call_graph_root, 32)?;
+    encoder.bytes(&outcome.terminal_payload_root, 32)?;
+    encoder.bytes(&outcome.transfer_root, 32)
+}
+
 fn encode_protocol(receipt: &ProtocolReceipt) -> Result<Vec<u8>, WireError> {
     let mut encoder = Encoder::new(MAX_MESSAGE_BYTES);
     encoder.structure_header_version(RECEIPT_TAG, receipt.protocol_version)?;
@@ -468,6 +648,9 @@ fn encode_protocol(receipt: &ProtocolReceipt) -> Result<Vec<u8>, WireError> {
     encoder.bytes(&receipt.authorization_hash, 32)?;
     encoder.bytes(&receipt.context_hash, 32)?;
     encoder.u64(receipt.timestamp)?;
+    if let Some(outcome) = &receipt.program_outcome {
+        encode_program_outcome(&mut encoder, outcome, receipt.protocol_version)?;
+    }
     encoder.u8(u8::from(receipt.sequencer_signature.is_some()))?;
     if let Some(signature) = receipt.sequencer_signature {
         encoder.bytes(&signature, 64)?;
@@ -510,6 +693,37 @@ pub fn encode_unsigned(receipt: &Receipt) -> Result<Vec<u8>, WireError> {
             encode_protocol(&unsigned)
         }
         Receipt::Replay(_) => Err(WireError::known(KnownResult::NonCanonical, 0)),
+    }
+}
+
+#[cfg(test)]
+mod program_outcome_vectors {
+    use super::*;
+
+    #[test]
+    fn c_v3_program_outcome_layout_round_trips_byte_exactly() -> Result<(), WireError> {
+        const C_VECTOR: &str = "505247330100000000000100010000000700000001000000000000000b000000000000000c000000000000000d000000000000000e00000001000000000000000f00000000000000000000000000000000000000000000000100000000000000020000000000000003000000000000000400000000000000050000000000000006000000000000000700000020000000000000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000201111111111111111111111111111111111111111111111111111111111111111000000202222222222222222222222222222222222222222222222222222222222222222000000200000000000000000000000000000000000000000000000000000000000000000";
+        let outcome = ProgramOutcome {
+            encoding_version: 3, terminal_kind: 1, result_code: 0,
+            runtime_version: 1, abi_version: 1, fee_schedule_version: 7,
+            metering_schedule_version: 1, cpu_fuel: 11, memory_bytes: 12,
+            storage_read_bytes: 13, storage_write_bytes: 14, output_values: 1,
+            output_bytes: 15, occupancy_byte_batches: 0, occupancy_fee_units: 0,
+            fee_schedule_prices: [1, 2, 3, 4, 5, 6, 7],
+            occupancy_asset_id: [0; 32], occupancy_evidence_digest: [0; 32],
+            occupancy_transfer_root: [0; 32], fee_units: 16,
+            call_graph_root: [0x11; 32], terminal_payload_root: [0x22; 32],
+            transfer_root: [0; 32],
+        };
+        let mut encoder = Encoder::new(MAX_MESSAGE_BYTES);
+        encode_program_outcome(&mut encoder, &outcome, 1)?;
+        let encoded = encoder.finish();
+        let encoded_hex: String = encoded.iter().map(|byte| format!("{byte:02x}")).collect();
+        assert_eq!(encoded_hex, C_VECTOR);
+        assert_eq!(&encoded[..4], &PROGRAM_OUTCOME_V3.to_be_bytes());
+        let mut decoder = Decoder::new(&encoded, MAX_MESSAGE_BYTES);
+        assert_eq!(decode_program_outcome(&mut decoder, 1)?, outcome);
+        decoder.finish()
     }
 }
 

@@ -28,6 +28,8 @@ bool lxp_program_metering_schedule_available(uint32_t schedule_version)
 
 lxp_result lxp_program_outcome_validate(const lxp_program_outcome *outcome)
 {
+    uint8_t terminal_payload_root[32];
+    uint8_t call_graph_root[32];
     if (outcome == NULL || !outcome->present ||
         !valid_program_terminal(outcome->terminal_kind) ||
         outcome->runtime_version == 0U || outcome->abi_version == 0U ||
@@ -45,6 +47,27 @@ lxp_result lxp_program_outcome_validate(const lxp_program_outcome *outcome)
         return LXP_FATAL_INVARIANT;
     if (lxp_ct_is_zero(outcome->terminal_payload_root, 32U))
         return LXP_ERR_NON_CANONICAL;
+    if (outcome->terminal_payload.length != 0U) {
+        if (outcome->terminal_payload.bytes == NULL ||
+            outcome->terminal_payload.length > LXP_MAX_ACTIVITY_BYTES)
+            return LXP_ERR_LENGTH_LIMIT;
+        if (lxp_hash_sha256(outcome->terminal_payload.bytes,
+                            outcome->terminal_payload.length,
+                            terminal_payload_root) != LXP_OK ||
+            lxp_ct_memcmp(terminal_payload_root,
+                          outcome->terminal_payload_root, 32U) != 0)
+            return LXP_ERR_NON_CANONICAL;
+    }
+    if (outcome->call_graph_payload.length != 0U) {
+        if (outcome->call_graph_payload.bytes == NULL ||
+            outcome->call_graph_payload.length > LXP_MAX_ACTIVITY_BYTES)
+            return LXP_ERR_LENGTH_LIMIT;
+        if (lxp_hash_sha256(outcome->call_graph_payload.bytes,
+                            outcome->call_graph_payload.length,
+                            call_graph_root) != LXP_OK ||
+            lxp_ct_memcmp(call_graph_root,outcome->call_graph_root,32U) != 0)
+            return LXP_ERR_NON_CANONICAL;
+    }
     if (outcome->encoding_version != 1U && outcome->encoding_version != 2U &&
         outcome->encoding_version != 3U)
         return LXP_ERR_VERSION_UNSUPPORTED;

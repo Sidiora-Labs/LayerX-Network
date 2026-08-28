@@ -1406,7 +1406,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Test that an interpreted script and its compiled equivalent produce identical state changes and identical receipts modulo cost.
     - Add the interpreter measurements to make programs-bench beside the execution baseline.
     - _Requirements: 40.5_
-  - [ ] 33.6 Make programs first-class on the agent plane
+  - [x] 33.6 Make programs first-class on the agent plane
     - Add agent-plane operations to discover a program, read its interface, simulate a call against current state and submit a call, under the existing agent-plane freshness and receipt-verification rules.
     - Make simulation honest: it returns the same refusals, the same typed failures and the same metered cost the real execution would, and it commits nothing.
     - Expose deployment, interface publication and calling through the platform CLI in the same shape as the existing program commands.

@@ -12,6 +12,8 @@ const CONFIG_VERSION: u16 = 1;
 pub struct Environment {
     pub endpoint: String,
     pub network_id: u32,
+    #[serde(default)]
+    pub sequencer_trust_anchor: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -40,6 +42,7 @@ impl Default for Configuration {
                 Environment {
                     endpoint: "http://127.0.0.1:9402".into(),
                     network_id: 402,
+                    sequencer_trust_anchor: None,
                 },
             )]),
             keys: BTreeMap::new(),

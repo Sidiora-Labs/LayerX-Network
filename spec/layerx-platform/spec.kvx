@@ -3494,7 +3494,7 @@ reqs = ["40.5"]
 
 [task.33.6]
 title = "Make programs first-class on the agent plane"
-status = "pending"
+status = "done"
 wave = 19
 requires = ["33.3","33.4","28.8"]
 do_1 = "Add agent-plane operations to discover a program, read its interface, simulate a call against current state and submit a call, under the existing agent-plane freshness and receipt-verification rules."
@@ -3503,8 +3503,8 @@ do_3 = "Expose deployment, interface publication and calling through the platfor
 do_4 = "Extend the emulator to execute program calls with real runtime semantics so an agent can develop against it and get real refusals."
 do_5 = "Ship an end-to-end walkthrough of an agent discovering an unknown program and calling it correctly with no human in the loop."
 verify_cmd = "make agent-test"
-symbols = ["layerx_agent::ops::program","layerx_platform_cli::program::call"]
-touches = ["agent/crates/layerx-agent/src/ops/program.rs","platform/crates/layerx-platform-cli/src/program/call.rs","agent/crates/layerx-agent-emulator/src/program.rs"]
+symbols = ["layerx_agentd::ops::program::ProgramOperations","layerx_platform_cli::programs::simulate","platform_emulator_simulate"]
+touches = ["agent/crates/layerx-agentd/Cargo.toml","agent/crates/layerx-agentd/src/ops/program.rs","agent/crates/layerx-agentd/src/ops/mod.rs","agent/crates/layerx-agentd/src/lib.rs","agent/crates/layerx-types/src/intent.rs","agent/crates/layerx-proof/src/receipt.rs","agent/crates/layerx-wire/src/decode.rs","agent/crates/layerx-wire/src/receipt.rs","include/layerx/lxp_receipt.h","src/modules/programs/call.c","src/protocol/lxp_receipt.c","programs/crates/layerx-programs-runtime/src/lib.rs","programs/crates/layerx-programs-runtime/src/terminal.rs","programs/crates/layerx-programs-runtime/src/occupancy.rs","programs/crates/layerx-programs-runtime/src/transfer.rs","platform/cli/src/config.rs","platform/cli/src/main.rs","platform/cli/src/programs.rs","platform/cli/Cargo.toml","platform/emulator/core/emulator_core.c","platform/emulator/core/emulator_core.h","platform/emulator/src/main.rs","platform/emulator/Cargo.toml","platform/examples/agent-program-call/walkthrough.sh","spec/layerx-platform/qualification.kvx"]
 reqs = ["40.6"]
 
 [task.33.7]

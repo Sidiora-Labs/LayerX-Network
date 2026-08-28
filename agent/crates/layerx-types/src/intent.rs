@@ -618,10 +618,24 @@ impl ProgramCallFailure {
 
 /// The typed outcome of one program call: either the callee's response or a
 /// typed failure. The outcome is the response the operation carries back.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProgramLegacyValue { I32(i32), I64(i64) }
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProgramLegacyCallResponse { code: i32, values: Vec<ProgramLegacyValue> }
+
+impl ProgramLegacyCallResponse {
+    pub fn new(code:i32,values:Vec<ProgramLegacyValue>)->Result<Self,ProgramCallError>{if code<0{return Err(ProgramCallError::NegativeResponseCode(code))}Ok(Self{code,values})}
+    #[must_use] pub const fn code(&self)->i32{self.code}
+    #[must_use] pub fn values(&self)->&[ProgramLegacyValue]{&self.values}
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ProgramCallOutcome {
     /// The call completed and returned a typed response.
     Completed(ProgramCallResponse),
+    /// An ABI-one call completed with its native typed Wasm value vector.
+    LegacyCompleted(ProgramLegacyCallResponse),
     /// The call was refused with a typed failure.
     Refused(ProgramCallFailure),
 }
@@ -630,7 +644,7 @@ impl ProgramCallOutcome {
     /// Reports whether the call completed with a response.
     #[must_use]
     pub const fn is_completed(&self) -> bool {
-        matches!(self, Self::Completed(_))
+        matches!(self, Self::Completed(_) | Self::LegacyCompleted(_))
     }
 
     /// Returns the completed response, if any.
@@ -638,7 +652,7 @@ impl ProgramCallOutcome {
     pub const fn response(&self) -> Option<&ProgramCallResponse> {
         match self {
             Self::Completed(response) => Some(response),
-            Self::Refused(_) => None,
+            Self::LegacyCompleted(_) | Self::Refused(_) => None,
         }
     }
 
@@ -647,7 +661,7 @@ impl ProgramCallOutcome {
     pub const fn failure(&self) -> Option<ProgramCallFailure> {
         match self {
             Self::Refused(failure) => Some(*failure),
-            Self::Completed(_) => None,
+            Self::Completed(_) | Self::LegacyCompleted(_) => None,
         }
     }
 }

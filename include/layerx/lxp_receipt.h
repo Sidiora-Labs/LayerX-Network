@@ -65,7 +65,9 @@ typedef struct lxp_program_outcome {
     uint8_t occupancy_transfer_root[32];
     lxp_u128 fee_units;
     uint8_t call_graph_root[32];
+    lxp_byte_span call_graph_payload;
     uint8_t terminal_payload_root[32];
+    lxp_byte_span terminal_payload;
     uint8_t transfer_root[32];
 } lxp_program_outcome;
 

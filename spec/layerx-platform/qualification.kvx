@@ -2695,3 +2695,44 @@ symbol = "layerx_programs_call_sandbox_admit, layerx_programs_sandbox_admit_host
 observed = "Reservation-lifecycle rereview found that Rust installed the token-bound thread-local host settlement reservation before C allocated its state, receipt and staged-slot capacity, while C published reservation_token only after all those operations succeeded. Any intermediate refusal therefore left cleanup unable to identify and cancel the Rust reservation. C now records the call token immediately after successful Rust admission, before its first fallible allocation, explicitly cancels and clears that token on its local admission-failure unwind, and retains the token for the ordinary activity finalizer on every later pre-work or terminal-capacity refusal."
 assumption = "Human qualification must inject failure at each state-buffer allocation, receipt allocation, staged-slot reservation, terminal C buffer allocation and Rust terminal-vector reservation, then prove the thread-local reservation is absent and the same thread can immediately admit another activity. No build, test, formatter, fault injection, qualification command or runtime result is asserted."
 severity = "qualification-required"
+[observation.task-33-6-agent-program-endpoints]
+task = "33.6"
+kind = "forced-assumption"
+files = ["agent/crates/layerx-agentd/src/ops/program.rs","platform/cli/src/programs.rs"]
+note = "Agent operations consume opaque VerifiedProtocolHead, VerifiedProgramHead and VerifiedInterfaceRead values produced by the configured node-pair verifier, and submit exact signed bytes through layerx-client LNI while preserving Unknown. The CLI removes per-call root, ABI and sequencer inputs; it verifies discovery under the active environment's configured sequencer trust anchor and carries the resulting root, ABI, version, code hash and freshness into receipt verification. Human qualification must exercise the configured trust histories, task 38.2 LNI server and authorized receipt lookup; this implementation phase did not start owner-operated nodes."
+
+[observation.task-33-6-emulator-program-registration]
+task = "33.6"
+kind = "qualification-required"
+files = ["platform/emulator/core/emulator_core.c","platform/emulator/src/main.rs"]
+note = "The emulator registers the real Programs module and simulates by exporting through a private arena into a separately allocated candidate, executing there and releasing candidate-owned output after response construction. It has no restore-on-live-state path. Startup requires an owner-supplied nonzero sequencer seed file; no signing seed is compiled into the binary. Human qualification must exercise deploy, enumeration, interface publication, simulate and call against the linked C core and compare refusal, cost and receipt fields; no build or runtime command was run during implementation."
+
+[observation.task-33-6-c-touch-graph]
+task = "33.6"
+kind = "codify-observation"
+files = ["platform/emulator/core/emulator_core.c","platform/emulator/core/emulator_core.h"]
+note = "Codify 0.6.0 did not observe the changed C emulator bridge files as task touches even though both are present in the Git diff. They remain part of the implementation and must be included in human qualification; the graph-observable Rust platform_emulator_simulate symbol anchors the same boundary."
+
+[observation.task-33-6-program-terminal-payload]
+task = "33.6"
+kind = "protocol-shape"
+files = ["src/protocol/lxp_receipt.c","agent/crates/layerx-wire/src/receipt.rs","platform/cli/src/programs.rs"]
+note = "The canonical lxp_program_outcome encodes terminal_payload_root while the execution boundary retains bounded non-consensus availability bytes. On current main the producer emits optional transfer-authority and occupancy wrappers around ABI1 execution-v2 or traced execution-v3 evidence, or ABI2 execution-v4 evidence with optional trace; it also emits distinct failure-detail, resource-detail, settlement-failure and callback-failure domains. The shared decoder authenticates bytes against the signed root, enforces the exact tag-specific composition, entrypoint, ABI, nested fault, meter and response grammars, and preserves values, usage, trace, graph, typed terminal facts and attachments; unauthenticated HTTP sibling outcomes are ignored. The call boundary retains the exact graph availability span separately for every runtime terminal family. Agent and CLI hash it against call_graph_root, require it to match ABI2 embedded graph bytes, decode nonempty occupancy settlement evidence and derive its exact maintenance transfer root, and decode candidate transfer authorization evidence to derive its exact kernel root. Occupancy grammar is selected from the verified outer receipt: protocol-v2 successful execution requires exactly one wrapper for both ABI1 and ABI2, protocol-v1 legacy success requires none, and every failure, resource, settlement or callback family forbids it. Empty required evidence is semantic absence and requires zero digest, transfer root, batches and fee; nonempty evidence is fully verified. ABI1 transfer roots do not require candidate authority evidence, and a candidate-authority wrapper on legacy evidence is refused. ABI1 success is a distinct typed legacy outcome carrying native Wasm values rather than invented response bytes. Human qualification must differential-test every producer domain, missing/oversized/tampered material and both ABIs."
+
+[observation.task-33-6-isolated-simulation]
+task = "33.6"
+kind = "qualification-required"
+files = ["platform/emulator/core/emulator_core.c","agent/crates/layerx-agentd/src/ops/program.rs"]
+note = "Emulator simulation writes a snapshot through a private arena and caller-owned buffer, imports it into a separately allocated candidate emulator, and executes only there. Receipt and terminal buffers remain candidate-owned until the Rust boundary copies them into its response and explicitly releases the candidate; no live arena, snapshot buffer, receipt buffer, kernel or publication map is mutated. The concrete agent HTTP transport consumes the domain-separated signed ProgramSimulationEvidence bound to discovery root, freshness, sequence, activity and boundary identity. Human qualification must fault private snapshot creation/import/execution/release and confirm the live root, sequence, scratch buffers and publications remain byte-identical."
+
+[observation.task-33-6-autonomous-walkthrough]
+task = "33.6"
+kind = "qualification-required"
+files = ["platform/examples/agent-program-call/walkthrough.sh","platform/cli/src/programs.rs","platform/emulator/core/emulator_core.c"]
+note = "The walkthrough accepts no operator arguments. It enumerates the registry, selects an active previously unknown program, reads any published interface, derives freshness and account sequence from live reads, simulates first, and returns the exact typed refusal without submitting when admission refuses. A completed simulation alone permits the real call. The CLI stateful submission boundary turns transport ambiguity into an explicit retained-byte unknown carrying the locally derived canonical activity id; the walkthrough resolves only that activity id through the receipt route while preserving the original idempotency key. Pre-send, local and deterministic command failures remain non-submitted refusals. Human qualification must run it with success, each refusal family, pre-send failure, a dropped response after commit and snapshot export/import; no walkthrough or shell command was executed in implementation."
+
+[observation.task-33-6-codify-saturation]
+task = "33.6"
+kind = "tooling"
+files = ["spec/layerx-platform/spec.kvx"]
+note = "The one allowed cg spec implemented attempt resolved all three task symbols, then remained blocked for about fifty seconds behind shared editor-owned Codify trace processes and was interrupted without killing them. The subsequent cg guard read shared task 5.8 rather than this worktree task 33.6 and therefore reported all eight changed implementation paths outside 5.8 plus four advisory stale documentation anchors; every implementation path is already declared in task 33.6 touches. The authoritative task status was set to implemented because source is complete; human integration must reconcile graph state once the shared database is available."

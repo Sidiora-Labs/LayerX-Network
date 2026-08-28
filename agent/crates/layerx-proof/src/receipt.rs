@@ -337,6 +337,84 @@ pub fn verify_program_state(
     })
 }
 
+/// Verifies a sequencer-signed Programs execution receipt, preserving both
+/// successful and refused outcomes without imposing 402LXP transfer fields.
+pub fn verify_program_outcome(
+    receipt_bytes: &[u8],
+    authorised: &AuthorizedBatch,
+) -> Result<VerifiedReceipt, VerificationFailure> {
+    let receipt = decode(receipt_bytes)
+        .map_err(|_| VerificationFailure::at(ReceiptCheck::Decode))?;
+    let reproduced = encode(&receipt)
+        .map_err(|_| VerificationFailure::at(ReceiptCheck::CanonicalEncoding))?;
+    if reproduced != receipt_bytes {
+        return Err(VerificationFailure::at(ReceiptCheck::CanonicalEncoding));
+    }
+    let protocol = receipt.protocol()
+        .ok_or_else(|| VerificationFailure::at(ReceiptCheck::ReceiptShape))?;
+    if !matches!(protocol.protocol_version(), 1 | 2) {
+        return Err(VerificationFailure::at(ReceiptCheck::ProtocolVersion));
+    }
+    if protocol.module_id() != 9 || protocol.operation() != 3 {
+        return Err(VerificationFailure::at(ReceiptCheck::Module));
+    }
+    let outcome = protocol.program_outcome()
+        .ok_or_else(|| VerificationFailure::at(ReceiptCheck::ReceiptShape))?;
+    if !matches!(outcome.abi_version(), 1 | 2)
+        || u32::from(outcome.abi_version()) != protocol.module_version()
+        || outcome.runtime_version() != 1
+    {
+        return Err(VerificationFailure::at(ReceiptCheck::ProtocolVersion));
+    }
+    if protocol.activity_id() == [0; 32] {
+        return Err(VerificationFailure::at(ReceiptCheck::ActivityId));
+    }
+    if protocol.batch_id() != authorised.batch_id {
+        return Err(VerificationFailure::at(ReceiptCheck::BatchId));
+    }
+    if protocol.previous_state_root() != authorised.previous_state_root {
+        return Err(VerificationFailure::at(ReceiptCheck::PreviousStateRoot));
+    }
+    if protocol.resulting_state_root() != authorised.resulting_state_root {
+        return Err(VerificationFailure::at(ReceiptCheck::ResultingStateRoot));
+    }
+    let signature = protocol.sequencer_signature()
+        .ok_or_else(|| VerificationFailure::at(ReceiptCheck::MissingSignature))?;
+    let unsigned = encode_unsigned(&receipt)
+        .map_err(|_| VerificationFailure::at(ReceiptCheck::CanonicalEncoding))?;
+    let digest = receipt_digest(&unsigned)
+        .map_err(|_| VerificationFailure::at(ReceiptCheck::CanonicalEncoding))?;
+    ed25519::verify_digest(&authorised.sequencer_public_key, &signature, &digest)
+        .map_err(|_| VerificationFailure::at(ReceiptCheck::SequencerSignature))?;
+    Ok(VerifiedReceipt {
+        receipt,
+        canonical_bytes: reproduced,
+        evidence: Evidence::sequencer(digest),
+    })
+}
+
+/// Verifies a Programs call against a separately pinned sequencer and prior
+/// state root. Batch identifiers and the resulting root remain signed receipt
+/// facts; they are not accepted from a sibling transport document.
+pub fn verify_program_outcome_at_root(
+    receipt_bytes: &[u8],
+    sequencer_public_key: [u8; 32],
+    expected_previous_state_root: [u8; 32],
+) -> Result<VerifiedReceipt, VerificationFailure> {
+    let receipt = decode(receipt_bytes)
+        .map_err(|_| VerificationFailure::at(ReceiptCheck::Decode))?;
+    let protocol = receipt.protocol()
+        .ok_or_else(|| VerificationFailure::at(ReceiptCheck::ReceiptShape))?;
+    if protocol.previous_state_root() != expected_previous_state_root {
+        return Err(VerificationFailure::at(ReceiptCheck::PreviousStateRoot));
+    }
+    let authorised = AuthorizedBatch::new(
+        protocol.batch_id(), protocol.asset(), expected_previous_state_root,
+        protocol.resulting_state_root(), sequencer_public_key,
+    );
+    verify_program_outcome(receipt_bytes, &authorised)
+}
+
 /// Decodes exact economic facts only when the supplied receipt is canonical.
 /// Authority and state-root verification remain the responsibility of
 /// [`verify_outcome`]; callers use this only with receipt bytes retained from a

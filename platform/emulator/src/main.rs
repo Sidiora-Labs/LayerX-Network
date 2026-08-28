@@ -14,6 +14,8 @@ use std::time::Duration;
 
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
+use sha2::{Digest as _, Sha256};
+use ed25519_dalek::{Signer as _, SigningKey};
 
 const DEFAULT_PORT: u16 = 9402;
 const DEFAULT_NETWORK_ID: u32 = 402;
@@ -33,10 +35,20 @@ struct CoreReceipt {
     activity_id: [u8; 32],
     batch_id: [u8; 32],
     state_root: [u8; 32],
+    previous_state_root: [u8; 32],
+    asset: [u8; 32],
+    sequencer_public_key: [u8; 32],
     global_sequence: c_ulonglong,
     result_code: c_int,
+    metered_cost_hi: c_ulonglong,
+    metered_cost_lo: c_ulonglong,
     bytes: *const c_uchar,
     length: usize,
+    terminal_payload: *const c_uchar,
+    terminal_payload_length: usize,
+    call_graph: *const c_uchar,
+    call_graph_length: usize,
+    isolated_owner: *mut c_void,
 }
 
 #[repr(C)]
@@ -49,8 +61,21 @@ struct CoreState {
     account_count: usize,
 }
 
+#[repr(C)]
+struct CoreProgram {
+    program_id: [u8; 32],
+    code_hash: [u8; 32],
+    version: c_uint,
+    abi_version: u16,
+    interface_bytes: *const c_uchar,
+    interface_length: usize,
+    has_interface: u8,
+    state_root: [u8; 32],
+    observed_sequence: c_ulonglong,
+}
+
 unsafe extern "C" {
-    fn platform_emulator_create(network_id: c_uint, timestamp_ms: c_ulonglong) -> *mut c_void;
+    fn platform_emulator_create(network_id: c_uint, timestamp_ms: c_ulonglong, sequencer_seed: *const c_uchar) -> *mut c_void;
     fn platform_emulator_destroy(emulator: *mut c_void);
     fn platform_emulator_error_name(result: c_int) -> *const c_char;
     fn platform_emulator_set_time(emulator: *mut c_void, timestamp_ms: c_ulonglong) -> c_int;
@@ -74,7 +99,21 @@ unsafe extern "C" {
         length: usize,
         receipt: *mut CoreReceipt,
     ) -> c_int;
+    fn platform_emulator_simulate(
+        emulator: *mut c_void,
+        activity: *const c_uchar,
+        length: usize,
+        receipt: *mut CoreReceipt,
+    ) -> c_int;
+    fn platform_emulator_receipt_release(receipt: *mut CoreReceipt);
     fn platform_emulator_inspect(emulator: *const c_void, state: *mut CoreState) -> c_int;
+    fn platform_emulator_program_read(
+        emulator: *mut c_void,
+        program_id: *const c_uchar,
+        program: *mut CoreProgram,
+    ) -> c_int;
+    fn platform_emulator_program_count(emulator: *const c_void) -> usize;
+    fn platform_emulator_program_at(emulator: *const c_void, index: usize, program_id: *mut c_uchar) -> c_int;
     fn platform_emulator_cell(
         emulator: *const c_void,
         index: usize,
@@ -105,6 +144,7 @@ unsafe extern "C" {
 
 struct Emulator {
     core: *mut c_void,
+    signing_key: SigningKey,
     receipts: HashMap<String, String>,
     receipt_order: VecDeque<String>,
     trace: u64,
@@ -121,6 +161,7 @@ struct Config {
     network_id: u32,
     timestamp_ms: u64,
     prefunds: Vec<Prefund>,
+    sequencer_seed: Option<[u8; 32]>,
 }
 
 struct Prefund {
@@ -447,10 +488,19 @@ fn submit(emulator: &mut Emulator, request: &Request, trace: u64) -> Response {
         activity_id: [0; 32],
         batch_id: [0; 32],
         state_root: [0; 32],
+        previous_state_root: [0; 32],
+        asset: [0; 32],
+        sequencer_public_key: [0; 32],
         global_sequence: 0,
         result_code: 0,
+        metered_cost_hi: 0,
+        metered_cost_lo: 0,
         bytes: ptr::null(),
         length: 0,
+        terminal_payload: ptr::null(),
+        terminal_payload_length: 0,
+        call_graph: ptr::null(), call_graph_length: 0,
+        isolated_owner: ptr::null_mut(),
     };
     let code = unsafe {
         platform_emulator_execute(
@@ -475,6 +525,12 @@ fn submit(emulator: &mut Emulator, request: &Request, trace: u64) -> Response {
         );
     }
     let encoded = unsafe { slice::from_raw_parts(receipt.bytes, receipt.length) };
+    if receipt.terminal_payload_length > MAX_RECEIPT_BYTES
+        || (receipt.terminal_payload_length != 0 && receipt.terminal_payload.is_null())
+    { return refusal(trace, 503, "core_invalid_output", "terminal payload availability is invalid"); }
+    let terminal_payload = if receipt.terminal_payload_length == 0 { &[] } else { unsafe { slice::from_raw_parts(receipt.terminal_payload, receipt.terminal_payload_length) } };
+    if receipt.call_graph_length > MAX_RECEIPT_BYTES || (receipt.call_graph_length != 0 && receipt.call_graph.is_null()) { return refusal(trace,503,"core_invalid_output","call graph availability is invalid"); }
+    let _call_graph = if receipt.call_graph_length == 0 { &[] } else { unsafe { slice::from_raw_parts(receipt.call_graph,receipt.call_graph_length) } };
     let receipt_hex = hex_encode(encoded);
     let activity_id = hex_encode(&receipt.activity_id);
     remember_receipt(emulator, activity_id.clone(), receipt_hex.clone());
@@ -515,10 +571,19 @@ fn program_call(emulator: &mut Emulator, request: &Request, trace: u64) -> Respo
         activity_id: [0; 32],
         batch_id: [0; 32],
         state_root: [0; 32],
+        previous_state_root: [0; 32],
+        asset: [0; 32],
+        sequencer_public_key: [0; 32],
         global_sequence: 0,
         result_code: 0,
+        metered_cost_hi: 0,
+        metered_cost_lo: 0,
         bytes: ptr::null(),
         length: 0,
+        terminal_payload: ptr::null(),
+        terminal_payload_length: 0,
+        call_graph: ptr::null(), call_graph_length: 0,
+        isolated_owner: ptr::null_mut(),
     };
     let code = unsafe {
         platform_emulator_execute(
@@ -543,7 +608,16 @@ fn program_call(emulator: &mut Emulator, request: &Request, trace: u64) -> Respo
         );
     }
     let encoded = unsafe { slice::from_raw_parts(receipt.bytes, receipt.length) };
+    if receipt.terminal_payload_length > MAX_RECEIPT_BYTES
+        || (receipt.terminal_payload_length != 0 && receipt.terminal_payload.is_null())
+    { return refusal(trace, 503, "core_invalid_output", "terminal payload availability is invalid"); }
+    let terminal_payload = if receipt.terminal_payload_length == 0 { &[] } else { unsafe { slice::from_raw_parts(receipt.terminal_payload, receipt.terminal_payload_length) } };
     let receipt_hex = hex_encode(encoded);
+    if receipt.call_graph_length > MAX_RECEIPT_BYTES || (receipt.call_graph_length != 0 && receipt.call_graph.is_null()) { return refusal(trace,503,"core_invalid_output","call graph availability is invalid"); }
+    let call_graph = if receipt.call_graph_length == 0 { &[] } else { unsafe { slice::from_raw_parts(receipt.call_graph,receipt.call_graph_length) } };
+    let receipt_digest: [u8; 32] = Sha256::digest(encoded).into();
+    let metered_cost = (u128::from(receipt.metered_cost_hi) << 64)
+        | u128::from(receipt.metered_cost_lo);
     let activity_id = hex_encode(&receipt.activity_id);
     remember_receipt(emulator, activity_id.clone(), receipt_hex.clone());
     let outcome = if receipt.result_code >= 0 {
@@ -557,7 +631,7 @@ fn program_call(emulator: &mut Emulator, request: &Request, trace: u64) -> Respo
             receipt.result_code
         )
     };
-    success(trace, &format!("{{\"activity_kind\":\"program-call\",\"transition\":\"real\",\"activity_id\":\"{activity_id}\",\"batch_id\":\"{}\",\"global_sequence\":{},\"result_code\":{},\"state_root\":\"{}\",\"receipt\":\"{receipt_hex}\",\"outcome\":{outcome}}}", hex_encode(&receipt.batch_id), receipt.global_sequence, receipt.result_code, hex_encode(&receipt.state_root)))
+    success(trace, &format!("{{\"activity_kind\":\"program-call\",\"transition\":\"real\",\"committed\":true,\"activity_id\":\"{activity_id}\",\"batch_id\":\"{}\",\"global_sequence\":{},\"result_code\":{},\"metered_cost\":\"{metered_cost}\",\"previous_state_root\":\"{}\",\"state_root\":\"{}\",\"asset\":\"{}\",\"sequencer_public_key\":\"{}\",\"receipt\":\"{receipt_hex}\",\"receipt_digest\":\"{}\",\"terminal_payload\":\"{}\",\"call_graph\":\"{}\",\"outcome\":{outcome}}}", hex_encode(&receipt.batch_id), receipt.global_sequence, receipt.result_code, hex_encode(&receipt.previous_state_root), hex_encode(&receipt.state_root), hex_encode(&receipt.asset), hex_encode(&receipt.sequencer_public_key), hex_encode(&receipt_digest), hex_encode(terminal_payload),hex_encode(call_graph)))
 }
 
 fn inspect(emulator: &Emulator, trace: u64) -> Response {
@@ -799,7 +873,12 @@ fn route(emulator: &mut Emulator, request: &Request) -> Response {
         ("GET", "/healthz") => health(emulator, trace),
         ("POST", "/v1/activities") => submit(emulator, request, trace),
         ("POST", "/v1/programs/call") => program_call(emulator, request, trace),
+        ("POST", "/v1/programs/simulate") => program_simulate(emulator, request, trace),
         ("GET", "/v1/state") => inspect(emulator, trace),
+        ("GET", "/v1/programs/registry") => program_registry_list(emulator, trace),
+        ("GET", path) if path.starts_with("/v1/programs/registry/") => {
+            program_registry_read(emulator, path, trace)
+        }
         ("POST", "/__emulator/accounts/prefund") => prefund(emulator, request, trace),
         ("POST", "/__emulator/time/set") => update_time(emulator, request, trace, false),
         ("POST", "/__emulator/time/advance") => update_time(emulator, request, trace, true),
@@ -828,7 +907,9 @@ fn route(emulator: &mut Emulator, request: &Request) -> Response {
         (
             _,
             "/v1/activities"
+            | "/v1/programs/registry"
             | "/v1/programs/call"
+            | "/v1/programs/simulate"
             | "/v1/state"
             | "/__emulator/accounts/prefund"
             | "/__emulator/time/set"
@@ -843,6 +924,129 @@ fn route(emulator: &mut Emulator, request: &Request) -> Response {
         ),
         _ => refusal(trace, 404, "not_found", "route does not exist"),
     }
+}
+
+fn program_registry_list(emulator: &Emulator, trace: u64) -> Response {
+    let count = unsafe { platform_emulator_program_count(emulator.core) };
+    let mut identifiers = Vec::with_capacity(count);
+    for index in 0..count {
+        let mut id = [0_u8; 32];
+        if unsafe { platform_emulator_program_at(emulator.core, index, id.as_mut_ptr()) } != 0 {
+            return refusal(trace, 503, "core_invalid_output", "program registry enumeration failed");
+        }
+        identifiers.push(format!("\"{}\"", hex_encode(&id)));
+    }
+    success(trace, &format!("{{\"program_ids\":[{}]}}", identifiers.join(",")))
+}
+
+fn program_registry_read(emulator: &mut Emulator, path: &str, trace: u64) -> Response {
+    let tail = &path[22..];
+    let (program_text, interface_only) = match tail.strip_suffix("/interface") {
+        Some(value) => (value, true),
+        None => (tail, false),
+    };
+    let bytes = match hex_decode(program_text) {
+        Ok(bytes) if bytes.len() == 32 => bytes,
+        _ => return refusal(trace, 400, "invalid_argument", "program id must be 32-byte hex"),
+    };
+    let mut program = CoreProgram {
+        program_id: [0; 32], code_hash: [0; 32], version: 0, abi_version: 0,
+        interface_bytes: ptr::null(), interface_length: 0, has_interface: 0,
+        state_root: [0; 32],
+        observed_sequence: 0,
+    };
+    let code = unsafe { platform_emulator_program_read(emulator.core, bytes.as_ptr(), &raw mut program) };
+    if code != 0 { return core_response(trace, code); }
+    let mut live = CoreState { state_root: [0; 32], next_sequence: 0,
+        batch_number: 0, timestamp_ms: 0, cell_count: 0, account_count: 0 };
+    let inspect_code = unsafe { platform_emulator_inspect(emulator.core, &raw mut live) };
+    if inspect_code != 0 { return core_response(trace, inspect_code); }
+    let valid_through = match live.timestamp_ms.checked_add(300_000) {
+        Some(value) => value, None => return refusal(trace, 503, "core_invalid_output", "freshness overflow"),
+    };
+    let mut discovery = b"LayerX/program-discovery-proof/v1\0".to_vec();
+    discovery.extend_from_slice(&program.program_id); discovery.push(1);
+    discovery.extend_from_slice(&program.version.to_be_bytes()); discovery.extend_from_slice(&program.code_hash);
+    discovery.extend_from_slice(&program.abi_version.to_be_bytes()); discovery.extend_from_slice(&program.observed_sequence.to_be_bytes());
+    discovery.extend_from_slice(&live.timestamp_ms.to_be_bytes()); discovery.extend_from_slice(&valid_through.to_be_bytes()); discovery.extend_from_slice(&program.state_root);
+    let receipt_digest: [u8; 32] = Sha256::digest(&discovery).into();
+    let signing = &emulator.signing_key;
+    let proof_signature = signing.sign(&receipt_digest).to_bytes();
+    let proof = format!("\"receipt_digest\":\"{}\",\"observed_at\":{},\"valid_through\":{},\"discovery_public_key\":\"{}\",\"discovery_signature\":\"{}\"", hex_encode(&receipt_digest), live.timestamp_ms, valid_through, hex_encode(&signing.verifying_key().to_bytes()), hex_encode(&proof_signature));
+    if program.has_interface == 0 {
+        if interface_only {
+            return refusal(trace, 404, "interface_absent", "program has no published interface");
+        }
+        let common = format!("\"program_id\":\"{}\",\"version\":{},\"code_hash\":\"{}\",\"abi_version\":{},\"interface_status\":\"absent\",\"observed_sequence\":{},\"state_root\":\"{}\",{proof},\"freshness\":{{\"mode\":\"signed-emulator-head\"}}", hex_encode(&program.program_id), program.version, hex_encode(&program.code_hash), program.abi_version, program.observed_sequence, hex_encode(&program.state_root));
+        return success(trace, &format!("{{{common},\"lifecycle\":\"active\"}}"));
+    }
+    if program.has_interface != 1 || program.interface_bytes.is_null() || program.interface_length == 0 || program.interface_length > 952 {
+        return refusal(trace, 503, "core_invalid_output", "program interface state is invalid");
+    }
+    let interface = unsafe { slice::from_raw_parts(program.interface_bytes, program.interface_length) };
+    let interface_digest: [u8; 32] = Sha256::digest(interface).into();
+    let common = format!("\"program_id\":\"{}\",\"version\":{},\"code_hash\":\"{}\",\"abi_version\":{},\"interface\":\"{}\",\"interface_digest\":\"{}\",\"observed_sequence\":{},\"state_root\":\"{}\",{proof},\"freshness\":{{\"mode\":\"signed-emulator-head\"}}", hex_encode(&program.program_id), program.version, hex_encode(&program.code_hash), program.abi_version, hex_encode(interface), hex_encode(&interface_digest), program.observed_sequence, hex_encode(&program.state_root));
+    if interface_only {
+        success(trace, &format!("{{{common}}}"))
+    } else {
+        success(trace, &format!("{{{common},\"lifecycle\":\"active\"}}"))
+    }
+}
+
+fn program_simulate(emulator: &mut Emulator, request: &Request, trace: u64) -> Response {
+    let activity = match decode_activity(request) {
+        Ok(activity) if !activity.is_empty() => activity,
+        Ok(_) => return refusal(trace, 400, "invalid_argument", "program simulation activity must not be empty"),
+        Err(error) => return refusal(trace, 400, "invalid_argument", &error),
+    };
+    let mut live = CoreState { state_root: [0; 32], next_sequence: 0,
+        batch_number: 0, timestamp_ms: 0, cell_count: 0, account_count: 0 };
+    let inspect_code = unsafe { platform_emulator_inspect(emulator.core, &raw mut live) };
+    if inspect_code != 0 { return core_response(trace, inspect_code); }
+    let mut receipt = CoreReceipt {
+        activity_id: [0; 32], batch_id: [0; 32], state_root: [0; 32],
+        previous_state_root: [0; 32], asset: [0; 32], sequencer_public_key: [0; 32],
+        global_sequence: 0, result_code: 0, metered_cost_hi: 0,
+        metered_cost_lo: 0, bytes: ptr::null(), length: 0,
+        terminal_payload: ptr::null(), terminal_payload_length: 0,
+        call_graph: ptr::null(), call_graph_length: 0,
+        isolated_owner: ptr::null_mut(),
+    };
+    let code = unsafe { platform_emulator_simulate(emulator.core, activity.as_ptr(), activity.len(), &raw mut receipt) };
+    if code != 0 { return core_response(trace, code); }
+    if receipt.bytes.is_null() || receipt.length == 0 || receipt.length > MAX_RECEIPT_BYTES {
+        unsafe { platform_emulator_receipt_release(&raw mut receipt); }
+        return refusal(trace, 503, "core_invalid_output", "the LayerX core returned an invalid simulation receipt buffer");
+    }
+    let encoded = unsafe { slice::from_raw_parts(receipt.bytes, receipt.length) };
+    if receipt.terminal_payload_length > MAX_RECEIPT_BYTES
+        || (receipt.terminal_payload_length != 0 && receipt.terminal_payload.is_null())
+    { unsafe { platform_emulator_receipt_release(&raw mut receipt); } return refusal(trace, 503, "core_invalid_output", "terminal payload availability is invalid"); }
+    let terminal_payload = if receipt.terminal_payload_length == 0 { &[] } else { unsafe { slice::from_raw_parts(receipt.terminal_payload, receipt.terminal_payload_length) } };
+    if receipt.call_graph_length > MAX_RECEIPT_BYTES || (receipt.call_graph_length != 0 && receipt.call_graph.is_null()) { unsafe { platform_emulator_receipt_release(&raw mut receipt); } return refusal(trace,503,"core_invalid_output","call graph availability is invalid"); }
+    let call_graph = if receipt.call_graph_length == 0 { &[] } else { unsafe { slice::from_raw_parts(receipt.call_graph,receipt.call_graph_length) } };
+    let receipt_digest: [u8; 32] = Sha256::digest(encoded).into();
+    let metered_cost = (u128::from(receipt.metered_cost_hi) << 64)
+        | u128::from(receipt.metered_cost_lo);
+    let outcome = if receipt.result_code >= 0 {
+        format!("{{\"status\":\"completed\",\"code\":{}}}", receipt.result_code)
+    } else {
+        format!("{{\"status\":\"refused\",\"failure\":{{\"result_code\":{}}}}}", receipt.result_code)
+    };
+    let signing = &emulator.signing_key;
+    let mut boundary_material = b"LayerX/emulator/simulation-boundary/v1\0".to_vec();
+    boundary_material.extend_from_slice(&signing.verifying_key().to_bytes());
+    let boundary_id: [u8; 32] = Sha256::digest(&boundary_material).into();
+    let observed_sequence = receipt.global_sequence.saturating_sub(1);
+    let mut evidence = b"LayerX/agent/program-simulation-evidence/v1\0".to_vec();
+    evidence.extend_from_slice(&boundary_id); evidence.extend_from_slice(&receipt.activity_id);
+    evidence.extend_from_slice(&receipt.previous_state_root); evidence.extend_from_slice(&receipt.state_root);
+    evidence.extend_from_slice(&observed_sequence.to_be_bytes()); evidence.extend_from_slice(&live.timestamp_ms.to_be_bytes()); evidence.push(0);
+    let evidence_digest: [u8; 32] = Sha256::digest(&evidence).into();
+    let evidence_signature = signing.sign(&evidence_digest).to_bytes();
+    let response = success(trace, &format!("{{\"activity_kind\":\"program-call\",\"transition\":\"isolated-candidate\",\"committed\":false,\"activity_id\":\"{}\",\"batch_id\":\"{}\",\"global_sequence\":{},\"result_code\":{},\"metered_cost\":\"{metered_cost}\",\"previous_state_root\":\"{}\",\"state_root\":\"{}\",\"asset\":\"{}\",\"sequencer_public_key\":\"{}\",\"receipt\":\"{}\",\"receipt_digest\":\"{}\",\"terminal_payload\":\"{}\",\"call_graph\":\"{}\",\"simulation_evidence\":{{\"boundary_id\":\"{}\",\"activity_id\":\"{}\",\"previous_state_root\":\"{}\",\"hypothetical_state_root\":\"{}\",\"observed_sequence\":{},\"observed_at\":{},\"committed\":false,\"public_key\":\"{}\",\"signature\":\"{}\"}},\"outcome\":{outcome}}}", hex_encode(&receipt.activity_id), hex_encode(&receipt.batch_id), receipt.global_sequence, receipt.result_code, hex_encode(&receipt.previous_state_root), hex_encode(&receipt.state_root), hex_encode(&receipt.asset), hex_encode(&receipt.sequencer_public_key), hex_encode(encoded), hex_encode(&receipt_digest), hex_encode(terminal_payload),hex_encode(call_graph), hex_encode(&boundary_id), hex_encode(&receipt.activity_id), hex_encode(&receipt.previous_state_root), hex_encode(&receipt.state_root), observed_sequence, live.timestamp_ms, hex_encode(&signing.verifying_key().to_bytes()), hex_encode(&evidence_signature)));
+    unsafe { platform_emulator_receipt_release(&raw mut receipt); }
+    response
 }
 
 fn parse_amount(value: &str) -> Result<(u64, u64), String> {
@@ -877,13 +1081,14 @@ fn parse_prefund(value: &str) -> Result<Prefund, String> {
 fn parse_config(arguments: impl IntoIterator<Item = String>) -> Result<Config, String> {
     let mut arguments = arguments.into_iter();
     if arguments.next().as_deref() != Some("up") {
-        return Err("usage: layerx emulator up [--listen ADDRESS] [--network-id ID] [--time-ms MS] [--prefund DID,PUBLIC_KEY,AMOUNT]".into());
+        return Err("usage: layerx emulator up [--listen ADDRESS] [--network-id ID] [--time-ms MS] [--sequencer-seed-file PATH] [--prefund DID,PUBLIC_KEY,AMOUNT]".into());
     }
     let mut config = Config {
         listen: SocketAddr::from(([127, 0, 0, 1], DEFAULT_PORT)),
         network_id: DEFAULT_NETWORK_ID,
         timestamp_ms: DEFAULT_TIME_MS,
         prefunds: Vec::new(),
+        sequencer_seed: None,
     };
     while let Some(argument) = arguments.next() {
         let value = arguments
@@ -905,6 +1110,14 @@ fn parse_config(arguments: impl IntoIterator<Item = String>) -> Result<Config, S
             "--time-ms" => {
                 config.timestamp_ms = value.parse().map_err(|_| "time must be an integer")?;
             }
+            "--sequencer-seed-file" => {
+                let bytes = std::fs::read(&value).map_err(|error| format!("could not read sequencer seed file {value}: {error}"))?;
+                let seed = if bytes.len() == 32 { bytes } else {
+                    let text = std::str::from_utf8(&bytes).map_err(|_| "sequencer seed file must contain 32 raw bytes or 64 hexadecimal characters")?;
+                    hex_decode(text.trim())?
+                };
+                config.sequencer_seed = Some(seed.try_into().map_err(|_| "sequencer seed must be exactly 32 bytes")?);
+            }
             "--prefund" => config.prefunds.push(parse_prefund(&value)?),
             _ => return Err(format!("unknown argument: {argument}")),
         }
@@ -914,12 +1127,15 @@ fn parse_config(arguments: impl IntoIterator<Item = String>) -> Result<Config, S
 
 /// Starts the local gateway adapter around the production `LayerX` transition.
 fn platform_emulator(config: Config) -> Result<(), String> {
-    let core = unsafe { platform_emulator_create(config.network_id, config.timestamp_ms) };
+    let seed = config.sequencer_seed.ok_or_else(|| "--sequencer-seed-file is required; the emulator has no compiled-in signing authority".to_owned())?;
+    if seed == [0; 32] { return Err("sequencer seed must not be zero".to_owned()); }
+    let core = unsafe { platform_emulator_create(config.network_id, config.timestamp_ms, seed.as_ptr()) };
     if core.is_null() {
         return Err("could not initialize the LayerX core".into());
     }
     let mut emulator = Emulator {
         core,
+        signing_key: SigningKey::from_bytes(&seed),
         receipts: HashMap::new(),
         receipt_order: VecDeque::new(),
         trace: 0,

@@ -15,6 +15,11 @@ pub struct Decoder<'a> {
 }
 
 impl<'a> Decoder<'a> {
+    /// Returns the number of unread bytes.
+    #[must_use]
+    pub const fn remaining(&self) -> usize {
+        self.bytes.len().saturating_sub(self.offset)
+    }
     /// Starts decoding without allocating from the caller's byte slice.
     #[must_use]
     pub const fn new(bytes: &'a [u8], allocation_limit: usize) -> Self {
