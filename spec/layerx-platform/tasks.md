@@ -1439,7 +1439,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Prove conservation across the whole lease lifecycle: funded equals spent plus refunded, exactly, with the kernel primitive enforcing it.
     - Test escrow exhaustion mid-execution, a zero-usage lease, and a lease whose refund is attempted twice.
     - _Requirements: 41.2_
-  - [ ] 34.3 Execute sandbox work under lease-scoped capabilities
+  - [ ] 34.3 Execute sandbox work under lease-scoped capabilities — **Implemented - qualification pending**
     - Execute a sandbox activity as an ordinary program call whose capability set is derived from the lease and can reach only the lease's own ephemeral namespaces and nothing else.
     - Refuse by construction every attempt to read or write outside the lease's namespaces, to call a program the lease did not authorise, to spend from an account the lease does not own, or to observe another lease's state.
     - Charge every unit of fuel, memory, storage and host-call work against the lease escrow through the ordinary meter, with no separate pricing path.

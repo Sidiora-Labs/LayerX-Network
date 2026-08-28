@@ -4,8 +4,14 @@
 
 pub mod lease;
 pub mod escrow;
+pub mod execute;
+mod runner;
 
 pub use escrow::{fund, settle, Escrow, EscrowOutcome, EscrowRefusal};
+pub use execute::{
+    LeaseCapabilities, SandboxExecutionRecord, SandboxExecutionRequest, SandboxRefusal,
+};
+pub use runner::execute;
 
 pub use lease::{
     usage_observation_digest, BoundKind, EphemeralNamespace, Lease, LeaseActivity, LeaseBook, LeaseId, LeaseLimits,

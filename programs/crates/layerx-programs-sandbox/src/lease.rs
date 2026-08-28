@@ -67,7 +67,12 @@ impl EphemeralNamespace {
     #[must_use] pub const fn lease(self) -> LeaseId { self.lease }
 
     pub fn storage_namespace(self) -> Result<StorageNamespace, LeaseRefusal> {
-        Ok(StorageNamespace::shared(self.host))
+        let principal = PrincipalId::new(self.prefix).map_err(|_| LeaseRefusal::HashRefusal)?;
+        Ok(StorageNamespace::principal(self.host, principal))
+    }
+
+    pub fn execution_principal(self) -> Result<PrincipalId, LeaseRefusal> {
+        PrincipalId::new(self.prefix).map_err(|_| LeaseRefusal::HashRefusal)
     }
 
     #[must_use] pub const fn key_prefix(self) -> [u8; 32] { self.prefix }

@@ -3562,7 +3562,7 @@ reqs = ["41.2"]
 
 [task.34.3]
 title = "Execute sandbox work under lease-scoped capabilities"
-status = "pending"
+status = "implemented"
 wave = 20
 requires = ["34.1"]
 do_1 = "Execute a sandbox activity as an ordinary program call whose capability set is derived from the lease and can reach only the lease's own ephemeral namespaces and nothing else."
