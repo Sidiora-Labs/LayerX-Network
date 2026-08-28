@@ -21,6 +21,7 @@ keyring-core.workspace = true
 layerx-mcp = { path = "../../agent/crates/layerx-mcp" }
 layerx-platform-emulator = { path = "../emulator" }
 layerx-programs-runtime = { path = "../../programs/crates/layerx-programs-runtime" }
+layerx-program-sdk = { path = "../../programs/sdk/rust" }
 layerx-proof = { path = "../../agent/crates/layerx-proof" }
 layerx-types = { path = "../../agent/crates/layerx-types" }
 layerx-wire = { path = "../../agent/crates/layerx-wire" }

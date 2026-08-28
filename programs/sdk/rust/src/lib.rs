@@ -27,6 +27,8 @@
 
 #![no_std]
 
+extern crate alloc;
+
 #[cfg(test)]
 extern crate std;
 
@@ -34,6 +36,7 @@ pub mod abi;
 pub mod access;
 pub mod amount;
 pub mod balance;
+pub mod bindgen;
 pub mod buffer;
 pub mod call;
 pub mod capability;
@@ -63,6 +66,7 @@ pub use abi::{
     MAX_STORAGE_VALUE_BYTES, MAX_PROGRAM_ACCOUNT_SEED_BYTES, MEMORY_EXPORT, RECEIPT_ENCODING_BYTES,
 };
 pub use amount::{Amount, ProtocolInteger};
+pub use bindgen::{BindgenError, BindingGenerator, GeneratedBindings};
 pub use access::{AccessEntry, AccessMode, AccessRecipe, AccessScope, ActivityAccess, KeyAccess};
 pub use buffer::Bytes;
 pub use call::{CallInput, CallResponse, CallResult, GrantedCapabilities};

@@ -217,6 +217,21 @@ enum ProgramCommand {
         #[arg(long)]
         artifact: Option<PathBuf>,
     },
+    /// Generate digest-bound Rust, TypeScript, and guest bindings from a published interface.
+    Bindings {
+        /// Canonical interface bytes obtained through the receipt-verified registry read.
+        #[arg(long)]
+        interface: PathBuf,
+        /// Receipt-verified interface digest; generation refuses a stale or substituted file.
+        #[arg(long)]
+        digest: String,
+        /// Receipt-verified deployed code hash; generation refuses interface drift.
+        #[arg(long)]
+        code_hash: String,
+        /// Directory that receives the generated binding artifacts.
+        #[arg(long, default_value = "bindings")]
+        output: PathBuf,
+    },
     /// Validate and submit a WASM artifact for receipt-backed deployment.
     Deploy {
         artifact: PathBuf,
@@ -844,6 +859,11 @@ fn program(command: ProgramCommand) -> Result<CommandOutput, String> {
             "program.built",
             "Built and validated a deterministic LayerX program",
             programs::build(&manifest_path, artifact.as_deref())?,
+        )),
+        ProgramCommand::Bindings { interface, digest, code_hash, output } => Ok(CommandOutput::new(
+            "program.bindings_generated",
+            "Generated digest-bound program bindings",
+            programs::program_bindings(&interface, &digest, &code_hash, &output)?,
         )),
         ProgramCommand::Deploy {
             artifact,

@@ -16,6 +16,72 @@ use crate::http::{validate_idempotency_key, validate_resource_id, Client};
 
 const DESCRIPTOR: &str = "layerx-program.json";
 
+pub fn program_bindings(
+    interface_path: &Path,
+    expected_digest: &str,
+    expected_code_hash: &str,
+    output: &Path,
+) -> Result<Value, String> {
+    let interface_path = interface_path.canonicalize().map_err(|error| {
+        format!(
+            "could not resolve published interface {}: {error}",
+            interface_path.display()
+        )
+    })?;
+    let interface = fs::read(&interface_path).map_err(|error| {
+        format!(
+            "could not read published interface {}: {error}",
+            interface_path.display()
+        )
+    })?;
+    let digest: [u8; 32] = fixed_hex("published interface digest", expected_digest)?;
+    let code_hash: [u8; 32] = fixed_hex("deployed program code hash", expected_code_hash)?;
+    let generator = layerx_program_sdk::BindingGenerator::from_interface(&interface)
+        .map_err(|error| format!("published interface is not canonical: {error}"))?;
+    generator
+        .require_digest(digest)
+        .map_err(|error| format!("published interface digest is stale: {error}"))?;
+    generator
+        .require_code_hash(code_hash)
+        .map_err(|error| format!("published interface is bound to different code: {error}"))?;
+
+    fs::create_dir_all(output).map_err(|error| {
+        format!("could not create binding directory {}: {error}", output.display())
+    })?;
+    let rust = generator.generate_rust();
+    let typescript = generator.generate_typescript();
+    let guest = generator.generate_guest();
+    write_binding(output, "client.rs", rust.as_bytes())?;
+    write_binding(output, "client.ts", typescript.as_bytes())?;
+    write_binding(output, "guest.rs", guest.as_bytes())?;
+    let manifest = serde_json::to_vec_pretty(&json!({
+        "source": interface_path.display().to_string(),
+        "interface_digest": hex_encode(&digest),
+        "code_hash": hex_encode(&code_hash),
+        "artifacts": ["client.rs", "client.ts", "guest.rs"],
+    }))
+    .map_err(|error| format!("could not encode binding manifest: {error}"))?;
+    write_binding(output, "bindings.json", &manifest)?;
+    Ok(json!({
+        "output": output.display().to_string(),
+        "interface_digest": hex_encode(&digest),
+        "code_hash": hex_encode(&code_hash),
+        "artifacts": ["client.rs", "client.ts", "guest.rs", "bindings.json"],
+        "binding": "receipt-verified digest and deployed code hash required before generation and at generated call time",
+    }))
+}
+
+fn write_binding(directory: &Path, name: &str, contents: &[u8]) -> Result<(), String> {
+    let destination = directory.join(name);
+    let temporary = directory.join(format!(".{name}.{}.tmp", std::process::id()));
+    fs::write(&temporary, contents)
+        .map_err(|error| format!("could not write {}: {error}", temporary.display()))?;
+    fs::rename(&temporary, &destination).map_err(|error| {
+        let _ = fs::remove_file(&temporary);
+        format!("could not publish {}: {error}", destination.display())
+    })
+}
+
 struct Step {
     command: String,
     args: Vec<String>,

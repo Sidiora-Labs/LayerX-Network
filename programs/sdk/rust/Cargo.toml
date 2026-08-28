@@ -10,6 +10,12 @@ name = "layerx_program_sdk"
 test = true
 doctest = false
 
+[dependencies]
+sha2.workspace = true
+
+[build-dependencies]
+sha2.workspace = true
+
 [lints.rust]
 unsafe_code = "allow"
 

@@ -3434,7 +3434,7 @@ reqs = ["40.3"]
 
 [task.33.3]
 title = "Generate typed bindings from a published interface"
-status = "pending"
+status = "implemented"
 wave = 19
 requires = ["33.1","33.2"]
 do_1 = "Generate Rust and TypeScript client bindings from a published interface, with a malformed call unconstructable and every typed failure represented in the return type."
@@ -3443,8 +3443,8 @@ do_3 = "Bind generated code to the interface digest so a stale binding is detect
 do_4 = "Wire generation into the CLI beside build and deploy, and into the SDK build so bindings regenerate as part of an ordinary build."
 do_5 = "Test round-tripping across every type in the convention and prove a stale binding is refused."
 verify_cmd = "make programs-test"
-symbols = ["layerx_program_sdk::bindgen","layerx_platform_cli::program::bindings"]
-touches = ["programs/sdk/rust/src/bindgen.rs","platform/crates/layerx-platform-cli/src/program/bindings.rs"]
+symbols = ["BindingGenerator","program_bindings"]
+touches = ["programs/sdk/rust/src/bindgen.rs","programs/sdk/rust/src/lib.rs","programs/sdk/rust/Cargo.toml","programs/sdk/rust/build.rs","programs/sdk/rust/tests/bindgen_conformance.rs","platform/cli/src/main.rs","platform/cli/src/programs.rs","platform/cli/Cargo.toml","spec/layerx-platform/qualification.kvx"]
 reqs = ["40.2"]
 
 [task.33.4]

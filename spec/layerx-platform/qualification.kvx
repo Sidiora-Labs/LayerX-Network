@@ -2304,3 +2304,18 @@ symbol = "cg spec implemented touch graph"
 observed = "Git records the interpreter package entry in programs/Cargo.lock, but cg sync reports the lockfile among skipped paths and cg spec implemented cannot observe its declared touch even after a successful incremental graph sync. Every indexed task symbol and every other declared touch passed the graph check."
 assumption = "Codify 0.6.0 does not support a force option for the implemented transition, so the authoritative spec status is advanced directly only after cg accepted both declared symbols and every indexed touch and the unindexable lockfile diff was inspected separately. Human qualification must use the checked-in lockfile through the declared --locked build and test commands; no dependency resolution, build or test was run in this implementation phase."
 severity = "phase-boundary"
+[observation.33.3.1]
+task = "33.3"
+file = "programs/sdk/rust/src/bindgen.rs, programs/sdk/rust/build.rs, platform/cli/src/programs.rs"
+symbol = "BindingGenerator, layerx program bindings, SDK binding regeneration"
+observed = "Binding generation consumes the exact canonical interface bytes but cannot itself establish that a local file came from protocol state. The CLI therefore requires the independently receipt-verified interface digest and deployed code hash and refuses either mismatch before emitting files; generated clients retain both identities and refuse a call before submission when the observed published identity is stale. SDK build regeneration likewise requires those verified identities as explicit configuration rather than treating an unproven interface file as authoritative. The canonical interface currently describes EVM head-only calldata only as a convention with no word count or field schema, so generated bindings expose it as a checked whole-word byte value rather than inventing fields."
+assumption = "Human qualification must obtain the canonical bytes, digest and deployed code hash through verify_interface_read, generate both languages and the guest dispatcher, then upgrade the program and prove the old client performs no submission. It must execute cross-language vectors for every integer, bounded byte string, fixed and variable array, option, every union tag, EVM whole-word payload and typed failure. No generation command, compiler, build, test or call was executed during implementation."
+severity = "qualification-required"
+
+[observation.33.3.2]
+task = "33.3"
+file = "spec/layerx-platform/spec.kvx"
+symbol = "req.40.2 and task.33.3 SDK language scope"
+observed = "The task explicitly requires generated Rust and TypeScript client bindings, while the broader requirement text refers to every SDK language. This implementation ships the two languages named by the task and does not fabricate generators for the repository's additional SDK languages."
+assumption = "The specification owner must decide whether bindings for Python, Go, JVM, Swift and C sharp belong to a later task or expand this acceptance boundary before production certification. Human qualification must not represent Rust and TypeScript coverage as every repository SDK language."
+severity = "acceptance-ambiguity"
