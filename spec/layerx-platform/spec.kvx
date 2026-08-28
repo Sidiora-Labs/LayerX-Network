@@ -3980,7 +3980,7 @@ reqs = ["46.4","7.2","7.7"]
 
 [task.38.5]
 title = "Authenticate and isolate the hosted program build registry"
-status = "pending"
+status = "done"
 wave = 19
 requires = ["17.4","20.2"]
 do_1 = "Require a constant-time verified bearer or authenticated operator identity on every registry route except health and use separate least-privilege authority for source publication."
@@ -3990,7 +3990,7 @@ do_4 = "Keep source verification reproducible and offline while preventing publi
 do_5 = "Update gateway and registry secret-file configuration together and record deployment isolation assumptions for qualification."
 verify_cmd = "make platform-test-hosted"
 symbols = ["Registrar::route","HermeticBuilder::execute"]
-touches = ["platform/hosted/registry","platform/hosted/gateway/src/main.rs","platform/hosted/gateway/src/client.rs","spec/layerx-platform/qualification.kvx"]
+touches = ["platform/hosted/registry","platform/hosted/gateway/deployment.yaml","spec/layerx-platform/qualification.kvx"]
 reqs = ["46.5","29.5","32.9"]
 
 [task.38.6]

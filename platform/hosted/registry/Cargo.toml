@@ -13,14 +13,23 @@ path = "src/lib.rs"
 name = "layerx-program-registry"
 path = "src/main.rs"
 
+[[bin]]
+name = "layerx-cgroup-exec"
+path = "src/bin/layerx-cgroup-exec.rs"
+
 [dependencies]
 layerx-programs = { package = "layerx-programs-registry", path = "../../../programs/crates/layerx-programs-registry" }
 layerx-programs-protocol-adapter = { path = "../../../programs/crates/layerx-programs-protocol-adapter" }
 layerx-proof.workspace = true
 layerx-wire.workspace = true
 serde_json.workspace = true
+rustls.workspace = true
+rustix.workspace = true
+serde.workspace = true
 sha2.workspace = true
+subtle.workspace = true
 ureq.workspace = true
+zeroize.workspace = true
 
 [lints]
 workspace = true

@@ -1,0 +1,25 @@
+[Unit]
+Description=Provision LayerX registry cgroup and quota boundary
+Before=kubelet.service
+RequiresMountsFor=/sys/fs/cgroup /var/lib/layerx-program-registry-builds
+ConditionPathExists=/sys/fs/cgroup/cgroup.controllers
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+Environment=LAYERX_REGISTRY_MAX_BUILDS=4
+Environment=LAYERX_REGISTRY_BUILD_QUOTA_BYTES=5368709120
+Environment=LAYERX_REGISTRY_BUILD_QUOTA_INODES=65536
+ExecStart=/usr/libexec/layerx/node-provision-build-boundary.sh
+User=root
+Group=root
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/sys/fs/cgroup /var/lib/layerx-program-registry-builds /run/lock
+CapabilityBoundingSet=CAP_SYS_ADMIN CAP_CHOWN CAP_DAC_OVERRIDE
+AmbientCapabilities=CAP_SYS_ADMIN CAP_CHOWN CAP_DAC_OVERRIDE
+
+[Install]
+WantedBy=multi-user.target

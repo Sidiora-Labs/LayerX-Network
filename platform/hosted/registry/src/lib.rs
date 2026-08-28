@@ -4,6 +4,7 @@
 //! produced by rebuilding published source in a pinned toolchain environment.
 
 mod builder;
+mod auth;
 mod http;
 mod journal;
 mod mirror;
@@ -15,8 +16,10 @@ mod verified;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 pub use builder::HermeticBuilder;
+pub use auth::{Authorization, RegistryAuthority};
 pub use http::{parse_request, write_response};
 pub use journal::FileDeploymentJournal;
 pub use mirror::{MirrorRefusal, MirroredSource, SourceMirror};
@@ -34,8 +37,17 @@ pub struct Config {
     pub verified: PathBuf,
     pub workspace: PathBuf,
     pub builder_image_digest: [u8; 32],
-    pub builder_path: String,
+    pub builder_environment_root: PathBuf,
+    pub builder_entrypoint: String,
+    pub builder_isolation_runtime: PathBuf,
+    pub builder_isolation_runtime_digest: [u8; 32],
+    pub builder_job_supervisor: PathBuf,
+    pub builder_job_supervisor_digest: [u8; 32],
+    pub builder_cgroup_root: PathBuf,
     pub build_timeout_seconds: u64,
+    pub build_memory_bytes: u64,
+    pub build_process_limit: u32,
+    pub build_file_size_bytes: u64,
     pub attempts: u32,
     pub staleness_ms: u64,
     pub node_endpoint: String,
@@ -44,6 +56,12 @@ pub struct Config {
     pub receipt_authority_authorization: String,
     pub receipt_authority_replica_id: [u8; 32],
     pub sequencer_trust_history: PathBuf,
+    pub request_authority: RegistryAuthority,
+    pub publication_authority: RegistryAuthority,
+    pub request_timeout_seconds: u64,
+    pub max_connections: usize,
+    pub max_builds: usize,
+    pub tls: Arc<rustls::ServerConfig>,
 }
 
 /// Stable graph anchor for the hosted program registry.

@@ -9,6 +9,7 @@
 //! never as a verified source.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::time::Instant;
 
 use layerx_programs::{
     hex, programs_source_verification, BuildPlan, BuildRefusal,
@@ -18,6 +19,7 @@ use layerx_programs::{
     VerifiedRegistryRead, WindDownStateAccess,
 };
 use layerx_programs_protocol_adapter::ProtocolProgramStateRead;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest as _, Sha256};
 
@@ -27,7 +29,7 @@ use crate::mirror::{MirrorRefusal, SourceMirror};
 use crate::node_state::NodeProgramStateSource;
 use crate::program_state::FileProgramStateJournal;
 use crate::verified::{VerifiedSource, VerifiedSourceStore};
-use crate::Config;
+use crate::{Authorization, Config};
 
 const IDEMPOTENCY_DOMAIN: &[u8] = b"LayerX/platform/registry/idempotency/v1\0";
 const REQUEST_DOMAIN: &[u8] = b"LayerX/platform/registry/source-request/v1\0";
@@ -36,7 +38,7 @@ const MAX_CHANGE_PAGES: usize = 1_024;
 const ROUTE_PREFIX: &str = "/v1/programs/registry/";
 
 /// One parsed request.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Request {
     pub method: String,
     pub path: String,
@@ -45,7 +47,7 @@ pub struct Request {
 }
 
 /// One rendered response.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Response {
     pub status: u16,
     pub body: String,
@@ -69,6 +71,8 @@ pub struct Registrar {
     mirror: SourceMirror,
     verified: VerifiedSourceStore,
     verifier: SourceVerifier<HermeticBuilder>,
+    request_authority: crate::RegistryAuthority,
+    publication_authority: crate::RegistryAuthority,
     staleness_ms: u64,
     balance_reads: BTreeMap<ProgramId, VerifiedProgramBalanceRead>,
     idempotency: BTreeMap<String, Completed>,
@@ -87,8 +91,17 @@ impl Registrar {
         let builder = HermeticBuilder::new(
             config.workspace.clone(),
             config.builder_image_digest,
-            config.builder_path.clone(),
+            config.builder_environment_root.clone(),
+            config.builder_entrypoint.clone(),
+            config.builder_isolation_runtime.clone(),
+            config.builder_isolation_runtime_digest,
+            config.builder_job_supervisor.clone(),
+            config.builder_job_supervisor_digest,
+            config.builder_cgroup_root.clone(),
             config.build_timeout_seconds,
+            config.build_memory_bytes,
+            config.build_process_limit,
+            config.build_file_size_bytes,
         )?;
         let verifier = SourceVerifier::new(builder, config.attempts)
             .map_err(|refused| format!("the build pipeline is not admissible: {refused}"))?;
@@ -115,6 +128,8 @@ impl Registrar {
             mirror: SourceMirror::open(config.mirror.clone())?,
             verified: VerifiedSourceStore::open(config.verified.clone())?,
             verifier,
+            request_authority: config.request_authority.clone(),
+            publication_authority: config.publication_authority.clone(),
             staleness_ms: config.staleness_ms,
             balance_reads: BTreeMap::new(),
             idempotency: BTreeMap::new(),
@@ -125,7 +140,41 @@ impl Registrar {
     }
 
     /// Answers one request at the supplied wall-clock millisecond.
-    pub fn route(&mut self, request: &Request, now: u64) -> Response {
+    pub fn route(&mut self, request: &Request, now: u64, deadline: Instant) -> Response {
+        if Instant::now() >= deadline {
+            return refusal(503, "request_deadline_exceeded", "the registry request deadline expired");
+        }
+        self.node_state.set_request_deadline(deadline);
+        if self.verifier.runner().set_request_deadline(deadline).is_err() {
+            return refusal(503, "builder_unavailable", "the builder deadline boundary is unavailable");
+        }
+        let authorization = if request.path == "/healthz" {
+            None
+        } else if configures_publication_route(request) {
+            if !self.publication_authority.verifies(request.headers.get("authorization").map(String::as_str)) {
+                return refusal(403, "publication_authority_required", "source publication requires the operator authority");
+            }
+            Some(Authorization::Publication)
+        } else {
+            if !self.request_authority.verifies(request.headers.get("authorization").map(String::as_str)) {
+                return refusal(401, "authentication_required", "a valid registry bearer credential is required");
+            }
+            Some(Authorization::Request)
+        };
+        let response = self.authorized_route(request, now, authorization, deadline);
+        if Instant::now() >= deadline {
+            return refusal(503, "request_deadline_exceeded", "the registry request deadline expired");
+        }
+        response
+    }
+
+    fn authorized_route(
+        &mut self,
+        request: &Request,
+        now: u64,
+        _authorization: Option<Authorization>,
+        deadline: Instant,
+    ) -> Response {
         match (request.method.as_str(), request.path.as_str()) {
             ("GET", "/healthz") => Response {
                 status: 200,
@@ -135,7 +184,7 @@ impl Registrar {
                 deployment_ingress_unavailable(&request.body)
             }
             ("POST", "/__registry/head") => self.ingest_head(now),
-            ("POST", "/__registry/sources") => self.ingest_source(&request.body),
+            ("POST", "/__registry/sources") => self.ingest_source(&request.body, deadline),
             (
                 _,
                 "/healthz" | "/__registry/deployments" | "/__registry/head" | "/__registry/sources",
@@ -144,7 +193,13 @@ impl Registrar {
                 "method_not_allowed",
                 "method is not supported for this route",
             ),
-            _ => self.program_route(request, now),
+            _ => {
+                if Instant::now() >= deadline {
+                    refusal(503, "request_deadline_exceeded", "the registry request deadline expired")
+                } else {
+                    self.program_route(request, now)
+                }
+            }
         }
     }
 
@@ -167,6 +222,9 @@ impl Registrar {
         let mut caught_up = false;
         let mut feed_head = 0_u64;
         for _ in 0..MAX_CHANGE_PAGES {
+            if self.node_state.request_deadline_expired() {
+                return Err("registry request deadline expired during protocol synchronization".to_owned());
+            }
             let (notices, next, scanned, current) = self.node_state.changes(complete)?;
             programs.extend(notices.into_iter().map(|notice| notice.program));
             if next == complete && !current {
@@ -414,6 +472,9 @@ impl Registrar {
             Ok(build) => build,
             Err(refused) => return rebuild_refusal(&refused),
         };
+        if self.node_state.request_deadline_expired() {
+            return refusal(503, "request_deadline_exceeded", "the registry request deadline expired during rebuild");
+        }
         let status = match self.registry.verify_source(program, version, &build) {
             Ok(status) => status,
             Err(error) => return refusal(404, "not_found", &error.to_string()),
@@ -514,7 +575,7 @@ impl Registrar {
         }
     }
 
-    fn ingest_source(&mut self, body: &[u8]) -> Response {
+    fn ingest_source(&mut self, body: &[u8], deadline: Instant) -> Response {
         let Ok(document) = serde_json::from_slice::<Value>(body) else {
             return refusal(400, "invalid_argument", "request body is not JSON");
         };
@@ -539,6 +600,9 @@ impl Registrar {
             Ok(plan) => plan,
             Err(error) => return refusal(400, "invalid_argument", &error.to_string()),
         };
+        if Instant::now() >= deadline {
+            return refusal(503, "request_deadline_exceeded", "the registry request deadline expired before source publication");
+        }
         match self.mirror.publish(uri, &plan, &archive) {
             Ok(digest) => Response {
                 status: 200,
@@ -552,6 +616,10 @@ impl Registrar {
             Err(error) => refusal(400, "invalid_argument", &error),
         }
     }
+}
+
+fn configures_publication_route(request: &Request) -> bool {
+    request.path == "/__registry/sources"
 }
 
 /// Renders one refusal in the platform's refusal envelope.

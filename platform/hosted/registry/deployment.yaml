@@ -1,0 +1,95 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: {name: layerx-program-registry, namespace: layerx-testnet}
+spec:
+  serviceName: layerx-program-registry
+  replicas: 1
+  selector: {matchLabels: {app: layerx-program-registry}}
+  template:
+    metadata: {labels: {app: layerx-program-registry, layerx-plane: trusted-boundary}}
+    spec:
+      nodeSelector: {layerx.io/program-registry-boundary: "v1"}
+      securityContext: {runAsNonRoot: true, runAsUser: 4030, runAsGroup: 4030, fsGroup: 4030}
+      containers:
+        - name: registry
+          image: ghcr.io/sidiora-labs/layerx-program-registry:0.1.0
+          args: [layerx-program-registry]
+          ports: [{name: registry, containerPort: 9420}]
+          env:
+            - {name: LAYERX_REGISTRY_LISTEN, value: "0.0.0.0:9420"}
+            - {name: LAYERX_REGISTRY_STATE, value: /var/lib/layerx-program-registry}
+            - {name: LAYERX_REGISTRY_REQUEST_TOKEN_FILE, value: /run/layerx/request/token}
+            - {name: LAYERX_REGISTRY_PUBLICATION_TOKEN_FILE, value: /run/layerx/publication/token}
+            - {name: LAYERX_REGISTRY_TLS_CERT_DER, value: /run/layerx/server/tls.crt.der}
+            - {name: LAYERX_REGISTRY_TLS_KEY_DER, value: /run/layerx/server/tls.key.der}
+            - {name: LAYERX_REGISTRY_CLIENT_CA_DER, value: /run/layerx/client-ca/ca.crt.der}
+            - {name: LAYERX_REGISTRY_BUILDER_ENVIRONMENT_ROOT, value: /opt/layerx-builder/rootfs}
+            - {name: LAYERX_REGISTRY_BUILDER_ENTRYPOINT, value: /bin/layerx-build}
+            - {name: LAYERX_REGISTRY_BUILDER_IMAGE_DIGEST, valueFrom: {configMapKeyRef: {name: layerx-program-builder-release, key: environment-tree-digest}}}
+            - {name: LAYERX_REGISTRY_BUILDER_ISOLATION_RUNTIME, value: /usr/bin/bwrap}
+            - {name: LAYERX_REGISTRY_BUILDER_ISOLATION_RUNTIME_DIGEST, valueFrom: {configMapKeyRef: {name: layerx-program-builder-release, key: bwrap-digest}}}
+            - {name: LAYERX_REGISTRY_BUILDER_JOB_SUPERVISOR, value: /usr/bin/layerx-cgroup-exec}
+            - {name: LAYERX_REGISTRY_BUILDER_JOB_SUPERVISOR_DIGEST, valueFrom: {configMapKeyRef: {name: layerx-program-builder-release, key: cgroup-exec-digest}}}
+            - {name: LAYERX_REGISTRY_BUILDER_CGROUP_ROOT, value: /run/layerx/cgroup}
+            - {name: LAYERX_REGISTRY_BUILD_ROOT, value: /run/layerx/quota}
+            - {name: LAYERX_REGISTRY_BUILD_MEMORY_BYTES, value: "2147483648"}
+            - {name: LAYERX_REGISTRY_BUILD_PROCESS_LIMIT, value: "64"}
+            - {name: LAYERX_REGISTRY_BUILD_FILE_SIZE_BYTES, value: "67108864"}
+            - {name: LAYERX_REGISTRY_REQUEST_TIMEOUT_SECONDS, value: "1800"}
+            - {name: LAYERX_REGISTRY_BUILD_TIMEOUT_SECONDS, value: "1800"}
+            - {name: LAYERX_REGISTRY_MAX_CONNECTIONS, value: "128"}
+            - {name: LAYERX_REGISTRY_MAX_BUILDS, value: "4"}
+            - {name: LAYERX_REGISTRY_NODE_ENDPOINT, value: "https://layerx-agent-boundary.layerx-testnet.svc.cluster.local:9443"}
+            - {name: LAYERX_REGISTRY_NODE_AUTHORIZATION, valueFrom: {secretKeyRef: {name: layerx-program-registry-node-client, key: token}}}
+            - {name: LAYERX_REGISTRY_RECEIPT_AUTHORITY_ENDPOINT, value: "https://layerx-receipt-authority.layerx-testnet.svc.cluster.local:9443"}
+            - {name: LAYERX_REGISTRY_RECEIPT_AUTHORITY_AUTHORIZATION, valueFrom: {secretKeyRef: {name: layerx-program-registry-authority-client, key: token}}}
+            - {name: LAYERX_REGISTRY_RECEIPT_AUTHORITY_REPLICA_ID, valueFrom: {configMapKeyRef: {name: layerx-receipt-authority, key: replica-id}}}
+            - {name: LAYERX_REGISTRY_SEQUENCER_TRUST_HISTORY, value: /run/layerx/trust/history}
+          readinessProbe: {tcpSocket: {port: registry}, periodSeconds: 5, failureThreshold: 3}
+          resources: {requests: {cpu: "1", memory: 1Gi}, limits: {cpu: "4", memory: 4Gi}}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}, seccompProfile: {type: RuntimeDefault}}
+          volumeMounts:
+            - {name: state, mountPath: /var/lib/layerx-program-registry}
+            - {name: request, mountPath: /run/layerx/request/token, subPath: token, readOnly: true}
+            - {name: publication, mountPath: /run/layerx/publication/token, subPath: token, readOnly: true}
+            - {name: server, mountPath: /run/layerx/server/tls.crt.der, subPath: tls.crt.der, readOnly: true}
+            - {name: server, mountPath: /run/layerx/server/tls.key.der, subPath: tls.key.der, readOnly: true}
+            - {name: client-ca, mountPath: /run/layerx/client-ca, readOnly: true}
+            - {name: trust, mountPath: /run/layerx/trust, readOnly: true}
+            - {name: builder, mountPath: /opt/layerx-builder, readOnly: true}
+            - {name: cgroup, mountPath: /run/layerx/cgroup}
+            - {name: quota, mountPath: /run/layerx/quota}
+      volumes:
+        - {name: request, secret: {secretName: layerx-program-registry-request-client, defaultMode: 0440}}
+        - {name: publication, secret: {secretName: layerx-program-registry-publication-operator, defaultMode: 0440}}
+        - {name: server, secret: {secretName: layerx-program-registry-server-tls, defaultMode: 0440}}
+        - {name: client-ca, secret: {secretName: layerx-internal-ca}}
+        - {name: trust, secret: {secretName: layerx-sequencer-trust-history}}
+        - {name: builder, persistentVolumeClaim: {claimName: layerx-program-builder-release}}
+        - {name: cgroup, hostPath: {path: /sys/fs/cgroup/layerx-program-registry, type: Directory}}
+        - {name: quota, hostPath: {path: /var/lib/layerx-program-registry-builds, type: Directory}}
+  volumeClaimTemplates:
+    - metadata: {name: state}
+      spec: {accessModes: [ReadWriteOnce], resources: {requests: {storage: 100Gi}}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: layerx-program-registry, namespace: layerx-testnet}
+spec: {selector: {app: layerx-program-registry}, ports: [{name: registry, port: 9420, targetPort: registry}]}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: layerx-program-registry, namespace: layerx-testnet}
+spec:
+  podSelector: {matchLabels: {app: layerx-program-registry}}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from: [{podSelector: {matchLabels: {app: layerx-gateway}}}]
+      ports: [{protocol: TCP, port: 9420}]
+    - from: [{podSelector: {matchLabels: {layerx-role: source-publication-operator}}}]
+      ports: [{protocol: TCP, port: 9420}]
+  egress:
+    - to: [{podSelector: {matchLabels: {layerx-plane: trusted-boundary}}}]
+      ports: [{protocol: TCP, port: 9443}]
+    - to: [{namespaceSelector: {}}]
+      ports: [{protocol: UDP, port: 53}, {protocol: TCP, port: 53}]

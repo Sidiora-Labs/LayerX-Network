@@ -81,6 +81,8 @@ spec:
             - {name: LAYERX_GATEWAY_AUTHORITY_TOKEN_FILE, value: /run/layerx/authority/token}
             - {name: LAYERX_GATEWAY_IDENTITY_URL, value: "https://layerx-identity.layerx-testnet.svc.cluster.local:9443"}
             - {name: LAYERX_GATEWAY_IDENTITY_TOKEN_FILE, value: /run/layerx/identity/token}
+            - {name: LAYERX_GATEWAY_PROGRAM_REGISTRY_URL, value: "https://layerx-program-registry.layerx-testnet.svc.cluster.local:9420"}
+            - {name: LAYERX_GATEWAY_PROGRAM_REGISTRY_TOKEN_FILE, value: /run/layerx/registry/token}
             - {name: LAYERX_GATEWAY_REDIS_URL, value: "rediss://layerx-gateway-redis.layerx-testnet.svc.cluster.local:6379"}
             - {name: LAYERX_GATEWAY_REDIS_USERNAME_FILE, value: /run/layerx/redis/username}
             - {name: LAYERX_GATEWAY_REDIS_PASSWORD_FILE, value: /run/layerx/redis/password}
@@ -102,6 +104,7 @@ spec:
             - {name: component, mountPath: /run/layerx/component, readOnly: true}
             - {name: authority, mountPath: /run/layerx/authority, readOnly: true}
             - {name: identity, mountPath: /run/layerx/identity, readOnly: true}
+            - {name: registry, mountPath: /run/layerx/registry, readOnly: true}
             - {name: redis, mountPath: /run/layerx/redis, readOnly: true}
             - {name: provisioning, mountPath: /run/layerx/provisioning, readOnly: true}
             - {name: modules, mountPath: /run/layerx/modules, readOnly: true}
@@ -112,6 +115,7 @@ spec:
         - {name: component, secret: {secretName: layerx-gateway-component-client}}
         - {name: authority, secret: {secretName: layerx-gateway-authority-client}}
         - {name: identity, secret: {secretName: layerx-gateway-identity-client}}
+        - {name: registry, secret: {secretName: layerx-program-registry-request-client}}
         - {name: redis, secret: {secretName: layerx-gateway-redis-client}}
         - {name: provisioning, secret: {secretName: layerx-gateway-key-provisioning}}
         - {name: modules, configMap: {name: layerx-core-module-registry}}
@@ -161,6 +165,8 @@ spec:
   egress:
     - to: [{podSelector: {matchLabels: {app: layerx-gateway-redis}}}]
       ports: [{protocol: TCP, port: 6379}]
+    - to: [{podSelector: {matchLabels: {app: layerx-program-registry}}}]
+      ports: [{protocol: TCP, port: 9420}]
     - to: [{podSelector: {matchLabels: {layerx-plane: trusted-boundary}}}]
       ports: [{protocol: TCP, port: 9443}]
     - to: [{namespaceSelector: {}}]

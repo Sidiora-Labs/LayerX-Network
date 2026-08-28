@@ -1640,7 +1640,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Apply connection, frame, rate and operation bounds and zeroize request material on every success and refusal path.
     - Ship the production binary and deployment contract while recording provider-specific qualification as owner-controlled.
     - _Requirements: 46.4, 7.2, 7.7_
-  - [ ] 38.5 Authenticate and isolate the hosted program build registry
+  - [x] 38.5 Authenticate and isolate the hosted program build registry
     - Require a constant-time verified bearer or authenticated operator identity on every registry route except health and use separate least-privilege authority for source publication.
     - Replace archive-controlled free-form commands with a pinned builder entrypoint and declared bounded arguments inside the pinned build environment.
     - Add request deadlines, strict duplicate-header and transfer-encoding refusal, a bounded connection pool and a bounded build queue.

@@ -1,4 +1,5 @@
-use std::time::Duration;
+use std::cell::Cell;
+use std::time::{Duration, Instant};
 
 use layerx_programs::{
     hex, AccountStateHead, DeploymentProof, ProgramId, ProtocolDeploymentVerifier,
@@ -42,6 +43,7 @@ pub struct NodeProgramStateSource {
     authority_authorization: String,
     authority_replica_id: [u8; 32],
     deployment_verifier: ProtocolDeploymentVerifier,
+    request_deadline: Cell<Option<Instant>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -90,7 +92,19 @@ impl NodeProgramStateSource {
             authority_authorization,
             authority_replica_id,
             deployment_verifier,
+            request_deadline: Cell::new(None),
         })
+    }
+
+    pub fn set_request_deadline(&self, deadline: Instant) {
+        self.request_deadline.set(Some(deadline));
+    }
+
+    #[must_use]
+    pub fn request_deadline_expired(&self) -> bool {
+        self.request_deadline
+            .get()
+            .is_some_and(|deadline| Instant::now() >= deadline)
     }
 
     pub fn verify_deployment(
@@ -264,11 +278,22 @@ impl NodeProgramStateSource {
     }
 
     fn get_from(&self, endpoint: &str, authorization: &str, path: &str) -> Result<Value, String> {
+        let remaining = self
+            .request_deadline
+            .get()
+            .map_or(Some(Duration::from_secs(30)), |deadline| {
+                deadline.checked_duration_since(Instant::now())
+            })
+            .filter(|remaining| !remaining.is_zero())
+            .ok_or_else(|| "registry request deadline expired before node authority access".to_owned())?;
         let url = format!("{endpoint}{path}");
         let mut response = self
             .agent
             .get(&url)
             .header("Authorization", &format!("Bearer {authorization}"))
+            .config()
+            .timeout_global(Some(remaining))
+            .build()
             .call()
             .map_err(|error| format!("node authority GET {path} failed: {error}"))?;
         let status = response.status();
