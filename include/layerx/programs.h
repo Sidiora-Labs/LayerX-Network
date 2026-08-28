@@ -15,6 +15,69 @@ typedef struct lxp_history lxp_history;
 typedef struct lxp_genesis_manifest lxp_genesis_manifest;
 typedef struct lxp_programs_occupancy_receipt lxp_programs_occupancy_receipt;
 
+/* Authenticated, non-owning projection of one already decoded and admitted
+ * Programs CALL. Every span points into the canonical activity payload owned
+ * by the caller. Consumers must either finish before that payload is released
+ * or copy the spans into their own prepared-transition storage. This object
+ * deliberately carries no caller-supplied "reachable" access set: that set is
+ * derived by the Programs runtime from the canonical capability bytes. */
+enum { LXP_PROGRAMS_SCHEDULE_MAX_OWNERS = 513 };
+typedef struct lxp_programs_schedule_owner {
+    uint8_t program_id[32];
+    uint8_t owner[32];
+} lxp_programs_schedule_owner;
+typedef struct lxp_programs_call_schedule_descriptor {
+    lxp_byte_span canonical_payload;
+    lxp_byte_span capabilities;
+    lxp_byte_span access_declaration;
+    uint16_t owner_count;
+    uint8_t owner_catalog_complete;
+    lxp_programs_schedule_owner owners[LXP_PROGRAMS_SCHEDULE_MAX_OWNERS];
+    uint8_t fee_treasury[32];
+    uint8_t activity_binding[32];
+    uint8_t program_id[32];
+    uint8_t principal[32];
+    uint8_t payer[32];
+} lxp_programs_call_schedule_descriptor;
+
+enum {
+    LXP_PROGRAMS_SCHEDULE_MAX_ACTIVITIES = 64,
+    LXP_PROGRAMS_SCHEDULE_MAX_PROTOCOL_ACCOUNTS = LXP_MAX_TRANSFER_SET_LEGS
+};
+typedef struct lxp_programs_schedule_account_effect {
+    uint8_t account[32];
+    uint8_t asset[32];
+    uint8_t mode; /* 0 read, 1 write */
+} lxp_programs_schedule_account_effect;
+typedef struct lxp_programs_schedule_item {
+    lxp_programs_call_schedule_descriptor call;
+    uint8_t identity_principal[32];
+    uint8_t occupancy_asset[32];
+    uint8_t occupancy_treasury[32];
+    uint8_t protocol_effects_complete;
+    uint16_t account_effect_count;
+    lxp_programs_schedule_account_effect
+        account_effects[LXP_PROGRAMS_SCHEDULE_MAX_PROTOCOL_ACCOUNTS];
+} lxp_programs_schedule_item;
+
+/* Produces monotonic canonical dependency levels. Each level is a contiguous
+ * canonical interval, so ordered apply never skips an earlier item. Worker
+ * count and serial refusal cannot alter the protocol schedule. */
+lxp_result layerx_programs_schedule_plan(
+    const lxp_programs_schedule_item *items, size_t item_count,
+    uint16_t *levels, uint16_t *maximum_level);
+
+/* Canonically projects committed Programs guest/outcome event effects. An
+ * effect buffer containing no publishable Programs event produces the frozen
+ * empty sequence encoding; malformed Programs envelopes or nonincreasing
+ * Programs ordinals refuse. Other modules' effects are not projected. */
+lxp_result lxp_programs_project_committed_events(
+    const lxp_effect_buffer *effects, lxp_arena *arena,
+    lxp_byte_span *canonical_events);
+lxp_result lxp_programs_project_receipt_events(
+    const lxp_receipt *receipt, lxp_arena *arena,
+    lxp_byte_span *canonical_events);
+
 /* Node-owned durable account-state feed. `append` must commit the notice and
  * its canonical receipt reference before returning. The node binds the feed
  * to the same kernel instance that commits activities; a refusal halts
@@ -79,8 +142,14 @@ typedef struct lx_programs_state_feed_store {
 lxp_result lxp_programs_state_feed_store_open(
     lx_programs_state_feed_store *store, lxp_log *log,
     lxp_log *canonical_log, lxp_history *history, lxp_arena *scratch,
-    pthread_mutex_t *coordination_mutex,
-    uint64_t baseline_next_sequence, const uint8_t baseline_state_root[32]);
+    pthread_mutex_t *coordination_mutex);
+/* Irreversibly anchors an empty recovered feed. The daemon may invoke this
+ * only after WAL authentication, context binding and recovery classification
+ * authorize creation of a new feed lineage. Existing or partial feed state is
+ * refused rather than treated as an idempotent anchor. */
+lxp_result lxp_programs_state_feed_store_anchor(
+    lx_programs_state_feed_store *store, uint64_t baseline_next_sequence,
+    const uint8_t baseline_state_root[32]);
 lxp_result lxp_programs_state_feed_store_recover(
     lx_programs_state_feed_store *store, lxp_kernel *kernel);
 lxp_result lxp_programs_state_feed_store_page(
@@ -575,6 +644,14 @@ lxp_result lxp_programs_call_decode(lxp_module_ctx *ctx,
 lxp_result lxp_programs_call_validate(
     lxp_module_ctx *ctx, const lxp_activity *activity,
     const lxp_authority_resolved *authority, const void *decoded);
+lxp_result lxp_programs_call_schedule_decode(
+    const lxp_activity *activity, const lxp_authority_resolved *authority,
+    const lxp_call_admission_facts *admission, const void *decoded,
+    lxp_programs_call_schedule_descriptor *descriptor);
+lxp_result lxp_programs_call_schedule_item_prepare(
+    const lxp_programs_call_schedule_descriptor *descriptor,
+    const uint8_t fee_asset[32], const uint8_t occupancy_asset[32],
+    bool effects_complete, lxp_programs_schedule_item *item);
 lxp_result lxp_programs_call_execute(
     lxp_module_ctx *ctx, const lxp_activity *activity,
     const lxp_authority_resolved *authority, const void *decoded,

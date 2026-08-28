@@ -30,6 +30,7 @@ typedef struct lxp_effect_buffer lxp_effect_buffer;
 typedef struct lxp_transfer_set lxp_transfer_set;
 typedef struct lxp_receipt lxp_receipt;
 typedef struct lxp_verified_receipt_facts lxp_verified_receipt_facts;
+typedef struct lxp_prepared_module_transition lxp_prepared_module_transition;
 typedef struct lx_account lx_account;
 #define lxp_module_ctx lxp_module_ctx
 #define lxp_effect_buffer lxp_effect_buffer
@@ -115,5 +116,26 @@ void *lxp_ctx_module_runtime(const lxp_module_ctx *ctx);
 lxp_result lxp_ctx_verified_receipt_facts(
     const lxp_module_ctx *ctx, const uint8_t receipt_digest[32],
     lxp_verified_receipt_facts *facts);
+
+/* Detaches the deterministic result of one module invocation from its private
+ * execution context.  The returned transition owns every copied byte and
+ * contains no kernel, arena, account, or module-runtime pointers.  The token
+ * identifies the kernel-owned immutable execution view for the dependency
+ * level, including every state and protocol input visible to module code. */
+lxp_result lxp_module_ctx_export_prepared(
+    lxp_module_ctx *ctx, const lxp_effect_buffer *effects,
+    const uint8_t level_snapshot_token[32],
+    lxp_prepared_module_transition **prepared);
+
+/* Reconstructs the staged result on a canonical private context without
+ * invoking module or guest code again.  Sparse touched-state preconditions are
+ * checked against that context and the exact level token; sequence- and
+ * root-dependent settlement remains the kernel's responsibility. */
+lxp_result lxp_module_ctx_import_prepared(
+    lxp_module_ctx *ctx, const lxp_prepared_module_transition *prepared,
+    const uint8_t level_snapshot_token[32], lxp_effect_buffer *effects);
+
+void lxp_prepared_module_transition_destroy(
+    lxp_prepared_module_transition *prepared);
 
 #endif

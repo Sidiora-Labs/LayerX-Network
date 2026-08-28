@@ -198,14 +198,6 @@ static lxp_result leaf_set(state_leaf *leaf, const uint8_t *key,
                            size_t key_length, const uint8_t *value,
                            size_t value_length);
 
-static bool bytes_zero(const uint8_t *bytes, size_t length)
-{
-    size_t i;
-    for (i = 0U; i < length; ++i)
-        if (bytes[i] != 0U) return false;
-    return true;
-}
-
 static void account_write_u64(uint8_t bytes[8], uint64_t value)
 {
     size_t i;
@@ -217,30 +209,14 @@ static lxp_result account_leaf_material(
     const lx_account *account, uint8_t key[33], uint8_t value[615],
     size_t *value_length)
 {
-    lx_account_name parsed;
-    uint8_t derived[32];
     size_t offset = 0U;
     lxp_result status;
     if (account == NULL || key == NULL || value == NULL ||
         value_length == NULL || account->name_length == 0U ||
         account->name_length > LX_ACCOUNT_NAME_MAX)
         return LXP_ERR_NON_CANONICAL;
-    status = lx_account_name_parse(account->name, account->name_length,
-                                   &parsed);
-    if (status == LXP_OK)
-        status = lx_account_id_from_string(account->name,
-                                           account->name_length, derived);
-    if (status != LXP_OK || parsed.kind != account->kind ||
-        memcmp(derived, account->id, 32U) != 0 ||
-        (!account->has_asset &&
-         (!lxp_u128_is_zero(account->balance) ||
-          !bytes_zero(account->asset_id, 32U))) ||
-        (account->has_asset && bytes_zero(account->asset_id, 32U)) ||
-        (!account->has_authority_key &&
-         !bytes_zero(account->authority_key, 32U)) ||
-        (account->has_authority_key &&
-         bytes_zero(account->authority_key, 32U)))
-        return status != LXP_OK ? status : LXP_ERR_NON_CANONICAL;
+    status = lx_account_validate_canonical(account);
+    if (status != LXP_OK) return status;
     key[0] = 4U;
     (void)memcpy(key + 1U, account->id, 32U);
     value[offset++] = (uint8_t)(account->name_length >> 8U);

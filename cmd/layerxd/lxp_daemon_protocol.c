@@ -498,13 +498,15 @@ lxp_result lxp_daemon_protocol_owner_attach(
     if (status != LXP_OK) goto fail;
     status = lxp_programs_state_feed_store_open(
         &owner->feed_store, feed_log, canonical_log, history, scratch,
-        &owner->mutex,
-        kernel->state->next_sequence, kernel->current_state_root);
+        &owner->mutex);
     if (status == LXP_OK) {
         programs_runtime->state_feed = &owner->feed_store.feed;
         status = lxp_kernel_bind_module_runtime(
             kernel, LXP_MODULE_PROGRAMS, programs_runtime);
     }
+    if (status == LXP_OK)
+        status = lxp_programs_bind_state_feed(
+            kernel, &owner->feed_store.feed);
     if (status == LXP_OK) status = replay(replay_context, owner);
     if (status == LXP_OK)
         status = lxp_programs_state_feed_store_recover(

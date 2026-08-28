@@ -87,10 +87,23 @@ static lxp_result validate_evidence(
         status = lxp_merkle_proof_verify(
             leaf, proof, header->receipt_merkle_root);
     if (status == LXP_OK &&
-        (receipt->global_sequence < header->first_sequence ||
+        (header->first_sequence == 0U ||
+         header->last_sequence < header->first_sequence ||
+         header->last_sequence - header->first_sequence >= UINT32_MAX ||
+         receipt->global_sequence < header->first_sequence ||
          receipt->global_sequence > header->last_sequence ||
-         lxp_ct_memcmp(receipt->resulting_state_root,
-                       header->resulting_state_root, 32U) != 0 ||
+         receipt->protocol_version != header->protocol_version ||
+         receipt->timestamp != header->timestamp_ms ||
+         proof->leaf_index !=
+             receipt->global_sequence - header->first_sequence ||
+         proof->leaf_count !=
+             header->last_sequence - header->first_sequence + 1U ||
+         (receipt->global_sequence == header->first_sequence &&
+          lxp_ct_memcmp(receipt->previous_state_root,
+                        header->previous_state_root, 32U) != 0) ||
+         (receipt->global_sequence == header->last_sequence &&
+          lxp_ct_memcmp(receipt->resulting_state_root,
+                        header->resulting_state_root, 32U) != 0) ||
          lxp_ct_is_zero(receipt->batch_id, 32U)))
         status = LXP_ERR_ROOT_MISMATCH;
     (void)lxp_arena_reset(arena, mark);
@@ -183,6 +196,7 @@ static lxp_result replay_authority(void *context,
         (lxp_daemon_receipt_authority_store *)context;
     lxp_daemon_receipt_evidence evidence;
     lxp_batch_header batch;
+    bool same_batch;
     if (store == NULL || header == NULL || body == NULL ||
         header->record_kind != (uint8_t)LXP_LOG_STATE_DIFF)
         return LXP_ERR_LOG_CORRUPT;
@@ -193,15 +207,44 @@ static lxp_result replay_authority(void *context,
                                 evidence.canonical_header.length,
                                 &batch) != LXP_OK ||
         evidence.global_sequence != header->global_sequence ||
+        evidence.global_sequence < batch.first_sequence ||
+        evidence.global_sequence > batch.last_sequence)
+        return LXP_ERR_LOG_CORRUPT;
+    same_batch = store->record_count != 0U &&
+                 batch.batch_number == store->last_batch_number;
+    if ((store->record_count == 0U &&
+         evidence.global_sequence != batch.first_sequence) ||
         (store->record_count != 0U &&
-         (evidence.global_sequence != store->last_global_sequence + 1U ||
-          batch.batch_number != store->last_batch_number + 1U)))
+         (store->last_global_sequence == UINT64_MAX ||
+          evidence.global_sequence != store->last_global_sequence + 1U)) ||
+        (same_batch &&
+         (evidence.canonical_header.length !=
+              sizeof(store->active_canonical_header) ||
+          lxp_ct_memcmp(evidence.canonical_header.bytes,
+                        store->active_canonical_header,
+                        sizeof(store->active_canonical_header)) != 0 ||
+          lxp_ct_memcmp(evidence.header_signature,
+                        store->active_header_signature, 64U) != 0 ||
+          evidence.global_sequence > store->active_batch_last_sequence)) ||
+        (store->record_count != 0U && !same_batch &&
+         (store->last_global_sequence != store->active_batch_last_sequence ||
+          store->last_batch_number == UINT64_MAX ||
+          batch.batch_number != store->last_batch_number + 1U ||
+          evidence.global_sequence != batch.first_sequence)))
         return LXP_ERR_LOG_CORRUPT;
     record_offset = store->replay_offset;
     store->replay_offset += LXP_LOG_HEADER_BYTES + header->body_length;
     status = cache_insert(store, &evidence, record_offset,
                           header->body_length);
     if (status == LXP_OK) {
+        if (!same_batch) {
+            (void)memcpy(store->active_canonical_header,
+                         evidence.canonical_header.bytes,
+                         sizeof(store->active_canonical_header));
+            (void)memcpy(store->active_header_signature,
+                         evidence.header_signature, 64U);
+            store->active_batch_last_sequence = batch.last_sequence;
+        }
         ++store->record_count;
         store->last_global_sequence = evidence.global_sequence;
         store->last_batch_number = batch.batch_number;
@@ -283,9 +326,24 @@ lxp_result lxp_daemon_receipt_authority_append(
     }
     if ((store->record_count != 0U &&
          (receipt.global_sequence != store->last_global_sequence + 1U ||
-          header.batch_number != store->last_batch_number + 1U)) ||
+          (header.batch_number == store->last_batch_number ?
+               (canonical_header == NULL ||
+                header_length != sizeof(store->active_canonical_header) ||
+                lxp_ct_memcmp(canonical_header,
+                              store->active_canonical_header,
+                              sizeof(store->active_canonical_header)) != 0 ||
+                lxp_ct_memcmp(header_signature,
+                              store->active_header_signature, 64U) != 0 ||
+                receipt.global_sequence >
+                    store->active_batch_last_sequence) :
+               (store->last_global_sequence !=
+                    store->active_batch_last_sequence ||
+                store->last_batch_number == UINT64_MAX ||
+                header.batch_number != store->last_batch_number + 1U ||
+                receipt.global_sequence != header.first_sequence)))) ||
         (store->record_count == 0U &&
-         (receipt.global_sequence == 0U || header.batch_number == 0U)))
+         (receipt.global_sequence == 0U || header.batch_number == 0U ||
+          receipt.global_sequence != header.first_sequence)))
         return LXP_ERR_SEQUENCE_GAP;
     body_length = AUTHORITY_FIXED_BYTES + header_length +
                   (size_t)receipt_proof->depth * 32U + receipt_length;
@@ -326,6 +384,14 @@ lxp_result lxp_daemon_receipt_authority_append(
                               (uint32_t)body_length);
     }
     if (status == LXP_OK) {
+        if (store->record_count == 0U ||
+            header.batch_number != store->last_batch_number) {
+            (void)memcpy(store->active_canonical_header, canonical_header,
+                         sizeof(store->active_canonical_header));
+            (void)memcpy(store->active_header_signature, header_signature,
+                         64U);
+            store->active_batch_last_sequence = header.last_sequence;
+        }
         ++store->record_count;
         store->last_global_sequence = receipt.global_sequence;
         store->last_batch_number = header.batch_number;
@@ -443,6 +509,10 @@ lxp_result lxp_daemon_receipt_authority_scan(
          lxp_ct_memcmp(receipt.batch_id, evidence->batch_id, 32U) != 0))
         status = LXP_ERR_LOG_CORRUPT;
     if (status != LXP_OK) return status;
+    if ((uint64_t)record.body_length > UINT64_MAX - LXP_LOG_HEADER_BYTES ||
+        *record_offset > UINT64_MAX - LXP_LOG_HEADER_BYTES -
+                             (uint64_t)record.body_length)
+        return LXP_ERR_OVERFLOW;
     *record_offset += LXP_LOG_HEADER_BYTES + record.body_length;
     *present = true;
     return LXP_OK;

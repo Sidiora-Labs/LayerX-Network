@@ -21,6 +21,7 @@ enum {
     LXP_MODULE_MAX_STAGED_ACCOUNTS = 16,
     LXP_KERNEL_MAX_BLOBS = 512,
     LXP_KERNEL_MAX_STAGED_BLOBS = 4,
+    LXP_KERNEL_MAX_TRANSFER_ASSETS = 64,
     LXP_KERNEL_MAX_BLOB_BYTES = 1048576,
     LXP_KERNEL_MAX_BLOB_TOTAL_BYTES = 67108864
 };
@@ -169,6 +170,13 @@ typedef struct lxp_kernel {
     uint64_t poisoned_sequence;
     uint8_t poisoned_activity_id[32];
     uint8_t poisoned_state_root[32];
+    bool batch_publication_pending;
+    uint8_t pending_batch_publication_digest[32];
+    uint8_t pending_batch_id[32];
+    uint8_t pending_batch_base_receipt_root[32];
+    uint64_t pending_batch_first_sequence;
+    uint64_t pending_batch_last_sequence;
+    uint32_t pending_batch_publication_index;
     void *module_runtime[LXP_MODULE_RESERVED_COUNT + 1U];
     uint8_t current_state_root[32];
 } lxp_kernel;
@@ -276,6 +284,117 @@ typedef struct lxp_kernel_execution {
     lxp_byte_span *canonical_events_out;
 } lxp_kernel_execution;
 #define lxp_kernel_execution lxp_kernel_execution
+
+/* A batch snapshot is an isolated, privately owned execution view.  It is the
+ * only kernel object that may be presented to speculative workers; live
+ * kernels, journals, account registries, identities, callback contexts and
+ * publication observers are never borrowed by worker execution. */
+typedef struct lxp_kernel_batch_snapshot lxp_kernel_batch_snapshot;
+typedef struct lxp_prepared_transition lxp_prepared_transition;
+typedef struct lxp_programs_schedule_item lxp_programs_schedule_item;
+typedef struct lxp_kernel_prepared_batch lxp_kernel_prepared_batch;
+typedef struct lxp_kernel_batch_boundary {
+    uint8_t receipt_state_root[32];
+    uint8_t canonical_state_root[32];
+    uint64_t next_sequence;
+} lxp_kernel_batch_boundary;
+
+lxp_result lxp_kernel_batch_snapshot_create(
+    const lxp_kernel *kernel, const lxp_identity_store *identities,
+    const lxp_verified_receipt_index *verified_receipts,
+    const lxp_kernel_execution *batch_execution,
+    lxp_kernel_batch_snapshot **snapshot);
+lxp_result lxp_kernel_batch_snapshot_clone(
+    const lxp_kernel_batch_snapshot *source,
+    lxp_kernel_batch_snapshot **snapshot);
+void lxp_kernel_batch_snapshot_destroy(lxp_kernel_batch_snapshot *snapshot);
+lxp_result lxp_kernel_batch_snapshot_begin_level(
+    lxp_kernel_batch_snapshot *snapshot);
+lxp_result lxp_kernel_batch_schedule_item(
+    const lxp_kernel_batch_snapshot *snapshot,
+    const lxp_activity *activity, const lxp_kernel_execution *execution,
+    lxp_arena *arena, lxp_programs_schedule_item *item);
+
+/* Preparation executes guest/module logic against private state and returns
+ * owned deterministic effects.  It does not assign a canonical state root,
+ * store an idempotency receipt, consume an identity sequence, sign, publish,
+ * or mutate the supplied snapshot. */
+lxp_result lxp_kernel_prepare_activity(
+    const lxp_kernel_batch_snapshot *snapshot,
+    const lxp_activity *activity, const lxp_kernel_execution *execution,
+    lxp_arena *worker_arena, lxp_prepared_transition **prepared);
+
+/* Applies one prepared result to a private canonical snapshot.  Settlement is
+ * performed in canonical activity order and derives all sequence-, root-,
+ * fee-, idempotency- and receipt-dependent fields at this boundary. */
+lxp_result lxp_kernel_snapshot_apply_prepared(
+    lxp_kernel_batch_snapshot *snapshot, const lxp_activity *activity,
+    const lxp_kernel_execution *execution,
+    const lxp_prepared_transition *prepared, lxp_receipt *receipt,
+    lxp_byte_span *canonical_events);
+
+/* Publishes a fully settled private snapshot to the live kernel without
+ * re-executing guest code.  The caller holds the sequencer's batch ownership
+ * lock.  Validation completes before any live domain is changed. */
+lxp_result lxp_kernel_batch_snapshot_commit(
+    lxp_kernel *kernel, lxp_identity_store *identities,
+    const lxp_kernel_batch_snapshot *base,
+    const lxp_kernel_batch_snapshot *settled);
+
+lxp_result lxp_kernel_prepare_activity_batch(
+    lxp_kernel *kernel, const lxp_activity *activities,
+    const lxp_kernel_execution *executions, size_t offered_count,
+    uint32_t maximum_workers, lxp_kernel_prepared_batch **batch,
+    size_t *retry_prefix_count);
+size_t lxp_kernel_prepared_batch_count(
+    const lxp_kernel_prepared_batch *batch);
+const lxp_receipt *lxp_kernel_prepared_batch_receipts(
+    const lxp_kernel_prepared_batch *batch);
+const lxp_byte_span *lxp_kernel_prepared_batch_events(
+    const lxp_kernel_prepared_batch *batch);
+const uint8_t *lxp_kernel_prepared_batch_final_root(
+    const lxp_kernel_prepared_batch *batch);
+const uint8_t *lxp_kernel_prepared_batch_publication_digest(
+    const lxp_kernel_prepared_batch *batch);
+const lxp_kernel_batch_boundary *lxp_kernel_prepared_batch_base_boundary(
+    const lxp_kernel_prepared_batch *batch);
+const lxp_kernel_batch_boundary *lxp_kernel_prepared_batch_final_boundary(
+    const lxp_kernel_prepared_batch *batch);
+lxp_result lxp_kernel_batch_boundary_read(
+    const lxp_kernel *kernel, lxp_kernel_batch_boundary *boundary);
+lxp_result lxp_kernel_batch_publication_digest(
+    const lxp_kernel_batch_boundary *base,
+    const lxp_kernel_batch_boundary *final,
+    const lxp_byte_span *canonical_activities,
+    const lxp_byte_span *canonical_receipts,
+    const lxp_byte_span *canonical_events, size_t activity_count,
+    uint8_t digest[32]);
+lxp_result lxp_kernel_commit_prepared_batch(
+    lxp_kernel *kernel, lxp_identity_store *identities,
+    lxp_kernel_prepared_batch *batch,
+    const uint8_t fsynced_publication_digest[32]);
+lxp_result lxp_kernel_finalize_prepared_batch_publication(
+    lxp_kernel *kernel, const lxp_activity *activities,
+    const lxp_kernel_prepared_batch *batch,
+    const uint8_t fsynced_publication_digest[32]);
+lxp_result lxp_kernel_restore_batch_publication_pending(
+    lxp_kernel *kernel, const uint8_t fsynced_publication_digest[32],
+    const uint8_t batch_id[32],
+    const uint8_t base_receipt_state_root[32],
+    const uint8_t final_receipt_state_root[32], uint64_t first_sequence,
+    uint64_t last_sequence, uint32_t next_publication_index);
+lxp_result lxp_kernel_finalize_batch_publication_records(
+    lxp_kernel *kernel, const lxp_activity *activities,
+    const lxp_receipt *receipts, size_t activity_count,
+    const uint8_t fsynced_publication_digest[32]);
+/* Observer append is required to be durable and idempotent by canonical
+ * activity/receipt identity.  Recovery persists or reconstructs this index;
+ * replay after a crash between append and index persistence is therefore a
+ * duplicate canonical append, never a second state transition. */
+uint32_t lxp_kernel_batch_publication_next_index(const lxp_kernel *kernel);
+void lxp_kernel_prepared_batch_destroy(lxp_kernel_prepared_batch *batch);
+
+void lxp_prepared_transition_destroy(lxp_prepared_transition *prepared);
 
 lxp_result lxp_module_version_for_epoch(
     const lxp_kernel *kernel, uint16_t module_id, uint64_t epoch,

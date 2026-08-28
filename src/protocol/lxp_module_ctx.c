@@ -17,6 +17,97 @@ typedef struct kv_view {
     size_t value_length;
 } kv_view;
 
+typedef struct lxp_prepared_account_change {
+    lx_account before;
+    lx_account after;
+} lxp_prepared_account_change;
+
+struct lxp_prepared_module_transition {
+    uint16_t module_id;
+    uint16_t protocol_version;
+    uint64_t epoch;
+    uint64_t global_sequence;
+    uint64_t batch_number;
+    lxp_exec_clock clock;
+    uint64_t gas_limit;
+    uint8_t activity_id[32];
+    uint8_t level_snapshot_token[32];
+    lxp_call_admission_facts call_admission;
+    uint64_t gas_used;
+    lxp_effect_buffer effects;
+    lxp_program_outcome program_outcome;
+    lxp_module_kv_change staged[LXP_MODULE_MAX_STAGED_WRITES];
+    bool kv_existed[LXP_MODULE_MAX_STAGED_WRITES];
+    uint32_t kv_before_length[LXP_MODULE_MAX_STAGED_WRITES];
+    uint8_t kv_before[LXP_MODULE_MAX_STAGED_WRITES]
+                     [LXP_MODULE_MAX_VALUE_BYTES];
+    size_t staged_count;
+    lx_account_registration staged_accounts[
+        LXP_MODULE_MAX_STAGED_ACCOUNTS];
+    size_t staged_account_count;
+    lxp_prepared_account_change accounts[
+        LXP_MAX_TRANSFER_SET_LEGS * 2U + 1U];
+    size_t account_count;
+    lxp_module_blob blobs[LXP_KERNEL_MAX_STAGED_BLOBS];
+    size_t blob_count;
+};
+
+static bool account_equal(const lx_account *left, const lx_account *right)
+{
+    return memcmp(left->id, right->id, sizeof(left->id)) == 0 &&
+           left->name_length == right->name_length &&
+           left->name_length <= sizeof(left->name) &&
+           memcmp(left->name, right->name, left->name_length) == 0 &&
+           left->kind == right->kind &&
+           lxp_u128_cmp(left->balance, right->balance) == 0 &&
+           left->has_asset == right->has_asset &&
+           (!left->has_asset ||
+            memcmp(left->asset_id, right->asset_id,
+                   sizeof(left->asset_id)) == 0) &&
+           left->next_sequence == right->next_sequence &&
+           left->created_at_sequence == right->created_at_sequence &&
+           left->frozen == right->frozen &&
+           left->has_open_reference == right->has_open_reference &&
+           left->has_authority_key == right->has_authority_key &&
+           (!left->has_authority_key ||
+            memcmp(left->authority_key, right->authority_key,
+                   sizeof(left->authority_key)) == 0);
+}
+
+static bool call_admission_equal(const lxp_call_admission_facts *left,
+                                 const lxp_call_admission_facts *right)
+{
+    return left->present == right->present &&
+           memcmp(left->activity_binding, right->activity_binding, 32U) == 0 &&
+           memcmp(left->payer, right->payer, 32U) == 0 &&
+           lxp_u128_cmp(left->available_fee_units,
+                        right->available_fee_units) == 0 &&
+           lxp_u128_cmp(left->signed_fee_limit,
+                        right->signed_fee_limit) == 0 &&
+           left->fee_schedule_version == right->fee_schedule_version &&
+           left->metering_schedule_version ==
+               right->metering_schedule_version &&
+           memcmp(left->metering_schedule_coefficients,
+                  right->metering_schedule_coefficients,
+                  sizeof(left->metering_schedule_coefficients)) == 0 &&
+           memcmp(left->fee_schedule_prices, right->fee_schedule_prices,
+                  sizeof(left->fee_schedule_prices)) == 0 &&
+           left->parameter_version == right->parameter_version;
+}
+
+static bool effects_are_canonical(uint16_t module_id,
+                                  const lxp_effect_buffer *effects)
+{
+    size_t i;
+    if (effects == NULL || effects->count > LXP_MAX_EFFECTS)
+        return false;
+    for (i = 0U; i < effects->count; ++i)
+        if (effects->effects[i].module_id != module_id ||
+            effects->effects[i].ordinal != i)
+            return false;
+    return true;
+}
+
 static bool key_equal(const uint8_t *left, size_t left_length,
                       const uint8_t *right, size_t right_length)
 {
@@ -921,6 +1012,233 @@ lxp_result lxp_ctx_emit_transfer_set(lxp_module_ctx *ctx,
                                      lxp_receipt *receipt)
 {
     return emit_transfer_set(ctx, set, receipt, false);
+}
+
+void lxp_prepared_module_transition_destroy(
+    lxp_prepared_module_transition *prepared)
+{
+    size_t i;
+    if (prepared == NULL) return;
+    for (i = 0U; i < prepared->blob_count; ++i)
+        free(prepared->blobs[i].bytes);
+    (void)memset(prepared, 0, sizeof(*prepared));
+    free(prepared);
+}
+
+lxp_result lxp_module_ctx_export_prepared(
+    lxp_module_ctx *ctx, const lxp_effect_buffer *effects,
+    const uint8_t level_snapshot_token[32],
+    lxp_prepared_module_transition **prepared)
+{
+    lxp_prepared_module_transition *result;
+    size_t i;
+    lxp_result status;
+    bool prepared_here = false;
+    if (ctx == NULL || effects == NULL || level_snapshot_token == NULL ||
+        lxp_ct_is_zero(level_snapshot_token, 32U) || prepared == NULL ||
+        *prepared != NULL || !ctx->mutable || ctx->kernel == NULL ||
+        ctx->effects != effects || ctx->next_effect_ordinal != effects->count ||
+        !effects_are_canonical(ctx->module_id, effects) ||
+        ctx->staged_count > LXP_MODULE_MAX_STAGED_WRITES ||
+        ctx->staged_account_count > LXP_MODULE_MAX_STAGED_ACCOUNTS ||
+        ctx->transfer_snapshot_count >
+            LXP_MAX_TRANSFER_SET_LEGS * 2U + 1U ||
+        ctx->staged_blob_count > LXP_KERNEL_MAX_STAGED_BLOBS)
+        return LXP_ERR_NON_CANONICAL;
+    if (!ctx->commit_prepared) {
+        status = lxp_module_ctx_prepare_commit(ctx);
+        if (status != LXP_OK) return status;
+        prepared_here = true;
+    }
+    result = (lxp_prepared_module_transition *)calloc(1U, sizeof(*result));
+    if (result == NULL) {
+        if (prepared_here) ctx->commit_prepared = false;
+        return LXP_ERR_ARENA_EXHAUSTED;
+    }
+    result->module_id = ctx->module_id;
+    result->protocol_version = ctx->protocol_version;
+    result->epoch = ctx->epoch;
+    result->global_sequence = ctx->global_sequence;
+    result->batch_number = ctx->batch_number;
+    result->clock = ctx->clock;
+    result->gas_limit = ctx->gas_limit;
+    (void)memcpy(result->activity_id, ctx->activity_id, 32U);
+    (void)memcpy(result->level_snapshot_token, level_snapshot_token, 32U);
+    result->call_admission = ctx->call_admission;
+    result->gas_used = ctx->gas_used;
+    result->effects = *effects;
+    result->program_outcome = ctx->program_outcome;
+    result->staged_count = ctx->staged_count;
+    (void)memcpy(result->staged, ctx->staged,
+                 ctx->staged_count * sizeof(ctx->staged[0]));
+    for (i = 0U; i < ctx->staged_count; ++i) {
+        size_t location = committed_find(ctx, ctx->staged[i].key,
+                                         ctx->staged[i].key_length);
+        if (location == ctx->kernel->module_kv_count) continue;
+        result->kv_existed[i] = true;
+        result->kv_before_length[i] =
+            ctx->kernel->module_kv[location].value_length;
+        (void)memcpy(result->kv_before[i],
+                     ctx->kernel->module_kv[location].value,
+                     result->kv_before_length[i]);
+    }
+    result->staged_account_count = ctx->staged_account_count;
+    (void)memcpy(result->staged_accounts, ctx->staged_accounts,
+                 ctx->staged_account_count * sizeof(ctx->staged_accounts[0]));
+    for (i = 0U; i < ctx->transfer_snapshot_count; ++i) {
+        const lxp_module_account_snapshot *snapshot =
+            &ctx->transfer_snapshots[i];
+        size_t staged;
+        for (staged = 0U; staged < ctx->staged_account_count; ++staged)
+            if (snapshot->account == &ctx->staged_accounts[staged].account)
+                break;
+        if (staged != ctx->staged_account_count) continue;
+        if (snapshot->account == NULL) {
+            lxp_prepared_module_transition_destroy(result);
+            if (prepared_here) ctx->commit_prepared = false;
+            return LXP_FATAL_INVARIANT;
+        }
+        result->accounts[result->account_count].before = *snapshot->account;
+        result->accounts[result->account_count].before.balance =
+            snapshot->balance;
+        (void)memcpy(result->accounts[result->account_count].before.asset_id,
+                     snapshot->asset_id, 32U);
+        result->accounts[result->account_count].before.has_asset =
+            snapshot->has_asset;
+        result->accounts[result->account_count].before.next_sequence =
+            snapshot->next_sequence;
+        result->accounts[result->account_count].after = *snapshot->account;
+        ++result->account_count;
+    }
+    for (i = 0U; i < ctx->staged_blob_count; ++i) {
+        uint8_t *copy = (uint8_t *)malloc(ctx->staged_blobs[i].length);
+        if (copy == NULL) {
+            lxp_prepared_module_transition_destroy(result);
+            if (prepared_here) ctx->commit_prepared = false;
+            return LXP_ERR_ARENA_EXHAUSTED;
+        }
+        (void)memcpy(copy, ctx->staged_blobs[i].bytes,
+                     ctx->staged_blobs[i].length);
+        result->blobs[result->blob_count] = ctx->staged_blobs[i];
+        result->blobs[result->blob_count].bytes = copy;
+        ++result->blob_count;
+    }
+    *prepared = result;
+    return LXP_OK;
+}
+
+lxp_result lxp_module_ctx_import_prepared(
+    lxp_module_ctx *ctx, const lxp_prepared_module_transition *prepared,
+    const uint8_t level_snapshot_token[32], lxp_effect_buffer *effects)
+{
+    uint8_t *blob_copies[LXP_KERNEL_MAX_STAGED_BLOBS] = { NULL };
+    lx_account *accounts[LXP_MAX_TRANSFER_SET_LEGS * 2U + 1U];
+    size_t i;
+    if (ctx == NULL || prepared == NULL || level_snapshot_token == NULL ||
+        lxp_ct_is_zero(level_snapshot_token, 32U) || effects == NULL ||
+        !ctx->mutable || ctx->kernel == NULL || ctx->kernel->state == NULL ||
+        ctx->effects != effects || effects->count != 0U ||
+        ctx->next_effect_ordinal != 0U ||
+        ctx->kernel->state->accounts == NULL || ctx->staged_count != 0U ||
+        ctx->staged_account_count != 0U || ctx->staged_blob_count != 0U ||
+        ctx->transfer_snapshot_count != 0U || ctx->commit_prepared ||
+        prepared->module_id != ctx->module_id ||
+        prepared->protocol_version != ctx->protocol_version ||
+        prepared->epoch != ctx->epoch ||
+        prepared->global_sequence != ctx->global_sequence ||
+        prepared->batch_number != ctx->batch_number ||
+        prepared->clock.sealed_timestamp_ms != ctx->clock.sealed_timestamp_ms ||
+        prepared->clock.bound != ctx->clock.bound ||
+        prepared->gas_limit != ctx->gas_limit ||
+        memcmp(prepared->activity_id, ctx->activity_id, 32U) != 0 ||
+        memcmp(prepared->level_snapshot_token,
+               level_snapshot_token, 32U) != 0 ||
+        !effects_are_canonical(ctx->module_id, &prepared->effects) ||
+        prepared->staged_count > LXP_MODULE_MAX_STAGED_WRITES ||
+        prepared->staged_account_count > LXP_MODULE_MAX_STAGED_ACCOUNTS ||
+        prepared->account_count > LXP_MAX_TRANSFER_SET_LEGS * 2U + 1U ||
+        prepared->blob_count > LXP_KERNEL_MAX_STAGED_BLOBS ||
+        !call_admission_equal(&prepared->call_admission,
+                              &ctx->call_admission))
+        return LXP_ERR_CONTEXT_MISMATCH;
+    for (i = 0U; i < prepared->staged_count; ++i) {
+        size_t location = committed_find(ctx, prepared->staged[i].key,
+                                         prepared->staged[i].key_length);
+        bool existed = location != ctx->kernel->module_kv_count;
+        if (existed != prepared->kv_existed[i] ||
+            (existed &&
+             (ctx->kernel->module_kv[location].value_length !=
+                  prepared->kv_before_length[i] ||
+              memcmp(ctx->kernel->module_kv[location].value,
+                     prepared->kv_before[i],
+                     prepared->kv_before_length[i]) != 0)))
+            return LXP_ERR_CONTEXT_MISMATCH;
+    }
+    for (i = 0U; i < prepared->staged_account_count; ++i) {
+        size_t account_index;
+        for (account_index = 0U;
+             account_index < ctx->kernel->state->accounts->count;
+             ++account_index)
+            if (memcmp(ctx->kernel->state->accounts->accounts[account_index].id,
+                       prepared->staged_accounts[i].account.id, 32U) == 0)
+                return LXP_ERR_CONTEXT_MISMATCH;
+    }
+    for (i = 0U; i < prepared->account_count; ++i) {
+        if (lxp_ctx_account_find(ctx, prepared->accounts[i].before.id,
+                                 &accounts[i]) != LXP_OK ||
+            !account_equal(accounts[i], &prepared->accounts[i].before))
+            return LXP_ERR_CONTEXT_MISMATCH;
+    }
+    for (i = 0U; i < prepared->blob_count; ++i) {
+        if (committed_blob_find(ctx, prepared->blobs[i].key) !=
+            ctx->kernel->blob_count)
+            return LXP_ERR_CONTEXT_MISMATCH;
+        blob_copies[i] = (uint8_t *)malloc(prepared->blobs[i].length);
+        if (blob_copies[i] == NULL) {
+            while (i != 0U) free(blob_copies[--i]);
+            return LXP_ERR_ARENA_EXHAUSTED;
+        }
+        (void)memcpy(blob_copies[i], prepared->blobs[i].bytes,
+                     prepared->blobs[i].length);
+    }
+    ctx->staged_count = prepared->staged_count;
+    (void)memcpy(ctx->staged, prepared->staged,
+                 prepared->staged_count * sizeof(prepared->staged[0]));
+    ctx->staged_account_count = prepared->staged_account_count;
+    (void)memcpy(ctx->staged_accounts, prepared->staged_accounts,
+                 prepared->staged_account_count *
+                     sizeof(prepared->staged_accounts[0]));
+    for (i = 0U; i < ctx->staged_account_count; ++i)
+        ctx->staged_accounts[i].expected_count =
+            ctx->kernel->state->accounts->count + i;
+    for (i = 0U; i < prepared->account_count; ++i) {
+        lxp_module_account_snapshot *snapshot =
+            &ctx->transfer_snapshots[ctx->transfer_snapshot_count++];
+        snapshot->account = accounts[i];
+        snapshot->balance = accounts[i]->balance;
+        (void)memcpy(snapshot->asset_id, accounts[i]->asset_id, 32U);
+        snapshot->has_asset = accounts[i]->has_asset;
+        snapshot->next_sequence = accounts[i]->next_sequence;
+        *accounts[i] = prepared->accounts[i].after;
+    }
+    ctx->transfer_applied = prepared->account_count != 0U;
+    for (i = 0U; i < prepared->blob_count; ++i) {
+        ctx->staged_blobs[i] = prepared->blobs[i];
+        ctx->staged_blobs[i].bytes = blob_copies[i];
+    }
+    ctx->staged_blob_count = prepared->blob_count;
+    ctx->gas_used = prepared->gas_used;
+    ctx->program_outcome = prepared->program_outcome;
+    {
+        lxp_result status = lxp_module_ctx_prepare_commit(ctx);
+        if (status != LXP_OK) {
+            lxp_module_ctx_rollback(ctx);
+            return status;
+        }
+    }
+    *effects = prepared->effects;
+    ctx->next_effect_ordinal = (uint16_t)effects->count;
+    return LXP_OK;
 }
 
 lxp_result lxp_ctx_emit_programs_maintenance_transfer_set(

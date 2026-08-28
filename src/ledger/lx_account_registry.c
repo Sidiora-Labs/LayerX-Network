@@ -100,6 +100,66 @@ lxp_result lx_account_registry_init(lx_account_registry *registry)
     return LXP_OK;
 }
 
+lxp_result lx_account_validate_canonical(const lx_account *account)
+{
+    lx_account_name parsed;
+    uint8_t derived[LX_ACCOUNT_ID_BYTES];
+    lxp_result status;
+    if (account == NULL || account->name_length == 0U ||
+        account->name_length > LX_ACCOUNT_NAME_MAX)
+        return LXP_ERR_NON_CANONICAL;
+    status = lx_account_name_parse(account->name, account->name_length,
+                                   &parsed);
+    if (status == LXP_OK)
+        status = lx_account_id_from_string(account->name,
+                                           account->name_length, derived);
+    if (status != LXP_OK || parsed.kind != account->kind ||
+        memcmp(derived, account->id, LX_ACCOUNT_ID_BYTES) != 0 ||
+        (!account->has_asset &&
+         (!lxp_u128_is_zero(account->balance) ||
+          !bytes_zero(account->asset_id, sizeof(account->asset_id)))) ||
+        (account->has_asset &&
+         bytes_zero(account->asset_id, sizeof(account->asset_id))) ||
+        (!account->has_authority_key &&
+         !bytes_zero(account->authority_key,
+                     sizeof(account->authority_key))) ||
+        (account->has_authority_key &&
+         bytes_zero(account->authority_key,
+                    sizeof(account->authority_key))))
+        return status != LXP_OK ? status : LXP_ERR_NON_CANONICAL;
+    return LXP_OK;
+}
+
+lxp_result lx_account_registry_snapshot(lx_account_registry *source,
+                                        lx_account_registry *snapshot)
+{
+    bool expected = false;
+    if (source == NULL || snapshot == NULL || source == snapshot ||
+        source->count > LX_ACCOUNT_REGISTRY_CAPACITY)
+        return LXP_ERR_NON_CANONICAL;
+    if (!atomic_compare_exchange_strong_explicit(
+            &source->gateway_transition, &expected, true,
+            memory_order_acq_rel, memory_order_acquire))
+        return LXP_ERR_CONTEXT_MISMATCH;
+    if (atomic_load_explicit(&source->gateway_acquirers,
+                             memory_order_acquire) != 0U) {
+        atomic_store_explicit(&source->gateway_transition, false,
+                              memory_order_release);
+        return LXP_ERR_CONTEXT_MISMATCH;
+    }
+    (void)memset(snapshot, 0, sizeof(*snapshot));
+    snapshot->count = source->count;
+    if (source->count != 0U)
+        (void)memcpy(snapshot->accounts, source->accounts,
+                     source->count * sizeof(source->accounts[0]));
+    atomic_init(&snapshot->gateway_owner, NULL);
+    atomic_init(&snapshot->gateway_acquirers, 0U);
+    atomic_init(&snapshot->gateway_transition, false);
+    atomic_store_explicit(&source->gateway_transition, false,
+                          memory_order_release);
+    return LXP_OK;
+}
+
 lxp_result lx_account_lookup(lx_account_registry *registry,
                              const uint8_t *name, size_t name_length,
                              const uint8_t presented_id[32],

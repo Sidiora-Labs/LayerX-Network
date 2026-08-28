@@ -56,6 +56,8 @@ pub mod occupancy;
 #[deny(unsafe_code)]
 pub mod qualification;
 #[deny(unsafe_code)]
+pub mod schedule;
+#[deny(unsafe_code)]
 pub mod storage;
 #[deny(unsafe_code)]
 pub mod test_support;
@@ -147,6 +149,10 @@ pub use qualification::{
     programs_differential_gate, programs_differential_gate_versioned, programs_fuzz_observation, programs_fuzz_targets,
     replay_recorded_execution, replay_recorded_execution_with_fee_history, DifferentialMismatch,
     FuzzTarget, RecordedExecution, ReplayRefusal,
+};
+pub use schedule::{
+    ConflictGraph, ParallelScheduler, ScheduleAccess, ScheduleError, SchedulePlan,
+    SchedulingStrategy, DEFAULT_MAXIMUM_SCHEDULER_WORKERS,
 };
 pub use storage::{
     NamespaceDrop, PrincipalId, ProgramId, ScanEntry, ScanLimits, Storage, StorageError,

@@ -254,6 +254,9 @@ lxp_result lx_account_kind_of(const uint8_t *name, size_t name_length,
 lxp_result lx_account_id_from_string(const uint8_t *name, size_t name_length,
                                      uint8_t account_id[LX_ACCOUNT_ID_BYTES]);
 lxp_result lx_account_registry_init(lx_account_registry *registry);
+lxp_result lx_account_validate_canonical(const lx_account *account);
+lxp_result lx_account_registry_snapshot(lx_account_registry *source,
+                                        lx_account_registry *snapshot);
 lxp_result lx_account_registry_root(const lx_account_registry *registry,
                                     uint8_t root[32]);
 lxp_result lx_account_registry_proof(

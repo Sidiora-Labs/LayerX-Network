@@ -8,6 +8,7 @@
 #include "layerx/lxp_hash.h"
 #include "layerx/lxp_genesis.h"
 #include "layerx/lxp_snapshot.h"
+#include "lxp_daemon_batch_wal.h"
 
 #include <errno.h>
 #include <dirent.h>
@@ -73,6 +74,10 @@ typedef struct lxp_daemon_process {
 } lxp_daemon_process;
 
 static lxp_result resume_batch_number(lxp_daemon_process *process);
+static lxp_result recover_ranged_batch_authorities(
+    lxp_daemon_process *process);
+static lxp_result recover_prepared_batch_wal(
+    lxp_daemon_process *process, lxp_daemon_protocol_owner *owner);
 
 static volatile sig_atomic_t stop_requested;
 
@@ -583,6 +588,28 @@ static lxp_result persist_state_checkpoint(lxp_daemon_process *process,
     return status;
 }
 
+static lxp_result persist_prepared_batch_checkpoint(
+    void *context, const lxp_kernel_batch_boundary *settled)
+{
+    lxp_daemon_process *process = (lxp_daemon_process *)context;
+    lxp_kernel_batch_boundary live;
+    lxp_result status;
+    if (process == NULL || settled == NULL || settled->next_sequence <= 1U)
+        return LXP_ERR_NON_CANONICAL;
+    status = lxp_kernel_batch_boundary_read(&process->kernel, &live);
+    if (status == LXP_OK &&
+        (live.next_sequence != settled->next_sequence ||
+         lxp_ct_memcmp(live.receipt_state_root,
+                       settled->receipt_state_root, 32U) != 0 ||
+         lxp_ct_memcmp(live.canonical_state_root,
+                       settled->canonical_state_root, 32U) != 0))
+        status = LXP_FATAL_INVARIANT;
+    if (status == LXP_OK)
+        status = persist_state_checkpoint(
+            process, settled->next_sequence - 1U);
+    return status;
+}
+
 static lxp_result replay_execute_activity(
     lxp_daemon_process *process, uint64_t global_sequence,
     const uint8_t *canonical_activity, size_t activity_length,
@@ -705,9 +732,10 @@ static lxp_result replay_execute_activity(
     return status;
 }
 
-static lxp_result ensure_batch_record(
+static lxp_result check_batch_record(
     lxp_daemon_process *process, const lxp_batch_header *expected,
-    const uint8_t *canonical_header, size_t header_length)
+    const uint8_t *canonical_header, size_t header_length,
+    bool append_missing)
 {
     uint64_t offset = 0U;
     uint64_t prior_batch = 0U;
@@ -718,6 +746,8 @@ static lxp_result ensure_batch_record(
         lxp_log_record_header record;
         uint8_t body[LXP_BATCH_HEADER_ENCODED_SIZE];
         lxp_batch_header header;
+        if (found && !append_missing)
+            return LXP_FATAL_REPLAY_DIVERGENCE;
         status = lxp_log_read(&process->batch_log, offset, &record, NULL, 0U);
         if (status != LXP_OK && status != LXP_ERR_LENGTH_LIMIT) break;
         if (record.record_kind != (uint8_t)LXP_LOG_BATCH_HEADER ||
@@ -732,7 +762,8 @@ static lxp_result ensure_batch_record(
               (prior_batch == UINT64_MAX || prior_sequence == UINT64_MAX ||
                header.batch_number != prior_batch + 1U ||
                header.first_sequence != prior_sequence + 1U)) ||
-             header.first_sequence != header.last_sequence ||
+             header.first_sequence == 0U ||
+             header.last_sequence < header.first_sequence ||
              header.last_sequence != record.global_sequence))
             status = LXP_ERR_BATCH_GAP;
         if (status == LXP_OK &&
@@ -754,13 +785,27 @@ static lxp_result ensure_batch_record(
          (prior_batch == UINT64_MAX || prior_sequence == UINT64_MAX ||
           expected->batch_number != prior_batch + 1U ||
           expected->first_sequence != prior_sequence + 1U)) ||
-        expected->first_sequence != expected->last_sequence)
+        expected->first_sequence == 0U ||
+        expected->last_sequence < expected->first_sequence)
         return LXP_ERR_BATCH_GAP;
+    if (prior_batch == 0U &&
+        expected->batch_number !=
+            process->sequencer_authorization.first_batch_number)
+        return LXP_ERR_BATCH_GAP;
+    if (!append_missing) return LXP_OK;
     status = lxp_log_append(&process->batch_log, LXP_LOG_BATCH_HEADER,
                             expected->last_sequence, canonical_header,
                             (uint32_t)header_length, NULL);
     if (status == LXP_OK) status = lxp_log_write_boundary(&process->batch_log);
     return status;
+}
+
+static lxp_result ensure_batch_record(
+    lxp_daemon_process *process, const lxp_batch_header *expected,
+    const uint8_t *canonical_header, size_t header_length)
+{
+    return check_batch_record(process, expected, canonical_header,
+                              header_length, true);
 }
 
 static lxp_result replay_publish_evidence(
@@ -771,6 +816,7 @@ static lxp_result replay_publish_evidence(
 {
     lxp_byte_span activities[1];
     lxp_byte_span receipts[1];
+    lxp_byte_span events[1];
     lxp_batch_roots roots;
     lxp_batch_header header;
     lxp_byte_span canonical_header;
@@ -789,9 +835,12 @@ static lxp_result replay_publish_evidence(
     }
     activities[0] = (lxp_byte_span){canonical_activity, activity_length};
     receipts[0] = (lxp_byte_span){canonical_receipt, receipt_length};
-    status = lxp_batch_roots_compute(
+    status = lxp_programs_project_receipt_events(
+        receipt, &process->execution_arena, &events[0]);
+    if (status == LXP_OK)
+        status = lxp_batch_roots_compute(
         &(lxp_batch_root_inputs){activities, 1U, receipts, 1U,
-                                 NULL, 0U, NULL, 0U, NULL, 0U},
+                                 events, 1U, NULL, 0U, NULL, 0U},
         &process->execution_arena, &roots);
     if (status == LXP_OK) {
         (void)memset(&header, 0, sizeof(header));
@@ -1153,7 +1202,8 @@ static lxp_result replay_canonical_after_snapshot(
     if (process == NULL || owner == NULL || owner->kernel != &process->kernel ||
         owner->feed_store.canonical_log != &process->canonical_log)
         return LXP_ERR_NON_CANONICAL;
-    status = reconcile_snapshot_evidence(process);
+    status = recover_prepared_batch_wal(process, owner);
+    if (status == LXP_OK) status = reconcile_snapshot_evidence(process);
     if (status != LXP_OK) return status;
     expected_sequence = process->state.next_sequence;
     scan_end = process->canonical_log.write_offset;
@@ -1304,7 +1354,159 @@ static lxp_result replay_canonical_after_snapshot(
         status = LXP_ERR_PROJECTION_STALE;
     free(activity_bytes);
     free(receipt_bytes);
+    if (status == LXP_OK)
+        status = recover_ranged_batch_authorities(process);
     if (status == LXP_OK) status = resume_batch_number(process);
+    return status;
+}
+
+static lxp_result publish_canonical_batch(
+    lxp_daemon_process *process, const lxp_byte_span *activities,
+    const lxp_byte_span *receipts, const lxp_receipt *decoded_receipts,
+    size_t activity_count, const lxp_byte_span *events, size_t event_count,
+    uint16_t protocol_version, uint64_t timestamp,
+    bool checkpoint_persisted)
+{
+    lxp_batch_roots roots;
+    lxp_batch_header header;
+    lxp_batch_seal_input seal;
+    lxp_byte_span canonical_header;
+    lxp_byte_span projected_events[LXP_DAEMON_MAX_BATCH_ACTIVITIES] = {{0}};
+    const lxp_byte_span *root_events = NULL;
+    size_t root_event_count = 0U;
+    uint8_t header_signature[64];
+    uint8_t receipt_hashes[LXP_DAEMON_MAX_BATCH_ACTIVITIES][32];
+    size_t i;
+    lxp_result status;
+    if (process == NULL || activities == NULL || receipts == NULL ||
+        decoded_receipts == NULL || activity_count == 0U ||
+        activity_count > LXP_DAEMON_MAX_BATCH_ACTIVITIES || timestamp == 0U ||
+        ((events == NULL) != (event_count == 0U)) ||
+        (activity_count > 1U && events == NULL) ||
+        (events != NULL && event_count != activity_count) ||
+        decoded_receipts[0].global_sequence == 0U ||
+        decoded_receipts[activity_count - 1U].global_sequence <
+            decoded_receipts[0].global_sequence)
+        return LXP_ERR_NON_CANONICAL;
+    for (i = 0U; i < activity_count; ++i) {
+        lxp_activity activity;
+        uint8_t activity_id[32] = {0};
+        if (activities[i].bytes == NULL || activities[i].length == 0U ||
+            receipts[i].bytes == NULL || receipts[i].length == 0U ||
+            decoded_receipts[i].protocol_version != protocol_version ||
+            decoded_receipts[i].timestamp != timestamp ||
+            decoded_receipts[0].global_sequence > UINT64_MAX - i ||
+            decoded_receipts[i].global_sequence !=
+                decoded_receipts[0].global_sequence + i ||
+            (i != 0U &&
+             lxp_ct_memcmp(decoded_receipts[i - 1U].resulting_state_root,
+                           decoded_receipts[i].previous_state_root,
+                           32U) != 0))
+            return LXP_ERR_NON_CANONICAL;
+        status = lxp_activity_decode(activities[i].bytes,
+                                     activities[i].length, &activity);
+        if (status == LXP_OK)
+            status = lxp_activity_id(activities[i].bytes,
+                                     activities[i].length, activity_id);
+        if (status != LXP_OK ||
+            activity.protocol_version != protocol_version ||
+            lxp_ct_memcmp(activity_id,
+                          decoded_receipts[i].activity_id, 32U) != 0)
+            return status != LXP_OK ? status : LXP_ERR_NON_CANONICAL;
+        if (events != NULL) {
+            status = lxp_programs_project_receipt_events(
+                &decoded_receipts[i], &process->execution_arena,
+                &projected_events[i]);
+            if (status != LXP_OK ||
+                projected_events[i].length != events[i].length ||
+                lxp_ct_memcmp(projected_events[i].bytes, events[i].bytes,
+                              events[i].length) != 0)
+                return status != LXP_OK ? status : LXP_ERR_NON_CANONICAL;
+        }
+    }
+    if (events != NULL) {
+        root_events = projected_events;
+        root_event_count = activity_count;
+    }
+    if (lxp_ct_memcmp(
+            decoded_receipts[activity_count - 1U].resulting_state_root,
+            process->kernel.current_state_root, 32U) != 0)
+        return LXP_FATAL_INVARIANT;
+    status = checkpoint_persisted ? LXP_OK : persist_state_checkpoint(
+        process, decoded_receipts[activity_count - 1U].global_sequence);
+    if (status == LXP_OK)
+        status = lxp_batch_roots_compute(
+            &(lxp_batch_root_inputs){activities, activity_count,
+                                     receipts, activity_count,
+                                     root_events, root_event_count,
+                                     NULL, 0U, NULL, 0U},
+            &process->execution_arena, &roots);
+    (void)memset(&seal, 0, sizeof(seal));
+    seal.protocol_version = protocol_version;
+    seal.network_id = process->network_id;
+    seal.epoch = process->kernel.epoch;
+    seal.batch_number = process->next_batch;
+    seal.first_sequence = decoded_receipts[0].global_sequence;
+    seal.last_sequence =
+        decoded_receipts[activity_count - 1U].global_sequence;
+    (void)memcpy(seal.previous_state_root,
+                 decoded_receipts[0].previous_state_root, 32U);
+    (void)memcpy(seal.resulting_state_root,
+                 decoded_receipts[activity_count - 1U].resulting_state_root,
+                 32U);
+    seal.timestamp_ms = timestamp;
+    (void)memcpy(seal.sequencer_id,
+                 process->sequencer_authorization.sequencer_id, 32U);
+    if (status == LXP_OK)
+        status = lxp_batch_seal(&header, &seal, &roots, &process->batch_log,
+                                &process->execution_arena);
+    if (status == LXP_OK)
+        status = lxp_batch_sign(
+            &header, process->sequencer_private_key,
+            &process->sequencer_authorization, header_signature,
+            &process->execution_arena);
+    if (status == LXP_OK)
+        status = lxp_batch_header_encode(
+            &header, &process->execution_arena, &canonical_header);
+    for (i = 0U; status == LXP_OK && i < activity_count; ++i)
+        status = lxp_merkle_leaf_hash(receipts[i].bytes, receipts[i].length,
+                                      receipt_hashes[i]);
+    for (i = 0U; status == LXP_OK && i < activity_count; ++i) {
+        lxp_merkle_proof proof;
+        uint8_t proof_root[32];
+        status = lxp_merkle_proof_generate(
+            (const uint8_t (*)[32])receipt_hashes, activity_count, i,
+            &process->execution_arena, &proof, proof_root);
+        if (status == LXP_OK &&
+            lxp_ct_memcmp(proof_root, roots.receipt_merkle_root, 32U) != 0)
+            status = LXP_FATAL_INVARIANT;
+        if (status == LXP_OK)
+            status = lxp_daemon_receipt_authority_append(
+                &process->receipt_authority,
+                receipts[i].bytes, receipts[i].length,
+                canonical_header.bytes, canonical_header.length,
+                header_signature, &proof, &process->execution_arena);
+        if (status == LXP_OK)
+            status = lxp_verified_receipt_index_add(
+                &process->verified_receipts, &decoded_receipts[i],
+                process->sequencer_authorization.public_key,
+                &process->execution_arena);
+        if (status == LXP_OK)
+            status = lxp_daemon_authority_replica_publish(
+                process->authority_replica_address,
+                process->authority_replica_port,
+                process->authority_replica_token,
+                process->authority_replica_token_length,
+                process->authority_replica_id,
+                receipts[i].bytes, receipts[i].length,
+                canonical_header.bytes, canonical_header.length,
+                header_signature, &proof);
+    }
+    if (status == LXP_OK)
+        process->next_batch = process->next_batch ==
+                                      process->sequencer_authorization
+                                          .last_batch_number ?
+                                  0U : process->next_batch + 1U;
     return status;
 }
 
@@ -1321,14 +1523,9 @@ static lxp_result apply_canonical_activity(
     lxp_kernel_execution execution;
     lxp_receipt receipt;
     lxp_byte_span canonical_receipt;
-    lxp_byte_span canonical_header;
+    lxp_byte_span canonical_events;
     lxp_byte_span activities[1];
     lxp_byte_span receipts[1];
-    lxp_batch_roots roots;
-    lxp_batch_header header;
-    lxp_batch_seal_input seal;
-    lxp_merkle_proof proof;
-    uint8_t header_signature[64];
     uint8_t batch_preimage[32U + 32U + 8U + 8U];
     uint8_t activity_id[32];
     uint8_t grant_id[32] = {0};
@@ -1423,79 +1620,360 @@ static lxp_result apply_canonical_activity(
         if (status == LXP_OK) status = LXP_FATAL_INVARIANT;
         goto finish;
     }
-    status = persist_state_checkpoint(process, global_sequence);
-    if (status != LXP_OK) goto finish;
     status = lxp_receipt_encode(&receipt, true, &process->execution_arena,
                                 &canonical_receipt);
     if (status != LXP_OK) goto finish;
+    status = lxp_programs_project_receipt_events(
+        &receipt, &process->execution_arena, &canonical_events);
+    if (status != LXP_OK) goto finish;
     activities[0] = (lxp_byte_span){canonical_activity, activity_length};
     receipts[0] = canonical_receipt;
-    status = lxp_batch_roots_compute(
-        &(lxp_batch_root_inputs){activities, 1U, receipts, 1U,
-                                 NULL, 0U, NULL, 0U, NULL, 0U},
-        &process->execution_arena, &roots);
-    if (status != LXP_OK) goto finish;
-    (void)memset(&seal, 0, sizeof(seal));
-    seal.protocol_version = activity.protocol_version;
-    seal.network_id = process->network_id;
-    seal.epoch = process->kernel.epoch;
-    seal.batch_number = process->next_batch;
-    seal.first_sequence = global_sequence;
-    seal.last_sequence = global_sequence;
-    (void)memcpy(seal.previous_state_root,
-                 receipt.previous_state_root, 32U);
-    (void)memcpy(seal.resulting_state_root,
-                 receipt.resulting_state_root, 32U);
-    seal.timestamp_ms = timestamp;
-    (void)memcpy(seal.sequencer_id,
-                 process->sequencer_authorization.sequencer_id, 32U);
-    status = lxp_batch_seal(&header, &seal, &roots, &process->batch_log,
-                            &process->execution_arena);
-    if (status == LXP_OK)
-        status = lxp_batch_sign(
-            &header, process->sequencer_private_key,
-            &process->sequencer_authorization, header_signature,
-            &process->execution_arena);
-    if (status == LXP_OK)
-        status = lxp_batch_header_encode(&header,
-                                         &process->execution_arena,
-                                         &canonical_header);
-    if (status != LXP_OK) goto finish;
-    (void)memset(&proof, 0, sizeof(proof));
-    proof.leaf_index = 0U;
-    proof.leaf_count = 1U;
-    status = lxp_daemon_protocol_publish_receipt(
-        &process->owner, canonical_receipt.bytes, canonical_receipt.length,
-        canonical_header.bytes, canonical_header.length, header_signature,
-        &proof);
-    if (status == LXP_OK)
-        status = lxp_daemon_authority_replica_publish(
-            process->authority_replica_address,
-            process->authority_replica_port,
-            process->authority_replica_token,
-            process->authority_replica_token_length,
-            process->authority_replica_id,
-            canonical_receipt.bytes, canonical_receipt.length,
-            canonical_header.bytes, canonical_header.length,
-            header_signature, &proof);
-    if (status == LXP_OK)
-        process->next_batch = process->next_batch ==
-                                      process->sequencer_authorization
-                                          .last_batch_number ?
-                                  0U : process->next_batch + 1U;
+    status = publish_canonical_batch(
+        process, activities, receipts, &receipt, 1U,
+        &canonical_events, 1U,
+        activity.protocol_version, timestamp, false);
     if (status == LXP_OK && process->next_batch == 0U) {
         if (pthread_mutex_lock(&process->daemon.mutex) != 0)
             status = LXP_FATAL_INVARIANT;
         else {
             process->daemon.accepting = false;
             process->daemon.failure = LXP_ERR_AUTH_SCOPE;
-            process->daemon.queue_count = 0U;
             (void)pthread_cond_broadcast(&process->daemon.queue_changed);
             if (pthread_mutex_unlock(&process->daemon.mutex) != 0)
                 status = LXP_FATAL_INVARIANT;
         }
     }
 finish:
+    (void)lxp_arena_reset(&process->execution_arena, mark);
+    if (pthread_mutex_unlock(&process->owner.mutex) != 0 && status == LXP_OK)
+        status = LXP_FATAL_INVARIANT;
+    return status;
+}
+
+static lxp_result commit_prepared_batch_wal(
+    lxp_daemon_process *process, const lxp_activity *decoded_activities,
+    const lxp_byte_span *activities, const lxp_byte_span *receipts,
+    const lxp_byte_span *events, const lxp_receipt *decoded_receipts,
+    size_t count, uint64_t timestamp,
+    lxp_kernel_prepared_batch *owned_prepared,
+    lxp_daemon_batch_wal_record **record)
+{
+    lxp_batch_roots roots;
+    lxp_batch_header header;
+    lxp_byte_span canonical_header;
+    lxp_merkle_proof proofs[LXP_DAEMON_MAX_BATCH_ACTIVITIES];
+    uint8_t receipt_hashes[LXP_DAEMON_MAX_BATCH_ACTIVITIES][32];
+    uint8_t proof_root[32];
+    uint8_t signature[64];
+    lxp_daemon_batch_wal_input input;
+    const lxp_kernel_batch_boundary *base;
+    const lxp_kernel_batch_boundary *settled;
+    size_t i;
+    lxp_result status;
+    if (count == 0U || count > LXP_DAEMON_MAX_BATCH_ACTIVITIES)
+        return LXP_ERR_LENGTH_LIMIT;
+    status = lxp_batch_roots_compute(
+        &(lxp_batch_root_inputs){activities, count, receipts, count,
+                                 events, count, NULL, 0U, NULL, 0U},
+        &process->execution_arena, &roots);
+    for (i = 0U; status == LXP_OK && i < count; ++i)
+        status = lxp_merkle_leaf_hash(receipts[i].bytes, receipts[i].length,
+                                      receipt_hashes[i]);
+    for (i = 0U; status == LXP_OK && i < count; ++i) {
+        status = lxp_merkle_proof_generate(
+            (const uint8_t (*)[32])receipt_hashes, count, i,
+            &process->execution_arena, &proofs[i], proof_root);
+        if (status == LXP_OK &&
+            lxp_ct_memcmp(proof_root, roots.receipt_merkle_root, 32U) != 0)
+            status = LXP_FATAL_INVARIANT;
+    }
+    (void)memset(&header, 0, sizeof(header));
+    header.protocol_version = decoded_activities[0].protocol_version;
+    header.network_id = process->network_id;
+    header.epoch = process->kernel.epoch;
+    header.batch_number = process->next_batch;
+    header.first_sequence = decoded_receipts[0].global_sequence;
+    header.last_sequence = decoded_receipts[count - 1U].global_sequence;
+    (void)memcpy(header.previous_state_root,
+                 decoded_receipts[0].previous_state_root, 32U);
+    (void)memcpy(header.resulting_state_root,
+                 decoded_receipts[count - 1U].resulting_state_root, 32U);
+    (void)memcpy(header.activity_merkle_root,
+                 roots.activity_merkle_root, 32U);
+    (void)memcpy(header.receipt_merkle_root,
+                 roots.receipt_merkle_root, 32U);
+    (void)memcpy(header.event_merkle_root, roots.event_merkle_root, 32U);
+    (void)memcpy(header.oracle_root, roots.oracle_root, 32U);
+    (void)memcpy(header.data_availability_root,
+                 roots.data_availability_root, 32U);
+    header.timestamp_ms = timestamp;
+    (void)memcpy(header.sequencer_id,
+                 process->sequencer_authorization.sequencer_id, 32U);
+    if (status == LXP_OK)
+        status = lxp_batch_sign(
+            &header, process->sequencer_private_key,
+            &process->sequencer_authorization, signature,
+            &process->execution_arena);
+    if (status == LXP_OK)
+        status = lxp_batch_header_encode(
+            &header, &process->execution_arena, &canonical_header);
+    base = lxp_kernel_prepared_batch_base_boundary(owned_prepared);
+    settled = lxp_kernel_prepared_batch_final_boundary(owned_prepared);
+    if (status == LXP_OK && (base == NULL || settled == NULL))
+        status = LXP_FATAL_INVARIANT;
+    if (status != LXP_OK) return status;
+    (void)memset(&input, 0, sizeof(input));
+    input.protocol_version = header.protocol_version;
+    input.network_id = header.network_id;
+    input.epoch = header.epoch;
+    input.batch_number = header.batch_number;
+    input.timestamp_ms = header.timestamp_ms;
+    input.parameter_version = decoded_receipts[0].parameter_version;
+    input.fee_schedule_version =
+        decoded_receipts[0].program_outcome.fee_schedule_version;
+    input.metering_schedule_version =
+        decoded_receipts[0].program_outcome.metering_schedule_version;
+    input.first_sequence = header.first_sequence;
+    input.last_sequence = header.last_sequence;
+    input.count = count;
+    input.base = *base;
+    input.settled = *settled;
+    (void)memcpy(input.publication_digest,
+                 lxp_kernel_prepared_batch_publication_digest(owned_prepared),
+                 32U);
+    input.authorization = process->sequencer_authorization;
+    input.canonical_header = canonical_header;
+    (void)memcpy(input.header_signature, signature, 64U);
+    input.activities = activities;
+    input.receipts = receipts;
+    input.events = events;
+    input.receipt_proofs = proofs;
+    return lxp_daemon_batch_wal_commit_kernel(
+        process->checkpoint_directory, &input,
+        &process->kernel, &process->identities,
+        decoded_activities, owned_prepared,
+        persist_prepared_batch_checkpoint, process, record);
+}
+
+static lxp_result apply_canonical_batch(
+    void *context, uint64_t first_global_sequence,
+    const lxp_daemon_activity *offered, size_t offered_count,
+    size_t *consumed_count)
+{
+    lxp_daemon_process *process = (lxp_daemon_process *)context;
+    lxp_activity activities[LXP_DAEMON_MAX_BATCH_ACTIVITIES];
+    lxp_kernel_execution executions[LXP_DAEMON_MAX_BATCH_ACTIVITIES];
+    lxp_authority_scope scopes[LXP_DAEMON_MAX_BATCH_ACTIVITIES];
+    lxp_authority_resolved authorities[LXP_DAEMON_MAX_BATCH_ACTIVITIES];
+    lxp_byte_span canonical_activities[LXP_DAEMON_MAX_BATCH_ACTIVITIES];
+    lxp_byte_span canonical_receipts[LXP_DAEMON_MAX_BATCH_ACTIVITIES];
+    lxp_batch_roots scheduling_roots;
+    uint8_t batch_id[32] = {0};
+    uint8_t grant_id[32] = {0};
+    uint64_t timestamp;
+    size_t count = 0U;
+    size_t retry_prefix_count = 0U;
+    size_t kernel_consumed = 0U;
+    size_t mark;
+    size_t i;
+    uint32_t maximum_workers;
+    lxp_kernel_prepared_batch *prepared_batch = NULL;
+    lxp_daemon_batch_wal_record *wal_record = NULL;
+    const lxp_receipt *prepared_receipts = NULL;
+    const lxp_byte_span *prepared_events = NULL;
+    bool live_committed = false;
+    lxp_kernel_batch_boundary live_boundary;
+    lxp_result status = LXP_OK;
+    if (consumed_count == NULL) return LXP_ERR_NON_CANONICAL;
+    *consumed_count = 0U;
+    if (process == NULL || offered == NULL || offered_count == 0U ||
+        offered_count > LXP_DAEMON_MAX_BATCH_ACTIVITIES ||
+        first_global_sequence != process->state.next_sequence ||
+        process->kernel.publication_poisoned || process->next_batch == 0U ||
+        process->next_batch <
+            process->sequencer_authorization.first_batch_number ||
+        process->next_batch >
+            process->sequencer_authorization.last_batch_number)
+        return LXP_ERR_SEQUENCE_GAP;
+    while (count < offered_count) {
+        status = lxp_activity_decode(offered[count].bytes,
+                                     offered[count].length,
+                                     &activities[count]);
+        if (status != LXP_OK) {
+            if (count == 0U) return status;
+            status = LXP_OK;
+            break;
+        }
+        if (activities[count].activity_type != LX_PROGRAMS_CALL) break;
+        if (count != 0U && activities[count].protocol_version !=
+                               activities[0].protocol_version)
+            break;
+        ++count;
+    }
+    if (count == 0U) {
+        status = apply_canonical_activity(
+            context, first_global_sequence,
+            offered[0].bytes, offered[0].length);
+        if (status == LXP_OK) *consumed_count = 1U;
+        return status;
+    }
+    if (first_global_sequence > UINT64_MAX - (count - 1U))
+        return LXP_ERR_OVERFLOW;
+    for (i = 0U; i < count; ++i)
+        canonical_activities[i] =
+            (lxp_byte_span){offered[i].bytes, offered[i].length};
+    if (pthread_mutex_lock(&process->owner.mutex) != 0) return LXP_ERR_IO;
+    process->state.writer = pthread_self();
+    mark = lxp_arena_mark(&process->execution_arena);
+    status = current_time_ms(&timestamp);
+    for (i = 0U; status == LXP_OK && i < count; ++i) {
+        lxp_identity *identity;
+        lx_account *principal;
+        uint64_t sequence = first_global_sequence + i;
+        status = lxp_activity_check_envelope(&activities[i],
+                                             process->network_id);
+        if (status == LXP_OK)
+            status = lxp_activity_verify_payload_hash(&activities[i]);
+        if (status == LXP_OK)
+            status = lxp_activity_verify_signature(&activities[i]);
+        if (status == LXP_OK)
+            status = lxp_identity_resolve(
+                &process->identities, activities[i].actor_did.bytes,
+                activities[i].actor_did.length, &identity);
+        if (status == LXP_OK &&
+            (activities[i].authority.length != 32U ||
+             !lxp_identity_key_valid(identity,
+                                     activities[i].authority.bytes,
+                                     timestamp, sequence)))
+            status = LXP_ERR_BAD_SIGNATURE;
+        principal = status == LXP_OK ?
+            principal_account(process, activities[i].authority.bytes) : NULL;
+        if (status == LXP_OK && principal == NULL)
+            status = LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE;
+        (void)memset(&scopes[i], 0, sizeof(scopes[i]));
+        scopes[i].module_mask = UINT64_C(1) << LXP_MODULE_PROGRAMS;
+        scopes[i].activity_ordinal_min = 1U;
+        scopes[i].activity_ordinal_max = 8U;
+        scopes[i].maximum_per_activity =
+            (lxp_u128){UINT64_MAX, UINT64_MAX};
+        scopes[i].maximum_total = (lxp_u128){UINT64_MAX, UINT64_MAX};
+        scopes[i].maximum_per_period =
+            (lxp_u128){UINT64_MAX, UINT64_MAX};
+        (void)memset(&authorities[i], 0, sizeof(authorities[i]));
+        if (status == LXP_OK) {
+            (void)memcpy(authorities[i].actor, identity->did_id, 32U);
+            (void)memcpy(authorities[i].principal, principal->id, 32U);
+            authorities[i].kind = LXP_AUTHORITY_OWNER;
+            (void)memcpy(authorities[i].verified_key,
+                         activities[i].authority.bytes, 32U);
+            authorities[i].scope = &scopes[i];
+            status = lxp_authority_hash(
+                authorities[i].kind, grant_id,
+                authorities[i].verified_key,
+                authorities[i].authority_hash);
+        }
+        (void)memset(&executions[i], 0, sizeof(executions[i]));
+        executions[i].network_id = process->network_id;
+        executions[i].batch_number = process->next_batch;
+        executions[i].batch_timestamp_ms = timestamp;
+        executions[i].maximum_timestamp_window = UINT64_C(300000);
+        executions[i].epoch = process->kernel.epoch;
+        executions[i].global_sequence = sequence;
+        executions[i].recorded_module_version =
+            LX_PROGRAMS_ACCOUNT_ABI_VERSION;
+        executions[i].parameter_version = process->parameter_version;
+        executions[i].signature_valid = true;
+        executions[i].identities = &process->identities;
+        executions[i].authority = &authorities[i];
+        executions[i].fee_parameters = &process->fees;
+        if (principal != NULL) executions[i].fee_balance = principal->balance;
+        executions[i].gas_limit = UINT64_MAX;
+        executions[i].arena = &process->execution_arena;
+        executions[i].sequencer_private_key =
+            process->sequencer_private_key;
+        executions[i].verified_receipts = &process->verified_receipts;
+    }
+    if (status == LXP_OK)
+        status = lxp_daemon_batch_bind_prefix(
+            canonical_activities, count,
+            process->kernel.current_state_root,
+            first_global_sequence, process->next_batch,
+            &process->execution_arena, executions,
+            &scheduling_roots, batch_id);
+    maximum_workers = process->daemon.config.serial_execution ? 1U :
+        (uint32_t)process->daemon.config.verify_workers;
+    if (maximum_workers == 0U) maximum_workers = 1U;
+    while (status == LXP_OK) {
+        retry_prefix_count = 0U;
+        status = lxp_kernel_prepare_activity_batch(
+            &process->kernel, activities, executions, count,
+            maximum_workers, &prepared_batch, &retry_prefix_count);
+        if (status == LXP_OK) break;
+        if (prepared_batch != NULL || retry_prefix_count == 0U)
+            break;
+        if (retry_prefix_count >= count) {
+            status = LXP_FATAL_INVARIANT;
+            break;
+        }
+        count = retry_prefix_count;
+        status = lxp_daemon_batch_bind_prefix(
+            canonical_activities, count,
+            process->kernel.current_state_root,
+            first_global_sequence, process->next_batch,
+            &process->execution_arena, executions,
+            &scheduling_roots, batch_id);
+    }
+    if (status == LXP_OK) {
+        kernel_consumed = lxp_kernel_prepared_batch_count(prepared_batch);
+        prepared_receipts =
+            lxp_kernel_prepared_batch_receipts(prepared_batch);
+        prepared_events = lxp_kernel_prepared_batch_events(prepared_batch);
+    }
+    if (status == LXP_OK &&
+        (kernel_consumed != count || prepared_receipts == NULL ||
+         prepared_events == NULL))
+        status = LXP_FATAL_INVARIANT;
+    for (i = 0U; status == LXP_OK && i < count; ++i)
+        status = lxp_receipt_encode(
+            &prepared_receipts[i], true, &process->execution_arena,
+            &canonical_receipts[i]);
+    if (status == LXP_OK)
+        status = commit_prepared_batch_wal(
+            process, activities, canonical_activities, canonical_receipts,
+            prepared_events, prepared_receipts, count, timestamp,
+            prepared_batch, &wal_record);
+    if (status == LXP_OK) live_committed = true;
+    if (status == LXP_OK)
+        status = publish_canonical_batch(
+            process, canonical_activities, canonical_receipts,
+            prepared_receipts, count, prepared_events, count,
+            activities[0].protocol_version, timestamp, true);
+    if (status == LXP_OK)
+        status = lxp_kernel_batch_boundary_read(
+            &process->kernel, &live_boundary);
+    if (status == LXP_OK)
+        status = lxp_daemon_batch_wal_transition(
+            process->checkpoint_directory, wal_record,
+            &live_boundary,
+            LXP_DAEMON_BATCH_WAL_COMMITTED);
+    if (status == LXP_OK)
+        status = lxp_daemon_batch_wal_retire(
+            process->checkpoint_directory, wal_record, &live_boundary);
+    if (status == LXP_OK && process->next_batch == 0U) {
+        if (pthread_mutex_lock(&process->daemon.mutex) != 0)
+            status = LXP_FATAL_INVARIANT;
+        else {
+            process->daemon.accepting = false;
+            process->daemon.failure = LXP_ERR_AUTH_SCOPE;
+            (void)pthread_cond_broadcast(&process->daemon.queue_changed);
+            if (pthread_mutex_unlock(&process->daemon.mutex) != 0)
+                status = LXP_FATAL_INVARIANT;
+        }
+    }
+    if (live_committed && status != LXP_OK) status = LXP_FATAL_INVARIANT;
+    if (status == LXP_OK) *consumed_count = count;
+    lxp_daemon_batch_wal_destroy(wal_record);
+    lxp_kernel_prepared_batch_destroy(prepared_batch);
     (void)lxp_arena_reset(&process->execution_arena, mark);
     if (pthread_mutex_unlock(&process->owner.mutex) != 0 && status == LXP_OK)
         status = LXP_FATAL_INVARIANT;
@@ -1512,10 +1990,462 @@ static lxp_result open_log(lxp_log *log, const char *environment,
     return status;
 }
 
+static void free_batch_spans(lxp_byte_span *spans, size_t count)
+{
+    size_t i;
+    for (i = 0U; i < count; ++i) free((void *)spans[i].bytes);
+}
+
+static lxp_result recover_prepared_batch_wal(
+    lxp_daemon_process *process, lxp_daemon_protocol_owner *owner)
+{
+    lxp_daemon_batch_wal_record *record = NULL;
+    const lxp_daemon_batch_wal_input *view;
+    lxp_kernel_batch_boundary live;
+    lxp_daemon_batch_wal_recovery recovery;
+    lxp_batch_header header;
+    lxp_activity activities[LXP_DAEMON_MAX_BATCH_ACTIVITIES];
+    lxp_receipt receipts[LXP_DAEMON_MAX_BATCH_ACTIVITIES];
+    bool present = false;
+    size_t i;
+    lxp_result status;
+    if (process == NULL || owner == NULL || owner != &process->owner)
+        return LXP_ERR_NON_CANONICAL;
+    status = lxp_daemon_batch_wal_load(
+        process->checkpoint_directory, &process->sequencer_authorization,
+        &record, &present);
+    if (status != LXP_OK) goto done;
+    if (!present) {
+        status = lxp_kernel_batch_boundary_read(&process->kernel, &live);
+        if (status == LXP_OK && !owner->feed_store.baseline_present)
+            status = lxp_programs_state_feed_store_anchor(
+                &owner->feed_store, live.next_sequence,
+                live.receipt_state_root);
+        goto done;
+    }
+    view = lxp_daemon_batch_wal_view(record);
+    if (view == NULL || view->count == 0U ||
+        view->count > LXP_DAEMON_MAX_BATCH_ACTIVITIES) {
+        status = LXP_ERR_LOG_CORRUPT;
+        goto done;
+    }
+    status = lxp_batch_header_decode(view->canonical_header.bytes,
+                                     view->canonical_header.length,
+                                     &header);
+    if (status == LXP_OK &&
+        (view->network_id != process->network_id ||
+         view->epoch != process->kernel.epoch ||
+         view->batch_number <
+             process->sequencer_authorization.first_batch_number ||
+         view->batch_number >
+             process->sequencer_authorization.last_batch_number ||
+         view->first_sequence != view->base.next_sequence ||
+         view->last_sequence == UINT64_MAX ||
+         view->settled.next_sequence != view->last_sequence + 1U ||
+         header.protocol_version != view->protocol_version ||
+         header.network_id != view->network_id ||
+         header.epoch != view->epoch ||
+         header.batch_number != view->batch_number ||
+         header.first_sequence != view->first_sequence ||
+         header.last_sequence != view->last_sequence ||
+         header.timestamp_ms != view->timestamp_ms ||
+         lxp_ct_memcmp(header.sequencer_id,
+                       process->sequencer_authorization.sequencer_id,
+                       32U) != 0 ||
+         lxp_ct_memcmp(header.previous_state_root,
+                       view->base.receipt_state_root, 32U) != 0 ||
+         lxp_ct_memcmp(header.resulting_state_root,
+                       view->settled.receipt_state_root, 32U) != 0))
+        status = LXP_FATAL_REPLAY_DIVERGENCE;
+    if (status != LXP_OK) goto done;
+    status = lxp_kernel_batch_boundary_read(&process->kernel, &live);
+    if (status == LXP_OK)
+        status = lxp_daemon_batch_wal_classify(record, &live, &recovery);
+    if (status != LXP_OK) goto done;
+    status = check_batch_record(
+        process, &header, view->canonical_header.bytes,
+        view->canonical_header.length, false);
+    if (status != LXP_OK) goto done;
+    if (!owner->feed_store.baseline_present) {
+        const lxp_kernel_batch_boundary *anchor =
+            recovery == LXP_DAEMON_BATCH_WAL_FINALIZE_SETTLED ||
+                    recovery == LXP_DAEMON_BATCH_WAL_ALREADY_COMMITTED ?
+                &view->base : &live;
+        status = lxp_programs_state_feed_store_anchor(
+            &owner->feed_store, anchor->next_sequence,
+            anchor->receipt_state_root);
+        if (status != LXP_OK) goto done;
+    }
+    if (recovery == LXP_DAEMON_BATCH_WAL_DISCARD_BASE) {
+        if (lxp_daemon_batch_wal_record_state(record) ==
+            LXP_DAEMON_BATCH_WAL_PREPARED)
+            status = lxp_daemon_batch_wal_transition(
+                process->checkpoint_directory, record,
+                &live,
+                LXP_DAEMON_BATCH_WAL_ABORTED);
+        if (status == LXP_OK)
+            status = lxp_daemon_batch_wal_retire(
+                process->checkpoint_directory, record, &live);
+        goto done;
+    }
+    if (recovery == LXP_DAEMON_BATCH_WAL_ALREADY_ABORTED) {
+        status = lxp_daemon_batch_wal_retire(
+            process->checkpoint_directory, record, &live);
+        goto done;
+    }
+    if (recovery != LXP_DAEMON_BATCH_WAL_FINALIZE_SETTLED &&
+        recovery != LXP_DAEMON_BATCH_WAL_ALREADY_COMMITTED) {
+        status = LXP_FATAL_REPLAY_DIVERGENCE;
+        goto done;
+    }
+    for (i = 0U; status == LXP_OK && i < view->count; ++i) {
+        status = lxp_activity_decode(view->activities[i].bytes,
+                                     view->activities[i].length,
+                                     &activities[i]);
+        if (status == LXP_OK)
+            status = lxp_receipt_decode(view->receipts[i].bytes,
+                                        view->receipts[i].length, true,
+                                        &receipts[i]);
+    }
+    if (status == LXP_OK)
+        status = lxp_kernel_restore_batch_publication_pending(
+            &process->kernel, view->publication_digest,
+            receipts[0].batch_id, view->base.receipt_state_root,
+            view->settled.receipt_state_root, view->first_sequence,
+            view->last_sequence, 0U);
+    if (status == LXP_OK)
+        status = lxp_kernel_finalize_batch_publication_records(
+            &process->kernel, activities, receipts, view->count,
+            view->publication_digest);
+    if (status == LXP_OK)
+        status = ensure_batch_record(
+            process, &header, view->canonical_header.bytes,
+            view->canonical_header.length);
+    for (i = 0U; status == LXP_OK && i < view->count; ++i) {
+        status = lxp_daemon_receipt_authority_append(
+                &process->receipt_authority,
+                view->receipts[i].bytes, view->receipts[i].length,
+                view->canonical_header.bytes, view->canonical_header.length,
+                view->header_signature, &view->receipt_proofs[i],
+                &process->owner_scratch);
+        if (status == LXP_OK)
+            status = lxp_verified_receipt_index_add(
+                &process->verified_receipts, &receipts[i],
+                process->sequencer_authorization.public_key,
+                &process->owner_scratch);
+        if (status == LXP_OK)
+            status = lxp_daemon_authority_replica_publish(
+                process->authority_replica_address,
+                process->authority_replica_port,
+                process->authority_replica_token,
+                process->authority_replica_token_length,
+                process->authority_replica_id,
+                view->receipts[i].bytes, view->receipts[i].length,
+                view->canonical_header.bytes, view->canonical_header.length,
+                view->header_signature, &view->receipt_proofs[i]);
+    }
+    if (status == LXP_OK &&
+        lxp_daemon_batch_wal_record_state(record) ==
+            LXP_DAEMON_BATCH_WAL_PREPARED)
+        status = lxp_daemon_batch_wal_transition(
+            process->checkpoint_directory, record,
+            &live,
+            LXP_DAEMON_BATCH_WAL_COMMITTED);
+    if (status == LXP_OK)
+        status = lxp_daemon_batch_wal_retire(
+            process->checkpoint_directory, record, &live);
+done:
+    lxp_daemon_batch_wal_destroy(record);
+    return status;
+}
+
+static lxp_result recover_ranged_batch_authority(
+    lxp_daemon_process *process, const lxp_batch_header *header,
+    const uint8_t *canonical_header, size_t header_length)
+{
+    lxp_byte_span activities[LXP_DAEMON_MAX_BATCH_ACTIVITIES] = {{0}};
+    lxp_byte_span receipts[LXP_DAEMON_MAX_BATCH_ACTIVITIES] = {{0}};
+    lxp_byte_span events[LXP_DAEMON_MAX_BATCH_ACTIVITIES] = {{0}};
+    lxp_receipt decoded[LXP_DAEMON_MAX_BATCH_ACTIVITIES];
+    uint8_t hashes[LXP_DAEMON_MAX_BATCH_ACTIVITIES][32];
+    uint8_t signature[64];
+    lxp_batch_roots roots;
+    uint64_t offset = 0U;
+    size_t count;
+    size_t i;
+    size_t mark;
+    lxp_result status = LXP_OK;
+    if (header->first_sequence == 0U ||
+        header->last_sequence < header->first_sequence ||
+        header->last_sequence - header->first_sequence >=
+            LXP_DAEMON_MAX_BATCH_ACTIVITIES)
+        return LXP_ERR_LENGTH_LIMIT;
+    count = (size_t)(header->last_sequence - header->first_sequence + 1U);
+    while (status == LXP_OK && offset < process->canonical_log.write_offset) {
+        lxp_log_record_header record;
+        uint8_t *body = NULL;
+        size_t index;
+        status = lxp_log_read(&process->canonical_log, offset,
+                              &record, NULL, 0U);
+        if (status != LXP_OK && status != LXP_ERR_LENGTH_LIMIT) break;
+        if (status == LXP_ERR_LENGTH_LIMIT) status = LXP_OK;
+        if (record.global_sequence >= header->first_sequence &&
+            record.global_sequence <= header->last_sequence &&
+            (record.record_kind == (uint8_t)LXP_LOG_ACTIVITY ||
+             record.record_kind == (uint8_t)LXP_LOG_RECEIPT)) {
+            if (record.body_length == 0U ||
+                record.body_length > LXP_MAX_ACTIVITY_BYTES) {
+                status = LXP_ERR_LOG_CORRUPT;
+                break;
+            }
+            body = (uint8_t *)malloc(record.body_length);
+            if (body == NULL) {
+                status = LXP_ERR_IO;
+                break;
+            }
+            status = lxp_log_read(&process->canonical_log, offset,
+                                  &record, body, record.body_length);
+            index = (size_t)(record.global_sequence -
+                             header->first_sequence);
+            if (status == LXP_OK &&
+                record.record_kind == (uint8_t)LXP_LOG_ACTIVITY) {
+                if (activities[index].bytes != NULL)
+                    status = LXP_ERR_LOG_CORRUPT;
+                else {
+                    activities[index] =
+                        (lxp_byte_span){body, record.body_length};
+                    body = NULL;
+                }
+            } else if (status == LXP_OK) {
+                if (receipts[index].bytes != NULL)
+                    status = LXP_ERR_LOG_CORRUPT;
+                else {
+                    receipts[index] =
+                        (lxp_byte_span){body, record.body_length};
+                    body = NULL;
+                }
+            }
+            free(body);
+        }
+        if (status == LXP_OK) {
+            if ((uint64_t)record.body_length >
+                    UINT64_MAX - LXP_LOG_HEADER_BYTES ||
+                offset > UINT64_MAX - LXP_LOG_HEADER_BYTES -
+                             (uint64_t)record.body_length)
+                status = LXP_ERR_OVERFLOW;
+            else
+                offset += LXP_LOG_HEADER_BYTES + record.body_length;
+        }
+    }
+    mark = lxp_arena_mark(&process->owner_scratch);
+    for (i = 0U; status == LXP_OK && i < count; ++i) {
+        lxp_activity activity;
+        uint8_t activity_id[32];
+        if (activities[i].bytes == NULL || receipts[i].bytes == NULL)
+            status = LXP_ERR_LOG_CORRUPT;
+        if (status == LXP_OK)
+            status = lxp_activity_decode(activities[i].bytes,
+                                         activities[i].length, &activity);
+        if (status == LXP_OK)
+            status = lxp_activity_check_envelope(
+                &activity, process->network_id);
+        if (status == LXP_OK)
+            status = lxp_activity_verify_payload_hash(&activity);
+        if (status == LXP_OK)
+            status = lxp_activity_verify_signature(&activity);
+        if (status == LXP_OK)
+            status = lxp_activity_id(activities[i].bytes,
+                                     activities[i].length, activity_id);
+        if (status == LXP_OK)
+            status = lxp_receipt_decode(receipts[i].bytes,
+                                        receipts[i].length, true,
+                                        &decoded[i]);
+        if (status == LXP_OK)
+            status = lxp_receipt_verify(
+                &decoded[i], process->sequencer_authorization.public_key,
+                &process->owner_scratch);
+        if (status == LXP_OK &&
+            (decoded[i].global_sequence != header->first_sequence + i ||
+             decoded[i].protocol_version != header->protocol_version ||
+             decoded[i].timestamp != header->timestamp_ms ||
+             lxp_ct_memcmp(decoded[i].activity_id, activity_id, 32U) != 0 ||
+             (i != 0U &&
+              lxp_ct_memcmp(decoded[i - 1U].resulting_state_root,
+                            decoded[i].previous_state_root, 32U) != 0)))
+            status = LXP_FATAL_REPLAY_DIVERGENCE;
+        if (status == LXP_OK)
+            status = lxp_merkle_leaf_hash(receipts[i].bytes,
+                                          receipts[i].length, hashes[i]);
+        if (status == LXP_OK)
+            status = lxp_programs_project_receipt_events(
+                &decoded[i], &process->owner_scratch, &events[i]);
+    }
+    if (status == LXP_OK &&
+        (lxp_ct_memcmp(decoded[0].previous_state_root,
+                       header->previous_state_root, 32U) != 0 ||
+         lxp_ct_memcmp(decoded[count - 1U].resulting_state_root,
+                       header->resulting_state_root, 32U) != 0))
+        status = LXP_FATAL_REPLAY_DIVERGENCE;
+    if (status == LXP_OK)
+        status = lxp_batch_roots_compute(
+            &(lxp_batch_root_inputs){activities, count, receipts, count,
+                                     events, count, NULL, 0U, NULL, 0U},
+            &process->owner_scratch, &roots);
+    if (status == LXP_OK &&
+        (lxp_ct_memcmp(roots.activity_merkle_root,
+                       header->activity_merkle_root, 32U) != 0 ||
+         lxp_ct_memcmp(roots.receipt_merkle_root,
+                       header->receipt_merkle_root, 32U) != 0 ||
+         lxp_ct_memcmp(roots.event_merkle_root,
+                       header->event_merkle_root, 32U) != 0 ||
+         lxp_ct_memcmp(roots.oracle_root,
+                       header->oracle_root, 32U) != 0 ||
+         lxp_ct_memcmp(roots.data_availability_root,
+                       header->data_availability_root, 32U) != 0))
+        status = LXP_FATAL_REPLAY_DIVERGENCE;
+    if (status == LXP_OK)
+        status = lxp_batch_sign(
+            header, process->sequencer_private_key,
+            &process->sequencer_authorization, signature,
+            &process->owner_scratch);
+    for (i = 0U; status == LXP_OK && i < count; ++i) {
+        lxp_daemon_receipt_evidence existing;
+        lxp_merkle_proof proof;
+        uint8_t digest[32];
+        uint8_t proof_root[32];
+        bool exists = false;
+        size_t lookup_mark = lxp_arena_mark(&process->owner_scratch);
+        status = lxp_receipt_digest(&decoded[i],
+                                    &process->owner_scratch, digest);
+        if (status == LXP_OK)
+            status = lxp_daemon_receipt_authority_lookup(
+                &process->receipt_authority, digest,
+                &process->owner_scratch, &existing);
+        if (status == LXP_OK &&
+            (existing.global_sequence != decoded[i].global_sequence ||
+             existing.canonical_header.length != header_length ||
+             lxp_ct_memcmp(existing.canonical_header.bytes,
+                           canonical_header, header_length) != 0 ||
+             lxp_ct_memcmp(existing.header_signature, signature, 64U) != 0 ||
+             existing.receipt_proof.leaf_index != i ||
+             existing.receipt_proof.leaf_count != count))
+            status = LXP_FATAL_REPLAY_DIVERGENCE;
+        if (status == LXP_OK) exists = true;
+        (void)lxp_arena_reset(&process->owner_scratch, lookup_mark);
+        if (!exists) {
+            if (status != LXP_ERR_UNKNOWN_ACTIVITY) break;
+            status = lxp_merkle_proof_generate(
+                (const uint8_t (*)[32])hashes, count, i,
+                &process->owner_scratch, &proof, proof_root);
+            if (status == LXP_OK &&
+                lxp_ct_memcmp(proof_root,
+                              header->receipt_merkle_root, 32U) != 0)
+                status = LXP_FATAL_REPLAY_DIVERGENCE;
+            if (status == LXP_OK)
+                status = lxp_daemon_receipt_authority_append(
+                    &process->receipt_authority,
+                    receipts[i].bytes, receipts[i].length,
+                    canonical_header, header_length, signature, &proof,
+                    &process->owner_scratch);
+            if (status == LXP_OK)
+                status = lxp_daemon_authority_replica_publish(
+                    process->authority_replica_address,
+                    process->authority_replica_port,
+                    process->authority_replica_token,
+                    process->authority_replica_token_length,
+                    process->authority_replica_id,
+                    receipts[i].bytes, receipts[i].length,
+                    canonical_header, header_length, signature, &proof);
+        }
+        if (status == LXP_OK)
+            status = lxp_verified_receipt_index_add(
+                &process->verified_receipts, &decoded[i],
+                process->sequencer_authorization.public_key,
+                &process->owner_scratch);
+    }
+    (void)lxp_arena_reset(&process->owner_scratch, mark);
+    free_batch_spans(activities, count);
+    free_batch_spans(receipts, count);
+    return status;
+}
+
+static lxp_result recover_ranged_batch_authorities(
+    lxp_daemon_process *process)
+{
+    uint64_t offset = 0U;
+    uint64_t prior_batch = 0U;
+    uint64_t prior_last_sequence = 0U;
+    uint64_t prior_epoch = 0U;
+    uint8_t prior_resulting_root[32] = {0};
+    lxp_result status = LXP_OK;
+    while (status == LXP_OK && offset < process->batch_log.write_offset) {
+        lxp_log_record_header record;
+        uint8_t body[LXP_BATCH_HEADER_ENCODED_SIZE];
+        lxp_batch_header header;
+        status = lxp_log_read(&process->batch_log, offset,
+                              &record, body, sizeof(body));
+        if (status == LXP_OK &&
+            (record.record_kind != (uint8_t)LXP_LOG_BATCH_HEADER ||
+             record.body_length != sizeof(body) ||
+             record.global_sequence == 0U))
+            status = LXP_ERR_LOG_CORRUPT;
+        if (status == LXP_OK)
+            status = lxp_batch_header_decode(body, sizeof(body), &header);
+        if (status == LXP_OK &&
+            (record.global_sequence != header.last_sequence ||
+             header.network_id != process->network_id ||
+             header.epoch == 0U || header.epoch > process->kernel.epoch ||
+             (prior_batch != 0U && header.epoch < prior_epoch) ||
+             header.batch_number <
+                 process->sequencer_authorization.first_batch_number ||
+             header.batch_number >
+                 process->sequencer_authorization.last_batch_number ||
+             (prior_batch == 0U &&
+              header.batch_number !=
+                  process->sequencer_authorization.first_batch_number) ||
+             lxp_ct_memcmp(header.sequencer_id,
+                           process->sequencer_authorization.sequencer_id,
+                           32U) != 0 ||
+             (prior_batch != 0U &&
+              (prior_batch == UINT64_MAX ||
+               prior_last_sequence == UINT64_MAX ||
+               header.batch_number != prior_batch + 1U ||
+               header.first_sequence != prior_last_sequence + 1U ||
+               lxp_ct_memcmp(header.previous_state_root,
+                             prior_resulting_root, 32U) != 0))))
+            status = LXP_ERR_BATCH_GAP;
+        if (status == LXP_OK)
+            status = recover_ranged_batch_authority(
+                process, &header, body, sizeof(body));
+        if (status == LXP_OK) {
+            prior_batch = header.batch_number;
+            prior_last_sequence = header.last_sequence;
+            prior_epoch = header.epoch;
+            (void)memcpy(prior_resulting_root,
+                         header.resulting_state_root, 32U);
+        }
+        if (status == LXP_OK) {
+            if ((uint64_t)record.body_length >
+                    UINT64_MAX - LXP_LOG_HEADER_BYTES ||
+                offset > UINT64_MAX - LXP_LOG_HEADER_BYTES -
+                             (uint64_t)record.body_length)
+                status = LXP_ERR_OVERFLOW;
+            else
+                offset += LXP_LOG_HEADER_BYTES + record.body_length;
+        }
+    }
+    return status;
+}
+
 static lxp_result resume_batch_number(lxp_daemon_process *process)
 {
     uint64_t next = process->sequencer_authorization.first_batch_number;
     uint64_t offset = 0U;
+    uint64_t active_batch = 0U;
+    uint64_t expected_sequence = 0U;
+    uint64_t active_last_sequence = 0U;
+    uint8_t active_header[LXP_BATCH_HEADER_ENCODED_SIZE];
+    uint8_t active_signature[64];
     bool present = true;
     lxp_result status = LXP_OK;
     while (status == LXP_OK && present) {
@@ -1529,16 +2459,52 @@ static lxp_result resume_batch_number(lxp_daemon_process *process)
             status = lxp_batch_header_decode(evidence.canonical_header.bytes,
                                              evidence.canonical_header.length,
                                              &header);
-        if (status == LXP_OK && present) {
-            if (next == 0U || header.batch_number < next)
+        if (status == LXP_OK && present &&
+            evidence.canonical_header.length != sizeof(active_header))
+            status = LXP_ERR_LOG_CORRUPT;
+        if (status == LXP_OK && present &&
+            header.batch_number != active_batch) {
+            if ((active_batch != 0U &&
+                 expected_sequence != active_last_sequence + 1U) ||
+                next == 0U || header.batch_number != next ||
+                evidence.global_sequence != header.first_sequence)
                 status = LXP_ERR_BATCH_GAP;
+            else {
+                active_batch = header.batch_number;
+                expected_sequence = header.first_sequence;
+                active_last_sequence = header.last_sequence;
+                (void)memcpy(active_header,
+                             evidence.canonical_header.bytes,
+                             sizeof(active_header));
+                (void)memcpy(active_signature,
+                             evidence.header_signature, 64U);
+            }
+        }
+        if (status == LXP_OK && present &&
+            (evidence.global_sequence != expected_sequence ||
+             header.batch_number != active_batch ||
+             header.last_sequence != active_last_sequence ||
+             lxp_ct_memcmp(evidence.canonical_header.bytes, active_header,
+                           sizeof(active_header)) != 0 ||
+             lxp_ct_memcmp(evidence.header_signature, active_signature,
+                           64U) != 0))
+            status = LXP_ERR_BATCH_GAP;
+        if (status == LXP_OK && present) {
+            if (expected_sequence == UINT64_MAX)
+                status = LXP_ERR_OVERFLOW;
             else
-                next = header.batch_number ==
+                ++expected_sequence;
+            if (status == LXP_OK &&
+                expected_sequence == active_last_sequence + 1U)
+                next = active_batch ==
                                process->sequencer_authorization.last_batch_number ?
-                           0U : header.batch_number + 1U;
+                           0U : active_batch + 1U;
         }
         (void)lxp_arena_reset(&process->owner_scratch, mark);
     }
+    if (status == LXP_OK && active_batch != 0U &&
+        expected_sequence != active_last_sequence + 1U)
+        status = LXP_ERR_BATCH_GAP;
     if (status == LXP_OK && next != 0U &&
         (next < process->sequencer_authorization.first_batch_number ||
          next > process->sequencer_authorization.last_batch_number))
@@ -1858,7 +2824,6 @@ static lxp_result open_process(lxp_daemon_process *process,
         (void)memcpy(process->authority_replica_token, replica_token,
                      process->authority_replica_token_length);
     }
-    if (status == LXP_OK) status = resume_batch_number(process);
     if (status == LXP_OK) {
         lx_programs_metering_schedule metering_schedule;
         status = lxp_programs_metering_schedule_current(
@@ -1926,8 +2891,8 @@ lxp_result lxp_daemon_serve(const char *configuration_path)
     status = open_process(process, configuration_path, &configuration,
                           &activity_fifo, &listener_address, &listener_port);
     if (status == LXP_OK)
-        status = lxp_daemon_start_protocol(
-            &process->daemon, &configuration, apply_canonical_activity,
+        status = lxp_daemon_start_protocol_batch(
+            &process->daemon, &configuration, apply_canonical_batch,
             process, &process->owner, listener_address, listener_port);
     process->daemon_started = status == LXP_OK;
     if (status == LXP_OK && process->next_batch == 0U) {

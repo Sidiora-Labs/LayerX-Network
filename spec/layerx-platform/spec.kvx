@@ -3366,7 +3366,7 @@ reqs = ["39.5"]
 
 [task.32.6]
 title = "Schedule non-conflicting program activities in parallel"
-status = "pending"
+status = "implemented"
 wave = 18
 requires = ["32.5"]
 do_1 = "Add a deterministic scheduler partitioning a batch's program activities into non-conflicting groups from their declared access sets, with the partition a pure function of the batch contents."
@@ -3376,7 +3376,7 @@ do_4 = "Prove equivalence with a differential harness running large batches seri
 do_5 = "Measure the speedup on a low-conflict workload and on an adversarial all-conflicting workload, and publish both numbers rather than only the flattering one."
 verify_cmd = "make programs-test"
 symbols = ["layerx_programs_runtime::ParallelScheduler","layerx_programs_runtime::ConflictGraph"]
-touches = ["programs/crates/layerx-programs-runtime/src/schedule.rs","programs/tests/differential/parallel.rs"]
+touches = ["include/layerx/lxp_daemon.h","include/layerx/lxp_kernel.h","include/layerx/lxp_ledger.h","include/layerx/lxp_module.h","include/layerx/lxp_state.h","include/layerx/programs.h","cmd/layerxd/lxp_daemon_main.c","cmd/layerxd/lxp_daemon_process.c","cmd/layerxd/lxp_daemon_protocol.c","cmd/layerxd/lxp_daemon_receipt_authority.c","cmd/layerxd/lxp_daemon_batch_wal.h","cmd/layerxd/lxp_daemon_batch_wal.c","src/protocol/lxp_kernel.c","src/protocol/lxp_module_ctx.c","src/state/lxp_journal.c","src/state/lxp_state_root.c","src/ledger/lx_account_registry.c","src/modules/programs/call.c","src/modules/programs/event.c","src/modules/programs/event.h","src/modules/programs/feed_store.c","programs/crates/layerx-programs-runtime/src/abi/capability.rs","programs/crates/layerx-programs-runtime/src/execute.rs","programs/crates/layerx-programs-runtime/src/ffi_call.rs","programs/crates/layerx-programs-runtime/src/lib.rs","programs/crates/layerx-programs-runtime/src/schedule.rs","programs/tests/differential/parallel.c","tests/programs/test_accounts.c","Makefile"]
 reqs = ["39.6"]
 
 [task.32.7]

@@ -54,9 +54,41 @@ typedef struct lxp_state_journal {
 } lxp_state_journal;
 #define lxp_state_journal lxp_state_journal
 
+typedef struct lxp_state_snapshot lxp_state_snapshot;
+typedef struct lxp_state_transition lxp_state_transition;
+typedef struct lxp_state_publication_guard lxp_state_publication_guard;
+
 lxp_result lxp_state_store_init(lxp_state_store *store,
                                 uint64_t first_sequence);
 lxp_result lxp_state_store_destroy(lxp_state_store *store);
+lxp_result lxp_state_snapshot_create(lxp_state_store *source,
+                                     lxp_state_snapshot **snapshot);
+lxp_result lxp_state_snapshot_clone(lxp_state_snapshot *source,
+                                    lxp_state_snapshot **snapshot);
+void lxp_state_snapshot_destroy(lxp_state_snapshot *snapshot);
+lxp_state_store *lxp_state_snapshot_store_for_prepare(
+    lxp_state_snapshot *snapshot);
+const lxp_state_store *lxp_state_snapshot_store(
+    const lxp_state_snapshot *snapshot);
+struct lx_account_registry *lxp_state_snapshot_accounts_for_prepare(
+    lxp_state_snapshot *snapshot);
+const struct lx_account_registry *lxp_state_snapshot_accounts(
+    const lxp_state_snapshot *snapshot);
+uint64_t lxp_state_snapshot_base_sequence(
+    const lxp_state_snapshot *snapshot);
+lxp_result lxp_state_snapshot_seal_level(lxp_state_snapshot *snapshot);
+lxp_result lxp_state_transition_create(
+    const lxp_state_snapshot *base, const lxp_state_snapshot *prepared,
+    lxp_state_transition **transition);
+void lxp_state_transition_destroy(lxp_state_transition *transition);
+lxp_result lxp_state_transition_apply_snapshot(
+    const lxp_state_transition *transition, lxp_state_snapshot *snapshot);
+lxp_result lxp_state_publication_guard_begin(
+    const lxp_state_snapshot *base, const lxp_state_snapshot *settled,
+    lxp_state_store *live, lxp_state_publication_guard **guard);
+void lxp_state_snapshot_publish_guarded(lxp_state_publication_guard *guard);
+lxp_result lxp_state_publication_guard_end(
+    lxp_state_publication_guard *guard);
 lxp_result lxp_state_store_bind_accounts(
     lxp_state_store *store, struct lx_account_registry *accounts);
 lxp_result lxp_state_store_require_account_root(lxp_state_store *store);

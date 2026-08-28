@@ -230,8 +230,7 @@ static int feed_group_pairing_replay(void)
         goto cleanup_mutex;
     }
     open_status = lxp_programs_state_feed_store_open(
-        &store, &feed_log, &canonical_log, &history, &scratch, &mutex, 1U,
-        baseline_root);
+        &store, &feed_log, &canonical_log, &history, &scratch, &mutex);
     page_status = lxp_programs_state_feed_store_page(
         &store, 0U, 2U, exposed, &exposed_count, &complete_through,
         &scanned_through);
@@ -337,8 +336,10 @@ static int feed_runtime_bindings(void)
     wrong_activity = activity;
     ++wrong_activity.account_sequence;
     if (lxp_programs_state_feed_store_open(
-            &store, &feed_log, &canonical_log, &history, &scratch, &mutex, 1U,
-            baseline_root) != LXP_OK ||
+            &store, &feed_log, &canonical_log, &history, &scratch, &mutex) !=
+            LXP_OK ||
+        lxp_programs_state_feed_store_anchor(
+            &store, 1U, baseline_root) != LXP_OK ||
         store.feed.lock(store.feed.context) != LXP_OK) {
         failed = 1;
         goto cleanup_mutex;

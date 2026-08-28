@@ -1108,6 +1108,7 @@ LAYERXD_SOURCES = \
 	cmd/layerxd/lxp_daemon_receipt_authority.c \
 	cmd/layerxd/lxp_daemon_protocol.c \
 	cmd/layerxd/lxp_daemon_listener.c \
+	cmd/layerxd/lxp_daemon_batch_wal.c \
 	cmd/layerxd/lxp_daemon_process.c \
 	cmd/layerxd/lxp_daemon_authority_replica.c \
 	cmd/layerxd/lxp_daemon_cli.c
@@ -2717,8 +2718,19 @@ programs-fuzz-smoke:
 programs-adversarial:
 	cd programs && $(PROGRAMS_CARGO) test --locked -p layerx-programs-runtime --test isolation --test composition
 
-programs-differential:
+
+$(BUILD_DIR)/tests/programs_parallel_differential: programs/tests/differential/parallel.c \
+		tests/programs/test_call_activity.c \
+		cmd/layerxd/lxp_daemon_batch_wal.c \
+		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) programs/tests/differential/parallel.c \
+		cmd/layerxd/lxp_daemon_batch_wal.c $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) \
+		$(EXTRA_LDFLAGS) -lcrypto -pthread -ldl -lm -o $@
+
+programs-differential: $(BUILD_DIR)/tests/programs_parallel_differential
 	cd programs && $(PROGRAMS_CARGO) test --locked -p layerx-programs-runtime --test replay --test determinism
+	$(RUN_PREFIX) $(BUILD_DIR)/tests/programs_parallel_differential
 
 programs-test: programs-module-boundaries programs-abi-drift programs-core-test programs-protocol-regression programs-adversarial programs-fuzz-smoke programs-differential programs-sdk-rust programs-sdk-c programs-sdk-assemblyscript programs-porting-v2-references
 	cd programs && $(PROGRAMS_CARGO) test --locked --workspace

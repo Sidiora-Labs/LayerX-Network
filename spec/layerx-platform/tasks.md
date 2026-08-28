@@ -1350,7 +1350,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Derive the declaration automatically wherever the SDK can prove it, and let a program declare explicitly where it cannot.
     - Test declaration enforcement against programs whose access depends on calldata, on prior state and on a callee's behaviour.
     - _Requirements: 39.5_
-  - [ ] 32.6 Schedule non-conflicting program activities in parallel
+  - [ ] 32.6 Schedule non-conflicting program activities in parallel — **Implemented - qualification pending**
     - Add a deterministic scheduler partitioning a batch's program activities into non-conflicting groups from their declared access sets, with the partition a pure function of the batch contents.
     - Execute groups concurrently and commit results in canonical activity order, so the state root and the receipt sequence are identical to serial execution.
     - Make the parallel path a strategy rather than a semantic: refusing to parallelise must always be safe and must never change a result.

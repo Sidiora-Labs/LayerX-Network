@@ -284,3 +284,21 @@ lxp_result lxp_programs_project_committed_events(
     canonical_events->length = writer.length;
     return LXP_OK;
 }
+
+lxp_result lxp_programs_project_receipt_events(
+    const lxp_receipt *receipt, lxp_arena *arena,
+    lxp_byte_span *canonical_events)
+{
+    static const lxp_effect_buffer empty_effects = { { { 0 } }, 0U };
+    if (receipt == NULL || arena == NULL || canonical_events == NULL)
+        return LXP_ERR_NON_CANONICAL;
+    if (receipt->module_id != LXP_MODULE_PROGRAMS ||
+        receipt->result_code != LXP_OK)
+        return lxp_programs_project_committed_events(
+            &empty_effects, arena, canonical_events);
+    if (!receipt->program_outcome.present ||
+        receipt->program_outcome.terminal_kind != LXP_PROGRAM_TERMINAL_SUCCESS)
+        return LXP_ERR_NON_CANONICAL;
+    return lxp_programs_project_committed_events(
+        &receipt->effects, arena, canonical_events);
+}

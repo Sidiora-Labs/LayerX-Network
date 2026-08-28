@@ -15,6 +15,7 @@
 
 enum {
     LXP_DAEMON_MAX_WORKERS = 16,
+    LXP_DAEMON_MAX_BATCH_ACTIVITIES = 64,
     LXP_DAEMON_QUEUE_CAPACITY = 4096,
     LXP_DAEMON_ACTIVITY_BYTES = 256,
     LXP_DAEMON_AUTHORITY_CACHE_RECEIPTS = 256,
@@ -41,6 +42,9 @@ typedef struct lxp_daemon_receipt_authority_store {
     uint64_t record_count;
     uint64_t last_global_sequence;
     uint64_t last_batch_number;
+    uint64_t active_batch_last_sequence;
+    uint8_t active_canonical_header[LXP_BATCH_HEADER_ENCODED_SIZE];
+    uint8_t active_header_signature[64];
     uint64_t replay_offset;
 } lxp_daemon_receipt_authority_store;
 
@@ -155,9 +159,15 @@ typedef lxp_result (*lxp_daemon_apply_fn)(
     void *context, uint64_t global_sequence,
     const uint8_t *activity, size_t activity_length);
 
+typedef lxp_result (*lxp_daemon_apply_batch_fn)(
+    void *context, uint64_t first_global_sequence,
+    const lxp_daemon_activity *activities, size_t offered_count,
+    size_t *consumed_count);
+
 typedef struct lxp_daemon {
     lxp_daemon_configuration config;
     lxp_daemon_apply_fn apply;
+    lxp_daemon_apply_batch_fn apply_batch;
     void *apply_context;
     lxp_daemon_protocol_owner *protocol_owner;
     pthread_t executor_thread;
@@ -186,9 +196,17 @@ lxp_result lxp_daemon_role(
 lxp_result lxp_daemon_start(
     lxp_daemon *daemon, const lxp_daemon_configuration *config,
     lxp_daemon_apply_fn apply, void *apply_context);
+lxp_result lxp_daemon_start_batch(
+    lxp_daemon *daemon, const lxp_daemon_configuration *config,
+    lxp_daemon_apply_batch_fn apply_batch, void *apply_context);
 lxp_result lxp_daemon_start_protocol(
     lxp_daemon *daemon, const lxp_daemon_configuration *config,
     lxp_daemon_apply_fn apply, void *apply_context,
+    lxp_daemon_protocol_owner *protocol_owner,
+    const char *loopback_address, uint16_t port);
+lxp_result lxp_daemon_start_protocol_batch(
+    lxp_daemon *daemon, const lxp_daemon_configuration *config,
+    lxp_daemon_apply_batch_fn apply_batch, void *apply_context,
     lxp_daemon_protocol_owner *protocol_owner,
     const char *loopback_address, uint16_t port);
 lxp_result lxp_daemon_submit(

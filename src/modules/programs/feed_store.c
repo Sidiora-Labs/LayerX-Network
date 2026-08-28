@@ -790,7 +790,7 @@ static lxp_result recover_canonical(lx_programs_state_feed_store *store,
     return status;
 }
 
-static lxp_result state_feed_store_anchor(
+static lxp_result state_feed_store_anchor_unlocked(
     lx_programs_state_feed_store *store, uint64_t next_sequence,
     const uint8_t state_root[32])
 {
@@ -800,7 +800,7 @@ static lxp_result state_feed_store_anchor(
     if (store == NULL || store->log == NULL || state_root == NULL ||
         next_sequence == 0U || lxp_ct_is_zero(state_root, 32U))
         return LXP_ERR_NON_CANONICAL;
-    if (store->baseline_present) return LXP_OK;
+    if (store->baseline_present) return LXP_ERR_CONTEXT_MISMATCH;
     if (store->log->write_offset != 0U ||
         store->notice_record_count != 0U ||
         store->scanned_through_sequence != 0U)
@@ -824,14 +824,12 @@ static lxp_result state_feed_store_anchor(
 lxp_result lxp_programs_state_feed_store_open(
     lx_programs_state_feed_store *store, lxp_log *log,
     lxp_log *canonical_log, lxp_history *history, lxp_arena *scratch,
-    pthread_mutex_t *coordination_mutex,
-    uint64_t baseline_next_sequence, const uint8_t baseline_state_root[32])
+    pthread_mutex_t *coordination_mutex)
 {
     lxp_result status;
     if (store == NULL || log == NULL || canonical_log == NULL ||
         history == NULL || history->log != canonical_log ||
-        log == canonical_log || scratch == NULL || coordination_mutex == NULL ||
-        baseline_state_root == NULL)
+        log == canonical_log || scratch == NULL || coordination_mutex == NULL)
         return LXP_ERR_NON_CANONICAL;
     (void)memset(store, 0, sizeof(*store));
     store->log = log;
@@ -846,10 +844,34 @@ lxp_result lxp_programs_state_feed_store_open(
     store->feed.lock = store_lock;
     store->feed.unlock = store_unlock;
     store->feed.context = store;
-    if (status == LXP_OK)
-        status = state_feed_store_anchor(
-            store, baseline_next_sequence, baseline_state_root);
     return status;
+}
+
+lxp_result lxp_programs_state_feed_store_anchor(
+    lx_programs_state_feed_store *store, uint64_t baseline_next_sequence,
+    const uint8_t baseline_state_root[32])
+{
+    lxp_result status;
+    bool locked = false;
+    if (store == NULL || store->log == NULL ||
+        store->canonical_log == NULL || store->history == NULL ||
+        store->scratch == NULL || store->coordination_mutex == NULL ||
+        store->feed.context != store || store->feed.begin != store_begin ||
+        store->feed.append != store_append ||
+        store->feed.advance != store_advance ||
+        store->feed.lock != store_lock || store->feed.unlock != store_unlock ||
+        baseline_state_root == NULL)
+        return LXP_ERR_NON_CANONICAL;
+    status = store_lock(store);
+    if (status == LXP_OK) {
+        locked = true;
+        status = state_feed_store_anchor_unlocked(
+            store, baseline_next_sequence, baseline_state_root);
+    }
+    {
+        lxp_result unlock_status = locked ? store_unlock(store) : LXP_OK;
+        return status == LXP_OK ? unlock_status : status;
+    }
 }
 
 lxp_result lxp_programs_state_feed_store_recover(

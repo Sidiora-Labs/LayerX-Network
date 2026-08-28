@@ -8,6 +8,7 @@
 #include "layerx/lxp_crypto.h"
 #include "layerx/lxp_hash.h"
 #include "layerx/lxp_kernel.h"
+#include "layerx/lxp_fee.h"
 #include "layerx/lxp_receipt.h"
 
 #include <stdint.h>
@@ -1711,6 +1712,118 @@ lxp_result lxp_programs_call_validate(
                               value->access_declaration_length);
 }
 
+lxp_result lxp_programs_call_schedule_decode(
+    const lxp_activity *activity, const lxp_authority_resolved *authority,
+    const lxp_call_admission_facts *admission, const void *decoded,
+    lxp_programs_call_schedule_descriptor *descriptor)
+{
+    lxp_programs_call_activity *value =
+        (lxp_programs_call_activity *)decoded;
+    uintptr_t payload_begin;
+    uintptr_t payload_end;
+    uintptr_t capabilities_begin;
+    uintptr_t declaration_begin;
+    size_t capabilities_offset;
+    const lx_programs_transfer_runtime *runtime;
+    lx_account *treasury = NULL;
+    size_t owner_index;
+    lxp_result status;
+    if (activity == NULL || authority == NULL || admission == NULL ||
+        value == NULL || descriptor == NULL || !admission->present ||
+        activity->activity_type != LX_PROGRAMS_CALL ||
+        activity->payload.bytes == NULL ||
+        lxp_ct_is_zero(admission->activity_binding, 32U) ||
+        lxp_ct_is_zero(authority->principal, 32U) ||
+        lxp_ct_is_zero(admission->payer, 32U))
+        return LXP_ERR_NON_CANONICAL;
+    status = lxp_activity_verify_payload_hash(activity);
+    if (status != LXP_OK) return status;
+    if (value->catalog == NULL) {
+        status = call_catalog_build(value);
+        if (status != LXP_OK) return status;
+    }
+    payload_begin = (uintptr_t)activity->payload.bytes;
+    capabilities_begin = (uintptr_t)value->capabilities;
+    declaration_begin = (uintptr_t)value->access_declaration;
+    if (activity->payload.length > UINTPTR_MAX - payload_begin)
+        return LXP_ERR_LENGTH_LIMIT;
+    payload_end = payload_begin + activity->payload.length;
+    if ((size_t)value->entrypoint_length > SIZE_MAX - PROGRAM_CALL_FIXED_BYTES ||
+        (size_t)value->calldata_length >
+            SIZE_MAX - PROGRAM_CALL_FIXED_BYTES - value->entrypoint_length)
+        return LXP_ERR_LENGTH_LIMIT;
+    capabilities_offset = PROGRAM_CALL_FIXED_BYTES + value->entrypoint_length +
+                          value->calldata_length;
+    if (capabilities_begin < payload_begin ||
+        declaration_begin < capabilities_begin ||
+        capabilities_begin > payload_end || declaration_begin > payload_end ||
+        value->capabilities_length > (size_t)(payload_end - capabilities_begin) ||
+        value->access_declaration_length >
+            (size_t)(payload_end - declaration_begin) ||
+        value->capabilities_length > declaration_begin - capabilities_begin ||
+        capabilities_begin - payload_begin != capabilities_offset ||
+        declaration_begin - capabilities_begin != value->capabilities_length ||
+        payload_end - declaration_begin != value->access_declaration_length)
+        return LXP_FATAL_INVARIANT;
+    (void)memset(descriptor, 0, sizeof(*descriptor));
+    descriptor->canonical_payload = activity->payload;
+    descriptor->capabilities.bytes = value->capabilities;
+    descriptor->capabilities.length = value->capabilities_length;
+    descriptor->access_declaration.bytes = value->access_declaration;
+    descriptor->access_declaration.length = value->access_declaration_length;
+    if (value->catalog_count <= LXP_PROGRAMS_SCHEDULE_MAX_OWNERS) {
+        descriptor->owner_catalog_complete = 1U;
+        descriptor->owner_count = (uint16_t)value->catalog_count;
+        for (owner_index = 0U; owner_index < value->catalog_count;
+             ++owner_index) {
+            (void)memcpy(descriptor->owners[owner_index].program_id,
+                         value->catalog[owner_index].program_id, 32U);
+            (void)memcpy(descriptor->owners[owner_index].owner,
+                         value->catalog[owner_index].owner, 32U);
+        }
+    }
+    runtime = (const lx_programs_transfer_runtime *)
+        lxp_ctx_module_runtime(value->ctx);
+    if (runtime != NULL && runtime->accounts != NULL &&
+        lxp_fee_treasury_account(runtime->accounts, &treasury) == LXP_OK &&
+        treasury != NULL)
+        (void)memcpy(descriptor->fee_treasury, treasury->id, 32U);
+    (void)memcpy(descriptor->activity_binding, admission->activity_binding, 32U);
+    (void)memcpy(descriptor->program_id, value->program_id, 32U);
+    (void)memcpy(descriptor->principal, authority->principal, 32U);
+    (void)memcpy(descriptor->payer, admission->payer, 32U);
+    return LXP_OK;
+}
+
+lxp_result lxp_programs_call_schedule_item_prepare(
+    const lxp_programs_call_schedule_descriptor *descriptor,
+    const uint8_t fee_asset[32], const uint8_t occupancy_asset[32],
+    bool effects_complete, lxp_programs_schedule_item *item)
+{
+    if (descriptor == NULL || fee_asset == NULL || occupancy_asset == NULL ||
+        item == NULL || lxp_ct_is_zero(descriptor->principal, 32U) ||
+        lxp_ct_is_zero(descriptor->payer, 32U))
+        return LXP_ERR_NON_CANONICAL;
+    (void)memset(item, 0, sizeof(*item));
+    item->call = *descriptor;
+    (void)memcpy(item->identity_principal, descriptor->principal, 32U);
+    if (!effects_complete) return LXP_OK;
+    if (lxp_ct_is_zero(fee_asset, 32U)) return LXP_ERR_NON_CANONICAL;
+    if (lxp_ct_is_zero(descriptor->fee_treasury, 32U)) return LXP_OK;
+    item->protocol_effects_complete = 1U;
+    item->account_effect_count = 1U;
+    (void)memcpy(item->account_effects[0].account, descriptor->payer, 32U);
+    (void)memcpy(item->account_effects[0].asset, fee_asset, 32U);
+    item->account_effects[0].mode = 1U;
+    (void)memcpy(item->occupancy_asset, occupancy_asset, 32U);
+    /* Base execution fees settle only at the canonical prefix boundary. The
+     * treasury is retained separately because occupancy reads and credits it
+     * during guest preparation whenever storage can grow. */
+    (void)memcpy(item->occupancy_treasury,
+                 descriptor->fee_treasury, 32U);
+    return LXP_OK;
+}
+
 lxp_result lxp_programs_call_execute(
     lxp_module_ctx *ctx, const lxp_activity *activity,
     const lxp_authority_resolved *authority, const void *decoded,
@@ -1727,8 +1840,10 @@ lxp_result lxp_programs_call_execute(
     value->effects = effects;
     status = lxp_ctx_bind_activity_state(ctx, value, call_activity_release);
     if (status != LXP_OK) return status;
-    status = call_catalog_build(value);
-    if (status != LXP_OK) return status;
+    if (value->catalog == NULL) {
+        status = call_catalog_build(value);
+        if (status != LXP_OK) return status;
+    }
     status = lxp_ctx_arena_alloc(ctx, sizeof(*value->occupancy),
                                  _Alignof(lxp_programs_occupancy_bridge),
                                  &allocation);

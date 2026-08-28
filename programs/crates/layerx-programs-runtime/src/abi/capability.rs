@@ -159,6 +159,20 @@ impl Capability {
 pub struct CapabilitySet(BTreeMap<CapabilityKey, Capability>);
 
 impl CapabilitySet {
+    pub(crate) fn admitted_schedule_accesses(
+        encoded: &[u8],
+        program: ProgramId,
+        principal: crate::PrincipalId,
+    ) -> Result<crate::AccessSet, AbiError> {
+        Self::decode_canonical(encoded)
+            .and_then(Self::new)
+            .and_then(|capabilities| {
+                capabilities
+                    .reachable_accesses(program, principal)
+                    .map_err(|_| AbiError::AccessDeclaration)
+            })
+    }
+
     pub(crate) fn reachable_accesses(
         &self,
         program: ProgramId,

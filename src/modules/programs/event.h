@@ -57,8 +57,4 @@ lxp_result lxp_programs_emit_guest_event(
     lxp_module_ctx *ctx, const lxp_programs_guest_event *event);
 lxp_result lxp_programs_emit_call_outcome(
     lxp_module_ctx *ctx, const lxp_programs_call_outcome *outcome);
-lxp_result lxp_programs_project_committed_events(
-    const lxp_effect_buffer *effects, lxp_arena *arena,
-    lxp_byte_span *canonical_events);
-
 #endif

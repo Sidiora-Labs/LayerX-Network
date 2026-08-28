@@ -7,7 +7,7 @@ use crate::occupancy::{
 use crate::storage::StorageError;
 use crate::validate::AbiRevision;
 use crate::{
-    AbiError, ActivityBudgetBinding, AtomicTransferSet, AuthorizationContext,
+    AbiError, AccessSet, ActivityBudgetBinding, AtomicTransferSet, AuthorizationContext,
     AuthorizedExecutionRecord, BudgetMeterRefusal, BudgetResourceKind,
     BudgetedAuthorizedExecutionRequest, BudgetedV1FailureCause, CandidateActivityOutcome,
     CandidateAuthorizedExecutionRecord, CapabilitySet, CompiledModule, CompositionContext,
@@ -21,6 +21,337 @@ use crate::{
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 use std::sync::Arc;
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct ScheduleByteSpan {
+    bytes: *const u8,
+    length: usize,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct CallScheduleDescriptor {
+    canonical_payload: ScheduleByteSpan,
+    capabilities: ScheduleByteSpan,
+    access_declaration: ScheduleByteSpan,
+    owner_count: u16,
+    owner_catalog_complete: u8,
+    owners: [ScheduleOwner; 513],
+    fee_treasury: [u8; 32],
+    activity_binding: [u8; 32],
+    program_id: [u8; 32],
+    principal: [u8; 32],
+    payer: [u8; 32],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct ScheduleOwner {
+    program_id: [u8; 32],
+    owner: [u8; 32],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct ProtocolAccountEffect {
+    account: [u8; 32],
+    asset: [u8; 32],
+    mode: u8,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ProgramsScheduleItem {
+    call: CallScheduleDescriptor,
+    identity_principal: [u8; 32],
+    occupancy_asset: [u8; 32],
+    occupancy_treasury: [u8; 32],
+    protocol_effects_complete: u8,
+    account_effect_count: u16,
+    account_effects: [ProtocolAccountEffect; 256],
+}
+
+unsafe fn schedule_span<'a>(span: ScheduleByteSpan) -> Result<&'a [u8], i32> {
+    if span.length == 0 {
+        return Ok(&[]);
+    }
+    if span.bytes.is_null() {
+        return Err(NON_CANONICAL);
+    }
+    Ok(unsafe { std::slice::from_raw_parts(span.bytes, span.length) })
+}
+
+fn schedule_descriptor_spans_bound(call: CallScheduleDescriptor) -> bool {
+    const CALL_FIXED_BYTES: usize = 32 + 2 + 2 + 4 + 2 + 4 + 4 + 7 * 8;
+    if call.canonical_payload.bytes.is_null()
+        || call.capabilities.bytes.is_null()
+        || call.access_declaration.bytes.is_null()
+    {
+        return false;
+    }
+    let payload = call.canonical_payload.bytes as usize;
+    let capabilities = call.capabilities.bytes as usize;
+    let declaration = call.access_declaration.bytes as usize;
+    let Some(payload_end) = payload.checked_add(call.canonical_payload.length) else {
+        return false;
+    };
+    let Some(capabilities_end) = capabilities.checked_add(call.capabilities.length) else {
+        return false;
+    };
+    let Some(declaration_end) = declaration.checked_add(call.access_declaration.length) else {
+        return false;
+    };
+    if call.canonical_payload.length < CALL_FIXED_BYTES {
+        return false;
+    }
+    let header = unsafe {
+        std::slice::from_raw_parts(call.canonical_payload.bytes, CALL_FIXED_BYTES)
+    };
+    let entrypoint_length = usize::from(u16::from_be_bytes([header[34], header[35]]));
+    let calldata_length = u32::from_be_bytes([header[36], header[37], header[38], header[39]])
+        as usize;
+    let capabilities_length =
+        usize::from(u16::from_be_bytes([header[40], header[41]]));
+    let access_declaration_length =
+        u32::from_be_bytes([header[42], header[43], header[44], header[45]]) as usize;
+    let Some(expected_capabilities) = payload
+        .checked_add(CALL_FIXED_BYTES)
+        .and_then(|offset| offset.checked_add(entrypoint_length))
+        .and_then(|offset| offset.checked_add(calldata_length))
+    else {
+        return false;
+    };
+    payload <= capabilities
+        && header[..32] == call.program_id
+        && capabilities == expected_capabilities
+        && call.capabilities.length == capabilities_length
+        && call.access_declaration.length == access_declaration_length
+        && capabilities_end == declaration
+        && declaration_end == payload_end
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn layerx_programs_schedule_plan(
+    items: *const ProgramsScheduleItem,
+    item_count: usize,
+    levels: *mut u16,
+    maximum_level: *mut u16,
+) -> i32 {
+    /* `items` must be projections produced after C envelope, authority and
+     * admission verification. Rust revalidates their canonical CALL layout and
+     * access encodings but does not mint or recompute admission bindings. */
+    if item_count == 0 || item_count > 64 || items.is_null() || levels.is_null()
+        || maximum_level.is_null()
+    {
+        return NON_CANONICAL;
+    }
+    let items = unsafe { std::slice::from_raw_parts(items, item_count) };
+    let mut prepared = Vec::with_capacity(item_count);
+    for item in items {
+        let call = item.call;
+        if !schedule_descriptor_spans_bound(call) {
+            return NON_CANONICAL;
+        }
+        let owner_count = usize::from(call.owner_count);
+        if call.owner_catalog_complete > 1
+            || owner_count > call.owners.len()
+            || (call.owner_catalog_complete == 0 && owner_count != 0)
+            || call.owners[owner_count..].iter().any(|entry| {
+                entry.program_id != [0; 32] || entry.owner != [0; 32]
+            })
+        {
+            return NON_CANONICAL;
+        }
+        let mut validated_owners = BTreeSet::new();
+        for entry in &call.owners[..owner_count] {
+            if ProgramId::new(entry.program_id).is_err()
+                || entry.owner == [0; 32]
+                || !validated_owners.insert(entry.program_id)
+            {
+                return NON_CANONICAL;
+            }
+        }
+        let account_count = usize::from(item.account_effect_count);
+        if item.protocol_effects_complete > 1
+            || account_count > item.account_effects.len()
+            || item.identity_principal == [0; 32]
+            || item.identity_principal != call.principal
+            || item.account_effects[account_count..].iter().any(|effect| {
+                effect.account != [0; 32] || effect.asset != [0; 32] || effect.mode != 0
+            })
+        {
+            return NON_CANONICAL;
+        }
+        let mut account_effects = Vec::with_capacity(account_count);
+        for effect in &item.account_effects[..account_count] {
+            let mode = match effect.mode {
+                0 => crate::AccessMode::Read,
+                1 => crate::AccessMode::Write,
+                _ => return NON_CANONICAL,
+            };
+            match crate::AccountAccess::new(effect.account, effect.asset, mode) {
+                Ok(effect) => account_effects.push(effect),
+                Err(_) => return NON_CANONICAL,
+            }
+        }
+        let program = match ProgramId::new(call.program_id) {
+            Ok(program) => program,
+            Err(_) => return NON_CANONICAL,
+        };
+        let principal = match PrincipalId::new(call.principal) {
+            Ok(principal) => principal,
+            Err(_) => return NON_CANONICAL,
+        };
+        let capabilities = match unsafe { schedule_span(call.capabilities) } {
+            Ok(capabilities) => capabilities,
+            Err(status) => return status,
+        };
+        let declaration_bytes = match unsafe { schedule_span(call.access_declaration) } {
+            Ok(declaration) => declaration,
+            Err(status) => return status,
+        };
+        let protocol_effects = if item.protocol_effects_complete == 0 {
+            if account_count != 0 {
+                return NON_CANONICAL;
+            }
+            None
+        } else {
+            let declaration = match crate::AccessDeclaration::canonical_decode(declaration_bytes) {
+                Ok(declaration) => declaration,
+                Err(_) => return NON_CANONICAL,
+            };
+            let reachable = match CapabilitySet::admitted_schedule_accesses(
+                capabilities,
+                program,
+                principal,
+            ) {
+                Ok(reachable) => reachable,
+                Err(_) => return NON_CANONICAL,
+            };
+            let writes: Vec<_> = declaration
+                .effective_set(&reachable)
+                .storage_accesses()
+                .filter(|access| access.mode() == crate::AccessMode::Write)
+                .map(|access| access.namespace())
+                .collect();
+            let has_storage_writes = !writes.is_empty();
+            let mut enrichment_complete = !has_storage_writes
+                || (item.occupancy_asset != [0; 32]
+                    && item.occupancy_treasury != [0; 32]);
+            let mut owners = BTreeMap::new();
+            if enrichment_complete
+                && writes.iter().any(|namespace| namespace.principal_scope().is_none())
+            {
+                let count = owner_count;
+                if call.owner_catalog_complete != 1 {
+                    enrichment_complete = false;
+                }
+                for entry in &call.owners[..count] {
+                    let Ok(program) = ProgramId::new(entry.program_id) else {
+                        return NON_CANONICAL;
+                    };
+                    if entry.owner == [0; 32]
+                        || owners.insert(program, entry.owner).is_some()
+                    {
+                        return NON_CANONICAL;
+                    }
+                }
+            }
+            for namespace in writes {
+                if !enrichment_complete {
+                    break;
+                }
+                let payer = match namespace.principal_scope() {
+                    Some(principal) => principal.bytes(),
+                    None => match owners.get(&namespace.program()) {
+                        Some(owner) => *owner,
+                        None => {
+                            enrichment_complete = false;
+                            break;
+                        }
+                    },
+                };
+                match crate::AccountAccess::new(
+                    payer,
+                    item.occupancy_asset,
+                    crate::AccessMode::Write,
+                ) {
+                    Ok(effect) => account_effects.push(effect),
+                    Err(_) => return NON_CANONICAL,
+                }
+            }
+            if enrichment_complete && has_storage_writes {
+                match crate::AccountAccess::new(
+                    item.occupancy_treasury,
+                    item.occupancy_asset,
+                    crate::AccessMode::Write,
+                ) {
+                    Ok(effect) => account_effects.push(effect),
+                    Err(_) => return NON_CANONICAL,
+                }
+            }
+            if account_effects.is_empty()
+                || !account_effects.iter().any(|effect| {
+                    effect.account() == call.payer
+                        && effect.mode() == crate::AccessMode::Write
+                })
+            {
+                return NON_CANONICAL;
+            }
+            if enrichment_complete {
+                AccessSet::new([], account_effects.into_iter().collect::<BTreeSet<_>>())
+                    .ok()
+                    .and_then(|accounts| {
+                        crate::schedule::ProtocolScheduleEffects::new(
+                            accounts,
+                            [item.identity_principal],
+                        )
+                    })
+            } else {
+                None
+            }
+        };
+        let access = match unsafe {
+            schedule_span(call.canonical_payload).and_then(|payload| {
+                schedule_span(call.capabilities).and_then(|capabilities| {
+                    schedule_span(call.access_declaration).and_then(|declaration| {
+                        crate::schedule::PreparedScheduleAccess::from_authenticated_call(
+                            payload,
+                            call.activity_binding,
+                            program,
+                            principal,
+                            call.payer,
+                            capabilities,
+                            declaration,
+                            protocol_effects,
+                        )
+                        .map_err(|_| NON_CANONICAL)
+                    })
+                })
+            })
+        } {
+            Ok(access) => access,
+            Err(status) => return status,
+        };
+        prepared.push(access);
+    }
+    let accesses: Vec<_> = prepared.iter().map(|value| value.access().clone()).collect();
+    let graph = crate::ConflictGraph::from_accesses(&accesses);
+    let mut highest = 0u16;
+    for (level, members) in graph.dependency_levels().iter().enumerate() {
+        let level = match u16::try_from(level) {
+            Ok(level) => level,
+            Err(_) => return LENGTH_LIMIT,
+        };
+        highest = level;
+        for &index in members {
+            unsafe { levels.add(index).write(level) };
+        }
+    }
+    unsafe { maximum_level.write(highest) };
+    OK
+}
 
 const OK: i32 = 0;
 const NON_CANONICAL: i32 = -3;
