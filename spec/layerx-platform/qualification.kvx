@@ -2359,3 +2359,11 @@ symbol = "cg spec implemented touch graph"
 observed = "Git records the layerx-programs-sandbox package and its exact dependency set in programs/Cargo.lock, but Codify 0.6.0 reports the lockfile as an unobservable declared touch. The task's Lease and LeaseState symbols and every other declared source and qualification touch passed the graph check."
 assumption = "The authoritative task status is advanced only after the lockfile diff was inspected and every graph-observable contract passed. Human qualification must consume the checked-in lockfile through the declared locked build and test commands; no dependency resolution, build or test was run in this implementation phase."
 severity = "phase-boundary"
+
+[observation.34.2.1]
+task = "34.2"
+file = "programs/crates/layerx-programs-sandbox/src/escrow.rs"
+symbol = "fund, Escrow::spend, settle"
+observed = "Lease funding, usage debits and refunds consume PreparedAuthorizedActivity, the runtime's affine authenticated execution artifact, and reach balances only through strict_settle and KernelTransferPrimitive. The sandbox validates the exact program-funding or program-authority source, derived lease seed, account, asset, principal, destination and amount before consuming that artifact. Escrow protocol state records only kernel transfer roots and exact funded, spent and refunded conservation counters; it is not a balance ledger. An exhausted lease settles through a non-monetary authenticated activity because the ordinary transfer law correctly refuses zero-value legs. Task 34.4 still owns pricing and per-activity usage receipts; this task accepts an already-priced maximum charge and enforces that the kernel-settled debit cannot exceed it or the funded remainder."
+assumption = "Human qualification must drive real candidate-v2 funding, partial spend, exact exhaustion, zero-usage refund and repeated settlement activities through the production C kernel and prove storage commits atomically with each transfer set. It must also confirm task 34.4 supplies prices and receipt bindings before calling Escrow::spend. No build, test, formatter, kernel execution or passing result is asserted."
+severity = "qualification-required"

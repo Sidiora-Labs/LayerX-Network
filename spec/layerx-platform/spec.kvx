@@ -3547,7 +3547,7 @@ reqs = ["41.1","41.7"]
 
 [task.34.2]
 title = "Escrow lease funds in a program-owned account"
-status = "pending"
+status = "implemented"
 wave = 20
 requires = ["34.1","30.4"]
 do_1 = "Fund a lease by a 402LXP transfer into an account the sandbox program derives from the lease identifier, so the escrow is real protocol balance rather than a bookkeeping entry."

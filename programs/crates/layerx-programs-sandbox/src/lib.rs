@@ -3,6 +3,9 @@
 #![deny(unsafe_code)]
 
 pub mod lease;
+pub mod escrow;
+
+pub use escrow::{fund, settle, Escrow, EscrowOutcome, EscrowRefusal};
 
 pub use lease::{
     usage_observation_digest, BoundKind, EphemeralNamespace, Lease, LeaseActivity, LeaseBook, LeaseId, LeaseLimits,

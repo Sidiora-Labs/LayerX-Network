@@ -1432,7 +1432,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Bound the number of concurrent leases per principal and the total resource ceiling one lease may declare.
     - Test every transition, every refused transition and the impossibility of reviving a destroyed lease.
     - _Requirements: 41.1, 41.7_
-  - [ ] 34.2 Escrow lease funds in a program-owned account
+  - [ ] 34.2 Escrow lease funds in a program-owned account — **Implemented - qualification pending**
     - Fund a lease by a 402LXP transfer into an account the sandbox program derives from the lease identifier, so the escrow is real protocol balance rather than a bookkeeping entry.
     - Make the escrow the hard ceiling on the lease: execution stops when the escrow is exhausted, and no execution proceeds against unfunded compute.
     - Refund the unspent remainder to the renting principal at settlement through the same authorised transfer path, with the refund a leg of the settling transfer set rather than a separate promise.
