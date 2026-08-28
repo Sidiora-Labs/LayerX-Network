@@ -676,3 +676,20 @@ The LayerX Platform is the complete product surface of LayerX: the human control
 6. THE registry runtime executables and container image SHALL be produced from paxeer-network/hpx/registry by repository automation, SHALL be identified by the source revision used to build them, and production deployment SHALL consume a checksum-bound separately published runtime artifact rather than commit generated executables or native libraries to Git.
 7. QUALIFICATION SHALL begin from a clean host, install through the public HTTPS command, verify every public endpoint and certificate, restart the registry and recover its persisted peers, reject malformed and spoofed registrations, and prove a downloaded node reaches the declared chain without treating artifact publication alone as node or protocol qualification.
 
+## Requirement 46: Audit-Driven Production Boundary Repairs
+
+**User Story:** As the owner preparing the platform for human qualification, I want every source-level blocker found by the refreshed multi-agent audit implemented explicitly, so that tomorrow's verification exercises real durable, authenticated and cross-language-compatible boundaries rather than known gaps.
+
+### Acceptance Criteria
+
+1. THE native daemon SHALL recover every durable log before any checkpoint, history, replay or reconciliation consumer reads its offsets, and an existing canonical or batch log SHALL never appear empty merely because the process restarted.
+2. THE node SHALL expose one production authenticated submission boundary implementing the frozen agent LNI request and response contract and feeding the canonical daemon submission path, with bounded framing, deadlines, peer authentication and no test-only bridge in production reachability.
+3. THE production human HTTPS service SHALL have a real privileged component server implementing session authorization, human-api execution and readiness against the real human services, with no fake, in-memory or second payload path.
+4. THE production custody boundary SHALL ship an mTLS LXKP gateway backed by an explicitly configured hardware or remote key provider, SHALL keep key material non-exportable, and SHALL fail closed when the provider is absent or unauthenticated.
+5. THE hosted program registry SHALL authenticate every non-health route, isolate operator-only source publication, execute only a pinned declared builder entrypoint, bound connection and build concurrency, and SHALL NOT ignore the bearer credential the gateway sends.
+6. EVERY SDK receipt decoder SHALL accept the canonical optional Programs outcome, enforce the same post-decode canonical invariants as the protocol decoder, and preserve identical refusal taxonomy across all seven languages.
+7. THE SDK generation lock and every declared generated output SHALL agree byte-for-byte, and every shipped file inside a generated output root SHALL be either lock-covered or explicitly declared handwritten.
+8. THE frozen interpreter refusal vectors SHALL reach the refusal stage they claim and SHALL NOT pass conformance by failing earlier for malformed register addressing.
+9. PROGRAM ABI upgrade policy SHALL be identical in consensus execution, receipt evidence and every registry projection, including a single fail-closed rule for version downgrades.
+10. PROGRAM event output and capability transport SHALL use one metered, count-bounded and size-consistent contract at the guest ABI, runtime, C ingress and SDK surfaces.
+

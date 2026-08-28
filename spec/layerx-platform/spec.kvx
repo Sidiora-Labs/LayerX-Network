@@ -627,6 +627,20 @@ ac_4 = "THE registry SHALL run as a restartable unprivileged service bound only 
 ac_5 = "THE public installer and HPX update path SHALL use node.hyperpaxeer.com as the sole default mirror, SHALL verify every downloaded binary, native library and chain configuration file against the published SHA-256 manifest before installation, and SHALL fail closed on a missing artifact, unsupported architecture or checksum mismatch."
 ac_6 = "THE registry runtime executables and container image SHALL be produced from paxeer-network/hpx/registry by repository automation, SHALL be identified by the source revision used to build them, and production deployment SHALL consume a checksum-bound separately published runtime artifact rather than commit generated executables or native libraries to Git."
 ac_7 = "QUALIFICATION SHALL begin from a clean host, install through the public HTTPS command, verify every public endpoint and certificate, restart the registry and recover its persisted peers, reject malformed and spoofed registrations, and prove a downloaded node reaches the declared chain without treating artifact publication alone as node or protocol qualification."
+
+[req.46]
+title = "Audit-Driven Production Boundary Repairs"
+story = "As the owner preparing the platform for human qualification, I want every source-level blocker found by the refreshed multi-agent audit implemented explicitly, so that tomorrow's verification exercises real durable, authenticated and cross-language-compatible boundaries rather than known gaps."
+ac_1 = "THE native daemon SHALL recover every durable log before any checkpoint, history, replay or reconciliation consumer reads its offsets, and an existing canonical or batch log SHALL never appear empty merely because the process restarted."
+ac_2 = "THE node SHALL expose one production authenticated submission boundary implementing the frozen agent LNI request and response contract and feeding the canonical daemon submission path, with bounded framing, deadlines, peer authentication and no test-only bridge in production reachability."
+ac_3 = "THE production human HTTPS service SHALL have a real privileged component server implementing session authorization, human-api execution and readiness against the real human services, with no fake, in-memory or second payload path."
+ac_4 = "THE production custody boundary SHALL ship an mTLS LXKP gateway backed by an explicitly configured hardware or remote key provider, SHALL keep key material non-exportable, and SHALL fail closed when the provider is absent or unauthenticated."
+ac_5 = "THE hosted program registry SHALL authenticate every non-health route, isolate operator-only source publication, execute only a pinned declared builder entrypoint, bound connection and build concurrency, and SHALL NOT ignore the bearer credential the gateway sends."
+ac_6 = "EVERY SDK receipt decoder SHALL accept the canonical optional Programs outcome, enforce the same post-decode canonical invariants as the protocol decoder, and preserve identical refusal taxonomy across all seven languages."
+ac_7 = "THE SDK generation lock and every declared generated output SHALL agree byte-for-byte, and every shipped file inside a generated output root SHALL be either lock-covered or explicitly declared handwritten."
+ac_8 = "THE frozen interpreter refusal vectors SHALL reach the refusal stage they claim and SHALL NOT pass conformance by failing earlier for malformed register addressing."
+ac_9 = "PROGRAM ABI upgrade policy SHALL be identical in consensus execution, receipt evidence and every registry projection, including a single fail-closed rule for version downgrades."
+ac_10 = "PROGRAM event output and capability transport SHALL use one metered, count-bounded and size-consistent contract at the guest ABI, runtime, C ingress and SDK surfaces."
 # --------------------------------------------------------------------------
 # TASKS
 # --------------------------------------------------------------------------
@@ -3898,3 +3912,158 @@ verify_cmd = "make hpx-public-check"
 symbols = ["artifactHandler","validPublicIP"]
 touches = ["paxeer-network/hpx",".github/workflows/paxeer-hpx-registry.yml","Makefile","tools/ci/public-repo-audit.sh","spec/layerx-platform/spec.kvx","spec/layerx-platform/requirements.md","spec/layerx-platform/tasks.md","spec/layerx-platform/qualification.kvx"]
 reqs = ["45.1","45.2","45.3","45.4","45.5","45.6","45.7"]
+
+[task.38]
+section = "Audit Repair Wave - Production Boundaries"
+title = "Close the source-level blockers before human qualification"
+status = "pending"
+note = "These tasks are implementation work explicitly requested after the 2026-08-28 refreshed audit. They write production artifacts only; compilation, replay, fault injection and certification remain human qualification work."
+
+[task.38.1]
+title = "Recover canonical and batch logs before daemon reconciliation"
+status = "pending"
+wave = 19
+do_1 = "Recover the canonical and batch logs immediately after opening them and before history construction, checkpoint reconciliation or batch-WAL recovery reads their offsets."
+do_2 = "Keep authority and feed recovery single-owned by their existing components and refuse double replay or ambiguous recovery ownership."
+do_3 = "Propagate torn-tail, corrupt-chain and IO failures without resetting durable offsets or silently starting from an empty log."
+do_4 = "Write restart regression cases covering a checkpointed canonical log and an existing batch log without executing them during implementation."
+do_5 = "Record the exact crash and qualification matrix still required in the feature qualification log."
+verify_cmd = "make test-storage"
+symbols = ["open_process","lxp_log_recover"]
+touches = ["cmd/layerxd/lxp_daemon_process.c","tests/storage","spec/layerx-platform/qualification.kvx"]
+reqs = ["46.1"]
+
+[task.38.2]
+title = "Ship the production node submission and LNI server boundary"
+status = "pending"
+wave = 19
+requires = ["28.8"]
+do_1 = "Implement the frozen LNI handshake, submission and receipt-lookup request contract as a production daemon boundary rather than a test-only adapter."
+do_2 = "Feed accepted canonical activity bytes into lxp_daemon_submit exactly once and preserve the retained-byte unknown-outcome semantics the agent client requires."
+do_3 = "Enforce bounded frames, deadlines, loopback UDS or authenticated mTLS transport, peer identity and constant-time credential comparison before parsing a state-changing request."
+do_4 = "Serve typed refusals and indeterminate submission outcomes without inventing success, retrying different bytes or exposing daemon internals."
+do_5 = "Write the real-client boundary cases and operator configuration contract without executing qualification."
+verify_cmd = "make agent-test-boundary"
+symbols = ["lxp_daemon_lni_serve","layerx_client::submit_signed"]
+touches = ["cmd/layerxd","include/layerx/lxp_daemon.h","agent/crates/layerx-client/src/lni","agent/tests/boundary/node","Makefile","spec/layerx-platform/qualification.kvx"]
+reqs = ["46.2","1.1","1.10"]
+
+[task.38.3]
+title = "Ship the privileged human component server"
+status = "pending"
+wave = 19
+requires = ["13.6"]
+do_1 = "Implement the server side of session.authorize, human-api.execute and readiness over the existing bounded Unix component protocol."
+do_2 = "Bind operations to the real passkey, custody, journey, approval, notification, activity and store services under principal and tenant scope."
+do_3 = "Keep layerx-intents as the sole payload authority and route every protocol mutation through the existing agent prepare, sign and submit path."
+do_4 = "Fail closed on unavailable dependencies, malformed component frames, stale evidence and unknown operations without an in-memory fallback."
+do_5 = "Ship a production binary and configuration surface plus real-boundary cases, leaving execution to human qualification."
+verify_cmd = "make human-test"
+symbols = ["HumanComponentServer","HumanApiComponents"]
+touches = ["human/crates/layerx-human-service/src","human/crates/layerx-human-service/Cargo.toml","human/tests","spec/layerx-platform/qualification.kvx"]
+reqs = ["46.3","1.1","1.10"]
+
+[task.38.4]
+title = "Ship the production LXKP KMS gateway"
+status = "pending"
+wave = 20
+requires = ["38.3","5.8"]
+do_1 = "Implement the server side of the bounded LXKP protocol over mutual TLS for probe, create, describe, rotate, destroy and sign operations."
+do_2 = "Back the gateway only with an explicitly configured non-exportable hardware or remote KMS provider and reject development envelope providers in production."
+do_3 = "Authenticate the client identity, bind every operation to the principal key binding and verify every returned signature before responding."
+do_4 = "Apply connection, frame, rate and operation bounds and zeroize request material on every success and refusal path."
+do_5 = "Ship the production binary and deployment contract while recording provider-specific qualification as owner-controlled."
+verify_cmd = "make human-test-custody"
+symbols = ["LxkpGateway","KmsProvider"]
+touches = ["human/crates/layerx-human-service/src/custody","human/crates/layerx-human-service/src/bin","human/crates/layerx-human-service/Cargo.toml","spec/layerx-platform/qualification.kvx"]
+reqs = ["46.4","7.2","7.7"]
+
+[task.38.5]
+title = "Authenticate and isolate the hosted program build registry"
+status = "pending"
+wave = 19
+requires = ["17.4","20.2"]
+do_1 = "Require a constant-time verified bearer or authenticated operator identity on every registry route except health and use separate least-privilege authority for source publication."
+do_2 = "Replace archive-controlled free-form commands with a pinned builder entrypoint and declared bounded arguments inside the pinned build environment."
+do_3 = "Add request deadlines, strict duplicate-header and transfer-encoding refusal, a bounded connection pool and a bounded build queue."
+do_4 = "Keep source verification reproducible and offline while preventing published archive executables from becoming the command authority."
+do_5 = "Update gateway and registry secret-file configuration together and record deployment isolation assumptions for qualification."
+verify_cmd = "make platform-test-hosted"
+symbols = ["Registrar::route","HermeticBuilder::execute"]
+touches = ["platform/hosted/registry","platform/hosted/gateway/src/main.rs","platform/hosted/gateway/src/client.rs","spec/layerx-platform/qualification.kvx"]
+reqs = ["46.5","29.5","32.9"]
+
+[task.38.6]
+title = "Restore canonical Programs receipt parity across all SDKs"
+status = "pending"
+wave = 22
+requires = ["33.7"]
+do_1 = "Model the optional canonical Programs outcome in the shared SDK generator and emit its strict decoder in all seven languages."
+do_2 = "Mirror the protocol decoder's required non-zero sequence, module, version, timestamp, activity and resulting-root invariants."
+do_3 = "Preserve canonical unsigned-receipt reconstruction and signature verification when the optional outcome is present."
+do_4 = "Add shared golden receipts with and without Programs outcomes and language-specific refusal vectors without running them during implementation."
+do_5 = "Expose one identical typed receipt failure taxonomy across every generated verifier."
+verify_cmd = "make platform-test-sdks"
+symbols = ["decodeProtocolReceipt","program_outcome"]
+touches = ["platform/sdk/generators","platform/sdk","agent/crates/layerx-sdk","spec/layerx-platform/qualification.kvx"]
+reqs = ["46.6","24.2","30.6"]
+
+[task.38.7]
+title = "Restore complete SDK generation-lock coverage"
+status = "pending"
+wave = 22
+requires = ["38.6"]
+do_1 = "Classify every file under a generated output root as generated or explicitly handwritten and make the drift gate cover that classification."
+do_2 = "Bring LocalVerifier.java, ConformanceMain.java and run-jvm.sh back into byte-for-byte agreement with the declared pipeline lock."
+do_3 = "Reject untracked files inside explicit-list output roots unless the pipeline declares them handwritten."
+do_4 = "Keep schema inputs, generator revision and every output digest in one atomic lock update."
+do_5 = "Record the current mismatch as superseded only after the canonical source and lock agree."
+verify_cmd = "make platform-sdk-check"
+symbols = ["drift_gate","write_lock"]
+touches = ["platform/sdk/generators","platform/sdk/pipeline.kvx","platform/sdk/jvm","platform/sdk/conformance","spec/layerx-platform/qualification.kvx"]
+reqs = ["46.7","24.1","24.2"]
+
+[task.38.8]
+title = "Repair frozen interpreter refusal-vector stage fidelity"
+status = "pending"
+wave = 19
+requires = ["33.4"]
+do_1 = "Correct the overflow and division refusal vectors so their declared register file admits every encoded operand."
+do_2 = "Keep each vector's intended arithmetic refusal and expected no-effect outcome unchanged."
+do_3 = "Make the conformance oracle name and assert the expected refusal stage rather than accepting any earlier error."
+do_4 = "Keep the runtime integration vector expectations aligned with the independent interpreter oracle."
+do_5 = "Record that execution of the repaired vectors remains a human qualification gate."
+verify_cmd = "make programs-test"
+symbols = ["fixed_refusals_cover_structure_arithmetic_amount_and_depth_without_effects"]
+touches = ["programs/crates/layerx-programs-interpreter/vectors/v1-refusals.hex","programs/crates/layerx-programs-interpreter/tests/conformance.rs","programs/crates/layerx-programs-runtime/tests/interpreter_program.rs","spec/layerx-platform/qualification.kvx"]
+reqs = ["46.8","40.5"]
+
+[task.38.9]
+title = "Unify Programs ABI upgrade policy across consensus and projections"
+status = "pending"
+wave = 19
+requires = ["33.1"]
+do_1 = "Freeze one ABI transition policy and enforce it in the C deploy and upgrade transition before any artifact or state mutation."
+do_2 = "Apply the identical rule in registry replay, executable admission and receipt-backed interface evidence."
+do_3 = "Return one typed version refusal for a downgrade rather than allowing consensus state that projections cannot ingest."
+do_4 = "Keep historical ABI replay under the version recorded in the receipt and do not rewrite existing versions."
+do_5 = "Write cross-language upgrade and downgrade cases for human qualification."
+verify_cmd = "make programs-test"
+symbols = ["execute_upgrade","Registry::record_deployment_version"]
+touches = ["src/modules/programs/deploy.c","programs/crates/layerx-programs-registry/src","programs/crates/layerx-programs-registry/tests","spec/layerx-platform/qualification.kvx"]
+reqs = ["46.9","29.4","29.7"]
+
+[task.38.10]
+title = "Align Programs event metering and capability transport bounds"
+status = "pending"
+wave = 19
+requires = ["32.4"]
+do_1 = "Charge event topic and data bytes through the ordinary output meter before allocating or staging the event."
+do_2 = "Enforce the aggregate event-count ceiling at emission time and retain the canonical-envelope check as a final invariant."
+do_3 = "Define one capability-encoding byte ceiling and derive the guest reads, C ingress and SDK constants from it."
+do_4 = "Keep capability count and encoded-byte ceilings mutually satisfiable for every constructible canonical capability set."
+do_5 = "Write boundary and exhaustion cases for event count, event bytes and maximum capability sets without running qualification."
+verify_cmd = "make programs-test"
+symbols = ["Abi::emit_event","layerx_programs_call_begin"]
+touches = ["programs/crates/layerx-programs-runtime/src","programs/sdk","programs/crates/layerx-programs-runtime/tests","spec/layerx-platform/qualification.kvx"]
+reqs = ["46.10","28.3","30.1"]
