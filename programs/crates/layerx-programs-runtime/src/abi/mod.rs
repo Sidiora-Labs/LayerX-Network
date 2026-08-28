@@ -12,6 +12,8 @@ pub mod context;
 pub mod manifest;
 pub mod response;
 mod storage_ops;
+#[cfg(test)]
+mod event_tests;
 
 pub use balance::{BalanceView, MAX_BALANCE_VIEW_GRANTS};
 use capability::CapabilityKey;
@@ -34,8 +36,20 @@ pub const ABI_MODULE: &str = manifest::ABI_V1_MODULE;
 pub const ABI_V2_MODULE: &str = manifest::ABI_V2_MODULE;
 pub const MAX_EVENT_TOPIC_BYTES: usize = 64;
 pub const MAX_EVENT_DATA_BYTES: usize = 65_536;
+/// Maximum events an activity may emit across its complete call graph.
+pub const MAX_EVENTS_PER_ACTIVITY: usize = crate::DEFAULT_MAX_CALL_GRAPH_EDGES as usize;
 pub const MAX_CALL_INPUT_BYTES: usize = 1_048_576;
-pub const MAX_CAPABILITIES: usize = 256;
+/// Maximum canonical grants. This is derived so even the largest grant encoding
+/// fits the single transport ceiling used by the guest and C boundaries.
+pub const MAX_CAPABILITY_ENCODING_BYTES: usize = 65_535;
+pub const MAX_CAPABILITY_ENCODING_HEADER_BYTES: usize = 2;
+pub const MAX_CAPABILITY_ENCODING_GRANT_BYTES: usize =
+    1 + 32 + 2 + crate::MAX_PROGRAM_ACCOUNT_SEED_BYTES + 32 + 32 + 32 + 16;
+pub const MAX_CAPABILITIES: usize = (MAX_CAPABILITY_ENCODING_BYTES
+    - MAX_CAPABILITY_ENCODING_HEADER_BYTES)
+    / MAX_CAPABILITY_ENCODING_GRANT_BYTES;
+pub const MAX_CANONICAL_CAPABILITY_SET_BYTES: usize = MAX_CAPABILITY_ENCODING_HEADER_BYTES
+    + MAX_CAPABILITIES * MAX_CAPABILITY_ENCODING_GRANT_BYTES;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct HostFunction {
@@ -342,7 +356,7 @@ impl AbiEffects {
     /// Canonically commits every program event to its producing frame, so an
     /// activity receipt cannot replay an event under another program frame.
     pub fn canonical_program_event_envelope(&self) -> Result<Vec<u8>, AbiError> {
-        if self.events.len() > crate::DEFAULT_MAX_CALL_GRAPH_EDGES as usize {
+        if self.events.len() > MAX_EVENTS_PER_ACTIVITY {
             return Err(AbiError::EventBounds);
         }
         let mut encoded = b"LayerX/programs/events/v1\0".to_vec();
@@ -448,6 +462,7 @@ pub struct Abi {
     receipts: BTreeMap<[u8; 32], ReceiptView>,
     balances: BTreeMap<([u8; 32], [u8; 32]), Result<BalanceView, AbiError>>,
     effects: AbiEffects,
+    event_count_base: usize,
     access_declaration: crate::AccessDeclaration,
 }
 
@@ -516,6 +531,7 @@ impl Abi {
             receipts: verified,
             balances,
             effects: AbiEffects::default(),
+            event_count_base: 0,
             access_declaration: crate::AccessDeclaration::absent(),
         })
     }
@@ -561,6 +577,7 @@ impl Abi {
             receipts,
             balances,
             effects: AbiEffects::default(),
+            event_count_base: 0,
             access_declaration: crate::AccessDeclaration::absent(),
         })
     }
@@ -619,6 +636,18 @@ impl Abi {
         self.effects.namespace_drops.extend(effects.namespace_drops);
     }
 
+    pub(crate) const fn emitted_event_count(&self) -> usize {
+        self.event_count_base + self.effects.events.len()
+    }
+
+    pub(crate) fn inherit_emitted_event_count(&mut self, count: usize) -> Result<(), AbiError> {
+        if count > MAX_EVENTS_PER_ACTIVITY {
+            return Err(AbiError::EventBounds);
+        }
+        self.event_count_base = count;
+        Ok(())
+    }
+
     pub(crate) fn set_access_declaration(&mut self, declaration: crate::AccessDeclaration) {
         self.access_declaration = declaration;
     }
@@ -642,13 +671,39 @@ impl Abi {
     /// # Errors
     ///
     /// Refuses missing authority and invalid topic/data bounds.
-    pub fn emit_event(&mut self, topic: &[u8], data: &[u8]) -> Result<(), AbiError> {
+    pub(crate) fn emit_event(
+        &self,
+        meter: &mut crate::Meter,
+        topic_length: usize,
+        data_length: usize,
+    ) -> Result<(), AbiError> {
         self.authorization
             .capabilities()
             .grant(&CapabilityKey::EmitEvent)?;
+        if topic_length == 0
+            || topic_length > MAX_EVENT_TOPIC_BYTES
+            || data_length > MAX_EVENT_DATA_BYTES
+            || self.emitted_event_count() >= MAX_EVENTS_PER_ACTIVITY
+        {
+            return Err(AbiError::EventBounds);
+        }
+        let bytes = topic_length
+            .checked_add(data_length)
+            .ok_or(AbiError::EventBounds)?;
+        meter.charge_output_bytes(bytes)?;
+        Ok(())
+    }
+
+    /// Stages bytes previously admitted by [`Self::emit_event`].
+    pub(crate) fn stage_reserved_event(
+        &mut self,
+        topic: Vec<u8>,
+        data: Vec<u8>,
+    ) -> Result<(), AbiError> {
         if topic.is_empty()
             || topic.len() > MAX_EVENT_TOPIC_BYTES
             || data.len() > MAX_EVENT_DATA_BYTES
+            || self.emitted_event_count() >= MAX_EVENTS_PER_ACTIVITY
         {
             return Err(AbiError::EventBounds);
         }
@@ -656,8 +711,8 @@ impl Abi {
             program: self.program,
             principal: self.authorization.principal(),
             frame: self.authorization.frame(),
-            topic: topic.to_vec(),
-            data: data.to_vec(),
+            topic,
+            data,
         });
         Ok(())
     }

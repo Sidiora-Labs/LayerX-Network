@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use crate::accounts::{derive_program_account, MAX_PROGRAM_ACCOUNT_SEED_BYTES};
 use crate::storage::ProgramId;
 
-use super::{AbiError, MAX_CAPABILITIES};
+use super::{AbiError, MAX_CAPABILITIES, MAX_CAPABILITY_ENCODING_BYTES};
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(super) enum CapabilityKey {
@@ -528,7 +528,7 @@ impl CapabilitySet {
         bytes: &[u8],
         candidate_v2: bool,
     ) -> Result<Vec<Capability>, AbiError> {
-        if bytes.len() < 2 {
+        if bytes.len() < 2 || bytes.len() > MAX_CAPABILITY_ENCODING_BYTES {
             return Err(AbiError::InvalidEncoding);
         }
         let count = usize::from(u16::from_be_bytes([bytes[0], bytes[1]]));

@@ -72,6 +72,24 @@ pub(crate) fn read_guest(
     Ok(bytes)
 }
 
+pub(crate) fn validate_guest_read(
+    caller: &Caller<'_, RuntimeState>,
+    pointer: i32,
+    length: i32,
+    maximum: usize,
+) -> Result<usize, i32> {
+    let pointer = nonnegative(pointer)?;
+    let length = nonnegative(length)?;
+    if length > maximum {
+        return Err(STATUS_BOUNDS);
+    }
+    let end = pointer.checked_add(length).ok_or(STATUS_BOUNDS)?;
+    if end > memory(caller)?.data(caller).len() {
+        return Err(STATUS_BOUNDS);
+    }
+    Ok(length)
+}
+
 pub(super) fn read_slice(
     caller: &Caller<'_, RuntimeState>,
     pointer: i32,

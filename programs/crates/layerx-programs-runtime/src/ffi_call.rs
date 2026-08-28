@@ -2042,7 +2042,7 @@ pub extern "C" fn layerx_programs_call_begin(
             || entrypoint_length == 0
             || entrypoint_length > 128
             || calldata_length > 1_048_576
-            || capabilities_length > 4_096
+            || usize::from(capabilities_length) > crate::abi::MAX_CAPABILITY_ENCODING_BYTES
             || access_declaration_length > crate::MAX_ACCESS_DECLARATION_BYTES
             || response_capacity > 1_048_576
         {

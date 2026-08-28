@@ -898,7 +898,16 @@ fn execute_nested(
         .graph()
         .clone();
     admitted_graph.enter(callee)?;
-    let (principal, capabilities, storage, receipts, balances, access_declaration, callee_frame) = {
+    let (
+        principal,
+        capabilities,
+        storage,
+        receipts,
+        balances,
+        access_declaration,
+        callee_frame,
+        emitted_event_count,
+    ) = {
         let abi = state.abi_mut().ok_or(CompositionRefusal::NotComposable)?;
         let callee_frame = admitted_graph
             .current()
@@ -913,6 +922,7 @@ fn execute_nested(
             abi.verified_balances(),
             abi.access_declaration().clone(),
             callee_frame,
+            abi.emitted_event_count(),
         )
     };
     state
@@ -941,6 +951,7 @@ fn execute_nested(
         receipts,
         balances,
     )?;
+    child_abi.inherit_emitted_event_count(emitted_event_count)?;
     child_abi.set_access_declaration(access_declaration);
     let child_graph = state
         .composition()

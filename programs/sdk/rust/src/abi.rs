@@ -38,6 +38,8 @@ pub const MAX_STORAGE_VALUE_BYTES: usize = 1_048_576;
 pub const MAX_EVENT_TOPIC_BYTES: usize = 64;
 /// Maximum event payload length admitted by the version-one ABI.
 pub const MAX_EVENT_DATA_BYTES: usize = 65_536;
+/// Runtime-enforced aggregate event count across one activity call graph.
+pub const MAX_EVENTS_PER_ACTIVITY: usize = 64;
 /// Maximum call input length admitted by the version-one ABI.
 pub const MAX_CALL_INPUT_BYTES: usize = 1_048_576;
 /// Explicitly non-current candidate host module for response operations.
@@ -106,9 +108,16 @@ pub const CANDIDATE_HOST_FUNCTIONS: [HostFunction; 19] = [
     HostFunction { name: "bigint_modexp_256", signature: "(i32,i32,i32,i32,i32,i32,i32,i32)->i32" },
 ];
 /// Maximum number of grants in one capability set.
-pub const MAX_CAPABILITIES: usize = 256;
+pub const MAX_CAPABILITY_ENCODING_HEADER_BYTES: usize = 2;
+pub const MAX_CAPABILITY_ENCODING_GRANT_BYTES: usize =
+    1 + 32 + 2 + MAX_PROGRAM_ACCOUNT_SEED_BYTES + 32 + 32 + 32 + 16;
 /// Maximum encoded capability-list length the host will read.
-pub const MAX_CAPABILITY_ENCODING_BYTES: usize = 16_384;
+pub const MAX_CAPABILITY_ENCODING_BYTES: usize = 65_535;
+pub const MAX_CAPABILITIES: usize = (MAX_CAPABILITY_ENCODING_BYTES
+    - MAX_CAPABILITY_ENCODING_HEADER_BYTES)
+    / MAX_CAPABILITY_ENCODING_GRANT_BYTES;
+pub const MAX_CANONICAL_CAPABILITY_SET_BYTES: usize = MAX_CAPABILITY_ENCODING_HEADER_BYTES
+    + MAX_CAPABILITIES * MAX_CAPABILITY_ENCODING_GRANT_BYTES;
 /// Exact length of the encoded receipt view returned by `receipt_read`.
 pub const RECEIPT_ENCODING_BYTES: usize = 116;
 

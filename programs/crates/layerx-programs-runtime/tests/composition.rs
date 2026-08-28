@@ -230,6 +230,64 @@ fn forwarding_program(callee: ProgramId, requested: &CapabilitySet) -> Vec<u8> {
     ])
 }
 
+fn event_chain_program(event_count: usize, child: Option<(ProgramId, &CapabilitySet)>) -> Vec<u8> {
+    let mut entry = Vec::new();
+    for _ in 0..event_count {
+        for value in [0, 1, 1, 0] {
+            push_i32(&mut entry, value);
+        }
+        entry.extend([0x10, 0, 0x1a]);
+    }
+    let mut data = vec![(0_u32, vec![1_u8])];
+    if let Some((callee, requested)) = child {
+        let encoded = requested.canonical_encoding();
+        data.push((32, callee.bytes().to_vec()));
+        data.push((64, encoded.clone()));
+        for value in [
+            32,
+            32,
+            0,
+            0,
+            64,
+            i32::try_from(encoded.len()).unwrap_or(i32::MAX),
+        ] {
+            push_i32(&mut entry, value);
+        }
+        entry.extend([0x10, 1]);
+    } else {
+        push_i32(&mut entry, 0);
+    }
+    entry.push(0x0b);
+    let data = data
+        .iter()
+        .map(|(offset, bytes)| (*offset, bytes.as_slice()))
+        .collect::<Vec<_>>();
+    module(&[
+        type_section(&[
+            (&[TYPE_I32; 4], &[TYPE_I32]),
+            (&[TYPE_I32; 6], &[TYPE_I32]),
+            (&[TYPE_I32], &[TYPE_I32]),
+            (&[TYPE_I32, TYPE_I32], &[TYPE_I32]),
+        ]),
+        import_section(&[
+            (ABI_MODULE, "event_emit", 0),
+            (ABI_MODULE, "program_call", 1),
+        ]),
+        function_section(&[2, 3]),
+        section(5, &[1, 1, 1, 1]),
+        exports(&[
+            ("layerx_reserve", 0, 2),
+            (CALL_ENTRY_EXPORT, 0, 3),
+            ("memory", 2, 0),
+        ]),
+        code_section(&[
+            func_body(&[], &[0x41, 0, 0x0b]),
+            func_body(&[], &entry),
+        ]),
+        data_section(&data),
+    ])
+}
+
 fn trapping_start_program() -> Vec<u8> {
     module(&[
         type_section(&[
@@ -388,6 +446,7 @@ fn execute_unbudgeted_with_output_limit(
     grants: CapabilitySet,
     rules: CompositionRules,
     output_values: u32,
+    output_bytes: u64,
     mut storage: Storage,
 ) -> (
     Result<
@@ -416,7 +475,7 @@ fn execute_unbudgeted_with_output_limit(
             1_048_576,
             1_048_576,
             output_values,
-            1_048_576,
+            output_bytes,
             4_096,
         ),
         FeeSchedule::declared(),
@@ -924,6 +983,7 @@ fn production_edge_boundary_and_one_past_are_independently_typed() {
         grants.clone(),
         CompositionRules::declared(),
         65,
+        1_048_576,
         Storage::new(),
     );
     let success = outcome.unwrap_or_else(|error| panic!("edge-sixty-four control: {error}"));
@@ -942,6 +1002,7 @@ fn production_edge_boundary_and_one_past_are_independently_typed() {
         grants.clone(),
         CompositionRules::declared(),
         64,
+        1_048_576,
         before.clone(),
     );
     assert_eq!(
@@ -1011,6 +1072,53 @@ fn production_edge_boundary_and_one_past_are_independently_typed() {
         .any(|edge| edge.caller() == id(88) && edge.callee() == id(90)));
     assert_eq!(failure.call_graph().visits(id(90)), 7);
     assert!(failure.usage().output_values <= 64);
+    assert_eq!(storage, before);
+}
+
+#[test]
+fn nested_guest_event_aggregate_accepts_sixty_four_and_rolls_back_sixty_five() {
+    let root = id(120);
+    let child = id(121);
+    let delegated = CapabilitySet::new([Capability::EmitEvent])
+        .unwrap_or_else(|error| panic!("delegated event capability: {error}"));
+    let grants = CapabilitySet::new([
+        Capability::EmitEvent,
+        Capability::Call { program: child },
+    ])
+    .unwrap_or_else(|error| panic!("root event capabilities: {error}"));
+    let root_wasm = event_chain_program(32, Some((child, &delegated)));
+
+    let (outcome, _) = execute_unbudgeted_with_output_limit(
+        root,
+        &root_wasm,
+        &[(child, event_chain_program(32, None))],
+        grants.clone(),
+        CompositionRules::declared(),
+        64,
+        64,
+        Storage::new(),
+    );
+    let success = outcome.unwrap_or_else(|error| panic!("sixty-four events: {error}"));
+    assert_eq!(success.effects.events.len(), 64);
+    assert_eq!(success.usage.output_bytes, 64);
+
+    let before = seeded_storage([root, child]);
+    let (outcome, storage) = execute_unbudgeted_with_output_limit(
+        root,
+        &root_wasm,
+        &[(child, event_chain_program(33, None))],
+        grants,
+        CompositionRules::declared(),
+        64,
+        64,
+        before.clone(),
+    );
+    assert_eq!(
+        outcome,
+        Err(ExecutionError::Composition(CompositionRefusal::Authority(
+            AbiError::EventBounds,
+        )))
+    );
     assert_eq!(storage, before);
 }
 

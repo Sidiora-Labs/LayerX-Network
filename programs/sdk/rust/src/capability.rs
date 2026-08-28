@@ -321,3 +321,64 @@ fn write_bytes(output: &mut [u8], cursor: &mut usize, bytes: &[u8]) -> Result<()
     *cursor = end;
     Ok(())
 }
+
+#[cfg(test)]
+mod parity_vectors {
+    use super::{Capability, CapabilitySet};
+    use crate::{
+        AccountId, Amount, AssetId, GrantedCapabilities, ProgramId,
+        MAX_CANONICAL_CAPABILITY_SET_BYTES,
+    };
+
+    const FIXTURE: &str = include_str!("../../vectors/capability-boundary.kvx");
+
+    fn fixture_hex() -> &'static str {
+        FIXTURE
+            .lines()
+            .find_map(|line| line.strip_prefix("encoded_hex = \"")?.strip_suffix('"'))
+            .unwrap_or_else(|| panic!("mixed_v1 encoded_hex fixture"))
+    }
+
+    fn decode_hex(value: &str) -> Vec<u8> {
+        value
+            .as_bytes()
+            .chunks_exact(2)
+            .map(|pair| {
+                let digit = |byte: u8| match byte {
+                    b'0'..=b'9' => byte - b'0',
+                    b'a'..=b'f' => byte - b'a' + 10,
+                    _ => panic!("fixture hex digit"),
+                };
+                (digit(pair[0]) << 4) | digit(pair[1])
+            })
+            .collect()
+    }
+
+    #[test]
+    fn mixed_v1_encoding_matches_shared_sdk_fixture() {
+        let program = ProgramId::new([0x11; 32])
+            .unwrap_or_else(|error| panic!("program: {error}"));
+        let asset = AssetId::new([0x22; 32])
+            .unwrap_or_else(|error| panic!("asset: {error}"));
+        let account = AccountId::new([0x33; 32])
+            .unwrap_or_else(|error| panic!("account: {error}"));
+        let transfer = Capability::transfer(asset, account, Amount::from_u128(7))
+            .unwrap_or_else(|error| panic!("transfer: {error}"));
+        let set = CapabilitySet::<3>::from_grants(&[
+            Capability::EmitEvent,
+            Capability::call(program),
+            transfer,
+        ])
+        .unwrap_or_else(|error| panic!("capabilities: {error}"));
+        let expected = decode_hex(fixture_hex());
+        let mut actual = vec![0; set.encoded_len()];
+        let written = set
+            .encode_into(&mut actual)
+            .unwrap_or_else(|error| panic!("encoding: {error}"));
+        assert_eq!(written, expected.len());
+        assert_eq!(actual, expected);
+        assert_eq!(MAX_CANONICAL_CAPABILITY_SET_BYTES, 65_452);
+        assert!(GrantedCapabilities::new(&vec![0; 65_535]).is_ok());
+        assert!(GrantedCapabilities::new(&vec![0; 65_536]).is_err());
+    }
+}

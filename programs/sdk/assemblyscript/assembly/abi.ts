@@ -40,12 +40,21 @@ export const MAX_STORAGE_VALUE_BYTES: i32 = 1048576;
 export const MAX_EVENT_TOPIC_BYTES: i32 = 64;
 /** Maximum event payload length admitted by the version-one ABI. */
 export const MAX_EVENT_DATA_BYTES: i32 = 65536;
+/** Runtime-enforced aggregate event count across one activity call graph. */
+export const MAX_EVENTS_PER_ACTIVITY: i32 = 64;
 /** Maximum call input length admitted by the version-one ABI. */
 export const MAX_CALL_INPUT_BYTES: i32 = 1048576;
 /** Maximum number of grants in one capability set. */
-export const MAX_CAPABILITIES: i32 = 256;
+export const MAX_CAPABILITY_ENCODING_HEADER_BYTES: i32 = 2;
+export const MAX_CAPABILITY_ENCODING_GRANT_BYTES: i32 = 275;
 /** Maximum encoded capability-list length the host will read. */
-export const MAX_CAPABILITY_ENCODING_BYTES: i32 = 16384;
+export const MAX_CAPABILITY_ENCODING_BYTES: i32 = 65535;
+export const MAX_CAPABILITIES: i32 =
+  (MAX_CAPABILITY_ENCODING_BYTES - MAX_CAPABILITY_ENCODING_HEADER_BYTES) /
+  MAX_CAPABILITY_ENCODING_GRANT_BYTES;
+export const MAX_CANONICAL_CAPABILITY_SET_BYTES: i32 =
+  MAX_CAPABILITY_ENCODING_HEADER_BYTES +
+  MAX_CAPABILITIES * MAX_CAPABILITY_ENCODING_GRANT_BYTES;
 /** Declared capacity of the call-input reservation every SDK program owns. */
 export const CALL_INPUT_CAPACITY: i32 = 8192;
 /** Value `layerx_reserve` returns when it refuses a reservation. */

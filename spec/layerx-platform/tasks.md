@@ -1675,7 +1675,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
     - Keep historical ABI replay under the version recorded in the receipt and do not rewrite existing versions.
     - Write cross-language upgrade and downgrade cases for human qualification.
     - _Requirements: 46.9, 29.4, 29.7_
-  - [ ] 38.10 Align Programs event metering and capability transport bounds
+  - [ ] 38.10 Align Programs event metering and capability transport bounds — **Implemented - qualification pending**
     - Charge event topic and data bytes through the ordinary output meter before allocating or staging the event.
     - Enforce the aggregate event-count ceiling at emission time and retain the canonical-envelope check as a final invariant.
     - Define one capability-encoding byte ceiling and derive the guest reads, C ingress and SDK constants from it.

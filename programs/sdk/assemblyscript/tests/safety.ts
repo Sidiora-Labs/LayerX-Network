@@ -4,9 +4,53 @@ import {
   AssetId,
   Capability,
   CapabilitySet,
+  callProgram,
+  ERR_CAPABILITY_BYTES,
   ERR_CAPABILITY_LIMIT,
+  MAX_CAPABILITIES,
+  MAX_CAPABILITY_ENCODING_BYTES,
+  MAX_CANONICAL_CAPABILITY_SET_BYTES,
+  MAX_EVENTS_PER_ACTIVITY,
   ProgramId
 } from "../assembly/index";
+
+const CAPABILITY_FIXTURE = includeBytes("../../vectors/capability-boundary.kvx");
+
+function hexDigit(byte: u8): i32 {
+  if (byte >= 48 && byte <= 57) return <i32>byte - 48;
+  if (byte >= 97 && byte <= 102) return <i32>byte - 87;
+  return -1;
+}
+
+function mixedFixtureBytes(): StaticArray<u8> {
+  const marker = "encoded_hex = \"";
+  let start = -1;
+  for (let offset = 0; offset + marker.length < CAPABILITY_FIXTURE.length; offset++) {
+    let matches = true;
+    for (let index = 0; index < marker.length; index++) {
+      if (CAPABILITY_FIXTURE[offset + index] != <u8>marker.charCodeAt(index)) {
+        matches = false;
+        break;
+      }
+    }
+    if (matches) {
+      start = offset + marker.length;
+      break;
+    }
+  }
+  if (start < 0) return new StaticArray<u8>(0);
+  let end = start;
+  while (end < CAPABILITY_FIXTURE.length && CAPABILITY_FIXTURE[end] != 34) end++;
+  if ((end - start) % 2 != 0) return new StaticArray<u8>(0);
+  const decoded = new StaticArray<u8>((end - start) / 2);
+  for (let index = 0; index < decoded.length; index++) {
+    const high = hexDigit(CAPABILITY_FIXTURE[start + index * 2]);
+    const low = hexDigit(CAPABILITY_FIXTURE[start + index * 2 + 1]);
+    if (high < 0 || low < 0) return new StaticArray<u8>(0);
+    decoded[index] = <u8>((high << 4) | low);
+  }
+  return decoded;
+}
 
 export function identifierFactoriesRejectMalformedAndProtectStorage(): bool {
   if (ProgramId.fromBytes(new StaticArray<u8>(31), 0) !== null) return false;
@@ -52,4 +96,30 @@ export function capabilityAuthorityCannotBeMutatedAfterConstruction(): bool {
   const exposed = grant.identifier;
   exposed[31] = 0;
   return grant.identifier[31] == 2 && grant.maximumAmount.equals(Amount.fromParts(0, 7));
+}
+
+export function capabilityParityFixtureMatchesRustAndC(): bool {
+  if (MAX_CAPABILITY_ENCODING_BYTES != 65535 || MAX_CAPABILITIES != 238 ||
+      MAX_CANONICAL_CAPABILITY_SET_BYTES != 65452 ||
+      MAX_EVENTS_PER_ACTIVITY != 64) return false;
+  const program = ProgramId.fromWords(<u64>0x1111111111111111, <u64>0x1111111111111111,
+    <u64>0x1111111111111111, <u64>0x1111111111111111);
+  const asset = AssetId.fromWords(<u64>0x2222222222222222, <u64>0x2222222222222222,
+    <u64>0x2222222222222222, <u64>0x2222222222222222);
+  const account = AccountId.fromWords(<u64>0x3333333333333333, <u64>0x3333333333333333,
+    <u64>0x3333333333333333, <u64>0x3333333333333333);
+  if (program === null || asset === null || account === null) return false;
+  const set = new CapabilitySet(3);
+  if (set.insert(Capability.emitEvent()) != 0 ||
+      set.insert(Capability.call(changetype<ProgramId>(program))) != 0 ||
+      set.insert(Capability.transfer402(changetype<AssetId>(asset),
+        changetype<AccountId>(account), Amount.fromParts(0, 7))) != 0) return false;
+  const encoded = set.toBytes();
+  const expected = mixedFixtureBytes();
+  if (!encoded.ok() || encoded.bytes.length != expected.length) return false;
+  for (let index = 0; index < expected.length; index++) {
+    if (encoded.bytes[index] != expected[index]) return false;
+  }
+  return callProgram(changetype<ProgramId>(program), new StaticArray<u8>(0),
+    new StaticArray<u8>(65536)) == ERR_CAPABILITY_BYTES;
 }

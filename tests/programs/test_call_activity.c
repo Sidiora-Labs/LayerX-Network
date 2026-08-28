@@ -377,7 +377,7 @@ static int malformed_call_payloads(void)
         LXP_ERR_NON_CANONICAL)
         return 1;
     length = call_payload(payload, program_id);
-    write_u16(payload + 40U, LX_PROGRAMS_MAX_CAPABILITY_BYTES + 1U);
+    write_u16(payload + 40U, LX_PROGRAMS_MAX_CAPABILITY_BYTES);
     if (lxp_programs_call_decode(&ctx, payload, length, &decoded) !=
         LXP_ERR_NON_CANONICAL)
         return 1;
@@ -391,6 +391,44 @@ static int malformed_call_payloads(void)
     if (lxp_programs_call_decode(&ctx, payload, length, &decoded) !=
         LXP_ERR_NON_CANONICAL)
         return 1;
+    return lxp_state_store_destroy(&state) == LXP_OK ? 0 : 1;
+}
+
+static int maximum_capability_transport_only_boundary(void)
+{
+    static uint8_t payload[CALL_FIXED_BYTES + 1U +
+                           LX_PROGRAMS_MAX_CAPABILITY_BYTES + 128U];
+    static uint8_t capability_transport[LX_PROGRAMS_MAX_CAPABILITY_BYTES];
+    uint8_t arena_bytes[8192];
+    uint8_t program_id[32];
+    lxp_arena arena;
+    lxp_state_store state;
+    lxp_state_journal journal;
+    lxp_kernel kernel;
+    lxp_module_ctx ctx;
+    uint64_t parameters = 1U;
+    void *decoded = NULL;
+    size_t length;
+    (void)memset(program_id, 0x32, sizeof(program_id));
+    (void)memset(payload, 0, sizeof(payload));
+    (void)memset(capability_transport, 0, sizeof(capability_transport));
+    length = call_payload_with_capabilities(
+        payload, program_id, capability_transport,
+        sizeof(capability_transport));
+    if (LX_PROGRAMS_MAX_CAPABILITY_BYTES != UINT16_MAX ||
+        lxp_state_store_init(&state, 0U) != LXP_OK ||
+        lxp_kernel_create(&kernel, &state, &journal, &parameters, 0U) != LXP_OK ||
+        lxp_arena_init(&arena, arena_bytes, sizeof(arena_bytes)) != LXP_OK ||
+        lxp_module_ctx_init(&ctx, &kernel, LXP_MODULE_PROGRAMS, 1U, 0U, 1U,
+                            1000000U, &arena, false) != LXP_OK)
+        return 1;
+    if (lxp_programs_call_decode(&ctx, payload, length, &decoded) != LXP_OK ||
+        decoded == NULL)
+        return 1;
+    /* This is the opaque transport boundary, not a canonical capability set:
+     * all-zero capability bytes are rejected by Rust decoding after C ingress.
+     * One byte beyond the ceiling is deliberately not representable in the
+     * canonical u16 CALL header; SDK size_t ingress owns that refusal. */
     return lxp_state_store_destroy(&state) == LXP_OK ? 0 : 1;
 }
 
@@ -1031,6 +1069,7 @@ static int qualify_porting_reference(const char *path, uint8_t marker)
 int main(int argc, char **argv)
 {
     if (malformed_call_payloads() != 0) return 1;
+    if (maximum_capability_transport_only_boundary() != 0) return 1;
     if (call_access_declaration_is_activity_bound() != 0) return 1;
     if (deploy_and_upgrade_persist_exact_artifacts() != 0) return 1;
     if (argc == 1) return 0;

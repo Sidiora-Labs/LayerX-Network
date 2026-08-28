@@ -2761,6 +2761,13 @@ programs-porting-v2-references: $(BUILD_DIR)/tests/programs_call_activity
 
 programs-sdk-c:
 	STRICT=1 sh programs/sdk/c/examples/paid-counter/build.sh all
+	@mkdir -p $(BUILD_DIR)/tests
+	$(CC) $(CPPFLAGS) $(CFLAGS) -I programs/sdk/c/include \
+		programs/sdk/c/tests/capability_parity.c \
+		programs/sdk/c/src/amount.c programs/sdk/c/src/bytes.c \
+		programs/sdk/c/src/capability.c \
+		-o $(BUILD_DIR)/tests/programs_sdk_c_capability_parity
+	$(RUN_PREFIX) $(BUILD_DIR)/tests/programs_sdk_c_capability_parity
 
 programs-sdk-rust:
 	sh programs/sdk/rust/quickstart/build.sh all
@@ -2769,6 +2776,7 @@ programs-sdk-rust:
 	sh programs/sdk/rust/examples/vault/build.sh
 
 programs-sdk-assemblyscript:
+	npm --prefix programs/sdk/assemblyscript run test:source
 	cd programs/sdk/assemblyscript/examples/paid-counter && npm run build && npm run lint
 
 programs-quickstart:

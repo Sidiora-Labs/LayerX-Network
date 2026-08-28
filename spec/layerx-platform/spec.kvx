@@ -4055,7 +4055,7 @@ reqs = ["46.9","29.4","29.7"]
 
 [task.38.10]
 title = "Align Programs event metering and capability transport bounds"
-status = "pending"
+status = "implemented"
 wave = 19
 requires = ["32.4"]
 do_1 = "Charge event topic and data bytes through the ordinary output meter before allocating or staging the event."
@@ -4065,5 +4065,5 @@ do_4 = "Keep capability count and encoded-byte ceilings mutually satisfiable for
 do_5 = "Write boundary and exhaustion cases for event count, event bytes and maximum capability sets without running qualification."
 verify_cmd = "make programs-test"
 symbols = ["Abi::emit_event","layerx_programs_call_begin"]
-touches = ["programs/crates/layerx-programs-runtime/src","programs/sdk","programs/crates/layerx-programs-runtime/tests","spec/layerx-platform/qualification.kvx"]
+touches = ["programs/crates/layerx-programs-runtime/src","programs/sdk","programs/crates/layerx-programs-runtime/tests","include/layerx/programs.h","src/modules/programs/call.c","src/modules/programs/event.h","tests/programs/test_call_activity.c","Makefile","spec/layerx-platform/qualification.kvx"]
 reqs = ["46.10","28.3","30.1"]

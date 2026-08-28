@@ -37,7 +37,12 @@ pub(super) fn register(linker: &mut Linker<RuntimeState>) -> Result<(), Executio
                     Err(status) => return Ok(status),
                 };
                 let encoded =
-                    match read_guest(&caller, capabilities_pointer, capabilities_length, 16_384) {
+                    match read_guest(
+                        &caller,
+                        capabilities_pointer,
+                        capabilities_length,
+                        crate::abi::MAX_CAPABILITY_ENCODING_BYTES,
+                    ) {
                         Ok(encoded) => encoded,
                         Err(status) => return Ok(status),
                     };
@@ -156,7 +161,12 @@ pub(super) fn register_candidate(linker: &mut Linker<RuntimeState>) -> Result<()
                     Err(status) => return Ok(i64::from(status)),
                 };
                 let encoded =
-                    match read_guest(&caller, capabilities_pointer, capabilities_length, 16_384) {
+                    match read_guest(
+                        &caller,
+                        capabilities_pointer,
+                        capabilities_length,
+                        crate::abi::MAX_CAPABILITY_ENCODING_BYTES,
+                    ) {
                         Ok(encoded) => encoded,
                         Err(status) => return Ok(i64::from(status)),
                     };

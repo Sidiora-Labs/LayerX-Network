@@ -1078,6 +1078,7 @@ lxp_result layerx_programs_call_event_begin(
     lxp_result status;
     if (value == NULL || value->ctx == NULL || value->event.active ||
         event_index != value->emitted_event_count ||
+        value->emitted_event_count >= LXP_PROGRAMS_EVENT_MAX_COUNT ||
         topic_length > LXP_PROGRAMS_EVENT_MAX_TOPIC_BYTES ||
         data_length > LXP_PROGRAMS_EVENT_MAX_DATA_BYTES)
         return LXP_ERR_NON_CANONICAL;
