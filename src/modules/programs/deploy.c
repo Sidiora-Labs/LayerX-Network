@@ -237,7 +237,9 @@ static lxp_result execute_upgrade(lxp_module_ctx *ctx,
     if ((value->policy_or_flags & 1U) != 0U) {
         status = layerx_programs_migration_execute_activity(
             (uint64_t)(uintptr_t)value, value->wasm_length,
-            value->migration_hook_length);
+            value->migration_hook_length, value->abi_version,
+            read_u64(value->new_hash), read_u64(value->new_hash + 8U),
+            read_u64(value->new_hash + 16U), read_u64(value->new_hash + 24U));
         if (status != LXP_OK) return status;
     }
     version = read_u32(current + 67U);
@@ -254,7 +256,11 @@ static lxp_result execute_upgrade(lxp_module_ctx *ctx,
     if (status != LXP_OK) return status;
     (void)memcpy(event, value->old_hash, 32U);
     (void)memcpy(event + 32U, value->new_hash, 32U);
-    return lxp_ctx_emit_event(ctx, PROGRAM_EVENT_UPGRADED, event, sizeof(event));
+    status = lxp_ctx_emit_event(ctx, PROGRAM_EVENT_UPGRADED, event, sizeof(event));
+    if (status != LXP_OK) return status;
+    return layerx_programs_module_cache_invalidate_upgrade(
+        read_u64(value->old_hash), read_u64(value->old_hash + 8U),
+        read_u64(value->old_hash + 16U), read_u64(value->old_hash + 24U));
 }
 
 lxp_result layerx_programs_migration_activity_byte(uint64_t token,

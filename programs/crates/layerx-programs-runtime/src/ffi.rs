@@ -1,10 +1,10 @@
 //! Scalar-only, activity-owned C ingress for migration validation.
 //!
 //! C owns the bounded source bytes in the current module-context arena. Rust
-//! reads them through one scalar callback, reconstructs transient local input,
-//! and retains no handles or state after this call returns.
+//! reads them through one scalar callback and reconstructs transient local
+//! input; only the hash-bound compiled artifact may outlive the call.
 
-use crate::{Executor, WasmEngine};
+use crate::{Executor, ModuleCacheKey, RuntimeArtifactOwnerRefusal};
 
 const RESULT_OK: i32 = 0;
 const RESULT_NON_CANONICAL: i32 = -3;
@@ -50,6 +50,11 @@ pub extern "C" fn layerx_programs_migration_execute_activity(
     token: u64,
     wasm_length: u32,
     hook_length: u16,
+    abi_version: u16,
+    h0: u64,
+    h1: u64,
+    h2: u64,
+    h3: u64,
 ) -> i32 {
     let wasm_length = wasm_length as usize;
     let hook_length = hook_length as usize;
@@ -72,13 +77,26 @@ pub extern "C" fn layerx_programs_migration_execute_activity(
     let Ok(hook) = String::from_utf8(hook) else {
         return RESULT_NON_CANONICAL;
     };
-    let Ok(engine) = WasmEngine::declared() else {
-        return RESULT_FATAL_INVARIANT;
+    let mut code_hash = [0_u8; 32];
+    for (chunk, word) in code_hash.chunks_exact_mut(8).zip([h0, h1, h2, h3]) {
+        chunk.copy_from_slice(&word.to_be_bytes());
+    }
+    let owner = match crate::cache::runtime_artifacts() {
+        Ok(owner) => owner,
+        Err(_) => return RESULT_FATAL_INVARIANT,
     };
-    let Ok(module) = engine.validate(&wasm) else {
-        return RESULT_NON_CANONICAL;
+    let module = match owner.get_or_compile(
+        ModuleCacheKey::new(code_hash, crate::RUNTIME_VERSION, abi_version),
+        &wasm,
+    ) {
+        Ok(module) => module,
+        Err(RuntimeArtifactOwnerRefusal::Compilation(_)) => return RESULT_NON_CANONICAL,
+        Err(
+            RuntimeArtifactOwnerRefusal::Initialization(_)
+            | RuntimeArtifactOwnerRefusal::SynchronizationPoisoned,
+        ) => return RESULT_FATAL_INVARIANT,
     };
-    match Executor::declared().execute(&module, &hook, &[]) {
+    match Executor::declared().execute(module.validated(), &hook, &[]) {
         Ok(_) => RESULT_OK,
         Err(crate::ExecutionError::Resource(_)) => RESULT_GAS_EXHAUSTED,
         Err(crate::ExecutionError::Fault(crate::ExecutionFault::UnknownExport { .. })) => {

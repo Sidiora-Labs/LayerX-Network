@@ -3291,7 +3291,7 @@ note = "Code-only lanes: 32.1, 32.2, 32.3, 32.4 and 32.5 are five independent im
 
 [task.32.1]
 title = "Cache validated and compiled modules by code hash"
-status = "pending"
+status = "implemented"
 wave = 18
 requires = ["28.7"]
 do_1 = "Add a bounded cache keyed by code hash and runtime version holding validated, compiled module artifacts, so a program validated once is not revalidated per invocation."

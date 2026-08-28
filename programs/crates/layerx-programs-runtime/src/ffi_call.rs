@@ -10,14 +10,17 @@ use crate::{
     AbiError, ActivityBudgetBinding, AtomicTransferSet, AuthorizationContext,
     AuthorizedExecutionRecord, BudgetMeterRefusal, BudgetResourceKind,
     BudgetedAuthorizedExecutionRequest, BudgetedV1FailureCause, CandidateActivityOutcome,
-    CandidateAuthorizedExecutionRecord, CapabilitySet, CompositionContext, CompositionRefusal,
-    CompositionRules, DeclaredBudget, EntrypointRefusal, ExecutionFault, Executor,
-    KernelTransferEvidence, KernelTransferPrimitive, MeterRefusal, MeteredUsage,
-    PreparedAuthorizedActivityOutcome, PrincipalId, ProgramCatalog, ProgramEvent, ProgramId,
-    BalanceView, ReceiptOracle, ReceiptView, ResourceKind, ResponseRefusal, SettlementFailure,
-    Storage, StorageNamespace, TransferCapability, TransferLawError, TransferSource, WasmEngine,
+    CandidateAuthorizedExecutionRecord, CapabilitySet, CompiledModule, CompositionContext,
+    CompositionRefusal, CompositionRules, DeclaredBudget, EntrypointRefusal, ExecutionFault,
+    Executor, KernelTransferEvidence, KernelTransferPrimitive, MeterRefusal, MeteredUsage,
+    ModuleCacheKey, PreparedAuthorizedActivityOutcome, PrincipalId, ProgramEvent, ProgramId,
+    ProgramResolver, BalanceView, ReceiptOracle, ReceiptView, ResourceKind, ResponseRefusal,
+    RuntimeArtifactOwnerRefusal, SettlementFailure, Storage, StorageNamespace, TransferCapability,
+    TransferLawError, TransferSource,
 };
 use std::collections::{BTreeMap, BTreeSet};
+use std::rc::Rc;
+use std::sync::Arc;
 
 const OK: i32 = 0;
 const NON_CANONICAL: i32 = -3;
@@ -39,6 +42,94 @@ const FAILURE: u8 = 2;
 const RESOURCE: u8 = 3;
 const GAS_EXHAUSTED: i32 = -601;
 const PROGRAM_REFUSED: i32 = -736;
+
+#[derive(Debug, Default)]
+struct CachedProgramResolver {
+    modules: BTreeMap<ProgramId, Arc<CompiledModule>>,
+}
+
+impl CachedProgramResolver {
+    fn insert(
+        &mut self,
+        program: ProgramId,
+        module: Arc<CompiledModule>,
+    ) -> Option<Arc<CompiledModule>> {
+        self.modules.insert(program, module)
+    }
+
+    fn contains(&self, program: ProgramId) -> bool {
+        self.modules.contains_key(&program)
+    }
+}
+
+impl ProgramResolver for CachedProgramResolver {
+    fn program_module(&self, program: ProgramId) -> Option<&crate::ValidatedModule> {
+        self.modules.get(&program).map(|module| module.validated())
+    }
+}
+
+fn artifact_refusal_status(refusal: RuntimeArtifactOwnerRefusal) -> i32 {
+    match refusal {
+        RuntimeArtifactOwnerRefusal::Compilation(_) => NON_CANONICAL,
+        RuntimeArtifactOwnerRefusal::Initialization(_)
+        | RuntimeArtifactOwnerRefusal::SynchronizationPoisoned => FATAL_INVARIANT,
+    }
+}
+
+fn compiled_module(key: ModuleCacheKey, wasm: &[u8]) -> Result<Arc<CompiledModule>, i32> {
+    crate::cache::runtime_artifacts()
+        .and_then(|owner| owner.get_or_compile(key, wasm))
+        .map_err(artifact_refusal_status)
+}
+
+fn initialized_artifact_owner() -> Result<Option<&'static crate::RuntimeArtifactOwner>, i32> {
+    crate::cache::initialized_runtime_artifacts().map_err(artifact_refusal_status)
+}
+
+#[no_mangle]
+pub extern "C" fn layerx_programs_module_cache_invalidate_upgrade(
+    h0: u64,
+    h1: u64,
+    h2: u64,
+    h3: u64,
+) -> i32 {
+    let owner = match initialized_artifact_owner() {
+        Ok(Some(owner)) => owner,
+        Ok(None) => return OK,
+        Err(refusal) => return refusal,
+    };
+    owner
+        .invalidate_upgrade(bytes([h0, h1, h2, h3]))
+        .map_or_else(artifact_refusal_status, |_| OK)
+}
+
+#[no_mangle]
+pub extern "C" fn layerx_programs_module_cache_invalidate_runtime(
+    retired_runtime_version: u16,
+) -> i32 {
+    let owner = match initialized_artifact_owner() {
+        Ok(Some(owner)) => owner,
+        Ok(None) => return OK,
+        Err(refusal) => return refusal,
+    };
+    owner
+        .invalidate_runtime(retired_runtime_version)
+        .map_or_else(artifact_refusal_status, |_| OK)
+}
+
+#[no_mangle]
+pub extern "C" fn layerx_programs_module_cache_invalidate_abi(
+    retired_abi_version: u16,
+) -> i32 {
+    let owner = match initialized_artifact_owner() {
+        Ok(Some(owner)) => owner,
+        Ok(None) => return OK,
+        Err(refusal) => return refusal,
+    };
+    owner
+        .invalidate_abi(retired_abi_version)
+        .map_or_else(artifact_refusal_status, |_| OK)
+}
 
 fn put_usize(out: &mut Vec<u8>, value: usize) -> Result<(), i32> {
     out.extend_from_slice(
@@ -1669,27 +1760,13 @@ pub extern "C" fn layerx_programs_call_begin(
                 layerx_programs_call_activity_byte(token, CAPABILITIES, offset)
             })?;
         crate::entrypoint::preflight(&calldata).map_err(|_| NON_CANONICAL)?;
-        let engine = WasmEngine::declared().map_err(|_| FATAL_INVARIANT)?;
         let root_wasm = scalar_bytes(
             usize::try_from(wasm_length).map_err(|_| LENGTH_LIMIT)?,
             |offset| unsafe { layerx_programs_call_activity_byte(token, WASM, offset) },
         )?;
-        let root_module = match abi_version {
-            ABI_V1_VERSION => engine.validate(&root_wasm),
-            2 => engine.validate_v2(&root_wasm),
-            _ => return Err(NON_CANONICAL),
-        }
-        .map_err(|_| NON_CANONICAL)?;
-        let grants = match root_module.abi_revision() {
-            AbiRevision::V1 => CapabilitySet::decode_canonical(&encoded_capabilities),
-            AbiRevision::V2 => {
-                CapabilitySet::decode_candidate_canonical(&encoded_capabilities)
-            }
-        }
-        .map_err(|_| NON_CANONICAL)?;
-        let capabilities = CapabilitySet::new(grants).map_err(|_| NON_CANONICAL)?;
         let count = c_count(unsafe { layerx_programs_call_catalog_count(token) })?;
-        let mut catalog = ProgramCatalog::new();
+        let mut catalog = CachedProgramResolver::default();
+        let mut root_module = None;
         let mut entries = Vec::with_capacity(usize::try_from(count).map_err(|_| LENGTH_LIMIT)?);
         let mut program_owners = BTreeMap::new();
         let mut storage = Storage::new();
@@ -1714,17 +1791,28 @@ pub extern "C" fn layerx_programs_call_begin(
             if entry_program == program && wasm != root_wasm {
                 return Err(NON_CANONICAL);
             }
-            let module = match catalog_abi {
-                ABI_V1_VERSION => engine.validate(&wasm),
-                2 if protocol_version == 2 => engine.validate_v2(&wasm),
+            match catalog_abi {
+                ABI_V1_VERSION => {}
+                2 if protocol_version == 2 => {}
                 _ => return Err(NON_CANONICAL),
-            }
-            .map_err(|_| NON_CANONICAL)?;
+            };
             if entry_program == program && catalog_abi != abi_version {
                 return Err(NON_CANONICAL);
             }
+            let module = compiled_module(
+                ModuleCacheKey::new(hash, crate::RUNTIME_VERSION, catalog_abi),
+                &wasm,
+            )?;
+            let root_candidate = if entry_program == program {
+                Some(Arc::clone(&module))
+            } else {
+                None
+            };
             if catalog.insert(entry_program, module).is_some() {
                 return Err(NON_CANONICAL);
+            }
+            if let Some(root_candidate) = root_candidate {
+                root_module = Some(root_candidate);
             }
             if program_owners.insert(entry_program, owner).is_some() {
                 return Err(NON_CANONICAL);
@@ -1735,6 +1823,15 @@ pub extern "C" fn layerx_programs_call_begin(
         if !catalog.contains(program) {
             return Err(MODULE_DISABLED);
         }
+        let root_module = root_module.ok_or(FATAL_INVARIANT)?;
+        let grants = match root_module.validated().abi_revision() {
+            AbiRevision::V1 => CapabilitySet::decode_canonical(&encoded_capabilities),
+            AbiRevision::V2 => {
+                CapabilitySet::decode_candidate_canonical(&encoded_capabilities)
+            }
+        }
+        .map_err(|_| NON_CANONICAL)?;
+        let capabilities = CapabilitySet::new(grants).map_err(|_| NON_CANONICAL)?;
         storage.clear_access_log();
         let mut occupancy_ledger = if protocol_version == 2 {
             let mut ledger = occupancy_ledger(occupancy_token, batch_number)?;
@@ -1763,7 +1860,7 @@ pub extern "C" fn layerx_programs_call_begin(
             .collect();
         let receipts = CReceiptOracle { token };
         let authorization = AuthorizationContext::new(payer, capabilities);
-        let candidate_transfer = if root_module.abi_revision() == AbiRevision::V2 {
+        let candidate_transfer = if root_module.validated().abi_revision() == AbiRevision::V2 {
             Some(
                 TransferCapability::from_root_authorization(
                     program,
@@ -1776,16 +1873,16 @@ pub extern "C" fn layerx_programs_call_begin(
             None
         };
         let request = crate::AuthorizedExecutionRequest {
-            module: &root_module,
+            module: root_module.validated(),
             program,
             authorization,
             receipts: &receipts,
             entrypoint: &entrypoint,
             calldata: &calldata,
-            composition: CompositionContext::catalog(catalog, CompositionRules::declared()),
+            composition: CompositionContext::new(Rc::new(catalog), CompositionRules::declared()),
             response_capacity: usize::try_from(response_capacity).map_err(|_| LENGTH_LIMIT)?,
         };
-        if root_module.abi_revision() == AbiRevision::V2 {
+        if root_module.validated().abi_revision() == AbiRevision::V2 {
             let execution_context = crate::abi::context::ExecutionContext::authenticated(
                 activity_sequence,
                 batch_number,

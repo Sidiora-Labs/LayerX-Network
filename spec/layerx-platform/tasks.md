@@ -1315,7 +1315,7 @@ surface makes the evidence portable while custody never leaves Paxeer.
 
 - [ ] 32. Make program execution fast enough and priced honestly enough to be a real plane
   - Code-only lanes: 32.1, 32.2, 32.3, 32.4 and 32.5 are five independent implementations on disjoint files. Task 32.6 follows 32.5. Task 32.7 is deferred benchmark and qualification work.
-  - [ ] 32.1 Cache validated and compiled modules by code hash
+  - [ ] 32.1 Cache validated and compiled modules by code hash — **Implemented - qualification pending**
     - Add a bounded cache keyed by code hash and runtime version holding validated, compiled module artifacts, so a program validated once is not revalidated per invocation.
     - Keep the cache an accelerator with no consensus authority: a cache miss, an eviction and a cold node must produce byte-identical results and identical metered cost to a cache hit.
     - Bound cache memory explicitly and evict deterministically, with eviction order derived from protocol state rather than wall-clock recency, so two nodes never diverge through eviction.

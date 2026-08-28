@@ -419,7 +419,19 @@ lxp_result layerx_programs_migration_activity_byte(uint64_t token,
 /* Synchronous lifecycle bridge matching the same arena-token rule. */
 lxp_result layerx_programs_migration_execute_activity(uint64_t token,
                                                        uint32_t wasm_length,
-                                                       uint16_t hook_length);
+                                                       uint16_t hook_length,
+                                                       uint16_t abi_version,
+                                                       uint64_t h0, uint64_t h1,
+                                                       uint64_t h2, uint64_t h3);
+
+/* Node-local compiled artifacts are explicitly retired after durable protocol
+ * transitions; these calls never mutate receipt or execution state. */
+lxp_result layerx_programs_module_cache_invalidate_upgrade(
+    uint64_t h0, uint64_t h1, uint64_t h2, uint64_t h3);
+lxp_result layerx_programs_module_cache_invalidate_runtime(
+    uint16_t retired_runtime_version);
+lxp_result layerx_programs_module_cache_invalidate_abi(
+    uint16_t retired_abi_version);
 
 typedef struct lxp_programs_call_activity lxp_programs_call_activity;
 

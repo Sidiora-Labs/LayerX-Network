@@ -19,6 +19,8 @@ pub mod accounts;
 #[deny(unsafe_code)]
 pub mod budget;
 #[deny(unsafe_code)]
+pub mod cache;
+#[deny(unsafe_code)]
 pub mod calls;
 #[deny(unsafe_code)]
 pub mod crypto;
@@ -86,6 +88,12 @@ pub use accounts::{
 pub use budget::{
     ActivityBudgetBinding, AdmittedBudget, BudgetAdmissionRefusal, BudgetDimension, DeclaredBudget,
     DECLARED_BUDGET_DOMAIN,
+};
+pub use cache::{
+    CompiledModule, CompiledModuleRefusal, ModuleCache, ModuleCacheKey, ModuleCacheLimits,
+    ModuleCacheLimitsRefusal, RuntimeArtifactOwner, RuntimeArtifactOwnerRefusal,
+    COMPILED_FUNCTION_WEIGHT_BYTES, COMPILED_MODULE_BASE_WEIGHT_BYTES,
+    DEFAULT_MAX_CACHED_MODULE_BYTES, DEFAULT_MAX_CACHED_MODULES,
 };
 pub use calls::{
     call_admission_fuel, CallEdge, CallFrame, CallGraph, CompositionContext, CompositionRefusal,
