@@ -598,6 +598,7 @@ pub fn verify_program_operation(
         call_graph,
         expected_program_id,
         expected_guest_abi_version,
+        *trusted_sequencer_key,
         "executed",
     )
 }
@@ -638,6 +639,7 @@ pub fn verify_program_simulation_operation(
         call_graph,
         expected_program_id,
         expected_guest_abi_version,
+        trusted_sequencer_key,
         "simulated",
     )
 }
@@ -648,6 +650,7 @@ fn render_verified_program_operation(
     call_graph: &[u8],
     expected_program_id: [u8; 32],
     expected_guest_abi_version: u16,
+    sequencer_public_key: [u8; 32],
     state: &str,
 ) -> Result<VerifiedOperation, GatewayError> {
     let protocol = verified
@@ -673,20 +676,27 @@ fn render_verified_program_operation(
         "guest_abi_version": expected_guest_abi_version,
         "module_version": protocol.module_version(),
         "batch_id": hex(&protocol.batch_id()),
-        "global_sequence": protocol.global_sequence(),
+        "global_sequence": protocol.global_sequence().to_string(),
         "result_code": verified.result_code(),
         "state_root": hex(&protocol.resulting_state_root()),
         "receipt": hex(verified.receipt().canonical_bytes()),
         "receipt_digest": hex(&receipt_digest),
         "terminal_payload": hex(terminal_payload),
         "call_graph": hex(call_graph),
+        "authority": {
+            "batch_id": hex(&protocol.batch_id()),
+            "asset": hex(&protocol.asset()),
+            "previous_state_root": hex(&protocol.previous_state_root()),
+            "resulting_state_root": hex(&protocol.resulting_state_root()),
+            "sequencer_public_key": hex(&sequencer_public_key),
+        },
         "usage": {
-            "cpu_fuel": verified.cpu_fuel(),
-            "memory_bytes": verified.memory_bytes(),
-            "storage_read_bytes": verified.storage_read_bytes(),
-            "storage_write_bytes": verified.storage_write_bytes(),
+            "cpu_fuel": verified.cpu_fuel().to_string(),
+            "memory_bytes": verified.memory_bytes().to_string(),
+            "storage_read_bytes": verified.storage_read_bytes().to_string(),
+            "storage_write_bytes": verified.storage_write_bytes().to_string(),
             "output_values": verified.output_values(),
-            "output_bytes": verified.output_bytes(),
+            "output_bytes": verified.output_bytes().to_string(),
             "fee_units": verified.fee_units().to_string(),
         },
         "outcome": outcome,
@@ -776,7 +786,11 @@ pub fn production_route<'a>(
             let id = path
                 .strip_prefix("/v1/programs/activities/")
                 .ok_or(GatewayError::InvalidRoute)?;
-            if id.len() == 64 && id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            if id.len() == 64
+                && id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            {
                 Ok(ProductionRoute::ProgramActivity(id))
             } else {
                 Err(GatewayError::InvalidRoute)
@@ -786,7 +800,11 @@ pub fn production_route<'a>(
             let id = path
                 .strip_prefix("/v1/programs/receipts/by-idempotency/")
                 .ok_or(GatewayError::InvalidRoute)?;
-            if id.len() == 64 && id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            if id.len() == 64
+                && id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            {
                 Ok(ProductionRoute::ProgramReceiptByIdempotency(id))
             } else {
                 Err(GatewayError::InvalidRoute)
@@ -799,7 +817,11 @@ pub fn production_route<'a>(
             let (id, interface) = remainder
                 .strip_suffix("/interface")
                 .map_or((remainder, false), |id| (id, true));
-            if id.len() == 64 && id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            if id.len() == 64
+                && id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            {
                 if interface {
                     Ok(ProductionRoute::ProgramInterface(id))
                 } else {
@@ -921,6 +943,16 @@ mod tests {
             production_route("POST", "/v1/programs/simulate"),
             Ok(ProductionRoute::ProgramSimulation)
         ));
+        let discovery = format!("/v1/programs/registry/{identifier}");
+        assert!(matches!(
+            production_route("GET", &discovery),
+            Ok(ProductionRoute::ProgramRegistry(value)) if value == identifier
+        ));
+        let interface = format!("/v1/programs/registry/{identifier}/interface");
+        assert!(matches!(
+            production_route("GET", &interface),
+            Ok(ProductionRoute::ProgramInterface(value)) if value == identifier
+        ));
         let activity = format!("/v1/programs/activities/{identifier}");
         assert!(matches!(
             production_route("GET", &activity),
@@ -933,5 +965,11 @@ mod tests {
         ));
         assert!(production_route("GET", "/v1/programs/activities/aa").is_err());
         assert!(production_route("GET", "/v1/programs/activities/../state").is_err());
+        assert!(production_route(
+            "GET",
+            &format!("/v1/programs/activities/{}", "A".repeat(64))
+        )
+        .is_err());
+        assert!(production_route("GET", "/v1/programs/registry").is_err());
     }
 }

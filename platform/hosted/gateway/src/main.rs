@@ -167,6 +167,28 @@ struct ProgramCallBody {
     signed_activity: String,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProgramSelectorBody {
+    program_id: String,
+    requested_verification_level: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProgramReceiptSelectorBody {
+    idempotency_key: String,
+    expected_activity_id: String,
+    requested_verification_level: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProgramActivitySelectorBody {
+    activity_id: String,
+    requested_verification_level: String,
+}
+
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum ProgramLifecycle {
     Active,
@@ -247,23 +269,29 @@ fn decode_hex(value: &str, maximum: usize) -> Result<Vec<u8>, String> {
         .collect()
 }
 
+fn media_type_is(request: &IncomingRequest, expected: &str) -> bool {
+    request
+        .headers
+        .get("content-type")
+        .and_then(|value| value.split(';').next())
+        .is_some_and(|value| value.trim().eq_ignore_ascii_case(expected))
+}
+
 fn program_call_bytes(
     request: &IncomingRequest,
     registry: &ModuleRegistry,
 ) -> Result<(Vec<u8>, [u8; 32]), String> {
-    let content_type = request
-        .headers
-        .get("content-type")
-        .map(String::as_str)
-        .unwrap_or_default();
-    let (signed_activity, expected_call) = if content_type == "application/octet-stream" {
+    let (signed_activity, expected_call) = if media_type_is(request, "application/octet-stream") {
         if request.body.len() > 1_048_576 {
             return Err("signed program activity exceeds its bound".to_owned());
         }
         (request.body.clone(), None)
-    } else if content_type == "application/json" {
+    } else if media_type_is(request, "application/json") {
         let body: ProgramCallBody =
             serde_json::from_slice(&request.body).map_err(|_| "program call body is invalid")?;
+        if !canonical_hex32_text(&body.program_id) {
+            return Err("program id is not canonical".to_owned());
+        }
         let program_id = parse_hex32(&body.program_id)?;
         let program = ProgramId::new(program_id);
         if program.is_zero() {
@@ -404,14 +432,14 @@ fn program_head(config: &Config, expected_program: [u8; 32]) -> Result<ProgramHe
     let observed_sequence = value
         .get("observed_sequence")
         .or_else(|| balance_receipt.and_then(|receipt| receipt.get("observed_sequence")))
-        .and_then(serde_json::Value::as_u64);
+        .and_then(canonical_u64);
     let observed_at = value
         .get("observed_at")
         .or_else(|| balance_receipt.and_then(|receipt| receipt.get("observed_at")))
-        .and_then(serde_json::Value::as_u64);
+        .and_then(canonical_u64);
     let valid_through = value
         .get("valid_through")
-        .and_then(serde_json::Value::as_u64)
+        .and_then(canonical_u64)
         .ok_or_else(|| response(503, "program_registry_invalid", Some(5)))?;
     if state_root.is_none()
         || observed_sequence.is_none()
@@ -619,6 +647,277 @@ fn json_response(status: u16, value: serde_json::Value) -> OutgoingResponse {
         body: value.to_string().into_bytes(),
         retry_after: None,
     }
+}
+
+fn programs_request_path(method: &str, path: &str) -> bool {
+    matches!(
+        (method, path),
+        ("POST", "/v1/programs/call") | ("POST", "/v1/programs/simulate")
+    ) || (method == "GET"
+        && (path.starts_with("/v1/programs/registry/")
+            || path.starts_with("/v1/programs/receipts/by-idempotency/")
+            || path.starts_with("/v1/programs/activities/")))
+}
+
+fn agent_error_class(status: u16, code: &str) -> &'static str {
+    if code.contains("idempotency") {
+        "IdempotencyConflict"
+    } else if code.contains("quota") {
+        "RateLimit"
+    } else if code.contains("authorization")
+        || code.contains("scope")
+        || code.contains("api_key")
+        || code.contains("identity")
+        || code.contains("not_active")
+        || code.contains("refused")
+    {
+        "PolicyRefusal"
+    } else if code.contains("verification")
+        || code.contains("unverified")
+        || code.contains("component_invalid")
+        || code.contains("invalid_output")
+        || code.contains("selector_mismatch")
+        || code.contains("binding_invalid")
+    {
+        "VerificationFailure"
+    } else if status == 404 || code.contains("absent") || code.contains("unknown_program") {
+        "UnavailableCapability"
+    } else if code.contains("invalid") || code.contains("required") || status == 415 {
+        "ProtocolIncompatibility"
+    } else if status >= 500 {
+        "TransportFailure"
+    } else {
+        "InternalFault"
+    }
+}
+
+fn agent_reason(code: &str) -> String {
+    let mut reason = String::with_capacity(code.len().min(128));
+    for byte in code.bytes().take(128) {
+        reason.push(char::from(match byte {
+            b'a'..=b'z' | b'0'..=b'9' | b'_' | b'.' => byte,
+            b'A'..=b'Z' => byte.to_ascii_lowercase(),
+            _ => b'_',
+        }));
+    }
+    if reason.is_empty() {
+        "program_request_failed".to_owned()
+    } else {
+        reason
+    }
+}
+
+fn normalize_program_u64s(value: &mut serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Object(object) => {
+            for (key, item) in object {
+                if key == "output_values" {
+                    let output_values = item.as_u64().or_else(|| {
+                        item.as_str().and_then(|text| {
+                            text.parse::<u64>()
+                                .ok()
+                                .filter(|number| text == number.to_string())
+                        })
+                    });
+                    let Some(output_values) = output_values
+                        .and_then(|number| u32::try_from(number).ok())
+                    else {
+                        return false;
+                    };
+                    *item = serde_json::json!(output_values);
+                } else if matches!(
+                    key.as_str(),
+                    "global_sequence"
+                        | "observed_sequence"
+                        | "observed_at"
+                        | "valid_through"
+                        | "cpu_fuel"
+                        | "memory_bytes"
+                        | "storage_read_bytes"
+                        | "storage_write_bytes"
+                        | "output_bytes"
+                ) {
+                    if let Some(number) = item.as_u64() {
+                        *item = serde_json::Value::String(number.to_string());
+                    } else if item
+                        .as_str()
+                        .and_then(|text| text.parse::<u64>().ok().map(|number| (text, number)))
+                        .is_none_or(|(text, number)| text != number.to_string())
+                    {
+                        return false;
+                    }
+                } else if !normalize_program_u64s(item) {
+                    return false;
+                }
+            }
+        }
+        serde_json::Value::Array(values) => {
+            for item in values {
+                if !normalize_program_u64s(item) {
+                    return false;
+                }
+            }
+        }
+        _ => {}
+    }
+    true
+}
+
+fn agent_response(request_id: &str, response: OutgoingResponse) -> OutgoingResponse {
+    let OutgoingResponse {
+        status,
+        body,
+        retry_after,
+    } = response;
+    let document = serde_json::from_slice::<serde_json::Value>(&body).ok();
+    let body = if (200..300).contains(&status) {
+        document
+            .as_ref()
+            .and_then(|value| value.get("value").or_else(|| value.get("result")))
+            .cloned()
+            .map_or_else(
+                || {
+                    serde_json::json!({
+                        "class": "InternalFault",
+                        "protocol_result_code": null,
+                        "retriability": "Retriable",
+                        "request_id": request_id,
+                        "reason": "invalid_program_success",
+                    })
+                },
+                |mut value| {
+                    if normalize_program_u64s(&mut value) {
+                        serde_json::json!({
+                            "request_id": request_id,
+                            "value": value,
+                            "verification_status": {
+                                "state": "Achieved",
+                                "level": "SequencerSigned",
+                            },
+                        })
+                    } else {
+                        serde_json::json!({
+                            "class": "InternalFault",
+                            "protocol_result_code": null,
+                            "retriability": "Retriable",
+                            "request_id": request_id,
+                            "reason": "invalid_program_u64",
+                        })
+                    }
+                },
+            )
+    } else {
+        let error = document.as_ref().and_then(|value| value.get("error"));
+        let code = error
+            .and_then(|value| value.get("code"))
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("program_request_failed");
+        let reason = agent_reason(code);
+        let protocol_result_code = error
+            .and_then(|value| value.get("protocol_result_code"))
+            .filter(|value| {
+                value
+                    .as_i64()
+                    .and_then(|number| i32::try_from(number).ok())
+                    .is_some()
+            })
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        serde_json::json!({
+            "class": agent_error_class(status, code),
+            "protocol_result_code": protocol_result_code,
+            "retriability": if retry_after.is_some() || status >= 500 { "Retriable" } else { "Terminal" },
+            "request_id": request_id,
+            "reason": reason,
+        })
+    };
+    OutgoingResponse {
+        status: if (200..300).contains(&status) && body.get("class").is_some() {
+            500
+        } else {
+            status
+        },
+        body: body.to_string().into_bytes(),
+        retry_after,
+    }
+}
+
+fn canonical_hex32_text(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn canonical_u64(value: &serde_json::Value) -> Option<u64> {
+    value.as_u64().or_else(|| {
+        value
+            .as_str()
+            .filter(|text| {
+                !text.is_empty()
+                    && text.bytes().all(|byte| byte.is_ascii_digit())
+                    && (*text == "0" || !text.starts_with('0'))
+            })
+            .and_then(|text| text.parse::<u64>().ok())
+    })
+}
+
+fn program_selector(request: &IncomingRequest, expected_program: &str) -> Result<(), ()> {
+    if !media_type_is(request, "application/json")
+        || request.body.is_empty()
+        || request.body.len() > 1024
+    {
+        return Err(());
+    }
+    let selector: ProgramSelectorBody = serde_json::from_slice(&request.body).map_err(|_| ())?;
+    if selector.program_id != expected_program
+        || !canonical_hex32_text(&selector.program_id)
+        || selector.requested_verification_level != "sequencer-signed"
+    {
+        return Err(());
+    }
+    Ok(())
+}
+
+fn program_receipt_selector(
+    request: &IncomingRequest,
+    expected_idempotency: &str,
+) -> Result<String, ()> {
+    if !media_type_is(request, "application/json")
+        || request.body.is_empty()
+        || request.body.len() > 1024
+    {
+        return Err(());
+    }
+    let selector: ProgramReceiptSelectorBody =
+        serde_json::from_slice(&request.body).map_err(|_| ())?;
+    if selector.idempotency_key != expected_idempotency
+        || !canonical_hex32_text(&selector.idempotency_key)
+        || !canonical_hex32_text(&selector.expected_activity_id)
+        || selector.requested_verification_level != "sequencer-signed"
+    {
+        return Err(());
+    }
+    Ok(selector.expected_activity_id)
+}
+
+fn program_activity_selector(request: &IncomingRequest, expected_activity: &str) -> Result<(), ()> {
+    if !media_type_is(request, "application/json")
+        || request.body.is_empty()
+        || request.body.len() > 1024
+    {
+        return Err(());
+    }
+    let selector: ProgramActivitySelectorBody =
+        serde_json::from_slice(&request.body).map_err(|_| ())?;
+    if selector.activity_id != expected_activity
+        || !canonical_hex32_text(&selector.activity_id)
+        || selector.requested_verification_level != "sequencer-signed"
+    {
+        return Err(());
+    }
+    Ok(())
 }
 
 fn trace(request: &IncomingRequest) -> String {
@@ -1255,8 +1554,8 @@ fn program_simulation(
         .and_then(|value| parse_hex32(value).ok());
     let evidence_sequence = evidence
         .get("observed_sequence")
-        .and_then(serde_json::Value::as_u64);
-    let evidence_at = evidence.get("observed_at").and_then(serde_json::Value::as_u64);
+        .and_then(canonical_u64);
+    let evidence_at = evidence.get("observed_at").and_then(canonical_u64);
     let public_key = evidence
         .get("public_key")
         .and_then(serde_json::Value::as_str)
@@ -1320,7 +1619,17 @@ fn program_simulation(
             "result": {
                 "committed": false,
                 "execution": verified_document,
-                "simulation_evidence": evidence,
+                "simulation_evidence": {
+                    "boundary_id": hex(&boundary_id),
+                    "activity_id": hex(&submission.activity_id()),
+                    "previous_state_root": hex(&state_root),
+                    "hypothetical_state_root": hex(&hypothetical),
+                    "observed_sequence": observed_sequence.to_string(),
+                    "observed_at": observed_at.to_string(),
+                    "committed": false,
+                    "public_key": hex(&config.trusted_sequencer_key),
+                    "signature": hex(&signature),
+                },
             },
             "trace": trace_id,
         }),
@@ -1335,7 +1644,12 @@ fn activity(
     program_call: bool,
 ) -> OutgoingResponse {
     let idempotency = match request.headers.get("idempotency-key") {
-        Some(value) if valid_identifier(value, 128) => value,
+        Some(value)
+            if if program_call {
+                canonical_hex32_text(value)
+            } else {
+                valid_identifier(value, 128)
+            } => value,
         _ => return response(400, "idempotency_key_required", None),
     };
     let content_type = request
@@ -1343,10 +1657,16 @@ fn activity(
         .get("content-type")
         .map(String::as_str)
         .unwrap_or("");
-    if !matches!(
-        content_type,
-        "application/json" | "application/octet-stream"
-    ) || request.body.is_empty()
+    let supported_content_type = if program_call {
+        media_type_is(request, "application/json")
+            || media_type_is(request, "application/octet-stream")
+    } else {
+        matches!(
+            content_type,
+            "application/json" | "application/octet-stream"
+        )
+    };
+    if !supported_content_type || request.body.is_empty()
     {
         return response(415, "activity_content_type_required", None);
     }
@@ -1381,7 +1701,7 @@ fn activity(
         Ok(value) => value,
         Err(_) => return response(403, "activity_authorization_refused", None),
     };
-    if !idempotency.eq_ignore_ascii_case(&hex(&verified_submission.idempotency_key())) {
+    if idempotency != &hex(&verified_submission.idempotency_key()) {
         return response(409, "protocol_idempotency_mismatch", None);
     }
     let program_head = match expected_program {
@@ -1772,6 +2092,7 @@ fn resolve_pending_program(
 
 fn read_route(
     config: &Config,
+    request: &IncomingRequest,
     record: &KeyRecord,
     route: ProductionRoute<'_>,
     trace_id: &str,
@@ -1779,6 +2100,27 @@ fn read_route(
     if matches!(route, ProductionRoute::State) {
         return response(503, "principal_state_proof_unavailable", Some(30));
     }
+    let expected_receipt_activity = match &route {
+        ProductionRoute::ProgramRegistry(program) | ProductionRoute::ProgramInterface(program) => {
+            if program_selector(request, program).is_err() {
+                return response(400, "invalid_program_selector", None);
+            }
+            None
+        }
+        ProductionRoute::ProgramReceiptByIdempotency(idempotency) => {
+            match program_receipt_selector(request, idempotency) {
+                Ok(activity_id) => Some(activity_id),
+                Err(()) => return response(400, "invalid_program_receipt_selector", None),
+            }
+        }
+        ProductionRoute::ProgramActivity(activity_id) => {
+            if program_activity_selector(request, activity_id).is_err() {
+                return response(400, "invalid_program_activity_selector", None);
+            }
+            None
+        }
+        _ => None,
+    };
     match config.store.consume_read(
         record,
         now().unwrap_or(0),
@@ -1877,9 +2219,9 @@ fn read_route(
                         "abi_version": head.abi_version,
                         "receipt_digest": hex(&head.receipt_digest),
                         "state_root": hex(&state_root),
-                        "observed_sequence": observed_sequence,
-                        "observed_at": observed_at,
-                        "valid_through": head.valid_through,
+                        "observed_sequence": observed_sequence.to_string(),
+                        "observed_at": observed_at.to_string(),
+                        "valid_through": head.valid_through.to_string(),
                         "verification": "registry-receipt-and-current-head-verified",
                     },
                     "trace": trace_id,
@@ -1921,7 +2263,8 @@ fn read_route(
             let interface = value
                 .get("interface")
                 .and_then(serde_json::Value::as_str)
-                .and_then(|value| decode_hex(value, 952).ok());
+                .and_then(|value| decode_hex(value, 952).ok())
+                .filter(|value| !value.is_empty());
             let interface_digest = value
                 .get("interface_digest")
                 .and_then(serde_json::Value::as_str)
@@ -1932,11 +2275,11 @@ fn read_route(
                 .and_then(|value| parse_hex32(value).ok());
             let observed_sequence = value
                 .get("observed_sequence")
-                .and_then(serde_json::Value::as_u64);
-            let observed_at = value.get("observed_at").and_then(serde_json::Value::as_u64);
+                .and_then(canonical_u64);
+            let observed_at = value.get("observed_at").and_then(canonical_u64);
             let valid_through = value
                 .get("valid_through")
-                .and_then(serde_json::Value::as_u64);
+                .and_then(canonical_u64);
             let version = value
                 .get("version")
                 .and_then(serde_json::Value::as_u64)
@@ -1954,9 +2297,10 @@ fn read_route(
                 .and_then(serde_json::Value::as_str)
                 .and_then(|value| parse_hex32(value).ok());
             let source = value.get("source").cloned();
-            let expected_interface_digest = interface
-                .as_ref()
-                .map(|bytes| <[u8; 32]>::from(Sha256::digest(bytes)));
+            let (Some(interface), Some(interface_digest)) = (interface, interface_digest) else {
+                return response(503, "program_registry_unverified", Some(5));
+            };
+            let expected_interface_digest = <[u8; 32]>::from(Sha256::digest(&interface));
             if value
                 .get("program_id")
                 .and_then(serde_json::Value::as_str)
@@ -1986,13 +2330,13 @@ fn read_route(
                         "version": head.version,
                         "code_hash": hex(&head.code_hash),
                         "abi_version": head.abi_version,
-                        "interface": interface.map(|bytes| hex(&bytes)),
-                        "interface_digest": interface_digest.map(|digest| hex(&digest)),
+                        "interface": hex(&interface),
+                        "interface_digest": hex(&interface_digest),
                         "receipt_digest": hex(&head.receipt_digest),
                         "state_root": head.state_root.map(|root| hex(&root)),
-                        "observed_sequence": head.observed_sequence,
-                        "observed_at": head.observed_at,
-                        "valid_through": head.valid_through,
+                        "observed_sequence": head.observed_sequence.map(|value| value.to_string()),
+                        "observed_at": head.observed_at.map(|value| value.to_string()),
+                        "valid_through": head.valid_through.to_string(),
                         "source": source,
                         "verification": "deployment-interface-and-current-head-verified",
                     },
@@ -2001,7 +2345,7 @@ fn read_route(
             )
         }
         ProductionRoute::ProgramReceiptByIdempotency(idempotency) => {
-            let idempotency = idempotency.to_ascii_lowercase();
+            let idempotency = idempotency.to_owned();
             let scope = digest(&[
                 record.principal_digest.as_bytes(),
                 idempotency.as_bytes(),
@@ -2017,8 +2361,11 @@ fn read_route(
                 Ok(Some(_)) | Ok(None) => return response(404, "program_receipt_not_found", None),
                 Err(_) => return response(503, "persistence_unavailable", Some(5)),
             };
-            if !operation.idempotency_key.eq_ignore_ascii_case(&idempotency) {
+            if operation.idempotency_key != idempotency {
                 return response(404, "program_receipt_not_found", None);
+            }
+            if expected_receipt_activity.as_deref() != Some(operation.activity_id.as_str()) {
+                return response(409, "program_receipt_selector_mismatch", None);
             }
             if operation.state == "pending" {
                 return resolve_pending_program(config, record, &operation, trace_id);
@@ -2043,7 +2390,7 @@ fn read_route(
             json_response(200, serde_json::json!({"ok":true,"result":value,"trace":trace_id}))
         }
         ProductionRoute::ProgramActivity(activity_id) => {
-            let activity_id = activity_id.to_ascii_lowercase();
+            let activity_id = activity_id.to_owned();
             let owner = match config.store.activity_owner(&activity_id) {
                 Ok(Some(value)) => value,
                 Ok(None) => return response(404, "program_activity_not_found", None),
@@ -2062,7 +2409,7 @@ fn read_route(
                 Ok(None) => return response(404, "program_activity_not_found", None),
                 Err(_) => return response(503, "persistence_unavailable", Some(5)),
             };
-            if !operation.activity_id.eq_ignore_ascii_case(&activity_id)
+            if operation.activity_id != activity_id
                 || operation
                     .principal
                     .as_bytes()
@@ -2144,10 +2491,17 @@ fn program_registry_ready(config: &Config) -> bool {
 }
 
 fn route(config: &Config, request: &IncomingRequest) -> OutgoingResponse {
+    let program_request = programs_request_path(&request.method, &request.path);
+    let trace_id = trace(request);
     if request.headers.contains_key("x-layerx-principal")
         || request.headers.contains_key("x-layerx-api-key")
     {
-        return response(400, "untrusted_identity_header", None);
+        let result = response(400, "untrusted_identity_header", None);
+        return if program_request {
+            agent_response(&trace_id, result)
+        } else {
+            result
+        };
     }
     if request.method == "GET" && request.path == "/livez" {
         return json_response(
@@ -2227,23 +2581,45 @@ fn route(config: &Config, request: &IncomingRequest) -> OutgoingResponse {
     }
     let parsed = match production_route(&request.method, &request.path) {
         Ok(value) => value,
-        Err(_) => return response(404, "not_found", None),
+        Err(_) => {
+            let result = response(404, "not_found", None);
+            return if program_request {
+                agent_response(&trace_id, result)
+            } else {
+                result
+            };
+        }
     };
     let record = match authenticate_key(config, request) {
         Ok(value) => value,
-        Err(error) => return error,
+        Err(error) => {
+            return if program_request {
+                agent_response(&trace_id, error)
+            } else {
+                error
+            };
+        }
     };
     if !permits(&record, &parsed) {
-        return response(403, "insufficient_scope", None);
+        let result = response(403, "insufficient_scope", None);
+        return if program_request {
+            agent_response(&trace_id, result)
+        } else {
+            result
+        };
     }
-    let trace_id = trace(request);
-    match parsed {
+    let result = match parsed {
         ProductionRoute::Activity => activity(config, request, &record, &trace_id, false),
         ProductionRoute::ProgramCall => activity(config, request, &record, &trace_id, true),
         ProductionRoute::ProgramSimulation => {
             program_simulation(config, request, &record, &trace_id)
         }
-        read => read_route(config, &record, read, &trace_id),
+        read => read_route(config, request, &record, read, &trace_id),
+    };
+    if program_request {
+        agent_response(&trace_id, result)
+    } else {
+        result
     }
 }
 
@@ -2295,5 +2671,118 @@ fn main() {
     if let Err(error) = run() {
         let _ = writeln!(std::io::stderr(), "layerx-gateway refused startup: {error}");
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod programs_wire_tests {
+    use super::{
+        agent_response, json_response, program_activity_selector, program_receipt_selector,
+        program_selector, response,
+    };
+    use layerx_platform_gateway::http::IncomingRequest;
+    use std::collections::BTreeMap;
+
+    fn selector_request(path: &str, body: serde_json::Value) -> IncomingRequest {
+        IncomingRequest {
+            method: "GET".to_owned(),
+            path: path.to_owned(),
+            headers: BTreeMap::from([(
+                "content-type".to_owned(),
+                "application/json".to_owned(),
+            )]),
+            body: body.to_string().into_bytes(),
+        }
+    }
+
+    #[test]
+    fn agent_program_success_envelope_preserves_terminal_states() {
+        for state in ["refused", "unknown", "executed"] {
+            let output = agent_response(
+                "gw-contract-test",
+                json_response(
+                    if state == "unknown" { 202 } else { 200 },
+                    serde_json::json!({
+                        "ok":true,
+                        "result":{
+                            "state":state,
+                            "global_sequence":u64::MAX,
+                            "usage":{"output_values":"7"}
+                        }
+                    }),
+                ),
+            );
+            let document: serde_json::Value = serde_json::from_slice(&output.body).unwrap();
+            assert_eq!(
+                document,
+                serde_json::json!({
+                    "request_id":"gw-contract-test",
+                    "value":{
+                        "state":state,
+                        "global_sequence":u64::MAX.to_string(),
+                        "usage":{"output_values":7}
+                    },
+                    "verification_status":{"state":"Achieved","level":"SequencerSigned"},
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn agent_program_error_envelope_is_exact() {
+        let output = agent_response(
+            "gw-contract-test",
+            response(409, "idempotency_conflict", None),
+        );
+        let document: serde_json::Value = serde_json::from_slice(&output.body).unwrap();
+        assert_eq!(
+            document,
+            serde_json::json!({
+                "class":"IdempotencyConflict",
+                "protocol_result_code":null,
+                "retriability":"Terminal",
+                "request_id":"gw-contract-test",
+                "reason":"idempotency_conflict",
+            })
+        );
+    }
+
+    #[test]
+    fn program_get_selectors_bind_every_identity_field() {
+        let program = "a".repeat(64);
+        let discovery = selector_request(
+            &format!("/v1/programs/registry/{program}"),
+            serde_json::json!({
+                "program_id":program.as_str(),
+                "requested_verification_level":"sequencer-signed",
+            }),
+        );
+        assert!(program_selector(&discovery, &program).is_ok());
+
+        let idempotency = "b".repeat(64);
+        let activity = "c".repeat(64);
+        let receipt = selector_request(
+            &format!("/v1/programs/receipts/by-idempotency/{idempotency}"),
+            serde_json::json!({
+                "idempotency_key":idempotency.as_str(),
+                "expected_activity_id":activity.as_str(),
+                "requested_verification_level":"sequencer-signed",
+            }),
+        );
+        assert_eq!(
+            program_receipt_selector(&receipt, &idempotency).as_deref(),
+            Ok(activity.as_str())
+        );
+        assert!(program_receipt_selector(&receipt, &"d".repeat(64)).is_err());
+
+        let lookup = selector_request(
+            &format!("/v1/programs/activities/{activity}"),
+            serde_json::json!({
+                "activity_id":activity.as_str(),
+                "requested_verification_level":"sequencer-signed",
+            }),
+        );
+        assert!(program_activity_selector(&lookup, &activity).is_ok());
+        assert!(program_activity_selector(&lookup, &"A".repeat(64)).is_err());
     }
 }

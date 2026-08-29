@@ -124,8 +124,6 @@ unsafe extern "C" {
         program_id: *const c_uchar,
         program: *mut CoreProgram,
     ) -> c_int;
-    fn platform_emulator_program_count(emulator: *const c_void) -> usize;
-    fn platform_emulator_program_at(emulator: *const c_void, index: usize, program_id: *mut c_uchar) -> c_int;
     fn platform_emulator_cell(
         emulator: *const c_void,
         index: usize,
@@ -225,6 +223,28 @@ struct ProgramCallBody {
     budget: ProgramCallBudgetBody,
     capabilities: Vec<String>,
     signed_activity: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProgramSelectorBody {
+    program_id: String,
+    requested_verification_level: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProgramReceiptSelectorBody {
+    idempotency_key: String,
+    expected_activity_id: String,
+    requested_verification_level: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProgramActivitySelectorBody {
+    activity_id: String,
+    requested_verification_level: String,
 }
 
 #[derive(Deserialize)]
@@ -392,6 +412,270 @@ fn core_response(trace: u64, code: i32) -> Response {
     refusal(trace, status, &name, "the LayerX core refused the request")
 }
 
+fn programs_route(method: &str, path: &str) -> bool {
+    match (method, path) {
+        ("POST", "/v1/programs/call") | ("POST", "/v1/programs/simulate") => true,
+        ("GET", path) if path.starts_with("/v1/programs/registry/") => {
+            let tail = &path[22..];
+            canonical_hex32_text(tail.strip_suffix("/interface").unwrap_or(tail))
+        }
+        ("GET", path) if path.starts_with("/v1/programs/receipts/by-idempotency/") => path
+            .strip_prefix("/v1/programs/receipts/by-idempotency/")
+            .is_some_and(canonical_hex32_text),
+        ("GET", path) if path.starts_with("/v1/programs/activities/") => path
+            .strip_prefix("/v1/programs/activities/")
+            .is_some_and(canonical_hex32_text),
+        _ => false,
+    }
+}
+
+fn programs_request_path(method: &str, path: &str) -> bool {
+    matches!(
+        (method, path),
+        ("POST", "/v1/programs/call") | ("POST", "/v1/programs/simulate")
+    ) || (method == "GET"
+        && (path.starts_with("/v1/programs/registry/")
+            || path.starts_with("/v1/programs/receipts/by-idempotency/")
+            || path.starts_with("/v1/programs/activities/")))
+}
+
+fn agent_error_class(status: u16, code: &str) -> &'static str {
+    if code.starts_with("LXP_ERR_") {
+        "CoreRejection"
+    } else if code.contains("idempotency") {
+        "IdempotencyConflict"
+    } else if code.contains("quota") {
+        "RateLimit"
+    } else if code.contains("authorization")
+        || code.contains("scope")
+        || code.contains("not_active")
+        || code.contains("refused")
+    {
+        "PolicyRefusal"
+    } else if code.contains("verification")
+        || code.contains("unverified")
+        || code.contains("invalid_output")
+        || code.contains("selector_mismatch")
+        || code.contains("binding_invalid")
+    {
+        "VerificationFailure"
+    } else if status == 404 || code.contains("absent") || code.contains("unknown_program") {
+        "UnavailableCapability"
+    } else if code.contains("invalid") || code.contains("required") || status == 415 {
+        "ProtocolIncompatibility"
+    } else if status >= 500 {
+        "TransportFailure"
+    } else {
+        "InternalFault"
+    }
+}
+
+fn agent_reason(code: &str) -> String {
+    let mut reason = String::with_capacity(code.len().min(128));
+    for byte in code.bytes().take(128) {
+        reason.push(char::from(match byte {
+            b'a'..=b'z' | b'0'..=b'9' | b'_' | b'.' => byte,
+            b'A'..=b'Z' => byte.to_ascii_lowercase(),
+            _ => b'_',
+        }));
+    }
+    if reason.is_empty() {
+        "program_request_failed".to_owned()
+    } else {
+        reason
+    }
+}
+
+fn normalize_program_u64s(value: &mut serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Object(object) => {
+            for (key, item) in object {
+                if key == "output_values" {
+                    let output_values = item.as_u64().or_else(|| {
+                        item.as_str().and_then(|text| {
+                            text.parse::<u64>()
+                                .ok()
+                                .filter(|number| text == number.to_string())
+                        })
+                    });
+                    let Some(output_values) = output_values
+                        .and_then(|number| u32::try_from(number).ok())
+                    else {
+                        return false;
+                    };
+                    *item = serde_json::json!(output_values);
+                } else if matches!(
+                    key.as_str(),
+                    "global_sequence"
+                        | "observed_sequence"
+                        | "observed_at"
+                        | "valid_through"
+                        | "cpu_fuel"
+                        | "memory_bytes"
+                        | "storage_read_bytes"
+                        | "storage_write_bytes"
+                        | "output_bytes"
+                ) {
+                    if let Some(number) = item.as_u64() {
+                        *item = serde_json::Value::String(number.to_string());
+                    } else if item
+                        .as_str()
+                        .and_then(|text| text.parse::<u64>().ok().map(|number| (text, number)))
+                        .is_none_or(|(text, number)| text != number.to_string())
+                    {
+                        return false;
+                    }
+                } else if !normalize_program_u64s(item) {
+                    return false;
+                }
+            }
+        }
+        serde_json::Value::Array(values) => {
+            for item in values {
+                if !normalize_program_u64s(item) {
+                    return false;
+                }
+            }
+        }
+        _ => {}
+    }
+    true
+}
+
+fn agent_response(trace: u64, response: Response) -> Response {
+    let Response {
+        status,
+        content_type: _,
+        body,
+    } = response;
+    let request_id = format!("emu-{trace:016x}");
+    let document = serde_json::from_slice::<serde_json::Value>(&body).ok();
+    let body = if (200..300).contains(&status) {
+        document
+            .as_ref()
+            .and_then(|value| value.get("value").or_else(|| value.get("result")))
+            .cloned()
+            .map_or_else(
+                || {
+                    serde_json::json!({
+                        "class": "InternalFault",
+                        "protocol_result_code": null,
+                        "retriability": "Retriable",
+                        "request_id": request_id.as_str(),
+                        "reason": "invalid_program_success",
+                    })
+                },
+                |mut value| {
+                    if normalize_program_u64s(&mut value) {
+                        serde_json::json!({
+                            "request_id": request_id.as_str(),
+                            "value": value,
+                            "verification_status": {
+                                "state": "Achieved",
+                                "level": "SequencerSigned",
+                            },
+                        })
+                    } else {
+                        serde_json::json!({
+                            "class": "InternalFault",
+                            "protocol_result_code": null,
+                            "retriability": "Retriable",
+                            "request_id": request_id.as_str(),
+                            "reason": "invalid_program_u64",
+                        })
+                    }
+                },
+            )
+    } else {
+        let error = document.as_ref().and_then(|value| value.get("error"));
+        let code = error
+            .and_then(|value| value.get("code"))
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("program_request_failed");
+        let reason = agent_reason(code);
+        let protocol_result_code = error
+            .and_then(|value| value.get("protocol_result_code"))
+            .filter(|value| {
+                value
+                    .as_i64()
+                    .and_then(|number| i32::try_from(number).ok())
+                    .is_some()
+            })
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        serde_json::json!({
+            "class": agent_error_class(status, code),
+            "protocol_result_code": protocol_result_code,
+            "retriability": if status >= 500 { "Retriable" } else { "Terminal" },
+            "request_id": request_id.as_str(),
+            "reason": reason,
+        })
+    };
+    Response {
+        status: if (200..300).contains(&status) && body.get("class").is_some() {
+            500
+        } else {
+            status
+        },
+        content_type: "application/json",
+        body: body.to_string().into_bytes(),
+    }
+}
+
+fn canonical_hex32_text(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn program_selector(request: &Request, expected_program: &str) -> Result<(), String> {
+    if request.body.is_empty() || request.body.len() > 1024 {
+        return Err("program selector must carry bounded canonical JSON".to_owned());
+    }
+    let selector = decode_json::<ProgramSelectorBody>(request)?;
+    if selector.program_id != expected_program
+        || !canonical_hex32_text(&selector.program_id)
+        || selector.requested_verification_level != "sequencer-signed"
+    {
+        return Err("program selector does not match the route and verification level".to_owned());
+    }
+    Ok(())
+}
+
+fn program_receipt_selector(
+    request: &Request,
+    expected_idempotency: &str,
+) -> Result<String, String> {
+    if request.body.is_empty() || request.body.len() > 1024 {
+        return Err("program receipt selector must carry bounded canonical JSON".to_owned());
+    }
+    let selector = decode_json::<ProgramReceiptSelectorBody>(request)?;
+    if selector.idempotency_key != expected_idempotency
+        || !canonical_hex32_text(&selector.idempotency_key)
+        || !canonical_hex32_text(&selector.expected_activity_id)
+        || selector.requested_verification_level != "sequencer-signed"
+    {
+        return Err("program receipt selector does not match the route and verification level".to_owned());
+    }
+    Ok(selector.expected_activity_id)
+}
+
+fn program_activity_selector(request: &Request, expected_activity: &str) -> Result<(), String> {
+    if request.body.is_empty() || request.body.len() > 1024 {
+        return Err("program activity selector must carry bounded canonical JSON".to_owned());
+    }
+    let selector = decode_json::<ProgramActivitySelectorBody>(request)?;
+    if selector.activity_id != expected_activity
+        || !canonical_hex32_text(&selector.activity_id)
+        || selector.requested_verification_level != "sequencer-signed"
+    {
+        return Err("program activity selector does not match the route and verification level".to_owned());
+    }
+    Ok(())
+}
+
 fn parse_request(stream: &mut TcpStream) -> Result<Request, String> {
     let mut bytes = Vec::with_capacity(4096);
     let mut chunk = [0_u8; 4096];
@@ -472,12 +756,19 @@ fn parse_request(stream: &mut TcpStream) -> Result<Request, String> {
             has_host = true;
         } else if name.eq_ignore_ascii_case("idempotency-key") {
             if idempotency_key.is_some()
-                || value.len() != 64
-                || !value.bytes().all(|byte| byte.is_ascii_hexdigit())
+                || if target == "/v1/programs/call" {
+                    value.is_empty() || value.len() > 128
+                } else {
+                    value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit())
+                }
             {
                 return Err("invalid idempotency key".into());
             }
-            idempotency_key = Some(value.to_ascii_lowercase());
+            idempotency_key = Some(if target == "/v1/programs/call" {
+                value.to_owned()
+            } else {
+                value.to_ascii_lowercase()
+            });
         } else if name.eq_ignore_ascii_case("transfer-encoding") {
             return Err("transfer encoding is not supported".into());
         }
@@ -488,7 +779,11 @@ fn parse_request(stream: &mut TcpStream) -> Result<Request, String> {
     if matches!(method, "POST" | "PUT") && !has_content_length {
         return Err("write request is missing content length".into());
     }
-    if !matches!(method, "POST" | "PUT") && content_length != 0 {
+    let programs_get = method == "GET"
+        && (target.starts_with("/v1/programs/registry/")
+            || target.starts_with("/v1/programs/receipts/by-idempotency/")
+            || target.starts_with("/v1/programs/activities/"));
+    if !matches!(method, "POST" | "PUT") && !programs_get && content_length != 0 {
         return Err("read request may not carry a body".into());
     }
     if content_length > MAX_REQUEST_BYTES {
@@ -616,9 +911,15 @@ fn programs_registry() -> Result<(ActivityType, ModuleRegistry), String> {
 fn decode_program_activity(request: &Request) -> Result<DecodedProgramActivity, String> {
     let media_type = request.content_type.split(';').next().unwrap_or_default().trim();
     let (signed, expected_call) = if media_type == "application/octet-stream" {
+        if request.body.len() > MAX_RECEIPT_BYTES {
+            return Err("signed program activity exceeds its bound".to_owned());
+        }
         (request.body.clone(), None)
     } else if media_type == "application/json" {
         let body = decode_json::<ProgramCallBody>(request)?;
+        if !canonical_hex32_text(&body.program_id) {
+            return Err("program id must be canonical 32-byte hexadecimal".to_owned());
+        }
         let program_bytes = hex_decode(&body.program_id)?;
         let program_id: [u8; 32] = program_bytes
             .try_into()
@@ -662,6 +963,11 @@ fn decode_program_activity(request: &Request) -> Result<DecodedProgramActivity, 
             .collect::<Result<Vec<_>, _>>()?;
         let capabilities = RequestedCapabilities::new(&requested)
             .map_err(|_| "program capabilities are not canonical".to_owned())?;
+        if body.signed_activity.len() % 2 != 0
+            || body.signed_activity.len() / 2 > MAX_RECEIPT_BYTES
+        {
+            return Err("signed program activity exceeds its bound".to_owned());
+        }
         (
             hex_decode(&body.signed_activity)?,
             Some(ProgramCall::new(program, calldata, budget, capabilities)),
@@ -808,6 +1114,7 @@ fn verified_program_document(
     call_graph: &[u8],
     program_id: [u8; 32],
     guest_abi_version: u16,
+    sequencer_public_key: [u8; 32],
     state: &str,
     idempotency_key: Option<&str>,
 ) -> Result<serde_json::Value, String> {
@@ -833,20 +1140,27 @@ fn verified_program_document(
         "guest_abi_version":guest_abi_version,
         "module_version":protocol.module_version(),
         "batch_id":hex_encode(&protocol.batch_id()),
-        "global_sequence":protocol.global_sequence(),
+        "global_sequence":protocol.global_sequence().to_string(),
         "result_code":verified.result_code(),
         "state_root":hex_encode(&protocol.resulting_state_root()),
         "receipt":hex_encode(verified.receipt().canonical_bytes()),
         "receipt_digest":hex_encode(&receipt_digest),
         "terminal_payload":hex_encode(terminal_payload),
         "call_graph":hex_encode(call_graph),
+        "authority":{
+            "batch_id":hex_encode(&protocol.batch_id()),
+            "asset":hex_encode(&protocol.asset()),
+            "previous_state_root":hex_encode(&protocol.previous_state_root()),
+            "resulting_state_root":hex_encode(&protocol.resulting_state_root()),
+            "sequencer_public_key":hex_encode(&sequencer_public_key),
+        },
         "usage":{
-            "cpu_fuel":verified.cpu_fuel(),
-            "memory_bytes":verified.memory_bytes(),
-            "storage_read_bytes":verified.storage_read_bytes(),
-            "storage_write_bytes":verified.storage_write_bytes(),
+            "cpu_fuel":verified.cpu_fuel().to_string(),
+            "memory_bytes":verified.memory_bytes().to_string(),
+            "storage_read_bytes":verified.storage_read_bytes().to_string(),
+            "storage_write_bytes":verified.storage_write_bytes().to_string(),
             "output_values":verified.output_values(),
-            "output_bytes":verified.output_bytes(),
+            "output_bytes":verified.output_bytes().to_string(),
             "fee_units":verified.fee_units().to_string(),
         },
         "outcome":program_outcome_json(verified.outcome()),
@@ -957,6 +1271,7 @@ fn program_call(emulator: &mut Emulator, request: &Request, trace: u64) -> Respo
         &material.call_graph,
         program_id,
         head.abi_version,
+        emulator.signing_key.verifying_key().to_bytes(),
         "executed",
         Some(&protocol_idempotency),
     ) {
@@ -1207,54 +1522,118 @@ fn advance_trace(trace: &mut u64) -> Option<u64> {
     Some(next)
 }
 
-fn route(emulator: &mut Emulator, request: &Request) -> Response {
-    let Some(trace) = advance_trace(&mut emulator.trace) else {
+fn program_receipt(emulator: &Emulator, request: &Request, trace: u64) -> Response {
+    let Some(idempotency) = request
+        .path
+        .strip_prefix("/v1/programs/receipts/by-idempotency/")
+    else {
+        return refusal(trace, 404, "program_receipt_not_found", "program receipt route is invalid");
+    };
+    if !canonical_hex32_text(idempotency) {
         return refusal(
+            trace,
+            400,
+            "invalid_argument",
+            "idempotency key must be canonical 32-byte hexadecimal",
+        );
+    }
+    let expected_activity = match program_receipt_selector(request, idempotency) {
+        Ok(value) => value,
+        Err(error) => return refusal(trace, 400, "invalid_program_receipt_selector", &error),
+    };
+    match emulator.program_operations.get(idempotency) {
+        Some(operation) if operation.activity_id == expected_activity => {
+            success(trace, &operation.response)
+        }
+        Some(_) => refusal(
+            trace,
+            409,
+            "program_receipt_selector_mismatch",
+            "the expected activity is not bound to this idempotency key",
+        ),
+        None => refusal(
+            trace,
+            404,
+            "program_receipt_not_found",
+            "program receipt is not present in this emulator process",
+        ),
+    }
+}
+
+fn program_activity(emulator: &Emulator, request: &Request, trace: u64) -> Response {
+    let Some(activity_id) = request.path.strip_prefix("/v1/programs/activities/") else {
+        return refusal(trace, 404, "program_activity_not_found", "program activity route is invalid");
+    };
+    if !canonical_hex32_text(activity_id) {
+        return refusal(
+            trace,
+            400,
+            "invalid_argument",
+            "activity id must be canonical 32-byte hexadecimal",
+        );
+    }
+    if let Err(error) = program_activity_selector(request, activity_id) {
+        return refusal(trace, 400, "invalid_program_activity_selector", &error);
+    }
+    let operation = emulator
+        .program_activity_operations
+        .get(activity_id)
+        .and_then(|idempotency| emulator.program_operations.get(idempotency));
+    match operation {
+        Some(operation) if operation.activity_id == activity_id => {
+            success(trace, &operation.response)
+        }
+        Some(_) => refusal(
+            trace,
+            503,
+            "program_activity_binding_invalid",
+            "the stored activity binding is inconsistent",
+        ),
+        None => refusal(
+            trace,
+            404,
+            "program_activity_not_found",
+            "program activity is not present in this emulator process",
+        ),
+    }
+}
+
+fn route(emulator: &mut Emulator, request: &Request) -> Response {
+    let program_request = programs_request_path(&request.method, &request.path);
+    let Some(trace) = advance_trace(&mut emulator.trace) else {
+        let result = refusal(
             u64::MAX,
             503,
             "trace_exhausted",
             "the emulator trace space is exhausted",
         );
+        return if program_request {
+            agent_response(u64::MAX, result)
+        } else {
+            result
+        };
     };
-    match (request.method.as_str(), request.path.as_str()) {
+    let result = match (request.method.as_str(), request.path.as_str()) {
         ("GET", "/healthz") => health(emulator, trace),
         ("POST", "/v1/activities") => submit(emulator, request, trace),
         ("POST", "/v1/programs/call") => program_call(emulator, request, trace),
         ("POST", "/v1/programs/simulate") => program_simulate(emulator, request, trace),
-        ("GET", path) if path.starts_with("/v1/programs/receipts/by-idempotency/") => {
-            let idempotency = &path[37..];
-            if idempotency.len() != 64
-                || !idempotency.bytes().all(|byte| byte.is_ascii_hexdigit())
-            {
-                return refusal(trace, 400, "invalid_argument", "idempotency key must be 32-byte hex");
-            }
-            let canonical = idempotency.to_ascii_lowercase();
-            match emulator.program_operations.get(&canonical) {
-                Some(operation) => success(trace, &operation.response),
-                None => refusal(trace, 404, "program_receipt_not_found", "program receipt is not present in this emulator process"),
-            }
+        ("GET", path)
+            if programs_route("GET", path)
+                && path.starts_with("/v1/programs/receipts/by-idempotency/") =>
+        {
+            program_receipt(emulator, request, trace)
         }
-        ("GET", path) if path.starts_with("/v1/programs/activities/") => {
-            let activity_id = &path[24..];
-            if activity_id.len() != 64
-                || !activity_id.bytes().all(|byte| byte.is_ascii_hexdigit())
-            {
-                return refusal(trace, 400, "invalid_argument", "activity id must be 32-byte hex");
-            }
-            let canonical = activity_id.to_ascii_lowercase();
-            let operation = emulator
-                .program_activity_operations
-                .get(&canonical)
-                .and_then(|idempotency| emulator.program_operations.get(idempotency));
-            match operation {
-                Some(operation) => success(trace, &operation.response),
-                None => refusal(trace, 404, "program_activity_not_found", "program activity is not present in this emulator process"),
-            }
+        ("GET", path)
+            if programs_route("GET", path) && path.starts_with("/v1/programs/activities/") =>
+        {
+            program_activity(emulator, request, trace)
         }
         ("GET", "/v1/state") => inspect(emulator, trace),
-        ("GET", "/v1/programs/registry") => program_registry_list(emulator, trace),
-        ("GET", path) if path.starts_with("/v1/programs/registry/") => {
-            program_registry_read(emulator, path, trace)
+        ("GET", path)
+            if programs_route("GET", path) && path.starts_with("/v1/programs/registry/") =>
+        {
+            program_registry_read(emulator, request, path, trace)
         }
         ("POST", "/__emulator/accounts/prefund") => prefund(emulator, request, trace),
         ("POST", "/__emulator/time/set") => update_time(emulator, request, trace, false),
@@ -1284,9 +1663,6 @@ fn route(emulator: &mut Emulator, request: &Request) -> Response {
         (
             _,
             "/v1/activities"
-            | "/v1/programs/registry"
-            | "/v1/programs/call"
-            | "/v1/programs/simulate"
             | "/v1/state"
             | "/__emulator/accounts/prefund"
             | "/__emulator/time/set"
@@ -1300,28 +1676,36 @@ fn route(emulator: &mut Emulator, request: &Request) -> Response {
             "method is not supported for this route",
         ),
         _ => refusal(trace, 404, "not_found", "route does not exist"),
+    };
+    if program_request {
+        agent_response(trace, result)
+    } else {
+        result
     }
 }
 
-fn program_registry_list(emulator: &Emulator, trace: u64) -> Response {
-    let count = unsafe { platform_emulator_program_count(emulator.core) };
-    let mut identifiers = Vec::with_capacity(count);
-    for index in 0..count {
-        let mut id = [0_u8; 32];
-        if unsafe { platform_emulator_program_at(emulator.core, index, id.as_mut_ptr()) } != 0 {
-            return refusal(trace, 503, "core_invalid_output", "program registry enumeration failed");
-        }
-        identifiers.push(format!("\"{}\"", hex_encode(&id)));
-    }
-    success(trace, &format!("{{\"program_ids\":[{}]}}", identifiers.join(",")))
-}
-
-fn program_registry_read(emulator: &mut Emulator, path: &str, trace: u64) -> Response {
+fn program_registry_read(
+    emulator: &mut Emulator,
+    request: &Request,
+    path: &str,
+    trace: u64,
+) -> Response {
     let tail = &path[22..];
     let (program_text, interface_only) = match tail.strip_suffix("/interface") {
         Some(value) => (value, true),
         None => (tail, false),
     };
+    if !canonical_hex32_text(program_text) {
+        return refusal(
+            trace,
+            400,
+            "invalid_argument",
+            "program id must be canonical 32-byte hexadecimal",
+        );
+    }
+    if let Err(error) = program_selector(request, program_text) {
+        return refusal(trace, 400, "invalid_program_selector", &error);
+    }
     let bytes = match hex_decode(program_text) {
         Ok(bytes) if bytes.len() == 32 => bytes,
         _ => return refusal(trace, 400, "invalid_argument", "program id must be 32-byte hex"),
@@ -1357,9 +1741,9 @@ fn program_registry_read(emulator: &mut Emulator, path: &str, trace: u64) -> Res
             "abi_version":program.abi_version,
             "receipt_digest":hex_encode(&program.deployment_receipt_digest),
             "state_root":hex_encode(&program.state_root),
-            "observed_sequence":program.observed_sequence,
-            "observed_at":live.timestamp_ms,
-            "valid_through":valid_through,
+            "observed_sequence":program.observed_sequence.to_string(),
+            "observed_at":live.timestamp_ms.to_string(),
+            "valid_through":valid_through.to_string(),
             "verification":"registry-receipt-and-current-head-verified",
         });
         return success(trace, &discovery.to_string());
@@ -1381,9 +1765,9 @@ fn program_registry_read(emulator: &mut Emulator, path: &str, trace: u64) -> Res
         "interface_digest":hex_encode(&interface_digest),
         "receipt_digest":hex_encode(&program.deployment_receipt_digest),
         "state_root":hex_encode(&program.state_root),
-        "observed_sequence":program.observed_sequence,
-        "observed_at":live.timestamp_ms,
-        "valid_through":valid_through,
+        "observed_sequence":program.observed_sequence.to_string(),
+        "observed_at":live.timestamp_ms.to_string(),
+        "valid_through":valid_through.to_string(),
         "source":{"status":"unpublished"},
         "verification":"deployment-interface-and-current-head-verified",
     });
@@ -1456,6 +1840,7 @@ fn program_simulate(emulator: &mut Emulator, request: &Request, trace: u64) -> R
         &material.call_graph,
         program_id,
         head.abi_version,
+        emulator.signing_key.verifying_key().to_bytes(),
         "simulated",
         None,
     ) {
@@ -1492,8 +1877,8 @@ fn program_simulate(emulator: &mut Emulator, request: &Request, trace: u64) -> R
             "activity_id":hex_encode(&decoded.activity_id),
             "previous_state_root":hex_encode(&head.state_root),
             "hypothetical_state_root":hex_encode(&hypothetical_state_root),
-            "observed_sequence":head.observed_sequence,
-            "observed_at":live.timestamp_ms,
+            "observed_sequence":head.observed_sequence.to_string(),
+            "observed_at":live.timestamp_ms.to_string(),
             "committed":false,
             "public_key":hex_encode(&signing.verifying_key().to_bytes()),
             "signature":hex_encode(&evidence_signature),
@@ -1745,7 +2130,11 @@ mod boundary_tests {
 
 #[cfg(test)]
 mod program_call_tests {
-    use super::{decode_activity, hex_decode, Request};
+    use super::{
+        agent_response, decode_activity, decode_program_activity, hex_decode,
+        program_activity_selector, program_receipt_selector, program_selector, programs_route,
+        refusal, success, Request, MAX_RECEIPT_BYTES,
+    };
 
     /// A representative canonical program-call activity. The value only has to
     /// be the exact bytes both ingress forms carry unchanged; the emulator hands
@@ -1819,5 +2208,147 @@ mod program_call_tests {
         };
         assert!(decode_activity(&duplicate).is_err());
         assert!(decode_activity(&unknown).is_err());
+    }
+
+    #[test]
+    fn program_routes_share_the_exact_agent_envelope() {
+        for state in ["refused", "unknown", "executed"] {
+            let output = agent_response(
+                7,
+                success(
+                    7,
+                    &format!(
+                        "{{\"state\":\"{state}\",\"global_sequence\":{},\"usage\":{{\"output_values\":\"7\"}}}}",
+                        u64::MAX
+                    ),
+                ),
+            );
+            let document: serde_json::Value = serde_json::from_slice(&output.body).unwrap();
+            assert_eq!(
+                document,
+                serde_json::json!({
+                    "request_id":"emu-0000000000000007",
+                    "value":{
+                        "state":state,
+                        "global_sequence":u64::MAX.to_string(),
+                        "usage":{"output_values":7}
+                    },
+                    "verification_status":{"state":"Achieved","level":"SequencerSigned"},
+                })
+            );
+        }
+
+        let output = agent_response(
+            8,
+            refusal(8, 409, "idempotency_conflict", "different activity"),
+        );
+        let document: serde_json::Value = serde_json::from_slice(&output.body).unwrap();
+        assert_eq!(
+            document,
+            serde_json::json!({
+                "class":"IdempotencyConflict",
+                "protocol_result_code":null,
+                "retriability":"Terminal",
+                "request_id":"emu-0000000000000008",
+                "reason":"idempotency_conflict",
+            })
+        );
+    }
+
+    #[test]
+    fn emulator_exposes_only_the_six_program_operation_routes() {
+        let id = "a".repeat(64);
+        assert!(programs_route("POST", "/v1/programs/call"));
+        assert!(programs_route("POST", "/v1/programs/simulate"));
+        assert!(programs_route(
+            "GET",
+            &format!("/v1/programs/registry/{id}")
+        ));
+        assert!(programs_route(
+            "GET",
+            &format!("/v1/programs/registry/{id}/interface")
+        ));
+        assert!(programs_route(
+            "GET",
+            &format!("/v1/programs/receipts/by-idempotency/{id}")
+        ));
+        assert!(programs_route(
+            "GET",
+            &format!("/v1/programs/activities/{id}")
+        ));
+        assert!(!programs_route("GET", "/v1/programs/registry"));
+        assert!(!programs_route(
+            "GET",
+            &format!("/v1/programs/registry/{id}/source")
+        ));
+        assert!(!programs_route(
+            "GET",
+            &format!("/v1/programs/activities/{}", "A".repeat(64))
+        ));
+    }
+
+    #[test]
+    fn program_get_selectors_bind_route_and_expected_activity() {
+        let program = "a".repeat(64);
+        let discovery = Request {
+            method: "GET".to_owned(),
+            path: format!("/v1/programs/registry/{program}"),
+            content_type: "application/json".to_owned(),
+            idempotency_key: None,
+            body: serde_json::json!({
+                "program_id":program.as_str(),
+                "requested_verification_level":"sequencer-signed",
+            })
+            .to_string()
+            .into_bytes(),
+        };
+        assert!(program_selector(&discovery, &program).is_ok());
+
+        let idempotency = "b".repeat(64);
+        let activity = "c".repeat(64);
+        let receipt = Request {
+            method: "GET".to_owned(),
+            path: format!("/v1/programs/receipts/by-idempotency/{idempotency}"),
+            content_type: "application/json".to_owned(),
+            idempotency_key: None,
+            body: serde_json::json!({
+                "idempotency_key":idempotency.as_str(),
+                "expected_activity_id":activity.as_str(),
+                "requested_verification_level":"sequencer-signed",
+            })
+            .to_string()
+            .into_bytes(),
+        };
+        assert_eq!(
+            program_receipt_selector(&receipt, &idempotency).as_deref(),
+            Ok(activity.as_str())
+        );
+        assert!(program_receipt_selector(&receipt, &"d".repeat(64)).is_err());
+
+        let lookup = Request {
+            method: "GET".to_owned(),
+            path: format!("/v1/programs/activities/{activity}"),
+            content_type: "application/json".to_owned(),
+            idempotency_key: None,
+            body: serde_json::json!({
+                "activity_id":activity.as_str(),
+                "requested_verification_level":"sequencer-signed",
+            })
+            .to_string()
+            .into_bytes(),
+        };
+        assert!(program_activity_selector(&lookup, &activity).is_ok());
+    }
+
+    #[test]
+    fn signed_program_activity_is_bounded_to_one_mebibyte() {
+        let request = Request {
+            method: "POST".to_owned(),
+            path: "/v1/programs/call".to_owned(),
+            content_type: "application/octet-stream".to_owned(),
+            idempotency_key: Some("a".repeat(64)),
+            body: vec![0; MAX_RECEIPT_BYTES + 1],
+        };
+        assert!(decode_program_activity(&request).is_err());
     }
 }
