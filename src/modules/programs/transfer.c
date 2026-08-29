@@ -37,6 +37,34 @@ static lx_account *account_by_id(lx_account_registry *accounts,
     return NULL;
 }
 
+static lxp_result source_authority_add(
+    lxp_transfer_source_authority
+        authorities[LXP_MAX_TRANSFER_SET_LEGS],
+    size_t *authority_count, const lxp_transfer_leg *leg,
+    const lxp_authority_resolved *resolved)
+{
+    lxp_transfer_source_authority *authority;
+    size_t index;
+    if (authorities == NULL || authority_count == NULL || leg == NULL ||
+        leg->from == NULL || resolved == NULL)
+        return LXP_ERR_NON_CANONICAL;
+    if (lxp_ct_memcmp(leg->from->id, resolved->principal, 32U) != 0)
+        return LXP_ERR_AUTH_SCOPE;
+    for (index = 0U; index < *authority_count; ++index)
+        if (lxp_ct_memcmp(authorities[index].authorized_from,
+                          leg->from->id, 32U) == 0)
+            return LXP_OK;
+    if (*authority_count >= LXP_MAX_TRANSFER_SET_LEGS)
+        return LXP_ERR_LENGTH_LIMIT;
+    authority = &authorities[*authority_count];
+    (void)memset(authority, 0, sizeof(*authority));
+    (void)memcpy(authority->authorized_from, leg->from->id, 32U);
+    authority->debit_authority_kind = LXP_AUTH_OWNER;
+    authority->protocol_system_capability = false;
+    ++*authority_count;
+    return LXP_OK;
+}
+
 lxp_result lxp_programs_transfer_decode(lxp_module_ctx *ctx,
                                         const uint8_t *payload,
                                         size_t payload_length,
@@ -122,17 +150,25 @@ lxp_result lxp_programs_transfer_execute_root(
     const programs_transfer_activity *value =
         (const programs_transfer_activity *)decoded;
     lx_programs_transfer_runtime *runtime;
+    lxp_transfer_source_authority
+        source_authorities[LXP_MAX_TRANSFER_SET_LEGS];
     lxp_transfer_set set;
     lxp_receipt receipt;
+    lx_account *sequence_account;
+    size_t source_authority_count = 0U;
     size_t i;
     lxp_result status;
-    (void)activity;
     (void)effects;
-    if (ctx == NULL || authority == NULL || value == NULL || transfer_root == NULL)
+    if (ctx == NULL || activity == NULL || authority == NULL || value == NULL ||
+        transfer_root == NULL)
         return LXP_ERR_NON_CANONICAL;
     runtime = (lx_programs_transfer_runtime *)lxp_ctx_module_runtime(ctx);
     if (runtime == NULL || runtime->accounts == NULL || runtime->assets == NULL)
         return LXP_ERR_MODULE_DISABLED;
+    sequence_account = account_by_id(runtime->accounts, authority->principal);
+    if (sequence_account == NULL)
+        return LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE;
+    (void)memset(source_authorities, 0, sizeof(source_authorities));
     (void)memset(&set, 0, sizeof(set));
     set.leg_count = value->leg_count;
     for (i = 0U; i < value->leg_count; ++i) {
@@ -146,14 +182,20 @@ lxp_result lxp_programs_transfer_execute_root(
                                         read_u64(leg + 104U)};
         set.legs[i].reason = LXP_REASON_PAYMENT;
         set.legs[i].supply_mode = LXP_TRANSFER_CONSERVED;
+        status = source_authority_add(source_authorities,
+                                      &source_authority_count,
+                                      &set.legs[i], authority);
+        if (status != LXP_OK) return status;
     }
     set.context.assets = runtime->assets;
     set.context.asset_count = runtime->asset_count;
     (void)memcpy(set.context.authorized_from, authority->principal, 32U);
-    set.context.actor_sequence = lxp_ctx_global_sequence(ctx);
+    set.context.actor_sequence = activity->account_sequence;
     set.context.batch_timestamp = lxp_ctx_batch_timestamp_ms(ctx);
-    set.context.sequence_account = set.legs[0].from;
+    set.context.sequence_account = sequence_account;
     set.context.debit_authority_kind = LXP_AUTH_OWNER;
+    set.context.source_authorities = source_authorities;
+    set.context.source_authority_count = source_authority_count;
     (void)memset(&receipt, 0, sizeof(receipt));
     status = lxp_ctx_emit_transfer_set(ctx, &set, &receipt);
     if (status != LXP_OK) return status;

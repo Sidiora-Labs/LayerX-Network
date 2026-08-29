@@ -70,6 +70,7 @@ static void leg(uint8_t *out, const uint8_t from[32], const uint8_t asset[32],
 
 static int dispatch(lxp_kernel *kernel, lxp_authority_resolved *authority,
                     uint8_t *payload, size_t payload_length,
+                    uint64_t account_sequence,
                     lxp_result expected)
 {
     uint8_t arena_bytes[8192];
@@ -81,6 +82,7 @@ static int dispatch(lxp_kernel *kernel, lxp_authority_resolved *authority,
     lxp_result result = LXP_OK;
     (void)memset(&activity, 0, sizeof(activity));
     activity.activity_type = LX_PROGRAMS_TRANSFER;
+    activity.account_sequence = account_sequence;
     activity.payload = (lxp_byte_span){payload, payload_length};
     if (lxp_arena_init(&arena, arena_bytes, sizeof(arena_bytes)) != LXP_OK ||
         lxp_kernel_module_for_activity(kernel, LX_PROGRAMS_TRANSFER, 0U,
@@ -210,7 +212,7 @@ int main(void)
                             &opened[i]) != LXP_OK)
             return 1;
     if (lxp_ledger_bootstrap_balance(opened[0], asset.asset_id,
-                                     (lxp_u128){0U, 100U}, 1U) != LXP_OK ||
+                                     (lxp_u128){0U, 100U}, 0U) != LXP_OK ||
         lxp_ledger_bootstrap_balance(opened[1], asset.asset_id,
                                      (lxp_u128){0U, 0U}, 0U) != LXP_OK ||
         lxp_ledger_bootstrap_balance(opened[2], asset.asset_id,
@@ -234,9 +236,14 @@ int main(void)
                                                     rollback_fee }) != LXP_OK ||
         lxp_kernel_set_capabilities(&kernel, NULL, apply_transfer_set) != LXP_OK ||
         lxp_kernel_bind_module_runtime(&kernel, LXP_MODULE_PROGRAMS, &runtime) != LXP_OK ||
-        dispatch(&kernel, &authority, payload, sizeof(payload),
+        dispatch(&kernel, &authority, payload, sizeof(payload), 1U,
+                 LXP_ERR_SEQUENCE_GAP) != 0 ||
+        opened[0]->balance.lo != 100U || opened[0]->next_sequence != 0U ||
+        opened[1]->balance.lo != 0U || opened[2]->balance.lo != 0U ||
+        dispatch(&kernel, &authority, payload, sizeof(payload), 0U,
                  LXP_ERR_INSUFFICIENT_BALANCE) != 0 ||
-        opened[0]->balance.lo != 100U || opened[1]->balance.lo != 0U ||
+        opened[0]->balance.lo != 100U || opened[0]->next_sequence != 0U ||
+        opened[1]->balance.lo != 0U ||
         opened[2]->balance.lo != 0U)
         return 1;
     write_u64(payload + 250U, 20U);
@@ -247,6 +254,7 @@ int main(void)
     activity.actor_did = (lxp_byte_span){actor_did, sizeof(actor_did) - 1U};
     activity.authority = (lxp_byte_span){primary_key, sizeof(primary_key)};
     activity.timestamp_bound = (lxp_timestamp_bound){1U, 100U};
+    activity.account_sequence = 0U;
     activity.idempotency_key[31] = 1U;
     activity.fee_limit = (lxp_u128){0U, 1U};
     activity.payload = (lxp_byte_span){payload, sizeof(payload)};
@@ -278,6 +286,7 @@ int main(void)
         memcmp(receipt.effects.effects[0].body, zero_root, 32U) == 0 ||
         charged_fees != 1U || last_fee.hi != 0U || last_fee.lo != 1U ||
         identity->next_sequence != 1U ||
+        opened[0]->next_sequence != 1U ||
         opened[0]->balance.lo != 50U || opened[1]->balance.lo != 30U ||
         opened[2]->balance.lo != 20U)
         return 1;
@@ -297,6 +306,7 @@ int main(void)
         receipt.fee_charged.hi != 0U || receipt.fee_charged.lo != 1U ||
         charged_fees != 2U || last_fee.hi != 0U || last_fee.lo != 1U ||
         identity->next_sequence != 2U || state.next_sequence != 3U ||
+        opened[0]->next_sequence != 1U ||
         opened[0]->balance.lo != 50U || opened[1]->balance.lo != 30U ||
         opened[2]->balance.lo != 20U)
         return 1;
@@ -304,12 +314,13 @@ int main(void)
     (void)memcpy(oversized_payload, payload, sizeof(payload));
     oversized_payload[sizeof(payload)] = 0U;
     if (dispatch(&kernel, &authority, oversized_payload,
-                 sizeof(oversized_payload), LXP_ERR_NON_CANONICAL) != 0 ||
+                 sizeof(oversized_payload), 1U,
+                 LXP_ERR_NON_CANONICAL) != 0 ||
         opened[0]->balance.lo != 50U || opened[1]->balance.lo != 30U ||
         opened[2]->balance.lo != 20U)
         return 1;
     payload[34] ^= 1U;
-    if (dispatch(&kernel, &authority, payload, sizeof(payload),
+    if (dispatch(&kernel, &authority, payload, sizeof(payload), 1U,
                  LXP_ERR_AUTH_SCOPE) != 0 || opened[0]->balance.lo != 50U)
         return 1;
     if (mixed_source_kernel_law(opened[0], opened[1], opened[2], &asset) != 0)
