@@ -7,6 +7,22 @@ use layerx_wire::receipt::{decode, encode, encode_unsigned, Receipt};
 use crate::evidence::Evidence;
 use crate::level::achieved;
 
+const PROGRAMS_MODULE_ID: u32 = 9;
+const PROGRAMS_STATE_OPERATION: u16 = 0;
+const PROGRAMS_CALL_OPERATION: u16 = 3;
+
+const fn supported_programs_module_version(version: u32) -> bool {
+    matches!(version, 1 | 2 | 3)
+}
+
+const fn supports_program_account_state(version: u32) -> bool {
+    matches!(version, 2 | 3)
+}
+
+const fn supported_program_guest_abi(version: u16) -> bool {
+    matches!(version, 1 | 2)
+}
+
 /// Core-published batch facts needed to establish sequencer authority and the
 /// state-root chain for one receipt.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -303,7 +319,10 @@ pub fn verify_program_state(
     if protocol.protocol_version() != 2 {
         return Err(VerificationFailure::at(ReceiptCheck::ProtocolVersion));
     }
-    if protocol.module_id() != 9 || protocol.module_version() != 2 || protocol.operation() != 0 {
+    if protocol.module_id() != PROGRAMS_MODULE_ID
+        || !supports_program_account_state(protocol.module_version())
+        || protocol.operation() != PROGRAMS_STATE_OPERATION
+    {
         return Err(VerificationFailure::at(ReceiptCheck::Module));
     }
     if protocol.result_code() != 0 {
@@ -355,15 +374,15 @@ pub fn verify_program_outcome(
     if !matches!(protocol.protocol_version(), 1 | 2) {
         return Err(VerificationFailure::at(ReceiptCheck::ProtocolVersion));
     }
-    if protocol.module_id() != 9 || protocol.operation() != 3 {
+    if protocol.module_id() != PROGRAMS_MODULE_ID
+        || !supported_programs_module_version(protocol.module_version())
+        || protocol.operation() != PROGRAMS_CALL_OPERATION
+    {
         return Err(VerificationFailure::at(ReceiptCheck::Module));
     }
     let outcome = protocol.program_outcome()
         .ok_or_else(|| VerificationFailure::at(ReceiptCheck::ReceiptShape))?;
-    if !matches!(outcome.abi_version(), 1 | 2)
-        || u32::from(outcome.abi_version()) != protocol.module_version()
-        || outcome.runtime_version() != 1
-    {
+    if !supported_program_guest_abi(outcome.abi_version()) || outcome.runtime_version() != 1 {
         return Err(VerificationFailure::at(ReceiptCheck::ProtocolVersion));
     }
     if protocol.activity_id() == [0; 32] {
@@ -442,4 +461,22 @@ pub fn canonical_protocol_facts(
         amount: protocol.amount(),
         fee_charged: protocol.fee_charged(),
     })
+}
+
+#[cfg(test)]
+mod programs_version_contract {
+    use super::{
+        supported_program_guest_abi, supported_programs_module_version,
+        supports_program_account_state,
+    };
+
+    #[test]
+    fn module_and_guest_versions_are_independent() {
+        assert!(supported_programs_module_version(3));
+        assert!(supports_program_account_state(3));
+        assert!(supported_program_guest_abi(2));
+        assert!(!supported_program_guest_abi(3));
+        assert!(!supported_programs_module_version(4));
+        assert!(!supports_program_account_state(1));
+    }
 }

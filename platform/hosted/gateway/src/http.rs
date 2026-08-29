@@ -8,7 +8,7 @@ use zeroize::Zeroize;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const IO_TIMEOUT: Duration = Duration::from_secs(8);
 const MAX_HEADERS: usize = 32 * 1024;
-const MAX_RESPONSE: usize = 512 * 1024;
+const MAX_RESPONSE: usize = 8 * 1024 * 1024;
 
 #[derive(Clone)]
 pub struct Endpoint {

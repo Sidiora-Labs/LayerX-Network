@@ -156,7 +156,7 @@ impl std::error::Error for ProtocolEvidenceError {}
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VerifiedDeploymentEvidence {
     record: DeploymentRecord,
-    interface_present: bool,
+    interface: Option<crate::ProgramInterface>,
     receipt_digest: [u8; 32],
     activity_id: [u8; 32],
     batch_header_digest: [u8; 32],
@@ -189,7 +189,14 @@ impl VerifiedDeploymentEvidence {
 
     #[must_use]
     pub const fn interface_present(&self) -> bool {
-        self.interface_present
+        self.interface.is_some()
+    }
+
+    /// Returns the canonical interface that was carried by this verified
+    /// deployment or upgrade, when one was published.
+    #[must_use]
+    pub const fn interface(&self) -> Option<&crate::ProgramInterface> {
+        self.interface.as_ref()
     }
 
     #[must_use]
@@ -497,10 +504,10 @@ impl ProtocolDeploymentVerifier {
                 ProtocolEvidenceError::BatchMismatch
             });
         }
-        let (record, interface_present) = bind_deployment(parsed, &head)?;
+        let (record, interface) = bind_deployment(parsed, &head)?;
         Ok(VerifiedDeploymentEvidence {
             record,
-            interface_present,
+            interface,
             receipt_digest: head.receipt_digest,
             activity_id: activity_identifier,
             batch_header_digest: head.batch_header_digest,
@@ -551,10 +558,10 @@ impl ProtocolDeploymentVerifier {
                 ProtocolEvidenceError::BatchMismatch
             });
         }
-        let (record, interface_present) = bind_deployment(parsed, &head)?;
+        let (record, interface) = bind_deployment(parsed, &head)?;
         Ok(VerifiedDeploymentEvidence {
             record,
-            interface_present,
+            interface,
             receipt_digest: head.receipt_digest,
             activity_id: activity_identifier,
             batch_header_digest: head.batch_header_digest,
@@ -1018,7 +1025,7 @@ enum LifecycleActivity {
         policy: UpgradePolicy,
         new_code_hash: [u8; 32],
         module: Vec<u8>,
-        interface_present: bool,
+        interface: Option<crate::ProgramInterface>,
     },
     Upgrade {
         program: ProgramId,
@@ -1026,7 +1033,7 @@ enum LifecycleActivity {
         old_code_hash: [u8; 32],
         new_code_hash: [u8; 32],
         module: Vec<u8>,
-        interface_present: bool,
+        interface: Option<crate::ProgramInterface>,
     },
 }
 
@@ -1091,7 +1098,7 @@ fn parse_lifecycle_activity(
                     policy,
                     new_code_hash,
                     module,
-                    interface_present: false,
+                    interface: None,
                 });
             }
             if payload.len() < 108 {
@@ -1133,7 +1140,7 @@ fn parse_lifecycle_activity(
                 policy,
                 new_code_hash,
                 module,
-                interface_present: true,
+                interface: Some(interface),
             })
         }
         UPGRADE_ORDINAL => {
@@ -1168,7 +1175,7 @@ fn parse_lifecycle_activity(
                     old_code_hash,
                     new_code_hash,
                     module,
-                    interface_present: false,
+                    interface: None,
                 });
             }
             if payload.len() < 110 {
@@ -1199,7 +1206,9 @@ fn parse_lifecycle_activity(
             if crate::hash::sha256(&module) != new_code_hash {
                 return Err(ProtocolEvidenceError::DeploymentMismatch);
             }
-            if interface_length != 0 {
+            let interface = if interface_length == 0 {
+                None
+            } else {
                 let interface = crate::ProgramInterface::decode(interface_bytes)
                     .map_err(|_| ProtocolEvidenceError::CanonicalActivity)?;
                 if interface.code_hash() != new_code_hash || interface.abi_version() != abi_version {
@@ -1211,14 +1220,15 @@ fn parse_lifecycle_activity(
                 if rebound.canonical_encoding() != interface_bytes {
                     return Err(ProtocolEvidenceError::DeploymentMismatch);
                 }
-            }
+                Some(interface)
+            };
             Ok(LifecycleActivity::Upgrade {
                 program,
                 abi_version,
                 old_code_hash,
                 new_code_hash,
                 module,
-                interface_present: interface_length != 0,
+                interface,
             })
         }
         _ => Err(ProtocolEvidenceError::UnsupportedActivity),
@@ -1228,25 +1238,25 @@ fn parse_lifecycle_activity(
 fn bind_deployment(
     activity: LifecycleActivity,
     head: &VerifiedHeadClaims,
-) -> Result<(DeploymentRecord, bool), ProtocolEvidenceError> {
+) -> Result<(DeploymentRecord, Option<crate::ProgramInterface>), ProtocolEvidenceError> {
     if head.lifecycle != ProgramLifecycle::Active {
         return Err(ProtocolEvidenceError::LifecycleProof);
     }
     let (program, abi_version, policy, old_code_hash, new_code_hash, module,
-         interface_present) = match activity {
+         interface) = match activity {
         LifecycleActivity::Deploy {
             program,
             abi_version,
             policy,
             new_code_hash,
             module,
-            interface_present,
+            interface,
         } => {
             if head.record.version != 1 || head.record.policy != policy {
                 return Err(ProtocolEvidenceError::DeploymentMismatch);
             }
             (program, abi_version, policy, None, new_code_hash, module,
-             interface_present)
+             interface)
         }
         LifecycleActivity::Upgrade {
             program,
@@ -1254,7 +1264,7 @@ fn bind_deployment(
             old_code_hash,
             new_code_hash,
             module,
-            interface_present,
+            interface,
         } => {
             if head.record.version <= 1
                 || !matches!(head.record.policy, UpgradePolicy::Authority(authority) if authority != [0; 32])
@@ -1268,7 +1278,7 @@ fn bind_deployment(
                 Some(old_code_hash),
                 new_code_hash,
                 module,
-                interface_present,
+                interface,
             )
         }
     };
@@ -1289,7 +1299,7 @@ fn bind_deployment(
         observed_at: head.freshness.observed_at,
         module,
         migration: None,
-    }, interface_present))
+    }, interface))
 }
 
 fn decode_program_record(
@@ -1733,7 +1743,7 @@ mod legacy_lifecycle_vectors {
         payload.extend_from_slice(module);
         assert!(matches!(
             parse_lifecycle_activity(UPGRADE_ORDINAL, &payload),
-            Ok(LifecycleActivity::Upgrade { module, interface_present: false, .. }) if module.as_slice() == WASM_HEADER
+            Ok(LifecycleActivity::Upgrade { module, interface: None, .. }) if module.as_slice() == WASM_HEADER
         ));
         payload[34] = 0;
         assert_eq!(

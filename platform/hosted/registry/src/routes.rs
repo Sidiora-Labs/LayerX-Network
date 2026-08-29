@@ -12,11 +12,11 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::time::Instant;
 
 use layerx_programs::{
-    hex, programs_source_verification, BuildPlan, BuildRefusal,
-    JournalReadAuthority, LifecycleReceipt, ObservedHead, ProgramId, ProgramLifecycle,
-    ProtocolDeploymentVerifier, Registry, RegistryError, RegistryVersion, ReproducibleBuild,
-    SourceArchive, SourceStatus, SourceVerifier, UpgradePolicy, VerifiedProgramBalanceRead,
-    VerifiedRegistryRead, WindDownStateAccess,
+    hex, programs_source_verification, AccountStateHead, BuildPlan, BuildRefusal,
+    JournalReadAuthority, LifecycleReceipt, ObservedHead, ProgramId, ProgramInterface,
+    ProgramLifecycle, ProtocolDeploymentVerifier, Registry, RegistryError, RegistryVersion,
+    ReproducibleBuild, SourceArchive, SourceStatus, SourceVerifier, UpgradePolicy,
+    VerifiedProgramBalanceRead, VerifiedRegistryRead, WindDownStateAccess,
 };
 use layerx_programs_protocol_adapter::ProtocolProgramStateRead;
 use serde::{Deserialize, Serialize};
@@ -75,6 +75,8 @@ pub struct Registrar {
     publication_authority: crate::RegistryAuthority,
     staleness_ms: u64,
     balance_reads: BTreeMap<ProgramId, VerifiedProgramBalanceRead>,
+    interfaces: BTreeMap<(ProgramId, u32), ProgramInterface>,
+    current_head: Option<AccountStateHead>,
     idempotency: BTreeMap<String, Completed>,
 }
 
@@ -132,6 +134,8 @@ impl Registrar {
             publication_authority: config.publication_authority.clone(),
             staleness_ms: config.staleness_ms,
             balance_reads: BTreeMap::new(),
+            interfaces: BTreeMap::new(),
+            current_head: None,
             idempotency: BTreeMap::new(),
         };
         registrar.rebuild()?;
@@ -295,6 +299,7 @@ impl Registrar {
         }
         self.registry = registry;
         self.balance_reads = balance_reads;
+        self.current_head = Some(current_head);
         Ok(())
     }
 
@@ -304,10 +309,13 @@ impl Registrar {
         };
         match rest.split_once('/') {
             None if request.method == "GET" => self.read(rest, now),
+            Some((program, "interface")) if request.method == "GET" => {
+                self.read_interface(program, now)
+            }
             Some((program, "source")) if request.method == "POST" => {
                 self.verify(program, request, now)
             }
-            None | Some((_, "source")) => refusal(
+            None | Some((_, "interface" | "source")) => refusal(
                 405,
                 "method_not_allowed",
                 "method is not supported for this route",
@@ -346,6 +354,19 @@ impl Registrar {
     }
 
     fn render_read(&self, read: &VerifiedRegistryRead, now: u64) -> Response {
+        let Some(head) = self.current_head else {
+            return refusal(
+                503,
+                "protocol_head_unavailable",
+                "a current independently verified protocol head is not available",
+            );
+        };
+        let Some(valid_through) = head.freshness.observed_at.checked_add(self.staleness_ms) else {
+            return refusal(503, "stale_read", "protocol head freshness overflowed");
+        };
+        if now > valid_through {
+            return refusal(503, "stale_read", "protocol head is outside its freshness bound");
+        }
         let abi = read
             .entry
             .versions
@@ -354,7 +375,7 @@ impl Registrar {
         if abi == Some(1) && read.entry.value_accounts.is_empty() {
             return Response {
                 status: 200,
-                body: registry_read_json(read, None).to_string(),
+                body: registry_read_json(read, None, head, valid_through).to_string(),
             };
         }
         if abi != Some(2) {
@@ -401,7 +422,80 @@ impl Registrar {
         }
         Response {
             status: 200,
-            body: registry_read_json(read, Some(balances)).to_string(),
+            body: registry_read_json(read, Some(balances), head, valid_through).to_string(),
+        }
+    }
+
+    fn read_interface(&mut self, program: &str, now: u64) -> Response {
+        let Some(program) = program_id(program) else {
+            return refusal(
+                400,
+                "invalid_argument",
+                "program id must be thirty-two hexadecimal-encoded bytes",
+            );
+        };
+        if self.registry.latest_version(program).is_err() {
+            return refusal(404, "not_found", "program is not registered");
+        }
+        if let Err(error) = self.synchronize_protocol_state(Some(program), now) {
+            return refusal(503, "protocol_state_unavailable", &error);
+        }
+        let authority = match JournalReadAuthority::new(&self.journal, now, self.staleness_ms) {
+            Ok(authority) => authority,
+            Err(error) => return refusal(503, "read_unverifiable", &error.to_string()),
+        };
+        let read = match self.registry.read(program, &authority) {
+            Ok(read) => read,
+            Err(RegistryError::UnknownProgram | RegistryError::UnknownVersion) => {
+                return refusal(404, "not_found", "program is not registered")
+            }
+            Err(error @ RegistryError::StaleRead) => {
+                return refusal(503, "stale_read", &error.to_string())
+            }
+            Err(error) => return refusal(502, "unverified_read", &error.to_string()),
+        };
+        let Some(version) = read.entry.versions.last() else {
+            return refusal(502, "unverified_read", "program has no verified version");
+        };
+        let Some(interface) = self.interfaces.get(&(program, version.number)) else {
+            return refusal(404, "interface_absent", "program has no published interface");
+        };
+        if interface.code_hash() != version.code_hash
+            || interface.abi_version() != version.abi_version
+        {
+            return refusal(
+                502,
+                "interface_registry_mismatch",
+                "published interface does not match the current verified program version",
+            );
+        }
+        let Some(head) = self.current_head else {
+            return refusal(503, "protocol_head_unavailable", "current protocol head is unavailable");
+        };
+        let Some(valid_through) = head.freshness.observed_at.checked_add(self.staleness_ms) else {
+            return refusal(503, "stale_read", "protocol head freshness overflowed");
+        };
+        if now > valid_through {
+            return refusal(503, "stale_read", "protocol head is outside its freshness bound");
+        }
+        Response {
+            status: 200,
+            body: json!({
+                "program_id": hex::encode(&program.bytes()),
+                "version": version.number,
+                "code_hash": hex::encode(&version.code_hash),
+                "abi_version": version.abi_version,
+                "interface": hex::encode(interface.canonical_encoding()),
+                "interface_digest": hex::encode(interface.digest().as_bytes()),
+                "deployment_receipt_digest": hex::encode(&version.deployment_receipt_digest),
+                "state_root": hex::encode(&head.state_root),
+                "observed_sequence": head.freshness.observed_sequence,
+                "observed_at": head.freshness.observed_at,
+                "valid_through": valid_through,
+                "source": source_json(version.source),
+                "verification": "deployment-interface-and-current-head-verified",
+            })
+            .to_string(),
         }
     }
 
@@ -522,9 +616,13 @@ impl Registrar {
 
     fn rebuild(&mut self) -> Result<(), String> {
         let mut registry = Registry::new();
+        let mut interfaces = BTreeMap::new();
         for proof in self.journal.proofs()? {
             let evidence = self.node_state.verify_stored_deployment(&proof)?;
             self.journal.audit_projection(&evidence)?;
+            if let Some(interface) = evidence.interface() {
+                interfaces.insert((evidence.program(), evidence.version()), interface.clone());
+            }
             registry
                 .record_verified_deployment(&evidence)
                 .map_err(|error| format!("verified deployment history is not replayable: {error}"))?;
@@ -547,6 +645,8 @@ impl Registrar {
         self.program_state.audit()?;
         self.registry = registry;
         self.balance_reads.clear();
+        self.interfaces = interfaces;
+        self.current_head = None;
         Ok(())
     }
 
@@ -682,6 +782,8 @@ fn verification_response(
 fn registry_read_json(
     read: &VerifiedRegistryRead,
     balances: Option<&VerifiedProgramBalanceRead>,
+    head: AccountStateHead,
+    valid_through: u64,
 ) -> Value {
     let lifecycle = balances.map_or(read.entry.lifecycle, VerifiedProgramBalanceRead::lifecycle);
     let value_accounts = balances.map_or_else(
@@ -715,6 +817,10 @@ fn registry_read_json(
         "program_id": hex::encode(&read.entry.program.bytes()),
         "upgrade_policy": policy_json(read.entry.upgrade_policy),
         "lifecycle": lifecycle_name(lifecycle),
+        "state_root": hex::encode(&head.state_root),
+        "observed_sequence": head.freshness.observed_sequence,
+        "observed_at": head.freshness.observed_at,
+        "valid_through": valid_through,
         "latest_version": read.entry.versions.last().map(|version| version.number),
         "versions": read
             .entry

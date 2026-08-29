@@ -114,7 +114,7 @@ export function ExplorerLookupForm({
   submitLabel,
 }: Readonly<{
   action: string;
-  kind: "receipt" | "account" | "checkpoint" | "batch";
+  kind: "receipt" | "account" | "checkpoint" | "batch" | "program";
   label: string;
   placeholder: string;
   submitLabel: string;

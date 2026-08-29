@@ -11,6 +11,12 @@ export {
   type ExplorerPage,
   type ExplorerRecord,
   type ExplorerVerificationLevel,
+  type ProgramLifecycle,
+  type ProgramRecord,
+  type ProgramSourceStatus,
+  type ProgramUpgradePolicy,
+  type ProgramValueAccountRecord,
+  type ProgramVersionRecord,
   type ReceiptRecord,
 } from "./model";
 export {

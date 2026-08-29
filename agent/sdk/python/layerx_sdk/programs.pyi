@@ -1,0 +1,33 @@
+from typing import Literal, Mapping
+
+from .production import IdempotencyKey, ProductionClient
+from .verifier import AuthorizedReceiptBatch, LocalSignatureVerifier, ReceiptVerification
+
+ProgramCapability = Literal["storage_read", "storage_write", "transfer", "emit_event", "compose"]
+
+class ProgramCall:
+    program_id: str
+    calldata: bytes
+    fuel: int
+    fee_limit: int
+    capabilities: tuple[ProgramCapability, ...]
+    signed_activity: bytes
+    def __init__(self, program_id: str, calldata: bytes, fuel: int, fee_limit: int, capabilities: tuple[ProgramCapability, ...], signed_activity: bytes) -> None: ...
+
+class VerifiedProgramReceipt:
+    verification: ReceiptVerification
+    terminal_payload: bytes
+    call_graph: bytes
+
+def verify_program_receipt(execution: Mapping[str, object], authority: AuthorizedReceiptBatch, signatures: LocalSignatureVerifier) -> VerifiedProgramReceipt: ...
+
+class ProgramOperations:
+    def __init__(self, client: ProductionClient) -> None: ...
+    def discover(self, program_id: str) -> Mapping[str, object]: ...
+    def interface(self, program_id: str) -> Mapping[str, object]: ...
+    def simulate(self, call: ProgramCall) -> Mapping[str, object]: ...
+    def submit(self, call: ProgramCall, idempotency_key: IdempotencyKey) -> Mapping[str, object]: ...
+    def receipt(self, idempotency_key: str, expected_activity_id: str) -> Mapping[str, object]: ...
+    def activity(self, activity_id: str) -> Mapping[str, object]: ...
+
+def platform_sdk_programs() -> str: ...

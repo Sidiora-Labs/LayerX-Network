@@ -5,7 +5,13 @@ pub mod store;
 
 use layerx_crypto::disclosure::{bind as bind_disclosure, AmountRole, CounterpartyRole};
 use layerx_crypto::{ed25519, SignatureMessage};
+use layerx_proof::program::{
+    verify_authorized_program_execution, verify_program_execution,
+    AuthorizedProgramExecutionExpectation, ProgramExecutionExpectation,
+    VerifiedProgramExecution,
+};
 use layerx_proof::receipt::{verify_outcome, AuthorizedBatch, ReceiptCheck};
+use layerx_types::intent::{ProgramCallFailure, ProgramCallOutcome, ProgramLegacyValue};
 pub use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry};
 use layerx_wire::activity::{decode_signed, encode_signed, encode_unsigned};
 use layerx_wire::hash::{activity_id, Domain};
@@ -549,12 +555,202 @@ pub fn verify_activity_operation(
     })
 }
 
+/// Verifies a committed Programs receipt together with its authenticated
+/// terminal payload and call graph, then renders only locally derived fields.
+///
+/// # Errors
+///
+/// Refuses untrusted sequencers and every receipt, activity, program, ABI,
+/// terminal, graph, occupancy, or transfer-authority mismatch.
+pub fn verify_program_operation(
+    receipt_bytes: &[u8],
+    terminal_payload: &[u8],
+    call_graph: &[u8],
+    authority: AuthorityFacts,
+    trusted_sequencer_key: &[u8; 32],
+    expected_activity_id: [u8; 32],
+    expected_program_id: [u8; 32],
+    expected_guest_abi_version: u16,
+) -> Result<VerifiedOperation, GatewayError> {
+    if authority
+        .sequencer_public_key()
+        .ct_eq(trusted_sequencer_key)
+        .unwrap_u8()
+        != 1
+    {
+        return Err(GatewayError::UntrustedSequencer);
+    }
+    let verified = verify_authorized_program_execution(
+        receipt_bytes,
+        terminal_payload,
+        call_graph,
+        AuthorizedProgramExecutionExpectation {
+            authority: authority.authorized(),
+            activity_id: expected_activity_id,
+            program_id: expected_program_id,
+            guest_abi_version: expected_guest_abi_version,
+        },
+    )
+    .map_err(|_| GatewayError::VerificationRequired)?;
+    render_verified_program_operation(
+        verified,
+        terminal_payload,
+        call_graph,
+        expected_program_id,
+        expected_guest_abi_version,
+        "executed",
+    )
+}
+
+/// Verifies a non-committing Programs simulation against a separately pinned
+/// protocol head and sequencer key.
+///
+/// # Errors
+///
+/// Refuses every receipt or terminal mismatch without returning a partial
+/// simulation result.
+pub fn verify_program_simulation_operation(
+    receipt_bytes: &[u8],
+    terminal_payload: &[u8],
+    call_graph: &[u8],
+    trusted_previous_state_root: [u8; 32],
+    trusted_sequencer_key: [u8; 32],
+    expected_activity_id: [u8; 32],
+    expected_program_id: [u8; 32],
+    expected_guest_abi_version: u16,
+) -> Result<VerifiedOperation, GatewayError> {
+    let verified = verify_program_execution(
+        receipt_bytes,
+        terminal_payload,
+        call_graph,
+        ProgramExecutionExpectation {
+            sequencer_public_key: trusted_sequencer_key,
+            previous_state_root: trusted_previous_state_root,
+            activity_id: expected_activity_id,
+            program_id: expected_program_id,
+            guest_abi_version: expected_guest_abi_version,
+        },
+    )
+    .map_err(|_| GatewayError::VerificationRequired)?;
+    render_verified_program_operation(
+        verified,
+        terminal_payload,
+        call_graph,
+        expected_program_id,
+        expected_guest_abi_version,
+        "simulated",
+    )
+}
+
+fn render_verified_program_operation(
+    verified: VerifiedProgramExecution,
+    terminal_payload: &[u8],
+    call_graph: &[u8],
+    expected_program_id: [u8; 32],
+    expected_guest_abi_version: u16,
+    state: &str,
+) -> Result<VerifiedOperation, GatewayError> {
+    let protocol = verified
+        .receipt()
+        .receipt()
+        .protocol()
+        .ok_or(GatewayError::VerificationRequired)?;
+    let receipt_digest = verified
+        .receipt()
+        .evidence()
+        .receipt_digest()
+        .ok_or(GatewayError::VerificationRequired)?;
+    let outcome = program_outcome_json(verified.outcome());
+    let response = serde_json::to_vec(&serde_json::json!({
+        "state": state,
+        "activity_id": hex(&protocol.activity_id()),
+        "program_id": hex(&expected_program_id),
+        "guest_abi_version": expected_guest_abi_version,
+        "module_version": protocol.module_version(),
+        "batch_id": hex(&protocol.batch_id()),
+        "global_sequence": protocol.global_sequence(),
+        "result_code": verified.result_code(),
+        "state_root": hex(&protocol.resulting_state_root()),
+        "receipt": hex(verified.receipt().canonical_bytes()),
+        "receipt_digest": hex(&receipt_digest),
+        "terminal_payload": hex(terminal_payload),
+        "call_graph": hex(call_graph),
+        "usage": {
+            "cpu_fuel": verified.cpu_fuel(),
+            "memory_bytes": verified.memory_bytes(),
+            "storage_read_bytes": verified.storage_read_bytes(),
+            "storage_write_bytes": verified.storage_write_bytes(),
+            "output_values": verified.output_values(),
+            "output_bytes": verified.output_bytes(),
+            "fee_units": verified.fee_units().to_string(),
+        },
+        "outcome": outcome,
+        "verification": "receipt-terminal-and-call-graph-verified",
+    }))
+    .map_err(|_| GatewayError::Encoding)?;
+    Ok(VerifiedOperation {
+        response,
+        receipt: verified.receipt().canonical_bytes().to_vec(),
+        receipt_digest,
+        activity_id: protocol.activity_id(),
+        result_code: verified.result_code(),
+        verification_rank: verified.receipt().level().wire_rank(),
+    })
+}
+
+fn program_outcome_json(outcome: &ProgramCallOutcome) -> serde_json::Value {
+    match outcome {
+        ProgramCallOutcome::Completed(response) => serde_json::json!({
+            "kind": "completed",
+            "code": response.code(),
+            "response": hex(response.body()),
+        }),
+        ProgramCallOutcome::LegacyCompleted(response) => serde_json::json!({
+            "kind": "legacy_completed",
+            "code": response.code(),
+            "values": response.values().iter().map(|value| match value {
+                ProgramLegacyValue::I32(value) => serde_json::json!({"type":"i32","value":value}),
+                ProgramLegacyValue::I64(value) => serde_json::json!({"type":"i64","value":value.to_string()}),
+            }).collect::<Vec<_>>(),
+        }),
+        ProgramCallOutcome::Refused(failure) => serde_json::json!({
+            "kind": "refused",
+            "failure": program_failure_json(*failure),
+        }),
+    }
+}
+
+fn program_failure_json(failure: ProgramCallFailure) -> serde_json::Value {
+    match failure {
+        ProgramCallFailure::UnknownProgram => serde_json::json!({"kind":"unknown_program"}),
+        ProgramCallFailure::Reentrancy => serde_json::json!({"kind":"reentrancy"}),
+        ProgramCallFailure::DepthExceeded { limit, attempted } => {
+            serde_json::json!({"kind":"depth_exceeded","limit":limit,"attempted":attempted})
+        }
+        ProgramCallFailure::FanoutExceeded { limit, attempted } => {
+            serde_json::json!({"kind":"fanout_exceeded","limit":limit,"attempted":attempted})
+        }
+        ProgramCallFailure::GuestRefused { code } => {
+            serde_json::json!({"kind":"guest_refused","code":code})
+        }
+        ProgramCallFailure::Authority => serde_json::json!({"kind":"authority"}),
+        ProgramCallFailure::Resource => serde_json::json!({"kind":"resource"}),
+        ProgramCallFailure::Response => serde_json::json!({"kind":"response"}),
+        ProgramCallFailure::Fault => serde_json::json!({"kind":"fault"}),
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ProductionRoute<'a> {
     Activity,
     State,
     Receipt(&'a str),
     ProgramRegistry(&'a str),
+    ProgramInterface(&'a str),
+    ProgramSimulation,
+    ProgramCall,
+    ProgramActivity(&'a str),
+    ProgramReceiptByIdempotency(&'a str),
     ProgramRegistrySource(&'a str),
 }
 
@@ -569,13 +765,42 @@ pub fn production_route<'a>(
 ) -> Result<ProductionRoute<'a>, GatewayError> {
     match (method, path) {
         ("POST", "/v1/activities") => Ok(ProductionRoute::Activity),
+        ("POST", "/v1/programs/simulate") => Ok(ProductionRoute::ProgramSimulation),
+        ("POST", "/v1/programs/call") => Ok(ProductionRoute::ProgramCall),
         ("GET", "/v1/state") => Ok(ProductionRoute::State),
-        ("GET", path) if path.starts_with("/v1/programs/registry/") => {
+        ("GET", path) if path.starts_with("/v1/programs/activities/") => {
             let id = path
-                .strip_prefix("/v1/programs/registry/")
+                .strip_prefix("/v1/programs/activities/")
                 .ok_or(GatewayError::InvalidRoute)?;
             if id.len() == 64 && id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-                Ok(ProductionRoute::ProgramRegistry(id))
+                Ok(ProductionRoute::ProgramActivity(id))
+            } else {
+                Err(GatewayError::InvalidRoute)
+            }
+        }
+        ("GET", path) if path.starts_with("/v1/programs/receipts/by-idempotency/") => {
+            let id = path
+                .strip_prefix("/v1/programs/receipts/by-idempotency/")
+                .ok_or(GatewayError::InvalidRoute)?;
+            if id.len() == 64 && id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                Ok(ProductionRoute::ProgramReceiptByIdempotency(id))
+            } else {
+                Err(GatewayError::InvalidRoute)
+            }
+        }
+        ("GET", path) if path.starts_with("/v1/programs/registry/") => {
+            let remainder = path
+                .strip_prefix("/v1/programs/registry/")
+                .ok_or(GatewayError::InvalidRoute)?;
+            let (id, interface) = remainder
+                .strip_suffix("/interface")
+                .map_or((remainder, false), |id| (id, true));
+            if id.len() == 64 && id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                if interface {
+                    Ok(ProductionRoute::ProgramInterface(id))
+                } else {
+                    Ok(ProductionRoute::ProgramRegistry(id))
+                }
             } else {
                 Err(GatewayError::InvalidRoute)
             }

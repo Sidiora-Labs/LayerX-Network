@@ -1,11 +1,11 @@
 //! First-class program discovery, interface, simulation, and call operations.
 
 use layerx_client::submit::{Submission, SubmitError};
-use layerx_proof::receipt::verify_program_outcome_at_root;
+use layerx_proof::program::{verify_program_execution, ProgramExecutionExpectation};
 use layerx_programs::{ProgramId, ProgramInterface, ProgramLifecycle, VerifiedInterfaceRead, VerifiedProgramHead, VerifiedProtocolHead};
-use layerx_programs_runtime::terminal::{decode_terminal_payload, CandidateTerminalOutcome, DecodedTerminal, ExecutionTerminal, TerminalDetail};
-use layerx_programs_runtime::{BudgetMeterRefusal, OccupancySettlement, ProgramFailure};
-use layerx_types::intent::{ProgramCall, ProgramCallOutcome, ProgramCallResponse, ProgramLegacyCallResponse, ProgramLegacyValue};
+use layerx_programs_runtime::terminal::DecodedTerminal;
+use layerx_programs_runtime::{BudgetMeterRefusal, ProgramFailure};
+use layerx_types::intent::{ProgramCall, ProgramCallOutcome};
 use layerx_types::payload::{ModuleId, ModuleRegistry};
 use layerx_wire::activity::decode_signed;
 use layerx_wire::hash::activity_id;
@@ -251,14 +251,24 @@ impl<T: ProgramSimulationTransport> ProgramSimulationBoundary
         if raw.receipt.is_empty() {
             return Err(ProgramOperationError::UnverifiedReceipt);
         }
-        let verified = verify_program_outcome_at_root(&raw.receipt,
-            self.simulation_public_key, self.trusted_previous_state_root)
-            .map_err(|_| ProgramOperationError::UnverifiedReceipt)?;
         let activity = decode_signed(signed_activity, &self.registry)
             .map_err(|_| ProgramOperationError::InvalidRequest)?;
         let expected = activity_id(&activity)
             .map_err(|_| ProgramOperationError::InvalidRequest)?;
-        let protocol = verified.receipt().protocol()
+        let verified = verify_program_execution(
+            &raw.receipt,
+            &raw.terminal_payload,
+            &raw.call_graph,
+            ProgramExecutionExpectation {
+                sequencer_public_key: self.simulation_public_key,
+                previous_state_root: self.trusted_previous_state_root,
+                activity_id: expected,
+                program_id: self.expected_program.bytes(),
+                guest_abi_version: self.expected_abi_version,
+            },
+        )
+        .map_err(|_| ProgramOperationError::UnverifiedReceipt)?;
+        let protocol = verified.receipt().receipt().protocol()
             .ok_or(ProgramOperationError::UnverifiedReceipt)?;
         if !raw.evidence.matches_context(self.boundary_id, expected,
                 self.trusted_previous_state_root,
@@ -270,130 +280,26 @@ impl<T: ProgramSimulationTransport> ProgramSimulationBoundary
         if self.observed_sequence.checked_add(1) != Some(protocol.global_sequence()) {
             return Err(ProgramOperationError::UnverifiedReceipt);
         }
-        let outcome = protocol.program_outcome()
-            .ok_or(ProgramOperationError::UnverifiedReceipt)?;
-        if outcome.abi_version() != self.expected_abi_version
-            || protocol.module_version() != u32::from(self.expected_abi_version)
-        { return Err(ProgramOperationError::UnverifiedReceipt); }
-        let payload_digest: [u8; 32] = Sha256::digest(&raw.terminal_payload).into();
-        if payload_digest != outcome.terminal_payload_root() {
-            return Err(ProgramOperationError::UnverifiedReceipt);
-        }
-        let terminal = decode_terminal_payload(outcome.terminal_kind(), outcome.abi_version(), &raw.terminal_payload)
-            .map_err(|_| ProgramOperationError::UnverifiedReceipt)?;
-        verify_terminal_commitments(&terminal, &raw.call_graph, protocol.protocol_version(), outcome)?;
-        let (typed_outcome, authenticated_failure, authenticated_resource) = match &terminal.detail {
-            TerminalDetail::Execution(ExecutionTerminal::CandidateV4 { program, abi_version,
-                runtime_version, fee_schedule_version, metering_schedule_version,
-                usage, outcome: CandidateTerminalOutcome::Success { code, response }, .. }) => {
-                if *program != self.expected_program.bytes() || *abi_version != outcome.abi_version()
-                    || *runtime_version != outcome.runtime_version()
-                    || *fee_schedule_version != outcome.fee_schedule_version()
-                    || *metering_schedule_version != outcome.metering_schedule_version()
-                    || !usage_matches(*usage, outcome)
-                { return Err(ProgramOperationError::UnverifiedReceipt); }
-                (Some(
-                ProgramCallOutcome::Completed(ProgramCallResponse::new(*code, response)
-                    .map_err(|_| ProgramOperationError::UnverifiedReceipt)?)), None, None)
-            }
-            TerminalDetail::Execution(ExecutionTerminal::CandidateV4 { program, abi_version, runtime_version, fee_schedule_version, metering_schedule_version, usage, outcome: CandidateTerminalOutcome::Failure(failure), .. }) => {
-                if !candidate_matches(*program,*abi_version,*runtime_version,*fee_schedule_version,*metering_schedule_version,*usage,self.expected_program,outcome) { return Err(ProgramOperationError::UnverifiedReceipt); }
-                (Some(ProgramCallOutcome::Refused(layerx_types::intent::ProgramCallFailure::GuestRefused { code: outcome.result_code() })), Some(failure.clone()), None)
-            }
-            TerminalDetail::Execution(ExecutionTerminal::CandidateV4 { program, abi_version, runtime_version, fee_schedule_version, metering_schedule_version, usage, outcome: CandidateTerminalOutcome::Resource(resource), .. }) => {
-                if !candidate_matches(*program,*abi_version,*runtime_version,*fee_schedule_version,*metering_schedule_version,*usage,self.expected_program,outcome) { return Err(ProgramOperationError::UnverifiedReceipt); }
-                (Some(ProgramCallOutcome::Refused(layerx_types::intent::ProgramCallFailure::Resource)), None, Some(*resource))
-            }
-            TerminalDetail::Execution(ExecutionTerminal::Legacy { runtime_version, abi_version, metering_schedule_version, usage, values, .. }) => {
-                if *abi_version != outcome.abi_version() || *runtime_version != outcome.runtime_version()
-                    || *metering_schedule_version != outcome.metering_schedule_version()
-                    || usage.cpu_fuel != outcome.cpu_fuel() || usage.memory_bytes != outcome.memory_bytes()
-                    || usage.storage_read_bytes != outcome.storage_read_bytes()
-                    || usage.storage_write_bytes != outcome.storage_write_bytes()
-                    || usage.output_values != outcome.output_values() || usage.fee_units != outcome.fee_units()
-                { return Err(ProgramOperationError::UnverifiedReceipt); }
-                let values=values.iter().map(|value|match value{
-                    layerx_programs_runtime::terminal::ExecutionValue::I32(value)=>ProgramLegacyValue::I32(*value),
-                    layerx_programs_runtime::terminal::ExecutionValue::I64(value)=>ProgramLegacyValue::I64(*value),
-                }).collect();
-                (Some(ProgramCallOutcome::LegacyCompleted(ProgramLegacyCallResponse::new(outcome.result_code(),values)
-                    .map_err(|_|ProgramOperationError::UnverifiedReceipt)?)), None, None)
-            }
-            TerminalDetail::Failure(layerx_programs_runtime::terminal::FailureTerminal::Program(failure)) =>
-                (Some(ProgramCallOutcome::Refused(layerx_types::intent::ProgramCallFailure::GuestRefused { code: outcome.result_code() })), Some(failure.clone()), None),
-            TerminalDetail::Failure(_) => (Some(ProgramCallOutcome::Refused(layerx_types::intent::ProgramCallFailure::GuestRefused { code: outcome.result_code() })), None, None),
-            TerminalDetail::Resource(resource) => (Some(ProgramCallOutcome::Refused(layerx_types::intent::ProgramCallFailure::Resource)), None, Some(*resource)),
-        };
-        if protocol.activity_id() != expected {
-            return Err(ProgramOperationError::UnverifiedReceipt);
-        }
         Ok(ProgramExecution {
             committed: false,
-            result_code: outcome.result_code(),
-            metered_cost: outcome.fee_units(),
-            fee_units: outcome.fee_units(),
-            terminal_payload_root: outcome.terminal_payload_root(),
-            cpu_fuel: outcome.cpu_fuel(),
-            memory_bytes: outcome.memory_bytes(),
-            storage_read_bytes: outcome.storage_read_bytes(),
-            storage_write_bytes: outcome.storage_write_bytes(),
-            output_values: outcome.output_values(),
-            output_bytes: outcome.output_bytes(),
-            outcome: typed_outcome,
-            authenticated_failure,
-            authenticated_resource,
-            terminal,
-            call_graph: raw.call_graph.clone(),
-            receipt: verified.canonical_bytes().to_vec(),
+            result_code: verified.result_code(),
+            metered_cost: verified.fee_units(),
+            fee_units: verified.fee_units(),
+            terminal_payload_root: verified.terminal_payload_root(),
+            cpu_fuel: verified.cpu_fuel(),
+            memory_bytes: verified.memory_bytes(),
+            storage_read_bytes: verified.storage_read_bytes(),
+            storage_write_bytes: verified.storage_write_bytes(),
+            output_values: verified.output_values(),
+            output_bytes: verified.output_bytes(),
+            outcome: Some(verified.outcome().clone()),
+            authenticated_failure: verified.authenticated_failure().cloned(),
+            authenticated_resource: verified.authenticated_resource().copied(),
+            terminal: verified.terminal().clone(),
+            call_graph: verified.call_graph().to_vec(),
+            receipt: verified.receipt().canonical_bytes().to_vec(),
         })
     }
-}
-
-fn verify_terminal_commitments(terminal:&DecodedTerminal,available_graph:&[u8],protocol_version:u16,outcome:&layerx_wire::receipt::ProgramOutcome)->Result<(),ProgramOperationError>{
-    if available_graph.is_empty()||<[u8;32]>::from(Sha256::digest(available_graph))!=outcome.call_graph_root(){return Err(ProgramOperationError::UnverifiedReceipt)}
-    if let TerminalDetail::Execution(ExecutionTerminal::CandidateV4{graph,..})=&terminal.detail {if graph!=available_graph{return Err(ProgramOperationError::UnverifiedReceipt)}}
-    let candidate=matches!(&terminal.detail,TerminalDetail::Execution(ExecutionTerminal::CandidateV4{..}));
-    let successful_execution=outcome.terminal_kind()==1&&matches!(&terminal.detail,TerminalDetail::Execution(ExecutionTerminal::Legacy{..}|ExecutionTerminal::CandidateV4{outcome:CandidateTerminalOutcome::Success{..},..}));
-    let occupancy_required=protocol_version==2&&successful_execution;
-    if !matches!(protocol_version,1|2){return Err(ProgramOperationError::UnverifiedReceipt)}
-    let mut occupancy_seen=false;let mut occupancy_present=false;let mut authority_seen=false;
-    for attachment in &terminal.attachments { match attachment {
-        layerx_programs_runtime::terminal::TerminalAttachment::Occupancy(bytes)=>{
-            if occupancy_seen||!occupancy_required{return Err(ProgramOperationError::UnverifiedReceipt)} occupancy_seen=true;
-            if bytes.is_empty(){
-                if outcome.occupancy_evidence_digest()!=[0;32]||outcome.occupancy_transfer_root()!=[0;32]
-                    ||outcome.occupancy_byte_batches()!=0||outcome.occupancy_fee_units()!=0
-                {return Err(ProgramOperationError::UnverifiedReceipt)}
-                continue
-            }
-            occupancy_present=true;
-            if <[u8;32]>::from(Sha256::digest(bytes))!=outcome.occupancy_evidence_digest(){return Err(ProgramOperationError::UnverifiedReceipt)}
-            let settlement=OccupancySettlement::canonical_decode(bytes).map_err(|_|ProgramOperationError::UnverifiedReceipt)?;
-            if settlement.usage().byte_batches!=outcome.occupancy_byte_batches()||settlement.usage().fee_units!=outcome.occupancy_fee_units()
-                || settlement.transfer_root(outcome.occupancy_asset_id()).map_err(|_|ProgramOperationError::UnverifiedReceipt)?!=outcome.occupancy_transfer_root(){return Err(ProgramOperationError::UnverifiedReceipt)}
-        }
-        layerx_programs_runtime::terminal::TerminalAttachment::TransferAuthority{authorization,transfer_root}=>{
-            if !candidate||authority_seen||*transfer_root!=outcome.transfer_root()||layerx_programs_runtime::transfer::verify_authorization_root(authorization,*transfer_root).is_err(){return Err(ProgramOperationError::UnverifiedReceipt)}authority_seen=true;
-        }
-    }}
-    if occupancy_required&&!occupancy_seen||occupancy_present!=(outcome.occupancy_evidence_digest()!=[0;32])
-        ||candidate&&authority_seen!=(outcome.transfer_root()!=[0;32]){return Err(ProgramOperationError::UnverifiedReceipt)}
-    Ok(())
-}
-
-fn usage_matches(usage: layerx_programs_runtime::MeteredUsage, outcome: &layerx_wire::receipt::ProgramOutcome) -> bool {
-    usage.cpu_fuel == outcome.cpu_fuel() && usage.memory_bytes == outcome.memory_bytes()
-        && usage.storage_read_bytes == outcome.storage_read_bytes()
-        && usage.storage_write_bytes == outcome.storage_write_bytes()
-        && usage.output_values == outcome.output_values() && usage.output_bytes == outcome.output_bytes()
-        && usage.fee_units == outcome.fee_units()
-}
-fn candidate_matches(program:[u8;32],abi:u16,runtime:u16,fee:u32,metering:u32,
-    usage:layerx_programs_runtime::MeteredUsage,expected:ProgramId,
-    outcome:&layerx_wire::receipt::ProgramOutcome)->bool {
-    program==expected.bytes() && abi==outcome.abi_version() && runtime==outcome.runtime_version()
-        && fee==outcome.fee_schedule_version() && metering==outcome.metering_schedule_version()
-        && usage_matches(usage,outcome)
 }
 
 #[cfg(test)]

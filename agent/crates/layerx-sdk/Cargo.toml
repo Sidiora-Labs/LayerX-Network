@@ -10,6 +10,7 @@ layerx-types = { path = "../layerx-types" }
 layerx-client = { path = "../layerx-client" }
 layerx-agent-api = { path = "../layerx-agent-api" }
 layerx-proof = { path = "../layerx-proof" }
+layerx-wire = { path = "../layerx-wire" }
 layerx-mirror = { path = "../../../interop/crates/layerx-mirror" }
 zeroize = "=1.9.0"
 

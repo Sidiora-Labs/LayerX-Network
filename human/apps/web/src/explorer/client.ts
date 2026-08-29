@@ -5,6 +5,7 @@ import {
   decodeBatch,
   decodeCheckpoint,
   decodePage,
+  decodeProgram,
   decodeReceipt,
   decodeRecord,
   decodeVerificationReport,
@@ -16,6 +17,7 @@ import {
   type EvidenceVerificationReport,
   type ExplorerPage,
   type ExplorerRecord,
+  type ProgramRecord,
   type ReceiptRecord,
 } from "./model";
 
@@ -26,6 +28,25 @@ export class ExplorerUnavailableError extends Error {
     super("The public explorer service is unavailable");
     this.name = "ExplorerUnavailableError";
   }
+}
+
+function programExplorerOrigin(): Readonly<{ origin: URL; bearer: string }> {
+  const configured = process.env.LAYERX_EXPLORER_PROGRAM_API_ORIGIN;
+  const bearer = process.env.LAYERX_EXPLORER_PROGRAM_BEARER_TOKEN;
+  if (configured === undefined || bearer === undefined || bearer.length < 32) {
+    throw new ExplorerUnavailableError();
+  }
+  let origin: URL;
+  try {
+    origin = new URL(configured);
+  } catch {
+    throw new ExplorerUnavailableError();
+  }
+  const loopback = origin.hostname === "127.0.0.1" || origin.hostname === "localhost";
+  if (!loopback || origin.protocol !== "http:" || origin.pathname !== "/") {
+    throw new ExplorerUnavailableError();
+  }
+  return Object.freeze({ origin, bearer });
 }
 
 function explorerOrigin(): URL {
@@ -160,6 +181,38 @@ export async function accountActivityPage(
     decodeAccountActivity,
     "account activity page",
   );
+}
+
+export async function programRecord(identifier: string): Promise<ProgramRecord | undefined> {
+  if (!validExplorerIdentifier(identifier)) {
+    throw new TypeError("Invalid program identifier");
+  }
+  const { origin, bearer } = programExplorerOrigin();
+  const url = new URL(`/v1/programs/${encodeURIComponent(identifier.toLowerCase())}`, origin);
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      headers: { Accept: "application/json", Authorization: `Bearer ${bearer}` },
+      cache: "no-store",
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    });
+  } catch {
+    throw new ExplorerUnavailableError();
+  }
+  if (response.status === 404) {
+    return undefined;
+  }
+  if (!response.ok) {
+    throw new ExplorerUnavailableError();
+  }
+  try {
+    return decodeProgram(await response.json());
+  } catch (error) {
+    if (error instanceof TypeError) {
+      throw error;
+    }
+    throw new ExplorerUnavailableError();
+  }
 }
 
 export async function verifyEvidenceUpstream(

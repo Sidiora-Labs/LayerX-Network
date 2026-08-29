@@ -2,7 +2,7 @@
 
 use layerx_programs::{
     ProgramId, ProgramLifecycle, ReadFreshness, SourceStatus, UpgradePolicy,
-    VerifiedProgramBalanceRead, VerifiedRegistryRead,
+    VerifiedDeploymentEvidence, VerifiedProgramBalanceRead, VerifiedRegistryRead,
 };
 use layerx_programs_protocol_adapter::ProtocolProgramStateRead;
 
@@ -12,6 +12,32 @@ pub struct ExplorerProgramVersion {
     pub code_hash: [u8; 32],
     pub abi_version: u16,
     pub source: SourceStatus,
+    pub interface_digest: Option<[u8; 32]>,
+}
+
+/// Interface identity admitted only from cryptographically verified deployment
+/// evidence. Callers cannot construct arbitrary interface metadata.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VerifiedProgramInterfaceMetadata {
+    program: ProgramId,
+    version: u32,
+    code_hash: [u8; 32],
+    abi_version: u16,
+    digest: [u8; 32],
+}
+
+impl VerifiedProgramInterfaceMetadata {
+    #[must_use]
+    pub fn from_deployment(evidence: &VerifiedDeploymentEvidence) -> Option<Self> {
+        let interface = evidence.interface()?;
+        Some(Self {
+            program: evidence.program(),
+            version: evidence.version(),
+            code_hash: evidence.code_hash(),
+            abi_version: evidence.abi_version(),
+            digest: interface.digest().into_bytes(),
+        })
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -41,6 +67,7 @@ pub struct ExplorerProgramBalance {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ExplorerProgramReadError {
     RegistryBalanceMismatch,
+    InterfaceRegistryMismatch,
     HistoricalBalance,
     StaleBalance,
 }
@@ -57,6 +84,7 @@ impl ExplorerProgram {
     pub fn from_verified(
         read: VerifiedRegistryRead,
         balances: VerifiedProgramBalanceRead,
+        interfaces: &[VerifiedProgramInterfaceMetadata],
         now: u64,
         staleness_limit: u64,
     ) -> Result<Self, ExplorerProgramReadError> {
@@ -90,13 +118,25 @@ impl ExplorerProgram {
                 .entry
                 .versions
                 .into_iter()
-                .map(|version| ExplorerProgramVersion {
-                    number: version.number,
-                    code_hash: version.code_hash,
-                    abi_version: version.abi_version,
-                    source: version.source,
+                .map(|version| {
+                    let metadata = interfaces.iter().find(|metadata| {
+                        metadata.program == read.entry.program && metadata.version == version.number
+                    });
+                    if metadata.is_some_and(|metadata| {
+                        metadata.code_hash != version.code_hash
+                            || metadata.abi_version != version.abi_version
+                    }) {
+                        return Err(ExplorerProgramReadError::InterfaceRegistryMismatch);
+                    }
+                    Ok(ExplorerProgramVersion {
+                        number: version.number,
+                        code_hash: version.code_hash,
+                        abi_version: version.abi_version,
+                        source: version.source,
+                        interface_digest: metadata.map(|metadata| metadata.digest),
+                    })
                 })
-                .collect(),
+                .collect::<Result<Vec<_>, _>>()?,
             observed_sequence: read.freshness.observed_sequence,
             observed_at: read.freshness.observed_at,
             receipt_digest: read.receipt_digest,
@@ -122,10 +162,11 @@ impl ExplorerProgram {
     pub fn from_protocol_state(
         read: VerifiedRegistryRead,
         state: &ProtocolProgramStateRead,
+        interfaces: &[VerifiedProgramInterfaceMetadata],
         now: u64,
         staleness_limit: u64,
     ) -> Result<Self, ExplorerProgramReadError> {
-        Self::from_verified(read, state.balances().clone(), now, staleness_limit)
+        Self::from_verified(read, state.balances().clone(), interfaces, now, staleness_limit)
     }
 }
 

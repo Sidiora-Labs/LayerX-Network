@@ -1,11 +1,11 @@
 [schema]
 name = "LayerX Agent API"
 major = 1
-minor = 1
+minor = 2
 node_interface_major = 1
 source_of_truth = "This schema and the schema files it includes define the daemon contract and every SDK surface. Generated output is never authoritative."
 compatibility = "Within one major version a release may only add sections or keys. Removing or changing an existing declaration requires a new major version."
-includes = ["identity.kvx","write.kvx","read.kvx","stream.kvx","errors.kvx","approval.kvx"]
+includes = ["identity.kvx","write.kvx","read.kvx","stream.kvx","errors.kvx","approval.kvx","programs.kvx"]
 
 [encoding]
 request = "contract_major:u16be contract_minor:u16be request_id:u64be operation:utf8 payload:canonical-map"
@@ -77,6 +77,15 @@ daemon = "0.1.x"
 classification = "additive_only"
 baseline = "golden/v1.kvx@1.0"
 change = "Adds approval.kvx without changing any contract 1.0 declaration."
+
+[compatibility.history.1_2]
+classification = "additive_only"
+baseline = "golden/v1.kvx@1.1"
+change = "Adds the receipt-verified Programs operation family and its bounded canonical call contract."
+
+[compatibility.feature.programs]
+introduced_contract = "1.2"
+classification = "additive_only"
 
 [compatibility.feature.approval]
 introduced_contract = "1.1"

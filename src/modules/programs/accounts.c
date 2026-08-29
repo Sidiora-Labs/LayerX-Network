@@ -57,7 +57,8 @@ static lxp_result account_module_required(lxp_module_ctx *ctx)
     status = lxp_kernel_module_by_id(ctx->kernel, LXP_MODULE_PROGRAMS,
                                      ctx->epoch, &registration);
     if (status != LXP_OK) return status;
-    return registration->abi_version == LX_PROGRAMS_ACCOUNT_ABI_VERSION ?
+    return registration->abi_version == LX_PROGRAMS_ACCOUNT_ABI_VERSION ||
+           registration->abi_version == LX_PROGRAMS_SANDBOX_ABI_VERSION ?
            LXP_OK : LXP_ERR_VERSION_UNSUPPORTED;
 }
 

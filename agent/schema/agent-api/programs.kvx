@@ -1,0 +1,127 @@
+[module]
+name = "programs"
+contract_major = 1
+compatibility = "additive_only"
+source_of_truth = "The canonical ProgramCall payload and authenticated Programs receipt grammar define this operation family."
+
+[limit]
+program_id_bytes = 32
+calldata_bytes = 1048576
+receipt_bytes = 1048576
+terminal_payload_bytes = 1048576
+call_graph_bytes = 1048576
+capabilities = 5
+
+[type.ProgramSelector]
+required = ["program_id","requested_verification_level"]
+program_id = "bytes32"
+
+[type.VerifiedProgramDiscovery]
+required = ["program_id","lifecycle","version","code_hash","abi_version","receipt_digest","state_root","freshness","valid_through"]
+proof = "receipt_verified_registry_read"
+lifecycle = ["active","deprecated","tombstoned"]
+
+[type.VerifiedProgramInterface]
+required = ["program_id","version","code_hash","abi_version","interface","interface_digest","receipt_digest","state_root","freshness","valid_through"]
+proof = "receipt_verified_registry_read"
+absence = "typed_absent_only_when_the_verified_version_has_no_interface"
+
+[type.ProgramCallBudget]
+required = ["fuel","fee_limit"]
+fuel = "nonzero_u64_decimal"
+fee_limit = "u128_decimal"
+
+[type.ProgramCapability]
+variants = ["storage_read","storage_write","transfer","emit_event","compose"]
+tags = [1,2,3,4,5]
+ordering = "ascending_unique_tag"
+
+[type.ProgramCallRequest]
+required = ["program_id","calldata","budget","capabilities","signed_activity"]
+program_id = "bytes32"
+calldata = "bounded_bytes"
+budget = "ProgramCallBudget"
+capabilities = "bounded_canonical_ProgramCapability_set"
+signed_activity = "bounded_bytes"
+identity_binding = "The signed Programs ordinal-3 activity must carry the exact canonical payload derived from program_id, calldata, budget and capabilities."
+
+[type.ProgramReceiptSelector]
+required = ["idempotency_key","expected_activity_id","requested_verification_level"]
+idempotency_key = "bytes32"
+expected_activity_id = "bytes32"
+
+[type.ProgramActivitySelector]
+required = ["activity_id","requested_verification_level"]
+activity_id = "bytes32"
+
+[type.ProgramExecutionEvidence]
+required = ["activity_id","receipt","terminal_payload","call_graph","authority"]
+proof = "local_canonical_receipt_signature_and_terminal_commitment_verification"
+transport_outcome = "never_authoritative"
+
+[type.ProgramSimulation]
+required = ["committed","execution","simulation_evidence"]
+committed = false
+proof = "boundary_signed_non_commit_evidence_and_locally_verified_ProgramExecutionEvidence"
+
+[type.ProgramSubmission]
+required = ["state","activity_id","idempotency_key"]
+states = ["refused","unknown","executed"]
+unknown = "first_class_and_resolved_by_program.receipt_or_program.activity"
+executed = "requires_locally_verified_ProgramExecutionEvidence"
+
+[type.ProgramOutcome]
+variants = ["completed","legacy_completed","refused"]
+source = "authenticated_terminal_payload_bound_to_canonical_program_outcome_receipt_fields"
+
+[type.ProgramFailure]
+variants = ["unknown_program","reentrancy","depth_exceeded","fanout_exceeded","guest_refused","authority","resource","response","fault"]
+source = "canonical_terminal_failure_grammar"
+
+[operation.program.discover]
+method = "GET"
+path = "/v1/programs/registry/{program_id}"
+request = "ProgramSelector"
+response = "VerifiedProgramDiscovery"
+scope = "program:read"
+
+[operation.program.interface]
+method = "GET"
+path = "/v1/programs/registry/{program_id}/interface"
+request = "ProgramSelector"
+request_required = ["program_id","requested_verification_level"]
+response = "VerifiedProgramInterface"
+scope = "program:read"
+
+[operation.program.simulate]
+method = "POST"
+path = "/v1/programs/simulate"
+request = "ProgramCallRequest"
+response = "ProgramSimulation"
+scope = "program:simulate"
+non_committing = true
+
+[operation.program.call]
+method = "POST"
+path = "/v1/programs/call"
+request = "ProgramCallRequest"
+required = ["idempotency_key"]
+response = "ProgramSubmission"
+scope = "program:call"
+unknown_outcome = "retain_signed_activity_and_resolve_by_receipt"
+
+[operation.program.receipt]
+method = "GET"
+path = "/v1/programs/receipts/by-idempotency/{idempotency_key}"
+request = "ProgramReceiptSelector"
+request_required = ["idempotency_key","expected_activity_id","requested_verification_level"]
+response = "ProgramSubmission"
+scope = "program:read"
+
+[operation.program.activity]
+method = "GET"
+path = "/v1/programs/activities/{activity_id}"
+request = "ProgramActivitySelector"
+request_required = ["activity_id","requested_verification_level"]
+response = "ProgramSubmission"
+scope = "program:read"

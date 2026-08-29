@@ -59,6 +59,44 @@ export interface AccountActivityRecord {
   readonly verificationLevel: ExplorerVerificationLevel;
 }
 
+export type ProgramLifecycle = "active" | "deprecated" | "tombstoned";
+
+export type ProgramUpgradePolicy =
+  | Readonly<{ kind: "immutable" }>
+  | Readonly<{ kind: "upgradeable"; authority: string }>;
+
+export type ProgramSourceStatus =
+  | Readonly<{ status: "unpublished" }>
+  | Readonly<{ status: "verified"; sourceDigest: string; environmentDigest: string }>
+  | Readonly<{ status: "mismatch"; expected: string; reproduced: string }>;
+
+export interface ProgramVersionRecord {
+  readonly version: string;
+  readonly codeHash: string;
+  readonly abiVersion: string;
+  readonly interfaceDigest?: string;
+  readonly source: ProgramSourceStatus;
+}
+
+export interface ProgramValueAccountRecord {
+  readonly account: string;
+  readonly asset: string;
+  readonly balance: string;
+  readonly frozen: boolean;
+}
+
+export interface ProgramRecord {
+  readonly program: string;
+  readonly upgradePolicy: ProgramUpgradePolicy;
+  readonly lifecycle: ProgramLifecycle;
+  readonly versions: readonly ProgramVersionRecord[];
+  readonly valueAccounts: readonly ProgramValueAccountRecord[];
+  readonly observedSequence: string;
+  readonly observedAt: string;
+  readonly receiptDigest: string;
+  readonly stateRoot: string;
+}
+
 export interface ExplorerPage<T> {
   readonly items: readonly T[];
   readonly nextBefore?: string;
@@ -241,6 +279,83 @@ export function decodeAccountActivity(
     from: hex(item.from, `${at}.from`),
     to: hex(item.to, `${at}.to`),
     verificationLevel: verificationLevel(item.verification_level, `${at}.verification_level`),
+  });
+}
+
+function decodeProgramSource(value: unknown, at: string): ProgramSourceStatus {
+  const item = record(value, at);
+  const status = text(item.status, `${at}.status`);
+  if (status === "unpublished") {
+    return Object.freeze({ status });
+  }
+  if (status === "verified") {
+    return Object.freeze({
+      status,
+      sourceDigest: hex(item.source_digest, `${at}.source_digest`),
+      environmentDigest: hex(item.environment_digest, `${at}.environment_digest`),
+    });
+  }
+  if (status === "mismatch") {
+    return Object.freeze({
+      status,
+      expected: hex(item.expected, `${at}.expected`),
+      reproduced: hex(item.reproduced, `${at}.reproduced`),
+    });
+  }
+  throw new TypeError(`${at}.status is not a declared source status`);
+}
+
+export function decodeProgram(value: unknown, at = "program"): ProgramRecord {
+  const item = record(value, at);
+  const policy = record(item.upgrade_policy, `${at}.upgrade_policy`);
+  const policyKind = text(policy.kind, `${at}.upgrade_policy.kind`);
+  if (policyKind !== "immutable" && policyKind !== "upgradeable") {
+    throw new TypeError(`${at}.upgrade_policy.kind is invalid`);
+  }
+  const lifecycle = text(item.lifecycle, `${at}.lifecycle`);
+  if (lifecycle !== "active" && lifecycle !== "deprecated" && lifecycle !== "tombstoned") {
+    throw new TypeError(`${at}.lifecycle is invalid`);
+  }
+  if (!Array.isArray(item.versions) || item.versions.length === 0 || item.versions.length > 1_024) {
+    throw new TypeError(`${at}.versions must be a bounded non-empty array`);
+  }
+  if (!Array.isArray(item.value_accounts) || item.value_accounts.length > 1_024) {
+    throw new TypeError(`${at}.value_accounts must be a bounded array`);
+  }
+  return Object.freeze({
+    program: hex(item.program, `${at}.program`),
+    upgradePolicy: policyKind === "immutable"
+      ? Object.freeze({ kind: "immutable" as const })
+      : Object.freeze({
+          kind: "upgradeable" as const,
+          authority: hex(policy.authority, `${at}.upgrade_policy.authority`),
+        }),
+    lifecycle,
+    versions: Object.freeze(item.versions.map((candidate, index) => {
+      const version = record(candidate, `${at}.versions[${String(index)}]`);
+      return Object.freeze({
+        version: decimal(version.version, `${at}.versions[${String(index)}].version`),
+        codeHash: hex(version.code_hash, `${at}.versions[${String(index)}].code_hash`),
+        abiVersion: decimal(version.abi_version, `${at}.versions[${String(index)}].abi_version`),
+        ...(version.interface_digest === null || version.interface_digest === undefined
+          ? {}
+          : { interfaceDigest: hex(version.interface_digest, `${at}.versions[${String(index)}].interface_digest`) }),
+        source: decodeProgramSource(version.source, `${at}.versions[${String(index)}].source`),
+      });
+    })),
+    valueAccounts: Object.freeze(item.value_accounts.map((candidate, index) => {
+      const account = record(candidate, `${at}.value_accounts[${String(index)}]`);
+      return Object.freeze({
+        account: hex(account.account, `${at}.value_accounts[${String(index)}].account`),
+        asset: hex(account.asset, `${at}.value_accounts[${String(index)}].asset`),
+        balance: decimal(account.balance, `${at}.value_accounts[${String(index)}].balance`),
+        frozen: boolean(account.frozen, `${at}.value_accounts[${String(index)}].frozen`),
+      });
+    })),
+    observedSequence: decimal(item.observed_sequence, `${at}.observed_sequence`),
+    observedAt: decimal(item.observed_at, `${at}.observed_at`),
+    receiptDigest: hex(item.receipt_digest, `${at}.receipt_digest`),
+    stateRoot: hex(item.state_root, `${at}.state_root`),
   });
 }
 

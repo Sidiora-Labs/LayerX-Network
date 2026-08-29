@@ -55,6 +55,13 @@ from .production import (
     SecretBytes as SecretBytes,
     platform_sdk_python as platform_sdk_python,
 )
+from .programs import (
+    ProgramCall as ProgramCall,
+    ProgramOperations as ProgramOperations,
+    VerifiedProgramReceipt as VerifiedProgramReceipt,
+    platform_sdk_programs as platform_sdk_programs,
+    verify_program_receipt as verify_program_receipt,
+)
 from .stream import (
     ResumableStream as ResumableStream,
     StreamCursor as StreamCursor,

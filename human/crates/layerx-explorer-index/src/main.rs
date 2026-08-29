@@ -9,12 +9,16 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use layerx_agentd::read::LayerxdProgramBalanceReader;
 use layerx_client::head::Head;
-use layerx_explorer_index::programs::ExplorerProgram;
+use layerx_explorer_index::programs::{
+    ExplorerProgram, VerifiedProgramInterfaceMetadata,
+};
 use layerx_explorer_index::{Indexer, ProtocolProgramIngestor};
 use layerx_programs::{
-    hex, DeploymentJournal, DeploymentProof, DeploymentRecord, JournalReadAuthority, ObservedHead,
-    ProgramId, ProgramLifecycle, ProtocolDeploymentVerifier, Registry, RegistryError,
+    hex, BuildPlan, DeploymentJournal, DeploymentProof, DeploymentRecord, JournalReadAuthority,
+    ObservedHead, ProgramId, ProgramLifecycle, ProtocolDeploymentVerifier, Registry, RegistryError,
+    ReproducibleBuild, SourceStatus, UpgradePolicy,
 };
+use serde_json::Value;
 
 const HEADER_LIMIT: usize = 16 * 1024;
 
@@ -61,6 +65,7 @@ struct Config {
     sequencer_trust_history: PathBuf,
     staleness_ms: u64,
     journal: FileJournal,
+    verified_source_store: PathBuf,
     probe_program: ProgramId,
     observed_sealed_batch: u64,
     finalised_checkpoint: [u8; 32],
@@ -116,6 +121,9 @@ fn config() -> Result<Config, String> {
         journal: FileJournal {
             root: PathBuf::from(required("LAYERX_EXPLORER_DEPLOYMENT_JOURNAL")?),
         },
+        verified_source_store: PathBuf::from(required(
+            "LAYERX_EXPLORER_VERIFIED_SOURCE_STORE",
+        )?),
         probe_program: ProgramId::new(parse_digest("LAYERX_EXPLORER_PROGRAM_PROBE_ID")?)
             .map_err(|error| format!("LAYERX_EXPLORER_PROGRAM_PROBE_ID is invalid: {error}"))?,
         observed_sealed_batch: parse_u64("LAYERX_EXPLORER_OBSERVED_SEALED_BATCH")?,
@@ -123,10 +131,16 @@ fn config() -> Result<Config, String> {
     })
 }
 
+struct LoadedRegistry {
+    registry: Registry,
+    interfaces: Vec<VerifiedProgramInterfaceMetadata>,
+}
+
 fn load_registry(
     root: &Path,
+    verified_source_store: &Path,
     verifier: &ProtocolDeploymentVerifier,
-) -> Result<Registry, String> {
+) -> Result<LoadedRegistry, String> {
     let mut paths = fs::read_dir(root)
         .map_err(|error| format!("deployment journal is unavailable: {error}"))?
         .map(|entry| entry.map(|value| value.path()))
@@ -135,6 +149,7 @@ fn load_registry(
     paths.retain(|path| path.extension().is_some_and(|value| value == "admission"));
     paths.sort();
     let mut registry = Registry::new();
+    let mut interfaces = Vec::new();
     for path in paths {
         let bytes = fs::read(&path)
             .map_err(|error| format!("{} is unreadable: {error}", path.display()))?;
@@ -159,6 +174,9 @@ fn load_registry(
         if &record != evidence.record() {
             return Err(format!("{} disagrees with protocol evidence", record_path.display()));
         }
+        if let Some(interface) = VerifiedProgramInterfaceMetadata::from_deployment(&evidence) {
+            interfaces.push(interface);
+        }
         registry
             .record_verified_deployment(&evidence)
             .map_err(|error| format!("verified deployment replay failed: {error}"))?;
@@ -166,7 +184,77 @@ fn load_registry(
     if registry.program_ids().is_empty() {
         return Err("deployment journal contains no verified admissions".to_owned());
     }
-    Ok(registry)
+    replay_verified_sources(verified_source_store, &mut registry)?;
+    Ok(LoadedRegistry {
+        registry,
+        interfaces,
+    })
+}
+
+fn replay_verified_sources(root: &Path, registry: &mut Registry) -> Result<(), String> {
+    let mut paths = fs::read_dir(root)
+        .map_err(|error| format!("verified source store is unavailable: {error}"))?
+        .map(|entry| entry.map(|value| value.path()))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("verified source store is unreadable: {error}"))?;
+    paths.retain(|path| path.extension().is_some_and(|value| value == "verified"));
+    paths.sort();
+    for path in paths {
+        let bytes = fs::read(&path)
+            .map_err(|error| format!("{} is unreadable: {error}", path.display()))?;
+        let document: Value = serde_json::from_slice(&bytes)
+            .map_err(|_| format!("{} is corrupt", path.display()))?;
+        let program = document["program"]
+            .as_str()
+            .and_then(|value| hex::decode_digest(value).ok())
+            .and_then(|value| ProgramId::new(value).ok())
+            .ok_or_else(|| format!("{} has an invalid program", path.display()))?;
+        let version = document["version"]
+            .as_u64()
+            .and_then(|value| u32::try_from(value).ok())
+            .filter(|value| *value != 0)
+            .ok_or_else(|| format!("{} has an invalid version", path.display()))?;
+        let expected_name = format!("{}-{version}", hex::encode(&program.bytes()));
+        if path.file_stem().and_then(|value| value.to_str()) != Some(expected_name.as_str()) {
+            return Err(format!("{} is filed under the wrong program version", path.display()));
+        }
+        let source_uri = document["source_uri"]
+            .as_str()
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| format!("{} has an invalid source URI", path.display()))?;
+        let source_digest = document["source_digest"]
+            .as_str()
+            .and_then(|value| hex::decode_digest(value).ok())
+            .ok_or_else(|| format!("{} has an invalid source digest", path.display()))?;
+        let artifact_digest = document["artifact_digest"]
+            .as_str()
+            .and_then(|value| hex::decode_digest(value).ok())
+            .ok_or_else(|| format!("{} has an invalid artifact digest", path.display()))?;
+        let plan = document["plan"]
+            .as_str()
+            .ok_or_else(|| format!("{} has no build plan", path.display()))
+            .and_then(|value| {
+                BuildPlan::parse(value)
+                    .map_err(|error| format!("{} has an invalid build plan: {error}", path.display()))
+            })?;
+        let build = ReproducibleBuild::from_record(
+            source_uri.to_owned(),
+            source_digest,
+            plan.environment,
+            artifact_digest,
+        )
+        .map_err(|error| format!("{} is inadmissible: {error}", path.display()))?;
+        match registry.verify_source(program, version, &build) {
+            Ok(SourceStatus::Verified { .. }) => {}
+            Ok(SourceStatus::Mismatch { .. } | SourceStatus::Unpublished) => {
+                return Err(format!("{} does not reproduce registered code", path.display()));
+            }
+            Err(error) => {
+                return Err(format!("{} is not bound to registry state: {error}", path.display()));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn now_ms() -> Result<u64, String> {
@@ -184,7 +272,57 @@ fn lifecycle(value: ProgramLifecycle) -> &'static str {
     }
 }
 
+fn upgrade_policy(value: UpgradePolicy) -> String {
+    match value {
+        UpgradePolicy::Immutable => "{\"kind\":\"immutable\"}".to_owned(),
+        UpgradePolicy::Authority(authority) => format!(
+            "{{\"kind\":\"upgradeable\",\"authority\":\"{}\"}}",
+            hex::encode(&authority),
+        ),
+    }
+}
+
+fn source_status(value: &SourceStatus) -> String {
+    match value {
+        SourceStatus::Unpublished => "{\"status\":\"unpublished\"}".to_owned(),
+        SourceStatus::Verified {
+            source_digest,
+            environment_digest,
+        } => format!(
+            "{{\"status\":\"verified\",\"source_digest\":\"{}\",\"environment_digest\":\"{}\"}}",
+            hex::encode(source_digest),
+            hex::encode(environment_digest),
+        ),
+        SourceStatus::Mismatch {
+            expected,
+            reproduced,
+        } => format!(
+            "{{\"status\":\"mismatch\",\"expected\":\"{}\",\"reproduced\":\"{}\"}}",
+            hex::encode(expected),
+            hex::encode(reproduced),
+        ),
+    }
+}
+
 fn program_json(program: &ExplorerProgram) -> String {
+    let versions = program
+        .versions
+        .iter()
+        .map(|version| {
+            format!(
+                "{{\"version\":\"{}\",\"code_hash\":\"{}\",\"abi_version\":\"{}\",\"interface_digest\":{},\"source\":{}}}",
+                version.number,
+                hex::encode(&version.code_hash),
+                version.abi_version,
+                version
+                    .interface_digest
+                    .map(|digest| format!("\"{}\"", hex::encode(&digest)))
+                    .unwrap_or_else(|| "null".to_owned()),
+                source_status(&version.source),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
     let accounts = program
         .value_accounts
         .iter()
@@ -200,9 +338,11 @@ fn program_json(program: &ExplorerProgram) -> String {
         .collect::<Vec<_>>()
         .join(",");
     format!(
-        "{{\"program\":\"{}\",\"lifecycle\":\"{}\",\"value_accounts\":[{}],\"observed_sequence\":{},\"observed_at\":{},\"receipt_digest\":\"{}\",\"state_root\":\"{}\"}}",
+        "{{\"program\":\"{}\",\"upgrade_policy\":{},\"lifecycle\":\"{}\",\"versions\":[{}],\"value_accounts\":[{}],\"observed_sequence\":\"{}\",\"observed_at\":\"{}\",\"receipt_digest\":\"{}\",\"state_root\":\"{}\"}}",
         hex::encode(&program.identifier),
+        upgrade_policy(program.upgrade_policy),
         lifecycle(program.lifecycle),
+        versions,
         accounts,
         program.balance_observed_sequence,
         program.balance_observed_at,
@@ -225,7 +365,7 @@ fn response(stream: &mut TcpStream, status: u16, body: &str) -> Result<(), Strin
 
 fn refresh_program(
     config: &Config,
-    registry: &Registry,
+    loaded: &LoadedRegistry,
     ingestor: &mut ProtocolProgramIngestor,
     index: &mut Indexer,
     program: ProgramId,
@@ -233,11 +373,12 @@ fn refresh_program(
 ) -> Result<(), String> {
     let authority = JournalReadAuthority::new(&config.journal, now, config.staleness_ms)
         .map_err(|error| format!("registry authority is unavailable: {error}"))?;
-    let read = registry
+    let read = loaded
+        .registry
         .read(program, &authority)
         .map_err(|error| format!("registry read is unavailable: {error}"))?;
     ingestor
-        .ingest(index, read, now)
+        .ingest(index, read, &loaded.interfaces, now)
         .map_err(|error| format!("program ingest failed: {error:?}"))?;
     Ok(())
 }
@@ -245,7 +386,7 @@ fn refresh_program(
 fn serve_connection(
     stream: &mut TcpStream,
     config: &Config,
-    registry: &Registry,
+    loaded: &LoadedRegistry,
     ingestor: &mut ProtocolProgramIngestor,
     index: &mut Indexer,
 ) -> Result<(), String> {
@@ -286,7 +427,7 @@ fn serve_connection(
     if path == "/healthz" {
         return match refresh_program(
             config,
-            registry,
+            loaded,
             ingestor,
             index,
             config.probe_program,
@@ -305,8 +446,11 @@ fn serve_connection(
     let Some(program) = program else {
         return response(stream, 400, "{\"error\":\"invalid_program\"}");
     };
+    if !loaded.registry.program_ids().contains(&program) {
+        return response(stream, 404, "{\"error\":\"not_found\"}");
+    }
     let now = now_ms()?;
-    if refresh_program(config, registry, ingestor, index, program, now).is_err() {
+    if refresh_program(config, loaded, ingestor, index, program, now).is_err() {
         return response(stream, 503, "{\"error\":\"program_state_unavailable\"}");
     }
     match index.program(program.bytes()).value {
@@ -321,7 +465,11 @@ fn serve(config: Config) -> Result<(), String> {
         config.staleness_ms,
     )
     .map_err(|error| format!("explorer deployment verifier is invalid: {error}"))?;
-    let registry = load_registry(&config.journal.root, &verifier)?;
+    let loaded = load_registry(
+        &config.journal.root,
+        &config.verified_source_store,
+        &verifier,
+    )?;
     let reader = LayerxdProgramBalanceReader::connect(
         &config.node_endpoint,
         config.node_bearer.clone(),
@@ -329,7 +477,7 @@ fn serve(config: Config) -> Result<(), String> {
         config.authority_bearer.clone(),
         config.authority_replica_id,
         verifier,
-        registry.clone(),
+        loaded.registry.clone(),
     )
     .map_err(|error| format!("explorer protocol reader configuration failed: {error:?}"))?;
     let head = config
@@ -345,11 +493,12 @@ fn serve(config: Config) -> Result<(), String> {
     let now = now_ms()?;
     let authority = JournalReadAuthority::new(&config.journal, now, config.staleness_ms)
         .map_err(|error| format!("explorer registry authority is unavailable: {error}"))?;
-    let probe = registry
+    let probe = loaded
+        .registry
         .read(config.probe_program, &authority)
         .map_err(|error| format!("explorer registry probe failed: {error}"))?;
     ingestor
-        .ingest(&mut index, probe, now)
+        .ingest(&mut index, probe, &loaded.interfaces, now)
         .map_err(|error| format!("explorer protocol probe failed: {error:?}"))?;
     let listener = TcpListener::bind(&config.listen)
         .map_err(|error| format!("explorer program listener failed: {error}"))?;
@@ -359,7 +508,7 @@ fn serve(config: Config) -> Result<(), String> {
             .set_read_timeout(Some(Duration::from_secs(10)))
             .and_then(|()| stream.set_write_timeout(Some(Duration::from_secs(10))))
             .map_err(|error| format!("explorer connection timeout setup failed: {error}"))?;
-        let _ = serve_connection(&mut stream, &config, &registry, &mut ingestor, &mut index);
+        let _ = serve_connection(&mut stream, &config, &loaded, &mut ingestor, &mut index);
     }
     Ok(())
 }

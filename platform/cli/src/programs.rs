@@ -638,9 +638,9 @@ fn render_call_result(
         .ok_or_else(|| "program receipt verifier produced no digest".to_owned())?;
     let program = protocol.program_outcome()
         .ok_or_else(|| "verified receipt omitted its Programs outcome".to_owned())?;
-    if program.abi_version() != head.abi_version
-        || protocol.module_version() != u32::from(head.abi_version)
-    { return Err("program receipt ABI does not match verified discovery".to_owned()); }
+    if program.abi_version() != head.abi_version {
+        return Err("program receipt ABI does not match verified discovery".to_owned());
+    }
     if head.observed_sequence.checked_add(1) != Some(protocol.global_sequence()) {
         return Err("program receipt sequence does not extend verified discovery".to_owned());
     }

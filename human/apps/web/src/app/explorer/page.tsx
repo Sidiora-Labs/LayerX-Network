@@ -48,6 +48,15 @@ export default async function ExplorerPlanePage() {
             submitLabel={copyEntry("explorer.lookup.action").message}
           />
         </ExplorerPanel>
+        <ExplorerPanel title={copyEntry("explorer.lookup.program.title").message}>
+          <ExplorerLookupForm
+            action="/explorer/lookup"
+            kind="program"
+            label={copyEntry("explorer.lookup.program.label").message}
+            placeholder={copyEntry("explorer.lookup.program.placeholder").message}
+            submitLabel={copyEntry("explorer.lookup.action").message}
+          />
+        </ExplorerPanel>
       </div>
       <ExplorerPanel title={copyEntry("explorer.checkpoints.recent").message}>
         <ExplorerTable

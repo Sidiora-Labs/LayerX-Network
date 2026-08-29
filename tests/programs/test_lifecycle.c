@@ -161,6 +161,9 @@ int main(void)
     lxp_state_store store;
     lxp_state_journal journal;
     lxp_kernel kernel;
+    lxp_state_store sandbox_store;
+    lxp_state_journal sandbox_journal;
+    lxp_kernel sandbox_kernel;
     lxp_authority_resolved authority;
     uint64_t parameters = 1U;
     (void)memset(&authority, 0, sizeof(authority));
@@ -283,6 +286,17 @@ int main(void)
     if (dispatch(&kernel, &journal, &authority, 2U, remove_interface,
                  110U + sizeof(wasm), LXP_OK) != 0 ||
         interface_state_absent(&kernel, deploy) != 0)
+        return 1;
+    (void)memset(deploy, 0x33, 32U);
+    if (lxp_state_store_init(&sandbox_store, 0U) != LXP_OK ||
+        lxp_kernel_create(&sandbox_kernel, &sandbox_store, &sandbox_journal,
+                          &parameters, 0U) != LXP_OK ||
+        lxp_kernel_register_module(&sandbox_kernel,
+                                   programs_module_registration_v3()) !=
+            LXP_OK ||
+        dispatch(&sandbox_kernel, &sandbox_journal, &authority, 1U, deploy,
+                 deploy_length, LXP_OK) != 0 ||
+        lxp_state_store_destroy(&sandbox_store) != LXP_OK)
         return 1;
     return lxp_state_store_destroy(&store) == LXP_OK ? 0 : 1;
 }

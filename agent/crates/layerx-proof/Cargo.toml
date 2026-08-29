@@ -9,6 +9,8 @@ license.workspace = true
 layerx-types = { path = "../layerx-types" }
 layerx-wire = { path = "../layerx-wire" }
 layerx-crypto = { path = "../layerx-crypto", default-features = false }
+layerx-programs-runtime = { path = "../../../programs/crates/layerx-programs-runtime" }
+sha2.workspace = true
 
 [dev-dependencies]
 ed25519-dalek = "=2.2.0"

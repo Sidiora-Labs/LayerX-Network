@@ -10,6 +10,7 @@ const DESTINATIONS = Object.freeze({
   account: "accounts",
   checkpoint: "checkpoints",
   batch: "batches",
+  program: "programs",
 });
 
 export function GET(request: NextRequest) {

@@ -796,7 +796,7 @@ static int registration_law(void)
             LXP_OK ||
         lxp_kernel_set_epoch(&kernel, 1U) != LXP_OK ||
         lxp_kernel_register_module(&kernel,
-                                   programs_module_registration_v2()) !=
+                                   programs_module_registration_v3()) !=
             LXP_OK ||
         lxp_kernel_bind_module_runtime(&kernel, LXP_MODULE_PROGRAMS,
                                        &runtime) != LXP_OK ||
@@ -963,7 +963,7 @@ static int registration_law(void)
                                    programs_module_registration()) != LXP_OK ||
         lxp_kernel_set_epoch(&restored_kernel, 1U) != LXP_OK ||
         lxp_kernel_register_module(&restored_kernel,
-                                   programs_module_registration_v2()) !=
+                                   programs_module_registration_v3()) !=
             LXP_OK)
         return 1;
     restored_runtime = runtime;

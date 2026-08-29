@@ -395,7 +395,8 @@ static lxp_result execute_deploy(lxp_module_ctx *ctx,
     status = lxp_kernel_module_by_id(ctx->kernel, LXP_MODULE_PROGRAMS,
                                      ctx->epoch, &registration);
     if (status != LXP_OK) return status;
-    if (registration->abi_version == LX_PROGRAMS_ACCOUNT_ABI_VERSION) {
+    if (registration->abi_version == LX_PROGRAMS_ACCOUNT_ABI_VERSION ||
+        registration->abi_version == LX_PROGRAMS_SANDBOX_ABI_VERSION) {
         status = lxp_programs_account_owner_bind(
             ctx, value->program_id, authority->principal);
         if (status != LXP_OK) return status;

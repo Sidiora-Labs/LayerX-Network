@@ -198,6 +198,7 @@ impl ProtocolProgramIngestor {
         &mut self,
         index: &mut Indexer,
         mut registry_read: layerx_programs::VerifiedRegistryRead,
+        interfaces: &[programs::VerifiedProgramInterfaceMetadata],
         now: u64,
     ) -> Result<IngestOutcome, IndexError> {
         let state = self
@@ -210,7 +211,13 @@ impl ProtocolProgramIngestor {
         registry_read.entry.lifecycle_history = state.history().to_vec();
         registry_read.receipt_digest = state.balances().receipt_digest();
         registry_read.freshness = state.balances().freshness();
-        index.ingest_program(registry_read, &state, now, self.staleness_limit)
+        index.ingest_program(
+            registry_read,
+            &state,
+            interfaces,
+            now,
+            self.staleness_limit,
+        )
     }
 }
 
@@ -572,12 +579,18 @@ impl Indexer {
         &mut self,
         registry_read: layerx_programs::VerifiedRegistryRead,
         state: &layerx_programs_protocol_adapter::ProtocolProgramStateRead,
+        interfaces: &[programs::VerifiedProgramInterfaceMetadata],
         now: u64,
         staleness_limit: u64,
     ) -> Result<IngestOutcome, IndexError> {
-        let program =
-            ExplorerProgram::from_protocol_state(registry_read, state, now, staleness_limit)
-                .map_err(IndexError::ProgramRead)?;
+        let program = ExplorerProgram::from_protocol_state(
+            registry_read,
+            state,
+            interfaces,
+            now,
+            staleness_limit,
+        )
+        .map_err(IndexError::ProgramRead)?;
         let identifier = program.identifier;
         if let Some(existing) = self.programs.get(&identifier) {
             if program.balance_observed_sequence < existing.balance_observed_sequence {

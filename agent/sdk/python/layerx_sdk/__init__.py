@@ -55,6 +55,7 @@ from .production import (
     SecretBytes,
     platform_sdk_python,
 )
+from .programs import ProgramCall, ProgramOperations, VerifiedProgramReceipt, platform_sdk_programs, verify_program_receipt
 from .stream import ResumableStream, StreamCursor, StreamEvent, StreamPage
 from .mirror import MirrorCandidate, MirrorPolicy, MirrorVerification, MirrorVerificationError, MirrorVerifier
 from .verifier import (
@@ -128,16 +129,21 @@ __all__ = [
     "PlatformSdkError",
     "ProductionClient",
     "ProductionTransport",
+    "ProgramCall",
+    "ProgramOperations",
     "ProtocolAmount",
     "ResumableStream",
     "RetryClass",
     "SdkErrorCode",
     "SdkTelemetry",
     "SecretBytes",
+    "VerifiedProgramReceipt",
     "StreamCursor",
     "StreamEvent",
     "StreamPage",
     "platform_sdk_python",
+    "platform_sdk_programs",
+    "verify_program_receipt",
     "BatchHeader",
     "AuthorizedReceiptBatch",
     "CheckpointAttestation",

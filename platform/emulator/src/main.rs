@@ -16,19 +16,25 @@ use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use sha2::{Digest as _, Sha256};
 use ed25519_dalek::{Signer as _, SigningKey};
+use layerx_types::intent::{
+    Amount, CallBudget, Calldata, CapabilityRequest, ProgramCall, ProgramId,
+    RequestedCapabilities,
+};
+use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry};
+use layerx_wire::activity::decode_signed;
 
 const DEFAULT_PORT: u16 = 9402;
 const DEFAULT_NETWORK_ID: u32 = 402;
 const DEFAULT_TIME_MS: u64 = 1_700_000_000_000;
 const MAX_HEADER_BYTES: usize = 32 * 1024;
 const MAX_REQUEST_BYTES: usize = 64 * 1024 * 1024;
-const MAX_JSON_BYTES: usize = 1024 * 1024;
+const MAX_JSON_BYTES: usize = 8 * 1024 * 1024;
 const IO_TIMEOUT: Duration = Duration::from_secs(10);
 const PARSER_WORKERS: usize = 8;
 const ADMISSION_CAPACITY: usize = 32;
 const TRANSITION_CAPACITY: usize = 32;
 const MAX_RECEIPTS: usize = 4096;
-const MAX_RECEIPT_BYTES: usize = 64 * 1024;
+const MAX_RECEIPT_BYTES: usize = 1024 * 1024;
 
 #[repr(C)]
 struct CoreReceipt {
@@ -175,6 +181,23 @@ struct Prefund {
 #[serde(deny_unknown_fields)]
 struct ActivityBody {
     activity: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProgramCallBudgetBody {
+    fuel: String,
+    fee_limit: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProgramCallBody {
+    program_id: String,
+    calldata: String,
+    budget: ProgramCallBudgetBody,
+    capabilities: Vec<String>,
+    signed_activity: String,
 }
 
 #[derive(Deserialize)]
@@ -548,6 +571,58 @@ fn decode_activity(request: &Request) -> Result<Vec<u8>, String> {
     }
 }
 
+fn decode_program_activity(request: &Request) -> Result<Vec<u8>, String> {
+    let media_type = request.content_type.split(';').next().unwrap_or_default().trim();
+    if media_type == "application/octet-stream" {
+        return Ok(request.body.clone());
+    }
+    if media_type != "application/json" {
+        return Err("program call requires application/json".to_owned());
+    }
+    let body = decode_json::<ProgramCallBody>(request)?;
+    let program_bytes = hex_decode(&body.program_id)?;
+    let program_id: [u8; 32] = program_bytes
+        .try_into()
+        .map_err(|_| "program id must be 32-byte hexadecimal".to_owned())?;
+    let program = ProgramId::new(program_id).map_err(|_| "program id is reserved".to_owned())?;
+    let calldata_bytes = hex_decode(&body.calldata)?;
+    let calldata = Calldata::new(&calldata_bytes).map_err(|_| "program calldata exceeds its bound".to_owned())?;
+    let fuel = body.budget.fuel.parse::<u64>().map_err(|_| "program fuel budget is invalid".to_owned())?;
+    if fuel.to_string() != body.budget.fuel {
+        return Err("program fuel budget is not canonical".to_owned());
+    }
+    let fee_limit = body.budget.fee_limit.parse::<u128>().map_err(|_| "program fee limit is invalid".to_owned())?;
+    if fee_limit.to_string() != body.budget.fee_limit {
+        return Err("program fee limit is not canonical".to_owned());
+    }
+    let budget = CallBudget::new(fuel, Amount::from_u128(fee_limit))
+        .map_err(|_| "program budget is invalid".to_owned())?;
+    let requested = body.capabilities.iter().map(|capability| match capability.as_str() {
+        "storage_read" => Ok(CapabilityRequest::StorageRead),
+        "storage_write" => Ok(CapabilityRequest::StorageWrite),
+        "transfer" => Ok(CapabilityRequest::Transfer),
+        "emit_event" => Ok(CapabilityRequest::EmitEvent),
+        "compose" => Ok(CapabilityRequest::Compose),
+        _ => Err("program capability is invalid".to_owned()),
+    }).collect::<Result<Vec<_>, _>>()?;
+    let capabilities = RequestedCapabilities::new(&requested)
+        .map_err(|_| "program capabilities are not canonical".to_owned())?;
+    let call = ProgramCall::new(program, calldata, budget, capabilities);
+    let signed = hex_decode(&body.signed_activity)?;
+    let call_type = ActivityType::new(ModuleId::Programs, 3)
+        .map_err(|_| "Programs CALL activity type is unavailable".to_owned())?;
+    let registration = ModuleRegistration::new(ModuleId::Programs, &[call_type])
+        .map_err(|_| "Programs module registration is unavailable".to_owned())?;
+    let registry = ModuleRegistry::new(&[registration])
+        .map_err(|_| "Programs module registry is unavailable".to_owned())?;
+    let activity = decode_signed(&signed, &registry)
+        .map_err(|_| "signed program activity is invalid".to_owned())?;
+    if activity.activity_type() != call_type || activity.payload() != call.canonical_payload() {
+        return Err("signed program activity does not match the typed call".to_owned());
+    }
+    Ok(signed)
+}
+
 /// Runs one Programs CALL activity through the same real transition function as
 /// every other activity. The emulator holds no mock call path: a call submitted
 /// here and the identical canonical activity submitted to the network execute
@@ -555,7 +630,7 @@ fn decode_activity(request: &Request) -> Result<Vec<u8>, String> {
 /// the state they run against. The receipt is stored and the typed outcome is
 /// derived from the receipt's own result code, never invented beside it.
 fn program_call(emulator: &mut Emulator, request: &Request, trace: u64) -> Response {
-    let activity = match decode_activity(request) {
+    let activity = match decode_program_activity(request) {
         Ok(activity) if !activity.is_empty() => activity,
         Ok(_) => {
             return refusal(
@@ -994,7 +1069,7 @@ fn program_registry_read(emulator: &mut Emulator, path: &str, trace: u64) -> Res
 }
 
 fn program_simulate(emulator: &mut Emulator, request: &Request, trace: u64) -> Response {
-    let activity = match decode_activity(request) {
+    let activity = match decode_program_activity(request) {
         Ok(activity) if !activity.is_empty() => activity,
         Ok(_) => return refusal(trace, 400, "invalid_argument", "program simulation activity must not be empty"),
         Err(error) => return refusal(trace, 400, "invalid_argument", &error),

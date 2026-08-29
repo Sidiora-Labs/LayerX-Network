@@ -8,7 +8,7 @@ use zeroize::Zeroizing;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const IO_TIMEOUT: Duration = Duration::from_secs(8);
-const MAX_RESPONSE: usize = 256 * 1024;
+const MAX_RESPONSE: usize = 16 * 1024 * 1024;
 const CONTINUATION_CHUNK_BYTES: usize = 128 * 1024;
 const MAX_CONTINUATION_BYTES: usize = 17 * 65_536;
 const MAX_CONTINUATION_CHUNKS: usize = 9;
@@ -91,6 +91,8 @@ pub struct OperationRecord {
     pub response: String,
     pub receipt: String,
     pub principal: String,
+    pub activity_id: String,
+    pub idempotency_key: String,
     pub continuation: String,
 }
 
@@ -313,6 +315,7 @@ impl RedisStore {
         now: u64,
         retention_seconds: u64,
         activity_id: &str,
+        protocol_idempotency_key: &str,
         principal_digest: &str,
         audit_event: &str,
         continuation: &str,
@@ -323,6 +326,7 @@ impl RedisStore {
         let usage = format!("gateway:quota:{}:{window}", record.key_id);
         let idem = format!("gateway:idem:{idempotency_scope}");
         let owner = format!("gateway:activity:{activity_id}");
+        let activity_operation = format!("gateway:activity-operation:{activity_id}");
         let retry = record.quota_window_seconds - now % record.quota_window_seconds;
         for _ in 0..AUDIT_ATTEMPTS {
             let (head, chain) = self.audit_values(audit_event)?;
@@ -334,7 +338,7 @@ impl RedisStore {
             let mut arguments = vec![
                 "EVAL",
                 RESERVE_SCRIPT,
-                "7",
+                "8",
                 key.as_str(),
                 usage.as_str(),
                 idem.as_str(),
@@ -342,6 +346,7 @@ impl RedisStore {
                 "gateway:audit:head",
                 "gateway:pending",
                 owner.as_str(),
+                activity_operation.as_str(),
                 epoch.as_str(),
                 quota_requests.as_str(),
                 retry.as_str(),
@@ -352,6 +357,7 @@ impl RedisStore {
                 head.as_str(),
                 chain.as_str(),
                 principal_digest,
+                protocol_idempotency_key,
             ];
             arguments.extend(continuation_chunks.iter().copied());
             let response = self.command(&arguments)?;
@@ -399,6 +405,8 @@ impl RedisStore {
                     response: fields.get("response").cloned().unwrap_or_default(),
                     receipt: fields.get("receipt").cloned().unwrap_or_default(),
                     principal: required(&fields, "principal")?,
+                    activity_id: required(&fields, "activity_id")?,
+                    idempotency_key: required(&fields, "idempotency_key")?,
                     continuation,
                 }))
             }
@@ -506,6 +514,37 @@ impl RedisStore {
                 .map_err(|_| "gateway activity owner is invalid".to_owned()),
             Resp::Bulk(None) => Ok(None),
             _ => Err("gateway activity owner response is invalid".to_owned()),
+        }
+    }
+
+    pub fn activity_operation(&self, activity_id: &str) -> Result<Option<OperationRecord>, String> {
+        let key = format!("gateway:activity-operation:{activity_id}");
+        let operation_key = match self.command(&["GET", &key])? {
+            Resp::Bulk(Some(value)) => String::from_utf8(value)
+                .map_err(|_| "gateway activity operation key is invalid".to_owned())?,
+            Resp::Bulk(None) => return Ok(None),
+            _ => return Err("gateway activity operation response is invalid".to_owned()),
+        };
+        if !operation_key.starts_with("gateway:idem:") {
+            return Err("gateway activity operation key is outside the idempotency namespace".to_owned());
+        }
+        match self.command(&["HGETALL", &operation_key])? {
+            Resp::Array(values) if values.is_empty() => Ok(None),
+            Resp::Array(values) => {
+                let fields = pairs(&values)?;
+                let continuation = durable_continuation(&fields)?;
+                Ok(Some(OperationRecord {
+                    digest: required(&fields, "digest")?,
+                    state: required(&fields, "state")?,
+                    response: fields.get("response").cloned().unwrap_or_default(),
+                    receipt: fields.get("receipt").cloned().unwrap_or_default(),
+                    principal: required(&fields, "principal")?,
+                    activity_id: required(&fields, "activity_id")?,
+                    idempotency_key: required(&fields, "idempotency_key")?,
+                    continuation,
+                }))
+            }
+            _ => Err("gateway activity operation record is invalid".to_owned()),
         }
     }
 
@@ -720,17 +759,20 @@ local previous = redis.call('GET', KEYS[5]) or ''
 if previous ~= ARGV[8] then return {'audit_retry'} end
 local owner = redis.call('GET', KEYS[7])
 if owner and owner ~= ARGV[10] then return {'conflict'} end
+local operation = redis.call('GET', KEYS[8])
+if operation and operation ~= KEYS[3] then return {'conflict'} end
 local used = tonumber(redis.call('GET', KEYS[2]) or '0')
 if used >= tonumber(ARGV[2]) then
  redis.call('XADD', KEYS[4], '*', 'previous', ARGV[8], 'chain', ARGV[9], 'event', ARGV[6], 'outcome', 'rate_limited'); redis.call('SET', KEYS[5], ARGV[9])
  return {'rate_limited', ARGV[3]}
 end
 redis.call('INCR', KEYS[2]); redis.call('EXPIRE', KEYS[2], ARGV[3])
-local continuation_count = #ARGV - 10
-redis.call('HSET', KEYS[3], 'digest', ARGV[5], 'state', 'pending', 'started_at', ARGV[7], 'principal', ARGV[10], 'continuation_count', continuation_count)
-for index = 1, continuation_count do redis.call('HSET', KEYS[3], 'continuation_' .. tostring(index - 1), ARGV[10 + index]) end
+local continuation_count = #ARGV - 11
+redis.call('HSET', KEYS[3], 'digest', ARGV[5], 'state', 'pending', 'started_at', ARGV[7], 'principal', ARGV[10], 'activity_id', string.sub(KEYS[7], 18), 'idempotency_key', ARGV[11], 'continuation_count', continuation_count)
+for index = 1, continuation_count do redis.call('HSET', KEYS[3], 'continuation_' .. tostring(index - 1), ARGV[11 + index]) end
 redis.call('EXPIRE', KEYS[3], ARGV[4]); redis.call('SADD', KEYS[6], KEYS[3])
-redis.call('SET', KEYS[7], ARGV[10])
+redis.call('SET', KEYS[7], ARGV[10], 'EX', ARGV[4])
+redis.call('SET', KEYS[8], KEYS[3], 'EX', ARGV[4])
 redis.call('XADD', KEYS[4], '*', 'previous', ARGV[8], 'chain', ARGV[9], 'event', ARGV[6], 'outcome', 'pending'); redis.call('SET', KEYS[5], ARGV[9])
 return {'reserved'}
 "#;
