@@ -39,6 +39,9 @@ public final class LocalVerifier {
     private static final int MAX_EFFECTS = 512;
     private static final int MAX_EFFECT_BODY = 256;
     private static final int ALL_AVAILABILITY_CLASSES = 0x1f;
+    private static final long PROGRAM_OUTCOME_V1 = 0x5052_4731L;
+    private static final long PROGRAM_OUTCOME_V2 = 0x5052_4732L;
+    private static final long PROGRAM_OUTCOME_V3 = 0x5052_4733L;
     private static final BigInteger MAX_U128 = BigInteger.ONE.shiftLeft(128).subtract(BigInteger.ONE);
 
     public record MerkleProof(long leafIndex, long leafCount, List<byte[]> siblings) {
@@ -84,13 +87,23 @@ public final class LocalVerifier {
     }
     public record ReceiptEffect(int moduleId, int ordinal, int eventType, int kind, boolean monetary,
         byte[] transferSetRoot, byte[] body) {}
+    public record ProgramReceiptOutcome(int encodingVersion, int terminalKind, int resultCode,
+        int runtimeVersion, int abiVersion, long feeScheduleVersion, long meteringScheduleVersion,
+        BigInteger cpuFuel, BigInteger memoryBytes, BigInteger storageReadBytes,
+        BigInteger storageWriteBytes, long outputValues, BigInteger outputBytes,
+        BigInteger occupancyByteBatches, BigInteger occupancyFeeUnits, List<BigInteger> feeSchedulePrices,
+        byte[] occupancyAssetId, byte[] occupancyEvidenceDigest, byte[] occupancyTransferRoot,
+        BigInteger feeUnits, byte[] callGraphRoot, byte[] terminalPayloadRoot, byte[] transferRoot) {
+        public ProgramReceiptOutcome { feeSchedulePrices = List.copyOf(feeSchedulePrices); }
+    }
     public record ProtocolReceipt(int protocolVersion, byte[] activityId, BigInteger globalSequence,
         byte[] previousStateRoot, byte[] resultingStateRoot, byte[] activityRoot, int resultCode,
         List<ReceiptEffect> effects, BigInteger feeCharged, byte[] batchId, int moduleId,
         long moduleVersion, long parameterVersion, int operation, byte[] asset, BigInteger amount,
         byte[] from, BigInteger fromBalanceBefore, BigInteger fromBalanceAfter, BigInteger fromSequence,
         byte[] to, BigInteger toBalanceBefore, BigInteger toBalanceAfter, byte[] transferSetRoot,
-        byte[] authorizationHash, byte[] contextHash, BigInteger timestamp, byte[] sequencerSignature) {
+        byte[] authorizationHash, byte[] contextHash, BigInteger timestamp,
+        ProgramReceiptOutcome programOutcome, byte[] sequencerSignature) {
         public ProtocolReceipt { effects = List.copyOf(effects); }
     }
     public record AuthorizedReceiptBatch(byte[] batchId, byte[] asset, byte[] previousStateRoot,
@@ -300,8 +313,9 @@ public final class LocalVerifier {
     private static DecodedReceipt decodeProtocolReceipt(byte[] canonicalReceipt) {
         if (canonicalReceipt == null || canonicalReceipt.length == 0 || canonicalReceipt.length > MAX_MESSAGE_BYTES) fail();
         Decoder d = new Decoder(canonicalReceipt);
-        if (d.u16() != 1 || d.u16() != 0x5201) fail();
-        int protocolVersion = d.u16(); if (protocolVersion != 1) fail();
+        int envelopeVersion = d.u16();
+        if ((envelopeVersion != 1 && envelopeVersion != 2) || d.u16() != 0x5201) fail();
+        int protocolVersion = d.u16(); if (protocolVersion != envelopeVersion) fail();
         byte[] activityId = d.bounded(32); BigInteger globalSequence = d.integer(8);
         byte[] previousStateRoot = d.bounded(32); byte[] resultingStateRoot = d.bounded(32);
         byte[] activityRoot = d.bounded(32); int resultCode = d.i32(); long effectCount = d.u32();
@@ -319,16 +333,82 @@ public final class LocalVerifier {
         BigInteger fromBefore = d.integer(16), fromAfter = d.integer(16), fromSequence = d.integer(8);
         byte[] to = d.bounded(32); BigInteger toBefore = d.integer(16), toAfter = d.integer(16);
         byte[] transferSetRoot = d.bounded(32), authorizationHash = d.bounded(32), contextHash = d.bounded(32);
-        BigInteger timestamp = d.integer(8); int signatureFlagOffset = d.position();
+        BigInteger timestamp = d.integer(8);
+        ProgramReceiptOutcome programOutcome = d.remaining() > 69
+            ? decodeProgramReceiptOutcomeFrom(d, protocolVersion) : null;
+        if (programOutcome != null && (moduleId != 9 || programOutcome.resultCode() != resultCode
+                || (programOutcome.terminalKind() == 1 && !equal(programOutcome.transferRoot(), transferSetRoot))
+                || (programOutcome.terminalKind() != 1 && !allZero(transferSetRoot)))) fail();
+        int signatureFlagOffset = d.position();
         if (d.u8() != 1) fail();
         byte[] signature = d.bounded(64); d.finish();
         ProtocolReceipt receipt = new ProtocolReceipt(protocolVersion, activityId, globalSequence,
             previousStateRoot, resultingStateRoot, activityRoot, resultCode, effects, feeCharged, batchId,
             moduleId, moduleVersion, parameterVersion, operation, asset, amount, from, fromBefore, fromAfter,
-            fromSequence, to, toBefore, toAfter, transferSetRoot, authorizationHash, contextHash, timestamp, signature);
+            fromSequence, to, toBefore, toAfter, transferSetRoot, authorizationHash, contextHash, timestamp,
+            programOutcome, signature);
         byte[] unsigned = Arrays.copyOf(canonicalReceipt, signatureFlagOffset + 1);
         unsigned[signatureFlagOffset] = 0;
         return new DecodedReceipt(receipt, unsigned);
+    }
+
+    private static ProgramReceiptOutcome decodeProgramReceiptOutcomeFrom(Decoder d, int protocolVersion) {
+        long tag = d.u32();
+        int encodingVersion = tag == PROGRAM_OUTCOME_V1 ? 1
+            : tag == PROGRAM_OUTCOME_V2 ? 2 : tag == PROGRAM_OUTCOME_V3 ? 3 : 0;
+        if (encodingVersion == 0) fail();
+        int terminalKind = d.u8(); int resultCode = d.i32(); int runtimeVersion = d.u16();
+        int abiVersion = d.u16(); long feeScheduleVersion = d.u32();
+        long meteringScheduleVersion = encodingVersion == 3 ? d.u32() : 1;
+        BigInteger cpuFuel = d.integer(8), memoryBytes = d.integer(8);
+        BigInteger storageReadBytes = d.integer(8), storageWriteBytes = d.integer(8);
+        long outputValues = d.u32(); BigInteger outputBytes = d.integer(8);
+        BigInteger occupancyByteBatches = BigInteger.ZERO, occupancyFeeUnits = BigInteger.ZERO;
+        List<BigInteger> feeSchedulePrices = new ArrayList<>(7);
+        byte[] occupancyAssetId = new byte[32], occupancyEvidenceDigest = new byte[32];
+        byte[] occupancyTransferRoot = new byte[32];
+        if (encodingVersion >= 2) {
+            occupancyByteBatches = d.integer(16); occupancyFeeUnits = d.integer(16);
+            for (int index = 0; index < 7; index++) feeSchedulePrices.add(d.integer(8));
+            occupancyAssetId = d.bounded(32); occupancyEvidenceDigest = d.bounded(32);
+            occupancyTransferRoot = d.bounded(32);
+        } else {
+            for (int index = 0; index < 7; index++) feeSchedulePrices.add(BigInteger.ZERO);
+        }
+        BigInteger feeUnits = d.integer(16); byte[] callGraphRoot = d.bounded(32);
+        byte[] terminalPayloadRoot = d.bounded(32); byte[] transferRoot = d.bounded(32);
+        boolean occupancyZero = occupancyByteBatches.signum() == 0 && occupancyFeeUnits.signum() == 0
+            && allZero(occupancyAssetId) && allZero(occupancyEvidenceDigest) && allZero(occupancyTransferRoot);
+        boolean validVersion = protocolVersion == 1 && (encodingVersion == 1 || encodingVersion == 3)
+            || protocolVersion == 2 && (encodingVersion == 2 || encodingVersion == 3);
+        if (terminalKind < 1 || terminalKind > 3 || runtimeVersion == 0 || abiVersion == 0
+                || feeScheduleVersion == 0 || meteringScheduleVersion != 1 || allZero(terminalPayloadRoot)
+                || terminalKind == 1 && resultCode != 0
+                || terminalKind != 1 && (resultCode == 0 || resultCode <= -1000)
+                || terminalKind != 1 && !allZero(transferRoot) || !validVersion
+                || encodingVersion == 1 && !occupancyZero
+                || encodingVersion >= 2 && terminalKind != 1 && !occupancyZero
+                || encodingVersion == 2 && terminalKind == 1
+                    && (allZero(occupancyAssetId) || allZero(occupancyEvidenceDigest))
+                || encodingVersion == 3 && allZero(occupancyAssetId) != allZero(occupancyEvidenceDigest)
+                || protocolVersion == 1 && encodingVersion == 3 && !occupancyZero
+                || protocolVersion == 2 && encodingVersion == 3 && terminalKind == 1
+                    && (allZero(occupancyAssetId) || allZero(occupancyEvidenceDigest))) fail();
+        return new ProgramReceiptOutcome(encodingVersion, terminalKind, resultCode, runtimeVersion,
+            abiVersion, feeScheduleVersion, meteringScheduleVersion, cpuFuel, memoryBytes,
+            storageReadBytes, storageWriteBytes, outputValues, outputBytes, occupancyByteBatches,
+            occupancyFeeUnits, feeSchedulePrices, occupancyAssetId, occupancyEvidenceDigest,
+            occupancyTransferRoot, feeUnits, callGraphRoot, terminalPayloadRoot, transferRoot);
+    }
+
+    public static ProgramReceiptOutcome decodeProgramReceiptOutcome(byte[] canonicalOutcome,
+                                                                     int protocolVersion) {
+        if (canonicalOutcome == null || canonicalOutcome.length == 0
+                || canonicalOutcome.length > MAX_MESSAGE_BYTES) fail();
+        Decoder decoder = new Decoder(canonicalOutcome.clone());
+        ProgramReceiptOutcome outcome = decodeProgramReceiptOutcomeFrom(decoder, protocolVersion);
+        decoder.finish();
+        return outcome;
     }
 
     private static byte[] attestationMessage(CheckpointAttestation a) {
@@ -386,6 +466,7 @@ public final class LocalVerifier {
         long u32() { return integer(4).longValueExact(); }
         int i32() { long value = u32(); return value > 0x7fff_ffffL ? (int) (value - 0x1_0000_0000L) : (int) value; }
         int position() { return offset; }
+        int remaining() { return bytes.length - offset; }
         byte[] fixed(int length) {
             if (length < 0 || offset > bytes.length - length) fail();
             byte[] value = Arrays.copyOfRange(bytes, offset, offset + length); offset += length; return value;

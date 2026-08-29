@@ -135,6 +135,31 @@ public sealed class BouncyCastleSignatureVerifier : ILocalSignatureVerifier
 
 public sealed record ReceiptEffect(ushort ModuleId, ushort Ordinal, ushort EventType, byte Kind, bool Monetary, byte[] TransferSetRoot, byte[] Body);
 
+public sealed record ProgramReceiptOutcome(
+    byte EncodingVersion,
+    byte TerminalKind,
+    int ResultCode,
+    ushort RuntimeVersion,
+    ushort AbiVersion,
+    uint FeeScheduleVersion,
+    uint MeteringScheduleVersion,
+    ulong CpuFuel,
+    ulong MemoryBytes,
+    ulong StorageReadBytes,
+    ulong StorageWriteBytes,
+    uint OutputValues,
+    ulong OutputBytes,
+    UInt128Value OccupancyByteBatches,
+    UInt128Value OccupancyFeeUnits,
+    IReadOnlyList<ulong> FeeSchedulePrices,
+    byte[] OccupancyAssetId,
+    byte[] OccupancyEvidenceDigest,
+    byte[] OccupancyTransferRoot,
+    UInt128Value FeeUnits,
+    byte[] CallGraphRoot,
+    byte[] TerminalPayloadRoot,
+    byte[] TransferRoot);
+
 public sealed record ProtocolReceipt(
     ushort ProtocolVersion,
     byte[] ActivityId,
@@ -163,6 +188,7 @@ public sealed record ProtocolReceipt(
     byte[] AuthorizationHash,
     byte[] ContextHash,
     ulong Timestamp,
+    ProgramReceiptOutcome? ProgramOutcome,
     byte[] SequencerSignature);
 
 public sealed record AuthorizedReceiptBatch(byte[] BatchId, byte[] Asset, byte[] PreviousStateRoot, byte[] ResultingStateRoot, byte[] SequencerPublicKey);
@@ -181,6 +207,9 @@ public static class LocalVerifier
     private const uint MaximumEffectBody = 256;
     private const int BatchHeaderBytes = 354;
     private const byte AllAvailabilityClasses = 0x1f;
+    private const uint ProgramOutcomeV1 = 0x5052_4731;
+    private const uint ProgramOutcomeV2 = 0x5052_4732;
+    private const uint ProgramOutcomeV3 = 0x5052_4733;
 
     public static void VerifyMerkleInclusion(ReadOnlySpan<byte> canonicalLeaf, MerkleProof proof, ReadOnlySpan<byte> expectedRoot)
     {
@@ -329,9 +358,10 @@ public static class LocalVerifier
     {
         if (canonicalReceipt.IsEmpty || canonicalReceipt.Length > MaximumMessageBytes) throw VerificationFailure();
         var decoder = new WireDecoder(canonicalReceipt.ToArray());
-        if (decoder.U16() != 1 || decoder.U16() != 0x5201) throw VerificationFailure();
+        var envelopeVersion = decoder.U16();
+        if (envelopeVersion is not (1 or 2) || decoder.U16() != 0x5201) throw VerificationFailure();
         var protocolVersion = decoder.U16();
-        if (protocolVersion != 1) throw VerificationFailure();
+        if (protocolVersion != envelopeVersion) throw VerificationFailure();
         var activityId = decoder.Array32();
         var globalSequence = decoder.U64();
         var previousStateRoot = decoder.Array32();
@@ -370,14 +400,85 @@ public static class LocalVerifier
         var authorizationHash = decoder.Array32();
         var contextHash = decoder.Array32();
         var timestamp = decoder.U64();
+        var programOutcome = decoder.Remaining > 69 ? DecodeProgramReceiptOutcomeFrom(decoder, protocolVersion) : null;
+        if (programOutcome is not null &&
+            (module != 9 || programOutcome.ResultCode != resultCode ||
+             programOutcome.TerminalKind == 1 && !Equal(programOutcome.TransferRoot, transferSetRoot) ||
+             programOutcome.TerminalKind != 1 && !AllZero(transferSetRoot))) throw VerificationFailure();
         var signatureFlagOffset = decoder.Position;
         if (decoder.U8() != 1) throw VerificationFailure();
         var sequencerSignature = decoder.BoundedExactly(64);
         decoder.Finish();
-        var receipt = new ProtocolReceipt(protocolVersion, activityId, globalSequence, previousStateRoot, resultingStateRoot, activityRoot, resultCode, effects.AsReadOnly(), feeCharged, batchId, module, moduleVersion, parameterVersion, operation, asset, amount, from, fromBalanceBefore, fromBalanceAfter, fromSequence, to, toBalanceBefore, toBalanceAfter, transferSetRoot, authorizationHash, contextHash, timestamp, sequencerSignature);
+        var receipt = new ProtocolReceipt(protocolVersion, activityId, globalSequence, previousStateRoot, resultingStateRoot, activityRoot, resultCode, effects.AsReadOnly(), feeCharged, batchId, module, moduleVersion, parameterVersion, operation, asset, amount, from, fromBalanceBefore, fromBalanceAfter, fromSequence, to, toBalanceBefore, toBalanceAfter, transferSetRoot, authorizationHash, contextHash, timestamp, programOutcome, sequencerSignature);
         var unsignedBytes = new byte[signatureFlagOffset + 1];
         canonicalReceipt[..signatureFlagOffset].CopyTo(unsignedBytes);
         return new(receipt, unsignedBytes);
+    }
+
+    private static ProgramReceiptOutcome DecodeProgramReceiptOutcomeFrom(WireDecoder decoder, ushort protocolVersion)
+    {
+        var encodingVersion = decoder.U32() switch
+        {
+            ProgramOutcomeV1 => (byte)1,
+            ProgramOutcomeV2 => (byte)2,
+            ProgramOutcomeV3 => (byte)3,
+            _ => throw VerificationFailure(),
+        };
+        var terminalKind = decoder.U8();
+        var resultCode = decoder.I32();
+        var runtimeVersion = decoder.U16();
+        var abiVersion = decoder.U16();
+        var feeScheduleVersion = decoder.U32();
+        var meteringScheduleVersion = encodingVersion == 3 ? decoder.U32() : 1U;
+        var cpuFuel = decoder.U64();
+        var memoryBytes = decoder.U64();
+        var storageReadBytes = decoder.U64();
+        var storageWriteBytes = decoder.U64();
+        var outputValues = decoder.U32();
+        var outputBytes = decoder.U64();
+        var occupancyByteBatches = encodingVersion >= 2 ? decoder.U128() : default(UInt128Value);
+        var occupancyFeeUnits = encodingVersion >= 2 ? decoder.U128() : default(UInt128Value);
+        var feeSchedulePrices = new ulong[7];
+        if (encodingVersion >= 2)
+            for (var index = 0; index < feeSchedulePrices.Length; index++) feeSchedulePrices[index] = decoder.U64();
+        var occupancyAssetId = encodingVersion >= 2 ? decoder.Array32() : new byte[32];
+        var occupancyEvidenceDigest = encodingVersion >= 2 ? decoder.Array32() : new byte[32];
+        var occupancyTransferRoot = encodingVersion >= 2 ? decoder.Array32() : new byte[32];
+        var feeUnits = decoder.U128();
+        var callGraphRoot = decoder.Array32();
+        var terminalPayloadRoot = decoder.Array32();
+        var transferRoot = decoder.Array32();
+        var occupancyZero = occupancyByteBatches == default(UInt128Value) && occupancyFeeUnits == default(UInt128Value) &&
+            AllZero(occupancyAssetId) && AllZero(occupancyEvidenceDigest) && AllZero(occupancyTransferRoot);
+        var validVersion = protocolVersion == 1 && encodingVersion is 1 or 3 ||
+            protocolVersion == 2 && encodingVersion is 2 or 3;
+        if (terminalKind is < 1 or > 3 || runtimeVersion == 0 || abiVersion == 0 ||
+            feeScheduleVersion == 0 || meteringScheduleVersion != 1 || AllZero(terminalPayloadRoot) ||
+            terminalKind == 1 && resultCode != 0 ||
+            terminalKind != 1 && (resultCode == 0 || resultCode <= -1000) ||
+            terminalKind != 1 && !AllZero(transferRoot) || !validVersion ||
+            encodingVersion == 1 && !occupancyZero ||
+            encodingVersion >= 2 && terminalKind != 1 && !occupancyZero ||
+            encodingVersion == 2 && terminalKind == 1 && (AllZero(occupancyAssetId) || AllZero(occupancyEvidenceDigest)) ||
+            encodingVersion == 3 && AllZero(occupancyAssetId) != AllZero(occupancyEvidenceDigest) ||
+            protocolVersion == 1 && encodingVersion == 3 && !occupancyZero ||
+            protocolVersion == 2 && encodingVersion == 3 && terminalKind == 1 && (AllZero(occupancyAssetId) || AllZero(occupancyEvidenceDigest)))
+            throw VerificationFailure();
+        return new(encodingVersion, terminalKind, resultCode, runtimeVersion, abiVersion,
+            feeScheduleVersion, meteringScheduleVersion, cpuFuel, memoryBytes, storageReadBytes,
+            storageWriteBytes, outputValues, outputBytes, occupancyByteBatches, occupancyFeeUnits,
+            Array.AsReadOnly(feeSchedulePrices), occupancyAssetId, occupancyEvidenceDigest,
+            occupancyTransferRoot, feeUnits, callGraphRoot, terminalPayloadRoot, transferRoot);
+    }
+
+    public static ProgramReceiptOutcome DecodeProgramReceiptOutcome(ReadOnlySpan<byte> canonicalOutcome,
+                                                                     ushort protocolVersion)
+    {
+        if (canonicalOutcome.IsEmpty || canonicalOutcome.Length > MaximumMessageBytes) throw VerificationFailure();
+        var decoder = new WireDecoder(canonicalOutcome.ToArray());
+        var outcome = DecodeProgramReceiptOutcomeFrom(decoder, protocolVersion);
+        decoder.Finish();
+        return outcome;
     }
 
     private static bool VerifyEd25519(ReadOnlySpan<byte> publicKey, ReadOnlySpan<byte> signature, ReadOnlySpan<byte> message)
@@ -462,6 +563,7 @@ public static class LocalVerifier
     {
         private readonly byte[] _value;
         public int Position { get; private set; }
+        public int Remaining => _value.Length - Position;
 
         public WireDecoder(byte[] value) => _value = value;
 

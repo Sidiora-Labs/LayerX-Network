@@ -660,6 +660,11 @@ fn render_verified_program_operation(
         .evidence()
         .receipt_digest()
         .ok_or(GatewayError::VerificationRequired)?;
+    let state = if state == "executed" && !verified.outcome().is_completed() {
+        "refused"
+    } else {
+        state
+    };
     let outcome = program_outcome_json(verified.outcome());
     let response = serde_json::to_vec(&serde_json::json!({
         "state": state,
@@ -751,7 +756,6 @@ pub enum ProductionRoute<'a> {
     ProgramCall,
     ProgramActivity(&'a str),
     ProgramReceiptByIdempotency(&'a str),
-    ProgramRegistrySource(&'a str),
 }
 
 /// Parses the exact production route set shared with the emulator. Emulator
@@ -801,17 +805,6 @@ pub fn production_route<'a>(
                 } else {
                     Ok(ProductionRoute::ProgramRegistry(id))
                 }
-            } else {
-                Err(GatewayError::InvalidRoute)
-            }
-        }
-        ("POST", path) if path.starts_with("/v1/programs/registry/") => {
-            let id = path
-                .strip_prefix("/v1/programs/registry/")
-                .and_then(|path| path.strip_suffix("/source"))
-                .ok_or(GatewayError::InvalidRoute)?;
-            if id.len() == 64 && id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-                Ok(ProductionRoute::ProgramRegistrySource(id))
             } else {
                 Err(GatewayError::InvalidRoute)
             }

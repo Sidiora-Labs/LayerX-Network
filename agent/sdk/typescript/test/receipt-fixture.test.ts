@@ -2,10 +2,13 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import {
+  decodeProgramReceiptOutcome,
   verifyReceipt,
   type AuthorizedReceiptBatch,
   type ReceiptVerification,
 } from "../src/index.js";
+
+const PROGRAM_OUTCOME_V3 = "505247330100000000000100010000000700000001000000000000000b000000000000000c000000000000000d000000000000000e00000001000000000000000f00000000000000000000000000000000000000000000000100000000000000020000000000000003000000000000000400000000000000050000000000000006000000000000000700000020000000000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000201111111111111111111111111111111111111111111111111111111111111111000000202222222222222222222222222222222222222222222222222222222222222222000000200000000000000000000000000000000000000000000000000000000000000000";
 
 function assert(condition: boolean, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -81,6 +84,12 @@ function authorizedBatch(fixture: ReceiptFixture): AuthorizedReceiptBatch {
 }
 
 export async function verifyReceiptFixture(): Promise<void> {
+  const outcome = decodeProgramReceiptOutcome(hexBytes(PROGRAM_OUTCOME_V3), 1);
+  assert(outcome.encodingVersion === 3, "program outcome encoding version diverged");
+  assert(outcome.abiVersion === 1, "program outcome ABI diverged");
+  assert(outcome.feeUnits === 16n, "program outcome fee units diverged");
+  hexEqual(outcome.callGraphRoot, "11".repeat(32), "program outcome call graph root");
+  hexEqual(outcome.terminalPayloadRoot, "22".repeat(32), "program outcome terminal payload root");
   const fixture = loadFixture();
   const canonical = hexBytes(fixture.canonical_receipt_hex);
   const verified: ReceiptVerification = await verifyReceipt(canonical, authorizedBatch(fixture));

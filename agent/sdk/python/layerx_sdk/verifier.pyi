@@ -40,6 +40,32 @@ class ReceiptEffect:
     body: bytes
 
 @dataclass(frozen=True)
+class ProgramReceiptOutcome:
+    encoding_version: Literal[1, 2, 3]
+    terminal_kind: Literal[1, 2, 3]
+    result_code: int
+    runtime_version: int
+    abi_version: int
+    fee_schedule_version: int
+    metering_schedule_version: int
+    cpu_fuel: int
+    memory_bytes: int
+    storage_read_bytes: int
+    storage_write_bytes: int
+    output_values: int
+    output_bytes: int
+    occupancy_byte_batches: int
+    occupancy_fee_units: int
+    fee_schedule_prices: tuple[int, int, int, int, int, int, int]
+    occupancy_asset_id: bytes
+    occupancy_evidence_digest: bytes
+    occupancy_transfer_root: bytes
+    fee_units: int
+    call_graph_root: bytes
+    terminal_payload_root: bytes
+    transfer_root: bytes
+
+@dataclass(frozen=True)
 class ProtocolReceipt:
     protocol_version: int
     activity_id: bytes
@@ -68,6 +94,7 @@ class ProtocolReceipt:
     authorization_hash: bytes
     context_hash: bytes
     timestamp: int
+    program_outcome: ProgramReceiptOutcome | None
     sequencer_signature: bytes
 
 @dataclass(frozen=True)
@@ -154,6 +181,7 @@ class CheckpointVerification:
 
 def verify_merkle_inclusion(canonical_leaf: bytes, proof: MerkleProof, expected_root: bytes) -> None: ...
 def decode_batch_header(canonical_header: bytes) -> BatchHeader: ...
+def decode_program_receipt_outcome(canonical_outcome: bytes, protocol_version: int) -> ProgramReceiptOutcome: ...
 def verify_batch_inclusion(kind: InclusionKind, canonical_leaf: bytes, proof: MerkleProof, canonical_header: bytes, header_signature: bytes, authorization: SequencerAuthorization, signatures: LocalSignatureVerifier) -> InclusionVerification: ...
 def verify_checkpoint(verification: CheckpointVerificationInput, signatures: LocalSignatureVerifier) -> CheckpointVerification: ...
 def verify_receipt_outcome(canonical_receipt: bytes, authorized: AuthorizedReceiptBatch, signatures: LocalSignatureVerifier) -> ReceiptVerification: ...

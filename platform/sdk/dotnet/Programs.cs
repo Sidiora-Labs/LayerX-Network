@@ -17,7 +17,7 @@ public sealed record ProgramCall
         var bounded = capabilities?.ToArray();
         if (programId?.Length != 32 || calldata is null || calldata.Length > 1_048_576 || budget is null || budget.Fuel == 0 || bounded is null || bounded.Length > 5 ||
             bounded.Zip(bounded.Skip(1)).Any(pair => pair.First >= pair.Second) ||
-            signedActivity is null || signedActivity.Length == 0) throw Invalid();
+            signedActivity is null || signedActivity.Length == 0 || signedActivity.Length > 1_048_576) throw Invalid();
         ProgramId = programId.ToArray(); Calldata = calldata.ToArray(); Budget = budget; Capabilities = Array.AsReadOnly(bounded);
         SignedActivity = signedActivity.ToArray();
     }
@@ -65,10 +65,13 @@ public sealed class ProgramsClient
     public async Task<ProgramSubmission> ReceiptAsync(IdempotencyKey idempotencyKey, byte[] expectedActivityId, string verificationLevel, CancellationToken cancellationToken = default)
     {
         var activity = Identifier(expectedActivityId);
-        return new(await _client.AgentProgramReceiptAsync(JsonValue.Object(new Dictionary<string, JsonValue>
+        var value = await _client.AgentProgramReceiptAsync(JsonValue.Object(new Dictionary<string, JsonValue>
             { ["idempotency_key"] = JsonValue.String(idempotencyKey.Value), ["expected_activity_id"] = JsonValue.String(activity),
               ["requested_verification_level"] = JsonValue.String(Level(verificationLevel)) }),
-            new Dictionary<string, string> { ["idempotency_key"] = idempotencyKey.Value }, cancellationToken).ConfigureAwait(false));
+            new Dictionary<string, string> { ["idempotency_key"] = idempotencyKey.Value }, cancellationToken).ConfigureAwait(false);
+        if (value is not JsonValue.ObjectValue map || !map.Value.TryGetValue("activity_id", out var returned) || returned is not JsonValue.StringValue returnedActivity || returnedActivity.Value != activity)
+            throw new PlatformSdkException(SdkErrorCode.VerificationFailure, RetryClass.Never);
+        return new(value);
     }
     public async Task<ProgramSubmission> ActivityAsync(byte[] activityId, string verificationLevel, CancellationToken cancellationToken = default)
     {
@@ -79,13 +82,19 @@ public sealed class ProgramsClient
     }
 
     public static async ValueTask<ReceiptVerification> VerifyReceiptAsync(byte[] canonicalReceipt, AuthorizedReceiptBatch authorized,
-        byte[] expectedActivityId, CancellationToken cancellationToken = default)
+        byte[] expectedActivityId, ushort expectedGuestAbiVersion, byte[] terminalPayload, byte[] callGraph,
+        CancellationToken cancellationToken = default)
     {
-        if (expectedActivityId?.Length != 32) throw Invalid();
+        if (expectedActivityId?.Length != 32 || expectedGuestAbiVersion is not (1 or 2)) throw Invalid();
         var verified = await LocalVerifier.VerifyReceiptOutcomeAsync(canonicalReceipt, authorized, cancellationToken).ConfigureAwait(false);
         var receipt = verified.Receipt;
+        var outcome = receipt.ProgramOutcome;
         if (receipt.ProtocolVersion == 0 || receipt.ModuleId != ReceiptModuleId || receipt.Operation != CallOperation ||
-            receipt.ModuleVersion is < 1 or > 3 || !receipt.ActivityId.SequenceEqual(expectedActivityId))
+            receipt.ModuleVersion is < 1 or > 3 || !receipt.ActivityId.SequenceEqual(expectedActivityId) ||
+            outcome is null || outcome.AbiVersion != expectedGuestAbiVersion || terminalPayload is null ||
+            callGraph is null || callGraph.Length == 0 ||
+            !System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(System.Security.Cryptography.SHA256.HashData(terminalPayload), outcome.TerminalPayloadRoot) ||
+            !System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(System.Security.Cryptography.SHA256.HashData(callGraph), outcome.CallGraphRoot))
             throw new PlatformSdkException(SdkErrorCode.VerificationFailure, RetryClass.Never);
         return verified;
     }

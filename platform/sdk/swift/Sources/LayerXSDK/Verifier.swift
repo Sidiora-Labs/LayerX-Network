@@ -12,6 +12,9 @@ private let maximumEffects: UInt32 = 512
 private let maximumEffectBody: UInt32 = 256
 private let batchHeaderBytes = 354
 private let allAvailabilityClasses: UInt8 = 0x1f
+private let programOutcomeV1: UInt32 = 0x5052_4731
+private let programOutcomeV2: UInt32 = 0x5052_4732
+private let programOutcomeV3: UInt32 = 0x5052_4733
 
 public struct UInt128Value: Hashable, Sendable {
     public let high: UInt64
@@ -186,6 +189,32 @@ public struct ReceiptEffect: Sendable {
     public let body: Data
 }
 
+public struct ProgramReceiptOutcome: Sendable {
+    public let encodingVersion: UInt8
+    public let terminalKind: UInt8
+    public let resultCode: Int32
+    public let runtimeVersion: UInt16
+    public let abiVersion: UInt16
+    public let feeScheduleVersion: UInt32
+    public let meteringScheduleVersion: UInt32
+    public let cpuFuel: UInt64
+    public let memoryBytes: UInt64
+    public let storageReadBytes: UInt64
+    public let storageWriteBytes: UInt64
+    public let outputValues: UInt32
+    public let outputBytes: UInt64
+    public let occupancyByteBatches: UInt128Value
+    public let occupancyFeeUnits: UInt128Value
+    public let feeSchedulePrices: [UInt64]
+    public let occupancyAssetID: Data
+    public let occupancyEvidenceDigest: Data
+    public let occupancyTransferRoot: Data
+    public let feeUnits: UInt128Value
+    public let callGraphRoot: Data
+    public let terminalPayloadRoot: Data
+    public let transferRoot: Data
+}
+
 public struct ProtocolReceipt: Sendable {
     public let protocolVersion: UInt16
     public let activityID: Data
@@ -214,6 +243,7 @@ public struct ProtocolReceipt: Sendable {
     public let authorizationHash: Data
     public let contextHash: Data
     public let timestamp: UInt64
+    public let programOutcome: ProgramReceiptOutcome?
     public let sequencerSignature: Data
 }
 
@@ -238,6 +268,15 @@ public struct ReceiptVerification: Sendable {
 }
 
 public enum LocalVerifier {
+    public static func decodeProgramReceiptOutcome(_ canonicalOutcome: Data,
+                                                    protocolVersion: UInt16) throws -> ProgramReceiptOutcome {
+        guard !canonicalOutcome.isEmpty, canonicalOutcome.count <= maximumMessageBytes else { throw verificationFailure() }
+        var decoder = WireDecoder(canonicalOutcome)
+        let outcome = try decodeProgramReceiptOutcomeFrom(&decoder, protocolVersion: protocolVersion)
+        try decoder.finish()
+        return outcome
+    }
+
     public static func verifyMerkleInclusion(canonicalLeaf: Data, proof: MerkleProof, expectedRoot: Data) throws {
         guard proof.leafCount > 0, proof.leafIndex < proof.leafCount,
               proof.siblings.count <= 32, proof.siblings.count == proofDepth(proof.leafCount),
@@ -399,9 +438,10 @@ private struct DecodedReceipt {
 private func decodeProtocolReceipt(_ canonicalReceipt: Data) throws -> DecodedReceipt {
     guard !canonicalReceipt.isEmpty, canonicalReceipt.count <= maximumMessageBytes else { throw verificationFailure() }
     var decoder = WireDecoder(canonicalReceipt)
-    guard try decoder.u16() == 1, try decoder.u16() == 0x5201 else { throw verificationFailure() }
+    let envelopeVersion = try decoder.u16()
+    guard (envelopeVersion == 1 || envelopeVersion == 2), try decoder.u16() == 0x5201 else { throw verificationFailure() }
     let protocolVersion = try decoder.u16()
-    guard protocolVersion == 1 else { throw verificationFailure() }
+    guard protocolVersion == envelopeVersion else { throw verificationFailure() }
     let activityID = try decoder.array32()
     let globalSequence = try decoder.u64()
     let previousStateRoot = try decoder.array32()
@@ -440,19 +480,92 @@ private func decodeProtocolReceipt(_ canonicalReceipt: Data) throws -> DecodedRe
     let authorizationHash = try decoder.array32()
     let contextHash = try decoder.array32()
     let timestamp = try decoder.u64()
+    let programOutcome = decoder.remaining > 69
+        ? try decodeProgramReceiptOutcomeFrom(&decoder, protocolVersion: protocolVersion) : nil
+    if let outcome = programOutcome {
+        guard moduleID == 9, outcome.resultCode == resultCode,
+              (outcome.terminalKind == 1 ? outcome.transferRoot == transferSetRoot : allZero(transferSetRoot))
+        else { throw verificationFailure() }
+    }
     let signatureFlagOffset = decoder.position
     guard try decoder.u8() == 1 else { throw verificationFailure() }
     let sequencerSignature = try decoder.bounded(exactly: 64)
     try decoder.finish()
-    let receipt = ProtocolReceipt(protocolVersion: protocolVersion, activityID: activityID, globalSequence: globalSequence, previousStateRoot: previousStateRoot, resultingStateRoot: resultingStateRoot, activityRoot: activityRoot, resultCode: resultCode, effects: effects, feeCharged: feeCharged, batchID: batchID, moduleID: moduleID, moduleVersion: moduleVersion, parameterVersion: parameterVersion, operation: operation, asset: asset, amount: amount, from: from, fromBalanceBefore: fromBalanceBefore, fromBalanceAfter: fromBalanceAfter, fromSequence: fromSequence, to: to, toBalanceBefore: toBalanceBefore, toBalanceAfter: toBalanceAfter, transferSetRoot: transferSetRoot, authorizationHash: authorizationHash, contextHash: contextHash, timestamp: timestamp, sequencerSignature: sequencerSignature)
+    let receipt = ProtocolReceipt(protocolVersion: protocolVersion, activityID: activityID, globalSequence: globalSequence, previousStateRoot: previousStateRoot, resultingStateRoot: resultingStateRoot, activityRoot: activityRoot, resultCode: resultCode, effects: effects, feeCharged: feeCharged, batchID: batchID, moduleID: moduleID, moduleVersion: moduleVersion, parameterVersion: parameterVersion, operation: operation, asset: asset, amount: amount, from: from, fromBalanceBefore: fromBalanceBefore, fromBalanceAfter: fromBalanceAfter, fromSequence: fromSequence, to: to, toBalanceBefore: toBalanceBefore, toBalanceAfter: toBalanceAfter, transferSetRoot: transferSetRoot, authorizationHash: authorizationHash, contextHash: contextHash, timestamp: timestamp, programOutcome: programOutcome, sequencerSignature: sequencerSignature)
     var unsigned = canonicalReceipt.prefix(signatureFlagOffset)
     unsigned.append(0)
     return DecodedReceipt(receipt: receipt, unsignedBytes: Data(unsigned))
 }
 
+private func decodeProgramReceiptOutcomeFrom(_ decoder: inout WireDecoder,
+                                              protocolVersion: UInt16) throws -> ProgramReceiptOutcome {
+    let tag = try decoder.u32()
+    let encodingVersion: UInt8
+    switch tag {
+    case programOutcomeV1: encodingVersion = 1
+    case programOutcomeV2: encodingVersion = 2
+    case programOutcomeV3: encodingVersion = 3
+    default: throw verificationFailure()
+    }
+    let terminalKind = try decoder.u8()
+    let resultCode = try decoder.i32()
+    let runtimeVersion = try decoder.u16()
+    let abiVersion = try decoder.u16()
+    let feeScheduleVersion = try decoder.u32()
+    let meteringScheduleVersion: UInt32 = encodingVersion == 3 ? (try decoder.u32()) : 1
+    let cpuFuel = try decoder.u64()
+    let memoryBytes = try decoder.u64()
+    let storageReadBytes = try decoder.u64()
+    let storageWriteBytes = try decoder.u64()
+    let outputValues = try decoder.u32()
+    let outputBytes = try decoder.u64()
+    let zero128 = UInt128Value(high: 0, low: 0)
+    let occupancyByteBatches = encodingVersion >= 2 ? (try decoder.u128()) : zero128
+    let occupancyFeeUnits = encodingVersion >= 2 ? (try decoder.u128()) : zero128
+    var feeSchedulePrices = Array(repeating: UInt64(0), count: 7)
+    if encodingVersion >= 2 {
+        for index in feeSchedulePrices.indices { feeSchedulePrices[index] = try decoder.u64() }
+    }
+    let occupancyAssetID = encodingVersion >= 2 ? (try decoder.array32()) : Data(repeating: 0, count: 32)
+    let occupancyEvidenceDigest = encodingVersion >= 2 ? (try decoder.array32()) : Data(repeating: 0, count: 32)
+    let occupancyTransferRoot = encodingVersion >= 2 ? (try decoder.array32()) : Data(repeating: 0, count: 32)
+    let feeUnits = try decoder.u128()
+    let callGraphRoot = try decoder.array32()
+    let terminalPayloadRoot = try decoder.array32()
+    let transferRoot = try decoder.array32()
+    let occupancyZero = occupancyByteBatches == zero128 && occupancyFeeUnits == zero128
+        && allZero(occupancyAssetID) && allZero(occupancyEvidenceDigest) && allZero(occupancyTransferRoot)
+    let validVersion = protocolVersion == 1 && (encodingVersion == 1 || encodingVersion == 3)
+        || protocolVersion == 2 && (encodingVersion == 2 || encodingVersion == 3)
+    guard (1...3).contains(terminalKind), runtimeVersion != 0, abiVersion != 0,
+          feeScheduleVersion != 0, meteringScheduleVersion == 1, !allZero(terminalPayloadRoot),
+          terminalKind != 1 || resultCode == 0,
+          terminalKind == 1 || (resultCode != 0 && resultCode > -1000),
+          terminalKind == 1 || allZero(transferRoot), validVersion,
+          encodingVersion != 1 || occupancyZero,
+          encodingVersion < 2 || terminalKind == 1 || occupancyZero,
+          encodingVersion != 2 || terminalKind != 1 || (!allZero(occupancyAssetID) && !allZero(occupancyEvidenceDigest)),
+          encodingVersion != 3 || allZero(occupancyAssetID) == allZero(occupancyEvidenceDigest),
+          protocolVersion != 1 || encodingVersion != 3 || occupancyZero,
+          protocolVersion != 2 || encodingVersion != 3 || terminalKind != 1
+            || (!allZero(occupancyAssetID) && !allZero(occupancyEvidenceDigest))
+    else { throw verificationFailure() }
+    return ProgramReceiptOutcome(encodingVersion: encodingVersion, terminalKind: terminalKind,
+        resultCode: resultCode, runtimeVersion: runtimeVersion, abiVersion: abiVersion,
+        feeScheduleVersion: feeScheduleVersion, meteringScheduleVersion: meteringScheduleVersion,
+        cpuFuel: cpuFuel, memoryBytes: memoryBytes, storageReadBytes: storageReadBytes,
+        storageWriteBytes: storageWriteBytes, outputValues: outputValues, outputBytes: outputBytes,
+        occupancyByteBatches: occupancyByteBatches, occupancyFeeUnits: occupancyFeeUnits,
+        feeSchedulePrices: feeSchedulePrices, occupancyAssetID: occupancyAssetID,
+        occupancyEvidenceDigest: occupancyEvidenceDigest, occupancyTransferRoot: occupancyTransferRoot,
+        feeUnits: feeUnits, callGraphRoot: callGraphRoot, terminalPayloadRoot: terminalPayloadRoot,
+        transferRoot: transferRoot)
+}
+
 private struct WireDecoder {
     private let bytes: [UInt8]
     private(set) var position = 0
+    var remaining: Int { bytes.count - position }
 
     init(_ data: Data) { bytes = Array(data) }
 

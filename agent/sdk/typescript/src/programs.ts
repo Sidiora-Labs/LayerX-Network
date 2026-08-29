@@ -25,8 +25,8 @@ export interface ProgramCall {
   readonly signedActivity: Uint8Array;
 }
 
-export interface ProgramDiscovery { readonly program_id: string; readonly lifecycle: string; readonly latest_version: number; readonly versions: readonly unknown[]; readonly state_root: string; readonly observed_sequence: number; readonly observed_at: number; readonly valid_through: number }
-export interface ProgramInterface { readonly program_id: string; readonly version: number; readonly code_hash: string; readonly abi_version: number; readonly interface: string; readonly interface_digest: string; readonly state_root: string; readonly observed_sequence: number; readonly observed_at: number; readonly valid_through: number }
+export interface ProgramDiscovery { readonly program_id: string; readonly lifecycle: "active" | "deprecated" | "tombstoned"; readonly version: number; readonly code_hash: string; readonly abi_version: number; readonly receipt_digest: string; readonly state_root: string; readonly observed_sequence: number; readonly observed_at: number; readonly valid_through: number; readonly verification: "registry-receipt-and-current-head-verified" }
+export interface ProgramInterface { readonly program_id: string; readonly version: number; readonly code_hash: string; readonly abi_version: number; readonly interface: string; readonly interface_digest: string; readonly receipt_digest: string; readonly state_root: string; readonly observed_sequence: number; readonly observed_at: number; readonly valid_through: number; readonly source: Readonly<Record<string, unknown>>; readonly verification: "deployment-interface-and-current-head-verified" }
 export type ProgramFailure = Readonly<{ kind: "unknown_program" | "reentrancy" | "depth_exceeded" | "fanout_exceeded" | "guest_refused" | "authority" | "resource" | "response" | "fault"; code?: number; limit?: number; attempted?: number }>;
 export type ProgramOutcome = Readonly<{ kind: "completed"; code: number; response: string }> | Readonly<{ kind: "legacy_completed"; code: number; values: readonly unknown[] }> | Readonly<{ kind: "refused"; failure: ProgramFailure }>;
 export interface ProgramUsage { readonly cpu_fuel: number; readonly memory_bytes: number; readonly storage_read_bytes: number; readonly storage_write_bytes: number; readonly output_values: number; readonly output_bytes: number; readonly fee_units: string }
@@ -36,7 +36,7 @@ export interface ProgramSimulation { readonly committed: false; readonly executi
 export interface VerifiedProgramReceipt { readonly verification: ReceiptVerification; readonly terminalPayload: Uint8Array; readonly callGraph: Uint8Array }
 
 function validateCall(call: ProgramCall): void {
-  if (!HEX32.test(call.programId) || call.calldata.length > MAX_CALLDATA || call.signedActivity.length === 0
+  if (!HEX32.test(call.programId) || call.calldata.length > MAX_CALLDATA || call.signedActivity.length === 0 || call.signedActivity.length > MAX_CALLDATA
     || call.budget.fuel <= 0n || call.budget.fuel > 18446744073709551615n
     || call.budget.feeLimit < 0n || call.budget.feeLimit > MAX_U128
     || call.capabilities.length > MAX_CAPABILITIES) throw new TypeError("invalid bounded program call");
@@ -59,8 +59,15 @@ export async function verifyProgramReceipt(
   const callGraph = decodeHex(execution.call_graph, 1_048_576);
   const verification = await verifyReceiptOutcome(receipt, authority);
   const protocol = verification.receipt;
+  const outcome = protocol.programOutcome;
   if (protocol.moduleId !== 9 || protocol.operation !== 3 || protocol.moduleVersion < 1
-    || protocol.moduleVersion > 3 || hex(protocol.activityId) !== execution.activity_id) {
+    || protocol.moduleVersion > 3 || protocol.moduleVersion !== execution.module_version
+    || hex(protocol.activityId) !== execution.activity_id || outcome === undefined
+    || outcome.abiVersion !== execution.guest_abi_version
+    || outcome.resultCode !== execution.result_code
+    || callGraph.length === 0
+    || !equal(await digest(terminalPayload), outcome.terminalPayloadRoot)
+    || !equal(await digest(callGraph), outcome.callGraphRoot)) {
     throw new TypeError("program receipt binding failed");
   }
   return Object.freeze({ verification, terminalPayload, callGraph });
@@ -72,7 +79,7 @@ export class ProgramOperations {
   public interface(programId: string): Promise<ProgramInterface> { if (!HEX32.test(programId)) throw new TypeError("invalid program id"); return this.client.agent("program.interface", { program_id: programId, requested_verification_level: "sequencer-signed" }); }
   public simulate(call: ProgramCall): Promise<ProgramSimulation> { validateCall(call); return this.client.agent("program.simulate", wireCall(call)); }
   public submit(call: ProgramCall, idempotencyKey: IdempotencyKey): Promise<ProgramSubmission> { validateCall(call); return this.client.agent("program.call", wireCall(call), { idempotencyKey }); }
-  public receipt(idempotencyKey: string, expectedActivityId: string): Promise<ProgramSubmission> { if (!HEX32.test(idempotencyKey) || !HEX32.test(expectedActivityId)) throw new TypeError("invalid program receipt selector"); return this.client.agent("program.receipt", { idempotency_key: idempotencyKey, expected_activity_id: expectedActivityId, requested_verification_level: "sequencer-signed" }); }
+  public async receipt(idempotencyKey: string, expectedActivityId: string): Promise<ProgramSubmission> { if (!HEX32.test(idempotencyKey) || !HEX32.test(expectedActivityId)) throw new TypeError("invalid program receipt selector"); const result = await this.client.agent<ProgramSubmission>("program.receipt", { idempotency_key: idempotencyKey, expected_activity_id: expectedActivityId, requested_verification_level: "sequencer-signed" }); if (result.activity_id !== expectedActivityId) throw new TypeError("program receipt selector binding failed"); return result; }
   public activity(activityId: string): Promise<ProgramSubmission> { if (!HEX32.test(activityId)) throw new TypeError("invalid activity id"); return this.client.agent("program.activity", { activity_id: activityId, requested_verification_level: "sequencer-signed" }); }
 }
 
@@ -84,5 +91,7 @@ function wireCall(call: ProgramCall): Readonly<Record<string, unknown>> {
 
 function hex(value: Uint8Array): string { return Array.from(value, (byte) => byte.toString(16).padStart(2, "0")).join(""); }
 function decodeHex(value: string, maximum: number): Uint8Array { if (value.length % 2 !== 0 || value.length > maximum * 2 || !/^[0-9a-f]*$/u.test(value)) throw new TypeError("invalid hexadecimal evidence"); return Uint8Array.from(value.match(/.{2}/gu) ?? [], (pair) => Number.parseInt(pair, 16)); }
+function equal(left: Uint8Array, right: Uint8Array): boolean { if (left.length !== right.length) return false; let difference = 0; for (let index = 0; index < left.length; index += 1) difference |= (left[index] ?? 0) ^ (right[index] ?? 0); return difference === 0; }
+async function digest(value: Uint8Array): Promise<Uint8Array> { const copy = new Uint8Array(value); return new Uint8Array(await globalThis.crypto.subtle.digest("SHA-256", copy.buffer)); }
 
 export function platform_sdk_programs(): string { return "receipt-verified-program-operations-v1"; }

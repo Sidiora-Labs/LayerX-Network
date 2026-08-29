@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from hashlib import sha256
 from typing import Literal, Mapping, cast
 
 from .production import IdempotencyKey, ProductionClient
@@ -37,7 +38,7 @@ def _hex32(value: str) -> bool:
 def _validate(call: ProgramCall) -> None:
     if not _hex32(call.program_id) or not 0 < call.fuel <= _MAX_U64 or not 0 <= call.fee_limit <= _MAX_U128:
         raise ValueError("invalid bounded program call")
-    if len(call.calldata) > _MAX_CALLDATA or len(call.capabilities) > 5 or not call.signed_activity:
+    if len(call.calldata) > _MAX_CALLDATA or len(call.capabilities) > 5 or not 0 < len(call.signed_activity) <= _MAX_CALLDATA:
         raise ValueError("invalid bounded program call")
     prior = 0
     for capability in call.capabilities:
@@ -62,14 +63,16 @@ def verify_program_receipt(
     activity_id = execution.get("activity_id")
     module_version = execution.get("module_version")
     guest_abi = execution.get("guest_abi_version")
-    if not isinstance(activity_id, str) or not _hex32(activity_id) or not isinstance(module_version, int) or module_version not in (1, 2, 3) or guest_abi not in (1, 2):
+    result_code = execution.get("result_code")
+    if not isinstance(activity_id, str) or not _hex32(activity_id) or not isinstance(module_version, int) or module_version not in (1, 2, 3) or guest_abi not in (1, 2) or not isinstance(result_code, int):
         raise ValueError("invalid program execution evidence")
     receipt = _evidence_bytes(execution, "receipt")
     terminal_payload = _evidence_bytes(execution, "terminal_payload")
     call_graph = _evidence_bytes(execution, "call_graph")
     verification = verify_receipt_outcome(receipt, authority, signatures)
     protocol = verification.receipt
-    if protocol.module_id != 9 or protocol.operation != 3 or protocol.module_version not in (1, 2, 3) or protocol.activity_id.hex() != activity_id:
+    outcome = protocol.program_outcome
+    if protocol.module_id != 9 or protocol.operation != 3 or protocol.module_version != module_version or protocol.activity_id.hex() != activity_id or outcome is None or outcome.abi_version != guest_abi or outcome.result_code != result_code or not call_graph or sha256(terminal_payload).digest() != outcome.terminal_payload_root or sha256(call_graph).digest() != outcome.call_graph_root:
         raise ValueError("program receipt binding failed")
     return VerifiedProgramReceipt(verification, terminal_payload, call_graph)
 
@@ -99,7 +102,10 @@ class ProgramOperations:
     def receipt(self, idempotency_key: str, expected_activity_id: str) -> Mapping[str, object]:
         if not _hex32(idempotency_key) or not _hex32(expected_activity_id):
             raise ValueError("invalid program receipt selector")
-        return cast(Mapping[str, object], self._client.agent("program.receipt", {"idempotency_key": idempotency_key, "expected_activity_id": expected_activity_id, "requested_verification_level": "sequencer-signed"}))
+        result = cast(Mapping[str, object], self._client.agent("program.receipt", {"idempotency_key": idempotency_key, "expected_activity_id": expected_activity_id, "requested_verification_level": "sequencer-signed"}))
+        if result.get("activity_id") != expected_activity_id:
+            raise ValueError("program receipt selector binding failed")
+        return result
 
     def activity(self, activity_id: str) -> Mapping[str, object]:
         if not _hex32(activity_id):

@@ -586,7 +586,8 @@ fn submit(emulator: &mut Emulator, request: &Request, trace: u64) -> Response {
     let receipt_hex = hex_encode(&material.receipt);
     let activity_id = hex_encode(&material.activity_id);
     remember_receipt(emulator, activity_id.clone(), receipt_hex.clone());
-    success(trace, &format!("{{\"activity_id\":\"{activity_id}\",\"batch_id\":\"{}\",\"global_sequence\":{global_sequence},\"result_code\":{result_code},\"state_root\":\"{}\",\"receipt\":\"{receipt_hex}\"}}", hex_encode(&batch_id), hex_encode(&state_root)))
+    let state = if result_code == 0 { "completed" } else { "refused" };
+    success(trace, &format!("{{\"state\":\"{state}\",\"activity_id\":\"{activity_id}\",\"batch_id\":\"{}\",\"global_sequence\":{global_sequence},\"result_code\":{result_code},\"state_root\":\"{}\",\"receipt\":\"{receipt_hex}\"}}", hex_encode(&batch_id), hex_encode(&state_root)))
 }
 
 fn decode_activity(request: &Request) -> Result<Vec<u8>, String> {
@@ -818,6 +819,11 @@ fn verified_program_document(
         .evidence()
         .receipt_digest()
         .ok_or_else(|| "verified Programs receipt has no digest".to_owned())?;
+    let state = if state == "executed" && !verified.outcome().is_completed() {
+        "refused"
+    } else {
+        state
+    };
     let mut document = serde_json::json!({
         "state":state,
         "activity_id":hex_encode(&protocol.activity_id()),
@@ -1339,27 +1345,46 @@ fn program_registry_read(emulator: &mut Emulator, path: &str, trace: u64) -> Res
     discovery.extend_from_slice(&program.abi_version.to_be_bytes()); discovery.extend_from_slice(&program.observed_sequence.to_be_bytes());
     discovery.extend_from_slice(&live.timestamp_ms.to_be_bytes()); discovery.extend_from_slice(&valid_through.to_be_bytes()); discovery.extend_from_slice(&program.state_root);
     let receipt_digest: [u8; 32] = Sha256::digest(&discovery).into();
-    let signing = &emulator.signing_key;
-    let proof_signature = signing.sign(&receipt_digest).to_bytes();
-    let proof = format!("\"receipt_digest\":\"{}\",\"observed_at\":{},\"valid_through\":{},\"discovery_public_key\":\"{}\",\"discovery_signature\":\"{}\"", hex_encode(&receipt_digest), live.timestamp_ms, valid_through, hex_encode(&signing.verifying_key().to_bytes()), hex_encode(&proof_signature));
+    if !interface_only {
+        let discovery = serde_json::json!({
+            "program_id":hex_encode(&program.program_id),
+            "lifecycle":"active",
+            "version":program.version,
+            "code_hash":hex_encode(&program.code_hash),
+            "abi_version":program.abi_version,
+            "receipt_digest":hex_encode(&receipt_digest),
+            "state_root":hex_encode(&program.state_root),
+            "observed_sequence":program.observed_sequence,
+            "observed_at":live.timestamp_ms,
+            "valid_through":valid_through,
+            "verification":"registry-receipt-and-current-head-verified",
+        });
+        return success(trace, &discovery.to_string());
+    }
     if program.has_interface == 0 {
-        if interface_only {
-            return refusal(trace, 404, "interface_absent", "program has no published interface");
-        }
-        let common = format!("\"program_id\":\"{}\",\"version\":{},\"code_hash\":\"{}\",\"abi_version\":{},\"interface_status\":\"absent\",\"observed_sequence\":{},\"state_root\":\"{}\",{proof},\"freshness\":{{\"mode\":\"signed-emulator-head\"}}", hex_encode(&program.program_id), program.version, hex_encode(&program.code_hash), program.abi_version, program.observed_sequence, hex_encode(&program.state_root));
-        return success(trace, &format!("{{{common},\"lifecycle\":\"active\"}}"));
+        return refusal(trace, 404, "interface_absent", "program has no published interface");
     }
     if program.has_interface != 1 || program.interface_bytes.is_null() || program.interface_length == 0 || program.interface_length > 952 {
         return refusal(trace, 503, "core_invalid_output", "program interface state is invalid");
     }
     let interface = unsafe { slice::from_raw_parts(program.interface_bytes, program.interface_length) };
     let interface_digest: [u8; 32] = Sha256::digest(interface).into();
-    let common = format!("\"program_id\":\"{}\",\"version\":{},\"code_hash\":\"{}\",\"abi_version\":{},\"interface\":\"{}\",\"interface_digest\":\"{}\",\"observed_sequence\":{},\"state_root\":\"{}\",{proof},\"freshness\":{{\"mode\":\"signed-emulator-head\"}}", hex_encode(&program.program_id), program.version, hex_encode(&program.code_hash), program.abi_version, hex_encode(interface), hex_encode(&interface_digest), program.observed_sequence, hex_encode(&program.state_root));
-    if interface_only {
-        success(trace, &format!("{{{common}}}"))
-    } else {
-        success(trace, &format!("{{{common},\"lifecycle\":\"active\"}}"))
-    }
+    let interface = serde_json::json!({
+        "program_id":hex_encode(&program.program_id),
+        "version":program.version,
+        "code_hash":hex_encode(&program.code_hash),
+        "abi_version":program.abi_version,
+        "interface":hex_encode(interface),
+        "interface_digest":hex_encode(&interface_digest),
+        "receipt_digest":hex_encode(&receipt_digest),
+        "state_root":hex_encode(&program.state_root),
+        "observed_sequence":program.observed_sequence,
+        "observed_at":live.timestamp_ms,
+        "valid_through":valid_through,
+        "source":{"status":"unpublished"},
+        "verification":"deployment-interface-and-current-head-verified",
+    });
+    success(trace, &interface.to_string())
 }
 
 fn program_simulate(emulator: &mut Emulator, request: &Request, trace: u64) -> Response {

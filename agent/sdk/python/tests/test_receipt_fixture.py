@@ -6,6 +6,9 @@ from pathlib import Path
 import unittest
 
 from layerx_sdk import AuthorizedReceiptBatch, PlatformSdkError, verify_receipt
+from layerx_sdk.verifier import decode_program_receipt_outcome
+
+_PROGRAM_OUTCOME_V3 = "505247330100000000000100010000000700000001000000000000000b000000000000000c000000000000000d000000000000000e00000001000000000000000f00000000000000000000000000000000000000000000000100000000000000020000000000000003000000000000000400000000000000050000000000000006000000000000000700000020000000000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000201111111111111111111111111111111111111111111111111111111111111111000000202222222222222222222222222222222222222222222222222222222222222222000000200000000000000000000000000000000000000000000000000000000000000000"
 
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 _SIGNATURES_PATH = (
@@ -46,6 +49,14 @@ def _authorized(fixture: dict) -> AuthorizedReceiptBatch:
 
 
 class ReceiptFixtureTest(unittest.TestCase):
+    def test_program_outcome_v3_vector(self) -> None:
+        outcome = decode_program_receipt_outcome(bytes.fromhex(_PROGRAM_OUTCOME_V3), 1)
+        self.assertEqual(outcome.encoding_version, 3)
+        self.assertEqual(outcome.abi_version, 1)
+        self.assertEqual(outcome.fee_units, 16)
+        self.assertEqual(outcome.call_graph_root, bytes.fromhex("11" * 32))
+        self.assertEqual(outcome.terminal_payload_root, bytes.fromhex("22" * 32))
+
     def test_core_fixture_receipt_verifies_positively(self) -> None:
         fixture = _load_fixture()
         expected = fixture["expected"]

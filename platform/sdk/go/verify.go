@@ -23,6 +23,9 @@ const (
 	maximumEffectBody      = 256
 	batchHeaderBytes       = 354
 	allAvailabilityClasses = 0x1f
+	programOutcomeV1       = 0x50524731
+	programOutcomeV2       = 0x50524732
+	programOutcomeV3       = 0x50524733
 )
 
 type ReceiptCheck string
@@ -78,6 +81,32 @@ type ReceiptEffect struct {
 	Body            []byte
 }
 
+type ProgramReceiptOutcome struct {
+	EncodingVersion          uint8
+	TerminalKind             uint8
+	ResultCode               int32
+	RuntimeVersion           uint16
+	ABIVersion               uint16
+	FeeScheduleVersion       uint32
+	MeteringScheduleVersion  uint32
+	CPUFuel                  uint64
+	MemoryBytes              uint64
+	StorageReadBytes         uint64
+	StorageWriteBytes        uint64
+	OutputValues             uint32
+	OutputBytes              uint64
+	OccupancyByteBatches     Uint128
+	OccupancyFeeUnits        Uint128
+	FeeSchedulePrices        [7]uint64
+	OccupancyAssetID         [32]byte
+	OccupancyEvidenceDigest  [32]byte
+	OccupancyTransferRoot    [32]byte
+	FeeUnits                 Uint128
+	CallGraphRoot            [32]byte
+	TerminalPayloadRoot      [32]byte
+	TransferRoot             [32]byte
+}
+
 type ProtocolReceipt struct {
 	ProtocolVersion    uint16
 	ActivityID         [32]byte
@@ -106,6 +135,7 @@ type ProtocolReceipt struct {
 	AuthorizationHash  [32]byte
 	ContextHash        [32]byte
 	Timestamp          uint64
+	ProgramOutcome     *ProgramReceiptOutcome
 	SequencerSignature [64]byte
 }
 
@@ -142,7 +172,7 @@ func VerifyReceiptOutcome(canonicalReceipt []byte, authorized AuthorizedBatch) (
 	if err != nil {
 		return VerifiedReceipt{}, err
 	}
-	if receipt.protocolVersion != 1 {
+	if receipt.protocolVersion != 1 && receipt.protocolVersion != 2 {
 		return VerifiedReceipt{}, receiptFailure(ReceiptCheckProtocolVersion)
 	}
 	if receipt.operation == 0 {
@@ -203,14 +233,18 @@ func VerifyReceipt(canonicalReceipt []byte, authorized AuthorizedBatch) (Verifie
 }
 
 func decodeProtocolReceipt(value []byte) (decodedReceipt, error) {
-	if len(value) > maximumMessageBytes || len(value) < 4 || !bytes.Equal(value[:4], []byte{0, 1, 0x52, 1}) {
+	if len(value) > maximumMessageBytes || len(value) < 4 || !(bytes.Equal(value[:4], []byte{0, 1, 0x52, 1}) || bytes.Equal(value[:4], []byte{0, 2, 0x52, 1})) {
 		return decodedReceipt{}, receiptFailure(ReceiptCheckReceiptShape)
 	}
 	decoder := wireDecoder{value: value}
-	if decoder.u16() != 1 || decoder.u16() != 0x5201 {
+	envelopeVersion := decoder.u16()
+	if (envelopeVersion != 1 && envelopeVersion != 2) || decoder.u16() != 0x5201 {
 		return decodedReceipt{}, receiptFailure(ReceiptCheckDecode)
 	}
 	receipt := decodedReceipt{protocolVersion: decoder.u16()}
+	if receipt.protocolVersion != envelopeVersion {
+		return decodedReceipt{}, receiptFailure(ReceiptCheckProtocolVersion)
+	}
 	receipt.protocol.ProtocolVersion = receipt.protocolVersion
 	receipt.activityID = decoder.array32()
 	receipt.protocol.ActivityID = receipt.activityID
@@ -271,6 +305,13 @@ func decodeProtocolReceipt(value []byte) (decodedReceipt, error) {
 	receipt.protocol.AuthorizationHash = decoder.array32()
 	receipt.protocol.ContextHash = decoder.array32()
 	receipt.protocol.Timestamp = decoder.u64()
+	if len(value)-decoder.offset > 69 {
+		outcome, ok := decodeProgramReceiptOutcomeFrom(&decoder, receipt.protocolVersion)
+		if !ok || receipt.protocol.ModuleID != 9 || outcome.ResultCode != receipt.resultCode || outcome.TerminalKind == 1 && outcome.TransferRoot != receipt.protocol.TransferSetRoot || outcome.TerminalKind != 1 && receipt.protocol.TransferSetRoot != [32]byte{} {
+			return decodedReceipt{}, receiptFailure(ReceiptCheckCanonicalEncoding)
+		}
+		receipt.protocol.ProgramOutcome = &outcome
+	}
 	signatureMarker := decoder.offset
 	present := decoder.u8()
 	if decoder.failed {
@@ -292,6 +333,67 @@ func decodeProtocolReceipt(value []byte) (decodedReceipt, error) {
 	copy(receipt.unsigned, value[:signatureMarker])
 	receipt.unsigned[signatureMarker] = 0
 	return receipt, nil
+}
+
+func decodeProgramReceiptOutcomeFrom(decoder *wireDecoder, protocolVersion uint16) (ProgramReceiptOutcome, bool) {
+	var outcome ProgramReceiptOutcome
+	switch decoder.u32() {
+	case programOutcomeV1:
+		outcome.EncodingVersion = 1
+	case programOutcomeV2:
+		outcome.EncodingVersion = 2
+	case programOutcomeV3:
+		outcome.EncodingVersion = 3
+	default:
+		return ProgramReceiptOutcome{}, false
+	}
+	outcome.TerminalKind = decoder.u8()
+	outcome.ResultCode = decoder.i32()
+	outcome.RuntimeVersion = decoder.u16()
+	outcome.ABIVersion = decoder.u16()
+	outcome.FeeScheduleVersion = decoder.u32()
+	outcome.MeteringScheduleVersion = 1
+	if outcome.EncodingVersion == 3 {
+		outcome.MeteringScheduleVersion = decoder.u32()
+	}
+	outcome.CPUFuel = decoder.u64()
+	outcome.MemoryBytes = decoder.u64()
+	outcome.StorageReadBytes = decoder.u64()
+	outcome.StorageWriteBytes = decoder.u64()
+	outcome.OutputValues = decoder.u32()
+	outcome.OutputBytes = decoder.u64()
+	if outcome.EncodingVersion >= 2 {
+		outcome.OccupancyByteBatches = decoder.u128()
+		outcome.OccupancyFeeUnits = decoder.u128()
+		for index := range outcome.FeeSchedulePrices {
+			outcome.FeeSchedulePrices[index] = decoder.u64()
+		}
+		outcome.OccupancyAssetID = decoder.array32()
+		outcome.OccupancyEvidenceDigest = decoder.array32()
+		outcome.OccupancyTransferRoot = decoder.array32()
+	}
+	outcome.FeeUnits = decoder.u128()
+	outcome.CallGraphRoot = decoder.array32()
+	outcome.TerminalPayloadRoot = decoder.array32()
+	outcome.TransferRoot = decoder.array32()
+	occupancyZero := outcome.OccupancyByteBatches == (Uint128{}) && outcome.OccupancyFeeUnits == (Uint128{}) && outcome.OccupancyAssetID == [32]byte{} && outcome.OccupancyEvidenceDigest == [32]byte{} && outcome.OccupancyTransferRoot == [32]byte{}
+	validVersion := protocolVersion == 1 && (outcome.EncodingVersion == 1 || outcome.EncodingVersion == 3) || protocolVersion == 2 && (outcome.EncodingVersion == 2 || outcome.EncodingVersion == 3)
+	if decoder.failed || outcome.TerminalKind < 1 || outcome.TerminalKind > 3 || outcome.RuntimeVersion == 0 || outcome.ABIVersion == 0 || outcome.FeeScheduleVersion == 0 || outcome.MeteringScheduleVersion != 1 || outcome.TerminalPayloadRoot == [32]byte{} || outcome.TerminalKind == 1 && outcome.ResultCode != 0 || outcome.TerminalKind != 1 && (outcome.ResultCode == 0 || outcome.ResultCode <= -1000) || outcome.TerminalKind != 1 && outcome.TransferRoot != [32]byte{} || !validVersion || outcome.EncodingVersion == 1 && !occupancyZero || outcome.EncodingVersion >= 2 && outcome.TerminalKind != 1 && !occupancyZero || outcome.EncodingVersion == 2 && outcome.TerminalKind == 1 && (outcome.OccupancyAssetID == [32]byte{} || outcome.OccupancyEvidenceDigest == [32]byte{}) || outcome.EncodingVersion == 3 && (outcome.OccupancyAssetID == [32]byte{}) != (outcome.OccupancyEvidenceDigest == [32]byte{}) || protocolVersion == 1 && outcome.EncodingVersion == 3 && !occupancyZero || protocolVersion == 2 && outcome.EncodingVersion == 3 && outcome.TerminalKind == 1 && (outcome.OccupancyAssetID == [32]byte{} || outcome.OccupancyEvidenceDigest == [32]byte{}) {
+		return ProgramReceiptOutcome{}, false
+	}
+	return outcome, true
+}
+
+func DecodeProgramReceiptOutcome(canonicalOutcome []byte, protocolVersion uint16) (ProgramReceiptOutcome, error) {
+	if len(canonicalOutcome) == 0 || len(canonicalOutcome) > maximumMessageBytes {
+		return ProgramReceiptOutcome{}, receiptFailure(ReceiptCheckReceiptShape)
+	}
+	decoder := wireDecoder{value: append([]byte(nil), canonicalOutcome...)}
+	outcome, ok := decodeProgramReceiptOutcomeFrom(&decoder, protocolVersion)
+	if !ok || decoder.failed || decoder.offset != len(canonicalOutcome) {
+		return ProgramReceiptOutcome{}, receiptFailure(ReceiptCheckCanonicalEncoding)
+	}
+	return outcome, nil
 }
 
 type MerkleProof struct {

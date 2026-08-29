@@ -1,3 +1,4 @@
+import Crypto
 import Foundation
 
 public struct ProgramBudget: Sendable {
@@ -33,7 +34,7 @@ public struct ProgramCall: Sendable {
         guard programID.count == 32, budget.fuel > 0, calldata.count <= 1_048_576,
               capabilities.count <= 5,
               zip(capabilities, capabilities.dropFirst()).allSatisfy({ $0.order < $1.order }),
-              !signedActivity.isEmpty else { throw programInvalid() }
+              !signedActivity.isEmpty, signedActivity.count <= 1_048_576 else { throw programInvalid() }
         self.programID = programID; self.calldata = calldata; self.budget = budget
         self.capabilities = capabilities; self.signedActivity = signedActivity
     }
@@ -78,9 +79,11 @@ public struct ProgramsClient: Sendable {
     }
     public func receipt(idempotencyKey: IdempotencyKey, expectedActivityID: Data, verificationLevel: String) async throws -> ProgramSubmission {
         let activity = try identifier(expectedActivityID)
-        return try .init(await client.agentProgramReceipt(.object(["idempotency_key": .string(idempotencyKey.rawValue),
+        let value = try await client.agentProgramReceipt(.object(["idempotency_key": .string(idempotencyKey.rawValue),
             "expected_activity_id": .string(activity), "requested_verification_level": .string(try level(verificationLevel))]),
-            pathParameters: ["idempotency_key": idempotencyKey.rawValue]))
+            pathParameters: ["idempotency_key": idempotencyKey.rawValue])
+        guard value.objectValue?["activity_id"]?.stringValue == activity else { throw programVerification() }
+        return try .init(value)
     }
     public func activity(activityID: Data, verificationLevel: String) async throws -> ProgramSubmission {
         let id = try identifier(activityID)
@@ -89,13 +92,18 @@ public struct ProgramsClient: Sendable {
     }
 
     public static func verifyReceipt(_ canonicalReceipt: Data, authorized: AuthorizedReceiptBatch,
-                                     expectedActivityID: Data) async throws -> ReceiptVerification {
-        guard expectedActivityID.count == 32 else { throw programInvalid() }
+                                     expectedActivityID: Data, expectedGuestABIVersion: UInt16,
+                                     terminalPayload: Data, callGraph: Data) async throws -> ReceiptVerification {
+        guard expectedActivityID.count == 32, expectedGuestABIVersion == 1 || expectedGuestABIVersion == 2 else { throw programInvalid() }
         let verified = try await LocalVerifier.verifyReceiptOutcome(canonicalReceipt, authorized: authorized)
         let receipt = verified.receipt
+        let outcome = receipt.programOutcome
         guard receipt.protocolVersion > 0, receipt.moduleID == receiptModuleID, receipt.operation == callOperation,
               (1...3).contains(receipt.moduleVersion),
-              receipt.activityID == expectedActivityID else { throw programVerification() }
+              receipt.activityID == expectedActivityID, let outcome,
+              outcome.abiVersion == expectedGuestABIVersion, !callGraph.isEmpty,
+              Data(SHA256.hash(data: terminalPayload)) == outcome.terminalPayloadRoot,
+              Data(SHA256.hash(data: callGraph)) == outcome.callGraphRoot else { throw programVerification() }
         return verified
     }
 }

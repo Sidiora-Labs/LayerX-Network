@@ -12,6 +12,9 @@ const MAX_EFFECTS = 512;
 const MAX_EFFECT_BODY = 256;
 const MAX_U128 = 0xffff_ffff_ffff_ffff_ffff_ffff_ffff_ffffn;
 const ALL_AVAILABILITY_CLASSES = 0x1f;
+const PROGRAM_OUTCOME_V1 = 0x5052_4731;
+const PROGRAM_OUTCOME_V2 = 0x5052_4732;
+const PROGRAM_OUTCOME_V3 = 0x5052_4733;
 
 export interface MerkleProof {
   readonly leafIndex: number;
@@ -125,6 +128,32 @@ export interface ReceiptEffect {
   readonly body: Uint8Array;
 }
 
+export interface ProgramReceiptOutcome {
+  readonly encodingVersion: 1 | 2 | 3;
+  readonly terminalKind: 1 | 2 | 3;
+  readonly resultCode: number;
+  readonly runtimeVersion: number;
+  readonly abiVersion: number;
+  readonly feeScheduleVersion: number;
+  readonly meteringScheduleVersion: number;
+  readonly cpuFuel: bigint;
+  readonly memoryBytes: bigint;
+  readonly storageReadBytes: bigint;
+  readonly storageWriteBytes: bigint;
+  readonly outputValues: number;
+  readonly outputBytes: bigint;
+  readonly occupancyByteBatches: bigint;
+  readonly occupancyFeeUnits: bigint;
+  readonly feeSchedulePrices: readonly bigint[];
+  readonly occupancyAssetId: Uint8Array;
+  readonly occupancyEvidenceDigest: Uint8Array;
+  readonly occupancyTransferRoot: Uint8Array;
+  readonly feeUnits: bigint;
+  readonly callGraphRoot: Uint8Array;
+  readonly terminalPayloadRoot: Uint8Array;
+  readonly transferRoot: Uint8Array;
+}
+
 export interface ProtocolReceipt {
   readonly protocolVersion: number;
   readonly activityId: Uint8Array;
@@ -153,6 +182,7 @@ export interface ProtocolReceipt {
   readonly authorizationHash: Uint8Array;
   readonly contextHash: Uint8Array;
   readonly timestamp: bigint;
+  readonly programOutcome?: ProgramReceiptOutcome;
   readonly sequencerSignature: Uint8Array;
 }
 
@@ -313,6 +343,10 @@ class Decoder {
 
   public position(): number {
     return this.#offset;
+  }
+
+  public remaining(): number {
+    return this.bytes.length - this.#offset;
   }
 
   public fixed(length: number): Uint8Array {
@@ -627,16 +661,118 @@ function allZero(value: Uint8Array): boolean {
   return aggregate === 0;
 }
 
+function decodeProgramReceiptOutcomeFrom(decoder: Decoder, protocolVersion: number): ProgramReceiptOutcome {
+  const tag = decoder.u32();
+  const encodingVersion = tag === PROGRAM_OUTCOME_V1 ? 1 : tag === PROGRAM_OUTCOME_V2 ? 2 : tag === PROGRAM_OUTCOME_V3 ? 3 : 0;
+  if (encodingVersion === 0) {
+    return verificationFailure();
+  }
+  const terminalKindValue = decoder.u8();
+  if (terminalKindValue < 1 || terminalKindValue > 3) {
+    return verificationFailure();
+  }
+  const terminalKind = terminalKindValue as 1 | 2 | 3;
+  const resultCode = decoder.i32();
+  const runtimeVersion = decoder.u16();
+  const abiVersion = decoder.u16();
+  const feeScheduleVersion = decoder.u32();
+  const meteringScheduleVersion = encodingVersion === 3 ? decoder.u32() : 1;
+  const cpuFuel = decoder.u64();
+  const memoryBytes = decoder.u64();
+  const storageReadBytes = decoder.u64();
+  const storageWriteBytes = decoder.u64();
+  const outputValues = decoder.u32();
+  const outputBytes = decoder.u64();
+  const occupancyByteBatches = encodingVersion >= 2 ? decoder.u128() : 0n;
+  const occupancyFeeUnits = encodingVersion >= 2 ? decoder.u128() : 0n;
+  const feeSchedulePrices: bigint[] = [];
+  if (encodingVersion >= 2) {
+    for (let index = 0; index < 7; index += 1) feeSchedulePrices.push(decoder.u64());
+  } else {
+    feeSchedulePrices.push(0n, 0n, 0n, 0n, 0n, 0n, 0n);
+  }
+  const occupancyAssetId = encodingVersion >= 2 ? decoder.bounded(32) : new Uint8Array(32);
+  const occupancyEvidenceDigest = encodingVersion >= 2 ? decoder.bounded(32) : new Uint8Array(32);
+  const occupancyTransferRoot = encodingVersion >= 2 ? decoder.bounded(32) : new Uint8Array(32);
+  const feeUnits = decoder.u128();
+  const callGraphRoot = decoder.bounded(32);
+  const terminalPayloadRoot = decoder.bounded(32);
+  const transferRoot = decoder.bounded(32);
+  const occupancyZero = occupancyByteBatches === 0n
+    && occupancyFeeUnits === 0n
+    && allZero(occupancyAssetId)
+    && allZero(occupancyEvidenceDigest)
+    && allZero(occupancyTransferRoot);
+  if (
+    runtimeVersion === 0
+    || abiVersion === 0
+    || feeScheduleVersion === 0
+    || meteringScheduleVersion !== 1
+    || allZero(terminalPayloadRoot)
+    || (terminalKind === 1 && resultCode !== 0)
+    || (terminalKind !== 1 && (resultCode === 0 || resultCode <= -1000))
+    || (terminalKind !== 1 && !allZero(transferRoot))
+    || !((protocolVersion === 1 && (encodingVersion === 1 || encodingVersion === 3))
+      || (protocolVersion === 2 && (encodingVersion === 2 || encodingVersion === 3)))
+    || (encodingVersion === 1 && !occupancyZero)
+    || (encodingVersion >= 2 && terminalKind !== 1 && !occupancyZero)
+    || (encodingVersion === 2 && terminalKind === 1
+      && (allZero(occupancyAssetId) || allZero(occupancyEvidenceDigest)))
+    || (encodingVersion === 3 && allZero(occupancyAssetId) !== allZero(occupancyEvidenceDigest))
+    || (protocolVersion === 1 && encodingVersion === 3 && !occupancyZero)
+    || (protocolVersion === 2 && encodingVersion === 3 && terminalKind === 1
+      && (allZero(occupancyAssetId) || allZero(occupancyEvidenceDigest)))
+  ) {
+    return verificationFailure();
+  }
+  return Object.freeze({
+    encodingVersion,
+    terminalKind,
+    resultCode,
+    runtimeVersion,
+    abiVersion,
+    feeScheduleVersion,
+    meteringScheduleVersion,
+    cpuFuel,
+    memoryBytes,
+    storageReadBytes,
+    storageWriteBytes,
+    outputValues,
+    outputBytes,
+    occupancyByteBatches,
+    occupancyFeeUnits,
+    feeSchedulePrices: Object.freeze(feeSchedulePrices),
+    occupancyAssetId,
+    occupancyEvidenceDigest,
+    occupancyTransferRoot,
+    feeUnits,
+    callGraphRoot,
+    terminalPayloadRoot,
+    transferRoot,
+  });
+}
+
+export function decodeProgramReceiptOutcome(canonicalOutcome: Uint8Array, protocolVersion: number): ProgramReceiptOutcome {
+  if (canonicalOutcome.length === 0 || canonicalOutcome.length > MAX_MESSAGE_BYTES) {
+    return verificationFailure();
+  }
+  const decoder = new Decoder(canonicalOutcome.slice());
+  const outcome = decodeProgramReceiptOutcomeFrom(decoder, protocolVersion);
+  decoder.finish();
+  return outcome;
+}
+
 function decodeProtocolReceipt(canonicalReceipt: Uint8Array): DecodedReceipt {
   if (canonicalReceipt.length === 0 || canonicalReceipt.length > MAX_MESSAGE_BYTES) {
     return verificationFailure();
   }
   const decoder = new Decoder(canonicalReceipt);
-  if (decoder.u16() !== 1 || decoder.u16() !== 0x5201) {
+  const envelopeVersion = decoder.u16();
+  if ((envelopeVersion !== 1 && envelopeVersion !== 2) || decoder.u16() !== 0x5201) {
     return verificationFailure();
   }
   const protocolVersion = decoder.u16();
-  if (protocolVersion !== 1) {
+  if (protocolVersion !== envelopeVersion) {
     return verificationFailure();
   }
   const activityId = decoder.bounded(32);
@@ -691,6 +827,17 @@ function decodeProtocolReceipt(canonicalReceipt: Uint8Array): DecodedReceipt {
   const authorizationHash = decoder.bounded(32);
   const contextHash = decoder.bounded(32);
   const timestamp = decoder.u64();
+  const programOutcome = decoder.remaining() > 69
+    ? decodeProgramReceiptOutcomeFrom(decoder, protocolVersion)
+    : undefined;
+  if (programOutcome !== undefined && (
+    moduleId !== 9
+    || programOutcome.resultCode !== resultCode
+    || (programOutcome.terminalKind === 1 && !equal(programOutcome.transferRoot, transferSetRoot))
+    || (programOutcome.terminalKind !== 1 && !allZero(transferSetRoot))
+  )) {
+    return verificationFailure();
+  }
   const signatureFlagOffset = decoder.position();
   if (decoder.u8() !== 1) {
     return verificationFailure();
@@ -726,6 +873,7 @@ function decodeProtocolReceipt(canonicalReceipt: Uint8Array): DecodedReceipt {
       authorizationHash,
       contextHash,
       timestamp,
+      ...(programOutcome === undefined ? {} : { programOutcome }),
       sequencerSignature,
     }),
     unsignedBytes: concatenate(canonicalReceipt.slice(0, signatureFlagOffset), new Uint8Array([0])),

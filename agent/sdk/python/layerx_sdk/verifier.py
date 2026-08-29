@@ -18,6 +18,9 @@ _MAX_EFFECTS = 512
 _MAX_EFFECT_BODY = 256
 _MAX_U128 = 0xFFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF
 _ALL_AVAILABILITY_CLASSES = 0x1F
+_PROGRAM_OUTCOME_V1 = 0x5052_4731
+_PROGRAM_OUTCOME_V2 = 0x5052_4732
+_PROGRAM_OUTCOME_V3 = 0x5052_4733
 
 
 def _failure() -> None:
@@ -127,6 +130,9 @@ class _Decoder:
 
     def position(self) -> int:
         return self._offset
+
+    def remaining(self) -> int:
+        return len(self._value) - self._offset
 
     def bounded(self, length: int) -> bytes:
         if self.u32() != length:
@@ -248,6 +254,33 @@ class ReceiptEffect:
 
 
 @dataclass(frozen=True)
+class ProgramReceiptOutcome:
+    encoding_version: Literal[1, 2, 3]
+    terminal_kind: Literal[1, 2, 3]
+    result_code: int
+    runtime_version: int
+    abi_version: int
+    fee_schedule_version: int
+    metering_schedule_version: int
+    cpu_fuel: int
+    memory_bytes: int
+    storage_read_bytes: int
+    storage_write_bytes: int
+    output_values: int
+    output_bytes: int
+    occupancy_byte_batches: int
+    occupancy_fee_units: int
+    fee_schedule_prices: tuple[int, int, int, int, int, int, int]
+    occupancy_asset_id: bytes
+    occupancy_evidence_digest: bytes
+    occupancy_transfer_root: bytes
+    fee_units: int
+    call_graph_root: bytes
+    terminal_payload_root: bytes
+    transfer_root: bytes
+
+
+@dataclass(frozen=True)
 class ProtocolReceipt:
     protocol_version: int
     activity_id: bytes
@@ -276,6 +309,7 @@ class ProtocolReceipt:
     authorization_hash: bytes
     context_hash: bytes
     timestamp: int
+    program_outcome: ProgramReceiptOutcome | None
     sequencer_signature: bytes
 
 
@@ -542,14 +576,133 @@ def _all_zero(value: bytes) -> bool:
     return aggregate == 0
 
 
+def _decode_program_receipt_outcome_from(
+    decoder: _Decoder, protocol_version: int
+) -> ProgramReceiptOutcome:
+    tags = {
+        _PROGRAM_OUTCOME_V1: 1,
+        _PROGRAM_OUTCOME_V2: 2,
+        _PROGRAM_OUTCOME_V3: 3,
+    }
+    encoding_value = tags.get(decoder.u32())
+    if encoding_value is None:
+        _failure()
+    encoding_version = cast(Literal[1, 2, 3], encoding_value)
+    terminal_value = decoder.u8()
+    if terminal_value not in (1, 2, 3):
+        _failure()
+    terminal_kind = cast(Literal[1, 2, 3], terminal_value)
+    result_code = decoder.i32()
+    runtime_version = decoder.u16()
+    abi_version = decoder.u16()
+    fee_schedule_version = decoder.u32()
+    metering_schedule_version = decoder.u32() if encoding_version == 3 else 1
+    cpu_fuel = decoder.u64()
+    memory_bytes = decoder.u64()
+    storage_read_bytes = decoder.u64()
+    storage_write_bytes = decoder.u64()
+    output_values = decoder.u32()
+    output_bytes = decoder.u64()
+    occupancy_byte_batches = decoder.u128() if encoding_version >= 2 else 0
+    occupancy_fee_units = decoder.u128() if encoding_version >= 2 else 0
+    fee_schedule_prices = cast(
+        tuple[int, int, int, int, int, int, int],
+        tuple(decoder.u64() for _ in range(7)) if encoding_version >= 2 else (0,) * 7,
+    )
+    occupancy_asset_id = decoder.bounded(32) if encoding_version >= 2 else bytes(32)
+    occupancy_evidence_digest = decoder.bounded(32) if encoding_version >= 2 else bytes(32)
+    occupancy_transfer_root = decoder.bounded(32) if encoding_version >= 2 else bytes(32)
+    fee_units = decoder.u128()
+    call_graph_root = decoder.bounded(32)
+    terminal_payload_root = decoder.bounded(32)
+    transfer_root = decoder.bounded(32)
+    occupancy_zero = (
+        occupancy_byte_batches == 0
+        and occupancy_fee_units == 0
+        and _all_zero(occupancy_asset_id)
+        and _all_zero(occupancy_evidence_digest)
+        and _all_zero(occupancy_transfer_root)
+    )
+    if (
+        runtime_version == 0
+        or abi_version == 0
+        or fee_schedule_version == 0
+        or metering_schedule_version != 1
+        or _all_zero(terminal_payload_root)
+        or (terminal_kind == 1 and result_code != 0)
+        or (terminal_kind != 1 and (result_code == 0 or result_code <= -1000))
+        or (terminal_kind != 1 and not _all_zero(transfer_root))
+        or not (
+            (protocol_version == 1 and encoding_version in (1, 3))
+            or (protocol_version == 2 and encoding_version in (2, 3))
+        )
+        or (encoding_version == 1 and not occupancy_zero)
+        or (encoding_version >= 2 and terminal_kind != 1 and not occupancy_zero)
+        or (
+            encoding_version == 2
+            and terminal_kind == 1
+            and (_all_zero(occupancy_asset_id) or _all_zero(occupancy_evidence_digest))
+        )
+        or (
+            encoding_version == 3
+            and _all_zero(occupancy_asset_id) != _all_zero(occupancy_evidence_digest)
+        )
+        or (protocol_version == 1 and encoding_version == 3 and not occupancy_zero)
+        or (
+            protocol_version == 2
+            and encoding_version == 3
+            and terminal_kind == 1
+            and (_all_zero(occupancy_asset_id) or _all_zero(occupancy_evidence_digest))
+        )
+    ):
+        _failure()
+    return ProgramReceiptOutcome(
+        encoding_version=encoding_version,
+        terminal_kind=terminal_kind,
+        result_code=result_code,
+        runtime_version=runtime_version,
+        abi_version=abi_version,
+        fee_schedule_version=fee_schedule_version,
+        metering_schedule_version=metering_schedule_version,
+        cpu_fuel=cpu_fuel,
+        memory_bytes=memory_bytes,
+        storage_read_bytes=storage_read_bytes,
+        storage_write_bytes=storage_write_bytes,
+        output_values=output_values,
+        output_bytes=output_bytes,
+        occupancy_byte_batches=occupancy_byte_batches,
+        occupancy_fee_units=occupancy_fee_units,
+        fee_schedule_prices=fee_schedule_prices,
+        occupancy_asset_id=occupancy_asset_id,
+        occupancy_evidence_digest=occupancy_evidence_digest,
+        occupancy_transfer_root=occupancy_transfer_root,
+        fee_units=fee_units,
+        call_graph_root=call_graph_root,
+        terminal_payload_root=terminal_payload_root,
+        transfer_root=transfer_root,
+    )
+
+
+def decode_program_receipt_outcome(
+    canonical_outcome: bytes, protocol_version: int
+) -> ProgramReceiptOutcome:
+    if not canonical_outcome or len(canonical_outcome) > _MAX_MESSAGE_BYTES:
+        _failure()
+    decoder = _Decoder(bytes(canonical_outcome))
+    outcome = _decode_program_receipt_outcome_from(decoder, protocol_version)
+    decoder.finish()
+    return outcome
+
+
 def _decode_protocol_receipt(canonical_receipt: bytes) -> tuple[ProtocolReceipt, bytes]:
     if not canonical_receipt or len(canonical_receipt) > _MAX_MESSAGE_BYTES:
         _failure()
     decoder = _Decoder(canonical_receipt)
-    if decoder.u16() != 1 or decoder.u16() != 0x5201:
+    envelope_version = decoder.u16()
+    if envelope_version not in (1, 2) or decoder.u16() != 0x5201:
         _failure()
     protocol_version = decoder.u16()
-    if protocol_version != 1:
+    if protocol_version != envelope_version:
         _failure()
     activity_id = decoder.bounded(32)
     global_sequence = decoder.u64()
@@ -599,6 +752,21 @@ def _decode_protocol_receipt(canonical_receipt: bytes) -> tuple[ProtocolReceipt,
     authorization_hash = decoder.bounded(32)
     context_hash = decoder.bounded(32)
     timestamp = decoder.u64()
+    program_outcome = (
+        _decode_program_receipt_outcome_from(decoder, protocol_version)
+        if decoder.remaining() > 69
+        else None
+    )
+    if program_outcome is not None and (
+        module_id != 9
+        or program_outcome.result_code != result_code
+        or (
+            program_outcome.terminal_kind == 1
+            and not _equal(program_outcome.transfer_root, transfer_set_root)
+        )
+        or (program_outcome.terminal_kind != 1 and not _all_zero(transfer_set_root))
+    ):
+        _failure()
     signature_flag_offset = decoder.position()
     if decoder.u8() != 1:
         _failure()
@@ -633,6 +801,7 @@ def _decode_protocol_receipt(canonical_receipt: bytes) -> tuple[ProtocolReceipt,
             authorization_hash=authorization_hash,
             context_hash=context_hash,
             timestamp=timestamp,
+            program_outcome=program_outcome,
             sequencer_signature=sequencer_signature,
         ),
         canonical_receipt[:signature_flag_offset] + b"\0",

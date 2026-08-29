@@ -11,6 +11,17 @@ import java.nio.file.Paths;
 import static org.junit.jupiter.api.Assertions.*;
 
 public final class ReceiptFixtureTest {
+    private static final String PROGRAM_OUTCOME_V3 = "505247330100000000000100010000000700000001000000000000000b000000000000000c000000000000000d000000000000000e00000001000000000000000f00000000000000000000000000000000000000000000000100000000000000020000000000000003000000000000000400000000000000050000000000000006000000000000000700000020000000000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000201111111111111111111111111111111111111111111111111111111111111111000000202222222222222222222222222222222222222222222222222222222222222222000000200000000000000000000000000000000000000000000000000000000000000000";
+
+    @Test
+    void programOutcomeV3VectorDecodes() {
+        var outcome = LocalVerifier.decodeProgramReceiptOutcome(hexDecode(PROGRAM_OUTCOME_V3), 1);
+        assertEquals(3, outcome.encodingVersion());
+        assertEquals(1, outcome.abiVersion());
+        assertEquals(java.math.BigInteger.valueOf(16), outcome.feeUnits());
+        org.junit.jupiter.api.Assertions.assertArrayEquals(hexDecode("11".repeat(32)), outcome.callGraphRoot());
+        org.junit.jupiter.api.Assertions.assertArrayEquals(hexDecode("22".repeat(32)), outcome.terminalPayloadRoot());
+    }
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final Path FIXTURE = Paths
         .get(System.getProperty("layerx.repo.root", "../../.."))

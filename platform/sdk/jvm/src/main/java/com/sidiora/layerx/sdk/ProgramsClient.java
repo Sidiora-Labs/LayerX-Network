@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.math.BigInteger;
+import java.security.MessageDigest;
 import java.util.concurrent.CompletionStage;
 
 public final class ProgramsClient {
@@ -34,7 +35,7 @@ public final class ProgramsClient {
         public Call {
             programId = exact(programId, 32);
             if (calldata == null || calldata.length > MAX_CALLDATA_BYTES || budget == null
-                    || signedActivity == null || signedActivity.length == 0
+                    || signedActivity == null || signedActivity.length == 0 || signedActivity.length > MAX_CALLDATA_BYTES
                     || capabilities == null || capabilities.size() > MAX_CAPABILITIES) invalid();
             capabilities = List.copyOf(capabilities);
             if (capabilities.stream().anyMatch(Objects::isNull)) invalid();
@@ -77,7 +78,10 @@ public final class ProgramsClient {
         var activity = hex(exact(expectedActivityId, 32));
         var body = object().put("idempotency_key", key.value()).put("expected_activity_id", activity)
             .put("requested_verification_level", required(verificationLevel));
-        return raw("program.receipt", body, Map.of("idempotency_key", key.value())).thenApply(Submission::new);
+        return raw("program.receipt", body, Map.of("idempotency_key", key.value())).thenApply(value -> {
+            if (!value.path("activity_id").asText().equals(activity)) invalidVerification();
+            return new Submission(value);
+        });
     }
     public CompletionStage<Submission> activity(byte[] activityId, String verificationLevel) {
         var id = hex(exact(activityId, 32));
@@ -86,12 +90,19 @@ public final class ProgramsClient {
     }
 
     public static LocalVerifier.ReceiptVerification verifyReceipt(byte[] canonicalReceipt,
-            LocalVerifier.AuthorizedReceiptBatch authorized, byte[] expectedActivityId) {
+            LocalVerifier.AuthorizedReceiptBatch authorized, byte[] expectedActivityId,
+            int expectedGuestAbiVersion, byte[] terminalPayload, byte[] callGraph) {
+        if (expectedGuestAbiVersion != 1 && expectedGuestAbiVersion != 2) invalid();
         var verified = LocalVerifier.verifyReceiptOutcome(canonicalReceipt, authorized);
         var receipt = verified.receipt();
+        var outcome = receipt.programOutcome();
         if (receipt.protocolVersion() == 0 || receipt.moduleId() != PROGRAMS_RECEIPT_MODULE_ID
                 || receipt.operation() != CALL_OPERATION || receipt.moduleVersion() < 1 || receipt.moduleVersion() > 3
-                || !java.util.Arrays.equals(receipt.activityId(), exact(expectedActivityId, 32))) invalidVerification();
+                || !java.util.Arrays.equals(receipt.activityId(), exact(expectedActivityId, 32))
+                || outcome == null || outcome.abiVersion() != expectedGuestAbiVersion
+                || callGraph == null || callGraph.length == 0 || terminalPayload == null
+                || !MessageDigest.isEqual(sha256(terminalPayload), outcome.terminalPayloadRoot())
+                || !MessageDigest.isEqual(sha256(callGraph), outcome.callGraphRoot())) invalidVerification();
         return verified;
     }
 
@@ -111,6 +122,7 @@ public final class ProgramsClient {
     private static String required(String value) { if (value == null || value.isEmpty() || value.length() > 64) invalid(); return value; }
     private static byte[] exact(byte[] value, int length) { if (value == null || value.length != length) invalid(); return value.clone(); }
     private static String hex(byte[] value) { return java.util.HexFormat.of().formatHex(value); }
+    private static byte[] sha256(byte[] value) { try { return MessageDigest.getInstance("SHA-256").digest(value); } catch (java.security.GeneralSecurityException impossible) { throw new AssertionError(impossible); } }
     private static void invalid() { throw PlatformSdkException.invalidArgument(); }
     private static void invalidVerification() { throw new PlatformSdkException(PlatformSdkException.Code.VERIFICATION_FAILURE, PlatformSdkException.Retry.NEVER, null, null, null); }
 }

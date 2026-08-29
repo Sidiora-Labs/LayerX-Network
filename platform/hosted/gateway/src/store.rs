@@ -86,6 +86,7 @@ pub enum Reservation {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OperationRecord {
+    pub scope: String,
     pub digest: String,
     pub state: String,
     pub response: String,
@@ -400,6 +401,7 @@ impl RedisStore {
                 let fields = pairs(&values)?;
                 let continuation = durable_continuation(&fields)?;
                 Ok(Some(OperationRecord {
+                    scope: required(&fields, "scope")?,
                     digest: required(&fields, "digest")?,
                     state: required(&fields, "state")?,
                     response: fields.get("response").cloned().unwrap_or_default(),
@@ -534,6 +536,7 @@ impl RedisStore {
                 let fields = pairs(&values)?;
                 let continuation = durable_continuation(&fields)?;
                 Ok(Some(OperationRecord {
+                    scope: required(&fields, "scope")?,
                     digest: required(&fields, "digest")?,
                     state: required(&fields, "state")?,
                     response: fields.get("response").cloned().unwrap_or_default(),
@@ -768,7 +771,7 @@ if used >= tonumber(ARGV[2]) then
 end
 redis.call('INCR', KEYS[2]); redis.call('EXPIRE', KEYS[2], ARGV[3])
 local continuation_count = #ARGV - 11
-redis.call('HSET', KEYS[3], 'digest', ARGV[5], 'state', 'pending', 'started_at', ARGV[7], 'principal', ARGV[10], 'activity_id', string.sub(KEYS[7], 18), 'idempotency_key', ARGV[11], 'continuation_count', continuation_count)
+redis.call('HSET', KEYS[3], 'scope', string.sub(KEYS[3], 14), 'digest', ARGV[5], 'state', 'pending', 'started_at', ARGV[7], 'principal', ARGV[10], 'activity_id', string.sub(KEYS[7], 18), 'idempotency_key', ARGV[11], 'continuation_count', continuation_count)
 for index = 1, continuation_count do redis.call('HSET', KEYS[3], 'continuation_' .. tostring(index - 1), ARGV[11 + index]) end
 redis.call('EXPIRE', KEYS[3], ARGV[4]); redis.call('SADD', KEYS[6], KEYS[3])
 redis.call('SET', KEYS[7], ARGV[10], 'EX', ARGV[4])

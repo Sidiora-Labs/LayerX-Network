@@ -3,6 +3,20 @@ import XCTest
 @testable import LayerXSDK
 
 final class ReceiptFixtureTests: XCTestCase {
+    private static let programOutcomeV3 = "505247330100000000000100010000000700000001000000000000000b000000000000000c000000000000000d000000000000000e00000001000000000000000f00000000000000000000000000000000000000000000000100000000000000020000000000000003000000000000000400000000000000050000000000000006000000000000000700000020000000000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000201111111111111111111111111111111111111111111111111111111111111111000000202222222222222222222222222222222222222222222222222222222222222222000000200000000000000000000000000000000000000000000000000000000000000000"
+
+    func testProgramOutcomeV3Vector() throws {
+        let hex = Self.programOutcomeV3
+        let encoded = Data(stride(from: 0, to: hex.count, by: 2).map {
+            UInt8(hex[hex.index(hex.startIndex, offsetBy: $0)..<hex.index(hex.startIndex, offsetBy: $0 + 2)], radix: 16)!
+        })
+        let outcome = try LocalVerifier.decodeProgramReceiptOutcome(encoded, protocolVersion: 1)
+        XCTAssertEqual(outcome.encodingVersion, 3)
+        XCTAssertEqual(outcome.abiVersion, 1)
+        XCTAssertEqual(outcome.feeUnits, UInt128Value(high: 0, low: 16))
+        XCTAssertEqual(outcome.callGraphRoot, Data(repeating: 0x11, count: 32))
+        XCTAssertEqual(outcome.terminalPayloadRoot, Data(repeating: 0x22, count: 32))
+    }
     private struct Fixture {
         let canonicalReceipt: Data
         let batch: AuthorizedReceiptBatch

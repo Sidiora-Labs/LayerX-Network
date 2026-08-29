@@ -1,7 +1,9 @@
 use layerx_platform_gateway::http::{
     self, Client, Endpoint, IncomingRequest, OutgoingResponse, UpstreamResponse,
 };
-use layerx_platform_gateway::store::{KeyRecord, RedisEndpoint, RedisStore, Reservation};
+use layerx_platform_gateway::store::{
+    KeyRecord, OperationRecord, RedisEndpoint, RedisStore, Reservation,
+};
 use layerx_platform_gateway::{
     authenticate_gateway_key, production_route, verify_activity_operation, verify_program_operation,
     verify_program_simulation_operation, verify_submission, AccessError, AuthorityFacts, IssuedKey,
@@ -165,13 +167,35 @@ struct ProgramCallBody {
     signed_activity: String,
 }
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum ProgramLifecycle {
+    Active,
+    Deprecated,
+    Tombstoned,
+}
+
+impl ProgramLifecycle {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Deprecated => "deprecated",
+            Self::Tombstoned => "tombstoned",
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 struct ProgramHead {
     program_id: [u8; 32],
+    lifecycle: ProgramLifecycle,
+    version: u32,
+    code_hash: [u8; 32],
     abi_version: u16,
+    receipt_digest: [u8; 32],
     state_root: Option<[u8; 32]>,
     observed_sequence: Option<u64>,
     observed_at: Option<u64>,
+    valid_through: u64,
 }
 
 fn now() -> Result<u64, String> {
@@ -325,7 +349,6 @@ fn program_head(config: &Config, expected_program: [u8; 32]) -> Result<ProgramHe
         .map_err(|_| response(503, "program_registry_invalid", Some(5)))?;
     let value = document.get("result").unwrap_or(&document);
     if value.get("program_id").and_then(serde_json::Value::as_str) != Some(program.as_str())
-        || value.get("lifecycle").and_then(serde_json::Value::as_str) != Some("active")
         || value
             .pointer("/receipt/verification")
             .and_then(serde_json::Value::as_str)
@@ -333,6 +356,12 @@ fn program_head(config: &Config, expected_program: [u8; 32]) -> Result<ProgramHe
     {
         return Err(response(503, "program_registry_unverified", Some(5)));
     }
+    let lifecycle = match value.get("lifecycle").and_then(serde_json::Value::as_str) {
+        Some("active") => ProgramLifecycle::Active,
+        Some("deprecated") => ProgramLifecycle::Deprecated,
+        Some("tombstoned") => ProgramLifecycle::Tombstoned,
+        _ => return Err(response(503, "program_registry_invalid", Some(5))),
+    };
     let latest = value
         .get("latest_version")
         .and_then(serde_json::Value::as_u64)
@@ -355,13 +384,17 @@ fn program_head(config: &Config, expected_program: [u8; 32]) -> Result<ProgramHe
         .and_then(|abi| u16::try_from(abi).ok())
         .filter(|abi| matches!(abi, 1 | 2))
         .ok_or_else(|| response(503, "program_registry_invalid", Some(5)))?;
+    let code_hash = version
+        .get("code_hash")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|value| parse_hex32(value).ok())
+        .ok_or_else(|| response(503, "program_registry_invalid", Some(5)))?;
     let deployment_receipt = version
         .get("deployment_receipt_digest")
         .and_then(serde_json::Value::as_str)
         .ok_or_else(|| response(503, "program_registry_invalid", Some(5)))?;
-    if parse_hex32(deployment_receipt).is_err() {
-        return Err(response(503, "program_registry_invalid", Some(5)));
-    }
+    let receipt_digest = parse_hex32(deployment_receipt)
+        .map_err(|_| response(503, "program_registry_invalid", Some(5)))?;
     let balance_receipt = value.pointer("/value_accounts/receipt");
     let state_root = value
         .get("state_root")
@@ -376,16 +409,28 @@ fn program_head(config: &Config, expected_program: [u8; 32]) -> Result<ProgramHe
         .get("observed_at")
         .or_else(|| balance_receipt.and_then(|receipt| receipt.get("observed_at")))
         .and_then(serde_json::Value::as_u64);
-    if state_root.is_none() || observed_sequence.is_none() || observed_at.is_none()
+    let valid_through = value
+        .get("valid_through")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(|| response(503, "program_registry_invalid", Some(5)))?;
+    if state_root.is_none()
+        || observed_sequence.is_none()
+        || observed_at.is_none()
+        || observed_at.is_some_and(|observed| valid_through < observed)
     {
         return Err(response(503, "program_state_unverified", Some(5)));
     }
     Ok(ProgramHead {
         program_id: expected_program,
+        lifecycle,
+        version: latest,
+        code_hash,
         abi_version,
+        receipt_digest,
         state_root,
         observed_sequence,
         observed_at,
+        valid_through,
     })
 }
 
@@ -737,7 +782,6 @@ fn permits(record: &KeyRecord, route: &ProductionRoute<'_>) -> bool {
         | ProductionRoute::ProgramInterface(_)
         | ProductionRoute::ProgramActivity(_)
         | ProductionRoute::ProgramReceiptByIdempotency(_) => "program:read",
-        ProductionRoute::ProgramRegistrySource(_) => "state:read",
     };
     record.scopes.split(',').any(|scope| scope == required)
 }
@@ -1019,7 +1063,7 @@ fn verified_result(
     config: &Config,
     activity_id: &str,
     receipt_hex: &str,
-) -> Result<(Vec<u8>, Vec<u8>), OutgoingResponse> {
+) -> Result<(Vec<u8>, Vec<u8>, i32), OutgoingResponse> {
     let expected =
         parse_hex32(activity_id).map_err(|_| response(503, "component_invalid", Some(5)))?;
     let receipt = decode_hex(receipt_hex, 256 * 1024)
@@ -1032,7 +1076,11 @@ fn verified_result(
         Some(expected),
     )
     .map_err(|_| response(503, "receipt_verification_failed", Some(5)))?;
-    Ok((verified.response().to_vec(), verified.receipt().to_vec()))
+    Ok((
+        verified.response().to_vec(),
+        verified.receipt().to_vec(),
+        verified.result_code(),
+    ))
 }
 
 fn verified_program_result(
@@ -1042,7 +1090,7 @@ fn verified_program_result(
     terminal_payload_hex: &str,
     call_graph_hex: &str,
     head: ProgramHead,
-) -> Result<(Vec<u8>, Vec<u8>), OutgoingResponse> {
+) -> Result<(Vec<u8>, Vec<u8>, i32), OutgoingResponse> {
     let expected_activity =
         parse_hex32(activity_id).map_err(|_| response(503, "component_invalid", Some(5)))?;
     let receipt = decode_hex(receipt_hex, 1_048_576)
@@ -1063,7 +1111,11 @@ fn verified_program_result(
         head.abi_version,
     )
     .map_err(|_| response(503, "program_receipt_verification_failed", Some(5)))?;
-    Ok((verified.response().to_vec(), verified.receipt().to_vec()))
+    Ok((
+        verified.response().to_vec(),
+        verified.receipt().to_vec(),
+        verified.result_code(),
+    ))
 }
 
 fn program_simulation(
@@ -1094,6 +1146,9 @@ fn program_simulation(
         Ok(value) => value,
         Err(error) => return error,
     };
+    if head.lifecycle != ProgramLifecycle::Active {
+        return response(409, "program_not_active", None);
+    }
     let (Some(state_root), Some(observed_sequence), Some(observed_at)) =
         (head.state_root, head.observed_sequence, head.observed_at)
     else {
@@ -1331,7 +1386,8 @@ fn activity(
     }
     let program_head = match expected_program {
         Some(program) => match program_head(config, program) {
-            Ok(head) => Some(head),
+            Ok(head) if head.lifecycle == ProgramLifecycle::Active => Some(head),
+            Ok(_) => return response(409, "program_not_active", None),
             Err(error) => return error,
         },
         None => None,
@@ -1346,7 +1402,6 @@ fn activity(
     ]);
     let scope = digest(&[
         record.principal_digest.as_bytes(),
-        record.key_id.as_bytes(),
         protocol_idempotency.as_bytes(),
     ]);
     let audit = audit_event(
@@ -1489,7 +1544,7 @@ fn activity(
         Ok(value) => value,
         Err(_) => return response(503, "component_invalid", Some(5)),
     };
-    if !matches!(component.state.as_str(), "completed" | "executed")
+    if !matches!(component.state.as_str(), "completed" | "executed" | "refused")
         || !component
             .activity_id
             .eq_ignore_ascii_case(&hex(&verified_submission.activity_id()))
@@ -1500,21 +1555,61 @@ fn activity(
     if program_call && (component.terminal_payload.is_empty() || component.call_graph.is_empty()) {
         return response(503, "component_invalid", Some(5));
     }
-    let (result, receipt) =
+    let (result, receipt, verified_result_code) =
         match program_head.map_or_else(
             || verified_result(config, &component.activity_id, &component.receipt),
-            |head| verified_program_result(
-                config,
-                &component.activity_id,
-                &component.receipt,
-                &component.terminal_payload,
-                &component.call_graph,
-                head,
-            ),
+            |head| {
+                verified_program_result(
+                    config,
+                    &component.activity_id,
+                    &component.receipt,
+                    &component.terminal_payload,
+                    &component.call_graph,
+                    head,
+                )
+            },
         ) {
             Ok(value) => value,
             Err(error) => return error,
         };
+    if !program_call && verified_result_code != 0 {
+        let refusal = json_response(
+            409,
+            serde_json::json!({
+                "ok": false,
+                "error": {
+                    "code": "activity_refused",
+                    "protocol_result_code": verified_result_code,
+                    "retry": "never",
+                    "activity_id": component.activity_id.to_ascii_lowercase(),
+                    "receipt": hex(&receipt),
+                },
+                "trace": trace_id,
+            }),
+        );
+        if config
+            .store
+            .complete(
+                &scope,
+                &request_digest,
+                "refused_409",
+                &hex(&refusal.body),
+                &hex(&receipt),
+                Some(&component.activity_id.to_ascii_lowercase()),
+                &record.principal_digest,
+                &audit_event(
+                    &record.principal_digest,
+                    "activity",
+                    &record.key_id,
+                    "receipt_verified_refusal",
+                ),
+            )
+            .is_err()
+        {
+            return response(503, "persistence_unavailable", Some(5));
+        }
+        return refusal;
+    }
     let mut result = match serde_json::from_slice::<serde_json::Value>(&result) {
         Ok(value) => value,
         Err(_) => return response(503, "receipt_encoding_failed", Some(5)),
@@ -1553,6 +1648,125 @@ fn activity(
     json_response(
         200,
         serde_json::json!({ "ok": true, "result": result, "trace": trace_id }),
+    )
+}
+
+fn pending_program_response(operation: &OperationRecord, trace_id: &str) -> OutgoingResponse {
+    json_response(
+        202,
+        serde_json::json!({
+            "ok": true,
+            "result": {
+                "state": "unknown",
+                "activity_id": operation.activity_id,
+                "idempotency_key": operation.idempotency_key,
+            },
+            "trace": trace_id,
+        }),
+    )
+}
+
+fn resolve_pending_program(
+    config: &Config,
+    record: &KeyRecord,
+    operation: &OperationRecord,
+    trace_id: &str,
+) -> OutgoingResponse {
+    let upstream = match config.client.request(
+        &config.component,
+        "GET",
+        &format!("/v1/programs/activities/{}", operation.activity_id),
+        config.component_token.as_str(),
+        None,
+        "application/json",
+        &[],
+    ) {
+        Ok(value) => value,
+        Err(_) => return pending_program_response(operation, trace_id),
+    };
+    if matches!(upstream.status, 202 | 404) {
+        return pending_program_response(operation, trace_id);
+    }
+    if upstream.status != 200 || upstream.content_type != "application/json" {
+        return response(503, "component_invalid", Some(5));
+    }
+    let document: serde_json::Value = match serde_json::from_slice(&upstream.body) {
+        Ok(value) => value,
+        Err(_) => return response(503, "component_invalid", Some(5)),
+    };
+    let value = document.get("result").unwrap_or(&document);
+    let component: ComponentActivity = match serde_json::from_value(value.clone()) {
+        Ok(value) => value,
+        Err(_) => return response(503, "component_invalid", Some(5)),
+    };
+    let program_id = value
+        .get("program_id")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|value| parse_hex32(value).ok());
+    if !matches!(component.state.as_str(), "executed" | "refused" | "completed")
+        || !component.activity_id.eq_ignore_ascii_case(&operation.activity_id)
+        || component.receipt.is_empty()
+        || component.terminal_payload.is_empty()
+        || component.call_graph.is_empty()
+    {
+        return response(503, "component_invalid", Some(5));
+    }
+    let Some(program_id) = program_id else {
+        return response(503, "component_invalid", Some(5));
+    };
+    let head = match program_head(config, program_id) {
+        Ok(value) => value,
+        Err(error) => return error,
+    };
+    let (verified, receipt, _) = match verified_program_result(
+        config,
+        &component.activity_id,
+        &component.receipt,
+        &component.terminal_payload,
+        &component.call_graph,
+        head,
+    ) {
+        Ok(value) => value,
+        Err(error) => return error,
+    };
+    let mut result: serde_json::Value = match serde_json::from_slice(&verified) {
+        Ok(value) => value,
+        Err(_) => return response(503, "receipt_encoding_failed", Some(5)),
+    };
+    if let Some(object) = result.as_object_mut() {
+        object.insert(
+            "idempotency_key".to_owned(),
+            serde_json::Value::String(operation.idempotency_key.clone()),
+        );
+    }
+    let stored_result = match serde_json::to_vec(&result) {
+        Ok(value) => value,
+        Err(_) => return response(503, "receipt_encoding_failed", Some(5)),
+    };
+    if config
+        .store
+        .complete(
+            &operation.scope,
+            &operation.digest,
+            "completed",
+            &hex(&stored_result),
+            &hex(&receipt),
+            Some(&operation.activity_id),
+            &record.principal_digest,
+            &audit_event(
+                &record.principal_digest,
+                "program_reconcile",
+                &record.key_id,
+                "receipt_verified",
+            ),
+        )
+        .is_err()
+    {
+        return response(503, "persistence_unavailable", Some(5));
+    }
+    json_response(
+        200,
+        serde_json::json!({"ok":true,"result":result,"trace":trace_id}),
     )
 }
 
@@ -1624,7 +1838,7 @@ fn read_route(
             if !component.activity_id.eq_ignore_ascii_case(activity_id) {
                 return response(503, "component_invalid", Some(5));
             }
-            let (_, receipt) = match verified_result(config, activity_id, &component.receipt) {
+            let (_, receipt, _) = match verified_result(config, activity_id, &component.receipt) {
                 Ok(value) => value,
                 Err(error) => return error,
             };
@@ -1638,28 +1852,49 @@ fn read_route(
             )
         }
         ProductionRoute::ProgramRegistry(program) => {
-            let upstream = match config.client.request(
-                &config.registry,
-                "GET",
-                &format!("/v1/programs/registry/{program}"),
-                config.registry_token.as_str(),
-                None,
-                "application/json",
-                &[],
-            ) {
+            let expected = match parse_hex32(program) {
                 Ok(value) => value,
-                Err(_) => return response(503, "program_registry_unavailable", Some(5)),
+                Err(_) => return response(400, "invalid_program_id", None),
             };
-            if upstream.content_type != "application/json" {
-                return response(503, "program_registry_invalid", Some(5));
-            }
-            OutgoingResponse {
-                status: upstream.status,
-                body: upstream.body,
-                retry_after: None,
-            }
+            let head = match program_head(config, expected) {
+                Ok(value) => value,
+                Err(error) => return error,
+            };
+            let (Some(state_root), Some(observed_sequence), Some(observed_at)) =
+                (head.state_root, head.observed_sequence, head.observed_at)
+            else {
+                return response(503, "program_state_unverified", Some(5));
+            };
+            json_response(
+                200,
+                serde_json::json!({
+                    "ok": true,
+                    "result": {
+                        "program_id": hex(&head.program_id),
+                        "lifecycle": head.lifecycle.name(),
+                        "version": head.version,
+                        "code_hash": hex(&head.code_hash),
+                        "abi_version": head.abi_version,
+                        "receipt_digest": hex(&head.receipt_digest),
+                        "state_root": hex(&state_root),
+                        "observed_sequence": observed_sequence,
+                        "observed_at": observed_at,
+                        "valid_through": head.valid_through,
+                        "verification": "registry-receipt-and-current-head-verified",
+                    },
+                    "trace": trace_id,
+                }),
+            )
         }
         ProductionRoute::ProgramInterface(program) => {
+            let expected = match parse_hex32(program) {
+                Ok(value) => value,
+                Err(_) => return response(400, "invalid_program_id", None),
+            };
+            let head = match program_head(config, expected) {
+                Ok(value) => value,
+                Err(error) => return error,
+            };
             let upstream = match config.client.request(
                 &config.registry,
                 "GET",
@@ -1672,20 +1907,103 @@ fn read_route(
                 Ok(value) => value,
                 Err(_) => return response(503, "program_registry_unavailable", Some(5)),
             };
-            if upstream.content_type != "application/json" {
+            if upstream.status == 404 {
+                return response(404, "program_interface_absent", None);
+            }
+            if upstream.status != 200 || upstream.content_type != "application/json" {
                 return response(503, "program_registry_invalid", Some(5));
             }
-            OutgoingResponse {
-                status: upstream.status,
-                body: upstream.body,
-                retry_after: None,
+            let document: serde_json::Value = match serde_json::from_slice(&upstream.body) {
+                Ok(value) => value,
+                Err(_) => return response(503, "program_registry_invalid", Some(5)),
+            };
+            let value = document.get("result").unwrap_or(&document);
+            let interface = value
+                .get("interface")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|value| decode_hex(value, 952).ok());
+            let interface_digest = value
+                .get("interface_digest")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|value| parse_hex32(value).ok());
+            let state_root = value
+                .get("state_root")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|value| parse_hex32(value).ok());
+            let observed_sequence = value
+                .get("observed_sequence")
+                .and_then(serde_json::Value::as_u64);
+            let observed_at = value.get("observed_at").and_then(serde_json::Value::as_u64);
+            let valid_through = value
+                .get("valid_through")
+                .and_then(serde_json::Value::as_u64);
+            let version = value
+                .get("version")
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|value| u32::try_from(value).ok());
+            let abi_version = value
+                .get("abi_version")
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|value| u16::try_from(value).ok());
+            let code_hash = value
+                .get("code_hash")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|value| parse_hex32(value).ok());
+            let receipt_digest = value
+                .get("deployment_receipt_digest")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|value| parse_hex32(value).ok());
+            let source = value.get("source").cloned();
+            let expected_interface_digest = interface
+                .as_ref()
+                .map(|bytes| <[u8; 32]>::from(Sha256::digest(bytes)));
+            if value
+                .get("program_id")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|value| parse_hex32(value).ok())
+                != Some(head.program_id)
+                || version != Some(head.version)
+                || abi_version != Some(head.abi_version)
+                || code_hash != Some(head.code_hash)
+                || receipt_digest != Some(head.receipt_digest)
+                || state_root != head.state_root
+                || observed_sequence != head.observed_sequence
+                || observed_at != head.observed_at
+                || valid_through != Some(head.valid_through)
+                || interface_digest != expected_interface_digest
+                || value.get("verification").and_then(serde_json::Value::as_str)
+                    != Some("deployment-interface-and-current-head-verified")
+                || source.is_none()
+            {
+                return response(503, "program_registry_unverified", Some(5));
             }
+            json_response(
+                200,
+                serde_json::json!({
+                    "ok": true,
+                    "result": {
+                        "program_id": hex(&head.program_id),
+                        "version": head.version,
+                        "code_hash": hex(&head.code_hash),
+                        "abi_version": head.abi_version,
+                        "interface": interface.map(|bytes| hex(&bytes)),
+                        "interface_digest": interface_digest.map(|digest| hex(&digest)),
+                        "receipt_digest": hex(&head.receipt_digest),
+                        "state_root": head.state_root.map(|root| hex(&root)),
+                        "observed_sequence": head.observed_sequence,
+                        "observed_at": head.observed_at,
+                        "valid_through": head.valid_through,
+                        "source": source,
+                        "verification": "deployment-interface-and-current-head-verified",
+                    },
+                    "trace": trace_id,
+                }),
+            )
         }
         ProductionRoute::ProgramReceiptByIdempotency(idempotency) => {
             let idempotency = idempotency.to_ascii_lowercase();
             let scope = digest(&[
                 record.principal_digest.as_bytes(),
-                record.key_id.as_bytes(),
                 idempotency.as_bytes(),
             ]);
             let operation = match config.store.operation(&scope) {
@@ -1703,14 +2021,7 @@ fn read_route(
                 return response(404, "program_receipt_not_found", None);
             }
             if operation.state == "pending" {
-                return json_response(
-                    202,
-                    serde_json::json!({
-                        "ok": true,
-                        "result": { "state": "unknown", "activity_id": operation.activity_id, "idempotency_key": idempotency },
-                        "trace": trace_id,
-                    }),
-                );
+                return resolve_pending_program(config, record, &operation, trace_id);
             }
             if operation.state != "completed" {
                 return response(409, "program_call_refused", None);
@@ -1762,18 +2073,7 @@ fn read_route(
                 return response(404, "program_activity_not_found", None);
             }
             if operation.state == "pending" {
-                return json_response(
-                    202,
-                    serde_json::json!({
-                        "ok": true,
-                        "result": {
-                            "state": "unknown",
-                            "activity_id": operation.activity_id,
-                            "idempotency_key": operation.idempotency_key,
-                        },
-                        "trace": trace_id,
-                    }),
-                );
+                return resolve_pending_program(config, record, &operation, trace_id);
             }
             if operation.state != "completed" {
                 return response(409, "program_call_refused", None);
@@ -1788,7 +2088,6 @@ fn read_route(
             };
             json_response(200, serde_json::json!({"ok":true,"result":value,"trace":trace_id}))
         }
-        ProductionRoute::ProgramRegistrySource(_) => response(405, "method_not_allowed", None),
         ProductionRoute::Activity
         | ProductionRoute::ProgramCall
         | ProductionRoute::ProgramSimulation => response(404, "not_found", None),
@@ -1943,28 +2242,6 @@ fn route(config: &Config, request: &IncomingRequest) -> OutgoingResponse {
         ProductionRoute::ProgramCall => activity(config, request, &record, &trace_id, true),
         ProductionRoute::ProgramSimulation => {
             program_simulation(config, request, &record, &trace_id)
-        }
-        ProductionRoute::ProgramRegistrySource(program) => {
-            let upstream = match config.client.request(
-                &config.registry,
-                "POST",
-                &format!("/v1/programs/registry/{program}/source"),
-                config.registry_token.as_str(),
-                request.headers.get("idempotency-key").map(String::as_str),
-                "application/json",
-                &request.body,
-            ) {
-                Ok(value) => value,
-                Err(_) => return response(503, "program_registry_unavailable", Some(5)),
-            };
-            if upstream.content_type != "application/json" {
-                return response(503, "program_registry_invalid", Some(5));
-            }
-            OutgoingResponse {
-                status: upstream.status,
-                body: upstream.body,
-                retry_after: None,
-            }
         }
         read => read_route(config, &record, read, &trace_id),
     }
