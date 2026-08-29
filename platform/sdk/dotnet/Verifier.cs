@@ -196,6 +196,9 @@ public sealed record ReceiptVerification(string Level, ProtocolReceipt Receipt, 
 
 public static class LocalVerifier
 {
+    public static bool VerifyEd25519Digest(ReadOnlySpan<byte> publicKey, ReadOnlySpan<byte> signature, ReadOnlySpan<byte> digest) =>
+        VerifyEd25519(Exact(publicKey.ToArray(), 32), Exact(signature.ToArray(), 64), Exact(digest.ToArray(), 32));
+
     private static readonly byte[] MerkleLeafDomain = Encoding.UTF8.GetBytes("LXP/v1/merkle-leaf\0");
     private static readonly byte[] MerkleInternalDomain = Encoding.UTF8.GetBytes("LXP/v1/merkle-internal\0");
     private static readonly byte[] BatchHeaderDomain = Encoding.UTF8.GetBytes("LXP/v1/batch-header\0");

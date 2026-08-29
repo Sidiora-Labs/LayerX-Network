@@ -33,6 +33,194 @@ public sealed class AccessToken : IDisposable
     public override string ToString() => "[REDACTED]";
 }
 
+public sealed class LayerXKeyCredential : IDisposable
+{
+    private static readonly UTF8Encoding StrictUtf8 = new(false, true);
+    private readonly string _keyId;
+    private readonly SecretBytes _secret;
+
+    public LayerXKeyCredential(string keyId, ReadOnlySpan<byte> secret)
+    {
+        if (string.IsNullOrEmpty(keyId) || keyId.Length > 64 || keyId.Any(character =>
+            !(character is >= 'a' and <= 'z' or >= 'A' and <= 'Z' or >= '0' and <= '9' or '-' or '_')))
+            throw new PlatformSdkException(SdkErrorCode.InvalidArgument, RetryClass.Never);
+        _keyId = keyId;
+        _secret = new SecretBytes(secret);
+    }
+
+    internal void Authorize(HttpRequestMessage request) => _secret.Use(bytes =>
+    {
+        string value;
+        try { value = StrictUtf8.GetString(bytes.Span); }
+        catch (DecoderFallbackException) { throw new PlatformSdkException(SdkErrorCode.InvalidArgument, RetryClass.Never); }
+        if (!value.StartsWith("lxp_live_", StringComparison.Ordinal) || value.Length != 73 ||
+            value.Skip(9).Any(character => !(character is >= '0' and <= '9' or >= 'a' and <= 'f')))
+            throw new PlatformSdkException(SdkErrorCode.InvalidArgument, RetryClass.Never);
+        request.Headers.TryAddWithoutValidation("Authorization", $"LayerX-Key {_keyId}:{value}");
+        return true;
+    });
+
+    public void Dispose() => _secret.Dispose();
+    public override string ToString() => "[REDACTED]";
+}
+
+public sealed class AgentHttpTransport : IPlatformTransport
+{
+    private const int MaximumResponseBytes = 8 * 1024 * 1024;
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private static readonly HashSet<string> Operations = new(StringComparer.Ordinal)
+    {
+        "program.discover", "program.interface", "program.simulate",
+        "program.call", "program.receipt", "program.activity",
+    };
+    private readonly Uri _baseUri;
+    private readonly HttpClient _httpClient;
+    private readonly LayerXKeyCredential? _credential;
+
+    public AgentHttpTransport(Uri baseUri, HttpClient? httpClient = null, LayerXKeyCredential? credential = null)
+    {
+        if (!baseUri.IsAbsoluteUri || !string.IsNullOrEmpty(baseUri.UserInfo) || string.IsNullOrEmpty(baseUri.Host) ||
+            !string.IsNullOrEmpty(baseUri.Query) || !string.IsNullOrEmpty(baseUri.Fragment) ||
+            (baseUri.Scheme != Uri.UriSchemeHttps && (baseUri.Scheme != Uri.UriSchemeHttp || !IsLoopback(baseUri.Host))))
+            throw new PlatformSdkException(SdkErrorCode.InvalidArgument, RetryClass.Never);
+        _baseUri = baseUri;
+        _httpClient = httpClient ?? new HttpClient();
+        _credential = credential;
+    }
+
+    public async Task<JsonValue> SendAsync(TransportCall call, CancellationToken cancellationToken = default)
+    {
+        var descriptor = call.Operation.Descriptor();
+        if (descriptor.Plane != PlatformPlane.Agent || !Operations.Contains(descriptor.Name))
+            throw new PlatformSdkException(SdkErrorCode.UnavailableCapability, RetryClass.Never);
+        if (descriptor.Name == "program.call")
+        {
+            if (call.IdempotencyKey is not { } key || !Hex32(key.Value))
+                throw new PlatformSdkException(SdkErrorCode.InvalidArgument, RetryClass.Never);
+        }
+        else if (call.IdempotencyKey is not null)
+            throw new PlatformSdkException(SdkErrorCode.InvalidArgument, RetryClass.Never);
+        var path = ResolvePath(descriptor.Path, call.PathParameters);
+        var target = Endpoint(_baseUri, path);
+        using var request = new HttpRequestMessage(ToHttpMethod(descriptor.Method), target);
+        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+        request.Headers.UserAgent.ParseAdd("layerx-dotnet/0.1.0");
+        request.Content = new ByteArrayContent(JsonSerializer.SerializeToUtf8Bytes(call.Request, JsonOptions));
+        request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
+        if (call.IdempotencyKey is { } idempotency)
+            request.Headers.TryAddWithoutValidation("Idempotency-Key", idempotency.Value);
+        _credential?.Authorize(request);
+        using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+        var encoded = await ReadBoundedAsync(response.Content, cancellationToken).ConfigureAwait(false);
+        AgentEnvelope? envelope;
+        try { envelope = JsonSerializer.Deserialize<AgentEnvelope>(encoded, JsonOptions); }
+        catch (JsonException) { throw Decode(); }
+        if (envelope is null) throw Decode();
+        if (envelope.ErrorClass is not null)
+        {
+            if (response.IsSuccessStatusCode || envelope.Value is not null) throw Decode(envelope.RequestId);
+            throw ServiceError(envelope);
+        }
+        if (!response.IsSuccessStatusCode || string.IsNullOrEmpty(envelope.RequestId) || envelope.Value is null)
+            throw Decode(envelope.RequestId);
+        if (!SequencerSigned(envelope.VerificationStatus))
+            throw new PlatformSdkException(SdkErrorCode.VerificationFailure, RetryClass.Never, envelope.RequestId);
+        return envelope.Value;
+    }
+
+    private static bool SequencerSigned(JsonValue? value) => value is JsonValue.ObjectValue map &&
+        map.Value.TryGetValue("state", out var state) && state is JsonValue.StringValue { Value: "Achieved" } &&
+        map.Value.TryGetValue("level", out var level) && level is JsonValue.StringValue { Value: "SequencerSigned" };
+
+    private static PlatformSdkException ServiceError(AgentEnvelope envelope)
+    {
+        if (string.IsNullOrEmpty(envelope.RequestId) || string.IsNullOrEmpty(envelope.Reason) ||
+            envelope.Reason.Any(character => !(character is >= 'a' and <= 'z' or >= '0' and <= '9' or '_' or '.')))
+            throw Decode(envelope.RequestId);
+        var code = envelope.ErrorClass switch
+        {
+            "TransportFailure" => SdkErrorCode.TransportFailure,
+            "Deadline" => SdkErrorCode.Deadline,
+            "ProtocolIncompatibility" => SdkErrorCode.ProtocolIncompatibility,
+            "UnavailableCapability" => SdkErrorCode.UnavailableCapability,
+            "CoreRejection" => SdkErrorCode.CoreRejection,
+            "VerificationFailure" => SdkErrorCode.VerificationFailure,
+            "PolicyRefusal" => SdkErrorCode.PolicyRefusal,
+            "CapabilityRefusal" => SdkErrorCode.CapabilityRefusal,
+            "BudgetRefusal" => SdkErrorCode.BudgetRefusal,
+            "RateLimit" => SdkErrorCode.RateLimit,
+            "IdempotencyConflict" => SdkErrorCode.IdempotencyConflict,
+            "InternalFault" => SdkErrorCode.InternalFault,
+            _ => throw Decode(envelope.RequestId),
+        };
+        var retry = envelope.Retriability switch
+        {
+            "Terminal" => RetryClass.Never,
+            "Retriable" => RetryClass.Safe,
+            _ => throw Decode(envelope.RequestId),
+        };
+        return new PlatformSdkException(code, retry, envelope.RequestId, envelope.ProtocolResultCode);
+    }
+
+    private static async Task<byte[]> ReadBoundedAsync(HttpContent content, CancellationToken cancellationToken)
+    {
+        await using var stream = await content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        using var output = new MemoryStream();
+        var buffer = new byte[16 * 1024];
+        while (true)
+        {
+            var count = await stream.ReadAsync(buffer.AsMemory(), cancellationToken).ConfigureAwait(false);
+            if (count == 0) return output.ToArray();
+            if (output.Length + count > MaximumResponseBytes) throw Decode();
+            output.Write(buffer, 0, count);
+        }
+    }
+
+    private static string ResolvePath(string template, IReadOnlyDictionary<string, string> parameters)
+    {
+        var path = template;
+        foreach (var (name, value) in parameters)
+        {
+            var token = "{" + name + "}";
+            if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(value) || !path.Contains(token, StringComparison.Ordinal))
+                throw new PlatformSdkException(SdkErrorCode.InvalidArgument, RetryClass.Never);
+            path = path.Replace(token, Uri.EscapeDataString(value), StringComparison.Ordinal);
+        }
+        if (!path.StartsWith("/", StringComparison.Ordinal) || path.Contains('{') || path.Contains('}'))
+            throw new PlatformSdkException(SdkErrorCode.InvalidArgument, RetryClass.Never);
+        return path;
+    }
+
+    private static Uri Endpoint(Uri baseUri, string path)
+    {
+        var builder = new UriBuilder(baseUri);
+        builder.Path = baseUri.AbsolutePath.TrimEnd('/') + path;
+        builder.Query = ""; builder.Fragment = "";
+        return builder.Uri;
+    }
+
+    private static HttpMethod ToHttpMethod(SdkHttpMethod method) => method switch
+    {
+        SdkHttpMethod.Get => HttpMethod.Get, SdkHttpMethod.Post => HttpMethod.Post,
+        SdkHttpMethod.Put => HttpMethod.Put, SdkHttpMethod.Patch => HttpMethod.Patch,
+        SdkHttpMethod.Delete => HttpMethod.Delete, _ => throw new PlatformSdkException(SdkErrorCode.InvalidArgument, RetryClass.Never),
+    };
+
+    private static bool IsLoopback(string host) => string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase) ||
+        IPAddress.TryParse(host, out var address) && IPAddress.IsLoopback(address);
+    private static bool Hex32(string value) => value.Length == 64 && value.All(character => character is >= '0' and <= '9' or >= 'a' and <= 'f');
+    private static PlatformSdkException Decode(string? requestId = null) => new(SdkErrorCode.DecodeFailure, RetryClass.Never, requestId);
+
+    private sealed record AgentEnvelope(
+        [property: JsonPropertyName("request_id")] string RequestId,
+        [property: JsonPropertyName("value")] JsonValue? Value,
+        [property: JsonPropertyName("verification_status")] JsonValue? VerificationStatus,
+        [property: JsonPropertyName("class")] string? ErrorClass,
+        [property: JsonPropertyName("protocol_result_code")] int? ProtocolResultCode,
+        [property: JsonPropertyName("retriability")] string? Retriability,
+        [property: JsonPropertyName("reason")] string? Reason);
+}
+
 public sealed class HumanHttpTransport : IPlatformTransport
 {
     private const int MaximumResponseBytes = 8 * 1024 * 1024;
