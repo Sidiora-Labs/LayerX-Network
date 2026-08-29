@@ -28,13 +28,13 @@ enum {
     PLATFORM_EMULATOR_ARENA_BYTES = 16 * 1024 * 1024,
     PLATFORM_EMULATOR_RECEIPT_BYTES = 64 * 1024,
     PLATFORM_EMULATOR_SNAPSHOT_BYTES = 24 * 1024 * 1024,
-    PLATFORM_EMULATOR_SNAPSHOT_VERSION = 2,
+    PLATFORM_EMULATOR_SNAPSHOT_VERSION = 3,
     PLATFORM_EMULATOR_FAULT_REJECT = 1,
     PLATFORM_EMULATOR_FAULT_DROP_RECEIPT = 2,
     PLATFORM_EMULATOR_FAULT_CORRUPT_RECEIPT = 3
 };
 
-static const uint8_t snapshot_magic[8] = { 'L', 'X', 'E', 'M', 'U', '0', '2', 0 };
+static const uint8_t snapshot_magic[8] = { 'L', 'X', 'E', 'M', 'U', '0', '3', 0 };
 
 typedef struct platform_snapshot_header {
     uint8_t magic[8];
@@ -80,6 +80,7 @@ struct platform_emulator {
     uint8_t sequencer_private_key[32];
     uint8_t sequencer_public_key[32];
     uint8_t program_ids[1024][32];
+    uint8_t program_receipt_digests[1024][32];
     size_t program_count;
 };
 
@@ -175,13 +176,16 @@ static lxp_result isolated_snapshot(const platform_emulator *emulator,
         emulator->kernel.current_state_root, &header.manifest);
     identity_bytes = emulator->identities.count * sizeof(lxp_identity);
     account_bytes = emulator->accounts.count * sizeof(lx_account);
-    program_bytes = emulator->program_count * 32U;
+    program_bytes = emulator->program_count * 64U;
     total = sizeof(header) + identity_bytes + account_bytes + program_bytes + core.length;
     if (status == LXP_OK && total <= PLATFORM_EMULATOR_SNAPSHOT_BYTES) {
         (void)memcpy(*snapshot, &header, sizeof(header));
         (void)memcpy(*snapshot + sizeof(header), emulator->identities.identities, identity_bytes);
         (void)memcpy(*snapshot + sizeof(header) + identity_bytes, emulator->accounts.accounts, account_bytes);
-        (void)memcpy(*snapshot + sizeof(header) + identity_bytes + account_bytes, emulator->program_ids, program_bytes);
+        (void)memcpy(*snapshot + sizeof(header) + identity_bytes + account_bytes,
+                     emulator->program_ids, program_bytes / 2U);
+        (void)memcpy(*snapshot + sizeof(header) + identity_bytes + account_bytes + program_bytes / 2U,
+                     emulator->program_receipt_digests, program_bytes / 2U);
         (void)memcpy(*snapshot + sizeof(header) + identity_bytes + account_bytes + program_bytes, core.bytes, core.length);
         status = lxp_hash_domain(LXP_DOMAIN_SNAPSHOT, *snapshot, total, header.wrapper_digest);
         if (status == LXP_OK) (void)memcpy(*snapshot + offsetof(platform_snapshot_header, wrapper_digest), header.wrapper_digest, 32U);
@@ -261,6 +265,8 @@ int32_t platform_emulator_program_read(platform_emulator *emulator,
     const uint8_t *interface_value;
     size_t record_length;
     size_t interface_length;
+    size_t program_index;
+    lx_programs_wind_down_view wind_down;
     lxp_module_ctx ctx;
     lxp_result status;
     if (emulator == NULL || program_id == NULL || program == NULL)
@@ -290,12 +296,36 @@ int32_t platform_emulator_program_read(platform_emulator *emulator,
     if (status == LXP_OK && interface_length != 0U && (interface_length < 72U ||
         emulator_read_u32(interface_value + 68U) != interface_length - 72U))
         status = LXP_FATAL_INVARIANT;
+    program_index = emulator->program_count;
+    if (status == LXP_OK) {
+        size_t index;
+        for (index = 0U; index < emulator->program_count; ++index) {
+            if (lxp_ct_memcmp(emulator->program_ids[index], program_id, 32U) == 0) {
+                program_index = index;
+                break;
+            }
+        }
+        if (program_index == emulator->program_count ||
+            lxp_ct_is_zero(emulator->program_receipt_digests[program_index], 32U))
+            status = LXP_FATAL_INVARIANT;
+    }
+    if (status == LXP_OK) {
+        status = lxp_programs_wind_down_read(&ctx, program_id, &wind_down);
+        if (status == LXP_ERR_UNKNOWN_FIELD) {
+            (void)memset(&wind_down, 0, sizeof(wind_down));
+            wind_down.status = LX_PROGRAMS_LIFECYCLE_ACTIVE;
+            status = LXP_OK;
+        }
+    }
     if (status == LXP_OK) {
         (void)memset(program, 0, sizeof(*program));
         (void)memcpy(program->program_id, program_id, 32U);
         (void)memcpy(program->code_hash, record + 33U, 32U);
+        (void)memcpy(program->deployment_receipt_digest,
+                     emulator->program_receipt_digests[program_index], 32U);
         program->abi_version = emulator_read_u16(record + 65U);
         program->version = emulator_read_u32(record + 67U);
+        program->lifecycle = (uint8_t)wind_down.status;
         program->interface_bytes = interface_length == 0U ? NULL : interface_value + 72U;
         program->interface_length = interface_length == 0U ? 0U : interface_length - 72U;
         program->has_interface = interface_length == 0U ? 0U : 1U;
@@ -524,6 +554,9 @@ int32_t platform_emulator_execute(platform_emulator *emulator,
     lxp_byte_span canonical_receipt;
     lxp_batch_root_inputs root_inputs;
     lxp_batch_roots roots;
+    uint8_t deployment_receipt_digest[32];
+    size_t program_index = 1024U;
+    size_t index;
     lxp_result status;
     if (emulator == NULL || activity_bytes == NULL || length == 0U ||
         output == NULL) return LXP_ERR_NON_CANONICAL;
@@ -567,12 +600,30 @@ int32_t platform_emulator_execute(platform_emulator *emulator,
         status = batch_identifier(emulator, execution.batch_id);
     if (status == LXP_OK && activity.activity_type == LX_PROGRAMS_DEPLOY &&
         emulator->program_count == 1024U) status = LXP_ERR_LIMIT;
+    if (status == LXP_OK && activity.activity_type == LX_PROGRAMS_DEPLOY)
+        program_index = emulator->program_count;
+    if (status == LXP_OK && activity.activity_type == LX_PROGRAMS_UPGRADE) {
+        for (index = 0U; index < emulator->program_count; ++index) {
+            if (activity.payload.length >= 32U &&
+                lxp_ct_memcmp(emulator->program_ids[index],
+                              activity.payload.bytes, 32U) == 0) {
+                program_index = index;
+                break;
+            }
+        }
+        if (program_index == 1024U) status = LXP_FATAL_INVARIANT;
+    }
     if (status == LXP_OK)
         status = lxp_kernel_execute_activity(&emulator->kernel, &activity,
                                              &execution, &receipt);
     if (status != LXP_OK) return status;
     status = lxp_receipt_encode(&receipt, true, &emulator->arena,
                                 &canonical_receipt);
+    if (status == LXP_OK && receipt.result_code == LXP_OK &&
+        (activity.activity_type == LX_PROGRAMS_DEPLOY ||
+         activity.activity_type == LX_PROGRAMS_UPGRADE))
+        status = lxp_receipt_digest(&receipt, &emulator->arena,
+                                    deployment_receipt_digest);
     if (status != LXP_OK || canonical_receipt.length >
         sizeof(emulator->receipt_bytes))
         return status != LXP_OK ? status : LXP_ERR_LENGTH_LIMIT;
@@ -621,11 +672,19 @@ int32_t platform_emulator_execute(platform_emulator *emulator,
     output->call_graph = emulator->call_graph_bytes;
     output->call_graph_length = receipt.program_outcome.call_graph_payload.length;
     output->isolated_owner = NULL;
-    if (activity.activity_type == LX_PROGRAMS_DEPLOY &&
-        activity.payload.length >= 32U && emulator->program_count < 1024U) {
-        (void)memcpy(emulator->program_ids[emulator->program_count],
+    if (receipt.result_code == LXP_OK &&
+        activity.activity_type == LX_PROGRAMS_DEPLOY &&
+        activity.payload.length >= 32U && program_index < 1024U) {
+        (void)memcpy(emulator->program_ids[program_index],
                      activity.payload.bytes, 32U);
+        (void)memcpy(emulator->program_receipt_digests[program_index],
+                     deployment_receipt_digest, 32U);
         ++emulator->program_count;
+    } else if (receipt.result_code == LXP_OK &&
+               activity.activity_type == LX_PROGRAMS_UPGRADE &&
+               program_index < emulator->program_count) {
+        (void)memcpy(emulator->program_receipt_digests[program_index],
+                     deployment_receipt_digest, 32U);
     }
     ++emulator->global_sequence;
     ++emulator->batch_number;
@@ -717,7 +776,7 @@ int32_t platform_emulator_snapshot_export(platform_emulator *emulator,
         emulator->kernel.current_state_root, &header.manifest);
     identity_bytes = emulator->identities.count * sizeof(lxp_identity);
     account_bytes = emulator->accounts.count * sizeof(lx_account);
-    program_bytes = emulator->program_count * 32U;
+    program_bytes = emulator->program_count * 64U;
     total = sizeof(header) + identity_bytes + account_bytes + program_bytes + core.length;
     if (status != LXP_OK || total > PLATFORM_EMULATOR_SNAPSHOT_BYTES)
         return status != LXP_OK ? status : LXP_ERR_LENGTH_LIMIT;
@@ -727,7 +786,10 @@ int32_t platform_emulator_snapshot_export(platform_emulator *emulator,
     (void)memcpy(emulator->snapshot_bytes + sizeof(header) + identity_bytes,
                  emulator->accounts.accounts, account_bytes);
     (void)memcpy(emulator->snapshot_bytes + sizeof(header) + identity_bytes +
-                 account_bytes, emulator->program_ids, program_bytes);
+                 account_bytes, emulator->program_ids, program_bytes / 2U);
+    (void)memcpy(emulator->snapshot_bytes + sizeof(header) + identity_bytes +
+                 account_bytes + program_bytes / 2U,
+                 emulator->program_receipt_digests, program_bytes / 2U);
     (void)memcpy(emulator->snapshot_bytes + sizeof(header) + identity_bytes +
                  account_bytes + program_bytes, core.bytes, core.length);
     status = lxp_hash_domain(LXP_DOMAIN_SNAPSHOT, emulator->snapshot_bytes,
@@ -767,7 +829,7 @@ int32_t platform_emulator_snapshot_import(platform_emulator *emulator,
     identity_bytes = (size_t)header.identity_count * sizeof(lxp_identity);
     account_bytes = (size_t)header.account_count * sizeof(lx_account);
     if (header.program_count > 1024U) return LXP_ERR_SNAPSHOT_MISMATCH;
-    program_bytes = (size_t)header.program_count * 32U;
+    program_bytes = (size_t)header.program_count * 64U;
     if (identity_bytes > SIZE_MAX - sizeof(header) ||
         account_bytes > SIZE_MAX - sizeof(header) - identity_bytes ||
         program_bytes > SIZE_MAX - sizeof(header) - identity_bytes - account_bytes ||
@@ -805,7 +867,11 @@ int32_t platform_emulator_snapshot_import(platform_emulator *emulator,
     emulator->accounts.count = (size_t)header.account_count;
     (void)memcpy(emulator->program_ids,
                  emulator->snapshot_bytes + sizeof(header) + identity_bytes + account_bytes,
-                 program_bytes);
+                 program_bytes / 2U);
+    (void)memcpy(emulator->program_receipt_digests,
+                 emulator->snapshot_bytes + sizeof(header) + identity_bytes +
+                     account_bytes + program_bytes / 2U,
+                 program_bytes / 2U);
     emulator->program_count = (size_t)header.program_count;
     emulator->timestamp_ms = header.timestamp_ms;
     emulator->batch_number = header.batch_number;

@@ -38,8 +38,10 @@ typedef struct platform_emulator_state {
 typedef struct platform_emulator_program {
     uint8_t program_id[32];
     uint8_t code_hash[32];
+    uint8_t deployment_receipt_digest[32];
     uint32_t version;
     uint16_t abi_version;
+    uint8_t lifecycle;
     const uint8_t *interface_bytes;
     size_t interface_length;
     uint8_t has_interface;

@@ -75,8 +75,10 @@ struct CoreState {
 struct CoreProgram {
     program_id: [u8; 32],
     code_hash: [u8; 32],
+    deployment_receipt_digest: [u8; 32],
     version: c_uint,
     abi_version: u16,
+    lifecycle: u8,
     interface_bytes: *const c_uchar,
     interface_length: usize,
     has_interface: u8,
@@ -1325,7 +1327,8 @@ fn program_registry_read(emulator: &mut Emulator, path: &str, trace: u64) -> Res
         _ => return refusal(trace, 400, "invalid_argument", "program id must be 32-byte hex"),
     };
     let mut program = CoreProgram {
-        program_id: [0; 32], code_hash: [0; 32], version: 0, abi_version: 0,
+        program_id: [0; 32], code_hash: [0; 32], deployment_receipt_digest: [0; 32],
+        version: 0, abi_version: 0, lifecycle: 0,
         interface_bytes: ptr::null(), interface_length: 0, has_interface: 0,
         state_root: [0; 32],
         observed_sequence: 0,
@@ -1339,20 +1342,20 @@ fn program_registry_read(emulator: &mut Emulator, path: &str, trace: u64) -> Res
     let valid_through = match live.timestamp_ms.checked_add(300_000) {
         Some(value) => value, None => return refusal(trace, 503, "core_invalid_output", "freshness overflow"),
     };
-    let mut discovery = b"LayerX/program-discovery-proof/v1\0".to_vec();
-    discovery.extend_from_slice(&program.program_id); discovery.push(1);
-    discovery.extend_from_slice(&program.version.to_be_bytes()); discovery.extend_from_slice(&program.code_hash);
-    discovery.extend_from_slice(&program.abi_version.to_be_bytes()); discovery.extend_from_slice(&program.observed_sequence.to_be_bytes());
-    discovery.extend_from_slice(&live.timestamp_ms.to_be_bytes()); discovery.extend_from_slice(&valid_through.to_be_bytes()); discovery.extend_from_slice(&program.state_root);
-    let receipt_digest: [u8; 32] = Sha256::digest(&discovery).into();
+    let lifecycle = match program.lifecycle {
+        1 => "active",
+        2 => "deprecated",
+        3 => "tombstoned",
+        _ => return refusal(trace, 503, "core_invalid_output", "program lifecycle is invalid"),
+    };
     if !interface_only {
         let discovery = serde_json::json!({
             "program_id":hex_encode(&program.program_id),
-            "lifecycle":"active",
+            "lifecycle":lifecycle,
             "version":program.version,
             "code_hash":hex_encode(&program.code_hash),
             "abi_version":program.abi_version,
-            "receipt_digest":hex_encode(&receipt_digest),
+            "receipt_digest":hex_encode(&program.deployment_receipt_digest),
             "state_root":hex_encode(&program.state_root),
             "observed_sequence":program.observed_sequence,
             "observed_at":live.timestamp_ms,
@@ -1376,7 +1379,7 @@ fn program_registry_read(emulator: &mut Emulator, path: &str, trace: u64) -> Res
         "abi_version":program.abi_version,
         "interface":hex_encode(interface),
         "interface_digest":hex_encode(&interface_digest),
-        "receipt_digest":hex_encode(&receipt_digest),
+        "receipt_digest":hex_encode(&program.deployment_receipt_digest),
         "state_root":hex_encode(&program.state_root),
         "observed_sequence":program.observed_sequence,
         "observed_at":live.timestamp_ms,
