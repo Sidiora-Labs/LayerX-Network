@@ -833,9 +833,15 @@ version = "0.1.0"
 dependencies = [
  "layerx-agent-api",
  "layerx-client",
+ "layerx-crypto",
  "layerx-mirror",
  "layerx-proof",
  "layerx-types",
+ "layerx-wire",
+ "serde_json",
+ "sha2",
+ "ureq",
+ "url",
  "zeroize",
 ]
 

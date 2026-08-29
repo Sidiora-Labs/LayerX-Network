@@ -9,9 +9,14 @@ license.workspace = true
 layerx-types = { path = "../layerx-types" }
 layerx-client = { path = "../layerx-client" }
 layerx-agent-api = { path = "../layerx-agent-api" }
+layerx-crypto = { path = "../layerx-crypto" }
 layerx-proof = { path = "../layerx-proof" }
 layerx-wire = { path = "../layerx-wire" }
 layerx-mirror = { path = "../../../interop/crates/layerx-mirror" }
+serde_json = "=1.0.149"
+sha2 = "=0.10.9"
+ureq = { version = "=3.4.0", default-features = false, features = ["native-tls-no-default"] }
+url = "=2.5.8"
 zeroize = "=1.9.0"
 
 [lints]

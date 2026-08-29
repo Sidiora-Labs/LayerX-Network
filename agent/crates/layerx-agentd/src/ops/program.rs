@@ -5,7 +5,7 @@ use layerx_proof::program::{verify_program_execution, ProgramExecutionExpectatio
 use layerx_programs::{ProgramId, ProgramInterface, ProgramLifecycle, VerifiedInterfaceRead, VerifiedProgramHead, VerifiedProtocolHead};
 use layerx_programs_runtime::terminal::DecodedTerminal;
 use layerx_programs_runtime::{BudgetMeterRefusal, ProgramFailure};
-use layerx_types::intent::{ProgramCall, ProgramCallOutcome};
+use layerx_types::intent::{CapabilityRequest, ProgramCall, ProgramCallOutcome};
 use layerx_types::payload::{ModuleId, ModuleRegistry};
 use layerx_wire::activity::decode_signed;
 use layerx_wire::hash::activity_id;
@@ -143,6 +143,7 @@ impl ProgramSimulationEvidence {
 pub trait ProgramSimulationTransport {
     fn simulate_exact(
         &mut self,
+        call: &ProgramCall,
         signed_activity: &[u8],
     ) -> Result<RawProgramSimulation, ProgramOperationError>;
 }
@@ -163,27 +164,44 @@ impl EmulatorProgramSimulationTransport {
 }
 
 impl ProgramSimulationTransport for EmulatorProgramSimulationTransport {
-    fn simulate_exact(&mut self, signed_activity: &[u8]) -> Result<RawProgramSimulation, ProgramOperationError> {
+    fn simulate_exact(
+        &mut self,
+        call: &ProgramCall,
+        signed_activity: &[u8],
+    ) -> Result<RawProgramSimulation, ProgramOperationError> {
         let url = format!("{}/v1/programs/simulate", self.endpoint);
         let mut response = self.agent.post(&url)
-            .send_json(serde_json::json!({"activity": encode_hex(signed_activity)}))
+            .send_json(program_call_request(call, signed_activity))
             .map_err(|_| ProgramOperationError::InvalidRequest)?;
         if !response.status().is_success() { return Err(ProgramOperationError::InvalidRequest); }
         let text = response.body_mut().read_to_string().map_err(|_| ProgramOperationError::InvalidRequest)?;
         let document: serde_json::Value = serde_json::from_str(&text).map_err(|_| ProgramOperationError::InvalidRequest)?;
-        let result = document.get("result").unwrap_or(&document);
+        let envelope = document.as_object().ok_or(ProgramOperationError::UnverifiedReceipt)?;
+        let verification = envelope.get("verification_status")
+            .and_then(serde_json::Value::as_object)
+            .ok_or(ProgramOperationError::UnverifiedReceipt)?;
+        if verification.get("state").and_then(serde_json::Value::as_str) != Some("Achieved")
+            || verification.get("level").and_then(serde_json::Value::as_str) != Some("SequencerSigned")
+        {
+            return Err(ProgramOperationError::UnverifiedReceipt);
+        }
+        let result = envelope.get("value").ok_or(ProgramOperationError::UnverifiedReceipt)?;
+        if result.get("committed").and_then(serde_json::Value::as_bool) != Some(false) {
+            return Err(ProgramOperationError::UnverifiedReceipt);
+        }
+        let execution = result.get("execution").ok_or(ProgramOperationError::UnverifiedReceipt)?;
         let evidence = result.get("simulation_evidence").ok_or(ProgramOperationError::UnverifiedReceipt)?;
         Ok(RawProgramSimulation {
-            receipt: decode_hex_json(result, "receipt")?,
-            terminal_payload: decode_hex_json(result, "terminal_payload")?,
-            call_graph: decode_hex_json(result, "call_graph")?,
+            receipt: decode_hex_json(execution, "receipt")?,
+            terminal_payload: decode_hex_json(execution, "terminal_payload")?,
+            call_graph: decode_hex_json(execution, "call_graph")?,
             evidence: ProgramSimulationEvidence {
                 boundary_id: decode_fixed_json(evidence, "boundary_id")?,
                 activity_id: decode_fixed_json(evidence, "activity_id")?,
                 previous_state_root: decode_fixed_json(evidence, "previous_state_root")?,
                 hypothetical_state_root: decode_fixed_json(evidence, "hypothetical_state_root")?,
-                observed_sequence: evidence.get("observed_sequence").and_then(serde_json::Value::as_u64).ok_or(ProgramOperationError::UnverifiedReceipt)?,
-                observed_at: evidence.get("observed_at").and_then(serde_json::Value::as_u64).ok_or(ProgramOperationError::UnverifiedReceipt)?,
+                observed_sequence: decode_decimal_u64_json(evidence, "observed_sequence")?,
+                observed_at: decode_decimal_u64_json(evidence, "observed_at")?,
                 committed: evidence.get("committed").and_then(serde_json::Value::as_bool).ok_or(ProgramOperationError::UnverifiedReceipt)?,
             },
             evidence_signature: decode_fixed_json(evidence, "signature")?,
@@ -192,6 +210,24 @@ impl ProgramSimulationTransport for EmulatorProgramSimulationTransport {
 }
 
 fn encode_hex(bytes: &[u8]) -> String { bytes.iter().map(|byte| format!("{byte:02x}")).collect() }
+fn program_call_request(call: &ProgramCall, signed_activity: &[u8]) -> serde_json::Value {
+    serde_json::json!({
+        "program_id": encode_hex(&call.callee().bytes()),
+        "calldata": encode_hex(call.calldata().as_bytes()),
+        "budget": {
+            "fuel": call.budget().fuel().to_string(),
+            "fee_limit": call.budget().fee_limit().value().to_string(),
+        },
+        "capabilities": call.capabilities().as_slice().iter().map(|capability| match capability {
+            CapabilityRequest::StorageRead => "storage_read",
+            CapabilityRequest::StorageWrite => "storage_write",
+            CapabilityRequest::Transfer => "transfer",
+            CapabilityRequest::EmitEvent => "emit_event",
+            CapabilityRequest::Compose => "compose",
+        }).collect::<Vec<_>>(),
+        "signed_activity": encode_hex(signed_activity),
+    })
+}
 fn decode_hex_json(value: &serde_json::Value, field: &str) -> Result<Vec<u8>, ProgramOperationError> {
     let text = value.get(field).and_then(serde_json::Value::as_str).ok_or(ProgramOperationError::UnverifiedReceipt)?;
     if text.len() % 2 != 0 { return Err(ProgramOperationError::UnverifiedReceipt); }
@@ -199,6 +235,16 @@ fn decode_hex_json(value: &serde_json::Value, field: &str) -> Result<Vec<u8>, Pr
 }
 fn decode_fixed_json<const N: usize>(value: &serde_json::Value, field: &str) -> Result<[u8; N], ProgramOperationError> {
     decode_hex_json(value, field)?.try_into().map_err(|_| ProgramOperationError::UnverifiedReceipt)
+}
+fn decode_decimal_u64_json(value: &serde_json::Value, field: &str) -> Result<u64, ProgramOperationError> {
+    let text = value.get(field).and_then(serde_json::Value::as_str)
+        .ok_or(ProgramOperationError::UnverifiedReceipt)?;
+    if text.is_empty() || !text.bytes().all(|byte| byte.is_ascii_digit())
+        || (text.len() > 1 && text.starts_with('0'))
+    {
+        return Err(ProgramOperationError::UnverifiedReceipt);
+    }
+    text.parse().map_err(|_| ProgramOperationError::UnverifiedReceipt)
 }
 
 pub struct ReceiptVerifiedProgramSimulator<T> {
@@ -237,17 +283,17 @@ impl<T: ProgramSimulationTransport> ReceiptVerifiedProgramSimulator<T> {
 }
 
 trait ProgramSimulationBoundary {
-    fn simulate_signed(&mut self, signed_activity: &[u8])
+    fn simulate_signed(&mut self, call: &ProgramCall, signed_activity: &[u8])
         -> Result<ProgramExecution, ProgramOperationError>;
 }
 
 impl<T: ProgramSimulationTransport> ProgramSimulationBoundary
     for ReceiptVerifiedProgramSimulator<T>
 {
-    fn simulate_signed(&mut self, signed_activity: &[u8])
+    fn simulate_signed(&mut self, call: &ProgramCall, signed_activity: &[u8])
         -> Result<ProgramExecution, ProgramOperationError>
     {
-        let raw = self.transport.simulate_exact(signed_activity)?;
+        let raw = self.transport.simulate_exact(call, signed_activity)?;
         if raw.receipt.is_empty() {
             return Err(ProgramOperationError::UnverifiedReceipt);
         }
@@ -426,7 +472,7 @@ impl ProgramOperations {
             || boundary.observed_at != discovery.observed_at
         { return Err(ProgramOperationError::UnverifiedReceipt); }
         validate_call_activity(boundary.registry(), call, signed_activity)?;
-        let execution = boundary.simulate_signed(signed_activity)?;
+        let execution = boundary.simulate_signed(call, signed_activity)?;
         if execution.committed() || execution.receipt().is_empty() {
             return Err(ProgramOperationError::UnverifiedReceipt);
         }
