@@ -45,6 +45,19 @@ fn unquote(value: &str) -> Result<&str, String> {
         .ok_or_else(|| format!("expected quoted value, got {value}"))
 }
 
+fn string_list(value: &str) -> Result<Vec<String>, String> {
+    let body = value
+        .strip_prefix('[')
+        .and_then(|value| value.strip_suffix(']'))
+        .ok_or_else(|| format!("expected string list, got {value}"))?;
+    if body.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    body.split(',')
+        .map(|item| unquote(item.trim()).map(str::to_owned))
+        .collect()
+}
+
 fn integer(entries: &BTreeMap<String, String>, key: &str) -> Result<u16, String> {
     entries
         .get(key)
@@ -307,27 +320,23 @@ fn main() {
     compatibility_gate(&old, &current)
         .unwrap_or_else(|error| panic!("incompatible schema: {error}"));
 
+    let includes = string_list(
+        current
+            .get("schema.includes")
+            .unwrap_or_else(|| panic!("schema.includes is unavailable")),
+    )
+    .unwrap_or_else(|error| panic!("invalid schema.includes: {error}"));
     let mut modules: Vec<(String, BTreeMap<String, String>)> =
         vec![("v1.kvx".to_owned(), current.clone())];
-    for module in [
-        "identity.kvx",
-        "write.kvx",
-        "read.kvx",
-        "stream.kvx",
-        "errors.kvx",
-        "approval.kvx",
-    ] {
+    for module in includes {
         let current_module = schema
             .parent()
             .unwrap_or_else(|| panic!("schema has no parent"))
-            .join(module);
-        if !current_module.exists() {
-            continue;
-        }
+            .join(&module);
         let baseline_module = baseline
             .parent()
             .unwrap_or_else(|| panic!("baseline has no parent"))
-            .join(module);
+            .join(&module);
         println!("cargo:rerun-if-changed={}", current_module.display());
         println!("cargo:rerun-if-changed={}", baseline_module.display());
         let current_entries = section_map(&read_file(&current_module))
@@ -341,7 +350,7 @@ fn main() {
                 panic!("incompatible {}: {error}", current_module.display())
             });
         }
-        modules.push((module.to_owned(), current_entries));
+        modules.push((module, current_entries));
     }
     settlement_domain_gate(&current, &modules)
         .unwrap_or_else(|error| panic!("invalid schema: {error}"));

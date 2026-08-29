@@ -65,7 +65,7 @@ exact_integer!(TimestampSeconds, u64);
 pub const fn agent_api_schema_v1() -> ContractSchema {
     ContractSchema {
         name: "LayerX Agent API",
-        version: ContractVersion { major: 1, minor: 1 },
+        version: ContractVersion { major: 1, minor: 2 },
         node_interface_major: 1,
     }
 }

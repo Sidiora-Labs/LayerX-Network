@@ -32,8 +32,11 @@ use layerx_types::result::ResultCode;
 
 pub mod approval;
 pub mod mirror_generated;
+mod operation_generated;
 pub mod production;
 pub mod programs;
+
+pub use operation_generated::Operation;
 
 macro_rules! mutation_methods {
     ($( $method:ident: $request:ty => $operation:ident ),+ $(,)?) => {
@@ -118,168 +121,6 @@ pub const GUARANTEES: Guarantees = Guarantees {
         Guarantee::ApprovalHoldsAreDaemonOnly,
     ],
 };
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Operation {
-    AgentRegister,
-    SessionOpen,
-    SessionRefresh,
-    SessionClose,
-    SessionList,
-    CapabilityCreate,
-    CapabilityAttenuate,
-    CapabilityList,
-    CapabilityRevoke,
-    BudgetCreate,
-    BudgetFund,
-    BudgetList,
-    BudgetReconciliation,
-    BudgetRevoke,
-    Project,
-    Prepare,
-    Sign,
-    Submit,
-    Track,
-    Wait,
-    ReadBalance,
-    ReadAccount,
-    ReadModuleState,
-    ReadHistory,
-    ReadBatch,
-    ReadCheckpoint,
-    ReadProofBundle,
-    AvailabilityFetch,
-    ExportOffline,
-    SubscriptionCreate,
-    SubscriptionList,
-    SubscriptionHealth,
-    SubscriptionAcknowledge,
-    SubscriptionPause,
-    SubscriptionResume,
-    SubscriptionDelete,
-    ApprovalList,
-    ApprovalGet,
-    ApprovalApprove,
-    ApprovalReject,
-}
-
-impl Operation {
-    pub const ALL: &'static [Self] = &[
-        Self::AgentRegister,
-        Self::SessionOpen,
-        Self::SessionRefresh,
-        Self::SessionClose,
-        Self::SessionList,
-        Self::CapabilityCreate,
-        Self::CapabilityAttenuate,
-        Self::CapabilityList,
-        Self::CapabilityRevoke,
-        Self::BudgetCreate,
-        Self::BudgetFund,
-        Self::BudgetList,
-        Self::BudgetReconciliation,
-        Self::BudgetRevoke,
-        Self::Project,
-        Self::Prepare,
-        Self::Sign,
-        Self::Submit,
-        Self::Track,
-        Self::Wait,
-        Self::ReadBalance,
-        Self::ReadAccount,
-        Self::ReadModuleState,
-        Self::ReadHistory,
-        Self::ReadBatch,
-        Self::ReadCheckpoint,
-        Self::ReadProofBundle,
-        Self::AvailabilityFetch,
-        Self::ExportOffline,
-        Self::SubscriptionCreate,
-        Self::SubscriptionList,
-        Self::SubscriptionHealth,
-        Self::SubscriptionAcknowledge,
-        Self::SubscriptionPause,
-        Self::SubscriptionResume,
-        Self::SubscriptionDelete,
-        Self::ApprovalList,
-        Self::ApprovalGet,
-        Self::ApprovalApprove,
-        Self::ApprovalReject,
-    ];
-
-    #[must_use]
-    pub const fn name(self) -> &'static str {
-        match self {
-            Self::AgentRegister => "agent.register",
-            Self::SessionOpen => "session.open",
-            Self::SessionRefresh => "session.refresh",
-            Self::SessionClose => "session.close",
-            Self::SessionList => "session.list",
-            Self::CapabilityCreate => "capability.create",
-            Self::CapabilityAttenuate => "capability.attenuate",
-            Self::CapabilityList => "capability.list",
-            Self::CapabilityRevoke => "capability.revoke",
-            Self::BudgetCreate => "budget.create",
-            Self::BudgetFund => "budget.fund",
-            Self::BudgetList => "budget.list",
-            Self::BudgetReconciliation => "budget.reconciliation",
-            Self::BudgetRevoke => "budget.revoke",
-            Self::Project => "project",
-            Self::Prepare => "prepare",
-            Self::Sign => "sign",
-            Self::Submit => "submit",
-            Self::Track => "track",
-            Self::Wait => "wait",
-            Self::ReadBalance => "read.balance",
-            Self::ReadAccount => "read.account",
-            Self::ReadModuleState => "read.module_state",
-            Self::ReadHistory => "read.history",
-            Self::ReadBatch => "read.batch",
-            Self::ReadCheckpoint => "read.checkpoint",
-            Self::ReadProofBundle => "read.proof_bundle",
-            Self::AvailabilityFetch => "availability.fetch",
-            Self::ExportOffline => "export.offline",
-            Self::SubscriptionCreate => "subscription.create",
-            Self::SubscriptionList => "subscription.list",
-            Self::SubscriptionHealth => "subscription.health",
-            Self::SubscriptionAcknowledge => "subscription.acknowledge",
-            Self::SubscriptionPause => "subscription.pause",
-            Self::SubscriptionResume => "subscription.resume",
-            Self::SubscriptionDelete => "subscription.delete",
-            Self::ApprovalList => "approval.list",
-            Self::ApprovalGet => "approval.get",
-            Self::ApprovalApprove => "approval.approve",
-            Self::ApprovalReject => "approval.reject",
-        }
-    }
-
-    #[must_use]
-    pub const fn mutating(self) -> bool {
-        matches!(
-            self,
-            Self::AgentRegister
-                | Self::SessionOpen
-                | Self::SessionRefresh
-                | Self::SessionClose
-                | Self::CapabilityCreate
-                | Self::CapabilityAttenuate
-                | Self::CapabilityRevoke
-                | Self::BudgetCreate
-                | Self::BudgetFund
-                | Self::BudgetRevoke
-                | Self::Prepare
-                | Self::Sign
-                | Self::Submit
-                | Self::SubscriptionCreate
-                | Self::SubscriptionAcknowledge
-                | Self::SubscriptionPause
-                | Self::SubscriptionResume
-                | Self::SubscriptionDelete
-                | Self::ApprovalApprove
-                | Self::ApprovalReject
-        )
-    }
-}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Call<T> {

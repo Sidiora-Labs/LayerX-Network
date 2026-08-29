@@ -41,6 +41,7 @@ fn copy_schema(root: &Path) {
         "stream.kvx",
         "errors.kvx",
         "approval.kvx",
+        "programs.kvx",
     ] {
         fs::copy(schema().join(name), root.join(name))
             .unwrap_or_else(|error| panic!("copy {name}: {error}"));
@@ -67,6 +68,12 @@ fn golden_schema_generation_is_byte_deterministic() {
         "approval.get",
         "approval.approve",
         "approval.reject",
+        "program.discover",
+        "program.interface",
+        "program.simulate",
+        "program.call",
+        "program.receipt",
+        "program.activity",
     ] {
         assert!(typescript.contains(operation));
     }
@@ -86,6 +93,12 @@ fn golden_schema_generation_is_byte_deterministic() {
     assert!(python.contains("def require_verified"));
     assert!(python.contains("class ApprovalLifecycleEvent"));
     assert!(python.contains("def approval_approve"));
+    assert!(python.contains("program.discover"));
+    assert!(python.contains("program.interface"));
+    assert!(python.contains("program.simulate"));
+    assert!(python.contains("program.call"));
+    assert!(python.contains("program.receipt"));
+    assert!(python.contains("program.activity"));
     let python_stub = first
         .files
         .get(Path::new("python/layerx_sdk/generated/client.pyi"))

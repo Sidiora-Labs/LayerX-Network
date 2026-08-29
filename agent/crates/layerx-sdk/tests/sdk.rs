@@ -88,7 +88,7 @@ fn freshness() -> Freshness {
 fn daemon_and_direct_node_shapes_publish_identical_guarantees_and_calls() {
     let daemon = Client::daemon(
         "/run/layerx/agentd.sock",
-        ContractVersion { major: 1, minor: 1 },
+        ContractVersion { major: 1, minor: 2 },
     )
     .unwrap_or_else(|error| panic!("daemon: {error:?}"));
     let direct =
@@ -110,7 +110,7 @@ fn daemon_and_direct_node_shapes_publish_identical_guarantees_and_calls() {
 
 #[test]
 fn operation_catalogue_covers_the_complete_contract_surface() {
-    assert_eq!(Operation::ALL.len(), 40);
+    assert_eq!(Operation::ALL.len(), 46);
     let names: std::collections::BTreeSet<_> = Operation::ALL
         .iter()
         .map(|operation| operation.name())
@@ -133,6 +133,12 @@ fn operation_catalogue_covers_the_complete_contract_surface() {
         "approval.get",
         "approval.approve",
         "approval.reject",
+        "program.discover",
+        "program.interface",
+        "program.simulate",
+        "program.call",
+        "program.receipt",
+        "program.activity",
     ] {
         assert!(names.contains(required), "missing SDK operation {required}");
     }
@@ -140,6 +146,12 @@ fn operation_catalogue_covers_the_complete_contract_surface() {
         .iter()
         .filter(|operation| operation.mutating())
         .all(|operation| !matches!(operation, Operation::Track | Operation::Wait)));
+    assert!(Operation::ProgramCall.mutating());
+    assert!(!Operation::ProgramDiscover.mutating());
+    assert!(!Operation::ProgramInterface.mutating());
+    assert!(!Operation::ProgramSimulate.mutating());
+    assert!(!Operation::ProgramReceipt.mutating());
+    assert!(!Operation::ProgramActivity.mutating());
 }
 
 #[test]

@@ -11,6 +11,8 @@ const RESPONSE_VECTOR: &str = include_str!("../../../schema/agent-api/golden/ver
 const WRITE_SOURCE: &str = include_str!("../../../schema/agent-api/write.kvx");
 const READ_SOURCE: &str = include_str!("../../../schema/agent-api/read.kvx");
 const STREAM_SOURCE: &str = include_str!("../../../schema/agent-api/stream.kvx");
+const PROGRAMS_SOURCE: &str = include_str!("../../../schema/agent-api/programs.kvx");
+const PROGRAMS_BASELINE: &str = include_str!("../../../schema/agent-api/golden/programs.kvx");
 
 const CUSTODY_CLAIM_TAGS: &[(&str, &str)] = &[
     ("write.kvx", "type.SubmissionState.Executed.settlement_domain"),
@@ -93,7 +95,7 @@ fn hex(value: &str) -> Vec<u8> {
 fn generated_contract_is_pinned_to_the_schema() {
     let contract = agent_api_schema_v1();
     assert_eq!(contract.name, "LayerX Agent API");
-    assert_eq!(contract.version, ContractVersion { major: 1, minor: 1 });
+    assert_eq!(contract.version, ContractVersion { major: 1, minor: 2 });
     assert_eq!(contract.node_interface_major, 1);
     let baseline = declarations(BASELINE);
     let current = declarations(AGENT_API_V1_SOURCE);
@@ -111,10 +113,15 @@ fn generated_contract_is_pinned_to_the_schema() {
             );
         }
     }
-    assert_eq!(current.get("schema.minor").map(String::as_str), Some("1"));
+    assert_eq!(current.get("schema.minor").map(String::as_str), Some("2"));
     assert!(current["schema.includes"].contains("approval.kvx"));
+    assert!(current["schema.includes"].contains("programs.kvx"));
     assert_eq!(
         current["compatibility.history.1_1.classification"],
+        "\"additive_only\""
+    );
+    assert_eq!(
+        current["compatibility.history.1_2.classification"],
         "\"additive_only\""
     );
 
@@ -129,6 +136,33 @@ fn generated_contract_is_pinned_to_the_schema() {
     };
     assert_eq!(request.request_id.get(), 7);
     assert_eq!(response.contract, request.supported);
+}
+
+#[test]
+fn programs_contract_is_included_with_receipt_resolution_and_call_idempotency() {
+    let programs = declarations(PROGRAMS_SOURCE);
+    assert_eq!(programs, declarations(PROGRAMS_BASELINE));
+    for operation in [
+        "program.discover",
+        "program.interface",
+        "program.simulate",
+        "program.call",
+        "program.receipt",
+        "program.activity",
+    ] {
+        assert!(
+            programs.contains_key(&format!("operation.{operation}.request")),
+            "Programs contract operation missing {operation}"
+        );
+    }
+    assert_eq!(
+        programs["operation.program.call.required"],
+        "[\"idempotency_key\"]"
+    );
+    assert_eq!(
+        programs["operation.program.call.unknown_outcome"],
+        "\"retain_signed_activity_and_resolve_by_receipt\""
+    );
 }
 
 #[test]

@@ -289,6 +289,22 @@ fn validate_model(model: &Model) -> Result<(), String> {
             return Err(format!("approval SDK operation missing {operation}"));
         }
     }
+    for operation in [
+        "program.discover",
+        "program.interface",
+        "program.simulate",
+        "program.call",
+        "program.receipt",
+        "program.activity",
+    ] {
+        if !model
+            .operations
+            .iter()
+            .any(|candidate| candidate == operation)
+        {
+            return Err(format!("Programs SDK operation missing {operation}"));
+        }
+    }
     if model.approval.states.is_empty()
         || model.approval.outcomes.is_empty()
         || model.approval.events.is_empty()

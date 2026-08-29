@@ -9,6 +9,8 @@ use std::process::{Command, Stdio};
 use sha2::{Digest, Sha256};
 
 const LOCK_PATH: &str = "platform/sdk/pipeline.kvx";
+const RUST_OPERATION_GENERATED_PATH: &str =
+    "agent/crates/layerx-sdk/src/operation_generated.rs";
 const GO_GENERATED_PATH: &str = "platform/sdk/go/generated.go";
 const JVM_GENERATED_PATH: &str =
     "platform/sdk/jvm/src/main/java/com/sidiora/layerx/sdk/GeneratedContract.java";
@@ -45,10 +47,10 @@ pub const JVM_FILES: &[&str] = &[
 
 const OUTPUTS: [(&str, &str, &str, Option<&[&str]>); 11] = [
     (
-        "agent-rust-mirror",
+        "agent-rust",
         "rust",
         "agent/crates/layerx-sdk/src",
-        Some(&["mirror_generated.rs"]),
+        Some(&["mirror_generated.rs", "operation_generated.rs"]),
     ),
     (
         "agent-typescript",
@@ -274,6 +276,24 @@ fn go_identifier(value: &str) -> String {
     output
 }
 
+fn rust_identifier(value: &str) -> String {
+    let mut output = String::new();
+    let mut upper = true;
+    for character in value.chars() {
+        if !character.is_ascii_alphanumeric() {
+            upper = true;
+            continue;
+        }
+        if upper {
+            output.push(character.to_ascii_uppercase());
+            upper = false;
+        } else {
+            output.push(character);
+        }
+    }
+    output
+}
+
 fn quoted(value: &str) -> String {
     format!("{value:?}")
 }
@@ -399,7 +419,7 @@ fn format_go(source: &str) -> Result<String, String> {
         .map_err(|error| format!("gofmt returned non-UTF-8 output: {error}"))
 }
 
-fn go_agent_operations(agent: &Sections) -> (Vec<String>, BTreeSet<String>) {
+fn schema_agent_operations(agent: &Sections) -> (Vec<String>, BTreeSet<String>) {
     let operations = agent
         .keys()
         .filter_map(|section| section.strip_prefix("operation.").map(str::to_owned))
@@ -418,6 +438,89 @@ fn go_agent_operations(agent: &Sections) -> (Vec<String>, BTreeSet<String>) {
         }
     }
     (operations, mutations)
+}
+
+fn generate_rust_operation_catalog(repo_root: &Path) -> Result<String, String> {
+    let agent = schema_sections(&repo_root.join(SOURCES[0].1))?;
+    let (operations, mutations) = schema_agent_operations(&agent);
+    if operations.is_empty() {
+        return Err("Rust SDK generation found an empty operation catalogue".to_owned());
+    }
+
+    let mut output = String::from(
+        "//! Code generated from the LayerX Agent API schema. DO NOT EDIT.\n\n#[derive(Clone, Copy, Debug, Eq, PartialEq)]\npub enum Operation {\n",
+    );
+    for operation in &operations {
+        writeln!(output, "    {},", rust_identifier(operation))
+            .map_err(|error| error.to_string())?;
+    }
+    writeln!(output, "}}\n\nimpl Operation {{\n    pub const ALL: &'static [Self] = &[")
+        .map_err(|error| error.to_string())?;
+    for operation in &operations {
+        writeln!(output, "        Self::{},", rust_identifier(operation))
+            .map_err(|error| error.to_string())?;
+    }
+    writeln!(output, "    ];\n\n    #[must_use]\n    pub const fn name(self) -> &'static str {{\n        match self {{")
+        .map_err(|error| error.to_string())?;
+    for operation in &operations {
+        writeln!(
+            output,
+            "            Self::{} => {},",
+            rust_identifier(operation),
+            quoted(operation)
+        )
+        .map_err(|error| error.to_string())?;
+    }
+    writeln!(
+        output,
+        "        }}\n    }}\n\n    #[must_use]\n    pub const fn mutating(self) -> bool {{"
+    )
+    .map_err(|error| error.to_string())?;
+    if mutations.is_empty() {
+        writeln!(output, "        false")
+            .map_err(|error| error.to_string())?;
+    } else {
+        writeln!(output, "        matches!(\n            self,")
+            .map_err(|error| error.to_string())?;
+        for (index, operation) in mutations.iter().enumerate() {
+            let separator = if index == 0 { "" } else { "| " };
+            writeln!(
+                output,
+                "            {separator}Self::{}",
+                rust_identifier(operation)
+            )
+            .map_err(|error| error.to_string())?;
+        }
+        writeln!(output, "        )")
+            .map_err(|error| error.to_string())?;
+    }
+    writeln!(output, "    }}\n}}")
+        .map_err(|error| error.to_string())?;
+    Ok(output)
+}
+
+fn check_rust_operation_catalog(repo_root: &Path) -> Result<(), String> {
+    let path = repo_root.join(RUST_OPERATION_GENERATED_PATH);
+    let actual = fs::read_to_string(&path)
+        .map_err(|error| format!("generated Rust file missing {}: {error}", path.display()))?;
+    let expected = generate_rust_operation_catalog(repo_root)?;
+    if actual != expected {
+        return Err(format!(
+            "generated Rust file {} is stale or hand-edited; run make platform-sdk-generate",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
+fn write_rust_operation_catalog(repo_root: &Path) -> Result<(), String> {
+    let path = repo_root.join(RUST_OPERATION_GENERATED_PATH);
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("generated path has no parent: {}", path.display()))?;
+    fs::create_dir_all(parent).map_err(|error| format!("create {}: {error}", parent.display()))?;
+    fs::write(&path, generate_rust_operation_catalog(repo_root)?)
+        .map_err(|error| format!("write {}: {error}", path.display()))
 }
 
 fn go_human_operations(human: &Sections) -> (Vec<String>, BTreeSet<String>) {
@@ -592,7 +695,7 @@ fn render_go_enums(output: &mut String, agent: &Sections, human: &Sections) -> R
 fn generate_go(repo_root: &Path) -> Result<String, String> {
     let agent = schema_sections(&repo_root.join(SOURCES[0].1))?;
     let human = schema_sections(&repo_root.join(SOURCES[1].1))?;
-    let (agent_operations, agent_mutations) = go_agent_operations(&agent);
+    let (agent_operations, agent_mutations) = schema_agent_operations(&agent);
     let (human_operations, human_mutations) = go_human_operations(&human);
     if agent_operations.is_empty() || human_operations.is_empty() {
         return Err("Go SDK generation found an empty operation catalogue".to_owned());
@@ -1085,6 +1188,7 @@ pub fn check(repo_root: &Path, lock_path: &Path) -> Result<(), String> {
     let committed = parse_lock(&committed)?;
     let live = capture(repo_root)?;
     drift_gate(&committed, &live)?;
+    check_rust_operation_catalog(repo_root)?;
     check_go(repo_root)?;
     check_jvm_contract(repo_root)?;
     check_jvm_conformance(repo_root)
@@ -1096,6 +1200,7 @@ pub fn check(repo_root: &Path, lock_path: &Path) -> Result<(), String> {
 ///
 /// Fails when a tree is unreadable or the lock cannot be written.
 pub fn write_lock(repo_root: &Path, lock_path: &Path) -> Result<(), String> {
+    write_rust_operation_catalog(repo_root)?;
     write_go(repo_root)?;
     write_jvm_contract(repo_root)?;
     write_jvm_conformance(repo_root)?;

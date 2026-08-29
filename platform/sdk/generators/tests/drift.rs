@@ -29,7 +29,7 @@ fn place(root: &Path, relative: &str, contents: &str) {
 
 fn repo_fixture(label: &str) -> PathBuf {
     let root = directory(label);
-    place(&root, "agent/schema/agent-api/v1.kvx", "[schema]\nincludes = [\"errors.kvx\",\"approval.kvx\",\"stream.kvx\"]\n\n[scalar.Amount]\nrust = \"u128\"\n");
+    place(&root, "agent/schema/agent-api/v1.kvx", "[schema]\nincludes = [\"errors.kvx\",\"approval.kvx\",\"stream.kvx\",\"programs.kvx\"]\n\n[scalar.Amount]\nrust = \"u128\"\n");
     place(&root, "agent/schema/agent-api/errors.kvx", "[operation.agent.register]\nrequest = \"Register\"\nresponse = \"Registered\"\n\n[mutation.agent.register]\nenvelope = \"IdempotentMutation\"\n\n[type.ErrorClass]\nvariants = [\"TransportFailure\"]\n\n[type.Retriability]\nvariants = [\"Terminal\"]\n");
     place(
         &root,
@@ -40,6 +40,11 @@ fn repo_fixture(label: &str) -> PathBuf {
         &root,
         "agent/schema/agent-api/stream.kvx",
         "[type.Delivery]\nvariants = [\"Event\"]\n",
+    );
+    place(
+        &root,
+        "agent/schema/agent-api/programs.kvx",
+        "[operation.program.discover]\nrequest = \"ProgramSelector\"\nresponse = \"VerifiedProgramDiscovery\"\n\n[operation.program.interface]\nrequest = \"ProgramSelector\"\nresponse = \"VerifiedProgramInterface\"\n\n[operation.program.simulate]\nrequest = \"ProgramCallRequest\"\nresponse = \"ProgramSimulation\"\n\n[operation.program.call]\nrequest = \"ProgramCallRequest\"\nrequired = [\"idempotency_key\"]\nresponse = \"ProgramSubmission\"\n\n[operation.program.receipt]\nrequest = \"ProgramReceiptSelector\"\nresponse = \"ProgramSubmission\"\n\n[operation.program.activity]\nrequest = \"ProgramActivitySelector\"\nresponse = \"ProgramSubmission\"\n",
     );
     place(
         &root,
@@ -98,6 +103,16 @@ fn repo_fixture(label: &str) -> PathBuf {
         "human/apps/web/src/api/generated/index.ts",
         "export const humanApi = true;\n",
     );
+    place(
+        &root,
+        "agent/crates/layerx-sdk/src/operation_generated.rs",
+        "// generated Rust operations\n",
+    );
+    place(
+        &root,
+        "agent/crates/layerx-sdk/src/mirror_generated.rs",
+        "// generated Rust mirror\n",
+    );
     place(&root, "platform/sdk/go/generated.go", "package layerx\n");
     for relative in pipeline::JVM_FILES {
         place(&root, &format!("platform/sdk/jvm/{relative}"), "jvm\n");
@@ -153,6 +168,29 @@ fn freshly_generated_pipeline_passes_the_gate() {
     let root = repo_fixture("fresh");
     generate(&root);
     check(&root, &lock_path(&root)).unwrap_or_else(|error| panic!("gate failed: {error}"));
+    cleanup(&root);
+}
+
+#[test]
+fn rust_operation_catalogue_is_derived_from_programs_schema() {
+    let root = repo_fixture("rust-programs");
+    generate(&root);
+    let generated = fs::read_to_string(
+        root.join("agent/crates/layerx-sdk/src/operation_generated.rs"),
+    )
+    .unwrap_or_else(|error| panic!("read generated Rust operation catalogue: {error}"));
+    assert!(generated.contains("ProgramDiscover"));
+    assert!(generated.contains("ProgramInterface"));
+    assert!(generated.contains("ProgramSimulate"));
+    assert!(generated.contains("ProgramCall"));
+    assert!(generated.contains("ProgramReceipt"));
+    assert!(generated.contains("ProgramActivity"));
+    let mutation = generated
+        .split("pub const fn mutating")
+        .nth(1)
+        .unwrap_or_else(|| panic!("generated mutation classifier missing"));
+    assert!(mutation.contains("Self::ProgramCall"));
+    assert!(!mutation.contains("Self::ProgramSimulate"));
     cleanup(&root);
 }
 
