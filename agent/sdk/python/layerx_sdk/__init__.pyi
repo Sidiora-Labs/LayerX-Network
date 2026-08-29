@@ -55,6 +55,10 @@ from .production import (
     SecretBytes as SecretBytes,
     platform_sdk_python as platform_sdk_python,
 )
+from .agent_http import (
+    AgentHttpTransport as AgentHttpTransport,
+    LayerXKeyCredential as LayerXKeyCredential,
+)
 from .programs import (
     ProgramCall as ProgramCall,
     ProgramOperations as ProgramOperations,

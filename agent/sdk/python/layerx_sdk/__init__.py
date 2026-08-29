@@ -55,6 +55,7 @@ from .production import (
     SecretBytes,
     platform_sdk_python,
 )
+from .agent_http import AgentHttpTransport, LayerXKeyCredential
 from .programs import ProgramCall, ProgramOperations, VerifiedProgramReceipt, platform_sdk_programs, verify_program_receipt
 from .stream import ResumableStream, StreamCursor, StreamEvent, StreamPage
 from .mirror import MirrorCandidate, MirrorPolicy, MirrorVerification, MirrorVerificationError, MirrorVerifier
@@ -124,8 +125,10 @@ __all__ = [
     "parse_timestamp_seconds",
     "require_verified",
     "AGENT_OPERATIONS",
+    "AgentHttpTransport",
     "HUMAN_OPERATIONS",
     "IdempotencyKey",
+    "LayerXKeyCredential",
     "PlatformSdkError",
     "ProductionClient",
     "ProductionTransport",

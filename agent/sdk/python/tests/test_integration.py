@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import ast
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import importlib.util
+import json
 from pathlib import Path
 import tempfile
+import threading
 from types import MappingProxyType
-from typing import get_args
+from typing import cast, get_args
 import unittest
 import zipfile
 
@@ -15,6 +18,7 @@ from layerx_sdk import (
     APPROVAL_ENFORCEMENT_NOTICE,
     APPROVAL_EVENT_KINDS,
     APPROVAL_STATES,
+    AgentHttpTransport,
     ApiError,
     ApprovalApproveRequest,
     ApprovalGetRequest,
@@ -24,8 +28,11 @@ from layerx_sdk import (
     CheckpointAttestation,
     ErrorClass,
     IdempotentMutation,
+    LayerXKeyCredential,
     SubmissionFailed,
     SubmissionUnknown,
+    ProductionClient,
+    SecretBytes,
     VerificationLevel,
     VerifiedRead,
     layerx_sdk_py_package,
@@ -48,6 +55,54 @@ def load_build_backend():
 
 
 class PythonSdkIntegration(unittest.TestCase):
+    def test_agent_http_transport_preserves_program_contract_and_authentication(self) -> None:
+        program_id = "11" * 32
+        observed: dict[str, object] = {}
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self) -> None:
+                length = int(self.headers["Content-Length"])
+                observed["path"] = self.path
+                observed["authorization"] = self.headers["Authorization"]
+                observed["body"] = self.rfile.read(length)
+                encoded = json.dumps({
+                    "request_id": "request-1",
+                    "value": {"program_id": program_id},
+                    "verification_status": {"state": "Achieved", "level": "SequencerSigned"},
+                }, separators=(",", ":")).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(encoded)))
+                self.end_headers()
+                self.wfile.write(encoded)
+
+            def log_message(self, _format: str, *args: object) -> None:
+                del args
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            credential = LayerXKeyCredential("key_1", SecretBytes(("lxp_live_" + "22" * 32).encode()))
+            client = ProductionClient(AgentHttpTransport(
+                f"http://127.0.0.1:{server.server_port}", credential=credential
+            ))
+            result = client.agent(
+                "program.discover",
+                {"program_id": program_id, "requested_verification_level": "sequencer-signed"},
+            )
+            self.assertEqual(result, {"program_id": program_id})
+            self.assertEqual(observed["path"], f"/v1/programs/registry/{program_id}")
+            self.assertEqual(observed["authorization"], "LayerX-Key key_1:lxp_live_" + "22" * 32)
+            self.assertEqual(json.loads(cast(bytes, observed["body"])), {
+                "program_id": program_id,
+                "requested_verification_level": "sequencer-signed",
+            })
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join()
+
     def test_approval_contract_operations_events_and_outcomes_are_exact(self) -> None:
         self.assertEqual(APPROVAL_CONTRACT_INTRODUCED, "1.1")
         self.assertIn("confers no protocol authority", APPROVAL_ENFORCEMENT_NOTICE)
