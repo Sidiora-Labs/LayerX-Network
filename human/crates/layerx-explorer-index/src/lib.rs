@@ -573,8 +573,8 @@ impl Indexer {
     }
 
     /// Projects one production adapter read into the public program index.
-    /// Existing rows are refreshed only by a later current-head proof for the
-    /// exact same program identity.
+    /// Existing rows advance with a later current-head proof, or at the exact
+    /// same proven state when verified source or interface evidence arrives.
     pub fn ingest_program(
         &mut self,
         registry_read: layerx_programs::VerifiedRegistryRead,
@@ -591,21 +591,41 @@ impl Indexer {
             staleness_limit,
         )
         .map_err(IndexError::ProgramRead)?;
+        self.ingest_program_projection(program)
+    }
+
+    fn ingest_program_projection(
+        &mut self,
+        program: ExplorerProgram,
+    ) -> Result<IngestOutcome, IndexError> {
         let identifier = program.identifier;
         if let Some(existing) = self.programs.get(&identifier) {
-            if program.balance_observed_sequence < existing.balance_observed_sequence {
+            if program.observed_sequence < existing.observed_sequence
+                || program.balance_observed_sequence < existing.balance_observed_sequence
+            {
                 return Err(IndexError::ProgramHeadRegression {
                     program: identifier,
                 });
             }
+            if existing.upgrade_policy != program.upgrade_policy
+                || !lifecycle_is_monotonic(existing.lifecycle, program.lifecycle)
+                || !verified_metadata_history_is_monotonic(existing, &program)
+            {
+                return Err(IndexError::ConflictingProgram {
+                    program: identifier,
+                });
+            }
             if program.balance_observed_sequence == existing.balance_observed_sequence {
-                return if existing == &program {
-                    Ok(IngestOutcome::AlreadyPresent)
-                } else {
-                    Err(IndexError::ConflictingProgram {
-                        program: identifier,
-                    })
-                };
+                if existing == &program {
+                    return Ok(IngestOutcome::AlreadyPresent);
+                }
+                if verified_metadata_enrichment(existing, &program) {
+                    self.programs.insert(identifier, program);
+                    return Ok(IngestOutcome::Inserted);
+                }
+                return Err(IndexError::ConflictingProgram {
+                    program: identifier,
+                });
             }
         }
         self.programs.insert(identifier, program);
@@ -673,6 +693,115 @@ impl Indexer {
     }
 }
 
+fn lifecycle_is_monotonic(
+    existing: layerx_programs::ProgramLifecycle,
+    candidate: layerx_programs::ProgramLifecycle,
+) -> bool {
+    matches!(
+        (existing, candidate),
+        (
+            layerx_programs::ProgramLifecycle::Active,
+            layerx_programs::ProgramLifecycle::Active
+                | layerx_programs::ProgramLifecycle::Deprecated
+                | layerx_programs::ProgramLifecycle::Tombstoned
+        ) | (
+            layerx_programs::ProgramLifecycle::Deprecated,
+            layerx_programs::ProgramLifecycle::Deprecated
+                | layerx_programs::ProgramLifecycle::Tombstoned
+        ) | (
+            layerx_programs::ProgramLifecycle::Tombstoned,
+            layerx_programs::ProgramLifecycle::Tombstoned
+        )
+    )
+}
+
+fn verified_metadata_history_is_monotonic(
+    existing: &ExplorerProgram,
+    candidate: &ExplorerProgram,
+) -> bool {
+    if candidate.versions.len() < existing.versions.len() {
+        return false;
+    }
+    existing
+        .versions
+        .iter()
+        .zip(&candidate.versions)
+        .all(|(prior, current)| {
+            prior.number == current.number
+                && prior.code_hash == current.code_hash
+                && prior.abi_version == current.abi_version
+                && source_metadata_is_monotonic(prior.source, current.source)
+                && interface_metadata_is_monotonic(
+                    prior.interface_digest,
+                    current.interface_digest,
+                )
+        })
+}
+
+fn source_metadata_is_monotonic(
+    existing: layerx_programs::SourceStatus,
+    candidate: layerx_programs::SourceStatus,
+) -> bool {
+    existing == candidate
+        || matches!(
+            (existing, candidate),
+            (
+                layerx_programs::SourceStatus::Unpublished,
+                layerx_programs::SourceStatus::Verified { .. }
+            )
+        )
+}
+
+fn interface_metadata_is_monotonic(
+    existing: Option<[u8; 32]>,
+    candidate: Option<[u8; 32]>,
+) -> bool {
+    existing == candidate || matches!((existing, candidate), (None, Some(_)))
+}
+
+fn verified_metadata_enrichment(existing: &ExplorerProgram, candidate: &ExplorerProgram) -> bool {
+    if existing.identifier != candidate.identifier
+        || existing.upgrade_policy != candidate.upgrade_policy
+        || existing.lifecycle != candidate.lifecycle
+        || existing.observed_sequence != candidate.observed_sequence
+        || existing.observed_at != candidate.observed_at
+        || existing.receipt_digest != candidate.receipt_digest
+        || existing.value_accounts != candidate.value_accounts
+        || existing.balance_observed_sequence != candidate.balance_observed_sequence
+        || existing.balance_observed_at != candidate.balance_observed_at
+        || existing.balance_receipt_digest != candidate.balance_receipt_digest
+        || existing.balance_state_root != candidate.balance_state_root
+        || existing.versions.len() != candidate.versions.len()
+    {
+        return false;
+    }
+    let mut enriched = false;
+    for (prior, current) in existing.versions.iter().zip(&candidate.versions) {
+        if prior.number != current.number
+            || prior.code_hash != current.code_hash
+            || prior.abi_version != current.abi_version
+        {
+            return false;
+        }
+        match (prior.source, current.source) {
+            (
+                layerx_programs::SourceStatus::Unpublished,
+                layerx_programs::SourceStatus::Verified { .. },
+            ) => {
+                enriched = true;
+            }
+            (prior_source, current_source) if prior_source == current_source => {}
+            _ => return false,
+        }
+        match (prior.interface_digest, current.interface_digest) {
+            (None, Some(_)) => enriched = true,
+            (prior_interface, current_interface) if prior_interface == current_interface => {}
+            _ => return false,
+        }
+    }
+    enriched
+}
+
 fn require_matching_evidence(
     batch: &BatchRecord,
     checkpoint: &CheckpointRecord,
@@ -733,4 +862,247 @@ fn record_id(kind: &[u8], bytes: &[u8]) -> RecordId {
     hasher.update(kind);
     hasher.update(bytes);
     RecordId(hasher.finalize().into())
+}
+
+#[cfg(test)]
+mod program_metadata_refresh_tests {
+    use layerx_client::head::Head;
+    use layerx_programs::{ProgramLifecycle, SourceStatus, UpgradePolicy};
+
+    use super::programs::{ExplorerProgram, ExplorerProgramBalance, ExplorerProgramVersion};
+    use super::{verified_metadata_enrichment, IndexError, Indexer, IngestOutcome};
+
+    fn projected_program() -> ExplorerProgram {
+        ExplorerProgram {
+            identifier: [0x11; 32],
+            upgrade_policy: UpgradePolicy::Immutable,
+            lifecycle: ProgramLifecycle::Active,
+            versions: vec![ExplorerProgramVersion {
+                number: 1,
+                code_hash: [0x22; 32],
+                abi_version: 2,
+                source: SourceStatus::Unpublished,
+                interface_digest: None,
+            }],
+            observed_sequence: 19,
+            observed_at: 1_900,
+            receipt_digest: [0x33; 32],
+            value_accounts: vec![ExplorerProgramBalance {
+                account: [0x44; 32],
+                asset: [0x55; 32],
+                balance: 700,
+                frozen: false,
+            }],
+            balance_observed_sequence: 19,
+            balance_observed_at: 1_900,
+            balance_receipt_digest: [0x66; 32],
+            balance_state_root: [0x77; 32],
+        }
+    }
+
+    #[test]
+    fn verified_source_and_interface_enrich_the_same_proven_state() {
+        let prior = projected_program();
+        let mut current = prior.clone();
+        current.versions[0].source = SourceStatus::Verified {
+            source_digest: [0x88; 32],
+            environment_digest: [0x99; 32],
+        };
+        current.versions[0].interface_digest = Some([0xaa; 32]);
+
+        assert!(verified_metadata_enrichment(&prior, &current));
+
+        let mut index = Indexer::new(Head {
+            chain_sequence: 19,
+            sealed_batch: 7,
+            finalised_checkpoint: [0xee; 32],
+        });
+        assert_eq!(
+            index.ingest_program_projection(prior),
+            Ok(IngestOutcome::Inserted)
+        );
+        assert_eq!(
+            index.ingest_program_projection(current.clone()),
+            Ok(IngestOutcome::Inserted)
+        );
+        assert_eq!(
+            index.program(current.identifier).value,
+            Some(current)
+        );
+    }
+
+    #[test]
+    fn metadata_refresh_cannot_change_protocol_balance_or_root_evidence() {
+        let prior = projected_program();
+        let mut current = prior.clone();
+        current.versions[0].interface_digest = Some([0xaa; 32]);
+        current.value_accounts[0].balance += 1;
+        assert!(!verified_metadata_enrichment(&prior, &current));
+
+        let mut index = Indexer::new(Head {
+            chain_sequence: 19,
+            sealed_batch: 7,
+            finalised_checkpoint: [0xee; 32],
+        });
+        assert_eq!(
+            index.ingest_program_projection(prior.clone()),
+            Ok(IngestOutcome::Inserted)
+        );
+        assert_eq!(
+            index.ingest_program_projection(current),
+            Err(IndexError::ConflictingProgram {
+                program: prior.identifier,
+            })
+        );
+
+        let mut current = prior.clone();
+        current.versions[0].interface_digest = Some([0xaa; 32]);
+        current.balance_state_root = [0xbb; 32];
+        assert!(!verified_metadata_enrichment(&prior, &current));
+
+        let mut current = prior.clone();
+        current.versions[0].interface_digest = Some([0xaa; 32]);
+        current.receipt_digest = [0xcc; 32];
+        assert!(!verified_metadata_enrichment(&prior, &current));
+    }
+
+    #[test]
+    fn metadata_refresh_cannot_rewrite_or_downgrade_verified_metadata() {
+        let mut prior = projected_program();
+        prior.versions[0].source = SourceStatus::Verified {
+            source_digest: [0x88; 32],
+            environment_digest: [0x99; 32],
+        };
+        prior.versions[0].interface_digest = Some([0xaa; 32]);
+
+        let mut current = prior.clone();
+        current.versions[0].source = SourceStatus::Unpublished;
+        assert!(!verified_metadata_enrichment(&prior, &current));
+
+        current.observed_sequence = 20;
+        current.observed_at = 2_000;
+        current.receipt_digest = [0xbb; 32];
+        current.balance_observed_sequence = 20;
+        current.balance_observed_at = 2_000;
+        current.balance_receipt_digest = [0xcc; 32];
+        current.balance_state_root = [0xdd; 32];
+        let mut index = Indexer::new(Head {
+            chain_sequence: 19,
+            sealed_batch: 7,
+            finalised_checkpoint: [0xee; 32],
+        });
+        assert_eq!(
+            index.ingest_program_projection(prior.clone()),
+            Ok(IngestOutcome::Inserted)
+        );
+        assert_eq!(
+            index.ingest_program_projection(current),
+            Err(IndexError::ConflictingProgram {
+                program: prior.identifier,
+            })
+        );
+
+        let mut current = prior.clone();
+        current.versions[0].interface_digest = Some([0xbb; 32]);
+        assert!(!verified_metadata_enrichment(&prior, &current));
+    }
+
+    #[test]
+    fn metadata_refresh_cannot_smuggle_an_upgrade_at_the_same_sequence() {
+        let prior = projected_program();
+        let mut current = prior.clone();
+        current.versions[0].interface_digest = Some([0xaa; 32]);
+        current.versions.push(ExplorerProgramVersion {
+            number: 2,
+            code_hash: [0xdd; 32],
+            abi_version: 2,
+            source: SourceStatus::Unpublished,
+            interface_digest: None,
+        });
+
+        assert!(!verified_metadata_enrichment(&prior, &current));
+    }
+
+    #[test]
+    fn later_verified_sequence_accepts_an_upgrade_without_restart() {
+        let prior = projected_program();
+        let mut current = prior.clone();
+        current.versions.push(ExplorerProgramVersion {
+            number: 2,
+            code_hash: [0xdd; 32],
+            abi_version: 2,
+            source: SourceStatus::Unpublished,
+            interface_digest: Some([0xaa; 32]),
+        });
+        current.observed_sequence = 20;
+        current.observed_at = 2_000;
+        current.receipt_digest = [0xbb; 32];
+        current.balance_observed_sequence = 20;
+        current.balance_observed_at = 2_000;
+        current.balance_receipt_digest = [0xcc; 32];
+        current.balance_state_root = [0xdd; 32];
+
+        let mut index = Indexer::new(Head {
+            chain_sequence: 19,
+            sealed_batch: 7,
+            finalised_checkpoint: [0xee; 32],
+        });
+        assert_eq!(
+            index.ingest_program_projection(prior),
+            Ok(IngestOutcome::Inserted)
+        );
+        assert_eq!(
+            index.ingest_program_projection(current.clone()),
+            Ok(IngestOutcome::Inserted)
+        );
+        assert_eq!(index.program(current.identifier).value, Some(current));
+    }
+
+    #[test]
+    fn later_verified_deployment_is_added_without_restart() {
+        let first = projected_program();
+        let mut second = projected_program();
+        second.identifier = [0x12; 32];
+        second.observed_sequence = 20;
+        second.observed_at = 2_000;
+        second.receipt_digest = [0xbb; 32];
+        second.value_accounts[0].account = [0x45; 32];
+        second.balance_observed_sequence = 20;
+        second.balance_observed_at = 2_000;
+        second.balance_receipt_digest = [0xcc; 32];
+        second.balance_state_root = [0xdd; 32];
+
+        let mut index = Indexer::new(Head {
+            chain_sequence: 19,
+            sealed_batch: 7,
+            finalised_checkpoint: [0xee; 32],
+        });
+        assert_eq!(
+            index.ingest_program_projection(first.clone()),
+            Ok(IngestOutcome::Inserted)
+        );
+        assert_eq!(
+            index.ingest_program_projection(second.clone()),
+            Ok(IngestOutcome::Inserted)
+        );
+        assert_eq!(index.program(first.identifier).value, Some(first));
+        assert_eq!(index.program(second.identifier).value, Some(second));
+    }
+
+    #[test]
+    fn explorer_head_refresh_refuses_chain_regression() {
+        let mut index = Indexer::new(Head {
+            chain_sequence: 19,
+            sealed_batch: 7,
+            finalised_checkpoint: [0xee; 32],
+        });
+        assert_eq!(
+            index.refresh_head(Head {
+                chain_sequence: 18,
+                sealed_batch: 7,
+                finalised_checkpoint: [0xee; 32],
+            }),
+            Err(IndexError::HeadRegression)
+        );
+    }
 }

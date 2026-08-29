@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 use std::env;
+use std::fmt;
 use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -136,6 +137,21 @@ struct LoadedRegistry {
     interfaces: Vec<VerifiedProgramInterfaceMetadata>,
 }
 
+#[derive(Debug)]
+enum ProgramRefreshError {
+    UnknownProgram,
+    Unavailable(String),
+}
+
+impl fmt::Display for ProgramRefreshError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnknownProgram => formatter.write_str("program is not registered"),
+            Self::Unavailable(error) => formatter.write_str(error),
+        }
+    }
+}
+
 fn load_registry(
     root: &Path,
     verified_source_store: &Path,
@@ -150,6 +166,7 @@ fn load_registry(
     paths.sort();
     let mut registry = Registry::new();
     let mut interfaces = Vec::new();
+    let mut deployments = Vec::new();
     for path in paths {
         let bytes = fs::read(&path)
             .map_err(|error| format!("{} is unreadable: {error}", path.display()))?;
@@ -174,6 +191,10 @@ fn load_registry(
         if &record != evidence.record() {
             return Err(format!("{} disagrees with protocol evidence", record_path.display()));
         }
+        deployments.push(evidence);
+    }
+    deployments.sort_by_key(|evidence| (evidence.program().bytes(), evidence.version()));
+    for evidence in deployments {
         if let Some(interface) = VerifiedProgramInterfaceMetadata::from_deployment(&evidence) {
             interfaces.push(interface);
         }
@@ -365,29 +386,87 @@ fn response(stream: &mut TcpStream, status: u16, body: &str) -> Result<(), Strin
 
 fn refresh_program(
     config: &Config,
-    loaded: &LoadedRegistry,
-    ingestor: &mut ProtocolProgramIngestor,
     index: &mut Indexer,
     program: ProgramId,
     now: u64,
-) -> Result<(), String> {
+) -> Result<(), ProgramRefreshError> {
+    let verifier = ProtocolDeploymentVerifier::from_protected_history(
+        &config.sequencer_trust_history,
+        config.staleness_ms,
+    )
+    .map_err(|error| {
+        ProgramRefreshError::Unavailable(format!(
+            "explorer deployment verifier is invalid: {error}"
+        ))
+    })?;
+    let loaded = load_registry(
+        &config.journal.root,
+        &config.verified_source_store,
+        &verifier,
+    )
+    .map_err(ProgramRefreshError::Unavailable)?;
+    if !loaded.registry.program_ids().contains(&program) {
+        return Err(ProgramRefreshError::UnknownProgram);
+    }
+    let head = config
+        .journal
+        .observed_head()
+        .map_err(|error| {
+            ProgramRefreshError::Unavailable(format!(
+                "explorer head is unavailable: {error}"
+            ))
+        })?;
+    index
+        .refresh_head(Head {
+            chain_sequence: head.sequence,
+            sealed_batch: config.observed_sealed_batch,
+            finalised_checkpoint: config.finalised_checkpoint,
+        })
+        .map_err(|error| {
+            ProgramRefreshError::Unavailable(format!(
+                "explorer head refresh failed: {error:?}"
+            ))
+        })?;
     let authority = JournalReadAuthority::new(&config.journal, now, config.staleness_ms)
-        .map_err(|error| format!("registry authority is unavailable: {error}"))?;
+        .map_err(|error| {
+            ProgramRefreshError::Unavailable(format!(
+                "registry authority is unavailable: {error}"
+            ))
+        })?;
     let read = loaded
         .registry
         .read(program, &authority)
-        .map_err(|error| format!("registry read is unavailable: {error}"))?;
+        .map_err(|error| {
+            ProgramRefreshError::Unavailable(format!(
+                "registry read is unavailable: {error}"
+            ))
+        })?;
+    let reader = LayerxdProgramBalanceReader::connect(
+        &config.node_endpoint,
+        config.node_bearer.clone(),
+        &config.authority_endpoint,
+        config.authority_bearer.clone(),
+        config.authority_replica_id,
+        verifier,
+        loaded.registry.clone(),
+    )
+    .map_err(|error| {
+        ProgramRefreshError::Unavailable(format!(
+            "explorer protocol reader configuration failed: {error:?}"
+        ))
+    })?;
+    let mut ingestor = ProtocolProgramIngestor::new(reader);
     ingestor
         .ingest(index, read, &loaded.interfaces, now)
-        .map_err(|error| format!("program ingest failed: {error:?}"))?;
+        .map_err(|error| {
+            ProgramRefreshError::Unavailable(format!("program ingest failed: {error:?}"))
+        })?;
     Ok(())
 }
 
 fn serve_connection(
     stream: &mut TcpStream,
     config: &Config,
-    loaded: &LoadedRegistry,
-    ingestor: &mut ProtocolProgramIngestor,
     index: &mut Indexer,
 ) -> Result<(), String> {
     let mut bytes = [0_u8; HEADER_LIMIT];
@@ -427,8 +506,6 @@ fn serve_connection(
     if path == "/healthz" {
         return match refresh_program(
             config,
-            loaded,
-            ingestor,
             index,
             config.probe_program,
             now_ms()?,
@@ -446,12 +523,15 @@ fn serve_connection(
     let Some(program) = program else {
         return response(stream, 400, "{\"error\":\"invalid_program\"}");
     };
-    if !loaded.registry.program_ids().contains(&program) {
-        return response(stream, 404, "{\"error\":\"not_found\"}");
-    }
     let now = now_ms()?;
-    if refresh_program(config, loaded, ingestor, index, program, now).is_err() {
-        return response(stream, 503, "{\"error\":\"program_state_unavailable\"}");
+    match refresh_program(config, index, program, now) {
+        Ok(()) => {}
+        Err(ProgramRefreshError::UnknownProgram) => {
+            return response(stream, 404, "{\"error\":\"not_found\"}");
+        }
+        Err(ProgramRefreshError::Unavailable(_)) => {
+            return response(stream, 503, "{\"error\":\"program_state_unavailable\"}");
+        }
     }
     match index.program(program.bytes()).value {
         Some(program) => response(stream, 200, &program_json(&program)),
@@ -460,26 +540,6 @@ fn serve_connection(
 }
 
 fn serve(config: Config) -> Result<(), String> {
-    let verifier = ProtocolDeploymentVerifier::from_protected_history(
-        &config.sequencer_trust_history,
-        config.staleness_ms,
-    )
-    .map_err(|error| format!("explorer deployment verifier is invalid: {error}"))?;
-    let loaded = load_registry(
-        &config.journal.root,
-        &config.verified_source_store,
-        &verifier,
-    )?;
-    let reader = LayerxdProgramBalanceReader::connect(
-        &config.node_endpoint,
-        config.node_bearer.clone(),
-        &config.authority_endpoint,
-        config.authority_bearer.clone(),
-        config.authority_replica_id,
-        verifier,
-        loaded.registry.clone(),
-    )
-    .map_err(|error| format!("explorer protocol reader configuration failed: {error:?}"))?;
     let head = config
         .journal
         .observed_head()
@@ -489,17 +549,13 @@ fn serve(config: Config) -> Result<(), String> {
         sealed_batch: config.observed_sealed_batch,
         finalised_checkpoint: config.finalised_checkpoint,
     });
-    let mut ingestor = ProtocolProgramIngestor::new(reader);
-    let now = now_ms()?;
-    let authority = JournalReadAuthority::new(&config.journal, now, config.staleness_ms)
-        .map_err(|error| format!("explorer registry authority is unavailable: {error}"))?;
-    let probe = loaded
-        .registry
-        .read(config.probe_program, &authority)
-        .map_err(|error| format!("explorer registry probe failed: {error}"))?;
-    ingestor
-        .ingest(&mut index, probe, &loaded.interfaces, now)
-        .map_err(|error| format!("explorer protocol probe failed: {error:?}"))?;
+    refresh_program(
+        &config,
+        &mut index,
+        config.probe_program,
+        now_ms()?,
+    )
+    .map_err(|error| format!("explorer protocol probe failed: {error}"))?;
     let listener = TcpListener::bind(&config.listen)
         .map_err(|error| format!("explorer program listener failed: {error}"))?;
     for incoming in listener.incoming() {
@@ -508,7 +564,7 @@ fn serve(config: Config) -> Result<(), String> {
             .set_read_timeout(Some(Duration::from_secs(10)))
             .and_then(|()| stream.set_write_timeout(Some(Duration::from_secs(10))))
             .map_err(|error| format!("explorer connection timeout setup failed: {error}"))?;
-        let _ = serve_connection(&mut stream, &config, &loaded, &mut ingestor, &mut index);
+        let _ = serve_connection(&mut stream, &config, &mut index);
     }
     Ok(())
 }
