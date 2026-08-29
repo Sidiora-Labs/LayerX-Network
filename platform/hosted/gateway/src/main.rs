@@ -227,59 +227,78 @@ fn program_call_bytes(
     request: &IncomingRequest,
     registry: &ModuleRegistry,
 ) -> Result<(Vec<u8>, [u8; 32]), String> {
-    if request
+    let content_type = request
         .headers
         .get("content-type")
         .map(String::as_str)
-        != Some("application/json")
-    {
-        return Err("program call requires application/json".to_owned());
-    }
-    let body: ProgramCallBody =
-        serde_json::from_slice(&request.body).map_err(|_| "program call body is invalid")?;
-    let program_id = parse_hex32(&body.program_id)?;
-    let program = ProgramId::new(program_id).map_err(|_| "program id is invalid")?;
-    let calldata_bytes = decode_hex(&body.calldata, 1_048_576)?;
-    let calldata = Calldata::new(&calldata_bytes).map_err(|_| "program calldata is invalid")?;
-    let fee_limit = body
-        .budget
-        .fee_limit
-        .parse::<u128>()
-        .map_err(|_| "program fee limit is invalid")?;
-    let fuel = body
-        .budget
-        .fuel
-        .parse::<u64>()
-        .map_err(|_| "program fuel budget is invalid")?;
-    if fuel.to_string() != body.budget.fuel {
-        return Err("program fuel budget is not canonical".to_owned());
-    }
-    let budget = CallBudget::new(fuel, Amount::from_u128(fee_limit))
-        .map_err(|_| "program budget is invalid")?;
-    let mut requested = Vec::with_capacity(body.capabilities.len());
-    for capability in body.capabilities {
-        requested.push(match capability.as_str() {
-            "storage_read" => CapabilityRequest::StorageRead,
-            "storage_write" => CapabilityRequest::StorageWrite,
-            "transfer" => CapabilityRequest::Transfer,
-            "emit_event" => CapabilityRequest::EmitEvent,
-            "compose" => CapabilityRequest::Compose,
-            _ => return Err("program capability is invalid".to_owned()),
-        });
-    }
-    let capabilities =
-        RequestedCapabilities::new(&requested).map_err(|_| "program capabilities are invalid")?;
-    let call = ProgramCall::new(program, calldata, budget, capabilities);
-    let signed_activity = decode_hex(&body.signed_activity, MAX_REQUEST)?;
+        .unwrap_or_default();
+    let (signed_activity, expected_call) = if content_type == "application/octet-stream" {
+        if request.body.len() > 1_048_576 {
+            return Err("signed program activity exceeds its bound".to_owned());
+        }
+        (request.body.clone(), None)
+    } else if content_type == "application/json" {
+        let body: ProgramCallBody =
+            serde_json::from_slice(&request.body).map_err(|_| "program call body is invalid")?;
+        let program_id = parse_hex32(&body.program_id)?;
+        let program = ProgramId::new(program_id);
+        if program.is_zero() {
+            return Err("program id is invalid".to_owned());
+        }
+        let calldata_bytes = decode_hex(&body.calldata, 1_048_576)?;
+        let calldata =
+            Calldata::new(&calldata_bytes).map_err(|_| "program calldata is invalid")?;
+        let fee_limit = body
+            .budget
+            .fee_limit
+            .parse::<u128>()
+            .map_err(|_| "program fee limit is invalid")?;
+        if fee_limit.to_string() != body.budget.fee_limit {
+            return Err("program fee limit is not canonical".to_owned());
+        }
+        let fuel = body
+            .budget
+            .fuel
+            .parse::<u64>()
+            .map_err(|_| "program fuel budget is invalid")?;
+        if fuel.to_string() != body.budget.fuel {
+            return Err("program fuel budget is not canonical".to_owned());
+        }
+        let budget = CallBudget::new(fuel, Amount::from_u128(fee_limit))
+            .map_err(|_| "program budget is invalid")?;
+        let mut requested = Vec::with_capacity(body.capabilities.len());
+        for capability in body.capabilities {
+            requested.push(match capability.as_str() {
+                "storage_read" => CapabilityRequest::StorageRead,
+                "storage_write" => CapabilityRequest::StorageWrite,
+                "transfer" => CapabilityRequest::Transfer,
+                "emit_event" => CapabilityRequest::EmitEvent,
+                "compose" => CapabilityRequest::Compose,
+                _ => return Err("program capability is invalid".to_owned()),
+            });
+        }
+        let capabilities = RequestedCapabilities::new(&requested)
+            .map_err(|_| "program capabilities are invalid")?;
+        (
+            decode_hex(&body.signed_activity, 1_048_576)?,
+            Some(ProgramCall::new(program, calldata, budget, capabilities)),
+        )
+    } else {
+        return Err("program call content type is not supported".to_owned());
+    };
     let activity =
         decode_signed(&signed_activity, registry).map_err(|_| "signed program activity is invalid")?;
     if activity.activity_type().module() != ModuleId::Programs
         || activity.activity_type().ordinal() != 3
-        || activity.payload() != call.canonical_payload()
     {
+        return Err("signed activity is not a Programs CALL".to_owned());
+    }
+    let call = ProgramCall::from_canonical_payload(activity.payload())
+        .map_err(|_| "signed program payload is not canonical".to_owned())?;
+    if expected_call.as_ref().is_some_and(|expected| expected != &call) {
         return Err("signed program activity does not match the typed call".to_owned());
     }
-    Ok((signed_activity, program_id))
+    Ok((signed_activity, call.callee().bytes()))
 }
 
 fn program_head(config: &Config, expected_program: [u8; 32]) -> Result<ProgramHead, OutgoingResponse> {
@@ -1114,14 +1133,15 @@ fn program_simulation(
         Err(_) => return response(503, "component_invalid", Some(5)),
     };
     let value = document.get("result").unwrap_or(&document);
-    let activity_id = value
+    let execution = value.get("execution").unwrap_or(value);
+    let activity_id = execution
         .get("activity_id")
         .and_then(serde_json::Value::as_str)
         .and_then(|value| parse_hex32(value).ok());
     if activity_id != Some(submission.activity_id()) {
         return response(503, "component_invalid", Some(5));
     }
-    let receipt = match value
+    let receipt = match execution
         .get("receipt")
         .and_then(serde_json::Value::as_str)
         .and_then(|value| decode_hex(value, 1_048_576).ok())
@@ -1129,7 +1149,7 @@ fn program_simulation(
         Some(value) => value,
         None => return response(503, "component_invalid", Some(5)),
     };
-    let terminal_payload = match value
+    let terminal_payload = match execution
         .get("terminal_payload")
         .and_then(serde_json::Value::as_str)
         .and_then(|value| decode_hex(value, 1_048_576).ok())
@@ -1137,7 +1157,7 @@ fn program_simulation(
         Some(value) => value,
         None => return response(503, "component_invalid", Some(5)),
     };
-    let call_graph = match value
+    let call_graph = match execution
         .get("call_graph")
         .and_then(serde_json::Value::as_str)
         .and_then(|value| decode_hex(value, 1_048_576).ok())
@@ -1214,6 +1234,12 @@ fn program_simulation(
     else {
         return response(503, "program_simulation_unverified", Some(5));
     };
+    let mut boundary_material = b"LayerX/emulator/simulation-boundary/v1\0".to_vec();
+    boundary_material.extend_from_slice(&config.trusted_sequencer_key);
+    let expected_boundary: [u8; 32] = Sha256::digest(boundary_material).into();
+    if boundary_id != expected_boundary {
+        return response(503, "program_simulation_unverified", Some(5));
+    }
     let mut signed = b"LayerX/agent/program-simulation-evidence/v1\0".to_vec();
     signed.extend_from_slice(&boundary_id);
     signed.extend_from_slice(&submission.activity_id());
@@ -1364,7 +1390,8 @@ fn activity(
                 return response(409, "idempotency_conflict", None);
             }
             if state == "completed" {
-                let Ok(result) = decode_hex(&stored, 512 * 1024) else {
+                let limit = if program_call { MAX_REQUEST } else { 512 * 1024 };
+                let Ok(result) = decode_hex(&stored, limit) else {
                     return response(503, "persistence_unavailable", Some(5));
                 };
                 let Ok(result) = serde_json::from_slice::<serde_json::Value>(&result) else {
@@ -1450,11 +1477,19 @@ fn activity(
             )
         };
     }
-    let component: ComponentActivity = match serde_json::from_slice(&upstream.body) {
+    let component_document: serde_json::Value = match serde_json::from_slice(&upstream.body) {
         Ok(value) => value,
         Err(_) => return response(503, "component_invalid", Some(5)),
     };
-    if component.state != "completed"
+    let component_value = component_document
+        .get("result")
+        .unwrap_or(&component_document)
+        .clone();
+    let component: ComponentActivity = match serde_json::from_value(component_value) {
+        Ok(value) => value,
+        Err(_) => return response(503, "component_invalid", Some(5)),
+    };
+    if !matches!(component.state.as_str(), "completed" | "executed")
         || !component
             .activity_id
             .eq_ignore_ascii_case(&hex(&verified_submission.activity_id()))
@@ -1647,6 +1682,7 @@ fn read_route(
             }
         }
         ProductionRoute::ProgramReceiptByIdempotency(idempotency) => {
+            let idempotency = idempotency.to_ascii_lowercase();
             let scope = digest(&[
                 record.principal_digest.as_bytes(),
                 record.key_id.as_bytes(),
@@ -1663,7 +1699,7 @@ fn read_route(
                 Ok(Some(_)) | Ok(None) => return response(404, "program_receipt_not_found", None),
                 Err(_) => return response(503, "persistence_unavailable", Some(5)),
             };
-            if !operation.idempotency_key.eq_ignore_ascii_case(idempotency) {
+            if !operation.idempotency_key.eq_ignore_ascii_case(&idempotency) {
                 return response(404, "program_receipt_not_found", None);
             }
             if operation.state == "pending" {
@@ -1690,13 +1726,14 @@ fn read_route(
             if let Some(object) = value.as_object_mut() {
                 object.insert(
                     "idempotency_key".to_owned(),
-                    serde_json::Value::String(idempotency.to_owned()),
+                    serde_json::Value::String(idempotency),
                 );
             }
             json_response(200, serde_json::json!({"ok":true,"result":value,"trace":trace_id}))
         }
         ProductionRoute::ProgramActivity(activity_id) => {
-            let owner = match config.store.activity_owner(activity_id) {
+            let activity_id = activity_id.to_ascii_lowercase();
+            let owner = match config.store.activity_owner(&activity_id) {
                 Ok(Some(value)) => value,
                 Ok(None) => return response(404, "program_activity_not_found", None),
                 Err(_) => return response(503, "persistence_unavailable", Some(5)),
@@ -1709,12 +1746,12 @@ fn read_route(
             {
                 return response(404, "program_activity_not_found", None);
             }
-            let operation = match config.store.activity_operation(activity_id) {
+            let operation = match config.store.activity_operation(&activity_id) {
                 Ok(Some(value)) => value,
                 Ok(None) => return response(404, "program_activity_not_found", None),
                 Err(_) => return response(503, "persistence_unavailable", Some(5)),
             };
-            if !operation.activity_id.eq_ignore_ascii_case(activity_id)
+            if !operation.activity_id.eq_ignore_ascii_case(&activity_id)
                 || operation
                     .principal
                     .as_bytes()
@@ -1838,7 +1875,7 @@ fn route(config: &Config, request: &IncomingRequest) -> OutgoingResponse {
             false,
         );
         let registry = program_registry_ready(config);
-        let ready = false;
+        let ready = store && component && authority && registry;
         return json_response(
             if ready { 200 } else { 503 },
             serde_json::json!({

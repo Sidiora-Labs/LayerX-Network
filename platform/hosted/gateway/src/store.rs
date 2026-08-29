@@ -796,7 +796,7 @@ if previous ~= ARGV[6] then return {'audit_retry'} end
 if ARGV[8] == '1' then
  local owner = redis.call('GET', KEYS[5])
  if owner and owner ~= ARGV[9] then return {'conflict'} end
- redis.call('SET', KEYS[5], ARGV[9])
+ redis.call('SET', KEYS[5], ARGV[9], 'KEEPTTL')
 end
 redis.call('HSET', KEYS[1], 'state', ARGV[2], 'response', ARGV[3], 'receipt', ARGV[4]); if ARGV[2] ~= 'pending' then redis.call('SREM', KEYS[2], KEYS[1]) end
 redis.call('XADD', KEYS[3], '*', 'previous', ARGV[6], 'chain', ARGV[7], 'event', ARGV[5], 'outcome', ARGV[2]); redis.call('SET', KEYS[4], ARGV[7])

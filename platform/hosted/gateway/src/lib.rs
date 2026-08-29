@@ -906,7 +906,7 @@ impl std::error::Error for GatewayError {}
 
 #[cfg(test)]
 mod tests {
-    use super::IssuedKey;
+    use super::{production_route, IssuedKey, ProductionRoute};
 
     #[test]
     fn issued_key_debug_redacts_the_credential() {
@@ -915,5 +915,30 @@ mod tests {
         assert!(output.contains(key.id()));
         assert!(output.contains("[REDACTED]"));
         assert!(!output.contains(key.secret()));
+    }
+
+    #[test]
+    fn production_program_routes_are_exact_and_bounded() {
+        let identifier = "a".repeat(64);
+        assert!(matches!(
+            production_route("POST", "/v1/programs/call"),
+            Ok(ProductionRoute::ProgramCall)
+        ));
+        assert!(matches!(
+            production_route("POST", "/v1/programs/simulate"),
+            Ok(ProductionRoute::ProgramSimulation)
+        ));
+        let activity = format!("/v1/programs/activities/{identifier}");
+        assert!(matches!(
+            production_route("GET", &activity),
+            Ok(ProductionRoute::ProgramActivity(value)) if value == identifier
+        ));
+        let receipt = format!("/v1/programs/receipts/by-idempotency/{identifier}");
+        assert!(matches!(
+            production_route("GET", &receipt),
+            Ok(ProductionRoute::ProgramReceiptByIdempotency(value)) if value == identifier
+        ));
+        assert!(production_route("GET", "/v1/programs/activities/aa").is_err());
+        assert!(production_route("GET", "/v1/programs/activities/../state").is_err());
     }
 }

@@ -16,12 +16,16 @@ use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use sha2::{Digest as _, Sha256};
 use ed25519_dalek::{Signer as _, SigningKey};
+use layerx_proof::program::{
+    verify_program_execution, ProgramExecutionExpectation, VerifiedProgramExecution,
+};
 use layerx_types::intent::{
-    Amount, CallBudget, Calldata, CapabilityRequest, ProgramCall, ProgramId,
-    RequestedCapabilities,
+    Amount, CallBudget, Calldata, CapabilityRequest, ProgramCall, ProgramCallFailure,
+    ProgramCallOutcome, ProgramId, ProgramLegacyValue, RequestedCapabilities,
 };
 use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry};
 use layerx_wire::activity::decode_signed;
+use layerx_wire::hash::activity_id as derive_activity_id;
 
 const DEFAULT_PORT: u16 = 9402;
 const DEFAULT_NETWORK_ID: u32 = 402;
@@ -153,7 +157,28 @@ struct Emulator {
     signing_key: SigningKey,
     receipts: HashMap<String, String>,
     receipt_order: VecDeque<String>,
+    program_operations: HashMap<String, ProgramOperation>,
+    program_activity_operations: HashMap<String, String>,
     trace: u64,
+}
+
+struct ProgramOperation {
+    activity_id: String,
+    response: String,
+}
+
+struct DecodedProgramActivity {
+    signed: Vec<u8>,
+    call: ProgramCall,
+    activity_id: [u8; 32],
+    idempotency_key: [u8; 32],
+}
+
+struct OwnedCoreReceipt {
+    activity_id: [u8; 32],
+    receipt: Vec<u8>,
+    terminal_payload: Vec<u8>,
+    call_graph: Vec<u8>,
 }
 
 impl Drop for Emulator {
@@ -238,6 +263,7 @@ struct Request {
     method: String,
     path: String,
     content_type: String,
+    idempotency_key: Option<String>,
     body: Vec<u8>,
 }
 
@@ -406,6 +432,7 @@ fn parse_request(stream: &mut TcpStream) -> Result<Request, String> {
     let mut content_type = String::new();
     let mut has_content_type = false;
     let mut has_host = false;
+    let mut idempotency_key = None;
     for line in lines.filter(|line| !line.is_empty()) {
         let (name, value) = line
             .split_once(':')
@@ -441,6 +468,14 @@ fn parse_request(stream: &mut TcpStream) -> Result<Request, String> {
                 return Err("invalid host header".into());
             }
             has_host = true;
+        } else if name.eq_ignore_ascii_case("idempotency-key") {
+            if idempotency_key.is_some()
+                || value.len() != 64
+                || !value.bytes().all(|byte| byte.is_ascii_hexdigit())
+            {
+                return Err("invalid idempotency key".into());
+            }
+            idempotency_key = Some(value.to_ascii_lowercase());
         } else if name.eq_ignore_ascii_case("transfer-encoding") {
             return Err("transfer encoding is not supported".into());
         }
@@ -475,6 +510,7 @@ fn parse_request(stream: &mut TcpStream) -> Result<Request, String> {
         method,
         path,
         content_type,
+        idempotency_key,
         body: bytes[header_end..header_end + content_length].to_vec(),
     })
 }
@@ -482,10 +518,13 @@ fn parse_request(stream: &mut TcpStream) -> Result<Request, String> {
 fn write_response(stream: &mut TcpStream, response: &Response) -> std::io::Result<()> {
     let reason = match response.status {
         200 => "OK",
+        202 => "Accepted",
         400 => "Bad Request",
         404 => "Not Found",
         405 => "Method Not Allowed",
+        409 => "Conflict",
         413 => "Content Too Large",
+        415 => "Unsupported Media Type",
         503 => "Service Unavailable",
         _ => "Error",
     };
@@ -536,28 +575,18 @@ fn submit(emulator: &mut Emulator, request: &Request, trace: u64) -> Response {
     if code != 0 {
         return core_response(trace, code);
     }
-    if receipt.bytes.is_null()
-        || receipt.length == 0
-        || receipt.length > MAX_RECEIPT_BYTES
-    {
-        return refusal(
-            trace,
-            503,
-            "core_invalid_output",
-            "the LayerX core returned an invalid receipt buffer",
-        );
-    }
-    let encoded = unsafe { slice::from_raw_parts(receipt.bytes, receipt.length) };
-    if receipt.terminal_payload_length > MAX_RECEIPT_BYTES
-        || (receipt.terminal_payload_length != 0 && receipt.terminal_payload.is_null())
-    { return refusal(trace, 503, "core_invalid_output", "terminal payload availability is invalid"); }
-    let terminal_payload = if receipt.terminal_payload_length == 0 { &[] } else { unsafe { slice::from_raw_parts(receipt.terminal_payload, receipt.terminal_payload_length) } };
-    if receipt.call_graph_length > MAX_RECEIPT_BYTES || (receipt.call_graph_length != 0 && receipt.call_graph.is_null()) { return refusal(trace,503,"core_invalid_output","call graph availability is invalid"); }
-    let _call_graph = if receipt.call_graph_length == 0 { &[] } else { unsafe { slice::from_raw_parts(receipt.call_graph,receipt.call_graph_length) } };
-    let receipt_hex = hex_encode(encoded);
-    let activity_id = hex_encode(&receipt.activity_id);
+    let batch_id = receipt.batch_id;
+    let global_sequence = receipt.global_sequence;
+    let result_code = receipt.result_code;
+    let state_root = receipt.state_root;
+    let material = match take_core_receipt(&mut receipt) {
+        Ok(material) => material,
+        Err(error) => return refusal(trace, 503, "core_invalid_output", &error),
+    };
+    let receipt_hex = hex_encode(&material.receipt);
+    let activity_id = hex_encode(&material.activity_id);
     remember_receipt(emulator, activity_id.clone(), receipt_hex.clone());
-    success(trace, &format!("{{\"activity_id\":\"{activity_id}\",\"batch_id\":\"{}\",\"global_sequence\":{},\"result_code\":{},\"state_root\":\"{}\",\"receipt\":\"{receipt_hex}\"}}", hex_encode(&receipt.batch_id), receipt.global_sequence, receipt.result_code, hex_encode(&receipt.state_root)))
+    success(trace, &format!("{{\"activity_id\":\"{activity_id}\",\"batch_id\":\"{}\",\"global_sequence\":{global_sequence},\"result_code\":{result_code},\"state_root\":\"{}\",\"receipt\":\"{receipt_hex}\"}}", hex_encode(&batch_id), hex_encode(&state_root)))
 }
 
 fn decode_activity(request: &Request) -> Result<Vec<u8>, String> {
@@ -571,76 +600,293 @@ fn decode_activity(request: &Request) -> Result<Vec<u8>, String> {
     }
 }
 
-fn decode_program_activity(request: &Request) -> Result<Vec<u8>, String> {
-    let media_type = request.content_type.split(';').next().unwrap_or_default().trim();
-    if media_type == "application/octet-stream" {
-        return Ok(request.body.clone());
-    }
-    if media_type != "application/json" {
-        return Err("program call requires application/json".to_owned());
-    }
-    let body = decode_json::<ProgramCallBody>(request)?;
-    let program_bytes = hex_decode(&body.program_id)?;
-    let program_id: [u8; 32] = program_bytes
-        .try_into()
-        .map_err(|_| "program id must be 32-byte hexadecimal".to_owned())?;
-    let program = ProgramId::new(program_id).map_err(|_| "program id is reserved".to_owned())?;
-    let calldata_bytes = hex_decode(&body.calldata)?;
-    let calldata = Calldata::new(&calldata_bytes).map_err(|_| "program calldata exceeds its bound".to_owned())?;
-    let fuel = body.budget.fuel.parse::<u64>().map_err(|_| "program fuel budget is invalid".to_owned())?;
-    if fuel.to_string() != body.budget.fuel {
-        return Err("program fuel budget is not canonical".to_owned());
-    }
-    let fee_limit = body.budget.fee_limit.parse::<u128>().map_err(|_| "program fee limit is invalid".to_owned())?;
-    if fee_limit.to_string() != body.budget.fee_limit {
-        return Err("program fee limit is not canonical".to_owned());
-    }
-    let budget = CallBudget::new(fuel, Amount::from_u128(fee_limit))
-        .map_err(|_| "program budget is invalid".to_owned())?;
-    let requested = body.capabilities.iter().map(|capability| match capability.as_str() {
-        "storage_read" => Ok(CapabilityRequest::StorageRead),
-        "storage_write" => Ok(CapabilityRequest::StorageWrite),
-        "transfer" => Ok(CapabilityRequest::Transfer),
-        "emit_event" => Ok(CapabilityRequest::EmitEvent),
-        "compose" => Ok(CapabilityRequest::Compose),
-        _ => Err("program capability is invalid".to_owned()),
-    }).collect::<Result<Vec<_>, _>>()?;
-    let capabilities = RequestedCapabilities::new(&requested)
-        .map_err(|_| "program capabilities are not canonical".to_owned())?;
-    let call = ProgramCall::new(program, calldata, budget, capabilities);
-    let signed = hex_decode(&body.signed_activity)?;
+fn programs_registry() -> Result<(ActivityType, ModuleRegistry), String> {
     let call_type = ActivityType::new(ModuleId::Programs, 3)
         .map_err(|_| "Programs CALL activity type is unavailable".to_owned())?;
     let registration = ModuleRegistration::new(ModuleId::Programs, &[call_type])
         .map_err(|_| "Programs module registration is unavailable".to_owned())?;
     let registry = ModuleRegistry::new(&[registration])
         .map_err(|_| "Programs module registry is unavailable".to_owned())?;
-    let activity = decode_signed(&signed, &registry)
-        .map_err(|_| "signed program activity is invalid".to_owned())?;
-    if activity.activity_type() != call_type || activity.payload() != call.canonical_payload() {
-        return Err("signed program activity does not match the typed call".to_owned());
-    }
-    Ok(signed)
+    Ok((call_type, registry))
 }
 
-/// Runs one Programs CALL activity through the same real transition function as
-/// every other activity. The emulator holds no mock call path: a call submitted
-/// here and the identical canonical activity submitted to the network execute
-/// the exact same transition, so a local call and a network call differ only in
-/// the state they run against. The receipt is stored and the typed outcome is
-/// derived from the receipt's own result code, never invented beside it.
-fn program_call(emulator: &mut Emulator, request: &Request, trace: u64) -> Response {
-    let activity = match decode_program_activity(request) {
-        Ok(activity) if !activity.is_empty() => activity,
-        Ok(_) => {
-            return refusal(
-                trace,
-                400,
-                "invalid_argument",
-                "program call activity must not be empty",
-            )
+fn decode_program_activity(request: &Request) -> Result<DecodedProgramActivity, String> {
+    let media_type = request.content_type.split(';').next().unwrap_or_default().trim();
+    let (signed, expected_call) = if media_type == "application/octet-stream" {
+        (request.body.clone(), None)
+    } else if media_type == "application/json" {
+        let body = decode_json::<ProgramCallBody>(request)?;
+        let program_bytes = hex_decode(&body.program_id)?;
+        let program_id: [u8; 32] = program_bytes
+            .try_into()
+            .map_err(|_| "program id must be 32-byte hexadecimal".to_owned())?;
+        let program = ProgramId::new(program_id);
+        if program.is_zero() {
+            return Err("program id is reserved".to_owned());
         }
+        let calldata_bytes = hex_decode(&body.calldata)?;
+        let calldata = Calldata::new(&calldata_bytes)
+            .map_err(|_| "program calldata exceeds its bound".to_owned())?;
+        let fuel = body
+            .budget
+            .fuel
+            .parse::<u64>()
+            .map_err(|_| "program fuel budget is invalid".to_owned())?;
+        if fuel.to_string() != body.budget.fuel {
+            return Err("program fuel budget is not canonical".to_owned());
+        }
+        let fee_limit = body
+            .budget
+            .fee_limit
+            .parse::<u128>()
+            .map_err(|_| "program fee limit is invalid".to_owned())?;
+        if fee_limit.to_string() != body.budget.fee_limit {
+            return Err("program fee limit is not canonical".to_owned());
+        }
+        let budget = CallBudget::new(fuel, Amount::from_u128(fee_limit))
+            .map_err(|_| "program budget is invalid".to_owned())?;
+        let requested = body
+            .capabilities
+            .iter()
+            .map(|capability| match capability.as_str() {
+                "storage_read" => Ok(CapabilityRequest::StorageRead),
+                "storage_write" => Ok(CapabilityRequest::StorageWrite),
+                "transfer" => Ok(CapabilityRequest::Transfer),
+                "emit_event" => Ok(CapabilityRequest::EmitEvent),
+                "compose" => Ok(CapabilityRequest::Compose),
+                _ => Err("program capability is invalid".to_owned()),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let capabilities = RequestedCapabilities::new(&requested)
+            .map_err(|_| "program capabilities are not canonical".to_owned())?;
+        (
+            hex_decode(&body.signed_activity)?,
+            Some(ProgramCall::new(program, calldata, budget, capabilities)),
+        )
+    } else {
+        return Err("program call content type is not supported".to_owned());
+    };
+    if signed.is_empty() {
+        return Err("program call activity must not be empty".to_owned());
+    }
+    let (call_type, registry) = programs_registry()?;
+    let activity = decode_signed(&signed, &registry)
+        .map_err(|_| "signed program activity is invalid".to_owned())?;
+    if activity.activity_type() != call_type {
+        return Err("signed activity is not a Programs CALL".to_owned());
+    }
+    let call = ProgramCall::from_canonical_payload(activity.payload())
+        .map_err(|_| "signed program payload is not canonical".to_owned())?;
+    if expected_call.as_ref().is_some_and(|expected| expected != &call) {
+        return Err("signed program activity does not match the typed call".to_owned());
+    }
+    let activity_id = derive_activity_id(&activity)
+        .map_err(|_| "signed program activity identity is invalid".to_owned())?;
+    Ok(DecodedProgramActivity {
+        signed,
+        call,
+        activity_id,
+        idempotency_key: activity.idempotency_key(),
+    })
+}
+
+fn take_core_receipt(receipt: &mut CoreReceipt) -> Result<OwnedCoreReceipt, String> {
+    let result = if receipt.bytes.is_null()
+        || receipt.length == 0
+        || receipt.length > MAX_RECEIPT_BYTES
+        || receipt.terminal_payload_length > MAX_RECEIPT_BYTES
+        || (receipt.terminal_payload_length != 0 && receipt.terminal_payload.is_null())
+        || receipt.call_graph_length > MAX_RECEIPT_BYTES
+        || (receipt.call_graph_length != 0 && receipt.call_graph.is_null())
+    {
+        Err("the LayerX core returned invalid Programs receipt material".to_owned())
+    } else {
+        let receipt_bytes = unsafe { slice::from_raw_parts(receipt.bytes, receipt.length) }.to_vec();
+        let terminal_payload = if receipt.terminal_payload_length == 0 {
+            Vec::new()
+        } else {
+            unsafe {
+                slice::from_raw_parts(receipt.terminal_payload, receipt.terminal_payload_length)
+            }
+            .to_vec()
+        };
+        let call_graph = if receipt.call_graph_length == 0 {
+            Vec::new()
+        } else {
+            unsafe { slice::from_raw_parts(receipt.call_graph, receipt.call_graph_length) }.to_vec()
+        };
+        Ok(OwnedCoreReceipt {
+            activity_id: receipt.activity_id,
+            receipt: receipt_bytes,
+            terminal_payload,
+            call_graph,
+        })
+    };
+    unsafe { platform_emulator_receipt_release(receipt) };
+    result
+}
+
+fn inspect_state(emulator: &Emulator) -> Result<CoreState, i32> {
+    let mut state = CoreState {
+        state_root: [0; 32],
+        next_sequence: 0,
+        batch_number: 0,
+        timestamp_ms: 0,
+        cell_count: 0,
+        account_count: 0,
+    };
+    let code = unsafe { platform_emulator_inspect(emulator.core, &raw mut state) };
+    if code == 0 { Ok(state) } else { Err(code) }
+}
+
+fn program_head(emulator: &mut Emulator, program_id: [u8; 32]) -> Result<CoreProgram, i32> {
+    let mut program = CoreProgram {
+        program_id: [0; 32],
+        code_hash: [0; 32],
+        version: 0,
+        abi_version: 0,
+        interface_bytes: ptr::null(),
+        interface_length: 0,
+        has_interface: 0,
+        state_root: [0; 32],
+        observed_sequence: 0,
+    };
+    let code = unsafe {
+        platform_emulator_program_read(emulator.core, program_id.as_ptr(), &raw mut program)
+    };
+    if code == 0 { Ok(program) } else { Err(code) }
+}
+
+fn program_failure_json(failure: ProgramCallFailure) -> serde_json::Value {
+    match failure {
+        ProgramCallFailure::UnknownProgram => serde_json::json!({"kind":"unknown_program"}),
+        ProgramCallFailure::Reentrancy => serde_json::json!({"kind":"reentrancy"}),
+        ProgramCallFailure::DepthExceeded { limit, attempted } => {
+            serde_json::json!({"kind":"depth_exceeded","limit":limit,"attempted":attempted})
+        }
+        ProgramCallFailure::FanoutExceeded { limit, attempted } => {
+            serde_json::json!({"kind":"fanout_exceeded","limit":limit,"attempted":attempted})
+        }
+        ProgramCallFailure::GuestRefused { code } => {
+            serde_json::json!({"kind":"guest_refused","code":code})
+        }
+        ProgramCallFailure::Authority => serde_json::json!({"kind":"authority"}),
+        ProgramCallFailure::Resource => serde_json::json!({"kind":"resource"}),
+        ProgramCallFailure::Response => serde_json::json!({"kind":"response"}),
+        ProgramCallFailure::Fault => serde_json::json!({"kind":"fault"}),
+    }
+}
+
+fn program_outcome_json(outcome: &ProgramCallOutcome) -> serde_json::Value {
+    match outcome {
+        ProgramCallOutcome::Completed(response) => serde_json::json!({
+            "kind":"completed",
+            "code":response.code(),
+            "response":hex_encode(response.body()),
+        }),
+        ProgramCallOutcome::LegacyCompleted(response) => serde_json::json!({
+            "kind":"legacy_completed",
+            "code":response.code(),
+            "values":response.values().iter().map(|value| match value {
+                ProgramLegacyValue::I32(value) => serde_json::json!({"type":"i32","value":value}),
+                ProgramLegacyValue::I64(value) => serde_json::json!({"type":"i64","value":value.to_string()}),
+            }).collect::<Vec<_>>(),
+        }),
+        ProgramCallOutcome::Refused(failure) => serde_json::json!({
+            "kind":"refused",
+            "failure":program_failure_json(*failure),
+        }),
+    }
+}
+
+fn verified_program_document(
+    verified: &VerifiedProgramExecution,
+    terminal_payload: &[u8],
+    call_graph: &[u8],
+    program_id: [u8; 32],
+    guest_abi_version: u16,
+    state: &str,
+    idempotency_key: Option<&str>,
+) -> Result<serde_json::Value, String> {
+    let protocol = verified
+        .receipt()
+        .receipt()
+        .protocol()
+        .ok_or_else(|| "verified Programs receipt has no protocol body".to_owned())?;
+    let receipt_digest = verified
+        .receipt()
+        .evidence()
+        .receipt_digest()
+        .ok_or_else(|| "verified Programs receipt has no digest".to_owned())?;
+    let mut document = serde_json::json!({
+        "state":state,
+        "activity_id":hex_encode(&protocol.activity_id()),
+        "program_id":hex_encode(&program_id),
+        "guest_abi_version":guest_abi_version,
+        "module_version":protocol.module_version(),
+        "batch_id":hex_encode(&protocol.batch_id()),
+        "global_sequence":protocol.global_sequence(),
+        "result_code":verified.result_code(),
+        "state_root":hex_encode(&protocol.resulting_state_root()),
+        "receipt":hex_encode(verified.receipt().canonical_bytes()),
+        "receipt_digest":hex_encode(&receipt_digest),
+        "terminal_payload":hex_encode(terminal_payload),
+        "call_graph":hex_encode(call_graph),
+        "usage":{
+            "cpu_fuel":verified.cpu_fuel(),
+            "memory_bytes":verified.memory_bytes(),
+            "storage_read_bytes":verified.storage_read_bytes(),
+            "storage_write_bytes":verified.storage_write_bytes(),
+            "output_values":verified.output_values(),
+            "output_bytes":verified.output_bytes(),
+            "fee_units":verified.fee_units().to_string(),
+        },
+        "outcome":program_outcome_json(verified.outcome()),
+        "verification":"receipt-terminal-and-call-graph-verified",
+    });
+    if let (Some(key), Some(object)) = (idempotency_key, document.as_object_mut()) {
+        object.insert(
+            "idempotency_key".to_owned(),
+            serde_json::Value::String(key.to_owned()),
+        );
+    }
+    Ok(document)
+}
+
+fn program_call(emulator: &mut Emulator, request: &Request, trace: u64) -> Response {
+    let decoded = match decode_program_activity(request) {
+        Ok(activity) => activity,
         Err(error) => return refusal(trace, 400, "invalid_argument", &error),
+    };
+    let protocol_idempotency = hex_encode(&decoded.idempotency_key);
+    if request.idempotency_key.as_deref() != Some(protocol_idempotency.as_str()) {
+        return refusal(
+            trace,
+            409,
+            "protocol_idempotency_mismatch",
+            "Idempotency-Key must equal the signed activity idempotency key",
+        );
+    }
+    let activity_id = hex_encode(&decoded.activity_id);
+    if let Some(existing) = emulator.program_operations.get(&protocol_idempotency) {
+        if existing.activity_id == activity_id {
+            return success(trace, &existing.response);
+        }
+        return refusal(
+            trace,
+            409,
+            "idempotency_conflict",
+            "the idempotency key is already bound to a different activity",
+        );
+    }
+    let program_id = decoded.call.callee().bytes();
+    let head = match program_head(emulator, program_id) {
+        Ok(head) => head,
+        Err(code) => return core_response(trace, code),
+    };
+    let before = match inspect_state(emulator) {
+        Ok(state) => state,
+        Err(code) => return core_response(trace, code),
     };
     let mut receipt = CoreReceipt {
         activity_id: [0; 32],
@@ -663,50 +909,66 @@ fn program_call(emulator: &mut Emulator, request: &Request, trace: u64) -> Respo
     let code = unsafe {
         platform_emulator_execute(
             emulator.core,
-            activity.as_ptr(),
-            activity.len(),
+            decoded.signed.as_ptr(),
+            decoded.signed.len(),
             &raw mut receipt,
         )
     };
     if code != 0 {
         return core_response(trace, code);
     }
-    if receipt.bytes.is_null()
-        || receipt.length == 0
-        || receipt.length > MAX_RECEIPT_BYTES
-    {
-        return refusal(
-            trace,
-            503,
-            "core_invalid_output",
-            "the LayerX core returned an invalid receipt buffer",
-        );
-    }
-    let encoded = unsafe { slice::from_raw_parts(receipt.bytes, receipt.length) };
-    if receipt.terminal_payload_length > MAX_RECEIPT_BYTES
-        || (receipt.terminal_payload_length != 0 && receipt.terminal_payload.is_null())
-    { return refusal(trace, 503, "core_invalid_output", "terminal payload availability is invalid"); }
-    let terminal_payload = if receipt.terminal_payload_length == 0 { &[] } else { unsafe { slice::from_raw_parts(receipt.terminal_payload, receipt.terminal_payload_length) } };
-    let receipt_hex = hex_encode(encoded);
-    if receipt.call_graph_length > MAX_RECEIPT_BYTES || (receipt.call_graph_length != 0 && receipt.call_graph.is_null()) { return refusal(trace,503,"core_invalid_output","call graph availability is invalid"); }
-    let call_graph = if receipt.call_graph_length == 0 { &[] } else { unsafe { slice::from_raw_parts(receipt.call_graph,receipt.call_graph_length) } };
-    let receipt_digest: [u8; 32] = Sha256::digest(encoded).into();
-    let metered_cost = (u128::from(receipt.metered_cost_hi) << 64)
-        | u128::from(receipt.metered_cost_lo);
-    let activity_id = hex_encode(&receipt.activity_id);
-    remember_receipt(emulator, activity_id.clone(), receipt_hex.clone());
-    let outcome = if receipt.result_code >= 0 {
-        format!(
-            "{{\"status\":\"completed\",\"code\":{}}}",
-            receipt.result_code
-        )
-    } else {
-        format!(
-            "{{\"status\":\"refused\",\"failure\":{{\"result_code\":{}}}}}",
-            receipt.result_code
-        )
+    let material = match take_core_receipt(&mut receipt) {
+        Ok(material) => material,
+        Err(error) => return refusal(trace, 503, "core_invalid_output", &error),
     };
-    success(trace, &format!("{{\"activity_kind\":\"program-call\",\"transition\":\"real\",\"committed\":true,\"activity_id\":\"{activity_id}\",\"batch_id\":\"{}\",\"global_sequence\":{},\"result_code\":{},\"metered_cost\":\"{metered_cost}\",\"previous_state_root\":\"{}\",\"state_root\":\"{}\",\"asset\":\"{}\",\"sequencer_public_key\":\"{}\",\"receipt\":\"{receipt_hex}\",\"receipt_digest\":\"{}\",\"terminal_payload\":\"{}\",\"call_graph\":\"{}\",\"outcome\":{outcome}}}", hex_encode(&receipt.batch_id), receipt.global_sequence, receipt.result_code, hex_encode(&receipt.previous_state_root), hex_encode(&receipt.state_root), hex_encode(&receipt.asset), hex_encode(&receipt.sequencer_public_key), hex_encode(&receipt_digest), hex_encode(terminal_payload),hex_encode(call_graph)))
+    let verified = match verify_program_execution(
+        &material.receipt,
+        &material.terminal_payload,
+        &material.call_graph,
+        ProgramExecutionExpectation {
+            sequencer_public_key: emulator.signing_key.verifying_key().to_bytes(),
+            previous_state_root: before.state_root,
+            activity_id: decoded.activity_id,
+            program_id,
+            guest_abi_version: head.abi_version,
+        },
+    ) {
+        Ok(verified) => verified,
+        Err(_) => {
+            return refusal(
+                trace,
+                503,
+                "program_receipt_verification_failed",
+                "the core result did not verify against the submitted call and trusted state",
+            )
+        }
+    };
+    let document = match verified_program_document(
+        &verified,
+        &material.terminal_payload,
+        &material.call_graph,
+        program_id,
+        head.abi_version,
+        "executed",
+        Some(&protocol_idempotency),
+    ) {
+        Ok(document) => document,
+        Err(error) => return refusal(trace, 503, "core_invalid_output", &error),
+    };
+    let response = document.to_string();
+    let receipt_hex = hex_encode(&material.receipt);
+    remember_receipt(emulator, activity_id.clone(), receipt_hex);
+    emulator
+        .program_activity_operations
+        .insert(activity_id.clone(), protocol_idempotency.clone());
+    emulator.program_operations.insert(
+        protocol_idempotency,
+        ProgramOperation {
+            activity_id,
+            response: response.clone(),
+        },
+    );
+    success(trace, &response)
 }
 
 fn inspect(emulator: &Emulator, trace: u64) -> Response {
@@ -926,6 +1188,8 @@ fn import_snapshot(emulator: &mut Emulator, body: &[u8], trace: u64) -> Response
     }
     emulator.receipts.clear();
     emulator.receipt_order.clear();
+    emulator.program_operations.clear();
+    emulator.program_activity_operations.clear();
     success(trace, "{\"imported\":true}")
 }
 
@@ -949,6 +1213,36 @@ fn route(emulator: &mut Emulator, request: &Request) -> Response {
         ("POST", "/v1/activities") => submit(emulator, request, trace),
         ("POST", "/v1/programs/call") => program_call(emulator, request, trace),
         ("POST", "/v1/programs/simulate") => program_simulate(emulator, request, trace),
+        ("GET", path) if path.starts_with("/v1/programs/receipts/by-idempotency/") => {
+            let idempotency = &path[37..];
+            if idempotency.len() != 64
+                || !idempotency.bytes().all(|byte| byte.is_ascii_hexdigit())
+            {
+                return refusal(trace, 400, "invalid_argument", "idempotency key must be 32-byte hex");
+            }
+            let canonical = idempotency.to_ascii_lowercase();
+            match emulator.program_operations.get(&canonical) {
+                Some(operation) => success(trace, &operation.response),
+                None => refusal(trace, 404, "program_receipt_not_found", "program receipt is not present in this emulator process"),
+            }
+        }
+        ("GET", path) if path.starts_with("/v1/programs/activities/") => {
+            let activity_id = &path[24..];
+            if activity_id.len() != 64
+                || !activity_id.bytes().all(|byte| byte.is_ascii_hexdigit())
+            {
+                return refusal(trace, 400, "invalid_argument", "activity id must be 32-byte hex");
+            }
+            let canonical = activity_id.to_ascii_lowercase();
+            let operation = emulator
+                .program_activity_operations
+                .get(&canonical)
+                .and_then(|idempotency| emulator.program_operations.get(idempotency));
+            match operation {
+                Some(operation) => success(trace, &operation.response),
+                None => refusal(trace, 404, "program_activity_not_found", "program activity is not present in this emulator process"),
+            }
+        }
         ("GET", "/v1/state") => inspect(emulator, trace),
         ("GET", "/v1/programs/registry") => program_registry_list(emulator, trace),
         ("GET", path) if path.starts_with("/v1/programs/registry/") => {
@@ -1069,15 +1363,19 @@ fn program_registry_read(emulator: &mut Emulator, path: &str, trace: u64) -> Res
 }
 
 fn program_simulate(emulator: &mut Emulator, request: &Request, trace: u64) -> Response {
-    let activity = match decode_program_activity(request) {
-        Ok(activity) if !activity.is_empty() => activity,
-        Ok(_) => return refusal(trace, 400, "invalid_argument", "program simulation activity must not be empty"),
+    let decoded = match decode_program_activity(request) {
+        Ok(activity) => activity,
         Err(error) => return refusal(trace, 400, "invalid_argument", &error),
     };
-    let mut live = CoreState { state_root: [0; 32], next_sequence: 0,
-        batch_number: 0, timestamp_ms: 0, cell_count: 0, account_count: 0 };
-    let inspect_code = unsafe { platform_emulator_inspect(emulator.core, &raw mut live) };
-    if inspect_code != 0 { return core_response(trace, inspect_code); }
+    let program_id = decoded.call.callee().bytes();
+    let head = match program_head(emulator, program_id) {
+        Ok(head) => head,
+        Err(code) => return core_response(trace, code),
+    };
+    let live = match inspect_state(emulator) {
+        Ok(state) => state,
+        Err(code) => return core_response(trace, code),
+    };
     let mut receipt = CoreReceipt {
         activity_id: [0; 32], batch_id: [0; 32], state_root: [0; 32],
         previous_state_root: [0; 32], asset: [0; 32], sequencer_public_key: [0; 32],
@@ -1087,41 +1385,93 @@ fn program_simulate(emulator: &mut Emulator, request: &Request, trace: u64) -> R
         call_graph: ptr::null(), call_graph_length: 0,
         isolated_owner: ptr::null_mut(),
     };
-    let code = unsafe { platform_emulator_simulate(emulator.core, activity.as_ptr(), activity.len(), &raw mut receipt) };
-    if code != 0 { return core_response(trace, code); }
-    if receipt.bytes.is_null() || receipt.length == 0 || receipt.length > MAX_RECEIPT_BYTES {
-        unsafe { platform_emulator_receipt_release(&raw mut receipt); }
-        return refusal(trace, 503, "core_invalid_output", "the LayerX core returned an invalid simulation receipt buffer");
+    let code = unsafe {
+        platform_emulator_simulate(
+            emulator.core,
+            decoded.signed.as_ptr(),
+            decoded.signed.len(),
+            &raw mut receipt,
+        )
+    };
+    if code != 0 {
+        return core_response(trace, code);
     }
-    let encoded = unsafe { slice::from_raw_parts(receipt.bytes, receipt.length) };
-    if receipt.terminal_payload_length > MAX_RECEIPT_BYTES
-        || (receipt.terminal_payload_length != 0 && receipt.terminal_payload.is_null())
-    { unsafe { platform_emulator_receipt_release(&raw mut receipt); } return refusal(trace, 503, "core_invalid_output", "terminal payload availability is invalid"); }
-    let terminal_payload = if receipt.terminal_payload_length == 0 { &[] } else { unsafe { slice::from_raw_parts(receipt.terminal_payload, receipt.terminal_payload_length) } };
-    if receipt.call_graph_length > MAX_RECEIPT_BYTES || (receipt.call_graph_length != 0 && receipt.call_graph.is_null()) { unsafe { platform_emulator_receipt_release(&raw mut receipt); } return refusal(trace,503,"core_invalid_output","call graph availability is invalid"); }
-    let call_graph = if receipt.call_graph_length == 0 { &[] } else { unsafe { slice::from_raw_parts(receipt.call_graph,receipt.call_graph_length) } };
-    let receipt_digest: [u8; 32] = Sha256::digest(encoded).into();
-    let metered_cost = (u128::from(receipt.metered_cost_hi) << 64)
-        | u128::from(receipt.metered_cost_lo);
-    let outcome = if receipt.result_code >= 0 {
-        format!("{{\"status\":\"completed\",\"code\":{}}}", receipt.result_code)
-    } else {
-        format!("{{\"status\":\"refused\",\"failure\":{{\"result_code\":{}}}}}", receipt.result_code)
+    let material = match take_core_receipt(&mut receipt) {
+        Ok(material) => material,
+        Err(error) => return refusal(trace, 503, "core_invalid_output", &error),
+    };
+    let verified = match verify_program_execution(
+        &material.receipt,
+        &material.terminal_payload,
+        &material.call_graph,
+        ProgramExecutionExpectation {
+            sequencer_public_key: emulator.signing_key.verifying_key().to_bytes(),
+            previous_state_root: head.state_root,
+            activity_id: decoded.activity_id,
+            program_id,
+            guest_abi_version: head.abi_version,
+        },
+    ) {
+        Ok(verified) => verified,
+        Err(_) => {
+            return refusal(
+                trace,
+                503,
+                "program_simulation_unverified",
+                "the simulated result did not verify against the discovered program head",
+            )
+        }
+    };
+    let execution = match verified_program_document(
+        &verified,
+        &material.terminal_payload,
+        &material.call_graph,
+        program_id,
+        head.abi_version,
+        "simulated",
+        None,
+    ) {
+        Ok(document) => document,
+        Err(error) => return refusal(trace, 503, "core_invalid_output", &error),
     };
     let signing = &emulator.signing_key;
     let mut boundary_material = b"LayerX/emulator/simulation-boundary/v1\0".to_vec();
     boundary_material.extend_from_slice(&signing.verifying_key().to_bytes());
     let boundary_id: [u8; 32] = Sha256::digest(&boundary_material).into();
-    let observed_sequence = receipt.global_sequence.saturating_sub(1);
     let mut evidence = b"LayerX/agent/program-simulation-evidence/v1\0".to_vec();
-    evidence.extend_from_slice(&boundary_id); evidence.extend_from_slice(&receipt.activity_id);
-    evidence.extend_from_slice(&receipt.previous_state_root); evidence.extend_from_slice(&receipt.state_root);
-    evidence.extend_from_slice(&observed_sequence.to_be_bytes()); evidence.extend_from_slice(&live.timestamp_ms.to_be_bytes()); evidence.push(0);
+    evidence.extend_from_slice(&boundary_id);
+    evidence.extend_from_slice(&decoded.activity_id);
+    evidence.extend_from_slice(&head.state_root);
+    let hypothetical_state_root = verified
+        .receipt()
+        .receipt()
+        .protocol()
+        .map(|protocol| protocol.resulting_state_root());
+    let Some(hypothetical_state_root) = hypothetical_state_root else {
+        return refusal(trace, 503, "core_invalid_output", "verified simulation has no protocol state root");
+    };
+    evidence.extend_from_slice(&hypothetical_state_root);
+    evidence.extend_from_slice(&head.observed_sequence.to_be_bytes());
+    evidence.extend_from_slice(&live.timestamp_ms.to_be_bytes());
+    evidence.push(0);
     let evidence_digest: [u8; 32] = Sha256::digest(&evidence).into();
     let evidence_signature = signing.sign(&evidence_digest).to_bytes();
-    let response = success(trace, &format!("{{\"activity_kind\":\"program-call\",\"transition\":\"isolated-candidate\",\"committed\":false,\"activity_id\":\"{}\",\"batch_id\":\"{}\",\"global_sequence\":{},\"result_code\":{},\"metered_cost\":\"{metered_cost}\",\"previous_state_root\":\"{}\",\"state_root\":\"{}\",\"asset\":\"{}\",\"sequencer_public_key\":\"{}\",\"receipt\":\"{}\",\"receipt_digest\":\"{}\",\"terminal_payload\":\"{}\",\"call_graph\":\"{}\",\"simulation_evidence\":{{\"boundary_id\":\"{}\",\"activity_id\":\"{}\",\"previous_state_root\":\"{}\",\"hypothetical_state_root\":\"{}\",\"observed_sequence\":{},\"observed_at\":{},\"committed\":false,\"public_key\":\"{}\",\"signature\":\"{}\"}},\"outcome\":{outcome}}}", hex_encode(&receipt.activity_id), hex_encode(&receipt.batch_id), receipt.global_sequence, receipt.result_code, hex_encode(&receipt.previous_state_root), hex_encode(&receipt.state_root), hex_encode(&receipt.asset), hex_encode(&receipt.sequencer_public_key), hex_encode(encoded), hex_encode(&receipt_digest), hex_encode(terminal_payload),hex_encode(call_graph), hex_encode(&boundary_id), hex_encode(&receipt.activity_id), hex_encode(&receipt.previous_state_root), hex_encode(&receipt.state_root), observed_sequence, live.timestamp_ms, hex_encode(&signing.verifying_key().to_bytes()), hex_encode(&evidence_signature)));
-    unsafe { platform_emulator_receipt_release(&raw mut receipt); }
-    response
+    let response = serde_json::json!({
+        "committed":false,
+        "execution":execution,
+        "simulation_evidence":{
+            "boundary_id":hex_encode(&boundary_id),
+            "activity_id":hex_encode(&decoded.activity_id),
+            "previous_state_root":hex_encode(&head.state_root),
+            "hypothetical_state_root":hex_encode(&hypothetical_state_root),
+            "observed_sequence":head.observed_sequence,
+            "observed_at":live.timestamp_ms,
+            "committed":false,
+            "public_key":hex_encode(&signing.verifying_key().to_bytes()),
+            "signature":hex_encode(&evidence_signature),
+        },
+    });
+    success(trace, &response.to_string())
 }
 
 fn parse_amount(value: &str) -> Result<(u64, u64), String> {
@@ -1213,6 +1563,8 @@ fn platform_emulator(config: Config) -> Result<(), String> {
         signing_key: SigningKey::from_bytes(&seed),
         receipts: HashMap::new(),
         receipt_order: VecDeque::new(),
+        program_operations: HashMap::new(),
+        program_activity_operations: HashMap::new(),
         trace: 0,
     };
     for prefund in config.prefunds {
@@ -1377,6 +1729,7 @@ mod program_call_tests {
             method: "POST".to_string(),
             path: "/v1/programs/call".to_string(),
             content_type: "application/json".to_string(),
+            idempotency_key: None,
             body: format!("{{\"activity\":\"{hex}\"}}").into_bytes(),
         }
     }
@@ -1386,6 +1739,7 @@ mod program_call_tests {
             method: "POST".to_string(),
             path: "/v1/programs/call".to_string(),
             content_type: "application/octet-stream".to_string(),
+            idempotency_key: None,
             body: bytes.to_vec(),
         }
     }
@@ -1413,6 +1767,7 @@ mod program_call_tests {
             method: "POST".to_string(),
             path: "/v1/programs/call".to_string(),
             content_type: "application/json".to_string(),
+            idempotency_key: None,
             body: b"{}".to_vec(),
         };
         assert!(decode_activity(&request).is_err());
@@ -1424,12 +1779,14 @@ mod program_call_tests {
             method: "POST".to_string(),
             path: "/v1/programs/call".to_string(),
             content_type: "application/json".to_string(),
+            idempotency_key: None,
             body: b"{\"activity\":\"00\",\"activity\":\"11\"}".to_vec(),
         };
         let unknown = Request {
             method: "POST".to_string(),
             path: "/v1/programs/call".to_string(),
             content_type: "application/json".to_string(),
+            idempotency_key: None,
             body: b"{\"activity\":\"00\",\"trusted\":true}".to_vec(),
         };
         assert!(decode_activity(&duplicate).is_err());

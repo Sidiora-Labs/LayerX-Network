@@ -528,6 +528,64 @@ impl ProgramCall {
         payload.extend_from_slice(calldata);
         payload
     }
+
+    /// Decodes the one canonical Programs call payload accepted by every
+    /// transport.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a different domain, truncation, trailing bytes, invalid scalar,
+    /// capability or calldata bounds, and non-canonical capability ordering.
+    pub fn from_canonical_payload(payload: &[u8]) -> Result<Self, ProgramCallError> {
+        let Some(mut remaining) = payload.strip_prefix(PROGRAM_CALL_PAYLOAD_DOMAIN) else {
+            return Err(ProgramCallError::NonCanonicalPayload);
+        };
+        let callee = take_array::<32>(&mut remaining)?;
+        let fuel = u64::from_be_bytes(take_array::<8>(&mut remaining)?);
+        let fee_limit = Amount::from_be_bytes(take_array::<16>(&mut remaining)?);
+        let capability_count = usize::from(u16::from_be_bytes(take_array::<2>(&mut remaining)?));
+        if capability_count > 5 || remaining.len() < capability_count.saturating_add(4) {
+            return Err(ProgramCallError::NonCanonicalPayload);
+        }
+        let (capability_bytes, tail) = remaining.split_at(capability_count);
+        remaining = tail;
+        let requested = capability_bytes
+            .iter()
+            .copied()
+            .map(CapabilityRequest::from_u8)
+            .collect::<Result<Vec<_>, _>>()?;
+        if requested.windows(2).any(|pair| pair[0] >= pair[1]) {
+            return Err(ProgramCallError::NonCanonicalPayload);
+        }
+        let calldata_length = usize::try_from(u32::from_be_bytes(take_array::<4>(&mut remaining)?))
+            .map_err(|_| ProgramCallError::NonCanonicalPayload)?;
+        if remaining.len() != calldata_length {
+            return Err(ProgramCallError::NonCanonicalPayload);
+        }
+        let callee = ProgramId::new(callee);
+        if callee.is_zero() {
+            return Err(ProgramCallError::NonCanonicalPayload);
+        }
+        let call = Self::new(
+            callee,
+            Calldata::new(remaining)?,
+            CallBudget::new(fuel, fee_limit)?,
+            RequestedCapabilities::new(&requested)?,
+        );
+        if call.canonical_payload() != payload {
+            return Err(ProgramCallError::NonCanonicalPayload);
+        }
+        Ok(call)
+    }
+}
+
+fn take_array<const N: usize>(remaining: &mut &[u8]) -> Result<[u8; N], ProgramCallError> {
+    let (head, tail) = remaining
+        .split_at_checked(N)
+        .ok_or(ProgramCallError::NonCanonicalPayload)?;
+    *remaining = tail;
+    head.try_into()
+        .map_err(|_| ProgramCallError::NonCanonicalPayload)
 }
 
 /// The typed successful response returned by one program call: the callee's
@@ -669,6 +727,8 @@ impl ProgramCallOutcome {
 /// Construction failure for a program-call operation or its typed response.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProgramCallError {
+    /// The byte payload is not the unique canonical Programs call encoding.
+    NonCanonicalPayload,
     /// A declared fuel bound of zero was supplied.
     ZeroFuel,
     /// A capability tag outside the closed set was presented.
@@ -720,7 +780,20 @@ mod program_call_tests {
 
     #[test]
     fn canonical_payload_matches_shared_golden_vector() -> Result<(), ProgramCallError> {
-        assert_eq!(hex(&golden_call()?.canonical_payload()), GOLDEN_PAYLOAD_HEX);
+        let payload = golden_call()?.canonical_payload();
+        assert_eq!(hex(&payload), GOLDEN_PAYLOAD_HEX);
+        assert_eq!(ProgramCall::from_canonical_payload(&payload)?, golden_call()?);
+        Ok(())
+    }
+
+    #[test]
+    fn canonical_payload_decoder_refuses_trailing_bytes() -> Result<(), ProgramCallError> {
+        let mut payload = golden_call()?.canonical_payload();
+        payload.push(0);
+        assert_eq!(
+            ProgramCall::from_canonical_payload(&payload),
+            Err(ProgramCallError::NonCanonicalPayload)
+        );
         Ok(())
     }
 

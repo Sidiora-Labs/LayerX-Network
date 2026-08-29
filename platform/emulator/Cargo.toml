@@ -18,6 +18,7 @@ sha2.workspace = true
 ed25519-dalek = "=2.2.0"
 layerx-types = { path = "../../agent/crates/layerx-types" }
 layerx-wire = { path = "../../agent/crates/layerx-wire" }
+layerx-proof = { path = "../../agent/crates/layerx-proof" }
 
 [lints.clippy]
 all = { level = "deny", priority = -1 }
