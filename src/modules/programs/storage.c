@@ -6,7 +6,11 @@
 
 #include <string.h>
 
-enum { STORAGE_FORMAT_VERSION = 1, STORAGE_HEAD_BYTES = 38 };
+enum {
+    STORAGE_FORMAT_VERSION = 1,
+    STORAGE_HEAD_BYTES = 38,
+    STORAGE_CELL_FIXED_BYTES = 38
+};
 static const uint8_t storage_prefix[8] = {'p','r','o','g','s','t','o','r'};
 
 static uint16_t read_u16(const uint8_t *p)
@@ -78,7 +82,8 @@ lxp_result lxp_programs_storage_import(
         if (cursor + 2U > manifest_length) return LXP_FATAL_INVARIANT;
         cell_key_length = read_u16(manifest + cursor); cursor += 2U;
         if (cell_key_length == 0U || cell_key_length > LX_PROGRAMS_STORAGE_MAX_KEY_BYTES ||
-            cursor + cell_key_length + 36U > manifest_length) return LXP_FATAL_INVARIANT;
+            cursor + cell_key_length + STORAGE_CELL_FIXED_BYTES - 2U >
+                manifest_length) return LXP_FATAL_INVARIANT;
         if (previous_key != NULL && key_compare(previous_key, previous_key_length,
             manifest + cursor, cell_key_length) >= 0) return LXP_FATAL_INVARIANT;
         value_length = read_u32(manifest + cursor + cell_key_length + 32U);
@@ -88,7 +93,8 @@ lxp_result lxp_programs_storage_import(
             value = &empty;
             stored_length = 0U;
         } else {
-            status = lxp_ctx_blob_get(ctx, manifest + cursor + cell_key_length,
+            status = lxp_ctx_blob_get(ctx,
+                                      manifest + cursor + cell_key_length,
                                       &value, &stored_length);
             if (status != LXP_OK) return status;
             if (stored_length != value_length) return LXP_FATAL_INVARIANT;
@@ -102,7 +108,7 @@ lxp_result lxp_programs_storage_import(
         if (status != LXP_OK) return status;
         previous_key = manifest + cursor;
         previous_key_length = cell_key_length;
-        cursor += cell_key_length + 36U;
+        cursor += cell_key_length + STORAGE_CELL_FIXED_BYTES - 2U;
     }
     return cursor == manifest_length ? LXP_OK : LXP_FATAL_INVARIANT;
 }
@@ -128,9 +134,11 @@ lxp_result lxp_programs_storage_stage_final(
             (index != 0U && key_compare(cells[index - 1U].key,
               cells[index - 1U].key_length, cells[index].key,
               cells[index].key_length) >= 0)) return LXP_ERR_NON_CANONICAL;
-        if (SIZE_MAX - manifest_length < (size_t)cells[index].key_length + 36U)
+        if (SIZE_MAX - manifest_length <
+                (size_t)cells[index].key_length + STORAGE_CELL_FIXED_BYTES)
             return LXP_ERR_LENGTH_LIMIT;
-        manifest_length += (size_t)cells[index].key_length + 36U;
+        manifest_length += (size_t)cells[index].key_length +
+                           STORAGE_CELL_FIXED_BYTES;
     }
     status = lxp_ctx_arena_alloc(ctx, manifest_length, 1U, &allocation);
     if (status != LXP_OK) return status;

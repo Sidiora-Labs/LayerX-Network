@@ -168,7 +168,8 @@ static int pending_and_history_vectors(void)
     return 0;
 }
 
-static int occupancy_vector(uint64_t observed, uint64_t expected)
+static int occupancy_vector(uint64_t observed, uint64_t expected,
+                            uint32_t expected_version)
 {
     static uint8_t arena_bytes[16384];
     const lx_programs_fee_schedule initial = {1U, 2U, 3U, 5U, 7U, 11U, 13U, 100U};
@@ -213,7 +214,8 @@ static int occupancy_vector(uint64_t observed, uint64_t expected)
     receipt.byte_batches = (lxp_u128){0U, observed};
     if (lxp_programs_fee_governance_observe_batch(&ctx, &receipt) != LXP_OK ||
         lxp_programs_fee_schedule_current(&ctx, &current, asset) != LXP_OK ||
-        current.version != 2U || current.occupancy_byte_batch != expected ||
+        current.version != expected_version ||
+        current.occupancy_byte_batch != expected ||
         asset[0] != 0x51U)
         return 2;
     for (index = 0U; index < 6U; ++index)
@@ -227,9 +229,11 @@ int main(void)
 {
     if (pending_and_history_vectors() != 0)
         return 1;
-    if (occupancy_vector(200U, 110U) != 0)
+    if (occupancy_vector(200U, 110U, 2U) != 0)
         return 2;
-    if (occupancy_vector(0U, 90U) != 0)
+    if (occupancy_vector(0U, 90U, 2U) != 0)
         return 3;
+    if (occupancy_vector(100U, 100U, 1U) != 0)
+        return 4;
     return 0;
 }

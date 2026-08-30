@@ -859,21 +859,10 @@ lxp_result lxp_programs_finalize_occupancy_batch(
     if (status != LXP_OK) return status;
     status = lxp_state_store_bind_accounts(kernel->state, runtime->accounts);
     if (status != LXP_OK) return status;
-    status = lxp_state_journal_open(kernel->state, global_sequence,
-                                    kernel->journal);
-    if (status != LXP_OK) return status;
-    status = lxp_state_journal_require_account_root(kernel->journal);
-    if (status != LXP_OK) {
-        (void)lxp_state_journal_rollback(kernel->journal);
-        return status;
-    }
     status = lxp_module_ctx_init(&ctx, kernel, LXP_MODULE_PROGRAMS,
                                  batch_timestamp_ms, kernel->epoch,
                                  global_sequence, UINT64_MAX, arena, true);
-    if (status != LXP_OK) {
-        (void)lxp_state_journal_rollback(kernel->journal);
-        return status;
-    }
+    if (status != LXP_OK) return status;
     ctx.protocol_version = LXP_PROTOCOL_VERSION_OCCUPANCY;
     ctx.batch_number = batch_number;
     status = lxp_programs_occupancy_bridge_init(&bridge, &ctx);
@@ -887,6 +876,15 @@ lxp_result lxp_programs_finalize_occupancy_batch(
     if (status == LXP_OK && batch_number != bridge.finalized_batch + 1U)
         status = batch_number <= bridge.finalized_batch ?
                  LXP_ERR_IDEMPOTENT_REPLAY : LXP_ERR_BATCH_GAP;
+    if (status != LXP_OK) return status;
+    status = lxp_state_journal_open(kernel->state, global_sequence,
+                                    kernel->journal);
+    if (status != LXP_OK) return status;
+    status = lxp_state_journal_require_account_root(kernel->journal);
+    if (status != LXP_OK) {
+        (void)lxp_state_journal_rollback(kernel->journal);
+        return status;
+    }
     bridge.finalizing = true;
     if (status == LXP_OK)
         status = layerx_programs_occupancy_finalize_rust(

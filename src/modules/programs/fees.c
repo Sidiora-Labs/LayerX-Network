@@ -1323,11 +1323,14 @@ lxp_result lxp_programs_fee_governance_observe_batch(
     }
     if (status != LXP_ERR_UNKNOWN_FIELD) {
         if (status != LXP_OK) return status;
-    } else if (applied_change != 0U) {
-        next.schedule.version = current.schedule.version + 1U;
-        next.schedule.occupancy_byte_batch = price;
-        next.activation_batch = receipt->batch_number + 1U;
-        schedule_changed = true;
+    } else {
+        if (applied_change != 0U) {
+            next.schedule.version = current.schedule.version + 1U;
+            next.schedule.occupancy_byte_batch = price;
+            next.activation_batch = receipt->batch_number + 1U;
+            schedule_changed = true;
+        }
+        status = LXP_OK;
     }
     if (schedule_changed) {
         if (current.schedule.version == UINT32_MAX) return LXP_ERR_OVERFLOW;
