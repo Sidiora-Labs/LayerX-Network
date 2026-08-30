@@ -1,7 +1,8 @@
 use super::*;
 use layerx_programs_runtime::{
     ActivityBudgetBinding, BudgetMeterRefusal, BudgetResourceKind,
-    BudgetedAuthorizedExecutionRequest, CandidateActivityOutcome, DeclaredBudget,
+    BudgetedAuthorizedExecutionRequest, CandidateActivityOutcome, CompositionRefusal,
+    DeclaredBudget,
 };
 
 fn candidate_exports(reserve: u8, call: u8) -> (Vec<u8>, Vec<u8>) {
@@ -234,7 +235,7 @@ fn call_with_capability_bytes(callee: ProgramId, encoded: &[u8]) -> Vec<u8> {
 fn repeated_scan_guest(repetitions: usize) -> Vec<u8> {
     let mut entry = Vec::new();
     for _ in 0..repetitions {
-        for argument in [2, 0, 0, 32, 0, 1, 16, 128, 128] {
+        for argument in [2, 0, 0, 32, 0, 1, 17, 128, 128] {
             push_i32(&mut entry, argument);
         }
         entry.extend([OP_CALL, 0, 0x1a]);
@@ -455,15 +456,11 @@ pub(super) fn foreign_shared_selectors_are_structurally_closed() {
             assert_eq!(record.execution().outputs(), [WasmValue::I32(-2)]);
             assert_eq!(record.execution().usage().storage_read_bytes, 0);
             assert_eq!(record.execution().usage().storage_write_bytes, 0);
-            let effects = record
-                .effects()
-                .unwrap_or_else(|| panic!("selector effects"));
-            assert!(
-                effects.calls.is_empty()
-                    && effects.events.is_empty()
-                    && effects.transfers.is_empty()
-                    && effects.namespace_drops.is_empty()
-            );
+            assert!(matches!(
+                record.outcome(),
+                CandidateActivityOutcome::Failure(_)
+            ));
+            assert!(record.effects().is_none());
             assert_eq!(storage, before);
         }
     }
@@ -496,7 +493,7 @@ pub(super) fn foreign_shared_selectors_are_structurally_closed() {
                 &mut storage,
                 attacker,
                 actor,
-                CapabilitySet::new([capability])
+                CapabilitySet::new([capability.clone()])
                     .unwrap_or_else(|error| panic!("cross grant: {error}")),
                 CompositionContext::isolated(),
             )
@@ -610,13 +607,11 @@ pub(super) fn forged_shared_capability_bytes_never_enter_the_child() {
         let record = result.unwrap_or_else(|error| panic!("forged status: {error}"));
         assert_eq!(record.execution().outputs(), [WasmValue::I32(-2)]);
         assert!(record.call_graph().edges().is_empty());
-        let effects = record
-            .effects()
-            .unwrap_or_else(|| panic!("success effects"));
-        assert!(effects.calls.is_empty());
-        assert!(effects.events.is_empty());
-        assert!(effects.transfers.is_empty());
-        assert!(effects.namespace_drops.is_empty());
+        assert!(matches!(
+            record.outcome(),
+            CandidateActivityOutcome::Failure(_)
+        ));
+        assert!(record.effects().is_none());
         assert_eq!(storage, before);
         assert_eq!(
             storage.namespace_cell_count(StorageNamespace::shared(child)),
@@ -772,7 +767,7 @@ pub(super) fn narrowing_never_widens_shared_authority_across_a_call() {
         (Capability::StorageWrite, Capability::SharedStorageWrite),
         (Capability::SharedStorageWrite, Capability::StorageWrite),
     ] {
-        let requested = CapabilitySet::new([requested_grant])
+        let requested = CapabilitySet::new([requested_grant.clone()])
             .unwrap_or_else(|error| panic!("cross request: {error}"))
             .canonical_encoding();
         let child_wasm = if requested_grant == Capability::StorageWrite {
@@ -982,18 +977,12 @@ pub(super) fn repeated_iteration_exhaustion_has_no_partial_output() {
         assert_eq!(cursor_record.execution().outputs(), [WasmValue::I32(-2)]);
         assert_eq!(cursor_record.execution().usage().storage_read_bytes, 0);
         assert_eq!(cursor_record.execution().usage().storage_write_bytes, 0);
-        assert!(cursor_record
-            .response()
-            .is_some_and(|response| response.bytes.is_empty()));
-        let effects = cursor_record
-            .effects()
-            .unwrap_or_else(|| panic!("cursor effects"));
-        assert!(
-            effects.calls.is_empty()
-                && effects.events.is_empty()
-                && effects.transfers.is_empty()
-                && effects.namespace_drops.is_empty()
-        );
+        assert!(matches!(
+            cursor_record.outcome(),
+            CandidateActivityOutcome::Failure(_)
+        ));
+        assert!(cursor_record.response().is_none());
+        assert!(cursor_record.effects().is_none());
         assert_eq!(storage, before);
     }
 }

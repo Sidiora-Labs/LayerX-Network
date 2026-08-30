@@ -7,8 +7,9 @@ use layerx_programs_runtime::{
     derive_program_account, Abi, AbiError, AuthorizationContext, AuthorizedExecutionRequest,
     Capability, CapabilitySet, CompositionContext, CompositionRules, ExecutionError, Executor,
     PrincipalId, ProgramCatalog, ProgramId, ReceiptOracle, ReceiptView, ResponseRefusal, Storage,
-    StorageNamespace, ValidationRefusal, WasmEngine, WasmValue, ABI_MODULE, ABI_VERSION, ABI_V1_VERSION,
-    ABI_V2_HOST_FUNCTIONS, ABI_V2_MANIFEST, ABI_V2_VERSION, CALL_ENTRY_EXPORT, HOST_FUNCTIONS,
+    StorageNamespace, ValidationRefusal, WasmEngine, WasmValue, ABI_MODULE, ABI_V1_VERSION,
+    ABI_V2_HOST_FUNCTIONS, ABI_V2_MANIFEST, ABI_V2_VERSION, ABI_VERSION, CALL_ENTRY_EXPORT,
+    HOST_FUNCTIONS,
 };
 
 const ABI_V1_GOLDEN: &str = include_str!("../../../tests/vectors/abi-v1.hex");
@@ -1062,33 +1063,51 @@ fn program_spend_capability_binds_owner_seed_account_asset_and_destination() {
     wrong_account[31] ^= 1;
     assert_eq!(
         CapabilitySet::new([Capability::ProgramSpend {
+            owner_program: owner,
+            seed: seed.to_vec(),
             source_account: wrong_account,
-            ..grant.clone()
+            asset: [19; 32],
+            to: [20; 32],
+            maximum_amount: 50,
         }]),
         Err(AbiError::InvalidCapability)
     );
     for widened in [
         Capability::ProgramSpend {
             owner_program: other,
+            seed: seed.to_vec(),
             source_account: derive_program_account(other, seed)
                 .unwrap_or_else(|error| panic!("other account: {error}"))
                 .bytes(),
-            ..grant.clone()
+            asset: [19; 32],
+            to: [20; 32],
+            maximum_amount: 50,
         },
         Capability::ProgramSpend {
+            owner_program: owner,
             seed: b"vault/other".to_vec(),
             source_account: derive_program_account(owner, b"vault/other")
                 .unwrap_or_else(|error| panic!("other seed account: {error}"))
                 .bytes(),
-            ..grant.clone()
+            asset: [19; 32],
+            to: [20; 32],
+            maximum_amount: 50,
         },
         Capability::ProgramSpend {
+            owner_program: owner,
+            seed: seed.to_vec(),
+            source_account,
             asset: [21; 32],
-            ..grant.clone()
+            to: [20; 32],
+            maximum_amount: 50,
         },
         Capability::ProgramSpend {
+            owner_program: owner,
+            seed: seed.to_vec(),
+            source_account,
+            asset: [19; 32],
             to: [22; 32],
-            ..grant.clone()
+            maximum_amount: 50,
         },
     ] {
         assert_eq!(
