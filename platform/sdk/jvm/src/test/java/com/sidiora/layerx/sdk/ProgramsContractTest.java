@@ -11,11 +11,11 @@ import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import org.junit.jupiter.api.Test;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
@@ -242,12 +242,201 @@ public final class ProgramsContractTest {
             java.util.HexFormat.of().formatHex(result.activityId()));
     }
 
+    @Test
+    void programTransferAuthorizationRecomputesV1AndV2RootsAndRejectsMutation() {
+        byte[] program = filled(0x11);
+        byte[] principal = filled(0x22);
+        byte[] asset = filled(0x33);
+        byte[] destination = filled(0x44);
+        byte[] v1 = transferAuthorization(false, program, principal, asset, destination);
+        byte[] v2 = transferAuthorization(true, program, principal, asset, destination);
+        byte[] root = transferRoot(principal, asset, destination, BigInteger.valueOf(7));
+        ProgramsClient.verifyAuthorizationRoot(v1, root);
+        ProgramsClient.verifyAuthorizationRoot(v2, root);
+
+        byte[] mutatedAuthorization = v2.clone();
+        mutatedAuthorization[mutatedAuthorization.length - 65] ^= 1;
+        assertThrows(IllegalArgumentException.class,
+            () -> ProgramsClient.verifyAuthorizationRoot(mutatedAuthorization, root));
+        byte[] mutatedRoot = root.clone();
+        mutatedRoot[0] ^= 1;
+        assertThrows(IllegalArgumentException.class,
+            () -> ProgramsClient.verifyAuthorizationRoot(v2, mutatedRoot));
+        assertThrows(IllegalArgumentException.class,
+            () -> ProgramsClient.verifyAuthorizationRoot(concatenate(v2, new byte[] {0}), root));
+    }
+
+    @Test
+    void occupancyV1V2V3BindsCountersFeesAssetAndTransferRoot() {
+        byte[] program = filled(0x11);
+        byte[] payer = filled(0x77);
+        byte[] asset = filled(0x66);
+        byte[] root = occupancyRoot(payer, asset, BigInteger.valueOf(6));
+        byte[] v1 = legacyOccupancy(false, program, payer);
+        byte[] v2 = legacyOccupancy(true, program, payer);
+        byte[] v3 = occupancyV3(program, payer);
+        for (byte[] evidence : List.of(v1, v2, v3)) {
+            ProgramsClient.verifyOccupancyBinding(evidence, asset, BigInteger.valueOf(3),
+                BigInteger.valueOf(6), root);
+        }
+
+        assertThrows(IllegalArgumentException.class, () -> ProgramsClient.verifyOccupancyBinding(
+            v3, asset, BigInteger.valueOf(4), BigInteger.valueOf(6), root));
+        assertThrows(IllegalArgumentException.class, () -> ProgramsClient.verifyOccupancyBinding(
+            v3, asset, BigInteger.valueOf(3), BigInteger.valueOf(7), root));
+        byte[] mutatedAsset = asset.clone();
+        mutatedAsset[0] ^= 1;
+        assertThrows(IllegalArgumentException.class, () -> ProgramsClient.verifyOccupancyBinding(
+            v3, mutatedAsset, BigInteger.valueOf(3), BigInteger.valueOf(6), root));
+        byte[] mutatedRoot = root.clone();
+        mutatedRoot[0] ^= 1;
+        assertThrows(IllegalArgumentException.class, () -> ProgramsClient.verifyOccupancyBinding(
+            v3, asset, BigInteger.valueOf(3), BigInteger.valueOf(6), mutatedRoot));
+        byte[] mutatedEvidence = v3.clone();
+        int declaredUnitsLowByte = "LXP/storage-occupancy-settlement/v3\0"
+            .getBytes(StandardCharsets.UTF_8).length + 8 + 4 + 7 * 8 + 15;
+        mutatedEvidence[declaredUnitsLowByte] ^= 1;
+        assertThrows(IllegalArgumentException.class, () -> ProgramsClient.verifyOccupancyBinding(
+            mutatedEvidence, asset, BigInteger.valueOf(3), BigInteger.valueOf(6), root));
+        assertThrows(IllegalArgumentException.class, () -> ProgramsClient.verifyOccupancyBinding(
+            concatenate(v3, new byte[] {0}), asset, BigInteger.valueOf(3),
+            BigInteger.valueOf(6), root));
+    }
+
+    @Test
+    void terminalAttachmentWrappersEnforceAuthorityThenOccupancyAndFullConsumption() {
+        byte[] program = filled(0x11);
+        byte[] principal = filled(0x22);
+        byte[] asset = filled(0x33);
+        byte[] destination = filled(0x44);
+        byte[] authorization = transferAuthorization(true, program, principal, asset, destination);
+        byte[] root = transferRoot(principal, asset, destination, BigInteger.valueOf(7));
+        byte[] inner = new byte[] {1, 2, 3};
+        byte[] occupancy = occupancyV3(program, filled(0x77));
+        byte[] canonical = authorityWrapper(occupancyWrapper(inner, occupancy), authorization, root);
+        assertArrayEquals(inner, ProgramsClient.unwrapTerminal(canonical).inner());
+
+        byte[] wrongOrder = occupancyWrapper(authorityWrapper(inner, authorization, root), occupancy);
+        assertThrows(IllegalArgumentException.class, () -> ProgramsClient.unwrapTerminal(wrongOrder));
+        byte[] duplicateAuthority = authorityWrapper(authorityWrapper(inner, authorization, root),
+            authorization, root);
+        assertThrows(IllegalArgumentException.class,
+            () -> ProgramsClient.unwrapTerminal(duplicateAuthority));
+        byte[] duplicateOccupancy = occupancyWrapper(occupancyWrapper(inner, occupancy), occupancy);
+        assertThrows(IllegalArgumentException.class,
+            () -> ProgramsClient.unwrapTerminal(duplicateOccupancy));
+        assertThrows(IllegalArgumentException.class,
+            () -> ProgramsClient.unwrapTerminal(concatenate(canonical, new byte[] {0})));
+    }
+
     private static byte[] programPayload(byte[] programId, byte[] calldata, byte[] ignoredKey) {
         byte[] domain = "LayerX/programs/call/v1\0".getBytes(StandardCharsets.UTF_8);
         ByteBuffer out = ByteBuffer.allocate(domain.length + 32 + 8 + 16 + 2 + 1 + 4 + calldata.length);
         out.put(domain).put(programId).putLong(1).put(new byte[16]).putShort((short) 1).put((byte) 1)
             .putInt(calldata.length).put(calldata);
         return out.array();
+    }
+
+    private static byte[] transferAuthorization(boolean candidate, byte[] program, byte[] principal,
+                                                byte[] asset, byte[] destination) {
+        byte[] domain = (candidate ? "LayerX/programs/402LXP/transfer-set/v2\0"
+            : "LayerX/programs/402LXP/transfer-set/v1\0").getBytes(StandardCharsets.UTF_8);
+        byte[] events = concatenate("LayerX/programs/events/v1\0".getBytes(StandardCharsets.UTF_8),
+            integer(BigInteger.ZERO, 4));
+        return concatenate(domain, program, principal, filled(0x55), new byte[9], sized(events),
+            integer(BigInteger.ZERO, 8), integer(BigInteger.ONE, 8), new byte[9],
+            candidate ? concatenate(new byte[] {1}, principal) : new byte[0], asset, destination,
+            integer(BigInteger.valueOf(7), 16), program);
+    }
+
+    private static byte[] occupancyV3(byte[] program, byte[] payer) {
+        byte[] namespace = concatenate(new byte[] {65}, program, new byte[] {0}, payer);
+        return concatenate("LXP/storage-occupancy-settlement/v3\0".getBytes(StandardCharsets.UTF_8),
+            integer(BigInteger.valueOf(2), 8), integer(BigInteger.ONE, 4),
+            integer(BigInteger.ZERO, 8), integer(BigInteger.ZERO, 8), integer(BigInteger.ZERO, 8),
+            integer(BigInteger.ZERO, 8), integer(BigInteger.ZERO, 8), integer(BigInteger.ZERO, 8),
+            integer(BigInteger.valueOf(2), 8), integer(BigInteger.valueOf(3), 16),
+            integer(BigInteger.valueOf(6), 16), integer(BigInteger.valueOf(6), 16),
+            integer(BigInteger.ZERO, 16), integer(BigInteger.ONE, 4), namespace, payer, program,
+            filled(0x88), integer(BigInteger.ONE, 8), integer(BigInteger.valueOf(2), 8),
+            integer(BigInteger.valueOf(3), 8), integer(BigInteger.valueOf(3), 8),
+            integer(BigInteger.valueOf(3), 16), integer(BigInteger.valueOf(2), 8),
+            integer(BigInteger.valueOf(6), 16), integer(BigInteger.ZERO, 16),
+            integer(BigInteger.valueOf(6), 16), integer(BigInteger.ZERO, 16), new byte[] {1},
+            integer(BigInteger.ZERO, 16), integer(BigInteger.valueOf(3), 8),
+            integer(BigInteger.valueOf(2), 8), integer(BigInteger.ZERO, 16), filled(0x99));
+    }
+
+    private static byte[] legacyOccupancy(boolean versioned, byte[] program, byte[] payer) {
+        byte[] domain = (versioned ? "LXP/storage-occupancy-settlement/v2\0"
+            : "LXP/storage-occupancy-settlement/v1\0").getBytes(StandardCharsets.UTF_8);
+        byte[] namespace = concatenate(new byte[] {65}, program, new byte[] {0}, payer);
+        return concatenate(domain, integer(BigInteger.valueOf(2), 8),
+            versioned ? integer(BigInteger.ONE, 4) : new byte[0], integer(BigInteger.ZERO, 8),
+            integer(BigInteger.ZERO, 8), integer(BigInteger.ZERO, 8), integer(BigInteger.ZERO, 8),
+            integer(BigInteger.ZERO, 8), integer(BigInteger.ZERO, 8),
+            integer(BigInteger.valueOf(2), 8), integer(BigInteger.valueOf(3), 16),
+            integer(BigInteger.valueOf(6), 16), integer(BigInteger.ONE, 8), namespace, payer,
+            integer(BigInteger.ONE, 8), integer(BigInteger.valueOf(2), 8),
+            integer(BigInteger.valueOf(3), 8), integer(BigInteger.valueOf(3), 8),
+            integer(BigInteger.valueOf(3), 16), integer(BigInteger.valueOf(2), 8),
+            integer(BigInteger.valueOf(6), 16));
+    }
+
+    private static byte[] transferRoot(byte[] principal, byte[] asset, byte[] destination,
+                                       BigInteger amount) {
+        byte[] leg = concatenate(new byte[] {0}, principal, destination, asset, integer(amount, 16),
+            integer(BigInteger.ONE, 2));
+        return sha256("LXP/v1/merkle-leaf\0".getBytes(StandardCharsets.UTF_8), leg);
+    }
+
+    private static byte[] occupancyRoot(byte[] payer, byte[] asset, BigInteger amount) {
+        byte[] treasury = sha256("LX:ACCOUNT:v1".getBytes(StandardCharsets.UTF_8),
+            integer(BigInteger.valueOf(11), 4), "system:fees".getBytes(StandardCharsets.UTF_8));
+        byte[] leg = concatenate(new byte[] {0}, payer, treasury, asset, integer(amount, 16),
+            integer(BigInteger.valueOf(23), 2));
+        return sha256("LXP/v1/merkle-leaf\0".getBytes(StandardCharsets.UTF_8), leg);
+    }
+
+    private static byte[] authorityWrapper(byte[] inner, byte[] authorization, byte[] root) {
+        return concatenate("LXP/program-execution-with-transfer-authority/v2\0"
+            .getBytes(StandardCharsets.UTF_8), sized(inner), sized(authorization), root);
+    }
+
+    private static byte[] occupancyWrapper(byte[] inner, byte[] evidence) {
+        return concatenate("LXP/program-execution-with-occupancy/v1\0"
+            .getBytes(StandardCharsets.UTF_8), sized(inner), sized(evidence));
+    }
+
+    private static byte[] sized(byte[] value) {
+        return concatenate(integer(BigInteger.valueOf(value.length), 4), value);
+    }
+
+    private static byte[] integer(BigInteger value, int length) {
+        byte[] raw = value.toByteArray();
+        if (value.signum() < 0 || value.bitLength() > length * 8) throw new AssertionError();
+        byte[] result = new byte[length];
+        int copy = Math.min(raw.length, length);
+        System.arraycopy(raw, raw.length - copy, result, length - copy, copy);
+        return result;
+    }
+
+    private static byte[] concatenate(byte[]... values) {
+        int length = 0;
+        for (byte[] value : values) length += value.length;
+        byte[] result = new byte[length];
+        int offset = 0;
+        for (byte[] value : values) {
+            System.arraycopy(value, 0, result, offset, value.length);
+            offset += value.length;
+        }
+        return result;
+    }
+
+    private static byte[] filled(int value) {
+        byte[] result = new byte[32];
+        java.util.Arrays.fill(result, (byte) value);
+        return result;
     }
 
     private static byte[] signedActivity(byte[] payload, byte[] key) {

@@ -14,7 +14,9 @@ import java.security.KeyFactory;
 import java.security.MessageDigest;
 import java.security.Signature;
 import java.security.spec.X509EncodedKeySpec;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
@@ -33,6 +35,7 @@ public final class ProgramsClient {
     private static final String EXECUTION_VERIFICATION = "receipt-terminal-and-call-graph-verified";
     private static final BigInteger MAX_U32 = BigInteger.ONE.shiftLeft(32).subtract(BigInteger.ONE);
     private static final BigInteger MAX_U64 = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE);
+    private static final BigInteger MAX_U128 = BigInteger.ONE.shiftLeft(128).subtract(BigInteger.ONE);
     private static final byte[] SIMULATION_BOUNDARY_DOMAIN =
         "LayerX/emulator/simulation-boundary/v1\0".getBytes(StandardCharsets.UTF_8);
     private static final byte[] SIMULATION_EVIDENCE_DOMAIN =
@@ -41,6 +44,33 @@ public final class ProgramsClient {
     private static final byte[] ACTIVITY_ID_DOMAIN = "LXP/v1/activity-id\0".getBytes(StandardCharsets.UTF_8);
     private static final byte[] PAYLOAD_HASH_DOMAIN = "LXP/v1/payload-hash\0".getBytes(StandardCharsets.UTF_8);
     private static final byte[] PROGRAM_CALL_DOMAIN = "LayerX/programs/call/v1\0".getBytes(StandardCharsets.UTF_8);
+    private static final byte[] TRANSFER_SET_V1_DOMAIN =
+        "LayerX/programs/402LXP/transfer-set/v1\0".getBytes(StandardCharsets.UTF_8);
+    private static final byte[] TRANSFER_SET_V2_DOMAIN =
+        "LayerX/programs/402LXP/transfer-set/v2\0".getBytes(StandardCharsets.UTF_8);
+    private static final byte[] PROGRAM_AUTHORITY_DOMAIN =
+        "LayerX/programs/402LXP/program-authority/v1\0".getBytes(StandardCharsets.UTF_8);
+    private static final byte[] PROGRAM_FUNDING_DOMAIN =
+        "LayerX/programs/402LXP/program-funding/v1\0".getBytes(StandardCharsets.UTF_8);
+    private static final byte[] PROGRAM_ACCOUNT_DOMAIN =
+        "LayerX/programs/program-account/v1\0".getBytes(StandardCharsets.UTF_8);
+    private static final byte[] EVENT_ENVELOPE_DOMAIN =
+        "LayerX/programs/events/v1\0".getBytes(StandardCharsets.UTF_8);
+    private static final byte[] OCCUPANCY_V1_DOMAIN =
+        "LXP/storage-occupancy-settlement/v1\0".getBytes(StandardCharsets.UTF_8);
+    private static final byte[] OCCUPANCY_V2_DOMAIN =
+        "LXP/storage-occupancy-settlement/v2\0".getBytes(StandardCharsets.UTF_8);
+    private static final byte[] OCCUPANCY_V3_DOMAIN =
+        "LXP/storage-occupancy-settlement/v3\0".getBytes(StandardCharsets.UTF_8);
+    private static final byte[] OCCUPANCY_MANDATE_DOMAIN =
+        "LXP/storage-occupancy-mandate/v1\0".getBytes(StandardCharsets.UTF_8);
+    private static final byte[] MERKLE_LEAF_DOMAIN =
+        "LXP/v1/merkle-leaf\0".getBytes(StandardCharsets.UTF_8);
+    private static final byte[] MERKLE_INTERNAL_DOMAIN =
+        "LXP/v1/merkle-internal\0".getBytes(StandardCharsets.UTF_8);
+    private static final byte[] ACCOUNT_DERIVATION_DOMAIN =
+        "LX:ACCOUNT:v1".getBytes(StandardCharsets.UTF_8);
+    private static final byte[] FEE_TREASURY_LABEL = "system:fees".getBytes(StandardCharsets.UTF_8);
     private record ActivityBinding(byte[] activityId, byte[] idempotencyKey,
                                    BigInteger notBefore, BigInteger notAfter) {
         private ActivityBinding {
@@ -494,13 +524,33 @@ public final class ProgramsClient {
     private record TerminalUsage(BigInteger cpu, BigInteger memory, BigInteger read, BigInteger write,
                                  long values, BigInteger outputBytes, BigInteger fee) {}
 
-    private record TerminalAttachments(byte[] occupancy, byte[] authorization, byte[] transferRoot) {}
+    static record TerminalAttachments(byte[] inner, byte[] occupancy, byte[] authorization,
+                                      byte[] transferRoot) {}
+
+    private record ProgramAuthorityBinding(byte[] owner, byte[] frame, byte[] source,
+                                           byte[] asset, byte[] destination, BigInteger amount) {}
+
+    private record ProgramFundingBinding(byte[] owner, byte[] destination, byte[] asset) {}
+
+    private record CapabilityKey(int order, List<byte[]> fields) {}
+
+    private record OccupancyCharge(byte[] payer, BigInteger amountDue, boolean paid,
+                                   BigInteger arrearsAfter) {}
+
+    private record OccupancySettlement(BigInteger byteBatches, BigInteger feeUnits,
+                                       List<OccupancyCharge> charges) {}
+
+    private record StorageNamespace(byte[] canonical, byte[] wire, byte[] program,
+                                    byte[] principal) {}
+
+    private record PayerAggregate(byte[] payer, BigInteger due, BigInteger paid,
+                                  BigInteger arrears) {}
 
     private static void verifyTerminal(byte[] encoded, byte[] availableGraph, byte[] expectedProgram,
             ObjectNode documentOutcome, int protocolVersion, LocalVerifier.ProgramReceiptOutcome receipt) {
         try {
             TerminalAttachments attachments = unwrapTerminal(encoded);
-            byte[] inner = terminalInner(encoded);
+            byte[] inner = attachments.inner();
             TerminalCursor cursor;
             boolean candidate = starts(inner, "LXP/program-execution/v4\0");
             boolean successful = false;
@@ -814,19 +864,34 @@ public final class ProgramsClient {
                 if (!allZero(receipt.occupancyEvidenceDigest()) || !allZero(receipt.occupancyTransferRoot())
                         || receipt.occupancyByteBatches().signum() != 0
                         || receipt.occupancyFeeUnits().signum() != 0) throw new IllegalArgumentException();
-            } else if (!MessageDigest.isEqual(sha256(occupancy), receipt.occupancyEvidenceDigest())) {
-                throw new IllegalArgumentException();
+            } else {
+                if (!MessageDigest.isEqual(sha256(occupancy), receipt.occupancyEvidenceDigest())) {
+                    throw new IllegalArgumentException();
+                }
+                verifyOccupancyBinding(occupancy, receipt.occupancyAssetId(),
+                    receipt.occupancyByteBatches(), receipt.occupancyFeeUnits(),
+                    receipt.occupancyTransferRoot());
             }
-        }
-        boolean authorityRequired = candidate && !allZero(receipt.transferRoot());
-        if (authorityRequired != (attachments.authorization() != null)) throw new IllegalArgumentException();
-        if (attachments.authorization() != null
-                && !MessageDigest.isEqual(attachments.transferRoot(), receipt.transferRoot())) {
+        } else if (!allZero(receipt.occupancyEvidenceDigest())
+                || !allZero(receipt.occupancyTransferRoot())
+                || receipt.occupancyByteBatches().signum() != 0
+                || receipt.occupancyFeeUnits().signum() != 0) {
             throw new IllegalArgumentException();
         }
+        boolean transferPresent = !allZero(receipt.transferRoot());
+        if (candidate ? (attachments.authorization() != null) != transferPresent
+                : attachments.authorization() != null) throw new IllegalArgumentException();
+        if (attachments.authorization() != null) {
+            if (attachments.authorization().length == 0 || attachments.transferRoot() == null
+                    || !MessageDigest.isEqual(attachments.transferRoot(), receipt.transferRoot())) {
+                throw new IllegalArgumentException();
+            }
+            verifyAuthorizationRoot(attachments.authorization(), attachments.transferRoot());
+        }
+        if (protocolVersion != 1 && protocolVersion != 2) throw new IllegalArgumentException();
     }
 
-    private static TerminalAttachments unwrapTerminal(byte[] encoded) {
+    static TerminalAttachments unwrapTerminal(byte[] encoded) {
         byte[] current = encoded;
         byte[] authorization = null;
         byte[] transferRoot = null;
@@ -837,38 +902,520 @@ public final class ProgramsClient {
             .getBytes(StandardCharsets.UTF_8);
         if (starts(current, authorityDomain)) {
             TerminalCursor cursor = new TerminalCursor(current, authorityDomain.length);
-            current = cursor.sized32();
-            authorization = cursor.sized32();
+            current = cursor.sized32(MAX_CALLDATA_BYTES);
+            authorization = cursor.sized32(MAX_CALLDATA_BYTES);
             transferRoot = cursor.take(32);
             cursor.finish();
         }
         if (starts(current, occupancyDomain)) {
             TerminalCursor cursor = new TerminalCursor(current, occupancyDomain.length);
-            current = cursor.sized32();
-            occupancy = cursor.sized32();
+            current = cursor.sized32(MAX_CALLDATA_BYTES);
+            occupancy = cursor.sized32(65_536);
             cursor.finish();
         }
         if (starts(current, authorityDomain) || starts(current, occupancyDomain)) {
             throw new IllegalArgumentException();
         }
-        return new TerminalAttachments(occupancy, authorization, transferRoot);
+        return new TerminalAttachments(current, occupancy, authorization, transferRoot);
     }
 
-    private static byte[] terminalInner(byte[] encoded) {
-        byte[] current = encoded;
-        byte[] authorityDomain = "LXP/program-execution-with-transfer-authority/v2\0"
-            .getBytes(StandardCharsets.UTF_8);
-        byte[] occupancyDomain = "LXP/program-execution-with-occupancy/v1\0"
-            .getBytes(StandardCharsets.UTF_8);
-        if (starts(current, authorityDomain)) {
-            TerminalCursor cursor = new TerminalCursor(current, authorityDomain.length);
-            current = cursor.sized32();
+    static void verifyAuthorizationRoot(byte[] encoded, byte[] expected) {
+        if (encoded == null || encoded.length == 0 || encoded.length > MAX_CALLDATA_BYTES
+                || expected == null || expected.length != 32) throw new IllegalArgumentException();
+        boolean candidate = starts(encoded, TRANSFER_SET_V2_DOMAIN);
+        byte[] domain = candidate ? TRANSFER_SET_V2_DOMAIN : TRANSFER_SET_V1_DOMAIN;
+        TerminalCursor cursor = new TerminalCursor(encoded, 0);
+        if (!starts(encoded, domain)
+                || !MessageDigest.isEqual(cursor.take(domain.length), domain)) {
+            throw new IllegalArgumentException();
         }
-        if (starts(current, occupancyDomain)) {
-            TerminalCursor cursor = new TerminalCursor(current, occupancyDomain.length);
-            current = cursor.sized32();
+        requireNonzero(cursor.take(32));
+        byte[] principal = cursor.take(32);
+        requireNonzero(principal);
+        requireNonzero(cursor.take(32));
+        decodeFrame(cursor);
+        decodeEventEnvelope(cursor.sized32(MAX_CALLDATA_BYTES));
+        BigInteger callCount = cursor.u64();
+        if (callCount.compareTo(BigInteger.valueOf(64)) > 0) throw new IllegalArgumentException();
+        for (int index = 0; index < callCount.intValue(); index++) {
+            requireNonzero(cursor.take(32));
+            requireNonzero(cursor.take(32));
+            requireNonzero(cursor.take(32));
+            decodeFrame(cursor);
+            decodeFrame(cursor);
+            decodeCapabilitySet(cursor.sized32(65_535), candidate);
         }
-        return current;
+        BigInteger legCount = cursor.u64();
+        if (legCount.signum() == 0 || legCount.compareTo(BigInteger.valueOf(256)) > 0) {
+            throw new IllegalArgumentException();
+        }
+        List<byte[]> kernelLegs = new ArrayList<>();
+        BigInteger total = BigInteger.ZERO;
+        for (int index = 0; index < legCount.intValue(); index++) {
+            byte[] frame = decodeFrame(cursor);
+            byte[] source = principal;
+            ProgramAuthorityBinding authority = null;
+            ProgramFundingBinding funding = null;
+            if (candidate) {
+                int sourceTag = cursor.u8();
+                if (sourceTag == 1) {
+                    source = cursor.take(32);
+                    requireNonzero(source);
+                    if (!MessageDigest.isEqual(source, principal)) throw new IllegalArgumentException();
+                } else if (sourceTag == 2) {
+                    authority = decodeProgramAuthority(cursor.sized32(MAX_CALLDATA_BYTES));
+                    source = authority.source();
+                } else if (sourceTag == 3) {
+                    source = cursor.take(32);
+                    requireNonzero(source);
+                    if (!MessageDigest.isEqual(source, principal)) throw new IllegalArgumentException();
+                    funding = decodeProgramFunding(cursor.sized32(MAX_CALLDATA_BYTES));
+                } else throw new IllegalArgumentException();
+            }
+            byte[] asset = cursor.take(32);
+            byte[] destination = cursor.take(32);
+            BigInteger amount = cursor.integer(16);
+            byte[] program = cursor.take(32);
+            requireNonzero(asset);
+            requireNonzero(destination);
+            requireNonzero(program);
+            if (amount.signum() == 0) throw new IllegalArgumentException();
+            if (authority != null && (!MessageDigest.isEqual(authority.owner(), program)
+                    || !MessageDigest.isEqual(authority.frame(), frame)
+                    || !MessageDigest.isEqual(authority.asset(), asset)
+                    || !MessageDigest.isEqual(authority.destination(), destination)
+                    || !authority.amount().equals(amount))) throw new IllegalArgumentException();
+            if (funding != null && (!MessageDigest.isEqual(funding.owner(), program)
+                    || !MessageDigest.isEqual(funding.destination(), destination)
+                    || !MessageDigest.isEqual(funding.asset(), asset))) {
+                throw new IllegalArgumentException();
+            }
+            total = checkedU128Add(total, amount);
+            kernelLegs.add(concatenate(new byte[] {0}, source, destination, asset,
+                fixedUnsigned(amount, 16), fixedUnsigned(BigInteger.ONE, 2)));
+        }
+        cursor.finish();
+        if (!MessageDigest.isEqual(merkleRoot(kernelLegs), expected)) {
+            throw new IllegalArgumentException();
+        }
+    }
+
+    private static ProgramAuthorityBinding decodeProgramAuthority(byte[] encoded) {
+        TerminalCursor cursor = new TerminalCursor(encoded, 0);
+        if (!MessageDigest.isEqual(cursor.take(PROGRAM_AUTHORITY_DOMAIN.length),
+                PROGRAM_AUTHORITY_DOMAIN)) throw new IllegalArgumentException();
+        byte[] owner = cursor.take(32);
+        requireNonzero(owner);
+        int seedLength = cursor.u16();
+        if (seedLength > 128) throw new IllegalArgumentException();
+        byte[] seed = cursor.take(seedLength);
+        byte[] source = cursor.take(32);
+        byte[] frame = decodeFrame(cursor);
+        byte[] asset = cursor.take(32);
+        byte[] destination = cursor.take(32);
+        BigInteger amount = cursor.integer(16);
+        cursor.finish();
+        requireNonzero(asset);
+        requireNonzero(destination);
+        if (amount.signum() == 0
+                || !MessageDigest.isEqual(deriveProgramAccount(owner, seed), source)) {
+            throw new IllegalArgumentException();
+        }
+        return new ProgramAuthorityBinding(owner, frame, source, asset, destination, amount);
+    }
+
+    private static ProgramFundingBinding decodeProgramFunding(byte[] encoded) {
+        TerminalCursor cursor = new TerminalCursor(encoded, 0);
+        if (!MessageDigest.isEqual(cursor.take(PROGRAM_FUNDING_DOMAIN.length),
+                PROGRAM_FUNDING_DOMAIN)) throw new IllegalArgumentException();
+        byte[] owner = cursor.take(32);
+        requireNonzero(owner);
+        int seedLength = cursor.u16();
+        if (seedLength > 128) throw new IllegalArgumentException();
+        byte[] seed = cursor.take(seedLength);
+        byte[] destination = cursor.take(32);
+        byte[] asset = cursor.take(32);
+        cursor.finish();
+        requireNonzero(destination);
+        requireNonzero(asset);
+        if (!MessageDigest.isEqual(deriveProgramAccount(owner, seed), destination)) {
+            throw new IllegalArgumentException();
+        }
+        return new ProgramFundingBinding(owner, destination, asset);
+    }
+
+    private static byte[] deriveProgramAccount(byte[] owner, byte[] seed) {
+        return sha256(PROGRAM_ACCOUNT_DOMAIN, owner,
+            fixedUnsigned(BigInteger.valueOf(seed.length), 4), seed);
+    }
+
+    private static void decodeEventEnvelope(byte[] encoded) {
+        TerminalCursor cursor = new TerminalCursor(encoded, 0);
+        if (!MessageDigest.isEqual(cursor.take(EVENT_ENVELOPE_DOMAIN.length),
+                EVENT_ENVELOPE_DOMAIN)) throw new IllegalArgumentException();
+        long count = cursor.u32();
+        if (count > 64) throw new IllegalArgumentException();
+        for (int index = 0; index < (int) count; index++) {
+            requireNonzero(cursor.take(32));
+            requireNonzero(cursor.take(32));
+            decodeFrame(cursor);
+            cursor.sized32(64);
+            cursor.sized32(65_536);
+        }
+        cursor.finish();
+    }
+
+    private static byte[] decodeFrame(TerminalCursor cursor) {
+        byte[] path = cursor.take(8);
+        int depth = cursor.u8();
+        if (depth > 8) throw new IllegalArgumentException();
+        for (int index = 0; index < path.length; index++) {
+            if (index < depth && path[index] == 0 || index >= depth && path[index] != 0) {
+                throw new IllegalArgumentException();
+            }
+        }
+        return concatenate(path, new byte[] {(byte) depth});
+    }
+
+    private static void decodeCapabilitySet(byte[] encoded, boolean candidate) {
+        if (encoded.length < 2 || encoded.length > 65_535) throw new IllegalArgumentException();
+        TerminalCursor cursor = new TerminalCursor(encoded, 0);
+        int count = cursor.u16();
+        if (count > 269) throw new IllegalArgumentException();
+        CapabilityKey prior = null;
+        int balanceViews = 0;
+        for (int index = 0; index < count; index++) {
+            int tag = cursor.u8();
+            CapabilityKey key;
+            if (tag == 1) key = new CapabilityKey(0, List.of());
+            else if (tag == 2) key = new CapabilityKey(1, List.of());
+            else if (tag == 3) key = new CapabilityKey(2, List.of());
+            else if (tag == 4) {
+                byte[] program = cursor.take(32);
+                requireNonzero(program);
+                key = new CapabilityKey(3, List.of(program));
+            } else if (tag == 5) {
+                byte[] asset = cursor.take(32);
+                byte[] destination = cursor.take(32);
+                BigInteger maximum = cursor.integer(16);
+                requireNonzero(asset);
+                requireNonzero(destination);
+                if (maximum.signum() == 0) throw new IllegalArgumentException();
+                key = new CapabilityKey(4, List.of(asset, destination));
+            } else if (tag == 9 && candidate) {
+                byte[] owner = cursor.take(32);
+                requireNonzero(owner);
+                int seedLength = cursor.u16();
+                if (seedLength > 128) throw new IllegalArgumentException();
+                byte[] seed = cursor.take(seedLength);
+                byte[] source = cursor.take(32);
+                byte[] asset = cursor.take(32);
+                byte[] destination = cursor.take(32);
+                BigInteger maximum = cursor.integer(16);
+                requireNonzero(asset);
+                requireNonzero(destination);
+                if (maximum.signum() == 0
+                        || !MessageDigest.isEqual(deriveProgramAccount(owner, seed), source)) {
+                    throw new IllegalArgumentException();
+                }
+                key = new CapabilityKey(5, List.of(owner, seed, source, asset, destination));
+            } else if (tag == 6) {
+                byte[] digest = cursor.take(32);
+                requireNonzero(digest);
+                key = new CapabilityKey(6, List.of(digest));
+            } else if (tag == 10 && candidate) {
+                byte[] account = cursor.take(32);
+                byte[] asset = cursor.take(32);
+                byte[] digest = cursor.take(32);
+                requireNonzero(account);
+                requireNonzero(asset);
+                requireNonzero(digest);
+                balanceViews++;
+                if (balanceViews > 32) throw new IllegalArgumentException();
+                key = new CapabilityKey(7, List.of(account, asset));
+            } else if (tag == 7) key = new CapabilityKey(8, List.of());
+            else if (tag == 8) key = new CapabilityKey(9, List.of());
+            else throw new IllegalArgumentException();
+            if (prior != null && compareCapabilityKeys(prior, key) >= 0) {
+                throw new IllegalArgumentException();
+            }
+            prior = key;
+        }
+        cursor.finish();
+    }
+
+    private static int compareCapabilityKeys(CapabilityKey left, CapabilityKey right) {
+        if (left.order() != right.order()) return Integer.compare(left.order(), right.order());
+        int length = Math.min(left.fields().size(), right.fields().size());
+        for (int index = 0; index < length; index++) {
+            int order = compareBytes(left.fields().get(index), right.fields().get(index));
+            if (order != 0) return order;
+        }
+        return Integer.compare(left.fields().size(), right.fields().size());
+    }
+
+    static void verifyOccupancyBinding(byte[] encoded, byte[] asset, BigInteger expectedByteBatches,
+                                       BigInteger expectedFeeUnits, byte[] expectedTransferRoot) {
+        OccupancySettlement settlement = decodeOccupancySettlement(encoded);
+        if (expectedByteBatches == null || expectedFeeUnits == null
+                || !settlement.byteBatches().equals(expectedByteBatches)
+                || !settlement.feeUnits().equals(expectedFeeUnits)
+                || !MessageDigest.isEqual(occupancyTransferRoot(settlement, asset),
+                    exactInternal(expectedTransferRoot, 32))) throw new IllegalArgumentException();
+    }
+
+    private static OccupancySettlement decodeOccupancySettlement(byte[] encoded) {
+        if (encoded == null || encoded.length > 65_536) throw new IllegalArgumentException();
+        if (starts(encoded, OCCUPANCY_V1_DOMAIN) || starts(encoded, OCCUPANCY_V2_DOMAIN)) {
+            return decodeLegacyOccupancy(encoded);
+        }
+        TerminalCursor cursor = new TerminalCursor(encoded, 0);
+        if (!MessageDigest.isEqual(cursor.take(OCCUPANCY_V3_DOMAIN.length),
+                OCCUPANCY_V3_DOMAIN)) throw new IllegalArgumentException();
+        BigInteger batch = cursor.u64();
+        BigInteger occupancyPrice = decodeOccupancySchedule(cursor, true);
+        BigInteger declaredUnits = cursor.integer(16);
+        BigInteger declaredFee = cursor.integer(16);
+        BigInteger declaredPaid = cursor.integer(16);
+        BigInteger declaredArrears = cursor.integer(16);
+        long count = cursor.u32();
+        if (count > 256) throw new IllegalArgumentException();
+        BigInteger byteBatches = BigInteger.ZERO;
+        BigInteger feeUnits = BigInteger.ZERO;
+        BigInteger paidUnits = BigInteger.ZERO;
+        BigInteger arrearsUnits = BigInteger.ZERO;
+        byte[] priorNamespace = null;
+        List<OccupancyCharge> charges = new ArrayList<>();
+        for (int index = 0; index < (int) count; index++) {
+            StorageNamespace namespace = decodeStorageNamespace(cursor);
+            if (priorNamespace != null && compareBytes(priorNamespace, namespace.canonical()) >= 0) {
+                throw new IllegalArgumentException();
+            }
+            priorNamespace = namespace.canonical();
+            byte[] payer = cursor.take(32);
+            requireNonzero(payer);
+            if (namespace.principal() != null
+                    && !MessageDigest.isEqual(namespace.principal(), payer)) {
+                throw new IllegalArgumentException();
+            }
+            byte[] rootProgram = cursor.take(32);
+            requireNonzero(rootProgram);
+            byte[] activity = cursor.take(32);
+            BigInteger fromBatch = cursor.u64();
+            BigInteger toBatch = cursor.u64();
+            BigInteger recordedBytes = cursor.u64();
+            BigInteger finalBytes = cursor.u64();
+            BigInteger units = cursor.integer(16);
+            BigInteger price = cursor.u64();
+            BigInteger accrued = cursor.integer(16);
+            BigInteger priorArrears = cursor.integer(16);
+            BigInteger amountDue = cursor.integer(16);
+            BigInteger authorizedAdded = cursor.integer(16);
+            int disposition = cursor.u8();
+            if (disposition < 1 || disposition > 5) throw new IllegalArgumentException();
+            BigInteger arrearsAfter = cursor.integer(16);
+            BigInteger maximumBytes = cursor.u64();
+            BigInteger maximumPrice = cursor.u64();
+            cursor.integer(16);
+            byte[] mandate = cursor.take(32);
+            if (toBatch.compareTo(fromBatch) < 0) throw new IllegalArgumentException();
+            BigInteger expectedUnits = checkedU128Multiply(recordedBytes,
+                toBatch.subtract(fromBatch));
+            BigInteger expectedFee = checkedU128Multiply(expectedUnits, price);
+            BigInteger expectedDue = checkedU128Add(priorArrears, expectedFee);
+            boolean migration = disposition == 5;
+            if (!toBatch.equals(batch) || !migration && !price.equals(occupancyPrice)
+                    || !units.equals(expectedUnits) || !accrued.equals(expectedFee)
+                    || !amountDue.equals(expectedDue) || finalBytes.compareTo(maximumBytes) > 0
+                    || !migration && (allZero(mandate) || allZero(activity))
+                    || migration && (price.signum() != 0 || accrued.signum() != 0
+                        || priorArrears.signum() != 0 || amountDue.signum() != 0
+                        || arrearsAfter.signum() != 0 || !allZero(mandate) || !allZero(activity)
+                        || !MessageDigest.isEqual(rootProgram, namespace.program()))
+                    || (disposition == 4) != (price.compareTo(maximumPrice) > 0)
+                    || disposition == 1 && arrearsAfter.signum() != 0
+                    || disposition != 1 && !arrearsAfter.equals(amountDue)) {
+                throw new IllegalArgumentException();
+            }
+            if (authorizedAdded.signum() != 0) {
+                byte[] expectedMandate = sha256(OCCUPANCY_MANDATE_DOMAIN, payer, rootProgram,
+                    activity, namespace.wire(), fixedUnsigned(maximumBytes, 8),
+                    fixedUnsigned(maximumPrice, 8), fixedUnsigned(authorizedAdded, 16));
+                if (!MessageDigest.isEqual(mandate, expectedMandate)) {
+                    throw new IllegalArgumentException();
+                }
+            }
+            byteBatches = checkedU128Add(byteBatches, units);
+            feeUnits = checkedU128Add(feeUnits, accrued);
+            if (disposition == 1) paidUnits = checkedU128Add(paidUnits, amountDue);
+            else arrearsUnits = checkedU128Add(arrearsUnits, arrearsAfter);
+            charges.add(new OccupancyCharge(payer, amountDue, disposition == 1, arrearsAfter));
+        }
+        cursor.finish();
+        if (!byteBatches.equals(declaredUnits) || !feeUnits.equals(declaredFee)
+                || !paidUnits.equals(declaredPaid) || !arrearsUnits.equals(declaredArrears)) {
+            throw new IllegalArgumentException();
+        }
+        return new OccupancySettlement(byteBatches, feeUnits, List.copyOf(charges));
+    }
+
+    private static OccupancySettlement decodeLegacyOccupancy(byte[] encoded) {
+        boolean versioned = starts(encoded, OCCUPANCY_V2_DOMAIN);
+        byte[] domain = versioned ? OCCUPANCY_V2_DOMAIN : OCCUPANCY_V1_DOMAIN;
+        TerminalCursor cursor = new TerminalCursor(encoded, 0);
+        if (!MessageDigest.isEqual(cursor.take(domain.length), domain)) {
+            throw new IllegalArgumentException();
+        }
+        BigInteger batch = cursor.u64();
+        BigInteger occupancyPrice = decodeOccupancySchedule(cursor, versioned);
+        BigInteger declaredUnits = cursor.integer(16);
+        BigInteger declaredFee = cursor.integer(16);
+        BigInteger count = cursor.u64();
+        if (count.compareTo(BigInteger.valueOf(256)) > 0) throw new IllegalArgumentException();
+        BigInteger byteBatches = BigInteger.ZERO;
+        BigInteger feeUnits = BigInteger.ZERO;
+        List<OccupancyCharge> charges = new ArrayList<>();
+        for (int index = 0; index < count.intValue(); index++) {
+            decodeStorageNamespace(cursor);
+            byte[] payer = cursor.take(32);
+            requireNonzero(payer);
+            BigInteger fromBatch = cursor.u64();
+            BigInteger toBatch = cursor.u64();
+            BigInteger recordedBytes = cursor.u64();
+            cursor.u64();
+            BigInteger units = cursor.integer(16);
+            BigInteger price = cursor.u64();
+            BigInteger accrued = cursor.integer(16);
+            if (toBatch.compareTo(fromBatch) < 0) throw new IllegalArgumentException();
+            BigInteger expectedUnits = checkedU128Multiply(recordedBytes,
+                toBatch.subtract(fromBatch));
+            if (!toBatch.equals(batch) || !units.equals(expectedUnits)
+                    || !price.equals(occupancyPrice)
+                    || !accrued.equals(checkedU128Multiply(units, price))) {
+                throw new IllegalArgumentException();
+            }
+            byteBatches = checkedU128Add(byteBatches, units);
+            feeUnits = checkedU128Add(feeUnits, accrued);
+            charges.add(new OccupancyCharge(payer, accrued, true, BigInteger.ZERO));
+        }
+        cursor.finish();
+        if (!byteBatches.equals(declaredUnits) || !feeUnits.equals(declaredFee)) {
+            throw new IllegalArgumentException();
+        }
+        return new OccupancySettlement(byteBatches, feeUnits, List.copyOf(charges));
+    }
+
+    private static BigInteger decodeOccupancySchedule(TerminalCursor cursor, boolean versioned) {
+        long version = versioned ? cursor.u32() : 1;
+        if (version == 0) throw new IllegalArgumentException();
+        BigInteger occupancyPrice = BigInteger.ZERO;
+        for (int index = 0; index < 7; index++) occupancyPrice = cursor.u64();
+        return occupancyPrice;
+    }
+
+    private static StorageNamespace decodeStorageNamespace(TerminalCursor cursor) {
+        int length = cursor.u8();
+        if (length != 33 && length != 65) throw new IllegalArgumentException();
+        byte[] canonical = cursor.take(length);
+        byte[] program = Arrays.copyOf(canonical, 32);
+        requireNonzero(program);
+        int tag = canonical[32] & 0xff;
+        byte[] principal = null;
+        if (tag == 0 && length == 65) {
+            principal = Arrays.copyOfRange(canonical, 33, 65);
+            requireNonzero(principal);
+        } else if (!(tag == 1 && length == 33) && !(tag == 2 && length == 65)) {
+            throw new IllegalArgumentException();
+        }
+        return new StorageNamespace(canonical,
+            concatenate(new byte[] {(byte) length}, canonical), program, principal);
+    }
+
+    private static byte[] occupancyTransferRoot(OccupancySettlement settlement, byte[] asset) {
+        byte[] boundedAsset = exactInternal(asset, 32);
+        requireNonzero(boundedAsset);
+        Map<String, PayerAggregate> payers = new HashMap<>();
+        for (OccupancyCharge charge : settlement.charges()) {
+            String key = hex(charge.payer());
+            PayerAggregate prior = payers.getOrDefault(key, new PayerAggregate(charge.payer(),
+                BigInteger.ZERO, BigInteger.ZERO, BigInteger.ZERO));
+            BigInteger due = checkedU128Add(prior.due(), charge.amountDue());
+            BigInteger paid = charge.paid()
+                ? checkedU128Add(prior.paid(), charge.amountDue()) : prior.paid();
+            BigInteger arrears = checkedU128Add(prior.arrears(), charge.arrearsAfter());
+            payers.put(key, new PayerAggregate(prior.payer(), due, paid, arrears));
+        }
+        byte[] treasury = sha256(ACCOUNT_DERIVATION_DOMAIN,
+            fixedUnsigned(BigInteger.valueOf(11), 4), FEE_TREASURY_LABEL);
+        List<PayerAggregate> ordered = new ArrayList<>(payers.values());
+        ordered.removeIf(value -> value.due().signum() == 0 && value.arrears().signum() == 0);
+        ordered.sort((left, right) -> compareBytes(left.payer(), right.payer()));
+        List<byte[]> legs = new ArrayList<>();
+        for (PayerAggregate payer : ordered) {
+            if (payer.paid().signum() != 0) {
+                legs.add(concatenate(new byte[] {0}, payer.payer(), treasury, boundedAsset,
+                    fixedUnsigned(payer.paid(), 16), fixedUnsigned(BigInteger.valueOf(23), 2)));
+            }
+        }
+        return merkleRoot(legs);
+    }
+
+    private static byte[] merkleRoot(List<byte[]> legs) {
+        if (legs.isEmpty()) return new byte[32];
+        List<byte[]> level = new ArrayList<>();
+        for (byte[] leg : legs) level.add(sha256(MERKLE_LEAF_DOMAIN, leg));
+        while (level.size() > 1) {
+            List<byte[]> next = new ArrayList<>();
+            for (int index = 0; index < level.size(); index += 2) {
+                byte[] left = level.get(index);
+                byte[] right = index + 1 < level.size() ? level.get(index + 1) : left;
+                next.add(sha256(MERKLE_INTERNAL_DOMAIN, left, right));
+            }
+            level = next;
+        }
+        return level.get(0);
+    }
+
+    private static BigInteger checkedU128Add(BigInteger left, BigInteger right) {
+        BigInteger result = left.add(right);
+        if (left.signum() < 0 || right.signum() < 0 || result.compareTo(MAX_U128) > 0) {
+            throw new IllegalArgumentException();
+        }
+        return result;
+    }
+
+    private static BigInteger checkedU128Multiply(BigInteger left, BigInteger right) {
+        BigInteger result = left.multiply(right);
+        if (left.signum() < 0 || right.signum() < 0 || result.compareTo(MAX_U128) > 0) {
+            throw new IllegalArgumentException();
+        }
+        return result;
+    }
+
+    private static int compareBytes(byte[] left, byte[] right) {
+        int length = Math.min(left.length, right.length);
+        for (int index = 0; index < length; index++) {
+            int order = Integer.compare(left[index] & 0xff, right[index] & 0xff);
+            if (order != 0) return order;
+        }
+        return Integer.compare(left.length, right.length);
+    }
+
+    private static byte[] concatenate(byte[]... values) {
+        int length = 0;
+        for (byte[] value : values) length = Math.addExact(length, value.length);
+        byte[] result = new byte[length];
+        int offset = 0;
+        for (byte[] value : values) {
+            System.arraycopy(value, 0, result, offset, value.length);
+            offset += value.length;
+        }
+        return result;
+    }
+
+    private static byte[] exactInternal(byte[] value, int length) {
+        if (value == null || value.length != length) throw new IllegalArgumentException();
+        return value;
     }
 
     private static boolean starts(byte[] value, String prefix) {
@@ -1274,8 +1821,11 @@ public final class ProgramsClient {
         private long i64() { return ByteBuffer.wrap(take(8)).getLong(); }
         private BigInteger integer(int length) { return new BigInteger(1, take(length)); }
         private byte[] sized32() {
+            return sized32(Integer.MAX_VALUE);
+        }
+        private byte[] sized32(int maximum) {
             long length = u32();
-            if (length > Integer.MAX_VALUE) throw new IllegalArgumentException();
+            if (length > maximum || length > Integer.MAX_VALUE) throw new IllegalArgumentException();
             return take((int) length);
         }
         private byte[] sized64() {
