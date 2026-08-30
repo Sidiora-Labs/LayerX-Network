@@ -215,8 +215,10 @@ static void account_write_u64(uint8_t bytes[8], uint64_t value)
         bytes[i] = (uint8_t)(value >> (56U - 8U * i));
 }
 
-static lxp_result account_leaf_material(
-    const lx_account *account, uint8_t key[33], uint8_t value[615],
+lxp_result lx_account_state_leaf_material(
+    const lx_account *account,
+    uint8_t key[LX_ACCOUNT_STATE_LEAF_KEY_BYTES],
+    uint8_t value[LX_ACCOUNT_STATE_LEAF_VALUE_MAX_BYTES],
     size_t *value_length)
 {
     size_t offset = 0U;
@@ -273,8 +275,8 @@ lxp_result lx_account_registry_root(const lx_account_registry *registry,
             if (memcmp(registry->accounts[j].id,
                        registry->accounts[i].id, 32U) == 0)
                 return LXP_ERR_NON_CANONICAL;
-        status = account_leaf_material(&registry->accounts[i], key, value,
-                                       &value_length);
+        status = lx_account_state_leaf_material(
+            &registry->accounts[i], key, value, &value_length);
         if (status == LXP_OK)
             status = leaf_set(&leaves[i], key, sizeof(key), value,
                               value_length);
@@ -306,8 +308,8 @@ lxp_result lx_account_registry_proof(
             if (memcmp(registry->accounts[prior].id,
                        registry->accounts[index].id, 32U) == 0)
                 return LXP_ERR_NON_CANONICAL;
-        status = account_leaf_material(&registry->accounts[index], key, value,
-                                       &value_length);
+        status = lx_account_state_leaf_material(
+            &registry->accounts[index], key, value, &value_length);
         if (status == LXP_OK)
             status = leaf_set(&leaves[index], key, sizeof(key), value,
                               value_length);

@@ -23,18 +23,26 @@
 
 enum {
     LNI_VERSION_MAJOR = 1,
-    LNI_VERSION_MINOR = 1,
+    LNI_VERSION_MINOR = 2,
     LNI_NODE_INFO_REQUEST = 1,
     LNI_NODE_INFO_RESPONSE = 2,
     LNI_SUBMIT_REQUEST = 3,
     LNI_SUBMIT_RESPONSE = 4,
     LNI_RECEIPT_LOOKUP_REQUEST = 5,
     LNI_RECEIPT_LOOKUP_RESPONSE = 6,
+    LNI_ACCOUNT_READ_REQUEST = 7,
+    LNI_ACCOUNT_READ_RESPONSE = 8,
     LNI_BATCH_HEADER_REQUEST = 12,
     LNI_BATCH_HEADER_RESPONSE = 13,
+    LNI_CHECKPOINT_REQUEST = 14,
+    LNI_CHECKPOINT_RESPONSE = 15,
+    LNI_PROOF_BUNDLE_REQUEST = 16,
+    LNI_PROOF_BUNDLE_RESPONSE = 17,
     LNI_ERROR_RESPONSE = 25,
     LNI_PREPARATION_STATE_REQUEST = 26,
     LNI_PREPARATION_STATE_RESPONSE = 27,
+    LNI_FINALITY_EVIDENCE_REGISTER_REQUEST = 28,
+    LNI_FINALITY_EVIDENCE_REGISTER_RESPONSE = 29,
     LNI_ENVELOPE_FIXED_BYTES = 22,
     LNI_NODE_INFO_FIXED_BYTES = 93,
     LNI_PREPARATION_STATE_MAX_BYTES = 4096,
@@ -472,26 +480,55 @@ static lxp_result send_node_info(lxp_daemon_lni_server *server,
                                  int64_t deadline)
 {
     static const char *sequencer_capabilities[] = {
-        "batch_header", "node_info", "preparation_state", "receipt_lookup",
+        "batch_header", "node_info", "preparation_state",
+        "receipt_lookup", "submit"
+    };
+    static const char *evidence_capabilities[] = {
+        "account_read", "batch_header", "checkpoint", "historical_proofs",
+        "node_info", "preparation_state", "proof_bundle", "receipt_lookup",
         "submit"
+    };
+    static const char *finalizer_capabilities[] = {
+        "account_read", "batch_header", "checkpoint",
+        "finality_evidence_register", "historical_proofs", "node_info",
+        "preparation_state", "proof_bundle", "receipt_lookup", "submit"
     };
     static const char *reader_capabilities[] = {
         "batch_header", "node_info", "receipt_lookup"
     };
-    const char *const *capabilities =
+    static const char *evidence_reader_capabilities[] = {
+        "account_read", "batch_header", "checkpoint", "historical_proofs",
+        "node_info", "proof_bundle", "receipt_lookup"
+    };
+    bool evidence_available = server->owner->evidence_store != NULL;
+    bool finalizer = server->daemon->config.role == LXP_DAEMON_SEQUENCER &&
+        evidence_available &&
+        server->owner->evidence_store->verify_finality_authority != NULL;
+    const char *const *capabilities = finalizer ? finalizer_capabilities :
         server->daemon->config.role == LXP_DAEMON_SEQUENCER ?
-            sequencer_capabilities : reader_capabilities;
+            (evidence_available ? evidence_capabilities :
+                                  sequencer_capabilities) :
+            (evidence_available ? evidence_reader_capabilities :
+                                  reader_capabilities);
     uint8_t payload[256];
-    uint8_t checkpoint[32] = {0};
     uint64_t head;
     uint64_t batch;
     size_t cursor = 0U;
     size_t index;
-    size_t capability_count = server->daemon->config.role ==
-        LXP_DAEMON_SEQUENCER ?
-            sizeof(sequencer_capabilities) /
-                sizeof(sequencer_capabilities[0]) :
-            sizeof(reader_capabilities) / sizeof(reader_capabilities[0]);
+    size_t capability_count = finalizer ?
+            sizeof(finalizer_capabilities) /
+                sizeof(finalizer_capabilities[0]) :
+        server->daemon->config.role == LXP_DAEMON_SEQUENCER ?
+            (evidence_available ?
+                sizeof(evidence_capabilities) /
+                    sizeof(evidence_capabilities[0]) :
+                sizeof(sequencer_capabilities) /
+                    sizeof(sequencer_capabilities[0])) :
+            (evidence_available ?
+                sizeof(evidence_reader_capabilities) /
+                    sizeof(evidence_reader_capabilities[0]) :
+                sizeof(reader_capabilities) /
+                    sizeof(reader_capabilities[0]));
     lxp_result status = LXP_OK;
     if (pthread_mutex_lock(&server->daemon->mutex) != 0) return LXP_ERR_IO;
     head = server->daemon->next_sequence == 0U ? 0U :
@@ -507,7 +544,13 @@ static lxp_result send_node_info(lxp_daemon_lni_server *server,
     payload[cursor++] = role_tag(server->daemon->config.role);
     store_u64(payload + cursor, head); cursor += 8U;
     store_u64(payload + cursor, batch); cursor += 8U;
-    (void)memcpy(payload + cursor, checkpoint, 32U); cursor += 32U;
+    if (server->owner->evidence_store != NULL)
+        (void)memcpy(payload + cursor,
+                     server->owner->evidence_store->latest_checkpoint_id,
+                     32U);
+    else
+        (void)memset(payload + cursor, 0, 32U);
+    cursor += 32U;
     (void)memcpy(payload + cursor,
                  server->owner->receipt_authority->authorization.public_key,
                  32U); cursor += 32U;
@@ -938,6 +981,420 @@ static lxp_result send_preparation_state(
                          NULL, 0U, deadline);
 }
 
+static lxp_result evidence_refusal(
+    lxp_daemon_lni_server *server, int descriptor,
+    uint64_t correlation_id, lxp_result status, int64_t deadline)
+{
+    lxp_result public_status =
+        status == LXP_ERR_IO || status == LXP_FATAL_INVARIANT ?
+            LXP_ERR_MODULE_DISABLED : status;
+    return send_refusal(descriptor, server->frame_bytes, correlation_id,
+                        4U, public_status, deadline);
+}
+
+static lxp_result latest_receipt_evidence(
+    lxp_daemon_protocol_owner *owner, lxp_arena *arena,
+    lxp_daemon_receipt_evidence *evidence)
+{
+    uint64_t offset = 0U;
+    uint64_t target;
+    size_t mark;
+    bool present = true;
+    lxp_result status = LXP_OK;
+    if (owner == NULL || owner->receipt_authority == NULL || arena == NULL ||
+        evidence == NULL)
+        return LXP_ERR_NON_CANONICAL;
+    target = owner->receipt_authority->last_global_sequence;
+    if (target == 0U) return LXP_ERR_MODULE_DISABLED;
+    mark = lxp_arena_mark(arena);
+    while (status == LXP_OK && present) {
+        status = lxp_daemon_receipt_authority_scan(
+            owner->receipt_authority, &offset, arena, evidence, &present);
+        if (status != LXP_OK || !present) break;
+        if (evidence->global_sequence == target) return LXP_OK;
+        if (evidence->global_sequence > target)
+            return LXP_ERR_LOG_CORRUPT;
+        status = lxp_arena_reset(arena, mark);
+    }
+    return status == LXP_OK ? LXP_ERR_PROJECTION_STALE : status;
+}
+
+static lxp_result latest_account_evidence(
+    lxp_daemon_protocol_owner *owner, const uint8_t account_id[32],
+    const uint8_t *asset_id, const uint8_t *target_activity_id,
+    lxp_arena *arena, lxp_daemon_account_evidence *evidence)
+{
+    lxp_daemon_receipt_evidence head;
+    lxp_receipt receipt;
+    const lx_account_registry *accounts;
+    uint8_t receipt_digest[32];
+    size_t index;
+    bool found = false;
+    lxp_result status;
+    if (owner == NULL || owner->kernel == NULL || owner->kernel->state == NULL ||
+        owner->kernel->state->accounts == NULL || account_id == NULL ||
+        arena == NULL || evidence == NULL)
+        return LXP_ERR_NON_CANONICAL;
+    accounts = owner->kernel->state->accounts;
+    for (index = 0U; index < accounts->count; ++index) {
+        const lx_account *account = &accounts->accounts[index];
+        if (lxp_ct_memcmp(account->id, account_id, 32U) != 0) continue;
+        if (found) return LXP_FATAL_INVARIANT;
+        found = true;
+        if (asset_id != NULL &&
+            (!account->has_asset ||
+             lxp_ct_memcmp(account->asset_id, asset_id, 32U) != 0))
+            return LXP_ERR_ASSET_MISMATCH;
+    }
+    if (!found) return LXP_ERR_UNKNOWN_ACCOUNT_NAMESPACE;
+    status = latest_receipt_evidence(owner, arena, &head);
+    if (status == LXP_OK)
+        status = lxp_receipt_decode(head.canonical_receipt.bytes,
+                                    head.canonical_receipt.length,
+                                    true, &receipt);
+    if (status == LXP_OK && target_activity_id != NULL &&
+        lxp_ct_memcmp(receipt.activity_id, target_activity_id, 32U) != 0)
+        status = LXP_ERR_CONTEXT_MISMATCH;
+    if (status == LXP_OK)
+        status = lxp_receipt_digest(&receipt, arena, receipt_digest);
+    if (status == LXP_OK)
+        status = lxp_daemon_account_evidence_build(
+            owner->kernel, owner->network_id, account_id, receipt_digest,
+            receipt.timestamp, head.canonical_receipt, &head.receipt_proof,
+            &owner->receipt_authority->authorization,
+            head.canonical_header, head.header_signature, arena, evidence);
+    return status;
+}
+
+static lxp_result parse_account_read_request(
+    const lni_envelope *request, uint8_t *kind,
+    const uint8_t **account_id, const uint8_t **asset_id,
+    uint8_t *selector_kind, uint64_t *selector_batch,
+    const uint8_t **selector_checkpoint, uint8_t *requested_rank)
+{
+    size_t cursor = 0U;
+    if (request == NULL || kind == NULL || account_id == NULL ||
+        asset_id == NULL || selector_kind == NULL || selector_batch == NULL ||
+        selector_checkpoint == NULL || requested_rank == NULL ||
+        request->proof_length != 0U || request->payload_length < 37U ||
+        load_u16(request->payload) != 1U)
+        return LXP_ERR_MALFORMED_ENVELOPE;
+    cursor = 2U;
+    *kind = request->payload[cursor++];
+    if (*kind != 1U && *kind != 2U) return LXP_ERR_MALFORMED_ENVELOPE;
+    if (cursor > request->payload_length - 32U)
+        return LXP_ERR_MALFORMED_ENVELOPE;
+    *account_id = request->payload + cursor;
+    cursor += 32U;
+    *asset_id = NULL;
+    if (*kind == 1U) {
+        if (cursor > request->payload_length - 32U)
+            return LXP_ERR_MALFORMED_ENVELOPE;
+        *asset_id = request->payload + cursor;
+        cursor += 32U;
+    }
+    if (cursor >= request->payload_length)
+        return LXP_ERR_MALFORMED_ENVELOPE;
+    *selector_kind = request->payload[cursor++];
+    *selector_batch = 0U;
+    *selector_checkpoint = NULL;
+    if (*selector_kind == 2U) {
+        if (cursor > request->payload_length - 8U)
+            return LXP_ERR_MALFORMED_ENVELOPE;
+        *selector_batch = load_u64(request->payload + cursor);
+        cursor += 8U;
+        if (*selector_batch == 0U) return LXP_ERR_MALFORMED_ENVELOPE;
+    } else if (*selector_kind == 3U) {
+        if (cursor > request->payload_length - 32U)
+            return LXP_ERR_MALFORMED_ENVELOPE;
+        *selector_checkpoint = request->payload + cursor;
+        cursor += 32U;
+        if (lxp_ct_is_zero(*selector_checkpoint, 32U))
+            return LXP_ERR_MALFORMED_ENVELOPE;
+    } else if (*selector_kind != 1U) {
+        return LXP_ERR_MALFORMED_ENVELOPE;
+    }
+    if (cursor + 1U != request->payload_length)
+        return LXP_ERR_MALFORMED_ENVELOPE;
+    *requested_rank = request->payload[cursor];
+    return *requested_rank <= 5U ? LXP_OK : LXP_ERR_MALFORMED_ENVELOPE;
+}
+
+static lxp_result account_value_asset_matches(
+    lxp_byte_span canonical_value, const uint8_t asset_id[32])
+{
+    size_t name_length;
+    size_t asset_offset;
+    if (canonical_value.bytes == NULL || asset_id == NULL ||
+        canonical_value.length < 2U)
+        return LXP_ERR_NON_CANONICAL;
+    name_length = load_u16(canonical_value.bytes);
+    if (name_length == 0U || name_length > LX_ACCOUNT_NAME_MAX ||
+        name_length > canonical_value.length - 2U)
+        return LXP_ERR_NON_CANONICAL;
+    asset_offset = 2U + name_length + 1U + 16U;
+    if (asset_offset > canonical_value.length ||
+        canonical_value.length - asset_offset < 33U)
+        return LXP_ERR_NON_CANONICAL;
+    return canonical_value.bytes[asset_offset + 32U] == 1U &&
+        lxp_ct_memcmp(canonical_value.bytes + asset_offset,
+                      asset_id, 32U) == 0 ?
+            LXP_OK : LXP_ERR_ASSET_MISMATCH;
+}
+
+static lxp_result send_account_read(
+    lxp_daemon_lni_server *server, int descriptor,
+    const lni_envelope *request, int64_t deadline)
+{
+    lxp_daemon_account_evidence evidence;
+    lxp_byte_span canonical_value;
+    lxp_byte_span proof_material;
+    const uint8_t *account_id;
+    const uint8_t *asset_id;
+    const uint8_t *selector_checkpoint;
+    uint64_t selector_batch;
+    uint8_t kind;
+    uint8_t selector_kind;
+    uint8_t requested_rank;
+    size_t mark;
+    lxp_result status;
+    if (request->minor < 2U || request->correlation_id == 0U)
+        return send_refusal(
+            descriptor, server->frame_bytes, request->correlation_id, 1U,
+            request->minor < 2U ? LXP_ERR_VERSION_UNSUPPORTED :
+                                  LXP_ERR_MALFORMED_ENVELOPE,
+            deadline);
+    status = parse_account_read_request(
+        request, &kind, &account_id, &asset_id, &selector_kind,
+        &selector_batch, &selector_checkpoint, &requested_rank);
+    if (status != LXP_OK)
+        return send_refusal(descriptor, server->frame_bytes,
+                            request->correlation_id, 1U, status, deadline);
+    if (server->owner->evidence_store == NULL || requested_rank > 4U ||
+        ((selector_kind == 1U || selector_kind == 2U) &&
+         requested_rank > 3U))
+        return send_refusal(descriptor, server->frame_bytes,
+                            request->correlation_id, 3U,
+                            LXP_ERR_MODULE_DISABLED, deadline);
+    if (pthread_mutex_lock(&server->owner->mutex) != 0) return LXP_ERR_IO;
+    mark = lxp_arena_mark(server->owner->scratch);
+    if (selector_kind == 1U)
+        status = latest_account_evidence(
+            server->owner, account_id, kind == 1U ? asset_id : NULL, NULL,
+            server->owner->scratch, &evidence);
+    else
+        status = LXP_OK;
+    if (status == LXP_OK)
+        status = lxp_daemon_account_evidence_wire_encode(
+            server->owner->evidence_store,
+            selector_kind == 1U ? &evidence : NULL,
+            selector_kind == 1U ? server->owner->kernel : NULL,
+            server->owner->network_id, account_id, selector_kind,
+            selector_batch, selector_checkpoint,
+            server->owner->scratch, &canonical_value, &proof_material);
+    if (status == LXP_OK && kind == 1U)
+        status = account_value_asset_matches(canonical_value, asset_id);
+    if (status == LXP_OK)
+        status = send_envelope(
+            descriptor, server->frame_bytes, LNI_ACCOUNT_READ_RESPONSE,
+            request->correlation_id, canonical_value.bytes,
+            canonical_value.length, proof_material.bytes,
+            proof_material.length, deadline);
+    else
+        status = evidence_refusal(server, descriptor,
+                                  request->correlation_id, status, deadline);
+    (void)lxp_arena_reset(server->owner->scratch, mark);
+    if (pthread_mutex_unlock(&server->owner->mutex) != 0 && status == LXP_OK)
+        status = LXP_FATAL_INVARIANT;
+    return status;
+}
+
+static lxp_result send_checkpoint(
+    lxp_daemon_lni_server *server, int descriptor,
+    const lni_envelope *request, int64_t deadline)
+{
+    lxp_daemon_finality_evidence evidence;
+    uint8_t checkpoint_id[32] = {0};
+    uint64_t batch_number = 0U;
+    size_t mark;
+    lxp_result status;
+    if (request->minor < 2U || request->correlation_id == 0U ||
+        request->proof_length != 0U || request->payload_length < 11U ||
+        load_u16(request->payload) != 1U)
+        return send_refusal(
+            descriptor, server->frame_bytes, request->correlation_id, 1U,
+            request->minor < 2U ? LXP_ERR_VERSION_UNSUPPORTED :
+                                  LXP_ERR_MALFORMED_ENVELOPE,
+            deadline);
+    if (request->payload[2] == 1U && request->payload_length == 35U) {
+        (void)memcpy(checkpoint_id, request->payload + 3U, 32U);
+        if (lxp_ct_is_zero(checkpoint_id, 32U))
+            return send_refusal(descriptor, server->frame_bytes,
+                                request->correlation_id, 1U,
+                                LXP_ERR_MALFORMED_ENVELOPE, deadline);
+    } else if (request->payload[2] == 2U && request->payload_length == 11U) {
+        batch_number = load_u64(request->payload + 3U);
+        if (batch_number == 0U)
+            return send_refusal(descriptor, server->frame_bytes,
+                                request->correlation_id, 1U,
+                                LXP_ERR_MALFORMED_ENVELOPE, deadline);
+    } else {
+        return send_refusal(descriptor, server->frame_bytes,
+                            request->correlation_id, 1U,
+                            LXP_ERR_MALFORMED_ENVELOPE, deadline);
+    }
+    if (server->owner->evidence_store == NULL)
+        return send_refusal(descriptor, server->frame_bytes,
+                            request->correlation_id, 3U,
+                            LXP_ERR_MODULE_DISABLED, deadline);
+    if (pthread_mutex_lock(&server->owner->mutex) != 0) return LXP_ERR_IO;
+    mark = lxp_arena_mark(server->owner->scratch);
+    status = lxp_daemon_finality_evidence_lookup(
+        server->owner->evidence_store, checkpoint_id, batch_number,
+        server->owner->scratch, &evidence);
+    if (status == LXP_OK)
+        status = send_envelope(
+            descriptor, server->frame_bytes, LNI_CHECKPOINT_RESPONSE,
+            request->correlation_id, evidence.checkpoint_payload.bytes,
+            evidence.checkpoint_payload.length, evidence.finality_proof.bytes,
+            evidence.finality_proof.length, deadline);
+    else
+        status = evidence_refusal(server, descriptor,
+                                  request->correlation_id, status, deadline);
+    (void)lxp_arena_reset(server->owner->scratch, mark);
+    if (pthread_mutex_unlock(&server->owner->mutex) != 0 && status == LXP_OK)
+        status = LXP_FATAL_INVARIANT;
+    return status;
+}
+
+static lxp_result send_proof_bundle(
+    lxp_daemon_lni_server *server, int descriptor,
+    const lni_envelope *request, int64_t deadline)
+{
+    lxp_daemon_activity_evidence activity;
+    lxp_daemon_account_evidence account;
+    lxp_byte_span canonical_value;
+    lxp_byte_span proof_material;
+    const uint8_t *target_activity_id;
+    uint8_t kind;
+    size_t mark;
+    lxp_result status;
+    if (request->minor < 2U || request->correlation_id == 0U ||
+        request->proof_length != 0U ||
+        (request->payload_length != 35U &&
+         request->payload_length != 67U) ||
+        load_u16(request->payload) != 1U)
+        return send_refusal(
+            descriptor, server->frame_bytes, request->correlation_id, 1U,
+            request->minor < 2U ? LXP_ERR_VERSION_UNSUPPORTED :
+                                  LXP_ERR_MALFORMED_ENVELOPE,
+            deadline);
+    kind = request->payload[2U];
+    target_activity_id = request->payload + 3U;
+    if (((kind == 1U || kind == 3U) && request->payload_length != 35U) ||
+        (kind == 2U && request->payload_length != 67U) ||
+        (kind != 1U && kind != 2U && kind != 3U) ||
+        lxp_ct_is_zero(target_activity_id, 32U) ||
+        (kind == 2U && lxp_ct_is_zero(request->payload + 35U, 32U)))
+        return send_refusal(descriptor, server->frame_bytes,
+                            request->correlation_id, 1U,
+                            LXP_ERR_MALFORMED_ENVELOPE, deadline);
+    if (server->owner->evidence_store == NULL)
+        return send_refusal(descriptor, server->frame_bytes,
+                            request->correlation_id, 3U,
+                            LXP_ERR_MODULE_DISABLED, deadline);
+    if (pthread_mutex_lock(&server->owner->mutex) != 0) return LXP_ERR_IO;
+    mark = lxp_arena_mark(server->owner->scratch);
+    if (kind == 2U) {
+        status = latest_account_evidence(
+            server->owner, request->payload + 35U, NULL,
+            target_activity_id, server->owner->scratch, &account);
+        if (status == LXP_OK)
+            status = lxp_daemon_account_evidence_wire_encode(
+                server->owner->evidence_store, &account,
+                server->owner->kernel, server->owner->network_id,
+                request->payload + 35U, 1U, 0U, NULL,
+                server->owner->scratch, &canonical_value, &proof_material);
+    } else {
+        status = lxp_daemon_activity_evidence_lookup(
+            server->owner->evidence_store, target_activity_id,
+            server->owner->scratch, &activity);
+        if (status == LXP_OK)
+            status = lxp_daemon_activity_evidence_wire_encode(
+                &activity, server->owner->network_id, kind,
+                server->owner->scratch, &canonical_value, &proof_material);
+    }
+    if (status == LXP_OK)
+        status = send_envelope(
+            descriptor, server->frame_bytes, LNI_PROOF_BUNDLE_RESPONSE,
+            request->correlation_id, canonical_value.bytes,
+            canonical_value.length, proof_material.bytes,
+            proof_material.length, deadline);
+    else
+        status = evidence_refusal(server, descriptor,
+                                  request->correlation_id, status, deadline);
+    (void)lxp_arena_reset(server->owner->scratch, mark);
+    if (pthread_mutex_unlock(&server->owner->mutex) != 0 && status == LXP_OK)
+        status = LXP_FATAL_INVARIANT;
+    return status;
+}
+
+static lxp_result send_finality_evidence_register(
+    lxp_daemon_lni_server *server, int descriptor,
+    const lni_envelope *request, int64_t deadline)
+{
+    lxp_daemon_finality_evidence evidence;
+    uint8_t response[74];
+    size_t mark;
+    lxp_result status;
+    if (request->minor < 2U || request->correlation_id == 0U ||
+        request->payload_length == 0U || request->proof_length == 0U ||
+        request->payload_length > LXP_DAEMON_FINALITY_REGISTER_MAX_BYTES ||
+        request->proof_length > LXP_DAEMON_FINALITY_REGISTER_MAX_BYTES ||
+        request->payload_length > LXP_DAEMON_FINALITY_REGISTER_MAX_BYTES -
+                                      request->proof_length)
+        return send_refusal(
+            descriptor, server->frame_bytes, request->correlation_id, 1U,
+            request->minor < 2U ? LXP_ERR_VERSION_UNSUPPORTED :
+                                  LXP_ERR_MALFORMED_ENVELOPE,
+            deadline);
+    if (server->daemon->config.role != LXP_DAEMON_SEQUENCER ||
+        server->owner->evidence_store == NULL ||
+        server->owner->evidence_store->verify_finality_authority == NULL)
+        return send_refusal(descriptor, server->frame_bytes,
+                            request->correlation_id, 3U,
+                            LXP_ERR_MODULE_DISABLED, deadline);
+    if (pthread_mutex_lock(&server->owner->mutex) != 0) return LXP_ERR_IO;
+    mark = lxp_arena_mark(server->owner->scratch);
+    status = lxp_daemon_finality_evidence_register(
+        server->owner->evidence_store,
+        (lxp_byte_span){request->payload, request->payload_length},
+        (lxp_byte_span){request->proof, request->proof_length},
+        server->owner->scratch, &evidence);
+    if (status == LXP_OK) {
+        store_u16(response, 1U);
+        (void)memcpy(response + 2U, evidence.checkpoint_id, 32U);
+        store_u64(response + 34U, evidence.batch_number);
+        (void)memcpy(response + 42U, evidence.record_digest, 32U);
+        status = send_envelope(
+            descriptor, server->frame_bytes,
+            LNI_FINALITY_EVIDENCE_REGISTER_RESPONSE,
+            request->correlation_id, response, sizeof(response),
+            NULL, 0U, deadline);
+    } else {
+        lxp_result public_status =
+            status == LXP_ERR_IO || status == LXP_FATAL_INVARIANT ?
+                LXP_ERR_MODULE_DISABLED : status;
+        status = send_refusal(
+            descriptor, server->frame_bytes, request->correlation_id, 4U,
+            public_status, deadline);
+    }
+    (void)lxp_arena_reset(server->owner->scratch, mark);
+    if (pthread_mutex_unlock(&server->owner->mutex) != 0 && status == LXP_OK)
+        status = LXP_FATAL_INVARIANT;
+    return status;
+}
+
 static bool peer_authorized(const lxp_daemon_lni_server *server,
                             int descriptor)
 {
@@ -1013,10 +1470,20 @@ static lxp_result serve_connection(lxp_daemon_lni_server *server,
             status = send_submit(server, descriptor, &request, deadline);
         } else if (request.tag == LNI_RECEIPT_LOOKUP_REQUEST) {
             status = send_receipt(server, descriptor, &request, deadline);
+        } else if (request.tag == LNI_ACCOUNT_READ_REQUEST) {
+            status = send_account_read(server, descriptor, &request, deadline);
         } else if (request.tag == LNI_BATCH_HEADER_REQUEST) {
             status = send_batch_header(server, descriptor, &request, deadline);
+        } else if (request.tag == LNI_CHECKPOINT_REQUEST) {
+            status = send_checkpoint(server, descriptor, &request, deadline);
+        } else if (request.tag == LNI_PROOF_BUNDLE_REQUEST) {
+            status = send_proof_bundle(
+                server, descriptor, &request, deadline);
         } else if (request.tag == LNI_PREPARATION_STATE_REQUEST) {
             status = send_preparation_state(
+                server, descriptor, &request, deadline);
+        } else if (request.tag == LNI_FINALITY_EVIDENCE_REGISTER_REQUEST) {
+            status = send_finality_evidence_register(
                 server, descriptor, &request, deadline);
         } else {
             status = send_refusal(descriptor, server->frame_bytes,

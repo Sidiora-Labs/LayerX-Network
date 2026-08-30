@@ -239,7 +239,11 @@ struct lx_account_registry {
     atomic_bool gateway_transition;
 };
 
-enum { LXP_STATE_PROOF_MAX_DEPTH = 32 };
+enum {
+    LXP_STATE_PROOF_MAX_DEPTH = 32,
+    LX_ACCOUNT_STATE_LEAF_KEY_BYTES = 33,
+    LX_ACCOUNT_STATE_LEAF_VALUE_MAX_BYTES = 615
+};
 typedef struct lxp_state_proof {
     uint32_t leaf_index;
     uint32_t leaf_count;
@@ -259,6 +263,11 @@ lxp_result lx_account_registry_snapshot(lx_account_registry *source,
                                         lx_account_registry *snapshot);
 lxp_result lx_account_registry_root(const lx_account_registry *registry,
                                     uint8_t root[32]);
+lxp_result lx_account_state_leaf_material(
+    const lx_account *account,
+    uint8_t key[LX_ACCOUNT_STATE_LEAF_KEY_BYTES],
+    uint8_t value[LX_ACCOUNT_STATE_LEAF_VALUE_MAX_BYTES],
+    size_t *value_length);
 lxp_result lx_account_registry_proof(
     const lx_account_registry *registry,
     const uint8_t account_id[LX_ACCOUNT_ID_BYTES], uint8_t root[32],

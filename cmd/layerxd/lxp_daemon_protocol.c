@@ -623,6 +623,40 @@ lxp_result lxp_daemon_protocol_owner_detach(
     return LXP_OK;
 }
 
+lxp_result lxp_daemon_protocol_owner_bind_evidence(
+    lxp_daemon_protocol_owner *owner,
+    lxp_daemon_evidence_store *evidence_store)
+{
+    lxp_result status = LXP_OK;
+    if (owner == NULL || evidence_store == NULL || !owner->attached ||
+        !evidence_store->initialized || evidence_store->log == NULL ||
+        evidence_store->network_id != owner->network_id ||
+        !evidence_store->authorization.authorized ||
+        !owner->receipt_authority->authorization.authorized ||
+        evidence_store->authorization.first_batch_number !=
+            owner->receipt_authority->authorization.first_batch_number ||
+        evidence_store->authorization.last_batch_number !=
+            owner->receipt_authority->authorization.last_batch_number ||
+        lxp_ct_memcmp(evidence_store->authorization.sequencer_id,
+                      owner->receipt_authority->authorization.sequencer_id,
+                      32U) != 0 ||
+        lxp_ct_memcmp(evidence_store->authorization.public_key,
+                      owner->receipt_authority->authorization.public_key,
+                      32U) != 0 ||
+        evidence_store->log == owner->receipt_authority->log ||
+        evidence_store->log == owner->history->log)
+        return LXP_ERR_NON_CANONICAL;
+    if (pthread_mutex_lock(&owner->mutex) != 0) return LXP_ERR_IO;
+    if (owner->evidence_store != NULL &&
+        owner->evidence_store != evidence_store)
+        status = LXP_ERR_CONTEXT_MISMATCH;
+    else
+        owner->evidence_store = evidence_store;
+    if (pthread_mutex_unlock(&owner->mutex) != 0 && status == LXP_OK)
+        status = LXP_FATAL_INVARIANT;
+    return status;
+}
+
 lxp_result lxp_daemon_protocol_publish_receipt(
     lxp_daemon_protocol_owner *owner,
     const uint8_t *canonical_receipt, size_t receipt_length,

@@ -5,8 +5,10 @@
 #include "layerx/lxp_activity.h"
 #include "layerx/lxp_batch.h"
 #include "layerx/lxp_history.h"
+#include "layerx/lxp_guarantor.h"
 #include "layerx/lxp_kernel.h"
 #include "layerx/lxp_merkle.h"
+#include "layerx/lxp_paxeer.h"
 #include "layerx/programs.h"
 
 #include <pthread.h>
@@ -15,6 +17,8 @@
 #include <stdint.h>
 
 typedef struct lxp_daemon lxp_daemon;
+typedef struct lxp_daemon_receipt_authority_store
+    lxp_daemon_receipt_authority_store;
 
 enum {
     LXP_DAEMON_MAX_WORKERS = 16,
@@ -25,9 +29,181 @@ enum {
     LXP_DAEMON_BEARER_MAX_BYTES = 128,
     LXP_DAEMON_PROTOCOL_MAX_CONNECTIONS = 4,
     LXP_DAEMON_PROTOCOL_SCRATCH_MIN_BYTES = 48 * 1024 * 1024,
-    LXP_DAEMON_LNI_MAX_FRAME_BYTES = LXP_MAX_ACTIVITY_BYTES + 22 + 32,
+    LXP_DAEMON_FINALITY_REGISTER_MAX_BYTES =
+        LXP_MAX_VALIDITY_PROOF_BYTES + 96 * 1024,
+    LXP_DAEMON_LNI_MAX_FRAME_BYTES =
+        LXP_DAEMON_FINALITY_REGISTER_MAX_BYTES + 64 * 1024,
     LXP_DAEMON_LNI_SOCKET_PATH_BYTES = 108
 };
+
+typedef enum lxp_daemon_evidence_kind {
+    LXP_DAEMON_EVIDENCE_ACCOUNT = 1,
+    LXP_DAEMON_EVIDENCE_ACTIVITY = 2,
+    LXP_DAEMON_EVIDENCE_FINALITY = 3
+} lxp_daemon_evidence_kind;
+
+struct lxp_daemon_settlement_registration_evidence;
+typedef lxp_result (*lxp_daemon_finality_authority_verify_fn)(
+    void *context, const lxp_guarantor_cert *certificate,
+    const lxp_guarantor_set *bonded_set,
+    const lxp_finalisation_requirements *requirements,
+    const struct lxp_daemon_settlement_registration_evidence *registration);
+
+typedef struct lxp_daemon_evidence_store {
+    lxp_log *log;
+    lxp_checkpoint_registry_state registry;
+    lxp_sequencer_authorization authorization;
+    uint32_t network_id;
+    uint64_t record_count;
+    uint64_t last_ordinal;
+    uint64_t latest_finalized_batch;
+    uint64_t latest_bonded_set_version;
+    uint8_t latest_checkpoint_id[32];
+    lxp_daemon_finality_authority_verify_fn verify_finality_authority;
+    void *finality_authority_context;
+    bool initialized;
+} lxp_daemon_evidence_store;
+
+typedef struct lxp_daemon_signed_header_evidence {
+    lxp_sequencer_authorization authorization;
+    lxp_byte_span canonical_header;
+    uint8_t signature[64];
+} lxp_daemon_signed_header_evidence;
+
+typedef struct lxp_daemon_account_evidence {
+    uint8_t account_id[32];
+    uint8_t receipt_digest[32];
+    uint64_t observed_sequence;
+    uint64_t observed_at_ms;
+    uint8_t account_leaf_key[LX_ACCOUNT_STATE_LEAF_KEY_BYTES];
+    uint8_t account_leaf_value[LX_ACCOUNT_STATE_LEAF_VALUE_MAX_BYTES];
+    size_t account_leaf_value_length;
+    uint8_t account_root[32];
+    uint8_t universal_root[32];
+    uint8_t resulting_state_root[32];
+    lxp_state_proof account_proof;
+    lxp_state_proof account_tree_proof;
+    lxp_state_proof universal_root_proof;
+    lxp_byte_span canonical_receipt;
+    lxp_merkle_proof receipt_proof;
+    lxp_daemon_signed_header_evidence signed_header;
+} lxp_daemon_account_evidence;
+
+typedef struct lxp_daemon_activity_evidence {
+    uint8_t activity_id[32];
+    uint8_t receipt_digest[32];
+    uint64_t global_sequence;
+    uint64_t batch_number;
+    lxp_byte_span canonical_activity;
+    lxp_merkle_proof activity_proof;
+    lxp_byte_span canonical_receipt;
+    lxp_merkle_proof receipt_proof;
+    lxp_daemon_signed_header_evidence signed_header;
+} lxp_daemon_activity_evidence;
+
+typedef struct lxp_daemon_finality_evidence {
+    uint8_t checkpoint_id[32];
+    uint8_t resulting_state_root[32];
+    uint8_t record_digest[32];
+    uint64_t batch_number;
+    uint64_t bonded_set_version;
+    uint64_t resulting_registration_count;
+    lxp_byte_span checkpoint_payload;
+    lxp_byte_span finality_proof;
+} lxp_daemon_finality_evidence;
+
+typedef struct lxp_daemon_settlement_registration_evidence {
+    uint64_t paxeer_chain_id;
+    uint8_t settlement_contract[20];
+    uint8_t checkpoint_id[32];
+    uint8_t transaction_id[32];
+    uint64_t observed_block_number;
+    uint64_t observed_at_ms;
+} lxp_daemon_settlement_registration_evidence;
+
+lxp_result lxp_daemon_evidence_open(
+    lxp_daemon_evidence_store *store, lxp_log *log, uint32_t network_id,
+    const lxp_sequencer_authorization *authorization,
+    const uint8_t initial_settlement_anchor[32], bool allow_initialize,
+    lxp_daemon_finality_authority_verify_fn verify_finality_authority,
+    void *finality_authority_context, lxp_arena *arena);
+lxp_result lxp_daemon_evidence_bind_finality_authority(
+    lxp_daemon_evidence_store *store,
+    lxp_daemon_finality_authority_verify_fn verify, void *context);
+lxp_result lxp_daemon_account_evidence_build(
+    const lxp_kernel *kernel, uint32_t network_id,
+    const uint8_t account_id[32],
+    const uint8_t receipt_digest[32], uint64_t observed_at_ms,
+    lxp_byte_span canonical_receipt,
+    const lxp_merkle_proof *receipt_proof,
+    const lxp_sequencer_authorization *authorization,
+    lxp_byte_span canonical_header, const uint8_t header_signature[64],
+    lxp_arena *arena, lxp_daemon_account_evidence *evidence);
+lxp_result lxp_daemon_account_evidence_publish(
+    lxp_daemon_evidence_store *store,
+    const lxp_daemon_account_evidence *evidence, lxp_arena *arena,
+    uint8_t record_digest[32]);
+lxp_result lxp_daemon_account_evidence_publish_batch(
+    lxp_daemon_evidence_store *store, const lxp_kernel *kernel,
+    lxp_byte_span canonical_head_receipt,
+    const lxp_merkle_proof *head_receipt_proof,
+    const lxp_sequencer_authorization *authorization,
+    lxp_byte_span canonical_header, const uint8_t header_signature[64],
+    lxp_arena *arena);
+lxp_result lxp_daemon_account_evidence_lookup(
+    const lxp_daemon_evidence_store *store, const uint8_t account_id[32],
+    const uint8_t resulting_state_root[32], lxp_arena *arena,
+    lxp_daemon_account_evidence *evidence);
+lxp_result lxp_daemon_account_evidence_lookup_batch(
+    const lxp_daemon_evidence_store *store, const uint8_t account_id[32],
+    uint64_t batch_number, lxp_arena *arena,
+    lxp_daemon_account_evidence *evidence);
+lxp_result lxp_daemon_account_evidence_wire_encode(
+    const lxp_daemon_evidence_store *store,
+    const lxp_daemon_account_evidence *latest_evidence,
+    const lxp_kernel *latest_kernel, uint32_t network_id,
+    const uint8_t account_id[32], uint8_t selector_kind,
+    uint64_t selector_batch,
+    const uint8_t selector_checkpoint_id[32],
+    lxp_arena *arena, lxp_byte_span *canonical_value,
+    lxp_byte_span *proof_material);
+lxp_result lxp_daemon_activity_evidence_publish(
+    lxp_daemon_evidence_store *store, lxp_byte_span canonical_activity,
+    const lxp_merkle_proof *activity_proof,
+    lxp_byte_span canonical_receipt,
+    const lxp_merkle_proof *receipt_proof,
+    const lxp_sequencer_authorization *authorization,
+    lxp_byte_span canonical_header, const uint8_t header_signature[64],
+    lxp_arena *arena, uint8_t record_digest[32]);
+lxp_result lxp_daemon_activity_evidence_lookup(
+    const lxp_daemon_evidence_store *store, const uint8_t activity_id[32],
+    lxp_arena *arena, lxp_daemon_activity_evidence *evidence);
+lxp_result lxp_daemon_activity_evidence_recover_batch(
+    lxp_daemon_evidence_store *store, const lxp_log *canonical_log,
+    const lxp_daemon_receipt_authority_store *receipt_authority,
+    const lxp_sequencer_authorization *authorization,
+    lxp_byte_span canonical_header, const uint8_t header_signature[64],
+    lxp_arena *arena);
+lxp_result lxp_daemon_activity_evidence_wire_encode(
+    const lxp_daemon_activity_evidence *evidence, uint32_t network_id,
+    uint8_t response_kind, lxp_arena *arena,
+    lxp_byte_span *canonical_value, lxp_byte_span *proof_material);
+lxp_result lxp_daemon_finality_evidence_register(
+    lxp_daemon_evidence_store *store, lxp_byte_span checkpoint_payload,
+    lxp_byte_span finality_proof, lxp_arena *arena,
+    lxp_daemon_finality_evidence *evidence);
+lxp_result lxp_daemon_finality_evidence_encode(
+    const lxp_guarantor_cert *certificate,
+    const lxp_guarantor_set *bonded_set,
+    const lxp_finalisation_requirements *requirements,
+    uint64_t expected_registration_count,
+    const lxp_daemon_settlement_registration_evidence *registration,
+    lxp_arena *arena, lxp_byte_span *checkpoint_payload,
+    lxp_byte_span *finality_proof);
+lxp_result lxp_daemon_finality_evidence_lookup(
+    const lxp_daemon_evidence_store *store,
+    const uint8_t checkpoint_id[32], uint64_t batch_number,
+    lxp_arena *arena, lxp_daemon_finality_evidence *evidence);
 
 typedef struct lxp_daemon_receipt_authority_entry {
     uint8_t receipt_digest[32];
@@ -71,6 +247,7 @@ typedef struct lxp_daemon_protocol_owner {
     lxp_history *history;
     lxp_verified_receipt_index *verified_receipts;
     lxp_daemon_receipt_authority_store *receipt_authority;
+    lxp_daemon_evidence_store *evidence_store;
     lxp_arena *scratch;
     lx_programs_state_feed_store feed_store;
     uint8_t bearer_token[LXP_DAEMON_BEARER_MAX_BYTES];
@@ -164,6 +341,9 @@ lxp_result lxp_daemon_protocol_owner_attach(
     size_t bearer_token_length);
 lxp_result lxp_daemon_protocol_owner_detach(
     lxp_daemon_protocol_owner *owner);
+lxp_result lxp_daemon_protocol_owner_bind_evidence(
+    lxp_daemon_protocol_owner *owner,
+    lxp_daemon_evidence_store *evidence_store);
 lxp_result lxp_daemon_protocol_publish_receipt(
     lxp_daemon_protocol_owner *owner,
     const uint8_t *canonical_receipt, size_t receipt_length,
