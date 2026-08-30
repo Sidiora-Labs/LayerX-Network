@@ -48,7 +48,7 @@ class FileFulfillmentRepository {
   }
 }
 
-const resourceBody = await readFile(process.env.LAYERX_RESOURCE_FILE ?? "./resource.json", "utf8");
+const resourceBody = await readFile(new URL("../resource.json", import.meta.url), "utf8");
 
 export const settlements = [];
 

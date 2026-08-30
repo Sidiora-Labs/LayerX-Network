@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { FileFulfillmentRepository } from "./fulfillments.js";
 
-const reportBody = await readFile(process.env.LAYERX_RESOURCE_FILE ?? "./resource.json", "utf8");
+const reportBody = await readFile(new URL("../resource.json", import.meta.url), "utf8");
 const fulfillmentDirectory = process.env.LAYERX_FULFILLMENT_DIR ?? "./fulfillments";
 
 export const settlements = [];
