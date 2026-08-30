@@ -1,27 +1,31 @@
 use ed25519_dalek::{Signer as _, SigningKey};
 use layerx_programs::{
     interface_state_key, interface_state_value, programs_root_commitment, state_leaf_commitment,
-    DeploymentProof, InterfaceCapability, InterfaceEntryPoint, InterfaceStateWitness,
+    state_node_commitment, DeploymentProof, InterfaceEntryPoint, InterfaceStateWitness,
     ProgramInterface, ProgramLifecycleProof, ProgramStateProof, ProtocolDeploymentVerifier,
     StateLeafWitness, StateProof, ValueSchema, ValueType,
 };
 use layerx_programs_runtime::{hash_bytes, HashAlgorithm, ProgramId, UpgradePolicy};
-use layerx_proof::merkle::{build_leaf_hash_proof, build_proof, Proof};
+use layerx_proof::merkle::build_proof;
 use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry};
 use layerx_wire::activity::decode_signed;
 use layerx_wire::encode::Encoder;
-use layerx_wire::hash::{
-    activity_id, batch_header_digest, execution_batch_id, receipt_digest,
-};
+use layerx_wire::hash::{activity_id, batch_header_digest, execution_batch_id, receipt_digest};
 
 pub const NOW: u64 = 1_700_000_150;
 pub const PROGRAM_BYTES: [u8; 32] = [0x31; 32];
 pub const AUTHORITY: [u8; 32] = [0x51; 32];
 pub const WASM_V1: &[u8] = &[
-    0,97,115,109,1,0,0,0,1,12,2,96,2,127,127,1,127,96,1,127,1,127,3,3,2,0,1,5,3,1,0,1,7,34,3,4,b'c',b'a',b'l',b'l',0,0,14,b'l',b'a',b'y',b'e',b'r',b'x',b'_',b'r',b'e',b's',b'e',b'r',b'v',b'e',0,1,6,b'm',b'e',b'm',b'o',b'r',b'y',2,0,10,11,2,4,0,65,0,11,4,0,65,0,11,
+    0, 97, 115, 109, 1, 0, 0, 0, 1, 12, 2, 96, 2, 127, 127, 1, 127, 96, 1, 127, 1, 127, 3, 3, 2, 0,
+    1, 5, 3, 1, 0, 1, 7, 34, 3, 4, b'c', b'a', b'l', b'l', 0, 0, 14, b'l', b'a', b'y', b'e', b'r',
+    b'x', b'_', b'r', b'e', b's', b'e', b'r', b'v', b'e', 0, 1, 6, b'm', b'e', b'm', b'o', b'r',
+    b'y', 2, 0, 10, 11, 2, 4, 0, 65, 0, 11, 4, 0, 65, 0, 11,
 ];
 pub const WASM_V2: &[u8] = &[
-    0,97,115,109,1,0,0,0,1,12,2,96,2,127,127,1,127,96,1,127,1,127,3,3,2,0,1,5,3,1,0,1,7,34,3,4,b'c',b'a',b'l',b'l',0,0,14,b'l',b'a',b'y',b'e',b'r',b'x',b'_',b'r',b'e',b's',b'e',b'r',b'v',b'e',0,1,6,b'm',b'e',b'm',b'o',b'r',b'y',2,0,10,11,2,4,0,65,1,11,4,0,65,0,11,
+    0, 97, 115, 109, 1, 0, 0, 0, 1, 12, 2, 96, 2, 127, 127, 1, 127, 96, 1, 127, 1, 127, 3, 3, 2, 0,
+    1, 5, 3, 1, 0, 1, 7, 34, 3, 4, b'c', b'a', b'l', b'l', 0, 0, 14, b'l', b'a', b'y', b'e', b'r',
+    b'x', b'_', b'r', b'e', b's', b'e', b'r', b'v', b'e', 0, 1, 6, b'm', b'e', b'm', b'o', b'r',
+    b'y', 2, 0, 10, 11, 2, 4, 0, 65, 1, 11, 4, 0, 65, 0, 11,
 ];
 const TRUST_HISTORY_DOMAIN: &[u8] = b"LayerX/sequencer-trust-history/v1\0";
 
@@ -86,19 +90,23 @@ pub fn try_verifier_from_history(
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static NEXT_HISTORY: AtomicU64 = AtomicU64::new(0);
-    let mut entries = anchors.iter().copied().map(|anchor| {
-        let mut bytes = Vec::with_capacity(103);
-        bytes.extend_from_slice(&anchor.protocol_version.to_be_bytes());
-        bytes.extend_from_slice(&anchor.network_id.to_be_bytes());
-        bytes.extend_from_slice(&anchor.epoch.to_be_bytes());
-        bytes.extend_from_slice(&anchor.sequencer_id);
-        bytes.extend_from_slice(&anchor.sequencer_public_key);
-        bytes.extend_from_slice(&anchor.first_batch.to_be_bytes());
-        bytes.extend_from_slice(&anchor.last_batch.to_be_bytes());
-        bytes.push(u8::from(anchor.revoked_from_batch.is_some()));
-        bytes.extend_from_slice(&anchor.revoked_from_batch.unwrap_or(0).to_be_bytes());
-        (bytes, anchor)
-    }).collect::<Vec<_>>();
+    let mut entries = anchors
+        .iter()
+        .copied()
+        .map(|anchor| {
+            let mut bytes = Vec::with_capacity(103);
+            bytes.extend_from_slice(&anchor.protocol_version.to_be_bytes());
+            bytes.extend_from_slice(&anchor.network_id.to_be_bytes());
+            bytes.extend_from_slice(&anchor.epoch.to_be_bytes());
+            bytes.extend_from_slice(&anchor.sequencer_id);
+            bytes.extend_from_slice(&anchor.sequencer_public_key);
+            bytes.extend_from_slice(&anchor.first_batch.to_be_bytes());
+            bytes.extend_from_slice(&anchor.last_batch.to_be_bytes());
+            bytes.push(u8::from(anchor.revoked_from_batch.is_some()));
+            bytes.extend_from_slice(&anchor.revoked_from_batch.unwrap_or(0).to_be_bytes());
+            (bytes, anchor)
+        })
+        .collect::<Vec<_>>();
     entries.sort_by(|left, right| left.0.cmp(&right.0));
     let selected = entries
         .iter()
@@ -165,18 +173,36 @@ pub fn deploy_fixture(
 }
 
 pub fn legacy_deploy_fixture(
-    wasm: &[u8], policy: UpgradePolicy, batch_number: u64, timestamp: u64,
+    wasm: &[u8],
+    policy: UpgradePolicy,
+    batch_number: u64,
+    timestamp: u64,
 ) -> ProtocolFixture {
     let mut payload = deploy_payload(wasm, policy);
     let interface_length = usize::try_from(u32::from_be_bytes(
-        payload[104..108].try_into().unwrap_or_else(|_| panic!("interface length")),
-    )).unwrap_or_else(|_| panic!("interface length usize"));
+        payload[104..108]
+            .try_into()
+            .unwrap_or_else(|_| panic!("interface length")),
+    ))
+    .unwrap_or_else(|_| panic!("interface length usize"));
     payload.drain(104..108 + interface_length);
-    fixture(payload, 1, wasm, policy, 1, batch_number, timestamp, false, false)
+    fixture(
+        payload,
+        1,
+        wasm,
+        policy,
+        1,
+        batch_number,
+        timestamp,
+        false,
+        false,
+    )
 }
 
 pub fn programs_call_fixture(
-    payload: Vec<u8>, batch_number: u64, timestamp: u64,
+    payload: Vec<u8>,
+    batch_number: u64,
+    timestamp: u64,
 ) -> ProtocolFixture {
     fixture(
         payload,
@@ -416,38 +442,34 @@ fn state_fixture_with_key(
         .iter()
         .position(|(key, _)| key == &program_key)
         .unwrap_or_else(|| panic!("program leaf absent"));
-    let (program_proof, programs_root) = build_leaf_hash_proof(&leaf_hashes, program_index)
-        .unwrap_or_else(|error| panic!("program proof: {error:?}"));
+    let (program_proof, programs_root) = build_state_proof(&leaf_hashes, program_index);
     let program_witness = StateLeafWitness {
         key: program_key,
         value: program_value,
-        proof: state_proof(&program_proof),
+        proof: program_proof,
     };
     let interface_index = leaves
         .iter()
         .position(|(key, _)| key == &interface_key)
         .unwrap_or_else(|| panic!("interface leaf absent"));
-    let (interface_proof, interface_root) =
-        build_leaf_hash_proof(&leaf_hashes, interface_index)
-            .unwrap_or_else(|error| panic!("interface proof: {error:?}"));
+    let (interface_proof, interface_root) = build_state_proof(&leaf_hashes, interface_index);
     assert_eq!(interface_root, programs_root);
     let interface_witness = InterfaceStateWitness {
         key: interface_key,
         value: interface_value,
-        proof: state_proof(&interface_proof),
+        proof: interface_proof,
     };
     let lifecycle = if deprecated {
         let status_index = leaves
             .iter()
             .position(|(key, _)| key == &status_key())
             .unwrap_or_else(|| panic!("status leaf absent"));
-        let (status_proof, root) = build_leaf_hash_proof(&leaf_hashes, status_index)
-            .unwrap_or_else(|error| panic!("status proof: {error:?}"));
+        let (status_proof, root) = build_state_proof(&leaf_hashes, status_index);
         assert_eq!(root, programs_root);
         ProgramLifecycleProof::Status(StateLeafWitness {
             key: leaves[status_index].0.clone(),
             value: leaves[status_index].1.clone(),
-            proof: state_proof(&status_proof),
+            proof: status_proof,
         })
     } else {
         ProgramLifecycleProof::Active {
@@ -462,16 +484,11 @@ fn state_fixture_with_key(
         siblings: Vec::new(),
     };
     let activity_value = canonical_activity_id(activity);
-    let (activity_proof, activity_root) = build_proof(&[activity], 0)
-        .unwrap_or_else(|error| panic!("activity root: {error:?}"));
+    let (activity_proof, activity_root) =
+        build_proof(&[activity], 0).unwrap_or_else(|error| panic!("activity root: {error:?}"));
     assert_eq!(activity_proof.leaf_count(), 1);
-    let mut batch_id = execution_batch_id(
-        [0x11; 32],
-        activity_value,
-        batch_number,
-        batch_number,
-    )
-    .unwrap_or_else(|error| panic!("batch id: {error:?}"));
+    let mut batch_id = execution_batch_id([0x11; 32], activity_value, batch_number, batch_number)
+        .unwrap_or_else(|error| panic!("batch id: {error:?}"));
     if wrong_batch_id {
         batch_id[0] ^= 1;
     }
@@ -506,8 +523,8 @@ fn state_fixture_with_key(
         key.verifying_key().to_bytes(),
         epoch,
     );
-    let header_hash = batch_header_digest(&header)
-        .unwrap_or_else(|error| panic!("header digest: {error:?}"));
+    let header_hash =
+        batch_header_digest(&header).unwrap_or_else(|error| panic!("header digest: {error:?}"));
     let header_signature = key.sign(&header_hash).to_bytes();
     (
         ProgramStateProof {
@@ -583,7 +600,7 @@ fn encode_program_receipt(
     signature: Option<[u8; 64]>,
 ) -> Vec<u8> {
     let mut encoder = Encoder::new(4_096);
-    assert_eq!(encoder.structure_header(0x5201), Ok(()));
+    assert_eq!(encoder.structure_header_version(0x5201, 2), Ok(()));
     assert_eq!(encoder.u16(2), Ok(()));
     assert_eq!(encoder.bytes(&activity_id, 32), Ok(()));
     assert_eq!(encoder.u64(batch_number), Ok(()));
@@ -596,7 +613,7 @@ fn encode_program_receipt(
     assert_eq!(encoder.bytes(&batch_id, 32), Ok(()));
     assert_eq!(encoder.u16(9), Ok(()));
     assert_eq!(encoder.u32(2), Ok(()));
-    assert_eq!(encoder.u32(1), Ok(()));
+    assert_eq!(encoder.u32(0), Ok(()));
     assert_eq!(encoder.u8(0), Ok(()));
     assert_eq!(encoder.bytes(&[0; 32], 32), Ok(()));
     assert_eq!(encoder.u128(0), Ok(()));
@@ -628,7 +645,7 @@ fn encode_header(
     epoch: u64,
 ) -> Vec<u8> {
     let mut encoder = Encoder::new(354);
-    assert_eq!(encoder.structure_header(0x1701), Ok(()));
+    assert_eq!(encoder.structure_header_version(0x1701, 2), Ok(()));
     assert_eq!(encoder.u8(15), Ok(()));
     assert_eq!(encoder.tag(1, 15), Ok(()));
     assert_eq!(encoder.u16(2), Ok(()));
@@ -719,32 +736,27 @@ fn upgrade_payload(old_wasm: &[u8], new_wasm: &[u8]) -> Vec<u8> {
 }
 
 pub fn fixture_interface(wasm: &[u8]) -> ProgramInterface {
-    let entries = || vec![InterfaceEntryPoint {
-        name: "call".to_owned(),
-        discriminator: [0x10, 0x20, 0x30, 0x40],
-        calldata: ValueSchema::layerx(ValueType::Bytes { max_len: 64 }),
-        response: ValueSchema::layerx(ValueType::Bytes { max_len: 64 }),
-        capabilities: vec![InterfaceCapability::StorageRead],
-        event_topics: vec![[0x44; 32]],
-        failures: Vec::new(),
-    }];
-    ProgramInterface::bind(
-        wasm,
-        1,
-        entries(),
-    )
-    .unwrap_or_else(|_| {
+    let entries = || {
+        vec![InterfaceEntryPoint {
+            name: "call".to_owned(),
+            discriminator: [0x10, 0x20, 0x30, 0x40],
+            calldata: ValueSchema::layerx(ValueType::Bytes { max_len: 64 }),
+            response: ValueSchema::layerx(ValueType::Bytes { max_len: 64 }),
+            capabilities: Vec::new(),
+            event_topics: vec![[0x44; 32]],
+            failures: Vec::new(),
+        }]
+    };
+    ProgramInterface::bind(wasm, 1, entries()).unwrap_or_else(|_| {
         ProgramInterface::bind(WASM_V1, 1, entries())
             .unwrap_or_else(|error| panic!("fallback program interface: {error}"))
     })
 }
 
 fn fixture_interface_encoding(wasm: &[u8]) -> Vec<u8> {
-    if let Ok(interface) = ProgramInterface::bind(
-        wasm,
-        1,
-        fixture_interface(WASM_V1).entries().to_vec(),
-    ) {
+    if let Ok(interface) =
+        ProgramInterface::bind(wasm, 1, fixture_interface(WASM_V1).entries().to_vec())
+    {
         return interface.canonical_encoding().to_vec();
     }
     let mut encoding = fixture_interface(WASM_V1).canonical_encoding().to_vec();
@@ -792,12 +804,35 @@ fn status_record() -> Vec<u8> {
     record
 }
 
-fn state_proof(proof: &Proof) -> StateProof {
-    StateProof {
-        leaf_index: proof.leaf_index(),
-        leaf_count: proof.leaf_count(),
-        siblings: proof.siblings().to_vec(),
+fn build_state_proof(leaf_hashes: &[[u8; 32]], leaf_index: usize) -> (StateProof, [u8; 32]) {
+    assert!(!leaf_hashes.is_empty(), "state tree must not be empty");
+    assert!(
+        leaf_index < leaf_hashes.len(),
+        "state leaf index is out of range"
+    );
+    let leaf_count =
+        u32::try_from(leaf_hashes.len()).unwrap_or_else(|_| panic!("state tree too large"));
+    let proof_index = leaf_index;
+    let mut level = leaf_hashes.to_vec();
+    let mut index = leaf_index;
+    let mut siblings = Vec::new();
+    while level.len() > 1 {
+        siblings.push(level.get(index ^ 1).copied().unwrap_or(level[index]));
+        level = level
+            .chunks(2)
+            .map(|pair| state_node_commitment(pair[0], *pair.get(1).unwrap_or(&pair[0])))
+            .collect();
+        index /= 2;
     }
+    (
+        StateProof {
+            leaf_index: u32::try_from(proof_index)
+                .unwrap_or_else(|_| panic!("state leaf index too large")),
+            leaf_count,
+            siblings,
+        },
+        level[0],
+    )
 }
 
 fn payload_hash(payload: &[u8]) -> [u8; 32] {

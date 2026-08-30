@@ -417,13 +417,13 @@ impl VerifiedAccountSnapshot {
             &self.account_tree_proof,
             self.universal_root,
         )
-        .map_err(|_| AccountStateError::UniversalRootMismatch)?;
+        .map_err(|error| proof_error(error, AccountStateError::UniversalRootMismatch))?;
         let universal_leaf = state_leaf_hash(&0_u16.to_be_bytes(), &self.universal_root);
         verify_state_proof(universal_leaf, &self.universal_root_proof, self.state_root)
-            .map_err(|_| AccountStateError::StateRootMismatch)?;
+            .map_err(|error| proof_error(error, AccountStateError::StateRootMismatch))?;
         let programs_leaf = state_leaf_hash(&PROGRAMS_MODULE_ID.to_be_bytes(), &self.programs_root);
         verify_state_proof(programs_leaf, &self.programs_root_proof, self.state_root)
-            .map_err(|_| AccountStateError::StateRootMismatch)?;
+            .map_err(|error| proof_error(error, AccountStateError::StateRootMismatch))?;
         if self.bindings.len() > MAX_PROGRAM_VALUE_ACCOUNTS {
             return Err(AccountStateError::InvalidProof);
         }
@@ -442,7 +442,7 @@ impl VerifiedAccountSnapshot {
                 &binding.proof,
                 self.programs_root,
             )
-            .map_err(|_| AccountStateError::InvalidProof)?;
+            .map_err(|error| proof_error(error, AccountStateError::InvalidProof))?;
             prior_binding_key = Some(key);
         }
         if self.accounts.len() > MAX_PROGRAM_VALUE_ACCOUNTS {
@@ -464,7 +464,7 @@ impl VerifiedAccountSnapshot {
             }
             let leaf_hash = account.leaf.commitment()?;
             verify_state_proof(leaf_hash, &account.proof, self.account_root)
-                .map_err(|_| AccountStateError::AccountRootMismatch)?;
+                .map_err(|error| proof_error(error, AccountStateError::AccountRootMismatch))?;
             prior = Some(account.leaf.account_id);
         }
         Ok(())
@@ -643,6 +643,13 @@ fn proof_depth(mut count: u32) -> usize {
         depth += 1;
     }
     depth
+}
+
+fn proof_error(error: AccountStateError, mismatch: AccountStateError) -> AccountStateError {
+    match error {
+        AccountStateError::ProofTooDeep => AccountStateError::ProofTooDeep,
+        _ => mismatch,
+    }
 }
 
 fn verify_state_proof(

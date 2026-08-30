@@ -5,20 +5,21 @@ mod support;
 use layerx_programs::{
     BuildEnvironment, DeploymentJournal, DeploymentRecord, ExecutableAdmissionError,
     JournalReadAuthority, ObservedHead, ProgramLifecycle, ProtocolEvidenceError, PublishedSource,
-    ReadFreshness, Registry, RegistryError,
-    RegistryReadAuthority, ReproducibleBuild, SourceStatus, VerifiedProgramCatalog,
+    ReadFreshness, Registry, RegistryError, RegistryReadAuthority, ReproducibleBuild, SourceStatus,
+    VerifiedProgramCatalog,
 };
 use layerx_programs_runtime::{
     hash_bytes, ActivityBudgetBinding, CompositionRules, Deploy, HashAlgorithm, Lifecycle,
     ProgramId, ProgramVersion, UpgradePolicy, ABI_V1_VERSION, ABI_V2_VERSION, ABI_VERSION,
 };
+use layerx_proof::merkle::verify_path;
+use layerx_wire::receipt::decode_batch_header;
 
 use support::{
     code_hash as fixture_code_hash, deploy_fixture, deploy_fixture_in_epoch, deprecated_state,
-    program as fixture_program, try_verifier_from_history, upgrade_fixture, verifier_for_fixture,
-    verifier_from_history, wrong_abi_fixture, wrong_batch_id_fixture, TrustAnchorFixture,
-    AUTHORITY, NOW,
-    WASM_V1 as PROTOCOL_WASM_V1, WASM_V2 as PROTOCOL_WASM_V2,
+    legacy_deploy_fixture, program as fixture_program, try_verifier_from_history, upgrade_fixture,
+    verifier_for_fixture, verifier_from_history, wrong_abi_fixture, wrong_batch_id_fixture,
+    TrustAnchorFixture, AUTHORITY, NOW, WASM_V1 as PROTOCOL_WASM_V1, WASM_V2 as PROTOCOL_WASM_V2,
 };
 
 const PROGRAM: [u8; 32] = [0x31; 32];
@@ -83,12 +84,7 @@ fn registry_resolves_historical_and_latest_code_only_from_protocol_evidence() {
     let program = fixture_program();
     let policy = UpgradePolicy::Authority(AUTHORITY);
     let deploy = deploy_fixture(PROTOCOL_WASM_V1, policy, 70, 1_700_000_070);
-    let upgrade = upgrade_fixture(
-        PROTOCOL_WASM_V1,
-        PROTOCOL_WASM_V2,
-        71,
-        1_700_000_071,
-    );
+    let upgrade = upgrade_fixture(PROTOCOL_WASM_V1, PROTOCOL_WASM_V2, 71, 1_700_000_071);
     let verifier = verifier_for_fixture(&deploy, 70, 100, None, 1_000);
     let first = verifier
         .verify_deployment(&deploy.proof, NOW)
@@ -146,7 +142,7 @@ fn registry_resolves_historical_and_latest_code_only_from_protocol_evidence() {
         executable.code_hash(program),
         Some(fixture_code_hash(PROTOCOL_WASM_V2))
     );
-    assert_eq!(executable.abi_version(program), Some(ABI_VERSION));
+    assert_eq!(executable.abi_version(program), Some(ABI_V1_VERSION));
     assert_eq!(
         executable.receipt_digest(program),
         Some(second.receipt_digest())
@@ -157,12 +153,7 @@ fn registry_resolves_historical_and_latest_code_only_from_protocol_evidence() {
     let binding = ActivityBudgetBinding::new([0xa1; 32])
         .unwrap_or_else(|error| panic!("activity binding: {error}"));
     let _composition = executable
-        .authorize_activity(
-            vec![current],
-            binding,
-            NOW,
-            CompositionRules::declared(),
-        )
+        .authorize_activity(vec![current], binding, NOW, CompositionRules::declared())
         .unwrap_or_else(|error| panic!("activity-scoped catalog: {error}"));
 }
 
@@ -195,12 +186,8 @@ fn forged_batch_journal_and_stale_evidence_never_create_deployment_authority() {
         verifier.verify_deployment(&wrong_abi.proof, NOW),
         Err(ProtocolEvidenceError::CanonicalActivity)
     );
-    let impossible_module = deploy_fixture(
-        b"not-wasm",
-        UpgradePolicy::Immutable,
-        70,
-        1_700_000_070,
-    );
+    let impossible_module =
+        deploy_fixture(b"not-wasm", UpgradePolicy::Immutable, 70, 1_700_000_070);
     assert_eq!(
         verifier.verify_deployment(&impossible_module.proof, NOW),
         Err(ProtocolEvidenceError::CanonicalActivity)
@@ -368,7 +355,7 @@ fn historical_deployments_replay_across_an_explicit_sequencer_rotation() {
 
 #[test]
 fn mismatched_receipt_invalid_module_stale_head_and_deprecation_are_fail_closed() {
-    let fixture = deploy_fixture(
+    let fixture = legacy_deploy_fixture(
         INVALID_WASM,
         UpgradePolicy::Authority(AUTHORITY),
         70,
@@ -383,10 +370,25 @@ fn mismatched_receipt_invalid_module_stale_head_and_deprecation_are_fail_closed(
     let verifier = verifier_for_fixture(&fixture, 70, 100, None, 1_000);
     let mut swapped_receipt = fixture.proof.clone();
     swapped_receipt.state.receipt = other.proof.state.receipt.clone();
-    assert!(matches!(
-        verifier.verify_deployment(&swapped_receipt, NOW),
-        Err(ProtocolEvidenceError::ReceiptInclusion | ProtocolEvidenceError::Receipt)
-    ));
+    let signed_header = decode_batch_header(&swapped_receipt.state.header)
+        .unwrap_or_else(|error| panic!("decode signed header: {error:?}"));
+    assert!(verify_path(
+        &swapped_receipt.state.receipt,
+        &swapped_receipt.state.receipt_proof,
+        &signed_header.receipt_merkle_root(),
+    )
+    .is_err());
+    let swapped_head =
+        verifier.verify_current_program(&swapped_receipt.state, fixture_program(), NOW);
+    assert!(
+        matches!(swapped_head, Err(ProtocolEvidenceError::ReceiptInclusion)),
+        "unexpected swapped-receipt head result: {swapped_head:?}"
+    );
+    let swapped_result = verifier.verify_deployment(&swapped_receipt, NOW);
+    assert!(
+        matches!(swapped_result, Err(ProtocolEvidenceError::ReceiptInclusion)),
+        "unexpected swapped-receipt result: {swapped_result:?}"
+    );
     let malformed_evidence = verifier
         .verify_deployment(&fixture.proof, NOW)
         .unwrap_or_else(|error| panic!("malformed module protocol evidence: {error}"));
@@ -412,8 +414,8 @@ fn mismatched_receipt_invalid_module_stale_head_and_deprecation_are_fail_closed(
         .unwrap_or_else(|error| panic!("active head: {error}"));
     let binding = ActivityBudgetBinding::new([0xa2; 32])
         .unwrap_or_else(|error| panic!("activity binding: {error}"));
-    let mut stale_catalog = VerifiedProgramCatalog::declared()
-        .unwrap_or_else(|error| panic!("stale catalog: {error}"));
+    let mut stale_catalog =
+        VerifiedProgramCatalog::declared().unwrap_or_else(|error| panic!("stale catalog: {error}"));
     stale_catalog
         .admit(evidence.clone())
         .unwrap_or_else(|error| panic!("catalog admission: {error}"));
@@ -461,8 +463,8 @@ fn direct_deployment_insertion_refuses_the_reserved_upgrade_authority() {
         wasm: WASM_V1.to_vec(),
         abi_version: ABI_VERSION,
     };
-    let mut lifecycle = Lifecycle::declared()
-        .unwrap_or_else(|error| panic!("lifecycle construction: {error}"));
+    let mut lifecycle =
+        Lifecycle::declared().unwrap_or_else(|error| panic!("lifecycle construction: {error}"));
     let receipt = lifecycle
         .deploy(Deploy {
             program,
