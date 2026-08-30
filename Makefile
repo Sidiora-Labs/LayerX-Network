@@ -45,6 +45,7 @@ TEST_LIBRARY := $(BUILD_DIR)/liblayerx-testing.a
 	test-arith-u128 test-arith-u256 test-arith-rounding test-arith-property \
 	test-arith-nofloat \
 	test-log test-log-durability test-recovery test-projection test-rebuild \
+	test-batch-wal-recovery test-storage-order test-storage \
 	test-journal \
 	test-activity-codec test-envelope test-verify-pool test-admission \
 	test-idempotency \
@@ -1505,6 +1506,26 @@ $(BUILD_DIR)/tools/log_inspect: tools/log_inspect.c $(LIBRARY)
 
 test-rebuild: $(BUILD_DIR)/tests/lxp_test_rebuild $(BUILD_DIR)/tools/log_inspect
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/lxp_test_rebuild
+
+$(BUILD_DIR)/tests/lxp_test_batch_wal_recovery: \
+		tests/storage/lxp_test_batch_wal_recovery.c \
+		cmd/layerxd/lxp_daemon_batch_wal.c $(LIBRARY) \
+		$(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) -Icmd/layerxd $(CFLAGS) \
+		tests/storage/lxp_test_batch_wal_recovery.c \
+		cmd/layerxd/lxp_daemon_batch_wal.c $(LIBRARY) \
+		$(PROGRAMS_RUNTIME_LIB) $(LIBRARY) \
+		$(EXTRA_LDFLAGS) -lcrypto -pthread -o $@
+
+test-batch-wal-recovery: $(BUILD_DIR)/tests/lxp_test_batch_wal_recovery
+	$(RUN_PREFIX) $(BUILD_DIR)/tests/lxp_test_batch_wal_recovery
+
+test-storage-order:
+	sh tests/storage/check_daemon_recovery_order.sh
+
+test-storage: test-storage-order test-log test-log-durability test-recovery \
+		test-projection test-rebuild test-batch-wal-recovery
 
 $(BUILD_DIR)/tests/lxp_test_journal: tests/state/lxp_test_journal.c $(LIBRARY)
 	@mkdir -p $(@D)

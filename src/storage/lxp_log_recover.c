@@ -111,7 +111,12 @@ lxp_result lxp_log_scan_tail(const lxp_log *log, uint64_t *valid_end,
         uint8_t *body;
         lxp_result status = pread_exact(log->descriptor, prefix,
                                         sizeof(prefix), offset);
-        if (status != LXP_OK) break;
+        if (status != LXP_OK) {
+            *valid_end = offset;
+            *last_record_offset = last;
+            *next_sequence = next;
+            return status;
+        }
         if (read_u32(prefix) == 0U) {
             *valid_end = offset;
             *last_record_offset = last;

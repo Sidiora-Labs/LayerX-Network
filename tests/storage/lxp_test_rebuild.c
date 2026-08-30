@@ -60,6 +60,9 @@ int main(void)
     lxp_log log;
     uint8_t first_digest[32];
     uint8_t second_digest[32];
+    uint8_t preserved_digest[32];
+    uint64_t receipt_offsets[2];
+    uint8_t corrupt;
     int first_fd = mkstemp(first_db);
     int second_fd = mkstemp(second_db);
     uint64_t sequence;
@@ -76,11 +79,19 @@ int main(void)
             lxp_log_append(&log, LXP_LOG_ACTIVITY, sequence, activity, 1U,
                            NULL) != LXP_OK || lxp_log_sync(&log) != LXP_OK ||
             lxp_log_append(&log, LXP_LOG_RECEIPT, sequence, encoded,
-                           (uint32_t)encoded_length, NULL) != LXP_OK ||
+                           (uint32_t)encoded_length,
+                           &receipt_offsets[sequence]) != LXP_OK ||
             lxp_log_append(&log, LXP_LOG_STATE_DIFF, sequence, activity, 1U,
                            NULL) != LXP_OK || lxp_log_sync(&log) != LXP_OK)
             return 1;
     }
+    if (lxp_log_close(&log) != LXP_OK ||
+        snprintf(log_path, sizeof(log_path), "%s/%020u.lxp", directory,
+                 0U) < 0 ||
+        lxp_log_open(&log, log_path) != LXP_OK ||
+        lxp_log_recover(&log, NULL, NULL) != LXP_OK ||
+        lxp_log_resume_sequence(&log) != 2U)
+        return 1;
     if (lxp_projection_open(&projection, first_db,
                             "migrations/0001_projection.sql") != LXP_OK ||
         lxp_projection_rebuild(&projection, &log,
@@ -93,9 +104,20 @@ int main(void)
                                "migrations/0001_projection.sql") != LXP_OK ||
         !database_digest(&projection, second_digest) ||
         memcmp(first_digest, second_digest, sizeof(first_digest)) != 0 ||
-        lxp_projection_close(&projection) != LXP_OK) return 1;
-    if (snprintf(log_path, sizeof(log_path), "%s/%020u.lxp", directory, 0U) < 0 ||
-        lxp_log_close(&log) != LXP_OK || unlink(log_path) != 0 ||
+        pread(log.descriptor, &corrupt, 1U,
+              (off_t)(receipt_offsets[1] + LXP_LOG_HEADER_BYTES)) != 1)
+        return 1;
+    corrupt ^= 1U;
+    if (pwrite(log.descriptor, &corrupt, 1U,
+               (off_t)(receipt_offsets[1] + LXP_LOG_HEADER_BYTES)) != 1 ||
+        lxp_projection_rebuild(&projection, &log,
+                               "migrations/0001_projection.sql") !=
+            LXP_ERR_LOG_CORRUPT ||
+        !database_digest(&projection, preserved_digest) ||
+        memcmp(second_digest, preserved_digest, sizeof(second_digest)) != 0 ||
+        lxp_projection_close(&projection) != LXP_OK)
+        return 1;
+    if (lxp_log_close(&log) != LXP_OK || unlink(log_path) != 0 ||
         rmdir(directory) != 0 || unlink(first_db) != 0 || unlink(second_db) != 0)
         return 1;
     return 0;
