@@ -58,12 +58,15 @@ fn transfer_module() -> Vec<u8> {
     let asset = [3; 32];
     let recipient = [4; 32];
     module(&[
-        type_section(&[(
-            &[TYPE_I64, TYPE_I64, TYPE_I32, TYPE_I32, TYPE_I32, TYPE_I32],
-            &[TYPE_I32],
-        )]),
+        type_section(&[
+            (
+                &[TYPE_I64, TYPE_I64, TYPE_I32, TYPE_I32, TYPE_I32, TYPE_I32],
+                &[TYPE_I32],
+            ),
+            (&[TYPE_I32, TYPE_I32], &[TYPE_I32]),
+        ]),
         import_section(&[(ABI_MODULE, "transfer_402", 0)]),
-        function_section(&[0]),
+        function_section(&[1]),
         section(5, &[1, 1, 1, 1]),
         exports(&[("run", 0, 1), ("memory", 2, 0)]),
         code_section(&[func_body(
@@ -147,9 +150,10 @@ fn candidate_program_transfer_module(
 
 fn no_effect_module() -> Vec<u8> {
     module(&[
-        type_section(&[(&[], &[TYPE_I32])]),
+        type_section(&[(&[TYPE_I32, TYPE_I32], &[TYPE_I32])]),
         function_section(&[0]),
-        exports(&[("run", 0, 0)]),
+        section(5, &[1, 1, 1, 1]),
+        exports(&[("run", 0, 0), ("memory", 2, 0)]),
         code_section(&[func_body(&[], &[OP_I32_CONST, 0, OP_END])]),
     ])
 }
