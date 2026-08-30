@@ -339,6 +339,13 @@ static uint64_t read_u64(const uint8_t *bytes)
     return value;
 }
 
+static bool checked_size_add(size_t left, size_t right, size_t *sum)
+{
+    if (sum == NULL || right > SIZE_MAX - left) return false;
+    *sum = left + right;
+    return true;
+}
+
 static void write_u64(uint8_t *bytes, uint64_t value)
 {
     size_t index;
@@ -1680,7 +1687,6 @@ lxp_result lxp_programs_call_decode(lxp_module_ctx *ctx,
     if (lxp_ct_is_zero(value->program_id, sizeof(value->program_id)) ||
         value->abi_version == 0U ||
         value->calldata_length > LX_PROGRAMS_MAX_CALLDATA_BYTES ||
-        value->capabilities_length > LX_PROGRAMS_MAX_CAPABILITY_BYTES ||
         value->access_declaration_length > LX_PROGRAMS_MAX_ACCESS_DECLARATION_BYTES ||
         value->response_capacity > LX_PROGRAMS_MAX_RESPONSE_BYTES)
         return LXP_ERR_NON_CANONICAL;
@@ -1787,12 +1793,12 @@ lxp_result lxp_programs_call_schedule_decode(
     if (activity->payload.length > UINTPTR_MAX - payload_begin)
         return LXP_ERR_LENGTH_LIMIT;
     payload_end = payload_begin + activity->payload.length;
-    if ((size_t)value->entrypoint_length > SIZE_MAX - PROGRAM_CALL_FIXED_BYTES ||
-        (size_t)value->calldata_length >
-            SIZE_MAX - PROGRAM_CALL_FIXED_BYTES - value->entrypoint_length)
+    capabilities_offset = PROGRAM_CALL_FIXED_BYTES;
+    if (!checked_size_add(capabilities_offset, value->entrypoint_length,
+                          &capabilities_offset) ||
+        !checked_size_add(capabilities_offset, value->calldata_length,
+                          &capabilities_offset))
         return LXP_ERR_LENGTH_LIMIT;
-    capabilities_offset = PROGRAM_CALL_FIXED_BYTES + value->entrypoint_length +
-                          value->calldata_length;
     if (capabilities_begin < payload_begin ||
         declaration_begin < capabilities_begin ||
         capabilities_begin > payload_end || declaration_begin > payload_end ||
