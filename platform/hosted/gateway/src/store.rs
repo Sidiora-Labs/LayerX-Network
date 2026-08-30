@@ -10,8 +10,8 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const IO_TIMEOUT: Duration = Duration::from_secs(8);
 const MAX_RESPONSE: usize = 16 * 1024 * 1024;
 const CONTINUATION_CHUNK_BYTES: usize = 128 * 1024;
-const MAX_CONTINUATION_BYTES: usize = 17 * 65_536;
-const MAX_CONTINUATION_CHUNKS: usize = 9;
+const MAX_CONTINUATION_BYTES: usize = 2 * 1024 * 1024;
+const MAX_CONTINUATION_CHUNKS: usize = 16;
 const AUDIT_ATTEMPTS: usize = 8;
 const MAX_KEYS_PER_PRINCIPAL: u64 = 128;
 const MAX_TAP_REPLAY_SECONDS: u64 = 3_600;
@@ -1141,4 +1141,35 @@ fn array_tag(response: Resp) -> Result<String, String> {
         .first()
         .and_then(text)
         .ok_or_else(|| "gateway Redis script tag is invalid".to_owned())
+}
+
+#[cfg(test)]
+mod continuation_tests {
+    use super::{
+        continuation_chunks, durable_continuation, CONTINUATION_CHUNK_BYTES,
+        MAX_CONTINUATION_BYTES, MAX_CONTINUATION_CHUNKS,
+    };
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn maximum_program_activity_hex_is_durably_chunked() {
+        let value = "a".repeat(MAX_CONTINUATION_BYTES);
+        let chunks = continuation_chunks(&value).unwrap();
+        assert_eq!(chunks.len(), MAX_CONTINUATION_CHUNKS);
+        assert!(chunks.iter().all(|chunk| chunk.len() == CONTINUATION_CHUNK_BYTES));
+
+        let mut fields = BTreeMap::from([(
+            "continuation_count".to_owned(),
+            chunks.len().to_string(),
+        )]);
+        for (index, chunk) in chunks.into_iter().enumerate() {
+            fields.insert(format!("continuation_{index}"), chunk.to_owned());
+        }
+        assert_eq!(durable_continuation(&fields).as_deref(), Ok(value.as_str()));
+    }
+
+    #[test]
+    fn oversized_program_activity_hex_is_rejected() {
+        assert!(continuation_chunks(&"a".repeat(MAX_CONTINUATION_BYTES + 1)).is_err());
+    }
 }

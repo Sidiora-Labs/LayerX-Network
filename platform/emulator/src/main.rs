@@ -39,6 +39,13 @@ const ADMISSION_CAPACITY: usize = 32;
 const TRANSITION_CAPACITY: usize = 32;
 const MAX_RECEIPTS: usize = 4096;
 const MAX_RECEIPT_BYTES: usize = 1024 * 1024;
+const MAX_CORE_SNAPSHOT_BYTES: usize = 24 * 1024 * 1024;
+const MAX_PROGRAM_OPERATIONS: usize = 4096;
+const MAX_PROGRAM_RESPONSE_BYTES: usize = MAX_JSON_BYTES;
+const MAX_RETAINED_SIGNED_ACTIVITY_BYTES: usize = 1024 * 1024;
+const RECOVERY_SNAPSHOT_MAGIC: &[u8; 8] = b"LXEMR001";
+const RECOVERY_SNAPSHOT_VERSION: u32 = 1;
+const RECOVERY_SNAPSHOT_DIGEST_DOMAIN: &[u8] = b"layerx-emulator-recovery-snapshot-v1\0";
 
 #[repr(C)]
 struct CoreReceipt {
@@ -162,9 +169,11 @@ struct Emulator {
     trace: u64,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct ProgramOperation {
     activity_id: String,
     response: String,
+    retained_signed_activity: Option<String>,
 }
 
 struct DecodedProgramActivity {
@@ -430,30 +439,25 @@ fn programs_route(method: &str, path: &str) -> bool {
 }
 
 fn programs_request_path(method: &str, path: &str) -> bool {
-    matches!(
-        (method, path),
-        ("POST", "/v1/programs/call") | ("POST", "/v1/programs/simulate")
-    ) || (method == "GET"
-        && (path.starts_with("/v1/programs/registry/")
-            || path.starts_with("/v1/programs/receipts/by-idempotency/")
-            || path.starts_with("/v1/programs/activities/")))
+    programs_route(method, path)
 }
 
 fn agent_error_class(status: u16, code: &str) -> &'static str {
-    if code.starts_with("LXP_ERR_") {
-        "CoreRejection"
-    } else if code.contains("idempotency") {
+    if code.contains("idempotency") {
         "IdempotencyConflict"
     } else if code.contains("quota") {
         "RateLimit"
     } else if code.contains("authorization")
         || code.contains("scope")
+        || code.contains("api_key")
+        || code.contains("identity")
         || code.contains("not_active")
         || code.contains("refused")
     {
         "PolicyRefusal"
     } else if code.contains("verification")
         || code.contains("unverified")
+        || code.contains("component_invalid")
         || code.contains("invalid_output")
         || code.contains("selector_mismatch")
         || code.contains("binding_invalid")
@@ -461,6 +465,8 @@ fn agent_error_class(status: u16, code: &str) -> &'static str {
         "VerificationFailure"
     } else if status == 404 || code.contains("absent") || code.contains("unknown_program") {
         "UnavailableCapability"
+    } else if code.starts_with("LXP_ERR_") {
+        "CoreRejection"
     } else if code.contains("invalid") || code.contains("required") || status == 415 {
         "ProtocolIncompatibility"
     } else if status >= 500 {
@@ -483,6 +489,33 @@ fn agent_reason(code: &str) -> String {
         "program_request_failed".to_owned()
     } else {
         reason
+    }
+}
+
+fn program_verification_status(value: &serde_json::Value) -> serde_json::Value {
+    match value.get("state").and_then(serde_json::Value::as_str) {
+        Some("unknown" | "pending") => serde_json::json!({
+            "state": "Unverified",
+            "requested": "SequencerSigned",
+            "achieved": "Unverified",
+            "reason": "receipt_pending",
+        }),
+        _ if matches!(
+            value.get("verification").and_then(serde_json::Value::as_str),
+            Some(
+                "registry-receipt-and-current-head-verified"
+                    | "deployment-interface-and-current-head-verified"
+            )
+        ) => serde_json::json!({
+            "state": "Unverified",
+            "requested": "SequencerSigned",
+            "achieved": "Unverified",
+            "reason": "server_side_receipt_verification_only",
+        }),
+        _ => serde_json::json!({
+            "state": "Achieved",
+            "level": "SequencerSigned",
+        }),
     }
 }
 
@@ -567,13 +600,11 @@ fn agent_response(trace: u64, response: Response) -> Response {
                 },
                 |mut value| {
                     if normalize_program_u64s(&mut value) {
+                        let verification_status = program_verification_status(&value);
                         serde_json::json!({
                             "request_id": request_id.as_str(),
                             "value": value,
-                            "verification_status": {
-                                "state": "Achieved",
-                                "level": "SequencerSigned",
-                            },
+                            "verification_status": verification_status,
                         })
                     } else {
                         serde_json::json!({
@@ -607,7 +638,7 @@ fn agent_response(trace: u64, response: Response) -> Response {
         serde_json::json!({
             "class": agent_error_class(status, code),
             "protocol_result_code": protocol_result_code,
-            "retriability": if status >= 500 { "Retriable" } else { "Terminal" },
+            "retriability": if status == 429 || status >= 500 { "Retriable" } else { "Terminal" },
             "request_id": request_id.as_str(),
             "reason": reason,
         })
@@ -1052,8 +1083,10 @@ fn program_head(emulator: &mut Emulator, program_id: [u8; 32]) -> Result<CorePro
     let mut program = CoreProgram {
         program_id: [0; 32],
         code_hash: [0; 32],
+        deployment_receipt_digest: [0; 32],
         version: 0,
         abi_version: 0,
+        lifecycle: 0,
         interface_bytes: ptr::null(),
         interface_length: 0,
         has_interface: 0,
@@ -1064,6 +1097,31 @@ fn program_head(emulator: &mut Emulator, program_id: [u8; 32]) -> Result<CorePro
         platform_emulator_program_read(emulator.core, program_id.as_ptr(), &raw mut program)
     };
     if code == 0 { Ok(program) } else { Err(code) }
+}
+
+fn program_head_error(trace: u64, code: i32) -> Response {
+    if code == -7 {
+        refusal(trace, 404, "unknown_program", "program is not registered")
+    } else {
+        core_response(trace, code)
+    }
+}
+
+fn active_program_head(
+    emulator: &mut Emulator,
+    program_id: [u8; 32],
+    trace: u64,
+) -> Result<CoreProgram, Response> {
+    let head = program_head(emulator, program_id).map_err(|code| program_head_error(trace, code))?;
+    if head.lifecycle != 1 {
+        return Err(refusal(
+            trace,
+            409,
+            "program_not_active",
+            "program lifecycle does not permit calls",
+        ));
+    }
+    Ok(head)
 }
 
 fn program_failure_json(failure: ProgramCallFailure) -> serde_json::Value {
@@ -1175,13 +1233,36 @@ fn verified_program_document(
     Ok(document)
 }
 
+fn stored_program_operation_response(trace: u64, operation: &ProgramOperation) -> Response {
+    let mut response = success(trace, &operation.response);
+    if serde_json::from_str::<serde_json::Value>(&operation.response)
+        .ok()
+        .and_then(|value| value.get("state").and_then(serde_json::Value::as_str).map(str::to_owned))
+        .is_some_and(|state| matches!(state.as_str(), "unknown" | "pending"))
+    {
+        response.status = 202;
+    }
+    response
+}
+
 fn program_call(emulator: &mut Emulator, request: &Request, trace: u64) -> Response {
+    let request_idempotency = match request.idempotency_key.as_deref() {
+        Some(value) if canonical_hex32_text(value) => value,
+        _ => {
+            return refusal(
+                trace,
+                400,
+                "idempotency_key_required",
+                "Idempotency-Key must be canonical 32-byte hexadecimal",
+            )
+        }
+    };
     let decoded = match decode_program_activity(request) {
         Ok(activity) => activity,
-        Err(error) => return refusal(trace, 400, "invalid_argument", &error),
+        Err(error) => return refusal(trace, 400, "invalid_program_call", &error),
     };
     let protocol_idempotency = hex_encode(&decoded.idempotency_key);
-    if request.idempotency_key.as_deref() != Some(protocol_idempotency.as_str()) {
+    if request_idempotency != protocol_idempotency {
         return refusal(
             trace,
             409,
@@ -1192,7 +1273,7 @@ fn program_call(emulator: &mut Emulator, request: &Request, trace: u64) -> Respo
     let activity_id = hex_encode(&decoded.activity_id);
     if let Some(existing) = emulator.program_operations.get(&protocol_idempotency) {
         if existing.activity_id == activity_id {
-            return success(trace, &existing.response);
+            return stored_program_operation_response(trace, existing);
         }
         return refusal(
             trace,
@@ -1201,10 +1282,18 @@ fn program_call(emulator: &mut Emulator, request: &Request, trace: u64) -> Respo
             "the idempotency key is already bound to a different activity",
         );
     }
+    if emulator.program_operations.len() >= MAX_PROGRAM_OPERATIONS {
+        return refusal(
+            trace,
+            503,
+            "persistence_unavailable",
+            "program recovery index reached its bounded capacity",
+        );
+    }
     let program_id = decoded.call.callee().bytes();
-    let head = match program_head(emulator, program_id) {
+    let head = match active_program_head(emulator, program_id, trace) {
         Ok(head) => head,
-        Err(code) => return core_response(trace, code),
+        Err(response) => return response,
     };
     let before = match inspect_state(emulator) {
         Ok(state) => state,
@@ -1236,6 +1325,30 @@ fn program_call(emulator: &mut Emulator, request: &Request, trace: u64) -> Respo
             &raw mut receipt,
         )
     };
+    if code == -904 {
+        let retained_signed_activity = hex_encode(&decoded.signed);
+        let response = serde_json::json!({
+            "state":"unknown",
+            "activity_id":activity_id.as_str(),
+            "idempotency_key":protocol_idempotency.as_str(),
+            "retained_signed_activity":retained_signed_activity.as_str(),
+        })
+        .to_string();
+        emulator
+            .program_activity_operations
+            .insert(activity_id.clone(), protocol_idempotency.clone());
+        let operation = ProgramOperation {
+            activity_id,
+            response,
+            retained_signed_activity: Some(retained_signed_activity),
+        };
+        let result = stored_program_operation_response(trace, &operation);
+        emulator.program_operations.insert(
+            protocol_idempotency,
+            operation,
+        );
+        return result;
+    }
     if code != 0 {
         return core_response(trace, code);
     }
@@ -1289,6 +1402,7 @@ fn program_call(emulator: &mut Emulator, request: &Request, trace: u64) -> Respo
         ProgramOperation {
             activity_id,
             response: response.clone(),
+            retained_signed_activity: Some(hex_encode(&decoded.signed)),
         },
     );
     success(trace, &response)
@@ -1479,6 +1593,281 @@ fn inject_fault(emulator: &mut Emulator, request: &Request, trace: u64) -> Respo
     }
 }
 
+struct RecoverySnapshot {
+    core_snapshot: Vec<u8>,
+    receipts: HashMap<String, String>,
+    receipt_order: VecDeque<String>,
+    program_operations: HashMap<String, ProgramOperation>,
+    program_activity_operations: HashMap<String, String>,
+}
+
+fn append_snapshot_bytes(encoded: &mut Vec<u8>, bytes: &[u8]) -> Result<(), String> {
+    let next = encoded
+        .len()
+        .checked_add(bytes.len())
+        .and_then(|length| length.checked_add(32))
+        .ok_or_else(|| "emulator recovery snapshot length overflowed".to_owned())?;
+    if next > MAX_REQUEST_BYTES {
+        return Err("emulator recovery snapshot exceeds its bound".to_owned());
+    }
+    encoded.extend_from_slice(bytes);
+    Ok(())
+}
+
+fn append_snapshot_u32(encoded: &mut Vec<u8>, value: usize) -> Result<(), String> {
+    let value = u32::try_from(value)
+        .map_err(|_| "emulator recovery snapshot field exceeds u32".to_owned())?;
+    append_snapshot_bytes(encoded, &value.to_be_bytes())
+}
+
+fn canonical_program_response(
+    response: &str,
+    activity_id: &str,
+    idempotency_key: &str,
+) -> bool {
+    if response.is_empty() || response.len() > MAX_PROGRAM_RESPONSE_BYTES {
+        return false;
+    }
+    let Ok(document) = serde_json::from_str::<serde_json::Value>(response) else {
+        return false;
+    };
+    document.is_object()
+        && document.to_string() == response
+        && document.get("activity_id").and_then(serde_json::Value::as_str) == Some(activity_id)
+        && document
+            .get("idempotency_key")
+            .and_then(serde_json::Value::as_str)
+            == Some(idempotency_key)
+}
+
+fn encode_recovery_snapshot(
+    core_snapshot: &[u8],
+    receipts: &HashMap<String, String>,
+    receipt_order: &VecDeque<String>,
+    program_operations: &HashMap<String, ProgramOperation>,
+    program_activity_operations: &HashMap<String, String>,
+) -> Result<Vec<u8>, String> {
+    if core_snapshot.is_empty() || core_snapshot.len() > MAX_CORE_SNAPSHOT_BYTES {
+        return Err("emulator core snapshot is outside its bound".to_owned());
+    }
+    if receipts.len() > MAX_RECEIPTS || receipt_order.len() != receipts.len() {
+        return Err("emulator receipt recovery index is outside its bound".to_owned());
+    }
+    if program_operations.len() > MAX_PROGRAM_OPERATIONS
+        || program_activity_operations.len() != program_operations.len()
+    {
+        return Err("emulator program recovery index is outside its bound".to_owned());
+    }
+
+    let mut encoded = Vec::new();
+    append_snapshot_bytes(&mut encoded, RECOVERY_SNAPSHOT_MAGIC)?;
+    append_snapshot_bytes(&mut encoded, &RECOVERY_SNAPSHOT_VERSION.to_be_bytes())?;
+    append_snapshot_u32(&mut encoded, core_snapshot.len())?;
+    append_snapshot_u32(&mut encoded, receipts.len())?;
+    append_snapshot_u32(&mut encoded, program_operations.len())?;
+    append_snapshot_bytes(&mut encoded, core_snapshot)?;
+
+    let mut seen_receipts = HashMap::new();
+    for activity_id in receipt_order {
+        if !canonical_hex32_text(activity_id) || seen_receipts.insert(activity_id, ()).is_some() {
+            return Err("emulator receipt recovery order is invalid".to_owned());
+        }
+        let activity = hex_decode(activity_id)
+            .map_err(|_| "emulator receipt activity id is invalid".to_owned())?;
+        let receipt = receipts
+            .get(activity_id)
+            .ok_or_else(|| "emulator receipt recovery order is incomplete".to_owned())?;
+        let receipt = hex_decode(receipt)
+            .map_err(|_| "emulator receipt recovery bytes are invalid".to_owned())?;
+        if receipt.is_empty() || receipt.len() > MAX_RECEIPT_BYTES {
+            return Err("emulator receipt recovery bytes exceed their bound".to_owned());
+        }
+        append_snapshot_bytes(&mut encoded, &activity)?;
+        append_snapshot_u32(&mut encoded, receipt.len())?;
+        append_snapshot_bytes(&mut encoded, &receipt)?;
+    }
+
+    let mut operations: Vec<_> = program_operations.iter().collect();
+    operations.sort_by(|(left, _), (right, _)| left.cmp(right));
+    for (idempotency_key, operation) in operations {
+        if !canonical_hex32_text(idempotency_key)
+            || !canonical_hex32_text(&operation.activity_id)
+            || program_activity_operations.get(&operation.activity_id) != Some(idempotency_key)
+            || !canonical_program_response(
+                &operation.response,
+                &operation.activity_id,
+                idempotency_key,
+            )
+        {
+            return Err("emulator program recovery binding is invalid".to_owned());
+        }
+        let idempotency = hex_decode(idempotency_key)
+            .map_err(|_| "emulator program idempotency key is invalid".to_owned())?;
+        let activity = hex_decode(&operation.activity_id)
+            .map_err(|_| "emulator program activity id is invalid".to_owned())?;
+        let retained = match operation.retained_signed_activity.as_deref() {
+            Some(value) => {
+                let bytes = hex_decode(value).map_err(|_| {
+                    "emulator retained signed program activity is invalid".to_owned()
+                })?;
+                if bytes.is_empty() || bytes.len() > MAX_RETAINED_SIGNED_ACTIVITY_BYTES {
+                    return Err(
+                        "emulator retained signed program activity exceeds its bound".to_owned(),
+                    );
+                }
+                bytes
+            }
+            None => Vec::new(),
+        };
+        append_snapshot_bytes(&mut encoded, &idempotency)?;
+        append_snapshot_bytes(&mut encoded, &activity)?;
+        append_snapshot_u32(&mut encoded, operation.response.len())?;
+        append_snapshot_bytes(&mut encoded, operation.response.as_bytes())?;
+        append_snapshot_u32(&mut encoded, retained.len())?;
+        append_snapshot_bytes(&mut encoded, &retained)?;
+    }
+
+    let mut digest = Sha256::new();
+    digest.update(RECOVERY_SNAPSHOT_DIGEST_DOMAIN);
+    digest.update(&encoded);
+    let digest: [u8; 32] = digest.finalize().into();
+    append_snapshot_bytes(&mut encoded, &digest)?;
+    Ok(encoded)
+}
+
+fn snapshot_take<'a>(
+    snapshot: &'a [u8],
+    offset: &mut usize,
+    length: usize,
+) -> Result<&'a [u8], String> {
+    let end = offset
+        .checked_add(length)
+        .ok_or_else(|| "emulator recovery snapshot offset overflowed".to_owned())?;
+    let value = snapshot
+        .get(*offset..end)
+        .ok_or_else(|| "emulator recovery snapshot is truncated".to_owned())?;
+    *offset = end;
+    Ok(value)
+}
+
+fn snapshot_u32(snapshot: &[u8], offset: &mut usize) -> Result<usize, String> {
+    let bytes: [u8; 4] = snapshot_take(snapshot, offset, 4)?
+        .try_into()
+        .map_err(|_| "emulator recovery snapshot integer is invalid".to_owned())?;
+    usize::try_from(u32::from_be_bytes(bytes))
+        .map_err(|_| "emulator recovery snapshot integer exceeds usize".to_owned())
+}
+
+fn decode_recovery_snapshot(body: &[u8]) -> Result<RecoverySnapshot, String> {
+    if body.len() > MAX_REQUEST_BYTES || body.len() < 8 + 4 + 4 + 4 + 4 + 32 {
+        return Err("emulator recovery snapshot is outside its bound".to_owned());
+    }
+    let authenticated_length = body.len() - 32;
+    let (authenticated, supplied_digest) = body.split_at(authenticated_length);
+    let mut digest = Sha256::new();
+    digest.update(RECOVERY_SNAPSHOT_DIGEST_DOMAIN);
+    digest.update(authenticated);
+    let expected_digest: [u8; 32] = digest.finalize().into();
+    if expected_digest.as_slice() != supplied_digest {
+        return Err("emulator recovery snapshot digest is invalid".to_owned());
+    }
+
+    let mut offset = 0;
+    if snapshot_take(authenticated, &mut offset, 8)? != RECOVERY_SNAPSHOT_MAGIC {
+        return Err("emulator recovery snapshot magic is invalid".to_owned());
+    }
+    let version = snapshot_u32(authenticated, &mut offset)?;
+    if version != RECOVERY_SNAPSHOT_VERSION as usize {
+        return Err("emulator recovery snapshot version is unsupported".to_owned());
+    }
+    let core_length = snapshot_u32(authenticated, &mut offset)?;
+    let receipt_count = snapshot_u32(authenticated, &mut offset)?;
+    let operation_count = snapshot_u32(authenticated, &mut offset)?;
+    if core_length == 0
+        || core_length > MAX_CORE_SNAPSHOT_BYTES
+        || receipt_count > MAX_RECEIPTS
+        || operation_count > MAX_PROGRAM_OPERATIONS
+    {
+        return Err("emulator recovery snapshot counts exceed their bounds".to_owned());
+    }
+    let core_snapshot = snapshot_take(authenticated, &mut offset, core_length)?.to_vec();
+
+    let mut receipts = HashMap::with_capacity(receipt_count);
+    let mut receipt_order = VecDeque::with_capacity(receipt_count);
+    for _ in 0..receipt_count {
+        let activity_id = hex_encode(snapshot_take(authenticated, &mut offset, 32)?);
+        let receipt_length = snapshot_u32(authenticated, &mut offset)?;
+        if receipt_length == 0 || receipt_length > MAX_RECEIPT_BYTES {
+            return Err("emulator recovery receipt exceeds its bound".to_owned());
+        }
+        let receipt = hex_encode(snapshot_take(authenticated, &mut offset, receipt_length)?);
+        if receipts.insert(activity_id.clone(), receipt).is_some() {
+            return Err("emulator recovery receipt activity is duplicated".to_owned());
+        }
+        receipt_order.push_back(activity_id);
+    }
+
+    let mut program_operations = HashMap::with_capacity(operation_count);
+    let mut program_activity_operations = HashMap::with_capacity(operation_count);
+    for _ in 0..operation_count {
+        let idempotency_key = hex_encode(snapshot_take(authenticated, &mut offset, 32)?);
+        let activity_id = hex_encode(snapshot_take(authenticated, &mut offset, 32)?);
+        let response_length = snapshot_u32(authenticated, &mut offset)?;
+        if response_length == 0 || response_length > MAX_PROGRAM_RESPONSE_BYTES {
+            return Err("emulator recovery program response exceeds its bound".to_owned());
+        }
+        let response = std::str::from_utf8(snapshot_take(
+            authenticated,
+            &mut offset,
+            response_length,
+        )?)
+        .map_err(|_| "emulator recovery program response is not UTF-8".to_owned())?
+        .to_owned();
+        if !canonical_program_response(&response, &activity_id, &idempotency_key) {
+            return Err("emulator recovery program response is invalid".to_owned());
+        }
+        let retained_length = snapshot_u32(authenticated, &mut offset)?;
+        if retained_length > MAX_RETAINED_SIGNED_ACTIVITY_BYTES {
+            return Err("emulator retained recovery activity exceeds its bound".to_owned());
+        }
+        let retained_signed_activity = if retained_length == 0 {
+            None
+        } else {
+            Some(hex_encode(snapshot_take(
+                authenticated,
+                &mut offset,
+                retained_length,
+            )?))
+        };
+        if program_activity_operations
+            .insert(activity_id.clone(), idempotency_key.clone())
+            .is_some()
+            || program_operations
+                .insert(
+                    idempotency_key,
+                    ProgramOperation {
+                        activity_id,
+                        response,
+                        retained_signed_activity,
+                    },
+                )
+                .is_some()
+        {
+            return Err("emulator recovery program binding is duplicated".to_owned());
+        }
+    }
+    if offset != authenticated.len() {
+        return Err("emulator recovery snapshot has trailing bytes".to_owned());
+    }
+    Ok(RecoverySnapshot {
+        core_snapshot,
+        receipts,
+        receipt_order,
+        program_operations,
+        program_activity_operations,
+    })
+}
+
 fn export_snapshot(emulator: &mut Emulator, trace: u64) -> Response {
     let mut bytes = ptr::null();
     let mut length = 0_usize;
@@ -1488,7 +1877,7 @@ fn export_snapshot(emulator: &mut Emulator, trace: u64) -> Response {
     if code != 0 {
         return core_response(trace, code);
     }
-    if bytes.is_null() || length == 0 || length > MAX_REQUEST_BYTES {
+    if bytes.is_null() || length == 0 || length > MAX_CORE_SNAPSHOT_BYTES {
         return refusal(
             trace,
             503,
@@ -1496,23 +1885,42 @@ fn export_snapshot(emulator: &mut Emulator, trace: u64) -> Response {
             "the LayerX core returned an invalid snapshot buffer",
         );
     }
-    Response {
-        status: 200,
-        content_type: "application/vnd.layerx.emulator-snapshot",
-        body: unsafe { slice::from_raw_parts(bytes, length) }.to_vec(),
+    let core_snapshot = unsafe { slice::from_raw_parts(bytes, length) };
+    match encode_recovery_snapshot(
+        core_snapshot,
+        &emulator.receipts,
+        &emulator.receipt_order,
+        &emulator.program_operations,
+        &emulator.program_activity_operations,
+    ) {
+        Ok(body) => Response {
+            status: 200,
+            content_type: "application/vnd.layerx.emulator-snapshot",
+            body,
+        },
+        Err(error) => refusal(trace, 503, "snapshot_encoding_failed", &error),
     }
 }
 
 fn import_snapshot(emulator: &mut Emulator, body: &[u8], trace: u64) -> Response {
-    let code =
-        unsafe { platform_emulator_snapshot_import(emulator.core, body.as_ptr(), body.len()) };
+    let recovered = match decode_recovery_snapshot(body) {
+        Ok(value) => value,
+        Err(error) => return refusal(trace, 400, "invalid_snapshot", &error),
+    };
+    let code = unsafe {
+        platform_emulator_snapshot_import(
+            emulator.core,
+            recovered.core_snapshot.as_ptr(),
+            recovered.core_snapshot.len(),
+        )
+    };
     if code != 0 {
         return core_response(trace, code);
     }
-    emulator.receipts.clear();
-    emulator.receipt_order.clear();
-    emulator.program_operations.clear();
-    emulator.program_activity_operations.clear();
+    emulator.receipts = recovered.receipts;
+    emulator.receipt_order = recovered.receipt_order;
+    emulator.program_operations = recovered.program_operations;
+    emulator.program_activity_operations = recovered.program_activity_operations;
     success(trace, "{\"imported\":true}")
 }
 
@@ -1543,7 +1951,7 @@ fn program_receipt(emulator: &Emulator, request: &Request, trace: u64) -> Respon
     };
     match emulator.program_operations.get(idempotency) {
         Some(operation) if operation.activity_id == expected_activity => {
-            success(trace, &operation.response)
+            stored_program_operation_response(trace, operation)
         }
         Some(_) => refusal(
             trace,
@@ -1581,13 +1989,10 @@ fn program_activity(emulator: &Emulator, request: &Request, trace: u64) -> Respo
         .and_then(|idempotency| emulator.program_operations.get(idempotency));
     match operation {
         Some(operation) if operation.activity_id == activity_id => {
-            success(trace, &operation.response)
+            stored_program_operation_response(trace, operation)
         }
         Some(_) => refusal(
-            trace,
-            503,
-            "program_activity_binding_invalid",
-            "the stored activity binding is inconsistent",
+            trace, 404, "program_activity_not_found", "program activity is not present",
         ),
         None => refusal(
             trace,
@@ -1718,7 +2123,7 @@ fn program_registry_read(
         observed_sequence: 0,
     };
     let code = unsafe { platform_emulator_program_read(emulator.core, bytes.as_ptr(), &raw mut program) };
-    if code != 0 { return core_response(trace, code); }
+    if code != 0 { return program_head_error(trace, code); }
     let mut live = CoreState { state_root: [0; 32], next_sequence: 0,
         batch_number: 0, timestamp_ms: 0, cell_count: 0, account_count: 0 };
     let inspect_code = unsafe { platform_emulator_inspect(emulator.core, &raw mut live) };
@@ -1749,7 +2154,7 @@ fn program_registry_read(
         return success(trace, &discovery.to_string());
     }
     if program.has_interface == 0 {
-        return refusal(trace, 404, "interface_absent", "program has no published interface");
+        return refusal(trace, 404, "program_interface_absent", "program has no published interface");
     }
     if program.has_interface != 1 || program.interface_bytes.is_null() || program.interface_length == 0 || program.interface_length > 952 {
         return refusal(trace, 503, "core_invalid_output", "program interface state is invalid");
@@ -1777,12 +2182,12 @@ fn program_registry_read(
 fn program_simulate(emulator: &mut Emulator, request: &Request, trace: u64) -> Response {
     let decoded = match decode_program_activity(request) {
         Ok(activity) => activity,
-        Err(error) => return refusal(trace, 400, "invalid_argument", &error),
+        Err(error) => return refusal(trace, 400, "invalid_program_call", &error),
     };
     let program_id = decoded.call.callee().bytes();
-    let head = match program_head(emulator, program_id) {
+    let head = match active_program_head(emulator, program_id, trace) {
         Ok(head) => head,
-        Err(code) => return core_response(trace, code),
+        Err(response) => return response,
     };
     let live = match inspect_state(emulator) {
         Ok(state) => state,
@@ -2131,10 +2536,13 @@ mod boundary_tests {
 #[cfg(test)]
 mod program_call_tests {
     use super::{
-        agent_response, decode_activity, decode_program_activity, hex_decode,
+        agent_error_class, agent_response, decode_activity, decode_program_activity,
+        decode_recovery_snapshot, encode_recovery_snapshot, hex_decode,
         program_activity_selector, program_receipt_selector, program_selector, programs_route,
-        refusal, success, Request, MAX_RECEIPT_BYTES,
+        refusal, stored_program_operation_response, success, ProgramOperation, Request,
+        MAX_RECEIPT_BYTES,
     };
+    use std::collections::{HashMap, VecDeque};
 
     /// A representative canonical program-call activity. The value only has to
     /// be the exact bytes both ingress forms carry unchanged; the emulator hands
@@ -2212,18 +2620,32 @@ mod program_call_tests {
 
     #[test]
     fn program_routes_share_the_exact_agent_envelope() {
-        for state in ["refused", "unknown", "executed"] {
-            let output = agent_response(
+        for state in ["refused", "unknown", "pending", "executed"] {
+            let mut inner = success(
                 7,
-                success(
-                    7,
-                    &format!(
-                        "{{\"state\":\"{state}\",\"global_sequence\":{},\"usage\":{{\"output_values\":\"7\"}}}}",
-                        u64::MAX
-                    ),
+                &format!(
+                    "{{\"state\":\"{state}\",\"global_sequence\":{},\"usage\":{{\"output_values\":\"7\"}}}}",
+                    u64::MAX
                 ),
             );
+            if matches!(state, "unknown" | "pending") {
+                inner.status = 202;
+            }
+            let output = agent_response(
+                7,
+                inner,
+            );
             let document: serde_json::Value = serde_json::from_slice(&output.body).unwrap();
+            let verification_status = if matches!(state, "unknown" | "pending") {
+                serde_json::json!({
+                    "state":"Unverified",
+                    "requested":"SequencerSigned",
+                    "achieved":"Unverified",
+                    "reason":"receipt_pending",
+                })
+            } else {
+                serde_json::json!({"state":"Achieved","level":"SequencerSigned"})
+            };
             assert_eq!(
                 document,
                 serde_json::json!({
@@ -2233,7 +2655,7 @@ mod program_call_tests {
                         "global_sequence":u64::MAX.to_string(),
                         "usage":{"output_values":7}
                     },
-                    "verification_status":{"state":"Achieved","level":"SequencerSigned"},
+                    "verification_status":verification_status,
                 })
             );
         }
@@ -2253,6 +2675,185 @@ mod program_call_tests {
                 "reason":"idempotency_conflict",
             })
         );
+    }
+
+    #[test]
+    fn discovery_is_explicitly_server_verified_only() {
+        for verification in [
+            "registry-receipt-and-current-head-verified",
+            "deployment-interface-and-current-head-verified",
+        ] {
+            let output = agent_response(
+                9,
+                success(
+                    9,
+                    &serde_json::json!({
+                        "program_id":"a".repeat(64),
+                        "verification":verification
+                    })
+                    .to_string(),
+                ),
+            );
+            let document: serde_json::Value = serde_json::from_slice(&output.body).unwrap();
+            assert_eq!(
+                document["verification_status"],
+                serde_json::json!({
+                    "state":"Unverified",
+                    "requested":"SequencerSigned",
+                    "achieved":"Unverified",
+                    "reason":"server_side_receipt_verification_only",
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn retained_unknown_operation_is_recoverable_without_a_false_signature_claim() {
+        let operation = ProgramOperation {
+            activity_id: "a".repeat(64),
+            response: serde_json::json!({
+                "state":"unknown",
+                "activity_id":"a".repeat(64),
+                "idempotency_key":"b".repeat(64),
+                "retained_signed_activity":"00ff",
+            })
+            .to_string(),
+            retained_signed_activity: Some("00ff".to_owned()),
+        };
+        let stored = stored_program_operation_response(10, &operation);
+        assert_eq!(stored.status, 202);
+        let output = agent_response(10, stored);
+        let document: serde_json::Value = serde_json::from_slice(&output.body).unwrap();
+        assert_eq!(document["value"]["retained_signed_activity"], "00ff");
+        assert_eq!(
+            document["verification_status"],
+            serde_json::json!({
+                "state":"Unverified",
+                "requested":"SequencerSigned",
+                "achieved":"Unverified",
+                "reason":"receipt_pending",
+            })
+        );
+    }
+
+    #[test]
+    fn program_error_classes_are_stable_for_provider_parity() {
+        for (status, code, expected) in [
+            (409, "idempotency_conflict", "IdempotencyConflict"),
+            (429, "quota_exceeded", "RateLimit"),
+            (403, "activity_authorization_refused", "PolicyRefusal"),
+            (503, "program_receipt_verification_failed", "VerificationFailure"),
+            (404, "program_interface_absent", "UnavailableCapability"),
+            (400, "LXP_ERR_BUDGET_EXCEEDED", "CoreRejection"),
+            (400, "invalid_argument", "ProtocolIncompatibility"),
+            (503, "persistence_unavailable", "TransportFailure"),
+            (400, "program_request_failed", "InternalFault"),
+        ] {
+            assert_eq!(agent_error_class(status, code), expected);
+        }
+    }
+
+    #[test]
+    fn recovery_snapshot_is_deterministic_and_preserves_program_indexes() {
+        let receipt_activity = "a".repeat(64);
+        let program_activity = "b".repeat(64);
+        let idempotency = "c".repeat(64);
+        let receipts = HashMap::from([
+            (receipt_activity.clone(), "deadbeef".to_owned()),
+            (program_activity.clone(), "01020304".to_owned()),
+        ]);
+        let receipt_order = [receipt_activity, program_activity.clone()]
+            .into_iter()
+            .collect::<VecDeque<_>>();
+        let response = serde_json::json!({
+            "state":"executed",
+            "activity_id":program_activity.as_str(),
+            "idempotency_key":idempotency.as_str(),
+        })
+        .to_string();
+        let program_operations = HashMap::from([(
+            idempotency.clone(),
+            ProgramOperation {
+                activity_id: program_activity.clone(),
+                response: response.clone(),
+                retained_signed_activity: Some("00ff".to_owned()),
+            },
+        )]);
+        let program_activity_operations =
+            HashMap::from([(program_activity.clone(), idempotency.clone())]);
+
+        let first = encode_recovery_snapshot(
+            b"bounded-core-snapshot",
+            &receipts,
+            &receipt_order,
+            &program_operations,
+            &program_activity_operations,
+        )
+        .unwrap();
+        let second = encode_recovery_snapshot(
+            b"bounded-core-snapshot",
+            &receipts,
+            &receipt_order,
+            &program_operations,
+            &program_activity_operations,
+        )
+        .unwrap();
+        assert_eq!(first, second);
+
+        let recovered = decode_recovery_snapshot(&first).unwrap();
+        assert_eq!(recovered.core_snapshot.as_slice(), b"bounded-core-snapshot");
+        assert_eq!(recovered.receipts, receipts);
+        assert_eq!(recovered.receipt_order, receipt_order);
+        assert_eq!(recovered.program_operations, program_operations);
+        assert_eq!(
+            recovered.program_activity_operations,
+            program_activity_operations
+        );
+    }
+
+    #[test]
+    fn recovery_snapshot_rejects_tampering_and_inconsistent_bindings() {
+        let activity = "a".repeat(64);
+        let idempotency = "b".repeat(64);
+        let receipts = HashMap::from([(activity.clone(), "00".to_owned())]);
+        let receipt_order = [activity.clone()].into_iter().collect::<VecDeque<_>>();
+        let response = serde_json::json!({
+            "state":"executed",
+            "activity_id":activity.as_str(),
+            "idempotency_key":idempotency.as_str(),
+        })
+        .to_string();
+        let operations = HashMap::from([(
+            idempotency,
+            ProgramOperation {
+                activity_id: activity.clone(),
+                response,
+                retained_signed_activity: None,
+            },
+        )]);
+        let bindings = HashMap::from([(activity, "c".repeat(64))]);
+        assert!(encode_recovery_snapshot(
+            b"bounded-core-snapshot",
+            &receipts,
+            &receipt_order,
+            &operations,
+            &bindings,
+        )
+        .is_err());
+
+        let empty_operations = HashMap::new();
+        let empty_bindings = HashMap::new();
+        let mut encoded = encode_recovery_snapshot(
+            b"bounded-core-snapshot",
+            &receipts,
+            &receipt_order,
+            &empty_operations,
+            &empty_bindings,
+        )
+        .unwrap();
+        let last = encoded.len() - 1;
+        encoded[last] ^= 1;
+        assert!(decode_recovery_snapshot(&encoded).is_err());
     }
 
     #[test]

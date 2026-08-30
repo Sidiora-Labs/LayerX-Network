@@ -227,6 +227,20 @@ fn now() -> Result<u64, String> {
         .map_err(|_| "system clock precedes Unix epoch".to_owned())
 }
 
+fn now_millis() -> Result<u64, String> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| "system clock precedes Unix epoch".to_owned())
+        .and_then(|duration| {
+            u64::try_from(duration.as_millis())
+                .map_err(|_| "system clock exceeds the supported millisecond range".to_owned())
+        })
+}
+
+fn program_head_is_current(observed_at: u64, valid_through: u64, current_time_ms: u64) -> bool {
+    observed_at <= valid_through && current_time_ms <= valid_through
+}
+
 fn read_secret(name: &str) -> Result<Zeroizing<String>, String> {
     let path = env::var(name).map_err(|_| format!("{name} is required"))?;
     let mut secret = fs::read_to_string(path).map_err(|error| error.to_string())?;
@@ -441,10 +455,14 @@ fn program_head(config: &Config, expected_program: [u8; 32]) -> Result<ProgramHe
         .get("valid_through")
         .and_then(canonical_u64)
         .ok_or_else(|| response(503, "program_registry_invalid", Some(5)))?;
+    let current_time_ms =
+        now_millis().map_err(|_| response(503, "program_state_unverified", Some(5)))?;
     if state_root.is_none()
         || observed_sequence.is_none()
         || observed_at.is_none()
-        || observed_at.is_some_and(|observed| valid_through < observed)
+        || observed_at.is_some_and(|observed| {
+            !program_head_is_current(observed, valid_through, current_time_ms)
+        })
     {
         return Err(response(503, "program_state_unverified", Some(5)));
     }
@@ -651,12 +669,16 @@ fn json_response(status: u16, value: serde_json::Value) -> OutgoingResponse {
 
 fn programs_request_path(method: &str, path: &str) -> bool {
     matches!(
-        (method, path),
-        ("POST", "/v1/programs/call") | ("POST", "/v1/programs/simulate")
-    ) || (method == "GET"
-        && (path.starts_with("/v1/programs/registry/")
-            || path.starts_with("/v1/programs/receipts/by-idempotency/")
-            || path.starts_with("/v1/programs/activities/")))
+        production_route(method, path),
+        Ok(
+            ProductionRoute::ProgramCall
+                | ProductionRoute::ProgramSimulation
+                | ProductionRoute::ProgramRegistry(_)
+                | ProductionRoute::ProgramInterface(_)
+                | ProductionRoute::ProgramReceiptByIdempotency(_)
+                | ProductionRoute::ProgramActivity(_)
+        )
+    )
 }
 
 fn agent_error_class(status: u16, code: &str) -> &'static str {
@@ -682,12 +704,41 @@ fn agent_error_class(status: u16, code: &str) -> &'static str {
         "VerificationFailure"
     } else if status == 404 || code.contains("absent") || code.contains("unknown_program") {
         "UnavailableCapability"
+    } else if code.starts_with("LXP_ERR_") {
+        "CoreRejection"
     } else if code.contains("invalid") || code.contains("required") || status == 415 {
         "ProtocolIncompatibility"
     } else if status >= 500 {
         "TransportFailure"
     } else {
         "InternalFault"
+    }
+}
+
+fn program_verification_status(value: &serde_json::Value) -> serde_json::Value {
+    match value.get("state").and_then(serde_json::Value::as_str) {
+        Some("unknown" | "pending") => serde_json::json!({
+            "state": "Unverified",
+            "requested": "SequencerSigned",
+            "achieved": "Unverified",
+            "reason": "receipt_pending",
+        }),
+        _ if matches!(
+            value.get("verification").and_then(serde_json::Value::as_str),
+            Some(
+                "registry-receipt-and-current-head-verified"
+                    | "deployment-interface-and-current-head-verified"
+            )
+        ) => serde_json::json!({
+            "state": "Unverified",
+            "requested": "SequencerSigned",
+            "achieved": "Unverified",
+            "reason": "server_side_receipt_verification_only",
+        }),
+        _ => serde_json::json!({
+            "state": "Achieved",
+            "level": "SequencerSigned",
+        }),
     }
 }
 
@@ -787,13 +838,11 @@ fn agent_response(request_id: &str, response: OutgoingResponse) -> OutgoingRespo
                 },
                 |mut value| {
                     if normalize_program_u64s(&mut value) {
+                        let verification_status = program_verification_status(&value);
                         serde_json::json!({
                             "request_id": request_id,
                             "value": value,
-                            "verification_status": {
-                                "state": "Achieved",
-                                "level": "SequencerSigned",
-                            },
+                            "verification_status": verification_status,
                         })
                     } else {
                         serde_json::json!({
@@ -827,7 +876,7 @@ fn agent_response(request_id: &str, response: OutgoingResponse) -> OutgoingRespo
         serde_json::json!({
             "class": agent_error_class(status, code),
             "protocol_result_code": protocol_result_code,
-            "retriability": if retry_after.is_some() || status >= 500 { "Retriable" } else { "Terminal" },
+            "retriability": if status == 429 || status >= 500 { "Retriable" } else { "Terminal" },
             "request_id": request_id,
             "reason": reason,
         })
@@ -1687,6 +1736,7 @@ fn activity(
             Err(_) => return response(400, "invalid_activity", None),
         }
     };
+    let retained_signed_activity = hex(&canonical);
     let signer_public_key = match parse_hex32(&record.signer_public_key) {
         Ok(value) => value,
         Err(_) => return response(503, "persistence_unavailable", Some(5)),
@@ -1740,7 +1790,11 @@ fn activity(
         &protocol_idempotency,
         &record.principal_digest,
         &audit,
-        "",
+        if program_call {
+            retained_signed_activity.as_str()
+        } else {
+            ""
+        },
     ) {
         Ok(value) => value,
         Err(_) => return response(503, "persistence_unavailable", Some(5)),
@@ -1807,16 +1861,20 @@ fn activity(
     ) {
         Ok(value) => value,
         Err(_) => {
-            return json_response(
-                202,
-                serde_json::json!({ "ok": true, "result": { "state": "unknown", "activity_id": submitted_activity_id, "idempotency_key": protocol_idempotency, "retained_signed_activity": hex(&canonical) }, "trace": trace_id }),
+            return submitted_unknown_response(
+                &submitted_activity_id,
+                &protocol_idempotency,
+                &retained_signed_activity,
+                trace_id,
             )
         }
     };
     if upstream.status == 202 {
-        return json_response(
-            202,
-            serde_json::json!({ "ok": true, "result": { "state": "unknown", "activity_id": submitted_activity_id, "idempotency_key": protocol_idempotency, "retained_signed_activity": hex(&canonical) }, "trace": trace_id }),
+        return submitted_unknown_response(
+            &submitted_activity_id,
+            &protocol_idempotency,
+            &retained_signed_activity,
+            trace_id,
         );
     }
     if upstream.status != 200 || upstream.content_type != "application/json" {
@@ -1846,9 +1904,11 @@ fn activity(
                 refusal
             }
         } else {
-            json_response(
-                202,
-                serde_json::json!({ "ok": true, "result": { "state": "unknown", "activity_id": submitted_activity_id, "idempotency_key": protocol_idempotency, "retained_signed_activity": hex(&canonical) }, "trace": trace_id }),
+            submitted_unknown_response(
+                &submitted_activity_id,
+                &protocol_idempotency,
+                &retained_signed_activity,
+                trace_id,
             )
         };
     }
@@ -1971,16 +2031,51 @@ fn activity(
     )
 }
 
-fn pending_program_response(operation: &OperationRecord, trace_id: &str) -> OutgoingResponse {
+fn submitted_unknown_response(
+    activity_id: &str,
+    idempotency_key: &str,
+    retained_signed_activity: &str,
+    trace_id: &str,
+) -> OutgoingResponse {
     json_response(
         202,
         serde_json::json!({
             "ok": true,
             "result": {
                 "state": "unknown",
-                "activity_id": operation.activity_id,
-                "idempotency_key": operation.idempotency_key,
+                "activity_id": activity_id,
+                "idempotency_key": idempotency_key,
+                "retained_signed_activity": retained_signed_activity,
             },
+            "trace": trace_id,
+        }),
+    )
+}
+
+fn pending_program_response(operation: &OperationRecord, trace_id: &str) -> OutgoingResponse {
+    if !operation.continuation.is_empty()
+        && decode_hex(&operation.continuation, 1024 * 1024).is_err()
+    {
+        return response(503, "persistence_unavailable", Some(5));
+    }
+    let mut result = serde_json::json!({
+        "state": "unknown",
+        "activity_id": operation.activity_id,
+        "idempotency_key": operation.idempotency_key,
+    });
+    if !operation.continuation.is_empty() {
+        if let Some(object) = result.as_object_mut() {
+            object.insert(
+                "retained_signed_activity".to_owned(),
+                serde_json::Value::String(operation.continuation.clone()),
+            );
+        }
+    }
+    json_response(
+        202,
+        serde_json::json!({
+            "ok": true,
+            "result": result,
             "trace": trace_id,
         }),
     )
@@ -2677,10 +2772,12 @@ fn main() {
 #[cfg(test)]
 mod programs_wire_tests {
     use super::{
-        agent_response, json_response, program_activity_selector, program_receipt_selector,
-        program_selector, response,
+        agent_error_class, agent_response, json_response, pending_program_response,
+        now_millis, program_activity_selector, program_head_is_current, program_receipt_selector,
+        program_selector, programs_request_path, response,
     };
     use layerx_platform_gateway::http::IncomingRequest;
+    use layerx_platform_gateway::store::OperationRecord;
     use std::collections::BTreeMap;
 
     fn selector_request(path: &str, body: serde_json::Value) -> IncomingRequest {
@@ -2697,11 +2794,15 @@ mod programs_wire_tests {
 
     #[test]
     fn agent_program_success_envelope_preserves_terminal_states() {
-        for state in ["refused", "unknown", "executed"] {
+        for state in ["refused", "unknown", "pending", "executed"] {
             let output = agent_response(
                 "gw-contract-test",
                 json_response(
-                    if state == "unknown" { 202 } else { 200 },
+                    if matches!(state, "unknown" | "pending") {
+                        202
+                    } else {
+                        200
+                    },
                     serde_json::json!({
                         "ok":true,
                         "result":{
@@ -2713,6 +2814,16 @@ mod programs_wire_tests {
                 ),
             );
             let document: serde_json::Value = serde_json::from_slice(&output.body).unwrap();
+            let verification_status = if matches!(state, "unknown" | "pending") {
+                serde_json::json!({
+                    "state":"Unverified",
+                    "requested":"SequencerSigned",
+                    "achieved":"Unverified",
+                    "reason":"receipt_pending",
+                })
+            } else {
+                serde_json::json!({"state":"Achieved","level":"SequencerSigned"})
+            };
             assert_eq!(
                 document,
                 serde_json::json!({
@@ -2722,10 +2833,125 @@ mod programs_wire_tests {
                         "global_sequence":u64::MAX.to_string(),
                         "usage":{"output_values":7}
                     },
-                    "verification_status":{"state":"Achieved","level":"SequencerSigned"},
+                    "verification_status":verification_status,
                 })
             );
         }
+    }
+
+    #[test]
+    fn program_heads_expire_against_unix_milliseconds() {
+        assert!(program_head_is_current(1_700_000_000_000, 1_700_000_300_000, 1_700_000_300_000));
+        assert!(!program_head_is_current(1_700_000_000_000, 1_700_000_300_000, 1_700_000_300_001));
+        assert!(!program_head_is_current(1_700_000_300_001, 1_700_000_300_000, 1_700_000_000_000));
+
+        let before = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        let observed = u128::from(now_millis().unwrap());
+        let after = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        assert!((before..=after).contains(&observed));
+    }
+
+    #[test]
+    fn discovery_is_explicitly_server_verified_only() {
+        let output = agent_response(
+            "gw-contract-test",
+            json_response(
+                200,
+                serde_json::json!({
+                    "ok":true,
+                    "result":{
+                        "program_id":"a".repeat(64),
+                        "verification":"registry-receipt-and-current-head-verified"
+                    }
+                }),
+            ),
+        );
+        let document: serde_json::Value = serde_json::from_slice(&output.body).unwrap();
+        assert_eq!(
+            document["verification_status"],
+            serde_json::json!({
+                "state":"Unverified",
+                "requested":"SequencerSigned",
+                "achieved":"Unverified",
+                "reason":"server_side_receipt_verification_only",
+            })
+        );
+    }
+
+    #[test]
+    fn six_program_operations_have_explicit_verification_outcomes() {
+        let cases = [
+            (
+                "call_executed",
+                200,
+                serde_json::json!({"state":"executed"}),
+                serde_json::json!({"state":"Achieved","level":"SequencerSigned"}),
+            ),
+            (
+                "call_unknown",
+                202,
+                serde_json::json!({"state":"unknown"}),
+                serde_json::json!({"state":"Unverified","requested":"SequencerSigned","achieved":"Unverified","reason":"receipt_pending"}),
+            ),
+            (
+                "simulate",
+                200,
+                serde_json::json!({"committed":false}),
+                serde_json::json!({"state":"Achieved","level":"SequencerSigned"}),
+            ),
+            (
+                "discover",
+                200,
+                serde_json::json!({"verification":"registry-receipt-and-current-head-verified"}),
+                serde_json::json!({"state":"Unverified","requested":"SequencerSigned","achieved":"Unverified","reason":"server_side_receipt_verification_only"}),
+            ),
+            (
+                "interface",
+                200,
+                serde_json::json!({"verification":"deployment-interface-and-current-head-verified"}),
+                serde_json::json!({"state":"Unverified","requested":"SequencerSigned","achieved":"Unverified","reason":"server_side_receipt_verification_only"}),
+            ),
+            (
+                "receipt_or_activity",
+                200,
+                serde_json::json!({"state":"executed"}),
+                serde_json::json!({"state":"Achieved","level":"SequencerSigned"}),
+            ),
+        ];
+        for (operation, status, value, expected) in cases {
+            let output = agent_response(
+                operation,
+                json_response(status, serde_json::json!({"ok":true,"result":value})),
+            );
+            let document: serde_json::Value = serde_json::from_slice(&output.body).unwrap();
+            assert_eq!(document["verification_status"], expected, "{operation}");
+        }
+
+        let id = "a".repeat(64);
+        for (method, path) in [
+            ("POST", "/v1/programs/call".to_owned()),
+            ("POST", "/v1/programs/simulate".to_owned()),
+            ("GET", format!("/v1/programs/registry/{id}")),
+            ("GET", format!("/v1/programs/registry/{id}/interface")),
+            ("GET", format!("/v1/programs/receipts/by-idempotency/{id}")),
+            ("GET", format!("/v1/programs/activities/{id}")),
+        ] {
+            assert!(programs_request_path(method, &path));
+        }
+        assert!(!programs_request_path(
+            "GET",
+            &format!("/v1/programs/registry/{id}/source")
+        ));
+        assert!(!programs_request_path(
+            "GET",
+            &format!("/v1/programs/activities/{}", "A".repeat(64))
+        ));
     }
 
     #[test]
@@ -2745,6 +2971,49 @@ mod programs_wire_tests {
                 "reason":"idempotency_conflict",
             })
         );
+    }
+
+    #[test]
+    fn program_error_classes_are_stable_for_provider_parity() {
+        for (status, code, expected) in [
+            (409, "idempotency_conflict", "IdempotencyConflict"),
+            (429, "quota_exceeded", "RateLimit"),
+            (403, "activity_authorization_refused", "PolicyRefusal"),
+            (503, "program_receipt_verification_failed", "VerificationFailure"),
+            (404, "program_interface_absent", "UnavailableCapability"),
+            (400, "LXP_ERR_BUDGET_EXCEEDED", "CoreRejection"),
+            (400, "invalid_argument", "ProtocolIncompatibility"),
+            (503, "persistence_unavailable", "TransportFailure"),
+            (400, "program_request_failed", "InternalFault"),
+        ] {
+            assert_eq!(agent_error_class(status, code), expected);
+        }
+    }
+
+    #[test]
+    fn pending_recovery_returns_retained_signed_activity_when_present() {
+        let operation = OperationRecord {
+            scope: "scope".to_owned(),
+            digest: "digest".to_owned(),
+            state: "pending".to_owned(),
+            response: String::new(),
+            receipt: String::new(),
+            principal: "principal".to_owned(),
+            activity_id: "a".repeat(64),
+            idempotency_key: "b".repeat(64),
+            continuation: "00ff".to_owned(),
+        };
+        let output = pending_program_response(&operation, "gw-contract-test");
+        let document: serde_json::Value = serde_json::from_slice(&output.body).unwrap();
+        assert_eq!(document["result"]["retained_signed_activity"], "00ff");
+
+        let legacy = OperationRecord {
+            continuation: String::new(),
+            ..operation
+        };
+        let output = pending_program_response(&legacy, "gw-contract-test");
+        let document: serde_json::Value = serde_json::from_slice(&output.body).unwrap();
+        assert!(document["result"].get("retained_signed_activity").is_none());
     }
 
     #[test]
