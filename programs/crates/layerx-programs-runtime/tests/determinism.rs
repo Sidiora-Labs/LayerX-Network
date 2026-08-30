@@ -9,7 +9,7 @@ use layerx_programs_runtime::{
     StorageNamespace, ValidationLimits, WasmEngine, WasmValue, ABI_V1_VERSION, RUNTIME_VERSION,
 };
 
-const EXECUTION_V1_GOLDEN: &str = include_str!("../vectors/execution-v1.hex");
+const EXECUTION_V2_GOLDEN: &str = include_str!("../vectors/execution-v2.hex");
 
 fn validated_add() -> layerx_programs_runtime::ValidatedModule {
     let engine = match WasmEngine::new(ValidationLimits::declared()) {
@@ -171,7 +171,7 @@ fn execution_evidence_matches_the_architecture_independent_golden() {
     assert_eq!(record.runtime_version, RUNTIME_VERSION);
     assert_eq!(record.abi_version, ABI_V1_VERSION);
     assert_eq!(record.outputs, vec![WasmValue::I32(42)]);
-    assert_eq!(record.canonical_evidence(), decode_hex(EXECUTION_V1_GOLDEN));
+    assert_eq!(record.canonical_evidence(), decode_hex(EXECUTION_V2_GOLDEN));
 }
 
 #[test]
