@@ -41,7 +41,7 @@ class TypedProgramResponseTests(unittest.TestCase):
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self) -> None:
                 value = interface if self.path.endswith("/interface") else discovery
-                encoded = json.dumps({"request_id": "typed-program-response", "value": value,
+                encoded = json.dumps({"request_id": "1", "value": value,
                     "verification_status": {"state": "Unverified", "requested": "SequencerSigned",
                         "achieved": "Unverified", "reason": "server_side_receipt_verification_only"}},
                     separators=(",", ":")).encode()

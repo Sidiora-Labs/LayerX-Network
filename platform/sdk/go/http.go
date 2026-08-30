@@ -210,7 +210,10 @@ func (transport *HumanHTTPTransport) Call(ctx context.Context, call TransportCal
 		if decodeError != nil && call.Operation == "program.call" && (decodeError.Code == ErrorDecodeFailure || decodeError.Code == ErrorVerificationFailure) {
 			return nil, newSDKError(ErrorUnknownOutcome, RetryUnknownOutcome)
 		}
-		return value, decodeError
+		if decodeError != nil {
+			return nil, decodeError
+		}
+		return value, nil
 	}
 	var envelope humanEnvelope
 	if err := json.Unmarshal(encoded, &envelope); err != nil || envelope.Trace == "" {

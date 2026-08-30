@@ -1,13 +1,15 @@
 import type { AuthorizedReceiptBatch, ReceiptVerification } from "./verifier.js";
 import { verifyReceiptOutcome } from "./verifier.js";
 import { PlatformSdkError, type IdempotencyKey, type ProductionClient } from "./production.js";
-import { decodeAndVerifyProgramTerminal, decodeSignedProgramCall } from "./program-wire.js";
+import { assertFreshSimulationObservation, decodeAndVerifyProgramTerminal, decodeSignedProgramCall,
+  type DecodedSignedProgramCall } from "./program-wire.js";
 
 const HEX32 = /^[0-9a-f]{64}$/u;
 const DECIMAL_U128 = /^(0|[1-9][0-9]{0,38})$/u;
 const MAX_U128 = 340282366920938463463374607431768211455n;
 const MAX_CALLDATA = 1_048_576;
 const MAX_CAPABILITIES = 5;
+const DEFAULT_MAXIMUM_SIMULATION_AGE_MILLISECONDS = 300_000n;
 const CAPABILITY_ORDER = Object.freeze({
   storage_read: 1,
   storage_write: 2,
@@ -43,11 +45,19 @@ export interface VerifiedProgramReceipt { readonly verification: ReceiptVerifica
 export class ProgramTrustContext {
   readonly #sequencerPublicKey: Uint8Array;
   readonly #clockMilliseconds: () => bigint;
+  readonly #maximumSimulationAgeMilliseconds: bigint;
 
-  public constructor(sequencerPublicKey: Uint8Array, clockMilliseconds: () => bigint = () => BigInt(Date.now())) {
-    if (sequencerPublicKey.length !== 32) throw new TypeError("invalid pinned sequencer key");
+  public constructor(
+    sequencerPublicKey: Uint8Array,
+    clockMilliseconds: () => bigint = () => BigInt(Date.now()),
+    maximumSimulationAgeMilliseconds: bigint = DEFAULT_MAXIMUM_SIMULATION_AGE_MILLISECONDS,
+  ) {
+    if (sequencerPublicKey.length !== 32 || sequencerPublicKey.every((value) => value === 0)
+      || maximumSimulationAgeMilliseconds <= 0n
+      || maximumSimulationAgeMilliseconds > 18446744073709551615n) throw new TypeError("invalid Programs trust context");
     this.#sequencerPublicKey = new Uint8Array(sequencerPublicKey);
     this.#clockMilliseconds = clockMilliseconds;
+    this.#maximumSimulationAgeMilliseconds = maximumSimulationAgeMilliseconds;
     Object.freeze(this);
   }
 
@@ -57,6 +67,7 @@ export class ProgramTrustContext {
     if (value < 0n || value > 18446744073709551615n) throw new TypeError("invalid trust clock");
     return value;
   }
+  public maximumSimulationAgeMilliseconds(): bigint { return this.#maximumSimulationAgeMilliseconds; }
 }
 
 function validateCall(call: ProgramCall): void {
@@ -118,7 +129,7 @@ export class ProgramOperations {
     if (!HEX32.test(programId)) throw new TypeError("invalid program id");
     const value = await this.client.agent<unknown, unknown>("program.discover", { program_id: programId, requested_verification_level: "sequencer-signed" });
     const result = discovery(value, programId, this.trust.nowMilliseconds());
-    this.#heads.set(programId, head(result));
+    this.#rememberHead(programId, head(result));
     return result;
   }
 
@@ -126,7 +137,7 @@ export class ProgramOperations {
     if (!HEX32.test(programId)) throw new TypeError("invalid program id");
     const value = await this.client.agent<unknown, unknown>("program.interface", { program_id: programId, requested_verification_level: "sequencer-signed" });
     const result = await programInterface(value, programId, this.trust.nowMilliseconds());
-    this.#heads.set(programId, head(result));
+    this.#rememberHead(programId, head(result));
     return result;
   }
 
@@ -137,10 +148,31 @@ export class ProgramOperations {
     if (prior === undefined) throw new TypeError("a fresh discovered program head is required before simulation");
     requireFreshHead(prior, this.trust.nowMilliseconds());
     const value = await this.client.agent<unknown, unknown>("program.simulate", wireCall(call));
+    this.#requireCurrentHead(call.programId, prior);
+    requireFreshHead(prior, this.trust.nowMilliseconds());
     const simulation = simulationDocument(value, call.programId, signed.activityId);
     const verified = await verifyProgramReceipt(simulation.execution, wireAuthority(simulation.execution.authority, this.trust), this.trust);
-    await verifySimulationEvidence(simulation, verified, prior, this.trust);
+    await verifySimulationEvidence(simulation, verified, prior, signed, this.trust);
+    this.#requireCurrentHead(call.programId, prior);
+    requireFreshHead(prior, this.trust.nowMilliseconds());
     return simulation;
+  }
+
+  #rememberHead(programId: string, candidate: ProgramHeadObservation): void {
+    const current = this.#heads.get(programId);
+    if (current !== undefined && (candidate.sequence < current.sequence
+      || candidate.observedAt < current.observedAt
+      || (candidate.sequence === current.sequence && (candidate.stateRoot !== current.stateRoot
+        || candidate.validThrough < current.validThrough)))) throw new TypeError("program head rollback or conflict");
+    this.#heads.set(programId, candidate);
+  }
+
+  #requireCurrentHead(programId: string, expected: ProgramHeadObservation): void {
+    const current = this.#heads.get(programId);
+    if (current === undefined || current.sequence !== expected.sequence || current.stateRoot !== expected.stateRoot
+      || current.observedAt !== expected.observedAt || current.validThrough !== expected.validThrough) {
+      throw new TypeError("program head changed during simulation");
+    }
   }
 
   public async submit(call: ProgramCall, idempotencyKey: IdempotencyKey): Promise<ProgramSubmission> {
@@ -310,7 +342,8 @@ function wireAuthority(value: ProgramAuthorityDocument, trust: ProgramTrustConte
   return Object.freeze({ batchId: decodeHex(value.batch_id, 32), asset: decodeHex(value.asset, 32), previousStateRoot: decodeHex(value.previous_state_root, 32), resultingStateRoot: decodeHex(value.resulting_state_root, 32), sequencerPublicKey: pinned });
 }
 
-async function verifySimulationEvidence(simulation: ProgramSimulation, verified: VerifiedProgramReceipt, prior: ProgramHeadObservation, trust: ProgramTrustContext): Promise<void> {
+async function verifySimulationEvidence(simulation: ProgramSimulation, verified: VerifiedProgramReceipt,
+  prior: ProgramHeadObservation, binding: DecodedSignedProgramCall, trust: ProgramTrustContext): Promise<void> {
   const evidence = simulation.simulation_evidence;
   const publicKey = decodeHex(evidence.public_key, 32);
   const pinned = trust.sequencerPublicKey();
@@ -329,10 +362,12 @@ async function verifySimulationEvidence(simulation: ProgramSimulation, verified:
   const protocol = verified.verification.receipt;
   const observedSequence = BigInt(evidence.observed_sequence);
   const observedAt = BigInt(evidence.observed_at);
+  requireFreshHead(prior, now);
+  assertFreshSimulationObservation(observedAt, binding, now, trust.maximumSimulationAgeMilliseconds());
   if (evidence.previous_state_root !== prior.stateRoot || observedSequence !== prior.sequence
     || hex(protocol.previousStateRoot) !== prior.stateRoot
     || protocol.globalSequence !== observedSequence + 1n || observedAt < prior.observedAt
-    || observedAt > prior.validThrough || observedAt > now) throw new TypeError("stale or mismatched simulation head");
+    || observedAt > prior.validThrough) throw new TypeError("stale or mismatched simulation head");
 }
 
 function wireCall(call: ProgramCall): Readonly<Record<string, unknown>> {

@@ -2,11 +2,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from hashlib import sha256
+from threading import RLock
 from time import time_ns
 from typing import Callable, Literal, Mapping, cast
 
 from .production import IdempotencyKey, PlatformSdkError, ProductionClient, SdkErrorCode
-from .program_wire import decode_and_verify_program_terminal, decode_signed_program_call
+from .program_wire import (
+    DecodedSignedProgramCall,
+    assert_fresh_simulation_observation,
+    decode_and_verify_program_terminal,
+    decode_signed_program_call,
+)
 from .verifier import AuthorizedReceiptBatch, LocalSignatureVerifier, ReceiptVerification, verify_receipt_outcome
 
 ProgramCapability = Literal["storage_read", "storage_write", "transfer", "emit_event", "compose"]
@@ -14,6 +20,7 @@ _CAPABILITY_ORDER: Mapping[str, int] = {"storage_read": 1, "storage_write": 2, "
 _MAX_CALLDATA = 1_048_576
 _MAX_U64 = (1 << 64) - 1
 _MAX_U128 = (1 << 128) - 1
+_DEFAULT_MAXIMUM_SIMULATION_AGE_MILLISECONDS = 300_000
 
 
 @dataclass(frozen=True)
@@ -76,9 +83,18 @@ class ProgramInterface:
 class ProgramTrustContext:
     sequencer_public_key: bytes
     clock_milliseconds: Callable[[], int] = lambda: time_ns() // 1_000_000
+    maximum_simulation_age_milliseconds: int = _DEFAULT_MAXIMUM_SIMULATION_AGE_MILLISECONDS
 
     def __post_init__(self) -> None:
-        if len(self.sequencer_public_key) != 32:
+        if (
+            not isinstance(self.sequencer_public_key, bytes)
+            or len(self.sequencer_public_key) != 32
+            or self.sequencer_public_key == bytes(32)
+            or not callable(self.clock_milliseconds)
+            or isinstance(self.maximum_simulation_age_milliseconds, bool)
+            or not isinstance(self.maximum_simulation_age_milliseconds, int)
+            or not 0 < self.maximum_simulation_age_milliseconds <= _MAX_U64
+        ):
             raise ValueError("invalid pinned sequencer key")
         object.__setattr__(self, "sequencer_public_key", bytes(self.sequencer_public_key))
 
@@ -155,29 +171,32 @@ class ProgramOperations:
         self._signatures = signatures
         self._trust = trust
         self._heads: dict[str, tuple[str, int, int, int]] = {}
+        self._heads_lock = RLock()
 
     def discover(self, program_id: str) -> ProgramDiscovery:
         if not _hex32(program_id):
             raise ValueError("invalid program id")
         result = _discovery(self._client.agent("program.discover", {"program_id": program_id, "requested_verification_level": "sequencer-signed"}), program_id, self._trust.now_milliseconds())
-        self._heads[program_id] = _head(result)
+        self._remember_head(program_id, _head(result))
         return result
 
     def interface(self, program_id: str) -> ProgramInterface:
         if not _hex32(program_id):
             raise ValueError("invalid program id")
         result = _interface(self._client.agent("program.interface", {"program_id": program_id, "requested_verification_level": "sequencer-signed"}), program_id, self._trust.now_milliseconds())
-        self._heads[program_id] = _head(result)
+        self._remember_head(program_id, _head(result))
         return result
 
     def simulate(self, call: ProgramCall) -> Mapping[str, object]:
         _validate(call)
         signed = decode_signed_program_call(call)
-        head = self._heads.get(call.program_id)
+        head = self._remembered_head(call.program_id)
         if head is None:
             raise ValueError("a fresh discovered program head is required before simulation")
         _fresh(head, self._trust.now_milliseconds())
         result = _mapping(self._client.agent("program.simulate", _wire(call)))
+        self._require_current_head(call.program_id, head)
+        _fresh(head, self._trust.now_milliseconds())
         _exact(result, ("committed", "execution", "simulation_evidence"))
         if result.get("committed") is not False:
             raise ValueError("committed program simulation")
@@ -185,8 +204,41 @@ class ProgramOperations:
         if execution["program_id"] != call.program_id or execution["activity_id"] != signed.activity_id:
             raise ValueError("program simulation binding failed")
         verified = verify_program_receipt(execution, _authority(execution, self._trust), self._signatures, self._trust)
-        _verify_simulation(result.get("simulation_evidence"), execution, verified, head, self._signatures, self._trust)
+        _verify_simulation(
+            result.get("simulation_evidence"),
+            execution,
+            verified,
+            head,
+            signed,
+            self._signatures,
+            self._trust,
+        )
+        self._require_current_head(call.program_id, head)
+        _fresh(head, self._trust.now_milliseconds())
         return result
+
+    def _remember_head(self, program_id: str, candidate: tuple[str, int, int, int]) -> None:
+        with self._heads_lock:
+            current = self._heads.get(program_id)
+            if current is not None and (
+                candidate[1] < current[1]
+                or candidate[2] < current[2]
+                or (
+                    candidate[1] == current[1]
+                    and (candidate[0] != current[0] or candidate[3] < current[3])
+                )
+            ):
+                raise ValueError("program head rollback or conflict")
+            self._heads[program_id] = candidate
+
+    def _remembered_head(self, program_id: str) -> tuple[str, int, int, int] | None:
+        with self._heads_lock:
+            return self._heads.get(program_id)
+
+    def _require_current_head(self, program_id: str, expected: tuple[str, int, int, int]) -> None:
+        with self._heads_lock:
+            if self._heads.get(program_id) != expected:
+                raise ValueError("program head changed during simulation")
 
     def submit(self, call: ProgramCall, idempotency_key: IdempotencyKey) -> Mapping[str, object]:
         _validate(call)
@@ -302,7 +354,15 @@ def _authority(execution: Mapping[str, object], trust: ProgramTrustContext) -> A
     )
 
 
-def _verify_simulation(value: object, execution: Mapping[str, object], verified: VerifiedProgramReceipt, head: tuple[str, int, int, int], signatures: LocalSignatureVerifier, trust: ProgramTrustContext) -> None:
+def _verify_simulation(
+    value: object,
+    execution: Mapping[str, object],
+    verified: VerifiedProgramReceipt,
+    head: tuple[str, int, int, int],
+    binding: DecodedSignedProgramCall,
+    signatures: LocalSignatureVerifier,
+    trust: ProgramTrustContext,
+) -> None:
     evidence = _mapping(value)
     _exact(evidence, ("boundary_id", "activity_id", "previous_state_root", "hypothetical_state_root",
         "observed_sequence", "observed_at", "committed", "public_key", "signature"))
@@ -327,6 +387,13 @@ def _verify_simulation(value: object, execution: Mapping[str, object], verified:
     state_root, head_sequence, head_observed_at, valid_through = head
     protocol = verified.verification.receipt
     now = trust.now_milliseconds()
+    _fresh(head, now)
+    assert_fresh_simulation_observation(
+        observed_at,
+        binding,
+        now,
+        trust.maximum_simulation_age_milliseconds,
+    )
     if previous.hex() != state_root or sequence != head_sequence or protocol.previous_state_root.hex() != state_root or protocol.global_sequence != sequence + 1 or observed_at < head_observed_at or observed_at > valid_through or observed_at > now:
         raise ValueError("stale or mismatched simulation head")
 

@@ -5,18 +5,22 @@ import {
   AgentHttpTransport,
   idempotencyKey,
   LayerXKeyCredential,
-  PlatformSdkError,
   ProgramOperations,
   ProgramTrustContext,
   ProductionClient,
   SecretBytes,
-  type ProductionTransport,
 } from "../src/index.js";
-import { decodeAndVerifyProgramTerminal } from "../src/program-wire.js";
+import { assertFreshSimulationObservation, decodeAndVerifyProgramTerminal, decodeSignedProgramCall } from "../src/program-wire.js";
 import type { ProgramReceiptOutcome } from "../src/verifier.js";
 
 function assert(condition: boolean, message: string): asserts condition {
   if (!condition) throw new Error(message);
+}
+
+async function rejectsWith(action: () => Promise<unknown>, expected: string, message: string): Promise<void> {
+  let failure: unknown;
+  try { await action(); } catch (error) { failure = error; }
+  assert(failure instanceof Error && failure.message.includes(expected), message);
 }
 
 const programId = "11".repeat(32);
@@ -31,7 +35,7 @@ const server = http.createServer((request, response) => {
     assert(request.headers.authorization === `LayerX-Key key_1:lxp_live_${"22".repeat(32)}`, "LayerX-Key authentication changed");
     response.writeHead(200, { "Content-Type": "application/json" });
     response.end(JSON.stringify({
-      request_id: "request-1",
+      request_id: "1",
       value: { program_id: programId },
       verification_status: { state: "Unverified", requested: "SequencerSigned", achieved: "Unverified", reason: "server_side_receipt_verification_only" },
     }));
@@ -67,25 +71,127 @@ try {
 
 const callIdempotency = "33".repeat(32);
 const signedActivity = await canonicalProgramCall(programId, callIdempotency);
-const ambiguous: ProductionTransport = {
-  async call<TRequest, TResponse>(): Promise<TResponse> {
-    throw new PlatformSdkError({ code: "decode-failure", retry: "never" });
-  },
-};
-const programs = new ProgramOperations(
-  new ProductionClient(ambiguous),
-  new ProgramTrustContext(Uint8Array.from({ length: 32 }, () => 0x44), () => 1n),
-);
-const unknown = await programs.submit({
+const signedBinding = await decodeSignedProgramCall({
   programId,
   calldata: new Uint8Array([0xaa]),
   budget: { fuel: 1n, feeLimit: 0n },
   capabilities: [],
   signedActivity,
-}, idempotencyKey(callIdempotency));
-assert(unknown.state === "unknown", "ambiguous call was not tagged unknown");
-assert(unknown.activity_id === await activityId(signedActivity), "unknown call activity ID was not derived from signed bytes");
-assert(unknown.retained_signed_activity === Buffer.from(signedActivity).toString("hex"), "unknown call did not retain signed bytes");
+});
+assert(signedBinding.notBefore === 10n && signedBinding.notAfter === 20n, "signed Programs validity window was discarded");
+assertFreshSimulationObservation(15n, signedBinding, 15n, 5n);
+for (const [observedAt, now, maximumAge] of [[9n, 15n, 10n], [21n, 21n, 10n], [15n, 14n, 10n], [15n, 21n, 5n]] as const) {
+  let rejected = false;
+  try { assertFreshSimulationObservation(observedAt, signedBinding, now, maximumAge); } catch { rejected = true; }
+  assert(rejected, "out-of-window Programs simulation observation was accepted");
+}
+const malformedServer = http.createServer((_request, response) => {
+  response.writeHead(200, { "Content-Type": "application/json" });
+  response.end(JSON.stringify({ malformed: true }));
+});
+malformedServer.listen(0, "127.0.0.1");
+await once(malformedServer, "listening");
+const malformedAddress = malformedServer.address();
+assert(malformedAddress !== null && typeof malformedAddress === "object", "malformed-response listener missing");
+try {
+  const programs = new ProgramOperations(
+    new ProductionClient(new AgentHttpTransport({ endpoint: `http://127.0.0.1:${malformedAddress.port}` })),
+    new ProgramTrustContext(Uint8Array.from({ length: 32 }, () => 0x44), () => 15n),
+  );
+  const unknown = await programs.submit({
+    programId,
+    calldata: new Uint8Array([0xaa]),
+    budget: { fuel: 1n, feeLimit: 0n },
+    capabilities: [],
+    signedActivity,
+  }, idempotencyKey(callIdempotency));
+  assert(unknown.state === "unknown", "ambiguous call was not tagged unknown");
+  assert(unknown.activity_id === await activityId(signedActivity), "unknown call activity ID was not derived from signed bytes");
+  assert(unknown.retained_signed_activity === Buffer.from(signedActivity).toString("hex"), "unknown call did not retain signed bytes");
+} finally {
+  malformedServer.close();
+  await once(malformedServer, "close");
+}
+
+let zeroKeyRejected = false;
+try { new ProgramTrustContext(new Uint8Array(32)); } catch { zeroKeyRejected = true; }
+assert(zeroKeyRejected, "all-zero Programs sequencer key was accepted");
+
+let trustNow = 15n;
+let headSequence = 10n;
+let headRoot = "55".repeat(32);
+let simulationMode: "expiry" | "race" = "expiry";
+let signalSimulation: (() => void) | undefined;
+let releaseSimulation: (() => void) | undefined;
+let simulationEntered = Promise.resolve();
+let simulationRelease = Promise.resolve();
+const trustServer = http.createServer(async (request, response) => {
+  if (request.url === `/v1/programs/registry/${programId}`) {
+    response.writeHead(200, { "Content-Type": "application/json" });
+    response.end(programEnvelope({
+      program_id: programId, lifecycle: "active", version: 1, code_hash: "22".repeat(32), abi_version: 2,
+      receipt_digest: "33".repeat(32), state_root: headRoot, observed_sequence: headSequence.toString(),
+      observed_at: "10", valid_through: "20", verification: "registry-receipt-and-current-head-verified",
+    }, false));
+    return;
+  }
+  assert(request.url === "/v1/programs/simulate", "unexpected Programs trust route");
+  if (simulationMode === "expiry") trustNow = 21n;
+  else {
+    signalSimulation?.();
+    await simulationRelease;
+  }
+  response.writeHead(200, { "Content-Type": "application/json" });
+  response.end(programEnvelope({}, true));
+});
+trustServer.listen(0, "127.0.0.1");
+await once(trustServer, "listening");
+const trustAddress = trustServer.address();
+assert(trustAddress !== null && typeof trustAddress === "object", "Programs trust listener missing");
+try {
+  const trustPrograms = new ProgramOperations(
+    new ProductionClient(new AgentHttpTransport({ endpoint: `http://127.0.0.1:${trustAddress.port}` })),
+    new ProgramTrustContext(Uint8Array.from({ length: 32 }, () => 0x44), () => trustNow, 5n),
+  );
+  await trustPrograms.discover(programId);
+  headSequence = 9n;
+  await rejectsWith(() => trustPrograms.discover(programId), "rollback or conflict", "Programs cache accepted a sequence rollback");
+  headSequence = 10n;
+  headRoot = "66".repeat(32);
+  await rejectsWith(() => trustPrograms.discover(programId), "rollback or conflict", "Programs cache accepted a conflicting root");
+  headRoot = "55".repeat(32);
+  await rejectsWith(() => trustPrograms.simulate({
+    programId, calldata: new Uint8Array([0xaa]), budget: { fuel: 1n, feeLimit: 0n }, capabilities: [], signedActivity,
+  }), "stale program head", "Programs simulation accepted a head that expired in flight");
+
+  trustNow = 15n;
+  await trustPrograms.discover(programId);
+  simulationMode = "race";
+  simulationEntered = new Promise<void>((resolve) => { signalSimulation = resolve; });
+  simulationRelease = new Promise<void>((resolve) => { releaseSimulation = resolve; });
+  const pendingSimulation = trustPrograms.simulate({
+    programId, calldata: new Uint8Array([0xaa]), budget: { fuel: 1n, feeLimit: 0n }, capabilities: [], signedActivity,
+  });
+  await simulationEntered;
+  headSequence = 11n;
+  headRoot = "77".repeat(32);
+  await trustPrograms.discover(programId);
+  releaseSimulation?.();
+  await rejectsWith(() => pendingSimulation, "head changed during simulation", "Programs simulation accepted a superseded head");
+
+  simulationEntered = new Promise<void>((resolve) => { signalSimulation = resolve; });
+  simulationRelease = new Promise<void>((resolve) => { releaseSimulation = resolve; });
+  const sameHeadSimulation = trustPrograms.simulate({
+    programId, calldata: new Uint8Array([0xaa]), budget: { fuel: 1n, feeLimit: 0n }, capabilities: [], signedActivity,
+  });
+  await simulationEntered;
+  await trustPrograms.discover(programId);
+  releaseSimulation?.();
+  await rejectsWith(() => sameHeadSimulation, "invalid program document fields", "Programs simulation treated an identical rediscovered head as changed");
+} finally {
+  trustServer.close();
+  await once(trustServer, "close");
+}
 
 const graph = Buffer.from("LayerX/programs/call-graph/v1\0", "utf8");
 const terminal = join(
@@ -180,6 +286,16 @@ await rejectsTerminal(authorityWrapper(authorityTerminal, transferAuthorization,
 await rejectsTerminal(occupancyWrapper(occupancyTerminal, occupancyEvidence), graph, programId, occupancyReceipt, 2,
   "duplicate occupancy attachment was accepted");
 
+function programEnvelope(value: Readonly<Record<string, unknown>>, achieved: boolean): string {
+  return JSON.stringify({
+    request_id: "1",
+    value,
+    verification_status: achieved
+      ? { state: "Achieved", level: "SequencerSigned" }
+      : { state: "Unverified", requested: "SequencerSigned", achieved: "Unverified", reason: "server_side_receipt_verification_only" },
+  });
+}
+
 async function canonicalProgramCall(callee: string, idempotency: string): Promise<Uint8Array> {
   const payload = join(
     Buffer.from("LayerX/programs/call/v1\0", "utf8"),
@@ -196,7 +312,7 @@ async function canonicalProgramCall(callee: string, idempotency: string): Promis
     Buffer.from([4]), sized(Buffer.from("did:lxp:test", "utf8")),
     Buffer.from([5]), sized(Buffer.from([1])),
     Buffer.from([6]), integer(0n, 8),
-    Buffer.from([7]), integer(0n, 8), integer(1n, 8),
+    Buffer.from([7]), integer(10n, 8), integer(20n, 8),
     Buffer.from([8]), sized(Buffer.from(idempotency, "hex")),
     Buffer.from([9]), integer(0n, 16),
     Buffer.from([10]), sized(payloadHash),

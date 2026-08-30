@@ -42,6 +42,8 @@ _MAX_GRAPH = len(b"LayerX/programs/call-graph/v1\0") + 32 + 16 + 8 + 64 * 68
 class DecodedSignedProgramCall:
     activity_id: str
     idempotency_key: str
+    not_before: int
+    not_after: int
     canonical_bytes: bytes
 
 
@@ -81,7 +83,35 @@ def decode_signed_program_call(call: object, expected_idempotency_key: str | Non
     key = idempotency.hex()
     if expected_idempotency_key is not None and key != expected_idempotency_key:
         _fail("signed activity idempotency")
-    return DecodedSignedProgramCall(sha256(_ACTIVITY_DOMAIN + canonical).hexdigest(), key, canonical)
+    return DecodedSignedProgramCall(
+        sha256(_ACTIVITY_DOMAIN + canonical).hexdigest(),
+        key,
+        not_before,
+        not_after,
+        canonical,
+    )
+
+
+def assert_fresh_simulation_observation(
+    observed_at: int,
+    binding: DecodedSignedProgramCall,
+    now: int,
+    maximum_age_milliseconds: int,
+) -> None:
+    if (
+        isinstance(observed_at, bool)
+        or not isinstance(observed_at, int)
+        or isinstance(now, bool)
+        or not isinstance(now, int)
+        or isinstance(maximum_age_milliseconds, bool)
+        or not isinstance(maximum_age_milliseconds, int)
+        or not 0 < maximum_age_milliseconds <= (1 << 64) - 1
+        or observed_at < binding.not_before
+        or observed_at > binding.not_after
+        or observed_at > now
+        or now - observed_at > maximum_age_milliseconds
+    ):
+        _fail("simulation observation bounds")
 
 
 def decode_and_verify_program_terminal(

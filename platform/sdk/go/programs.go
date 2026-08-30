@@ -14,6 +14,7 @@ import (
 	"math/big"
 	"sort"
 	"strconv"
+	"sync"
 	"time"
 	"unicode/utf8"
 )
@@ -22,6 +23,7 @@ const (
 	MaximumProgramCalldataBytes = 1_048_576
 	MaximumProgramCapabilities  = 5
 	maximumProgramLegacyValues  = 512
+	maximumProgramSimulationAge = uint64(300_000)
 )
 
 type ProgramCapability string
@@ -287,6 +289,8 @@ type VerifiedProgramReceipt struct {
 type programCallBinding struct {
 	ActivityID     [32]byte
 	IdempotencyKey [32]byte
+	NotBefore      uint64
+	NotAfter       uint64
 }
 
 func validateProgramCall(call ProgramCall) error {
@@ -363,7 +367,7 @@ func bindSignedProgramCall(call ProgramCall) (programCallBinding, error) {
 	if decoder.failed || decoder.offset != len(call.SignedActivity) || domainDigest([]byte("LXP/v1/payload-hash\x00"), payload) != payloadHash || !programPayloadMatchesCall(payload, call) {
 		return programCallBinding{}, newSDKError(ErrorInvalidArgument, RetryNever)
 	}
-	return programCallBinding{ActivityID: domainDigest([]byte("LXP/v1/activity-id\x00"), call.SignedActivity), IdempotencyKey: idempotencyKey}, nil
+	return programCallBinding{ActivityID: domainDigest([]byte("LXP/v1/activity-id\x00"), call.SignedActivity), IdempotencyKey: idempotencyKey, NotBefore: notBefore, NotAfter: notAfter}, nil
 }
 
 func programPayloadMatchesCall(payload []byte, call ProgramCall) bool {
@@ -1599,13 +1603,41 @@ func canonicalProgramKey(key IdempotencyKey) bool {
 type Programs struct {
 	client                    *Client
 	trustedSequencerPublicKey [32]byte
+	clockMilliseconds         func() uint64
+	maximumSimulationAge      uint64
+	headsMu                   sync.RWMutex
+	heads                     map[[32]byte]programHeadObservation
+}
+
+type programHeadObservation struct {
+	StateRoot    [32]byte
+	Sequence     uint64
+	ObservedAt   uint64
+	ValidThrough uint64
+}
+
+type ProgramTrustOptions struct {
+	ClockMilliseconds                func() uint64
+	MaximumSimulationAgeMilliseconds uint64
 }
 
 func NewPrograms(client *Client, trustedSequencerPublicKey [32]byte) (*Programs, error) {
-	if client == nil || trustedSequencerPublicKey == ([32]byte{}) {
+	return NewProgramsWithTrustOptions(client, trustedSequencerPublicKey, ProgramTrustOptions{
+		ClockMilliseconds:                currentProgramTimeMilliseconds,
+		MaximumSimulationAgeMilliseconds: maximumProgramSimulationAge,
+	})
+}
+
+func NewProgramsWithTrustOptions(client *Client, trustedSequencerPublicKey [32]byte, options ProgramTrustOptions) (*Programs, error) {
+	if client == nil || trustedSequencerPublicKey == ([32]byte{}) || options.ClockMilliseconds == nil || options.MaximumSimulationAgeMilliseconds == 0 {
 		return nil, newSDKError(ErrorInvalidArgument, RetryNever)
 	}
-	return &Programs{client: client, trustedSequencerPublicKey: trustedSequencerPublicKey}, nil
+	return &Programs{
+		client: client, trustedSequencerPublicKey: trustedSequencerPublicKey,
+		clockMilliseconds:    options.ClockMilliseconds,
+		maximumSimulationAge: options.MaximumSimulationAgeMilliseconds,
+		heads:                make(map[[32]byte]programHeadObservation),
+	}, nil
 }
 
 func (programs *Programs) Discover(ctx context.Context, program [32]byte) (ProgramDiscovery, error) {
@@ -1615,9 +1647,17 @@ func (programs *Programs) Discover(ctx context.Context, program [32]byte) (Progr
 		return ProgramDiscovery{}, err
 	}
 	var out ProgramDiscovery
-	if decodeStrict(raw, &out) != nil || !validDiscovery(out, id, uint64(time.Now().UnixMilli())) {
+	if decodeStrict(raw, &out) != nil || !validDiscovery(out, id, programs.clockMilliseconds()) {
 		return ProgramDiscovery{}, newSDKError(ErrorDecodeFailure, RetryNever)
 	}
+	head, headError := decodeProgramHead(out.StateRoot, out.ObservedSequence, out.ObservedAt, out.ValidThrough)
+	if headError != nil {
+		return ProgramDiscovery{}, newSDKError(ErrorDecodeFailure, RetryNever)
+	}
+	if programs.rememberHead(program, head) != nil {
+		return ProgramDiscovery{}, newSDKError(ErrorVerificationFailure, RetryNever)
+	}
+	out.Verification = "server-side-receipt-verification-only"
 	return out, nil
 }
 
@@ -1628,9 +1668,17 @@ func (programs *Programs) Interface(ctx context.Context, program [32]byte) (Prog
 		return ProgramInterface{}, err
 	}
 	var out ProgramInterface
-	if decodeStrict(raw, &out) != nil || !validProgramInterface(out, id, uint64(time.Now().UnixMilli())) {
+	if decodeStrict(raw, &out) != nil || !validProgramInterface(out, id, programs.clockMilliseconds()) {
 		return ProgramInterface{}, newSDKError(ErrorDecodeFailure, RetryNever)
 	}
+	head, headError := decodeProgramHead(out.StateRoot, out.ObservedSequence, out.ObservedAt, out.ValidThrough)
+	if headError != nil {
+		return ProgramInterface{}, newSDKError(ErrorDecodeFailure, RetryNever)
+	}
+	if programs.rememberHead(program, head) != nil {
+		return ProgramInterface{}, newSDKError(ErrorVerificationFailure, RetryNever)
+	}
+	out.Verification = "server-side-receipt-verification-only"
 	return out, nil
 }
 
@@ -1639,11 +1687,30 @@ func (programs *Programs) Simulate(ctx context.Context, call ProgramCall) (Progr
 	if err != nil {
 		return ProgramSimulation{}, err
 	}
+	prior, found := programs.rememberedHead(call.ProgramID)
+	if !found {
+		return ProgramSimulation{}, newSDKError(ErrorVerificationFailure, RetryNever)
+	}
+	if !validProgramHeadTime(prior, programs.clockMilliseconds()) {
+		return ProgramSimulation{}, newSDKError(ErrorVerificationFailure, RetryNever)
+	}
 	raw, err := programs.raw(ctx, "program.simulate", false, programCallWire(call), CallOptions{})
 	if err != nil {
 		return ProgramSimulation{}, err
 	}
-	return decodeProgramSimulation(raw, call.ProgramID, binding.ActivityID, programs.trustedSequencerPublicKey)
+	now := programs.clockMilliseconds()
+	if !programs.headIsCurrent(call.ProgramID, prior) || !validProgramHeadTime(prior, now) {
+		return ProgramSimulation{}, newSDKError(ErrorVerificationFailure, RetryNever)
+	}
+	result, decodeError := decodeProgramSimulation(raw, call.ProgramID, binding, prior, programs.trustedSequencerPublicKey,
+		now, programs.maximumSimulationAge)
+	if decodeError != nil {
+		return ProgramSimulation{}, decodeError
+	}
+	if !programs.headIsCurrent(call.ProgramID, prior) || !validProgramHeadTime(prior, programs.clockMilliseconds()) {
+		return ProgramSimulation{}, newSDKError(ErrorVerificationFailure, RetryNever)
+	}
+	return result, nil
 }
 
 func (programs *Programs) Submit(ctx context.Context, call ProgramCall, key IdempotencyKey) (ProgramSubmission, error) {
@@ -1695,7 +1762,34 @@ func (programs *Programs) raw(ctx context.Context, operation string, requiresKey
 	return out, err
 }
 
-func decodeProgramSimulation(raw json.RawMessage, expectedProgram [32]byte, expectedActivity [32]byte, trustedSequencerPublicKey [32]byte) (ProgramSimulation, error) {
+func (programs *Programs) rememberHead(program [32]byte, head programHeadObservation) error {
+	programs.headsMu.Lock()
+	defer programs.headsMu.Unlock()
+	if current, found := programs.heads[program]; found &&
+		(head.Sequence < current.Sequence || head.ObservedAt < current.ObservedAt ||
+			head.Sequence == current.Sequence && (head.StateRoot != current.StateRoot || head.ValidThrough < current.ValidThrough)) {
+		return errors.New("Programs head rollback or conflict")
+	}
+	programs.heads[program] = head
+	return nil
+}
+
+func (programs *Programs) rememberedHead(program [32]byte) (programHeadObservation, bool) {
+	programs.headsMu.RLock()
+	defer programs.headsMu.RUnlock()
+	head, found := programs.heads[program]
+	return head, found
+}
+
+func (programs *Programs) headIsCurrent(program [32]byte, expected programHeadObservation) bool {
+	programs.headsMu.RLock()
+	defer programs.headsMu.RUnlock()
+	current, found := programs.heads[program]
+	return found && current == expected
+}
+
+func decodeProgramSimulation(raw json.RawMessage, expectedProgram [32]byte, binding programCallBinding,
+	prior programHeadObservation, trustedSequencerPublicKey [32]byte, now uint64, maximumAge uint64) (ProgramSimulation, error) {
 	var document struct {
 		Committed          bool                      `json:"committed"`
 		Execution          ProgramExecutionDocument  `json:"execution"`
@@ -1706,11 +1800,12 @@ func decodeProgramSimulation(raw json.RawMessage, expectedProgram [32]byte, expe
 	}
 	programID, err := programHex32(document.Execution.ProgramID)
 	activityID, activityError := programHex32(document.Execution.ActivityID)
-	if err != nil || activityError != nil || programID != expectedProgram || activityID != expectedActivity {
+	if err != nil || activityError != nil || programID != expectedProgram || activityID != binding.ActivityID {
 		return ProgramSimulation{}, newSDKError(ErrorVerificationFailure, RetryNever)
 	}
 	verified, verifyError := verifyExecutionAuthority(document.Execution, trustedSequencerPublicKey)
-	if verifyError != nil || verifySimulationEvidence(document.Execution, document.SimulationEvidence, trustedSequencerPublicKey) != nil {
+	if verifyError != nil || verifySimulationEvidence(document.Execution, document.SimulationEvidence, binding,
+		prior, trustedSequencerPublicKey, now, maximumAge) != nil {
 		return ProgramSimulation{}, newSDKError(ErrorVerificationFailure, RetryNever)
 	}
 	return ProgramSimulation{Committed: false, Execution: document.Execution, SimulationEvidence: document.SimulationEvidence, Verification: verified}, nil
@@ -1775,8 +1870,11 @@ func decodeProgramSubmission(raw json.RawMessage, expectedProgram *[32]byte, exp
 
 func verifyExecutionAuthority(execution ProgramExecutionDocument, trustedSequencerPublicKey [32]byte) (VerifiedProgramReceipt, error) {
 	authority, err := execution.Authority.authorizedBatch()
-	if err != nil || trustedSequencerPublicKey == ([32]byte{}) || authority.SequencerPublicKey != trustedSequencerPublicKey {
+	if err != nil {
 		return VerifiedProgramReceipt{}, err
+	}
+	if trustedSequencerPublicKey == ([32]byte{}) || authority.SequencerPublicKey != trustedSequencerPublicKey {
+		return VerifiedProgramReceipt{}, errors.New("Programs sequencer authority does not match the pinned key")
 	}
 	stateRoot, rootError := programHex32(execution.StateRoot)
 	batchID, batchError := programHex32(execution.BatchID)
@@ -1797,7 +1895,9 @@ func verifyExecutionAuthority(execution ProgramExecutionDocument, trustedSequenc
 	return verified, nil
 }
 
-func verifySimulationEvidence(execution ProgramExecutionDocument, evidence ProgramSimulationEvidence, trustedSequencerPublicKey [32]byte) error {
+func verifySimulationEvidence(execution ProgramExecutionDocument, evidence ProgramSimulationEvidence,
+	binding programCallBinding, prior programHeadObservation, trustedSequencerPublicKey [32]byte,
+	now uint64, maximumAge uint64) error {
 	if evidence.Committed || !canonicalUnsigned(evidence.ObservedSequence, 64) || !canonicalUnsigned(evidence.ObservedAt, 64) {
 		return errors.New("invalid simulation evidence")
 	}
@@ -1809,12 +1909,12 @@ func verifySimulationEvidence(execution ProgramExecutionDocument, evidence Progr
 	signature, signatureError := decodeProgramHex(evidence.Signature)
 	executionActivity, executionActivityError := programHex32(execution.ActivityID)
 	executionRoot, executionRootError := programHex32(execution.StateRoot)
-	if boundaryError != nil || activityError != nil || previousError != nil || hypotheticalError != nil || publicError != nil || signatureError != nil || len(signature) != ed25519.SignatureSize || executionActivityError != nil || executionRootError != nil || activity != executionActivity || hypothetical != executionRoot {
+	if boundaryError != nil || activityError != nil || previousError != nil || hypotheticalError != nil || publicError != nil || signatureError != nil || len(signature) != ed25519.SignatureSize || executionActivityError != nil || executionRootError != nil || activity != executionActivity || activity != binding.ActivityID || hypothetical != executionRoot {
 		return errors.New("invalid simulation evidence")
 	}
 	authority, authorityError := execution.Authority.authorizedBatch()
 	sequence, sequenceError := strconv.ParseUint(evidence.ObservedSequence, 10, 64)
-	if authorityError != nil || sequenceError != nil || sequence == math.MaxUint64 || trustedSequencerPublicKey == ([32]byte{}) || authority.SequencerPublicKey != trustedSequencerPublicKey || publicKey != trustedSequencerPublicKey || execution.Verification != "receipt-terminal-and-call-graph-verified" || authority.PreviousStateRoot != previous || authority.ResultingStateRoot != hypothetical || execution.GlobalSequence != strconv.FormatUint(sequence+1, 10) {
+	if authorityError != nil || sequenceError != nil || sequence == math.MaxUint64 || trustedSequencerPublicKey == ([32]byte{}) || authority.SequencerPublicKey != trustedSequencerPublicKey || publicKey != trustedSequencerPublicKey || execution.Verification != "receipt-terminal-and-call-graph-verified" || authority.PreviousStateRoot != previous || previous != prior.StateRoot || authority.ResultingStateRoot != hypothetical || sequence != prior.Sequence || execution.GlobalSequence != strconv.FormatUint(sequence+1, 10) {
 		return errors.New("simulation authority mismatch")
 	}
 	expectedBoundary := sha256.Sum256(append([]byte("LayerX/emulator/simulation-boundary/v1\x00"), publicKey[:]...))
@@ -1822,6 +1922,9 @@ func verifySimulationEvidence(execution ProgramExecutionDocument, evidence Progr
 		return errors.New("simulation boundary mismatch")
 	}
 	observedAt, _ := strconv.ParseUint(evidence.ObservedAt, 10, 64)
+	if !validProgramSimulationTime(observedAt, binding, prior, now, maximumAge) {
+		return errors.New("stale simulation evidence")
+	}
 	signed := make([]byte, 0, 32*4+8*2+64)
 	signed = append(signed, []byte("LayerX/agent/program-simulation-evidence/v1\x00")...)
 	signed = append(signed, boundary[:]...)
@@ -1841,6 +1944,39 @@ func verifySimulationEvidence(execution ProgramExecutionDocument, evidence Progr
 	return nil
 }
 
+func validProgramSimulationTime(observedAt uint64, binding programCallBinding,
+	prior programHeadObservation, now uint64, maximumAge uint64) bool {
+	return maximumAge != 0 && binding.NotAfter >= binding.NotBefore &&
+		observedAt >= binding.NotBefore && observedAt <= binding.NotAfter &&
+		observedAt <= now && now-observedAt <= maximumAge &&
+		prior.ObservedAt <= now && now <= prior.ValidThrough &&
+		observedAt >= prior.ObservedAt && observedAt <= prior.ValidThrough
+}
+
+func validProgramHeadTime(head programHeadObservation, now uint64) bool {
+	return head.ObservedAt <= now && now <= head.ValidThrough && head.ObservedAt <= head.ValidThrough
+}
+
+func decodeProgramHead(stateRoot string, sequence string, observedAt string, validThrough string) (programHeadObservation, error) {
+	root, rootError := programHex32(stateRoot)
+	parsedSequence, sequenceError := strconv.ParseUint(sequence, 10, 64)
+	parsedObservedAt, observedError := strconv.ParseUint(observedAt, 10, 64)
+	parsedValidThrough, validError := strconv.ParseUint(validThrough, 10, 64)
+	if rootError != nil || sequenceError != nil || observedError != nil || validError != nil || parsedValidThrough < parsedObservedAt {
+		return programHeadObservation{}, errors.New("invalid Programs head")
+	}
+	return programHeadObservation{StateRoot: root, Sequence: parsedSequence,
+		ObservedAt: parsedObservedAt, ValidThrough: parsedValidThrough}, nil
+}
+
+func currentProgramTimeMilliseconds() uint64 {
+	now := time.Now().UnixMilli()
+	if now < 0 {
+		return 0
+	}
+	return uint64(now)
+}
+
 func (authority ProgramResponseAuthority) authorizedBatch() (AuthorizedBatch, error) {
 	batch, batchError := programHex32(authority.BatchID)
 	asset, assetError := programHex32(authority.Asset)
@@ -1854,11 +1990,11 @@ func (authority ProgramResponseAuthority) authorizedBatch() (AuthorizedBatch, er
 }
 
 func validDiscovery(value ProgramDiscovery, expectedID string, now uint64) bool {
-	return value.ProgramID == expectedID && canonicalLowerHex(value.CodeHash, 32) && canonicalLowerHex(value.ReceiptDigest, 32) && canonicalLowerHex(value.StateRoot, 32) && value.Version != 0 && value.ABIVersion >= 1 && value.ABIVersion <= 2 && (value.Lifecycle == "active" || value.Lifecycle == "deprecated" || value.Lifecycle == "tombstoned") && canonicalUnsigned(value.ObservedSequence, 64) && canonicalUnsigned(value.ObservedAt, 64) && canonicalUnsigned(value.ValidThrough, 64) && decimalAtLeast(value.ValidThrough, value.ObservedAt) && decimalAtLeast(value.ValidThrough, strconv.FormatUint(now, 10)) && value.Verification == "registry-receipt-and-current-head-verified"
+	return value.ProgramID == expectedID && canonicalLowerHex(value.CodeHash, 32) && canonicalLowerHex(value.ReceiptDigest, 32) && canonicalLowerHex(value.StateRoot, 32) && value.Version != 0 && value.ABIVersion >= 1 && value.ABIVersion <= 2 && (value.Lifecycle == "active" || value.Lifecycle == "deprecated" || value.Lifecycle == "tombstoned") && canonicalUnsigned(value.ObservedSequence, 64) && canonicalUnsigned(value.ObservedAt, 64) && canonicalUnsigned(value.ValidThrough, 64) && decimalAtLeast(value.ValidThrough, value.ObservedAt) && decimalAtLeast(strconv.FormatUint(now, 10), value.ObservedAt) && decimalAtLeast(value.ValidThrough, strconv.FormatUint(now, 10)) && value.Verification == "registry-receipt-and-current-head-verified"
 }
 
 func validProgramInterface(value ProgramInterface, expectedID string, now uint64) bool {
-	if value.ProgramID != expectedID || !canonicalLowerHex(value.CodeHash, 32) || !canonicalLowerHex(value.ReceiptDigest, 32) || !canonicalLowerHex(value.StateRoot, 32) || value.Version == 0 || value.ABIVersion < 1 || value.ABIVersion > 2 || !canonicalUnsigned(value.ObservedSequence, 64) || !canonicalUnsigned(value.ObservedAt, 64) || !canonicalUnsigned(value.ValidThrough, 64) || !decimalAtLeast(value.ValidThrough, value.ObservedAt) || !decimalAtLeast(value.ValidThrough, strconv.FormatUint(now, 10)) || value.Verification != "deployment-interface-and-current-head-verified" || value.Source.Status == "" {
+	if value.ProgramID != expectedID || !canonicalLowerHex(value.CodeHash, 32) || !canonicalLowerHex(value.ReceiptDigest, 32) || !canonicalLowerHex(value.StateRoot, 32) || value.Version == 0 || value.ABIVersion < 1 || value.ABIVersion > 2 || !canonicalUnsigned(value.ObservedSequence, 64) || !canonicalUnsigned(value.ObservedAt, 64) || !canonicalUnsigned(value.ValidThrough, 64) || !decimalAtLeast(value.ValidThrough, value.ObservedAt) || !decimalAtLeast(strconv.FormatUint(now, 10), value.ObservedAt) || !decimalAtLeast(value.ValidThrough, strconv.FormatUint(now, 10)) || value.Verification != "deployment-interface-and-current-head-verified" || value.Source.Status == "" {
 		return false
 	}
 	if value.Interface == nil || value.InterfaceDigest == nil {

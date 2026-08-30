@@ -2,11 +2,18 @@ package layerx
 
 import (
 	"bytes"
+	"context"
+	"crypto/ed25519"
+	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"reflect"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -171,7 +178,7 @@ func TestSignedProgramCallBindingDerivesCanonicalIdentityAndKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("bind canonical signed Programs call: %v", err)
 	}
-	if binding.IdempotencyKey != key || binding.ActivityID != domainDigest([]byte("LXP/v1/activity-id\x00"), activity) {
+	if binding.IdempotencyKey != key || binding.ActivityID != domainDigest([]byte("LXP/v1/activity-id\x00"), activity) || binding.NotBefore != 1 || binding.NotAfter != 2 {
 		t.Fatalf("signed Programs identity binding diverged")
 	}
 	mutated := call
@@ -186,6 +193,324 @@ func TestSignedProgramCallBindingDerivesCanonicalIdentityAndKey(t *testing.T) {
 	if err != nil || corruptedBinding.ActivityID == binding.ActivityID {
 		t.Fatalf("canonical signed bytes did not exclusively determine activity identity")
 	}
+}
+
+func TestProgramDiscoveryCachesFreshHeadAndDowngradesServerClaim(t *testing.T) {
+	program := [32]byte{1}
+	id := hex.EncodeToString(program[:])
+	var sequence atomic.Uint64
+	sequence.Store(7)
+	var rootVersion atomic.Uint64
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodGet || request.URL.Path != "/v1/programs/registry/"+id {
+			http.Error(response, "unexpected Programs route", http.StatusNotFound)
+			return
+		}
+		root := strings.Repeat("4", 64)
+		if rootVersion.Load() != 0 {
+			root = strings.Repeat("5", 64)
+		}
+		writeProgramSuccess(response, programDiscoveryValue(id, root, sequence.Load(), 900, 1_100), false)
+	}))
+	defer server.Close()
+	transport, err := NewHumanHTTPTransport(server.URL, server.Client(), nil)
+	if err != nil {
+		t.Fatalf("construct Programs HTTP transport: %v", err)
+	}
+	client, err := NewClient(transport, nil)
+	if err != nil {
+		t.Fatalf("construct Programs client: %v", err)
+	}
+	var now atomic.Uint64
+	now.Store(1_000)
+	programs, err := NewProgramsWithTrustOptions(client, [32]byte{9}, ProgramTrustOptions{
+		ClockMilliseconds: func() uint64 { return now.Load() }, MaximumSimulationAgeMilliseconds: 300,
+	})
+	if err != nil {
+		t.Fatalf("construct Programs operations: %v", err)
+	}
+	discovery, err := programs.Discover(context.Background(), program)
+	if err != nil || discovery.Verification != "server-side-receipt-verification-only" {
+		t.Fatalf("fresh Programs discovery was not safely projected: %#v %v", discovery, err)
+	}
+	head, found := programs.rememberedHead(program)
+	expectedRoot, _ := programHex32(strings.Repeat("4", 64))
+	if !found || head.Sequence != 7 || head.ObservedAt != 900 || head.ValidThrough != 1_100 || head.StateRoot != expectedRoot {
+		t.Fatalf("Programs discovery head was not retained: %#v", head)
+	}
+
+	sequence.Store(6)
+	if _, err := programs.Discover(context.Background(), program); programErrorCode(err) != ErrorVerificationFailure {
+		t.Fatalf("Programs discovery accepted a sequence rollback: %v", err)
+	}
+	sequence.Store(7)
+	rootVersion.Store(1)
+	if _, err := programs.Discover(context.Background(), program); programErrorCode(err) != ErrorVerificationFailure {
+		t.Fatalf("Programs discovery accepted a conflicting root: %v", err)
+	}
+	rootVersion.Store(0)
+	now.Store(800)
+	if _, err := programs.Discover(context.Background(), program); err == nil {
+		t.Fatal("Programs discovery accepted a future-observed head")
+	}
+}
+
+func TestProgramsSimulateRejectsHeadExpiryDuringHTTPCall(t *testing.T) {
+	call, _, _ := canonicalProgramCallFixture()
+	id := hex.EncodeToString(call.ProgramID[:])
+	var now atomic.Uint64
+	now.Store(1)
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/v1/programs/registry/" + id:
+			writeProgramSuccess(response, programDiscoveryValue(id, strings.Repeat("4", 64), 7, 1, 2), false)
+		case "/v1/programs/simulate":
+			now.Store(3)
+			writeProgramSuccess(response, `{}`, true)
+		default:
+			http.Error(response, "unexpected Programs route", http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	programs := newHTTPProgramsForTest(t, server, [32]byte{9}, func() uint64 { return now.Load() })
+	if _, err := programs.Discover(context.Background(), call.ProgramID); err != nil {
+		t.Fatalf("discover Programs head: %v", err)
+	}
+	if _, err := programs.Simulate(context.Background(), call); programErrorCode(err) != ErrorVerificationFailure {
+		t.Fatalf("simulation accepted a head that expired in flight: %v", err)
+	}
+}
+
+func TestProgramsSimulateRejectsExpiredHeadBeforeHTTPCall(t *testing.T) {
+	call, _, _ := canonicalProgramCallFixture()
+	id := hex.EncodeToString(call.ProgramID[:])
+	var now atomic.Uint64
+	now.Store(1)
+	var simulationRequests atomic.Uint64
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/v1/programs/registry/" + id:
+			writeProgramSuccess(response, programDiscoveryValue(id, strings.Repeat("4", 64), 7, 1, 2), false)
+		case "/v1/programs/simulate":
+			simulationRequests.Add(1)
+			writeProgramSuccess(response, `{}`, true)
+		default:
+			http.Error(response, "unexpected Programs route", http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	programs := newHTTPProgramsForTest(t, server, [32]byte{9}, func() uint64 { return now.Load() })
+	if _, err := programs.Discover(context.Background(), call.ProgramID); err != nil {
+		t.Fatalf("discover Programs head: %v", err)
+	}
+	now.Store(3)
+	if _, err := programs.Simulate(context.Background(), call); programErrorCode(err) != ErrorVerificationFailure {
+		t.Fatalf("simulation accepted a head that expired before dispatch: %v", err)
+	}
+	if simulationRequests.Load() != 0 {
+		t.Fatalf("simulation dispatched %d request(s) against an expired head", simulationRequests.Load())
+	}
+}
+
+func TestProgramsSimulateRejectsConcurrentHTTPHeadAdvance(t *testing.T) {
+	call, _, _ := canonicalProgramCallFixture()
+	id := hex.EncodeToString(call.ProgramID[:])
+	var sequence atomic.Uint64
+	sequence.Store(7)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/v1/programs/registry/" + id:
+			root := strings.Repeat("4", 64)
+			if sequence.Load() == 8 {
+				root = strings.Repeat("5", 64)
+			}
+			writeProgramSuccess(response, programDiscoveryValue(id, root, sequence.Load(), 1, 2), false)
+		case "/v1/programs/simulate":
+			close(entered)
+			<-release
+			writeProgramSuccess(response, `{}`, true)
+		default:
+			http.Error(response, "unexpected Programs route", http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	programs := newHTTPProgramsForTest(t, server, [32]byte{9}, func() uint64 { return 1 })
+	if _, err := programs.Discover(context.Background(), call.ProgramID); err != nil {
+		t.Fatalf("discover initial Programs head: %v", err)
+	}
+	result := make(chan error, 1)
+	go func() {
+		_, err := programs.Simulate(context.Background(), call)
+		result <- err
+	}()
+	<-entered
+	sequence.Store(8)
+	if _, err := programs.Discover(context.Background(), call.ProgramID); err != nil {
+		t.Fatalf("advance Programs head: %v", err)
+	}
+	close(release)
+	if err := <-result; programErrorCode(err) != ErrorVerificationFailure {
+		t.Fatalf("simulation accepted evidence against a superseded head: %v", err)
+	}
+}
+
+func newHTTPProgramsForTest(t *testing.T, server *httptest.Server, key [32]byte, clock func() uint64) *Programs {
+	t.Helper()
+	transport, err := NewHumanHTTPTransport(server.URL, server.Client(), nil)
+	if err != nil {
+		t.Fatalf("construct Programs HTTP transport: %v", err)
+	}
+	client, err := NewClient(transport, nil)
+	if err != nil {
+		t.Fatalf("construct Programs client: %v", err)
+	}
+	programs, err := NewProgramsWithTrustOptions(client, key, ProgramTrustOptions{
+		ClockMilliseconds: clock, MaximumSimulationAgeMilliseconds: 300,
+	})
+	if err != nil {
+		t.Fatalf("construct Programs operations: %v", err)
+	}
+	return programs
+}
+
+func programDiscoveryValue(id string, root string, sequence uint64, observedAt uint64, validThrough uint64) string {
+	return `{"program_id":"` + id + `","lifecycle":"active","version":1,"code_hash":"` + strings.Repeat("2", 64) +
+		`","abi_version":2,"receipt_digest":"` + strings.Repeat("3", 64) + `","state_root":"` + root +
+		`","observed_sequence":"` + strconv.FormatUint(sequence, 10) + `","observed_at":"` + strconv.FormatUint(observedAt, 10) +
+		`","valid_through":"` + strconv.FormatUint(validThrough, 10) + `","verification":"registry-receipt-and-current-head-verified"}`
+}
+
+func writeProgramSuccess(response http.ResponseWriter, value string, achieved bool) {
+	response.Header().Set("Content-Type", "application/json")
+	verification := `{"state":"Unverified","requested":"SequencerSigned","achieved":"Unverified","reason":"server_side_receipt_verification_only"}`
+	if achieved {
+		verification = `{"state":"Achieved","level":"SequencerSigned"}`
+	}
+	_, _ = response.Write([]byte(`{"request_id":"request-1","value":` + value + `,"verification_status":` + verification + `}`))
+}
+
+func programErrorCode(err error) ErrorCode {
+	if sdkError, ok := err.(*SDKError); ok {
+		return sdkError.Code
+	}
+	return ""
+}
+
+func TestProgramSimulationEvidenceBindsWindowAgeAndDiscoveredHead(t *testing.T) {
+	execution, evidence, binding, prior, publicKey := programSimulationEvidenceFixture(1_000)
+	if err := verifySimulationEvidence(execution, evidence, binding, prior, publicKey, 1_000, 300); err != nil {
+		t.Fatalf("canonical Programs simulation evidence was refused: %v", err)
+	}
+	for name, mutate := range map[string]func(*ProgramExecutionDocument, *ProgramSimulationEvidence, *programCallBinding, *programHeadObservation, *uint64, *uint64){
+		"before signed window": func(execution *ProgramExecutionDocument, evidence *ProgramSimulationEvidence, binding *programCallBinding, prior *programHeadObservation, now *uint64, maximumAge *uint64) {
+			*execution, *evidence, *binding, *prior, _ = programSimulationEvidenceFixture(899)
+		},
+		"after signed window": func(execution *ProgramExecutionDocument, evidence *ProgramSimulationEvidence, binding *programCallBinding, prior *programHeadObservation, now *uint64, maximumAge *uint64) {
+			*execution, *evidence, *binding, *prior, _ = programSimulationEvidenceFixture(2_001)
+			*now = 2_001
+		},
+		"future observation": func(_ *ProgramExecutionDocument, _ *ProgramSimulationEvidence, _ *programCallBinding, _ *programHeadObservation, now *uint64, _ *uint64) {
+			*now = 999
+		},
+		"over age": func(_ *ProgramExecutionDocument, _ *ProgramSimulationEvidence, _ *programCallBinding, _ *programHeadObservation, now *uint64, maximumAge *uint64) {
+			*now, *maximumAge = 1_301, 300
+		},
+		"wrong head root": func(_ *ProgramExecutionDocument, _ *ProgramSimulationEvidence, _ *programCallBinding, prior *programHeadObservation, _ *uint64, _ *uint64) {
+			prior.StateRoot[0] ^= 1
+		},
+		"wrong head sequence": func(_ *ProgramExecutionDocument, _ *ProgramSimulationEvidence, _ *programCallBinding, prior *programHeadObservation, _ *uint64, _ *uint64) {
+			prior.Sequence--
+		},
+		"expired head": func(_ *ProgramExecutionDocument, _ *ProgramSimulationEvidence, _ *programCallBinding, prior *programHeadObservation, _ *uint64, _ *uint64) {
+			prior.ValidThrough = 999
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidateExecution, candidateEvidence := execution, evidence
+			candidateBinding, candidatePrior := binding, prior
+			now, maximumAge := uint64(1_000), uint64(300)
+			mutate(&candidateExecution, &candidateEvidence, &candidateBinding, &candidatePrior, &now, &maximumAge)
+			if err := verifySimulationEvidence(candidateExecution, candidateEvidence, candidateBinding, candidatePrior, publicKey, now, maximumAge); err == nil {
+				t.Fatal("invalid Programs simulation evidence was accepted")
+			}
+		})
+	}
+}
+
+func TestProgramExecutionAuthorityRejectsWrongPinnedKey(t *testing.T) {
+	publicKey := [32]byte{9}
+	execution := ProgramExecutionDocument{Authority: ProgramResponseAuthority{
+		BatchID: strings.Repeat("1", 64), Asset: strings.Repeat("2", 64),
+		PreviousStateRoot: strings.Repeat("3", 64), ResultingStateRoot: strings.Repeat("4", 64),
+		SequencerPublicKey: hex.EncodeToString(publicKey[:]),
+	}}
+	for name, pinned := range map[string][32]byte{"zero": {}, "different": {8}} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := verifyExecutionAuthority(execution, pinned); err == nil {
+				t.Fatal("Programs execution accepted authority outside the pinned sequencer key")
+			}
+		})
+	}
+	raw, err := json.Marshal(map[string]any{
+		"state": "executed", "activity_id": strings.Repeat("a", 64), "program_id": strings.Repeat("b", 64),
+		"guest_abi_version": 1, "module_version": 1, "batch_id": strings.Repeat("1", 64),
+		"global_sequence": "1", "result_code": 0, "state_root": strings.Repeat("4", 64),
+		"receipt": "00", "receipt_digest": strings.Repeat("5", 64), "terminal_payload": "", "call_graph": "00",
+		"authority": execution.Authority,
+		"usage": map[string]any{"cpu_fuel": "0", "memory_bytes": "0", "storage_read_bytes": "0",
+			"storage_write_bytes": "0", "output_values": 0, "output_bytes": "0", "fee_units": "0"},
+		"outcome":      map[string]any{"kind": "completed", "code": 0, "response": ""},
+		"verification": "receipt-terminal-and-call-graph-verified", "idempotency_key": strings.Repeat("c", 64),
+	})
+	if err != nil {
+		t.Fatalf("encode wrong-authority Programs submission: %v", err)
+	}
+	if _, err := decodeProgramSubmission(raw, nil, nil, strings.Repeat("c", 64), nil, [32]byte{8}); programErrorCode(err) != ErrorVerificationFailure {
+		t.Fatalf("Programs submission accepted a response outside the pinned sequencer key: %v", err)
+	}
+}
+
+func programSimulationEvidenceFixture(observedAt uint64) (ProgramExecutionDocument, ProgramSimulationEvidence, programCallBinding, programHeadObservation, [32]byte) {
+	seed := [32]byte{7}
+	privateKey := ed25519.NewKeyFromSeed(seed[:])
+	var publicKey [32]byte
+	copy(publicKey[:], privateKey.Public().(ed25519.PublicKey))
+	activity, previous, hypothetical := [32]byte{1}, [32]byte{2}, [32]byte{3}
+	boundary := sha256.Sum256(append([]byte("LayerX/emulator/simulation-boundary/v1\x00"), publicKey[:]...))
+	sequence := uint64(10)
+	signed := append([]byte("LayerX/agent/program-simulation-evidence/v1\x00"), boundary[:]...)
+	signed = append(signed, activity[:]...)
+	signed = append(signed, previous[:]...)
+	signed = append(signed, hypothetical[:]...)
+	var integer [8]byte
+	binary.BigEndian.PutUint64(integer[:], sequence)
+	signed = append(signed, integer[:]...)
+	binary.BigEndian.PutUint64(integer[:], observedAt)
+	signed = append(signed, integer[:]...)
+	signed = append(signed, 0)
+	digest := sha256.Sum256(signed)
+	signature := ed25519.Sign(privateKey, digest[:])
+	execution := ProgramExecutionDocument{
+		ActivityID: hex.EncodeToString(activity[:]), StateRoot: hex.EncodeToString(hypothetical[:]),
+		GlobalSequence: "11", Verification: "receipt-terminal-and-call-graph-verified",
+		Authority: ProgramResponseAuthority{
+			BatchID: strings.Repeat("4", 64), Asset: strings.Repeat("5", 64),
+			PreviousStateRoot: hex.EncodeToString(previous[:]), ResultingStateRoot: hex.EncodeToString(hypothetical[:]),
+			SequencerPublicKey: hex.EncodeToString(publicKey[:]),
+		},
+	}
+	evidence := ProgramSimulationEvidence{
+		BoundaryID: hex.EncodeToString(boundary[:]), ActivityID: hex.EncodeToString(activity[:]),
+		PreviousStateRoot: hex.EncodeToString(previous[:]), HypotheticalStateRoot: hex.EncodeToString(hypothetical[:]),
+		ObservedSequence: "10", ObservedAt: strconv.FormatUint(observedAt, 10), PublicKey: hex.EncodeToString(publicKey[:]),
+		Signature: hex.EncodeToString(signature),
+	}
+	return execution, evidence,
+		programCallBinding{ActivityID: activity, NotBefore: 900, NotAfter: 2_000},
+		programHeadObservation{StateRoot: previous, Sequence: sequence, ObservedAt: 800, ValidThrough: 3_000},
+		publicKey
 }
 
 func TestCanonicalProgramTerminalBindsResponseUsageAndGraph(t *testing.T) {

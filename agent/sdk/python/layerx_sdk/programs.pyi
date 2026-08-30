@@ -55,7 +55,8 @@ class ProgramInterface:
 class ProgramTrustContext:
     sequencer_public_key: bytes
     clock_milliseconds: Callable[[], int]
-    def __init__(self, sequencer_public_key: bytes, clock_milliseconds: Callable[[], int] = ...) -> None: ...
+    maximum_simulation_age_milliseconds: int
+    def __init__(self, sequencer_public_key: bytes, clock_milliseconds: Callable[[], int] = ..., maximum_simulation_age_milliseconds: int = ...) -> None: ...
     def now_milliseconds(self) -> int: ...
 
 class VerifiedProgramReceipt:

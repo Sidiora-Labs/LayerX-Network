@@ -37,6 +37,8 @@ const CAPABILITY_TAGS = Object.freeze({ storage_read: 1, storage_write: 2, trans
 export interface DecodedSignedProgramCall {
   readonly activityId: string;
   readonly idempotencyKey: string;
+  readonly notBefore: bigint;
+  readonly notAfter: bigint;
   readonly canonicalBytes: Uint8Array;
 }
 
@@ -74,8 +76,22 @@ export async function decodeSignedProgramCall(
   return Object.freeze({
     activityId: hex(await sha256(ACTIVITY_DOMAIN, canonical)),
     idempotencyKey,
+    notBefore,
+    notAfter,
     canonicalBytes: canonical,
   });
+}
+
+export function assertFreshSimulationObservation(
+  observedAt: bigint,
+  binding: Pick<DecodedSignedProgramCall, "notBefore" | "notAfter">,
+  now: bigint,
+  maximumAgeMilliseconds: bigint,
+): void {
+  if (maximumAgeMilliseconds <= 0n || observedAt < binding.notBefore || observedAt > binding.notAfter
+    || observedAt > now || now - observedAt > maximumAgeMilliseconds) {
+    fail("simulation observation bounds");
+  }
 }
 
 export async function decodeAndVerifyProgramTerminal(
