@@ -156,7 +156,7 @@ static lxp_result isolated_snapshot(const platform_emulator *emulator,
     *snapshot = malloc(PLATFORM_EMULATOR_SNAPSHOT_BYTES);
     if (arena_bytes == NULL || *snapshot == NULL) {
         free(arena_bytes); free(*snapshot); *snapshot = NULL;
-        return LXP_ERR_LIMIT;
+        return LXP_ERR_ARENA_EXHAUSTED;
     }
     status = lxp_arena_init(&arena, arena_bytes, PLATFORM_EMULATOR_ARENA_BYTES);
     if (status == LXP_OK)
@@ -211,7 +211,10 @@ int32_t platform_emulator_simulate(platform_emulator *emulator,
     candidate = platform_emulator_create(emulator->network_id,
                                          emulator->timestamp_ms,
                                          emulator->sequencer_private_key);
-    if (candidate == NULL) { free(snapshot); return LXP_ERR_LIMIT; }
+    if (candidate == NULL) {
+        free(snapshot);
+        return LXP_ERR_ARENA_EXHAUSTED;
+    }
     status = platform_emulator_snapshot_import(candidate, snapshot,
                                                snapshot_length);
     free(snapshot);
@@ -328,7 +331,7 @@ int32_t platform_emulator_program_read(platform_emulator *emulator,
         program->lifecycle = (uint8_t)wind_down.status;
         program->interface_bytes = interface_length == 0U ? NULL : interface_value + 72U;
         program->interface_length = interface_length == 0U ? 0U : interface_length - 72U;
-        program->has_interface = interface_length == 0U ? 0U : 1U;
+        program->has_interface = (uint8_t)(interface_length != 0U);
         status = lxp_state_root(&emulator->kernel, program->state_root);
         program->observed_sequence = emulator->global_sequence - 1U;
     }
@@ -599,7 +602,8 @@ int32_t platform_emulator_execute(platform_emulator *emulator,
     if (status == LXP_OK)
         status = batch_identifier(emulator, execution.batch_id);
     if (status == LXP_OK && activity.activity_type == LX_PROGRAMS_DEPLOY &&
-        emulator->program_count == 1024U) status = LXP_ERR_LIMIT;
+        emulator->program_count == 1024U)
+        status = LXP_ERR_ARENA_EXHAUSTED;
     if (status == LXP_OK && activity.activity_type == LX_PROGRAMS_DEPLOY)
         program_index = emulator->program_count;
     if (status == LXP_OK && activity.activity_type == LX_PROGRAMS_UPGRADE) {
