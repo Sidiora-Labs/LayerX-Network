@@ -115,6 +115,22 @@ impl SessionRegistry {
     pub(crate) fn records_mut(&mut self) -> &mut BTreeMap<SessionId, SessionRecord> {
         &mut self.records
     }
+
+    pub fn restore_tenant(&mut self, store: &Store, tenant: &TenantId) -> Result<(), SessionError> {
+        for object_id in store.list_object_ids(tenant, ObjectKind::Session) {
+            let key = TenantKey::new(tenant.clone(), ObjectKind::Session, object_id)?;
+            let value = store.get(&key).ok_or(SessionError::NotFound)?;
+            let record = decode(value.bytes(), tenant.clone())?;
+            if self
+                .records
+                .insert(record.request.session_id, record)
+                .is_some()
+            {
+                return Err(SessionError::IdentityMismatch);
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Session refusal taxonomy suitable for audit recording.
@@ -210,6 +226,38 @@ pub fn close(
     Ok(())
 }
 
+pub fn close_with_companion(
+    store: &mut Store,
+    registry: &mut SessionRegistry,
+    session_id: SessionId,
+    companion_key: TenantKey,
+    companion_bytes: Vec<u8>,
+) -> Result<(), SessionError> {
+    let existing = registry
+        .records
+        .get(&session_id)
+        .cloned()
+        .ok_or(SessionError::NotFound)?;
+    if !existing.open {
+        return Err(SessionError::AlreadyClosed);
+    }
+    let mut closed = existing;
+    closed.open = false;
+    let session_key = TenantKey::new(
+        closed.request.tenant.clone(),
+        ObjectKind::Session,
+        closed.request.session_id.0.to_vec(),
+    )?;
+    store.update_local_with_companion(
+        session_key,
+        encode(&closed)?,
+        companion_key,
+        companion_bytes,
+    )?;
+    registry.records.insert(session_id, closed);
+    Ok(())
+}
+
 /// Applies a core revocation event to sessions and unsubmitted preparations.
 ///
 /// # Errors
@@ -273,7 +321,14 @@ fn encode(record: &SessionRecord) -> Result<Vec<u8>, SessionError> {
         .map_err(|_| SessionError::MissingField("opening_client"))?;
     let policy_len = u16::try_from(record.request.policy_version.len())
         .map_err(|_| SessionError::MissingField("policy_version"))?;
+    let did = record.request.agent.as_bytes();
+    let did_len = u16::try_from(did.len()).map_err(|_| SessionError::MissingField("agent"))?;
+    let activity_len = u16::try_from(record.request.permitted_activity_types.len())
+        .map_err(|_| SessionError::MissingField("permitted_activity_types"))?;
+    let scope_len = u16::try_from(record.request.scopes.len())
+        .map_err(|_| SessionError::MissingField("scopes"))?;
     let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"LXSR02");
     bytes.extend_from_slice(&record.request.session_id.0);
     bytes.extend_from_slice(&record.request.token_id);
     bytes.extend_from_slice(&record.request.expiry_sequence.to_be_bytes());
@@ -285,5 +340,148 @@ fn encode(record: &SessionRecord) -> Result<Vec<u8>, SessionError> {
     bytes.extend_from_slice(record.request.opening_client.as_bytes());
     bytes.extend_from_slice(&policy_len.to_be_bytes());
     bytes.extend_from_slice(record.request.policy_version.as_bytes());
+    bytes.extend_from_slice(&did_len.to_be_bytes());
+    bytes.extend_from_slice(did);
+    let (authority_kind, authority_id) = match &record.request.authority {
+        ProtocolAuthority::PrimaryKey(value) => (1, value),
+        ProtocolAuthority::SessionKey(value) => (2, value),
+        ProtocolAuthority::CapabilityGrant(value) => (3, value),
+    };
+    bytes.push(authority_kind);
+    bytes.extend_from_slice(authority_id);
+    bytes.extend_from_slice(&activity_len.to_be_bytes());
+    for value in &record.request.permitted_activity_types {
+        bytes.extend_from_slice(&value.to_be_bytes());
+    }
+    bytes.extend_from_slice(&scope_len.to_be_bytes());
+    for value in &record.request.scopes {
+        let length =
+            u16::try_from(value.len()).map_err(|_| SessionError::MissingField("scopes"))?;
+        bytes.extend_from_slice(&length.to_be_bytes());
+        bytes.extend_from_slice(value.as_bytes());
+    }
     Ok(bytes)
+}
+
+fn decode(bytes: &[u8], tenant: TenantId) -> Result<SessionRecord, SessionError> {
+    let mut at = 0;
+    let take = |at: &mut usize, length: usize| -> Result<&[u8], SessionError> {
+        let end = at
+            .checked_add(length)
+            .ok_or(SessionError::MissingField("record"))?;
+        let value = bytes
+            .get(*at..end)
+            .ok_or(SessionError::MissingField("record"))?;
+        *at = end;
+        Ok(value)
+    };
+    if take(&mut at, 6)? != b"LXSR02" {
+        return Err(SessionError::MissingField("record_version"));
+    }
+    let session_id = SessionId(
+        take(&mut at, 32)?
+            .try_into()
+            .map_err(|_| SessionError::MissingField("session_id"))?,
+    );
+    let token_id = take(&mut at, 32)?
+        .try_into()
+        .map_err(|_| SessionError::MissingField("token_id"))?;
+    let expiry_sequence = u64::from_be_bytes(
+        take(&mut at, 8)?
+            .try_into()
+            .map_err(|_| SessionError::MissingField("expiry"))?,
+    );
+    let open = match take(&mut at, 1)?[0] {
+        0 => false,
+        1 => true,
+        _ => return Err(SessionError::MissingField("open")),
+    };
+    let sequence = u64::from_be_bytes(
+        take(&mut at, 8)?
+            .try_into()
+            .map_err(|_| SessionError::MissingField("sequence"))?,
+    );
+    let budget_reserved = u128::from_be_bytes(
+        take(&mut at, 16)?
+            .try_into()
+            .map_err(|_| SessionError::MissingField("budget"))?,
+    );
+    let subscription_cursor = u64::from_be_bytes(
+        take(&mut at, 8)?
+            .try_into()
+            .map_err(|_| SessionError::MissingField("cursor"))?,
+    );
+    let text = |at: &mut usize| -> Result<String, SessionError> {
+        let length = usize::from(u16::from_be_bytes(
+            take(at, 2)?
+                .try_into()
+                .map_err(|_| SessionError::MissingField("text"))?,
+        ));
+        String::from_utf8(take(at, length)?.to_vec())
+            .map_err(|_| SessionError::MissingField("text"))
+    };
+    let opening_client = text(&mut at)?;
+    let policy_version = text(&mut at)?;
+    let did_len = usize::from(u16::from_be_bytes(
+        take(&mut at, 2)?
+            .try_into()
+            .map_err(|_| SessionError::MissingField("agent"))?,
+    ));
+    let agent =
+        Did::new(take(&mut at, did_len)?).map_err(|_| SessionError::MissingField("agent"))?;
+    let authority_id = {
+        let kind = take(&mut at, 1)?[0];
+        let id = take(&mut at, 32)?
+            .try_into()
+            .map_err(|_| SessionError::MissingField("authority"))?;
+        match kind {
+            1 => ProtocolAuthority::PrimaryKey(id),
+            2 => ProtocolAuthority::SessionKey(id),
+            3 => ProtocolAuthority::CapabilityGrant(id),
+            _ => return Err(SessionError::MissingField("authority")),
+        }
+    };
+    let activity_count = usize::from(u16::from_be_bytes(
+        take(&mut at, 2)?
+            .try_into()
+            .map_err(|_| SessionError::MissingField("activities"))?,
+    ));
+    let mut permitted_activity_types = BTreeSet::new();
+    for _ in 0..activity_count {
+        permitted_activity_types.insert(u16::from_be_bytes(
+            take(&mut at, 2)?
+                .try_into()
+                .map_err(|_| SessionError::MissingField("activities"))?,
+        ));
+    }
+    let scope_count = usize::from(u16::from_be_bytes(
+        take(&mut at, 2)?
+            .try_into()
+            .map_err(|_| SessionError::MissingField("scopes"))?,
+    ));
+    let mut scopes = BTreeSet::new();
+    for _ in 0..scope_count {
+        scopes.insert(text(&mut at)?);
+    }
+    if at != bytes.len() || permitted_activity_types.is_empty() || scopes.is_empty() {
+        return Err(SessionError::MissingField("record"));
+    }
+    Ok(SessionRecord {
+        request: OpenRequest {
+            session_id,
+            token_id,
+            tenant,
+            agent,
+            authority: authority_id,
+            permitted_activity_types,
+            scopes,
+            expiry_sequence,
+            opening_client,
+            policy_version,
+        },
+        open,
+        sequence,
+        budget_reserved,
+        subscription_cursor,
+    })
 }

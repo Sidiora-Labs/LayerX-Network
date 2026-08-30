@@ -38,6 +38,7 @@ fn setup(store: &mut Store) -> (Did, SessionRegistry) {
     let mut boundary = BoundaryIdentity(CoreIdentity {
         canonical_bytes: b"identity".to_vec(),
         head_sequence: 1,
+        revocation_sequence: 1,
         verification_level: VerificationLevel::STATE_PROVEN,
         frozen: false,
         authorities: vec![ProtocolAuthority::SessionKey([3; 32])],

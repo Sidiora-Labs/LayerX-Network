@@ -1,16 +1,31 @@
 #![forbid(unsafe_code)]
 
+use std::collections::BTreeMap;
 use std::env;
 use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::{mpsc, Arc, Mutex};
+use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use layerx_agentd::audit::Redacted;
+use layerx_agentd::budget::{LimitConfig, LimitId, LimitScope};
+use layerx_agentd::human::{HumanListenerConfig, HumanPeer, HumanUnixServer};
+use layerx_agentd::human_runtime::{
+    HumanAuthorityBoundary, ProductionHumanOperations, RemoteHumanAuthority, UnifiedAgentOwner,
+};
 use layerx_agentd::read::{
     LayerxdProgramBalanceReader, ProgramBalanceRead, ProgramBalanceReadRoute,
 };
+use layerx_agentd::session_keys::SessionKeyRegistry;
+use layerx_agentd::store::Store;
+use layerx_client::client::{ClientConfig, ReconnectPolicy};
+use layerx_client::lni::handshake::HandshakeConfig;
+use layerx_client::lni::schema::Version;
+use layerx_client::lni::transport::Limits;
+use layerx_client::Client;
 use layerx_programs::{
     hex, DeploymentProof, DeploymentRecord, ProgramId, ProgramLifecycle,
     ProtocolDeploymentVerifier, Registry,
@@ -49,6 +64,206 @@ fn parse_digest(name: &str) -> Result<[u8; 32], String> {
     hex::decode_digest(&required(name)?).map_err(|error| format!("{name} is invalid: {error}"))
 }
 
+fn parse_hex<const N: usize>(name: &str) -> Result<[u8; N], String> {
+    let value = required(name)?;
+    if value.len() != N * 2 {
+        return Err(format!("{name} has the wrong width"));
+    }
+    let mut bytes = [0; N];
+    for (index, byte) in bytes.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&value[index * 2..index * 2 + 2], 16)
+            .map_err(|_| format!("{name} is not hexadecimal"))?;
+    }
+    Ok(bytes)
+}
+
+fn human_peers() -> Result<BTreeMap<u32, (String, String)>, String> {
+    let mut peers = BTreeMap::new();
+    for entry in required("LAYERX_AGENT_HUMAN_PEERS")?.split(',') {
+        let fields = entry.splitn(3, ':').collect::<Vec<_>>();
+        if fields.len() != 3 || fields[1].is_empty() || fields[2].is_empty() {
+            return Err("human peer map is invalid".to_owned());
+        }
+        let uid = fields[0].parse().map_err(|_| "human peer uid is invalid")?;
+        if peers
+            .insert(uid, (fields[1].to_owned(), fields[2].to_owned()))
+            .is_some()
+        {
+            return Err("human peer uid is duplicated".to_owned());
+        }
+    }
+    if peers.is_empty() {
+        return Err("human peer map is empty".to_owned());
+    }
+    Ok(peers)
+}
+
+fn verified_limit() -> Result<LimitConfig, String> {
+    let scope_bytes = parse_hex("LAYERX_AGENT_HUMAN_LIMIT_SCOPE_ID")?;
+    let scope = match required("LAYERX_AGENT_HUMAN_LIMIT_SCOPE")?.as_str() {
+        "tenant" => LimitScope::Tenant(scope_bytes),
+        "agent" => LimitScope::Agent(scope_bytes),
+        "session" => LimitScope::Session(scope_bytes),
+        "capability" => LimitScope::Capability(scope_bytes),
+        "counterparty" => LimitScope::Counterparty(scope_bytes),
+        _ => return Err("human limit scope is invalid".to_owned()),
+    };
+    Ok(LimitConfig {
+        id: LimitId(parse_hex("LAYERX_AGENT_HUMAN_LIMIT_ID")?),
+        name: required("LAYERX_AGENT_HUMAN_LIMIT_NAME")?,
+        scope,
+        ceiling: required("LAYERX_AGENT_HUMAN_LIMIT_CEILING")?
+            .parse()
+            .map_err(|_| "human limit ceiling is invalid")?,
+        consumed: required("LAYERX_AGENT_HUMAN_LIMIT_CONSUMED")?
+            .parse()
+            .map_err(|_| "human limit consumed is invalid")?,
+    })
+}
+
+fn start_human_owner() -> Result<mpsc::Receiver<Result<(), String>>, String> {
+    let peers = human_peers()?;
+    let deadline = Duration::from_millis(parse_u64("LAYERX_AGENT_HUMAN_DEADLINE_MS")?);
+    let limits = Limits {
+        maximum_frame_bytes: required("LAYERX_AGENT_HUMAN_MAX_FRAME_BYTES")?
+            .parse()
+            .map_err(|_| "human max frame is invalid")?,
+        maximum_connections: required("LAYERX_AGENT_HUMAN_MAX_CONNECTIONS")?
+            .parse()
+            .map_err(|_| "human max connections is invalid")?,
+        maximum_streams: required("LAYERX_AGENT_HUMAN_MAX_STREAMS")?
+            .parse()
+            .map_err(|_| "human max streams is invalid")?,
+        maximum_queued_bytes: required("LAYERX_AGENT_HUMAN_MAX_QUEUED_BYTES")?
+            .parse()
+            .map_err(|_| "human max queue is invalid")?,
+        deadline,
+    }
+    .validate()
+    .map_err(|_| "human LNI limits are invalid")?;
+    let node_path = PathBuf::from(required("LAYERX_AGENT_HUMAN_NODE_LNI")?);
+    let store_path = PathBuf::from(required("LAYERX_AGENT_HUMAN_STORE")?);
+    let socket_path = PathBuf::from(required("LAYERX_AGENT_HUMAN_SOCKET")?);
+    let session_key_root = PathBuf::from(required("LAYERX_AGENT_HUMAN_SESSION_KEY_ROOT")?);
+    let session_secret_path =
+        PathBuf::from(required("LAYERX_AGENT_HUMAN_SESSION_OPERATOR_SECRET_FILE")?);
+    if !node_path.is_absolute()
+        || !store_path.is_absolute()
+        || !socket_path.is_absolute()
+        || !session_key_root.is_absolute()
+        || !session_secret_path.is_absolute()
+    {
+        return Err("human daemon paths must be absolute".to_owned());
+    }
+    let node = Client::connect(ClientConfig {
+        endpoint: node_path,
+        handshake: HandshakeConfig {
+            built_interface_version: Version::V1_1,
+            expected_protocol_version: required("LAYERX_AGENT_HUMAN_PROTOCOL_VERSION")?
+                .parse()
+                .map_err(|_| "human protocol version is invalid")?,
+            expected_network_id: required("LAYERX_AGENT_HUMAN_NETWORK_ID")?
+                .parse()
+                .map_err(|_| "human network id is invalid")?,
+        },
+        limits,
+        reconnect: ReconnectPolicy {
+            maximum_attempts: required("LAYERX_AGENT_HUMAN_RECONNECT_ATTEMPTS")?
+                .parse()
+                .map_err(|_| "human reconnect attempts are invalid")?,
+            base_delay: Duration::from_millis(parse_u64("LAYERX_AGENT_HUMAN_RECONNECT_BASE_MS")?),
+            maximum_delay: Duration::from_millis(parse_u64("LAYERX_AGENT_HUMAN_RECONNECT_MAX_MS")?),
+            jitter_percent: required("LAYERX_AGENT_HUMAN_RECONNECT_JITTER_PERCENT")?
+                .parse()
+                .map_err(|_| "human reconnect jitter is invalid")?,
+        },
+    })
+    .map_err(|error| format!("human node LNI is unavailable: {error:?}"))?;
+    let authority = RemoteHumanAuthority::connect(
+        &required("LAYERX_AGENT_HUMAN_AUTHORITY_ENDPOINT")?,
+        required("LAYERX_AGENT_HUMAN_AUTHORITY_BEARER")?,
+        deadline,
+        required("LAYERX_AGENT_HUMAN_AUTHORITY_MAX_BYTES")?
+            .parse()
+            .map_err(|_| "human authority bound is invalid")?,
+    )
+    .map_err(|error| format!("human authority is invalid: {error:?}"))?;
+    for (uid, (principal, tenant)) in &peers {
+        authority
+            .registry(&HumanPeer {
+                uid: *uid,
+                principal: principal.clone(),
+                tenant: tenant.clone(),
+            })
+            .map_err(|error| format!("human authority readiness failed: {error:?}"))?;
+    }
+    let shared_store =
+        Arc::new(Mutex::new(Store::open(store_path).map_err(|error| {
+            format!("human store is unavailable: {error}")
+        })?));
+    let operations = ProductionHumanOperations::new(
+        authority,
+        node,
+        Arc::clone(&shared_store),
+        &peers,
+        required("LAYERX_AGENT_HUMAN_MAX_PAYLOAD_BYTES")?
+            .parse()
+            .map_err(|_| "human payload bound is invalid")?,
+        parse_u64("LAYERX_AGENT_HUMAN_TIMESTAMP_SPAN")?,
+    )
+    .map_err(|error| format!("human operations are invalid: {error:?}"))?;
+    let socket_uid = required("LAYERX_AGENT_HUMAN_SOCKET_UID")?
+        .parse()
+        .map_err(|_| "human socket uid is invalid")?;
+    let operator_secret = layerx_agentd::config::read_protected_source(&session_secret_path, 4096)
+        .map_err(|error| format!("human session operator secret is unavailable: {error:?}"))?;
+    let session_keys = SessionKeyRegistry::open(
+        session_key_root,
+        operator_secret,
+        required("LAYERX_AGENT_HUMAN_NETWORK_ID")?
+            .parse()
+            .map_err(|_| "human network id is invalid")?,
+        socket_uid,
+    )
+    .map_err(|error| format!("human session key registry is invalid: {error:?}"))?;
+    let owner = UnifiedAgentOwner::new(
+        operations,
+        shared_store,
+        &peers,
+        vec![verified_limit()?],
+        session_keys,
+    )
+    .map_err(|error| format!("human owner is invalid: {error:?}"))?;
+    let server = HumanUnixServer::bind(
+        HumanListenerConfig {
+            endpoint: socket_path,
+            owner_uid: socket_uid,
+            owner_gid: required("LAYERX_AGENT_HUMAN_SOCKET_GID")?
+                .parse()
+                .map_err(|_| "human socket gid is invalid")?,
+            mode: u32::from_str_radix(&required("LAYERX_AGENT_HUMAN_SOCKET_MODE")?, 8)
+                .map_err(|_| "human socket mode is invalid")?,
+            maximum_frame_bytes: limits.maximum_frame_bytes,
+            deadline,
+            peers,
+        },
+        owner,
+    )
+    .map_err(|error| format!("human listener is invalid: {error:?}"))?;
+    let (sender, receiver) = mpsc::sync_channel(1);
+    thread::Builder::new()
+        .name("layerx-agent-human".to_owned())
+        .spawn(move || {
+            let _ = sender.send(
+                server
+                    .serve()
+                    .map_err(|error| format!("human listener stopped: {error:?}")),
+            );
+        })
+        .map_err(|error| format!("human listener thread failed: {error}"))?;
+    Ok(receiver)
+}
+
 fn config() -> Result<Config, String> {
     let listen = required("LAYERX_AGENT_PROGRAM_LISTEN")?;
     let bearer = required("LAYERX_AGENT_PROGRAM_BEARER_TOKEN")?;
@@ -85,10 +300,7 @@ fn config() -> Result<Config, String> {
     })
 }
 
-fn load_registry(
-    root: &Path,
-    verifier: &ProtocolDeploymentVerifier,
-) -> Result<Registry, String> {
+fn load_registry(root: &Path, verifier: &ProtocolDeploymentVerifier) -> Result<Registry, String> {
     let mut paths = fs::read_dir(root)
         .map_err(|error| format!("deployment journal is unavailable: {error}"))?
         .map(|entry| entry.map(|value| value.path()))
@@ -107,7 +319,10 @@ fn load_registry(
             .map_err(|error| format!("{} is unverified: {error}", path.display()))?;
         let expected = hex::encode(&evidence.receipt_digest());
         if path.file_stem().and_then(|value| value.to_str()) != Some(expected.as_str()) {
-            return Err(format!("{} is filed under the wrong receipt", path.display()));
+            return Err(format!(
+                "{} is filed under the wrong receipt",
+                path.display()
+            ));
         }
         let record_path = root.join(format!("{expected}.deployment"));
         let record = DeploymentRecord::decode(
@@ -119,7 +334,10 @@ fn load_registry(
             .validate()
             .map_err(|error| format!("{} is inadmissible: {error}", record_path.display()))?;
         if &record != evidence.record() {
-            return Err(format!("{} disagrees with protocol evidence", record_path.display()));
+            return Err(format!(
+                "{} disagrees with protocol evidence",
+                record_path.display()
+            ));
         }
         registry
             .record_verified_deployment(&evidence)
@@ -252,6 +470,7 @@ fn serve_connection(
 }
 
 fn serve(config: Config) -> Result<(), String> {
+    let human = start_human_owner()?;
     let verifier = ProtocolDeploymentVerifier::from_protected_history(
         Path::new(&config.sequencer_trust_history),
         config.staleness_ms,
@@ -274,8 +493,25 @@ fn serve(config: Config) -> Result<(), String> {
         .map_err(|error| format!("agent protocol reader is not ready: {error:?}"))?;
     let listener = TcpListener::bind(&config.listen)
         .map_err(|error| format!("agent program listener failed: {error}"))?;
-    for incoming in listener.incoming() {
-        let mut stream = incoming.map_err(|error| format!("agent accept failed: {error}"))?;
+    listener
+        .set_nonblocking(true)
+        .map_err(|error| format!("agent program listener nonblocking setup failed: {error}"))?;
+    loop {
+        match human.try_recv() {
+            Ok(result) => return result,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                return Err("human listener terminated without status".to_owned())
+            }
+            Err(mpsc::TryRecvError::Empty) => {}
+        }
+        let mut stream = match listener.accept() {
+            Ok((stream, _)) => stream,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                thread::sleep(Duration::from_millis(25));
+                continue;
+            }
+            Err(error) => return Err(format!("agent accept failed: {error}")),
+        };
         stream
             .set_read_timeout(Some(Duration::from_secs(10)))
             .and_then(|()| stream.set_write_timeout(Some(Duration::from_secs(10))))
@@ -287,7 +523,6 @@ fn serve(config: Config) -> Result<(), String> {
             &mut route,
         );
     }
-    Ok(())
 }
 
 fn main() {

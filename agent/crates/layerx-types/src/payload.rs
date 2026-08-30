@@ -142,6 +142,12 @@ impl ModuleRegistration {
         self.module
     }
 
+    /// Returns the exact sorted activity set negotiated for this module.
+    #[must_use]
+    pub fn activity_types(&self) -> &[ActivityType] {
+        &self.activity_types
+    }
+
     fn declares(&self, activity_type: ActivityType) -> bool {
         self.activity_types.binary_search(&activity_type).is_ok()
     }
@@ -167,6 +173,12 @@ impl ModuleRegistry {
             }
         }
         Ok(Self(registrations.to_vec()))
+    }
+
+    /// Returns the exact sorted module registrations negotiated from core.
+    #[must_use]
+    pub fn registrations(&self) -> &[ModuleRegistration] {
+        &self.0
     }
 
     /// Reports whether core registered this exact module activity type.

@@ -55,6 +55,7 @@ fn active_identity(head_sequence: u64) -> CoreIdentity {
     CoreIdentity {
         canonical_bytes: format!("identity-at-{head_sequence}").into_bytes(),
         head_sequence,
+        revocation_sequence: 1,
         verification_level: VerificationLevel::STATE_PROVEN,
         frozen: false,
         authorities: vec![ProtocolAuthority::SessionKey([7; 32])],

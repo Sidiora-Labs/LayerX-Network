@@ -18,6 +18,7 @@ pub enum ProtocolAuthority {
 pub struct CoreIdentity {
     pub canonical_bytes: Vec<u8>,
     pub head_sequence: u64,
+    pub revocation_sequence: u64,
     pub verification_level: VerificationLevel,
     pub frozen: bool,
     pub authorities: Vec<ProtocolAuthority>,
@@ -164,6 +165,9 @@ fn validate_observation(observation: &CoreIdentity) -> Result<(), IdentityError>
         return Err(IdentityError::Frozen);
     }
     if observation.verification_level == VerificationLevel::UNVERIFIED {
+        return Err(IdentityError::Unverified);
+    }
+    if observation.revocation_sequence == 0 {
         return Err(IdentityError::Unverified);
     }
     Ok(())

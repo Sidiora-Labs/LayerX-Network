@@ -120,6 +120,25 @@ fn ct_nonzero<const N: usize>(bytes: &[u8; N]) -> bool {
 }
 
 impl Keystore {
+    /// Opens a key under its exact authenticated context and lends the
+    /// plaintext seed only to the supplied callback. The temporary plaintext
+    /// remains in zeroizing storage and cannot be returned by reference.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same identity, network, authentication and decoding
+    /// failures as [`Self::open`].
+    pub fn open_with<R>(
+        &self,
+        operator_secret: &[u8],
+        expected_identity: &[u8],
+        expected_network_id: u32,
+        operation: impl FnOnce(&[u8; PRIVATE_KEY_BYTES]) -> R,
+    ) -> Result<R, KeystoreError> {
+        let key = self.open(operator_secret, expected_identity, expected_network_id)?;
+        Ok(key.expose(operation))
+    }
+
     /// Encrypts one Ed25519 seed under an operator secret and bound identity.
     ///
     /// # Errors

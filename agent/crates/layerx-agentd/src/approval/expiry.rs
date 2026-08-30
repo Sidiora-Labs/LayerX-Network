@@ -1,7 +1,7 @@
 //! Durable approval expiry, idempotency and concurrency arbitration.
 
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use crate::budget::{self, BudgetLimiter, ReleaseKind};
 use crate::policy::approval::{ApprovalSnapshot, ApprovalState};
@@ -38,10 +38,49 @@ impl DecisionKey {
 
 /// File-backed approval state machine used across process restarts.
 pub struct ApprovalExpiry {
-    store: Mutex<Store>,
+    store: Arc<Mutex<Store>>,
 }
 
 impl ApprovalExpiry {
+    pub(crate) fn repeated(
+        &self,
+        tenant: &TenantId,
+        approval_id: [u8; 32],
+        idempotency_key: &DecisionKey,
+    ) -> Result<Option<ApprovalDecision>, ApprovalExpiryError> {
+        let store = self.store.lock().map_err(|_| ApprovalExpiryError::Store)?;
+        let key = storage_key(tenant, approval_id)?;
+        let Some(value) = store.get(&key) else {
+            return Ok(None);
+        };
+        let persisted = decode(value.bytes())?;
+        match (persisted.outcome, persisted.idempotency_key.as_deref()) {
+            (Some(outcome), Some(key)) if key == idempotency_key.as_str() => {
+                Ok(Some(ApprovalDecision {
+                    outcome,
+                    submission_ref: persisted.submission_ref,
+                    winning_outcome: None,
+                    enforcement: super::ApprovalEnforcement::DaemonOnly,
+                    authority_notice: super::APPROVAL_ENFORCEMENT_NOTICE,
+                }))
+            }
+            (Some(outcome), _) => Ok(Some(super::conflict(outcome))),
+            (None, _) => Ok(None),
+        }
+    }
+
+    pub(crate) fn persist_prepared_decision(
+        &self,
+        key: TenantKey,
+        bytes: Vec<u8>,
+    ) -> Result<(), ApprovalExpiryError> {
+        self.store
+            .lock()
+            .map_err(|_| ApprovalExpiryError::Store)?
+            .put_local(key, bytes)
+            .map_err(|_| ApprovalExpiryError::Store)
+    }
+
     /// Opens the real daemon store at `root`.
     ///
     /// # Errors
@@ -49,8 +88,16 @@ impl ApprovalExpiry {
     /// Returns a storage failure when the store cannot be opened or migrated.
     pub fn open(root: impl AsRef<Path>) -> Result<Self, ApprovalExpiryError> {
         Ok(Self {
-            store: Mutex::new(Store::open(root).map_err(|_| ApprovalExpiryError::Store)?),
+            store: Arc::new(Mutex::new(
+                Store::open(root).map_err(|_| ApprovalExpiryError::Store)?,
+            )),
         })
+    }
+
+    /// Uses the daemon's sole durable store owner.
+    #[must_use]
+    pub fn from_shared_store(store: Arc<Mutex<Store>>) -> Self {
+        Self { store }
     }
 
     pub(crate) fn observe(
@@ -126,8 +173,12 @@ impl ApprovalExpiry {
         persisted.idempotency_key = Some(idempotency_key.as_str().to_owned());
         persisted.outcome = Some(intended);
         persisted.submission_ref = submission_ref;
+        let bytes = encode(&persisted)?;
+        if intended == ApprovalOutcome::Granted {
+            return Ok(DecisionResolution::WinnerPrepared(key, bytes));
+        }
         store
-            .put_local(key, encode(&persisted)?)
+            .put_local(key, bytes)
             .map_err(|_| ApprovalExpiryError::Store)?;
         Ok(DecisionResolution::Winner)
     }
@@ -171,6 +222,7 @@ impl ApprovalExpiry {
 
 pub(crate) enum DecisionResolution {
     Winner,
+    WinnerPrepared(TenantKey, Vec<u8>),
     Repeat(ApprovalDecision),
     Conflict(ApprovalOutcome),
     Expired,

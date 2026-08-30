@@ -369,6 +369,117 @@ impl Store {
         Ok(true)
     }
 
+    /// Atomically replaces one daemon-local record with another.
+    pub fn replace_local(
+        &mut self,
+        previous_key: &TenantKey,
+        replacement_key: TenantKey,
+        replacement_bytes: Vec<u8>,
+    ) -> Result<(), StoreError> {
+        let Some(previous) = self.entries.get(previous_key) else {
+            return Err(StoreError::Corrupt("missing local record to replace"));
+        };
+        if previous.class != StorageClass::LocalOnly || self.entries.contains_key(&replacement_key)
+        {
+            return Err(StoreError::Corrupt("invalid local record replacement"));
+        }
+        let before = self.entries.clone();
+        self.entries.remove(previous_key);
+        self.entries.insert(
+            replacement_key,
+            StoredValue {
+                class: StorageClass::LocalOnly,
+                bytes: replacement_bytes,
+            },
+        );
+        if let Err(error) = self.persist() {
+            self.entries = before;
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    pub fn replace_local_with_companion(
+        &mut self,
+        previous_key: &TenantKey,
+        replacement_key: TenantKey,
+        replacement_bytes: Vec<u8>,
+        companion_key: TenantKey,
+        companion_bytes: Vec<u8>,
+    ) -> Result<(), StoreError> {
+        let Some(previous) = self.entries.get(previous_key) else {
+            return Err(StoreError::Corrupt("missing local record to replace"));
+        };
+        if previous.class != StorageClass::LocalOnly
+            || self.entries.contains_key(&replacement_key)
+            || self
+                .entries
+                .get(&companion_key)
+                .is_some_and(|value| value.class != StorageClass::LocalOnly)
+        {
+            return Err(StoreError::Corrupt("invalid local record replacement"));
+        }
+        let before = self.entries.clone();
+        self.entries.remove(previous_key);
+        self.entries.insert(
+            replacement_key,
+            StoredValue {
+                class: StorageClass::LocalOnly,
+                bytes: replacement_bytes,
+            },
+        );
+        self.entries.insert(
+            companion_key,
+            StoredValue {
+                class: StorageClass::LocalOnly,
+                bytes: companion_bytes,
+            },
+        );
+        if let Err(error) = self.persist() {
+            self.entries = before;
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    /// Atomically updates one local record and creates one absent local companion.
+    pub fn update_local_with_companion(
+        &mut self,
+        key: TenantKey,
+        bytes: Vec<u8>,
+        companion_key: TenantKey,
+        companion_bytes: Vec<u8>,
+    ) -> Result<(), StoreError> {
+        if self
+            .entries
+            .get(&key)
+            .is_none_or(|value| value.class != StorageClass::LocalOnly)
+            || self.entries.contains_key(&companion_key)
+        {
+            return Err(StoreError::Corrupt("invalid local record update"));
+        }
+        let before = self.entries.clone();
+        self.entries.insert(
+            key,
+            StoredValue {
+                class: StorageClass::LocalOnly,
+                bytes,
+            },
+        );
+        self.entries.insert(
+            companion_key,
+            StoredValue {
+                class: StorageClass::LocalOnly,
+                bytes: companion_bytes,
+            },
+        );
+        if let Err(error) = self.persist() {
+            self.entries = before;
+            return Err(error);
+        }
+        Ok(())
+    }
+
     /// Atomically records the three local records required before transmission.
     ///
     /// # Errors

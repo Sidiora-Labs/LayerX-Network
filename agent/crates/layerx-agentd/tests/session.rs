@@ -45,6 +45,7 @@ fn identity(
     let mut boundary = BoundaryIdentity(CoreIdentity {
         canonical_bytes: b"proven-identity".to_vec(),
         head_sequence: 10,
+        revocation_sequence: 1,
         verification_level: VerificationLevel::STATE_PROVEN,
         frozen: false,
         authorities: vec![ProtocolAuthority::SessionKey([4; 32])],

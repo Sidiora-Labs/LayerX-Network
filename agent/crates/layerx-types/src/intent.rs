@@ -36,6 +36,25 @@ exact_identifier!(DepositProofId, "An external deposit-proof identifier.");
 exact_identifier!(WithdrawalId, "A bridge withdrawal identifier.");
 exact_identifier!(PurposeHash, "A protocol purpose commitment.");
 exact_identifier!(ContextHash, "A transaction context commitment.");
+exact_identifier!(AuthorityGrantId, "A protocol authority-grant identifier.");
+
+/// Closed reason carried by a protocol session revocation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum SessionRevocationReason {
+    Paused = 1,
+    Archived = 2,
+    Renewed = 3,
+    PrimaryKeyRotated = 4,
+    SignedOut = 5,
+}
+
+impl SessionRevocationReason {
+    #[must_use]
+    pub const fn value(self) -> u8 {
+        self as u8
+    }
+}
 
 /// Exact 20-byte EVM payout address.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]

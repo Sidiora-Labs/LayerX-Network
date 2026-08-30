@@ -61,6 +61,7 @@ pub enum CoreStateError {
 pub struct ProductionCorePreparationBoundary<'a> {
     client: &'a mut layerx_client::Client,
     next_correlation_id: u64,
+    last_state: Option<CorePreparationState>,
 }
 
 impl<'a> ProductionCorePreparationBoundary<'a> {
@@ -79,7 +80,16 @@ impl<'a> ProductionCorePreparationBoundary<'a> {
         Ok(Self {
             client,
             next_correlation_id: first_correlation_id,
+            last_state: None,
         })
+    }
+
+    /// Returns the exact node snapshot consumed by the most recent successful
+    /// preparation call. Callers retain its registry for later signature
+    /// verification instead of querying a second authority.
+    #[must_use]
+    pub const fn last_state(&self) -> Option<&CorePreparationState> {
+        self.last_state.as_ref()
     }
 }
 
@@ -94,13 +104,15 @@ impl CorePreparationBoundary for ProductionCorePreparationBoundary<'_> {
             .client
             .preparation_state(actor, correlation_id)
             .map_err(map_preparation_state_error)?;
-        Ok(CorePreparationState {
+        let state = CorePreparationState {
             network_id: state.network_id,
             account_sequence: state.account_sequence,
             protocol_timestamp: state.protocol_timestamp,
             observed_head_sequence: state.observed_head_sequence,
             module_registry: state.module_registry,
-        })
+        };
+        self.last_state = Some(state.clone());
+        Ok(state)
     }
 }
 

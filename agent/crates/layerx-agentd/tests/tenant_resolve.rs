@@ -48,6 +48,7 @@ fn token(root: &PathBuf) -> (Token, TenantId, Did) {
     let mut boundary = BoundaryIdentity(CoreIdentity {
         canonical_bytes: b"core-identity".to_vec(),
         head_sequence: 10,
+        revocation_sequence: 1,
         verification_level: VerificationLevel::STATE_PROVEN,
         frozen: false,
         authorities: vec![ProtocolAuthority::SessionKey([4; 32])],

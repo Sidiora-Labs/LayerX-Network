@@ -1,9 +1,9 @@
 //! Prepare, sign, submit, track, and wait contract types.
 
-use layerx_types::result::ResultCode;
 use crate::identity::{ActivityType, AgentDid, Asset, AuthorityRef, ContractError, ExplicitSet};
 use crate::verify::Level;
 use crate::{Amount, Sequence, TimestampSeconds};
+use layerx_types::result::ResultCode;
 
 macro_rules! required_bytes {
     ($name:ident, $field:literal) => {
@@ -87,6 +87,8 @@ impl TimestampBound {
 /// Complete request from which the daemon builds canonical unsigned bytes.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PrepareRequest {
+    /// Full protocol module and ordinal packed into the canonical u32 form.
+    pub protocol_activity_type: u32,
     pub actor: AgentDid,
     pub authority: AuthorityRef,
     pub account_sequence: Sequence,
@@ -138,6 +140,7 @@ pub struct SignRequest {
 pub struct SubmitRequest {
     pub preparation_ref: PreparationRef,
     pub signature: SignatureBytes,
+    pub approval_release_ref: Option<[u8; 32]>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

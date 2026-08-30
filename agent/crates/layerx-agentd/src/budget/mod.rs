@@ -11,8 +11,7 @@ mod recovery;
 mod reservations;
 
 pub use accounting::{
-    LocalAccounting, ProtocolBudgetState, ReconcileError, ReconciliationState,
-    SpendReceiptEvidence,
+    LocalAccounting, ProtocolBudgetState, ReconcileError, ReconciliationState, SpendReceiptEvidence,
 };
 pub use create::{
     create_protocol_budget, BudgetCreationError, BudgetKind, BudgetPipeline, BudgetRequest,
@@ -23,8 +22,8 @@ pub use recovery::{
     PersistedReceipt, RestartAccounting, RestartError, UnknownOutcome, UnknownReservation,
 };
 pub use reservations::{
-    BudgetLimiter, BudgetReservation, LimitConfig, LimitId, LimitRefusal, LimitScope, ReleaseKind,
-    ReservationRequest,
+    BudgetLimiter, BudgetReservation, DurableBudgetReservation, LimitConfig, LimitId, LimitRefusal,
+    LimitScope, ReleaseKind, ReservationRequest,
 };
 
 /// Reconciles local budget cache state against verified protocol evidence.
@@ -71,6 +70,14 @@ pub fn release(
     current_sequence: u64,
 ) -> Result<bool, LimitRefusal> {
     reservations::release_all(limiter, reservation_id, kind, current_sequence)
+}
+
+/// Restores canonical durable reservations before the limiter is made ready.
+pub fn restore(
+    limiter: &BudgetLimiter,
+    reservations: &[DurableBudgetReservation],
+) -> Result<(), LimitRefusal> {
+    reservations::restore_all(limiter, reservations)
 }
 
 /// Persists a reservation whose submission outcome is unknown.

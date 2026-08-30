@@ -18,6 +18,9 @@ layerx-programs-protocol-adapter = { path = "../../../programs/crates/layerx-pro
 sha2 = "=0.10.9"
 serde_json = "=1.0.149"
 ureq = { version = "=3.4.0", default-features = false, features = ["json", "native-tls-no-default"] }
+rustix = { version = "=1.1.4", features = ["net"] }
+zeroize = "=1.9.0"
+getrandom = "=0.3.4"
 
 [dev-dependencies]
 ed25519-dalek = "=2.2.0"

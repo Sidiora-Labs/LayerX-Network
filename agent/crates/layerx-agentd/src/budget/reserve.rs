@@ -3,6 +3,10 @@
 use std::collections::BTreeMap;
 use std::sync::Mutex;
 
+use sha2::{Digest as _, Sha256};
+
+const RESERVATION_DIGEST_DOMAIN: &[u8] = b"layerx:budget-reservation:v1\0";
+
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct LimitId(pub [u8; 16]);
 
@@ -36,6 +40,13 @@ pub struct BudgetLimiter {
 }
 
 impl BudgetLimiter {
+    /// Whether an exact durable approval reservation is present in any configured scope.
+    pub fn has_reservation(&self, reservation_id: [u8; 32]) -> Result<bool, LimitRefusal> {
+        let limits = self.limits.lock().map_err(|_| LimitRefusal::Poisoned)?;
+        Ok(limits
+            .values()
+            .any(|limit| limit.held.contains_key(&reservation_id)))
+    }
     /// Builds a limiter from a complete set of limit configurations.
     ///
     /// # Errors
@@ -105,6 +116,33 @@ pub struct BudgetReservation {
     pub id: [u8; 32],
     pub amount: u128,
     pub applied_limits: Vec<LimitId>,
+    pub durable: Vec<DurableBudgetReservation>,
+}
+
+/// Canonical restart record for one reservation applied to one verified limit.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DurableBudgetReservation {
+    pub reservation_id: [u8; 32],
+    pub limit_id: LimitId,
+    pub scope: LimitScope,
+    pub amount: u128,
+    pub ceiling: u128,
+    pub expiry_sequence: u64,
+    pub digest: [u8; 32],
+}
+
+impl DurableBudgetReservation {
+    #[must_use]
+    pub fn canonical_digest(&self) -> [u8; 32] {
+        reservation_digest(
+            self.reservation_id,
+            self.limit_id,
+            self.scope,
+            self.amount,
+            self.ceiling,
+            self.expiry_sequence,
+        )
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -148,6 +186,9 @@ pub(crate) fn reserve_all(
     let mut limits = limiter.limits.lock().map_err(|_| LimitRefusal::Poisoned)?;
     for id in &applicable {
         let limit = limits.get(id).ok_or(LimitRefusal::UnknownLimit(*id))?;
+        if limit.held.contains_key(&request.id) {
+            return Err(LimitRefusal::InvalidRequest);
+        }
         let held = held_total(limit)?;
         let projected = limit
             .config
@@ -173,11 +214,73 @@ pub(crate) fn reserve_all(
                 .insert(request.id, (request.amount, request.expiry_sequence));
         }
     }
+    let durable = applicable
+        .iter()
+        .map(|id| {
+            let limit = limits.get(id).ok_or(LimitRefusal::UnknownLimit(*id))?;
+            let mut record = DurableBudgetReservation {
+                reservation_id: request.id,
+                limit_id: *id,
+                scope: limit.config.scope,
+                amount: request.amount,
+                ceiling: limit.config.ceiling,
+                expiry_sequence: request.expiry_sequence,
+                digest: [0; 32],
+            };
+            record.digest = record.canonical_digest();
+            Ok(record)
+        })
+        .collect::<Result<Vec<_>, LimitRefusal>>()?;
     Ok(BudgetReservation {
         id: request.id,
         amount: request.amount,
         applied_limits: applicable,
+        durable,
     })
+}
+
+pub(crate) fn restore_all(
+    limiter: &BudgetLimiter,
+    records: &[DurableBudgetReservation],
+) -> Result<(), LimitRefusal> {
+    let mut limits = limiter.limits.lock().map_err(|_| LimitRefusal::Poisoned)?;
+    let mut restored = limits.clone();
+    for record in records {
+        if record.reservation_id == [0; 32]
+            || record.amount == 0
+            || record.expiry_sequence == 0
+            || record.digest != record.canonical_digest()
+        {
+            return Err(LimitRefusal::InvalidRequest);
+        }
+        let limit = restored
+            .get_mut(&record.limit_id)
+            .ok_or(LimitRefusal::UnknownLimit(record.limit_id))?;
+        if limit.config.scope != record.scope
+            || limit.config.ceiling != record.ceiling
+            || limit.held.contains_key(&record.reservation_id)
+        {
+            return Err(LimitRefusal::InvalidConfiguration);
+        }
+        limit.held.insert(
+            record.reservation_id,
+            (record.amount, record.expiry_sequence),
+        );
+    }
+    for limit in restored.values() {
+        let held = held_total(limit)?;
+        if limit
+            .config
+            .consumed
+            .checked_add(held)
+            .ok_or(LimitRefusal::Arithmetic)?
+            > limit.config.ceiling
+        {
+            return Err(LimitRefusal::InvalidConfiguration);
+        }
+    }
+    *limits = restored;
+    Ok(())
 }
 
 pub(crate) fn release_all(
@@ -217,4 +320,31 @@ fn held_total(limit: &LimitState) -> Result<u128, LimitRefusal> {
         .values()
         .try_fold(0_u128, |total, (amount, _)| total.checked_add(*amount))
         .ok_or(LimitRefusal::Arithmetic)
+}
+
+fn reservation_digest(
+    reservation_id: [u8; 32],
+    limit_id: LimitId,
+    scope: LimitScope,
+    amount: u128,
+    ceiling: u128,
+    expiry_sequence: u64,
+) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(RESERVATION_DIGEST_DOMAIN);
+    hasher.update(reservation_id);
+    hasher.update(limit_id.0);
+    let (tag, identity) = match scope {
+        LimitScope::Tenant(value) => (0_u8, value),
+        LimitScope::Agent(value) => (1_u8, value),
+        LimitScope::Session(value) => (2_u8, value),
+        LimitScope::Capability(value) => (3_u8, value),
+        LimitScope::Counterparty(value) => (4_u8, value),
+    };
+    hasher.update([tag]);
+    hasher.update(identity);
+    hasher.update(amount.to_be_bytes());
+    hasher.update(ceiling.to_be_bytes());
+    hasher.update(expiry_sequence.to_be_bytes());
+    hasher.finalize().into()
 }

@@ -9,8 +9,9 @@ use sha2::{Digest as _, Sha256};
 use crate::budget::{self, BudgetLimiter, ReleaseKind};
 use crate::policy::approval::{
     ApprovalError as RegistryError, ApprovalRegistry, ApprovalSnapshot, ApprovalState, ApproverId,
+    ReleasedApproval,
 };
-use crate::store::TenantId;
+use crate::store::{Store, TenantId};
 
 mod events;
 mod expiry;
@@ -46,6 +47,7 @@ pub struct ApprovalRecord {
     pub created_at_sequence: u64,
     pub expires_at_sequence: u64,
     pub state: ApprovalState,
+    pub submission_ref: Option<[u8; 32]>,
     pub enforcement: ApprovalEnforcement,
     pub authority_notice: &'static str,
 }
@@ -79,6 +81,7 @@ pub struct ApprovalDecision {
 }
 
 /// One preparation held under its owning tenant and approval identity.
+#[derive(Clone)]
 struct QueuedSubmission {
     tenant: TenantId,
     approval_id: [u8; 32],
@@ -92,6 +95,127 @@ pub struct ApprovalSubmissionQueue {
 }
 
 impl ApprovalSubmissionQueue {
+    pub(crate) fn matches_released_decision(
+        &self,
+        tenant: &TenantId,
+        approval_id: [u8; 32],
+        submission_ref: [u8; 32],
+        disclosure_digest: [u8; 32],
+    ) -> Result<bool, ApprovalOutcome> {
+        let queued = self.queued.lock().map_err(|_| ApprovalOutcome::Conflict)?;
+        Ok(queued.get(&submission_ref).is_some_and(|record| {
+            &record.tenant == tenant
+                && record.approval_id == approval_id
+                && record.prepared.disclosure.canonical_digest == disclosure_digest
+        }))
+    }
+
+    pub(crate) fn settle_verified(
+        &self,
+        tenant: &TenantId,
+        idempotency_key: [u8; 32],
+        result_code: i32,
+        current_sequence: u64,
+        store: &mut Store,
+        limiter: &BudgetLimiter,
+    ) -> Result<bool, ApprovalOperationError> {
+        let identity = idempotency_key
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        let mut queued = self
+            .queued
+            .lock()
+            .map_err(|_| ApprovalOperationError::Registry(RegistryError::Unavailable))?;
+        let selected = queued.iter().find_map(|(reference, record)| {
+            (&record.tenant == tenant
+                && record.prepared.disclosure.idempotency_key.as_str() == identity)
+                .then_some((*reference, record.approval_id))
+        });
+        let Some((reference, approval_id)) = selected else {
+            return Ok(false);
+        };
+        let key = crate::policy::approval::released_storage_key(tenant, approval_id)
+            .map_err(ApprovalOperationError::Registry)?;
+        if !store
+            .remove_local(&key)
+            .map_err(|_| ApprovalOperationError::Registry(RegistryError::Unavailable))?
+        {
+            return Err(ApprovalOperationError::Registry(
+                RegistryError::CorruptRecord,
+            ));
+        }
+        budget::release(
+            limiter,
+            approval_id,
+            if result_code == 0 {
+                ReleaseKind::Executed
+            } else {
+                ReleaseKind::Failed
+            },
+            current_sequence,
+        )
+        .map_err(ApprovalOperationError::Reservation)?;
+        queued.remove(&reference);
+        Ok(true)
+    }
+
+    pub(crate) fn authorize_submit(
+        &self,
+        tenant: &TenantId,
+        preparation_ref: &str,
+        canonical_bytes: &[u8],
+        release_ref: Option<[u8; 32]>,
+    ) -> Result<(), ApprovalOutcome> {
+        let queued = self.queued.lock().map_err(|_| ApprovalOutcome::Conflict)?;
+        match release_ref {
+            Some(reference) => match queued.get(&reference) {
+                Some(record)
+                    if &record.tenant == tenant
+                        && record.prepared.preparation_ref.as_str() == preparation_ref
+                        && record.prepared.unsigned_canonical_bytes.as_bytes()
+                            == canonical_bytes =>
+                {
+                    Ok(())
+                }
+                _ => Err(ApprovalOutcome::Conflict),
+            },
+            None if queued.values().any(|record| {
+                &record.tenant == tenant
+                    && record.prepared.preparation_ref.as_str() == preparation_ref
+                    && record.prepared.unsigned_canonical_bytes.as_bytes() == canonical_bytes
+            }) =>
+            {
+                Err(ApprovalOutcome::Conflict)
+            }
+            None => Ok(()),
+        }
+    }
+
+    pub(crate) fn restore(&self, records: Vec<ReleasedApproval>) -> Result<(), ApprovalOutcome> {
+        let mut queued = self.queued.lock().map_err(|_| ApprovalOutcome::Conflict)?;
+        let mut restored = queued.clone();
+        for record in records {
+            if Self::reference(&record.tenant, record.approval_id, &record.prepared)
+                != record.submission_ref
+                || restored
+                    .insert(
+                        record.submission_ref,
+                        QueuedSubmission {
+                            tenant: record.tenant,
+                            approval_id: record.approval_id,
+                            prepared: record.prepared,
+                        },
+                    )
+                    .is_some()
+            {
+                return Err(ApprovalOutcome::Conflict);
+            }
+        }
+        *queued = restored;
+        Ok(())
+    }
+
     fn reference(tenant: &TenantId, approval_id: [u8; 32], prepared: &Prepared) -> [u8; 32] {
         let mut hasher = Sha256::new();
         hasher.update(b"layerx-approved-preparation-v1");
@@ -264,6 +388,13 @@ impl<'a> ApprovalService<'a> {
             approver,
             current_sequence,
         } = request;
+        if let Some(decision) = self
+            .expiry
+            .repeated(tenant, approval_id, idempotency_key)
+            .map_err(ApprovalOperationError::Durability)?
+        {
+            return Ok(decision);
+        }
         let snapshot = self
             .registry
             .get_scoped(tenant, approval_id, current_sequence)
@@ -278,7 +409,7 @@ impl<'a> ApprovalService<'a> {
         };
         let submission_ref = (intended == ApprovalOutcome::Granted)
             .then(|| ApprovalSubmissionQueue::reference(tenant, approval_id, &snapshot.prepared));
-        match self
+        let decision_record = match self
             .expiry
             .decide(
                 &snapshot,
@@ -290,7 +421,8 @@ impl<'a> ApprovalService<'a> {
             )
             .map_err(ApprovalOperationError::Durability)?
         {
-            expiry::DecisionResolution::Winner => {}
+            expiry::DecisionResolution::Winner => None,
+            expiry::DecisionResolution::WinnerPrepared(key, bytes) => Some((key, bytes)),
             expiry::DecisionResolution::Repeat(decision) => return Ok(decision),
             expiry::DecisionResolution::Conflict(winner) => {
                 return Ok(conflict(winner));
@@ -298,7 +430,7 @@ impl<'a> ApprovalService<'a> {
             expiry::DecisionResolution::Expired => {
                 return Ok(decision(ApprovalOutcome::Expired, None));
             }
-        }
+        };
         let claimed = match self
             .registry
             .claim_scoped(tenant, approval_id, current_sequence)
@@ -314,6 +446,7 @@ impl<'a> ApprovalService<'a> {
                     approver,
                     "held_preparation_changed_after_approval_hold",
                     None,
+                    None,
                 )
                 .map_err(ApprovalOperationError::Registry)?;
             return Ok(decision(ApprovalOutcome::Defective, None));
@@ -328,6 +461,9 @@ impl<'a> ApprovalService<'a> {
                     return Ok(decision(outcome, None));
                 }
             };
+        let fallback_decision_record = (!self.registry.has_durable_store())
+            .then(|| decision_record.clone())
+            .flatten();
         self.registry
             .complete_claim(
                 approval_id,
@@ -335,8 +471,14 @@ impl<'a> ApprovalService<'a> {
                 approver,
                 "approver_released_exact_preparation",
                 Some(queued_submission_ref),
+                decision_record,
             )
             .map_err(ApprovalOperationError::Registry)?;
+        if let Some((key, bytes)) = fallback_decision_record {
+            self.expiry
+                .persist_prepared_decision(key, bytes)
+                .map_err(ApprovalOperationError::Durability)?;
+        }
         debug_assert_eq!(submission_ref, Some(queued_submission_ref));
         Ok(decision(
             ApprovalOutcome::Granted,
@@ -377,6 +519,11 @@ impl<'a> ApprovalService<'a> {
             .map_err(ApprovalOperationError::Durability)?
         {
             expiry::DecisionResolution::Winner => {}
+            expiry::DecisionResolution::WinnerPrepared(_, _) => {
+                return Err(ApprovalOperationError::Durability(
+                    ApprovalExpiryError::Corrupt,
+                ))
+            }
             expiry::DecisionResolution::Repeat(decision) => return Ok(decision),
             expiry::DecisionResolution::Conflict(winner) => {
                 return Ok(conflict(winner));
@@ -410,6 +557,7 @@ impl<'a> ApprovalService<'a> {
                 approver,
                 "approver_rejected_and_released_reservation",
                 None,
+                None,
             )
             .map_err(ApprovalOperationError::Registry)?;
         Ok(decision(ApprovalOutcome::Rejected, None))
@@ -439,6 +587,7 @@ fn record(snapshot: ApprovalSnapshot) -> ApprovalRecord {
         created_at_sequence: snapshot.created_at_sequence,
         expires_at_sequence: snapshot.expires_at_sequence,
         state: snapshot.state,
+        submission_ref: snapshot.submission_ref,
         enforcement: ApprovalEnforcement::DaemonOnly,
         authority_notice: APPROVAL_ENFORCEMENT_NOTICE,
     }
