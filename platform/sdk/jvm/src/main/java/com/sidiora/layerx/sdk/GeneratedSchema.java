@@ -1936,7 +1936,7 @@ public final class GeneratedSchema {
                 Objects.requireNonNull(idempotency_key, "idempotency_key");
             }
         }
-        public static final SchemaTypes.TypedOperation<ProgramReceiptRequest, ProgramReceiptResponse> PROGRAM_RECEIPT = new SchemaTypes.TypedOperation<>(OperationCatalog.Plane.AGENT, "program.receipt", true, ProgramReceiptRequest.class, ProgramReceiptResponse.class);
+        public static final SchemaTypes.TypedOperation<ProgramReceiptRequest, ProgramReceiptResponse> PROGRAM_RECEIPT = new SchemaTypes.TypedOperation<>(OperationCatalog.Plane.AGENT, "program.receipt", false, ProgramReceiptRequest.class, ProgramReceiptResponse.class);
         public record ProgramSimulateRequest(JsonNode program_id, JsonNode calldata, AgentModels.ProgramCallBudget budget, JsonNode capabilities, JsonNode signed_activity) implements SchemaTypes.GeneratedRequest {
             public ProgramSimulateRequest {
                 Objects.requireNonNull(program_id, "program_id");

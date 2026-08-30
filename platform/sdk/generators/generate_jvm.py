@@ -149,7 +149,10 @@ def operation_specs(plane: Plane) -> list[dict[str, object]]:
             "response_fields": plane.fields(response_model, response_fallback),
             "response_model": response_model,
             "idempotency": bool(entries.get("idempotency")) or wire in mutations
-                or "idempotency_key" in request_fallback,
+                or (
+                    entries.get("method") != "GET"
+                    and "idempotency_key" in request_fallback
+                ),
         })
     return result
 

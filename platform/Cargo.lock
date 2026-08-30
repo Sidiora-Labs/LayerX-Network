@@ -1222,6 +1222,7 @@ dependencies = [
 name = "layerx-agentd"
 version = "0.1.0"
 dependencies = [
+ "getrandom 0.3.4",
  "layerx-agent-api",
  "layerx-client",
  "layerx-crypto",
@@ -1231,9 +1232,11 @@ dependencies = [
  "layerx-proof",
  "layerx-types",
  "layerx-wire",
+ "rustix",
  "serde_json",
  "sha2",
  "ureq",
+ "zeroize",
 ]
 
 [[package]]

@@ -21,6 +21,7 @@ root = "agent/crates/layerx-sdk/src"
 [files.agent-rust]
 "mirror_generated.rs" = "36c041d89f4cb23a73ea0baec0f7a15e6568763d603716b641e3d99dff2571fa"
 "operation_generated.rs" = "c4db66773d0317ee19165074ebc96147101b7be9abd01e51c8c8768e43bb297a"
+"receipt_generated.rs" = "e9d7bc01d51eaf6588595d7d9807a8d180841bc61e535c8af6985e2a79ba52f4"
 
 [output.agent-typescript]
 language = "typescript"
@@ -30,6 +31,7 @@ root = "agent/sdk/typescript/src/generated"
 "client.ts" = "8819e4be601bbaa7443c436b4a2e3b7ddf8b93d969d1948dc99fcf7e875967ca"
 "guarantees.md" = "16a010803f8a34b36a0101965f577d7884c6f05b6d5713054fb33e50ab9fff86"
 "mirror.ts" = "6f7c1968e536eec01b9a9fe91bd4f9f70fc5e9973ea0b4c908ae56af170e0b79"
+"receipt.ts" = "5ab22834d888c225291915392b0d7a3c7a79004ac56e86729fc42729e235bdf3"
 
 [output.agent-python]
 language = "python"
@@ -42,6 +44,8 @@ root = "agent/sdk/python/layerx_sdk/generated"
 "guarantees.md" = "16a010803f8a34b36a0101965f577d7884c6f05b6d5713054fb33e50ab9fff86"
 "mirror.py" = "03af926da7d418275b407896b98966ad87eea3dc1ea140afdc2376c17d575ed3"
 "mirror.pyi" = "ac018d858e019b806197a32b2b5c6b85b290018831c3fa638a20df89e3db2771"
+"receipt.py" = "de5b6405754fab76c7eff8ba90f49aa48da68fb4e660f90644e4f591648ac65e"
+"receipt.pyi" = "5922febf76f0fc2df90bb207700c6ec45eff3fadf3c5542ba2541c03bb8c1623"
 
 [output.agent-compatibility]
 language = "markdown"
@@ -65,6 +69,7 @@ root = "platform/sdk/go"
 [files.platform-go]
 "generated.go" = "fdc54d59551b10b35c8b847bc34f1502e230beb7129e0a8871340617edf18e88"
 "mirror_generated.go" = "50e24c574ac570b429db96116f52b4279e66a5e92f2fb273d847988067c45876"
+"receipt_generated.go" = "9f85988f797c7dc6a9fdb214c420718d4438a87b2df7593e5d831b7f9a97bc72"
 
 [output.platform-jvm]
 language = "jvm"
@@ -74,12 +79,12 @@ root = "platform/sdk/jvm"
 "pom.xml" = "43d9af46728bf4507ea4eaa2ba6b6cc779559085f27862b78f26d01a09e975a1"
 "src/main/java/com/sidiora/layerx/sdk/HttpProductionTransport.java" = "c9901b3857b493015aae029729ab30e785e66deaa3e3db2226b6ed06fbeea39b"
 "src/main/java/com/sidiora/layerx/sdk/GeneratedContract.java" = "c86cbd2eb19f9be5e26051dfab55ed1888a5389414ffd720149feec9cb607461"
-"src/main/java/com/sidiora/layerx/sdk/GeneratedSchema.java" = "0abae015c81b7e71e2a0063828c3e421af4f54176c56df90257fdd8d4de0e1bb"
+"src/main/java/com/sidiora/layerx/sdk/GeneratedSchema.java" = "8482e87c8d450edbf20cb86b4cd43e1231460d051af64bb86d4e8486d939a7c7"
 "src/main/java/com/sidiora/layerx/sdk/GeneratedMirror.java" = "facf45b2da6828d41371b36bc0f2119f643d7b45003dead0c9590a9b0f0b6b8f"
 "src/main/java/com/sidiora/layerx/sdk/IdempotencyKey.java" = "2cfba7826e4bb7a6f0d4af63530f43c7aece547cf9f64ff1664b781cc431f6a4"
 "src/main/java/com/sidiora/layerx/sdk/OperationCatalog.java" = "477843c32935ffbc9ecff6dd6a35b78693b059c3d29a59aa021349b4a868e8e3"
 "src/main/java/com/sidiora/layerx/sdk/PlatformSdk.java" = "6ce450c76565bea84a68704cc89a65bbafec9adb4ebb28d1d2392cd8ee97db48"
-"src/main/java/com/sidiora/layerx/sdk/PlatformSdkException.java" = "765d7b42391513b91e40a268eaf05c590202ee9640277f17fca3d1d1c68bcdf7"
+"src/main/java/com/sidiora/layerx/sdk/PlatformSdkException.java" = "a1324a3f0be42e84e44f6203b284de92936b9bae2289e4e38e038c20ba800953"
 "src/main/java/com/sidiora/layerx/sdk/ProductionClient.java" = "83fede5d0ac860acac280f5197ccefa480b68cc6f60032b8bf6a72242f44cbd4"
 "src/main/java/com/sidiora/layerx/sdk/ProductionTransport.java" = "0a9297bb04cc34b82cc969fa1535cc371b60af761ea95a04a5a831b407387f1b"
 "src/main/java/com/sidiora/layerx/sdk/ProtocolAmount.java" = "8462ed22f102ad077bc3da2947dcae180a78787708eac9c487b4940a14a5c92e"
@@ -87,7 +92,8 @@ root = "platform/sdk/jvm"
 "src/main/java/com/sidiora/layerx/sdk/SchemaErrors.java" = "90a11904638f91609e6c4ce7ca7e98244323b799799d9a6f1f5b0345d78ffa8f"
 "src/main/java/com/sidiora/layerx/sdk/SchemaTypes.java" = "2fe1eb340835d7df1ce84b8664b0f837e6010a21fcc577553e6ba821af957780"
 "src/main/java/com/sidiora/layerx/sdk/SecretBytes.java" = "c651515a3541ee6d2fbbee0c348bf480844b33124ee4a40b0a4688a3e9da5ee5"
-"src/main/java/com/sidiora/layerx/sdk/verify/LocalVerifier.java" = "6b87e79d899e4327a99b7cece31a376c025193eab2ab63a7361137bbc7480551"
+"src/main/java/com/sidiora/layerx/sdk/verify/LocalVerifier.java" = "a38325dbd7154060e115eb4961fc978104ef9a2d14544c569d962f39f5635163"
+"src/main/java/com/sidiora/layerx/sdk/verify/GeneratedReceiptContract.java" = "23368a29361e567777b2f386a2e9a76c86b5fafa7ca897aa892db76ce59f430d"
 "src/conformance/java/com/sidiora/layerx/sdk/ConformanceMain.java" = "53f616fd55957f24eb3e4dd373a1b6409776ca26d6a9ba3ffc2cc4b71c509d15"
 "src/main/kotlin/com/sidiora/layerx/sdk/LayerX.kt" = "4557618f74dd11d88c9615e915b3377f9c41fab1187a735ab36a9a3d359df4a3"
 "src/test/java/com/sidiora/layerx/sdk/GoldenVectorTest.java" = "5b00fa27be243a836f0fb57f64915904afdf47f0b4c7266074b3b31d03fe95a8"
@@ -108,6 +114,7 @@ root = "platform/sdk/swift/Sources/LayerXSDK/Generated"
 [files.platform-swift]
 "OperationCatalog.swift" = "baf30883247428756ed2c95666e5e289a06398c92323f4c989ee9bc1bdf2ec83"
 "MirrorSchema.swift" = "422548e15055091d839d085c9115343774125d83a7a6c986ce2f4803164db1a1"
+"ReceiptContract.swift" = "00482fdaf04a26a008f664472742964707e1ba5dfa7f439f85c5d67dc3ef00a6"
 
 [output.platform-dotnet]
 language = "csharp"
@@ -116,6 +123,7 @@ root = "platform/sdk/dotnet/Generated"
 [files.platform-dotnet]
 "OperationCatalog.cs" = "97f63e4305cd114d1a32fcaa4e5d933594f04797000e0bed1f6ca704cea09708"
 "MirrorSchema.cs" = "16cf74fc85cd4a93cd9b394dddc59ef3bdd73a9ab2e23ee83879ae3a529f81ce"
+"ReceiptContract.cs" = "839ed8af3a44c5eadaabefb484ca47839a9ac0ca1297369c50715cfca27cb6bf"
 
 [output.platform-portable-conformance]
 language = "json"
