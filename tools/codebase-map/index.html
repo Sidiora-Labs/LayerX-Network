@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <title>LayerX Codebase Map</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <div id="loading" class="loading" role="status">
+      <div class="loading-mark">LX</div>
+      <div>
+        <strong>Building your map</strong>
+        <span>Loading code-derived relationships…</span>
+      </div>
+    </div>
+
+    <div id="app" class="app" hidden>
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true">LX</div>
+          <div>
+            <h1>Codebase map</h1>
+            <p id="snapshot-label">LayerX protocol</p>
+          </div>
+        </div>
+
+        <label class="global-search">
+          <span aria-hidden="true">⌕</span>
+          <input id="search" type="search" autocomplete="off" spellcheck="false" placeholder="Find any file, symbol, task, route, or package…">
+          <kbd>/</kbd>
+        </label>
+
+        <div class="snapshot-state">
+          <span id="dirty-indicator" class="state-dot"></span>
+          <div>
+            <strong id="branch-label">—</strong>
+            <span id="commit-label">—</span>
+          </div>
+        </div>
+      </header>
+
+      <section id="metric-strip" class="metric-strip" aria-label="Repository coverage"></section>
+
+      <main class="workspace">
+        <aside class="rail" aria-label="Map views">
+          <nav id="view-nav" class="view-nav"></nav>
+          <div class="rail-footer">
+            <button id="fit-button" class="icon-button" type="button" title="Fit graph to screen" aria-label="Fit graph to screen">⌗</button>
+            <button id="help-button" class="icon-button" type="button" title="Keyboard and navigation help" aria-label="Open help">?</button>
+          </div>
+        </aside>
+
+        <aside class="inventory-panel">
+          <div class="panel-heading">
+            <div>
+              <span class="eyebrow">Inventory</span>
+              <h2 id="inventory-title">Systems</h2>
+            </div>
+            <span id="inventory-count" class="count-pill">0</span>
+          </div>
+          <div id="breadcrumbs" class="breadcrumbs" aria-label="Current scope"></div>
+          <div id="search-results" class="search-results" hidden></div>
+          <div id="inventory" class="inventory" role="list"></div>
+          <div class="inventory-footer">
+            <span id="inventory-note">Select an item to inspect it</span>
+          </div>
+        </aside>
+
+        <section class="graph-panel" aria-label="Interactive code graph">
+          <div class="graph-toolbar">
+            <div>
+              <span id="view-kicker" class="eyebrow">Architecture</span>
+              <h2 id="view-title">System relationships</h2>
+            </div>
+            <div class="graph-toolbar-actions">
+              <span id="render-note" class="render-note"></span>
+              <button id="back-button" class="text-button" type="button" disabled>Back</button>
+              <button id="fit-toolbar-button" class="text-button" type="button">Fit view</button>
+            </div>
+          </div>
+          <div id="canvas-shell" class="canvas-shell">
+            <canvas id="graph" tabindex="0" aria-label="Pan and zoom code relationship graph"></canvas>
+            <div class="canvas-hint">Scroll to zoom · drag empty space to pan · drag a node to arrange</div>
+            <div id="graph-empty" class="graph-empty" hidden>
+              <strong>No relationships in this scope</strong>
+              <span>Choose another item from the inventory or search the full map.</span>
+            </div>
+          </div>
+          <div id="legend" class="legend"></div>
+        </section>
+
+        <aside id="inspector" class="inspector-panel" aria-label="Selection details">
+          <div id="inspector-empty" class="inspector-empty">
+            <div class="empty-orbit" aria-hidden="true"><span></span></div>
+            <h2>Trace anything</h2>
+            <p>Select a node or inventory item to see its source, ownership, relationships, delivery state, and coverage.</p>
+          </div>
+          <div id="inspector-content" hidden></div>
+        </aside>
+      </main>
+    </div>
+
+    <dialog id="help-dialog" class="help-dialog">
+      <form method="dialog">
+        <div class="dialog-heading">
+          <div>
+            <span class="eyebrow">Navigation</span>
+            <h2>Move through the codebase</h2>
+          </div>
+          <button class="icon-button" value="close" aria-label="Close help">×</button>
+        </div>
+        <div class="help-grid">
+          <div><kbd>/</kbd><span>Search everything</span></div>
+          <div><kbd>Esc</kbd><span>Clear search or selection</span></div>
+          <div><kbd>F</kbd><span>Fit the current graph</span></div>
+          <div><kbd>←</kbd><span>Return to the previous scope</span></div>
+          <div><kbd>Wheel</kbd><span>Zoom around the pointer</span></div>
+          <div><kbd>Drag</kbd><span>Pan space or reposition a node</span></div>
+        </div>
+        <p class="dialog-note">Every edge identifies its source class. Unresolved and external references remain coverage facts; they are never promoted into invented internal relationships.</p>
+      </form>
+    </dialog>
+
+    <script type="module" src="app.js"></script>
+  </body>
+</html>

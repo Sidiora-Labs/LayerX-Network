@@ -1,0 +1,13 @@
+{
+  "name": "@layerx/codebase-map",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "generate": "node generate.mjs",
+    "serve": "node serve.mjs",
+    "check": "node --test test/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=22.5"
+  }
+}
