@@ -19,6 +19,8 @@ const STEP_UP_EVIDENCE_ROW_PREFIX: &str = "auth-stepup-evidence-";
 pub struct OperationDigest([u8; 32]);
 
 impl OperationDigest {
+    const SCHEMA_PREFIX: &'static str = "opd_";
+
     /// Wraps the canonical operation digest.
     #[must_use]
     pub const fn new(bytes: [u8; 32]) -> Self {
@@ -29,6 +31,51 @@ impl OperationDigest {
     #[must_use]
     pub const fn bytes(self) -> [u8; 32] {
         self.0
+    }
+
+    /// Parses the strict lowercase human-api representation.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a missing prefix, non-lowercase hexadecimal text, or a digest
+    /// whose decoded width is not exactly 32 bytes.
+    pub fn parse_schema(value: &str) -> Result<Self, AuthError> {
+        let encoded = value
+            .strip_prefix(Self::SCHEMA_PREFIX)
+            .ok_or(AuthError::InvalidInput("invalid operation digest"))?;
+        if encoded.len() != 64
+            || !encoded
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err(AuthError::InvalidInput("invalid operation digest"));
+        }
+        let mut bytes = [0_u8; 32];
+        for (index, pair) in encoded.as_bytes().chunks_exact(2).enumerate() {
+            bytes[index] = (hex_nibble(pair[0])? << 4) | hex_nibble(pair[1])?;
+        }
+        Ok(Self(bytes))
+    }
+
+    /// Renders the strict lowercase human-api representation.
+    #[must_use]
+    pub fn to_schema(self) -> String {
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        let mut encoded = String::with_capacity(Self::SCHEMA_PREFIX.len() + 64);
+        encoded.push_str(Self::SCHEMA_PREFIX);
+        for byte in self.0 {
+            encoded.push(char::from(HEX[usize::from(byte >> 4)]));
+            encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
+        }
+        encoded
+    }
+}
+
+fn hex_nibble(byte: u8) -> Result<u8, AuthError> {
+    match byte {
+        b'0'..=b'9' => Ok(byte - b'0'),
+        b'a'..=b'f' => Ok(byte - b'a' + 10),
+        _ => Err(AuthError::InvalidInput("invalid operation digest")),
     }
 }
 

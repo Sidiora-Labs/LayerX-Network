@@ -291,6 +291,8 @@ const MONTH_NAMES: [&str; 12] = [
 ];
 const WEEKDAY_NAMES: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
+use crate::time::rfc3339;
+
 fn civil_from_days(days: u64) -> (u64, usize, u64) {
     let shifted = days.saturating_add(719_468);
     let era = shifted / 146_097;
@@ -323,17 +325,6 @@ fn civil_from_days(days: u64) -> (u64, usize, u64) {
     (year, month_index, day)
 }
 
-pub(crate) fn rfc3339(seconds: u64) -> String {
-    let days = seconds / SECONDS_PER_DAY;
-    let remainder = seconds % SECONDS_PER_DAY;
-    let (year, month_index, day) = civil_from_days(days);
-    let month = month_index.saturating_add(1);
-    let hour = remainder / 3600;
-    let minute = remainder % 3600 / 60;
-    let second = remainder % 60;
-    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
-}
-
 pub(crate) fn rfc2822(seconds: u64) -> String {
     let days = seconds / SECONDS_PER_DAY;
     let remainder = seconds % SECONDS_PER_DAY;
@@ -348,7 +339,9 @@ pub(crate) fn rfc2822(seconds: u64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{json_escape, rfc2822, rfc3339};
+    use crate::time::rfc3339;
+
+    use super::{json_escape, rfc2822};
 
     #[test]
     fn renders_the_epoch_and_a_modern_stamp() {

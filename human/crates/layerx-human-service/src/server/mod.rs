@@ -4,6 +4,7 @@ pub mod backend;
 mod component;
 mod component_protocol;
 mod http;
+pub mod identity;
 mod limits;
 mod privileged;
 pub mod schema;
@@ -28,6 +29,7 @@ pub use component::{
     HumanComponentServer,
 };
 pub use http::{HttpConfig, Router};
+pub use identity::IdentityProjector;
 pub use limits::PrincipalLimits;
 pub use privileged::{
     AuthorizationGrantPolicy, AuthorizedSession, ComponentOperationRequest,

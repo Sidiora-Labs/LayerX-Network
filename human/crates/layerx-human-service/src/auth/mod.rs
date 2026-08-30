@@ -202,6 +202,8 @@ pub struct AssertionProof {
     pub assertion_id: String,
     /// Passkey that produced the verified signature.
     pub passkey_id: String,
+    /// Time at which the credential signature was verified.
+    pub completed_at: u64,
     /// Deadline for opening the session.
     pub expires_at: u64,
 }
@@ -279,6 +281,10 @@ impl std::fmt::Debug for OpaqueSecret {
 #[derive(Clone, Eq, PartialEq)]
 pub struct SessionGrant {
     session_id: String,
+    device: Device,
+    opened_at: u64,
+    last_active_at: u64,
+    restricted: bool,
     access_token: OpaqueSecret,
     refresh_token: OpaqueSecret,
     csrf_token: OpaqueSecret,
@@ -321,6 +327,20 @@ impl SessionGrant {
     #[must_use]
     pub const fn refresh_expires_at(&self) -> u64 {
         self.refresh_expires_at
+    }
+
+    /// Returns the exact current-session projection that accompanies these
+    /// browser secrets.
+    #[must_use]
+    pub fn session(&self) -> SessionView {
+        SessionView {
+            session_id: self.session_id.clone(),
+            device: self.device.clone(),
+            opened_at: self.opened_at,
+            last_active_at: self.last_active_at,
+            current: true,
+            restricted: self.restricted,
+        }
     }
 }
 
@@ -909,6 +929,7 @@ impl Passkeys {
         Ok(AssertionProof {
             assertion_id: assertion_id.to_owned(),
             passkey_id: stored.record.passkey_id,
+            completed_at: now,
             expires_at,
         })
     }
@@ -1379,6 +1400,10 @@ impl Passkeys {
         )?;
         Ok(SessionGrant {
             session_id,
+            device: record.device.clone(),
+            opened_at: record.opened_at,
+            last_active_at: record.last_active_at,
+            restricted: record.assurance == Assurance::FallbackRestricted,
             access_token,
             refresh_token,
             csrf_token,
@@ -1654,6 +1679,10 @@ fn rotate_session_secrets(
     record.access_expires_at = now.saturating_add(config.session_ttl_secs);
     Ok(SessionGrant {
         session_id: record.session_id.clone(),
+        device: record.device.clone(),
+        opened_at: record.opened_at,
+        last_active_at: record.last_active_at,
+        restricted: record.assurance == Assurance::FallbackRestricted,
         access_token,
         refresh_token,
         csrf_token,

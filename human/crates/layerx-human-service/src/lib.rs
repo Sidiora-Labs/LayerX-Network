@@ -16,6 +16,7 @@ pub mod server;
 pub mod security;
 pub mod store;
 pub mod support;
+mod time;
 pub mod trace;
 
 /// The immutable workspace boundary consumed by the human control plane.
