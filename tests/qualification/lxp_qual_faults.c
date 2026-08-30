@@ -408,7 +408,13 @@ lxp_result lxp_qual_fault_boundaries(void)
         for (occurrence = 1U; occurrence <= cases[i].occurrences;
              ++occurrence) {
             lxp_result status = run_boundary(cases[i].boundary, occurrence);
-            if (status != LXP_OK) return status;
+            if (status != LXP_OK) {
+                (void)fprintf(stderr,
+                              "fault boundary %u occurrence %u failed: %d\n",
+                              (unsigned)cases[i].boundary,
+                              (unsigned)occurrence, (int)status);
+                return status;
+            }
         }
     }
     return LXP_OK;

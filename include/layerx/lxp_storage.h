@@ -40,6 +40,11 @@ typedef struct lxp_log {
     uint64_t write_offset;
     uint64_t previous_record_offset;
     uint64_t next_sequence;
+    uint64_t durable_offset;
+    uint64_t durable_previous_record_offset;
+    uint64_t durable_next_sequence;
+    uint64_t durable_generation;
+    bool has_durable_marker;
 } lxp_log;
 
 uint32_t lxp_log_crc32c(const void *bytes, size_t length);

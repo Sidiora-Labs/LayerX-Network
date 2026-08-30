@@ -13,6 +13,13 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+enum {
+    LXP_LOG_DURABLE_MARKER_MAGIC = 0x4c585044,
+    LXP_LOG_DURABLE_MARKER_VERSION = 1,
+    LXP_LOG_DURABLE_MARKER_SLOT_BYTES = 64,
+    LXP_LOG_DURABLE_MARKER_BYTES = 128
+};
+
 static int valid_kind(uint8_t kind)
 {
     return kind >= (uint8_t)LXP_LOG_ACTIVITY &&
@@ -119,6 +126,97 @@ uint32_t lxp_log_crc32c(const void *bytes, size_t length)
     return ~crc;
 }
 
+static void durable_marker_encode(const lxp_log *log, uint64_t generation,
+                                  uint8_t out[LXP_LOG_DURABLE_MARKER_SLOT_BYTES])
+{
+    (void)memset(out, 0, LXP_LOG_DURABLE_MARKER_SLOT_BYTES);
+    store_u32(out, LXP_LOG_DURABLE_MARKER_MAGIC);
+    store_u32(out + 4U, LXP_LOG_DURABLE_MARKER_VERSION);
+    store_u64(out + 8U, generation);
+    store_u64(out + 16U, log->write_offset);
+    store_u64(out + 24U, log->previous_record_offset);
+    store_u64(out + 32U, log->next_sequence);
+    store_u32(out + 40U, lxp_log_crc32c(out, 40U));
+}
+
+static bool durable_marker_decode(
+    const uint8_t in[LXP_LOG_DURABLE_MARKER_SLOT_BYTES], uint64_t capacity,
+    uint64_t *generation, uint64_t *offset, uint64_t *previous,
+    uint64_t *next)
+{
+    size_t i;
+    if (load_u32(in) != LXP_LOG_DURABLE_MARKER_MAGIC ||
+        load_u32(in + 4U) != LXP_LOG_DURABLE_MARKER_VERSION ||
+        load_u32(in + 40U) != lxp_log_crc32c(in, 40U))
+        return false;
+    for (i = 44U; i < LXP_LOG_DURABLE_MARKER_SLOT_BYTES; ++i) {
+        if (in[i] != 0U) return false;
+    }
+    *generation = load_u64(in + 8U);
+    *offset = load_u64(in + 16U);
+    *previous = load_u64(in + 24U);
+    *next = load_u64(in + 32U);
+    if (*offset > capacity || (*offset == 0U && *previous != 0U) ||
+        (*offset != 0U && *previous >= *offset))
+        return false;
+    return true;
+}
+
+static lxp_result durable_marker_store(lxp_log *log, uint64_t generation)
+{
+    uint8_t encoded[LXP_LOG_DURABLE_MARKER_SLOT_BYTES];
+    uint64_t slot = generation & UINT64_C(1);
+    lxp_result status;
+    durable_marker_encode(log, generation, encoded);
+    status = write_exact(log->descriptor, encoded, sizeof(encoded),
+                         log->capacity + slot * sizeof(encoded));
+    if (status != LXP_OK || fdatasync(log->descriptor) != 0)
+        return status != LXP_OK ? status : LXP_ERR_IO;
+    log->durable_offset = log->write_offset;
+    log->durable_previous_record_offset = log->previous_record_offset;
+    log->durable_next_sequence = log->next_sequence;
+    log->durable_generation = generation;
+    return LXP_OK;
+}
+
+static lxp_result durable_marker_load(lxp_log *log, uint64_t physical_capacity)
+{
+    uint8_t slots[2][LXP_LOG_DURABLE_MARKER_SLOT_BYTES];
+    uint64_t generation[2];
+    uint64_t offset[2];
+    uint64_t previous[2];
+    uint64_t next[2];
+    bool valid[2];
+    bool marker_magic = false;
+    size_t i;
+    size_t selected;
+    lxp_result status;
+    if (physical_capacity < LXP_LOG_HEADER_BYTES +
+            LXP_LOG_DURABLE_MARKER_BYTES)
+        return LXP_OK;
+    status = read_exact(log->descriptor, slots[0], sizeof(slots),
+                        physical_capacity - LXP_LOG_DURABLE_MARKER_BYTES);
+    if (status != LXP_OK) return status;
+    for (i = 0U; i < 2U; ++i) {
+        if (load_u32(slots[i]) == LXP_LOG_DURABLE_MARKER_MAGIC)
+            marker_magic = true;
+        valid[i] = durable_marker_decode(
+            slots[i], physical_capacity - LXP_LOG_DURABLE_MARKER_BYTES,
+            &generation[i], &offset[i], &previous[i], &next[i]);
+    }
+    if (!valid[0] && !valid[1])
+        return marker_magic ? LXP_ERR_LOG_CORRUPT : LXP_OK;
+    selected = valid[0] && valid[1] ?
+        (generation[1] > generation[0] ? 1U : 0U) : (valid[1] ? 1U : 0U);
+    log->capacity = physical_capacity - LXP_LOG_DURABLE_MARKER_BYTES;
+    log->durable_generation = generation[selected];
+    log->durable_offset = offset[selected];
+    log->durable_previous_record_offset = previous[selected];
+    log->durable_next_sequence = next[selected];
+    log->has_durable_marker = true;
+    return LXP_OK;
+}
+
 lxp_result lxp_log_segment_create(lxp_log *log, const char *directory,
                                   uint64_t segment_sequence,
                                   uint64_t segment_size)
@@ -128,7 +226,8 @@ lxp_result lxp_log_segment_create(lxp_log *log, const char *directory,
     int length;
     int allocation;
     if (log == NULL || directory == NULL ||
-        segment_size < LXP_LOG_HEADER_BYTES) return LXP_ERR_NON_CANONICAL;
+        segment_size < LXP_LOG_HEADER_BYTES + LXP_LOG_DURABLE_MARKER_BYTES)
+        return LXP_ERR_NON_CANONICAL;
     length = snprintf(path, sizeof(path), "%s/%020" PRIu64 ".lxp",
                       directory, segment_sequence);
     if (length < 0 || (size_t)length >= sizeof(path)) return LXP_ERR_LENGTH_LIMIT;
@@ -142,10 +241,21 @@ lxp_result lxp_log_segment_create(lxp_log *log, const char *directory,
     }
     log->descriptor = descriptor;
     log->segment_sequence = segment_sequence;
-    log->capacity = segment_size;
+    log->capacity = segment_size - LXP_LOG_DURABLE_MARKER_BYTES;
     log->write_offset = 0U;
     log->previous_record_offset = 0U;
     log->next_sequence = 0U;
+    log->durable_offset = 0U;
+    log->durable_previous_record_offset = 0U;
+    log->durable_next_sequence = 0U;
+    log->durable_generation = 0U;
+    log->has_durable_marker = true;
+    if (durable_marker_store(log, 0U) != LXP_OK) {
+        (void)close(descriptor);
+        (void)unlink(path);
+        log->descriptor = -1;
+        return LXP_ERR_IO;
+    }
     return LXP_OK;
 }
 
@@ -166,6 +276,20 @@ lxp_result lxp_log_open(lxp_log *log, const char *path)
     log->write_offset = 0U;
     log->previous_record_offset = 0U;
     log->next_sequence = 0U;
+    log->durable_offset = 0U;
+    log->durable_previous_record_offset = 0U;
+    log->durable_next_sequence = 0U;
+    log->durable_generation = 0U;
+    log->has_durable_marker = false;
+    {
+        lxp_result status = durable_marker_load(
+            log, (uint64_t)information.st_size);
+        if (status != LXP_OK) {
+            (void)close(descriptor);
+            log->descriptor = -1;
+            return status;
+        }
+    }
     return LXP_OK;
 }
 
@@ -247,6 +371,15 @@ lxp_result lxp_log_sync(lxp_log *log)
 {
     if (log == NULL || log->descriptor < 0) return LXP_ERR_NON_CANONICAL;
     if (fdatasync(log->descriptor) != 0) return LXP_ERR_IO;
+    if (log->has_durable_marker) {
+        if (log->durable_generation == UINT64_MAX)
+            return LXP_ERR_LENGTH_LIMIT;
+        {
+            lxp_result status = durable_marker_store(
+                log, log->durable_generation + 1U);
+            if (status != LXP_OK) return status;
+        }
+    }
     lxp_fault_inject_point(LXP_FAULT_LOG_SYNCED);
     return LXP_OK;
 }
@@ -264,12 +397,15 @@ bool lxp_log_fault_point(uint32_t boundary, uint32_t abort_boundary)
 lxp_result lxp_log_durable_head(const lxp_log *log, uint64_t *global_sequence)
 {
     uint64_t offset = 0U;
+    uint64_t limit;
     uint64_t pending_sequence = 0U;
     uint64_t durable = UINT64_MAX;
     int have_activity = 0;
     if (log == NULL || global_sequence == NULL || log->descriptor < 0)
         return LXP_ERR_NON_CANONICAL;
-    while (offset + LXP_LOG_HEADER_BYTES <= log->capacity) {
+    limit = log->has_durable_marker ? log->durable_offset : log->capacity;
+    if (limit > log->capacity) return LXP_ERR_LOG_CORRUPT;
+    while (offset + LXP_LOG_HEADER_BYTES <= limit) {
         uint8_t encoded[LXP_LOG_HEADER_BYTES];
         lxp_log_record_header header;
         uint8_t *body;
@@ -281,7 +417,7 @@ lxp_result lxp_log_durable_head(const lxp_log *log, uint64_t *global_sequence)
         if (header.magic != LXP_LOG_MAGIC || !valid_kind(header.record_kind) ||
             header.reserved[0] != 0U || header.reserved[1] != 0U ||
             header.reserved[2] != 0U ||
-            (uint64_t)header.body_length > log->capacity - offset -
+            (uint64_t)header.body_length > limit - offset -
             LXP_LOG_HEADER_BYTES) return LXP_ERR_LOG_CORRUPT;
         body = header.body_length == 0U ? NULL : malloc(header.body_length);
         if (header.body_length != 0U && body == NULL) return LXP_ERR_IO;
@@ -302,6 +438,8 @@ lxp_result lxp_log_durable_head(const lxp_log *log, uint64_t *global_sequence)
         }
         offset += LXP_LOG_HEADER_BYTES + header.body_length;
     }
+    if (log->has_durable_marker && offset != limit)
+        return LXP_ERR_LOG_TRUNCATED;
     *global_sequence = durable;
     return LXP_OK;
 }

@@ -95,17 +95,18 @@ static lxp_result load_record(const lxp_log *log, uint64_t offset,
     return LXP_OK;
 }
 
-lxp_result lxp_log_scan_tail(const lxp_log *log, uint64_t *valid_end,
-                             uint64_t *last_record_offset,
-                             uint64_t *next_sequence)
+static lxp_result scan_tail_to(const lxp_log *log, uint64_t limit,
+                               uint64_t *valid_end,
+                               uint64_t *last_record_offset,
+                               uint64_t *next_sequence)
 {
     uint64_t offset = 0U;
     uint64_t last = 0U;
     uint64_t next = 0U;
     if (log == NULL || valid_end == NULL || last_record_offset == NULL ||
-        next_sequence == NULL || log->descriptor < 0)
+        next_sequence == NULL || log->descriptor < 0 || limit > log->capacity)
         return LXP_ERR_NON_CANONICAL;
-    while (offset + LXP_LOG_HEADER_BYTES <= log->capacity) {
+    while (offset + LXP_LOG_HEADER_BYTES <= limit) {
         uint8_t prefix[4];
         lxp_log_record_header header;
         uint8_t *body;
@@ -146,7 +147,16 @@ lxp_result lxp_log_scan_tail(const lxp_log *log, uint64_t *valid_end,
     *valid_end = offset;
     *last_record_offset = last;
     *next_sequence = next;
-    return offset == log->capacity ? LXP_OK : LXP_ERR_LOG_TRUNCATED;
+    return offset == limit ? LXP_OK : LXP_ERR_LOG_TRUNCATED;
+}
+
+lxp_result lxp_log_scan_tail(const lxp_log *log, uint64_t *valid_end,
+                             uint64_t *last_record_offset,
+                             uint64_t *next_sequence)
+{
+    if (log == NULL) return LXP_ERR_NON_CANONICAL;
+    return scan_tail_to(log, log->capacity, valid_end, last_record_offset,
+                        next_sequence);
 }
 
 lxp_result lxp_log_truncate_partial(lxp_log *log, uint64_t valid_end)
@@ -216,19 +226,32 @@ static lxp_result recover(lxp_log *log, lxp_log_replay_fn replay,
     uint64_t durable;
     uint64_t start;
     uint64_t recovery_end;
+    uint64_t recovered_next;
     lxp_result status;
     if (log == NULL) return LXP_ERR_NON_CANONICAL;
-    status = lxp_log_scan_tail(log, &valid_end, &last, &scanned_next);
-    if (status == LXP_ERR_LOG_TRUNCATED) {
+    status = scan_tail_to(
+        log, log->has_durable_marker ? log->durable_offset : log->capacity,
+        &valid_end, &last, &scanned_next);
+    if (status == LXP_ERR_LOG_TRUNCATED && !log->has_durable_marker) {
         status = lxp_log_truncate_partial(log, valid_end);
         if (status != LXP_OK) return status;
     } else if (status != LXP_OK) return status;
+    if (log->has_durable_marker &&
+        (valid_end != log->durable_offset ||
+         last != log->durable_previous_record_offset ||
+         scanned_next != log->durable_next_sequence))
+        return LXP_ERR_LOG_CORRUPT;
     status = lxp_log_durable_head(log, &durable);
     if (status != LXP_OK) return status;
     status = find_recovery_window(log, valid_end, durable, &start,
                                   &recovery_end, &last, complete_records);
     if (status != LXP_OK) return status;
+    recovered_next = durable == UINT64_MAX && recovery_end == valid_end ?
+                     scanned_next : durable == UINT64_MAX ? 0U :
+                     durable + 1U;
     if (valid_end != recovery_end) {
+        log->previous_record_offset = last;
+        log->next_sequence = recovered_next;
         status = lxp_log_truncate_partial(log, recovery_end);
         if (status != LXP_OK) return status;
     }
@@ -246,9 +269,7 @@ static lxp_result recover(lxp_log *log, lxp_log_replay_fn replay,
     }
     log->write_offset = recovery_end;
     log->previous_record_offset = last;
-    log->next_sequence = durable == UINT64_MAX && recovery_end == valid_end ?
-                         scanned_next : durable == UINT64_MAX ? 0U :
-                         durable + 1U;
+    log->next_sequence = recovered_next;
     return LXP_OK;
 }
 
