@@ -1845,6 +1845,31 @@ human-check-bundle:
 
 human-e2e: human-test-e2e
 
+.PHONY: qualification-runner-test human-qualify-journeys \
+	human-qualify-fabrication human-qualify-faults human-qualify-perf \
+	human-qualify platform-qualify
+
+qualification-runner-test:
+	python3 -m unittest tools.qualification.test_release_runner
+
+human-qualify-journeys:
+	python3 tools/qualification/release_runner.py $@
+
+human-qualify-fabrication:
+	python3 tools/qualification/release_runner.py $@
+
+human-qualify-faults:
+	python3 tools/qualification/release_runner.py $@
+
+human-qualify-perf:
+	python3 tools/qualification/release_runner.py $@
+
+human-qualify:
+	python3 tools/qualification/release_runner.py $@
+
+platform-qualify:
+	python3 tools/qualification/release_runner.py $@
+
 agent-test:
 	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked --workspace
 
