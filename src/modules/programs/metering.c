@@ -224,11 +224,13 @@ lxp_result lxp_programs_metering_schedule_current(
     for (version = 1U; version <= active.version; ++version) {
         history_key(version, key);
         status = kernel_record(kernel, key, sizeof(key), &historical);
-        if (status != LXP_OK || historical.version != version ||
+        if (status != LXP_OK) return status;
+        if (historical.version != version ||
             !schedule_lineage_valid(&historical) ||
-            !lxp_program_metering_schedule_available(historical.version) ||
             historical.activation_batch <= prior_activation)
-            return status == LXP_OK ? LXP_FATAL_REPLAY_DIVERGENCE : status;
+            return LXP_FATAL_REPLAY_DIVERGENCE;
+        if (!lxp_program_metering_schedule_available(historical.version))
+            return LXP_ERR_VERSION_UNSUPPORTED;
         prior_activation = historical.activation_batch;
         if (historical.activation_batch <= batch_number) {
             selected = historical;
