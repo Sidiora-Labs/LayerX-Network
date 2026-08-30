@@ -276,8 +276,10 @@ private func verifiedExecution(_ object: [String: JSONValue], state: String, ide
     let authorityObject = try objectValue(object, "authority")
     try requireFields(authorityObject, ["batch_id", "asset", "previous_state_root", "resulting_state_root", "sequencer_public_key"])
     let authority = try authorized(object["authority"])
-    guard authority.batchID == try hexData(object, "batch_id", exactBytes: 32),
-          authority.resultingStateRoot == try hexData(object, "state_root", exactBytes: 32),
+    let namedBatchID = try hexData(object, "batch_id", exactBytes: 32)
+    let namedStateRoot = try hexData(object, "state_root", exactBytes: 32)
+    guard authority.batchID == namedBatchID,
+          authority.resultingStateRoot == namedStateRoot,
           authority.sequencerPublicKey == pinnedKey else { throw programVerification() }
     let usage = try objectValue(object, "usage")
     try requireFields(usage, ["cpu_fuel", "memory_bytes", "storage_read_bytes", "storage_write_bytes",
@@ -300,10 +302,17 @@ private func verifiedExecution(_ object: [String: JSONValue], state: String, ide
     guard let receiptOutcome = verified.receipt.programOutcome else { throw programVerification() }
     try verifyTerminal(terminal, availableGraph: graph, expectedProgram: program,
         documentOutcome: outcomeDocument, protocolVersion: verified.receipt.protocolVersion, receipt: receiptOutcome)
-    let kindMatches = (outcomeKind == "completed" || outcomeKind == "legacy_completed")
-        ? receiptOutcome.terminalKind == 1 && try integer32(outcomeDocument, "code") == receiptOutcome.resultCode
-        : outcomeKind == "refused" && (receiptOutcome.terminalKind == 2 || receiptOutcome.terminalKind == 3)
-    guard verified.receiptDigest == try hexData(object, "receipt_digest", exactBytes: 32),
+    let kindMatches: Bool
+    if outcomeKind == "completed" || outcomeKind == "legacy_completed" {
+        let outcomeCode = try integer32(outcomeDocument, "code")
+        kindMatches = receiptOutcome.terminalKind == 1
+            && outcomeCode == receiptOutcome.resultCode
+    } else {
+        kindMatches = outcomeKind == "refused"
+            && (receiptOutcome.terminalKind == 2 || receiptOutcome.terminalKind == 3)
+    }
+    let namedReceiptDigest = try hexData(object, "receipt_digest", exactBytes: 32)
+    guard verified.receiptDigest == namedReceiptDigest,
           verified.receipt.globalSequence == globalSequence, verified.receipt.resultCode == resultCode,
           receiptOutcome.resultCode == resultCode, verified.receipt.moduleVersion == UInt32(moduleVersion),
           receiptOutcome.cpuFuel == cpu, receiptOutcome.memoryBytes == memory,
@@ -334,13 +343,19 @@ private func verifiedSimulation(_ value: JSONValue, expectedProgramID: Data, bin
     let authority = try objectValue(execution, "authority")
     let sequence = try decimalUInt64Field(evidence, "observed_sequence")
     let observedAt = try decimalUInt64Field(evidence, "observed_at")
+    let executionActivity = try hexData(execution, "activity_id", exactBytes: 32)
+    let authorityPrevious = try hexData(authority, "previous_state_root", exactBytes: 32)
+    let authorityResulting = try hexData(authority, "resulting_state_root", exactBytes: 32)
+    let executionStateRoot = try hexData(execution, "state_root", exactBytes: 32)
+    let authorityKey = try hexData(authority, "sequencer_public_key", exactBytes: 32)
+    let executionSequence = try decimalUInt64Field(execution, "global_sequence")
     guard sequence < UInt64.max, activity == binding.activityID,
-          activity == try hexData(execution, "activity_id", exactBytes: 32),
-          previous == try hexData(authority, "previous_state_root", exactBytes: 32),
-          hypothetical == try hexData(authority, "resulting_state_root", exactBytes: 32),
-          hypothetical == try hexData(execution, "state_root", exactBytes: 32),
-          publicKey == try hexData(authority, "sequencer_public_key", exactBytes: 32), publicKey == pinnedKey,
-          try decimalUInt64Field(execution, "global_sequence") == sequence + 1,
+          activity == executionActivity,
+          previous == authorityPrevious,
+          hypothetical == authorityResulting,
+          hypothetical == executionStateRoot,
+          publicKey == authorityKey, publicKey == pinnedKey,
+          executionSequence == sequence + 1,
           observedAt >= binding.notBefore, observedAt <= binding.notAfter, observedAt <= now,
           now - observedAt <= maximumAge, Data(SHA256.hash(data: boundaryMaterial)) == boundary else { throw programVerification() }
     var signed = Data("LayerX/agent/program-simulation-evidence/v1\0".utf8)
@@ -566,8 +581,11 @@ private func matchUsage(_ usage: TerminalUsage, _ receipt: ProgramReceiptOutcome
 private func requireRefusal(_ outcome: [String: JSONValue], expected: String, code: Int32) throws {
     guard try text(outcome, "kind") == "refused" else { throw programVerification() }
     let failure = try objectValue(outcome, "failure")
-    guard try text(failure, "kind") == expected,
-          expected != "guest_refused" || try integer32(failure, "code") == code else { throw programVerification() }
+    let failureKind = try text(failure, "kind")
+    guard failureKind == expected else { throw programVerification() }
+    if expected == "guest_refused" {
+        guard try integer32(failure, "code") == code else { throw programVerification() }
+    }
 }
 
 private func unwrapTerminal(_ encoded: Data) throws -> TerminalAttachments {

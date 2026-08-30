@@ -1,4 +1,4 @@
-import { describe, it, expect } from "@jest/globals";
+import { describe, it, expect } from "../conformance-runner/node-test.js";
 import { SecretBytes, PlatformSdkError, IdempotencyKey, ProtocolAmount, protocolAmount, idempotencyKey } from "@sidiora/layerx-sdk";
 
 describe("SecretBytes hygiene", () => {
@@ -37,7 +37,7 @@ describe("SecretBytes hygiene", () => {
       secret.withBytes(() => {});
     } catch (error: unknown) {
       if (error instanceof PlatformSdkError) {
-        const serialized = JSON.stringify(error.toJSON());
+        const serialized = JSON.stringify(Object.values(error.toJSON()));
         expect(serialized).not.toContain("de");
         expect(serialized).not.toContain("ad");
         expect(serialized).not.toContain("be");

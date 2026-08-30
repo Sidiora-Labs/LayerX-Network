@@ -1,4 +1,4 @@
-import { describe, it, expect } from "@jest/globals";
+import { describe, it, expect } from "../conformance-runner/node-test.js";
 import { ResumableStream, StreamPage, StreamCursor, streamCursor, PlatformSdkError } from "@sidiora/layerx-sdk";
 
 describe("StreamCursor hygiene", () => {

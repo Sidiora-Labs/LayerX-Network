@@ -39,7 +39,7 @@ platform-sample-install: platform-sample-preflight
 		platform/integrations/spring/example/pom.xml \
 		platform/docs/samples/first-payment-jvm/pom.xml platform/docs/samples/paid-endpoint-spring/pom.xml \
 		platform/docs/samples/mobile-payment-android/pom.xml; do \
-		mvn -q -f "$$pom" dependency:go-offline -DexcludeGroupIds=com.sidiora.layerx; \
+		mvn -q -f "$$pom" -Pconformance dependency:go-offline -DexcludeGroupIds=com.sidiora.layerx; \
 	done
 	@set -eu; \
 		sdk_lock=$$(sha256sum platform/sdk/swift/Package.resolved | awk '{print $$1}'); \
@@ -189,10 +189,11 @@ platform-verify-sdks: platform-sdk-check platform-sample-dependencies-ready plat
 	npm run build --workspace @sidiora/layerx-sdk
 	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked -p layerx-sdk --tests
 	./node_modules/.bin/tsc -p platform/sdk/conformance-runner/tsconfig.json
+	cp platform/sdk/conformance-runner/package.json build/platform-sdk-conformance/package.json
 	node --import ./platform/sdk/conformance-runner/register.mjs --test \
 		build/platform-sdk-conformance/platform/sdk/conformance/secret-hygiene.test.js \
 		build/platform-sdk-conformance/platform/sdk/conformance/streaming-resumability.test.js
-	PYTHONPATH=agent/sdk/python python3 -m pytest \
+	PYTHONPATH=agent/sdk/python python3 -m pytest --import-mode=importlib \
 		platform/sdk/conformance/secret-hygiene.test.py \
 		platform/sdk/conformance/streaming-resumability.test.py
 	sh platform/sdk/conformance/run-go.sh $(CURDIR)

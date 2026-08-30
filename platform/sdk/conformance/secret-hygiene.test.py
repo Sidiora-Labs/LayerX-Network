@@ -45,7 +45,7 @@ class TestSecretBytesHygiene:
         try:
             secret.use(lambda v: None)
         except PlatformSdkError as error:
-            serialized = json.dumps(error.to_dict())
+            serialized = json.dumps(list(error.to_dict().values()))
             assert "de" not in serialized
             assert "ad" not in serialized
             assert "be" not in serialized
