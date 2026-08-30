@@ -107,8 +107,6 @@ pub fn execute_wasm<'ctx, 'engine>(
     call_stack: &'engine mut CallStack,
     code_map: &'engine CodeMap,
     const_pool: ConstPoolView<'engine>,
-    current_func: CompiledFunc,
-    value_base: usize,
     resource_limiter: &'ctx mut ResourceLimiterRef<'ctx>,
 ) -> Result<WasmOutcome, TrapCode> {
     Executor::new(ctx, cache, value_stack, call_stack, code_map, const_pool)
@@ -180,6 +178,10 @@ struct Executor<'ctx, 'engine> {
     code_map: &'engine CodeMap,
     /// A read-only view to a pool of constant values.
     const_pool: ConstPoolView<'engine>,
+    /// The function body currently being executed.
+    current_func: CompiledFunc,
+    /// The value-stack index at which the current function's locals begin.
+    value_base: usize,
 }
 
 macro_rules! forward_call {

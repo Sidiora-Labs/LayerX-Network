@@ -717,6 +717,7 @@ dependencies = [
  "layerx-crypto",
  "layerx-programs-protocol-adapter",
  "layerx-programs-registry",
+ "layerx-programs-runtime",
  "layerx-proof",
  "layerx-types",
  "layerx-wire",
@@ -812,6 +813,7 @@ dependencies = [
  "num-bigint",
  "sha2",
  "sha3",
+ "wasm-instrument",
  "wasmi",
  "wasmparser-nostd",
 ]
@@ -823,8 +825,10 @@ dependencies = [
  "ed25519-dalek",
  "k256",
  "layerx-crypto",
+ "layerx-programs-runtime",
  "layerx-types",
  "layerx-wire",
+ "sha2",
 ]
 
 [[package]]
@@ -1004,6 +1008,10 @@ dependencies = [
  "pkg-config",
  "vcpkg",
 ]
+
+[[package]]
+name = "parity-wasm"
+version = "0.45.0"
 
 [[package]]
 name = "password-hash"
@@ -1546,10 +1554,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ccf3ec651a847eb01de73ccad15eb7d99f80485de043efb2f370cd654f4ea44b"
 
 [[package]]
+name = "wasm-instrument"
+version = "0.4.0"
+dependencies = [
+ "parity-wasm",
+]
+
+[[package]]
 name = "wasmi"
 version = "0.31.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "77a8281d1d660cdf54c76a3efa9ddd0c270cada1383a995db3ccb43d166456c7"
 dependencies = [
  "smallvec",
  "spin",

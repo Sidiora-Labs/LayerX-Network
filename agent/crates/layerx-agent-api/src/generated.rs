@@ -87,9 +87,7 @@ pub fn agent_api_compat_gate(
         match current.iter().find(|(candidate, _)| candidate == key) {
             Some((_, new_value)) if new_value == old_value => {}
             Some((_, new_value)) => {
-                return Err(format!(
-                    "breaking contract change at {key}: {old_value} -> {new_value}"
-                ));
+                return Err(format!("breaking contract change at {key}: {old_value} -> {new_value}"));
             }
             None => return Err(format!("breaking contract removal: {key}")),
         }

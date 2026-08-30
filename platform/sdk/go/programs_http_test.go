@@ -109,14 +109,14 @@ func TestProgramCallKeyAndUnknownSubmissionAreExact(t *testing.T) {
 		t.Fatalf("decode exact unknown Programs submission: %#v %v", submission, decodeError)
 	}
 	withExecution := json.RawMessage(`{"state":"unknown","activity_id":"` + activityText + `","idempotency_key":"` + keyText + `","retained_signed_activity":"010203","receipt":"00"}`)
-	if _, decodeError := decodeProgramSubmission(withExecution, nil, nil, keyText, retained, trusted); decodeError == nil || decodeError.Code != ErrorDecodeFailure {
+	if _, decodeError := decodeProgramSubmission(withExecution, nil, nil, keyText, retained, trusted); decodeError == nil || decodeError.(*SDKError).Code != ErrorDecodeFailure {
 		t.Fatalf("unknown Programs submission accepted execution evidence")
 	}
 	resolution := json.RawMessage(`{"state":"unknown","activity_id":"` + activityText + `","idempotency_key":"` + keyText + `"}`)
 	if _, decodeError := decodeProgramSubmission(resolution, nil, nil, keyText, nil, trusted); decodeError != nil {
 		t.Fatalf("receipt/activity resolution refused unknown state without retained request: %v", decodeError)
 	}
-	if _, decodeError := decodeProgramSubmission(resolution, nil, nil, keyText, retained, trusted); decodeError == nil || decodeError.Code != ErrorVerificationFailure {
+	if _, decodeError := decodeProgramSubmission(resolution, nil, nil, keyText, retained, trusted); decodeError == nil || decodeError.(*SDKError).Code != ErrorVerificationFailure {
 		t.Fatalf("submit accepted unknown state without retained signed activity")
 	}
 }

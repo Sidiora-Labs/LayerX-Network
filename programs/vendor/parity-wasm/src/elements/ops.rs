@@ -2,6 +2,8 @@ use super::{
 	BlockType, CountedList, CountedListWriter, Deserialize, Error, Serialize, Uint32, Uint64,
 	Uint8, VarInt32, VarInt64, VarUint32,
 };
+#[cfg(feature = "reference_types")]
+use super::ValueType;
 use crate::io;
 use alloc::{boxed::Box, vec::Vec};
 use core::fmt;
@@ -1732,7 +1734,7 @@ macro_rules! op {
 		let b: u8 = $byte;
 		$writer.write(&[b])?;
 	}};
-	($writer: expr, $byte: expr, $s: block) => {{
+	($writer: expr, $byte: expr, $s: expr) => {{
 		op!($writer, $byte);
 		$s;
 	}};

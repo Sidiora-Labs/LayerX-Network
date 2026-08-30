@@ -137,6 +137,10 @@ impl Deserialize for BlockType {
 			-0x02 => Ok(BlockType::Value(ValueType::I64)),
 			-0x03 => Ok(BlockType::Value(ValueType::F32)),
 			-0x04 => Ok(BlockType::Value(ValueType::F64)),
+			#[cfg(feature = "reference_types")]
+			-0x10 => Ok(BlockType::Value(ValueType::FuncRef)),
+			#[cfg(feature = "reference_types")]
+			-0x11 => Ok(BlockType::Value(ValueType::ExternRef)),
 			#[cfg(feature = "simd")]
 			-0x05 => Ok(BlockType::Value(ValueType::V128)),
 			#[cfg(feature = "multi_value")]
@@ -160,6 +164,10 @@ impl Serialize for BlockType {
 			BlockType::Value(ValueType::I64) => -0x02,
 			BlockType::Value(ValueType::F32) => -0x03,
 			BlockType::Value(ValueType::F64) => -0x04,
+			#[cfg(feature = "reference_types")]
+			BlockType::Value(ValueType::FuncRef) => -0x10,
+			#[cfg(feature = "reference_types")]
+			BlockType::Value(ValueType::ExternRef) => -0x11,
 			#[cfg(feature = "simd")]
 			BlockType::Value(ValueType::V128) => -0x05,
 			#[cfg(feature = "multi_value")]

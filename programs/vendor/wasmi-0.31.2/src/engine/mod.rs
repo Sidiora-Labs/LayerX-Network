@@ -746,9 +746,7 @@ impl<'engine> EngineExecutor<'engine> {
             };
             match outcome {
                 WasmOutcome::Return => {
-                    let terminal_instance = *self.stack.frames.peek()
-                        .map(FuncFrame::instance)
-                        .ok_or_else(|| TaggedTrap::Wasm(TrapCode::UnreachableCodeReached.into()))?;
+                    let terminal_instance = *cache.instance();
                     let charge = ctx.store.inner.terminal_observation_charge(terminal_instance, self.stack.values.entries().len())
                         .map_err(|_| TaggedTrap::Wasm(TrapCode::UnreachableCodeReached.into()))?;
                     if let Some(charge) = charge {

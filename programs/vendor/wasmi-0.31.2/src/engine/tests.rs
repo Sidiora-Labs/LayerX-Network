@@ -9,7 +9,9 @@ use crate::{
         DropKeep,
     },
     Engine,
+    Linker,
     Module,
+    Store,
 };
 
 /// Converts the `wat` string source into `wasm` encoded byte.
@@ -199,6 +201,31 @@ where
 
 fn drop_keep(drop: usize, keep: usize) -> DropKeep {
     DropKeep::new(drop, keep).unwrap()
+}
+
+#[test]
+fn executes_root_wasm_return() {
+    let wasm = wat2wasm(
+        r#"
+        (module
+            (func (export "call") (result i32)
+                i32.const 7
+            )
+        )
+    "#,
+    );
+    let engine = Engine::default();
+    let module = Module::new(&engine, &mut &wasm[..]).unwrap();
+    let mut store = Store::new(&engine, ());
+    let instance = Linker::new(&engine)
+        .instantiate(&mut store, &module)
+        .unwrap()
+        .start(&mut store)
+        .unwrap();
+    let call = instance
+        .get_typed_func::<(), i32>(&store, "call")
+        .unwrap();
+    assert_eq!(call.call(&mut store, ()).unwrap(), 7);
 }
 
 #[test]
