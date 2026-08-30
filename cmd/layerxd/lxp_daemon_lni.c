@@ -30,6 +30,8 @@ enum {
     LNI_SUBMIT_RESPONSE = 4,
     LNI_RECEIPT_LOOKUP_REQUEST = 5,
     LNI_RECEIPT_LOOKUP_RESPONSE = 6,
+    LNI_BATCH_HEADER_REQUEST = 12,
+    LNI_BATCH_HEADER_RESPONSE = 13,
     LNI_ERROR_RESPONSE = 25,
     LNI_PREPARATION_STATE_REQUEST = 26,
     LNI_PREPARATION_STATE_RESPONSE = 27,
@@ -461,15 +463,20 @@ static uint8_t role_tag(lxp_daemon_role_kind role)
     }
 }
 
+static lxp_result receipt_refusal(int descriptor, uint32_t maximum,
+                                  uint64_t correlation_id, lxp_result status,
+                                  int64_t deadline);
+
 static lxp_result send_node_info(lxp_daemon_lni_server *server,
                                  int descriptor, uint64_t correlation_id,
                                  int64_t deadline)
 {
     static const char *sequencer_capabilities[] = {
-        "node_info", "preparation_state", "receipt_lookup", "submit"
+        "batch_header", "node_info", "preparation_state", "receipt_lookup",
+        "submit"
     };
     static const char *reader_capabilities[] = {
-        "node_info", "receipt_lookup"
+        "batch_header", "node_info", "receipt_lookup"
     };
     const char *const *capabilities =
         server->daemon->config.role == LXP_DAEMON_SEQUENCER ?
@@ -517,6 +524,77 @@ static lxp_result send_node_info(lxp_daemon_lni_server *server,
         status = send_envelope(descriptor, server->frame_bytes,
                                LNI_NODE_INFO_RESPONSE, correlation_id,
                                payload, cursor, NULL, 0U, deadline);
+    return status;
+}
+
+static lxp_result send_batch_header(lxp_daemon_lni_server *server,
+                                    int descriptor,
+                                    const lni_envelope *request,
+                                    int64_t deadline)
+{
+    lxp_daemon_receipt_evidence evidence;
+    lxp_batch_header header;
+    uint8_t proof[146];
+    uint64_t record_offset = 0U;
+    uint64_t selected;
+    bool present = false;
+    bool found = false;
+    size_t mark;
+    lxp_result status = LXP_OK;
+    if (request->proof_length != 0U || request->payload_length != 10U ||
+        load_u16(request->payload) != 1U ||
+        load_u64(request->payload + 2U) == 0U)
+        return send_refusal(descriptor, server->frame_bytes,
+                            request->correlation_id, 1U,
+                            LXP_ERR_MALFORMED_ENVELOPE, deadline);
+    selected = load_u64(request->payload + 2U);
+    if (pthread_mutex_lock(&server->owner->mutex) != 0) return LXP_ERR_IO;
+    mark = lxp_arena_mark(server->owner->scratch);
+    while (status == LXP_OK && !found) {
+        status = lxp_daemon_receipt_authority_scan(
+            server->owner->receipt_authority, &record_offset,
+            server->owner->scratch, &evidence, &present);
+        if (status != LXP_OK || !present) break;
+        status = lxp_batch_header_decode(evidence.canonical_header.bytes,
+                                         evidence.canonical_header.length,
+                                         &header);
+        if (status == LXP_OK && header.batch_number == selected) found = true;
+        if (!found) {
+            (void)lxp_arena_reset(server->owner->scratch, mark);
+            mark = lxp_arena_mark(server->owner->scratch);
+        }
+    }
+    if (status == LXP_OK && !found) {
+        status = send_envelope(descriptor, server->frame_bytes,
+                               LNI_BATCH_HEADER_RESPONSE,
+                               request->correlation_id, NULL, 0U, NULL, 0U,
+                               deadline);
+    } else if (status == LXP_OK) {
+        store_u16(proof, 1U);
+        (void)memcpy(proof + 2U,
+                     server->owner->receipt_authority->authorization.sequencer_id,
+                     32U);
+        (void)memcpy(proof + 34U,
+                     server->owner->receipt_authority->authorization.public_key,
+                     32U);
+        store_u64(proof + 66U,
+                  server->owner->receipt_authority->authorization.first_batch_number);
+        store_u64(proof + 74U,
+                  server->owner->receipt_authority->authorization.last_batch_number);
+        (void)memcpy(proof + 82U, evidence.header_signature, 64U);
+        status = send_envelope(descriptor, server->frame_bytes,
+                               LNI_BATCH_HEADER_RESPONSE,
+                               request->correlation_id,
+                               evidence.canonical_header.bytes,
+                               evidence.canonical_header.length,
+                               proof, sizeof(proof), deadline);
+    } else {
+        status = receipt_refusal(descriptor, server->frame_bytes,
+                                 request->correlation_id, status, deadline);
+    }
+    (void)lxp_arena_reset(server->owner->scratch, mark);
+    if (pthread_mutex_unlock(&server->owner->mutex) != 0 && status == LXP_OK)
+        status = LXP_FATAL_INVARIANT;
     return status;
 }
 
@@ -935,6 +1013,8 @@ static lxp_result serve_connection(lxp_daemon_lni_server *server,
             status = send_submit(server, descriptor, &request, deadline);
         } else if (request.tag == LNI_RECEIPT_LOOKUP_REQUEST) {
             status = send_receipt(server, descriptor, &request, deadline);
+        } else if (request.tag == LNI_BATCH_HEADER_REQUEST) {
+            status = send_batch_header(server, descriptor, &request, deadline);
         } else if (request.tag == LNI_PREPARATION_STATE_REQUEST) {
             status = send_preparation_state(
                 server, descriptor, &request, deadline);

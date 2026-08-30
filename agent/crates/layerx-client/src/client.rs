@@ -14,6 +14,7 @@ use crate::availability::{
     fetch, AvailabilitySelector, FetchContext, FetchError, FetchOutcome, Progress, Provider,
     ProviderSet,
 };
+use crate::batch::{self, BatchHeaderError, SignedBatchHeader};
 use crate::head::{Head, HeadError, HeadTracker};
 use crate::lni::handshake::{perform, Handshake, HandshakeConfig, HandshakeError};
 use crate::lni::preparation::{
@@ -329,6 +330,32 @@ impl Client {
                 correlation_id,
                 authorised_batch,
             },
+        )
+    }
+
+    /// Retrieves and independently verifies one canonical signed batch header.
+    pub fn batch_header(
+        &mut self,
+        batch_number: u64,
+        correlation_id: u64,
+    ) -> Result<SignedBatchHeader, BatchHeaderError> {
+        if !self
+            .handshake
+            .capabilities()
+            .contains(Capability::BatchHeader)
+        {
+            return Err(BatchHeaderError::UnavailableCapability);
+        }
+        let transport = self
+            .transport
+            .as_mut()
+            .ok_or(BatchHeaderError::Disconnected)?;
+        batch::lookup(
+            transport,
+            self.handshake.node().interface_version,
+            batch_number,
+            correlation_id,
+            self.handshake.node().authorised_sequencer_key,
         )
     }
 
