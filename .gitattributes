@@ -18,4 +18,4 @@ Makefile text eol=lf
 *.lxv binary
 *.vsix binary
 
-programs/vendor/** -text -eol
+programs/vendor/** -text -eol whitespace=-blank-at-eol,-blank-at-eof,-space-before-tab conflict-marker-size=255
