@@ -1061,11 +1061,16 @@ lxp_result layerx_programs_call_terminal_publish(uint64_t token)
                      sizeof(outcome.occupancy_transfer_root));
     }
     (void)memcpy(outcome.call_graph_root, graph_root, sizeof(graph_root));
-    outcome.call_graph_payload = (lxp_byte_span){ value->terminal.graph,
-                                                 value->terminal.graph_length };
     (void)memcpy(outcome.terminal_payload_root, terminal_root, sizeof(terminal_root));
-    outcome.terminal_payload = (lxp_byte_span){ value->terminal.terminal,
-                                                value->terminal.terminal_length };
+    if (value->ctx->kernel->journal != NULL &&
+        value->ctx->kernel->journal->open) {
+        outcome.call_graph_payload = (lxp_byte_span){
+            value->terminal.graph, value->terminal.graph_length
+        };
+        outcome.terminal_payload = (lxp_byte_span){
+            value->terminal.terminal, value->terminal.terminal_length
+        };
+    }
     if (outcome.terminal_kind != LXP_PROGRAM_TERMINAL_SUCCESS)
         return lxp_ctx_bind_program_outcome(value->ctx, &outcome);
     (void)memcpy(outcome.transfer_root, value->terminal.transfer_root, 32U);

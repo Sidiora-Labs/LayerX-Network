@@ -14,7 +14,7 @@ static lxp_result occupancy_parameters(
     const lx_programs_transfer_runtime *runtime =
         (const lx_programs_transfer_runtime *)context;
     if (runtime == NULL || schedule == NULL || asset_id == NULL ||
-        runtime->fee_schedule.version != version)
+        (version != 0U && runtime->fee_schedule.version != version))
         return LXP_ERR_VERSION_UNSUPPORTED;
     *schedule = runtime->fee_schedule;
     (void)memcpy(asset_id, runtime->occupancy_asset_id, 32U);
@@ -26,7 +26,10 @@ enum {
                        LX_PROGRAMS_CALL_BUDGET_FIELDS * 8,
     DEPLOY_FIXED_BYTES = 108,
     UPGRADE_FIXED_BYTES = 110,
-    INTERFACE_MAX_FIXTURE_BYTES = 256
+    INTERFACE_MAX_FIXTURE_BYTES = 256,
+    INTERFACE_CAPABILITIES_NONE = 0,
+    INTERFACE_CAPABILITIES_STORAGE_READ = 1,
+    INTERFACE_CAPABILITIES_STAGED_TERMINAL = 2
 };
 
 static void write_u16(uint8_t *out, uint16_t value)
@@ -157,7 +160,7 @@ static size_t staged_terminal_module(uint8_t *out, bool resource)
     append_name(section, &length, "event_emit"); section[length++] = 0U; section[length++] = 0U;
     append_name(section, &length, "layerx_v1");
     append_name(section, &length, "transfer_402"); section[length++] = 0U; section[length++] = 1U;
-    append_name(section, &length, "layerx_v2_candidate");
+    append_name(section, &length, "layerx_v2");
     append_name(section, &length, "refusal_write"); section[length++] = 0U; section[length++] = 2U;
     append_section(out, &cursor, 2U, section, length);
     { static const uint8_t functions[] = {2U, 3U, 4U};
@@ -208,7 +211,7 @@ static size_t candidate_module(uint8_t *out, const uint8_t *entry,
 {
     static const uint8_t header[] = {0U, 0x61U, 0x73U, 0x6dU, 1U, 0U, 0U, 0U};
     static const uint8_t types[] = {
-        1U, 14U, 2U, 0x60U, 1U, 0x7fU, 1U, 0x7fU,
+        1U, 12U, 2U, 0x60U, 1U, 0x7fU, 1U, 0x7fU,
         0x60U, 2U, 0x7fU, 0x7fU, 1U, 0x7fU
     };
     static const uint8_t functions[] = {3U, 3U, 2U, 0U, 1U};
@@ -254,7 +257,7 @@ static size_t call_payload_with_access(
     const uint8_t *capabilities, size_t capabilities_length,
     const uint8_t *access_declaration, size_t access_declaration_length)
 {
-    static const uint8_t entrypoint[] = "run";
+    static const uint8_t entrypoint[] = "layerx_call";
     const uint64_t budget[LX_PROGRAMS_CALL_BUDGET_FIELDS] = {
         1000000U, 1048576U, 1048576U, 1048576U, 64U, 1024U, 64U
     };
@@ -324,7 +327,7 @@ static size_t staged_call_payload(uint8_t *out, const uint8_t program_id[32])
 
 static int malformed_call_payloads(void)
 {
-    uint8_t arena_bytes[8192];
+    static uint8_t arena_bytes[LXP_MAX_ACTIVITY_BYTES + 4096U];
     uint8_t payload[CALL_FIXED_BYTES + LX_PROGRAMS_MAX_ENTRYPOINT_BYTES + 64U];
     uint8_t program_id[32];
     lxp_arena arena;
@@ -339,6 +342,8 @@ static int malformed_call_payloads(void)
     length = call_payload(payload, program_id);
     if (lxp_state_store_init(&state, 0U) != LXP_OK ||
         lxp_kernel_create(&kernel, &state, &journal, &parameters, 0U) != LXP_OK ||
+        lxp_kernel_register_module(&kernel, programs_module_registration()) !=
+            LXP_OK ||
         lxp_arena_init(&arena, arena_bytes, sizeof(arena_bytes)) != LXP_OK ||
         lxp_module_ctx_init(&ctx, &kernel, LXP_MODULE_PROGRAMS, 1U, 0U, 1U,
                             1000000U, &arena, false) != LXP_OK)
@@ -349,46 +354,55 @@ static int malformed_call_payloads(void)
                                  &decoded) != LXP_ERR_TRUNCATED)
         return 1;
     payload[length] = 0U;
-    if (lxp_programs_call_decode(&ctx, payload, length + 1U, &decoded) !=
+    if (lxp_arena_reset(&arena, 0U) != LXP_OK ||
+        lxp_programs_call_decode(&ctx, payload, length + 1U, &decoded) !=
         LXP_ERR_NON_CANONICAL)
         return 1;
     (void)memset(payload, 0, 32U);
-    if (lxp_programs_call_decode(&ctx, payload, length, &decoded) !=
+    if (lxp_arena_reset(&arena, 0U) != LXP_OK ||
+        lxp_programs_call_decode(&ctx, payload, length, &decoded) !=
         LXP_ERR_NON_CANONICAL)
         return 1;
     length = call_payload(payload, program_id);
     write_u16(payload + 32U, LX_PROGRAMS_ABI_VERSION + 1U);
-    if (lxp_programs_call_decode(&ctx, payload, length, &decoded) !=
-        LXP_ERR_NON_CANONICAL)
+    if (lxp_arena_reset(&arena, 0U) != LXP_OK ||
+        lxp_programs_call_decode(&ctx, payload, length, &decoded) !=
+        LXP_ERR_VERSION_UNSUPPORTED)
         return 1;
     length = call_payload(payload, program_id);
     write_u16(payload + 34U, 0U);
-    if (lxp_programs_call_decode(&ctx, payload, length, &decoded) !=
+    if (lxp_arena_reset(&arena, 0U) != LXP_OK ||
+        lxp_programs_call_decode(&ctx, payload, length, &decoded) !=
         LXP_ERR_NON_CANONICAL)
         return 1;
     length = call_payload(payload, program_id);
     payload[CALL_FIXED_BYTES] = (uint8_t)'/';
-    if (lxp_programs_call_decode(&ctx, payload, length, &decoded) !=
+    if (lxp_arena_reset(&arena, 0U) != LXP_OK ||
+        lxp_programs_call_decode(&ctx, payload, length, &decoded) !=
         LXP_ERR_NON_CANONICAL)
         return 1;
     length = call_payload(payload, program_id);
     write_u32(payload + 36U, LX_PROGRAMS_MAX_CALLDATA_BYTES + 1U);
-    if (lxp_programs_call_decode(&ctx, payload, length, &decoded) !=
+    if (lxp_arena_reset(&arena, 0U) != LXP_OK ||
+        lxp_programs_call_decode(&ctx, payload, length, &decoded) !=
         LXP_ERR_NON_CANONICAL)
         return 1;
     length = call_payload(payload, program_id);
     write_u16(payload + 40U, LX_PROGRAMS_MAX_CAPABILITY_BYTES);
-    if (lxp_programs_call_decode(&ctx, payload, length, &decoded) !=
+    if (lxp_arena_reset(&arena, 0U) != LXP_OK ||
+        lxp_programs_call_decode(&ctx, payload, length, &decoded) !=
         LXP_ERR_NON_CANONICAL)
         return 1;
     length = call_payload(payload, program_id);
     write_u32(payload + 42U, LX_PROGRAMS_MAX_ACCESS_DECLARATION_BYTES + 1U);
-    if (lxp_programs_call_decode(&ctx, payload, length, &decoded) !=
+    if (lxp_arena_reset(&arena, 0U) != LXP_OK ||
+        lxp_programs_call_decode(&ctx, payload, length, &decoded) !=
         LXP_ERR_NON_CANONICAL)
         return 1;
     length = call_payload(payload, program_id);
     write_u32(payload + 46U, LX_PROGRAMS_MAX_RESPONSE_BYTES + 1U);
-    if (lxp_programs_call_decode(&ctx, payload, length, &decoded) !=
+    if (lxp_arena_reset(&arena, 0U) != LXP_OK ||
+        lxp_programs_call_decode(&ctx, payload, length, &decoded) !=
         LXP_ERR_NON_CANONICAL)
         return 1;
     return lxp_state_store_destroy(&state) == LXP_OK ? 0 : 1;
@@ -399,7 +413,7 @@ static int maximum_capability_transport_only_boundary(void)
     static uint8_t payload[CALL_FIXED_BYTES + 1U +
                            LX_PROGRAMS_MAX_CAPABILITY_BYTES + 128U];
     static uint8_t capability_transport[LX_PROGRAMS_MAX_CAPABILITY_BYTES];
-    uint8_t arena_bytes[8192];
+    static uint8_t arena_bytes[LXP_MAX_ACTIVITY_BYTES + 4096U];
     uint8_t program_id[32];
     lxp_arena arena;
     lxp_state_store state;
@@ -418,6 +432,8 @@ static int maximum_capability_transport_only_boundary(void)
     if (LX_PROGRAMS_MAX_CAPABILITY_BYTES != UINT16_MAX ||
         lxp_state_store_init(&state, 0U) != LXP_OK ||
         lxp_kernel_create(&kernel, &state, &journal, &parameters, 0U) != LXP_OK ||
+        lxp_kernel_register_module(&kernel, programs_module_registration()) !=
+            LXP_OK ||
         lxp_arena_init(&arena, arena_bytes, sizeof(arena_bytes)) != LXP_OK ||
         lxp_module_ctx_init(&ctx, &kernel, LXP_MODULE_PROGRAMS, 1U, 0U, 1U,
                             1000000U, &arena, false) != LXP_OK)
@@ -433,7 +449,8 @@ static int maximum_capability_transport_only_boundary(void)
 }
 
 static size_t interface_payload(uint8_t *out, const uint8_t code_hash[32],
-                                uint16_t abi_version)
+                                uint16_t abi_version,
+                                uint8_t capability_profile)
 {
     static const uint8_t domain[] = "LayerX/program-interface/v1";
     size_t offset = 0U;
@@ -459,9 +476,28 @@ static size_t interface_payload(uint8_t *out, const uint8_t code_hash[32],
     out[offset++] = 0x20U;
     write_u32(out + offset, 64U);
     offset += 4U;
-    write_u16(out + offset, 1U);
-    offset += 2U;
-    out[offset++] = 0U;
+    if (capability_profile == INTERFACE_CAPABILITIES_NONE) {
+        write_u16(out + offset, 0U);
+        offset += 2U;
+    } else if (capability_profile ==
+               INTERFACE_CAPABILITIES_STORAGE_READ) {
+        write_u16(out + offset, 1U);
+        offset += 2U;
+        out[offset++] = 0U;
+    } else {
+        write_u16(out + offset, 3U);
+        offset += 2U;
+        out[offset++] = 1U;
+        out[offset++] = 4U;
+        out[offset++] = 6U;
+        (void)memset(out + offset, 9, 32U);
+        offset += 32U;
+        (void)memset(out + offset, 10, 32U);
+        offset += 32U;
+        (void)memset(out + offset, 0, 16U);
+        out[offset + 15U] = 1U;
+        offset += 16U;
+    }
     write_u16(out + offset, 0U);
     offset += 2U;
     write_u16(out + offset, 0U);
@@ -470,7 +506,8 @@ static size_t interface_payload(uint8_t *out, const uint8_t code_hash[32],
 
 static size_t deploy_payload(uint8_t *out, const uint8_t program_id[32],
                              const uint8_t authority[32], const uint8_t *wasm,
-                             size_t wasm_length, uint8_t code_hash[32])
+                             size_t wasm_length, uint8_t code_hash[32],
+                             uint8_t capability_profile)
 {
     size_t interface_length;
     (void)lxp_hash_sha256(wasm, wasm_length, code_hash);
@@ -482,7 +519,8 @@ static size_t deploy_payload(uint8_t *out, const uint8_t program_id[32],
     (void)memcpy(out + 68U, code_hash, 32U);
     write_u32(out + 100U, (uint32_t)wasm_length);
     interface_length = interface_payload(out + DEPLOY_FIXED_BYTES, code_hash,
-                                         LX_PROGRAMS_ABI_VERSION);
+                                         LX_PROGRAMS_ABI_VERSION,
+                                         capability_profile);
     write_u32(out + 104U, (uint32_t)interface_length);
     (void)memcpy(out + DEPLOY_FIXED_BYTES + interface_length, wasm,
                  wasm_length);
@@ -491,20 +529,23 @@ static size_t deploy_payload(uint8_t *out, const uint8_t program_id[32],
 
 static size_t upgrade_payload(uint8_t *out, const uint8_t program_id[32],
                               const uint8_t old_hash[32], const uint8_t *wasm,
-                              size_t wasm_length, uint8_t new_hash[32])
+                              size_t wasm_length, uint8_t new_hash[32],
+                              uint16_t abi_version,
+                              uint8_t capability_profile, bool breaking)
 {
     size_t interface_length;
     (void)lxp_hash_sha256(wasm, wasm_length, new_hash);
     (void)memcpy(out, program_id, 32U);
-    write_u16(out + 32U, LX_PROGRAMS_ABI_VERSION);
-    out[34] = 0U;
+    write_u16(out + 32U, abi_version);
+    out[34] = breaking ? 2U : 0U;
     out[35] = 0U;
     (void)memcpy(out + 36U, old_hash, 32U);
     (void)memcpy(out + 68U, new_hash, 32U);
     write_u16(out + 100U, 0U);
     write_u32(out + 102U, (uint32_t)wasm_length);
     interface_length = interface_payload(out + UPGRADE_FIXED_BYTES, new_hash,
-                                         LX_PROGRAMS_ABI_VERSION);
+                                         abi_version,
+                                         capability_profile);
     write_u32(out + 106U, (uint32_t)interface_length);
     (void)memcpy(out + UPGRADE_FIXED_BYTES + interface_length, wasm,
                  wasm_length);
@@ -516,7 +557,8 @@ static size_t reference_deploy_payload(
     const uint8_t *wasm, size_t wasm_length, uint8_t code_hash[32])
 {
     size_t length = deploy_payload(out, program_id, authority, wasm,
-                                   wasm_length, code_hash);
+                                   wasm_length, code_hash,
+                                   INTERFACE_CAPABILITIES_STORAGE_READ);
     write_u16(out + 32U, LX_PROGRAMS_ACCOUNT_ABI_VERSION);
     return length;
 }
@@ -556,8 +598,8 @@ static int call_access_declaration_is_activity_bound(void)
     uint8_t mutation[sizeof(absent_access)];
     uint8_t program_id[32];
     uint8_t authority[32];
-    uint8_t original_arena_bytes[2048];
-    uint8_t mutated_arena_bytes[2048];
+    static uint8_t original_arena_bytes[LXP_MAX_ACTIVITY_BYTES];
+    static uint8_t mutated_arena_bytes[LXP_MAX_ACTIVITY_BYTES];
     uint8_t original_id[32];
     uint8_t mutated_id[32];
     lxp_activity original_activity;
@@ -636,7 +678,7 @@ static int deploy_and_upgrade_persist_exact_artifacts(void)
     uint8_t actor_id[32];
     uint8_t treasury_id[32];
     uint8_t fee_asset[32] = {9U};
-    static uint8_t arena_bytes[LXP_MAX_ACTIVITY_BYTES + 4096U];
+    static uint8_t arena_bytes[2U * LXP_MAX_ACTIVITY_BYTES + 4096U];
     lxp_arena arena;
     lxp_state_store state;
     lxp_state_journal journal;
@@ -700,17 +742,18 @@ static int deploy_and_upgrade_persist_exact_artifacts(void)
     runtime.resolve_occupancy_parameters = occupancy_parameters;
     runtime.occupancy_parameter_context = &runtime;
     payload_length = deploy_payload(payload, program_id, authority.principal,
-                                    wasm, wasm_length, code_hash);
+                                    wasm, wasm_length, code_hash,
+                                    INTERFACE_CAPABILITIES_NONE);
     fill_activity(&activity, LX_PROGRAMS_DEPLOY, payload, payload_length,
                   did, sizeof(did) - 1U, primary_key);
     fees.version = 1U;
     fees.multiplier_basis_points = 10000U;
-    if (lxp_state_store_init(&state, 0U) != LXP_OK ||
+    if (lxp_state_store_init(&state, 1U) != LXP_OK ||
         lxp_identity_register(&identities, did, sizeof(did) - 1U,
                               primary_key, &identity) != LXP_OK ||
         lxp_kernel_create(&kernel, &state, &journal, &parameters, 0U) != LXP_OK ||
         install_metering_v1(&kernel) != LXP_OK ||
-        lxp_kernel_register_module(&kernel, programs_module_registration()) !=
+        lxp_kernel_register_module(&kernel, programs_module_registration_v2()) !=
             LXP_OK ||
         lxp_kernel_bind_module_runtime(&kernel, LXP_MODULE_PROGRAMS, &runtime) !=
             LXP_OK ||
@@ -723,7 +766,7 @@ static int deploy_and_upgrade_persist_exact_artifacts(void)
     execution.batch_timestamp_ms = 10U;
     execution.maximum_timestamp_window = 100U;
     execution.global_sequence = 1U;
-    execution.recorded_module_version = LX_PROGRAMS_ABI_VERSION;
+    execution.recorded_module_version = LX_PROGRAMS_ACCOUNT_ABI_VERSION;
     execution.parameter_version = 1U;
     execution.signature_valid = true;
     execution.identities = &identities;
@@ -735,7 +778,7 @@ static int deploy_and_upgrade_persist_exact_artifacts(void)
             LXP_OK ||
         receipt.result_code != LXP_OK ||
         receipt.module_id != LXP_MODULE_PROGRAMS ||
-        receipt.module_version != LX_PROGRAMS_ABI_VERSION ||
+        receipt.module_version != LX_PROGRAMS_ACCOUNT_ABI_VERSION ||
         receipt.effects.count != 1U ||
         receipt.effects.effects[0].event_type != LX_PROGRAMS_EVENT_DEPLOYED ||
         receipt.effects.effects[0].body_length != 32U ||
@@ -789,7 +832,9 @@ static int deploy_and_upgrade_persist_exact_artifacts(void)
                  receipt.program_outcome.terminal_payload_root, 32U);
     payload_length = upgrade_payload(payload, program_id, code_hash,
                                      upgraded_wasm, upgraded_wasm_length,
-                                     upgraded_hash);
+                                     upgraded_hash,
+                                     LX_PROGRAMS_ABI_VERSION,
+                                     INTERFACE_CAPABILITIES_NONE, false);
     fill_activity(&activity, LX_PROGRAMS_UPGRADE, payload, payload_length,
                   did, sizeof(did) - 1U, primary_key);
     activity.account_sequence = 2U;
@@ -801,7 +846,7 @@ static int deploy_and_upgrade_persist_exact_artifacts(void)
             LXP_OK ||
         receipt.result_code != LXP_OK ||
         receipt.module_id != LXP_MODULE_PROGRAMS ||
-        receipt.module_version != LX_PROGRAMS_ABI_VERSION ||
+        receipt.module_version != LX_PROGRAMS_ACCOUNT_ABI_VERSION ||
         receipt.effects.count != 1U ||
         receipt.effects.effects[0].event_type != LX_PROGRAMS_EVENT_UPGRADED ||
         receipt.effects.effects[0].body_length != 64U ||
@@ -824,7 +869,8 @@ static int deploy_and_upgrade_persist_exact_artifacts(void)
                   did, sizeof(did) - 1U, primary_key);
     activity.account_sequence = 3U;
     activity.idempotency_key[31] = 4U;
-    activity.fee_limit = (lxp_u128){0U, UINT64_MAX};
+    activity.fee_limit = actor->balance;
+    execution.fee_balance = actor->balance;
     execution.global_sequence = 4U;
     actor_before = actor->balance;
     treasury_before = treasury->balance;
@@ -844,7 +890,10 @@ static int deploy_and_upgrade_persist_exact_artifacts(void)
         return 1;
     payload_length = upgrade_payload(payload, program_id, upgraded_hash,
                                      failure_wasm, failure_wasm_length,
-                                     failure_hash);
+                                     failure_hash,
+                                     LX_PROGRAMS_ACCOUNT_ABI_VERSION,
+                                     INTERFACE_CAPABILITIES_STAGED_TERMINAL,
+                                     true);
     fill_activity(&activity, LX_PROGRAMS_UPGRADE, payload, payload_length,
                   did, sizeof(did) - 1U, primary_key);
     activity.account_sequence = 4U;
@@ -854,12 +903,14 @@ static int deploy_and_upgrade_persist_exact_artifacts(void)
         lxp_kernel_execute_activity(&kernel, &activity, &execution, &receipt) !=
             LXP_OK || receipt.result_code != LXP_OK)
         return 1;
-    payload_length = call_payload(call, program_id);
+    payload_length = staged_call_payload(call, program_id);
+    write_u16(call + 32U, LX_PROGRAMS_ACCOUNT_ABI_VERSION);
     fill_activity(&activity, LX_PROGRAMS_CALL, call, payload_length,
                   did, sizeof(did) - 1U, primary_key);
     activity.account_sequence = 5U;
     activity.idempotency_key[31] = 6U;
-    activity.fee_limit = (lxp_u128){0U, UINT64_MAX};
+    activity.fee_limit = actor->balance;
+    execution.fee_balance = actor->balance;
     execution.global_sequence = 6U;
     module_kv_before = kernel.module_kv_count;
     actor_before = actor->balance;
@@ -881,7 +932,10 @@ static int deploy_and_upgrade_persist_exact_artifacts(void)
         return 1;
     payload_length = upgrade_payload(payload, program_id, failure_hash,
                                      resource_wasm, resource_wasm_length,
-                                     resource_hash);
+                                     resource_hash,
+                                     LX_PROGRAMS_ACCOUNT_ABI_VERSION,
+                                     INTERFACE_CAPABILITIES_STAGED_TERMINAL,
+                                     false);
     fill_activity(&activity, LX_PROGRAMS_UPGRADE, payload, payload_length,
                   did, sizeof(did) - 1U, primary_key);
     activity.account_sequence = 6U;
@@ -892,13 +946,15 @@ static int deploy_and_upgrade_persist_exact_artifacts(void)
         lxp_kernel_execute_activity(&kernel, &activity, &execution, &receipt) !=
             LXP_OK || receipt.result_code != LXP_OK)
         return 1;
-    payload_length = call_payload(call, program_id);
-    write_u64(call + 46U, 100U);
+    payload_length = staged_call_payload(call, program_id);
+    write_u16(call + 32U, LX_PROGRAMS_ACCOUNT_ABI_VERSION);
+    write_u64(call + 50U, 1000U);
     fill_activity(&activity, LX_PROGRAMS_CALL, call, payload_length,
                   did, sizeof(did) - 1U, primary_key);
     activity.account_sequence = 7U;
     activity.idempotency_key[31] = 8U;
-    activity.fee_limit = (lxp_u128){0U, UINT64_MAX};
+    activity.fee_limit = actor->balance;
+    execution.fee_balance = actor->balance;
     execution.global_sequence = 8U;
     module_kv_before = kernel.module_kv_count;
     actor_before = actor->balance;

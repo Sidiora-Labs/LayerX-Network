@@ -425,9 +425,12 @@ lxp_result layerx_programs_occupancy_output_begin(
     if (status != LXP_OK) return status;
     status = lxp_state_store_bind_accounts(bridge->ctx->kernel->state,
                                            runtime->accounts);
-    if (status == LXP_OK)
-        status = lxp_state_journal_require_account_root(
-            bridge->ctx->kernel->journal);
+    if (status == LXP_OK) {
+        lxp_state_journal *journal = bridge->ctx->kernel->journal;
+        status = journal != NULL && journal->open ?
+            lxp_state_journal_require_account_root(journal) :
+            lxp_state_store_require_account_root(bridge->ctx->kernel->state);
+    }
     if (status != LXP_OK) return status;
     if (schedule.version != schedule_version)
         return LXP_ERR_VERSION_UNSUPPORTED;
