@@ -334,7 +334,7 @@ int main(void)
                 &alternate_accounts, &alternate_invoices) != LXP_ERR_IO ||
             lxp_gateway_registry_leave(alternate_invoices) != LXP_OK)
             return 1;
-        alternate_invoices->records[0].receipt.signature[0] = 0xa5U;
+        alternate_invoices->records[0].receipt.sequencer_signature[0] = 0xa5U;
         alternate_invoices->count = 1U;
         if (lxp_gateway_invoice_registry_destroy(
                 &alternate_accounts, &alternate_invoices) != LXP_OK ||

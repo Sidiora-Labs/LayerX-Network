@@ -1071,18 +1071,22 @@ test-gateway: $(BUILD_DIR)/tests/test_gateway_requirement \
 		$(BUILD_DIR)/obj/fuzz/fuzz_gateway_json.o
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_gateway_requirement
 
-$(BUILD_DIR)/tests/test_gateway_send: tests/test_gateway_send.c $(TEST_LIBRARY)
+$(BUILD_DIR)/tests/test_gateway_send: tests/test_gateway_send.c \
+		$(TEST_LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
 	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) -DLXP_TESTING $(CFLAGS) $< $(TEST_LIBRARY) $(EXTRA_LDFLAGS) \
-		-lcrypto -pthread -o $@
+	$(CC) $(CPPFLAGS) -DLXP_TESTING $(CFLAGS) $< $(TEST_LIBRARY) \
+		$(PROGRAMS_RUNTIME_LIB) $(TEST_LIBRARY) $(EXTRA_LDFLAGS) \
+		-lcrypto -pthread -ldl -lm -o $@
 
 test-gateway-send: $(BUILD_DIR)/tests/test_gateway_send
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_gateway_send
 
-$(BUILD_DIR)/tests/test_gateway_receive: tests/test_gateway_receive.c $(TEST_LIBRARY)
+$(BUILD_DIR)/tests/test_gateway_receive: tests/test_gateway_receive.c \
+		$(TEST_LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
 	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) -DLXP_TESTING $(CFLAGS) $< $(TEST_LIBRARY) $(EXTRA_LDFLAGS) \
-		-lcrypto -pthread -o $@
+	$(CC) $(CPPFLAGS) -DLXP_TESTING $(CFLAGS) $< $(TEST_LIBRARY) \
+		$(PROGRAMS_RUNTIME_LIB) $(TEST_LIBRARY) $(EXTRA_LDFLAGS) \
+		-lcrypto -pthread -ldl -lm -o $@
 
 test-gateway-receive: $(BUILD_DIR)/tests/test_gateway_receive
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_gateway_receive
