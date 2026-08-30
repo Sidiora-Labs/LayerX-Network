@@ -767,6 +767,20 @@ pub enum ProductionRoute<'a> {
     ProgramReceiptByIdempotency(&'a str),
 }
 
+const PLATFORM_GATEWAY_PROGRAM_ROUTES: [&str; 6] = [
+    "POST /v1/programs/call",
+    "POST /v1/programs/simulate",
+    "GET /v1/programs/registry/{program_id}",
+    "GET /v1/programs/registry/{program_id}/interface",
+    "GET /v1/programs/activities/{activity_id}",
+    "GET /v1/programs/receipts/by-idempotency/{idempotency_key}",
+];
+
+#[must_use]
+pub const fn platform_gateway_program_routes() -> &'static [&'static str; 6] {
+    &PLATFORM_GATEWAY_PROGRAM_ROUTES
+}
+
 /// Parses the exact production route set shared with the emulator. Emulator
 /// administration paths are never accepted.
 ///
@@ -920,7 +934,7 @@ impl std::error::Error for GatewayError {}
 
 #[cfg(test)]
 mod tests {
-    use super::{production_route, IssuedKey, ProductionRoute};
+    use super::{platform_gateway_program_routes, production_route, IssuedKey, ProductionRoute};
 
     #[test]
     fn issued_key_debug_redacts_the_credential() {
@@ -933,6 +947,17 @@ mod tests {
 
     #[test]
     fn production_program_routes_are_exact_and_bounded() {
+        assert_eq!(
+            platform_gateway_program_routes(),
+            &[
+                "POST /v1/programs/call",
+                "POST /v1/programs/simulate",
+                "GET /v1/programs/registry/{program_id}",
+                "GET /v1/programs/registry/{program_id}/interface",
+                "GET /v1/programs/activities/{activity_id}",
+                "GET /v1/programs/receipts/by-idempotency/{idempotency_key}",
+            ]
+        );
         let identifier = "a".repeat(64);
         assert!(matches!(
             production_route("POST", "/v1/programs/call"),
