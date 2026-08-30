@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+from hashlib import sha256
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import importlib.util
 import json
@@ -28,11 +29,17 @@ from layerx_sdk import (
     CheckpointAttestation,
     ErrorClass,
     IdempotentMutation,
+    IdempotencyKey,
     LayerXKeyCredential,
+    PlatformSdkError,
+    ProgramCall,
+    ProgramOperations,
+    ProgramTrustContext,
     SubmissionFailed,
     SubmissionUnknown,
     ProductionClient,
     SecretBytes,
+    SdkErrorCode,
     VerificationLevel,
     VerifiedRead,
     layerx_sdk_py_package,
@@ -40,9 +47,46 @@ from layerx_sdk import (
     parse_sequence,
     require_verified,
 )
+from layerx_sdk.program_wire import decode_and_verify_program_terminal
+from layerx_sdk.verifier import ProgramReceiptOutcome
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def canonical_program_call(program_id: str, idempotency: str) -> bytes:
+    payload = b"".join((
+        b"LayerX/programs/call/v1\0",
+        bytes.fromhex(program_id),
+        (1).to_bytes(8, "big"),
+        (0).to_bytes(16, "big"),
+        (0).to_bytes(2, "big"),
+        sized(b"\xaa"),
+    ))
+    payload_hash = sha256(b"LXP/v1/payload-hash\0" + payload).digest()
+    return b"".join((
+        (1).to_bytes(2, "big"), (0x1001).to_bytes(2, "big"), b"\x0c",
+        b"\x01", (1).to_bytes(2, "big"),
+        b"\x02", (1).to_bytes(4, "big"),
+        b"\x03", (0x0009_0003).to_bytes(4, "big"),
+        b"\x04", sized(b"did:lxp:test"),
+        b"\x05", sized(b"\x01"),
+        b"\x06", (0).to_bytes(8, "big"),
+        b"\x07", (0).to_bytes(8, "big"), (1).to_bytes(8, "big"),
+        b"\x08", sized(bytes.fromhex(idempotency)),
+        b"\x09", (0).to_bytes(16, "big"),
+        b"\x0a", sized(payload_hash),
+        b"\x0b", sized(payload),
+        b"\x0c", sized(b"\x02"),
+    ))
+
+
+def sized(value: bytes) -> bytes:
+    return len(value).to_bytes(4, "big") + value
+
+
+def sized64(value: bytes) -> bytes:
+    return len(value).to_bytes(8, "big") + value
 
 
 def load_build_backend():
@@ -68,7 +112,7 @@ class PythonSdkIntegration(unittest.TestCase):
                 encoded = json.dumps({
                     "request_id": "request-1",
                     "value": {"program_id": program_id},
-                    "verification_status": {"state": "Achieved", "level": "SequencerSigned"},
+                    "verification_status": {"state": "Unverified", "requested": "SequencerSigned", "achieved": "Unverified", "reason": "server_side_receipt_verification_only"},
                 }, separators=(",", ":")).encode()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
@@ -102,6 +146,90 @@ class PythonSdkIntegration(unittest.TestCase):
             server.shutdown()
             server.server_close()
             thread.join()
+
+    def test_program_call_ambiguity_retains_canonical_signed_evidence(self) -> None:
+        program_id = "11" * 32
+        idempotency = "33" * 32
+        signed = canonical_program_call(program_id, idempotency)
+
+        class AmbiguousTransport:
+            def call(self, plane: object, operation: object, request: object, idempotency_key: object) -> object:
+                del plane, operation, request, idempotency_key
+                raise PlatformSdkError(SdkErrorCode.DECODE_FAILURE, "never")
+
+        class Signatures:
+            def verify_ed25519(self, public_key: bytes, signature: bytes, digest: bytes) -> bool:
+                del public_key, signature, digest
+                return False
+
+            def verify_recoverable_secp256k1(self, public_key: bytes, signature: bytes, signature_v: int, signer: bytes, digest: bytes) -> bool:
+                del public_key, signature, signature_v, signer, digest
+                return False
+
+        programs = ProgramOperations(
+            ProductionClient(AmbiguousTransport()),  # type: ignore[arg-type]
+            Signatures(),  # type: ignore[arg-type]
+            ProgramTrustContext(bytes([0x44]) * 32, lambda: 1),
+        )
+        unknown = programs.submit(ProgramCall(program_id, b"\xaa", 1, 0, (), signed), IdempotencyKey(idempotency))
+        self.assertEqual(unknown["state"], "unknown")
+        self.assertEqual(unknown["activity_id"], sha256(b"LXP/v1/activity-id\0" + signed).hexdigest())
+        self.assertEqual(unknown["retained_signed_activity"], signed.hex())
+
+    def test_agent_http_transport_never_follows_redirects(self) -> None:
+        followed = False
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self) -> None:
+                nonlocal followed
+                if self.path == "/target":
+                    followed = True
+                    self.send_response(500)
+                    self.end_headers()
+                    return
+                encoded = b"{}"
+                self.send_response(307)
+                self.send_header("Location", "/target")
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(encoded)))
+                self.end_headers()
+                self.wfile.write(encoded)
+
+            def log_message(self, _format: str, *args: object) -> None:
+                del args
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            client = ProductionClient(AgentHttpTransport(f"http://127.0.0.1:{server.server_port}"))
+            with self.assertRaises(PlatformSdkError):
+                client.agent("program.discover", {"program_id": "11" * 32, "requested_verification_level": "sequencer-signed"})
+            self.assertFalse(followed)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join()
+
+    def test_candidate_terminal_response_and_usage_are_receipt_bound(self) -> None:
+        program_id = "11" * 32
+        graph = b"LayerX/programs/call-graph/v1\0"
+        terminal = b"".join((
+            b"LXP/program-execution/v4\0",
+            (1).to_bytes(2, "big"), (1).to_bytes(4, "big"), (1).to_bytes(4, "big"), (0).to_bytes(8, "big"),
+            (1).to_bytes(8, "big"), (2).to_bytes(8, "big"), (3).to_bytes(8, "big"), (4).to_bytes(8, "big"),
+            (0).to_bytes(4, "big"), (0).to_bytes(8, "big"), (10).to_bytes(16, "big"), b"\0",
+            bytes.fromhex(program_id), (2).to_bytes(2, "big"), b"\0", (0).to_bytes(4, "big"),
+            sized64(b"\xaa\xbb"), sized64(graph),
+        ))
+        receipt = ProgramReceiptOutcome(
+            3, 1, 0, 1, 2, 1, 1, 1, 2, 3, 4, 0, 0, 0, 0,
+            (0, 0, 0, 0, 0, 0, 0), bytes(32), bytes(32), bytes(32), 10,
+            sha256(graph).digest(), sha256(terminal).digest(), bytes(32),
+        )
+        decoded = decode_and_verify_program_terminal(terminal, graph, program_id, receipt, 1)
+        self.assertEqual(decoded.outcome, {"kind": "completed", "code": 0, "response": "aabb"})
+        self.assertEqual(decoded.usage["fee_units"], "10")
 
     def test_approval_contract_operations_events_and_outcomes_are_exact(self) -> None:
         self.assertEqual(APPROVAL_CONTRACT_INTRODUCED, "1.1")

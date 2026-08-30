@@ -5,7 +5,7 @@ import json
 from typing import Mapping, cast
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlparse, urlunparse
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from .production import (
     IdempotencyKey,
@@ -17,6 +17,7 @@ from .production import (
 )
 
 _MAX_RESPONSE_BYTES = 8 * 1024 * 1024
+_MAX_REQUEST_BYTES = 4 * 1024 * 1024
 _HEX = frozenset("0123456789abcdef")
 _ERROR_CLASS: Mapping[str, SdkErrorCode] = {
     "TransportFailure": SdkErrorCode.TRANSPORT_FAILURE,
@@ -83,7 +84,7 @@ class LayerXKeyCredential:
 
 
 class AgentHttpTransport(ProductionTransport):
-    __slots__ = ("_endpoint", "_credential", "_timeout", "_maximum_response_bytes")
+    __slots__ = ("_endpoint", "_credential", "_timeout", "_maximum_response_bytes", "_opener")
 
     def __init__(
         self,
@@ -96,11 +97,12 @@ class AgentHttpTransport(ProductionTransport):
         self._endpoint = _validated_endpoint(endpoint)
         if not isinstance(timeout, (int, float)) or isinstance(timeout, bool) or timeout <= 0:
             raise _invalid_argument()
-        if not isinstance(maximum_response_bytes, int) or isinstance(maximum_response_bytes, bool) or maximum_response_bytes <= 0:
+        if not isinstance(maximum_response_bytes, int) or isinstance(maximum_response_bytes, bool) or maximum_response_bytes <= 0 or maximum_response_bytes > _MAX_RESPONSE_BYTES:
             raise _invalid_argument()
         self._credential = credential
         self._timeout = float(timeout)
         self._maximum_response_bytes = maximum_response_bytes
+        self._opener = build_opener(_NoRedirect())
 
     def call(
         self,
@@ -127,10 +129,13 @@ class AgentHttpTransport(ProductionTransport):
             raise _invalid_argument()
         if operation in {"program.discover", "program.interface", "program.receipt", "program.activity"} and request.get("requested_verification_level") != "sequencer-signed":
             raise _invalid_argument()
+        _require_exact_request(operation, request)
         try:
             body = json.dumps(request, ensure_ascii=True, allow_nan=False, separators=(",", ":")).encode("utf-8")
         except (TypeError, ValueError, OverflowError):
             raise _invalid_argument() from None
+        if len(body) > _MAX_REQUEST_BYTES:
+            raise _invalid_argument()
         headers = {
             "Accept": "application/json",
             "Content-Type": "application/json",
@@ -143,13 +148,17 @@ class AgentHttpTransport(ProductionTransport):
             headers["Authorization"] = self._credential.use()
         outbound = Request(_route_endpoint(self._endpoint, path), data=body, headers=headers, method=route.method)
         try:
-            with urlopen(outbound, timeout=self._timeout) as response:
+            with self._opener.open(outbound, timeout=self._timeout) as response:
                 encoded = _bounded_read(response, self._maximum_response_bytes)
-                return _decode_envelope(response.status, encoded)
+                if response.headers.get("Content-Type") != "application/json":
+                    raise _decode_failure()
+                return _decode_envelope(response.status, encoded, operation)
         except HTTPError as error:
             try:
                 encoded = _bounded_read(error, self._maximum_response_bytes)
-                return _decode_envelope(error.code, encoded)
+                if error.headers.get("Content-Type") != "application/json":
+                    raise _decode_failure()
+                return _decode_envelope(error.code, encoded, operation)
             finally:
                 error.close()
         except PlatformSdkError:
@@ -186,6 +195,19 @@ def _route_endpoint(base: str, path: str) -> str:
     return urlunparse((parsed.scheme, parsed.netloc, parsed.path.rstrip("/") + path, "", "", ""))
 
 
+def _require_exact_request(operation: str, request: Mapping[str, object]) -> None:
+    fields: Mapping[str, frozenset[str]] = {
+        "program.discover": frozenset(("program_id", "requested_verification_level")),
+        "program.interface": frozenset(("program_id", "requested_verification_level")),
+        "program.simulate": frozenset(("program_id", "calldata", "budget", "capabilities", "signed_activity")),
+        "program.call": frozenset(("program_id", "calldata", "budget", "capabilities", "signed_activity")),
+        "program.receipt": frozenset(("idempotency_key", "expected_activity_id", "requested_verification_level")),
+        "program.activity": frozenset(("activity_id", "requested_verification_level")),
+    }
+    if frozenset(request) != fields[operation]:
+        raise _invalid_argument()
+
+
 def _bounded_read(response: object, maximum: int) -> bytes:
     reader = getattr(response, "read", None)
     if not callable(reader):
@@ -196,7 +218,7 @@ def _bounded_read(response: object, maximum: int) -> bytes:
     return encoded
 
 
-def _decode_envelope(status: int, encoded: bytes) -> object:
+def _decode_envelope(status: int, encoded: bytes, operation: str) -> object:
     try:
         envelope = json.loads(encoded.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError):
@@ -204,17 +226,30 @@ def _decode_envelope(status: int, encoded: bytes) -> object:
     if not isinstance(envelope, dict) or any(not isinstance(key, str) for key in envelope):
         raise _decode_failure()
     if "class" in envelope:
+        _exact(envelope, ("class", "protocol_result_code", "retriability", "reason", "request_id"))
         raise _service_error(status, envelope)
+    _exact(envelope, ("request_id", "value", "verification_status"))
     request_id = envelope.get("request_id")
-    if not 200 <= status < 300 or not isinstance(request_id, str) or not request_id or "value" not in envelope:
+    if not 200 <= status < 300 or not _valid_request_id(request_id) or "value" not in envelope:
         raise _decode_failure(request_id if isinstance(request_id, str) else None)
-    if not _achieved_sequencer(envelope.get("verification_status")):
+    if not _accepted_program_verification(operation, envelope.get("value"), envelope.get("verification_status")):
         raise PlatformSdkError(SdkErrorCode.VERIFICATION_FAILURE, "never", request_id=request_id)
     return envelope["value"]
 
 
-def _achieved_sequencer(value: object) -> bool:
-    return isinstance(value, dict) and value.get("state") == "Achieved" and value.get("level") == "SequencerSigned"
+def _accepted_program_verification(operation: str, result: object, value: object) -> bool:
+    if not isinstance(value, dict) or any(not isinstance(key, str) for key in value):
+        return False
+    result_state = result.get("state") if isinstance(result, dict) else None
+    if operation in {"program.discover", "program.interface"}:
+        return _exact_unverified(value, "server_side_receipt_verification_only")
+    if operation in {"program.call", "program.receipt", "program.activity"} and result_state in {"unknown", "pending"}:
+        return _exact_unverified(value, "receipt_pending")
+    return set(value) == {"state", "level"} and value.get("state") == "Achieved" and value.get("level") == "SequencerSigned"
+
+
+def _exact_unverified(value: Mapping[str, object], reason: str) -> bool:
+    return set(value) == {"state", "requested", "achieved", "reason"} and value.get("state") == "Unverified" and value.get("requested") == "SequencerSigned" and value.get("achieved") == "Unverified" and value.get("reason") == reason
 
 
 def _service_error(status: int, error: Mapping[str, object]) -> PlatformSdkError:
@@ -224,7 +259,7 @@ def _service_error(status: int, error: Mapping[str, object]) -> PlatformSdkError
     reason = error.get("reason")
     protocol = error.get("protocol_result_code")
     code = _ERROR_CLASS.get(exact_class) if isinstance(exact_class, str) else None
-    if 200 <= status < 300 or not isinstance(request_id, str) or not request_id or code is None or retriability not in {"Terminal", "Retriable"} or not isinstance(reason, str) or not reason or any(character not in "abcdefghijklmnopqrstuvwxyz0123456789_." for character in reason) or (protocol is not None and (not isinstance(protocol, int) or isinstance(protocol, bool))):
+    if 200 <= status < 300 or not _valid_request_id(request_id) or code is None or retriability not in {"Terminal", "Retriable"} or not isinstance(reason, str) or not reason or any(character not in "abcdefghijklmnopqrstuvwxyz0123456789_." for character in reason) or (protocol is not None and (not isinstance(protocol, int) or isinstance(protocol, bool))):
         raise _decode_failure(request_id if isinstance(request_id, str) else None)
     return PlatformSdkError(
         code,
@@ -236,6 +271,21 @@ def _service_error(status: int, error: Mapping[str, object]) -> PlatformSdkError
 
 def _hex32(value: str) -> bool:
     return len(value) == 64 and all(character in _HEX for character in value)
+
+
+def _exact(value: Mapping[str, object], required: tuple[str, ...]) -> None:
+    if set(value) != set(required):
+        raise _decode_failure()
+
+
+def _valid_request_id(value: object) -> bool:
+    return isinstance(value, str) and 0 < len(value) <= 128 and value.isascii() and all(0x21 <= ord(character) <= 0x7E for character in value)
+
+
+class _NoRedirect(HTTPRedirectHandler):
+    def redirect_request(self, request: Request, file_pointer: object, code: int, message: str, headers: object, new_url: str) -> None:
+        del request, file_pointer, code, message, headers, new_url
+        return None
 
 
 def _transport_failure(operation: str) -> PlatformSdkError:

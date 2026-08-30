@@ -62,6 +62,7 @@ from .agent_http import (
 from .programs import (
     ProgramCall as ProgramCall,
     ProgramOperations as ProgramOperations,
+    ProgramTrustContext as ProgramTrustContext,
     VerifiedProgramReceipt as VerifiedProgramReceipt,
     platform_sdk_programs as platform_sdk_programs,
     verify_program_receipt as verify_program_receipt,

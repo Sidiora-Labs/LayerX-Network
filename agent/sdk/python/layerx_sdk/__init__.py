@@ -56,7 +56,7 @@ from .production import (
     platform_sdk_python,
 )
 from .agent_http import AgentHttpTransport, LayerXKeyCredential
-from .programs import ProgramCall, ProgramOperations, VerifiedProgramReceipt, platform_sdk_programs, verify_program_receipt
+from .programs import ProgramCall, ProgramOperations, ProgramTrustContext, VerifiedProgramReceipt, platform_sdk_programs, verify_program_receipt
 from .stream import ResumableStream, StreamCursor, StreamEvent, StreamPage
 from .mirror import MirrorCandidate, MirrorPolicy, MirrorVerification, MirrorVerificationError, MirrorVerifier
 from .verifier import (
@@ -134,6 +134,7 @@ __all__ = [
     "ProductionTransport",
     "ProgramCall",
     "ProgramOperations",
+    "ProgramTrustContext",
     "ProtocolAmount",
     "ResumableStream",
     "RetryClass",

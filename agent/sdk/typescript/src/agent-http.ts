@@ -11,6 +11,7 @@ import {
 } from "./production.js";
 
 const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
+const MAX_REQUEST_BYTES = 4 * 1024 * 1024;
 const DEFAULT_TIMEOUT_MS = 30_000;
 const HEX32 = /^[0-9a-f]{64}$/u;
 const KEY_ID = /^[A-Za-z0-9_-]{1,64}$/u;
@@ -86,6 +87,7 @@ export class AgentHttpTransport implements ProductionTransport {
     this.#credential = options.credential;
     this.#timeoutMs = exactPositive(options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
     this.#maximumResponseBytes = exactPositive(options.maximumResponseBytes ?? MAX_RESPONSE_BYTES);
+    if (this.#maximumResponseBytes > MAX_RESPONSE_BYTES) throw invalidArgument();
   }
 
   public async call<TRequest, TResponse>(call: TransportCall<TRequest>): Promise<TResponse> {
@@ -102,7 +104,11 @@ export class AgentHttpTransport implements ProductionTransport {
       throw invalidArgument();
     }
     requireRequestedVerification(call.operation as AgentOperation, request);
-    const body = Buffer.from(JSON.stringify(request), "utf8");
+    requireExactRequest(call.operation as AgentOperation, request);
+    let body: Buffer;
+    try { body = Buffer.from(JSON.stringify(request), "utf8"); }
+    catch { throw invalidArgument(); }
+    if (body.length > MAX_REQUEST_BYTES) throw invalidArgument();
     const endpoint = routeEndpoint(this.#endpoint, path);
     const headers: http.OutgoingHttpHeaders = {
       Accept: "application/json",
@@ -142,7 +148,8 @@ export class AgentHttpTransport implements ProductionTransport {
         response.on("end", () => {
           if (settled) return;
           try {
-            const value = decodeEnvelope(response.statusCode ?? 0, Buffer.concat(chunks));
+            if (response.headers["content-type"] !== "application/json") throw decodeFailure();
+            const value = decodeEnvelope(response.statusCode ?? 0, Buffer.concat(chunks), operation);
             finish(resolve, value as TResponse);
           } catch (error) {
             finish(reject, error);
@@ -180,6 +187,19 @@ function requireRequestedVerification(operation: AgentOperation, request: Readon
   }
 }
 
+function requireExactRequest(operation: AgentOperation, request: Readonly<Record<string, unknown>>): void {
+  const fields: Readonly<Partial<Record<AgentOperation, readonly string[]>>> = {
+    "program.discover": ["program_id", "requested_verification_level"],
+    "program.interface": ["program_id", "requested_verification_level"],
+    "program.simulate": ["program_id", "calldata", "budget", "capabilities", "signed_activity"],
+    "program.call": ["program_id", "calldata", "budget", "capabilities", "signed_activity"],
+    "program.receipt": ["idempotency_key", "expected_activity_id", "requested_verification_level"],
+    "program.activity": ["activity_id", "requested_verification_level"],
+  };
+  const expected = fields[operation];
+  if (expected === undefined || Object.keys(request).length !== expected.length || expected.some((field) => !(field in request))) throw invalidArgument();
+}
+
 function validateEndpoint(value: URL | string): URL {
   let endpoint: URL;
   try { endpoint = new URL(value); } catch { throw invalidArgument(); }
@@ -207,27 +227,45 @@ function exactPositive(value: number): number {
   return value;
 }
 
-function decodeEnvelope(status: number, encoded: Buffer): unknown {
+function decodeEnvelope(status: number, encoded: Buffer, operation: AgentOperation): unknown {
   let envelope: Readonly<Record<string, unknown>>;
   try { envelope = record(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(encoded)) as unknown); }
   catch { throw decodeFailure(); }
-  if ("class" in envelope) throw serviceError(status, envelope);
+  if ("class" in envelope) {
+    exactKeys(envelope, ["class", "protocol_result_code", "retriability", "reason", "request_id"]);
+    throw serviceError(status, envelope);
+  }
+  exactKeys(envelope, ["request_id", "value", "verification_status"]);
   const requestId = envelope.request_id;
-  if (status < 200 || status >= 300 || typeof requestId !== "string" || requestId.length === 0 || !("value" in envelope)) {
+  if (status < 200 || status >= 300 || !validRequestId(requestId) || !("value" in envelope)) {
     throw decodeFailure(typeof requestId === "string" ? requestId : undefined);
   }
-  if (!achievedSequencerVerification(envelope.verification_status)) throw new PlatformSdkError({ code: "verification-failure", retry: "never", requestId });
+  if (!acceptedProgramVerification(operation, envelope.value, envelope.verification_status)) throw new PlatformSdkError({ code: "verification-failure", retry: "never", requestId });
   return envelope.value;
 }
 
-function achievedSequencerVerification(value: unknown): boolean {
+function acceptedProgramVerification(operation: AgentOperation, result: unknown, value: unknown): boolean {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
   const status = value as Readonly<Record<string, unknown>>;
-  return status.state === "Achieved" && status.level === "SequencerSigned";
+  const resultState = result !== null && typeof result === "object" && !Array.isArray(result)
+    ? (result as Readonly<Record<string, unknown>>).state : undefined;
+  if (operation === "program.discover" || operation === "program.interface") {
+    return exactUnverified(status, "server_side_receipt_verification_only");
+  }
+  if ((operation === "program.call" || operation === "program.receipt" || operation === "program.activity")
+    && (resultState === "unknown" || resultState === "pending")) {
+    return exactUnverified(status, "receipt_pending");
+  }
+  return Object.keys(status).length === 2 && status.state === "Achieved" && status.level === "SequencerSigned";
+}
+
+function exactUnverified(value: Readonly<Record<string, unknown>>, reason: string): boolean {
+  return Object.keys(value).length === 4 && value.state === "Unverified" && value.requested === "SequencerSigned"
+    && value.achieved === "Unverified" && value.reason === reason;
 }
 
 function serviceError(status: number, error: Readonly<Record<string, unknown>>): PlatformSdkError {
-  const requestId = typeof error.request_id === "string" && error.request_id.length > 0 ? error.request_id : undefined;
+  const requestId = validRequestId(error.request_id) ? error.request_id : undefined;
   const code = typeof error.class === "string" ? ERROR_CLASS[error.class] : undefined;
   const retriability = error.retriability;
   const reason = error.reason;
@@ -244,6 +282,14 @@ function serviceError(status: number, error: Readonly<Record<string, unknown>>):
     requestId,
     ...(protocol === null ? {} : { protocolResultCode: protocol as number }),
   });
+}
+
+function exactKeys(value: Readonly<Record<string, unknown>>, required: readonly string[]): void {
+  if (Object.keys(value).length !== required.length || required.some((key) => !(key in value))) throw decodeFailure();
+}
+
+function validRequestId(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= 128 && /^[\x21-\x7e]+$/u.test(value);
 }
 
 function transportFailure(operation: AgentOperation): PlatformSdkError {
