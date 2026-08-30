@@ -18,6 +18,7 @@ static lxp_result kernel_state_validate(const lxp_kernel *kernel)
 {
     size_t blob_total = 0U;
     size_t i;
+    uint16_t last_module_id = LXP_LEGACY_LAST_MODULE_ID;
     if (kernel == NULL) return LXP_ERR_NON_CANONICAL;
     if (kernel->state == NULL) return LXP_FATAL_INVARIANT;
     if (kernel->state->count > LXP_STATE_MAX_CELLS ||
@@ -40,11 +41,20 @@ static lxp_result kernel_state_validate(const lxp_kernel *kernel)
         if (kernel->modules[i].activity_type_count >
             LXP_MODULE_MAX_ACTIVITY_TYPES)
             return LXP_ERR_LENGTH_LIMIT;
-    for (i = 0U; i < kernel->module_kv_count; ++i)
+    for (i = 0U; i < kernel->module_count; ++i)
+        if (kernel->modules[i].module_id != 0U &&
+            kernel->modules[i].module_id <= LXP_MODULE_RESERVED_COUNT &&
+            kernel->modules[i].module_id > last_module_id)
+            last_module_id = kernel->modules[i].module_id;
+    for (i = 0U; i < kernel->module_kv_count; ++i) {
+        if (kernel->module_kv[i].module_id == 0U ||
+            kernel->module_kv[i].module_id > last_module_id)
+            return LXP_ERR_UNKNOWN_MODULE;
         if (kernel->module_kv[i].key_length == 0U ||
             kernel->module_kv[i].key_length > LXP_MODULE_MAX_KEY_BYTES ||
             kernel->module_kv[i].value_length > LXP_MODULE_MAX_VALUE_BYTES)
             return LXP_ERR_LENGTH_LIMIT;
+    }
     for (i = 0U; i < kernel->blob_count; ++i) {
         const lxp_module_blob *blob = &kernel->blobs[i];
         if (blob->length > LXP_KERNEL_MAX_BLOB_BYTES ||

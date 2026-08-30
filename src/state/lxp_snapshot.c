@@ -458,6 +458,14 @@ lxp_result lxp_snapshot_load(const uint8_t *snapshot, size_t snapshot_length,
     if (status != LXP_OK || lxp_ct_memcmp(
         digest, manifest->snapshot_digest, 32U) != 0)
         return status != LXP_OK ? status : LXP_ERR_SNAPSHOT_MISMATCH;
+    if (snapshot_length >= 2U) {
+        uint16_t encoded_version =
+            (uint16_t)(((uint16_t)snapshot[0] << 8U) | snapshot[1]);
+        if (!lxp_protocol_version_supported(encoded_version))
+            return LXP_ERR_VERSION_UNSUPPORTED;
+    }
+    if (manifest->global_sequence == UINT64_MAX)
+        return LXP_ERR_SEQUENCE_MISMATCH;
     candidate = malloc(sizeof(*candidate));
     state = malloc(sizeof(*state));
     if (candidate == NULL || state == NULL) {

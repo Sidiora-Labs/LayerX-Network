@@ -202,6 +202,16 @@ int main(void)
         lxp_state_root(&restored, restored_terminal) != LXP_OK ||
         memcmp(root, restored_terminal, 32U) != 0)
         return 1;
+    ((uint8_t *)snapshot.bytes)[0] = 0xffU;
+    ((uint8_t *)snapshot.bytes)[1] = 0xffU;
+    if (lxp_snapshot_manifest(snapshot.bytes, snapshot.length, 2U,
+                              root, &manifest) != LXP_OK ||
+        lxp_snapshot_load(snapshot.bytes, snapshot.length, &manifest, root,
+                          &restored) != LXP_ERR_VERSION_UNSUPPORTED ||
+        restored_state.next_sequence != 3U)
+        return 1;
+    ((uint8_t *)snapshot.bytes)[0] = 0U;
+    ((uint8_t *)snapshot.bytes)[1] = LXP_PROTOCOL_VERSION_OCCUPANCY;
     (void)memset((uint8_t *)snapshot.bytes + 2U, 0xff, 8U);
     if (lxp_snapshot_manifest(snapshot.bytes, snapshot.length, UINT64_MAX,
                               root, &manifest) != LXP_OK ||

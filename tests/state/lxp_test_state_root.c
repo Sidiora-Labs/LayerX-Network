@@ -119,6 +119,13 @@ int main(void)
     ++second.module_kv_count;
     if (lxp_state_root(&second, chained) != LXP_ERR_UNKNOWN_MODULE) return 1;
     --second.module_kv_count;
+    second.module_kv[second.module_kv_count].module_id = 1U;
+    second.module_kv[second.module_kv_count].key_length = 0U;
+    second.module_kv[second.module_kv_count].value_length = 1U;
+    second.module_kv[second.module_kv_count].value[0] = 9U;
+    ++second.module_kv_count;
+    if (lxp_state_root(&second, chained) != LXP_ERR_LENGTH_LIMIT) return 1;
+    --second.module_kv_count;
     second.module_kv[second.module_kv_count].module_id = 9U;
     second.module_kv[second.module_kv_count].key_length = 1U;
     second.module_kv[second.module_kv_count].key[0] = 9U;
