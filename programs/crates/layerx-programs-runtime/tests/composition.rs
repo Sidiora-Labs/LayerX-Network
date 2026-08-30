@@ -1100,7 +1100,7 @@ fn nested_guest_event_aggregate_accepts_sixty_four_and_rolls_back_sixty_five() {
     );
     let success = outcome.unwrap_or_else(|error| panic!("sixty-four events: {error}"));
     assert_eq!(success.effects.events.len(), 64);
-    assert_eq!(success.usage.output_bytes, 64);
+    assert_eq!(success.execution.usage.output_bytes, 64);
 
     let before = seeded_storage([root, child]);
     let (outcome, storage) = execute_unbudgeted_with_output_limit(
