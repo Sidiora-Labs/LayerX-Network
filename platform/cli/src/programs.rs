@@ -535,6 +535,17 @@ pub fn simulate(client: &Client, request: &CallRequest<'_>) -> Result<Value, Str
 }
 
 fn signed_call(request: &CallRequest<'_>, canonical_payload: &[u8]) -> Result<Vec<u8>, String> {
+    signed_call_with_signer(request, canonical_payload, || {
+        let seed = crate::credential::key_seed(request.key_name)?;
+        Ok(SigningKey::from_bytes(&seed))
+    })
+}
+
+fn signed_call_with_signer(
+    request: &CallRequest<'_>,
+    canonical_payload: &[u8],
+    signer: impl FnOnce() -> Result<SigningKey, String>,
+) -> Result<Vec<u8>, String> {
     if request.expires_at_ms <= request.not_before_ms
         || request.expires_at_ms - request.not_before_ms > 300_000
     {
@@ -551,8 +562,7 @@ fn signed_call(request: &CallRequest<'_>, canonical_payload: &[u8]) -> Result<Ve
         .map_err(|error| format!("program call payload is invalid: {error:?}"))?;
     let payload_hash = payload_hash_for(&payload)
         .map_err(|error| format!("program payload hash is invalid: {error:?}"))?;
-    let seed = crate::credential::key_seed(request.key_name)?;
-    let signing_key = SigningKey::from_bytes(&seed);
+    let signing_key = signer()?;
     let public_key = signing_key.verifying_key().to_bytes();
     let actor = Did::new(request.actor_did.as_bytes())
         .map_err(|error| format!("program caller DID is invalid: {error:?}"))?;
@@ -638,6 +648,7 @@ fn parse_capability(name: &str) -> Result<CapabilityRequest, String> {
 
 const fn describe_call_error(error: ProgramCallError) -> &'static str {
     match error {
+        ProgramCallError::NonCanonicalPayload => "program call payload is not canonical",
         ProgramCallError::ZeroFuel => "declared call fuel must be greater than zero",
         ProgramCallError::UnknownCapability(_) => {
             "a requested capability is outside the closed set"
@@ -1045,7 +1056,7 @@ fn discover_call_head(
         return Err("program discovery is outside its signed freshness interval".to_owned());
     }
     let mut proof = b"LayerX/program-discovery-proof/v1\0".to_vec();
-    proof.extend_from_slice(&fixed_hex("program id", request.program_id)?);
+    proof.extend_from_slice(&fixed_hex::<32>("program id", request.program_id)?);
     proof.push(1);
     proof.extend_from_slice(&version.to_be_bytes());
     proof.extend_from_slice(&code_hash);
@@ -1463,13 +1474,15 @@ fn discover_artifact(project: &Path) -> Result<PathBuf, String> {
 #[cfg(test)]
 mod call_tests {
     use super::{
-        build_call, classify_outcome, render_call_result, signed_call, validate_signed_call,
-        CallRequest, VerifiedCallHead,
+        build_call, classify_outcome, describe_call_error, render_call_result,
+        signed_call_with_signer, validate_signed_call, CallRequest, VerifiedCallHead,
     };
     use crate::encoding::hex_encode;
+    use ed25519_dalek::SigningKey;
     use layerx_types::amount::Amount;
     use layerx_types::intent::{
-        CallBudget, Calldata, CapabilityRequest, ProgramCall, ProgramId, RequestedCapabilities,
+        CallBudget, Calldata, CapabilityRequest, ProgramCall, ProgramCallError, ProgramId,
+        RequestedCapabilities,
     };
     use serde_json::json;
 
@@ -1540,6 +1553,14 @@ mod call_tests {
         assert_eq!(
             built.canonical_payload(),
             agent_layer_call().canonical_payload()
+        );
+    }
+
+    #[test]
+    fn non_canonical_call_payload_has_an_explicit_cli_refusal() {
+        assert_eq!(
+            describe_call_error(ProgramCallError::NonCanonicalPayload),
+            "program call payload is not canonical"
         );
     }
 
@@ -1624,7 +1645,9 @@ mod call_tests {
         let mut call_b = call_a.clone();
         let last = call_b.len() - 1;
         call_b[last] ^= 1;
-        let signed_b = signed_call(&request, &call_b).expect("source vector signs");
+        let signed_b =
+            signed_call_with_signer(&request, &call_b, || Ok(SigningKey::from_bytes(&[7; 32])))
+                .expect("source vector signs");
         assert!(validate_signed_call(&call_a, &signed_b).is_err());
     }
 }

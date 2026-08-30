@@ -7,6 +7,8 @@
 
 use std::io::{Read as _, Write as _};
 use std::net::{TcpListener, TcpStream};
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -15,6 +17,7 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 
 static SEQUENCE: AtomicU32 = AtomicU32::new(0);
+const EMULATOR_SEQUENCER_SEED: [u8; 32] = [0x42; 32];
 
 fn scratch(prefix: &str) -> PathBuf {
     let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed);
@@ -68,6 +71,7 @@ impl Cli {
 
     /// Point the active `emulator` profile at a live emulator endpoint.
     pub fn bind_emulator(&self, endpoint: &str) -> Output {
+        let trust_anchor = emulator_trust_anchor();
         self.run(&[
             "--json",
             "environment",
@@ -77,6 +81,8 @@ impl Cli {
             endpoint,
             "--network-id",
             "402",
+            "--sequencer-trust-anchor",
+            &trust_anchor,
         ])
     }
 
@@ -131,6 +137,7 @@ impl Drop for Cli {
 pub struct Emulator {
     child: Child,
     endpoint: String,
+    sequencer_seed: PathBuf,
 }
 
 impl Emulator {
@@ -139,8 +146,24 @@ impl Emulator {
         let port = free_port();
         let listen = format!("127.0.0.1:{port}");
         let endpoint = format!("http://{listen}");
+        let sequencer_seed = scratch("emulator-sequencer-seed");
+        let mut seed_options = std::fs::OpenOptions::new();
+        seed_options.write(true).create_new(true);
+        #[cfg(unix)]
+        seed_options.mode(0o600);
+        let mut seed_file = seed_options
+            .open(&sequencer_seed)
+            .unwrap_or_else(|error| panic!("the emulator seed should be created: {error}"));
+        seed_file
+            .write_all(&EMULATOR_SEQUENCER_SEED)
+            .unwrap_or_else(|error| panic!("the emulator seed should be written: {error}"));
+        seed_file
+            .sync_all()
+            .unwrap_or_else(|error| panic!("the emulator seed should be durable: {error}"));
         let child = match Command::new(env!("CARGO_BIN_EXE_layerx"))
             .args(["emulator", "up", "--listen", &listen])
+            .arg("--sequencer-seed-file")
+            .arg(&sequencer_seed)
             .env_remove("LAYERX_CONFIG")
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -149,7 +172,11 @@ impl Emulator {
             Ok(child) => child,
             Err(error) => panic!("the emulator should start: {error}"),
         };
-        let emulator = Self { child, endpoint };
+        let emulator = Self {
+            child,
+            endpoint,
+            sequencer_seed,
+        };
         emulator.wait_until_ready();
         emulator
     }
@@ -177,7 +204,21 @@ impl Drop for Emulator {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+        let _ = std::fs::remove_file(&self.sequencer_seed);
     }
+}
+
+fn emulator_trust_anchor() -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let public_key = ed25519_dalek::SigningKey::from_bytes(&EMULATOR_SEQUENCER_SEED)
+        .verifying_key()
+        .to_bytes();
+    let mut encoded = String::with_capacity(public_key.len() * 2);
+    for byte in public_key {
+        encoded.push(char::from(HEX[usize::from(byte >> 4)]));
+        encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    encoded
 }
 
 fn free_port() -> u16 {

@@ -160,9 +160,9 @@ impl UsageReceipt {
         bytes.extend_from_slice(&self.previous_accumulator_root);
         bytes.push(self.observation.outcome as u8);
         bytes.extend_from_slice(&self.observation.root_program.bytes());
-        encode_metered(&mut bytes, self.observation.usage);
-        encode_lease_usage(&mut bytes, self.cumulative);
-        encode_prices(&mut bytes, self.prices);
+        encode_metered(bytes, self.observation.usage);
+        encode_lease_usage(bytes, self.cumulative);
+        encode_prices(bytes, self.prices);
         bytes.extend_from_slice(&self.charged.to_be_bytes());
         bytes.extend_from_slice(&self.cumulative_spent.to_be_bytes());
         bytes.extend_from_slice(&self.transfer_root);

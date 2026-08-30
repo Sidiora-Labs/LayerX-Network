@@ -19,6 +19,8 @@ ed25519-dalek = "=2.2.0"
 layerx-types = { path = "../../agent/crates/layerx-types" }
 layerx-wire = { path = "../../agent/crates/layerx-wire" }
 layerx-proof = { path = "../../agent/crates/layerx-proof" }
+layerx-programs-runtime = { path = "../../programs/crates/layerx-programs-runtime", features = ["host-ffi"] }
+layerx-programs-sandbox = { path = "../../programs/crates/layerx-programs-sandbox", features = ["host-ffi"] }
 
 [lints.clippy]
 all = { level = "deny", priority = -1 }

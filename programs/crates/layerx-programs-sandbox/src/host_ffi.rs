@@ -1,6 +1,6 @@
 use layerx_programs_runtime::{
     reserve_host_sandbox_escrow_charge, settle_reserved_host_sandbox_escrow_charge,
-    ActivityBudgetBinding, MeteredUsage, PrincipalId, ProgramId, ReservedSandboxEscrowCharge,
+    ActivityBudgetBinding, MeteredUsage, ProgramId, ReservedSandboxEscrowCharge,
 };
 use std::cell::RefCell;
 

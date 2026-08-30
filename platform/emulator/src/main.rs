@@ -2527,6 +2527,8 @@ fn parse_config(arguments: impl IntoIterator<Item = String>) -> Result<Config, S
 
 /// Starts the local gateway adapter around the production `LayerX` transition.
 fn platform_emulator(config: Config) -> Result<(), String> {
+    layerx_programs_runtime::retain_host_ffi_exports();
+    layerx_programs_sandbox::retain_host_ffi_exports();
     let seed = config.sequencer_seed.ok_or_else(|| {
         "--sequencer-seed-file is required; the emulator has no compiled-in signing authority"
             .to_owned()

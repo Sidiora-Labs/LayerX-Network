@@ -1370,6 +1370,8 @@ name = "layerx-platform-emulator"
 version = "0.1.0"
 dependencies = [
  "ed25519-dalek",
+ "layerx-programs-runtime",
+ "layerx-programs-sandbox",
  "layerx-proof",
  "layerx-types",
  "layerx-wire",
@@ -1518,6 +1520,17 @@ dependencies = [
  "wasm-instrument",
  "wasmi",
  "wasmparser-nostd",
+]
+
+[[package]]
+name = "layerx-programs-sandbox"
+version = "0.1.0"
+dependencies = [
+ "layerx-programs-registry",
+ "layerx-programs-runtime",
+ "layerx-proof",
+ "layerx-types",
+ "layerx-wire",
 ]
 
 [[package]]

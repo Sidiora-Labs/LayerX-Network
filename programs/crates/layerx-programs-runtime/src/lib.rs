@@ -53,6 +53,25 @@ mod ffi_transfer;
 #[cfg(feature = "host-ffi")]
 #[allow(unsafe_code)]
 mod ffi_interface;
+
+#[cfg(feature = "host-ffi")]
+#[inline(never)]
+pub fn retain_host_ffi_exports() {
+    let exports = [
+        ffi::layerx_programs_migration_execute_activity as *const (),
+        ffi_call::layerx_programs_schedule_plan as *const (),
+        ffi_call::layerx_programs_module_cache_invalidate_upgrade as *const (),
+        ffi_call::layerx_programs_module_cache_invalidate_runtime as *const (),
+        ffi_call::layerx_programs_module_cache_invalidate_abi as *const (),
+        ffi_call::layerx_programs_call_begin as *const (),
+        ffi_call::layerx_programs_occupancy_finalize_rust as *const (),
+        ffi_transfer::layerx_programs_authorize_402lxp_leg as *const (),
+        ffi_transfer::layerx_programs_consume_program_spend_authorization as *const (),
+        ffi_transfer::layerx_programs_settle_wind_down_402lxp_leg as *const (),
+        ffi_interface::layerx_programs_interface_validate as *const (),
+    ];
+    let _ = std::hint::black_box(exports);
+}
 #[deny(unsafe_code)]
 mod host;
 #[deny(unsafe_code)]

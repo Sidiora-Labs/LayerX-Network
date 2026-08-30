@@ -573,7 +573,7 @@ impl Lease {
             self.usage.namespace_bytes] {
             out.extend_from_slice(&value.to_be_bytes());
         }
-        encode_fee_schedule(&mut out, self.fee_schedule);
+        encode_fee_schedule(out, self.fee_schedule);
         out.extend_from_slice(&self.escrow_consumed.to_be_bytes());
         out.push(self.state as u8);
         out.push(u8::try_from(self.history.len()).map_err(|_| LeaseRefusal::HistoryOverflow)?);

@@ -9,7 +9,20 @@ pub mod execute;
 pub mod usage;
 pub mod activity;
 #[cfg(feature = "host-ffi")]
+#[allow(unsafe_code)]
 mod host_ffi;
+
+#[cfg(feature = "host-ffi")]
+#[inline(never)]
+pub fn retain_host_ffi_exports() {
+    let exports = [
+        host_ffi::layerx_programs_sandbox_admit_host as *const (),
+        host_ffi::layerx_programs_sandbox_cancel_host as *const (),
+        host_ffi::layerx_programs_sandbox_settle_call_rust as *const (),
+        host_ffi::layerx_programs_sandbox_lifecycle_validate as *const (),
+    ];
+    let _ = std::hint::black_box(exports);
+}
 
 pub use activity::{canonical_activate, canonical_execute, canonical_fund,
     canonical_submission_digest, execute, fund_lease, activate_lease,
