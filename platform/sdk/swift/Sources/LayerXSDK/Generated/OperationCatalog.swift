@@ -18,6 +18,12 @@ public enum PlatformOperation: String, CaseIterable, Sendable {
     case agentCapabilityRevoke = "agent:capability.revoke"
     case agentExportOffline = "agent:export.offline"
     case agentPrepare = "agent:prepare"
+    case agentProgramActivity = "agent:program.activity"
+    case agentProgramCall = "agent:program.call"
+    case agentProgramDiscover = "agent:program.discover"
+    case agentProgramInterface = "agent:program.interface"
+    case agentProgramReceipt = "agent:program.receipt"
+    case agentProgramSimulate = "agent:program.simulate"
     case agentProject = "agent:project"
     case agentReadAccount = "agent:read.account"
     case agentReadBalance = "agent:read.balance"
@@ -41,6 +47,7 @@ public enum PlatformOperation: String, CaseIterable, Sendable {
     case agentSubscriptionResume = "agent:subscription.resume"
     case agentTrack = "agent:track"
     case agentWait = "agent:wait"
+    case humanAccountBalance = "human:account.balance"
     case humanAccountCreate = "human:account.create"
     case humanActivityEntry = "human:activity.entry"
     case humanActivityExportEvidence = "human:activity.export.evidence"
@@ -75,6 +82,7 @@ public enum PlatformOperation: String, CaseIterable, Sendable {
     case humanEvidenceGet = "human:evidence.get"
     case humanExitEligibility = "human:exit.eligibility"
     case humanExitStart = "human:exit.start"
+    case humanHomeSummary = "human:home.summary"
     case humanJourneyGet = "human:journey.get"
     case humanJourneyList = "human:journey.list"
     case humanMoveCommit = "human:move.commit"
@@ -137,6 +145,12 @@ public enum PlatformOperation: String, CaseIterable, Sendable {
         case .agentCapabilityRevoke: return OperationDescriptor(plane: .agent, name: "capability.revoke", method: .post, path: "", requestType: "object", responseType: "AuthorityResponse<CapabilityRecord>", requiresIdempotency: true, bodyless: false)
         case .agentExportOffline: return OperationDescriptor(plane: .agent, name: "export.offline", method: .post, path: "", requestType: "object", responseType: "VerifiedRead<OfflineExport>", requiresIdempotency: false, bodyless: false)
         case .agentPrepare: return OperationDescriptor(plane: .agent, name: "prepare", method: .post, path: "", requestType: "PrepareRequest", responseType: "Prepared", requiresIdempotency: true, bodyless: false)
+        case .agentProgramActivity: return OperationDescriptor(plane: .agent, name: "program.activity", method: .get, path: "/v1/programs/activities/{activity_id}", requestType: "ProgramActivitySelector", responseType: "ProgramSubmission", requiresIdempotency: false, bodyless: false)
+        case .agentProgramCall: return OperationDescriptor(plane: .agent, name: "program.call", method: .post, path: "/v1/programs/call", requestType: "ProgramCallRequest", responseType: "ProgramSubmission", requiresIdempotency: true, bodyless: false)
+        case .agentProgramDiscover: return OperationDescriptor(plane: .agent, name: "program.discover", method: .get, path: "/v1/programs/registry/{program_id}", requestType: "ProgramSelector", responseType: "VerifiedProgramDiscovery", requiresIdempotency: false, bodyless: false)
+        case .agentProgramInterface: return OperationDescriptor(plane: .agent, name: "program.interface", method: .get, path: "/v1/programs/registry/{program_id}/interface", requestType: "ProgramSelector", responseType: "VerifiedProgramInterface", requiresIdempotency: false, bodyless: false)
+        case .agentProgramReceipt: return OperationDescriptor(plane: .agent, name: "program.receipt", method: .get, path: "/v1/programs/receipts/by-idempotency/{idempotency_key}", requestType: "ProgramReceiptSelector", responseType: "ProgramSubmission", requiresIdempotency: false, bodyless: false)
+        case .agentProgramSimulate: return OperationDescriptor(plane: .agent, name: "program.simulate", method: .post, path: "/v1/programs/simulate", requestType: "ProgramCallRequest", responseType: "ProgramSimulation", requiresIdempotency: false, bodyless: false)
         case .agentProject: return OperationDescriptor(plane: .agent, name: "project", method: .post, path: "", requestType: "object", responseType: "ProjectionResult", requiresIdempotency: false, bodyless: false)
         case .agentReadAccount: return OperationDescriptor(plane: .agent, name: "read.account", method: .post, path: "", requestType: "object", responseType: "VerifiedRead<AccountValue>", requiresIdempotency: false, bodyless: false)
         case .agentReadBalance: return OperationDescriptor(plane: .agent, name: "read.balance", method: .post, path: "", requestType: "object", responseType: "VerifiedRead<BalanceValue>", requiresIdempotency: false, bodyless: false)
@@ -160,6 +174,7 @@ public enum PlatformOperation: String, CaseIterable, Sendable {
         case .agentSubscriptionResume: return OperationDescriptor(plane: .agent, name: "subscription.resume", method: .post, path: "", requestType: "object", responseType: "object", requiresIdempotency: true, bodyless: false)
         case .agentTrack: return OperationDescriptor(plane: .agent, name: "track", method: .post, path: "", requestType: "TrackRequest", responseType: "TrackedSubmission", requiresIdempotency: false, bodyless: false)
         case .agentWait: return OperationDescriptor(plane: .agent, name: "wait", method: .post, path: "", requestType: "WaitRequest", responseType: "WaitResult", requiresIdempotency: false, bodyless: false)
+        case .humanAccountBalance: return OperationDescriptor(plane: .human, name: "account.balance", method: .get, path: "/v1/account/balance", requestType: "Empty", responseType: "AccountBalance", requiresIdempotency: false, bodyless: true)
         case .humanAccountCreate: return OperationDescriptor(plane: .human, name: "account.create", method: .post, path: "/v1/accounts", requestType: "AccountCreateRequest", responseType: "AccountCreation", requiresIdempotency: true, bodyless: false)
         case .humanActivityEntry: return OperationDescriptor(plane: .human, name: "activity.entry", method: .get, path: "/v1/activity/{entry_id}", requestType: "Empty", responseType: "ActivityEntryDetail", requiresIdempotency: false, bodyless: true)
         case .humanActivityExportEvidence: return OperationDescriptor(plane: .human, name: "activity.export.evidence", method: .post, path: "/v1/activity/exports/evidence", requestType: "ExportEvidenceRequest", responseType: "ExportArtefact", requiresIdempotency: true, bodyless: false)
@@ -194,6 +209,7 @@ public enum PlatformOperation: String, CaseIterable, Sendable {
         case .humanEvidenceGet: return OperationDescriptor(plane: .human, name: "evidence.get", method: .get, path: "/v1/evidence/{evidence_id}", requestType: "Empty", responseType: "EvidenceMaterial", requiresIdempotency: false, bodyless: true)
         case .humanExitEligibility: return OperationDescriptor(plane: .human, name: "exit.eligibility", method: .get, path: "/v1/exit/eligibility", requestType: "Empty", responseType: "ExitEligibility", requiresIdempotency: false, bodyless: true)
         case .humanExitStart: return OperationDescriptor(plane: .human, name: "exit.start", method: .post, path: "/v1/exit", requestType: "ExitStartRequest", responseType: "Journey", requiresIdempotency: true, bodyless: false)
+        case .humanHomeSummary: return OperationDescriptor(plane: .human, name: "home.summary", method: .get, path: "/v1/home", requestType: "Empty", responseType: "HomeSummary", requiresIdempotency: false, bodyless: true)
         case .humanJourneyGet: return OperationDescriptor(plane: .human, name: "journey.get", method: .get, path: "/v1/journeys/{journey_id}", requestType: "Empty", responseType: "Journey", requiresIdempotency: false, bodyless: true)
         case .humanJourneyList: return OperationDescriptor(plane: .human, name: "journey.list", method: .get, path: "/v1/journeys", requestType: "Empty", responseType: "JourneyPage", requiresIdempotency: false, bodyless: true)
         case .humanMoveCommit: return OperationDescriptor(plane: .human, name: "move.commit", method: .post, path: "/v1/moves", requestType: "MoveCommitRequest", responseType: "Journey", requiresIdempotency: true, bodyless: false)
@@ -292,6 +308,24 @@ public extension PlatformClient {
     func agentPrepare(_ request: JSONValue, idempotencyKey: IdempotencyKey, pathParameters: [String: String] = [:]) async throws -> JSONValue {
         try await mutate(.agentPrepare, request: request, idempotencyKey: idempotencyKey, pathParameters: pathParameters)
     }
+    func agentProgramActivity(_ request: JSONValue, pathParameters: [String: String] = [:]) async throws -> JSONValue {
+        try await read(.agentProgramActivity, request: request, pathParameters: pathParameters)
+    }
+    func agentProgramCall(_ request: JSONValue, idempotencyKey: IdempotencyKey, pathParameters: [String: String] = [:]) async throws -> JSONValue {
+        try await mutate(.agentProgramCall, request: request, idempotencyKey: idempotencyKey, pathParameters: pathParameters)
+    }
+    func agentProgramDiscover(_ request: JSONValue, pathParameters: [String: String] = [:]) async throws -> JSONValue {
+        try await read(.agentProgramDiscover, request: request, pathParameters: pathParameters)
+    }
+    func agentProgramInterface(_ request: JSONValue, pathParameters: [String: String] = [:]) async throws -> JSONValue {
+        try await read(.agentProgramInterface, request: request, pathParameters: pathParameters)
+    }
+    func agentProgramReceipt(_ request: JSONValue, pathParameters: [String: String] = [:]) async throws -> JSONValue {
+        try await read(.agentProgramReceipt, request: request, pathParameters: pathParameters)
+    }
+    func agentProgramSimulate(_ request: JSONValue, pathParameters: [String: String] = [:]) async throws -> JSONValue {
+        try await read(.agentProgramSimulate, request: request, pathParameters: pathParameters)
+    }
     func agentProject(_ request: JSONValue, pathParameters: [String: String] = [:]) async throws -> JSONValue {
         try await read(.agentProject, request: request, pathParameters: pathParameters)
     }
@@ -360,6 +394,9 @@ public extension PlatformClient {
     }
     func agentWait(_ request: JSONValue, pathParameters: [String: String] = [:]) async throws -> JSONValue {
         try await read(.agentWait, request: request, pathParameters: pathParameters)
+    }
+    func humanAccountBalance(_ request: JSONValue = .object([:]), pathParameters: [String: String] = [:]) async throws -> JSONValue {
+        try await read(.humanAccountBalance, request: request, pathParameters: pathParameters)
     }
     func humanAccountCreate(_ request: JSONValue, idempotencyKey: IdempotencyKey, pathParameters: [String: String] = [:]) async throws -> JSONValue {
         try await mutate(.humanAccountCreate, request: request, idempotencyKey: idempotencyKey, pathParameters: pathParameters)
@@ -462,6 +499,9 @@ public extension PlatformClient {
     }
     func humanExitStart(_ request: JSONValue, idempotencyKey: IdempotencyKey, pathParameters: [String: String] = [:]) async throws -> JSONValue {
         try await mutate(.humanExitStart, request: request, idempotencyKey: idempotencyKey, pathParameters: pathParameters)
+    }
+    func humanHomeSummary(_ request: JSONValue = .object([:]), pathParameters: [String: String] = [:]) async throws -> JSONValue {
+        try await read(.humanHomeSummary, request: request, pathParameters: pathParameters)
     }
     func humanJourneyGet(_ request: JSONValue = .object([:]), pathParameters: [String: String] = [:]) async throws -> JSONValue {
         try await read(.humanJourneyGet, request: request, pathParameters: pathParameters)
@@ -591,6 +631,6 @@ public extension PlatformClient {
     }
 }
 
-private let sdkMetadata = SDKMetadata(name: "LayerXSDK", version: "0.1.0", agentOperations: 40, humanOperations: 76)
+private let sdkMetadata = SDKMetadata(name: "LayerXSDK", version: "0.1.0", agentOperations: 46, humanOperations: 78)
 
 public func platform_sdk_swift() -> SDKMetadata { sdkMetadata }

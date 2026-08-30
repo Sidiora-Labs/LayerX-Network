@@ -272,22 +272,40 @@ func TestProgramTerminalWrapperOrderAndUniquenessAreClosed(t *testing.T) {
 func canonicalProgramTransferAuthorizationFixture() ([]byte, [32]byte) {
 	program, principal, invocation, asset, destination := [32]byte{1}, [32]byte{2}, [32]byte{3}, [32]byte{4}, [32]byte{5}
 	encoded := []byte("LayerX/programs/402LXP/transfer-set/v1\x00")
-	encoded = append(encoded, program[:]...); encoded = append(encoded, principal[:]...); encoded = append(encoded, invocation[:]...)
-	encoded = append(encoded, make([]byte, 8)...); encoded = append(encoded, 0)
-	events := []byte("LayerX/programs/events/v1\x00"); events = appendUint32(events, 0)
-	encoded = appendUint32(encoded, uint32(len(events))); encoded = append(encoded, events...)
-	encoded = appendUint64(encoded, 0); encoded = appendUint64(encoded, 1)
-	encoded = append(encoded, make([]byte, 8)...); encoded = append(encoded, 0)
-	encoded = append(encoded, asset[:]...); encoded = append(encoded, destination[:]...)
-	encoded = append(encoded, make([]byte, 15)...); encoded = append(encoded, 7); encoded = append(encoded, program[:]...)
-	leg := []byte{0}; leg = append(leg, principal[:]...); leg = append(leg, destination[:]...); leg = append(leg, asset[:]...); leg = append(leg, make([]byte, 15)...); leg = append(leg, 7, 0, 1)
+	encoded = append(encoded, program[:]...)
+	encoded = append(encoded, principal[:]...)
+	encoded = append(encoded, invocation[:]...)
+	encoded = append(encoded, make([]byte, 8)...)
+	encoded = append(encoded, 0)
+	events := []byte("LayerX/programs/events/v1\x00")
+	events = appendUint32(events, 0)
+	encoded = appendUint32(encoded, uint32(len(events)))
+	encoded = append(encoded, events...)
+	encoded = appendUint64(encoded, 0)
+	encoded = appendUint64(encoded, 1)
+	encoded = append(encoded, make([]byte, 8)...)
+	encoded = append(encoded, 0)
+	encoded = append(encoded, asset[:]...)
+	encoded = append(encoded, destination[:]...)
+	encoded = append(encoded, make([]byte, 15)...)
+	encoded = append(encoded, 7)
+	encoded = append(encoded, program[:]...)
+	leg := []byte{0}
+	leg = append(leg, principal[:]...)
+	leg = append(leg, destination[:]...)
+	leg = append(leg, asset[:]...)
+	leg = append(leg, make([]byte, 15)...)
+	leg = append(leg, 7, 0, 1)
 	return encoded, domainDigest([]byte("LXP/v1/merkle-leaf\x00"), leg)
 }
 
 func canonicalEmptyProgramOccupancyFixture() []byte {
 	encoded := []byte("LXP/storage-occupancy-settlement/v3\x00")
-	encoded = appendUint64(encoded, 1); encoded = appendUint32(encoded, 1)
-	for index := 0; index < 7; index++ { encoded = appendUint64(encoded, uint64(index+1)) }
+	encoded = appendUint64(encoded, 1)
+	encoded = appendUint32(encoded, 1)
+	for index := 0; index < 7; index++ {
+		encoded = appendUint64(encoded, uint64(index+1))
+	}
 	encoded = append(encoded, make([]byte, 16*4)...)
 	return appendUint32(encoded, 0)
 }

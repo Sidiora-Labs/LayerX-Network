@@ -166,7 +166,13 @@ impl ExplorerProgram {
         now: u64,
         staleness_limit: u64,
     ) -> Result<Self, ExplorerProgramReadError> {
-        Self::from_verified(read, state.balances().clone(), interfaces, now, staleness_limit)
+        Self::from_verified(
+            read,
+            state.balances().clone(),
+            interfaces,
+            now,
+            staleness_limit,
+        )
     }
 }
 

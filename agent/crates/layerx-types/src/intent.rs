@@ -677,15 +677,32 @@ impl ProgramCallFailure {
 /// The typed outcome of one program call: either the callee's response or a
 /// typed failure. The outcome is the response the operation carries back.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ProgramLegacyValue { I32(i32), I64(i64) }
+pub enum ProgramLegacyValue {
+    I32(i32),
+    I64(i64),
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ProgramLegacyCallResponse { code: i32, values: Vec<ProgramLegacyValue> }
+pub struct ProgramLegacyCallResponse {
+    code: i32,
+    values: Vec<ProgramLegacyValue>,
+}
 
 impl ProgramLegacyCallResponse {
-    pub fn new(code:i32,values:Vec<ProgramLegacyValue>)->Result<Self,ProgramCallError>{if code<0{return Err(ProgramCallError::NegativeResponseCode(code))}Ok(Self{code,values})}
-    #[must_use] pub const fn code(&self)->i32{self.code}
-    #[must_use] pub fn values(&self)->&[ProgramLegacyValue]{&self.values}
+    pub fn new(code: i32, values: Vec<ProgramLegacyValue>) -> Result<Self, ProgramCallError> {
+        if code < 0 {
+            return Err(ProgramCallError::NegativeResponseCode(code));
+        }
+        Ok(Self { code, values })
+    }
+    #[must_use]
+    pub const fn code(&self) -> i32 {
+        self.code
+    }
+    #[must_use]
+    pub fn values(&self) -> &[ProgramLegacyValue] {
+        &self.values
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -782,7 +799,10 @@ mod program_call_tests {
     fn canonical_payload_matches_shared_golden_vector() -> Result<(), ProgramCallError> {
         let payload = golden_call()?.canonical_payload();
         assert_eq!(hex(&payload), GOLDEN_PAYLOAD_HEX);
-        assert_eq!(ProgramCall::from_canonical_payload(&payload)?, golden_call()?);
+        assert_eq!(
+            ProgramCall::from_canonical_payload(&payload)?,
+            golden_call()?
+        );
         Ok(())
     }
 
@@ -823,10 +843,9 @@ mod program_call_tests {
     #[test]
     fn duplicate_capability_is_refused() {
         assert_eq!(
-            RequestedCapabilities::new(&[
-                CapabilityRequest::Transfer,
-                CapabilityRequest::Transfer,
-            ]),
+            RequestedCapabilities::new(
+                &[CapabilityRequest::Transfer, CapabilityRequest::Transfer,]
+            ),
             Err(ProgramCallError::DuplicateCapability(
                 CapabilityRequest::Transfer.tag()
             ))
@@ -859,7 +878,9 @@ mod program_call_tests {
         let oversized = vec![0_u8; MAX_CALL_RESPONSE_BYTES + 1];
         assert_eq!(
             ProgramCallResponse::new(0, &oversized),
-            Err(ProgramCallError::ResponseLength(MAX_CALL_RESPONSE_BYTES + 1))
+            Err(ProgramCallError::ResponseLength(
+                MAX_CALL_RESPONSE_BYTES + 1
+            ))
         );
     }
 

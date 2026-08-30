@@ -10,9 +10,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use layerx_agentd::read::LayerxdProgramBalanceReader;
 use layerx_client::head::Head;
-use layerx_explorer_index::programs::{
-    ExplorerProgram, VerifiedProgramInterfaceMetadata,
-};
+use layerx_explorer_index::programs::{ExplorerProgram, VerifiedProgramInterfaceMetadata};
 use layerx_explorer_index::{Indexer, ProtocolProgramIngestor};
 use layerx_programs::{
     hex, BuildPlan, DeploymentJournal, DeploymentProof, DeploymentRecord, JournalReadAuthority,
@@ -122,9 +120,7 @@ fn config() -> Result<Config, String> {
         journal: FileJournal {
             root: PathBuf::from(required("LAYERX_EXPLORER_DEPLOYMENT_JOURNAL")?),
         },
-        verified_source_store: PathBuf::from(required(
-            "LAYERX_EXPLORER_VERIFIED_SOURCE_STORE",
-        )?),
+        verified_source_store: PathBuf::from(required("LAYERX_EXPLORER_VERIFIED_SOURCE_STORE")?),
         probe_program: ProgramId::new(parse_digest("LAYERX_EXPLORER_PROGRAM_PROBE_ID")?)
             .map_err(|error| format!("LAYERX_EXPLORER_PROGRAM_PROBE_ID is invalid: {error}"))?,
         observed_sealed_batch: parse_u64("LAYERX_EXPLORER_OBSERVED_SEALED_BATCH")?,
@@ -177,7 +173,10 @@ fn load_registry(
             .map_err(|error| format!("{} is unverified: {error}", path.display()))?;
         let expected = hex::encode(&evidence.receipt_digest());
         if path.file_stem().and_then(|value| value.to_str()) != Some(expected.as_str()) {
-            return Err(format!("{} is filed under the wrong receipt", path.display()));
+            return Err(format!(
+                "{} is filed under the wrong receipt",
+                path.display()
+            ));
         }
         let record_path = root.join(format!("{expected}.deployment"));
         let record = DeploymentRecord::decode(
@@ -189,7 +188,10 @@ fn load_registry(
             .validate()
             .map_err(|error| format!("{} is inadmissible: {error}", record_path.display()))?;
         if &record != evidence.record() {
-            return Err(format!("{} disagrees with protocol evidence", record_path.display()));
+            return Err(format!(
+                "{} disagrees with protocol evidence",
+                record_path.display()
+            ));
         }
         deployments.push(evidence);
     }
@@ -223,8 +225,8 @@ fn replay_verified_sources(root: &Path, registry: &mut Registry) -> Result<(), S
     for path in paths {
         let bytes = fs::read(&path)
             .map_err(|error| format!("{} is unreadable: {error}", path.display()))?;
-        let document: Value = serde_json::from_slice(&bytes)
-            .map_err(|_| format!("{} is corrupt", path.display()))?;
+        let document: Value =
+            serde_json::from_slice(&bytes).map_err(|_| format!("{} is corrupt", path.display()))?;
         let program = document["program"]
             .as_str()
             .and_then(|value| hex::decode_digest(value).ok())
@@ -237,7 +239,10 @@ fn replay_verified_sources(root: &Path, registry: &mut Registry) -> Result<(), S
             .ok_or_else(|| format!("{} has an invalid version", path.display()))?;
         let expected_name = format!("{}-{version}", hex::encode(&program.bytes()));
         if path.file_stem().and_then(|value| value.to_str()) != Some(expected_name.as_str()) {
-            return Err(format!("{} is filed under the wrong program version", path.display()));
+            return Err(format!(
+                "{} is filed under the wrong program version",
+                path.display()
+            ));
         }
         let source_uri = document["source_uri"]
             .as_str()
@@ -255,8 +260,9 @@ fn replay_verified_sources(root: &Path, registry: &mut Registry) -> Result<(), S
             .as_str()
             .ok_or_else(|| format!("{} has no build plan", path.display()))
             .and_then(|value| {
-                BuildPlan::parse(value)
-                    .map_err(|error| format!("{} has an invalid build plan: {error}", path.display()))
+                BuildPlan::parse(value).map_err(|error| {
+                    format!("{} has an invalid build plan: {error}", path.display())
+                })
             })?;
         let build = ReproducibleBuild::from_record(
             source_uri.to_owned(),
@@ -268,10 +274,16 @@ fn replay_verified_sources(root: &Path, registry: &mut Registry) -> Result<(), S
         match registry.verify_source(program, version, &build) {
             Ok(SourceStatus::Verified { .. }) => {}
             Ok(SourceStatus::Mismatch { .. } | SourceStatus::Unpublished) => {
-                return Err(format!("{} does not reproduce registered code", path.display()));
+                return Err(format!(
+                    "{} does not reproduce registered code",
+                    path.display()
+                ));
             }
             Err(error) => {
-                return Err(format!("{} is not bound to registry state: {error}", path.display()));
+                return Err(format!(
+                    "{} is not bound to registry state: {error}",
+                    path.display()
+                ));
             }
         }
     }
@@ -408,14 +420,9 @@ fn refresh_program(
     if !loaded.registry.program_ids().contains(&program) {
         return Err(ProgramRefreshError::UnknownProgram);
     }
-    let head = config
-        .journal
-        .observed_head()
-        .map_err(|error| {
-            ProgramRefreshError::Unavailable(format!(
-                "explorer head is unavailable: {error}"
-            ))
-        })?;
+    let head = config.journal.observed_head().map_err(|error| {
+        ProgramRefreshError::Unavailable(format!("explorer head is unavailable: {error}"))
+    })?;
     index
         .refresh_head(Head {
             chain_sequence: head.sequence,
@@ -423,24 +430,15 @@ fn refresh_program(
             finalised_checkpoint: config.finalised_checkpoint,
         })
         .map_err(|error| {
-            ProgramRefreshError::Unavailable(format!(
-                "explorer head refresh failed: {error:?}"
-            ))
+            ProgramRefreshError::Unavailable(format!("explorer head refresh failed: {error:?}"))
         })?;
-    let authority = JournalReadAuthority::new(&config.journal, now, config.staleness_ms)
-        .map_err(|error| {
-            ProgramRefreshError::Unavailable(format!(
-                "registry authority is unavailable: {error}"
-            ))
+    let authority =
+        JournalReadAuthority::new(&config.journal, now, config.staleness_ms).map_err(|error| {
+            ProgramRefreshError::Unavailable(format!("registry authority is unavailable: {error}"))
         })?;
-    let read = loaded
-        .registry
-        .read(program, &authority)
-        .map_err(|error| {
-            ProgramRefreshError::Unavailable(format!(
-                "registry read is unavailable: {error}"
-            ))
-        })?;
+    let read = loaded.registry.read(program, &authority).map_err(|error| {
+        ProgramRefreshError::Unavailable(format!("registry read is unavailable: {error}"))
+    })?;
     let reader = LayerxdProgramBalanceReader::connect(
         &config.node_endpoint,
         config.node_bearer.clone(),
@@ -504,12 +502,7 @@ fn serve_connection(
         return response(stream, 401, "{\"error\":\"unauthorized\"}");
     }
     if path == "/healthz" {
-        return match refresh_program(
-            config,
-            index,
-            config.probe_program,
-            now_ms()?,
-        ) {
+        return match refresh_program(config, index, config.probe_program, now_ms()?) {
             Ok(()) => response(stream, 200, "{\"ready\":true}"),
             Err(_) => response(stream, 503, "{\"ready\":false}"),
         };
@@ -549,13 +542,8 @@ fn serve(config: Config) -> Result<(), String> {
         sealed_batch: config.observed_sealed_batch,
         finalised_checkpoint: config.finalised_checkpoint,
     });
-    refresh_program(
-        &config,
-        &mut index,
-        config.probe_program,
-        now_ms()?,
-    )
-    .map_err(|error| format!("explorer protocol probe failed: {error}"))?;
+    refresh_program(&config, &mut index, config.probe_program, now_ms()?)
+        .map_err(|error| format!("explorer protocol probe failed: {error}"))?;
     let listener = TcpListener::bind(&config.listen)
         .map_err(|error| format!("explorer program listener failed: {error}"))?;
     for incoming in listener.incoming() {

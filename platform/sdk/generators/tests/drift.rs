@@ -175,10 +175,9 @@ fn freshly_generated_pipeline_passes_the_gate() {
 fn rust_operation_catalogue_is_derived_from_programs_schema() {
     let root = repo_fixture("rust-programs");
     generate(&root);
-    let generated = fs::read_to_string(
-        root.join("agent/crates/layerx-sdk/src/operation_generated.rs"),
-    )
-    .unwrap_or_else(|error| panic!("read generated Rust operation catalogue: {error}"));
+    let generated =
+        fs::read_to_string(root.join("agent/crates/layerx-sdk/src/operation_generated.rs"))
+            .unwrap_or_else(|error| panic!("read generated Rust operation catalogue: {error}"));
     assert!(generated.contains("ProgramDiscover"));
     assert!(generated.contains("ProgramInterface"));
     assert!(generated.contains("ProgramSimulate"));

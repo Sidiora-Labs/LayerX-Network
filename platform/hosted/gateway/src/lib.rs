@@ -7,8 +7,7 @@ use layerx_crypto::disclosure::{bind as bind_disclosure, AmountRole, Counterpart
 use layerx_crypto::{ed25519, SignatureMessage};
 use layerx_proof::program::{
     verify_authorized_program_execution, verify_program_execution,
-    AuthorizedProgramExecutionExpectation, ProgramExecutionExpectation,
-    VerifiedProgramExecution,
+    AuthorizedProgramExecutionExpectation, ProgramExecutionExpectation, VerifiedProgramExecution,
 };
 use layerx_proof::receipt::{verify_outcome, AuthorizedBatch, ReceiptCheck};
 use layerx_types::intent::{ProgramCallFailure, ProgramCallOutcome, ProgramLegacyValue};

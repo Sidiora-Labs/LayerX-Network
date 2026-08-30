@@ -211,13 +211,7 @@ impl ProtocolProgramIngestor {
         registry_read.entry.lifecycle_history = state.history().to_vec();
         registry_read.receipt_digest = state.balances().receipt_digest();
         registry_read.freshness = state.balances().freshness();
-        index.ingest_program(
-            registry_read,
-            &state,
-            interfaces,
-            now,
-            self.staleness_limit,
-        )
+        index.ingest_program(registry_read, &state, interfaces, now, self.staleness_limit)
     }
 }
 
@@ -731,10 +725,7 @@ fn verified_metadata_history_is_monotonic(
                 && prior.code_hash == current.code_hash
                 && prior.abi_version == current.abi_version
                 && source_metadata_is_monotonic(prior.source, current.source)
-                && interface_metadata_is_monotonic(
-                    prior.interface_digest,
-                    current.interface_digest,
-                )
+                && interface_metadata_is_monotonic(prior.interface_digest, current.interface_digest)
         })
 }
 
@@ -925,10 +916,7 @@ mod program_metadata_refresh_tests {
             index.ingest_program_projection(current.clone()),
             Ok(IngestOutcome::Inserted)
         );
-        assert_eq!(
-            index.program(current.identifier).value,
-            Some(current)
-        );
+        assert_eq!(index.program(current.identifier).value, Some(current));
     }
 
     #[test]

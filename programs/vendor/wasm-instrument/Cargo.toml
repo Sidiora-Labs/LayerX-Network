@@ -40,7 +40,8 @@ repository = "https://github.com/paritytech/wasm-instrument"
 bench = false
 
 [dependencies.parity-wasm]
-version = "0.45"
+path = "../parity-wasm"
+version = "=0.45.0"
 features = [
     "bulk",
     "multi_value",

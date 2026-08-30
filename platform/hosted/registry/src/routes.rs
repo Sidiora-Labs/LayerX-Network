@@ -146,28 +146,59 @@ impl Registrar {
     /// Answers one request at the supplied wall-clock millisecond.
     pub fn route(&mut self, request: &Request, now: u64, deadline: Instant) -> Response {
         if Instant::now() >= deadline {
-            return refusal(503, "request_deadline_exceeded", "the registry request deadline expired");
+            return refusal(
+                503,
+                "request_deadline_exceeded",
+                "the registry request deadline expired",
+            );
         }
         self.node_state.set_request_deadline(deadline);
-        if self.verifier.runner().set_request_deadline(deadline).is_err() {
-            return refusal(503, "builder_unavailable", "the builder deadline boundary is unavailable");
+        if self
+            .verifier
+            .runner()
+            .set_request_deadline(deadline)
+            .is_err()
+        {
+            return refusal(
+                503,
+                "builder_unavailable",
+                "the builder deadline boundary is unavailable",
+            );
         }
         let authorization = if request.path == "/healthz" {
             None
         } else if configures_publication_route(request) {
-            if !self.publication_authority.verifies(request.headers.get("authorization").map(String::as_str)) {
-                return refusal(403, "publication_authority_required", "source publication requires the operator authority");
+            if !self
+                .publication_authority
+                .verifies(request.headers.get("authorization").map(String::as_str))
+            {
+                return refusal(
+                    403,
+                    "publication_authority_required",
+                    "source publication requires the operator authority",
+                );
             }
             Some(Authorization::Publication)
         } else {
-            if !self.request_authority.verifies(request.headers.get("authorization").map(String::as_str)) {
-                return refusal(401, "authentication_required", "a valid registry bearer credential is required");
+            if !self
+                .request_authority
+                .verifies(request.headers.get("authorization").map(String::as_str))
+            {
+                return refusal(
+                    401,
+                    "authentication_required",
+                    "a valid registry bearer credential is required",
+                );
             }
             Some(Authorization::Request)
         };
         let response = self.authorized_route(request, now, authorization, deadline);
         if Instant::now() >= deadline {
-            return refusal(503, "request_deadline_exceeded", "the registry request deadline expired");
+            return refusal(
+                503,
+                "request_deadline_exceeded",
+                "the registry request deadline expired",
+            );
         }
         response
     }
@@ -184,9 +215,7 @@ impl Registrar {
                 status: 200,
                 body: json!({"status": "ready", "service": "program-registry"}).to_string(),
             },
-            ("POST", "/__registry/deployments") => {
-                deployment_ingress_unavailable(&request.body)
-            }
+            ("POST", "/__registry/deployments") => deployment_ingress_unavailable(&request.body),
             ("POST", "/__registry/head") => self.ingest_head(now),
             ("POST", "/__registry/sources") => self.ingest_source(&request.body, deadline),
             (
@@ -199,7 +228,11 @@ impl Registrar {
             ),
             _ => {
                 if Instant::now() >= deadline {
-                    refusal(503, "request_deadline_exceeded", "the registry request deadline expired")
+                    refusal(
+                        503,
+                        "request_deadline_exceeded",
+                        "the registry request deadline expired",
+                    )
                 } else {
                     self.program_route(request, now)
                 }
@@ -227,7 +260,9 @@ impl Registrar {
         let mut feed_head = 0_u64;
         for _ in 0..MAX_CHANGE_PAGES {
             if self.node_state.request_deadline_expired() {
-                return Err("registry request deadline expired during protocol synchronization".to_owned());
+                return Err(
+                    "registry request deadline expired during protocol synchronization".to_owned(),
+                );
             }
             let (notices, next, scanned, current) = self.node_state.changes(complete)?;
             programs.extend(notices.into_iter().map(|notice| notice.program));
@@ -338,8 +373,7 @@ impl Registrar {
         if let Err(error) = self.synchronize_protocol_state(Some(program), now) {
             return refusal(503, "protocol_state_unavailable", &error);
         }
-        let authority = match JournalReadAuthority::new(&self.journal, now, self.staleness_ms)
-        {
+        let authority = match JournalReadAuthority::new(&self.journal, now, self.staleness_ms) {
             Ok(authority) => authority,
             Err(error) => return refusal(503, "read_unverifiable", &error.to_string()),
         };
@@ -365,7 +399,11 @@ impl Registrar {
             return refusal(503, "stale_read", "protocol head freshness overflowed");
         };
         if now > valid_through {
-            return refusal(503, "stale_read", "protocol head is outside its freshness bound");
+            return refusal(
+                503,
+                "stale_read",
+                "protocol head is outside its freshness bound",
+            );
         }
         let abi = read
             .entry
@@ -458,7 +496,11 @@ impl Registrar {
             return refusal(502, "unverified_read", "program has no verified version");
         };
         let Some(interface) = self.interfaces.get(&(program, version.number)) else {
-            return refusal(404, "interface_absent", "program has no published interface");
+            return refusal(
+                404,
+                "interface_absent",
+                "program has no published interface",
+            );
         };
         if interface.code_hash() != version.code_hash
             || interface.abi_version() != version.abi_version
@@ -470,13 +512,21 @@ impl Registrar {
             );
         }
         let Some(head) = self.current_head else {
-            return refusal(503, "protocol_head_unavailable", "current protocol head is unavailable");
+            return refusal(
+                503,
+                "protocol_head_unavailable",
+                "current protocol head is unavailable",
+            );
         };
         let Some(valid_through) = head.freshness.observed_at.checked_add(self.staleness_ms) else {
             return refusal(503, "stale_read", "protocol head freshness overflowed");
         };
         if now > valid_through {
-            return refusal(503, "stale_read", "protocol head is outside its freshness bound");
+            return refusal(
+                503,
+                "stale_read",
+                "protocol head is outside its freshness bound",
+            );
         }
         Response {
             status: 200,
@@ -567,7 +617,11 @@ impl Registrar {
             Err(refused) => return rebuild_refusal(&refused),
         };
         if self.node_state.request_deadline_expired() {
-            return refusal(503, "request_deadline_exceeded", "the registry request deadline expired during rebuild");
+            return refusal(
+                503,
+                "request_deadline_exceeded",
+                "the registry request deadline expired during rebuild",
+            );
         }
         let status = match self.registry.verify_source(program, version, &build) {
             Ok(status) => status,
@@ -625,7 +679,9 @@ impl Registrar {
             }
             registry
                 .record_verified_deployment(&evidence)
-                .map_err(|error| format!("verified deployment history is not replayable: {error}"))?;
+                .map_err(|error| {
+                    format!("verified deployment history is not replayable: {error}")
+                })?;
         }
         for record in self.verified.records()? {
             let build = ReproducibleBuild::from_record(
@@ -701,7 +757,11 @@ impl Registrar {
             Err(error) => return refusal(400, "invalid_argument", &error.to_string()),
         };
         if Instant::now() >= deadline {
-            return refusal(503, "request_deadline_exceeded", "the registry request deadline expired before source publication");
+            return refusal(
+                503,
+                "request_deadline_exceeded",
+                "the registry request deadline expired before source publication",
+            );
         }
         match self.mirror.publish(uri, &plan, &archive) {
             Ok(digest) => Response {

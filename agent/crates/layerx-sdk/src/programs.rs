@@ -1,11 +1,11 @@
 //! Receipt-verified Programs operations for direct-node and hosted transports.
 
+pub use layerx_agent_api::error::{ErrorClass as AgentErrorClass, Retriability};
 use layerx_proof::program::{
     verify_authorized_program_execution, AuthorizedProgramExecutionExpectation,
     VerifiedProgramExecution,
 };
 use layerx_proof::receipt::AuthorizedBatch;
-pub use layerx_agent_api::error::{ErrorClass as AgentErrorClass, Retriability};
 use layerx_types::intent::ProgramCall;
 use layerx_types::payload::{ModuleId, ModuleRegistry};
 use layerx_types::result::ResultCode;
@@ -151,16 +151,46 @@ pub struct VerifiedProgramDiscovery {
 }
 
 impl VerifiedProgramDiscovery {
-    #[must_use] pub const fn program_id(&self) -> [u8; 32] { self.program_id }
-    #[must_use] pub const fn lifecycle(&self) -> ProgramLifecycle { self.lifecycle }
-    #[must_use] pub const fn version(&self) -> u32 { self.version }
-    #[must_use] pub const fn code_hash(&self) -> [u8; 32] { self.code_hash }
-    #[must_use] pub const fn abi_version(&self) -> u16 { self.abi_version }
-    #[must_use] pub const fn receipt_digest(&self) -> [u8; 32] { self.receipt_digest }
-    #[must_use] pub const fn state_root(&self) -> [u8; 32] { self.state_root }
-    #[must_use] pub const fn observed_sequence(&self) -> u64 { self.observed_sequence }
-    #[must_use] pub const fn observed_at(&self) -> u64 { self.observed_at }
-    #[must_use] pub const fn valid_through(&self) -> u64 { self.valid_through }
+    #[must_use]
+    pub const fn program_id(&self) -> [u8; 32] {
+        self.program_id
+    }
+    #[must_use]
+    pub const fn lifecycle(&self) -> ProgramLifecycle {
+        self.lifecycle
+    }
+    #[must_use]
+    pub const fn version(&self) -> u32 {
+        self.version
+    }
+    #[must_use]
+    pub const fn code_hash(&self) -> [u8; 32] {
+        self.code_hash
+    }
+    #[must_use]
+    pub const fn abi_version(&self) -> u16 {
+        self.abi_version
+    }
+    #[must_use]
+    pub const fn receipt_digest(&self) -> [u8; 32] {
+        self.receipt_digest
+    }
+    #[must_use]
+    pub const fn state_root(&self) -> [u8; 32] {
+        self.state_root
+    }
+    #[must_use]
+    pub const fn observed_sequence(&self) -> u64 {
+        self.observed_sequence
+    }
+    #[must_use]
+    pub const fn observed_at(&self) -> u64 {
+        self.observed_at
+    }
+    #[must_use]
+    pub const fn valid_through(&self) -> u64 {
+        self.valid_through
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -180,18 +210,54 @@ pub struct VerifiedProgramInterface {
 }
 
 impl VerifiedProgramInterface {
-    #[must_use] pub const fn program_id(&self) -> [u8; 32] { self.program_id }
-    #[must_use] pub const fn version(&self) -> u32 { self.version }
-    #[must_use] pub const fn code_hash(&self) -> [u8; 32] { self.code_hash }
-    #[must_use] pub const fn abi_version(&self) -> u16 { self.abi_version }
-    #[must_use] pub fn interface(&self) -> &[u8] { &self.interface }
-    #[must_use] pub const fn interface_digest(&self) -> [u8; 32] { self.interface_digest }
-    #[must_use] pub const fn receipt_digest(&self) -> [u8; 32] { self.receipt_digest }
-    #[must_use] pub const fn state_root(&self) -> [u8; 32] { self.state_root }
-    #[must_use] pub const fn observed_sequence(&self) -> u64 { self.observed_sequence }
-    #[must_use] pub const fn observed_at(&self) -> u64 { self.observed_at }
-    #[must_use] pub const fn valid_through(&self) -> u64 { self.valid_through }
-    #[must_use] pub const fn source(&self) -> ProgramSource { self.source }
+    #[must_use]
+    pub const fn program_id(&self) -> [u8; 32] {
+        self.program_id
+    }
+    #[must_use]
+    pub const fn version(&self) -> u32 {
+        self.version
+    }
+    #[must_use]
+    pub const fn code_hash(&self) -> [u8; 32] {
+        self.code_hash
+    }
+    #[must_use]
+    pub const fn abi_version(&self) -> u16 {
+        self.abi_version
+    }
+    #[must_use]
+    pub fn interface(&self) -> &[u8] {
+        &self.interface
+    }
+    #[must_use]
+    pub const fn interface_digest(&self) -> [u8; 32] {
+        self.interface_digest
+    }
+    #[must_use]
+    pub const fn receipt_digest(&self) -> [u8; 32] {
+        self.receipt_digest
+    }
+    #[must_use]
+    pub const fn state_root(&self) -> [u8; 32] {
+        self.state_root
+    }
+    #[must_use]
+    pub const fn observed_sequence(&self) -> u64 {
+        self.observed_sequence
+    }
+    #[must_use]
+    pub const fn observed_at(&self) -> u64 {
+        self.observed_at
+    }
+    #[must_use]
+    pub const fn valid_through(&self) -> u64 {
+        self.valid_through
+    }
+    #[must_use]
+    pub const fn source(&self) -> ProgramSource {
+        self.source
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -267,10 +333,7 @@ pub trait ProgramTransport {
         idempotency_key: [u8; 32],
         expected_activity: [u8; 32],
     ) -> Result<ProgramSubmission, ProgramOperationError>;
-    fn activity(
-        &self,
-        activity_id: [u8; 32],
-    ) -> Result<ProgramSubmission, ProgramOperationError>;
+    fn activity(&self, activity_id: [u8; 32]) -> Result<ProgramSubmission, ProgramOperationError>;
 }
 
 pub struct ProgramOperations<T> {

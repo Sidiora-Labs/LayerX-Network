@@ -20,8 +20,8 @@ import (
 
 const (
 	MaximumProgramCalldataBytes = 1_048_576
-	MaximumProgramCapabilities = 5
-	maximumProgramLegacyValues = 512
+	MaximumProgramCapabilities  = 5
+	maximumProgramLegacyValues  = 512
 )
 
 type ProgramCapability string
@@ -62,19 +62,19 @@ type ProgramDiscovery struct {
 }
 
 type ProgramInterface struct {
-	ProgramID        string          `json:"program_id"`
-	Version          uint32          `json:"version"`
-	CodeHash         string          `json:"code_hash"`
-	ABIVersion       uint16          `json:"abi_version"`
-	Interface        *string         `json:"interface"`
-	InterfaceDigest  *string         `json:"interface_digest"`
-	ReceiptDigest    string          `json:"receipt_digest"`
-	StateRoot        string          `json:"state_root"`
-	ObservedSequence string          `json:"observed_sequence"`
-	ObservedAt       string          `json:"observed_at"`
-	ValidThrough     string          `json:"valid_through"`
-	Source           ProgramSource   `json:"source"`
-	Verification     string          `json:"verification"`
+	ProgramID        string        `json:"program_id"`
+	Version          uint32        `json:"version"`
+	CodeHash         string        `json:"code_hash"`
+	ABIVersion       uint16        `json:"abi_version"`
+	Interface        *string       `json:"interface"`
+	InterfaceDigest  *string       `json:"interface_digest"`
+	ReceiptDigest    string        `json:"receipt_digest"`
+	StateRoot        string        `json:"state_root"`
+	ObservedSequence string        `json:"observed_sequence"`
+	ObservedAt       string        `json:"observed_at"`
+	ValidThrough     string        `json:"valid_through"`
+	Source           ProgramSource `json:"source"`
+	Verification     string        `json:"verification"`
 }
 
 type ProgramSource struct {
@@ -932,8 +932,8 @@ func consumeStandaloneProgramResource(cursor *programTerminalCursor) bool {
 func validProgramTransferError(tag byte) bool { return tag >= 1 && tag <= 12 }
 
 type programOccupancyProjection struct {
-	ByteBatches Uint128
-	FeeUnits    Uint128
+	ByteBatches  Uint128
+	FeeUnits     Uint128
 	TransferRoot [32]byte
 }
 
@@ -942,26 +942,42 @@ func decodeProgramOccupancy(encoded []byte, asset [32]byte) (programOccupancyPro
 	if len(encoded) > 65_536 || asset == ([32]byte{}) {
 		return programOccupancyProjection{}, errors.New("invalid Programs occupancy settlement")
 	}
-	if bytes.HasPrefix(encoded, []byte("LXP/storage-occupancy-settlement/v1\x00")) || bytes.HasPrefix(encoded, []byte("LXP/storage-occupancy-settlement/v2\x00")) { return decodeLegacyProgramOccupancy(encoded, asset) }
-	if !bytes.HasPrefix(encoded, []byte(domain)) { return programOccupancyProjection{}, errors.New("invalid Programs occupancy settlement") }
+	if bytes.HasPrefix(encoded, []byte("LXP/storage-occupancy-settlement/v1\x00")) || bytes.HasPrefix(encoded, []byte("LXP/storage-occupancy-settlement/v2\x00")) {
+		return decodeLegacyProgramOccupancy(encoded, asset)
+	}
+	if !bytes.HasPrefix(encoded, []byte(domain)) {
+		return programOccupancyProjection{}, errors.New("invalid Programs occupancy settlement")
+	}
 	cursor := programTerminalCursor{value: encoded[len(domain):]}
 	batch := cursor.u64()
-	if cursor.u32() == 0 { return programOccupancyProjection{}, errors.New("invalid Programs occupancy schedule") }
+	if cursor.u32() == 0 {
+		return programOccupancyProjection{}, errors.New("invalid Programs occupancy schedule")
+	}
 	prices := [7]uint64{}
-	for index := range prices { prices[index] = cursor.u64() }
+	for index := range prices {
+		prices[index] = cursor.u64()
+	}
 	declaredBatches, declaredFees, declaredPaid, declaredArrears := cursor.u128(), cursor.u128(), cursor.u128(), cursor.u128()
 	count := cursor.u32()
-	if count > 256 { return programOccupancyProjection{}, errors.New("Programs occupancy positions exceed bound") }
+	if count > 256 {
+		return programOccupancyProjection{}, errors.New("Programs occupancy positions exceed bound")
+	}
 	var batches, fees, paid, arrears Uint128
 	var priorNamespace []byte
 	paidByPayer := make(map[[32]byte]Uint128)
 	for index := uint32(0); index < count; index++ {
 		namespaceLength := cursor.byte()
 		namespace := append([]byte(nil), cursor.take(int(namespaceLength))...)
-		if (namespaceLength != 33 && namespaceLength != 65) || !validProgramNamespace(namespace) || priorNamespace != nil && bytes.Compare(priorNamespace, namespace) >= 0 { return programOccupancyProjection{}, errors.New("invalid Programs occupancy namespace") }
+		if (namespaceLength != 33 && namespaceLength != 65) || !validProgramNamespace(namespace) || priorNamespace != nil && bytes.Compare(priorNamespace, namespace) >= 0 {
+			return programOccupancyProjection{}, errors.New("invalid Programs occupancy namespace")
+		}
 		priorNamespace = namespace
-		payer := cursor.array32(); rootProgram := cursor.array32(); activity := cursor.array32()
-		if payer == ([32]byte{}) || rootProgram == ([32]byte{}) || namespace[32] == 0 && !bytes.Equal(namespace[33:], payer[:]) { return programOccupancyProjection{}, errors.New("invalid Programs occupancy authority") }
+		payer := cursor.array32()
+		rootProgram := cursor.array32()
+		activity := cursor.array32()
+		if payer == ([32]byte{}) || rootProgram == ([32]byte{}) || namespace[32] == 0 && !bytes.Equal(namespace[33:], payer[:]) {
+			return programOccupancyProjection{}, errors.New("invalid Programs occupancy authority")
+		}
 		fromBatch, toBatch, recorded, finalBytes := cursor.u64(), cursor.u64(), cursor.u64(), cursor.u64()
 		byteBatches, price, accrued := cursor.u128(), cursor.u64(), cursor.u128()
 		priorArrears, amountDue, authorizedAdded := cursor.u128(), cursor.u128(), cursor.u128()
@@ -977,84 +993,477 @@ func decodeProgramOccupancy(encoded []byte, asset [32]byte) (programOccupancyPro
 		migration := disposition == 5
 		mandateExpected := programOccupancyMandate(payer, rootProgram, activity, namespace, maximumBytes, maximumPrice, authorizedAdded)
 		invalid := cursor.failed || toBatch != batch || disposition < 1 || disposition > 5 || underflow || overflow || feeOverflow || !dueOK || !byteBatches.Equal(computedBatches) || !accrued.Equal(computedFees) || !amountDue.Equal(computedDue) || finalBytes > maximumBytes || !migration && price != prices[6] || !migration && (mandate == ([32]byte{}) || activity == ([32]byte{})) || migration && (price != 0 || accrued != (Uint128{}) || priorArrears != (Uint128{}) || amountDue != (Uint128{}) || arrearsAfter != (Uint128{}) || mandate != ([32]byte{}) || activity != ([32]byte{}) || !bytes.Equal(rootProgram[:], namespace[:32])) || authorizedAdded != (Uint128{}) && mandate != mandateExpected || (disposition == 4) != (price > maximumPrice) || disposition == 1 && arrearsAfter != (Uint128{}) || disposition != 1 && !arrearsAfter.Equal(amountDue)
-		if invalid { return programOccupancyProjection{}, errors.New("invalid Programs occupancy charge") }
+		if invalid {
+			return programOccupancyProjection{}, errors.New("invalid Programs occupancy charge")
+		}
 		var ok bool
-		if batches, ok = batches.Add(byteBatches); !ok { return programOccupancyProjection{}, errors.New("Programs occupancy batch overflow") }
-		if fees, ok = fees.Add(accrued); !ok { return programOccupancyProjection{}, errors.New("Programs occupancy fee overflow") }
+		if batches, ok = batches.Add(byteBatches); !ok {
+			return programOccupancyProjection{}, errors.New("Programs occupancy batch overflow")
+		}
+		if fees, ok = fees.Add(accrued); !ok {
+			return programOccupancyProjection{}, errors.New("Programs occupancy fee overflow")
+		}
 		if disposition == 1 {
-			if paid, ok = paid.Add(amountDue); !ok { return programOccupancyProjection{}, errors.New("Programs occupancy paid overflow") }
-			current := paidByPayer[payer]; if current, ok = current.Add(amountDue); !ok { return programOccupancyProjection{}, errors.New("Programs occupancy payer overflow") }; paidByPayer[payer] = current
-		} else if arrears, ok = arrears.Add(arrearsAfter); !ok { return programOccupancyProjection{}, errors.New("Programs occupancy arrears overflow") }
+			if paid, ok = paid.Add(amountDue); !ok {
+				return programOccupancyProjection{}, errors.New("Programs occupancy paid overflow")
+			}
+			current := paidByPayer[payer]
+			if current, ok = current.Add(amountDue); !ok {
+				return programOccupancyProjection{}, errors.New("Programs occupancy payer overflow")
+			}
+			paidByPayer[payer] = current
+		} else if arrears, ok = arrears.Add(arrearsAfter); !ok {
+			return programOccupancyProjection{}, errors.New("Programs occupancy arrears overflow")
+		}
 	}
-	if cursor.failed || !cursor.finished() || !batches.Equal(declaredBatches) || !fees.Equal(declaredFees) || !paid.Equal(declaredPaid) || !arrears.Equal(declaredArrears) { return programOccupancyProjection{}, errors.New("Programs occupancy totals mismatch") }
+	if cursor.failed || !cursor.finished() || !batches.Equal(declaredBatches) || !fees.Equal(declaredFees) || !paid.Equal(declaredPaid) || !arrears.Equal(declaredArrears) {
+		return programOccupancyProjection{}, errors.New("Programs occupancy totals mismatch")
+	}
 	root := programOccupancyTransferRoot(paidByPayer, asset)
 	return programOccupancyProjection{ByteBatches: batches, FeeUnits: fees, TransferRoot: root}, nil
 }
 
 func decodeLegacyProgramOccupancy(encoded []byte, asset [32]byte) (programOccupancyProjection, error) {
-	v2:=[]byte("LXP/storage-occupancy-settlement/v2\x00");domain:=[]byte("LXP/storage-occupancy-settlement/v1\x00");versioned:=bytes.HasPrefix(encoded,v2);if versioned{domain=v2};cursor:=programTerminalCursor{value:encoded[len(domain):]};batch:=cursor.u64();if versioned&&cursor.u32()==0{return programOccupancyProjection{},errors.New("invalid legacy Programs occupancy schedule")};prices:=[7]uint64{};for index:=range prices{prices[index]=cursor.u64()};declaredBatches,declaredFees:=cursor.u128(),cursor.u128();count:=cursor.u64();if count>256{return programOccupancyProjection{},errors.New("legacy Programs occupancy positions exceed bound")};var batches,fees Uint128;paid:=make(map[[32]byte]Uint128)
-	for index:=uint64(0);index<count;index++{length:=cursor.byte();namespace:=cursor.take(int(length));payer:=cursor.array32();fromBatch,toBatch,recorded:=cursor.u64(),cursor.u64(),cursor.u64();_ = cursor.u64();byteBatches,price,accrued:=cursor.u128(),cursor.u64(),cursor.u128();intervals,underflow:=subtractProgramUint64(toBatch,fromBatch);computed,overflow:=multiplyProgramU64(recorded,intervals);computedFee,feeOverflow:=multiplyProgramUint128U64(computed,price);if !validProgramNamespace(namespace)||payer==([32]byte{})||len(namespace)==65&&namespace[32]==0&&!bytes.Equal(namespace[33:],payer[:])||toBatch!=batch||underflow||overflow||feeOverflow||!byteBatches.Equal(computed)||price!=prices[6]||!accrued.Equal(computedFee){return programOccupancyProjection{},errors.New("invalid legacy Programs occupancy charge")};var ok bool;if batches,ok=batches.Add(byteBatches);!ok{return programOccupancyProjection{},errors.New("legacy Programs occupancy overflow")};if fees,ok=fees.Add(accrued);!ok{return programOccupancyProjection{},errors.New("legacy Programs occupancy overflow")};current:=paid[payer];if current,ok=current.Add(accrued);!ok{return programOccupancyProjection{},errors.New("legacy Programs occupancy payer overflow")};paid[payer]=current}
-	if cursor.failed||!cursor.finished()||!batches.Equal(declaredBatches)||!fees.Equal(declaredFees){return programOccupancyProjection{},errors.New("legacy Programs occupancy totals mismatch")};return programOccupancyProjection{ByteBatches:batches,FeeUnits:fees,TransferRoot:programOccupancyTransferRoot(paid,asset)},nil
+	v2 := []byte("LXP/storage-occupancy-settlement/v2\x00")
+	domain := []byte("LXP/storage-occupancy-settlement/v1\x00")
+	versioned := bytes.HasPrefix(encoded, v2)
+	if versioned {
+		domain = v2
+	}
+	cursor := programTerminalCursor{value: encoded[len(domain):]}
+	batch := cursor.u64()
+	if versioned && cursor.u32() == 0 {
+		return programOccupancyProjection{}, errors.New("invalid legacy Programs occupancy schedule")
+	}
+	prices := [7]uint64{}
+	for index := range prices {
+		prices[index] = cursor.u64()
+	}
+	declaredBatches, declaredFees := cursor.u128(), cursor.u128()
+	count := cursor.u64()
+	if count > 256 {
+		return programOccupancyProjection{}, errors.New("legacy Programs occupancy positions exceed bound")
+	}
+	var batches, fees Uint128
+	paid := make(map[[32]byte]Uint128)
+	for index := uint64(0); index < count; index++ {
+		length := cursor.byte()
+		namespace := cursor.take(int(length))
+		payer := cursor.array32()
+		fromBatch, toBatch, recorded := cursor.u64(), cursor.u64(), cursor.u64()
+		_ = cursor.u64()
+		byteBatches, price, accrued := cursor.u128(), cursor.u64(), cursor.u128()
+		intervals, underflow := subtractProgramUint64(toBatch, fromBatch)
+		computed, overflow := multiplyProgramU64(recorded, intervals)
+		computedFee, feeOverflow := multiplyProgramUint128U64(computed, price)
+		if !validProgramNamespace(namespace) || payer == ([32]byte{}) || len(namespace) == 65 && namespace[32] == 0 && !bytes.Equal(namespace[33:], payer[:]) || toBatch != batch || underflow || overflow || feeOverflow || !byteBatches.Equal(computed) || price != prices[6] || !accrued.Equal(computedFee) {
+			return programOccupancyProjection{}, errors.New("invalid legacy Programs occupancy charge")
+		}
+		var ok bool
+		if batches, ok = batches.Add(byteBatches); !ok {
+			return programOccupancyProjection{}, errors.New("legacy Programs occupancy overflow")
+		}
+		if fees, ok = fees.Add(accrued); !ok {
+			return programOccupancyProjection{}, errors.New("legacy Programs occupancy overflow")
+		}
+		current := paid[payer]
+		if current, ok = current.Add(accrued); !ok {
+			return programOccupancyProjection{}, errors.New("legacy Programs occupancy payer overflow")
+		}
+		paid[payer] = current
+	}
+	if cursor.failed || !cursor.finished() || !batches.Equal(declaredBatches) || !fees.Equal(declaredFees) {
+		return programOccupancyProjection{}, errors.New("legacy Programs occupancy totals mismatch")
+	}
+	return programOccupancyProjection{ByteBatches: batches, FeeUnits: fees, TransferRoot: programOccupancyTransferRoot(paid, asset)}, nil
 }
 
-func validProgramNamespace(value []byte) bool { return len(value) == 65 && (value[32] == 0 || value[32] == 2) && !allProgramZero(value[:32]) && !allProgramZero(value[33:]) || len(value) == 33 && value[32] == 1 && !allProgramZero(value[:32]) }
-func subtractProgramUint64(left, right uint64) (uint64, bool) { if left < right { return 0, true }; return left-right, false }
-func multiplyProgramU64(left, right uint64) (Uint128, bool) { value := new(big.Int).Mul(new(big.Int).SetUint64(left), new(big.Int).SetUint64(right)); return programBigUint128(value) }
-func multiplyProgramUint128U64(left Uint128, right uint64) (Uint128, bool) { value := new(big.Int).Mul(programUint128Big(left), new(big.Int).SetUint64(right)); return programBigUint128(value) }
-func programUint128Big(value Uint128) *big.Int { var encoded [16]byte; binary.BigEndian.PutUint64(encoded[:8], value.High()); binary.BigEndian.PutUint64(encoded[8:], value.Low()); return new(big.Int).SetBytes(encoded[:]) }
-func programBigUint128(value *big.Int) (Uint128, bool) { if value.Sign() < 0 || value.BitLen() > 128 { return Uint128{}, true }; bytesValue := value.FillBytes(make([]byte, 16)); return NewUint128(binary.BigEndian.Uint64(bytesValue[:8]), binary.BigEndian.Uint64(bytesValue[8:])), false }
+func validProgramNamespace(value []byte) bool {
+	return len(value) == 65 && (value[32] == 0 || value[32] == 2) && !allProgramZero(value[:32]) && !allProgramZero(value[33:]) || len(value) == 33 && value[32] == 1 && !allProgramZero(value[:32])
+}
+func subtractProgramUint64(left, right uint64) (uint64, bool) {
+	if left < right {
+		return 0, true
+	}
+	return left - right, false
+}
+func multiplyProgramU64(left, right uint64) (Uint128, bool) {
+	value := new(big.Int).Mul(new(big.Int).SetUint64(left), new(big.Int).SetUint64(right))
+	return programBigUint128(value)
+}
+func multiplyProgramUint128U64(left Uint128, right uint64) (Uint128, bool) {
+	value := new(big.Int).Mul(programUint128Big(left), new(big.Int).SetUint64(right))
+	return programBigUint128(value)
+}
+func programUint128Big(value Uint128) *big.Int {
+	var encoded [16]byte
+	binary.BigEndian.PutUint64(encoded[:8], value.High())
+	binary.BigEndian.PutUint64(encoded[8:], value.Low())
+	return new(big.Int).SetBytes(encoded[:])
+}
+func programBigUint128(value *big.Int) (Uint128, bool) {
+	if value.Sign() < 0 || value.BitLen() > 128 {
+		return Uint128{}, true
+	}
+	bytesValue := value.FillBytes(make([]byte, 16))
+	return NewUint128(binary.BigEndian.Uint64(bytesValue[:8]), binary.BigEndian.Uint64(bytesValue[8:])), false
+}
 
 func programOccupancyMandate(payer, rootProgram, activity [32]byte, namespace []byte, maximumBytes, maximumPrice uint64, ceiling Uint128) [32]byte {
-	material := []byte("LXP/storage-occupancy-mandate/v1\x00"); material = append(material, payer[:]...); material = append(material, rootProgram[:]...); material = append(material, activity[:]...); material = append(material, byte(len(namespace))); material = append(material, namespace...); var number [8]byte; binary.BigEndian.PutUint64(number[:], maximumBytes); material = append(material, number[:]...); binary.BigEndian.PutUint64(number[:], maximumPrice); material = append(material, number[:]...); var wide [16]byte; binary.BigEndian.PutUint64(wide[:8], ceiling.High()); binary.BigEndian.PutUint64(wide[8:], ceiling.Low()); material = append(material, wide[:]...); return sha256.Sum256(material)
+	material := []byte("LXP/storage-occupancy-mandate/v1\x00")
+	material = append(material, payer[:]...)
+	material = append(material, rootProgram[:]...)
+	material = append(material, activity[:]...)
+	material = append(material, byte(len(namespace)))
+	material = append(material, namespace...)
+	var number [8]byte
+	binary.BigEndian.PutUint64(number[:], maximumBytes)
+	material = append(material, number[:]...)
+	binary.BigEndian.PutUint64(number[:], maximumPrice)
+	material = append(material, number[:]...)
+	var wide [16]byte
+	binary.BigEndian.PutUint64(wide[:8], ceiling.High())
+	binary.BigEndian.PutUint64(wide[8:], ceiling.Low())
+	material = append(material, wide[:]...)
+	return sha256.Sum256(material)
 }
 
 func programOccupancyTransferRoot(paid map[[32]byte]Uint128, asset [32]byte) [32]byte {
-	treasuryMaterial := []byte("LX:ACCOUNT:v1"); var length [4]byte; binary.BigEndian.PutUint32(length[:], 11); treasuryMaterial = append(treasuryMaterial, length[:]...); treasuryMaterial = append(treasuryMaterial, []byte("system:fees")...); treasury := sha256.Sum256(treasuryMaterial)
-	payers := make([][32]byte, 0, len(paid)); for payer, amount := range paid { if amount != (Uint128{}) { payers = append(payers, payer) } }; sort.Slice(payers, func(i,j int) bool { return bytes.Compare(payers[i][:], payers[j][:]) < 0 })
-	level := make([][32]byte, 0, len(payers)); for _, payer := range payers { leg := []byte{0}; leg = append(leg, payer[:]...); leg = append(leg, treasury[:]...); leg = append(leg, asset[:]...); var amount [16]byte; binary.BigEndian.PutUint64(amount[:8], paid[payer].High()); binary.BigEndian.PutUint64(amount[8:], paid[payer].Low()); leg = append(leg, amount[:]...); leg = append(leg, 0, 23); level = append(level, domainDigest([]byte("LXP/v1/merkle-leaf\x00"), leg)) }
-	for len(level) > 1 { next := make([][32]byte, 0, (len(level)+1)/2); for index := 0; index < len(level); index += 2 { right := level[index]; if index+1 < len(level) { right = level[index+1] }; next = append(next, domainDigest([]byte("LXP/v1/merkle-internal\x00"), level[index][:], right[:])) }; level = next }; if len(level)==0{return [32]byte{}}; return level[0]
+	treasuryMaterial := []byte("LX:ACCOUNT:v1")
+	var length [4]byte
+	binary.BigEndian.PutUint32(length[:], 11)
+	treasuryMaterial = append(treasuryMaterial, length[:]...)
+	treasuryMaterial = append(treasuryMaterial, []byte("system:fees")...)
+	treasury := sha256.Sum256(treasuryMaterial)
+	payers := make([][32]byte, 0, len(paid))
+	for payer, amount := range paid {
+		if amount != (Uint128{}) {
+			payers = append(payers, payer)
+		}
+	}
+	sort.Slice(payers, func(i, j int) bool { return bytes.Compare(payers[i][:], payers[j][:]) < 0 })
+	level := make([][32]byte, 0, len(payers))
+	for _, payer := range payers {
+		leg := []byte{0}
+		leg = append(leg, payer[:]...)
+		leg = append(leg, treasury[:]...)
+		leg = append(leg, asset[:]...)
+		var amount [16]byte
+		binary.BigEndian.PutUint64(amount[:8], paid[payer].High())
+		binary.BigEndian.PutUint64(amount[8:], paid[payer].Low())
+		leg = append(leg, amount[:]...)
+		leg = append(leg, 0, 23)
+		level = append(level, domainDigest([]byte("LXP/v1/merkle-leaf\x00"), leg))
+	}
+	for len(level) > 1 {
+		next := make([][32]byte, 0, (len(level)+1)/2)
+		for index := 0; index < len(level); index += 2 {
+			right := level[index]
+			if index+1 < len(level) {
+				right = level[index+1]
+			}
+			next = append(next, domainDigest([]byte("LXP/v1/merkle-internal\x00"), level[index][:], right[:]))
+		}
+		level = next
+	}
+	if len(level) == 0 {
+		return [32]byte{}
+	}
+	return level[0]
 }
 
 func verifyProgramTransferAuthorization(encoded []byte, expected [32]byte) error {
 	v1, v2 := []byte("LayerX/programs/402LXP/transfer-set/v1\x00"), []byte("LayerX/programs/402LXP/transfer-set/v2\x00")
-	candidate := bytes.HasPrefix(encoded, v2); domain := v1; if candidate { domain = v2 } else if !bytes.HasPrefix(encoded, v1) { return errors.New("invalid Programs transfer-set domain") }
-	cursor := programTerminalCursor{value: encoded[len(domain):]}; program, principal, invocation := cursor.array32(), cursor.array32(), cursor.array32()
-	if program == ([32]byte{}) || principal == ([32]byte{}) || invocation == ([32]byte{}) || !consumeProgramFrame(&cursor) { return errors.New("invalid Programs transfer-set authority") }
-	events := cursor.take(int(cursor.u32())); if !validProgramEvents(events) { return errors.New("invalid Programs transfer-set events") }
-	callCount := cursor.u64(); if callCount > 64 { return errors.New("Programs transfer-set call bound") }
-	for index:=uint64(0); index<callCount; index++ { caller,callee,callPrincipal:=cursor.array32(),cursor.array32(),cursor.array32(); if caller==([32]byte{})||callee==([32]byte{})||callPrincipal==([32]byte{})||!consumeProgramFrame(&cursor)||!consumeProgramFrame(&cursor){return errors.New("invalid Programs transfer call")}; grants:=cursor.take(int(cursor.u32())); if !validProgramCapabilities(grants,candidate){return errors.New("invalid Programs transfer grants")} }
-	legCount:=cursor.u64(); if legCount==0||legCount>256{return errors.New("invalid Programs transfer leg count")}; leaves:=make([][32]byte,0,legCount)
-	for index:=uint64(0);index<legCount;index++ { frameStart:=cursor.offset;if !consumeProgramFrame(&cursor){return errors.New("invalid Programs transfer frame")};frame:=append([]byte(nil),cursor.value[frameStart:cursor.offset]...); source:=principal;sourceTag:=byte(0);var binding decodedProgramAuthority
-		if candidate { sourceTag=cursor.byte();switch sourceTag{case 1: source=cursor.array32(); if source!=principal{return errors.New("Programs principal source mismatch")}; case 2: authority:=cursor.take(int(cursor.u32())); decoded,err:=decodeProgramAuthority(authority);if err!=nil{return err};binding=decoded;source=decoded.source; case 3: fundingPrincipal:=cursor.array32();if fundingPrincipal!=principal{return errors.New("Programs funding principal mismatch")};encodedBinding:=cursor.take(int(cursor.u32()));decoded,err:=decodeProgramFunding(encodedBinding);if err!=nil{return err};binding=decoded;source=fundingPrincipal; default:return errors.New("invalid Programs transfer source")} }
-		asset,to:=cursor.array32(),cursor.array32();amount:=cursor.u128();legProgram:=cursor.array32();if asset==([32]byte{})||to==([32]byte{})||amount==(Uint128{})||legProgram==([32]byte{})||sourceTag==2&&(binding.owner!=legProgram||!bytes.Equal(binding.frame,frame)||binding.asset!=asset||binding.to!=to||binding.amount!=amount)||sourceTag==3&&(binding.owner!=legProgram||binding.source!=to||binding.asset!=asset){return errors.New("invalid Programs transfer leg")};leg:=[]byte{0};leg=append(leg,source[:]...);leg=append(leg,to[:]...);leg=append(leg,asset[:]...);var wide[16]byte;binary.BigEndian.PutUint64(wide[:8],amount.High());binary.BigEndian.PutUint64(wide[8:],amount.Low());leg=append(leg,wide[:]...);leg=append(leg,0,1);leaves=append(leaves,domainDigest([]byte("LXP/v1/merkle-leaf\x00"),leg)) }
-	if cursor.failed||!cursor.finished(){return errors.New("trailing Programs transfer authorization")};for len(leaves)>1{next:=make([][32]byte,0,(len(leaves)+1)/2);for index:=0;index<len(leaves);index+=2{right:=leaves[index];if index+1<len(leaves){right=leaves[index+1]};next=append(next,domainDigest([]byte("LXP/v1/merkle-internal\x00"),leaves[index][:],right[:]))};leaves=next};if len(leaves)!=1||leaves[0]!=expected{return errors.New("Programs transfer authorization root mismatch")};return nil
+	candidate := bytes.HasPrefix(encoded, v2)
+	domain := v1
+	if candidate {
+		domain = v2
+	} else if !bytes.HasPrefix(encoded, v1) {
+		return errors.New("invalid Programs transfer-set domain")
+	}
+	cursor := programTerminalCursor{value: encoded[len(domain):]}
+	program, principal, invocation := cursor.array32(), cursor.array32(), cursor.array32()
+	if program == ([32]byte{}) || principal == ([32]byte{}) || invocation == ([32]byte{}) || !consumeProgramFrame(&cursor) {
+		return errors.New("invalid Programs transfer-set authority")
+	}
+	events := cursor.take(int(cursor.u32()))
+	if !validProgramEvents(events) {
+		return errors.New("invalid Programs transfer-set events")
+	}
+	callCount := cursor.u64()
+	if callCount > 64 {
+		return errors.New("Programs transfer-set call bound")
+	}
+	for index := uint64(0); index < callCount; index++ {
+		caller, callee, callPrincipal := cursor.array32(), cursor.array32(), cursor.array32()
+		if caller == ([32]byte{}) || callee == ([32]byte{}) || callPrincipal == ([32]byte{}) || !consumeProgramFrame(&cursor) || !consumeProgramFrame(&cursor) {
+			return errors.New("invalid Programs transfer call")
+		}
+		grants := cursor.take(int(cursor.u32()))
+		if !validProgramCapabilities(grants, candidate) {
+			return errors.New("invalid Programs transfer grants")
+		}
+	}
+	legCount := cursor.u64()
+	if legCount == 0 || legCount > 256 {
+		return errors.New("invalid Programs transfer leg count")
+	}
+	leaves := make([][32]byte, 0, legCount)
+	for index := uint64(0); index < legCount; index++ {
+		frameStart := cursor.offset
+		if !consumeProgramFrame(&cursor) {
+			return errors.New("invalid Programs transfer frame")
+		}
+		frame := append([]byte(nil), cursor.value[frameStart:cursor.offset]...)
+		source := principal
+		sourceTag := byte(0)
+		var binding decodedProgramAuthority
+		if candidate {
+			sourceTag = cursor.byte()
+			switch sourceTag {
+			case 1:
+				source = cursor.array32()
+				if source != principal {
+					return errors.New("Programs principal source mismatch")
+				}
+			case 2:
+				authority := cursor.take(int(cursor.u32()))
+				decoded, err := decodeProgramAuthority(authority)
+				if err != nil {
+					return err
+				}
+				binding = decoded
+				source = decoded.source
+			case 3:
+				fundingPrincipal := cursor.array32()
+				if fundingPrincipal != principal {
+					return errors.New("Programs funding principal mismatch")
+				}
+				encodedBinding := cursor.take(int(cursor.u32()))
+				decoded, err := decodeProgramFunding(encodedBinding)
+				if err != nil {
+					return err
+				}
+				binding = decoded
+				source = fundingPrincipal
+			default:
+				return errors.New("invalid Programs transfer source")
+			}
+		}
+		asset, to := cursor.array32(), cursor.array32()
+		amount := cursor.u128()
+		legProgram := cursor.array32()
+		if asset == ([32]byte{}) || to == ([32]byte{}) || amount == (Uint128{}) || legProgram == ([32]byte{}) || sourceTag == 2 && (binding.owner != legProgram || !bytes.Equal(binding.frame, frame) || binding.asset != asset || binding.to != to || binding.amount != amount) || sourceTag == 3 && (binding.owner != legProgram || binding.source != to || binding.asset != asset) {
+			return errors.New("invalid Programs transfer leg")
+		}
+		leg := []byte{0}
+		leg = append(leg, source[:]...)
+		leg = append(leg, to[:]...)
+		leg = append(leg, asset[:]...)
+		var wide [16]byte
+		binary.BigEndian.PutUint64(wide[:8], amount.High())
+		binary.BigEndian.PutUint64(wide[8:], amount.Low())
+		leg = append(leg, wide[:]...)
+		leg = append(leg, 0, 1)
+		leaves = append(leaves, domainDigest([]byte("LXP/v1/merkle-leaf\x00"), leg))
+	}
+	if cursor.failed || !cursor.finished() {
+		return errors.New("trailing Programs transfer authorization")
+	}
+	for len(leaves) > 1 {
+		next := make([][32]byte, 0, (len(leaves)+1)/2)
+		for index := 0; index < len(leaves); index += 2 {
+			right := leaves[index]
+			if index+1 < len(leaves) {
+				right = leaves[index+1]
+			}
+			next = append(next, domainDigest([]byte("LXP/v1/merkle-internal\x00"), leaves[index][:], right[:]))
+		}
+		leaves = next
+	}
+	if len(leaves) != 1 || leaves[0] != expected {
+		return errors.New("Programs transfer authorization root mismatch")
+	}
+	return nil
 }
 
-func consumeProgramFrame(cursor *programTerminalCursor) bool { path:=cursor.take(8);depth:=cursor.byte();if cursor.failed||depth>8{return false};for index,value:=range path{if index<int(depth)&&value==0||index>=int(depth)&&value!=0{return false}};return true }
-func validProgramEvents(encoded []byte) bool { domain:=[]byte("LayerX/programs/events/v1\x00");if !bytes.HasPrefix(encoded,domain){return false};cursor:=programTerminalCursor{value:encoded[len(domain):]};count:=cursor.u32();if count>64{return false};for index:=uint32(0);index<count;index++{if cursor.array32()==([32]byte{})||cursor.array32()==([32]byte{})||!consumeProgramFrame(&cursor){return false};if len(cursor.take(int(cursor.u32())))>64||len(cursor.take(int(cursor.u32())))>65_536{return false}};return !cursor.failed&&cursor.finished() }
-func validProgramCapabilities(encoded []byte,candidate bool) bool {
-	if len(encoded)<2||len(encoded)>65_535{return false};cursor:=programTerminalCursor{value:encoded};count:=cursor.u16();if count>238{return false};priorRank:=-1;var prior [][]byte
-	for index:=uint16(0);index<count;index++{tag:=cursor.byte();rank:=byte(255);var key [][]byte
-		switch tag{
-		case 1:rank=0
-		case 2:rank=1
-		case 3:rank=2
-		case 4:rank=3;program:=cursor.array32();if program==([32]byte{}){return false};key=[][]byte{program[:]}
-		case 5:rank=4;asset,to:=cursor.array32(),cursor.array32();if asset==([32]byte{})||to==([32]byte{})||cursor.u128()==(Uint128{}){return false};key=[][]byte{asset[:],to[:]}
-		case 9:if !candidate{return false};rank=5;owner:=cursor.array32();seed:=append([]byte(nil),cursor.take(int(cursor.u16()))...);source,asset,to:=cursor.array32(),cursor.array32(),cursor.array32();if owner==([32]byte{})||len(seed)>128||source!=deriveProgramAccount(owner,seed)||asset==([32]byte{})||to==([32]byte{})||cursor.u128()==(Uint128{}){return false};key=[][]byte{owner[:],seed,source[:],asset[:],to[:]}
-		case 6:rank=6;receipt:=cursor.array32();if receipt==([32]byte{}){return false};key=[][]byte{receipt[:]}
-		case 10:if !candidate{return false};rank=7;account,asset,receipt:=cursor.array32(),cursor.array32(),cursor.array32();if account==([32]byte{})||asset==([32]byte{})||receipt==([32]byte{}){return false};key=[][]byte{account[:],asset[:]}
-		case 7:rank=8
-		case 8:rank=9
-		default:return false}
-		if priorRank>int(rank)||priorRank==int(rank)&&compareProgramCapabilityKey(prior,key)>=0{return false};priorRank,prior=int(rank),key
-	};return !cursor.failed&&cursor.finished()
+func consumeProgramFrame(cursor *programTerminalCursor) bool {
+	path := cursor.take(8)
+	depth := cursor.byte()
+	if cursor.failed || depth > 8 {
+		return false
+	}
+	for index, value := range path {
+		if index < int(depth) && value == 0 || index >= int(depth) && value != 0 {
+			return false
+		}
+	}
+	return true
 }
-func compareProgramCapabilityKey(left,right [][]byte)int{for index:=0;index<len(left)&&index<len(right);index++{if compared:=bytes.Compare(left[index],right[index]);compared!=0{return compared}};if len(left)<len(right){return -1};if len(left)>len(right){return 1};return 0}
-type decodedProgramAuthority struct{source,owner,asset,to [32]byte;amount Uint128;frame []byte}
-func decodeProgramAuthority(encoded []byte)(decodedProgramAuthority,error){domain:=[]byte("LayerX/programs/402LXP/program-authority/v1\x00");if !bytes.HasPrefix(encoded,domain){return decodedProgramAuthority{},errors.New("invalid Programs program authority")};cursor:=programTerminalCursor{value:encoded[len(domain):]};owner:=cursor.array32();seed:=cursor.take(int(cursor.u16()));source:=cursor.array32();frameStart:=cursor.offset;if owner==([32]byte{})||len(seed)>128||source!=deriveProgramAccount(owner,seed)||!consumeProgramFrame(&cursor){return decodedProgramAuthority{},errors.New("invalid Programs program authority")};frame:=append([]byte(nil),cursor.value[frameStart:cursor.offset]...);asset,to,amount:=cursor.array32(),cursor.array32(),cursor.u128();if asset==([32]byte{})||to==([32]byte{})||amount==(Uint128{})||cursor.failed||!cursor.finished(){return decodedProgramAuthority{},errors.New("invalid Programs program authority")};return decodedProgramAuthority{source:source,owner:owner,asset:asset,to:to,amount:amount,frame:frame},nil}
-func decodeProgramFunding(encoded []byte)(decodedProgramAuthority,error){domain:=[]byte("LayerX/programs/402LXP/program-funding/v1\x00");if !bytes.HasPrefix(encoded,domain){return decodedProgramAuthority{},errors.New("invalid Programs funding authority")};cursor:=programTerminalCursor{value:encoded[len(domain):]};owner:=cursor.array32();seed:=cursor.take(int(cursor.u16()));destination:=cursor.array32();asset:=cursor.array32();if owner==([32]byte{})||len(seed)>128||destination!=deriveProgramAccount(owner,seed)||asset==([32]byte{})||cursor.failed||!cursor.finished(){return decodedProgramAuthority{},errors.New("invalid Programs funding authority")};return decodedProgramAuthority{source:destination,owner:owner,asset:asset},nil}
-func deriveProgramAccount(program [32]byte,seed []byte)[32]byte{material:=[]byte("LayerX/programs/program-account/v1\x00");material=append(material,program[:]...);var length[4]byte;binary.BigEndian.PutUint32(length[:],uint32(len(seed)));material=append(material,length[:]...);material=append(material,seed...);return sha256.Sum256(material)}
+func validProgramEvents(encoded []byte) bool {
+	domain := []byte("LayerX/programs/events/v1\x00")
+	if !bytes.HasPrefix(encoded, domain) {
+		return false
+	}
+	cursor := programTerminalCursor{value: encoded[len(domain):]}
+	count := cursor.u32()
+	if count > 64 {
+		return false
+	}
+	for index := uint32(0); index < count; index++ {
+		if cursor.array32() == ([32]byte{}) || cursor.array32() == ([32]byte{}) || !consumeProgramFrame(&cursor) {
+			return false
+		}
+		if len(cursor.take(int(cursor.u32()))) > 64 || len(cursor.take(int(cursor.u32()))) > 65_536 {
+			return false
+		}
+	}
+	return !cursor.failed && cursor.finished()
+}
+func validProgramCapabilities(encoded []byte, candidate bool) bool {
+	if len(encoded) < 2 || len(encoded) > 65_535 {
+		return false
+	}
+	cursor := programTerminalCursor{value: encoded}
+	count := cursor.u16()
+	if count > 238 {
+		return false
+	}
+	priorRank := -1
+	var prior [][]byte
+	for index := uint16(0); index < count; index++ {
+		tag := cursor.byte()
+		rank := byte(255)
+		var key [][]byte
+		switch tag {
+		case 1:
+			rank = 0
+		case 2:
+			rank = 1
+		case 3:
+			rank = 2
+		case 4:
+			rank = 3
+			program := cursor.array32()
+			if program == ([32]byte{}) {
+				return false
+			}
+			key = [][]byte{program[:]}
+		case 5:
+			rank = 4
+			asset, to := cursor.array32(), cursor.array32()
+			if asset == ([32]byte{}) || to == ([32]byte{}) || cursor.u128() == (Uint128{}) {
+				return false
+			}
+			key = [][]byte{asset[:], to[:]}
+		case 9:
+			if !candidate {
+				return false
+			}
+			rank = 5
+			owner := cursor.array32()
+			seed := append([]byte(nil), cursor.take(int(cursor.u16()))...)
+			source, asset, to := cursor.array32(), cursor.array32(), cursor.array32()
+			if owner == ([32]byte{}) || len(seed) > 128 || source != deriveProgramAccount(owner, seed) || asset == ([32]byte{}) || to == ([32]byte{}) || cursor.u128() == (Uint128{}) {
+				return false
+			}
+			key = [][]byte{owner[:], seed, source[:], asset[:], to[:]}
+		case 6:
+			rank = 6
+			receipt := cursor.array32()
+			if receipt == ([32]byte{}) {
+				return false
+			}
+			key = [][]byte{receipt[:]}
+		case 10:
+			if !candidate {
+				return false
+			}
+			rank = 7
+			account, asset, receipt := cursor.array32(), cursor.array32(), cursor.array32()
+			if account == ([32]byte{}) || asset == ([32]byte{}) || receipt == ([32]byte{}) {
+				return false
+			}
+			key = [][]byte{account[:], asset[:]}
+		case 7:
+			rank = 8
+		case 8:
+			rank = 9
+		default:
+			return false
+		}
+		if priorRank > int(rank) || priorRank == int(rank) && compareProgramCapabilityKey(prior, key) >= 0 {
+			return false
+		}
+		priorRank, prior = int(rank), key
+	}
+	return !cursor.failed && cursor.finished()
+}
+func compareProgramCapabilityKey(left, right [][]byte) int {
+	for index := 0; index < len(left) && index < len(right); index++ {
+		if compared := bytes.Compare(left[index], right[index]); compared != 0 {
+			return compared
+		}
+	}
+	if len(left) < len(right) {
+		return -1
+	}
+	if len(left) > len(right) {
+		return 1
+	}
+	return 0
+}
+
+type decodedProgramAuthority struct {
+	source, owner, asset, to [32]byte
+	amount                   Uint128
+	frame                    []byte
+}
+
+func decodeProgramAuthority(encoded []byte) (decodedProgramAuthority, error) {
+	domain := []byte("LayerX/programs/402LXP/program-authority/v1\x00")
+	if !bytes.HasPrefix(encoded, domain) {
+		return decodedProgramAuthority{}, errors.New("invalid Programs program authority")
+	}
+	cursor := programTerminalCursor{value: encoded[len(domain):]}
+	owner := cursor.array32()
+	seed := cursor.take(int(cursor.u16()))
+	source := cursor.array32()
+	frameStart := cursor.offset
+	if owner == ([32]byte{}) || len(seed) > 128 || source != deriveProgramAccount(owner, seed) || !consumeProgramFrame(&cursor) {
+		return decodedProgramAuthority{}, errors.New("invalid Programs program authority")
+	}
+	frame := append([]byte(nil), cursor.value[frameStart:cursor.offset]...)
+	asset, to, amount := cursor.array32(), cursor.array32(), cursor.u128()
+	if asset == ([32]byte{}) || to == ([32]byte{}) || amount == (Uint128{}) || cursor.failed || !cursor.finished() {
+		return decodedProgramAuthority{}, errors.New("invalid Programs program authority")
+	}
+	return decodedProgramAuthority{source: source, owner: owner, asset: asset, to: to, amount: amount, frame: frame}, nil
+}
+func decodeProgramFunding(encoded []byte) (decodedProgramAuthority, error) {
+	domain := []byte("LayerX/programs/402LXP/program-funding/v1\x00")
+	if !bytes.HasPrefix(encoded, domain) {
+		return decodedProgramAuthority{}, errors.New("invalid Programs funding authority")
+	}
+	cursor := programTerminalCursor{value: encoded[len(domain):]}
+	owner := cursor.array32()
+	seed := cursor.take(int(cursor.u16()))
+	destination := cursor.array32()
+	asset := cursor.array32()
+	if owner == ([32]byte{}) || len(seed) > 128 || destination != deriveProgramAccount(owner, seed) || asset == ([32]byte{}) || cursor.failed || !cursor.finished() {
+		return decodedProgramAuthority{}, errors.New("invalid Programs funding authority")
+	}
+	return decodedProgramAuthority{source: destination, owner: owner, asset: asset}, nil
+}
+func deriveProgramAccount(program [32]byte, seed []byte) [32]byte {
+	material := []byte("LayerX/programs/program-account/v1\x00")
+	material = append(material, program[:]...)
+	var length [4]byte
+	binary.BigEndian.PutUint32(length[:], uint32(len(seed)))
+	material = append(material, length[:]...)
+	material = append(material, seed...)
+	return sha256.Sum256(material)
+}
 
 func allProgramZero(value []byte) bool {
 	for _, item := range value {
@@ -1173,10 +1582,10 @@ func decodeProgramHex(value string) ([]byte, error) {
 
 func programCallWire(call ProgramCall) map[string]any {
 	return map[string]any{
-		"program_id": hex.EncodeToString(call.ProgramID[:]),
-		"calldata": hex.EncodeToString(call.Calldata),
-		"budget": map[string]any{"fuel": programUint64(call.Budget.Fuel), "fee_limit": call.Budget.FeeLimit.String()},
-		"capabilities": call.Capabilities,
+		"program_id":      hex.EncodeToString(call.ProgramID[:]),
+		"calldata":        hex.EncodeToString(call.Calldata),
+		"budget":          map[string]any{"fuel": programUint64(call.Budget.Fuel), "fee_limit": call.Budget.FeeLimit.String()},
+		"capabilities":    call.Capabilities,
 		"signed_activity": hex.EncodeToString(call.SignedActivity),
 	}
 }
@@ -1580,4 +1989,6 @@ func programHex32Raw(value json.RawMessage) ([32]byte, error) {
 	return programHex32(text)
 }
 
-func PlatformSDKPrograms() string { return "server-attested-registry-and-locally-verified-program-execution-v1" }
+func PlatformSDKPrograms() string {
+	return "server-attested-registry-and-locally-verified-program-execution-v1"
+}

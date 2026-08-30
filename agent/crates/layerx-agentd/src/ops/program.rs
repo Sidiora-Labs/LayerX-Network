@@ -1,16 +1,19 @@
 //! First-class program discovery, interface, simulation, and call operations.
 
 use layerx_client::submit::{Submission, SubmitError};
-use layerx_proof::program::{verify_program_execution, ProgramExecutionExpectation};
-use layerx_programs::{ProgramId, ProgramInterface, ProgramLifecycle, VerifiedInterfaceRead, VerifiedProgramHead, VerifiedProtocolHead};
+use layerx_crypto::ed25519;
+use layerx_programs::{
+    ProgramId, ProgramInterface, ProgramLifecycle, VerifiedInterfaceRead, VerifiedProgramHead,
+    VerifiedProtocolHead,
+};
 use layerx_programs_runtime::terminal::DecodedTerminal;
 use layerx_programs_runtime::{BudgetMeterRefusal, ProgramFailure};
+use layerx_proof::program::{verify_program_execution, ProgramExecutionExpectation};
 use layerx_types::intent::{CapabilityRequest, ProgramCall, ProgramCallOutcome};
 use layerx_types::payload::{ModuleId, ModuleRegistry};
 use layerx_wire::activity::decode_signed;
 use layerx_wire::hash::activity_id;
 use sha2::{Digest as _, Sha256};
-use layerx_crypto::ed25519;
 
 const SIMULATION_EVIDENCE_DOMAIN: &[u8] = b"LayerX/agent/program-simulation-evidence/v1\0";
 
@@ -69,23 +72,74 @@ pub struct ProgramExecution {
 }
 
 impl ProgramExecution {
-    #[must_use] pub const fn committed(&self) -> bool { self.committed }
-    #[must_use] pub const fn result_code(&self) -> i32 { self.result_code }
-    #[must_use] pub const fn metered_cost(&self) -> u128 { self.metered_cost }
-    #[must_use] pub const fn fee_units(&self) -> u128 { self.fee_units }
-    #[must_use] pub const fn terminal_payload_root(&self) -> [u8; 32] { self.terminal_payload_root }
-    #[must_use] pub const fn cpu_fuel(&self) -> u64 { self.cpu_fuel }
-    #[must_use] pub const fn memory_bytes(&self) -> u64 { self.memory_bytes }
-    #[must_use] pub const fn storage_read_bytes(&self) -> u64 { self.storage_read_bytes }
-    #[must_use] pub const fn storage_write_bytes(&self) -> u64 { self.storage_write_bytes }
-    #[must_use] pub const fn output_values(&self) -> u32 { self.output_values }
-    #[must_use] pub const fn output_bytes(&self) -> u64 { self.output_bytes }
-    #[must_use] pub const fn outcome(&self) -> Option<&ProgramCallOutcome> { self.outcome.as_ref() }
-    #[must_use] pub const fn authenticated_failure(&self) -> Option<&ProgramFailure> { self.authenticated_failure.as_ref() }
-    #[must_use] pub const fn authenticated_resource(&self) -> Option<&BudgetMeterRefusal> { self.authenticated_resource.as_ref() }
-    #[must_use] pub const fn terminal(&self) -> &DecodedTerminal { &self.terminal }
-    #[must_use] pub fn call_graph(&self) -> &[u8] { &self.call_graph }
-    #[must_use] pub fn receipt(&self) -> &[u8] { &self.receipt }
+    #[must_use]
+    pub const fn committed(&self) -> bool {
+        self.committed
+    }
+    #[must_use]
+    pub const fn result_code(&self) -> i32 {
+        self.result_code
+    }
+    #[must_use]
+    pub const fn metered_cost(&self) -> u128 {
+        self.metered_cost
+    }
+    #[must_use]
+    pub const fn fee_units(&self) -> u128 {
+        self.fee_units
+    }
+    #[must_use]
+    pub const fn terminal_payload_root(&self) -> [u8; 32] {
+        self.terminal_payload_root
+    }
+    #[must_use]
+    pub const fn cpu_fuel(&self) -> u64 {
+        self.cpu_fuel
+    }
+    #[must_use]
+    pub const fn memory_bytes(&self) -> u64 {
+        self.memory_bytes
+    }
+    #[must_use]
+    pub const fn storage_read_bytes(&self) -> u64 {
+        self.storage_read_bytes
+    }
+    #[must_use]
+    pub const fn storage_write_bytes(&self) -> u64 {
+        self.storage_write_bytes
+    }
+    #[must_use]
+    pub const fn output_values(&self) -> u32 {
+        self.output_values
+    }
+    #[must_use]
+    pub const fn output_bytes(&self) -> u64 {
+        self.output_bytes
+    }
+    #[must_use]
+    pub const fn outcome(&self) -> Option<&ProgramCallOutcome> {
+        self.outcome.as_ref()
+    }
+    #[must_use]
+    pub const fn authenticated_failure(&self) -> Option<&ProgramFailure> {
+        self.authenticated_failure.as_ref()
+    }
+    #[must_use]
+    pub const fn authenticated_resource(&self) -> Option<&BudgetMeterRefusal> {
+        self.authenticated_resource.as_ref()
+    }
+    #[must_use]
+    pub const fn terminal(&self) -> &DecodedTerminal {
+        &self.terminal
+    }
+    #[must_use]
+    pub fn call_graph(&self) -> &[u8] {
+        &self.call_graph
+    }
+    #[must_use]
+    pub fn receipt(&self) -> &[u8] {
+        &self.receipt
+    }
 }
 
 pub struct RawProgramSimulation {
@@ -131,7 +185,8 @@ impl ProgramSimulationEvidence {
         observed_sequence: u64,
         observed_at: u64,
     ) -> bool {
-        !self.committed && self.boundary_id == boundary_id
+        !self.committed
+            && self.boundary_id == boundary_id
             && self.activity_id == activity_id
             && self.previous_state_root == previous_state_root
             && self.hypothetical_state_root == hypothetical_state_root
@@ -159,7 +214,10 @@ impl EmulatorProgramSimulationTransport {
         let config = ureq::Agent::config_builder()
             .http_status_as_error(false)
             .build();
-        Self { agent: config.into(), endpoint: endpoint.trim_end_matches('/').to_owned() }
+        Self {
+            agent: config.into(),
+            endpoint: endpoint.trim_end_matches('/').to_owned(),
+        }
     }
 }
 
@@ -170,27 +228,50 @@ impl ProgramSimulationTransport for EmulatorProgramSimulationTransport {
         signed_activity: &[u8],
     ) -> Result<RawProgramSimulation, ProgramOperationError> {
         let url = format!("{}/v1/programs/simulate", self.endpoint);
-        let mut response = self.agent.post(&url)
+        let mut response = self
+            .agent
+            .post(&url)
             .send_json(program_call_request(call, signed_activity))
             .map_err(|_| ProgramOperationError::InvalidRequest)?;
-        if !response.status().is_success() { return Err(ProgramOperationError::InvalidRequest); }
-        let text = response.body_mut().read_to_string().map_err(|_| ProgramOperationError::InvalidRequest)?;
-        let document: serde_json::Value = serde_json::from_str(&text).map_err(|_| ProgramOperationError::InvalidRequest)?;
-        let envelope = document.as_object().ok_or(ProgramOperationError::UnverifiedReceipt)?;
-        let verification = envelope.get("verification_status")
+        if !response.status().is_success() {
+            return Err(ProgramOperationError::InvalidRequest);
+        }
+        let text = response
+            .body_mut()
+            .read_to_string()
+            .map_err(|_| ProgramOperationError::InvalidRequest)?;
+        let document: serde_json::Value =
+            serde_json::from_str(&text).map_err(|_| ProgramOperationError::InvalidRequest)?;
+        let envelope = document
+            .as_object()
+            .ok_or(ProgramOperationError::UnverifiedReceipt)?;
+        let verification = envelope
+            .get("verification_status")
             .and_then(serde_json::Value::as_object)
             .ok_or(ProgramOperationError::UnverifiedReceipt)?;
-        if verification.get("state").and_then(serde_json::Value::as_str) != Some("Achieved")
-            || verification.get("level").and_then(serde_json::Value::as_str) != Some("SequencerSigned")
+        if verification
+            .get("state")
+            .and_then(serde_json::Value::as_str)
+            != Some("Achieved")
+            || verification
+                .get("level")
+                .and_then(serde_json::Value::as_str)
+                != Some("SequencerSigned")
         {
             return Err(ProgramOperationError::UnverifiedReceipt);
         }
-        let result = envelope.get("value").ok_or(ProgramOperationError::UnverifiedReceipt)?;
+        let result = envelope
+            .get("value")
+            .ok_or(ProgramOperationError::UnverifiedReceipt)?;
         if result.get("committed").and_then(serde_json::Value::as_bool) != Some(false) {
             return Err(ProgramOperationError::UnverifiedReceipt);
         }
-        let execution = result.get("execution").ok_or(ProgramOperationError::UnverifiedReceipt)?;
-        let evidence = result.get("simulation_evidence").ok_or(ProgramOperationError::UnverifiedReceipt)?;
+        let execution = result
+            .get("execution")
+            .ok_or(ProgramOperationError::UnverifiedReceipt)?;
+        let evidence = result
+            .get("simulation_evidence")
+            .ok_or(ProgramOperationError::UnverifiedReceipt)?;
         Ok(RawProgramSimulation {
             receipt: decode_hex_json(execution, "receipt")?,
             terminal_payload: decode_hex_json(execution, "terminal_payload")?,
@@ -202,14 +283,19 @@ impl ProgramSimulationTransport for EmulatorProgramSimulationTransport {
                 hypothetical_state_root: decode_fixed_json(evidence, "hypothetical_state_root")?,
                 observed_sequence: decode_decimal_u64_json(evidence, "observed_sequence")?,
                 observed_at: decode_decimal_u64_json(evidence, "observed_at")?,
-                committed: evidence.get("committed").and_then(serde_json::Value::as_bool).ok_or(ProgramOperationError::UnverifiedReceipt)?,
+                committed: evidence
+                    .get("committed")
+                    .and_then(serde_json::Value::as_bool)
+                    .ok_or(ProgramOperationError::UnverifiedReceipt)?,
             },
             evidence_signature: decode_fixed_json(evidence, "signature")?,
         })
     }
 }
 
-fn encode_hex(bytes: &[u8]) -> String { bytes.iter().map(|byte| format!("{byte:02x}")).collect() }
+fn encode_hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
 fn program_call_request(call: &ProgramCall, signed_activity: &[u8]) -> serde_json::Value {
     serde_json::json!({
         "program_id": encode_hex(&call.callee().bytes()),
@@ -228,23 +314,49 @@ fn program_call_request(call: &ProgramCall, signed_activity: &[u8]) -> serde_jso
         "signed_activity": encode_hex(signed_activity),
     })
 }
-fn decode_hex_json(value: &serde_json::Value, field: &str) -> Result<Vec<u8>, ProgramOperationError> {
-    let text = value.get(field).and_then(serde_json::Value::as_str).ok_or(ProgramOperationError::UnverifiedReceipt)?;
-    if text.len() % 2 != 0 { return Err(ProgramOperationError::UnverifiedReceipt); }
-    (0..text.len()).step_by(2).map(|offset| u8::from_str_radix(&text[offset..offset + 2], 16).map_err(|_| ProgramOperationError::UnverifiedReceipt)).collect()
-}
-fn decode_fixed_json<const N: usize>(value: &serde_json::Value, field: &str) -> Result<[u8; N], ProgramOperationError> {
-    decode_hex_json(value, field)?.try_into().map_err(|_| ProgramOperationError::UnverifiedReceipt)
-}
-fn decode_decimal_u64_json(value: &serde_json::Value, field: &str) -> Result<u64, ProgramOperationError> {
-    let text = value.get(field).and_then(serde_json::Value::as_str)
+fn decode_hex_json(
+    value: &serde_json::Value,
+    field: &str,
+) -> Result<Vec<u8>, ProgramOperationError> {
+    let text = value
+        .get(field)
+        .and_then(serde_json::Value::as_str)
         .ok_or(ProgramOperationError::UnverifiedReceipt)?;
-    if text.is_empty() || !text.bytes().all(|byte| byte.is_ascii_digit())
+    if text.len() % 2 != 0 {
+        return Err(ProgramOperationError::UnverifiedReceipt);
+    }
+    (0..text.len())
+        .step_by(2)
+        .map(|offset| {
+            u8::from_str_radix(&text[offset..offset + 2], 16)
+                .map_err(|_| ProgramOperationError::UnverifiedReceipt)
+        })
+        .collect()
+}
+fn decode_fixed_json<const N: usize>(
+    value: &serde_json::Value,
+    field: &str,
+) -> Result<[u8; N], ProgramOperationError> {
+    decode_hex_json(value, field)?
+        .try_into()
+        .map_err(|_| ProgramOperationError::UnverifiedReceipt)
+}
+fn decode_decimal_u64_json(
+    value: &serde_json::Value,
+    field: &str,
+) -> Result<u64, ProgramOperationError> {
+    let text = value
+        .get(field)
+        .and_then(serde_json::Value::as_str)
+        .ok_or(ProgramOperationError::UnverifiedReceipt)?;
+    if text.is_empty()
+        || !text.bytes().all(|byte| byte.is_ascii_digit())
         || (text.len() > 1 && text.starts_with('0'))
     {
         return Err(ProgramOperationError::UnverifiedReceipt);
     }
-    text.parse().map_err(|_| ProgramOperationError::UnverifiedReceipt)
+    text.parse()
+        .map_err(|_| ProgramOperationError::UnverifiedReceipt)
 }
 
 pub struct ReceiptVerifiedProgramSimulator<T> {
@@ -272,35 +384,45 @@ impl<T: ProgramSimulationTransport> ReceiptVerifiedProgramSimulator<T> {
         let simulation_public_key = protocol_head.sequencer_public_key();
         let mut boundary = b"LayerX/emulator/simulation-boundary/v1\0".to_vec();
         boundary.extend_from_slice(&simulation_public_key);
-        Self { transport, registry, expected_abi_version: program_head.abi_version(),
-            expected_program: program_head.program(), expected_version: program_head.version(),
+        Self {
+            transport,
+            registry,
+            expected_abi_version: program_head.abi_version(),
+            expected_program: program_head.program(),
+            expected_version: program_head.version(),
             expected_code_hash: program_head.code_hash(),
-            simulation_public_key, boundary_id: Sha256::digest(boundary).into(),
+            simulation_public_key,
+            boundary_id: Sha256::digest(boundary).into(),
             observed_sequence: program_head.freshness().observed_sequence,
             observed_at: program_head.freshness().observed_at,
-            trusted_previous_state_root: protocol_head.state_root() }
+            trusted_previous_state_root: protocol_head.state_root(),
+        }
     }
 }
 
 trait ProgramSimulationBoundary {
-    fn simulate_signed(&mut self, call: &ProgramCall, signed_activity: &[u8])
-        -> Result<ProgramExecution, ProgramOperationError>;
+    fn simulate_signed(
+        &mut self,
+        call: &ProgramCall,
+        signed_activity: &[u8],
+    ) -> Result<ProgramExecution, ProgramOperationError>;
 }
 
 impl<T: ProgramSimulationTransport> ProgramSimulationBoundary
     for ReceiptVerifiedProgramSimulator<T>
 {
-    fn simulate_signed(&mut self, call: &ProgramCall, signed_activity: &[u8])
-        -> Result<ProgramExecution, ProgramOperationError>
-    {
+    fn simulate_signed(
+        &mut self,
+        call: &ProgramCall,
+        signed_activity: &[u8],
+    ) -> Result<ProgramExecution, ProgramOperationError> {
         let raw = self.transport.simulate_exact(call, signed_activity)?;
         if raw.receipt.is_empty() {
             return Err(ProgramOperationError::UnverifiedReceipt);
         }
         let activity = decode_signed(signed_activity, &self.registry)
             .map_err(|_| ProgramOperationError::InvalidRequest)?;
-        let expected = activity_id(&activity)
-            .map_err(|_| ProgramOperationError::InvalidRequest)?;
+        let expected = activity_id(&activity).map_err(|_| ProgramOperationError::InvalidRequest)?;
         let verified = verify_program_execution(
             &raw.receipt,
             &raw.terminal_payload,
@@ -314,15 +436,27 @@ impl<T: ProgramSimulationTransport> ProgramSimulationBoundary
             },
         )
         .map_err(|_| ProgramOperationError::UnverifiedReceipt)?;
-        let protocol = verified.receipt().receipt().protocol()
+        let protocol = verified
+            .receipt()
+            .receipt()
+            .protocol()
             .ok_or(ProgramOperationError::UnverifiedReceipt)?;
-        if !raw.evidence.matches_context(self.boundary_id, expected,
-                self.trusted_previous_state_root,
-                protocol.resulting_state_root(), self.observed_sequence,
-                self.observed_at)
-            || ed25519::verify_digest(&self.simulation_public_key,
-                &raw.evidence_signature, &raw.evidence.signing_digest()).is_err()
-        { return Err(ProgramOperationError::UnverifiedReceipt); }
+        if !raw.evidence.matches_context(
+            self.boundary_id,
+            expected,
+            self.trusted_previous_state_root,
+            protocol.resulting_state_root(),
+            self.observed_sequence,
+            self.observed_at,
+        ) || ed25519::verify_digest(
+            &self.simulation_public_key,
+            &raw.evidence_signature,
+            &raw.evidence.signing_digest(),
+        )
+        .is_err()
+        {
+            return Err(ProgramOperationError::UnverifiedReceipt);
+        }
         if self.observed_sequence.checked_add(1) != Some(protocol.global_sequence()) {
             return Err(ProgramOperationError::UnverifiedReceipt);
         }
@@ -354,15 +488,20 @@ mod simulation_rejection_vectors {
 
     fn evidence() -> ProgramSimulationEvidence {
         ProgramSimulationEvidence {
-            boundary_id: [1; 32], activity_id: [2; 32],
-            previous_state_root: [3; 32], hypothetical_state_root: [4; 32],
-            observed_sequence: 5, observed_at: 6, committed: false,
+            boundary_id: [1; 32],
+            activity_id: [2; 32],
+            previous_state_root: [3; 32],
+            hypothetical_state_root: [4; 32],
+            observed_sequence: 5,
+            observed_at: 6,
+            committed: false,
         }
     }
 
     #[test]
     fn committed_lie_is_refused_before_signature_authority() {
-        let mut value = evidence(); value.committed = true;
+        let mut value = evidence();
+        value.committed = true;
         assert!(!value.matches_context([1; 32], [2; 32], [3; 32], [4; 32], 5, 6));
     }
 
@@ -409,12 +548,15 @@ impl ProgramOperations {
         if balances.lifecycle() != ProgramLifecycle::Active {
             return Err(ProgramOperationError::InactiveProgram);
         }
-        if head.program() != program || head.lifecycle() != ProgramLifecycle::Active
+        if head.program() != program
+            || head.lifecycle() != ProgramLifecycle::Active
             || head.receipt_digest() != balances.receipt_digest()
             || head.state_root() != balances.state_root()
             || head.freshness() != freshness
             || now > head.valid_until_ms()
-        { return Err(ProgramOperationError::UnverifiedReceipt); }
+        {
+            return Err(ProgramOperationError::UnverifiedReceipt);
+        }
         Ok(ProgramDiscovery {
             program,
             lifecycle: balances.lifecycle(),
@@ -470,7 +612,9 @@ impl ProgramOperations {
             || boundary.expected_code_hash != discovery.code_hash
             || boundary.observed_sequence != discovery.observed_sequence
             || boundary.observed_at != discovery.observed_at
-        { return Err(ProgramOperationError::UnverifiedReceipt); }
+        {
+            return Err(ProgramOperationError::UnverifiedReceipt);
+        }
         validate_call_activity(boundary.registry(), call, signed_activity)?;
         let execution = boundary.simulate_signed(call, signed_activity)?;
         if execution.committed() || execution.receipt().is_empty() {
@@ -508,7 +652,9 @@ impl ProgramOperations {
 }
 
 impl<T> ReceiptVerifiedProgramSimulator<T> {
-    const fn registry(&self) -> &ModuleRegistry { &self.registry }
+    const fn registry(&self) -> &ModuleRegistry {
+        &self.registry
+    }
 }
 
 fn validate_call_activity(
@@ -519,7 +665,8 @@ fn validate_call_activity(
     let activity = decode_signed(signed_activity, registry)
         .map_err(|_| ProgramOperationError::InvalidRequest)?;
     let kind = activity.activity_type();
-    if kind.module() != ModuleId::Programs || kind.ordinal() != 3
+    if kind.module() != ModuleId::Programs
+        || kind.ordinal() != 3
         || activity.payload() != call.canonical_payload()
     {
         return Err(ProgramOperationError::InvalidRequest);

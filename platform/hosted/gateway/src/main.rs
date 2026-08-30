@@ -1,3 +1,4 @@
+use layerx_crypto::ed25519;
 use layerx_platform_gateway::http::{
     self, Client, Endpoint, IncomingRequest, OutgoingResponse, UpstreamResponse,
 };
@@ -5,14 +6,12 @@ use layerx_platform_gateway::store::{
     KeyRecord, OperationRecord, RedisEndpoint, RedisStore, Reservation,
 };
 use layerx_platform_gateway::{
-    authenticate_gateway_key, production_route, verify_activity_operation, verify_program_operation,
-    verify_program_simulation_operation, verify_submission, AccessError, AuthorityFacts, IssuedKey,
-    PrincipalId, ProductionRoute, Quota,
+    authenticate_gateway_key, production_route, verify_activity_operation,
+    verify_program_operation, verify_program_simulation_operation, verify_submission, AccessError,
+    AuthorityFacts, IssuedKey, PrincipalId, ProductionRoute, Quota,
 };
-use layerx_crypto::ed25519;
 use layerx_types::intent::{
-    Amount, CallBudget, Calldata, CapabilityRequest, ProgramCall, ProgramId,
-    RequestedCapabilities,
+    Amount, CallBudget, Calldata, CapabilityRequest, ProgramCall, ProgramId, RequestedCapabilities,
 };
 use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry};
 use layerx_wire::activity::decode_signed;
@@ -277,8 +276,7 @@ fn decode_hex(value: &str, maximum: usize) -> Result<Vec<u8>, String> {
         .map(|pair| {
             let text = std::str::from_utf8(pair)
                 .map_err(|_| "hexadecimal payload is invalid".to_owned())?;
-            u8::from_str_radix(text, 16)
-                .map_err(|_| "hexadecimal payload is invalid".to_owned())
+            u8::from_str_radix(text, 16).map_err(|_| "hexadecimal payload is invalid".to_owned())
         })
         .collect()
 }
@@ -312,8 +310,7 @@ fn program_call_bytes(
             return Err("program id is invalid".to_owned());
         }
         let calldata_bytes = decode_hex(&body.calldata, 1_048_576)?;
-        let calldata =
-            Calldata::new(&calldata_bytes).map_err(|_| "program calldata is invalid")?;
+        let calldata = Calldata::new(&calldata_bytes).map_err(|_| "program calldata is invalid")?;
         let fee_limit = body
             .budget
             .fee_limit
@@ -352,8 +349,8 @@ fn program_call_bytes(
     } else {
         return Err("program call content type is not supported".to_owned());
     };
-    let activity =
-        decode_signed(&signed_activity, registry).map_err(|_| "signed program activity is invalid")?;
+    let activity = decode_signed(&signed_activity, registry)
+        .map_err(|_| "signed program activity is invalid")?;
     if activity.activity_type().module() != ModuleId::Programs
         || activity.activity_type().ordinal() != 3
     {
@@ -361,13 +358,19 @@ fn program_call_bytes(
     }
     let call = ProgramCall::from_canonical_payload(activity.payload())
         .map_err(|_| "signed program payload is not canonical".to_owned())?;
-    if expected_call.as_ref().is_some_and(|expected| expected != &call) {
+    if expected_call
+        .as_ref()
+        .is_some_and(|expected| expected != &call)
+    {
         return Err("signed program activity does not match the typed call".to_owned());
     }
     Ok((signed_activity, call.callee().bytes()))
 }
 
-fn program_head(config: &Config, expected_program: [u8; 32]) -> Result<ProgramHead, OutgoingResponse> {
+fn program_head(
+    config: &Config,
+    expected_program: [u8; 32],
+) -> Result<ProgramHead, OutgoingResponse> {
     let program = hex(&expected_program);
     let upstream = config
         .client
@@ -670,14 +673,12 @@ fn json_response(status: u16, value: serde_json::Value) -> OutgoingResponse {
 fn programs_request_path(method: &str, path: &str) -> bool {
     matches!(
         production_route(method, path),
-        Ok(
-            ProductionRoute::ProgramCall
-                | ProductionRoute::ProgramSimulation
-                | ProductionRoute::ProgramRegistry(_)
-                | ProductionRoute::ProgramInterface(_)
-                | ProductionRoute::ProgramReceiptByIdempotency(_)
-                | ProductionRoute::ProgramActivity(_)
-        )
+        Ok(ProductionRoute::ProgramCall
+            | ProductionRoute::ProgramSimulation
+            | ProductionRoute::ProgramRegistry(_)
+            | ProductionRoute::ProgramInterface(_)
+            | ProductionRoute::ProgramReceiptByIdempotency(_)
+            | ProductionRoute::ProgramActivity(_))
     )
 }
 
@@ -724,17 +725,22 @@ fn program_verification_status(value: &serde_json::Value) -> serde_json::Value {
             "reason": "receipt_pending",
         }),
         _ if matches!(
-            value.get("verification").and_then(serde_json::Value::as_str),
+            value
+                .get("verification")
+                .and_then(serde_json::Value::as_str),
             Some(
                 "registry-receipt-and-current-head-verified"
                     | "deployment-interface-and-current-head-verified"
             )
-        ) => serde_json::json!({
-            "state": "Unverified",
-            "requested": "SequencerSigned",
-            "achieved": "Unverified",
-            "reason": "server_side_receipt_verification_only",
-        }),
+        ) =>
+        {
+            serde_json::json!({
+                "state": "Unverified",
+                "requested": "SequencerSigned",
+                "achieved": "Unverified",
+                "reason": "server_side_receipt_verification_only",
+            })
+        }
         _ => serde_json::json!({
             "state": "Achieved",
             "level": "SequencerSigned",
@@ -770,8 +776,8 @@ fn normalize_program_u64s(value: &mut serde_json::Value) -> bool {
                                 .filter(|number| text == number.to_string())
                         })
                     });
-                    let Some(output_values) = output_values
-                        .and_then(|number| u32::try_from(number).ok())
+                    let Some(output_values) =
+                        output_values.and_then(|number| u32::try_from(number).ok())
                     else {
                         return false;
                     };
@@ -1601,9 +1607,7 @@ fn program_simulation(
         .get("hypothetical_state_root")
         .and_then(serde_json::Value::as_str)
         .and_then(|value| parse_hex32(value).ok());
-    let evidence_sequence = evidence
-        .get("observed_sequence")
-        .and_then(canonical_u64);
+    let evidence_sequence = evidence.get("observed_sequence").and_then(canonical_u64);
     let evidence_at = evidence.get("observed_at").and_then(canonical_u64);
     let public_key = evidence
         .get("public_key")
@@ -1622,7 +1626,10 @@ fn program_simulation(
         .get("state_root")
         .and_then(serde_json::Value::as_str)
         .and_then(|value| parse_hex32(value).ok());
-    if evidence.get("committed").and_then(serde_json::Value::as_bool) != Some(false)
+    if evidence
+        .get("committed")
+        .and_then(serde_json::Value::as_bool)
+        != Some(false)
         || previous != Some(state_root)
         || evidence_activity != Some(submission.activity_id())
         || evidence_sequence != Some(observed_sequence)
@@ -1652,12 +1659,7 @@ fn program_simulation(
     signed.extend_from_slice(&observed_at.to_be_bytes());
     signed.push(0);
     let evidence_digest: [u8; 32] = Sha256::digest(signed).into();
-    if ed25519::verify_digest(
-        &config.trusted_sequencer_key,
-        &signature,
-        &evidence_digest,
-    )
-    .is_err()
+    if ed25519::verify_digest(&config.trusted_sequencer_key, &signature, &evidence_digest).is_err()
     {
         return response(503, "program_simulation_unverified", Some(5));
     }
@@ -1698,7 +1700,10 @@ fn activity(
                 canonical_hex32_text(value)
             } else {
                 valid_identifier(value, 128)
-            } => value,
+            } =>
+        {
+            value
+        }
         _ => return response(400, "idempotency_key_required", None),
     };
     let content_type = request
@@ -1715,8 +1720,7 @@ fn activity(
             "application/json" | "application/octet-stream"
         )
     };
-    if !supported_content_type || request.body.is_empty()
-    {
+    if !supported_content_type || request.body.is_empty() {
         return response(415, "activity_content_type_required", None);
     }
     let (canonical, expected_program) = if program_call {
@@ -1819,7 +1823,11 @@ fn activity(
                 return response(409, "idempotency_conflict", None);
             }
             if state == "completed" {
-                let limit = if program_call { MAX_REQUEST } else { 512 * 1024 };
+                let limit = if program_call {
+                    MAX_REQUEST
+                } else {
+                    512 * 1024
+                };
                 let Ok(result) = decode_hex(&stored, limit) else {
                     return response(503, "persistence_unavailable", Some(5));
                 };
@@ -1853,7 +1861,11 @@ fn activity(
     let upstream = match config.client.request(
         &config.component,
         "POST",
-        if program_call { "/v1/programs/call" } else { "/v1/activities" },
+        if program_call {
+            "/v1/programs/call"
+        } else {
+            "/v1/activities"
+        },
         config.component_token.as_str(),
         Some(&protocol_idempotency),
         "application/octet-stream",
@@ -1924,10 +1936,12 @@ fn activity(
         Ok(value) => value,
         Err(_) => return response(503, "component_invalid", Some(5)),
     };
-    if !matches!(component.state.as_str(), "completed" | "executed" | "refused")
-        || !component
-            .activity_id
-            .eq_ignore_ascii_case(&hex(&verified_submission.activity_id()))
+    if !matches!(
+        component.state.as_str(),
+        "completed" | "executed" | "refused"
+    ) || !component
+        .activity_id
+        .eq_ignore_ascii_case(&hex(&verified_submission.activity_id()))
         || component.receipt.is_empty()
     {
         return response(503, "component_invalid", Some(5));
@@ -1935,23 +1949,22 @@ fn activity(
     if program_call && (component.terminal_payload.is_empty() || component.call_graph.is_empty()) {
         return response(503, "component_invalid", Some(5));
     }
-    let (result, receipt, verified_result_code) =
-        match program_head.map_or_else(
-            || verified_result(config, &component.activity_id, &component.receipt),
-            |head| {
-                verified_program_result(
-                    config,
-                    &component.activity_id,
-                    &component.receipt,
-                    &component.terminal_payload,
-                    &component.call_graph,
-                    head,
-                )
-            },
-        ) {
-            Ok(value) => value,
-            Err(error) => return error,
-        };
+    let (result, receipt, verified_result_code) = match program_head.map_or_else(
+        || verified_result(config, &component.activity_id, &component.receipt),
+        |head| {
+            verified_program_result(
+                config,
+                &component.activity_id,
+                &component.receipt,
+                &component.terminal_payload,
+                &component.call_graph,
+                head,
+            )
+        },
+    ) {
+        Ok(value) => value,
+        Err(error) => return error,
+    };
     if !program_call && verified_result_code != 0 {
         let refusal = json_response(
             409,
@@ -2118,8 +2131,12 @@ fn resolve_pending_program(
         .get("program_id")
         .and_then(serde_json::Value::as_str)
         .and_then(|value| parse_hex32(value).ok());
-    if !matches!(component.state.as_str(), "executed" | "refused" | "completed")
-        || !component.activity_id.eq_ignore_ascii_case(&operation.activity_id)
+    if !matches!(
+        component.state.as_str(),
+        "executed" | "refused" | "completed"
+    ) || !component
+        .activity_id
+        .eq_ignore_ascii_case(&operation.activity_id)
         || component.receipt.is_empty()
         || component.terminal_payload.is_empty()
         || component.call_graph.is_empty()
@@ -2368,13 +2385,9 @@ fn read_route(
                 .get("state_root")
                 .and_then(serde_json::Value::as_str)
                 .and_then(|value| parse_hex32(value).ok());
-            let observed_sequence = value
-                .get("observed_sequence")
-                .and_then(canonical_u64);
+            let observed_sequence = value.get("observed_sequence").and_then(canonical_u64);
             let observed_at = value.get("observed_at").and_then(canonical_u64);
-            let valid_through = value
-                .get("valid_through")
-                .and_then(canonical_u64);
+            let valid_through = value.get("valid_through").and_then(canonical_u64);
             let version = value
                 .get("version")
                 .and_then(serde_json::Value::as_u64)
@@ -2410,7 +2423,9 @@ fn read_route(
                 || observed_at != head.observed_at
                 || valid_through != Some(head.valid_through)
                 || interface_digest != expected_interface_digest
-                || value.get("verification").and_then(serde_json::Value::as_str)
+                || value
+                    .get("verification")
+                    .and_then(serde_json::Value::as_str)
                     != Some("deployment-interface-and-current-head-verified")
                 || source.is_none()
             {
@@ -2441,10 +2456,7 @@ fn read_route(
         }
         ProductionRoute::ProgramReceiptByIdempotency(idempotency) => {
             let idempotency = idempotency.to_owned();
-            let scope = digest(&[
-                record.principal_digest.as_bytes(),
-                idempotency.as_bytes(),
-            ]);
+            let scope = digest(&[record.principal_digest.as_bytes(), idempotency.as_bytes()]);
             let operation = match config.store.operation(&scope) {
                 Ok(Some(value))
                     if value
@@ -2452,7 +2464,10 @@ fn read_route(
                         .as_bytes()
                         .ct_eq(record.principal_digest.as_bytes())
                         .unwrap_u8()
-                        == 1 => value,
+                        == 1 =>
+                {
+                    value
+                }
                 Ok(Some(_)) | Ok(None) => return response(404, "program_receipt_not_found", None),
                 Err(_) => return response(503, "persistence_unavailable", Some(5)),
             };
@@ -2482,7 +2497,10 @@ fn read_route(
                     serde_json::Value::String(idempotency),
                 );
             }
-            json_response(200, serde_json::json!({"ok":true,"result":value,"trace":trace_id}))
+            json_response(
+                200,
+                serde_json::json!({"ok":true,"result":value,"trace":trace_id}),
+            )
         }
         ProductionRoute::ProgramActivity(activity_id) => {
             let activity_id = activity_id.to_owned();
@@ -2528,7 +2546,10 @@ fn read_route(
                 Ok(value) => value,
                 Err(_) => return response(503, "persistence_unavailable", Some(5)),
             };
-            json_response(200, serde_json::json!({"ok":true,"result":value,"trace":trace_id}))
+            json_response(
+                200,
+                serde_json::json!({"ok":true,"result":value,"trace":trace_id}),
+            )
         }
         ProductionRoute::Activity
         | ProductionRoute::ProgramCall
@@ -2772,8 +2793,8 @@ fn main() {
 #[cfg(test)]
 mod programs_wire_tests {
     use super::{
-        agent_error_class, agent_response, json_response, pending_program_response,
-        now_millis, program_activity_selector, program_head_is_current, program_receipt_selector,
+        agent_error_class, agent_response, json_response, now_millis, pending_program_response,
+        program_activity_selector, program_head_is_current, program_receipt_selector,
         program_selector, programs_request_path, response,
     };
     use layerx_platform_gateway::http::IncomingRequest;
@@ -2784,10 +2805,7 @@ mod programs_wire_tests {
         IncomingRequest {
             method: "GET".to_owned(),
             path: path.to_owned(),
-            headers: BTreeMap::from([(
-                "content-type".to_owned(),
-                "application/json".to_owned(),
-            )]),
+            headers: BTreeMap::from([("content-type".to_owned(), "application/json".to_owned())]),
             body: body.to_string().into_bytes(),
         }
     }
@@ -2841,9 +2859,21 @@ mod programs_wire_tests {
 
     #[test]
     fn program_heads_expire_against_unix_milliseconds() {
-        assert!(program_head_is_current(1_700_000_000_000, 1_700_000_300_000, 1_700_000_300_000));
-        assert!(!program_head_is_current(1_700_000_000_000, 1_700_000_300_000, 1_700_000_300_001));
-        assert!(!program_head_is_current(1_700_000_300_001, 1_700_000_300_000, 1_700_000_000_000));
+        assert!(program_head_is_current(
+            1_700_000_000_000,
+            1_700_000_300_000,
+            1_700_000_300_000
+        ));
+        assert!(!program_head_is_current(
+            1_700_000_000_000,
+            1_700_000_300_000,
+            1_700_000_300_001
+        ));
+        assert!(!program_head_is_current(
+            1_700_000_300_001,
+            1_700_000_300_000,
+            1_700_000_000_000
+        ));
 
         let before = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -2979,7 +3009,11 @@ mod programs_wire_tests {
             (409, "idempotency_conflict", "IdempotencyConflict"),
             (429, "quota_exceeded", "RateLimit"),
             (403, "activity_authorization_refused", "PolicyRefusal"),
-            (503, "program_receipt_verification_failed", "VerificationFailure"),
+            (
+                503,
+                "program_receipt_verification_failed",
+                "VerificationFailure",
+            ),
             (404, "program_interface_absent", "UnavailableCapability"),
             (400, "LXP_ERR_BUDGET_EXCEEDED", "CoreRejection"),
             (400, "invalid_argument", "ProtocolIncompatibility"),

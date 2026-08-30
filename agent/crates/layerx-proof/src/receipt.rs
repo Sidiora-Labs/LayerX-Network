@@ -362,14 +362,15 @@ pub fn verify_program_outcome(
     receipt_bytes: &[u8],
     authorised: &AuthorizedBatch,
 ) -> Result<VerifiedReceipt, VerificationFailure> {
-    let receipt = decode(receipt_bytes)
-        .map_err(|_| VerificationFailure::at(ReceiptCheck::Decode))?;
-    let reproduced = encode(&receipt)
-        .map_err(|_| VerificationFailure::at(ReceiptCheck::CanonicalEncoding))?;
+    let receipt =
+        decode(receipt_bytes).map_err(|_| VerificationFailure::at(ReceiptCheck::Decode))?;
+    let reproduced =
+        encode(&receipt).map_err(|_| VerificationFailure::at(ReceiptCheck::CanonicalEncoding))?;
     if reproduced != receipt_bytes {
         return Err(VerificationFailure::at(ReceiptCheck::CanonicalEncoding));
     }
-    let protocol = receipt.protocol()
+    let protocol = receipt
+        .protocol()
         .ok_or_else(|| VerificationFailure::at(ReceiptCheck::ReceiptShape))?;
     if !matches!(protocol.protocol_version(), 1 | 2) {
         return Err(VerificationFailure::at(ReceiptCheck::ProtocolVersion));
@@ -380,7 +381,8 @@ pub fn verify_program_outcome(
     {
         return Err(VerificationFailure::at(ReceiptCheck::Module));
     }
-    let outcome = protocol.program_outcome()
+    let outcome = protocol
+        .program_outcome()
         .ok_or_else(|| VerificationFailure::at(ReceiptCheck::ReceiptShape))?;
     if !supported_program_guest_abi(outcome.abi_version()) || outcome.runtime_version() != 1 {
         return Err(VerificationFailure::at(ReceiptCheck::ProtocolVersion));
@@ -397,7 +399,8 @@ pub fn verify_program_outcome(
     if protocol.resulting_state_root() != authorised.resulting_state_root {
         return Err(VerificationFailure::at(ReceiptCheck::ResultingStateRoot));
     }
-    let signature = protocol.sequencer_signature()
+    let signature = protocol
+        .sequencer_signature()
         .ok_or_else(|| VerificationFailure::at(ReceiptCheck::MissingSignature))?;
     let unsigned = encode_unsigned(&receipt)
         .map_err(|_| VerificationFailure::at(ReceiptCheck::CanonicalEncoding))?;
@@ -420,16 +423,20 @@ pub fn verify_program_outcome_at_root(
     sequencer_public_key: [u8; 32],
     expected_previous_state_root: [u8; 32],
 ) -> Result<VerifiedReceipt, VerificationFailure> {
-    let receipt = decode(receipt_bytes)
-        .map_err(|_| VerificationFailure::at(ReceiptCheck::Decode))?;
-    let protocol = receipt.protocol()
+    let receipt =
+        decode(receipt_bytes).map_err(|_| VerificationFailure::at(ReceiptCheck::Decode))?;
+    let protocol = receipt
+        .protocol()
         .ok_or_else(|| VerificationFailure::at(ReceiptCheck::ReceiptShape))?;
     if protocol.previous_state_root() != expected_previous_state_root {
         return Err(VerificationFailure::at(ReceiptCheck::PreviousStateRoot));
     }
     let authorised = AuthorizedBatch::new(
-        protocol.batch_id(), protocol.asset(), expected_previous_state_root,
-        protocol.resulting_state_root(), sequencer_public_key,
+        protocol.batch_id(),
+        protocol.asset(),
+        expected_previous_state_root,
+        protocol.resulting_state_root(),
+        sequencer_public_key,
     );
     verify_program_outcome(receipt_bytes, &authorised)
 }

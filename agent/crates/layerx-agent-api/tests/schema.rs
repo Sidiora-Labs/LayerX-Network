@@ -15,8 +15,14 @@ const PROGRAMS_SOURCE: &str = include_str!("../../../schema/agent-api/programs.k
 const PROGRAMS_BASELINE: &str = include_str!("../../../schema/agent-api/golden/programs.kvx");
 
 const CUSTODY_CLAIM_TAGS: &[(&str, &str)] = &[
-    ("write.kvx", "type.SubmissionState.Executed.settlement_domain"),
-    ("stream.kvx", "type.ReceiptReference.Verified.settlement_domain"),
+    (
+        "write.kvx",
+        "type.SubmissionState.Executed.settlement_domain",
+    ),
+    (
+        "stream.kvx",
+        "type.ReceiptReference.Verified.settlement_domain",
+    ),
     ("read.kvx", "operation.export.offline.settlement_domain"),
 ];
 
@@ -198,8 +204,7 @@ fn compatibility_gate_accepts_additions_and_rejects_mutation_or_removal() {
 fn custody_receipt_shapes_name_the_paxeer_settlement_domain() {
     let root = declarations(AGENT_API_V1_SOURCE);
     assert_eq!(
-        root["type.SettlementDomain.variants"],
-        "[\"Paxeer\"]",
+        root["type.SettlementDomain.variants"], "[\"Paxeer\"]",
         "Paxeer is the sole valid settlement domain in this contract version"
     );
     let write = declarations(WRITE_SOURCE);
@@ -220,8 +225,7 @@ fn untagged_or_foreign_custody_claims_are_rejected() {
     let read = declarations(READ_SOURCE);
     let stream = declarations(STREAM_SOURCE);
 
-    let stripped_source =
-        WRITE_SOURCE.replace("Executed.settlement_domain = \"Paxeer\"\n", "");
+    let stripped_source = WRITE_SOURCE.replace("Executed.settlement_domain = \"Paxeer\"\n", "");
     assert!(stripped_source.len() < WRITE_SOURCE.len());
     let stripped = declarations(&stripped_source);
     let untagged = settlement_domain_gate(
@@ -278,7 +282,10 @@ fn adding_a_settlement_domain_is_additive_by_construction() {
         1,
         1,
         &previous,
-        &[("type.SubmissionState.Executed.settlement_domain", "\"Solana\"")]
+        &[(
+            "type.SubmissionState.Executed.settlement_domain",
+            "\"Solana\""
+        )]
     )
     .is_err());
     let baseline = declarations(BASELINE);

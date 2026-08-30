@@ -208,6 +208,107 @@ public final class GeneratedSchema {
                 throw new IllegalArgumentException("unknown schema variant");
             }
         }
+        public record ProgramActivitySelector(JsonNode activity_id, JsonNode requested_verification_level) implements SchemaTypes.GeneratedResponse {
+            public ProgramActivitySelector {
+                Objects.requireNonNull(activity_id, "activity_id");
+                Objects.requireNonNull(requested_verification_level, "requested_verification_level");
+            }
+        }
+        public record ProgramCallBudget(JsonNode fuel, JsonNode fee_limit) implements SchemaTypes.GeneratedResponse {
+            public ProgramCallBudget {
+                Objects.requireNonNull(fuel, "fuel");
+                Objects.requireNonNull(fee_limit, "fee_limit");
+            }
+        }
+        public record ProgramCallRequest(JsonNode program_id, JsonNode calldata, AgentModels.ProgramCallBudget budget, JsonNode capabilities, JsonNode signed_activity) implements SchemaTypes.GeneratedResponse {
+            public ProgramCallRequest {
+                Objects.requireNonNull(program_id, "program_id");
+                Objects.requireNonNull(calldata, "calldata");
+                Objects.requireNonNull(budget, "budget");
+                Objects.requireNonNull(capabilities, "capabilities");
+                Objects.requireNonNull(signed_activity, "signed_activity");
+            }
+        }
+        public enum ProgramCapability {
+            STORAGE_READ("storage_read"),
+            STORAGE_WRITE("storage_write"),
+            TRANSFER("transfer"),
+            EMIT_EVENT("emit_event"),
+            COMPOSE("compose");
+            private final String wire;
+            ProgramCapability(String wire) { this.wire = wire; }
+            @JsonValue public String wire() { return wire; }
+            @JsonCreator public static ProgramCapability fromWire(String wire) {
+                for (ProgramCapability value : values()) if (value.wire.equals(wire)) return value;
+                throw new IllegalArgumentException("unknown schema variant");
+            }
+        }
+        public record ProgramExecutionEvidence(JsonNode activity_id, JsonNode receipt, JsonNode terminal_payload, JsonNode call_graph, JsonNode authority) implements SchemaTypes.GeneratedResponse {
+            public ProgramExecutionEvidence {
+                Objects.requireNonNull(activity_id, "activity_id");
+                Objects.requireNonNull(receipt, "receipt");
+                Objects.requireNonNull(terminal_payload, "terminal_payload");
+                Objects.requireNonNull(call_graph, "call_graph");
+                Objects.requireNonNull(authority, "authority");
+            }
+        }
+        public enum ProgramFailure {
+            UNKNOWN_PROGRAM("unknown_program"),
+            REENTRANCY("reentrancy"),
+            DEPTH_EXCEEDED("depth_exceeded"),
+            FANOUT_EXCEEDED("fanout_exceeded"),
+            GUEST_REFUSED("guest_refused"),
+            AUTHORITY("authority"),
+            RESOURCE("resource"),
+            RESPONSE("response"),
+            FAULT("fault");
+            private final String wire;
+            ProgramFailure(String wire) { this.wire = wire; }
+            @JsonValue public String wire() { return wire; }
+            @JsonCreator public static ProgramFailure fromWire(String wire) {
+                for (ProgramFailure value : values()) if (value.wire.equals(wire)) return value;
+                throw new IllegalArgumentException("unknown schema variant");
+            }
+        }
+        public enum ProgramOutcome {
+            COMPLETED("completed"),
+            LEGACY_COMPLETED("legacy_completed"),
+            REFUSED("refused");
+            private final String wire;
+            ProgramOutcome(String wire) { this.wire = wire; }
+            @JsonValue public String wire() { return wire; }
+            @JsonCreator public static ProgramOutcome fromWire(String wire) {
+                for (ProgramOutcome value : values()) if (value.wire.equals(wire)) return value;
+                throw new IllegalArgumentException("unknown schema variant");
+            }
+        }
+        public record ProgramReceiptSelector(JsonNode idempotency_key, JsonNode expected_activity_id, JsonNode requested_verification_level) implements SchemaTypes.GeneratedResponse {
+            public ProgramReceiptSelector {
+                Objects.requireNonNull(idempotency_key, "idempotency_key");
+                Objects.requireNonNull(expected_activity_id, "expected_activity_id");
+                Objects.requireNonNull(requested_verification_level, "requested_verification_level");
+            }
+        }
+        public record ProgramSelector(JsonNode program_id, JsonNode requested_verification_level) implements SchemaTypes.GeneratedResponse {
+            public ProgramSelector {
+                Objects.requireNonNull(program_id, "program_id");
+                Objects.requireNonNull(requested_verification_level, "requested_verification_level");
+            }
+        }
+        public record ProgramSimulation(JsonNode committed, JsonNode execution, JsonNode simulation_evidence) implements SchemaTypes.GeneratedResponse {
+            public ProgramSimulation {
+                Objects.requireNonNull(committed, "committed");
+                Objects.requireNonNull(execution, "execution");
+                Objects.requireNonNull(simulation_evidence, "simulation_evidence");
+            }
+        }
+        public record ProgramSubmission(JsonNode state, JsonNode activity_id, JsonNode idempotency_key) implements SchemaTypes.GeneratedResponse {
+            public ProgramSubmission {
+                Objects.requireNonNull(state, "state");
+                Objects.requireNonNull(activity_id, "activity_id");
+                Objects.requireNonNull(idempotency_key, "idempotency_key");
+            }
+        }
         public record ReceiptReference(String kind, JsonNode value) implements SchemaTypes.GeneratedResponse {
             private static final Set<String> KINDS = Set.of("None", "Verified");
             public ReceiptReference {
@@ -309,6 +410,38 @@ public final class GeneratedSchema {
                 Objects.requireNonNull(kind, "kind");
                 Objects.requireNonNull(value, "value");
                 if (!KINDS.contains(kind)) throw PlatformSdkException.invalidArgument();
+            }
+        }
+        public record VerifiedProgramDiscovery(JsonNode program_id, JsonNode lifecycle, JsonNode version, JsonNode code_hash, JsonNode abi_version, JsonNode receipt_digest, JsonNode state_root, JsonNode observed_sequence, JsonNode observed_at, JsonNode valid_through, JsonNode verification) implements SchemaTypes.GeneratedResponse {
+            public VerifiedProgramDiscovery {
+                Objects.requireNonNull(program_id, "program_id");
+                Objects.requireNonNull(lifecycle, "lifecycle");
+                Objects.requireNonNull(version, "version");
+                Objects.requireNonNull(code_hash, "code_hash");
+                Objects.requireNonNull(abi_version, "abi_version");
+                Objects.requireNonNull(receipt_digest, "receipt_digest");
+                Objects.requireNonNull(state_root, "state_root");
+                Objects.requireNonNull(observed_sequence, "observed_sequence");
+                Objects.requireNonNull(observed_at, "observed_at");
+                Objects.requireNonNull(valid_through, "valid_through");
+                Objects.requireNonNull(verification, "verification");
+            }
+        }
+        public record VerifiedProgramInterface(JsonNode program_id, JsonNode version, JsonNode code_hash, JsonNode abi_version, @JsonProperty("interface") JsonNode interface_, JsonNode interface_digest, JsonNode receipt_digest, JsonNode state_root, JsonNode observed_sequence, JsonNode observed_at, JsonNode valid_through, JsonNode source, JsonNode verification) implements SchemaTypes.GeneratedResponse {
+            public VerifiedProgramInterface {
+                Objects.requireNonNull(program_id, "program_id");
+                Objects.requireNonNull(version, "version");
+                Objects.requireNonNull(code_hash, "code_hash");
+                Objects.requireNonNull(abi_version, "abi_version");
+                Objects.requireNonNull(interface_, "interface");
+                Objects.requireNonNull(interface_digest, "interface_digest");
+                Objects.requireNonNull(receipt_digest, "receipt_digest");
+                Objects.requireNonNull(state_root, "state_root");
+                Objects.requireNonNull(observed_sequence, "observed_sequence");
+                Objects.requireNonNull(observed_at, "observed_at");
+                Objects.requireNonNull(valid_through, "valid_through");
+                Objects.requireNonNull(source, "source");
+                Objects.requireNonNull(verification, "verification");
             }
         }
         public record VerifiedRead(JsonNode value, JsonNode achieved_verification_level, JsonNode freshness) implements SchemaTypes.GeneratedResponse {
@@ -1707,6 +1840,115 @@ public final class GeneratedSchema {
             }
         }
         public static final SchemaTypes.TypedOperation<PrepareRequest, PrepareResponse> PREPARE = new SchemaTypes.TypedOperation<>(OperationCatalog.Plane.AGENT, "prepare", true, PrepareRequest.class, PrepareResponse.class);
+        public record ProgramActivityRequest(JsonNode activity_id, JsonNode requested_verification_level) implements SchemaTypes.GeneratedRequest {
+            public ProgramActivityRequest {
+                Objects.requireNonNull(activity_id, "activity_id");
+                Objects.requireNonNull(requested_verification_level, "requested_verification_level");
+            }
+        }
+        public record ProgramActivityResponse(JsonNode state, JsonNode activity_id, JsonNode idempotency_key) implements SchemaTypes.GeneratedResponse {
+            public ProgramActivityResponse {
+                Objects.requireNonNull(state, "state");
+                Objects.requireNonNull(activity_id, "activity_id");
+                Objects.requireNonNull(idempotency_key, "idempotency_key");
+            }
+        }
+        public static final SchemaTypes.TypedOperation<ProgramActivityRequest, ProgramActivityResponse> PROGRAM_ACTIVITY = new SchemaTypes.TypedOperation<>(OperationCatalog.Plane.AGENT, "program.activity", false, ProgramActivityRequest.class, ProgramActivityResponse.class);
+        public record ProgramCallRequest(JsonNode program_id, JsonNode calldata, AgentModels.ProgramCallBudget budget, JsonNode capabilities, JsonNode signed_activity) implements SchemaTypes.GeneratedRequest {
+            public ProgramCallRequest {
+                Objects.requireNonNull(program_id, "program_id");
+                Objects.requireNonNull(calldata, "calldata");
+                Objects.requireNonNull(budget, "budget");
+                Objects.requireNonNull(capabilities, "capabilities");
+                Objects.requireNonNull(signed_activity, "signed_activity");
+            }
+        }
+        public record ProgramCallResponse(JsonNode state, JsonNode activity_id, JsonNode idempotency_key) implements SchemaTypes.GeneratedResponse {
+            public ProgramCallResponse {
+                Objects.requireNonNull(state, "state");
+                Objects.requireNonNull(activity_id, "activity_id");
+                Objects.requireNonNull(idempotency_key, "idempotency_key");
+            }
+        }
+        public static final SchemaTypes.TypedOperation<ProgramCallRequest, ProgramCallResponse> PROGRAM_CALL = new SchemaTypes.TypedOperation<>(OperationCatalog.Plane.AGENT, "program.call", true, ProgramCallRequest.class, ProgramCallResponse.class);
+        public record ProgramDiscoverRequest(JsonNode program_id, JsonNode requested_verification_level) implements SchemaTypes.GeneratedRequest {
+            public ProgramDiscoverRequest {
+                Objects.requireNonNull(program_id, "program_id");
+                Objects.requireNonNull(requested_verification_level, "requested_verification_level");
+            }
+        }
+        public record ProgramDiscoverResponse(JsonNode program_id, JsonNode lifecycle, JsonNode version, JsonNode code_hash, JsonNode abi_version, JsonNode receipt_digest, JsonNode state_root, JsonNode observed_sequence, JsonNode observed_at, JsonNode valid_through, JsonNode verification) implements SchemaTypes.GeneratedResponse {
+            public ProgramDiscoverResponse {
+                Objects.requireNonNull(program_id, "program_id");
+                Objects.requireNonNull(lifecycle, "lifecycle");
+                Objects.requireNonNull(version, "version");
+                Objects.requireNonNull(code_hash, "code_hash");
+                Objects.requireNonNull(abi_version, "abi_version");
+                Objects.requireNonNull(receipt_digest, "receipt_digest");
+                Objects.requireNonNull(state_root, "state_root");
+                Objects.requireNonNull(observed_sequence, "observed_sequence");
+                Objects.requireNonNull(observed_at, "observed_at");
+                Objects.requireNonNull(valid_through, "valid_through");
+                Objects.requireNonNull(verification, "verification");
+            }
+        }
+        public static final SchemaTypes.TypedOperation<ProgramDiscoverRequest, ProgramDiscoverResponse> PROGRAM_DISCOVER = new SchemaTypes.TypedOperation<>(OperationCatalog.Plane.AGENT, "program.discover", false, ProgramDiscoverRequest.class, ProgramDiscoverResponse.class);
+        public record ProgramInterfaceRequest(JsonNode program_id, JsonNode requested_verification_level) implements SchemaTypes.GeneratedRequest {
+            public ProgramInterfaceRequest {
+                Objects.requireNonNull(program_id, "program_id");
+                Objects.requireNonNull(requested_verification_level, "requested_verification_level");
+            }
+        }
+        public record ProgramInterfaceResponse(JsonNode program_id, JsonNode version, JsonNode code_hash, JsonNode abi_version, @JsonProperty("interface") JsonNode interface_, JsonNode interface_digest, JsonNode receipt_digest, JsonNode state_root, JsonNode observed_sequence, JsonNode observed_at, JsonNode valid_through, JsonNode source, JsonNode verification) implements SchemaTypes.GeneratedResponse {
+            public ProgramInterfaceResponse {
+                Objects.requireNonNull(program_id, "program_id");
+                Objects.requireNonNull(version, "version");
+                Objects.requireNonNull(code_hash, "code_hash");
+                Objects.requireNonNull(abi_version, "abi_version");
+                Objects.requireNonNull(interface_, "interface");
+                Objects.requireNonNull(interface_digest, "interface_digest");
+                Objects.requireNonNull(receipt_digest, "receipt_digest");
+                Objects.requireNonNull(state_root, "state_root");
+                Objects.requireNonNull(observed_sequence, "observed_sequence");
+                Objects.requireNonNull(observed_at, "observed_at");
+                Objects.requireNonNull(valid_through, "valid_through");
+                Objects.requireNonNull(source, "source");
+                Objects.requireNonNull(verification, "verification");
+            }
+        }
+        public static final SchemaTypes.TypedOperation<ProgramInterfaceRequest, ProgramInterfaceResponse> PROGRAM_INTERFACE = new SchemaTypes.TypedOperation<>(OperationCatalog.Plane.AGENT, "program.interface", false, ProgramInterfaceRequest.class, ProgramInterfaceResponse.class);
+        public record ProgramReceiptRequest(JsonNode idempotency_key, JsonNode expected_activity_id, JsonNode requested_verification_level) implements SchemaTypes.GeneratedRequest {
+            public ProgramReceiptRequest {
+                Objects.requireNonNull(idempotency_key, "idempotency_key");
+                Objects.requireNonNull(expected_activity_id, "expected_activity_id");
+                Objects.requireNonNull(requested_verification_level, "requested_verification_level");
+            }
+        }
+        public record ProgramReceiptResponse(JsonNode state, JsonNode activity_id, JsonNode idempotency_key) implements SchemaTypes.GeneratedResponse {
+            public ProgramReceiptResponse {
+                Objects.requireNonNull(state, "state");
+                Objects.requireNonNull(activity_id, "activity_id");
+                Objects.requireNonNull(idempotency_key, "idempotency_key");
+            }
+        }
+        public static final SchemaTypes.TypedOperation<ProgramReceiptRequest, ProgramReceiptResponse> PROGRAM_RECEIPT = new SchemaTypes.TypedOperation<>(OperationCatalog.Plane.AGENT, "program.receipt", true, ProgramReceiptRequest.class, ProgramReceiptResponse.class);
+        public record ProgramSimulateRequest(JsonNode program_id, JsonNode calldata, AgentModels.ProgramCallBudget budget, JsonNode capabilities, JsonNode signed_activity) implements SchemaTypes.GeneratedRequest {
+            public ProgramSimulateRequest {
+                Objects.requireNonNull(program_id, "program_id");
+                Objects.requireNonNull(calldata, "calldata");
+                Objects.requireNonNull(budget, "budget");
+                Objects.requireNonNull(capabilities, "capabilities");
+                Objects.requireNonNull(signed_activity, "signed_activity");
+            }
+        }
+        public record ProgramSimulateResponse(JsonNode committed, JsonNode execution, JsonNode simulation_evidence) implements SchemaTypes.GeneratedResponse {
+            public ProgramSimulateResponse {
+                Objects.requireNonNull(committed, "committed");
+                Objects.requireNonNull(execution, "execution");
+                Objects.requireNonNull(simulation_evidence, "simulation_evidence");
+            }
+        }
+        public static final SchemaTypes.TypedOperation<ProgramSimulateRequest, ProgramSimulateResponse> PROGRAM_SIMULATE = new SchemaTypes.TypedOperation<>(OperationCatalog.Plane.AGENT, "program.simulate", false, ProgramSimulateRequest.class, ProgramSimulateResponse.class);
         public record ProjectRequest() implements SchemaTypes.GeneratedRequest {
         }
         public record ProjectResponse(JsonNode value) implements SchemaTypes.GeneratedResponse {
@@ -3087,6 +3329,12 @@ public final class GeneratedSchema {
         Map.entry("capability.revoke", AgentOperations.CAPABILITY_REVOKE ),
         Map.entry("export.offline", AgentOperations.EXPORT_OFFLINE ),
         Map.entry("prepare", AgentOperations.PREPARE ),
+        Map.entry("program.activity", AgentOperations.PROGRAM_ACTIVITY ),
+        Map.entry("program.call", AgentOperations.PROGRAM_CALL ),
+        Map.entry("program.discover", AgentOperations.PROGRAM_DISCOVER ),
+        Map.entry("program.interface", AgentOperations.PROGRAM_INTERFACE ),
+        Map.entry("program.receipt", AgentOperations.PROGRAM_RECEIPT ),
+        Map.entry("program.simulate", AgentOperations.PROGRAM_SIMULATE ),
         Map.entry("project", AgentOperations.PROJECT ),
         Map.entry("read.account", AgentOperations.READ_ACCOUNT ),
         Map.entry("read.balance", AgentOperations.READ_BALANCE ),

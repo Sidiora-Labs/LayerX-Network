@@ -40,7 +40,10 @@ impl LayerXKeyCredential {
     /// # Errors
     ///
     /// Refuses a key identifier outside the exact gateway identifier grammar.
-    pub fn new(key_id: impl Into<String>, secret: SecretBytes) -> Result<Self, ProgramOperationError> {
+    pub fn new(
+        key_id: impl Into<String>,
+        secret: SecretBytes,
+    ) -> Result<Self, ProgramOperationError> {
         let key_id = key_id.into();
         if key_id.is_empty()
             || key_id.len() > 64
@@ -55,8 +58,8 @@ impl LayerXKeyCredential {
 
     fn authorization(&self) -> Result<Zeroizing<String>, ProgramOperationError> {
         self.secret.expose_to(|bytes| {
-            let secret = std::str::from_utf8(bytes)
-                .map_err(|_| ProgramOperationError::Authentication)?;
+            let secret =
+                std::str::from_utf8(bytes).map_err(|_| ProgramOperationError::Authentication)?;
             let suffix = secret
                 .strip_prefix("lxp_live_")
                 .ok_or(ProgramOperationError::Authentication)?;
@@ -245,8 +248,8 @@ impl ProgramTransport for HttpProgramTransport {
         if let Some(credential) = &self.credential {
             let _ = credential.authorization()?;
         }
-        let encoded = serde_json::to_vec(&wire_call(request))
-            .map_err(|_| ProgramOperationError::Decode)?;
+        let encoded =
+            serde_json::to_vec(&wire_call(request)).map_err(|_| ProgramOperationError::Decode)?;
         if encoded.is_empty() || encoded.len() > MAX_HTTP_REQUEST_BYTES {
             return Err(ProgramOperationError::Bounds);
         }
@@ -269,7 +272,7 @@ impl ProgramTransport for HttpProgramTransport {
                         trusted_sequencer_public_key: self.trusted_sequencer_public_key,
                     },
                 )
-        });
+            });
         match attempt {
             Ok(submission) => Ok(submission),
             Err(ProgramOperationError::Service(error))
@@ -315,10 +318,7 @@ impl ProgramTransport for HttpProgramTransport {
         )
     }
 
-    fn activity(
-        &self,
-        activity_id: [u8; 32],
-    ) -> Result<ProgramSubmission, ProgramOperationError> {
+    fn activity(&self, activity_id: [u8; 32]) -> Result<ProgramSubmission, ProgramOperationError> {
         let activity = hex(&activity_id);
         let value = self.dispatch(
             "program.activity",
@@ -415,12 +415,7 @@ fn decode_agent_response(
         .get("content-type")
         .and_then(|value| value.to_str().ok())
         .unwrap_or("");
-    if content_type
-        .split(';')
-        .next()
-        .map(str::trim)
-        != Some("application/json")
-    {
+    if content_type.split(';').next().map(str::trim) != Some("application/json") {
         return Err(ProgramOperationError::Decode);
     }
     let encoded = response
@@ -435,7 +430,13 @@ fn decode_agent_response(
     if envelope.contains_key("class") {
         if !exact_fields(
             envelope,
-            &["class", "protocol_result_code", "retriability", "reason", "request_id"],
+            &[
+                "class",
+                "protocol_result_code",
+                "retriability",
+                "reason",
+                "request_id",
+            ],
         ) {
             return Err(ProgramOperationError::Decode);
         }
@@ -447,8 +448,7 @@ fn decode_agent_response(
         return Err(ProgramOperationError::Decode);
     }
     let value = envelope.get("value").ok_or(ProgramOperationError::Decode)?;
-    if !(200..300).contains(&status)
-        || !valid_request_id(required_string(envelope, "request_id")?)
+    if !(200..300).contains(&status) || !valid_request_id(required_string(envelope, "request_id")?)
     {
         return Err(ProgramOperationError::Decode);
     }
@@ -470,9 +470,9 @@ fn decode_service_error(
     if !valid_request_id(request_id)
         || reason.is_empty()
         || reason.len() > MAX_REASON_BYTES
-        || !reason
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'.'))
+        || !reason.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'.')
+        })
     {
         return Err(ProgramOperationError::Decode);
     }
@@ -504,9 +504,7 @@ fn decode_service_error(
             .map(layerx_types::result::ResultCode::from_raw),
         _ => return Err(ProgramOperationError::Decode),
     };
-    if value.get("protocol_result_code") != Some(&Value::Null)
-        && protocol_result_code.is_none()
-    {
+    if value.get("protocol_result_code") != Some(&Value::Null) && protocol_result_code.is_none() {
         return Err(ProgramOperationError::Decode);
     }
     Ok(ProgramServiceError {
@@ -529,8 +527,10 @@ fn accepted_program_verification(operation: &str, result: &Value, value: Option<
         .as_object()
         .and_then(|object| object.get("state"))
         .and_then(Value::as_str);
-    if matches!(operation, "program.call" | "program.receipt" | "program.activity")
-        && matches!(result_state, Some("unknown" | "pending"))
+    if matches!(
+        operation,
+        "program.call" | "program.receipt" | "program.activity"
+    ) && matches!(result_state, Some("unknown" | "pending"))
     {
         return exact_unverified(status, "receipt_pending");
     }
@@ -564,8 +564,7 @@ fn decode_discovery(
 ) -> Result<VerifiedProgramDiscovery, ProgramOperationError> {
     let value = object(value)?;
     if fixed(value, "program_id")? != expected_program
-        || required_string(value, "verification")?
-            != "registry-receipt-and-current-head-verified"
+        || required_string(value, "verification")? != "registry-receipt-and-current-head-verified"
     {
         return Err(ProgramOperationError::IdentityMismatch);
     }
@@ -666,7 +665,9 @@ fn decode_simulation(
         return Err(ProgramOperationError::Verification);
     }
     let decoded = decode_execution(
-        value.get("execution").ok_or(ProgramOperationError::Decode)?,
+        value
+            .get("execution")
+            .ok_or(ProgramOperationError::Decode)?,
         Some(ExecutionState::Simulated),
         trusted_sequencer_public_key,
     )?;
@@ -681,10 +682,8 @@ fn decode_simulation(
             .ok_or(ProgramOperationError::Decode)?,
     )?;
     let public_key = decoded.authority.sequencer_public_key();
-    let expected_boundary: [u8; 32] = Sha256::digest(
-        [SIMULATION_BOUNDARY_DOMAIN, public_key.as_slice()].concat(),
-    )
-    .into();
+    let expected_boundary: [u8; 32] =
+        Sha256::digest([SIMULATION_BOUNDARY_DOMAIN, public_key.as_slice()].concat()).into();
     let protocol = decoded
         .verified
         .receipt()
@@ -759,13 +758,15 @@ fn decode_submission(
                 )
             })
             .transpose()?;
-        if expected.activity_id.is_some_and(|value| value != activity_id)
+        if expected
+            .activity_id
+            .is_some_and(|value| value != activity_id)
             || expected
                 .idempotency_key
                 .is_some_and(|value| value != idempotency_key)
-            || expected.retained_signed_activity.is_some_and(|expected| {
-                retained.as_deref() != Some(expected)
-            })
+            || expected
+                .retained_signed_activity
+                .is_some_and(|expected| retained.as_deref() != Some(expected))
         {
             return Err(ProgramOperationError::IdentityMismatch);
         }
@@ -776,10 +777,12 @@ fn decode_submission(
         });
     }
     let decoded = decode_execution(value, None, expected.trusted_sequencer_public_key)?;
-    if !matches!(decoded.state, ExecutionState::Executed | ExecutionState::Refused)
-        || expected
-            .program_id
-            .is_some_and(|value| value != decoded.program_id)
+    if !matches!(
+        decoded.state,
+        ExecutionState::Executed | ExecutionState::Refused
+    ) || expected
+        .program_id
+        .is_some_and(|value| value != decoded.program_id)
         || expected
             .activity_id
             .is_some_and(|value| value != decoded.activity_id)
@@ -824,12 +827,7 @@ fn decode_execution(
     let state_root = fixed(value, "state_root")?;
     let receipt_digest = fixed(value, "receipt_digest")?;
     let receipt = bounded_hex(value, "receipt", MAX_SIGNED_ACTIVITY_BYTES, None)?;
-    let terminal_payload = bounded_hex(
-        value,
-        "terminal_payload",
-        MAX_SIGNED_ACTIVITY_BYTES,
-        None,
-    )?;
+    let terminal_payload = bounded_hex(value, "terminal_payload", MAX_SIGNED_ACTIVITY_BYTES, None)?;
     let call_graph = bounded_hex(value, "call_graph", MAX_SIGNED_ACTIVITY_BYTES, None)?;
     let authority_value = value
         .get("authority")
@@ -990,10 +988,7 @@ fn required_string<'a>(
         .ok_or(ProgramOperationError::Decode)
 }
 
-fn fixed(
-    value: &Map<String, Value>,
-    field: &str,
-) -> Result<[u8; 32], ProgramOperationError> {
+fn fixed(value: &Map<String, Value>, field: &str) -> Result<[u8; 32], ProgramOperationError> {
     fixed_n(value, field)
 }
 
@@ -1052,18 +1047,16 @@ fn hex(bytes: &[u8]) -> String {
     output
 }
 
-fn decimal_u64(
-    value: &Map<String, Value>,
-    field: &str,
-) -> Result<u64, ProgramOperationError> {
-    canonical_decimal(value, field)?.parse().map_err(|_| ProgramOperationError::Bounds)
+fn decimal_u64(value: &Map<String, Value>, field: &str) -> Result<u64, ProgramOperationError> {
+    canonical_decimal(value, field)?
+        .parse()
+        .map_err(|_| ProgramOperationError::Bounds)
 }
 
-fn decimal_u128(
-    value: &Map<String, Value>,
-    field: &str,
-) -> Result<u128, ProgramOperationError> {
-    canonical_decimal(value, field)?.parse().map_err(|_| ProgramOperationError::Bounds)
+fn decimal_u128(value: &Map<String, Value>, field: &str) -> Result<u128, ProgramOperationError> {
+    canonical_decimal(value, field)?
+        .parse()
+        .map_err(|_| ProgramOperationError::Bounds)
 }
 
 fn canonical_decimal<'a>(
@@ -1114,10 +1107,7 @@ fn bounded_u16(
     Ok(parsed)
 }
 
-fn exact_i32(
-    value: &Map<String, Value>,
-    field: &str,
-) -> Result<i32, ProgramOperationError> {
+fn exact_i32(value: &Map<String, Value>, field: &str) -> Result<i32, ProgramOperationError> {
     value
         .get(field)
         .and_then(Value::as_i64)
@@ -1192,14 +1182,26 @@ mod source_contract {
         let exact = object(&exact).unwrap_or_else(|_| panic!("object"));
         assert!(exact_fields(
             exact,
-            &["class", "protocol_result_code", "retriability", "reason", "request_id"],
+            &[
+                "class",
+                "protocol_result_code",
+                "retriability",
+                "reason",
+                "request_id"
+            ],
         ));
         assert!(decode_service_error(400, exact).is_ok());
         let mut widened = exact.clone();
         widened.insert("extra".to_owned(), json!(true));
         assert!(!exact_fields(
             &widened,
-            &["class", "protocol_result_code", "retriability", "reason", "request_id"],
+            &[
+                "class",
+                "protocol_result_code",
+                "retriability",
+                "reason",
+                "request_id"
+            ],
         ));
     }
 }

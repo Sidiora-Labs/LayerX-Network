@@ -5,9 +5,7 @@ use std::fs::{self, File};
 use std::io::Read as _;
 use std::path::Path;
 
-use layerx_programs_runtime::{
-    ProgramId, UpgradePolicy, ABI_V1_VERSION, ABI_V2_VERSION,
-};
+use layerx_programs_runtime::{ProgramId, UpgradePolicy, ABI_V1_VERSION, ABI_V2_VERSION};
 use layerx_proof::inclusion::{
     verify_activity, verify_receipt as verify_receipt_inclusion, SequencerAuthorization,
 };
@@ -16,14 +14,10 @@ use layerx_proof::receipt::{verify_program_state, AuthorizedBatch};
 use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry};
 use layerx_wire::activity::{decode_signed, encode_signed};
 use layerx_wire::hash::{activity_id, execution_batch_id, payload_hash, receipt_digest};
-use layerx_wire::receipt::{
-    decode as decode_receipt, decode_batch_header, encode_unsigned,
-};
+use layerx_wire::receipt::{decode as decode_receipt, decode_batch_header, encode_unsigned};
 
 use crate::account_state::verify_state_membership;
-use crate::{
-    DeploymentRecord, ProgramLifecycle, ReadFreshness, StateProof,
-};
+use crate::{DeploymentRecord, ProgramLifecycle, ReadFreshness, StateProof};
 
 const PROGRAMS_MODULE_ID: u16 = 9;
 const DEPLOY_ORDINAL: u16 = 1;
@@ -118,9 +112,7 @@ impl Display for ProtocolEvidenceError {
             Self::TrustHistoryUnavailable => {
                 "canonical protected sequencer trust history is unavailable"
             }
-            Self::TrustAnchorUnavailable => {
-                "signed batch has no configured sequencer trust anchor"
-            }
+            Self::TrustAnchorUnavailable => "signed batch has no configured sequencer trust anchor",
             Self::TrustAnchorAmbiguous => {
                 "signed batch matches more than one sequencer trust anchor"
             }
@@ -136,7 +128,9 @@ impl Display for ProtocolEvidenceError {
             Self::Receipt => "Programs receipt is not a successful sequencer-signed receipt",
             Self::ReceiptInclusion => "Programs receipt is not included by the signed batch",
             Self::BatchMismatch => "activity, receipt, and state do not share one signed batch",
-            Self::BatchIdentifier => "receipt batch identifier does not match the core execution context",
+            Self::BatchIdentifier => {
+                "receipt batch identifier does not match the core execution context"
+            }
             Self::ActivityReceiptMismatch => "Programs receipt names a different activity",
             Self::StateRoot => "Programs root is not committed by the receipt state root",
             Self::StateProof => "Programs state membership proof is invalid",
@@ -434,8 +428,8 @@ impl ProtocolDeploymentVerifier {
             return Err(ProtocolEvidenceError::TrustHistoryUnavailable);
         }
         require_private_history(&link_metadata)?;
-        let mut file = File::open(path)
-            .map_err(|_| ProtocolEvidenceError::TrustHistoryUnavailable)?;
+        let mut file =
+            File::open(path).map_err(|_| ProtocolEvidenceError::TrustHistoryUnavailable)?;
         let metadata = file
             .metadata()
             .map_err(|_| ProtocolEvidenceError::TrustHistoryUnavailable)?;
@@ -473,10 +467,8 @@ impl ProtocolDeploymentVerifier {
         now_ms: u64,
     ) -> Result<VerifiedDeploymentEvidence, ProtocolEvidenceError> {
         let activity = canonical_programs_activity(&proof.activity)?;
-        let parsed = parse_lifecycle_activity(
-            activity.activity_type().ordinal(),
-            activity.payload(),
-        )?;
+        let parsed =
+            parse_lifecycle_activity(activity.activity_type().ordinal(), activity.payload())?;
         if payload_hash(&activity).map_err(|_| ProtocolEvidenceError::PayloadHash)?
             != activity.payload_hash()
         {
@@ -527,10 +519,8 @@ impl ProtocolDeploymentVerifier {
         proof: &DeploymentProof,
     ) -> Result<VerifiedDeploymentEvidence, ProtocolEvidenceError> {
         let activity = canonical_programs_activity(&proof.activity)?;
-        let parsed = parse_lifecycle_activity(
-            activity.activity_type().ordinal(),
-            activity.payload(),
-        )?;
+        let parsed =
+            parse_lifecycle_activity(activity.activity_type().ordinal(), activity.payload())?;
         if payload_hash(&activity).map_err(|_| ProtocolEvidenceError::PayloadHash)?
             != activity.payload_hash()
         {
@@ -649,13 +639,8 @@ impl ProtocolDeploymentVerifier {
         header_signature: &[u8; 64],
         moment: EvidenceMoment,
     ) -> Result<VerifiedProtocolHead, ProtocolEvidenceError> {
-        let claims = self.verify_receipt(
-            receipt,
-            receipt_proof,
-            header,
-            header_signature,
-            moment,
-        )?;
+        let claims =
+            self.verify_receipt(receipt, receipt_proof, header, header_signature, moment)?;
         Ok(VerifiedProtocolHead {
             activity_id: claims.activity_id,
             receipt_digest: claims.receipt_digest,
@@ -749,7 +734,10 @@ impl ProtocolDeploymentVerifier {
         );
         let verified = verify_program_state(receipt, &authorized)
             .map_err(|_| ProtocolEvidenceError::Receipt)?;
-        let verified_protocol = verified.receipt().protocol().ok_or(ProtocolEvidenceError::Receipt)?;
+        let verified_protocol = verified
+            .receipt()
+            .protocol()
+            .ok_or(ProtocolEvidenceError::Receipt)?;
         if verified_protocol.resulting_state_root() != header.resulting_state_root()
             || verified_protocol.protocol_version() != header.protocol_version()
             || verified_protocol.timestamp() != header.timestamp_ms()
@@ -768,7 +756,8 @@ impl ProtocolDeploymentVerifier {
                 return Err(ProtocolEvidenceError::Stale);
             }
         }
-        let unsigned = encode_unsigned(verified.receipt()).map_err(|_| ProtocolEvidenceError::Receipt)?;
+        let unsigned =
+            encode_unsigned(verified.receipt()).map_err(|_| ProtocolEvidenceError::Receipt)?;
         let digest = receipt_digest(&unsigned).map_err(|_| ProtocolEvidenceError::Receipt)?;
         Ok(VerifiedReceiptClaims {
             activity_id: verified_protocol.activity_id(),
@@ -938,14 +927,13 @@ fn decode_trust_history(
         return Err(ProtocolEvidenceError::InvalidTrustAnchor);
     }
     let current = anchors[current_anchor];
-    if anchors.iter().any(|anchor| anchor.network_id != current.network_id) {
+    if anchors
+        .iter()
+        .any(|anchor| anchor.network_id != current.network_id)
+    {
         return Err(ProtocolEvidenceError::InvalidTrustAnchor);
     }
-    let current_position = (
-        current.epoch,
-        current.first_batch,
-        current.protocol_version,
-    );
+    let current_position = (current.epoch, current.first_batch, current.protocol_version);
     if anchors.iter().any(|anchor| {
         (anchor.epoch, anchor.first_batch, anchor.protocol_version) > current_position
     }) {
@@ -1048,8 +1036,8 @@ fn canonical_programs_activity(
         .map_err(|_| ProtocolEvidenceError::UnsupportedActivity)?;
     let registry = ModuleRegistry::new(&[registration])
         .map_err(|_| ProtocolEvidenceError::UnsupportedActivity)?;
-    let activity = decode_signed(bytes, &registry)
-        .map_err(|_| ProtocolEvidenceError::CanonicalActivity)?;
+    let activity =
+        decode_signed(bytes, &registry).map_err(|_| ProtocolEvidenceError::CanonicalActivity)?;
     if encode_signed(&activity).map_err(|_| ProtocolEvidenceError::CanonicalActivity)? != bytes {
         return Err(ProtocolEvidenceError::CanonicalActivity);
     }
@@ -1080,8 +1068,7 @@ fn parse_lifecycle_activity(
             let new_code_hash = array::<32>(payload, 68)?;
             let wasm_length = usize::try_from(u32::from_be_bytes(array::<4>(payload, 100)?))
                 .map_err(|_| ProtocolEvidenceError::CanonicalActivity)?;
-            let legacy = wasm_length != 0
-                && payload.len().checked_sub(104) == Some(wasm_length);
+            let legacy = wasm_length != 0 && payload.len().checked_sub(104) == Some(wasm_length);
             if legacy {
                 let module = payload[104..].to_vec();
                 if wasm_length > MAX_MODULE_BYTES
@@ -1114,7 +1101,8 @@ fn parse_lifecycle_activity(
             {
                 return Err(ProtocolEvidenceError::CanonicalActivity);
             }
-            let interface_bytes = payload.get(108..108 + interface_length)
+            let interface_bytes = payload
+                .get(108..108 + interface_length)
                 .ok_or(ProtocolEvidenceError::CanonicalActivity)?;
             let module = payload[108 + interface_length..].to_vec();
             if module.get(..WASM_HEADER.len()) != Some(WASM_HEADER) {
@@ -1128,9 +1116,9 @@ fn parse_lifecycle_activity(
             if interface.code_hash() != new_code_hash || interface.abi_version() != abi_version {
                 return Err(ProtocolEvidenceError::DeploymentMismatch);
             }
-            let rebound = crate::ProgramInterface::bind(
-                &module, abi_version, interface.entries().to_vec(),
-            ).map_err(|_| ProtocolEvidenceError::DeploymentMismatch)?;
+            let rebound =
+                crate::ProgramInterface::bind(&module, abi_version, interface.entries().to_vec())
+                    .map_err(|_| ProtocolEvidenceError::DeploymentMismatch)?;
             if rebound.canonical_encoding() != interface_bytes {
                 return Err(ProtocolEvidenceError::DeploymentMismatch);
             }
@@ -1197,7 +1185,8 @@ fn parse_lifecycle_activity(
                 return Err(ProtocolEvidenceError::CanonicalActivity);
             }
             let interface_start = 110 + hook_length;
-            let interface_bytes = payload.get(interface_start..interface_start + interface_length)
+            let interface_bytes = payload
+                .get(interface_start..interface_start + interface_length)
                 .ok_or(ProtocolEvidenceError::CanonicalActivity)?;
             let module = payload[interface_start + interface_length..].to_vec();
             if module.get(..WASM_HEADER.len()) != Some(WASM_HEADER) {
@@ -1211,12 +1200,16 @@ fn parse_lifecycle_activity(
             } else {
                 let interface = crate::ProgramInterface::decode(interface_bytes)
                     .map_err(|_| ProtocolEvidenceError::CanonicalActivity)?;
-                if interface.code_hash() != new_code_hash || interface.abi_version() != abi_version {
+                if interface.code_hash() != new_code_hash || interface.abi_version() != abi_version
+                {
                     return Err(ProtocolEvidenceError::DeploymentMismatch);
                 }
                 let rebound = crate::ProgramInterface::bind(
-                    &module, abi_version, interface.entries().to_vec(),
-                ).map_err(|_| ProtocolEvidenceError::DeploymentMismatch)?;
+                    &module,
+                    abi_version,
+                    interface.entries().to_vec(),
+                )
+                .map_err(|_| ProtocolEvidenceError::DeploymentMismatch)?;
                 if rebound.canonical_encoding() != interface_bytes {
                     return Err(ProtocolEvidenceError::DeploymentMismatch);
                 }
@@ -1242,64 +1235,74 @@ fn bind_deployment(
     if head.lifecycle != ProgramLifecycle::Active {
         return Err(ProtocolEvidenceError::LifecycleProof);
     }
-    let (program, abi_version, policy, old_code_hash, new_code_hash, module,
-         interface) = match activity {
-        LifecycleActivity::Deploy {
-            program,
-            abi_version,
-            policy,
-            new_code_hash,
-            module,
-            interface,
-        } => {
-            if head.record.version != 1 || head.record.policy != policy {
-                return Err(ProtocolEvidenceError::DeploymentMismatch);
-            }
-            (program, abi_version, policy, None, new_code_hash, module,
-             interface)
-        }
-        LifecycleActivity::Upgrade {
-            program,
-            abi_version,
-            old_code_hash,
-            new_code_hash,
-            module,
-            interface,
-        } => {
-            if head.record.version <= 1
-                || !matches!(head.record.policy, UpgradePolicy::Authority(authority) if authority != [0; 32])
-            {
-                return Err(ProtocolEvidenceError::DeploymentMismatch);
-            }
-            (
+    let (program, abi_version, policy, old_code_hash, new_code_hash, module, interface) =
+        match activity {
+            LifecycleActivity::Deploy {
                 program,
                 abi_version,
-                head.record.policy,
-                Some(old_code_hash),
+                policy,
                 new_code_hash,
                 module,
                 interface,
-            )
-        }
-    };
+            } => {
+                if head.record.version != 1 || head.record.policy != policy {
+                    return Err(ProtocolEvidenceError::DeploymentMismatch);
+                }
+                (
+                    program,
+                    abi_version,
+                    policy,
+                    None,
+                    new_code_hash,
+                    module,
+                    interface,
+                )
+            }
+            LifecycleActivity::Upgrade {
+                program,
+                abi_version,
+                old_code_hash,
+                new_code_hash,
+                module,
+                interface,
+            } => {
+                if head.record.version <= 1
+                    || !matches!(head.record.policy, UpgradePolicy::Authority(authority) if authority != [0; 32])
+                {
+                    return Err(ProtocolEvidenceError::DeploymentMismatch);
+                }
+                (
+                    program,
+                    abi_version,
+                    head.record.policy,
+                    Some(old_code_hash),
+                    new_code_hash,
+                    module,
+                    interface,
+                )
+            }
+        };
     if program != head.record.program
         || abi_version != head.record.abi_version
         || new_code_hash != head.record.code_hash
     {
         return Err(ProtocolEvidenceError::DeploymentMismatch);
     }
-    Ok((DeploymentRecord {
-        program,
-        version: head.record.version,
-        abi_version,
-        upgrade_policy: policy,
-        old_code_hash,
-        new_code_hash,
-        sequence: head.freshness.observed_sequence,
-        observed_at: head.freshness.observed_at,
-        module,
-        migration: None,
-    }, interface))
+    Ok((
+        DeploymentRecord {
+            program,
+            version: head.record.version,
+            abi_version,
+            upgrade_policy: policy,
+            old_code_hash,
+            new_code_hash,
+            sequence: head.freshness.observed_sequence,
+            observed_at: head.freshness.observed_at,
+            module,
+            migration: None,
+        },
+        interface,
+    ))
 }
 
 fn decode_program_record(
@@ -1439,10 +1442,7 @@ fn verify_absence(
     Ok(())
 }
 
-fn verify_witness(
-    witness: &StateLeafWitness,
-    root: [u8; 32],
-) -> Result<(), ProtocolEvidenceError> {
+fn verify_witness(witness: &StateLeafWitness, root: [u8; 32]) -> Result<(), ProtocolEvidenceError> {
     if witness.key.is_empty()
         || u32::try_from(witness.key.len()).is_err()
         || u32::try_from(witness.value.len()).is_err()
@@ -1453,10 +1453,7 @@ fn verify_witness(
         .map_err(|_| ProtocolEvidenceError::StateProof)
 }
 
-fn array<const N: usize>(
-    bytes: &[u8],
-    offset: usize,
-) -> Result<[u8; N], ProtocolEvidenceError> {
+fn array<const N: usize>(bytes: &[u8], offset: usize) -> Result<[u8; N], ProtocolEvidenceError> {
     bytes
         .get(offset..offset.saturating_add(N))
         .and_then(|value| value.try_into().ok())
@@ -1506,8 +1503,8 @@ impl DeploymentProof {
     /// Computes the canonical unsigned receipt digest used only to address
     /// stored proof material. This does not verify the receipt signature.
     pub fn claimed_receipt_digest(&self) -> Result<[u8; 32], ProtocolEvidenceError> {
-        let receipt = decode_receipt(&self.state.receipt)
-            .map_err(|_| ProtocolEvidenceError::Receipt)?;
+        let receipt =
+            decode_receipt(&self.state.receipt).map_err(|_| ProtocolEvidenceError::Receipt)?;
         let unsigned = encode_unsigned(&receipt).map_err(|_| ProtocolEvidenceError::Receipt)?;
         receipt_digest(&unsigned).map_err(|_| ProtocolEvidenceError::Receipt)
     }
@@ -1610,10 +1607,7 @@ fn put_state_proof(bytes: &mut Vec<u8>, proof: &StateProof) {
     }
 }
 
-fn take_state_proof(
-    bytes: &[u8],
-    cursor: &mut usize,
-) -> Result<StateProof, ProtocolEvidenceError> {
+fn take_state_proof(bytes: &[u8], cursor: &mut usize) -> Result<StateProof, ProtocolEvidenceError> {
     let leaf_index = u32::from_be_bytes(take_array::<4>(bytes, cursor)?);
     let leaf_count = u32::from_be_bytes(take_array::<4>(bytes, cursor)?);
     let count = usize::from(take_array::<1>(bytes, cursor)?[0]);
@@ -1646,7 +1640,9 @@ fn take_bytes(
     if length > limit {
         return Err(ProtocolEvidenceError::Encoding);
     }
-    let end = cursor.checked_add(length).ok_or(ProtocolEvidenceError::Encoding)?;
+    let end = cursor
+        .checked_add(length)
+        .ok_or(ProtocolEvidenceError::Encoding)?;
     let value = bytes
         .get(*cursor..end)
         .ok_or(ProtocolEvidenceError::Encoding)?
@@ -1659,7 +1655,9 @@ fn take_array<const N: usize>(
     bytes: &[u8],
     cursor: &mut usize,
 ) -> Result<[u8; N], ProtocolEvidenceError> {
-    let end = cursor.checked_add(N).ok_or(ProtocolEvidenceError::Encoding)?;
+    let end = cursor
+        .checked_add(N)
+        .ok_or(ProtocolEvidenceError::Encoding)?;
     let value = bytes
         .get(*cursor..end)
         .and_then(|slice| slice.try_into().ok())
@@ -1751,5 +1749,4 @@ mod legacy_lifecycle_vectors {
             Err(ProtocolEvidenceError::CanonicalActivity)
         );
     }
-
 }

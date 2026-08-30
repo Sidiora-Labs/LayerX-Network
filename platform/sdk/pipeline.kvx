@@ -1,10 +1,10 @@
 [pipeline]
 sources = ["agent-api", "human-api", "mirror-v2"]
-outputs = ["agent-rust-mirror", "agent-typescript", "agent-python", "agent-compatibility", "human-typescript", "platform-go", "platform-jvm", "platform-conformance", "platform-swift", "platform-dotnet", "platform-portable-conformance"]
+outputs = ["agent-rust", "agent-typescript", "agent-python", "agent-compatibility", "human-typescript", "platform-go", "platform-jvm", "platform-conformance", "platform-swift", "platform-dotnet", "platform-portable-conformance"]
 
 [source.agent-api]
 root = "agent/schema/agent-api"
-digest = "f6a35f783071efd1664be305734e912a6f4848c60b53e17a58fca4d4c6f830d2"
+digest = "5e4d784ab671e71cb1b41cb9125d09e31c4ac830021ccd642906a89883580ef3"
 
 [source.human-api]
 root = "human/schema/human-api"
@@ -14,19 +14,20 @@ digest = "40b02242ff6570acf3182a23e3a977db4f20c2e90f61b183831e1fb307788193"
 root = "platform/sdk/schema"
 digest = "dcf89b2dd01409c6c0429574f49d43e66adb3e027448243a894c210bc0d309ca"
 
-[output.agent-rust-mirror]
+[output.agent-rust]
 language = "rust"
 root = "agent/crates/layerx-sdk/src"
 
-[files.agent-rust-mirror]
+[files.agent-rust]
 "mirror_generated.rs" = "36c041d89f4cb23a73ea0baec0f7a15e6568763d603716b641e3d99dff2571fa"
+"operation_generated.rs" = "c4db66773d0317ee19165074ebc96147101b7be9abd01e51c8c8768e43bb297a"
 
 [output.agent-typescript]
 language = "typescript"
 root = "agent/sdk/typescript/src/generated"
 
 [files.agent-typescript]
-"client.ts" = "f3ba2684e5162dd5b4b3eb87fe63161cfbe470f06597c9394db7a24fa268be87"
+"client.ts" = "8819e4be601bbaa7443c436b4a2e3b7ddf8b93d969d1948dc99fcf7e875967ca"
 "guarantees.md" = "16a010803f8a34b36a0101965f577d7884c6f05b6d5713054fb33e50ab9fff86"
 "mirror.ts" = "6f7c1968e536eec01b9a9fe91bd4f9f70fc5e9973ea0b4c908ae56af170e0b79"
 
@@ -36,8 +37,8 @@ root = "agent/sdk/python/layerx_sdk/generated"
 
 [files.agent-python]
 "__init__.py" = "5542bf19c9f1b61d1a0a9cb748dc1f0062a9a8df1a3db4b1e525cb8dbd1f6e34"
-"client.py" = "00d6f58e618b1951c4688c7b49d6a88917362efed15d4db013243ac019230f9a"
-"client.pyi" = "276de41062e640a03c1d073e31f832ad5f0661ef5da7756d26883ec2ca81ca35"
+"client.py" = "9ef06c8b9971aa1c867297c7318143288448f4f2182ebf1fda02d7107ad1dbce"
+"client.pyi" = "a6e55e151861f78826ce37b648b1765b24bbe64b04cd85a92ded3b807ebefce7"
 "guarantees.md" = "16a010803f8a34b36a0101965f577d7884c6f05b6d5713054fb33e50ab9fff86"
 "mirror.py" = "03af926da7d418275b407896b98966ad87eea3dc1ea140afdc2376c17d575ed3"
 "mirror.pyi" = "ac018d858e019b806197a32b2b5c6b85b290018831c3fa638a20df89e3db2771"
@@ -62,7 +63,7 @@ language = "go"
 root = "platform/sdk/go"
 
 [files.platform-go]
-"generated.go" = "034f5860cc2a75b02856914db701f04c1cd0b3b8cd188a02387970bca8a8d103"
+"generated.go" = "fdc54d59551b10b35c8b847bc34f1502e230beb7129e0a8871340617edf18e88"
 "mirror_generated.go" = "50e24c574ac570b429db96116f52b4279e66a5e92f2fb273d847988067c45876"
 
 [output.platform-jvm]
@@ -71,23 +72,23 @@ root = "platform/sdk/jvm"
 
 [files.platform-jvm]
 "pom.xml" = "43d9af46728bf4507ea4eaa2ba6b6cc779559085f27862b78f26d01a09e975a1"
-"src/main/java/com/sidiora/layerx/sdk/HttpProductionTransport.java" = "fea16f98514adb524e6115f958f6ed608bad5aa5b57b79dcbe2dfe65fe5578fd"
-"src/main/java/com/sidiora/layerx/sdk/GeneratedContract.java" = "1c21c4a8727c611b1c23ca4cf88bfd2cc313f09a4e265358f41068f1266902af"
-"src/main/java/com/sidiora/layerx/sdk/GeneratedSchema.java" = "a2ce05f7e7c4df5c08a1bdae9e4668935490e99726fb9a6f4b2b57690b436970"
+"src/main/java/com/sidiora/layerx/sdk/HttpProductionTransport.java" = "cb4a1af2773dd93660c0108db1dbac692158b6b970181bfd4c1c284a815dd570"
+"src/main/java/com/sidiora/layerx/sdk/GeneratedContract.java" = "c86cbd2eb19f9be5e26051dfab55ed1888a5389414ffd720149feec9cb607461"
+"src/main/java/com/sidiora/layerx/sdk/GeneratedSchema.java" = "c4d0909a0acca6e8af40daea3df23c86c5de4cc93ff9e4b00a780c8ee05f997e"
 "src/main/java/com/sidiora/layerx/sdk/GeneratedMirror.java" = "facf45b2da6828d41371b36bc0f2119f643d7b45003dead0c9590a9b0f0b6b8f"
 "src/main/java/com/sidiora/layerx/sdk/IdempotencyKey.java" = "2cfba7826e4bb7a6f0d4af63530f43c7aece547cf9f64ff1664b781cc431f6a4"
 "src/main/java/com/sidiora/layerx/sdk/OperationCatalog.java" = "477843c32935ffbc9ecff6dd6a35b78693b059c3d29a59aa021349b4a868e8e3"
 "src/main/java/com/sidiora/layerx/sdk/PlatformSdk.java" = "6ce450c76565bea84a68704cc89a65bbafec9adb4ebb28d1d2392cd8ee97db48"
 "src/main/java/com/sidiora/layerx/sdk/PlatformSdkException.java" = "765d7b42391513b91e40a268eaf05c590202ee9640277f17fca3d1d1c68bcdf7"
-"src/main/java/com/sidiora/layerx/sdk/ProductionClient.java" = "1988a46be946edb2fc1fabd9812c8b84941535a65860b8e0ecbb354d84b92030"
-"src/main/java/com/sidiora/layerx/sdk/ProductionTransport.java" = "91699f9ae101ecc01791cba9a80d1dfb4065ba9b2cd5da7b6407d4122c6bb35a"
+"src/main/java/com/sidiora/layerx/sdk/ProductionClient.java" = "83fede5d0ac860acac280f5197ccefa480b68cc6f60032b8bf6a72242f44cbd4"
+"src/main/java/com/sidiora/layerx/sdk/ProductionTransport.java" = "0a9297bb04cc34b82cc969fa1535cc371b60af761ea95a04a5a831b407387f1b"
 "src/main/java/com/sidiora/layerx/sdk/ProtocolAmount.java" = "8462ed22f102ad077bc3da2947dcae180a78787708eac9c487b4940a14a5c92e"
 "src/main/java/com/sidiora/layerx/sdk/ResumableStream.java" = "634606acf7724164edda10a0a4d0cf464a85c61d1a059c341862a90790c9792e"
 "src/main/java/com/sidiora/layerx/sdk/SchemaErrors.java" = "90a11904638f91609e6c4ce7ca7e98244323b799799d9a6f1f5b0345d78ffa8f"
 "src/main/java/com/sidiora/layerx/sdk/SchemaTypes.java" = "2fe1eb340835d7df1ce84b8664b0f837e6010a21fcc577553e6ba821af957780"
 "src/main/java/com/sidiora/layerx/sdk/SecretBytes.java" = "c651515a3541ee6d2fbbee0c348bf480844b33124ee4a40b0a4688a3e9da5ee5"
-"src/main/java/com/sidiora/layerx/sdk/verify/LocalVerifier.java" = "3475bed26f3950d7c5af2855847d62bca73c9893cde4e6351679024d09c6bc28"
-"src/conformance/java/com/sidiora/layerx/sdk/ConformanceMain.java" = "a0cf20975ee51aa31d3fdd44e5e93d71678152fa5ed2c3af88f9e05894323605"
+"src/main/java/com/sidiora/layerx/sdk/verify/LocalVerifier.java" = "6b87e79d899e4327a99b7cece31a376c025193eab2ab63a7361137bbc7480551"
+"src/conformance/java/com/sidiora/layerx/sdk/ConformanceMain.java" = "53f616fd55957f24eb3e4dd373a1b6409776ca26d6a9ba3ffc2cc4b71c509d15"
 "src/main/kotlin/com/sidiora/layerx/sdk/LayerX.kt" = "4557618f74dd11d88c9615e915b3377f9c41fab1187a735ab36a9a3d359df4a3"
 "src/test/java/com/sidiora/layerx/sdk/GoldenVectorTest.java" = "5b00fa27be243a836f0fb57f64915904afdf47f0b4c7266074b3b31d03fe95a8"
 
@@ -96,8 +97,8 @@ language = "kvx"
 root = "platform/sdk/conformance"
 
 [files.platform-conformance]
-"jvm.kvx" = "8ca29f078fca77813e256e1f3801d04f38b2752e4eb86b5f5417a9d8249d7a60"
-"run-jvm.sh" = "9ff882f505d35769fee6d64287fbff953ce0e97d5b72485ce54211c036f04bcb"
+"jvm.kvx" = "cf4b6453952a1e43621cbeadfb32720cc97f19238bcdd473ab4b7d534b703ab2"
+"run-jvm.sh" = "d0d7af078a37f823bf65745680479a10a89c90a77043b7359db9bc591ef59c3d"
 "mirror-v2.json" = "030c9b16aa72eec19aee23fcc2a79b2828112b238194f0cc31b50046bcd6bfdb"
 
 [output.platform-swift]
@@ -105,7 +106,7 @@ language = "swift"
 root = "platform/sdk/swift/Sources/LayerXSDK/Generated"
 
 [files.platform-swift]
-"OperationCatalog.swift" = "6c964040c7e8dfe6b75fb683c7f7d90caa5c727219745b03f53c4d597a6b3598"
+"OperationCatalog.swift" = "baf30883247428756ed2c95666e5e289a06398c92323f4c989ee9bc1bdf2ec83"
 "MirrorSchema.swift" = "422548e15055091d839d085c9115343774125d83a7a6c986ce2f4803164db1a1"
 
 [output.platform-dotnet]
@@ -113,7 +114,7 @@ language = "csharp"
 root = "platform/sdk/dotnet/Generated"
 
 [files.platform-dotnet]
-"OperationCatalog.cs" = "0d73ea2366b73faa8bbc957e5f77fdfd82ab05e2c9c283bd6180e3254d060ff4"
+"OperationCatalog.cs" = "97f63e4305cd114d1a32fcaa4e5d933594f04797000e0bed1f6ca704cea09708"
 "MirrorSchema.cs" = "16cf74fc85cd4a93cd9b394dddc59ef3bdd73a9ab2e23ee83879ae3a529f81ce"
 
 [output.platform-portable-conformance]
@@ -121,4 +122,4 @@ language = "json"
 root = "platform/sdk/conformance"
 
 [files.platform-portable-conformance]
-"operations.json" = "6314af07d153abc6519f9ace76dfa017db353fb8eef136b16edb68f4516148bb"
+"operations.json" = "7593e2ec9861e90ade503384f31b03f5aa6f48fd4619638e617fe3e907e783b3"

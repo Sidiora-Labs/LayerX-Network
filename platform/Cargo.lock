@@ -1227,6 +1227,7 @@ dependencies = [
  "layerx-crypto",
  "layerx-programs-protocol-adapter",
  "layerx-programs-registry",
+ "layerx-programs-runtime",
  "layerx-proof",
  "layerx-types",
  "layerx-wire",
@@ -1331,8 +1332,11 @@ dependencies = [
  "getrandom 0.3.4",
  "keyring",
  "keyring-core",
+ "layerx-crypto",
  "layerx-mcp",
  "layerx-platform-emulator",
+ "layerx-program-sdk",
+ "layerx-programs-registry",
  "layerx-programs-runtime",
  "layerx-proof",
  "layerx-types",
@@ -1365,8 +1369,13 @@ dependencies = [
 name = "layerx-platform-emulator"
 version = "0.1.0"
 dependencies = [
+ "ed25519-dalek",
+ "layerx-proof",
+ "layerx-types",
+ "layerx-wire",
  "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]
@@ -1412,9 +1421,14 @@ dependencies = [
  "layerx-programs-registry",
  "layerx-proof",
  "layerx-wire",
+ "rustix",
+ "rustls",
+ "serde",
  "serde_json",
  "sha2",
+ "subtle",
  "ureq",
+ "zeroize",
 ]
 
 [[package]]
@@ -1468,6 +1482,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "layerx-program-sdk"
+version = "0.1.0"
+dependencies = [
+ "sha2",
+]
+
+[[package]]
 name = "layerx-programs-protocol-adapter"
 version = "0.1.0"
 dependencies = [
@@ -1494,6 +1515,7 @@ dependencies = [
  "num-bigint",
  "sha2",
  "sha3",
+ "wasm-instrument",
  "wasmi",
  "wasmparser-nostd",
 ]
@@ -1503,8 +1525,10 @@ name = "layerx-proof"
 version = "0.1.0"
 dependencies = [
  "layerx-crypto",
+ "layerx-programs-runtime",
  "layerx-types",
  "layerx-wire",
+ "sha2",
 ]
 
 [[package]]
@@ -1544,9 +1568,15 @@ version = "0.1.0"
 dependencies = [
  "layerx-agent-api",
  "layerx-client",
+ "layerx-crypto",
  "layerx-mirror",
  "layerx-proof",
  "layerx-types",
+ "layerx-wire",
+ "serde_json",
+ "sha2",
+ "ureq",
+ "url",
  "zeroize",
 ]
 
@@ -1778,6 +1808,10 @@ dependencies = [
  "futures-core",
  "pin-project-lite",
 ]
+
+[[package]]
+name = "parity-wasm"
+version = "0.45.0"
 
 [[package]]
 name = "parking"
@@ -2615,10 +2649,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "wasm-instrument"
+version = "0.4.0"
+dependencies = [
+ "parity-wasm",
+]
+
+[[package]]
 name = "wasmi"
 version = "0.31.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "77a8281d1d660cdf54c76a3efa9ddd0c270cada1383a995db3ccb43d166456c7"
 dependencies = [
  "smallvec",
  "spin",

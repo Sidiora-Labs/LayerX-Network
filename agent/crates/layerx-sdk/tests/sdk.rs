@@ -343,7 +343,7 @@ fn signer_surface_contains_no_key_export_and_offline_verifier_is_real() {
         &empty,
         layerx_proof::checkpoint::SettlementDomain::new(31_337, [0x55; 20]),
     )
-        .unwrap_or_else(|error| panic!("empty export has no false fact: {error:?}"));
+    .unwrap_or_else(|error| panic!("empty export has no false fact: {error:?}"));
     assert_eq!(report.verified_receipts, 0);
     assert!(!report.derived_aggregates_are_protocol_facts);
 

@@ -528,7 +528,9 @@ impl RedisStore {
             _ => return Err("gateway activity operation response is invalid".to_owned()),
         };
         if !operation_key.starts_with("gateway:idem:") {
-            return Err("gateway activity operation key is outside the idempotency namespace".to_owned());
+            return Err(
+                "gateway activity operation key is outside the idempotency namespace".to_owned(),
+            );
         }
         match self.command(&["HGETALL", &operation_key])? {
             Resp::Array(values) if values.is_empty() => Ok(None),
@@ -609,12 +611,8 @@ impl RedisStore {
                 continue;
             }
             return match tag.as_str() {
-                "consumed" => Ok(TapNonceConsumption::Consumed {
-                    binding_digest,
-                }),
-                "existing" => Ok(TapNonceConsumption::AlreadyConsumed {
-                    binding_digest,
-                }),
+                "consumed" => Ok(TapNonceConsumption::Consumed { binding_digest }),
+                "existing" => Ok(TapNonceConsumption::AlreadyConsumed { binding_digest }),
                 "replay" => Ok(TapNonceConsumption::Replay),
                 _ => Err("gateway TAP nonce transition conflicted".to_owned()),
             };
@@ -888,16 +886,15 @@ fn canonical_target_authority(value: &str) -> bool {
     {
         return false;
     }
-    let (host, port) = value.rsplit_once(':').map_or((value, None), |(host, port)| {
-        (host, Some(port))
-    });
+    let (host, port) = value
+        .rsplit_once(':')
+        .map_or((value, None), |(host, port)| (host, Some(port)));
     if host.is_empty()
         || host.contains(':')
         || host.ends_with('.')
         || port.is_some_and(|port| {
-            port.parse::<u16>().map_or(true, |number| {
-                number == 0 || number.to_string() != port
-            })
+            port.parse::<u16>()
+                .map_or(true, |number| number == 0 || number.to_string() != port)
         })
     {
         return false;
@@ -928,8 +925,7 @@ fn canonical_target_path(value: &str) -> bool {
                 segment.is_empty()
                     || matches!(segment, "." | "..")
                     || !segment.bytes().all(|byte| {
-                        byte.is_ascii_alphanumeric()
-                            || matches!(byte, b'-' | b'_' | b'.' | b'~')
+                        byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~')
                     })
             }))
 }
@@ -1156,12 +1152,12 @@ mod continuation_tests {
         let value = "a".repeat(MAX_CONTINUATION_BYTES);
         let chunks = continuation_chunks(&value).unwrap();
         assert_eq!(chunks.len(), MAX_CONTINUATION_CHUNKS);
-        assert!(chunks.iter().all(|chunk| chunk.len() == CONTINUATION_CHUNK_BYTES));
+        assert!(chunks
+            .iter()
+            .all(|chunk| chunk.len() == CONTINUATION_CHUNK_BYTES));
 
-        let mut fields = BTreeMap::from([(
-            "continuation_count".to_owned(),
-            chunks.len().to_string(),
-        )]);
+        let mut fields =
+            BTreeMap::from([("continuation_count".to_owned(), chunks.len().to_string())]);
         for (index, chunk) in chunks.into_iter().enumerate() {
             fields.insert(format!("continuation_{index}"), chunk.to_owned());
         }

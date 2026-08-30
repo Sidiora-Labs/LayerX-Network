@@ -146,8 +146,14 @@ fn additive_string_list(previous: &str, current: &str) -> bool {
 }
 
 const CUSTODY_CLAIM_TAGS: &[(&str, &str)] = &[
-    ("write.kvx", "type.SubmissionState.Executed.settlement_domain"),
-    ("stream.kvx", "type.ReceiptReference.Verified.settlement_domain"),
+    (
+        "write.kvx",
+        "type.SubmissionState.Executed.settlement_domain",
+    ),
+    (
+        "stream.kvx",
+        "type.ReceiptReference.Verified.settlement_domain",
+    ),
     ("read.kvx", "operation.export.offline.settlement_domain"),
 ];
 

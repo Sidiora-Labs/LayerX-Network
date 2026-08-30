@@ -9,8 +9,7 @@ use std::process::{Command, Stdio};
 use sha2::{Digest, Sha256};
 
 const LOCK_PATH: &str = "platform/sdk/pipeline.kvx";
-const RUST_OPERATION_GENERATED_PATH: &str =
-    "agent/crates/layerx-sdk/src/operation_generated.rs";
+const RUST_OPERATION_GENERATED_PATH: &str = "agent/crates/layerx-sdk/src/operation_generated.rs";
 const GO_GENERATED_PATH: &str = "platform/sdk/go/generated.go";
 const JVM_GENERATED_PATH: &str =
     "platform/sdk/jvm/src/main/java/com/sidiora/layerx/sdk/GeneratedContract.java";
@@ -454,8 +453,11 @@ fn generate_rust_operation_catalog(repo_root: &Path) -> Result<String, String> {
         writeln!(output, "    {},", rust_identifier(operation))
             .map_err(|error| error.to_string())?;
     }
-    writeln!(output, "}}\n\nimpl Operation {{\n    pub const ALL: &'static [Self] = &[")
-        .map_err(|error| error.to_string())?;
+    writeln!(
+        output,
+        "}}\n\nimpl Operation {{\n    pub const ALL: &'static [Self] = &["
+    )
+    .map_err(|error| error.to_string())?;
     for operation in &operations {
         writeln!(output, "        Self::{},", rust_identifier(operation))
             .map_err(|error| error.to_string())?;
@@ -477,8 +479,7 @@ fn generate_rust_operation_catalog(repo_root: &Path) -> Result<String, String> {
     )
     .map_err(|error| error.to_string())?;
     if mutations.is_empty() {
-        writeln!(output, "        false")
-            .map_err(|error| error.to_string())?;
+        writeln!(output, "        false").map_err(|error| error.to_string())?;
     } else {
         writeln!(output, "        matches!(\n            self,")
             .map_err(|error| error.to_string())?;
@@ -491,11 +492,9 @@ fn generate_rust_operation_catalog(repo_root: &Path) -> Result<String, String> {
             )
             .map_err(|error| error.to_string())?;
         }
-        writeln!(output, "        )")
-            .map_err(|error| error.to_string())?;
+        writeln!(output, "        )").map_err(|error| error.to_string())?;
     }
-    writeln!(output, "    }}\n}}")
-        .map_err(|error| error.to_string())?;
+    writeln!(output, "    }}\n}}").map_err(|error| error.to_string())?;
     Ok(output)
 }
 

@@ -219,9 +219,9 @@ fn verify_program_execution_receipt(
             ProgramExecutionCheck::Activity,
         ));
     }
-    let outcome = protocol.program_outcome().ok_or_else(|| {
-        ProgramExecutionVerificationFailure::at(ProgramExecutionCheck::Receipt)
-    })?;
+    let outcome = protocol
+        .program_outcome()
+        .ok_or_else(|| ProgramExecutionVerificationFailure::at(ProgramExecutionCheck::Receipt))?;
     if outcome.abi_version() != expected_guest_abi_version {
         return Err(ProgramExecutionVerificationFailure::at(
             ProgramExecutionCheck::GuestAbi,
@@ -296,8 +296,9 @@ fn verified_terminal_outcome(
             ) {
                 return terminal_failure();
             }
-            let response = ProgramCallResponse::new(*code, response)
-                .map_err(|_| ProgramExecutionVerificationFailure::at(ProgramExecutionCheck::Terminal))?;
+            let response = ProgramCallResponse::new(*code, response).map_err(|_| {
+                ProgramExecutionVerificationFailure::at(ProgramExecutionCheck::Terminal)
+            })?;
             Ok((ProgramCallOutcome::Completed(response), None, None))
         }
         TerminalDetail::Execution(ExecutionTerminal::CandidateV4 {
@@ -386,27 +387,25 @@ fn verified_terminal_outcome(
                     }
                 })
                 .collect();
-            let response = ProgramLegacyCallResponse::new(outcome.result_code(), values)
-                .map_err(|_| ProgramExecutionVerificationFailure::at(ProgramExecutionCheck::Terminal))?;
+            let response =
+                ProgramLegacyCallResponse::new(outcome.result_code(), values).map_err(|_| {
+                    ProgramExecutionVerificationFailure::at(ProgramExecutionCheck::Terminal)
+                })?;
             Ok((ProgramCallOutcome::LegacyCompleted(response), None, None))
         }
         TerminalDetail::Failure(layerx_programs_runtime::terminal::FailureTerminal::Program(
             failure,
         )) => Ok((
-            ProgramCallOutcome::Refused(
-                layerx_types::intent::ProgramCallFailure::GuestRefused {
-                    code: outcome.result_code(),
-                },
-            ),
+            ProgramCallOutcome::Refused(layerx_types::intent::ProgramCallFailure::GuestRefused {
+                code: outcome.result_code(),
+            }),
             Some(failure.clone()),
             None,
         )),
         TerminalDetail::Failure(_) => Ok((
-            ProgramCallOutcome::Refused(
-                layerx_types::intent::ProgramCallFailure::GuestRefused {
-                    code: outcome.result_code(),
-                },
-            ),
+            ProgramCallOutcome::Refused(layerx_types::intent::ProgramCallFailure::GuestRefused {
+                code: outcome.result_code(),
+            }),
             None,
             None,
         )),
@@ -492,9 +491,7 @@ fn verify_terminal_commitments(
                     continue;
                 }
                 occupancy_present = true;
-                if <[u8; 32]>::from(Sha256::digest(bytes))
-                    != outcome.occupancy_evidence_digest()
-                {
+                if <[u8; 32]>::from(Sha256::digest(bytes)) != outcome.occupancy_evidence_digest() {
                     return Err(ProgramExecutionVerificationFailure::at(
                         ProgramExecutionCheck::Occupancy,
                     ));
@@ -554,10 +551,7 @@ fn verify_terminal_commitments(
     Ok(())
 }
 
-fn usage_matches(
-    usage: layerx_programs_runtime::MeteredUsage,
-    outcome: &ProgramOutcome,
-) -> bool {
+fn usage_matches(usage: layerx_programs_runtime::MeteredUsage, outcome: &ProgramOutcome) -> bool {
     usage.cpu_fuel == outcome.cpu_fuel()
         && usage.memory_bytes == outcome.memory_bytes()
         && usage.storage_read_bytes == outcome.storage_read_bytes()

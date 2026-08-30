@@ -22,6 +22,12 @@ public enum PlatformOperation
     AgentCapabilityRevoke,
     AgentExportOffline,
     AgentPrepare,
+    AgentProgramActivity,
+    AgentProgramCall,
+    AgentProgramDiscover,
+    AgentProgramInterface,
+    AgentProgramReceipt,
+    AgentProgramSimulate,
     AgentProject,
     AgentReadAccount,
     AgentReadBalance,
@@ -45,6 +51,7 @@ public enum PlatformOperation
     AgentSubscriptionResume,
     AgentTrack,
     AgentWait,
+    HumanAccountBalance,
     HumanAccountCreate,
     HumanActivityEntry,
     HumanActivityExportEvidence,
@@ -79,6 +86,7 @@ public enum PlatformOperation
     HumanEvidenceGet,
     HumanExitEligibility,
     HumanExitStart,
+    HumanHomeSummary,
     HumanJourneyGet,
     HumanJourneyList,
     HumanMoveCommit,
@@ -144,6 +152,12 @@ public static class GeneratedOperationCatalog
             PlatformOperation.AgentCapabilityRevoke => new(PlatformPlane.Agent, "capability.revoke", SdkHttpMethod.Post, "", "object", "AuthorityResponse<CapabilityRecord>", true, false),
             PlatformOperation.AgentExportOffline => new(PlatformPlane.Agent, "export.offline", SdkHttpMethod.Post, "", "object", "VerifiedRead<OfflineExport>", false, false),
             PlatformOperation.AgentPrepare => new(PlatformPlane.Agent, "prepare", SdkHttpMethod.Post, "", "PrepareRequest", "Prepared", true, false),
+            PlatformOperation.AgentProgramActivity => new(PlatformPlane.Agent, "program.activity", SdkHttpMethod.Get, "/v1/programs/activities/{activity_id}", "ProgramActivitySelector", "ProgramSubmission", false, false),
+            PlatformOperation.AgentProgramCall => new(PlatformPlane.Agent, "program.call", SdkHttpMethod.Post, "/v1/programs/call", "ProgramCallRequest", "ProgramSubmission", true, false),
+            PlatformOperation.AgentProgramDiscover => new(PlatformPlane.Agent, "program.discover", SdkHttpMethod.Get, "/v1/programs/registry/{program_id}", "ProgramSelector", "VerifiedProgramDiscovery", false, false),
+            PlatformOperation.AgentProgramInterface => new(PlatformPlane.Agent, "program.interface", SdkHttpMethod.Get, "/v1/programs/registry/{program_id}/interface", "ProgramSelector", "VerifiedProgramInterface", false, false),
+            PlatformOperation.AgentProgramReceipt => new(PlatformPlane.Agent, "program.receipt", SdkHttpMethod.Get, "/v1/programs/receipts/by-idempotency/{idempotency_key}", "ProgramReceiptSelector", "ProgramSubmission", false, false),
+            PlatformOperation.AgentProgramSimulate => new(PlatformPlane.Agent, "program.simulate", SdkHttpMethod.Post, "/v1/programs/simulate", "ProgramCallRequest", "ProgramSimulation", false, false),
             PlatformOperation.AgentProject => new(PlatformPlane.Agent, "project", SdkHttpMethod.Post, "", "object", "ProjectionResult", false, false),
             PlatformOperation.AgentReadAccount => new(PlatformPlane.Agent, "read.account", SdkHttpMethod.Post, "", "object", "VerifiedRead<AccountValue>", false, false),
             PlatformOperation.AgentReadBalance => new(PlatformPlane.Agent, "read.balance", SdkHttpMethod.Post, "", "object", "VerifiedRead<BalanceValue>", false, false),
@@ -167,6 +181,7 @@ public static class GeneratedOperationCatalog
             PlatformOperation.AgentSubscriptionResume => new(PlatformPlane.Agent, "subscription.resume", SdkHttpMethod.Post, "", "object", "object", true, false),
             PlatformOperation.AgentTrack => new(PlatformPlane.Agent, "track", SdkHttpMethod.Post, "", "TrackRequest", "TrackedSubmission", false, false),
             PlatformOperation.AgentWait => new(PlatformPlane.Agent, "wait", SdkHttpMethod.Post, "", "WaitRequest", "WaitResult", false, false),
+            PlatformOperation.HumanAccountBalance => new(PlatformPlane.Human, "account.balance", SdkHttpMethod.Get, "/v1/account/balance", "Empty", "AccountBalance", false, true),
             PlatformOperation.HumanAccountCreate => new(PlatformPlane.Human, "account.create", SdkHttpMethod.Post, "/v1/accounts", "AccountCreateRequest", "AccountCreation", true, false),
             PlatformOperation.HumanActivityEntry => new(PlatformPlane.Human, "activity.entry", SdkHttpMethod.Get, "/v1/activity/{entry_id}", "Empty", "ActivityEntryDetail", false, true),
             PlatformOperation.HumanActivityExportEvidence => new(PlatformPlane.Human, "activity.export.evidence", SdkHttpMethod.Post, "/v1/activity/exports/evidence", "ExportEvidenceRequest", "ExportArtefact", true, false),
@@ -201,6 +216,7 @@ public static class GeneratedOperationCatalog
             PlatformOperation.HumanEvidenceGet => new(PlatformPlane.Human, "evidence.get", SdkHttpMethod.Get, "/v1/evidence/{evidence_id}", "Empty", "EvidenceMaterial", false, true),
             PlatformOperation.HumanExitEligibility => new(PlatformPlane.Human, "exit.eligibility", SdkHttpMethod.Get, "/v1/exit/eligibility", "Empty", "ExitEligibility", false, true),
             PlatformOperation.HumanExitStart => new(PlatformPlane.Human, "exit.start", SdkHttpMethod.Post, "/v1/exit", "ExitStartRequest", "Journey", true, false),
+            PlatformOperation.HumanHomeSummary => new(PlatformPlane.Human, "home.summary", SdkHttpMethod.Get, "/v1/home", "Empty", "HomeSummary", false, true),
             PlatformOperation.HumanJourneyGet => new(PlatformPlane.Human, "journey.get", SdkHttpMethod.Get, "/v1/journeys/{journey_id}", "Empty", "Journey", false, true),
             PlatformOperation.HumanJourneyList => new(PlatformPlane.Human, "journey.list", SdkHttpMethod.Get, "/v1/journeys", "Empty", "JourneyPage", false, true),
             PlatformOperation.HumanMoveCommit => new(PlatformPlane.Human, "move.commit", SdkHttpMethod.Post, "/v1/moves", "MoveCommitRequest", "Journey", true, false),
@@ -248,7 +264,7 @@ public static class GeneratedOperationCatalog
 
     public static SdkMetadata platform_sdk_dotnet()
     {
-        return new("LayerX.Sdk", "0.1.0", 40, 76);
+        return new("LayerX.Sdk", "0.1.0", 46, 78);
     }
 }
 
@@ -288,6 +304,18 @@ public static class GeneratedPlatformClientExtensions
         client.ReadAsync(PlatformOperation.AgentExportOffline, request, pathParameters, cancellationToken);
     public static Task<JsonValue> AgentPrepareAsync(this PlatformClient client, JsonValue request, IdempotencyKey idempotencyKey, IReadOnlyDictionary<string, string>? pathParameters = null, CancellationToken cancellationToken = default) =>
         client.MutateAsync(PlatformOperation.AgentPrepare, request, idempotencyKey, pathParameters, cancellationToken);
+    public static Task<JsonValue> AgentProgramActivityAsync(this PlatformClient client, JsonValue request, IReadOnlyDictionary<string, string>? pathParameters = null, CancellationToken cancellationToken = default) =>
+        client.ReadAsync(PlatformOperation.AgentProgramActivity, request, pathParameters, cancellationToken);
+    public static Task<JsonValue> AgentProgramCallAsync(this PlatformClient client, JsonValue request, IdempotencyKey idempotencyKey, IReadOnlyDictionary<string, string>? pathParameters = null, CancellationToken cancellationToken = default) =>
+        client.MutateAsync(PlatformOperation.AgentProgramCall, request, idempotencyKey, pathParameters, cancellationToken);
+    public static Task<JsonValue> AgentProgramDiscoverAsync(this PlatformClient client, JsonValue request, IReadOnlyDictionary<string, string>? pathParameters = null, CancellationToken cancellationToken = default) =>
+        client.ReadAsync(PlatformOperation.AgentProgramDiscover, request, pathParameters, cancellationToken);
+    public static Task<JsonValue> AgentProgramInterfaceAsync(this PlatformClient client, JsonValue request, IReadOnlyDictionary<string, string>? pathParameters = null, CancellationToken cancellationToken = default) =>
+        client.ReadAsync(PlatformOperation.AgentProgramInterface, request, pathParameters, cancellationToken);
+    public static Task<JsonValue> AgentProgramReceiptAsync(this PlatformClient client, JsonValue request, IReadOnlyDictionary<string, string>? pathParameters = null, CancellationToken cancellationToken = default) =>
+        client.ReadAsync(PlatformOperation.AgentProgramReceipt, request, pathParameters, cancellationToken);
+    public static Task<JsonValue> AgentProgramSimulateAsync(this PlatformClient client, JsonValue request, IReadOnlyDictionary<string, string>? pathParameters = null, CancellationToken cancellationToken = default) =>
+        client.ReadAsync(PlatformOperation.AgentProgramSimulate, request, pathParameters, cancellationToken);
     public static Task<JsonValue> AgentProjectAsync(this PlatformClient client, JsonValue request, IReadOnlyDictionary<string, string>? pathParameters = null, CancellationToken cancellationToken = default) =>
         client.ReadAsync(PlatformOperation.AgentProject, request, pathParameters, cancellationToken);
     public static Task<JsonValue> AgentReadAccountAsync(this PlatformClient client, JsonValue request, IReadOnlyDictionary<string, string>? pathParameters = null, CancellationToken cancellationToken = default) =>
@@ -334,6 +362,8 @@ public static class GeneratedPlatformClientExtensions
         client.ReadAsync(PlatformOperation.AgentTrack, request, pathParameters, cancellationToken);
     public static Task<JsonValue> AgentWaitAsync(this PlatformClient client, JsonValue request, IReadOnlyDictionary<string, string>? pathParameters = null, CancellationToken cancellationToken = default) =>
         client.ReadAsync(PlatformOperation.AgentWait, request, pathParameters, cancellationToken);
+    public static Task<JsonValue> HumanAccountBalanceAsync(this PlatformClient client, JsonValue? request = null, IReadOnlyDictionary<string, string>? pathParameters = null, CancellationToken cancellationToken = default) =>
+        client.ReadAsync(PlatformOperation.HumanAccountBalance, request ?? JsonValue.EmptyObject, pathParameters, cancellationToken);
     public static Task<JsonValue> HumanAccountCreateAsync(this PlatformClient client, JsonValue request, IdempotencyKey idempotencyKey, IReadOnlyDictionary<string, string>? pathParameters = null, CancellationToken cancellationToken = default) =>
         client.MutateAsync(PlatformOperation.HumanAccountCreate, request, idempotencyKey, pathParameters, cancellationToken);
     public static Task<JsonValue> HumanActivityEntryAsync(this PlatformClient client, JsonValue? request = null, IReadOnlyDictionary<string, string>? pathParameters = null, CancellationToken cancellationToken = default) =>
@@ -402,6 +432,8 @@ public static class GeneratedPlatformClientExtensions
         client.ReadAsync(PlatformOperation.HumanExitEligibility, request ?? JsonValue.EmptyObject, pathParameters, cancellationToken);
     public static Task<JsonValue> HumanExitStartAsync(this PlatformClient client, JsonValue request, IdempotencyKey idempotencyKey, IReadOnlyDictionary<string, string>? pathParameters = null, CancellationToken cancellationToken = default) =>
         client.MutateAsync(PlatformOperation.HumanExitStart, request, idempotencyKey, pathParameters, cancellationToken);
+    public static Task<JsonValue> HumanHomeSummaryAsync(this PlatformClient client, JsonValue? request = null, IReadOnlyDictionary<string, string>? pathParameters = null, CancellationToken cancellationToken = default) =>
+        client.ReadAsync(PlatformOperation.HumanHomeSummary, request ?? JsonValue.EmptyObject, pathParameters, cancellationToken);
     public static Task<JsonValue> HumanJourneyGetAsync(this PlatformClient client, JsonValue? request = null, IReadOnlyDictionary<string, string>? pathParameters = null, CancellationToken cancellationToken = default) =>
         client.ReadAsync(PlatformOperation.HumanJourneyGet, request ?? JsonValue.EmptyObject, pathParameters, cancellationToken);
     public static Task<JsonValue> HumanJourneyListAsync(this PlatformClient client, JsonValue? request = null, IReadOnlyDictionary<string, string>? pathParameters = null, CancellationToken cancellationToken = default) =>

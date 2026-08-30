@@ -24,10 +24,10 @@ use layerx_agent_api::track::{TrackRequest, TrackedSubmission, WaitRequest};
 use layerx_agent_api::verify::Level;
 use layerx_agent_api::{agent_api_schema_v1, ContractVersion, SubmissionState};
 use layerx_client::client::{Client as NodeClient, ClientConfig, ConnectionError};
+pub use layerx_proof::checkpoint::SettlementDomain;
 use layerx_proof::export::{
     verify as verify_offline_export, ExportVerificationError, OfflineExport, VerificationReport,
 };
-pub use layerx_proof::checkpoint::SettlementDomain;
 use layerx_types::result::ResultCode;
 
 pub mod approval;

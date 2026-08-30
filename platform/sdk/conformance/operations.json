@@ -173,6 +173,66 @@
     },
     {
       "plane": "agent",
+      "name": "program.activity",
+      "method": "GET",
+      "path": "/v1/programs/activities/{activity_id}",
+      "request": "ProgramActivitySelector",
+      "response": "ProgramSubmission",
+      "idempotency": false,
+      "bodyless": false
+    },
+    {
+      "plane": "agent",
+      "name": "program.call",
+      "method": "POST",
+      "path": "/v1/programs/call",
+      "request": "ProgramCallRequest",
+      "response": "ProgramSubmission",
+      "idempotency": true,
+      "bodyless": false
+    },
+    {
+      "plane": "agent",
+      "name": "program.discover",
+      "method": "GET",
+      "path": "/v1/programs/registry/{program_id}",
+      "request": "ProgramSelector",
+      "response": "VerifiedProgramDiscovery",
+      "idempotency": false,
+      "bodyless": false
+    },
+    {
+      "plane": "agent",
+      "name": "program.interface",
+      "method": "GET",
+      "path": "/v1/programs/registry/{program_id}/interface",
+      "request": "ProgramSelector",
+      "response": "VerifiedProgramInterface",
+      "idempotency": false,
+      "bodyless": false
+    },
+    {
+      "plane": "agent",
+      "name": "program.receipt",
+      "method": "GET",
+      "path": "/v1/programs/receipts/by-idempotency/{idempotency_key}",
+      "request": "ProgramReceiptSelector",
+      "response": "ProgramSubmission",
+      "idempotency": false,
+      "bodyless": false
+    },
+    {
+      "plane": "agent",
+      "name": "program.simulate",
+      "method": "POST",
+      "path": "/v1/programs/simulate",
+      "request": "ProgramCallRequest",
+      "response": "ProgramSimulation",
+      "idempotency": false,
+      "bodyless": false
+    },
+    {
+      "plane": "agent",
       "name": "project",
       "method": "POST",
       "path": "",
@@ -400,6 +460,16 @@
       "response": "WaitResult",
       "idempotency": false,
       "bodyless": false
+    },
+    {
+      "plane": "human",
+      "name": "account.balance",
+      "method": "GET",
+      "path": "/v1/account/balance",
+      "request": "Empty",
+      "response": "AccountBalance",
+      "idempotency": false,
+      "bodyless": true
     },
     {
       "plane": "human",
@@ -740,6 +810,16 @@
       "response": "Journey",
       "idempotency": true,
       "bodyless": false
+    },
+    {
+      "plane": "human",
+      "name": "home.summary",
+      "method": "GET",
+      "path": "/v1/home",
+      "request": "Empty",
+      "response": "HomeSummary",
+      "idempotency": false,
+      "bodyless": true
     },
     {
       "plane": "human",
