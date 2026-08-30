@@ -221,6 +221,77 @@ func TestCanonicalProgramTerminalBindsResponseUsageAndGraph(t *testing.T) {
 	}
 }
 
+func TestProgramTransferAuthorizationRecomputesCanonicalRoot(t *testing.T) {
+	authorization, root := canonicalProgramTransferAuthorizationFixture()
+	if err := verifyProgramTransferAuthorization(authorization, root); err != nil {
+		t.Fatalf("canonical Programs transfer authorization rejected: %v", err)
+	}
+	mutated := append([]byte(nil), authorization...)
+	mutated[len(mutated)-33] ^= 1
+	if err := verifyProgramTransferAuthorization(mutated, root); err == nil {
+		t.Fatalf("mutated Programs transfer authorization retained the signed root")
+	}
+	if err := verifyProgramTransferAuthorization(append(authorization, 0), root); err == nil {
+		t.Fatalf("Programs transfer authorization accepted trailing bytes")
+	}
+}
+
+func TestProgramOccupancySettlementBindsCountersFeesAndAssetRoot(t *testing.T) {
+	asset := [32]byte{4}
+	settlement := canonicalEmptyProgramOccupancyFixture()
+	projection, err := decodeProgramOccupancy(settlement, asset)
+	if err != nil || projection.ByteBatches != (Uint128{}) || projection.FeeUnits != (Uint128{}) || projection.TransferRoot != ([32]byte{}) {
+		t.Fatalf("canonical empty Programs occupancy settlement rejected: %#v %v", projection, err)
+	}
+	mutated := append([]byte(nil), settlement...)
+	declaredFeeLowByte := len("LXP/storage-occupancy-settlement/v3\x00") + 8 + 4 + 7*8 + 16 + 15
+	mutated[declaredFeeLowByte] = 1
+	if _, err := decodeProgramOccupancy(mutated, asset); err == nil {
+		t.Fatalf("Programs occupancy settlement accepted a mutated fee total")
+	}
+	if _, err := decodeProgramOccupancy(settlement, [32]byte{}); err == nil {
+		t.Fatalf("Programs occupancy settlement accepted a missing receipt asset")
+	}
+}
+
+func TestProgramTerminalWrapperOrderAndUniquenessAreClosed(t *testing.T) {
+	program := [32]byte{1}
+	inner := []byte("LXP/program-execution-with-transfer-authority/v2\x00")
+	inner = appendUint32(inner, 0)
+	inner = appendUint32(inner, 0)
+	inner = append(inner, make([]byte, 32)...)
+	outer := []byte("LXP/program-execution-with-occupancy/v1\x00")
+	outer = appendUint32(outer, uint32(len(inner)))
+	outer = append(outer, inner...)
+	outer = appendUint32(outer, 0)
+	if _, err := decodeProgramTerminal(1, 2, outer, program, 0); err == nil {
+		t.Fatalf("Programs terminal accepted producer-impossible occupancy-before-authority wrappers")
+	}
+}
+
+func canonicalProgramTransferAuthorizationFixture() ([]byte, [32]byte) {
+	program, principal, invocation, asset, destination := [32]byte{1}, [32]byte{2}, [32]byte{3}, [32]byte{4}, [32]byte{5}
+	encoded := []byte("LayerX/programs/402LXP/transfer-set/v1\x00")
+	encoded = append(encoded, program[:]...); encoded = append(encoded, principal[:]...); encoded = append(encoded, invocation[:]...)
+	encoded = append(encoded, make([]byte, 8)...); encoded = append(encoded, 0)
+	events := []byte("LayerX/programs/events/v1\x00"); events = appendUint32(events, 0)
+	encoded = appendUint32(encoded, uint32(len(events))); encoded = append(encoded, events...)
+	encoded = appendUint64(encoded, 0); encoded = appendUint64(encoded, 1)
+	encoded = append(encoded, make([]byte, 8)...); encoded = append(encoded, 0)
+	encoded = append(encoded, asset[:]...); encoded = append(encoded, destination[:]...)
+	encoded = append(encoded, make([]byte, 15)...); encoded = append(encoded, 7); encoded = append(encoded, program[:]...)
+	leg := []byte{0}; leg = append(leg, principal[:]...); leg = append(leg, destination[:]...); leg = append(leg, asset[:]...); leg = append(leg, make([]byte, 15)...); leg = append(leg, 7, 0, 1)
+	return encoded, domainDigest([]byte("LXP/v1/merkle-leaf\x00"), leg)
+}
+
+func canonicalEmptyProgramOccupancyFixture() []byte {
+	encoded := []byte("LXP/storage-occupancy-settlement/v3\x00")
+	encoded = appendUint64(encoded, 1); encoded = appendUint32(encoded, 1)
+	for index := 0; index < 7; index++ { encoded = appendUint64(encoded, uint64(index+1)) }
+	encoded = append(encoded, make([]byte, 16*4)...)
+	return appendUint32(encoded, 0)
+}
+
 func canonicalProgramCallFixture() (ProgramCall, [32]byte, []byte) {
 	program := [32]byte{1}
 	key := [32]byte{2}
