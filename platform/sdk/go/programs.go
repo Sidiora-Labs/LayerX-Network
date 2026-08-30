@@ -14,6 +14,7 @@ import (
 	"math/big"
 	"strconv"
 	"time"
+	"unicode/utf8"
 )
 
 const (
@@ -282,6 +283,11 @@ type VerifiedProgramReceipt struct {
 	CallGraph       []byte
 }
 
+type programCallBinding struct {
+	ActivityID     [32]byte
+	IdempotencyKey [32]byte
+}
+
 func validateProgramCall(call ProgramCall) error {
 	if call.Budget.Fuel == 0 || len(call.Calldata) > MaximumProgramCalldataBytes || len(call.Capabilities) > MaximumProgramCapabilities || len(call.SignedActivity) == 0 || len(call.SignedActivity) > MaximumProgramCalldataBytes {
 		return newSDKError(ErrorInvalidArgument, RetryNever)
@@ -295,7 +301,97 @@ func validateProgramCall(call ProgramCall) error {
 		}
 		prior = current
 	}
-	return nil
+	_, err := bindSignedProgramCall(call)
+	return err
+}
+
+func bindSignedProgramCall(call ProgramCall) (programCallBinding, error) {
+	if call.Budget.Fuel == 0 || len(call.Calldata) > MaximumProgramCalldataBytes || len(call.Capabilities) > MaximumProgramCapabilities || len(call.SignedActivity) == 0 || len(call.SignedActivity) > MaximumProgramCalldataBytes {
+		return programCallBinding{}, newSDKError(ErrorInvalidArgument, RetryNever)
+	}
+	decoder := wireDecoder{value: call.SignedActivity}
+	if decoder.u16() != 1 || decoder.u16() != 0x1001 || decoder.u8() != 12 {
+		return programCallBinding{}, newSDKError(ErrorInvalidArgument, RetryNever)
+	}
+	field := func(expected byte) bool { return decoder.u8() == expected && !decoder.failed }
+	if !field(1) {
+		return programCallBinding{}, newSDKError(ErrorInvalidArgument, RetryNever)
+	}
+	protocolVersion := decoder.u16()
+	if protocolVersion != 1 && protocolVersion != 2 || !field(2) {
+		return programCallBinding{}, newSDKError(ErrorInvalidArgument, RetryNever)
+	}
+	_ = decoder.u32()
+	if !field(3) || decoder.u32() != 0x0009_0003 || !field(4) {
+		return programCallBinding{}, newSDKError(ErrorInvalidArgument, RetryNever)
+	}
+	_ = decoder.bounded(255)
+	if !field(5) {
+		return programCallBinding{}, newSDKError(ErrorInvalidArgument, RetryNever)
+	}
+	_ = decoder.bounded(524_288)
+	if !field(6) {
+		return programCallBinding{}, newSDKError(ErrorInvalidArgument, RetryNever)
+	}
+	_ = decoder.u64()
+	if !field(7) {
+		return programCallBinding{}, newSDKError(ErrorInvalidArgument, RetryNever)
+	}
+	notBefore := decoder.u64()
+	notAfter := decoder.u64()
+	if notAfter < notBefore || !field(8) {
+		return programCallBinding{}, newSDKError(ErrorInvalidArgument, RetryNever)
+	}
+	idempotencyKey := decoder.array32()
+	if !field(9) {
+		return programCallBinding{}, newSDKError(ErrorInvalidArgument, RetryNever)
+	}
+	_ = decoder.u128()
+	if !field(10) {
+		return programCallBinding{}, newSDKError(ErrorInvalidArgument, RetryNever)
+	}
+	payloadHash := decoder.array32()
+	if !field(11) {
+		return programCallBinding{}, newSDKError(ErrorInvalidArgument, RetryNever)
+	}
+	payload := decoder.bounded(524_288)
+	if !field(12) {
+		return programCallBinding{}, newSDKError(ErrorInvalidArgument, RetryNever)
+	}
+	_ = decoder.bounded(128)
+	if decoder.failed || decoder.offset != len(call.SignedActivity) || domainDigest([]byte("LXP/v1/payload-hash\x00"), payload) != payloadHash || !programPayloadMatchesCall(payload, call) {
+		return programCallBinding{}, newSDKError(ErrorInvalidArgument, RetryNever)
+	}
+	return programCallBinding{ActivityID: domainDigest([]byte("LXP/v1/activity-id\x00"), call.SignedActivity), IdempotencyKey: idempotencyKey}, nil
+}
+
+func programPayloadMatchesCall(payload []byte, call ProgramCall) bool {
+	domain := []byte("LayerX/programs/call/v1\x00")
+	if !bytes.HasPrefix(payload, domain) {
+		return false
+	}
+	decoder := wireDecoder{value: payload[len(domain):]}
+	programID := decoder.fixed(32)
+	fuel := decoder.u64()
+	feeLimit := decoder.u128()
+	capabilityCount := decoder.u16()
+	if decoder.failed || int(capabilityCount) > MaximumProgramCapabilities {
+		return false
+	}
+	capabilities := decoder.fixed(int(capabilityCount))
+	calldataLength := decoder.u32()
+	calldata := decoder.fixed(int(calldataLength))
+	if decoder.failed || decoder.offset != len(decoder.value) || len(programID) != 32 || bytes.Equal(programID, make([]byte, 32)) || fuel == 0 || fuel != call.Budget.Fuel || feeLimit != call.Budget.FeeLimit || !bytes.Equal(programID, call.ProgramID[:]) || !bytes.Equal(calldata, call.Calldata) || len(capabilities) != len(call.Capabilities) {
+		return false
+	}
+	previous := byte(0)
+	for index, tag := range capabilities {
+		if tag < 1 || tag > 5 || tag <= previous || ProgramCapability([]string{"", "storage_read", "storage_write", "transfer", "emit_event", "compose"}[tag]) != call.Capabilities[index] {
+			return false
+		}
+		previous = tag
+	}
+	return true
 }
 
 func VerifyProgramReceipt(execution ProgramExecutionDocument, authority AuthorizedBatch) (VerifiedProgramReceipt, error) {
@@ -329,8 +425,603 @@ func VerifyProgramReceipt(execution ProgramExecutionDocument, authority Authoriz
 	if digestError != nil || verified.Receipt.ActivityID != activity || verified.Receipt.BatchID != authority.BatchID || verified.Receipt.ResultingStateRoot != authority.ResultingStateRoot || verified.Receipt.ModuleID != 9 || verified.Receipt.Operation != 3 || verified.Receipt.ModuleVersion != execution.ModuleVersion || outcome == nil || outcome.ABIVersion != execution.GuestABIVersion || outcome.ResultCode != execution.ResultCode || len(graph) == 0 || terminalDigest != outcome.TerminalPayloadRoot || graphDigest != outcome.CallGraphRoot || verified.ReceiptDigest != declaredReceiptDigest {
 		return VerifiedProgramReceipt{}, verificationFailure()
 	}
+	if verifyProgramTerminal(execution, verified.Receipt, terminal, graph) != nil {
+		return VerifiedProgramReceipt{}, verificationFailure()
+	}
 	return VerifiedProgramReceipt{Verification: verified, TerminalPayload: terminal, CallGraph: graph}, nil
 }
+
+type programTerminalProjection struct {
+	Outcome                 ProgramOutcome
+	RuntimeVersion          uint16
+	FeeScheduleVersion      uint32
+	MeteringScheduleVersion uint32
+	CPUFuel                 uint64
+	MemoryBytes             uint64
+	StorageReadBytes        uint64
+	StorageWriteBytes       uint64
+	OutputValues            uint32
+	OutputBytes             uint64
+	FeeUnits                Uint128
+	Candidate               bool
+	Successful              bool
+	EmbeddedGraph           []byte
+	Occupancy               []byte
+	TransferAuthorization   []byte
+	TransferRoot            [32]byte
+}
+
+func verifyProgramTerminal(execution ProgramExecutionDocument, receipt ProtocolReceipt, terminal []byte, graph []byte) error {
+	receiptOutcome := receipt.ProgramOutcome
+	if receiptOutcome == nil {
+		return errors.New("missing Programs receipt outcome")
+	}
+	programID, err := programHex32(execution.ProgramID)
+	if err != nil {
+		return err
+	}
+	projection, err := decodeProgramTerminal(receiptOutcome.TerminalKind, receiptOutcome.ABIVersion, terminal, programID, receiptOutcome.ResultCode)
+	if err != nil || projection.RuntimeVersion != receiptOutcome.RuntimeVersion || projection.Candidate && projection.FeeScheduleVersion != receiptOutcome.FeeScheduleVersion || projection.MeteringScheduleVersion != receiptOutcome.MeteringScheduleVersion || projection.CPUFuel != receiptOutcome.CPUFuel || projection.MemoryBytes != receiptOutcome.MemoryBytes || projection.StorageReadBytes != receiptOutcome.StorageReadBytes || projection.StorageWriteBytes != receiptOutcome.StorageWriteBytes || projection.OutputValues != receiptOutcome.OutputValues || projection.OutputBytes != receiptOutcome.OutputBytes || !projection.FeeUnits.Equal(receiptOutcome.FeeUnits) || !programOutcomesEqual(projection.Outcome, execution.Outcome) {
+		return errors.New("Programs terminal projection mismatch")
+	}
+	if projection.Candidate && !bytes.Equal(projection.EmbeddedGraph, graph) {
+		return errors.New("Programs embedded call graph mismatch")
+	}
+	occupancyRequired := receipt.ProtocolVersion == 2 && projection.Successful
+	if occupancyRequired != (projection.Occupancy != nil) {
+		return errors.New("Programs occupancy attachment mismatch")
+	}
+	if projection.Occupancy == nil {
+		if receiptOutcome.OccupancyEvidenceDigest != ([32]byte{}) || receiptOutcome.OccupancyTransferRoot != ([32]byte{}) || receiptOutcome.OccupancyByteBatches != (Uint128{}) || receiptOutcome.OccupancyFeeUnits != (Uint128{}) {
+			return errors.New("Programs receipt carries unattached occupancy")
+		}
+	} else if len(projection.Occupancy) == 0 {
+		if receiptOutcome.OccupancyEvidenceDigest != ([32]byte{}) || receiptOutcome.OccupancyTransferRoot != ([32]byte{}) || receiptOutcome.OccupancyByteBatches != (Uint128{}) || receiptOutcome.OccupancyFeeUnits != (Uint128{}) {
+			return errors.New("Programs empty occupancy attachment mismatch")
+		}
+	} else if sha256.Sum256(projection.Occupancy) != receiptOutcome.OccupancyEvidenceDigest {
+		return errors.New("Programs occupancy digest mismatch")
+	}
+	if !projection.Candidate && projection.TransferAuthorization != nil {
+		return errors.New("Programs transfer authority attachment mismatch")
+	}
+	if (projection.TransferAuthorization != nil) != (receiptOutcome.TransferRoot != ([32]byte{})) {
+		return errors.New("Programs transfer authority presence mismatch")
+	}
+	if projection.TransferAuthorization != nil && projection.TransferRoot != receiptOutcome.TransferRoot {
+		return errors.New("Programs transfer authority root mismatch")
+	}
+	return nil
+}
+
+func programOutcomesEqual(left ProgramOutcome, right ProgramOutcome) bool {
+	if left.Kind != right.Kind {
+		return false
+	}
+	switch left.Kind {
+	case "completed":
+		return left.Code != nil && right.Code != nil && *left.Code == *right.Code && bytes.Equal(left.Response, right.Response)
+	case "legacy_completed":
+		if left.Code == nil || right.Code == nil || *left.Code != *right.Code || len(left.Values) != len(right.Values) {
+			return false
+		}
+		for index := range left.Values {
+			if left.Values[index].Type != right.Values[index].Type || left.Values[index].Value != right.Values[index].Value {
+				return false
+			}
+		}
+		return true
+	case "refused":
+		return left.Failure != nil && right.Failure != nil && reflectProgramFailure(*left.Failure, *right.Failure)
+	default:
+		return false
+	}
+}
+
+func reflectProgramFailure(left ProgramFailure, right ProgramFailure) bool {
+	return left.Kind == right.Kind && equalProgramUint32(left.Limit, right.Limit) && equalProgramUint32(left.Attempted, right.Attempted) && equalProgramInt32(left.Code, right.Code)
+}
+
+func equalProgramUint32(left *uint32, right *uint32) bool {
+	return left == nil && right == nil || left != nil && right != nil && *left == *right
+}
+
+func equalProgramInt32(left *int32, right *int32) bool {
+	return left == nil && right == nil || left != nil && right != nil && *left == *right
+}
+
+func decodeProgramTerminal(kind uint8, abi uint16, encoded []byte, expectedProgram [32]byte, resultCode int32) (programTerminalProjection, error) {
+	inner := encoded
+	projection := programTerminalProjection{}
+	authorityDomain := []byte("LXP/program-execution-with-transfer-authority/v2\x00")
+	occupancyDomain := []byte("LXP/program-execution-with-occupancy/v1\x00")
+	if bytes.HasPrefix(inner, authorityDomain) {
+		cursor := programTerminalCursor{value: inner[len(authorityDomain):]}
+		inner = cursor.sized32()
+		projection.TransferAuthorization = append([]byte{}, cursor.sized32()...)
+		copy(projection.TransferRoot[:], cursor.take(32))
+		if cursor.failed || !cursor.finished() {
+			return programTerminalProjection{}, errors.New("invalid Programs transfer authority wrapper")
+		}
+	}
+	if bytes.HasPrefix(inner, occupancyDomain) {
+		cursor := programTerminalCursor{value: inner[len(occupancyDomain):]}
+		inner = cursor.sized32()
+		projection.Occupancy = append([]byte{}, cursor.sized32()...)
+		if cursor.failed || !cursor.finished() {
+			return programTerminalProjection{}, errors.New("invalid Programs occupancy wrapper")
+		}
+	}
+	if bytes.HasPrefix(inner, authorityDomain) || bytes.HasPrefix(inner, occupancyDomain) {
+		return programTerminalProjection{}, errors.New("invalid nested Programs terminal wrapper")
+	}
+	legacyV2 := []byte("LXP/program-execution/v2\x00")
+	legacyV3 := []byte("LXP/program-execution/v3\x00")
+	candidateV4 := []byte("LXP/program-execution/v4\x00")
+	switch {
+	case bytes.HasPrefix(inner, legacyV2), bytes.HasPrefix(inner, legacyV3):
+		if kind != 1 || abi != 1 {
+			return programTerminalProjection{}, errors.New("Programs legacy terminal kind mismatch")
+		}
+		traced := bytes.HasPrefix(inner, legacyV3)
+		domain := legacyV2
+		if traced {
+			domain = legacyV3
+		}
+		cursor := programTerminalCursor{value: inner[len(domain):]}
+		projection.RuntimeVersion = cursor.u16()
+		terminalABI := cursor.u16()
+		projection.MeteringScheduleVersion = cursor.u32()
+		countValue := cursor.take(16)
+		if len(countValue) != 16 || !allProgramZero(countValue[:8]) {
+			return programTerminalProjection{}, errors.New("Programs legacy value count overflow")
+		}
+		count := binary.BigEndian.Uint64(countValue[8:])
+		if count > maximumProgramLegacyValues {
+			return programTerminalProjection{}, errors.New("Programs legacy value count exceeds bound")
+		}
+		values := make([]ProgramLegacyValue, 0, count)
+		for index := uint64(0); index < count; index++ {
+			switch cursor.byte() {
+			case 1:
+				values = append(values, ProgramLegacyValue{Type: "i32", Value: float64(cursor.i32())})
+			case 2:
+				values = append(values, ProgramLegacyValue{Type: "i64", Value: strconv.FormatInt(cursor.i64(), 10)})
+			default:
+				return programTerminalProjection{}, errors.New("invalid Programs legacy value tag")
+			}
+		}
+		projection.CPUFuel = cursor.u64()
+		projection.MemoryBytes = cursor.u64()
+		projection.StorageReadBytes = cursor.u64()
+		projection.StorageWriteBytes = cursor.u64()
+		projection.OutputValues = cursor.u32()
+		projection.OutputBytes = 0
+		projection.FeeUnits = cursor.u128()
+		if traced {
+			if cursor.byte() != 1 || len(cursor.sized64()) > 34+512*52 {
+				return programTerminalProjection{}, errors.New("invalid Programs legacy trace")
+			}
+		}
+		if cursor.failed || !cursor.finished() || terminalABI != abi || projection.RuntimeVersion == 0 || projection.MeteringScheduleVersion == 0 {
+			return programTerminalProjection{}, errors.New("invalid Programs legacy terminal")
+		}
+		code := resultCode
+		projection.Outcome = ProgramOutcome{Kind: "legacy_completed", Code: &code, Values: values}
+		projection.Successful = true
+		return projection, nil
+	case bytes.HasPrefix(inner, candidateV4):
+		projection.Candidate = true
+		cursor := programTerminalCursor{value: inner[len(candidateV4):]}
+		projection.RuntimeVersion = cursor.u16()
+		projection.FeeScheduleVersion = cursor.u32()
+		projection.MeteringScheduleVersion = cursor.u32()
+		valueCount := cursor.u64()
+		if valueCount > maximumProgramLegacyValues {
+			return programTerminalProjection{}, errors.New("Programs candidate value count exceeds bound")
+		}
+		for index := uint64(0); index < valueCount; index++ {
+			switch cursor.byte() {
+			case 1:
+				_ = cursor.i32()
+			case 2:
+				_ = cursor.i64()
+			default:
+				return programTerminalProjection{}, errors.New("invalid Programs candidate value tag")
+			}
+		}
+		projection.CPUFuel = cursor.u64()
+		projection.MemoryBytes = cursor.u64()
+		projection.StorageReadBytes = cursor.u64()
+		projection.StorageWriteBytes = cursor.u64()
+		projection.OutputValues = cursor.u32()
+		projection.OutputBytes = cursor.u64()
+		projection.FeeUnits = cursor.u128()
+		switch cursor.byte() {
+		case 0:
+		case 1:
+			if len(cursor.sized64()) > 34+512*52 {
+				return programTerminalProjection{}, errors.New("Programs candidate trace exceeds bound")
+			}
+		default:
+			return programTerminalProjection{}, errors.New("invalid Programs candidate trace tag")
+		}
+		var program [32]byte
+		copy(program[:], cursor.take(32))
+		terminalABI := cursor.u16()
+		outcomeTag := cursor.byte()
+		switch outcomeTag {
+		case 0:
+			code := cursor.i32()
+			response := append([]byte(nil), cursor.sized64()...)
+			if code < 0 || len(response) > MaximumProgramCalldataBytes || kind != 1 {
+				return programTerminalProjection{}, errors.New("invalid Programs candidate response")
+			}
+			projection.Outcome = ProgramOutcome{Kind: "completed", Code: &code, Response: response}
+			projection.Successful = true
+		case 1:
+			if !validCanonicalProgramFailure(cursor.sized64()) || kind != 2 {
+				return programTerminalProjection{}, errors.New("invalid Programs candidate failure")
+			}
+			code := resultCode
+			projection.Outcome = ProgramOutcome{Kind: "refused", Failure: &ProgramFailure{Kind: "guest_refused", Code: &code}}
+		case 2:
+			if !consumeProgramMeterRefusal(&cursor, projection) || kind != 3 {
+				return programTerminalProjection{}, errors.New("invalid Programs candidate resource refusal")
+			}
+			projection.Outcome = ProgramOutcome{Kind: "refused", Failure: &ProgramFailure{Kind: "resource"}}
+		default:
+			return programTerminalProjection{}, errors.New("invalid Programs candidate outcome tag")
+		}
+		projection.EmbeddedGraph = append([]byte(nil), cursor.sized64()...)
+		if cursor.failed || !cursor.finished() || len(projection.EmbeddedGraph) > MaximumProgramCalldataBytes || program != expectedProgram || terminalABI != abi || abi != 2 || projection.RuntimeVersion == 0 || projection.FeeScheduleVersion == 0 || projection.MeteringScheduleVersion == 0 {
+			return programTerminalProjection{}, errors.New("invalid Programs candidate terminal")
+		}
+		return projection, nil
+	default:
+		return decodeProgramFailureTerminal(kind, abi, inner, resultCode, projection)
+	}
+}
+
+func decodeProgramFailureTerminal(kind uint8, abi uint16, inner []byte, resultCode int32, projection programTerminalProjection) (programTerminalProjection, error) {
+	if abi != 1 && abi != 2 {
+		return programTerminalProjection{}, errors.New("invalid Programs failure ABI")
+	}
+	failureDomain := []byte("LXP/programs/failure-detail/v1\x00")
+	resourceDomain := []byte("LXP/programs/resource-detail/v1\x00")
+	settlementDomain := []byte("LXP/programs/settlement-failure/v1\x00")
+	callbackDomain := []byte("LXP/programs/callback-failure/v1\x00")
+	code := resultCode
+	switch {
+	case bytes.HasPrefix(inner, failureDomain):
+		cursor := programTerminalCursor{value: inner[len(failureDomain):]}
+		tag := cursor.byte()
+		payload := cursor.sized32()
+		if cursor.failed || !cursor.finished() || tag < 1 || tag > 4 || len(payload) == 0 || kind != 2 {
+			return programTerminalProjection{}, errors.New("invalid Programs failure terminal")
+		}
+		if !validProgramFailureDetail(tag, payload) {
+			return programTerminalProjection{}, errors.New("invalid Programs authenticated failure")
+		}
+		projection.Outcome = ProgramOutcome{Kind: "refused", Failure: &ProgramFailure{Kind: "guest_refused", Code: &code}}
+	case bytes.HasPrefix(inner, resourceDomain):
+		cursor := programTerminalCursor{value: inner[len(resourceDomain):]}
+		if !consumeStandaloneProgramResource(&cursor) || cursor.failed || !cursor.finished() || kind != 3 {
+			return programTerminalProjection{}, errors.New("invalid Programs resource terminal")
+		}
+		projection.Outcome = ProgramOutcome{Kind: "refused", Failure: &ProgramFailure{Kind: "resource"}}
+	case bytes.HasPrefix(inner, settlementDomain):
+		if kind != 2 || len(inner) != len(settlementDomain)+1 || !validProgramTransferError(inner[len(settlementDomain)]) {
+			return programTerminalProjection{}, errors.New("invalid Programs settlement terminal")
+		}
+		projection.Outcome = ProgramOutcome{Kind: "refused", Failure: &ProgramFailure{Kind: "guest_refused", Code: &code}}
+	case bytes.HasPrefix(inner, callbackDomain):
+		if kind != 2 || len(inner) != len(callbackDomain)+5 {
+			return programTerminalProjection{}, errors.New("invalid Programs callback terminal")
+		}
+		projection.Outcome = ProgramOutcome{Kind: "refused", Failure: &ProgramFailure{Kind: "guest_refused", Code: &code}}
+	default:
+		return programTerminalProjection{}, errors.New("unknown Programs terminal domain")
+	}
+	return projection, nil
+}
+
+func validCanonicalProgramFailure(encoded []byte) bool {
+	if len(encoded) < 40 {
+		return false
+	}
+	program := encoded[:32]
+	class := binary.BigEndian.Uint32(encoded[32:36])
+	reasonLength := binary.BigEndian.Uint32(encoded[36:40])
+	if allProgramZero(program) || reasonLength > 4096 || int(reasonLength) != len(encoded)-40 || !(class >= 1 && class <= 5 || class == 254 || class == 255) {
+		return false
+	}
+	return (class != 254 && class != 255) || reasonLength == 0
+}
+
+func validProgramFailureDetail(tag byte, payload []byte) bool {
+	if tag == 1 {
+		return validCanonicalProgramFailure(payload)
+	}
+	cursor := programTerminalCursor{value: payload}
+	switch tag {
+	case 2:
+		if !consumeProgramCompositionFailure(&cursor) {
+			return false
+		}
+	case 3:
+		if !consumeProgramEntrypointFailure(&cursor) {
+			return false
+		}
+	case 4:
+		if !consumeProgramABIFailure(&cursor) {
+			return false
+		}
+	default:
+		return false
+	}
+	return cursor.finished()
+}
+
+func consumeProgramCompositionFailure(cursor *programTerminalCursor) bool {
+	switch cursor.byte() {
+	case 1, 9, 10, 11, 20, 21, 22:
+	case 2:
+		expected := cursor.byte()
+		actual := cursor.byte()
+		if (expected != 1 && expected != 2) || (actual != 1 && actual != 2) {
+			return false
+		}
+	case 23:
+		_ = cursor.take(76)
+		_ = cursor.take(76)
+	case 3, 4:
+		_ = cursor.take(32)
+	case 5, 6, 7:
+		_ = cursor.u32()
+		_ = cursor.u32()
+	case 8:
+		_ = cursor.take(32)
+		_ = cursor.u32()
+		_ = cursor.u32()
+	case 12:
+		_ = cursor.i32()
+	case 13:
+		_ = cursor.u64()
+		_ = cursor.u64()
+	case 14:
+		_ = cursor.take(32)
+		_ = cursor.i32()
+	case 15:
+		return validCanonicalProgramFailure(cursor.rest())
+	case 16:
+		return consumeNestedProgramABI(cursor)
+	case 17:
+		return consumeProgramFault(cursor)
+	case 18:
+		return consumeProgramMeterFailure(cursor)
+	case 19:
+		return consumeProgramResponseFailure(cursor)
+	default:
+		return false
+	}
+	return !cursor.failed
+}
+
+func consumeProgramEntrypointFailure(cursor *programTerminalCursor) bool {
+	switch cursor.byte() {
+	case 1:
+		_ = cursor.u64()
+		_ = cursor.u64()
+	case 2, 3, 4:
+	case 5, 6:
+		_ = cursor.i32()
+	case 7:
+		return consumeProgramFault(cursor)
+	case 8:
+		return consumeProgramMeterFailure(cursor)
+	default:
+		return false
+	}
+	return !cursor.failed
+}
+
+func consumeProgramABIFailure(cursor *programTerminalCursor) bool {
+	tag := cursor.byte()
+	if tag >= 1 && tag <= 10 || tag >= 13 && tag <= 15 {
+		return !cursor.failed
+	}
+	if tag == 11 {
+		storage := cursor.byte()
+		return !cursor.failed && storage >= 1 && storage <= 11
+	}
+	return tag == 12 && consumeProgramMeterFailure(cursor)
+}
+
+func consumeNestedProgramABI(cursor *programTerminalCursor) bool {
+	return consumeProgramABIFailure(cursor)
+}
+
+func consumeProgramMeterFailure(cursor *programTerminalCursor) bool {
+	switch cursor.byte() {
+	case 1:
+		resource := cursor.byte()
+		limit := cursor.u64()
+		attempted := cursor.u64()
+		return !cursor.failed && resource >= 1 && resource <= 7 && attempted > limit
+	case 2:
+		resource := cursor.byte()
+		return !cursor.failed && resource >= 1 && resource <= 7
+	case 3:
+		return !cursor.failed
+	default:
+		return false
+	}
+}
+
+func consumeProgramFault(cursor *programTerminalCursor) bool {
+	tag := cursor.byte()
+	if tag == 1 || tag == 2 || tag == 16 {
+		name := cursor.sized32()
+		return !cursor.failed && utf8.Valid(name)
+	}
+	if tag >= 3 && tag <= 13 || tag == 15 {
+		return !cursor.failed
+	}
+	return tag == 14 && consumeProgramMeterFailure(cursor)
+}
+
+func consumeProgramResponseFailure(cursor *programTerminalCursor) bool {
+	switch cursor.byte() {
+	case 1, 2:
+		_ = cursor.u64()
+		_ = cursor.u64()
+	case 3, 4:
+	case 5:
+		_ = cursor.i32()
+		_ = cursor.i32()
+	case 6:
+		return consumeProgramMeterFailure(cursor)
+	default:
+		return false
+	}
+	return !cursor.failed
+}
+
+func consumeProgramMeterRefusal(cursor *programTerminalCursor, projection programTerminalProjection) bool {
+	tag := cursor.byte()
+	resource := cursor.byte()
+	if resource > 6 {
+		return false
+	}
+	if tag == 1 {
+		return !cursor.failed
+	}
+	if tag != 0 {
+		return false
+	}
+	limit := cursor.u64()
+	attempted := cursor.u64()
+	usage := []uint64{projection.CPUFuel, projection.MemoryBytes, projection.StorageReadBytes, projection.StorageWriteBytes, uint64(projection.OutputValues), projection.OutputBytes, 0}[resource]
+	return !cursor.failed && attempted > limit && usage <= limit
+}
+
+func consumeStandaloneProgramResource(cursor *programTerminalCursor) bool {
+	tag := cursor.byte()
+	resource := cursor.byte()
+	if resource < 1 || resource > 7 {
+		return false
+	}
+	if tag == 2 {
+		return !cursor.failed
+	}
+	if tag != 1 {
+		return false
+	}
+	limit := cursor.u64()
+	attempted := cursor.u64()
+	return !cursor.failed && attempted > limit
+}
+
+func validProgramTransferError(tag byte) bool { return tag >= 1 && tag <= 12 }
+
+func allProgramZero(value []byte) bool {
+	for _, item := range value {
+		if item != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+type programTerminalCursor struct {
+	value  []byte
+	offset int
+	failed bool
+}
+
+func (cursor *programTerminalCursor) take(length int) []byte {
+	if cursor.failed || length < 0 || cursor.offset > len(cursor.value)-length {
+		cursor.failed = true
+		return nil
+	}
+	value := cursor.value[cursor.offset : cursor.offset+length]
+	cursor.offset += length
+	return value
+}
+
+func (cursor *programTerminalCursor) byte() byte {
+	value := cursor.take(1)
+	if len(value) != 1 {
+		return 0
+	}
+	return value[0]
+}
+
+func (cursor *programTerminalCursor) u16() uint16 {
+	value := cursor.take(2)
+	if len(value) != 2 {
+		return 0
+	}
+	return binary.BigEndian.Uint16(value)
+}
+
+func (cursor *programTerminalCursor) u32() uint32 {
+	value := cursor.take(4)
+	if len(value) != 4 {
+		return 0
+	}
+	return binary.BigEndian.Uint32(value)
+}
+
+func (cursor *programTerminalCursor) i32() int32 { return int32(cursor.u32()) }
+
+func (cursor *programTerminalCursor) u64() uint64 {
+	value := cursor.take(8)
+	if len(value) != 8 {
+		return 0
+	}
+	return binary.BigEndian.Uint64(value)
+}
+
+func (cursor *programTerminalCursor) i64() int64 { return int64(cursor.u64()) }
+
+func (cursor *programTerminalCursor) u128() Uint128 {
+	return Uint128{high: cursor.u64(), low: cursor.u64()}
+}
+
+func (cursor *programTerminalCursor) sized32() []byte {
+	length := cursor.u32()
+	if uint64(length) > uint64(maximumProgramTerminalBytes) {
+		cursor.failed = true
+		return nil
+	}
+	return cursor.take(int(length))
+}
+
+func (cursor *programTerminalCursor) sized64() []byte {
+	length := cursor.u64()
+	if length > uint64(maximumProgramTerminalBytes) {
+		cursor.failed = true
+		return nil
+	}
+	return cursor.take(int(length))
+}
+
+func (cursor *programTerminalCursor) rest() []byte {
+	if cursor.failed {
+		return nil
+	}
+	value := cursor.value[cursor.offset:]
+	cursor.offset = len(cursor.value)
+	return value
+}
+
+func (cursor *programTerminalCursor) finished() bool {
+	return !cursor.failed && cursor.offset == len(cursor.value)
+}
+
+const maximumProgramTerminalBytes = MaximumProgramCalldataBytes + 8192
 
 func decodeProgramHex(value string) ([]byte, error) {
 	if len(value) > 2*MaximumProgramCalldataBytes || len(value)%2 != 0 || !canonicalLowerHex(value, len(value)/2) {
@@ -398,28 +1089,37 @@ func (programs *Programs) Interface(ctx context.Context, program [32]byte) (Prog
 }
 
 func (programs *Programs) Simulate(ctx context.Context, call ProgramCall) (ProgramSimulation, error) {
-	if err := validateProgramCall(call); err != nil {
+	binding, err := bindSignedProgramCall(call)
+	if err != nil {
 		return ProgramSimulation{}, err
 	}
 	raw, err := programs.raw(ctx, "program.simulate", false, programCallWire(call), CallOptions{})
 	if err != nil {
 		return ProgramSimulation{}, err
 	}
-	return decodeProgramSimulation(raw, call.ProgramID, programs.trustedSequencerPublicKey)
+	return decodeProgramSimulation(raw, call.ProgramID, binding.ActivityID, programs.trustedSequencerPublicKey)
 }
 
 func (programs *Programs) Submit(ctx context.Context, call ProgramCall, key IdempotencyKey) (ProgramSubmission, error) {
-	if err := validateProgramCall(call); err != nil {
+	binding, err := bindSignedProgramCall(call)
+	if err != nil {
 		return ProgramSubmission{}, err
 	}
-	if !canonicalProgramKey(key) {
+	if !canonicalProgramKey(key) || key.String() != hex.EncodeToString(binding.IdempotencyKey[:]) {
 		return ProgramSubmission{}, newSDKError(ErrorIdempotencyRequired, RetryNever)
 	}
 	raw, err := programs.raw(ctx, "program.call", true, programCallWire(call), CallOptions{IdempotencyKey: key})
 	if err != nil {
+		if sdkError, ok := err.(*SDKError); ok && sdkError.Code == ErrorUnknownOutcome {
+			return ProgramSubmission{State: ProgramSubmissionUnknown, ActivityID: binding.ActivityID, IdempotencyKey: key.String(), RetainedSignedActivity: append([]byte(nil), call.SignedActivity...)}, nil
+		}
 		return ProgramSubmission{}, err
 	}
-	return decodeProgramSubmission(raw, &call.ProgramID, nil, key.String(), call.SignedActivity, programs.trustedSequencerPublicKey)
+	submission, decodeError := decodeProgramSubmission(raw, &call.ProgramID, &binding.ActivityID, key.String(), call.SignedActivity, programs.trustedSequencerPublicKey)
+	if decodeError != nil {
+		return ProgramSubmission{State: ProgramSubmissionUnknown, ActivityID: binding.ActivityID, IdempotencyKey: key.String(), RetainedSignedActivity: append([]byte(nil), call.SignedActivity...)}, nil
+	}
+	return submission, nil
 }
 
 func (programs *Programs) Receipt(ctx context.Context, key IdempotencyKey, expectedActivity [32]byte) (ProgramSubmission, error) {
@@ -449,17 +1149,18 @@ func (programs *Programs) raw(ctx context.Context, operation string, requiresKey
 	return out, err
 }
 
-func decodeProgramSimulation(raw json.RawMessage, expectedProgram [32]byte, trustedSequencerPublicKey [32]byte) (ProgramSimulation, error) {
+func decodeProgramSimulation(raw json.RawMessage, expectedProgram [32]byte, expectedActivity [32]byte, trustedSequencerPublicKey [32]byte) (ProgramSimulation, error) {
 	var document struct {
 		Committed          bool                      `json:"committed"`
 		Execution          ProgramExecutionDocument  `json:"execution"`
 		SimulationEvidence ProgramSimulationEvidence `json:"simulation_evidence"`
 	}
-	if decodeStrict(raw, &document) != nil || document.Committed || document.Execution.State != "simulated" {
+	if decodeStrict(raw, &document) != nil || document.Committed || document.Execution.State != "simulated" || document.Execution.IdempotencyKey != "" {
 		return ProgramSimulation{}, newSDKError(ErrorDecodeFailure, RetryNever)
 	}
 	programID, err := programHex32(document.Execution.ProgramID)
-	if err != nil || programID != expectedProgram {
+	activityID, activityError := programHex32(document.Execution.ActivityID)
+	if err != nil || activityError != nil || programID != expectedProgram || activityID != expectedActivity {
 		return ProgramSimulation{}, newSDKError(ErrorVerificationFailure, RetryNever)
 	}
 	verified, verifyError := verifyExecutionAuthority(document.Execution, trustedSequencerPublicKey)
@@ -478,7 +1179,7 @@ func decodeProgramSubmission(raw json.RawMessage, expectedProgram *[32]byte, exp
 	if json.Unmarshal(fields["state"], &state) != nil {
 		return ProgramSubmission{}, newSDKError(ErrorDecodeFailure, RetryNever)
 	}
-	if state == ProgramSubmissionUnknown {
+	if state == ProgramSubmissionUnknown || state == "pending" {
 		if !(exactFields(fields, "state", "activity_id", "idempotency_key") || exactFields(fields, "state", "activity_id", "idempotency_key", "retained_signed_activity")) {
 			return ProgramSubmission{}, newSDKError(ErrorDecodeFailure, RetryNever)
 		}
@@ -502,7 +1203,7 @@ func decodeProgramSubmission(raw json.RawMessage, expectedProgram *[32]byte, exp
 		if activityError != nil || retainedError != nil || expectedActivity != nil && activity != *expectedActivity || expectedSigned != nil && !bytes.Equal(retained, expectedSigned) {
 			return ProgramSubmission{}, newSDKError(ErrorVerificationFailure, RetryNever)
 		}
-		return ProgramSubmission{State: state, ActivityID: activity, IdempotencyKey: key, RetainedSignedActivity: retained}, nil
+		return ProgramSubmission{State: ProgramSubmissionUnknown, ActivityID: activity, IdempotencyKey: key, RetainedSignedActivity: retained}, nil
 	}
 	if state != ProgramSubmissionExecuted && state != ProgramSubmissionRefused {
 		return ProgramSubmission{}, newSDKError(ErrorDecodeFailure, RetryNever)
@@ -544,7 +1245,7 @@ func verifyExecutionAuthority(execution ProgramExecutionDocument, trustedSequenc
 	receiptOutcome := receipt.ProgramOutcome
 	sequence, sequenceError := strconv.ParseUint(execution.GlobalSequence, 10, 64)
 	feeUnits, feeError := ParseUint128(execution.Usage.FeeUnits)
-	if receiptOutcome == nil || sequenceError != nil || receipt.GlobalSequence != sequence || feeError != nil || receipt.ResultCode != execution.ResultCode || receiptOutcome.CPUFuel != mustProgramUint64(execution.Usage.CPUFuel) || receiptOutcome.MemoryBytes != mustProgramUint64(execution.Usage.MemoryBytes) || receiptOutcome.StorageReadBytes != mustProgramUint64(execution.Usage.StorageReadBytes) || receiptOutcome.StorageWriteBytes != mustProgramUint64(execution.Usage.StorageWriteBytes) || receiptOutcome.OutputValues != execution.Usage.OutputValues || receiptOutcome.OutputBytes != mustProgramUint64(execution.Usage.OutputBytes) || !receiptOutcome.FeeUnits.Equal(feeUnits) || execution.Outcome.Kind == "completed" && (receiptOutcome.TerminalKind != 1 || execution.Outcome.Code == nil || *execution.Outcome.Code != receiptOutcome.ResultCode) || execution.Outcome.Kind == "legacy_completed" && (receiptOutcome.TerminalKind != 2 || execution.Outcome.Code == nil || *execution.Outcome.Code != receiptOutcome.ResultCode) || execution.Outcome.Kind == "refused" && receiptOutcome.TerminalKind != 3 {
+	if receiptOutcome == nil || sequenceError != nil || receipt.GlobalSequence != sequence || feeError != nil || receipt.ResultCode != execution.ResultCode || receiptOutcome.CPUFuel != mustProgramUint64(execution.Usage.CPUFuel) || receiptOutcome.MemoryBytes != mustProgramUint64(execution.Usage.MemoryBytes) || receiptOutcome.StorageReadBytes != mustProgramUint64(execution.Usage.StorageReadBytes) || receiptOutcome.StorageWriteBytes != mustProgramUint64(execution.Usage.StorageWriteBytes) || receiptOutcome.OutputValues != execution.Usage.OutputValues || receiptOutcome.OutputBytes != mustProgramUint64(execution.Usage.OutputBytes) || !receiptOutcome.FeeUnits.Equal(feeUnits) || execution.Outcome.Kind == "completed" && (receiptOutcome.TerminalKind != 1 || execution.Outcome.Code == nil || *execution.Outcome.Code != receiptOutcome.ResultCode) || execution.Outcome.Kind == "legacy_completed" && (receiptOutcome.TerminalKind != 1 || execution.Outcome.Code == nil || *execution.Outcome.Code != receiptOutcome.ResultCode) || execution.Outcome.Kind == "refused" && receiptOutcome.TerminalKind != 2 && receiptOutcome.TerminalKind != 3 {
 		return VerifiedProgramReceipt{}, errors.New("Programs outcome is not receipt-bound")
 	}
 	return verified, nil
@@ -742,4 +1443,4 @@ func programHex32Raw(value json.RawMessage) ([32]byte, error) {
 	return programHex32(text)
 }
 
-func PlatformSDKPrograms() string { return "receipt-verified-program-operations-v1" }
+func PlatformSDKPrograms() string { return "server-attested-registry-and-locally-verified-program-execution-v1" }

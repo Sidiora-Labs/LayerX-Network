@@ -366,5 +366,5 @@ pub fn verify_program_evidence(
 
 #[must_use]
 pub const fn platform_sdk_programs() -> &'static str {
-    "receipt-and-terminal-verified-program-operations-v1"
+    "server-attested-registry-and-locally-verified-program-execution-v1"
 }

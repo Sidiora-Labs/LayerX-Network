@@ -206,8 +206,8 @@ func (transport *HumanHTTPTransport) Call(ctx context.Context, call TransportCal
 		return nil, newSDKError(ErrorDecodeFailure, RetryNever)
 	}
 	if isProgram {
-		value, decodeError := decodeProgramAgentEnvelope(response.StatusCode, encoded)
-		if decodeError != nil && call.Operation == "program.call" && decodeError.Code == ErrorDecodeFailure {
+		value, decodeError := decodeProgramAgentEnvelope(response.StatusCode, encoded, call.Operation)
+		if decodeError != nil && call.Operation == "program.call" && (decodeError.Code == ErrorDecodeFailure || decodeError.Code == ErrorVerificationFailure) {
 			return nil, newSDKError(ErrorUnknownOutcome, RetryUnknownOutcome)
 		}
 		return value, decodeError
@@ -228,7 +228,7 @@ func (transport *HumanHTTPTransport) Call(ctx context.Context, call TransportCal
 	return nil, envelope.Error.sdkError(envelope.Trace)
 }
 
-func decodeProgramAgentEnvelope(status int, encoded []byte) (json.RawMessage, *SDKError) {
+func decodeProgramAgentEnvelope(status int, encoded []byte, operation string) (json.RawMessage, *SDKError) {
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(encoded, &fields); err != nil {
 		return nil, newSDKError(ErrorDecodeFailure, RetryNever)
@@ -246,20 +246,48 @@ func decodeProgramAgentEnvelope(status int, encoded []byte) (json.RawMessage, *S
 	if err := json.Unmarshal(fields["request_id"], &requestID); err != nil || requestID == "" || len(requestID) > 256 {
 		return nil, newSDKError(ErrorDecodeFailure, RetryNever)
 	}
-	var verification map[string]json.RawMessage
-	if err := json.Unmarshal(fields["verification_status"], &verification); err != nil || len(verification) != 2 {
-		return nil, newSDKError(ErrorDecodeFailure, RetryNever)
-	}
-	var state string
-	var level string
-	if json.Unmarshal(verification["state"], &state) != nil || json.Unmarshal(verification["level"], &level) != nil || state != "Achieved" || level != "SequencerSigned" {
-		return nil, newSDKError(ErrorDecodeFailure, RetryNever)
-	}
 	value := fields["value"]
 	if len(value) == 0 || bytes.Equal(value, []byte("null")) {
 		return nil, newSDKError(ErrorDecodeFailure, RetryNever)
 	}
+	if !acceptedProgramVerification(operation, value, fields["verification_status"]) {
+		return nil, newSDKError(ErrorVerificationFailure, RetryNever)
+	}
 	return append(json.RawMessage(nil), value...), nil
+}
+
+func acceptedProgramVerification(operation string, value json.RawMessage, encoded json.RawMessage) bool {
+	var verification map[string]json.RawMessage
+	if decodeStrict(encoded, &verification) != nil || verification == nil {
+		return false
+	}
+	if operation == "program.discover" || operation == "program.interface" {
+		return exactProgramUnverified(verification, "server_side_receipt_verification_only")
+	}
+	var result map[string]json.RawMessage
+	_ = decodeStrict(value, &result)
+	var resultState string
+	_ = json.Unmarshal(result["state"], &resultState)
+	if (operation == "program.call" || operation == "program.receipt" || operation == "program.activity") && (resultState == "unknown" || resultState == "pending") {
+		return exactProgramUnverified(verification, "receipt_pending")
+	}
+	if !exactFields(verification, "state", "level") {
+		return false
+	}
+	var state string
+	var level string
+	return json.Unmarshal(verification["state"], &state) == nil && json.Unmarshal(verification["level"], &level) == nil && state == "Achieved" && level == "SequencerSigned"
+}
+
+func exactProgramUnverified(value map[string]json.RawMessage, reason string) bool {
+	if !exactFields(value, "state", "requested", "achieved", "reason") {
+		return false
+	}
+	var state string
+	var requested string
+	var achieved string
+	var actualReason string
+	return json.Unmarshal(value["state"], &state) == nil && json.Unmarshal(value["requested"], &requested) == nil && json.Unmarshal(value["achieved"], &achieved) == nil && json.Unmarshal(value["reason"], &actualReason) == nil && state == "Unverified" && requested == "SequencerSigned" && achieved == "Unverified" && actualReason == reason
 }
 
 func decodeProgramAgentError(fields map[string]json.RawMessage) *SDKError {

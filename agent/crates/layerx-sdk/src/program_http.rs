@@ -124,6 +124,7 @@ impl HttpProgramTransport {
 
     fn dispatch(
         &self,
+        operation: &'static str,
         method: Method,
         route: &str,
         body: &Value,
@@ -178,7 +179,7 @@ impl HttpProgramTransport {
             }
         }
         .map_err(|_| ProgramOperationError::Transport)?;
-        decode_agent_response(response)
+        decode_agent_response(response, operation)
     }
 }
 
@@ -189,6 +190,7 @@ impl ProgramTransport for HttpProgramTransport {
     ) -> Result<VerifiedProgramDiscovery, ProgramOperationError> {
         let program_id = hex(&program);
         let value = self.dispatch(
+            "program.discover",
             Method::Get,
             &format!("/v1/programs/registry/{program_id}"),
             &json!({
@@ -206,6 +208,7 @@ impl ProgramTransport for HttpProgramTransport {
     ) -> Result<VerifiedProgramInterface, ProgramOperationError> {
         let program_id = hex(&program);
         let value = self.dispatch(
+            "program.interface",
             Method::Get,
             &format!("/v1/programs/registry/{program_id}/interface"),
             &json!({
@@ -222,6 +225,7 @@ impl ProgramTransport for HttpProgramTransport {
         request: &ProgramCallRequest,
     ) -> Result<VerifiedProgramSimulation, ProgramOperationError> {
         let value = self.dispatch(
+            "program.simulate",
             Method::Post,
             "/v1/programs/simulate",
             &wire_call(request),
@@ -238,8 +242,17 @@ impl ProgramTransport for HttpProgramTransport {
         if idempotency_key != request.bound_idempotency_key() {
             return Err(ProgramOperationError::IdentityMismatch);
         }
+        if let Some(credential) = &self.credential {
+            let _ = credential.authorization()?;
+        }
+        let encoded = serde_json::to_vec(&wire_call(request))
+            .map_err(|_| ProgramOperationError::Decode)?;
+        if encoded.is_empty() || encoded.len() > MAX_HTTP_REQUEST_BYTES {
+            return Err(ProgramOperationError::Bounds);
+        }
         let attempt = self
             .dispatch(
+                "program.call",
                 Method::Post,
                 "/v1/programs/call",
                 &wire_call(request),
@@ -259,10 +272,6 @@ impl ProgramTransport for HttpProgramTransport {
         });
         match attempt {
             Ok(submission) => Ok(submission),
-            Err(ProgramOperationError::Authentication) => {
-                Err(ProgramOperationError::Authentication)
-            }
-            Err(ProgramOperationError::Bounds) => Err(ProgramOperationError::Bounds),
             Err(ProgramOperationError::Service(error))
                 if error.retriability == Retriability::Terminal =>
             {
@@ -284,6 +293,7 @@ impl ProgramTransport for HttpProgramTransport {
         let idempotency = hex(&idempotency_key);
         let activity = hex(&expected_activity);
         let value = self.dispatch(
+            "program.receipt",
             Method::Get,
             &format!("/v1/programs/receipts/by-idempotency/{idempotency}"),
             &json!({
@@ -311,6 +321,7 @@ impl ProgramTransport for HttpProgramTransport {
     ) -> Result<ProgramSubmission, ProgramOperationError> {
         let activity = hex(&activity_id);
         let value = self.dispatch(
+            "program.activity",
             Method::Get,
             &format!("/v1/programs/activities/{activity}"),
             &json!({
@@ -396,6 +407,7 @@ fn loopback(endpoint: &Url) -> bool {
 
 fn decode_agent_response(
     mut response: ureq::http::Response<ureq::Body>,
+    operation: &str,
 ) -> Result<Value, ProgramOperationError> {
     let status = response.status().as_u16();
     let content_type = response
@@ -421,20 +433,29 @@ fn decode_agent_response(
         serde_json::from_slice(&encoded).map_err(|_| ProgramOperationError::Decode)?;
     let envelope = object(&document)?;
     if envelope.contains_key("class") {
+        if !exact_fields(
+            envelope,
+            &["class", "protocol_result_code", "retriability", "reason", "request_id"],
+        ) {
+            return Err(ProgramOperationError::Decode);
+        }
         return Err(ProgramOperationError::Service(decode_service_error(
             status, envelope,
         )?));
     }
+    if !exact_fields(envelope, &["request_id", "value", "verification_status"]) {
+        return Err(ProgramOperationError::Decode);
+    }
+    let value = envelope.get("value").ok_or(ProgramOperationError::Decode)?;
     if !(200..300).contains(&status)
         || !valid_request_id(required_string(envelope, "request_id")?)
-        || !achieved_sequencer(envelope.get("verification_status"))
     {
         return Err(ProgramOperationError::Decode);
     }
-    envelope
-        .get("value")
-        .cloned()
-        .ok_or(ProgramOperationError::Decode)
+    if !accepted_program_verification(operation, value, envelope.get("verification_status")) {
+        return Err(ProgramOperationError::Verification);
+    }
+    Ok(value.clone())
 }
 
 fn decode_service_error(
@@ -497,13 +518,37 @@ fn decode_service_error(
     })
 }
 
-fn achieved_sequencer(value: Option<&Value>) -> bool {
-    value
-        .and_then(Value::as_object)
-        .is_some_and(|status| {
-            status.get("state").and_then(Value::as_str) == Some("Achieved")
-                && status.get("level").and_then(Value::as_str) == Some("SequencerSigned")
-        })
+fn accepted_program_verification(operation: &str, result: &Value, value: Option<&Value>) -> bool {
+    let Some(status) = value.and_then(Value::as_object) else {
+        return false;
+    };
+    if matches!(operation, "program.discover" | "program.interface") {
+        return exact_unverified(status, "server_side_receipt_verification_only");
+    }
+    let result_state = result
+        .as_object()
+        .and_then(|object| object.get("state"))
+        .and_then(Value::as_str);
+    if matches!(operation, "program.call" | "program.receipt" | "program.activity")
+        && matches!(result_state, Some("unknown" | "pending"))
+    {
+        return exact_unverified(status, "receipt_pending");
+    }
+    exact_fields(status, &["state", "level"])
+        && status.get("state").and_then(Value::as_str) == Some("Achieved")
+        && status.get("level").and_then(Value::as_str) == Some("SequencerSigned")
+}
+
+fn exact_unverified(value: &Map<String, Value>, reason: &str) -> bool {
+    exact_fields(value, &["state", "requested", "achieved", "reason"])
+        && value.get("state").and_then(Value::as_str) == Some("Unverified")
+        && value.get("requested").and_then(Value::as_str) == Some("SequencerSigned")
+        && value.get("achieved").and_then(Value::as_str) == Some("Unverified")
+        && value.get("reason").and_then(Value::as_str) == Some(reason)
+}
+
+fn exact_fields(value: &Map<String, Value>, required: &[&str]) -> bool {
+    value.len() == required.len() && required.iter().all(|field| value.contains_key(*field))
 }
 
 fn valid_request_id(value: &str) -> bool {
@@ -697,7 +742,10 @@ fn decode_submission(
     expected: SubmissionExpectation<'_>,
 ) -> Result<ProgramSubmission, ProgramOperationError> {
     let object = object(value)?;
-    if object.get("state").and_then(Value::as_str) == Some("unknown") {
+    if matches!(
+        object.get("state").and_then(Value::as_str),
+        Some("unknown" | "pending")
+    ) {
         let activity_id = fixed(object, "activity_id")?;
         let idempotency_key = fixed(object, "idempotency_key")?;
         let retained = object
@@ -1075,4 +1123,83 @@ fn exact_i32(
         .and_then(Value::as_i64)
         .and_then(|value| i32::try_from(value).ok())
         .ok_or(ProgramOperationError::Decode)
+}
+
+#[cfg(test)]
+mod source_contract {
+    use serde_json::json;
+
+    use super::{accepted_program_verification, decode_service_error, exact_fields, object};
+
+    #[test]
+    fn programs_verification_status_matrix_is_closed() {
+        let server_attested = json!({
+            "state":"Unverified",
+            "requested":"SequencerSigned",
+            "achieved":"Unverified",
+            "reason":"server_side_receipt_verification_only",
+        });
+        let pending = json!({
+            "state":"Unverified",
+            "requested":"SequencerSigned",
+            "achieved":"Unverified",
+            "reason":"receipt_pending",
+        });
+        let achieved = json!({"state":"Achieved","level":"SequencerSigned"});
+        assert!(accepted_program_verification(
+            "program.discover",
+            &json!({"program_id":"00"}),
+            Some(&server_attested),
+        ));
+        assert!(accepted_program_verification(
+            "program.call",
+            &json!({"state":"unknown"}),
+            Some(&pending),
+        ));
+        assert!(accepted_program_verification(
+            "program.simulate",
+            &json!({"committed":false}),
+            Some(&achieved),
+        ));
+        assert!(!accepted_program_verification(
+            "program.discover",
+            &json!({"program_id":"00"}),
+            Some(&achieved),
+        ));
+        assert!(!accepted_program_verification(
+            "program.call",
+            &json!({"state":"unknown"}),
+            Some(&achieved),
+        ));
+        let mut widened = pending;
+        widened["extra"] = json!(true);
+        assert!(!accepted_program_verification(
+            "program.receipt",
+            &json!({"state":"pending"}),
+            Some(&widened),
+        ));
+    }
+
+    #[test]
+    fn programs_error_envelope_fields_are_exact() {
+        let exact = json!({
+            "class":"CoreRejection",
+            "protocol_result_code":-7,
+            "retriability":"Terminal",
+            "request_id":"request-1",
+            "reason":"core_refused",
+        });
+        let exact = object(&exact).unwrap_or_else(|_| panic!("object"));
+        assert!(exact_fields(
+            exact,
+            &["class", "protocol_result_code", "retriability", "reason", "request_id"],
+        ));
+        assert!(decode_service_error(400, exact).is_ok());
+        let mut widened = exact.clone();
+        widened.insert("extra".to_owned(), json!(true));
+        assert!(!exact_fields(
+            &widened,
+            &["class", "protocol_result_code", "retriability", "reason", "request_id"],
+        ));
+    }
 }

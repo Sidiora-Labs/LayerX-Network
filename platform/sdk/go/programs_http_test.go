@@ -2,6 +2,7 @@ package layerx
 
 import (
 	"bytes"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"reflect"
@@ -58,21 +59,33 @@ func TestLayerXKeyAuthorizerIsExactAndRedactsNoAlternateGrammar(t *testing.T) {
 
 func TestProgramAgentEnvelopeRequiresExactAchievedSequencerProof(t *testing.T) {
 	encoded := []byte(`{"request_id":"request-1","value":{"state":"unknown"},"verification_status":{"state":"Achieved","level":"SequencerSigned"}}`)
-	value, err := decodeProgramAgentEnvelope(http.StatusOK, encoded)
+	if _, err := decodeProgramAgentEnvelope(http.StatusOK, encoded, "program.call"); err == nil || err.Code != ErrorVerificationFailure {
+		t.Fatalf("pending Programs result accepted achieved verification: %v", err)
+	}
+	pending := []byte(`{"request_id":"request-1","value":{"state":"unknown"},"verification_status":{"state":"Unverified","requested":"SequencerSigned","achieved":"Unverified","reason":"receipt_pending"}}`)
+	value, err := decodeProgramAgentEnvelope(http.StatusAccepted, pending, "program.call")
 	if err != nil || string(value) != `{"state":"unknown"}` {
-		t.Fatalf("decode exact Programs success: value=%s error=%v", value, err)
+		t.Fatalf("decode exact pending Programs success: value=%s error=%v", value, err)
+	}
+	discovery := []byte(`{"request_id":"request-2","value":{"program_id":"` + strings.Repeat("a", 64) + `"},"verification_status":{"state":"Unverified","requested":"SequencerSigned","achieved":"Unverified","reason":"server_side_receipt_verification_only"}}`)
+	if _, err := decodeProgramAgentEnvelope(http.StatusOK, discovery, "program.discover"); err != nil {
+		t.Fatalf("server-attested discovery envelope was refused: %v", err)
+	}
+	terminal := []byte(`{"request_id":"request-3","value":{"state":"executed"},"verification_status":{"state":"Achieved","level":"SequencerSigned"}}`)
+	if _, err := decodeProgramAgentEnvelope(http.StatusOK, terminal, "program.call"); err != nil {
+		t.Fatalf("terminal Programs envelope was refused: %v", err)
 	}
 	for _, invalid := range [][]byte{
 		[]byte(`{"request_id":"request-1","value":{},"verification_status":{"state":"Unverified","level":"SequencerSigned"}}`),
 		[]byte(`{"request_id":"request-1","value":{},"verification_status":{"state":"Achieved","level":"StateProven"}}`),
 		[]byte(`{"request_id":"request-1","value":{},"verification_status":{"state":"Achieved","level":"SequencerSigned"},"extra":true}`),
 	} {
-		if _, failure := decodeProgramAgentEnvelope(http.StatusOK, invalid); failure == nil || failure.Code != ErrorDecodeFailure {
+		if _, failure := decodeProgramAgentEnvelope(http.StatusOK, invalid, "program.simulate"); failure == nil || (failure.Code != ErrorDecodeFailure && failure.Code != ErrorVerificationFailure) {
 			t.Fatalf("accepted invalid Programs success envelope: %s", invalid)
 		}
 	}
 	errorEnvelope := []byte(`{"class":"CoreRejection","protocol_result_code":-7,"retriability":"Terminal","request_id":"request-2","reason":"core_refused"}`)
-	if _, failure := decodeProgramAgentEnvelope(http.StatusBadRequest, errorEnvelope); failure == nil || failure.Code != ErrorCoreRejection || failure.Retry != RetryNever || failure.RequestID != "request-2" || failure.ProtocolResultCode == nil || *failure.ProtocolResultCode != -7 {
+	if _, failure := decodeProgramAgentEnvelope(http.StatusBadRequest, errorEnvelope, "program.call"); failure == nil || failure.Code != ErrorCoreRejection || failure.Retry != RetryNever || failure.RequestID != "request-2" || failure.ProtocolResultCode == nil || *failure.ProtocolResultCode != -7 {
 		t.Fatalf("decode exact Programs error envelope: %#v", failure)
 	}
 }
@@ -140,4 +153,121 @@ func TestProgramSourceTagsAreClosed(t *testing.T) {
 			t.Fatalf("accepted invalid Programs source: %s", invalid)
 		}
 	}
+}
+
+func TestPendingProgramSubmissionNormalizesToUnknown(t *testing.T) {
+	activity := [32]byte{1}
+	key := strings.Repeat("02", 32)
+	raw := json.RawMessage(`{"state":"pending","activity_id":"` + hex.EncodeToString(activity[:]) + `","idempotency_key":"` + key + `"}`)
+	submission, err := decodeProgramSubmission(raw, nil, &activity, key, nil, [32]byte{3})
+	if err != nil || submission.State != ProgramSubmissionUnknown || submission.ActivityID != activity || submission.IdempotencyKey != key {
+		t.Fatalf("pending Programs submission was not retained as unknown: %#v %v", submission, err)
+	}
+}
+
+func TestSignedProgramCallBindingDerivesCanonicalIdentityAndKey(t *testing.T) {
+	call, key, activity := canonicalProgramCallFixture()
+	binding, err := bindSignedProgramCall(call)
+	if err != nil {
+		t.Fatalf("bind canonical signed Programs call: %v", err)
+	}
+	if binding.IdempotencyKey != key || binding.ActivityID != domainDigest([]byte("LXP/v1/activity-id\x00"), activity) {
+		t.Fatalf("signed Programs identity binding diverged")
+	}
+	mutated := call
+	mutated.Calldata = []byte{0xaa, 0xbc}
+	if _, err := bindSignedProgramCall(mutated); err == nil {
+		t.Fatalf("signed Programs call accepted a different typed payload")
+	}
+	corrupted := call
+	corrupted.SignedActivity = append([]byte(nil), call.SignedActivity...)
+	corrupted.SignedActivity[len(corrupted.SignedActivity)-1] ^= 1
+	corruptedBinding, err := bindSignedProgramCall(corrupted)
+	if err != nil || corruptedBinding.ActivityID == binding.ActivityID {
+		t.Fatalf("canonical signed bytes did not exclusively determine activity identity")
+	}
+}
+
+func TestCanonicalProgramTerminalBindsResponseUsageAndGraph(t *testing.T) {
+	program := [32]byte{1}
+	graph := []byte{0x10, 0x20}
+	terminal := []byte("LXP/program-execution/v4\x00")
+	terminal = appendUint16(terminal, 1)
+	terminal = appendUint32(terminal, 1)
+	terminal = appendUint32(terminal, 1)
+	terminal = appendUint64(terminal, 0)
+	for _, value := range []uint64{1, 2, 3, 4} {
+		terminal = appendUint64(terminal, value)
+	}
+	terminal = appendUint32(terminal, 5)
+	terminal = appendUint64(terminal, 6)
+	terminal = append(terminal, make([]byte, 15)...)
+	terminal = append(terminal, 7)
+	terminal = append(terminal, 0)
+	terminal = append(terminal, program[:]...)
+	terminal = appendUint16(terminal, 2)
+	terminal = append(terminal, 0)
+	terminal = appendUint32(terminal, 0)
+	terminal = appendUint64(terminal, 2)
+	terminal = append(terminal, 0xaa, 0xbb)
+	terminal = appendUint64(terminal, uint64(len(graph)))
+	terminal = append(terminal, graph...)
+	projection, err := decodeProgramTerminal(1, 2, terminal, program, 0)
+	if err != nil || !projection.Candidate || !projection.Successful || projection.Outcome.Kind != "completed" || !bytes.Equal(projection.Outcome.Response, []byte{0xaa, 0xbb}) || projection.OutputValues != 5 || projection.OutputBytes != 6 || projection.FeeUnits != NewUint128(0, 7) || !bytes.Equal(projection.EmbeddedGraph, graph) {
+		t.Fatalf("canonical Programs terminal projection diverged: %#v %v", projection, err)
+	}
+	if _, err := decodeProgramTerminal(2, 2, terminal, program, -1); err == nil {
+		t.Fatalf("Programs success terminal accepted failure receipt kind")
+	}
+}
+
+func canonicalProgramCallFixture() (ProgramCall, [32]byte, []byte) {
+	program := [32]byte{1}
+	key := [32]byte{2}
+	calldata := []byte{0xaa, 0xbb}
+	payload := []byte("LayerX/programs/call/v1\x00")
+	payload = append(payload, program[:]...)
+	payload = appendUint64(payload, 10)
+	payload = append(payload, make([]byte, 15)...)
+	payload = append(payload, 20)
+	payload = appendUint16(payload, 1)
+	payload = append(payload, 1)
+	payload = appendUint32(payload, uint32(len(calldata)))
+	payload = append(payload, calldata...)
+	payloadHash := domainDigest([]byte("LXP/v1/payload-hash\x00"), payload)
+	activity := appendUint16(nil, 1)
+	activity = appendUint16(activity, 0x1001)
+	activity = append(activity, 12, 1)
+	activity = appendUint16(activity, 1)
+	activity = append(activity, 2)
+	activity = appendUint32(activity, 1)
+	activity = append(activity, 3)
+	activity = appendUint32(activity, 0x0009_0003)
+	activity = append(activity, 4)
+	activity = appendUint32(activity, 3)
+	activity = append(activity, 'd', 'i', 'd')
+	activity = append(activity, 5)
+	activity = appendUint32(activity, 1)
+	activity = append(activity, 1)
+	activity = append(activity, 6)
+	activity = appendUint64(activity, 1)
+	activity = append(activity, 7)
+	activity = appendUint64(activity, 1)
+	activity = appendUint64(activity, 2)
+	activity = append(activity, 8)
+	activity = appendUint32(activity, 32)
+	activity = append(activity, key[:]...)
+	activity = append(activity, 9)
+	activity = append(activity, make([]byte, 15)...)
+	activity = append(activity, 30)
+	activity = append(activity, 10)
+	activity = appendUint32(activity, 32)
+	activity = append(activity, payloadHash[:]...)
+	activity = append(activity, 11)
+	activity = appendUint32(activity, uint32(len(payload)))
+	activity = append(activity, payload...)
+	activity = append(activity, 12)
+	activity = appendUint32(activity, 64)
+	activity = append(activity, make([]byte, 64)...)
+	return ProgramCall{ProgramID: program, Calldata: calldata, Budget: ProgramBudget{Fuel: 10, FeeLimit: NewUint128(0, 20)}, Capabilities: []ProgramCapability{ProgramStorageRead}, SignedActivity: activity}, key, activity
 }
