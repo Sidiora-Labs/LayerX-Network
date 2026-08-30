@@ -545,6 +545,63 @@ pub(crate) fn record_host_settlement_reserved(
     Ok(receipt)
 }
 
+pub(crate) fn record_expiry_occupancy_settlement(
+    state: &mut DurableUsageState, activity_id: [u8; 32], transfer_root: [u8; 32],
+    lease_state: &mut Vec<u8>, receipt_bytes: &mut Vec<u8>,
+) -> Result<UsageReceipt, UsageRefusal> {
+    state.ledger.verify(&state.lease, &state.escrow)?;
+    if activity_id == [0; 32] || transfer_root == [0; 32]
+        || state.ledger.receipt_count >= MAX_USAGE_RECEIPTS
+        || !matches!(state.lease.state(), crate::LeaseState::Active | crate::LeaseState::Settling) {
+        return Err(UsageRefusal::InvalidActivity);
+    }
+    let observed_batch = state.lease.expiry();
+    let prior_batch = state.ledger.latest().map_or(
+        state.lease.opened_at(), UsageReceipt::observed_batch);
+    let elapsed = observed_batch.checked_sub(prior_batch).ok_or(UsageRefusal::InvalidActivity)?;
+    let occupancy_byte_batches = occupancy_byte_batches(state.lease.usage().namespace_bytes, elapsed)?;
+    let prices = UsagePrices::from_schedule(state.lease.fee_schedule());
+    let occupancy_fee_units = occupancy_byte_batches
+        .checked_mul(u128::from(prices.occupancy_byte_batch))
+        .ok_or(UsageRefusal::ArithmeticOverflow)?;
+    if occupancy_fee_units == 0 { return Err(UsageRefusal::ZeroCharge); }
+    let expected_lease_digest = state.lease.state_digest().map_err(UsageRefusal::Lease)?;
+    let lease_terms_digest = state.lease.request_binding_digest().map_err(UsageRefusal::Lease)?;
+    let observation = UsageObservation::host_sealed(ActivityOutcome::Success,
+        state.lease.host_program(), ActivityBudgetBinding::new(activity_id)
+            .map_err(|_| UsageRefusal::InvalidActivity)?, MeteredUsage {
+            cpu_fuel: 0, memory_bytes: 0, storage_read_bytes: 0, storage_write_bytes: 0,
+            output_values: 0, output_bytes: 0, occupancy_byte_batches,
+            occupancy_fee_units, fee_units: 0 });
+    let next_spent = state.ledger.spent.checked_add(occupancy_fee_units)
+        .ok_or(UsageRefusal::ArithmeticOverflow)?;
+    let cumulative = state.lease.usage();
+    state.lease.record_expiry_usage(cumulative, next_spent, observed_batch)
+        .map_err(UsageRefusal::Lease)?;
+    state.escrow = state.escrow.projected_expiry_spend(&state.lease, occupancy_fee_units)
+        .map_err(UsageRefusal::Escrow)?;
+    state.lease.write_canonical_state(lease_state).map_err(UsageRefusal::Lease)?;
+    let resulting_lease_digest = hash_bytes(HashAlgorithm::Sha256, lease_state)
+        .map_err(|_| UsageRefusal::HashRefusal)?;
+    let sequence = state.ledger.receipt_count.checked_add(1)
+        .ok_or(UsageRefusal::ArithmeticOverflow)?;
+    let mut receipt = UsageReceipt { lease: state.lease.id(), sequence, observed_batch,
+        activity_id, lease_terms_digest, expected_lease_digest, resulting_lease_digest,
+        fee_destination: state.lease.fee_destination(),
+        previous: state.ledger.latest().map_or(GENESIS_RECEIPT, UsageReceipt::digest),
+        previous_accumulator_root: state.ledger.accumulator_root, observation, cumulative,
+        prices, charged: occupancy_fee_units, cumulative_spent: next_spent, transfer_root,
+        digest: [0; 32] };
+    receipt.write_canonical(receipt_bytes);
+    receipt.digest = receipt_digest(receipt_bytes)?;
+    receipt.verify()?;
+    let next_root = accumulator_root_for(state.ledger.accumulator_root, sequence, receipt.digest)?;
+    state.ledger = UsageLedger { receipt_count: sequence, spent: next_spent,
+        accumulator_root: next_root, latest: Some(receipt.clone()) };
+    state.ledger.verify(&state.lease, &state.escrow)?;
+    Ok(receipt)
+}
+
 fn occupancy_byte_batches(prior_bytes: u64, elapsed_batches: u64) -> Result<u128, UsageRefusal> {
     u128::from(prior_bytes).checked_mul(u128::from(elapsed_batches))
         .ok_or(UsageRefusal::ArithmeticOverflow)
@@ -654,6 +711,24 @@ impl<'a> Cursor<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{LeaseActivity, LeaseId, LeaseLimits};
+    use layerx_programs_runtime::{PrincipalId, ProgramId};
+
+    fn active_usage_state(escrow_amount: u128, namespace_bytes: u64) -> DurableUsageState {
+        let schedule = FeeSchedule::new_complete(1, 1, 1, 1, 1, 1, 1, 1);
+        let mut lease = Lease::request_with_schedule(LeaseId::new([1; 32]).expect("lease"),
+            PrincipalId::new([2; 32]).expect("tenant"), ProgramId::new([3; 32]).expect("program"),
+            [4; 32], [5; 32], escrow_amount, LeaseLimits { cpu_fuel: 10, memory_bytes: 10,
+                storage_read_bytes: 10, storage_write_bytes: 10, output_values: 10,
+                output_bytes: 10, table_elements: 10, namespace_bytes: 10 }, 1, 4, schedule)
+            .expect("lease");
+        lease.apply_host_activity(LeaseActivity::Fund, [6; 32], 1).expect("fund");
+        let escrow = Escrow::funded_genesis(&lease, [7; 32]).expect("escrow");
+        lease.apply_host_activity(LeaseActivity::Activate, [8; 32], 2).expect("activate");
+        lease.record_usage(LeaseUsage { namespace_bytes, ..LeaseUsage::default() }, 0, 2, None)
+            .expect("usage");
+        DurableUsageState { lease, escrow, ledger: UsageLedger::new() }
+    }
 
     #[test]
     fn outcome_encoding_keeps_failed_work_distinct() {
@@ -717,5 +792,40 @@ mod tests {
         let first = accumulator_root_for([0; 32], 1, [7; 32]).expect("first");
         assert_ne!(first, accumulator_root_for([0; 32], 2, [7; 32]).expect("sequence"));
         assert_ne!(first, accumulator_root_for([0; 32], 1, [8; 32]).expect("receipt"));
+    }
+
+    #[test]
+    fn active_at_expiry_settles_exact_occupancy_and_exhausted_escrow() {
+        let mut state = active_usage_state(3, 1);
+        let activity_id = [9; 32];
+        let expected_digest = state.lease.state_digest().expect("digest");
+        let root = sandbox_escrow_charge_root(state.lease.host_program(),
+            state.lease.namespace().execution_principal().expect("principal"), activity_id,
+            state.lease.id().bytes(), expected_digest, state.lease.escrow_account(),
+            state.lease.escrow_asset(), state.lease.fee_destination(), 3).expect("root");
+        let mut lease_bytes = Vec::new(); let mut receipt_bytes = Vec::new();
+        let receipt = record_expiry_occupancy_settlement(&mut state, activity_id, root,
+            &mut lease_bytes, &mut receipt_bytes).expect("final settlement");
+        assert_eq!(receipt.observed_batch(), 4);
+        assert_eq!(receipt.usage().occupancy_byte_batches, 3);
+        assert_eq!(receipt.charged(), 3);
+        assert_eq!(state.escrow.remaining(), Ok(0));
+        assert_eq!(state.ledger.running_total(), state.escrow.spent());
+        assert_eq!(UsageReceipt::decode(&receipt_bytes, receipt.digest()), Ok(receipt));
+        let usage_lease = state.lease.clone();
+        let ledger_bytes = state.ledger.canonical_state().expect("ledger");
+        state.lease.terminalize_by_sweep([10; 32], [11; 32], 4).expect("terminalize");
+        state.escrow.finalize_refund(&state.lease, 0, [0; 32]).expect("zero refund");
+        assert!(UsageLedger::decode_state(&ledger_bytes, &usage_lease, &state.escrow).is_ok());
+    }
+
+    #[test]
+    fn untouched_full_escrow_has_zero_final_usage_and_full_refund() {
+        let mut state = active_usage_state(100, 0);
+        assert_eq!(state.ledger.receipt_count(), 0);
+        assert_eq!(state.escrow.remaining(), Ok(100));
+        state.lease.terminalize_by_sweep([10; 32], [11; 32], 4).expect("terminalize");
+        state.escrow.finalize_refund(&state.lease, 100, [12; 32]).expect("refund");
+        assert_eq!(state.escrow.funded(), state.escrow.spent() + state.escrow.refunded());
     }
 }

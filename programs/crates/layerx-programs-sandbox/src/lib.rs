@@ -8,6 +8,7 @@ pub mod escrow;
 pub mod execute;
 pub mod usage;
 pub mod activity;
+pub mod expiry;
 #[cfg(feature = "host-ffi")]
 #[allow(unsafe_code)]
 mod host_ffi;
@@ -17,6 +18,7 @@ mod host_ffi;
 pub fn retain_host_ffi_exports() {
     let exports = [
         host_ffi::layerx_programs_sandbox_admit_host as *const (),
+        host_ffi::layerx_programs_sandbox_final_reserve_host as *const (),
         host_ffi::layerx_programs_sandbox_cancel_host as *const (),
         host_ffi::layerx_programs_sandbox_settle_call_rust as *const (),
         host_ffi::layerx_programs_sandbox_lifecycle_validate as *const (),
@@ -31,6 +33,9 @@ pub use activity::{canonical_activate, canonical_execute, canonical_fund,
     PROGRAMS_SANDBOX_ACTIVITY_TYPE};
 
 pub use escrow::{settle, Escrow, EscrowOutcome, EscrowRefusal};
+pub use expiry::{destroy, sweep, ExpiryQueue, ExpiryRefusal, SweepEvidence, SweepPage,
+    AuthenticatedTerminalRecord, TerminalLeaseRecord, TerminalReceiptEvidence,
+    MAX_SWEEP_LEASES_PER_BATCH};
 pub use execute::{
     LeaseCapabilities, SandboxExecutionRecord, SandboxExecutionRequest, SandboxRefusal,
 };

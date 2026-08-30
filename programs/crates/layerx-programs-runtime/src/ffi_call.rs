@@ -894,6 +894,11 @@ unsafe extern "C" {
         token: u64, observed_batch: u64,
         maximum_fee_hi: u64, maximum_fee_lo: u64,
     ) -> i32;
+    fn layerx_programs_sandbox_final_reserve_host(
+        token: u64, observed_batch: u64, cpu: u64, memory: u64,
+        storage_read: u64, storage_write: u64, output_values: u32,
+        output_bytes: u64, final_namespace_bytes: u64,
+    ) -> i32;
     fn layerx_programs_call_sandbox_context_byte(
         token: u64,
         section: u16,
@@ -2631,6 +2636,22 @@ pub extern "C" fn layerx_programs_call_begin(
                     let prior_namespace_bytes = initial_sizes
                         .get(&StorageNamespace::principal(program, execution_principal))
                         .copied().unwrap_or(0);
+                    if sandbox {
+                        let measured = record.execution().usage();
+                        let status = unsafe { layerx_programs_sandbox_final_reserve_host(
+                            token, batch_number, measured.cpu_fuel, measured.memory_bytes,
+                            measured.storage_read_bytes, measured.storage_write_bytes,
+                            measured.output_values, measured.output_bytes, final_namespace_bytes,
+                        ) };
+                        if status != OK {
+                            write_callback_detail(&mut terminal_detail, 6, status);
+                            record.call_graph().write_canonical_evidence(&mut terminal_graph);
+                            return terminal_sandbox_postexecution_failure(token,
+                                fee_schedule_version, &record, program, binding, batch_number,
+                                prior_namespace_bytes, fee_schedule.occupancy_byte_batch_price(),
+                                &terminal_graph, core::mem::take(&mut terminal_detail));
+                        }
+                    }
                     if let Err(status) =
                         c_ok(unsafe { layerx_programs_call_storage_final_authorize(token) })
                     {

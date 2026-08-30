@@ -675,7 +675,7 @@ static lxp_result replay_execute_activity(
     (void)memset(&scope, 0, sizeof(scope));
     scope.module_mask = UINT64_C(1) << LXP_MODULE_PROGRAMS;
     scope.activity_ordinal_min = 1U;
-    scope.activity_ordinal_max = 9U;
+    scope.activity_ordinal_max = 10U;
     scope.maximum_per_activity = (lxp_u128){UINT64_MAX, UINT64_MAX};
     scope.maximum_total = (lxp_u128){UINT64_MAX, UINT64_MAX};
     scope.maximum_per_period = (lxp_u128){UINT64_MAX, UINT64_MAX};
@@ -1576,7 +1576,7 @@ static lxp_result apply_canonical_activity(
     (void)memset(&scope, 0, sizeof(scope));
     scope.module_mask = UINT64_C(1) << LXP_MODULE_PROGRAMS;
     scope.activity_ordinal_min = 1U;
-    scope.activity_ordinal_max = 9U;
+    scope.activity_ordinal_max = 10U;
     scope.maximum_per_activity = (lxp_u128){UINT64_MAX, UINT64_MAX};
     scope.maximum_total = (lxp_u128){UINT64_MAX, UINT64_MAX};
     scope.maximum_per_period = (lxp_u128){UINT64_MAX, UINT64_MAX};
@@ -1604,7 +1604,7 @@ static lxp_result apply_canonical_activity(
     execution.maximum_timestamp_window = UINT64_C(300000);
     execution.epoch = process->kernel.epoch;
     execution.global_sequence = global_sequence;
-    execution.recorded_module_version = LX_PROGRAMS_SANDBOX_ABI_VERSION;
+    execution.recorded_module_version = LX_PROGRAMS_SANDBOX_DESTROY_ABI_VERSION;
     execution.recorded_fee_schedule_version = 0U;
     execution.parameter_version = process->parameter_version;
     execution.signature_valid = true;
@@ -1856,7 +1856,7 @@ static lxp_result apply_canonical_batch(
         (void)memset(&scopes[i], 0, sizeof(scopes[i]));
         scopes[i].module_mask = UINT64_C(1) << LXP_MODULE_PROGRAMS;
         scopes[i].activity_ordinal_min = 1U;
-        scopes[i].activity_ordinal_max = 9U;
+        scopes[i].activity_ordinal_max = 10U;
         scopes[i].maximum_per_activity =
             (lxp_u128){UINT64_MAX, UINT64_MAX};
         scopes[i].maximum_total = (lxp_u128){UINT64_MAX, UINT64_MAX};
@@ -1883,7 +1883,7 @@ static lxp_result apply_canonical_batch(
         executions[i].epoch = process->kernel.epoch;
         executions[i].global_sequence = sequence;
         executions[i].recorded_module_version =
-            LX_PROGRAMS_SANDBOX_ABI_VERSION;
+            LX_PROGRAMS_SANDBOX_DESTROY_ABI_VERSION;
         executions[i].parameter_version = process->parameter_version;
         executions[i].signature_valid = true;
         executions[i].identities = &process->identities;
@@ -2707,7 +2707,7 @@ static lxp_result open_process(lxp_daemon_process *process,
                                    &process->journal, configuration, 1U);
     if (status == LXP_OK)
         status = lxp_kernel_register_module(
-            &process->kernel, programs_module_registration_v3());
+            &process->kernel, programs_module_registration_v4());
     if (status == LXP_OK)
         status = lxp_kernel_set_capabilities(
             &process->kernel, NULL, lxp_kernel_canonical_ledger_apply);

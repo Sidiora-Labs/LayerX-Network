@@ -96,6 +96,7 @@ int main(void)
     lx_account to_account;
     lxp_transfer_asset_state asset_state;
     lxp_transfer_set set;
+    lxp_transfer_source_authority source_authority;
     lxp_receipt receipt;
     uint8_t state_key[32] = { 0x44U };
     uint8_t preview_value = 13U;
@@ -108,6 +109,7 @@ int main(void)
     (void)memset(&to_account, 0, sizeof(to_account));
     (void)memset(&asset_state, 0, sizeof(asset_state));
     (void)memset(&set, 0, sizeof(set));
+    (void)memset(&source_authority, 0, sizeof(source_authority));
     (void)memset(&receipt, 0, sizeof(receipt));
     (void)memset(&from_account.id, 0xA1, sizeof(from_account.id));
     (void)memset(&to_account.id, 0xB2, sizeof(to_account.id));
@@ -132,6 +134,11 @@ int main(void)
     set.context.debit_authority_kind = LXP_AUTH_PROTOCOL_MODULE;
     set.context.protocol_system_capability = true;
     (void)memcpy(set.context.authorized_from, from_account.id, 32U);
+    source_authority.debit_authority_kind = LXP_AUTH_PROTOCOL_MODULE;
+    source_authority.protocol_system_capability = true;
+    (void)memcpy(source_authority.authorized_from, from_account.id, 32U);
+    set.context.source_authorities = &source_authority;
+    set.context.source_authority_count = 1U;
 
     if (lxp_state_store_init(&store, 0U) != LXP_OK ||
         lxp_arena_init(&arena, arena_bytes, sizeof(arena_bytes)) != LXP_OK ||

@@ -1,10 +1,11 @@
 use layerx_programs_runtime::{
     reserve_host_sandbox_escrow_charge, settle_reserved_host_sandbox_escrow_charge,
-    ActivityBudgetBinding, MeteredUsage, ProgramId, ReservedSandboxEscrowCharge,
+    hash_bytes, ActivityBudgetBinding, HashAlgorithm, MeteredUsage, ProgramId,
+    ReservedSandboxEscrowCharge,
 };
 use std::cell::RefCell;
 
-use crate::usage::record_host_settlement_reserved;
+use crate::usage::{record_expiry_occupancy_settlement, record_host_settlement_reserved};
 use crate::{ActivityOutcome, DurableUsageState, Escrow, Lease, LeaseUsage, UsageLedger, UsageObservation};
 
 const OK: i32 = 0;
@@ -27,9 +28,127 @@ thread_local! {
         const { RefCell::new(None) };
 }
 
-fn admitted_charge_fits(remaining: u128, occupancy: u128, maximum_execution: u128) -> bool {
-    maximum_execution != 0
-        && maximum_execution.checked_add(occupancy).is_some_and(|total| total <= remaining)
+struct DestroyTerminal { bytes: Vec<u8> }
+thread_local! { static DESTROY_TERMINAL: RefCell<Option<DestroyTerminal>> = const { RefCell::new(None) }; }
+
+unsafe extern "C" {
+    fn layerx_programs_sandbox_destroy_state_length(token: u64, kind: u16) -> i32;
+    fn layerx_programs_sandbox_destroy_state_byte(token: u64, kind: u16, offset: u32) -> i32;
+    fn layerx_programs_sandbox_destroy_archive(token: u64, kind: u16,
+        bytes: *const u8, length: u32) -> i32;
+    fn layerx_programs_sandbox_destroy_refund(token: u64, from: *const u8,
+        to: *const u8, asset: *const u8, amount_hi: u64, amount_lo: u64,
+        root: *mut u8) -> i32;
+    fn layerx_programs_sandbox_destroy_charge(token: u64, from: *const u8,
+        to: *const u8, asset: *const u8, amount_hi: u64, amount_lo: u64,
+        root: *mut u8) -> i32;
+}
+
+fn destroy_state(token: u64, kind: u16) -> Result<Vec<u8>, i32> {
+    let length = unsafe { layerx_programs_sandbox_destroy_state_length(token, kind) };
+    if length <= 0 { return Err(NON_CANONICAL); }
+    (0..u32::try_from(length).map_err(|_| NON_CANONICAL)?).map(|offset| {
+        let byte = unsafe { layerx_programs_sandbox_destroy_state_byte(token, kind, offset) };
+        u8::try_from(byte).map_err(|_| NON_CANONICAL)
+    }).collect()
+}
+
+fn destroy_host(token: u64, lease_id: [u8; 32], expected_root: [u8; 32], activity_id: [u8; 32],
+    expected_sequence: u64, boundary: u64) -> Result<(), i32> {
+    let lease = Lease::decode_state(&destroy_state(token, 0)?).map_err(|_| NON_CANONICAL)?;
+    let escrow = Escrow::decode_state(&lease, &destroy_state(token, 1)?).map_err(|_| NON_CANONICAL)?;
+    let ledger = UsageLedger::decode_state(&destroy_state(token, 2)?, &lease, &escrow)
+        .map_err(|_| NON_CANONICAL)?;
+    if lease.id().bytes()!=lease_id || lease.state_digest().map_err(|_| NON_CANONICAL)?!=expected_root
+        || expected_sequence == 0 || boundary < lease.expiry()
+        || matches!(lease.state(), crate::LeaseState::Destroyed) { return Err(NON_CANONICAL); }
+    let mut state = DurableUsageState { lease, escrow, ledger };
+    let prior_batch = state.ledger.latest().map_or(
+        state.lease.opened_at(), crate::UsageReceipt::observed_batch);
+    let final_occupancy = occupancy_charge(state.lease.usage().namespace_bytes,
+        state.lease.expiry().checked_sub(prior_batch).ok_or(NON_CANONICAL)?,
+        state.lease.fee_schedule().occupancy_byte_batch_price()).ok_or(NON_CANONICAL)?;
+    let mut final_usage_receipt_digest = [0u8; 32];
+    let mut usage_lease_bytes = state.lease.canonical_state_bytes().map_err(|_| NON_CANONICAL)?;
+    if final_occupancy != 0 {
+        let mut charge_root = [0u8; 32];
+        if unsafe { layerx_programs_sandbox_destroy_charge(token,
+            state.lease.escrow_account().as_ptr(), state.lease.fee_destination().as_ptr(),
+            state.lease.escrow_asset().as_ptr(), (final_occupancy >> 64) as u64,
+            final_occupancy as u64, charge_root.as_mut_ptr()) } != OK { return Err(NON_CANONICAL); }
+        let mut receipt_bytes = Vec::with_capacity(4096);
+        let receipt = record_expiry_occupancy_settlement(&mut state, activity_id, charge_root,
+            &mut usage_lease_bytes, &mut receipt_bytes).map_err(|_| NON_CANONICAL)?;
+        if receipt.charged() != final_occupancy { return Err(NON_CANONICAL); }
+        final_usage_receipt_digest = receipt.digest();
+    }
+    let ledger_bytes = state.ledger.canonical_state().map_err(|_| NON_CANONICAL)?;
+    let mut receipt_preimage=Vec::new();receipt_preimage.extend_from_slice(b"LayerX/programs/sandbox/destroy/v1\0");
+    receipt_preimage.extend_from_slice(&activity_id);receipt_preimage.extend_from_slice(&lease_id);receipt_preimage.extend_from_slice(&expected_root);
+    receipt_preimage.extend_from_slice(&expected_sequence.to_be_bytes());receipt_preimage.extend_from_slice(&boundary.to_be_bytes());
+    receipt_preimage.extend_from_slice(&final_usage_receipt_digest);
+    let mut receipt_digest = hash_bytes(HashAlgorithm::Sha256,&receipt_preimage).map_err(|_| NON_CANONICAL)?;
+    receipt_digest[0] ^= 0x40;
+    state.lease.terminalize_by_sweep(activity_id, receipt_digest, boundary).map_err(|_| NON_CANONICAL)?;
+    let amount = state.escrow.remaining().map_err(|_| NON_CANONICAL)?;
+    let mut transfer_root = [0u8; 32];
+    if amount != 0 && unsafe { layerx_programs_sandbox_destroy_refund(token,
+        state.lease.escrow_account().as_ptr(), state.lease.tenant().bytes().as_ptr(),
+        state.lease.escrow_asset().as_ptr(), (amount >> 64) as u64, amount as u64,
+        transfer_root.as_mut_ptr()) } != OK { return Err(NON_CANONICAL); }
+    state.escrow.finalize_refund(&state.lease, amount, transfer_root).map_err(|_| NON_CANONICAL)?;
+    let lease_bytes=state.lease.canonical_state_bytes().map_err(|_| NON_CANONICAL)?;
+    let escrow_bytes=state.escrow.canonical_state();
+    for (kind,bytes) in [(0u16,lease_bytes.as_slice()),(1,escrow_bytes.as_slice()),
+        (2,ledger_bytes.as_slice()),(3,usage_lease_bytes.as_slice())] {
+        if unsafe { layerx_programs_sandbox_destroy_archive(token,kind,bytes.as_ptr(),
+            u32::try_from(bytes.len()).map_err(|_| NON_CANONICAL)?) } != OK { return Err(NON_CANONICAL); }
+    }
+    let mut terminal=Vec::new(); terminal.extend_from_slice(&receipt_digest);
+    terminal.extend_from_slice(&transfer_root);terminal.extend_from_slice(&amount.to_be_bytes());
+    terminal.extend_from_slice(&state.lease.state_digest().map_err(|_| NON_CANONICAL)?);
+    terminal.extend_from_slice(&hash_bytes(HashAlgorithm::Sha256,&escrow_bytes).map_err(|_| NON_CANONICAL)?);
+    DESTROY_TERMINAL.with(|slot| { *slot.borrow_mut()=Some(DestroyTerminal{bytes:terminal}); });
+    Ok(())
+}
+
+#[no_mangle]
+pub extern "C" fn layerx_programs_sandbox_destroy_host(token:u64, lease_id:*const u8,
+    expected_root:*const u8, activity_id:*const u8, expected_sequence:u64,boundary:u64)->i32 {
+    std::panic::catch_unwind(|| { if lease_id.is_null()||expected_root.is_null()||activity_id.is_null(){return Err(NON_CANONICAL)}
+        let mut id=[0u8;32];let mut root=[0u8;32];let mut activity=[0u8;32];unsafe{id.copy_from_slice(core::slice::from_raw_parts(lease_id,32));root.copy_from_slice(core::slice::from_raw_parts(expected_root,32));activity.copy_from_slice(core::slice::from_raw_parts(activity_id,32));}
+        destroy_host(token,id,root,activity,expected_sequence,boundary) }).ok().and_then(Result::ok).map_or(NON_CANONICAL,|()|OK)
+}
+
+#[no_mangle]
+pub extern "C" fn layerx_programs_sandbox_destroy_terminal(_token:u64, output:*mut u8,capacity:u32)->i32 {
+    if output.is_null(){return NON_CANONICAL} DESTROY_TERMINAL.with(|slot| { let Some(value)=slot.borrow_mut().take() else{return NON_CANONICAL};
+        if value.bytes.len()>capacity as usize{return NON_CANONICAL} unsafe{core::ptr::copy_nonoverlapping(value.bytes.as_ptr(),output,value.bytes.len());} OK })
+}
+
+fn occupancy_charge(namespace_bytes: u64, batches: u64, price: u64) -> Option<u128> {
+    u128::from(namespace_bytes).checked_mul(u128::from(batches))?
+        .checked_mul(u128::from(price))
+}
+
+fn admitted_charge(namespace_bytes: u64, prior_batch: u64, expiry: u64,
+    occupancy_price: u64, maximum_execution: u128) -> Option<u128> {
+    if maximum_execution == 0 || prior_batch >= expiry { return None; }
+    maximum_execution.checked_add(occupancy_charge(namespace_bytes,
+        expiry.checked_sub(prior_batch)?, occupancy_price)?)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn postexecution_reserve_fits(remaining: u128, namespace_bytes: u64,
+    final_namespace_bytes: u64, prior_batch: u64, observed_batch: u64, expiry: u64,
+    occupancy_price: u64, exact_execution: u128) -> bool {
+    if prior_batch > observed_batch || observed_batch >= expiry { return false; }
+    let Some(current) = occupancy_charge(namespace_bytes,
+        observed_batch - prior_batch, occupancy_price) else { return false; };
+    let Some(future) = occupancy_charge(final_namespace_bytes,
+        expiry - observed_batch, occupancy_price) else { return false; };
+    exact_execution.checked_add(current).and_then(|value| value.checked_add(future))
+        .is_some_and(|reserved| reserved <= remaining)
 }
 
 unsafe extern "C" {
@@ -143,19 +262,18 @@ pub extern "C" fn layerx_programs_sandbox_admit_host(
             return Err(NON_CANONICAL);
         }
         let prior_batch = ledger.latest().map_or(lease.opened_at(), crate::UsageReceipt::observed_batch);
-        let elapsed = observed_batch.checked_sub(prior_batch).ok_or(NON_CANONICAL)?;
-        let occupancy = u128::from(lease.usage().namespace_bytes)
-            .checked_mul(u128::from(elapsed))
-            .and_then(|units| units.checked_mul(u128::from(schedule.occupancy_byte_batch_price())))
-            .ok_or(NON_CANONICAL)?;
+        if observed_batch < prior_batch || observed_batch >= lease.expiry() {
+            return Err(NON_CANONICAL);
+        }
         let maximum_execution = (u128::from(maximum_fee_hi) << 64)
             | u128::from(maximum_fee_lo);
         let remaining = escrow.funded().checked_sub(escrow.spent())
             .and_then(|value| value.checked_sub(escrow.refunded()))
             .ok_or(NON_CANONICAL)?;
-        if !admitted_charge_fits(remaining, occupancy, maximum_execution) {
-            return Err(NON_CANONICAL);
-        }
+        let maximum_charge = admitted_charge(lease.usage().namespace_bytes, prior_batch,
+            lease.expiry(), schedule.occupancy_byte_batch_price(), maximum_execution)
+            .ok_or(NON_CANONICAL)?;
+        if maximum_charge > remaining { return Err(NON_CANONICAL); }
         let activity_id: [u8; 32] = lifecycle_field(token, 8)?.try_into()
             .map_err(|_| NON_CANONICAL)?;
         let principal = lease.namespace().execution_principal().map_err(|_| NON_CANONICAL)?;
@@ -164,7 +282,7 @@ pub extern "C" fn layerx_programs_sandbox_admit_host(
         let transfer = reserve_host_sandbox_escrow_charge(
             lease.host_program(), principal, activity_id, lease.id().bytes(),
             expected_lease_digest, lease.escrow_account(),
-            lease.escrow_asset(), lease.fee_destination(), maximum_execution,
+            lease.escrow_asset(), lease.fee_destination(), maximum_charge,
         ).map_err(|_| NON_CANONICAL)?;
         HOST_SETTLEMENT_RESERVATION.with(|slot| {
             let mut slot = slot.borrow_mut();
@@ -196,15 +314,55 @@ pub extern "C" fn layerx_programs_sandbox_cancel_host(token: u64) {
 
 #[cfg(test)]
 mod admission_cases {
-    use super::admitted_charge_fits;
+    use super::{admitted_charge, postexecution_reserve_fits};
 
     #[test]
-    fn reserve_includes_accrued_occupancy_and_full_admitted_execution() {
-        assert!(admitted_charge_fits(100, 20, 80));
-        assert!(!admitted_charge_fits(99, 20, 80));
-        assert!(!admitted_charge_fits(u128::MAX, 1, u128::MAX));
-        assert!(!admitted_charge_fits(100, 20, 0));
+    fn admission_reserves_occupancy_through_expiry_and_full_execution() {
+        assert_eq!(admitted_charge(2, 10, 20, 1, 80), Some(100));
+        assert_eq!(admitted_charge(2, 20, 20, 1, 80), None);
+        assert_eq!(admitted_charge(2, 10, 20, 1, 0), None);
+        assert_eq!(admitted_charge(u64::MAX, 0, u64::MAX, u64::MAX, 1), None);
     }
+
+    #[test]
+    fn successful_growth_must_leave_exact_frozen_price_reserve() {
+        assert!(postexecution_reserve_fits(100, 2, 4, 10, 15, 20, 1, 70));
+        assert!(!postexecution_reserve_fits(99, 2, 4, 10, 15, 20, 1, 70));
+        assert!(!postexecution_reserve_fits(100, 2, 4, 10, 20, 20, 1, 70));
+    }
+}
+
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub extern "C" fn layerx_programs_sandbox_final_reserve_host(token: u64,
+    observed_batch: u64, cpu: u64, memory: u64, storage_read: u64,
+    storage_write: u64, output_values: u32, output_bytes: u64,
+    final_namespace_bytes: u64) -> i32 {
+    std::panic::catch_unwind(|| HOST_SETTLEMENT_RESERVATION.with(|slot| {
+        let slot = slot.borrow();
+        let reservation = slot.as_ref().ok_or(NON_CANONICAL)?;
+        if reservation.token != token { return Err(NON_CANONICAL); }
+        let lease = &reservation.state.lease;
+        let schedule = lease.fee_schedule();
+        let exact_execution = [(cpu, schedule.cpu_price()),
+            (memory, schedule.memory_byte_price()),
+            (storage_read, schedule.storage_read_byte_price()),
+            (storage_write, schedule.storage_write_byte_price()),
+            (u64::from(output_values), schedule.output_value_price()),
+            (output_bytes, schedule.output_byte_price())]
+            .into_iter().try_fold(0u128, |total, (units, price)| total
+                .checked_add(u128::from(units).checked_mul(u128::from(price))?))
+            .ok_or(NON_CANONICAL)?;
+        let prior_batch = reservation.state.ledger.latest().map_or(
+            lease.opened_at(), crate::UsageReceipt::observed_batch);
+        let remaining = reservation.state.escrow.remaining().map_err(|_| NON_CANONICAL)?;
+        if !postexecution_reserve_fits(remaining, lease.usage().namespace_bytes,
+            final_namespace_bytes, prior_batch, observed_batch, lease.expiry(),
+            schedule.occupancy_byte_batch_price(), exact_execution) {
+            return Err(NON_CANONICAL);
+        }
+        Ok(())
+    })).ok().and_then(Result::ok).map_or(NON_CANONICAL, |()| OK)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -270,7 +428,6 @@ fn settle_call(
         table_elements: lease.usage().table_elements,
         namespace_bytes: if outcome == 1 { final_namespace_bytes } else { lease.usage().namespace_bytes },
     };
-    let execution_principal = lease.namespace().execution_principal().map_err(|_| NON_CANONICAL)?;
     let exact_fee = execution_fee.checked_add(occupancy_fee_units).ok_or(NON_CANONICAL)?;
     escrow.permits_execution(&lease, exact_fee).map_err(|_| NON_CANONICAL)?;
     let settlement = settle_reserved_host_sandbox_escrow_charge(

@@ -1,5 +1,7 @@
 #include "layerx/programs.h"
 
+#include "sandbox.h"
+
 #include "layerx/lxp_crypto.h"
 #include "layerx/lxp_kernel.h"
 
@@ -42,6 +44,12 @@ static const uint32_t activity_types_v3[] = {
     LX_PROGRAMS_FEE_GOVERNANCE,
     LX_PROGRAMS_SANDBOX
 };
+static const uint32_t activity_types_v4[] = {
+    LX_PROGRAMS_DEPLOY, LX_PROGRAMS_UPGRADE, LX_PROGRAMS_CALL,
+    LX_PROGRAMS_REGISTRY, LX_PROGRAMS_TRANSFER, LX_PROGRAMS_ACCOUNT,
+    LX_PROGRAMS_WIND_DOWN, LX_PROGRAMS_FEE_GOVERNANCE,
+    LX_PROGRAMS_SANDBOX, LX_PROGRAMS_SANDBOX_DESTROY
+};
 
 static lxp_result programs_genesis(lxp_module_ctx *ctx,
                                    const uint8_t *manifest, size_t length)
@@ -74,6 +82,8 @@ static lxp_result programs_decode(lxp_module_ctx *ctx, uint16_t ordinal,
                                                   decoded);
     if (ordinal == lxp_activity_type_ordinal(LX_PROGRAMS_SANDBOX))
         return lxp_programs_sandbox_decode(ctx, payload, length, decoded);
+    if (ordinal == lxp_activity_type_ordinal(LX_PROGRAMS_SANDBOX_DESTROY))
+        return lxp_programs_sandbox_destroy_decode(ctx,payload,length,decoded);
     if (ctx == NULL || decoded == NULL || ordinal == 0U || ordinal > 4U ||
         payload == NULL || length < 32U)
         return ordinal == 0U || ordinal > 4U ? LXP_ERR_UNKNOWN_ACTIVITY :
@@ -117,6 +127,8 @@ static lxp_result programs_validate(lxp_module_ctx *ctx,
                                                      decoded);
     if (activity != NULL && activity->activity_type == LX_PROGRAMS_SANDBOX)
         return lxp_programs_sandbox_validate(ctx, activity, authority, decoded);
+    if (activity != NULL && activity->activity_type == LX_PROGRAMS_SANDBOX_DESTROY)
+        return lxp_programs_sandbox_destroy_validate(ctx,activity,authority,decoded);
     if (ctx == NULL || activity == NULL || authority == NULL || value == NULL)
         return LXP_ERR_NON_CANONICAL;
     if (lxp_ct_is_zero(authority->principal, sizeof(authority->principal)))
@@ -163,6 +175,8 @@ static lxp_result programs_execute(lxp_module_ctx *ctx,
     if (activity != NULL && activity->activity_type == LX_PROGRAMS_SANDBOX)
         return lxp_programs_sandbox_execute(ctx, activity, authority, decoded,
                                             effects);
+    if (activity != NULL && activity->activity_type == LX_PROGRAMS_SANDBOX_DESTROY)
+        return lxp_programs_sandbox_destroy_execute(ctx,activity,authority,decoded,effects);
     (void)effects;
     if (ctx == NULL || authority == NULL || value == NULL)
         return LXP_ERR_NON_CANONICAL;
@@ -262,4 +276,15 @@ const lxp_module_iface *programs_module_registration_v3(void)
 const lxp_module_iface *lx_programs_module_iface(void)
 {
     return programs_module_registration();
+}
+
+const lxp_module_iface *programs_module_registration_v4(void)
+{
+    static const lxp_module_iface iface = {
+        LXP_MODULE_PROGRAMS, LX_PROGRAMS_SANDBOX_DESTROY_ABI_VERSION, "programs",
+        activity_types_v4, sizeof(activity_types_v4)/sizeof(activity_types_v4[0]),
+        programs_genesis, programs_decode, programs_validate, programs_execute,
+        programs_epoch, programs_epoch, programs_state_root, NULL
+    };
+    return &iface;
 }

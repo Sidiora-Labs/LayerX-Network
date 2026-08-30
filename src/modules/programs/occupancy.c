@@ -1,6 +1,7 @@
 #include "occupancy.h"
 #include "occupancy_evidence.h"
 #include "storage.h"
+#include "sandbox.h"
 
 #include "layerx/lxp_crypto.h"
 #include "layerx/lxp_fee.h"
@@ -885,6 +886,13 @@ lxp_result lxp_programs_finalize_occupancy_batch(
     if (status != LXP_OK) return status;
     status = lxp_state_journal_require_account_root(kernel->journal);
     if (status != LXP_OK) {
+        (void)lxp_state_journal_rollback(kernel->journal);
+        return status;
+    }
+    status = lxp_programs_sandbox_finalize_expiry_batch(
+        &ctx, batch_number);
+    if (status != LXP_OK) {
+        lxp_module_ctx_rollback(&ctx);
         (void)lxp_state_journal_rollback(kernel->journal);
         return status;
     }

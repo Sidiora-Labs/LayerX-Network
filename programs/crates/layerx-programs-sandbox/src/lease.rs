@@ -413,6 +413,113 @@ impl LeaseStateWitness {
 }
 
 impl Lease {
+    pub(crate) fn record_expiry_usage(
+        &mut self, usage: LeaseUsage, escrow_consumed: u128, observed_batch: u64,
+    ) -> Result<(), LeaseRefusal> {
+        if !matches!(self.state, LeaseState::Active | LeaseState::Settling) {
+            return Err(LeaseRefusal::LeaseNotActive);
+        }
+        if observed_batch != self.expiry { return Err(LeaseRefusal::InvalidSequence); }
+        if usage.regressed_from(self.usage) || usage.first_exceeded(self.limits).is_some()
+            || escrow_consumed < self.escrow_consumed || escrow_consumed > self.escrow_amount {
+            return Err(LeaseRefusal::UsageRegression);
+        }
+        self.usage = usage;
+        self.escrow_consumed = escrow_consumed;
+        Ok(())
+    }
+
+    pub(crate) fn expire_by_sweep(
+        &mut self, activity_id: [u8; 32], receipt_digest: [u8; 32], batch_sequence: u64,
+    ) -> Result<LeaseTransitionReceipt, LeaseRefusal> {
+        if self.state == LeaseState::Destroyed { return Err(LeaseRefusal::InvalidTransition); }
+        if self.state == LeaseState::Expired { return Err(LeaseRefusal::StaleState {
+            expected: LeaseState::Expired, declared: LeaseState::Expired,
+        }); }
+        if batch_sequence < self.expiry { return Err(LeaseRefusal::NotExpired {
+            expiry: self.expiry, observed: batch_sequence,
+        }); }
+        self.apply_sweep_transition(LeaseActivity::Expire, LeaseState::Expired,
+            activity_id, receipt_digest, batch_sequence)
+    }
+
+    pub(crate) fn terminalize_by_sweep(
+        &mut self, activity_id: [u8; 32], receipt_digest: [u8; 32], boundary: u64,
+    ) -> Result<(), LeaseRefusal> {
+        if self.state != LeaseState::Expired {
+            self.expire_by_sweep(activity_id, receipt_digest, boundary)?;
+        }
+        let mut destroy_id = activity_id;
+        destroy_id[0] ^= 0x80;
+        let mut destroy_receipt = receipt_digest;
+        destroy_receipt[0] ^= 0x80;
+        self.apply_sweep_transition(LeaseActivity::Destroy, LeaseState::Destroyed,
+            destroy_id, destroy_receipt, boundary)?;
+        Ok(())
+    }
+
+    pub(crate) fn destroy_by_sweep(
+        &mut self, storage: &mut Storage, meter: &mut Meter,
+        activity_id: [u8; 32], receipt_digest: [u8; 32], batch_sequence: u64,
+    ) -> Result<(LeaseTransitionReceipt, u64, u64), LeaseRefusal> {
+        if self.state != LeaseState::Expired { return Err(LeaseRefusal::StaleState {
+            expected: LeaseState::Expired, declared: self.state,
+        }); }
+        let namespace = self.namespace.storage_namespace()?;
+        let cells = u64::try_from(storage.namespace_cell_count(namespace))
+            .map_err(|_| LeaseRefusal::StorageFailure)?;
+        let bytes = storage.namespace_persistent_bytes(namespace)
+            .map_err(|_| LeaseRefusal::StorageFailure)?;
+        let snapshot_namespace = self.namespace.snapshot_storage_namespace();
+        let snapshot_cells = u64::try_from(storage.protocol_namespace_entries(snapshot_namespace)
+            .map_err(|_| LeaseRefusal::StorageFailure)?.len())
+            .map_err(|_| LeaseRefusal::StorageFailure)?;
+        let snapshot_bytes = storage.protocol_prefix_bytes(snapshot_namespace, b"snapshot")
+            .map_err(|_| LeaseRefusal::StorageFailure)?;
+        let reclaimed_cells = cells.checked_add(snapshot_cells).ok_or(LeaseRefusal::StorageFailure)?;
+        let reclaimed_bytes = bytes.checked_add(snapshot_bytes).ok_or(LeaseRefusal::StorageFailure)?;
+        let mut candidate = self.clone();
+        let receipt = candidate.apply_sweep_transition(LeaseActivity::Destroy,
+            LeaseState::Destroyed, activity_id, receipt_digest, batch_sequence)?;
+        let mut candidate_storage = storage.clone();
+        candidate_storage.replace_protocol_namespace(namespace, &[])
+            .map_err(|_| LeaseRefusal::StorageFailure)?;
+        candidate_storage.replace_protocol_prefix(snapshot_namespace, b"snapshot", &[])
+            .map_err(|_| LeaseRefusal::StorageFailure)?;
+        let mut candidate_meter = meter.clone();
+        candidate_meter.charge_storage_write(reclaimed_bytes.checked_add(reclaimed_cells)
+            .ok_or(LeaseRefusal::StorageFailure)?)
+            .map_err(|_| LeaseRefusal::StorageMeterRefusal)?;
+        *self = candidate;
+        *storage = candidate_storage;
+        *meter = candidate_meter;
+        Ok((receipt, reclaimed_cells, reclaimed_bytes))
+    }
+
+    fn apply_sweep_transition(
+        &mut self, activity: LeaseActivity, to: LeaseState, activity_id: [u8; 32],
+        receipt_digest: [u8; 32], batch_sequence: u64,
+    ) -> Result<LeaseTransitionReceipt, LeaseRefusal> {
+        if activity_id == [0; 32] || receipt_digest == [0; 32]
+            || batch_sequence < self.opened_at
+            || self.history.len() >= MAX_LEASE_TRANSITIONS
+            || self.history.iter().any(|prior| prior.transition.activity_id == activity_id
+                || prior.receipt_digest == receipt_digest)
+            || !declared_edge(activity, self.state, to) {
+            return Err(LeaseRefusal::InvalidTransition);
+        }
+        if self.history.last().is_some_and(|prior| batch_sequence < prior.batch_sequence) {
+            return Err(LeaseRefusal::InvalidSequence);
+        }
+        let transition = LeaseTransition { lease: self.id, tenant: self.tenant, activity,
+            from: self.state, to, activity_id, usage_observation_digest: [0; 32] };
+        let receipt = LeaseTransitionReceipt { lease: self.id, transition,
+            receipt_digest, batch_sequence };
+        self.state = to;
+        self.history.push(receipt);
+        Ok(receipt)
+    }
+
     pub(crate) fn apply_host_activity(
         &mut self, activity: LeaseActivity, activity_id: [u8; 32], batch_sequence: u64,
     ) -> Result<(), LeaseRefusal> {
@@ -786,7 +893,7 @@ impl Lease {
         self.apply_transition(transition, evidence)
     }
 
-    pub fn destroy(
+    pub fn destroy_with_evidence(
         &mut self, storage: &mut Storage, meter: &mut Meter,
         transition: LeaseTransition, evidence: TransitionEvidence,
     ) -> Result<TransitionOutcome, LeaseRefusal> {
@@ -951,12 +1058,12 @@ impl LeaseBook {
         Ok(outcome)
     }
 
-    pub fn destroy(
+    pub fn destroy_with_evidence(
         &mut self, id: LeaseId, storage: &mut Storage, meter: &mut Meter,
         transition: LeaseTransition, evidence: TransitionEvidence,
     ) -> Result<TransitionOutcome, LeaseRefusal> {
         let lease = self.leases.get_mut(&id).ok_or(LeaseRefusal::UnknownLease)?;
-        lease.destroy(storage, meter, transition, evidence)
+        lease.destroy_with_evidence(storage, meter, transition, evidence)
     }
 }
 

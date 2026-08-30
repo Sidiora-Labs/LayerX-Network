@@ -172,9 +172,11 @@ enum {
     LX_PROGRAMS_WIND_DOWN = 0x00090007,
     LX_PROGRAMS_FEE_GOVERNANCE = 0x00090008,
     LX_PROGRAMS_SANDBOX = 0x00090009,
+    LX_PROGRAMS_SANDBOX_DESTROY = 0x0009000A,
     LX_PROGRAMS_ABI_VERSION = 1,
     LX_PROGRAMS_ACCOUNT_ABI_VERSION = 2,
     LX_PROGRAMS_SANDBOX_ABI_VERSION = 3,
+    LX_PROGRAMS_SANDBOX_DESTROY_ABI_VERSION = 4,
     LX_PROGRAMS_EVENT_DEPLOYED = 1,
     LX_PROGRAMS_EVENT_UPGRADED = 2,
     LX_PROGRAMS_EVENT_CALLED = 3,
@@ -438,6 +440,7 @@ enum {
 const lxp_module_iface *programs_module_registration(void);
 const lxp_module_iface *programs_module_registration_v2(void);
 const lxp_module_iface *programs_module_registration_v3(void);
+const lxp_module_iface *programs_module_registration_v4(void);
 const lxp_module_iface *lx_programs_module_iface(void);
 
 lxp_result lxp_programs_lifecycle_decode(lxp_module_ctx *ctx,

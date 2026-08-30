@@ -446,6 +446,17 @@ lxp_result lxp_module_ctx_commit(lxp_module_ctx *ctx)
     for (i = 0U; i < ctx->staged_blob_count; ++i) {
         lxp_module_blob *staged = &ctx->staged_blobs[i];
         size_t location = committed_blob_find(ctx, staged->key);
+        if (staged->deleted) {
+            if (location != ctx->kernel->blob_count) {
+                size_t tail = ctx->kernel->blob_count - location - 1U;
+                ctx->kernel->blob_total_bytes -= ctx->kernel->blobs[location].length;
+                free(ctx->kernel->blobs[location].bytes);
+                if (tail != 0U) (void)memmove(&ctx->kernel->blobs[location],
+                    &ctx->kernel->blobs[location + 1U], tail * sizeof(ctx->kernel->blobs[0]));
+                --ctx->kernel->blob_count;
+            }
+            continue;
+        }
         if (location == ctx->kernel->blob_count) {
             location = ctx->kernel->blob_count++;
             ctx->kernel->blobs[location] = *staged;
@@ -495,7 +506,7 @@ lxp_result lxp_module_ctx_prepare_commit(lxp_module_ctx *ctx)
         if (status != LXP_OK) return status;
     }
     for (i = 0U; i < ctx->staged_blob_count; ++i)
-        if (committed_blob_find(ctx, ctx->staged_blobs[i].key) ==
+        if (!ctx->staged_blobs[i].deleted && committed_blob_find(ctx, ctx->staged_blobs[i].key) ==
             ctx->kernel->blob_count) {
             ++blob_additions;
             if (SIZE_MAX - blob_bytes < ctx->staged_blobs[i].length)
@@ -573,9 +584,19 @@ static lxp_result preview_apply_module(const lxp_module_ctx *ctx,
     }
     for (i = 0U; i < ctx->staged_blob_count; ++i) {
         size_t length = ctx->staged_blobs[i].length;
-        if (preview_blob_find(preview, ctx->module_id,
-                              ctx->staged_blobs[i].key) !=
-            preview->blob_count) continue;
+        size_t location = preview_blob_find(preview, ctx->module_id,
+                                            ctx->staged_blobs[i].key);
+        if (ctx->staged_blobs[i].deleted) {
+            if (location != preview->blob_count) {
+                size_t tail = preview->blob_count - location - 1U;
+                preview->blob_total_bytes -= preview->blobs[location].length;
+                if (tail != 0U) (void)memmove(&preview->blobs[location],
+                    &preview->blobs[location + 1U], tail * sizeof(preview->blobs[0]));
+                --preview->blob_count;
+            }
+            continue;
+        }
+        if (location != preview->blob_count) continue;
         if (preview->blob_count == LXP_KERNEL_MAX_BLOBS ||
             length > LXP_KERNEL_MAX_BLOB_TOTAL_BYTES -
                          preview->blob_total_bytes)
@@ -751,6 +772,7 @@ lxp_result lxp_ctx_blob_get(lxp_module_ctx *ctx, const uint8_t key[32],
         return LXP_ERR_NON_CANONICAL;
     location = staged_blob_find(ctx, key);
     if (location != ctx->staged_blob_count) {
+        if (ctx->staged_blobs[location].deleted) return LXP_ERR_UNKNOWN_FIELD;
         *bytes = ctx->staged_blobs[location].bytes;
         *length = ctx->staged_blobs[location].length;
         return LXP_OK;
@@ -778,7 +800,8 @@ lxp_result lxp_ctx_blob_put(lxp_module_ctx *ctx, const uint8_t key[32],
     if (memcmp(digest, key, 32U) != 0) return LXP_ERR_CONTEXT_MISMATCH;
     location = staged_blob_find(ctx, key);
     if (location != ctx->staged_blob_count)
-        return ctx->staged_blobs[location].length == length &&
+        return !ctx->staged_blobs[location].deleted &&
+                       ctx->staged_blobs[location].length == length &&
                        memcmp(ctx->staged_blobs[location].bytes, bytes,
                               length) == 0 ? LXP_OK : LXP_FATAL_INVARIANT;
     location = committed_blob_find(ctx, key);
@@ -796,6 +819,47 @@ lxp_result lxp_ctx_blob_put(lxp_module_ctx *ctx, const uint8_t key[32],
     (void)memcpy(ctx->staged_blobs[location].key, key, 32U);
     ctx->staged_blobs[location].length = length;
     ctx->staged_blobs[location].bytes = copy;
+    ctx->staged_blobs[location].deleted = false;
+    return LXP_OK;
+}
+
+lxp_result lxp_ctx_blob_del(lxp_module_ctx *ctx, const uint8_t key[32])
+{
+    size_t location;
+    size_t committed;
+    if (ctx == NULL || key == NULL || !ctx->mutable)
+        return LXP_ERR_NON_CANONICAL;
+    location = staged_blob_find(ctx, key);
+    committed = committed_blob_find(ctx, key);
+    if (location != ctx->staged_blob_count) {
+        if (ctx->staged_blobs[location].deleted) return LXP_OK;
+        if (committed == ctx->kernel->blob_count) {
+            size_t tail = ctx->staged_blob_count - location - 1U;
+            free(ctx->staged_blobs[location].bytes);
+            if (tail != 0U)
+                (void)memmove(&ctx->staged_blobs[location],
+                              &ctx->staged_blobs[location + 1U],
+                              tail * sizeof(ctx->staged_blobs[0]));
+            --ctx->staged_blob_count;
+            (void)memset(&ctx->staged_blobs[ctx->staged_blob_count], 0,
+                         sizeof(ctx->staged_blobs[0]));
+            return LXP_OK;
+        }
+    } else {
+        if (committed == ctx->kernel->blob_count)
+            return LXP_ERR_UNKNOWN_FIELD;
+        if (ctx->staged_blob_count == LXP_KERNEL_MAX_STAGED_BLOBS)
+            return LXP_ERR_ARENA_EXHAUSTED;
+        location = ctx->staged_blob_count++;
+        (void)memset(&ctx->staged_blobs[location], 0,
+                     sizeof(ctx->staged_blobs[location]));
+        ctx->staged_blobs[location].module_id = ctx->module_id;
+        (void)memcpy(ctx->staged_blobs[location].key, key, 32U);
+    }
+    free(ctx->staged_blobs[location].bytes);
+    ctx->staged_blobs[location].bytes = NULL;
+    ctx->staged_blobs[location].length = 0U;
+    ctx->staged_blobs[location].deleted = true;
     return LXP_OK;
 }
 
@@ -1113,14 +1177,17 @@ lxp_result lxp_module_ctx_export_prepared(
         ++result->account_count;
     }
     for (i = 0U; i < ctx->staged_blob_count; ++i) {
-        uint8_t *copy = (uint8_t *)malloc(ctx->staged_blobs[i].length);
-        if (copy == NULL) {
+        uint8_t *copy = NULL;
+        if (!ctx->staged_blobs[i].deleted)
+            copy = (uint8_t *)malloc(ctx->staged_blobs[i].length);
+        if (!ctx->staged_blobs[i].deleted && copy == NULL) {
             lxp_prepared_module_transition_destroy(result);
             if (prepared_here) ctx->commit_prepared = false;
             return LXP_ERR_ARENA_EXHAUSTED;
         }
-        (void)memcpy(copy, ctx->staged_blobs[i].bytes,
-                     ctx->staged_blobs[i].length);
+        if (!ctx->staged_blobs[i].deleted)
+            (void)memcpy(copy, ctx->staged_blobs[i].bytes,
+                         ctx->staged_blobs[i].length);
         result->blobs[result->blob_count] = ctx->staged_blobs[i];
         result->blobs[result->blob_count].bytes = copy;
         ++result->blob_count;
@@ -1192,16 +1259,21 @@ lxp_result lxp_module_ctx_import_prepared(
             return LXP_ERR_CONTEXT_MISMATCH;
     }
     for (i = 0U; i < prepared->blob_count; ++i) {
-        if (committed_blob_find(ctx, prepared->blobs[i].key) !=
-            ctx->kernel->blob_count)
+        size_t location = committed_blob_find(ctx, prepared->blobs[i].key);
+        if ((!prepared->blobs[i].deleted &&
+             location != ctx->kernel->blob_count) ||
+            (prepared->blobs[i].deleted &&
+             location == ctx->kernel->blob_count))
             return LXP_ERR_CONTEXT_MISMATCH;
-        blob_copies[i] = (uint8_t *)malloc(prepared->blobs[i].length);
-        if (blob_copies[i] == NULL) {
+        if (!prepared->blobs[i].deleted)
+            blob_copies[i] = (uint8_t *)malloc(prepared->blobs[i].length);
+        if (!prepared->blobs[i].deleted && blob_copies[i] == NULL) {
             while (i != 0U) free(blob_copies[--i]);
             return LXP_ERR_ARENA_EXHAUSTED;
         }
-        (void)memcpy(blob_copies[i], prepared->blobs[i].bytes,
-                     prepared->blobs[i].length);
+        if (!prepared->blobs[i].deleted)
+            (void)memcpy(blob_copies[i], prepared->blobs[i].bytes,
+                         prepared->blobs[i].length);
     }
     ctx->staged_count = prepared->staged_count;
     (void)memcpy(ctx->staged, prepared->staged,

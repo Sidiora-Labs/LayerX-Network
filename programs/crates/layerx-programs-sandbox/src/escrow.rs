@@ -164,6 +164,40 @@ impl Escrow {
         Ok(projected)
     }
 
+    pub(crate) fn projected_expiry_spend(
+        self, lease: &Lease, exact_charge: u128,
+    ) -> Result<Self, EscrowRefusal> {
+        self.binds(lease)?;
+        if !matches!(lease.state(), LeaseState::Active | LeaseState::Settling) {
+            return Err(EscrowRefusal::LeaseNotExecutable);
+        }
+        if self.finalized { return Err(EscrowRefusal::AlreadySettled); }
+        ensure_charge(exact_charge, self.remaining()?)?;
+        let mut projected = self;
+        projected.spent = projected.spent.checked_add(exact_charge)
+            .ok_or(EscrowRefusal::ConservationViolation)?;
+        if projected.spent > projected.funded { return Err(EscrowRefusal::ConservationViolation); }
+        Ok(projected)
+    }
+
+    pub(crate) fn finalize_refund(
+        &mut self, lease: &Lease, amount: u128, transfer_root: [u8; 32],
+    ) -> Result<(), EscrowRefusal> {
+        self.binds(lease)?;
+        if self.finalized || amount != self.remaining()? ||
+            (amount == 0) != (transfer_root == [0; 32]) {
+            return Err(EscrowRefusal::RefundMismatch { expected: self.remaining()?, actual: amount });
+        }
+        self.refunded = amount;
+        self.settlement_root = (amount != 0).then_some(transfer_root);
+        self.finalized = true;
+        if self.funded != self.spent.checked_add(self.refunded)
+            .ok_or(EscrowRefusal::ConservationViolation)? {
+            return Err(EscrowRefusal::ConservationViolation);
+        }
+        Ok(())
+    }
+
     fn binds(self, lease: &Lease) -> Result<(), EscrowRefusal> {
         if self.lease != lease.id() || self.account != lease.escrow_account()
             || self.asset != lease.escrow_asset() || self.funded != lease.escrow_amount()

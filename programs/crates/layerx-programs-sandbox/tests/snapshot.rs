@@ -246,7 +246,7 @@ fn snapshot_destroy_restore_and_continue_preserves_exact_execution_state() {
         from: LeaseState::Expired, to: LeaseState::Destroyed, activity_id: [0; 32],
         usage_observation_digest: [0; 32] }, 16);
     let mut reclaim_meter = meter();
-    destroyed.destroy(&mut source_storage, &mut reclaim_meter, destroy, destroy_evidence)
+    destroyed.destroy_with_evidence(&mut source_storage, &mut reclaim_meter, destroy, destroy_evidence)
         .unwrap_or_else(|error| panic!("destroy: {error}"));
     assert_eq!(destroyed.state(), LeaseState::Destroyed);
     assert_eq!(destroyed.snapshot_records().len(), 1);
@@ -321,7 +321,7 @@ fn ownership_digest_and_target_bindings_are_refused_before_metering() {
     assert!(matches!(restore(&source, &mut target, &mut target_storage, snapshot.digest(),
         snapshot.state().clone(), intruder_authorization, &mut intruder_meter, &module,
         activate, activation_evidence),
-        Err(SnapshotRefusal::NotSnapshotOwner));
+        Err(SnapshotRefusal::NotSnapshotOwner)));
     assert_eq!(intruder_meter.finish().map(|usage| usage.storage_write_bytes), Ok(0));
 
     let mut altered_instance = running_instance(&source, &module, source_storage.clone());
@@ -332,7 +332,7 @@ fn ownership_digest_and_target_bindings_are_refused_before_metering() {
     let target_authorization = AuthorizationContext::new(target.tenant(), CapabilitySet::empty());
     assert!(matches!(restore(&source, &mut target, &mut target_storage, snapshot.digest(), altered.state().clone(),
         target_authorization, &mut mismatch_meter, &module, activate, activation_evidence),
-        Err(SnapshotRefusal::DigestMismatch));
+        Err(SnapshotRefusal::DigestMismatch)));
     assert_eq!(mismatch_meter.finish().map(|usage| usage.storage_write_bytes), Ok(0));
 
     let mut foreign = funded(5, 8);
@@ -343,7 +343,7 @@ fn ownership_digest_and_target_bindings_are_refused_before_metering() {
     assert!(matches!(restore(&source, &mut foreign, &mut foreign_storage, snapshot.digest(),
         snapshot.state().clone(), foreign_authorization, &mut foreign_meter, &module,
         activate, activation_evidence),
-        Err(SnapshotRefusal::NotSnapshotOwner));
+        Err(SnapshotRefusal::NotSnapshotOwner)));
 }
 
 #[test]

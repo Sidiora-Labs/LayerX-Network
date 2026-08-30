@@ -31,6 +31,7 @@ typedef struct lxp_module_blob {
     uint8_t key[32];
     size_t length;
     uint8_t *bytes;
+    bool deleted;
 } lxp_module_blob;
 
 typedef struct lxp_module_kv_entry {
@@ -255,6 +256,7 @@ lxp_result lxp_ctx_blob_get(lxp_module_ctx *ctx, const uint8_t key[32],
                             const uint8_t **bytes, size_t *length);
 lxp_result lxp_ctx_blob_put(lxp_module_ctx *ctx, const uint8_t key[32],
                             const uint8_t *bytes, size_t length);
+lxp_result lxp_ctx_blob_del(lxp_module_ctx *ctx, const uint8_t key[32]);
 
 typedef struct lxp_kernel_execution {
     uint32_t network_id;

@@ -266,20 +266,21 @@ test-kernel: $(BUILD_DIR)/tests/lxp_test_kernel
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/lxp_test_kernel
 
 $(BUILD_DIR)/tests/lxp_test_module_ctx: \
-		tests/protocol/lxp_test_module_ctx.c $(LIBRARY)
+		tests/protocol/lxp_test_module_ctx.c $(LIBRARY) \
+		$(PROGRAMS_RUNTIME_LIB) | programs-build
 	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(EXTRA_LDFLAGS) \
-		-lcrypto -pthread -o $@
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) \
+		$(LIBRARY) $(EXTRA_LDFLAGS) -lcrypto -pthread -ldl -lm -o $@
 
 test-module-ctx: $(BUILD_DIR)/tests/lxp_test_module_ctx
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/lxp_test_module_ctx
 	tools/ci/symbol-allowlist.sh "$(BUILD_DIR)"
 
 $(BUILD_DIR)/tests/lxp_test_dispatch: tests/protocol/lxp_test_dispatch.c \
-		$(LIBRARY)
+		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
 	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(EXTRA_LDFLAGS) \
-		-lcrypto -pthread -o $@
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) \
+		$(LIBRARY) $(EXTRA_LDFLAGS) -lcrypto -pthread -ldl -lm -o $@
 
 test-dispatch: $(BUILD_DIR)/tests/lxp_test_dispatch
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/lxp_test_dispatch
@@ -294,20 +295,20 @@ test-receipts: $(BUILD_DIR)/tests/lxp_test_receipts
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/lxp_test_receipts
 
 $(BUILD_DIR)/tests/lxp_test_state_root: tests/state/lxp_test_state_root.c \
-		$(LIBRARY)
+		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
 	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(EXTRA_LDFLAGS) \
-		-lcrypto -pthread -o $@
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) \
+		$(LIBRARY) $(EXTRA_LDFLAGS) -lcrypto -pthread -ldl -lm -o $@
 
 test-state-root: $(BUILD_DIR)/tests/lxp_test_state_root
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/lxp_test_state_root
 
 $(BUILD_DIR)/tests/lxp_test_golden_replay: \
 		tests/replay/lxp_test_golden_replay.c $(LIBRARY) \
-		tests/replay/golden/history.lxl
+		tests/replay/golden/history.lxl $(PROGRAMS_RUNTIME_LIB) | programs-build
 	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(EXTRA_LDFLAGS) \
-		-lcrypto -pthread -o $@
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) \
+		$(LIBRARY) $(EXTRA_LDFLAGS) -lcrypto -pthread -ldl -lm -o $@
 
 test-replay-golden-local: $(BUILD_DIR)/tests/lxp_test_golden_replay
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/lxp_test_golden_replay
@@ -829,10 +830,11 @@ $(BUILD_DIR)/tests/test_replica_divergence: \
 test-replica-divergence: $(BUILD_DIR)/tests/test_replica_divergence
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_replica_divergence
 
-$(BUILD_DIR)/tests/test_snapshot: tests/test_snapshot.c $(LIBRARY)
+$(BUILD_DIR)/tests/test_snapshot: tests/test_snapshot.c $(LIBRARY) \
+		$(PROGRAMS_RUNTIME_LIB) | programs-build
 	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(EXTRA_LDFLAGS) \
-		-lcrypto -pthread -o $@
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) \
+		$(LIBRARY) $(EXTRA_LDFLAGS) -lcrypto -pthread -ldl -lm -o $@
 
 test-snapshot: $(BUILD_DIR)/tests/test_snapshot
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_snapshot
