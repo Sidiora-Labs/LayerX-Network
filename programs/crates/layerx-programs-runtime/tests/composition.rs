@@ -402,8 +402,16 @@ fn execute_budgeted_with_storage(
     let payer = principal(9);
     let binding =
         ActivityBudgetBinding::new([10; 32]).unwrap_or_else(|error| panic!("binding: {error}"));
-    let declared = DeclaredBudget::new(1_000_000, 1_048_576, 1_048_576, 1_048_576, 64, 0, 64)
-        .unwrap_or_else(|error| panic!("budget: {error}"));
+    let declared = DeclaredBudget::new(
+        1_000_000,
+        1_048_576,
+        1_048_576,
+        1_048_576,
+        64,
+        ResourceBudget::declared().output_bytes(),
+        64,
+    )
+    .unwrap_or_else(|error| panic!("budget: {error}"));
     let admitted = executor
         .admit_activity_budget_for_qualification(declared, payer, binding, u128::MAX)
         .unwrap_or_else(|error| panic!("admission: {error}"));
