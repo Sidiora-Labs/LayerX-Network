@@ -474,11 +474,7 @@ pub fn lint_sources(project: &Path) -> Vec<DeterminismViolation> {
 /// and manifests, and the compiled artifact.
 #[must_use]
 pub fn lint_project(project: &Path, artifact: Option<&Path>) -> Vec<DeterminismViolation> {
-    lint_project_for_abi(
-        project,
-        artifact,
-        layerx_programs_runtime::ABI_V1_VERSION,
-    )
+    lint_project_for_abi(project, artifact, layerx_programs_runtime::ABI_V1_VERSION)
 }
 
 /// Lints one program project against its explicitly recorded ABI revision.
@@ -716,6 +712,9 @@ fn from_validation(refusal: &ValidationRefusal) -> DeterminismViolation {
         ValidationRefusal::RejectedByEngine { reason } => DeterminismViolation::RejectedByEngine {
             reason: reason.clone(),
         },
+        ValidationRefusal::MeterInjection { reason } => DeterminismViolation::RejectedByEngine {
+            reason: format!("meter injection refused: {reason}"),
+        },
     }
 }
 
@@ -896,16 +895,30 @@ mod abi_surface_tests {
 
     #[test]
     fn candidate_imports_require_explicit_revision_and_exact_declaration() {
-        assert!(!permitted_import(
-            "layerx_v2",
-            "refusal_write",
-            false
-        ));
-        assert!(permitted_import(
-            "layerx_v2",
-            "refusal_write",
-            true
-        ));
+        assert!(!permitted_import("layerx_v2", "refusal_write", false));
+        assert!(permitted_import("layerx_v2", "refusal_write", true));
         assert!(!permitted_import("layerx_v2", "undeclared", true));
+    }
+}
+
+#[cfg(test)]
+mod validation_refusal_tests {
+    use super::{from_validation, DeterminismViolation};
+    use layerx_programs_runtime::ValidationRefusal;
+
+    #[test]
+    fn meter_injection_refusal_is_reported_as_engine_rejection() {
+        let violation = from_validation(&ValidationRefusal::MeterInjection {
+            reason: "module imports the private meter namespace".to_string(),
+        });
+
+        assert_eq!(
+            violation,
+            DeterminismViolation::RejectedByEngine {
+                reason: "meter injection refused: module imports the private meter namespace"
+                    .to_string(),
+            }
+        );
+        assert_eq!(violation.name(), "rejected-by-engine");
     }
 }
