@@ -1,9 +1,107 @@
 #include "layerx/programs.h"
 
+#include "layerx/lxp_genesis.h"
 #include "layerx/lxp_hash.h"
 #include "layerx/lxp_kernel.h"
 
+#include <openssl/evp.h>
 #include <string.h>
+
+static int public_key_for(const uint8_t private_key[32], uint8_t public_key[32])
+{
+    EVP_PKEY *key = EVP_PKEY_new_raw_private_key(
+        EVP_PKEY_ED25519, NULL, private_key, 32U);
+    size_t length = 32U;
+    int ok = key != NULL && EVP_PKEY_get_raw_public_key(
+        key, public_key, &length) == 1 && length == 32U;
+    EVP_PKEY_free(key);
+    return ok ? 0 : 1;
+}
+
+static int sign_raw(const uint8_t private_key[32], const uint8_t *message,
+                    size_t message_length, uint8_t signature[64])
+{
+    EVP_PKEY *key = EVP_PKEY_new_raw_private_key(
+        EVP_PKEY_ED25519, NULL, private_key, 32U);
+    EVP_MD_CTX *context = EVP_MD_CTX_new();
+    size_t signature_length = 64U;
+    int ok = key != NULL && context != NULL &&
+        EVP_DigestSignInit(context, NULL, NULL, NULL, key) == 1 &&
+        EVP_DigestSign(context, signature, &signature_length,
+                       message, message_length) == 1 &&
+        signature_length == 64U;
+    EVP_MD_CTX_free(context);
+    EVP_PKEY_free(key);
+    return ok ? 0 : 1;
+}
+
+static lxp_result checkpoint_id(uint32_t network_id,
+                                const uint8_t state_root[32],
+                                uint8_t output[32])
+{
+    uint8_t preimage[36];
+    preimage[0] = (uint8_t)(network_id >> 24U);
+    preimage[1] = (uint8_t)(network_id >> 16U);
+    preimage[2] = (uint8_t)(network_id >> 8U);
+    preimage[3] = (uint8_t)network_id;
+    (void)memcpy(preimage + 4U, state_root, 32U);
+    return lxp_hash_domain(LXP_DOMAIN_CHECKPOINT_CERTIFICATE,
+                           preimage, sizeof(preimage), output);
+}
+
+static int project_metering_genesis(lxp_kernel *kernel)
+{
+    static const uint8_t signer_private_key[32] = {7U};
+    static uint8_t arena_bytes[LXP_GENESIS_MAX_ENCODED_BYTES];
+    static lxp_genesis_manifest manifest;
+    lxp_arena arena;
+    lxp_byte_span preimage;
+    lx_programs_metering_schedule schedule;
+    size_t index;
+    (void)memset(&manifest, 0, sizeof(manifest));
+    manifest.protocol_version = LXP_PROTOCOL_VERSION;
+    manifest.network_id = 1U;
+    manifest.genesis_timestamp_ms = 1U;
+    manifest.parameter_count = 1U;
+    manifest.parameters[0].module_id = 1U;
+    manifest.parameters[0].key[0] = 1U;
+    manifest.guarantor_count = 1U;
+    manifest.guarantors[0].guarantor_id[0] = 1U;
+    (void)memset(manifest.guarantors[0].public_key, 1,
+                 sizeof(manifest.guarantors[0].public_key));
+    manifest.guarantors[0].bond = (lxp_u128){0U, 1U};
+    manifest.account_count = 1U;
+    manifest.accounts[0].account_id[0] = 1U;
+    manifest.accounts[0].asset_id[0] = 1U;
+    if (public_key_for(signer_private_key, manifest.signer_public_key) != 0)
+        return 1;
+    (void)memset(&schedule, 0, sizeof(schedule));
+    schedule.version = LXP_PROGRAM_METERING_SCHEDULE_VERSION_V1;
+    for (index = 0U; index < 5U; ++index)
+        schedule.coefficients[index] = 1U;
+    schedule.coefficients[5] = 8U;
+    schedule.coefficients[6] = 8U;
+    schedule.coefficients[7] = 64U;
+    schedule.coefficients[8] = 8U;
+    schedule.activation_batch = 1U;
+    schedule.authority_kind = LX_PROGRAMS_METERING_AUTHORITY_GENESIS;
+    if (lxp_arena_init(&arena, arena_bytes, sizeof(arena_bytes)) != LXP_OK ||
+        lxp_hash_payload(manifest.signer_public_key, 32U,
+                         schedule.authority_digest) != LXP_OK ||
+        lxp_programs_metering_genesis_append(&manifest, &schedule) != LXP_OK ||
+        lxp_genesis_state_root(&manifest, &arena,
+                               manifest.genesis_state_root) != LXP_OK ||
+        checkpoint_id(manifest.network_id, manifest.genesis_state_root,
+                      manifest.paxeer_genesis_checkpoint_id) != LXP_OK ||
+        lxp_genesis_encode(&manifest, false, &arena, &preimage) != LXP_OK ||
+        sign_raw(signer_private_key, preimage.bytes, preimage.length,
+                 manifest.signature) != 0 ||
+        lxp_arena_reset(&arena, 0U) != LXP_OK ||
+        lxp_programs_metering_genesis_project(&manifest, &arena, kernel) !=
+            LXP_OK)
+        return 1;
+    return 0;
+}
 
 static void write_u16(uint8_t *bytes, uint16_t value)
 {
@@ -113,8 +211,11 @@ static int dispatch(lxp_kernel *kernel, lxp_state_journal *journal,
         lxp_kernel_module_for_activity(kernel, activity.activity_type, 0U,
                                        &registration) != LXP_OK ||
         lxp_module_ctx_init(&ctx, kernel, LXP_MODULE_PROGRAMS, 1U, 0U,
-                            ordinal, 1000000U, &arena, false) != LXP_OK ||
-        lxp_effect_buffer_init(&effects) != LXP_OK ||
+                            ordinal, 1000000U, &arena, false) != LXP_OK)
+        return 1;
+    ctx.protocol_version = LXP_PROTOCOL_VERSION;
+    ctx.batch_number = 1U;
+    if (lxp_effect_buffer_init(&effects) != LXP_OK ||
         lxp_module_ctx_bind_effects(&ctx, &effects) != LXP_OK ||
         lxp_kernel_dispatch(registration, &ctx, &activity, authority,
                             &effects, &module_result) != LXP_OK ||
@@ -197,6 +298,7 @@ int main(void)
     upgrade_length = 117U + upgrade_interface_length + sizeof(migration_wasm);
     if (lxp_state_store_init(&store, 0U) != LXP_OK ||
         lxp_kernel_create(&kernel, &store, &journal, &parameters, 0U) != LXP_OK ||
+        project_metering_genesis(&kernel) != 0 ||
         lxp_kernel_register_module(&kernel, programs_module_registration()) != LXP_OK ||
         dispatch(&kernel, &journal, &authority, 1U, deploy, deploy_length,
                  LXP_OK) != 0 || kernel.blob_count != 1U ||
@@ -266,7 +368,7 @@ int main(void)
     upgrade[32] = 0U;
     upgrade[33] = 2U;
     if (dispatch(&kernel, &journal, &authority, 2U, upgrade, upgrade_length,
-                 LXP_ERR_VERSION_UNSUPPORTED) != 0)
+                 LXP_ERR_CONTEXT_MISMATCH) != 0)
         return 1;
     upgrade[32] = 0U;
     upgrade[33] = 1U;
