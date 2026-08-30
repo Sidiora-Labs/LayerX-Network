@@ -12,7 +12,7 @@ use base64::Engine as _;
 use ciborium::value::Value as CborValue;
 use ed25519_dalek::{Signer as _, SigningKey as Ed25519SigningKey};
 use k256::ecdsa::SigningKey;
-use layerx_agentd::outbox::{Outbox, ReceiptEvidence, SubmissionState};
+use layerx_agentd::outbox::{Outbox, SubmissionState};
 use layerx_agentd::prepare::{
     prepare_activity, CorePreparationBoundary, CorePreparationState, CoreStateError,
     PreparationDefaults, PrepareRequest,
@@ -139,7 +139,7 @@ impl InProcessAgentContract {
         }
     }
 
-    fn mark_executed(&mut self, submission: AgentSubmission, receipt_digest: [u8; 32]) {
+    fn mark_executed(&mut self, submission: AgentSubmission, receipt: AgentBindingReceipt) {
         for state in [SubmissionState::Submitted, SubmissionState::Acknowledged] {
             self.outbox
                 .transition(
@@ -151,16 +151,23 @@ impl InProcessAgentContract {
                 )
                 .unwrap_or_else(|error| panic!("agent transition: {error:?}"));
         }
+        let signer = Ed25519SigningKey::from_bytes(&[0x35; 32]);
+        let raw = support::raw_receipt_evidence(
+            receipt.canonical_receipt,
+            receipt.authorized_batch,
+            9,
+            &signer,
+        );
+        let verified = support::evidence_verifier(&signer)
+            .verify_receipt(&raw)
+            .unwrap_or_else(|error| panic!("binding receipt verification: {error:?}"));
         self.outbox
             .transition(
                 &mut self.store,
                 submission.submission_id,
                 SubmissionState::Executed,
                 "cryptographically verified binding receipt",
-                Some(ReceiptEvidence {
-                    receipt_ref: receipt_digest,
-                    verified: true,
-                }),
+                Some(verified),
             )
             .unwrap_or_else(|error| panic!("agent execution transition: {error:?}"));
     }
@@ -323,7 +330,7 @@ fn binding_receipt(
         activity_id: submission.activity_id,
         previous_state_root: [2; 32],
         resulting_state_root: [3; 32],
-        batch_id: [4; 32],
+        batch_id: support::execution_batch_id([2; 32], submission.activity_id, 9),
         asset: [5; 32],
         operation,
         recorded_address: address.bytes(),
@@ -606,17 +613,13 @@ fn initial_binding_requires_real_signature_and_verified_matching_receipt() {
         Ok(BindingState::Binding { .. })
     ));
 
+    let accepted_receipt = binding_receipt(submission, address, 4);
     let active = required(
-        journey.finalize(
-            &mut scope,
-            &binding_receipt(submission, address, 4),
-            104,
-            &TraceId::mint([2; 16]),
-        ),
+        journey.finalize(&mut scope, &accepted_receipt, 104, &TraceId::mint([2; 16])),
         "finalize binding",
     );
     assert_eq!(active.address(), address.bytes());
-    agent.mark_executed(submission, active.receipt_digest());
+    agent.mark_executed(submission, accepted_receipt);
     assert!(agent
         .outbox
         .status(submission.submission_id)
@@ -668,16 +671,12 @@ fn rebind_requires_real_step_up_keeps_old_active_and_audits_notification() {
         ),
         "submit initial",
     );
+    let old_receipt = binding_receipt(initial, old_address, 4);
     let old_active = required(
-        journey.finalize(
-            &mut scope,
-            &binding_receipt(initial, old_address, 4),
-            102,
-            &TraceId::mint([3; 16]),
-        ),
+        journey.finalize(&mut scope, &old_receipt, 102, &TraceId::mint([3; 16])),
         "finalize initial",
     );
-    agent.mark_executed(initial, old_active.receipt_digest());
+    agent.mark_executed(initial, old_receipt);
 
     let passkeys = required(Passkeys::new(auth_config()), "passkeys");
     let mut authenticator = SoftwareAuthenticator::new();
@@ -733,17 +732,13 @@ fn rebind_requires_real_step_up_keeps_old_active_and_audits_notification() {
         matches!(journey.state(&scope), Ok(BindingState::Rebinding { active, .. }) if active == old_active)
     );
 
+    let new_receipt = binding_receipt(submission, new_address, 4);
     let new_active = required(
-        journey.finalize(
-            &mut scope,
-            &binding_receipt(submission, new_address, 4),
-            125,
-            &TraceId::mint([5; 16]),
-        ),
+        journey.finalize(&mut scope, &new_receipt, 125, &TraceId::mint([5; 16])),
         "finalize rebind",
     );
     assert_eq!(new_active.address(), new_address.bytes());
-    agent.mark_executed(submission, new_active.receipt_digest());
+    agent.mark_executed(submission, new_receipt);
     assert_ne!(new_active.receipt_digest(), old_active.receipt_digest());
     assert_eq!(required(journey.history(&scope), "history").len(), 2);
     let notifications = required(journey.security_notifications(&scope), "notifications");

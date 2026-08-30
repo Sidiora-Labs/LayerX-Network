@@ -1,8 +1,9 @@
 use serde_json::{json, Value};
 
 use crate::auth::{
-    AssertionChallenge, AssertionProof, OperationDigest, PasskeyRecord, RegistrationChallenge,
-    SessionGrant, SessionRevocation, SessionView, StepUpChallenge, StepUpEvidence,
+    AssertionChallenge, AssertionProof, Device, OperationDigest, PasskeyRecord,
+    RegistrationChallenge, SessionGrant, SessionRevocation, SessionView, StepUpChallenge,
+    StepUpEvidence,
 };
 use crate::time::rfc3339;
 
@@ -12,6 +13,32 @@ use super::backend::{ApiFailure, BackendResponse, SessionSecrets};
 pub struct IdentityProjector;
 
 impl IdentityProjector {
+    /// Mints the service-owned device identifier from the schema-decoded
+    /// session.open presentation metadata.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed when an older client omits metadata or when either field
+    /// violates the durable device bounds.
+    pub fn mint_session_device(body: &Value) -> Result<Device, ApiFailure> {
+        let device = body
+            .get("device")
+            .and_then(Value::as_object)
+            .filter(|device| {
+                device.len() == 2 && device.contains_key("label") && device.contains_key("platform")
+            })
+            .ok_or_else(|| ApiFailure::invalid_request(Some("device")))?;
+        let label = device
+            .get("label")
+            .and_then(Value::as_str)
+            .ok_or_else(|| ApiFailure::invalid_request(Some("device.label")))?;
+        let platform = device
+            .get("platform")
+            .and_then(Value::as_str)
+            .ok_or_else(|| ApiFailure::invalid_request(Some("device.platform")))?;
+        Device::mint(label, platform).map_err(|_| ApiFailure::invalid_request(Some("device")))
+    }
+
     #[must_use]
     pub fn registration_challenge(challenge: &RegistrationChallenge) -> Value {
         json!({
@@ -47,7 +74,10 @@ impl IdentityProjector {
             "passkey_id".to_owned(),
             Value::String(passkey.passkey_id().to_owned()),
         );
-        object.insert("label".to_owned(), Value::String(passkey.label().to_owned()));
+        object.insert(
+            "label".to_owned(),
+            Value::String(passkey.label().to_owned()),
+        );
         object.insert(
             "created_at".to_owned(),
             Value::String(rfc3339(passkey.created_at())),

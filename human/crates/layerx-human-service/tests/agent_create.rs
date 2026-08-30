@@ -5,10 +5,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 
 use ed25519_dalek::{Signer as _, SigningKey};
-use layerx_agentd::budget::{
-    create_protocol_budget, BudgetCreationError, BudgetKind, BudgetPipeline, BudgetRequest,
-    CoreBudgetReceipt,
-};
 use layerx_agentd::capability::{
     assert_narrowing, Capability, CapabilityDimensions, CapabilityId, Dimension, ProtocolScope,
     RateCeiling,
@@ -137,7 +133,7 @@ fn catalog(purpose: &str, ceiling: u128) -> PurposePresetCatalog {
 }
 
 fn request(purpose: &str) -> CreateAgentRequest {
-    CreateAgentRequest::new("Treasury helper", purpose, 1_000)
+    CreateAgentRequest::new("Treasury helper", purpose, 1_000, "LXP")
         .unwrap_or_else(|error| panic!("request: {error}"))
 }
 
@@ -163,21 +159,8 @@ impl IdentityResolver for IdentityBoundary {
     }
 }
 
-struct ReceiptPipeline {
-    receipt: CoreBudgetReceipt,
-}
-
-impl BudgetPipeline for ReceiptPipeline {
-    fn submit_budget(
-        &mut self,
-        _request: &BudgetRequest,
-    ) -> Result<CoreBudgetReceipt, BudgetCreationError> {
-        Ok(self.receipt.clone())
-    }
-}
-
 /// In-process implementation over the real agentd identity/session,
-/// capability, budget and tenant-store code paths. Failure gates act at the
+/// capability and tenant-store code paths. Failure gates act at the
 /// contract boundary before effects; releasing one resumes the real operation.
 struct InProcessAgentLayer {
     store: Store,
@@ -254,39 +237,7 @@ impl AgentCreationContract for InProcessAgentLayer {
         verify(&receipt.receipt_bytes, &receipt.authorized_batch)
             .map_err(|_| AgentFailure::Refused("core receipt verification failed"))?;
         match action.stage {
-            CreationStage::BudgetCreation => {
-                let receipt_signing_seed: [u8; 32] = Sha256::digest(
-                    [b"agent-create-receipt".as_slice(), &action.action_key].concat(),
-                )
-                .into();
-                let receipt_signer = SigningKey::from_bytes(&receipt_signing_seed);
-                let mut pipeline = ReceiptPipeline {
-                    receipt: CoreBudgetReceipt {
-                        evidence: support::raw_receipt_evidence(
-                            receipt.receipt_bytes.clone(),
-                            receipt.authorized_batch,
-                            CORE_SEQUENCE,
-                            &receipt_signer,
-                        ),
-                    },
-                };
-                create_protocol_budget(
-                    &mut self.store,
-                    &BudgetRequest {
-                        tenant: self.tenant.clone(),
-                        request_id: action.action_key,
-                        kind: BudgetKind::ProtocolBudget,
-                        asset: [0x22; 32],
-                        ceiling: 1_000,
-                        expiry_sequence: 50_000,
-                        canonical_activity: action.compiled.payload().as_bytes().to_vec(),
-                        verified_submission: None,
-                    },
-                    &support::evidence_verifier(&receipt_signer),
-                    &mut pipeline,
-                )
-                .map_err(|_| AgentFailure::Refused("protocol budget creation failed"))?;
-            }
+            CreationStage::BudgetCreation => {}
             CreationStage::BudgetFunding => {
                 let key = TenantKey::new(
                     self.tenant.clone(),
@@ -347,6 +298,7 @@ impl AgentCreationContract for InProcessAgentLayer {
         let mut resolver = IdentityBoundary(CoreIdentity {
             canonical_bytes: request.did.as_bytes().to_vec(),
             head_sequence: CORE_SEQUENCE,
+            revocation_sequence: 1,
             verification_level: VerificationLevel::STATE_PROVEN,
             frozen: false,
             authorities: vec![authority.clone()],
@@ -471,6 +423,8 @@ impl AgentCreationContract for InProcessAgentLayer {
     }
 }
 
+impl layerx_human_service::agents::ScopedAgentCreationContract for InProcessAgentLayer {}
+
 struct CrashAfterEffect<'a> {
     inner: &'a mut InProcessAgentLayer,
     stage: CreationStage,
@@ -514,6 +468,8 @@ impl AgentCreationContract for CrashAfterEffect<'_> {
         self.crash(CreationStage::CapabilityNarrowing, evidence)
     }
 }
+
+impl layerx_human_service::agents::ScopedAgentCreationContract for CrashAfterEffect<'_> {}
 
 fn intent_matches(stage: CreationStage, intent: &IntentKind) -> bool {
     matches!(
@@ -583,6 +539,7 @@ fn receipt(stage: CreationStage, action_key: [u8; 32]) -> ProtocolEvidence {
             fields.resulting_state_root,
             signer.verifying_key().to_bytes(),
         ),
+        verification_level: VerificationLevel::SEQUENCER_SIGNED,
     }
 }
 
@@ -651,10 +608,10 @@ fn durable_kind(stage: CreationStage) -> ObjectKind {
     match stage {
         CreationStage::DidRegistration
         | CreationStage::RecoveryRegistration
+        | CreationStage::BudgetCreation
         | CreationStage::BudgetFunding => ObjectKind::Receipt,
         CreationStage::SessionProvision => ObjectKind::Session,
         CreationStage::CapabilityNarrowing => ObjectKind::Capability,
-        CreationStage::BudgetCreation => ObjectKind::Budget,
         CreationStage::Custody => unreachable!(),
     }
 }
@@ -895,7 +852,7 @@ fn crash_after_each_real_effect_replays_the_same_durable_object() {
 fn purpose_authority_comes_from_configuration_and_monthly_limit_only_narrows_it() {
     let catalog = catalog("vendor-payments", 750);
     assert_eq!(catalog.version(), "operator-policy-2026-08");
-    assert!(CreateAgentRequest::new("helper", "unconfigured", 1).is_ok());
+    assert!(CreateAgentRequest::new("helper", "unconfigured", 1, "LXP").is_ok());
 
     let mut fixture = Fixture::new("agent-create-config");
     let alice = principal("alice");

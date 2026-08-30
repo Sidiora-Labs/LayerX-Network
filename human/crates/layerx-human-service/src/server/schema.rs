@@ -4,7 +4,10 @@ use std::fmt::{Display, Formatter};
 use serde_json::{Map, Value};
 
 const SCHEMA_FILES: &[(&str, &str)] = &[
-    ("v1.kvx", include_str!("../../../../schema/human-api/v1.kvx")),
+    (
+        "v1.kvx",
+        include_str!("../../../../schema/human-api/v1.kvx"),
+    ),
     (
         "journeys.kvx",
         include_str!("../../../../schema/human-api/journeys.kvx"),
@@ -65,6 +68,51 @@ enum TypeDeclaration {
 }
 
 /// One operation compiled directly from the owner-supplied human-api schema.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AuthorizationClass {
+    Read,
+    MoneyMovement,
+    Approval,
+    Withdrawal,
+    Exit,
+    SecuritySettings,
+    SecretReveal,
+    WalletRebind,
+    AgentArchive,
+}
+
+impl AuthorizationClass {
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "read" => Some(Self::Read),
+            "money-movement" => Some(Self::MoneyMovement),
+            "approval" => Some(Self::Approval),
+            "withdrawal" => Some(Self::Withdrawal),
+            "exit" => Some(Self::Exit),
+            "security-settings" => Some(Self::SecuritySettings),
+            "secret-reveal" => Some(Self::SecretReveal),
+            "wallet-rebind" => Some(Self::WalletRebind),
+            "agent-archive" => Some(Self::AgentArchive),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Read => "read",
+            Self::MoneyMovement => "money-movement",
+            Self::Approval => "approval",
+            Self::Withdrawal => "withdrawal",
+            Self::Exit => "exit",
+            Self::SecuritySettings => "security-settings",
+            Self::SecretReveal => "secret-reveal",
+            Self::WalletRebind => "wallet-rebind",
+            Self::AgentArchive => "agent-archive",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Operation {
     pub name: String,
@@ -73,6 +121,7 @@ pub struct Operation {
     pub request: String,
     pub response: String,
     pub idempotency: bool,
+    pub authorization_class: AuthorizationClass,
 }
 
 impl Operation {
@@ -178,7 +227,9 @@ impl ApiSchema {
                         insert_type(
                             &mut types,
                             name,
-                            TypeDeclaration::Record(record_fields(file, section, values, "required")?),
+                            TypeDeclaration::Record(record_fields(
+                                file, section, values, "required",
+                            )?),
                         )?;
                     }
                 } else if let Some(name) = section.strip_prefix("record.") {
@@ -211,17 +262,30 @@ impl ApiSchema {
                 let Some(name) = section.strip_prefix("operation.") else {
                     continue;
                 };
+                let authorization_class_value =
+                    required_quoted(file, section, values, "authorization_class")?;
+                let authorization_class = AuthorizationClass::parse(&authorization_class_value)
+                    .ok_or_else(|| {
+                        SchemaError::new(format!(
+                            "{file}.{section}.authorization_class is not a recognized closed class"
+                        ))
+                    })?;
                 let operation = Operation {
                     name: name.to_owned(),
                     method: required_quoted(file, section, values, "method")?,
                     path: required_quoted(file, section, values, "path")?,
                     request: required_quoted(file, section, values, "request")?,
                     response: required_quoted(file, section, values, "response")?,
-                    idempotency: values.get("idempotency").is_some_and(|value| value == "true"),
+                    idempotency: values
+                        .get("idempotency")
+                        .is_some_and(|value| value == "true"),
+                    authorization_class,
                 };
                 let base_path = format!("/v{major}/");
-                if !matches!(operation.method.as_str(), "DELETE" | "GET" | "PATCH" | "POST" | "PUT")
-                    || !operation.path.starts_with(&base_path)
+                if !matches!(
+                    operation.method.as_str(),
+                    "DELETE" | "GET" | "PATCH" | "POST" | "PUT"
+                ) || !operation.path.starts_with(&base_path)
                     || operation.path.contains(['?', '#'])
                     || operation.path.ends_with('/')
                 {
@@ -229,7 +293,9 @@ impl ApiSchema {
                         "{file}.{section} does not declare a canonical v{major} route"
                     )));
                 }
-                if !types.contains_key(&operation.request) || !types.contains_key(&operation.response) {
+                if !types.contains_key(&operation.request)
+                    || !types.contains_key(&operation.response)
+                {
                     return Err(SchemaError::new(format!(
                         "{}.{} references an undeclared request or response type",
                         file, section
@@ -285,7 +351,9 @@ impl ApiSchema {
     /// Returns a typed path failure when decoding is unsafe.
     pub fn route(&self, method: &str, path: &str) -> Result<Option<RouteMatch<'_>>, SchemaError> {
         if path.contains('?') || path.contains('#') || !path.starts_with('/') {
-            return Err(SchemaError::new("the request target is not a canonical path"));
+            return Err(SchemaError::new(
+                "the request target is not a canonical path",
+            ));
         }
         for operation in &self.operations {
             if operation.method != method {
@@ -328,7 +396,11 @@ impl ApiSchema {
     /// # Errors
     ///
     /// Refuses a component response that could not have been produced by the declared schema.
-    pub fn encode_response(&self, operation: &Operation, result: &Value) -> Result<(), SchemaError> {
+    pub fn encode_response(
+        &self,
+        operation: &Operation,
+        result: &Value,
+    ) -> Result<(), SchemaError> {
         self.validate(&operation.response, result, "response.result", 0)?;
         let balance = match operation.name.as_str() {
             "account.balance" => Some(result),
@@ -372,7 +444,10 @@ impl ApiSchema {
                 if prefix.as_ref().is_some_and(|required| {
                     !text.starts_with(required) || text.len() == required.len()
                 }) {
-                    return Err(SchemaError::at(at, format!("must carry the {type_name} prefix")));
+                    return Err(SchemaError::at(
+                        at,
+                        format!("must carry the {type_name} prefix"),
+                    ));
                 }
                 match format.as_deref() {
                     Some("decimal")
@@ -382,9 +457,9 @@ impl ApiSchema {
                     }
                     Some("currency")
                         if text.is_empty()
-                            || !text.bytes().all(|byte| {
-                                byte.is_ascii_uppercase() || byte.is_ascii_digit()
-                            }) =>
+                            || !text
+                                .bytes()
+                                .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit()) =>
                     {
                         return Err(SchemaError::at(at, "must be an uppercase currency code"));
                     }
@@ -418,7 +493,10 @@ impl ApiSchema {
                 if variants.contains(variant) {
                     Ok(())
                 } else {
-                    Err(SchemaError::at(at, format!("is not a declared {type_name} variant")))
+                    Err(SchemaError::at(
+                        at,
+                        format!("is not a declared {type_name} variant"),
+                    ))
                 }
             }
             TypeDeclaration::Record(fields) => {
@@ -504,8 +582,9 @@ fn enforce_verified_balance(balance: &Value) -> Result<(), SchemaError> {
                             Some("receipt-verified") | Some("checkpoint-finalised")
                         )
                 }
-                "checkpoint-finalised" => class == Some("checkpoint-proof")
-                    && level == Some("checkpoint-finalised"),
+                "checkpoint-finalised" => {
+                    class == Some("checkpoint-proof") && level == Some("checkpoint-finalised")
+                }
                 _ => false,
             }
         })
@@ -530,13 +609,19 @@ fn parse_sections(
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
-        if let Some(section) = line.strip_prefix('[').and_then(|value| value.strip_suffix(']')) {
+        if let Some(section) = line
+            .strip_prefix('[')
+            .and_then(|value| value.strip_suffix(']'))
+        {
             current = section.to_owned();
             sections.entry(current.clone()).or_default();
             continue;
         }
         let (key, value) = line.split_once('=').ok_or_else(|| {
-            SchemaError::new(format!("{file}:{} is not a key/value declaration", index + 1))
+            SchemaError::new(format!(
+                "{file}:{} is not a key/value declaration",
+                index + 1
+            ))
         })?;
         if current.is_empty() {
             return Err(SchemaError::new(format!(
@@ -576,7 +661,9 @@ fn record_fields(
     }
     let mut names = BTreeSet::new();
     if fields.iter().any(|field| !names.insert(field.name.clone())) {
-        return Err(SchemaError::new(format!("{file}.{section} repeats a field")));
+        return Err(SchemaError::new(format!(
+            "{file}.{section} repeats a field"
+        )));
     }
     Ok(fields)
 }
@@ -659,9 +746,8 @@ fn required_quoted(
     values: &BTreeMap<String, String>,
     key: &str,
 ) -> Result<String, SchemaError> {
-    quoted(values.get(key)).ok_or_else(|| {
-        SchemaError::new(format!("{file}.{section}.{key} is not a quoted value"))
-    })
+    quoted(values.get(key))
+        .ok_or_else(|| SchemaError::new(format!("{file}.{section}.{key} is not a quoted value")))
 }
 
 fn required_number(values: &BTreeMap<String, String>, key: &str) -> Result<u32, SchemaError> {

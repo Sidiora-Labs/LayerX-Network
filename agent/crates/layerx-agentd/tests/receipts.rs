@@ -1,7 +1,9 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use ed25519_dalek::{Signer as _, SigningKey};
-use layerx_agentd::receipt::{classify, serve, store, ReceiptLookupKey, ReceiptStoreError};
+use layerx_agentd::receipt::{
+    classify, serve, store, store_verified_if_absent, ReceiptLookupKey, ReceiptStoreError,
+};
 use layerx_agentd::store::{Store, TenantId};
 use layerx_proof::receipt::AuthorizedBatch;
 use layerx_types::result::{KnownResult, ResultCode, Retriability};
@@ -135,6 +137,70 @@ fn verified_bytes_survive_all_three_indexes_and_restart_unchanged() {
         assert_eq!(served.canonical_bytes, exact);
         assert_eq!(served.metadata, metadata);
     }
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn first_verified_ingress_is_stored_before_it_is_served() {
+    let root = directory("first-ingress");
+    let signing_key = SigningKey::from_bytes(&[3; 32]);
+    let fields = fields(0);
+    let exact = sign(&fields, &signing_key);
+    let idem = [0x45; 32];
+    let mut durable = Store::open(&root).unwrap_or_else(|error| panic!("store: {error}"));
+    assert!(matches!(
+        serve(&durable, tenant(), ReceiptLookupKey::Idempotency(idem)),
+        Err(ReceiptStoreError::Missing)
+    ));
+    let served = store_verified_if_absent(
+        &mut durable,
+        tenant(),
+        idem,
+        &exact,
+        &authorised(&fields, &signing_key),
+    )
+    .unwrap_or_else(|error| panic!("first ingress: {error:?}"));
+    assert_eq!(served.canonical_bytes, exact);
+    assert_eq!(
+        served.metadata.verification_level,
+        VerificationLevel::SEQUENCER_SIGNED
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn repeated_verified_ingress_refuses_conflicts_without_replacing_the_first_receipt() {
+    let root = directory("ingress-conflict");
+    let signing_key = SigningKey::from_bytes(&[3; 32]);
+    let original = fields(0);
+    let exact = sign(&original, &signing_key);
+    let idem = [0x46; 32];
+    let mut durable = Store::open(&root).unwrap_or_else(|error| panic!("store: {error}"));
+    store_verified_if_absent(
+        &mut durable,
+        tenant(),
+        idem,
+        &exact,
+        &authorised(&original, &signing_key),
+    )
+    .unwrap_or_else(|error| panic!("first ingress: {error:?}"));
+
+    let mut conflicting = original.clone();
+    conflicting.activity_id = [0x47; 32];
+    let conflicting_exact = sign(&conflicting, &signing_key);
+    assert!(matches!(
+        store_verified_if_absent(
+            &mut durable,
+            tenant(),
+            idem,
+            &conflicting_exact,
+            &authorised(&conflicting, &signing_key),
+        ),
+        Err(ReceiptStoreError::Corrupt)
+    ));
+    let served = serve(&durable, tenant(), ReceiptLookupKey::Idempotency(idem))
+        .unwrap_or_else(|error| panic!("serve original: {error:?}"));
+    assert_eq!(served.canonical_bytes, exact);
     let _ = std::fs::remove_dir_all(root);
 }
 

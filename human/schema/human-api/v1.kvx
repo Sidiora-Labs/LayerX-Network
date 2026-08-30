@@ -6,6 +6,13 @@ source_of_truth = "This schema and the schema files it includes define the human
 compatibility = "Additive only within a major version: a release may only add sections, keys, list entries or optional fields. Removing or changing an existing declaration requires a new major version."
 includes = ["journeys.kvx","errors.kvx","stream.kvx","identity.kvx","movement.kvx","agents.kvx","activity.kvx","support.kvx","home.kvx"]
 
+[authorization]
+model = "Every non-public operation is authorized against the durable principal-scoped passkey session and yields a one-use execution capability bound to the operation, canonical body disclosure, destination, principal, authenticated agent tenant, session, trace, random nonce, issue time and a maximum age of sixty seconds."
+discovery = "Opaque registration, assertion, step-up and session identifiers resolve through a durable MAC-authenticated index containing no bearer secret. Agent tenancy always comes from the authenticated PrincipalStore scope."
+classes = ["read","money-movement","approval","withdrawal","exit","security-settings","secret-reveal","wallet-rebind","agent-archive"]
+refusal = "Unclassified operations, disclosure mismatches, expiry, nonce replay, unauthenticated indexes and unavailable security providers refuse closed."
+security_provider = "Authenticator verification and verified recovery receipt disclosure use a finite versioned binary Unix boundary, with no local fallback and no generic JSON service contract."
+
 [encoding]
 transport = "HTTPS"
 content_type = "application/json"
@@ -96,6 +103,7 @@ fields = ["amount:Amount","currency:CurrencyCode"]
 fields = ["ok:boolean","result:object","trace:TraceId"]
 
 [operation.version]
+authorization_class = "read"
 method = "GET"
 path = "/v1/version"
 request = "Empty"

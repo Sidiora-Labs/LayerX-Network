@@ -105,6 +105,7 @@ rejected = "A rejection is immediate and final for this hold: money_moved is fal
 approved = "An approval releases exactly the held activity into the submission path. money_moved stays false at decision time; the released activity is tracked to its verified receipt through evidence like any movement."
 
 [operation.agent.create]
+authorization_class = "money-movement"
 method = "POST"
 path = "/v1/agents"
 request = "AgentCreateRequest"
@@ -113,18 +114,21 @@ idempotency = true
 journey = "Creation is a staged receipt-verified journey of kind agent-create. The agent renders active only when every step's receipt has verified; a partial creation shows which steps completed and resumes."
 
 [operation.agent.list]
+authorization_class = "read"
 method = "GET"
 path = "/v1/agents"
 request = "Empty"
 response = "AgentPage"
 
 [operation.agent.get]
+authorization_class = "read"
 method = "GET"
 path = "/v1/agents/{agent_id}"
 request = "Empty"
 response = "Agent"
 
 [operation.agent.pause]
+authorization_class = "money-movement"
 method = "POST"
 path = "/v1/agents/{agent_id}/pause"
 request = "Empty"
@@ -135,6 +139,7 @@ consequence_copy_key = "agent.pause.consequence"
 effect = "Operating authority is suspended promptly. Pause is reversible, confirmed with the plain consequence sentence consequence_copy_key names, and the paused record carries the evidence backing the suspension."
 
 [operation.agent.resume]
+authorization_class = "money-movement"
 method = "POST"
 path = "/v1/agents/{agent_id}/resume"
 request = "Empty"
@@ -143,6 +148,7 @@ idempotency = true
 effect = "Resume restores the agent's operating authority through the same receipt-verified paths pause used."
 
 [operation.agent.limit]
+authorization_class = "money-movement"
 method = "POST"
 path = "/v1/agents/{agent_id}/limit"
 request = "AgentLimitRequest"
@@ -151,6 +157,7 @@ idempotency = true
 enforcement = "Where the limit is protocol-backed the change is receipt-verified through a protocol budget change. Any remainder this plane enforces itself is labelled app in enforcement and is never described as a protocol guarantee."
 
 [operation.agent.reclaim]
+authorization_class = "money-movement"
 method = "POST"
 path = "/v1/agents/{agent_id}/reclaim"
 request = "AgentReclaimRequest"
@@ -159,6 +166,7 @@ idempotency = true
 vocabulary = "Taking money back is a move journey using return vocabulary. There is no key-based sweep of an agent's account: the route resolver picks a legitimate return path and the journey shows the receipt-backed result."
 
 [operation.agent.rotate]
+authorization_class = "security-settings"
 method = "POST"
 path = "/v1/agents/{agent_id}/rotate"
 request = "Empty"
@@ -167,6 +175,7 @@ idempotency = true
 effect = "Rotation runs through the protocol's own mechanism with its challenge delay presented in plain time before anything changes hands."
 
 [operation.agent.recover]
+authorization_class = "security-settings"
 method = "POST"
 path = "/v1/agents/{agent_id}/recover"
 request = "Empty"
@@ -175,6 +184,7 @@ idempotency = true
 authority = "Recovery runs under the human's recovery authority with step-up, and the challenge delay is presented in plain time before anything changes."
 
 [operation.agent.archive]
+authorization_class = "agent-archive"
 method = "POST"
 path = "/v1/agents/{agent_id}/archive"
 request = "AgentArchiveRequest"
@@ -184,18 +194,21 @@ grammar = "destructive"
 disposition_first = "Archive is refused with archive-needs-disposition while funds remain undisposed: remaining balances return through the reclaim paths first. A confirmed archive revokes authority, retires operating keys and keeps the agent's history and receipts readable forever."
 
 [operation.approval.list]
+authorization_class = "read"
 method = "GET"
 path = "/v1/approvals"
 request = "Empty"
 response = "ApprovalPage"
 
 [operation.approval.get]
+authorization_class = "read"
 method = "GET"
 path = "/v1/approvals/{approval_id}"
 request = "Empty"
 response = "ApprovalDetail"
 
 [operation.approval.approve]
+authorization_class = "approval"
 method = "POST"
 path = "/v1/approvals/{approval_id}/approve"
 request = "ApprovalApproveRequest"
@@ -204,6 +217,7 @@ idempotency = true
 outcomes = "Exactly one decision wins. A hold already decided answers already-decided, an expired hold answers hold-expired, a defective hold answers hold-defective, and repeating the same decision returns the original outcome."
 
 [operation.approval.reject]
+authorization_class = "approval"
 method = "POST"
 path = "/v1/approvals/{approval_id}/reject"
 request = "Empty"

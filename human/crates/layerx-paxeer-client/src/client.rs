@@ -133,7 +133,9 @@ pub enum ClientConfigError {
         url: String,
         fault: EndpointFault,
     },
-    ZeroRequestTimeout { url: String },
+    ZeroRequestTimeout {
+        url: String,
+    },
     InconsistentChainBinding {
         url: String,
         expected: u64,
@@ -151,6 +153,30 @@ pub(crate) struct QuorumBinding {
     chain_id: u64,
     endpoint_sources: Vec<(String, crate::rpc::EndpointTransport)>,
     minimum_agreement: usize,
+}
+
+impl QuorumBinding {
+    pub(crate) fn from_wire(
+        chain_id: u64,
+        endpoint_sources: Vec<(String, crate::rpc::EndpointTransport)>,
+        minimum_agreement: usize,
+    ) -> Self {
+        Self {
+            chain_id,
+            endpoint_sources,
+            minimum_agreement,
+        }
+    }
+
+    pub(crate) const fn chain_id(&self) -> u64 {
+        self.chain_id
+    }
+    pub(crate) fn endpoint_sources(&self) -> &[(String, crate::rpc::EndpointTransport)] {
+        &self.endpoint_sources
+    }
+    pub(crate) const fn minimum_agreement(&self) -> usize {
+        self.minimum_agreement
+    }
 }
 
 /// Read-only Paxeer client over one or more declared endpoints.
@@ -203,10 +229,9 @@ impl PaxeerClient {
             {
                 return Err(ClientConfigError::MixedTransportModes);
             }
-            if let Some((first_url, _)) = identities.insert(
-                identity,
-                (endpoint.url.clone(), endpoint.transport.clone()),
-            ) {
+            if let Some((first_url, _)) =
+                identities.insert(identity, (endpoint.url.clone(), endpoint.transport.clone()))
+            {
                 return Err(ClientConfigError::DuplicateEndpointIdentity {
                     first_url,
                     duplicate_url: endpoint.url.clone(),
@@ -559,12 +584,11 @@ impl PaxeerClient {
             "eth_getTransactionReceipt",
             &[Json::Text(transaction.to_hex())],
         )?;
-        let included = inclusion_with_logs(&receipt, transaction).map_err(|detail| {
-            EndpointFailure {
+        let included =
+            inclusion_with_logs(&receipt, transaction).map_err(|detail| EndpointFailure {
                 url: endpoint.url.clone(),
                 fault: EndpointFault::UnexpectedValue { detail },
-            }
-        })?;
+            })?;
         let (transaction_view, canonical_block, receipt_logs) =
             if let Some((included, logs)) = included {
                 if included.block.number > head {
@@ -699,13 +723,16 @@ fn semantic_quorum_index(
     observations: &[(String, Json)],
     minimum_agreement: usize,
 ) -> Option<usize> {
-    observations.iter().enumerate().find_map(|(index, (_, candidate))| {
-        let agreeing = observations
-            .iter()
-            .filter(|(_, observed)| semantic_json_eq(observed, candidate))
-            .count();
-        (agreeing >= minimum_agreement).then_some(index)
-    })
+    observations
+        .iter()
+        .enumerate()
+        .find_map(|(index, (_, candidate))| {
+            let agreeing = observations
+                .iter()
+                .filter(|(_, observed)| semantic_json_eq(observed, candidate))
+                .count();
+            (agreeing >= minimum_agreement).then_some(index)
+        })
 }
 
 fn semantic_json_eq(left: &Json, right: &Json) -> bool {

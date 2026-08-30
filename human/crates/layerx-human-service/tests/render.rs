@@ -13,7 +13,6 @@ use layerx_agent_api::prepare::{
 };
 use layerx_agent_api::verify::Level;
 use layerx_agent_api::{Amount as ApiAmount, TimestampSeconds as ApiTimestamp};
-use layerx_agentd::budget::{reconcile, LocalAccounting, ProtocolBudgetState, ReconciliationState};
 use layerx_agentd::capability::CapabilityId;
 use layerx_agentd::policy::approval::{hold, ApprovalContext, ApprovalRegistry};
 use layerx_agentd::prepare::{
@@ -239,33 +238,36 @@ fn held_digest(prepared: &Prepared, marker: u8) -> [u8; 32] {
 }
 
 fn verified_budget(remaining: u128, observed_at_sequence: u64) -> VerifiedBudgetAfter {
-    let mut local = LocalAccounting {
-        consumed: 0,
-        window_start_sequence: 1,
-        last_receipt: None,
-    };
-    let state = reconcile(
-        &mut local,
-        ProtocolBudgetState {
-            evidence: support::raw_state_leaf(
-                remaining.to_be_bytes().to_vec(),
-                observed_at_sequence,
-            ),
-        },
-        &[],
-        &support::evidence_verifier(&SigningKey::from_bytes(&[0x84; 32])),
-    )
-    .unwrap_or_else(|error| panic!("verified budget reconciliation: {error:?}"));
-    budget_from_state(state)
-}
-
-fn budget_from_state(state: ReconciliationState) -> VerifiedBudgetAfter {
+    let account = [0x41; 32];
+    let asset = [0x42; 32];
+    let mut canonical = Vec::with_capacity(80);
+    canonical.extend_from_slice(&account);
+    canonical.extend_from_slice(&asset);
+    canonical.extend_from_slice(&remaining.to_be_bytes());
+    let authority = support::evidence_verifier(&SigningKey::from_bytes(&[0x84; 32]));
+    let state = authority
+        .verify_state(&support::raw_state_leaf(canonical, observed_at_sequence))
+        .unwrap_or_else(|error| panic!("verified balance state: {error:?}"));
+    let canonical: [u8; 80] = state
+        .canonical_state()
+        .try_into()
+        .unwrap_or_else(|_| panic!("canonical balance state length"));
+    assert_eq!(
+        state.level(),
+        layerx_types::verify::VerificationLevel::STATE_PROVEN
+    );
+    assert_eq!(canonical[..32], account);
+    assert_eq!(canonical[32..64], asset);
+    let verified_remaining = u128::from_be_bytes(
+        canonical[64..]
+            .try_into()
+            .unwrap_or_else(|_| panic!("canonical balance amount")),
+    );
     let mut evidence = Sha256::new();
-    evidence.update(b"layerx-agent-budget-read/v1");
-    evidence.update(state.remaining().to_be_bytes());
+    evidence.update(canonical);
     evidence.update(state.observed_head_sequence().to_be_bytes());
     VerifiedBudgetAfter {
-        remaining: state.remaining(),
+        remaining: verified_remaining,
         level: Level::StateProven,
         evidence_digest: evidence.finalize().into(),
         observed_at_sequence: state.observed_head_sequence(),

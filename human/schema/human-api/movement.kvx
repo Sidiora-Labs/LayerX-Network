@@ -114,6 +114,7 @@ settlement_domain = "paxeer"
 normal_operation = "Where the protocol has not declared exit eligibility, eligible is false and copy_key states plainly that the exit is unavailable because the network is operating normally, with withdraw_instead_path offering the ordinary withdrawal instead."
 
 [operation.move.quote]
+authorization_class = "money-movement"
 method = "POST"
 path = "/v1/moves/quote"
 request = "MoveQuoteRequest"
@@ -121,6 +122,7 @@ response = "MoveQuote"
 no_route = "A route the resolver cannot serve is a typed refusal, never a partial attempt."
 
 [operation.move.commit]
+authorization_class = "money-movement"
 method = "POST"
 path = "/v1/moves"
 request = "MoveCommitRequest"
@@ -129,6 +131,7 @@ idempotency = true
 journey = "Committing a quote starts a journey of kind move. Repeating the request returns the original journey."
 
 [operation.deposit.start]
+authorization_class = "money-movement"
 method = "POST"
 path = "/v1/deposits"
 request = "DepositStartRequest"
@@ -137,6 +140,7 @@ idempotency = true
 first_stage = "The returned journey of kind deposit starts at the stage waiting on the wallet, and the journey carries the wallet request to sign for exactly that stage. Where no wallet is bound the journey starts with a linking stage instead, folding binding into the journey rather than a separate errand."
 
 [operation.deposit.confirm]
+authorization_class = "money-movement"
 method = "POST"
 path = "/v1/deposits/{journey_id}/confirm"
 request = "DepositConfirmRequest"
@@ -144,6 +148,7 @@ response = "Journey"
 handoff = "The wallet's transaction reference hands the journey to the service, which runs it server-side from here with no further user action required."
 
 [operation.withdraw.start]
+authorization_class = "withdrawal"
 method = "POST"
 path = "/v1/withdrawals"
 request = "WithdrawStartRequest"
@@ -152,6 +157,7 @@ idempotency = true
 commitment = "Starting a withdrawal commits it: a committed withdrawal cannot be cancelled, only completed, and the review states this explicitly before the user commits."
 
 [operation.withdraw.claim]
+authorization_class = "withdrawal"
 method = "POST"
 path = "/v1/withdrawals/{journey_id}/claim"
 request = "WithdrawClaimRequest"
@@ -159,6 +165,7 @@ response = "Journey"
 claim = "The wallet's claim signature reference advances the journey through its ready-to-claim stage toward paid out."
 
 [operation.exit.start]
+authorization_class = "exit"
 method = "POST"
 path = "/v1/exit"
 request = "ExitStartRequest"
@@ -167,6 +174,7 @@ idempotency = true
 framing = "A guided flow under Settings framed as getting my money out. It requires the typed confirmation of its irreversibility and stays operable when ordinary LayerX operation is degraded."
 
 [operation.exit.eligibility]
+authorization_class = "read"
 method = "GET"
 path = "/v1/exit/eligibility"
 request = "Empty"

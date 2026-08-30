@@ -17,6 +17,7 @@ use layerx_intents::{compile, CompileError, DisclosureCheck, DisclosureCheckErro
 use layerx_proof::receipt::{verify_outcome, AuthorizedBatch, VerificationFailure};
 use layerx_sdk::{Call, Client as AgentClient, SdkError, SubmissionOutcome};
 use layerx_types::payload::{ActivityType, ModuleRegistry, PayloadError};
+use layerx_types::verify::VerificationLevel;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
@@ -91,9 +92,42 @@ impl JourneyLeg {
 
 /// One immutable movement plan. The caller idempotency key owns the durable
 /// record; each leg has a separate stable economic idempotency key.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum JourneyKind {
+    Onboarding,
+    WalletBinding,
+    Deposit,
+    Withdraw,
+    Exit,
+    Move,
+    AgentCreate,
+    AgentFund,
+    AgentPause,
+    AgentRetire,
+}
+
+impl JourneyKind {
+    const fn code(self) -> u8 {
+        match self {
+            Self::Onboarding => 1,
+            Self::WalletBinding => 2,
+            Self::Deposit => 3,
+            Self::Withdraw => 4,
+            Self::Exit => 5,
+            Self::Move => 6,
+            Self::AgentCreate => 7,
+            Self::AgentFund => 8,
+            Self::AgentPause => 9,
+            Self::AgentRetire => 10,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct JourneyPlan {
     journey_id: JourneyId,
+    kind: JourneyKind,
     idempotency_key: [u8; 32],
     custody_key: KeyId,
     signing_operation: Operation,
@@ -108,6 +142,7 @@ impl JourneyPlan {
     /// Refuses a zero caller key, no legs, too many legs, or reused action keys.
     pub fn new(
         journey_id: JourneyId,
+        kind: JourneyKind,
         idempotency_key: [u8; 32],
         custody_key: KeyId,
         signing_operation: Operation,
@@ -123,6 +158,7 @@ impl JourneyPlan {
         }
         Ok(Self {
             journey_id,
+            kind,
             idempotency_key,
             custody_key,
             signing_operation,
@@ -152,12 +188,14 @@ pub struct AgentPreparation {
     pub idempotency_key: [u8; 32],
 }
 
-/// Canonical receipt bytes and the independently supplied batch authority used
-/// to verify them.
+/// Canonical receipt bytes, independently supplied batch authority, and the
+/// verification rank authenticated by the agent boundary. The rank is not
+/// inferred from receipt bytes and cannot replace local receipt verification.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReceiptMaterial {
     pub canonical_bytes: Vec<u8>,
     pub authorised_batch: AuthorizedBatch,
+    pub verification_level: VerificationLevel,
 }
 
 /// Receipt evidence retained by a completed journey leg. This exposes only
@@ -169,6 +207,7 @@ pub struct VerifiedLegEvidence {
     pub activity_id: [u8; 32],
     pub canonical_receipt: Vec<u8>,
     pub receipt_digest: [u8; 32],
+    pub authorised_batch: AuthorizedBatch,
 }
 
 /// Result of the receipt-only resolution operation.
@@ -272,6 +311,8 @@ pub struct JourneyStatus {
     current_leg: usize,
     phases: Vec<JourneyPhase>,
     receipt_digests: Vec<Option<[u8; 32]>>,
+    receipt_material: Vec<Option<Vec<u8>>>,
+    receipt_authorities: Vec<Option<AuthorizedBatch>>,
     refusal_codes: Vec<Option<i32>>,
 }
 
@@ -299,6 +340,15 @@ impl JourneyStatus {
     #[must_use]
     pub fn receipt_digests(&self) -> &[Option<[u8; 32]>] {
         &self.receipt_digests
+    }
+
+    #[must_use]
+    pub fn receipt_material(&self) -> &[Option<Vec<u8>>] {
+        &self.receipt_material
+    }
+    #[must_use]
+    pub fn receipt_authorities(&self) -> &[Option<AuthorizedBatch>] {
+        &self.receipt_authorities
     }
 
     /// Returns the exact protocol result for each refused leg.
@@ -386,7 +436,38 @@ struct LegRecord {
     activity_id: Option<[u8; 32]>,
     receipt: Option<Vec<u8>>,
     receipt_digest: Option<[u8; 32]>,
+    #[serde(default)]
+    receipt_authority: Option<StoredAuthorizedBatch>,
     refusal_code: Option<i32>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct StoredAuthorizedBatch {
+    batch_id: [u8; 32],
+    asset: [u8; 32],
+    previous_state_root: [u8; 32],
+    resulting_state_root: [u8; 32],
+    sequencer_public_key: [u8; 32],
+}
+impl StoredAuthorizedBatch {
+    fn from_public(value: &AuthorizedBatch) -> Self {
+        Self {
+            batch_id: value.batch_id(),
+            asset: value.asset(),
+            previous_state_root: value.previous_state_root(),
+            resulting_state_root: value.resulting_state_root(),
+            sequencer_public_key: value.sequencer_public_key(),
+        }
+    }
+    fn public(&self) -> AuthorizedBatch {
+        AuthorizedBatch::new(
+            self.batch_id,
+            self.asset,
+            self.previous_state_root,
+            self.resulting_state_root,
+            self.sequencer_public_key,
+        )
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -401,6 +482,7 @@ struct TransitionRecord {
 struct JourneyRecord {
     version: u8,
     journey_id: String,
+    kind: JourneyKind,
     idempotency_key: [u8; 32],
     plan_digest: [u8; 32],
     custody_key: String,
@@ -419,6 +501,37 @@ pub struct JourneyEngine {
 }
 
 impl JourneyEngine {
+    /// Returns protocol identities only for a leg whose receipt has been
+    /// independently verified. Pending submissions are intentionally hidden.
+    pub fn verified_identity(&self, leg: usize) -> Option<(&str, [u8; 32])> {
+        let leg = self.record.legs.get(leg)?;
+        if leg.phase != JourneyPhase::ReceiptVerified || leg.receipt_digest.is_none() {
+            return None;
+        }
+        Some((leg.submission_ref.as_deref()?, leg.activity_id?))
+    }
+
+    /// Re-obtains and validates the agent preparation for a persisted Prepared
+    /// leg, exposing only the disclosure digest needed to bridge fresh
+    /// authentication into custody. No signature or submission is produced.
+    pub fn prepared_disclosure_digest(
+        &self,
+        agent_contract: &AgentClient,
+        agent: &mut dyn AgentBoundary,
+        registry: &ModuleRegistry,
+    ) -> Result<[u8; 32], JourneyError> {
+        let index = self.record.current_leg;
+        if self.record.legs.get(index).map(|leg| leg.phase) != Some(JourneyPhase::Prepared) {
+            return Err(JourneyError::Corrupt("journey leg is not prepared"));
+        }
+        let call = self.prepare_call(agent_contract, index)?;
+        let prepared = agent.prepare(&call)?;
+        self.validate_preparation(index, &prepared, registry)?;
+        prepared
+            .disclosure
+            .audit_digest()
+            .map_err(|_| JourneyError::PreparationMismatch)
+    }
     /// Compiles and independently verifies every typed intent, then atomically
     /// persists the immutable plan before any agent-layer effect is possible.
     /// Repeating the caller idempotency key returns the original journey.
@@ -452,6 +565,7 @@ impl JourneyEngine {
         let record = JourneyRecord {
             version: RECORD_VERSION,
             journey_id: plan.journey_id.as_str().to_owned(),
+            kind: plan.kind,
             idempotency_key: plan.idempotency_key,
             plan_digest,
             custody_key: plan.custody_key.as_str().to_owned(),
@@ -496,6 +610,53 @@ impl JourneyEngine {
             }
         }
         Ok(found)
+    }
+
+    /// Lists all journeys in an authenticated principal scope in stable
+    /// newest-first order.
+    ///
+    /// # Errors
+    ///
+    /// Refuses malformed records or duplicate public identifiers.
+    pub fn list(scope: &PrincipalScope<'_>) -> Result<Vec<Self>, JourneyError> {
+        let mut journeys = Vec::new();
+        let mut identifiers = BTreeSet::new();
+        for key in scope.keys(Table::Journeys) {
+            if !key.as_str().starts_with(JOURNEY_PREFIX) {
+                continue;
+            }
+            let row = scope
+                .get(Table::Journeys, &key)
+                .ok_or(JourneyError::Corrupt("journey disappeared while listing"))?;
+            let record = decode_record(row.bytes())?;
+            if !identifiers.insert(record.journey_id.clone()) {
+                return Err(JourneyError::Corrupt("duplicate journey identifier"));
+            }
+            journeys.push(Self { record });
+        }
+        journeys.sort_by(|left, right| {
+            right
+                .record
+                .updated_at
+                .cmp(&left.record.updated_at)
+                .then_with(|| right.record.journey_id.cmp(&left.record.journey_id))
+        });
+        Ok(journeys)
+    }
+
+    #[must_use]
+    pub const fn started_at(&self) -> u64 {
+        self.record.started_at
+    }
+
+    #[must_use]
+    pub const fn updated_at(&self) -> u64 {
+        self.record.updated_at
+    }
+
+    #[must_use]
+    pub const fn kind(&self) -> JourneyKind {
+        self.record.kind
     }
 
     /// Advances at most one durable phase. Every external call is preceded by
@@ -656,12 +817,30 @@ impl JourneyEngine {
             .iter()
             .map(|leg| leg.refusal_code)
             .collect();
+        let receipt_material = self
+            .record
+            .legs
+            .iter()
+            .map(|leg| leg.receipt.clone())
+            .collect();
+        let receipt_authorities = self
+            .record
+            .legs
+            .iter()
+            .map(|leg| {
+                leg.receipt_authority
+                    .as_ref()
+                    .map(StoredAuthorizedBatch::public)
+            })
+            .collect();
         Ok(JourneyStatus {
             journey_id,
             state: self.state(),
             current_leg: self.record.current_leg,
             phases,
             receipt_digests,
+            receipt_material,
+            receipt_authorities,
             refusal_codes,
         })
     }
@@ -695,6 +874,13 @@ impl JourneyEngine {
             receipt_digest: leg
                 .receipt_digest
                 .ok_or(JourneyError::Corrupt("verified leg has no receipt digest"))?,
+            authorised_batch: leg
+                .receipt_authority
+                .as_ref()
+                .ok_or(JourneyError::Corrupt(
+                    "verified leg has no receipt authority",
+                ))?
+                .public(),
         }))
     }
 
@@ -765,6 +951,7 @@ impl JourneyEngine {
             .get(index)
             .ok_or(JourneyError::Corrupt("current leg is outside the plan"))?;
         let request = PrepareRequest {
+            protocol_activity_type: leg.activity_type,
             actor: AgentDid::new(leg.preparation.actor.clone())?,
             authority: AuthorityRef::new(leg.preparation.authority.clone())?,
             account_sequence: Sequence(leg.preparation.account_sequence),
@@ -798,6 +985,7 @@ impl JourneyEngine {
         let request = SubmitRequest {
             preparation_ref: PreparationRef::new(signed.preparation_ref.clone())?,
             signature: SignatureBytes::new(signed.signature.clone())?,
+            approval_release_ref: None,
         };
         let digest = submit_digest(&request, signed.signer_public_key);
         Ok((
@@ -948,6 +1136,9 @@ impl JourneyEngine {
         }
         leg.receipt = Some(canonical);
         leg.receipt_digest = Some(digest);
+        leg.receipt_authority = Some(StoredAuthorizedBatch::from_public(
+            &material.authorised_batch,
+        ));
         leg.refusal_code = None;
         if now < self.record.updated_at {
             return Err(JourneyError::TimeRegressed);
@@ -1036,6 +1227,7 @@ impl JourneyEngine {
                 transition.observed_at,
                 &bytes,
             )?;
+            put_stream_progress(scope, &progress, transition.observed_at)?;
         }
         Ok(())
     }
@@ -1074,6 +1266,7 @@ fn compile_plan(
                 activity_id: None,
                 receipt: None,
                 receipt_digest: None,
+                receipt_authority: None,
                 refusal_code: None,
             })
         })
@@ -1155,6 +1348,7 @@ fn plan_digest(plan: &JourneyPlan, legs: &[LegRecord]) -> [u8; 32] {
     let mut digest = Sha256::new();
     digest.update(PLAN_DIGEST_DOMAIN);
     hash_text(&mut digest, plan.journey_id.as_str());
+    digest.update([plan.kind.code()]);
     digest.update(plan.idempotency_key);
     hash_text(&mut digest, plan.custody_key.as_str());
     hash_text(&mut digest, plan.signing_operation.label());
@@ -1176,6 +1370,7 @@ fn plan_digest(plan: &JourneyPlan, legs: &[LegRecord]) -> [u8; 32] {
 fn prepare_digest(request: &PrepareRequest) -> [u8; 32] {
     let mut digest = Sha256::new();
     digest.update(PREPARE_DIGEST_DOMAIN);
+    digest.update(request.protocol_activity_type.to_be_bytes());
     hash_text(&mut digest, request.actor.as_str());
     hash_text(&mut digest, request.authority.as_str());
     digest.update(request.account_sequence.get().to_be_bytes());
@@ -1194,6 +1389,13 @@ fn submit_digest(request: &SubmitRequest, signer_public_key: [u8; 32]) -> [u8; 3
     hash_text(&mut digest, request.preparation_ref.as_str());
     digest.update(Sha256::digest(request.signature.as_bytes()));
     digest.update(signer_public_key);
+    match request.approval_release_ref {
+        Some(reference) => {
+            digest.update([1]);
+            digest.update(reference);
+        }
+        None => digest.update([0]),
+    }
     digest.finalize().into()
 }
 
@@ -1285,6 +1487,55 @@ fn put_exact(
     Ok(())
 }
 
+fn put_stream_progress(
+    scope: &mut PrincipalScope<'_>,
+    progress: &JourneyProgress,
+    now: u64,
+) -> Result<(), JourneyError> {
+    let source = format!("journey:{}:{}", progress.journey_id(), progress.sequence());
+    let source_digest: [u8; 32] = Sha256::digest(source.as_bytes()).into();
+    let source_key = RowKey::new(format!("stream-source-{}", hex(&source_digest)))?;
+    if scope.get(Table::Stream, &source_key).is_some() {
+        return Ok(());
+    }
+    let head_key = RowKey::new("stream-head")?;
+    let sequence = scope
+        .get(Table::Stream, &head_key)
+        .map(|row| {
+            let bytes: [u8; 8] = row
+                .bytes()
+                .try_into()
+                .map_err(|_| JourneyError::Corrupt("invalid stream head"))?;
+            Ok::<u64, JourneyError>(u64::from_be_bytes(bytes))
+        })
+        .transpose()?
+        .unwrap_or(0)
+        .checked_add(1)
+        .ok_or(JourneyError::SequenceOverflow)?;
+    let event = serde_json::json!({"sequence":sequence,"source":source,"kind":"journey-progress","observed_at":now,"payload":{}});
+    let event_bytes = serde_json::to_vec(&event)
+        .map_err(|_| JourneyError::Corrupt("stream event cannot be encoded"))?;
+    scope.put(
+        Table::Stream,
+        RowKey::new(format!("stream-event-{sequence:016x}"))?,
+        now,
+        event_bytes,
+    )?;
+    scope.put(
+        Table::Stream,
+        source_key,
+        now,
+        sequence.to_be_bytes().to_vec(),
+    )?;
+    scope.put(
+        Table::Stream,
+        head_key,
+        now,
+        sequence.to_be_bytes().to_vec(),
+    )?;
+    Ok(())
+}
+
 fn hash_text(digest: &mut Sha256, value: &str) {
     digest.update(u32::try_from(value.len()).unwrap_or(u32::MAX).to_be_bytes());
     digest.update(value.as_bytes());
@@ -1321,6 +1572,7 @@ pub enum JourneyError {
     ReceiptMismatch,
     ReceiptReuse,
     EvidenceConflict,
+    SequenceOverflow,
     Corrupt(&'static str),
 }
 
@@ -1352,6 +1604,7 @@ impl Display for JourneyError {
                 formatter.write_str("one receipt cannot complete two journey legs")
             }
             Self::EvidenceConflict => formatter.write_str("durable journey evidence conflicts"),
+            Self::SequenceOverflow => formatter.write_str("journey event sequence overflowed"),
             Self::Corrupt(reason) => write!(formatter, "corrupt journey: {reason}"),
         }
     }

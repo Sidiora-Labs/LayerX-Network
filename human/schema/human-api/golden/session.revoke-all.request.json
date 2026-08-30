@@ -1,4 +1,7 @@
 {
   "method": "POST",
-  "path": "/v1/sessions/revoke-all"
+  "path": "/v1/sessions/revoke-all",
+  "headers": {
+    "Idempotency-Key": "session-revoke-all:9f8b6d4c2e0a1b3c5d7e9f0a2b4c6d8e"
+  }
 }

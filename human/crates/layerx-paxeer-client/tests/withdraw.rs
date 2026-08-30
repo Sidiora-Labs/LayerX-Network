@@ -597,12 +597,7 @@ fn deploy_suite(
         ),
         0,
     );
-    anvil.send_checked(
-        FUNDED,
-        bond,
-        &call_data(DEPOSIT_BOND, &[GUARANTOR_ID]),
-        1,
-    );
+    anvil.send_checked(FUNDED, bond, &call_data(DEPOSIT_BOND, &[GUARANTOR_ID]), 1);
     (
         token,
         vault,
@@ -857,8 +852,7 @@ fn register_checkpoint_calldata(header: &Header, attestation: &WithdrawalAttesta
 
 fn fixture() -> Fixture {
     let anvil = Anvil::launch();
-    let (token, vault, bond, checkpoint_registry, challenge_manager, claims) =
-        deploy_suite(&anvil);
+    let (token, vault, bond, checkpoint_registry, challenge_manager, claims) = deploy_suite(&anvil);
     let recipient = parse_address(RECIPIENT);
     let expectation = debit_expectation(recipient);
     let debit = committed_debit(expectation);

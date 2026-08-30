@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { ActivityEntry, ActivityEntryDetail, ActivityGroup, ActivityPage, ExportArtefact } from "../src/api/generated/index.ts";
+import { HumanApiError, type ActivityEntry, type ActivityEntryDetail, type ActivityGroup, type ActivityPage, type ExportArtefact } from "../src/api/generated/index.ts";
 import { humanApi } from "../src/api/index.ts";
+import { copyEntry } from "../copy/catalog.ts";
 import {
   activityFailure,
   agentFilterOptions,
@@ -295,7 +296,7 @@ test("filterEchoLines generates human-readable filter descriptions", () => {
   const names = new Map([["agent_1", "Agent One"]]);
   const emptyEcho = filterEchoLines({}, names);
   assert.equal(emptyEcho.length, 1);
-  assert.ok(emptyEcho[0]!.includes("All"));
+  assert.equal(emptyEcho[0], copyEntry("activity.feed.echo.all").message);
 
   const kindEcho = filterEchoLines({ kinds: ["deposit", "withdrawal"] }, names);
   assert.equal(kindEcho.length, 1);
@@ -486,21 +487,14 @@ test("entryVerification returns the highest verification level from evidence", (
 });
 
 test("activityFailure transforms HumanApiError into ActivityFailure", () => {
-  const apiError = {
-    detail: {
-      code: "ACTIVITY_UNAVAILABLE",
-      copy_key: "error.activity_unavailable",
-      retry: "retriable",
-    },
-    trace: "trc_001",
-  };
-  const failure = activityFailure({
-    ...apiError,
-    name: "HumanApiError",
-    message: "Activity unavailable",
+  const apiError = new HumanApiError(503, "trc_001", {
+    code: "unavailable",
+    copy_key: "error.activity_unavailable",
+    retry: "retriable",
   });
+  const failure = activityFailure(apiError);
   assert.equal(failure.kind, "service");
-  assert.equal(failure.code, "ACTIVITY_UNAVAILABLE");
+  assert.equal(failure.code, "unavailable");
   assert.equal(failure.trace, "trc_001");
   assert.equal(failure.retriable, true);
 });

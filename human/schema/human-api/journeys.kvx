@@ -48,18 +48,21 @@ settlement_domain = "paxeer"
 material = "The referenced receipt or proof in its canonical bytes, exactly as the protocol produced them, sufficient for export and for verification independent of this plane."
 
 [operation.evidence.get]
+authorization_class = "read"
 method = "GET"
 path = "/v1/evidence/{evidence_id}"
 request = "Empty"
 response = "EvidenceMaterial"
 
 [operation.journey.get]
+authorization_class = "read"
 method = "GET"
 path = "/v1/journeys/{journey_id}"
 request = "Empty"
 response = "Journey"
 
 [operation.journey.list]
+authorization_class = "read"
 method = "GET"
 path = "/v1/journeys"
 request = "Empty"

@@ -33,7 +33,37 @@ pub enum Endpoint {
     AgentBudget(AccountId),
 }
 
+/// Refusal to assign a validated account to a semantic movement endpoint.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EndpointConstructionError {
+    WrongAccountNamespace,
+}
+
 impl Endpoint {
+    /// Reconstructs a Human endpoint while enforcing its declared namespace.
+    pub fn human(account: AccountId) -> Result<Self, EndpointConstructionError> {
+        if account.namespace() != AccountNamespace::AgentMain {
+            return Err(EndpointConstructionError::WrongAccountNamespace);
+        }
+        Ok(Self::Human(account))
+    }
+
+    /// Reconstructs an Agent endpoint while enforcing its declared namespace.
+    pub fn agent(account: AccountId) -> Result<Self, EndpointConstructionError> {
+        if account.namespace() != AccountNamespace::AgentMain {
+            return Err(EndpointConstructionError::WrongAccountNamespace);
+        }
+        Ok(Self::Agent(account))
+    }
+
+    /// Reconstructs a managed-budget endpoint while enforcing its namespace.
+    pub fn agent_budget(account: AccountId) -> Result<Self, EndpointConstructionError> {
+        if account.namespace() != AccountNamespace::AgentBudget {
+            return Err(EndpointConstructionError::WrongAccountNamespace);
+        }
+        Ok(Self::AgentBudget(account))
+    }
+
     /// Returns the closed endpoint discriminator used in typed refusals.
     #[must_use]
     pub const fn kind(&self) -> EndpointKind {
@@ -142,6 +172,303 @@ pub struct RouteRequest {
     pub relationship: Relationship,
     pub asset: AssetId,
     pub amount: Amount,
+}
+
+impl RouteRequest {
+    /// Reconstructs one wire request and proves that the complete route is valid.
+    pub fn from_wire_parts(
+        source: Endpoint,
+        destination: Endpoint,
+        relationship: Relationship,
+        asset: AssetId,
+        amount: Amount,
+    ) -> Result<Self, RouteError> {
+        let request = Self {
+            source,
+            destination,
+            relationship,
+            asset,
+            amount,
+        };
+        RouteResolver::resolve(&request)?;
+        Ok(request)
+    }
+
+    /// Encodes the complete resolver input in one canonical, versioned form.
+    #[must_use]
+    pub fn canonical_encode(&self) -> Vec<u8> {
+        let mut out = vec![1];
+        put_endpoint(&mut out, &self.source);
+        put_endpoint(&mut out, &self.destination);
+        match &self.relationship {
+            Relationship::Direct(v) => {
+                out.push(1);
+                put_send(&mut out, v)
+            }
+            Relationship::ManagedBudget(v) => {
+                out.push(2);
+                out.extend(v.budget_id.bytes());
+                out.extend(v.idempotency_key.bytes());
+                out.extend(v.revocation_sequence.value().to_be_bytes());
+                match v.create {
+                    None => out.push(0),
+                    Some(c) => {
+                        out.push(1);
+                        out.extend(c.per_period_limit.to_be_bytes());
+                        out.extend(c.period_length.value().to_be_bytes());
+                        out.push(match c.rollover {
+                            RolloverPolicy::None => 0,
+                            RolloverPolicy::Capped => 1,
+                        });
+                        out.extend(c.carry_cap.to_be_bytes());
+                        out.extend(c.purpose.bytes());
+                        out.extend(c.expiry.value().to_be_bytes());
+                    }
+                }
+            }
+            Relationship::AgentAuthorized(v) => {
+                out.push(3);
+                put_send(&mut out, v)
+            }
+            Relationship::PayerGrant(v) => {
+                out.push(4);
+                out.extend(v.payer_grant.bytes());
+                out.extend(v.receiver_sequence.value().to_be_bytes());
+                out.extend(v.idempotency_key.bytes());
+                out.extend(v.context_hash.bytes());
+            }
+            Relationship::Custody(CustodyRoute::Deposit {
+                deposit_proof,
+                checkpoint,
+                reserve,
+                idempotency_key,
+            }) => {
+                out.push(5);
+                out.extend(deposit_proof.bytes());
+                out.extend(checkpoint.bytes());
+                put_text(&mut out, reserve.canonical());
+                out.extend(idempotency_key.bytes());
+            }
+            Relationship::Custody(CustodyRoute::Withdrawal {
+                withdrawal_id,
+                withdrawals_account,
+                payout_address,
+                idempotency_key,
+            }) => {
+                out.push(6);
+                out.extend(withdrawal_id.bytes());
+                put_text(&mut out, withdrawals_account.canonical());
+                out.extend(payout_address.bytes());
+                out.extend(idempotency_key.bytes());
+            }
+        }
+        out.extend(self.asset.bytes());
+        out.extend(self.amount.to_be_bytes());
+        out
+    }
+
+    /// Decodes canonical resolver bytes and re-runs the total resolver.
+    pub fn canonical_decode(bytes: &[u8]) -> Result<Self, RouteError> {
+        let mut r = RouteWire::new(bytes);
+        if r.u8()? != 1 {
+            return Err(wire_error());
+        }
+        let source = r.endpoint()?;
+        let destination = r.endpoint()?;
+        let relationship = match r.u8()? {
+            1 => Relationship::Direct(r.send()?),
+            2 => {
+                let budget_id = BudgetId::new(r.array()?);
+                let idempotency_key = IdempotencyKey::new(r.array()?);
+                let revocation_sequence = Sequence::from_u64(r.u64()?);
+                let create = match r.u8()? {
+                    0 => None,
+                    1 => Some(BudgetCreation {
+                        per_period_limit: Amount::from_u128(r.u128()?),
+                        period_length: PeriodLength::new(r.u64()?).map_err(|_| wire_error())?,
+                        rollover: match r.u8()? {
+                            0 => RolloverPolicy::None,
+                            1 => RolloverPolicy::Capped,
+                            _ => return Err(wire_error()),
+                        },
+                        carry_cap: Amount::from_u128(r.u128()?),
+                        purpose: PurposeHash::new(r.array()?),
+                        expiry: TimestampSeconds::from_u64(r.u64()?),
+                    }),
+                    _ => return Err(wire_error()),
+                };
+                Relationship::ManagedBudget(BudgetRoute {
+                    budget_id,
+                    idempotency_key,
+                    revocation_sequence,
+                    create,
+                })
+            }
+            3 => Relationship::AgentAuthorized(r.send()?),
+            4 => Relationship::PayerGrant(PayerGrantRoute {
+                payer_grant: PayerGrantId::new(r.array()?),
+                receiver_sequence: Sequence::from_u64(r.u64()?),
+                idempotency_key: IdempotencyKey::new(r.array()?),
+                context_hash: ContextHash::new(r.array()?),
+            }),
+            5 => Relationship::Custody(CustodyRoute::Deposit {
+                deposit_proof: DepositProofId::new(r.array()?),
+                checkpoint: CheckpointId::new(r.array()?),
+                reserve: AccountId::parse(&r.text(512)?).map_err(|_| wire_error())?,
+                idempotency_key: IdempotencyKey::new(r.array()?),
+            }),
+            6 => Relationship::Custody(CustodyRoute::Withdrawal {
+                withdrawal_id: WithdrawalId::new(r.array()?),
+                withdrawals_account: AccountId::parse(&r.text(512)?).map_err(|_| wire_error())?,
+                payout_address: EvmAddress::new(r.array()?),
+                idempotency_key: IdempotencyKey::new(r.array()?),
+            }),
+            _ => return Err(wire_error()),
+        };
+        let asset = AssetId::new(r.array()?);
+        let amount = Amount::from_u128(r.u128()?);
+        if !r.done() {
+            return Err(wire_error());
+        }
+        let request = Self::from_wire_parts(source, destination, relationship, asset, amount)?;
+        if request.canonical_encode() != bytes {
+            return Err(wire_error());
+        }
+        Ok(request)
+    }
+}
+
+fn wire_error() -> RouteError {
+    RouteError::Unavailable {
+        source: EndpointKind::Human,
+        destination: EndpointKind::Human,
+        relationship: "invalid-wire",
+    }
+}
+fn put_text(out: &mut Vec<u8>, v: &str) {
+    out.extend((v.len() as u16).to_be_bytes());
+    out.extend(v.as_bytes())
+}
+fn put_endpoint(out: &mut Vec<u8>, v: &Endpoint) {
+    match v {
+        Endpoint::PaxeerWallet => out.push(0),
+        Endpoint::Human(a) => {
+            out.push(1);
+            put_text(out, a.canonical())
+        }
+        Endpoint::Agent(a) => {
+            out.push(2);
+            put_text(out, a.canonical())
+        }
+        Endpoint::AgentBudget(a) => {
+            out.push(3);
+            put_text(out, a.canonical())
+        }
+    }
+}
+fn put_send(out: &mut Vec<u8>, v: &SendRoute) {
+    out.extend(v.account_sequence.value().to_be_bytes());
+    out.extend(v.idempotency_key.bytes());
+    out.extend(v.expires_at.value().to_be_bytes());
+    out.extend(v.context_hash.bytes());
+    out.push(v.authorization.kind() as u8);
+    out.extend(v.authorization.public_key().bytes());
+    out.extend(v.authorization.signature().bytes());
+    out.extend(v.network_id.value().to_be_bytes());
+    out.extend(v.protocol_version.value().to_be_bytes())
+}
+struct RouteWire<'a> {
+    bytes: &'a [u8],
+    at: usize,
+}
+impl<'a> RouteWire<'a> {
+    fn new(bytes: &'a [u8]) -> Self {
+        Self { bytes, at: 0 }
+    }
+    fn take(&mut self, n: usize) -> Result<&'a [u8], RouteError> {
+        let end = self.at.checked_add(n).ok_or_else(wire_error)?;
+        let v = self.bytes.get(self.at..end).ok_or_else(wire_error)?;
+        self.at = end;
+        Ok(v)
+    }
+    fn array<const N: usize>(&mut self) -> Result<[u8; N], RouteError> {
+        self.take(N)?.try_into().map_err(|_| wire_error())
+    }
+    fn u8(&mut self) -> Result<u8, RouteError> {
+        Ok(self.array::<1>()?[0])
+    }
+    fn u16(&mut self) -> Result<u16, RouteError> {
+        Ok(u16::from_be_bytes(self.array()?))
+    }
+    fn u32(&mut self) -> Result<u32, RouteError> {
+        Ok(u32::from_be_bytes(self.array()?))
+    }
+    fn u64(&mut self) -> Result<u64, RouteError> {
+        Ok(u64::from_be_bytes(self.array()?))
+    }
+    fn u128(&mut self) -> Result<u128, RouteError> {
+        Ok(u128::from_be_bytes(self.array()?))
+    }
+    fn text(&mut self, max: usize) -> Result<String, RouteError> {
+        let n = self.u16()? as usize;
+        if n == 0 || n > max {
+            return Err(wire_error());
+        }
+        let b = self.take(n)?;
+        let s = std::str::from_utf8(b).map_err(|_| wire_error())?;
+        if s.chars().any(char::is_control) {
+            return Err(wire_error());
+        }
+        Ok(s.to_owned())
+    }
+    fn endpoint(&mut self) -> Result<Endpoint, RouteError> {
+        match self.u8()? {
+            0 => Ok(Endpoint::PaxeerWallet),
+            1 => Endpoint::human(AccountId::parse(&self.text(512)?).map_err(|_| wire_error())?)
+                .map_err(|_| wire_error()),
+            2 => Endpoint::agent(AccountId::parse(&self.text(512)?).map_err(|_| wire_error())?)
+                .map_err(|_| wire_error()),
+            3 => Endpoint::agent_budget(
+                AccountId::parse(&self.text(512)?).map_err(|_| wire_error())?,
+            )
+            .map_err(|_| wire_error()),
+            _ => Err(wire_error()),
+        }
+    }
+    fn send(&mut self) -> Result<SendRoute, RouteError> {
+        let account_sequence = Sequence::from_u64(self.u64()?);
+        let idempotency_key = IdempotencyKey::new(self.array()?);
+        let expires_at = TimestampSeconds::from_u64(self.u64()?);
+        let context_hash = ContextHash::new(self.array()?);
+        let kind = match self.u8()? {
+            1 => layerx_types::intent::SendAuthorizationKind::Owner,
+            2 => layerx_types::intent::SendAuthorizationKind::SessionKey,
+            3 => layerx_types::intent::SendAuthorizationKind::DelegatedCapability,
+            4 => layerx_types::intent::SendAuthorizationKind::BudgetAllowance,
+            5 => layerx_types::intent::SendAuthorizationKind::Escrow,
+            6 => layerx_types::intent::SendAuthorizationKind::ProtocolModule,
+            _ => return Err(wire_error()),
+        };
+        let authorization = SendAuthorization::new(
+            kind,
+            layerx_types::intent::PublicKey::new(self.array()?),
+            layerx_types::intent::AuthorizationSignature::new(self.array()?),
+        );
+        let network_id = NetworkId::new(self.u32()?).map_err(|_| wire_error())?;
+        let protocol_version = ProtocolVersion::new(self.u16()?).map_err(|_| wire_error())?;
+        Ok(SendRoute {
+            account_sequence,
+            idempotency_key,
+            expires_at,
+            context_hash,
+            authorization,
+            network_id,
+            protocol_version,
+        })
+    }
+    fn done(&self) -> bool {
+        self.at == self.bytes.len()
+    }
 }
 
 /// Vocabulary permitted in APIs, logs and user-facing copy.

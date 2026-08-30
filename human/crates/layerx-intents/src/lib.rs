@@ -22,7 +22,7 @@ pub use vocabulary::{
     BridgeDepositCredit, BridgeWithdrawRequest, BudgetCreate, BudgetDefund, BudgetFund,
     DidRegistration, EvmPayoutBinding, Intent, IntentError, IntentErrorReason, IntentField,
     IntentKind, IntentVersion, KeyRotation, LxpReceive, LxpSend, PayerGrantRegistration,
-    RecoveryRegistration,
+    RecoveryRegistration, SessionGrant, SessionRevoke,
 };
 
 /// Stable identity of the sole human-plane payload authority.

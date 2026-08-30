@@ -20,7 +20,7 @@ mod paxeer_real {
     impl JourneyChain {
         pub(super) fn new(expectation: DebitExpectation) -> Self {
             let anvil = Anvil::launch();
-            let (token, vault, checkpoint_registry, challenge_manager, claims) =
+            let (token, vault, bond, checkpoint_registry, challenge_manager, claims) =
                 deploy_suite(&anvil);
             let leaf = withdrawal_leaf(expectation);
             let timestamp_ms = anvil
@@ -29,7 +29,7 @@ mod paxeer_real {
                 .unwrap_or_else(|| panic!("latest block timestamp exceeds canonical milliseconds"));
             let header = checkpoint_header(leaf, timestamp_ms);
             let checkpoint_hash = checkpoint_hash(&header);
-            let attestation = signed_attestation(&header, checkpoint_hash);
+            let attestation = signed_attestation(&header, checkpoint_hash, bond);
             anvil.send_checked(
                 FUNDED,
                 checkpoint_registry,
@@ -141,9 +141,7 @@ use layerx_agent_api::track::{
     TrackedSubmission,
 };
 use layerx_agent_api::verify::Level;
-use layerx_agentd::outbox::{
-    Outbox, OutboxError, ReceiptEvidence as OutboxReceipt, SubmissionState as OutboxState,
-};
+use layerx_agentd::outbox::{Outbox, OutboxError, SubmissionState as OutboxState};
 use layerx_agentd::prepare::{
     prepare_activity, CorePreparationBoundary, CorePreparationState, CoreStateError,
     PreparationDefaults, PrepareRequest, Prepared,
@@ -433,7 +431,16 @@ impl AgentBoundary for RealWithdrawalAgent {
             &material.authorised_batch,
         )
         .map_err(|_| AgentBoundaryError::CorruptResponse)?;
-        let receipt_digest: [u8; 32] = Sha256::digest(&material.canonical_bytes).into();
+        let signer = SigningKey::from_bytes(&[0x51; 32]);
+        let raw = support::raw_receipt_evidence(
+            material.canonical_bytes.clone(),
+            material.authorised_batch.clone(),
+            1,
+            &signer,
+        );
+        let verified = support::evidence_verifier(&signer)
+            .verify_receipt(&raw)
+            .map_err(|_| AgentBoundaryError::CorruptResponse)?;
         self.outbox
             .transition(
                 &mut self.store,
@@ -449,10 +456,7 @@ impl AgentBoundary for RealWithdrawalAgent {
                 key,
                 OutboxState::Executed,
                 "real sequencer receipt verified",
-                Some(OutboxReceipt {
-                    receipt_ref: receipt_digest,
-                    verified: true,
-                }),
+                Some(verified),
             )
             .map_err(|_| AgentBoundaryError::Refused)?;
         let observation = Self::tracked(key, activity_id, &material);
@@ -506,6 +510,7 @@ impl AgentBoundary for RealWithdrawalAgent {
 #[derive(Clone, Copy)]
 struct ReceiptFields {
     activity_id: [u8; 32],
+    batch_id: [u8; 32],
     key: [u8; 32],
     from: [u8; 32],
     to: [u8; 32],
@@ -519,6 +524,7 @@ fn withdrawal_receipt(
 ) -> ReceiptMaterial {
     let fields = ReceiptFields {
         activity_id,
+        batch_id: support::execution_batch_id([0x41; 32], activity_id, 1),
         key,
         from,
         to,
@@ -532,12 +538,13 @@ fn withdrawal_receipt(
     ReceiptMaterial {
         canonical_bytes: encode_receipt(fields, Some(signature.to_bytes())),
         authorised_batch: AuthorizedBatch::new(
-            [0x43; 32],
+            fields.batch_id,
             ASSET,
             [0x41; 32],
             [0x42; 32],
             signer.verifying_key().to_bytes(),
         ),
+        verification_level: layerx_types::verify::VerificationLevel::SEQUENCER_SIGNED,
     }
 }
 
@@ -554,7 +561,7 @@ fn encode_receipt(fields: ReceiptFields, signature: Option<[u8; 64]>) -> Vec<u8>
     bytes.extend_from_slice(&0_i32.to_be_bytes());
     bytes.extend_from_slice(&0_u32.to_be_bytes());
     bytes.extend_from_slice(&1_u128.to_be_bytes());
-    push_bytes(&mut bytes, &[0x43; 32]);
+    push_bytes(&mut bytes, &fields.batch_id);
     push_u16(&mut bytes, u16::from(ModuleId::Bridge as u8));
     bytes.extend_from_slice(&1_u32.to_be_bytes());
     bytes.extend_from_slice(&1_u32.to_be_bytes());
@@ -619,6 +626,14 @@ impl RealRuntime {
 }
 
 impl WithdrawalRuntime for RealRuntime {
+    fn verify_claim_signature(
+        &mut self,
+        _request: &WithdrawalTransactionRequest,
+        _signature: &[u8],
+    ) -> Result<Vec<u8>, WithdrawalBoundaryError> {
+        Err(WithdrawalBoundaryError::ContractViolation)
+    }
+
     fn checkpoint_proof(
         &mut self,
         _debit: &DebitExpectation,

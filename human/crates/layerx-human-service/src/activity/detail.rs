@@ -20,6 +20,22 @@ pub struct ReceiptActual {
 }
 
 impl ReceiptActual {
+    pub(crate) fn from_verified_journey_bytes(
+        bytes: &[u8],
+        reference: &str,
+    ) -> Result<Self, DetailError> {
+        if super::hex(Sha256::digest(bytes)) != reference {
+            return Err(DetailError::InvalidReceiptEvidence);
+        }
+        let facts =
+            canonical_protocol_facts(bytes).map_err(|_| DetailError::InvalidReceiptEvidence)?;
+        Ok(Self {
+            reference: reference.to_owned(),
+            asset: facts.asset(),
+            amount: facts.amount(),
+            fee: facts.fee_charged(),
+        })
+    }
     /// Constructs actuals only from a receipt that passed the proof verifier.
     ///
     /// # Errors

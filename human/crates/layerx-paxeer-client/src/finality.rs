@@ -6,6 +6,10 @@ use crate::client::{
 };
 use crate::rpc::{EndpointConfig, EndpointFailure, EndpointTransport};
 
+mod finality_wire;
+
+pub(crate) use finality_wire::{decode as decode_wire, encode as encode_wire};
+
 /// Declared tracking configuration: endpoints, depth, cadence and stall bound.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TrackerConfig {
@@ -65,7 +69,9 @@ pub enum ChainSignal {
         stalled_for: Duration,
         delayed_after: Duration,
     },
-    Unreachable { error: EndpointError },
+    Unreachable {
+        error: EndpointError,
+    },
 }
 
 /// How the configured endpoints served this poll: fully, by failover, or not.
@@ -238,8 +244,8 @@ impl FinalityTracker {
         if config.delayed_after_polls == 0 {
             return Err(TrackerConfigError::ZeroDelayedAfterPolls);
         }
-        let client = PaxeerClient::new(config.endpoints.clone())
-            .map_err(TrackerConfigError::Endpoints)?;
+        let client =
+            PaxeerClient::new(config.endpoints.clone()).map_err(TrackerConfigError::Endpoints)?;
         validate_endpoint_agreement(&config.endpoints, config.minimum_endpoint_agreement)?;
         Ok(Self {
             client,
@@ -297,7 +303,9 @@ impl FinalityTracker {
             Ok((head, stage, evidence)) => {
                 let unchanged = self
                     .last_observation
-                    .is_some_and(|(last_head, last_stage)| last_head == head && last_stage == stage);
+                    .is_some_and(|(last_head, last_stage)| {
+                        last_head == head && last_stage == stage
+                    });
                 if matches!(stage, FinalityStage::Final { .. }) || !unchanged {
                     self.stalled_polls = 0;
                 } else {
@@ -381,8 +389,7 @@ impl FinalityTracker {
         failovers.append(&mut dissent);
         let head = observation.head;
         let evidence = FinalityEvidence::from_observation(
-            self.client
-                .quorum_binding(self.minimum_endpoint_agreement),
+            self.client.quorum_binding(self.minimum_endpoint_agreement),
             &observation,
         );
         let stage = match observation.transaction {
@@ -396,9 +403,8 @@ impl FinalityTracker {
                     }
                     self.recorded = Some(included);
                     self.lost = None;
-                    let confirmations = head
-                        .saturating_sub(included.block.number)
-                        .saturating_add(1);
+                    let confirmations =
+                        head.saturating_sub(included.block.number).saturating_add(1);
                     if confirmations >= self.required_confirmations {
                         FinalityStage::Final {
                             inclusion: included,
@@ -441,7 +447,10 @@ impl FinalityTracker {
         Ok((head, stage, evidence))
     }
 
-    fn displace(&mut self, reference: Option<TransactionInclusion>) -> Option<TransactionInclusion> {
+    fn displace(
+        &mut self,
+        reference: Option<TransactionInclusion>,
+    ) -> Option<TransactionInclusion> {
         if let Some(prior) = self.recorded.take() {
             self.displacements = self.displacements.saturating_add(1);
             self.lost = Some(prior);
@@ -590,8 +599,8 @@ mod tests {
     fn deposit_proof_refuses_report_from_weaker_endpoint_quorum() {
         let endpoints = vec![endpoint(18_545), endpoint(18_546)];
         let verifier = deposit_verifier(&endpoints);
-        let client = PaxeerClient::new(endpoints)
-            .unwrap_or_else(|error| panic!("Paxeer client: {error:?}"));
+        let client =
+            PaxeerClient::new(endpoints).unwrap_or_else(|error| panic!("Paxeer client: {error:?}"));
         let report = final_report(client.quorum_binding(1), 12, 12, 21, 31_337);
 
         assert_eq!(
@@ -627,8 +636,8 @@ mod tests {
     fn deposit_proof_refuses_quorum_evidence_from_another_chain() {
         let endpoints = vec![endpoint(18_553), endpoint(18_554)];
         let verifier = deposit_verifier(&endpoints);
-        let client = PaxeerClient::new(endpoints)
-            .unwrap_or_else(|error| panic!("Paxeer client: {error:?}"));
+        let client =
+            PaxeerClient::new(endpoints).unwrap_or_else(|error| panic!("Paxeer client: {error:?}"));
         let report = final_report(client.quorum_binding(2), 12, 12, 21, 1);
 
         assert_eq!(
@@ -646,8 +655,8 @@ mod tests {
     fn deposit_proof_refuses_report_from_weaker_confirmation_policy() {
         let endpoints = vec![endpoint(18_547), endpoint(18_548)];
         let verifier = deposit_verifier(&endpoints);
-        let client = PaxeerClient::new(endpoints)
-            .unwrap_or_else(|error| panic!("Paxeer client: {error:?}"));
+        let client =
+            PaxeerClient::new(endpoints).unwrap_or_else(|error| panic!("Paxeer client: {error:?}"));
         let report = final_report(client.quorum_binding(2), 12, 1, 21, 31_337);
 
         assert_eq!(
@@ -665,8 +674,8 @@ mod tests {
     fn deposit_proof_recomputes_confirmation_depth_from_quorum_evidence() {
         let endpoints = vec![endpoint(18_549), endpoint(18_550)];
         let verifier = deposit_verifier(&endpoints);
-        let client = PaxeerClient::new(endpoints)
-            .unwrap_or_else(|error| panic!("Paxeer client: {error:?}"));
+        let client =
+            PaxeerClient::new(endpoints).unwrap_or_else(|error| panic!("Paxeer client: {error:?}"));
         let report = final_report(client.quorum_binding(2), 12, 12, 10, 31_337);
 
         assert_eq!(

@@ -1,13 +1,23 @@
 //! Production HTTPS+JSON boundary for the versioned human-api contract.
 
+pub mod agent_creation;
+pub mod agent_runtime;
 pub mod backend;
 mod component;
 mod component_protocol;
+mod executor;
 mod http;
 pub mod identity;
+mod identity_dispatch;
+mod identity_services;
 mod limits;
+pub mod movement_provider;
 mod privileged;
+pub mod production_auth;
+pub mod production_components;
+mod production_reads;
 pub mod schema;
+mod stream_journal;
 
 use std::io;
 use std::net::{SocketAddr, TcpListener};
@@ -21,20 +31,23 @@ use rustls::{ServerConfig, ServerConnection, StreamOwned};
 use zeroize::Zeroize;
 
 pub use backend::{
-    default_component_limits, ApiFailure, ComponentState, HumanApiComponents, Readiness,
-    UnixComponents,
+    default_component_limits, ApiFailure, BackendResponse, ComponentState, HumanApiComponents,
+    Readiness, ScopedRequest, SessionCredentials, UnixComponents,
 };
 pub use component::{
-    BoundHumanComponentServer, ComponentServerConfig, ComponentServerError, ComponentShutdown,
-    HumanComponentServer,
+    BoundHumanComponentServer, ComponentMaintenance, ComponentServerConfig, ComponentServerError,
+    ComponentShutdown, HumanComponentServer,
 };
+pub(crate) use executor::poll_once_ready;
 pub use http::{HttpConfig, Router};
 pub use identity::IdentityProjector;
+pub use identity_services::{IdentityServices, ProvisionedAccount, ProvisionedAccounts};
 pub use limits::PrincipalLimits;
 pub use privileged::{
     AuthorizationGrantPolicy, AuthorizedSession, ComponentOperationRequest,
     PrivilegedHumanComponents, PrivilegedHumanServices,
 };
+pub use production_components::{ProductionComponents, ProductionComponentsConfig};
 
 /// Explicit finite HTTPS listener configuration.
 pub struct HttpsConfig {
@@ -55,8 +68,8 @@ impl HttpsConfig {
             return Err(ApiFailure::unavailable());
         }
         let private_key_bytes = std::mem::take(&mut self.private_key_der);
-        let private_key = PrivateKeyDer::try_from(private_key_bytes)
-            .map_err(|_| ApiFailure::unavailable())?;
+        let private_key =
+            PrivateKeyDer::try_from(private_key_bytes).map_err(|_| ApiFailure::unavailable())?;
         let configuration = ServerConfig::builder()
             .with_no_client_auth()
             .with_single_cert(
@@ -96,7 +109,10 @@ impl<B: HumanApiComponents> HttpsServer<B> {
     /// Refuses invalid TLS material and propagates listener failures. Individual
     /// connection failures are isolated to their bounded worker.
     pub fn run(mut self) -> Result<(), ServerError> {
-        let tls = self.configuration.rustls().map_err(ServerError::Configuration)?;
+        let tls = self
+            .configuration
+            .rustls()
+            .map_err(ServerError::Configuration)?;
         let listener = TcpListener::bind(self.configuration.bind).map_err(ServerError::Io)?;
         let gate = ConnectionGate::new(self.configuration.maximum_connections);
         loop {

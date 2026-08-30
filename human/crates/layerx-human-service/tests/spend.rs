@@ -18,9 +18,7 @@ use layerx_agentd::capability::{
 use layerx_agentd::protocol_evidence::RawReceiptEvidence;
 use layerx_agentd::receipt as daemon_receipt;
 use layerx_agentd::store::{Store, TenantId};
-use layerx_human_service::agents::{
-    AgentShell, SpendError, SpendProfile, SpendReconciliation,
-};
+use layerx_human_service::agents::{AgentShell, SpendError, SpendProfile, SpendReconciliation};
 use layerx_human_service::store::PrincipalId;
 use layerx_proof::receipt::AuthorizedBatch;
 use layerx_types::payload::ModuleId;
@@ -119,9 +117,7 @@ impl RealAgentLayer {
             budget_limit_id,
             next_sequence: AtomicU64::new(WINDOW_START),
             commit: Mutex::new(()),
-            durable: Mutex::new(DurableReceipts {
-                store,
-            }),
+            durable: Mutex::new(DurableReceipts { store }),
         })
     }
 
@@ -362,12 +358,51 @@ fn push_bytes(output: &mut Vec<u8>, value: &[u8]) {
 #[test]
 fn spend_surface_fails_closed_without_a_canonical_budget_state_record() {
     let layer = RealAgentLayer::new("reconcile", 1_000, 500);
-    layer
-        .submit(7, COUNTERPARTY, ASSET, 100, [1; 32])
-        .unwrap_or_else(|error| panic!("first activity: {error:?}"));
-    layer
-        .submit(7, COUNTERPARTY, ASSET, 100, [2; 32])
-        .unwrap_or_else(|error| panic!("second activity: {error:?}"));
+    assert_eq!(
+        layer.submit(7, COUNTERPARTY, ASSET, 100, [1; 32]),
+        Err(SubmitRefusal::CapabilityCeiling(CeilingError::Unreconciled))
+    );
+    assert_eq!(
+        layer.submit(7, COUNTERPARTY, ASSET, 100, [2; 32]),
+        Err(SubmitRefusal::CapabilityCeiling(CeilingError::Unreconciled))
+    );
+    let snapshot = layer
+        .capability_ceiling
+        .snapshot()
+        .unwrap_or_else(|error| panic!("capability snapshot: {error:?}"));
+    assert_eq!(snapshot.consumed, 0);
+    assert_eq!(snapshot.held, 0);
+    assert_eq!(snapshot.reservations, 0);
+    assert!(!snapshot.reconciled);
+    assert_eq!(
+        layer
+            .budget
+            .held_reservations()
+            .unwrap_or_else(|error| panic!("budget reservations: {error:?}")),
+        0
+    );
+    assert_eq!(
+        layer
+            .budget
+            .consumed(layer.budget_limit_id)
+            .unwrap_or_else(|error| panic!("budget consumption: {error:?}")),
+        0
+    );
+    let durable = layer
+        .durable
+        .lock()
+        .unwrap_or_else(|error| panic!("durable lock: {error}"));
+    for idempotency_key in [[1; 32], [2; 32]] {
+        assert!(matches!(
+            daemon_receipt::serve(
+                &durable.store,
+                layer.tenant.clone(),
+                daemon_receipt::ReceiptLookupKey::Idempotency(idempotency_key),
+            ),
+            Err(daemon_receipt::ReceiptStoreError::Missing)
+        ));
+    }
+    drop(durable);
 
     let service = SpendReconciliation::new(profile())
         .unwrap_or_else(|error| panic!("spend service: {error}"));
@@ -396,16 +431,30 @@ fn concurrent_hostile_activity_stays_inside_capability_and_budget_bounds() {
         .into_iter()
         .map(|worker| worker.join().unwrap_or_else(|_| panic!("worker panicked")))
         .collect();
-    assert_eq!(outcomes.iter().filter(|outcome| outcome.is_ok()).count(), 4);
     assert_eq!(
         outcomes
             .iter()
             .filter(|outcome| matches!(
                 outcome,
-                Err(SubmitRefusal::CapabilityCeiling(CeilingError::Exceeded))
+                Err(SubmitRefusal::CapabilityCeiling(CeilingError::Unreconciled))
             ))
             .count(),
-        4
+        8
+    );
+    let snapshot = capability_bound
+        .capability_ceiling
+        .snapshot()
+        .unwrap_or_else(|error| panic!("capability snapshot: {error:?}"));
+    assert_eq!(snapshot.consumed, 0);
+    assert_eq!(snapshot.held, 0);
+    assert_eq!(snapshot.reservations, 0);
+    assert!(!snapshot.reconciled);
+    assert_eq!(
+        capability_bound
+            .budget
+            .held_reservations()
+            .unwrap_or_else(|error| panic!("budget reservations: {error:?}")),
+        0
     );
     assert_eq!(
         capability_bound.submit(8, COUNTERPARTY, ASSET, 1, [0x21; 32]),
@@ -435,16 +484,54 @@ fn concurrent_hostile_activity_stays_inside_capability_and_budget_bounds() {
     }
 
     let budget_bound = RealAgentLayer::new("budget-bound", 1_000, 250);
-    assert!(budget_bound
-        .submit(7, COUNTERPARTY, ASSET, 100, [0x31; 32])
-        .is_ok());
-    assert!(budget_bound
-        .submit(7, COUNTERPARTY, ASSET, 100, [0x32; 32])
-        .is_ok());
+    assert_eq!(
+        budget_bound.submit(7, COUNTERPARTY, ASSET, 100, [0x31; 32]),
+        Err(SubmitRefusal::CapabilityCeiling(CeilingError::Unreconciled))
+    );
+    assert_eq!(
+        budget_bound.submit(7, COUNTERPARTY, ASSET, 100, [0x32; 32]),
+        Err(SubmitRefusal::CapabilityCeiling(CeilingError::Unreconciled))
+    );
+    for (id, amount) in [([0x41; 32], 100), ([0x42; 32], 100)] {
+        reserve(
+            &budget_bound.budget,
+            &ReservationRequest {
+                id,
+                amount,
+                expiry_sequence: WINDOW_START + 100,
+                current_sequence: WINDOW_START,
+                applicable_limits: vec![budget_bound.budget_limit_id],
+            },
+        )
+        .unwrap_or_else(|error| panic!("real budget reservation: {error:?}"));
+    }
     assert!(matches!(
-        budget_bound.submit(7, COUNTERPARTY, ASSET, 60, [0x33; 32]),
-        Err(SubmitRefusal::Budget(LimitRefusal::Exceeded { .. }))
+        reserve(
+            &budget_bound.budget,
+            &ReservationRequest {
+                id: [0x43; 32],
+                amount: 60,
+                expiry_sequence: WINDOW_START + 100,
+                current_sequence: WINDOW_START,
+                applicable_limits: vec![budget_bound.budget_limit_id],
+            },
+        ),
+        Err(LimitRefusal::Exceeded { .. })
     ));
+    assert_eq!(
+        budget_bound
+            .budget
+            .held_reservations()
+            .unwrap_or_else(|error| panic!("budget reservations: {error:?}")),
+        2
+    );
+    assert_eq!(
+        budget_bound
+            .budget
+            .consumed(budget_bound.budget_limit_id)
+            .unwrap_or_else(|error| panic!("budget consumption: {error:?}")),
+        0
+    );
     let budget_service = SpendReconciliation::new(profile())
         .unwrap_or_else(|error| panic!("budget spend service: {error}"));
     assert!(matches!(

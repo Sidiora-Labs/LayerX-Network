@@ -1,3 +1,4 @@
+use ed25519_dalek::{Signature, VerifyingKey};
 use layerx_agent_api::error::RequestId;
 use layerx_agent_api::idempotency::{BodyDigest, IdempotentMutation, Key};
 use layerx_agent_api::identity::{AgentDid, AuthorityRef, ContractError};
@@ -6,8 +7,8 @@ use layerx_agent_api::prepare::{
     TimestampBound as AgentTimestampBound,
 };
 use layerx_agent_api::{Amount as AgentAmount, Sequence};
-use ed25519_dalek::{Signature, VerifyingKey};
 use layerx_intents::{CompiledIntent, Intent};
+use layerx_proof::merkle::{decode_proof, encode_proof};
 use layerx_proof::merkle::{leaf_hash, verify_leaf_hash, MerkleError, Proof};
 use layerx_proof::receipt::AuthorizedBatch;
 use layerx_sdk::{Call, Client as AgentClient};
@@ -177,6 +178,688 @@ pub enum DepositFailure {
     CreditRefused(CreditFault),
 }
 
+const DEPOSIT_FAILURE_VERSION: u8 = 1;
+const DEPOSIT_FAILURE_MAX_BYTES: usize = 65_536;
+const DEPOSIT_FAILURE_MAX_TEXT: usize = 4_096;
+const DEPOSIT_FAILURE_MAX_ENDPOINTS: usize = 64;
+
+impl DepositFailure {
+    pub(crate) fn encode_failure_native(
+        &self,
+        maximum_bytes: usize,
+    ) -> Result<Vec<u8>, DepositNativeError> {
+        let mut out = Vec::new();
+        out.push(DEPOSIT_FAILURE_VERSION);
+        match self {
+            Self::CustodyFailed(fault) => {
+                out.push(0);
+                encode_custody_fault(&mut out, fault)?;
+            }
+            Self::ProofUnavailable(fault) => {
+                out.push(1);
+                encode_proof_fault(&mut out, fault)?;
+            }
+            Self::CreditRefused(fault) => {
+                out.push(2);
+                encode_credit_fault(&mut out, fault)?;
+            }
+        }
+        if out.len() > maximum_bytes || out.len() > DEPOSIT_FAILURE_MAX_BYTES {
+            return Err(DepositNativeError::Limit);
+        }
+        Ok(out)
+    }
+
+    pub(crate) fn decode_failure_native(bytes: &[u8]) -> Result<Self, DepositNativeError> {
+        if bytes.len() > DEPOSIT_FAILURE_MAX_BYTES {
+            return Err(DepositNativeError::Limit);
+        }
+        let mut reader = DepositReader::new(bytes);
+        if reader.u8()? != DEPOSIT_FAILURE_VERSION {
+            return Err(DepositNativeError::Encoding);
+        }
+        let failure = match reader.u8()? {
+            0 => Self::CustodyFailed(decode_custody_fault(&mut reader)?),
+            1 => Self::ProofUnavailable(decode_proof_fault(&mut reader)?),
+            2 => Self::CreditRefused(decode_credit_fault(&mut reader)?),
+            _ => return Err(DepositNativeError::Encoding),
+        };
+        reader.finish()?;
+        Ok(failure)
+    }
+}
+
+fn put_text(out: &mut Vec<u8>, text: &str) -> Result<(), DepositNativeError> {
+    if text.len() > DEPOSIT_FAILURE_MAX_TEXT {
+        return Err(DepositNativeError::Limit);
+    }
+    let length = u16::try_from(text.len()).map_err(|_| DepositNativeError::Limit)?;
+    out.extend_from_slice(&length.to_be_bytes());
+    out.extend_from_slice(text.as_bytes());
+    Ok(())
+}
+
+fn put_inclusion(out: &mut Vec<u8>, value: &TransactionInclusion) {
+    out.extend_from_slice(&value.block.number.to_be_bytes());
+    out.extend_from_slice(&value.block.hash);
+    out.extend_from_slice(&value.transaction_index.to_be_bytes());
+    out.push(match value.execution {
+        ExecutionOutcome::Succeeded => 0,
+        ExecutionOutcome::Reverted => 1,
+    });
+    match value.deployed_contract {
+        None => out.push(0),
+        Some(address) => {
+            out.push(1);
+            out.extend_from_slice(&address.bytes());
+        }
+    }
+}
+
+fn get_inclusion(
+    reader: &mut DepositReader<'_>,
+) -> Result<TransactionInclusion, DepositNativeError> {
+    let block = BlockRef {
+        number: reader.u64()?,
+        hash: reader.array()?,
+    };
+    let transaction_index = reader.u64()?;
+    let execution = match reader.u8()? {
+        0 => ExecutionOutcome::Succeeded,
+        1 => ExecutionOutcome::Reverted,
+        _ => return Err(DepositNativeError::Encoding),
+    };
+    let deployed_contract = match reader.u8()? {
+        0 => None,
+        1 => Some(EvmAddress::new(reader.array()?)),
+        _ => return Err(DepositNativeError::Encoding),
+    };
+    Ok(TransactionInclusion {
+        block,
+        transaction_index,
+        execution,
+        deployed_contract,
+    })
+}
+
+fn encode_custody_fault(out: &mut Vec<u8>, fault: &CustodyFault) -> Result<(), DepositNativeError> {
+    match fault {
+        CustodyFault::Reverted { inclusion } => {
+            out.push(0);
+            put_inclusion(out, inclusion);
+        }
+        CustodyFault::Displaced {
+            lost,
+            head,
+            requeued,
+        } => {
+            out.push(1);
+            put_inclusion(out, lost);
+            out.extend_from_slice(&head.to_be_bytes());
+            out.push(u8::from(*requeued));
+        }
+    }
+    Ok(())
+}
+
+fn decode_custody_fault(
+    reader: &mut DepositReader<'_>,
+) -> Result<CustodyFault, DepositNativeError> {
+    match reader.u8()? {
+        0 => Ok(CustodyFault::Reverted {
+            inclusion: get_inclusion(reader)?,
+        }),
+        1 => {
+            let lost = get_inclusion(reader)?;
+            let head = reader.u64()?;
+            let requeued = reader.boolean()?;
+            Ok(CustodyFault::Displaced {
+                lost,
+                head,
+                requeued,
+            })
+        }
+        _ => Err(DepositNativeError::Encoding),
+    }
+}
+
+fn put_block(out: &mut Vec<u8>, block: &BlockRef) {
+    out.extend_from_slice(&block.number.to_be_bytes());
+    out.extend_from_slice(&block.hash);
+}
+fn get_block(reader: &mut DepositReader<'_>) -> Result<BlockRef, DepositNativeError> {
+    Ok(BlockRef {
+        number: reader.u64()?,
+        hash: reader.array()?,
+    })
+}
+
+fn encode_stage(out: &mut Vec<u8>, stage: &FinalityStage) {
+    match stage {
+        FinalityStage::Announced => out.push(0),
+        FinalityStage::Missing { head } => {
+            out.push(1);
+            out.extend_from_slice(&head.to_be_bytes());
+        }
+        FinalityStage::Pooled { head } => {
+            out.push(2);
+            out.extend_from_slice(&head.to_be_bytes());
+        }
+        FinalityStage::Confirming {
+            inclusion,
+            confirmations,
+            required,
+        } => {
+            out.push(3);
+            put_inclusion(out, inclusion);
+            out.extend_from_slice(&confirmations.to_be_bytes());
+            out.extend_from_slice(&required.to_be_bytes());
+        }
+        FinalityStage::Final {
+            inclusion,
+            confirmations,
+            required,
+        } => {
+            out.push(4);
+            put_inclusion(out, inclusion);
+            out.extend_from_slice(&confirmations.to_be_bytes());
+            out.extend_from_slice(&required.to_be_bytes());
+        }
+        FinalityStage::Displaced {
+            lost,
+            head,
+            requeued,
+        } => {
+            out.push(5);
+            put_inclusion(out, lost);
+            out.extend_from_slice(&head.to_be_bytes());
+            out.push(u8::from(*requeued));
+        }
+    }
+}
+
+fn decode_stage(reader: &mut DepositReader<'_>) -> Result<FinalityStage, DepositNativeError> {
+    match reader.u8()? {
+        0 => Ok(FinalityStage::Announced),
+        1 => Ok(FinalityStage::Missing {
+            head: reader.u64()?,
+        }),
+        2 => Ok(FinalityStage::Pooled {
+            head: reader.u64()?,
+        }),
+        3 | 4 => {
+            let tag = reader.bytes[reader.at - 1];
+            let inclusion = get_inclusion(reader)?;
+            let confirmations = reader.u64()?;
+            let required = reader.u64()?;
+            if tag == 3 {
+                Ok(FinalityStage::Confirming {
+                    inclusion,
+                    confirmations,
+                    required,
+                })
+            } else {
+                Ok(FinalityStage::Final {
+                    inclusion,
+                    confirmations,
+                    required,
+                })
+            }
+        }
+        5 => {
+            let lost = get_inclusion(reader)?;
+            let head = reader.u64()?;
+            let requeued = reader.boolean()?;
+            Ok(FinalityStage::Displaced {
+                lost,
+                head,
+                requeued,
+            })
+        }
+        _ => Err(DepositNativeError::Encoding),
+    }
+}
+
+fn encode_endpoint_error(
+    out: &mut Vec<u8>,
+    error: &EndpointError,
+) -> Result<(), DepositNativeError> {
+    if error.failures.is_empty() {
+        return Err(DepositNativeError::Encoding);
+    }
+    if error.failures.len() > DEPOSIT_FAILURE_MAX_ENDPOINTS {
+        return Err(DepositNativeError::Limit);
+    }
+    out.push(u8::try_from(error.failures.len()).map_err(|_| DepositNativeError::Limit)?);
+    for failure in &error.failures {
+        put_text(out, &failure.url)?;
+        encode_endpoint_fault(out, &failure.fault)?;
+    }
+    Ok(())
+}
+
+fn decode_endpoint_error(
+    reader: &mut DepositReader<'_>,
+) -> Result<EndpointError, DepositNativeError> {
+    let count = usize::from(reader.u8()?);
+    if count == 0 {
+        return Err(DepositNativeError::Encoding);
+    }
+    if count > DEPOSIT_FAILURE_MAX_ENDPOINTS {
+        return Err(DepositNativeError::Limit);
+    }
+    let mut failures = Vec::with_capacity(count);
+    for _ in 0..count {
+        failures.push(crate::rpc::EndpointFailure {
+            url: reader.text()?,
+            fault: decode_endpoint_fault(reader)?,
+        });
+    }
+    Ok(EndpointError { failures })
+}
+
+fn encode_endpoint_fault(
+    out: &mut Vec<u8>,
+    fault: &crate::rpc::EndpointFault,
+) -> Result<(), DepositNativeError> {
+    use crate::rpc::EndpointFault;
+    match fault {
+        EndpointFault::UnsupportedUrl => out.push(0),
+        EndpointFault::InsecureTransport => out.push(1),
+        EndpointFault::InvalidTrustAnchor => out.push(2),
+        EndpointFault::Authentication { detail } => {
+            out.push(3);
+            put_text(out, detail)?;
+        }
+        EndpointFault::Connect { detail } => {
+            out.push(4);
+            put_text(out, detail)?;
+        }
+        EndpointFault::Transport { detail } => {
+            out.push(5);
+            put_text(out, detail)?;
+        }
+        EndpointFault::Http { status } => {
+            out.push(6);
+            out.extend_from_slice(&status.to_be_bytes());
+        }
+        EndpointFault::ResponseTooLarge => out.push(7),
+        EndpointFault::AmbiguousFraming => out.push(8),
+        EndpointFault::MalformedResponse => out.push(9),
+        EndpointFault::Rpc { code, message } => {
+            out.push(10);
+            out.extend_from_slice(&code.to_be_bytes());
+            put_text(out, message)?;
+        }
+        EndpointFault::ChainMismatch { expected, actual } => {
+            out.push(11);
+            out.extend_from_slice(&expected.to_be_bytes());
+            out.extend_from_slice(&actual.to_be_bytes());
+        }
+        EndpointFault::InconsistentObservation => out.push(12),
+        EndpointFault::UnexpectedValue { detail } => {
+            out.push(13);
+            put_text(out, detail)?;
+        }
+    }
+    Ok(())
+}
+
+fn decode_endpoint_fault(
+    reader: &mut DepositReader<'_>,
+) -> Result<crate::rpc::EndpointFault, DepositNativeError> {
+    use crate::rpc::EndpointFault;
+    match reader.u8()? {
+        0 => Ok(EndpointFault::UnsupportedUrl),
+        1 => Ok(EndpointFault::InsecureTransport),
+        2 => Ok(EndpointFault::InvalidTrustAnchor),
+        3 => Ok(EndpointFault::Authentication {
+            detail: reader.text()?,
+        }),
+        4 => Ok(EndpointFault::Connect {
+            detail: reader.text()?,
+        }),
+        5 => Ok(EndpointFault::Transport {
+            detail: reader.text()?,
+        }),
+        6 => Ok(EndpointFault::Http {
+            status: reader.u16()?,
+        }),
+        7 => Ok(EndpointFault::ResponseTooLarge),
+        8 => Ok(EndpointFault::AmbiguousFraming),
+        9 => Ok(EndpointFault::MalformedResponse),
+        10 => Ok(EndpointFault::Rpc {
+            code: reader.i64()?,
+            message: reader.text()?,
+        }),
+        11 => Ok(EndpointFault::ChainMismatch {
+            expected: reader.u64()?,
+            actual: reader.u64()?,
+        }),
+        12 => Ok(EndpointFault::InconsistentObservation),
+        13 => Ok(EndpointFault::UnexpectedValue {
+            detail: reader.text()?,
+        }),
+        _ => Err(DepositNativeError::Encoding),
+    }
+}
+
+fn encode_merkle(out: &mut Vec<u8>, error: &MerkleError) -> Result<(), DepositNativeError> {
+    match error {
+        MerkleError::Encoding => out.push(0),
+        MerkleError::EmptyTree => out.push(1),
+        MerkleError::LeafIndex { index, count } => {
+            out.push(2);
+            out.extend_from_slice(&index.to_be_bytes());
+            out.extend_from_slice(&count.to_be_bytes());
+        }
+        MerkleError::PathLength { expected, actual } => {
+            out.push(3);
+            out.extend_from_slice(
+                &u64::try_from(*expected)
+                    .map_err(|_| DepositNativeError::Limit)?
+                    .to_be_bytes(),
+            );
+            out.extend_from_slice(
+                &u64::try_from(*actual)
+                    .map_err(|_| DepositNativeError::Limit)?
+                    .to_be_bytes(),
+            );
+        }
+        MerkleError::PromotionSibling { level } => {
+            out.push(4);
+            out.extend_from_slice(
+                &u64::try_from(*level)
+                    .map_err(|_| DepositNativeError::Limit)?
+                    .to_be_bytes(),
+            );
+        }
+        MerkleError::RootMismatch => out.push(5),
+        MerkleError::TreeTooLarge => out.push(6),
+        MerkleError::Hash => out.push(7),
+    }
+    Ok(())
+}
+
+fn decode_merkle(reader: &mut DepositReader<'_>) -> Result<MerkleError, DepositNativeError> {
+    match reader.u8()? {
+        0 => Ok(MerkleError::Encoding),
+        1 => Ok(MerkleError::EmptyTree),
+        2 => Ok(MerkleError::LeafIndex {
+            index: reader.u32()?,
+            count: reader.u32()?,
+        }),
+        3 => Ok(MerkleError::PathLength {
+            expected: usize::try_from(reader.u64()?).map_err(|_| DepositNativeError::Limit)?,
+            actual: usize::try_from(reader.u64()?).map_err(|_| DepositNativeError::Limit)?,
+        }),
+        4 => Ok(MerkleError::PromotionSibling {
+            level: usize::try_from(reader.u64()?).map_err(|_| DepositNativeError::Limit)?,
+        }),
+        5 => Ok(MerkleError::RootMismatch),
+        6 => Ok(MerkleError::TreeTooLarge),
+        7 => Ok(MerkleError::Hash),
+        _ => Err(DepositNativeError::Encoding),
+    }
+}
+
+fn put_static_field(out: &mut Vec<u8>, field: &'static str) -> Result<(), DepositNativeError> {
+    put_text(out, field)
+}
+
+fn decode_static_field(reader: &mut DepositReader<'_>) -> Result<&'static str, DepositNativeError> {
+    let value = reader.text()?;
+    match value.as_str() {
+        "tenant" => Ok("tenant"),
+        "agent_did" => Ok("agent_did"),
+        "authority_ref" => Ok("authority_ref"),
+        "client" => Ok("client"),
+        "policy_version" => Ok("policy_version"),
+        "session_id" => Ok("session_id"),
+        "capability_id" => Ok("capability_id"),
+        "budget_id" => Ok("budget_id"),
+        "counterparty" => Ok("counterparty"),
+        "asset" => Ok("asset"),
+        "purpose" => Ok("purpose"),
+        "protocol_authority" => Ok("protocol_authority"),
+        "idempotency_key" => Ok("idempotency_key"),
+        "reason" => Ok("reason"),
+        "availability_selector" => Ok("availability_selector"),
+        "fact_set" => Ok("fact_set"),
+        "offline_evidence" => Ok("offline_evidence"),
+        "projection_rationale" => Ok("projection_rationale"),
+        "event_bytes" => Ok("event_bytes"),
+        "filter_account_outside_tenant" => Ok("filter_account_outside_tenant"),
+        "filter_agent_outside_tenant" => Ok("filter_agent_outside_tenant"),
+        "filter_asset_outside_tenant" => Ok("filter_asset_outside_tenant"),
+        "filter_counterparty_outside_tenant" => Ok("filter_counterparty_outside_tenant"),
+        "filter_module_outside_tenant" => Ok("filter_module_outside_tenant"),
+        "transition_cause" => Ok("transition_cause"),
+        "expiry" => Ok("expiry"),
+        "limit" => Ok("limit"),
+        "availability_bound" => Ok("availability_bound"),
+        "history_range" => Ok("history_range"),
+        "page_limit" => Ok("page_limit"),
+        "gap_range" => Ok("gap_range"),
+        "timestamp_bound" => Ok("timestamp_bound"),
+        "checkpoint_id" => Ok("checkpoint_id"),
+        "checkpoint_state_root" => Ok("checkpoint_state_root"),
+        "deposit_root" => Ok("deposit_root"),
+        "custody_reference" => Ok("custody_reference"),
+        "network_id" => Ok("network_id"),
+        "protocol_version" => Ok("protocol_version"),
+        "deposit_id" => Ok("deposit_id"),
+        "asset_id" => Ok("asset_id"),
+        "amount" => Ok("amount"),
+        _ => Err(DepositNativeError::Encoding),
+    }
+}
+
+fn encode_proof_fault(out: &mut Vec<u8>, fault: &ProofFault) -> Result<(), DepositNativeError> {
+    match fault {
+        ProofFault::ProducerUnavailable => out.push(0),
+        ProofFault::NotFinal { stage } => {
+            out.push(1);
+            encode_stage(out, stage);
+        }
+        ProofFault::Unreadable { error } => {
+            out.push(2);
+            encode_endpoint_error(out, error)?;
+        }
+        ProofFault::InclusionChanged { tracked, observed } => {
+            out.push(3);
+            put_block(out, tracked);
+            match observed {
+                None => out.push(0),
+                Some(block) => {
+                    out.push(1);
+                    put_block(out, block);
+                }
+            }
+        }
+        ProofFault::MissingQuorumEvidence => out.push(4),
+        ProofFault::EvidenceSourceMismatch => out.push(5),
+        ProofFault::FinalityChainIdMismatch { expected, found } => {
+            out.push(6);
+            out.extend_from_slice(&expected.to_be_bytes());
+            out.extend_from_slice(&found.to_be_bytes());
+        }
+        ProofFault::ConfirmationPolicyMismatch { expected, reported } => {
+            out.push(7);
+            out.extend_from_slice(&expected.to_be_bytes());
+            out.extend_from_slice(&reported.to_be_bytes());
+        }
+        ProofFault::ConfirmationEvidenceMismatch { reported, observed } => {
+            out.push(8);
+            out.extend_from_slice(&reported.to_be_bytes());
+            out.extend_from_slice(&observed.to_be_bytes());
+        }
+        ProofFault::MissingCustodyEvent { vault } => {
+            out.push(9);
+            out.extend_from_slice(&vault.bytes());
+        }
+        ProofFault::MalformedCustodyEvent { detail } => {
+            out.push(10);
+            put_text(out, detail)?;
+        }
+        ProofFault::AmountOverflow { beneficiary } => {
+            out.push(11);
+            out.extend_from_slice(beneficiary);
+        }
+        ProofFault::UnboundDeposit { emitted, derived } => {
+            out.push(12);
+            out.extend_from_slice(emitted);
+            out.extend_from_slice(derived);
+        }
+        ProofFault::NonCanonicalRegistration { field } => {
+            out.push(13);
+            put_static_field(out, field)?;
+        }
+        ProofFault::RegistrationNetworkMismatch { expected, found } => {
+            out.push(14);
+            out.extend_from_slice(&expected.to_be_bytes());
+            out.extend_from_slice(&found.to_be_bytes());
+        }
+        ProofFault::RegistrationProtocolMismatch { expected, found } => {
+            out.push(15);
+            out.extend_from_slice(&expected.to_be_bytes());
+            out.extend_from_slice(&found.to_be_bytes());
+        }
+        ProofFault::CustodyReferenceMismatch { expected, found } => {
+            out.push(16);
+            out.extend_from_slice(expected);
+            out.extend_from_slice(found);
+        }
+        ProofFault::InvalidDepositRootSignature => out.push(17),
+        ProofFault::NonCanonicalDepositLeaf { field } => {
+            out.push(18);
+            put_static_field(out, field)?;
+        }
+        ProofFault::DepositInclusion(error) => {
+            out.push(19);
+            encode_merkle(out, error)?;
+        }
+    }
+    Ok(())
+}
+
+fn decode_proof_fault(reader: &mut DepositReader<'_>) -> Result<ProofFault, DepositNativeError> {
+    match reader.u8()? {
+        0 => Ok(ProofFault::ProducerUnavailable),
+        1 => Ok(ProofFault::NotFinal {
+            stage: decode_stage(reader)?,
+        }),
+        2 => Ok(ProofFault::Unreadable {
+            error: decode_endpoint_error(reader)?,
+        }),
+        3 => {
+            let tracked = get_block(reader)?;
+            let observed = match reader.u8()? {
+                0 => None,
+                1 => Some(get_block(reader)?),
+                _ => return Err(DepositNativeError::Encoding),
+            };
+            Ok(ProofFault::InclusionChanged { tracked, observed })
+        }
+        4 => Ok(ProofFault::MissingQuorumEvidence),
+        5 => Ok(ProofFault::EvidenceSourceMismatch),
+        6 => Ok(ProofFault::FinalityChainIdMismatch {
+            expected: reader.u64()?,
+            found: reader.u64()?,
+        }),
+        7 => Ok(ProofFault::ConfirmationPolicyMismatch {
+            expected: reader.u64()?,
+            reported: reader.u64()?,
+        }),
+        8 => Ok(ProofFault::ConfirmationEvidenceMismatch {
+            reported: reader.u64()?,
+            observed: reader.u64()?,
+        }),
+        9 => Ok(ProofFault::MissingCustodyEvent {
+            vault: EvmAddress::new(reader.array()?),
+        }),
+        10 => Ok(ProofFault::MalformedCustodyEvent {
+            detail: reader.text()?,
+        }),
+        11 => Ok(ProofFault::AmountOverflow {
+            beneficiary: reader.array()?,
+        }),
+        12 => Ok(ProofFault::UnboundDeposit {
+            emitted: reader.array()?,
+            derived: reader.array()?,
+        }),
+        13 => Ok(ProofFault::NonCanonicalRegistration {
+            field: decode_static_field(reader)?,
+        }),
+        14 => Ok(ProofFault::RegistrationNetworkMismatch {
+            expected: reader.u32()?,
+            found: reader.u32()?,
+        }),
+        15 => Ok(ProofFault::RegistrationProtocolMismatch {
+            expected: reader.u16()?,
+            found: reader.u16()?,
+        }),
+        16 => Ok(ProofFault::CustodyReferenceMismatch {
+            expected: reader.array()?,
+            found: reader.array()?,
+        }),
+        17 => Ok(ProofFault::InvalidDepositRootSignature),
+        18 => Ok(ProofFault::NonCanonicalDepositLeaf {
+            field: decode_static_field(reader)?,
+        }),
+        19 => Ok(ProofFault::DepositInclusion(decode_merkle(reader)?)),
+        _ => Err(DepositNativeError::Encoding),
+    }
+}
+
+fn encode_credit_fault(out: &mut Vec<u8>, fault: &CreditFault) -> Result<(), DepositNativeError> {
+    match fault {
+        CreditFault::BeneficiaryMismatch {
+            beneficiary,
+            recipient,
+        } => {
+            out.push(0);
+            out.extend_from_slice(beneficiary);
+            out.extend_from_slice(recipient);
+        }
+        CreditFault::ReserveNamespace => out.push(1),
+        CreditFault::BridgeProofIngressUnavailable => out.push(2),
+        CreditFault::AgentContract(error) => {
+            out.push(3);
+            match error {
+                ContractError::Empty(field) => {
+                    out.push(0);
+                    put_static_field(out, field)?;
+                }
+                ContractError::Zero(field) => {
+                    out.push(1);
+                    put_static_field(out, field)?;
+                }
+                ContractError::DaemonLimitFunding => out.push(2),
+            }
+        }
+    }
+    Ok(())
+}
+
+fn decode_credit_fault(reader: &mut DepositReader<'_>) -> Result<CreditFault, DepositNativeError> {
+    match reader.u8()? {
+        0 => Ok(CreditFault::BeneficiaryMismatch {
+            beneficiary: reader.array()?,
+            recipient: reader.array()?,
+        }),
+        1 => Ok(CreditFault::ReserveNamespace),
+        2 => Ok(CreditFault::BridgeProofIngressUnavailable),
+        3 => Ok(CreditFault::AgentContract(match reader.u8()? {
+            0 => ContractError::Empty(decode_static_field(reader)?),
+            1 => ContractError::Zero(decode_static_field(reader)?),
+            2 => ContractError::DaemonLimitFunding,
+            _ => return Err(DepositNativeError::Encoding),
+        })),
+        _ => Err(DepositNativeError::Encoding),
+    }
+}
+
 /// The exact Paxeer chain, quorum, and confirmation policy permitted to mint
 /// a custody proof.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -198,10 +881,7 @@ pub enum DepositProofConfigError {
     Agreement(TrackerConfigError),
     ZeroRequiredConfirmations,
     ZeroPaxeerChainId,
-    EndpointChainIdMismatch {
-        expected: u64,
-        found: u64,
-    },
+    EndpointChainIdMismatch { expected: u64, found: u64 },
     InvalidCheckpointAuthority,
     ZeroCustodyReference,
     ZeroNetworkId,
@@ -274,8 +954,8 @@ impl DepositProofVerifier {
             config.minimum_endpoint_agreement,
         )
         .map_err(DepositProofConfigError::Agreement)?;
-        let client = PaxeerClient::new(config.endpoints)
-            .map_err(DepositProofConfigError::Endpoints)?;
+        let client =
+            PaxeerClient::new(config.endpoints).map_err(DepositProofConfigError::Endpoints)?;
         let binding = client.quorum_binding(config.minimum_endpoint_agreement);
         Ok(Self {
             binding,
@@ -386,9 +1066,7 @@ impl DepositProofVerifier {
         let signature = Signature::from_bytes(&registration.signature);
         self.checkpoint_authority
             .verify_strict(&message, &signature)
-            .map_err(|_| {
-                DepositFailure::ProofUnavailable(ProofFault::InvalidDepositRootSignature)
-            })
+            .map_err(|_| DepositFailure::ProofUnavailable(ProofFault::InvalidDepositRootSignature))
     }
 
     fn admit_finality<'a>(
@@ -491,9 +1169,11 @@ impl DepositProofVerifier {
                 stage: report.stage(),
             }));
         }
-        let logs = evidence.receipt_logs().ok_or(DepositFailure::ProofUnavailable(
-            ProofFault::MissingQuorumEvidence,
-        ))?;
+        let logs = evidence
+            .receipt_logs()
+            .ok_or(DepositFailure::ProofUnavailable(
+                ProofFault::MissingQuorumEvidence,
+            ))?;
         Ok(AdmittedFinality {
             inclusion,
             confirmations: observed_confirmations,
@@ -535,6 +1215,183 @@ pub struct DepositProof {
 }
 
 impl DepositProof {
+    pub(crate) fn encode_native(
+        &self,
+        maximum_bytes: usize,
+    ) -> Result<Vec<u8>, DepositNativeError> {
+        const FIXED_BYTES: usize = 486;
+        if maximum_bytes == 0 {
+            return Err(DepositNativeError::Limit);
+        }
+        let merkle = encode_proof(&self.inclusion_proof);
+        let length = u16::try_from(merkle.len()).map_err(|_| DepositNativeError::Limit)?;
+        let capacity = FIXED_BYTES
+            .checked_add(merkle.len())
+            .ok_or(DepositNativeError::Limit)?;
+        if capacity > maximum_bytes || capacity > DEPOSIT_NATIVE_PAYLOAD_MAX {
+            return Err(DepositNativeError::Limit);
+        }
+        let mut out = Vec::with_capacity(capacity);
+        out.extend_from_slice(&self.transaction.bytes());
+        out.extend_from_slice(&self.inclusion.block.number.to_be_bytes());
+        out.extend_from_slice(&self.inclusion.block.hash);
+        out.extend_from_slice(&self.inclusion.transaction_index.to_be_bytes());
+        out.push(match self.inclusion.execution {
+            ExecutionOutcome::Succeeded => 1,
+            ExecutionOutcome::Reverted => 0,
+        });
+        match self.inclusion.deployed_contract {
+            Some(address) => {
+                out.push(1);
+                out.extend_from_slice(&address.bytes());
+            }
+            None => {
+                out.push(0);
+                out.extend_from_slice(&[0; 20]);
+            }
+        }
+        out.extend_from_slice(&self.confirmations.to_be_bytes());
+        out.extend_from_slice(&self.required.to_be_bytes());
+        out.extend_from_slice(&self.chain_id.to_be_bytes());
+        out.extend_from_slice(&self.vault.bytes());
+        out.extend_from_slice(&self.custody.deposit_id);
+        out.extend_from_slice(&self.custody.asset.bytes());
+        out.extend_from_slice(&self.custody.payer.bytes());
+        out.extend_from_slice(&self.custody.beneficiary);
+        out.extend_from_slice(&self.custody.amount.to_be_bytes());
+        out.extend_from_slice(&self.custody.nonce.to_be_bytes());
+        out.extend_from_slice(&self.checkpoint_id.bytes());
+        out.extend_from_slice(&self.checkpoint_state_root);
+        out.extend_from_slice(&self.deposit_root);
+        out.extend_from_slice(&self.custody_reference);
+        out.extend_from_slice(&self.network_id.to_be_bytes());
+        out.extend_from_slice(&self.protocol_version.to_be_bytes());
+        out.extend_from_slice(&self.registration_signature);
+        out.extend_from_slice(&length.to_be_bytes());
+        out.extend_from_slice(&merkle);
+        Ok(out)
+    }
+
+    pub(crate) fn decode_native(bytes: &[u8]) -> Result<Self, DepositNativeError> {
+        const FIXED_BYTES: usize = 486;
+        if bytes.len() < FIXED_BYTES || bytes.len() > DEPOSIT_NATIVE_PAYLOAD_MAX {
+            return Err(DepositNativeError::Encoding);
+        }
+        let mut reader = DepositReader::new(bytes);
+        let transaction = TransactionHash::new(reader.array()?);
+        let block = BlockRef {
+            number: reader.u64()?,
+            hash: reader.array()?,
+        };
+        let transaction_index = reader.u64()?;
+        let execution = match reader.u8()? {
+            1 => ExecutionOutcome::Succeeded,
+            0 => ExecutionOutcome::Reverted,
+            _ => return Err(DepositNativeError::Encoding),
+        };
+        let deployed = reader.u8()?;
+        let deployed_bytes = reader.array()?;
+        let deployed_contract = match deployed {
+            0 if deployed_bytes == [0; 20] => None,
+            1 => Some(EvmAddress::new(deployed_bytes)),
+            _ => return Err(DepositNativeError::Encoding),
+        };
+        let confirmations = reader.u64()?;
+        let required = reader.u64()?;
+        let chain_id = reader.u64()?;
+        let vault = EvmAddress::new(reader.array()?);
+        let custody = CustodyDeposit {
+            deposit_id: reader.array()?,
+            asset: AssetId::new(reader.array()?),
+            payer: EvmAddress::new(reader.array()?),
+            beneficiary: reader.array()?,
+            amount: Amount::from_be_bytes(reader.array()?),
+            nonce: reader.u64()?,
+        };
+        let checkpoint_id = CheckpointId::new(reader.array()?);
+        let checkpoint_state_root = reader.array()?;
+        let deposit_root = reader.array()?;
+        let custody_reference = reader.array()?;
+        let network_id = reader.u32()?;
+        let protocol_version = reader.u16()?;
+        let registration_signature = reader.array()?;
+        let proof_length = usize::from(reader.u16()?);
+        if reader.remaining() != proof_length {
+            return Err(DepositNativeError::Encoding);
+        }
+        let inclusion_proof =
+            decode_proof(reader.take(proof_length)?).map_err(DepositNativeError::Merkle)?;
+        reader.finish()?;
+        if execution == ExecutionOutcome::Reverted {
+            return Err(DepositNativeError::Custody(CustodyFault::Reverted {
+                inclusion: TransactionInclusion {
+                    block,
+                    transaction_index,
+                    execution,
+                    deployed_contract,
+                },
+            }));
+        }
+        if required == 0 || confirmations < required || chain_id == 0 {
+            return Err(DepositNativeError::Encoding);
+        }
+        let derived = derive_deposit_id(chain_id, vault, &custody);
+        if derived != custody.deposit_id {
+            return Err(DepositNativeError::Proof(ProofFault::UnboundDeposit {
+                emitted: custody.deposit_id,
+                derived,
+            }));
+        }
+        let registration = DepositRootRegistration {
+            checkpoint_id: checkpoint_id.bytes(),
+            checkpoint_state_root,
+            deposit_root,
+            custody_reference,
+            network_id,
+            protocol_version,
+            signature: registration_signature,
+        };
+        deposit_root_registration_message(&registration).map_err(DepositNativeError::Proof)?;
+        let leaf_bytes = deposit_leaf_bytes(
+            custody.deposit_id,
+            custody_reference,
+            custody.asset,
+            custody.amount,
+            checkpoint_id.bytes(),
+            network_id,
+            protocol_version,
+        )
+        .map_err(DepositNativeError::Proof)?;
+        let computed_leaf = leaf_hash(&leaf_bytes).map_err(DepositNativeError::Merkle)?;
+        verify_leaf_hash(&computed_leaf, &inclusion_proof, &deposit_root)
+            .map_err(DepositNativeError::Merkle)?;
+        let nullifier = deposit_nullifier(custody.deposit_id);
+        Ok(Self {
+            transaction,
+            inclusion: TransactionInclusion {
+                block,
+                transaction_index,
+                execution,
+                deployed_contract,
+            },
+            confirmations,
+            required,
+            chain_id,
+            vault,
+            custody,
+            checkpoint_id,
+            checkpoint_state_root,
+            deposit_root,
+            custody_reference,
+            network_id,
+            protocol_version,
+            registration_signature,
+            inclusion_proof,
+            leaf_hash: computed_leaf,
+            nullifier,
+        })
+    }
+
     #[must_use]
     pub const fn transaction(&self) -> TransactionHash {
         self.transaction
@@ -716,6 +1573,85 @@ impl DepositProof {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum DepositNativeError {
+    Encoding,
+    Limit,
+    Custody(CustodyFault),
+    Proof(ProofFault),
+    Merkle(MerkleError),
+}
+
+pub(crate) const DEPOSIT_NATIVE_PAYLOAD_MAX: usize =
+    486 + 10 + 32 * layerx_proof::merkle::MAX_DEPTH;
+
+struct DepositReader<'a> {
+    bytes: &'a [u8],
+    at: usize,
+}
+
+impl<'a> DepositReader<'a> {
+    const fn new(bytes: &'a [u8]) -> Self {
+        Self { bytes, at: 0 }
+    }
+    fn take(&mut self, count: usize) -> Result<&'a [u8], DepositNativeError> {
+        let end = self
+            .at
+            .checked_add(count)
+            .ok_or(DepositNativeError::Encoding)?;
+        let value = self
+            .bytes
+            .get(self.at..end)
+            .ok_or(DepositNativeError::Encoding)?;
+        self.at = end;
+        Ok(value)
+    }
+    fn array<const N: usize>(&mut self) -> Result<[u8; N], DepositNativeError> {
+        self.take(N)?
+            .try_into()
+            .map_err(|_| DepositNativeError::Encoding)
+    }
+    fn u8(&mut self) -> Result<u8, DepositNativeError> {
+        Ok(self.array::<1>()?[0])
+    }
+    fn u16(&mut self) -> Result<u16, DepositNativeError> {
+        Ok(u16::from_be_bytes(self.array()?))
+    }
+    fn u32(&mut self) -> Result<u32, DepositNativeError> {
+        Ok(u32::from_be_bytes(self.array()?))
+    }
+    fn u64(&mut self) -> Result<u64, DepositNativeError> {
+        Ok(u64::from_be_bytes(self.array()?))
+    }
+    fn i64(&mut self) -> Result<i64, DepositNativeError> {
+        Ok(i64::from_be_bytes(self.array()?))
+    }
+    fn boolean(&mut self) -> Result<bool, DepositNativeError> {
+        match self.u8()? {
+            0 => Ok(false),
+            1 => Ok(true),
+            _ => Err(DepositNativeError::Encoding),
+        }
+    }
+    fn text(&mut self) -> Result<String, DepositNativeError> {
+        let length = usize::from(self.u16()?);
+        if length > DEPOSIT_FAILURE_MAX_TEXT {
+            return Err(DepositNativeError::Limit);
+        }
+        String::from_utf8(self.take(length)?.to_vec()).map_err(|_| DepositNativeError::Encoding)
+    }
+    fn remaining(&self) -> usize {
+        self.bytes.len().saturating_sub(self.at)
+    }
+    fn finish(self) -> Result<(), DepositNativeError> {
+        if self.at == self.bytes.len() {
+            Ok(())
+        } else {
+            Err(DepositNativeError::Encoding)
+        }
+    }
+}
+
 /// Caller-owned fields that the Agent API requires in addition to the exact
 /// compiled deposit-credit payload.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -796,6 +1732,7 @@ impl CreditPath {
             key: Key::new(key).map_err(credit_contract)?,
             body_digest,
             operation: AgentPrepareRequest {
+                protocol_activity_type: self.compiled.activity_type().value(),
                 actor: context.actor,
                 authority: context.authority,
                 account_sequence: context.account_sequence,

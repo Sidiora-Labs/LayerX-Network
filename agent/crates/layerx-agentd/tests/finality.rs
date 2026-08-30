@@ -2,12 +2,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use ed25519_dalek::{Signer as _, SigningKey as EdSigningKey};
 use k256::ecdsa::{Signature, SigningKey};
-use layerx_crypto::secp256k1;
 use layerx_agentd::finality::{
     augment, wait_for_level, CheckpointBundle, FinalityError, InclusionBundle, VerificationProgress,
 };
-use layerx_agentd::receipt::{serve, store, ReceiptLookupKey};
+use layerx_agentd::receipt::{serve, store, store_verified_if_absent, ReceiptLookupKey};
 use layerx_agentd::store::{Store, TenantId};
+use layerx_crypto::secp256k1;
 use layerx_proof::checkpoint::{
     checkpoint_id, Attestation, Certificate, Checkpoint, CheckpointError, GuarantorKey,
     SettlementDomain,
@@ -193,10 +193,8 @@ fn attestation(checkpoint: [u8; 32], guarantor_id: [u8; 32], key: &SigningKey) -
     let (signature, recovery_id): (Signature, _) = key
         .sign_prehash_recoverable(&digest)
         .unwrap_or_else(|error| panic!("attestation signature: {error}"));
-    let signer = secp256k1::evm_address(
-        key.verifying_key().to_encoded_point(true).as_bytes(),
-    )
-    .unwrap_or_else(|error| panic!("attestation signer: {error:?}"));
+    let signer = secp256k1::evm_address(key.verifying_key().to_encoded_point(true).as_bytes())
+        .unwrap_or_else(|error| panic!("attestation signer: {error:?}"));
     Attestation::new(
         1,
         42,
@@ -300,6 +298,25 @@ fn verified_checkpoint_and_settlement_raise_level_without_altering_receipt() {
     assert_eq!(served.canonical_bytes, exact_receipt);
     assert_eq!(
         served.metadata.verification_level,
+        VerificationLevel::SETTLEMENT_ANCHORED
+    );
+    let receipt_key = EdSigningKey::from_bytes(&[3; 32]);
+    let repeated = store_verified_if_absent(
+        &mut durable,
+        tenant(),
+        idempotency_key,
+        &exact_receipt,
+        &AuthorizedBatch::new(
+            [4; 32],
+            [5; 32],
+            [2; 32],
+            [3; 32],
+            receipt_key.verifying_key().to_bytes(),
+        ),
+    )
+    .unwrap_or_else(|error| panic!("repeat verified ingress: {error:?}"));
+    assert_eq!(
+        repeated.metadata.verification_level,
         VerificationLevel::SETTLEMENT_ANCHORED
     );
     let _ = std::fs::remove_dir_all(root);

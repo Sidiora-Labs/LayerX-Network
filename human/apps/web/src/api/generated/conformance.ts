@@ -242,19 +242,19 @@ export const conformance: { readonly [name in OperationName]: (run: ConformanceR
   "security.recovery.reveal": async (run) =>
     encodeTimedSecret(await run.client.securityRecoveryReveal(decodeSecurityRecoveryReveal(runBody(run), "golden request body"))),
   "security.session.revoke": async (run) =>
-    encodeSessionRevocation(await run.client.securitySessionRevoke(runParam(run, "session_id"), decodeSecuritySessionRevocation(runBody(run), "golden request body"))),
+    encodeSessionRevocation(await run.client.securitySessionRevoke(runParam(run, "session_id"), decodeSecuritySessionRevocation(runBody(run), "golden request body"), runKey(run))),
   "security.session.revoke-all": async (run) =>
-    encodeSessionRevocation(await run.client.securitySessionRevokeAll(decodeSecuritySessionRevocation(runBody(run), "golden request body"))),
+    encodeSessionRevocation(await run.client.securitySessionRevokeAll(decodeSecuritySessionRevocation(runBody(run), "golden request body"), runKey(run))),
   "session.list": async (run) =>
     encodeSessionList(await run.client.sessionList()),
   "session.open": async (run) =>
-    encodeSession(await run.client.sessionOpen(decodeSessionOpenRequest(runBody(run), "golden request body"))),
+    encodeSession(await run.client.sessionOpen(decodeSessionOpenRequest(runBody(run), "golden request body"), runKey(run))),
   "session.refresh": async (run) =>
     encodeSession(await run.client.sessionRefresh()),
   "session.revoke": async (run) =>
-    encodeSessionRevocation(await run.client.sessionRevoke(runParam(run, "session_id"))),
+    encodeSessionRevocation(await run.client.sessionRevoke(runParam(run, "session_id"), runKey(run))),
   "session.revoke-all": async (run) =>
-    encodeSessionRevocation(await run.client.sessionRevokeAll()),
+    encodeSessionRevocation(await run.client.sessionRevokeAll(runKey(run))),
   "stepup.begin": async (run) =>
     encodeStepUpChallenge(await run.client.stepupBegin(decodeStepUpRequest(runBody(run), "golden request body"))),
   "stepup.finish": async (run) =>

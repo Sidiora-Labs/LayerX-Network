@@ -1,11 +1,12 @@
 use std::collections::BTreeSet;
 use std::fmt::{Display, Formatter, Write as _};
 
+use layerx_proof::checkpoint::SettlementDomain;
 use layerx_proof::export::{
     verify as verify_offline, ExportVerificationError, OfflineExport, VerificationReport,
 };
-use layerx_proof::checkpoint::SettlementDomain;
 use layerx_proof::merkle::encode_proof;
+use layerx_proof::receipt::AuthorizedBatch;
 use sha2::{Digest as _, Sha256};
 
 use crate::audit::{verify_export as verify_audit, AuditChain, AuditError};
@@ -21,6 +22,7 @@ const MAXIMUM_EXPORT_BYTES: usize = 64 * 1024 * 1024;
 const PRINCIPAL_DOMAIN: &[u8] = b"layerx-human-export-principal/v1";
 const CSV_HEADER: &str =
     "entry_id,kind,status,occurred_at,projected_at,verification,receipt_references\r\n";
+const BUNDLE_MAGIC: &[u8; 8] = b"LXHEXP01";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StatementExport {
@@ -73,6 +75,124 @@ pub struct EvidenceBundle {
 }
 
 impl EvidenceBundle {
+    /// Encodes the receipt evidence bundle in a bounded canonical binary form.
+    pub fn encode(&self) -> Result<Vec<u8>, ExportError> {
+        let mut out = Vec::new();
+        out.extend_from_slice(BUNDLE_MAGIC);
+        out.extend_from_slice(&self.principal_binding);
+        push_u32(&mut out, self.entries.len())?;
+        for entry in &self.entries {
+            push_bytes(&mut out, entry.entry_id.as_str().as_bytes())?;
+            push_u32(&mut out, entry.receipt_references.len())?;
+            for reference in &entry.receipt_references {
+                push_bytes(&mut out, reference.as_bytes())?;
+            }
+        }
+        push_u32(&mut out, self.protocol_evidence.len())?;
+        for export in &self.protocol_evidence {
+            if !export.inclusions.is_empty()
+                || !export.checkpoints.is_empty()
+                || !export.derived_aggregates.is_empty()
+            {
+                return Err(ExportError::UnboundProtocolEvidence);
+            }
+            push_u32(&mut out, export.receipts.len())?;
+            for receipt in &export.receipts {
+                push_bytes(&mut out, receipt.statement.as_bytes())?;
+                push_bytes(&mut out, &receipt.canonical_receipt_bytes)?;
+                out.extend_from_slice(&receipt.authorised_batch.batch_id());
+                out.extend_from_slice(&receipt.authorised_batch.asset());
+                out.extend_from_slice(&receipt.authorised_batch.previous_state_root());
+                out.extend_from_slice(&receipt.authorised_batch.resulting_state_root());
+                out.extend_from_slice(&receipt.authorised_batch.sequencer_public_key());
+                out.extend_from_slice(&receipt.expected_receipt_digest);
+            }
+        }
+        match &self.audit_export {
+            Some(value) => {
+                out.push(1);
+                push_bytes(&mut out, value)?
+            }
+            None => out.push(0),
+        }
+        require_bound(out.len(), MAXIMUM_EXPORT_BYTES)?;
+        Ok(out)
+    }
+
+    /// Decodes the canonical bounded receipt bundle without trusting lengths.
+    pub fn decode(bytes: &[u8]) -> Result<Self, ExportError> {
+        require_bound(bytes.len(), MAXIMUM_EXPORT_BYTES)?;
+        let mut reader = BundleReader { bytes, offset: 0 };
+        if reader.take(8)? != BUNDLE_MAGIC {
+            return Err(ExportError::UnboundProtocolEvidence);
+        }
+        let principal_binding = reader.array()?;
+        let entry_count = reader.count()?;
+        let mut entries = Vec::with_capacity(entry_count);
+        for _ in 0..entry_count {
+            let id = String::from_utf8(reader.bytes()?.to_vec())
+                .map_err(|_| ExportError::UnboundProtocolEvidence)?;
+            let entry_id = ActivityEntryId::new(id).map_err(FeedError::from)?;
+            let count = reader.count()?;
+            let mut refs = Vec::with_capacity(count);
+            for _ in 0..count {
+                refs.push(
+                    String::from_utf8(reader.bytes()?.to_vec())
+                        .map_err(|_| ExportError::UnboundProtocolEvidence)?,
+                )
+            }
+            entries.push(EvidenceEntry {
+                entry_id,
+                receipt_references: refs,
+            });
+        }
+        let export_count = reader.count()?;
+        let mut protocol_evidence = Vec::with_capacity(export_count);
+        for _ in 0..export_count {
+            let count = reader.count()?;
+            let mut receipts = Vec::with_capacity(count);
+            for _ in 0..count {
+                let statement = String::from_utf8(reader.bytes()?.to_vec())
+                    .map_err(|_| ExportError::UnboundProtocolEvidence)?;
+                let canonical_receipt_bytes = reader.bytes()?.to_vec();
+                let authorised_batch = AuthorizedBatch::new(
+                    reader.array()?,
+                    reader.array()?,
+                    reader.array()?,
+                    reader.array()?,
+                    reader.array()?,
+                );
+                let expected_receipt_digest = reader.array()?;
+                receipts.push(layerx_proof::export::ReceiptFact {
+                    statement,
+                    canonical_receipt_bytes,
+                    authorised_batch,
+                    expected_receipt_digest,
+                });
+            }
+            protocol_evidence.push(OfflineExport {
+                receipts,
+                inclusions: Vec::new(),
+                checkpoints: Vec::new(),
+                derived_aggregates: Vec::new(),
+            });
+        }
+        let audit_export = match reader.byte()? {
+            0 => None,
+            1 => Some(reader.bytes()?.to_vec()),
+            _ => return Err(ExportError::UnboundProtocolEvidence),
+        };
+        if reader.offset != bytes.len() {
+            return Err(ExportError::UnboundProtocolEvidence);
+        }
+        Ok(Self {
+            principal_binding,
+            entries,
+            protocol_evidence,
+            audit_export,
+            bounded_bytes: bytes.len(),
+        })
+    }
     #[must_use]
     pub const fn principal_binding(&self) -> [u8; 32] {
         self.principal_binding
@@ -133,6 +253,60 @@ impl EvidenceBundle {
                 .sum(),
             audit_entries: audit.map_or(0, |report| report.entries()),
         })
+    }
+}
+
+fn push_u32(out: &mut Vec<u8>, value: usize) -> Result<(), ExportError> {
+    out.extend_from_slice(
+        &u32::try_from(value)
+            .map_err(|_| ExportError::SizeOverflow)?
+            .to_be_bytes(),
+    );
+    Ok(())
+}
+fn push_bytes(out: &mut Vec<u8>, value: &[u8]) -> Result<(), ExportError> {
+    if value.is_empty() {
+        return Err(ExportError::UnboundProtocolEvidence);
+    }
+    push_u32(out, value.len())?;
+    out.extend_from_slice(value);
+    require_bound(out.len(), MAXIMUM_EXPORT_BYTES)
+}
+struct BundleReader<'a> {
+    bytes: &'a [u8],
+    offset: usize,
+}
+impl<'a> BundleReader<'a> {
+    fn take(&mut self, n: usize) -> Result<&'a [u8], ExportError> {
+        let end = self
+            .offset
+            .checked_add(n)
+            .ok_or(ExportError::SizeOverflow)?;
+        let value = self
+            .bytes
+            .get(self.offset..end)
+            .ok_or(ExportError::UnboundProtocolEvidence)?;
+        self.offset = end;
+        Ok(value)
+    }
+    fn byte(&mut self) -> Result<u8, ExportError> {
+        Ok(self.take(1)?[0])
+    }
+    fn array<const N: usize>(&mut self) -> Result<[u8; N], ExportError> {
+        self.take(N)?
+            .try_into()
+            .map_err(|_| ExportError::UnboundProtocolEvidence)
+    }
+    fn count(&mut self) -> Result<usize, ExportError> {
+        let value = u32::from_be_bytes(self.array()?);
+        usize::try_from(value).map_err(|_| ExportError::SizeOverflow)
+    }
+    fn bytes(&mut self) -> Result<&'a [u8], ExportError> {
+        let n = self.count()?;
+        if n == 0 {
+            return Err(ExportError::UnboundProtocolEvidence);
+        }
+        self.take(n)
     }
 }
 
@@ -250,11 +424,7 @@ impl EvidenceExport {
             })
             .collect::<Vec<_>>();
         let expected = referenced_receipts(&entries);
-        verify_protocol_set(
-            &protocol_evidence,
-            &expected,
-            expected_settlement_domain,
-        )?;
+        verify_protocol_set(&protocol_evidence, &expected, expected_settlement_domain)?;
         let bounded_bytes = evidence_size(&entries, &protocol_evidence, None)?;
         require_bound(bounded_bytes, self.maximum_bytes)?;
         let bundle = EvidenceBundle {
@@ -419,8 +589,8 @@ fn verify_protocol_set(
         if artifact.receipts.is_empty() {
             return Err(ExportError::UnboundProtocolEvidence);
         }
-        let report = verify_offline(artifact, expected_settlement_domain)
-            .map_err(ExportError::Protocol)?;
+        let report =
+            verify_offline(artifact, expected_settlement_domain).map_err(ExportError::Protocol)?;
         for receipt in &artifact.receipts {
             let reference = hex(Sha256::digest(&receipt.canonical_receipt_bytes));
             if !provided.insert(reference.clone()) {

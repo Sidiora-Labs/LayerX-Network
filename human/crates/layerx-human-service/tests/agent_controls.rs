@@ -6,9 +6,8 @@ use std::fs;
 
 use ed25519_dalek::{Signer as _, SigningKey};
 use layerx_agentd::budget::{
-    create_protocol_budget, reserve, BudgetCreationError, BudgetKind, BudgetLimiter,
-    BudgetPipeline, BudgetRequest, CoreBudgetReceipt, LimitConfig, LimitId, LimitRefusal,
-    LimitScope, LocalLimit, ReservationRequest,
+    reserve, BudgetLimiter, LimitConfig, LimitId, LimitRefusal, LimitScope, LocalLimit,
+    ReservationRequest,
 };
 use layerx_agentd::identity::{
     register, CoreIdentity, IdentityError, IdentityResolver, ProtocolAuthority,
@@ -37,6 +36,7 @@ use layerx_human_service::custody::{
     RotationSubmission, SessionEntropySource, SessionKeyEntropy, SessionKeyError,
     SessionKeyProvisioner, SessionPolicy, SessionTarget, SuspensionEvidence,
 };
+use layerx_human_service::server::agent_creation::ProductionAgentCreation;
 use layerx_human_service::store::PrincipalId;
 use layerx_intents::{DisclosureCheck, IntentKind};
 use layerx_proof::receipt::{verify, AuthorizedBatch};
@@ -64,19 +64,6 @@ struct InstalledSession {
     _issued: IssuedSessionKey,
     _signer: ProvisionedSessionKey,
     token: Token,
-}
-
-struct ReceiptPipeline {
-    receipt: CoreBudgetReceipt,
-}
-
-impl BudgetPipeline for ReceiptPipeline {
-    fn submit_budget(
-        &mut self,
-        _request: &BudgetRequest,
-    ) -> Result<CoreBudgetReceipt, BudgetCreationError> {
-        Ok(self.receipt.clone())
-    }
 }
 
 /// In-process agent contract over the actual agentd identity, session,
@@ -217,6 +204,7 @@ impl AgentSessionContract for RealAgentLayer {
         let mut resolver = IdentityBoundary(CoreIdentity {
             canonical_bytes: self.protocol_identity.to_vec(),
             head_sequence: self.core_sequence,
+            revocation_sequence: 1,
             verification_level: VerificationLevel::STATE_PROVEN,
             frozen: false,
             authorities,
@@ -369,33 +357,22 @@ impl AgentCreationContract for RealAgentLayer {
         let receipt = protocol_receipt(action.action_key);
         verify(&receipt.receipt_bytes, &receipt.authorized_batch)
             .map_err(|_| AgentFailure::Refused("receipt verification failed"))?;
-        let mut pipeline = ReceiptPipeline {
-            receipt: CoreBudgetReceipt {
-                evidence: support::raw_receipt_evidence(
-                    receipt.receipt_bytes.clone(),
-                    receipt.authorized_batch,
-                    11,
-                    &SigningKey::from_bytes(&[0x84; 32]),
-                ),
-            },
-        };
-        let receipt_signer = SigningKey::from_bytes(&[0x84; 32]);
-        create_protocol_budget(
-            &mut self.store,
-            &BudgetRequest {
-                tenant: self.tenant.clone(),
-                request_id: action.action_key,
-                kind: BudgetKind::ProtocolBudget,
-                asset: ASSET,
-                ceiling: decoded_limit(action.intent.kind())?,
-                expiry_sequence: 50_000,
-                canonical_activity: action.compiled.payload().as_bytes().to_vec(),
-                verified_submission: None,
-            },
-            &support::evidence_verifier(&receipt_signer),
-            &mut pipeline,
-        )
-        .map_err(|_| AgentFailure::Refused("protocol budget change failed"))?;
+        decoded_limit(action.intent.kind())?;
+        let finalization = ProductionAgentCreation::finalization_evidence(
+            &receipt,
+            ModuleId::Budget,
+            1,
+            self.now,
+        )?;
+        if finalization.action_key != action.action_key
+            || finalization.activity_id != action.action_key
+            || finalization.observed_sequence != 11
+            || finalization.verification != VerificationLevel::CHECKPOINT_FINALISED.wire_rank()
+        {
+            return Err(AgentFailure::Refused(
+                "protocol budget finalization mismatch",
+            ));
+        }
         self.protocol_limit_effects = self.protocol_limit_effects.saturating_add(1);
         self.protocol_cache
             .insert(action.action_key, receipt.clone());
@@ -420,6 +397,8 @@ impl AgentCreationContract for RealAgentLayer {
         ))
     }
 }
+
+impl layerx_human_service::agents::ScopedAgentCreationContract for RealAgentLayer {}
 
 impl AgentControlAgent for RealAgentLayer {
     fn apply_app_limit(
@@ -609,6 +588,28 @@ fn pause_revokes_real_authority_promptly_and_resume_is_receipt_gated() {
 
 #[test]
 fn protocol_and_app_limit_changes_keep_their_real_enforcement_labels() {
+    let mut unfinalized = protocol_receipt([0x60; 32]);
+    unfinalized.verification_level = VerificationLevel::SEQUENCER_SIGNED;
+    assert!(matches!(
+        ProductionAgentCreation::finalization_evidence(&unfinalized, ModuleId::Budget, 1, 1_002,),
+        Err(AgentFailure::Refused(
+            "lifecycle receipt is not checkpoint-finalized"
+        ))
+    ));
+    let finalized = protocol_receipt([0x62; 32]);
+    assert!(matches!(
+        ProductionAgentCreation::finalization_evidence(&finalized, ModuleId::Governance, 1, 1_002,),
+        Err(AgentFailure::Refused(
+            "lifecycle receipt does not prove successful action"
+        ))
+    ));
+    assert!(matches!(
+        ProductionAgentCreation::finalization_evidence(&finalized, ModuleId::Budget, 7, 1_002,),
+        Err(AgentFailure::Refused(
+            "lifecycle receipt does not prove successful action"
+        ))
+    ));
+
     let (mut protocol, _) = controls(
         "agent-controls-protocol-limit",
         LimitBacking::Protocol {
@@ -623,7 +624,10 @@ fn protocol_and_app_limit_changes_keep_their_real_enforcement_labels() {
     assert_eq!(changed.limit.monthly, 750);
     assert_eq!(changed.limit.enforcement, LimitEnforcement::Protocol);
     assert_eq!(changed.limit.enforcement_copy_key, PROTOCOL_LIMIT_COPY_KEY);
-    assert!(changed.limit.verification_level >= VerificationLevel::SEQUENCER_SIGNED);
+    assert_eq!(
+        changed.limit.verification_level,
+        VerificationLevel::CHECKPOINT_FINALISED
+    );
     assert_eq!(
         protocol
             .boundary()
@@ -714,6 +718,7 @@ fn protocol_receipt(action_key: [u8; 32]) -> ProtocolEvidence {
             fields.resulting_state_root,
             signer.verifying_key().to_bytes(),
         ),
+        verification_level: VerificationLevel::CHECKPOINT_FINALISED,
     }
 }
 

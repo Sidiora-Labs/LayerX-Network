@@ -282,6 +282,7 @@ impl Reclaim {
         )?;
         let plan = JourneyPlan::new(
             request.journey_id.clone(),
+            crate::journeys::JourneyKind::AgentRetire,
             request.idempotency_key,
             request.agent.custody_key.clone(),
             Operation::ProtocolMutation,

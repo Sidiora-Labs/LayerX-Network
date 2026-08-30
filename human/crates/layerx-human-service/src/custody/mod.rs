@@ -837,7 +837,7 @@ impl Keystore {
             .binding_digest
             .is_some_and(|digest| !layerx_crypto::ct::eq_fixed(&digest, &binding.digest()))
         {
-            return Err(CustodyError::Kms(KmsError::Integrity));
+            return Err(CustodyError::Kms(KmsError::Refused));
         }
         Ok(())
     }

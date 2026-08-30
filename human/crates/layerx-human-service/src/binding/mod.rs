@@ -21,8 +21,12 @@ use crate::auth::{
     AccessDecision, AuthError, AuthorizationRequest, OperationClass, OperationDigest, Passkeys,
     StepUpEvidence,
 };
+use crate::custody::{KeyId, Operation as CustodyOperation};
+use crate::journeys::{JourneyEngine, JourneyKind, JourneyLeg, JourneyPlan};
+use crate::notify::JourneyId;
 use crate::store::{EvidenceRef, PrincipalScope, RowKey, StoreError, Table};
 use crate::trace::TraceId;
+use layerx_agent_api::identity::{AgentDid, AuthorityRef};
 
 const CORE_DID_DOMAIN: &[u8] = b"LXP/v1/did-id\0";
 const CORE_BINDING_DOMAIN: &[u8] = b"LXP/v1/evm-payout-binding\0";
@@ -33,7 +37,7 @@ const GOVERNANCE_BINDING_OPERATION: u8 = 4;
 const MAX_STATEMENT_TTL: u64 = 600;
 
 /// Exact, human-readable ownership statement paired with the digest accepted by core.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct BindingStatement {
     did: Vec<u8>,
     network_id: u32,
@@ -378,6 +382,79 @@ pub struct BindingJourney {
 }
 
 impl BindingJourney {
+    pub fn rebind_operation_digest_verified(
+        receipt_digest: [u8; 32],
+        active_address: [u8; 20],
+        statement: &BindingStatement,
+    ) -> OperationDigest {
+        let mut hasher = Sha256::new();
+        hasher.update(REBIND_DOMAIN);
+        hasher.update(receipt_digest);
+        hasher.update(active_address);
+        hasher.update(statement.signing_digest);
+        hasher.update(statement.address);
+        hasher.update(statement.network_id.to_be_bytes());
+        OperationDigest::new(hasher.finalize().into())
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub fn start_durable(
+        &self,
+        scope: &mut PrincipalScope<'_>,
+        statement: &BindingStatement,
+        ownership_signature: &[u8],
+        idempotency_key: IdempotencyKey,
+        actor: AgentDid,
+        authority: AuthorityRef,
+        account_sequence: u64,
+        not_before: u64,
+        not_after: u64,
+        fee_limit: u128,
+        rebind: bool,
+        now: u64,
+    ) -> Result<JourneyEngine, BindingError> {
+        validate_statement(statement, now)?;
+        let recovered = recover_address(statement.signing_digest, ownership_signature)?;
+        if recovered != statement.address {
+            return Err(BindingError::SignerAddressMismatch);
+        }
+        let did =
+            Did::new(&statement.did).map_err(|_| BindingError::InvalidStatement("invalid DID"))?;
+        let network = NetworkId::new(statement.network_id)
+            .map_err(|_| BindingError::InvalidStatement("invalid network"))?;
+        let signature = Signature::new(ownership_signature).map_err(|_| BindingError::Intent)?;
+        let binding = EvmPayoutBinding::new(did, network, EvmAddress::new(recovered), signature)
+            .map_err(|_| BindingError::Intent)?;
+        let intent = Intent::v1(IntentKind::EvmPayoutBinding(binding));
+        let action_key = idempotency_key.bytes();
+        let journey_id = JourneyId::new(format!("jrn_{}", hex(&action_key)))
+            .map_err(|_| BindingError::CorruptState)?;
+        let leg = JourneyLeg::new(
+            intent,
+            action_key,
+            actor,
+            authority,
+            account_sequence,
+            not_before,
+            not_after,
+            fee_limit,
+        )
+        .map_err(|_| BindingError::InvalidAgentResponse)?;
+        let plan = JourneyPlan::new(
+            journey_id,
+            JourneyKind::WalletBinding,
+            action_key,
+            KeyId::new("human-primary").map_err(|_| BindingError::CorruptState)?,
+            if rebind {
+                CustodyOperation::WalletRebinding
+            } else {
+                CustodyOperation::ProtocolMutation
+            },
+            vec![leg],
+        )
+        .map_err(|_| BindingError::InvalidAgentResponse)?;
+        JourneyEngine::start(scope, &plan, &self.registry, now)
+            .map_err(|_| BindingError::Agent(AgentBindingError::Refused))
+    }
     /// Creates a journey against the governance registry negotiated through the agent boundary.
     #[must_use]
     pub const fn new(registry: ModuleRegistry) -> Self {

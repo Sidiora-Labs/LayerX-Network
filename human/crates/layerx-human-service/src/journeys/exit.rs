@@ -82,6 +82,158 @@ pub struct ExitPlan {
     pub evidence: ExitEvidence,
 }
 
+/// Encodes all owner-visible exit evidence without JSON or debug projections.
+pub(crate) fn encode_exit_plan(plan: &ExitPlan) -> Result<Vec<u8>, ExitJourneyError> {
+    validate_plan(plan)?;
+    validate_exit_evidence(&plan.evidence)?;
+    let mut out = super::wire::Writer::new(3);
+    out.text(plan.journey_id.as_str())
+        .map_err(|_| ExitJourneyError::InvalidPlan)?;
+    out.fixed(&plan.idempotency_key);
+    out.fixed(&plan.evidence.account);
+    out.fixed(&plan.evidence.asset_id);
+    out.u128(plan.evidence.finalised_balance);
+    out.fixed(&plan.evidence.recipient.bytes());
+    out.u64(plan.evidence.leaf_index);
+    out.u16(
+        u16::try_from(plan.evidence.siblings.len()).map_err(|_| ExitJourneyError::InvalidPlan)?,
+    );
+    for sibling in &plan.evidence.siblings {
+        out.fixed(sibling);
+    }
+    out.u16(
+        u16::try_from(plan.evidence.attestations.len())
+            .map_err(|_| ExitJourneyError::InvalidPlan)?,
+    );
+    for value in &plan.evidence.attestations {
+        out.u16(value.protocol_version);
+        out.u32(value.network_id);
+        out.u64(value.paxeer_chain_id);
+        out.fixed(&value.settlement_contract.bytes());
+        out.u64(value.epoch);
+        out.fixed(&value.checkpoint_id);
+        out.fixed(&value.checkpoint_hash);
+        out.fixed(&value.guarantor_id);
+        out.u64(value.batch_number);
+        out.fixed(&value.data_availability_root);
+        out.boolean(value.replayed);
+        out.boolean(value.data_available);
+        out.fixed(&[value.availability_class_mask]);
+        out.u64(value.attested_at);
+        out.fixed(&value.signer.bytes());
+        out.fixed(&value.signature_r);
+        out.fixed(&value.signature_s);
+        out.fixed(&[value.signature_v]);
+    }
+    Ok(out.finish())
+}
+
+/// Decodes an exact bounded exit plan and constructs only validated evidence.
+pub(crate) fn decode_exit_plan(bytes: &[u8]) -> Result<ExitPlan, ExitJourneyError> {
+    let mut input =
+        super::wire::Reader::new(bytes, 3).map_err(|_| ExitJourneyError::InvalidPlan)?;
+    let journey_id = JourneyId::new(input.text().map_err(|_| ExitJourneyError::InvalidPlan)?)
+        .map_err(|_| ExitJourneyError::InvalidPlan)?;
+    let idempotency_key = input.fixed().map_err(|_| ExitJourneyError::InvalidPlan)?;
+    let account = input.fixed().map_err(|_| ExitJourneyError::InvalidPlan)?;
+    let asset_id = input.fixed().map_err(|_| ExitJourneyError::InvalidPlan)?;
+    let finalised_balance = input.u128().map_err(|_| ExitJourneyError::InvalidPlan)?;
+    let recipient = EvmAddress::new(input.fixed().map_err(|_| ExitJourneyError::InvalidPlan)?);
+    let leaf_index = input.u64().map_err(|_| ExitJourneyError::InvalidPlan)?;
+    let sibling_count = usize::from(input.u16().map_err(|_| ExitJourneyError::InvalidPlan)?);
+    if sibling_count > super::wire::MAX_PROOF_ITEMS {
+        return Err(ExitJourneyError::InvalidPlan);
+    }
+    let mut siblings = Vec::with_capacity(sibling_count);
+    for _ in 0..sibling_count {
+        siblings.push(input.fixed().map_err(|_| ExitJourneyError::InvalidPlan)?);
+    }
+    let attestation_count = usize::from(input.u16().map_err(|_| ExitJourneyError::InvalidPlan)?);
+    if attestation_count == 0 || attestation_count > super::wire::MAX_PROOF_ITEMS {
+        return Err(ExitJourneyError::InvalidPlan);
+    }
+    let mut attestations = Vec::with_capacity(attestation_count);
+    for _ in 0..attestation_count {
+        attestations.push(GuarantorAttestation {
+            protocol_version: input.u16().map_err(|_| ExitJourneyError::InvalidPlan)?,
+            network_id: input.u32().map_err(|_| ExitJourneyError::InvalidPlan)?,
+            paxeer_chain_id: input.u64().map_err(|_| ExitJourneyError::InvalidPlan)?,
+            settlement_contract: EvmAddress::new(
+                input.fixed().map_err(|_| ExitJourneyError::InvalidPlan)?,
+            ),
+            epoch: input.u64().map_err(|_| ExitJourneyError::InvalidPlan)?,
+            checkpoint_id: input.fixed().map_err(|_| ExitJourneyError::InvalidPlan)?,
+            checkpoint_hash: input.fixed().map_err(|_| ExitJourneyError::InvalidPlan)?,
+            guarantor_id: input.fixed().map_err(|_| ExitJourneyError::InvalidPlan)?,
+            batch_number: input.u64().map_err(|_| ExitJourneyError::InvalidPlan)?,
+            data_availability_root: input.fixed().map_err(|_| ExitJourneyError::InvalidPlan)?,
+            replayed: input.boolean().map_err(|_| ExitJourneyError::InvalidPlan)?,
+            data_available: input.boolean().map_err(|_| ExitJourneyError::InvalidPlan)?,
+            availability_class_mask: input
+                .fixed::<1>()
+                .map_err(|_| ExitJourneyError::InvalidPlan)?[0],
+            attested_at: input.u64().map_err(|_| ExitJourneyError::InvalidPlan)?,
+            signer: EvmAddress::new(input.fixed().map_err(|_| ExitJourneyError::InvalidPlan)?),
+            signature_r: input.fixed().map_err(|_| ExitJourneyError::InvalidPlan)?,
+            signature_s: input.fixed().map_err(|_| ExitJourneyError::InvalidPlan)?,
+            signature_v: input
+                .fixed::<1>()
+                .map_err(|_| ExitJourneyError::InvalidPlan)?[0],
+        });
+    }
+    input.finish().map_err(|_| ExitJourneyError::InvalidPlan)?;
+    let plan = ExitPlan {
+        journey_id,
+        idempotency_key,
+        evidence: ExitEvidence {
+            account,
+            asset_id,
+            finalised_balance,
+            recipient,
+            leaf_index,
+            siblings,
+            attestations,
+        },
+    };
+    validate_plan(&plan)?;
+    validate_exit_evidence(&plan.evidence)?;
+    Ok(plan)
+}
+
+fn validate_exit_evidence(evidence: &ExitEvidence) -> Result<(), ExitJourneyError> {
+    let depth = evidence.siblings.len();
+    if evidence.account == [0; 32]
+        || evidence.asset_id == [0; 32]
+        || evidence.finalised_balance == 0
+        || evidence.recipient.bytes() == [0; 20]
+        || depth > super::wire::MAX_PROOF_ITEMS
+        || evidence
+            .leaf_index
+            .checked_shr(u32::try_from(depth).unwrap_or(u32::MAX))
+            .unwrap_or(0)
+            != 0
+        || evidence.attestations.is_empty()
+        || evidence.attestations.len() > super::wire::MAX_PROOF_ITEMS
+    {
+        return Err(ExitJourneyError::InvalidPlan);
+    }
+    if evidence.attestations.iter().any(|value| {
+        value.protocol_version == 0
+            || value.network_id == 0
+            || value.paxeer_chain_id == 0
+            || value.settlement_contract.bytes() == [0; 20]
+            || value.checkpoint_id == [0; 32]
+            || value.checkpoint_hash == [0; 32]
+            || value.guarantor_id == [0; 32]
+            || value.signer.bytes() == [0; 20]
+            || value.signature_r == [0; 32]
+            || value.signature_s == [0; 32]
+    }) {
+        return Err(ExitJourneyError::InvalidPlan);
+    }
+    Ok(())
+}
+
 /// Stable wallet request. Implementations must resolve the original transaction
 /// for repeated calls carrying the same action key and identical claim.
 #[derive(Clone, Debug, Eq, PartialEq)]

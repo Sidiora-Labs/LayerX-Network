@@ -9,15 +9,11 @@ use std::time::Duration;
 use ed25519_dalek::{Signer as _, SigningKey};
 use layerx_agentd::boot::{handshake_gate, Gate};
 use layerx_agentd::config::StartupConfig;
-use layerx_agentd::protocol_evidence::{
-    EvidenceAuthority, RawReceiptEvidence, RawStateEvidence,
-};
+use layerx_agentd::protocol_evidence::{EvidenceAuthority, RawReceiptEvidence, RawStateEvidence};
 use layerx_agentd::store::TenantId;
 use layerx_client::lni::framing::{read_frame, write_frame};
 use layerx_client::lni::handshake::{encode_node_info, NodeInfo, NodeRole};
-use layerx_client::lni::schema::{
-    decode_envelope, encode_envelope, Envelope, Version,
-};
+use layerx_client::lni::schema::{decode_envelope, encode_envelope, Envelope, Version};
 use layerx_client::lni::transport::{ConnectionGate, Limits, Uds};
 use layerx_human_service::store::{
     AgentTenantId, PrincipalId, PrincipalStore, RetentionPeriod, RetentionPolicy, RowKey,
@@ -92,8 +88,7 @@ pub fn evidence_verifier(receipt_signer: &SigningKey) -> EvidenceAuthority {
         .unwrap_or_else(|error| panic!("authority source: {error}"));
     std::fs::set_permissions(&authority_path, std::fs::Permissions::from_mode(0o600))
         .unwrap_or_else(|error| panic!("authority source permissions: {error}"));
-    let tenant = TenantId::new("human-evidence")
-        .unwrap_or_else(|error| panic!("tenant: {error}"));
+    let tenant = TenantId::new("human-evidence").unwrap_or_else(|error| panic!("tenant: {error}"));
     let config = StartupConfig {
         network_id: 42,
         node_endpoint: PathBuf::from("/run/layerx/layerxd.sock"),
@@ -107,14 +102,10 @@ pub fn evidence_verifier(receipt_signer: &SigningKey) -> EvidenceAuthority {
             tenant.clone(),
             PathBuf::from("/etc/layerx/human-signer.kvx"),
         )]),
-        verification_defaults: BTreeMap::from([(
-            tenant,
-            VerificationLevel::STATE_PROVEN,
-        )]),
+        verification_defaults: BTreeMap::from([(tenant, VerificationLevel::STATE_PROVEN)]),
         sequencer_authority_source: authority_path,
     };
-    let mut gate = Gate::new(&config)
-        .unwrap_or_else(|error| panic!("authority gate: {error:?}"));
+    let mut gate = Gate::new(&config).unwrap_or_else(|error| panic!("authority gate: {error:?}"));
     let socket_path = directory("evidence-handshake").with_extension("sock");
     let listener = UnixListener::bind(&socket_path)
         .unwrap_or_else(|error| panic!("bind evidence handshake: {error}"));
@@ -207,8 +198,8 @@ pub fn raw_receipt_evidence(
         signer.verifying_key().to_bytes()
     );
     let leaves = [canonical_receipt.as_slice()];
-    let (proof, receipt_root) = build_proof(&leaves, 0)
-        .unwrap_or_else(|error| panic!("receipt proof: {error:?}"));
+    let (proof, receipt_root) =
+        build_proof(&leaves, 0).unwrap_or_else(|error| panic!("receipt proof: {error:?}"));
     let sequencer_id = signer.verifying_key().to_bytes();
     let header = canonical_header(
         authorised_batch.previous_state_root(),
@@ -229,8 +220,8 @@ pub fn raw_receipt_evidence(
 
 pub fn raw_state_leaf(canonical_state: Vec<u8>, observed_head: u64) -> RawStateEvidence {
     let leaves = [canonical_state.as_slice()];
-    let (proof, state_root) = build_proof(&leaves, 0)
-        .unwrap_or_else(|error| panic!("state proof: {error:?}"));
+    let (proof, state_root) =
+        build_proof(&leaves, 0).unwrap_or_else(|error| panic!("state proof: {error:?}"));
     let signer = SigningKey::from_bytes(&[0x84; 32]);
     let sequencer_id = signer.verifying_key().to_bytes();
     let header = canonical_header(

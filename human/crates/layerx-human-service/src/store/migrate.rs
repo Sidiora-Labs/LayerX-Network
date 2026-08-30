@@ -75,7 +75,9 @@ pub(crate) fn prepare(root: &Path) -> Result<u32, MigrationError> {
     let current = u32::try_from(versions.len()).map_err(|_| MigrationError::SizeOverflow)?;
     for from in 1..current {
         if transform_from(from).is_none() {
-            return Err(MigrationError::InvalidManifest("missing migration transform"));
+            return Err(MigrationError::InvalidManifest(
+                "missing migration transform",
+            ));
         }
     }
     match read_version_file(root)? {

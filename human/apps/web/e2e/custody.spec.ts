@@ -540,7 +540,7 @@ test("custody journey state presentation enforces receipt-gated completion", () 
   const journeyWithoutEvidence = mockDepositJourney();
   journeyWithoutEvidence.stages[2]!.evidence = [];
   const presentedWithoutEvidence = presentedJourneyState(journeyWithoutEvidence, DEPOSIT_FINAL_STAGE);
-  assert.equal(presentedWithoutEvidence, "processing");
+  assert.equal(presentedWithoutEvidence, "still-checking");
 
   const journeyWithEvidence = mockDepositJourney();
   const presentedWithEvidence = presentedJourneyState(journeyWithEvidence, DEPOSIT_FINAL_STAGE);

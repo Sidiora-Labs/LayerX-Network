@@ -118,6 +118,154 @@ pub struct WithdrawalPlan {
     pub agent: WithdrawalAgentPlan,
 }
 
+/// Encodes the complete withdrawal plan in canonical provider-wire order.
+pub(crate) fn encode_withdrawal_plan(
+    plan: &WithdrawalPlan,
+) -> Result<Vec<u8>, WithdrawalJourneyError> {
+    validate_plan(plan)?;
+    let mut out = super::wire::Writer::new(2);
+    out.text(plan.journey_id.as_str())
+        .map_err(|_| WithdrawalJourneyError::InvalidPlan)?;
+    out.fixed(&plan.idempotency_key);
+    out.u32(plan.network.value());
+    out.fixed(&plan.withdrawal_id.bytes());
+    out.text(plan.owner.canonical())
+        .map_err(|_| WithdrawalJourneyError::InvalidPlan)?;
+    out.text(plan.withdrawals_account.canonical())
+        .map_err(|_| WithdrawalJourneyError::InvalidPlan)?;
+    out.fixed(&plan.payout_address.bytes());
+    out.fixed(&plan.asset.bytes());
+    out.u128(plan.amount.value());
+    out.text(&plan.currency)
+        .map_err(|_| WithdrawalJourneyError::InvalidPlan)?;
+    out.u64(plan.settlement.checkpoint_interval_seconds);
+    out.u64(plan.settlement.paxeer_block_seconds);
+    out.u64(plan.settlement.required_confirmations);
+    out.u64(plan.reminder_interval_seconds);
+    out.text(plan.agent.actor.as_str())
+        .map_err(|_| WithdrawalJourneyError::InvalidPlan)?;
+    out.text(plan.agent.authority.as_str())
+        .map_err(|_| WithdrawalJourneyError::InvalidPlan)?;
+    out.u64(plan.agent.account_sequence);
+    out.u64(plan.agent.not_before);
+    out.u64(plan.agent.not_after);
+    out.u128(plan.agent.fee_limit);
+    out.text(plan.agent.custody_key.as_str())
+        .map_err(|_| WithdrawalJourneyError::InvalidPlan)?;
+    Ok(out.finish())
+}
+
+/// Decodes and validates one canonical withdrawal plan with no trailing data.
+pub(crate) fn decode_withdrawal_plan(
+    bytes: &[u8],
+) -> Result<WithdrawalPlan, WithdrawalJourneyError> {
+    let mut input =
+        super::wire::Reader::new(bytes, 2).map_err(|_| WithdrawalJourneyError::InvalidPlan)?;
+    let plan = WithdrawalPlan {
+        journey_id: JourneyId::new(
+            input
+                .text()
+                .map_err(|_| WithdrawalJourneyError::InvalidPlan)?,
+        )
+        .map_err(|_| WithdrawalJourneyError::InvalidPlan)?,
+        idempotency_key: input
+            .fixed()
+            .map_err(|_| WithdrawalJourneyError::InvalidPlan)?,
+        network: NetworkId::new(
+            input
+                .u32()
+                .map_err(|_| WithdrawalJourneyError::InvalidPlan)?,
+        )
+        .map_err(|_| WithdrawalJourneyError::InvalidPlan)?,
+        withdrawal_id: WithdrawalId::new(
+            input
+                .fixed()
+                .map_err(|_| WithdrawalJourneyError::InvalidPlan)?,
+        ),
+        owner: AccountId::parse(
+            &input
+                .text()
+                .map_err(|_| WithdrawalJourneyError::InvalidPlan)?,
+        )
+        .map_err(|_| WithdrawalJourneyError::InvalidPlan)?,
+        withdrawals_account: AccountId::parse(
+            &input
+                .text()
+                .map_err(|_| WithdrawalJourneyError::InvalidPlan)?,
+        )
+        .map_err(|_| WithdrawalJourneyError::InvalidPlan)?,
+        payout_address: EvmAddress::new(
+            input
+                .fixed()
+                .map_err(|_| WithdrawalJourneyError::InvalidPlan)?,
+        ),
+        asset: AssetId::new(
+            input
+                .fixed()
+                .map_err(|_| WithdrawalJourneyError::InvalidPlan)?,
+        ),
+        amount: Amount::from_u128(
+            input
+                .u128()
+                .map_err(|_| WithdrawalJourneyError::InvalidPlan)?,
+        ),
+        currency: input
+            .text()
+            .map_err(|_| WithdrawalJourneyError::InvalidPlan)?,
+        settlement: SettlementConfig {
+            checkpoint_interval_seconds: input
+                .u64()
+                .map_err(|_| WithdrawalJourneyError::InvalidPlan)?,
+            paxeer_block_seconds: input
+                .u64()
+                .map_err(|_| WithdrawalJourneyError::InvalidPlan)?,
+            required_confirmations: input
+                .u64()
+                .map_err(|_| WithdrawalJourneyError::InvalidPlan)?,
+        },
+        reminder_interval_seconds: input
+            .u64()
+            .map_err(|_| WithdrawalJourneyError::InvalidPlan)?,
+        agent: WithdrawalAgentPlan {
+            actor: AgentDid::new(
+                input
+                    .text()
+                    .map_err(|_| WithdrawalJourneyError::InvalidPlan)?,
+            )
+            .map_err(|_| WithdrawalJourneyError::InvalidPlan)?,
+            authority: AuthorityRef::new(
+                input
+                    .text()
+                    .map_err(|_| WithdrawalJourneyError::InvalidPlan)?,
+            )
+            .map_err(|_| WithdrawalJourneyError::InvalidPlan)?,
+            account_sequence: input
+                .u64()
+                .map_err(|_| WithdrawalJourneyError::InvalidPlan)?,
+            not_before: input
+                .u64()
+                .map_err(|_| WithdrawalJourneyError::InvalidPlan)?,
+            not_after: input
+                .u64()
+                .map_err(|_| WithdrawalJourneyError::InvalidPlan)?,
+            fee_limit: input
+                .u128()
+                .map_err(|_| WithdrawalJourneyError::InvalidPlan)?,
+            custody_key: KeyId::new(
+                input
+                    .text()
+                    .map_err(|_| WithdrawalJourneyError::InvalidPlan)?,
+            )
+            .map_err(|_| WithdrawalJourneyError::InvalidPlan)?,
+        },
+    };
+    input
+        .finish()
+        .map_err(|_| WithdrawalJourneyError::InvalidPlan)?;
+    validate_plan(&plan)?;
+    Ok(plan)
+}
+
 /// The only truthful cancellation promise after the `LayerX` debit commits.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CancellationPolicy {
@@ -159,6 +307,14 @@ pub enum WithdrawalBoundaryError {
 
 /// Core proof and Paxeer transaction operations consumed by the state machine.
 pub trait WithdrawalRuntime {
+    /// Verifies a wallet signature against the exact persisted claim request
+    /// and returns the complete transaction bytes authorised by that signature.
+    fn verify_claim_signature(
+        &mut self,
+        request: &WithdrawalTransactionRequest,
+        signature: &[u8],
+    ) -> Result<Vec<u8>, WithdrawalBoundaryError>;
+
     /// Returns a real finalised checkpoint proof, or `None` while settlement is pending.
     ///
     /// # Errors
@@ -571,6 +727,48 @@ pub struct WithdrawalJourney {
 }
 
 impl WithdrawalJourney {
+    /// Verifies and submits the user's external claim signature exactly once.
+    /// An unknown broadcast outcome moves immediately to lookup-only recovery.
+    pub fn claim_external_signature<R: WithdrawalRuntime>(
+        &mut self,
+        scope: &mut PrincipalScope<'_>,
+        runtime: &mut R,
+        boundary: &WithdrawalBoundary,
+        signature: &[u8],
+        now: u64,
+    ) -> Result<WithdrawalStatus, WithdrawalJourneyError> {
+        if now < self.record.updated_at {
+            return Err(WithdrawalJourneyError::TimeRegressed);
+        }
+        if self.record.phase != Phase::ClaimReady {
+            return Err(WithdrawalJourneyError::ClaimNotReady);
+        }
+        let mut request = self.claim_request(boundary)?;
+        let signed = runtime.verify_claim_signature(&request, signature)?;
+        if signed.is_empty() || signed == request.calldata {
+            return Err(WithdrawalJourneyError::Boundary(
+                WithdrawalBoundaryError::ContractViolation,
+            ));
+        }
+        request.calldata = signed;
+        match runtime.submit_or_resolve(&request) {
+            Ok(PaxeerActionOutcome::Submitted(transaction)) => {
+                if transaction.bytes() == [0; 32] {
+                    return Err(WithdrawalJourneyError::Boundary(
+                        WithdrawalBoundaryError::ContractViolation,
+                    ));
+                }
+                self.record.claim_transaction = Some(transaction.bytes());
+                self.transition(scope, Phase::ClaimConfirming, now)?;
+            }
+            Ok(PaxeerActionOutcome::Unknown) | Err(WithdrawalBoundaryError::Unavailable) => {
+                self.transition(scope, Phase::ClaimStillChecking, now)?;
+            }
+            Err(error) => return Err(error.into()),
+        }
+        self.status()
+    }
+
     /// Persists immutable review facts before any debit can execute. Repeating
     /// the idempotency key returns the existing journey only when every plan
     /// fact agrees.
@@ -651,6 +849,32 @@ impl WithdrawalJourney {
         journey.write_state(scope)?;
         journey.ensure_pin(scope)?;
         Ok(journey)
+    }
+
+    /// Re-obtains the exact disclosure for a prepared protocol debit.
+    /// Returns `None` until the debit reaches the prepared phase and after it
+    /// has already been signed, so fresh step-up evidence is bound only at the
+    /// signing boundary.
+    pub fn prepared_debit_disclosure_digest(
+        &self,
+        scope: &PrincipalScope<'_>,
+        agent_contract: &AgentClient,
+        agent: &mut dyn AgentBoundary,
+        registry: &ModuleRegistry,
+    ) -> Result<Option<[u8; 32]>, WithdrawalJourneyError> {
+        let id = JourneyId::new(self.record.debit_journey_id.clone())
+            .map_err(|_| WithdrawalJourneyError::Corrupt("invalid debit journey id"))?;
+        let Some(engine) = JourneyEngine::load(scope, &id)? else {
+            return Ok(None);
+        };
+        let status = engine.status()?;
+        if status.phases().get(status.current_leg()) != Some(&super::JourneyPhase::Prepared) {
+            return Ok(None);
+        }
+        engine
+            .prepared_disclosure_digest(agent_contract, agent, registry)
+            .map(Some)
+            .map_err(WithdrawalJourneyError::from)
     }
 
     /// Loads the newest append-only state and repairs its permanent evidence pin.
@@ -1094,6 +1318,7 @@ impl WithdrawalJourney {
         Ok(JourneyPlan::new(
             JourneyId::new(self.record.debit_journey_id.clone())
                 .map_err(|_| WithdrawalJourneyError::Corrupt("invalid debit journey id"))?,
+            super::engine::JourneyKind::Withdraw,
             self.record.debit_plan_key,
             KeyId::new(self.record.custody_key.clone())
                 .map_err(|_| WithdrawalJourneyError::Corrupt("invalid custody key"))?,

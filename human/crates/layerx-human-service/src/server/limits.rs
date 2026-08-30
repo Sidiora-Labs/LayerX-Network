@@ -51,7 +51,9 @@ impl PrincipalLimits {
             now.saturating_sub(window.started_at) < self.window_seconds.saturating_mul(2)
         });
         if !windows.contains_key(principal) && windows.len() >= self.maximum_principals {
-            return Err(ApiFailure::rate_limited(self.window_seconds.saturating_mul(1_000)));
+            return Err(ApiFailure::rate_limited(
+                self.window_seconds.saturating_mul(1_000),
+            ));
         }
         let window = windows.entry(principal.to_owned()).or_insert(Window {
             started_at: now,

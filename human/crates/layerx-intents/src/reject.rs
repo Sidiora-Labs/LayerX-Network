@@ -19,6 +19,8 @@ pub enum IntentKindTag {
     BudgetDefund = 10,
     BridgeDepositCredit = 11,
     BridgeWithdrawRequest = 12,
+    SessionGrant = 13,
+    SessionRevoke = 14,
 }
 
 impl IntentKindTag {
@@ -36,6 +38,8 @@ impl IntentKindTag {
             10 => Some(Self::BudgetDefund),
             11 => Some(Self::BridgeDepositCredit),
             12 => Some(Self::BridgeWithdrawRequest),
+            13 => Some(Self::SessionGrant),
+            14 => Some(Self::SessionRevoke),
             _ => None,
         }
     }
@@ -83,7 +87,7 @@ impl<'a> RejectedIntent<'a> {
 /// # Errors
 ///
 /// Returns a typed rejection for truncated input, every version other than V1,
-/// and every kind outside the closed twelve-kind vocabulary.
+/// and every kind outside the closed fourteen-kind vocabulary.
 pub fn inspect_intent(input: &[u8]) -> Result<IntentHeader, RejectedIntent<'_>> {
     let mut decoder = Decoder::new(input, 0);
     let version = decoder.u16().map_err(|error| RejectedIntent {

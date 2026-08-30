@@ -99,10 +99,7 @@ pub(crate) fn canonical_endpoint_identity(
         Scheme::Http => "http",
         Scheme::Https => "https",
     };
-    Ok(format!(
-        "{scheme}://{host}:{}{}",
-        target.port, target.path
-    ))
+    Ok(format!("{scheme}://{host}:{}{}", target.port, target.path))
 }
 
 fn trust_roots(trust_anchor_der: &[u8]) -> Result<RootCertStore, EndpointFault> {
@@ -136,10 +133,7 @@ fn parse_url(url: &str) -> Option<Target> {
         Some(index) => rest.split_at(index),
         None => (rest, "/"),
     };
-    if authority.contains('[')
-        || authority.contains(']')
-        || authority.matches(':').count() > 1
-    {
+    if authority.contains('[') || authority.contains(']') || authority.matches(':').count() > 1 {
         return None;
     }
     let (host, port) = match authority.rfind(':') {
@@ -309,9 +303,11 @@ fn exchange(
                 .with_no_client_auth();
             let server_name = ServerName::try_from(target.host.clone())
                 .map_err(|_| EndpointFault::InvalidTrustAnchor)?;
-            let connection = ClientConnection::new(Arc::new(configuration), server_name)
-                .map_err(|error| EndpointFault::Authentication {
-                    detail: error.to_string(),
+            let connection =
+                ClientConnection::new(Arc::new(configuration), server_name).map_err(|error| {
+                    EndpointFault::Authentication {
+                        detail: error.to_string(),
+                    }
                 })?;
             let mut tls = StreamOwned::new(connection, tcp);
             exchange_stream(&mut tls, target, body)
@@ -425,9 +421,7 @@ fn split_response(response: &[u8]) -> Result<(u16, String), EndpointFault> {
             }
             raw_body.to_vec()
         }
-        (None, Some(value)) if value.eq_ignore_ascii_case("chunked") => {
-            decode_chunked(raw_body)?
-        }
+        (None, Some(value)) if value.eq_ignore_ascii_case("chunked") => decode_chunked(raw_body)?,
         _ => return Err(EndpointFault::AmbiguousFraming),
     };
     String::from_utf8(body_bytes)
@@ -455,8 +449,8 @@ fn decode_chunked(raw: &[u8]) -> Result<Vec<u8>, EndpointFault> {
         if size_text.is_empty() || size_text.contains(';') {
             return Err(EndpointFault::AmbiguousFraming);
         }
-        let size = usize::from_str_radix(size_text, 16)
-            .map_err(|_| EndpointFault::MalformedResponse)?;
+        let size =
+            usize::from_str_radix(size_text, 16).map_err(|_| EndpointFault::MalformedResponse)?;
         rest = rest
             .get(line_end.saturating_add(2)..)
             .ok_or(EndpointFault::MalformedResponse)?;
@@ -472,9 +466,7 @@ fn decode_chunked(raw: &[u8]) -> Result<Vec<u8>, EndpointFault> {
         }
         let chunk = rest.get(..size).ok_or(EndpointFault::MalformedResponse)?;
         output.extend_from_slice(chunk);
-        rest = rest
-            .get(size..)
-            .ok_or(EndpointFault::MalformedResponse)?;
+        rest = rest.get(size..).ok_or(EndpointFault::MalformedResponse)?;
         rest = rest
             .strip_prefix(b"\r\n")
             .ok_or(EndpointFault::MalformedResponse)?;

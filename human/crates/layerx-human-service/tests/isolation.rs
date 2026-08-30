@@ -7,8 +7,7 @@ use layerx_human_service::store::{
     RowKey, StoreError, Table, TenancyError,
 };
 use support::{
-    directory, install_and_open, principal, retention_uniform, row_key, tenancy,
-    version_file_bytes,
+    directory, install_and_open, principal, retention_uniform, row_key, tenancy, version_file_bytes,
 };
 
 const TABLES: [Table; 4] = [
@@ -19,7 +18,9 @@ const TABLES: [Table; 4] = [
 ];
 
 fn contains(haystack: &[u8], needle: &[u8]) -> bool {
-    haystack.windows(needle.len()).any(|window| window == needle)
+    haystack
+        .windows(needle.len())
+        .any(|window| window == needle)
 }
 
 fn v1_length(value: usize) -> [u8; 4] {
@@ -379,8 +380,8 @@ fn v1_stores_migrate_forward_to_the_current_version() {
     let version_bytes = fs::read(root.join("store.version"))
         .unwrap_or_else(|error| panic!("read version: {error}"));
     assert_eq!(version_bytes, version_file_bytes(2));
-    let migrated = fs::read(alice_dir.join("store.bin"))
-        .unwrap_or_else(|error| panic!("read file: {error}"));
+    let migrated =
+        fs::read(alice_dir.join("store.bin")).unwrap_or_else(|error| panic!("read file: {error}"));
     assert_eq!(migrated.get(4..8), Some(2_u32.to_be_bytes().as_slice()));
     {
         let scope = store
@@ -493,7 +494,12 @@ fn expiry_never_deletes_evidence_referenced_by_exportable_audit() {
                 .unwrap_or_else(|error| panic!("put: {error}"));
         }
         scope
-            .append_audit(row_key("audit-int"), 0, b"int".to_vec(), AuditDisposition::Internal)
+            .append_audit(
+                row_key("audit-int"),
+                0,
+                b"int".to_vec(),
+                AuditDisposition::Internal,
+            )
             .unwrap_or_else(|error| panic!("audit: {error}"));
         scope
             .append_audit(
@@ -550,7 +556,12 @@ fn evidence_references_resolve_only_inside_their_own_scope() {
             .principal(&principal("alice"))
             .unwrap_or_else(|error| panic!("scope: {error}"));
         scope
-            .put(Table::Journeys, exhibit.clone(), 0, b"alice-exhibit".to_vec())
+            .put(
+                Table::Journeys,
+                exhibit.clone(),
+                0,
+                b"alice-exhibit".to_vec(),
+            )
             .unwrap_or_else(|error| panic!("put: {error}"));
     }
     {
@@ -609,7 +620,12 @@ fn audit_entries_are_append_only() {
         .principal(&principal("alice"))
         .unwrap_or_else(|error| panic!("scope: {error}"));
     scope
-        .append_audit(row_key("audit-1"), 1, b"one".to_vec(), AuditDisposition::Internal)
+        .append_audit(
+            row_key("audit-1"),
+            1,
+            b"one".to_vec(),
+            AuditDisposition::Internal,
+        )
         .unwrap_or_else(|error| panic!("audit: {error}"));
     let duplicate = scope.append_audit(
         row_key("audit-1"),

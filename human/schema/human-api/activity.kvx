@@ -112,18 +112,21 @@ nesting = "Per-event-class preferences nest under each channel's toggle, with on
 immediacy = "Preference changes take effect immediately."
 
 [operation.activity.query]
+authorization_class = "money-movement"
 method = "POST"
 path = "/v1/activity/query"
 request = "ActivityQueryRequest"
 response = "ActivityPage"
 
 [operation.activity.entry]
+authorization_class = "read"
 method = "GET"
 path = "/v1/activity/{entry_id}"
 request = "Empty"
 response = "ActivityEntryDetail"
 
 [operation.activity.export.statement]
+authorization_class = "money-movement"
 method = "POST"
 path = "/v1/activity/exports/statement"
 request = "ExportStatementRequest"
@@ -131,6 +134,7 @@ response = "ExportArtefact"
 idempotency = true
 
 [operation.activity.export.evidence]
+authorization_class = "money-movement"
 method = "POST"
 path = "/v1/activity/exports/evidence"
 request = "ExportEvidenceRequest"
@@ -138,24 +142,28 @@ response = "ExportArtefact"
 idempotency = true
 
 [operation.notification.list]
+authorization_class = "read"
 method = "GET"
 path = "/v1/notifications"
 request = "Empty"
 response = "NotificationPage"
 
 [operation.notification.read]
+authorization_class = "money-movement"
 method = "POST"
 path = "/v1/notifications/{notification_id}/read"
 request = "Empty"
 response = "NotificationSummary"
 
 [operation.notification.preferences.get]
+authorization_class = "read"
 method = "GET"
 path = "/v1/notifications/preferences"
 request = "Empty"
 response = "NotificationPreferences"
 
 [operation.notification.preferences.set]
+authorization_class = "money-movement"
 method = "POST"
 path = "/v1/notifications/preferences"
 request = "NotificationPreferences"

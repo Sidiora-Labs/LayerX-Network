@@ -41,7 +41,7 @@ impl RetentionPolicy {
     pub const fn period(&self, table: Table) -> RetentionPeriod {
         match table {
             Table::Journeys => self.journeys,
-            Table::Notifications | Table::Support => self.notifications,
+            Table::Notifications | Table::Support | Table::Stream => self.notifications,
             Table::Telemetry => self.telemetry,
             Table::Cache => self.cache,
         }

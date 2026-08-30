@@ -55,6 +55,9 @@ pub enum CompileField {
     Network,
     PayoutAddress,
     OwnershipSignature,
+    SessionGrant,
+    AuthorityGrant,
+    RevocationReason,
     From,
     To,
     Recipient,
@@ -180,6 +183,31 @@ pub fn compile(intent: &Intent, registry: &ModuleRegistry) -> Result<CompiledInt
                 encoder.bytes(value.ownership_signature.as_bytes(), 128),
             )?;
             finish(registry, ModuleId::Governance, 4, encoder)
+        }
+        IntentKind::SessionGrant(value) => {
+            header(&mut encoder, 0x7105, 1)?;
+            wire(
+                CompileField::SessionGrant,
+                encoder.bytes(&value.registration_payload, 1024),
+            )?;
+            finish(registry, ModuleId::Governance, 5, encoder)
+        }
+        IntentKind::SessionRevoke(value) => {
+            header(&mut encoder, 0x7106, 3)?;
+            fixed(
+                &mut encoder,
+                &value.grant_id.bytes(),
+                CompileField::AuthorityGrant,
+            )?;
+            wire(
+                CompileField::RevocationReason,
+                encoder.u8(value.reason.value()),
+            )?;
+            wire(
+                CompileField::Sequence,
+                encoder.u64(value.effective_sequence.value()),
+            )?;
+            finish(registry, ModuleId::Governance, 6, encoder)
         }
         IntentKind::LxpSend(value) => {
             wire(CompileField::Header, encoder.u16(ASSET_SEND_TAG))?;

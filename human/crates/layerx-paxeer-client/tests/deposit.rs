@@ -389,8 +389,8 @@ fn published_proof(
         1,
     )
     .unwrap_or_else(|error| panic!("deposit leaf: {error:?}"));
-    let deposit_root = leaf_hash(&leaf_bytes)
-        .unwrap_or_else(|error| panic!("deposit leaf hash: {error:?}"));
+    let deposit_root =
+        leaf_hash(&leaf_bytes).unwrap_or_else(|error| panic!("deposit leaf hash: {error:?}"));
     let mut registration = DepositRootRegistration {
         checkpoint_id,
         checkpoint_state_root: [8; 32],
@@ -451,10 +451,7 @@ struct ReceiptFields {
     to: [u8; 32],
 }
 
-fn signed_receipt(
-    fields: &ReceiptFields,
-    signing: &SigningKey,
-) -> (Vec<u8>, AuthorizedBatch) {
+fn signed_receipt(fields: &ReceiptFields, signing: &SigningKey) -> (Vec<u8>, AuthorizedBatch) {
     assert_eq!(fields.activity_id, hex_array(CREDIT_ACTIVITY_ID_HEX));
     assert_eq!(fields.previous_state_root, [7; 32]);
     assert_eq!(fields.resulting_state_root, [8; 32]);
@@ -523,8 +520,8 @@ fn signed_custody_root_mints_an_opaque_proof_but_credit_ingress_fails_closed() {
     let decoy = leaf_hash(b"another canonical deposit leaf")
         .unwrap_or_else(|error| panic!("decoy leaf: {error:?}"));
     let mut indexed = published.clone();
-    indexed.inclusion_proof = Proof::new(1, 2, vec![decoy])
-        .unwrap_or_else(|error| panic!("index-aware path: {error:?}"));
+    indexed.inclusion_proof =
+        Proof::new(1, 2, vec![decoy]).unwrap_or_else(|error| panic!("index-aware path: {error:?}"));
     indexed.registration.deposit_root = node_hash(&decoy, &proof.leaf_hash())
         .unwrap_or_else(|error| panic!("index-aware root: {error:?}"));
     let message = deposit_root_registration_message(&indexed.registration)
@@ -537,8 +534,8 @@ fn signed_custody_root_mints_an_opaque_proof_but_credit_ingress_fails_closed() {
     assert_eq!(indexed_proof.inclusion_proof().leaf_count(), 2);
 
     let mut wrong_index = indexed;
-    wrong_index.inclusion_proof = Proof::new(0, 2, vec![decoy])
-        .unwrap_or_else(|error| panic!("wrong index path: {error:?}"));
+    wrong_index.inclusion_proof =
+        Proof::new(0, 2, vec![decoy]).unwrap_or_else(|error| panic!("wrong index path: {error:?}"));
     assert!(matches!(
         proof_verifier.obtain(&report, vault, wrong_index),
         Err(DepositFailure::ProofUnavailable(
@@ -648,8 +645,7 @@ fn deposit_failures_remain_typed_at_each_boundary() {
         Err(DepositFailure::CustodyFailed(CustodyFault::Reverted { .. }))
     ));
 
-    let FinalityStage::Final { required, .. } = report.stage()
-    else {
+    let FinalityStage::Final { required, .. } = report.stage() else {
         panic!("expected final report");
     };
     let mut confirming = FinalityTracker::new(
@@ -664,8 +660,7 @@ fn deposit_failures_remain_typed_at_each_boundary() {
     )
     .unwrap_or_else(|error| panic!("confirming tracker: {error:?}"));
     let unavailable = confirming.poll();
-    let deeper_verifier =
-        deposit_verifier(&anvil, required.saturating_add(1), &authority);
+    let deeper_verifier = deposit_verifier(&anvil, required.saturating_add(1), &authority);
     assert!(matches!(
         deeper_verifier.obtain(&unavailable, vault, published),
         Err(DepositFailure::ProofUnavailable(

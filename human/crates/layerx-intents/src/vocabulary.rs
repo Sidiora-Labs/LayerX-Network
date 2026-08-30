@@ -5,13 +5,17 @@ use layerx_types::activity::{Signature, TimestampBound};
 use layerx_types::amount::Amount;
 use layerx_types::ids::{AssetId, CheckpointId, Did, IdempotencyKey};
 use layerx_types::intent::{
-    ApprovalThreshold, BudgetId, ContextHash, DepositProofId, EvmAddress, GrantSchedule, NetworkId,
-    PayerGrantId, PeriodLength, ProtocolVersion, PublicKey, PurposeHash, RecoveryRoot,
-    RolloverPolicy, SendAuthorization, Sequence, TimestampSeconds, WithdrawalId,
+    ApprovalThreshold, AuthorityGrantId, BudgetId, ContextHash, DepositProofId, EvmAddress,
+    GrantSchedule, NetworkId, PayerGrantId, PeriodLength, ProtocolVersion, PublicKey, PurposeHash,
+    RecoveryRoot, RolloverPolicy, SendAuthorization, Sequence, SessionRevocationReason,
+    TimestampSeconds, WithdrawalId,
 };
 #[cfg(test)]
 use layerx_types::intent::{AuthorizationSignature, SendAuthorizationKind};
 use layerx_types::payload::ModuleId;
+use layerx_wire::decode::Decoder;
+
+const MAX_SESSION_GRANT_BYTES: usize = 1024;
 
 /// Version of the intent-to-canonical-payload contract.
 ///
@@ -63,7 +67,7 @@ impl Intent {
     }
 }
 
-/// The twelve v1 journeys and the protocol module payload each compiles to.
+/// The fourteen v1 journeys and the protocol module payload each compiles to.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum IntentKind {
     /// Onboarding: register a DID and primary key in the governance identity registry.
@@ -74,6 +78,10 @@ pub enum IntentKind {
     RecoveryRegistration(RecoveryRegistration),
     /// Withdrawal setup: bind an EVM payout address in the governance identity registry.
     EvmPayoutBinding(EvmPayoutBinding),
+    /// Agent authority: grant a scoped, expiring protocol session.
+    SessionGrant(SessionGrant),
+    /// Agent authority: revoke an existing protocol session.
+    SessionRevoke(SessionRevoke),
     /// Move money: compile an asset-module 402LXP send.
     LxpSend(LxpSend),
     /// Receive money: compile an asset-module payer-grant draw.
@@ -99,7 +107,9 @@ impl IntentKind {
             Self::DidRegistration(_)
             | Self::KeyRotation(_)
             | Self::RecoveryRegistration(_)
-            | Self::EvmPayoutBinding(_) => ModuleId::Governance,
+            | Self::EvmPayoutBinding(_)
+            | Self::SessionGrant(_)
+            | Self::SessionRevoke(_) => ModuleId::Governance,
             Self::LxpSend(_) | Self::LxpReceive(_) => ModuleId::Asset,
             Self::PayerGrantRegistration(_)
             | Self::BudgetCreate(_)
@@ -107,6 +117,56 @@ impl IntentKind {
             | Self::BudgetDefund(_) => ModuleId::Budget,
             Self::BridgeDepositCredit(_) | Self::BridgeWithdrawRequest(_) => ModuleId::Bridge,
         }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SessionGrant {
+    pub(crate) registration_payload: Vec<u8>,
+}
+
+impl SessionGrant {
+    /// Builds a scoped protocol session grant.
+    ///
+    /// # Errors
+    ///
+    /// Refuses anything other than the exact bounded canonical session-key
+    /// authority grant emitted by `layerx-crypto`.
+    pub fn new(registration_payload: Vec<u8>) -> Result<Self, IntentError> {
+        validate_session_grant(&registration_payload)?;
+        Ok(Self {
+            registration_payload,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SessionRevoke {
+    pub(crate) grant_id: AuthorityGrantId,
+    pub(crate) reason: SessionRevocationReason,
+    pub(crate) effective_sequence: Sequence,
+}
+
+impl SessionRevoke {
+    /// Builds a protocol session revocation.
+    ///
+    /// # Errors
+    ///
+    /// Refuses the reserved zero grant identifier and zero effective sequence.
+    pub fn new(
+        grant_id: AuthorityGrantId,
+        reason: SessionRevocationReason,
+        effective_sequence: Sequence,
+    ) -> Result<Self, IntentError> {
+        nonzero_identifier(grant_id.bytes(), IntentField::AuthorityGrant)?;
+        if effective_sequence.value() == 0 {
+            return Err(IntentError::zero(IntentField::EffectiveSequence));
+        }
+        Ok(Self {
+            grant_id,
+            reason,
+            effective_sequence,
+        })
     }
 }
 
@@ -235,6 +295,37 @@ pub struct LxpSend {
 }
 
 impl LxpSend {
+    /// Returns validated fields for canonical boundary encoding.
+    #[must_use]
+    pub fn to_wire_parts(
+        &self,
+    ) -> (
+        &AccountId,
+        &AccountId,
+        AssetId,
+        Amount,
+        Sequence,
+        IdempotencyKey,
+        TimestampSeconds,
+        ContextHash,
+        SendAuthorization,
+        NetworkId,
+        ProtocolVersion,
+    ) {
+        (
+            &self.from,
+            &self.to,
+            self.asset,
+            self.amount,
+            self.account_sequence,
+            self.idempotency_key,
+            self.expires_at,
+            self.context_hash,
+            self.authorization,
+            self.network_id,
+            self.protocol_version,
+        )
+    }
     /// Builds an asset send between distinct validated account namespaces.
     ///
     /// # Errors
@@ -288,6 +379,31 @@ pub struct LxpReceive {
 }
 
 impl LxpReceive {
+    /// Returns validated fields for canonical boundary encoding.
+    #[must_use]
+    pub fn to_wire_parts(
+        &self,
+    ) -> (
+        &AccountId,
+        &AccountId,
+        AssetId,
+        Amount,
+        PayerGrantId,
+        Sequence,
+        IdempotencyKey,
+        ContextHash,
+    ) {
+        (
+            &self.from,
+            &self.to,
+            self.asset,
+            self.amount,
+            self.payer_grant,
+            self.receiver_sequence,
+            self.idempotency_key,
+            self.context_hash,
+        )
+    }
     /// Builds one 402LXP receive under a named payer grant.
     ///
     /// # Errors
@@ -399,6 +515,35 @@ pub struct BudgetCreate {
 }
 
 impl BudgetCreate {
+    /// Returns validated fields for canonical boundary encoding.
+    #[must_use]
+    pub fn to_wire_parts(
+        &self,
+    ) -> (
+        BudgetId,
+        &AccountId,
+        &AccountId,
+        AssetId,
+        Amount,
+        PeriodLength,
+        RolloverPolicy,
+        Amount,
+        PurposeHash,
+        TimestampSeconds,
+    ) {
+        (
+            self.budget_id,
+            &self.owner,
+            &self.budget_account,
+            self.asset,
+            self.per_period_limit,
+            self.period_length,
+            self.rollover,
+            self.carry_cap,
+            self.purpose,
+            self.expiry,
+        )
+    }
     /// Returns the exact protocol-enforced limit carried by this intent.
     #[must_use]
     pub const fn per_period_limit(&self) -> Amount {
@@ -466,6 +611,27 @@ pub struct BudgetFund {
 }
 
 impl BudgetFund {
+    /// Returns validated fields for canonical boundary encoding.
+    #[must_use]
+    pub fn to_wire_parts(
+        &self,
+    ) -> (
+        BudgetId,
+        &AccountId,
+        &AccountId,
+        AssetId,
+        Amount,
+        IdempotencyKey,
+    ) {
+        (
+            self.budget_id,
+            &self.owner,
+            &self.budget_account,
+            self.asset,
+            self.amount,
+            self.idempotency_key,
+        )
+    }
     /// Builds one budget funding transfer.
     ///
     /// # Errors
@@ -503,6 +669,29 @@ pub struct BudgetDefund {
 }
 
 impl BudgetDefund {
+    /// Returns validated fields for canonical boundary encoding.
+    #[must_use]
+    pub fn to_wire_parts(
+        &self,
+    ) -> (
+        BudgetId,
+        &AccountId,
+        &AccountId,
+        AssetId,
+        Amount,
+        Sequence,
+        IdempotencyKey,
+    ) {
+        (
+            self.budget_id,
+            &self.budget_account,
+            &self.owner,
+            self.asset,
+            self.amount,
+            self.revocation_sequence,
+            self.idempotency_key,
+        )
+    }
     /// Builds one deterministic budget reclaim.
     ///
     /// # Errors
@@ -543,6 +732,29 @@ pub struct BridgeDepositCredit {
 }
 
 impl BridgeDepositCredit {
+    /// Returns validated fields for canonical boundary encoding.
+    #[must_use]
+    pub fn to_wire_parts(
+        &self,
+    ) -> (
+        DepositProofId,
+        CheckpointId,
+        &AccountId,
+        &AccountId,
+        AssetId,
+        Amount,
+        IdempotencyKey,
+    ) {
+        (
+            self.deposit_proof,
+            self.checkpoint,
+            &self.reserve,
+            &self.recipient,
+            self.asset,
+            self.amount,
+            self.idempotency_key,
+        )
+    }
     /// Builds a Paxeer deposit credit tied to one checkpoint and proof.
     ///
     /// # Errors
@@ -586,6 +798,29 @@ pub struct BridgeWithdrawRequest {
 }
 
 impl BridgeWithdrawRequest {
+    /// Returns validated fields for canonical boundary encoding.
+    #[must_use]
+    pub fn to_wire_parts(
+        &self,
+    ) -> (
+        WithdrawalId,
+        &AccountId,
+        &AccountId,
+        EvmAddress,
+        AssetId,
+        Amount,
+        IdempotencyKey,
+    ) {
+        (
+            self.withdrawal_id,
+            &self.owner,
+            &self.withdrawals_account,
+            self.payout_address,
+            self.asset,
+            self.amount,
+            self.idempotency_key,
+        )
+    }
     /// Builds a Paxeer withdrawal request to an exact EVM payout address.
     ///
     /// # Errors
@@ -634,6 +869,9 @@ pub enum IntentField {
     PendingKey,
     PrimaryKey,
     RecoveryRoot,
+    SessionGrant,
+    AuthorityGrant,
+    EffectiveSequence,
     Withdrawal,
 }
 
@@ -643,6 +881,7 @@ pub enum IntentErrorReason {
     Empty,
     Zero,
     InvalidRange,
+    InvalidCanonicalEncoding,
     SameSourceAndDestination,
     WrongAccountNamespace,
 }
@@ -697,6 +936,72 @@ fn nonzero_key(key: PublicKey, field: IntentField) -> Result<(), IntentError> {
     } else {
         Ok(())
     }
+}
+
+fn nonzero_identifier(bytes: [u8; 32], field: IntentField) -> Result<(), IntentError> {
+    if bytes.iter().all(|byte| *byte == 0) {
+        Err(IntentError::zero(field))
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_session_grant(bytes: &[u8]) -> Result<(), IntentError> {
+    let invalid = || IntentError {
+        field: IntentField::SessionGrant,
+        reason: IntentErrorReason::InvalidCanonicalEncoding,
+    };
+    if bytes.len() > MAX_SESSION_GRANT_BYTES {
+        return Err(invalid());
+    }
+    let mut decoder = Decoder::new(bytes, 0);
+    decoder.structure_header(0x2001).map_err(|_| invalid())?;
+    if decoder.u8().map_err(|_| invalid())? != 1 {
+        return Err(invalid());
+    }
+    let grantor = decoder.bytes(32).map_err(|_| invalid())?;
+    let grantee = decoder.bytes(32).map_err(|_| invalid())?;
+    if grantor == [0; 32]
+        || grantee != grantor
+        || decoder.u8().map_err(|_| invalid())? != 2
+        || decoder.bytes(32).map_err(|_| invalid())? == [0; 32]
+    {
+        return Err(invalid());
+    }
+    let module_mask = decoder.u64().map_err(|_| invalid())?;
+    let ordinal_min = decoder.u16().map_err(|_| invalid())?;
+    let ordinal_max = decoder.u16().map_err(|_| invalid())?;
+    if module_mask == 0
+        || module_mask & !0x03fe != 0
+        || ordinal_min == 0
+        || ordinal_min > ordinal_max
+    {
+        return Err(invalid());
+    }
+    if decoder.bytes(32).map_err(|_| invalid())? != [0; 32]
+        || decoder.u128().map_err(|_| invalid())? != 0
+        || decoder.u128().map_err(|_| invalid())? != 0
+        || decoder.u128().map_err(|_| invalid())? != 0
+        || decoder.u64().map_err(|_| invalid())? != 0
+        || decoder.u128().map_err(|_| invalid())? != 0
+        || decoder.u128().map_err(|_| invalid())? != 0
+        || decoder.u64().map_err(|_| invalid())? != 0
+        || decoder.bytes(32).map_err(|_| invalid())? != [0; 32]
+    {
+        return Err(invalid());
+    }
+    let not_before = decoder.u64().map_err(|_| invalid())?;
+    let not_after = decoder.u64().map_err(|_| invalid())?;
+    if not_after == 0
+        || not_after <= not_before
+        || decoder.u64().map_err(|_| invalid())? == 0
+        || decoder.u8().map_err(|_| invalid())? != 0
+        || decoder.u64().map_err(|_| invalid())? != 0
+        || decoder.bytes(64).map_err(|_| invalid())? != [0; 64]
+    {
+        return Err(invalid());
+    }
+    decoder.finish().map_err(|_| invalid())
 }
 
 fn movement(from: &AccountId, to: &AccountId, amount: Amount) -> Result<(), IntentError> {

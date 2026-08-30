@@ -172,7 +172,11 @@ export function SecurityScreen({ client: suppliedClient, authenticator: supplied
   const revokeSession = async (session: Session) => {
     await runMutation(`session:${session.session_id}`, async () => {
       const stepUp = await securityStepUp(client, "revoke-session", session.session_id, authenticator);
-      const result = await client.securitySessionRevoke(session.session_id, { step_up: stepUp });
+      const result = await client.securitySessionRevoke(
+        session.session_id,
+        { step_up: stepUp },
+        `security-session-revoke:${stepUp.challenge_id}`,
+      );
       setSnapshot((snapshot) => ({
         ...snapshot,
         sessions: snapshot.sessions.filter(
@@ -190,7 +194,10 @@ export function SecurityScreen({ client: suppliedClient, authenticator: supplied
   const signOutEverywhere = async () => {
     await runMutation("sessions:all", async () => {
       const stepUp = await securityStepUp(client, "revoke-all-sessions", undefined, authenticator);
-      await client.securitySessionRevokeAll({ step_up: stepUp });
+      await client.securitySessionRevokeAll(
+        { step_up: stepUp },
+        `security-session-revoke-all:${stepUp.challenge_id}`,
+      );
       window.location.assign("/?return_to=%2Fapp%2Fsettings%2Fsecurity");
     });
   };

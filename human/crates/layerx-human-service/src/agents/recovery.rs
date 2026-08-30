@@ -1090,6 +1090,7 @@ const fn table_code(table: Table) -> u8 {
         Table::Support => 6,
         Table::Telemetry => 4,
         Table::Cache => 5,
+        Table::Stream => 7,
     }
 }
 
@@ -1100,6 +1101,7 @@ fn table_from_code(code: u8) -> Result<Table, AgentRecoveryError> {
         6 => Ok(Table::Support),
         4 => Ok(Table::Telemetry),
         5 => Ok(Table::Cache),
+        7 => Ok(Table::Stream),
         _ => Err(AgentRecoveryError::Corrupt("invalid evidence table")),
     }
 }

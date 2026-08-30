@@ -28,6 +28,9 @@ pub enum DisclosureField {
     Network,
     PayoutAddress,
     OwnershipSignature,
+    SessionGrant,
+    AuthorityGrant,
+    RevocationReason,
     From,
     To,
     Recipient,
@@ -140,6 +143,20 @@ impl DisclosureCheck {
                     128,
                     DisclosureField::OwnershipSignature,
                 )?;
+            }
+            IntentKind::SessionGrant(value) => {
+                round_trip.header(0x7105, 1)?;
+                round_trip.bytes(
+                    &value.registration_payload,
+                    1024,
+                    DisclosureField::SessionGrant,
+                )?;
+            }
+            IntentKind::SessionRevoke(value) => {
+                round_trip.header(0x7106, 3)?;
+                round_trip.fixed(&value.grant_id.bytes(), DisclosureField::AuthorityGrant)?;
+                round_trip.u8(value.reason.value(), DisclosureField::RevocationReason)?;
+                round_trip.u64(value.effective_sequence.value(), DisclosureField::Sequence)?;
             }
             IntentKind::LxpSend(value) => {
                 round_trip.header(0x5301, 10)?;
@@ -525,6 +542,8 @@ fn expected_activity_type(intent: &Intent) -> Result<ActivityType, DisclosureChe
         IntentKind::KeyRotation(_) => (ModuleId::Governance, 2),
         IntentKind::RecoveryRegistration(_) => (ModuleId::Governance, 3),
         IntentKind::EvmPayoutBinding(_) => (ModuleId::Governance, 4),
+        IntentKind::SessionGrant(_) => (ModuleId::Governance, 5),
+        IntentKind::SessionRevoke(_) => (ModuleId::Governance, 6),
         IntentKind::LxpSend(_) => (ModuleId::Asset, 5),
         IntentKind::LxpReceive(_) => (ModuleId::Asset, 6),
         IntentKind::PayerGrantRegistration(_) => (ModuleId::Budget, 4),

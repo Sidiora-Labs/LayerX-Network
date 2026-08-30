@@ -1,6 +1,9 @@
 {
   "method": "POST",
   "path": "/v1/security/sessions/ses_01j2h5r8ad4e6f8g0h2j4k6m8n/revoke",
+  "headers": {
+    "Idempotency-Key": "security-session-revoke:chg_01j2h5w4eh8j0k2m4n6p8q0r2s"
+  },
   "body": {
     "step_up": {
       "challenge_id": "chg_01j2h5w4eh8j0k2m4n6p8q0r2s",

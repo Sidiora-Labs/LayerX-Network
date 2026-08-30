@@ -21,12 +21,14 @@ required = ["events:StreamEvent[]","next_cursor:Cursor"]
 paging = "An empty events list with an unchanged next_cursor means the position is current. next_cursor always names the position after the last delivered event and is always safe to resume from."
 
 [operation.stream.open]
+authorization_class = "money-movement"
 method = "POST"
 path = "/v1/stream"
 request = "Empty"
 response = "StreamPosition"
 
 [operation.stream.next]
+authorization_class = "read"
 method = "GET"
 path = "/v1/stream/{cursor}"
 request = "Empty"

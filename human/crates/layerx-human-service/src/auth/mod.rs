@@ -217,6 +217,16 @@ pub struct Device {
 }
 
 impl Device {
+    /// Mints a service-owned durable device identifier around presentation
+    /// metadata declared by the calling shell.
+    ///
+    /// # Errors
+    ///
+    /// Returns an entropy failure or rejects invalid label/platform metadata.
+    pub fn mint(label: impl Into<String>, platform: impl Into<String>) -> Result<Self, AuthError> {
+        Self::new(mint_identifier("dev_")?, label, platform)
+    }
+
     /// Creates a bounded device descriptor.
     pub fn new(
         device_id: impl Into<String>,
@@ -507,7 +517,7 @@ struct VerifiedAssertion {
     consumed: bool,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 struct SessionRecord {
     session_id: String,
     device: Device,
@@ -521,6 +531,47 @@ struct SessionRecord {
     epoch: u64,
     revoked_at: Option<u64>,
     assurance: Assurance,
+    #[serde(default)]
+    protocol_grant_id: [u8; 32],
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+struct SessionOpeningRecord {
+    assertion_id: String,
+    action_key: [u8; 32],
+    opened_at: u64,
+    label: String,
+    platform: String,
+}
+
+pub struct PreparedBrowserSession {
+    assertion_id: String,
+    opening_key: Option<RowKey>,
+    record: SessionRecord,
+    grant: SessionGrant,
+}
+impl PreparedBrowserSession {
+    pub fn session_id(&self) -> &str {
+        self.grant.session_id()
+    }
+    pub fn opened_at(&self) -> u64 {
+        self.record.opened_at
+    }
+    pub fn device(&self) -> &Device {
+        &self.record.device
+    }
+    pub fn refresh_expires_at(&self) -> u64 {
+        self.grant.refresh_expires_at()
+    }
+    pub fn bind_protocol_grant(&mut self, value: [u8; 32]) -> Result<(), AuthError> {
+        if value == [0; 32]
+            || (self.record.protocol_grant_id != [0; 32] && self.record.protocol_grant_id != value)
+        {
+            return Err(AuthError::ForgeryRefused);
+        }
+        self.record.protocol_grant_id = value;
+        Ok(())
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -623,6 +674,26 @@ impl Passkeys {
         matched.ok_or(AuthError::Unauthenticated)
     }
 
+    /// Resolves the non-secret principal route carried by a registration
+    /// handle. The registration proof remains authoritative only after
+    /// [`Self::finish_registration`] loads and consumes it inside that scope.
+    pub fn principal_for_registration(
+        registration_id: &str,
+        tenancy: &TenancyMap,
+    ) -> Result<PrincipalId, AuthError> {
+        principal_for_bootstrap_identifier(registration_id, "reg_", tenancy)
+    }
+
+    /// Resolves the non-secret principal route carried by an assertion handle.
+    /// The signed assertion and its one-use session-opening record are still
+    /// verified inside the returned principal scope.
+    pub fn principal_for_assertion(
+        assertion_id: &str,
+        tenancy: &TenancyMap,
+    ) -> Result<PrincipalId, AuthError> {
+        principal_for_bootstrap_identifier(assertion_id, "asr_", tenancy)
+    }
+
     /// Starts passkey registration for the authenticated application account.
     pub fn begin_registration(
         &self,
@@ -646,7 +717,7 @@ impl Passkeys {
             &account.display_name,
             &credential_ids,
         );
-        let registration_id = mint_identifier("reg_")?;
+        let registration_id = mint_routed_identifier("reg_", scope.principal())?;
         let expires_at = now.saturating_add(self.config.ceremony_ttl_secs);
         let record = RegistrationRecord {
             state,
@@ -749,6 +820,20 @@ impl Passkeys {
         Ok(passkeys)
     }
 
+    /// Lists safe passkey metadata after the privileged dispatcher consumed
+    /// an affine read authorization for this principal.
+    pub fn list_passkeys_authorized(
+        &self,
+        scope: &PrincipalScope<'_>,
+    ) -> Result<Vec<PasskeyRecord>, AuthError> {
+        let mut passkeys = load_passkeys(scope)?
+            .into_iter()
+            .map(|(_, stored)| stored.record)
+            .collect::<Vec<_>>();
+        passkeys.sort_by(|left, right| left.passkey_id.cmp(&right.passkey_id));
+        Ok(passkeys)
+    }
+
     /// Starts an additional-passkey registration only after a fresh ceremony
     /// confirms this exact security mutation.
     #[allow(clippy::too_many_arguments)]
@@ -838,6 +923,31 @@ impl Passkeys {
         Ok(remaining)
     }
 
+    /// Revokes one passkey after the privileged dispatcher consumed the
+    /// operation-bound security capability.
+    pub fn revoke_passkey_authorized(
+        &self,
+        scope: &mut PrincipalScope<'_>,
+        passkey_id: &str,
+    ) -> Result<Vec<PasskeyRecord>, AuthError> {
+        let passkeys = load_passkeys(scope)?;
+        if passkeys.len() <= 1 {
+            return Err(AuthError::LastPasskey);
+        }
+        let key = row_key(PASSKEY_ROW_PREFIX, passkey_id)?;
+        if !passkeys.iter().any(|(candidate, _)| candidate == &key) {
+            return Err(AuthError::CredentialNotFound);
+        }
+        scope.remove(Table::Cache, &key)?;
+        let mut remaining = passkeys
+            .into_iter()
+            .filter(|(candidate, _)| candidate != &key)
+            .map(|(_, stored)| stored.record)
+            .collect::<Vec<_>>();
+        remaining.sort_by(|left, right| left.passkey_id.cmp(&right.passkey_id));
+        Ok(remaining)
+    }
+
     /// Starts a username-resolved assertion scoped to this principal's
     /// registered passkeys.
     pub fn begin_assertion(
@@ -857,7 +967,7 @@ impl Passkeys {
         let (challenge, state) = self
             .webauthn
             .start_authentication_with_creds_for_user(&user_handle(scope), &credentials);
-        let assertion_id = mint_identifier("asr_")?;
+        let assertion_id = mint_routed_identifier("asr_", scope.principal())?;
         let expires_at = now.saturating_add(self.config.ceremony_ttl_secs);
         put_json(
             scope,
@@ -943,8 +1053,20 @@ impl Passkeys {
         device: Device,
         now: u64,
     ) -> Result<SessionGrant, AuthError> {
+        let prepared = self.prepare_open_session(scope, assertion_id, device, now, [0; 32])?;
+        self.commit_open_session(scope, prepared, now)
+    }
+
+    pub fn prepare_open_session(
+        &self,
+        scope: &PrincipalScope<'_>,
+        assertion_id: &str,
+        device: Device,
+        now: u64,
+        protocol_grant_id: [u8; 32],
+    ) -> Result<PreparedBrowserSession, AuthError> {
         let key = row_key(VERIFIED_ASSERTION_ROW_PREFIX, assertion_id)?;
-        let mut assertion = get_json::<VerifiedAssertion>(scope, Table::Cache, &key)?
+        let assertion = get_json::<VerifiedAssertion>(scope, Table::Cache, &key)?
             .ok_or(AuthError::AssertionNotVerified)?;
         if assertion.consumed {
             return Err(AuthError::AssertionSpent);
@@ -952,9 +1074,203 @@ impl Passkeys {
         if now > assertion.expires_at {
             return Err(AuthError::ChallengeExpired);
         }
-        assertion.consumed = true;
-        put_json(scope, Table::Cache, key, now, &assertion)?;
-        self.issue_session(scope, Assurance::Passkey, device, now)
+        let epoch = session_epoch(scope)?;
+        let session_id = mint_identifier("ses_")?;
+        let (access_token, access_digest) = mint_token(&session_id, scope.principal())?;
+        let (refresh_token, refresh_digest) = mint_token(&session_id, scope.principal())?;
+        let csrf_token = mint_secret()?;
+        let csrf_digest = token_digest(csrf_token.expose());
+        let access_expires_at = now.saturating_add(self.config.session_ttl_secs);
+        let refresh_expires_at = now.saturating_add(self.config.refresh_ttl_secs);
+        let record = SessionRecord {
+            session_id: session_id.clone(),
+            device: device.clone(),
+            opened_at: now,
+            last_active_at: now,
+            access_expires_at,
+            refresh_expires_at,
+            access_digest,
+            refresh_digest,
+            csrf_digest,
+            epoch,
+            revoked_at: None,
+            assurance: Assurance::Passkey,
+            protocol_grant_id,
+        };
+        Ok(PreparedBrowserSession {
+            assertion_id: assertion_id.to_owned(),
+            opening_key: None,
+            record,
+            grant: SessionGrant {
+                session_id,
+                device,
+                opened_at: now,
+                last_active_at: now,
+                restricted: false,
+                access_token,
+                refresh_token,
+                csrf_token,
+                access_expires_at,
+                refresh_expires_at,
+            },
+        })
+    }
+
+    /// Prepares a crash-recoverable browser session. All bearer material is
+    /// derived from a secret component key and is never persisted in clear.
+    pub fn prepare_open_session_replayable(
+        &self,
+        scope: &mut PrincipalScope<'_>,
+        assertion_id: &str,
+        label: &str,
+        platform: &str,
+        action_key: [u8; 32],
+        recovery_seed: [u8; 32],
+        now: u64,
+    ) -> Result<PreparedBrowserSession, AuthError> {
+        if action_key == [0; 32] || recovery_seed == [0; 32] {
+            return Err(AuthError::ForgeryRefused);
+        }
+        let opening_key = RowKey::new(format!("auth-session-opening-{}", lower_hex(&action_key)))?;
+        let opening = if let Some(existing) =
+            get_json::<SessionOpeningRecord>(scope, Table::Journeys, &opening_key)?
+        {
+            if existing.assertion_id != assertion_id
+                || existing.action_key != action_key
+                || existing.label != label
+                || existing.platform != platform
+            {
+                return Err(AuthError::ForgeryRefused);
+            }
+            existing
+        } else {
+            let assertion_key = row_key(VERIFIED_ASSERTION_ROW_PREFIX, assertion_id)?;
+            let assertion = get_json::<VerifiedAssertion>(scope, Table::Cache, &assertion_key)?
+                .ok_or(AuthError::AssertionNotVerified)?;
+            if assertion.consumed {
+                return Err(AuthError::AssertionSpent);
+            }
+            if now > assertion.expires_at {
+                return Err(AuthError::ChallengeExpired);
+            }
+            let opening = SessionOpeningRecord {
+                assertion_id: assertion_id.to_owned(),
+                action_key,
+                opened_at: now,
+                label: label.to_owned(),
+                platform: platform.to_owned(),
+            };
+            put_json(scope, Table::Journeys, opening_key.clone(), now, &opening)?;
+            opening
+        };
+        let session_entropy = derive_session_material(&recovery_seed, b"session-id");
+        let session_id = format!(
+            "ses_{}",
+            lower_hex(&session_entropy[..IDENTIFIER_ENTROPY_BYTES])
+        );
+        let device_entropy = derive_session_material(&recovery_seed, b"device-id");
+        let device = Device::new(
+            format!(
+                "dev_{}",
+                lower_hex(&device_entropy[..IDENTIFIER_ENTROPY_BYTES])
+            ),
+            label,
+            platform,
+        )?;
+        let token = |label: &[u8]| {
+            let secret = URL_SAFE_NO_PAD.encode(derive_session_material(&recovery_seed, label));
+            let route = principal_route(scope.principal());
+            OpaqueSecret(Zeroizing::new(format!("{session_id}.{route}.{secret}")))
+        };
+        let access_token = token(b"access-token");
+        let refresh_token = token(b"refresh-token");
+        let csrf_token = OpaqueSecret(Zeroizing::new(
+            URL_SAFE_NO_PAD.encode(derive_session_material(&recovery_seed, b"csrf-token")),
+        ));
+        let access_expires_at = opening
+            .opened_at
+            .saturating_add(self.config.session_ttl_secs);
+        let refresh_expires_at = opening
+            .opened_at
+            .saturating_add(self.config.refresh_ttl_secs);
+        let record = SessionRecord {
+            session_id: session_id.clone(),
+            device: device.clone(),
+            opened_at: opening.opened_at,
+            last_active_at: opening.opened_at,
+            access_expires_at,
+            refresh_expires_at,
+            access_digest: token_digest(access_token.expose()),
+            refresh_digest: token_digest(refresh_token.expose()),
+            csrf_digest: token_digest(csrf_token.expose()),
+            epoch: session_epoch(scope)?,
+            revoked_at: None,
+            assurance: Assurance::Passkey,
+            protocol_grant_id: [0; 32],
+        };
+        let record = if let Some(existing) = get_json::<SessionRecord>(
+            scope,
+            Table::Cache,
+            &row_key(SESSION_ROW_PREFIX, &session_id)?,
+        )? {
+            if existing.session_id != record.session_id
+                || existing.device != record.device
+                || existing.opened_at != record.opened_at
+                || existing.access_digest != record.access_digest
+                || existing.refresh_digest != record.refresh_digest
+                || existing.csrf_digest != record.csrf_digest
+            {
+                return Err(AuthError::ForgeryRefused);
+            }
+            existing
+        } else {
+            record
+        };
+        Ok(PreparedBrowserSession {
+            assertion_id: assertion_id.to_owned(),
+            opening_key: Some(opening_key),
+            record,
+            grant: SessionGrant {
+                session_id,
+                device,
+                opened_at: opening.opened_at,
+                last_active_at: opening.opened_at,
+                restricted: false,
+                access_token,
+                refresh_token,
+                csrf_token,
+                access_expires_at,
+                refresh_expires_at,
+            },
+        })
+    }
+
+    pub fn commit_open_session(
+        &self,
+        scope: &mut PrincipalScope<'_>,
+        prepared: PreparedBrowserSession,
+        now: u64,
+    ) -> Result<SessionGrant, AuthError> {
+        let key = row_key(VERIFIED_ASSERTION_ROW_PREFIX, &prepared.assertion_id)?;
+        let mut assertion = get_json::<VerifiedAssertion>(scope, Table::Cache, &key)?
+            .ok_or(AuthError::AssertionNotVerified)?;
+        let session_key = row_key(SESSION_ROW_PREFIX, &prepared.record.session_id)?;
+        let existing = get_json::<SessionRecord>(scope, Table::Cache, &session_key)?;
+        if now > assertion.expires_at && existing.is_none() {
+            return Err(AuthError::ChallengeExpired);
+        }
+        if let Some(record) = existing {
+            if record != prepared.record {
+                return Err(AuthError::ForgeryRefused);
+            }
+        } else {
+            assertion.consumed = true;
+            put_json(scope, Table::Cache, key, now, &assertion)?;
+            record_device(scope, &prepared.record.device, now)?;
+            put_json(scope, Table::Cache, session_key, now, &prepared.record)?;
+        }
+        let _ = prepared.opening_key;
+        Ok(prepared.grant)
     }
 
     /// Rotates a valid refresh generation. Revoked, signed-out and expired
@@ -986,6 +1302,47 @@ impl Passkeys {
         put_json(scope, Table::Cache, key, now, &record)?;
         touch_device(scope, &record.device, now)?;
         Ok(grant)
+    }
+
+    /// Validates one refresh generation without rotating it. The caller must
+    /// consume the returned reservation through `refresh_authorized` only
+    /// after its affine execution capability is consumed.
+    pub fn reserve_refresh(
+        &self,
+        scope: &PrincipalScope<'_>,
+        refresh_token: &str,
+        csrf_token: &str,
+        now: u64,
+    ) -> Result<String, AuthError> {
+        let session_id = token_session_id(refresh_token)?;
+        let key = row_key(SESSION_ROW_PREFIX, session_id)?;
+        let record = get_json::<SessionRecord>(scope, Table::Cache, &key)?
+            .ok_or(AuthError::Unauthenticated)?;
+        let epoch = session_epoch(scope)?;
+        if record.revoked_at.is_some() || record.epoch != epoch {
+            return Err(AuthError::Unauthenticated);
+        }
+        if now > record.refresh_expires_at {
+            return Err(AuthError::SessionExpired);
+        }
+        if !digest_matches(&record.refresh_digest, refresh_token)
+            || !digest_matches(&record.csrf_digest, csrf_token)
+        {
+            return Err(AuthError::ForgeryRefused);
+        }
+        Ok(session_id.to_owned())
+    }
+
+    /// Rotates the refresh generation after the exact request capability has
+    /// been consumed by the privileged dispatcher.
+    pub fn refresh_authorized(
+        &self,
+        scope: &mut PrincipalScope<'_>,
+        refresh_token: &str,
+        csrf_token: &str,
+        now: u64,
+    ) -> Result<SessionGrant, AuthError> {
+        self.refresh_session(scope, refresh_token, csrf_token, now)
     }
 
     /// Validates a refresh generation without rotating it. The caller must
@@ -1108,6 +1465,132 @@ impl Passkeys {
         }
         sessions.sort_by(|left, right| left.session_id.cmp(&right.session_id));
         Ok(sessions)
+    }
+
+    /// Lists sessions after the privileged boundary has already consumed an
+    /// affine authorization capability for `session.list`.
+    pub fn list_sessions_authorized(
+        &self,
+        scope: &PrincipalScope<'_>,
+        current_session_id: &str,
+    ) -> Result<Vec<SessionView>, AuthError> {
+        let epoch = session_epoch(scope)?;
+        let current_key = row_key(SESSION_ROW_PREFIX, current_session_id)?;
+        let current = get_json::<SessionRecord>(scope, Table::Cache, &current_key)?
+            .ok_or(AuthError::Unauthenticated)?;
+        if current.revoked_at.is_some() || current.epoch != epoch {
+            return Err(AuthError::Unauthenticated);
+        }
+        let mut sessions = Vec::new();
+        for key in scope.keys(Table::Cache) {
+            if !key.as_str().starts_with(SESSION_ROW_PREFIX) {
+                continue;
+            }
+            if let Some(record) = get_json::<SessionRecord>(scope, Table::Cache, &key)? {
+                if record.revoked_at.is_none() && record.epoch == epoch {
+                    sessions.push(SessionView {
+                        current: record.session_id == current_session_id,
+                        session_id: record.session_id,
+                        device: record.device,
+                        opened_at: record.opened_at,
+                        last_active_at: record.last_active_at,
+                        restricted: record.assurance == Assurance::FallbackRestricted,
+                    });
+                }
+            }
+        }
+        sessions.sort_by(|left, right| left.session_id.cmp(&right.session_id));
+        Ok(sessions)
+    }
+
+    /// Revokes a target after an affine security-settings authorization has
+    /// already been consumed by the privileged dispatcher.
+    pub fn revoke_session_authorized(
+        &self,
+        scope: &mut PrincipalScope<'_>,
+        target_session_id: &str,
+        now: u64,
+    ) -> Result<SessionRevocation, AuthError> {
+        let key = row_key(SESSION_ROW_PREFIX, target_session_id)?;
+        let mut record = get_json::<SessionRecord>(scope, Table::Cache, &key)?
+            .ok_or(AuthError::SessionNotFound)?;
+        record.revoked_at = Some(now);
+        put_json(scope, Table::Cache, key, now, &record)?;
+        Ok(SessionRevocation {
+            revoked_session_ids: vec![target_session_id.to_owned()],
+            revoked_at: now,
+        })
+    }
+
+    pub fn protocol_grant_for_session(
+        &self,
+        scope: &PrincipalScope<'_>,
+        target_session_id: &str,
+    ) -> Result<[u8; 32], AuthError> {
+        let key = row_key(SESSION_ROW_PREFIX, target_session_id)?;
+        let record = get_json::<SessionRecord>(scope, Table::Cache, &key)?
+            .ok_or(AuthError::SessionNotFound)?;
+        if record.revoked_at.is_some() || record.protocol_grant_id == [0; 32] {
+            Err(AuthError::SessionNotFound)
+        } else {
+            Ok(record.protocol_grant_id)
+        }
+    }
+    pub fn active_protocol_session_grants(
+        &self,
+        scope: &PrincipalScope<'_>,
+    ) -> Result<Vec<(String, [u8; 32])>, AuthError> {
+        let epoch = session_epoch(scope)?;
+        let mut values = Vec::new();
+        for key in scope.keys(Table::Cache) {
+            if !key.as_str().starts_with(SESSION_ROW_PREFIX) {
+                continue;
+            }
+            if let Some(record) = get_json::<SessionRecord>(scope, Table::Cache, &key)? {
+                if record.revoked_at.is_none()
+                    && record.epoch == epoch
+                    && record.protocol_grant_id != [0; 32]
+                {
+                    values.push((record.session_id, record.protocol_grant_id));
+                }
+            }
+        }
+        values.sort_by(|left, right| left.0.cmp(&right.0));
+        Ok(values)
+    }
+
+    /// Invalidates the current principal epoch after consumed affine
+    /// authorization, without requiring the raw bearer token a second time.
+    pub fn revoke_all_sessions_authorized(
+        &self,
+        scope: &mut PrincipalScope<'_>,
+        now: u64,
+    ) -> Result<SessionRevocation, AuthError> {
+        let current = session_epoch(scope)?;
+        let next = current.checked_add(1).ok_or(AuthError::SizeOverflow)?;
+        put_json(
+            scope,
+            Table::Cache,
+            RowKey::new(SESSION_EPOCH_ROW)?,
+            now,
+            &SessionEpoch { value: next },
+        )?;
+        let mut revoked = Vec::new();
+        for key in scope.keys(Table::Cache) {
+            if !key.as_str().starts_with(SESSION_ROW_PREFIX) {
+                continue;
+            }
+            if let Some(record) = get_json::<SessionRecord>(scope, Table::Cache, &key)? {
+                if record.revoked_at.is_none() && record.epoch == current {
+                    revoked.push(record.session_id);
+                }
+            }
+        }
+        revoked.sort();
+        Ok(SessionRevocation {
+            revoked_session_ids: revoked,
+            revoked_at: now,
+        })
     }
 
     /// Revokes one session after authenticating the caller and validating the
@@ -1390,6 +1873,7 @@ impl Passkeys {
             epoch,
             revoked_at: None,
             assurance,
+            protocol_grant_id: [0; 32],
         };
         put_json(
             scope,
@@ -1457,15 +1941,42 @@ fn valid_machine_label(value: &str) -> bool {
 
 fn valid_prefixed_id(value: &str, prefix: &str) -> bool {
     value.strip_prefix(prefix).is_some_and(|suffix| {
-        suffix.len() == IDENTIFIER_ENTROPY_BYTES * 2
-            && suffix
-                .bytes()
-                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        valid_lower_hex(suffix, IDENTIFIER_ENTROPY_BYTES * 2)
+            || suffix.split_once('_').is_some_and(|(route, random)| {
+                valid_lower_hex(route, 32 * 2)
+                    && valid_lower_hex(random, IDENTIFIER_ENTROPY_BYTES * 2)
+            })
     })
+}
+
+fn valid_lower_hex(value: &str, length: usize) -> bool {
+    value.len() == length
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
 }
 
 fn fill_random(bytes: &mut [u8]) -> Result<(), AuthError> {
     getrandom::fill(bytes).map_err(|_| AuthError::EntropyUnavailable)
+}
+
+fn derive_session_material(seed: &[u8; 32], label: &[u8]) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(b"layerx-human/browser-session-material/v1\0");
+    digest.update(u64::try_from(label.len()).unwrap_or(u64::MAX).to_be_bytes());
+    digest.update(label);
+    digest.update(seed);
+    digest.finalize().into()
+}
+
+fn lower_hex(bytes: &[u8]) -> String {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut output = String::with_capacity(bytes.len().saturating_mul(2));
+    for byte in bytes {
+        output.push(char::from(DIGITS[usize::from(byte >> 4)]));
+        output.push(char::from(DIGITS[usize::from(byte & 0x0f)]));
+    }
+    output
 }
 
 fn mint_identifier(prefix: &str) -> Result<String, AuthError> {
@@ -1478,6 +1989,54 @@ fn mint_identifier(prefix: &str) -> Result<String, AuthError> {
         write!(&mut identifier, "{byte:02x}").map_err(|_| AuthError::SizeOverflow)?;
     }
     Ok(identifier)
+}
+
+fn mint_routed_identifier(prefix: &str, principal: &PrincipalId) -> Result<String, AuthError> {
+    let random = mint_identifier("")?;
+    Ok(format!(
+        "{prefix}{}_{}",
+        principal_bootstrap_route(principal),
+        random
+    ))
+}
+
+fn principal_for_bootstrap_identifier(
+    identifier: &str,
+    prefix: &str,
+    tenancy: &TenancyMap,
+) -> Result<PrincipalId, AuthError> {
+    let suffix = identifier
+        .strip_prefix(prefix)
+        .ok_or(AuthError::Unauthenticated)?;
+    let (route, random) = suffix.split_once('_').ok_or(AuthError::Unauthenticated)?;
+    if !valid_lower_hex(route, 32 * 2) || !valid_lower_hex(random, IDENTIFIER_ENTROPY_BYTES * 2) {
+        return Err(AuthError::Unauthenticated);
+    }
+    let mut matched = None;
+    for principal in tenancy.principals() {
+        let candidate = principal_bootstrap_route(&principal);
+        if candidate.len() == route.len()
+            && bool::from(candidate.as_bytes().ct_eq(route.as_bytes()))
+            && matched.replace(principal).is_some()
+        {
+            return Err(AuthError::CorruptState);
+        }
+    }
+    matched.ok_or(AuthError::Unauthenticated)
+}
+
+fn principal_bootstrap_route(principal: &PrincipalId) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut hasher = Sha256::new();
+    hasher.update(USER_HANDLE_DOMAIN);
+    hasher.update(principal.as_str().as_bytes());
+    let digest = hasher.finalize();
+    let mut route = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        route.push(char::from(HEX[usize::from(byte >> 4)]));
+        route.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    route
 }
 
 fn mint_secret() -> Result<OpaqueSecret, AuthError> {
@@ -1534,9 +2093,9 @@ fn token_principal_route(token: &str) -> Result<&str, AuthError> {
 
 fn valid_token_route(route: &str) -> bool {
     route.len() == 43
-        && route.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')
-        })
+        && route
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
 }
 
 fn principal_route(principal: &PrincipalId) -> String {

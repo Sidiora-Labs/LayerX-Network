@@ -336,6 +336,7 @@ impl AgentSessionContract for AgentLayer {
         let mut boundary = IdentityBoundary(CoreIdentity {
             canonical_bytes: self.protocol_identity.to_vec(),
             head_sequence: self.core_sequence,
+            revocation_sequence: 1,
             verification_level: VerificationLevel::STATE_PROVEN,
             frozen: false,
             authorities,

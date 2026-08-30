@@ -99,6 +99,7 @@ required = ["account_id:AccountId","onboarding:Journey"]
 journey = "Creating an account starts the onboarding journey that stands up the protocol identity underneath it, and the journey is the account's honest per-stage progress from the first moment."
 
 [operation.account.create]
+authorization_class = "money-movement"
 method = "POST"
 path = "/v1/accounts"
 request = "AccountCreateRequest"
@@ -120,12 +121,14 @@ required = ["passkey_id:PasskeyId","label:string","created_at:Timestamp"]
 optional = ["last_used_at:Timestamp"]
 
 [operation.passkey.register.begin]
+authorization_class = "money-movement"
 method = "POST"
 path = "/v1/passkeys/registrations"
 request = "PasskeyRegistrationBegin"
 response = "PasskeyRegistrationChallenge"
 
 [operation.passkey.register.finish]
+authorization_class = "money-movement"
 method = "POST"
 path = "/v1/passkeys/registrations/{registration_id}"
 request = "PasskeyRegistrationFinish"
@@ -147,12 +150,14 @@ required = ["assertion_id:AssertionId","passkey_id:PasskeyId","completed_at:Time
 consumption = "A completed assertion opens exactly one session before expires_at, then it is spent."
 
 [operation.passkey.assert.begin]
+authorization_class = "money-movement"
 method = "POST"
 path = "/v1/passkeys/assertions"
 request = "PasskeyAssertionBegin"
 response = "PasskeyAssertionChallenge"
 
 [operation.passkey.assert.finish]
+authorization_class = "money-movement"
 method = "POST"
 path = "/v1/passkeys/assertions/{assertion_id}"
 request = "PasskeyAssertionFinish"
@@ -165,8 +170,14 @@ required = ["device_id:DeviceId","label:string","platform:string"]
 required = ["session_id:SessionId","device:Device","opened_at:Timestamp","last_active_at:Timestamp","current:boolean"]
 inventory = "The session inventory shows every device holding access, each with its last activity, so a person can see and end access from anywhere."
 
+[type.SessionDevice]
+required = ["label:string","platform:string"]
+identity = "Presentation metadata declared by the calling shell. The service mints the durable DeviceId; neither this metadata nor the identifier is authentication authority."
+
 [type.SessionOpenRequest]
 required = ["assertion_id:AssertionId"]
+optional = ["device:SessionDevice"]
+compatibility = "Clients in the production beta service minor supply device metadata. It is optional on the additive wire contract so older decoders remain compatible, but the service fails closed when an opening request omits it because inventing device inventory is forbidden."
 
 [type.SessionList]
 required = ["sessions:Session[]"]
@@ -175,36 +186,44 @@ required = ["sessions:Session[]"]
 required = ["revoked_session_ids:SessionId[]","revoked_at:Timestamp"]
 
 [operation.session.open]
+authorization_class = "money-movement"
 method = "POST"
 path = "/v1/sessions"
 request = "SessionOpenRequest"
 response = "Session"
+idempotency = true
 scope = "Every operation on the authenticated plane is scoped to the principal this session belongs to. A session never grants a view into anyone else's account, and opening one on a new device records the device and sends a security notification."
 
 [operation.session.refresh]
+authorization_class = "money-movement"
 method = "POST"
 path = "/v1/sessions/refresh"
 request = "Empty"
 response = "Session"
 
 [operation.session.list]
+authorization_class = "read"
 method = "GET"
 path = "/v1/sessions"
 request = "Empty"
 response = "SessionList"
 
 [operation.session.revoke]
+authorization_class = "security-settings"
 method = "DELETE"
 path = "/v1/sessions/{session_id}"
 request = "Empty"
 response = "SessionRevocation"
+idempotency = true
 effect = "Revocation takes effect promptly on every shell holding the session."
 
 [operation.session.revoke-all]
+authorization_class = "security-settings"
 method = "POST"
 path = "/v1/sessions/revoke-all"
 request = "Empty"
 response = "SessionRevocation"
+idempotency = true
 everywhere = "Signs out every session of the principal, including the one making the call."
 
 [type.StepUpRequest]
@@ -222,12 +241,14 @@ required = ["challenge_id:StepUpChallengeId","confirms:OperationDigest","passkey
 reference = "The record other modules carry when an operation requires fresh confirmation: acting on an approval, starting a withdrawal or exit, changing security settings, revealing a secret, replacing the payout wallet, archiving an agent."
 
 [operation.stepup.begin]
+authorization_class = "money-movement"
 method = "POST"
 path = "/v1/step-up"
 request = "StepUpRequest"
 response = "StepUpChallenge"
 
 [operation.stepup.finish]
+authorization_class = "money-movement"
 method = "POST"
 path = "/v1/step-up/{challenge_id}"
 request = "StepUpFinish"
@@ -245,6 +266,7 @@ binding = "The service derives the operation digest from the authenticated princ
 required = ["confirms:OperationDigest"]
 
 [operation.security.action]
+authorization_class = "money-movement"
 method = "POST"
 path = "/v1/security/actions"
 request = "SecurityActionRequest"
@@ -263,24 +285,28 @@ required = ["credential:OpaqueCredential","step_up:StepUpEvidence"]
 required = ["step_up:StepUpEvidence"]
 
 [operation.security.passkey.list]
+authorization_class = "read"
 method = "GET"
 path = "/v1/security/passkeys"
 request = "Empty"
 response = "PasskeyList"
 
 [operation.security.passkey.register.begin]
+authorization_class = "security-settings"
 method = "POST"
 path = "/v1/security/passkeys/registrations"
 request = "SecurityPasskeyRegistrationBegin"
 response = "PasskeyRegistrationChallenge"
 
 [operation.security.passkey.register.finish]
+authorization_class = "security-settings"
 method = "POST"
 path = "/v1/security/passkeys/registrations/{registration_id}"
 request = "SecurityPasskeyRegistrationFinish"
 response = "Passkey"
 
 [operation.security.passkey.revoke]
+authorization_class = "security-settings"
 method = "POST"
 path = "/v1/security/passkeys/{passkey_id}/revoke"
 request = "SecurityPasskeyRevocation"
@@ -291,16 +317,20 @@ lockout = "The service refuses removal of the final passkey."
 required = ["step_up:StepUpEvidence"]
 
 [operation.security.session.revoke]
+authorization_class = "security-settings"
 method = "POST"
 path = "/v1/security/sessions/{session_id}/revoke"
 request = "SecuritySessionRevocation"
 response = "SessionRevocation"
+idempotency = true
 
 [operation.security.session.revoke-all]
+authorization_class = "security-settings"
 method = "POST"
 path = "/v1/security/sessions/revoke-all"
 request = "SecuritySessionRevocation"
 response = "SessionRevocation"
+idempotency = true
 everywhere = "Invalidates active sessions and every refresh path, including the caller."
 
 [type.TimedSecret]
@@ -337,24 +367,28 @@ required = ["step_up:StepUpEvidence"]
 required = ["step_up:StepUpEvidence"]
 
 [operation.authenticator.status]
+authorization_class = "read"
 method = "GET"
 path = "/v1/security/authenticators"
 request = "Empty"
 response = "AuthenticatorStatus"
 
 [operation.authenticator.setup.begin]
+authorization_class = "security-settings"
 method = "POST"
 path = "/v1/security/authenticators/setups"
 request = "AuthenticatorSetupBegin"
 response = "AuthenticatorSetupChallenge"
 
 [operation.authenticator.setup.finish]
+authorization_class = "security-settings"
 method = "POST"
 path = "/v1/security/authenticators/setups/{setup_id}"
 request = "AuthenticatorSetupFinish"
 response = "AuthenticatorSetupResult"
 
 [operation.authenticator.disable]
+authorization_class = "security-settings"
 method = "POST"
 path = "/v1/security/authenticators/{authenticator_id}/disable"
 request = "AuthenticatorDisable"
@@ -362,6 +396,7 @@ response = "AuthenticatorStatus"
 warning = "The client presents explicit consequence copy before requesting step-up."
 
 [operation.authenticator.backup.rotate]
+authorization_class = "security-settings"
 method = "POST"
 path = "/v1/security/authenticators/backup-codes"
 request = "BackupCodeRotation"
@@ -371,6 +406,7 @@ response = "BackupCodeSet"
 required = ["evidence_id:EvidenceId","step_up:StepUpEvidence"]
 
 [operation.security.recovery.reveal]
+authorization_class = "secret-reveal"
 method = "POST"
 path = "/v1/security/recovery/evidence"
 request = "SecurityRecoveryReveal"
@@ -378,6 +414,7 @@ response = "TimedSecret"
 receipt = "The revealed bytes are the exact recovery registration receipt already referenced by onboarding status, never a client-authored representation."
 
 [operation.onboarding.status]
+authorization_class = "read"
 method = "GET"
 path = "/v1/onboarding"
 request = "Empty"
@@ -386,6 +423,7 @@ kind = "The journey of kind onboarding: creating the account, adding the passkey
 active = "The account reads as active only when the journey's protocol-identity stage carries evidence of class layerx-receipt at verification receipt-verified or higher. No stage is presented as done from local state alone."
 
 [operation.onboarding.resume]
+authorization_class = "money-movement"
 method = "POST"
 path = "/v1/onboarding/resume"
 request = "Empty"
@@ -416,12 +454,14 @@ evidence = "evidence references the receipt-backed record that established the c
 required = ["address:EvmAddress","statement:string","signature:EvmSignature","step_up:StepUpEvidence"]
 
 [operation.binding.statement]
+authorization_class = "money-movement"
 method = "POST"
 path = "/v1/wallet-binding/statement"
 request = "BindingStatementRequest"
 response = "BindingStatement"
 
 [operation.binding.submit]
+authorization_class = "money-movement"
 method = "POST"
 path = "/v1/wallet-binding"
 request = "BindingSubmission"
@@ -430,6 +470,7 @@ idempotency = true
 journey = "Returns the journey of kind wallet-binding. The binding reads as established only when its receipt-backed evidence verifies, and a signature from any address other than the named one is refused, never silently accepted."
 
 [operation.binding.status]
+authorization_class = "read"
 method = "GET"
 path = "/v1/wallet-binding"
 request = "Empty"
@@ -440,6 +481,7 @@ required = ["binding:BindingStatement","confirms:OperationDigest"]
 binding = "The service issues the exact replacement statement and derives confirms from the current receipt-backed binding and that statement. The browser signs the returned statement and never constructs the operation digest."
 
 [operation.binding.rebind.action]
+authorization_class = "money-movement"
 method = "POST"
 path = "/v1/wallet-binding/rebind/action"
 request = "BindingStatementRequest"
@@ -447,6 +489,7 @@ response = "BindingRebindAction"
 step_up = "This is the only source of the operation digest used to request fresh passkey evidence for a wallet replacement."
 
 [operation.binding.rebind]
+authorization_class = "wallet-rebind"
 method = "POST"
 path = "/v1/wallet-binding/rebind"
 request = "RebindingSubmission"
@@ -464,12 +507,14 @@ required = []
 optional = ["display_name:string","avatar_url:string"]
 
 [operation.profile.get]
+authorization_class = "read"
 method = "GET"
 path = "/v1/profile"
 request = "Empty"
 response = "Profile"
 
 [operation.profile.update]
+authorization_class = "money-movement"
 method = "PATCH"
 path = "/v1/profile"
 request = "ProfileUpdate"

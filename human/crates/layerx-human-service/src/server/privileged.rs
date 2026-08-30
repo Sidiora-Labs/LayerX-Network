@@ -70,11 +70,7 @@ pub trait PrivilegedHumanServices: Send + 'static {
         now: u64,
     ) -> Result<BackendResponse, ApiFailure>;
 
-    fn readiness(
-        &mut self,
-        store: &mut PrincipalStore,
-        now: u64,
-    ) -> Result<Readiness, ApiFailure>;
+    fn readiness(&mut self, store: &mut PrincipalStore, now: u64) -> Result<Readiness, ApiFailure>;
 }
 
 /// Real passkey and principal-scoping middleware for concrete human services.
@@ -206,12 +202,19 @@ impl<S: PrivilegedHumanServices> HumanApiComponents for PrivilegedHumanComponent
                 expires_at,
             },
         );
-        Ok(PrincipalContext {
+        PrincipalContext::authorized(
             principal,
             tenant,
-            session_id: session.session_id,
+            session.session_id,
             authorization,
-        })
+            credentials.request_digest,
+            credentials.disclosure_digest,
+            operation.name.clone(),
+            credentials.intended_destination.to_owned(),
+            trace.to_owned(),
+            now,
+            expires_at,
+        )
     }
 
     fn execute(&self, request: ScopedRequest<'_>) -> Result<BackendResponse, ApiFailure> {
@@ -236,7 +239,7 @@ impl<S: PrivilegedHumanServices> HumanApiComponents for PrivilegedHumanComponent
         };
         let grant = state
             .grants
-            .remove(&context.authorization)
+            .remove(context.capability())
             .ok_or_else(ApiFailure::unauthenticated)?;
         if grant.expires_at < now
             || grant.principal != context.principal.as_str()
@@ -258,7 +261,10 @@ impl<S: PrivilegedHumanServices> HumanApiComponents for PrivilegedHumanComponent
             return Err(ApiFailure::forbidden());
         }
         let session = if grant.refresh {
-            let csrf = grant.csrf_token.as_deref().ok_or_else(ApiFailure::forbidden)?;
+            let csrf = grant
+                .csrf_token
+                .as_deref()
+                .ok_or_else(ApiFailure::forbidden)?;
             passkeys
                 .authorize_refresh(&scope, &grant.token, csrf, now)
                 .map_err(map_auth_error)?
@@ -329,7 +335,7 @@ fn unix_seconds() -> Result<u64, ApiFailure> {
         .map(|duration| duration.as_secs())
 }
 
-fn map_auth_error(error: AuthError) -> ApiFailure {
+pub(super) fn map_auth_error(error: AuthError) -> ApiFailure {
     match error {
         AuthError::Unauthenticated | AuthError::SessionNotFound => ApiFailure::unauthenticated(),
         AuthError::SessionExpired => ApiFailure::session_expired(),

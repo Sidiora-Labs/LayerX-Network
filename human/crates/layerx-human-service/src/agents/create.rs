@@ -39,6 +39,7 @@ pub struct CreateAgentRequest {
     name: String,
     purpose: String,
     monthly_spend: u128,
+    currency: String,
 }
 
 impl CreateAgentRequest {
@@ -51,14 +52,18 @@ impl CreateAgentRequest {
         name: impl Into<String>,
         purpose: impl Into<String>,
         monthly_spend: u128,
+        currency: impl Into<String>,
     ) -> Result<Self, AgentCreationError> {
         let name = name.into();
         let purpose = purpose.into();
+        let currency = currency.into();
         if name.is_empty()
             || name.len() > NAME_LIMIT
             || purpose.is_empty()
             || purpose.len() > PURPOSE_LIMIT
             || monthly_spend == 0
+            || currency.is_empty()
+            || currency.len() > 32
         {
             return Err(AgentCreationError::InvalidRequest);
         }
@@ -66,6 +71,7 @@ impl CreateAgentRequest {
             name,
             purpose,
             monthly_spend,
+            currency,
         })
     }
 
@@ -82,6 +88,11 @@ impl CreateAgentRequest {
     #[must_use]
     pub const fn monthly_spend(&self) -> u128 {
         self.monthly_spend
+    }
+
+    #[must_use]
+    pub fn currency(&self) -> &str {
+        &self.currency
     }
 }
 
@@ -286,6 +297,44 @@ pub struct CreationStatus {
     pub stages: Vec<(CreationStage, StageState)>,
 }
 
+/// Durable Human projection for list/get while creation is incomplete or
+/// after every receipt-gated stage has completed. Spend and live authority
+/// are deliberately absent; callers obtain those from the agent owner.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CreationProjection {
+    pub agent_id: [u8; 32],
+    pub did: Did,
+    pub name: String,
+    pub purpose: String,
+    pub monthly_limit: u128,
+    pub currency: String,
+    pub started_at: u64,
+    pub status: CreationStatus,
+    pub verified_evidence: Vec<[u8; 32]>,
+    pub primary_public_key: Option<[u8; 32]>,
+    pub activity_types: Vec<u32>,
+    pub daemon_scopes: Vec<String>,
+    pub session_expires_at: u64,
+    pub protocol_grant_id: [u8; 32],
+    pub period_seconds: u64,
+    pub owner_account: String,
+    pub budget_account: String,
+    pub budget_asset: [u8; 32],
+    pub purpose_hash: [u8; 32],
+    pub recovery_root: [u8; 32],
+    pub recovery_threshold: u16,
+    pub counterparties: Vec<[u8; 32]>,
+    pub assets: Vec<[u8; 32]>,
+    pub amount_ceiling: u128,
+    pub rate_maximum_uses: u64,
+    pub rate_window_sequences: u64,
+    pub purposes: Vec<String>,
+    pub capability_expiry_sequence: u64,
+    pub budget_expiry_seconds: u64,
+    pub initial_funding: u128,
+    pub network_id: u32,
+}
+
 /// Typed protocol submission. The agent contract receives the semantic intent,
 /// compiler output, and disclosure proof together; callers cannot supply raw
 /// node payload bytes.
@@ -296,16 +345,19 @@ pub struct ProtocolAction {
     pub intent: Intent,
     pub compiled: layerx_intents::CompiledIntent,
     pub disclosure: DisclosureCheck,
+    pub custody_key: KeyId,
+    pub started_at: u64,
 }
 
-/// Canonical receipt and independently obtained batch authority returned by
-/// the real agent/core submission path.
+/// Canonical receipt, independently obtained batch authority, and the durable
+/// finality rank returned by the peer-authenticated agent boundary.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProtocolEvidence {
     pub action_key: [u8; 32],
     pub activity_id: [u8; 32],
     pub receipt_bytes: Vec<u8>,
     pub authorized_batch: AuthorizedBatch,
+    pub verification_level: VerificationLevel,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -315,6 +367,10 @@ pub struct SessionProvision {
     pub activity_types: Vec<ActivityType>,
     pub daemon_scopes: Vec<String>,
     pub expires_at: u64,
+    pub primary_authority: [u8; 32],
+    pub grantor: [u8; 32],
+    pub custody_key: KeyId,
+    pub revocation_sequence: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -330,6 +386,7 @@ pub struct CapabilityProvision {
     pub rate_window_sequences: u64,
     pub purposes: BTreeSet<String>,
     pub expiry_sequence: u64,
+    pub primary_authority: [u8; 32],
 }
 
 /// Agent-layer evidence for joined session and narrowed-capability operations.
@@ -396,6 +453,29 @@ pub trait AgentCreationContract {
     ) -> Result<AgentEvidence, AgentFailure>;
 }
 
+/// Creation-only extension which keeps custody audit and journey persistence
+/// inside the caller's already-open principal transaction. Implementations
+/// used by controls retain the unscoped contract above; production creation
+/// adapters override this method and must not acquire a second store lock.
+pub trait ScopedAgentCreationContract: AgentCreationContract {
+    fn submit_protocol_scoped(
+        &mut self,
+        _scope: &mut PrincipalScope<'_>,
+        action: ProtocolAction,
+    ) -> Result<ProtocolEvidence, AgentFailure> {
+        self.submit_protocol(action)
+    }
+
+    fn provision_session_scoped(
+        &mut self,
+        _scope: &mut PrincipalScope<'_>,
+        _registry: &ModuleRegistry,
+        request: SessionProvision,
+    ) -> Result<AgentEvidence, AgentFailure> {
+        self.provision_session(request)
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 struct StoredPreset {
     config_version: String,
@@ -424,6 +504,7 @@ struct JourneyRecord {
     idempotency_key: [u8; 32],
     name: String,
     monthly_spend: u128,
+    currency: String,
     did: Vec<u8>,
     owner_account: String,
     recovery_root: [u8; 32],
@@ -526,6 +607,7 @@ impl CreationJourney {
                 idempotency_key: context.idempotency_key,
                 name: request.name.clone(),
                 monthly_spend: request.monthly_spend,
+                currency: request.currency.clone(),
                 did: did.as_bytes().to_vec(),
                 owner_account: context.owner_account.clone(),
                 recovery_root: context.human_recovery_root,
@@ -558,6 +640,36 @@ impl CreationJourney {
             serde_json::from_slice(row.bytes()).map_err(|_| AgentCreationError::CorruptJourney)?;
         validate_record(&record, agent_id)?;
         Ok(Some(Self { record }))
+    }
+
+    /// Lists every managed-agent creation owned by this authenticated
+    /// principal. Corrupt or duplicate rows refuse the whole projection.
+    pub fn list(scope: &PrincipalScope<'_>) -> Result<Vec<Self>, AgentCreationError> {
+        let mut journeys = Vec::new();
+        let mut identifiers = BTreeSet::new();
+        for key in scope.keys(Table::Journeys) {
+            if !key.as_str().starts_with("agent-create-") {
+                continue;
+            }
+            let row = scope
+                .get(Table::Journeys, &key)
+                .ok_or(AgentCreationError::CorruptJourney)?;
+            let record: JourneyRecord = serde_json::from_slice(row.bytes())
+                .map_err(|_| AgentCreationError::CorruptJourney)?;
+            validate_record(&record, record.agent_id)?;
+            if !identifiers.insert(record.agent_id) {
+                return Err(AgentCreationError::CorruptJourney);
+            }
+            journeys.push(Self { record });
+        }
+        journeys.sort_by(|left, right| {
+            right
+                .record
+                .started_at
+                .cmp(&left.record.started_at)
+                .then_with(|| right.record.agent_id.cmp(&left.record.agent_id))
+        });
+        Ok(journeys)
     }
 
     #[must_use]
@@ -596,6 +708,61 @@ impl CreationJourney {
         }
     }
 
+    /// Returns only Human-owned immutable and receipt-gated workflow facts.
+    #[must_use]
+    pub fn projection(&self) -> CreationProjection {
+        CreationProjection {
+            agent_id: self.record.agent_id,
+            did: self.did().unwrap_or_else(|_| unreachable!()),
+            name: self.record.name.clone(),
+            purpose: self.record.preset.id.clone(),
+            monthly_limit: self.record.monthly_spend,
+            currency: self.record.currency.clone(),
+            started_at: self.record.started_at,
+            status: self.status(),
+            verified_evidence: self
+                .record
+                .stages
+                .iter()
+                .map(|stage| stage.evidence_digest)
+                .collect::<Option<Vec<_>>>()
+                .unwrap_or_default(),
+            primary_public_key: self.record.public_key,
+            activity_types: self.record.preset.activity_types.clone(),
+            daemon_scopes: self.record.preset.session_scopes.clone(),
+            session_expires_at: self
+                .record
+                .started_at
+                .checked_add(self.record.preset.session_lifetime_seconds)
+                .unwrap_or_else(|| unreachable!()),
+            protocol_grant_id: self
+                .stage(CreationStage::SessionProvision)
+                .object_id
+                .unwrap_or([0; 32]),
+            period_seconds: self.record.preset.budget_period_seconds,
+            owner_account: self.record.owner_account.clone(),
+            budget_account: self
+                .budget_account()
+                .unwrap_or_else(|_| unreachable!())
+                .canonical()
+                .to_owned(),
+            budget_asset: self.record.preset.budget_asset,
+            purpose_hash: self.record.preset.config_digest,
+            recovery_root: self.record.recovery_root,
+            recovery_threshold: self.record.recovery_threshold,
+            counterparties: self.record.preset.counterparties.clone(),
+            assets: self.record.preset.assets.clone(),
+            amount_ceiling: self.record.preset.amount_ceiling,
+            rate_maximum_uses: self.record.preset.rate_maximum_uses,
+            rate_window_sequences: self.record.preset.rate_window_sequences,
+            purposes: self.record.preset.purposes.clone(),
+            capability_expiry_sequence: self.record.preset.expiry_sequence,
+            budget_expiry_seconds: self.record.preset.budget_expiry_seconds,
+            initial_funding: self.record.preset.initial_funding,
+            network_id: self.record.network_id,
+        }
+    }
+
     /// Resumes from the first unverified stage. A boundary failure is persisted
     /// and returned as honest partial status; a later call retries the identical
     /// action key and never repeats a verified effect.
@@ -603,7 +770,7 @@ impl CreationJourney {
     /// # Errors
     ///
     /// Returns typed custody, intent, verification, evidence, and store failures.
-    pub fn resume<C: AgentCreationContract>(
+    pub fn resume<C: ScopedAgentCreationContract>(
         &mut self,
         scope: &mut PrincipalScope<'_>,
         keystore: &Keystore,
@@ -623,7 +790,7 @@ impl CreationJourney {
                 | CreationStage::BudgetFunding => {
                     self.run_protocol(scope, registry, agent, stage, now)
                 }
-                CreationStage::SessionProvision => self.run_session(scope, agent, now),
+                CreationStage::SessionProvision => self.run_session(scope, registry, agent, now),
                 CreationStage::CapabilityNarrowing => self.run_capability(scope, agent, now),
                 CreationStage::Custody => unreachable!(),
             };
@@ -677,7 +844,7 @@ impl CreationJourney {
         self.persist(scope, now)
     }
 
-    fn run_protocol<C: AgentCreationContract>(
+    fn run_protocol<C: ScopedAgentCreationContract>(
         &mut self,
         scope: &mut PrincipalScope<'_>,
         registry: &ModuleRegistry,
@@ -687,7 +854,7 @@ impl CreationJourney {
     ) -> Result<(), AgentCreationError> {
         let action = self.protocol_action(stage, registry)?;
         let action_key = action.action_key;
-        let evidence = agent.submit_protocol(action)?;
+        let evidence = agent.submit_protocol_scoped(scope, action)?;
         if evidence.action_key != action_key || evidence.activity_id != action_key {
             return Err(AgentCreationError::EvidenceConflict);
         }
@@ -725,9 +892,10 @@ impl CreationJourney {
         self.persist(scope, now)
     }
 
-    fn run_session<C: AgentCreationContract>(
+    fn run_session<C: ScopedAgentCreationContract>(
         &mut self,
         scope: &mut PrincipalScope<'_>,
+        registry: &ModuleRegistry,
         agent: &mut C,
         now: u64,
     ) -> Result<(), AgentCreationError> {
@@ -741,17 +909,28 @@ impl CreationJourney {
                 ActivityType::from_u32(*value).map_err(|_| AgentCreationError::InvalidPresetConfig)
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let evidence = agent.provision_session(SessionProvision {
-            action_key,
-            did: self.did()?,
-            activity_types,
-            daemon_scopes: self.record.preset.session_scopes.clone(),
-            expires_at: self
-                .record
-                .started_at
-                .checked_add(self.record.preset.session_lifetime_seconds)
-                .ok_or(AgentCreationError::InvalidPresetConfig)?,
-        })?;
+        let evidence = agent.provision_session_scoped(
+            scope,
+            registry,
+            SessionProvision {
+                action_key,
+                did: self.did()?,
+                activity_types,
+                daemon_scopes: self.record.preset.session_scopes.clone(),
+                expires_at: self
+                    .record
+                    .started_at
+                    .checked_add(self.record.preset.session_lifetime_seconds)
+                    .ok_or(AgentCreationError::InvalidPresetConfig)?,
+                primary_authority: self
+                    .record
+                    .public_key
+                    .ok_or(AgentCreationError::CustodyRequired)?,
+                grantor: self.record.agent_id,
+                custody_key: KeyId::new(format!("agent-{}", short_hex(&self.record.agent_id)))?,
+                revocation_sequence: 1,
+            },
+        )?;
         self.accept_agent_evidence(scope, CreationStage::SessionProvision, &evidence, now)
     }
 
@@ -786,6 +965,10 @@ impl CreationJourney {
             rate_window_sequences: self.record.preset.rate_window_sequences,
             purposes: self.record.preset.purposes.iter().cloned().collect(),
             expiry_sequence: self.record.preset.expiry_sequence,
+            primary_authority: self
+                .record
+                .public_key
+                .ok_or(AgentCreationError::CustodyRequired)?,
         };
         let evidence = agent.narrow_capability(request)?;
         self.accept_agent_evidence(scope, stage, &evidence, now)
@@ -802,7 +985,9 @@ impl CreationJourney {
             || evidence.object_id == [0; 32]
             || evidence.observed_sequence == 0
             || evidence.verification_level < VerificationLevel::BATCH_INCLUDED
-            || evidence.receipt_digest != evidence.expected_digest(stage)
+            || (stage != CreationStage::SessionProvision
+                && evidence.receipt_digest != evidence.expected_digest(stage))
+            || evidence.receipt_digest == [0; 32]
         {
             return Err(AgentCreationError::EvidenceConflict);
         }
@@ -892,6 +1077,8 @@ impl CreationJourney {
             intent,
             compiled,
             disclosure,
+            custody_key: KeyId::new(format!("agent-{}", short_hex(&self.record.agent_id)))?,
+            started_at: self.record.started_at,
         })
     }
 
@@ -946,6 +1133,14 @@ fn validate_record(record: &JourneyRecord, expected: [u8; 32]) -> Result<(), Age
     if record.version != RECORD_VERSION
         || record.agent_id != expected
         || record.idempotency_key == [0; 32]
+        || record.name.is_empty()
+        || record.currency.is_empty()
+        || record.currency.len() > 32
+        || record.monthly_spend == 0
+        || record
+            .started_at
+            .checked_add(record.preset.session_lifetime_seconds)
+            .is_none()
         || record.did.is_empty()
         || record.stages.len() != CreationStage::ALL.len()
         || record

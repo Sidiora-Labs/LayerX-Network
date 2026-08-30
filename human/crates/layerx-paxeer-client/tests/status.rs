@@ -148,7 +148,7 @@ fn transfer(anvil: &Anvil) -> TransactionHash {
 
 fn wait_final(tracked: &mut FinalityTracker) {
     for _ in 0..200 {
-        if matches!(tracked.poll().stage, FinalityStage::Final { .. }) {
+        if matches!(tracked.poll().stage(), FinalityStage::Final { .. }) {
             return;
         }
         thread::sleep(Duration::from_millis(20));

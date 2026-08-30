@@ -5,12 +5,12 @@ import type {
   SecurityActionKind,
   StepUpEvidence,
   TimedSecret,
-} from "../../api";
+} from "../../api/index.ts";
 import {
   browserPasskeyAuthenticator,
   performStepUp,
   type PasskeyAuthenticator,
-} from "../../journeys/approvals";
+} from "../../journeys/approvals/ceremony.ts";
 
 const RECOVERY_STAGE_COPY_KEY = "onboarding.stage.putting-recovery-in-place";
 

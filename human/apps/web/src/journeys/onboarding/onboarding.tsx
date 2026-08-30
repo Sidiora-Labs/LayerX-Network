@@ -325,7 +325,13 @@ export function Onboarding({
     const challenge = await api.passkeyAssertBegin(request);
     const credential = await performAssertionCeremony(challenge.ceremony);
     const completed = await api.passkeyAssertFinish(challenge.assertion_id, { credential });
-    return api.sessionOpen({ assertion_id: completed.assertion_id });
+    return api.sessionOpen(
+      {
+        assertion_id: completed.assertion_id,
+        device: { label: "LayerX web app", platform: "web" },
+      },
+      `session-open:${completed.assertion_id}`,
+    );
   };
 
   const continueSetup = (phaseNow: Extract<Phase, { name: "passkey" }>): void => {

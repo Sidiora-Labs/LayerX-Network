@@ -4,7 +4,6 @@ mod support;
 use std::collections::BTreeMap;
 use std::fs;
 
-use ed25519_dalek::SigningKey;
 use layerx_agent_api::identity::{ActivityType, AgentDid, Asset, AuthorityRef, ExplicitSet};
 use layerx_agent_api::prepare::{
     CanonicalBytes, DisclosedAmount, Disclosure, IdempotencyRef, PreparationRef, Prepared,
@@ -18,7 +17,7 @@ use layerx_agentd::approval::{
     ApprovalOutcome, ApprovalService, ApprovalSubmissionQueue, DecisionKey, DecisionRequest,
 };
 use layerx_agentd::audit::{Coverage, Log};
-use layerx_agentd::budget::{reconcile, BudgetLimiter, LocalAccounting, ProtocolBudgetState};
+use layerx_agentd::budget::BudgetLimiter;
 use layerx_agentd::capability::CapabilityId;
 use layerx_agentd::events::EventIngestor;
 use layerx_agentd::policy::approval::{
@@ -91,7 +90,6 @@ struct AgentdBoundary<'a> {
     queue: &'a ApprovalSubmissionQueue,
     tenant: TenantId,
     released: BTreeMap<[u8; 32], [u8; 32]>,
-    local_budget: LocalAccounting,
 }
 
 impl ApprovalBoundary for AgentdBoundary<'_> {
@@ -130,26 +128,40 @@ impl ApprovalBoundary for AgentdBoundary<'_> {
 
     fn verified_budget_after(
         &mut self,
-        _hold: &AgentApprovalRecord,
+        hold: &AgentApprovalRecord,
         at_sequence: u64,
     ) -> Result<VerifiedBudgetAfter, ApprovalBoundaryError> {
-        let state = reconcile(
-            &mut self.local_budget,
-            ProtocolBudgetState {
-                evidence: support::raw_state_leaf(
-                    b"budget-state-schema-unavailable".to_vec(),
-                    at_sequence,
-                ),
-            },
-            &[],
-            &support::evidence_verifier(&SigningKey::from_bytes(&[0x84; 32])),
-        )
-        .map_err(|_| ApprovalBoundaryError::VerificationFailed)?;
+        let account = [0x41; 32];
+        let asset: [u8; 32] = Sha256::digest(hold.held_activity.asset.as_str().as_bytes()).into();
+        let mut canonical = Vec::with_capacity(80);
+        canonical.extend_from_slice(&account);
+        canonical.extend_from_slice(&asset);
+        canonical.extend_from_slice(&975_u128.to_be_bytes());
+        let authority =
+            support::evidence_verifier(&ed25519_dalek::SigningKey::from_bytes(&[0x84; 32]));
+        let state = authority
+            .verify_state(&support::raw_state_leaf(canonical, at_sequence))
+            .map_err(|_| ApprovalBoundaryError::VerificationFailed)?;
+        let canonical: [u8; 80] = state
+            .canonical_state()
+            .try_into()
+            .map_err(|_| ApprovalBoundaryError::Corrupt)?;
+        if state.level() != layerx_types::verify::VerificationLevel::STATE_PROVEN
+            || canonical[..32] != account
+            || canonical[32..64] != asset
+        {
+            return Err(ApprovalBoundaryError::VerificationFailed);
+        }
+        let remaining = u128::from_be_bytes(
+            canonical[64..]
+                .try_into()
+                .map_err(|_| ApprovalBoundaryError::Corrupt)?,
+        );
         let mut evidence = Sha256::new();
-        evidence.update(state.remaining().to_be_bytes());
+        evidence.update(canonical);
         evidence.update(state.observed_head_sequence().to_be_bytes());
         Ok(VerifiedBudgetAfter {
-            remaining: state.remaining(),
+            remaining,
             level: Level::StateProven,
             evidence_digest: evidence.finalize().into(),
             observed_at_sequence: state.observed_head_sequence(),
@@ -267,11 +279,6 @@ fn real_agent_holds_drive_live_inbox_counts_notifications_and_honest_lifecycle()
         queue: &queue,
         tenant: tenant(),
         released: BTreeMap::new(),
-        local_budget: LocalAccounting {
-            consumed: 0,
-            window_start_sequence: 1,
-            last_receipt: None,
-        },
     };
     let mut inbox = Inbox::new(10, 3).unwrap_or_else(|error| panic!("inbox: {error}"));
     inbox
@@ -300,9 +307,11 @@ fn real_agent_holds_drive_live_inbox_counts_notifications_and_honest_lifecycle()
     assert_eq!(pending.items()[0].remaining(12), 38);
     let deliveries = Dispatcher::deliveries(&scope)
         .unwrap_or_else(|error| panic!("notification deliveries: {error}"));
-    assert!(deliveries.iter().all(|delivery| delivery
-        .deep_link()
-        .contains(pending.items()[0].approval_id().as_str())));
+    assert!(deliveries.iter().all(|delivery| {
+        delivery
+            .deep_link()
+            .contains(pending.items()[0].approval_id().as_str())
+    }));
     assert!(deliveries
         .iter()
         .all(|delivery| delivery.payload().contains("agt_")));

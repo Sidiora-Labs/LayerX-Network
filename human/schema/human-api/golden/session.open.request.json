@@ -1,7 +1,14 @@
 {
   "method": "POST",
   "path": "/v1/sessions",
+  "headers": {
+    "Idempotency-Key": "session-open:asr_01j2h5p0yb2c4d6e8f0g2h4j6k"
+  },
   "body": {
-    "assertion_id": "asr_01j2h5p0yb2c4d6e8f0g2h4j6k"
+    "assertion_id": "asr_01j2h5p0yb2c4d6e8f0g2h4j6k",
+    "device": {
+      "label": "LayerX web app",
+      "platform": "web"
+    }
   }
 }

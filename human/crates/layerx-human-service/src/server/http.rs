@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Value};
+use sha2::{Digest as _, Sha256};
 use subtle::ConstantTimeEq;
 use zeroize::Zeroize;
 
@@ -164,48 +165,6 @@ impl<B: HumanApiComponents> Router<B> {
         {
             return error_response(&trace, ApiFailure::forbidden());
         }
-        let cookies = match parse_cookies(request.header("cookie")) {
-            Ok(cookies) => cookies,
-            Err(failure) => return error_response(&trace, failure),
-        };
-        let principal = if operation.is_public_bootstrap() {
-            if let Err(failure) = self.limits.admit(public_rate_key, unix_seconds()) {
-                return error_response(&trace, failure);
-            }
-            None
-        } else {
-            let credential_name = if operation.uses_refresh_cookie() {
-                REFRESH_COOKIE
-            } else {
-                ACCESS_COOKIE
-            };
-            let Some(access_token) = cookies.get(credential_name) else {
-                return error_response(&trace, ApiFailure::unauthenticated());
-            };
-            let csrf_cookie = cookies.get(CSRF_COOKIE).map(String::as_str);
-            if operation.mutates()
-                && !csrf_matches(csrf_cookie, request.header("x-layerx-csrf"))
-            {
-                return error_response(&trace, ApiFailure::forbidden());
-            }
-            let context = match self.backend.authorize(
-                operation,
-                SessionCredentials {
-                    access_token,
-                    csrf_token: csrf_cookie,
-                    intended_destination: &request.path,
-                    refresh: operation.uses_refresh_cookie(),
-                },
-                trace.as_str(),
-            ) {
-                Ok(context) => context,
-                Err(failure) => return error_response(&trace, failure),
-            };
-            if let Err(failure) = self.limits.admit(context.principal.as_str(), unix_seconds()) {
-                return error_response(&trace, failure);
-            }
-            Some(context)
-        };
         let idempotency_key = match idempotency_key(operation, request.header("idempotency-key")) {
             Ok(key) => key,
             Err(failure) => return error_response(&trace, failure),
@@ -225,10 +184,74 @@ impl<B: HumanApiComponents> Router<B> {
                 return error_response(&trace, ApiFailure::invalid_request(field));
             }
         };
-        let clear_session = should_clear_session(operation, principal.as_ref(), &matched.path_parameters);
+        let disclosure_digest = match json_digest(&body) {
+            Ok(digest) => digest,
+            Err(failure) => return error_response(&trace, failure),
+        };
+        let request_digest = match authorized_request_digest(
+            operation,
+            &request.path,
+            &matched.path_parameters,
+            &body,
+            idempotency_key.as_deref(),
+            trace.as_str(),
+        ) {
+            Ok(digest) => digest,
+            Err(failure) => return error_response(&trace, failure),
+        };
+        let cookies = match parse_cookies(request.header("cookie")) {
+            Ok(cookies) => cookies,
+            Err(failure) => return error_response(&trace, failure),
+        };
+        let principal = if operation.is_public_bootstrap() {
+            if let Err(failure) = self.limits.admit(public_rate_key, unix_seconds()) {
+                return error_response(&trace, failure);
+            }
+            None
+        } else {
+            let credential_name = if operation.uses_refresh_cookie() {
+                REFRESH_COOKIE
+            } else {
+                ACCESS_COOKIE
+            };
+            let Some(access_token) = cookies.get(credential_name) else {
+                return error_response(&trace, ApiFailure::unauthenticated());
+            };
+            let csrf_cookie = cookies.get(CSRF_COOKIE).map(String::as_str);
+            if operation.mutates() && !csrf_matches(csrf_cookie, request.header("x-layerx-csrf")) {
+                return error_response(&trace, ApiFailure::forbidden());
+            }
+            let context = match self.backend.authorize(
+                operation,
+                SessionCredentials {
+                    access_token,
+                    csrf_token: csrf_cookie,
+                    intended_destination: &request.path,
+                    refresh: operation.uses_refresh_cookie(),
+                    request_digest,
+                    disclosure_digest,
+                    path_parameters: &matched.path_parameters,
+                    body: &body,
+                    idempotency_key: idempotency_key.as_deref(),
+                },
+                trace.as_str(),
+            ) {
+                Ok(context) => context,
+                Err(failure) => return error_response(&trace, failure),
+            };
+            if let Err(failure) = self
+                .limits
+                .admit(context.principal.as_str(), unix_seconds())
+            {
+                return error_response(&trace, failure);
+            }
+            Some(context)
+        };
+        let clear_session =
+            should_clear_session(operation, principal.as_ref(), &matched.path_parameters);
         let response = self.backend.execute(ScopedRequest {
             operation,
-            principal: principal.as_ref(),
+            principal,
             path_parameters: matched.path_parameters,
             body,
             idempotency_key,
@@ -260,9 +283,9 @@ fn idempotency_key(
     let key = supplied
         .filter(|value| !value.is_empty() && value.len() <= 255)
         .filter(|value| {
-            value
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'))
+            value.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':')
+            })
         })
         .ok_or_else(|| ApiFailure::invalid_request(Some("Idempotency-Key")))?;
     Ok(Some(key.to_owned()))
@@ -302,8 +325,9 @@ fn should_clear_session(
 
 fn success_status(operation: &Operation) -> u16 {
     match operation.name.as_str() {
-        "account.create" | "agent.create" | "deposit.start" | "session.open"
-        | "support.create" => 201,
+        "account.create" | "agent.create" | "deposit.start" | "session.open" | "support.create" => {
+            201
+        }
         _ => 200,
     }
 }
@@ -327,6 +351,40 @@ fn unix_seconds() -> u64 {
         .map_or(0, |duration| duration.as_secs())
 }
 
+fn json_digest(value: &Value) -> Result<[u8; 32], ApiFailure> {
+    let encoded = serde_json::to_vec(value).map_err(|_| ApiFailure::invalid_request(None))?;
+    Ok(Sha256::digest(encoded).into())
+}
+
+fn authorized_request_digest(
+    operation: &Operation,
+    destination: &str,
+    path_parameters: &BTreeMap<String, String>,
+    body: &Value,
+    idempotency_key: Option<&str>,
+    trace: &str,
+) -> Result<[u8; 32], ApiFailure> {
+    let mut digest = Sha256::new();
+    digest.update(b"layerx-human/authorized-operation/v1\0");
+    digest_field(&mut digest, operation.name.as_bytes());
+    digest_field(&mut digest, operation.method.as_bytes());
+    digest_field(&mut digest, destination.as_bytes());
+    for (name, value) in path_parameters {
+        digest_field(&mut digest, name.as_bytes());
+        digest_field(&mut digest, value.as_bytes());
+    }
+    let body = serde_json::to_vec(body).map_err(|_| ApiFailure::invalid_request(None))?;
+    digest_field(&mut digest, &body);
+    digest_field(&mut digest, idempotency_key.unwrap_or_default().as_bytes());
+    digest_field(&mut digest, trace.as_bytes());
+    Ok(digest.finalize().into())
+}
+
+fn digest_field(digest: &mut Sha256, value: &[u8]) {
+    digest.update(u64::try_from(value.len()).unwrap_or(u64::MAX).to_be_bytes());
+    digest.update(value);
+}
+
 struct HttpRequest {
     method: String,
     path: String,
@@ -342,7 +400,9 @@ impl HttpRequest {
                 return Err(ApiFailure::invalid_request(None));
             }
             let mut block = [0_u8; 4096];
-            let read = stream.read(&mut block).map_err(|_| ApiFailure::invalid_request(None))?;
+            let read = stream
+                .read(&mut block)
+                .map_err(|_| ApiFailure::invalid_request(None))?;
             if read == 0 {
                 return Err(ApiFailure::invalid_request(None));
             }
@@ -357,7 +417,9 @@ impl HttpRequest {
         let header_text = std::str::from_utf8(&received[..header_end])
             .map_err(|_| ApiFailure::invalid_request(None))?;
         let mut lines = header_text[..header_text.len().saturating_sub(4)].split("\r\n");
-        let request_line = lines.next().ok_or_else(|| ApiFailure::invalid_request(None))?;
+        let request_line = lines
+            .next()
+            .ok_or_else(|| ApiFailure::invalid_request(None))?;
         let mut request_parts = request_line.split(' ');
         let method = request_parts.next().unwrap_or_default();
         let target = request_parts.next().unwrap_or_default();
@@ -386,7 +448,9 @@ impl HttpRequest {
             let value = value.trim();
             if name.is_empty()
                 || !name.bytes().all(header_name_byte)
-                || value.bytes().any(|byte| byte.is_ascii_control() && byte != b'\t')
+                || value
+                    .bytes()
+                    .any(|byte| byte.is_ascii_control() && byte != b'\t')
                 || headers.insert(name, value.to_owned()).is_some()
             {
                 return Err(ApiFailure::invalid_request(None));
@@ -562,7 +626,12 @@ fn success_response(
     result: Value,
     headers: Vec<(&'static str, String)>,
 ) -> HttpResponse {
-    response(status, trace, json!({ "ok": true, "result": result, "trace": trace.as_str() }), headers)
+    response(
+        status,
+        trace,
+        json!({ "ok": true, "result": result, "trace": trace.as_str() }),
+        headers,
+    )
 }
 
 fn error_response(trace: &TraceId, failure: ApiFailure) -> HttpResponse {
@@ -654,7 +723,11 @@ fn clear_session_headers() -> Vec<(&'static str, String)> {
                 "Set-Cookie",
                 format!(
                     "{name}=; Path=/; Max-Age=0; Secure; SameSite=Strict{}",
-                    if name == CSRF_COOKIE { "" } else { "; HttpOnly" }
+                    if name == CSRF_COOKIE {
+                        ""
+                    } else {
+                        "; HttpOnly"
+                    }
                 ),
             )
         })

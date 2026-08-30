@@ -97,6 +97,36 @@ pub struct DebitExpectation {
     pub recipient: EvmAddress,
 }
 
+impl DebitExpectation {
+    /// Constructs the exact debit claim only after rejecting every empty
+    /// consensus binding. This is the owner-side ingress used by bounded wire
+    /// decoders; callers cannot accidentally admit the less strict test
+    /// literal representation.
+    pub fn validated(
+        activity_id: [u8; 32],
+        network_id: u32,
+        withdrawal_id: [u8; 32],
+        account: [u8; 32],
+        withdrawals_account: [u8; 32],
+        asset_id: [u8; 32],
+        amount: u128,
+        recipient: EvmAddress,
+    ) -> Result<Self, DebitFault> {
+        let value = Self {
+            activity_id,
+            network_id,
+            withdrawal_id,
+            account,
+            withdrawals_account,
+            asset_id,
+            amount,
+            recipient,
+        };
+        validate_debit_expectation(&value)?;
+        Ok(value)
+    }
+}
+
 /// Exact reason canonical `LayerX` debit evidence was refused.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DebitFault {
@@ -228,6 +258,111 @@ pub struct CheckpointProof {
     pub leaf_index: u64,
     pub siblings: Vec<[u8; 32]>,
     pub attestations: Vec<WithdrawalAttestation>,
+}
+
+impl CheckpointProof {
+    /// Constructs structurally canonical checkpoint material at the wire
+    /// boundary. Debit-specific root and attestation-domain checks remain in
+    /// `WithdrawalBoundary`, where the verified debit and configured chain
+    /// domain are available.
+    pub fn validated(
+        checkpoint_hash: [u8; 32],
+        state_root: [u8; 32],
+        epoch: u64,
+        batch_number: u64,
+        data_availability_root: [u8; 32],
+        leaf_index: u64,
+        siblings: Vec<[u8; 32]>,
+        attestations: Vec<WithdrawalAttestation>,
+    ) -> Result<Self, ClaimRefusal> {
+        for (field, value) in [
+            ("checkpoint_hash", checkpoint_hash),
+            ("state_root", state_root),
+            ("data_availability_root", data_availability_root),
+        ] {
+            if value == [0; 32] {
+                return Err(ClaimRefusal::EmptyCheckpointField(field));
+            }
+        }
+        if epoch == 0 || batch_number == 0 {
+            return Err(ClaimRefusal::EmptyCheckpointField("epoch_or_batch"));
+        }
+        if siblings.len() > MAX_PROOF_DEPTH {
+            return Err(ClaimRefusal::ProofTooDeep {
+                depth: siblings.len(),
+            });
+        }
+        if siblings.len() < 64
+            && leaf_index
+                .checked_shr(u32::try_from(siblings.len()).unwrap_or(64))
+                .unwrap_or(0)
+                != 0
+        {
+            return Err(ClaimRefusal::LeafIndexOutOfRange {
+                leaf_index,
+                depth: siblings.len(),
+            });
+        }
+        if attestations.is_empty() {
+            return Err(ClaimRefusal::NoAttestations);
+        }
+        let mut previous = None;
+        for (index, attestation) in attestations.iter().enumerate() {
+            for (valid, field) in [
+                (attestation.protocol_version != 0, "protocol_version"),
+                (attestation.network_id != 0, "network_id"),
+                (attestation.paxeer_chain_id != 0, "paxeer_chain_id"),
+                (
+                    attestation.settlement_contract.bytes() != [0; 20],
+                    "settlement_contract",
+                ),
+                (attestation.epoch == epoch, "epoch"),
+                (
+                    attestation.checkpoint_id == checkpoint_hash,
+                    "checkpoint_id",
+                ),
+                (
+                    attestation.checkpoint_hash == checkpoint_hash,
+                    "checkpoint_hash",
+                ),
+                (attestation.guarantor_id != [0; 32], "guarantor_id"),
+                (attestation.batch_number == batch_number, "batch_number"),
+                (
+                    attestation.data_availability_root == data_availability_root,
+                    "data_availability_root",
+                ),
+                (attestation.replayed, "replayed"),
+                (attestation.data_available, "data_available"),
+                (
+                    attestation.availability_class_mask == ALL_AVAILABILITY_CLASSES,
+                    "availability_class_mask",
+                ),
+                (attestation.attested_at != 0, "attested_at"),
+                (attestation.signer.bytes() != [0; 20], "signer"),
+                (attestation.signature_r != [0; 32], "signature_r"),
+                (attestation.signature_s != [0; 32], "signature_s"),
+                (matches!(attestation.signature_v, 27 | 28), "signature_v"),
+            ] {
+                if !valid {
+                    return Err(ClaimRefusal::InvalidAttestation { index, field });
+                }
+            }
+            if previous.is_some_and(|prior| prior >= attestation.guarantor_id) {
+                return Err(ClaimRefusal::UnsortedGuarantors { index });
+            }
+            previous = Some(attestation.guarantor_id);
+        }
+        Ok(Self {
+            checkpoint_hash,
+            state_root,
+            epoch,
+            batch_number,
+            data_availability_root,
+            leaf_index,
+            siblings,
+            attestations,
+        })
+    }
 }
 
 /// Why a claim was refused before a wallet transaction could be requested.
@@ -538,8 +673,8 @@ impl WithdrawalBoundary {
             config.minimum_endpoint_agreement,
         )
         .map_err(WithdrawalConfigError::Agreement)?;
-        let client =
-            PaxeerClient::new(config.endpoints.clone()).map_err(WithdrawalConfigError::Endpoints)?;
+        let client = PaxeerClient::new(config.endpoints.clone())
+            .map_err(WithdrawalConfigError::Endpoints)?;
         Ok(Self {
             client,
             endpoints: config.endpoints,
@@ -1009,12 +1144,10 @@ impl WithdrawalBoundary {
         if tracked.execution == ExecutionOutcome::Reverted {
             return Err(WithdrawalError::Reverted { inclusion: tracked });
         }
-        let evidence = report.evidence().ok_or(WithdrawalError::MissingQuorumEvidence)?;
-        if evidence.binding()
-            != &self
-                .client
-                .quorum_binding(self.minimum_endpoint_agreement)
-        {
+        let evidence = report
+            .evidence()
+            .ok_or(WithdrawalError::MissingQuorumEvidence)?;
+        if evidence.binding() != &self.client.quorum_binding(self.minimum_endpoint_agreement) {
             return Err(WithdrawalError::EvidenceSourceMismatch);
         }
         let observed_inclusion = match evidence.transaction() {

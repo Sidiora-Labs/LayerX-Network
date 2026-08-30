@@ -167,7 +167,7 @@ fn wait_included(tracked: &mut FinalityTracker) -> FinalityReport {
         let report = tracked.poll();
         if !matches!(
             report.stage(),
-            FinalityStage::Pooled { .. } | FinalityStage::Missing { .. }
+            FinalityStage::Announced | FinalityStage::Pooled { .. } | FinalityStage::Missing { .. }
         ) {
             return report;
         }
@@ -373,10 +373,7 @@ fn displaced_transaction_requeues_and_reincludes_honestly() {
     let resent = anvil.transfer();
     assert_eq!(resent, transaction);
     let report = tracked.poll();
-    let FinalityStage::Displaced {
-        lost, requeued, ..
-    } = report.stage()
-    else {
+    let FinalityStage::Displaced { lost, requeued, .. } = report.stage() else {
         panic!("expected displaced, got {:?}", report.stage())
     };
     assert!(requeued);
@@ -496,7 +493,10 @@ fn endpoint_loss_reads_unreachable_with_last_known_stage() {
 
     let report = tracked.poll();
     assert!(matches!(report.signal(), ChainSignal::Unreachable { .. }));
-    assert!(matches!(report.endpoint(), EndpointSignal::Unreachable { .. }));
+    assert!(matches!(
+        report.endpoint(),
+        EndpointSignal::Unreachable { .. }
+    ));
     assert!(matches!(report.stage(), FinalityStage::Confirming { .. }));
     assert_eq!(report.progress(), progress(1, 5));
 }
@@ -674,7 +674,9 @@ fn declared_configuration_is_validated() {
     };
     assert!(matches!(
         FinalityTracker::new(no_endpoints, transaction).err(),
-        Some(TrackerConfigError::Endpoints(ClientConfigError::NoEndpoints))
+        Some(TrackerConfigError::Endpoints(
+            ClientConfigError::NoEndpoints
+        ))
     ));
 
     let zero_required = TrackerConfig {
@@ -819,7 +821,9 @@ fn response_bounds_and_ambiguous_framing_fail_closed() {
         b"HTTP/1.1 200 OK\r\nContent-Length: 2097153\r\nConnection: close\r\n\r\n".to_vec(),
     );
     assert!(matches!(
-        raw_call(&oversized, "eth_chainId", &[]).err().map(|failure| failure.fault),
+        raw_call(&oversized, "eth_chainId", &[])
+            .err()
+            .map(|failure| failure.fault),
         Some(EndpointFault::ResponseTooLarge)
     ));
 

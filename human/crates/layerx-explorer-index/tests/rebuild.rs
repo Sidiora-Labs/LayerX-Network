@@ -1,7 +1,7 @@
 use k256::ecdsa::{Signature, SigningKey};
-use layerx_crypto::secp256k1;
 use layerx_client::availability::{AvailabilityRecords, AvailabilityResult};
 use layerx_client::head::Head;
+use layerx_crypto::secp256k1;
 use layerx_explorer_index::verify::Verifier;
 use layerx_explorer_index::{IndexError, Indexer, IngestOutcome, QueryError};
 use layerx_proof::availability::{
@@ -16,9 +16,8 @@ use sha2::{Digest as _, Sha256};
 
 const HEADER_HEX: &str = "000117010f010001020000002a0300000000000000070400000000000000080500000000000000010600000000000000040700000020070707070707070707070707070707070707070707070707070707070707070708000000200808080808080808080808080808080808080808080808080808080808080808090000002091ed12e8565698680de301805638f596971c38d675d0258fd6827008587d2ccf0a00000020616323e29dec4e7e5b8ce8e23fd9c440d41e9a4b7aed8fa1912e739e9319066c0b000000203977f389195d255de7f536f64e62e68c99ca9e4fd9cb72e66041fd6cb80de3e10c0000002012e44fb808b082f72b3f7fecf45d9fb45d5c693bd8e98599c9ca53e2a9a48f0e0d000000202a6b085ba8513ee8878a31da25d7f2a059f197ed0637afe18def06f2a7b4841f0e00000000000003e80f000000200f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f";
 const AVAILABILITY_ROOT: [u8; 32] = [
-    0x12, 0xe4, 0x4f, 0xb8, 0x08, 0xb0, 0x82, 0xf7, 0x2b, 0x3f, 0x7f, 0xec, 0xf4, 0x5d,
-    0x9f, 0xb4, 0x5d, 0x5c, 0x69, 0x3b, 0xd8, 0xe9, 0x85, 0x99, 0xc9, 0xca, 0x53, 0xe2,
-    0xa9, 0xa4, 0x8f, 0x0e,
+    0x12, 0xe4, 0x4f, 0xb8, 0x08, 0xb0, 0x82, 0xf7, 0x2b, 0x3f, 0x7f, 0xec, 0xf4, 0x5d, 0x9f, 0xb4,
+    0x5d, 0x5c, 0x69, 0x3b, 0xd8, 0xe9, 0x85, 0x99, 0xc9, 0xca, 0x53, 0xe2, 0xa9, 0xa4, 0x8f, 0x0e,
 ];
 
 fn decode_hex(value: &str) -> Vec<u8> {
@@ -52,12 +51,7 @@ fn tagged(kind: u8, bytes: &[u8]) -> Vec<u8> {
     encoded
 }
 
-fn chunk_digest(
-    batch_number: u64,
-    index: u32,
-    class: AvailabilityClass,
-    bytes: &[u8],
-) -> [u8; 32] {
+fn chunk_digest(batch_number: u64, index: u32, class: AvailabilityClass, bytes: &[u8]) -> [u8; 32] {
     let length = u32::try_from(bytes.len())
         .unwrap_or_else(|error| panic!("fixture chunk too long: {error}"));
     let mut hasher = Sha256::new();
@@ -126,11 +120,8 @@ fn availability_result() -> AvailabilityResult {
             records.receipts[1].as_slice(),
         ])
         .unwrap_or_else(|error| panic!("receipt root failed: {error:?}")),
-        event: root(&[
-            records.events[0].as_slice(),
-            records.events[1].as_slice(),
-        ])
-        .unwrap_or_else(|error| panic!("event root failed: {error:?}")),
+        event: root(&[records.events[0].as_slice(), records.events[1].as_slice()])
+            .unwrap_or_else(|error| panic!("event root failed: {error:?}")),
         oracle: root(&[records.oracle_inputs[0].as_slice()])
             .unwrap_or_else(|error| panic!("oracle root failed: {error:?}")),
     };
@@ -182,7 +173,10 @@ fn attestation(
         .sign_prehash_recoverable(&digest)
         .unwrap_or_else(|error| panic!("fixture attestation signing failed: {error}"));
     let signer = secp256k1::evm_address(
-        signing_key.verifying_key().to_encoded_point(true).as_bytes(),
+        signing_key
+            .verifying_key()
+            .to_encoded_point(true)
+            .as_bytes(),
     )
     .unwrap_or_else(|error| panic!("fixture attestation signer failed: {error:?}"));
     Attestation::new(
@@ -425,5 +419,8 @@ fn availability_result_exposes_only_record_sets_that_reverify() {
         records,
         result.record_roots(),
     );
-    assert!(refused.is_err(), "altered receipt set must not become indexable");
+    assert!(
+        refused.is_err(),
+        "altered receipt set must not become indexable"
+    );
 }

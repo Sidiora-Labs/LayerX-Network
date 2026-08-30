@@ -2542,10 +2542,42 @@ impl<A: HumanAuthorityBoundary> HumanOperations for ProductionHumanOperations<A>
                     .receipt()
                     .protocol()
                     .ok_or(HumanOperationError::Refused)?;
+                let tenant =
+                    TenantId::new(peer.tenant.clone()).map_err(|_| HumanOperationError::Refused)?;
+                let served = {
+                    let mut store = self
+                        .store
+                        .lock()
+                        .map_err(|_| HumanOperationError::Unavailable)?;
+                    crate::receipt::store_verified_if_absent(
+                        &mut store,
+                        tenant,
+                        idempotency_key,
+                        receipt.canonical_bytes(),
+                        &authority,
+                    )
+                    .map_err(|error| match error {
+                        crate::receipt::ReceiptStoreError::Missing
+                        | crate::receipt::ReceiptStoreError::Store(_) => {
+                            HumanOperationError::Unavailable
+                        }
+                        _ => HumanOperationError::Refused,
+                    })?
+                };
+                if served.canonical_bytes != receipt.canonical_bytes()
+                    || served.metadata.idempotency_key != idempotency_key
+                    || served.metadata.activity_id != expected_activity_id
+                    || served.metadata.activity_id != protocol.activity_id()
+                    || served.metadata.global_sequence != protocol.global_sequence()
+                    || served.metadata.result.code.raw() != protocol.result_code()
+                    || served.metadata.verification_level < receipt.level()
+                {
+                    return Err(HumanOperationError::Refused);
+                }
                 self.last_verified_receipt = Some((
                     idempotency_key,
-                    protocol.result_code(),
-                    protocol.global_sequence(),
+                    served.metadata.result.code.raw(),
+                    served.metadata.global_sequence,
                 ));
                 out.u8(1);
                 out.bytes(receipt.canonical_bytes())?;
@@ -2554,6 +2586,7 @@ impl<A: HumanAuthorityBoundary> HumanOperations for ProductionHumanOperations<A>
                 out.fixed(&authority.previous_state_root());
                 out.fixed(&authority.resulting_state_root());
                 out.fixed(&authority.sequencer_public_key());
+                out.u8(served.metadata.verification_level.wire_rank());
             }
         }
         out.finish()

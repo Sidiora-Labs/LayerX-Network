@@ -17,7 +17,7 @@ import type {
   TimedSecret,
 } from "../src/api";
 import type { PasskeyAuthenticator } from "../src/journeys/approvals";
-import { securityStepUp } from "../src/settings/security";
+import { securityStepUp } from "../src/settings/security/model.ts";
 
 interface MockCredential {
   readonly id: string;
@@ -29,24 +29,10 @@ interface MockCredential {
   };
 }
 
-interface MockPasskeyAuthenticator extends PasskeyAuthenticator {
-  readonly mockCredential: MockCredential;
-}
-
-function createMockStepUpEvidence(action: SecurityActionKind, targetId?: string): StepUpEvidence {
-  const digest: OperationDigest = `${action}:${targetId ?? "none"}` as OperationDigest;
-  return {
-    challenge_id: `stepup-${action}-${Date.now()}` as StepUpChallengeId,
-    confirms: digest,
-    passkey_id: "mock-passkey-id" as PasskeyId,
-    completed_at: new Date().toISOString(),
-    expires_at: new Date(Date.now() + 300000).toISOString(),
-  };
-}
-
 function createMockClient(
   securityActionResponses: Map<SecurityActionKind, { confirms: OperationDigest }>,
 ): HumanApiClient {
+  let pendingDigest: OperationDigest | undefined;
   return {
     securityAction: async (request: { action: SecurityActionKind; target_id?: string }) => {
       const response = securityActionResponses.get(request.action);
@@ -54,6 +40,34 @@ function createMockClient(
         throw new Error(`Unexpected action: ${request.action}`);
       }
       return response;
+    },
+    stepupBegin: async (request: { confirms: OperationDigest }) => {
+      if (![...securityActionResponses.values()].some((response) => response.confirms === request.confirms)) {
+        throw new Error("Step-up digest was not issued by the security action");
+      }
+      pendingDigest = request.confirms;
+      return {
+        challenge_id: "mock-stepup-challenge" as StepUpChallengeId,
+        confirms: request.confirms,
+        ceremony: "mock-stepup-ceremony" as OpaqueCredential,
+        expires_at: new Date(Date.now() + 300000).toISOString(),
+      };
+    },
+    stepupFinish: async (challengeId: string, request: { credential: OpaqueCredential }) => {
+      if (
+        challengeId !== "mock-stepup-challenge"
+        || request.credential !== "mock-stepup-credential"
+        || pendingDigest === undefined
+      ) {
+        throw new Error("Step-up completion did not match the issued challenge");
+      }
+      return {
+        challenge_id: challengeId as StepUpChallengeId,
+        confirms: pendingDigest,
+        passkey_id: "mock-passkey-id" as PasskeyId,
+        completed_at: new Date().toISOString(),
+        expires_at: new Date(Date.now() + 300000).toISOString(),
+      };
     },
     securityPasskeyRegisterBegin: async (_request: { label: string; step_up: StepUpEvidence }) => {
       const challenge: PasskeyRegistrationChallenge = {
@@ -145,37 +159,11 @@ function createMockClient(
   } as unknown as HumanApiClient;
 }
 
-function createMockAuthenticator(): MockPasskeyAuthenticator {
-  return {
-    mockCredential: {
-      id: "mock-credential-id",
-      type: "public-key",
-      rawId: new ArrayBuffer(32),
-      response: {
-        clientDataJSON: new ArrayBuffer(128),
-        attestationObject: new ArrayBuffer(256),
-      },
-    },
-    beginAssertion: async (_challenge: unknown) => {
-      return {
-        credential_id: "mock-credential-id",
-        authenticator_data: new Uint8Array([0x01, 0x02, 0x03]),
-        client_data_json: new Uint8Array([0x04, 0x05, 0x06]),
-        signature: new Uint8Array([0x07, 0x08, 0x09]),
-      };
-    },
-    beginRegistration: async (_ceremony: unknown) => {
-      return {
-        id: "new-credential-id",
-        type: "public-key",
-        rawId: new ArrayBuffer(32),
-        response: {
-          clientDataJSON: new ArrayBuffer(128),
-          attestationObject: new ArrayBuffer(256),
-        },
-      };
-    },
-  } as unknown as MockPasskeyAuthenticator;
+function createMockAuthenticator(): PasskeyAuthenticator {
+  return async (ceremony) => {
+    assert.equal(ceremony, "mock-stepup-ceremony");
+    return "mock-stepup-credential" as OpaqueCredential;
+  };
 }
 
 test("add-passkey mutation requires step-up", async () => {

@@ -151,6 +151,67 @@ pub fn serve(
     })
 }
 
+/// Persists a newly observed proof-verified receipt exactly once, or validates
+/// that an existing durable receipt is the same observation without lowering
+/// any independently augmented finality level.
+///
+/// # Errors
+///
+/// Returns the underlying proof or store error for a first observation and
+/// `Corrupt` when an existing index conflicts with the verified ingress.
+pub fn store_verified_if_absent(
+    durable: &mut Store,
+    tenant: TenantId,
+    idempotency_key: [u8; 32],
+    receipt_bytes: &[u8],
+    authorised: &AuthorizedBatch,
+) -> Result<ServedReceipt, ReceiptStoreError> {
+    match serve(
+        durable,
+        tenant.clone(),
+        ReceiptLookupKey::Idempotency(idempotency_key),
+    ) {
+        Ok(existing) => {
+            let verified = verify_outcome(receipt_bytes, authorised)
+                .map_err(|failure| ReceiptStoreError::Verification(failure.check))?;
+            let protocol = verified
+                .receipt()
+                .protocol()
+                .ok_or(ReceiptStoreError::Corrupt)?;
+            if existing.canonical_bytes != verified.canonical_bytes()
+                || existing.metadata.activity_id != protocol.activity_id()
+                || existing.metadata.idempotency_key != idempotency_key
+                || existing.metadata.global_sequence != protocol.global_sequence()
+                || existing.metadata.result
+                    != classify(ResultCode::from_raw(protocol.result_code()))
+                || existing.metadata.verification_level < verified.level()
+            {
+                return Err(ReceiptStoreError::Corrupt);
+            }
+            Ok(existing)
+        }
+        Err(ReceiptStoreError::Missing) => {
+            let metadata = store(
+                durable,
+                tenant.clone(),
+                idempotency_key,
+                receipt_bytes,
+                authorised,
+            )?;
+            let served = serve(
+                durable,
+                tenant,
+                ReceiptLookupKey::Idempotency(idempotency_key),
+            )?;
+            if served.canonical_bytes != receipt_bytes || served.metadata != metadata {
+                return Err(ReceiptStoreError::Corrupt);
+            }
+            Ok(served)
+        }
+        Err(error) => Err(error),
+    }
+}
+
 pub(crate) fn raise_verification_level(
     durable: &mut Store,
     tenant: TenantId,

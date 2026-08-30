@@ -147,6 +147,49 @@ struct StepUpRecord {
 }
 
 impl Passkeys {
+    pub fn revalidate_step_up(
+        &self,
+        scope: &mut PrincipalScope<'_>,
+        evidence: &StepUpEvidence,
+        expected: OperationDigest,
+        now: u64,
+    ) -> Result<(), AuthError> {
+        let durable = self.load_step_up_evidence(scope, evidence.challenge_id(), now)?;
+        if durable != *evidence {
+            return Err(AuthError::StepUpMismatch);
+        }
+        Self::validate_step_up(scope, &durable, expected, now)
+    }
+    /// Resolves step-up evidence from the principal's authenticated durable
+    /// scope. Callers may supply only the opaque challenge identifier; the
+    /// evidence fields used for authorization always come from this record.
+    pub fn load_step_up_evidence(
+        &self,
+        scope: &mut PrincipalScope<'_>,
+        challenge_id: &str,
+        now: u64,
+    ) -> Result<StepUpEvidence, AuthError> {
+        if !valid_prefixed_id(challenge_id, "chg_") {
+            return Err(AuthError::InvalidInput("invalid step-up identifier"));
+        }
+        let key = row_key(STEP_UP_EVIDENCE_ROW_PREFIX, challenge_id)?;
+        let evidence = get_json::<StepUpEvidence>(scope, Table::Cache, &key)?
+            .ok_or(AuthError::StepUpMismatch)?;
+        if evidence.challenge_id != challenge_id
+            || evidence.completed_at > now
+            || evidence.expires_at <= evidence.completed_at
+            || evidence.expires_at.saturating_sub(evidence.completed_at)
+                > self.config.step_up_ttl_secs
+        {
+            return Err(AuthError::StepUpMismatch);
+        }
+        if now > evidence.expires_at {
+            scope.remove(Table::Cache, &key)?;
+            return Err(AuthError::StepUpExpired);
+        }
+        Ok(evidence)
+    }
+
     /// Starts a fresh passkey ceremony for one exact operation. A valid
     /// passkey-authenticated browser session and CSRF token are required to
     /// request the ceremony.
@@ -159,6 +202,51 @@ impl Passkeys {
         now: u64,
     ) -> Result<StepUpChallenge, AuthError> {
         Self::authorize_base_mutation(scope, access_token, csrf_token, now)?;
+        self.check_rate_limit(scope, RatePurpose::StepUp, now)?;
+        let passkeys = load_passkeys(scope)?;
+        if passkeys.is_empty() {
+            return Err(AuthError::NoPasskeys);
+        }
+        let credentials: Vec<PasskeyCredential> = passkeys
+            .iter()
+            .map(|(_, passkey)| passkey.credential.clone())
+            .collect();
+        let (challenge, state) = self
+            .webauthn
+            .start_authentication_with_creds_for_user(&user_handle(scope), &credentials);
+        let challenge_id = mint_identifier("chg_")?;
+        let expires_at = now.saturating_add(self.config.ceremony_ttl_secs);
+        put_json(
+            scope,
+            Table::Journeys,
+            row_key(STEP_UP_ROW_PREFIX, &challenge_id)?,
+            now,
+            &StepUpRecord {
+                state,
+                candidate_passkeys: passkeys
+                    .iter()
+                    .map(|(_, passkey)| passkey.record.passkey_id.clone())
+                    .collect(),
+                confirms,
+                expires_at,
+            },
+        )?;
+        Ok(StepUpChallenge {
+            challenge_id,
+            confirms,
+            ceremony: encode_opaque(&challenge)?,
+            expires_at,
+        })
+    }
+
+    /// Starts the ceremony after the privileged dispatcher has consumed an
+    /// affine authorization capability for `stepup.begin`.
+    pub fn begin_step_up_authorized(
+        &self,
+        scope: &mut PrincipalScope<'_>,
+        confirms: OperationDigest,
+        now: u64,
+    ) -> Result<StepUpChallenge, AuthError> {
         self.check_rate_limit(scope, RatePurpose::StepUp, now)?;
         let passkeys = load_passkeys(scope)?;
         if passkeys.is_empty() {
@@ -249,7 +337,7 @@ impl Passkeys {
     }
 
     pub(super) fn validate_step_up(
-        scope: &PrincipalScope<'_>,
+        scope: &mut PrincipalScope<'_>,
         evidence: &StepUpEvidence,
         expected: OperationDigest,
         now: u64,

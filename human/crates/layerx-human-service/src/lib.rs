@@ -1,10 +1,10 @@
 #![forbid(unsafe_code)]
 
-pub mod agents;
 pub mod activity;
-pub mod auth;
-pub mod audit;
+pub mod agents;
 pub mod approvals;
+pub mod audit;
+pub mod auth;
 pub mod binding;
 pub mod custody;
 pub mod health;
@@ -12,8 +12,8 @@ pub mod journeys;
 pub mod notify;
 pub mod onboarding;
 pub mod redaction;
-pub mod server;
 pub mod security;
+pub mod server;
 pub mod store;
 pub mod support;
 mod time;

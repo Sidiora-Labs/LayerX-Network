@@ -12,12 +12,12 @@ use layerx_types::account::AccountId;
 use layerx_types::amount::Amount;
 use layerx_types::ids::{AssetId, Did};
 use layerx_types::intent::{BudgetId, PeriodLength, PurposeHash, RolloverPolicy, TimestampSeconds};
-use layerx_types::payload::ModuleRegistry;
+use layerx_types::payload::{ModuleId, ModuleRegistry};
 use layerx_types::verify::VerificationLevel;
 use sha2::{Digest as _, Sha256};
 
 use crate::custody::{
-    AgentSessionContract, RevocationOutcome, SessionEntropySource, SessionKeyError,
+    AgentSessionContract, KeyId, RevocationOutcome, SessionEntropySource, SessionKeyError,
     SessionKeyProvisioner, SessionLease, SessionLeaseState,
 };
 use crate::store::PrincipalId;
@@ -35,8 +35,7 @@ pub const PROTOCOL_LIMIT_COPY_KEY: &str = "agent.limit.protocol-enforced";
 /// Copy-catalog key for a restriction enforced by this plane.
 pub const APP_LIMIT_COPY_KEY: &str = "agent.limit.app-enforced";
 /// Mandatory honest description carried beside every local restriction.
-pub const APP_LIMIT_EXPLANATION: &str =
-    "This limit is enforced by the app and agent service. Bypassing them bypasses it; it is not a protocol guarantee.";
+pub const APP_LIMIT_EXPLANATION: &str = "This limit is enforced by the app and agent service. Bypassing them bypasses it; it is not a protocol guarantee.";
 /// Plain consequence sentence named by [`PAUSE_CONSEQUENCE_COPY_KEY`].
 pub const PAUSE_CONSEQUENCE: &str =
     "The agent stops acting now. You can resume it later after its authority is restored.";
@@ -607,6 +606,9 @@ impl<B: AgentControlContract> AgentControls<B> {
             intent,
             compiled,
             disclosure,
+            custody_key: KeyId::new(format!("agent-{}", short_hex(&self.profile.agent_id)))
+                .map_err(|_| AgentControlError::InvalidProfile)?,
+            started_at: observed_at,
         })?;
         if evidence.action_key != action_key || evidence.activity_id != action_key {
             return Err(AgentControlError::EvidenceConflict);
@@ -616,12 +618,20 @@ impl<B: AgentControlContract> AgentControls<B> {
             .receipt()
             .protocol()
             .ok_or(AgentControlError::EvidenceConflict)?;
-        if protocol.activity_id() != action_key || protocol.operation() != 1 {
+        if protocol.activity_id() != action_key
+            || protocol.module_id() != ModuleId::Budget as u16
+            || protocol.operation() != 1
+        {
+            return Err(AgentControlError::EvidenceConflict);
+        }
+        if evidence.verification_level < VerificationLevel::CHECKPOINT_FINALISED
+            || evidence.verification_level < verified.level()
+        {
             return Err(AgentControlError::EvidenceConflict);
         }
         Ok(LimitChangeEvidence {
             digest: Sha256::digest(verified.canonical_bytes()).into(),
-            level: verified.level(),
+            level: evidence.verification_level,
             replacement_budget: Some(replacement),
         })
     }
@@ -778,4 +788,17 @@ impl From<VerificationFailure> for AgentControlError {
     fn from(value: VerificationFailure) -> Self {
         Self::Receipt(value)
     }
+}
+
+fn short_hex(bytes: &[u8; 32]) -> String {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    bytes[..8]
+        .iter()
+        .flat_map(|byte| {
+            [
+                DIGITS[(byte >> 4) as usize] as char,
+                DIGITS[(byte & 15) as usize] as char,
+            ]
+        })
+        .collect()
 }

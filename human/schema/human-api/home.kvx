@@ -19,12 +19,14 @@ required = ["balance:AccountBalance","agents:Agent[]","approvals:ApprovalSummary
 composition = "Every protocol fact retains the verification and evidence carried by its source operation. The summary is a bounded composition of the real balance, agent, approval and activity services, never a second cache or write model."
 
 [operation.account.balance]
+authorization_class = "read"
 method = "GET"
 path = "/v1/account/balance"
 request = "Empty"
 response = "AccountBalance"
 
 [operation.home.summary]
+authorization_class = "read"
 method = "GET"
 path = "/v1/home"
 request = "Empty"

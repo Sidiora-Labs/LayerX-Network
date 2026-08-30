@@ -427,6 +427,7 @@ pub fn finalize_control(
         tenant,
         agent_id,
         evidence,
+        ModuleId::Governance,
         6,
         &operation,
         |agent| {
@@ -469,6 +470,7 @@ pub fn finalize_limit(
         tenant,
         agent_id,
         evidence,
+        ModuleId::Budget,
         1,
         &body,
         |agent| {
@@ -558,7 +560,12 @@ pub fn finalize_journey(
         agent_id,
         evidence,
         match kind {
-            0 => 3,
+            0 => ModuleId::Budget,
+            1 | 2 => ModuleId::Governance,
+            _ => return Err(HumanOperationError::Refused),
+        },
+        match kind {
+            0 => 7,
             1 | 2 => 2,
             _ => return Err(HumanOperationError::Refused),
         },
@@ -621,6 +628,7 @@ pub fn finalize_archive(
         tenant,
         agent_id,
         evidence,
+        ModuleId::Governance,
         6,
         &body,
         |agent| {
@@ -791,6 +799,7 @@ fn finalize_agent<F, R>(
     tenant: &TenantId,
     agent_id: &str,
     evidence: FinalizationEvidence,
+    expected_module: ModuleId,
     expected_operation: u8,
     operation: &[u8],
     mutate: F,
@@ -800,14 +809,7 @@ where
     F: FnOnce(&mut ManagedAgent) -> Result<(), HumanOperationError>,
     R: FnOnce(&ManagedAgent) -> Result<HumanResponse, HumanOperationError>,
 {
-    if evidence.action_key == [0; 32]
-        || evidence.activity_id != evidence.action_key
-        || evidence.receipt_digest == [0; 32]
-        || evidence.observed_sequence == 0
-        || evidence.verification < 4
-        || evidence.verification > 5
-        || evidence.finalized_at == 0
-    {
+    if !valid_finalization_shape(evidence) {
         return Err(HumanOperationError::Refused);
     }
     let aggregate_key = agent_key(tenant, agent_id)?;
@@ -836,9 +838,12 @@ where
         decode_receipt(&served.canonical_bytes).map_err(|_| HumanOperationError::Refused)?;
     let protocol = receipt.protocol().ok_or(HumanOperationError::Refused)?;
     let digest: [u8; 32] = Sha256::digest(&served.canonical_bytes).into();
-    if protocol.module_id() != ModuleId::Governance as u16
-        || protocol.operation() != expected_operation
-        || served.metadata.activity_id != evidence.activity_id
+    if !matches_finalized_operation(
+        protocol.module_id(),
+        protocol.operation(),
+        expected_module,
+        expected_operation,
+    ) || served.metadata.activity_id != evidence.activity_id
         || served.metadata.idempotency_key != evidence.action_key
         || served.metadata.global_sequence != evidence.observed_sequence
         || served.metadata.result.code.raw() != 0
@@ -870,6 +875,25 @@ where
         .update_local_with_companion(aggregate_key, encode(&agent)?, action_key, action)
         .map_err(|_| HumanOperationError::Unavailable)?;
     Ok(response)
+}
+
+fn valid_finalization_shape(evidence: FinalizationEvidence) -> bool {
+    evidence.action_key != [0; 32]
+        && evidence.activity_id == evidence.action_key
+        && evidence.receipt_digest != [0; 32]
+        && evidence.observed_sequence != 0
+        && evidence.verification >= VerificationLevel::CHECKPOINT_FINALISED.wire_rank()
+        && evidence.verification <= VerificationLevel::SETTLEMENT_ANCHORED.wire_rank()
+        && evidence.finalized_at != 0
+}
+
+fn matches_finalized_operation(
+    module: u16,
+    operation: u8,
+    expected_module: ModuleId,
+    expected_operation: u8,
+) -> bool {
+    module == expected_module as u16 && operation == expected_operation
 }
 
 fn action_record_key(
@@ -1419,4 +1443,55 @@ fn read_texts(i: &mut Input, max: usize) -> Result<Vec<String>, HumanOperationEr
         v.push(i.text()?)
     }
     Ok(v)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn evidence(verification: u8) -> FinalizationEvidence {
+        FinalizationEvidence {
+            action_key: [1; 32],
+            activity_id: [1; 32],
+            receipt_digest: [2; 32],
+            observed_sequence: 1,
+            verification,
+            finalized_at: 1,
+        }
+    }
+
+    #[test]
+    fn finalization_shape_requires_checkpoint_rank() {
+        assert!(!valid_finalization_shape(evidence(
+            VerificationLevel::STATE_PROVEN.wire_rank()
+        )));
+        assert!(valid_finalization_shape(evidence(
+            VerificationLevel::CHECKPOINT_FINALISED.wire_rank()
+        )));
+        assert!(valid_finalization_shape(evidence(
+            VerificationLevel::SETTLEMENT_ANCHORED.wire_rank()
+        )));
+    }
+
+    #[test]
+    fn lifecycle_module_and_operation_must_both_match() {
+        assert!(matches_finalized_operation(
+            ModuleId::Budget as u16,
+            1,
+            ModuleId::Budget,
+            1,
+        ));
+        assert!(!matches_finalized_operation(
+            ModuleId::Governance as u16,
+            1,
+            ModuleId::Budget,
+            1,
+        ));
+        assert!(!matches_finalized_operation(
+            ModuleId::Budget as u16,
+            7,
+            ModuleId::Budget,
+            1,
+        ));
+    }
 }

@@ -64,12 +64,14 @@ required = ["through_message_id:SupportMessageId"]
 required = ["message_id:SupportMessageId","helpful:boolean"]
 
 [operation.support.list]
+authorization_class = "read"
 method = "GET"
 path = "/v1/support/conversations"
 request = "Empty"
 response = "SupportConversationPage"
 
 [operation.support.create]
+authorization_class = "money-movement"
 method = "POST"
 path = "/v1/support/conversations"
 request = "SupportCreateRequest"
@@ -77,6 +79,7 @@ response = "SupportConversation"
 idempotency = true
 
 [operation.support.reply]
+authorization_class = "money-movement"
 method = "POST"
 path = "/v1/support/conversations/{conversation_id}/replies"
 request = "SupportReplyRequest"
@@ -84,18 +87,21 @@ response = "SupportConversation"
 idempotency = true
 
 [operation.support.read]
+authorization_class = "money-movement"
 method = "POST"
 path = "/v1/support/conversations/{conversation_id}/read"
 request = "SupportReadRequest"
 response = "SupportConversationStatus"
 
 [operation.support.status]
+authorization_class = "read"
 method = "GET"
 path = "/v1/support/conversations/{conversation_id}/status"
 request = "Empty"
 response = "SupportConversationStatus"
 
 [operation.support.feedback]
+authorization_class = "money-movement"
 method = "POST"
 path = "/v1/support/conversations/{conversation_id}/feedback"
 request = "SupportFeedbackRequest"

@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { copyEntry } from "../copy/catalog.ts";
+import { formatCopy } from "../copy/format.ts";
 import {
   Agents,
   agentListItems,
@@ -24,7 +26,7 @@ import {
   type Journey,
   type KeyChallenge,
   type Money,
-} from "../src/journeys/agents";
+} from "../src/journeys/agents/model.ts";
 
 const LOCALE = "en-GB";
 const CURRENCY = "LXP";
@@ -88,7 +90,7 @@ test("creation journey progress surfaces honest partial and complete states", ()
     stages: [
       {
         stage_id: "register-did",
-        copy_key: "agent.create.stage.register_did",
+        copy_key: "agent.create.stage.setting-up",
         state: "done",
         evidence: [
           {
@@ -100,7 +102,7 @@ test("creation journey progress surfaces honest partial and complete states", ()
       },
       {
         stage_id: "create-budget",
-        copy_key: "agent.create.stage.create_budget",
+        copy_key: "agent.create.stage.protection",
         state: "processing",
         evidence: [],
       },
@@ -127,7 +129,7 @@ test("creation journey complete requires all stages receipt-verified", () => {
     stages: [
       {
         stage_id: "register-did",
-        copy_key: "agent.create.stage.register_did",
+        copy_key: "agent.create.stage.setting-up",
         state: "done",
         evidence: [
           {
@@ -139,7 +141,7 @@ test("creation journey complete requires all stages receipt-verified", () => {
       },
       {
         stage_id: "create-budget",
-        copy_key: "agent.create.stage.create_budget",
+        copy_key: "agent.create.stage.protection",
         state: "done",
         evidence: [
           {
@@ -407,7 +409,10 @@ test("rotation and recovery present challenge delay in plain time", () => {
 
   const presentation = keyChallengePresentation(mockChallenge, LOCALE);
   assert.match(presentation.delayText, /day/iu);
-  assert.match(presentation.delaySentence, /rotation/iu);
+  assert.equal(
+    presentation.delaySentence,
+    formatCopy("agent.keys.rotate-delay", { delay: presentation.delayText }),
+  );
   assert.match(presentation.readySentence, /24 Aug 2026/u);
   assert.equal(presentation.bodyKey, "agent.keys.rotate.body");
 });
@@ -501,7 +506,7 @@ test("agent presentation suppresses unverified active state", () => {
   };
 
   const presentation = agentPresentation(unverifiedActiveAgent);
-  assert.match(presentation.label, /creating/iu);
+  assert.equal(presentation.label, copyEntry("agent.state.creating").message);
   assert.equal(presentation.tone, "accent");
   assert.equal(presentation.stateVerified, false);
 });
@@ -616,7 +621,7 @@ test("reclaim journey completion returns money from agent to human", async () =>
     stages: [
       {
         stage_id: "reclaim-transfer",
-        copy_key: "agent.reclaim.stage.transfer",
+        copy_key: "agent.reclaim.consequence",
         state: "done",
         evidence: [
           {

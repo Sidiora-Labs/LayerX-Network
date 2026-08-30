@@ -18,9 +18,7 @@ use layerx_agent_api::track::{
     TrackedSubmission,
 };
 use layerx_agent_api::verify::Level;
-use layerx_agentd::outbox::{
-    Outbox, OutboxError, ReceiptEvidence as OutboxReceipt, SubmissionState as OutboxState,
-};
+use layerx_agentd::outbox::{Outbox, OutboxError, SubmissionState as OutboxState};
 use layerx_agentd::prepare::{
     prepare_activity, CorePreparationBoundary, CorePreparationState, CoreStateError,
     PreparationDefaults, PrepareRequest, Prepared,
@@ -491,17 +489,23 @@ impl AgentBoundary for RealAgentLayer {
                 .receipt_material
                 .get(&key)
                 .ok_or(AgentBoundaryError::CorruptResponse)?;
-            let digest: [u8; 32] = Sha256::digest(&material.canonical_bytes).into();
+            let signer = SigningKey::from_bytes(&[key[0].saturating_add(4); 32]);
+            let raw = support::raw_receipt_evidence(
+                material.canonical_bytes.clone(),
+                material.authorised_batch.clone(),
+                u64::from(key[0]),
+                &signer,
+            );
+            let verified = support::evidence_verifier(&signer)
+                .verify_receipt(&raw)
+                .map_err(|_| AgentBoundaryError::CorruptResponse)?;
             self.outbox
                 .transition(
                     &mut self.store,
                     key,
                     OutboxState::Executed,
                     "verified receipt attached",
-                    Some(OutboxReceipt {
-                        receipt_ref: digest,
-                        verified: true,
-                    }),
+                    Some(verified),
                 )
                 .map_err(|_| AgentBoundaryError::Refused)?;
         }
@@ -573,7 +577,11 @@ fn receipt(activity_id: [u8; 32], marker: u8, activity: ActivityType) -> Receipt
         activity_id,
         previous_state_root: [marker.saturating_add(1); 32],
         resulting_state_root: [marker.saturating_add(2); 32],
-        batch_id: [marker.saturating_add(3); 32],
+        batch_id: support::execution_batch_id(
+            [marker.saturating_add(1); 32],
+            activity_id,
+            u64::from(marker),
+        ),
         asset: [0x33; 32],
         module: activity.module(),
         operation: u8::try_from(activity.ordinal())
@@ -595,6 +603,7 @@ fn receipt(activity_id: [u8; 32], marker: u8, activity: ActivityType) -> Receipt
             fields.resulting_state_root,
             signer.verifying_key().to_bytes(),
         ),
+        verification_level: layerx_types::verify::VerificationLevel::SEQUENCER_SIGNED,
     }
 }
 
@@ -749,6 +758,7 @@ impl Fixture {
         JourneyPlan::new(
             JourneyId::new("jrn_crashjourney")
                 .unwrap_or_else(|error| panic!("journey id: {error}")),
+            layerx_human_service::journeys::JourneyKind::Move,
             [0x31; 32],
             KeyId::new("human-primary").unwrap_or_else(|error| panic!("key: {error}")),
             Operation::ProtocolMutation,

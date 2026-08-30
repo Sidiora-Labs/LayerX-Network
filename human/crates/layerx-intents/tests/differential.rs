@@ -1,18 +1,19 @@
+use layerx_crypto::session::{issue_session_key, SessionKeyRequest};
 use layerx_intents::{
     compile, golden, BridgeDepositCredit, BridgeWithdrawRequest, BudgetCreate, BudgetDefund,
     BudgetFund, DidRegistration, DisclosureCheck, DisclosureCheckError, DisclosureField,
     EvmPayoutBinding, Intent, IntentKind, IntentVersion, KeyRotation, LxpReceive, LxpSend,
-    PayerGrantRegistration, RecoveryRegistration,
+    PayerGrantRegistration, RecoveryRegistration, SessionGrant, SessionRevoke,
 };
 use layerx_types::account::AccountId;
 use layerx_types::activity::{Signature, TimestampBound};
 use layerx_types::amount::Amount;
 use layerx_types::ids::{AssetId, CheckpointId, Did, IdempotencyKey};
 use layerx_types::intent::{
-    ApprovalThreshold, AuthorizationSignature, BudgetId, ContextHash, DepositProofId, EvmAddress,
-    GrantSchedule, NetworkId, PayerGrantId, PeriodLength, ProtocolVersion, PublicKey, PurposeHash,
-    RecoveryRoot, RolloverPolicy, SendAuthorization, SendAuthorizationKind, Sequence,
-    TimestampSeconds, WithdrawalId,
+    ApprovalThreshold, AuthorityGrantId, AuthorizationSignature, BudgetId, ContextHash,
+    DepositProofId, EvmAddress, GrantSchedule, NetworkId, PayerGrantId, PeriodLength,
+    ProtocolVersion, PublicKey, PurposeHash, RecoveryRoot, RolloverPolicy, SendAuthorization,
+    SendAuthorizationKind, Sequence, SessionRevocationReason, TimestampSeconds, WithdrawalId,
 };
 use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry};
 use proptest::prelude::*;
@@ -37,6 +38,8 @@ fn registry() -> ModuleRegistry {
                 activity(ModuleId::Governance, 2),
                 activity(ModuleId::Governance, 3),
                 activity(ModuleId::Governance, 4),
+                activity(ModuleId::Governance, 5),
+                activity(ModuleId::Governance, 6),
             ],
         )
         .unwrap_or_else(|error| panic!("governance: {error:?}")),
@@ -112,6 +115,17 @@ fn fixtures() -> Vec<Fixture> {
     let asset = || AssetId::new([2; 32]);
     let idempotency = || IdempotencyKey::new([3; 32]);
     let amount = || Amount::from_u128(25);
+    let issued_session = issue_session_key(&SessionKeyRequest {
+        grantor: [1; 32],
+        session_public_key: [2; 32],
+        not_before: 10,
+        expires_at: Some(1_000),
+        permitted_activity_types: (1..=6)
+            .map(|ordinal| activity(ModuleId::Governance, ordinal))
+            .collect(),
+        revocation_sequence: Some(3),
+    })
+    .unwrap_or_else(|error| panic!("session grant: {error:?}"));
     vec![
         Fixture {
             name: "did_registration",
@@ -158,6 +172,26 @@ fn fixtures() -> Vec<Fixture> {
                     Signature::new(&[5; 65]).unwrap_or_else(|error| panic!("signature: {error:?}")),
                 )
                 .unwrap_or_else(|error| panic!("payout binding: {error:?}")),
+            )),
+        },
+        Fixture {
+            name: "session_grant",
+            source: "v1 session_grant canonical_authority_grant=0x2001 grantor=01x32 session_public_key=02x32 module_mask=128 ordinal_min=1 ordinal_max=6 not_before=10 expires=1000 revocation_sequence=3",
+            intent: Intent::v1(IntentKind::SessionGrant(
+                SessionGrant::new(issued_session.registration_payload)
+                    .unwrap_or_else(|error| panic!("session intent: {error:?}")),
+            )),
+        },
+        Fixture {
+            name: "session_revoke",
+            source: "v1 session_revoke grant_id=03x32 reason=paused effective_sequence=9",
+            intent: Intent::v1(IntentKind::SessionRevoke(
+                SessionRevoke::new(
+                    AuthorityGrantId::new([3; 32]),
+                    SessionRevocationReason::Paused,
+                    Sequence::from_u64(9),
+                )
+                .unwrap_or_else(|error| panic!("session revoke: {error:?}")),
             )),
         },
         Fixture {

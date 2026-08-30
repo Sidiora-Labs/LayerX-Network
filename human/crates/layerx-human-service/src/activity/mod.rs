@@ -220,6 +220,8 @@ impl AgentActivity {
 pub struct ReceiptEvidence {
     reference: String,
     level: Level,
+    canonical: Option<Vec<u8>>,
+    authority: Option<layerx_proof::receipt::AuthorizedBatch>,
 }
 
 impl ReceiptEvidence {
@@ -231,6 +233,15 @@ impl ReceiptEvidence {
     #[must_use]
     pub const fn level(&self) -> Level {
         self.level
+    }
+
+    #[must_use]
+    pub fn canonical(&self) -> Option<&[u8]> {
+        self.canonical.as_deref()
+    }
+    #[must_use]
+    pub const fn authority(&self) -> Option<&layerx_proof::receipt::AuthorizedBatch> {
+        self.authority.as_ref()
     }
 }
 
@@ -512,6 +523,32 @@ impl Feed {
         }
     }
 
+    /// Loads one current entry from the authenticated principal projection.
+    ///
+    /// # Errors
+    ///
+    /// Refuses corrupt durable projection state.
+    pub fn entry(
+        self,
+        scope: &PrincipalScope<'_>,
+        entry_id: &ActivityEntryId,
+    ) -> Result<Option<ActivityEntry>, FeedError> {
+        let state = load_state(scope)?;
+        let current = state
+            .revisions
+            .iter()
+            .filter(|revision| revision.entry_id == entry_id.as_str())
+            .max_by_key(|revision| revision.revision);
+        current.map(activity_entry).transpose()
+    }
+
+    /// Returns the last agent cursor durably consumed by this projection.
+    /// This is the only source head against which a local feed page can claim
+    /// currency without consulting a newer agent-layer read.
+    pub fn projected_agent_head(self, scope: &PrincipalScope<'_>) -> Result<u64, FeedError> {
+        Ok(load_state(scope)?.last_agent_cursor.unwrap_or(0))
+    }
+
     /// Applies a draft atomically. Until this call, changes to the draft have
     /// no effect on page requests.
     ///
@@ -584,6 +621,8 @@ impl Feed {
                     vec![StoredReceipt {
                         reference: receipt_ref.as_str().to_owned(),
                         level: level_code(*verification_level),
+                        canonical: None,
+                        authority: None,
                     }],
                 )
             }
@@ -649,10 +688,15 @@ impl Feed {
         let receipts: Vec<StoredReceipt> = status
             .receipt_digests()
             .iter()
-            .flatten()
-            .map(|digest| StoredReceipt {
-                reference: hex(digest),
-                level: level_code(Level::SequencerSigned),
+            .zip(status.receipt_material())
+            .zip(status.receipt_authorities())
+            .filter_map(|((digest, material), authority)| {
+                digest.map(|digest| StoredReceipt {
+                    reference: hex(&digest),
+                    level: level_code(Level::SequencerSigned),
+                    canonical: material.clone(),
+                    authority: authority.as_ref().map(StoredReceiptAuthority::from_public),
+                })
             })
             .collect();
         let activity_status = journey_status(kind, status, refusal)?;
@@ -721,6 +765,8 @@ impl Feed {
                         receipts.push(StoredReceipt {
                             reference: receipt_ref.as_str().to_owned(),
                             level: level_code(tracking.verification_level),
+                            canonical: None,
+                            authority: None,
                         });
                         if tracking.verification_level >= Level::CheckpointFinalised {
                             ActivityStatus::DoneFinalised
@@ -934,6 +980,29 @@ struct StoredRevision {
 struct StoredReceipt {
     reference: String,
     level: u8,
+    #[serde(default)]
+    canonical: Option<Vec<u8>>,
+    #[serde(default)]
+    authority: Option<StoredReceiptAuthority>,
+}
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct StoredReceiptAuthority {
+    batch_id: [u8; 32],
+    asset: [u8; 32],
+    previous_state_root: [u8; 32],
+    resulting_state_root: [u8; 32],
+    sequencer_public_key: [u8; 32],
+}
+impl StoredReceiptAuthority {
+    fn from_public(value: &layerx_proof::receipt::AuthorizedBatch) -> Self {
+        Self {
+            batch_id: value.batch_id(),
+            asset: value.asset(),
+            previous_state_root: value.previous_state_root(),
+            resulting_state_root: value.resulting_state_root(),
+            sequencer_public_key: value.sequencer_public_key(),
+        }
+    }
 }
 
 struct Candidate {
@@ -1084,6 +1153,16 @@ fn activity_entry(revision: &StoredRevision) -> Result<ActivityEntry, FeedError>
             Ok(ReceiptEvidence {
                 reference: receipt.reference.clone(),
                 level: level(receipt.level).ok_or(FeedError::CorruptState)?,
+                canonical: receipt.canonical.clone(),
+                authority: receipt.authority.as_ref().map(|value| {
+                    layerx_proof::receipt::AuthorizedBatch::new(
+                        value.batch_id,
+                        value.asset,
+                        value.previous_state_root,
+                        value.resulting_state_root,
+                        value.sequencer_public_key,
+                    )
+                }),
             })
         })
         .collect::<Result<_, FeedError>>()?;

@@ -1,5 +1,5 @@
 use std::fmt::{Debug, Formatter};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use layerx_crypto::disclosure::Disclosure;
 use layerx_types::payload::ModuleRegistry;
@@ -32,6 +32,22 @@ pub enum Operation {
 }
 
 impl Operation {
+    /// Reconstructs the closed operation vocabulary used on privileged wires.
+    #[must_use]
+    pub fn from_label(value: &str) -> Option<Self> {
+        match value {
+            "protocol-mutation" => Some(Self::ProtocolMutation),
+            "approval-decision" => Some(Self::ApprovalDecision),
+            "security-settings" => Some(Self::SecuritySettings),
+            "secret-reveal" => Some(Self::SecretReveal),
+            "withdrawal" => Some(Self::Withdrawal),
+            "emergency-exit" => Some(Self::EmergencyExit),
+            "wallet-rebinding" => Some(Self::WalletRebinding),
+            "agent-archive" => Some(Self::AgentArchive),
+            _ => None,
+        }
+    }
+
     /// Returns the stable audit label for this operation class.
     #[must_use]
     pub const fn label(self) -> &'static str {
@@ -268,12 +284,71 @@ impl Debug for SignatureGrant {
 /// contract and the principal store's durable rate and audit records.
 pub struct CustodySigner {
     keystore: Keystore,
-    store: Mutex<PrincipalStore>,
+    store: Arc<Mutex<PrincipalStore>>,
     registry: ModuleRegistry,
     limits: SigningLimits,
 }
 
 impl CustodySigner {
+    pub(crate) const fn creation_keystore(&self) -> &Keystore {
+        &self.keystore
+    }
+
+    pub(crate) const fn creation_registry(&self) -> &ModuleRegistry {
+        &self.registry
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn bind_authenticated_step_up(
+        &self,
+        passkeys: &crate::auth::Passkeys,
+        scope: &mut crate::store::PrincipalScope<'_>,
+        authenticated: &crate::auth::StepUpEvidence,
+        expected_auth_operation: crate::auth::OperationDigest,
+        operation: Operation,
+        prepared_disclosure_digest: [u8; 32],
+        capability_request_digest: [u8; 32],
+        now: u64,
+    ) -> Result<StepUpEvidence, CustodyError> {
+        if prepared_disclosure_digest == [0; 32] || capability_request_digest == [0; 32] {
+            return Err(CustodyError::InvalidEvidence);
+        }
+        passkeys
+            .revalidate_step_up(scope, authenticated, expected_auth_operation, now)
+            .map_err(|_| CustodyError::InvalidEvidence)?;
+        let mut digest = sha2::Sha256::new();
+        use sha2::Digest as _;
+        digest.update(b"layerx-human/auth-to-custody-step-up/v1\0");
+        digest.update(scope.principal().as_str().as_bytes());
+        digest.update(authenticated.challenge_id().as_bytes());
+        digest.update(operation.label().as_bytes());
+        digest.update(expected_auth_operation.bytes());
+        digest.update(capability_request_digest);
+        digest.update(prepared_disclosure_digest);
+        let evidence_id = format!("cse_{}", hex(digest.finalize().into()));
+        StepUpEvidence::new(
+            evidence_id,
+            operation,
+            prepared_disclosure_digest,
+            authenticated.completed_at(),
+            authenticated.expires_at(),
+        )
+    }
+    pub fn resume_onboarding_local(
+        &self,
+        journey: &mut crate::onboarding::OnboardingJourney,
+        scope: &mut crate::store::PrincipalScope<'_>,
+        now: u64,
+    ) -> Result<crate::onboarding::OnboardingStatus, crate::onboarding::OnboardingError> {
+        journey.resume_local(scope, &self.keystore, now)
+    }
+    /// Returns a redacted readiness projection without exposing provider or
+    /// key references.
+    #[must_use]
+    pub fn status(&self) -> super::CustodyStatus {
+        self.keystore.status()
+    }
+
     /// Binds one keystore, principal store, negotiated module registry and
     /// declared throughput policy into a custody signing service.
     #[must_use]
@@ -285,7 +360,26 @@ impl CustodySigner {
     ) -> Self {
         Self {
             keystore,
-            store: Mutex::new(store),
+            store: Arc::new(Mutex::new(store)),
+            registry,
+            limits,
+        }
+    }
+
+    /// Binds custody to the same principal store used by the production
+    /// authentication and human-component dispatcher. Sharing this handle is
+    /// required so authorization, signing rate state, audit decisions and
+    /// journey state are serialized through one durable store owner.
+    #[must_use]
+    pub fn new_shared(
+        keystore: Keystore,
+        store: Arc<Mutex<PrincipalStore>>,
+        registry: ModuleRegistry,
+        limits: SigningLimits,
+    ) -> Self {
+        Self {
+            keystore,
+            store,
             registry,
             limits,
         }

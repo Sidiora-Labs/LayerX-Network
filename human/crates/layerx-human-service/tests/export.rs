@@ -16,14 +16,14 @@ use layerx_human_service::audit::{
     verify_export as verify_audit_export, AuditChain, AuditEvent, SecurityChangeKind,
     StepUpEvidence,
 };
-use layerx_intents::vectors::{
-    batch_header, batch_header_signing_digest, receipt as receipt_vector, receipt_signing_digest,
-};
 use layerx_human_service::notify::ActivityEntryId;
 use layerx_human_service::store::{EvidenceRef, PrincipalScope, Table};
 use layerx_human_service::trace::TraceId;
-use layerx_proof::export::{InclusionFact, InclusionKind, OfflineExport, ReceiptFact};
+use layerx_intents::vectors::{
+    batch_header, batch_header_signing_digest, receipt as receipt_vector, receipt_signing_digest,
+};
 use layerx_proof::checkpoint::SettlementDomain;
+use layerx_proof::export::{InclusionFact, InclusionKind, OfflineExport, ReceiptFact};
 use layerx_proof::inclusion::SequencerAuthorization;
 use layerx_proof::merkle::{build_proof, encode_proof};
 use layerx_proof::receipt::{verify_outcome, AuthorizedBatch};

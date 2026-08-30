@@ -12,7 +12,7 @@ use std::time::Duration;
 use layerx_client::lni::framing::{read_frame, write_frame};
 use layerx_client::lni::transport::Limits;
 use rustix::net::sockopt::socket_peercred;
-use serde_json::Value;
+use rustix::net::{recv, RecvFlags};
 use zeroize::Zeroize;
 
 use crate::store::{AgentTenantId, PrincipalId};
@@ -22,12 +22,18 @@ use super::backend::{
     SessionCredentials,
 };
 use super::component_protocol::{
-    encode_authorized, encode_backend, encode_failure, encode_readiness, validate_execute,
-    ComponentRequest, WirePrincipal,
+    authorized_request_digest, encode_authorized, encode_backend, encode_failure, encode_readiness,
+    json_digest, parse_digest, validate_execute, ComponentRequest, WirePrincipal,
 };
 use super::schema::ApiSchema;
 
 const ACCEPT_POLL: Duration = Duration::from_millis(10);
+
+/// Bounded periodic recovery/retention work owned by a concrete component graph.
+pub trait ComponentMaintenance: Send + Sync + 'static {
+    fn maintain(&self, maximum_items: usize, now: u64) -> Result<usize, ApiFailure>;
+    fn set_maintenance_health(&self, healthy: bool);
+}
 
 /// Finite filesystem and worker policy for the privileged component boundary.
 #[derive(Clone, Debug)]
@@ -96,12 +102,46 @@ impl ComponentShutdown {
 /// Production server for the existing bounded human component protocol.
 pub struct HumanComponentServer {
     backend: Arc<dyn HumanApiComponents>,
+    maintenance: Option<MaintenanceRuntime>,
+}
+
+#[derive(Clone)]
+struct MaintenanceRuntime {
+    backend: Arc<dyn ComponentMaintenance>,
+    interval: Duration,
+    maximum_items: usize,
 }
 
 impl HumanComponentServer {
     #[must_use]
     pub fn new(backend: Arc<dyn HumanApiComponents>) -> Self {
-        Self { backend }
+        Self {
+            backend,
+            maintenance: None,
+        }
+    }
+
+    /// Creates a production server whose retention/recovery maintenance is
+    /// part of readiness and runs under a finite cadence and work bound.
+    pub fn new_maintained<B>(
+        backend: Arc<B>,
+        interval: Duration,
+        maximum_items: usize,
+    ) -> Result<Self, ComponentServerError>
+    where
+        B: HumanApiComponents + ComponentMaintenance,
+    {
+        if interval.is_zero() || maximum_items == 0 {
+            return Err(ComponentServerError::Configuration);
+        }
+        Ok(Self {
+            backend: Arc::clone(&backend) as Arc<dyn HumanApiComponents>,
+            maintenance: Some(MaintenanceRuntime {
+                backend,
+                interval,
+                maximum_items,
+            }),
+        })
     }
 
     /// Validates the embedded schema and filesystem authority before binding.
@@ -111,15 +151,15 @@ impl HumanComponentServer {
     ) -> Result<BoundHumanComponentServer, ComponentServerError> {
         configuration.validate()?;
         prepare_socket_path(&configuration.socket_path, configuration.allowed_uid)?;
-        let listener = UnixListener::bind(&configuration.socket_path)
-            .map_err(ComponentServerError::Io)?;
+        let listener =
+            UnixListener::bind(&configuration.socket_path).map_err(ComponentServerError::Io)?;
         fs::set_permissions(
             &configuration.socket_path,
             fs::Permissions::from_mode(0o600),
         )
         .map_err(ComponentServerError::Io)?;
-        let metadata = fs::symlink_metadata(&configuration.socket_path)
-            .map_err(ComponentServerError::Io)?;
+        let metadata =
+            fs::symlink_metadata(&configuration.socket_path).map_err(ComponentServerError::Io)?;
         if !metadata.file_type().is_socket()
             || metadata.uid() != configuration.allowed_uid
             || metadata.mode() & 0o777 != 0o600
@@ -144,6 +184,7 @@ impl HumanComponentServer {
             },
             configuration,
             shutdown: ComponentShutdown::default(),
+            maintenance: self.maintenance,
         })
     }
 }
@@ -155,6 +196,7 @@ pub struct BoundHumanComponentServer {
     socket: SocketGuard,
     configuration: ComponentServerConfig,
     shutdown: ComponentShutdown,
+    maintenance: Option<MaintenanceRuntime>,
 }
 
 impl BoundHumanComponentServer {
@@ -170,6 +212,36 @@ impl BoundHumanComponentServer {
 
     /// Runs a fixed worker pool and bounded admission queue until shutdown.
     pub fn run(self) -> Result<(), ComponentServerError> {
+        let maintenance_worker = if let Some(maintenance) = self.maintenance.clone() {
+            let now = epoch_seconds()?;
+            maintenance
+                .backend
+                .maintain(maintenance.maximum_items, now)
+                .map_err(|_| ComponentServerError::Protocol)?;
+            let shutdown = self.shutdown.clone();
+            Some(thread::spawn(move || {
+                while !shutdown.requested() {
+                    thread::sleep(maintenance.interval);
+                    if shutdown.requested() {
+                        break;
+                    }
+                    let Ok(now) = epoch_seconds() else {
+                        maintenance.backend.set_maintenance_health(false);
+                        break;
+                    };
+                    if maintenance
+                        .backend
+                        .maintain(maintenance.maximum_items, now)
+                        .is_err()
+                    {
+                        maintenance.backend.set_maintenance_health(false);
+                        break;
+                    }
+                }
+            }))
+        } else {
+            None
+        };
         let (sender, receiver) = mpsc::sync_channel(self.configuration.queue_capacity);
         let receiver = Arc::new(Mutex::new(receiver));
         let mut workers = Vec::with_capacity(self.configuration.worker_count);
@@ -196,8 +268,20 @@ impl BoundHumanComponentServer {
                 return Err(ComponentServerError::Worker);
             }
         }
+        if let Some(worker) = maintenance_worker {
+            if worker.join().is_err() {
+                return Err(ComponentServerError::Worker);
+            }
+        }
         accepted
     }
+}
+
+fn epoch_seconds() -> Result<u64, ComponentServerError> {
+    std::time::SystemTime::now()
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .map(|value| value.as_secs())
+        .map_err(|_| ComponentServerError::Protocol)
 }
 
 struct Dispatcher {
@@ -215,6 +299,11 @@ impl Dispatcher {
                 csrf_token,
                 intended_destination,
                 refresh,
+                request_digest,
+                disclosure_digest,
+                path_parameters,
+                body,
+                idempotency_key,
                 trace,
                 ..
             } => {
@@ -222,6 +311,21 @@ impl Dispatcher {
                     .schema
                     .operation(operation)
                     .ok_or_else(ApiFailure::not_found)?;
+                let request_digest = parse_digest(request_digest, "request_digest")?;
+                let disclosure_digest = parse_digest(disclosure_digest, "disclosure_digest")?;
+                if disclosure_digest != json_digest(body)?
+                    || request_digest
+                        != authorized_request_digest(
+                            operation,
+                            intended_destination,
+                            path_parameters,
+                            body,
+                            idempotency_key.as_deref(),
+                            trace,
+                        )?
+                {
+                    return Err(ApiFailure::unauthenticated());
+                }
                 let context = self.backend.authorize(
                     operation,
                     SessionCredentials {
@@ -229,6 +333,11 @@ impl Dispatcher {
                         csrf_token: csrf_token.as_deref(),
                         intended_destination,
                         refresh: *refresh,
+                        request_digest,
+                        disclosure_digest,
+                        path_parameters,
+                        body,
+                        idempotency_key: idempotency_key.as_deref(),
                     },
                     trace,
                 )?;
@@ -263,7 +372,7 @@ impl Dispatcher {
                     .map_err(|_| ApiFailure::invalid_request(Some("body")))?;
                 let response = self.backend.execute(ScopedRequest {
                     operation,
-                    principal: principal.as_ref(),
+                    principal,
                     path_parameters: std::mem::take(path_parameters),
                     body,
                     idempotency_key: idempotency_key.take(),
@@ -298,17 +407,31 @@ impl Dispatcher {
     }
 }
 
-fn principal_context(value: Option<&WirePrincipal>) -> Result<Option<PrincipalContext>, ApiFailure> {
+fn principal_context(
+    value: Option<&WirePrincipal>,
+) -> Result<Option<PrincipalContext>, ApiFailure> {
     value
         .map(|principal| {
-            Ok(PrincipalContext {
-                principal: PrincipalId::new(&principal.principal_id)
+            let context = PrincipalContext::authorized(
+                PrincipalId::new(&principal.principal_id)
                     .map_err(|_| ApiFailure::invalid_request(Some("principal_id")))?,
-                tenant: AgentTenantId::new(&principal.tenant_id)
+                AgentTenantId::new(&principal.tenant_id)
                     .map_err(|_| ApiFailure::invalid_request(Some("tenant_id")))?,
-                session_id: principal.session_id.clone(),
-                authorization: principal.authorization.clone(),
-            })
+                principal.session_id.clone(),
+                principal.capability.clone(),
+                parse_digest(&principal.request_digest, "request_digest")?,
+                parse_digest(&principal.disclosure_digest, "disclosure_digest")?,
+                principal.operation.clone(),
+                principal.destination.clone(),
+                principal.trace.clone(),
+                principal.issued_at,
+                principal.expires_at,
+            )?;
+            match (&principal.refresh_token, &principal.refresh_csrf) {
+                (Some(token), Some(csrf)) => context.with_refresh(token.clone(), csrf.clone()),
+                (None, None) => Ok(context),
+                _ => Err(ApiFailure::unauthenticated()),
+            }
         })
         .transpose()
 }
@@ -322,7 +445,8 @@ fn accept_loop(
     while !shutdown.requested() {
         match listener.accept() {
             Ok((stream, _)) => {
-                let peer = socket_peercred(&stream).map_err(ComponentServerError::Io)?;
+                let peer = socket_peercred(&stream)
+                    .map_err(|error| ComponentServerError::Io(error.into()))?;
                 if peer.uid.as_raw() != allowed_uid {
                     continue;
                 }
@@ -357,9 +481,7 @@ fn worker(
         };
         match received {
             Ok(mut stream) => {
-                if socket_peercred(&stream)
-                    .is_ok_and(|peer| peer.uid.as_raw() == allowed_uid)
-                {
+                if socket_peercred(&stream).is_ok_and(|peer| peer.uid.as_raw() == allowed_uid) {
                     let _ = serve_one(&mut stream, &dispatcher, limits);
                 }
             }
@@ -389,23 +511,16 @@ fn serve_one(
 }
 
 fn reject_buffered_second_frame(stream: &UnixStream) -> Result<(), ComponentServerError> {
-    stream
-        .set_nonblocking(true)
-        .map_err(ComponentServerError::Io)?;
     let mut extra = [0_u8; 1];
-    let result = match stream.peek(&mut extra) {
-        Ok(0) => Ok(()),
-        Ok(_) => Err(ComponentServerError::Protocol),
+    match recv(stream, &mut extra, RecvFlags::PEEK | RecvFlags::DONTWAIT).map_err(io::Error::from) {
+        Ok((0, _)) => Ok(()),
+        Ok((_, _)) => Err(ComponentServerError::Protocol),
         Err(error) if error.kind() == io::ErrorKind::WouldBlock => Ok(()),
         Err(error) if error.kind() == io::ErrorKind::Interrupted => {
             Err(ComponentServerError::Protocol)
         }
         Err(error) => Err(ComponentServerError::Io(error)),
-    };
-    stream
-        .set_nonblocking(false)
-        .map_err(ComponentServerError::Io)?;
-    result
+    }
 }
 
 fn prepare_socket_path(path: &Path, allowed_uid: u32) -> Result<(), ComponentServerError> {
@@ -482,3 +597,28 @@ impl std::fmt::Display for ComponentServerError {
 }
 
 impl std::error::Error for ComponentServerError {}
+
+#[cfg(test)]
+mod tests {
+    use std::io::{Read as _, Write as _};
+
+    use super::{reject_buffered_second_frame, ComponentServerError, UnixStream};
+
+    #[test]
+    fn second_frame_probe_is_nonblocking_and_does_not_consume_bytes() {
+        let (server, mut client) = UnixStream::pair().expect("socket pair");
+        reject_buffered_second_frame(&server).expect("empty socket");
+
+        client.write_all(&[0x7f]).expect("write extra byte");
+        assert!(matches!(
+            reject_buffered_second_frame(&server),
+            Err(ComponentServerError::Protocol)
+        ));
+
+        let mut retained = [0_u8; 1];
+        (&server)
+            .read_exact(&mut retained)
+            .expect("peek retained byte");
+        assert_eq!(retained, [0x7f]);
+    }
+}

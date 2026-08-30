@@ -576,6 +576,44 @@ impl RealDepositRuntime {
 }
 
 impl DepositRuntime for RealDepositRuntime {
+    fn verify_external_deposit(
+        &mut self,
+        request: &WalletCustodyRequest,
+        transaction: TransactionHash,
+    ) -> Result<TransactionHash, DepositBoundaryError> {
+        if request.wallet != parse_address(FUNDED)
+            || request.chain_id != PAXEER_CHAIN_ID
+            || request.vault != self.vault
+            || request.asset != AssetId::new(ASSET)
+            || request.amount != Amount::from_u128(AMOUNT)
+        {
+            return Err(DepositBoundaryError::ContractViolation);
+        }
+        let observed = self.anvil.call(
+            "eth_getTransactionByHash",
+            &[Json::Text(transaction.to_hex())],
+        );
+        let expected_input = calldata(
+            "0x8a9e532c",
+            &[ASSET, u128_word(AMOUNT), request.beneficiary],
+        );
+        let matches = observed
+            .member("from")
+            .and_then(Json::as_text)
+            .is_some_and(|value| value.eq_ignore_ascii_case(FUNDED))
+            && observed
+                .member("to")
+                .and_then(Json::as_text)
+                .is_some_and(|value| value.eq_ignore_ascii_case(&address_hex(self.vault)))
+            && observed
+                .member("input")
+                .and_then(Json::as_text)
+                .is_some_and(|value| value.eq_ignore_ascii_case(&expected_input));
+        matches
+            .then_some(transaction)
+            .ok_or(DepositBoundaryError::ContractViolation)
+    }
+
     fn submit_custody(
         &mut self,
         request: &WalletCustodyRequest,
@@ -688,6 +726,7 @@ impl RealCreditAgent {
                 [8; 32],
                 signer.verifying_key().to_bytes(),
             ),
+            verification_level: layerx_types::verify::VerificationLevel::SEQUENCER_SIGNED,
         })
     }
 
@@ -1142,9 +1181,7 @@ fn real_deposit_resumes_custody_then_fails_closed_without_a_proof_producer() {
         .unwrap_or_else(|error| panic!("final status: {error}"));
     assert!(matches!(
         final_status.stage(),
-        DepositStage::Failed(
-            layerx_human_service::journeys::DepositFailureKind::ProofUnavailable
-        )
+        DepositStage::Failed(layerx_human_service::journeys::DepositFailureKind::ProofUnavailable)
     ));
     let final_scope = store
         .principal(&fixture.principal)

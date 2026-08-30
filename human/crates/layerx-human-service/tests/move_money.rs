@@ -18,9 +18,7 @@ use layerx_agent_api::track::{
     TrackedSubmission,
 };
 use layerx_agent_api::verify::Level;
-use layerx_agentd::outbox::{
-    Outbox, OutboxError, ReceiptEvidence as OutboxReceipt, SubmissionState as OutboxState,
-};
+use layerx_agentd::outbox::{Outbox, OutboxError, SubmissionState as OutboxState};
 use layerx_agentd::prepare::{
     prepare_activity, CorePreparationBoundary, CorePreparationState, CoreStateError,
     PreparationDefaults, PrepareRequest, Prepared,
@@ -490,7 +488,16 @@ impl AgentBoundary for RealAgentLayer {
             .receipts
             .get(&key)
             .ok_or(AgentBoundaryError::CorruptResponse)?;
-        let digest: [u8; 32] = Sha256::digest(&material.canonical_bytes).into();
+        let signer = SigningKey::from_bytes(&[key[0].saturating_add(4); 32]);
+        let raw = support::raw_receipt_evidence(
+            material.canonical_bytes.clone(),
+            material.authorised_batch.clone(),
+            u64::from(key[0]),
+            &signer,
+        );
+        let verified = support::evidence_verifier(&signer)
+            .verify_receipt(&raw)
+            .map_err(|_| AgentBoundaryError::CorruptResponse)?;
         if self
             .outbox
             .status(key)
@@ -502,10 +509,7 @@ impl AgentBoundary for RealAgentLayer {
                     key,
                     OutboxState::Executed,
                     "verified receipt attached",
-                    Some(OutboxReceipt {
-                        receipt_ref: digest,
-                        verified: true,
-                    }),
+                    Some(verified),
                 )
                 .map_err(|_| AgentBoundaryError::Refused)?;
         }
@@ -559,9 +563,18 @@ impl AgentBoundary for RealAgentLayer {
 fn receipt(activity_id: [u8; 32], marker: u8, specification: ReceiptSpec) -> ReceiptMaterial {
     let previous = [marker.saturating_add(1); 32];
     let resulting = [marker.saturating_add(2); 32];
-    let batch = [marker.saturating_add(3); 32];
+    let sequence = u64::from(marker);
+    let batch = support::execution_batch_id(previous, activity_id, sequence);
     let signer = SigningKey::from_bytes(&[marker.saturating_add(4); 32]);
-    let unsigned = encode_receipt(activity_id, previous, resulting, batch, specification, None);
+    let unsigned = encode_receipt(
+        activity_id,
+        previous,
+        resulting,
+        batch,
+        sequence,
+        specification,
+        None,
+    );
     let mut digest = Sha256::new();
     digest.update(b"LXP/v1/receipt\0");
     digest.update(&unsigned);
@@ -572,6 +585,7 @@ fn receipt(activity_id: [u8; 32], marker: u8, specification: ReceiptSpec) -> Rec
             previous,
             resulting,
             batch,
+            sequence,
             specification,
             Some(signature.to_bytes()),
         ),
@@ -582,6 +596,7 @@ fn receipt(activity_id: [u8; 32], marker: u8, specification: ReceiptSpec) -> Rec
             resulting,
             signer.verifying_key().to_bytes(),
         ),
+        verification_level: layerx_types::verify::VerificationLevel::SEQUENCER_SIGNED,
     }
 }
 
@@ -590,6 +605,7 @@ fn encode_receipt(
     previous: [u8; 32],
     resulting: [u8; 32],
     batch: [u8; 32],
+    sequence: u64,
     specification: ReceiptSpec,
     signature: Option<[u8; 64]>,
 ) -> Vec<u8> {
@@ -598,7 +614,7 @@ fn encode_receipt(
     push_u16(&mut bytes, 0x5201);
     push_u16(&mut bytes, 1);
     push_bytes(&mut bytes, &activity_id);
-    push_u64(&mut bytes, u64::from(batch[0]));
+    push_u64(&mut bytes, sequence);
     push_bytes(&mut bytes, &previous);
     push_bytes(&mut bytes, &resulting);
     push_bytes(&mut bytes, &[0x81; 32]);

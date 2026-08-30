@@ -2963,6 +2963,28 @@ export function encodeSession(value: Session): JsonValue {
   return result;
 }
 
+export interface SessionDevice {
+  label: string;
+  platform: string;
+}
+
+export function decodeSessionDevice(value: JsonValue | undefined, at: string): SessionDevice {
+  const object = expectObject(value, at);
+  const result: SessionDevice = {
+    label: expectString(object["label"], at + ".label"),
+    platform: expectString(object["platform"], at + ".platform"),
+  };
+  return result;
+}
+
+export function encodeSessionDevice(value: SessionDevice): JsonValue {
+  const result: JsonObject = {
+    label: value.label,
+    platform: value.platform,
+  };
+  return result;
+}
+
 export interface SessionList {
   sessions: Session[];
 }
@@ -2984,6 +3006,7 @@ export function encodeSessionList(value: SessionList): JsonValue {
 
 export interface SessionOpenRequest {
   assertion_id: AssertionId;
+  device?: SessionDevice;
 }
 
 export function decodeSessionOpenRequest(value: JsonValue | undefined, at: string): SessionOpenRequest {
@@ -2991,6 +3014,9 @@ export function decodeSessionOpenRequest(value: JsonValue | undefined, at: strin
   const result: SessionOpenRequest = {
     assertion_id: expectString(object["assertion_id"], at + ".assertion_id"),
   };
+  if (object["device"] !== undefined) {
+    result.device = decodeSessionDevice(object["device"], at + ".device");
+  }
   return result;
 }
 
@@ -2998,6 +3024,9 @@ export function encodeSessionOpenRequest(value: SessionOpenRequest): JsonValue {
   const result: JsonObject = {
     assertion_id: value.assertion_id,
   };
+  if (value.device !== undefined) {
+    result["device"] = encodeSessionDevice(value.device);
+  }
   return result;
 }
 
@@ -3849,13 +3878,13 @@ export const operations: { readonly [name in OperationName]: OperationShape } = 
   "security.passkey.register.finish": { method: "POST", path: "/v1/security/passkeys/registrations/{registration_id}", pathParams: ["registration_id"], request: "SecurityPasskeyRegistrationFinish", response: "Passkey", idempotency: false, bodyless: false },
   "security.passkey.revoke": { method: "POST", path: "/v1/security/passkeys/{passkey_id}/revoke", pathParams: ["passkey_id"], request: "SecurityPasskeyRevocation", response: "PasskeyList", idempotency: false, bodyless: false },
   "security.recovery.reveal": { method: "POST", path: "/v1/security/recovery/evidence", pathParams: [], request: "SecurityRecoveryReveal", response: "TimedSecret", idempotency: false, bodyless: false },
-  "security.session.revoke": { method: "POST", path: "/v1/security/sessions/{session_id}/revoke", pathParams: ["session_id"], request: "SecuritySessionRevocation", response: "SessionRevocation", idempotency: false, bodyless: false },
-  "security.session.revoke-all": { method: "POST", path: "/v1/security/sessions/revoke-all", pathParams: [], request: "SecuritySessionRevocation", response: "SessionRevocation", idempotency: false, bodyless: false },
+  "security.session.revoke": { method: "POST", path: "/v1/security/sessions/{session_id}/revoke", pathParams: ["session_id"], request: "SecuritySessionRevocation", response: "SessionRevocation", idempotency: true, bodyless: false },
+  "security.session.revoke-all": { method: "POST", path: "/v1/security/sessions/revoke-all", pathParams: [], request: "SecuritySessionRevocation", response: "SessionRevocation", idempotency: true, bodyless: false },
   "session.list": { method: "GET", path: "/v1/sessions", pathParams: [], request: "Empty", response: "SessionList", idempotency: false, bodyless: true },
-  "session.open": { method: "POST", path: "/v1/sessions", pathParams: [], request: "SessionOpenRequest", response: "Session", idempotency: false, bodyless: false },
+  "session.open": { method: "POST", path: "/v1/sessions", pathParams: [], request: "SessionOpenRequest", response: "Session", idempotency: true, bodyless: false },
   "session.refresh": { method: "POST", path: "/v1/sessions/refresh", pathParams: [], request: "Empty", response: "Session", idempotency: false, bodyless: true },
-  "session.revoke": { method: "DELETE", path: "/v1/sessions/{session_id}", pathParams: ["session_id"], request: "Empty", response: "SessionRevocation", idempotency: false, bodyless: true },
-  "session.revoke-all": { method: "POST", path: "/v1/sessions/revoke-all", pathParams: [], request: "Empty", response: "SessionRevocation", idempotency: false, bodyless: true },
+  "session.revoke": { method: "DELETE", path: "/v1/sessions/{session_id}", pathParams: ["session_id"], request: "Empty", response: "SessionRevocation", idempotency: true, bodyless: true },
+  "session.revoke-all": { method: "POST", path: "/v1/sessions/revoke-all", pathParams: [], request: "Empty", response: "SessionRevocation", idempotency: true, bodyless: true },
   "stepup.begin": { method: "POST", path: "/v1/step-up", pathParams: [], request: "StepUpRequest", response: "StepUpChallenge", idempotency: false, bodyless: false },
   "stepup.finish": { method: "POST", path: "/v1/step-up/{challenge_id}", pathParams: ["challenge_id"], request: "StepUpFinish", response: "StepUpEvidence", idempotency: false, bodyless: false },
   "stream.next": { method: "GET", path: "/v1/stream/{cursor}", pathParams: ["cursor"], request: "Empty", response: "StreamPage", idempotency: false, bodyless: true },
@@ -3941,13 +3970,13 @@ export interface HumanApiClient {
   securityPasskeyRegisterFinish(registration_id: string, request: SecurityPasskeyRegistrationFinish): Promise<Passkey>;
   securityPasskeyRevoke(passkey_id: string, request: SecurityPasskeyRevocation): Promise<PasskeyList>;
   securityRecoveryReveal(request: SecurityRecoveryReveal): Promise<TimedSecret>;
-  securitySessionRevoke(session_id: string, request: SecuritySessionRevocation): Promise<SessionRevocation>;
-  securitySessionRevokeAll(request: SecuritySessionRevocation): Promise<SessionRevocation>;
+  securitySessionRevoke(session_id: string, request: SecuritySessionRevocation, idempotencyKey: string): Promise<SessionRevocation>;
+  securitySessionRevokeAll(request: SecuritySessionRevocation, idempotencyKey: string): Promise<SessionRevocation>;
   sessionList(): Promise<SessionList>;
-  sessionOpen(request: SessionOpenRequest): Promise<Session>;
+  sessionOpen(request: SessionOpenRequest, idempotencyKey: string): Promise<Session>;
   sessionRefresh(): Promise<Session>;
-  sessionRevoke(session_id: string): Promise<SessionRevocation>;
-  sessionRevokeAll(): Promise<SessionRevocation>;
+  sessionRevoke(session_id: string, idempotencyKey: string): Promise<SessionRevocation>;
+  sessionRevokeAll(idempotencyKey: string): Promise<SessionRevocation>;
   stepupBegin(request: StepUpRequest): Promise<StepUpChallenge>;
   stepupFinish(challenge_id: string, request: StepUpFinish): Promise<StepUpEvidence>;
   streamNext(cursor: string): Promise<StreamPage>;
@@ -4125,20 +4154,20 @@ export function createHumanApiClient(options: HumanApiClientOptions = {}): Human
       decodePasskeyList(await execute("POST", "/v1/security/passkeys/" + encodeURIComponent(passkey_id) + "/revoke", encodeSecurityPasskeyRevocation(request), undefined), "security.passkey.revoke result"),
     securityRecoveryReveal: async (request) =>
       decodeTimedSecret(await execute("POST", "/v1/security/recovery/evidence", encodeSecurityRecoveryReveal(request), undefined), "security.recovery.reveal result"),
-    securitySessionRevoke: async (session_id, request) =>
-      decodeSessionRevocation(await execute("POST", "/v1/security/sessions/" + encodeURIComponent(session_id) + "/revoke", encodeSecuritySessionRevocation(request), undefined), "security.session.revoke result"),
-    securitySessionRevokeAll: async (request) =>
-      decodeSessionRevocation(await execute("POST", "/v1/security/sessions/revoke-all", encodeSecuritySessionRevocation(request), undefined), "security.session.revoke-all result"),
+    securitySessionRevoke: async (session_id, request, idempotencyKey) =>
+      decodeSessionRevocation(await execute("POST", "/v1/security/sessions/" + encodeURIComponent(session_id) + "/revoke", encodeSecuritySessionRevocation(request), idempotencyKey), "security.session.revoke result"),
+    securitySessionRevokeAll: async (request, idempotencyKey) =>
+      decodeSessionRevocation(await execute("POST", "/v1/security/sessions/revoke-all", encodeSecuritySessionRevocation(request), idempotencyKey), "security.session.revoke-all result"),
     sessionList: async () =>
       decodeSessionList(await execute("GET", "/v1/sessions", undefined, undefined), "session.list result"),
-    sessionOpen: async (request) =>
-      decodeSession(await execute("POST", "/v1/sessions", encodeSessionOpenRequest(request), undefined), "session.open result"),
+    sessionOpen: async (request, idempotencyKey) =>
+      decodeSession(await execute("POST", "/v1/sessions", encodeSessionOpenRequest(request), idempotencyKey), "session.open result"),
     sessionRefresh: async () =>
       decodeSession(await execute("POST", "/v1/sessions/refresh", undefined, undefined), "session.refresh result"),
-    sessionRevoke: async (session_id) =>
-      decodeSessionRevocation(await execute("DELETE", "/v1/sessions/" + encodeURIComponent(session_id), undefined, undefined), "session.revoke result"),
-    sessionRevokeAll: async () =>
-      decodeSessionRevocation(await execute("POST", "/v1/sessions/revoke-all", undefined, undefined), "session.revoke-all result"),
+    sessionRevoke: async (session_id, idempotencyKey) =>
+      decodeSessionRevocation(await execute("DELETE", "/v1/sessions/" + encodeURIComponent(session_id), undefined, idempotencyKey), "session.revoke result"),
+    sessionRevokeAll: async (idempotencyKey) =>
+      decodeSessionRevocation(await execute("POST", "/v1/sessions/revoke-all", undefined, idempotencyKey), "session.revoke-all result"),
     stepupBegin: async (request) =>
       decodeStepUpChallenge(await execute("POST", "/v1/step-up", encodeStepUpRequest(request), undefined), "stepup.begin result"),
     stepupFinish: async (challenge_id, request) =>

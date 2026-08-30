@@ -58,7 +58,13 @@ impl MoveLegExecution {
         not_after: u64,
         fee_ceiling: u128,
     ) -> Result<Self, MoveJourneyError> {
-        if action_key == [0; 32] || not_after < not_before {
+        if action_key == [0; 32]
+            || not_after < not_before
+            || actor.as_str().len() > 512
+            || authority.as_str().len() > 512
+            || actor.as_str().chars().any(char::is_control)
+            || authority.as_str().chars().any(char::is_control)
+        {
             return Err(MoveJourneyError::InvalidPlan);
         }
         Ok(Self {
@@ -82,6 +88,42 @@ impl MoveLegExecution {
     #[must_use]
     pub const fn fee_ceiling(&self) -> u128 {
         self.fee_ceiling
+    }
+
+    /// Returns the validated fields used by the canonical provider wire codec.
+    #[must_use]
+    pub fn to_wire_parts(&self) -> ([u8; 32], &AgentDid, &AuthorityRef, u64, u64, u64, u128) {
+        (
+            self.action_key,
+            &self.actor,
+            &self.authority,
+            self.account_sequence,
+            self.not_before,
+            self.not_after,
+            self.fee_ceiling,
+        )
+    }
+
+    /// Reconstructs wire fields through the plan validator.
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_wire_parts(
+        action_key: [u8; 32],
+        actor: AgentDid,
+        authority: AuthorityRef,
+        account_sequence: u64,
+        not_before: u64,
+        not_after: u64,
+        fee_ceiling: u128,
+    ) -> Result<Self, MoveJourneyError> {
+        Self::new(
+            action_key,
+            actor,
+            authority,
+            account_sequence,
+            not_before,
+            not_after,
+            fee_ceiling,
+        )
     }
 }
 
@@ -155,6 +197,159 @@ pub struct MovePlan {
 }
 
 impl MovePlan {
+    /// Canonically encodes the complete immutable plan without debug or serde forms.
+    #[must_use]
+    pub fn canonical_encode(&self) -> Vec<u8> {
+        let mut out = vec![1];
+        wire_text(&mut out, self.journey_id.as_str());
+        out.extend(self.idempotency_key);
+        wire_text(&mut out, self.custody_key.as_str());
+        wire_text(&mut out, self.operation.label());
+        let route = self.request.canonical_encode();
+        out.extend((route.len() as u32).to_be_bytes());
+        out.extend(route);
+        out.extend((self.executions.len() as u16).to_be_bytes());
+        for execution in &self.executions {
+            let (k, a, r, s, b, e, f) = execution.to_wire_parts();
+            out.extend(k);
+            wire_text(&mut out, a.as_str());
+            wire_text(&mut out, r.as_str());
+            out.extend(s.to_be_bytes());
+            out.extend(b.to_be_bytes());
+            out.extend(e.to_be_bytes());
+            out.extend(f.to_be_bytes());
+        }
+        out.extend(self.quote.fee_estimate.to_be_bytes());
+        wire_text(&mut out, &self.quote.asset_label);
+        wire_text(&mut out, &self.quote.arrival_expectation);
+        out
+    }
+
+    /// Decodes bounded canonical bytes and reconstructs every owner through validators.
+    pub fn canonical_decode(bytes: &[u8]) -> Result<Self, MoveJourneyError> {
+        if bytes.is_empty() || bytes.len() > 1_048_576 {
+            return Err(MoveJourneyError::InvalidPlan);
+        }
+        let mut r = MoveWire::new(bytes);
+        if r.u8()? != 1 {
+            return Err(MoveJourneyError::InvalidPlan);
+        }
+        let journey_id = JourneyId::new(r.text(128)?).map_err(|_| MoveJourneyError::InvalidPlan)?;
+        let idempotency_key = r.array()?;
+        let custody_key = KeyId::new(r.text(128)?).map_err(|_| MoveJourneyError::InvalidPlan)?;
+        let operation = Operation::from_label(&r.text(64)?).ok_or(MoveJourneyError::InvalidPlan)?;
+        let route_len = r.u32()? as usize;
+        if route_len == 0 || route_len > 262_144 {
+            return Err(MoveJourneyError::InvalidPlan);
+        }
+        let request =
+            RouteRequest::canonical_decode(r.take(route_len)?).map_err(MoveJourneyError::Route)?;
+        let count = r.u16()? as usize;
+        if count == 0 || count > 64 {
+            return Err(MoveJourneyError::InvalidPlan);
+        }
+        let mut executions = Vec::with_capacity(count);
+        for _ in 0..count {
+            executions.push(MoveLegExecution::from_wire_parts(
+                r.array()?,
+                AgentDid::new(r.text(512)?).map_err(|_| MoveJourneyError::InvalidPlan)?,
+                AuthorityRef::new(r.text(512)?).map_err(|_| MoveJourneyError::InvalidPlan)?,
+                r.u64()?,
+                r.u64()?,
+                r.u64()?,
+                r.u128()?,
+            )?);
+        }
+        let fee_estimate = r.u128()?;
+        let asset_label = r.text(TEXT_LIMIT)?;
+        let arrival_expectation = r.text(TEXT_LIMIT)?;
+        if !r.done() {
+            return Err(MoveJourneyError::InvalidPlan);
+        }
+        let plan = Self::from_wire_parts(
+            journey_id,
+            idempotency_key,
+            custody_key,
+            operation,
+            request,
+            executions,
+            fee_estimate,
+            asset_label,
+            arrival_expectation,
+        )?;
+        if plan.canonical_encode() != bytes {
+            return Err(MoveJourneyError::InvalidPlan);
+        }
+        Ok(plan)
+    }
+    /// Returns every owner field needed for canonical wire encoding.
+    #[must_use]
+    pub fn to_wire_parts(
+        &self,
+    ) -> (
+        &JourneyId,
+        [u8; 32],
+        &KeyId,
+        Operation,
+        &RouteRequest,
+        &[MoveLegExecution],
+        u128,
+        &str,
+        &str,
+    ) {
+        (
+            &self.journey_id,
+            self.idempotency_key,
+            &self.custody_key,
+            self.operation,
+            &self.request,
+            &self.executions,
+            self.quote.fee_estimate,
+            &self.quote.asset_label,
+            &self.quote.arrival_expectation,
+        )
+    }
+
+    /// Reconstructs provider wire fields through route and plan validation.
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_wire_parts(
+        journey_id: JourneyId,
+        idempotency_key: [u8; 32],
+        custody_key: KeyId,
+        operation: Operation,
+        request: RouteRequest,
+        executions: Vec<MoveLegExecution>,
+        fee_estimate: u128,
+        asset_label: String,
+        arrival_expectation: String,
+    ) -> Result<Self, MoveJourneyError> {
+        Self::new(
+            journey_id,
+            idempotency_key,
+            custody_key,
+            operation,
+            request,
+            executions,
+            fee_estimate,
+            asset_label,
+            arrival_expectation,
+        )
+    }
+    /// Rebinds an unchanged reviewed route to the commit idempotency key.
+    /// This is restricted to the privileged server composition; all economic
+    /// fields and per-leg action keys remain exactly those returned by the
+    /// trusted movement planner.
+    pub(crate) fn with_idempotency_key(
+        mut self,
+        idempotency_key: [u8; 32],
+    ) -> Result<Self, MoveJourneyError> {
+        if idempotency_key == [0; 32] {
+            return Err(MoveJourneyError::InvalidPlan);
+        }
+        self.idempotency_key = idempotency_key;
+        Ok(self)
+    }
+
     /// Resolves the complete route and derives the review and aggregate fee ceiling.
     ///
     /// # Errors
@@ -250,6 +445,67 @@ impl MovePlan {
     #[must_use]
     pub const fn route(&self) -> &Route {
         &self.route
+    }
+}
+
+fn wire_text(out: &mut Vec<u8>, value: &str) {
+    out.extend((value.len() as u16).to_be_bytes());
+    out.extend(value.as_bytes())
+}
+struct MoveWire<'a> {
+    bytes: &'a [u8],
+    at: usize,
+}
+impl<'a> MoveWire<'a> {
+    fn new(bytes: &'a [u8]) -> Self {
+        Self { bytes, at: 0 }
+    }
+    fn take(&mut self, n: usize) -> Result<&'a [u8], MoveJourneyError> {
+        let end = self
+            .at
+            .checked_add(n)
+            .ok_or(MoveJourneyError::InvalidPlan)?;
+        let value = self
+            .bytes
+            .get(self.at..end)
+            .ok_or(MoveJourneyError::InvalidPlan)?;
+        self.at = end;
+        Ok(value)
+    }
+    fn array<const N: usize>(&mut self) -> Result<[u8; N], MoveJourneyError> {
+        self.take(N)?
+            .try_into()
+            .map_err(|_| MoveJourneyError::InvalidPlan)
+    }
+    fn u8(&mut self) -> Result<u8, MoveJourneyError> {
+        Ok(self.array::<1>()?[0])
+    }
+    fn u16(&mut self) -> Result<u16, MoveJourneyError> {
+        Ok(u16::from_be_bytes(self.array()?))
+    }
+    fn u32(&mut self) -> Result<u32, MoveJourneyError> {
+        Ok(u32::from_be_bytes(self.array()?))
+    }
+    fn u64(&mut self) -> Result<u64, MoveJourneyError> {
+        Ok(u64::from_be_bytes(self.array()?))
+    }
+    fn u128(&mut self) -> Result<u128, MoveJourneyError> {
+        Ok(u128::from_be_bytes(self.array()?))
+    }
+    fn text(&mut self, max: usize) -> Result<String, MoveJourneyError> {
+        let n = self.u16()? as usize;
+        if n == 0 || n > max {
+            return Err(MoveJourneyError::InvalidPlan);
+        }
+        let bytes = self.take(n)?;
+        let value = std::str::from_utf8(bytes).map_err(|_| MoveJourneyError::InvalidPlan)?;
+        if value.chars().any(char::is_control) {
+            return Err(MoveJourneyError::InvalidPlan);
+        }
+        Ok(value.to_owned())
+    }
+    fn done(&self) -> bool {
+        self.at == self.bytes.len()
     }
 }
 
@@ -680,6 +936,7 @@ fn engine_plan(plan: &MovePlan) -> Result<JourneyPlan, MoveJourneyError> {
         .collect::<Result<Vec<_>, _>>()?;
     Ok(JourneyPlan::new(
         plan.journey_id.clone(),
+        super::engine::JourneyKind::Move,
         plan.idempotency_key,
         plan.custody_key.clone(),
         plan.operation,

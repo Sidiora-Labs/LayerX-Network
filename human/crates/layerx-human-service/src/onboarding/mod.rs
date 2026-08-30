@@ -21,7 +21,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
 use crate::audit::{AuditChain, AuditError, AuditEvent, IdentityEvent};
-use crate::custody::{CustodyError, KeyClass, KeyId, Keystore};
+use crate::custody::{CustodyError, KeyClass, KeyId, Keystore, Operation as CustodyOperation};
+use crate::journeys::{JourneyEngine, JourneyKind, JourneyLeg, JourneyPlan};
+use crate::notify::JourneyId;
 use crate::store::{EvidenceRef, PrincipalScope, RowKey, StoreError, Table};
 use crate::trace::TraceId;
 
@@ -498,6 +500,64 @@ pub struct OnboardingJourney {
 }
 
 impl OnboardingJourney {
+    #[allow(clippy::too_many_arguments)]
+    pub fn start_durable_engine(
+        &self,
+        scope: &mut PrincipalScope<'_>,
+        registry: &ModuleRegistry,
+        actor: AgentDid,
+        authority: AuthorityRef,
+        account_sequence: u64,
+        not_before: u64,
+        not_after: u64,
+        fee_limit: u128,
+        now: u64,
+    ) -> Result<JourneyEngine, OnboardingError> {
+        let first_key = self.action_key(ProtocolStage::DidRegistration);
+        let second_key = self.action_key(ProtocolStage::RecoveryRegistration);
+        let legs = vec![
+            JourneyLeg::new(
+                self.intent(ProtocolStage::DidRegistration)?,
+                first_key,
+                actor.clone(),
+                authority.clone(),
+                account_sequence,
+                not_before,
+                not_after,
+                fee_limit,
+            )
+            .map_err(|_| OnboardingError::InvalidAgentContext)?,
+            JourneyLeg::new(
+                self.intent(ProtocolStage::RecoveryRegistration)?,
+                second_key,
+                actor,
+                authority,
+                account_sequence
+                    .checked_add(1)
+                    .ok_or(OnboardingError::InvalidAgentContext)?,
+                not_before,
+                not_after,
+                fee_limit,
+            )
+            .map_err(|_| OnboardingError::InvalidAgentContext)?,
+        ];
+        let journey_id = JourneyId::new(format!("jrn_{}", hex(&self.record.idempotency_key)))
+            .map_err(|_| OnboardingError::InvalidIdempotencyKey)?;
+        let plan = JourneyPlan::new(
+            journey_id,
+            JourneyKind::Onboarding,
+            self.record.idempotency_key,
+            primary_key_id()?,
+            CustodyOperation::ProtocolMutation,
+            legs,
+        )
+        .map_err(|_| OnboardingError::InvalidAgentContext)?;
+        JourneyEngine::start(scope, &plan, registry, now)
+            .map_err(|_| OnboardingError::InvalidAgentContext)
+    }
+    pub fn did(&self) -> Result<Did, OnboardingError> {
+        Did::new(&self.record.did).map_err(|_| OnboardingError::CorruptJourney("invalid DID"))
+    }
     /// Creates or returns the principal's one application identity journey.
     /// Repeating the same request converges; a conflicting request is refused.
     ///
@@ -900,6 +960,7 @@ impl OnboardingJourney {
         let disclosure = DisclosureCheck::verify(&intent, &compiled)?;
         let action_key = self.action_key(stage);
         let request = PrepareRequest {
+            protocol_activity_type: compiled.activity_type().value(),
             actor: AgentDid::new(stored.actor.clone())?,
             authority: AuthorityRef::new(stored.authority.clone())?,
             account_sequence: Sequence(stored.account_sequence),
@@ -1235,6 +1296,7 @@ fn ensure_identity_event(
 fn prepare_body_digest(request: &PrepareRequest) -> [u8; 32] {
     let mut digest = Sha256::new();
     digest.update(PREPARE_DIGEST_DOMAIN);
+    digest.update(request.protocol_activity_type.to_be_bytes());
     hash_text(&mut digest, request.actor.as_str());
     hash_text(&mut digest, request.authority.as_str());
     digest.update(request.account_sequence.get().to_be_bytes());
