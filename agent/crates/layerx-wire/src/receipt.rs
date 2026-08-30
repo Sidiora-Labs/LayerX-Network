@@ -863,7 +863,7 @@ pub fn decode_batch_header(bytes: &[u8]) -> Result<BatchHeader, WireError> {
         ));
     }
     let mut decoder = Decoder::new(bytes, 0);
-    decoder.structure_header(BATCH_TAG)?;
+    let envelope_version = decoder.structure_header_version(BATCH_TAG)?;
     if decoder.u8()? != BATCH_FIELDS {
         return Err(WireError::known(
             KnownResult::NonCanonical,
@@ -872,6 +872,9 @@ pub fn decode_batch_header(bytes: &[u8]) -> Result<BatchHeader, WireError> {
     }
     batch_field(&mut decoder, 1)?;
     let protocol_version = decoder.u16()?;
+    if protocol_version != envelope_version {
+        return Err(WireError::known(KnownResult::VersionUnsupported, 0));
+    }
     batch_field(&mut decoder, 2)?;
     let network_id = decoder.u32()?;
     batch_field(&mut decoder, 3)?;
@@ -927,7 +930,7 @@ pub fn decode_batch_header(bytes: &[u8]) -> Result<BatchHeader, WireError> {
 /// Returns typed codec errors and a fatal invariant if width diverges.
 pub fn encode_batch_header(header: &BatchHeader) -> Result<Vec<u8>, WireError> {
     let mut encoder = Encoder::new(BATCH_ENCODED_BYTES);
-    encoder.structure_header(BATCH_TAG)?;
+    encoder.structure_header_version(BATCH_TAG, header.protocol_version)?;
     encoder.u8(BATCH_FIELDS)?;
     macro_rules! field {
         ($id:expr, $value:expr) => {{

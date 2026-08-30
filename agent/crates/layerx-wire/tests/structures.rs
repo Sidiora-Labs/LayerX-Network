@@ -54,10 +54,23 @@ fn registry() -> ModuleRegistry {
 }
 
 fn batch_bytes() -> Vec<u8> {
+    batch_bytes_for_version(1)
+}
+
+fn batch_bytes_for_version(protocol_version: u16) -> Vec<u8> {
     let mut encoder = Encoder::new(354);
-    assert!(encoder.structure_header(0x1701).is_ok());
+    assert!(encoder
+        .structure_header_version(0x1701, protocol_version)
+        .is_ok());
     assert!(encoder.u8(15).is_ok());
-    for (field, scalar) in [(1, 1_u64), (2, 77), (3, 2), (4, 3), (5, 4), (6, 5)] {
+    for (field, scalar) in [
+        (1, u64::from(protocol_version)),
+        (2, 77),
+        (3, 2),
+        (4, 3),
+        (5, 4),
+        (6, 5),
+    ] {
         assert!(encoder.tag(field, 15).is_ok());
         if field == 1 {
             assert!(encoder
@@ -217,6 +230,29 @@ fn receipt_batch_proof_and_checkpoint_structures_round_trip() {
         panic!("checkpoint failed decode");
     };
     assert_eq!(encode_checkpoint(&checkpoint), Ok(checkpoint_bytes));
+}
+
+#[test]
+fn occupancy_batch_header_round_trips_with_its_envelope_version() {
+    let batch_bytes = batch_bytes_for_version(2);
+    let Ok(batch) = decode_batch_header(&batch_bytes) else {
+        panic!("occupancy batch failed decode");
+    };
+    assert_eq!(batch.protocol_version(), 2);
+    assert_eq!(encode_batch_header(&batch), Ok(batch_bytes));
+}
+
+#[test]
+fn batch_header_refuses_an_envelope_field_version_mismatch() {
+    let mut batch_bytes = batch_bytes_for_version(2);
+    batch_bytes[6..8].copy_from_slice(&1_u16.to_be_bytes());
+    assert_eq!(
+        decode_batch_header(&batch_bytes).map(|_| ()),
+        Err(layerx_wire::WireError {
+            result: KnownResult::VersionUnsupported.into(),
+            offset: 0,
+        })
+    );
 }
 
 #[test]
