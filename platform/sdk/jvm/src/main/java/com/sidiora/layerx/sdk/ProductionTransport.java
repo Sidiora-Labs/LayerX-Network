@@ -15,5 +15,20 @@ public interface ProductionTransport {
             pathParameters = pathParameters == null ? SchemaTypes.PathParameters.none() : pathParameters;
         }
     }
+    record ProgramsCall(String operation, ObjectNode request,
+                SchemaTypes.PathParameters pathParameters, IdempotencyKey idempotencyKey) {
+        public ProgramsCall {
+            Objects.requireNonNull(operation, "operation");
+            request = request == null ? com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode()
+                : request.deepCopy();
+            pathParameters = pathParameters == null ? SchemaTypes.PathParameters.none() : pathParameters;
+        }
+    }
     <T> CompletionStage<T> call(Call call, JavaType responseType);
+
+    default <T> CompletionStage<T> callPrograms(ProgramsCall call, JavaType responseType) {
+        return java.util.concurrent.CompletableFuture.failedFuture(new PlatformSdkException(
+            PlatformSdkException.Code.UNAVAILABLE_CAPABILITY, PlatformSdkException.Retry.NEVER,
+            null, null, null));
+    }
 }
