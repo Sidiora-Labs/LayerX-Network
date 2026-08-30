@@ -16,9 +16,10 @@ use ed25519_dalek::{Signer as _, SigningKey};
 use layerx_proof::program::{
     verify_program_execution, ProgramExecutionExpectation, VerifiedProgramExecution,
 };
+use layerx_types::amount::Amount;
 use layerx_types::intent::{
-    Amount, CallBudget, Calldata, CapabilityRequest, ProgramCall, ProgramCallFailure,
-    ProgramCallOutcome, ProgramId, ProgramLegacyValue, RequestedCapabilities,
+    CallBudget, Calldata, CapabilityRequest, ProgramCall, ProgramCallFailure, ProgramCallOutcome,
+    ProgramId, ProgramLegacyValue, RequestedCapabilities,
 };
 use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry};
 use layerx_wire::activity::decode_signed;
