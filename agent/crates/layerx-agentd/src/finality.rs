@@ -1,38 +1,32 @@
 //! Proof-gated submission finality augmentation and deadline-bounded waiting.
 
-use layerx_proof::checkpoint::{
-    verify_certificate, Certificate, CheckpointError, GuarantorKey, SettlementDomain,
-};
+use layerx_client::evidence::{VerifiedCheckpoint, VerifiedProofBundle};
 use layerx_proof::inclusion::{
-    verify_activity, verify_state, InclusionError, SequencerAuthorization,
+    verify_activity, verify_receipt, InclusionError, SequencerAuthorization,
 };
 use layerx_proof::merkle::Proof;
+use layerx_proof::receipt::verify_sequencer_signature;
+use layerx_types::payload::ModuleRegistry;
 use layerx_types::verify::VerificationLevel;
+use layerx_wire::activity::{decode_signed, encode_signed};
+use layerx_wire::hash::activity_id;
+use layerx_wire::receipt::Receipt;
 
 use crate::receipt::{self, ReceiptLookupKey, ReceiptStoreError};
 use crate::store::{ObjectKind, Store, StoreError, TenantId, TenantKey};
 
 const RECORD_MAGIC: &[u8; 4] = b"LXFA";
 
-/// Activity and state evidence carried by one signed batch.
+/// Activity and exact receipt evidence carried by one signed batch.
 pub struct InclusionBundle<'a> {
+    pub registry: &'a ModuleRegistry,
     pub activity_bytes: &'a [u8],
     pub activity_proof: &'a Proof,
-    pub state_leaf_bytes: &'a [u8],
-    pub state_proof: &'a Proof,
-    pub named_resulting_state_root: [u8; 32],
+    pub receipt_bytes: &'a [u8],
+    pub receipt_proof: &'a Proof,
     pub header_bytes: &'a [u8],
     pub header_signature: [u8; 64],
     pub authorization: &'a SequencerAuthorization,
-}
-
-/// Optional checkpoint evidence that may raise a state-proven receipt.
-pub struct CheckpointBundle<'a> {
-    pub certificate: &'a Certificate,
-    pub bonded_set: &'a [GuarantorKey],
-    pub registered_checkpoint_id: [u8; 32],
-    pub expected_settlement_domain: SettlementDomain,
-    pub registered_settlement_reference: Option<&'a [u8]>,
 }
 
 /// Verified evidence retained alongside, but never inside, original receipt bytes.
@@ -41,7 +35,7 @@ pub struct FinalityRecord {
     pub idempotency_key: [u8; 32],
     pub verification_level: VerificationLevel,
     pub activity_proof: Vec<u8>,
-    pub state_proof: Vec<u8>,
+    pub receipt_proof: Vec<u8>,
     pub checkpoint_id: Option<[u8; 32]>,
     pub guarantor_signatures_achieved: Option<usize>,
     pub guarantor_threshold: Option<usize>,
@@ -52,7 +46,6 @@ pub struct FinalityRecord {
 pub enum FinalityError {
     Receipt(ReceiptStoreError),
     Inclusion(InclusionError),
-    Checkpoint(CheckpointError),
     Store(StoreError),
     InvalidDeadline,
     ProgressUnavailable,
@@ -77,21 +70,29 @@ impl From<StoreError> for FinalityError {
 /// # Errors
 ///
 /// Returns a receipt error when the receipt is absent or corrupt, `Inclusion` or
-/// `Checkpoint` when the supplied evidence fails verification, `Arithmetic` when a
-/// proof cannot be encoded, and `Corrupt` when the re-read receipt differs from
-/// the raised one.
+/// `Arithmetic` when a proof cannot be encoded, and `Corrupt` when the re-read
+/// receipt differs from the raised one. Checkpoint finality is deliberately
+/// unavailable on this raw-byte path; only [`augment_verified`] can consume a
+/// node-authority-accepted [`VerifiedCheckpoint`].
 pub fn augment(
     durable: &mut Store,
     tenant: TenantId,
     idempotency_key: [u8; 32],
     inclusion: &InclusionBundle<'_>,
-    checkpoint: Option<&CheckpointBundle<'_>>,
 ) -> Result<FinalityRecord, FinalityError> {
     let receipt_before = receipt::serve(
         durable,
         tenant.clone(),
         ReceiptLookupKey::Idempotency(idempotency_key),
     )?;
+    let activity = decode_signed(inclusion.activity_bytes, inclusion.registry)
+        .map_err(|_| FinalityError::Corrupt)?;
+    if encode_signed(&activity).map_err(|_| FinalityError::Corrupt)? != inclusion.activity_bytes
+        || activity_id(&activity).map_err(|_| FinalityError::Corrupt)?
+            != receipt_before.metadata.activity_id
+    {
+        return Err(FinalityError::Corrupt);
+    }
     verify_activity(
         inclusion.activity_bytes,
         inclusion.activity_proof,
@@ -100,42 +101,133 @@ pub fn augment(
         inclusion.authorization,
     )
     .map_err(FinalityError::Inclusion)?;
-    verify_state(
-        inclusion.state_leaf_bytes,
-        inclusion.state_proof,
-        &inclusion.named_resulting_state_root,
+    if inclusion.receipt_bytes != receipt_before.canonical_bytes {
+        return Err(FinalityError::Corrupt);
+    }
+    let receipt_value = verify_sequencer_signature(
+        inclusion.receipt_bytes,
+        inclusion.authorization.public_key(),
+    )
+    .map_err(|_| FinalityError::Corrupt)?;
+    let Receipt::Protocol(protocol_receipt) = receipt_value else {
+        return Err(FinalityError::Corrupt);
+    };
+    if protocol_receipt.activity_id() != receipt_before.metadata.activity_id
+        || protocol_receipt.global_sequence() != receipt_before.metadata.global_sequence
+        || protocol_receipt.result_code() != receipt_before.metadata.result.code.raw()
+    {
+        return Err(FinalityError::Corrupt);
+    }
+    verify_receipt(
+        inclusion.receipt_bytes,
+        inclusion.receipt_proof,
         inclusion.header_bytes,
         &inclusion.header_signature,
         inclusion.authorization,
     )
     .map_err(FinalityError::Inclusion)?;
 
+    let record = FinalityRecord {
+        idempotency_key,
+        verification_level: VerificationLevel::BATCH_INCLUDED,
+        activity_proof: encode_proof(inclusion.activity_proof)?,
+        receipt_proof: encode_proof(inclusion.receipt_proof)?,
+        checkpoint_id: None,
+        guarantor_signatures_achieved: None,
+        guarantor_threshold: None,
+        settlement_reference: None,
+    };
+    durable.put_local(
+        record_key(tenant.clone(), idempotency_key)?,
+        encode_record(&record)?,
+    )?;
+    let metadata = receipt::raise_verification_level(
+        durable,
+        tenant.clone(),
+        idempotency_key,
+        &receipt_before.canonical_bytes,
+        record.verification_level,
+    )?;
+    let receipt_after = receipt::serve(
+        durable,
+        tenant,
+        ReceiptLookupKey::Idempotency(idempotency_key),
+    )?;
+    if receipt_after.canonical_bytes != receipt_before.canonical_bytes
+        || receipt_after.metadata.verification_level != metadata.verification_level
+    {
+        return Err(FinalityError::Corrupt);
+    }
+    Ok(record)
+}
+
+/// Persists finality already established by the production LNI verifier.
+///
+/// The activity and exact stored receipt must have independently verified
+/// inclusion under byte-identical signed-header evidence. A checkpoint raises
+/// the receipt only when its verified certificate covers that same header.
+pub fn augment_verified(
+    durable: &mut Store,
+    tenant: TenantId,
+    idempotency_key: [u8; 32],
+    activity: &VerifiedProofBundle,
+    receipt_bundle: &VerifiedProofBundle,
+    checkpoint: Option<&VerifiedCheckpoint>,
+) -> Result<FinalityRecord, FinalityError> {
+    let receipt_before = receipt::serve(
+        durable,
+        tenant.clone(),
+        ReceiptLookupKey::Idempotency(idempotency_key),
+    )?;
+    let (
+        VerifiedProofBundle::Activity {
+            activity_id,
+            proof: activity_proof,
+            signed_header: activity_header,
+            ..
+        },
+        VerifiedProofBundle::Receipt {
+            canonical_bytes: receipt_bytes,
+            activity_id: receipt_activity_id,
+            proof: receipt_proof,
+            signed_header: receipt_header,
+        },
+    ) = (activity, receipt_bundle)
+    else {
+        return Err(FinalityError::Corrupt);
+    };
+    if activity_id != receipt_activity_id
+        || *activity_id != receipt_before.metadata.activity_id
+        || receipt_bytes != &receipt_before.canonical_bytes
+        || !activity_header.same_evidence(receipt_header)
+    {
+        return Err(FinalityError::Corrupt);
+    }
     let mut record = FinalityRecord {
         idempotency_key,
-        verification_level: VerificationLevel::STATE_PROVEN,
-        activity_proof: encode_proof(inclusion.activity_proof)?,
-        state_proof: encode_proof(inclusion.state_proof)?,
+        verification_level: VerificationLevel::BATCH_INCLUDED,
+        activity_proof: encode_proof(activity_proof)?,
+        receipt_proof: encode_proof(receipt_proof)?,
         checkpoint_id: None,
         guarantor_signatures_achieved: None,
         guarantor_threshold: None,
         settlement_reference: None,
     };
     if let Some(checkpoint) = checkpoint {
-        let report = verify_certificate(
-            checkpoint.certificate,
-            checkpoint.bonded_set,
-            &checkpoint.registered_checkpoint_id,
-            checkpoint.expected_settlement_domain,
-            checkpoint.registered_settlement_reference,
-        )
-        .map_err(FinalityError::Checkpoint)?;
-        record.verification_level = report.level();
+        let report = checkpoint.report();
+        if report.level() != VerificationLevel::CHECKPOINT_FINALISED
+            || checkpoint.canonical_header() != activity_header.canonical_bytes
+        {
+            return Err(FinalityError::Corrupt);
+        }
+        record.verification_level = VerificationLevel::CHECKPOINT_FINALISED;
         record.checkpoint_id = report.evidence().checkpoint_id();
         record.guarantor_signatures_achieved = Some(report.achieved);
         record.guarantor_threshold = Some(report.required);
+        // Registration bytes are retained, but never relabelled as a Paxeer
+        // settlement anchor without a separate live-chain finality verifier.
         record.settlement_reference = report.evidence().settlement_reference().map(<[u8]>::to_vec);
     }
-
     durable.put_local(
         record_key(tenant.clone(), idempotency_key)?,
         encode_record(&record)?,
@@ -251,7 +343,7 @@ fn encode_record(record: &FinalityRecord) -> Result<Vec<u8>, FinalityError> {
     bytes.extend_from_slice(&record.idempotency_key);
     bytes.push(record.verification_level.wire_rank());
     push_bytes(&mut bytes, &record.activity_proof)?;
-    push_bytes(&mut bytes, &record.state_proof)?;
+    push_bytes(&mut bytes, &record.receipt_proof)?;
     match record.checkpoint_id {
         Some(identifier) => {
             bytes.push(1);

@@ -45,7 +45,7 @@ TEST_LIBRARY := $(BUILD_DIR)/liblayerx-testing.a
 	test-arith-u128 test-arith-u256 test-arith-rounding test-arith-property \
 	test-arith-nofloat \
 	test-log test-log-durability test-recovery test-projection test-rebuild \
-	test-batch-wal-recovery test-storage-order test-storage \
+	test-batch-wal-recovery test-finality-evidence test-storage-order test-storage \
 	test-journal \
 	test-activity-codec test-envelope test-verify-pool test-admission \
 	test-idempotency \
@@ -1119,6 +1119,7 @@ LAYERXD_SOURCES = \
 	cmd/layerxd/lxp_daemon_protocol.c \
 	cmd/layerxd/lxp_daemon_listener.c \
 	cmd/layerxd/lxp_daemon_lni.c \
+	cmd/layerxd/lxp_daemon_evidence.c \
 	cmd/layerxd/lxp_daemon_batch_wal.c \
 	cmd/layerxd/lxp_daemon_process.c \
 	cmd/layerxd/lxp_daemon_authority_replica.c \
@@ -1129,7 +1130,7 @@ $(BUILD_DIR)/bin/layerxd: cmd/layerxd/main.c $(LAYERXD_SOURCES) $(LIBRARY) \
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(CFLAGS) cmd/layerxd/main.c $(LAYERXD_SOURCES) \
 		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) $(EXTRA_LDFLAGS) \
-		-lcrypto -pthread -ldl -lm -o $@
+		-lcrypto -lsqlite3 -pthread -ldl -lm -o $@
 
 layerxd: $(BUILD_DIR)/bin/layerxd
 
@@ -1138,7 +1139,7 @@ $(BUILD_DIR)/tests/test_layerxd: tests/test_layerxd.c $(LAYERXD_SOURCES) \
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(CFLAGS) tests/test_layerxd.c $(LAYERXD_SOURCES) \
 		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) $(EXTRA_LDFLAGS) \
-		-lcrypto -pthread -ldl -lm -o $@
+		-lcrypto -lsqlite3 -pthread -ldl -lm -o $@
 
 test-layerxd: $(BUILD_DIR)/tests/test_layerxd
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_layerxd
@@ -1530,11 +1531,28 @@ $(BUILD_DIR)/tests/lxp_test_batch_wal_recovery: \
 test-batch-wal-recovery: $(BUILD_DIR)/tests/lxp_test_batch_wal_recovery
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/lxp_test_batch_wal_recovery
 
+$(BUILD_DIR)/tests/lxp_test_finality_evidence: \
+		tests/storage/lxp_test_finality_evidence.c \
+		cmd/layerxd/lxp_daemon_evidence.c \
+		cmd/layerxd/lxp_daemon_receipt_authority.c $(LIBRARY) \
+		$(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) \
+		tests/storage/lxp_test_finality_evidence.c \
+		cmd/layerxd/lxp_daemon_evidence.c \
+		cmd/layerxd/lxp_daemon_receipt_authority.c $(LIBRARY) \
+		$(PROGRAMS_RUNTIME_LIB) $(LIBRARY) \
+		$(EXTRA_LDFLAGS) -lcrypto -pthread -ldl -lm -o $@
+
+test-finality-evidence: $(BUILD_DIR)/tests/lxp_test_finality_evidence
+	$(RUN_PREFIX) $(BUILD_DIR)/tests/lxp_test_finality_evidence
+
 test-storage-order:
 	sh tests/storage/check_daemon_recovery_order.sh
 
 test-storage: test-storage-order test-log test-log-durability test-recovery \
-		test-projection test-rebuild test-batch-wal-recovery
+		test-projection test-rebuild test-batch-wal-recovery \
+		test-finality-evidence
 
 $(BUILD_DIR)/tests/lxp_test_journal: tests/state/lxp_test_journal.c $(LIBRARY)
 	@mkdir -p $(@D)

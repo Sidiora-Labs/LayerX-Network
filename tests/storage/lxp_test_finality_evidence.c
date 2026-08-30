@@ -34,6 +34,107 @@ static void report_stage_failure(const char *stage)
     (void)fprintf(stderr, "lxp_test_finality_evidence: %s failed\n", stage);
 }
 
+static int hex_nibble(uint8_t encoded, uint8_t *value)
+{
+    if (value == NULL) return 1;
+    if (encoded >= (uint8_t)'0' && encoded <= (uint8_t)'9')
+        *value = (uint8_t)(encoded - (uint8_t)'0');
+    else if (encoded >= (uint8_t)'a' && encoded <= (uint8_t)'f')
+        *value = (uint8_t)(encoded - (uint8_t)'a' + 10U);
+    else
+        return 1;
+    return 0;
+}
+
+static int load_finality_vector_field(const char *field, uint8_t *value,
+                                      size_t capacity, size_t *value_length)
+{
+    static const char vector_path[] =
+        "tests/vectors/finality_evidence_v1.vec";
+    FILE *file;
+    char *line = NULL;
+    size_t line_capacity = 0U;
+    size_t field_length;
+    bool found = false;
+    ssize_t read_length;
+    int result = 1;
+    if (field == NULL || value == NULL || value_length == NULL ||
+        capacity == 0U)
+        return 1;
+    field_length = strlen(field);
+    file = fopen(vector_path, "rb");
+    if (file == NULL) return 1;
+    while ((read_length = getline(&line, &line_capacity, file)) >= 0) {
+        size_t encoded_length;
+        size_t index;
+        if (read_length > 0 && line[(size_t)read_length - 1U] == '\n')
+            --read_length;
+        if (read_length > 0 && line[(size_t)read_length - 1U] == '\r')
+            --read_length;
+        if ((size_t)read_length <= field_length ||
+            memcmp(line, field, field_length) != 0 ||
+            line[field_length] != '=')
+            continue;
+        if (found) goto cleanup;
+        encoded_length = (size_t)read_length - field_length - 1U;
+        if ((encoded_length & 1U) != 0U ||
+            encoded_length / 2U > capacity)
+            goto cleanup;
+        for (index = 0U; index < encoded_length / 2U; ++index) {
+            uint8_t high;
+            uint8_t low;
+            if (hex_nibble((uint8_t)line[field_length + 1U + index * 2U],
+                           &high) != 0 ||
+                hex_nibble((uint8_t)line[field_length + 2U + index * 2U],
+                           &low) != 0)
+                goto cleanup;
+            value[index] = (uint8_t)((high << 4U) | low);
+        }
+        *value_length = encoded_length / 2U;
+        found = true;
+    }
+    if (ferror(file) == 0 && found) result = 0;
+
+cleanup:
+    free(line);
+    (void)fclose(file);
+    return result;
+}
+
+static int compare_finality_vector(lxp_byte_span checkpoint_payload,
+                                   lxp_byte_span finality_proof)
+{
+    uint8_t *expected_payload = malloc(
+        LXP_DAEMON_FINALITY_REGISTER_MAX_BYTES);
+    uint8_t *expected_proof = malloc(
+        LXP_DAEMON_FINALITY_REGISTER_MAX_BYTES);
+    size_t expected_payload_length = 0U;
+    size_t expected_proof_length = 0U;
+    int result = 1;
+    if (expected_payload == NULL || expected_proof == NULL ||
+        load_finality_vector_field(
+            "checkpoint_payload", expected_payload,
+            LXP_DAEMON_FINALITY_REGISTER_MAX_BYTES,
+            &expected_payload_length) != 0 ||
+        load_finality_vector_field(
+            "finality_proof", expected_proof,
+            LXP_DAEMON_FINALITY_REGISTER_MAX_BYTES,
+            &expected_proof_length) != 0 ||
+        checkpoint_payload.length != expected_payload_length ||
+        finality_proof.length != expected_proof_length ||
+        lxp_ct_memcmp(checkpoint_payload.bytes, expected_payload,
+                      expected_payload_length) != 0 ||
+        lxp_ct_memcmp(finality_proof.bytes, expected_proof,
+                      expected_proof_length) != 0)
+        goto cleanup;
+    result = 0;
+
+cleanup:
+    free(expected_proof);
+    free(expected_payload);
+    return result;
+}
+
 typedef struct test_fixture {
     lx_account_registry accounts;
     lx_account *account;
@@ -470,9 +571,43 @@ static int build_account_and_batch(test_fixture *fixture, lxp_arena *arena,
     return 0;
 }
 
-static int build_finality(test_fixture *fixture, lxp_arena *arena)
+static int build_finality(test_fixture *fixture, lxp_arena *arena,
+                          bool use_vector_signatures)
 {
     static const uint8_t validity_proof[] = {0x56U, 0x50U, 0x31U, 0x01U};
+    static const uint8_t vector_signatures[3][64] = {
+        {
+            0xaeU, 0xb4U, 0xbaU, 0xfbU, 0xf9U, 0x22U, 0x9cU, 0xd3U,
+            0x45U, 0xf6U, 0x9eU, 0xf4U, 0xc4U, 0xd5U, 0x51U, 0xd5U,
+            0x36U, 0x84U, 0x4aU, 0xe8U, 0xe6U, 0x3bU, 0x05U, 0x8bU,
+            0xfaU, 0x0fU, 0x84U, 0xd4U, 0x88U, 0xa4U, 0x6bU, 0xd0U,
+            0x1aU, 0x3fU, 0x92U, 0xb8U, 0x4cU, 0xa5U, 0x4dU, 0x42U,
+            0x8bU, 0xd6U, 0x72U, 0xc4U, 0xa9U, 0xd1U, 0xa2U, 0xceU,
+            0x44U, 0x46U, 0x8cU, 0xbcU, 0x64U, 0xdaU, 0x19U, 0xf5U,
+            0x51U, 0x7eU, 0x78U, 0x5cU, 0xe8U, 0x2aU, 0x9eU, 0xfaU,
+        },
+        {
+            0xabU, 0x49U, 0xcbU, 0xbdU, 0x3eU, 0xcbU, 0x9aU, 0x1cU,
+            0xfdU, 0xd0U, 0x6bU, 0x4aU, 0x6cU, 0xc9U, 0x88U, 0x84U,
+            0x00U, 0x3bU, 0x1dU, 0x21U, 0xaaU, 0xcbU, 0x2eU, 0x3aU,
+            0xadU, 0xa4U, 0x9fU, 0xd6U, 0xa0U, 0xa9U, 0xf2U, 0x0bU,
+            0x32U, 0xf1U, 0xc3U, 0x10U, 0xdaU, 0xa3U, 0x70U, 0x6aU,
+            0xceU, 0x37U, 0xdaU, 0xdbU, 0x79U, 0x93U, 0x3aU, 0x4eU,
+            0xf1U, 0xfcU, 0xb5U, 0x87U, 0x2fU, 0x8bU, 0x53U, 0xa8U,
+            0x9cU, 0x2bU, 0xbaU, 0x07U, 0x19U, 0xcfU, 0xb9U, 0xebU,
+        },
+        {
+            0x65U, 0x7cU, 0x64U, 0x3bU, 0xf7U, 0x05U, 0xfbU, 0x49U,
+            0x3eU, 0xd5U, 0x5bU, 0x4fU, 0xb0U, 0x2cU, 0x75U, 0xe7U,
+            0x18U, 0x2bU, 0x33U, 0x62U, 0x63U, 0x85U, 0x16U, 0xd7U,
+            0xccU, 0xefU, 0xf3U, 0x1dU, 0xa0U, 0xbaU, 0x30U, 0x18U,
+            0x1dU, 0xa2U, 0xfeU, 0x11U, 0xecU, 0x9fU, 0x82U, 0xa1U,
+            0x9aU, 0x96U, 0x21U, 0x4dU, 0xc0U, 0x3eU, 0xf2U, 0xadU,
+            0x8cU, 0xaeU, 0x3fU, 0xc6U, 0xabU, 0x64U, 0xc4U, 0x5aU,
+            0xf6U, 0x8aU, 0xf5U, 0xfdU, 0x91U, 0xbcU, 0x76U, 0x7bU,
+        },
+    };
+    static const uint8_t vector_signature_v[3] = {27U, 28U, 28U};
     lxp_checkpoint_certificate checkpoint;
     lxp_guarantor_attestation attestations[3];
     lxp_byte_span payload;
@@ -518,6 +653,16 @@ static int build_finality(test_fixture *fixture, lxp_arena *arena)
                 arena, &attestations[index]) != LXP_OK)
             return 1;
     }
+    if (use_vector_signatures)
+        for (index = 0U; index < 3U; ++index) {
+            (void)memcpy(attestations[index].signature,
+                         vector_signatures[index], 64U);
+            attestations[index].signature_v = vector_signature_v[index];
+            if (lxp_guarantor_attestation_verify(
+                    &attestations[index],
+                    fixture->guarantors[index].paxeer_public_key) != LXP_OK)
+                return 1;
+        }
     if (lxp_guarantor_cert_assemble(
             &checkpoint, attestations, 3U, 2U,
             &fixture->certificate) != LXP_OK)
@@ -551,6 +696,11 @@ static int build_finality(test_fixture *fixture, lxp_arena *arena)
         proof.length == 0U ||
         proof.length > sizeof(fixture->finality_proof))
         return 1;
+    if (use_vector_signatures &&
+        compare_finality_vector(payload, proof) != 0) {
+        report_stage_failure("typed finality vector parity");
+        return 1;
+    }
     fixture->checkpoint_payload_length = payload.length;
     fixture->finality_proof_length = proof.length;
     (void)memcpy(fixture->checkpoint_payload,
@@ -1337,7 +1487,7 @@ static int refuse_mismatched_checkpoint_account(
     (void)memcpy(alternative->canonical_header, encoded.bytes,
                  encoded.length);
     if (lxp_arena_reset(&arena, mark) != LXP_OK ||
-        build_finality(alternative, &arena) != 0 ||
+        build_finality(alternative, &arena, false) != 0 ||
         mkdtemp(directory) == NULL ||
         snprintf(path, sizeof(path), "%s/%020u.lxp",
                  directory, 0U) < 0 ||
@@ -1571,7 +1721,7 @@ int main(void)
         report_stage_failure("account and batch fixture");
         goto cleanup;
     }
-    if (build_finality(fixture, &fixture_arena) != 0) {
+    if (build_finality(fixture, &fixture_arena, true) != 0) {
         report_stage_failure("finality fixture");
         goto cleanup;
     }

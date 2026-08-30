@@ -2,19 +2,22 @@
 
 use std::cmp::Ordering;
 
-use layerx_proof::inclusion::{
-    verify_activity, verify_state, InclusionError, SequencerAuthorization,
-};
+use layerx_proof::inclusion::{verify_activity, InclusionError, SequencerAuthorization};
 use layerx_proof::merkle::{MerkleError, Proof, MAX_DEPTH};
+use layerx_proof::state::{decode_account_value, AccountProofError};
 use layerx_types::amount::Amount;
 use layerx_types::verify::VerificationLevel;
+use layerx_wire::receipt::decode_batch_header;
 
+use crate::evidence::{decode_nested_evidence, EvidenceError, RootSelector};
 use crate::head::Head;
+use crate::lni::refusal::decode_core_refusal;
 use crate::lni::schema::{decode_envelope, encode_envelope, Envelope, SchemaError, Version};
 use crate::lni::transport::{FrameTransport, TransportError};
 
 const ACCOUNT_READ_REQUEST_TAG: u16 = 7;
 const ACCOUNT_READ_RESPONSE_TAG: u16 = 8;
+const ERROR_RESPONSE_TAG: u16 = 25;
 const HISTORY_RANGE_REQUEST_TAG: u16 = 9;
 const HISTORY_ITEM_TAG: u16 = 10;
 const HISTORY_END_TAG: u16 = 11;
@@ -42,9 +45,13 @@ impl Requested {
 pub struct ReadContext {
     pub interface_version: Version,
     pub correlation_id: u64,
+    pub expected_protocol_version: u16,
+    pub expected_network_id: u32,
     pub requested: Requested,
     pub head: Head,
     pub sequencer_authorization: SequencerAuthorization,
+    pub handshake_sequencer_key: [u8; 32],
+    pub root_selector: RootSelector,
 }
 
 /// Freshness coordinates inseparable from a returned read value.
@@ -194,7 +201,6 @@ pub struct HistoryPage {
 enum StateSelector {
     Balance { account: [u8; 32], asset: [u8; 32] },
     Account { account: [u8; 32] },
-    Module { module_id: u16, key: Vec<u8> },
 }
 
 /// A typed refusal that names evidence shortfall and sequence discontinuity.
@@ -203,10 +209,16 @@ pub enum ReadError {
     Transport(TransportError),
     Envelope(SchemaError),
     UnexpectedResponse,
+    CoreRefusal {
+        class: u8,
+        result: layerx_types::result::ResultCode,
+    },
     MalformedValue,
     SelectorMismatch,
     Evidence(MerkleError),
     Inclusion(InclusionError),
+    ProductionEvidence(EvidenceError),
+    Account(AccountProofError),
     MissingEvidence {
         requested: VerificationLevel,
         achieved: VerificationLevel,
@@ -254,26 +266,15 @@ pub fn balance(
         &StateSelector::Balance { account, asset },
         context,
     )?;
-    let bytes: [u8; 80] = value
-        .canonical_bytes()
-        .try_into()
-        .map_err(|_| ReadError::MalformedValue)?;
-    let actual_account: [u8; 32] = bytes[..32]
-        .try_into()
-        .map_err(|_| ReadError::MalformedValue)?;
-    let actual_asset: [u8; 32] = bytes[32..64]
-        .try_into()
-        .map_err(|_| ReadError::MalformedValue)?;
-    if actual_account != account || actual_asset != asset {
+    let canonical =
+        decode_account_value(account, value.canonical_bytes()).map_err(ReadError::Account)?;
+    if !canonical.has_asset || canonical.asset_id != asset {
         return Err(ReadError::SelectorMismatch);
     }
-    let amount_bytes: [u8; 16] = bytes[64..]
-        .try_into()
-        .map_err(|_| ReadError::MalformedValue)?;
     Ok(Balance {
         account,
         asset,
-        amount: Amount::from_be_bytes(amount_bytes),
+        amount: Amount::from_u128(canonical.balance),
         value,
     })
 }
@@ -306,14 +307,8 @@ pub fn module_state(
     if key.len() > MAX_SELECTOR_KEY_BYTES {
         return Err(ReadError::PageBound);
     }
-    point_read(
-        transport,
-        &StateSelector::Module {
-            module_id,
-            key: key.to_vec(),
-        },
-        context,
-    )
+    let _ = (transport, module_id, context);
+    Err(ReadError::UnavailableCapability)
 }
 
 fn point_read(
@@ -321,7 +316,7 @@ fn point_read(
     selector: &StateSelector,
     context: ReadContext,
 ) -> Result<ReadValue, ReadError> {
-    let selector_bytes = encode_state_selector(selector, context.requested)?;
+    let selector_bytes = encode_state_selector(selector, context.root_selector, context.requested)?;
     let request = encode_envelope(Envelope {
         version: context.interface_version,
         message_tag: ACCOUNT_READ_REQUEST_TAG,
@@ -332,18 +327,36 @@ fn point_read(
     transport.send(&request)?;
     let response_bytes = transport.receive()?;
     let response = decode_envelope(&response_bytes)?;
+    if response.version.major == context.interface_version.major
+        && response.message_tag == ERROR_RESPONSE_TAG
+        && response.correlation_id == context.correlation_id
+        && response.proof_material.is_empty()
+    {
+        let refusal =
+            decode_core_refusal(response.canonical_payload).ok_or(ReadError::UnexpectedResponse)?;
+        return Err(ReadError::CoreRefusal {
+            class: refusal.class,
+            result: refusal.result,
+        });
+    }
     if response.version.major != context.interface_version.major
         || response.message_tag != ACCOUNT_READ_RESPONSE_TAG
         || response.correlation_id != context.correlation_id
     {
         return Err(ReadError::UnexpectedResponse);
     }
-    verify_state_value(response.canonical_payload, response.proof_material, context)
+    verify_state_value(
+        response.canonical_payload,
+        response.proof_material,
+        selector,
+        context,
+    )
 }
 
 fn verify_state_value(
     canonical_bytes: &[u8],
     proof_material: &[u8],
+    selector: &StateSelector,
     context: ReadContext,
 ) -> Result<ReadValue, ReadError> {
     if proof_material.is_empty() {
@@ -360,25 +373,59 @@ fn verify_state_value(
             },
         });
     }
-    let bundle = ProofBundle::decode(proof_material)?;
-    let evidence = verify_state(
+    let (expected_account, expected_asset) = match selector {
+        StateSelector::Balance { account, asset } => (*account, Some(*asset)),
+        StateSelector::Account { account } => (*account, None),
+    };
+    let decoded = decode_nested_evidence(
+        proof_material,
+        context.expected_protocol_version,
+        context.expected_network_id,
+    )
+    .map_err(ReadError::ProductionEvidence)?;
+    if decoded.selector != context.root_selector
+        || decoded.proof.account_id != expected_account
+        || decoded.signed_header.public_key != context.handshake_sequencer_key
+        || decoded.signed_header.response_authorization() != context.sequencer_authorization
+    {
+        return Err(ReadError::SelectorMismatch);
+    }
+    let header = decode_batch_header(&decoded.signed_header.canonical_bytes)
+        .map_err(|_| ReadError::MalformedValue)?;
+    if context.expected_protocol_version == 0
+        || context.expected_network_id == 0
+        || header.protocol_version() != context.expected_protocol_version
+        || header.network_id() != context.expected_network_id
+    {
+        return Err(ReadError::SelectorMismatch);
+    }
+    match context.root_selector {
+        RootSelector::Latest if header.batch_number() != context.head.sealed_batch => {
+            return Err(ReadError::SelectorMismatch);
+        }
+        RootSelector::Latest | RootSelector::Batch(_) | RootSelector::Checkpoint(_) => {}
+    }
+    let verified = layerx_proof::state::verify_nested_account(
         canonical_bytes,
-        &bundle.proof,
-        &bundle.root,
-        &bundle.header,
-        &bundle.header_signature,
+        expected_account,
+        expected_asset,
+        &decoded.proof,
         &context.sequencer_authorization,
     )
-    .map_err(ReadError::Inclusion)?;
-    let achieved = evidence.level();
+    .map_err(ReadError::Account)?;
+    let achieved = if let Some(checkpoint) = decoded.checkpoint {
+        checkpoint.report().level()
+    } else {
+        VerificationLevel::STATE_PROVEN
+    };
     require_level(context.requested, achieved)?;
     Ok(ReadValue {
         canonical_bytes: canonical_bytes.to_vec(),
         proof_material: proof_material.to_vec(),
         achieved,
         freshness: Freshness {
-            global_sequence: evidence.header().header().last_sequence(),
-            batch_number: evidence.header().header().batch_number(),
+            global_sequence: verified.observed_sequence(),
+            batch_number: verified.header().header().batch_number(),
             observed_head_sequence: context.head.chain_sequence,
             observed_checkpoint: context.head.finalised_checkpoint,
         },
@@ -398,9 +445,11 @@ fn require_level(requested: Requested, achieved: VerificationLevel) -> Result<()
 
 fn encode_state_selector(
     selector: &StateSelector,
+    root_selector: RootSelector,
     requested: Requested,
 ) -> Result<Vec<u8>, ReadError> {
     let mut bytes = Vec::new();
+    bytes.extend_from_slice(&1_u16.to_be_bytes());
     match selector {
         StateSelector::Balance { account, asset } => {
             bytes.push(1);
@@ -411,14 +460,8 @@ fn encode_state_selector(
             bytes.push(2);
             bytes.extend_from_slice(account);
         }
-        StateSelector::Module { module_id, key } => {
-            let length = u16::try_from(key.len()).map_err(|_| ReadError::PageBound)?;
-            bytes.push(3);
-            bytes.extend_from_slice(&module_id.to_be_bytes());
-            bytes.extend_from_slice(&length.to_be_bytes());
-            bytes.extend_from_slice(key);
-        }
     }
+    root_selector.encode(&mut bytes);
     bytes.push(requested.level().wire_rank());
     Ok(bytes)
 }
@@ -585,7 +628,6 @@ fn decode_history_end(bytes: &[u8]) -> Result<u64, ReadError> {
 }
 
 struct ProofBundle {
-    root: [u8; 32],
     proof: Proof,
     header: Vec<u8>,
     header_signature: [u8; 64],
@@ -595,7 +637,7 @@ impl ProofBundle {
     fn decode(bytes: &[u8]) -> Result<Self, ReadError> {
         let mut reader = Reader::new(bytes);
         let _asserted_level = reader.u8()?;
-        let root = reader.array()?;
+        let _root: [u8; 32] = reader.array()?;
         let leaf_index = reader.u32()?;
         let leaf_count = reader.u32()?;
         let sibling_count = usize::from(reader.u8()?);
@@ -613,7 +655,6 @@ impl ProofBundle {
         reader.finish()?;
         let proof = Proof::new(leaf_index, leaf_count, siblings).map_err(ReadError::Evidence)?;
         Ok(Self {
-            root,
             proof,
             header,
             header_signature,

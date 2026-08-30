@@ -115,7 +115,7 @@ impl InclusionEvidence {
     }
 }
 
-fn verify_header(
+pub(crate) fn verify_header(
     header_bytes: &[u8],
     signature: &[u8; 64],
     authorization: &SequencerAuthorization,

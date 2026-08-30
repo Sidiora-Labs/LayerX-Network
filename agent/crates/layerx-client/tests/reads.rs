@@ -6,6 +6,7 @@ use std::thread;
 use std::time::Duration;
 
 use ed25519_dalek::{Signer as _, SigningKey};
+use layerx_client::evidence::{EvidenceError, RootSelector};
 use layerx_client::head::Head;
 use layerx_client::lni::framing::{read_frame, write_frame};
 use layerx_client::lni::schema::{decode_envelope, encode_envelope, Envelope, Version};
@@ -139,16 +140,25 @@ fn encode_proof(
 }
 
 fn context(requested: VerificationLevel, authorization: SequencerAuthorization) -> ReadContext {
+    let root_selector = if requested >= VerificationLevel::CHECKPOINT_FINALISED {
+        RootSelector::Checkpoint([0x71; 32])
+    } else {
+        RootSelector::Latest
+    };
     ReadContext {
-        interface_version: Version::V1_0,
+        interface_version: Version::V1_2,
         correlation_id: 44,
+        expected_protocol_version: 1,
+        expected_network_id: 77,
         requested: Requested::new(requested),
         head: Head {
             chain_sequence: 12,
             sealed_batch: 7,
             finalised_checkpoint: [0x71; 32],
         },
+        handshake_sequencer_key: authorization.public_key(),
         sequencer_authorization: authorization,
+        root_selector,
     }
 }
 
@@ -182,7 +192,7 @@ fn respond(stream: &mut UnixStream, tag: u16, correlation_id: u64, payload: &[u8
 }
 
 #[test]
-fn balance_level_comes_only_from_verified_evidence() {
+fn legacy_generic_balance_proof_never_establishes_state() {
     let socket = SocketPath::new("levels");
     let listener = match UnixListener::bind(&socket.0) {
         Ok(listener) => listener,
@@ -208,21 +218,15 @@ fn balance_level_comes_only_from_verified_evidence() {
             Ok(transport) => transport,
             Err(error) => panic!("state-proven connection failed: {error:?}"),
         };
-        let value = match balance(
-            &mut transport,
-            account_id,
-            asset_id,
-            context(VerificationLevel::STATE_PROVEN, authorization),
-        ) {
-            Ok(value) => value,
-            Err(error) => panic!("state-proven balance failed: {error:?}"),
-        };
-        assert_eq!(value.amount.value(), 750);
-        assert_eq!(value.achieved(), VerificationLevel::STATE_PROVEN);
-        assert_eq!(value.freshness().global_sequence, 12);
-        assert_eq!(value.freshness().batch_number, 7);
-        assert_eq!(value.freshness().observed_checkpoint, [0x71; 32]);
-        assert_eq!(value.canonical_bytes(), leaf);
+        assert_eq!(
+            balance(
+                &mut transport,
+                account_id,
+                asset_id,
+                context(VerificationLevel::STATE_PROVEN, authorization),
+            ),
+            Err(ReadError::ProductionEvidence(EvidenceError::Malformed))
+        );
     }
     {
         let mut transport = match Uds::connect(&socket.0, &gate, limits()) {
@@ -236,17 +240,14 @@ fn balance_level_comes_only_from_verified_evidence() {
                 asset_id,
                 context(VerificationLevel::CHECKPOINT_FINALISED, authorization),
             ),
-            Err(ReadError::MissingEvidence {
-                requested: VerificationLevel::CHECKPOINT_FINALISED,
-                achieved: VerificationLevel::STATE_PROVEN,
-            })
+            Err(ReadError::ProductionEvidence(EvidenceError::Malformed))
         );
     }
     assert!(server.join().is_ok(), "level node panicked");
 }
 
 #[test]
-fn account_and_module_reads_preserve_opaque_core_bytes() {
+fn unverified_account_bytes_remain_opaque_and_module_reads_fail_closed() {
     let socket = SocketPath::new("opaque");
     let listener = match UnixListener::bind(&socket.0) {
         Ok(listener) => listener,
@@ -258,10 +259,8 @@ fn account_and_module_reads_preserve_opaque_core_bytes() {
             Ok(connection) => connection,
             Err(error) => panic!("accept failed: {error}"),
         };
-        for payload in [&b"account-core-bytes"[..], &b"module-core-bytes"[..]] {
-            let (correlation, _) = request(&mut stream, 7);
-            respond(&mut stream, 8, correlation, payload, &[]);
-        }
+        let (correlation, _) = request(&mut stream, 7);
+        respond(&mut stream, 8, correlation, b"account-core-bytes", &[]);
     });
     let gate = ConnectionGate::new(1);
     let mut transport = match Uds::connect(&socket.0, &gate, limits()) {
@@ -274,11 +273,10 @@ fn account_and_module_reads_preserve_opaque_core_bytes() {
         Err(error) => panic!("account read failed: {error:?}"),
     };
     assert_eq!(account_value.canonical_bytes(), b"account-core-bytes");
-    let module_value = match module_state(&mut transport, 6, b"position", read_context) {
-        Ok(value) => value,
-        Err(error) => panic!("module read failed: {error:?}"),
-    };
-    assert_eq!(module_value.canonical_bytes(), b"module-core-bytes");
+    assert_eq!(
+        module_state(&mut transport, 6, b"position", read_context),
+        Err(ReadError::UnavailableCapability)
+    );
     assert!(server.join().is_ok(), "opaque node panicked");
 }
 

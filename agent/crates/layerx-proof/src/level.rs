@@ -25,10 +25,6 @@ impl Achieved {
         Self(VerificationLevel::CHECKPOINT_FINALISED)
     }
 
-    pub(crate) const fn settlement_anchored() -> Self {
-        Self(VerificationLevel::SETTLEMENT_ANCHORED)
-    }
-
     pub(crate) const fn level(self) -> VerificationLevel {
         self.0
     }

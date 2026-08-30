@@ -23,7 +23,7 @@ fn hex(value: &str) -> Vec<u8> {
 #[test]
 fn lni_schema_and_document_cover_every_declared_message() {
     let schema = lni_schema_v1();
-    assert_eq!(schema.version, Version::V1_1);
+    assert_eq!(schema.version, Version::V1_2);
     assert_eq!(schema.messages.len(), lni_golden_vectors().len());
     let mut tags = BTreeSet::new();
     for message in schema.messages {

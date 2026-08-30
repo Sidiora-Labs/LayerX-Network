@@ -1,4 +1,4 @@
-//! Bonded-guarantor threshold and settlement-anchor verification.
+//! Bonded-guarantor threshold and settlement-registration verification.
 
 use std::collections::BTreeSet;
 
@@ -128,6 +128,11 @@ impl Attestation {
     #[must_use]
     pub const fn signature_v(&self) -> u8 {
         self.signature_v
+    }
+
+    #[must_use]
+    pub const fn attested_at_ms(&self) -> u64 {
+        self.attested_at_ms
     }
 
     fn message(&self) -> [u8; ATTESTATION_BYTES] {
@@ -429,7 +434,7 @@ pub fn verify_certificate(
             attestation.signature_v,
             &digest,
         )
-            .map_err(|_| CheckpointError::Signature(attestation.guarantor_id))?;
+        .map_err(|_| CheckpointError::Signature(attestation.guarantor_id))?;
         achieved += 1;
     }
     if certificate.threshold == 0 || achieved < certificate.threshold {

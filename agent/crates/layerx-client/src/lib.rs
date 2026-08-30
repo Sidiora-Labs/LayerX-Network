@@ -3,6 +3,7 @@
 pub mod availability;
 pub mod batch;
 pub mod client;
+pub mod evidence;
 pub mod head;
 pub mod lni;
 pub mod read;

@@ -124,7 +124,7 @@ fn verified_limit() -> Result<LimitConfig, String> {
 fn start_human_owner() -> Result<mpsc::Receiver<Result<(), String>>, String> {
     let peers = human_peers()?;
     let deadline = Duration::from_millis(parse_u64("LAYERX_AGENT_HUMAN_DEADLINE_MS")?);
-    let limits = Limits {
+    let human_limits = Limits {
         maximum_frame_bytes: required("LAYERX_AGENT_HUMAN_MAX_FRAME_BYTES")?
             .parse()
             .map_err(|_| "human max frame is invalid")?,
@@ -141,6 +141,12 @@ fn start_human_owner() -> Result<mpsc::Receiver<Result<(), String>>, String> {
     }
     .validate()
     .map_err(|_| "human LNI limits are invalid")?;
+    let node_limits = Limits {
+        maximum_frame_bytes: human_limits
+            .maximum_frame_bytes
+            .max(layerx_client::evidence::MINIMUM_FINALITY_FRAME_BYTES),
+        ..human_limits
+    };
     let node_path = PathBuf::from(required("LAYERX_AGENT_HUMAN_NODE_LNI")?);
     let store_path = PathBuf::from(required("LAYERX_AGENT_HUMAN_STORE")?);
     let socket_path = PathBuf::from(required("LAYERX_AGENT_HUMAN_SOCKET")?);
@@ -158,7 +164,7 @@ fn start_human_owner() -> Result<mpsc::Receiver<Result<(), String>>, String> {
     let node = Client::connect(ClientConfig {
         endpoint: node_path,
         handshake: HandshakeConfig {
-            built_interface_version: Version::V1_1,
+            built_interface_version: Version::V1_2,
             expected_protocol_version: required("LAYERX_AGENT_HUMAN_PROTOCOL_VERSION")?
                 .parse()
                 .map_err(|_| "human protocol version is invalid")?,
@@ -166,7 +172,7 @@ fn start_human_owner() -> Result<mpsc::Receiver<Result<(), String>>, String> {
                 .parse()
                 .map_err(|_| "human network id is invalid")?,
         },
-        limits,
+        limits: node_limits,
         reconnect: ReconnectPolicy {
             maximum_attempts: required("LAYERX_AGENT_HUMAN_RECONNECT_ATTEMPTS")?
                 .parse()
@@ -243,7 +249,7 @@ fn start_human_owner() -> Result<mpsc::Receiver<Result<(), String>>, String> {
                 .map_err(|_| "human socket gid is invalid")?,
             mode: u32::from_str_radix(&required("LAYERX_AGENT_HUMAN_SOCKET_MODE")?, 8)
                 .map_err(|_| "human socket mode is invalid")?,
-            maximum_frame_bytes: limits.maximum_frame_bytes,
+            maximum_frame_bytes: human_limits.maximum_frame_bytes,
             deadline,
             peers,
         },

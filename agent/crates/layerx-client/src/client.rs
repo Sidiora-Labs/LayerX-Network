@@ -15,6 +15,10 @@ use crate::availability::{
     ProviderSet,
 };
 use crate::batch::{self, BatchHeaderError, SignedBatchHeader};
+use crate::evidence::{
+    self, CheckpointSelector, EvidenceContext, EvidenceError, FinalityEvidenceCandidate,
+    ProofBundleSelector, RegistrationAck, RootSelector, VerifiedCheckpoint, VerifiedProofBundle,
+};
 use crate::head::{Head, HeadError, HeadTracker};
 use crate::lni::handshake::{perform, Handshake, HandshakeConfig, HandshakeError};
 use crate::lni::preparation::{
@@ -405,7 +409,7 @@ impl Client {
         correlation_id: u64,
         authorization: SequencerAuthorization,
     ) -> Result<Balance, ReadError> {
-        self.require_read_capability(Capability::AccountRead)?;
+        self.require_account_read_capabilities(requested)?;
         let context = self.read_context(requested, correlation_id, authorization);
         let transport = self.transport.as_mut().ok_or(ReadError::Disconnected)?;
         balance(transport, account_id, asset_id, context)
@@ -423,7 +427,7 @@ impl Client {
         correlation_id: u64,
         authorization: SequencerAuthorization,
     ) -> Result<ReadValue, ReadError> {
-        self.require_read_capability(Capability::AccountRead)?;
+        self.require_account_read_capabilities(requested)?;
         let context = self.read_context(requested, correlation_id, authorization);
         let transport = self.transport.as_mut().ok_or(ReadError::Disconnected)?;
         account(transport, account_id, context)
@@ -485,19 +489,119 @@ impl Client {
         }
     }
 
+    fn require_account_read_capabilities(
+        &self,
+        requested: VerificationLevel,
+    ) -> Result<(), ReadError> {
+        self.require_read_capability(Capability::AccountRead)?;
+        if requires_historical_account_proofs(requested) {
+            self.require_read_capability(Capability::HistoricalProofs)?;
+        }
+        Ok(())
+    }
+
     fn read_context(
         &self,
         requested: VerificationLevel,
         correlation_id: u64,
         authorization: SequencerAuthorization,
     ) -> ReadContext {
+        let head = self.head.current();
+        let root_selector = if requested >= VerificationLevel::CHECKPOINT_FINALISED {
+            RootSelector::Checkpoint(head.finalised_checkpoint)
+        } else {
+            RootSelector::Latest
+        };
         ReadContext {
             interface_version: self.handshake.node().interface_version,
             correlation_id,
+            expected_protocol_version: self.config.handshake.expected_protocol_version,
+            expected_network_id: self.config.handshake.expected_network_id,
             requested: Requested::new(requested),
-            head: self.head.current(),
+            head,
             sequencer_authorization: authorization,
+            handshake_sequencer_key: self.handshake.node().authorised_sequencer_key,
+            root_selector,
         }
+    }
+
+    /// Retrieves one independently verified activity, receipt, or account proof.
+    pub fn proof_bundle(
+        &mut self,
+        selector: ProofBundleSelector,
+        correlation_id: u64,
+        registry: &ModuleRegistry,
+    ) -> Result<VerifiedProofBundle, EvidenceError> {
+        if !self
+            .handshake
+            .capabilities()
+            .contains(Capability::ProofBundle)
+        {
+            return Err(EvidenceError::Unavailable);
+        }
+        let transport = self.transport.as_mut().ok_or(EvidenceError::Unavailable)?;
+        evidence::proof_bundle(
+            transport,
+            selector,
+            EvidenceContext {
+                interface_version: self.handshake.node().interface_version,
+                correlation_id,
+                expected_protocol_version: self.config.handshake.expected_protocol_version,
+                expected_network_id: self.handshake.node().network_id,
+                handshake_sequencer_key: self.handshake.node().authorised_sequencer_key,
+            },
+            registry,
+        )
+    }
+
+    /// Retrieves one independently verified finalized checkpoint.
+    pub fn checkpoint_evidence(
+        &mut self,
+        selector: CheckpointSelector,
+        correlation_id: u64,
+    ) -> Result<VerifiedCheckpoint, EvidenceError> {
+        if !self
+            .handshake
+            .capabilities()
+            .contains(Capability::Checkpoint)
+        {
+            return Err(EvidenceError::Unavailable);
+        }
+        let transport = self.transport.as_mut().ok_or(EvidenceError::Unavailable)?;
+        evidence::checkpoint(
+            transport,
+            selector,
+            EvidenceContext {
+                interface_version: self.handshake.node().interface_version,
+                correlation_id,
+                expected_protocol_version: self.config.handshake.expected_protocol_version,
+                expected_network_id: self.handshake.node().network_id,
+                handshake_sequencer_key: self.handshake.node().authorised_sequencer_key,
+            },
+        )
+    }
+
+    /// Registers a locally verified checkpoint evidence bundle and accepts only
+    /// the durable idempotent acknowledgement.
+    pub fn register_finality_evidence(
+        &mut self,
+        evidence: &FinalityEvidenceCandidate,
+        correlation_id: u64,
+    ) -> Result<RegistrationAck, EvidenceError> {
+        if !self
+            .handshake
+            .capabilities()
+            .contains(Capability::FinalityEvidenceRegister)
+        {
+            return Err(EvidenceError::Unavailable);
+        }
+        let transport = self.transport.as_mut().ok_or(EvidenceError::Unavailable)?;
+        evidence::register_finality_evidence(
+            transport,
+            evidence,
+            self.handshake.node().interface_version,
+            correlation_id,
+        )
     }
 
     /// Starts or resumes the ordered core event stream through this client's
@@ -562,6 +666,10 @@ impl Client {
     }
 }
 
+fn requires_historical_account_proofs(requested: VerificationLevel) -> bool {
+    requested.wire_rank() >= VerificationLevel::CHECKPOINT_FINALISED.wire_rank()
+}
+
 fn state_for(handshake: &Handshake) -> ConnectionState {
     if capability_report(handshake.capabilities())
         .gaps()
@@ -570,5 +678,23 @@ fn state_for(handshake: &Handshake) -> ConnectionState {
         ConnectionState::Connected
     } else {
         ConnectionState::Degraded
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn finalised_account_reads_require_historical_proofs() {
+        assert!(!requires_historical_account_proofs(
+            VerificationLevel::STATE_PROVEN
+        ));
+        assert!(requires_historical_account_proofs(
+            VerificationLevel::CHECKPOINT_FINALISED
+        ));
+        assert!(requires_historical_account_proofs(
+            VerificationLevel::SETTLEMENT_ANCHORED
+        ));
     }
 }

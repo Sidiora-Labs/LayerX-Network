@@ -224,6 +224,14 @@ impl Outbox {
         Ok(&record.signed_canonical_bytes)
     }
 
+    /// Returns the exact durable signed activity at any later lifecycle state.
+    pub fn exact_signed_bytes(&self, submission_id: [u8; 32]) -> Result<&[u8], OutboxError> {
+        self.records
+            .get(&submission_id)
+            .map(|record| record.signed_canonical_bytes.as_slice())
+            .ok_or(OutboxError::NotFound)
+    }
+
     /// Applies one legal state change and durably records it with its cause.
     ///
     /// # Errors

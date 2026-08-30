@@ -1,9 +1,9 @@
 use ed25519_dalek::{Signer as _, SigningKey as EdSigningKey};
 use k256::ecdsa::{Signature, SigningKey};
-use layerx_crypto::secp256k1;
 use layerx_agentd::read::{
     checkpoint, proof_bundle, CheckpointReadError, ProofBundleKind, ProofBundleRequest,
 };
+use layerx_crypto::secp256k1;
 use layerx_proof::checkpoint::{
     checkpoint_id, Attestation, Certificate, Checkpoint, CheckpointError, GuarantorKey,
     SettlementDomain,
@@ -83,10 +83,8 @@ fn attestation(checkpoint: [u8; 32], guarantor_id: [u8; 32], key: &SigningKey) -
     let (signature, recovery_id): (Signature, _) = key
         .sign_prehash_recoverable(&digest)
         .unwrap_or_else(|error| panic!("attestation signature: {error}"));
-    let signer = secp256k1::evm_address(
-        key.verifying_key().to_encoded_point(true).as_bytes(),
-    )
-    .unwrap_or_else(|error| panic!("attestation signer: {error:?}"));
+    let signer = secp256k1::evm_address(key.verifying_key().to_encoded_point(true).as_bytes())
+        .unwrap_or_else(|error| panic!("attestation signer: {error:?}"));
     Attestation::new(
         1,
         42,
@@ -167,7 +165,7 @@ fn inclusion_fixture() -> InclusionFixture {
 }
 
 #[test]
-fn verified_checkpoint_derives_commitments_signers_threshold_and_settlement() {
+fn verified_checkpoint_derives_commitments_signers_and_registration_without_anchor_escalation() {
     let fixture = inclusion_fixture();
     let (certificate, bonded, identifier) = certificate(
         &fixture.header,
@@ -199,7 +197,7 @@ fn verified_checkpoint_derives_commitments_signers_threshold_and_settlement() {
     );
     assert_eq!(
         served.verification_level,
-        VerificationLevel::SETTLEMENT_ANCHORED
+        VerificationLevel::CHECKPOINT_FINALISED
     );
 
     let bundle = proof_bundle(&ProofBundleRequest {
@@ -222,7 +220,14 @@ fn unavailable_subthreshold_duplicate_and_settlement_mismatch_are_refused() {
     let fixture = inclusion_fixture();
     let (valid, bonded, identifier) = certificate(&fixture.header, 2, 2, None, false);
     assert_eq!(
-        checkpoint(&valid, &bonded, identifier, settlement_domain(), None, false),
+        checkpoint(
+            &valid,
+            &bonded,
+            identifier,
+            settlement_domain(),
+            None,
+            false
+        ),
         Err(CheckpointReadError::AvailabilityUnavailable {
             checkpoint_id: identifier
         })
@@ -230,7 +235,14 @@ fn unavailable_subthreshold_duplicate_and_settlement_mismatch_are_refused() {
 
     let (subthreshold, keys, identifier) = certificate(&fixture.header, 1, 2, None, false);
     assert!(matches!(
-        checkpoint(&subthreshold, &keys, identifier, settlement_domain(), None, true),
+        checkpoint(
+            &subthreshold,
+            &keys,
+            identifier,
+            settlement_domain(),
+            None,
+            true
+        ),
         Err(CheckpointReadError::Certificate(
             CheckpointError::Threshold {
                 achieved: 1,
@@ -241,7 +253,14 @@ fn unavailable_subthreshold_duplicate_and_settlement_mismatch_are_refused() {
 
     let (duplicate, keys, identifier) = certificate(&fixture.header, 1, 2, None, true);
     assert!(matches!(
-        checkpoint(&duplicate, &keys, identifier, settlement_domain(), None, true),
+        checkpoint(
+            &duplicate,
+            &keys,
+            identifier,
+            settlement_domain(),
+            None,
+            true
+        ),
         Err(CheckpointReadError::Certificate(
             CheckpointError::DuplicateSigner(_)
         ))

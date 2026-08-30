@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
+use layerx_client::evidence::{CheckpointSelector, EvidenceError, ProofBundleSelector};
 use layerx_client::receipt::{Lookup, ReceiptSelector};
 use layerx_client::submit::Submission;
 use layerx_client::Client;
@@ -12,6 +13,7 @@ use layerx_types::activity::{Authority, TimestampBound};
 use layerx_types::amount::Amount;
 use layerx_types::ids::{Did, IdempotencyKey};
 use layerx_types::payload::{ActivityType, ModuleRegistry};
+use layerx_types::result::Retriability;
 use layerx_types::verify::VerificationLevel;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -2544,14 +2546,14 @@ impl<A: HumanAuthorityBoundary> HumanOperations for ProductionHumanOperations<A>
                     .ok_or(HumanOperationError::Refused)?;
                 let tenant =
                     TenantId::new(peer.tenant.clone()).map_err(|_| HumanOperationError::Refused)?;
-                let served = {
+                let mut served = {
                     let mut store = self
                         .store
                         .lock()
                         .map_err(|_| HumanOperationError::Unavailable)?;
                     crate::receipt::store_verified_if_absent(
                         &mut store,
-                        tenant,
+                        tenant.clone(),
                         idempotency_key,
                         receipt.canonical_bytes(),
                         &authority,
@@ -2573,6 +2575,74 @@ impl<A: HumanAuthorityBoundary> HumanOperations for ProductionHumanOperations<A>
                     || served.metadata.verification_level < receipt.level()
                 {
                     return Err(HumanOperationError::Refused);
+                }
+                let registry = self.authority.registry(peer).map_err(map_core)?;
+                let correlation = u64::from_be_bytes(
+                    idempotency_key[..8]
+                        .try_into()
+                        .map_err(|_| HumanOperationError::Refused)?,
+                ) | 1;
+                let activity_evidence = self.node.proof_bundle(
+                    ProofBundleSelector::Activity(expected_activity_id),
+                    correlation,
+                    &registry,
+                );
+                let receipt_evidence = self.node.proof_bundle(
+                    ProofBundleSelector::Receipt(expected_activity_id),
+                    correlation
+                        .checked_add(1)
+                        .ok_or(HumanOperationError::Refused)?,
+                    &registry,
+                );
+                match (activity_evidence, receipt_evidence) {
+                    (Ok(activity_evidence), Ok(receipt_evidence)) => {
+                        if activity_evidence.canonical_bytes()
+                            != self
+                                .outbox
+                                .exact_signed_bytes(idempotency_key)
+                                .map_err(|_| HumanOperationError::Refused)?
+                            || receipt_evidence.canonical_bytes() != receipt.canonical_bytes()
+                        {
+                            return Err(HumanOperationError::Refused);
+                        }
+                        let evidence_batch = activity_evidence
+                            .signed_header()
+                            .batch_number()
+                            .map_err(|_| HumanOperationError::Refused)?;
+                        let checkpoint = match self.node.checkpoint_evidence(
+                            CheckpointSelector::Batch(evidence_batch),
+                            correlation
+                                .checked_add(2)
+                                .ok_or(HumanOperationError::Refused)?,
+                        ) {
+                            Ok(checkpoint) => Some(checkpoint),
+                            Err(error) if evidence_unavailable(&error) => None,
+                            Err(_) => return Err(HumanOperationError::Refused),
+                        };
+                        {
+                            let mut store = self
+                                .store
+                                .lock()
+                                .map_err(|_| HumanOperationError::Unavailable)?;
+                            crate::finality::augment_verified(
+                                &mut store,
+                                tenant.clone(),
+                                idempotency_key,
+                                &activity_evidence,
+                                &receipt_evidence,
+                                checkpoint.as_ref(),
+                            )
+                            .map_err(|_| HumanOperationError::Refused)?;
+                            served = crate::receipt::serve(
+                                &store,
+                                tenant,
+                                crate::receipt::ReceiptLookupKey::Idempotency(idempotency_key),
+                            )
+                            .map_err(|_| HumanOperationError::Unavailable)?;
+                        }
+                    }
+                    (Err(error), _) | (_, Err(error)) if evidence_unavailable(&error) => {}
+                    (Err(_), _) | (_, Err(_)) => return Err(HumanOperationError::Refused),
                 }
                 self.last_verified_receipt = Some((
                     idempotency_key,
@@ -2786,6 +2856,16 @@ impl<A: HumanAuthorityBoundary> HumanOperations for ProductionHumanOperations<A>
         _: [u8; 32],
     ) -> Result<HumanResponse, HumanOperationError> {
         Err(HumanOperationError::Unavailable)
+    }
+}
+
+fn evidence_unavailable(error: &EvidenceError) -> bool {
+    match error {
+        EvidenceError::Unavailable | EvidenceError::Transport(_) => true,
+        EvidenceError::CoreRefusal { result, .. } => {
+            result.retriability() == Retriability::Retriable
+        }
+        _ => false,
     }
 }
 

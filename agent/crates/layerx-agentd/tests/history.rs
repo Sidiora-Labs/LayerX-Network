@@ -6,6 +6,7 @@ use std::thread;
 use std::time::Duration;
 
 use layerx_agentd::read::{history, HistoryLimits, HistoryReadError};
+use layerx_client::evidence::RootSelector;
 use layerx_client::head::Head;
 use layerx_client::lni::framing::{read_frame, write_frame};
 use layerx_client::lni::schema::{decode_envelope, encode_envelope, Envelope, Version};
@@ -55,8 +56,10 @@ fn history_limits(oldest: u64) -> HistoryLimits {
 
 fn context(head: u64) -> ReadContext {
     ReadContext {
-        interface_version: Version::V1_0,
+        interface_version: Version::V1_2,
         correlation_id: 91,
+        expected_protocol_version: 1,
+        expected_network_id: 77,
         requested: Requested::new(VerificationLevel::UNVERIFIED),
         head: Head {
             chain_sequence: head,
@@ -64,6 +67,8 @@ fn context(head: u64) -> ReadContext {
             finalised_checkpoint: [0x71; 32],
         },
         sequencer_authorization: SequencerAuthorization::new([1; 32], [2; 32], 0, u64::MAX),
+        handshake_sequencer_key: [2; 32],
+        root_selector: RootSelector::Latest,
     }
 }
 

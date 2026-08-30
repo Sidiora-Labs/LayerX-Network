@@ -1,7 +1,7 @@
 [schema]
 name = "LayerX Node Interface"
 major = 1
-minor = 1
+minor = 2
 encoding = "major:u16be minor:u16be message_tag:u16be correlation_id:u64be canonical_payload:bytes32 proof_material:bytes32"
 compatibility = "Within major version 1, minor releases may add only new message tags, optional trailing fields, and capabilities; removal, reuse, reordering, or changed meaning requires a new major version."
 protocol_payload = "Any protocol datum is opaque canonical LayerX bytes. It is never expanded into an LNI-specific activity, receipt, state, batch, checkpoint, proof, or event layout."
@@ -9,7 +9,7 @@ transport = "Length-prefixed canonical frames over Unix sockets by default, mutu
 handshake = "NodeInfo is the first exchange and carries LNI version, protocol version, network id, node role, chain head, latest sealed batch, latest finalised checkpoint, authorised sequencer key, and capabilities."
 
 [capabilities]
-values = ["node_info","submit","receipt_lookup","account_read","history_range","batch_header","checkpoint","proof_bundle","availability_fetch","event_subscribe","historical_proofs","preparation_state"]
+values = ["node_info","submit","receipt_lookup","account_read","history_range","batch_header","checkpoint","proof_bundle","availability_fetch","event_subscribe","historical_proofs","preparation_state","finality_evidence_register"]
 
 [message.1]
 name = "NodeInfoRequest"
@@ -63,7 +63,7 @@ golden = "0001000000060000000000000000000000010600000001a5"
 name = "AccountReadRequest"
 kind = "request"
 capability = "account_read"
-canonical_payload = "canonical account, asset, root selector, and proof request bytes"
+canonical_payload = "AR1: version:u16be=1 kind:u8(balance=1,account=2) account_id:bytes32 [asset_id:bytes32 for balance] root_selector:u8(latest=1,batch=2,checkpoint=3) [batch:u64be|checkpoint_id:bytes32] requested_verification_rank:u8; zero identities, zero selected batch/checkpoint, unknown kinds/ranks, and trailing bytes are refused"
 proof_material = "empty"
 golden = "0001000000070000000000000000000000010700000000"
 
@@ -71,8 +71,8 @@ golden = "0001000000070000000000000000000000010700000000"
 name = "AccountReadResponse"
 kind = "response"
 capability = "account_read"
-canonical_payload = "canonical LayerX account-state bytes"
-proof_material = "state inclusion proof and signed batch evidence bytes"
+canonical_payload = "exact canonical lx_account_state_leaf_material value bytes; no LNI balance wrapper"
+proof_material = "NP1: version:u16be=1 kind:u8=2 echoed_root_selector account_id:bytes32 account_root:bytes32 universal_root:bytes32 resulting_root:bytes32 account_SP1 account_tree_SP1 universal_module_SP1 canonical_head_receipt:bytes32 receipt_SP1 SH1 checkpoint_present:u8 [CP1:bytes32 CX1:bytes32]; exact account->account-tree->module-0->signed-global-root chain, head receipt inclusion, and selector identity are mandatory"
 golden = "0001000000080000000000000000000000010800000001a5"
 
 [message.9]
@@ -119,7 +119,7 @@ golden = "00010000000d0000000000000000000000010d00000001a5"
 name = "CheckpointRequest"
 kind = "request"
 capability = "checkpoint"
-canonical_payload = "canonical checkpoint-id or batch-number selector bytes"
+canonical_payload = "version:u16be=1 selector:u8(checkpoint_id=1,batch=2) checkpoint_id:bytes32|batch:u64be; zero selectors and trailing bytes are refused"
 proof_material = "empty"
 golden = "00010000000e0000000000000000000000010e00000000"
 
@@ -127,15 +127,15 @@ golden = "00010000000e0000000000000000000000010e00000000"
 name = "CheckpointResponse"
 kind = "response"
 capability = "checkpoint"
-canonical_payload = "canonical LayerX checkpoint bytes"
-proof_material = "certificate, guarantor signatures, threshold, and settlement reference bytes"
+canonical_payload = "CP1: version:u16be=1 canonical_header:bytes32 validity_proof:bytes32 attestation_count:u8 sorted_full_attestations threshold:u8 settlement_registration_reference:bytes16"
+proof_material = "CX1: version:u16be=1 expected_registration_count:u64be full_bonded_set_snapshot sorted by guarantor id, finalisation_requirements, and checkpoint registration summary with exact settlement reference; response exists only for authority-verified durably registered evidence"
 golden = "00010000000f0000000000000000000000010f00000001a5"
 
 [message.16]
 name = "ProofBundleRequest"
 kind = "request"
 capability = "proof_bundle"
-canonical_payload = "canonical activity or account target and root-selector bytes"
+canonical_payload = "PB1: version:u16be=1 kind:u8(activity=1,account_state=2,receipt=3) activity_id:bytes32 [account_id:bytes32 for account_state]; zero identities, unknown kinds, and trailing bytes are refused"
 proof_material = "empty"
 golden = "0001000000100000000000000000000000011000000000"
 
@@ -143,8 +143,8 @@ golden = "0001000000100000000000000000000000011000000000"
 name = "ProofBundleResponse"
 kind = "response"
 capability = "proof_bundle"
-canonical_payload = "opaque canonical target LayerX bytes"
-proof_material = "activity and state inclusion proof bytes"
+canonical_payload = "kind 1 exact canonical signed activity; kind 2 exact canonical account value; kind 3 exact canonical receipt"
+proof_material = "kind 1/3: version:u16be=1 kind:u8 activity_id:bytes32 SP1 SH1; kind 2: NP1; SP1 is leaf_index:u32be leaf_count:u32be depth:u8 siblings:bytes32[] with exact geometry; SH1 is version:u16be=1 sequencer_id:bytes32 public_key:bytes32 first_batch:u64be last_batch:u64be canonical_header:bytes32 signature:bytes64"
 golden = "0001000000110000000000000000000000011100000001a5"
 
 [message.18]
@@ -226,3 +226,19 @@ capability = "preparation_state"
 canonical_payload = "version:u16be=1 actor_did_length:u16be actor_did:bytes network_id:u32be account_next_sequence:u64be latest_sealed_timestamp:u64be observed_head_sequence:u64be observed_state_root:bytes32 kernel_epoch:u64be module_count:u16be modules:(module_id:u16be activity_count:u16be activity_types:u32be[]); total payload is bounded to 4096 bytes; authenticated same-process snapshot only, not a Merkle proof"
 proof_material = "empty"
 golden = "00010001001b0000000000000000000000011b00000000"
+
+[message.28]
+name = "FinalityEvidenceRegisterRequest"
+kind = "request"
+capability = "finality_evidence_register"
+canonical_payload = "CP1 exact finalized-checkpoint certificate bytes as tag 15; bounded validity proof, sorted full attestations, threshold, and exact 110-byte registration reference"
+proof_material = "CX1 full bonded-set snapshot, finalisation requirements, and exact settlement registration evidence as tag 15; daemon-owned finality-authority verification is mandatory before append and unbound authority fails unavailable"
+golden = "00010002001c0000000000000000000000011c00000001a5"
+
+[message.29]
+name = "FinalityEvidenceRegisterResponse"
+kind = "response"
+capability = "finality_evidence_register"
+canonical_payload = "version:u16be=1 checkpoint_id:bytes32 batch_number:u64be durable_record_digest:bytes32; returned only after append and fsync; identical retry returns the same digest and conflicting retry is refused"
+proof_material = "empty"
+golden = "00010002001d0000000000000000000000011d00000000"

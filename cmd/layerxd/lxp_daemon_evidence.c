@@ -2263,19 +2263,22 @@ lxp_result lxp_daemon_account_evidence_wire_encode(
              evidence->signed_header.canonical_header.bytes,
              evidence->signed_header.canonical_header.length) != 0))
         status = LXP_ERR_CONTEXT_MISMATCH;
-    selector_length = selector_kind == 1U ? 1U :
-        selector_kind == 2U ? 9U : 33U;
-    if (status == LXP_OK && selector_kind == 3U)
-        checkpoint_length = 4U + checkpoint->checkpoint_payload.length + 4U +
-            checkpoint->finality_proof.length;
-    proof_length = 3U + selector_length + 32U + 96U +
-        state_proof_length(&evidence->account_proof) +
-        state_proof_length(&evidence->account_tree_proof) +
-        state_proof_length(&evidence->universal_root_proof) + 4U +
-        evidence->canonical_receipt.length +
-        merkle_proof_length(&evidence->receipt_proof) +
-        signed_header_length(&evidence->signed_header) + 1U +
-        checkpoint_length;
+    if (status == LXP_OK) {
+        selector_length = selector_kind == 1U ? 1U :
+            selector_kind == 2U ? 9U : 33U;
+        if (selector_kind == 3U)
+            checkpoint_length = 4U +
+                checkpoint->checkpoint_payload.length + 4U +
+                checkpoint->finality_proof.length;
+        proof_length = 3U + selector_length + 32U + 96U +
+            state_proof_length(&evidence->account_proof) +
+            state_proof_length(&evidence->account_tree_proof) +
+            state_proof_length(&evidence->universal_root_proof) + 4U +
+            evidence->canonical_receipt.length +
+            merkle_proof_length(&evidence->receipt_proof) +
+            signed_header_length(&evidence->signed_header) + 1U +
+            checkpoint_length;
+    }
     if (status == LXP_OK)
         status = lxp_arena_alloc(arena, evidence->account_leaf_value_length,
                                  _Alignof(uint64_t), &allocation);
@@ -2468,12 +2471,12 @@ lxp_result lxp_daemon_activity_evidence_recover_batch(
     lxp_byte_span canonical_header, const uint8_t header_signature[64],
     lxp_arena *arena)
 {
-    lxp_byte_span activities[LXP_DAEMON_MAX_BATCH_ACTIVITIES] = {{0}};
-    lxp_byte_span receipts[LXP_DAEMON_MAX_BATCH_ACTIVITIES] = {{0}};
-    lxp_byte_span events[LXP_DAEMON_MAX_BATCH_ACTIVITIES] = {{0}};
-    lxp_receipt decoded[LXP_DAEMON_MAX_BATCH_ACTIVITIES];
-    uint8_t activity_hashes[LXP_DAEMON_MAX_BATCH_ACTIVITIES][32];
-    uint8_t receipt_hashes[LXP_DAEMON_MAX_BATCH_ACTIVITIES][32];
+    lxp_byte_span *activities = NULL;
+    lxp_byte_span *receipts = NULL;
+    lxp_byte_span *events = NULL;
+    lxp_receipt *decoded = NULL;
+    uint8_t (*activity_hashes)[32] = NULL;
+    uint8_t (*receipt_hashes)[32] = NULL;
     lxp_daemon_signed_header_evidence signed_header;
     lxp_batch_header header;
     lxp_batch_roots roots;
@@ -2509,6 +2512,20 @@ lxp_result lxp_daemon_activity_evidence_recover_batch(
         status = LXP_ERR_LENGTH_LIMIT;
     if (status == LXP_OK)
         count = (size_t)(header.last_sequence - header.first_sequence + 1U);
+    if (status == LXP_OK) {
+        activities = (lxp_byte_span *)calloc(count, sizeof(*activities));
+        receipts = (lxp_byte_span *)calloc(count, sizeof(*receipts));
+        events = (lxp_byte_span *)calloc(count, sizeof(*events));
+        decoded = (lxp_receipt *)calloc(count, sizeof(*decoded));
+        activity_hashes =
+            (uint8_t (*)[32])calloc(count, sizeof(*activity_hashes));
+        receipt_hashes =
+            (uint8_t (*)[32])calloc(count, sizeof(*receipt_hashes));
+        if (activities == NULL || receipts == NULL || events == NULL ||
+            decoded == NULL || activity_hashes == NULL ||
+            receipt_hashes == NULL)
+            status = LXP_ERR_IO;
+    }
     while (status == LXP_OK && offset < canonical_log->write_offset) {
         lxp_log_record_header record;
         uint8_t *body = NULL;
@@ -2682,9 +2699,15 @@ lxp_result lxp_daemon_activity_evidence_recover_batch(
         (void)lxp_arena_reset(arena, item_mark);
     }
     for (index = 0U; index < count; ++index) {
-        free((void *)activities[index].bytes);
-        free((void *)receipts[index].bytes);
+        if (activities != NULL) free((void *)activities[index].bytes);
+        if (receipts != NULL) free((void *)receipts[index].bytes);
     }
+    free(receipt_hashes);
+    free(activity_hashes);
+    free(decoded);
+    free(events);
+    free(receipts);
+    free(activities);
     (void)lxp_arena_reset(arena, mark);
     return status;
 }

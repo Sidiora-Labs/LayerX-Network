@@ -299,6 +299,49 @@ pub fn verify_outcome(
     })
 }
 
+/// Verifies canonical receipt bytes and their internal sequencer signature
+/// without accepting transport-supplied batch, asset, or state facts.
+///
+/// This is the receipt-authenticity primitive used after the same bytes have
+/// independently passed a signed-header Merkle inclusion check.
+///
+/// # Errors
+///
+/// Refuses non-canonical or unsupported receipt shapes, zero activity
+/// identities, missing signatures, and signatures invalid under the pinned
+/// sequencer key.
+pub fn verify_sequencer_signature(
+    receipt_bytes: &[u8],
+    sequencer_public_key: [u8; 32],
+) -> Result<Receipt, VerificationFailure> {
+    let receipt =
+        decode(receipt_bytes).map_err(|_| VerificationFailure::at(ReceiptCheck::Decode))?;
+    let reproduced =
+        encode(&receipt).map_err(|_| VerificationFailure::at(ReceiptCheck::CanonicalEncoding))?;
+    if reproduced != receipt_bytes {
+        return Err(VerificationFailure::at(ReceiptCheck::CanonicalEncoding));
+    }
+    let protocol = receipt
+        .protocol()
+        .ok_or_else(|| VerificationFailure::at(ReceiptCheck::ReceiptShape))?;
+    if !supported_protocol_version(protocol.protocol_version()) {
+        return Err(VerificationFailure::at(ReceiptCheck::ProtocolVersion));
+    }
+    if protocol.activity_id() == [0; 32] {
+        return Err(VerificationFailure::at(ReceiptCheck::ActivityId));
+    }
+    let signature = protocol
+        .sequencer_signature()
+        .ok_or_else(|| VerificationFailure::at(ReceiptCheck::MissingSignature))?;
+    let unsigned = encode_unsigned(&receipt)
+        .map_err(|_| VerificationFailure::at(ReceiptCheck::CanonicalEncoding))?;
+    let digest = receipt_digest(&unsigned)
+        .map_err(|_| VerificationFailure::at(ReceiptCheck::CanonicalEncoding))?;
+    ed25519::verify_digest(&sequencer_public_key, &signature, &digest)
+        .map_err(|_| VerificationFailure::at(ReceiptCheck::SequencerSignature))?;
+    Ok(receipt)
+}
+
 /// Verifies one successful ABI-two Programs state receipt without imposing
 /// ledger-transfer fields on an ACCOUNT or `WIND_DOWN` transition.
 ///

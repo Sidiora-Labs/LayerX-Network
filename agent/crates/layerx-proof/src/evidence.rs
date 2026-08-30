@@ -54,11 +54,11 @@ impl Evidence {
         settlement_reference: Option<Vec<u8>>,
     ) -> Self {
         Self {
-            achieved: if settlement_reference.is_some() {
-                Achieved::settlement_anchored()
-            } else {
-                Achieved::checkpoint_finalised()
-            },
+            // A matching registration reference proves only that the
+            // checkpoint was registered. Settlement anchoring requires a
+            // separate live Paxeer finality verifier and is never inferred
+            // from transported bytes.
+            achieved: Achieved::checkpoint_finalised(),
             receipt_digest: None,
             header_digest: None,
             proof_root: None,
@@ -101,7 +101,8 @@ impl Evidence {
         self.checkpoint_id
     }
 
-    /// Borrows the exact matched settlement reference when anchoring passed.
+    /// Borrows the exact matched settlement-registration reference. Its
+    /// presence does not establish Paxeer settlement anchoring.
     #[must_use]
     pub fn settlement_reference(&self) -> Option<&[u8]> {
         self.settlement_reference.as_deref()
