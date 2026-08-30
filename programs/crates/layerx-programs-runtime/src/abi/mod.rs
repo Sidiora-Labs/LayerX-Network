@@ -147,7 +147,7 @@ pub const HOST_FUNCTIONS: [HostFunction; 7] = [
 ];
 
 /// Exact authority fixed for one invocation.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AuthorizationContext {
     principal: PrincipalId,
     capabilities: CapabilitySet,
@@ -234,7 +234,6 @@ impl CallFrameId {
     }
 
     /// Rebuilds a host-frame identifier from its canonical artifact form.
-    #[cfg(test)]
     pub(crate) fn from_canonical(path: [u8; 8], depth: u8) -> Result<Self, AbiError> {
         let depth = usize::from(depth);
         if depth > path.len() || path[depth..].iter().any(|byte| *byte != 0) {

@@ -149,7 +149,7 @@ impl MeterInjection {
         if schedule != FuelSchedule::WASMI_0_31_2 {
             return Err(InjectionRefusal::UnknownSchedule { version: schedule.version() });
         }
-        let module: elements::Module = elements::deserialize_buffer(wasm).map_err(|error| {
+        let module = elements::deserialize_buffer::<elements::Module>(wasm).map_err(|error| {
             InjectionRefusal::MalformedModule { reason: error.to_string() }
         })?;
         refuse_private_import_collision(&module)?;

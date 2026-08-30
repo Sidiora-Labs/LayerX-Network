@@ -178,6 +178,7 @@ impl TypeTag {
 }
 
 /// Calldata encoding and decoding context.
+#[derive(Debug)]
 pub struct Calldata {
     convention: EncodingConvention,
     data: Vec<u8>,

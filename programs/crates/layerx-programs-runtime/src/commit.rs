@@ -352,7 +352,7 @@ impl ExecutionTrace {
             return Err(CommitmentError::CommitmentLimit { limit: MAX_TRACE_COMMITMENTS });
         }
         let retained_bytes = u64::try_from(step.instruction.len())
-            .ok_or(CommitmentError::CostOverflow)?;
+            .map_err(|_| CommitmentError::CostOverflow)?;
         let total_state_bytes = self.total_state_bytes.checked_add(retained_bytes)
             .ok_or(CommitmentError::CostOverflow)?;
         if total_state_bytes > MAX_TRACE_STATE_BYTES {

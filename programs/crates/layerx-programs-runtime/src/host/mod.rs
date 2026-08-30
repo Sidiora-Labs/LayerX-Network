@@ -11,8 +11,6 @@ mod signature;
 mod storage;
 mod transfer;
 
-use std::collections::BTreeMap;
-
 use wasmi::{Caller, Engine, InstancePre, Linker, Module, Store};
 
 use crate::abi::context::{ContextField, ContextRefusal, ExecutionContext};
@@ -24,6 +22,7 @@ use crate::execute::ExecutionFault;
 use crate::fault::{ProgramFailure, RefusalClass, RefusalReason};
 use crate::meter::Meter;
 use crate::meter::inject::{PRIVATE_CHARGE_FUNCTION, PRIVATE_CHECK_FUNCTION, PRIVATE_METER_MODULE};
+use crate::AbiRevision;
 
 use self::memory::{nonnegative, read_fixed, write_guest};
 
@@ -498,7 +497,7 @@ impl RuntimeState {
         })
     }
 
-    pub(crate) const fn isolated_legacy_reference(meter: Meter) -> Self {
+    pub(crate) fn isolated_legacy_reference(meter: Meter) -> Self {
         let mut state = Self::isolated(meter);
         state.legacy_reference_fuel = true;
         state
@@ -756,7 +755,7 @@ impl RuntimeState {
             .and_then(|abi| operation(abi, &mut self.meter));
         if let Err(error) = &result {
             if self.meter.is_activity() {
-                self.record_refusal(CompositionRefusal::Authority(*error));
+                self.record_refusal(CompositionRefusal::Authority(error.clone()));
             }
         }
         result
