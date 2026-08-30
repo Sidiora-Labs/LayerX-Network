@@ -393,18 +393,20 @@ public final class HttpProductionTransport implements ProductionTransport {
 
     private static boolean validProgramVerification(String operation, JsonNode value, JsonNode verification) {
         if (Set.of("program.discover", "program.interface").contains(operation)) {
-            return exactFields(verification, "state", "level", "reason")
+            return exactFields(verification, "state", "requested", "achieved", "reason")
                 && "Unverified".equals(verification.path("state").textValue())
-                && "SequencerSigned".equals(verification.path("level").textValue())
+                && "SequencerSigned".equals(verification.path("requested").textValue())
+                && "Unverified".equals(verification.path("achieved").textValue())
                 && "server_side_receipt_verification_only".equals(
                     verification.path("reason").textValue());
         }
         boolean pending = Set.of("program.call", "program.receipt", "program.activity").contains(operation)
-            && value.isObject() && "unknown".equals(value.path("state").textValue());
+            && value.isObject() && Set.of("unknown", "pending").contains(value.path("state").textValue());
         if (pending) {
-            return exactFields(verification, "state", "level", "reason")
+            return exactFields(verification, "state", "requested", "achieved", "reason")
                 && "Unverified".equals(verification.path("state").textValue())
-                && "SequencerSigned".equals(verification.path("level").textValue())
+                && "SequencerSigned".equals(verification.path("requested").textValue())
+                && "Unverified".equals(verification.path("achieved").textValue())
                 && "receipt_pending".equals(verification.path("reason").textValue());
         }
         return Set.of("program.simulate", "program.call", "program.receipt", "program.activity")

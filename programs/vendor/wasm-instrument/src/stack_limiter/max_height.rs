@@ -1,6 +1,6 @@
 use super::resolve_func_type;
 use alloc::vec::Vec;
-use parity_wasm::elements::{self, BlockType, Type};
+use parity_wasm::elements::{self, BlockType, BulkInstruction, Type};
 
 #[cfg(feature = "sign_ext")]
 use parity_wasm::elements::SignExtInstruction;
@@ -299,6 +299,13 @@ pub fn compute(func_idx: u32, module: &elements::Module) -> Result<u32, &'static
 			SetGlobal(_) => {
 				stack.pop_values(1)?;
 			},
+			TableGet(_) => {
+				stack.pop_values(1)?;
+				stack.push_values(1)?;
+			},
+			TableSet(_) => {
+				stack.pop_values(2)?;
+			},
 			I32Load(_, _) |
 			I64Load(_, _) |
 			F32Load(_, _) |
@@ -342,12 +349,13 @@ pub fn compute(func_idx: u32, module: &elements::Module) -> Result<u32, &'static
 				stack.push_values(1)?;
 			},
 
-			I32Const(_) | I64Const(_) | F32Const(_) | F64Const(_) => {
+			I32Const(_) | I64Const(_) | F32Const(_) | F64Const(_) | RefNull(_) |
+			RefFunc(_) => {
 				// These instructions just push the single literal value onto the stack.
 				stack.push_values(1)?;
 			},
 
-			I32Eqz | I64Eqz => {
+			I32Eqz | I64Eqz | RefIsNull => {
 				// These instructions pop the value and compare it against zero, and pushes
 				// the result of the comparison.
 				stack.pop_values(1)?;
@@ -390,6 +398,23 @@ pub fn compute(func_idx: u32, module: &elements::Module) -> Result<u32, &'static
 			F64ReinterpretI64 => {
 				// Conversion operators take one value and produce one result.
 				stack.pop_values(1)?;
+				stack.push_values(1)?;
+			},
+
+			Bulk(BulkInstruction::MemoryInit(_, _)) |
+			Bulk(BulkInstruction::MemoryCopy(_, _)) |
+			Bulk(BulkInstruction::MemoryFill(_)) |
+			Bulk(BulkInstruction::TableInit(_, _)) |
+			Bulk(BulkInstruction::TableCopy(_, _)) |
+			Bulk(BulkInstruction::TableFill(_)) => {
+				stack.pop_values(3)?;
+			},
+			Bulk(BulkInstruction::MemoryDrop(_)) | Bulk(BulkInstruction::TableDrop(_)) => {},
+			Bulk(BulkInstruction::TableGrow(_)) => {
+				stack.pop_values(2)?;
+				stack.push_values(1)?;
+			},
+			Bulk(BulkInstruction::TableSize(_)) => {
 				stack.push_values(1)?;
 			},
 

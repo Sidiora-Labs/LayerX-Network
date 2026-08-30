@@ -50,10 +50,21 @@ public sealed class ProgramsContractTests
         var achieved = Status("Achieved", null); var discovery = Status("Unverified", "server_side_receipt_verification_only");
         var pending = Status("Unverified", "receipt_pending");
         var unknown = JsonValue.Object(new Dictionary<string, JsonValue> { ["state"] = JsonValue.String("unknown") });
+        var inFlight = JsonValue.Object(new Dictionary<string, JsonValue> { ["state"] = JsonValue.String("pending") });
+        var terminal = JsonValue.Object(new Dictionary<string, JsonValue> { ["state"] = JsonValue.String("executed") });
+        var oldUnverified = JsonValue.Object(new Dictionary<string, JsonValue>
+        {
+            ["state"] = JsonValue.String("Unverified"), ["level"] = JsonValue.String("SequencerSigned"),
+            ["reason"] = JsonValue.String("server_side_receipt_verification_only"),
+        });
         Assert.True(TransportStatus("program.discover", JsonValue.EmptyObject, discovery));
         Assert.False(TransportStatus("program.discover", JsonValue.EmptyObject, achieved));
+        Assert.False(TransportStatus("program.discover", JsonValue.EmptyObject, oldUnverified));
         Assert.True(TransportStatus("program.receipt", unknown, pending));
+        Assert.True(TransportStatus("program.activity", inFlight, pending));
         Assert.False(TransportStatus("program.receipt", unknown, achieved));
+        Assert.False(TransportStatus("program.call", inFlight, achieved));
+        Assert.True(TransportStatus("program.call", terminal, achieved));
         Assert.True(TransportStatus("program.simulate", JsonValue.EmptyObject, achieved));
         Assert.False(TransportStatus("program.simulate", JsonValue.EmptyObject, discovery));
     }
@@ -109,9 +120,16 @@ public sealed class ProgramsContractTests
     {
         var fields = new Dictionary<string, JsonValue>
         {
-            ["state"] = JsonValue.String(state), ["level"] = JsonValue.String("SequencerSigned"),
+            ["state"] = JsonValue.String(state),
         };
-        if (reason is not null) fields["reason"] = JsonValue.String(reason); return JsonValue.Object(fields);
+        if (reason is null) fields["level"] = JsonValue.String("SequencerSigned");
+        else
+        {
+            fields["requested"] = JsonValue.String("SequencerSigned");
+            fields["achieved"] = JsonValue.String("Unverified");
+            fields["reason"] = JsonValue.String(reason);
+        }
+        return JsonValue.Object(fields);
     }
 
     private static T Property<T>(object value, string name) => (T)(value.GetType().GetProperty(name)?.GetValue(value)

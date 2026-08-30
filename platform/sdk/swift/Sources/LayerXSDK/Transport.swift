@@ -228,17 +228,19 @@ public final class AgentHTTPTransport: PlatformTransport, @unchecked Sendable {
     static func validVerification(_ operation: String, value: JSONValue, status: JSONValue?) -> Bool {
         guard let object = status?.objectValue else { return false }
         if operation == "program.discover" || operation == "program.interface" {
-            return exact(object, ["state", "level", "reason"])
+            return exact(object, ["state", "requested", "achieved", "reason"])
                 && object["state"]?.stringValue == "Unverified"
-                && object["level"]?.stringValue == "SequencerSigned"
+                && object["requested"]?.stringValue == "SequencerSigned"
+                && object["achieved"]?.stringValue == "Unverified"
                 && object["reason"]?.stringValue == "server_side_receipt_verification_only"
         }
         let pending = ["program.call", "program.receipt", "program.activity"].contains(operation)
-            && value.objectValue?["state"]?.stringValue == "unknown"
+            && ["unknown", "pending"].contains(value.objectValue?["state"]?.stringValue ?? "")
         if pending {
-            return exact(object, ["state", "level", "reason"])
+            return exact(object, ["state", "requested", "achieved", "reason"])
                 && object["state"]?.stringValue == "Unverified"
-                && object["level"]?.stringValue == "SequencerSigned"
+                && object["requested"]?.stringValue == "SequencerSigned"
+                && object["achieved"]?.stringValue == "Unverified"
                 && object["reason"]?.stringValue == "receipt_pending"
         }
         return ["program.simulate", "program.call", "program.receipt", "program.activity"].contains(operation)

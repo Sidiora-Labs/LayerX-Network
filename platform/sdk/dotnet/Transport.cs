@@ -204,14 +204,15 @@ public sealed class AgentHttpTransport : IPlatformTransport
         var status = verification is JsonValue.ObjectValue objectValue ? objectValue.Value : null;
         if (status is null) return false;
         if (operation is "program.discover" or "program.interface")
-            return Exact(status, "state", "level", "reason") && Text(status, "state") == "Unverified" &&
-                Text(status, "level") == "SequencerSigned" &&
+            return Exact(status, "state", "requested", "achieved", "reason") && Text(status, "state") == "Unverified" &&
+                Text(status, "requested") == "SequencerSigned" && Text(status, "achieved") == "Unverified" &&
                 Text(status, "reason") == "server_side_receipt_verification_only";
         var pending = (operation is "program.call" or "program.receipt" or "program.activity") &&
-            value is JsonValue.ObjectValue pendingValue && TryText(pendingValue.Value, "state") == "unknown";
+            value is JsonValue.ObjectValue pendingValue && TryText(pendingValue.Value, "state") is "unknown" or "pending";
         if (pending)
-            return Exact(status, "state", "level", "reason") && Text(status, "state") == "Unverified" &&
-                Text(status, "level") == "SequencerSigned" && Text(status, "reason") == "receipt_pending";
+            return Exact(status, "state", "requested", "achieved", "reason") && Text(status, "state") == "Unverified" &&
+                Text(status, "requested") == "SequencerSigned" && Text(status, "achieved") == "Unverified" &&
+                Text(status, "reason") == "receipt_pending";
         return (operation is "program.simulate" or "program.call" or "program.receipt" or "program.activity") &&
             Exact(status, "state", "level") && Text(status, "state") == "Achieved" &&
             Text(status, "level") == "SequencerSigned";

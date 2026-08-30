@@ -42,15 +42,25 @@ final class ProgramsContractTests: XCTestCase {
 
     func testOperationValueVerificationStatusMatrixIsExact() {
         let achieved: JSONValue = .object(["state": .string("Achieved"), "level": .string("SequencerSigned")])
-        let discovery: JSONValue = .object(["state": .string("Unverified"), "level": .string("SequencerSigned"),
+        let discovery: JSONValue = .object(["state": .string("Unverified"), "requested": .string("SequencerSigned"),
+            "achieved": .string("Unverified"),
             "reason": .string("server_side_receipt_verification_only")])
-        let pending: JSONValue = .object(["state": .string("Unverified"), "level": .string("SequencerSigned"),
+        let pending: JSONValue = .object(["state": .string("Unverified"), "requested": .string("SequencerSigned"),
+            "achieved": .string("Unverified"),
             "reason": .string("receipt_pending")])
+        let oldUnverified: JSONValue = .object(["state": .string("Unverified"), "level": .string("SequencerSigned"),
+            "reason": .string("server_side_receipt_verification_only")])
         let unknown: JSONValue = .object(["state": .string("unknown")])
+        let inFlight: JSONValue = .object(["state": .string("pending")])
+        let terminal: JSONValue = .object(["state": .string("executed")])
         XCTAssertTrue(AgentHTTPTransport.validVerification("program.discover", value: .emptyObject, status: discovery))
         XCTAssertFalse(AgentHTTPTransport.validVerification("program.discover", value: .emptyObject, status: achieved))
+        XCTAssertFalse(AgentHTTPTransport.validVerification("program.discover", value: .emptyObject, status: oldUnverified))
         XCTAssertTrue(AgentHTTPTransport.validVerification("program.receipt", value: unknown, status: pending))
+        XCTAssertTrue(AgentHTTPTransport.validVerification("program.activity", value: inFlight, status: pending))
         XCTAssertFalse(AgentHTTPTransport.validVerification("program.receipt", value: unknown, status: achieved))
+        XCTAssertFalse(AgentHTTPTransport.validVerification("program.call", value: inFlight, status: achieved))
+        XCTAssertTrue(AgentHTTPTransport.validVerification("program.call", value: terminal, status: achieved))
         XCTAssertTrue(AgentHTTPTransport.validVerification("program.simulate", value: .emptyObject, status: achieved))
         XCTAssertFalse(AgentHTTPTransport.validVerification("program.simulate", value: .emptyObject, status: discovery))
     }

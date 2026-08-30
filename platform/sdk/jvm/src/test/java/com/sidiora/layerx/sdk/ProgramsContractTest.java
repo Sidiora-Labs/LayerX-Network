@@ -132,6 +132,12 @@ public final class ProgramsContractTest {
             .getBytes(StandardCharsets.UTF_8);
         assertEquals(0, transport.<ObjectNode>decodePrograms("program.simulate", 200, achieved, object).size());
 
+        byte[] terminal = ("{\"request_id\":\"1\",\"value\":{\"state\":\"executed\"},"
+            + "\"verification_status\":{\"state\":\"Achieved\",\"level\":\"SequencerSigned\"}}")
+            .getBytes(StandardCharsets.UTF_8);
+        assertEquals("executed", transport.<ObjectNode>decodePrograms(
+            "program.call", 200, terminal, object).path("state").textValue());
+
         byte[] downgraded = ("{\"request_id\":\"1\",\"value\":{},"
             + "\"verification_status\":{\"state\":\"Unverified\",\"level\":\"SequencerSigned\"}}")
             .getBytes(StandardCharsets.UTF_8);
@@ -146,7 +152,8 @@ public final class ProgramsContractTest {
             () -> transport.decodePrograms("program.simulate", 200, extra, object));
 
         byte[] serverVerifiedOnly = ("{\"request_id\":\"1\",\"value\":{},"
-            + "\"verification_status\":{\"state\":\"Unverified\",\"level\":\"SequencerSigned\","
+            + "\"verification_status\":{\"state\":\"Unverified\",\"requested\":\"SequencerSigned\","
+            + "\"achieved\":\"Unverified\","
             + "\"reason\":\"server_side_receipt_verification_only\"}}")
             .getBytes(StandardCharsets.UTF_8);
         assertEquals(0, transport.<ObjectNode>decodePrograms(
@@ -154,14 +161,39 @@ public final class ProgramsContractTest {
         assertThrows(PlatformSdkException.class,
             () -> transport.decodePrograms("program.discover", 200, achieved, object));
 
-        byte[] pending = ("{\"request_id\":\"1\",\"value\":{\"state\":\"unknown\"},"
+        byte[] oldUnverified = ("{\"request_id\":\"1\",\"value\":{},"
             + "\"verification_status\":{\"state\":\"Unverified\",\"level\":\"SequencerSigned\","
+            + "\"reason\":\"server_side_receipt_verification_only\"}}")
+            .getBytes(StandardCharsets.UTF_8);
+        assertThrows(PlatformSdkException.class,
+            () -> transport.decodePrograms("program.discover", 200, oldUnverified, object));
+
+        byte[] pendingUnknown = ("{\"request_id\":\"1\",\"value\":{\"state\":\"unknown\"},"
+            + "\"verification_status\":{\"state\":\"Unverified\",\"requested\":\"SequencerSigned\","
+            + "\"achieved\":\"Unverified\","
             + "\"reason\":\"receipt_pending\"}}")
             .getBytes(StandardCharsets.UTF_8);
         assertEquals("unknown", transport.<ObjectNode>decodePrograms(
-            "program.receipt", 200, pending, object).path("state").textValue());
+            "program.receipt", 200, pendingUnknown, object).path("state").textValue());
+
+        byte[] pendingInFlight = ("{\"request_id\":\"1\",\"value\":{\"state\":\"pending\"},"
+            + "\"verification_status\":{\"state\":\"Unverified\",\"requested\":\"SequencerSigned\","
+            + "\"achieved\":\"Unverified\",\"reason\":\"receipt_pending\"}}")
+            .getBytes(StandardCharsets.UTF_8);
+        assertEquals("pending", transport.<ObjectNode>decodePrograms(
+            "program.activity", 200, pendingInFlight, object).path("state").textValue());
+
+        byte[] achievedUnknown = ("{\"request_id\":\"1\",\"value\":{\"state\":\"unknown\"},"
+            + "\"verification_status\":{\"state\":\"Achieved\",\"level\":\"SequencerSigned\"}}")
+            .getBytes(StandardCharsets.UTF_8);
         assertThrows(PlatformSdkException.class,
-            () -> transport.decodePrograms("program.receipt", 200, achieved, object));
+            () -> transport.decodePrograms("program.receipt", 200, achievedUnknown, object));
+
+        byte[] achievedPending = ("{\"request_id\":\"1\",\"value\":{\"state\":\"pending\"},"
+            + "\"verification_status\":{\"state\":\"Achieved\",\"level\":\"SequencerSigned\"}}")
+            .getBytes(StandardCharsets.UTF_8);
+        assertThrows(PlatformSdkException.class,
+            () -> transport.decodePrograms("program.call", 200, achievedPending, object));
 
         byte[] serviceError = ("{\"class\":\"PolicyRefusal\",\"protocol_result_code\":null,"
             + "\"retriability\":\"Terminal\",\"request_id\":\"2\",\"reason\":\"policy_refusal\"}")
