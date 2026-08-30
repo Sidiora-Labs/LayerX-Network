@@ -164,12 +164,25 @@ $(BUILD_DIR)/tools/generate_receipt_fixture: \
 		platform/sdk/conformance/fixtures/generate_receipt_fixture.c \
 		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
 	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) \
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< -Wl,--start-group \
+		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) -Wl,--end-group \
 		$(EXTRA_LDFLAGS) -lcrypto -pthread -o $@
 
-platform-receipt-fixture: $(BUILD_DIR)/tools/generate_receipt_fixture
+$(BUILD_DIR)/tools/generate_program_receipt_fixture: \
+		platform/sdk/conformance/fixtures/generate_program_receipt_fixture.c \
+		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< -Wl,--start-group \
+		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) -Wl,--end-group \
+		$(EXTRA_LDFLAGS) -lcrypto -pthread -o $@
+
+platform-receipt-fixture: $(BUILD_DIR)/tools/generate_receipt_fixture \
+		$(BUILD_DIR)/tools/generate_program_receipt_fixture
 	$(RUN_PREFIX) $(BUILD_DIR)/tools/generate_receipt_fixture \
 		platform/sdk/conformance/fixtures/receipt-positive-v1.json
+	$(RUN_PREFIX) $(BUILD_DIR)/tools/generate_program_receipt_fixture \
+		platform/sdk/conformance/fixtures/receipt-programs-positive-v1.json \
+		platform/sdk/conformance/fixtures/receipt-refusals-v1.json
 
 platform-verify-sdks: platform-sdk-check platform-sample-dependencies-ready platform-js-install
 	@python3 -c 'import pytest' || { echo "pytest is required for Python SDK conformance" >&2; exit 1; }

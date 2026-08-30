@@ -24,12 +24,12 @@ final class ReceiptFixtureTests: XCTestCase {
         let authorizedBatch: [String: Any]
     }
 
-    private func fixtureURL() -> URL {
+    private func fixtureURL(_ name: String = "receipt-positive-v1.json") -> URL {
         var url = URL(fileURLWithPath: #filePath)
         for _ in 0..<6 { url.deleteLastPathComponent() }
         return url
             .appendingPathComponent("platform/sdk/conformance/fixtures")
-            .appendingPathComponent("receipt-positive-v1.json")
+            .appendingPathComponent(name)
     }
 
     private func hexData(_ value: String) throws -> Data {
@@ -54,8 +54,8 @@ final class ReceiptFixtureTests: XCTestCase {
         return UInt128Value(high: 0, low: try XCTUnwrap(UInt64(text), "non-decimal \(key)"))
     }
 
-    private func loadFixture() throws -> Fixture {
-        let raw = try Data(contentsOf: fixtureURL())
+    private func loadFixture(_ name: String = "receipt-positive-v1.json") throws -> Fixture {
+        let raw = try Data(contentsOf: fixtureURL(name))
         let json = try XCTUnwrap(
             try JSONSerialization.jsonObject(with: raw) as? [String: Any], "fixture is not an object")
         let authorizedBatch = try XCTUnwrap(
@@ -128,5 +128,41 @@ final class ReceiptFixtureTests: XCTestCase {
             _ = try await LocalVerifier.verifyReceipt(mutated, authorized: fixture.batch)
             XCTFail("mutated receipt verified; a flipped signature byte must fail")
         } catch {}
+    }
+
+    func testProgramsReceiptPreservesOptionalOutcome() async throws {
+        let fixture = try loadFixture("receipt-programs-positive-v1.json")
+        let verified = try await LocalVerifier.verifyReceipt(
+            fixture.canonicalReceipt, authorized: fixture.batch)
+        let outcome = try XCTUnwrap(verified.receipt.programOutcome)
+        XCTAssertEqual(outcome.encodingVersion, 3)
+        XCTAssertEqual(outcome.runtimeVersion, 1)
+        XCTAssertEqual(outcome.abiVersion, 1)
+        XCTAssertEqual(outcome.feeUnits, UInt128Value(high: 0, low: 16))
+    }
+
+    func testRefusalVectorsExposeSharedTaxonomy() async throws {
+        let raw = try Data(contentsOf: fixtureURL("receipt-refusals-v1.json"))
+        let json = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: raw) as? [String: Any])
+        let authority = try XCTUnwrap(json["authorized_batch"] as? [String: Any])
+        let batch = AuthorizedReceiptBatch(
+            batchID: try hexField(authority, "batch_id_hex"),
+            asset: try hexField(authority, "asset_hex"),
+            previousStateRoot: try hexField(authority, "previous_state_root_hex"),
+            resultingStateRoot: try hexField(authority, "resulting_state_root_hex"),
+            sequencerPublicKey: try hexField(authority, "sequencer_public_key_hex"))
+        let vectors = try XCTUnwrap(json["vectors"] as? [[String: Any]])
+        for vector in vectors {
+            let name = try XCTUnwrap(vector["name"] as? String)
+            let expected = try XCTUnwrap(vector["expected_check"] as? String)
+            do {
+                _ = try await LocalVerifier.verifyReceipt(
+                    try hexField(vector, "canonical_receipt_hex"), authorized: batch)
+                XCTFail("\(name) verified")
+            } catch let error as PlatformSDKError {
+                XCTAssertEqual(error.receiptCheck?.rawValue, expected, name)
+            }
+        }
     }
 }

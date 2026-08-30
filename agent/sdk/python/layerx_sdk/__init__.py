@@ -41,6 +41,7 @@ from .generated.client import (
     parse_timestamp_seconds,
     require_verified,
 )
+from .generated.receipt import ReceiptFailureCode
 from .production import (
     AGENT_OPERATIONS,
     HUMAN_OPERATIONS,
@@ -74,6 +75,7 @@ from .verifier import (
     MerkleProof,
     ProtocolReceipt,
     ReceiptEffect,
+    ReceiptVerificationError,
     ReceiptVerification,
     SequencerAuthorization,
     decode_batch_header,
@@ -165,7 +167,9 @@ __all__ = [
     "MerkleProof",
     "ProtocolReceipt",
     "ReceiptEffect",
+    "ReceiptFailureCode",
     "ReceiptVerification",
+    "ReceiptVerificationError",
     "SequencerAuthorization",
     "decode_batch_header",
     "verify_batch_inclusion",

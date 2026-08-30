@@ -29,6 +29,11 @@ fn place(root: &Path, relative: &str, contents: &str) {
 
 fn repo_fixture(label: &str) -> PathBuf {
     let root = directory(label);
+    place(
+        &root,
+        "platform/sdk/generators/receipt.kvx",
+        "[receipt]\nprogram_outcome = \"optional\"\nprograms_module_id = 9\nprogram_outcome_tags = [\"50524731\", \"50524732\", \"50524733\"]\nrequired_nonzero = [\"global-sequence\", \"module-id\", \"module-version\", \"timestamp\", \"activity-id\", \"resulting-state-root\"]\nfailure_checks = [\"decode\", \"canonical-encoding\", \"receipt-shape\", \"missing-signature\", \"protocol-version\", \"result-code\", \"operation\", \"activity-id\", \"global-sequence\", \"module-id\", \"module-version\", \"timestamp\", \"batch-id\", \"asset\", \"previous-state-root\", \"resulting-state-root\", \"debit-balance\", \"credit-balance\", \"program-outcome\", \"sequencer-signature\"]\n",
+    );
     place(&root, "agent/schema/agent-api/v1.kvx", "[schema]\nincludes = [\"errors.kvx\",\"approval.kvx\",\"stream.kvx\",\"programs.kvx\"]\n\n[scalar.Amount]\nrust = \"u128\"\n");
     place(&root, "agent/schema/agent-api/errors.kvx", "[operation.agent.register]\nrequest = \"Register\"\nresponse = \"Registered\"\n\n[mutation.agent.register]\nenvelope = \"IdempotentMutation\"\n\n[type.ErrorClass]\nvariants = [\"TransportFailure\"]\n\n[type.Retriability]\nvariants = [\"Terminal\"]\n");
     place(
@@ -114,6 +119,11 @@ fn repo_fixture(label: &str) -> PathBuf {
         "// generated Rust mirror\n",
     );
     place(&root, "platform/sdk/go/generated.go", "package layerx\n");
+    place(
+        &root,
+        "platform/sdk/go/mirror_generated.go",
+        "package layerx\n",
+    );
     for relative in pipeline::JVM_FILES {
         place(&root, &format!("platform/sdk/jvm/{relative}"), "jvm\n");
     }
@@ -123,6 +133,12 @@ fn repo_fixture(label: &str) -> PathBuf {
         "[sdk]\nname = \"jvm\"\n",
     );
     place(&root, "platform/sdk/conformance/run-jvm.sh", "#!/bin/sh\n");
+    place(&root, "platform/sdk/conformance/mirror-v2.json", "{}\n");
+    place(
+        &root,
+        "platform/sdk/schema/mirror-v2.kvx",
+        "[schema]\nversion = 2\n",
+    );
     place(
         &root,
         "platform/sdk/swift/Sources/LayerXSDK/Generated/OperationCatalog.swift",
@@ -130,8 +146,18 @@ fn repo_fixture(label: &str) -> PathBuf {
     );
     place(
         &root,
+        "platform/sdk/swift/Sources/LayerXSDK/Generated/MirrorSchema.swift",
+        "// generated Swift mirror\n",
+    );
+    place(
+        &root,
         "platform/sdk/dotnet/Generated/OperationCatalog.cs",
         "// generated C#\n",
+    );
+    place(
+        &root,
+        "platform/sdk/dotnet/Generated/MirrorSchema.cs",
+        "// generated C# mirror\n",
     );
     place(
         &root,
@@ -196,6 +222,7 @@ fn rust_operation_catalogue_is_derived_from_programs_schema() {
 #[test]
 fn lock_round_trips_through_render_and_parse() {
     let root = repo_fixture("roundtrip");
+    generate(&root);
     let live = capture(&root).unwrap_or_else(|error| panic!("capture: {error}"));
     let text = render(&live).unwrap_or_else(|error| panic!("render: {error}"));
     let parsed = parse_lock(&text).unwrap_or_else(|error| panic!("parse: {error}"));

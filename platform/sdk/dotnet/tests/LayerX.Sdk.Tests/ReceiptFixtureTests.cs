@@ -38,10 +38,12 @@ public sealed class ReceiptFixtureTests
         => new(0, ulong.Parse(element.GetProperty(key).GetString()
             ?? throw new InvalidOperationException($"missing {key}")));
 
-    private static Fixture LoadFixture()
+    private static string FixturePath(string name) => Path.Combine(
+        RepoRoot(), "platform", "sdk", "conformance", "fixtures", name);
+
+    private static Fixture LoadFixture(string name = "receipt-positive-v1.json")
     {
-        var path = Path.Combine(
-            RepoRoot(), "platform", "sdk", "conformance", "fixtures", "receipt-positive-v1.json");
+        var path = FixturePath(name);
         using var document = JsonDocument.Parse(File.ReadAllText(path));
         var root = document.RootElement.Clone();
         var batch = root.GetProperty("authorized_batch");
@@ -98,5 +100,41 @@ public sealed class ReceiptFixtureTests
         mutated[^1] ^= 0x01;
         await Assert.ThrowsAsync<PlatformSdkException>(async () =>
             await LocalVerifier.VerifyReceiptAsync(mutated, fixture.Batch));
+    }
+
+    [Fact]
+    public async Task ProgramsReceiptPreservesOptionalOutcome()
+    {
+        var fixture = LoadFixture("receipt-programs-positive-v1.json");
+        var verified = await LocalVerifier.VerifyReceiptAsync(fixture.CanonicalReceipt, fixture.Batch);
+        var outcome = Assert.IsType<ProgramReceiptOutcome>(verified.Receipt.ProgramOutcome);
+        Assert.Equal((byte)3, outcome.EncodingVersion);
+        Assert.Equal((ushort)1, outcome.RuntimeVersion);
+        Assert.Equal((ushort)1, outcome.AbiVersion);
+        Assert.Equal(new UInt128Value(0, 16), outcome.FeeUnits);
+    }
+
+    [Fact]
+    public async Task RefusalVectorsExposeSharedTaxonomy()
+    {
+        using var document = JsonDocument.Parse(File.ReadAllText(
+            FixturePath("receipt-refusals-v1.json")));
+        var root = document.RootElement;
+        var authority = root.GetProperty("authorized_batch");
+        var batch = new AuthorizedReceiptBatch(
+            HexField(authority, "batch_id_hex"),
+            HexField(authority, "asset_hex"),
+            HexField(authority, "previous_state_root_hex"),
+            HexField(authority, "resulting_state_root_hex"),
+            HexField(authority, "sequencer_public_key_hex"));
+        foreach (var vector in root.GetProperty("vectors").EnumerateArray())
+        {
+            var failure = await Assert.ThrowsAsync<PlatformSdkException>(async () =>
+                await LocalVerifier.VerifyReceiptAsync(
+                    HexField(vector, "canonical_receipt_hex"), batch));
+            Assert.NotNull(failure.ReceiptCheck);
+            Assert.Equal(vector.GetProperty("expected_check").GetString(),
+                failure.ReceiptCheck!.Value.MachineCode());
+        }
     }
 }

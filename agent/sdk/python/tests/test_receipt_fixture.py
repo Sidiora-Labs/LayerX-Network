@@ -5,7 +5,12 @@ import json
 from pathlib import Path
 import unittest
 
-from layerx_sdk import AuthorizedReceiptBatch, PlatformSdkError, verify_receipt
+from layerx_sdk import (
+    AuthorizedReceiptBatch,
+    PlatformSdkError,
+    ReceiptVerificationError,
+    verify_receipt,
+)
 from layerx_sdk.verifier import decode_program_receipt_outcome
 
 _PROGRAM_OUTCOME_V3 = "505247330100000000000100010000000700000001000000000000000b000000000000000c000000000000000d000000000000000e00000001000000000000000f0000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000020000000000000003000000000000000400000000000000050000000000000006000000000000000700000020000000000000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000201111111111111111111111111111111111111111111111111111111111111111000000202222222222222222222222222222222222222222222222222222222222222222000000200000000000000000000000000000000000000000000000000000000000000000"
@@ -35,6 +40,10 @@ LayerXSignatureVerifier = _signature_verifier_class()
 
 def _load_fixture() -> dict:
     return json.loads(_FIXTURE_PATH.read_text(encoding="utf-8"))
+
+
+def _load_shared_fixture(name: str) -> dict:
+    return json.loads((_FIXTURE_PATH.parent / name).read_text(encoding="utf-8"))
 
 
 def _authorized(fixture: dict) -> AuthorizedReceiptBatch:
@@ -104,6 +113,34 @@ class ReceiptFixtureTest(unittest.TestCase):
             verify_receipt(
                 bytes(mutated), _authorized(fixture), LayerXSignatureVerifier()
             )
+
+    def test_core_programs_fixture_preserves_optional_outcome(self) -> None:
+        fixture = _load_shared_fixture("receipt-programs-positive-v1.json")
+        verified = verify_receipt(
+            bytes.fromhex(fixture["canonical_receipt_hex"]),
+            _authorized(fixture),
+            LayerXSignatureVerifier(),
+        )
+        outcome = verified.receipt.program_outcome
+        self.assertIsNotNone(outcome)
+        assert outcome is not None
+        self.assertEqual(outcome.encoding_version, 3)
+        self.assertEqual(outcome.runtime_version, 1)
+        self.assertEqual(outcome.abi_version, 1)
+        self.assertEqual(outcome.fee_units, 16)
+
+    def test_core_refusal_vectors_expose_shared_taxonomy(self) -> None:
+        fixture = _load_shared_fixture("receipt-refusals-v1.json")
+        authorized = _authorized(fixture)
+        for vector in fixture["vectors"]:
+            with self.subTest(vector=vector["name"]):
+                with self.assertRaises(ReceiptVerificationError) as refused:
+                    verify_receipt(
+                        bytes.fromhex(vector["canonical_receipt_hex"]),
+                        authorized,
+                        LayerXSignatureVerifier(),
+                    )
+                self.assertEqual(refused.exception.check.value, vector["expected_check"])
 
 
 if __name__ == "__main__":

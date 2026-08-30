@@ -35,8 +35,12 @@ pub mod mirror_generated;
 mod operation_generated;
 pub mod production;
 pub mod programs;
+mod receipt_generated;
 
 pub use operation_generated::Operation;
+pub use receipt_generated::{
+    ReceiptFailureCode, PROGRAMS_MODULE_ID, PROGRAM_OUTCOME_TAGS, REQUIRED_NONZERO_CHECKS,
+};
 
 macro_rules! mutation_methods {
     ($( $method:ident: $request:ty => $operation:ident ),+ $(,)?) => {

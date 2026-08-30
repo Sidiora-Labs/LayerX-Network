@@ -3,6 +3,8 @@ import { fileURLToPath } from "node:url";
 
 import {
   decodeProgramReceiptOutcome,
+  ReceiptFailureCode,
+  ReceiptVerificationError,
   verifyReceipt,
   type AuthorizedReceiptBatch,
   type ReceiptVerification,
@@ -44,6 +46,15 @@ interface ReceiptFixture {
   };
 }
 
+interface ReceiptRefusalFixture {
+  readonly authorized_batch: ReceiptFixture["authorized_batch"];
+  readonly vectors: readonly {
+    readonly name: string;
+    readonly expected_check: string;
+    readonly canonical_receipt_hex: string;
+  }[];
+}
+
 function hexBytes(value: string): Uint8Array {
   assert(value.length % 2 === 0, "odd hex length");
   const bytes = new Uint8Array(value.length / 2);
@@ -63,10 +74,10 @@ function hexEqual(actual: Uint8Array, expectedHex: string, field: string): void 
   }
 }
 
-function loadFixture(): ReceiptFixture {
+function loadFixture(name = "receipt-positive-v1.json"): ReceiptFixture {
   const path = fileURLToPath(
     new URL(
-      "../../../../../platform/sdk/conformance/fixtures/receipt-positive-v1.json",
+      `../../../../../platform/sdk/conformance/fixtures/${name}`,
       import.meta.url,
     ),
   );
@@ -127,6 +138,32 @@ export async function verifyReceiptFixture(): Promise<void> {
     refused = true;
   }
   assert(refused, "mutated receipt verified; a flipped signature byte must fail");
+
+  const programs = loadFixture("receipt-programs-positive-v1.json");
+  const verifiedPrograms = await verifyReceipt(
+    hexBytes(programs.canonical_receipt_hex),
+    authorizedBatch(programs),
+  );
+  const embedded = verifiedPrograms.receipt.programOutcome;
+  assert(embedded !== undefined, "Programs receipt lost its optional outcome");
+  assert(embedded.encodingVersion === 3, "embedded outcome version diverged");
+  assert(embedded.runtimeVersion === 1, "embedded runtime version diverged");
+  assert(embedded.abiVersion === 1, "embedded ABI version diverged");
+  assert(embedded.feeUnits === 16n, "embedded fee units diverged");
+
+  const refusals = loadFixture("receipt-refusals-v1.json") as unknown as ReceiptRefusalFixture;
+  for (const vector of refusals.vectors) {
+    try {
+      await verifyReceipt(
+        hexBytes(vector.canonical_receipt_hex),
+        authorizedBatch(refusals as unknown as ReceiptFixture),
+      );
+      throw new Error(`${vector.name} verified`);
+    } catch (error) {
+      assert(error instanceof ReceiptVerificationError, `${vector.name} returned an untyped failure`);
+      assert(error.check === (vector.expected_check as ReceiptFailureCode), `${vector.name} taxonomy diverged`);
+    }
+  }
 }
 
 await verifyReceiptFixture();

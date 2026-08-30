@@ -5,6 +5,11 @@ from hashlib import sha256
 from typing import Literal, Protocol, cast
 
 from .production import PlatformSdkError, SdkErrorCode
+from .generated.receipt import (
+    PROGRAM_OUTCOME_TAGS,
+    PROGRAMS_MODULE_ID,
+    ReceiptFailureCode,
+)
 
 _MERKLE_LEAF_DOMAIN = b"LXP/v1/merkle-leaf\0"
 _MERKLE_INTERNAL_DOMAIN = b"LXP/v1/merkle-internal\0"
@@ -18,9 +23,19 @@ _MAX_EFFECTS = 512
 _MAX_EFFECT_BODY = 256
 _MAX_U128 = 0xFFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF
 _ALL_AVAILABILITY_CLASSES = 0x1F
-_PROGRAM_OUTCOME_V1 = 0x5052_4731
-_PROGRAM_OUTCOME_V2 = 0x5052_4732
-_PROGRAM_OUTCOME_V3 = 0x5052_4733
+_PROGRAM_OUTCOME_V1, _PROGRAM_OUTCOME_V2, _PROGRAM_OUTCOME_V3 = PROGRAM_OUTCOME_TAGS
+
+
+class ReceiptVerificationError(PlatformSdkError):
+    __slots__ = ("check",)
+
+    def __init__(self, check: ReceiptFailureCode) -> None:
+        super().__init__(SdkErrorCode.VERIFICATION_FAILURE, "never")
+        self.check = check
+
+
+def _receipt_failure(check: ReceiptFailureCode) -> None:
+    raise ReceiptVerificationError(check)
 
 
 def _failure() -> None:
@@ -687,23 +702,28 @@ def decode_program_receipt_outcome(
     canonical_outcome: bytes, protocol_version: int
 ) -> ProgramReceiptOutcome:
     if not canonical_outcome or len(canonical_outcome) > _MAX_MESSAGE_BYTES:
-        _failure()
-    decoder = _Decoder(bytes(canonical_outcome))
-    outcome = _decode_program_receipt_outcome_from(decoder, protocol_version)
-    decoder.finish()
-    return outcome
+        _receipt_failure(ReceiptFailureCode.RECEIPT_SHAPE)
+    try:
+        decoder = _Decoder(bytes(canonical_outcome))
+        outcome = _decode_program_receipt_outcome_from(decoder, protocol_version)
+        decoder.finish()
+        return outcome
+    except ReceiptVerificationError:
+        raise
+    except PlatformSdkError:
+        _receipt_failure(ReceiptFailureCode.PROGRAM_OUTCOME)
 
 
 def _decode_protocol_receipt(canonical_receipt: bytes) -> tuple[ProtocolReceipt, bytes]:
     if not canonical_receipt or len(canonical_receipt) > _MAX_MESSAGE_BYTES:
-        _failure()
+        _receipt_failure(ReceiptFailureCode.RECEIPT_SHAPE)
     decoder = _Decoder(canonical_receipt)
     envelope_version = decoder.u16()
     if envelope_version not in (1, 2) or decoder.u16() != 0x5201:
-        _failure()
+        _receipt_failure(ReceiptFailureCode.DECODE)
     protocol_version = decoder.u16()
     if protocol_version != envelope_version:
-        _failure()
+        _receipt_failure(ReceiptFailureCode.PROTOCOL_VERSION)
     activity_id = decoder.bounded(32)
     global_sequence = decoder.u64()
     previous_state_root = decoder.bounded(32)
@@ -712,7 +732,7 @@ def _decode_protocol_receipt(canonical_receipt: bytes) -> tuple[ProtocolReceipt,
     result_code = decoder.i32()
     effect_count = decoder.u32()
     if effect_count > _MAX_EFFECTS:
-        _failure()
+        _receipt_failure(ReceiptFailureCode.DECODE)
     effects: list[ReceiptEffect] = []
     for _ in range(effect_count):
         module_id = decoder.u16()
@@ -720,10 +740,10 @@ def _decode_protocol_receipt(canonical_receipt: bytes) -> tuple[ProtocolReceipt,
         event_type = decoder.u16()
         kind_value = decoder.u8()
         if kind_value < 1 or kind_value > 3:
-            _failure()
+            _receipt_failure(ReceiptFailureCode.DECODE)
         monetary_value = decoder.u8()
         if monetary_value > 1 or (monetary_value == 1 and kind_value != 2):
-            _failure()
+            _receipt_failure(ReceiptFailureCode.DECODE)
         effects.append(ReceiptEffect(
             module_id=module_id,
             ordinal=ordinal,
@@ -752,13 +772,28 @@ def _decode_protocol_receipt(canonical_receipt: bytes) -> tuple[ProtocolReceipt,
     authorization_hash = decoder.bounded(32)
     context_hash = decoder.bounded(32)
     timestamp = decoder.u64()
-    program_outcome = (
-        _decode_program_receipt_outcome_from(decoder, protocol_version)
-        if decoder.remaining() > 69
-        else None
-    )
+    if global_sequence == 0:
+        _receipt_failure(ReceiptFailureCode.GLOBAL_SEQUENCE)
+    if module_id == 0:
+        _receipt_failure(ReceiptFailureCode.MODULE_ID)
+    if module_version == 0:
+        _receipt_failure(ReceiptFailureCode.MODULE_VERSION)
+    if timestamp == 0:
+        _receipt_failure(ReceiptFailureCode.TIMESTAMP)
+    if _all_zero(activity_id):
+        _receipt_failure(ReceiptFailureCode.ACTIVITY_ID)
+    if _all_zero(resulting_state_root):
+        _receipt_failure(ReceiptFailureCode.RESULTING_STATE_ROOT)
+    try:
+        program_outcome = (
+            _decode_program_receipt_outcome_from(decoder, protocol_version)
+            if decoder.remaining() > 69
+            else None
+        )
+    except PlatformSdkError:
+        _receipt_failure(ReceiptFailureCode.PROGRAM_OUTCOME)
     if program_outcome is not None and (
-        module_id != 9
+        module_id != PROGRAMS_MODULE_ID
         or program_outcome.result_code != result_code
         or (
             program_outcome.terminal_kind == 1
@@ -766,10 +801,10 @@ def _decode_protocol_receipt(canonical_receipt: bytes) -> tuple[ProtocolReceipt,
         )
         or (program_outcome.terminal_kind != 1 and not _all_zero(transfer_set_root))
     ):
-        _failure()
+        _receipt_failure(ReceiptFailureCode.PROGRAM_OUTCOME)
     signature_flag_offset = decoder.position()
     if decoder.u8() != 1:
-        _failure()
+        _receipt_failure(ReceiptFailureCode.MISSING_SIGNATURE)
     sequencer_signature = decoder.bounded(64)
     decoder.finish()
     return (
@@ -813,31 +848,44 @@ def verify_receipt_outcome(
     authorized: AuthorizedReceiptBatch,
     signatures: LocalSignatureVerifier,
 ) -> ReceiptVerification:
-    receipt, unsigned_receipt = _decode_protocol_receipt(canonical_receipt)
-    if (
-        receipt.operation == 0
-        or _all_zero(receipt.activity_id)
-        or _all_zero(receipt.asset)
-        or not _equal(receipt.batch_id, _exact(authorized.batch_id, 32))
-        or not _equal(receipt.asset, _exact(authorized.asset, 32))
-        or not _equal(receipt.previous_state_root, _exact(authorized.previous_state_root, 32))
-        or not _equal(receipt.resulting_state_root, _exact(authorized.resulting_state_root, 32))
-    ):
-        _failure()
-    if receipt.result_code == 0 and (
-        receipt.from_balance_before < receipt.amount
-        or receipt.from_balance_before - receipt.amount != receipt.from_balance_after
-        or receipt.to_balance_before + receipt.amount > _MAX_U128
-        or receipt.to_balance_before + receipt.amount != receipt.to_balance_after
-    ):
-        _failure()
+    try:
+        receipt, unsigned_receipt = _decode_protocol_receipt(canonical_receipt)
+    except ReceiptVerificationError:
+        raise
+    except PlatformSdkError:
+        _receipt_failure(ReceiptFailureCode.DECODE)
+    if receipt.operation == 0:
+        _receipt_failure(ReceiptFailureCode.OPERATION)
+    if _all_zero(receipt.activity_id):
+        _receipt_failure(ReceiptFailureCode.ACTIVITY_ID)
+    if _all_zero(receipt.asset):
+        _receipt_failure(ReceiptFailureCode.ASSET)
+    if not _equal(receipt.batch_id, _exact(authorized.batch_id, 32)):
+        _receipt_failure(ReceiptFailureCode.BATCH_ID)
+    if not _equal(receipt.asset, _exact(authorized.asset, 32)):
+        _receipt_failure(ReceiptFailureCode.ASSET)
+    if not _equal(receipt.previous_state_root, _exact(authorized.previous_state_root, 32)):
+        _receipt_failure(ReceiptFailureCode.PREVIOUS_STATE_ROOT)
+    if not _equal(receipt.resulting_state_root, _exact(authorized.resulting_state_root, 32)):
+        _receipt_failure(ReceiptFailureCode.RESULTING_STATE_ROOT)
+    if receipt.result_code == 0:
+        if (
+            receipt.from_balance_before < receipt.amount
+            or receipt.from_balance_before - receipt.amount != receipt.from_balance_after
+        ):
+            _receipt_failure(ReceiptFailureCode.DEBIT_BALANCE)
+        if (
+            receipt.to_balance_before + receipt.amount > _MAX_U128
+            or receipt.to_balance_before + receipt.amount != receipt.to_balance_after
+        ):
+            _receipt_failure(ReceiptFailureCode.CREDIT_BALANCE)
     receipt_digest = _digest(_RECEIPT_DOMAIN, unsigned_receipt)
     if not signatures.verify_ed25519(
         _exact(authorized.sequencer_public_key, 32),
         receipt.sequencer_signature,
         receipt_digest,
     ):
-        _failure()
+        _receipt_failure(ReceiptFailureCode.SEQUENCER_SIGNATURE)
     return ReceiptVerification(
         level="sequencer-signed",
         receipt=receipt,
@@ -853,5 +901,5 @@ def verify_receipt(
 ) -> ReceiptVerification:
     verified = verify_receipt_outcome(canonical_receipt, authorized, signatures)
     if verified.receipt.result_code != 0:
-        _failure()
+        _receipt_failure(ReceiptFailureCode.RESULT_CODE)
     return verified

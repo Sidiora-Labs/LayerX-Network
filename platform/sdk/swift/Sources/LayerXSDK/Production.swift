@@ -29,13 +29,15 @@ public struct PlatformSDKError: Error, Sendable, Equatable, CustomStringConverti
     public let requestID: String?
     public let protocolResultCode: Int32?
     public let retryAfterMilliseconds: UInt64?
+    public let receiptCheck: ReceiptCheck?
 
-    public init(code: SDKErrorCode, retry: RetryClass, requestID: String? = nil, protocolResultCode: Int32? = nil, retryAfterMilliseconds: UInt64? = nil) {
+    public init(code: SDKErrorCode, retry: RetryClass, requestID: String? = nil, protocolResultCode: Int32? = nil, retryAfterMilliseconds: UInt64? = nil, receiptCheck: ReceiptCheck? = nil) {
         self.code = code
         self.retry = retry
         self.requestID = requestID
         self.protocolResultCode = protocolResultCode
         self.retryAfterMilliseconds = retryAfterMilliseconds
+        self.receiptCheck = receiptCheck
     }
 
     public var description: String { "LayerX SDK error: \(code.rawValue)" }

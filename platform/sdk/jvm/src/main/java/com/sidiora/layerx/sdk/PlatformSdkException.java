@@ -1,6 +1,7 @@
 package com.sidiora.layerx.sdk;
 
 import com.fasterxml.jackson.annotation.JsonValue;
+import com.sidiora.layerx.sdk.verify.GeneratedReceiptContract.ReceiptCheck;
 import java.util.Map;
 
 public final class PlatformSdkException extends RuntimeException {
@@ -50,16 +51,18 @@ public final class PlatformSdkException extends RuntimeException {
     private final SchemaErrors.AgentRetriability agentRetriability;
     private final SchemaErrors.HumanCode humanCode;
     private final SchemaErrors.HumanRetriability humanRetriability;
+    private final ReceiptCheck receiptCheck;
 
     public PlatformSdkException(Code code, Retry retry, String requestId, Integer protocolResultCode, Long retryAfterMs) {
-        this(code, retry, requestId, protocolResultCode, retryAfterMs, null, null, null, null);
+        this(code, retry, requestId, protocolResultCode, retryAfterMs, null, null, null, null, null);
     }
 
     private PlatformSdkException(Code code, Retry retry, String requestId, Integer protocolResultCode,
                                  Long retryAfterMs, SchemaErrors.AgentClass agentClass,
                                  SchemaErrors.AgentRetriability agentRetriability,
                                  SchemaErrors.HumanCode humanCode,
-                                 SchemaErrors.HumanRetriability humanRetriability) {
+                                 SchemaErrors.HumanRetriability humanRetriability,
+                                 ReceiptCheck receiptCheck) {
         super(MESSAGES.get(code));
         this.code = code;
         this.retry = retry;
@@ -70,6 +73,7 @@ public final class PlatformSdkException extends RuntimeException {
         this.agentRetriability = agentRetriability;
         this.humanCode = humanCode;
         this.humanRetriability = humanRetriability;
+        this.receiptCheck = receiptCheck;
     }
 
     public static PlatformSdkException agent(Code code, Retry retry, String requestId,
@@ -78,7 +82,7 @@ public final class PlatformSdkException extends RuntimeException {
                                              SchemaErrors.AgentRetriability retriability) {
         if (agentClass == null || retriability == null) throw invalidArgument();
         return new PlatformSdkException(code, retry, requestId, protocolResultCode, retryAfterMs,
-            agentClass, retriability, null, null);
+            agentClass, retriability, null, null, null);
     }
 
     public static PlatformSdkException human(Code code, Retry retry, String requestId,
@@ -87,7 +91,7 @@ public final class PlatformSdkException extends RuntimeException {
                                              SchemaErrors.HumanRetriability retriability) {
         if (humanCode == null || retriability == null) throw invalidArgument();
         return new PlatformSdkException(code, retry, requestId, protocolResultCode, retryAfterMs,
-            null, null, humanCode, retriability);
+            null, null, humanCode, retriability, null);
     }
 
     public static PlatformSdkException invalidArgument() {
@@ -95,6 +99,11 @@ public final class PlatformSdkException extends RuntimeException {
     }
     public static PlatformSdkException verificationFailure() {
         return new PlatformSdkException(Code.VERIFICATION_FAILURE, Retry.NEVER, null, null, null);
+    }
+    public static PlatformSdkException receiptVerification(ReceiptCheck check) {
+        if (check == null) throw invalidArgument();
+        return new PlatformSdkException(Code.VERIFICATION_FAILURE, Retry.NEVER, null, null, null,
+            null, null, null, null, check);
     }
     public Code code() { return code; }
     public Retry retry() { return retry; }
@@ -105,6 +114,7 @@ public final class PlatformSdkException extends RuntimeException {
     public SchemaErrors.AgentRetriability agentRetriability() { return agentRetriability; }
     public SchemaErrors.HumanCode humanCode() { return humanCode; }
     public SchemaErrors.HumanRetriability humanRetriability() { return humanRetriability; }
+    public ReceiptCheck receiptCheck() { return receiptCheck; }
     @JsonValue public Map<String, Object> safeDetails() {
         var value = new java.util.LinkedHashMap<String, Object>();
         value.put("code", code.wire()); value.put("retry", retry.wire());
@@ -115,6 +125,7 @@ public final class PlatformSdkException extends RuntimeException {
         if (agentRetriability != null) value.put("agentRetriability", agentRetriability.wire());
         if (humanCode != null) value.put("humanCode", humanCode.wire());
         if (humanRetriability != null) value.put("humanRetriability", humanRetriability.wire());
+        if (receiptCheck != null) value.put("receiptCheck", receiptCheck.wire());
         return Map.copyOf(value);
     }
 }

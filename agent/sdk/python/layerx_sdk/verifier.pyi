@@ -1,5 +1,10 @@
 from dataclasses import dataclass
 from typing import Literal, Protocol
+from .generated.receipt import ReceiptFailureCode
+from .production import PlatformSdkError
+
+class ReceiptVerificationError(PlatformSdkError):
+    check: ReceiptFailureCode
 
 @dataclass(frozen=True)
 class MerkleProof:

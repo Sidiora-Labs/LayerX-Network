@@ -23,29 +23,6 @@ const (
 	maximumEffectBody      = 256
 	batchHeaderBytes       = 354
 	allAvailabilityClasses = 0x1f
-	programOutcomeV1       = 0x50524731
-	programOutcomeV2       = 0x50524732
-	programOutcomeV3       = 0x50524733
-)
-
-type ReceiptCheck string
-
-const (
-	ReceiptCheckDecode             ReceiptCheck = "decode"
-	ReceiptCheckCanonicalEncoding  ReceiptCheck = "canonical-encoding"
-	ReceiptCheckReceiptShape       ReceiptCheck = "receipt-shape"
-	ReceiptCheckMissingSignature   ReceiptCheck = "missing-signature"
-	ReceiptCheckProtocolVersion    ReceiptCheck = "protocol-version"
-	ReceiptCheckResultCode         ReceiptCheck = "result-code"
-	ReceiptCheckOperation          ReceiptCheck = "operation"
-	ReceiptCheckActivityID         ReceiptCheck = "activity-id"
-	ReceiptCheckBatchID            ReceiptCheck = "batch-id"
-	ReceiptCheckAsset              ReceiptCheck = "asset"
-	ReceiptCheckPreviousStateRoot  ReceiptCheck = "previous-state-root"
-	ReceiptCheckResultingStateRoot ReceiptCheck = "resulting-state-root"
-	ReceiptCheckDebitBalance       ReceiptCheck = "debit-balance"
-	ReceiptCheckCreditBalance      ReceiptCheck = "credit-balance"
-	ReceiptCheckSequencerSignature ReceiptCheck = "sequencer-signature"
 )
 
 type VerificationError struct{ Check ReceiptCheck }
@@ -82,29 +59,29 @@ type ReceiptEffect struct {
 }
 
 type ProgramReceiptOutcome struct {
-	EncodingVersion          uint8
-	TerminalKind             uint8
-	ResultCode               int32
-	RuntimeVersion           uint16
-	ABIVersion               uint16
-	FeeScheduleVersion       uint32
-	MeteringScheduleVersion  uint32
-	CPUFuel                  uint64
-	MemoryBytes              uint64
-	StorageReadBytes         uint64
-	StorageWriteBytes        uint64
-	OutputValues             uint32
-	OutputBytes              uint64
-	OccupancyByteBatches     Uint128
-	OccupancyFeeUnits        Uint128
-	FeeSchedulePrices        [7]uint64
-	OccupancyAssetID         [32]byte
-	OccupancyEvidenceDigest  [32]byte
-	OccupancyTransferRoot    [32]byte
-	FeeUnits                 Uint128
-	CallGraphRoot            [32]byte
-	TerminalPayloadRoot      [32]byte
-	TransferRoot             [32]byte
+	EncodingVersion         uint8
+	TerminalKind            uint8
+	ResultCode              int32
+	RuntimeVersion          uint16
+	ABIVersion              uint16
+	FeeScheduleVersion      uint32
+	MeteringScheduleVersion uint32
+	CPUFuel                 uint64
+	MemoryBytes             uint64
+	StorageReadBytes        uint64
+	StorageWriteBytes       uint64
+	OutputValues            uint32
+	OutputBytes             uint64
+	OccupancyByteBatches    Uint128
+	OccupancyFeeUnits       Uint128
+	FeeSchedulePrices       [7]uint64
+	OccupancyAssetID        [32]byte
+	OccupancyEvidenceDigest [32]byte
+	OccupancyTransferRoot   [32]byte
+	FeeUnits                Uint128
+	CallGraphRoot           [32]byte
+	TerminalPayloadRoot     [32]byte
+	TransferRoot            [32]byte
 }
 
 type ProtocolReceipt struct {
@@ -305,10 +282,31 @@ func decodeProtocolReceipt(value []byte) (decodedReceipt, error) {
 	receipt.protocol.AuthorizationHash = decoder.array32()
 	receipt.protocol.ContextHash = decoder.array32()
 	receipt.protocol.Timestamp = decoder.u64()
+	if decoder.failed {
+		return decodedReceipt{}, receiptFailure(ReceiptCheckDecode)
+	}
+	if receipt.protocol.GlobalSequence == 0 {
+		return decodedReceipt{}, receiptFailure(ReceiptCheckGlobalSequence)
+	}
+	if receipt.protocol.ModuleID == 0 {
+		return decodedReceipt{}, receiptFailure(ReceiptCheckModuleID)
+	}
+	if receipt.protocol.ModuleVersion == 0 {
+		return decodedReceipt{}, receiptFailure(ReceiptCheckModuleVersion)
+	}
+	if receipt.protocol.Timestamp == 0 {
+		return decodedReceipt{}, receiptFailure(ReceiptCheckTimestamp)
+	}
+	if zero32(receipt.protocol.ActivityID) {
+		return decodedReceipt{}, receiptFailure(ReceiptCheckActivityID)
+	}
+	if zero32(receipt.protocol.ResultingStateRoot) {
+		return decodedReceipt{}, receiptFailure(ReceiptCheckResultingStateRoot)
+	}
 	if len(value)-decoder.offset > 69 {
 		outcome, ok := decodeProgramReceiptOutcomeFrom(&decoder, receipt.protocolVersion)
-		if !ok || receipt.protocol.ModuleID != 9 || outcome.ResultCode != receipt.resultCode || outcome.TerminalKind == 1 && outcome.TransferRoot != receipt.protocol.TransferSetRoot || outcome.TerminalKind != 1 && receipt.protocol.TransferSetRoot != [32]byte{} {
-			return decodedReceipt{}, receiptFailure(ReceiptCheckCanonicalEncoding)
+		if !ok || receipt.protocol.ModuleID != ProgramsModuleID || outcome.ResultCode != receipt.resultCode || outcome.TerminalKind == 1 && outcome.TransferRoot != receipt.protocol.TransferSetRoot || outcome.TerminalKind != 1 && receipt.protocol.TransferSetRoot != [32]byte{} {
+			return decodedReceipt{}, receiptFailure(ReceiptCheckProgramOutcome)
 		}
 		receipt.protocol.ProgramOutcome = &outcome
 	}
@@ -338,11 +336,11 @@ func decodeProtocolReceipt(value []byte) (decodedReceipt, error) {
 func decodeProgramReceiptOutcomeFrom(decoder *wireDecoder, protocolVersion uint16) (ProgramReceiptOutcome, bool) {
 	var outcome ProgramReceiptOutcome
 	switch decoder.u32() {
-	case programOutcomeV1:
+	case ProgramOutcomeTagV1:
 		outcome.EncodingVersion = 1
-	case programOutcomeV2:
+	case ProgramOutcomeTagV2:
 		outcome.EncodingVersion = 2
-	case programOutcomeV3:
+	case ProgramOutcomeTagV3:
 		outcome.EncodingVersion = 3
 	default:
 		return ProgramReceiptOutcome{}, false

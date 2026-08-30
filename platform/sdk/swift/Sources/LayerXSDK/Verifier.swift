@@ -12,10 +12,6 @@ private let maximumEffects: UInt32 = 512
 private let maximumEffectBody: UInt32 = 256
 private let batchHeaderBytes = 354
 private let allAvailabilityClasses: UInt8 = 0x1f
-private let programOutcomeV1: UInt32 = 0x5052_4731
-private let programOutcomeV2: UInt32 = 0x5052_4732
-private let programOutcomeV3: UInt32 = 0x5052_4733
-
 public struct UInt128Value: Hashable, Sendable {
     public let high: UInt64
     public let low: UInt64
@@ -270,11 +266,19 @@ public struct ReceiptVerification: Sendable {
 public enum LocalVerifier {
     public static func decodeProgramReceiptOutcome(_ canonicalOutcome: Data,
                                                     protocolVersion: UInt16) throws -> ProgramReceiptOutcome {
-        guard !canonicalOutcome.isEmpty, canonicalOutcome.count <= maximumMessageBytes else { throw verificationFailure() }
-        var decoder = WireDecoder(canonicalOutcome)
-        let outcome = try decodeProgramReceiptOutcomeFrom(&decoder, protocolVersion: protocolVersion)
-        try decoder.finish()
-        return outcome
+        guard !canonicalOutcome.isEmpty, canonicalOutcome.count <= maximumMessageBytes else {
+            throw receiptFailure(.receiptShape)
+        }
+        do {
+            var decoder = WireDecoder(canonicalOutcome)
+            let outcome = try decodeProgramReceiptOutcomeFrom(&decoder, protocolVersion: protocolVersion)
+            try decoder.finish()
+            return outcome
+        } catch let error as PlatformSDKError where error.receiptCheck != nil {
+            throw error
+        } catch {
+            throw receiptFailure(.programOutcome)
+        }
     }
 
     public static func verifyMerkleInclusion(canonicalLeaf: Data, proof: MerkleProof, expectedRoot: Data) throws {
@@ -409,23 +413,31 @@ public enum LocalVerifier {
         let asset = try exact(authorized.asset, 32)
         let previousStateRoot = try exact(authorized.previousStateRoot, 32)
         let resultingStateRoot = try exact(authorized.resultingStateRoot, 32)
-        guard receipt.operation != 0, !allZero(receipt.activityID), !allZero(receipt.asset),
-              receipt.batchID == batchID,
-              receipt.asset == asset,
-              receipt.previousStateRoot == previousStateRoot,
-              receipt.resultingStateRoot == resultingStateRoot else { throw verificationFailure() }
+        guard receipt.operation != 0 else { throw receiptFailure(.operation) }
+        guard !allZero(receipt.activityID) else { throw receiptFailure(.activityId) }
+        guard !allZero(receipt.asset) else { throw receiptFailure(.asset) }
+        guard receipt.batchID == batchID else { throw receiptFailure(.batchId) }
+        guard receipt.asset == asset else { throw receiptFailure(.asset) }
+        guard receipt.previousStateRoot == previousStateRoot else { throw receiptFailure(.previousStateRoot) }
+        guard receipt.resultingStateRoot == resultingStateRoot else { throw receiptFailure(.resultingStateRoot) }
         if receipt.resultCode == 0 {
-            guard receipt.fromBalanceBefore.subtracting(receipt.amount) == receipt.fromBalanceAfter,
-                  receipt.toBalanceBefore.adding(receipt.amount) == receipt.toBalanceAfter else { throw verificationFailure() }
+            guard receipt.fromBalanceBefore.subtracting(receipt.amount) == receipt.fromBalanceAfter else {
+                throw receiptFailure(.debitBalance)
+            }
+            guard receipt.toBalanceBefore.adding(receipt.amount) == receipt.toBalanceAfter else {
+                throw receiptFailure(.creditBalance)
+            }
         }
         let receiptDigest = digest(receiptDomain, decoded.unsignedBytes)
-        guard verifyEd25519(publicKey: try exact(authorized.sequencerPublicKey, 32), signature: receipt.sequencerSignature, message: receiptDigest) else { throw verificationFailure() }
+        guard verifyEd25519(publicKey: try exact(authorized.sequencerPublicKey, 32), signature: receipt.sequencerSignature, message: receiptDigest) else {
+            throw receiptFailure(.sequencerSignature)
+        }
         return ReceiptVerification(level: "sequencer-signed", receipt: receipt, canonicalBytes: canonicalReceipt, receiptDigest: receiptDigest)
     }
 
     public static func verifyReceipt(_ canonicalReceipt: Data, authorized: AuthorizedReceiptBatch) async throws -> ReceiptVerification {
         let verified = try await verifyReceiptOutcome(canonicalReceipt, authorized: authorized)
-        guard verified.receipt.resultCode == 0 else { throw verificationFailure() }
+        guard verified.receipt.resultCode == 0 else { throw receiptFailure(.resultCode) }
         return verified
     }
 }
@@ -436,12 +448,26 @@ private struct DecodedReceipt {
 }
 
 private func decodeProtocolReceipt(_ canonicalReceipt: Data) throws -> DecodedReceipt {
-    guard !canonicalReceipt.isEmpty, canonicalReceipt.count <= maximumMessageBytes else { throw verificationFailure() }
+    do {
+        return try decodeProtocolReceiptInner(canonicalReceipt)
+    } catch let error as PlatformSDKError where error.receiptCheck != nil {
+        throw error
+    } catch {
+        throw receiptFailure(.decode)
+    }
+}
+
+private func decodeProtocolReceiptInner(_ canonicalReceipt: Data) throws -> DecodedReceipt {
+    guard !canonicalReceipt.isEmpty, canonicalReceipt.count <= maximumMessageBytes else {
+        throw receiptFailure(.receiptShape)
+    }
     var decoder = WireDecoder(canonicalReceipt)
     let envelopeVersion = try decoder.u16()
-    guard (envelopeVersion == 1 || envelopeVersion == 2), try decoder.u16() == 0x5201 else { throw verificationFailure() }
+    guard (envelopeVersion == 1 || envelopeVersion == 2), try decoder.u16() == 0x5201 else {
+        throw receiptFailure(.decode)
+    }
     let protocolVersion = try decoder.u16()
-    guard protocolVersion == envelopeVersion else { throw verificationFailure() }
+    guard protocolVersion == envelopeVersion else { throw receiptFailure(.protocolVersion) }
     let activityID = try decoder.array32()
     let globalSequence = try decoder.u64()
     let previousStateRoot = try decoder.array32()
@@ -480,15 +506,26 @@ private func decodeProtocolReceipt(_ canonicalReceipt: Data) throws -> DecodedRe
     let authorizationHash = try decoder.array32()
     let contextHash = try decoder.array32()
     let timestamp = try decoder.u64()
-    let programOutcome = decoder.remaining > 69
-        ? try decodeProgramReceiptOutcomeFrom(&decoder, protocolVersion: protocolVersion) : nil
+    guard globalSequence != 0 else { throw receiptFailure(.globalSequence) }
+    guard moduleID != 0 else { throw receiptFailure(.moduleId) }
+    guard moduleVersion != 0 else { throw receiptFailure(.moduleVersion) }
+    guard timestamp != 0 else { throw receiptFailure(.timestamp) }
+    guard !allZero(activityID) else { throw receiptFailure(.activityId) }
+    guard !allZero(resultingStateRoot) else { throw receiptFailure(.resultingStateRoot) }
+    let programOutcome: ProgramReceiptOutcome?
+    do {
+        programOutcome = decoder.remaining > 69
+            ? try decodeProgramReceiptOutcomeFrom(&decoder, protocolVersion: protocolVersion) : nil
+    } catch {
+        throw receiptFailure(.programOutcome)
+    }
     if let outcome = programOutcome {
-        guard moduleID == 9, outcome.resultCode == resultCode,
+        guard moduleID == programsModuleID, outcome.resultCode == resultCode,
               (outcome.terminalKind == 1 ? outcome.transferRoot == transferSetRoot : allZero(transferSetRoot))
-        else { throw verificationFailure() }
+        else { throw receiptFailure(.programOutcome) }
     }
     let signatureFlagOffset = decoder.position
-    guard try decoder.u8() == 1 else { throw verificationFailure() }
+    guard try decoder.u8() == 1 else { throw receiptFailure(.missingSignature) }
     let sequencerSignature = try decoder.bounded(exactly: 64)
     try decoder.finish()
     let receipt = ProtocolReceipt(protocolVersion: protocolVersion, activityID: activityID, globalSequence: globalSequence, previousStateRoot: previousStateRoot, resultingStateRoot: resultingStateRoot, activityRoot: activityRoot, resultCode: resultCode, effects: effects, feeCharged: feeCharged, batchID: batchID, moduleID: moduleID, moduleVersion: moduleVersion, parameterVersion: parameterVersion, operation: operation, asset: asset, amount: amount, from: from, fromBalanceBefore: fromBalanceBefore, fromBalanceAfter: fromBalanceAfter, fromSequence: fromSequence, to: to, toBalanceBefore: toBalanceBefore, toBalanceAfter: toBalanceAfter, transferSetRoot: transferSetRoot, authorizationHash: authorizationHash, contextHash: contextHash, timestamp: timestamp, programOutcome: programOutcome, sequencerSignature: sequencerSignature)
@@ -601,6 +638,10 @@ private struct WireDecoder {
 
 private func verificationFailure() -> PlatformSDKError {
     PlatformSDKError(code: .verificationFailure, retry: .never)
+}
+
+private func receiptFailure(_ check: ReceiptCheck) -> PlatformSDKError {
+    PlatformSDKError(code: .verificationFailure, retry: .never, receiptCheck: check)
 }
 
 private func exact(_ value: Data, _ length: Int) throws -> Data {

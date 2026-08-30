@@ -1,4 +1,9 @@
 import { PlatformSdkError } from "./production.js";
+import {
+  PROGRAM_OUTCOME_TAGS,
+  PROGRAMS_MODULE_ID,
+  ReceiptFailureCode,
+} from "./generated/receipt.js";
 
 const MERKLE_LEAF_DOMAIN = new TextEncoder().encode("LXP/v1/merkle-leaf\0");
 const MERKLE_INTERNAL_DOMAIN = new TextEncoder().encode("LXP/v1/merkle-internal\0");
@@ -12,9 +17,7 @@ const MAX_EFFECTS = 512;
 const MAX_EFFECT_BODY = 256;
 const MAX_U128 = 0xffff_ffff_ffff_ffff_ffff_ffff_ffff_ffffn;
 const ALL_AVAILABILITY_CLASSES = 0x1f;
-const PROGRAM_OUTCOME_V1 = 0x5052_4731;
-const PROGRAM_OUTCOME_V2 = 0x5052_4732;
-const PROGRAM_OUTCOME_V3 = 0x5052_4733;
+const [PROGRAM_OUTCOME_V1, PROGRAM_OUTCOME_V2, PROGRAM_OUTCOME_V3] = PROGRAM_OUTCOME_TAGS;
 
 export interface MerkleProof {
   readonly leafIndex: number;
@@ -199,6 +202,20 @@ export interface ReceiptVerification {
   readonly receipt: ProtocolReceipt;
   readonly canonicalBytes: Uint8Array;
   readonly receiptDigest: Uint8Array;
+}
+
+export class ReceiptVerificationError extends PlatformSdkError {
+  public readonly check: ReceiptFailureCode;
+
+  public constructor(check: ReceiptFailureCode) {
+    super({ code: "verification-failure", retry: "never" });
+    this.name = "ReceiptVerificationError";
+    this.check = check;
+  }
+}
+
+function receiptFailure(check: ReceiptFailureCode): never {
+  throw new ReceiptVerificationError(check);
 }
 
 function verificationFailure(): never {
@@ -665,11 +682,11 @@ function decodeProgramReceiptOutcomeFrom(decoder: Decoder, protocolVersion: numb
   const tag = decoder.u32();
   const encodingVersion = tag === PROGRAM_OUTCOME_V1 ? 1 : tag === PROGRAM_OUTCOME_V2 ? 2 : tag === PROGRAM_OUTCOME_V3 ? 3 : 0;
   if (encodingVersion === 0) {
-    return verificationFailure();
+    return receiptFailure(ReceiptFailureCode.ProgramOutcome);
   }
   const terminalKindValue = decoder.u8();
   if (terminalKindValue < 1 || terminalKindValue > 3) {
-    return verificationFailure();
+    return receiptFailure(ReceiptFailureCode.ProgramOutcome);
   }
   const terminalKind = terminalKindValue as 1 | 2 | 3;
   const resultCode = decoder.i32();
@@ -723,7 +740,7 @@ function decodeProgramReceiptOutcomeFrom(decoder: Decoder, protocolVersion: numb
     || (protocolVersion === 2 && encodingVersion === 3 && terminalKind === 1
       && (allZero(occupancyAssetId) || allZero(occupancyEvidenceDigest)))
   ) {
-    return verificationFailure();
+    return receiptFailure(ReceiptFailureCode.ProgramOutcome);
   }
   return Object.freeze({
     encodingVersion,
@@ -754,26 +771,31 @@ function decodeProgramReceiptOutcomeFrom(decoder: Decoder, protocolVersion: numb
 
 export function decodeProgramReceiptOutcome(canonicalOutcome: Uint8Array, protocolVersion: number): ProgramReceiptOutcome {
   if (canonicalOutcome.length === 0 || canonicalOutcome.length > MAX_MESSAGE_BYTES) {
-    return verificationFailure();
+    return receiptFailure(ReceiptFailureCode.ReceiptShape);
   }
-  const decoder = new Decoder(canonicalOutcome.slice());
-  const outcome = decodeProgramReceiptOutcomeFrom(decoder, protocolVersion);
-  decoder.finish();
-  return outcome;
+  try {
+    const decoder = new Decoder(canonicalOutcome.slice());
+    const outcome = decodeProgramReceiptOutcomeFrom(decoder, protocolVersion);
+    decoder.finish();
+    return outcome;
+  } catch (error) {
+    if (error instanceof ReceiptVerificationError) throw error;
+    return receiptFailure(ReceiptFailureCode.ProgramOutcome);
+  }
 }
 
 function decodeProtocolReceipt(canonicalReceipt: Uint8Array): DecodedReceipt {
   if (canonicalReceipt.length === 0 || canonicalReceipt.length > MAX_MESSAGE_BYTES) {
-    return verificationFailure();
+    return receiptFailure(ReceiptFailureCode.ReceiptShape);
   }
   const decoder = new Decoder(canonicalReceipt);
   const envelopeVersion = decoder.u16();
   if ((envelopeVersion !== 1 && envelopeVersion !== 2) || decoder.u16() !== 0x5201) {
-    return verificationFailure();
+    return receiptFailure(ReceiptFailureCode.Decode);
   }
   const protocolVersion = decoder.u16();
   if (protocolVersion !== envelopeVersion) {
-    return verificationFailure();
+    return receiptFailure(ReceiptFailureCode.ProtocolVersion);
   }
   const activityId = decoder.bounded(32);
   const globalSequence = decoder.u64();
@@ -783,7 +805,7 @@ function decodeProtocolReceipt(canonicalReceipt: Uint8Array): DecodedReceipt {
   const resultCode = decoder.i32();
   const effectCount = decoder.u32();
   if (effectCount > MAX_EFFECTS) {
-    return verificationFailure();
+    return receiptFailure(ReceiptFailureCode.Decode);
   }
   const effects: ReceiptEffect[] = [];
   for (let index = 0; index < effectCount; index += 1) {
@@ -792,11 +814,11 @@ function decodeProtocolReceipt(canonicalReceipt: Uint8Array): DecodedReceipt {
     const eventType = decoder.u16();
     const kindValue = decoder.u8();
     if (kindValue < 1 || kindValue > 3) {
-      return verificationFailure();
+      return receiptFailure(ReceiptFailureCode.Decode);
     }
     const monetaryValue = decoder.u8();
     if (monetaryValue > 1 || (monetaryValue === 1 && kindValue !== 2)) {
-      return verificationFailure();
+      return receiptFailure(ReceiptFailureCode.Decode);
     }
     effects.push(Object.freeze({
       moduleId,
@@ -827,20 +849,38 @@ function decodeProtocolReceipt(canonicalReceipt: Uint8Array): DecodedReceipt {
   const authorizationHash = decoder.bounded(32);
   const contextHash = decoder.bounded(32);
   const timestamp = decoder.u64();
+  if (globalSequence === 0n) {
+    return receiptFailure(ReceiptFailureCode.GlobalSequence);
+  }
+  if (moduleId === 0) {
+    return receiptFailure(ReceiptFailureCode.ModuleId);
+  }
+  if (moduleVersion === 0) {
+    return receiptFailure(ReceiptFailureCode.ModuleVersion);
+  }
+  if (timestamp === 0n) {
+    return receiptFailure(ReceiptFailureCode.Timestamp);
+  }
+  if (allZero(activityId)) {
+    return receiptFailure(ReceiptFailureCode.ActivityId);
+  }
+  if (allZero(resultingStateRoot)) {
+    return receiptFailure(ReceiptFailureCode.ResultingStateRoot);
+  }
   const programOutcome = decoder.remaining() > 69
     ? decodeProgramReceiptOutcomeFrom(decoder, protocolVersion)
     : undefined;
   if (programOutcome !== undefined && (
-    moduleId !== 9
+    moduleId !== PROGRAMS_MODULE_ID
     || programOutcome.resultCode !== resultCode
     || (programOutcome.terminalKind === 1 && !equal(programOutcome.transferRoot, transferSetRoot))
     || (programOutcome.terminalKind !== 1 && !allZero(transferSetRoot))
   )) {
-    return verificationFailure();
+    return receiptFailure(ReceiptFailureCode.ProgramOutcome);
   }
   const signatureFlagOffset = decoder.position();
   if (decoder.u8() !== 1) {
-    return verificationFailure();
+    return receiptFailure(ReceiptFailureCode.MissingSignature);
   }
   const sequencerSignature = decoder.bounded(64);
   decoder.finish();
@@ -892,17 +932,24 @@ export async function verifyReceiptOutcome(
     resultingStateRoot: exactBytes(authorized.resultingStateRoot, 32).slice(),
     sequencerPublicKey: exactBytes(authorized.sequencerPublicKey, 32).slice(),
   });
-  const { receipt, unsignedBytes } = decodeProtocolReceipt(canonical);
-  if (
-    receipt.operation === 0
-    || allZero(receipt.activityId)
-    || allZero(receipt.asset)
-    || !equal(receipt.batchId, authority.batchId)
-    || !equal(receipt.asset, authority.asset)
-    || !equal(receipt.previousStateRoot, authority.previousStateRoot)
-    || !equal(receipt.resultingStateRoot, authority.resultingStateRoot)
-  ) {
-    return verificationFailure();
+  let decoded: DecodedReceipt;
+  try {
+    decoded = decodeProtocolReceipt(canonical);
+  } catch (error) {
+    if (error instanceof ReceiptVerificationError) throw error;
+    return receiptFailure(ReceiptFailureCode.Decode);
+  }
+  const { receipt, unsignedBytes } = decoded;
+  if (receipt.operation === 0) return receiptFailure(ReceiptFailureCode.Operation);
+  if (allZero(receipt.activityId)) return receiptFailure(ReceiptFailureCode.ActivityId);
+  if (allZero(receipt.asset)) return receiptFailure(ReceiptFailureCode.Asset);
+  if (!equal(receipt.batchId, authority.batchId)) return receiptFailure(ReceiptFailureCode.BatchId);
+  if (!equal(receipt.asset, authority.asset)) return receiptFailure(ReceiptFailureCode.Asset);
+  if (!equal(receipt.previousStateRoot, authority.previousStateRoot)) {
+    return receiptFailure(ReceiptFailureCode.PreviousStateRoot);
+  }
+  if (!equal(receipt.resultingStateRoot, authority.resultingStateRoot)) {
+    return receiptFailure(ReceiptFailureCode.ResultingStateRoot);
   }
   if (receipt.resultCode === 0) {
     if (
@@ -911,7 +958,12 @@ export async function verifyReceiptOutcome(
       || receipt.toBalanceBefore + receipt.amount > MAX_U128
       || receipt.toBalanceBefore + receipt.amount !== receipt.toBalanceAfter
     ) {
-      return verificationFailure();
+      return receiptFailure(
+        receipt.fromBalanceBefore < receipt.amount
+          || receipt.fromBalanceBefore - receipt.amount !== receipt.fromBalanceAfter
+          ? ReceiptFailureCode.DebitBalance
+          : ReceiptFailureCode.CreditBalance,
+      );
     }
   }
   const receiptDigest = await sha256(RECEIPT_DOMAIN, unsignedBytes);
@@ -920,7 +972,7 @@ export async function verifyReceiptOutcome(
     receipt.sequencerSignature,
     receiptDigest,
   )) {
-    return verificationFailure();
+    return receiptFailure(ReceiptFailureCode.SequencerSignature);
   }
   return Object.freeze({
     level: "sequencer-signed",
@@ -936,7 +988,7 @@ export async function verifyReceipt(
 ): Promise<ReceiptVerification> {
   const verified = await verifyReceiptOutcome(canonicalReceipt, authorized);
   if (verified.receipt.resultCode !== 0) {
-    return verificationFailure();
+    return receiptFailure(ReceiptFailureCode.ResultCode);
   }
   return verified;
 }

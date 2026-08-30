@@ -1,6 +1,7 @@
 package com.sidiora.layerx.sdk.verify;
 
 import com.sidiora.layerx.sdk.PlatformSdkException;
+import com.sidiora.layerx.sdk.verify.GeneratedReceiptContract.ReceiptCheck;
 import java.io.ByteArrayOutputStream;
 import java.math.BigInteger;
 import java.nio.ByteBuffer;
@@ -39,9 +40,9 @@ public final class LocalVerifier {
     private static final int MAX_EFFECTS = 512;
     private static final int MAX_EFFECT_BODY = 256;
     private static final int ALL_AVAILABILITY_CLASSES = 0x1f;
-    private static final long PROGRAM_OUTCOME_V1 = 0x5052_4731L;
-    private static final long PROGRAM_OUTCOME_V2 = 0x5052_4732L;
-    private static final long PROGRAM_OUTCOME_V3 = 0x5052_4733L;
+    private static final long PROGRAM_OUTCOME_V1 = GeneratedReceiptContract.PROGRAM_OUTCOME_V1;
+    private static final long PROGRAM_OUTCOME_V2 = GeneratedReceiptContract.PROGRAM_OUTCOME_V2;
+    private static final long PROGRAM_OUTCOME_V3 = GeneratedReceiptContract.PROGRAM_OUTCOME_V3;
     private static final BigInteger MAX_U128 = BigInteger.ONE.shiftLeft(128).subtract(BigInteger.ONE);
 
     public record MerkleProof(long leafIndex, long leafCount, List<byte[]> siblings) {
@@ -274,27 +275,33 @@ public final class LocalVerifier {
                                                              AuthorizedReceiptBatch authorized) {
         DecodedReceipt decoded = decodeProtocolReceipt(canonicalReceipt);
         ProtocolReceipt receipt = decoded.receipt();
-        if (receipt.operation() == 0 || allZero(receipt.activityId()) || allZero(receipt.asset())
-                || !equal(receipt.batchId(), exact(authorized.batchId(), 32))
-                || !equal(receipt.asset(), exact(authorized.asset(), 32))
-                || !equal(receipt.previousStateRoot(), exact(authorized.previousStateRoot(), 32))
-                || !equal(receipt.resultingStateRoot(), exact(authorized.resultingStateRoot(), 32))) fail();
+        if (receipt.operation() == 0) fail(ReceiptCheck.OPERATION);
+        if (allZero(receipt.activityId())) fail(ReceiptCheck.ACTIVITY_ID);
+        if (allZero(receipt.asset())) fail(ReceiptCheck.ASSET);
+        if (!equal(receipt.batchId(), exact(authorized.batchId(), 32))) fail(ReceiptCheck.BATCH_ID);
+        if (!equal(receipt.asset(), exact(authorized.asset(), 32))) fail(ReceiptCheck.ASSET);
+        if (!equal(receipt.previousStateRoot(), exact(authorized.previousStateRoot(), 32)))
+            fail(ReceiptCheck.PREVIOUS_STATE_ROOT);
+        if (!equal(receipt.resultingStateRoot(), exact(authorized.resultingStateRoot(), 32)))
+            fail(ReceiptCheck.RESULTING_STATE_ROOT);
         if (receipt.resultCode() == 0) {
             BigInteger expectedFrom = receipt.fromBalanceBefore().subtract(receipt.amount());
             BigInteger expectedTo = receipt.toBalanceBefore().add(receipt.amount());
             if (receipt.fromBalanceBefore().compareTo(receipt.amount()) < 0
-                    || !expectedFrom.equals(receipt.fromBalanceAfter())
-                    || expectedTo.compareTo(MAX_U128) > 0 || !expectedTo.equals(receipt.toBalanceAfter())) fail();
+                    || !expectedFrom.equals(receipt.fromBalanceAfter())) fail(ReceiptCheck.DEBIT_BALANCE);
+            if (expectedTo.compareTo(MAX_U128) > 0 || !expectedTo.equals(receipt.toBalanceAfter()))
+                fail(ReceiptCheck.CREDIT_BALANCE);
         }
         byte[] digest = sha256(RECEIPT_DOMAIN, decoded.unsignedBytes());
-        if (!verifyEd25519(authorized.sequencerPublicKey(), receipt.sequencerSignature(), digest)) fail();
+        if (!verifyEd25519(authorized.sequencerPublicKey(), receipt.sequencerSignature(), digest))
+            fail(ReceiptCheck.SEQUENCER_SIGNATURE);
         return new ReceiptVerification(VerificationLevel.SEQUENCER_SIGNED, receipt,
             canonicalReceipt.clone(), digest);
     }
 
     public static ReceiptVerification verifyReceipt(byte[] canonicalReceipt, AuthorizedReceiptBatch authorized) {
         ReceiptVerification verified = verifyReceiptOutcome(canonicalReceipt, authorized);
-        if (verified.receipt().resultCode() != 0) fail();
+        if (verified.receipt().resultCode() != 0) fail(ReceiptCheck.RESULT_CODE);
         return verified;
     }
 
@@ -311,11 +318,23 @@ public final class LocalVerifier {
     }
 
     private static DecodedReceipt decodeProtocolReceipt(byte[] canonicalReceipt) {
-        if (canonicalReceipt == null || canonicalReceipt.length == 0 || canonicalReceipt.length > MAX_MESSAGE_BYTES) fail();
+        try {
+            return decodeProtocolReceiptInner(canonicalReceipt);
+        } catch (PlatformSdkException error) {
+            if (error.receiptCheck() != null) throw error;
+            throw failure(ReceiptCheck.DECODE);
+        }
+    }
+
+    private static DecodedReceipt decodeProtocolReceiptInner(byte[] canonicalReceipt) {
+        if (canonicalReceipt == null || canonicalReceipt.length == 0 || canonicalReceipt.length > MAX_MESSAGE_BYTES)
+            fail(ReceiptCheck.RECEIPT_SHAPE);
         Decoder d = new Decoder(canonicalReceipt);
         int envelopeVersion = d.u16();
-        if ((envelopeVersion != 1 && envelopeVersion != 2) || d.u16() != 0x5201) fail();
-        int protocolVersion = d.u16(); if (protocolVersion != envelopeVersion) fail();
+        if ((envelopeVersion != 1 && envelopeVersion != 2) || d.u16() != 0x5201)
+            fail(ReceiptCheck.DECODE);
+        int protocolVersion = d.u16();
+        if (protocolVersion != envelopeVersion) fail(ReceiptCheck.PROTOCOL_VERSION);
         byte[] activityId = d.bounded(32); BigInteger globalSequence = d.integer(8);
         byte[] previousStateRoot = d.bounded(32); byte[] resultingStateRoot = d.bounded(32);
         byte[] activityRoot = d.bounded(32); int resultCode = d.i32(); long effectCount = d.u32();
@@ -334,13 +353,27 @@ public final class LocalVerifier {
         byte[] to = d.bounded(32); BigInteger toBefore = d.integer(16), toAfter = d.integer(16);
         byte[] transferSetRoot = d.bounded(32), authorizationHash = d.bounded(32), contextHash = d.bounded(32);
         BigInteger timestamp = d.integer(8);
-        ProgramReceiptOutcome programOutcome = d.remaining() > 69
-            ? decodeProgramReceiptOutcomeFrom(d, protocolVersion) : null;
-        if (programOutcome != null && (moduleId != 9 || programOutcome.resultCode() != resultCode
+        if (globalSequence.signum() == 0) fail(ReceiptCheck.GLOBAL_SEQUENCE);
+        if (moduleId == 0) fail(ReceiptCheck.MODULE_ID);
+        if (moduleVersion == 0) fail(ReceiptCheck.MODULE_VERSION);
+        if (timestamp.signum() == 0) fail(ReceiptCheck.TIMESTAMP);
+        if (allZero(activityId)) fail(ReceiptCheck.ACTIVITY_ID);
+        if (allZero(resultingStateRoot)) fail(ReceiptCheck.RESULTING_STATE_ROOT);
+        ProgramReceiptOutcome programOutcome;
+        try {
+            programOutcome = d.remaining() > 69
+                ? decodeProgramReceiptOutcomeFrom(d, protocolVersion) : null;
+        } catch (PlatformSdkException error) {
+            if (error.receiptCheck() != null) throw error;
+            throw failure(ReceiptCheck.PROGRAM_OUTCOME);
+        }
+        if (programOutcome != null && (moduleId != GeneratedReceiptContract.PROGRAMS_MODULE_ID
+                || programOutcome.resultCode() != resultCode
                 || (programOutcome.terminalKind() == 1 && !equal(programOutcome.transferRoot(), transferSetRoot))
-                || (programOutcome.terminalKind() != 1 && !allZero(transferSetRoot)))) fail();
+                || (programOutcome.terminalKind() != 1 && !allZero(transferSetRoot))))
+            fail(ReceiptCheck.PROGRAM_OUTCOME);
         int signatureFlagOffset = d.position();
-        if (d.u8() != 1) fail();
+        if (d.u8() != 1) fail(ReceiptCheck.MISSING_SIGNATURE);
         byte[] signature = d.bounded(64); d.finish();
         ProtocolReceipt receipt = new ProtocolReceipt(protocolVersion, activityId, globalSequence,
             previousStateRoot, resultingStateRoot, activityRoot, resultCode, effects, feeCharged, batchId,
@@ -404,11 +437,16 @@ public final class LocalVerifier {
     public static ProgramReceiptOutcome decodeProgramReceiptOutcome(byte[] canonicalOutcome,
                                                                      int protocolVersion) {
         if (canonicalOutcome == null || canonicalOutcome.length == 0
-                || canonicalOutcome.length > MAX_MESSAGE_BYTES) fail();
-        Decoder decoder = new Decoder(canonicalOutcome.clone());
-        ProgramReceiptOutcome outcome = decodeProgramReceiptOutcomeFrom(decoder, protocolVersion);
-        decoder.finish();
-        return outcome;
+                || canonicalOutcome.length > MAX_MESSAGE_BYTES) fail(ReceiptCheck.RECEIPT_SHAPE);
+        try {
+            Decoder decoder = new Decoder(canonicalOutcome.clone());
+            ProgramReceiptOutcome outcome = decodeProgramReceiptOutcomeFrom(decoder, protocolVersion);
+            decoder.finish();
+            return outcome;
+        } catch (PlatformSdkException error) {
+            if (error.receiptCheck() != null) throw error;
+            throw failure(ReceiptCheck.PROGRAM_OUTCOME);
+        }
     }
 
     private static byte[] attestationMessage(CheckpointAttestation a) {
@@ -456,7 +494,11 @@ public final class LocalVerifier {
     private static byte[] ascii(String value) { return value.getBytes(StandardCharsets.UTF_8); }
     private static byte[] hex(String value) { return java.util.HexFormat.of().parseHex(value); }
     private static PlatformSdkException failure() { return PlatformSdkException.verificationFailure(); }
+    private static PlatformSdkException failure(ReceiptCheck check) {
+        return PlatformSdkException.receiptVerification(check);
+    }
     private static void fail() { throw failure(); }
+    private static void fail(ReceiptCheck check) { throw failure(check); }
 
     private static final class Decoder {
         private final byte[] bytes; private int offset;

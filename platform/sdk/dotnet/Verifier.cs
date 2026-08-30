@@ -210,9 +210,9 @@ public static class LocalVerifier
     private const uint MaximumEffectBody = 256;
     private const int BatchHeaderBytes = 354;
     private const byte AllAvailabilityClasses = 0x1f;
-    private const uint ProgramOutcomeV1 = 0x5052_4731;
-    private const uint ProgramOutcomeV2 = 0x5052_4732;
-    private const uint ProgramOutcomeV3 = 0x5052_4733;
+    private const uint ProgramOutcomeV1 = GeneratedReceiptContract.ProgramOutcomeV1;
+    private const uint ProgramOutcomeV2 = GeneratedReceiptContract.ProgramOutcomeV2;
+    private const uint ProgramOutcomeV3 = GeneratedReceiptContract.ProgramOutcomeV3;
 
     public static void VerifyMerkleInclusion(ReadOnlySpan<byte> canonicalLeaf, MerkleProof proof, ReadOnlySpan<byte> expectedRoot)
     {
@@ -337,34 +337,52 @@ public static class LocalVerifier
         cancellationToken.ThrowIfCancellationRequested();
         var decoded = DecodeProtocolReceipt(canonicalReceipt.Span);
         var receipt = decoded.Receipt;
-        if (receipt.Operation == 0 || AllZero(receipt.ActivityId) || AllZero(receipt.Asset) ||
-            !Equal(receipt.BatchId, Exact(authorized.BatchId, 32)) || !Equal(receipt.Asset, Exact(authorized.Asset, 32)) ||
-            !Equal(receipt.PreviousStateRoot, Exact(authorized.PreviousStateRoot, 32)) || !Equal(receipt.ResultingStateRoot, Exact(authorized.ResultingStateRoot, 32)))
-            throw VerificationFailure();
-        if (receipt.ResultCode == 0 &&
-            (!receipt.FromBalanceBefore.TrySubtract(receipt.Amount, out var debitAfter) || debitAfter != receipt.FromBalanceAfter ||
-             !receipt.ToBalanceBefore.TryAdd(receipt.Amount, out var creditAfter) || creditAfter != receipt.ToBalanceAfter))
-            throw VerificationFailure();
+        if (receipt.Operation == 0) throw VerificationFailure(ReceiptCheck.Operation);
+        if (AllZero(receipt.ActivityId)) throw VerificationFailure(ReceiptCheck.ActivityId);
+        if (AllZero(receipt.Asset)) throw VerificationFailure(ReceiptCheck.Asset);
+        if (!Equal(receipt.BatchId, Exact(authorized.BatchId, 32))) throw VerificationFailure(ReceiptCheck.BatchId);
+        if (!Equal(receipt.Asset, Exact(authorized.Asset, 32))) throw VerificationFailure(ReceiptCheck.Asset);
+        if (!Equal(receipt.PreviousStateRoot, Exact(authorized.PreviousStateRoot, 32)))
+            throw VerificationFailure(ReceiptCheck.PreviousStateRoot);
+        if (!Equal(receipt.ResultingStateRoot, Exact(authorized.ResultingStateRoot, 32)))
+            throw VerificationFailure(ReceiptCheck.ResultingStateRoot);
+        if (receipt.ResultCode == 0)
+        {
+            if (!receipt.FromBalanceBefore.TrySubtract(receipt.Amount, out var debitAfter) || debitAfter != receipt.FromBalanceAfter)
+                throw VerificationFailure(ReceiptCheck.DebitBalance);
+            if (!receipt.ToBalanceBefore.TryAdd(receipt.Amount, out var creditAfter) || creditAfter != receipt.ToBalanceAfter)
+                throw VerificationFailure(ReceiptCheck.CreditBalance);
+        }
         var receiptDigest = Digest(ReceiptDomain, decoded.UnsignedBytes);
-        if (!VerifyEd25519(Exact(authorized.SequencerPublicKey, 32), receipt.SequencerSignature, receiptDigest)) throw VerificationFailure();
+        if (!VerifyEd25519(Exact(authorized.SequencerPublicKey, 32), receipt.SequencerSignature, receiptDigest))
+            throw VerificationFailure(ReceiptCheck.SequencerSignature);
         return ValueTask.FromResult(new ReceiptVerification("sequencer-signed", receipt, canonicalReceipt.ToArray(), receiptDigest));
     }
 
     public static async ValueTask<ReceiptVerification> VerifyReceiptAsync(ReadOnlyMemory<byte> canonicalReceipt, AuthorizedReceiptBatch authorized, CancellationToken cancellationToken = default)
     {
         var verified = await VerifyReceiptOutcomeAsync(canonicalReceipt, authorized, cancellationToken).ConfigureAwait(false);
-        if (verified.Receipt.ResultCode != 0) throw VerificationFailure();
+        if (verified.Receipt.ResultCode != 0) throw VerificationFailure(ReceiptCheck.ResultCode);
         return verified;
     }
 
     private static DecodedReceipt DecodeProtocolReceipt(ReadOnlySpan<byte> canonicalReceipt)
     {
-        if (canonicalReceipt.IsEmpty || canonicalReceipt.Length > MaximumMessageBytes) throw VerificationFailure();
+        try { return DecodeProtocolReceiptInner(canonicalReceipt); }
+        catch (PlatformSdkException error) when (error.ReceiptCheck is not null) { throw; }
+        catch (PlatformSdkException) { throw VerificationFailure(ReceiptCheck.Decode); }
+    }
+
+    private static DecodedReceipt DecodeProtocolReceiptInner(ReadOnlySpan<byte> canonicalReceipt)
+    {
+        if (canonicalReceipt.IsEmpty || canonicalReceipt.Length > MaximumMessageBytes)
+            throw VerificationFailure(ReceiptCheck.ReceiptShape);
         var decoder = new WireDecoder(canonicalReceipt.ToArray());
         var envelopeVersion = decoder.U16();
-        if (envelopeVersion is not (1 or 2) || decoder.U16() != 0x5201) throw VerificationFailure();
+        if (envelopeVersion is not (1 or 2) || decoder.U16() != 0x5201)
+            throw VerificationFailure(ReceiptCheck.Decode);
         var protocolVersion = decoder.U16();
-        if (protocolVersion != envelopeVersion) throw VerificationFailure();
+        if (protocolVersion != envelopeVersion) throw VerificationFailure(ReceiptCheck.ProtocolVersion);
         var activityId = decoder.Array32();
         var globalSequence = decoder.U64();
         var previousStateRoot = decoder.Array32();
@@ -403,13 +421,22 @@ public static class LocalVerifier
         var authorizationHash = decoder.Array32();
         var contextHash = decoder.Array32();
         var timestamp = decoder.U64();
-        var programOutcome = decoder.Remaining > 69 ? DecodeProgramReceiptOutcomeFrom(decoder, protocolVersion) : null;
+        if (globalSequence == 0) throw VerificationFailure(ReceiptCheck.GlobalSequence);
+        if (module == 0) throw VerificationFailure(ReceiptCheck.ModuleId);
+        if (moduleVersion == 0) throw VerificationFailure(ReceiptCheck.ModuleVersion);
+        if (timestamp == 0) throw VerificationFailure(ReceiptCheck.Timestamp);
+        if (AllZero(activityId)) throw VerificationFailure(ReceiptCheck.ActivityId);
+        if (AllZero(resultingStateRoot)) throw VerificationFailure(ReceiptCheck.ResultingStateRoot);
+        ProgramReceiptOutcome? programOutcome;
+        try { programOutcome = decoder.Remaining > 69 ? DecodeProgramReceiptOutcomeFrom(decoder, protocolVersion) : null; }
+        catch (PlatformSdkException) { throw VerificationFailure(ReceiptCheck.ProgramOutcome); }
         if (programOutcome is not null &&
-            (module != 9 || programOutcome.ResultCode != resultCode ||
+            (module != GeneratedReceiptContract.ProgramsModuleId || programOutcome.ResultCode != resultCode ||
              programOutcome.TerminalKind == 1 && !Equal(programOutcome.TransferRoot, transferSetRoot) ||
-             programOutcome.TerminalKind != 1 && !AllZero(transferSetRoot))) throw VerificationFailure();
+             programOutcome.TerminalKind != 1 && !AllZero(transferSetRoot)))
+            throw VerificationFailure(ReceiptCheck.ProgramOutcome);
         var signatureFlagOffset = decoder.Position;
-        if (decoder.U8() != 1) throw VerificationFailure();
+        if (decoder.U8() != 1) throw VerificationFailure(ReceiptCheck.MissingSignature);
         var sequencerSignature = decoder.BoundedExactly(64);
         decoder.Finish();
         var receipt = new ProtocolReceipt(protocolVersion, activityId, globalSequence, previousStateRoot, resultingStateRoot, activityRoot, resultCode, effects.AsReadOnly(), feeCharged, batchId, module, moduleVersion, parameterVersion, operation, asset, amount, from, fromBalanceBefore, fromBalanceAfter, fromSequence, to, toBalanceBefore, toBalanceAfter, transferSetRoot, authorizationHash, contextHash, timestamp, programOutcome, sequencerSignature);
@@ -477,11 +504,17 @@ public static class LocalVerifier
     public static ProgramReceiptOutcome DecodeProgramReceiptOutcome(ReadOnlySpan<byte> canonicalOutcome,
                                                                      ushort protocolVersion)
     {
-        if (canonicalOutcome.IsEmpty || canonicalOutcome.Length > MaximumMessageBytes) throw VerificationFailure();
-        var decoder = new WireDecoder(canonicalOutcome.ToArray());
-        var outcome = DecodeProgramReceiptOutcomeFrom(decoder, protocolVersion);
-        decoder.Finish();
-        return outcome;
+        if (canonicalOutcome.IsEmpty || canonicalOutcome.Length > MaximumMessageBytes)
+            throw VerificationFailure(ReceiptCheck.ReceiptShape);
+        try
+        {
+            var decoder = new WireDecoder(canonicalOutcome.ToArray());
+            var outcome = DecodeProgramReceiptOutcomeFrom(decoder, protocolVersion);
+            decoder.Finish();
+            return outcome;
+        }
+        catch (PlatformSdkException error) when (error.ReceiptCheck is not null) { throw; }
+        catch (PlatformSdkException) { throw VerificationFailure(ReceiptCheck.ProgramOutcome); }
     }
 
     private static bool VerifyEd25519(ReadOnlySpan<byte> publicKey, ReadOnlySpan<byte> signature, ReadOnlySpan<byte> message)
@@ -559,6 +592,8 @@ public static class LocalVerifier
     }
 
     private static PlatformSdkException VerificationFailure() => new(SdkErrorCode.VerificationFailure, RetryClass.Never);
+    private static PlatformSdkException VerificationFailure(ReceiptCheck check) =>
+        new(SdkErrorCode.VerificationFailure, RetryClass.Never, receiptCheck: check);
 
     private sealed record DecodedReceipt(ProtocolReceipt Receipt, byte[] UnsignedBytes);
 

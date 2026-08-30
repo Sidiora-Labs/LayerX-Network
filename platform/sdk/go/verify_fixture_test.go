@@ -28,16 +28,18 @@ func TestProgramOutcomeV3Vector(t *testing.T) {
 	}
 }
 
+type receiptFixtureAuthority struct {
+	BatchIDHex            string `json:"batch_id_hex"`
+	AssetHex              string `json:"asset_hex"`
+	PreviousStateRootHex  string `json:"previous_state_root_hex"`
+	ResultingStateRootHex string `json:"resulting_state_root_hex"`
+	SequencerPublicKeyHex string `json:"sequencer_public_key_hex"`
+}
+
 type receiptFixture struct {
-	CanonicalReceiptHex string `json:"canonical_receipt_hex"`
-	AuthorizedBatch     struct {
-		BatchIDHex            string `json:"batch_id_hex"`
-		AssetHex              string `json:"asset_hex"`
-		PreviousStateRootHex  string `json:"previous_state_root_hex"`
-		ResultingStateRootHex string `json:"resulting_state_root_hex"`
-		SequencerPublicKeyHex string `json:"sequencer_public_key_hex"`
-	} `json:"authorized_batch"`
-	Expected struct {
+	CanonicalReceiptHex string                  `json:"canonical_receipt_hex"`
+	AuthorizedBatch     receiptFixtureAuthority `json:"authorized_batch"`
+	Expected            struct {
 		Level             string `json:"level"`
 		ResultCode        int32  `json:"result_code"`
 		ProtocolVersion   uint16 `json:"protocol_version"`
@@ -58,9 +60,9 @@ type receiptFixture struct {
 	} `json:"expected"`
 }
 
-func loadReceiptFixture(t *testing.T) receiptFixture {
+func loadReceiptFixtureNamed(t *testing.T, name string) receiptFixture {
 	t.Helper()
-	raw, err := os.ReadFile("../conformance/fixtures/receipt-positive-v1.json")
+	raw, err := os.ReadFile("../conformance/fixtures/" + name)
 	if err != nil {
 		t.Fatalf("read fixture: %v", err)
 	}
@@ -69,6 +71,11 @@ func loadReceiptFixture(t *testing.T) receiptFixture {
 		t.Fatalf("decode fixture: %v", err)
 	}
 	return fixture
+}
+
+func loadReceiptFixture(t *testing.T) receiptFixture {
+	t.Helper()
+	return loadReceiptFixtureNamed(t, "receipt-positive-v1.json")
 }
 
 func fixtureBytes(t *testing.T, value string) []byte {
@@ -108,6 +115,17 @@ func fixtureAuthorizedBatch(t *testing.T, fixture receiptFixture) AuthorizedBatc
 		PreviousStateRoot:  fixture32(t, fixture.AuthorizedBatch.PreviousStateRootHex),
 		ResultingStateRoot: fixture32(t, fixture.AuthorizedBatch.ResultingStateRootHex),
 		SequencerPublicKey: fixture32(t, fixture.AuthorizedBatch.SequencerPublicKeyHex),
+	}
+}
+
+func fixtureAuthority(t *testing.T, authority receiptFixtureAuthority) AuthorizedBatch {
+	t.Helper()
+	return AuthorizedBatch{
+		BatchID:            fixture32(t, authority.BatchIDHex),
+		Asset:              fixture32(t, authority.AssetHex),
+		PreviousStateRoot:  fixture32(t, authority.PreviousStateRootHex),
+		ResultingStateRoot: fixture32(t, authority.ResultingStateRootHex),
+		SequencerPublicKey: fixture32(t, authority.SequencerPublicKeyHex),
 	}
 }
 
@@ -192,5 +210,57 @@ func TestVerifyReceiptFixtureByteFlipFails(t *testing.T) {
 	mutated[len(mutated)-1] ^= 0x01
 	if _, err := VerifyReceipt(mutated, fixtureAuthorizedBatch(t, fixture)); err == nil {
 		t.Fatalf("mutated receipt verified; a flipped signature byte must fail")
+	}
+}
+
+func TestVerifyProgramsReceiptFixturePreservesOutcome(t *testing.T) {
+	fixture := loadReceiptFixtureNamed(t, "receipt-programs-positive-v1.json")
+	verified, err := VerifyReceipt(
+		fixtureBytes(t, fixture.CanonicalReceiptHex),
+		fixtureAuthorizedBatch(t, fixture),
+	)
+	if err != nil {
+		t.Fatalf("verify Programs receipt: %v", err)
+	}
+	outcome := verified.Receipt.ProgramOutcome
+	if outcome == nil {
+		t.Fatalf("Programs receipt lost its optional outcome")
+	}
+	if outcome.EncodingVersion != 3 || outcome.RuntimeVersion != 1 || outcome.ABIVersion != 1 || outcome.FeeUnits != NewUint128(0, 16) {
+		t.Fatalf("Programs receipt outcome diverged")
+	}
+}
+
+func TestReceiptRefusalVectorsExposeSharedTaxonomy(t *testing.T) {
+	var fixture struct {
+		AuthorizedBatch receiptFixtureAuthority `json:"authorized_batch"`
+		Vectors         []struct {
+			Name                string `json:"name"`
+			ExpectedCheck       string `json:"expected_check"`
+			CanonicalReceiptHex string `json:"canonical_receipt_hex"`
+		} `json:"vectors"`
+	}
+	raw, err := os.ReadFile("../conformance/fixtures/receipt-refusals-v1.json")
+	if err != nil {
+		t.Fatalf("read refusal fixture: %v", err)
+	}
+	if err := json.Unmarshal(raw, &fixture); err != nil {
+		t.Fatalf("decode refusal fixture: %v", err)
+	}
+	for _, vector := range fixture.Vectors {
+		vector := vector
+		t.Run(vector.Name, func(t *testing.T) {
+			_, err := VerifyReceipt(
+				fixtureBytes(t, vector.CanonicalReceiptHex),
+				fixtureAuthority(t, fixture.AuthorizedBatch),
+			)
+			failure, ok := err.(*VerificationError)
+			if !ok {
+				t.Fatalf("untyped receipt failure: %T %v", err, err)
+			}
+			if string(failure.Check) != vector.ExpectedCheck {
+				t.Fatalf("receipt check %q, want %q", failure.Check, vector.ExpectedCheck)
+			}
+		})
 	}
 }

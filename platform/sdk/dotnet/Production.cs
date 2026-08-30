@@ -63,8 +63,9 @@ public sealed class PlatformSdkException : Exception
     public string? RequestId { get; }
     public int? ProtocolResultCode { get; }
     public ulong? RetryAfterMilliseconds { get; }
+    public ReceiptCheck? ReceiptCheck { get; }
 
-    public PlatformSdkException(SdkErrorCode code, RetryClass retry, string? requestId = null, int? protocolResultCode = null, ulong? retryAfterMilliseconds = null)
+    public PlatformSdkException(SdkErrorCode code, RetryClass retry, string? requestId = null, int? protocolResultCode = null, ulong? retryAfterMilliseconds = null, ReceiptCheck? receiptCheck = null)
         : base(SafeMessage(code))
     {
         Code = code;
@@ -72,6 +73,7 @@ public sealed class PlatformSdkException : Exception
         RequestId = requestId;
         ProtocolResultCode = protocolResultCode;
         RetryAfterMilliseconds = retryAfterMilliseconds;
+        ReceiptCheck = receiptCheck;
     }
 
     private static string SafeMessage(SdkErrorCode code) => code switch

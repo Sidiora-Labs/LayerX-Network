@@ -1,15 +1,54 @@
 use std::fs;
 use std::path::Path;
 
-use layerx_proof::receipt::{canonical_protocol_facts, AuthorizedBatch, ReceiptCheck};
+use layerx_proof::receipt::{canonical_protocol_facts, AuthorizedBatch};
 use layerx_sdk::production::verify_receipt;
+use layerx_sdk::ReceiptFailureCode;
 use layerx_types::verify::VerificationLevel;
 
 fn fixture_json() -> String {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../../platform/sdk/conformance/fixtures/receipt-positive-v1.json");
-    fs::read_to_string(&path)
-        .unwrap_or_else(|error| panic!("read {}: {error}", path.display()))
+    fs::read_to_string(&path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()))
+}
+
+fn shared_fixture(name: &str) -> serde_json::Value {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../platform/sdk/conformance/fixtures")
+        .join(name);
+    let source = fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+    serde_json::from_str(&source)
+        .unwrap_or_else(|error| panic!("decode {}: {error}", path.display()))
+}
+
+fn value_hex(value: &serde_json::Value, field: &str) -> Vec<u8> {
+    hex_bytes(
+        value[field]
+            .as_str()
+            .unwrap_or_else(|| panic!("fixture field {field} missing")),
+    )
+}
+
+fn value_authorised(fixture: &serde_json::Value) -> AuthorizedBatch {
+    let batch = &fixture["authorized_batch"];
+    AuthorizedBatch::new(
+        value_hex(batch, "batch_id_hex")
+            .try_into()
+            .expect("batch id length"),
+        value_hex(batch, "asset_hex")
+            .try_into()
+            .expect("asset length"),
+        value_hex(batch, "previous_state_root_hex")
+            .try_into()
+            .expect("previous root length"),
+        value_hex(batch, "resulting_state_root_hex")
+            .try_into()
+            .expect("resulting root length"),
+        value_hex(batch, "sequencer_public_key_hex")
+            .try_into()
+            .expect("sequencer key length"),
+    )
 }
 
 fn string_field(json: &str, key: &str) -> String {
@@ -91,24 +130,54 @@ fn core_fixture_receipt_verifies_positively() {
         .protocol()
         .unwrap_or_else(|| panic!("verified receipt lost its protocol body"));
     assert_eq!(i64::from(protocol.result_code()), 0);
-    assert_eq!(u64::from(protocol.protocol_version()), number_field(&json, "protocol_version"));
-    assert_eq!(u64::from(protocol.operation()), number_field(&json, "operation"));
-    assert_eq!(u64::from(protocol.module_id()), number_field(&json, "module_id"));
-    assert_eq!(protocol.global_sequence(), number_field(&json, "global_sequence"));
+    assert_eq!(
+        u64::from(protocol.protocol_version()),
+        number_field(&json, "protocol_version")
+    );
+    assert_eq!(
+        u64::from(protocol.operation()),
+        number_field(&json, "operation")
+    );
+    assert_eq!(
+        u64::from(protocol.module_id()),
+        number_field(&json, "module_id")
+    );
+    assert_eq!(
+        protocol.global_sequence(),
+        number_field(&json, "global_sequence")
+    );
     assert_eq!(protocol.timestamp(), number_field(&json, "timestamp_ms"));
     assert_eq!(protocol.amount(), u128_field(&json, "amount"));
     assert_eq!(protocol.fee_charged(), u128_field(&json, "fee_charged"));
-    assert_eq!(protocol.debit_balance_before(), u128_field(&json, "from_balance_before"));
-    assert_eq!(protocol.debit_balance_after(), u128_field(&json, "from_balance_after"));
-    assert_eq!(protocol.credit_balance_before(), u128_field(&json, "to_balance_before"));
-    assert_eq!(protocol.credit_balance_after(), u128_field(&json, "to_balance_after"));
+    assert_eq!(
+        protocol.debit_balance_before(),
+        u128_field(&json, "from_balance_before")
+    );
+    assert_eq!(
+        protocol.debit_balance_after(),
+        u128_field(&json, "from_balance_after")
+    );
+    assert_eq!(
+        protocol.credit_balance_before(),
+        u128_field(&json, "to_balance_before")
+    );
+    assert_eq!(
+        protocol.credit_balance_after(),
+        u128_field(&json, "to_balance_after")
+    );
     assert_eq!(protocol.activity_id(), hex_32(&json, "activity_id_hex"));
     assert_eq!(protocol.from(), hex_32(&json, "from_hex"));
     assert_eq!(protocol.to(), hex_32(&json, "to_hex"));
     assert_eq!(protocol.batch_id(), hex_32(&json, "batch_id_hex"));
     assert_eq!(protocol.asset(), hex_32(&json, "asset_hex"));
-    assert_eq!(protocol.previous_state_root(), hex_32(&json, "previous_state_root_hex"));
-    assert_eq!(protocol.resulting_state_root(), hex_32(&json, "resulting_state_root_hex"));
+    assert_eq!(
+        protocol.previous_state_root(),
+        hex_32(&json, "previous_state_root_hex")
+    );
+    assert_eq!(
+        protocol.resulting_state_root(),
+        hex_32(&json, "resulting_state_root_hex")
+    );
     let facts = canonical_protocol_facts(&canonical)
         .unwrap_or_else(|failure| panic!("canonical facts refused: {failure:?}"));
     assert_eq!(facts.result_code(), 0);
@@ -126,5 +195,36 @@ fn core_fixture_receipt_byte_flip_fails() {
     let Err(failure) = verify_receipt(&mutated, &authorised_batch(&json)) else {
         panic!("mutated receipt verified; a flipped signature byte must fail")
     };
-    assert_eq!(failure.check, ReceiptCheck::SequencerSignature);
+    assert_eq!(failure.check, ReceiptFailureCode::SequencerSignature);
+}
+
+#[test]
+fn core_programs_fixture_preserves_the_optional_outcome() {
+    let fixture = shared_fixture("receipt-programs-positive-v1.json");
+    let canonical = value_hex(&fixture, "canonical_receipt_hex");
+    let verified = verify_receipt(&canonical, &value_authorised(&fixture))
+        .unwrap_or_else(|failure| panic!("Programs receipt refused: {failure:?}"));
+    let receipt = verified.receipt().protocol().expect("protocol receipt");
+    let outcome = receipt.program_outcome().expect("Programs outcome");
+    assert_eq!(outcome.encoding_version(), 3);
+    assert_eq!(outcome.runtime_version(), 1);
+    assert_eq!(outcome.abi_version(), 1);
+    assert_eq!(outcome.fee_units(), 16);
+    assert_eq!(outcome.call_graph_root(), [0x11; 32]);
+    assert_eq!(outcome.terminal_payload_root(), [0x22; 32]);
+}
+
+#[test]
+fn core_refusal_vectors_expose_the_shared_taxonomy() {
+    let fixture = shared_fixture("receipt-refusals-v1.json");
+    let authorised = value_authorised(&fixture);
+    for vector in fixture["vectors"].as_array().expect("refusal vectors") {
+        let canonical = value_hex(vector, "canonical_receipt_hex");
+        let failure =
+            verify_receipt(&canonical, &authorised).expect_err("non-canonical receipt verified");
+        assert_eq!(
+            failure.check.as_str(),
+            vector["expected_check"].as_str().expect("expected check")
+        );
+    }
 }

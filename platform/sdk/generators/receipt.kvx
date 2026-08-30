@@ -1,0 +1,6 @@
+[receipt]
+program_outcome = "optional"
+programs_module_id = 9
+program_outcome_tags = ["50524731", "50524732", "50524733"]
+required_nonzero = ["global-sequence", "module-id", "module-version", "timestamp", "activity-id", "resulting-state-root"]
+failure_checks = ["decode", "canonical-encoding", "receipt-shape", "missing-signature", "protocol-version", "result-code", "operation", "activity-id", "global-sequence", "module-id", "module-version", "timestamp", "batch-id", "asset", "previous-state-root", "resulting-state-root", "debit-balance", "credit-balance", "program-outcome", "sequencer-signature"]

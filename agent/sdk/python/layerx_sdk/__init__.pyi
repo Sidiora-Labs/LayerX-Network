@@ -41,6 +41,7 @@ from .generated.client import (
     parse_timestamp_seconds as parse_timestamp_seconds,
     require_verified as require_verified,
 )
+from .generated.receipt import ReceiptFailureCode as ReceiptFailureCode
 from .production import (
     AGENT_OPERATIONS as AGENT_OPERATIONS,
     HUMAN_OPERATIONS as HUMAN_OPERATIONS,
@@ -96,6 +97,7 @@ from .verifier import (
     MerkleProof as MerkleProof,
     ProtocolReceipt as ProtocolReceipt,
     ReceiptEffect as ReceiptEffect,
+    ReceiptVerificationError as ReceiptVerificationError,
     ReceiptVerification as ReceiptVerification,
     SequencerAuthorization as SequencerAuthorization,
     decode_batch_header as decode_batch_header,

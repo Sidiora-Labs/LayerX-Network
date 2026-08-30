@@ -1,5 +1,6 @@
 export * from "./generated/client.js";
 export * from "./generated/mirror.js";
+export * from "./generated/receipt.js";
 export * from "./agent-http.js";
 export * from "./mirror.js";
 export * from "./node-mirror.js";

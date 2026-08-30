@@ -26,6 +26,7 @@ public final class ReceiptFixtureTest {
     private static final Path FIXTURE = Paths
         .get(System.getProperty("layerx.repo.root", "../../.."))
         .resolve("platform/sdk/conformance/fixtures/receipt-positive-v1.json");
+    private static final Path FIXTURE_ROOT = FIXTURE.getParent();
 
     @Test
     void testCoreFixtureReceiptVerifiesPositively() throws Exception {
@@ -77,6 +78,36 @@ public final class ReceiptFixtureTest {
         mutated[mutated.length - 1] ^= 0x01;
         assertThrows(PlatformSdkException.class,
             () -> LocalVerifier.verifyReceipt(mutated, authorizedBatch(fixture)));
+    }
+
+    @Test
+    void programsReceiptPreservesOptionalOutcome() throws Exception {
+        JsonNode fixture = JSON.readTree(Files.readString(
+            FIXTURE_ROOT.resolve("receipt-programs-positive-v1.json")));
+        LocalVerifier.ReceiptVerification verified = LocalVerifier.verifyReceipt(
+            hexDecode(fixture.get("canonical_receipt_hex").asText()),
+            authorizedBatch(fixture));
+        LocalVerifier.ProgramReceiptOutcome outcome = verified.receipt().programOutcome();
+        assertNotNull(outcome);
+        assertEquals(3, outcome.encodingVersion());
+        assertEquals(1, outcome.runtimeVersion());
+        assertEquals(1, outcome.abiVersion());
+        assertEquals(BigInteger.valueOf(16), outcome.feeUnits());
+    }
+
+    @Test
+    void refusalVectorsExposeSharedTaxonomy() throws Exception {
+        JsonNode fixture = JSON.readTree(Files.readString(
+            FIXTURE_ROOT.resolve("receipt-refusals-v1.json")));
+        for (JsonNode vector : fixture.get("vectors")) {
+            PlatformSdkException failure = assertThrows(PlatformSdkException.class,
+                () -> LocalVerifier.verifyReceipt(
+                    hexDecode(vector.get("canonical_receipt_hex").asText()),
+                    authorizedBatch(fixture)), vector.get("name").asText());
+            assertNotNull(failure.receiptCheck());
+            assertEquals(vector.get("expected_check").asText(),
+                failure.receiptCheck().wire());
+        }
     }
 
     private static LocalVerifier.AuthorizedReceiptBatch authorizedBatch(JsonNode fixture) {

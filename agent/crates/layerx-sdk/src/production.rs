@@ -21,11 +21,84 @@ use layerx_proof::inclusion::{
 };
 use layerx_proof::merkle::Proof;
 use layerx_proof::receipt::{
-    verify_outcome, AuthorizedBatch, VerificationFailure, VerifiedReceipt,
+    verify_outcome, AuthorizedBatch, ReceiptCheck as ProofReceiptCheck,
+    VerificationFailure as ProofVerificationFailure, VerifiedReceipt,
 };
+use layerx_wire::receipt::{decode as decode_receipt, Receipt};
 use zeroize::Zeroize;
 
-use crate::{Client, Deployment};
+use crate::{Client, Deployment, ReceiptFailureCode};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ReceiptVerificationFailure {
+    pub check: ReceiptFailureCode,
+}
+
+impl ReceiptVerificationFailure {
+    const fn at(check: ReceiptFailureCode) -> Self {
+        Self { check }
+    }
+}
+
+impl fmt::Display for ReceiptVerificationFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "receipt verification failed at {}",
+            self.check.as_str()
+        )
+    }
+}
+
+impl std::error::Error for ReceiptVerificationFailure {}
+
+fn proof_receipt_failure(failure: ProofVerificationFailure) -> ReceiptVerificationFailure {
+    let check = match failure.check {
+        ProofReceiptCheck::Decode => ReceiptFailureCode::Decode,
+        ProofReceiptCheck::CanonicalEncoding => ReceiptFailureCode::CanonicalEncoding,
+        ProofReceiptCheck::ReceiptShape => ReceiptFailureCode::ReceiptShape,
+        ProofReceiptCheck::MissingSignature => ReceiptFailureCode::MissingSignature,
+        ProofReceiptCheck::ProtocolVersion => ReceiptFailureCode::ProtocolVersion,
+        ProofReceiptCheck::Module => ReceiptFailureCode::ModuleId,
+        ProofReceiptCheck::ResultCode => ReceiptFailureCode::ResultCode,
+        ProofReceiptCheck::Operation => ReceiptFailureCode::Operation,
+        ProofReceiptCheck::ActivityId => ReceiptFailureCode::ActivityId,
+        ProofReceiptCheck::BatchId => ReceiptFailureCode::BatchId,
+        ProofReceiptCheck::Asset => ReceiptFailureCode::Asset,
+        ProofReceiptCheck::PreviousStateRoot => ReceiptFailureCode::PreviousStateRoot,
+        ProofReceiptCheck::ResultingStateRoot => ReceiptFailureCode::ResultingStateRoot,
+        ProofReceiptCheck::DebitBalance => ReceiptFailureCode::DebitBalance,
+        ProofReceiptCheck::CreditBalance => ReceiptFailureCode::CreditBalance,
+        ProofReceiptCheck::SequencerSignature => ReceiptFailureCode::SequencerSignature,
+    };
+    ReceiptVerificationFailure::at(check)
+}
+
+fn decode_receipt_invariants(canonical_receipt: &[u8]) -> Result<(), ReceiptVerificationFailure> {
+    let decoded = decode_receipt(canonical_receipt)
+        .map_err(|_| ReceiptVerificationFailure::at(ReceiptFailureCode::Decode))?;
+    let Receipt::Protocol(protocol) = decoded else {
+        return Err(ReceiptVerificationFailure::at(
+            ReceiptFailureCode::ReceiptShape,
+        ));
+    };
+    let check = if protocol.global_sequence() == 0 {
+        Some(ReceiptFailureCode::GlobalSequence)
+    } else if protocol.module_id() == 0 {
+        Some(ReceiptFailureCode::ModuleId)
+    } else if protocol.module_version() == 0 {
+        Some(ReceiptFailureCode::ModuleVersion)
+    } else if protocol.timestamp() == 0 {
+        Some(ReceiptFailureCode::Timestamp)
+    } else if protocol.activity_id() == [0; 32] {
+        Some(ReceiptFailureCode::ActivityId)
+    } else if protocol.resulting_state_root() == [0; 32] {
+        Some(ReceiptFailureCode::ResultingStateRoot)
+    } else {
+        None
+    };
+    check.map_or(Ok(()), |check| Err(ReceiptVerificationFailure::at(check)))
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PlatformSdkMetadata {
@@ -587,8 +660,9 @@ impl ResumableStream {
 pub fn verify_receipt(
     canonical_receipt: &[u8],
     authorised_batch: &AuthorizedBatch,
-) -> Result<VerifiedReceipt, VerificationFailure> {
-    verify_outcome(canonical_receipt, authorised_batch)
+) -> Result<VerifiedReceipt, ReceiptVerificationFailure> {
+    decode_receipt_invariants(canonical_receipt)?;
+    verify_outcome(canonical_receipt, authorised_batch).map_err(proof_receipt_failure)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
