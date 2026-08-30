@@ -11,6 +11,10 @@ const PROGRAMS_MODULE_ID: u32 = 9;
 const PROGRAMS_STATE_OPERATION: u16 = 0;
 const PROGRAMS_CALL_OPERATION: u16 = 3;
 
+const fn supported_protocol_version(version: u16) -> bool {
+    matches!(version, 1 | 2)
+}
+
 const fn supported_programs_module_version(version: u32) -> bool {
     matches!(version, 1 | 2 | 3)
 }
@@ -242,7 +246,7 @@ pub fn verify_outcome(
     let protocol = receipt
         .protocol()
         .ok_or_else(|| VerificationFailure::at(ReceiptCheck::ReceiptShape))?;
-    if protocol.protocol_version() != 1 {
+    if !supported_protocol_version(protocol.protocol_version()) {
         return Err(VerificationFailure::at(ReceiptCheck::ProtocolVersion));
     }
     if protocol.operation() == 0 {
@@ -473,12 +477,15 @@ pub fn canonical_protocol_facts(
 #[cfg(test)]
 mod programs_version_contract {
     use super::{
-        supported_program_guest_abi, supported_programs_module_version,
+        supported_program_guest_abi, supported_programs_module_version, supported_protocol_version,
         supports_program_account_state,
     };
 
     #[test]
     fn module_and_guest_versions_are_independent() {
+        assert!(supported_protocol_version(1));
+        assert!(supported_protocol_version(2));
+        assert!(!supported_protocol_version(3));
         assert!(supported_programs_module_version(3));
         assert!(supports_program_account_state(3));
         assert!(supported_program_guest_abi(2));

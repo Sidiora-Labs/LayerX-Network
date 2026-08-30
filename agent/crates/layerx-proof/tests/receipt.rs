@@ -39,10 +39,17 @@ fn fields() -> Fields {
     }
 }
 
-fn encode_fields(fields: &Fields, signature: Option<[u8; 64]>) -> Vec<u8> {
+fn encode_fields_version(
+    fields: &Fields,
+    signature: Option<[u8; 64]>,
+    protocol_version: u16,
+) -> Vec<u8> {
     let mut encoder = Encoder::new(4096);
-    assert_eq!(encoder.structure_header(0x5201), Ok(()));
-    assert_eq!(encoder.u16(1), Ok(()));
+    assert_eq!(
+        encoder.structure_header_version(0x5201, protocol_version),
+        Ok(())
+    );
+    assert_eq!(encoder.u16(protocol_version), Ok(()));
     assert_eq!(encoder.bytes(&fields.activity_id, 32), Ok(()));
     assert_eq!(encoder.u64(9), Ok(()));
     assert_eq!(encoder.bytes(&fields.previous_state_root, 32), Ok(()));
@@ -76,11 +83,26 @@ fn encode_fields(fields: &Fields, signature: Option<[u8; 64]>) -> Vec<u8> {
     encoder.finish()
 }
 
+fn encode_fields(fields: &Fields, signature: Option<[u8; 64]>) -> Vec<u8> {
+    encode_fields_version(fields, signature, 1)
+}
+
 fn sign(fields: &Fields, signing_key: &SigningKey) -> Vec<u8> {
     let unsigned = encode_fields(fields, None);
     let digest = receipt_digest(&unsigned)
         .unwrap_or_else(|error| panic!("receipt hashing failed: {error:?}"));
     encode_fields(fields, Some(signing_key.sign(&digest).to_bytes()))
+}
+
+fn sign_version(fields: &Fields, signing_key: &SigningKey, protocol_version: u16) -> Vec<u8> {
+    let unsigned = encode_fields_version(fields, None, protocol_version);
+    let digest = receipt_digest(&unsigned)
+        .unwrap_or_else(|error| panic!("receipt hashing failed: {error:?}"));
+    encode_fields_version(
+        fields,
+        Some(signing_key.sign(&digest).to_bytes()),
+        protocol_version,
+    )
 }
 
 fn authorised(fields: &Fields, signing_key: &SigningKey) -> AuthorizedBatch {
@@ -108,6 +130,23 @@ fn verifies_from_bytes_with_no_ambient_capabilities() {
     assert_eq!(facts.asset(), fields.asset);
     assert_eq!(facts.amount(), fields.amount);
     assert_eq!(facts.fee_charged(), 1);
+}
+
+#[test]
+fn verifies_current_occupancy_protocol_receipts() {
+    let signing_key = SigningKey::from_bytes(&[3; 32]);
+    let fields = fields();
+    let bytes = sign_version(&fields, &signing_key, 2);
+    let verified = verify(&bytes, &authorised(&fields, &signing_key))
+        .unwrap_or_else(|error| panic!("valid protocol v2 receipt rejected: {error:?}"));
+    assert_eq!(verified.canonical_bytes(), bytes);
+    assert_eq!(
+        verified
+            .receipt()
+            .protocol()
+            .map(|receipt| receipt.protocol_version()),
+        Some(2)
+    );
 }
 
 #[test]
