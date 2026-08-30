@@ -45,6 +45,28 @@ public sealed class ProgramsContractTests
     }
 
     [Fact]
+    public async Task DiscoveryClientReturnsBoundedTypedResponseWithHonestVerificationLevel()
+    {
+        var program = new string('1', 64); var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var value = JsonValue.Object(new Dictionary<string, JsonValue>
+        {
+            ["program_id"] = JsonValue.String(program), ["lifecycle"] = JsonValue.String("active"),
+            ["version"] = JsonValue.Integer(7), ["code_hash"] = JsonValue.String(new string('2', 64)),
+            ["abi_version"] = JsonValue.Integer(2), ["receipt_digest"] = JsonValue.String(new string('3', 64)),
+            ["state_root"] = JsonValue.String(new string('4', 64)), ["observed_sequence"] = JsonValue.String("9"),
+            ["observed_at"] = JsonValue.String(now.ToString()), ["valid_through"] = JsonValue.String((now + 60_000).ToString()),
+            ["verification"] = JsonValue.String("registry-receipt-and-current-head-verified"),
+        });
+        var programs = new ProgramsClient(new PlatformClient(new ProgramTransport(value)),
+            Enumerable.Repeat((byte)1, 32).ToArray());
+
+        var discovered = await programs.DiscoverAsync(Convert.FromHexString(program), "sequencer-signed");
+        Assert.Equal(ProgramLifecycle.Active, discovered.Lifecycle);
+        Assert.Equal((uint)7, discovered.Version); Assert.Equal((ulong)9, discovered.ObservedSequence);
+        Assert.Equal("server-side-receipt-verification-only", discovered.Verification);
+    }
+
+    [Fact]
     public void OperationValueVerificationStatusMatrixIsExact()
     {
         var achieved = Status("Achieved", null); var discovery = Status("Unverified", "server_side_receipt_verification_only");

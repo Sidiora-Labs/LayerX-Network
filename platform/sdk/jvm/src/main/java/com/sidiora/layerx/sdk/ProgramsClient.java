@@ -128,12 +128,48 @@ public final class ProgramsClient {
         @Override public byte[] signedActivity() { return signedActivity.clone(); }
     }
 
-    public record Discovery(ObjectNode value) {
-        public Discovery { value = copy(value); }
+    public enum Lifecycle { ACTIVE, DEPRECATED, TOMBSTONED }
+
+    public record Source(String status, byte[] sourceDigest, byte[] environmentDigest, String pipeline,
+                         byte[] expectedCodeHash, byte[] reproducedArtifactDigest) {
+        public Source {
+            status = Objects.requireNonNull(status, "status");
+            sourceDigest = cloneNullable(sourceDigest); environmentDigest = cloneNullable(environmentDigest);
+            expectedCodeHash = cloneNullable(expectedCodeHash); reproducedArtifactDigest = cloneNullable(reproducedArtifactDigest);
+        }
+        @Override public byte[] sourceDigest() { return cloneNullable(sourceDigest); }
+        @Override public byte[] environmentDigest() { return cloneNullable(environmentDigest); }
+        @Override public byte[] expectedCodeHash() { return cloneNullable(expectedCodeHash); }
+        @Override public byte[] reproducedArtifactDigest() { return cloneNullable(reproducedArtifactDigest); }
     }
 
-    public record Interface(ObjectNode value) {
-        public Interface { value = copy(value); }
+    public record Discovery(byte[] programId, Lifecycle lifecycle, long version, byte[] codeHash,
+                            int abiVersion, byte[] receiptDigest, byte[] stateRoot,
+                            BigInteger observedSequence, BigInteger observedAt, BigInteger validThrough,
+                            String verification) {
+        public Discovery {
+            programId = programId.clone(); codeHash = codeHash.clone(); receiptDigest = receiptDigest.clone(); stateRoot = stateRoot.clone();
+        }
+        @Override public byte[] programId() { return programId.clone(); }
+        @Override public byte[] codeHash() { return codeHash.clone(); }
+        @Override public byte[] receiptDigest() { return receiptDigest.clone(); }
+        @Override public byte[] stateRoot() { return stateRoot.clone(); }
+    }
+
+    public record Interface(byte[] programId, long version, byte[] codeHash, int abiVersion,
+                            byte[] interfaceBytes, byte[] interfaceDigest, byte[] receiptDigest,
+                            byte[] stateRoot, BigInteger observedSequence, BigInteger observedAt,
+                            BigInteger validThrough, Source source, String verification) {
+        public Interface {
+            programId = programId.clone(); codeHash = codeHash.clone(); interfaceBytes = interfaceBytes.clone();
+            interfaceDigest = interfaceDigest.clone(); receiptDigest = receiptDigest.clone(); stateRoot = stateRoot.clone();
+        }
+        @Override public byte[] programId() { return programId.clone(); }
+        @Override public byte[] codeHash() { return codeHash.clone(); }
+        @Override public byte[] interfaceBytes() { return interfaceBytes.clone(); }
+        @Override public byte[] interfaceDigest() { return interfaceDigest.clone(); }
+        @Override public byte[] receiptDigest() { return receiptDigest.clone(); }
+        @Override public byte[] stateRoot() { return stateRoot.clone(); }
     }
 
     public record VerifiedExecution(ObjectNode document, LocalVerifier.ReceiptVerification receipt,
@@ -335,7 +371,11 @@ public final class ProgramsClient {
             throw decodeFailure();
         }
         unsigned(value.get("observed_sequence"), 64);
-        return new Discovery(value);
+        return new Discovery(hex32(expectedProgram), Lifecycle.valueOf(lifecycle.toUpperCase(java.util.Locale.ROOT)),
+            requiredU32(value.get("version")), hex32(text(value, "code_hash")), abi,
+            hex32(text(value, "receipt_digest")), hex32(text(value, "state_root")),
+            unsigned(value.get("observed_sequence"), 64), observedAt, unsigned(value.get("valid_through"), 64),
+            "server-side-receipt-verification-only");
     }
 
     private static Interface decodeInterface(ObjectNode value, String expectedProgram, BigInteger now) {
@@ -358,8 +398,12 @@ public final class ProgramsClient {
         if (interfaceBytes.length > MAX_INTERFACE_BYTES) throw decodeFailure();
         byte[] interfaceDigest = hex32(text(value, "interface_digest"));
         if (!MessageDigest.isEqual(sha256(interfaceBytes), interfaceDigest)) throw decodeFailure();
-        validateSource(object(value, "source"));
-        return new Interface(value);
+        Source source = decodeSource(object(value, "source"));
+        return new Interface(hex32(expectedProgram), requiredU32(value.get("version")),
+            hex32(text(value, "code_hash")), abi, interfaceBytes, interfaceDigest,
+            hex32(text(value, "receipt_digest")), hex32(text(value, "state_root")),
+            unsigned(value.get("observed_sequence"), 64), observedAt, unsigned(value.get("valid_through"), 64), source,
+            "server-side-receipt-verification-only");
     }
 
     private static void validateSource(ObjectNode source) {
@@ -382,6 +426,21 @@ public final class ProgramsClient {
             default -> throw decodeFailure();
         }
     }
+
+    private static Source decodeSource(ObjectNode source) {
+        validateSource(source);
+        String status = text(source, "status");
+        return switch (status) {
+            case "unpublished" -> new Source(status, null, null, null, null, null);
+            case "verified" -> new Source(status, hex32(text(source, "source_digest")),
+                hex32(text(source, "environment_digest")), text(source, "pipeline"), null, null);
+            case "mismatch" -> new Source(status, null, null, null,
+                hex32(text(source, "expected_code_hash")), hex32(text(source, "reproduced_artifact_digest")));
+            default -> throw decodeFailure();
+        };
+    }
+
+    private static byte[] cloneNullable(byte[] value) { return value == null ? null : value.clone(); }
 
     private static Simulation decodeSimulation(ObjectNode value, byte[] expectedProgram,
                                                 ActivityBinding activity, byte[] pinnedKey,

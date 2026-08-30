@@ -11,6 +11,7 @@ import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
+import java.util.HexFormat;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import org.junit.jupiter.api.Test;
@@ -117,6 +118,35 @@ public final class ProgramsContractTest {
             HttpClient.newBuilder().followRedirects(HttpClient.Redirect.ALWAYS).build(), JSON,
             URI.create("http://localhost:8080"), URI.create("http://localhost:9090"),
             Duration.ofSeconds(1), null));
+    }
+
+    @Test
+    void generatedInterfaceAndTypedClientPreserveStructuredSourceMetadata() throws Exception {
+        long now = System.currentTimeMillis();
+        ObjectNode source = JSON.createObjectNode().put("status", "verified")
+            .put("source_digest", HEX32).put("environment_digest", OTHER_HEX32)
+            .put("pipeline", "sha256-source-artifact-reproducible-build-v1");
+        ObjectNode interfaceValue = JSON.createObjectNode().put("program_id", HEX32).put("version", 7)
+            .put("code_hash", HEX32).put("abi_version", 2).put("interface", "00")
+            .put("interface_digest", "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d")
+            .put("receipt_digest", OTHER_HEX32).put("state_root", HEX32)
+            .put("observed_sequence", "9").put("observed_at", Long.toString(now))
+            .put("valid_through", Long.toString(now + 60_000))
+            .put("verification", "deployment-interface-and-current-head-verified").set("source", source);
+
+        var generated = JSON.treeToValue(interfaceValue,
+            GeneratedSchema.AgentModels.VerifiedProgramInterface.class);
+        assertEquals("verified", generated.source().status());
+        assertEquals(HEX32, generated.source().source_digest());
+
+        byte[] pinned = new byte[32]; pinned[0] = 1;
+        var programs = new ProgramsClient(new ProductionClient(new CapturingTransport(interfaceValue)), pinned);
+        ProgramsClient.Interface typed = programs.interfaceAt(HexFormat.of().parseHex(HEX32), "sequencer-signed")
+            .toCompletableFuture().join();
+        assertEquals(7, typed.version());
+        assertEquals("verified", typed.source().status());
+        assertArrayEquals(HexFormat.of().parseHex(HEX32), typed.source().sourceDigest());
+        assertEquals("server-side-receipt-verification-only", typed.verification());
     }
 
     @Test

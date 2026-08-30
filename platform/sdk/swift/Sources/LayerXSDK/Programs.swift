@@ -41,8 +41,24 @@ public struct ProgramCall: Sendable {
     }
 }
 
-public struct ProgramDiscovery: Sendable { public let value: JSONValue }
-public struct ProgramInterface: Sendable { public let value: JSONValue }
+public enum ProgramLifecycle: String, Sendable { case active, deprecated, tombstoned }
+public enum ProgramSource: Sendable {
+    case unpublished
+    case verified(sourceDigest: Data, environmentDigest: Data, pipeline: String)
+    case mismatch(expectedCodeHash: Data, reproducedArtifactDigest: Data)
+}
+public struct ProgramDiscovery: Sendable {
+    public let programID: Data; public let lifecycle: ProgramLifecycle; public let version: UInt32
+    public let codeHash: Data; public let abiVersion: UInt16; public let receiptDigest: Data; public let stateRoot: Data
+    public let observedSequence: UInt64; public let observedAt: UInt64; public let validThrough: UInt64
+    public let verification = "server-side-receipt-verification-only"
+}
+public struct ProgramInterface: Sendable {
+    public let programID: Data; public let version: UInt32; public let codeHash: Data; public let abiVersion: UInt16
+    public let interface: Data; public let interfaceDigest: Data; public let receiptDigest: Data; public let stateRoot: Data
+    public let observedSequence: UInt64; public let observedAt: UInt64; public let validThrough: UInt64
+    public let source: ProgramSource; public let verification = "server-side-receipt-verification-only"
+}
 public struct VerifiedProgramExecution: Sendable {
     public let value: JSONValue
     public let receipt: ReceiptVerification
@@ -99,16 +115,14 @@ public struct ProgramsClient: Sendable {
         let id = try identifier(programID); let value = try await client.program("program.discover", request:
             .object(["program_id": .string(id), "requested_verification_level": .string(try level(verificationLevel))]),
             pathParameters: ["program_id": id])
-        try verifiedDiscovery(value, programID: id, interface: false, now: nowMilliseconds())
-        return .init(value: value)
+        return try verifiedDiscovery(value, programID: id, interface: false, now: nowMilliseconds()).discovery!
     }
     public func interface(programID: Data, verificationLevel: String) async throws -> ProgramInterface {
         let id = try identifier(programID)
         let value = try await client.program("program.interface", request: .object(["program_id": .string(id),
             "requested_verification_level": .string(try level(verificationLevel))]),
             pathParameters: ["program_id": id])
-        try verifiedDiscovery(value, programID: id, interface: true, now: nowMilliseconds())
-        return .init(value: value)
+        return try verifiedDiscovery(value, programID: id, interface: true, now: nowMilliseconds()).interface!
     }
     public func simulate(_ call: ProgramCall) async throws -> ProgramSimulation {
         let binding = try decodeSignedCall(call)
@@ -339,7 +353,8 @@ private func verifiedSimulation(_ value: JSONValue, expectedProgramID: Data, bin
     return verified
 }
 
-private func verifiedDiscovery(_ value: JSONValue, programID: String, interface: Bool, now: UInt64) throws {
+private func verifiedDiscovery(_ value: JSONValue, programID: String, interface: Bool, now: UInt64)
+    throws -> (discovery: ProgramDiscovery?, interface: ProgramInterface?) {
     guard let object = value.objectValue else { throw programVerification() }
     let fields: Set<String> = interface
         ? ["program_id", "version", "code_hash", "abi_version", "interface", "interface_digest",
@@ -355,16 +370,42 @@ private func verifiedDiscovery(_ value: JSONValue, programID: String, interface:
           hex32(try text(object, "state_root")), validThrough >= observedAt, now <= validThrough,
           object["verification"]?.stringValue == (interface ? "deployment-interface-and-current-head-verified" :
             "registry-receipt-and-current-head-verified") else { throw programVerification() }
-    _ = try decimalUInt64Field(object, "observed_sequence")
+    let observedSequence = try decimalUInt64Field(object, "observed_sequence")
+    let program = try hexData(object, "program_id", exactBytes: 32)
+    let codeHash = try hexData(object, "code_hash", exactBytes: 32)
+    let receiptDigest = try hexData(object, "receipt_digest", exactBytes: 32)
+    let stateRoot = try hexData(object, "state_root", exactBytes: 32)
+    let version = try uint32Field(object, "version")
+    let abiVersion = UInt16(abi)
     if interface {
         let bytes = try hexData(object, "interface", maximumBytes: 952)
-        guard !bytes.isEmpty, Data(SHA256.hash(data: bytes)) == try hexData(object, "interface_digest", exactBytes: 32) else {
+        let interfaceDigest = try hexData(object, "interface_digest", exactBytes: 32)
+        guard !bytes.isEmpty, Data(SHA256.hash(data: bytes)) == interfaceDigest else {
             throw programVerification()
         }
-        try validateSource(try objectValue(object, "source"))
+        let source = try typedSource(try objectValue(object, "source"))
+        return (nil, ProgramInterface(programID: program, version: version, codeHash: codeHash,
+            abiVersion: abiVersion, interface: bytes, interfaceDigest: interfaceDigest,
+            receiptDigest: receiptDigest, stateRoot: stateRoot, observedSequence: observedSequence,
+            observedAt: observedAt, validThrough: validThrough, source: source))
     } else {
         guard let lifecycle = object["lifecycle"]?.stringValue,
-              ["active", "deprecated", "tombstoned"].contains(lifecycle) else { throw programDecode() }
+              let typedLifecycle = ProgramLifecycle(rawValue: lifecycle) else { throw programDecode() }
+        return (ProgramDiscovery(programID: program, lifecycle: typedLifecycle, version: version,
+            codeHash: codeHash, abiVersion: abiVersion, receiptDigest: receiptDigest, stateRoot: stateRoot,
+            observedSequence: observedSequence, observedAt: observedAt, validThrough: validThrough), nil)
+    }
+}
+
+private func typedSource(_ source: [String: JSONValue]) throws -> ProgramSource {
+    try validateSource(source)
+    switch try text(source, "status") {
+    case "unpublished": return .unpublished
+    case "verified": return .verified(sourceDigest: try hexData(source, "source_digest", exactBytes: 32),
+        environmentDigest: try hexData(source, "environment_digest", exactBytes: 32), pipeline: try text(source, "pipeline"))
+    case "mismatch": return .mismatch(expectedCodeHash: try hexData(source, "expected_code_hash", exactBytes: 32),
+        reproducedArtifactDigest: try hexData(source, "reproduced_artifact_digest", exactBytes: 32))
+    default: throw programDecode()
     }
 }
 

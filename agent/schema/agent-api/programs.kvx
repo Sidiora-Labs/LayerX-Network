@@ -20,11 +20,41 @@ program_id = "bytes32"
 required = ["program_id","lifecycle","version","code_hash","abi_version","receipt_digest","state_root","observed_sequence","observed_at","valid_through","verification"]
 proof = "receipt_verified_registry_read"
 lifecycle = ["active","deprecated","tombstoned"]
+program_id = "bytes32"
+version = "nonzero_u32"
+code_hash = "bytes32"
+abi_version = "u16_inclusive_1_2"
+receipt_digest = "bytes32"
+state_root = "bytes32"
+observed_sequence = "u64_decimal"
+observed_at = "u64_decimal_milliseconds"
+valid_through = "u64_decimal_milliseconds"
+verification = "server_side_receipt_verification_only_at_sdk_boundary"
 
 [type.VerifiedProgramInterface]
 required = ["program_id","version","code_hash","abi_version","interface","interface_digest","receipt_digest","state_root","observed_sequence","observed_at","valid_through","source","verification"]
 proof = "receipt_verified_registry_read"
 absence = "typed_absent_only_when_the_verified_version_has_no_interface"
+program_id = "bytes32"
+version = "nonzero_u32"
+code_hash = "bytes32"
+abi_version = "u16_inclusive_1_2"
+interface = "bounded_bytes"
+interface_digest = "sha256_of_interface"
+receipt_digest = "bytes32"
+state_root = "bytes32"
+observed_sequence = "u64_decimal"
+observed_at = "u64_decimal_milliseconds"
+valid_through = "u64_decimal_milliseconds"
+source = "ProgramSource"
+verification = "server_side_receipt_verification_only_at_sdk_boundary"
+
+[type.ProgramSource]
+required = ["status:string"]
+optional = ["source_digest:string","environment_digest:string","pipeline:string","expected_code_hash:string","reproduced_artifact_digest:string"]
+status_values = ["unpublished","verified","mismatch"]
+verified_required = ["source_digest","environment_digest","pipeline"]
+mismatch_required = ["expected_code_hash","reproduced_artifact_digest"]
 
 [type.ProgramCallBudget]
 required = ["fuel","fee_limit"]

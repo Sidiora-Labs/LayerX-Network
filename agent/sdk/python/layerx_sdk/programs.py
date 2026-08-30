@@ -26,6 +26,52 @@ class ProgramCall:
     signed_activity: bytes
 
 
+ProgramLifecycle = Literal["active", "deprecated", "tombstoned"]
+ProgramSourceStatus = Literal["unpublished", "verified", "mismatch"]
+
+
+@dataclass(frozen=True)
+class ProgramSource:
+    status: ProgramSourceStatus
+    source_digest: str | None = None
+    environment_digest: str | None = None
+    pipeline: str | None = None
+    expected_code_hash: str | None = None
+    reproduced_artifact_digest: str | None = None
+
+
+@dataclass(frozen=True)
+class ProgramDiscovery:
+    program_id: str
+    lifecycle: ProgramLifecycle
+    version: int
+    code_hash: str
+    abi_version: int
+    receipt_digest: str
+    state_root: str
+    observed_sequence: int
+    observed_at: int
+    valid_through: int
+    verification: Literal["server-side-receipt-verification-only"] = "server-side-receipt-verification-only"
+
+
+@dataclass(frozen=True)
+class ProgramInterface:
+    program_id: str
+    version: int
+    code_hash: str
+    abi_version: int
+    interface: bytes
+    interface_digest: str
+    receipt_digest: str
+    state_root: str
+    observed_sequence: int
+    observed_at: int
+    valid_through: int
+    source: ProgramSource
+    verification: Literal["server-side-receipt-verification-only"] = "server-side-receipt-verification-only"
+
+
 @dataclass(frozen=True)
 class ProgramTrustContext:
     sequencer_public_key: bytes
@@ -110,14 +156,14 @@ class ProgramOperations:
         self._trust = trust
         self._heads: dict[str, tuple[str, int, int, int]] = {}
 
-    def discover(self, program_id: str) -> Mapping[str, object]:
+    def discover(self, program_id: str) -> ProgramDiscovery:
         if not _hex32(program_id):
             raise ValueError("invalid program id")
         result = _discovery(self._client.agent("program.discover", {"program_id": program_id, "requested_verification_level": "sequencer-signed"}), program_id, self._trust.now_milliseconds())
         self._heads[program_id] = _head(result)
         return result
 
-    def interface(self, program_id: str) -> Mapping[str, object]:
+    def interface(self, program_id: str) -> ProgramInterface:
         if not _hex32(program_id):
             raise ValueError("invalid program id")
         result = _interface(self._client.agent("program.interface", {"program_id": program_id, "requested_verification_level": "sequencer-signed"}), program_id, self._trust.now_milliseconds())
@@ -285,7 +331,7 @@ def _verify_simulation(value: object, execution: Mapping[str, object], verified:
         raise ValueError("stale or mismatched simulation head")
 
 
-def _discovery(value: object, program_id: str, now: int) -> Mapping[str, object]:
+def _discovery(value: object, program_id: str, now: int) -> ProgramDiscovery:
     result = _mapping(value)
     _exact(result, ("program_id", "lifecycle", "version", "code_hash", "abi_version", "receipt_digest",
         "state_root", "observed_sequence", "observed_at", "valid_through", "verification"))
@@ -297,13 +343,15 @@ def _discovery(value: object, program_id: str, now: int) -> Mapping[str, object]
         _hex_field(result, field, 32, exact=True)
     for field in ("observed_sequence", "observed_at", "valid_through"):
         _decimal(result.get(field), (1 << 64) - 1)
-    documented = dict(result)
-    documented["verification"] = "server-side-receipt-verification-only"
+    documented = ProgramDiscovery(program_id, cast(ProgramLifecycle, result["lifecycle"]), cast(int, result["version"]),
+        cast(str, result["code_hash"]), cast(int, result["abi_version"]), cast(str, result["receipt_digest"]),
+        cast(str, result["state_root"]), _decimal(result["observed_sequence"], _MAX_U64),
+        _decimal(result["observed_at"], _MAX_U64), _decimal(result["valid_through"], _MAX_U64))
     _fresh(_head(documented), now)
     return documented
 
 
-def _interface(value: object, program_id: str, now: int) -> Mapping[str, object]:
+def _interface(value: object, program_id: str, now: int) -> ProgramInterface:
     result = _mapping(value)
     _exact(result, ("program_id", "version", "code_hash", "abi_version", "interface", "interface_digest",
         "receipt_digest", "state_root", "observed_sequence", "observed_at", "valid_through", "source", "verification"))
@@ -319,9 +367,11 @@ def _interface(value: object, program_id: str, now: int) -> Mapping[str, object]
     source = _program_source(result.get("source"))
     for field in ("observed_sequence", "observed_at", "valid_through"):
         _decimal(result.get(field), (1 << 64) - 1)
-    documented = dict(result)
-    documented["source"] = source
-    documented["verification"] = "server-side-receipt-verification-only"
+    documented = ProgramInterface(program_id, cast(int, result["version"]), cast(str, result["code_hash"]),
+        cast(int, result["abi_version"]), interface, cast(str, result["interface_digest"]),
+        cast(str, result["receipt_digest"]), cast(str, result["state_root"]),
+        _decimal(result["observed_sequence"], _MAX_U64), _decimal(result["observed_at"], _MAX_U64),
+        _decimal(result["valid_through"], _MAX_U64), _typed_program_source(source))
     _fresh(_head(documented), now)
     return documented
 
@@ -418,9 +468,17 @@ def _signed_decimal(value: str) -> bool:
     return bool(digits) and digits.isdigit() and (digits == "0" or not digits.startswith("0")) and value != "-0"
 
 
-def _head(value: Mapping[str, object]) -> tuple[str, int, int, int]:
-    return (cast(str, value["state_root"]), int(cast(str, value["observed_sequence"])),
-        int(cast(str, value["observed_at"])), int(cast(str, value["valid_through"])))
+def _typed_program_source(value: Mapping[str, object]) -> ProgramSource:
+    return ProgramSource(status=cast(ProgramSourceStatus, value["status"]),
+        source_digest=cast(str | None, value.get("source_digest")),
+        environment_digest=cast(str | None, value.get("environment_digest")),
+        pipeline=cast(str | None, value.get("pipeline")),
+        expected_code_hash=cast(str | None, value.get("expected_code_hash")),
+        reproduced_artifact_digest=cast(str | None, value.get("reproduced_artifact_digest")))
+
+
+def _head(value: ProgramDiscovery | ProgramInterface) -> tuple[str, int, int, int]:
+    return (value.state_root, value.observed_sequence, value.observed_at, value.valid_through)
 
 
 def _fresh(value: tuple[str, int, int, int], now: int) -> None:

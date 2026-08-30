@@ -4,7 +4,7 @@ outputs = ["agent-rust", "agent-typescript", "agent-python", "agent-compatibilit
 
 [source.agent-api]
 root = "agent/schema/agent-api"
-digest = "5e4d784ab671e71cb1b41cb9125d09e31c4ac830021ccd642906a89883580ef3"
+digest = "d173c0cd079e4e4eed627d55a13fa3d558643e9e8d9b32b1f46d4b13b37146d1"
 
 [source.human-api]
 root = "human/schema/human-api"
@@ -72,9 +72,9 @@ root = "platform/sdk/jvm"
 
 [files.platform-jvm]
 "pom.xml" = "43d9af46728bf4507ea4eaa2ba6b6cc779559085f27862b78f26d01a09e975a1"
-"src/main/java/com/sidiora/layerx/sdk/HttpProductionTransport.java" = "cb4a1af2773dd93660c0108db1dbac692158b6b970181bfd4c1c284a815dd570"
+"src/main/java/com/sidiora/layerx/sdk/HttpProductionTransport.java" = "c9901b3857b493015aae029729ab30e785e66deaa3e3db2226b6ed06fbeea39b"
 "src/main/java/com/sidiora/layerx/sdk/GeneratedContract.java" = "c86cbd2eb19f9be5e26051dfab55ed1888a5389414ffd720149feec9cb607461"
-"src/main/java/com/sidiora/layerx/sdk/GeneratedSchema.java" = "c4d0909a0acca6e8af40daea3df23c86c5de4cc93ff9e4b00a780c8ee05f997e"
+"src/main/java/com/sidiora/layerx/sdk/GeneratedSchema.java" = "0abae015c81b7e71e2a0063828c3e421af4f54176c56df90257fdd8d4de0e1bb"
 "src/main/java/com/sidiora/layerx/sdk/GeneratedMirror.java" = "facf45b2da6828d41371b36bc0f2119f643d7b45003dead0c9590a9b0f0b6b8f"
 "src/main/java/com/sidiora/layerx/sdk/IdempotencyKey.java" = "2cfba7826e4bb7a6f0d4af63530f43c7aece547cf9f64ff1664b781cc431f6a4"
 "src/main/java/com/sidiora/layerx/sdk/OperationCatalog.java" = "477843c32935ffbc9ecff6dd6a35b78693b059c3d29a59aa021349b4a868e8e3"

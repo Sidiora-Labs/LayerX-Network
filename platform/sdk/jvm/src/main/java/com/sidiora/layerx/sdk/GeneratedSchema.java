@@ -302,6 +302,11 @@ public final class GeneratedSchema {
                 Objects.requireNonNull(simulation_evidence, "simulation_evidence");
             }
         }
+        public record ProgramSource(String status, String source_digest, String environment_digest, String pipeline, String expected_code_hash, String reproduced_artifact_digest) implements SchemaTypes.GeneratedResponse {
+            public ProgramSource {
+                Objects.requireNonNull(status, "status");
+            }
+        }
         public record ProgramSubmission(JsonNode state, JsonNode activity_id, JsonNode idempotency_key) implements SchemaTypes.GeneratedResponse {
             public ProgramSubmission {
                 Objects.requireNonNull(state, "state");
@@ -427,7 +432,7 @@ public final class GeneratedSchema {
                 Objects.requireNonNull(verification, "verification");
             }
         }
-        public record VerifiedProgramInterface(JsonNode program_id, JsonNode version, JsonNode code_hash, JsonNode abi_version, @JsonProperty("interface") JsonNode interface_, JsonNode interface_digest, JsonNode receipt_digest, JsonNode state_root, JsonNode observed_sequence, JsonNode observed_at, JsonNode valid_through, JsonNode source, JsonNode verification) implements SchemaTypes.GeneratedResponse {
+        public record VerifiedProgramInterface(JsonNode program_id, JsonNode version, JsonNode code_hash, JsonNode abi_version, @JsonProperty("interface") JsonNode interface_, JsonNode interface_digest, JsonNode receipt_digest, JsonNode state_root, JsonNode observed_sequence, JsonNode observed_at, JsonNode valid_through, AgentModels.ProgramSource source, JsonNode verification) implements SchemaTypes.GeneratedResponse {
             public VerifiedProgramInterface {
                 Objects.requireNonNull(program_id, "program_id");
                 Objects.requireNonNull(version, "version");
@@ -1899,7 +1904,7 @@ public final class GeneratedSchema {
                 Objects.requireNonNull(requested_verification_level, "requested_verification_level");
             }
         }
-        public record ProgramInterfaceResponse(JsonNode program_id, JsonNode version, JsonNode code_hash, JsonNode abi_version, @JsonProperty("interface") JsonNode interface_, JsonNode interface_digest, JsonNode receipt_digest, JsonNode state_root, JsonNode observed_sequence, JsonNode observed_at, JsonNode valid_through, JsonNode source, JsonNode verification) implements SchemaTypes.GeneratedResponse {
+        public record ProgramInterfaceResponse(JsonNode program_id, JsonNode version, JsonNode code_hash, JsonNode abi_version, @JsonProperty("interface") JsonNode interface_, JsonNode interface_digest, JsonNode receipt_digest, JsonNode state_root, JsonNode observed_sequence, JsonNode observed_at, JsonNode valid_through, AgentModels.ProgramSource source, JsonNode verification) implements SchemaTypes.GeneratedResponse {
             public ProgramInterfaceResponse {
                 Objects.requireNonNull(program_id, "program_id");
                 Objects.requireNonNull(version, "version");

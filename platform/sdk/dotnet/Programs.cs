@@ -30,8 +30,19 @@ public sealed record ProgramCall
     private static PlatformSdkException Invalid() => new(SdkErrorCode.InvalidArgument, RetryClass.Never);
 }
 
-public sealed record ProgramDiscovery(JsonValue Value);
-public sealed record ProgramInterface(JsonValue Value);
+public enum ProgramLifecycle { Active, Deprecated, Tombstoned }
+public abstract record ProgramSource
+{
+    public sealed record Unpublished : ProgramSource;
+    public sealed record Verified(byte[] SourceDigest, byte[] EnvironmentDigest, string Pipeline) : ProgramSource;
+    public sealed record Mismatch(byte[] ExpectedCodeHash, byte[] ReproducedArtifactDigest) : ProgramSource;
+}
+public sealed record ProgramDiscovery(byte[] ProgramId, ProgramLifecycle Lifecycle, uint Version, byte[] CodeHash,
+    ushort AbiVersion, byte[] ReceiptDigest, byte[] StateRoot, ulong ObservedSequence, ulong ObservedAt,
+    ulong ValidThrough, string Verification);
+public sealed record ProgramInterface(byte[] ProgramId, uint Version, byte[] CodeHash, ushort AbiVersion,
+    byte[] Interface, byte[] InterfaceDigest, byte[] ReceiptDigest, byte[] StateRoot, ulong ObservedSequence,
+    ulong ObservedAt, ulong ValidThrough, ProgramSource Source, string Verification);
 public sealed class VerifiedProgramExecution
 {
     public JsonValue Value { get; }
@@ -109,7 +120,7 @@ public sealed class ProgramsClient
         var id = Identifier(programId); var value = await _client.ProgramAsync("program.discover", JsonValue.Object(new Dictionary<string, JsonValue>
             { ["program_id"] = JsonValue.String(id), ["requested_verification_level"] = JsonValue.String(Level(verificationLevel)) }),
             pathParameters: new Dictionary<string, string> { ["program_id"] = id }, cancellationToken: cancellationToken).ConfigureAwait(false);
-        VerifyDiscovery(value, id, false, NowMilliseconds()); return new(value);
+        return (ProgramDiscovery)VerifyDiscovery(value, id, false, NowMilliseconds());
     }
     public async Task<ProgramInterface> InterfaceAsync(byte[] programId, string verificationLevel, CancellationToken cancellationToken = default)
     {
@@ -117,7 +128,7 @@ public sealed class ProgramsClient
         var value = await _client.ProgramAsync("program.interface", JsonValue.Object(new Dictionary<string, JsonValue>
             { ["program_id"] = JsonValue.String(id), ["requested_verification_level"] = JsonValue.String(Level(verificationLevel)) }),
             pathParameters: new Dictionary<string, string> { ["program_id"] = id }, cancellationToken: cancellationToken).ConfigureAwait(false);
-        VerifyDiscovery(value, id, true, NowMilliseconds()); return new(value);
+        return (ProgramInterface)VerifyDiscovery(value, id, true, NowMilliseconds());
     }
     public async Task<ProgramSimulation> SimulateAsync(ProgramCall call, CancellationToken cancellationToken = default)
     {
@@ -302,7 +313,7 @@ public sealed class ProgramsClient
         return execution;
     }
 
-    private static void VerifyDiscovery(JsonValue value, string programId, bool @interface, ulong now)
+    private static object VerifyDiscovery(JsonValue value, string programId, bool @interface, ulong now)
     {
         var map = Map(value);
         string[] fields = @interface
@@ -318,14 +329,38 @@ public sealed class ProgramsClient
             validThrough < observedAt || now > validThrough ||
             Text(map, "verification") != (@interface ? "deployment-interface-and-current-head-verified" :
                 "registry-receipt-and-current-head-verified")) throw Verify();
-        _ = DecimalUInt64(map, "observed_sequence");
+        var observedSequence = DecimalUInt64(map, "observed_sequence");
+        var program = Bytes(map, "program_id", 32, true); var codeHash = Bytes(map, "code_hash", 32, true);
+        var receiptDigest = Bytes(map, "receipt_digest", 32, true); var stateRoot = Bytes(map, "state_root", 32, true);
         if (@interface)
         {
             var bytes = Bytes(map, "interface", MaximumInterfaceBytes); var digest = Bytes(map, "interface_digest", 32, true);
             if (bytes.Length == 0 || !Fixed(SHA256.HashData(bytes), digest)) throw Verify();
-            ValidateSource(Map(Field(map, "source")));
+            var source = TypedSource(Map(Field(map, "source")));
+            return new ProgramInterface(program, version, codeHash, abi, bytes, digest, receiptDigest, stateRoot,
+                observedSequence, observedAt, validThrough, source, "server-side-receipt-verification-only");
         }
-        else if (Text(map, "lifecycle") is not ("active" or "deprecated" or "tombstoned")) throw Decode();
+        var lifecycle = Text(map, "lifecycle") switch
+        {
+            "active" => ProgramLifecycle.Active, "deprecated" => ProgramLifecycle.Deprecated,
+            "tombstoned" => ProgramLifecycle.Tombstoned, _ => throw Decode()
+        };
+        return new ProgramDiscovery(program, lifecycle, version, codeHash, abi, receiptDigest, stateRoot,
+            observedSequence, observedAt, validThrough, "server-side-receipt-verification-only");
+    }
+
+    private static ProgramSource TypedSource(IReadOnlyDictionary<string, JsonValue> source)
+    {
+        ValidateSource(source);
+        return Text(source, "status") switch
+        {
+            "unpublished" => new ProgramSource.Unpublished(),
+            "verified" => new ProgramSource.Verified(Bytes(source, "source_digest", 32, true),
+                Bytes(source, "environment_digest", 32, true), Text(source, "pipeline")),
+            "mismatch" => new ProgramSource.Mismatch(Bytes(source, "expected_code_hash", 32, true),
+                Bytes(source, "reproduced_artifact_digest", 32, true)),
+            _ => throw Decode()
+        };
     }
 
     private static AuthorizedReceiptBatch Authority(JsonValue value)
