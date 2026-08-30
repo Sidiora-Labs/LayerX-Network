@@ -1006,6 +1006,7 @@ fn require_same_history_file(
     Err(ProtocolEvidenceError::TrustHistoryUnavailable)
 }
 
+#[derive(Debug, PartialEq)]
 enum LifecycleActivity {
     Deploy {
         program: ProgramId,

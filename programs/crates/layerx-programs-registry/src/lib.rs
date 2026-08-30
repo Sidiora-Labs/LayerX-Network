@@ -5,22 +5,24 @@ mod archive;
 mod authority;
 mod deprecate;
 mod hash;
-mod interface;
 pub mod hex;
+mod interface;
 mod pipeline;
 mod protocol_evidence;
 mod resolver;
 
 pub use account_state::{
     account_tree_commitment, program_account_registration_commitment, programs_root_commitment,
-    state_leaf_commitment, state_node_commitment, universal_root_commitment, AccountStateError,
-    AccountStateHead, AccountStateJournal, CanonicalAccountLeaf, JournalAccountStateAuthority,
-    ProgramValueAccountBinding, ProvenAccountLeaf, ProvenProgramBinding, StateProof, ValueAccount,
-    VerifiedAccountSnapshot, verify_state_membership, MAX_PROGRAM_VALUE_ACCOUNTS,
+    state_leaf_commitment, state_node_commitment, universal_root_commitment,
+    verify_state_membership, AccountStateError, AccountStateHead, AccountStateJournal,
+    CanonicalAccountLeaf, JournalAccountStateAuthority, ProgramValueAccountBinding,
+    ProvenAccountLeaf, ProvenProgramBinding, StateProof, ValueAccount, VerifiedAccountSnapshot,
+    MAX_PROGRAM_VALUE_ACCOUNTS,
 };
 pub use archive::{ArchiveError, SourceArchive, SourceFile};
 pub use authority::{
-    DeploymentJournal, DeploymentRecord, JournalReadAuthority, ObservedHead,
+    DeploymentJournal, DeploymentRecord, JournalReadAuthority, MigrationExecutionEvidence,
+    ObservedHead,
 };
 pub use deprecate::{
     AuthorizedExit, Deprecation, DeprecationRefusal, DeprecationRequest, ExitRoute,
@@ -29,8 +31,7 @@ pub use deprecate::{
 pub use interface::{
     interface_state_key, interface_state_value, verify_interface_read, InterfaceCapability,
     InterfaceDigest, InterfaceEntryPoint, InterfaceRefusal, InterfaceStateWitness,
-    ProgramInterface, SchemaVariant, TypedFailure, ValueSchema, ValueType,
-    VerifiedInterfaceRead,
+    ProgramInterface, SchemaVariant, TypedFailure, ValueSchema, ValueType, VerifiedInterfaceRead,
 };
 pub use pipeline::{BuildAttempt, BuildPlan, BuildRefusal, BuildRunner, SourceVerifier};
 pub use protocol_evidence::{

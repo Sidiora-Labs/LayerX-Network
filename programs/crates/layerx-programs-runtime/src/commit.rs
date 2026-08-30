@@ -193,20 +193,28 @@ impl TracePolicy {
             return Err(CommitmentError::ZeroInterval);
         }
         if maximum_commitments == 0
-            || usize::try_from(maximum_commitments).map_or(true, |count| count > MAX_TRACE_COMMITMENTS)
+            || usize::try_from(maximum_commitments)
+                .map_or(true, |count| count > MAX_TRACE_COMMITMENTS)
         {
             return Err(CommitmentError::CommitmentLimit {
                 limit: MAX_TRACE_COMMITMENTS,
             });
         }
-        Ok(Self { interval, maximum_commitments })
+        Ok(Self {
+            interval,
+            maximum_commitments,
+        })
     }
 
     #[must_use]
-    pub const fn interval(self) -> u64 { self.interval }
+    pub const fn interval(self) -> u64 {
+        self.interval
+    }
 
     #[must_use]
-    pub const fn maximum_commitments(self) -> u32 { self.maximum_commitments }
+    pub const fn maximum_commitments(self) -> u32 {
+        self.maximum_commitments
+    }
 
     #[must_use]
     pub fn canonical_bytes(self) -> [u8; 12] {
@@ -262,19 +270,29 @@ impl ExecutionTrace {
     }
 
     #[must_use]
-    pub const fn policy(&self) -> TracePolicy { self.policy }
+    pub const fn policy(&self) -> TracePolicy {
+        self.policy
+    }
 
     #[must_use]
-    pub fn commitments(&self) -> &[StepCommitment] { &self.commitments }
+    pub fn commitments(&self) -> &[StepCommitment] {
+        &self.commitments
+    }
 
     #[must_use]
-    pub fn steps(&self) -> &[ExecutionStep] { &self.steps }
+    pub fn steps(&self) -> &[ExecutionStep] {
+        &self.steps
+    }
 
     #[must_use]
-    pub const fn total_commitment_fuel(&self) -> u64 { self.total_commitment_fuel }
+    pub const fn total_commitment_fuel(&self) -> u64 {
+        self.total_commitment_fuel
+    }
 
     #[must_use]
-    pub const fn total_state_bytes(&self) -> u64 { self.total_state_bytes }
+    pub const fn total_state_bytes(&self) -> u64 {
+        self.total_state_bytes
+    }
 
     #[must_use]
     pub const fn total_arbitration_commitment_fuel(&self) -> u64 {
@@ -301,7 +319,10 @@ impl ExecutionTrace {
         !self.arbitration_steps.is_empty()
     }
 
-    pub fn record(&mut self, state: &ExecutionState) -> Result<Option<StepCommitment>, CommitmentError> {
+    pub fn record(
+        &mut self,
+        state: &ExecutionState,
+    ) -> Result<Option<StepCommitment>, CommitmentError> {
         if state.step_index % self.policy.interval != 0 {
             return Ok(None);
         }
@@ -310,7 +331,10 @@ impl ExecutionTrace {
         Ok(Some(commitment))
     }
 
-    pub(crate) fn record_commitment(&mut self, commitment: StepCommitment) -> Result<(), CommitmentError> {
+    pub(crate) fn record_commitment(
+        &mut self,
+        commitment: StepCommitment,
+    ) -> Result<(), CommitmentError> {
         if let Some(previous) = self.commitments.last() {
             if commitment.step_index <= previous.step_index {
                 return Err(CommitmentError::NonMonotonicStep {
@@ -320,11 +344,17 @@ impl ExecutionTrace {
             }
         }
         if self.commitments.len() >= self.policy.maximum_commitments as usize {
-            return Err(CommitmentError::CommitmentLimit { limit: self.policy.maximum_commitments as usize });
+            return Err(CommitmentError::CommitmentLimit {
+                limit: self.policy.maximum_commitments as usize,
+            });
         }
-        self.total_commitment_fuel = self.total_commitment_fuel.checked_add(commitment.commitment_fuel)
+        self.total_commitment_fuel = self
+            .total_commitment_fuel
+            .checked_add(commitment.commitment_fuel)
             .ok_or(CommitmentError::CostOverflow)?;
-        self.total_state_bytes = self.total_state_bytes.checked_add(u64::from(commitment.encoded_state_bytes))
+        self.total_state_bytes = self
+            .total_state_bytes
+            .checked_add(u64::from(commitment.encoded_state_bytes))
             .ok_or(CommitmentError::CostOverflow)?;
         if self.total_state_bytes > MAX_TRACE_STATE_BYTES {
             return Err(CommitmentError::TraceByteLimit {
@@ -337,7 +367,10 @@ impl ExecutionTrace {
     }
 
     pub(crate) fn record_step(&mut self, step: ExecutionStep) -> Result<(), CommitmentError> {
-        let expected_post = step.pre_state.step_index.checked_add(1)
+        let expected_post = step
+            .pre_state
+            .step_index
+            .checked_add(1)
             .ok_or(CommitmentError::InvalidStepTransition)?;
         if step.instruction.is_empty() || step.instruction.len() > MAX_STEP_INSTRUCTION_BYTES {
             return Err(CommitmentError::InvalidInstructionEncoding);
@@ -349,11 +382,15 @@ impl ExecutionTrace {
             return Err(CommitmentError::InvalidStepTransition);
         }
         if self.steps.len() >= MAX_TRACE_COMMITMENTS {
-            return Err(CommitmentError::CommitmentLimit { limit: MAX_TRACE_COMMITMENTS });
+            return Err(CommitmentError::CommitmentLimit {
+                limit: MAX_TRACE_COMMITMENTS,
+            });
         }
-        let retained_bytes = u64::try_from(step.instruction.len())
-            .map_err(|_| CommitmentError::CostOverflow)?;
-        let total_state_bytes = self.total_state_bytes.checked_add(retained_bytes)
+        let retained_bytes =
+            u64::try_from(step.instruction.len()).map_err(|_| CommitmentError::CostOverflow)?;
+        let total_state_bytes = self
+            .total_state_bytes
+            .checked_add(retained_bytes)
             .ok_or(CommitmentError::CostOverflow)?;
         if total_state_bytes > MAX_TRACE_STATE_BYTES {
             return Err(CommitmentError::TraceByteLimit {
@@ -370,7 +407,11 @@ impl ExecutionTrace {
         &mut self,
         step: ArbitrationExecutionStep,
     ) -> Result<(), CommitmentError> {
-        let expected_post = step.pre_state.legacy.step_index.checked_add(1)
+        let expected_post = step
+            .pre_state
+            .legacy
+            .step_index
+            .checked_add(1)
             .ok_or(CommitmentError::InvalidStepTransition)?;
         if step.instruction.is_empty() || step.instruction.len() > MAX_STEP_INSTRUCTION_BYTES {
             return Err(CommitmentError::InvalidInstructionEncoding);
@@ -384,24 +425,39 @@ impl ExecutionTrace {
             return Err(CommitmentError::InvalidStepTransition);
         }
         if self.arbitration_steps.len() >= MAX_TRACE_COMMITMENTS {
-            return Err(CommitmentError::CommitmentLimit { limit: MAX_TRACE_COMMITMENTS });
+            return Err(CommitmentError::CommitmentLimit {
+                limit: MAX_TRACE_COMMITMENTS,
+            });
         }
         let mut additions = [None, None];
         let mut addition_count = 0_usize;
         let mut next_fuel = self.total_arbitration_commitment_fuel;
         let mut next_bytes = self.total_arbitration_state_bytes;
         for commitment in [step.pre_commitment, step.post_commitment] {
-            if self.arbitration_commitments.last().map_or(
-                false,
-                |previous| previous.step_index == commitment.step_index,
-            ) || additions[..addition_count].iter().flatten().any(
-                |previous: &ArbitrationStepCommitment| previous.step_index == commitment.step_index,
-            ) {
+            if self
+                .arbitration_commitments
+                .last()
+                .map_or(false, |previous| {
+                    previous.step_index == commitment.step_index
+                })
+                || additions[..addition_count].iter().flatten().any(
+                    |previous: &ArbitrationStepCommitment| {
+                        previous.step_index == commitment.step_index
+                    },
+                )
+            {
                 continue;
             }
-            let previous_index = additions[..addition_count].iter().flatten().last()
+            let previous_index = additions[..addition_count]
+                .iter()
+                .flatten()
+                .last()
                 .map(|previous| previous.step_index)
-                .or_else(|| self.arbitration_commitments.last().map(|previous| previous.step_index));
+                .or_else(|| {
+                    self.arbitration_commitments
+                        .last()
+                        .map(|previous| previous.step_index)
+                });
             if previous_index.is_some_and(|previous| previous >= commitment.step_index) {
                 return Err(CommitmentError::InvalidStepTransition);
             }
@@ -422,8 +478,7 @@ impl ExecutionTrace {
         }
         next_bytes = next_bytes
             .checked_add(
-                u64::try_from(step.instruction.len())
-                    .map_err(|_| CommitmentError::CostOverflow)?,
+                u64::try_from(step.instruction.len()).map_err(|_| CommitmentError::CostOverflow)?,
             )
             .ok_or(CommitmentError::CostOverflow)?;
         if next_bytes > MAX_TRACE_STATE_BYTES {
@@ -434,7 +489,8 @@ impl ExecutionTrace {
         }
         self.total_arbitration_commitment_fuel = next_fuel;
         self.total_arbitration_state_bytes = next_bytes;
-        self.arbitration_commitments.extend(additions.into_iter().flatten());
+        self.arbitration_commitments
+            .extend(additions.into_iter().flatten());
         self.arbitration_steps.push(step);
         Ok(())
     }
@@ -456,7 +512,6 @@ impl ExecutionTrace {
         Ok(bytes)
     }
 
-
     /// Canonical arbitration evidence. Legacy commitments remain embedded for
     /// receipt compatibility, but eligibility is established only by the
     /// complete v2 chain appended here.
@@ -466,10 +521,14 @@ impl ExecutionTrace {
         }
         let legacy = self.canonical_bytes()?;
         let per_commitment = 2_usize + 8 + 32 + 4 + 8;
-        let commitment_bytes = self.arbitration_commitments.len()
+        let commitment_bytes = self
+            .arbitration_commitments
+            .len()
             .checked_mul(per_commitment)
             .ok_or(CommitmentError::CostOverflow)?;
-        let capacity = 2_usize.checked_add(4).and_then(|bytes| bytes.checked_add(legacy.len()))
+        let capacity = 2_usize
+            .checked_add(4)
+            .and_then(|bytes| bytes.checked_add(legacy.len()))
             .and_then(|bytes| bytes.checked_add(4))
             .and_then(|bytes| bytes.checked_add(commitment_bytes))
             .and_then(|bytes| bytes.checked_add(16))
@@ -495,13 +554,202 @@ impl ExecutionTrace {
         bytes.extend_from_slice(&self.total_arbitration_state_bytes.to_be_bytes());
         Ok(bytes)
     }
+
+    /// Verifies frozen arbitration-trace evidence without manufacturing the
+    /// execution witnesses intentionally omitted from receipt evidence.
+    pub fn verify_canonical_arbitration_bytes(bytes: &[u8]) -> Result<(), CommitmentError> {
+        if bytes.len() > MAX_ARBITRATION_STATE_BYTES {
+            return Err(CommitmentError::ArbitrationStateTooLarge {
+                bytes: bytes.len(),
+                limit: MAX_ARBITRATION_STATE_BYTES,
+            });
+        }
+        let mut cursor = CanonicalTraceCursor::new(bytes);
+        if cursor.u16()? != ARBITRATION_STEP_COMMITMENT_VERSION {
+            return Err(CommitmentError::InvalidCanonicalEncoding);
+        }
+        let legacy = cursor.bytes()?;
+        verify_legacy_trace_bytes(legacy)?;
+        let count = cursor.count()?;
+        if count == 0 || count > MAX_TRACE_COMMITMENTS {
+            return Err(CommitmentError::CommitmentLimit {
+                limit: MAX_TRACE_COMMITMENTS,
+            });
+        }
+        let mut commitments = Vec::with_capacity(count);
+        let mut previous = None;
+        let mut total_fuel = 0_u64;
+        let mut total_state_bytes = 0_u64;
+        for _ in 0..count {
+            let commitment = ArbitrationStepCommitment {
+                version: cursor.u16()?,
+                step_index: cursor.u64()?,
+                digest: cursor.array()?,
+                encoded_state_bytes: cursor.u32()?,
+                commitment_fuel: cursor.u64()?,
+            };
+            if commitment.version != ARBITRATION_STEP_COMMITMENT_VERSION
+                || previous.is_some_and(|index| commitment.step_index <= index)
+                || usize::try_from(commitment.encoded_state_bytes)
+                    .map_or(true, |size| size > MAX_ARBITRATION_STATE_BYTES)
+            {
+                return Err(CommitmentError::InvalidCanonicalEncoding);
+            }
+            previous = Some(commitment.step_index);
+            total_fuel = total_fuel
+                .checked_add(commitment.commitment_fuel)
+                .ok_or(CommitmentError::CostOverflow)?;
+            total_state_bytes = total_state_bytes
+                .checked_add(u64::from(commitment.encoded_state_bytes))
+                .ok_or(CommitmentError::CostOverflow)?;
+            commitments.push(commitment);
+        }
+        let encoded_total_fuel = cursor.u64()?;
+        let encoded_total_state_bytes = cursor.u64()?;
+        if !cursor.is_empty()
+            || total_fuel != encoded_total_fuel
+            || total_state_bytes > encoded_total_state_bytes
+            || encoded_total_state_bytes > MAX_ARBITRATION_STATE_BYTES as u64
+        {
+            return Err(CommitmentError::InvalidCanonicalEncoding);
+        }
+        let mut canonical = Vec::with_capacity(bytes.len());
+        canonical.extend_from_slice(&ARBITRATION_STEP_COMMITMENT_VERSION.to_be_bytes());
+        put_bytes(&mut canonical, legacy)?;
+        put_len(&mut canonical, commitments.len())?;
+        for commitment in commitments {
+            canonical.extend_from_slice(&commitment.version.to_be_bytes());
+            canonical.extend_from_slice(&commitment.step_index.to_be_bytes());
+            canonical.extend_from_slice(&commitment.digest);
+            canonical.extend_from_slice(&commitment.encoded_state_bytes.to_be_bytes());
+            canonical.extend_from_slice(&commitment.commitment_fuel.to_be_bytes());
+        }
+        canonical.extend_from_slice(&encoded_total_fuel.to_be_bytes());
+        canonical.extend_from_slice(&encoded_total_state_bytes.to_be_bytes());
+        if canonical != bytes {
+            return Err(CommitmentError::InvalidCanonicalEncoding);
+        }
+        Ok(())
+    }
+}
+
+fn verify_legacy_trace_bytes(bytes: &[u8]) -> Result<(), CommitmentError> {
+    let mut cursor = CanonicalTraceCursor::new(bytes);
+    if cursor.u16()? != STEP_COMMITMENT_VERSION {
+        return Err(CommitmentError::InvalidCanonicalEncoding);
+    }
+    let policy = TracePolicy::new(cursor.u64()?, cursor.u32()?)?;
+    let count = cursor.count()?;
+    if count > policy.maximum_commitments as usize || count > MAX_TRACE_COMMITMENTS {
+        return Err(CommitmentError::CommitmentLimit {
+            limit: policy.maximum_commitments as usize,
+        });
+    }
+    let mut commitments = Vec::with_capacity(count);
+    let mut previous = None;
+    let mut total_fuel = 0_u64;
+    let mut total_state_bytes = 0_u64;
+    for _ in 0..count {
+        let commitment = StepCommitment {
+            step_index: cursor.u64()?,
+            digest: cursor.array()?,
+            encoded_state_bytes: cursor.u32()?,
+            commitment_fuel: cursor.u64()?,
+        };
+        if previous.is_some_and(|index| commitment.step_index <= index)
+            || usize::try_from(commitment.encoded_state_bytes)
+                .map_or(true, |size| size > MAX_STEP_STATE_BYTES)
+            || commitment.commitment_fuel
+                != step_commitment_fuel(u64::from(commitment.encoded_state_bytes))?
+        {
+            return Err(CommitmentError::InvalidCanonicalEncoding);
+        }
+        previous = Some(commitment.step_index);
+        total_fuel = total_fuel
+            .checked_add(commitment.commitment_fuel)
+            .ok_or(CommitmentError::CostOverflow)?;
+        total_state_bytes = total_state_bytes
+            .checked_add(u64::from(commitment.encoded_state_bytes))
+            .ok_or(CommitmentError::CostOverflow)?;
+        commitments.push(commitment);
+    }
+    let encoded_total_fuel = cursor.u64()?;
+    let encoded_total_state_bytes = cursor.u64()?;
+    if !cursor.is_empty()
+        || total_fuel != encoded_total_fuel
+        || total_state_bytes > encoded_total_state_bytes
+        || encoded_total_state_bytes > MAX_TRACE_STATE_BYTES
+    {
+        return Err(CommitmentError::InvalidCanonicalEncoding);
+    }
+    let mut canonical = Vec::with_capacity(bytes.len());
+    canonical.extend_from_slice(&STEP_COMMITMENT_VERSION.to_be_bytes());
+    canonical.extend_from_slice(&policy.canonical_bytes());
+    put_len(&mut canonical, commitments.len())?;
+    for commitment in commitments {
+        canonical.extend_from_slice(&commitment.step_index.to_be_bytes());
+        canonical.extend_from_slice(&commitment.digest);
+        canonical.extend_from_slice(&commitment.encoded_state_bytes.to_be_bytes());
+        canonical.extend_from_slice(&commitment.commitment_fuel.to_be_bytes());
+    }
+    canonical.extend_from_slice(&encoded_total_fuel.to_be_bytes());
+    canonical.extend_from_slice(&encoded_total_state_bytes.to_be_bytes());
+    if canonical != bytes {
+        return Err(CommitmentError::InvalidCanonicalEncoding);
+    }
+    Ok(())
+}
+
+struct CanonicalTraceCursor<'a> {
+    remaining: &'a [u8],
+}
+
+impl<'a> CanonicalTraceCursor<'a> {
+    const fn new(remaining: &'a [u8]) -> Self {
+        Self { remaining }
+    }
+    const fn is_empty(&self) -> bool {
+        self.remaining.is_empty()
+    }
+    fn take(&mut self, length: usize) -> Result<&'a [u8], CommitmentError> {
+        let (value, remaining) = self
+            .remaining
+            .split_at_checked(length)
+            .ok_or(CommitmentError::InvalidCanonicalEncoding)?;
+        self.remaining = remaining;
+        Ok(value)
+    }
+    fn array<const N: usize>(&mut self) -> Result<[u8; N], CommitmentError> {
+        self.take(N)?
+            .try_into()
+            .map_err(|_| CommitmentError::InvalidCanonicalEncoding)
+    }
+    fn u16(&mut self) -> Result<u16, CommitmentError> {
+        Ok(u16::from_be_bytes(self.array()?))
+    }
+    fn u32(&mut self) -> Result<u32, CommitmentError> {
+        Ok(u32::from_be_bytes(self.array()?))
+    }
+    fn u64(&mut self) -> Result<u64, CommitmentError> {
+        Ok(u64::from_be_bytes(self.array()?))
+    }
+    fn count(&mut self) -> Result<usize, CommitmentError> {
+        usize::try_from(self.u32()?).map_err(|_| CommitmentError::InvalidCanonicalEncoding)
+    }
+    fn bytes(&mut self) -> Result<&'a [u8], CommitmentError> {
+        let length = self.count()?;
+        self.take(length)
+    }
 }
 
 impl StepCommitment {
     pub fn from_state(state: &ExecutionState) -> Result<Self, CommitmentError> {
         let encoded = state.canonical_bytes()?;
-        let encoded_state_bytes = u32::try_from(encoded.len())
-            .map_err(|_| CommitmentError::StateTooLarge { bytes: encoded.len(), limit: MAX_STEP_STATE_BYTES })?;
+        let encoded_state_bytes =
+            u32::try_from(encoded.len()).map_err(|_| CommitmentError::StateTooLarge {
+                bytes: encoded.len(),
+                limit: MAX_STEP_STATE_BYTES,
+            })?;
         let commitment_fuel = step_commitment_fuel(u64::from(encoded_state_bytes))?;
         let mut hasher = Sha256::new();
         hasher.update(STEP_COMMITMENT_DOMAIN);
@@ -518,7 +766,9 @@ impl StepCommitment {
     /// They omit transition-determining state and cannot be used by the
     /// single-step arbiter.
     #[must_use]
-    pub const fn arbitration_eligible(self) -> bool { false }
+    pub const fn arbitration_eligible(self) -> bool {
+        false
+    }
 }
 
 impl ArbitrationStepCommitment {
@@ -532,8 +782,8 @@ impl ArbitrationStepCommitment {
         })?;
         let legacy_state_bytes = u64::try_from(state.legacy.canonical_bytes()?.len())
             .map_err(|_| CommitmentError::CostOverflow)?;
-        let engine_state_bytes = u64::try_from(state.engine_state.len())
-            .map_err(|_| CommitmentError::CostOverflow)?;
+        let engine_state_bytes =
+            u64::try_from(state.engine_state.len()).map_err(|_| CommitmentError::CostOverflow)?;
         let commitment_fuel = arbitration_step_commitment_fuel_with_host(
             legacy_state_bytes,
             engine_state_bytes,
@@ -546,7 +796,8 @@ impl ArbitrationStepCommitment {
                 measured: usize::try_from(arbitration_step_state_bytes(
                     legacy_state_bytes,
                     engine_state_bytes,
-                )?).unwrap_or(usize::MAX),
+                )?)
+                .unwrap_or(usize::MAX),
                 encoded: encoded.len(),
             });
         }
@@ -569,10 +820,13 @@ impl ArbitrationStepCommitment {
 }
 
 pub fn step_commitment_fuel(encoded_state_bytes: u64) -> Result<u64, CommitmentError> {
-    STEP_COMMITMENT_BASE_FUEL.checked_add(
-        encoded_state_bytes.checked_mul(STEP_COMMITMENT_FUEL_PER_BYTE)
-            .ok_or(CommitmentError::CostOverflow)?,
-    ).ok_or(CommitmentError::CostOverflow)
+    STEP_COMMITMENT_BASE_FUEL
+        .checked_add(
+            encoded_state_bytes
+                .checked_mul(STEP_COMMITMENT_FUEL_PER_BYTE)
+                .ok_or(CommitmentError::CostOverflow)?,
+        )
+        .ok_or(CommitmentError::CostOverflow)
 }
 
 /// Exact v2 state length shared by observer authorization, commitment hashing
@@ -582,7 +836,9 @@ pub fn arbitration_step_state_bytes(
     legacy_state_bytes: u64,
     engine_state_bytes: u64,
 ) -> Result<u64, CommitmentError> {
-    218_u64.checked_add(4).and_then(|bytes| bytes.checked_add(legacy_state_bytes))
+    218_u64
+        .checked_add(4)
+        .and_then(|bytes| bytes.checked_add(legacy_state_bytes))
         .and_then(|bytes| bytes.checked_add(4))
         .and_then(|bytes| bytes.checked_add(engine_state_bytes))
         .and_then(|bytes| bytes.checked_add(40))
@@ -601,11 +857,12 @@ pub fn arbitration_step_commitment_fuel_with_host(
     engine_state_bytes: u64,
     host_state_bytes: u64,
 ) -> Result<u64, CommitmentError> {
-    let host_work = host_state_bytes.checked_mul(3).ok_or(CommitmentError::CostOverflow)?;
-    let work = arbitration_step_state_bytes(
-        legacy_state_bytes,
-        engine_state_bytes,
-    )?.checked_add(host_work).ok_or(CommitmentError::CostOverflow)?;
+    let host_work = host_state_bytes
+        .checked_mul(3)
+        .ok_or(CommitmentError::CostOverflow)?;
+    let work = arbitration_step_state_bytes(legacy_state_bytes, engine_state_bytes)?
+        .checked_add(host_work)
+        .ok_or(CommitmentError::CostOverflow)?;
     step_commitment_fuel(work)
 }
 
@@ -626,7 +883,10 @@ impl ExecutionState {
         for frame in &self.call_frames {
             bytes.extend_from_slice(&frame.function_index.to_be_bytes());
             match frame.return_program_counter {
-                Some(pc) => { bytes.push(1); bytes.extend_from_slice(&pc.to_be_bytes()); }
+                Some(pc) => {
+                    bytes.push(1);
+                    bytes.extend_from_slice(&pc.to_be_bytes());
+                }
                 None => bytes.push(0),
             }
             put_values(&mut bytes, &frame.locals)?;
@@ -661,7 +921,10 @@ impl ExecutionState {
         bytes.extend_from_slice(&self.fuel_remaining.to_be_bytes());
         put_usage(&mut bytes, self.metered_usage);
         if bytes.len() > MAX_STEP_STATE_BYTES {
-            return Err(CommitmentError::StateTooLarge { bytes: bytes.len(), limit: MAX_STEP_STATE_BYTES });
+            return Err(CommitmentError::StateTooLarge {
+                bytes: bytes.len(),
+                limit: MAX_STEP_STATE_BYTES,
+            });
         }
         Ok(bytes)
     }
@@ -684,12 +947,13 @@ impl ArbitrationExecutionState {
                 limit: MAX_ARBITRATION_ENGINE_STATE_BYTES,
             });
         }
-        let host_state_bytes = usize::try_from(self.host_state_bytes)
-            .map_err(|_| CommitmentError::ArbitrationComponentTooLarge {
+        let host_state_bytes = usize::try_from(self.host_state_bytes).map_err(|_| {
+            CommitmentError::ArbitrationComponentTooLarge {
                 component: "host",
                 bytes: usize::MAX,
                 limit: MAX_ARBITRATION_HOST_STATE_BYTES,
-            })?;
+            }
+        })?;
         if host_state_bytes > MAX_ARBITRATION_HOST_STATE_BYTES {
             return Err(CommitmentError::ArbitrationComponentTooLarge {
                 component: "host",
@@ -699,13 +963,18 @@ impl ArbitrationExecutionState {
         }
         let legacy = self.legacy.canonical_bytes()?;
         let identity_bytes = 2_usize
-            .checked_add(2).and_then(|bytes| bytes.checked_add(2))
-            .and_then(|bytes| bytes.checked_add(4)).and_then(|bytes| bytes.checked_add(4))
-            .and_then(|bytes| bytes.checked_add(12)).and_then(|bytes| bytes.checked_add(32 * 6))
+            .checked_add(2)
+            .and_then(|bytes| bytes.checked_add(2))
+            .and_then(|bytes| bytes.checked_add(4))
+            .and_then(|bytes| bytes.checked_add(4))
+            .and_then(|bytes| bytes.checked_add(12))
+            .and_then(|bytes| bytes.checked_add(32 * 6))
             .ok_or(CommitmentError::CostOverflow)?;
         let total = identity_bytes
-            .checked_add(4).and_then(|bytes| bytes.checked_add(legacy.len()))
-            .and_then(|bytes| bytes.checked_add(4)).and_then(|bytes| bytes.checked_add(self.engine_state.len()))
+            .checked_add(4)
+            .and_then(|bytes| bytes.checked_add(legacy.len()))
+            .and_then(|bytes| bytes.checked_add(4))
+            .and_then(|bytes| bytes.checked_add(self.engine_state.len()))
             .and_then(|bytes| bytes.checked_add(32 + 8))
             .ok_or(CommitmentError::CostOverflow)?;
         let shared_total = arbitration_step_state_bytes(
@@ -754,42 +1023,107 @@ impl ArbitrationExecutionState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CommitmentError {
     ZeroInterval,
-    LengthOutOfRange { bytes: usize },
-    StateTooLarge { bytes: usize, limit: usize },
+    LengthOutOfRange {
+        bytes: usize,
+    },
+    StateTooLarge {
+        bytes: usize,
+        limit: usize,
+    },
     GlobalsNotCanonical,
     StorageOverlayNotCanonical,
-    NonMonotonicStep { previous: u64, attempted: u64 },
-    CommitmentLimit { limit: usize },
+    NonMonotonicStep {
+        previous: u64,
+        attempted: u64,
+    },
+    CommitmentLimit {
+        limit: usize,
+    },
     CostOverflow,
     InvalidStepTransition,
     InvalidInstructionEncoding,
-    TraceByteLimit { attempted: u64, limit: u64 },
+    TraceByteLimit {
+        attempted: u64,
+        limit: u64,
+    },
     ArbitrationIdentityMismatch,
-    ArbitrationComponentTooLarge { component: &'static str, bytes: usize, limit: usize },
-    ArbitrationStateTooLarge { bytes: usize, limit: usize },
-    CanonicalLengthMismatch { measured: usize, encoded: usize },
+    ArbitrationComponentTooLarge {
+        component: &'static str,
+        bytes: usize,
+        limit: usize,
+    },
+    ArbitrationStateTooLarge {
+        bytes: usize,
+        limit: usize,
+    },
+    CanonicalLengthMismatch {
+        measured: usize,
+        encoded: usize,
+    },
     LegacyCommitmentNotArbitrable,
+    InvalidCanonicalEncoding,
 }
 
 impl Display for CommitmentError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::ZeroInterval => formatter.write_str("execution trace interval is zero"),
-            Self::LengthOutOfRange { bytes } => write!(formatter, "canonical field length {bytes} exceeds u32"),
-            Self::StateTooLarge { bytes, limit } => write!(formatter, "encoded execution state {bytes} exceeds {limit}"),
-            Self::GlobalsNotCanonical => formatter.write_str("execution globals are not strictly ordered"),
-            Self::StorageOverlayNotCanonical => formatter.write_str("storage overlay keys are not strictly ordered"),
-            Self::NonMonotonicStep { previous, attempted } => write!(formatter, "step {attempted} does not follow committed step {previous}"),
-            Self::CommitmentLimit { limit } => write!(formatter, "execution trace exceeds commitment limit {limit}"),
+            Self::LengthOutOfRange { bytes } => {
+                write!(formatter, "canonical field length {bytes} exceeds u32")
+            }
+            Self::StateTooLarge { bytes, limit } => {
+                write!(formatter, "encoded execution state {bytes} exceeds {limit}")
+            }
+            Self::GlobalsNotCanonical => {
+                formatter.write_str("execution globals are not strictly ordered")
+            }
+            Self::StorageOverlayNotCanonical => {
+                formatter.write_str("storage overlay keys are not strictly ordered")
+            }
+            Self::NonMonotonicStep {
+                previous,
+                attempted,
+            } => write!(
+                formatter,
+                "step {attempted} does not follow committed step {previous}"
+            ),
+            Self::CommitmentLimit { limit } => write!(
+                formatter,
+                "execution trace exceeds commitment limit {limit}"
+            ),
             Self::CostOverflow => formatter.write_str("execution commitment cost overflowed"),
-            Self::InvalidStepTransition => formatter.write_str("execution step evidence is not a consecutive committed transition"),
-            Self::InvalidInstructionEncoding => formatter.write_str("execution step instruction encoding is empty or exceeds its bound"),
-            Self::TraceByteLimit { attempted, limit } => write!(formatter, "execution trace state bytes {attempted} exceed {limit}"),
-            Self::ArbitrationIdentityMismatch => formatter.write_str("arbitration state identity does not match its frozen v1 state"),
-            Self::ArbitrationComponentTooLarge { component, bytes, limit } => write!(formatter, "arbitration {component} state {bytes} exceeds {limit}"),
-            Self::ArbitrationStateTooLarge { bytes, limit } => write!(formatter, "encoded arbitration state {bytes} exceeds {limit}"),
-            Self::CanonicalLengthMismatch { measured, encoded } => write!(formatter, "canonical state measured {measured} bytes but encoded {encoded}"),
-            Self::LegacyCommitmentNotArbitrable => formatter.write_str("version-one execution commitment is not eligible for arbitration"),
+            Self::InvalidStepTransition => formatter
+                .write_str("execution step evidence is not a consecutive committed transition"),
+            Self::InvalidInstructionEncoding => formatter
+                .write_str("execution step instruction encoding is empty or exceeds its bound"),
+            Self::TraceByteLimit { attempted, limit } => write!(
+                formatter,
+                "execution trace state bytes {attempted} exceed {limit}"
+            ),
+            Self::ArbitrationIdentityMismatch => {
+                formatter.write_str("arbitration state identity does not match its frozen v1 state")
+            }
+            Self::ArbitrationComponentTooLarge {
+                component,
+                bytes,
+                limit,
+            } => write!(
+                formatter,
+                "arbitration {component} state {bytes} exceeds {limit}"
+            ),
+            Self::ArbitrationStateTooLarge { bytes, limit } => write!(
+                formatter,
+                "encoded arbitration state {bytes} exceeds {limit}"
+            ),
+            Self::CanonicalLengthMismatch { measured, encoded } => write!(
+                formatter,
+                "canonical state measured {measured} bytes but encoded {encoded}"
+            ),
+            Self::LegacyCommitmentNotArbitrable => formatter
+                .write_str("version-one execution commitment is not eligible for arbitration"),
+            Self::InvalidCanonicalEncoding => {
+                formatter.write_str("execution trace encoding is not canonical")
+            }
         }
     }
 }
@@ -797,14 +1131,20 @@ impl Display for CommitmentError {
 impl std::error::Error for CommitmentError {}
 
 fn validate_canonical_globals(globals: &[ExecutionGlobal]) -> Result<(), CommitmentError> {
-    if globals.windows(2).any(|pair| pair[0].global_index >= pair[1].global_index) {
+    if globals
+        .windows(2)
+        .any(|pair| pair[0].global_index >= pair[1].global_index)
+    {
         return Err(CommitmentError::GlobalsNotCanonical);
     }
     Ok(())
 }
 
 fn validate_canonical_overlay(entries: &[StorageOverlayEntry]) -> Result<(), CommitmentError> {
-    if entries.windows(2).any(|pair| pair[0].key() >= pair[1].key()) {
+    if entries
+        .windows(2)
+        .any(|pair| pair[0].key() >= pair[1].key())
+    {
         return Err(CommitmentError::StorageOverlayNotCanonical);
     }
     Ok(())
@@ -824,14 +1164,22 @@ fn put_bytes(output: &mut Vec<u8>, bytes: &[u8]) -> Result<(), CommitmentError> 
 
 fn put_values(output: &mut Vec<u8>, values: &[ExecutionValue]) -> Result<(), CommitmentError> {
     put_len(output, values.len())?;
-    for value in values { put_value(output, *value); }
+    for value in values {
+        put_value(output, *value);
+    }
     Ok(())
 }
 
 fn put_value(output: &mut Vec<u8>, value: ExecutionValue) {
     match value {
-        ExecutionValue::I32(value) => { output.push(0); output.extend_from_slice(&value.to_be_bytes()); }
-        ExecutionValue::I64(value) => { output.push(1); output.extend_from_slice(&value.to_be_bytes()); }
+        ExecutionValue::I32(value) => {
+            output.push(0);
+            output.extend_from_slice(&value.to_be_bytes());
+        }
+        ExecutionValue::I64(value) => {
+            output.push(1);
+            output.extend_from_slice(&value.to_be_bytes());
+        }
     }
 }
 
@@ -872,7 +1220,10 @@ mod tests {
             execution_parameters_digest: [0x33; 32],
             step_index: 8,
             program_counter: 13,
-            value_stack: vec![ExecutionValue::I32(-1), ExecutionValue::I64(0x0102_0304_0506_0708)],
+            value_stack: vec![
+                ExecutionValue::I32(-1),
+                ExecutionValue::I64(0x0102_0304_0506_0708),
+            ],
             call_frames: vec![ExecutionFrame {
                 function_index: 2,
                 return_program_counter: Some(21),
@@ -884,9 +1235,16 @@ mod tests {
                 unreachable: false,
             }],
             linear_memory: vec![0x00, 0x7f, 0x80, 0xff],
-            globals: vec![ExecutionGlobal { global_index: 0, mutable: true, value: ExecutionValue::I32(42) }],
+            globals: vec![ExecutionGlobal {
+                global_index: 0,
+                mutable: true,
+                value: ExecutionValue::I32(42),
+            }],
             storage_overlay: vec![
-                StorageOverlayEntry::Write { key: b"a".to_vec(), value: b"one".to_vec() },
+                StorageOverlayEntry::Write {
+                    key: b"a".to_vec(),
+                    value: b"one".to_vec(),
+                },
                 StorageOverlayEntry::Delete { key: b"b".to_vec() },
             ],
             fuel_remaining: 999,
@@ -903,14 +1261,16 @@ mod tests {
         assert_eq!(
             commitment.digest,
             [
-                0x92, 0x66, 0x21, 0x51, 0x5c, 0xb1, 0x0c, 0xaf,
-                0xf1, 0xca, 0x8a, 0x1b, 0x1d, 0x41, 0x8b, 0xb3,
-                0x5c, 0xa4, 0x63, 0x8e, 0xd9, 0x3a, 0x3c, 0x57,
-                0x3c, 0x7e, 0x30, 0x16, 0xda, 0x8b, 0xed, 0x74,
+                0x92, 0x66, 0x21, 0x51, 0x5c, 0xb1, 0x0c, 0xaf, 0xf1, 0xca, 0x8a, 0x1b, 0x1d, 0x41,
+                0x8b, 0xb3, 0x5c, 0xa4, 0x63, 0x8e, 0xd9, 0x3a, 0x3c, 0x57, 0x3c, 0x7e, 0x30, 0x16,
+                0xda, 0x8b, 0xed, 0x74,
             ]
         );
         assert_eq!(commitment.encoded_state_bytes as usize, encoded.len());
-        assert_eq!(commitment.commitment_fuel, STEP_COMMITMENT_BASE_FUEL + encoded.len() as u64);
+        assert_eq!(
+            commitment.commitment_fuel,
+            STEP_COMMITMENT_BASE_FUEL + encoded.len() as u64
+        );
     }
 
     #[test]
@@ -919,13 +1279,19 @@ mod tests {
         let mut trace = ExecutionTrace::new(policy);
         let mut state = golden_state();
         state.step_index = 3;
-        assert_eq!(trace.record(&state).expect("unaligned step is ignored"), None);
+        assert_eq!(
+            trace.record(&state).expect("unaligned step is ignored"),
+            None
+        );
         state.step_index = 4;
         assert!(trace.record(&state).expect("first commitment").is_some());
         state.step_index = 8;
         assert!(trace.record(&state).expect("second commitment").is_some());
         assert_eq!(trace.commitments().len(), 2);
-        assert_eq!(trace.policy().canonical_bytes(), [0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 3]);
+        assert_eq!(
+            trace.policy().canonical_bytes(),
+            [0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 3]
+        );
     }
 
     #[test]
@@ -941,8 +1307,8 @@ mod tests {
 
     #[test]
     fn legacy_commitment_is_not_an_arbitration_pre_state() {
-        let commitment = StepCommitment::from_state(&golden_state())
-            .expect("legacy golden state commits");
+        let commitment =
+            StepCommitment::from_state(&golden_state()).expect("legacy golden state commits");
         assert!(!commitment.arbitration_eligible());
         let trace = ExecutionTrace::new(TracePolicy::new(1, 2).expect("valid policy"));
         assert_eq!(
@@ -973,12 +1339,18 @@ mod tests {
             host_state_root: [0x77; 32],
             host_state_bytes: 9,
         };
-        let original = ArbitrationStepCommitment::from_state(&state)
-            .expect("complete state commits");
+        let original =
+            ArbitrationStepCommitment::from_state(&state).expect("complete state commits");
         assert!(original.arbitration_eligible());
         for changed in [
-            ArbitrationExecutionState { engine_state: vec![0x01, 0x03], ..state.clone() },
-            ArbitrationExecutionState { host_state_root: [0x78; 32], ..state.clone() },
+            ArbitrationExecutionState {
+                engine_state: vec![0x01, 0x03],
+                ..state.clone()
+            },
+            ArbitrationExecutionState {
+                host_state_root: [0x78; 32],
+                ..state.clone()
+            },
             ArbitrationExecutionState {
                 identity: ArbitrationExecutionIdentity {
                     host_base_state_root: [0x45; 32],
@@ -994,6 +1366,75 @@ mod tests {
                     .digest,
             );
         }
+    }
+
+    #[test]
+    fn canonical_arbitration_trace_verifier_rejects_mutation_and_truncation() {
+        let policy = TracePolicy::new(1, 4).expect("valid policy");
+        let mut trace = ExecutionTrace::new(policy);
+        let pre_legacy = Arc::new(golden_state());
+        let mut post_legacy_value = golden_state();
+        post_legacy_value.step_index = pre_legacy.step_index + 1;
+        post_legacy_value.program_counter += 1;
+        let post_legacy = Arc::new(post_legacy_value);
+        trace.record(&pre_legacy).expect("pre-state commitment");
+        trace.record(&post_legacy).expect("post-state commitment");
+        let identity = ArbitrationExecutionIdentity {
+            module_code_hash: pre_legacy.module_code_hash,
+            input_digest: pre_legacy.input_digest,
+            runtime_version: 1,
+            abi_version: 2,
+            fee_schedule_version: 3,
+            metering_schedule_version: 4,
+            trace_policy: policy,
+            host_base_state_root: [0x44; 32],
+            receipt_oracle_root: [0x55; 32],
+            balance_oracle_root: [0x66; 32],
+        };
+        let pre_state = Arc::new(ArbitrationExecutionState {
+            identity,
+            legacy: Arc::clone(&pre_legacy),
+            engine_state: vec![1],
+            host_state_root: [0x77; 32],
+            host_state_bytes: 1,
+        });
+        let post_state = Arc::new(ArbitrationExecutionState {
+            identity,
+            legacy: Arc::clone(&post_legacy),
+            engine_state: vec![2],
+            host_state_root: [0x78; 32],
+            host_state_bytes: 1,
+        });
+        let pre_commitment = ArbitrationStepCommitment::from_state(&pre_state)
+            .expect("pre-state arbitration commitment");
+        let post_commitment = ArbitrationStepCommitment::from_state(&post_state)
+            .expect("post-state arbitration commitment");
+        trace
+            .record_arbitration_step(ArbitrationExecutionStep {
+                instruction: vec![0x01],
+                instruction_fuel: 1,
+                memory_expansion_bytes: 0,
+                pre_state,
+                post_state,
+                pre_commitment,
+                post_commitment,
+            })
+            .expect("complete arbitration transition");
+
+        let encoded = trace.canonical_arbitration_bytes().expect("trace encodes");
+        ExecutionTrace::verify_canonical_arbitration_bytes(&encoded)
+            .expect("canonical trace verifies");
+
+        let mut mutated = encoded.clone();
+        mutated[0] ^= 1;
+        assert_eq!(
+            ExecutionTrace::verify_canonical_arbitration_bytes(&mutated),
+            Err(CommitmentError::InvalidCanonicalEncoding),
+        );
+        assert!(
+            ExecutionTrace::verify_canonical_arbitration_bytes(&encoded[..encoded.len() - 1])
+                .is_err()
+        );
     }
 
     fn hex(bytes: &[u8]) -> String {
