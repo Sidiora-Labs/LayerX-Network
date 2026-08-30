@@ -269,6 +269,15 @@ impl ApiSchema {
         &self.operations
     }
 
+    /// Resolves an operation by its frozen schema name.
+    #[must_use]
+    pub fn operation(&self, name: &str) -> Option<&Operation> {
+        self.operations
+            .binary_search_by(|operation| operation.name.as_str().cmp(name))
+            .ok()
+            .map(|index| &self.operations[index])
+    }
+
     /// Matches one method/path pair without permitting encoded separators or traversal.
     ///
     /// # Errors

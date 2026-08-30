@@ -149,6 +149,7 @@ pub struct PrincipalContext {
     pub principal: PrincipalId,
     pub tenant: AgentTenantId,
     pub session_id: String,
+    pub authorization: String,
 }
 
 /// One schema-decoded request after session authentication and path binding.
@@ -311,13 +312,34 @@ impl UnixComponents {
         let decoded = serde_json::from_slice(&response);
         response.zeroize();
         let mut value: Value = decoded.map_err(|_| ApiFailure::upstream_degraded())?;
-        let ok = value
-            .as_object()
-            .and_then(|object| object.get("ok"))
-            .and_then(Value::as_bool);
+        let (ok, has_result, has_error, has_session, malformed) = {
+            let object = value.as_object().ok_or_else(ApiFailure::upstream_degraded)?;
+            (
+                object.get("ok").and_then(Value::as_bool),
+                object.contains_key("result"),
+                object.contains_key("error"),
+                object.contains_key("session"),
+                object.get("version").and_then(Value::as_u64)
+                    != Some(COMPONENT_PROTOCOL_VERSION)
+                    || object.keys().any(|key| {
+                        !matches!(
+                            key.as_str(),
+                            "version" | "ok" | "result" | "error" | "session"
+                        )
+                    }),
+            )
+        };
+        if malformed {
+            zeroize_value(&mut value);
+            return Err(ApiFailure::upstream_degraded());
+        }
         match ok {
-            Some(true) => Ok(value),
+            Some(true) if has_result && !has_error => Ok(value),
             Some(false) => {
+                if has_result || has_session || !has_error {
+                    zeroize_value(&mut value);
+                    return Err(ApiFailure::upstream_degraded());
+                }
                 let failure = value
                     .as_object()
                     .and_then(|object| object.get("error"));
@@ -341,6 +363,7 @@ impl HumanApiComponents for UnixComponents {
         trace: &str,
     ) -> Result<PrincipalContext, ApiFailure> {
         let mut response = self.round_trip(json!({
+            "version": COMPONENT_PROTOCOL_VERSION,
             "kind": "session.authorize",
             "operation": operation.name.as_str(),
             "access_token": credentials.access_token,
@@ -350,10 +373,23 @@ impl HumanApiComponents for UnixComponents {
             "trace": trace
         }))?;
         let parsed = (|| {
+            if response.get("session").is_some() {
+                return Err(ApiFailure::upstream_degraded());
+            }
             let result = response
                 .get("result")
                 .and_then(Value::as_object)
                 .ok_or_else(ApiFailure::upstream_degraded)?;
+            if result.len() != 4
+                || result.keys().any(|key| {
+                    !matches!(
+                        key.as_str(),
+                        "principal_id" | "tenant_id" | "session_id" | "authorization"
+                    )
+                })
+            {
+                return Err(ApiFailure::upstream_degraded());
+            }
             let principal = result
                 .get("principal_id")
                 .and_then(Value::as_str)
@@ -374,10 +410,17 @@ impl HumanApiComponents for UnixComponents {
                 .filter(|value| !value.is_empty() && value.len() <= 255)
                 .ok_or_else(ApiFailure::upstream_degraded)?
                 .to_owned();
+            let authorization = result
+                .get("authorization")
+                .and_then(Value::as_str)
+                .filter(|value| valid_secret(value))
+                .ok_or_else(ApiFailure::upstream_degraded)?
+                .to_owned();
             Ok(PrincipalContext {
                 principal,
                 tenant,
                 session_id,
+                authorization,
             })
         })();
         zeroize_value(&mut response);
@@ -385,15 +428,17 @@ impl HumanApiComponents for UnixComponents {
     }
 
     fn execute(&self, request: ScopedRequest<'_>) -> Result<BackendResponse, ApiFailure> {
-        let component = component_owner(&request.operation.name);
+        let component = component_owner(&request.operation.name)?;
         let principal = request.principal.map(|context| {
             json!({
                 "principal_id": context.principal.as_str(),
                 "tenant_id": context.tenant.as_str(),
-                "session_id": context.session_id.as_str()
+                "session_id": context.session_id.as_str(),
+                "authorization": context.authorization.as_str()
             })
         });
         let mut response = self.round_trip(json!({
+            "version": COMPONENT_PROTOCOL_VERSION,
             "kind": "human-api.execute",
             "component": component,
             "operation": request.operation.name.as_str(),
@@ -425,16 +470,30 @@ impl HumanApiComponents for UnixComponents {
 
     fn readiness(&self, trace: &str) -> Result<Readiness, ApiFailure> {
         let mut response = self.round_trip(json!({
+            "version": COMPONENT_PROTOCOL_VERSION,
             "kind": "readiness",
             "trace": trace
         }))?;
         let parsed = (|| {
+            if response.get("session").is_some() {
+                return Err(ApiFailure::upstream_degraded());
+            }
             let result = response
                 .get("result")
                 .and_then(Value::as_object)
                 .ok_or_else(ApiFailure::upstream_degraded)?;
+            if result.len() != 5
+                || result.keys().any(|key| {
+                    !matches!(
+                        key.as_str(),
+                        "human_service" | "custody" | "agent" | "core" | "paxeer"
+                    )
+                })
+            {
+                return Err(ApiFailure::upstream_degraded());
+            }
             Ok(Readiness {
-                human_service: ComponentState::Ready,
+                human_service: parse_component_state(result.get("human_service"))?,
                 custody: parse_component_state(result.get("custody"))?,
                 agent: parse_component_state(result.get("agent"))?,
                 core: parse_component_state(result.get("core"))?,
@@ -455,12 +514,12 @@ fn zeroize_value(value: &mut Value) {
     }
 }
 
-fn component_owner(operation: &str) -> &'static str {
+pub(crate) fn component_owner(operation: &str) -> Result<&'static str, ApiFailure> {
     if operation == "account.balance" {
-        return "agent";
+        return Ok("agent");
     }
     let root = operation.split('.').next().unwrap_or_default();
-    match root {
+    let owner = match root {
         "account" | "authenticator" | "passkey" | "profile" | "security" | "session"
         | "stepup" => "custody",
         "binding" => "custody",
@@ -473,23 +532,32 @@ fn component_owner(operation: &str) -> &'static str {
         "support" => "support",
         "home" => "home",
         "version" => "service",
-        _ => "agent",
-    }
+        _ => return Err(ApiFailure::not_found()),
+    };
+    Ok(owner)
 }
 
 fn parse_session(value: &Value) -> Result<SessionSecrets, ApiFailure> {
     let object = value.as_object().ok_or_else(ApiFailure::upstream_degraded)?;
+    if object.len() != 5
+        || object.keys().any(|key| {
+            !matches!(
+                key.as_str(),
+                "access_token"
+                    | "refresh_token"
+                    | "csrf_token"
+                    | "access_max_age_seconds"
+                    | "refresh_max_age_seconds"
+            )
+        })
+    {
+        return Err(ApiFailure::upstream_degraded());
+    }
     let secret = |name: &str| {
         object
             .get(name)
             .and_then(Value::as_str)
-            .filter(|value| {
-                !value.is_empty()
-                    && value.len() <= 4096
-                    && value.bytes().all(|byte| {
-                        byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~')
-                    })
-            })
+            .filter(|value| valid_secret(value))
             .map(str::to_owned)
             .ok_or_else(ApiFailure::upstream_degraded)
     };
@@ -508,6 +576,14 @@ fn parse_session(value: &Value) -> Result<SessionSecrets, ApiFailure> {
     })
 }
 
+fn valid_secret(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 4096
+        && value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~')
+        })
+}
+
 fn parse_component_state(value: Option<&Value>) -> Result<ComponentState, ApiFailure> {
     match value.and_then(Value::as_str) {
         Some("ready") => Ok(ComponentState::Ready),
@@ -521,6 +597,14 @@ fn parse_failure(value: Option<&Value>) -> Result<ApiFailure, ApiFailure> {
     let object = value
         .and_then(Value::as_object)
         .ok_or_else(ApiFailure::upstream_degraded)?;
+    if object.keys().any(|key| {
+        !matches!(
+            key.as_str(),
+            "status" | "code" | "copy_key" | "retry" | "retry_after_ms" | "field"
+        )
+    }) {
+        return Err(ApiFailure::upstream_degraded());
+    }
     let status = object
         .get("status")
         .and_then(Value::as_u64)
@@ -597,6 +681,8 @@ const ERROR_CODES: &[&str] = &[
     "support-conversation-unknown",
     "support-message-unknown",
 ];
+
+pub(crate) const COMPONENT_PROTOCOL_VERSION: u64 = 1;
 
 #[must_use]
 pub const fn default_component_limits() -> Limits {

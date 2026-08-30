@@ -22,7 +22,7 @@ use sha2::{Digest as _, Sha256};
 use subtle::ConstantTimeEq as _;
 use zeroize::{Zeroize as _, Zeroizing};
 
-use crate::store::{PrincipalScope, RowKey, StoreError, Table};
+use crate::store::{PrincipalId, PrincipalScope, RowKey, StoreError, Table, TenancyMap};
 
 const PASSKEY_ROW_PREFIX: &str = "auth-passkey-";
 const REGISTRATION_ROW_PREFIX: &str = "auth-registration-";
@@ -35,6 +35,7 @@ const SESSION_EPOCH_ROW: &str = "auth-epoch-sessions";
 const RATE_ROW_PREFIX: &str = "auth-rate-";
 const NEW_DEVICE_ROW_PREFIX: &str = "auth-new-device-";
 const TOKEN_DOMAIN: &[u8] = b"layerx-human-session-token/v1";
+const TOKEN_ROUTE_DOMAIN: &[u8] = b"layerx-human-session-route/v1";
 const FALLBACK_DOMAIN: &[u8] = b"layerx-human-fallback/v1";
 const USER_HANDLE_DOMAIN: &[u8] = b"layerx-human-passkey-user/v1";
 const IDENTIFIER_ENTROPY_BYTES: usize = 16;
@@ -390,6 +391,7 @@ impl FallbackCredential {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OperationClass {
     Read,
+    Mutation,
     MoneyMovement,
     Approval,
     Withdrawal,
@@ -576,6 +578,29 @@ impl Passkeys {
             .require_user_handle(true)
             .strict_base64(true);
         Ok(Self { webauthn, config })
+    }
+
+    /// Resolves the non-secret routing commitment carried by a session token
+    /// against the authenticated tenancy map. The caller must still verify the
+    /// token digest inside the returned principal scope before authorizing it.
+    pub fn principal_for_token(
+        &self,
+        token: &str,
+        tenancy: &TenancyMap,
+    ) -> Result<PrincipalId, AuthError> {
+        let route = token_principal_route(token)?;
+        let mut matched = None;
+        for principal in tenancy.principals() {
+            let candidate = principal_route(&principal);
+            if candidate.len() == route.len()
+                && bool::from(candidate.as_bytes().ct_eq(route.as_bytes()))
+            {
+                if matched.replace(principal).is_some() {
+                    return Err(AuthError::CorruptState);
+                }
+            }
+        }
+        matched.ok_or(AuthError::Unauthenticated)
     }
 
     /// Starts passkey registration for the authenticated application account.
@@ -936,10 +961,38 @@ impl Passkeys {
         {
             return Err(AuthError::ForgeryRefused);
         }
-        let grant = rotate_session_secrets(&mut record, &self.config, now)?;
+        let grant = rotate_session_secrets(&mut record, &self.config, scope.principal(), now)?;
         put_json(scope, Table::Cache, key, now, &record)?;
         touch_device(scope, &record.device, now)?;
         Ok(grant)
+    }
+
+    /// Validates a refresh generation without rotating it. The caller must
+    /// consume the same token through [`Self::refresh_session`] when executing
+    /// the refresh operation.
+    pub fn authorize_refresh(
+        &self,
+        scope: &PrincipalScope<'_>,
+        refresh_token: &str,
+        csrf_token: &str,
+        now: u64,
+    ) -> Result<SessionContext, AuthError> {
+        let session_id = token_session_id(refresh_token)?;
+        let key = row_key(SESSION_ROW_PREFIX, session_id)?;
+        let record = get_json::<SessionRecord>(scope, Table::Cache, &key)?
+            .ok_or(AuthError::Unauthenticated)?;
+        if record.revoked_at.is_some()
+            || record.epoch != session_epoch(scope)?
+            || now > record.refresh_expires_at
+            || !digest_matches(&record.refresh_digest, refresh_token)
+            || !digest_matches(&record.csrf_digest, csrf_token)
+        {
+            return Err(AuthError::Unauthenticated);
+        }
+        Ok(SessionContext {
+            session_id: record.session_id,
+            device_id: record.device.id,
+        })
     }
 
     /// Authorizes one browser request, returning an explicit re-authentication
@@ -1297,8 +1350,8 @@ impl Passkeys {
         record_device(scope, &device, now)?;
         let epoch = session_epoch(scope)?;
         let session_id = mint_identifier("ses_")?;
-        let (access_token, access_digest) = mint_token(&session_id)?;
-        let (refresh_token, refresh_digest) = mint_token(&session_id)?;
+        let (access_token, access_digest) = mint_token(&session_id, scope.principal())?;
+        let (refresh_token, refresh_digest) = mint_token(&session_id, scope.principal())?;
         let csrf_token = mint_secret()?;
         let csrf_digest = token_digest(csrf_token.expose());
         let access_expires_at = now.saturating_add(self.config.session_ttl_secs);
@@ -1410,19 +1463,62 @@ fn mint_secret() -> Result<OpaqueSecret, AuthError> {
     Ok(OpaqueSecret(Zeroizing::new(encoded)))
 }
 
-fn mint_token(session_id: &str) -> Result<(OpaqueSecret, [u8; 32]), AuthError> {
+fn mint_token(
+    session_id: &str,
+    principal: &PrincipalId,
+) -> Result<(OpaqueSecret, [u8; 32]), AuthError> {
     let secret = mint_secret()?;
-    let token = OpaqueSecret(Zeroizing::new(format!("{session_id}.{}", secret.expose())));
+    let route = principal_route(principal);
+    let token = OpaqueSecret(Zeroizing::new(format!(
+        "{session_id}.{route}.{}",
+        secret.expose()
+    )));
     let digest = token_digest(token.expose());
     Ok((token, digest))
 }
 
 fn token_session_id(token: &str) -> Result<&str, AuthError> {
-    let (session_id, secret) = token.split_once('.').ok_or(AuthError::Unauthenticated)?;
-    if !valid_prefixed_id(session_id, "ses_") || secret.is_empty() {
+    let mut fields = token.split('.');
+    let session_id = fields.next().ok_or(AuthError::Unauthenticated)?;
+    let route = fields.next().ok_or(AuthError::Unauthenticated)?;
+    let secret = fields.next().ok_or(AuthError::Unauthenticated)?;
+    if fields.next().is_some()
+        || !valid_prefixed_id(session_id, "ses_")
+        || !valid_token_route(route)
+        || secret.is_empty()
+    {
         return Err(AuthError::Unauthenticated);
     }
     Ok(session_id)
+}
+
+fn token_principal_route(token: &str) -> Result<&str, AuthError> {
+    let mut fields = token.split('.');
+    let session_id = fields.next().ok_or(AuthError::Unauthenticated)?;
+    let route = fields.next().ok_or(AuthError::Unauthenticated)?;
+    let secret = fields.next().ok_or(AuthError::Unauthenticated)?;
+    if fields.next().is_some()
+        || !valid_prefixed_id(session_id, "ses_")
+        || !valid_token_route(route)
+        || secret.is_empty()
+    {
+        return Err(AuthError::Unauthenticated);
+    }
+    Ok(route)
+}
+
+fn valid_token_route(route: &str) -> bool {
+    route.len() == 43
+        && route.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')
+        })
+}
+
+fn principal_route(principal: &PrincipalId) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(TOKEN_ROUTE_DOMAIN);
+    hasher.update(principal.as_str().as_bytes());
+    URL_SAFE_NO_PAD.encode(hasher.finalize())
 }
 
 fn token_digest(token: &str) -> [u8; 32] {
@@ -1545,10 +1641,11 @@ fn load_session(
 fn rotate_session_secrets(
     record: &mut SessionRecord,
     config: &AuthConfig,
+    principal: &PrincipalId,
     now: u64,
 ) -> Result<SessionGrant, AuthError> {
-    let (access_token, access_digest) = mint_token(&record.session_id)?;
-    let (refresh_token, refresh_digest) = mint_token(&record.session_id)?;
+    let (access_token, access_digest) = mint_token(&record.session_id, principal)?;
+    let (refresh_token, refresh_digest) = mint_token(&record.session_id, principal)?;
     let csrf_token = mint_secret()?;
     record.access_digest = access_digest;
     record.refresh_digest = refresh_digest;

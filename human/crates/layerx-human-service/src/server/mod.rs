@@ -1,8 +1,11 @@
 //! Production HTTPS+JSON boundary for the versioned human-api contract.
 
 pub mod backend;
+mod component;
+mod component_protocol;
 mod http;
 mod limits;
+mod privileged;
 pub mod schema;
 
 use std::io;
@@ -20,8 +23,16 @@ pub use backend::{
     default_component_limits, ApiFailure, ComponentState, HumanApiComponents, Readiness,
     UnixComponents,
 };
+pub use component::{
+    BoundHumanComponentServer, ComponentServerConfig, ComponentServerError, ComponentShutdown,
+    HumanComponentServer,
+};
 pub use http::{HttpConfig, Router};
 pub use limits::PrincipalLimits;
+pub use privileged::{
+    AuthorizationGrantPolicy, AuthorizedSession, ComponentOperationRequest,
+    PrivilegedHumanComponents, PrivilegedHumanServices,
+};
 
 /// Explicit finite HTTPS listener configuration.
 pub struct HttpsConfig {
