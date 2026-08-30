@@ -1,5 +1,5 @@
 use std::net::IpAddr;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use layerx_crypto::ed25519;
 use layerx_types::intent::{
@@ -81,6 +81,7 @@ pub struct HttpProgramTransport {
     agent: ureq::Agent,
     endpoint: Url,
     credential: Option<LayerXKeyCredential>,
+    trusted_sequencer_public_key: [u8; 32],
 }
 
 impl HttpProgramTransport {
@@ -93,8 +94,12 @@ impl HttpProgramTransport {
     pub fn connect(
         endpoint: &str,
         credential: Option<LayerXKeyCredential>,
+        trusted_sequencer_public_key: [u8; 32],
     ) -> Result<Self, ProgramOperationError> {
         let endpoint = validate_endpoint(endpoint)?;
+        if trusted_sequencer_public_key.iter().all(|byte| *byte == 0) {
+            return Err(ProgramOperationError::Authentication);
+        }
         let config = ureq::Agent::config_builder()
             .timeout_global(Some(Duration::from_secs(30)))
             .http_status_as_error(false)
@@ -104,6 +109,7 @@ impl HttpProgramTransport {
             agent: config.into(),
             endpoint,
             credential,
+            trusted_sequencer_public_key,
         })
     }
 
@@ -191,7 +197,7 @@ impl ProgramTransport for HttpProgramTransport {
             }),
             None,
         )?;
-        decode_discovery(&value, program)
+        decode_discovery(&value, program, now_millis()?)
     }
 
     fn interface(
@@ -208,7 +214,7 @@ impl ProgramTransport for HttpProgramTransport {
             }),
             None,
         )?;
-        decode_interface(&value, program)
+        decode_interface(&value, program, now_millis()?)
     }
 
     fn simulate(
@@ -221,7 +227,7 @@ impl ProgramTransport for HttpProgramTransport {
             &wire_call(request),
             None,
         )?;
-        decode_simulation(&value, request)
+        decode_simulation(&value, request, self.trusted_sequencer_public_key)
     }
 
     fn submit(
@@ -247,6 +253,7 @@ impl ProgramTransport for HttpProgramTransport {
                         activity_id: Some(request.bound_activity_id()),
                         idempotency_key: Some(idempotency_key),
                         retained_signed_activity: Some(request.signed_activity()),
+                        trusted_sequencer_public_key: self.trusted_sequencer_public_key,
                     },
                 )
         });
@@ -293,6 +300,7 @@ impl ProgramTransport for HttpProgramTransport {
                 activity_id: Some(expected_activity),
                 idempotency_key: Some(idempotency_key),
                 retained_signed_activity: None,
+                trusted_sequencer_public_key: self.trusted_sequencer_public_key,
             },
         )
     }
@@ -318,6 +326,7 @@ impl ProgramTransport for HttpProgramTransport {
                 activity_id: Some(activity_id),
                 idempotency_key: None,
                 retained_signed_activity: None,
+                trusted_sequencer_public_key: self.trusted_sequencer_public_key,
             },
         )
     }
@@ -350,6 +359,15 @@ struct SubmissionExpectation<'a> {
     activity_id: Option<[u8; 32]>,
     idempotency_key: Option<[u8; 32]>,
     retained_signed_activity: Option<&'a [u8]>,
+    trusted_sequencer_public_key: [u8; 32],
+}
+
+fn now_millis() -> Result<u64, ProgramOperationError> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .and_then(|duration| u64::try_from(duration.as_millis()).ok())
+        .ok_or(ProgramOperationError::Verification)
 }
 
 fn validate_endpoint(value: &str) -> Result<Url, ProgramOperationError> {
@@ -497,6 +515,7 @@ fn valid_request_id(value: &str) -> bool {
 fn decode_discovery(
     value: &Value,
     expected_program: [u8; 32],
+    now: u64,
 ) -> Result<VerifiedProgramDiscovery, ProgramOperationError> {
     let value = object(value)?;
     if fixed(value, "program_id")? != expected_program
@@ -516,7 +535,7 @@ fn decode_discovery(
     let observed_sequence = decimal_u64(value, "observed_sequence")?;
     let observed_at = decimal_u64(value, "observed_at")?;
     let valid_through = decimal_u64(value, "valid_through")?;
-    if valid_through < observed_at {
+    if valid_through < observed_at || now > valid_through {
         return Err(ProgramOperationError::Verification);
     }
     Ok(VerifiedProgramDiscovery {
@@ -536,6 +555,7 @@ fn decode_discovery(
 fn decode_interface(
     value: &Value,
     expected_program: [u8; 32],
+    now: u64,
 ) -> Result<VerifiedProgramInterface, ProgramOperationError> {
     let value = object(value)?;
     if fixed(value, "program_id")? != expected_program
@@ -554,7 +574,7 @@ fn decode_interface(
     }
     let observed_at = decimal_u64(value, "observed_at")?;
     let valid_through = decimal_u64(value, "valid_through")?;
-    if valid_through < observed_at {
+    if valid_through < observed_at || now > valid_through {
         return Err(ProgramOperationError::Verification);
     }
     Ok(VerifiedProgramInterface {
@@ -594,6 +614,7 @@ fn decode_source(value: Option<&Value>) -> Result<ProgramSource, ProgramOperatio
 fn decode_simulation(
     value: &Value,
     request: &ProgramCallRequest,
+    trusted_sequencer_public_key: [u8; 32],
 ) -> Result<VerifiedProgramSimulation, ProgramOperationError> {
     let value = object(value)?;
     if value.get("committed").and_then(Value::as_bool) != Some(false) {
@@ -602,6 +623,7 @@ fn decode_simulation(
     let decoded = decode_execution(
         value.get("execution").ok_or(ProgramOperationError::Decode)?,
         Some(ExecutionState::Simulated),
+        trusted_sequencer_public_key,
     )?;
     if decoded.activity_id != request.bound_activity_id()
         || decoded.program_id != request.call().callee().bytes()
@@ -705,7 +727,7 @@ fn decode_submission(
             retained_signed_activity: retained,
         });
     }
-    let decoded = decode_execution(value, None)?;
+    let decoded = decode_execution(value, None, expected.trusted_sequencer_public_key)?;
     if !matches!(decoded.state, ExecutionState::Executed | ExecutionState::Refused)
         || expected
             .program_id
@@ -730,6 +752,7 @@ fn decode_submission(
 fn decode_execution(
     value: &Value,
     expected_state: Option<ExecutionState>,
+    trusted_sequencer_public_key: [u8; 32],
 ) -> Result<DecodedExecution, ProgramOperationError> {
     let value = object(value)?;
     let state = match required_string(value, "state")? {
@@ -771,7 +794,10 @@ fn decode_execution(
         fixed(authority_value, "resulting_state_root")?,
         fixed(authority_value, "sequencer_public_key")?,
     );
-    if authority.batch_id() != batch_id || authority.resulting_state_root() != state_root {
+    if authority.sequencer_public_key() != trusted_sequencer_public_key
+        || authority.batch_id() != batch_id
+        || authority.resulting_state_root() != state_root
+    {
         return Err(ProgramOperationError::IdentityMismatch);
     }
     let usage = value

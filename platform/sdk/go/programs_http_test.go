@@ -90,19 +90,20 @@ func TestProgramCallKeyAndUnknownSubmissionAreExact(t *testing.T) {
 	activityText := strings.Repeat("b", 64)
 	retained := []byte{0x01, 0x02, 0x03}
 	raw := json.RawMessage(`{"state":"unknown","activity_id":"` + activityText + `","idempotency_key":"` + keyText + `","retained_signed_activity":"010203"}`)
-	submission, decodeError := decodeProgramSubmission(raw, nil, nil, keyText, retained)
+	trusted := [32]byte{1}
+	submission, decodeError := decodeProgramSubmission(raw, nil, nil, keyText, retained, trusted)
 	if decodeError != nil || submission.State != ProgramSubmissionUnknown || submission.IdempotencyKey != keyText || !bytes.Equal(submission.RetainedSignedActivity, retained) {
 		t.Fatalf("decode exact unknown Programs submission: %#v %v", submission, decodeError)
 	}
 	withExecution := json.RawMessage(`{"state":"unknown","activity_id":"` + activityText + `","idempotency_key":"` + keyText + `","retained_signed_activity":"010203","receipt":"00"}`)
-	if _, decodeError := decodeProgramSubmission(withExecution, nil, nil, keyText, retained); decodeError == nil || decodeError.Code != ErrorDecodeFailure {
+	if _, decodeError := decodeProgramSubmission(withExecution, nil, nil, keyText, retained, trusted); decodeError == nil || decodeError.Code != ErrorDecodeFailure {
 		t.Fatalf("unknown Programs submission accepted execution evidence")
 	}
 	resolution := json.RawMessage(`{"state":"unknown","activity_id":"` + activityText + `","idempotency_key":"` + keyText + `"}`)
-	if _, decodeError := decodeProgramSubmission(resolution, nil, nil, keyText, nil); decodeError != nil {
+	if _, decodeError := decodeProgramSubmission(resolution, nil, nil, keyText, nil, trusted); decodeError != nil {
 		t.Fatalf("receipt/activity resolution refused unknown state without retained request: %v", decodeError)
 	}
-	if _, decodeError := decodeProgramSubmission(resolution, nil, nil, keyText, retained); decodeError == nil || decodeError.Code != ErrorVerificationFailure {
+	if _, decodeError := decodeProgramSubmission(resolution, nil, nil, keyText, retained, trusted); decodeError == nil || decodeError.Code != ErrorVerificationFailure {
 		t.Fatalf("submit accepted unknown state without retained signed activity")
 	}
 }

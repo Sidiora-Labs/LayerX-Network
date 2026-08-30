@@ -47,9 +47,13 @@ func NewHumanHTTPTransport(baseURL string, client *http.Client, authorizer Reque
 		return nil, newSDKError(ErrorInvalidArgument, RetryNever)
 	}
 	if client == nil {
-		client = http.DefaultClient
+		client = &http.Client{}
 	}
-	return &HumanHTTPTransport{baseURL: parsed, client: client, authorizer: authorizer}, nil
+	boundedClient := *client
+	boundedClient.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	return &HumanHTTPTransport{baseURL: parsed, client: &boundedClient, authorizer: authorizer}, nil
 }
 
 func loopbackHost(host string) bool {
