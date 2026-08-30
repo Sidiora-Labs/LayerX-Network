@@ -25,6 +25,11 @@ const REGISTRY_KEYS: [&str; 7] = [
     "status",
 ];
 
+const MAVEN_CENTRAL_KEYS: [&str; 3] = ["coordinate", "languages", "module_name"];
+const MAVEN_CENTRAL_COORDINATE: &str = "com.sidiora.layerx:layerx-sdk";
+const MAVEN_CENTRAL_LANGUAGES: [&str; 2] = ["java", "kotlin"];
+const MAVEN_CENTRAL_MODULE_NAME: &str = "com.sidiora.layerx.sdk";
+
 const NPM_MIDDLEWARE_PACKAGES: [&str; 4] = [
     "@sidiora/layerx-agent-middleware",
     "@sidiora/layerx-buyer-middleware",
@@ -64,8 +69,7 @@ pub struct ReleasePipeline {
 /// required declaration and a known status.
 pub fn release_pipeline(source: &str) -> Result<ReleasePipeline, String> {
     let document = layerx_platform_kvx::parse(source)?;
-    let declared =
-        layerx_platform_kvx::string_list(document.required("release", "registries")?)?;
+    let declared = layerx_platform_kvx::string_list(document.required("release", "registries")?)?;
     if declared != REGISTRIES {
         return Err(format!(
             "release.registries must list exactly the seven mandated registries {REGISTRIES:?}, got {declared:?}"
@@ -88,9 +92,8 @@ pub fn release_pipeline(source: &str) -> Result<ReleasePipeline, String> {
     if source_digest.is_empty() {
         return Err("release.source_digest must not be empty".to_owned());
     }
-    let reference_applications = layerx_platform_kvx::string_list(
-        document.required("release", "reference_applications")?,
-    )?;
+    let reference_applications =
+        layerx_platform_kvx::string_list(document.required("release", "reference_applications")?)?;
     if reference_applications != REFERENCE_APPLICATIONS {
         return Err(format!(
             "release.reference_applications must list exactly the four cloneable applications {REFERENCE_APPLICATIONS:?}, got {reference_applications:?}"
@@ -129,16 +132,36 @@ pub fn release_pipeline(source: &str) -> Result<ReleasePipeline, String> {
                 }
                 continue;
             }
-            if !REGISTRY_KEYS.contains(key) {
+            if *key == "languages" && name == "maven-central" {
+                let languages = layerx_platform_kvx::string_list(value)?;
+                if languages != MAVEN_CENTRAL_LANGUAGES {
+                    return Err(format!(
+                        "registry.maven-central.languages must list exactly {MAVEN_CENTRAL_LANGUAGES:?}, got {languages:?}"
+                    ));
+                }
+                declarations.push(((*key).to_owned(), languages.join(",")));
+                continue;
+            }
+            if !REGISTRY_KEYS.contains(key) && !registry_specific_keys(name).contains(key) {
                 return Err(format!("unknown declaration {section}.{key}"));
             }
             let value = layerx_platform_kvx::unquote(value)?;
             if value.is_empty() {
                 return Err(format!("empty declaration {section}.{key}"));
             }
+            if name == "maven-central"
+                && ((*key == "coordinate" && value != MAVEN_CENTRAL_COORDINATE)
+                    || (*key == "module_name" && value != MAVEN_CENTRAL_MODULE_NAME))
+            {
+                return Err(format!("registry.maven-central.{key} is not canonical"));
+            }
             declarations.push(((*key).to_owned(), value));
         }
-        for key in REGISTRY_KEYS {
+        for key in REGISTRY_KEYS
+            .iter()
+            .chain(registry_specific_keys(name))
+            .copied()
+        {
             if !declarations.iter().any(|(declared, _)| declared == key) {
                 return Err(format!("missing declaration {section}.{key}"));
             }
@@ -156,7 +179,9 @@ pub fn release_pipeline(source: &str) -> Result<ReleasePipeline, String> {
             ));
         }
         if name != "npm" && !packages.is_empty() {
-            return Err(format!("registry {name} does not accept a packages declaration"));
+            return Err(format!(
+                "registry {name} does not accept a packages declaration"
+            ));
         }
         registries.push(Registry {
             name: name.to_owned(),
@@ -170,6 +195,14 @@ pub fn release_pipeline(source: &str) -> Result<ReleasePipeline, String> {
         reference_applications,
         registries,
     })
+}
+
+fn registry_specific_keys(name: &str) -> &'static [&'static str] {
+    if name == "maven-central" {
+        &MAVEN_CENTRAL_KEYS
+    } else {
+        &[]
+    }
 }
 
 /// Renders the machine-readable release plan.
@@ -190,7 +223,11 @@ pub fn plan(pipeline: &ReleasePipeline) -> Result<String, String> {
     .map_err(fail)?;
     for registry in &pipeline.registries {
         write!(text, "registry={}", registry.name).map_err(fail)?;
-        for key in REGISTRY_KEYS {
+        for key in REGISTRY_KEYS
+            .iter()
+            .chain(registry_specific_keys(&registry.name))
+            .copied()
+        {
             let value = registry
                 .declarations
                 .iter()

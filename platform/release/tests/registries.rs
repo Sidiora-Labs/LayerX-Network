@@ -9,8 +9,7 @@ use release::{plan, release_pipeline};
 
 fn committed_manifest() -> String {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("registries.kvx");
-    fs::read_to_string(&path)
-        .unwrap_or_else(|error| panic!("read {}: {error}", path.display()))
+    fs::read_to_string(&path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()))
 }
 
 #[test]
@@ -45,9 +44,15 @@ fn plan_is_deterministic_and_machine_readable() {
     assert_eq!(first, second);
     assert_eq!(first.lines().count(), 10);
     assert!(first.starts_with("tag_format=sdk-v{version}\n"));
-    assert!(first.lines().nth(2).is_some_and(|line| line.starts_with("reference_applications=")));
+    assert!(first
+        .lines()
+        .nth(2)
+        .is_some_and(|line| line.starts_with("reference_applications=")));
     for line in first.lines().skip(3) {
-        assert!(line.starts_with("registry="), "unexpected plan line: {line}");
+        assert!(
+            line.starts_with("registry="),
+            "unexpected plan line: {line}"
+        );
         assert!(line.contains(" signing="), "plan line lost signing: {line}");
         assert!(
             line.contains(" verification=byte-compare-against-tagged-source"),
@@ -89,6 +94,32 @@ fn npm_release_declares_every_middleware_package() {
             "@sidiora/layerx-seller-middleware",
         ]
     );
+}
+
+#[test]
+fn maven_release_preserves_its_typed_coordinates() {
+    let pipeline = release_pipeline(&committed_manifest())
+        .unwrap_or_else(|error| panic!("manifest refused: {error}"));
+    let maven = pipeline
+        .registries
+        .iter()
+        .find(|registry| registry.name == "maven-central")
+        .unwrap_or_else(|| panic!("Maven Central registry missing"));
+    assert!(maven.declarations.contains(&(
+        "coordinate".to_owned(),
+        "com.sidiora.layerx:layerx-sdk".to_owned()
+    )));
+    assert!(maven
+        .declarations
+        .contains(&("languages".to_owned(), "java,kotlin".to_owned())));
+    assert!(maven.declarations.contains(&(
+        "module_name".to_owned(),
+        "com.sidiora.layerx.sdk".to_owned()
+    )));
+    let rendered = plan(&pipeline).unwrap_or_else(|error| panic!("plan: {error}"));
+    assert!(rendered.contains(
+        "coordinate=com.sidiora.layerx:layerx-sdk languages=java,kotlin module_name=com.sidiora.layerx.sdk"
+    ));
 }
 
 fn expect_refusal(source: &str, needle: &str) {
@@ -155,11 +186,57 @@ fn unknown_registry_declaration_is_refused() {
 }
 
 #[test]
-fn empty_declaration_is_refused() {
+fn maven_declarations_are_refused_for_other_registries() {
     let source = committed_manifest().replace(
-        "artifact = \"nupkg\"",
-        "artifact = \"\"",
+        "[registry.nuget]\necosystem = \"dotnet\"",
+        "[registry.nuget]\ncoordinate = \"invalid:coordinate\"\necosystem = \"dotnet\"",
     );
+    expect_refusal(&source, "unknown declaration registry.nuget.coordinate");
+}
+
+#[test]
+fn incomplete_maven_coordinates_are_refused() {
+    let source =
+        committed_manifest().replace("coordinate = \"com.sidiora.layerx:layerx-sdk\"\n", "");
+    expect_refusal(
+        &source,
+        "missing declaration registry.maven-central.coordinate",
+    );
+}
+
+#[test]
+fn non_canonical_maven_coordinates_are_refused() {
+    let coordinate = committed_manifest().replace(
+        "coordinate = \"com.sidiora.layerx:layerx-sdk\"",
+        "coordinate = \"com.sidiora.layerx:other-sdk\"",
+    );
+    expect_refusal(
+        &coordinate,
+        "registry.maven-central.coordinate is not canonical",
+    );
+
+    let languages = committed_manifest().replace(
+        "languages = [\"java\",\"kotlin\"]",
+        "languages = [\"kotlin\",\"java\"]",
+    );
+    expect_refusal(
+        &languages,
+        "registry.maven-central.languages must list exactly",
+    );
+
+    let module = committed_manifest().replace(
+        "module_name = \"com.sidiora.layerx.sdk\"",
+        "module_name = \"com.sidiora.layerx.other\"",
+    );
+    expect_refusal(
+        &module,
+        "registry.maven-central.module_name is not canonical",
+    );
+}
+
+#[test]
+fn empty_declaration_is_refused() {
+    let source = committed_manifest().replace("artifact = \"nupkg\"", "artifact = \"\"");
     expect_refusal(&source, "empty declaration registry.nuget.artifact");
 }
 
