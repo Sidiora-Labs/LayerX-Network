@@ -214,7 +214,7 @@ static int malformed_program_spend_tables_refused(
         authorities[index].debit_authority_kind = LXP_AUTH_PROGRAM_SPEND;
     }
     (void)memset(&set, 0, sizeof(set));
-    set.legs = legs;
+    (void)memcpy(set.legs, legs, sizeof(legs));
     set.leg_count = 1U;
     set.context.assets = assets;
     set.context.asset_count = asset_count;

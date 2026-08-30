@@ -1,7 +1,7 @@
 [schema]
 name = "LayerX Node Interface"
 major = 1
-minor = 0
+minor = 1
 encoding = "major:u16be minor:u16be message_tag:u16be correlation_id:u64be canonical_payload:bytes32 proof_material:bytes32"
 compatibility = "Within major version 1, minor releases may add only new message tags, optional trailing fields, and capabilities; removal, reuse, reordering, or changed meaning requires a new major version."
 protocol_payload = "Any protocol datum is opaque canonical LayerX bytes. It is never expanded into an LNI-specific activity, receipt, state, batch, checkpoint, proof, or event layout."
@@ -9,7 +9,7 @@ transport = "Length-prefixed canonical frames over Unix sockets by default, mutu
 handshake = "NodeInfo is the first exchange and carries LNI version, protocol version, network id, node role, chain head, latest sealed batch, latest finalised checkpoint, authorised sequencer key, and capabilities."
 
 [capabilities]
-values = ["node_info","submit","receipt_lookup","account_read","history_range","batch_header","checkpoint","proof_bundle","availability_fetch","event_subscribe","historical_proofs"]
+values = ["node_info","submit","receipt_lookup","account_read","history_range","batch_header","checkpoint","proof_bundle","availability_fetch","event_subscribe","historical_proofs","preparation_state"]
 
 [message.1]
 name = "NodeInfoRequest"
@@ -210,3 +210,19 @@ capability = "node_info"
 canonical_payload = "canonical typed boundary-error bytes"
 proof_material = "empty"
 golden = "0001000000190000000000000000000000011900000000"
+
+[message.26]
+name = "PreparationStateRequest"
+kind = "request"
+capability = "preparation_state"
+canonical_payload = "version:u16be=1 actor_did_length:u16be actor_did:bytes; the DID is non-empty and bounded to the protocol maximum"
+proof_material = "empty"
+golden = "00010001001a0000000000000000000000011a00000000"
+
+[message.27]
+name = "PreparationStateResponse"
+kind = "response"
+capability = "preparation_state"
+canonical_payload = "version:u16be=1 actor_did_length:u16be actor_did:bytes network_id:u32be account_next_sequence:u64be latest_sealed_timestamp:u64be observed_head_sequence:u64be observed_state_root:bytes32 kernel_epoch:u64be module_count:u16be modules:(module_id:u16be activity_count:u16be activity_types:u32be[]); total payload is bounded to 4096 bytes; authenticated same-process snapshot only, not a Merkle proof"
+proof_material = "empty"
+golden = "00010001001b0000000000000000000000011b00000000"

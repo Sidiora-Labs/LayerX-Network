@@ -1,3 +1,6 @@
+#define _GNU_SOURCE
+#define _POSIX_C_SOURCE 200809L
+
 #include "lxp_daemon_batch_wal.h"
 
 #include "layerx/lxp_crypto.h"
@@ -538,11 +541,12 @@ static lxp_result durable_replace(const char *directory,const uint8_t *bytes,
         if(status==LXP_OK && fd<0)status=LXP_ERR_IO;
     }
     while(status==LXP_OK && offset<length) {
-        ssize_t n=write(fd,bytes+offset,length-offset);
-        if(n>0)offset+=(size_t)n; else if(n<0 && errno==EINTR)continue; else status=LXP_ERR_IO;
+        ssize_t written=write(fd,bytes+offset,length-offset);
+        if(written>0)offset+=(size_t)written; else if(written<0 && errno==EINTR)continue; else status=LXP_ERR_IO;
     }
     if(status==LXP_OK && fdatasync(fd)!=0)status=LXP_ERR_IO;
-    if(fd>=0 && close(fd)!=0 && status==LXP_OK)status=LXP_ERR_IO; fd=-1;
+    if(fd>=0 && close(fd)!=0 && status==LXP_OK)status=LXP_ERR_IO;
+    fd=-1;
     if(status==LXP_OK && require_absent) {
         if(linkat(dfd,temp,dfd,"prepared-batch.lxw",0)!=0)
             status=errno==EEXIST ? LXP_ERR_CONTEXT_MISMATCH : LXP_ERR_IO;
@@ -844,7 +848,8 @@ lxp_result lxp_daemon_batch_wal_retire(const char *directory,
         return LXP_FATAL_REPLAY_DIVERGENCE;
     status=encode_record(&record->view,record->state,
                          &expected,&expected_length);
-    if(status==LXP_OK)status=paths(directory,final);(void)final;
+    if(status==LXP_OK)status=paths(directory,final);
+    (void)final;
     if(status==LXP_OK) {
         if(pthread_mutex_lock(&wal_replace_mutex)!=0)status=LXP_ERR_IO;
         else locked=true;

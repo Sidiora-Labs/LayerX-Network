@@ -47,6 +47,7 @@ typedef struct lxp_daemon_receipt_authority_store {
     uint64_t record_count;
     uint64_t last_global_sequence;
     uint64_t last_batch_number;
+    uint64_t last_sealed_timestamp;
     uint64_t active_batch_last_sequence;
     uint8_t active_canonical_header[LXP_BATCH_HEADER_ENCODED_SIZE];
     uint8_t active_header_signature[64];
@@ -65,6 +66,7 @@ typedef struct lxp_daemon_receipt_evidence {
 
 typedef struct lxp_daemon_protocol_owner {
     lxp_kernel *kernel;
+    lxp_identity_store *identities;
     lx_programs_transfer_runtime *programs_runtime;
     lxp_history *history;
     lxp_verified_receipt_index *verified_receipts;
@@ -73,6 +75,8 @@ typedef struct lxp_daemon_protocol_owner {
     lx_programs_state_feed_store feed_store;
     uint8_t bearer_token[LXP_DAEMON_BEARER_MAX_BYTES];
     size_t bearer_token_length;
+    uint32_t network_id;
+    uint64_t latest_sealed_timestamp;
     pthread_mutex_t mutex;
     pthread_cond_t listener_changed;
     pthread_t listener_thread;
@@ -149,6 +153,8 @@ lxp_result lxp_daemon_receipt_authority_scan(
     bool *present);
 lxp_result lxp_daemon_protocol_owner_attach(
     lxp_daemon_protocol_owner *owner, lxp_kernel *kernel,
+    lxp_identity_store *identities, uint32_t network_id,
+    uint64_t bootstrap_sealed_timestamp,
     lx_programs_transfer_runtime *programs_runtime, lxp_log *feed_log,
     lxp_log *canonical_log, lxp_history *history,
     lxp_verified_receipt_index *verified_receipts,
@@ -179,6 +185,11 @@ lxp_result lxp_daemon_lni_serve(
     const lxp_daemon_lni_configuration *configuration);
 lxp_result lxp_daemon_lni_stop(lxp_daemon_lni_server *server);
 lxp_result lxp_daemon_lni_status(lxp_daemon_lni_server *server);
+lxp_result lxp_daemon_lni_preparation_state(
+    lxp_daemon_protocol_owner *owner, const uint8_t *request,
+    size_t request_length,
+    uint8_t *response, size_t response_capacity,
+    size_t *response_length);
 
 typedef enum lxp_daemon_role_kind {
     LXP_DAEMON_SEQUENCER = 1,

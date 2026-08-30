@@ -443,6 +443,8 @@ static lxp_result route_inner(lxp_daemon_protocol_owner *owner,
 
 lxp_result lxp_daemon_protocol_owner_attach(
     lxp_daemon_protocol_owner *owner, lxp_kernel *kernel,
+    lxp_identity_store *identities, uint32_t network_id,
+    uint64_t bootstrap_sealed_timestamp,
     lx_programs_transfer_runtime *programs_runtime, lxp_log *feed_log,
     lxp_log *canonical_log, lxp_history *history,
     lxp_verified_receipt_index *verified_receipts,
@@ -455,7 +457,9 @@ lxp_result lxp_daemon_protocol_owner_attach(
     lxp_result status;
     pthread_mutexattr_t mutex_attributes;
     bool mutex_initialized = false;
-    if (owner == NULL || kernel == NULL || programs_runtime == NULL ||
+    if (owner == NULL || kernel == NULL || identities == NULL ||
+        network_id == 0U ||
+        programs_runtime == NULL ||
         feed_log == NULL || canonical_log == NULL || history == NULL ||
         verified_receipts == NULL || receipt_authority == NULL ||
         replay == NULL || replay_context == NULL ||
@@ -474,6 +478,8 @@ lxp_result lxp_daemon_protocol_owner_attach(
             return LXP_ERR_NON_CANONICAL;
     (void)memset(owner, 0, sizeof(*owner));
     owner->kernel = kernel;
+    owner->identities = identities;
+    owner->network_id = network_id;
     owner->programs_runtime = programs_runtime;
     owner->history = history;
     owner->verified_receipts = verified_receipts;
@@ -565,6 +571,22 @@ lxp_result lxp_daemon_protocol_owner_attach(
             status = LXP_ERR_PROJECTION_STALE;
         (void)lxp_arena_reset(scratch, mark);
     }
+    if (status == LXP_OK && receipt_authority->record_count != 0U) {
+        if (receipt_authority->last_global_sequence == UINT64_MAX ||
+            kernel->state->next_sequence !=
+                receipt_authority->last_global_sequence + 1U ||
+            receipt_authority->last_sealed_timestamp == 0U)
+            status = LXP_ERR_PROJECTION_STALE;
+        else
+            owner->latest_sealed_timestamp =
+                receipt_authority->last_sealed_timestamp;
+    } else if (status == LXP_OK) {
+        if (kernel->state->next_sequence != 1U ||
+            bootstrap_sealed_timestamp == 0U)
+            status = LXP_ERR_PROJECTION_STALE;
+        else
+            owner->latest_sealed_timestamp = bootstrap_sealed_timestamp;
+    }
     if (status == LXP_OK) owner->attached = true;
     else {
 fail:
@@ -626,6 +648,7 @@ lxp_result lxp_daemon_protocol_publish_receipt(
             owner->verified_receipts, &receipt,
             owner->receipt_authority->authorization.public_key,
             owner->scratch);
+    if (status == LXP_OK) owner->latest_sealed_timestamp = receipt.timestamp;
     (void)lxp_arena_reset(owner->scratch, mark);
     (void)pthread_mutex_unlock(&owner->mutex);
     return status;

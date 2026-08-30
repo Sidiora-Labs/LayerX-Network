@@ -218,7 +218,11 @@ int main(void)
         lxp_ledger_bootstrap_balance(opened[2], asset.asset_id,
                                      (lxp_u128){0U, 0U}, 0U) != LXP_OK)
         return 1;
-    runtime = (lx_programs_transfer_runtime){&accounts, &asset, 1U};
+    runtime = (lx_programs_transfer_runtime){
+        .accounts = &accounts,
+        .assets = &asset,
+        .asset_count = 1U,
+    };
     (void)memset(&authority, 0, sizeof(authority));
     (void)memcpy(authority.principal, ids[0], 32U);
     (void)memset(authority.authority_hash, 0x55, 32U);

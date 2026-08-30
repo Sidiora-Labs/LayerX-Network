@@ -6,6 +6,7 @@ use layerx_types::activity::{
 use layerx_types::amount::Amount;
 use layerx_types::ids::{Did, IdempotencyKey};
 use layerx_types::payload::{ActivityType, ModuleRegistry, Payload, PayloadError};
+use layerx_types::result::ResultCode;
 use layerx_wire::activity::encode_unsigned_envelope;
 use layerx_wire::hash::payload_hash_for;
 use layerx_wire::sign::preimage_unsigned;
@@ -42,8 +43,9 @@ pub trait CorePreparationBoundary {
     ///
     /// # Errors
     ///
-    /// Returns `Unavailable` when core cannot be reached and `Unverified` when the returned
-    /// state has not been verified.
+    /// Returns `Unavailable` when core cannot be reached, `Unverified` when
+    /// returned state cannot be trusted, and `Refused` for an authenticated
+    /// typed core refusal.
     fn preparation_state(&mut self, actor: &Did) -> Result<CorePreparationState, CoreStateError>;
 }
 
@@ -51,6 +53,75 @@ pub trait CorePreparationBoundary {
 pub enum CoreStateError {
     Unavailable,
     Unverified,
+    Refused { class: u8, result: ResultCode },
+}
+
+/// Production adapter from the authenticated LNI client into preparation.
+/// Correlation identifiers are boundary-local and never supply protocol state.
+pub struct ProductionCorePreparationBoundary<'a> {
+    client: &'a mut layerx_client::Client,
+    next_correlation_id: u64,
+}
+
+impl<'a> ProductionCorePreparationBoundary<'a> {
+    /// Creates a production boundary with a non-zero first correlation id.
+    ///
+    /// # Errors
+    ///
+    /// Refuses zero, which is reserved for the LNI handshake.
+    pub fn new(
+        client: &'a mut layerx_client::Client,
+        first_correlation_id: u64,
+    ) -> Result<Self, CoreStateError> {
+        if first_correlation_id == 0 {
+            return Err(CoreStateError::Unavailable);
+        }
+        Ok(Self {
+            client,
+            next_correlation_id: first_correlation_id,
+        })
+    }
+}
+
+impl CorePreparationBoundary for ProductionCorePreparationBoundary<'_> {
+    fn preparation_state(&mut self, actor: &Did) -> Result<CorePreparationState, CoreStateError> {
+        let correlation_id = self.next_correlation_id;
+        if correlation_id == 0 {
+            return Err(CoreStateError::Unavailable);
+        }
+        self.next_correlation_id = correlation_id.checked_add(1).unwrap_or(0);
+        let state = self
+            .client
+            .preparation_state(actor, correlation_id)
+            .map_err(map_preparation_state_error)?;
+        Ok(CorePreparationState {
+            network_id: state.network_id,
+            account_sequence: state.account_sequence,
+            protocol_timestamp: state.protocol_timestamp,
+            observed_head_sequence: state.observed_head_sequence,
+            module_registry: state.module_registry,
+        })
+    }
+}
+
+fn map_preparation_state_error(error: layerx_client::lni::PreparationStateError) -> CoreStateError {
+    use layerx_client::lni::PreparationStateError;
+    match error {
+        PreparationStateError::Transport(_)
+        | PreparationStateError::UnavailableCapability
+        | PreparationStateError::Disconnected => CoreStateError::Unavailable,
+        PreparationStateError::CoreRefusal { class, result } => {
+            CoreStateError::Refused { class, result }
+        }
+        PreparationStateError::Envelope(_)
+        | PreparationStateError::InvalidCorrelation
+        | PreparationStateError::InterfaceVersion(_)
+        | PreparationStateError::MalformedRequest
+        | PreparationStateError::MalformedResponse
+        | PreparationStateError::ActorMismatch
+        | PreparationStateError::Network { .. }
+        | PreparationStateError::StaleSnapshot { .. } => CoreStateError::Unverified,
+    }
 }
 
 /// Explicit configured defaults and hard preparation bounds.

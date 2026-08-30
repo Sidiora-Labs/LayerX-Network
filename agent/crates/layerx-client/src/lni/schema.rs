@@ -16,6 +16,9 @@ impl Version {
     /// Version implemented by this crate.
     pub const V1_0: Self = Self { major: 1, minor: 0 };
 
+    /// Additive preparation-state boundary revision.
+    pub const V1_1: Self = Self { major: 1, minor: 1 };
+
     /// Returns whether the two peers can interpret the same stable message set.
     #[must_use]
     pub const fn is_compatible_with(self, peer: Self) -> bool {
@@ -48,6 +51,7 @@ pub enum Capability {
     AvailabilityFetch,
     EventSubscribe,
     HistoricalProofs,
+    PreparationState,
 }
 
 impl Capability {
@@ -66,6 +70,7 @@ impl Capability {
             Self::AvailabilityFetch => "availability_fetch",
             Self::EventSubscribe => "event_subscribe",
             Self::HistoricalProofs => "historical_proofs",
+            Self::PreparationState => "preparation_state",
         }
     }
 }
@@ -89,7 +94,7 @@ pub struct Schema {
     pub capabilities: &'static [Capability],
 }
 
-const CAPABILITIES: [Capability; 11] = [
+const CAPABILITIES: [Capability; 12] = [
     Capability::NodeInfo,
     Capability::Submit,
     Capability::ReceiptLookup,
@@ -101,6 +106,7 @@ const CAPABILITIES: [Capability; 11] = [
     Capability::AvailabilityFetch,
     Capability::EventSubscribe,
     Capability::HistoricalProofs,
+    Capability::PreparationState,
 ];
 
 const fn message(
@@ -121,7 +127,7 @@ const fn message(
     }
 }
 
-const MESSAGES: [MessageDescriptor; 25] = [
+const MESSAGES: [MessageDescriptor; 27] = [
     message(
         "NodeInfoRequest",
         1,
@@ -322,10 +328,26 @@ const MESSAGES: [MessageDescriptor; 25] = [
         false,
         false,
     ),
+    message(
+        "PreparationStateRequest",
+        26,
+        MessageKind::Request,
+        Capability::PreparationState,
+        false,
+        false,
+    ),
+    message(
+        "PreparationStateResponse",
+        27,
+        MessageKind::Response,
+        Capability::PreparationState,
+        true,
+        false,
+    ),
 ];
 
 const SCHEMA: Schema = Schema {
-    version: Version::V1_0,
+    version: Version::V1_1,
     messages: &MESSAGES,
     capabilities: &CAPABILITIES,
 };
@@ -348,7 +370,7 @@ pub struct GoldenVector {
 const NO_PROOF: &[u8] = &[];
 const PROOF: &[u8] = &[0xa5];
 
-const GOLDENS: [GoldenVector; 25] = [
+const GOLDENS: [GoldenVector; 27] = [
     GoldenVector {
         message: "NodeInfoRequest",
         payload: &[1],
@@ -499,7 +521,31 @@ const GOLDENS: [GoldenVector; 25] = [
         proof_material: NO_PROOF,
         encoded_hex: "0001000000190000000000000000000000011900000000",
     },
+    GoldenVector {
+        message: "PreparationStateRequest",
+        payload: &[26],
+        proof_material: NO_PROOF,
+        encoded_hex: "00010001001a0000000000000000000000011a00000000",
+    },
+    GoldenVector {
+        message: "PreparationStateResponse",
+        payload: &[27],
+        proof_material: NO_PROOF,
+        encoded_hex: "00010001001b0000000000000000000000011b00000000",
+    },
 ];
+
+impl GoldenVector {
+    /// Interface revision frozen into this literal vector.
+    #[must_use]
+    pub const fn version(self) -> Version {
+        if self.payload[0] >= 26 {
+            Version::V1_1
+        } else {
+            Version::V1_0
+        }
+    }
+}
 
 /// Returns a literal canonical vector for every v1 message tag.
 #[must_use]

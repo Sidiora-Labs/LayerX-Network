@@ -60,6 +60,16 @@ typedef struct daemon_apply_state {
     uint64_t expected_sequence;
 } daemon_apply_state;
 
+typedef struct preparation_fixture {
+    lxp_state_store state;
+    lxp_state_journal journal;
+    lxp_kernel kernel;
+    lxp_identity_store identities;
+    lxp_daemon_receipt_authority_store authority;
+    lxp_daemon_protocol_owner owner;
+    bool initialized;
+} preparation_fixture;
+
 static volatile sig_atomic_t running = 1;
 
 static void stop_running(int signal_number)
@@ -148,7 +158,7 @@ static int send_envelope(
     if (frame == NULL) return 1;
     store_u32(frame, (uint32_t)body_length);
     store_u16(frame + cursor, 1U); cursor += 2U;
-    store_u16(frame + cursor, 0U); cursor += 2U;
+    store_u16(frame + cursor, 1U); cursor += 2U;
     store_u16(frame + cursor, message_tag); cursor += 2U;
     store_u64(frame + cursor, correlation_id); cursor += 8U;
     store_u32(frame + cursor, (uint32_t)payload_length); cursor += 4U;
@@ -219,6 +229,8 @@ static int write_genesis(const char *path)
     lxp_arena arena;
     lxp_byte_span preimage;
     lxp_byte_span encoded;
+    lx_programs_metering_schedule metering;
+    lx_programs_fee_genesis_parameters fee_genesis;
     FILE *file;
     if (lxp_arena_init(&arena, arena_storage, sizeof(arena_storage)) != LXP_OK)
         return 1;
@@ -238,7 +250,38 @@ static int write_genesis(const char *path)
     manifest.accounts[0].account_id[0] = 1U;
     manifest.accounts[0].asset_id[0] = 1U;
     manifest.accounts[0].balance = (lxp_u128){0U, 1000U};
+    (void)memset(&metering, 0, sizeof(metering));
+    metering.version = 1U;
+    metering.coefficients[0] = 1U;
+    metering.coefficients[1] = 1U;
+    metering.coefficients[2] = 1U;
+    metering.coefficients[3] = 1U;
+    metering.coefficients[4] = 1U;
+    metering.coefficients[5] = 8U;
+    metering.coefficients[6] = 8U;
+    metering.coefficients[7] = 64U;
+    metering.coefficients[8] = 8U;
+    metering.activation_batch = 1U;
+    metering.authority_kind = LX_PROGRAMS_METERING_AUTHORITY_GENESIS;
+    (void)memset(&fee_genesis, 0, sizeof(fee_genesis));
+    fee_genesis.schedule = (lx_programs_fee_schedule){
+        1U, 1U, 1U, 2U, 4U, 1U, 1U, 100U
+    };
+    fee_genesis.occupancy_asset_id[0] = 1U;
+    fee_genesis.target_occupancy_byte_batches = 100U;
+    fee_genesis.response_denominator = 1U;
+    fee_genesis.maximum_change_numerator = 1U;
+    fee_genesis.maximum_change_denominator = 10U;
+    fee_genesis.minimum_fee_units_per_occupancy_byte_batch = 1U;
+    fee_genesis.maximum_fee_units_per_occupancy_byte_batch = 1000U;
     if (public_key_for(private_key, manifest.signer_public_key) != 0 ||
+        lxp_hash_payload(
+            manifest.signer_public_key, 32U,
+            metering.authority_digest) != LXP_OK ||
+        lxp_programs_metering_genesis_append(
+            &manifest, &metering) != LXP_OK ||
+        lxp_programs_fee_genesis_append(
+            &manifest, &fee_genesis) != LXP_OK ||
         lxp_genesis_state_root(
             &manifest, &arena, manifest.genesis_state_root) != LXP_OK ||
         genesis_checkpoint_id(
@@ -266,20 +309,43 @@ static int load_genesis(
     FILE *file = fopen(path, "rb");
     lxp_genesis_registration registration;
     bool enabled = false;
-    if (file == NULL || fseek(file, 0L, SEEK_END) != 0 ||
+    if (file == NULL) {
+        (void)fputs("boundary genesis open failed\n", stderr);
+        return 1;
+    }
+    if (fseek(file, 0L, SEEK_END) != 0 ||
         (size = ftell(file)) <= 0 || fseek(file, 0L, SEEK_SET) != 0) {
         if (file != NULL) (void)fclose(file);
+        (void)fputs("boundary genesis sizing failed\n", stderr);
         return 1;
     }
     bytes = malloc((size_t)size);
-    if (bytes == NULL || fread(bytes, 1U, (size_t)size, file) != (size_t)size ||
-        fclose(file) != 0 ||
-        lxp_genesis_parse(
-            bytes, (size_t)size, LXP_GENESIS_INPUT_MANIFEST,
-            manifest) != LXP_OK ||
-        lxp_genesis_verify_signature(manifest, arena) != LXP_OK ||
-        lxp_arena_reset(arena, 0U) != LXP_OK) {
+    if (bytes == NULL) {
+        (void)fclose(file);
+        (void)fputs("boundary genesis allocation failed\n", stderr);
+        return 1;
+    }
+    if (fread(bytes, 1U, (size_t)size, file) != (size_t)size ||
+        fclose(file) != 0) {
         free(bytes);
+        (void)fputs("boundary genesis read failed\n", stderr);
+        return 1;
+    }
+    if (lxp_genesis_parse(
+            bytes, (size_t)size, LXP_GENESIS_INPUT_MANIFEST,
+            manifest) != LXP_OK) {
+        free(bytes);
+        (void)fputs("boundary genesis parse failed\n", stderr);
+        return 1;
+    }
+    if (lxp_genesis_verify_signature(manifest, arena) != LXP_OK) {
+        free(bytes);
+        (void)fputs("boundary genesis signature failed\n", stderr);
+        return 1;
+    }
+    if (lxp_arena_reset(arena, 0U) != LXP_OK) {
+        free(bytes);
+        (void)fputs("boundary genesis verification arena reset failed\n", stderr);
         return 1;
     }
     free(bytes);
@@ -290,9 +356,13 @@ static int load_genesis(
     (void)memcpy(registration.state_root,
                  manifest->genesis_state_root, 32U);
     registration.finalised = true;
-    return lxp_genesis_accept(
-        manifest, &registration, true, arena, &enabled) == LXP_OK && enabled
-        ? 0 : 1;
+    if (lxp_genesis_accept(
+            manifest, &registration, true, arena, &enabled) != LXP_OK ||
+        !enabled) {
+        (void)fputs("boundary genesis acceptance failed\n", stderr);
+        return 1;
+    }
+    return 0;
 }
 
 static lxp_result apply_activity(
@@ -437,15 +507,15 @@ static size_t node_info_payload(
 {
     static const char *capabilities[] = {
         "account_read", "availability_fetch", "batch_header", "checkpoint",
-        "event_subscribe", "history_range", "node_info", "proof_bundle",
-        "receipt_lookup", "submit"
+        "event_subscribe", "history_range", "node_info",
+        "preparation_state", "proof_bundle", "receipt_lookup", "submit"
     };
     size_t count = mode == NODE_DEGRADED ? 1U :
         sizeof(capabilities) / sizeof(capabilities[0]);
     size_t cursor = 0U;
     size_t index;
     store_u16(output + cursor, 1U); cursor += 2U;
-    store_u16(output + cursor, 0U); cursor += 2U;
+    store_u16(output + cursor, 1U); cursor += 2U;
     store_u16(output + cursor, 1U); cursor += 2U;
     store_u32(output + cursor, 77U); cursor += 4U;
     output[cursor++] = 1U;
@@ -471,7 +541,8 @@ static int send_error(int descriptor, uint64_t correlation_id, uint8_t code)
 
 static int handle_request(
     int descriptor, const uint8_t *request, size_t length,
-    node_fixture *fixture, lxp_daemon *daemon, node_mode mode)
+    node_fixture *fixture, preparation_fixture *preparation,
+    lxp_daemon *daemon, node_mode mode)
 {
     uint16_t major;
     uint16_t tag;
@@ -565,6 +636,18 @@ static int handle_request(
         store_u64(end, mode == NODE_BEHIND ? 5U : 10U);
         return send_envelope(
             descriptor, 24U, correlation_id, end, 8U, NULL, 0U);
+    case 26U: {
+        uint8_t snapshot[4096];
+        size_t snapshot_length = 0U;
+        lxp_result status = lxp_daemon_lni_preparation_state(
+            &preparation->owner, payload, payload_length,
+            snapshot, sizeof(snapshot), &snapshot_length);
+        if (status != LXP_OK)
+            return send_error(descriptor, correlation_id, 4U);
+        return send_envelope(
+            descriptor, 27U, correlation_id,
+            snapshot, snapshot_length, NULL, 0U);
+    }
     default:
         return send_error(descriptor, correlation_id, 1U);
     }
@@ -572,7 +655,7 @@ static int handle_request(
 
 static int serve_connection(
     int descriptor, node_fixture *fixture,
-    lxp_daemon *daemon, node_mode mode)
+    preparation_fixture *preparation, lxp_daemon *daemon, node_mode mode)
 {
     uint8_t prefix[4];
     while (running) {
@@ -588,7 +671,7 @@ static int serve_connection(
         }
         if (handle_request(
                 descriptor, frame, length,
-                fixture, daemon, mode) != 0) {
+                fixture, preparation, daemon, mode) != 0) {
             free(frame);
             return 1;
         }
@@ -603,6 +686,7 @@ static int serve_node(
     static uint8_t arena_storage[ARENA_BYTES];
     static lxp_genesis_manifest genesis;
     static node_fixture fixture;
+    static preparation_fixture preparation;
     static lxp_daemon daemon;
     lxp_daemon_configuration configuration;
     daemon_apply_state apply_state = {10U};
@@ -610,11 +694,84 @@ static int serve_node(
     struct sockaddr_un address;
     int listener;
     int result = 1;
-    if (strlen(socket_path) >= sizeof(address.sun_path) ||
-        lxp_arena_init(&arena, arena_storage, sizeof(arena_storage)) != LXP_OK ||
-        load_genesis(genesis_path, &genesis, &arena) != 0 ||
-        lxp_arena_reset(&arena, 0U) != LXP_OK ||
-        fixture_init(&fixture, &arena) != 0) return 1;
+    if (strlen(socket_path) >= sizeof(address.sun_path)) {
+        (void)fputs("boundary node socket path is too long\n", stderr);
+        return 1;
+    }
+    if (lxp_arena_init(&arena, arena_storage, sizeof(arena_storage)) != LXP_OK) {
+        (void)fputs("boundary node arena initialization failed\n", stderr);
+        return 1;
+    }
+    if (load_genesis(genesis_path, &genesis, &arena) != 0) {
+        (void)fputs("boundary node genesis load failed\n", stderr);
+        return 1;
+    }
+    if (lxp_arena_reset(&arena, 0U) != LXP_OK) {
+        (void)fputs("boundary node arena reset failed\n", stderr);
+        return 1;
+    }
+    if (fixture_init(&fixture, &arena) != 0) {
+        (void)fputs("boundary node protocol fixture failed\n", stderr);
+        return 1;
+    }
+    (void)memset(&preparation, 0, sizeof(preparation));
+    {
+        static const uint8_t actor[] =
+            "did:layerx:production-boundary";
+        static uint64_t parameters = 1U;
+        lxp_identity *identity = NULL;
+        if (lxp_state_store_init(&preparation.state, 11U) != LXP_OK) {
+            (void)fputs("boundary preparation state initialization failed\n", stderr);
+            return 1;
+        }
+        if (lxp_kernel_create(
+                &preparation.kernel, &preparation.state,
+                &preparation.journal, &parameters, 3U) != LXP_OK) {
+            (void)fputs("boundary preparation kernel creation failed\n", stderr);
+            return 1;
+        }
+        if (lxp_kernel_register_module(
+                &preparation.kernel,
+                programs_module_registration_v3()) != LXP_OK) {
+            (void)fputs("boundary preparation module registration failed\n", stderr);
+            return 1;
+        }
+        if (lxp_state_root(
+                &preparation.kernel,
+                preparation.kernel.current_state_root) != LXP_OK) {
+            (void)fputs("boundary preparation state root failed\n", stderr);
+            return 1;
+        }
+        if (lxp_identity_register(
+                &preparation.identities, actor, sizeof(actor) - 1U,
+                (const uint8_t[32]){7U}, &identity) != LXP_OK ||
+            identity == NULL) {
+            (void)fputs("boundary preparation identity registration failed\n", stderr);
+            return 1;
+        }
+        if (pthread_mutex_init(&preparation.owner.mutex, NULL) != 0) {
+            (void)fputs("boundary preparation owner mutex failed\n", stderr);
+            return 1;
+        }
+        identity->next_sequence = 5U;
+        preparation.owner.kernel = &preparation.kernel;
+        preparation.owner.identities = &preparation.identities;
+        preparation.owner.receipt_authority = &preparation.authority;
+        preparation.owner.network_id = 77U;
+        preparation.authority.record_count = 1U;
+        preparation.authority.last_global_sequence = 10U;
+        preparation.authority.last_sealed_timestamp =
+            UINT64_C(1700000001000);
+        preparation.owner.latest_sealed_timestamp =
+            preparation.authority.last_sealed_timestamp;
+        preparation.owner.feed_store.scanned_through_sequence = 10U;
+        preparation.owner.feed_store.head_timestamp =
+            preparation.owner.latest_sealed_timestamp;
+        (void)memcpy(preparation.owner.feed_store.head_state_root,
+                     preparation.kernel.current_state_root, 32U);
+        preparation.owner.attached = true;
+        preparation.initialized = true;
+    }
     (void)memset(&configuration, 0, sizeof(configuration));
     configuration.role = LXP_DAEMON_SEQUENCER;
     configuration.network_id = genesis.network_id;
@@ -622,7 +779,10 @@ static int serve_node(
     configuration.serial_execution = true;
     if (lxp_daemon_start(
             &daemon, &configuration,
-            apply_activity, &apply_state) != LXP_OK) return 1;
+            apply_activity, &apply_state) != LXP_OK) {
+        (void)fputs("boundary daemon start failed\n", stderr);
+        return 1;
+    }
     listener = socket(AF_UNIX, SOCK_STREAM, 0);
     if (listener < 0) goto shutdown;
     (void)memset(&address, 0, sizeof(address));
@@ -638,7 +798,7 @@ static int serve_node(
         int connection = accept(listener, NULL, NULL);
         if (connection >= 0) {
             if (serve_connection(
-                    connection, &fixture,
+                    connection, &fixture, &preparation,
                     &daemon, mode) != 0) result = 1;
             (void)close(connection);
         } else if (errno != EINTR) {
@@ -651,6 +811,12 @@ close_listener:
     (void)unlink(socket_path);
 shutdown:
     if (lxp_daemon_shutdown(&daemon) != LXP_OK) result = 1;
+    if (preparation.initialized) {
+        if (pthread_mutex_destroy(&preparation.owner.mutex) != 0 ||
+            lxp_state_store_destroy(&preparation.state) != LXP_OK)
+            result = 1;
+        preparation.initialized = false;
+    }
     return result;
 }
 

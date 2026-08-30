@@ -24,7 +24,9 @@ def rust_u16(source, name):
 def table(source, name):
     start = source.index(f"pub const {name}:")
     body = source[start:source.index("\n];", start)]
-    calls = re.findall(r'host\("([^"]+)", "([^"]+)"\)', body)
+    calls = re.findall(
+        r'host\s*\(\s*"([^"]+)"\s*,\s*"([^"]+)"\s*,?\s*\)', body, re.DOTALL
+    )
     return calls or re.findall(r'HostFunction\s*\{\s*name:\s*"([^"]+)",\s*signature:\s*"([^"]+)"', body, re.DOTALL)
 
 def manifest_surface(encoded):

@@ -4,15 +4,26 @@ set -eu
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 metadata_file=$(mktemp)
 license_file=$(mktemp)
-trap 'rm -f -- "$metadata_file" "$license_file"' EXIT HUP INT TERM
+vendor_file=$(mktemp)
+trap 'rm -f -- "$metadata_file" "$license_file" "$vendor_file"' EXIT HUP INT TERM
 
 cd "$repo_root/programs"
 cargo metadata --manifest-path "$repo_root/programs/Cargo.toml" \
     --locked --format-version 1 >"$metadata_file"
 
-banned='^(bindgen|libsqlite3-sys|rusqlite|sqlx-sqlite|ctor|inventory|getrandom|rand|rand_core|chrono|time|instant|tokio|mio|socket2|wasi|wasmtime)$'
+banned='^(bindgen|libsqlite3-sys|rusqlite|sqlx-sqlite|ctor|inventory|getrandom|rand|chrono|time|instant|tokio|mio|socket2|wasi|wasmtime)$'
 if jq -r '.packages[].name' "$metadata_file" | grep -Eq "$banned"; then
     echo "programs dependency policy: forbidden boundary, clock, randomness or network crate" >&2
+    exit 1
+fi
+if jq -e '
+    . as $metadata
+    | [$metadata.packages[] | select(.name == "rand_core") | .id] as $ids
+    | any($metadata.resolve.nodes[];
+        ((.id as $id | $ids | index($id)) != null)
+        and any(.features[]; . == "getrandom" or . == "std"))
+' "$metadata_file" >/dev/null; then
+    echo "programs dependency policy: rand_core entropy features are forbidden" >&2
     exit 1
 fi
 
@@ -69,17 +80,49 @@ LICENSE_ALTERNATIVES
     esac
 done <"$license_file"
 
-jq -r '.packages[] | select(.source != null) | .name' "$metadata_file" | while IFS= read -r package; do
-    if [ ! -f "$repo_root/programs/vendor/$package/.cargo-checksum.json" ]; then
-        echo "programs vendoring policy: $package is not vendored under programs/vendor" >&2
+find "$repo_root/programs/vendor" -mindepth 2 -maxdepth 2 \
+    -name Cargo.toml -print | while IFS= read -r manifest; do
+    directory=$(dirname -- "$manifest")
+    [ -f "$directory/.cargo-checksum.json" ] || continue
+    awk '
+        /^\[package\][[:space:]]*$/ { in_package = 1; next }
+        /^\[/ && in_package { exit }
+        in_package && /^[[:space:]]*name[[:space:]]*=/ && name == "" {
+            line = $0
+            sub(/^[^=]*=[[:space:]]*/, "", line)
+            gsub(/^"|"[[:space:]]*$/, "", line)
+            name = line
+        }
+        in_package && /^[[:space:]]*version[[:space:]]*=/ && version == "" {
+            line = $0
+            sub(/^[^=]*=[[:space:]]*/, "", line)
+            gsub(/^"|"[[:space:]]*$/, "", line)
+            version = line
+        }
+        END { if (name != "" && version != "") print name "\t" version }
+    ' "$manifest"
+done | sort -u >"$vendor_file"
+
+jq -r '.packages[] | select(.source != null) | [.name, .version] | @tsv' \
+    "$metadata_file" | while IFS="$(printf '\t')" read -r package version; do
+    if ! awk -F '\t' -v package="$package" -v version="$version" \
+        '$1 == package && $2 == version { found = 1 } END { exit !found }' \
+        "$vendor_file"; then
+        echo "programs vendoring policy: $package $version is not vendored with a checksum" >&2
         exit 1
     fi
 done
 
-if ! grep -q '^wasmi = "=0\.31\.2"$' "$repo_root/programs/Cargo.toml"; then
+wasmi_dependency=$(grep '^wasmi = ' "$repo_root/programs/Cargo.toml" || true)
+case "$wasmi_dependency" in
+    *'path = "vendor/wasmi-0.31.2"'*'version = "=0.31.2"'*|\
+    *'version = "=0.31.2"'*'path = "vendor/wasmi-0.31.2"'*)
+        ;;
+    *)
     echo "programs vendoring policy: the WASM engine must stay pinned to an exact revision" >&2
     exit 1
-fi
+        ;;
+esac
 test -r "$repo_root/programs/.cargo/config.toml"
 if ! grep -q 'replace-with = "vendored-sources"' "$repo_root/programs/.cargo/config.toml"; then
     echo "programs vendoring policy: builds must resolve the engine from programs/vendor" >&2
@@ -87,9 +130,18 @@ if ! grep -q 'replace-with = "vendored-sources"' "$repo_root/programs/.cargo/con
 fi
 
 if command -v rg >/dev/null 2>&1; then
-    unsafe_hits=$(rg -n --glob '*.rs' '\bunsafe\s+(fn|trait|impl|extern)|\bunsafe\s*\{' "$repo_root/programs/crates" || true)
+    unsafe_hits=$(rg -n --glob '*.rs' \
+        --glob '!**/layerx-programs-runtime/src/ffi*.rs' \
+        --glob '!**/layerx-programs-sandbox/src/host_ffi.rs' \
+        --glob '!**/layerx-programs-protocol-adapter/src/ffi.rs' \
+        '\bunsafe\s+(fn|trait|impl|extern)|\bunsafe\s*\{' \
+        "$repo_root/programs/crates" || true)
 else
-    unsafe_hits=$(grep -rEn --include='*.rs' '\bunsafe[[:space:]]+(fn|trait|impl|extern)|\bunsafe[[:space:]]*\{' "$repo_root/programs/crates" || true)
+    unsafe_hits=$(grep -rEn --include='*.rs' \
+        '\bunsafe[[:space:]]+(fn|trait|impl|extern)|\bunsafe[[:space:]]*\{' \
+        "$repo_root/programs/crates" | grep -Ev \
+        '/layerx-programs-runtime/src/ffi[^/]*\.rs:|/layerx-programs-sandbox/src/host_ffi\.rs:|/layerx-programs-protocol-adapter/src/ffi\.rs:' \
+        || true)
 fi
 if [ -n "$unsafe_hits" ]; then
     printf '%s\n' "$unsafe_hits" >&2

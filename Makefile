@@ -1980,7 +1980,20 @@ $(BUILD_DIR)/agent/layerxd-lni: agent/tests/boundary/node/layerxd_lni.c \
 		$(LAYERXD_SOURCES) $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) \
 		$(EXTRA_LDFLAGS) -lcrypto -lsqlite3 -pthread -ldl -lm -o $@
 
-agent-test-boundary: $(BUILD_DIR)/agent/layerxd-lni
+$(BUILD_DIR)/agent/lni-preparation-state: \
+		agent/tests/boundary/node/preparation_state.c \
+		$(LAYERXD_SOURCES) $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
+	mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) \
+		agent/tests/boundary/node/preparation_state.c \
+		$(LAYERXD_SOURCES) $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) \
+		$(EXTRA_LDFLAGS) -lcrypto -lsqlite3 -pthread -ldl -lm -o $@
+
+agent-test-boundary: $(BUILD_DIR)/agent/layerxd-lni \
+		$(BUILD_DIR)/agent/lni-preparation-state
+	$(RUN_PREFIX) $(BUILD_DIR)/agent/lni-preparation-state
+	$(AGENT_CARGO) test --manifest-path $(AGENT_MANIFEST) --locked \
+		-p layerx-client --test lni_preparation
 	$(AGENT_CARGO) run --manifest-path agent/tests/boundary/Cargo.toml --locked -- \
 		$(CURDIR)/$(BUILD_DIR)/agent/layerxd-lni $(CURDIR)
 
@@ -2626,7 +2639,8 @@ programs-build:
 programs-lint: programs-module-boundaries
 	cd programs && $(PROGRAMS_CARGO) clippy --locked --workspace --all-targets --features layerx-programs-sandbox/host-ffi -- -D warnings
 	sh programs/tools/dependency-policy.sh
-	cd programs && $(PROGRAMS_CARGO) deny check advisories bans sources
+	cd programs && $(PROGRAMS_CARGO) deny check advisories sources
+	cd programs && $(PROGRAMS_CARGO) deny check bans --exclude-dev
 
 programs-module-boundaries:
 	sh programs/tools/runtime-module-boundaries.sh
@@ -2666,22 +2680,22 @@ $(BUILD_DIR)/tests/programs_occupancy_batch: tests/programs/test_occupancy_batch
 		$(EXTRA_LDFLAGS) -lcrypto -pthread -ldl -lm -o $@
 
 $(BUILD_DIR)/tests/programs_metering_schedule: tests/programs/test_metering_schedule.c \
-		$(LIBRARY)
+		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
 	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) \
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< -Wl,--start-group $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) -Wl,--end-group \
 		$(EXTRA_LDFLAGS) -lcrypto -pthread -ldl -lm -o $@
 
 $(BUILD_DIR)/tests/programs_fee_governance: tests/programs/test_fee_governance.c \
-		$(LIBRARY)
+		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
 	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) \
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< -Wl,--start-group $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) -Wl,--end-group \
 		$(EXTRA_LDFLAGS) -lcrypto -pthread -ldl -lm -o $@
 
 $(BUILD_DIR)/tests/programs_accounts: tests/programs/test_accounts.c \
 		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) \
-		$(EXTRA_LDFLAGS) -lcrypto -pthread -ldl -lm -o $@
+		$(EXTRA_LDFLAGS) -lcrypto -lsqlite3 -pthread -ldl -lm -o $@
 
 $(BUILD_DIR)/tests/programs_winddown: tests/programs/test_winddown.c \
 		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build

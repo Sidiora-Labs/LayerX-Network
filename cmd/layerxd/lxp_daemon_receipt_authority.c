@@ -248,6 +248,7 @@ static lxp_result replay_authority(void *context,
         ++store->record_count;
         store->last_global_sequence = evidence.global_sequence;
         store->last_batch_number = batch.batch_number;
+        store->last_sealed_timestamp = batch.timestamp_ms;
     }
     return status;
 }
@@ -396,6 +397,7 @@ lxp_result lxp_daemon_receipt_authority_append(
         ++store->record_count;
         store->last_global_sequence = receipt.global_sequence;
         store->last_batch_number = header.batch_number;
+        store->last_sealed_timestamp = header.timestamp_ms;
     }
     free(body);
     return status;
@@ -510,8 +512,7 @@ lxp_result lxp_daemon_receipt_authority_scan(
          lxp_ct_memcmp(receipt.batch_id, evidence->batch_id, 32U) != 0))
         status = LXP_ERR_LOG_CORRUPT;
     if (status != LXP_OK) return status;
-    if ((uint64_t)record.body_length > UINT64_MAX - LXP_LOG_HEADER_BYTES ||
-        *record_offset > UINT64_MAX - LXP_LOG_HEADER_BYTES -
+    if (*record_offset > UINT64_MAX - LXP_LOG_HEADER_BYTES -
                              (uint64_t)record.body_length)
         return LXP_ERR_OVERFLOW;
     *record_offset += LXP_LOG_HEADER_BYTES + record.body_length;

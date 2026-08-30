@@ -23,7 +23,7 @@
 
 enum {
     LNI_VERSION_MAJOR = 1,
-    LNI_VERSION_MINOR = 0,
+    LNI_VERSION_MINOR = 1,
     LNI_NODE_INFO_REQUEST = 1,
     LNI_NODE_INFO_RESPONSE = 2,
     LNI_SUBMIT_REQUEST = 3,
@@ -31,8 +31,11 @@ enum {
     LNI_RECEIPT_LOOKUP_REQUEST = 5,
     LNI_RECEIPT_LOOKUP_RESPONSE = 6,
     LNI_ERROR_RESPONSE = 25,
+    LNI_PREPARATION_STATE_REQUEST = 26,
+    LNI_PREPARATION_STATE_RESPONSE = 27,
     LNI_ENVELOPE_FIXED_BYTES = 22,
     LNI_NODE_INFO_FIXED_BYTES = 93,
+    LNI_PREPARATION_STATE_MAX_BYTES = 4096,
     LNI_BACKLOG = 16
 };
 
@@ -462,9 +465,15 @@ static lxp_result send_node_info(lxp_daemon_lni_server *server,
                                  int descriptor, uint64_t correlation_id,
                                  int64_t deadline)
 {
-    static const char *capabilities[] = {
-        "node_info", "receipt_lookup", "submit"
+    static const char *sequencer_capabilities[] = {
+        "node_info", "preparation_state", "receipt_lookup", "submit"
     };
+    static const char *reader_capabilities[] = {
+        "node_info", "receipt_lookup"
+    };
+    const char *const *capabilities =
+        server->daemon->config.role == LXP_DAEMON_SEQUENCER ?
+            sequencer_capabilities : reader_capabilities;
     uint8_t payload[256];
     uint8_t checkpoint[32] = {0};
     uint64_t head;
@@ -472,7 +481,10 @@ static lxp_result send_node_info(lxp_daemon_lni_server *server,
     size_t cursor = 0U;
     size_t index;
     size_t capability_count = server->daemon->config.role ==
-        LXP_DAEMON_SEQUENCER ? 3U : 2U;
+        LXP_DAEMON_SEQUENCER ?
+            sizeof(sequencer_capabilities) /
+                sizeof(sequencer_capabilities[0]) :
+            sizeof(reader_capabilities) / sizeof(reader_capabilities[0]);
     lxp_result status = LXP_OK;
     if (pthread_mutex_lock(&server->daemon->mutex) != 0) return LXP_ERR_IO;
     head = server->daemon->next_sequence == 0U ? 0U :
@@ -633,6 +645,221 @@ static lxp_result send_receipt(lxp_daemon_lni_server *server, int descriptor,
     return status;
 }
 
+static bool registration_active(
+    const lxp_module_registration *registration, uint64_t epoch)
+{
+    return registration->enabled && epoch >= registration->enabled_epoch &&
+        epoch < registration->disabled_epoch;
+}
+
+static lxp_result encode_active_registrations(
+    const lxp_kernel *kernel, uint8_t *payload, size_t capacity,
+    size_t *cursor)
+{
+    const lxp_module_registration *active[LXP_MODULE_RESERVED_COUNT] = {0};
+    size_t index;
+    uint16_t module_id;
+    uint16_t count = 0U;
+    if (kernel == NULL || payload == NULL || cursor == NULL)
+        return LXP_ERR_NON_CANONICAL;
+    for (index = 0U; index < kernel->module_count; ++index) {
+        const lxp_module_registration *registration = &kernel->modules[index];
+        size_t activity_index;
+        if (!registration_active(registration, kernel->epoch)) continue;
+        if (registration->module_id == 0U ||
+            registration->module_id > LXP_MODULE_RESERVED_COUNT ||
+            registration->activity_type_count == 0U ||
+            registration->activity_type_count > LXP_MODULE_MAX_ACTIVITY_TYPES ||
+            active[registration->module_id - 1U] != NULL)
+            return LXP_ERR_UNKNOWN_MODULE;
+        for (activity_index = 0U;
+             activity_index < registration->activity_type_count;
+             ++activity_index) {
+            uint32_t activity_type =
+                registration->activity_types[activity_index];
+            if ((activity_type >> 16U) != registration->module_id ||
+                (activity_type & UINT32_C(0xffff)) == 0U ||
+                (activity_index != 0U &&
+                 registration->activity_types[activity_index - 1U] >=
+                     activity_type))
+                return LXP_ERR_UNKNOWN_ACTIVITY;
+        }
+        active[registration->module_id - 1U] = registration;
+        ++count;
+    }
+    if (count == 0U || *cursor > capacity - 2U)
+        return count == 0U ? LXP_ERR_MODULE_DISABLED : LXP_ERR_LENGTH_LIMIT;
+    store_u16(payload + *cursor, count);
+    *cursor += 2U;
+    for (module_id = 1U; module_id <= LXP_MODULE_RESERVED_COUNT;
+         ++module_id) {
+        const lxp_module_registration *registration = active[module_id - 1U];
+        size_t activity_index;
+        size_t required;
+        if (registration == NULL) continue;
+        required = 4U + registration->activity_type_count * 4U;
+        if (*cursor > capacity || required > capacity - *cursor)
+            return LXP_ERR_LENGTH_LIMIT;
+        store_u16(payload + *cursor, module_id);
+        *cursor += 2U;
+        store_u16(payload + *cursor,
+                  (uint16_t)registration->activity_type_count);
+        *cursor += 2U;
+        for (activity_index = 0U;
+             activity_index < registration->activity_type_count;
+             ++activity_index) {
+            store_u32(payload + *cursor,
+                      registration->activity_types[activity_index]);
+            *cursor += 4U;
+        }
+    }
+    return LXP_OK;
+}
+
+static lxp_result preparation_snapshot_valid(
+    const lxp_daemon_protocol_owner *owner)
+{
+    const lxp_kernel *kernel;
+    if (owner == NULL || !owner->attached || owner->kernel == NULL ||
+        owner->kernel->state == NULL || owner->identities == NULL ||
+        owner->receipt_authority == NULL ||
+        owner->network_id == 0U ||
+        owner->latest_sealed_timestamp == 0U)
+        return LXP_ERR_MODULE_DISABLED;
+    kernel = owner->kernel;
+    if (kernel->publication_poisoned || kernel->batch_publication_pending ||
+        kernel->state->next_sequence == 0U || kernel->epoch == 0U ||
+        kernel->module_count == 0U ||
+        kernel->module_count > LXP_MODULE_RESERVED_COUNT ||
+        lxp_ct_is_zero(kernel->current_state_root, 32U))
+        return LXP_ERR_MODULE_DISABLED;
+    if (owner->receipt_authority->record_count == 0U) {
+        if (kernel->state->next_sequence != 1U)
+            return LXP_ERR_PROJECTION_STALE;
+    } else if (owner->receipt_authority->last_global_sequence == UINT64_MAX ||
+               owner->receipt_authority->last_global_sequence + 1U !=
+                   kernel->state->next_sequence ||
+               owner->receipt_authority->last_sealed_timestamp !=
+                   owner->latest_sealed_timestamp) {
+        return LXP_ERR_PROJECTION_STALE;
+    }
+    if ((owner->feed_store.scanned_through_sequence == 0U &&
+         (owner->feed_store.baseline_next_sequence !=
+              kernel->state->next_sequence ||
+          lxp_ct_memcmp(owner->feed_store.baseline_state_root,
+                        kernel->current_state_root, 32U) != 0)) ||
+        (owner->feed_store.scanned_through_sequence != 0U &&
+         (owner->feed_store.scanned_through_sequence == UINT64_MAX ||
+          owner->feed_store.scanned_through_sequence + 1U !=
+              kernel->state->next_sequence ||
+          owner->feed_store.head_timestamp !=
+              owner->latest_sealed_timestamp ||
+          lxp_ct_memcmp(owner->feed_store.head_state_root,
+                        kernel->current_state_root, 32U) != 0)))
+        return LXP_ERR_PROJECTION_STALE;
+    return LXP_OK;
+}
+
+lxp_result lxp_daemon_lni_preparation_state(
+    lxp_daemon_protocol_owner *owner, const uint8_t *request,
+    size_t request_length,
+    uint8_t *response, size_t response_capacity,
+    size_t *response_length)
+{
+    const uint8_t *actor;
+    size_t bounded_capacity;
+    size_t actor_length;
+    size_t cursor = 0U;
+    lxp_identity *identity = NULL;
+    lxp_result status;
+    if (response_length == NULL) return LXP_ERR_MALFORMED_ENVELOPE;
+    *response_length = 0U;
+    if (owner == NULL || request == NULL || response == NULL ||
+        request_length < 4U || load_u16(request) != 1U)
+        return LXP_ERR_MALFORMED_ENVELOPE;
+    bounded_capacity = response_capacity < LNI_PREPARATION_STATE_MAX_BYTES ?
+        response_capacity : LNI_PREPARATION_STATE_MAX_BYTES;
+    actor_length = load_u16(request + 2U);
+    if (actor_length == 0U || actor_length > LXP_MAX_DID_LENGTH ||
+        request_length != 4U + actor_length)
+        return LXP_ERR_MALFORMED_ENVELOPE;
+    if (bounded_capacity < 4U ||
+        actor_length > bounded_capacity - 4U ||
+        bounded_capacity - 4U - actor_length < 78U)
+        return LXP_ERR_LENGTH_LIMIT;
+    actor = request + 4U;
+    if (pthread_mutex_lock(&owner->mutex) != 0) return LXP_ERR_IO;
+    status = preparation_snapshot_valid(owner);
+    if (status == LXP_OK)
+        status = lxp_identity_resolve(owner->identities, actor,
+                                      actor_length, &identity);
+    if (status == LXP_OK && identity->status != LXP_IDENTITY_ACTIVE)
+        status = LXP_ERR_UNKNOWN_DID;
+    if (status == LXP_OK) {
+        const lxp_kernel *kernel = owner->kernel;
+        store_u16(response + cursor, 1U); cursor += 2U;
+        store_u16(response + cursor, (uint16_t)actor_length); cursor += 2U;
+        (void)memcpy(response + cursor, actor, actor_length);
+        cursor += actor_length;
+        store_u32(response + cursor, owner->network_id);
+        cursor += 4U;
+        store_u64(response + cursor, identity->next_sequence); cursor += 8U;
+        store_u64(response + cursor,
+                  owner->latest_sealed_timestamp); cursor += 8U;
+        store_u64(response + cursor, kernel->state->next_sequence - 1U);
+        cursor += 8U;
+        (void)memcpy(response + cursor, kernel->current_state_root, 32U);
+        cursor += 32U;
+        store_u64(response + cursor, kernel->epoch); cursor += 8U;
+        status = encode_active_registrations(
+            kernel, response, bounded_capacity, &cursor);
+    }
+    if (pthread_mutex_unlock(&owner->mutex) != 0 && status == LXP_OK)
+        status = LXP_FATAL_INVARIANT;
+    if (status == LXP_OK) *response_length = cursor;
+    return status;
+}
+
+static lxp_result send_preparation_state(
+    lxp_daemon_lni_server *server, int descriptor,
+    const lni_envelope *request, int64_t deadline)
+{
+    uint8_t payload[LNI_PREPARATION_STATE_MAX_BYTES];
+    size_t payload_length = 0U;
+    lxp_result status;
+    if (request->minor < LNI_VERSION_MINOR)
+        return send_refusal(descriptor, server->frame_bytes,
+                            request->correlation_id, 3U,
+                            LXP_ERR_VERSION_UNSUPPORTED, deadline);
+    if (request->correlation_id == 0U || request->proof_length != 0U ||
+        server->daemon->config.role != LXP_DAEMON_SEQUENCER)
+        return send_refusal(descriptor, server->frame_bytes,
+                            request->correlation_id,
+                            request->correlation_id == 0U ||
+                            request->proof_length != 0U ? 1U : 3U,
+                            request->correlation_id == 0U ||
+                            request->proof_length != 0U ?
+                                LXP_ERR_MALFORMED_ENVELOPE :
+                                LXP_ERR_MODULE_DISABLED,
+                            deadline);
+    status = lxp_daemon_lni_preparation_state(
+        server->owner, request->payload, request->payload_length,
+        payload, sizeof(payload), &payload_length);
+    if (status != LXP_OK) {
+        lxp_result public_status =
+            status == LXP_ERR_IO || status == LXP_FATAL_INVARIANT ?
+                LXP_ERR_MODULE_DISABLED : status;
+        return send_refusal(descriptor, server->frame_bytes,
+                            request->correlation_id,
+                            status == LXP_ERR_MALFORMED_ENVELOPE ? 1U : 4U,
+                            public_status, deadline);
+    }
+    return send_envelope(descriptor, server->frame_bytes,
+                         LNI_PREPARATION_STATE_RESPONSE,
+                         request->correlation_id, payload, payload_length,
+                         NULL, 0U, deadline);
+}
+
 static bool peer_authorized(const lxp_daemon_lni_server *server,
                             int descriptor)
 {
@@ -708,6 +935,9 @@ static lxp_result serve_connection(lxp_daemon_lni_server *server,
             status = send_submit(server, descriptor, &request, deadline);
         } else if (request.tag == LNI_RECEIPT_LOOKUP_REQUEST) {
             status = send_receipt(server, descriptor, &request, deadline);
+        } else if (request.tag == LNI_PREPARATION_STATE_REQUEST) {
+            status = send_preparation_state(
+                server, descriptor, &request, deadline);
         } else {
             status = send_refusal(descriptor, server->frame_bytes,
                                   request.correlation_id, 3U,
@@ -777,6 +1007,8 @@ lxp_result lxp_daemon_lni_serve(
     if (server == NULL || daemon == NULL || owner == NULL ||
         configuration == NULL || configuration->socket_path == NULL ||
         !daemon->primitives_initialized || !owner->attached ||
+        daemon->config.network_id == 0U ||
+        daemon->config.network_id != owner->network_id ||
         configuration->frame_bytes != LXP_DAEMON_LNI_MAX_FRAME_BYTES ||
         configuration->deadline_milliseconds == 0U ||
         configuration->socket_mode != 0660U ||

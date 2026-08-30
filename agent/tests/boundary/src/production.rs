@@ -7,12 +7,14 @@ use std::thread;
 use std::time::Duration;
 
 use layerx_client::lni::handshake::{perform, HandshakeConfig};
+use layerx_client::lni::preparation::{preparation_state, PreparationStateContext};
 use layerx_client::lni::schema::{decode_envelope, encode_envelope, Envelope, Version};
 use layerx_client::lni::transport::FrameTransport;
+use layerx_types::ids::Did;
+use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry};
 use layerx_wire::activity::decode_signed;
 use layerx_wire::hash::activity_id;
 use layerx_wire::receipt::decode as decode_receipt;
-use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry};
 
 use crate::cases::connect;
 
@@ -32,7 +34,7 @@ fn exchange(
     payload: &[u8],
 ) -> Result<(u16, Vec<u8>, Vec<u8>), String> {
     let request = encode_envelope(Envelope {
-        version: Version::V1_0,
+        version: Version::V1_1,
         message_tag: tag,
         correlation_id,
         canonical_payload: payload,
@@ -47,9 +49,7 @@ fn exchange(
         .map_err(|error| format!("production response receive failed: {error:?}"))?;
     let response = decode_envelope(&response)
         .map_err(|error| format!("production response malformed: {error:?}"))?;
-    if response.version.major != Version::V1_0.major
-        || response.correlation_id != correlation_id
-    {
+    if response.version.major != Version::V1_1.major || response.correlation_id != correlation_id {
         return Err("production response changed version or correlation".to_owned());
     }
     Ok((
@@ -93,11 +93,13 @@ pub fn run_if_configured() -> Result<Option<String>, String> {
     }
     let decoded = decode_signed(&activity_bytes, &registry()?)
         .map_err(|error| format!("qualification activity is not canonical: {error:?}"))?;
+    let actor = Did::new(decoded.actor_did())
+        .map_err(|error| format!("qualification actor DID is not canonical: {error:?}"))?;
     let expected_activity_id = activity_id(&decoded)
         .map_err(|error| format!("qualification activity id failed: {error:?}"))?;
     let mut transport = connect(Path::new(&socket))?;
     let expected = HandshakeConfig {
-        built_interface_version: Version::V1_0,
+        built_interface_version: Version::V1_1,
         expected_protocol_version: std::env::var("LAYERX_QUALIFY_PROTOCOL_VERSION")
             .map_err(|_| "LAYERX_QUALIFY_PROTOCOL_VERSION is required".to_owned())?
             .parse()
@@ -117,6 +119,33 @@ pub fn run_if_configured() -> Result<Option<String>, String> {
         .capabilities()
         .require(layerx_client::lni::schema::Capability::ReceiptLookup)
         .map_err(|error| format!("production receipt lookup unavailable: {error:?}"))?;
+    handshake
+        .capabilities()
+        .require(layerx_client::lni::schema::Capability::PreparationState)
+        .map_err(|error| format!("production preparation state unavailable: {error:?}"))?;
+    let preparation = preparation_state(
+        &mut transport,
+        &actor,
+        PreparationStateContext {
+            interface_version: handshake.node().interface_version,
+            expected_network_id: expected.expected_network_id,
+            minimum_observed_head: handshake.node().chain_head_sequence,
+            correlation_id: 38_199,
+        },
+    )
+    .map_err(|error| format!("production preparation snapshot refused: {error:?}"))?;
+    if preparation.account_sequence != decoded.account_sequence()
+        || preparation.network_id != decoded.network_id()
+        || preparation.protocol_timestamp < decoded.timestamp_bound().not_before
+        || preparation.protocol_timestamp > decoded.timestamp_bound().not_after
+        || !preparation
+            .module_registry
+            .declares(decoded.activity_type())
+    {
+        return Err(
+            "production preparation snapshot did not bind the submitted activity".to_owned(),
+        );
+    }
 
     let (tag, retained, evidence) = exchange(&mut transport, 3, 38_200, &activity_bytes)?;
     if tag != 4 || retained != activity_bytes || evidence.as_slice() != expected_activity_id {
@@ -127,8 +156,7 @@ pub fn run_if_configured() -> Result<Option<String>, String> {
     selector.extend_from_slice(&expected_activity_id);
     let mut receipt = Vec::new();
     for attempt in 0_u64..100 {
-        let (tag, candidate, proof) =
-            exchange(&mut transport, 5, 38_201 + attempt, &selector)?;
+        let (tag, candidate, proof) = exchange(&mut transport, 5, 38_201 + attempt, &selector)?;
         if tag != 6 || !proof.is_empty() {
             return Err("production receipt lookup response shape changed".to_owned());
         }
@@ -149,16 +177,14 @@ pub fn run_if_configured() -> Result<Option<String>, String> {
     let mut idempotency_selector = Vec::with_capacity(33);
     idempotency_selector.push(2);
     idempotency_selector.extend_from_slice(&decoded.idempotency_key());
-    let (tag, by_idempotency, proof) =
-        exchange(&mut transport, 5, 38_400, &idempotency_selector)?;
+    let (tag, by_idempotency, proof) = exchange(&mut transport, 5, 38_400, &idempotency_selector)?;
     if tag != 6 || by_idempotency != receipt || !proof.is_empty() {
         return Err("idempotency lookup did not return byte-identical receipt".to_owned());
     }
     let mut sequence_selector = Vec::with_capacity(9);
     sequence_selector.push(3);
     sequence_selector.extend_from_slice(&decoded_receipt.global_sequence().to_be_bytes());
-    let (tag, by_sequence, proof) =
-        exchange(&mut transport, 5, 38_401, &sequence_selector)?;
+    let (tag, by_sequence, proof) = exchange(&mut transport, 5, 38_401, &sequence_selector)?;
     if tag != 6 || by_sequence != receipt || !proof.is_empty() {
         return Err("sequence lookup did not return byte-identical receipt".to_owned());
     }
@@ -168,9 +194,8 @@ pub fn run_if_configured() -> Result<Option<String>, String> {
     if tag != 6 || !absent.is_empty() || !proof.is_empty() {
         return Err("production absent receipt was not canonical empty evidence".to_owned());
     }
-    let maximum_activity_path =
-        std::env::var_os("LAYERX_QUALIFY_MAX_SIGNED_ACTIVITY")
-            .ok_or_else(|| "LAYERX_QUALIFY_MAX_SIGNED_ACTIVITY is required".to_owned())?;
+    let maximum_activity_path = std::env::var_os("LAYERX_QUALIFY_MAX_SIGNED_ACTIVITY")
+        .ok_or_else(|| "LAYERX_QUALIFY_MAX_SIGNED_ACTIVITY is required".to_owned())?;
     let maximum_activity = fs::read(maximum_activity_path)
         .map_err(|error| format!("could not read maximum signed activity: {error}"))?;
     if maximum_activity.len() != 1_048_576 {
@@ -180,8 +205,7 @@ pub fn run_if_configured() -> Result<Option<String>, String> {
         .map_err(|error| format!("maximum activity is not canonical: {error:?}"))?;
     let maximum_id = activity_id(&maximum_decoded)
         .map_err(|error| format!("maximum activity id failed: {error:?}"))?;
-    let (tag, retained, evidence) =
-        exchange(&mut transport, 3, 38_500, &maximum_activity)?;
+    let (tag, retained, evidence) = exchange(&mut transport, 3, 38_500, &maximum_activity)?;
     if tag != 4 || retained != maximum_activity || evidence.as_slice() != maximum_id {
         return Err("maximum canonical activity was not retained byte-exactly".to_owned());
     }

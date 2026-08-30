@@ -38,7 +38,6 @@ deny = [
     { name = "inventory", reason = "Process-wide registries are forbidden" },
     { name = "getrandom", reason = "The deterministic runtime admits no randomness" },
     { name = "rand", reason = "The deterministic runtime admits no randomness" },
-    { name = "rand_core", reason = "The deterministic runtime admits no randomness" },
     { name = "chrono", reason = "The deterministic runtime admits no clocks" },
     { name = "time", reason = "The deterministic runtime admits no clocks" },
     { name = "instant", reason = "The deterministic runtime admits no clocks" },

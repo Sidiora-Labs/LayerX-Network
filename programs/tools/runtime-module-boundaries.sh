@@ -46,8 +46,9 @@ check_root() {
 
     for path in \
         budget.rs \
-        abi/mod.rs abi/capability.rs abi/codec.rs abi/response.rs abi/storage_ops.rs \
-        host/mod.rs host/memory.rs host/storage.rs host/events.rs host/calls.rs \
+        abi/mod.rs abi/balance.rs abi/capability.rs abi/codec.rs abi/context.rs \
+        abi/event_tests.rs abi/host_state.rs abi/manifest.rs abi/response.rs abi/storage_ops.rs \
+        host/mod.rs host/balance.rs host/context.rs host/memory.rs host/storage.rs host/events.rs host/calls.rs \
         host/transfer.rs host/scan.rs host/crypto.rs host/signature.rs
     do
         if [ ! -f "$root/$path" ]; then
@@ -80,7 +81,7 @@ check_root() {
                 [ -f "$file" ] && basename "$file"
             done | sort
         )
-        expected=$(printf '%s\n' capability.rs codec.rs mod.rs response.rs storage_ops.rs)
+        expected=$(printf '%s\n' balance.rs capability.rs codec.rs context.rs event_tests.rs host_state.rs manifest.rs mod.rs response.rs storage_ops.rs)
         if [ "$actual" != "$expected" ]; then
             echo "runtime module boundary: unexpected ABI module inventory" >&2
             failed=1
@@ -93,7 +94,7 @@ check_root() {
                 [ -f "$file" ] && basename "$file"
             done | sort
         )
-        expected=$(printf '%s\n' calls.rs crypto.rs events.rs memory.rs mod.rs scan.rs signature.rs storage.rs transfer.rs)
+        expected=$(printf '%s\n' balance.rs calls.rs context.rs crypto.rs events.rs memory.rs mod.rs scan.rs signature.rs storage.rs transfer.rs)
         if [ "$actual" != "$expected" ]; then
             echo "runtime module boundary: unexpected host module inventory" >&2
             failed=1
@@ -140,7 +141,7 @@ if [ "${1:-}" = "--self-test" ]; then
     fixture=$(mktemp -d)
     trap 'find "$fixture" -type f -delete; find "$fixture" -depth -type d -exec rmdir {} \; 2>/dev/null || true' EXIT
     mkdir -p "$fixture/abi" "$fixture/host"
-    for path in budget.rs abi/mod.rs abi/capability.rs abi/codec.rs abi/response.rs abi/storage_ops.rs host/mod.rs host/memory.rs host/storage.rs host/events.rs host/calls.rs host/transfer.rs host/scan.rs host/crypto.rs host/signature.rs
+    for path in budget.rs abi/mod.rs abi/balance.rs abi/capability.rs abi/codec.rs abi/context.rs abi/event_tests.rs abi/host_state.rs abi/manifest.rs abi/response.rs abi/storage_ops.rs host/mod.rs host/balance.rs host/context.rs host/memory.rs host/storage.rs host/events.rs host/calls.rs host/transfer.rs host/scan.rs host/crypto.rs host/signature.rs
     do
         : > "$fixture/$path"
     done

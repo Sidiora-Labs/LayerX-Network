@@ -37,7 +37,7 @@ static int registration_contract(void)
         next->abi_version != LX_PROGRAMS_ACCOUNT_ABI_VERSION ||
         strcmp(next->name, "programs") != 0 ||
         next->activity_type_count !=
-            sizeof(expected_types) / sizeof(expected_types[0]) + 2U)
+            sizeof(expected_types) / sizeof(expected_types[0]) + 3U)
         return 1;
     if (sandbox == NULL || sandbox->module_id != LXP_MODULE_PROGRAMS ||
         sandbox->abi_version != LX_PROGRAMS_SANDBOX_ABI_VERSION ||
@@ -49,12 +49,15 @@ static int registration_contract(void)
         return 1;
     for (i = 0U; i < current->activity_type_count; ++i)
         if (current->activity_types[i] != expected_types[i] ||
-            next->activity_types[i] != expected_types[i])
+            next->activity_types[i] != expected_types[i] ||
+            sandbox->activity_types[i] != expected_types[i])
             return 1;
-    if (next->activity_types[next->activity_type_count - 2U] !=
+    if (next->activity_types[next->activity_type_count - 3U] !=
             LX_PROGRAMS_ACCOUNT ||
+        next->activity_types[next->activity_type_count - 2U] !=
+            LX_PROGRAMS_WIND_DOWN ||
         next->activity_types[next->activity_type_count - 1U] !=
-            LX_PROGRAMS_WIND_DOWN)
+            LX_PROGRAMS_FEE_GOVERNANCE)
         return 1;
     if (lxp_state_store_init(&store, 0U) != LXP_OK ||
         lxp_kernel_create(&kernel, &store, &journal, &parameters, 0U) !=
@@ -158,19 +161,26 @@ int main(void)
         lxp_programs_abi_transition_validate(0U, LX_PROGRAMS_ACCOUNT_ABI_VERSION) != LXP_OK ||
         lxp_programs_abi_transition_validate(LX_PROGRAMS_ABI_VERSION,
                                              LX_PROGRAMS_ACCOUNT_ABI_VERSION) != LXP_OK ||
+        lxp_programs_abi_transition_validate(0U,
+                                             LX_PROGRAMS_SANDBOX_ABI_VERSION) != LXP_OK ||
+        lxp_programs_abi_transition_validate(LX_PROGRAMS_ACCOUNT_ABI_VERSION,
+                                             LX_PROGRAMS_SANDBOX_ABI_VERSION) != LXP_OK ||
         lxp_programs_abi_transition_validate(LX_PROGRAMS_ACCOUNT_ABI_VERSION,
                                              LX_PROGRAMS_ABI_VERSION) !=
             LXP_ERR_VERSION_UNSUPPORTED ||
+        lxp_programs_abi_transition_validate(LX_PROGRAMS_SANDBOX_ABI_VERSION,
+                                             LX_PROGRAMS_ACCOUNT_ABI_VERSION) !=
+            LXP_ERR_VERSION_UNSUPPORTED ||
         lxp_programs_abi_transition_validate(0U,
-                                             LX_PROGRAMS_ACCOUNT_ABI_VERSION + 1U) !=
+                                             LX_PROGRAMS_SANDBOX_ABI_VERSION + 1U) !=
             LXP_ERR_VERSION_UNSUPPORTED)
         return 1;
     if (registration_contract() != 0) return 1;
     if (exercise(lxp_activity_type_ordinal(LX_PROGRAMS_CALL), 40U,
-                 LXP_ERR_MODULE_DISABLED, 0U) != 0) return 1;
+                 LXP_ERR_TRUNCATED, 0U) != 0) return 1;
     if (exercise(lxp_activity_type_ordinal(LX_PROGRAMS_REGISTRY), 32U,
                  LXP_OK, 0U) != 0) return 1;
     if (exercise(lxp_activity_type_ordinal(LX_PROGRAMS_CALL), 31U,
-                 LXP_ERR_MODULE_DISABLED, 0U) != 0) return 1;
+                 LXP_ERR_TRUNCATED, 0U) != 0) return 1;
     return 0;
 }

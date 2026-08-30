@@ -64,6 +64,7 @@ typedef struct lxp_daemon_process {
     uint64_t next_batch;
     uint32_t parameter_version;
     uint32_t network_id;
+    uint64_t bootstrap_sealed_timestamp;
     bool state_open;
     bool history_open;
     bool feed_open;
@@ -2230,9 +2231,7 @@ static lxp_result recover_ranged_batch_authority(
             free(body);
         }
         if (status == LXP_OK) {
-            if ((uint64_t)record.body_length >
-                    UINT64_MAX - LXP_LOG_HEADER_BYTES ||
-                offset > UINT64_MAX - LXP_LOG_HEADER_BYTES -
+            if (offset > UINT64_MAX - LXP_LOG_HEADER_BYTES -
                              (uint64_t)record.body_length)
                 status = LXP_ERR_OVERFLOW;
             else
@@ -2427,9 +2426,7 @@ static lxp_result recover_ranged_batch_authorities(
                          header.resulting_state_root, 32U);
         }
         if (status == LXP_OK) {
-            if ((uint64_t)record.body_length >
-                    UINT64_MAX - LXP_LOG_HEADER_BYTES ||
-                offset > UINT64_MAX - LXP_LOG_HEADER_BYTES -
+            if (offset > UINT64_MAX - LXP_LOG_HEADER_BYTES -
                              (uint64_t)record.body_length)
                 status = LXP_ERR_OVERFLOW;
             else
@@ -2614,8 +2611,10 @@ static lxp_result project_bootstrap_metering(
     if (status == LXP_OK) {
         process->kernel.module_kv_count = candidate->module_kv_count;
         (void)memcpy(process->kernel.module_kv, candidate->module_kv,
-                     candidate->module_kv_count *
-                         sizeof(candidate->module_kv[0]));
+                         candidate->module_kv_count *
+                             sizeof(candidate->module_kv[0]));
+        process->bootstrap_sealed_timestamp =
+            genesis->genesis_timestamp_ms;
     }
     free(bytes);
     free(genesis);
@@ -2853,7 +2852,9 @@ static lxp_result open_process(lxp_daemon_process *process,
     bearer = required_environment("LAYERX_NODE_PROGRAM_BEARER_TOKEN");
     if (status == LXP_OK)
         status = lxp_daemon_protocol_owner_attach(
-            &process->owner, &process->kernel, &process->programs,
+            &process->owner, &process->kernel, &process->identities,
+            process->network_id, process->bootstrap_sealed_timestamp,
+            &process->programs,
             &process->feed_log, &process->canonical_log, &process->history,
             &process->verified_receipts, &process->receipt_authority,
             &process->owner_scratch, replay_canonical_after_snapshot,

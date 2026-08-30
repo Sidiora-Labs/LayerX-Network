@@ -7,9 +7,11 @@ use std::thread;
 use std::time::Duration;
 
 use layerx_client::lni::handshake::{perform, Handshake, HandshakeConfig};
+use layerx_client::lni::preparation::{preparation_state, PreparationStateContext};
 use layerx_client::lni::schema::{encode_envelope, Capability, Envelope, Version};
 use layerx_client::lni::transport::{ConnectionGate, FrameTransport, Limits, Uds};
 use layerx_proof::merkle::leaf_hash;
+use layerx_types::ids::Did;
 use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry};
 use layerx_wire::activity::decode_signed;
 use layerx_wire::hash::{activity_id, batch_header_digest, checkpoint_id};
@@ -110,7 +112,7 @@ pub(crate) fn connect(socket: &Path) -> Result<Uds, String> {
 
 fn config() -> HandshakeConfig {
     HandshakeConfig {
-        built_interface_version: Version::V1_0,
+        built_interface_version: Version::V1_1,
         expected_protocol_version: 1,
         expected_network_id: 77,
     }
@@ -123,7 +125,7 @@ fn request(
     payload: &[u8],
 ) -> Result<(), String> {
     let encoded = encode_envelope(Envelope {
-        version: Version::V1_0,
+        version: Version::V1_1,
         message_tag: tag,
         correlation_id,
         canonical_payload: payload,
@@ -192,7 +194,7 @@ fn decode_response(bytes: &[u8]) -> Result<Response, String> {
 }
 
 fn expect(response: &Response, tag: u16, correlation_id: u64) -> Result<(), String> {
-    if response.version != Version::V1_0
+    if response.version != Version::V1_1
         || response.tag != tag
         || response.correlation_id != correlation_id
     {
@@ -238,6 +240,7 @@ fn exercise_live_messages(
         Capability::ProofBundle,
         Capability::AvailabilityFetch,
         Capability::EventSubscribe,
+        Capability::PreparationState,
     ] {
         handshake
             .capabilities()
@@ -379,6 +382,34 @@ fn exercise_live_messages(
     expect(&heartbeat, 24, 21)?;
     covered.insert(24);
 
+    let actor = Did::new(b"did:layerx:production-boundary")
+        .map_err(|error| format!("preparation actor failed: {error:?}"))?;
+    let preparation = preparation_state(
+        transport,
+        &actor,
+        PreparationStateContext {
+            interface_version: Version::V1_1,
+            expected_network_id: 77,
+            minimum_observed_head: handshake.node().chain_head_sequence,
+            correlation_id: 27,
+        },
+    )
+    .map_err(|error| format!("production preparation snapshot failed: {error:?}"))?;
+    if preparation.actor != actor
+        || preparation.account_sequence != 5
+        || preparation.protocol_timestamp != 1_700_000_001_000
+        || preparation.observed_head_sequence != 10
+        || preparation.kernel_epoch != 3
+        || !preparation.module_registry.declares(
+            ActivityType::new(ModuleId::Programs, 1)
+                .map_err(|error| format!("program activity failed: {error:?}"))?,
+        )
+    {
+        return Err("production preparation snapshot changed facts".to_owned());
+    }
+    covered.insert(26);
+    covered.insert(27);
+
     let incompatible = encode_envelope(Envelope {
         version: Version { major: 2, minor: 0 },
         message_tag: 1,
@@ -454,7 +485,7 @@ pub fn agent_boundary_conformance_suite(
         .map_err(|error| format!("normal handshake failed: {error:?}"))?;
     let capability_qualification = crate::gaps::verify_and_render(&accepted)?;
     let covered = exercise_live_messages(&mut connection, &accepted)?;
-    if covered != (1_u16..=25).collect() {
+    if covered != (1_u16..=27).collect() {
         return Err(format!("incomplete live message coverage: {covered:?}"));
     }
     drop(connection);
@@ -499,6 +530,6 @@ pub fn agent_boundary_conformance_suite(
     fs::remove_dir_all(&directory)
         .map_err(|error| format!("could not clean boundary directory: {error}"))?;
     Ok(format!(
-        "agent boundary conformance suite passed: real node, 25 messages, restart, behind, unreachable, degraded\n{capability_qualification}"
+        "agent boundary conformance suite passed: real node, 27 messages, restart, behind, unreachable, degraded\n{capability_qualification}"
     ))
 }

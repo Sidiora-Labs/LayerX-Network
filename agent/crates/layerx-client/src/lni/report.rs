@@ -136,5 +136,6 @@ const fn absent_behavior(capability: Capability) -> &'static str {
         Capability::AvailabilityFetch => "availability_read_unavailable",
         Capability::EventSubscribe => "event_stream_unavailable",
         Capability::HistoricalProofs => "historical_verification_unavailable",
+        Capability::PreparationState => "preparation_unavailable",
     }
 }

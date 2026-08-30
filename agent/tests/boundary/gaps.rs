@@ -1,11 +1,11 @@
+use layerx_client::lni::capability_report;
 use layerx_client::lni::handshake::Handshake;
 use layerx_client::lni::schema::Capability;
-use layerx_client::lni::capability_report;
 use layerx_types::error::LayerError;
 
 pub fn verify_and_render(handshake: &Handshake) -> Result<String, String> {
     let report = capability_report(handshake.capabilities());
-    if report.entries().len() != 11 {
+    if report.entries().len() != 12 {
         return Err("capability report omitted schema requirements".to_owned());
     }
     if report.daemon_status() != report.cli_output()

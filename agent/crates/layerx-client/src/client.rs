@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use layerx_proof::inclusion::SequencerAuthorization;
 use layerx_proof::receipt::AuthorizedBatch;
+use layerx_types::ids::Did;
 use layerx_types::payload::ModuleRegistry;
 use layerx_types::verify::VerificationLevel;
 
@@ -15,6 +16,9 @@ use crate::availability::{
 };
 use crate::head::{Head, HeadError, HeadTracker};
 use crate::lni::handshake::{perform, Handshake, HandshakeConfig, HandshakeError};
+use crate::lni::preparation::{
+    preparation_state, PreparationState, PreparationStateContext, PreparationStateError,
+};
 use crate::lni::report::capability_report;
 use crate::lni::schema::Capability;
 use crate::lni::transport::{ConnectionGate, Limits, TransportError, Uds};
@@ -220,6 +224,41 @@ impl Client {
     /// Refuses an unadvertised key without attempting signature verification.
     pub fn require_receipt_key(&self, batch: u64, key: [u8; 32]) -> Result<(), HeadError> {
         self.head.require_sequencer_key(batch, key)
+    }
+
+    /// Obtains the actor's complete atomic preparation snapshot from the
+    /// authenticated production node boundary.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a capability or connection gap and every typed core refusal,
+    /// malformed response, network mismatch, or head regression.
+    pub fn preparation_state(
+        &mut self,
+        actor: &Did,
+        correlation_id: u64,
+    ) -> Result<PreparationState, PreparationStateError> {
+        if !self
+            .handshake
+            .capabilities()
+            .contains(Capability::PreparationState)
+        {
+            return Err(PreparationStateError::UnavailableCapability);
+        }
+        let transport = self
+            .transport
+            .as_mut()
+            .ok_or(PreparationStateError::Disconnected)?;
+        preparation_state(
+            transport,
+            actor,
+            PreparationStateContext {
+                interface_version: self.handshake.node().interface_version,
+                expected_network_id: self.config.handshake.expected_network_id,
+                minimum_observed_head: self.head.current().chain_sequence,
+                correlation_id,
+            },
+        )
     }
 
     /// Verifies and transmits one signed activity through the sole boundary
