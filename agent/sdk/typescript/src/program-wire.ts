@@ -13,6 +13,20 @@ const FAILURE = bytes("LXP/programs/failure-detail/v1\0");
 const RESOURCE = bytes("LXP/programs/resource-detail/v1\0");
 const SETTLEMENT = bytes("LXP/programs/settlement-failure/v1\0");
 const CALLBACK = bytes("LXP/programs/callback-failure/v1\0");
+const TRANSFER_SET_V1 = bytes("LayerX/programs/402LXP/transfer-set/v1\0");
+const TRANSFER_SET_V2 = bytes("LayerX/programs/402LXP/transfer-set/v2\0");
+const PROGRAM_AUTHORITY = bytes("LayerX/programs/402LXP/program-authority/v1\0");
+const PROGRAM_FUNDING = bytes("LayerX/programs/402LXP/program-funding/v1\0");
+const PROGRAM_ACCOUNT = bytes("LayerX/programs/program-account/v1\0");
+const EVENT_ENVELOPE = bytes("LayerX/programs/events/v1\0");
+const OCCUPANCY_V1 = bytes("LXP/storage-occupancy-settlement/v1\0");
+const OCCUPANCY_V2 = bytes("LXP/storage-occupancy-settlement/v2\0");
+const OCCUPANCY_V3 = bytes("LXP/storage-occupancy-settlement/v3\0");
+const OCCUPANCY_MANDATE = bytes("LXP/storage-occupancy-mandate/v1\0");
+const MERKLE_LEAF = bytes("LXP/v1/merkle-leaf\0");
+const MERKLE_INTERNAL = bytes("LXP/v1/merkle-internal\0");
+const ACCOUNT_DERIVATION = bytes("LX:ACCOUNT:v1");
+const FEE_TREASURY_LABEL = bytes("system:fees");
 const MAX_U64 = 0xffff_ffff_ffff_ffffn;
 const MAX_U128 = 0xffff_ffff_ffff_ffff_ffff_ffff_ffff_ffffn;
 const MAX_TRACE_EVIDENCE_BYTES = 34 + 65_536 * 52;
@@ -145,8 +159,13 @@ export async function decodeAndVerifyProgramTerminal(
     if (occupancy.length === 0) {
       if (!equal(receipt.occupancyEvidenceDigest, zero) || !equal(receipt.occupancyTransferRoot, zero)
         || receipt.occupancyByteBatches !== 0n || receipt.occupancyFeeUnits !== 0n) fail("empty occupancy attachment");
-    } else if (!equal(await sha256(occupancy), receipt.occupancyEvidenceDigest)) {
-      fail("occupancy evidence digest");
+    } else {
+      if (!equal(await sha256(occupancy), receipt.occupancyEvidenceDigest)) fail("occupancy evidence digest");
+      const settlement = await decodeOccupancySettlement(occupancy);
+      if (settlement.byteBatches !== receipt.occupancyByteBatches || settlement.feeUnits !== receipt.occupancyFeeUnits
+        || !equal(await occupancyTransferRoot(settlement, receipt.occupancyAssetId), receipt.occupancyTransferRoot)) {
+        fail("occupancy receipt binding");
+      }
     }
   } else if (!equal(receipt.occupancyEvidenceDigest, zero) || !equal(receipt.occupancyTransferRoot, zero)
     || receipt.occupancyByteBatches !== 0n || receipt.occupancyFeeUnits !== 0n) {
@@ -154,7 +173,10 @@ export async function decodeAndVerifyProgramTerminal(
   }
   const transferPresent = !equal(receipt.transferRoot, zero);
   if (candidate ? (authorization !== undefined) !== transferPresent : authorization !== undefined) fail("transfer authority presence");
-  if (authorization !== undefined && (authorization.length === 0 || authorityRoot === undefined || !equal(authorityRoot, receipt.transferRoot))) fail("transfer authority root");
+  if (authorization !== undefined) {
+    if (authorization.length === 0 || authorityRoot === undefined || !equal(authorityRoot, receipt.transferRoot)) fail("transfer authority root");
+    await verifyAuthorizationRoot(authorization, authorityRoot);
+  }
   if (protocolVersion !== 1 && protocolVersion !== 2) fail("program receipt protocol");
   const boundUsage = usage ?? receiptUsage(receipt);
   return Object.freeze({ outcome, usage: boundUsage });
@@ -378,6 +400,280 @@ function sameUsage(left: ProgramUsage, right: ProgramUsage): boolean {
     && left.storage_read_bytes === right.storage_read_bytes && left.storage_write_bytes === right.storage_write_bytes
     && left.output_values === right.output_values && left.output_bytes === right.output_bytes && left.fee_units === right.fee_units;
 }
+
+interface CapabilityKey { readonly order: number; readonly fields: readonly Uint8Array[] }
+interface ProgramAuthorityBinding {
+  readonly owner: Uint8Array; readonly frame: Uint8Array; readonly source: Uint8Array;
+  readonly asset: Uint8Array; readonly to: Uint8Array; readonly amount: bigint;
+}
+interface ProgramFundingBinding { readonly owner: Uint8Array; readonly destination: Uint8Array; readonly asset: Uint8Array }
+interface OccupancyChargeBinding { readonly payer: Uint8Array; readonly amountDue: bigint; readonly paid: boolean; readonly arrearsAfter: bigint }
+interface OccupancySettlementBinding { readonly byteBatches: bigint; readonly feeUnits: bigint; readonly charges: readonly OccupancyChargeBinding[] }
+interface StorageNamespaceBinding { readonly canonical: Uint8Array; readonly wire: Uint8Array; readonly program: Uint8Array; readonly principal?: Uint8Array }
+
+async function verifyAuthorizationRoot(encoded: Uint8Array, expected: Uint8Array): Promise<void> {
+  const reader = new Reader(encoded);
+  const candidate = starts(encoded, TRANSFER_SET_V2);
+  const domain = candidate ? TRANSFER_SET_V2 : TRANSFER_SET_V1;
+  if (!starts(encoded, domain) || !equal(reader.fixed(domain.length), domain)) fail("transfer authorization domain");
+  nonzero(reader.fixed(32), "transfer program");
+  const principal = reader.fixed(32); nonzero(principal, "transfer principal");
+  nonzero(reader.fixed(32), "transfer invocation authority");
+  decodeFrame(reader);
+  decodeEventEnvelope(reader.fixed(reader.u32()));
+  const calls = reader.u64();
+  if (calls > 64n) fail("transfer call count");
+  for (let index = 0; index < Number(calls); index += 1) {
+    nonzero(reader.fixed(32), "transfer caller");
+    nonzero(reader.fixed(32), "transfer callee");
+    nonzero(reader.fixed(32), "transfer call principal");
+    decodeFrame(reader); decodeFrame(reader);
+    await decodeCapabilitySet(reader.fixed(reader.u32()), candidate);
+  }
+  const legCount = reader.u64();
+  if (legCount === 0n || legCount > 256n) fail("transfer leg count");
+  const kernelLegs: Uint8Array[] = [];
+  let total = 0n;
+  for (let index = 0; index < Number(legCount); index += 1) {
+    const frame = decodeFrame(reader);
+    let source = principal;
+    let authority: ProgramAuthorityBinding | undefined;
+    let funding: ProgramFundingBinding | undefined;
+    if (candidate) {
+      const sourceTag = reader.byte();
+      if (sourceTag === 1) {
+        source = reader.fixed(32); nonzero(source, "transfer principal source");
+        if (!equal(source, principal)) fail("transfer principal authority");
+      } else if (sourceTag === 2) {
+        const encodedAuthority = reader.sizedU32(1_048_576);
+        authority = await decodeProgramAuthority(encodedAuthority);
+        source = authority.source;
+      } else if (sourceTag === 3) {
+        source = reader.fixed(32); nonzero(source, "transfer funding principal");
+        if (!equal(source, principal)) fail("transfer funding authority");
+        funding = await decodeProgramFunding(reader.sizedU32(1_048_576));
+      } else fail("transfer source tag");
+    }
+    const asset = reader.fixed(32); const to = reader.fixed(32); const amount = reader.u128(); const program = reader.fixed(32);
+    nonzero(asset, "transfer asset"); nonzero(to, "transfer destination"); nonzero(program, "transfer leg program");
+    if (amount === 0n) fail("transfer amount");
+    if (authority !== undefined && (!equal(authority.owner, program) || !equal(authority.frame, frame)
+      || !equal(authority.asset, asset) || !equal(authority.to, to) || authority.amount !== amount)) fail("program transfer authority");
+    if (funding !== undefined && (!equal(funding.owner, program) || !equal(funding.destination, to) || !equal(funding.asset, asset))) fail("program funding authority");
+    total = checkedU128Add(total, amount, "transfer total");
+    kernelLegs.push(concatenate(Uint8Array.of(0), source, to, asset, bigEndian(amount, 16), bigEndian(1n, 2)));
+  }
+  reader.end();
+  if (!equal(await merkleRoot(kernelLegs), expected)) fail("transfer authorization root");
+}
+
+async function decodeProgramAuthority(encoded: Uint8Array): Promise<ProgramAuthorityBinding> {
+  const reader = new Reader(encoded);
+  if (!equal(reader.fixed(PROGRAM_AUTHORITY.length), PROGRAM_AUTHORITY)) fail("program authority domain");
+  const owner = reader.fixed(32); nonzero(owner, "program authority owner");
+  const seedLength = reader.u16(); if (seedLength > 128) fail("program authority seed");
+  const seed = reader.fixed(seedLength); const source = reader.fixed(32); const frame = decodeFrame(reader);
+  const asset = reader.fixed(32); const to = reader.fixed(32); const amount = reader.u128(); reader.end();
+  nonzero(asset, "program authority asset"); nonzero(to, "program authority destination");
+  if (amount === 0n || !equal(await deriveProgramAccount(owner, seed), source)) fail("program authority derivation");
+  return { owner, frame, source, asset, to, amount };
+}
+
+async function decodeProgramFunding(encoded: Uint8Array): Promise<ProgramFundingBinding> {
+  const reader = new Reader(encoded);
+  if (!equal(reader.fixed(PROGRAM_FUNDING.length), PROGRAM_FUNDING)) fail("program funding domain");
+  const owner = reader.fixed(32); nonzero(owner, "program funding owner");
+  const seedLength = reader.u16(); if (seedLength > 128) fail("program funding seed");
+  const seed = reader.fixed(seedLength); const destination = reader.fixed(32); const asset = reader.fixed(32); reader.end();
+  nonzero(destination, "program funding destination"); nonzero(asset, "program funding asset");
+  if (!equal(await deriveProgramAccount(owner, seed), destination)) fail("program funding derivation");
+  return { owner, destination, asset };
+}
+
+async function deriveProgramAccount(owner: Uint8Array, seed: Uint8Array): Promise<Uint8Array> {
+  return sha256(PROGRAM_ACCOUNT, owner, bigEndian(BigInt(seed.length), 4), seed);
+}
+
+function decodeEventEnvelope(encoded: Uint8Array): void {
+  const reader = new Reader(encoded);
+  if (!equal(reader.fixed(EVENT_ENVELOPE.length), EVENT_ENVELOPE)) fail("program event domain");
+  const count = reader.u32(); if (count > 64) fail("program event count");
+  for (let index = 0; index < count; index += 1) {
+    nonzero(reader.fixed(32), "event program"); nonzero(reader.fixed(32), "event principal"); decodeFrame(reader);
+    reader.sizedU32(64); reader.sizedU32(65_536);
+  }
+  reader.end();
+}
+
+function decodeFrame(reader: Reader): Uint8Array {
+  const path = reader.fixed(8); const depth = reader.byte();
+  if (depth > 8 || path.subarray(0, depth).some((value) => value === 0) || path.subarray(depth).some((value) => value !== 0)) fail("call frame");
+  return concatenate(path, Uint8Array.of(depth));
+}
+
+async function decodeCapabilitySet(encoded: Uint8Array, candidate: boolean): Promise<void> {
+  if (encoded.length < 2 || encoded.length > 65_535) fail("capability encoding length");
+  const reader = new Reader(encoded); const count = reader.u16();
+  if (count > 269) fail("capability count");
+  let prior: CapabilityKey | undefined; let balanceViews = 0;
+  for (let index = 0; index < count; index += 1) {
+    const tag = reader.byte(); let key: CapabilityKey;
+    if (tag === 1) key = { order: 0, fields: [] };
+    else if (tag === 2) key = { order: 1, fields: [] };
+    else if (tag === 3) key = { order: 2, fields: [] };
+    else if (tag === 4) { const program = reader.fixed(32); nonzero(program, "call capability program"); key = { order: 3, fields: [program] }; }
+    else if (tag === 5) {
+      const asset = reader.fixed(32); const to = reader.fixed(32); const maximum = reader.u128();
+      nonzero(asset, "transfer capability asset"); nonzero(to, "transfer capability destination"); if (maximum === 0n) fail("transfer capability amount");
+      key = { order: 4, fields: [asset, to] };
+    } else if (tag === 9 && candidate) {
+      const owner = reader.fixed(32); nonzero(owner, "program spend owner"); const seedLength = reader.u16();
+      if (seedLength > 128) fail("program spend seed");
+      const seed = reader.fixed(seedLength); const source = reader.fixed(32); const asset = reader.fixed(32); const to = reader.fixed(32); const maximum = reader.u128();
+      nonzero(asset, "program spend asset"); nonzero(to, "program spend destination"); if (maximum === 0n) fail("program spend amount");
+      if (!equal(await deriveProgramAccount(owner, seed), source)) fail("program spend account");
+      key = { order: 5, fields: [owner, seed, source, asset, to] };
+    } else if (tag === 6) { const digest = reader.fixed(32); nonzero(digest, "receipt capability"); key = { order: 6, fields: [digest] }; }
+    else if (tag === 10 && candidate) {
+      const account = reader.fixed(32); const asset = reader.fixed(32); const digest = reader.fixed(32);
+      nonzero(account, "balance capability account"); nonzero(asset, "balance capability asset"); nonzero(digest, "balance capability receipt");
+      balanceViews += 1; if (balanceViews > 32) fail("balance capability count"); key = { order: 7, fields: [account, asset] };
+    } else if (tag === 7) key = { order: 8, fields: [] };
+    else if (tag === 8) key = { order: 9, fields: [] };
+    else fail("capability tag");
+    if (prior !== undefined && compareCapabilityKeys(prior, key) >= 0) fail("capability canonical order");
+    prior = key;
+  }
+  reader.end();
+}
+
+function compareCapabilityKeys(left: CapabilityKey, right: CapabilityKey): number {
+  if (left.order !== right.order) return left.order - right.order;
+  for (let index = 0; index < Math.min(left.fields.length, right.fields.length); index += 1) {
+    const order = compareBytes(left.fields[index] ?? new Uint8Array(), right.fields[index] ?? new Uint8Array()); if (order !== 0) return order;
+  }
+  return left.fields.length - right.fields.length;
+}
+
+async function decodeOccupancySettlement(encoded: Uint8Array): Promise<OccupancySettlementBinding> {
+  if (encoded.length > 65_536) fail("occupancy evidence length");
+  if (starts(encoded, OCCUPANCY_V1) || starts(encoded, OCCUPANCY_V2)) return decodeLegacyOccupancy(encoded);
+  const reader = new Reader(encoded);
+  if (!equal(reader.fixed(OCCUPANCY_V3.length), OCCUPANCY_V3)) fail("occupancy evidence domain");
+  const batch = reader.u64(); const occupancyPrice = decodeOccupancySchedule(reader, true);
+  const declaredUnits = reader.u128(); const declaredFee = reader.u128(); const declaredPaid = reader.u128(); const declaredArrears = reader.u128();
+  const count = reader.u32(); if (count > 256) fail("occupancy position count");
+  let byteBatches = 0n; let feeUnits = 0n; let paidUnits = 0n; let arrearsUnits = 0n;
+  let priorNamespace: Uint8Array | undefined; const charges: OccupancyChargeBinding[] = [];
+  for (let index = 0; index < count; index += 1) {
+    const namespace = decodeStorageNamespace(reader);
+    if (priorNamespace !== undefined && compareBytes(priorNamespace, namespace.canonical) >= 0) fail("occupancy namespace order");
+    priorNamespace = namespace.canonical;
+    const payer = reader.fixed(32); nonzero(payer, "occupancy payer");
+    if (namespace.principal !== undefined && !equal(namespace.principal, payer)) fail("occupancy payer scope");
+    const rootProgram = reader.fixed(32); nonzero(rootProgram, "occupancy root program");
+    const activity = reader.fixed(32); const fromBatch = reader.u64(); const toBatch = reader.u64();
+    const recordedBytes = reader.u64(); const finalBytes = reader.u64(); const units = reader.u128(); const price = reader.u64();
+    const accrued = reader.u128(); const priorArrears = reader.u128(); const amountDue = reader.u128(); const authorizedAdded = reader.u128();
+    const disposition = reader.byte(); if (disposition < 1 || disposition > 5) fail("occupancy disposition");
+    const arrearsAfter = reader.u128(); const maximumBytes = reader.u64(); const maximumPrice = reader.u64(); reader.u128(); const mandate = reader.fixed(32);
+    if (toBatch < fromBatch) fail("occupancy batch interval");
+    const expectedUnits = checkedU128Multiply(recordedBytes, toBatch - fromBatch, "occupancy units");
+    const expectedFee = checkedU128Multiply(expectedUnits, price, "occupancy fee");
+    const expectedDue = checkedU128Add(priorArrears, expectedFee, "occupancy due");
+    const migration = disposition === 5;
+    if (toBatch !== batch || (!migration && price !== occupancyPrice) || units !== expectedUnits || accrued !== expectedFee
+      || amountDue !== expectedDue || finalBytes > maximumBytes || (!migration && (allZero(mandate) || allZero(activity)))
+      || (migration && (price !== 0n || accrued !== 0n || priorArrears !== 0n || amountDue !== 0n || arrearsAfter !== 0n
+        || !allZero(mandate) || !allZero(activity) || !equal(rootProgram, namespace.program)))
+      || (disposition === 4) !== (price > maximumPrice) || (disposition === 1 && arrearsAfter !== 0n)
+      || (disposition !== 1 && arrearsAfter !== amountDue)) fail("occupancy charge semantics");
+    if (authorizedAdded !== 0n) {
+      const expectedMandate = await sha256(OCCUPANCY_MANDATE, payer, rootProgram, activity, namespace.wire,
+        bigEndian(maximumBytes, 8), bigEndian(maximumPrice, 8), bigEndian(authorizedAdded, 16));
+      if (!equal(mandate, expectedMandate)) fail("occupancy mandate");
+    }
+    byteBatches = checkedU128Add(byteBatches, units, "occupancy usage"); feeUnits = checkedU128Add(feeUnits, accrued, "occupancy fees");
+    if (disposition === 1) paidUnits = checkedU128Add(paidUnits, amountDue, "occupancy paid");
+    else arrearsUnits = checkedU128Add(arrearsUnits, arrearsAfter, "occupancy arrears");
+    charges.push({ payer, amountDue, paid: disposition === 1, arrearsAfter });
+  }
+  reader.end();
+  if (byteBatches !== declaredUnits || feeUnits !== declaredFee || paidUnits !== declaredPaid || arrearsUnits !== declaredArrears) fail("occupancy declared usage");
+  return { byteBatches, feeUnits, charges };
+}
+
+function decodeLegacyOccupancy(encoded: Uint8Array): OccupancySettlementBinding {
+  const versioned = starts(encoded, OCCUPANCY_V2); const domain = versioned ? OCCUPANCY_V2 : OCCUPANCY_V1;
+  const reader = new Reader(encoded); if (!equal(reader.fixed(domain.length), domain)) fail("legacy occupancy domain");
+  const batch = reader.u64(); const occupancyPrice = decodeOccupancySchedule(reader, versioned);
+  const declaredUnits = reader.u128(); const declaredFee = reader.u128(); const count = reader.u64();
+  if (count > 256n) fail("legacy occupancy count");
+  let byteBatches = 0n; let feeUnits = 0n; const charges: OccupancyChargeBinding[] = [];
+  for (let index = 0; index < Number(count); index += 1) {
+    const namespace = decodeStorageNamespace(reader); const payer = reader.fixed(32); nonzero(payer, "legacy occupancy payer");
+    const fromBatch = reader.u64(); const toBatch = reader.u64(); const recordedBytes = reader.u64(); reader.u64();
+    const units = reader.u128(); const price = reader.u64(); const accrued = reader.u128();
+    if (toBatch < fromBatch) fail("legacy occupancy batch interval");
+    const expectedUnits = checkedU128Multiply(recordedBytes, toBatch - fromBatch, "legacy occupancy units");
+    if (toBatch !== batch || units !== expectedUnits || price !== occupancyPrice
+      || accrued !== checkedU128Multiply(units, price, "legacy occupancy fee")) fail("legacy occupancy charge");
+    byteBatches = checkedU128Add(byteBatches, units, "legacy occupancy usage"); feeUnits = checkedU128Add(feeUnits, accrued, "legacy occupancy fees");
+    charges.push({ payer, amountDue: accrued, paid: true, arrearsAfter: 0n });
+    void namespace;
+  }
+  reader.end(); if (byteBatches !== declaredUnits || feeUnits !== declaredFee) fail("legacy occupancy declared usage");
+  return { byteBatches, feeUnits, charges };
+}
+
+function decodeOccupancySchedule(reader: Reader, versioned: boolean): bigint {
+  const version = versioned ? reader.u32() : 1; if (version === 0) fail("occupancy schedule version");
+  let occupancyPrice = 0n; for (let index = 0; index < 7; index += 1) occupancyPrice = reader.u64(); return occupancyPrice;
+}
+
+function decodeStorageNamespace(reader: Reader): StorageNamespaceBinding {
+  const length = reader.byte(); if (length !== 33 && length !== 65) fail("storage namespace length");
+  const canonical = reader.fixed(length); const program = canonical.subarray(0, 32); nonzero(program, "storage namespace program");
+  const tag = canonical[32]; let principal: Uint8Array | undefined;
+  if (tag === 0 && length === 65) { principal = canonical.subarray(33); nonzero(principal, "storage namespace principal"); }
+  else if (!(tag === 1 && length === 33) && !(tag === 2 && length === 65)) fail("storage namespace tag");
+  return { canonical, wire: concatenate(Uint8Array.of(length), canonical), program, ...(principal === undefined ? {} : { principal }) };
+}
+
+async function occupancyTransferRoot(settlement: OccupancySettlementBinding, asset: Uint8Array): Promise<Uint8Array> {
+  if (asset.length !== 32) fail("occupancy asset length");
+  nonzero(asset, "occupancy asset");
+  const payers = new Map<string, { payer: Uint8Array; due: bigint; paid: bigint; arrears: bigint }>();
+  for (const charge of settlement.charges) {
+    const key = hex(charge.payer); const existing = payers.get(key) ?? { payer: charge.payer, due: 0n, paid: 0n, arrears: 0n };
+    existing.due = checkedU128Add(existing.due, charge.amountDue, "occupancy payer due");
+    if (charge.paid) existing.paid = checkedU128Add(existing.paid, charge.amountDue, "occupancy payer paid");
+    existing.arrears = checkedU128Add(existing.arrears, charge.arrearsAfter, "occupancy payer arrears"); payers.set(key, existing);
+  }
+  const treasury = await sha256(ACCOUNT_DERIVATION, bigEndian(11n, 4), FEE_TREASURY_LABEL); const legs: Uint8Array[] = [];
+  for (const entry of [...payers.values()].filter((value) => value.due !== 0n || value.arrears !== 0n).sort((left, right) => compareBytes(left.payer, right.payer))) {
+    if (entry.paid !== 0n) legs.push(concatenate(Uint8Array.of(0), entry.payer, treasury, asset, bigEndian(entry.paid, 16), bigEndian(23n, 2)));
+  }
+  return merkleRoot(legs);
+}
+
+async function merkleRoot(legs: readonly Uint8Array[]): Promise<Uint8Array> {
+  if (legs.length === 0) return new Uint8Array(32);
+  let level = await Promise.all(legs.map((leg) => sha256(MERKLE_LEAF, leg)));
+  while (level.length > 1) {
+    const next: Uint8Array[] = [];
+    for (let index = 0; index < level.length; index += 2) next.push(await sha256(MERKLE_INTERNAL, level[index] ?? fail("merkle level"), level[index + 1] ?? level[index] ?? fail("merkle level")));
+    level = next;
+  }
+  return level[0] ?? fail("merkle root");
+}
+
+function checkedU128Add(left: bigint, right: bigint, boundary: string): bigint { const value = left + right; if (value > MAX_U128) fail(boundary); return value; }
+function checkedU128Multiply(left: bigint, right: bigint, boundary: string): bigint { const value = left * right; if (value > MAX_U128) fail(boundary); return value; }
+function bigEndian(value: bigint, length: number): Uint8Array { const result = new Uint8Array(length); let remaining = value; for (let index = length - 1; index >= 0; index -= 1) { result[index] = Number(remaining & 0xffn); remaining >>= 8n; } if (remaining !== 0n) fail("canonical integer encoding"); return result; }
+function nonzero(value: Uint8Array, boundary: string): void { if (allZero(value)) fail(boundary); }
+function allZero(value: Uint8Array): boolean { return value.every((byte) => byte === 0); }
+function compareBytes(left: Uint8Array, right: Uint8Array): number { const length = Math.min(left.length, right.length); for (let index = 0; index < length; index += 1) { const order = (left[index] ?? 0) - (right[index] ?? 0); if (order !== 0) return order; } return left.length - right.length; }
 
 function validTransferError(tag: number): boolean { return tag >= 1 && tag <= 12; }
 function field(reader: Reader, expected: number): void { if (reader.byte() !== expected) fail("signed activity field tag"); }

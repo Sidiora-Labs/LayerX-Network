@@ -110,6 +110,76 @@ const decodedTerminal = await decodeAndVerifyProgramTerminal(terminal, graph, pr
 assert(decodedTerminal.outcome.kind === "completed" && decodedTerminal.outcome.response === "aabb", "canonical candidate terminal response was not bound");
 assert(decodedTerminal.usage.fee_units === "10", "canonical candidate terminal usage was not bound");
 
+const transferPrincipal = Buffer.from("22".repeat(32), "hex");
+const transferAsset = Buffer.from("33".repeat(32), "hex");
+const transferDestination = Buffer.from("44".repeat(32), "hex");
+const transferAuthorization = join(
+  Buffer.from("LayerX/programs/402LXP/transfer-set/v2\0", "utf8"), Buffer.from(programId, "hex"), transferPrincipal,
+  Buffer.from("55".repeat(32), "hex"), Buffer.alloc(9),
+  sized(Buffer.concat([Buffer.from("LayerX/programs/events/v1\0", "utf8"), Buffer.alloc(4)])),
+  integer(0n, 8), integer(1n, 8), Buffer.alloc(9), Buffer.from([1]), transferPrincipal,
+  transferAsset, transferDestination, integer(7n, 16), Buffer.from(programId, "hex"),
+);
+const transferRoot = await merkleTestRoot(join(Buffer.from([0]), transferPrincipal, transferDestination, transferAsset, integer(7n, 16), integer(1n, 2)));
+const authorityTerminal = authorityWrapper(terminal, transferAuthorization, transferRoot);
+const authorityReceipt = { ...receiptOutcome, terminalPayloadRoot: await hash(authorityTerminal), transferRoot };
+await decodeAndVerifyProgramTerminal(authorityTerminal, graph, programId, authorityReceipt, 1);
+const mutatedAuthorization = Uint8Array.from(transferAuthorization); const authorizationMutation = mutatedAuthorization.length - 65;
+mutatedAuthorization[authorizationMutation] = (mutatedAuthorization[authorizationMutation] ?? 0) ^ 1;
+await rejectsTerminal(authorityWrapper(terminal, mutatedAuthorization, transferRoot), graph, programId, authorityReceipt, 1, "mutated transfer authorization was accepted");
+const mutatedAuthorityRoot = Uint8Array.from(transferRoot); mutatedAuthorityRoot[0] = (mutatedAuthorityRoot[0] ?? 0) ^ 1;
+await rejectsTerminal(authorityWrapper(terminal, transferAuthorization, mutatedAuthorityRoot), graph, programId, authorityReceipt, 1, "mutated transfer wrapper root was accepted");
+
+const occupancyAsset = Buffer.from("66".repeat(32), "hex");
+const occupancyPayer = Buffer.from("77".repeat(32), "hex");
+const occupancyNamespace = join(Buffer.from([65]), Buffer.from(programId, "hex"), Buffer.from([0]), occupancyPayer);
+const occupancyEvidence = join(
+  Buffer.from("LXP/storage-occupancy-settlement/v3\0", "utf8"), integer(2n, 8), integer(1n, 4),
+  integer(0n, 8), integer(0n, 8), integer(0n, 8), integer(0n, 8), integer(0n, 8), integer(0n, 8), integer(2n, 8),
+  integer(3n, 16), integer(6n, 16), integer(6n, 16), integer(0n, 16), integer(1n, 4),
+  occupancyNamespace, occupancyPayer, Buffer.from(programId, "hex"), Buffer.from("88".repeat(32), "hex"),
+  integer(1n, 8), integer(2n, 8), integer(3n, 8), integer(3n, 8), integer(3n, 16), integer(2n, 8),
+  integer(6n, 16), integer(0n, 16), integer(6n, 16), integer(0n, 16), Buffer.from([1]), integer(0n, 16),
+  integer(3n, 8), integer(2n, 8), integer(0n, 16), Buffer.from("99".repeat(32), "hex"),
+);
+const occupancyRoot = await occupancyTestRoot(occupancyPayer, occupancyAsset, 6n);
+const occupancyTerminal = occupancyWrapper(terminal, occupancyEvidence);
+const occupancyReceipt: ProgramReceiptOutcome = {
+  ...receiptOutcome, terminalPayloadRoot: await hash(occupancyTerminal), occupancyByteBatches: 3n, occupancyFeeUnits: 6n,
+  occupancyAssetId: occupancyAsset, occupancyEvidenceDigest: await hash(occupancyEvidence), occupancyTransferRoot: occupancyRoot,
+};
+await decodeAndVerifyProgramTerminal(occupancyTerminal, graph, programId, occupancyReceipt, 2);
+await rejectsTerminal(occupancyTerminal, graph, programId, { ...occupancyReceipt, occupancyByteBatches: 4n }, 2, "mutated occupancy counter was accepted");
+const mutatedEvidence = Uint8Array.from(occupancyEvidence);
+const evidenceMutation = Buffer.from("LXP/storage-occupancy-settlement/v3\0", "utf8").length + 8 + 4 + (7 * 8) + 15;
+mutatedEvidence[evidenceMutation] = (mutatedEvidence[evidenceMutation] ?? 0) ^ 1;
+await rejectsTerminal(occupancyWrapper(terminal, mutatedEvidence), graph, programId,
+  { ...occupancyReceipt, occupancyEvidenceDigest: await hash(mutatedEvidence) }, 2, "semantically mutated occupancy evidence was accepted");
+const mutatedOccupancyRoot = Uint8Array.from(occupancyRoot); mutatedOccupancyRoot[0] = (mutatedOccupancyRoot[0] ?? 0) ^ 1;
+await rejectsTerminal(occupancyTerminal, graph, programId, { ...occupancyReceipt, occupancyTransferRoot: mutatedOccupancyRoot }, 2, "mutated occupancy root was accepted");
+const mutatedOccupancyAsset = Uint8Array.from(occupancyAsset); mutatedOccupancyAsset[0] = (mutatedOccupancyAsset[0] ?? 0) ^ 1;
+await rejectsTerminal(occupancyTerminal, graph, programId, { ...occupancyReceipt, occupancyAssetId: mutatedOccupancyAsset }, 2, "mutated occupancy asset was accepted");
+
+const zeroOccupancyEvidence = join(
+  Buffer.from("LXP/storage-occupancy-settlement/v3\0", "utf8"), integer(2n, 8), integer(1n, 4),
+  ...Array.from({ length: 7 }, () => integer(0n, 8)), ...Array.from({ length: 4 }, () => integer(0n, 16)), integer(0n, 4),
+);
+const zeroOccupancyTerminal = occupancyWrapper(terminal, zeroOccupancyEvidence);
+await decodeAndVerifyProgramTerminal(zeroOccupancyTerminal, graph, programId, {
+  ...receiptOutcome, terminalPayloadRoot: await hash(zeroOccupancyTerminal), occupancyAssetId: occupancyAsset,
+  occupancyEvidenceDigest: await hash(zeroOccupancyEvidence), occupancyTransferRoot: new Uint8Array(32),
+}, 2);
+const emptyOccupancyTerminal = occupancyWrapper(terminal, new Uint8Array());
+await decodeAndVerifyProgramTerminal(emptyOccupancyTerminal, graph, programId, {
+  ...receiptOutcome, terminalPayloadRoot: await hash(emptyOccupancyTerminal),
+}, 2);
+const wrongWrapperOrder = occupancyWrapper(authorityWrapper(terminal, transferAuthorization, transferRoot), occupancyEvidence);
+await rejectsTerminal(wrongWrapperOrder, graph, programId, { ...occupancyReceipt, transferRoot }, 2, "noncanonical attachment wrapper order was accepted");
+await rejectsTerminal(authorityWrapper(authorityTerminal, transferAuthorization, transferRoot), graph, programId, authorityReceipt, 1,
+  "duplicate transfer authority attachment was accepted");
+await rejectsTerminal(occupancyWrapper(occupancyTerminal, occupancyEvidence), graph, programId, occupancyReceipt, 2,
+  "duplicate occupancy attachment was accepted");
+
 async function canonicalProgramCall(callee: string, idempotency: string): Promise<Uint8Array> {
   const payload = join(
     Buffer.from("LayerX/programs/call/v1\0", "utf8"),
@@ -143,6 +213,26 @@ async function hash(value: Uint8Array): Promise<Uint8Array> {
   const encoded = new ArrayBuffer(value.length);
   new Uint8Array(encoded).set(value);
   return new Uint8Array(await globalThis.crypto.subtle.digest("SHA-256", encoded));
+}
+
+function authorityWrapper(inner: Uint8Array, authorization: Uint8Array, root: Uint8Array): Uint8Array {
+  return join(Buffer.from("LXP/program-execution-with-transfer-authority/v2\0", "utf8"), sized(inner), sized(authorization), root);
+}
+function occupancyWrapper(inner: Uint8Array, evidence: Uint8Array): Uint8Array {
+  return join(Buffer.from("LXP/program-execution-with-occupancy/v1\0", "utf8"), sized(inner), sized(evidence));
+}
+async function merkleTestRoot(leg: Uint8Array): Promise<Uint8Array> {
+  return hash(join(Buffer.from("LXP/v1/merkle-leaf\0", "utf8"), leg));
+}
+async function occupancyTestRoot(payer: Uint8Array, asset: Uint8Array, amount: bigint): Promise<Uint8Array> {
+  const treasury = await hash(join(Buffer.from("LX:ACCOUNT:v1", "utf8"), integer(11n, 4), Buffer.from("system:fees", "utf8")));
+  return merkleTestRoot(join(Buffer.from([0]), payer, treasury, asset, integer(amount, 16), integer(23n, 2)));
+}
+async function rejectsTerminal(payload: Uint8Array, availableGraph: Uint8Array, expectedProgram: string,
+  receipt: ProgramReceiptOutcome, protocol: number, message: string): Promise<void> {
+  let rejected = false;
+  try { await decodeAndVerifyProgramTerminal(payload, availableGraph, expectedProgram, receipt, protocol); } catch { rejected = true; }
+  assert(rejected, message);
 }
 
 function sized(value: Uint8Array): Uint8Array { return join(integer(BigInt(value.length), 4), value); }
