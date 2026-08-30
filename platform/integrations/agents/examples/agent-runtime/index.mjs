@@ -5,6 +5,7 @@ import { createLangChainIntegration } from "@sidiora/layerx-agent-integrations/l
 import { createOpenAiIntegration } from "@sidiora/layerx-agent-integrations/openai";
 import { createVercelAiIntegration } from "@sidiora/layerx-agent-integrations/vercel-ai";
 import { createMcpIntegration } from "@sidiora/layerx-agent-integrations/mcp";
+import { createA2AIntegration, FileA2ATaskStore } from "@sidiora/layerx-agent-integrations/a2a";
 
 const required = (name) => {
   const value = process.env[name];
@@ -37,7 +38,41 @@ const integrations = {
     };
   },
   a2a: () => {
-    throw new Error("a2a_requires_durable_task_store_and_authenticated_request_context_verifier");
+    const tenant = required("LAYERX_TENANT");
+    const actor = required("LAYERX_ACTOR");
+    const integration = createA2AIntegration({
+      ...options,
+      durableTaskStore: new FileA2ATaskStore(
+        `${required("LAYERX_WEBHOOK_DELIVERY_STORE_PATH")}.a2a-tasks.sqlite3`,
+      ),
+      authentication: {
+        schemeName: "layerxBearer",
+        securityScheme: {
+          scheme: {
+            $case: "httpAuthSecurityScheme",
+            value: {
+              description: "LayerX service bearer token",
+              scheme: "Bearer",
+              bearerFormat: "opaque",
+            },
+          },
+        },
+        async authenticate(context) {
+          if (context.tenant !== tenant || context.user?.isAuthenticated !== true
+              || context.user.userName !== actor) {
+            throw new Error("a2a_unauthenticated_request_context");
+          }
+          return context;
+        },
+      },
+    });
+    return {
+      integration,
+      tools: integration.tools.definitions.map((tool) => tool.name),
+      async spend(input) {
+        return object(await integration.executeToolRequest({ tool: "layerx_spend", arguments: input }));
+      },
+    };
   },
   openai: () => {
     const integration = createOpenAiIntegration(options);

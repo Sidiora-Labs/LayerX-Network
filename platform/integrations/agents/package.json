@@ -43,6 +43,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node test/a2a-store.test.mjs",
     "integration:real": "node examples/agent-runtime/index.mjs"
   },
   "dependencies": {
@@ -62,6 +63,6 @@
     "typescript": "5.9.2"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22.18.0"
   }
 }
