@@ -268,6 +268,7 @@ int main(void)
     lxp_state_journal journal;
     lxp_kernel kernel;
     lxp_module_ctx ctx;
+    lxp_effect_buffer effects;
     lxp_arena arena;
     uint8_t arena_bytes[65536];
     lxp_authority_resolved authority;
@@ -349,8 +350,10 @@ int main(void)
 
     if (lxp_state_journal_open(&state, 8U, &journal) != LXP_OK ||
         lxp_arena_init(&arena, arena_bytes, sizeof(arena_bytes)) != LXP_OK ||
-        lxp_module_ctx_init(&ctx, &kernel, LXP_MODULE_PROGRAMS, 8U, 1U, 7U,
-                            100000U, &arena, true) != LXP_OK)
+        lxp_module_ctx_init(&ctx, &kernel, LXP_MODULE_PROGRAMS, 8U, 1U, 8U,
+                            100000U, &arena, true) != LXP_OK ||
+        lxp_effect_buffer_init(&effects) != LXP_OK ||
+        lxp_module_ctx_bind_effects(&ctx, &effects) != LXP_OK)
         return 1;
     ctx.protocol_version = LXP_PROTOCOL_VERSION_OCCUPANCY;
     for (index = 0U; index < 2U; ++index)
