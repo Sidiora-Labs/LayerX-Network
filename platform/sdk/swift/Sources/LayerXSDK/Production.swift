@@ -132,8 +132,28 @@ public struct TransportCall: Sendable {
     public let idempotencyKey: IdempotencyKey?
 }
 
+public struct ProgramTransportCall: Sendable {
+    public let operation: String
+    public let request: JSONValue
+    public let pathParameters: [String: String]
+    public let idempotencyKey: IdempotencyKey?
+
+    public init(operation: String, request: JSONValue, pathParameters: [String: String] = [:],
+                idempotencyKey: IdempotencyKey? = nil) {
+        self.operation = operation; self.request = request
+        self.pathParameters = pathParameters; self.idempotencyKey = idempotencyKey
+    }
+}
+
 public protocol PlatformTransport: Sendable {
     func send(_ call: TransportCall) async throws -> JSONValue
+    func sendProgram(_ call: ProgramTransportCall) async throws -> JSONValue
+}
+
+public extension PlatformTransport {
+    func sendProgram(_ call: ProgramTransportCall) async throws -> JSONValue {
+        throw PlatformSDKError(code: .unavailableCapability, retry: .never)
+    }
 }
 
 public struct SDKTelemetryEvent: Sendable {
@@ -176,6 +196,24 @@ public final class PlatformClient: @unchecked Sendable {
             throw PlatformSDKError(code: .invalidArgument, retry: .never)
         }
         return try await execute(operation, request: request, idempotencyKey: idempotencyKey, pathParameters: pathParameters)
+    }
+
+    func program(_ operation: String, request: JSONValue, idempotencyKey: IdempotencyKey? = nil,
+                 pathParameters: [String: String] = [:]) async throws -> JSONValue {
+        do {
+            let response = try await transport.sendProgram(.init(operation: operation, request: request,
+                pathParameters: pathParameters, idempotencyKey: idempotencyKey))
+            telemetry?(.init(plane: .agent, operation: operation, outcome: .completed, code: nil))
+            return response
+        } catch let error as PlatformSDKError {
+            telemetry?(.init(plane: .agent, operation: operation, outcome: .refused, code: error.code))
+            throw error
+        } catch {
+            let code: SDKErrorCode = operation == "program.call" ? .unknownOutcome : .transportFailure
+            let retry: RetryClass = operation == "program.call" ? .unknownOutcome : .safe
+            telemetry?(.init(plane: .agent, operation: operation, outcome: .refused, code: code))
+            throw PlatformSDKError(code: code, retry: retry)
+        }
     }
 
     private func execute(_ operation: PlatformOperation, request: JSONValue, idempotencyKey: IdempotencyKey?, pathParameters: [String: String]) async throws -> JSONValue {

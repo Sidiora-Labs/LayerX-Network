@@ -2,6 +2,7 @@
 
 using System.Net;
 using System.Net.Http.Headers;
+using System.Numerics;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -67,6 +68,8 @@ public sealed class LayerXKeyCredential : IDisposable
 public sealed class AgentHttpTransport : IPlatformTransport
 {
     private const int MaximumResponseBytes = 8 * 1024 * 1024;
+    private const int MaximumProgramsRequestBytes = 8 * 1024 * 1024;
+    private const int MaximumProgramBytes = 1_048_576;
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private static readonly HashSet<string> Operations = new(StringComparer.Ordinal)
     {
@@ -76,6 +79,24 @@ public sealed class AgentHttpTransport : IPlatformTransport
     private readonly Uri _baseUri;
     private readonly HttpClient _httpClient;
     private readonly LayerXKeyCredential? _credential;
+    private sealed record ProgramRoute(HttpMethod Method, string Path,
+        IReadOnlySet<string> PathParameters, bool Idempotent);
+    private static readonly IReadOnlyDictionary<string, ProgramRoute> ProgramRoutes =
+        new Dictionary<string, ProgramRoute>(StringComparer.Ordinal)
+        {
+            ["program.discover"] = new(HttpMethod.Get, "/v1/programs/registry/{program_id}",
+                new HashSet<string>(["program_id"], StringComparer.Ordinal), false),
+            ["program.interface"] = new(HttpMethod.Get, "/v1/programs/registry/{program_id}/interface",
+                new HashSet<string>(["program_id"], StringComparer.Ordinal), false),
+            ["program.simulate"] = new(HttpMethod.Post, "/v1/programs/simulate",
+                new HashSet<string>(StringComparer.Ordinal), false),
+            ["program.call"] = new(HttpMethod.Post, "/v1/programs/call",
+                new HashSet<string>(StringComparer.Ordinal), true),
+            ["program.receipt"] = new(HttpMethod.Get, "/v1/programs/receipts/by-idempotency/{idempotency_key}",
+                new HashSet<string>(["idempotency_key"], StringComparer.Ordinal), false),
+            ["program.activity"] = new(HttpMethod.Get, "/v1/programs/activities/{activity_id}",
+                new HashSet<string>(["activity_id"], StringComparer.Ordinal), false),
+        };
 
     public AgentHttpTransport(Uri baseUri, HttpClient? httpClient = null, LayerXKeyCredential? credential = null)
     {
@@ -83,8 +104,10 @@ public sealed class AgentHttpTransport : IPlatformTransport
             !string.IsNullOrEmpty(baseUri.Query) || !string.IsNullOrEmpty(baseUri.Fragment) ||
             (baseUri.Scheme != Uri.UriSchemeHttps && (baseUri.Scheme != Uri.UriSchemeHttp || !IsLoopback(baseUri.Host))))
             throw new PlatformSdkException(SdkErrorCode.InvalidArgument, RetryClass.Never);
+        if (httpClient is not null)
+            throw new PlatformSdkException(SdkErrorCode.InvalidArgument, RetryClass.Never);
         _baseUri = baseUri;
-        _httpClient = httpClient ?? new HttpClient();
+        _httpClient = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false });
         _credential = credential;
     }
 
@@ -93,44 +116,210 @@ public sealed class AgentHttpTransport : IPlatformTransport
         var descriptor = call.Operation.Descriptor();
         if (descriptor.Plane != PlatformPlane.Agent || !Operations.Contains(descriptor.Name))
             throw new PlatformSdkException(SdkErrorCode.UnavailableCapability, RetryClass.Never);
-        if (descriptor.Name == "program.call")
+        return await SendProgramAsync(new ProgramTransportCall(descriptor.Name, call.Request,
+            call.PathParameters, call.IdempotencyKey), cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<JsonValue> SendProgramAsync(ProgramTransportCall call, CancellationToken cancellationToken = default)
+    {
+        if (!ProgramRoutes.TryGetValue(call.Operation, out var route) ||
+            !route.PathParameters.SetEquals(call.PathParameters.Keys)) throw Invalid();
+        if (route.Idempotent)
         {
             if (call.IdempotencyKey is not { } key || !Hex32(key.Value))
-                throw new PlatformSdkException(SdkErrorCode.InvalidArgument, RetryClass.Never);
+                throw new PlatformSdkException(SdkErrorCode.IdempotencyRequired, RetryClass.Never);
         }
         else if (call.IdempotencyKey is not null)
-            throw new PlatformSdkException(SdkErrorCode.InvalidArgument, RetryClass.Never);
-        var path = ResolvePath(descriptor.Path, call.PathParameters);
-        var target = Endpoint(_baseUri, path);
-        using var request = new HttpRequestMessage(ToHttpMethod(descriptor.Method), target);
+            throw Invalid();
+        ValidateProgramRequest(call);
+        var encodedRequest = JsonSerializer.SerializeToUtf8Bytes(call.Request, JsonOptions);
+        if (encodedRequest.Length == 0 || encodedRequest.Length > MaximumProgramsRequestBytes) throw Invalid();
+        var path = route.Path;
+        foreach (var name in route.PathParameters)
+        {
+            if (!call.PathParameters.TryGetValue(name, out var value) || !Hex32(value) ||
+                !ProgramMap(call.Request).TryGetValue(name, out var rawBodyValue) ||
+                rawBodyValue is not JsonValue.StringValue bodyValue || bodyValue.Value != value)
+                throw Invalid();
+            path = path.Replace("{" + name + "}", Uri.EscapeDataString(value), StringComparison.Ordinal);
+        }
+        var target = RootEndpoint(_baseUri, path);
+        using var request = new HttpRequestMessage(route.Method, target);
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
         request.Headers.UserAgent.ParseAdd("layerx-dotnet/0.1.0");
-        request.Content = new ByteArrayContent(JsonSerializer.SerializeToUtf8Bytes(call.Request, JsonOptions));
+        request.Content = new ByteArrayContent(encodedRequest);
         request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
         if (call.IdempotencyKey is { } idempotency)
             request.Headers.TryAddWithoutValidation("Idempotency-Key", idempotency.Value);
-        _credential?.Authorize(request);
-        using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
-        var encoded = await ReadBoundedAsync(response.Content, cancellationToken).ConfigureAwait(false);
-        AgentEnvelope? envelope;
-        try { envelope = JsonSerializer.Deserialize<AgentEnvelope>(encoded, JsonOptions); }
-        catch (JsonException) { throw Decode(); }
-        if (envelope is null) throw Decode();
-        if (envelope.ErrorClass is not null)
+        if (_credential is null) throw new PlatformSdkException(SdkErrorCode.CapabilityRefusal, RetryClass.Never);
+        _credential.Authorize(request);
+        HttpResponseMessage response;
+        try
         {
-            if (response.IsSuccessStatusCode || envelope.Value is not null) throw Decode(envelope.RequestId);
-            throw ServiceError(envelope);
+            response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead,
+                cancellationToken).ConfigureAwait(false);
         }
-        if (!response.IsSuccessStatusCode || string.IsNullOrEmpty(envelope.RequestId) || envelope.Value is null)
-            throw Decode(envelope.RequestId);
-        if (!SequencerSigned(envelope.VerificationStatus))
-            throw new PlatformSdkException(SdkErrorCode.VerificationFailure, RetryClass.Never, envelope.RequestId);
-        return envelope.Value;
+        catch when (call.Operation == "program.call") { throw UnknownOutcome(); }
+        catch (OperationCanceledException) { throw new PlatformSdkException(SdkErrorCode.Deadline, RetryClass.Safe); }
+        catch { throw new PlatformSdkException(SdkErrorCode.TransportFailure, RetryClass.Safe); }
+        using (response)
+        {
+            try
+            {
+                if (response.Content.Headers.ContentType?.MediaType is not string mediaType ||
+                    !string.Equals(mediaType, "application/json", StringComparison.OrdinalIgnoreCase)) throw Decode();
+                var encoded = await ReadBoundedAsync(response.Content, cancellationToken).ConfigureAwait(false);
+                return DecodeProgramEnvelope(call.Operation, (int)response.StatusCode, encoded);
+            }
+            catch (PlatformSdkException error) when (call.Operation == "program.call" &&
+                error.Code is SdkErrorCode.DecodeFailure or SdkErrorCode.VerificationFailure)
+            {
+                throw UnknownOutcome();
+            }
+        }
     }
 
-    private static bool SequencerSigned(JsonValue? value) => value is JsonValue.ObjectValue map &&
-        map.Value.TryGetValue("state", out var state) && state is JsonValue.StringValue { Value: "Achieved" } &&
-        map.Value.TryGetValue("level", out var level) && level is JsonValue.StringValue { Value: "SequencerSigned" };
+    private static JsonValue DecodeProgramEnvelope(string operation, int status, byte[] encoded)
+    {
+        JsonValue? document;
+        try { document = JsonSerializer.Deserialize<JsonValue>(encoded, JsonOptions); }
+        catch (JsonException) { throw Decode(); }
+        var envelope = ResponseMap(document ?? throw Decode());
+        if (envelope.ContainsKey("class"))
+        {
+            if (status is >= 200 and < 300 || !Exact(envelope,
+                "class", "protocol_result_code", "retriability", "request_id", "reason")) throw Decode();
+            throw ProgramServiceError(envelope);
+        }
+        var requestId = TryText(envelope, "request_id");
+        if (status is < 200 or >= 300 || !Exact(envelope, "request_id", "value", "verification_status") ||
+            requestId is null || !ValidRequestId(requestId) || !envelope.TryGetValue("value", out var value) || value is JsonValue.NullValue ||
+            !envelope.TryGetValue("verification_status", out var verification) ||
+            !ValidProgramVerification(operation, value, verification)) throw Decode(requestId);
+        return value;
+    }
+
+    private static bool ValidProgramVerification(string operation, JsonValue value, JsonValue verification)
+    {
+        var status = verification is JsonValue.ObjectValue objectValue ? objectValue.Value : null;
+        if (status is null) return false;
+        if (operation is "program.discover" or "program.interface")
+            return Exact(status, "state", "level", "reason") && Text(status, "state") == "Unverified" &&
+                Text(status, "level") == "SequencerSigned" &&
+                Text(status, "reason") == "server_side_receipt_verification_only";
+        var pending = (operation is "program.call" or "program.receipt" or "program.activity") &&
+            value is JsonValue.ObjectValue pendingValue && TryText(pendingValue.Value, "state") == "unknown";
+        if (pending)
+            return Exact(status, "state", "level", "reason") && Text(status, "state") == "Unverified" &&
+                Text(status, "level") == "SequencerSigned" && Text(status, "reason") == "receipt_pending";
+        return (operation is "program.simulate" or "program.call" or "program.receipt" or "program.activity") &&
+            Exact(status, "state", "level") && Text(status, "state") == "Achieved" &&
+            Text(status, "level") == "SequencerSigned";
+    }
+
+    private static PlatformSdkException ProgramServiceError(IReadOnlyDictionary<string, JsonValue> envelope)
+    {
+        var requestId = Text(envelope, "request_id"); var reason = Text(envelope, "reason");
+        if (!ValidRequestId(requestId) || string.IsNullOrEmpty(reason) || reason.Length > 128 ||
+            reason.Any(character => !(character is >= 'a' and <= 'z' or >= '0' and <= '9' or '_' or '.'))) throw Decode();
+        int? resultCode = envelope["protocol_result_code"] switch
+        {
+            JsonValue.NullValue => null,
+            JsonValue.IntegerValue integer when integer.Value is >= int.MinValue and <= int.MaxValue => (int)integer.Value,
+            _ => throw Decode(requestId),
+        };
+        var code = Text(envelope, "class") switch
+        {
+            "TransportFailure" => SdkErrorCode.TransportFailure, "Deadline" => SdkErrorCode.Deadline,
+            "ProtocolIncompatibility" => SdkErrorCode.ProtocolIncompatibility,
+            "UnavailableCapability" => SdkErrorCode.UnavailableCapability,
+            "CoreRejection" => SdkErrorCode.CoreRejection, "VerificationFailure" => SdkErrorCode.VerificationFailure,
+            "PolicyRefusal" => SdkErrorCode.PolicyRefusal, "CapabilityRefusal" => SdkErrorCode.CapabilityRefusal,
+            "BudgetRefusal" => SdkErrorCode.BudgetRefusal, "RateLimit" => SdkErrorCode.RateLimit,
+            "IdempotencyConflict" => SdkErrorCode.IdempotencyConflict, "InternalFault" => SdkErrorCode.InternalFault,
+            _ => throw Decode(requestId),
+        };
+        var retry = Text(envelope, "retriability") switch
+        {
+            "Terminal" => RetryClass.Never, "Retriable" => RetryClass.Safe, _ => throw Decode(requestId),
+        };
+        return new PlatformSdkException(code, retry, requestId, resultCode);
+    }
+
+    private static void ValidateProgramRequest(ProgramTransportCall call)
+    {
+        var value = ProgramMap(call.Request);
+        switch (call.Operation)
+        {
+            case "program.discover": case "program.interface":
+                if (!Exact(value, "program_id", "requested_verification_level") ||
+                    !CanonicalProgram(value.GetValueOrDefault("program_id")) ||
+                    TryText(value, "requested_verification_level") != "sequencer-signed") throw Invalid();
+                break;
+            case "program.receipt":
+                if (!Exact(value, "idempotency_key", "expected_activity_id", "requested_verification_level") ||
+                    !CanonicalHex(value.GetValueOrDefault("idempotency_key"), 32, false) ||
+                    !CanonicalHex(value.GetValueOrDefault("expected_activity_id"), 32, false) ||
+                    TryText(value, "requested_verification_level") != "sequencer-signed") throw Invalid();
+                break;
+            case "program.activity":
+                if (!Exact(value, "activity_id", "requested_verification_level") ||
+                    !CanonicalHex(value.GetValueOrDefault("activity_id"), 32, false) ||
+                    TryText(value, "requested_verification_level") != "sequencer-signed") throw Invalid();
+                break;
+            case "program.simulate": case "program.call": ValidateProgramCall(value); break;
+            default: throw Invalid();
+        }
+    }
+
+    private static void ValidateProgramCall(IReadOnlyDictionary<string, JsonValue> value)
+    {
+        if (!Exact(value, "program_id", "calldata", "budget", "capabilities", "signed_activity") ||
+            !CanonicalProgram(value.GetValueOrDefault("program_id")) ||
+            !BoundedHex(value.GetValueOrDefault("calldata"), MaximumProgramBytes, true) ||
+            !BoundedHex(value.GetValueOrDefault("signed_activity"), MaximumProgramBytes, false) ||
+            value.GetValueOrDefault("budget") is not JsonValue.ObjectValue budget ||
+            !Exact(budget.Value, "fuel", "fee_limit") || !CanonicalUInt64(budget.Value.GetValueOrDefault("fuel"), true) ||
+            !CanonicalUInt128(budget.Value.GetValueOrDefault("fee_limit")) ||
+            value.GetValueOrDefault("capabilities") is not JsonValue.ArrayValue capabilities || capabilities.Value.Count > 5)
+            throw Invalid();
+        string[] order = ["storage_read", "storage_write", "transfer", "emit_event", "compose"];
+        var previous = -1;
+        foreach (var capability in capabilities.Value)
+        {
+            var current = capability is JsonValue.StringValue name ? Array.IndexOf(order, name.Value) : -1;
+            if (current <= previous) throw Invalid();
+            previous = current;
+        }
+    }
+
+    private static IReadOnlyDictionary<string, JsonValue> ProgramMap(JsonValue value) =>
+        value is JsonValue.ObjectValue map ? map.Value : throw Invalid();
+    private static IReadOnlyDictionary<string, JsonValue> ResponseMap(JsonValue value) =>
+        value is JsonValue.ObjectValue map ? map.Value : throw Decode();
+    private static bool Exact(IReadOnlyDictionary<string, JsonValue> value, params string[] fields) =>
+        value.Count == fields.Length && fields.All(value.ContainsKey);
+    private static string Text(IReadOnlyDictionary<string, JsonValue> value, string field) =>
+        TryText(value, field) ?? throw Decode();
+    private static string? TryText(IReadOnlyDictionary<string, JsonValue> value, string field) =>
+        value.TryGetValue(field, out var raw) && raw is JsonValue.StringValue text ? text.Value : null;
+    private static bool CanonicalProgram(JsonValue? value) => CanonicalHex(value, 32, false) &&
+        value is JsonValue.StringValue text && text.Value != new string('0', 64);
+    private static bool CanonicalHex(JsonValue? value, int bytes, bool empty) =>
+        value is JsonValue.StringValue text && (empty && text.Value.Length == 0 ||
+            text.Value.Length == bytes * 2 && text.Value.All(character => character is >= '0' and <= '9' or >= 'a' and <= 'f'));
+    private static bool BoundedHex(JsonValue? value, int maximum, bool empty) =>
+        value is JsonValue.StringValue text && text.Value.Length % 2 == 0 && text.Value.Length <= maximum * 2 &&
+        (empty || text.Value.Length != 0) && text.Value.All(character => character is >= '0' and <= '9' or >= 'a' and <= 'f');
+    private static bool CanonicalUInt64(JsonValue? value, bool positive) => value is JsonValue.StringValue text &&
+        CanonicalDecimal(text.Value) && ulong.TryParse(text.Value, out var parsed) && (!positive || parsed > 0);
+    private static bool CanonicalUInt128(JsonValue? value) => value is JsonValue.StringValue text &&
+        CanonicalDecimal(text.Value) && BigInteger.TryParse(text.Value, out var parsed) &&
+        parsed >= BigInteger.Zero && parsed < (BigInteger.One << 128);
+    private static bool CanonicalDecimal(string value) => !string.IsNullOrEmpty(value) &&
+        (value == "0" || value[0] != '0') && value.All(character => character is >= '0' and <= '9');
+    private static bool ValidRequestId(string value) => !string.IsNullOrEmpty(value) && value.Length <= 128 &&
+        value.All(character => character is >= (char)0x21 and <= (char)0x7e);
 
     private static PlatformSdkException ServiceError(AgentEnvelope envelope)
     {
@@ -199,6 +388,12 @@ public sealed class AgentHttpTransport : IPlatformTransport
         return builder.Uri;
     }
 
+    private static Uri RootEndpoint(Uri baseUri, string path)
+    {
+        var builder = new UriBuilder(baseUri) { Path = path, Query = "", Fragment = "" };
+        return builder.Uri;
+    }
+
     private static HttpMethod ToHttpMethod(SdkHttpMethod method) => method switch
     {
         SdkHttpMethod.Get => HttpMethod.Get, SdkHttpMethod.Post => HttpMethod.Post,
@@ -209,7 +404,9 @@ public sealed class AgentHttpTransport : IPlatformTransport
     private static bool IsLoopback(string host) => string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase) ||
         IPAddress.TryParse(host, out var address) && IPAddress.IsLoopback(address);
     private static bool Hex32(string value) => value.Length == 64 && value.All(character => character is >= '0' and <= '9' or >= 'a' and <= 'f');
+    private static PlatformSdkException Invalid() => new(SdkErrorCode.InvalidArgument, RetryClass.Never);
     private static PlatformSdkException Decode(string? requestId = null) => new(SdkErrorCode.DecodeFailure, RetryClass.Never, requestId);
+    private static PlatformSdkException UnknownOutcome() => new(SdkErrorCode.UnknownOutcome, RetryClass.UnknownOutcome);
 
     private sealed record AgentEnvelope(
         [property: JsonPropertyName("request_id")] string RequestId,

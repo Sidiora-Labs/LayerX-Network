@@ -4,6 +4,8 @@ import FoundationNetworking
 #endif
 
 private let maximumHTTPResponseBytes = 8 * 1024 * 1024
+private let maximumProgramsRequestBytes = 8 * 1024 * 1024
+private let maximumProgramBytes = 1_048_576
 
 public final class AccessToken: @unchecked Sendable, CustomStringConvertible {
     private let secret: SecretBytes
@@ -63,6 +65,26 @@ public final class AgentHTTPTransport: PlatformTransport, @unchecked Sendable {
     private let baseURL: URL
     private let session: URLSession
     private let credential: LayerXKeyCredential?
+    private struct ProgramRoute {
+        let method: String
+        let path: String
+        let pathParameters: Set<String>
+        let idempotent: Bool
+    }
+    private static let programRoutes: [String: ProgramRoute] = [
+        "program.discover": .init(method: "GET", path: "/v1/programs/registry/{program_id}",
+            pathParameters: ["program_id"], idempotent: false),
+        "program.interface": .init(method: "GET", path: "/v1/programs/registry/{program_id}/interface",
+            pathParameters: ["program_id"], idempotent: false),
+        "program.simulate": .init(method: "POST", path: "/v1/programs/simulate",
+            pathParameters: [], idempotent: false),
+        "program.call": .init(method: "POST", path: "/v1/programs/call",
+            pathParameters: [], idempotent: true),
+        "program.receipt": .init(method: "GET", path: "/v1/programs/receipts/by-idempotency/{idempotency_key}",
+            pathParameters: ["idempotency_key"], idempotent: false),
+        "program.activity": .init(method: "GET", path: "/v1/programs/activities/{activity_id}",
+            pathParameters: ["activity_id"], idempotent: false),
+    ]
 
     public init(baseURL: URL, session: URLSession = .shared, credential: LayerXKeyCredential? = nil) throws {
         guard baseURL.user == nil, baseURL.password == nil, baseURL.host != nil,
@@ -80,51 +102,218 @@ public final class AgentHTTPTransport: PlatformTransport, @unchecked Sendable {
         guard descriptor.plane == .agent, Self.operations.contains(descriptor.name) else {
             throw PlatformSDKError(code: .unavailableCapability, retry: .never)
         }
-        if descriptor.name == "program.call" {
+        return try await sendProgram(.init(operation: descriptor.name, request: call.request,
+            pathParameters: call.pathParameters, idempotencyKey: call.idempotencyKey))
+    }
+
+    public func sendProgram(_ call: ProgramTransportCall) async throws -> JSONValue {
+        guard let route = Self.programRoutes[call.operation], route.pathParameters == Set(call.pathParameters.keys) else {
+            throw PlatformSDKError(code: .invalidArgument, retry: .never)
+        }
+        if route.idempotent {
             guard let key = call.idempotencyKey, Self.hex32(key.rawValue) else {
-                throw PlatformSDKError(code: .invalidArgument, retry: .never)
+                throw PlatformSDKError(code: .idempotencyRequired, retry: .never)
             }
         } else if call.idempotencyKey != nil {
             throw PlatformSDKError(code: .invalidArgument, retry: .never)
         }
-        let path = try Self.resolvePath(descriptor.path, parameters: call.pathParameters)
-        guard let target = Self.endpoint(baseURL, path: path) else {
+        try Self.validateProgramRequest(call)
+        let encoded = try JSONEncoder().encode(call.request)
+        guard !encoded.isEmpty, encoded.count <= maximumProgramsRequestBytes else {
+            throw PlatformSDKError(code: .invalidArgument, retry: .never)
+        }
+        var path = route.path
+        for name in route.pathParameters {
+            guard let value = call.pathParameters[name], Self.hex32(value),
+                  call.request.objectValue?[name]?.stringValue == value else {
+                throw PlatformSDKError(code: .invalidArgument, retry: .never)
+            }
+            path = path.replacingOccurrences(of: "{\(name)}", with: Self.percentEncodePathSegment(value))
+        }
+        guard let target = Self.rootEndpoint(baseURL, path: path) else {
             throw PlatformSDKError(code: .invalidArgument, retry: .never)
         }
         var request = URLRequest(url: target)
-        request.httpMethod = descriptor.method.rawValue
-        request.httpBody = try JSONEncoder().encode(call.request)
+        request.httpMethod = route.method
+        request.httpBody = encoded
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("layerx-swift/0.1.0", forHTTPHeaderField: "User-Agent")
         if let key = call.idempotencyKey { request.setValue(key.rawValue, forHTTPHeaderField: "Idempotency-Key") }
-        try credential?.authorize(&request)
-        let (data, response) = try await session.data(for: request)
-        guard data.count <= maximumHTTPResponseBytes, let http = response as? HTTPURLResponse else {
-            throw PlatformSDKError(code: .decodeFailure, retry: .never)
+        guard let credential else {
+            throw PlatformSDKError(code: .capabilityRefusal, retry: .never)
         }
-        let envelope: AgentEnvelope
-        do { envelope = try JSONDecoder().decode(AgentEnvelope.self, from: data) }
-        catch { throw PlatformSDKError(code: .decodeFailure, retry: .never) }
-        if let error = envelope.errorClass {
-            guard !(200..<300).contains(http.statusCode), envelope.value == nil else {
-                throw PlatformSDKError(code: .decodeFailure, retry: .never)
-            }
-            throw try error.sdkError(envelope)
+        try credential.authorize(&request)
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: request, delegate: NoRedirectDelegate.shared)
+        } catch {
+            if call.operation == "program.call" { throw Self.unknownOutcome() }
+            throw PlatformSDKError(code: .transportFailure, retry: .safe)
         }
-        guard (200..<300).contains(http.statusCode), !envelope.requestID.isEmpty,
-              let value = envelope.value, Self.sequencerSigned(envelope.verificationStatus) else {
-            if !envelope.requestID.isEmpty, envelope.value != nil {
-                throw PlatformSDKError(code: .verificationFailure, retry: .never, requestID: envelope.requestID)
+        do {
+            guard data.count <= maximumHTTPResponseBytes, let http = response as? HTTPURLResponse,
+                  Self.jsonContentType(http) else { throw Self.decode() }
+            return try Self.decodeProgramEnvelope(call.operation, status: http.statusCode, data: data)
+        } catch let error as PlatformSDKError {
+            if call.operation == "program.call",
+               (error.code == .decodeFailure || error.code == .verificationFailure) {
+                throw Self.unknownOutcome()
             }
-            throw PlatformSDKError(code: .decodeFailure, retry: .never, requestID: envelope.requestID.isEmpty ? nil : envelope.requestID)
+            throw error
+        }
+    }
+
+    private static func decodeProgramEnvelope(_ operation: String, status: Int, data: Data) throws -> JSONValue {
+        let document: JSONValue
+        do { document = try JSONDecoder().decode(JSONValue.self, from: data) }
+        catch { throw decode() }
+        guard let envelope = document.objectValue else { throw decode() }
+        if envelope["class"] != nil {
+            guard !(200..<300).contains(status), exact(envelope,
+                ["class", "protocol_result_code", "retriability", "request_id", "reason"]) else { throw decode() }
+            throw try serviceError(envelope)
+        }
+        guard (200..<300).contains(status), exact(envelope, ["request_id", "value", "verification_status"]),
+              let requestID = envelope["request_id"]?.stringValue, validRequestID(requestID),
+              let value = envelope["value"], value != .null,
+              validVerification(operation, value: value, status: envelope["verification_status"]) else {
+            throw decode(envelope["request_id"]?.stringValue)
         }
         return value
     }
 
-    private static func sequencerSigned(_ value: JSONValue?) -> Bool {
-        guard let status = value?.objectValue else { return false }
-        return status["state"]?.stringValue == "Achieved" && status["level"]?.stringValue == "SequencerSigned"
+    private static func validateProgramRequest(_ call: ProgramTransportCall) throws {
+        guard let object = call.request.objectValue else { throw invalid() }
+        switch call.operation {
+        case "program.discover", "program.interface":
+            guard exact(object, ["program_id", "requested_verification_level"]),
+                  canonicalProgram(object["program_id"]),
+                  object["requested_verification_level"]?.stringValue == "sequencer-signed" else { throw invalid() }
+        case "program.receipt":
+            guard exact(object, ["idempotency_key", "expected_activity_id", "requested_verification_level"]),
+                  canonicalHex(object["idempotency_key"], bytes: 32, empty: false),
+                  canonicalHex(object["expected_activity_id"], bytes: 32, empty: false),
+                  object["requested_verification_level"]?.stringValue == "sequencer-signed" else { throw invalid() }
+        case "program.activity":
+            guard exact(object, ["activity_id", "requested_verification_level"]),
+                  canonicalHex(object["activity_id"], bytes: 32, empty: false),
+                  object["requested_verification_level"]?.stringValue == "sequencer-signed" else { throw invalid() }
+        case "program.simulate", "program.call":
+            try validateProgramCall(object)
+        default: throw invalid()
+        }
+    }
+
+    private static func validateProgramCall(_ object: [String: JSONValue]) throws {
+        guard exact(object, ["program_id", "calldata", "budget", "capabilities", "signed_activity"]),
+              canonicalProgram(object["program_id"]),
+              boundedHex(object["calldata"], maximum: maximumProgramBytes, empty: true),
+              boundedHex(object["signed_activity"], maximum: maximumProgramBytes, empty: false),
+              let budget = object["budget"]?.objectValue,
+              exact(budget, ["fuel", "fee_limit"]),
+              canonicalUInt64(budget["fuel"], positive: true), canonicalUInt128(budget["fee_limit"]),
+              case let .array(capabilities)? = object["capabilities"], capabilities.count <= 5 else { throw invalid() }
+        let order = ["storage_read", "storage_write", "transfer", "emit_event", "compose"]
+        var previous = -1
+        for capability in capabilities {
+            guard let name = capability.stringValue, let current = order.firstIndex(of: name), current > previous else {
+                throw invalid()
+            }
+            previous = current
+        }
+    }
+
+    static func validVerification(_ operation: String, value: JSONValue, status: JSONValue?) -> Bool {
+        guard let object = status?.objectValue else { return false }
+        if operation == "program.discover" || operation == "program.interface" {
+            return exact(object, ["state", "level", "reason"])
+                && object["state"]?.stringValue == "Unverified"
+                && object["level"]?.stringValue == "SequencerSigned"
+                && object["reason"]?.stringValue == "server_side_receipt_verification_only"
+        }
+        let pending = ["program.call", "program.receipt", "program.activity"].contains(operation)
+            && value.objectValue?["state"]?.stringValue == "unknown"
+        if pending {
+            return exact(object, ["state", "level", "reason"])
+                && object["state"]?.stringValue == "Unverified"
+                && object["level"]?.stringValue == "SequencerSigned"
+                && object["reason"]?.stringValue == "receipt_pending"
+        }
+        return ["program.simulate", "program.call", "program.receipt", "program.activity"].contains(operation)
+            && exact(object, ["state", "level"])
+            && object["state"]?.stringValue == "Achieved"
+            && object["level"]?.stringValue == "SequencerSigned"
+    }
+
+    private static func serviceError(_ object: [String: JSONValue]) throws -> PlatformSDKError {
+        guard let requestID = object["request_id"]?.stringValue, validRequestID(requestID),
+              let errorClass = object["class"]?.stringValue,
+              let retriability = object["retriability"]?.stringValue,
+              let reason = object["reason"]?.stringValue, !reason.isEmpty, reason.utf8.count <= 128,
+              reason.utf8.allSatisfy({ ($0 >= 48 && $0 <= 57) || ($0 >= 97 && $0 <= 122) || $0 == 95 || $0 == 46 }) else {
+            throw decode()
+        }
+        let resultCode: Int32?
+        switch object["protocol_result_code"] {
+        case .null?: resultCode = nil
+        case let .integer(value)?:
+            guard let exact = Int32(exactly: value) else { throw decode(requestID) }
+            resultCode = exact
+        default: throw decode(requestID)
+        }
+        return try errorClass.sdkError(.init(requestID: requestID, value: nil,
+            verificationStatus: nil, errorClass: errorClass, protocolResultCode: resultCode,
+            retriability: retriability, reason: reason))
+    }
+
+    private static func exact(_ object: [String: JSONValue], _ fields: Set<String>) -> Bool {
+        object.count == fields.count && Set(object.keys) == fields
+    }
+
+    private static func canonicalProgram(_ value: JSONValue?) -> Bool {
+        canonicalHex(value, bytes: 32, empty: false) && value?.stringValue != String(repeating: "0", count: 64)
+    }
+
+    private static func canonicalHex(_ value: JSONValue?, bytes: Int, empty: Bool) -> Bool {
+        guard let text = value?.stringValue else { return false }
+        return empty && text.isEmpty || text.utf8.count == bytes * 2 && canonicalHexText(text)
+    }
+
+    private static func boundedHex(_ value: JSONValue?, maximum: Int, empty: Bool) -> Bool {
+        guard let text = value?.stringValue, text.utf8.count % 2 == 0,
+              text.utf8.count <= maximum * 2, empty || !text.isEmpty else { return false }
+        return canonicalHexText(text)
+    }
+
+    private static func canonicalHexText(_ value: String) -> Bool {
+        value.utf8.allSatisfy { ($0 >= 48 && $0 <= 57) || ($0 >= 97 && $0 <= 102) }
+    }
+
+    private static func canonicalUInt64(_ value: JSONValue?, positive: Bool) -> Bool {
+        guard let text = value?.stringValue, canonicalDecimal(text), let parsed = UInt64(text) else { return false }
+        return !positive || parsed > 0
+    }
+
+    private static func canonicalUInt128(_ value: JSONValue?) -> Bool {
+        let maximum = "340282366920938463463374607431768211455"
+        guard let text = value?.stringValue, canonicalDecimal(text) else { return false }
+        return text.count < maximum.count || text.count == maximum.count && text <= maximum
+    }
+
+    private static func canonicalDecimal(_ value: String) -> Bool {
+        !value.isEmpty && (value == "0" || value.first != "0")
+            && value.utf8.allSatisfy { $0 >= 48 && $0 <= 57 }
+    }
+
+    private static func validRequestID(_ value: String) -> Bool {
+        !value.isEmpty && value.utf8.count <= 128 && value.utf8.allSatisfy { $0 >= 0x21 && $0 <= 0x7e }
+    }
+
+    private static func jsonContentType(_ response: HTTPURLResponse) -> Bool {
+        response.value(forHTTPHeaderField: "Content-Type")?.split(separator: ";", maxSplits: 1).first?
+            .trimmingCharacters(in: .whitespaces).lowercased() == "application/json"
     }
 
     private static func resolvePath(_ template: String, parameters: [String: String]) throws -> String {
@@ -142,11 +331,10 @@ public final class AgentHTTPTransport: PlatformTransport, @unchecked Sendable {
         return path
     }
 
-    private static func endpoint(_ base: URL, path: String) -> URL? {
+    private static func rootEndpoint(_ base: URL, path: String) -> URL? {
         guard var components = URLComponents(url: base, resolvingAgainstBaseURL: false) else { return nil }
-        let prefix = components.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        let suffix = path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        components.path = "/" + [prefix, suffix].filter { !$0.isEmpty }.joined(separator: "/")
+        components.path = path
+        components.query = nil; components.fragment = nil
         return components.url
     }
 
@@ -159,11 +347,27 @@ public final class AgentHTTPTransport: PlatformTransport, @unchecked Sendable {
         value.utf8.count == 64 && value.utf8.allSatisfy { ($0 >= 48 && $0 <= 57) || ($0 >= 97 && $0 <= 102) }
     }
 
+    private static func invalid() -> PlatformSDKError { .init(code: .invalidArgument, retry: .never) }
+    private static func decode(_ requestID: String? = nil) -> PlatformSDKError {
+        .init(code: .decodeFailure, retry: .never, requestID: requestID)
+    }
+    private static func unknownOutcome() -> PlatformSDKError { .init(code: .unknownOutcome, retry: .unknownOutcome) }
+
     private static func isLoopback(_ host: String?) -> Bool {
         guard let host = host?.lowercased() else { return false }
         if host == "localhost" || host == "::1" || host == "[::1]" { return true }
         let octets = host.split(separator: ".")
         return octets.count == 4 && octets.first == "127" && octets.allSatisfy { UInt8($0) != nil }
+    }
+}
+
+private final class NoRedirectDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    static let shared = NoRedirectDelegate()
+    func urlSession(_ session: URLSession, task: URLSessionTask,
+                    willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest,
+                    completionHandler: @escaping (URLRequest?) -> Void) {
+        completionHandler(nil)
     }
 }
 

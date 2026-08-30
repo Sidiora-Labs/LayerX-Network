@@ -193,9 +193,18 @@ public sealed record TransportCall(
     IReadOnlyDictionary<string, string> PathParameters,
     IdempotencyKey? IdempotencyKey);
 
+public sealed record ProgramTransportCall(
+    string Operation,
+    JsonValue Request,
+    IReadOnlyDictionary<string, string> PathParameters,
+    IdempotencyKey? IdempotencyKey);
+
 public interface IPlatformTransport
 {
     Task<JsonValue> SendAsync(TransportCall call, CancellationToken cancellationToken = default);
+
+    Task<JsonValue> SendProgramAsync(ProgramTransportCall call, CancellationToken cancellationToken = default) =>
+        Task.FromException<JsonValue>(new PlatformSdkException(SdkErrorCode.UnavailableCapability, RetryClass.Never));
 }
 
 public sealed record SdkTelemetryEvent(PlatformPlane Plane, string Operation, string Outcome, SdkErrorCode? Code = null);
@@ -224,6 +233,34 @@ public sealed class PlatformClient
         if (!operation.Descriptor().RequiresIdempotency || !idempotencyKey.IsValid)
             throw new PlatformSdkException(SdkErrorCode.InvalidArgument, RetryClass.Never);
         return ExecuteAsync(operation, request ?? throw new PlatformSdkException(SdkErrorCode.InvalidArgument, RetryClass.Never), idempotencyKey, pathParameters, cancellationToken);
+    }
+
+    internal async Task<JsonValue> ProgramAsync(string operation, JsonValue request, IdempotencyKey? idempotencyKey = null,
+        IReadOnlyDictionary<string, string>? pathParameters = null, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var response = await _transport.SendProgramAsync(new ProgramTransportCall(operation,
+                request ?? throw new PlatformSdkException(SdkErrorCode.InvalidArgument, RetryClass.Never),
+                pathParameters is null ? new Dictionary<string, string>() :
+                    new Dictionary<string, string>(pathParameters, StringComparer.Ordinal), idempotencyKey),
+                cancellationToken).ConfigureAwait(false);
+            _telemetry?.Invoke(new(PlatformPlane.Agent, operation, "completed"));
+            return response;
+        }
+        catch (PlatformSdkException exception)
+        {
+            _telemetry?.Invoke(new(PlatformPlane.Agent, operation, "refused", exception.Code));
+            throw;
+        }
+        catch
+        {
+            var error = operation == "program.call"
+                ? new PlatformSdkException(SdkErrorCode.UnknownOutcome, RetryClass.UnknownOutcome)
+                : new PlatformSdkException(SdkErrorCode.TransportFailure, RetryClass.Safe);
+            _telemetry?.Invoke(new(PlatformPlane.Agent, operation, "refused", error.Code));
+            throw error;
+        }
     }
 
     private async Task<JsonValue> ExecuteAsync(PlatformOperation operation, JsonValue request, IdempotencyKey? idempotencyKey, IReadOnlyDictionary<string, string>? pathParameters, CancellationToken cancellationToken)
