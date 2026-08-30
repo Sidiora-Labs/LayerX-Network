@@ -196,6 +196,8 @@ static int occupancy_vector(uint64_t observed, uint64_t expected)
         lxp_module_ctx_init(&ctx, &kernel, LXP_MODULE_PROGRAMS,
                             10U, 41U, 2U, UINT64_MAX, &arena, true) != LXP_OK)
         return 1;
+    ctx.protocol_version = LXP_PROTOCOL_VERSION;
+    ctx.batch_number = 2U;
     (void)memset(&receipt, 0, sizeof(receipt));
     receipt.batch_number = 2U;
     receipt.parameter_version = parameter_version;
