@@ -334,27 +334,30 @@ test-ledger-transfer: $(BUILD_DIR)/tests/test_apply_transfer
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_apply_transfer
 
 $(BUILD_DIR)/tests/test_transfer_set: tests/ledger/test_transfer_set.c \
-		$(TEST_LIBRARY)
+		$(TEST_LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
 	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) -DLXP_TESTING $(CFLAGS) $< $(TEST_LIBRARY) $(EXTRA_LDFLAGS) \
-		-lcrypto -pthread -o $@
+	$(CC) $(CPPFLAGS) -DLXP_TESTING $(CFLAGS) $< $(TEST_LIBRARY) \
+		$(PROGRAMS_RUNTIME_LIB) $(TEST_LIBRARY) $(EXTRA_LDFLAGS) \
+		-lcrypto -pthread -ldl -lm -o $@
 
 test-ledger-set: $(BUILD_DIR)/tests/test_transfer_set
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_transfer_set
 
 $(BUILD_DIR)/tests/test_send: tests/ledger/test_send.c fuzz/fuzz_lxp_send.c \
-		$(LIBRARY)
+		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(CFLAGS) tests/ledger/test_send.c fuzz/fuzz_lxp_send.c \
-		$(LIBRARY) $(EXTRA_LDFLAGS) -lcrypto -pthread -o $@
+		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) $(LIBRARY) $(EXTRA_LDFLAGS) \
+		-lcrypto -pthread -ldl -lm -o $@
 
 test-ledger-send: $(BUILD_DIR)/tests/test_send
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_send
 
-$(BUILD_DIR)/tests/test_receive: tests/ledger/test_receive.c $(LIBRARY)
+$(BUILD_DIR)/tests/test_receive: tests/ledger/test_receive.c \
+		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
 	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(EXTRA_LDFLAGS) \
-		-lcrypto -pthread -o $@
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) \
+		$(LIBRARY) $(EXTRA_LDFLAGS) -lcrypto -pthread -ldl -lm -o $@
 
 test-ledger-receive: $(BUILD_DIR)/tests/test_receive
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_receive
@@ -2674,7 +2677,7 @@ interop-lint:
 PROGRAMS_CARGO ?= cargo
 PROGRAMS_RUNTIME_LIB := programs/target/debug/liblayerx_programs_sandbox.a
 
-.PHONY: programs-build programs-lint programs-test programs-core-test programs-protocol-regression programs-adversarial programs-module-boundaries programs-abi-drift programs-porting-v2-references \
+.PHONY: programs-build programs-lint programs-test programs-core-test programs-protocol-regression programs-adversarial programs-conservation programs-qualify programs-module-boundaries programs-abi-drift programs-porting-v2-references \
 	programs-fuzz-smoke programs-differential programs-interpreter-conformance programs-bench programs-interpreter-bench programs-quickstart programs-sdk-rust programs-sdk-c programs-sdk-assemblyscript
 
 .PHONY: programs-js-install
@@ -2783,7 +2786,13 @@ programs-fuzz-smoke:
 	cd programs && $(PROGRAMS_CARGO) run --locked -p layerx-programs-fuzz --bin programs-fuzz -- execution fuzz/corpus/execution
 
 programs-adversarial:
-	cd programs && $(PROGRAMS_CARGO) test --locked -p layerx-programs-runtime --test isolation --test composition
+	cd programs && $(PROGRAMS_CARGO) test --locked -p layerx-programs-runtime --test isolation --test composition --test monetary_law
+
+programs-conservation:
+	programs/tests/conservation/run.sh
+
+programs-qualify:
+	python3 tools/qualification/release_runner.py $@
 
 
 $(BUILD_DIR)/tests/programs_parallel_differential: programs/tests/differential/parallel.c \

@@ -11,6 +11,7 @@ from pathlib import Path
 
 from tools.qualification.release_runner import (
     EVIDENCE_SPECS,
+    LOCAL_COMMANDS,
     SCHEMA,
     QualificationFailure,
     validate_evidence,
@@ -26,6 +27,30 @@ def digest(value: bytes) -> str:
 
 
 class ReleaseRunnerTests(unittest.TestCase):
+    def test_programs_gate_binds_local_conservation_and_live_crash_matrix(self) -> None:
+        self.assertEqual(
+            LOCAL_COMMANDS["programs-qualify"],
+            (
+                ("make", "--no-print-directory", "programs-test"),
+                ("make", "--no-print-directory", "programs-conservation"),
+            ),
+        )
+        required = {
+            "real-node/concurrent-same-account-transfers",
+            "real-node/duplicate-idempotency-keys",
+            "real-node/lost-response-after-successful-commit",
+            "real-node/crash-before-batch-wal",
+            "real-node/crash-after-batch-wal",
+            "real-node/crash-before-state-mutation",
+            "real-node/crash-after-state-mutation",
+            "real-node/crash-before-receipt-publication",
+            "real-node/crash-after-receipt-publication",
+            "real-node/crash-before-acknowledgement",
+            "real-node/crash-after-acknowledgement",
+            "program-heavy-monetary-law-replay",
+        }
+        self.assertTrue(required.issubset(EVIDENCE_SPECS["programs-qualify"].cases))
+
     def test_missing_real_stack_fails_before_any_local_gate(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             environment = dict(os.environ)

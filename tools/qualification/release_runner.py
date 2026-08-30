@@ -192,6 +192,17 @@ EVIDENCE_SPECS = {
                 "real-node/isolation",
                 "real-node/determinism-differential",
                 "real-node/metering",
+                "real-node/concurrent-same-account-transfers",
+                "real-node/duplicate-idempotency-keys",
+                "real-node/lost-response-after-successful-commit",
+                "real-node/crash-before-batch-wal",
+                "real-node/crash-after-batch-wal",
+                "real-node/crash-before-state-mutation",
+                "real-node/crash-after-state-mutation",
+                "real-node/crash-before-receipt-publication",
+                "real-node/crash-after-receipt-publication",
+                "real-node/crash-before-acknowledgement",
+                "real-node/crash-after-acknowledgement",
                 "ported-reference-contracts",
                 "program-heavy-monetary-law-replay",
             )
@@ -279,6 +290,10 @@ LOCAL_COMMANDS = {
         ("make", "--no-print-directory", "interop-test-migration-testnets"),
         ("make", "--no-print-directory", "interop-test-ramps-sandbox"),
         ("make", "--no-print-directory", "platform-release-check"),
+    ),
+    "programs-qualify": (
+        ("make", "--no-print-directory", "programs-test"),
+        ("make", "--no-print-directory", "programs-conservation"),
     ),
 }
 
