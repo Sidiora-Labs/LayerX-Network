@@ -125,7 +125,7 @@ fn settlement_domain() -> SettlementDomain {
 }
 
 #[test]
-fn reports_distinct_threshold_and_settlement_levels() {
+fn transported_registration_never_invents_paxeer_chain_finality() {
     let (certificate, keys, identifier) = fixture();
     let finalised = verify_certificate(&certificate, &keys, &identifier, settlement_domain(), None)
         .unwrap_or_else(|error| panic!("finalised certificate failed: {error:?}"));
@@ -148,22 +148,26 @@ fn reports_distinct_threshold_and_settlement_levels() {
 
     let (anchored, anchored_keys, anchored_identifier) =
         fixture_with_settlement(Some(b"paxeer-registered-1".to_vec()));
-    let anchored_report = verify_certificate(
+    let registered_report = verify_certificate(
         &anchored,
         &anchored_keys,
         &anchored_identifier,
         settlement_domain(),
         Some(b"paxeer-registered-1"),
     )
-    .unwrap_or_else(|error| panic!("anchored certificate failed: {error:?}"));
-    assert_eq!(anchored_report.achieved, 3);
-    assert_eq!(anchored_report.required, 2);
+    .unwrap_or_else(|error| panic!("registered certificate failed: {error:?}"));
+    assert_eq!(registered_report.achieved, 3);
+    assert_eq!(registered_report.required, 2);
     assert_eq!(
-        anchored_report.level(),
+        registered_report.level(),
+        VerificationLevel::CHECKPOINT_FINALISED
+    );
+    assert_ne!(
+        registered_report.level(),
         VerificationLevel::SETTLEMENT_ANCHORED
     );
     assert_eq!(
-        anchored_report.evidence().settlement_reference(),
+        registered_report.evidence().settlement_reference(),
         Some(b"paxeer-registered-1".as_slice())
     );
     assert_eq!(
