@@ -13,6 +13,7 @@ typedef struct lxp_kernel lxp_kernel;
 typedef struct lxp_log lxp_log;
 typedef struct lxp_history lxp_history;
 typedef struct lxp_genesis_manifest lxp_genesis_manifest;
+typedef struct lxp_call_admission_facts lxp_call_admission_facts;
 typedef struct lxp_programs_occupancy_receipt lxp_programs_occupancy_receipt;
 
 /* Authenticated, non-owning projection of one already decoded and admitted
