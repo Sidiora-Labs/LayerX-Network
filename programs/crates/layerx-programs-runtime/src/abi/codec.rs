@@ -430,6 +430,9 @@ impl<'a> Decoder<'a> {
     }
 
     fn validate_layerx_value(&mut self, depth: u8) -> Result<(), CodecError> {
+        if depth > MAX_NESTING_DEPTH {
+            return Err(CodecError::NestingTooDeep);
+        }
         let tag_byte = self.read_byte()?;
         let tag = TypeTag::from_byte(tag_byte)?;
         match tag {

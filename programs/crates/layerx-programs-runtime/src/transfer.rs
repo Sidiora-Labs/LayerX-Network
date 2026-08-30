@@ -614,9 +614,11 @@ impl TransferCapability {
             let Some((caller, parent_capabilities)) = frames.get(&call.caller_frame) else {
                 return Err(TransferLawError::InvariantViolation);
             };
-            if *caller != call.caller
-                || !parent_capabilities
-                    .contains_narrowed_for_program_edge(call.caller, &call.capabilities)
+            if *caller != call.caller {
+                return Err(TransferLawError::InvariantViolation);
+            }
+            if !parent_capabilities
+                .contains_narrowed_for_program_edge(call.caller, &call.capabilities)
             {
                 return Err(TransferLawError::CapabilityEscalation);
             }
