@@ -319,9 +319,9 @@ pub fn verify_program_state(
     if protocol.protocol_version() != 2 {
         return Err(VerificationFailure::at(ReceiptCheck::ProtocolVersion));
     }
-    if protocol.module_id() != PROGRAMS_MODULE_ID
+    if u32::from(protocol.module_id()) != PROGRAMS_MODULE_ID
         || !supports_program_account_state(protocol.module_version())
-        || protocol.operation() != PROGRAMS_STATE_OPERATION
+        || u16::from(protocol.operation()) != PROGRAMS_STATE_OPERATION
     {
         return Err(VerificationFailure::at(ReceiptCheck::Module));
     }
@@ -375,9 +375,9 @@ pub fn verify_program_outcome(
     if !matches!(protocol.protocol_version(), 1 | 2) {
         return Err(VerificationFailure::at(ReceiptCheck::ProtocolVersion));
     }
-    if protocol.module_id() != PROGRAMS_MODULE_ID
+    if u32::from(protocol.module_id()) != PROGRAMS_MODULE_ID
         || !supported_programs_module_version(protocol.module_version())
-        || protocol.operation() != PROGRAMS_CALL_OPERATION
+        || u16::from(protocol.operation()) != PROGRAMS_CALL_OPERATION
     {
         return Err(VerificationFailure::at(ReceiptCheck::Module));
     }
