@@ -65,10 +65,16 @@ fn memory_and_exports(reserve_index: u8, call_index: u8) -> (Vec<u8>, Vec<u8>) {
 }
 
 fn data(offset: u8, bytes: &[u8]) -> Vec<u8> {
-    let mut payload = unsigned_leb(1);
-    payload.extend_from_slice(&[0, 0x41, offset, 0x0b]);
-    payload.extend(unsigned_leb(bytes.len() as u64));
-    payload.extend_from_slice(bytes);
+    data_segments(&[(offset, bytes)])
+}
+
+fn data_segments(segments: &[(u8, &[u8])]) -> Vec<u8> {
+    let mut payload = unsigned_leb(segments.len() as u64);
+    for (offset, bytes) in segments {
+        payload.extend_from_slice(&[0, 0x41, *offset, 0x0b]);
+        payload.extend(unsigned_leb(bytes.len() as u64));
+        payload.extend_from_slice(bytes);
+    }
     section(11, &payload)
 }
 
@@ -220,8 +226,7 @@ fn candidate_forwarder(callee: ProgramId, requested: &CapabilitySet) -> Vec<u8> 
         memory,
         exports,
         code_section(&[func_body(&[], &[0x41, 0, 0x0b]), func_body(&[], &entry)]),
-        data(0, &callee.bytes()),
-        data(32, &encoded),
+        data_segments(&[(0, &callee.bytes()), (32, &encoded)]),
     ])
 }
 
@@ -280,7 +285,7 @@ fn prior_state_selected_writer() -> Vec<u8> {
     module(&[
         types, imports, function_section(&[1, 2]), memory, exports,
         code_section(&[func_body(&[], &[0x41, 0, 0x0b]), func_body(&[], &entry)]),
-        data(8, b"route"), data(40, b"v"),
+        data_segments(&[(8, b"route"), (40, b"v")]),
     ])
 }
 
@@ -392,7 +397,10 @@ fn declared_access_executes_calldata_selected_guest_keys_and_charges_excess() {
         b"alpha", broad, CompositionContext::isolated(),
     ).unwrap_or_else(|error| panic!("broad execution: {error}"));
     assert!(broad_record.execution().usage().cpu_fuel > exact_record.execution().usage().cpu_fuel);
-    assert_ne!(broad_record.execution().canonical_evidence(), exact_record.execution().canonical_evidence());
+    assert_ne!(
+        broad_record.canonical_evidence(),
+        exact_record.canonical_evidence()
+    );
 
     let mut omitted_storage = Storage::new();
     let omitted_record = execute_guest_declared(
@@ -408,8 +416,13 @@ fn declared_access_executes_calldata_selected_guest_keys_and_charges_excess() {
     let denied_record = execute_guest_declared(
         &calldata_selected_writer(), owner, actor, capabilities(), &mut denied_storage,
         b"alpha", denied, CompositionContext::isolated(),
-    ).unwrap_or_else(|error| panic!("denied execution: {error}"));
-    assert_eq!(denied_record.execution().outputs(), &[WasmValue::I32(-1)]);
+    );
+    assert_eq!(
+        denied_record,
+        Err(ExecutionError::Composition(CompositionRefusal::Authority(
+            AbiError::AccessDeclaration,
+        )))
+    );
     assert_eq!(denied_storage, before);
 }
 
@@ -428,8 +441,13 @@ fn declared_access_rolls_back_prior_state_selected_guest_write() {
     let denied = execute_guest_declared(
         &prior_state_selected_writer(), owner, actor, capabilities(), &mut seeded,
         &[], incomplete, CompositionContext::isolated(),
-    ).unwrap_or_else(|error| panic!("prior-state denial: {error}"));
-    assert_eq!(denied.execution().outputs(), &[WasmValue::I32(-1)]);
+    );
+    assert_eq!(
+        denied,
+        Err(ExecutionError::Composition(CompositionRefusal::Authority(
+            AbiError::AccessDeclaration,
+        )))
+    );
     assert_eq!(seeded, before);
 
     let complete = explicit_access(|builder| {
@@ -453,10 +471,15 @@ fn declared_access_is_enforced_inside_real_nested_guest_frame() {
     let child_namespace = StorageNamespace::shared(child);
     let requested = shared_grants();
     let engine = WasmEngine::declared().unwrap_or_else(|error| panic!("engine: {error}"));
-    let child_module = engine.validate_candidate_v2(&shared_increment_guest()).unwrap_or_else(|error| panic!("child: {error}"));
+    let child_wasm = shared_increment_guest();
     let catalog = || {
         let mut catalog = ProgramCatalog::new();
-        catalog.insert(child, child_module.clone());
+        catalog.insert(
+            child,
+            engine
+                .validate_candidate_v2(&child_wasm)
+                .unwrap_or_else(|error| panic!("child: {error}")),
+        );
         CompositionContext::catalog(catalog, CompositionRules::declared())
     };
     let capabilities = || CapabilitySet::new([
@@ -466,10 +489,16 @@ fn declared_access_is_enforced_inside_real_nested_guest_frame() {
     let incomplete = explicit_access(|builder| builder.call(child).map(|_| ()));
     let before = Storage::new();
     let mut denied_storage = before.clone();
-    let _ = execute_guest_declared(
+    let denied = execute_guest_declared(
         &candidate_forwarder(child, &requested), root, actor, capabilities(),
         &mut denied_storage, &[], incomplete, catalog(),
-    ).unwrap_or_else(|error| panic!("nested denial: {error}"));
+    );
+    assert_eq!(
+        denied,
+        Err(ExecutionError::Composition(CompositionRefusal::Authority(
+            AbiError::AccessDeclaration,
+        )))
+    );
     assert_eq!(denied_storage, before);
 
     let complete = explicit_access(|builder| {
@@ -483,7 +512,8 @@ fn declared_access_is_enforced_inside_real_nested_guest_frame() {
         &candidate_forwarder(child, &requested), root, actor, capabilities(),
         &mut accepted_storage, &[], complete, catalog(),
     ).unwrap_or_else(|error| panic!("nested acceptance: {error}"));
-    assert!(accepted.call_graph().frames().len() > 1);
+    assert_eq!(accepted.call_graph().edges().len(), 1);
+    assert_eq!(accepted.call_graph().edges()[0].callee(), child);
     assert_eq!(accepted_storage.transaction(child_namespace).read(b"total"), Ok(Some(vec![0])));
 }
 
@@ -849,16 +879,19 @@ fn candidate_program_call_narrows_shared_authority_before_child_entry() {
     let child = program(25);
     let actor = principal(7);
     let engine = WasmEngine::declared().unwrap_or_else(|error| panic!("engine: {error}"));
-    let child_module = engine
-        .validate_candidate_v2(&candidate_shared_reader())
-        .unwrap_or_else(|error| panic!("child: {error}"));
+    let child_wasm = candidate_shared_reader();
     let requested_read = CapabilitySet::new([Capability::SharedStorageRead])
         .unwrap_or_else(|error| panic!("requested read: {error}"));
     let root_module = engine
         .validate_candidate_v2(&candidate_forwarder(child, &requested_read))
         .unwrap_or_else(|error| panic!("root: {error}"));
     let mut catalog = ProgramCatalog::new();
-    catalog.insert(child, child_module.clone());
+    catalog.insert(
+        child,
+        engine
+            .validate_candidate_v2(&child_wasm)
+            .unwrap_or_else(|error| panic!("child: {error}")),
+    );
     let mut storage = Storage::new();
     let mut seed = storage.transaction(StorageNamespace::shared(child));
     seed.write(b"total", &17u64.to_be_bytes())
@@ -905,7 +938,12 @@ fn candidate_program_call_narrows_shared_authority_before_child_entry() {
             .validate_candidate_v2(&candidate_forwarder(child, &request))
             .unwrap_or_else(|error| panic!("denied root: {error}"));
         let mut denied_catalog = ProgramCatalog::new();
-        denied_catalog.insert(child, child_module.clone());
+        denied_catalog.insert(
+            child,
+            engine
+                .validate_candidate_v2(&child_wasm)
+                .unwrap_or_else(|error| panic!("denied child: {error}")),
+        );
         let mut denied_storage = before.clone();
         assert_eq!(
             Executor::declared().execute_authorized_candidate(
