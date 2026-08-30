@@ -1257,6 +1257,17 @@ fn program_call(emulator: &mut Emulator, request: &Request, trace: u64) -> Respo
             )
         }
     };
+    let media_type = request.content_type.split(';').next().unwrap_or_default().trim();
+    if request.body.is_empty()
+        || !matches!(media_type, "application/json" | "application/octet-stream")
+    {
+        return refusal(
+            trace,
+            415,
+            "activity_content_type_required",
+            "program call requires bounded JSON or octet-stream content",
+        );
+    }
     let decoded = match decode_program_activity(request) {
         Ok(activity) => activity,
         Err(error) => return refusal(trace, 400, "invalid_program_call", &error),
