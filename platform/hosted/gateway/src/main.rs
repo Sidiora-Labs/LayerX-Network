@@ -10,8 +10,9 @@ use layerx_platform_gateway::{
     verify_program_operation, verify_program_simulation_operation, verify_submission, AccessError,
     AuthorityFacts, IssuedKey, PrincipalId, ProductionRoute, Quota,
 };
+use layerx_types::amount::Amount;
 use layerx_types::intent::{
-    Amount, CallBudget, Calldata, CapabilityRequest, ProgramCall, ProgramId, RequestedCapabilities,
+    CallBudget, Calldata, CapabilityRequest, ProgramCall, ProgramId, RequestedCapabilities,
 };
 use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry};
 use layerx_wire::activity::decode_signed;

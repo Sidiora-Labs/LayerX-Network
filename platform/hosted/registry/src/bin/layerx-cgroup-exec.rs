@@ -11,8 +11,7 @@ use std::process::{Command, ExitCode};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use rustix::process::{getpid, kill_process};
-use rustix::signal::Signal;
+use rustix::process::{getpid, kill_process, Signal};
 
 const POLL: Duration = Duration::from_millis(10);
 const ATTACH_TIMEOUT: Duration = Duration::from_secs(5);
@@ -84,7 +83,7 @@ fn parse() -> Result<Limits, String> {
         let command = arguments.get(split + 1..).unwrap_or_default();
         let (program, rest) = command.split_first()
             .ok_or_else(|| "stopped launcher omitted command".to_owned())?;
-        kill_process(getpid(), Signal::Stop).map_err(|error| error.to_string())?;
+        kill_process(getpid(), Signal::STOP).map_err(|error| error.to_string())?;
         return Err(Command::new(program).args(rest).exec().to_string());
     }
     if !arguments.iter().any(|argument| argument == "--cgroup-v2")
@@ -187,7 +186,7 @@ fn supervise(limits: Limits) -> Result<ExitCode, String> {
     fs::OpenOptions::new().write(true).open(job.path.join("cgroup.kill"))
         .map_err(|error| format!("cgroup.kill is unavailable: {error}"))?;
     let executable = fs::File::open("/proc/self/exe").map_err(|error| error.to_string())?;
-    rustix::fs::fcntl_setfd(&executable, rustix::fs::FdFlags::empty())
+    rustix::io::fcntl_setfd(&executable, rustix::io::FdFlags::empty())
         .map_err(|error| format!("supervisor executable fd cannot be inherited: {error}"))?;
     let mut child = Command::new(format!("/proc/self/fd/{}", executable.as_raw_fd()))
         .arg("--stopped-launcher")
@@ -213,7 +212,7 @@ fn supervise(limits: Limits) -> Result<ExitCode, String> {
     }
     let raw_pid = i32::try_from(pid).map_err(|_| "child pid is invalid".to_owned())?;
     kill_process(rustix::process::Pid::from_raw(raw_pid)
-        .ok_or_else(|| "child pid is invalid".to_owned())?, Signal::Cont)
+        .ok_or_else(|| "child pid is invalid".to_owned())?, Signal::CONT)
         .map_err(|error| error.to_string())?;
     let deadline = Instant::now() + Duration::from_millis(limits.wall_ms);
     let result = loop {

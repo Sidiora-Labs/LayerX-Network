@@ -18,8 +18,7 @@ use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::server::WebPkiClientVerifier;
 use rustls::{RootCertStore, ServerConfig, ServerConnection, StreamOwned};
 use zeroize::{Zeroize as _, Zeroizing};
-use rustix::process::{kill_process, Pid};
-use rustix::signal::Signal;
+use rustix::process::{kill_process, Pid, Signal};
 
 const DEFAULT_LISTEN: &str = "127.0.0.1:9420";
 const DEFAULT_ROOT: &str = "/var/lib/layerx-program-registry";
@@ -480,7 +479,7 @@ fn isolated_route(request: &layerx_platform_registry::Request, deadline: Instant
         Some(pid) => pid,
         None => return refusal(503, "worker_unavailable", "the request worker pid is invalid"),
     };
-    if kill_process(raw_pid, Signal::Cont).is_err() {
+    if kill_process(raw_pid, Signal::CONT).is_err() {
         let _ = child.kill();
         let _ = child.wait();
         return refusal(503, "worker_unavailable", "the request worker could not continue");
@@ -644,7 +643,7 @@ fn main() {
     let mut arguments = env::args().skip(1);
     if arguments.next().as_deref() == Some("--stopped-request-worker") {
         let remaining = arguments.next().and_then(|value| value.parse().ok()).unwrap_or(0);
-        if kill_process(rustix::process::getpid(), Signal::Stop).is_err() {
+        if kill_process(rustix::process::getpid(), Signal::STOP).is_err() {
             std::process::exit(3);
         }
         if let Err(error) = request_worker(remaining) {
@@ -724,8 +723,8 @@ mod tests {
             "pids.max",
             "cgroup.procs",
             "cgroup.kill",
-            "Signal::Stop",
-            "Signal::Cont",
+            "Signal::STOP",
+            "Signal::CONT",
             "cpu.stat",
             "io.stat",
             "io.max",

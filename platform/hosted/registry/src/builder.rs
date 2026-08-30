@@ -388,7 +388,7 @@ fn verified_executable(path: PathBuf, expected: [u8; 32], label: &str) -> Result
 }
 
 fn verified_executable_fd(path: &Path, expected: [u8; 32], label: &str) -> Result<File, String> {
-    use rustix::fs::{fcntl_setfd, FdFlags};
+    use rustix::io::{fcntl_setfd, FdFlags};
 
     let mut file = File::open(path).map_err(|error| format!("{label} is unavailable: {error}"))?;
     let metadata = file.metadata().map_err(|error| format!("{label} is unavailable: {error}"))?;
