@@ -810,7 +810,7 @@ impl ProgramInstance {
             });
         };
         let result_count = func.ty(&self.store).results().len();
-        self.store
+        let output_reservation = self.store
             .data_mut()
             .meter_mut()
             .charge_output(result_count)
@@ -823,9 +823,10 @@ impl ProgramInstance {
             if fault == ExecutionFault::OutOfFuel {
                 self.store.data_mut().meter_mut().mark_cpu_exhausted();
             }
+            self.store.data_mut().meter_mut().rollback_output(output_reservation);
             return Err(fault);
         }
-        outputs
+        let outputs: Result<Vec<WasmValue>, ExecutionFault> = outputs
             .into_iter()
             .map(|value| match value {
                 Value::I32(inner) => Ok(WasmValue::I32(inner)),
@@ -834,7 +835,11 @@ impl ProgramInstance {
                     Err(ExecutionFault::NonIntegerValue)
                 }
             })
-            .collect()
+            .collect();
+        if outputs.is_err() {
+            self.store.data_mut().meter_mut().rollback_output(output_reservation);
+        }
+        outputs
     }
 
     pub fn capture_continuation(

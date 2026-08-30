@@ -872,6 +872,8 @@ pub(crate) struct QualificationMeterSnapshot {
     pub(crate) output_bytes: u64,
 }
 
+pub(crate) struct OutputReservation(u32);
+
 /// Typed resource refusal with exact limit and attempted use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MeterRefusal {
@@ -1173,7 +1175,8 @@ impl Meter {
         });
     }
 
-    pub(crate) fn charge_output(&mut self, values: usize) -> Result<(), MeterRefusal> {
+    pub(crate) fn charge_output(&mut self, values: usize) -> Result<OutputReservation, MeterRefusal> {
+        let previous = self.output_values;
         let requested = u64::try_from(values).unwrap_or(u64::MAX);
         let attempted = self.counter_add(
             ResourceKind::Output,
@@ -1191,7 +1194,11 @@ impl Meter {
                 limit: u64::from(self.budget.output_values),
                 attempted,
             })?;
-        Ok(())
+        Ok(OutputReservation(previous))
+    }
+
+    pub(crate) fn rollback_output(&mut self, reservation: OutputReservation) {
+        self.output_values = reservation.0;
     }
 
     pub(crate) fn charge_output_bytes(&mut self, bytes: usize) -> Result<(), MeterRefusal> {

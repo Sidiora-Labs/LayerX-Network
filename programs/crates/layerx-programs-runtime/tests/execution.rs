@@ -74,6 +74,11 @@ fn integer_division_by_zero_faults_typed() {
     };
     let result = instance.call("div", &[WasmValue::I32(7), WasmValue::I32(0)]);
     assert_eq!(result, Err(ExecutionFault::IntegerDivisionByZero));
+    let usage = instance
+        .meter()
+        .finish()
+        .unwrap_or_else(|error| panic!("trap usage: {error}"));
+    assert_eq!(usage.output_values, 0);
 }
 
 #[test]
@@ -103,6 +108,11 @@ fn declared_call_depth_limit_faults_typed() {
     };
     let result = instance.call("run", &[]);
     assert_eq!(result, Err(ExecutionFault::StackExhausted));
+    let usage = instance
+        .meter()
+        .finish()
+        .unwrap_or_else(|error| panic!("trap usage: {error}"));
+    assert_eq!(usage.output_values, 0);
 }
 
 #[test]
