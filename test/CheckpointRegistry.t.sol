@@ -347,7 +347,8 @@ contract CheckpointRegistryTest {
         bytes32 guarantorId = bytes32(uint256(2));
         address rotatedSigner = vm.addr(5);
         bond.rotateGuarantorSigner(guarantorId, rotatedSigner, 4, 8);
-        CanonicalCheckpoint.GuarantorAttestation memory second = first;
+        CanonicalCheckpoint.GuarantorAttestation memory second =
+            abi.decode(abi.encode(first), (CanonicalCheckpoint.GuarantorAttestation));
         second.checkpointHash = keccak256("conflicting-old-signer-checkpoint");
         second.checkpointId = second.checkpointHash;
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(2, CanonicalCheckpoint.attestationHash(second));

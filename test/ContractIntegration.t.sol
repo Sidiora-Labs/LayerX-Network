@@ -481,8 +481,9 @@ contract ContractIntegrationTest {
         require(emergencyExit.eligible(), "upheld fraud did not activate emergency exit");
 
         EmergencyExit.BalanceProof memory proof = EmergencyExit.BalanceProof({leafIndex: 0, siblings: new bytes32[](0)});
+        EmergencyExit.ExitClaim memory fraudulentClaim = _exitClaim(fraudulent, assetId);
         vm.expectPartialRevert(EmergencyExit.InvalidExitClaim.selector);
-        emergencyExit.executeExit(_exitClaim(fraudulent, assetId), fraudulent.stateRoot, proof, fraudulent.attestations);
+        emergencyExit.executeExit(fraudulentClaim, fraudulent.stateRoot, proof, fraudulent.attestations);
 
         emergencyExit.executeExit(_exitClaim(safe, assetId), safe.stateRoot, proof, safe.attestations);
         require(token.balanceOf(safe.recipient) == safe.balance, "safe emergency balance unpaid");
