@@ -2655,13 +2655,21 @@ interop-test-ramps-sandbox:
 INTEROP_CARGO ?= cargo
 INTEROP_MANIFEST := interop/Cargo.toml
 
-.PHONY: interop-build interop-test interop-lint interop-test-x402 interop-test-mandates interop-test-migration interop-test-migration-testnets interop-test-ucp interop-test-portable interop-test-visa-tap
+.PHONY: interop-build interop-test interop-lint interop-test-x402 interop-test-mandates interop-test-migration interop-test-migration-testnets interop-test-ucp interop-test-portable interop-test-visa-tap interop-test-mirrors
 
 interop-build:
 	$(INTEROP_CARGO) build --manifest-path $(INTEROP_MANIFEST) --locked --workspace
 
 interop-test:
 	$(INTEROP_CARGO) test --manifest-path $(INTEROP_MANIFEST) --locked --workspace
+
+interop-test-mirrors:
+	$(INTEROP_CARGO) test --manifest-path $(INTEROP_MANIFEST) --locked -p layerx-mirror
+	cargo test --manifest-path interop/contracts/solana-mirror/Cargo.toml --locked
+	forge test --root . --contracts interop/contracts/ethereum-mirror \
+		--match-path interop/contracts/ethereum-mirror/test/LayerXMirrorArchive.t.sol \
+		--use 0.8.30 --evm-version paris --optimize --optimizer-runs 100000 \
+		--via-ir --no-metadata
 
 interop-test-x402:
 	$(INTEROP_CARGO) test --manifest-path $(INTEROP_MANIFEST) --locked -p layerx-x402

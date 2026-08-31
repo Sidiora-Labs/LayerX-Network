@@ -63,14 +63,14 @@ fn initialize(
     accounts: &[AccountInfo<'_>],
     reader: &mut Reader<'_>,
 ) -> ProgramResult {
-    let commitment = reader.array()?;
+    let commitment: [u8; 32] = reader.array()?;
     let network_id = reader.u32()?;
     let batch_number = reader.u64()?;
-    let checkpoint_id = reader.array()?;
+    let checkpoint_id: [u8; 32] = reader.array()?;
     let total_bytes = reader.u64()?;
     let total_chunks = reader.u32()?;
-    let archive_digest = reader.array()?;
-    let expected_chain = reader.array()?;
+    let archive_digest: [u8; 32] = reader.array()?;
+    let expected_chain: [u8; 32] = reader.array()?;
     reader.finish()?;
     if commitment == [0; 32]
         || network_id == 0
@@ -136,11 +136,11 @@ fn append(
     accounts: &[AccountInfo<'_>],
     reader: &mut Reader<'_>,
 ) -> ProgramResult {
-    let commitment = reader.array()?;
+    let commitment: [u8; 32] = reader.array()?;
     let index = reader.u32()?;
     let length = usize::from(reader.u16()?);
     let value = reader.take(length)?;
-    let claimed_digest = reader.array()?;
+    let claimed_digest: [u8; 32] = reader.array()?;
     reader.finish()?;
     if length == 0 || length > MAX_CHUNK_BYTES || hash(value).to_bytes() != claimed_digest {
         return Err(MirrorError::Bounds.into());
@@ -243,7 +243,7 @@ fn finalize(
     accounts: &[AccountInfo<'_>],
     reader: &mut Reader<'_>,
 ) -> ProgramResult {
-    let commitment = reader.array()?;
+    let commitment: [u8; 32] = reader.array()?;
     reader.finish()?;
     let mut accounts = accounts.iter();
     let payer = next_account_info(&mut accounts)?;
@@ -377,7 +377,7 @@ impl<'a> Reader<'a> {
             .map_err(|_| MirrorError::Instruction.into())
     }
 
-    fn finish(self) -> ProgramResult {
+    fn finish(&self) -> ProgramResult {
         if self.offset == self.bytes.len() {
             Ok(())
         } else {

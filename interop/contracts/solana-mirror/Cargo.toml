@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2021"
 license = "LicenseRef-Centra-ai-Protocol"
 
+[workspace]
+
 [lib]
 crate-type = ["cdylib", "lib"]
 
