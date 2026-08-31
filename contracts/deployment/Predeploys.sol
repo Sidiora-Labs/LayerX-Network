@@ -3,6 +3,7 @@ pragma solidity ^0.8.24;
 
 interface IBlueprintPredictor {
     function predict(bytes32 role, bytes32 initCodeHash) external view returns (address);
+    function predictTimelock() external view returns (address);
 }
 
 library Predeploys {
@@ -62,6 +63,7 @@ library Predeploys {
         returns (address)
     {
         if (!isKnown(role)) revert UnknownPredeployRole(role);
+        if (role == TIMELOCK) return blueprint.predictTimelock();
         return blueprint.predict(role, initCodeHash);
     }
 }

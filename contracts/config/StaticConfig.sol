@@ -21,7 +21,7 @@ library StaticConfig {
         uint192 releaseVersion;
         address governanceTimelock;
         address emergencyCouncil;
-        bytes32 genesisStateRoot;
+        bytes32 genesisReceiptRoot;
         uint64 challengeWindow;
         uint64 checkpointLivenessBound;
         uint256 enabledFeatures;
@@ -72,7 +72,7 @@ library StaticConfig {
         if (
             config.chainId == 0 || config.protocolVersion != Constants.PROTOCOL_VERSION || config.releaseVersion == 0
                 || config.governanceTimelock == address(0) || config.emergencyCouncil == address(0)
-                || config.governanceTimelock == config.emergencyCouncil || config.genesisStateRoot == bytes32(0)
+                || config.governanceTimelock == config.emergencyCouncil || config.genesisReceiptRoot == bytes32(0)
                 || config.challengeWindow < 1 hours || config.checkpointLivenessBound < 1 hours
                 || config.assetDefinitionsRoot == bytes32(0)
         ) {
@@ -91,7 +91,7 @@ library StaticConfig {
                 config.releaseVersion,
                 config.governanceTimelock,
                 config.emergencyCouncil,
-                config.genesisStateRoot,
+                config.genesisReceiptRoot,
                 config.challengeWindow,
                 config.checkpointLivenessBound,
                 config.enabledFeatures,

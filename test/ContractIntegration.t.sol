@@ -17,6 +17,7 @@ import {Predeploys} from "../contracts/deployment/Predeploys.sol";
 import {ILayerXComponent, Preinstalls} from "../contracts/deployment/Preinstalls.sol";
 import {ManagerContainer} from "../contracts/manager/ManagerContainer.sol";
 import {ManagerMigrator} from "../contracts/manager/ManagerMigrator.sol";
+import {ManagerUnauthorized} from "../contracts/manager/BlockErrors.sol";
 import {StaticConfig} from "../contracts/config/StaticConfig.sol";
 import {Features} from "../contracts/config/Features.sol";
 import {Constants} from "../contracts/libraries/Constants.sol";
@@ -24,6 +25,7 @@ import {CanonicalCheckpoint} from "../contracts/libraries/CanonicalCheckpoint.so
 import {MessageTypes} from "../contracts/libraries/MessageTypes.sol";
 import {PaxeerWithdrawalCodec} from "../contracts/libraries/PaxeerWithdrawalCodec.sol";
 import {SemverComp} from "../contracts/libraries/SemverComp.sol";
+import {Governed} from "../contracts/security/Governed.sol";
 import {UUPSNotUpgradeable} from "../contracts/security/UUPSNotUpgradeable.sol";
 
 interface IntegrationVm {
@@ -164,13 +166,23 @@ contract ContractIntegrationTest {
         CanonicalCheckpoint.GuarantorAttestation[] attestations;
     }
 
+    struct ScheduledCall {
+        address target;
+        bytes data;
+        bytes32 salt;
+        uint256 nonce;
+    }
+
     IntegrationVm private constant vm = IntegrationVm(address(uint160(uint256(keccak256("hevm cheat code")))));
 
-    bytes32 private constant GENESIS = keccak256("integration-genesis");
+    bytes32 private constant GENESIS_RECEIPT_ROOT = keccak256("integration-genesis-receipt-root");
     address private constant EMERGENCY_COUNCIL = address(0xEC01);
+    address private constant FINAL_PROPOSER = address(0xA110CE);
+    address private constant FINAL_EXECUTOR = address(0xE0EC);
 
     uint192 private release;
     bytes32 private configHash;
+    StaticConfig.Config private deploymentConfig;
     IntegrationToken private token;
     Blueprint private blueprint;
     LayerXTimelock private timelock;
@@ -186,6 +198,9 @@ contract ContractIntegrationTest {
     ManagerContainer private managerContainer;
     ManagerMigrator private managerMigrator;
     LayerXCustody private custodyTopology;
+    uint256 private governanceSaltNonce;
+    bool private injectRoleTransitionFailure;
+    bool private roleTransitionFailureObserved;
 
     receive() external payable {}
 
@@ -201,26 +216,27 @@ contract ContractIntegrationTest {
             minimumDeposit: 1_000_000,
             custodyCap: 1_000_000_000_000
         });
-        StaticConfig.Config memory config = StaticConfig.Config({
+        deploymentConfig = StaticConfig.Config({
             chainId: block.chainid,
             protocolVersion: Constants.PROTOCOL_VERSION,
             releaseVersion: release,
-            governanceTimelock: address(this),
+            governanceTimelock: address(0),
             emergencyCouncil: EMERGENCY_COUNCIL,
-            genesisStateRoot: GENESIS,
+            genesisReceiptRoot: GENESIS_RECEIPT_ROOT,
             challengeWindow: 7 days,
             checkpointLivenessBound: 1 days,
             enabledFeatures: Features.ERC20_CUSTODY | Features.CHECKPOINT_CHALLENGES | Features.WITHDRAWAL_CLAIMS
                 | Features.EMERGENCY_EXIT | Features.RESERVE_RECONCILIATION,
             assetDefinitionsRoot: StaticConfig.hashAssets(assets)
         });
-        configHash = StaticConfig.hash(config, block.chainid);
-        blueprint = new Blueprint(address(this), configHash, release);
+        StaticConfig.Config memory blueprintConfig = deploymentConfig;
+        blueprint = new Blueprint(address(this), blueprintConfig);
+        deploymentConfig.governanceTimelock = blueprint.predictTimelock();
+        configHash = StaticConfig.hash(deploymentConfig, block.chainid);
+        require(configHash == blueprint.staticConfigHash(), "derived config");
         _deploySuite();
-        Preinstalls.ComponentManifest[] memory manifests = _manifests();
-        managerContainer.initialize(manifests, _allowlists());
-        managerContainer.setMigrator(address(managerMigrator));
-        blueprint.seal();
+        _requireGovernanceTopology();
+        _bootstrapGovernance();
     }
 
     function testCompleteDeterministicSuiteAndCustodyInvariants() public {
@@ -234,6 +250,7 @@ contract ContractIntegrationTest {
             address component = _component(role);
             require(blueprint.deploymentForRole(role) == component, "non-blueprint component");
             require(managerContainer.componentForRole(role) == component, "unmanaged component");
+            require(managerContainer.selectorsForRole(role).length == 0, "immutable role migration selector");
             (bool success, bytes memory reason) =
                 component.call(abi.encodeCall(UUPSNotUpgradeable.upgradeTo, (address(0x1234))));
             require(!success && reason.length >= 4, "upgrade accepted");
@@ -255,8 +272,14 @@ contract ContractIntegrationTest {
         }
 
         bytes32 assetId = keccak256("USDX");
-        assetRegistry.registerAsset(assetId, address(token), 6, 1_000_000, 1_000_000_000_000);
-        vault.setSettlementModule(address(this), true);
+        _governanceCall(
+            address(assetRegistry),
+            abi.encodeCall(
+                AssetRegistry.registerAsset,
+                (assetId, address(token), uint8(6), uint128(1_000_000), uint128(1_000_000_000_000))
+            )
+        );
+        _governanceCall(address(vault), abi.encodeCall(LayerXVault.setSettlementModule, (address(this), true)));
         address depositor = address(0xA11CE);
         uint256 deposited = 1_000_000_000;
         token.mint(depositor, deposited);
@@ -276,43 +299,95 @@ contract ContractIntegrationTest {
         GovernanceTarget target = new GovernanceTarget();
         bytes memory targetCall = abi.encodeCall(GovernanceTarget.setValue, (uint256(77)));
         vm.expectPartialRevert(LayerXTimelock.InvalidOperation.selector);
+        vm.prank(FINAL_PROPOSER);
         timelock.schedule(address(target), 0, targetCall, keccak256("blocked"), 2 days);
         bytes memory permissionCall = abi.encodeCall(
             LayerXTimelock.setCallPermission, (address(target), GovernanceTarget.setValue.selector, true)
         );
-        bytes32 permissionId = timelock.schedule(address(timelock), 0, permissionCall, keccak256("permission"), 2 days);
-        vm.warp(timelock.readyAt(permissionId));
-        timelock.execute(address(timelock), 0, permissionCall, keccak256("permission"), 0);
-        bytes32 targetId = timelock.schedule(address(target), 0, targetCall, keccak256("allowed"), 2 days);
-        vm.warp(timelock.readyAt(targetId));
-        timelock.execute(address(target), 0, targetCall, keccak256("allowed"), 1);
+        _governanceCall(address(timelock), permissionCall);
+        _governanceCall(address(target), targetCall);
         require(target.value() == 77, "allowed governance call failed");
 
         bytes memory failurePermission =
             abi.encodeCall(LayerXTimelock.setCallPermission, (address(target), GovernanceTarget.fail.selector, true));
-        bytes32 failurePermissionId =
-            timelock.schedule(address(timelock), 0, failurePermission, keccak256("failure-permission"), 2 days);
-        vm.warp(timelock.readyAt(failurePermissionId));
-        timelock.execute(address(timelock), 0, failurePermission, keccak256("failure-permission"), 2);
+        _governanceCall(address(timelock), failurePermission);
         bytes memory failureCall = abi.encodeCall(GovernanceTarget.fail, ());
-        bytes32 failureId = timelock.schedule(address(target), 0, failureCall, keccak256("bounded-failure"), 2 days);
-        vm.warp(timelock.readyAt(failureId));
+        ScheduledCall memory failure = _schedule(address(target), failureCall);
+        vm.warp(block.timestamp + timelock.minDelay());
         vm.expectPartialRevert(LayerXTimelock.CallFailed.selector);
-        timelock.execute(address(target), 0, failureCall, keccak256("bounded-failure"), 3);
+        vm.prank(FINAL_EXECUTOR);
+        timelock.execute(failure.target, 0, failure.data, failure.salt, failure.nonce);
 
         bytes memory initCode = abi.encodePacked(type(IntegrationToken).creationCode, abi.encode(address(this)));
         vm.expectPartialRevert(Blueprint.BlueprintSealed.selector);
         blueprint.deploy(Predeploys.ASSET_REGISTRY, initCode, address(token).codehash);
     }
 
+    function testBootstrapRequiresBothGovernanceDelays() public {
+        LayerXTimelock isolated = new LayerXTimelock(
+            2 days, 7 days, address(this), address(this), address(this), 1 ether, configHash, release
+        );
+        GovernanceTarget target = new GovernanceTarget();
+        bytes memory permission = abi.encodeCall(
+            LayerXTimelock.setCallPermission, (address(target), GovernanceTarget.setValue.selector, true)
+        );
+        isolated.schedule(address(isolated), 0, permission, keccak256("first-delay"), isolated.minDelay());
+        vm.expectPartialRevert(LayerXTimelock.OperationNotReady.selector);
+        isolated.execute(address(isolated), 0, permission, keccak256("first-delay"), 0);
+        vm.warp(block.timestamp + isolated.minDelay());
+        isolated.execute(address(isolated), 0, permission, keccak256("first-delay"), 0);
+
+        bytes memory callData = abi.encodeCall(GovernanceTarget.setValue, (uint256(91)));
+        isolated.schedule(address(target), 0, callData, keccak256("second-delay"), isolated.minDelay());
+        vm.expectPartialRevert(LayerXTimelock.OperationNotReady.selector);
+        isolated.execute(address(target), 0, callData, keccak256("second-delay"), 1);
+        vm.warp(block.timestamp + isolated.minDelay());
+        isolated.execute(address(target), 0, callData, keccak256("second-delay"), 1);
+        require(target.value() == 91, "second governance delay absent");
+    }
+
+    function testBootstrapRolesAreFullyTransferredAndRevoked() public view {
+        require(timelock.proposer(FINAL_PROPOSER), "final proposer missing");
+        require(timelock.executor(FINAL_EXECUTOR), "final executor missing");
+        require(timelock.guardian(EMERGENCY_COUNCIL), "final guardian missing");
+        require(!timelock.proposer(address(this)), "bootstrap proposer retained");
+        require(!timelock.executor(address(this)), "bootstrap executor retained");
+        require(!timelock.guardian(address(this)), "bootstrap guardian retained");
+    }
+
+    function testRoleTransitionFailureLeavesBlueprintUnsealed() public {
+        injectRoleTransitionFailure = true;
+        roleTransitionFailureObserved = false;
+        setUp();
+
+        require(roleTransitionFailureObserved, "role transition did not fail");
+        require(managerContainer.initialized(), "manager not initialized");
+        require(managerContainer.migrator() == address(managerMigrator), "migrator missing");
+        require(!blueprint.deploymentsSealed(), "failed transition sealed blueprint");
+    }
+
+    function testDeployerCannotBypassImmutableTimelockGovernance() public {
+        vm.expectPartialRevert(Governed.GovernanceOnly.selector);
+        assetRegistry.updateRisk(keccak256("USDX"), 1, 1, true);
+        vm.expectPartialRevert(Governed.GovernanceOnly.selector);
+        vault.setSettlementModule(address(withdrawalClaims), true);
+        vm.expectPartialRevert(GuarantorBond.Unauthorized.selector);
+        guarantorBond.setSlashingAuthority(address(challengeManager));
+        vm.expectPartialRevert(ManagerUnauthorized.selector);
+        managerContainer.setMigrator(address(managerMigrator));
+    }
+
     function testAssetAndNullifierAdministrativeLifecycles() public {
         _prepareSettlement(1_000_000_000);
         bytes32 assetId = keccak256("USDX");
-        assetRegistry.updateRisk(assetId, 2_000_000, 2_000_000_000_000, true);
+        _governanceCall(
+            address(assetRegistry),
+            abi.encodeCall(AssetRegistry.updateRisk, (assetId, uint128(2_000_000), uint128(2_000_000_000_000), true))
+        );
         vm.prank(EMERGENCY_COUNCIL);
         assetRegistry.emergencyPause(assetId);
         require(assetRegistry.asset(assetId).paused, "emergency pause absent");
-        assetRegistry.governanceUnpause(assetId);
+        _governanceCall(address(assetRegistry), abi.encodeCall(AssetRegistry.governanceUnpause, (assetId)));
         require(!assetRegistry.asset(assetId).paused, "governance unpause absent");
 
         bytes32 firstNullifier = keccak256("lifecycle-nullifier-consume");
@@ -390,7 +465,10 @@ contract ContractIntegrationTest {
         challengeManager.raiseChallenge{value: 1 ether}(
             checkpointHash, CheckpointChallengeManager.Kind.DataAvailability, keccak256("missing-shard")
         );
-        challengeManager.resolveChallenge(checkpointHash, true);
+        _governanceCall(
+            address(challengeManager),
+            abi.encodeCall(CheckpointChallengeManager.resolveChallenge, (checkpointHash, true))
+        );
         require(checkpointRegistry.explicitlyInvalidated(checkpointHash), "checkpoint invalidation not recorded");
         require(!checkpointRegistry.isCanonicalCheckpoint(checkpointHash), "challenged checkpoint remained canonical");
         withdrawalClaims.cancelChallengedClaim(claimId);
@@ -414,9 +492,12 @@ contract ContractIntegrationTest {
         challengeManager.raiseChallenge{value: 1 ether}(
             checkpointHash, CheckpointChallengeManager.Kind.Fraud, keccak256("invalid-transition")
         );
-        uint256 governanceBalance = address(this).balance;
-        challengeManager.resolveChallenge(checkpointHash, false);
-        require(address(this).balance == governanceBalance + 1 ether, "rejected bond not conserved");
+        uint256 governanceBalance = address(timelock).balance;
+        _governanceCall(
+            address(challengeManager),
+            abi.encodeCall(CheckpointChallengeManager.resolveChallenge, (checkpointHash, false))
+        );
+        require(address(timelock).balance == governanceBalance + 1 ether, "rejected bond not conserved");
         vm.warp(challengeManager.windowClosesAt(checkpointHash));
         require(challengeManager.claimable(checkpointHash), "rejected checkpoint not claimable");
     }
@@ -439,7 +520,7 @@ contract ContractIntegrationTest {
             checkpointHash: checkpointHash
         });
         EmergencyExit.BalanceProof memory proof = EmergencyExit.BalanceProof({leafIndex: 0, siblings: new bytes32[](0)});
-        emergencyExit.declareEmergency(false);
+        _governanceCall(address(emergencyExit), abi.encodeCall(EmergencyExit.declareEmergency, (false)));
         vm.prank(EMERGENCY_COUNCIL);
         emergencyExit.emergencyCouncilDeclare();
         emergencyExit.executeExit(exitClaim, stateRoot, proof, attestations);
@@ -463,7 +544,10 @@ contract ContractIntegrationTest {
         challengeManager.raiseChallenge{value: 1 ether}(
             fraudulent.checkpointHash, CheckpointChallengeManager.Kind.Fraud, keccak256("invalid-state-root")
         );
-        challengeManager.resolveChallenge(fraudulent.checkpointHash, true);
+        _governanceCall(
+            address(challengeManager),
+            abi.encodeCall(CheckpointChallengeManager.resolveChallenge, (fraudulent.checkpointHash, true))
+        );
 
         require(checkpointRegistry.explicitlyInvalidated(fraudulent.checkpointHash), "fraud invalidation not recorded");
         require(
@@ -521,9 +605,12 @@ contract ContractIntegrationTest {
 
     function testGuarantorAdministrativeSlashAndUnbondLifecycles() public {
         _fundGuarantors();
-        guarantorBond.updateCustodiedValue(50 ether);
+        _governanceCall(address(guarantorBond), abi.encodeCall(GuarantorBond.updateCustodiedValue, (50 ether)));
         address firstSigner = vm.addr(1);
-        guarantorBond.removeGuarantor(bytes32(uint256(1)), 2, 3);
+        _governanceCall(
+            address(guarantorBond),
+            abi.encodeCall(GuarantorBond.removeGuarantor, (bytes32(uint256(1)), uint64(2), uint64(3)))
+        );
         vm.prank(firstSigner);
         guarantorBond.beginUnbond(bytes32(uint256(1)), 1 ether);
         vm.prank(firstSigner);
@@ -536,9 +623,16 @@ contract ContractIntegrationTest {
         guarantorBond.finalizeUnbond(bytes32(uint256(1)));
         require(firstSigner.balance == signerBalance + 1 ether, "unbond not returned");
 
-        guarantorBond.setUnresolvedSlashing(bytes32(uint256(2)), true);
-        guarantorBond.setUnresolvedSlashing(bytes32(uint256(2)), false);
-        guarantorBond.setGuarantorJailStatus(bytes32(uint256(2)), true, 4);
+        _governanceCall(
+            address(guarantorBond), abi.encodeCall(GuarantorBond.setUnresolvedSlashing, (bytes32(uint256(2)), true))
+        );
+        _governanceCall(
+            address(guarantorBond), abi.encodeCall(GuarantorBond.setUnresolvedSlashing, (bytes32(uint256(2)), false))
+        );
+        _governanceCall(
+            address(guarantorBond),
+            abi.encodeCall(GuarantorBond.setGuarantorJailStatus, (bytes32(uint256(2)), true, uint64(4)))
+        );
         require(guarantorBond.bondRecord(bytes32(uint256(2))).jailed, "administrative jail absent");
 
         GuarantorBond isolated =
@@ -557,24 +651,48 @@ contract ContractIntegrationTest {
 
     function _prepareSettlement(uint256 custody) private {
         bytes32 assetId = keccak256("USDX");
-        assetRegistry.registerAsset(assetId, address(token), 6, 1_000_000, 1_000_000_000_000);
-        vault.setSettlementModule(address(withdrawalClaims), true);
-        vault.setSettlementModule(address(emergencyExit), true);
-        vault.setSettlementModule(address(this), true);
-        nullifierRegistry.setConsumer(address(withdrawalClaims), true);
-        nullifierRegistry.setConsumer(address(emergencyExit), true);
-        nullifierRegistry.setConsumer(address(this), true);
+        _governanceCall(
+            address(assetRegistry),
+            abi.encodeCall(
+                AssetRegistry.registerAsset,
+                (assetId, address(token), uint8(6), uint128(1_000_000), uint128(1_000_000_000_000))
+            )
+        );
+        _governanceCall(
+            address(vault), abi.encodeCall(LayerXVault.setSettlementModule, (address(withdrawalClaims), true))
+        );
+        _governanceCall(address(vault), abi.encodeCall(LayerXVault.setSettlementModule, (address(emergencyExit), true)));
+        _governanceCall(address(vault), abi.encodeCall(LayerXVault.setSettlementModule, (address(this), true)));
+        _governanceCall(
+            address(nullifierRegistry),
+            abi.encodeCall(WithdrawalNullifierRegistry.setConsumer, (address(withdrawalClaims), true))
+        );
+        _governanceCall(
+            address(nullifierRegistry),
+            abi.encodeCall(WithdrawalNullifierRegistry.setConsumer, (address(emergencyExit), true))
+        );
+        _governanceCall(
+            address(nullifierRegistry), abi.encodeCall(WithdrawalNullifierRegistry.setConsumer, (address(this), true))
+        );
         token.mint(address(this), custody);
         token.approve(address(vault), custody);
         vault.deposit(assetId, custody, keccak256("integration-custody-account"));
         _fundGuarantors();
-        guarantorBond.setSlashingAuthority(address(challengeManager));
+        _governanceCall(
+            address(guarantorBond), abi.encodeCall(GuarantorBond.setSlashingAuthority, (address(challengeManager)))
+        );
     }
 
     function _fundGuarantors() private {
         for (uint256 privateKey = 1; privateKey <= 2; ++privateKey) {
             address signer = vm.addr(privateKey);
-            guarantorBond.activateGuarantor(bytes32(privateKey), signer, signer, 1, uint64(privateKey));
+            _governanceCall(
+                address(guarantorBond),
+                abi.encodeCall(
+                    GuarantorBond.activateGuarantor,
+                    (bytes32(privateKey), signer, signer, uint64(1), uint64(privateKey))
+                )
+            );
             vm.deal(signer, 3 ether);
             vm.prank(signer);
             guarantorBond.depositBond{value: 2 ether}(bytes32(privateKey));
@@ -714,6 +832,192 @@ contract ContractIntegrationTest {
         custodyTopology = _deployCustodyTopology();
     }
 
+    function _bootstrapGovernance() private {
+        address[] memory targets = new address[](19);
+        bytes4[] memory selectors = new bytes4[](19);
+        uint256 index;
+        targets[index] = address(assetRegistry);
+        selectors[index++] = AssetRegistry.registerAsset.selector;
+        targets[index] = address(assetRegistry);
+        selectors[index++] = AssetRegistry.updateRisk.selector;
+        targets[index] = address(assetRegistry);
+        selectors[index++] = AssetRegistry.governanceUnpause.selector;
+        targets[index] = address(vault);
+        selectors[index++] = LayerXVault.setSettlementModule.selector;
+        targets[index] = address(guarantorBond);
+        selectors[index++] = GuarantorBond.updateCustodiedValue.selector;
+        targets[index] = address(guarantorBond);
+        selectors[index++] = GuarantorBond.setSlashingAuthority.selector;
+        targets[index] = address(guarantorBond);
+        selectors[index++] = GuarantorBond.activateGuarantor.selector;
+        targets[index] = address(guarantorBond);
+        selectors[index++] = GuarantorBond.rotateGuarantorSigner.selector;
+        targets[index] = address(guarantorBond);
+        selectors[index++] = GuarantorBond.removeGuarantor.selector;
+        targets[index] = address(guarantorBond);
+        selectors[index++] = GuarantorBond.setGuarantorJailStatus.selector;
+        targets[index] = address(guarantorBond);
+        selectors[index++] = GuarantorBond.setUnresolvedSlashing.selector;
+        targets[index] = address(guarantorBond);
+        selectors[index++] = GuarantorBond.sweepSlashed.selector;
+        targets[index] = address(challengeManager);
+        selectors[index++] = CheckpointChallengeManager.resolveChallenge.selector;
+        targets[index] = address(nullifierRegistry);
+        selectors[index++] = WithdrawalNullifierRegistry.setConsumer.selector;
+        targets[index] = address(emergencyExit);
+        selectors[index++] = EmergencyExit.declareEmergency.selector;
+        targets[index] = address(managerContainer);
+        selectors[index++] = ManagerContainer.initialize.selector;
+        targets[index] = address(managerContainer);
+        selectors[index++] = ManagerContainer.setMigrator.selector;
+        targets[index] = address(managerMigrator);
+        selectors[index++] = ManagerMigrator.stageMigration.selector;
+        targets[index] = address(managerMigrator);
+        selectors[index++] = ManagerMigrator.cancelMigration.selector;
+        require(index == targets.length, "permission inventory");
+
+        ScheduledCall[] memory permissionCalls = new ScheduledCall[](targets.length);
+        for (uint256 i = 0; i < targets.length; ++i) {
+            permissionCalls[i] = _schedule(
+                address(timelock), abi.encodeCall(LayerXTimelock.setCallPermission, (targets[i], selectors[i], true))
+            );
+        }
+        vm.expectPartialRevert(LayerXTimelock.OperationNotReady.selector);
+        timelock.execute(
+            permissionCalls[0].target, 0, permissionCalls[0].data, permissionCalls[0].salt, permissionCalls[0].nonce
+        );
+        vm.warp(block.timestamp + timelock.minDelay());
+        for (uint256 i = 0; i < permissionCalls.length; ++i) {
+            _execute(permissionCalls[i]);
+            require(timelock.callPermission(targets[i], selectors[i]), "permission missing");
+        }
+
+        ScheduledCall[] memory initializationCalls = new ScheduledCall[](8);
+        initializationCalls[0] = _schedule(
+            address(managerContainer), abi.encodeCall(ManagerContainer.initialize, (_manifests(), _allowlists()))
+        );
+        initializationCalls[1] = _schedule(
+            address(managerContainer), abi.encodeCall(ManagerContainer.setMigrator, (address(managerMigrator)))
+        );
+        initializationCalls[2] =
+            _schedule(address(timelock), abi.encodeCall(LayerXTimelock.setRole, (uint8(1), FINAL_PROPOSER, true)));
+        initializationCalls[3] =
+            _schedule(address(timelock), abi.encodeCall(LayerXTimelock.setRole, (uint8(2), FINAL_EXECUTOR, true)));
+        initializationCalls[4] =
+            _schedule(address(timelock), abi.encodeCall(LayerXTimelock.setRole, (uint8(3), EMERGENCY_COUNCIL, true)));
+        initializationCalls[5] =
+            _schedule(address(timelock), abi.encodeCall(LayerXTimelock.setRole, (uint8(1), address(this), false)));
+        initializationCalls[6] =
+            _schedule(address(timelock), abi.encodeCall(LayerXTimelock.setRole, (uint8(3), address(this), false)));
+        initializationCalls[7] =
+            _schedule(address(timelock), abi.encodeCall(LayerXTimelock.setRole, (uint8(2), address(this), false)));
+        ScheduledCall memory failingRoleCall;
+        if (injectRoleTransitionFailure) {
+            failingRoleCall =
+                _schedule(address(timelock), abi.encodeCall(LayerXTimelock.setRole, (uint8(0), FINAL_PROPOSER, true)));
+        }
+        vm.expectPartialRevert(LayerXTimelock.OperationNotReady.selector);
+        timelock.execute(
+            initializationCalls[0].target,
+            0,
+            initializationCalls[0].data,
+            initializationCalls[0].salt,
+            initializationCalls[0].nonce
+        );
+        vm.warp(block.timestamp + timelock.minDelay());
+        _execute(initializationCalls[0]);
+        _execute(initializationCalls[1]);
+        if (injectRoleTransitionFailure) {
+            _execute(initializationCalls[2]);
+            vm.expectPartialRevert(LayerXTimelock.CallFailed.selector);
+            timelock.execute(
+                failingRoleCall.target, 0, failingRoleCall.data, failingRoleCall.salt, failingRoleCall.nonce
+            );
+            roleTransitionFailureObserved = true;
+            require(!blueprint.deploymentsSealed(), "failed transition sealed blueprint");
+            return;
+        }
+        for (uint256 i = 2; i < initializationCalls.length; ++i) {
+            _execute(initializationCalls[i]);
+        }
+        require(timelock.proposer(FINAL_PROPOSER), "final proposer missing");
+        require(timelock.executor(FINAL_EXECUTOR), "final executor missing");
+        require(timelock.guardian(EMERGENCY_COUNCIL), "final guardian missing");
+        require(!timelock.proposer(address(this)), "bootstrap proposer retained");
+        require(!timelock.executor(address(this)), "bootstrap executor retained");
+        require(!timelock.guardian(address(this)), "bootstrap guardian retained");
+        require(managerContainer.initialized(), "manager not initialized");
+        require(managerContainer.migrator() == address(managerMigrator), "migrator missing");
+        for (uint256 i = 0; i < Predeploys.COUNT; ++i) {
+            bytes32 role = Predeploys.roleAt(i);
+            require(managerContainer.componentForRole(role) == _component(role), "manager topology mismatch");
+        }
+        _requireGovernanceTopology();
+        blueprint.seal();
+        require(blueprint.deploymentsSealed(), "blueprint open");
+    }
+
+    function _requireGovernanceTopology() private view {
+        address governance = address(timelock);
+        require(blueprint.governanceTimelock() == governance, "blueprint governance");
+        require(blueprint.emergencyCouncil() == EMERGENCY_COUNCIL, "blueprint emergency council");
+        require(assetRegistry.governance() == governance, "asset governance");
+        require(assetRegistry.emergencyCouncil() == EMERGENCY_COUNCIL, "asset emergency council");
+        require(vault.governance() == governance, "vault governance");
+        require(vault.emergencyCouncil() == EMERGENCY_COUNCIL, "vault emergency council");
+        require(guarantorBond.custodyAuthority() == governance, "bond custody authority");
+        require(guarantorBond.membershipAuthority() == governance, "bond membership authority");
+        require(challengeManager.governance() == governance, "challenge governance");
+        require(challengeManager.emergencyCouncil() == EMERGENCY_COUNCIL, "challenge emergency council");
+        require(nullifierRegistry.governance() == governance, "nullifier governance");
+        require(nullifierRegistry.emergencyCouncil() == EMERGENCY_COUNCIL, "nullifier emergency council");
+        require(emergencyExit.governance() == governance, "exit governance");
+        require(emergencyExit.emergencyCouncil() == EMERGENCY_COUNCIL, "exit emergency council");
+        require(managerContainer.governanceTimelock() == governance, "manager governance");
+        require(managerContainer.emergencyCouncil() == EMERGENCY_COUNCIL, "manager emergency council");
+        require(managerMigrator.governanceTimelock() == governance, "migrator governance");
+        require(address(vault.assetRegistry()) == address(assetRegistry), "vault registry");
+        require(address(checkpointRegistry.guarantorEligibility()) == address(guarantorBond), "checkpoint bond");
+        require(address(challengeManager.registry()) == address(checkpointRegistry), "challenge registry");
+        require(address(challengeManager.guarantorBond()) == address(guarantorBond), "challenge bond");
+        require(address(withdrawalClaims.registry()) == address(checkpointRegistry), "claims registry");
+        require(address(withdrawalClaims.challengeManager()) == address(challengeManager), "claims challenge");
+        require(address(withdrawalClaims.nullifierRegistry()) == address(nullifierRegistry), "claims nullifier");
+        require(address(withdrawalClaims.vault()) == address(vault), "claims vault");
+        require(address(emergencyExit.registry()) == address(checkpointRegistry), "exit registry");
+        require(address(emergencyExit.challengeManager()) == address(challengeManager), "exit challenge");
+        require(address(emergencyExit.nullifierRegistry()) == address(nullifierRegistry), "exit nullifier");
+        require(address(emergencyExit.vault()) == address(vault), "exit vault");
+        require(address(reserveReconciler.registry()) == address(checkpointRegistry), "reconciler registry");
+        require(address(reserveReconciler.vault()) == address(vault), "reconciler vault");
+        require(address(reserveReconciler.withdrawalClaims()) == address(withdrawalClaims), "reconciler claims");
+        require(address(managerMigrator.container()) == address(managerContainer), "migrator container");
+    }
+
+    function _governanceCall(address target, bytes memory data) private returns (bytes memory result) {
+        ScheduledCall memory scheduled = _schedule(target, data);
+        vm.warp(block.timestamp + timelock.minDelay());
+        return _execute(scheduled);
+    }
+
+    function _schedule(address target, bytes memory data) private returns (ScheduledCall memory scheduled) {
+        uint256 saltNonce = governanceSaltNonce++;
+        scheduled = ScheduledCall({
+            target: target,
+            data: data,
+            salt: keccak256(abi.encode("integration-governance", saltNonce, target, keccak256(data))),
+            nonce: timelock.operationNonce()
+        });
+        uint64 delay = timelock.minDelay();
+        if (timelock.proposer(FINAL_PROPOSER)) vm.prank(FINAL_PROPOSER);
+        timelock.schedule(target, 0, data, scheduled.salt, delay);
+    }
+
+    function _execute(ScheduledCall memory scheduled) private returns (bytes memory result) {
+        if (timelock.executor(FINAL_EXECUTOR)) vm.prank(FINAL_EXECUTOR);
+        return timelock.execute(scheduled.target, 0, scheduled.data, scheduled.salt, scheduled.nonce);
+    }
+
     function _deployTimelock() private returns (LayerXTimelock result) {
         bytes memory arguments = abi.encode(
             uint64(2 days),
@@ -729,17 +1033,16 @@ contract ContractIntegrationTest {
             2 days, 7 days, address(this), address(this), address(this), 10 ether, configHash, release
         );
         result = LayerXTimelock(
-            payable(_deploy(
-                    Predeploys.TIMELOCK,
-                    abi.encodePacked(type(LayerXTimelock).creationCode, arguments),
-                    address(runtimeReference).codehash
+            payable(blueprint.deployTimelock(
+                    abi.encodePacked(type(LayerXTimelock).creationCode, arguments), address(runtimeReference).codehash
                 ))
         );
+        require(address(result) == blueprint.predictTimelock(), "timelock prediction mismatch");
     }
 
     function _deployAssetRegistry() private returns (AssetRegistry result) {
-        bytes memory arguments = abi.encode(address(this), EMERGENCY_COUNCIL, configHash, release);
-        AssetRegistry runtimeReference = new AssetRegistry(address(this), EMERGENCY_COUNCIL, configHash, release);
+        bytes memory arguments = abi.encode(address(timelock), EMERGENCY_COUNCIL, configHash, release);
+        AssetRegistry runtimeReference = new AssetRegistry(address(timelock), EMERGENCY_COUNCIL, configHash, release);
         result = AssetRegistry(
             _deploy(
                 Predeploys.ASSET_REGISTRY,
@@ -750,9 +1053,9 @@ contract ContractIntegrationTest {
     }
 
     function _deployVault() private returns (LayerXVault result) {
-        bytes memory arguments = abi.encode(assetRegistry, address(this), EMERGENCY_COUNCIL, configHash, release);
+        bytes memory arguments = abi.encode(assetRegistry, address(timelock), EMERGENCY_COUNCIL, configHash, release);
         LayerXVault runtimeReference =
-            new LayerXVault(assetRegistry, address(this), EMERGENCY_COUNCIL, configHash, release);
+            new LayerXVault(assetRegistry, address(timelock), EMERGENCY_COUNCIL, configHash, release);
         result = LayerXVault(
             _deploy(
                 Predeploys.VAULT,
@@ -764,8 +1067,8 @@ contract ContractIntegrationTest {
 
     function _deployGuarantorBond() private returns (GuarantorBond result) {
         bytes memory arguments = abi.encode(
-            address(this),
-            address(this),
+            address(timelock),
+            address(timelock),
             uint16(1),
             uint32(42),
             uint32(100),
@@ -775,7 +1078,7 @@ contract ContractIntegrationTest {
             release
         );
         GuarantorBond runtimeReference =
-            new GuarantorBond(address(this), address(this), 1, 42, 100, 100 ether, 7 days, configHash, release);
+            new GuarantorBond(address(timelock), address(timelock), 1, 42, 100, 100 ether, 7 days, configHash, release);
         result = GuarantorBond(
             payable(_deploy(
                     Predeploys.GUARANTOR_BOND,
@@ -794,12 +1097,13 @@ contract ContractIntegrationTest {
             uint16(4),
             uint64(1 hours),
             uint64(5 minutes),
-            GENESIS,
+            GENESIS_RECEIPT_ROOT,
             configHash,
             release
         );
-        CheckpointRegistry runtimeReference =
-            new CheckpointRegistry(guarantorBond, 1, 42, 2, 4, 1 hours, 5 minutes, GENESIS, configHash, release);
+        CheckpointRegistry runtimeReference = new CheckpointRegistry(
+            guarantorBond, 1, 42, 2, 4, 1 hours, 5 minutes, GENESIS_RECEIPT_ROOT, configHash, release
+        );
         result = CheckpointRegistry(
             _deploy(
                 Predeploys.CHECKPOINT_REGISTRY,
@@ -813,7 +1117,7 @@ contract ContractIntegrationTest {
         bytes memory arguments = abi.encode(
             checkpointRegistry,
             guarantorBond,
-            address(this),
+            address(timelock),
             EMERGENCY_COUNCIL,
             uint64(7 days),
             uint128(1 ether),
@@ -821,7 +1125,14 @@ contract ContractIntegrationTest {
             release
         );
         CheckpointChallengeManager runtimeReference = new CheckpointChallengeManager(
-            checkpointRegistry, guarantorBond, address(this), EMERGENCY_COUNCIL, 7 days, 1 ether, configHash, release
+            checkpointRegistry,
+            guarantorBond,
+            address(timelock),
+            EMERGENCY_COUNCIL,
+            7 days,
+            1 ether,
+            configHash,
+            release
         );
         result = CheckpointChallengeManager(
             _deploy(
@@ -833,9 +1144,9 @@ contract ContractIntegrationTest {
     }
 
     function _deployNullifierRegistry() private returns (WithdrawalNullifierRegistry result) {
-        bytes memory arguments = abi.encode(address(this), EMERGENCY_COUNCIL, configHash, release);
+        bytes memory arguments = abi.encode(address(timelock), EMERGENCY_COUNCIL, configHash, release);
         WithdrawalNullifierRegistry runtimeReference =
-            new WithdrawalNullifierRegistry(address(this), EMERGENCY_COUNCIL, configHash, release);
+            new WithdrawalNullifierRegistry(address(timelock), EMERGENCY_COUNCIL, configHash, release);
         result = WithdrawalNullifierRegistry(
             _deploy(
                 Predeploys.NULLIFIER_REGISTRY,
@@ -865,7 +1176,7 @@ contract ContractIntegrationTest {
             challengeManager,
             nullifierRegistry,
             vault,
-            address(this),
+            address(timelock),
             EMERGENCY_COUNCIL,
             uint64(1 days),
             configHash,
@@ -876,7 +1187,7 @@ contract ContractIntegrationTest {
             challengeManager,
             nullifierRegistry,
             vault,
-            address(this),
+            address(timelock),
             EMERGENCY_COUNCIL,
             1 days,
             configHash,
@@ -905,8 +1216,9 @@ contract ContractIntegrationTest {
     }
 
     function _deployManagerContainer() private returns (ManagerContainer result) {
-        bytes memory arguments = abi.encode(address(this), configHash, release);
-        ManagerContainer runtimeReference = new ManagerContainer(address(this), configHash, release);
+        StaticConfig.Config memory config = deploymentConfig;
+        bytes memory arguments = abi.encode(config);
+        ManagerContainer runtimeReference = new ManagerContainer(config);
         result = ManagerContainer(
             _deploy(
                 Predeploys.CONTRACTS_MANAGER,
@@ -919,7 +1231,7 @@ contract ContractIntegrationTest {
     function _deployManagerMigrator() private returns (ManagerMigrator result) {
         bytes memory arguments = abi.encode(
             managerContainer,
-            address(this),
+            address(timelock),
             address(this),
             uint64(1 days),
             uint64(7 days),
@@ -927,7 +1239,7 @@ contract ContractIntegrationTest {
             uint256(1 ether)
         );
         ManagerMigrator runtimeReference =
-            new ManagerMigrator(managerContainer, address(this), address(this), 1 days, 7 days, 1_000_000, 1 ether);
+            new ManagerMigrator(managerContainer, address(timelock), address(this), 1 days, 7 days, 1_000_000, 1 ether);
         result = ManagerMigrator(
             payable(_deploy(
                     Predeploys.MANAGER_MIGRATOR,
@@ -993,52 +1305,8 @@ contract ContractIntegrationTest {
     function _allowlists() private pure returns (bytes4[][] memory lists) {
         lists = new bytes4[][](Predeploys.COUNT);
         for (uint256 i = 0; i < lists.length; ++i) {
-            lists[i] = new bytes4[](1);
-            lists[i][0] = _selectorForRole(Predeploys.roleAt(i));
+            lists[i] = new bytes4[](0);
         }
-    }
-
-    function _selectorForRole(bytes32 role) private pure returns (bytes4) {
-        if (role == Predeploys.TIMELOCK) {
-            return LayerXTimelock.setCallPermission.selector;
-        }
-        if (role == Predeploys.ASSET_REGISTRY) {
-            return AssetRegistry.updateRisk.selector;
-        }
-        if (role == Predeploys.VAULT) {
-            return LayerXVault.setSettlementModule.selector;
-        }
-        if (role == Predeploys.GUARANTOR_BOND) {
-            return GuarantorBond.updateCustodiedValue.selector;
-        }
-        if (role == Predeploys.CHECKPOINT_REGISTRY) {
-            return CheckpointRegistry.registerCheckpoint.selector;
-        }
-        if (role == Predeploys.CHALLENGE_MANAGER) {
-            return CheckpointChallengeManager.resolveChallenge.selector;
-        }
-        if (role == Predeploys.NULLIFIER_REGISTRY) {
-            return WithdrawalNullifierRegistry.setConsumer.selector;
-        }
-        if (role == Predeploys.WITHDRAWAL_CLAIMS) {
-            return WithdrawalClaims.finaliseClaim.selector;
-        }
-        if (role == Predeploys.EMERGENCY_EXIT) {
-            return EmergencyExit.declareEmergency.selector;
-        }
-        if (role == Predeploys.RESERVE_RECONCILER) {
-            return ReserveReconciler.reconcile.selector;
-        }
-        if (role == Predeploys.CONTRACTS_MANAGER) {
-            return ManagerContainer.completeMigration.selector;
-        }
-        if (role == Predeploys.MANAGER_MIGRATOR) {
-            return ManagerMigrator.cancelMigration.selector;
-        }
-        if (role == Predeploys.CUSTODY_TOPOLOGY) {
-            return UUPSNotUpgradeable.upgradeTo.selector;
-        }
-        revert("unknown role");
     }
 
     function _component(bytes32 role) private view returns (address) {

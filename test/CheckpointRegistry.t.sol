@@ -20,7 +20,7 @@ contract CheckpointRegistryTest {
     GuarantorBond private bond;
     CheckpointRegistry private registry;
     uint256[3] private keys = [uint256(1), uint256(2), uint256(3)];
-    bytes32 private constant GENESIS = bytes32(uint256(0x11) << 248);
+    bytes32 private constant GENESIS_RECEIPT_ROOT = bytes32(uint256(0x11) << 248);
     bytes32 private constant CONFIG = keccak256("checkpoint-test-config");
     uint192 private constant RELEASE = uint192(1) << 128;
 
@@ -34,7 +34,7 @@ contract CheckpointRegistryTest {
             vm.prank(signer);
             bond.depositBond{value: 2 ether}(bytes32(i + 1));
         }
-        registry = new CheckpointRegistry(bond, 1, 42, 2, 4, 1 hours, 5 minutes, GENESIS, CONFIG, RELEASE);
+        registry = new CheckpointRegistry(bond, 1, 42, 2, 4, 1 hours, 5 minutes, GENESIS_RECEIPT_ROOT, CONFIG, RELEASE);
     }
 
     function testCanonicalHeaderMatchesCVector() public view {
@@ -45,6 +45,10 @@ contract CheckpointRegistryTest {
             registry.checkpointHash(header, "") == 0xf655c001cc9392bddb71932afa21742e7be6ac762e76f3ce0c56e32e8ec35aee,
             "C checkpoint vector mismatch"
         );
+    }
+
+    function testInitialContinuityUsesGenesisReceiptRoot() public view {
+        require(registry.latestFinalisedStateRoot() == GENESIS_RECEIPT_ROOT, "genesis receipt root");
     }
 
     function testCanonicalMillisecondTimestampsMeetSecondBasedWallClockBounds() public {
@@ -308,7 +312,7 @@ contract CheckpointRegistryTest {
             batchNumber: 1,
             firstSequence: 1,
             lastSequence: 1_000_000,
-            previousStateRoot: GENESIS,
+            previousStateRoot: GENESIS_RECEIPT_ROOT,
             resultingStateRoot: bytes32(uint256(0x22) << 248),
             activityMerkleRoot: bytes32(uint256(0x33) << 248),
             receiptMerkleRoot: bytes32(uint256(0x44) << 248),

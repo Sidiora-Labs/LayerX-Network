@@ -3,7 +3,9 @@ pragma solidity ^0.8.24;
 
 import {Predeploys} from "../deployment/Predeploys.sol";
 import {Preinstalls} from "../deployment/Preinstalls.sol";
+import {StaticConfig} from "../config/StaticConfig.sol";
 import {SemverComp} from "../libraries/SemverComp.sol";
+import {SafeCall} from "../libraries/SafeCall.sol";
 import {LayerXComponent} from "../security/LayerXComponent.sol";
 import {
     ManagerUnauthorized,
@@ -16,6 +18,7 @@ import {
 
 contract ManagerContainer is LayerXComponent {
     address public immutable governanceTimelock;
+    address public immutable emergencyCouncil;
     uint192 public currentRelease;
     bytes32 public currentManifestRoot;
     address public migrator;
@@ -31,14 +34,12 @@ contract ManagerContainer is LayerXComponent {
         bytes32 indexed migrationId, uint192 sourceRelease, uint192 targetRelease, bytes32 configHash
     );
 
-    constructor(address governance, bytes32 configHash, uint192 initialRelease)
-        LayerXComponent(Predeploys.CONTRACTS_MANAGER, configHash, initialRelease)
+    constructor(StaticConfig.Config memory config)
+        LayerXComponent(Predeploys.CONTRACTS_MANAGER, StaticConfig.hash(config, block.chainid), config.releaseVersion)
     {
-        if (governance == address(0) || configHash == bytes32(0) || initialRelease == 0) {
-            revert InvalidManagerConfiguration();
-        }
-        governanceTimelock = governance;
-        currentRelease = initialRelease;
+        governanceTimelock = config.governanceTimelock;
+        emergencyCouncil = config.emergencyCouncil;
+        currentRelease = config.releaseVersion;
     }
 
     modifier onlyGovernance() {
@@ -57,6 +58,7 @@ contract ManagerContainer is LayerXComponent {
             revert InvalidManagerConfiguration();
         }
         bytes32 root = Preinstalls.validateComplete(initialManifests);
+        _validateTopology(initialManifests);
         for (uint256 i = 0; i < Predeploys.COUNT; ++i) {
             Preinstalls.ComponentManifest calldata manifest = initialManifests[i];
             if (manifest.configHash != staticConfigHash) {
@@ -64,9 +66,6 @@ contract ManagerContainer is LayerXComponent {
             }
             manifests[manifest.role] = manifest;
             bytes4 previous;
-            if (selectorAllowlists[i].length == 0) {
-                revert SelectorNotAllowed(manifest.role, bytes4(0));
-            }
             for (uint256 j = 0; j < selectorAllowlists[i].length; ++j) {
                 bytes4 selector = selectorAllowlists[i][j];
                 if (selector == bytes4(0) || (j != 0 && selector <= previous)) {
@@ -142,5 +141,76 @@ contract ManagerContainer is LayerXComponent {
 
     function roleCount() external pure returns (uint256) {
         return Predeploys.COUNT;
+    }
+
+    function _validateTopology(Preinstalls.ComponentManifest[] calldata initialManifests) private view {
+        address timelock = governanceTimelock;
+        if (
+            initialManifests[0].component != timelock || initialManifests[10].component != address(this)
+                || initialManifests[11].component == address(this)
+        ) {
+            revert InvalidManagerConfiguration();
+        }
+
+        _requireAddress(initialManifests[1], bytes4(keccak256("governance()")), timelock);
+        _requireAddress(initialManifests[2], bytes4(keccak256("governance()")), timelock);
+        _requireAddress(initialManifests[3], bytes4(keccak256("custodyAuthority()")), timelock);
+        _requireAddress(initialManifests[3], bytes4(keccak256("membershipAuthority()")), timelock);
+        _requireAddress(initialManifests[5], bytes4(keccak256("governance()")), timelock);
+        _requireAddress(initialManifests[6], bytes4(keccak256("governance()")), timelock);
+        _requireAddress(initialManifests[8], bytes4(keccak256("governance()")), timelock);
+        _requireAddress(initialManifests[11], bytes4(keccak256("governanceTimelock()")), timelock);
+        _requireAddress(initialManifests[11], bytes4(keccak256("container()")), address(this));
+
+        address emergency = emergencyCouncil;
+        _requireAddress(initialManifests[1], bytes4(keccak256("emergencyCouncil()")), emergency);
+        _requireAddress(initialManifests[2], bytes4(keccak256("emergencyCouncil()")), emergency);
+        _requireAddress(initialManifests[5], bytes4(keccak256("emergencyCouncil()")), emergency);
+        _requireAddress(initialManifests[6], bytes4(keccak256("emergencyCouncil()")), emergency);
+        _requireAddress(initialManifests[8], bytes4(keccak256("emergencyCouncil()")), emergency);
+
+        _requireAddress(initialManifests[2], bytes4(keccak256("assetRegistry()")), initialManifests[1].component);
+        _requireAddress(initialManifests[4], bytes4(keccak256("guarantorEligibility()")), initialManifests[3].component);
+        _requireAddress(initialManifests[5], bytes4(keccak256("registry()")), initialManifests[4].component);
+        _requireAddress(initialManifests[5], bytes4(keccak256("guarantorBond()")), initialManifests[3].component);
+        _requireAddress(initialManifests[7], bytes4(keccak256("registry()")), initialManifests[4].component);
+        _requireAddress(initialManifests[7], bytes4(keccak256("challengeManager()")), initialManifests[5].component);
+        _requireAddress(initialManifests[7], bytes4(keccak256("nullifierRegistry()")), initialManifests[6].component);
+        _requireAddress(initialManifests[7], bytes4(keccak256("vault()")), initialManifests[2].component);
+        _requireAddress(initialManifests[8], bytes4(keccak256("registry()")), initialManifests[4].component);
+        _requireAddress(initialManifests[8], bytes4(keccak256("challengeManager()")), initialManifests[5].component);
+        _requireAddress(initialManifests[8], bytes4(keccak256("nullifierRegistry()")), initialManifests[6].component);
+        _requireAddress(initialManifests[8], bytes4(keccak256("vault()")), initialManifests[2].component);
+        _requireAddress(initialManifests[9], bytes4(keccak256("registry()")), initialManifests[4].component);
+        _requireAddress(initialManifests[9], bytes4(keccak256("vault()")), initialManifests[2].component);
+        _requireAddress(initialManifests[9], bytes4(keccak256("withdrawalClaims()")), initialManifests[7].component);
+        _requireAddress(initialManifests[12], bytes4(keccak256("checkpointRegistry()")), initialManifests[4].component);
+        _requireAddress(initialManifests[12], bytes4(keccak256("guarantorBond()")), initialManifests[3].component);
+        _requireAddress(initialManifests[12], bytes4(keccak256("vault()")), initialManifests[2].component);
+        _requireAddress(initialManifests[12], bytes4(keccak256("challengeManager()")), initialManifests[5].component);
+        _requireAddress(
+            initialManifests[12], bytes4(keccak256("withdrawalNullifiers()")), initialManifests[6].component
+        );
+        _requireAddress(initialManifests[12], bytes4(keccak256("withdrawalClaims()")), initialManifests[7].component);
+    }
+
+    function _requireAddress(Preinstalls.ComponentManifest calldata manifest, bytes4 selector, address expected)
+        private
+        view
+    {
+        SafeCall.CallResult memory result =
+            SafeCall.staticCall(manifest.component, abi.encodeWithSelector(selector), 50_000, 32);
+        if (!result.success || result.returnDataSize != 32) revert InvalidComponent(manifest.role, manifest.component);
+        bytes memory data = result.returnData;
+        uint256 word;
+        assembly ("memory-safe") {
+            word := mload(add(data, 32))
+        }
+        if (word > type(uint160).max) revert InvalidComponent(manifest.role, manifest.component);
+        address actual;
+        assembly ("memory-safe") {
+            actual := word
+        }
+        if (actual != expected) revert InvalidComponent(manifest.role, manifest.component);
     }
 }

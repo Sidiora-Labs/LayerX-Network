@@ -73,14 +73,14 @@ contract CheckpointRegistry is LayerXComponent {
         uint16 attestationLimit,
         uint64 attestationDelay,
         uint64 futureTimestampDrift,
-        bytes32 genesisStateRoot,
+        bytes32 genesisReceiptRoot,
         bytes32 componentConfigHash,
         uint192 componentRelease
     ) LayerXComponent(Predeploys.CHECKPOINT_REGISTRY, componentConfigHash, componentRelease) {
         if (
             address(eligibility) == address(0) || expectedProtocolVersion == 0 || expectedNetworkId == 0
                 || certificateThreshold == 0 || attestationLimit < certificateThreshold || attestationLimit > 32
-                || attestationDelay == 0 || futureTimestampDrift == 0 || genesisStateRoot == bytes32(0)
+                || attestationDelay == 0 || futureTimestampDrift == 0 || genesisReceiptRoot == bytes32(0)
                 || attestationDelay > type(uint64).max / MILLISECONDS_PER_SECOND
                 || futureTimestampDrift > type(uint64).max / MILLISECONDS_PER_SECOND || block.chainid > type(uint64).max
                 || eligibility.protocolVersion() != expectedProtocolVersion
@@ -97,7 +97,7 @@ contract CheckpointRegistry is LayerXComponent {
         maximumFutureTimestampDrift = futureTimestampDrift;
         maximumAttestationDelayMilliseconds = attestationDelay * MILLISECONDS_PER_SECOND;
         maximumFutureTimestampDriftMilliseconds = futureTimestampDrift * MILLISECONDS_PER_SECOND;
-        latestFinalisedStateRoot = genesisStateRoot;
+        latestFinalisedStateRoot = genesisReceiptRoot;
     }
 
     function canonicalHeader(CanonicalCheckpoint.HeaderCommitments calldata header)
