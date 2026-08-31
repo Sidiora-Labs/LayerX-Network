@@ -1,0 +1,29 @@
+{
+  "program": "layerx-solana-mirror-program",
+  "source": "interop/contracts/solana-mirror",
+  "source_commit": "e54359c864676f9904122337e9fd8ba951bcac4c",
+  "toolchain": {
+    "solana_cli": "3.0.10",
+    "cargo_build_sbf": "3.0.10",
+    "platform_tools": "1.51",
+    "rustc": "1.84.1"
+  },
+  "network": "solana-devnet",
+  "genesis_hash": "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG",
+  "program_id": "ExU8LpHSSit5LocqLS8KJT6hayvXXZv4MSQkWB2utUr4",
+  "publisher_ed25519_public_key": "96MWekuLEj5pdPmiQU84g3SMmWYG6PVoPUzUqc8CCM7q",
+  "program_data_account": "HndSGxG22cc1sRiDTLN2bxaFenhUDENkt5f6qJpo8fvS",
+  "upgradeable_loader_id": "BPFLoaderUpgradeab1e11111111111111111111111",
+  "program_elf_bytes": 87568,
+  "program_elf_sha256": "721759d6374a8bbb6cb67830ff41a7059e24aa1756feabec981941c5b62b5d4b",
+  "deployment_signature": "4NBuKugdwvm3GkLazBsJCNJCKoZixuV4FDapVx2nqPwqRinfnbTC9YVKu7rtE9wvfpJWPb8bSbHmz5zV3Z1P4Yyh",
+  "deployment_finalized_slot": 490794970,
+  "deployment_fee_lamports": 10000,
+  "program_data_rent_lamports": 610677360,
+  "program_account_rent_lamports": 1141440,
+  "finalization_signature": "4cwAca1qDag29TxcdEmpJzG1sDRWjdRMUmcGjMua4nPND42nyAtzpvqwfMyJFbhrQFwxUcwQ3M9wW8KMmYPEJqZD",
+  "finalization_finalized_slot": 490795727,
+  "finalization_fee_lamports": 5000,
+  "upgrade_authority": null,
+  "on_chain_elf_verified": true
+}
