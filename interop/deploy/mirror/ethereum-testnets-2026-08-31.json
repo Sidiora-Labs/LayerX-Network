@@ -1,0 +1,56 @@
+{
+  "contract": "LayerXMirrorArchive",
+  "source": "interop/contracts/ethereum-mirror/LayerXMirrorArchive.sol",
+  "source_commit": "e8dda648009179d18320419ecb963a49c1103588",
+  "compiler": "solc-0.8.30",
+  "evm_version": "paris",
+  "optimizer": {
+    "enabled": true,
+    "runs": 100000,
+    "via_ir": true,
+    "metadata": false
+  },
+  "publisher": "0x12598F221f1e645322C7665537D4Ab130281f51d",
+  "runtime_code_keccak256": "0x5eb3b34c096f27e37e96afcea7c9488616815ceee8bf554f8be3f6c67d07ddfb",
+  "deployments": [
+    {
+      "network": "ethereum-sepolia",
+      "chain_id": 11155111,
+      "genesis_hash": "0x25a5cc106eea7138acab33231d7160d69cb777ee0c2c553fcddf5138993e6dd9",
+      "contract_address": "0x757ab4D9dC18C92E23BBa1eEA005Fa3f1a544401",
+      "deployment_transaction": "0x82086e0139fc95eb5ab6480ab7f19acf205851c399729ab5b35ab9888f3b6405",
+      "deployment_block": 11603723,
+      "deployment_block_hash": "0xb8cafcf7325c56a0d9af40c56e8b7e5f8aa5b1d947e82bca1d2a84806bc7fe16",
+      "gas_used": 991531,
+      "effective_gas_price": 1124611264,
+      "receipt_status": 1,
+      "post_deploy_native_balance": "0"
+    },
+    {
+      "network": "base-sepolia",
+      "chain_id": 84532,
+      "genesis_hash": "0x0dcc9e089e30b90ddfc55be9a37dd15bc551aeee999d2e2b51414c54eaf934e4",
+      "contract_address": "0xcF8fa2D08190993BeBECC211f641E319EdF5a6C6",
+      "deployment_transaction": "0xfd2acfd45c1e209c1a7bd31ac887d9cffcca7cc3787dd50333a5ce13dc1f5c53",
+      "deployment_block": 46193195,
+      "deployment_block_hash": "0x0a12eea3d826a183666c777af2b7757e03730b34f11ff37b8ad43f6ea724a4fe",
+      "gas_used": 991531,
+      "effective_gas_price": 6000000,
+      "receipt_status": 1,
+      "post_deploy_native_balance": "0"
+    },
+    {
+      "network": "hood-testnet",
+      "chain_id": 46630,
+      "genesis_hash": "0x829a42e6d68c872aafcef3abb2123fe371138fc415dd8b44381bbbf23049dd32",
+      "contract_address": "0xcF8fa2D08190993BeBECC211f641E319EdF5a6C6",
+      "deployment_transaction": "0x65f79641f18fecefeaa3ef8793a2783bf5d0b41acdbd813f852dfd031322e818",
+      "deployment_block": 110370454,
+      "deployment_block_hash": "0x597220053607905a7ad6430bc6ff552b5d05ab5024ad08e2ed7b0d4f007b2657",
+      "gas_used": 1078216,
+      "effective_gas_price": 10000000,
+      "receipt_status": 1,
+      "post_deploy_native_balance": "0"
+    }
+  ]
+}
