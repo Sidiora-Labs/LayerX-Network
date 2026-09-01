@@ -28,6 +28,7 @@ import {
 interface ManagerVm {
     function deal(address account, uint256 balance) external;
     function expectPartialRevert(bytes4 selector) external;
+    function expectRevert() external;
     function prank(address sender) external;
     function warp(uint256 timestamp) external;
 }
@@ -60,6 +61,14 @@ contract MigrationComponent is ILayerXComponent {
     address public withdrawalNullifiers;
     uint256 public migrationCount;
     uint256 public receivedValue;
+
+    function bondToken() external pure returns (address) {
+        return Constants.USDL_TOKEN;
+    }
+
+    function assetId() external pure returns (bytes32) {
+        return Constants.USDL_ASSET_ID;
+    }
 
     constructor(
         bytes32 role,
@@ -401,6 +410,13 @@ contract MigrationComponent is ILayerXComponent {
                 container.completeMigration(keccak256("direct-completion"), release101, configHash);
             }
 
+            function testContainerRejectsGenesisFinalizationAgainstUnregisteredTopology() public {
+                vm.expectRevert();
+                vm.prank(governanceTimelock);
+                container.finalizeGenesis();
+                require(!container.genesisFinalized() && container.deploymentId() == bytes32(0), "genesis finalized");
+            }
+
             function testContainerRejectsManifestWithMismatchedImmutableGovernance() public {
                 StaticConfig.Config memory config = managerConfig;
                 ManagerContainer isolatedContainer = new ManagerContainer(config);
@@ -506,17 +522,34 @@ contract MigrationComponent is ILayerXComponent {
                 view
                 returns (StaticConfig.Config memory)
             {
+                StaticConfig.AssetDefinition[] memory assets = new StaticConfig.AssetDefinition[](1);
+                assets[0] = StaticConfig.AssetDefinition({
+                    assetId: Constants.USDL_ASSET_ID,
+                    token: Constants.USDL_TOKEN,
+                    tokenDecimals: Constants.USDL_TOKEN_DECIMALS,
+                    protocolDecimals: Constants.USDL_PROTOCOL_DECIMALS,
+                    minimumDeposit: 1_000_000,
+                    custodyCap: 1_000_000_000_000
+                });
                 return StaticConfig.Config({
                     chainId: block.chainid,
                     protocolVersion: Constants.PROTOCOL_VERSION,
                     releaseVersion: configRelease,
                     governanceTimelock: governance,
                     emergencyCouncil: emergency,
+                    genesisManifestDigest: keccak256("manager-genesis-manifest"),
+                    genesisCanonicalStateRoot: keccak256("manager-genesis-canonical-state-root"),
                     genesisReceiptRoot: keccak256("manager-genesis-receipt-root"),
+                    usdlToken: Constants.USDL_TOKEN,
+                    usdlAssetId: Constants.USDL_ASSET_ID,
+                    usdlDecimals: Constants.USDL_TOKEN_DECIMALS,
+                    usdlProtocolDecimals: Constants.USDL_PROTOCOL_DECIMALS,
+                    usdlMinimumDeposit: 1_000_000,
+                    usdlCustodyCap: 1_000_000_000_000,
                     challengeWindow: 7 days,
                     checkpointLivenessBound: 1 days,
                     enabledFeatures: 0,
-                    assetDefinitionsRoot: keccak256("manager-assets")
+                    assetDefinitionsRoot: StaticConfig.hashAssets(assets)
                 });
             }
 

@@ -23,6 +23,7 @@ use layerx_proof::merkle::build_proof;
 use layerx_proof::receipt::AuthorizedBatch;
 use layerx_types::verify::VerificationLevel;
 use layerx_wire::hash::execution_batch_id as wire_execution_batch_id;
+use layerx_wire::limits::PROTOCOL_VERSION;
 use sha2::{Digest as _, Sha256};
 
 static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(1);
@@ -92,7 +93,7 @@ pub fn evidence_verifier(receipt_signer: &SigningKey) -> EvidenceAuthority {
     let config = StartupConfig {
         network_id: 42,
         node_endpoint: PathBuf::from("/run/layerx/layerxd.sock"),
-        expected_protocol_version: 1,
+        expected_protocol_version: layerx_wire::limits::PROTOCOL_VERSION,
         tenants: BTreeSet::from([tenant.clone()]),
         policy_sources: BTreeMap::from([(
             tenant.clone(),
@@ -111,7 +112,7 @@ pub fn evidence_verifier(receipt_signer: &SigningKey) -> EvidenceAuthority {
         .unwrap_or_else(|error| panic!("bind evidence handshake: {error}"));
     let node = NodeInfo {
         interface_version: Version::V1_0,
-        protocol_version: 1,
+        protocol_version: layerx_wire::limits::PROTOCOL_VERSION,
         network_id: 42,
         role: NodeRole::Sequencer,
         chain_head_sequence: 50,
@@ -251,11 +252,11 @@ fn canonical_header(
     sequencer_id: [u8; 32],
 ) -> Vec<u8> {
     let mut encoded = Vec::with_capacity(354);
-    encoded.extend_from_slice(&1_u16.to_be_bytes());
+    encoded.extend_from_slice(&PROTOCOL_VERSION.to_be_bytes());
     encoded.extend_from_slice(&0x1701_u16.to_be_bytes());
     encoded.push(15);
     let fields: [(u8, Vec<u8>); 15] = [
-        (1, 1_u16.to_be_bytes().to_vec()),
+        (1, PROTOCOL_VERSION.to_be_bytes().to_vec()),
         (2, 42_u32.to_be_bytes().to_vec()),
         (3, 2_u64.to_be_bytes().to_vec()),
         (4, 7_u64.to_be_bytes().to_vec()),

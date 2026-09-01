@@ -36,7 +36,8 @@ LIBRARY := $(BUILD_DIR)/liblayerx.a
 TEST_LIB_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/test-obj/%.o,$(LIB_SOURCES))
 TEST_LIBRARY := $(BUILD_DIR)/liblayerx-testing.a
 
-.PHONY: all build clean reproducible layerxd test test-harness list-tests \
+.PHONY: all build clean reproducible layerxd layerx-genesis-build test \
+	test-harness list-tests \
 	test-result test-protocol test-arena test-sanitizer-smoke \
 	test-sanitizer-suite test-codec test-codec-limits test-codec-version \
 	test-codec-vectors fuzz-codec-smoke test-crypto-hash test-crypto-ed25519 \
@@ -147,6 +148,7 @@ TEST_LIBRARY := $(BUILD_DIR)/liblayerx-testing.a
 	test-layerxd \
 	test-tools \
 	test-genesis \
+	test-genesis-bootstrap \
 	test-genesis-import \
 	test-genesis-reconcile \
 	test-legacy-readonly \
@@ -325,10 +327,10 @@ test-ledger-accounts: $(BUILD_DIR)/tests/test_account_id
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_account_id
 
 $(BUILD_DIR)/tests/test_apply_transfer: tests/ledger/test_apply_transfer.c \
-		$(LIBRARY)
+		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
 	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(EXTRA_LDFLAGS) \
-		-lcrypto -pthread -o $@
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) \
+		$(LIBRARY) $(EXTRA_LDFLAGS) -lcrypto -pthread -ldl -lm -o $@
 
 test-ledger-transfer: $(BUILD_DIR)/tests/test_apply_transfer
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_apply_transfer
@@ -389,10 +391,10 @@ test-asset-balance: $(BUILD_DIR)/tests/test_asset_state
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_asset_state
 
 $(BUILD_DIR)/tests/test_asset_transfer: tests/modules/test_asset_transfer.c \
-		$(LIBRARY)
+		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
 	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(EXTRA_LDFLAGS) \
-		-lcrypto -pthread -o $@
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIBRARY) $(PROGRAMS_RUNTIME_LIB) \
+		$(LIBRARY) $(EXTRA_LDFLAGS) -lcrypto -pthread -ldl -lm -o $@
 
 test-asset-transfer: $(BUILD_DIR)/tests/test_asset_transfer
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_asset_transfer
@@ -1121,6 +1123,7 @@ LAYERXD_SOURCES = \
 	cmd/layerxd/lxp_daemon_lni.c \
 	cmd/layerxd/lxp_daemon_evidence.c \
 	cmd/layerxd/lxp_daemon_batch_wal.c \
+	cmd/layerxd/lxp_daemon_artifact.c \
 	cmd/layerxd/lxp_daemon_process.c \
 	cmd/layerxd/lxp_daemon_authority_replica.c \
 	cmd/layerxd/lxp_daemon_cli.c
@@ -1133,6 +1136,20 @@ $(BUILD_DIR)/bin/layerxd: cmd/layerxd/main.c $(LAYERXD_SOURCES) $(LIBRARY) \
 		-lcrypto -lsqlite3 -pthread -ldl -lm -o $@
 
 layerxd: $(BUILD_DIR)/bin/layerxd
+
+$(BUILD_DIR)/bin/layerx-genesis-build: \
+		cmd/layerx-genesis/main.c \
+		cmd/layerx-genesis/lxp_genesis_build_cli.c \
+		cmd/layerx-genesis/lxp_genesis_builder.c $(LIBRARY) \
+		$(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) cmd/layerx-genesis/main.c \
+		cmd/layerx-genesis/lxp_genesis_build_cli.c \
+		cmd/layerx-genesis/lxp_genesis_builder.c $(LIBRARY) \
+		$(PROGRAMS_RUNTIME_LIB) $(LIBRARY) $(EXTRA_LDFLAGS) \
+		-lcrypto -pthread -ldl -lm -o $@
+
+layerx-genesis-build: $(BUILD_DIR)/bin/layerx-genesis-build
 
 $(BUILD_DIR)/tests/test_layerxd: tests/test_layerxd.c $(LAYERXD_SOURCES) \
 		$(LIBRARY) $(PROGRAMS_RUNTIME_LIB) | programs-build
@@ -1159,14 +1176,46 @@ test-tools: $(BUILD_DIR)/tests/test_tools
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_tools
 
 $(BUILD_DIR)/tests/test_genesis_manifest: tests/test_genesis_manifest.c \
-		cmd/layerx-genesis/lxp_genesis_main.c $(LIBRARY)
+		cmd/layerx-genesis/lxp_genesis_main.c \
+		cmd/layerx-genesis/lxp_genesis_build_cli.c \
+		cmd/layerx-genesis/lxp_genesis_builder.c $(LIBRARY) \
+		$(PROGRAMS_RUNTIME_LIB) | programs-build
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(CFLAGS) tests/test_genesis_manifest.c \
-		cmd/layerx-genesis/lxp_genesis_main.c $(LIBRARY) \
-		$(EXTRA_LDFLAGS) -lcrypto -pthread -o $@
+		cmd/layerx-genesis/lxp_genesis_main.c \
+		cmd/layerx-genesis/lxp_genesis_build_cli.c \
+		cmd/layerx-genesis/lxp_genesis_builder.c $(LIBRARY) \
+		$(PROGRAMS_RUNTIME_LIB) $(LIBRARY) $(EXTRA_LDFLAGS) \
+		-lcrypto -pthread -ldl -lm -o $@
 
-test-genesis: $(BUILD_DIR)/tests/test_genesis_manifest
+$(BUILD_DIR)/tests/test_genesis_builder_cli: \
+		tests/test_genesis_builder_cli.c \
+		cmd/layerx-genesis/lxp_genesis_build_cli.c \
+		cmd/layerx-genesis/lxp_genesis_builder.c $(LIBRARY) \
+		$(PROGRAMS_RUNTIME_LIB) | programs-build
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) tests/test_genesis_builder_cli.c \
+		cmd/layerx-genesis/lxp_genesis_build_cli.c \
+		cmd/layerx-genesis/lxp_genesis_builder.c $(LIBRARY) \
+		$(PROGRAMS_RUNTIME_LIB) $(LIBRARY) $(EXTRA_LDFLAGS) \
+		-lcrypto -pthread -ldl -lm -o $@
+
+$(BUILD_DIR)/tests/test_daemon_bootstrap_artifact: \
+		tests/test_daemon_bootstrap_artifact.c \
+		cmd/layerxd/lxp_daemon_artifact.c $(LIBRARY)
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) tests/test_daemon_bootstrap_artifact.c \
+		cmd/layerxd/lxp_daemon_artifact.c $(LIBRARY) \
+		$(EXTRA_LDFLAGS) -o $@
+
+test-genesis-bootstrap: $(BUILD_DIR)/tests/test_genesis_manifest \
+		$(BUILD_DIR)/tests/test_genesis_builder_cli \
+		$(BUILD_DIR)/tests/test_daemon_bootstrap_artifact
 	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_genesis_manifest
+	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_genesis_builder_cli
+	$(RUN_PREFIX) $(BUILD_DIR)/tests/test_daemon_bootstrap_artifact
+
+test-genesis: test-genesis-bootstrap
 
 $(BUILD_DIR)/tests/test_genesis_import: tests/test_genesis_import.c \
 		cmd/layerx-genesis/lxp_import.c $(LIBRARY)

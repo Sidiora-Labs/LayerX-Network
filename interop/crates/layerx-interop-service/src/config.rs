@@ -221,6 +221,9 @@ pub fn load() -> Result<Config, String> {
     let protocol_version = wire_version
         .parse::<u16>()
         .map_err(|_| "interop LXP wire version must be numeric".to_owned())?;
+    if protocol_version != layerx_wire::limits::PROTOCOL_VERSION {
+        return Err("interop LXP wire version is not the current beta protocol".to_owned());
+    }
     let protocol_network_id = env::var("LAYERX_INTEROP_PROTOCOL_NETWORK_ID")
         .map_err(|_| "LAYERX_INTEROP_PROTOCOL_NETWORK_ID is required".to_owned())?
         .parse::<u32>()
@@ -368,10 +371,7 @@ fn runtime_manifest(file: ManifestFile) -> Result<RuntimeManifest, String> {
             || binding.principal_digest != binding.principal_digest.to_ascii_lowercase()
             || binding.audience.is_empty()
             || binding.audience.len() > 512
-            || binding
-                .audience
-                .bytes()
-                .any(|byte| byte.is_ascii_control())
+            || binding.audience.bytes().any(|byte| byte.is_ascii_control())
             || binding.currency.len() != 3
             || !binding
                 .currency

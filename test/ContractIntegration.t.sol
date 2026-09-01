@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {AssetRegistry} from "../contracts/custody/AssetRegistry.sol";
+import {ILayerXAssetRegistry} from "../contracts/interfaces/ILayerXAssetRegistry.sol";
 import {LayerXVault} from "../contracts/custody/LayerXVault.sol";
 import {ReserveReconciler} from "../contracts/custody/ReserveReconciler.sol";
 import {CheckpointRegistry} from "../contracts/CheckpointRegistry.sol";
@@ -42,6 +43,8 @@ interface IntegrationVm {
     function sign(uint256 privateKey, bytes32 digest) external returns (uint8 v, bytes32 r, bytes32 s);
 
     function warp(uint256 timestamp) external;
+
+    function etch(address target, bytes calldata code) external;
 }
 
 contract IntegrationToken {
@@ -176,6 +179,9 @@ contract ContractIntegrationTest {
     IntegrationVm private constant vm = IntegrationVm(address(uint160(uint256(keccak256("hevm cheat code")))));
 
     bytes32 private constant GENESIS_RECEIPT_ROOT = keccak256("integration-genesis-receipt-root");
+    bytes32 private constant GENESIS_CANONICAL_STATE_ROOT = keccak256("integration-genesis-canonical-state-root");
+    bytes32 private constant GENESIS_MANIFEST_DIGEST = keccak256("integration-genesis-manifest");
+    bytes32 private constant GENESIS_GUARANTOR_ID = bytes32(uint256(0x100));
     address private constant EMERGENCY_COUNCIL = address(0xEC01);
     address private constant FINAL_PROPOSER = address(0xA110CE);
     address private constant FINAL_EXECUTOR = address(0xE0EC);
@@ -201,18 +207,24 @@ contract ContractIntegrationTest {
     uint256 private governanceSaltNonce;
     bool private injectRoleTransitionFailure;
     bool private roleTransitionFailureObserved;
+    bool private injectGenesisFinalizationFailure;
+    bool private genesisFinalizationFailureObserved;
+    bool private injectStaleBondedSetVersion;
+    bool private staleBondedSetVersionObserved;
 
     receive() external payable {}
 
     function setUp() public {
         release = SemverComp.parseRelease("1.0.0");
-        token = new IntegrationToken(address(this));
+        IntegrationToken tokenImplementation = new IntegrationToken(address(this));
+        vm.etch(Constants.USDL_TOKEN, address(tokenImplementation).code);
+        token = IntegrationToken(Constants.USDL_TOKEN);
         StaticConfig.AssetDefinition[] memory assets = new StaticConfig.AssetDefinition[](1);
         assets[0] = StaticConfig.AssetDefinition({
-            assetId: keccak256("USDX"),
-            token: address(token),
-            tokenDecimals: 6,
-            protocolDecimals: 18,
+            assetId: Constants.USDL_ASSET_ID,
+            token: Constants.USDL_TOKEN,
+            tokenDecimals: Constants.USDL_TOKEN_DECIMALS,
+            protocolDecimals: Constants.USDL_PROTOCOL_DECIMALS,
             minimumDeposit: 1_000_000,
             custodyCap: 1_000_000_000_000
         });
@@ -222,7 +234,15 @@ contract ContractIntegrationTest {
             releaseVersion: release,
             governanceTimelock: address(0),
             emergencyCouncil: EMERGENCY_COUNCIL,
+            genesisManifestDigest: GENESIS_MANIFEST_DIGEST,
+            genesisCanonicalStateRoot: GENESIS_CANONICAL_STATE_ROOT,
             genesisReceiptRoot: GENESIS_RECEIPT_ROOT,
+            usdlToken: Constants.USDL_TOKEN,
+            usdlAssetId: Constants.USDL_ASSET_ID,
+            usdlDecimals: Constants.USDL_TOKEN_DECIMALS,
+            usdlProtocolDecimals: Constants.USDL_PROTOCOL_DECIMALS,
+            usdlMinimumDeposit: 1_000_000,
+            usdlCustodyCap: 1_000_000_000_000,
             challengeWindow: 7 days,
             checkpointLivenessBound: 1 days,
             enabledFeatures: Features.ERC20_CUSTODY | Features.CHECKPOINT_CHALLENGES | Features.WITHDRAWAL_CLAIMS
@@ -235,7 +255,6 @@ contract ContractIntegrationTest {
         configHash = StaticConfig.hash(deploymentConfig, block.chainid);
         require(configHash == blueprint.staticConfigHash(), "derived config");
         _deploySuite();
-        _requireGovernanceTopology();
         _bootstrapGovernance();
     }
 
@@ -271,14 +290,13 @@ contract ContractIntegrationTest {
             );
         }
 
-        bytes32 assetId = keccak256("USDX");
-        _governanceCall(
-            address(assetRegistry),
-            abi.encodeCall(
-                AssetRegistry.registerAsset,
-                (assetId, address(token), uint8(6), uint128(1_000_000), uint128(1_000_000_000_000))
-            )
-        );
+        bytes32 assetId = Constants.USDL_ASSET_ID;
+        ILayerXAssetRegistry.AssetConfig memory registeredAsset = assetRegistry.asset(assetId);
+        require(registeredAsset.token == address(token), "wrong USDL token");
+        require(registeredAsset.decimals == Constants.USDL_TOKEN_DECIMALS, "wrong USDL decimals");
+        require(registeredAsset.minimumDeposit == 1_000_000, "wrong USDL minimum");
+        require(registeredAsset.custodyCap == 1_000_000_000_000, "wrong USDL cap");
+        require(registeredAsset.enabled && !registeredAsset.paused, "USDL unavailable");
         _governanceCall(address(vault), abi.encodeCall(LayerXVault.setSettlementModule, (address(this), true)));
         address depositor = address(0xA11CE);
         uint256 deposited = 1_000_000_000;
@@ -363,12 +381,68 @@ contract ContractIntegrationTest {
         require(roleTransitionFailureObserved, "role transition did not fail");
         require(managerContainer.initialized(), "manager not initialized");
         require(managerContainer.migrator() == address(managerMigrator), "migrator missing");
+        require(managerContainer.genesisFinalized(), "genesis not finalized");
         require(!blueprint.deploymentsSealed(), "failed transition sealed blueprint");
+    }
+
+    function testSealBeforeGenesisFinalizationLeavesBlueprintUnsealed() public {
+        injectGenesisFinalizationFailure = true;
+        genesisFinalizationFailureObserved = false;
+        setUp();
+
+        require(genesisFinalizationFailureObserved, "seal-before-finalize did not fail");
+        require(!managerContainer.genesisFinalized(), "genesis unexpectedly finalized");
+        require(!blueprint.deploymentsSealed(), "unfinalized genesis sealed blueprint");
+    }
+
+    function testGenesisFinalizationAndUsdlCustodyBoundaryAreCanonical() public {
+        require(managerContainer.genesisFinalized(), "genesis not finalized");
+        require(managerContainer.deploymentId() != bytes32(0), "deployment id missing");
+        require(guarantorBond.genesisBondedSetCommitment() != bytes32(0), "bonded set missing");
+        require(
+            guarantorBond.genesisBondedSetVersion() == guarantorBond.membershipVersion(), "bonded set version mismatch"
+        );
+        ILayerXAssetRegistry.AssetConfig memory asset = assetRegistry.asset(Constants.USDL_ASSET_ID);
+        require(
+            asset.token == Constants.USDL_TOKEN && asset.decimals == Constants.USDL_TOKEN_DECIMALS,
+            "USDL registration mismatch"
+        );
+
+        uint64 version = guarantorBond.membershipVersion();
+        token.mint(address(this), 3_000_000);
+        token.approve(address(vault), 3_000_000);
+        vault.deposit(Constants.USDL_ASSET_ID, 3_000_000, keccak256("custody-sync"));
+        require(guarantorBond.custodiedValue() == 3_000_000, "deposit custody stale");
+        require(guarantorBond.membershipVersion() == version + 1, "deposit custody not versioned");
+        _governanceCall(address(vault), abi.encodeCall(LayerXVault.setSettlementModule, (address(this), true)));
+        vault.release(keccak256("custody-sync-release"), Constants.USDL_ASSET_ID, address(this), 1_000_000);
+        require(guarantorBond.custodiedValue() == 2_000_000, "release custody stale");
+        require(guarantorBond.membershipVersion() == version + 2, "release custody not versioned");
+    }
+
+    function testGenesisFinalizationCannotRunTwice() public {
+        ScheduledCall memory scheduled =
+            _schedule(address(managerContainer), abi.encodeCall(ManagerContainer.finalizeGenesis, ()));
+        vm.warp(block.timestamp + timelock.minDelay());
+        vm.expectPartialRevert(LayerXTimelock.CallFailed.selector);
+        vm.prank(FINAL_EXECUTOR);
+        timelock.execute(scheduled.target, 0, scheduled.data, scheduled.salt, scheduled.nonce);
+        require(managerContainer.genesisFinalized(), "finalized state lost");
+    }
+
+    function testGenesisFinalizationRejectsStaleBondedSetVersion() public {
+        injectStaleBondedSetVersion = true;
+        staleBondedSetVersionObserved = false;
+        setUp();
+
+        require(staleBondedSetVersionObserved, "stale bonded set accepted");
+        require(!managerContainer.genesisFinalized(), "stale genesis finalized");
+        require(!blueprint.deploymentsSealed(), "stale genesis sealed blueprint");
     }
 
     function testDeployerCannotBypassImmutableTimelockGovernance() public {
         vm.expectPartialRevert(Governed.GovernanceOnly.selector);
-        assetRegistry.updateRisk(keccak256("USDX"), 1, 1, true);
+        assetRegistry.updateRisk(Constants.USDL_ASSET_ID, 1, 1, true);
         vm.expectPartialRevert(Governed.GovernanceOnly.selector);
         vault.setSettlementModule(address(withdrawalClaims), true);
         vm.expectPartialRevert(GuarantorBond.Unauthorized.selector);
@@ -379,7 +453,7 @@ contract ContractIntegrationTest {
 
     function testAssetAndNullifierAdministrativeLifecycles() public {
         _prepareSettlement(1_000_000_000);
-        bytes32 assetId = keccak256("USDX");
+        bytes32 assetId = Constants.USDL_ASSET_ID;
         _governanceCall(
             address(assetRegistry),
             abi.encodeCall(AssetRegistry.updateRisk, (assetId, uint128(2_000_000), uint128(2_000_000_000_000), true))
@@ -505,7 +579,7 @@ contract ContractIntegrationTest {
     function testEmergencyExitUsesLatestCertifiedBalanceExactlyOnce() public {
         _prepareSettlement(1_000_000_000);
         bytes32 account = keccak256("emergency-account");
-        bytes32 assetId = keccak256("USDX");
+        bytes32 assetId = Constants.USDL_ASSET_ID;
         address recipient = address(0xE911);
         uint128 balance = 300_000_000;
         bytes32 stateRoot = PaxeerWithdrawalCodec.balanceLeaf(account, assetId, balance, recipient);
@@ -531,7 +605,7 @@ contract ContractIntegrationTest {
 
     function testUpheldLatestCheckpointCannotAuthorizeEmergencyExit() public {
         _prepareSettlement(1_000_000_000);
-        bytes32 assetId = keccak256("USDX");
+        bytes32 assetId = Constants.USDL_ASSET_ID;
         EmergencyCheckpointFixture memory safe =
             _registerEmergencyCheckpoint(assetId, keccak256("safe-emergency-account"), address(0x5AFE), 300_000_000);
         EmergencyCheckpointFixture memory fraudulent = _registerEmergencyCheckpoint(
@@ -578,7 +652,7 @@ contract ContractIntegrationTest {
         uint128 custody = 1_000_000_000;
         _prepareSettlement(custody);
         ReserveReconciler.LiabilityReport memory report = ReserveReconciler.LiabilityReport({
-            assetId: keccak256("USDX"),
+            assetId: Constants.USDL_ASSET_ID,
             agentMain: 100_000_000,
             escrow: 100_000_000,
             budget: 100_000_000,
@@ -605,11 +679,10 @@ contract ContractIntegrationTest {
 
     function testGuarantorAdministrativeSlashAndUnbondLifecycles() public {
         _fundGuarantors();
-        _governanceCall(address(guarantorBond), abi.encodeCall(GuarantorBond.updateCustodiedValue, (50 ether)));
         address firstSigner = vm.addr(1);
         _governanceCall(
             address(guarantorBond),
-            abi.encodeCall(GuarantorBond.removeGuarantor, (bytes32(uint256(1)), uint64(2), uint64(3)))
+            abi.encodeCall(GuarantorBond.removeGuarantor, (bytes32(uint256(1)), uint64(2), uint64(4)))
         );
         vm.prank(firstSigner);
         guarantorBond.beginUnbond(bytes32(uint256(1)), 1 ether);
@@ -618,10 +691,10 @@ contract ContractIntegrationTest {
         vm.prank(firstSigner);
         guarantorBond.beginUnbond(bytes32(uint256(1)), 1 ether);
         vm.warp(block.timestamp + guarantorBond.unbondingDelay());
-        uint256 signerBalance = firstSigner.balance;
+        uint256 signerBalance = token.balanceOf(firstSigner);
         vm.prank(firstSigner);
         guarantorBond.finalizeUnbond(bytes32(uint256(1)));
-        require(firstSigner.balance == signerBalance + 1 ether, "unbond not returned");
+        require(token.balanceOf(firstSigner) == signerBalance + 1 ether, "unbond not returned");
 
         _governanceCall(
             address(guarantorBond), abi.encodeCall(GuarantorBond.setUnresolvedSlashing, (bytes32(uint256(2)), true))
@@ -631,33 +704,39 @@ contract ContractIntegrationTest {
         );
         _governanceCall(
             address(guarantorBond),
-            abi.encodeCall(GuarantorBond.setGuarantorJailStatus, (bytes32(uint256(2)), true, uint64(4)))
+            abi.encodeCall(GuarantorBond.setGuarantorJailStatus, (bytes32(uint256(2)), true, uint64(5)))
         );
         require(guarantorBond.bondRecord(bytes32(uint256(2))).jailed, "administrative jail absent");
 
-        GuarantorBond isolated =
-            new GuarantorBond(address(this), address(this), 1, 42, 100, 100 ether, 7 days, configHash, release);
+        GuarantorBond isolated = new GuarantorBond(
+            address(this),
+            address(this),
+            Constants.USDL_TOKEN,
+            address(this),
+            Constants.USDL_ASSET_ID,
+            Constants.PROTOCOL_VERSION,
+            42,
+            100,
+            7 days,
+            configHash,
+            release
+        );
         isolated.setSlashingAuthority(address(this));
         address thirdSigner = vm.addr(3);
         isolated.activateGuarantor(bytes32(uint256(3)), thirdSigner, thirdSigner, 1, 1);
-        vm.deal(thirdSigner, 3 ether);
+        token.mint(thirdSigner, 2 ether);
         vm.prank(thirdSigner);
-        isolated.depositBond{value: 2 ether}(bytes32(uint256(3)));
+        token.approve(address(isolated), 2 ether);
+        vm.prank(thirdSigner);
+        isolated.depositBond(bytes32(uint256(3)), 2 ether);
         isolated.slashForCheckpoint(bytes32(uint256(3)), keccak256("faulted-checkpoint"));
-        address payable recipient = payable(address(0x51A5));
+        address recipient = address(0x51A5);
         isolated.sweepSlashed(recipient, 2 ether);
-        require(recipient.balance == 2 ether && isolated.slashedBalance() == 0, "slash sweep not conserved");
+        require(token.balanceOf(recipient) == 2 ether && isolated.slashedBalance() == 0, "slash sweep not conserved");
     }
 
     function _prepareSettlement(uint256 custody) private {
-        bytes32 assetId = keccak256("USDX");
-        _governanceCall(
-            address(assetRegistry),
-            abi.encodeCall(
-                AssetRegistry.registerAsset,
-                (assetId, address(token), uint8(6), uint128(1_000_000), uint128(1_000_000_000_000))
-            )
-        );
+        bytes32 assetId = Constants.USDL_ASSET_ID;
         _governanceCall(
             address(vault), abi.encodeCall(LayerXVault.setSettlementModule, (address(withdrawalClaims), true))
         );
@@ -690,12 +769,14 @@ contract ContractIntegrationTest {
                 address(guarantorBond),
                 abi.encodeCall(
                     GuarantorBond.activateGuarantor,
-                    (bytes32(privateKey), signer, signer, uint64(1), uint64(privateKey))
+                    (bytes32(privateKey), signer, signer, uint64(1), uint64(privateKey + 1))
                 )
             );
-            vm.deal(signer, 3 ether);
+            token.mint(signer, 2 ether);
             vm.prank(signer);
-            guarantorBond.depositBond{value: 2 ether}(bytes32(privateKey));
+            token.approve(address(guarantorBond), 2 ether);
+            vm.prank(signer);
+            guarantorBond.depositBond(bytes32(privateKey), 2 ether);
         }
     }
 
@@ -707,7 +788,7 @@ contract ContractIntegrationTest {
         withdrawal = WithdrawalClaims.Withdrawal({
             withdrawalId: keccak256("integration-withdrawal"),
             account: keccak256("integration-account"),
-            assetId: keccak256("USDX"),
+            assetId: Constants.USDL_ASSET_ID,
             amount: amount,
             recipient: recipient,
             checkpointHash: bytes32(0)
@@ -833,8 +914,8 @@ contract ContractIntegrationTest {
     }
 
     function _bootstrapGovernance() private {
-        address[] memory targets = new address[](19);
-        bytes4[] memory selectors = new bytes4[](19);
+        address[] memory targets = new address[](21);
+        bytes4[] memory selectors = new bytes4[](21);
         uint256 index;
         targets[index] = address(assetRegistry);
         selectors[index++] = AssetRegistry.registerAsset.selector;
@@ -844,8 +925,8 @@ contract ContractIntegrationTest {
         selectors[index++] = AssetRegistry.governanceUnpause.selector;
         targets[index] = address(vault);
         selectors[index++] = LayerXVault.setSettlementModule.selector;
-        targets[index] = address(guarantorBond);
-        selectors[index++] = GuarantorBond.updateCustodiedValue.selector;
+        targets[index] = address(vault);
+        selectors[index++] = LayerXVault.setGuarantorBond.selector;
         targets[index] = address(guarantorBond);
         selectors[index++] = GuarantorBond.setSlashingAuthority.selector;
         targets[index] = address(guarantorBond);
@@ -860,6 +941,8 @@ contract ContractIntegrationTest {
         selectors[index++] = GuarantorBond.setUnresolvedSlashing.selector;
         targets[index] = address(guarantorBond);
         selectors[index++] = GuarantorBond.sweepSlashed.selector;
+        targets[index] = address(guarantorBond);
+        selectors[index++] = GuarantorBond.sealGenesisBondedSet.selector;
         targets[index] = address(challengeManager);
         selectors[index++] = CheckpointChallengeManager.resolveChallenge.selector;
         targets[index] = address(nullifierRegistry);
@@ -870,6 +953,8 @@ contract ContractIntegrationTest {
         selectors[index++] = ManagerContainer.initialize.selector;
         targets[index] = address(managerContainer);
         selectors[index++] = ManagerContainer.setMigrator.selector;
+        targets[index] = address(managerContainer);
+        selectors[index++] = ManagerContainer.finalizeGenesis.selector;
         targets[index] = address(managerMigrator);
         selectors[index++] = ManagerMigrator.stageMigration.selector;
         targets[index] = address(managerMigrator);
@@ -892,24 +977,53 @@ contract ContractIntegrationTest {
             require(timelock.callPermission(targets[i], selectors[i]), "permission missing");
         }
 
-        ScheduledCall[] memory initializationCalls = new ScheduledCall[](8);
+        ScheduledCall[] memory initializationCalls = new ScheduledCall[](13);
         initializationCalls[0] = _schedule(
             address(managerContainer), abi.encodeCall(ManagerContainer.initialize, (_manifests(), _allowlists()))
         );
         initializationCalls[1] = _schedule(
             address(managerContainer), abi.encodeCall(ManagerContainer.setMigrator, (address(managerMigrator)))
         );
-        initializationCalls[2] =
-            _schedule(address(timelock), abi.encodeCall(LayerXTimelock.setRole, (uint8(1), FINAL_PROPOSER, true)));
+        initializationCalls[2] = _schedule(
+            address(assetRegistry),
+            abi.encodeCall(
+                AssetRegistry.registerAsset,
+                (
+                    Constants.USDL_ASSET_ID,
+                    Constants.USDL_TOKEN,
+                    Constants.USDL_TOKEN_DECIMALS,
+                    deploymentConfig.usdlMinimumDeposit,
+                    deploymentConfig.usdlCustodyCap
+                )
+            )
+        );
         initializationCalls[3] =
-            _schedule(address(timelock), abi.encodeCall(LayerXTimelock.setRole, (uint8(2), FINAL_EXECUTOR, true)));
-        initializationCalls[4] =
-            _schedule(address(timelock), abi.encodeCall(LayerXTimelock.setRole, (uint8(3), EMERGENCY_COUNCIL, true)));
-        initializationCalls[5] =
-            _schedule(address(timelock), abi.encodeCall(LayerXTimelock.setRole, (uint8(1), address(this), false)));
+            _schedule(address(vault), abi.encodeCall(LayerXVault.setGuarantorBond, (address(guarantorBond))));
+        initializationCalls[4] = _schedule(
+            address(guarantorBond),
+            abi.encodeCall(
+                GuarantorBond.activateGuarantor,
+                (GENESIS_GUARANTOR_ID, vm.addr(100), address(this), uint64(1), uint64(1))
+            )
+        );
+        bytes32[] memory genesisGuarantorIds = new bytes32[](1);
+        genesisGuarantorIds[0] = GENESIS_GUARANTOR_ID;
+        initializationCalls[5] = _schedule(
+            address(guarantorBond), abi.encodeCall(GuarantorBond.sealGenesisBondedSet, (genesisGuarantorIds))
+        );
         initializationCalls[6] =
-            _schedule(address(timelock), abi.encodeCall(LayerXTimelock.setRole, (uint8(3), address(this), false)));
+            _schedule(address(managerContainer), abi.encodeCall(ManagerContainer.finalizeGenesis, ()));
         initializationCalls[7] =
+            _schedule(address(timelock), abi.encodeCall(LayerXTimelock.setRole, (uint8(1), FINAL_PROPOSER, true)));
+        initializationCalls[8] =
+            _schedule(address(timelock), abi.encodeCall(LayerXTimelock.setRole, (uint8(2), FINAL_EXECUTOR, true)));
+        initializationCalls[9] =
+            _schedule(address(timelock), abi.encodeCall(LayerXTimelock.setRole, (uint8(3), EMERGENCY_COUNCIL, true)));
+        initializationCalls[10] =
+            _schedule(address(timelock), abi.encodeCall(LayerXTimelock.setRole, (uint8(1), address(this), false)));
+        initializationCalls[11] =
+            _schedule(address(timelock), abi.encodeCall(LayerXTimelock.setRole, (uint8(3), address(this), false)));
+        initializationCalls[12] =
             _schedule(address(timelock), abi.encodeCall(LayerXTimelock.setRole, (uint8(2), address(this), false)));
         ScheduledCall memory failingRoleCall;
         if (injectRoleTransitionFailure) {
@@ -925,10 +1039,42 @@ contract ContractIntegrationTest {
             initializationCalls[0].nonce
         );
         vm.warp(block.timestamp + timelock.minDelay());
-        _execute(initializationCalls[0]);
-        _execute(initializationCalls[1]);
+        for (uint256 i = 0; i <= 4; ++i) {
+            _execute(initializationCalls[i]);
+        }
+        token.mint(address(this), 2_000_000);
+        token.approve(address(guarantorBond), 2_000_000);
+        guarantorBond.depositBond(GENESIS_GUARANTOR_ID, 2_000_000);
+        _execute(initializationCalls[5]);
+        if (injectStaleBondedSetVersion) {
+            token.mint(address(this), 1);
+            token.approve(address(guarantorBond), 1);
+            guarantorBond.depositBond(GENESIS_GUARANTOR_ID, 1);
+            vm.expectPartialRevert(LayerXTimelock.CallFailed.selector);
+            timelock.execute(
+                initializationCalls[6].target,
+                0,
+                initializationCalls[6].data,
+                initializationCalls[6].salt,
+                initializationCalls[6].nonce
+            );
+            staleBondedSetVersionObserved = true;
+            require(!managerContainer.genesisFinalized(), "stale genesis finalized");
+            return;
+        }
+        if (injectGenesisFinalizationFailure) {
+            for (uint256 i = 7; i < initializationCalls.length; ++i) {
+                _execute(initializationCalls[i]);
+            }
+            vm.expectPartialRevert(Blueprint.InvalidBlueprint.selector);
+            blueprint.seal();
+            genesisFinalizationFailureObserved = true;
+            require(!blueprint.deploymentsSealed(), "unfinalized genesis sealed blueprint");
+            return;
+        }
+        _execute(initializationCalls[6]);
         if (injectRoleTransitionFailure) {
-            _execute(initializationCalls[2]);
+            _execute(initializationCalls[7]);
             vm.expectPartialRevert(LayerXTimelock.CallFailed.selector);
             timelock.execute(
                 failingRoleCall.target, 0, failingRoleCall.data, failingRoleCall.salt, failingRoleCall.nonce
@@ -937,7 +1083,7 @@ contract ContractIntegrationTest {
             require(!blueprint.deploymentsSealed(), "failed transition sealed blueprint");
             return;
         }
-        for (uint256 i = 2; i < initializationCalls.length; ++i) {
+        for (uint256 i = 7; i < initializationCalls.length; ++i) {
             _execute(initializationCalls[i]);
         }
         require(timelock.proposer(FINAL_PROPOSER), "final proposer missing");
@@ -948,6 +1094,8 @@ contract ContractIntegrationTest {
         require(!timelock.guardian(address(this)), "bootstrap guardian retained");
         require(managerContainer.initialized(), "manager not initialized");
         require(managerContainer.migrator() == address(managerMigrator), "migrator missing");
+        require(managerContainer.genesisFinalized(), "genesis not finalized");
+        require(managerContainer.deploymentId() != bytes32(0), "deployment id missing");
         for (uint256 i = 0; i < Predeploys.COUNT; ++i) {
             bytes32 role = Predeploys.roleAt(i);
             require(managerContainer.componentForRole(role) == _component(role), "manager topology mismatch");
@@ -965,8 +1113,12 @@ contract ContractIntegrationTest {
         require(assetRegistry.emergencyCouncil() == EMERGENCY_COUNCIL, "asset emergency council");
         require(vault.governance() == governance, "vault governance");
         require(vault.emergencyCouncil() == EMERGENCY_COUNCIL, "vault emergency council");
+        require(vault.guarantorBond() == address(guarantorBond), "vault bond accounting");
         require(guarantorBond.custodyAuthority() == governance, "bond custody authority");
         require(guarantorBond.membershipAuthority() == governance, "bond membership authority");
+        require(guarantorBond.vault() == address(vault), "bond vault");
+        require(guarantorBond.bondToken() == Constants.USDL_TOKEN, "bond token");
+        require(guarantorBond.assetId() == Constants.USDL_ASSET_ID, "bond asset");
         require(challengeManager.governance() == governance, "challenge governance");
         require(challengeManager.emergencyCouncil() == EMERGENCY_COUNCIL, "challenge emergency council");
         require(nullifierRegistry.governance() == governance, "nullifier governance");
@@ -975,6 +1127,19 @@ contract ContractIntegrationTest {
         require(emergencyExit.emergencyCouncil() == EMERGENCY_COUNCIL, "exit emergency council");
         require(managerContainer.governanceTimelock() == governance, "manager governance");
         require(managerContainer.emergencyCouncil() == EMERGENCY_COUNCIL, "manager emergency council");
+        require(managerContainer.genesisManifestDigest() == GENESIS_MANIFEST_DIGEST, "manager manifest digest");
+        require(managerContainer.genesisCanonicalStateRoot() == GENESIS_CANONICAL_STATE_ROOT, "manager canonical root");
+        require(managerContainer.genesisReceiptRoot() == GENESIS_RECEIPT_ROOT, "manager receipt root");
+        require(managerContainer.usdlToken() == Constants.USDL_TOKEN, "manager USDL token");
+        require(managerContainer.usdlAssetId() == Constants.USDL_ASSET_ID, "manager USDL asset");
+        require(managerContainer.usdlDecimals() == Constants.USDL_TOKEN_DECIMALS, "manager USDL decimals");
+        require(managerContainer.usdlMinimumDeposit() == deploymentConfig.usdlMinimumDeposit, "manager USDL minimum");
+        require(managerContainer.usdlCustodyCap() == deploymentConfig.usdlCustodyCap, "manager USDL cap");
+        require(checkpointRegistry.genesisManifestDigest() == GENESIS_MANIFEST_DIGEST, "registry manifest digest");
+        require(
+            checkpointRegistry.genesisCanonicalStateRoot() == GENESIS_CANONICAL_STATE_ROOT, "registry canonical root"
+        );
+        require(checkpointRegistry.genesisReceiptRoot() == GENESIS_RECEIPT_ROOT, "registry receipt root");
         require(managerMigrator.governanceTimelock() == governance, "migrator governance");
         require(address(vault.assetRegistry()) == address(assetRegistry), "vault registry");
         require(address(checkpointRegistry.guarantorEligibility()) == address(guarantorBond), "checkpoint bond");
@@ -1069,16 +1234,29 @@ contract ContractIntegrationTest {
         bytes memory arguments = abi.encode(
             address(timelock),
             address(timelock),
-            uint16(1),
+            Constants.USDL_TOKEN,
+            address(vault),
+            Constants.USDL_ASSET_ID,
+            Constants.PROTOCOL_VERSION,
             uint32(42),
             uint32(100),
-            uint256(100 ether),
             uint64(7 days),
             configHash,
             release
         );
-        GuarantorBond runtimeReference =
-            new GuarantorBond(address(timelock), address(timelock), 1, 42, 100, 100 ether, 7 days, configHash, release);
+        GuarantorBond runtimeReference = new GuarantorBond(
+            address(timelock),
+            address(timelock),
+            Constants.USDL_TOKEN,
+            address(vault),
+            Constants.USDL_ASSET_ID,
+            Constants.PROTOCOL_VERSION,
+            42,
+            100,
+            7 days,
+            configHash,
+            release
+        );
         result = GuarantorBond(
             payable(_deploy(
                     Predeploys.GUARANTOR_BOND,
@@ -1091,18 +1269,31 @@ contract ContractIntegrationTest {
     function _deployCheckpointRegistry() private returns (CheckpointRegistry result) {
         bytes memory arguments = abi.encode(
             guarantorBond,
-            uint16(1),
+            Constants.PROTOCOL_VERSION,
             uint32(42),
             uint16(2),
             uint16(4),
             uint64(1 hours),
             uint64(5 minutes),
+            GENESIS_MANIFEST_DIGEST,
+            GENESIS_CANONICAL_STATE_ROOT,
             GENESIS_RECEIPT_ROOT,
             configHash,
             release
         );
         CheckpointRegistry runtimeReference = new CheckpointRegistry(
-            guarantorBond, 1, 42, 2, 4, 1 hours, 5 minutes, GENESIS_RECEIPT_ROOT, configHash, release
+            guarantorBond,
+            Constants.PROTOCOL_VERSION,
+            42,
+            2,
+            4,
+            1 hours,
+            5 minutes,
+            GENESIS_MANIFEST_DIGEST,
+            GENESIS_CANONICAL_STATE_ROOT,
+            GENESIS_RECEIPT_ROOT,
+            configHash,
+            release
         );
         result = CheckpointRegistry(
             _deploy(

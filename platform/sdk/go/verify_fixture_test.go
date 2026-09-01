@@ -75,7 +75,7 @@ func loadReceiptFixtureNamed(t *testing.T, name string) receiptFixture {
 
 func loadReceiptFixture(t *testing.T) receiptFixture {
 	t.Helper()
-	return loadReceiptFixtureNamed(t, "receipt-positive-v1.json")
+	return loadReceiptFixtureNamed(t, "receipt-positive-v2.json")
 }
 
 func fixtureBytes(t *testing.T, value string) []byte {
@@ -214,7 +214,7 @@ func TestVerifyReceiptFixtureByteFlipFails(t *testing.T) {
 }
 
 func TestVerifyProgramsReceiptFixturePreservesOutcome(t *testing.T) {
-	fixture := loadReceiptFixtureNamed(t, "receipt-programs-positive-v1.json")
+	fixture := loadReceiptFixtureNamed(t, "receipt-programs-positive-v2.json")
 	verified, err := VerifyReceipt(
 		fixtureBytes(t, fixture.CanonicalReceiptHex),
 		fixtureAuthorizedBatch(t, fixture),
@@ -229,6 +229,12 @@ func TestVerifyProgramsReceiptFixturePreservesOutcome(t *testing.T) {
 	if outcome.EncodingVersion != 3 || outcome.RuntimeVersion != 1 || outcome.ABIVersion != 1 || outcome.FeeUnits != NewUint128(0, 16) {
 		t.Fatalf("Programs receipt outcome diverged")
 	}
+	if outcome.OccupancyByteBatches != NewUint128(0, 2) || outcome.OccupancyFeeUnits != NewUint128(0, 7) {
+		t.Fatalf("Programs occupancy totals diverged")
+	}
+	if outcome.OccupancyAssetID != fixture32(t, fixture.AuthorizedBatch.AssetHex) || outcome.OccupancyEvidenceDigest == [32]byte{} || outcome.OccupancyTransferRoot == [32]byte{} {
+		t.Fatalf("Programs occupancy evidence diverged")
+	}
 }
 
 func TestReceiptRefusalVectorsExposeSharedTaxonomy(t *testing.T) {
@@ -240,7 +246,7 @@ func TestReceiptRefusalVectorsExposeSharedTaxonomy(t *testing.T) {
 			CanonicalReceiptHex string `json:"canonical_receipt_hex"`
 		} `json:"vectors"`
 	}
-	raw, err := os.ReadFile("../conformance/fixtures/receipt-refusals-v1.json")
+	raw, err := os.ReadFile("../conformance/fixtures/receipt-refusals-v2.json")
 	if err != nil {
 		t.Fatalf("read refusal fixture: %v", err)
 	}

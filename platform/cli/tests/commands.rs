@@ -68,10 +68,7 @@ fn new_scaffolds_a_deterministic_program_project() {
 
     let project = parent.join("counter");
     for file in ["Cargo.toml", "LayerX.toml", "src/lib.rs", ".gitignore"] {
-        assert!(
-            project.join(file).exists(),
-            "scaffold should create {file}"
-        );
+        assert!(project.join(file).exists(), "scaffold should create {file}");
     }
     let _ = std::fs::remove_dir_all(&parent);
 }
@@ -123,8 +120,14 @@ fn environment_use_rejects_unknown_environment_names() {
 #[test]
 fn key_lifecycle_metadata_persists_in_configuration() {
     let cli = Cli::new();
-    assert_success_envelope(&cli.run(&["--json", "key", "create", "alpha"]), "key.created");
-    assert_success_envelope(&cli.run(&["--json", "key", "create", "beta"]), "key.created");
+    assert_success_envelope(
+        &cli.run(&["--json", "key", "create", "alpha"]),
+        "key.created",
+    );
+    assert_success_envelope(
+        &cli.run(&["--json", "key", "create", "beta"]),
+        "key.created",
+    );
 
     let listed = assert_success_envelope(&cli.run(&["--json", "key", "list"]), "key.list");
     let names: Vec<&str> = match listed.pointer("/data").and_then(Value::as_array) {
@@ -136,9 +139,16 @@ fn key_lifecycle_metadata_persists_in_configuration() {
     };
     assert_eq!(names, vec!["alpha", "beta"]);
 
-    assert_success_envelope(&cli.run(&["--json", "key", "default", "beta"]), "key.default");
-    let shown = assert_success_envelope(&cli.run(&["--json", "key", "show", "beta"]), "key.metadata");
-    assert_eq!(shown.pointer("/data/default").and_then(Value::as_bool), Some(true));
+    assert_success_envelope(
+        &cli.run(&["--json", "key", "default", "beta"]),
+        "key.default",
+    );
+    let shown =
+        assert_success_envelope(&cli.run(&["--json", "key", "show", "beta"]), "key.metadata");
+    assert_eq!(
+        shown.pointer("/data/default").and_then(Value::as_bool),
+        Some(true)
+    );
 }
 
 #[test]
@@ -239,7 +249,13 @@ fn program_build_reports_a_missing_manifest() {
     let cli = Cli::new();
     let missing = scratch_dir("manifest").join("Cargo.toml");
     let missing_text = missing.to_string_lossy().into_owned();
-    let output = cli.run(&["--json", "program", "build", "--manifest-path", &missing_text]);
+    let output = cli.run(&[
+        "--json",
+        "program",
+        "build",
+        "--manifest-path",
+        &missing_text,
+    ]);
     assert_command_failed(&output);
 }
 

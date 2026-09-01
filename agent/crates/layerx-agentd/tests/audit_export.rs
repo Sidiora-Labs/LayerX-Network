@@ -12,8 +12,8 @@ use layerx_agentd::audit::{
 use layerx_agentd::identity::ProtocolAuthority;
 use layerx_agentd::store::TenantId;
 use layerx_agentd::tenant::{Config, RedactionPolicy, Retention};
-use layerx_proof::export::{InclusionFact, InclusionKind, OfflineExport, ReceiptFact};
 use layerx_proof::checkpoint::SettlementDomain;
+use layerx_proof::export::{InclusionFact, InclusionKind, OfflineExport, ReceiptFact};
 use layerx_proof::inclusion::SequencerAuthorization;
 use layerx_proof::merkle::build_proof;
 use layerx_proof::receipt::{verify_outcome, AuthorizedBatch};
@@ -106,8 +106,11 @@ fn entry(
 
 fn receipt_bytes(signature: Option<[u8; 64]>) -> Vec<u8> {
     let mut encoder = Encoder::new(4096);
-    assert_eq!(encoder.structure_header(0x5201), Ok(()));
-    assert_eq!(encoder.u16(1), Ok(()));
+    assert_eq!(
+        encoder.structure_header_version(0x5201, layerx_wire::limits::PROTOCOL_VERSION),
+        Ok(())
+    );
+    assert_eq!(encoder.u16(layerx_wire::limits::PROTOCOL_VERSION), Ok(()));
     assert_eq!(encoder.bytes(&[1; 32], 32), Ok(()));
     assert_eq!(encoder.u64(9), Ok(()));
     assert_eq!(encoder.bytes(&[2; 32], 32), Ok(()));
@@ -143,12 +146,15 @@ fn receipt_bytes(signature: Option<[u8; 64]>) -> Vec<u8> {
 
 fn header_bytes(state_root: [u8; 32], activity_root: [u8; 32], sequencer: [u8; 32]) -> Vec<u8> {
     let mut encoder = Encoder::new(354);
-    assert_eq!(encoder.structure_header(0x1701), Ok(()));
+    assert_eq!(
+        encoder.structure_header_version(0x1701, layerx_wire::limits::PROTOCOL_VERSION),
+        Ok(())
+    );
     assert_eq!(encoder.u8(15), Ok(()));
     for field in 1..=15 {
         assert_eq!(encoder.tag(field, 15), Ok(()));
         match field {
-            1 => assert_eq!(encoder.u16(1), Ok(())),
+            1 => assert_eq!(encoder.u16(layerx_wire::limits::PROTOCOL_VERSION), Ok(())),
             2 => assert_eq!(encoder.u32(42), Ok(())),
             3 => assert_eq!(encoder.u64(7), Ok(())),
             4 => assert_eq!(encoder.u64(8), Ok(())),
@@ -283,8 +289,8 @@ fn tenant_agent_and_time_slice_carries_real_receipt_and_proof_evidence() {
     assert_eq!(exported.chain.links.len(), 3);
     assert!(exported.chain.links[0].canonical_entry_bytes.is_some());
     assert!(exported.chain.links[1].canonical_entry_bytes.is_none());
-    let report = review(&exported, settlement_domain())
-        .unwrap_or_else(|error| panic!("review: {error}"));
+    let report =
+        review(&exported, settlement_domain()).unwrap_or_else(|error| panic!("review: {error}"));
     assert_eq!(report.exported_entries, 1);
     assert_eq!(report.verified_receipts, 1);
     assert_eq!(report.verified_inclusions, 1);
@@ -303,7 +309,13 @@ fn tenant_agent_and_time_slice_carries_real_receipt_and_proof_evidence() {
         through_observed_at_ms: None,
     };
     assert_eq!(
-        export(&path, &config, wrong_tenant, &evidence_store, settlement_domain()),
+        export(
+            &path,
+            &config,
+            wrong_tenant,
+            &evidence_store,
+            settlement_domain()
+        ),
         Err(ExportError::WrongTenant)
     );
     let _ = fs::remove_dir_all(root);
@@ -382,8 +394,8 @@ fn retention_boundary_redacts_old_payload_and_keeps_availability_failure() {
     );
     assert!(exported.chain.links[0].canonical_entry_bytes.is_none());
     assert!(exported.chain.links[2].canonical_entry_bytes.is_some());
-    let report = review(&exported, settlement_domain())
-        .unwrap_or_else(|error| panic!("review: {error}"));
+    let report =
+        review(&exported, settlement_domain()).unwrap_or_else(|error| panic!("review: {error}"));
     assert_eq!(report.failed_records, 1);
 
     let mut excised = exported;

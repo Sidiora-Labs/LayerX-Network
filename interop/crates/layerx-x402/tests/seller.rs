@@ -10,15 +10,14 @@ use layerx_interop_gateway::principal::PrincipalId;
 use layerx_interop_gateway::trace::TraceId;
 use layerx_interop_gateway::GatewayCore;
 use layerx_proof::receipt::AuthorizedBatch;
-use layerx_x402::x402_adapter_descriptor;
 use layerx_x402::model::{
     AtomicAmount, PaymentPayload, PaymentRequired, PaymentRequirements, ResourceInfo,
     SettlementResponse, X402_VERSION,
 };
 use layerx_x402::seller::{
-    ExecutedPayment, LayerXPaymentRequest, PaymentPlane, PlanePaymentOutcome, Seller,
-    SellerOutcome,
+    ExecutedPayment, LayerXPaymentRequest, PaymentPlane, PlanePaymentOutcome, Seller, SellerOutcome,
 };
+use layerx_x402::x402_adapter_descriptor;
 use serde_json::json;
 
 struct TestPaymentPlane {
@@ -38,14 +37,13 @@ impl PaymentPlane for TestPaymentPlane {
     }
 }
 
-
 fn registered_gateway() -> GatewayCore {
     let mut gateway = GatewayCore::new();
     let suite = AdapterId::new("x402-v2").unwrap_or_else(|error| panic!("suite id: {error}"));
     let conformance = ConformanceSuite::new(suite, 20, [0xc0; 32])
         .unwrap_or_else(|error| panic!("conformance: {error}"));
-    let descriptor = x402_adapter_descriptor(conformance)
-        .unwrap_or_else(|error| panic!("descriptor: {error}"));
+    let descriptor =
+        x402_adapter_descriptor(conformance).unwrap_or_else(|error| panic!("descriptor: {error}"));
     gateway
         .register_adapter(descriptor, &TraceId::mint([0xcc; 16]), 0)
         .unwrap_or_else(|error| panic!("register x402: {error}"));
@@ -165,8 +163,8 @@ fn seller_returns_pending_when_plane_returns_pending() {
     let seller = Seller::new(required).expect("valid required");
     let payload = test_payment_payload();
 
-    let encoded = base64::engine::general_purpose::STANDARD
-        .encode(serde_json::to_vec(&payload).unwrap());
+    let encoded =
+        base64::engine::general_purpose::STANDARD.encode(serde_json::to_vec(&payload).unwrap());
 
     let mut gateway = registered_gateway();
     let principal = PrincipalId::new("test-merchant").unwrap();
@@ -188,8 +186,8 @@ fn seller_returns_refused_when_plane_refuses_payment() {
     let seller = Seller::new(required).expect("valid required");
     let payload = test_payment_payload();
 
-    let encoded = base64::engine::general_purpose::STANDARD
-        .encode(serde_json::to_vec(&payload).unwrap());
+    let encoded =
+        base64::engine::general_purpose::STANDARD.encode(serde_json::to_vec(&payload).unwrap());
 
     let mut gateway = registered_gateway();
     let principal = PrincipalId::new("test-merchant").unwrap();
@@ -219,8 +217,8 @@ fn seller_idempotency_key_is_deterministic_per_principal_and_payload() {
     let seller = Seller::new(required).expect("valid required");
     let payload = test_payment_payload();
 
-    let encoded = base64::engine::general_purpose::STANDARD
-        .encode(serde_json::to_vec(&payload).unwrap());
+    let encoded =
+        base64::engine::general_purpose::STANDARD.encode(serde_json::to_vec(&payload).unwrap());
 
     let mut gateway1 = registered_gateway();
     let mut gateway2 = registered_gateway();
@@ -242,12 +240,13 @@ fn seller_idempotency_key_is_deterministic_per_principal_and_payload() {
 #[test]
 fn seller_preserves_extensions_from_payment_required() {
     let mut required = test_payment_required();
-    required
-        .extensions
-        .insert("custom".to_owned(), layerx_x402::model::Extension {
+    required.extensions.insert(
+        "custom".to_owned(),
+        layerx_x402::model::Extension {
             info: json!({"key": "value"}),
             schema: json!({"type": "object"}),
-        });
+        },
+    );
 
     let seller = Seller::new(required).expect("valid with extensions");
     let signal = seller.payment_required().expect("encoding succeeds");
@@ -299,8 +298,8 @@ fn payment_plane_request_contains_all_requirements() {
     let seller = Seller::new(required.clone()).expect("valid required");
     let payload = test_payment_payload();
 
-    let encoded = base64::engine::general_purpose::STANDARD
-        .encode(serde_json::to_vec(&payload).unwrap());
+    let encoded =
+        base64::engine::general_purpose::STANDARD.encode(serde_json::to_vec(&payload).unwrap());
 
     let mut gateway = registered_gateway();
     let principal = PrincipalId::new("test-merchant").unwrap();

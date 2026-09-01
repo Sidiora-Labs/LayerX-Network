@@ -40,6 +40,7 @@ public final class LocalVerifier {
     private static final int MAX_EFFECTS = 512;
     private static final int MAX_EFFECT_BODY = 256;
     private static final int ALL_AVAILABILITY_CLASSES = 0x1f;
+    private static final int CURRENT_PROTOCOL_VERSION = 2;
     private static final long PROGRAM_OUTCOME_V1 = GeneratedReceiptContract.PROGRAM_OUTCOME_V1;
     private static final long PROGRAM_OUTCOME_V2 = GeneratedReceiptContract.PROGRAM_OUTCOME_V2;
     private static final long PROGRAM_OUTCOME_V3 = GeneratedReceiptContract.PROGRAM_OUTCOME_V3;
@@ -164,6 +165,7 @@ public final class LocalVerifier {
     public static InclusionVerification verifyBatchInclusion(InclusionKind kind, byte[] canonicalLeaf,
         MerkleProof proof, byte[] canonicalHeader, byte[] headerSignature, SequencerAuthorization authorization) {
         BatchHeader header = decodeBatchHeader(canonicalHeader);
+        if (header.protocolVersion() != CURRENT_PROTOCOL_VERSION) fail();
         if (header.batchNumber().compareTo(authorization.firstBatchNumber()) < 0
                 || header.batchNumber().compareTo(authorization.lastBatchNumber()) > 0
                 || !equal(header.sequencerId(), exact(authorization.sequencerId(), 32))) fail();
@@ -186,6 +188,7 @@ public final class LocalVerifier {
         CheckpointCertificate certificate = input.certificate();
         if (!input.availabilityObtained() || certificate.validityProof().length > 0xffff_ffffL) fail();
         BatchHeader header = decodeBatchHeader(certificate.canonicalHeader());
+        if (header.protocolVersion() != CURRENT_PROTOCOL_VERSION) fail();
         byte[] checkpointId = sha256(CHECKPOINT_DOMAIN, certificate.canonicalHeader(),
             u32(certificate.validityProof().length), certificate.validityProof());
         byte[] expectedSettlementContract = exact(input.expectedSettlementContract(), 20);
@@ -272,9 +275,10 @@ public final class LocalVerifier {
     }
 
     public static ReceiptVerification verifyReceiptOutcome(byte[] canonicalReceipt,
-                                                             AuthorizedReceiptBatch authorized) {
+                                                              AuthorizedReceiptBatch authorized) {
         DecodedReceipt decoded = decodeProtocolReceipt(canonicalReceipt);
         ProtocolReceipt receipt = decoded.receipt();
+        if (receipt.protocolVersion() != CURRENT_PROTOCOL_VERSION) fail(ReceiptCheck.PROTOCOL_VERSION);
         if (receipt.operation() == 0) fail(ReceiptCheck.OPERATION);
         if (allZero(receipt.activityId())) fail(ReceiptCheck.ACTIVITY_ID);
         if (allZero(receipt.asset())) fail(ReceiptCheck.ASSET);

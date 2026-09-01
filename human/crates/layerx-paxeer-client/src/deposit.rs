@@ -886,6 +886,7 @@ pub enum DepositProofConfigError {
     ZeroCustodyReference,
     ZeroNetworkId,
     ZeroProtocolVersion,
+    UnsupportedProtocolVersion,
 }
 
 /// The configured authority that can mint a [`DepositProof`].
@@ -943,6 +944,9 @@ impl DepositProofVerifier {
         }
         if config.layerx_protocol_version == 0 {
             return Err(DepositProofConfigError::ZeroProtocolVersion);
+        }
+        if config.layerx_protocol_version != layerx_wire::limits::PROTOCOL_VERSION {
+            return Err(DepositProofConfigError::UnsupportedProtocolVersion);
         }
         let checkpoint_authority = VerifyingKey::from_bytes(&config.paxeer_checkpoint_authority)
             .map_err(|_| DepositProofConfigError::InvalidCheckpointAuthority)?;

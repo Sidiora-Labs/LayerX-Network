@@ -5,11 +5,11 @@ use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
 
 use layerx_agentd::outbox::{Outbox, OutboxError, SubmissionState};
-use layerx_agentd::protocol_evidence::VerifiedReceiptEvidence;
 use layerx_agentd::prepare::{
     prepare_activity, CorePreparationBoundary, CorePreparationState, CoreStateError,
     PreparationDefaults, PrepareRequest,
 };
+use layerx_agentd::protocol_evidence::VerifiedReceiptEvidence;
 use layerx_agentd::sign::{attach_external_signature, verify_before_submit, VerifiedSubmission};
 use layerx_agentd::store::{ObjectKind, Store, TenantId, TenantKey};
 use layerx_crypto::local::LocalSigner;
@@ -112,7 +112,7 @@ fn send_payload(id: u8) -> Vec<u8> {
         .u32(17)
         .unwrap_or_else(|error| panic!("network: {error:?}"));
     encoder
-        .u16(1)
+        .u16(layerx_wire::limits::PROTOCOL_VERSION)
         .unwrap_or_else(|error| panic!("version: {error:?}"));
     encoder.finish()
 }
@@ -424,9 +424,10 @@ fn legacy_boolean_receipt_records_fail_closed() {
     enqueue(&mut outbox, &mut store, 1, &verified);
     let key = TenantKey::new(tenant(), ObjectKind::Outbox, [1; 32].to_vec())
         .unwrap_or_else(|error| panic!("outbox key: {error}"));
-    let mut legacy = store
-        .get(&key)
-        .map_or_else(|| panic!("outbox record missing"), |value| value.bytes().to_vec());
+    let mut legacy = store.get(&key).map_or_else(
+        || panic!("outbox record missing"),
+        |value| value.bytes().to_vec(),
+    );
     legacy[4] = 1;
     store
         .put_local(key, legacy)

@@ -106,7 +106,7 @@ fn send_payload(amount: u128, recipient: [u8; 32]) -> Vec<u8> {
         .u32(17)
         .unwrap_or_else(|error| panic!("network: {error:?}"));
     encoder
-        .u16(1)
+        .u16(layerx_wire::limits::PROTOCOL_VERSION)
         .unwrap_or_else(|error| panic!("version: {error:?}"));
     encoder.finish()
 }

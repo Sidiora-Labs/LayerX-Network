@@ -2,8 +2,8 @@ use std::cell::Cell;
 use std::time::{Duration, Instant};
 
 use layerx_programs::{
-    hex, AccountStateHead, DeploymentProof, ProgramId, ProtocolDeploymentVerifier,
-    ReadFreshness, VerifiedDeploymentEvidence,
+    hex, AccountStateHead, DeploymentProof, ProgramId, ProtocolDeploymentVerifier, ReadFreshness,
+    VerifiedDeploymentEvidence,
 };
 use layerx_proof::merkle::{decode_proof, Proof};
 use layerx_wire::hash::receipt_digest;
@@ -68,9 +68,7 @@ impl NodeProgramStateSource {
             || authority_authorization.is_empty()
             || authority_replica_id == [0; 32]
         {
-            return Err(
-                "node authorities and a configured verifier are required".to_owned(),
-            );
+            return Err("node authorities and a configured verifier are required".to_owned());
         }
         if !(endpoint.starts_with("https://") || loopback_http(endpoint))
             || !(authority_endpoint.starts_with("https://") || loopback_http(authority_endpoint))
@@ -285,7 +283,9 @@ impl NodeProgramStateSource {
                 deadline.checked_duration_since(Instant::now())
             })
             .filter(|remaining| !remaining.is_zero())
-            .ok_or_else(|| "registry request deadline expired before node authority access".to_owned())?;
+            .ok_or_else(|| {
+                "registry request deadline expired before node authority access".to_owned()
+            })?;
         let url = format!("{endpoint}{path}");
         let mut response = self
             .agent
@@ -376,8 +376,7 @@ impl NodeProgramStateSource {
             .map_err(|error| format!("node state root is invalid: {error}"))?;
         if declared_digest != verified.receipt_digest()
             || declared_root != verified.state_root()
-            || value["observed_sequence"].as_u64()
-                != Some(verified.freshness().observed_sequence)
+            || value["observed_sequence"].as_u64() != Some(verified.freshness().observed_sequence)
             || value["observed_at"].as_u64() != Some(verified.freshness().observed_at)
         {
             return Err("node account-state claims disagree with the verified receipt".to_owned());

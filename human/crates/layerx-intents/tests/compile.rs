@@ -105,7 +105,8 @@ fn send_intent(entropy: [u8; 32]) -> Intent {
             AuthorizationSignature::new(signature),
         ),
         NetworkId::new(77).unwrap_or_else(|error| panic!("network: {error:?}")),
-        ProtocolVersion::new(1).unwrap_or_else(|error| panic!("protocol: {error:?}")),
+        ProtocolVersion::new(layerx_wire::limits::PROTOCOL_VERSION)
+            .unwrap_or_else(|error| panic!("protocol: {error:?}")),
     )
     .unwrap_or_else(|error| panic!("send intent: {error:?}"));
     Intent::v1(IntentKind::LxpSend(send))

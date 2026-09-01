@@ -41,7 +41,7 @@ public sealed class ReceiptFixtureTests
     private static string FixturePath(string name) => Path.Combine(
         RepoRoot(), "platform", "sdk", "conformance", "fixtures", name);
 
-    private static Fixture LoadFixture(string name = "receipt-positive-v1.json")
+    private static Fixture LoadFixture(string name = "receipt-positive-v2.json")
     {
         var path = FixturePath(name);
         using var document = JsonDocument.Parse(File.ReadAllText(path));
@@ -105,12 +105,17 @@ public sealed class ReceiptFixtureTests
     [Fact]
     public async Task ProgramsReceiptPreservesOptionalOutcome()
     {
-        var fixture = LoadFixture("receipt-programs-positive-v1.json");
+        var fixture = LoadFixture("receipt-programs-positive-v2.json");
         var verified = await LocalVerifier.VerifyReceiptAsync(fixture.CanonicalReceipt, fixture.Batch);
         var outcome = Assert.IsType<ProgramReceiptOutcome>(verified.Receipt.ProgramOutcome);
         Assert.Equal((byte)3, outcome.EncodingVersion);
         Assert.Equal((ushort)1, outcome.RuntimeVersion);
         Assert.Equal((ushort)1, outcome.AbiVersion);
+        Assert.Equal(new UInt128Value(0, 2), outcome.OccupancyByteBatches);
+        Assert.Equal(new UInt128Value(0, 7), outcome.OccupancyFeeUnits);
+        Assert.Equal(fixture.Batch.Asset, outcome.OccupancyAssetId);
+        Assert.Contains(outcome.OccupancyEvidenceDigest, value => value != 0);
+        Assert.Contains(outcome.OccupancyTransferRoot, value => value != 0);
         Assert.Equal(new UInt128Value(0, 16), outcome.FeeUnits);
     }
 
@@ -118,7 +123,7 @@ public sealed class ReceiptFixtureTests
     public async Task RefusalVectorsExposeSharedTaxonomy()
     {
         using var document = JsonDocument.Parse(File.ReadAllText(
-            FixturePath("receipt-refusals-v1.json")));
+            FixturePath("receipt-refusals-v2.json")));
         var root = document.RootElement;
         var authority = root.GetProperty("authorized_batch");
         var batch = new AuthorizedReceiptBatch(

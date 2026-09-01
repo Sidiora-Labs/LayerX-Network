@@ -131,7 +131,8 @@ fn send_intent(public_key: [u8; 32], amount: u128, key: u8) -> Intent {
             AuthorizationSignature::new([0x77; 64]),
         ),
         NetworkId::new(NETWORK_ID).unwrap_or_else(|error| panic!("network: {error:?}")),
-        ProtocolVersion::new(1).unwrap_or_else(|error| panic!("protocol: {error:?}")),
+        ProtocolVersion::new(layerx_wire::limits::PROTOCOL_VERSION)
+            .unwrap_or_else(|error| panic!("protocol: {error:?}")),
     )
     .unwrap_or_else(|error| panic!("send intent: {error:?}"));
     Intent::v1(IntentKind::LxpSend(send))
@@ -609,9 +610,9 @@ fn receipt(activity_id: [u8; 32], marker: u8, activity: ActivityType) -> Receipt
 
 fn encode_receipt(fields: &ReceiptFields, signature: Option<[u8; 64]>) -> Vec<u8> {
     let mut bytes = Vec::new();
-    push_u16(&mut bytes, 1);
+    push_u16(&mut bytes, layerx_wire::limits::PROTOCOL_VERSION);
     push_u16(&mut bytes, 0x5201);
-    push_u16(&mut bytes, 1);
+    push_u16(&mut bytes, layerx_wire::limits::PROTOCOL_VERSION);
     push_bytes(&mut bytes, &fields.activity_id);
     push_u64(&mut bytes, fields.sequence);
     push_bytes(&mut bytes, &fields.previous_state_root);

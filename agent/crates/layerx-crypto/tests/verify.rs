@@ -6,6 +6,7 @@ use k256::ecdsa::{
 use layerx_crypto::{ct, ed25519, secp256k1, SignatureMessage, VerifyError};
 use layerx_types::result::KnownResult;
 use layerx_wire::hash::Domain;
+use layerx_wire::limits::{LEGACY_PROTOCOL_VERSION, PROTOCOL_VERSION};
 
 const ED25519_SEED: [u8; 32] = [
     0x9d, 0x61, 0xb1, 0x9d, 0xef, 0xfd, 0x5a, 0x60, 0xba, 0x84, 0x4a, 0xf4, 0x92, 0xec, 0x2c, 0xc4,
@@ -15,7 +16,8 @@ const CORE_MESSAGE: &[u8] = &[0, 0, 0, 17, b'L', b'a', b'y', b'e', b'r', b'X'];
 const OTHER_NETWORK_MESSAGE: &[u8] = &[0, 0, 0, 18, b'L', b'a', b'y', b'e', b'r', b'X'];
 
 fn message(domain: Domain, network_id: u32) -> SignatureMessage<'static> {
-    let Ok(value) = SignatureMessage::new(domain, 1, network_id, CORE_MESSAGE) else {
+    let Ok(value) = SignatureMessage::new(domain, PROTOCOL_VERSION, network_id, CORE_MESSAGE)
+    else {
         panic!("valid signature scope rejected");
     };
     value
@@ -103,8 +105,8 @@ fn core_secp256k1_vector_and_malleable_forms_match() {
     assert_eq!(
         secp256k1::evm_address(public_key.as_bytes()),
         Ok([
-            0x7e, 0x5f, 0x45, 0x52, 0x09, 0x1a, 0x69, 0x12, 0x5d, 0x5d,
-            0xfc, 0xb7, 0xb8, 0xc2, 0x65, 0x90, 0x29, 0x39, 0x5b, 0xdf,
+            0x7e, 0x5f, 0x45, 0x52, 0x09, 0x1a, 0x69, 0x12, 0x5d, 0x5d, 0xfc, 0xb7, 0xb8, 0xc2,
+            0x65, 0x90, 0x29, 0x39, 0x5b, 0xdf,
         ])
     );
     assert_eq!(
@@ -117,12 +119,7 @@ fn core_secp256k1_vector_and_malleable_forms_match() {
         Ok(())
     );
     assert_eq!(
-        secp256k1::verify_recoverable_digest(
-            public_key.as_bytes(),
-            &signature_bytes,
-            29,
-            &digest,
-        ),
+        secp256k1::verify_recoverable_digest(public_key.as_bytes(), &signature_bytes, 29, &digest,),
         Err(VerifyError::BadSignature)
     );
     assert_eq!(
@@ -149,19 +146,30 @@ fn core_secp256k1_vector_and_malleable_forms_match() {
 #[test]
 fn protocol_and_canonical_network_bytes_cannot_reuse_signatures() {
     let (public_key, signature) = ed25519_vector();
-    let other_network =
-        SignatureMessage::new(Domain::SignaturePreimage, 1, 18, OTHER_NETWORK_MESSAGE)
-            .unwrap_or_else(|error| panic!("network-scoped bytes rejected: {error:?}"));
+    let other_network = SignatureMessage::new(
+        Domain::SignaturePreimage,
+        PROTOCOL_VERSION,
+        18,
+        OTHER_NETWORK_MESSAGE,
+    )
+    .unwrap_or_else(|error| panic!("network-scoped bytes rejected: {error:?}"));
     assert_eq!(
         ed25519::verify(&public_key, &signature, other_network),
         Err(VerifyError::BadSignature)
     );
+    assert!(SignatureMessage::new(
+        Domain::SignaturePreimage,
+        LEGACY_PROTOCOL_VERSION,
+        17,
+        CORE_MESSAGE,
+    )
+    .is_ok());
     assert_eq!(
-        SignatureMessage::new(Domain::SignaturePreimage, 2, 17, CORE_MESSAGE).err(),
+        SignatureMessage::new(Domain::SignaturePreimage, 3, 17, CORE_MESSAGE).err(),
         Some(VerifyError::VersionUnsupported)
     );
     assert_eq!(
-        SignatureMessage::new(Domain::SignaturePreimage, 1, 0, CORE_MESSAGE).err(),
+        SignatureMessage::new(Domain::SignaturePreimage, PROTOCOL_VERSION, 0, CORE_MESSAGE).err(),
         Some(VerifyError::WrongNetwork)
     );
     assert_eq!(

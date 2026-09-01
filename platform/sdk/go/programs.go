@@ -315,7 +315,8 @@ func bindSignedProgramCall(call ProgramCall) (programCallBinding, error) {
 		return programCallBinding{}, newSDKError(ErrorInvalidArgument, RetryNever)
 	}
 	decoder := wireDecoder{value: call.SignedActivity}
-	if decoder.u16() != 1 || decoder.u16() != 0x1001 || decoder.u8() != 12 {
+	envelopeVersion := decoder.u16()
+	if envelopeVersion != 1 && envelopeVersion != 2 || decoder.u16() != 0x1001 || decoder.u8() != 12 {
 		return programCallBinding{}, newSDKError(ErrorInvalidArgument, RetryNever)
 	}
 	field := func(expected byte) bool { return decoder.u8() == expected && !decoder.failed }
@@ -323,7 +324,7 @@ func bindSignedProgramCall(call ProgramCall) (programCallBinding, error) {
 		return programCallBinding{}, newSDKError(ErrorInvalidArgument, RetryNever)
 	}
 	protocolVersion := decoder.u16()
-	if protocolVersion != 1 && protocolVersion != 2 || !field(2) {
+	if protocolVersion != envelopeVersion || !field(2) {
 		return programCallBinding{}, newSDKError(ErrorInvalidArgument, RetryNever)
 	}
 	_ = decoder.u32()

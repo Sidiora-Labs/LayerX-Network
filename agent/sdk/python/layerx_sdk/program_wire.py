@@ -56,10 +56,11 @@ class DecodedProgramTerminal:
 def decode_signed_program_call(call: object, expected_idempotency_key: str | None = None) -> DecodedSignedProgramCall:
     canonical = bytes(getattr(call, "signed_activity"))
     reader = _Reader(canonical)
-    if reader.u16() != 1 or reader.u16() != 0x1001 or reader.byte() != 12:
+    envelope_version = reader.u16()
+    if envelope_version not in (1, 2) or reader.u16() != 0x1001 or reader.byte() != 12:
         _fail("signed activity header")
     _field(reader, 1)
-    if reader.u16() not in (1, 2):
+    if reader.u16() != envelope_version:
         _fail("signed activity protocol")
     _field(reader, 2); reader.u32()
     _field(reader, 3)

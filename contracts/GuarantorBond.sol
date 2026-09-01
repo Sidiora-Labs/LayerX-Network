@@ -4,7 +4,7 @@ pragma solidity ^0.8.24;
 import {CanonicalCheckpoint} from "./libraries/CanonicalCheckpoint.sol";
 import {Arithmetic} from "./libraries/Arithmetic.sol";
 import {CryptographyPrimitives} from "./libraries/CryptographyPrimitives.sol";
-import {SafeCall} from "./libraries/SafeCall.sol";
+import {SafeTransfer} from "./libraries/SafeTransfer.sol";
 import {Types} from "./libraries/Types.sol";
 import {Constants} from "./libraries/Constants.sol";
 import {IGuarantorEligibility} from "./interfaces/IGuarantorEligibility.sol";
@@ -40,19 +40,27 @@ contract GuarantorBond is IGuarantorEligibility, LayerXComponent {
 
     address public immutable custodyAuthority;
     address public immutable membershipAuthority;
+    address public immutable bondToken;
+    address public immutable vault;
+    bytes32 public immutable assetId;
     uint16 public immutable override protocolVersion;
     uint32 public immutable override networkId;
     address public override slashingAuthority;
     uint32 public immutable minimumBondBps;
     uint64 public immutable unbondingDelay;
     uint256 public custodiedValue;
+    uint256 public totalBonded;
     uint256 public slashedBalance;
     uint64 public override membershipVersion;
     uint64 public lastGovernanceSequence;
     uint256 private lockState = 1;
     mapping(bytes32 => BondRecord) private records;
+    bytes32[] private allGuarantorIds;
+    mapping(bytes32 => bool) private genesisIncluded;
     mapping(address => bytes32) public guarantorIdForSigner;
     mapping(bytes32 => mapping(address => SignerAuthorization)) public signerAuthorization;
+    bytes32 public genesisBondedSetCommitment;
+    uint64 public genesisBondedSetVersion;
 
     event GuarantorActivated(
         bytes32 indexed guarantorId,
@@ -87,29 +95,37 @@ contract GuarantorBond is IGuarantorEligibility, LayerXComponent {
         uint64 setVersion
     );
     event SlashingAuthoritySet(address indexed authority);
+    event CustodiedValueSynchronized(uint256 value, uint64 setVersion);
+    event GenesisBondedSetSealed(bytes32 indexed commitment, uint64 indexed setVersion, uint256 memberCount);
 
     constructor(
         address custody,
         address membershipGovernance,
+        address usdlToken,
+        address custodyVault,
+        bytes32 usdlAssetId,
         uint16 expectedProtocolVersion,
         uint32 expectedNetworkId,
         uint32 bondBps,
-        uint256 initialCustodiedValue,
         uint64 withdrawalDelay,
         bytes32 componentConfigHash,
         uint192 componentRelease
     ) LayerXComponent(Predeploys.GUARANTOR_BOND, componentConfigHash, componentRelease) {
         if (
-            custody == address(0) || membershipGovernance == address(0) || bondBps == 0 || bondBps > 10_000
+            custody == address(0) || membershipGovernance == address(0) || usdlToken != Constants.USDL_TOKEN
+                || usdlToken.code.length == 0 || custodyVault == address(0) || custodyVault.code.length == 0
+                || usdlAssetId != Constants.USDL_ASSET_ID || bondBps == 0 || bondBps > 10_000
                 || expectedProtocolVersion == 0 || expectedNetworkId == 0 || withdrawalDelay < 1 days
                 || block.chainid > type(uint64).max
         ) revert InvalidConfiguration();
         custodyAuthority = custody;
         membershipAuthority = membershipGovernance;
+        bondToken = usdlToken;
+        vault = custodyVault;
+        assetId = usdlAssetId;
         protocolVersion = expectedProtocolVersion;
         networkId = expectedNetworkId;
         minimumBondBps = bondBps;
-        custodiedValue = initialCustodiedValue;
         unbondingDelay = withdrawalDelay;
     }
 
@@ -134,9 +150,12 @@ contract GuarantorBond is IGuarantorEligibility, LayerXComponent {
         return records[guarantorId];
     }
 
-    function updateCustodiedValue(uint256 value) external {
-        if (msg.sender != custodyAuthority) revert Unauthorized();
+    function syncCustodiedValue(uint256 value) external {
+        if (msg.sender != vault) revert Unauthorized();
+        if (value == custodiedValue) revert InvalidBondAction();
         custodiedValue = value;
+        uint64 version = _advanceVersion();
+        emit CustodiedValueSynchronized(value, version);
     }
 
     function setSlashingAuthority(address authority) external {
@@ -171,6 +190,7 @@ contract GuarantorBond is IGuarantorEligibility, LayerXComponent {
             jailed: false,
             unresolvedSlashing: false
         });
+        allGuarantorIds.push(guarantorId);
         guarantorIdForSigner[signer] = guarantorId;
         signerAuthorization[guarantorId][signer] =
             SignerAuthorization({activeFromEpoch: joinedEpoch, activeUntilEpoch: 0, setVersion: version});
@@ -234,13 +254,19 @@ contract GuarantorBond is IGuarantorEligibility, LayerXComponent {
         emit GuarantorJailStatusSet(guarantorId, jailed, version, governanceSequence);
     }
 
-    function depositBond(bytes32 guarantorId) external payable {
+    function depositBond(bytes32 guarantorId, uint256 amount) external nonReentrant {
         BondRecord storage record = records[guarantorId];
-        if (record.signer == address(0) || msg.value == 0 || record.removedEpoch != 0 || record.ejectedAtVersion != 0) {
+        if (record.signer == address(0) || amount == 0 || record.removedEpoch != 0 || record.ejectedAtVersion != 0) {
             revert InvalidBondAction();
         }
-        record.amount = Arithmetic.add(record.amount, msg.value);
-        emit BondDeposited(guarantorId, msg.sender, msg.value, record.amount);
+        uint256 beforeBalance = SafeTransfer.balanceOf(bondToken, address(this));
+        SafeTransfer.safeTransferFrom(bondToken, msg.sender, address(this), amount);
+        uint256 afterBalance = SafeTransfer.balanceOf(bondToken, address(this));
+        if (afterBalance < beforeBalance || afterBalance - beforeBalance != amount) revert TransferFailed();
+        record.amount = Arithmetic.add(record.amount, amount);
+        totalBonded = Arithmetic.add(totalBonded, amount);
+        _advanceVersion();
+        emit BondDeposited(guarantorId, msg.sender, amount, record.amount);
     }
 
     function beginUnbond(bytes32 guarantorId, uint256 amount) external {
@@ -277,8 +303,16 @@ contract GuarantorBond is IGuarantorEligibility, LayerXComponent {
         record.pendingWithdrawal = 0;
         record.withdrawalAvailableAt = 0;
         record.amount -= amount;
-        SafeCall.CallResult memory result = SafeCall.sendValue(msg.sender, amount, 100_000);
-        if (!result.success) revert TransferFailed();
+        totalBonded -= amount;
+        uint256 beforeBalance = SafeTransfer.balanceOf(bondToken, address(this));
+        uint256 recipientBefore = SafeTransfer.balanceOf(bondToken, msg.sender);
+        SafeTransfer.safeTransfer(bondToken, msg.sender, amount);
+        uint256 afterBalance = SafeTransfer.balanceOf(bondToken, address(this));
+        uint256 recipientAfter = SafeTransfer.balanceOf(bondToken, msg.sender);
+        if (beforeBalance - afterBalance != amount || recipientAfter - recipientBefore != amount) {
+            revert TransferFailed();
+        }
+        _advanceVersion();
     }
 
     function bondedActive(bytes32 guarantorId, address signer, uint64 checkpointEpoch) external view returns (bool) {
@@ -294,8 +328,9 @@ contract GuarantorBond is IGuarantorEligibility, LayerXComponent {
     function setUnresolvedSlashing(bytes32 guarantorId, bool unresolved) external {
         if (msg.sender != custodyAuthority) revert Unauthorized();
         BondRecord storage record = records[guarantorId];
-        if (record.signer == address(0)) revert InvalidBondAction();
+        if (record.signer == address(0) || record.unresolvedSlashing == unresolved) revert InvalidBondAction();
         record.unresolvedSlashing = unresolved;
+        _advanceVersion();
     }
 
     function submitEquivocation(
@@ -330,13 +365,46 @@ contract GuarantorBond is IGuarantorEligibility, LayerXComponent {
         _slash(guarantorId, record, record.signer, checkpointHash, checkpointHash);
     }
 
-    function sweepSlashed(address payable recipient, uint256 amount) external nonReentrant {
+    function sweepSlashed(address recipient, uint256 amount) external nonReentrant {
         if (msg.sender != custodyAuthority || recipient == address(0) || amount > slashedBalance) {
             revert Unauthorized();
         }
         slashedBalance -= amount;
-        SafeCall.CallResult memory result = SafeCall.sendValue(recipient, amount, 100_000);
-        if (!result.success) revert TransferFailed();
+        uint256 beforeBalance = SafeTransfer.balanceOf(bondToken, address(this));
+        uint256 recipientBefore = SafeTransfer.balanceOf(bondToken, recipient);
+        SafeTransfer.safeTransfer(bondToken, recipient, amount);
+        uint256 afterBalance = SafeTransfer.balanceOf(bondToken, address(this));
+        uint256 recipientAfter = SafeTransfer.balanceOf(bondToken, recipient);
+        if (beforeBalance - afterBalance != amount || recipientAfter - recipientBefore != amount) {
+            revert TransferFailed();
+        }
+    }
+
+    function sealGenesisBondedSet(bytes32[] calldata guarantorIds) external onlyMembershipAuthority {
+        if (genesisBondedSetCommitment != bytes32(0) || guarantorIds.length == 0) revert InvalidBondAction();
+        address[] memory signers = new address[](guarantorIds.length);
+        uint256[] memory amounts = new uint256[](guarantorIds.length);
+        bytes32 previous;
+        for (uint256 i = 0; i < guarantorIds.length; ++i) {
+            bytes32 guarantorId = guarantorIds[i];
+            BondRecord storage record = records[guarantorId];
+            if (guarantorId <= previous || !_genesisCandidate(record)) revert InvalidBondAction();
+            genesisIncluded[guarantorId] = true;
+            signers[i] = record.signer;
+            amounts[i] = record.amount;
+            previous = guarantorId;
+        }
+        for (uint256 i = 0; i < allGuarantorIds.length; ++i) {
+            bytes32 guarantorId = allGuarantorIds[i];
+            if (_genesisCandidate(records[guarantorId]) != genesisIncluded[guarantorId]) revert InvalidBondAction();
+        }
+        uint64 version = membershipVersion;
+        bytes32 commitment =
+            sha256(abi.encode("LXP/Paxeer/genesis-bonded-set/v2", version, guarantorIds, signers, amounts));
+        if (commitment == bytes32(0)) revert InvalidBondAction();
+        genesisBondedSetVersion = version;
+        genesisBondedSetCommitment = commitment;
+        emit GenesisBondedSetSealed(commitment, version, guarantorIds.length);
     }
 
     function _validSignature(CanonicalCheckpoint.GuarantorAttestation calldata attestation)
@@ -370,27 +438,34 @@ contract GuarantorBond is IGuarantorEligibility, LayerXComponent {
         bytes32 firstCheckpoint,
         bytes32 secondCheckpoint
     ) private {
-        if (membershipVersion == type(uint64).max) revert InvalidBondAction();
         uint256 amount = record.amount;
         record.amount = 0;
         record.pendingWithdrawal = 0;
         record.withdrawalAvailableAt = 0;
         record.jailed = true;
         record.unresolvedSlashing = false;
-        uint64 version = membershipVersion + 1;
-        membershipVersion = version;
+        totalBonded -= amount;
+        uint64 version = _advanceVersion();
         record.ejectedAtVersion = version;
         slashedBalance = Arithmetic.add(slashedBalance, amount);
         emit GuarantorSlashed(guarantorId, offendingSigner, firstCheckpoint, secondCheckpoint, amount, version);
     }
 
     function _advanceMembership(uint64 governanceSequence) private returns (uint64 version) {
-        if (lastGovernanceSequence == type(uint64).max || membershipVersion == type(uint64).max) {
-            revert InvalidBondAction();
-        }
+        if (lastGovernanceSequence == type(uint64).max) revert InvalidBondAction();
         if (governanceSequence != lastGovernanceSequence + 1) revert InvalidBondAction();
         lastGovernanceSequence = governanceSequence;
+        version = _advanceVersion();
+    }
+
+    function _advanceVersion() private returns (uint64 version) {
+        if (membershipVersion == type(uint64).max) revert InvalidBondAction();
         version = membershipVersion + 1;
         membershipVersion = version;
+    }
+
+    function _genesisCandidate(BondRecord storage record) private view returns (bool) {
+        return record.signer != address(0) && record.amount != 0 && record.removedEpoch == 0
+            && record.ejectedAtVersion == 0 && !record.jailed && !record.unresolvedSlashing;
     }
 }

@@ -12,6 +12,7 @@ use layerx_crypto::ed25519;
 use layerx_crypto::signer::{sign_disclosed, KeystoreSigner, LocalSigner, SignError, Signer};
 use layerx_crypto::SignatureMessage;
 use layerx_wire::hash::Domain;
+use layerx_wire::limits::PROTOCOL_VERSION;
 
 struct NoopWake;
 
@@ -50,7 +51,9 @@ fn local_signer_is_object_safe_and_never_renders_key_material() {
     let Ok(signature) = signature else {
         panic!("local signer refused valid request");
     };
-    let Ok(message) = SignatureMessage::new(Domain::SignaturePreimage, 1, 17, &canonical) else {
+    let Ok(message) =
+        SignatureMessage::new(Domain::SignaturePreimage, PROTOCOL_VERSION, 17, &canonical)
+    else {
         panic!("valid verification message rejected");
     };
     assert_eq!(
@@ -205,7 +208,9 @@ fn operating_system_keystore_signer_uses_a_real_ssh_agent() {
     let Ok(signature) = signature else {
         panic!("real ssh-agent refused valid request");
     };
-    let Ok(message) = SignatureMessage::new(Domain::SignaturePreimage, 1, 17, &canonical) else {
+    let Ok(message) =
+        SignatureMessage::new(Domain::SignaturePreimage, PROTOCOL_VERSION, 17, &canonical)
+    else {
         panic!("valid verification message rejected");
     };
     assert_eq!(

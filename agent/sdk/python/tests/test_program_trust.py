@@ -56,11 +56,11 @@ def canonical_program_call(not_before: int = 10, not_after: int = 20) -> bytes:
     ))
     payload_hash = sha256(b"LXP/v1/payload-hash\0" + payload).digest()
     return b"".join((
-        (1).to_bytes(2, "big"),
+        (2).to_bytes(2, "big"),
         (0x1001).to_bytes(2, "big"),
         b"\x0c",
         b"\x01",
-        (1).to_bytes(2, "big"),
+        (2).to_bytes(2, "big"),
         b"\x02",
         (1).to_bytes(4, "big"),
         b"\x03",
@@ -138,6 +138,12 @@ class ProgramTrustTests(unittest.TestCase):
     def test_signed_validity_and_maximum_simulation_age_are_enforced(self) -> None:
         binding = decode_signed_program_call(call())
         self.assertEqual((binding.not_before, binding.not_after), (10, 20))
+        mismatched = bytearray(call().signed_activity)
+        mismatched[1] = 1
+        with self.assertRaisesRegex(ValueError, "protocol"):
+            decode_signed_program_call(
+                ProgramCall(PROGRAM_ID, b"\xaa", 1, 0, (), bytes(mismatched))
+            )
         assert_fresh_simulation_observation(15, binding, 15, 5)
         for observed_at, now, maximum_age in (
             (9, 15, 10),

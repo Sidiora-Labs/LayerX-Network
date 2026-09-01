@@ -2,7 +2,7 @@
 
 use layerx_types::result::KnownResult;
 
-use crate::limits::{MAX_PROTOCOL_VERSION, PROTOCOL_VERSION};
+use crate::limits::{LEGACY_PROTOCOL_VERSION, MAX_PROTOCOL_VERSION, STRUCTURE_VERSION};
 use crate::{check_ordered_keys, WireError};
 
 /// A capacity-bounded canonical byte encoder.
@@ -174,7 +174,7 @@ impl Encoder {
         if structure_tag == 0 {
             return Err(WireError::known(KnownResult::InvalidTag, self.bytes.len()));
         }
-        self.u16(PROTOCOL_VERSION)?;
+        self.u16(STRUCTURE_VERSION)?;
         self.u16(structure_tag)
     }
 
@@ -192,7 +192,7 @@ impl Encoder {
         if structure_tag == 0 {
             return Err(WireError::known(KnownResult::InvalidTag, self.bytes.len()));
         }
-        if !(PROTOCOL_VERSION..=MAX_PROTOCOL_VERSION).contains(&protocol_version) {
+        if !(LEGACY_PROTOCOL_VERSION..=MAX_PROTOCOL_VERSION).contains(&protocol_version) {
             return Err(WireError::known(
                 KnownResult::VersionUnsupported,
                 self.bytes.len(),

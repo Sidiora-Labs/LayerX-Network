@@ -35,6 +35,7 @@ use layerx_human_service::trace::TraceId;
 use layerx_proof::receipt::{verify as verify_receipt, AuthorizedBatch};
 use layerx_types::result::ResultCode;
 use layerx_types::verify::VerificationLevel;
+use layerx_wire::limits::PROTOCOL_VERSION;
 use sha2::{Digest as _, Sha256};
 
 fn text<T, E: std::fmt::Debug>(value: Result<T, E>, label: &str) -> T {
@@ -138,9 +139,9 @@ fn push_bytes(output: &mut Vec<u8>, value: &[u8]) {
 
 fn encode_receipt(fields: &ReceiptFields, signature: Option<[u8; 64]>) -> Vec<u8> {
     let mut bytes = Vec::new();
-    bytes.extend_from_slice(&1_u16.to_be_bytes());
+    bytes.extend_from_slice(&PROTOCOL_VERSION.to_be_bytes());
     bytes.extend_from_slice(&0x5201_u16.to_be_bytes());
-    bytes.extend_from_slice(&1_u16.to_be_bytes());
+    bytes.extend_from_slice(&PROTOCOL_VERSION.to_be_bytes());
     push_bytes(&mut bytes, &fields.activity_id);
     bytes.extend_from_slice(&17_u64.to_be_bytes());
     push_bytes(&mut bytes, &fields.previous_state_root);

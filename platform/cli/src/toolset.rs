@@ -258,7 +258,7 @@ fn submit(runtime: &Runtime, arguments: &Value) -> Result<Value, String> {
         .map_err(|error| format!("payment timestamp is invalid: {error:?}"))?;
     let mut builder = EnvelopeBuilder::new();
     builder
-        .protocol_version(1)
+        .protocol_version(layerx_wire::limits::PROTOCOL_VERSION)
         .and_then(|value| value.network_id(runtime.network_id))
         .and_then(|value| value.activity_type(activity_type))
         .and_then(|value| value.actor_did(actor))

@@ -16,7 +16,9 @@ enum {
     LXP_GENESIS_MAX_ENCODED_BYTES = 262144,
     LXP_IMPORT_SECTION_COUNT = 11,
     LXP_IMPORT_MAX_ITEMS = 256,
-    LXP_IMPORT_MAX_ASSET_TOTALS = 32
+    LXP_IMPORT_MAX_ASSET_TOTALS = 32,
+    LXP_GENESIS_REGISTRATION_BYTES = 82,
+    LXP_GENESIS_FRESH_SYSTEM_ACCOUNT_COUNT = 3
 };
 
 typedef enum lxp_import_section_kind {
@@ -139,7 +141,7 @@ typedef struct lxp_genesis_manifest {
     lxp_genesis_module_value module_values[LXP_GENESIS_MAX_MODULE_VALUES];
     size_t module_value_count;
     uint8_t genesis_state_root[32];
-    uint8_t paxeer_genesis_checkpoint_id[32];
+    uint8_t genesis_receipt_state_root[32];
     uint8_t signer_public_key[32];
     uint8_t signature[64];
 } lxp_genesis_manifest;
@@ -153,6 +155,17 @@ typedef struct lxp_genesis_registration {
     bool finalised;
 } lxp_genesis_registration;
 
+typedef struct lxp_genesis_bootstrap_registration {
+    uint32_t network_id;
+    uint64_t registration_index;
+    uint8_t settlement_anchor[32];
+    uint8_t state_root[32];
+    bool finalised;
+} lxp_genesis_bootstrap_registration;
+
+struct lxp_kernel;
+struct lxp_snapshot_manifest_record;
+
 lxp_result lxp_genesis_encode(
     const lxp_genesis_manifest *manifest, bool include_signature,
     lxp_arena *arena, lxp_byte_span *encoded);
@@ -162,15 +175,41 @@ lxp_result lxp_genesis_parse(
 lxp_result lxp_genesis_state_root(
     const lxp_genesis_manifest *manifest, lxp_arena *arena,
     uint8_t state_root[32]);
+lxp_result lxp_genesis_manifest_commitment(
+    const lxp_genesis_manifest *manifest, lxp_arena *arena,
+    uint8_t digest[32]);
+lxp_result lxp_genesis_materialize(
+    const lxp_genesis_manifest *manifest, lxp_arena *arena,
+    struct lxp_kernel *kernel);
+lxp_result lxp_genesis_fresh_empty_accounts(
+    lxp_genesis_manifest *manifest, const uint8_t asset_id[32]);
+lxp_result lxp_genesis_parameter_version(
+    const lxp_genesis_manifest *manifest, uint32_t *parameter_version);
+lxp_result lxp_genesis_receipt_state_root(
+    uint32_t network_id, const uint8_t canonical_state_root[32],
+    uint8_t receipt_state_root[32]);
+lxp_result lxp_genesis_registration_encode(
+    const lxp_genesis_bootstrap_registration *registration,
+    uint8_t encoded[LXP_GENESIS_REGISTRATION_BYTES]);
+lxp_result lxp_genesis_registration_parse(
+    const uint8_t *encoded, size_t encoded_length,
+    lxp_genesis_bootstrap_registration *registration);
 lxp_result lxp_genesis_verify_signature(
     const lxp_genesis_manifest *manifest, lxp_arena *arena);
 lxp_result lxp_genesis_accept(
     const lxp_genesis_manifest *manifest,
-    const lxp_genesis_registration *registration,
+    const lxp_genesis_bootstrap_registration *registration,
     bool storage_empty, lxp_arena *arena, bool *activities_enabled);
+lxp_result lxp_genesis_bootstrap_verify(
+    const lxp_genesis_manifest *manifest,
+    const lxp_genesis_bootstrap_registration *registration,
+    uint32_t configured_network_id, bool storage_empty,
+    const struct lxp_snapshot_manifest_record *snapshot,
+    const struct lxp_kernel *kernel, lxp_arena *arena,
+    bool *activities_enabled);
 lxp_result lxp_genesis_main(
     const uint8_t *manifest_bytes, size_t manifest_length,
-    const lxp_genesis_registration *registration,
+    const lxp_genesis_bootstrap_registration *registration,
     bool storage_empty, lxp_arena *arena, bool *activities_enabled);
 lxp_result lxp_import_balances(
     const lxp_import_section *section, lxp_genesis_manifest *manifest);

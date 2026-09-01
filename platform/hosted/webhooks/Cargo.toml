@@ -16,6 +16,7 @@ path = "src/main.rs"
 ed25519-dalek.workspace = true
 getrandom.workspace = true
 layerx-platform-gateway = { path = "../gateway" }
+layerx-wire = { path = "../../../agent/crates/layerx-wire" }
 native-tls.workspace = true
 rustls.workspace = true
 serde.workspace = true

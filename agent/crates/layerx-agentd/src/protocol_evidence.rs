@@ -145,9 +145,7 @@ impl ProtocolEvidenceVerifier {
             MAX_AUTHORITY_SOURCE_BYTES,
         )
         .map_err(|failure| match failure {
-            ProtectedSourceError::Unavailable => {
-                VerifierPolicyError::AuthoritySourceUnavailable
-            }
+            ProtectedSourceError::Unavailable => VerifierPolicyError::AuthoritySourceUnavailable,
             ProtectedSourceError::TooLarge => VerifierPolicyError::AuthoritySourceMalformed,
             ProtectedSourceError::Unprotected | ProtectedSourceError::Changed => {
                 VerifierPolicyError::AuthoritySourceUnprotected
@@ -330,11 +328,12 @@ impl ProtocolEvidenceVerifier {
                 check: ReceiptCheck::Decode,
             })
         })?;
-        let protocol = decoded.protocol().ok_or(ReceiptEvidenceError::Receipt(
-            VerificationFailure {
-                check: ReceiptCheck::ReceiptShape,
-            },
-        ))?;
+        let protocol =
+            decoded
+                .protocol()
+                .ok_or(ReceiptEvidenceError::Receipt(VerificationFailure {
+                    check: ReceiptCheck::ReceiptShape,
+                }))?;
         if protocol.protocol_version() != selected_header.protocol_version() {
             return Err(ReceiptEvidenceError::ProtocolVersion);
         }
@@ -362,11 +361,12 @@ impl ProtocolEvidenceVerifier {
         );
         let verified = verify_outcome(&raw.canonical_receipt, &authorised)
             .map_err(ReceiptEvidenceError::Receipt)?;
-        let protocol = verified.receipt().protocol().ok_or(
-            ReceiptEvidenceError::Receipt(VerificationFailure {
+        let protocol = verified
+            .receipt()
+            .protocol()
+            .ok_or(ReceiptEvidenceError::Receipt(VerificationFailure {
                 check: ReceiptCheck::ReceiptShape,
-            }),
-        )?;
+            }))?;
         let receipt_ref = Sha256::digest(verified.canonical_bytes()).into();
         Ok(VerifiedReceiptEvidence {
             receipt_ref,

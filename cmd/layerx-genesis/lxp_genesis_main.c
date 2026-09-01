@@ -2,7 +2,7 @@
 
 lxp_result lxp_genesis_main(
     const uint8_t *manifest_bytes, size_t manifest_length,
-    const lxp_genesis_registration *registration,
+    const lxp_genesis_bootstrap_registration *registration,
     bool storage_empty, lxp_arena *arena, bool *activities_enabled)
 {
     lxp_genesis_manifest manifest;

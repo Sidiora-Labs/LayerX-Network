@@ -554,7 +554,7 @@ mod tests {
             paxeer_checkpoint_authority: authority.verifying_key().to_bytes(),
             custody_reference: [10; 32],
             layerx_network_id: 17,
-            layerx_protocol_version: 1,
+            layerx_protocol_version: layerx_wire::limits::PROTOCOL_VERSION,
         }
     }
 

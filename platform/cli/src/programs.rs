@@ -576,7 +576,7 @@ fn signed_call_with_signer(
         .map_err(|_| "fee limit must be an unsigned protocol integer".to_owned())?;
     let mut builder = EnvelopeBuilder::new();
     builder
-        .protocol_version(1)
+        .protocol_version(layerx_wire::limits::PROTOCOL_VERSION)
         .and_then(|value| value.network_id(request.network_id))
         .and_then(|value| value.activity_type(activity_type))
         .and_then(|value| value.actor_did(actor))

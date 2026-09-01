@@ -50,7 +50,7 @@ impl IndependentVerifier {
         trusted_batch: &AuthorizedBatch,
     ) -> Result<VerificationOutcome, PortableReceiptError> {
         let portable = PortableReceipt::from_json(vector_json.as_bytes())?;
-        
+
         if portable.format() != PORTABLE_RECEIPT_FORMAT {
             return Err(PortableReceiptError::UnsupportedFormat);
         }
@@ -64,22 +64,18 @@ impl IndependentVerifier {
         })
     }
 
-    pub fn verify_all_golden_vectors(&self) -> Vec<Result<VerificationOutcome, PortableReceiptError>> {
+    pub fn verify_all_golden_vectors(
+        &self,
+    ) -> Vec<Result<VerificationOutcome, PortableReceiptError>> {
         let vectors = [
-            (GOLDEN_VECTOR_1, AuthorizedBatch::new(
-                [1u8; 32],
-                [2u8; 32],
-                [3u8; 32],
-                [4u8; 32],
-                [5u8; 32],
-            )),
-            (GOLDEN_VECTOR_2, AuthorizedBatch::new(
-                [6u8; 32],
-                [7u8; 32],
-                [8u8; 32],
-                [9u8; 32],
-                [10u8; 32],
-            )),
+            (
+                GOLDEN_VECTOR_1,
+                AuthorizedBatch::new([1u8; 32], [2u8; 32], [3u8; 32], [4u8; 32], [5u8; 32]),
+            ),
+            (
+                GOLDEN_VECTOR_2,
+                AuthorizedBatch::new([6u8; 32], [7u8; 32], [8u8; 32], [9u8; 32], [10u8; 32]),
+            ),
         ];
 
         vectors
@@ -99,13 +95,7 @@ pub struct VerificationOutcome {
 #[test]
 fn independent_verifier_accepts_golden_vector_1() {
     let verifier = IndependentVerifier::new("test-external-verifier-1");
-    let trusted_batch = AuthorizedBatch::new(
-        [1u8; 32],
-        [2u8; 32],
-        [3u8; 32],
-        [4u8; 32],
-        [5u8; 32],
-    );
+    let trusted_batch = AuthorizedBatch::new([1u8; 32], [2u8; 32], [3u8; 32], [4u8; 32], [5u8; 32]);
 
     let result = verifier.verify_vector_against_trusted_batch(GOLDEN_VECTOR_1, &trusted_batch);
     assert!(
@@ -117,13 +107,8 @@ fn independent_verifier_accepts_golden_vector_1() {
 #[test]
 fn independent_verifier_accepts_golden_vector_2() {
     let verifier = IndependentVerifier::new("test-external-verifier-2");
-    let trusted_batch = AuthorizedBatch::new(
-        [6u8; 32],
-        [7u8; 32],
-        [8u8; 32],
-        [9u8; 32],
-        [10u8; 32],
-    );
+    let trusted_batch =
+        AuthorizedBatch::new([6u8; 32], [7u8; 32], [8u8; 32], [9u8; 32], [10u8; 32]);
 
     let result = verifier.verify_vector_against_trusted_batch(GOLDEN_VECTOR_2, &trusted_batch);
     assert!(
@@ -135,19 +120,13 @@ fn independent_verifier_accepts_golden_vector_2() {
 #[test]
 fn independent_verifier_rejects_batch_mismatch() {
     let verifier = IndependentVerifier::new("test-external-verifier-mismatch");
-    let wrong_batch = AuthorizedBatch::new(
-        [99u8; 32],
-        [99u8; 32],
-        [99u8; 32],
-        [99u8; 32],
-        [99u8; 32],
-    );
+    let wrong_batch =
+        AuthorizedBatch::new([99u8; 32], [99u8; 32], [99u8; 32], [99u8; 32], [99u8; 32]);
 
     let result = verifier.verify_vector_against_trusted_batch(GOLDEN_VECTOR_1, &wrong_batch);
     match result {
         Err(PortableReceiptError::BatchAuthorizationMismatch) => {}
-        Err(PortableReceiptError::Receipt(_)) => {
-        }
+        Err(PortableReceiptError::Receipt(_)) => {}
         other => {}
     }
 }
@@ -156,27 +135,17 @@ fn independent_verifier_rejects_batch_mismatch() {
 fn independent_verifier_processes_all_vectors() {
     let verifier = IndependentVerifier::new("test-batch-verifier");
     let results = verifier.verify_all_golden_vectors();
-    
-    assert_eq!(
-        results.len(),
-        2,
-        "Must process both golden vectors"
-    );
+
+    assert_eq!(results.len(), 2, "Must process both golden vectors");
 }
 
 #[test]
 fn independent_verifier_no_layerx_infrastructure_required() {
     let verifier = IndependentVerifier::new("standalone-verifier");
-    let trusted_batch = AuthorizedBatch::new(
-        [1u8; 32],
-        [2u8; 32],
-        [3u8; 32],
-        [4u8; 32],
-        [5u8; 32],
-    );
+    let trusted_batch = AuthorizedBatch::new([1u8; 32], [2u8; 32], [3u8; 32], [4u8; 32], [5u8; 32]);
 
     let result = verifier.verify_vector_against_trusted_batch(GOLDEN_VECTOR_1, &trusted_batch);
-    
+
     let _verification_completed_without_gateway = result.is_ok() || result.is_err();
     let _verification_completed_without_node = true;
     let _verification_completed_without_database = true;
@@ -186,8 +155,7 @@ fn independent_verifier_no_layerx_infrastructure_required() {
 #[test]
 fn portable_format_constant_is_stable() {
     assert_eq!(
-        PORTABLE_RECEIPT_FORMAT,
-        "layerx-receipt-proof-v1",
+        PORTABLE_RECEIPT_FORMAT, "layerx-receipt-proof-v1",
         "Format constant must remain stable for external implementations"
     );
 }
@@ -200,12 +168,9 @@ fn independent_implementation_can_enumerate_vectors() {
         2,
         "Golden vectors are available to independent implementations"
     );
-    
+
     for (idx, vector) in vectors_available.iter().enumerate() {
-        assert!(
-            !vector.is_empty(),
-            "Vector {idx} must be non-empty"
-        );
+        assert!(!vector.is_empty(), "Vector {idx} must be non-empty");
         assert!(
             vector.contains("layerx-receipt-proof-v1"),
             "Vector {idx} must contain format identifier"

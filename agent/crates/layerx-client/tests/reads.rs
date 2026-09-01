@@ -19,6 +19,7 @@ use layerx_proof::merkle::{build_proof, Proof};
 use layerx_types::verify::VerificationLevel;
 use layerx_wire::encode::Encoder;
 use layerx_wire::hash::batch_header_digest;
+use layerx_wire::limits::PROTOCOL_VERSION;
 
 static NEXT_SOCKET: AtomicU64 = AtomicU64::new(1);
 
@@ -52,10 +53,12 @@ fn limits() -> Limits {
 
 fn header_bytes(state_root: [u8; 32], activity_root: [u8; 32], sequencer_id: [u8; 32]) -> Vec<u8> {
     let mut encoder = Encoder::new(354);
-    assert!(encoder.structure_header(0x1701).is_ok());
+    assert!(encoder
+        .structure_header_version(0x1701, PROTOCOL_VERSION)
+        .is_ok());
     assert!(encoder.u8(15).is_ok());
     assert!(encoder.tag(1, 15).is_ok());
-    assert!(encoder.u16(1).is_ok());
+    assert!(encoder.u16(PROTOCOL_VERSION).is_ok());
     assert!(encoder.tag(2, 15).is_ok());
     assert!(encoder.u32(77).is_ok());
     for (field, value) in [(3, 2_u64), (4, 7), (5, 10), (6, 12)] {
@@ -148,7 +151,7 @@ fn context(requested: VerificationLevel, authorization: SequencerAuthorization) 
     ReadContext {
         interface_version: Version::V1_2,
         correlation_id: 44,
-        expected_protocol_version: 1,
+        expected_protocol_version: PROTOCOL_VERSION,
         expected_network_id: 77,
         requested: Requested::new(requested),
         head: Head {

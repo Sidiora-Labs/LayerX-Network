@@ -39,9 +39,9 @@ fn push_bytes(output: &mut Vec<u8>, value: &[u8]) {
 
 fn encode_receipt(fields: &ReceiptFields, signature: Option<[u8; 64]>) -> Vec<u8> {
     let mut bytes = Vec::new();
-    bytes.extend_from_slice(&1_u16.to_be_bytes());
+    bytes.extend_from_slice(&layerx_wire::limits::PROTOCOL_VERSION.to_be_bytes());
     bytes.extend_from_slice(&0x5201_u16.to_be_bytes());
-    bytes.extend_from_slice(&1_u16.to_be_bytes());
+    bytes.extend_from_slice(&layerx_wire::limits::PROTOCOL_VERSION.to_be_bytes());
     push_bytes(&mut bytes, &fields.activity_id);
     bytes.extend_from_slice(&17_u64.to_be_bytes());
     push_bytes(&mut bytes, &fields.previous_state_root);

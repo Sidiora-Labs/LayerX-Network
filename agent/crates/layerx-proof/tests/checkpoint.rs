@@ -7,15 +7,19 @@ use layerx_proof::checkpoint::{
 use layerx_types::verify::VerificationLevel;
 use layerx_wire::encode::Encoder;
 use layerx_wire::hash::checkpoint_attestation_digest;
+use layerx_wire::limits::PROTOCOL_VERSION;
 
 fn header_bytes() -> Vec<u8> {
     let mut encoder = Encoder::new(354);
-    assert_eq!(encoder.structure_header(0x1701), Ok(()));
+    assert_eq!(
+        encoder.structure_header_version(0x1701, PROTOCOL_VERSION),
+        Ok(())
+    );
     assert_eq!(encoder.u8(15), Ok(()));
     for field in 1..=15 {
         assert_eq!(encoder.tag(field, 15), Ok(()));
         match field {
-            1 => assert_eq!(encoder.u16(1), Ok(())),
+            1 => assert_eq!(encoder.u16(PROTOCOL_VERSION), Ok(())),
             2 => assert_eq!(encoder.u32(42), Ok(())),
             3 => assert_eq!(encoder.u64(7), Ok(())),
             4 => assert_eq!(encoder.u64(8), Ok(())),
@@ -52,7 +56,7 @@ fn attestation(
 ) -> Attestation {
     let settlement_contract = [0x55; 20];
     let mut message = [0_u8; 189];
-    message[..2].copy_from_slice(&1_u16.to_be_bytes());
+    message[..2].copy_from_slice(&PROTOCOL_VERSION.to_be_bytes());
     message[2..6].copy_from_slice(&42_u32.to_be_bytes());
     message[6..14].copy_from_slice(&31_337_u64.to_be_bytes());
     message[14..34].copy_from_slice(&settlement_contract);
@@ -72,11 +76,14 @@ fn attestation(
         .sign_prehash_recoverable(&digest)
         .unwrap_or_else(|error| panic!("attestation signing failed: {error}"));
     let signer = secp256k1::evm_address(
-        signing_key.verifying_key().to_encoded_point(true).as_bytes(),
+        signing_key
+            .verifying_key()
+            .to_encoded_point(true)
+            .as_bytes(),
     )
     .unwrap_or_else(|error| panic!("attestation signer: {error:?}"));
     Attestation::new(
-        1,
+        PROTOCOL_VERSION,
         42,
         31_337,
         settlement_contract,
@@ -131,7 +138,7 @@ fn transported_registration_never_invents_paxeer_chain_finality() {
         .unwrap_or_else(|error| panic!("finalised certificate failed: {error:?}"));
     assert_eq!(finalised.achieved, 3);
     assert_eq!(finalised.required, 2);
-    assert_eq!(finalised.protocol_version(), 1);
+    assert_eq!(finalised.protocol_version(), PROTOCOL_VERSION);
     assert_eq!(finalised.network_id(), 42);
     assert_eq!(finalised.batch_number(), 8);
     assert_eq!(finalised.first_sequence(), 11);
@@ -194,7 +201,13 @@ fn rejects_threshold_duplicate_membership_signature_and_identifier_failures() {
         None,
     );
     assert_eq!(
-        verify_certificate(&duplicate_certificate, &keys, &identifier, settlement_domain(), None),
+        verify_certificate(
+            &duplicate_certificate,
+            &keys,
+            &identifier,
+            settlement_domain(),
+            None
+        ),
         Err(CheckpointError::DuplicateSigner(first_id))
     );
 
@@ -217,7 +230,13 @@ fn rejects_threshold_duplicate_membership_signature_and_identifier_failures() {
         None,
     );
     assert_eq!(
-        verify_certificate(&one_signature, &keys, &identifier, settlement_domain(), None),
+        verify_certificate(
+            &one_signature,
+            &keys,
+            &identifier,
+            settlement_domain(),
+            None
+        ),
         Err(CheckpointError::Threshold {
             achieved: 1,
             required: 2,
@@ -227,14 +246,35 @@ fn rejects_threshold_duplicate_membership_signature_and_identifier_failures() {
     let bad_signature = Certificate::new(
         Checkpoint::new(header_bytes(), b"PROOF".to_vec()),
         vec![Attestation::new(
-            1, 42, 31_337, [0x55; 20], 7, identifier, identifier, first_id, 8, [12; 32],
-            true, true, 0x1f, 1_001, [1; 20], [1; 64], 27,
+            PROTOCOL_VERSION,
+            42,
+            31_337,
+            [0x55; 20],
+            7,
+            identifier,
+            identifier,
+            first_id,
+            8,
+            [12; 32],
+            true,
+            true,
+            0x1f,
+            1_001,
+            [1; 20],
+            [1; 64],
+            27,
         )],
         1,
         None,
     );
     assert_eq!(
-        verify_certificate(&bad_signature, &keys, &identifier, settlement_domain(), None),
+        verify_certificate(
+            &bad_signature,
+            &keys,
+            &identifier,
+            settlement_domain(),
+            None
+        ),
         Err(CheckpointError::Signature(first_id))
     );
 

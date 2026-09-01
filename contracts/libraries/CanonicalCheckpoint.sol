@@ -6,8 +6,8 @@ import {Constants} from "./Constants.sol";
 
 library CanonicalCheckpoint {
     error ValidityProofTooLarge(uint256 length);
-    bytes internal constant CHECKPOINT_DOMAIN = "LXP/v1/checkpoint-certificate\x00";
-    bytes internal constant ATTESTATION_DOMAIN = "LXP/v1/guarantor-attestation\x00";
+    bytes internal constant CHECKPOINT_DOMAIN = "LXP/v2/checkpoint-certificate\x00";
+    bytes internal constant ATTESTATION_DOMAIN = "LXP/v2/guarantor-attestation\x00";
     uint256 internal constant HEADER_LENGTH = 354;
 
     struct HeaderCommitments {
@@ -51,7 +51,7 @@ library CanonicalCheckpoint {
 
     function encodeHeader(HeaderCommitments calldata header) internal pure returns (bytes memory encoded) {
         encoded = bytes.concat(
-            hex"000117010f",
+            hex"000217010f",
             abi.encodePacked(
                 uint8(1),
                 header.protocolVersion,

@@ -158,8 +158,8 @@ pub fn run(config_path: &Path) -> Result<(), RuntimeError> {
     validate_runtime(&config)?;
     let spool = ArchiveSpool::open(config.state_directory.join("archives"))
         .map_err(|_| RuntimeError::State)?;
-    let next_batch = recover_next_batch(&spool, config.first_batch_number)
-        .map_err(|_| RuntimeError::State)?;
+    let next_batch =
+        recover_next_batch(&spool, config.first_batch_number).map_err(|_| RuntimeError::State)?;
     let status = Arc::new(Mutex::new(RuntimeStatus::default()));
     let poll = Duration::from_millis(config.poll_interval_ms);
 
@@ -344,17 +344,10 @@ fn ordered_archives(spool: &ArchiveSpool) -> Vec<Result<Archive, ()>> {
     archives
 }
 
-fn recover_next_batch(
-    spool: &ArchiveSpool,
-    first: u64,
-) -> Result<u64, SpoolRecoveryError> {
+fn recover_next_batch(spool: &ArchiveSpool, first: u64) -> Result<u64, SpoolRecoveryError> {
     recover_spool(
         first,
-        || {
-            spool
-                .commitments()
-                .map_err(|_| SpoolRecoveryError::Store)
-        },
+        || spool.commitments().map_err(|_| SpoolRecoveryError::Store),
         |commitment| {
             let stored = spool
                 .get(commitment)
@@ -723,6 +716,7 @@ fn validate_runtime(config: &RuntimeConfig) -> Result<(), RuntimeError> {
         || !matches!(config.status_listen.ip(), IpAddr::V4(_) | IpAddr::V6(_))
         || !config.status_listen.ip().is_loopback()
         || config.status_listen.port() == 0
+        || config.node.expected_protocol_version != layerx_wire::limits::PROTOCOL_VERSION
         || !(100..=120_000).contains(&config.node.deadline_ms)
         || !(1024..=64 * 1024 * 1024).contains(&config.node.maximum_frame_bytes)
         || !(1..=64).contains(&config.node.maximum_connections)
@@ -960,10 +954,7 @@ mod tests {
     fn startup_refuses_duplicate_batch_metadata() {
         let result = recover_batch_sequence(7, [commitment(1), commitment(2)], |_| Ok(7));
 
-        assert!(matches!(
-            result,
-            Err(SpoolRecoveryError::DuplicateBatch)
-        ));
+        assert!(matches!(result, Err(SpoolRecoveryError::DuplicateBatch)));
     }
 
     #[test]
@@ -990,8 +981,10 @@ mod tests {
             43
         );
         assert_eq!(
-            recover_batch_sequence(41, [], |_| unreachable!("empty inventory has no loader calls"))
-                .unwrap_or_else(|error| panic!("recover empty spool: {error:?}")),
+            recover_batch_sequence(41, [], |_| unreachable!(
+                "empty inventory has no loader calls"
+            ))
+            .unwrap_or_else(|error| panic!("recover empty spool: {error:?}")),
             41
         );
     }

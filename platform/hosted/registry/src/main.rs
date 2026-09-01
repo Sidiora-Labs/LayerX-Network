@@ -12,13 +12,15 @@ use std::thread;
 use std::time::{Duration, Instant};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use layerx_platform_registry::{parse_request, refusal, write_response, Config, Registrar, RegistryAuthority};
+use layerx_platform_registry::{
+    parse_request, refusal, write_response, Config, Registrar, RegistryAuthority,
+};
 use layerx_programs::hex;
+use rustix::process::{kill_process, Pid, Signal};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::server::WebPkiClientVerifier;
 use rustls::{RootCertStore, ServerConfig, ServerConnection, StreamOwned};
 use zeroize::{Zeroize as _, Zeroizing};
-use rustix::process::{kill_process, Pid, Signal};
 
 const DEFAULT_LISTEN: &str = "127.0.0.1:9420";
 const DEFAULT_ROOT: &str = "/var/lib/layerx-program-registry";
@@ -59,7 +61,9 @@ impl DeadlineStream {
         self.deadline
             .checked_duration_since(Instant::now())
             .filter(|remaining| !remaining.is_zero())
-            .ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "absolute request deadline expired"))
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::TimedOut, "absolute request deadline expired")
+            })
     }
 }
 
@@ -116,7 +120,9 @@ fn parse_u32(name: &str, default: u32) -> Result<u32, String> {
 
 fn parse_usize(name: &str, default: usize, maximum: usize) -> Result<usize, String> {
     let value = env::var(name).map_or(Ok(default), |value| {
-        value.parse().map_err(|_| format!("{name} must be an integer"))
+        value
+            .parse()
+            .map_err(|_| format!("{name} must be an integer"))
     })?;
     if value == 0 || value > maximum {
         return Err(format!("{name} is outside its bound"));
@@ -126,7 +132,9 @@ fn parse_usize(name: &str, default: usize, maximum: usize) -> Result<usize, Stri
 
 fn read_secret(name: &str) -> Result<Zeroizing<String>, String> {
     let configured = PathBuf::from(env::var(name).map_err(|_| format!("{name} is required"))?);
-    if !configured.is_absolute() || fs::canonicalize(&configured).map_err(|error| error.to_string())? != configured {
+    if !configured.is_absolute()
+        || fs::canonicalize(&configured).map_err(|error| error.to_string())? != configured
+    {
         return Err(format!("{name} must name a canonical absolute file"));
     }
     let metadata = fs::metadata(&configured).map_err(|error| error.to_string())?;
@@ -137,7 +145,9 @@ fn read_secret(name: &str) -> Result<Zeroizing<String>, String> {
     {
         use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
         if metadata.permissions().mode() & 0o007 != 0 || metadata.nlink() != 1 {
-            return Err(format!("{name} must be process-group private and singly linked"));
+            return Err(format!(
+                "{name} must be process-group private and singly linked"
+            ));
         }
     }
     let mut secret = fs::read_to_string(&configured).map_err(|error| error.to_string())?;
@@ -178,7 +188,9 @@ fn read_private_file(name: &str, maximum: u64) -> Result<Vec<u8>, String> {
     {
         use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
         if metadata.permissions().mode() & 0o007 != 0 || metadata.nlink() != 1 {
-            return Err(format!("{name} must be process-group private and singly linked"));
+            return Err(format!(
+                "{name} must be process-group private and singly linked"
+            ));
         }
     }
     fs::read(configured).map_err(|error| error.to_string())
@@ -192,11 +204,9 @@ fn tls_config() -> Result<Arc<ServerConfig>, String> {
         "LAYERX_REGISTRY_TLS_CERT_DER",
         64 * 1024,
     )?);
-    let private_key = PrivateKeyDer::try_from(read_private_file(
-        "LAYERX_REGISTRY_TLS_KEY_DER",
-        64 * 1024,
-    )?)
-    .map_err(|_| "registry TLS private key is invalid".to_owned())?;
+    let private_key =
+        PrivateKeyDer::try_from(read_private_file("LAYERX_REGISTRY_TLS_KEY_DER", 64 * 1024)?)
+            .map_err(|_| "registry TLS private key is invalid".to_owned())?;
     let client_ca = CertificateDer::from(read_bounded_file(
         "LAYERX_REGISTRY_CLIENT_CA_DER",
         64 * 1024,
@@ -223,8 +233,10 @@ fn config() -> Result<Config, String> {
     let root = parse_path("LAYERX_REGISTRY_STATE", PathBuf::from(DEFAULT_ROOT));
     let digest = env::var("LAYERX_REGISTRY_BUILDER_IMAGE_DIGEST")
         .map_err(|_| "LAYERX_REGISTRY_BUILDER_IMAGE_DIGEST is required".to_owned())?;
-    let request_authority = RegistryAuthority::new(read_secret("LAYERX_REGISTRY_REQUEST_TOKEN_FILE")?)?;
-    let publication_authority = RegistryAuthority::new(read_secret("LAYERX_REGISTRY_PUBLICATION_TOKEN_FILE")?)?;
+    let request_authority =
+        RegistryAuthority::new(read_secret("LAYERX_REGISTRY_REQUEST_TOKEN_FILE")?)?;
+    let publication_authority =
+        RegistryAuthority::new(read_secret("LAYERX_REGISTRY_PUBLICATION_TOKEN_FILE")?)?;
     if request_authority.same_as(&publication_authority) {
         return Err("request and publication authorities must be distinct".to_owned());
     }
@@ -240,24 +252,36 @@ fn config() -> Result<Config, String> {
         workspace: parse_path("LAYERX_REGISTRY_BUILD_ROOT", root.join("builds")),
         builder_image_digest: hex::decode_digest(&digest)
             .map_err(|error| format!("LAYERX_REGISTRY_BUILDER_IMAGE_DIGEST is invalid: {error}"))?,
-        builder_environment_root: PathBuf::from(env::var("LAYERX_REGISTRY_BUILDER_ENVIRONMENT_ROOT")
-            .map_err(|_| "LAYERX_REGISTRY_BUILDER_ENVIRONMENT_ROOT is required".to_owned())?),
+        builder_environment_root: PathBuf::from(
+            env::var("LAYERX_REGISTRY_BUILDER_ENVIRONMENT_ROOT")
+                .map_err(|_| "LAYERX_REGISTRY_BUILDER_ENVIRONMENT_ROOT is required".to_owned())?,
+        ),
         builder_entrypoint: env::var("LAYERX_REGISTRY_BUILDER_ENTRYPOINT")
             .map_err(|_| "LAYERX_REGISTRY_BUILDER_ENTRYPOINT is required".to_owned())?,
-        builder_isolation_runtime: PathBuf::from(env::var("LAYERX_REGISTRY_BUILDER_ISOLATION_RUNTIME")
-            .map_err(|_| "LAYERX_REGISTRY_BUILDER_ISOLATION_RUNTIME is required".to_owned())?),
+        builder_isolation_runtime: PathBuf::from(
+            env::var("LAYERX_REGISTRY_BUILDER_ISOLATION_RUNTIME")
+                .map_err(|_| "LAYERX_REGISTRY_BUILDER_ISOLATION_RUNTIME is required".to_owned())?,
+        ),
         builder_isolation_runtime_digest: hex::decode_digest(
-            &env::var("LAYERX_REGISTRY_BUILDER_ISOLATION_RUNTIME_DIGEST")
-                .map_err(|_| "LAYERX_REGISTRY_BUILDER_ISOLATION_RUNTIME_DIGEST is required".to_owned())?,
-        ).map_err(|error| format!("builder isolation runtime digest is invalid: {error}"))?,
-        builder_job_supervisor: PathBuf::from(env::var("LAYERX_REGISTRY_BUILDER_JOB_SUPERVISOR")
-            .map_err(|_| "LAYERX_REGISTRY_BUILDER_JOB_SUPERVISOR is required".to_owned())?),
+            &env::var("LAYERX_REGISTRY_BUILDER_ISOLATION_RUNTIME_DIGEST").map_err(|_| {
+                "LAYERX_REGISTRY_BUILDER_ISOLATION_RUNTIME_DIGEST is required".to_owned()
+            })?,
+        )
+        .map_err(|error| format!("builder isolation runtime digest is invalid: {error}"))?,
+        builder_job_supervisor: PathBuf::from(
+            env::var("LAYERX_REGISTRY_BUILDER_JOB_SUPERVISOR")
+                .map_err(|_| "LAYERX_REGISTRY_BUILDER_JOB_SUPERVISOR is required".to_owned())?,
+        ),
         builder_job_supervisor_digest: hex::decode_digest(
-            &env::var("LAYERX_REGISTRY_BUILDER_JOB_SUPERVISOR_DIGEST")
-                .map_err(|_| "LAYERX_REGISTRY_BUILDER_JOB_SUPERVISOR_DIGEST is required".to_owned())?,
-        ).map_err(|error| format!("builder job supervisor digest is invalid: {error}"))?,
-        builder_cgroup_root: PathBuf::from(env::var("LAYERX_REGISTRY_BUILDER_CGROUP_ROOT")
-            .map_err(|_| "LAYERX_REGISTRY_BUILDER_CGROUP_ROOT is required".to_owned())?),
+            &env::var("LAYERX_REGISTRY_BUILDER_JOB_SUPERVISOR_DIGEST").map_err(|_| {
+                "LAYERX_REGISTRY_BUILDER_JOB_SUPERVISOR_DIGEST is required".to_owned()
+            })?,
+        )
+        .map_err(|error| format!("builder job supervisor digest is invalid: {error}"))?,
+        builder_cgroup_root: PathBuf::from(
+            env::var("LAYERX_REGISTRY_BUILDER_CGROUP_ROOT")
+                .map_err(|_| "LAYERX_REGISTRY_BUILDER_CGROUP_ROOT is required".to_owned())?,
+        ),
         build_timeout_seconds: parse_u64("LAYERX_REGISTRY_BUILD_TIMEOUT_SECONDS", 1_800)?,
         build_memory_bytes: parse_u64("LAYERX_REGISTRY_BUILD_MEMORY_BYTES", 2_147_483_648)?,
         build_process_limit: parse_u32("LAYERX_REGISTRY_BUILD_PROCESS_LIMIT", 64)?,
@@ -321,23 +345,43 @@ impl Drop for CgroupCreation {
 
 impl WorkerCgroup {
     fn create() -> Result<Self, String> {
-        let root = PathBuf::from(env::var("LAYERX_REGISTRY_BUILDER_CGROUP_ROOT")
-            .map_err(|_| "worker cgroup root is unavailable".to_owned())?);
+        let root = PathBuf::from(
+            env::var("LAYERX_REGISTRY_BUILDER_CGROUP_ROOT")
+                .map_err(|_| "worker cgroup root is unavailable".to_owned())?,
+        );
         let path = root.join(format!("request-{}-{}", std::process::id(), now()));
         fs::create_dir(&path).map_err(|error| format!("worker cgroup creation failed: {error}"))?;
-        let mut creation = CgroupCreation { path: path.clone(), committed: false };
+        let mut creation = CgroupCreation {
+            path: path.clone(),
+            committed: false,
+        };
         let worker_leaf = path.join("worker");
         let build_root = path.join("builds");
-        fs::write(path.join("cgroup.subtree_control"), b"+cpu +memory +pids +io")
-            .map_err(|error| format!("worker cgroup delegation failed: {error}"))?;
-        fs::create_dir(&worker_leaf).map_err(|error| format!("worker leaf creation failed: {error}"))?;
-        fs::create_dir(&build_root).map_err(|error| format!("build cgroup root creation failed: {error}"))?;
-        fs::write(build_root.join("cgroup.subtree_control"), b"+cpu +memory +pids +io")
-            .map_err(|error| format!("build cgroup delegation failed: {error}"))?;
-        let kill_file = fs::OpenOptions::new().write(true).open(path.join("cgroup.kill"))
+        fs::write(
+            path.join("cgroup.subtree_control"),
+            b"+cpu +memory +pids +io",
+        )
+        .map_err(|error| format!("worker cgroup delegation failed: {error}"))?;
+        fs::create_dir(&worker_leaf)
+            .map_err(|error| format!("worker leaf creation failed: {error}"))?;
+        fs::create_dir(&build_root)
+            .map_err(|error| format!("build cgroup root creation failed: {error}"))?;
+        fs::write(
+            build_root.join("cgroup.subtree_control"),
+            b"+cpu +memory +pids +io",
+        )
+        .map_err(|error| format!("build cgroup delegation failed: {error}"))?;
+        let kill_file = fs::OpenOptions::new()
+            .write(true)
+            .open(path.join("cgroup.kill"))
             .map_err(|error| format!("worker cgroup kill boundary failed: {error}"))?;
         creation.committed = true;
-        Ok(Self { path, worker_leaf, build_root, kill_file })
+        Ok(Self {
+            path,
+            worker_leaf,
+            build_root,
+            kill_file,
+        })
     }
 
     fn attach(&self, pid: u32) -> Result<(), String> {
@@ -355,9 +399,9 @@ impl Drop for WorkerCgroup {
     fn drop(&mut self) {
         self.kill();
         for _ in 0..100 {
-            let empty = fs::read_to_string(self.path.join("cgroup.events")).ok().is_some_and(|events| {
-                events.lines().any(|line| line == "populated 0")
-            });
+            let empty = fs::read_to_string(self.path.join("cgroup.events"))
+                .ok()
+                .is_some_and(|events| events.lines().any(|line| line == "populated 0"));
             if !empty {
                 thread::sleep(Duration::from_millis(10));
                 continue;
@@ -383,18 +427,27 @@ fn remove_cgroup_tree(root: &std::path::Path) {
 }
 
 fn process_stopped(pid: u32) -> bool {
-    fs::read_to_string(format!("/proc/{pid}/status")).ok().is_some_and(|status| {
-        status.lines().find(|line| line.starts_with("State:"))
-            .is_some_and(|state| state.contains('T'))
-    })
+    fs::read_to_string(format!("/proc/{pid}/status"))
+        .ok()
+        .is_some_and(|status| {
+            status
+                .lines()
+                .find(|line| line.starts_with("State:"))
+                .is_some_and(|state| state.contains('T'))
+        })
 }
 
 fn reclaim_worker_cgroups() -> Result<(), String> {
-    let root = PathBuf::from(env::var("LAYERX_REGISTRY_BUILDER_CGROUP_ROOT")
-        .map_err(|_| "worker cgroup root is unavailable".to_owned())?);
+    let root = PathBuf::from(
+        env::var("LAYERX_REGISTRY_BUILDER_CGROUP_ROOT")
+            .map_err(|_| "worker cgroup root is unavailable".to_owned())?,
+    );
     for entry in fs::read_dir(&root).map_err(|error| error.to_string())? {
         let entry = entry.map_err(|error| error.to_string())?;
-        if entry.file_type().map_err(|error| error.to_string())?.is_dir()
+        if entry
+            .file_type()
+            .map_err(|error| error.to_string())?
+            .is_dir()
             && (entry.file_name().to_string_lossy().starts_with("request-")
                 || entry.file_name().to_string_lossy().starts_with("job-"))
         {
@@ -420,82 +473,156 @@ fn request_worker(remaining_ms: u64) -> Result<(), String> {
         return Err("worker deadline is empty".to_owned());
     }
     let mut encoded = Vec::new();
-    io::stdin().take(MAX_WORKER_IPC_BYTES).read_to_end(&mut encoded)
+    io::stdin()
+        .take(MAX_WORKER_IPC_BYTES)
+        .read_to_end(&mut encoded)
         .map_err(|error| error.to_string())?;
     if u64::try_from(encoded.len()).map_or(true, |length| length >= MAX_WORKER_IPC_BYTES) {
         return Err("worker request exceeds bounded IPC".to_owned());
     }
     let request = serde_json::from_slice(&encoded).map_err(|error| error.to_string())?;
     let config = config()?;
-    let deadline = Instant::now().checked_add(Duration::from_millis(remaining_ms))
+    let deadline = Instant::now()
+        .checked_add(Duration::from_millis(remaining_ms))
         .ok_or_else(|| "worker deadline is invalid".to_owned())?;
     let response = Registrar::open(&config, now())?.route(&request, now(), deadline);
     serde_json::to_writer(io::stdout().lock(), &response).map_err(|error| error.to_string())
 }
 
-fn isolated_route(request: &layerx_platform_registry::Request, deadline: Instant) -> layerx_platform_registry::Response {
+fn isolated_route(
+    request: &layerx_platform_registry::Request,
+    deadline: Instant,
+) -> layerx_platform_registry::Response {
     let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
-        return refusal(503, "request_deadline_exceeded", "the registry request deadline expired");
+        return refusal(
+            503,
+            "request_deadline_exceeded",
+            "the registry request deadline expired",
+        );
     };
     let encoded = match serde_json::to_vec(request) {
-        Ok(encoded) if u64::try_from(encoded.len()).is_ok_and(|length| length < MAX_WORKER_IPC_BYTES) => encoded,
-        _ => return refusal(503, "worker_unavailable", "the bounded request worker IPC refused the request"),
+        Ok(encoded)
+            if u64::try_from(encoded.len()).is_ok_and(|length| length < MAX_WORKER_IPC_BYTES) =>
+        {
+            encoded
+        }
+        _ => {
+            return refusal(
+                503,
+                "worker_unavailable",
+                "the bounded request worker IPC refused the request",
+            )
+        }
     };
     let executable = match env::current_exe() {
         Ok(executable) => executable,
-        Err(_) => return refusal(503, "worker_unavailable", "the request worker executable is unavailable"),
+        Err(_) => {
+            return refusal(
+                503,
+                "worker_unavailable",
+                "the request worker executable is unavailable",
+            )
+        }
     };
     let worker_group = match WorkerCgroup::create() {
         Ok(group) => group,
-        Err(_) => return refusal(503, "worker_unavailable", "the request worker cgroup is unavailable"),
+        Err(_) => {
+            return refusal(
+                503,
+                "worker_unavailable",
+                "the request worker cgroup is unavailable",
+            )
+        }
     };
     let mut child = match Command::new(executable)
         .arg("--stopped-request-worker")
         .arg(remaining.as_millis().to_string())
-        .env("LAYERX_REGISTRY_BUILDER_CGROUP_ROOT", &worker_group.build_root)
+        .env(
+            "LAYERX_REGISTRY_BUILDER_CGROUP_ROOT",
+            &worker_group.build_root,
+        )
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
     {
         Ok(child) => child,
-        Err(_) => return refusal(503, "worker_unavailable", "the request worker could not start"),
+        Err(_) => {
+            return refusal(
+                503,
+                "worker_unavailable",
+                "the request worker could not start",
+            )
+        }
     };
     let pid = child.id();
     while !process_stopped(pid) {
         if Instant::now() >= deadline {
             let _ = child.kill();
             let _ = child.wait();
-            return refusal(503, "request_deadline_exceeded", "the request worker expired before attachment");
+            return refusal(
+                503,
+                "request_deadline_exceeded",
+                "the request worker expired before attachment",
+            );
         }
         thread::sleep(Duration::from_millis(1));
     }
     if worker_group.attach(pid).is_err() {
         let _ = child.kill();
         let _ = child.wait();
-        return refusal(503, "worker_unavailable", "the request worker could not be attached");
+        return refusal(
+            503,
+            "worker_unavailable",
+            "the request worker could not be attached",
+        );
     }
     let raw_pid = match i32::try_from(pid).ok().and_then(Pid::from_raw) {
         Some(pid) => pid,
-        None => return refusal(503, "worker_unavailable", "the request worker pid is invalid"),
+        None => {
+            return refusal(
+                503,
+                "worker_unavailable",
+                "the request worker pid is invalid",
+            )
+        }
     };
     if kill_process(raw_pid, Signal::CONT).is_err() {
         let _ = child.kill();
         let _ = child.wait();
-        return refusal(503, "worker_unavailable", "the request worker could not continue");
+        return refusal(
+            503,
+            "worker_unavailable",
+            "the request worker could not continue",
+        );
     }
     let mut input = match child.stdin.take() {
         Some(input) => input,
-        None => return refusal(503, "worker_unavailable", "the request worker input is unavailable"),
+        None => {
+            return refusal(
+                503,
+                "worker_unavailable",
+                "the request worker input is unavailable",
+            )
+        }
     };
     let mut output = match child.stdout.take() {
         Some(output) => output,
-        None => return refusal(503, "worker_unavailable", "the request worker output is unavailable"),
+        None => {
+            return refusal(
+                503,
+                "worker_unavailable",
+                "the request worker output is unavailable",
+            )
+        }
     };
     let writer = thread::spawn(move || input.write_all(&encoded));
     let reader = thread::spawn(move || {
         let mut bytes = Vec::new();
-        output.take(MAX_WORKER_IPC_BYTES).read_to_end(&mut bytes).map(|_| bytes)
+        output
+            .take(MAX_WORKER_IPC_BYTES)
+            .read_to_end(&mut bytes)
+            .map(|_| bytes)
     });
     let status = loop {
         match child.try_wait() {
@@ -511,15 +638,28 @@ fn isolated_route(request: &layerx_platform_registry::Request, deadline: Instant
     let _ = writer.join();
     let bytes = reader.join().ok().and_then(Result::ok).unwrap_or_default();
     if status.is_none() {
-        return refusal(503, "request_deadline_exceeded", "the isolated request worker was cancelled at its deadline");
+        return refusal(
+            503,
+            "request_deadline_exceeded",
+            "the isolated request worker was cancelled at its deadline",
+        );
     }
     if !status.is_some_and(|status| status.success())
         || u64::try_from(bytes.len()).map_or(true, |length| length >= MAX_WORKER_IPC_BYTES)
     {
-        return refusal(503, "worker_unavailable", "the bounded request worker refused completion");
+        return refusal(
+            503,
+            "worker_unavailable",
+            "the bounded request worker refused completion",
+        );
     }
-    serde_json::from_slice(&bytes)
-        .unwrap_or_else(|_| refusal(503, "worker_unavailable", "the request worker returned an invalid response"))
+    serde_json::from_slice(&bytes).unwrap_or_else(|_| {
+        refusal(
+            503,
+            "worker_unavailable",
+            "the request worker returned an invalid response",
+        )
+    })
 }
 
 fn serve(config: &Config) -> Result<(), String> {
@@ -620,14 +760,23 @@ fn serve(config: &Config) -> Result<(), String> {
                         },
                     );
                     let response = if Instant::now() >= deadline {
-                        refusal(503, "request_deadline_exceeded", "the registry request deadline expired")
+                        refusal(
+                            503,
+                            "request_deadline_exceeded",
+                            "the registry request deadline expired",
+                        )
                     } else {
                         response
                     };
                     let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
                         return;
                     };
-                    if stream.inner.sock.set_write_timeout(Some(remaining)).is_err() {
+                    if stream
+                        .inner
+                        .sock
+                        .set_write_timeout(Some(remaining))
+                        .is_err()
+                    {
                         return;
                     }
                     let _ = write_response(&mut stream, &response);
@@ -642,7 +791,10 @@ fn serve(config: &Config) -> Result<(), String> {
 fn main() {
     let mut arguments = env::args().skip(1);
     if arguments.next().as_deref() == Some("--stopped-request-worker") {
-        let remaining = arguments.next().and_then(|value| value.parse().ok()).unwrap_or(0);
+        let remaining = arguments
+            .next()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(0);
         if kill_process(rustix::process::getpid(), Signal::STOP).is_err() {
             std::process::exit(3);
         }
@@ -670,9 +822,8 @@ mod tests {
 
     #[test]
     fn deployment_contract_keeps_https_mtls_and_bearer_roles_aligned() {
-        assert!(GATEWAY_DEPLOYMENT.contains(
-            "https://layerx-program-registry.layerx-testnet.svc.cluster.local:9420"
-        ));
+        assert!(GATEWAY_DEPLOYMENT
+            .contains("https://layerx-program-registry.layerx-testnet.svc.cluster.local:9420"));
         for required in [
             "LAYERX_REGISTRY_TLS_CERT_DER",
             "LAYERX_REGISTRY_TLS_KEY_DER",
@@ -731,14 +882,27 @@ mod tests {
         ] {
             assert!(CGROUP_SUPERVISOR_SOURCE.contains(aggregate_boundary));
         }
-        for quota_boundary in ["cgroup.subtree_control", "mkfs.ext4", "-N", "--autoclear", "mountpoint -q", "e2fsck -p"] {
+        for quota_boundary in [
+            "cgroup.subtree_control",
+            "mkfs.ext4",
+            "-N",
+            "--autoclear",
+            "mountpoint -q",
+            "e2fsck -p",
+        ] {
             assert!(PROVISIONER_SOURCE.contains(quota_boundary));
         }
     }
 
     #[test]
     fn request_deadline_cancels_only_the_bounded_worker_and_preserves_listener_liveness() {
-        for boundary in ["registrar_gate: Mutex<()>", "--stopped-request-worker", "worker_group.kill()", "cgroup.kill", "child.wait()"] {
+        for boundary in [
+            "registrar_gate: Mutex<()>",
+            "--stopped-request-worker",
+            "worker_group.kill()",
+            "cgroup.kill",
+            "child.wait()",
+        ] {
             assert!(MAIN_SOURCE.contains(boundary));
         }
         assert!(!MAIN_SOURCE.contains(concat!("std::process::", "abort()")));
@@ -746,14 +910,33 @@ mod tests {
 
     #[test]
     fn delegation_quota_and_open_inode_execution_fail_closed() {
-        for boundary in ["cgroup.subtree_control", "mountpoint -q", "losetup -j", "e2fsck -p", "mkfs.ext4", "-N", "--autoclear", "stat -c %u:%g"] {
+        for boundary in [
+            "cgroup.subtree_control",
+            "mountpoint -q",
+            "losetup -j",
+            "e2fsck -p",
+            "mkfs.ext4",
+            "-N",
+            "--autoclear",
+            "stat -c %u:%g",
+        ] {
             assert!(PROVISIONER_SOURCE.contains(boundary));
         }
-        for boundary in ["CapabilityBoundingSet=CAP_SYS_ADMIN CAP_CHOWN CAP_DAC_OVERRIDE", "ProtectSystem=strict", "ReadWritePaths=/sys/fs/cgroup /var/lib/layerx-program-registry-builds"] {
+        for boundary in [
+            "CapabilityBoundingSet=CAP_SYS_ADMIN CAP_CHOWN CAP_DAC_OVERRIDE",
+            "ProtectSystem=strict",
+            "ReadWritePaths=/sys/fs/cgroup /var/lib/layerx-program-registry-builds",
+        ] {
             assert!(NODE_UNIT.contains(boundary));
         }
         assert!(REGISTRY_DEPLOYMENT.contains("layerx.io/program-registry-boundary: \"v1\""));
-        for boundary in ["NonBlockingLockExclusive", "sync_all", "metadata.dev() != root_device", "fcntl_setfd", "/proc/self/fd/"] {
+        for boundary in [
+            "NonBlockingLockExclusive",
+            "sync_all",
+            "metadata.dev() != root_device",
+            "fcntl_setfd",
+            "/proc/self/fd/",
+        ] {
             assert!(BUILDER_SOURCE.contains(boundary));
         }
     }

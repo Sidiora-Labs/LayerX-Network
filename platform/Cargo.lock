@@ -1322,6 +1322,7 @@ dependencies = [
  "layerx-proof",
  "layerx-sdk",
  "layerx-types",
+ "layerx-wire",
  "rustls",
  "sha2",
 ]
@@ -1455,6 +1456,7 @@ dependencies = [
 name = "layerx-platform-testnet"
 version = "0.1.0"
 dependencies = [
+ "layerx-wire",
  "native-tls",
  "rustls",
  "serde",
@@ -1470,6 +1472,7 @@ dependencies = [
  "ed25519-dalek",
  "getrandom 0.3.4",
  "layerx-platform-gateway",
+ "layerx-wire",
  "native-tls",
  "rustls",
  "serde",
@@ -1572,6 +1575,7 @@ dependencies = [
  "layerx-paxeer-client",
  "layerx-ramp-toolkit",
  "layerx-types",
+ "layerx-wire",
  "native-tls",
  "serde",
  "serde_json",

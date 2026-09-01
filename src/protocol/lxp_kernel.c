@@ -1,6 +1,7 @@
 #include "layerx/lxp_kernel.h"
 
 #include "layerx/lxp_admission.h"
+#include "layerx/lx_asset.h"
 #include "layerx/lxp_crypto.h"
 #include "layerx/lxp_hash.h"
 #include "layerx/programs.h"
@@ -814,7 +815,24 @@ lxp_result lxp_kernel_bind_module_runtime(lxp_kernel *kernel,
     if (kernel == NULL || runtime == NULL || module_id == 0U ||
         module_id > LXP_MODULE_RESERVED_COUNT)
         return LXP_ERR_NON_CANONICAL;
-    if (module_id == LXP_MODULE_PROGRAMS) {
+    if (module_id == LXP_MODULE_ASSET) {
+        lx_asset_runtime *asset_runtime = (lx_asset_runtime *)runtime;
+        if (asset_runtime->accounts == NULL || asset_runtime->assets == NULL ||
+            asset_runtime->asset_count == 0U ||
+            asset_runtime->asset_count > LX_ASSET_REGISTRY_CAPACITY ||
+            asset_runtime->transfer_assets == NULL ||
+            asset_runtime->transfer_asset_count == 0U ||
+            asset_runtime->transfer_asset_count > LX_ASSET_REGISTRY_CAPACITY ||
+            asset_runtime->network_id == 0U ||
+            asset_runtime->protocol_version !=
+                LXP_PROTOCOL_VERSION_OCCUPANCY)
+            return LXP_ERR_NON_CANONICAL;
+        status = lxp_state_store_bind_accounts(kernel->state,
+                                                asset_runtime->accounts);
+        if (status == LXP_OK)
+            status = lxp_state_store_require_account_root(kernel->state);
+        if (status != LXP_OK) return status;
+    } else if (module_id == LXP_MODULE_PROGRAMS) {
         lx_programs_transfer_runtime *programs_runtime =
             (lx_programs_transfer_runtime *)runtime;
         if (programs_runtime->accounts == NULL)
@@ -1207,6 +1225,59 @@ static lxp_result receipt_state_root(const lxp_kernel *kernel,
     (void)memcpy(input + offset, module_root, sizeof(module_root));
     offset += sizeof(module_root);
     return lxp_hash_domain(LXP_DOMAIN_RECEIPT, input, offset, root);
+}
+
+static lxp_result receipt_bind_ledger_projection(
+    lxp_receipt *receipt, const lxp_module_ctx *module_ctx)
+{
+    lxp_ledger_receipt_input input;
+    lxp_receipt ledger;
+    lxp_result status;
+    if (receipt == NULL || module_ctx == NULL)
+        return LXP_ERR_NON_CANONICAL;
+    if (!module_ctx->ledger_receipt_present) {
+        size_t index;
+        if (module_ctx->effects == NULL) return LXP_FATAL_INVARIANT;
+        for (index = 0U; index < module_ctx->effects->count; ++index)
+            if (module_ctx->effects->effects[index].monetary &&
+                module_ctx->effects->effects[index].kind ==
+                    LXP_EFFECT_TRANSFER)
+                return LXP_FATAL_INVARIANT;
+        return LXP_OK;
+    }
+    if (receipt->result_code != LXP_OK ||
+        receipt->module_id != LXP_MODULE_ASSET ||
+        module_ctx->module_id != LXP_MODULE_ASSET ||
+        module_ctx->ledger_receipt.global_sequence !=
+            receipt->global_sequence ||
+        module_ctx->ledger_receipt.timestamp != receipt->timestamp ||
+        lxp_ct_memcmp(module_ctx->ledger_receipt.transaction_id,
+                      receipt->activity_id, 32U) != 0)
+        return LXP_FATAL_INVARIANT;
+    input = module_ctx->ledger_receipt;
+    (void)memcpy(input.previous_state_root,
+                 receipt->previous_state_root, 32U);
+    (void)memcpy(input.resulting_state_root,
+                 receipt->resulting_state_root, 32U);
+    (void)memcpy(input.batch_id, receipt->batch_id, 32U);
+    status = lxp_ledger_receipt_build(&ledger, &input);
+    if (status != LXP_OK) return status;
+    receipt->operation = ledger.operation;
+    (void)memcpy(receipt->asset, ledger.asset, 32U);
+    receipt->amount = ledger.amount;
+    (void)memcpy(receipt->from, ledger.from, 32U);
+    receipt->from_balance_before = ledger.from_balance_before;
+    receipt->from_balance_after = ledger.from_balance_after;
+    receipt->from_sequence = ledger.from_sequence;
+    (void)memcpy(receipt->to, ledger.to, 32U);
+    receipt->to_balance_before = ledger.to_balance_before;
+    receipt->to_balance_after = ledger.to_balance_after;
+    (void)memcpy(receipt->transfer_set_root,
+                 ledger.transfer_set_root, 32U);
+    (void)memcpy(receipt->authorization_hash,
+                 ledger.authorization_hash, 32U);
+    (void)memcpy(receipt->context_hash, ledger.context_hash, 32U);
+    return LXP_OK;
 }
 
 typedef struct legacy_program_outcome_v2 {
@@ -2170,6 +2241,8 @@ lxp_result lxp_kernel_snapshot_apply_prepared(
             receipt->fee_charged, receipt->batch_id, receipt->module_id,
             receipt->module_version, receipt->parameter_version);
     if (status == LXP_OK) receipt->timestamp = execution->batch_timestamp_ms;
+    if (status == LXP_OK && module_ctx_initialized)
+        status = receipt_bind_ledger_projection(receipt, &module_ctx);
     if (status == LXP_OK && module_ctx_initialized) {
         const lxp_program_outcome *outcome =
             lxp_ctx_program_outcome(&module_ctx);
@@ -3535,6 +3608,8 @@ lxp_result lxp_kernel_execute_activity(lxp_kernel *kernel,
             registration->abi_version, execution->parameter_version);
     if (status == LXP_OK)
         receipt->timestamp = execution->batch_timestamp_ms;
+    if (status == LXP_OK && module_ctx_initialized)
+        status = receipt_bind_ledger_projection(receipt, &module_ctx);
     if (status == LXP_OK && programs_call &&
         program_outcome->terminal_kind == LXP_PROGRAM_TERMINAL_SUCCESS)
         (void)memcpy(receipt->transfer_set_root,

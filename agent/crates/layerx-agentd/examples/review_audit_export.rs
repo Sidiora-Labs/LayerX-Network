@@ -1,8 +1,8 @@
 //! Minimal independent reviewer entry point for a daemon-produced audit export.
 
 use layerx_agentd::audit::{verify_chain_material, AuditExport};
-use layerx_proof::export::verify;
 use layerx_proof::checkpoint::SettlementDomain;
+use layerx_proof::export::verify;
 
 fn review_without_daemon(
     export: &AuditExport,

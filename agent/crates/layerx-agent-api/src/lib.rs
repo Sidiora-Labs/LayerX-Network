@@ -1,16 +1,16 @@
 //! Stable contract shared by agent-facing servers and SDKs.
 
+#[path = "error.rs"]
+mod error_contract;
 pub mod generated;
 #[path = "identity.rs"]
 mod identity_contract;
-#[path = "write.rs"]
-mod write_contract;
 #[path = "read.rs"]
 mod read_contract;
 #[path = "stream.rs"]
 mod stream_contract;
-#[path = "error.rs"]
-mod error_contract;
+#[path = "write.rs"]
+mod write_contract;
 
 /// Identity and session contract namespace.
 pub mod identity {
@@ -20,8 +20,8 @@ pub mod identity {
 /// Capability contract namespace.
 pub mod capability {
     pub use crate::identity_contract::{
-        AmountCeiling, CapabilityAttenuate, CapabilityCreate, CapabilityDimensions,
-        CapabilityId, CapabilityList, CapabilityRevoke, ExplicitSet, RateCeiling,
+        AmountCeiling, CapabilityAttenuate, CapabilityCreate, CapabilityDimensions, CapabilityId,
+        CapabilityList, CapabilityRevoke, ExplicitSet, RateCeiling,
     };
 }
 
@@ -35,8 +35,8 @@ pub mod budget {
 /// Preparation contract namespace.
 pub mod prepare {
     pub use crate::write_contract::{
-        CanonicalBytes, DisclosedAmount, Disclosure, IdempotencyRef, PayloadBytes, PrepareRequest,
-        Prepared, PreparationRef, SigningPreimage, TimestampBound,
+        CanonicalBytes, DisclosedAmount, Disclosure, IdempotencyRef, PayloadBytes, PreparationRef,
+        PrepareRequest, Prepared, SigningPreimage, TimestampBound,
     };
 }
 

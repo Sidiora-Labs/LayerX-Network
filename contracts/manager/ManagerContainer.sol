@@ -6,6 +6,9 @@ import {Preinstalls} from "../deployment/Preinstalls.sol";
 import {StaticConfig} from "../config/StaticConfig.sol";
 import {SemverComp} from "../libraries/SemverComp.sol";
 import {SafeCall} from "../libraries/SafeCall.sol";
+import {SafeTransfer} from "../libraries/SafeTransfer.sol";
+import {Constants} from "../libraries/Constants.sol";
+import {ILayerXAssetRegistry} from "../interfaces/ILayerXAssetRegistry.sol";
 import {LayerXComponent} from "../security/LayerXComponent.sol";
 import {
     ManagerUnauthorized,
@@ -19,10 +22,20 @@ import {
 contract ManagerContainer is LayerXComponent {
     address public immutable governanceTimelock;
     address public immutable emergencyCouncil;
+    bytes32 public immutable genesisManifestDigest;
+    bytes32 public immutable genesisCanonicalStateRoot;
+    bytes32 public immutable genesisReceiptRoot;
+    address public immutable usdlToken;
+    bytes32 public immutable usdlAssetId;
+    uint8 public immutable usdlDecimals;
+    uint128 public immutable usdlMinimumDeposit;
+    uint128 public immutable usdlCustodyCap;
     uint192 public currentRelease;
     bytes32 public currentManifestRoot;
     address public migrator;
     bool public initialized;
+    bool public genesisFinalized;
+    bytes32 public deploymentId;
 
     mapping(bytes32 => Preinstalls.ComponentManifest) private manifests;
     mapping(bytes32 => mapping(bytes4 => bool)) private selectorPermission;
@@ -30,6 +43,12 @@ contract ManagerContainer is LayerXComponent {
 
     event ManagerInitialized(bytes32 indexed manifestRoot, bytes32 indexed configHash, uint192 release);
     event MigratorSet(address indexed migrator);
+    event GenesisDeploymentFinalized(
+        bytes32 indexed deploymentId,
+        bytes32 indexed genesisCheckpointId,
+        bytes32 indexed bondedSetCommitment,
+        uint64 bondedSetVersion
+    );
     event SystemReleaseAdvanced(
         bytes32 indexed migrationId, uint192 sourceRelease, uint192 targetRelease, bytes32 configHash
     );
@@ -39,6 +58,14 @@ contract ManagerContainer is LayerXComponent {
     {
         governanceTimelock = config.governanceTimelock;
         emergencyCouncil = config.emergencyCouncil;
+        genesisManifestDigest = config.genesisManifestDigest;
+        genesisCanonicalStateRoot = config.genesisCanonicalStateRoot;
+        genesisReceiptRoot = config.genesisReceiptRoot;
+        usdlToken = config.usdlToken;
+        usdlAssetId = config.usdlAssetId;
+        usdlDecimals = config.usdlDecimals;
+        usdlMinimumDeposit = config.usdlMinimumDeposit;
+        usdlCustodyCap = config.usdlCustodyCap;
         currentRelease = config.releaseVersion;
     }
 
@@ -104,6 +131,71 @@ contract ManagerContainer is LayerXComponent {
         emit SystemReleaseAdvanced(migrationId, source, targetRelease, configHash);
     }
 
+    function finalizeGenesis() external onlyGovernance {
+        if (!initialized || genesisFinalized) revert InvalidManagerConfiguration();
+        address registryAddress = componentForRole(Predeploys.ASSET_REGISTRY);
+        address vaultAddress = componentForRole(Predeploys.VAULT);
+        address bondAddress = componentForRole(Predeploys.GUARANTOR_BOND);
+        address checkpointAddress = componentForRole(Predeploys.CHECKPOINT_REGISTRY);
+        if (migrator != componentForRole(Predeploys.MANAGER_MIGRATOR)) revert InvalidManagerConfiguration();
+
+        ILayerXAssetRegistry.AssetConfig memory asset = ILayerXAssetRegistry(registryAddress).asset(usdlAssetId);
+        SafeCall.CallResult memory decimalsResult =
+            SafeCall.staticCall(usdlToken, abi.encodeWithSelector(bytes4(keccak256("decimals()"))), 50_000, 32);
+        if (
+            !decimalsResult.success || decimalsResult.returnDataSize != 32
+                || abi.decode(decimalsResult.returnData, (uint256)) != usdlDecimals
+        ) revert InvalidManagerConfiguration();
+        if (
+            asset.token != usdlToken || asset.decimals != usdlDecimals || asset.minimumDeposit != usdlMinimumDeposit
+                || asset.custodyCap != usdlCustodyCap || !asset.enabled || asset.paused
+        ) revert InvalidManagerConfiguration();
+
+        IGenesisVault vaultComponent = IGenesisVault(vaultAddress);
+        IGenesisBond bondComponent = IGenesisBond(bondAddress);
+        IGenesisCheckpointRegistry checkpointComponent = IGenesisCheckpointRegistry(checkpointAddress);
+        bytes32 bondedSetCommitment = bondComponent.genesisBondedSetCommitment();
+        uint64 bondedSetVersion = bondComponent.genesisBondedSetVersion();
+        bytes32 genesisCheckpoint = checkpointComponent.genesisCheckpointId();
+        if (
+            vaultComponent.assetRegistry() != registryAddress || vaultComponent.guarantorBond() != bondAddress
+                || bondComponent.vault() != vaultAddress || bondComponent.bondToken() != usdlToken
+                || bondComponent.assetId() != usdlAssetId || bondedSetCommitment == bytes32(0) || bondedSetVersion == 0
+                || bondedSetVersion != bondComponent.membershipVersion() || bondComponent.slashedBalance() != 0
+                || SafeTransfer.balanceOf(usdlToken, bondAddress) != bondComponent.totalBonded()
+                || bondComponent.custodiedValue() != vaultComponent.totalCustodied(usdlAssetId)
+                || checkpointComponent.protocolVersion() != Constants.PROTOCOL_VERSION
+                || checkpointComponent.genesisManifestDigest() != genesisManifestDigest
+                || checkpointComponent.genesisCanonicalStateRoot() != genesisCanonicalStateRoot
+                || checkpointComponent.genesisReceiptRoot() != genesisReceiptRoot || genesisCheckpoint == bytes32(0)
+                || checkpointComponent.derivedGenesisCheckpointId() != genesisCheckpoint
+                || checkpointComponent.staticConfigHash() != staticConfigHash
+        ) revert InvalidManagerConfiguration();
+
+        bytes32 identifier = sha256(
+            abi.encode(
+                "LXP/Paxeer/genesis-deployment/v2",
+                block.chainid,
+                staticConfigHash,
+                currentManifestRoot,
+                genesisManifestDigest,
+                genesisCanonicalStateRoot,
+                genesisReceiptRoot,
+                genesisCheckpoint,
+                bondedSetCommitment,
+                bondedSetVersion,
+                registryAddress,
+                vaultAddress,
+                bondAddress,
+                checkpointAddress
+            )
+        );
+        if (identifier == bytes32(0)) revert InvalidManagerConfiguration();
+        deploymentId = identifier;
+        genesisFinalized = true;
+        emit GenesisDeploymentFinalized(identifier, genesisCheckpoint, bondedSetCommitment, bondedSetVersion);
+    }
+
     function componentForRole(bytes32 role) public view returns (address) {
         if (!initialized) revert ManagerNotInitialized();
         address component = manifests[role].component;
@@ -156,6 +248,9 @@ contract ManagerContainer is LayerXComponent {
         _requireAddress(initialManifests[2], bytes4(keccak256("governance()")), timelock);
         _requireAddress(initialManifests[3], bytes4(keccak256("custodyAuthority()")), timelock);
         _requireAddress(initialManifests[3], bytes4(keccak256("membershipAuthority()")), timelock);
+        _requireAddress(initialManifests[3], bytes4(keccak256("vault()")), initialManifests[2].component);
+        _requireAddress(initialManifests[3], bytes4(keccak256("bondToken()")), usdlToken);
+        _requireBytes32(initialManifests[3], bytes4(keccak256("assetId()")), usdlAssetId);
         _requireAddress(initialManifests[5], bytes4(keccak256("governance()")), timelock);
         _requireAddress(initialManifests[6], bytes4(keccak256("governance()")), timelock);
         _requireAddress(initialManifests[8], bytes4(keccak256("governance()")), timelock);
@@ -213,4 +308,43 @@ contract ManagerContainer is LayerXComponent {
         }
         if (actual != expected) revert InvalidComponent(manifest.role, manifest.component);
     }
+
+    function _requireBytes32(Preinstalls.ComponentManifest calldata manifest, bytes4 selector, bytes32 expected)
+        private
+        view
+    {
+        SafeCall.CallResult memory result =
+            SafeCall.staticCall(manifest.component, abi.encodeWithSelector(selector), 50_000, 32);
+        if (!result.success || result.returnDataSize != 32 || abi.decode(result.returnData, (bytes32)) != expected) {
+            revert InvalidComponent(manifest.role, manifest.component);
+        }
+    }
+}
+
+interface IGenesisVault {
+    function assetRegistry() external view returns (address);
+    function guarantorBond() external view returns (address);
+    function totalCustodied(bytes32 assetId) external view returns (uint256);
+}
+
+interface IGenesisBond {
+    function vault() external view returns (address);
+    function bondToken() external view returns (address);
+    function assetId() external view returns (bytes32);
+    function custodiedValue() external view returns (uint256);
+    function membershipVersion() external view returns (uint64);
+    function totalBonded() external view returns (uint256);
+    function slashedBalance() external view returns (uint256);
+    function genesisBondedSetCommitment() external view returns (bytes32);
+    function genesisBondedSetVersion() external view returns (uint64);
+}
+
+interface IGenesisCheckpointRegistry {
+    function protocolVersion() external view returns (uint16);
+    function genesisManifestDigest() external view returns (bytes32);
+    function genesisCanonicalStateRoot() external view returns (bytes32);
+    function genesisReceiptRoot() external view returns (bytes32);
+    function genesisCheckpointId() external view returns (bytes32);
+    function derivedGenesisCheckpointId() external view returns (bytes32);
+    function staticConfigHash() external view returns (bytes32);
 }

@@ -1,8 +1,6 @@
 //! Compact low-S secp256k1 verification for Paxeer-facing certificates.
 
-use k256::ecdsa::{
-    signature::hazmat::PrehashVerifier as _, RecoveryId, Signature, VerifyingKey,
-};
+use k256::ecdsa::{signature::hazmat::PrehashVerifier as _, RecoveryId, Signature, VerifyingKey};
 use sha3::{Digest as _, Keccak256};
 
 use crate::{SignatureMessage, VerifyError};

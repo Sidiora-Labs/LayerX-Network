@@ -73,8 +73,11 @@ impl RedisProcess {
             .port();
         drop(listener);
         let acl = directory.join("users.acl");
-        fs::write(&acl, "user default off\nuser tap on >tap-secret ~* &* +@all\n")
-            .unwrap_or_else(|error| panic!("test Redis ACL must be written: {error}"));
+        fs::write(
+            &acl,
+            "user default off\nuser tap on >tap-secret ~* &* +@all\n",
+        )
+        .unwrap_or_else(|error| panic!("test Redis ACL must be written: {error}"));
         let config = directory.join("redis.conf");
         fs::write(
             &config,

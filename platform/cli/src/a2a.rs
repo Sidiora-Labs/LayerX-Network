@@ -102,9 +102,7 @@ pub fn serve(
         &tools,
     ));
     let tools = Arc::new(tools);
-    let authorization = Arc::new(crate::install::a2a::read_authorization(
-        authorization_file,
-    )?);
+    let authorization = Arc::new(crate::install::a2a::read_authorization(authorization_file)?);
     let listener =
         TcpListener::bind(address).map_err(|error| format!("could not bind {listen}: {error}"))?;
     let tasks = Arc::new(Mutex::new(BTreeMap::<String, Value>::new()));
@@ -135,14 +133,7 @@ pub fn serve(
                     continue;
                 }
                 let response = match read_request(&mut stream) {
-                    Ok(request) => route(
-                        &runtime,
-                        &tools,
-                        &card,
-                        &tasks,
-                        &authorization,
-                        &request,
-                    ),
+                    Ok(request) => route(&runtime, &tools, &card, &tasks, &authorization, &request),
                     Err(error) => encode(400, &json!({"error": error})),
                 };
                 let _ = write_response(&mut stream, &response);
@@ -159,7 +150,10 @@ pub fn serve(
                 let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
                 let _ = write_response(
                     &mut stream,
-                    &encode(503, &json!({"error": "agent-to-agent service is at capacity"})),
+                    &encode(
+                        503,
+                        &json!({"error": "agent-to-agent service is at capacity"}),
+                    ),
                 );
             }
             Err(TrySendError::Disconnected(_)) => {
@@ -180,9 +174,10 @@ fn route(
 ) -> Response {
     match request.method.as_str() {
         "GET" if CARD_ROUTES.contains(&request.path.as_str()) => encode(200, card),
-        "POST" if !authorized(request, authorization) => {
-            encode(401, &json!({"error": "valid bearer authorization is required"}))
-        }
+        "POST" if !authorized(request, authorization) => encode(
+            401,
+            &json!({"error": "valid bearer authorization is required"}),
+        ),
         "POST" if request.path == "/" => {
             encode(200, &dispatch(runtime, tools, tasks, &request.body))
         }
@@ -355,11 +350,7 @@ fn gateway_state(value: &Value) -> Option<&str> {
         .and_then(Value::as_str)
 }
 
-fn cancel(
-    tasks: &Mutex<BTreeMap<String, Value>>,
-    identifier: Value,
-    parameters: &Value,
-) -> Value {
+fn cancel(tasks: &Mutex<BTreeMap<String, Value>>, identifier: Value, parameters: &Value) -> Value {
     let Some(name) = parameters.get("id").and_then(Value::as_str) else {
         return failure(identifier, -32602, "the request did not name a task");
     };
@@ -384,11 +375,7 @@ fn cancel(
     }
 }
 
-fn fetch(
-    tasks: &Mutex<BTreeMap<String, Value>>,
-    identifier: Value,
-    parameters: &Value,
-) -> Value {
+fn fetch(tasks: &Mutex<BTreeMap<String, Value>>, identifier: Value, parameters: &Value) -> Value {
     let Some(name) = parameters.get("id").and_then(Value::as_str) else {
         return failure(identifier, -32602, "the request did not name a task");
     };
@@ -490,7 +477,10 @@ fn read_request(stream: &mut TcpStream) -> Result<Request, String> {
             return Err("the request contains a malformed header name".into());
         }
         let value = value.trim_matches([' ', '\t']);
-        if value.bytes().any(|byte| byte.is_ascii_control() && byte != b'\t') {
+        if value
+            .bytes()
+            .any(|byte| byte.is_ascii_control() && byte != b'\t')
+        {
             return Err("the request contains a malformed header value".into());
         }
         if name.eq_ignore_ascii_case("content-length") {
@@ -523,9 +513,7 @@ fn read_request(stream: &mut TcpStream) -> Result<Request, String> {
     if !has_host {
         return Err("the request has no host header".into());
     }
-    if method == "POST"
-        && (!has_length || content_type != Some("application/json"))
-    {
+    if method == "POST" && (!has_length || content_type != Some("application/json")) {
         return Err("POST requires one application/json body with an explicit length".into());
     }
     if method != "POST" && length != 0 {
@@ -882,9 +870,7 @@ mod request_boundary_tests {
         let address = listener.local_addr().map_err(|error| error.to_string())?;
         let writer = thread::spawn(move || -> Result<(), String> {
             let mut stream = TcpStream::connect(address).map_err(|error| error.to_string())?;
-            stream
-                .write_all(&raw)
-                .map_err(|error| error.to_string())
+            stream.write_all(&raw).map_err(|error| error.to_string())
         });
         let (mut stream, _) = listener.accept().map_err(|error| error.to_string())?;
         let parsed = read_request(&mut stream).map(|_| ());
@@ -904,7 +890,11 @@ mod request_boundary_tests {
 
     #[test]
     fn rejects_query_aliases_and_oversized_headers() {
-        assert!(parse(b"GET /.well-known/agent-card.json?write=true HTTP/1.1\r\nHost: localhost\r\n\r\n".to_vec()).is_err());
+        assert!(parse(
+            b"GET /.well-known/agent-card.json?write=true HTTP/1.1\r\nHost: localhost\r\n\r\n"
+                .to_vec()
+        )
+        .is_err());
         let mut request = b"GET / HTTP/1.1\r\nHost: localhost\r\nX-Fill: ".to_vec();
         request.extend(std::iter::repeat_n(b'a', super::MAX_HEADER_BYTES));
         request.extend_from_slice(b"\r\n\r\n");

@@ -1042,8 +1042,9 @@ public sealed class ProgramsClient
         try
         {
             var signed = call.SignedActivity; var cursor = new BinaryCursor(signed);
-            if (cursor.U16() != 1 || cursor.U16() != 0x1001 || cursor.U8() != 12) throw new InvalidDataException();
-            cursor.Tag(1); var protocol = cursor.U16(); if (protocol is not (1 or 2)) throw new InvalidDataException();
+            var envelopeVersion = cursor.U16();
+            if (envelopeVersion is not (1 or 2) || cursor.U16() != 0x1001 || cursor.U8() != 12) throw new InvalidDataException();
+            cursor.Tag(1); var protocol = cursor.U16(); if (protocol != envelopeVersion) throw new InvalidDataException();
             cursor.Tag(2); _ = cursor.U32(); cursor.Tag(3);
             if (cursor.U32() != ((uint)ReceiptModuleId << 16 | CallOperation)) throw new InvalidDataException();
             cursor.Tag(4); _ = cursor.Bounded(255, true); cursor.Tag(5); _ = cursor.Bounded(524_288, true);

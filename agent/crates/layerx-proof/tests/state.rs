@@ -8,6 +8,7 @@ use layerx_proof::state::{
 };
 use layerx_wire::encode::Encoder;
 use layerx_wire::hash::{batch_header_digest, receipt_digest};
+use layerx_wire::limits::PROTOCOL_VERSION;
 use sha2::{Digest as _, Sha256};
 
 const PROGRAM_ACCOUNT_VECTORS: &str =
@@ -88,8 +89,11 @@ fn receipt_bytes(
 ) -> Vec<u8> {
     let encode = |signature: Option<[u8; 64]>| {
         let mut encoder = Encoder::new(4096);
-        assert_eq!(encoder.structure_header(0x5201), Ok(()));
-        assert_eq!(encoder.u16(1), Ok(()));
+        assert_eq!(
+            encoder.structure_header_version(0x5201, PROTOCOL_VERSION),
+            Ok(())
+        );
+        assert_eq!(encoder.u16(PROTOCOL_VERSION), Ok(()));
         assert_eq!(encoder.bytes(&activity_id, 32), Ok(()));
         assert_eq!(encoder.u64(10), Ok(()));
         assert_eq!(encoder.bytes(&[0x21; 32], 32), Ok(()));
@@ -138,10 +142,13 @@ fn header_bytes(
     sequencer_id: [u8; 32],
 ) -> Vec<u8> {
     let mut encoder = Encoder::new(354);
-    assert_eq!(encoder.structure_header(0x1701), Ok(()));
+    assert_eq!(
+        encoder.structure_header_version(0x1701, PROTOCOL_VERSION),
+        Ok(())
+    );
     assert_eq!(encoder.u8(15), Ok(()));
     let fields: [(u8, Vec<u8>); 15] = [
-        (1, 1_u16.to_be_bytes().to_vec()),
+        (1, PROTOCOL_VERSION.to_be_bytes().to_vec()),
         (2, 42_u32.to_be_bytes().to_vec()),
         (3, 2_u64.to_be_bytes().to_vec()),
         (4, 7_u64.to_be_bytes().to_vec()),

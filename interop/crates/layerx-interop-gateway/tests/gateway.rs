@@ -81,9 +81,9 @@ fn encode_receipt(fields: &ReceiptFields, signature: Option<[u8; 64]>) -> Vec<u8
     let debit_before = 10_000_u128;
     let credit_before = 20_000_u128;
     let mut bytes = Vec::new();
-    push_u16(&mut bytes, 1);
+    push_u16(&mut bytes, 2);
     push_u16(&mut bytes, 0x5201);
-    push_u16(&mut bytes, 1);
+    push_u16(&mut bytes, 2);
     push_bytes(&mut bytes, &fields.activity_id);
     push_u64(&mut bytes, fields.sequence);
     push_bytes(&mut bytes, &fields.previous_state_root);
@@ -140,8 +140,7 @@ fn adapter_id(name: &str) -> AdapterId {
 }
 
 fn x402_descriptor() -> AdapterDescriptor {
-    let version =
-        SpecVersion::parse("2.0.0").unwrap_or_else(|error| panic!("version: {error}"));
+    let version = SpecVersion::parse("2.0.0").unwrap_or_else(|error| panic!("version: {error}"));
     let spec = PinnedSpec::new(adapter_id("x402"), version, [0x51; 32])
         .unwrap_or_else(|error| panic!("spec: {error}"));
     let conformance = ConformanceSuite::new(adapter_id("x402-v2-vectors"), 96, [0x52; 32])
@@ -231,13 +230,23 @@ fn a_state_changing_translation_refuses_every_unverified_termination() {
     let last = tampered.len() - 1;
     tampered[last] ^= 0x01;
     let rejected = core
-        .settle_with_receipt(&alice, key, &tampered, &material.authorised_batch, &trace, 12)
+        .settle_with_receipt(
+            &alice,
+            key,
+            &tampered,
+            &material.authorised_batch,
+            &trace,
+            12,
+        )
         .map_err(|error| *error.error());
     assert!(
         matches!(rejected, Err(GatewayError::ReceiptRejected(_))),
         "tampered receipt bytes must be rejected, got {rejected:?}"
     );
-    assert_eq!(core.translation(&alice, key), Some(TranslationStatus::Pending));
+    assert_eq!(
+        core.translation(&alice, key),
+        Some(TranslationStatus::Pending)
+    );
 
     let foreign_signer = SigningKey::from_bytes(&[0x99; 32]);
     let foreign_authority = AuthorizedBatch::new(
@@ -262,7 +271,10 @@ fn a_state_changing_translation_refuses_every_unverified_termination() {
         matches!(unauthorised, Err(GatewayError::ReceiptRejected(_))),
         "a receipt outside the authorised batch must be rejected, got {unauthorised:?}"
     );
-    assert_eq!(core.translation(&alice, key), Some(TranslationStatus::Pending));
+    assert_eq!(
+        core.translation(&alice, key),
+        Some(TranslationStatus::Pending)
+    );
 }
 
 #[test]
@@ -290,9 +302,12 @@ fn a_verified_receipt_terminates_the_translation_and_binds_the_audit_chain() {
             14,
         )
         .unwrap_or_else(|error| panic!("settle: {error}"));
-    let receipt_digest = leaf_hash(&material.canonical_receipt)
-        .unwrap_or_else(|error| panic!("digest: {error:?}"));
-    assert_eq!(settled, TranslationStatus::ReceiptVerified { receipt_digest });
+    let receipt_digest =
+        leaf_hash(&material.canonical_receipt).unwrap_or_else(|error| panic!("digest: {error:?}"));
+    assert_eq!(
+        settled,
+        TranslationStatus::ReceiptVerified { receipt_digest }
+    );
 
     let replay = core
         .settle_with_receipt(
@@ -304,7 +319,10 @@ fn a_verified_receipt_terminates_the_translation_and_binds_the_audit_chain() {
             15,
         )
         .unwrap_or_else(|error| panic!("replayed settle: {error}"));
-    assert_eq!(replay, TranslationStatus::ReceiptVerified { receipt_digest });
+    assert_eq!(
+        replay,
+        TranslationStatus::ReceiptVerified { receipt_digest }
+    );
 
     let other = signed_receipt(151, key, 251);
     let conflict = core
@@ -347,24 +365,37 @@ fn idempotency_keys_bind_content_and_replay_the_original() {
         .unwrap_or_else(|error| panic!("replay: {error}"));
     assert_eq!(replay, TranslationStatus::Pending);
 
-    let conflicting =
-        TranslationRequest::new(adapter_id("x402"), TranslationKind::StateChanging, [0x31; 32], [0x43; 32])
-            .unwrap_or_else(|error| panic!("conflicting request: {error}"));
+    let conflicting = TranslationRequest::new(
+        adapter_id("x402"),
+        TranslationKind::StateChanging,
+        [0x31; 32],
+        [0x43; 32],
+    )
+    .unwrap_or_else(|error| panic!("conflicting request: {error}"));
     let conflict = core
         .begin_translation(&alice, &conflicting, &trace, 12)
         .map_err(|error| *error.error());
     assert_eq!(conflict, Err(GatewayError::IdempotencyConflict));
 
-    let rekind =
-        TranslationRequest::new(adapter_id("x402"), TranslationKind::ReadOnly, [0x31; 32], [0x42; 32])
-            .unwrap_or_else(|error| panic!("rekind request: {error}"));
+    let rekind = TranslationRequest::new(
+        adapter_id("x402"),
+        TranslationKind::ReadOnly,
+        [0x31; 32],
+        [0x42; 32],
+    )
+    .unwrap_or_else(|error| panic!("rekind request: {error}"));
     let kind_conflict = core
         .begin_translation(&alice, &rekind, &trace, 13)
         .map_err(|error| *error.error());
     assert_eq!(kind_conflict, Err(GatewayError::IdempotencyConflict));
 
     assert_eq!(
-        TranslationRequest::new(adapter_id("x402"), TranslationKind::ReadOnly, [0; 32], [0x42; 32]),
+        TranslationRequest::new(
+            adapter_id("x402"),
+            TranslationKind::ReadOnly,
+            [0; 32],
+            [0x42; 32]
+        ),
         Err(GatewayError::InvalidTranslation),
         "the reserved zero idempotency key must be refused"
     );
@@ -377,8 +408,13 @@ fn principals_are_isolated_across_every_gateway_surface() {
     let mallory = principal("mallory");
     let trace = TraceId::mint([4; 16]);
     let key = [0x41; 32];
-    core.begin_translation(&alice, &request(TranslationKind::StateChanging, 0x41), &trace, 10)
-        .unwrap_or_else(|error| panic!("begin: {error}"));
+    core.begin_translation(
+        &alice,
+        &request(TranslationKind::StateChanging, 0x41),
+        &trace,
+        10,
+    )
+    .unwrap_or_else(|error| panic!("begin: {error}"));
 
     assert_eq!(core.translation(&mallory, key), None);
     let material = signed_receipt(160, key, 77);
@@ -397,10 +433,18 @@ fn principals_are_isolated_across_every_gateway_surface() {
         Err(GatewayError::UnknownTranslation),
         "a principal must not reach another principal's translation"
     );
-    assert_eq!(core.translation(&alice, key), Some(TranslationStatus::Pending));
+    assert_eq!(
+        core.translation(&alice, key),
+        Some(TranslationStatus::Pending)
+    );
 
     let same_key = core
-        .begin_translation(&mallory, &request(TranslationKind::StateChanging, 0x41), &trace, 12)
+        .begin_translation(
+            &mallory,
+            &request(TranslationKind::StateChanging, 0x41),
+            &trace,
+            12,
+        )
         .unwrap_or_else(|error| panic!("independent begin: {error}"));
     assert_eq!(
         same_key,
@@ -431,8 +475,13 @@ fn read_only_translations_complete_without_receipts_but_cannot_claim_settlement(
     let alice = principal("alice");
     let trace = TraceId::mint([5; 16]);
     let key = [0x51; 32];
-    core.begin_translation(&alice, &request(TranslationKind::ReadOnly, 0x51), &trace, 10)
-        .unwrap_or_else(|error| panic!("begin: {error}"));
+    core.begin_translation(
+        &alice,
+        &request(TranslationKind::ReadOnly, 0x51),
+        &trace,
+        10,
+    )
+    .unwrap_or_else(|error| panic!("begin: {error}"));
     let material = signed_receipt(170, key, 5);
     let misclaimed = core
         .settle_with_receipt(
@@ -462,8 +511,13 @@ fn refusals_are_honest_terminal_states() {
     let alice = principal("alice");
     let trace = TraceId::mint([6; 16]);
     let key = [0x61; 32];
-    core.begin_translation(&alice, &request(TranslationKind::StateChanging, 0x61), &trace, 10)
-        .unwrap_or_else(|error| panic!("begin: {error}"));
+    core.begin_translation(
+        &alice,
+        &request(TranslationKind::StateChanging, 0x61),
+        &trace,
+        10,
+    )
+    .unwrap_or_else(|error| panic!("begin: {error}"));
     let refused = core
         .refuse_translation(&alice, key, &trace, 11)
         .unwrap_or_else(|error| panic!("refuse: {error}"));
@@ -481,7 +535,10 @@ fn refusals_are_honest_terminal_states() {
         )
         .map_err(|error| *error.error());
     assert_eq!(closed, Err(GatewayError::TranslationClosed));
-    assert_eq!(core.translation(&alice, key), Some(TranslationStatus::Refused));
+    assert_eq!(
+        core.translation(&alice, key),
+        Some(TranslationStatus::Refused)
+    );
 }
 
 #[test]
@@ -495,8 +552,13 @@ fn traces_propagate_onto_audits_errors_and_boundary_headers() {
         "a well-formed inbound trace must cross the boundary unchanged"
     );
     let key = [0x71; 32];
-    core.begin_translation(&alice, &request(TranslationKind::StateChanging, 0x71), &begin_trace, 10)
-        .unwrap_or_else(|error| panic!("begin: {error}"));
+    core.begin_translation(
+        &alice,
+        &request(TranslationKind::StateChanging, 0x71),
+        &begin_trace,
+        10,
+    )
+    .unwrap_or_else(|error| panic!("begin: {error}"));
 
     let settle_trace = TraceId::mint([8; 16]);
     let material = signed_receipt(190, key, 12);

@@ -1,11 +1,15 @@
-#include "layerx/lxp_genesis.h"
+#include "layerx/lxp_genesis_builder.h"
 
+#include "layerx/lxp_crypto.h"
 #include "layerx/lxp_hash.h"
 #include "layerx/lxp_kernel.h"
-#include "layerx/programs.h"
+#include "layerx/lxp_ledger.h"
+#include "layerx/lxp_state.h"
 
 #include <openssl/evp.h>
 #include <string.h>
+
+#define REQUIRE(condition) do { if (!(condition)) return 1; } while (0)
 
 static int public_key_for(
     const uint8_t private_key[32], uint8_t public_key[32])
@@ -13,229 +17,223 @@ static int public_key_for(
     EVP_PKEY *key = EVP_PKEY_new_raw_private_key(
         EVP_PKEY_ED25519, NULL, private_key, 32U);
     size_t length = 32U;
-    int ok = key != NULL && EVP_PKEY_get_raw_public_key(
+    int valid = key != NULL && EVP_PKEY_get_raw_public_key(
         key, public_key, &length) == 1 && length == 32U;
     EVP_PKEY_free(key);
-    return ok ? 0 : 1;
+    return valid ? 0 : 1;
 }
 
-static int sign_raw(
-    const uint8_t private_key[32], const uint8_t *message,
-    size_t message_length, uint8_t signature[64])
+static void draft_manifest(lxp_genesis_manifest *draft)
 {
-    EVP_PKEY *key = EVP_PKEY_new_raw_private_key(
-        EVP_PKEY_ED25519, NULL, private_key, 32U);
-    EVP_MD_CTX *context = EVP_MD_CTX_new();
-    size_t signature_length = 64U;
-    int ok = key != NULL && context != NULL &&
-        EVP_DigestSignInit(context, NULL, NULL, NULL, key) == 1 &&
-        EVP_DigestSign(context, signature, &signature_length,
-                       message, message_length) == 1 &&
-        signature_length == 64U;
-    EVP_MD_CTX_free(context);
-    EVP_PKEY_free(key);
-    return ok ? 0 : 1;
+    static const uint8_t parameter_key[32] = {
+        'p','a','r','a','m','e','t','e','r','-','v','e','r','s','i','o','n'
+    };
+    (void)memset(draft, 0, sizeof(*draft));
+    draft->protocol_version = LXP_PROTOCOL_VERSION;
+    draft->network_id = 42U;
+    draft->genesis_timestamp_ms = UINT64_C(1700000000000);
+    draft->parameter_count = 1U;
+    draft->parameters[0].module_id = LXP_MODULE_GOVERNANCE;
+    (void)memcpy(draft->parameters[0].key, parameter_key,
+                 sizeof(parameter_key));
+    draft->parameters[0].value[31] = 1U;
+    draft->guarantor_count = 1U;
+    draft->guarantors[0].guarantor_id[0] = 1U;
+    draft->guarantors[0].public_key[0] = 2U;
+    draft->guarantors[0].public_key[32] = 3U;
+    draft->guarantors[0].bond = (lxp_u128){0U, 0U};
 }
 
-static lxp_result checkpoint_id(
-    uint32_t network_id, const uint8_t state_root[32], uint8_t output[32])
+static void programs_parameters(
+    const uint8_t signer_public_key[32], const uint8_t asset_id[32],
+    lx_programs_metering_schedule *metering,
+    lx_programs_fee_genesis_parameters *fees)
 {
-    uint8_t preimage[36];
-    preimage[0] = (uint8_t)(network_id >> 24U);
-    preimage[1] = (uint8_t)(network_id >> 16U);
-    preimage[2] = (uint8_t)(network_id >> 8U);
-    preimage[3] = (uint8_t)network_id;
-    (void)memcpy(preimage + 4U, state_root, 32U);
-    return lxp_hash_domain(
-        LXP_DOMAIN_CHECKPOINT_CERTIFICATE,
-        preimage, sizeof(preimage), output);
+    (void)memset(metering, 0, sizeof(*metering));
+    metering->version = 1U;
+    metering->coefficients[0] = 1U;
+    metering->coefficients[1] = 1U;
+    metering->coefficients[2] = 1U;
+    metering->coefficients[3] = 1U;
+    metering->coefficients[4] = 1U;
+    metering->coefficients[5] = 8U;
+    metering->coefficients[6] = 8U;
+    metering->coefficients[7] = 64U;
+    metering->coefficients[8] = 8U;
+    metering->activation_batch = 1U;
+    metering->authority_kind = LX_PROGRAMS_METERING_AUTHORITY_GENESIS;
+    (void)lxp_hash_payload(signer_public_key, 32U,
+                           metering->authority_digest);
+    (void)memset(fees, 0, sizeof(*fees));
+    fees->schedule = (lx_programs_fee_schedule){
+        1U, 1U, 1U, 2U, 4U, 1U, 1U, 100U
+    };
+    (void)memcpy(fees->occupancy_asset_id, asset_id, 32U);
+    fees->target_occupancy_byte_batches = 100U;
+    fees->response_denominator = 1U;
+    fees->maximum_change_numerator = 1U;
+    fees->maximum_change_denominator = 10U;
+    fees->minimum_fee_units_per_occupancy_byte_batch = 1U;
+    fees->maximum_fee_units_per_occupancy_byte_batch = 1000U;
+}
+
+static int zero_supply_accounts(const lxp_genesis_manifest *manifest,
+                                const uint8_t asset_id[32])
+{
+    bool has_fees = false;
+    bool has_reserve = false;
+    bool has_withdrawals = false;
+    size_t index;
+    if (manifest->account_count != LXP_GENESIS_FRESH_SYSTEM_ACCOUNT_COUNT)
+        return 1;
+    for (index = 0U; index < manifest->account_count; ++index) {
+        const lxp_genesis_account *account = &manifest->accounts[index];
+        if (memcmp(account->asset_id, asset_id, 32U) != 0 ||
+            !lxp_u128_is_zero(account->balance) || account->locked ||
+            !lxp_ct_is_zero(account->parent_account_id, 32U))
+            return 1;
+        if (account->subaccount_kind == LX_ACCOUNT_SYSTEM_FEES)
+            has_fees = true;
+        else if (account->subaccount_kind ==
+                 LX_ACCOUNT_SYSTEM_PAXEER_RESERVE)
+            has_reserve = true;
+        else if (account->subaccount_kind ==
+                 LX_ACCOUNT_SYSTEM_PAXEER_WITHDRAWALS)
+            has_withdrawals = true;
+        else
+            return 1;
+    }
+    return has_fees && has_reserve && has_withdrawals ? 0 : 1;
 }
 
 int main(void)
 {
     static const uint8_t signer_private_key[32] = {7U};
-    static uint8_t arena_bytes[1048576U];
-    static uint8_t encoded_copy[LXP_GENESIS_MAX_ENCODED_BYTES];
+    static uint8_t arena_bytes[8388608U];
+    static lxp_genesis_manifest draft;
     static lxp_genesis_manifest manifest;
     static lxp_genesis_manifest decoded;
-    lxp_arena arena;
-    lxp_byte_span preimage;
-    lxp_byte_span encoded;
-    lxp_byte_span reencoded;
-    lxp_genesis_registration registration;
+    static lxp_genesis_manifest changed;
+    uint8_t signer_public_key[32];
+    uint8_t asset_id[32] = {0x85U};
+    uint8_t registration_bytes[LXP_GENESIS_REGISTRATION_BYTES];
+    uint8_t expected_receipt_root[32];
+    lxp_snapshot_manifest_record snapshot_manifest;
+    lxp_snapshot_manifest_record changed_snapshot;
+    lxp_genesis_bootstrap_registration registration;
+    lxp_genesis_bootstrap_registration decoded_registration;
     lx_programs_metering_schedule metering;
-    lx_programs_fee_genesis_parameters fee_genesis;
-    lxp_kernel projected;
+    lx_programs_fee_genesis_parameters fee_parameters;
+    lxp_state_store state;
+    lxp_state_journal journal;
+    lxp_kernel kernel;
+    lx_account_registry accounts;
+    lxp_byte_span encoded_manifest;
+    lxp_byte_span snapshot;
+    lxp_arena arena;
     bool enabled = false;
-    size_t encoded_length;
 
-    if (lxp_arena_init(&arena, arena_bytes, sizeof(arena_bytes)) != LXP_OK)
-        return 1;
-    (void)memset(&manifest, 0, sizeof(manifest));
-    manifest.protocol_version = LXP_PROTOCOL_VERSION;
-    manifest.network_id = 42U;
-    manifest.genesis_timestamp_ms = 1700000000000U;
-    manifest.parameter_count = 2U;
-    manifest.parameters[0].module_id = 1U;
-    manifest.parameters[0].key[0] = 1U;
-    manifest.parameters[0].value[0] = 11U;
-    manifest.parameters[1].module_id = 2U;
-    manifest.parameters[1].key[0] = 1U;
-    manifest.parameters[1].value[0] = 12U;
-    manifest.guarantor_count = 2U;
-    manifest.guarantors[0].guarantor_id[0] = 1U;
-    manifest.guarantors[0].public_key[0] = 2U;
-    manifest.guarantors[0].bond = (lxp_u128){0U, 100U};
-    manifest.guarantors[1].guarantor_id[0] = 2U;
-    manifest.guarantors[1].public_key[0] = 3U;
-    manifest.guarantors[1].bond = (lxp_u128){0U, 100U};
-    manifest.account_count = 2U;
-    manifest.accounts[0].asset_id[0] = 1U;
-    manifest.accounts[0].account_id[0] = 1U;
-    manifest.accounts[0].balance = (lxp_u128){0U, 700U};
-    manifest.accounts[1].asset_id[0] = 1U;
-    manifest.accounts[1].account_id[0] = 2U;
-    manifest.accounts[1].balance = (lxp_u128){0U, 300U};
-    manifest.accounts[1].locked = true;
-    manifest.accounts[1].subaccount_kind = 4U;
-    manifest.accounts[1].parent_account_id[0] = 1U;
-    manifest.module_value_count = 1U;
-    manifest.module_values[0].module_id = 1U;
-    manifest.module_values[0].key[0] = 1U;
-    manifest.module_values[0].value[0] = 9U;
-    manifest.module_values[0].value_length = 1U;
-    if (public_key_for(
-            signer_private_key, manifest.signer_public_key) != 0)
-        return 1;
-    (void)memset(&metering, 0, sizeof(metering));
-    metering.version = 1U;
-    metering.coefficients[0] = 1U;
-    metering.coefficients[1] = 1U;
-    metering.coefficients[2] = 1U;
-    metering.coefficients[3] = 1U;
-    metering.coefficients[4] = 1U;
-    metering.coefficients[5] = 8U;
-    metering.coefficients[6] = 8U;
-    metering.coefficients[7] = 64U;
-    metering.coefficients[8] = 8U;
-    metering.activation_batch = 1U;
-    metering.authority_kind = LX_PROGRAMS_METERING_AUTHORITY_GENESIS;
-    (void)memset(&fee_genesis, 0, sizeof(fee_genesis));
-    fee_genesis.schedule = (lx_programs_fee_schedule){
-        1U, 1U, 1U, 2U, 4U, 1U, 1U, 100U
-    };
-    fee_genesis.occupancy_asset_id[0] = 1U;
-    fee_genesis.target_occupancy_byte_batches = 100U;
-    fee_genesis.response_denominator = 1U;
-    fee_genesis.maximum_change_numerator = 1U;
-    fee_genesis.maximum_change_denominator = 10U;
-    fee_genesis.minimum_fee_units_per_occupancy_byte_batch = 1U;
-    fee_genesis.maximum_fee_units_per_occupancy_byte_batch = 1000U;
-    if (lxp_hash_payload(manifest.signer_public_key, 32U,
-                         metering.authority_digest) != LXP_OK ||
-        lxp_programs_metering_genesis_append(&manifest, &metering) != LXP_OK ||
-        lxp_programs_fee_genesis_append(&manifest, &fee_genesis) != LXP_OK ||
-        lxp_genesis_state_root(
-            &manifest, &arena, manifest.genesis_state_root) != LXP_OK ||
-        checkpoint_id(
-            manifest.network_id, manifest.genesis_state_root,
-            manifest.paxeer_genesis_checkpoint_id) != LXP_OK ||
-        lxp_genesis_encode(
-            &manifest, false, &arena, &preimage) != LXP_OK ||
-        sign_raw(signer_private_key, preimage.bytes, preimage.length,
-                 manifest.signature) != 0 ||
-        lxp_arena_reset(&arena, 0U) != LXP_OK ||
-        lxp_genesis_encode(
-            &manifest, true, &arena, &encoded) != LXP_OK ||
-        encoded.length > sizeof(encoded_copy))
-        return 1;
-    encoded_length = encoded.length;
-    (void)memcpy(encoded_copy, encoded.bytes, encoded_length);
-    if (lxp_genesis_parse(
-            encoded_copy, encoded_length,
-            LXP_GENESIS_INPUT_MANIFEST, &decoded) != LXP_OK ||
-        lxp_genesis_verify_signature(&decoded, &arena) != LXP_OK ||
-        lxp_programs_metering_genesis_validate(&decoded) != LXP_OK ||
-        lxp_programs_fee_genesis_validate(&decoded) != LXP_OK ||
-        decoded.accounts[1].subaccount_kind != 4U ||
-        lxp_arena_reset(&arena, 0U) != LXP_OK ||
-        lxp_genesis_encode(
-            &decoded, true, &arena, &reencoded) != LXP_OK ||
-        reencoded.length != encoded_length ||
-        memcmp(reencoded.bytes, encoded_copy, encoded_length) != 0 ||
-        lxp_genesis_parse(
-            encoded_copy, encoded_length,
-            LXP_GENESIS_INPUT_DATABASE, &decoded) != LXP_ERR_NON_CANONICAL)
-        return 1;
-    if (lxp_genesis_parse(
-            encoded_copy, encoded_length,
-            LXP_GENESIS_INPUT_MANIFEST, &decoded) != LXP_OK ||
-        lxp_arena_reset(&arena, 0U) != LXP_OK)
-        return 1;
-    (void)memset(&projected, 0, sizeof(projected));
-    if (lxp_programs_metering_genesis_project(
-            &decoded, &arena, &projected) != LXP_OK ||
-        lxp_programs_fee_genesis_project(
-            &decoded, &arena, &projected) != LXP_OK ||
-        projected.module_kv_count != 4U)
-        return 1;
-    {
-        size_t index;
-        size_t metering_index = projected.module_kv_count;
-        uint8_t preserved;
-        for (index = 0U; index < projected.module_kv_count; ++index)
-            if (projected.module_kv[index].value_length ==
-                    LX_PROGRAMS_METERING_RECORD_BYTES &&
-                memcmp(projected.module_kv[index].value, "LXMR1", 5U) == 0) {
-                metering_index = index;
-                break;
-            }
-        if (metering_index == projected.module_kv_count) return 1;
-        projected.module_kv[metering_index]
-            .value[LX_PROGRAMS_METERING_RECORD_BYTES - 1U] ^= 1U;
-        preserved = projected.module_kv[metering_index]
-            .value[LX_PROGRAMS_METERING_RECORD_BYTES - 1U];
-        if (lxp_programs_metering_genesis_project(
-                &decoded, &arena, &projected) == LXP_OK ||
-            projected.module_kv_count != 4U ||
-            projected.module_kv[metering_index]
-                .value[LX_PROGRAMS_METERING_RECORD_BYTES - 1U] != preserved)
-            return 1;
-    }
-    {
-        size_t index;
-        bool corrupted = false;
-        for (index = 0U; index < decoded.module_value_count; ++index) {
-            if (decoded.module_values[index].value_length ==
-                    LX_PROGRAMS_METERING_RECORD_BYTES &&
-                memcmp(decoded.module_values[index].value, "LXMR1", 5U) == 0) {
-                decoded.module_values[index]
-                    .value[LX_PROGRAMS_METERING_RECORD_BYTES - 1U] ^= 1U;
-                corrupted = true;
-                break;
-            }
-        }
-        if (!corrupted ||
-            lxp_programs_metering_genesis_validate(&decoded) == LXP_OK)
-            return 1;
-    }
+    REQUIRE(public_key_for(signer_private_key, signer_public_key) == 0);
+    draft_manifest(&draft);
+    programs_parameters(signer_public_key, asset_id, &metering,
+                        &fee_parameters);
+    REQUIRE(lxp_arena_init(&arena, arena_bytes, sizeof(arena_bytes)) == LXP_OK);
+    REQUIRE(lxp_genesis_build_fresh_empty(
+        &draft, asset_id, &metering, &fee_parameters, signer_private_key,
+        &arena, &manifest, &snapshot_manifest, &encoded_manifest,
+        &snapshot) == LXP_OK);
+    REQUIRE(zero_supply_accounts(&manifest, asset_id) == 0);
+    REQUIRE(!lxp_ct_is_zero(manifest.genesis_state_root, 32U));
+    REQUIRE(!lxp_ct_is_zero(manifest.signature, 64U));
+    REQUIRE(memcmp(manifest.signer_public_key, signer_public_key, 32U) == 0);
+    REQUIRE(lxp_genesis_receipt_state_root(
+        manifest.network_id, manifest.genesis_state_root,
+        expected_receipt_root) == LXP_OK);
+    REQUIRE(memcmp(manifest.genesis_receipt_state_root,
+                   expected_receipt_root, 32U) == 0);
+    REQUIRE(memcmp(snapshot_manifest.canonical_state_root,
+                   manifest.genesis_state_root, 32U) == 0);
+    REQUIRE(memcmp(snapshot_manifest.receipt_state_root,
+                   expected_receipt_root, 32U) == 0);
+    REQUIRE(memcmp(snapshot_manifest.canonical_state_root,
+                   snapshot_manifest.receipt_state_root, 32U) != 0);
+    REQUIRE(lxp_genesis_parse(encoded_manifest.bytes, encoded_manifest.length,
+                              LXP_GENESIS_INPUT_MANIFEST, &decoded) == LXP_OK);
+    REQUIRE(memcmp(&decoded, &manifest, sizeof(manifest)) == 0);
+    REQUIRE(lxp_genesis_verify_signature(&decoded, &arena) == LXP_OK);
+    REQUIRE(lxp_programs_metering_genesis_validate(&decoded) == LXP_OK);
+    REQUIRE(lxp_programs_fee_genesis_validate(&decoded) == LXP_OK);
+
+    REQUIRE(lx_account_registry_init(&accounts) == LXP_OK);
+    REQUIRE(lxp_state_store_init(&state, 1U) == LXP_OK);
+    REQUIRE(lxp_state_store_bind_accounts(&state, &accounts) == LXP_OK);
+    REQUIRE(lxp_kernel_create(&kernel, &state, &journal, &manifest, 1U) ==
+            LXP_OK);
+    REQUIRE(lxp_kernel_register_module(
+        &kernel, programs_module_registration_v4()) == LXP_OK);
+    REQUIRE(lxp_snapshot_load(snapshot.bytes, snapshot.length,
+                              &snapshot_manifest, &kernel) == LXP_OK);
+    REQUIRE(accounts.count == LXP_GENESIS_FRESH_SYSTEM_ACCOUNT_COUNT);
+    REQUIRE(memcmp(kernel.current_state_root,
+                   snapshot_manifest.receipt_state_root, 32U) == 0);
+
     (void)memset(&registration, 0, sizeof(registration));
     registration.network_id = manifest.network_id;
-    (void)memcpy(registration.checkpoint_id,
-                 manifest.paxeer_genesis_checkpoint_id, 32U);
+    (void)memcpy(registration.settlement_anchor,
+                 manifest.genesis_receipt_state_root, 32U);
     (void)memcpy(registration.state_root,
-                 manifest.genesis_state_root, 32U);
+                 manifest.genesis_receipt_state_root, 32U);
     registration.finalised = true;
-    if (lxp_genesis_accept(
-            &manifest, &registration, false,
-            &arena, &enabled) != LXP_ERR_ROOT_MISMATCH || enabled ||
-        lxp_genesis_main(
-            encoded_copy, encoded_length, &registration, true,
-            &arena, &enabled) != LXP_OK || !enabled)
-        return 1;
-    encoded_copy[encoded_length - 1U] ^= 1U;
-    return lxp_genesis_parse(
-        encoded_copy, encoded_length, LXP_GENESIS_INPUT_MANIFEST,
-        &decoded) == LXP_OK &&
-        lxp_genesis_verify_signature(&decoded, &arena) == LXP_OK ? 1 : 0;
+    REQUIRE(lxp_genesis_registration_encode(
+        &registration, registration_bytes) == LXP_OK);
+    REQUIRE(lxp_genesis_registration_parse(
+        registration_bytes, sizeof(registration_bytes),
+        &decoded_registration) == LXP_OK);
+    REQUIRE(memcmp(&decoded_registration, &registration,
+                   sizeof(registration)) == 0);
+    REQUIRE(lxp_genesis_bootstrap_verify(
+        &manifest, &decoded_registration, 42U, true, &snapshot_manifest,
+        &kernel, &arena, &enabled) == LXP_OK && enabled);
+
+    enabled = true;
+    REQUIRE(lxp_genesis_bootstrap_verify(
+        &manifest, &decoded_registration, 42U, false, &snapshot_manifest,
+        &kernel, &arena, &enabled) != LXP_OK && !enabled);
+    enabled = true;
+    REQUIRE(lxp_genesis_bootstrap_verify(
+        &manifest, &decoded_registration, 43U, true, &snapshot_manifest,
+        &kernel, &arena, &enabled) != LXP_OK && !enabled);
+    changed_snapshot = snapshot_manifest;
+    changed_snapshot.receipt_state_root[0] ^= 1U;
+    enabled = true;
+    REQUIRE(lxp_genesis_bootstrap_verify(
+        &manifest, &decoded_registration, 42U, true, &changed_snapshot,
+        &kernel, &arena, &enabled) != LXP_OK && !enabled);
+    changed_snapshot = snapshot_manifest;
+    changed_snapshot.canonical_state_root[0] ^= 1U;
+    enabled = true;
+    REQUIRE(lxp_genesis_bootstrap_verify(
+        &manifest, &decoded_registration, 42U, true, &changed_snapshot,
+        &kernel, &arena, &enabled) != LXP_OK && !enabled);
+
+    changed = manifest;
+    changed.parameters[0].value[31] = 2U;
+    REQUIRE(lxp_genesis_verify_signature(&changed, &arena) != LXP_OK);
+    changed = manifest;
+    changed.module_values[0].value[0] ^= 1U;
+    REQUIRE(lxp_genesis_verify_signature(&changed, &arena) != LXP_OK);
+    changed = manifest;
+    changed.accounts[0].balance.lo = 1U;
+    REQUIRE(lxp_genesis_verify_signature(&changed, &arena) != LXP_OK);
+    decoded_registration.network_id = 43U;
+    enabled = true;
+    REQUIRE(lxp_genesis_bootstrap_verify(
+        &manifest, &decoded_registration, 42U, true, &snapshot_manifest,
+        &kernel, &arena, &enabled) != LXP_OK && !enabled);
+    registration_bytes[81] = 0U;
+    REQUIRE(lxp_genesis_registration_parse(
+        registration_bytes, sizeof(registration_bytes),
+        &decoded_registration) != LXP_OK);
+    REQUIRE(lxp_state_store_destroy(&state) == LXP_OK);
+    return 0;
 }

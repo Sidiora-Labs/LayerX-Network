@@ -84,13 +84,7 @@ fn reading_a_missing_account_is_a_machine_readable_refusal() {
     let cli = Cli::new();
     assert!(cli.bind_emulator(emulator.endpoint()).status.success());
 
-    let output = cli.run(&[
-        "--json",
-        "account",
-        "get",
-        "--did",
-        "did:layerx:absent",
-    ]);
+    let output = cli.run(&["--json", "account", "get", "--did", "did:layerx:absent"]);
     assert!(!output.status.success());
     let value = error_envelope(&output);
     assert_eq!(value.pointer("/ok").and_then(Value::as_bool), Some(false));
@@ -115,4 +109,115 @@ fn human_and_machine_output_agree_on_the_active_environment() {
     );
     // The human presentation is not JSON; only the --json form is machine-readable.
     assert!(serde_json::from_slice::<Value>(&human.stdout).is_err());
+}
+
+#[test]
+fn payment_test_quotes_and_commits_once_through_the_live_emulator() {
+    let emulator = Emulator::start();
+    let cli = Cli::new();
+    assert!(cli.bind_emulator(emulator.endpoint()).status.success());
+
+    let seed = "42".repeat(32);
+    let imported = cli.run_with_stdin(
+        &[
+            "--json",
+            "key",
+            "import",
+            "move-source",
+            "--did",
+            "did:layerx:move-source",
+        ],
+        &seed,
+    );
+    assert!(
+        imported.status.success(),
+        "source import should succeed: {}",
+        String::from_utf8_lossy(&imported.stderr)
+    );
+    let destination_key = cli.run(&[
+        "--json",
+        "key",
+        "create",
+        "move-destination",
+        "--did",
+        "did:layerx:move-destination",
+    ]);
+    assert!(destination_key.status.success());
+    let source_account = cli.run(&[
+        "--json",
+        "account",
+        "create",
+        "--key",
+        "move-source",
+        "--initial-amount",
+        "1000",
+    ]);
+    assert!(source_account.status.success());
+    let destination_account = cli.run(&[
+        "--json",
+        "account",
+        "create",
+        "--key",
+        "move-destination",
+        "--initial-amount",
+        "0",
+    ]);
+    assert!(destination_account.status.success());
+
+    let payment = cli.run(&[
+        "--json",
+        "payment",
+        "test",
+        "--from",
+        "agent:did:layerx:move-source:main",
+        "--to",
+        "agent:did:layerx:move-destination:main",
+        "--currency",
+        "LXP",
+        "--amount",
+        "250",
+        "--idempotency-key",
+        "cli-payment-test-0001",
+    ]);
+    assert!(
+        payment.status.success(),
+        "payment should succeed: {}",
+        String::from_utf8_lossy(&payment.stderr)
+    );
+    let payment = envelope(&payment);
+    assert_eq!(string_field(&payment, "/kind"), "payment.started");
+    assert_eq!(string_field(&payment, "/data/journey/result/state"), "done");
+    assert!(
+        payment
+            .pointer("/data/journey/result/evidence/0/verification")
+            .and_then(Value::as_str)
+            == Some("receipt-verified")
+    );
+
+    let source = envelope(&cli.run(&[
+        "--json",
+        "account",
+        "get",
+        "--did",
+        "did:layerx:move-source",
+    ]));
+    let destination = envelope(&cli.run(&[
+        "--json",
+        "account",
+        "get",
+        "--did",
+        "did:layerx:move-destination",
+    ]));
+    assert_eq!(
+        source
+            .pointer("/data/account/balance_lo")
+            .and_then(Value::as_u64),
+        Some(750)
+    );
+    assert_eq!(
+        destination
+            .pointer("/data/account/balance_lo")
+            .and_then(Value::as_u64),
+        Some(250)
+    );
 }

@@ -11,6 +11,7 @@
 #include "layerx/lxp_authority.h"
 #include "layerx/lxp_batch.h"
 #include "layerx/lxp_crypto.h"
+#include "layerx/lxp_genesis.h"
 #include "layerx/lxp_hash.h"
 #include "layerx/lxp_identity.h"
 #include "layerx/lxp_kernel.h"
@@ -64,6 +65,7 @@ struct platform_emulator {
     lx_asset_registry assets;
     lx_asset_record native_asset;
     lxp_transfer_asset_state native_asset_state;
+    lx_asset_runtime asset_runtime;
     lxp_kernel kernel;
     lxp_fee_params fee_parameters;
     lxp_arena arena;
@@ -83,23 +85,6 @@ struct platform_emulator {
     uint8_t program_receipt_digests[1024][32];
     size_t program_count;
 };
-
-static lxp_result apply_transfer_set(lxp_kernel *kernel,
-                                     const lxp_transfer_set *set,
-                                     lxp_receipt *receipt)
-{
-    lxp_transfer_set_result applied;
-    lxp_transfer_context context;
-    lxp_result status;
-    (void)kernel;
-    if (set == NULL || receipt == NULL) return LXP_ERR_NON_CANONICAL;
-    context = set->context;
-    status = lxp_apply_transfer_set((lxp_transfer_leg *)set->legs,
-                                    set->leg_count, &context, &applied);
-    if (status == LXP_OK)
-        (void)memcpy(receipt->transfer_set_root, applied.transfer_set_root, 32U);
-    return status;
-}
 
 static uint8_t emulator_fee_token;
 
@@ -149,6 +134,7 @@ static lxp_result isolated_snapshot(const platform_emulator *emulator,
     platform_snapshot_header header;
     lxp_arena arena;
     lxp_byte_span core;
+    lxp_kernel_batch_boundary boundary;
     uint8_t *arena_bytes;
     size_t identity_bytes, account_bytes, program_bytes, total;
     lxp_result status;
@@ -159,6 +145,8 @@ static lxp_result isolated_snapshot(const platform_emulator *emulator,
         return LXP_ERR_ARENA_EXHAUSTED;
     }
     status = lxp_arena_init(&arena, arena_bytes, PLATFORM_EMULATOR_ARENA_BYTES);
+    if (status == LXP_OK)
+        status = lxp_kernel_batch_boundary_read(&emulator->kernel, &boundary);
     if (status == LXP_OK)
         status = lxp_snapshot_write(&emulator->kernel,
             emulator->global_sequence == 0U ? 0U : emulator->global_sequence - 1U,
@@ -173,7 +161,8 @@ static lxp_result isolated_snapshot(const platform_emulator *emulator,
     header.program_count = emulator->program_count;
     status = lxp_snapshot_manifest_build(core.bytes, core.length,
         emulator->global_sequence == 0U ? 0U : emulator->global_sequence - 1U,
-        emulator->kernel.current_state_root, &header.manifest);
+        boundary.canonical_state_root, boundary.receipt_state_root,
+        &header.manifest);
     identity_bytes = emulator->identities.count * sizeof(lxp_identity);
     account_bytes = emulator->accounts.count * sizeof(lx_account);
     program_bytes = emulator->program_count * 64U;
@@ -359,6 +348,7 @@ platform_emulator *platform_emulator_create(uint32_t network_id,
 {
     platform_emulator *emulator;
     lxp_result status;
+    uint8_t canonical_state_root[32];
     if (network_id == 0U || timestamp_ms == 0U || sequencer_seed == NULL ||
         lxp_ct_is_zero(sequencer_seed, 32U)) return NULL;
     emulator = calloc(1U, sizeof(*emulator));
@@ -395,6 +385,11 @@ platform_emulator *platform_emulator_create(uint32_t network_id,
     if (status == LXP_OK)
         status = lx_account_registry_init(&emulator->accounts);
     if (status == LXP_OK)
+        status = lxp_state_store_bind_accounts(
+            &emulator->state, &emulator->accounts);
+    if (status == LXP_OK)
+        status = lxp_state_store_require_account_root(&emulator->state);
+    if (status == LXP_OK)
         status = lx_asset_registry_init(&emulator->assets, 0U);
     if (status == LXP_OK)
         status = lxp_arena_init(&emulator->arena, emulator->arena_bytes,
@@ -405,8 +400,8 @@ platform_emulator *platform_emulator_create(uint32_t network_id,
                                    &emulator->parameter_set, 0U);
     if (status == LXP_OK) status = register_modules(emulator);
     if (status == LXP_OK)
-        status = lxp_kernel_set_capabilities(&emulator->kernel, NULL,
-                                             apply_transfer_set);
+        status = lxp_kernel_set_capabilities(
+            &emulator->kernel, NULL, lxp_kernel_canonical_ledger_apply);
     if (status == LXP_OK)
         status = lxp_kernel_set_fee_transaction(
             &emulator->kernel,
@@ -422,9 +417,26 @@ platform_emulator *platform_emulator_create(uint32_t network_id,
         status = lx_asset_transfer_state(&emulator->native_asset,
                                          &emulator->native_asset_state);
     }
+    if (status == LXP_OK) {
+        emulator->asset_runtime.accounts = &emulator->accounts;
+        emulator->asset_runtime.assets = &emulator->native_asset;
+        emulator->asset_runtime.asset_count = 1U;
+        emulator->asset_runtime.transfer_assets =
+            &emulator->native_asset_state;
+        emulator->asset_runtime.transfer_asset_count = 1U;
+        emulator->asset_runtime.network_id = emulator->network_id;
+        emulator->asset_runtime.protocol_version =
+            LXP_PROTOCOL_VERSION_OCCUPANCY;
+        status = lxp_kernel_bind_module_runtime(
+            &emulator->kernel, LXP_MODULE_ASSET,
+            &emulator->asset_runtime);
+    }
     if (status == LXP_OK)
-        status = lxp_state_root(&emulator->kernel,
-                                emulator->kernel.current_state_root);
+        status = lxp_state_root(&emulator->kernel, canonical_state_root);
+    if (status == LXP_OK)
+        status = lxp_genesis_receipt_state_root(
+            emulator->network_id, canonical_state_root,
+            emulator->kernel.current_state_root);
     if (status != LXP_OK) {
         platform_emulator_destroy(emulator);
         return NULL;
@@ -488,6 +500,7 @@ int32_t platform_emulator_prefund(platform_emulator *emulator,
     lx_account *account;
     lxp_identity *identity;
     lxp_result status;
+    uint8_t canonical_state_root[32];
     static const uint8_t prefix[] = "agent:";
     static const uint8_t suffix[] = ":main";
     if (emulator == NULL || did == NULL || public_key == NULL ||
@@ -515,6 +528,12 @@ int32_t platform_emulator_prefund(platform_emulator *emulator,
             account, emulator->native_asset.asset_id,
             (lxp_u128){ amount_hi, amount_lo }, 0U);
     }
+    if (status == LXP_OK)
+        status = lxp_state_root(&emulator->kernel, canonical_state_root);
+    if (status == LXP_OK)
+        status = lxp_genesis_receipt_state_root(
+            emulator->network_id, canonical_state_root,
+            emulator->kernel.current_state_root);
     (void)identity;
     return status;
 }
@@ -588,6 +607,12 @@ int32_t platform_emulator_execute(platform_emulator *emulator,
     execution.maximum_timestamp_window = UINT64_C(86400000);
     execution.epoch = 0U;
     execution.global_sequence = emulator->global_sequence;
+    if (status == LXP_OK) {
+        if (emulator->batch_number == UINT64_MAX)
+            status = LXP_ERR_OVERFLOW;
+        else
+            execution.batch_number = emulator->batch_number + 1U;
+    }
     execution.recorded_module_version = 1U;
     execution.parameter_version = 1U;
     execution.signature_valid = true;
@@ -702,10 +727,15 @@ int32_t platform_emulator_execute(platform_emulator *emulator,
 int32_t platform_emulator_inspect(const platform_emulator *emulator,
                                   platform_emulator_state *state)
 {
+    lxp_kernel_batch_boundary boundary;
     lxp_result status;
     if (emulator == NULL || state == NULL) return LXP_ERR_NON_CANONICAL;
-    status = lxp_state_root(&emulator->kernel, state->state_root);
+    status = lxp_kernel_batch_boundary_read(&emulator->kernel, &boundary);
     if (status != LXP_OK) return status;
+    (void)memcpy(state->canonical_state_root,
+                 boundary.canonical_state_root, 32U);
+    (void)memcpy(state->receipt_state_root,
+                 boundary.receipt_state_root, 32U);
     state->next_sequence = emulator->state.next_sequence;
     state->batch_number = emulator->batch_number;
     state->timestamp_ms = emulator->timestamp_ms;
@@ -730,11 +760,12 @@ int32_t platform_emulator_cell(const platform_emulator *emulator, size_t index,
 int32_t platform_emulator_account(const platform_emulator *emulator,
                                   size_t index, uint8_t id[32],
                                   const uint8_t **name, size_t *name_length,
-                                  uint64_t *balance_hi, uint64_t *balance_lo)
+                                  uint64_t *balance_hi, uint64_t *balance_lo,
+                                  uint64_t *next_sequence)
 {
     const lx_account *account;
     if (emulator == NULL || id == NULL || name == NULL || name_length == NULL ||
-        balance_hi == NULL || balance_lo == NULL ||
+        balance_hi == NULL || balance_lo == NULL || next_sequence == NULL ||
         index >= emulator->accounts.count) return LXP_ERR_UNKNOWN_FIELD;
     account = &emulator->accounts.accounts[index];
     (void)memcpy(id, account->id, 32U);
@@ -742,7 +773,30 @@ int32_t platform_emulator_account(const platform_emulator *emulator,
     *name_length = account->name_length;
     *balance_hi = account->balance.hi;
     *balance_lo = account->balance.lo;
+    *next_sequence = account->next_sequence;
     return LXP_OK;
+}
+
+int32_t platform_emulator_identity_sequence(
+    const platform_emulator *emulator, const uint8_t *did,
+    size_t did_length, uint64_t *next_sequence)
+{
+    uint8_t did_id[32];
+    size_t index;
+    lxp_result status;
+    if (emulator == NULL || did == NULL || did_length == 0U ||
+        did_length > LXP_MAX_DID_LENGTH || next_sequence == NULL)
+        return LXP_ERR_NON_CANONICAL;
+    status = lxp_did_id_derive(did, did_length, did_id);
+    if (status != LXP_OK) return status;
+    for (index = 0U; index < emulator->identities.count; ++index) {
+        const lxp_identity *identity = &emulator->identities.identities[index];
+        if (lxp_ct_memcmp(identity->did_id, did_id, 32U) == 0) {
+            *next_sequence = identity->next_sequence;
+            return LXP_OK;
+        }
+    }
+    return LXP_ERR_UNKNOWN_DID;
 }
 
 int32_t platform_emulator_snapshot_export(platform_emulator *emulator,
@@ -751,6 +805,7 @@ int32_t platform_emulator_snapshot_export(platform_emulator *emulator,
 {
     platform_snapshot_header header;
     lxp_byte_span core;
+    lxp_kernel_batch_boundary boundary;
     size_t identity_bytes;
     size_t account_bytes;
     size_t program_bytes;
@@ -759,6 +814,8 @@ int32_t platform_emulator_snapshot_export(platform_emulator *emulator,
     if (emulator == NULL || bytes == NULL || length == NULL)
         return LXP_ERR_NON_CANONICAL;
     status = lxp_arena_reset(&emulator->arena, 0U);
+    if (status == LXP_OK)
+        status = lxp_kernel_batch_boundary_read(&emulator->kernel, &boundary);
     if (status == LXP_OK)
         status = lxp_snapshot_write(&emulator->kernel,
             emulator->global_sequence == 0U ? 0U : emulator->global_sequence - 1U,
@@ -777,7 +834,8 @@ int32_t platform_emulator_snapshot_export(platform_emulator *emulator,
     header.core_length = core.length;
     status = lxp_snapshot_manifest_build(core.bytes, core.length,
         emulator->global_sequence == 0U ? 0U : emulator->global_sequence - 1U,
-        emulator->kernel.current_state_root, &header.manifest);
+        boundary.canonical_state_root, boundary.receipt_state_root,
+        &header.manifest);
     identity_bytes = emulator->identities.count * sizeof(lxp_identity);
     account_bytes = emulator->accounts.count * sizeof(lx_account);
     program_bytes = emulator->program_count * 64U;
@@ -858,8 +916,7 @@ int32_t platform_emulator_snapshot_import(platform_emulator *emulator,
     core = emulator->snapshot_bytes + sizeof(header) + identity_bytes +
            account_bytes + program_bytes;
     status = lxp_snapshot_load(core, (size_t)header.core_length,
-                               &header.manifest, header.manifest.state_root,
-                               &emulator->kernel);
+                               &header.manifest, &emulator->kernel);
     if (status != LXP_OK) return status;
     (void)memcpy(emulator->identities.identities,
                  emulator->snapshot_bytes + sizeof(header),

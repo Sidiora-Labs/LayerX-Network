@@ -152,6 +152,10 @@ impl TrustedSources {
             );
         }
         let trusted = read_secret("LAYERX_WEBHOOKS_SEQUENCER_PUBLIC_KEY_FILE")?;
+        let wire_version = bounded_env("LAYERX_WEBHOOKS_LXP_WIRE_VERSION", 32)?;
+        if wire_version.parse::<u16>().ok() != Some(layerx_wire::limits::PROTOCOL_VERSION) {
+            return Err("webhook LXP wire version is not the current beta protocol".to_owned());
+        }
         let verifier = ReceiptVerifier {
             client: Client::trusted(client_identity.clone()),
             component: Endpoint::parse(
@@ -167,7 +171,7 @@ impl TrustedSources {
             trusted_sequencer_key: fixed_hex::<32>(trusted.as_str())
                 .map_err(|_| "trusted sequencer key is invalid".to_owned())?,
             network_id: bounded_env("LAYERX_WEBHOOKS_NETWORK_ID", 64)?,
-            wire_version: bounded_env("LAYERX_WEBHOOKS_LXP_WIRE_VERSION", 32)?,
+            wire_version,
         };
         Ok(Self {
             client: Client::trusted(client_identity),

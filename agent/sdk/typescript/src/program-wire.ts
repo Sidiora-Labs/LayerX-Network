@@ -53,9 +53,10 @@ export async function decodeSignedProgramCall(
 ): Promise<DecodedSignedProgramCall> {
   const canonical = new Uint8Array(call.signedActivity);
   const reader = new Reader(canonical);
-  if (reader.u16() !== 1 || reader.u16() !== 0x1001 || reader.byte() !== 12) fail("signed activity header");
+  const envelopeVersion = reader.u16();
+  if ((envelopeVersion !== 1 && envelopeVersion !== 2) || reader.u16() !== 0x1001 || reader.byte() !== 12) fail("signed activity header");
   field(reader, 1); const protocolVersion = reader.u16();
-  if (protocolVersion !== 1 && protocolVersion !== 2) fail("signed activity protocol");
+  if (protocolVersion !== envelopeVersion) fail("signed activity protocol");
   field(reader, 2); reader.u32();
   field(reader, 3); if (reader.u32() !== 0x0009_0003) fail("signed activity type");
   field(reader, 4); const actor = reader.sizedU32(255);

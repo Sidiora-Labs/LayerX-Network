@@ -4,6 +4,7 @@ use std::collections::BTreeSet;
 
 use layerx_crypto::secp256k1;
 use layerx_wire::hash::{checkpoint_attestation_digest, checkpoint_id as hash_checkpoint_id};
+use layerx_wire::limits::PROTOCOL_VERSION;
 use layerx_wire::receipt::{decode_batch_header, encode_batch_header};
 
 use crate::availability::RootCommitments;
@@ -382,6 +383,9 @@ pub fn verify_certificate(
 ) -> Result<ThresholdReport, CheckpointError> {
     let header = decode_batch_header(&certificate.checkpoint.header_bytes)
         .map_err(|_| CheckpointError::Header)?;
+    if header.protocol_version() != PROTOCOL_VERSION {
+        return Err(CheckpointError::CheckpointFields);
+    }
     let identifier = checkpoint_id(&certificate.checkpoint)?;
     if &identifier != registered_checkpoint_id {
         return Err(CheckpointError::CheckpointIdentifier);

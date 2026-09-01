@@ -309,7 +309,10 @@ impl CheckpointProof {
         let mut previous = None;
         for (index, attestation) in attestations.iter().enumerate() {
             for (valid, field) in [
-                (attestation.protocol_version != 0, "protocol_version"),
+                (
+                    attestation.protocol_version == layerx_wire::limits::PROTOCOL_VERSION,
+                    "protocol_version",
+                ),
                 (attestation.network_id != 0, "network_id"),
                 (attestation.paxeer_chain_id != 0, "paxeer_chain_id"),
                 (
@@ -1555,7 +1558,10 @@ fn validate_checkpoint_proof(
     let mut previous = None;
     for (index, attestation) in proof.attestations.iter().enumerate() {
         for (valid, field) in [
-            (attestation.protocol_version != 0, "protocol_version"),
+            (
+                attestation.protocol_version == layerx_wire::limits::PROTOCOL_VERSION,
+                "protocol_version",
+            ),
             (
                 attestation.network_id == debit.expectation.network_id,
                 "network_id",

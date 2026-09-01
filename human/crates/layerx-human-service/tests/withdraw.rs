@@ -181,7 +181,10 @@ use support::{directory, principal, retention_uniform, tenancy};
 
 const NETWORK_ID: u32 = 17;
 const ACCOUNT_SEQUENCE: u64 = 7;
-const ASSET: [u8; 32] = [0x42; 32];
+const ASSET: [u8; 32] = [
+    0x70, 0xf5, 0xb6, 0x3a, 0x98, 0x55, 0xdd, 0x2b, 0xe2, 0xba, 0x94, 0x1c, 0x04, 0xa3, 0x3a, 0x1f,
+    0x0e, 0xeb, 0x97, 0x50, 0xcc, 0xeb, 0x32, 0x4c, 0x22, 0x37, 0x64, 0xf0, 0xfd, 0xc5, 0x01, 0xd8,
+];
 const AMOUNT: u128 = 25;
 const RECIPIENT: [u8; 20] = [
     0x3c, 0x44, 0xcd, 0xdd, 0xb6, 0xa9, 0x00, 0xfa, 0x2b, 0x58, 0x5d, 0xd2, 0x99, 0xe0, 0x3d, 0x12,
@@ -550,9 +553,9 @@ fn withdrawal_receipt(
 
 fn encode_receipt(fields: ReceiptFields, signature: Option<[u8; 64]>) -> Vec<u8> {
     let mut bytes = Vec::new();
-    push_u16(&mut bytes, 1);
+    push_u16(&mut bytes, layerx_wire::limits::PROTOCOL_VERSION);
     push_u16(&mut bytes, 0x5201);
-    push_u16(&mut bytes, 1);
+    push_u16(&mut bytes, layerx_wire::limits::PROTOCOL_VERSION);
     push_bytes(&mut bytes, &fields.activity_id);
     push_u64(&mut bytes, 1);
     push_bytes(&mut bytes, &[0x41; 32]);

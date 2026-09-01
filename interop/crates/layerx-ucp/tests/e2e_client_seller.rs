@@ -1,14 +1,15 @@
-use layerx_ucp::{
-    ucp_adapter_descriptor, Capability, CheckoutStatus, CheckoutSubmission, ExecutedUcpPayment, MerchantProfile,
-    NegotiatedCapabilities, OrderMetadata, PaymentHandler, PlatformProfile, StoredOrder,
-    UcpAdapter, UcpError, UcpIdempotencyKey, UcpPaymentIntent, UcpPaymentPlane, UcpPlaneResult,
-};
+use ed25519_dalek::{Signer as _, SigningKey};
 use layerx_interop_gateway::adapter::{AdapterId, ConformanceSuite, PinnedSpec, SpecVersion};
 use layerx_interop_gateway::principal::PrincipalId;
 use layerx_interop_gateway::trace::TraceId;
 use layerx_interop_gateway::GatewayCore;
 use layerx_proof::receipt::AuthorizedBatch;
-use ed25519_dalek::{Signer as _, SigningKey};
+use layerx_ucp::{
+    ucp_adapter_descriptor, Capability, CheckoutStatus, CheckoutSubmission, ExecutedUcpPayment,
+    MerchantProfile, NegotiatedCapabilities, OrderMetadata, PaymentHandler, PlatformProfile,
+    StoredOrder, UcpAdapter, UcpError, UcpIdempotencyKey, UcpPaymentIntent, UcpPaymentPlane,
+    UcpPlaneResult, UCP_CHECKOUT_SPEC_SHA256,
+};
 use sha2::{Digest as _, Sha256};
 use std::collections::HashMap;
 
@@ -19,8 +20,9 @@ const ORDER_CAPABILITY: &str = "dev.ucp.shopping.order";
 fn registered_gateway(trace: &TraceId) -> Result<GatewayCore, UcpError> {
     let mut gateway = layerx_interop_gateway::interop_gateway_core();
     let adapter_id = AdapterId::new("ucp").map_err(|error| UcpError::Gateway(error.into()))?;
-    let version = SpecVersion::parse("20260408").map_err(|error| UcpError::Gateway(error.into()))?;
-    let spec = PinnedSpec::new(adapter_id, version, [0xea; 32])
+    let version =
+        SpecVersion::parse("20260408").map_err(|error| UcpError::Gateway(error.into()))?;
+    let spec = PinnedSpec::new(adapter_id, version, UCP_CHECKOUT_SPEC_SHA256)
         .map_err(|error| UcpError::Gateway(error.into()))?;
     let suite_id = AdapterId::new("ucp-2026-04-08-vectors")
         .map_err(|error| UcpError::Gateway(error.into()))?;
@@ -91,13 +93,11 @@ impl LayerXSeller {
             "https://layerx.dev/2026-04-08/schemas/402.json",
         )?;
 
-        let merchant_profile = MerchantProfile::layerx(
-            "https://merchant.example/ucp-rest",
-            handler,
-        )?;
+        let merchant_profile =
+            MerchantProfile::layerx("https://merchant.example/ucp-rest", handler)?;
 
-        let principal = PrincipalId::new("seller-merchant")
-            .map_err(|_| UcpError::InvalidProfile)?;
+        let principal =
+            PrincipalId::new("seller-merchant").map_err(|_| UcpError::InvalidProfile)?;
 
         let trace = TraceId::mint([0xcc; 16]);
         Ok(Self {
@@ -170,7 +170,9 @@ impl TestSellerPlane {
         order_id: String,
         permalink_url: String,
     ) {
-        if let Some((receipt, batch)) = self.get_executed_receipt(submission.idempotency_key.gateway_key()) {
+        if let Some((receipt, batch)) =
+            self.get_executed_receipt(submission.idempotency_key.gateway_key())
+        {
             let metadata = OrderMetadata {
                 order_id: order_id.clone(),
                 permalink_url,
@@ -201,7 +203,9 @@ impl UcpPaymentPlane for TestSellerPlane {
         intent: &UcpPaymentIntent,
         _trace: &TraceId,
     ) -> Result<UcpPlaneResult, UcpError> {
-        if let Some((metadata, receipt, batch)) = self.executed_checkouts.get(&intent.idempotency_key) {
+        if let Some((metadata, receipt, batch)) =
+            self.executed_checkouts.get(&intent.idempotency_key)
+        {
             return Ok(UcpPlaneResult::Executed(Box::new(ExecutedUcpPayment {
                 metadata: metadata.clone(),
                 canonical_receipt: receipt.clone(),
@@ -331,9 +335,9 @@ fn encode_receipt(
     let credit_before = 5_000_u128;
 
     let mut bytes = Vec::new();
-    push_u16(&mut bytes, 1);
+    push_u16(&mut bytes, 2);
     push_u16(&mut bytes, 0x5201);
-    push_u16(&mut bytes, 1);
+    push_u16(&mut bytes, 2);
     push_bytes(&mut bytes, activity_id);
     push_u64(&mut bytes, sequence);
     push_bytes(&mut bytes, previous_state_root);
@@ -376,8 +380,7 @@ fn push_u64(bytes: &mut Vec<u8>, value: u64) {
 }
 
 fn push_bytes(output: &mut Vec<u8>, value: &[u8]) {
-    let length = u32::try_from(value.len())
-        .unwrap_or_else(|_| panic!("receipt field overflow"));
+    let length = u32::try_from(value.len()).unwrap_or_else(|_| panic!("receipt field overflow"));
     output.extend_from_slice(&length.to_be_bytes());
     output.extend_from_slice(value);
 }
@@ -388,10 +391,14 @@ fn ucp_client_completes_checkout_with_layerx_seller() {
     let mut seller = LayerXSeller::new().unwrap_or_else(|error| panic!("seller setup: {error}"));
 
     let merchant_handler = seller.merchant_profile.payment_handlers()[0].clone();
-    let negotiated = NegotiatedCapabilities::negotiate(&client.platform_profile(), &merchant_handler)
-        .unwrap_or_else(|error| panic!("capability negotiation: {error}"));
+    let negotiated =
+        NegotiatedCapabilities::negotiate(&client.platform_profile(), &merchant_handler)
+            .unwrap_or_else(|error| panic!("capability negotiation: {error}"));
 
-    assert!(negotiated.checkout(), "client and seller must agree on checkout capability");
+    assert!(
+        negotiated.checkout(),
+        "client and seller must agree on checkout capability"
+    );
 
     let asset = [0xe1; 32];
     let recipient = [0xe2; 32];
@@ -435,8 +442,9 @@ fn ucp_client_retrieves_order_with_verified_receipt() {
     let mut seller = LayerXSeller::new().unwrap_or_else(|error| panic!("seller setup: {error}"));
 
     let merchant_handler = seller.merchant_profile.payment_handlers()[0].clone();
-    let negotiated = NegotiatedCapabilities::negotiate(&client.platform_profile(), &merchant_handler)
-        .unwrap_or_else(|error| panic!("negotiation: {error}"));
+    let negotiated =
+        NegotiatedCapabilities::negotiate(&client.platform_profile(), &merchant_handler)
+            .unwrap_or_else(|error| panic!("negotiation: {error}"));
 
     let asset = [0xf1; 32];
     let recipient = [0xf2; 32];
@@ -472,7 +480,10 @@ fn ucp_client_retrieves_order_with_verified_receipt() {
     assert_eq!(order.checkout_id, "chk_order_retrieve");
     assert_eq!(order.currency, *b"EUR");
     assert_eq!(order.total_minor, 15000);
-    assert_ne!(order.receipt_digest, [0; 32], "order must carry verified receipt digest");
+    assert_ne!(
+        order.receipt_digest, [0; 32],
+        "order must carry verified receipt digest"
+    );
 }
 
 #[test]
@@ -481,8 +492,9 @@ fn ucp_client_and_seller_maintain_idempotency_across_retries() {
     let mut seller = LayerXSeller::new().unwrap_or_else(|error| panic!("seller setup: {error}"));
 
     let merchant_handler = seller.merchant_profile.payment_handlers()[0].clone();
-    let negotiated = NegotiatedCapabilities::negotiate(&client.platform_profile(), &merchant_handler)
-        .unwrap_or_else(|error| panic!("negotiation: {error}"));
+    let negotiated =
+        NegotiatedCapabilities::negotiate(&client.platform_profile(), &merchant_handler)
+            .unwrap_or_else(|error| panic!("negotiation: {error}"));
 
     let asset = [0xb1; 32];
     let recipient = [0xb2; 32];

@@ -65,7 +65,9 @@ impl TransitionEvidence {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Event {
-    OrderCreated { order: RampOrder },
+    OrderCreated {
+        order: RampOrder,
+    },
     LeaseAcquired {
         order_digest: [u8; 32],
         worker_id: String,
@@ -151,8 +153,9 @@ impl OrderSnapshot {
             WorkflowStage::ProviderSubmittedUnknown | WorkflowStage::LayerxSubmittedUnknown => {
                 AggregateStatus::Unknown
             }
-            WorkflowStage::ProviderSubmissionPlanned
-            | WorkflowStage::LayerxSubmissionPlanned => AggregateStatus::Unknown,
+            WorkflowStage::ProviderSubmissionPlanned | WorkflowStage::LayerxSubmissionPlanned => {
+                AggregateStatus::Unknown
+            }
             WorkflowStage::ProviderReversed
             | WorkflowStage::ReversalPending
             | WorkflowStage::Reversed => AggregateStatus::Reversed,
@@ -265,15 +268,17 @@ impl Journal {
         order.validate_bound()?;
         if let Some(existing) = self.order_ids.get(&order.order_id) {
             return if *existing == order.order_digest {
-                self.orders
-                    .get(existing)
-                    .cloned()
-                    .ok_or(RampError::Journal)
+                self.orders.get(existing).cloned().ok_or(RampError::Journal)
             } else {
                 Err(RampError::Conflict)
             };
         }
-        self.append(Event::OrderCreated { order: order.clone() }, now)?;
+        self.append(
+            Event::OrderCreated {
+                order: order.clone(),
+            },
+            now,
+        )?;
         self.orders
             .get(&order.order_digest)
             .cloned()
@@ -307,7 +312,10 @@ impl Journal {
         if !safe_identifier(worker_id) || lease_seconds == 0 {
             return Err(RampError::InvalidOrder);
         }
-        let snapshot = self.orders.get(&order_digest).ok_or(RampError::InvalidOrder)?;
+        let snapshot = self
+            .orders
+            .get(&order_digest)
+            .ok_or(RampError::InvalidOrder)?;
         if snapshot
             .lease
             .as_ref()
@@ -337,7 +345,10 @@ impl Journal {
         if !allowed(expected, next) {
             return Err(RampError::IllegalTransition);
         }
-        let snapshot = self.orders.get(&order_digest).ok_or(RampError::InvalidOrder)?;
+        let snapshot = self
+            .orders
+            .get(&order_digest)
+            .ok_or(RampError::InvalidOrder)?;
         if snapshot.stage != expected {
             return Err(RampError::Conflict);
         }
@@ -401,7 +412,10 @@ impl Journal {
         if !allowed(expected, next) {
             return Err(RampError::IllegalTransition);
         }
-        let snapshot = self.orders.get(&order_digest).ok_or(RampError::InvalidOrder)?;
+        let snapshot = self
+            .orders
+            .get(&order_digest)
+            .ok_or(RampError::InvalidOrder)?;
         if snapshot.stage != expected {
             return Err(RampError::Conflict);
         }
@@ -434,16 +448,11 @@ impl Journal {
         confirmations: u64,
         now: u64,
     ) -> Result<(), RampError> {
-        if !safe_identifier(operation_id)
-            || transaction_hash == [0; 32]
-            || !safe_identifier(stage)
+        if !safe_identifier(operation_id) || transaction_hash == [0; 32] || !safe_identifier(stage)
         {
             return Err(RampError::Paxeer);
         }
-        let existing = self
-            .paxeer
-            .get(&idempotency_key)
-            .ok_or(RampError::Paxeer)?;
+        let existing = self.paxeer.get(&idempotency_key).ok_or(RampError::Paxeer)?;
         if existing
             .operation_id
             .as_ref()
@@ -523,7 +532,9 @@ impl Journal {
             return Err(RampError::Journal);
         }
         bytes.push(b'\n');
-        self.file.write_all(&bytes).map_err(|_| RampError::Journal)?;
+        self.file
+            .write_all(&bytes)
+            .map_err(|_| RampError::Journal)?;
         self.file.sync_data().map_err(|_| RampError::Journal)?;
         self.apply(&event)?;
         self.next_sequence = next_sequence;
@@ -560,7 +571,10 @@ impl Journal {
                 if !safe_identifier(worker_id) || *expires_at == 0 {
                     return Err(RampError::Journal);
                 }
-                let snapshot = self.orders.get_mut(order_digest).ok_or(RampError::Journal)?;
+                let snapshot = self
+                    .orders
+                    .get_mut(order_digest)
+                    .ok_or(RampError::Journal)?;
                 snapshot.lease = Some((worker_id.clone(), *expires_at));
             }
             Event::Transition {
@@ -569,7 +583,10 @@ impl Journal {
                 next,
                 evidence,
             } => {
-                let snapshot = self.orders.get_mut(order_digest).ok_or(RampError::Journal)?;
+                let snapshot = self
+                    .orders
+                    .get_mut(order_digest)
+                    .ok_or(RampError::Journal)?;
                 if snapshot.stage != *expected
                     || !allowed(*expected, *next)
                     || validate_resulting_evidence(*next, &snapshot.evidence, evidence).is_err()
@@ -603,10 +620,13 @@ impl Journal {
                     return Err(RampError::Journal);
                 }
                 if !self.orders.contains_key(order_digest)
-                    || self.callbacks.insert(
-                        callback_id.clone(),
-                        (*order_digest, *provider_sequence, *evidence_digest),
-                    ).is_some()
+                    || self
+                        .callbacks
+                        .insert(
+                            callback_id.clone(),
+                            (*order_digest, *provider_sequence, *evidence_digest),
+                        )
+                        .is_some()
                 {
                     return Err(RampError::Journal);
                 }
@@ -617,7 +637,10 @@ impl Journal {
                 {
                     return Err(RampError::Journal);
                 }
-                let snapshot = self.orders.get_mut(order_digest).ok_or(RampError::Journal)?;
+                let snapshot = self
+                    .orders
+                    .get_mut(order_digest)
+                    .ok_or(RampError::Journal)?;
                 if snapshot.stage != *expected
                     || !allowed(*expected, *next)
                     || validate_resulting_evidence(*next, &snapshot.evidence, evidence).is_err()
@@ -636,19 +659,23 @@ impl Journal {
                 if *idempotency_key == [0; 32] || *asset == [0; 32] || *amount == 0 {
                     return Err(RampError::Journal);
                 }
-                if self.paxeer.insert(
-                    *idempotency_key,
-                    PaxeerSnapshot {
-                        idempotency_key: *idempotency_key,
-                        asset: *asset,
-                        amount: *amount,
-                        operation_id: None,
-                        transaction_hash: None,
-                        stage: "submission_planned".to_owned(),
-                        block_hash: None,
-                        confirmations: 0,
-                    },
-                ).is_some() {
+                if self
+                    .paxeer
+                    .insert(
+                        *idempotency_key,
+                        PaxeerSnapshot {
+                            idempotency_key: *idempotency_key,
+                            asset: *asset,
+                            amount: *amount,
+                            operation_id: None,
+                            transaction_hash: None,
+                            stage: "submission_planned".to_owned(),
+                            block_hash: None,
+                            confirmations: 0,
+                        },
+                    )
+                    .is_some()
+                {
                     return Err(RampError::Journal);
                 }
             }
@@ -666,9 +693,17 @@ impl Journal {
                 {
                     return Err(RampError::Journal);
                 }
-                let snapshot = self.paxeer.get_mut(idempotency_key).ok_or(RampError::Journal)?;
-                if snapshot.operation_id.as_ref().is_some_and(|value| value != operation_id)
-                    || snapshot.transaction_hash.is_some_and(|value| value != *transaction_hash)
+                let snapshot = self
+                    .paxeer
+                    .get_mut(idempotency_key)
+                    .ok_or(RampError::Journal)?;
+                if snapshot
+                    .operation_id
+                    .as_ref()
+                    .is_some_and(|value| value != operation_id)
+                    || snapshot
+                        .transaction_hash
+                        .is_some_and(|value| value != *transaction_hash)
                 {
                     return Err(RampError::Journal);
                 }
@@ -769,7 +804,9 @@ fn record_digest(body: &RecordBody) -> Result<[u8; 32], RampError> {
 
 fn merge_evidence(target: &mut TransitionEvidence, value: &TransitionEvidence) {
     if value.provider_operation_id.is_some() {
-        target.provider_operation_id.clone_from(&value.provider_operation_id);
+        target
+            .provider_operation_id
+            .clone_from(&value.provider_operation_id);
     }
     if value.provider_evidence_digest.is_some() {
         target.provider_evidence_digest = value.provider_evidence_digest;
@@ -778,7 +815,9 @@ fn merge_evidence(target: &mut TransitionEvidence, value: &TransitionEvidence) {
         target.activity_id = value.activity_id;
     }
     if value.canonical_activity.is_some() {
-        target.canonical_activity.clone_from(&value.canonical_activity);
+        target
+            .canonical_activity
+            .clone_from(&value.canonical_activity);
     }
     if value.receipt_digest.is_some() {
         target.receipt_digest = value.receipt_digest;
@@ -823,9 +862,9 @@ fn completion_missing(evidence: &TransitionEvidence) -> bool {
 fn safe_identifier(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 128
-        && value.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':')
-        })
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'))
 }
 
 fn validate_resulting_evidence(
@@ -847,7 +886,9 @@ fn validate_resulting_evidence(
         .canonical_activity
         .as_ref()
         .is_some_and(|value| !value.is_empty() && value.len() <= 1024 * 1024);
-    let receipt = evidence.receipt_digest.is_some_and(|value| value != [0; 32]);
+    let receipt = evidence
+        .receipt_digest
+        .is_some_and(|value| value != [0; 32]);
     let refusal = evidence
         .refusal_code
         .as_deref()
@@ -883,19 +924,74 @@ const fn allowed(from: WorkflowStage, to: WorkflowStage) -> bool {
     use WorkflowStage as S;
     matches!(
         (from, to),
-        (S::CompliancePending, S::ManualReview | S::ComplianceRefused | S::AwaitingExternalCredit | S::AwaitingLayerxPayment)
-            | (S::ManualReview, S::ComplianceRefused | S::AwaitingExternalCredit | S::AwaitingLayerxPayment | S::ProviderSubmittedUnknown | S::ProviderPending | S::ProviderSettled | S::ProviderRefused | S::ProviderReversed | S::ManualReview)
-            | (S::AwaitingExternalCredit, S::ProviderSubmissionPlanned | S::ProviderPending | S::ProviderSettled | S::ProviderRefused)
-            | (S::ProviderSubmissionPlanned, S::ProviderSubmittedUnknown | S::ProviderPending | S::ProviderSettled | S::ProviderRefused | S::ManualReview)
-            | (S::ProviderSubmittedUnknown, S::ProviderSubmittedUnknown | S::ProviderPending | S::ProviderSettled | S::ProviderRefused | S::ProviderReversed | S::ManualReview)
-            | (S::ProviderPending, S::ProviderPending | S::ProviderSettled | S::ProviderRefused | S::ProviderReversed | S::ManualReview)
-            | (S::ProviderSettled, S::LayerxSubmissionPlanned | S::LayerxPending | S::ProviderReversed)
-            | (S::AwaitingLayerxPayment, S::LayerxSubmissionPlanned | S::LayerxPending | S::LayerxVerified | S::LayerxRefused)
-            | (S::LayerxSubmissionPlanned, S::LayerxSubmittedUnknown | S::LayerxPending | S::LayerxVerified | S::LayerxRefused)
-            | (S::LayerxSubmittedUnknown, S::LayerxSubmittedUnknown | S::LayerxPending | S::LayerxVerified | S::LayerxRefused)
-            | (S::LayerxPending, S::LayerxPending | S::LayerxVerified | S::LayerxRefused)
-            | (S::LayerxVerified, S::ProviderSubmissionPlanned | S::ProviderPending | S::ProviderSettled | S::ProviderRefused | S::Done)
-            | (S::ProviderSettled, S::Done)
+        (
+            S::CompliancePending,
+            S::ManualReview
+                | S::ComplianceRefused
+                | S::AwaitingExternalCredit
+                | S::AwaitingLayerxPayment
+        ) | (
+            S::ManualReview,
+            S::ComplianceRefused
+                | S::AwaitingExternalCredit
+                | S::AwaitingLayerxPayment
+                | S::ProviderSubmittedUnknown
+                | S::ProviderPending
+                | S::ProviderSettled
+                | S::ProviderRefused
+                | S::ProviderReversed
+                | S::ManualReview
+        ) | (
+            S::AwaitingExternalCredit,
+            S::ProviderSubmissionPlanned
+                | S::ProviderPending
+                | S::ProviderSettled
+                | S::ProviderRefused
+        ) | (
+            S::ProviderSubmissionPlanned,
+            S::ProviderSubmittedUnknown
+                | S::ProviderPending
+                | S::ProviderSettled
+                | S::ProviderRefused
+                | S::ManualReview
+        ) | (
+            S::ProviderSubmittedUnknown,
+            S::ProviderSubmittedUnknown
+                | S::ProviderPending
+                | S::ProviderSettled
+                | S::ProviderRefused
+                | S::ProviderReversed
+                | S::ManualReview
+        ) | (
+            S::ProviderPending,
+            S::ProviderPending
+                | S::ProviderSettled
+                | S::ProviderRefused
+                | S::ProviderReversed
+                | S::ManualReview
+        ) | (
+            S::ProviderSettled,
+            S::LayerxSubmissionPlanned | S::LayerxPending | S::ProviderReversed
+        ) | (
+            S::AwaitingLayerxPayment,
+            S::LayerxSubmissionPlanned | S::LayerxPending | S::LayerxVerified | S::LayerxRefused
+        ) | (
+            S::LayerxSubmissionPlanned,
+            S::LayerxSubmittedUnknown | S::LayerxPending | S::LayerxVerified | S::LayerxRefused
+        ) | (
+            S::LayerxSubmittedUnknown,
+            S::LayerxSubmittedUnknown | S::LayerxPending | S::LayerxVerified | S::LayerxRefused
+        ) | (
+            S::LayerxPending,
+            S::LayerxPending | S::LayerxVerified | S::LayerxRefused
+        ) | (
+            S::LayerxVerified,
+            S::ProviderSubmissionPlanned
+                | S::ProviderPending
+                | S::ProviderSettled
+                | S::ProviderRefused
+                | S::Done
+        ) | (S::ProviderSettled, S::Done)
             | (S::Done, S::ProviderReversed | S::ReversalPending)
             | (S::ProviderReversed, S::ReversalPending | S::Reversed)
             | (S::ReversalPending, S::ReversalPending | S::Reversed)

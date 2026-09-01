@@ -26,7 +26,7 @@ fn values() -> BTreeMap<String, String> {
             "node_endpoint".to_owned(),
             "/run/layerx/layerxd.sock".to_owned(),
         ),
-        ("expected_protocol_version".to_owned(), "1".to_owned()),
+        ("expected_protocol_version".to_owned(), "2".to_owned()),
         ("tenants".to_owned(), "tenant-a,tenant-b".to_owned()),
         (
             "policy_sources".to_owned(),
@@ -81,7 +81,10 @@ fn explicit_environment_precedence_produces_one_fully_typed_configuration() {
         loaded.node_endpoint,
         PathBuf::from("/run/layerx/override.sock")
     );
-    assert_eq!(loaded.expected_protocol_version, 1);
+    assert_eq!(
+        loaded.expected_protocol_version,
+        layerx_wire::limits::PROTOCOL_VERSION
+    );
     assert_eq!(loaded.tenants.len(), 2);
     assert!(loaded
         .verification_defaults
@@ -150,7 +153,7 @@ fn unsafe_paths_protocols_maps_and_blank_overrides_name_the_setting() {
         ),
         (
             "expected_protocol_version",
-            "2",
+            "1",
             RejectionReason::UnsupportedProtocol,
         ),
         (

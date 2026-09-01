@@ -8,7 +8,7 @@ use layerx_types::verify::VerificationLevel;
 
 fn fixture_json() -> String {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../platform/sdk/conformance/fixtures/receipt-positive-v1.json");
+        .join("../../../platform/sdk/conformance/fixtures/receipt-positive-v2.json");
     fs::read_to_string(&path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()))
 }
 
@@ -28,6 +28,12 @@ fn value_hex(value: &serde_json::Value, field: &str) -> Vec<u8> {
             .as_str()
             .unwrap_or_else(|| panic!("fixture field {field} missing")),
     )
+}
+
+fn value_hex_32(value: &serde_json::Value, field: &str) -> [u8; 32] {
+    value_hex(value, field)
+        .try_into()
+        .unwrap_or_else(|bytes: Vec<u8>| panic!("fixture field {field} is {} bytes", bytes.len()))
 }
 
 fn value_authorised(fixture: &serde_json::Value) -> AuthorizedBatch {
@@ -200,7 +206,7 @@ fn core_fixture_receipt_byte_flip_fails() {
 
 #[test]
 fn core_programs_fixture_preserves_the_optional_outcome() {
-    let fixture = shared_fixture("receipt-programs-positive-v1.json");
+    let fixture = shared_fixture("receipt-programs-positive-v2.json");
     let canonical = value_hex(&fixture, "canonical_receipt_hex");
     let verified = verify_receipt(&canonical, &value_authorised(&fixture))
         .unwrap_or_else(|failure| panic!("Programs receipt refused: {failure:?}"));
@@ -209,6 +215,29 @@ fn core_programs_fixture_preserves_the_optional_outcome() {
     assert_eq!(outcome.encoding_version(), 3);
     assert_eq!(outcome.runtime_version(), 1);
     assert_eq!(outcome.abi_version(), 1);
+    assert_eq!(outcome.occupancy_byte_batches(), 2);
+    assert_eq!(outcome.occupancy_fee_units(), 7);
+    assert_eq!(
+        outcome.occupancy_asset_id(),
+        value_hex_32(
+            &fixture["expected"],
+            "program_outcome_occupancy_asset_id_hex"
+        )
+    );
+    assert_eq!(
+        outcome.occupancy_evidence_digest(),
+        value_hex_32(
+            &fixture["expected"],
+            "program_outcome_occupancy_evidence_digest_hex"
+        )
+    );
+    assert_eq!(
+        outcome.occupancy_transfer_root(),
+        value_hex_32(
+            &fixture["expected"],
+            "program_outcome_occupancy_transfer_root_hex"
+        )
+    );
     assert_eq!(outcome.fee_units(), 16);
     assert_eq!(outcome.call_graph_root(), [0x11; 32]);
     assert_eq!(outcome.terminal_payload_root(), [0x22; 32]);
@@ -216,7 +245,7 @@ fn core_programs_fixture_preserves_the_optional_outcome() {
 
 #[test]
 fn core_refusal_vectors_expose_the_shared_taxonomy() {
-    let fixture = shared_fixture("receipt-refusals-v1.json");
+    let fixture = shared_fixture("receipt-refusals-v2.json");
     let authorised = value_authorised(&fixture);
     for vector in fixture["vectors"].as_array().expect("refusal vectors") {
         let canonical = value_hex(vector, "canonical_receipt_hex");

@@ -10,8 +10,8 @@ const RECEIPT_DOMAIN = new TextEncoder().encode("LXP/v1/receipt\0");
 const MERKLE_LEAF_DOMAIN = new TextEncoder().encode("LXP/v1/merkle-leaf\0");
 
 const RECEIPT_MAGIC = 0x5201;
-const RECEIPT_MAGIC_PREFIX = 1;
-const PROTOCOL_VERSION = 1;
+const PROTOCOL_VERSION = 2;
+const RECEIPT_MAGIC_PREFIX = PROTOCOL_VERSION;
 
 /**
  * A signing sequencer used by the conformance suite. It builds byte-identical

@@ -2,6 +2,7 @@
 
 use layerx_crypto::ed25519;
 use layerx_wire::hash::batch_header_digest;
+use layerx_wire::limits::PROTOCOL_VERSION;
 use layerx_wire::receipt::{decode_batch_header, encode_batch_header, BatchHeader};
 
 use crate::evidence::Evidence;
@@ -122,7 +123,7 @@ pub(crate) fn verify_header(
 ) -> Result<VerifiedBatchHeader, InclusionError> {
     let header = decode_batch_header(header_bytes).map_err(|_| InclusionError::HeaderDecode)?;
     let reproduced = encode_batch_header(&header).map_err(|_| InclusionError::HeaderCanonical)?;
-    if reproduced != header_bytes {
+    if reproduced != header_bytes || header.protocol_version() != PROTOCOL_VERSION {
         return Err(InclusionError::HeaderCanonical);
     }
     if header.batch_number() < authorization.first_batch_number

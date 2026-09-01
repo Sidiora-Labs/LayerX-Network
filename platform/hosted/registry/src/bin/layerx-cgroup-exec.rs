@@ -3,9 +3,9 @@
 use std::env;
 use std::fs;
 use std::io::Write as _;
-use std::os::unix::process::CommandExt as _;
-use std::os::unix::fs::MetadataExt as _;
 use std::os::fd::AsRawFd as _;
+use std::os::unix::fs::MetadataExt as _;
+use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 use std::thread;
@@ -78,32 +78,51 @@ fn value(argument: &str, name: &str) -> Option<u64> {
 fn parse() -> Result<Limits, String> {
     let arguments = env::args().skip(1).collect::<Vec<_>>();
     if arguments.first().map(String::as_str) == Some("--stopped-launcher") {
-        let split = arguments.iter().position(|argument| argument == "--")
+        let split = arguments
+            .iter()
+            .position(|argument| argument == "--")
             .ok_or_else(|| "stopped launcher omitted command boundary".to_owned())?;
         let command = arguments.get(split + 1..).unwrap_or_default();
-        let (program, rest) = command.split_first()
+        let (program, rest) = command
+            .split_first()
             .ok_or_else(|| "stopped launcher omitted command".to_owned())?;
         kill_process(getpid(), Signal::STOP).map_err(|error| error.to_string())?;
         return Err(Command::new(program).args(rest).exec().to_string());
     }
     if !arguments.iter().any(|argument| argument == "--cgroup-v2")
-        || !arguments.iter().any(|argument| argument == "--attach-before-exec")
-        || !arguments.iter().any(|argument| argument == "--kill-tree-on-exit")
+        || !arguments
+            .iter()
+            .any(|argument| argument == "--attach-before-exec")
+        || !arguments
+            .iter()
+            .any(|argument| argument == "--kill-tree-on-exit")
     {
         return Err("mandatory cgroup supervisor contract is absent".to_owned());
     }
-    let split = arguments.iter().position(|argument| argument == "--")
+    let split = arguments
+        .iter()
+        .position(|argument| argument == "--")
         .ok_or_else(|| "supervisor omitted command boundary".to_owned())?;
-    let root_index = arguments.iter().position(|argument| argument == "--cgroup-root")
+    let root_index = arguments
+        .iter()
+        .position(|argument| argument == "--cgroup-root")
         .ok_or_else(|| "supervisor omitted cgroup root".to_owned())?;
-    let root = arguments.get(root_index + 1).map(PathBuf::from)
+    let root = arguments
+        .get(root_index + 1)
+        .map(PathBuf::from)
         .ok_or_else(|| "supervisor omitted cgroup root value".to_owned())?;
-    let workspace_index = arguments.iter().position(|argument| argument == "--workspace-device-path")
+    let workspace_index = arguments
+        .iter()
+        .position(|argument| argument == "--workspace-device-path")
         .ok_or_else(|| "supervisor omitted quota workspace".to_owned())?;
-    let workspace = arguments.get(workspace_index + 1).map(PathBuf::from)
+    let workspace = arguments
+        .get(workspace_index + 1)
+        .map(PathBuf::from)
         .ok_or_else(|| "supervisor omitted quota workspace value".to_owned())?;
     let number = |name: &str| {
-        arguments.iter().find_map(|argument| value(argument, name))
+        arguments
+            .iter()
+            .find_map(|argument| value(argument, name))
             .filter(|number| *number > 0)
             .ok_or_else(|| format!("supervisor omitted {name}"))
     };
@@ -126,9 +145,12 @@ fn parse() -> Result<Limits, String> {
 
 fn write_control(root: &Path, name: &str, value: impl AsRef<[u8]>) -> Result<(), String> {
     let path = root.join(name);
-    let mut file = fs::OpenOptions::new().write(true).open(&path)
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .open(&path)
         .map_err(|error| format!("{} is unavailable: {error}", path.display()))?;
-    file.write_all(value.as_ref()).map_err(|error| error.to_string())
+    file.write_all(value.as_ref())
+        .map_err(|error| error.to_string())
 }
 
 fn counter(root: &Path, file: &str, field: &str, missing_is_zero: bool) -> Result<u64, String> {
@@ -137,12 +159,19 @@ fn counter(root: &Path, file: &str, field: &str, missing_is_zero: bool) -> Resul
     let mut found = false;
     let mut total = 0_u64;
     for (index, word) in words.iter().enumerate() {
-        let encoded = word.strip_prefix(field).and_then(|value| value.strip_prefix('='));
-        let adjacent = (*word == field).then(|| words.get(index + 1).copied()).flatten();
+        let encoded = word
+            .strip_prefix(field)
+            .and_then(|value| value.strip_prefix('='));
+        let adjacent = (*word == field)
+            .then(|| words.get(index + 1).copied())
+            .flatten();
         if let Some(raw) = encoded.or(adjacent) {
-            total = total.checked_add(raw.parse::<u64>().map_err(|_| {
-                format!("{file} contains an invalid {field} counter")
-            })?).ok_or_else(|| format!("{file} {field} counter overflowed"))?;
+            total = total
+                .checked_add(
+                    raw.parse::<u64>()
+                        .map_err(|_| format!("{file} contains an invalid {field} counter"))?,
+                )
+                .ok_or_else(|| format!("{file} {field} counter overflowed"))?;
             found = true;
         }
     }
@@ -156,7 +185,11 @@ fn counter(root: &Path, file: &str, field: &str, missing_is_zero: bool) -> Resul
 fn stopped(pid: u32) -> bool {
     fs::read_to_string(format!("/proc/{pid}/status"))
         .ok()
-        .and_then(|text| text.lines().find(|line| line.starts_with("State:")).map(str::to_owned))
+        .and_then(|text| {
+            text.lines()
+                .find(|line| line.starts_with("State:"))
+                .map(str::to_owned)
+        })
         .is_some_and(|state| state.contains('T'))
 }
 
@@ -167,9 +200,13 @@ fn linux_device(device: u64) -> (u64, u64) {
 }
 
 fn supervise(limits: Limits) -> Result<ExitCode, String> {
-    let nonce = SystemTime::now().duration_since(UNIX_EPOCH)
-        .map_err(|_| "system clock is unavailable".to_owned())?.as_nanos();
-    let job_path = limits.root.join(format!("job-{}-{nonce}", std::process::id()));
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| "system clock is unavailable".to_owned())?
+        .as_nanos();
+    let job_path = limits
+        .root
+        .join(format!("job-{}-{nonce}", std::process::id()));
     fs::create_dir(&job_path).map_err(|error| format!("could not create job cgroup: {error}"))?;
     let job = JobCgroup { path: job_path };
     write_control(&job.path, "memory.max", limits.memory.to_string())?;
@@ -177,13 +214,19 @@ fn supervise(limits: Limits) -> Result<ExitCode, String> {
     write_control(&job.path, "memory.oom.group", b"1")?;
     write_control(&job.path, "pids.max", limits.pids.to_string())?;
     if job.path.join("io.max").exists() {
-        let device = fs::metadata(&limits.workspace).map_err(|error| {
-            format!("quota workspace device is unavailable: {error}")
-        })?.dev();
+        let device = fs::metadata(&limits.workspace)
+            .map_err(|error| format!("quota workspace device is unavailable: {error}"))?
+            .dev();
         let (major, minor) = linux_device(device);
-        write_control(&job.path, "io.max", format!("{major}:{minor} wbps={}", limits.io_write))?;
+        write_control(
+            &job.path,
+            "io.max",
+            format!("{major}:{minor} wbps={}", limits.io_write),
+        )?;
     }
-    fs::OpenOptions::new().write(true).open(job.path.join("cgroup.kill"))
+    fs::OpenOptions::new()
+        .write(true)
+        .open(job.path.join("cgroup.kill"))
         .map_err(|error| format!("cgroup.kill is unavailable: {error}"))?;
     let executable = fs::File::open("/proc/self/exe").map_err(|error| error.to_string())?;
     rustix::io::fcntl_setfd(&executable, rustix::io::FdFlags::empty())
@@ -211,13 +254,17 @@ fn supervise(limits: Limits) -> Result<ExitCode, String> {
         return Err(error);
     }
     let raw_pid = i32::try_from(pid).map_err(|_| "child pid is invalid".to_owned())?;
-    kill_process(rustix::process::Pid::from_raw(raw_pid)
-        .ok_or_else(|| "child pid is invalid".to_owned())?, Signal::CONT)
-        .map_err(|error| error.to_string())?;
+    kill_process(
+        rustix::process::Pid::from_raw(raw_pid).ok_or_else(|| "child pid is invalid".to_owned())?,
+        Signal::CONT,
+    )
+    .map_err(|error| error.to_string())?;
     let deadline = Instant::now() + Duration::from_millis(limits.wall_ms);
     let result = loop {
         if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
-            break status.code().and_then(|code| u8::try_from(code).ok())
+            break status
+                .code()
+                .and_then(|code| u8::try_from(code).ok())
                 .map_or(ExitCode::FAILURE, ExitCode::from);
         }
         let cpu = counter(&job.path, "cpu.stat", "usage_usec", false)?;

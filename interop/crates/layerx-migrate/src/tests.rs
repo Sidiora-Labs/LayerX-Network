@@ -173,9 +173,9 @@ impl TestPlane {
         ownership: &VerifiedOwnership,
     ) -> Vec<u8> {
         let mut bytes = Vec::new();
-        push_u16(&mut bytes, 1);
+        push_u16(&mut bytes, 2);
         push_u16(&mut bytes, 0x5201);
-        push_u16(&mut bytes, 1);
+        push_u16(&mut bytes, 2);
         push_bytes(&mut bytes, &activity_id);
         push_u64(&mut bytes, sequence);
         push_bytes(&mut bytes, &previous);
@@ -200,7 +200,7 @@ impl TestPlane {
         bytes.extend_from_slice(&1_u128.to_be_bytes());
         push_bytes(&mut bytes, &[0x91; 32]);
         push_bytes(&mut bytes, &TEST_CUSTODY_AUTHORIZATION);
-        push_bytes(&mut bytes, &custody_policy().context_hash(finality));
+        push_bytes(&mut bytes, &binding_policy().context_hash(ownership));
         push_u64(&mut bytes, PERIOD_START + sequence);
         bytes.push(0);
         let signature = self.sign(&bytes);
@@ -223,9 +223,9 @@ impl TestPlane {
         let debit_before = 5_000_u128;
         let credit_before = 10_000_u128;
         let mut bytes = Vec::new();
-        push_u16(&mut bytes, 1);
+        push_u16(&mut bytes, 2);
         push_u16(&mut bytes, 0x5201);
-        push_u16(&mut bytes, 1);
+        push_u16(&mut bytes, 2);
         push_bytes(&mut bytes, &activity_id);
         push_u64(&mut bytes, sequence);
         push_bytes(&mut bytes, &previous);
@@ -250,7 +250,7 @@ impl TestPlane {
         bytes.extend_from_slice(&(credit_before + finality.layerx_amount).to_be_bytes());
         push_bytes(&mut bytes, &[0x91; 32]);
         push_bytes(&mut bytes, &[0x92; 32]);
-        push_bytes(&mut bytes, &binding_policy().context_hash(ownership));
+        push_bytes(&mut bytes, &custody_policy().context_hash(finality));
         push_u64(&mut bytes, PERIOD_START + sequence);
         bytes.push(0);
         let signature = self.sign(&bytes);
@@ -1246,11 +1246,11 @@ fn migration_refuses_claims_lacking_verifiable_finality_evidence() {
 #[test]
 fn ethereum_and_solana_codify_anchors_are_stable() {
     assert_eq!(
-        layerx_migrate::interop_migrate_ethereum(),
+        crate::interop_migrate_ethereum(),
         "verified-finality-ethereum-migration"
     );
     assert_eq!(
-        layerx_migrate::interop_migrate_solana(),
+        crate::interop_migrate_solana(),
         "verified-finality-solana-migration"
     );
 }

@@ -51,7 +51,7 @@ fn send_route(sequence: u64, key_byte: u8) -> SendRoute {
         ),
         network_id: NetworkId::new(1)
             .unwrap_or_else(|error| panic!("network identifier: {error:?}")),
-        protocol_version: ProtocolVersion::new(1)
+        protocol_version: ProtocolVersion::new(layerx_wire::limits::PROTOCOL_VERSION)
             .unwrap_or_else(|error| panic!("protocol version: {error:?}")),
     }
 }

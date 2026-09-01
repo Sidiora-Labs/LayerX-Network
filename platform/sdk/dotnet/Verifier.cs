@@ -210,6 +210,7 @@ public static class LocalVerifier
     private const uint MaximumEffectBody = 256;
     private const int BatchHeaderBytes = 354;
     private const byte AllAvailabilityClasses = 0x1f;
+    private const ushort CurrentProtocolVersion = 2;
     private const uint ProgramOutcomeV1 = GeneratedReceiptContract.ProgramOutcomeV1;
     private const uint ProgramOutcomeV2 = GeneratedReceiptContract.ProgramOutcomeV2;
     private const uint ProgramOutcomeV3 = GeneratedReceiptContract.ProgramOutcomeV3;
@@ -264,6 +265,7 @@ public static class LocalVerifier
     {
         cancellationToken.ThrowIfCancellationRequested();
         var header = DecodeBatchHeader(canonicalHeader.Span);
+        if (header.ProtocolVersion != CurrentProtocolVersion) throw VerificationFailure();
         if (header.BatchNumber < authorization.FirstBatchNumber || header.BatchNumber > authorization.LastBatchNumber || !Equal(header.SequencerId, Exact(authorization.SequencerId, 32)))
             throw VerificationFailure();
         var headerDigest = Digest(BatchHeaderDomain, canonicalHeader.ToArray());
@@ -288,6 +290,7 @@ public static class LocalVerifier
         if (!input.AvailabilityObtained || certificate.Threshold == 0 || certificate.ValidityProof is null || certificate.Attestations is null || certificate.ValidityProof.LongLength > uint.MaxValue)
             throw VerificationFailure();
         var header = DecodeBatchHeader(certificate.CanonicalHeader);
+        if (header.ProtocolVersion != CurrentProtocolVersion) throw VerificationFailure();
         var checkpointId = Digest(CheckpointDomain, certificate.CanonicalHeader, EncodeUInt32((uint)certificate.ValidityProof.Length), certificate.ValidityProof);
         var expectedSettlementContract = Exact(input.ExpectedSettlementContract, 20);
         if (!Equal(checkpointId, Exact(input.RegisteredCheckpointId, 32)) || input.ExpectedPaxeerChainId == 0 || AllZero(expectedSettlementContract)) throw VerificationFailure();
@@ -337,6 +340,7 @@ public static class LocalVerifier
         cancellationToken.ThrowIfCancellationRequested();
         var decoded = DecodeProtocolReceipt(canonicalReceipt.Span);
         var receipt = decoded.Receipt;
+        if (receipt.ProtocolVersion != CurrentProtocolVersion) throw VerificationFailure(ReceiptCheck.ProtocolVersion);
         if (receipt.Operation == 0) throw VerificationFailure(ReceiptCheck.Operation);
         if (AllZero(receipt.ActivityId)) throw VerificationFailure(ReceiptCheck.ActivityId);
         if (AllZero(receipt.Asset)) throw VerificationFailure(ReceiptCheck.Asset);

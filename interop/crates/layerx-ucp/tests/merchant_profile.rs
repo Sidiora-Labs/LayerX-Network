@@ -1,15 +1,18 @@
-use layerx_ucp::{
-    ucp_adapter_descriptor, Capability, CheckoutStatus, CheckoutSubmission, MerchantProfile, NegotiatedCapabilities,
-    OrderMetadata, PaymentHandler, PlatformProfile, StoredOrder, UcpAdapter, UcpError,
-    UcpIdempotencyKey, UcpOrder, UcpPaymentIntent, UcpPaymentPlane, UcpPlaneResult,
+use ed25519_dalek::{Signer as _, SigningKey};
+use layerx_interop_gateway::adapter::{
+    AdapterDescriptor, AdapterId, ConformanceSuite, PinnedSpec, SpecVersion,
 };
-use layerx_interop_gateway::adapter::{AdapterDescriptor, AdapterId, ConformanceSuite, PinnedSpec, SpecVersion};
 use layerx_interop_gateway::principal::PrincipalId;
 use layerx_interop_gateway::trace::TraceId;
 use layerx_interop_gateway::GatewayCore;
 use layerx_proof::merkle::leaf_hash;
 use layerx_proof::receipt::{verify, AuthorizedBatch};
-use ed25519_dalek::{Signer as _, SigningKey};
+use layerx_ucp::{
+    ucp_adapter_descriptor, Capability, CheckoutStatus, CheckoutSubmission, MerchantProfile,
+    NegotiatedCapabilities, OrderMetadata, PaymentHandler, PlatformProfile, StoredOrder,
+    UcpAdapter, UcpError, UcpIdempotencyKey, UcpOrder, UcpPaymentIntent, UcpPaymentPlane,
+    UcpPlaneResult, UCP_CHECKOUT_SPEC_SHA256,
+};
 use sha2::{Digest as _, Sha256};
 use std::collections::HashMap;
 
@@ -25,7 +28,7 @@ fn registered_gateway(trace: &TraceId) -> GatewayCore {
     let mut gateway = layerx_interop_gateway::interop_gateway_core();
     let adapter_id = AdapterId::new("ucp").unwrap_or_else(|error| panic!("adapter id: {error}"));
     let version = SpecVersion::parse("20260408").unwrap_or_else(|error| panic!("version: {error}"));
-    let spec = PinnedSpec::new(adapter_id, version, [0xea; 32])
+    let spec = PinnedSpec::new(adapter_id, version, UCP_CHECKOUT_SPEC_SHA256)
         .unwrap_or_else(|error| panic!("spec: {error}"));
     let suite_id = AdapterId::new("ucp-2026-04-08-vectors")
         .unwrap_or_else(|error| panic!("suite id: {error}"));
@@ -56,16 +59,15 @@ impl TestPaymentPlane {
         self.pending_checkouts.insert(idempotency_key, ());
     }
 
-    fn execute_checkout(
-        &mut self,
-        intent: &UcpPaymentIntent,
-        sequencer_seed: [u8; 32],
-    ) {
+    fn execute_checkout(&mut self, intent: &UcpPaymentIntent, sequencer_seed: [u8; 32]) {
         let metadata = OrderMetadata {
             order_id: format!("ord_{}", hex(&intent.idempotency_key[..8])),
-            permalink_url: format!("https://merchant.example/{}", hex(&intent.idempotency_key[..8])),
+            permalink_url: format!(
+                "https://merchant.example/{}",
+                hex(&intent.idempotency_key[..8])
+            ),
         };
-        
+
         let receipt_material = signed_receipt(
             100,
             intent.idempotency_key,
@@ -89,7 +91,9 @@ impl UcpPaymentPlane for TestPaymentPlane {
         intent: &UcpPaymentIntent,
         _trace: &TraceId,
     ) -> Result<UcpPlaneResult, UcpError> {
-        if let Some((metadata, receipt, batch)) = self.executed_checkouts.get(&intent.idempotency_key) {
+        if let Some((metadata, receipt, batch)) =
+            self.executed_checkouts.get(&intent.idempotency_key)
+        {
             return Ok(UcpPlaneResult::Executed(Box::new(
                 layerx_ucp::ExecutedUcpPayment {
                     metadata: metadata.clone(),
@@ -128,21 +132,43 @@ fn signed_receipt(
         .concat(),
     )
     .into();
-    
-    let previous_state_root: [u8; 32] = Sha256::digest([b"before".as_slice(), &activity_id].concat()).into();
-    let resulting_state_root: [u8; 32] = Sha256::digest([b"after".as_slice(), &activity_id].concat()).into();
+
+    let previous_state_root: [u8; 32] =
+        Sha256::digest([b"before".as_slice(), &activity_id].concat()).into();
+    let resulting_state_root: [u8; 32] =
+        Sha256::digest([b"after".as_slice(), &activity_id].concat()).into();
     let batch_id: [u8; 32] = Sha256::digest([b"batch".as_slice(), &activity_id].concat()).into();
-    
+
     let signer = SigningKey::from_bytes(&sequencer_seed);
-    let unsigned = encode_receipt(&activity_id, sequence, &previous_state_root, &resulting_state_root, &batch_id, &asset, amount, &recipient, None);
-    
+    let unsigned = encode_receipt(
+        &activity_id,
+        sequence,
+        &previous_state_root,
+        &resulting_state_root,
+        &batch_id,
+        &asset,
+        amount,
+        &recipient,
+        None,
+    );
+
     let mut digest = Sha256::new();
     digest.update(b"LXP/v1/receipt\0");
     digest.update(&unsigned);
     let signature = signer.sign(&<[u8; 32]>::from(digest.finalize()));
-    
-    let canonical_receipt = encode_receipt(&activity_id, sequence, &previous_state_root, &resulting_state_root, &batch_id, &asset, amount, &recipient, Some(signature.to_bytes()));
-    
+
+    let canonical_receipt = encode_receipt(
+        &activity_id,
+        sequence,
+        &previous_state_root,
+        &resulting_state_root,
+        &batch_id,
+        &asset,
+        amount,
+        &recipient,
+        Some(signature.to_bytes()),
+    );
+
     let authorised_batch = AuthorizedBatch::new(
         batch_id,
         asset,
@@ -150,7 +176,7 @@ fn signed_receipt(
         resulting_state_root,
         signer.verifying_key().to_bytes(),
     );
-    
+
     (canonical_receipt, authorised_batch)
 }
 
@@ -168,11 +194,11 @@ fn encode_receipt(
     let sender = [0xa1; 32];
     let debit_before = 50_000_u128;
     let credit_before = 10_000_u128;
-    
+
     let mut bytes = Vec::new();
-    push_u16(&mut bytes, 1);
+    push_u16(&mut bytes, 2);
     push_u16(&mut bytes, 0x5201);
-    push_u16(&mut bytes, 1);
+    push_u16(&mut bytes, 2);
     push_bytes(&mut bytes, activity_id);
     push_u64(&mut bytes, sequence);
     push_bytes(&mut bytes, previous_state_root);
@@ -266,14 +292,20 @@ fn capability_negotiation_requires_exact_checkout_match() {
 
     let platform = PlatformProfile {
         profile_url: "https://platform.example/profile".to_owned(),
-        capabilities: vec![
-            Capability::new(CHECKOUT_CAPABILITY, UCP_VERSION, "https://ucp.dev/checkout", "https://ucp.dev/checkout.json")
-                .unwrap_or_else(|error| panic!("checkout capability: {error}")),
-        ],
-        payment_handlers: vec![
-            PaymentHandler::new(PAYMENT_HANDLER_ID, PAYMENT_HANDLER_VERSION, PAYMENT_HANDLER_SPEC, PAYMENT_HANDLER_SCHEMA)
-                .unwrap_or_else(|error| panic!("platform handler: {error}")),
-        ],
+        capabilities: vec![Capability::new(
+            CHECKOUT_CAPABILITY,
+            UCP_VERSION,
+            "https://ucp.dev/checkout",
+            "https://ucp.dev/checkout.json",
+        )
+        .unwrap_or_else(|error| panic!("checkout capability: {error}"))],
+        payment_handlers: vec![PaymentHandler::new(
+            PAYMENT_HANDLER_ID,
+            PAYMENT_HANDLER_VERSION,
+            PAYMENT_HANDLER_SPEC,
+            PAYMENT_HANDLER_SCHEMA,
+        )
+        .unwrap_or_else(|error| panic!("platform handler: {error}"))],
     };
 
     let negotiated = NegotiatedCapabilities::negotiate(&platform, &merchant_handler)
@@ -283,10 +315,13 @@ fn capability_negotiation_requires_exact_checkout_match() {
 
     let unsupported_version = PlatformProfile {
         profile_url: "https://platform.example/profile".to_owned(),
-        capabilities: vec![
-            Capability::new(CHECKOUT_CAPABILITY, "2025-01-01", "https://ucp.dev/old", "https://ucp.dev/old.json")
-                .unwrap_or_else(|error| panic!("old capability: {error}")),
-        ],
+        capabilities: vec![Capability::new(
+            CHECKOUT_CAPABILITY,
+            "2025-01-01",
+            "https://ucp.dev/old",
+            "https://ucp.dev/old.json",
+        )
+        .unwrap_or_else(|error| panic!("old capability: {error}"))],
         payment_handlers: vec![merchant_handler.clone()],
     };
 
@@ -298,7 +333,8 @@ fn capability_negotiation_requires_exact_checkout_match() {
 fn checkout_completion_requires_receipt_verification() {
     let trace = TraceId::mint([0xcc; 16]);
     let mut gateway = registered_gateway(&trace);
-    let principal = PrincipalId::new("merchant").unwrap_or_else(|error| panic!("principal: {error}"));
+    let principal =
+        PrincipalId::new("merchant").unwrap_or_else(|error| panic!("principal: {error}"));
 
     let asset = [0xc1; 32];
     let recipient = [0xd1; 32];
@@ -315,10 +351,13 @@ fn checkout_completion_requires_receipt_verification() {
 
     let platform = PlatformProfile {
         profile_url: "https://platform.example/profile".to_owned(),
-        capabilities: vec![
-            Capability::new(CHECKOUT_CAPABILITY, UCP_VERSION, "https://ucp.dev/checkout", "https://ucp.dev/checkout.json")
-                .unwrap_or_else(|error| panic!("checkout: {error}")),
-        ],
+        capabilities: vec![Capability::new(
+            CHECKOUT_CAPABILITY,
+            UCP_VERSION,
+            "https://ucp.dev/checkout",
+            "https://ucp.dev/checkout.json",
+        )
+        .unwrap_or_else(|error| panic!("checkout: {error}"))],
         payment_handlers: vec![handler.clone()],
     };
 
@@ -349,8 +388,15 @@ fn checkout_completion_requires_receipt_verification() {
         sequencer_seed,
     );
 
-    let outcome = UcpAdapter::complete_checkout(&mut gateway, &principal, &submission, &mut plane, &trace, 10)
-        .unwrap_or_else(|error| panic!("checkout completion: {error}"));
+    let outcome = UcpAdapter::complete_checkout(
+        &mut gateway,
+        &principal,
+        &submission,
+        &mut plane,
+        &trace,
+        10,
+    )
+    .unwrap_or_else(|error| panic!("checkout completion: {error}"));
 
     assert_eq!(outcome.status, CheckoutStatus::Completed);
     assert!(outcome.order.is_some());
@@ -366,7 +412,8 @@ fn checkout_completion_requires_receipt_verification() {
 fn order_state_remains_receipt_backed_or_honestly_pending() {
     let trace = TraceId::mint([0xdd; 16]);
     let mut gateway = registered_gateway(&trace);
-    let principal = PrincipalId::new("merchant").unwrap_or_else(|error| panic!("principal: {error}"));
+    let principal =
+        PrincipalId::new("merchant").unwrap_or_else(|error| panic!("principal: {error}"));
 
     let asset = [0xc2; 32];
     let recipient = [0xd2; 32];
@@ -383,10 +430,13 @@ fn order_state_remains_receipt_backed_or_honestly_pending() {
 
     let platform = PlatformProfile {
         profile_url: "https://platform.example/profile".to_owned(),
-        capabilities: vec![
-            Capability::new(CHECKOUT_CAPABILITY, UCP_VERSION, "https://ucp.dev/checkout", "https://ucp.dev/checkout.json")
-                .unwrap_or_else(|error| panic!("checkout: {error}")),
-        ],
+        capabilities: vec![Capability::new(
+            CHECKOUT_CAPABILITY,
+            UCP_VERSION,
+            "https://ucp.dev/checkout",
+            "https://ucp.dev/checkout.json",
+        )
+        .unwrap_or_else(|error| panic!("checkout: {error}"))],
         payment_handlers: vec![handler.clone()],
     };
 
@@ -406,11 +456,21 @@ fn order_state_remains_receipt_backed_or_honestly_pending() {
     let mut plane = TestPaymentPlane::new();
     plane.mark_pending(idempotency_key.gateway_key());
 
-    let outcome = UcpAdapter::complete_checkout(&mut gateway, &principal, &submission, &mut plane, &trace, 20)
-        .unwrap_or_else(|error| panic!("checkout pending: {error}"));
+    let outcome = UcpAdapter::complete_checkout(
+        &mut gateway,
+        &principal,
+        &submission,
+        &mut plane,
+        &trace,
+        20,
+    )
+    .unwrap_or_else(|error| panic!("checkout pending: {error}"));
 
     assert_eq!(outcome.status, CheckoutStatus::CompleteInProgress);
-    assert!(outcome.order.is_none(), "pending checkout must not return an order");
+    assert!(
+        outcome.order.is_none(),
+        "pending checkout must not return an order"
+    );
 }
 
 #[test]
@@ -431,10 +491,20 @@ fn order_read_verifies_stored_receipt_on_every_access() {
     let platform = PlatformProfile {
         profile_url: "https://platform.example/profile".to_owned(),
         capabilities: vec![
-            Capability::new(CHECKOUT_CAPABILITY, UCP_VERSION, "https://ucp.dev/checkout", "https://ucp.dev/checkout.json")
-                .unwrap_or_else(|error| panic!("checkout: {error}")),
-            Capability::new(ORDER_CAPABILITY, UCP_VERSION, "https://ucp.dev/order", "https://ucp.dev/order.json")
-                .unwrap_or_else(|error| panic!("order: {error}")),
+            Capability::new(
+                CHECKOUT_CAPABILITY,
+                UCP_VERSION,
+                "https://ucp.dev/checkout",
+                "https://ucp.dev/checkout.json",
+            )
+            .unwrap_or_else(|error| panic!("checkout: {error}")),
+            Capability::new(
+                ORDER_CAPABILITY,
+                UCP_VERSION,
+                "https://ucp.dev/order",
+                "https://ucp.dev/order.json",
+            )
+            .unwrap_or_else(|error| panic!("order: {error}")),
         ],
         payment_handlers: vec![handler.clone()],
     };
@@ -474,8 +544,8 @@ fn order_read_verifies_stored_receipt_on_every_access() {
         authorised_batch: batch,
     };
 
-    let order = UcpAdapter::read_order(&stored)
-        .unwrap_or_else(|error| panic!("order read: {error}"));
+    let order =
+        UcpAdapter::read_order(&stored).unwrap_or_else(|error| panic!("order read: {error}"));
 
     assert_eq!(order.id, "ord_read_test");
     assert_eq!(order.checkout_id, "chk_order_read");
@@ -504,10 +574,13 @@ fn payment_handler_mismatch_refuses_negotiation() {
 
     let platform = PlatformProfile {
         profile_url: "https://platform.example/profile".to_owned(),
-        capabilities: vec![
-            Capability::new(CHECKOUT_CAPABILITY, UCP_VERSION, "https://ucp.dev/checkout", "https://ucp.dev/checkout.json")
-                .unwrap_or_else(|error| panic!("checkout: {error}")),
-        ],
+        capabilities: vec![Capability::new(
+            CHECKOUT_CAPABILITY,
+            UCP_VERSION,
+            "https://ucp.dev/checkout",
+            "https://ucp.dev/checkout.json",
+        )
+        .unwrap_or_else(|error| panic!("checkout: {error}"))],
         payment_handlers: vec![different_handler],
     };
 

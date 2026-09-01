@@ -4,10 +4,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Display, Formatter};
 use std::path::Path;
 
+use layerx_proof::checkpoint::SettlementDomain;
 use layerx_proof::export::{
     verify as verify_protocol_evidence, ExportVerificationError, OfflineExport,
 };
-use layerx_proof::checkpoint::SettlementDomain;
 use layerx_types::ids::Did;
 use sha2::{Digest, Sha256};
 
@@ -290,11 +290,8 @@ pub fn export(
         });
     }
 
-    let referenced_evidence = collect_referenced_evidence(
-        &entries,
-        evidence_store,
-        expected_settlement_domain,
-    )?;
+    let referenced_evidence =
+        collect_referenced_evidence(&entries, evidence_store, expected_settlement_domain)?;
 
     let first_index = usize::try_from(first_sequence).map_err(|_| ExportError::EmptySlice)?;
     let links = chain_links(
@@ -526,15 +523,12 @@ pub fn review(
         {
             return Err(ReviewError::EvidenceSet);
         }
-        let verified = verify_protocol_evidence(
-            &evidence.protocol_facts,
-            expected_settlement_domain,
-        ).map_err(|error| {
-            ReviewError::Evidence {
-                receipt_id: evidence.receipt_id,
-                error,
-            }
-        })?;
+        let verified =
+            verify_protocol_evidence(&evidence.protocol_facts, expected_settlement_domain)
+                .map_err(|error| ReviewError::Evidence {
+                    receipt_id: evidence.receipt_id,
+                    error,
+                })?;
         report.verified_receipts = report
             .verified_receipts
             .saturating_add(verified.verified_receipts);

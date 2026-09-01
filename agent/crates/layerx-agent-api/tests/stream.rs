@@ -1,6 +1,4 @@
-use layerx_agent_api::identity::{
-    ActivityType, AgentDid, CapabilityId, ExplicitSet, TenantId,
-};
+use layerx_agent_api::identity::{ActivityType, AgentDid, CapabilityId, ExplicitSet, TenantId};
 use layerx_agent_api::subscription::{
     Cursor, DeduplicationId, Delivery, DeliveryTarget, EventDelivery, EventIdentity, GapNotice,
     ReceiptReference, SubscriptionCreate, SubscriptionFilter, SubscriptionScope, TenantObject,
@@ -71,7 +69,10 @@ fn event_delivery_has_identity_derived_deduplication_and_receipt_level() {
         ReceiptReference::None,
     )
     .unwrap_or_else(|error| panic!("delivery: {error:?}"));
-    assert_eq!(delivery.deduplication_id, DeduplicationId::from_event_identity(identity));
+    assert_eq!(
+        delivery.deduplication_id,
+        DeduplicationId::from_event_identity(identity)
+    );
     assert!(SCHEMA.contains("Consumers must deduplicate on deduplication_id"));
     assert_eq!(delivery.cursor, Cursor(Sequence(45)));
 }
@@ -92,6 +93,9 @@ fn gap_and_truncation_are_first_class_delivery_barriers() {
         resume_cursor: Cursor(Sequence(20)),
     };
     assert!(matches!(Delivery::Gap(gap), Delivery::Gap(_)));
-    assert!(matches!(Delivery::Truncated(truncated), Delivery::Truncated(_)));
+    assert!(matches!(
+        Delivery::Truncated(truncated),
+        Delivery::Truncated(_)
+    ));
     assert!(SCHEMA.contains("No later event may be delivered before successful backfill"));
 }

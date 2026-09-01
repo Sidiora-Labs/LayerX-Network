@@ -199,9 +199,7 @@ impl MutualTlsClient {
         if !matches!(method, "GET" | "POST")
             || !path.starts_with('/')
             || path.contains(['?', '#', '\\'])
-            || path
-                .split('/')
-                .any(|segment| matches!(segment, "." | ".."))
+            || path.split('/').any(|segment| matches!(segment, "." | ".."))
             || body.len() > MAX_BODY_BYTES
             || authorization.is_some_and(invalid_header)
             || idempotency.is_some_and(invalid_header)
@@ -214,8 +212,8 @@ impl MutualTlsClient {
             .map_err(|_| RampError::Provider)?
             .next()
             .ok_or(RampError::Provider)?;
-        let stream = TcpStream::connect_timeout(&address, self.timeout)
-            .map_err(|_| RampError::Provider)?;
+        let stream =
+            TcpStream::connect_timeout(&address, self.timeout).map_err(|_| RampError::Provider)?;
         stream
             .set_read_timeout(Some(self.timeout))
             .and_then(|()| stream.set_write_timeout(Some(self.timeout)))
@@ -323,10 +321,7 @@ fn parse_response(bytes: &[u8]) -> Result<HttpResponse, RampError> {
     if !body.is_empty() && content_type != Some("application/json") {
         return Err(RampError::Provider);
     }
-    Ok(HttpResponse {
-        status,
-        body,
-    })
+    Ok(HttpResponse { status, body })
 }
 
 fn decode_chunked(mut input: &[u8]) -> Result<Vec<u8>, RampError> {
@@ -374,9 +369,9 @@ fn invalid_header(value: &str) -> bool {
 fn safe_segment(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 128
-        && value.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':')
-        })
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'))
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -419,12 +414,8 @@ impl ComplianceDecision {
         {
             return Err(RampError::Compliance);
         }
-        verify_detached(
-            public_key,
-            &canonical_compliance(self),
-            &self.signature,
-        )
-        .map_err(|_| RampError::Compliance)
+        verify_detached(public_key, &canonical_compliance(self), &self.signature)
+            .map_err(|_| RampError::Compliance)
     }
 }
 
@@ -596,17 +587,17 @@ impl ProviderResult {
             || self.currency != order.quote.external_currency
             || !safe_segment(&self.operation_id)
             || matches!(self.state, ProviderState::Settled | ProviderState::Reversed)
-                && self
-                    .evidence_digest
-                    .is_none_or(|digest| digest == [0; 32])
+                && self.evidence_digest.is_none_or(|digest| digest == [0; 32])
             || coded_state
                 && self
                     .refusal_code
                     .as_deref()
                     .is_none_or(|code| !safe_segment(code))
             || !coded_state && self.refusal_code.is_some()
-            || matches!(self.state, ProviderState::SubmittedUnknown | ProviderState::Pending)
-                && self.retry_at.is_none_or(|retry| retry == 0)
+            || matches!(
+                self.state,
+                ProviderState::SubmittedUnknown | ProviderState::Pending
+            ) && self.retry_at.is_none_or(|retry| retry == 0)
         {
             return Err(RampError::Provider);
         }
@@ -676,7 +667,13 @@ impl ProviderClient {
             return Err(RampError::Provider);
         }
         let path = operation_id.strip_prefix("idempotency:").map_or_else(
-            || format!("{}/{}", self.status_path.trim_end_matches('/'), operation_id),
+            || {
+                format!(
+                    "{}/{}",
+                    self.status_path.trim_end_matches('/'),
+                    operation_id
+                )
+            },
             |idempotency| {
                 format!(
                     "{}/by-idempotency/{}",
@@ -697,7 +694,11 @@ impl ProviderClient {
         self.decode(order, response)
     }
 
-    fn decode(&self, order: &RampOrder, response: HttpResponse) -> Result<ProviderResult, RampError> {
+    fn decode(
+        &self,
+        order: &RampOrder,
+        response: HttpResponse,
+    ) -> Result<ProviderResult, RampError> {
         if !matches!(response.status, 200 | 202 | 409 | 422) {
             return Err(RampError::Provider);
         }
@@ -821,16 +822,13 @@ impl LayerxClient {
                     registry,
                 )?
             }
-            RampDirection::OffRamp => {
-                compile_payer_grant_draw(order, account_sequence, registry)?
-            }
+            RampDirection::OffRamp => compile_payer_grant_draw(order, account_sequence, registry)?,
         };
         let unsigned = self.unsigned(order, account_sequence, now, compiled)?;
         let canonical = encode_unsigned_envelope(&unsigned).map_err(|_| RampError::Layerx)?;
         let signature = self.sign(order, &canonical)?;
-        let signed = unsigned.attach_signature(
-            Signature::new(&signature).map_err(|_| RampError::Layerx)?,
-        );
+        let signed =
+            unsigned.attach_signature(Signature::new(&signature).map_err(|_| RampError::Layerx)?);
         let signed_bytes = encode_signed_envelope(&signed).map_err(|_| RampError::Layerx)?;
         let decoded = layerx_wire::activity::decode_signed(&signed_bytes, registry)
             .map_err(|_| RampError::Layerx)?;

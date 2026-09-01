@@ -273,7 +273,7 @@ fn validate_credential_paths(config: &RpcEndpointConfig) -> Result<(), Migration
     }
     let metadata =
         fs::metadata(&config.bearer_token_file).map_err(|_| MigrationError::Configuration)?;
-    if !metadata.is_file() || metadata.permissions().mode() & 0o037 != 0 {
+    if !metadata.is_file() || metadata.permissions().mode() & 0o077 != 0 {
         return Err(MigrationError::Configuration);
     }
     Ok(())
@@ -292,10 +292,8 @@ fn independent_identities(identities: &[(&str, u16, &str)]) -> bool {
         .iter()
         .map(|(host, port, _)| (*host, *port))
         .collect();
-    let backend_identities: BTreeSet<_> = identities
-        .iter()
-        .map(|(_, _, backend)| *backend)
-        .collect();
+    let backend_identities: BTreeSet<_> =
+        identities.iter().map(|(_, _, backend)| *backend).collect();
     network_identities.len() == identities.len() && backend_identities.len() == identities.len()
 }
 
@@ -597,11 +595,8 @@ mod tests {
         let (directory, mut config) = credential_fixture();
         assert_eq!(validate_credential_paths(&config), Ok(()));
 
-        fs::set_permissions(
-            &config.bearer_token_file,
-            fs::Permissions::from_mode(0o640),
-        )
-        .unwrap_or_else(|error| panic!("weaken credential fixture: {error}"));
+        fs::set_permissions(&config.bearer_token_file, fs::Permissions::from_mode(0o640))
+            .unwrap_or_else(|error| panic!("weaken credential fixture: {error}"));
         assert!(validate_credential_paths(&config).is_err());
 
         config.bearer_token_file = PathBuf::from("relative.token");

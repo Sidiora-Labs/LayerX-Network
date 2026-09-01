@@ -28,7 +28,7 @@ use layerx_wire::hash::{
 };
 
 static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(1);
-const PROTOCOL_VERSION: u16 = 1;
+const PROTOCOL_VERSION: u16 = layerx_wire::limits::PROTOCOL_VERSION;
 const NETWORK_ID: u32 = 42;
 const BATCH_NUMBER: u64 = 8;
 const GLOBAL_SEQUENCE: u64 = 9;
@@ -87,7 +87,10 @@ fn signed_activity(registry: &ModuleRegistry) -> (Vec<u8>, [u8; 32]) {
     let key = EdSigningKey::from_bytes(&[0x31; 32]);
     let public_key = key.verifying_key().to_bytes();
     let mut unsigned = Encoder::new(4_096);
-    assert_eq!(unsigned.structure_header(0x1001), Ok(()));
+    assert_eq!(
+        unsigned.structure_header_version(0x1001, PROTOCOL_VERSION),
+        Ok(())
+    );
     assert_eq!(unsigned.u8(11), Ok(()));
     activity_fields(&mut unsigned, &public_key);
     let unsigned = unsigned.finish();
@@ -101,7 +104,10 @@ fn signed_activity(registry: &ModuleRegistry) -> (Vec<u8>, [u8; 32]) {
     let signature = key.sign(&message.digest()).to_bytes();
 
     let mut signed = Encoder::new(4_096);
-    assert_eq!(signed.structure_header(0x1001), Ok(()));
+    assert_eq!(
+        signed.structure_header_version(0x1001, PROTOCOL_VERSION),
+        Ok(())
+    );
     assert_eq!(signed.u8(12), Ok(()));
     activity_fields(&mut signed, &public_key);
     assert_eq!(signed.tag(12, 12), Ok(()));
@@ -116,7 +122,10 @@ fn signed_activity(registry: &ModuleRegistry) -> (Vec<u8>, [u8; 32]) {
 
 fn receipt_bytes(activity_identifier: [u8; 32], signature: Option<[u8; 64]>) -> Vec<u8> {
     let mut encoder = Encoder::new(4_096);
-    assert_eq!(encoder.structure_header(0x5201), Ok(()));
+    assert_eq!(
+        encoder.structure_header_version(0x5201, PROTOCOL_VERSION),
+        Ok(())
+    );
     assert_eq!(encoder.u16(PROTOCOL_VERSION), Ok(()));
     assert_eq!(encoder.bytes(&activity_identifier, 32), Ok(()));
     assert_eq!(encoder.u64(GLOBAL_SEQUENCE), Ok(()));
@@ -164,7 +173,10 @@ fn header_bytes(
     sequencer_id: [u8; 32],
 ) -> Vec<u8> {
     let mut encoder = Encoder::new(354);
-    assert_eq!(encoder.structure_header(0x1701), Ok(()));
+    assert_eq!(
+        encoder.structure_header_version(0x1701, PROTOCOL_VERSION),
+        Ok(())
+    );
     assert_eq!(encoder.u8(15), Ok(()));
     for field in 1..=15 {
         assert_eq!(encoder.tag(field, 15), Ok(()));

@@ -27,12 +27,15 @@ fn reference(head_sequence: u64, checkpoint: u8) -> Reference {
 
 fn header_bytes(state_root: [u8; 32], activity_root: [u8; 32], sequencer: [u8; 32]) -> Vec<u8> {
     let mut encoder = Encoder::new(354);
-    assert_eq!(encoder.structure_header(0x1701), Ok(()));
+    assert_eq!(
+        encoder.structure_header_version(0x1701, layerx_wire::limits::PROTOCOL_VERSION),
+        Ok(())
+    );
     assert_eq!(encoder.u8(15), Ok(()));
     for field in 1..=15 {
         assert_eq!(encoder.tag(field, 15), Ok(()));
         match field {
-            1 => assert_eq!(encoder.u16(1), Ok(())),
+            1 => assert_eq!(encoder.u16(layerx_wire::limits::PROTOCOL_VERSION), Ok(())),
             2 => assert_eq!(encoder.u32(42), Ok(())),
             3 => assert_eq!(encoder.u64(2), Ok(())),
             4 => assert_eq!(encoder.u64(7), Ok(())),

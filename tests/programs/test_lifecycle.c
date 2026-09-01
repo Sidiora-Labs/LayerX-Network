@@ -35,20 +35,6 @@ static int sign_raw(const uint8_t private_key[32], const uint8_t *message,
     return ok ? 0 : 1;
 }
 
-static lxp_result checkpoint_id(uint32_t network_id,
-                                const uint8_t state_root[32],
-                                uint8_t output[32])
-{
-    uint8_t preimage[36];
-    preimage[0] = (uint8_t)(network_id >> 24U);
-    preimage[1] = (uint8_t)(network_id >> 16U);
-    preimage[2] = (uint8_t)(network_id >> 8U);
-    preimage[3] = (uint8_t)network_id;
-    (void)memcpy(preimage + 4U, state_root, 32U);
-    return lxp_hash_domain(LXP_DOMAIN_CHECKPOINT_CERTIFICATE,
-                           preimage, sizeof(preimage), output);
-}
-
 static int project_metering_genesis(lxp_kernel *kernel)
 {
     static const uint8_t signer_private_key[32] = {7U};
@@ -57,22 +43,22 @@ static int project_metering_genesis(lxp_kernel *kernel)
     lxp_arena arena;
     lxp_byte_span preimage;
     lx_programs_metering_schedule schedule;
+    lx_programs_fee_genesis_parameters fees;
+    uint8_t asset_id[32] = {1U};
     size_t index;
     (void)memset(&manifest, 0, sizeof(manifest));
     manifest.protocol_version = LXP_PROTOCOL_VERSION;
     manifest.network_id = 1U;
     manifest.genesis_timestamp_ms = 1U;
     manifest.parameter_count = 1U;
-    manifest.parameters[0].module_id = 1U;
-    manifest.parameters[0].key[0] = 1U;
+    manifest.parameters[0].module_id = LXP_MODULE_GOVERNANCE;
+    (void)memcpy(manifest.parameters[0].key, "parameter-version", 17U);
+    manifest.parameters[0].value[31] = 1U;
     manifest.guarantor_count = 1U;
     manifest.guarantors[0].guarantor_id[0] = 1U;
     (void)memset(manifest.guarantors[0].public_key, 1,
                  sizeof(manifest.guarantors[0].public_key));
-    manifest.guarantors[0].bond = (lxp_u128){0U, 1U};
-    manifest.account_count = 1U;
-    manifest.accounts[0].account_id[0] = 1U;
-    manifest.accounts[0].asset_id[0] = 1U;
+    manifest.guarantors[0].bond = (lxp_u128){0U, 0U};
     if (public_key_for(signer_private_key, manifest.signer_public_key) != 0)
         return 1;
     (void)memset(&schedule, 0, sizeof(schedule));
@@ -85,14 +71,28 @@ static int project_metering_genesis(lxp_kernel *kernel)
     schedule.coefficients[8] = 8U;
     schedule.activation_batch = 1U;
     schedule.authority_kind = LX_PROGRAMS_METERING_AUTHORITY_GENESIS;
+    (void)memset(&fees, 0, sizeof(fees));
+    fees.schedule = (lx_programs_fee_schedule){
+        1U, 1U, 1U, 2U, 4U, 1U, 1U, 100U
+    };
+    (void)memcpy(fees.occupancy_asset_id, asset_id, 32U);
+    fees.target_occupancy_byte_batches = 100U;
+    fees.response_denominator = 1U;
+    fees.maximum_change_numerator = 1U;
+    fees.maximum_change_denominator = 10U;
+    fees.minimum_fee_units_per_occupancy_byte_batch = 1U;
+    fees.maximum_fee_units_per_occupancy_byte_batch = 1000U;
     if (lxp_arena_init(&arena, arena_bytes, sizeof(arena_bytes)) != LXP_OK ||
+        lxp_genesis_fresh_empty_accounts(&manifest, asset_id) != LXP_OK ||
         lxp_hash_payload(manifest.signer_public_key, 32U,
                          schedule.authority_digest) != LXP_OK ||
         lxp_programs_metering_genesis_append(&manifest, &schedule) != LXP_OK ||
+        lxp_programs_fee_genesis_append(&manifest, &fees) != LXP_OK ||
         lxp_genesis_state_root(&manifest, &arena,
                                manifest.genesis_state_root) != LXP_OK ||
-        checkpoint_id(manifest.network_id, manifest.genesis_state_root,
-                      manifest.paxeer_genesis_checkpoint_id) != LXP_OK ||
+        lxp_genesis_receipt_state_root(
+            manifest.network_id, manifest.genesis_state_root,
+            manifest.genesis_receipt_state_root) != LXP_OK ||
         lxp_genesis_encode(&manifest, false, &arena, &preimage) != LXP_OK ||
         sign_raw(signer_private_key, preimage.bytes, preimage.length,
                  manifest.signature) != 0 ||

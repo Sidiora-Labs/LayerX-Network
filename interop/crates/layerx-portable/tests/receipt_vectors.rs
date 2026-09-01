@@ -4,7 +4,7 @@
 //! using only the published format specification and trusted batch authorization.
 
 use layerx_portable::{
-    PortableReceipt, PortableReceiptError, PORTABLE_RECEIPT_FORMAT, interop_portable_verification,
+    interop_portable_verification, PortableReceipt, PortableReceiptError, PORTABLE_RECEIPT_FORMAT,
 };
 use layerx_proof::receipt::{AuthorizedBatch, VerificationFailure};
 
@@ -125,25 +125,14 @@ fn reject_unsupported_verification_level() {
 
 #[test]
 fn verify_requires_matching_batch_authorization() {
-    let receipt = PortableReceipt::from_json(GOLDEN_RECEIPT_JSON.as_bytes())
-        .expect("golden vector parses");
-    
-    let trusted_batch = AuthorizedBatch::new(
-        [1u8; 32],
-        [2u8; 32],
-        [3u8; 32],
-        [4u8; 32],
-        [5u8; 32],
-    );
-    
-    let mismatched_batch = AuthorizedBatch::new(
-        [99u8; 32],
-        [2u8; 32],
-        [3u8; 32],
-        [4u8; 32],
-        [5u8; 32],
-    );
-    
+    let receipt =
+        PortableReceipt::from_json(GOLDEN_RECEIPT_JSON.as_bytes()).expect("golden vector parses");
+
+    let trusted_batch = AuthorizedBatch::new([1u8; 32], [2u8; 32], [3u8; 32], [4u8; 32], [5u8; 32]);
+
+    let mismatched_batch =
+        AuthorizedBatch::new([99u8; 32], [2u8; 32], [3u8; 32], [4u8; 32], [5u8; 32]);
+
     let result = receipt.verify(&mismatched_batch);
     match result {
         Err(PortableReceiptError::BatchAuthorizationMismatch) => {}
@@ -154,17 +143,11 @@ fn verify_requires_matching_batch_authorization() {
 #[test]
 fn roundtrip_export_and_verify() {
     let canonical_receipt = vec![
-        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+        1, 1,
     ];
-    let batch = AuthorizedBatch::new(
-        [10u8; 32],
-        [20u8; 32],
-        [30u8; 32],
-        [40u8; 32],
-        [50u8; 32],
-    );
-    
+    let batch = AuthorizedBatch::new([10u8; 32], [20u8; 32], [30u8; 32], [40u8; 32], [50u8; 32]);
+
     let result = PortableReceipt::export(&canonical_receipt, &batch);
     assert!(
         result.is_err() || result.is_ok(),
@@ -174,19 +157,13 @@ fn roundtrip_export_and_verify() {
 
 #[test]
 fn export_and_json_roundtrip() {
-    let batch = AuthorizedBatch::new(
-        [1u8; 32],
-        [2u8; 32],
-        [3u8; 32],
-        [4u8; 32],
-        [5u8; 32],
-    );
-    
-    let parsed_original = PortableReceipt::from_json(GOLDEN_RECEIPT_JSON.as_bytes())
-        .expect("golden vector parses");
+    let batch = AuthorizedBatch::new([1u8; 32], [2u8; 32], [3u8; 32], [4u8; 32], [5u8; 32]);
+
+    let parsed_original =
+        PortableReceipt::from_json(GOLDEN_RECEIPT_JSON.as_bytes()).expect("golden vector parses");
     let json_output = parsed_original.to_json().expect("serializes to JSON");
     let parsed_roundtrip = PortableReceipt::from_json(&json_output).expect("roundtrip parses");
-    
+
     assert_eq!(
         parsed_original.format(),
         parsed_roundtrip.format(),
@@ -212,7 +189,7 @@ fn reject_oversized_json() {
         oversized.push_str("AAAA");
     }
     oversized.push_str(r#"","receiptDigest":"BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ","batchId":"AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE","asset":"AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI","previousStateRoot":"AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM","resultingStateRoot":"BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ","sequencerPublicKey":"BQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQU"}"#);
-    
+
     let result = PortableReceipt::from_json(oversized.as_bytes());
     match result {
         Err(PortableReceiptError::JsonBounds) => {}
@@ -222,13 +199,7 @@ fn reject_oversized_json() {
 
 #[test]
 fn reject_oversized_canonical_receipt() {
-    let batch = AuthorizedBatch::new(
-        [1u8; 32],
-        [2u8; 32],
-        [3u8; 32],
-        [4u8; 32],
-        [5u8; 32],
-    );
+    let batch = AuthorizedBatch::new([1u8; 32], [2u8; 32], [3u8; 32], [4u8; 32], [5u8; 32]);
     let oversized_receipt = vec![0u8; 1_048_577];
     let result = PortableReceipt::export(&oversized_receipt, &batch);
     match result {
@@ -239,13 +210,7 @@ fn reject_oversized_canonical_receipt() {
 
 #[test]
 fn reject_empty_canonical_receipt() {
-    let batch = AuthorizedBatch::new(
-        [1u8; 32],
-        [2u8; 32],
-        [3u8; 32],
-        [4u8; 32],
-        [5u8; 32],
-    );
+    let batch = AuthorizedBatch::new([1u8; 32], [2u8; 32], [3u8; 32], [4u8; 32], [5u8; 32]);
     let result = PortableReceipt::export(&[], &batch);
     match result {
         Err(PortableReceiptError::ReceiptBounds) => {}

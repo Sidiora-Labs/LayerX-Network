@@ -12,35 +12,31 @@ use std::task::{Context, Poll, Wake, Waker};
 use std::thread;
 use std::time::Duration;
 
+use ed25519_dalek::{Signer as _, SigningKey};
 use layerx_agentd::boot::{handshake_gate, Gate, GateError};
 use layerx_agentd::config::StartupConfig;
-use layerx_agentd::protocol_evidence::{
-    EvidenceAuthority, RawReceiptEvidence, RawStateEvidence,
-};
 use layerx_agentd::prepare::{
     prepare_activity, CorePreparationBoundary, CorePreparationState, CoreStateError,
     PreparationDefaults, PrepareRequest,
 };
+use layerx_agentd::protocol_evidence::{EvidenceAuthority, RawReceiptEvidence, RawStateEvidence};
 use layerx_agentd::sign::{attach_external_signature, verify_before_submit, VerifiedSubmission};
 use layerx_agentd::store::TenantId;
+use layerx_client::lni::framing::{read_frame, write_frame};
+use layerx_client::lni::handshake::{encode_node_info, NodeInfo, NodeRole};
+use layerx_client::lni::schema::{decode_envelope, encode_envelope, Envelope, Version};
+use layerx_client::lni::transport::{ConnectionGate, Limits, Uds};
 use layerx_crypto::local::LocalSigner;
 use layerx_crypto::signer::{sign_disclosed, Signer};
+use layerx_programs::hex;
+use layerx_proof::merkle::build_proof;
 use layerx_types::activity::{Authority, TimestampBound};
 use layerx_types::amount::Amount;
 use layerx_types::ids::{Did, IdempotencyKey};
 use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry};
-use layerx_wire::encode::Encoder;
-use layerx_client::lni::framing::{read_frame, write_frame};
-use layerx_client::lni::handshake::{encode_node_info, NodeInfo, NodeRole};
-use layerx_client::lni::schema::{
-    decode_envelope, encode_envelope, Envelope, Version,
-};
-use layerx_client::lni::transport::{ConnectionGate, Limits, Uds};
-use layerx_programs::hex;
-use layerx_proof::merkle::build_proof;
 use layerx_types::verify::VerificationLevel;
+use layerx_wire::encode::Encoder;
 use layerx_wire::hash::{batch_header_digest, execution_batch_id, receipt_digest};
-use ed25519_dalek::{Signer as _, SigningKey};
 
 static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(1);
 
@@ -130,7 +126,7 @@ fn send_payload(id: u8) -> Vec<u8> {
         .u32(17)
         .unwrap_or_else(|error| panic!("network: {error:?}"));
     encoder
-        .u16(1)
+        .u16(layerx_wire::limits::PROTOCOL_VERSION)
         .unwrap_or_else(|error| panic!("version: {error:?}"));
     encoder.finish()
 }
@@ -213,8 +209,7 @@ pub struct TestAuthorityPolicy<'a> {
 }
 
 pub fn evidence_authority(policy: TestAuthorityPolicy<'_>) -> EvidenceAuthority {
-    try_evidence_authority(policy)
-        .unwrap_or_else(|error| panic!("evidence authority: {error:?}"))
+    try_evidence_authority(policy).unwrap_or_else(|error| panic!("evidence authority: {error:?}"))
 }
 
 pub fn evidence_authority_for_sequencer(
@@ -277,10 +272,7 @@ fn try_evidence_authority_with_sequencer(
             tenant.clone(),
             PathBuf::from("/etc/layerx/signer-a.kvx"),
         )]),
-        verification_defaults: BTreeMap::from([(
-            tenant,
-            VerificationLevel::STATE_PROVEN,
-        )]),
+        verification_defaults: BTreeMap::from([(tenant, VerificationLevel::STATE_PROVEN)]),
         sequencer_authority_source: authority_path,
     };
     let mut gate = Gate::new(&config)?;
@@ -352,7 +344,7 @@ fn try_evidence_authority_with_sequencer(
 
 pub fn evidence_verifier() -> EvidenceAuthority {
     evidence_authority(TestAuthorityPolicy {
-        protocol_version: 1,
+        protocol_version: layerx_wire::limits::PROTOCOL_VERSION,
         network_id: 42,
         records: &[TestAuthorityRecord {
             signing_seed: [0x3a; 32],
@@ -376,13 +368,7 @@ pub fn raw_receipt_at(
     amount: u128,
     global_sequence: u64,
 ) -> RawReceiptEvidence {
-    raw_receipt_for_execution_batch(
-        activity_id,
-        result_code,
-        amount,
-        global_sequence,
-        7,
-    )
+    raw_receipt_for_execution_batch(activity_id, result_code, amount, global_sequence, 7)
 }
 
 #[allow(clippy::too_many_lines)]
@@ -406,8 +392,11 @@ pub fn raw_receipt_for_execution_batch(
     let asset = [0x24; 32];
     let encode = |signature: Option<[u8; 64]>| {
         let mut encoder = Encoder::new(4096);
-        assert_eq!(encoder.structure_header(0x5201), Ok(()));
-        assert_eq!(encoder.u16(1), Ok(()));
+        assert_eq!(
+            encoder.structure_header_version(0x5201, layerx_wire::limits::PROTOCOL_VERSION,),
+            Ok(())
+        );
+        assert_eq!(encoder.u16(layerx_wire::limits::PROTOCOL_VERSION), Ok(()));
         assert_eq!(encoder.bytes(&activity_id, 32), Ok(()));
         assert_eq!(encoder.u64(global_sequence), Ok(()));
         assert_eq!(encoder.bytes(&previous_state_root, 32), Ok(()));
@@ -425,11 +414,21 @@ pub fn raw_receipt_for_execution_batch(
         assert_eq!(encoder.u128(amount), Ok(()));
         assert_eq!(encoder.bytes(&[0x26; 32], 32), Ok(()));
         assert_eq!(encoder.u128(1_000 + amount), Ok(()));
-        assert_eq!(encoder.u128(if result_code == 0 { 1_000 } else { 1_000 + amount }), Ok(()));
+        assert_eq!(
+            encoder.u128(if result_code == 0 {
+                1_000
+            } else {
+                1_000 + amount
+            }),
+            Ok(())
+        );
         assert_eq!(encoder.u64(1), Ok(()));
         assert_eq!(encoder.bytes(&[0x27; 32], 32), Ok(()));
         assert_eq!(encoder.u128(10), Ok(()));
-        assert_eq!(encoder.u128(if result_code == 0 { 10 + amount } else { 10 }), Ok(()));
+        assert_eq!(
+            encoder.u128(if result_code == 0 { 10 + amount } else { 10 }),
+            Ok(())
+        );
         for value in [[0x28; 32], [0x29; 32], [0x2a; 32]] {
             assert_eq!(encoder.bytes(&value, 32), Ok(()));
         }
@@ -441,18 +440,24 @@ pub fn raw_receipt_for_execution_batch(
         encoder.finish()
     };
     let unsigned = encode(None);
-    let digest = receipt_digest(&unsigned)
-        .unwrap_or_else(|error| panic!("receipt digest: {error:?}"));
+    let digest =
+        receipt_digest(&unsigned).unwrap_or_else(|error| panic!("receipt digest: {error:?}"));
     let canonical_receipt = encode(Some(key.sign(&digest).to_bytes()));
     let leaves = [canonical_receipt.as_slice()];
-    let (proof, receipt_root) = build_proof(&leaves, 0)
-        .unwrap_or_else(|error| panic!("receipt proof: {error:?}"));
+    let (proof, receipt_root) =
+        build_proof(&leaves, 0).unwrap_or_else(|error| panic!("receipt proof: {error:?}"));
     let sequencer_id = key.verifying_key().to_bytes();
     let mut encoder = Encoder::new(354);
-    assert_eq!(encoder.structure_header(0x1701), Ok(()));
+    assert_eq!(
+        encoder.structure_header_version(0x1701, layerx_wire::limits::PROTOCOL_VERSION),
+        Ok(())
+    );
     assert_eq!(encoder.u8(15), Ok(()));
     let fields: [(u8, Vec<u8>); 15] = [
-        (1, 1_u16.to_be_bytes().to_vec()),
+        (
+            1,
+            layerx_wire::limits::PROTOCOL_VERSION.to_be_bytes().to_vec(),
+        ),
         (2, 42_u32.to_be_bytes().to_vec()),
         (3, 2_u64.to_be_bytes().to_vec()),
         (4, 7_u64.to_be_bytes().to_vec()),
@@ -497,8 +502,8 @@ pub fn raw_receipt_for_execution_batch(
         }
     }
     let header = encoder.finish();
-    let header_digest = batch_header_digest(&header)
-        .unwrap_or_else(|error| panic!("header digest: {error:?}"));
+    let header_digest =
+        batch_header_digest(&header).unwrap_or_else(|error| panic!("header digest: {error:?}"));
     RawReceiptEvidence::new(
         canonical_receipt,
         proof,
@@ -519,16 +524,13 @@ pub fn corrupt_raw_receipt(
     )
 }
 
-pub fn raw_state_leaf(
-    canonical_state: Vec<u8>,
-    observed_head: u64,
-) -> RawStateEvidence {
+pub fn raw_state_leaf(canonical_state: Vec<u8>, observed_head: u64) -> RawStateEvidence {
     raw_state_leaf_with(
         canonical_state,
         observed_head,
         StateHeaderIdentity {
             signing_seed: [0x3a; 32],
-            protocol_version: 1,
+            protocol_version: layerx_wire::limits::PROTOCOL_VERSION,
             network_id: 42,
             epoch: 2,
             batch_number: 7,
@@ -563,11 +565,14 @@ pub fn raw_state_leaf_with_sequencer_id(
     sequencer_id: [u8; 32],
 ) -> RawStateEvidence {
     let leaves = [canonical_state.as_slice()];
-    let (proof, root) = build_proof(&leaves, 0)
-        .unwrap_or_else(|error| panic!("state proof: {error:?}"));
+    let (proof, root) =
+        build_proof(&leaves, 0).unwrap_or_else(|error| panic!("state proof: {error:?}"));
     let key = SigningKey::from_bytes(&identity.signing_seed);
     let mut encoder = Encoder::new(354);
-    assert_eq!(encoder.structure_header(0x1701), Ok(()));
+    assert_eq!(
+        encoder.structure_header_version(0x1701, identity.protocol_version),
+        Ok(())
+    );
     assert_eq!(encoder.u8(15), Ok(()));
     let fields: [(u8, Vec<u8>); 15] = [
         (1, identity.protocol_version.to_be_bytes().to_vec()),
@@ -589,15 +594,34 @@ pub fn raw_state_leaf_with_sequencer_id(
     for (field, value) in fields {
         assert_eq!(encoder.tag(field, 15), Ok(()));
         match field {
-            1 => assert_eq!(encoder.u16(u16::from_be_bytes([value[0], value[1]])), Ok(())),
-            2 => assert_eq!(encoder.u32(u32::from_be_bytes(value.as_slice().try_into().unwrap_or_else(|_| panic!("u32 field")))), Ok(())),
-            3..=6 | 14 => assert_eq!(encoder.u64(u64::from_be_bytes(value.as_slice().try_into().unwrap_or_else(|_| panic!("u64 field")))), Ok(())),
+            1 => assert_eq!(
+                encoder.u16(u16::from_be_bytes([value[0], value[1]])),
+                Ok(())
+            ),
+            2 => assert_eq!(
+                encoder.u32(u32::from_be_bytes(
+                    value
+                        .as_slice()
+                        .try_into()
+                        .unwrap_or_else(|_| panic!("u32 field"))
+                )),
+                Ok(())
+            ),
+            3..=6 | 14 => assert_eq!(
+                encoder.u64(u64::from_be_bytes(
+                    value
+                        .as_slice()
+                        .try_into()
+                        .unwrap_or_else(|_| panic!("u64 field"))
+                )),
+                Ok(())
+            ),
             _ => assert_eq!(encoder.bytes(&value, 32), Ok(())),
         }
     }
     let header = encoder.finish();
-    let digest = batch_header_digest(&header)
-        .unwrap_or_else(|error| panic!("header digest: {error:?}"));
+    let digest =
+        batch_header_digest(&header).unwrap_or_else(|error| panic!("header digest: {error:?}"));
     RawStateEvidence::new(
         canonical_state,
         proof,
@@ -607,10 +631,7 @@ pub fn raw_state_leaf_with_sequencer_id(
     )
 }
 
-pub fn corrupt_raw_state(
-    raw: &RawStateEvidence,
-    canonical_state: Vec<u8>,
-) -> RawStateEvidence {
+pub fn corrupt_raw_state(raw: &RawStateEvidence, canonical_state: Vec<u8>) -> RawStateEvidence {
     RawStateEvidence::new(
         canonical_state,
         raw.proof().clone(),

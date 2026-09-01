@@ -52,12 +52,15 @@ fn limits() -> Limits {
 
 fn header_bytes(state_root: [u8; 32], receipt_root: [u8; 32], sequencer_id: [u8; 32]) -> Vec<u8> {
     let mut encoder = Encoder::new(354);
-    assert_eq!(encoder.structure_header(0x1701), Ok(()));
+    assert_eq!(
+        encoder.structure_header_version(0x1701, layerx_wire::limits::PROTOCOL_VERSION),
+        Ok(())
+    );
     assert_eq!(encoder.u8(15), Ok(()));
     for field in 1..=15 {
         assert_eq!(encoder.tag(field, 15), Ok(()));
         match field {
-            1 => assert_eq!(encoder.u16(1), Ok(())),
+            1 => assert_eq!(encoder.u16(layerx_wire::limits::PROTOCOL_VERSION), Ok(())),
             2 => assert_eq!(encoder.u32(77), Ok(())),
             3 => assert_eq!(encoder.u64(2), Ok(())),
             4 => assert_eq!(encoder.u64(7), Ok(())),
@@ -144,8 +147,11 @@ fn receipt_bytes(
     signature: Option<[u8; 64]>,
 ) -> Vec<u8> {
     let mut encoder = Encoder::new(4_096);
-    assert_eq!(encoder.structure_header(0x5201), Ok(()));
-    assert_eq!(encoder.u16(1), Ok(()));
+    assert_eq!(
+        encoder.structure_header_version(0x5201, layerx_wire::limits::PROTOCOL_VERSION),
+        Ok(())
+    );
+    assert_eq!(encoder.u16(layerx_wire::limits::PROTOCOL_VERSION), Ok(()));
     assert_eq!(encoder.bytes(&activity_id, 32), Ok(()));
     assert_eq!(encoder.u64(12), Ok(()));
     assert_eq!(encoder.bytes(&[0x21; 32], 32), Ok(()));
@@ -267,7 +273,7 @@ fn context(requested: VerificationLevel, authorization: SequencerAuthorization) 
     ReadContext {
         interface_version: Version::V1_2,
         correlation_id: 44,
-        expected_protocol_version: 1,
+        expected_protocol_version: layerx_wire::limits::PROTOCOL_VERSION,
         expected_network_id: 77,
         requested: Requested::new(requested),
         head: Head {

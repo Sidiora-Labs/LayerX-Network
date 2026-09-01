@@ -46,7 +46,7 @@ static lxp_result execute(lxp_module_ctx *ctx,
     set.legs[0].amount = request->amount;
     set.legs[0].reason = LXP_REASON_PAYMENT;
     set.context = request->context;
-    return lxp_ctx_emit_transfer_set(ctx, &set, receipt);
+    return lxp_ctx_emit_monetary_transfer_set(ctx, &set, receipt);
 }
 
 lxp_result lx_asset_send_execute(lxp_module_ctx *ctx,

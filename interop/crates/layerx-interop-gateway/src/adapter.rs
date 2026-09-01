@@ -294,7 +294,9 @@ mod tests {
             SpecVersion::parse(pinned)
                 .unwrap_or_else(|error| panic!("pinned version {pinned} refused: {error}"));
         }
-        for unpinned in ["", "*", "2.x", "^2.0", "~2.0.1", ">=2", "2.", ".2", "2..0", "latest"] {
+        for unpinned in [
+            "", "*", "2.x", "^2.0", "~2.0.1", ">=2", "2.", ".2", "2..0", "latest",
+        ] {
             assert_eq!(
                 SpecVersion::parse(unpinned),
                 Err(AdapterError::UnpinnedVersion),
@@ -324,8 +326,7 @@ mod tests {
 
     #[test]
     fn pins_and_suites_without_content_are_refused() {
-        let version = SpecVersion::parse("2")
-            .unwrap_or_else(|error| panic!("version: {error}"));
+        let version = SpecVersion::parse("2").unwrap_or_else(|error| panic!("version: {error}"));
         assert_eq!(
             PinnedSpec::new(identifier("x402"), version, [0; 32]),
             Err(AdapterError::UnpinnedDocument)

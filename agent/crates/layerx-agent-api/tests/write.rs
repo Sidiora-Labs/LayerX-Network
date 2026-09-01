@@ -5,8 +5,8 @@ use layerx_agent_api::prepare::{
 use layerx_agent_api::track::{
     ReceiptRef, SubmissionRef, SubmissionState, TrackedSubmission, WaitRequest, WaitResult,
 };
-use layerx_agent_api::{Amount, TimestampSeconds};
 use layerx_agent_api::verify::Level;
+use layerx_agent_api::{Amount, TimestampSeconds};
 
 const SCHEMA: &str = include_str!("../../../schema/agent-api/write.kvx");
 
@@ -26,9 +26,7 @@ fn preparation_binds_exact_bytes_preimage_disclosure_and_expiry() {
             activity_type: ActivityType(9),
             actor: required(AgentDid::new("did:layerx:actor")),
             authority: required(AuthorityRef::new("owner-1")),
-            counterparties: ExplicitSet::allow(vec![required(AgentDid::new(
-                "did:layerx:payee",
-            ))]),
+            counterparties: ExplicitSet::allow(vec![required(AgentDid::new("did:layerx:payee"))]),
             amounts: ExplicitSet::deny_all(),
             asset: required(Asset::new("LXP")),
             fee_limit: Amount(3),

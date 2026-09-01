@@ -12,6 +12,7 @@ private let maximumEffects: UInt32 = 512
 private let maximumEffectBody: UInt32 = 256
 private let batchHeaderBytes = 354
 private let allAvailabilityClasses: UInt8 = 0x1f
+private let currentProtocolVersion: UInt16 = 2
 public struct UInt128Value: Hashable, Sendable {
     public let high: UInt64
     public let low: UInt64
@@ -326,6 +327,7 @@ public enum LocalVerifier {
 
     public static func verifyBatchInclusion(kind: InclusionKind, canonicalLeaf: Data, proof: MerkleProof, canonicalHeader: Data, headerSignature: Data, authorization: SequencerAuthorization) async throws -> InclusionVerification {
         let header = try decodeBatchHeader(canonicalHeader)
+        guard header.protocolVersion == currentProtocolVersion else { throw verificationFailure() }
         let authorizedSequencerID = try exact(authorization.sequencerID, 32)
         guard header.batchNumber >= authorization.firstBatchNumber,
               header.batchNumber <= authorization.lastBatchNumber,
@@ -348,6 +350,7 @@ public enum LocalVerifier {
         guard input.availabilityObtained, certificate.threshold > 0,
               UInt64(certificate.validityProof.count) <= UInt64(UInt32.max) else { throw verificationFailure() }
         let header = try decodeBatchHeader(certificate.canonicalHeader)
+        guard header.protocolVersion == currentProtocolVersion else { throw verificationFailure() }
         let checkpointID = digest(checkpointDomain, certificate.canonicalHeader, encodeUInt32(UInt32(certificate.validityProof.count)), certificate.validityProof)
         let registeredCheckpointID = try exact(input.registeredCheckpointID, 32)
         let expectedSettlementContract = try exact(input.expectedSettlementContract, 20)
@@ -409,6 +412,7 @@ public enum LocalVerifier {
     public static func verifyReceiptOutcome(_ canonicalReceipt: Data, authorized: AuthorizedReceiptBatch) async throws -> ReceiptVerification {
         let decoded = try decodeProtocolReceipt(canonicalReceipt)
         let receipt = decoded.receipt
+        guard receipt.protocolVersion == currentProtocolVersion else { throw receiptFailure(.protocolVersion) }
         let batchID = try exact(authorized.batchID, 32)
         let asset = try exact(authorized.asset, 32)
         let previousStateRoot = try exact(authorized.previousStateRoot, 32)

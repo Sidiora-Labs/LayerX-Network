@@ -25,7 +25,7 @@ public final class ReceiptFixtureTest {
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final Path FIXTURE = Paths
         .get(System.getProperty("layerx.repo.root", "../../.."))
-        .resolve("platform/sdk/conformance/fixtures/receipt-positive-v1.json");
+        .resolve("platform/sdk/conformance/fixtures/receipt-positive-v2.json");
     private static final Path FIXTURE_ROOT = FIXTURE.getParent();
 
     @Test
@@ -83,7 +83,7 @@ public final class ReceiptFixtureTest {
     @Test
     void programsReceiptPreservesOptionalOutcome() throws Exception {
         JsonNode fixture = JSON.readTree(Files.readString(
-            FIXTURE_ROOT.resolve("receipt-programs-positive-v1.json")));
+            FIXTURE_ROOT.resolve("receipt-programs-positive-v2.json")));
         LocalVerifier.ReceiptVerification verified = LocalVerifier.verifyReceipt(
             hexDecode(fixture.get("canonical_receipt_hex").asText()),
             authorizedBatch(fixture));
@@ -92,13 +92,19 @@ public final class ReceiptFixtureTest {
         assertEquals(3, outcome.encodingVersion());
         assertEquals(1, outcome.runtimeVersion());
         assertEquals(1, outcome.abiVersion());
+        assertEquals(BigInteger.valueOf(2), outcome.occupancyByteBatches());
+        assertEquals(BigInteger.valueOf(7), outcome.occupancyFeeUnits());
+        assertArrayEquals(hexDecode(fixture.get("authorized_batch").get("asset_hex").asText()),
+            outcome.occupancyAssetId());
+        assertFalse(allZero(outcome.occupancyEvidenceDigest()));
+        assertFalse(allZero(outcome.occupancyTransferRoot()));
         assertEquals(BigInteger.valueOf(16), outcome.feeUnits());
     }
 
     @Test
     void refusalVectorsExposeSharedTaxonomy() throws Exception {
         JsonNode fixture = JSON.readTree(Files.readString(
-            FIXTURE_ROOT.resolve("receipt-refusals-v1.json")));
+            FIXTURE_ROOT.resolve("receipt-refusals-v2.json")));
         for (JsonNode vector : fixture.get("vectors")) {
             PlatformSdkException failure = assertThrows(PlatformSdkException.class,
                 () -> LocalVerifier.verifyReceipt(
@@ -128,5 +134,10 @@ public final class ReceiptFixtureTest {
                 + Character.digit(hex.charAt(i + 1), 16));
         }
         return data;
+    }
+
+    private static boolean allZero(byte[] value) {
+        for (byte current : value) if (current != 0) return false;
+        return true;
     }
 }

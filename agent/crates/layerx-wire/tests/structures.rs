@@ -11,6 +11,7 @@ use layerx_wire::receipt::{
     decode, decode_batch_header, decode_checkpoint, decode_merkle_proof, encode,
     encode_batch_header, encode_checkpoint, encode_merkle_proof,
 };
+use sha2::{Digest as _, Sha256};
 
 fn repository_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..")
@@ -92,6 +93,37 @@ fn batch_bytes_for_version(protocol_version: u16) -> Vec<u8> {
     assert!(encoder.u64(6).is_ok());
     assert!(encoder.tag(15, 15).is_ok());
     assert!(encoder.bytes(&[15; 32], 32).is_ok());
+    encoder.finish()
+}
+
+fn checkpoint_vector_root(first: u8) -> [u8; 32] {
+    let mut root = [0; 32];
+    root[0] = first;
+    root
+}
+
+fn protocol_v2_checkpoint_vector_header() -> Vec<u8> {
+    let mut encoder = Encoder::new(354);
+    assert!(encoder.structure_header_version(0x1701, 2).is_ok());
+    assert!(encoder.u8(15).is_ok());
+    for (field, scalar) in [(1, 2_u64), (2, 42), (3, 1), (4, 1), (5, 1), (6, 1_000_000)] {
+        assert!(encoder.tag(field, 15).is_ok());
+        if field == 1 {
+            assert!(encoder.u16(2).is_ok());
+        } else if field == 2 {
+            assert!(encoder.u32(42).is_ok());
+        } else {
+            assert!(encoder.u64(scalar).is_ok());
+        }
+    }
+    for (field, first) in (7_u8..=13).zip([0x11_u8, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77]) {
+        assert!(encoder.tag(field, 15).is_ok());
+        assert!(encoder.bytes(&checkpoint_vector_root(first), 32).is_ok());
+    }
+    assert!(encoder.tag(14, 15).is_ok());
+    assert!(encoder.u64(1000).is_ok());
+    assert!(encoder.tag(15, 15).is_ok());
+    assert!(encoder.bytes(&checkpoint_vector_root(0x88), 32).is_ok());
     encoder.finish()
 }
 
@@ -243,6 +275,29 @@ fn occupancy_batch_header_round_trips_with_its_envelope_version() {
 }
 
 #[test]
+fn protocol_v2_checkpoint_header_matches_the_c_and_solidity_vector() {
+    let header = protocol_v2_checkpoint_vector_header();
+    assert_eq!(header.len(), 354);
+    assert_eq!(&header[..2], &[0, 2]);
+    let decoded = decode_batch_header(&header).expect("v2 checkpoint header");
+    assert_eq!(decoded.protocol_version(), 2);
+    assert_eq!(encode_batch_header(&decoded), Ok(header.clone()));
+
+    let mut hasher = Sha256::new();
+    hasher.update(b"LXP/v2/checkpoint-certificate\x00");
+    hasher.update(&header);
+    hasher.update(0_u32.to_be_bytes());
+    assert_eq!(
+        <[u8; 32]>::from(hasher.finalize()),
+        [
+            0xf5, 0xd3, 0x5d, 0xfd, 0x94, 0x88, 0x12, 0xaa, 0xc7, 0x2e, 0x8b, 0xc5, 0xbd, 0x87,
+            0xc5, 0x7b, 0xe8, 0x37, 0x7c, 0x89, 0x1e, 0x9b, 0x9f, 0xec, 0x6d, 0x84, 0x35, 0x0c,
+            0xdd, 0x8f, 0xf7, 0x43,
+        ]
+    );
+}
+
+#[test]
 fn batch_header_refuses_an_envelope_field_version_mismatch() {
     let mut batch_bytes = batch_bytes_for_version(2);
     batch_bytes[6..8].copy_from_slice(&1_u16.to_be_bytes());
@@ -264,7 +319,7 @@ fn unknown_version_activity_and_field_are_deterministic_rejections() {
     let template = &corpus.replay.canonical_activities[0];
 
     let mut version = template.clone();
-    version[1] = 2;
+    version[1] = 3;
     assert_eq!(
         decode_signed(&version, &registry).map(|_| ()),
         Err(layerx_wire::WireError {

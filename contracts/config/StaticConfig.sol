@@ -21,7 +21,15 @@ library StaticConfig {
         uint192 releaseVersion;
         address governanceTimelock;
         address emergencyCouncil;
+        bytes32 genesisManifestDigest;
+        bytes32 genesisCanonicalStateRoot;
         bytes32 genesisReceiptRoot;
+        address usdlToken;
+        bytes32 usdlAssetId;
+        uint8 usdlDecimals;
+        uint8 usdlProtocolDecimals;
+        uint128 usdlMinimumDeposit;
+        uint128 usdlCustodyCap;
         uint64 challengeWindow;
         uint64 checkpointLivenessBound;
         uint256 enabledFeatures;
@@ -72,12 +80,29 @@ library StaticConfig {
         if (
             config.chainId == 0 || config.protocolVersion != Constants.PROTOCOL_VERSION || config.releaseVersion == 0
                 || config.governanceTimelock == address(0) || config.emergencyCouncil == address(0)
-                || config.governanceTimelock == config.emergencyCouncil || config.genesisReceiptRoot == bytes32(0)
-                || config.challengeWindow < 1 hours || config.checkpointLivenessBound < 1 hours
-                || config.assetDefinitionsRoot == bytes32(0)
+                || config.governanceTimelock == config.emergencyCouncil || config.genesisManifestDigest == bytes32(0)
+                || config.genesisCanonicalStateRoot == bytes32(0) || config.genesisReceiptRoot == bytes32(0)
+                || config.usdlToken != Constants.USDL_TOKEN
+                || config.genesisManifestDigest == config.genesisCanonicalStateRoot
+                || config.genesisManifestDigest == config.genesisReceiptRoot
+                || config.genesisCanonicalStateRoot == config.genesisReceiptRoot
+                || config.usdlAssetId != Constants.USDL_ASSET_ID || config.usdlDecimals != Constants.USDL_TOKEN_DECIMALS
+                || config.usdlProtocolDecimals != Constants.USDL_PROTOCOL_DECIMALS || config.usdlMinimumDeposit == 0
+                || config.usdlCustodyCap < config.usdlMinimumDeposit || config.challengeWindow < 1 hours
+                || config.checkpointLivenessBound < 1 hours || config.assetDefinitionsRoot == bytes32(0)
         ) {
             revert InvalidStaticConfig();
         }
+        AssetDefinition[] memory assets = new AssetDefinition[](1);
+        assets[0] = AssetDefinition({
+            assetId: config.usdlAssetId,
+            token: config.usdlToken,
+            tokenDecimals: config.usdlDecimals,
+            protocolDecimals: config.usdlProtocolDecimals,
+            minimumDeposit: config.usdlMinimumDeposit,
+            custodyCap: config.usdlCustodyCap
+        });
+        if (config.assetDefinitionsRoot != hashAssets(assets)) revert InvalidStaticConfig();
         Features.validate(config.enabledFeatures);
     }
 
@@ -85,13 +110,21 @@ library StaticConfig {
         validate(config, actualChainId);
         return keccak256(
             abi.encode(
-                "LXP/Paxeer/static-config/v1",
+                "LXP/Paxeer/static-config/v2",
                 config.chainId,
                 config.protocolVersion,
                 config.releaseVersion,
                 config.governanceTimelock,
                 config.emergencyCouncil,
+                config.genesisManifestDigest,
+                config.genesisCanonicalStateRoot,
                 config.genesisReceiptRoot,
+                config.usdlToken,
+                config.usdlAssetId,
+                config.usdlDecimals,
+                config.usdlProtocolDecimals,
+                config.usdlMinimumDeposit,
+                config.usdlCustodyCap,
                 config.challengeWindow,
                 config.checkpointLivenessBound,
                 config.enabledFeatures,

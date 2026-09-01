@@ -239,13 +239,13 @@ public static class GeneratedOperationCatalog
             PlatformOperation.HumanSecurityPasskeyRegisterFinish => new(PlatformPlane.Human, "security.passkey.register.finish", SdkHttpMethod.Post, "/v1/security/passkeys/registrations/{registration_id}", "SecurityPasskeyRegistrationFinish", "Passkey", false, false),
             PlatformOperation.HumanSecurityPasskeyRevoke => new(PlatformPlane.Human, "security.passkey.revoke", SdkHttpMethod.Post, "/v1/security/passkeys/{passkey_id}/revoke", "SecurityPasskeyRevocation", "PasskeyList", false, false),
             PlatformOperation.HumanSecurityRecoveryReveal => new(PlatformPlane.Human, "security.recovery.reveal", SdkHttpMethod.Post, "/v1/security/recovery/evidence", "SecurityRecoveryReveal", "TimedSecret", false, false),
-            PlatformOperation.HumanSecuritySessionRevoke => new(PlatformPlane.Human, "security.session.revoke", SdkHttpMethod.Post, "/v1/security/sessions/{session_id}/revoke", "SecuritySessionRevocation", "SessionRevocation", false, false),
-            PlatformOperation.HumanSecuritySessionRevokeAll => new(PlatformPlane.Human, "security.session.revoke-all", SdkHttpMethod.Post, "/v1/security/sessions/revoke-all", "SecuritySessionRevocation", "SessionRevocation", false, false),
+            PlatformOperation.HumanSecuritySessionRevoke => new(PlatformPlane.Human, "security.session.revoke", SdkHttpMethod.Post, "/v1/security/sessions/{session_id}/revoke", "SecuritySessionRevocation", "SessionRevocation", true, false),
+            PlatformOperation.HumanSecuritySessionRevokeAll => new(PlatformPlane.Human, "security.session.revoke-all", SdkHttpMethod.Post, "/v1/security/sessions/revoke-all", "SecuritySessionRevocation", "SessionRevocation", true, false),
             PlatformOperation.HumanSessionList => new(PlatformPlane.Human, "session.list", SdkHttpMethod.Get, "/v1/sessions", "Empty", "SessionList", false, true),
-            PlatformOperation.HumanSessionOpen => new(PlatformPlane.Human, "session.open", SdkHttpMethod.Post, "/v1/sessions", "SessionOpenRequest", "Session", false, false),
+            PlatformOperation.HumanSessionOpen => new(PlatformPlane.Human, "session.open", SdkHttpMethod.Post, "/v1/sessions", "SessionOpenRequest", "Session", true, false),
             PlatformOperation.HumanSessionRefresh => new(PlatformPlane.Human, "session.refresh", SdkHttpMethod.Post, "/v1/sessions/refresh", "Empty", "Session", false, true),
-            PlatformOperation.HumanSessionRevoke => new(PlatformPlane.Human, "session.revoke", SdkHttpMethod.Delete, "/v1/sessions/{session_id}", "Empty", "SessionRevocation", false, true),
-            PlatformOperation.HumanSessionRevokeAll => new(PlatformPlane.Human, "session.revoke-all", SdkHttpMethod.Post, "/v1/sessions/revoke-all", "Empty", "SessionRevocation", false, true),
+            PlatformOperation.HumanSessionRevoke => new(PlatformPlane.Human, "session.revoke", SdkHttpMethod.Delete, "/v1/sessions/{session_id}", "Empty", "SessionRevocation", true, true),
+            PlatformOperation.HumanSessionRevokeAll => new(PlatformPlane.Human, "session.revoke-all", SdkHttpMethod.Post, "/v1/sessions/revoke-all", "Empty", "SessionRevocation", true, true),
             PlatformOperation.HumanStepupBegin => new(PlatformPlane.Human, "stepup.begin", SdkHttpMethod.Post, "/v1/step-up", "StepUpRequest", "StepUpChallenge", false, false),
             PlatformOperation.HumanStepupFinish => new(PlatformPlane.Human, "stepup.finish", SdkHttpMethod.Post, "/v1/step-up/{challenge_id}", "StepUpFinish", "StepUpEvidence", false, false),
             PlatformOperation.HumanStreamNext => new(PlatformPlane.Human, "stream.next", SdkHttpMethod.Get, "/v1/stream/{cursor}", "Empty", "StreamPage", false, true),
@@ -478,20 +478,20 @@ public static class GeneratedPlatformClientExtensions
         client.ReadAsync(PlatformOperation.HumanSecurityPasskeyRevoke, request, pathParameters, cancellationToken);
     public static Task<JsonValue> HumanSecurityRecoveryRevealAsync(this PlatformClient client, JsonValue request, IReadOnlyDictionary<string, string>? pathParameters = null, CancellationToken cancellationToken = default) =>
         client.ReadAsync(PlatformOperation.HumanSecurityRecoveryReveal, request, pathParameters, cancellationToken);
-    public static Task<JsonValue> HumanSecuritySessionRevokeAsync(this PlatformClient client, JsonValue request, IReadOnlyDictionary<string, string>? pathParameters = null, CancellationToken cancellationToken = default) =>
-        client.ReadAsync(PlatformOperation.HumanSecuritySessionRevoke, request, pathParameters, cancellationToken);
-    public static Task<JsonValue> HumanSecuritySessionRevokeAllAsync(this PlatformClient client, JsonValue request, IReadOnlyDictionary<string, string>? pathParameters = null, CancellationToken cancellationToken = default) =>
-        client.ReadAsync(PlatformOperation.HumanSecuritySessionRevokeAll, request, pathParameters, cancellationToken);
+    public static Task<JsonValue> HumanSecuritySessionRevokeAsync(this PlatformClient client, JsonValue request, IdempotencyKey idempotencyKey, IReadOnlyDictionary<string, string>? pathParameters = null, CancellationToken cancellationToken = default) =>
+        client.MutateAsync(PlatformOperation.HumanSecuritySessionRevoke, request, idempotencyKey, pathParameters, cancellationToken);
+    public static Task<JsonValue> HumanSecuritySessionRevokeAllAsync(this PlatformClient client, JsonValue request, IdempotencyKey idempotencyKey, IReadOnlyDictionary<string, string>? pathParameters = null, CancellationToken cancellationToken = default) =>
+        client.MutateAsync(PlatformOperation.HumanSecuritySessionRevokeAll, request, idempotencyKey, pathParameters, cancellationToken);
     public static Task<JsonValue> HumanSessionListAsync(this PlatformClient client, JsonValue? request = null, IReadOnlyDictionary<string, string>? pathParameters = null, CancellationToken cancellationToken = default) =>
         client.ReadAsync(PlatformOperation.HumanSessionList, request ?? JsonValue.EmptyObject, pathParameters, cancellationToken);
-    public static Task<JsonValue> HumanSessionOpenAsync(this PlatformClient client, JsonValue request, IReadOnlyDictionary<string, string>? pathParameters = null, CancellationToken cancellationToken = default) =>
-        client.ReadAsync(PlatformOperation.HumanSessionOpen, request, pathParameters, cancellationToken);
+    public static Task<JsonValue> HumanSessionOpenAsync(this PlatformClient client, JsonValue request, IdempotencyKey idempotencyKey, IReadOnlyDictionary<string, string>? pathParameters = null, CancellationToken cancellationToken = default) =>
+        client.MutateAsync(PlatformOperation.HumanSessionOpen, request, idempotencyKey, pathParameters, cancellationToken);
     public static Task<JsonValue> HumanSessionRefreshAsync(this PlatformClient client, JsonValue? request = null, IReadOnlyDictionary<string, string>? pathParameters = null, CancellationToken cancellationToken = default) =>
         client.ReadAsync(PlatformOperation.HumanSessionRefresh, request ?? JsonValue.EmptyObject, pathParameters, cancellationToken);
-    public static Task<JsonValue> HumanSessionRevokeAsync(this PlatformClient client, JsonValue? request = null, IReadOnlyDictionary<string, string>? pathParameters = null, CancellationToken cancellationToken = default) =>
-        client.ReadAsync(PlatformOperation.HumanSessionRevoke, request ?? JsonValue.EmptyObject, pathParameters, cancellationToken);
-    public static Task<JsonValue> HumanSessionRevokeAllAsync(this PlatformClient client, JsonValue? request = null, IReadOnlyDictionary<string, string>? pathParameters = null, CancellationToken cancellationToken = default) =>
-        client.ReadAsync(PlatformOperation.HumanSessionRevokeAll, request ?? JsonValue.EmptyObject, pathParameters, cancellationToken);
+    public static Task<JsonValue> HumanSessionRevokeAsync(this PlatformClient client, IdempotencyKey idempotencyKey, IReadOnlyDictionary<string, string>? pathParameters = null, CancellationToken cancellationToken = default) =>
+        client.MutateAsync(PlatformOperation.HumanSessionRevoke, JsonValue.EmptyObject, idempotencyKey, pathParameters, cancellationToken);
+    public static Task<JsonValue> HumanSessionRevokeAllAsync(this PlatformClient client, IdempotencyKey idempotencyKey, IReadOnlyDictionary<string, string>? pathParameters = null, CancellationToken cancellationToken = default) =>
+        client.MutateAsync(PlatformOperation.HumanSessionRevokeAll, JsonValue.EmptyObject, idempotencyKey, pathParameters, cancellationToken);
     public static Task<JsonValue> HumanStepupBeginAsync(this PlatformClient client, JsonValue request, IReadOnlyDictionary<string, string>? pathParameters = null, CancellationToken cancellationToken = default) =>
         client.ReadAsync(PlatformOperation.HumanStepupBegin, request, pathParameters, cancellationToken);
     public static Task<JsonValue> HumanStepupFinishAsync(this PlatformClient client, JsonValue request, IReadOnlyDictionary<string, string>? pathParameters = null, CancellationToken cancellationToken = default) =>

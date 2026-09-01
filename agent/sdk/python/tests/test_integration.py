@@ -391,7 +391,7 @@ class PythonSdkIntegration(unittest.TestCase):
 
     def test_checkpoint_attestation_exposes_canonical_paxeer_binding(self) -> None:
         attestation = CheckpointAttestation(
-            protocol_version=1,
+            protocol_version=2,
             network_id=17,
             paxeer_chain_id=777,
             settlement_contract=bytes([1]) * 20,

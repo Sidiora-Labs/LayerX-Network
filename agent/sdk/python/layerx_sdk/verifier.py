@@ -23,6 +23,7 @@ _MAX_EFFECTS = 512
 _MAX_EFFECT_BODY = 256
 _MAX_U128 = 0xFFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF
 _ALL_AVAILABILITY_CLASSES = 0x1F
+_CURRENT_PROTOCOL_VERSION = 2
 _PROGRAM_OUTCOME_V1, _PROGRAM_OUTCOME_V2, _PROGRAM_OUTCOME_V3 = PROGRAM_OUTCOME_TAGS
 
 
@@ -374,6 +375,8 @@ def verify_batch_inclusion(
     signatures: LocalSignatureVerifier,
 ) -> InclusionVerification:
     header = decode_batch_header(canonical_header)
+    if header.protocol_version != _CURRENT_PROTOCOL_VERSION:
+        _failure()
     if (
         header.batch_number < authorization.first_batch_number
         or header.batch_number > authorization.last_batch_number
@@ -507,6 +510,8 @@ def verify_checkpoint(
     if not verification.availability_obtained or len(certificate.validity_proof) > 0xFFFF_FFFF:
         _failure()
     header = decode_batch_header(certificate.canonical_header)
+    if header.protocol_version != _CURRENT_PROTOCOL_VERSION:
+        _failure()
     checkpoint_id = _digest(
         _CHECKPOINT_DOMAIN,
         certificate.canonical_header,
@@ -854,6 +859,8 @@ def verify_receipt_outcome(
         raise
     except PlatformSdkError:
         _receipt_failure(ReceiptFailureCode.DECODE)
+    if receipt.protocol_version != _CURRENT_PROTOCOL_VERSION:
+        _receipt_failure(ReceiptFailureCode.PROTOCOL_VERSION)
     if receipt.operation == 0:
         _receipt_failure(ReceiptFailureCode.OPERATION)
     if _all_zero(receipt.activity_id):

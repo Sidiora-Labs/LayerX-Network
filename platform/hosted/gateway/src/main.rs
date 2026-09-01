@@ -575,6 +575,9 @@ fn config() -> Result<Config, String> {
     let protocol_version = wire_version
         .parse::<u16>()
         .map_err(|_| "gateway LXP wire version must be numeric".to_owned())?;
+    if protocol_version != layerx_wire::limits::PROTOCOL_VERSION {
+        return Err("gateway LXP wire version is not the current beta protocol".to_owned());
+    }
     let protocol_network_id = env::var("LAYERX_GATEWAY_PROTOCOL_NETWORK_ID")
         .map_err(|_| "gateway protocol network identifier is required")?
         .parse::<u32>()

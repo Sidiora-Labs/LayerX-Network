@@ -8,6 +8,7 @@
 #include "layerx/lxp_hash.h"
 #include "layerx/lxp_genesis.h"
 #include "layerx/lxp_snapshot.h"
+#include "lxp_daemon_artifact.h"
 #include "lxp_daemon_batch_wal.h"
 
 #include <errno.h>
@@ -144,6 +145,10 @@ static lxp_result latest_snapshot_path(
     errno = 0;
     while ((entry = readdir(stream)) != NULL) {
         uint64_t sequence;
+        if (checkpoint_name(entry->d_name, &sequence) && sequence == 0U) {
+            (void)closedir(stream);
+            return LXP_ERR_SNAPSHOT_MISMATCH;
+        }
         if (checkpoint_name(entry->d_name, &sequence) &&
             (!found || sequence > latest)) {
             latest = sequence;
@@ -560,6 +565,7 @@ static lxp_result identity_checkpoint_load(
 static lxp_result persist_state_checkpoint(lxp_daemon_process *process,
                                            uint64_t global_sequence)
 {
+    lxp_kernel_batch_boundary boundary;
     lxp_snapshot_manifest_record manifest;
     lxp_byte_span snapshot;
     size_t mark;
@@ -569,12 +575,19 @@ static lxp_result persist_state_checkpoint(lxp_daemon_process *process,
     if (process == NULL || process->checkpoint_directory == NULL)
         return LXP_ERR_NON_CANONICAL;
     mark = lxp_arena_mark(&process->checkpoint_arena);
-    status = lxp_snapshot_write(&process->kernel, global_sequence,
-                                &process->checkpoint_arena, &snapshot);
+    status = lxp_kernel_batch_boundary_read(&process->kernel, &boundary);
+    if (status == LXP_OK &&
+        (boundary.next_sequence == 0U ||
+         boundary.next_sequence - 1U != global_sequence))
+        status = LXP_ERR_SEQUENCE_MISMATCH;
+    if (status == LXP_OK)
+        status = lxp_snapshot_write(&process->kernel, global_sequence,
+                                    &process->checkpoint_arena, &snapshot);
     if (status == LXP_OK)
         status = lxp_snapshot_manifest(
             snapshot.bytes, snapshot.length, global_sequence,
-            process->kernel.current_state_root, &manifest);
+            boundary.canonical_state_root, boundary.receipt_state_root,
+            &manifest);
     if (status == LXP_OK)
         status = identity_checkpoint_write(process, global_sequence);
     length = status == LXP_OK ?
@@ -648,13 +661,12 @@ static lxp_result recover_batch_account_evidence(
             path, &process->checkpoint_arena, &manifest, &snapshot);
     if (status == LXP_OK &&
         (manifest.global_sequence != header->last_sequence ||
-         lxp_ct_memcmp(manifest.state_root,
+         lxp_ct_memcmp(manifest.receipt_state_root,
                        header->resulting_state_root, 32U) != 0))
         status = LXP_ERR_SNAPSHOT_MISMATCH;
     if (status == LXP_OK)
-        status = lxp_snapshot_load(
-            snapshot.bytes, snapshot.length, &manifest,
-            header->resulting_state_root, kernel);
+        status = lxp_snapshot_load(snapshot.bytes, snapshot.length,
+                                   &manifest, kernel);
     if (status == LXP_OK)
         status = lxp_daemon_account_evidence_publish_batch(
             &process->evidence_store, kernel, canonical_head_receipt,
@@ -2716,14 +2728,31 @@ static lxp_result replicate_authority_history(lxp_daemon_process *process)
 
 static lxp_result load_schedule(lxp_daemon_process *process)
 {
-    uint64_t parameter_version;
-    lxp_result status = parse_u64_text(
-        required_environment("LAYERX_NODE_PARAMETER_VERSION"),
-        &parameter_version);
-    if (status != LXP_OK || parameter_version == 0U ||
-        parameter_version > UINT16_MAX)
+    static const uint8_t key[32] = {
+        'p','a','r','a','m','e','t','e','r','-','v','e','r','s','i','o','n'
+    };
+    const lxp_module_kv_entry *parameter = NULL;
+    uint32_t parameter_version;
+    size_t index;
+    if (process == NULL) return LXP_ERR_NON_CANONICAL;
+    for (index = 0U; index < process->kernel.module_kv_count; ++index) {
+        const lxp_module_kv_entry *entry = &process->kernel.module_kv[index];
+        if (entry->module_id == LXP_MODULE_GOVERNANCE &&
+            entry->key_length == sizeof(key) &&
+            memcmp(entry->key, key, sizeof(key)) == 0) {
+            if (parameter != NULL) return LXP_ERR_SEQUENCE_REUSED;
+            parameter = entry;
+        }
+    }
+    if (parameter == NULL || parameter->value_length != 32U ||
+        !lxp_ct_is_zero(parameter->value, 28U))
         return LXP_ERR_VERSION_UNSUPPORTED;
-    process->parameter_version = (uint32_t)parameter_version;
+    parameter_version = ((uint32_t)parameter->value[28] << 24U) |
+        ((uint32_t)parameter->value[29] << 16U) |
+        ((uint32_t)parameter->value[30] << 8U) | parameter->value[31];
+    if (parameter_version == 0U || parameter_version > UINT16_MAX)
+        return LXP_ERR_VERSION_UNSUPPORTED;
+    process->parameter_version = parameter_version;
     process->fees = (lxp_fee_params){
         (uint16_t)parameter_version, {0U, 0U}, {0U, 0U}, {0U, 0U},
         {0U, 0U}, {0U, 0U}, 10000U
@@ -2731,68 +2760,116 @@ static lxp_result load_schedule(lxp_daemon_process *process)
     return LXP_OK;
 }
 
-static lxp_result project_bootstrap_metering(
-    lxp_daemon_process *process, const lxp_snapshot_manifest_record *snapshot)
+static lxp_result path_empty_or_absent(const char *path)
+{
+    struct stat information;
+    if (path == NULL) return LXP_ERR_NON_CANONICAL;
+    if (lstat(path, &information) != 0)
+        return errno == ENOENT ? LXP_OK : LXP_ERR_IO;
+    return S_ISREG(information.st_mode) && information.st_nlink == 1 &&
+           information.st_size == 0 ?
+        LXP_OK : LXP_ERR_ROOT_MISMATCH;
+}
+
+static lxp_result directory_empty(const char *path)
+{
+    DIR *directory;
+    struct dirent *entry;
+    lxp_result status = LXP_OK;
+    if (path == NULL) return LXP_ERR_NON_CANONICAL;
+    directory = opendir(path);
+    if (directory == NULL) return LXP_ERR_IO;
+    errno = 0;
+    while ((entry = readdir(directory)) != NULL) {
+        if (strcmp(entry->d_name, ".") != 0 &&
+            strcmp(entry->d_name, "..") != 0) {
+            status = LXP_ERR_ROOT_MISMATCH;
+            break;
+        }
+    }
+    if (status == LXP_OK && errno != 0) status = LXP_ERR_IO;
+    if (closedir(directory) != 0 && status == LXP_OK) status = LXP_ERR_IO;
+    return status;
+}
+
+static lxp_result bootstrap_storage_empty(const char *checkpoint_directory)
+{
+    static const char *const names[] = {
+        "LAYERX_NODE_PROGRAM_FEED_LOG", "LAYERX_NODE_CANONICAL_LOG",
+        "LAYERX_NODE_RECEIPT_AUTHORITY_LOG", "LAYERX_NODE_BATCH_LOG",
+        "LAYERX_NODE_EVIDENCE_LOG", "LAYERX_NODE_HISTORY_DATABASE"
+    };
+    size_t index;
+    lxp_result status = directory_empty(checkpoint_directory);
+    for (index = 0U; status == LXP_OK &&
+         index < sizeof(names) / sizeof(names[0]); ++index)
+        status = path_empty_or_absent(required_environment(names[index]));
+    return status;
+}
+
+static lxp_result load_genesis_registration(
+    lxp_genesis_bootstrap_registration *registration)
+{
+    const char *path = required_environment("LAYERX_NODE_GENESIS_REGISTRATION");
+    uint8_t *encoded = NULL;
+    size_t length = 0U;
+    lxp_result status;
+    if (registration == NULL || path == NULL) return LXP_ERR_NON_CANONICAL;
+    status = lxp_daemon_artifact_read(
+        path, LXP_GENESIS_REGISTRATION_BYTES,
+        LXP_GENESIS_REGISTRATION_BYTES, &encoded, &length);
+    if (status == LXP_OK)
+        status = lxp_genesis_registration_parse(encoded, length,
+                                                 registration);
+    if (encoded != NULL) {
+        lxp_secure_zero(encoded, length);
+        free(encoded);
+    }
+    return status;
+}
+
+static lxp_result verify_bootstrap_genesis(
+    lxp_daemon_process *process, const lxp_snapshot_manifest_record *snapshot,
+    bool storage_empty)
 {
     const char *path = required_environment("LAYERX_NODE_GENESIS_MANIFEST");
-    lxp_genesis_manifest *genesis;
-    lxp_kernel *candidate;
-    uint8_t *bytes;
-    uint8_t projected_root[32];
-    FILE *file;
-    long length;
+    lxp_genesis_manifest *genesis = NULL;
+    lxp_genesis_bootstrap_registration registration = {0};
+    uint8_t *bytes = NULL;
+    bool activities_enabled = false;
+    size_t length = 0U;
     lxp_result status;
     if (process == NULL || snapshot == NULL || path == NULL)
         return LXP_ERR_NON_CANONICAL;
-    file = fopen(path, "rb");
-    if (file == NULL || fseek(file, 0L, SEEK_END) != 0 ||
-        (length = ftell(file)) <= 0 || fseek(file, 0L, SEEK_SET) != 0) {
-        if (file != NULL) (void)fclose(file);
-        return LXP_ERR_IO;
-    }
-    bytes = (uint8_t *)malloc((size_t)length);
-    genesis = (lxp_genesis_manifest *)malloc(sizeof(*genesis));
-    candidate = (lxp_kernel *)malloc(sizeof(*candidate));
-    if (bytes == NULL || genesis == NULL || candidate == NULL) {
+    status = lxp_daemon_artifact_read(
+        path, LXP_GENESIS_MAX_ENCODED_BYTES, 0U, &bytes, &length);
+    if (status == LXP_OK)
+        genesis = (lxp_genesis_manifest *)malloc(sizeof(*genesis));
+    if (status == LXP_OK && genesis == NULL) {
         free(bytes);
         free(genesis);
-        free(candidate);
-        (void)fclose(file);
         return LXP_ERR_IO;
     }
-    if (fread(bytes, 1U, (size_t)length, file) != (size_t)length ||
-        fclose(file) != 0)
-        status = LXP_ERR_IO;
-    else
+    if (status == LXP_OK)
         status = lxp_genesis_parse(bytes, (size_t)length,
                                    LXP_GENESIS_INPUT_MANIFEST, genesis);
-    if (status == LXP_OK && lxp_ct_memcmp(
-            genesis->genesis_state_root, snapshot->state_root, 32U) != 0)
-        status = LXP_ERR_ROOT_MISMATCH;
-    if (status == LXP_OK) {
-        *candidate = process->kernel;
-        status = lxp_programs_metering_genesis_project(
-            genesis, &process->owner_scratch, candidate);
-        if (status == LXP_OK)
-            status = lxp_programs_fee_genesis_project(
-                genesis, &process->owner_scratch, candidate);
-    }
+    if (status == LXP_OK) status = load_genesis_registration(&registration);
     if (status == LXP_OK)
-        status = lxp_state_root(candidate, projected_root);
-    if (status == LXP_OK && lxp_ct_memcmp(
-            projected_root, snapshot->state_root, 32U) != 0)
-        status = LXP_ERR_ROOT_MISMATCH;
+        status = lxp_genesis_bootstrap_verify(
+            genesis, &registration, process->network_id, storage_empty,
+            snapshot, &process->kernel, &process->owner_scratch,
+            &activities_enabled);
+    if (status == LXP_OK && !activities_enabled)
+        status = LXP_FATAL_INVARIANT;
     if (status == LXP_OK) {
-        process->kernel.module_kv_count = candidate->module_kv_count;
-        (void)memcpy(process->kernel.module_kv, candidate->module_kv,
-                         candidate->module_kv_count *
-                             sizeof(candidate->module_kv[0]));
         process->bootstrap_sealed_timestamp =
             genesis->genesis_timestamp_ms;
     }
+    if (bytes != NULL) lxp_secure_zero(bytes, length);
+    if (genesis != NULL) lxp_secure_zero(genesis, sizeof(*genesis));
+    lxp_secure_zero(&registration, sizeof(registration));
     free(bytes);
     free(genesis);
-    free(candidate);
     return status;
 }
 
@@ -2800,47 +2877,46 @@ static lxp_result load_genesis_settlement_anchor(
     lxp_daemon_process *process, uint8_t settlement_anchor[32])
 {
     const char *path = required_environment("LAYERX_NODE_GENESIS_MANIFEST");
-    lxp_genesis_manifest *genesis;
-    uint8_t *bytes;
-    FILE *file;
-    long length;
+    lxp_genesis_manifest *genesis = NULL;
+    lxp_genesis_bootstrap_registration registration = {0};
+    uint8_t *bytes = NULL;
+    size_t length = 0U;
     lxp_result status;
     if (process == NULL || settlement_anchor == NULL || path == NULL)
         return LXP_ERR_NON_CANONICAL;
-    file = fopen(path, "rb");
-    if (file == NULL || fseek(file, 0L, SEEK_END) != 0 ||
-        (length = ftell(file)) <= 0 ||
-        (unsigned long)length > LXP_GENESIS_MAX_ENCODED_BYTES ||
-        fseek(file, 0L, SEEK_SET) != 0) {
-        if (file != NULL) (void)fclose(file);
-        return LXP_ERR_IO;
-    }
-    bytes = (uint8_t *)malloc((size_t)length);
-    genesis = (lxp_genesis_manifest *)malloc(sizeof(*genesis));
-    if (bytes == NULL || genesis == NULL) {
+    status = lxp_daemon_artifact_read(
+        path, LXP_GENESIS_MAX_ENCODED_BYTES, 0U, &bytes, &length);
+    if (status == LXP_OK)
+        genesis = (lxp_genesis_manifest *)malloc(sizeof(*genesis));
+    if (status == LXP_OK && genesis == NULL) {
         free(bytes);
         free(genesis);
-        (void)fclose(file);
         return LXP_ERR_IO;
     }
-    if (fread(bytes, 1U, (size_t)length, file) != (size_t)length ||
-        fclose(file) != 0)
-        status = LXP_ERR_IO;
-    else
+    if (status == LXP_OK)
         status = lxp_genesis_parse(bytes, (size_t)length,
                                    LXP_GENESIS_INPUT_MANIFEST, genesis);
     if (status == LXP_OK)
         status = lxp_genesis_verify_signature(genesis,
                                               &process->owner_scratch);
+    if (status == LXP_OK)
+        status = load_genesis_registration(&registration);
     if (status == LXP_OK &&
         (genesis->network_id != process->network_id ||
-         lxp_ct_is_zero(genesis->paxeer_genesis_checkpoint_id, 32U)))
+         lxp_ct_is_zero(genesis->genesis_receipt_state_root, 32U) ||
+         !registration.finalised || registration.registration_index != 0U ||
+         registration.network_id != process->network_id ||
+         lxp_ct_memcmp(registration.settlement_anchor,
+                       genesis->genesis_receipt_state_root, 32U) != 0 ||
+         lxp_ct_memcmp(registration.state_root,
+                       genesis->genesis_receipt_state_root, 32U) != 0))
         status = LXP_ERR_CONTEXT_MISMATCH;
     if (status == LXP_OK)
         (void)memcpy(settlement_anchor,
-                     genesis->paxeer_genesis_checkpoint_id, 32U);
-    lxp_secure_zero(bytes, (size_t)length);
-    lxp_secure_zero(genesis, sizeof(*genesis));
+                     genesis->genesis_receipt_state_root, 32U);
+    if (bytes != NULL) lxp_secure_zero(bytes, length);
+    if (genesis != NULL) lxp_secure_zero(genesis, sizeof(*genesis));
+    lxp_secure_zero(&registration, sizeof(registration));
     free(bytes);
     free(genesis);
     return status;
@@ -2887,6 +2963,7 @@ static lxp_result open_process(lxp_daemon_process *process,
     uint8_t genesis_settlement_anchor[32];
     char snapshot_path[4096];
     bool checkpoint_selected = false;
+    bool initial_storage_empty = false;
     uint64_t value;
     const char *bearer;
     const char *replica_token;
@@ -2945,15 +3022,19 @@ static lxp_result open_process(lxp_daemon_process *process,
             required_environment("LAYERX_NODE_SNAPSHOT"), snapshot_path,
             &checkpoint_selected);
     if (status == LXP_OK) process->checkpoint_selected = checkpoint_selected;
+    if (status == LXP_OK && !checkpoint_selected) {
+        status = bootstrap_storage_empty(process->checkpoint_directory);
+        initial_storage_empty = status == LXP_OK;
+    }
     if (status == LXP_OK)
         status = lxp_snapshot_store_read(snapshot_path, &snapshot_arena,
                                          &manifest, &snapshot);
     if (status == LXP_OK)
         status = lxp_snapshot_load(snapshot.bytes, snapshot.length,
-                                   &manifest, manifest.state_root,
-                                   &process->kernel);
+                                   &manifest, &process->kernel);
     if (status == LXP_OK && !checkpoint_selected)
-        status = project_bootstrap_metering(process, &manifest);
+        status = verify_bootstrap_genesis(process, &manifest,
+                                          initial_storage_empty);
     free(snapshot_bytes);
     if (status == LXP_OK &&
         configuration->start_sequence > process->state.next_sequence)
@@ -3040,6 +3121,9 @@ static lxp_result open_process(lxp_daemon_process *process,
             process->network_id, &process->sequencer_authorization,
             genesis_settlement_anchor, true,
             NULL, NULL, &process->owner_scratch);
+    if (status == LXP_OK &&
+        process->evidence_store.verify_finality_authority == NULL)
+        status = LXP_ERR_MODULE_DISABLED;
     if (status == LXP_OK)
         status = lxp_history_open(
             &process->history, &process->canonical_log,

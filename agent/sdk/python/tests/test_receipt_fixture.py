@@ -20,7 +20,7 @@ _SIGNATURES_PATH = (
     _REPO_ROOT / "platform" / "integrations" / "fastapi" / "layerx_fastapi" / "signatures.py"
 )
 _FIXTURE_PATH = (
-    _REPO_ROOT / "platform" / "sdk" / "conformance" / "fixtures" / "receipt-positive-v1.json"
+    _REPO_ROOT / "platform" / "sdk" / "conformance" / "fixtures" / "receipt-positive-v2.json"
 )
 
 
@@ -115,7 +115,7 @@ class ReceiptFixtureTest(unittest.TestCase):
             )
 
     def test_core_programs_fixture_preserves_optional_outcome(self) -> None:
-        fixture = _load_shared_fixture("receipt-programs-positive-v1.json")
+        fixture = _load_shared_fixture("receipt-programs-positive-v2.json")
         verified = verify_receipt(
             bytes.fromhex(fixture["canonical_receipt_hex"]),
             _authorized(fixture),
@@ -127,10 +127,18 @@ class ReceiptFixtureTest(unittest.TestCase):
         self.assertEqual(outcome.encoding_version, 3)
         self.assertEqual(outcome.runtime_version, 1)
         self.assertEqual(outcome.abi_version, 1)
+        self.assertEqual(outcome.occupancy_byte_batches, 2)
+        self.assertEqual(outcome.occupancy_fee_units, 7)
+        self.assertEqual(
+            outcome.occupancy_asset_id,
+            bytes.fromhex(fixture["authorized_batch"]["asset_hex"]),
+        )
+        self.assertNotEqual(outcome.occupancy_evidence_digest, bytes(32))
+        self.assertNotEqual(outcome.occupancy_transfer_root, bytes(32))
         self.assertEqual(outcome.fee_units, 16)
 
     def test_core_refusal_vectors_expose_shared_taxonomy(self) -> None:
-        fixture = _load_shared_fixture("receipt-refusals-v1.json")
+        fixture = _load_shared_fixture("receipt-refusals-v2.json")
         authorized = _authorized(fixture)
         for vector in fixture["vectors"]:
             with self.subTest(vector=vector["name"]):

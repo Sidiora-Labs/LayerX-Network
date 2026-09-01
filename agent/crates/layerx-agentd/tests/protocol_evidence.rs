@@ -1,13 +1,12 @@
 mod support;
 
+use layerx_agentd::boot::GateError;
 use layerx_agentd::protocol_evidence::{
     EvidenceAuthority, ReceiptEvidenceError, StateEvidenceError, VerifierPolicyError,
 };
-use layerx_agentd::boot::GateError;
+use layerx_wire::limits::{LEGACY_PROTOCOL_VERSION, PROTOCOL_VERSION};
 
-use support::{
-    StateHeaderIdentity, TestAuthorityPolicy, TestAuthorityRecord,
-};
+use support::{StateHeaderIdentity, TestAuthorityPolicy, TestAuthorityRecord};
 
 #[derive(Clone, Copy)]
 struct PolicyIdentity {
@@ -69,14 +68,14 @@ fn trusted_policy_issues_state_evidence_only_for_its_exact_identity() {
 fn canonical_genesis_batch_zero_is_inside_a_bounded_trusted_range() {
     let genesis = state(StateHeaderIdentity {
         signing_seed: [0x4a; 32],
-        protocol_version: 1,
+        protocol_version: PROTOCOL_VERSION,
         network_id: 42,
         epoch: 0,
         batch_number: 0,
     });
     let verified = verifier(PolicyIdentity {
         signing_seed: [0x4a; 32],
-        protocol_version: 1,
+        protocol_version: PROTOCOL_VERSION,
         network_id: 42,
         epoch: 0,
         first_batch: 0,
@@ -95,7 +94,7 @@ fn revocation_handover_selects_only_the_key_active_at_each_batch() {
     let sequencer_id = [0x91; 32];
     let authority = support::evidence_authority_for_sequencer(
         TestAuthorityPolicy {
-            protocol_version: 1,
+            protocol_version: PROTOCOL_VERSION,
             network_id: 42,
             records: &[
                 TestAuthorityRecord {
@@ -123,7 +122,7 @@ fn revocation_handover_selects_only_the_key_active_at_each_batch() {
         50,
         StateHeaderIdentity {
             signing_seed: [0x4a; 32],
-            protocol_version: 1,
+            protocol_version: PROTOCOL_VERSION,
             network_id: 42,
             epoch: 2,
             batch_number: 4,
@@ -135,7 +134,7 @@ fn revocation_handover_selects_only_the_key_active_at_each_batch() {
         51,
         StateHeaderIdentity {
             signing_seed: [0x5a; 32],
-            protocol_version: 1,
+            protocol_version: PROTOCOL_VERSION,
             network_id: 42,
             epoch: 2,
             batch_number: 5,
@@ -147,7 +146,7 @@ fn revocation_handover_selects_only_the_key_active_at_each_batch() {
         51,
         StateHeaderIdentity {
             signing_seed: [0x4a; 32],
-            protocol_version: 1,
+            protocol_version: PROTOCOL_VERSION,
             network_id: 42,
             epoch: 2,
             batch_number: 5,
@@ -177,7 +176,7 @@ fn revocation_handover_selects_only_the_key_active_at_each_batch() {
 fn a_caller_cannot_substitute_a_policy_after_the_daemon_handshake() {
     assert_eq!(
         support::try_evidence_authority(TestAuthorityPolicy {
-            protocol_version: 1,
+            protocol_version: PROTOCOL_VERSION,
             network_id: 42,
             records: &[TestAuthorityRecord {
                 signing_seed: [0x4a; 32],
@@ -197,7 +196,7 @@ fn a_caller_cannot_substitute_a_policy_after_the_daemon_handshake() {
 fn an_attacker_signed_header_cannot_supply_its_own_trust_key() {
     let attacker = state(StateHeaderIdentity {
         signing_seed: [0x5a; 32],
-        protocol_version: 1,
+        protocol_version: PROTOCOL_VERSION,
         network_id: 42,
         epoch: 2,
         batch_number: 7,
@@ -205,7 +204,7 @@ fn an_attacker_signed_header_cannot_supply_its_own_trust_key() {
     assert_eq!(
         verifier(PolicyIdentity {
             signing_seed: [0x4a; 32],
-            protocol_version: 1,
+            protocol_version: PROTOCOL_VERSION,
             network_id: 42,
             epoch: 2,
             first_batch: 7,
@@ -225,7 +224,7 @@ fn an_attacker_signed_header_cannot_supply_its_own_trust_key() {
 fn cross_network_and_cross_protocol_headers_are_refused_before_signature_use() {
     let cross_network = state(StateHeaderIdentity {
         signing_seed: [0x4a; 32],
-        protocol_version: 1,
+        protocol_version: PROTOCOL_VERSION,
         network_id: 43,
         epoch: 2,
         batch_number: 7,
@@ -233,7 +232,7 @@ fn cross_network_and_cross_protocol_headers_are_refused_before_signature_use() {
     assert_eq!(
         verifier(PolicyIdentity {
             signing_seed: [0x4a; 32],
-            protocol_version: 1,
+            protocol_version: PROTOCOL_VERSION,
             network_id: 42,
             epoch: 2,
             first_batch: 7,
@@ -248,7 +247,7 @@ fn cross_network_and_cross_protocol_headers_are_refused_before_signature_use() {
 
     let cross_protocol = state(StateHeaderIdentity {
         signing_seed: [0x4a; 32],
-        protocol_version: 2,
+        protocol_version: LEGACY_PROTOCOL_VERSION,
         network_id: 42,
         epoch: 2,
         batch_number: 7,
@@ -256,7 +255,7 @@ fn cross_network_and_cross_protocol_headers_are_refused_before_signature_use() {
     assert_eq!(
         verifier(PolicyIdentity {
             signing_seed: [0x4a; 32],
-            protocol_version: 1,
+            protocol_version: PROTOCOL_VERSION,
             network_id: 42,
             epoch: 2,
             first_batch: 7,
@@ -276,7 +275,7 @@ fn cross_network_and_cross_protocol_headers_are_refused_before_signature_use() {
 fn a_header_from_an_unconfigured_epoch_cannot_reuse_an_authorised_key() {
     let wrong_epoch = state(StateHeaderIdentity {
         signing_seed: [0x4a; 32],
-        protocol_version: 1,
+        protocol_version: PROTOCOL_VERSION,
         network_id: 42,
         epoch: 3,
         batch_number: 7,
@@ -284,7 +283,7 @@ fn a_header_from_an_unconfigured_epoch_cannot_reuse_an_authorised_key() {
     assert_eq!(
         verifier(PolicyIdentity {
             signing_seed: [0x4a; 32],
-            protocol_version: 1,
+            protocol_version: PROTOCOL_VERSION,
             network_id: 42,
             epoch: 2,
             first_batch: 7,
@@ -302,7 +301,7 @@ fn a_header_from_an_unconfigured_epoch_cannot_reuse_an_authorised_key() {
 fn revoked_and_out_of_range_keys_cannot_issue_evidence() {
     let raw = state(StateHeaderIdentity {
         signing_seed: [0x4a; 32],
-        protocol_version: 1,
+        protocol_version: PROTOCOL_VERSION,
         network_id: 42,
         epoch: 2,
         batch_number: 7,
@@ -310,7 +309,7 @@ fn revoked_and_out_of_range_keys_cannot_issue_evidence() {
     assert_eq!(
         verifier(PolicyIdentity {
             signing_seed: [0x4a; 32],
-            protocol_version: 1,
+            protocol_version: PROTOCOL_VERSION,
             network_id: 42,
             epoch: 2,
             first_batch: 7,
@@ -325,7 +324,7 @@ fn revoked_and_out_of_range_keys_cannot_issue_evidence() {
     assert_eq!(
         verifier(PolicyIdentity {
             signing_seed: [0x4a; 32],
-            protocol_version: 1,
+            protocol_version: PROTOCOL_VERSION,
             network_id: 42,
             epoch: 2,
             first_batch: 8,
@@ -335,9 +334,7 @@ fn revoked_and_out_of_range_keys_cannot_issue_evidence() {
             handshake_batch: 7,
         })
         .verify_state(&raw),
-        Err(StateEvidenceError::Policy(
-            VerifierPolicyError::BatchRange
-        ))
+        Err(StateEvidenceError::Policy(VerifierPolicyError::BatchRange))
     );
 }
 

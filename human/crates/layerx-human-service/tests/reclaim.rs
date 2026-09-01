@@ -45,7 +45,7 @@ fn send_route(public_key: [u8; 32], key: u8) -> SendRoute {
             AuthorizationSignature::new([0x62; 64]),
         ),
         network_id: NetworkId::new(NETWORK_ID).unwrap_or_else(|error| panic!("network: {error:?}")),
-        protocol_version: ProtocolVersion::new(1)
+        protocol_version: ProtocolVersion::new(layerx_wire::limits::PROTOCOL_VERSION)
             .unwrap_or_else(|error| panic!("protocol: {error:?}")),
     }
 }

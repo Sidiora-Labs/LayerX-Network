@@ -997,13 +997,17 @@ fn generate_rust_operation_catalog(repo_root: &Path) -> Result<String, String> {
         writeln!(output, "        matches!(\n            self,")
             .map_err(|error| error.to_string())?;
         for (index, operation) in mutations.iter().enumerate() {
-            let separator = if index == 0 { "" } else { "| " };
-            writeln!(
-                output,
-                "            {separator}Self::{}",
-                rust_identifier(operation)
-            )
-            .map_err(|error| error.to_string())?;
+            if index == 0 {
+                writeln!(output, "            Self::{}", rust_identifier(operation))
+                    .map_err(|error| error.to_string())?;
+            } else {
+                writeln!(
+                    output,
+                    "                | Self::{}",
+                    rust_identifier(operation)
+                )
+                .map_err(|error| error.to_string())?;
+            }
         }
         writeln!(output, "        )").map_err(|error| error.to_string())?;
     }
@@ -1417,7 +1421,7 @@ artifact = \"com.sidiora.layerx:layerx-sdk\"\n\
 root = \"platform/sdk/jvm\"\n\
 agent_schema = \"agent/schema/agent-api\"\n\
 human_schema = \"human/schema/human-api\"\n\
-protocol_version = 1\n\
+protocol_version = 2\n\
 agent_operations = {agent_operations}\n\
 human_operations = {human_operations}\n\
 money_type = \"java.math.BigInteger\"\n\

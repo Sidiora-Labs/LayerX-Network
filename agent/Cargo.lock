@@ -873,6 +873,7 @@ name = "layerx-wire"
 version = "0.1.0"
 dependencies = [
  "layerx-types",
+ "sha2",
 ]
 
 [[package]]

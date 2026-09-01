@@ -357,6 +357,8 @@ lxp_result lxp_programs_fee_genesis_append(
     const lx_programs_fee_genesis_parameters *parameters);
 lxp_result lxp_programs_fee_genesis_validate(
     const lxp_genesis_manifest *manifest);
+lxp_result lxp_programs_fee_genesis_materialize(
+    const lxp_genesis_manifest *manifest, lxp_kernel *kernel);
 lxp_result lxp_programs_fee_genesis_project(
     const lxp_genesis_manifest *manifest, lxp_arena *arena,
     lxp_kernel *kernel);
@@ -404,6 +406,8 @@ lxp_result lxp_programs_metering_genesis_append(
     const lx_programs_metering_schedule *schedule);
 lxp_result lxp_programs_metering_genesis_validate(
     const lxp_genesis_manifest *manifest);
+lxp_result lxp_programs_metering_genesis_materialize(
+    const lxp_genesis_manifest *manifest, lxp_kernel *kernel);
 lxp_result lxp_programs_metering_genesis_project(
     const lxp_genesis_manifest *manifest, lxp_arena *arena,
     lxp_kernel *kernel);

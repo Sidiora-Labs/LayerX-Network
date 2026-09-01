@@ -9,8 +9,8 @@ use layerx_agent_api::read::{
     AccountRef, AccountValue, BalanceValue, BatchRef, BatchValue, CheckpointRef, CheckpointValue,
     Freshness, HistoryValue, ModuleStateValue, ProjectionResult, RelativeTo, VerifiedRead,
 };
-use layerx_agent_api::{Amount, Sequence};
 use layerx_agent_api::verify::Level;
+use layerx_agent_api::{Amount, Sequence};
 
 const SCHEMA: &str = include_str!("../../../schema/agent-api/read.kvx");
 
@@ -113,7 +113,10 @@ fn availability_reports_complete_provider_or_attributed_partials() {
         }],
     };
     let read = VerifiedRead::new(report, Level::BatchIncluded, freshness());
-    assert!(matches!(read.value.completion, AvailabilityCompletion::Partial));
+    assert!(matches!(
+        read.value.completion,
+        AvailabilityCompletion::Partial
+    ));
     assert_eq!(read.value.providers.len(), 1);
     assert!(SCHEMA.contains("bytes are never merged across providers"));
 }

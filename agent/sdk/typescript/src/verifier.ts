@@ -17,6 +17,7 @@ const MAX_EFFECTS = 512;
 const MAX_EFFECT_BODY = 256;
 const MAX_U128 = 0xffff_ffff_ffff_ffff_ffff_ffff_ffff_ffffn;
 const ALL_AVAILABILITY_CLASSES = 0x1f;
+const CURRENT_PROTOCOL_VERSION = 2;
 const [PROGRAM_OUTCOME_V1, PROGRAM_OUTCOME_V2, PROGRAM_OUTCOME_V3] = PROGRAM_OUTCOME_TAGS;
 
 export interface MerkleProof {
@@ -507,6 +508,7 @@ export async function verifyBatchInclusion(
   authorization: SequencerAuthorization,
 ): Promise<InclusionVerification> {
   const header = decodeBatchHeader(canonicalHeader);
+  if (header.protocolVersion !== CURRENT_PROTOCOL_VERSION) return verificationFailure();
   if (
     header.batchNumber < authorization.firstBatchNumber
     || header.batchNumber > authorization.lastBatchNumber
@@ -585,6 +587,7 @@ export async function verifyCheckpoint(
     return verificationFailure();
   }
   const header = decodeBatchHeader(certificate.canonicalHeader);
+  if (header.protocolVersion !== CURRENT_PROTOCOL_VERSION) return verificationFailure();
   const checkpointId = await sha256(
     CHECKPOINT_DOMAIN,
     certificate.canonicalHeader,
@@ -940,6 +943,7 @@ export async function verifyReceiptOutcome(
     return receiptFailure(ReceiptFailureCode.Decode);
   }
   const { receipt, unsignedBytes } = decoded;
+  if (receipt.protocolVersion !== CURRENT_PROTOCOL_VERSION) return receiptFailure(ReceiptFailureCode.ProtocolVersion);
   if (receipt.operation === 0) return receiptFailure(ReceiptFailureCode.Operation);
   if (allZero(receipt.activityId)) return receiptFailure(ReceiptFailureCode.ActivityId);
   if (allZero(receipt.asset)) return receiptFailure(ReceiptFailureCode.Asset);

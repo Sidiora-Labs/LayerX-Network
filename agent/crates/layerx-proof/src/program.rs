@@ -8,6 +8,7 @@ use layerx_programs_runtime::{BudgetMeterRefusal, OccupancySettlement, ProgramFa
 use layerx_types::intent::{
     ProgramCallOutcome, ProgramCallResponse, ProgramLegacyCallResponse, ProgramLegacyValue,
 };
+use layerx_wire::limits::PROTOCOL_VERSION;
 use layerx_wire::receipt::ProgramOutcome;
 use sha2::{Digest as _, Sha256};
 
@@ -460,7 +461,7 @@ fn verify_terminal_commitments(
                     }
             )
         );
-    if !matches!(protocol_version, 1 | 2) {
+    if protocol_version != PROTOCOL_VERSION {
         return Err(ProgramExecutionVerificationFailure::at(
             ProgramExecutionCheck::Receipt,
         ));

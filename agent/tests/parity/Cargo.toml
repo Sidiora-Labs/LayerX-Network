@@ -12,5 +12,6 @@ layerx-client = { path = "../../crates/layerx-client" }
 layerx-proof = { path = "../../crates/layerx-proof" }
 layerx-sdk = { path = "../../crates/layerx-sdk" }
 layerx-types = { path = "../../crates/layerx-types" }
+layerx-wire = { path = "../../crates/layerx-wire" }
 
 [workspace]

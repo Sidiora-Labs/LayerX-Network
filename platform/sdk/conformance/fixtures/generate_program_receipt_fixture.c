@@ -1,4 +1,5 @@
 #include "layerx/lxp_crypto.h"
+#include "layerx/lxp_hash.h"
 #include "layerx/lxp_module.h"
 #include "layerx/lxp_receipt.h"
 
@@ -83,7 +84,7 @@ static int build_receipt(lxp_receipt *receipt, fixture_evidence *evidence)
     (void)memset(evidence->batch_id, 0x81, sizeof(evidence->batch_id));
     (void)memset(evidence->asset, 0x91, sizeof(evidence->asset));
     status = lxp_effect_buffer_init(&effects);
-    receipt->protocol_version = LXP_PROTOCOL_VERSION_LEGACY;
+    receipt->protocol_version = LXP_PROTOCOL_VERSION;
     if (status == LXP_OK)
         status = lxp_receipt_build(
             receipt, activity_id, UINT64_C(7),
@@ -110,7 +111,12 @@ static int build_receipt(lxp_receipt *receipt, fixture_evidence *evidence)
 
 static int bind_program_outcome(lxp_receipt *receipt)
 {
+    static const uint8_t occupancy_evidence[] =
+        "layerx-sdk-conformance-program-occupancy-evidence-v2";
+    static const uint8_t occupancy_transfers[] =
+        "layerx-sdk-conformance-program-occupancy-transfers-v2";
     lxp_program_outcome outcome;
+    size_t index;
     (void)memset(&outcome, 0, sizeof(outcome));
     outcome.present = true;
     outcome.encoding_version = 3U;
@@ -127,6 +133,18 @@ static int bind_program_outcome(lxp_receipt *receipt)
     outcome.storage_write_bytes = 14U;
     outcome.output_values = 1U;
     outcome.output_bytes = 15U;
+    outcome.occupancy_byte_batches = (lxp_u128){0U, 2U};
+    outcome.occupancy_fee_units = (lxp_u128){0U, 7U};
+    for (index = 0U; index < 7U; ++index)
+        outcome.fee_schedule_prices[index] = (uint64_t)index + 1U;
+    (void)memcpy(outcome.occupancy_asset_id, receipt->asset, 32U);
+    if (lxp_hash_sha256(occupancy_evidence,
+                        sizeof(occupancy_evidence) - 1U,
+                        outcome.occupancy_evidence_digest) != LXP_OK ||
+        lxp_hash_sha256(occupancy_transfers,
+                        sizeof(occupancy_transfers) - 1U,
+                        outcome.occupancy_transfer_root) != LXP_OK)
+        return 1;
     outcome.fee_units = (lxp_u128){0U, 16U};
     (void)memset(outcome.call_graph_root, 0x11, 32U);
     (void)memset(outcome.terminal_payload_root, 0x22, 32U);
@@ -139,7 +157,8 @@ static int encode_signed(lxp_receipt *receipt, lxp_arena *arena,
                          lxp_byte_span *canonical, uint8_t digest[32])
 {
     lxp_receipt decoded;
-    if (lxp_receipt_sign(receipt, sequencer_private_key, arena) != LXP_OK ||
+    if (receipt->protocol_version != LXP_PROTOCOL_VERSION ||
+        lxp_receipt_sign(receipt, sequencer_private_key, arena) != LXP_OK ||
         lxp_receipt_digest(receipt, arena, digest) != LXP_OK ||
         lxp_receipt_encode(receipt, true, arena, canonical) != LXP_OK ||
         lxp_receipt_decode(canonical->bytes, canonical->length, true,
@@ -163,7 +182,7 @@ static int write_program_fixture(const char *path, lxp_receipt *receipt,
     if (output == NULL) return 1;
     (void)fprintf(output,
         "{\n"
-        "  \"name\": \"receipt-programs-positive-v1\",\n"
+        "  \"name\": \"receipt-programs-positive-v2\",\n"
         "  \"provenance\": {\n"
         "    \"generator\": \"platform/sdk/conformance/fixtures/generate_program_receipt_fixture.c\",\n"
         "    \"command\": \"make platform-receipt-fixture\",\n"
@@ -176,7 +195,7 @@ static int write_program_fixture(const char *path, lxp_receipt *receipt,
         "  \"expected\": {\n"
         "    \"level\": \"sequencer-signed\",\n"
         "    \"result_code\": 0,\n"
-        "    \"protocol_version\": 1,\n"
+        "    \"protocol_version\": 2,\n"
         "    \"operation\": 3,\n"
         "    \"module_id\": 9,\n"
         "    \"module_version\": 1,\n"
@@ -185,7 +204,20 @@ static int write_program_fixture(const char *path, lxp_receipt *receipt,
         "    \"program_outcome_encoding_version\": 3,\n"
         "    \"program_outcome_runtime_version\": 1,\n"
         "    \"program_outcome_abi_version\": 1,\n"
+        "    \"program_outcome_occupancy_byte_batches\": \"2\",\n"
+        "    \"program_outcome_occupancy_fee_units\": \"7\",\n"
         "    \"program_outcome_fee_units\": \"16\",\n");
+    write_hex_field(output, "    ",
+                    "program_outcome_occupancy_asset_id_hex",
+                    receipt->program_outcome.occupancy_asset_id, 32U, ",");
+    write_hex_field(output, "    ",
+                    "program_outcome_occupancy_evidence_digest_hex",
+                    receipt->program_outcome.occupancy_evidence_digest,
+                    32U, ",");
+    write_hex_field(output, "    ",
+                    "program_outcome_occupancy_transfer_root_hex",
+                    receipt->program_outcome.occupancy_transfer_root,
+                    32U, ",");
     write_hex_field(output, "    ", "program_outcome_call_graph_root_hex",
                     receipt->program_outcome.call_graph_root, 32U, ",");
     write_hex_field(output, "    ",
@@ -225,10 +257,15 @@ static int write_refusal_fixture(const char *path,
     if (output == NULL) return 1;
     (void)fprintf(output,
         "{\n"
-        "  \"name\": \"receipt-refusals-v1\",\n"
+        "  \"name\": \"receipt-refusals-v2\",\n"
         "  \"provenance\": {\"generator\": \"platform/sdk/conformance/fixtures/generate_program_receipt_fixture.c\", \"command\": \"make platform-receipt-fixture\"},\n");
     write_authority(output, evidence, ",");
     (void)fprintf(output, "  \"vectors\": [\n");
+    candidate = *base;
+    candidate.protocol_version = LXP_PROTOCOL_VERSION_LEGACY;
+    if (write_refusal_vector(output, "legacy-protocol-version",
+                             "protocol-version", &candidate, arena, ",") != 0)
+        return 1;
     candidate = *base;
     candidate.global_sequence = 0U;
     if (write_refusal_vector(output, "zero-global-sequence",
@@ -268,9 +305,9 @@ int main(int argc, char **argv)
 {
     static uint8_t arena_bytes[8U * LXP_MAX_ACTIVITY_BYTES];
     const char *program_path = argc > 1 ? argv[1] :
-        "platform/sdk/conformance/fixtures/receipt-programs-positive-v1.json";
+        "platform/sdk/conformance/fixtures/receipt-programs-positive-v2.json";
     const char *refusal_path = argc > 2 ? argv[2] :
-        "platform/sdk/conformance/fixtures/receipt-refusals-v1.json";
+        "platform/sdk/conformance/fixtures/receipt-refusals-v2.json";
     fixture_evidence evidence;
     lxp_receipt base;
     lxp_receipt programs;

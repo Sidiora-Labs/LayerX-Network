@@ -1592,12 +1592,13 @@ public final class ProgramsClient {
         try {
             byte[] signed = call.signedActivity();
             BinaryCursor cursor = new BinaryCursor(signed);
-            if (cursor.u16() != 1 || cursor.u16() != 0x1001 || cursor.u8() != 12) {
+            int envelopeVersion = cursor.u16();
+            if ((envelopeVersion != 1 && envelopeVersion != 2) || cursor.u16() != 0x1001 || cursor.u8() != 12) {
                 throw new IllegalArgumentException();
             }
             cursor.tag(1);
             int protocolVersion = cursor.u16();
-            if (protocolVersion != 1 && protocolVersion != 2) throw new IllegalArgumentException();
+            if (protocolVersion != envelopeVersion) throw new IllegalArgumentException();
             cursor.tag(2);
             cursor.u32();
             cursor.tag(3);

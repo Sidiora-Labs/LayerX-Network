@@ -6,8 +6,8 @@ use layerx_wire::activity::{decode_signed, encode_signed, encode_unsigned};
 use layerx_wire::hash::{activity_id, Domain};
 use layerx_wire::WireError;
 
-use crate::lni::schema::{decode_envelope, encode_envelope, Envelope, SchemaError, Version};
 use crate::lni::refusal::decode_core_refusal;
+use crate::lni::schema::{decode_envelope, encode_envelope, Envelope, SchemaError, Version};
 use crate::lni::transport::{FrameTransport, TransportError};
 
 const SUBMIT_REQUEST_TAG: u16 = 3;
@@ -141,8 +141,14 @@ pub enum SubmitError {
     Wire(WireError),
     SignatureLength(usize),
     Signature(VerifyError),
-    ProtocolVersion { expected: u16, actual: u16 },
-    Network { expected: u32, actual: u32 },
+    ProtocolVersion {
+        expected: u16,
+        actual: u16,
+    },
+    Network {
+        expected: u32,
+        actual: u32,
+    },
     Envelope(SchemaError),
     CoreRefusal {
         class: u8,

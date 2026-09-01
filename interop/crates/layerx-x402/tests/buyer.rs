@@ -192,12 +192,13 @@ fn buyer_echoes_required_extensions_byte_for_value() {
     let buyer = Buyer::new(supported).expect("valid supported");
 
     let mut required = test_payment_required();
-    required
-        .extensions
-        .insert("custom".to_owned(), layerx_x402::model::Extension {
+    required.extensions.insert(
+        "custom".to_owned(),
+        layerx_x402::model::Extension {
             info: json!({"key": "value", "number": 42}),
             schema: json!({"type": "object"}),
-        });
+        },
+    );
 
     let encoded = encode_payment_required(&required);
     let mut plane = TestBuyerPlane {
@@ -281,10 +282,7 @@ fn buyer_includes_resource_info_in_built_payment() {
         .expect("payment built");
 
     assert!(payment.payload.resource.is_some());
-    assert_eq!(
-        payment.payload.resource.unwrap().url,
-        required.resource.url
-    );
+    assert_eq!(payment.payload.resource.unwrap().url, required.resource.url);
 }
 
 #[test]
@@ -303,9 +301,10 @@ fn buyer_payment_header_is_base64_encoded_json() {
         .build_payment(&encoded, [1; 32], &mut plane, &trace)
         .expect("payment built");
 
-    let decoded = STANDARD.decode(payment.header.as_bytes()).expect("valid base64");
-    let parsed: PaymentPayload =
-        serde_json::from_slice(&decoded).expect("valid payment payload");
+    let decoded = STANDARD
+        .decode(payment.header.as_bytes())
+        .expect("valid base64");
+    let parsed: PaymentPayload = serde_json::from_slice(&decoded).expect("valid payment payload");
 
     assert_eq!(parsed.x402_version, X402_VERSION);
     assert_eq!(parsed.accepted, test_requirements());

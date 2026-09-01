@@ -26,6 +26,10 @@ const RECIPIENT: EvmAddress = EvmAddress::new([
     0x3c, 0x44, 0xcd, 0xdd, 0xb6, 0xa9, 0x00, 0xfa, 0x2b, 0x58, 0x5d, 0xd2, 0x99, 0xe0, 0x3d, 0x12,
     0xfa, 0x42, 0x93, 0xbc,
 ]);
+const USDL_TOKEN: EvmAddress = EvmAddress::new([
+    0x85, 0xfc, 0xd1, 0x37, 0x35, 0xf4, 0x30, 0x98, 0x33, 0xa5, 0x03, 0xee, 0x80, 0x4e, 0xa3, 0x23,
+    0x95, 0x85, 0x14, 0x79,
+]);
 const GOVERNANCE_KEY: [u8; 32] = [
     0xac, 0x09, 0x74, 0xbe, 0xc3, 0x9a, 0x17, 0xe3, 0x6b, 0xa4, 0xa6, 0xb4, 0xd2, 0x38, 0xff, 0x94,
     0x4b, 0xac, 0xb4, 0x78, 0xcb, 0xed, 0x5e, 0xfc, 0xae, 0x78, 0x4d, 0x7b, 0xf4, 0xf2, 0xff, 0x80,
@@ -33,13 +37,19 @@ const GOVERNANCE_KEY: [u8; 32] = [
 const NETWORK_ID: u32 = 17;
 const BALANCE: u128 = 300;
 const CUSTODY: u128 = 500;
+const BOND: u128 = 5;
 const ACCOUNT: [u8; 32] = [0x44; 32];
-const ASSET: [u8; 32] = [0x33; 32];
+const ASSET: [u8; 32] = [
+    0x70, 0xf5, 0xb6, 0x3a, 0x98, 0x55, 0xdd, 0x2b, 0xe2, 0xba, 0x94, 0x1c, 0x04, 0xa3, 0x3a, 0x1f,
+    0x0e, 0xeb, 0x97, 0x50, 0xcc, 0xeb, 0x32, 0x4c, 0x22, 0x37, 0x64, 0xf0, 0xfd, 0xc5, 0x01, 0xd8,
+];
+const GENESIS_MANIFEST: [u8; 32] = [0x20; 32];
+const GENESIS_CANONICAL_STATE: [u8; 32] = [0x21; 32];
 const GENESIS: [u8; 32] = [0x22; 32];
 const CONFIG_HASH: [u8; 32] = [0x11; 32];
 const DATA_AVAILABILITY_ROOT: [u8; 32] = [0x66; 32];
-const CHECKPOINT_DOMAIN: &[u8] = b"LXP/v1/checkpoint-certificate\x00";
-const ATTESTATION_DOMAIN: &[u8] = b"LXP/v1/guarantor-attestation\x00";
+const CHECKPOINT_DOMAIN: &[u8] = b"LXP/v2/checkpoint-certificate\x00";
+const ATTESTATION_DOMAIN: &[u8] = b"LXP/v2/guarantor-attestation\x00";
 
 const REGISTER_ASSET: [u8; 4] = [0xea, 0x24, 0x92, 0x88];
 const MINT: [u8; 4] = [0x40, 0xc1, 0x0f, 0x19];
@@ -47,8 +57,9 @@ const APPROVE: [u8; 4] = [0x09, 0x5e, 0xa7, 0xb3];
 const DEPOSIT: [u8; 4] = [0x8a, 0x9e, 0x53, 0x2c];
 const SET_SETTLEMENT_MODULE: [u8; 4] = [0x0f, 0x2f, 0x5f, 0x64];
 const SET_CONSUMER: [u8; 4] = [0x02, 0xc9, 0xef, 0x45];
-const DEPOSIT_BOND: [u8; 4] = [0xf5, 0x14, 0x8c, 0x24];
+const DEPOSIT_BOND: [u8; 4] = [0x09, 0xe0, 0x86, 0x44];
 const ACTIVATE_GUARANTOR: [u8; 4] = [0x23, 0x7d, 0xd0, 0x4f];
+const SET_GUARANTOR_BOND: [u8; 4] = [0x05, 0xc3, 0xd9, 0xea];
 const REGISTER_CHECKPOINT: [u8; 4] = [0xc7, 0x2a, 0x88, 0x43];
 const DECLARE_EMERGENCY: [u8; 4] = [0x50, 0xd1, 0x7f, 0xff];
 const BALANCE_OF: [u8; 4] = [0x70, 0xa0, 0x82, 0x31];
@@ -128,7 +139,13 @@ impl Anvil {
     ) -> TransactionInclusion {
         let transaction = self.send(sender, Some(recipient), calldata, value);
         let inclusion = self.wait_receipt(transaction);
-        assert_eq!(inclusion.execution, ExecutionOutcome::Succeeded);
+        assert_eq!(
+            inclusion.execution,
+            ExecutionOutcome::Succeeded,
+            "transaction to {} with selector {} reverted",
+            address_hex(recipient),
+            bytes_hex(calldata.get(..4).unwrap_or(calldata))
+        );
         inclusion
     }
 
@@ -180,6 +197,20 @@ impl Anvil {
             .unwrap_or_else(|| panic!("{name}: no deployed contract in receipt"))
     }
 
+    fn install_code(&self, source: EvmAddress, target: EvmAddress) {
+        let code = self.text_result(
+            "eth_getCode",
+            &[
+                Json::Text(address_hex(source)),
+                Json::Text("latest".to_owned()),
+            ],
+        );
+        let _ = self.call(
+            "anvil_setCode",
+            &[Json::Text(address_hex(target)), Json::Text(code)],
+        );
+    }
+
     fn mine(&self) {
         self.call("evm_mine", &[]);
     }
@@ -208,7 +239,9 @@ struct Topology {
 
 impl Topology {
     fn deploy(anvil: &Anvil) -> Self {
-        let token = anvil.deploy("IntegrationToken", &[address_word(GOVERNANCE)]);
+        let token_template = anvil.deploy("IntegrationToken", &[address_word(GOVERNANCE)]);
+        anvil.install_code(token_template, USDL_TOKEN);
+        let token = USDL_TOKEN;
         let registry = anvil.deploy(
             "AssetRegistry",
             &[
@@ -233,10 +266,12 @@ impl Topology {
             &[
                 address_word(GOVERNANCE),
                 address_word(GOVERNANCE),
-                quantity_word(1),
+                address_word(token),
+                address_word(vault),
+                ASSET,
+                quantity_word(u128::from(layerx_wire::limits::PROTOCOL_VERSION)),
                 quantity_word(u128::from(NETWORK_ID)),
                 quantity_word(100),
-                quantity_word(0),
                 quantity_word(86_400),
                 CONFIG_HASH,
                 quantity_word(1),
@@ -246,12 +281,14 @@ impl Topology {
             "CheckpointRegistry",
             &[
                 address_word(bond),
-                quantity_word(1),
+                quantity_word(u128::from(layerx_wire::limits::PROTOCOL_VERSION)),
                 quantity_word(u128::from(NETWORK_ID)),
                 quantity_word(1),
                 quantity_word(1),
                 quantity_word(3_600),
                 quantity_word(3_600),
+                GENESIS_MANIFEST,
+                GENESIS_CANONICAL_STATE,
                 GENESIS,
                 CONFIG_HASH,
                 quantity_word(1),
@@ -293,6 +330,12 @@ impl Topology {
                 quantity_word(1),
             ],
         );
+        anvil.transact(
+            GOVERNANCE,
+            vault,
+            &static_call(SET_GUARANTOR_BOND, &[address_word(bond)]),
+            0,
+        );
         Self {
             token,
             registry,
@@ -324,8 +367,8 @@ impl Topology {
         anvil.transact(
             GOVERNANCE,
             self.bond,
-            &static_call(DEPOSIT_BOND, &[quantity_word(1)]),
-            1,
+            &static_call(DEPOSIT_BOND, &[quantity_word(1), quantity_word(BOND)]),
+            0,
         );
         let state_root = balance_leaf(&ACCOUNT, &ASSET, BALANCE, RECIPIENT);
         let (digest, attestation) = signed_checkpoint(state_root, self.bond);
@@ -378,6 +421,18 @@ impl Topology {
             GOVERNANCE,
             self.vault,
             &static_call(DEPOSIT, &[ASSET, quantity_word(CUSTODY), [0x77; 32]]),
+            0,
+        );
+        anvil.transact(
+            GOVERNANCE,
+            self.token,
+            &static_call(MINT, &[address_word(GOVERNANCE), quantity_word(BOND)]),
+            0,
+        );
+        anvil.transact(
+            GOVERNANCE,
+            self.token,
+            &static_call(APPROVE, &[address_word(self.bond), quantity_word(BOND)]),
             0,
         );
         anvil.transact(
@@ -536,7 +591,7 @@ fn signed_checkpoint(
 ) -> ([u8; 32], GuarantorAttestation) {
     let digest = checkpoint_digest(state_root);
     let mut attestation = GuarantorAttestation {
-        protocol_version: 1,
+        protocol_version: layerx_wire::limits::PROTOCOL_VERSION,
         network_id: NETWORK_ID,
         paxeer_chain_id: 31_337,
         settlement_contract,
@@ -572,9 +627,9 @@ fn signed_checkpoint(
 }
 
 fn checkpoint_digest(state_root: [u8; 32]) -> [u8; 32] {
-    let mut header = vec![0x00, 0x01, 0x17, 0x01, 0x0f];
+    let mut header = vec![0x00, 0x02, 0x17, 0x01, 0x0f];
     header.extend_from_slice(&[1]);
-    header.extend_from_slice(&1_u16.to_be_bytes());
+    header.extend_from_slice(&layerx_wire::limits::PROTOCOL_VERSION.to_be_bytes());
     header.extend_from_slice(&[2]);
     header.extend_from_slice(&NETWORK_ID.to_be_bytes());
     for (field, value) in [(3_u8, 1_u64), (4, 1), (5, 1), (6, 100)] {
@@ -630,7 +685,7 @@ fn register_checkpoint_calldata(
     attestation: &GuarantorAttestation,
 ) -> Vec<u8> {
     let mut words = vec![
-        quantity_word(1),
+        quantity_word(u128::from(layerx_wire::limits::PROTOCOL_VERSION)),
         quantity_word(u128::from(NETWORK_ID)),
         quantity_word(1),
         quantity_word(1),

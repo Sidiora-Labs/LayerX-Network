@@ -9,6 +9,7 @@ license.workspace = true
 layerx-ramp-toolkit = { path = "../toolkit" }
 layerx-paxeer-client.workspace = true
 layerx-types.workspace = true
+layerx-wire.workspace = true
 native-tls.workspace = true
 serde.workspace = true
 serde_json.workspace = true

@@ -13,6 +13,7 @@ name = "layerx-testnet-control"
 path = "src/main.rs"
 
 [dependencies]
+layerx-wire = { path = "../../../agent/crates/layerx-wire" }
 native-tls.workspace = true
 rustls.workspace = true
 serde.workspace = true

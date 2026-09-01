@@ -18,6 +18,7 @@ var (
 )
 
 const (
+	currentProtocolVersion = uint16(2)
 	maximumMessageBytes    = 1_048_576
 	maximumEffects         = 512
 	maximumEffectBody      = 256
@@ -149,7 +150,7 @@ func VerifyReceiptOutcome(canonicalReceipt []byte, authorized AuthorizedBatch) (
 	if err != nil {
 		return VerifiedReceipt{}, err
 	}
-	if receipt.protocolVersion != 1 && receipt.protocolVersion != 2 {
+	if receipt.protocolVersion != currentProtocolVersion {
 		return VerifiedReceipt{}, receiptFailure(ReceiptCheckProtocolVersion)
 	}
 	if receipt.operation == 0 {
@@ -556,6 +557,9 @@ func VerifyBatchInclusion(kind InclusionKind, canonicalLeaf []byte, proof Merkle
 	if err != nil {
 		return InclusionVerification{}, err
 	}
+	if header.ProtocolVersion != currentProtocolVersion {
+		return InclusionVerification{}, verificationFailure()
+	}
 	if header.BatchNumber < authorization.FirstBatchNumber || header.BatchNumber > authorization.LastBatchNumber || header.SequencerID != authorization.SequencerID || len(headerSignature) != ed25519.SignatureSize {
 		return InclusionVerification{}, verificationFailure()
 	}
@@ -649,6 +653,9 @@ func VerifyCheckpoint(ctx context.Context, input CheckpointVerificationInput, si
 	header, err := DecodeBatchHeader(certificate.CanonicalHeader)
 	if err != nil {
 		return CheckpointVerification{}, err
+	}
+	if header.ProtocolVersion != currentProtocolVersion {
+		return CheckpointVerification{}, verificationFailure()
 	}
 	length := make([]byte, 4)
 	binary.BigEndian.PutUint32(length, uint32(len(certificate.ValidityProof)))

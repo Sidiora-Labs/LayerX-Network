@@ -8,13 +8,16 @@ import {Governed} from "../security/Governed.sol";
 import {ReentrancyLock} from "../security/ReentrancyLock.sol";
 import {LayerXComponent} from "../security/LayerXComponent.sol";
 import {Predeploys} from "../deployment/Predeploys.sol";
+import {Constants} from "../libraries/Constants.sol";
 
 contract LayerXVault is Governed, ReentrancyLock, LayerXComponent {
     error InvalidDeposit();
     error InvalidRelease();
     error SettlementModuleOnly();
+    error InvalidBondAccounting();
 
     ILayerXAssetRegistry public immutable assetRegistry;
+    address public guarantorBond;
     mapping(address => bool) public settlementModule;
     mapping(bytes32 => uint256) public totalCustodied;
     mapping(bytes32 => uint256) public totalReleased;
@@ -38,6 +41,7 @@ contract LayerXVault is Governed, ReentrancyLock, LayerXComponent {
         address settlementModule
     );
     event SettlementModuleSet(address indexed module, bool enabled);
+    event GuarantorBondSet(address indexed guarantorBond);
 
     constructor(
         ILayerXAssetRegistry registry,
@@ -59,6 +63,17 @@ contract LayerXVault is Governed, ReentrancyLock, LayerXComponent {
         }
         settlementModule[module] = enabled;
         emit SettlementModuleSet(module, enabled);
+    }
+
+    function setGuarantorBond(address bond) external onlyGovernance {
+        if (
+            guarantorBond != address(0) || bond.code.length == 0
+                || IGuarantorBondAccounting(bond).vault() != address(this)
+                || IGuarantorBondAccounting(bond).bondToken() != Constants.USDL_TOKEN
+                || IGuarantorBondAccounting(bond).assetId() != Constants.USDL_ASSET_ID
+        ) revert InvalidBondAccounting();
+        guarantorBond = bond;
+        emit GuarantorBondSet(bond);
     }
 
     function deposit(bytes32 assetId, uint256 amount, bytes32 beneficiary)
@@ -93,6 +108,7 @@ contract LayerXVault is Governed, ReentrancyLock, LayerXComponent {
         if (recordedDeposit[depositId]) revert InvalidDeposit();
         recordedDeposit[depositId] = true;
         totalCustodied[assetId] = afterBalance;
+        _synchronizeUsdl(assetId, afterBalance);
         emit CustodyDeposit(depositId, assetId, msg.sender, beneficiary, amount, nonce);
     }
 
@@ -113,6 +129,21 @@ contract LayerXVault is Governed, ReentrancyLock, LayerXComponent {
         uint256 afterBalance = SafeTransfer.balanceOf(config.token, address(this));
         if (beforeBalance - afterBalance != amount) revert InvalidRelease();
         totalCustodied[assetId] = afterBalance;
+        _synchronizeUsdl(assetId, afterBalance);
         emit CustodyRelease(claimId, assetId, recipient, amount, msg.sender);
     }
+
+    function _synchronizeUsdl(bytes32 assetId, uint256 value) private {
+        if (assetId != Constants.USDL_ASSET_ID) return;
+        address bond = guarantorBond;
+        if (bond == address(0)) revert InvalidBondAccounting();
+        IGuarantorBondAccounting(bond).syncCustodiedValue(value);
+    }
+}
+
+interface IGuarantorBondAccounting {
+    function vault() external view returns (address);
+    function bondToken() external view returns (address);
+    function assetId() external view returns (bytes32);
+    function syncCustodiedValue(uint256 value) external;
 }

@@ -3,11 +3,13 @@
 //! These tests prove that external protocol evidence is bound to exact
 //! presentation bytes, pinned specifications, and conformance suite digests.
 
-use layerx_portable::{
-    verify_external_evidence, ExternalEvidenceKind, ExternalEvidenceVerifier,
-    ExternalPresentation, ExternalPresentationError, ExternalVerificationError,
+use layerx_interop_gateway::adapter::{
+    AdapterDescriptor, AdapterId, ConformanceSuite, PinnedSpec, SpecVersion,
 };
-use layerx_interop_gateway::adapter::{AdapterDescriptor, AdapterId, ConformanceSuite, PinnedSpec, SpecVersion};
+use layerx_portable::{
+    verify_external_evidence, ExternalEvidenceKind, ExternalEvidenceVerifier, ExternalPresentation,
+    ExternalPresentationError, ExternalVerificationError,
+};
 
 struct MockMandateVerifier {
     descriptor: AdapterDescriptor,
@@ -22,8 +24,8 @@ impl MockMandateVerifier {
         let spec = PinnedSpec::new(protocol_id, spec_version, spec_document_digest)
             .expect("valid pinned spec");
         let suite_id = AdapterId::new("test-suite-v1").expect("valid suite id");
-        let conformance = ConformanceSuite::new(suite_id, 10, [2u8; 32])
-            .expect("valid conformance suite");
+        let conformance =
+            ConformanceSuite::new(suite_id, 10, [2u8; 32]).expect("valid conformance suite");
         let descriptor = AdapterDescriptor::new(adapter_id, spec, conformance);
         Self { descriptor }
     }
@@ -263,10 +265,10 @@ fn evidence_digest_changes_with_payload() {
     )
     .expect("valid presentation");
 
-    let verified1 = verify_external_evidence(&verifier, &presentation1, &())
-        .expect("verification 1 succeeds");
-    let verified2 = verify_external_evidence(&verifier, &presentation2, &())
-        .expect("verification 2 succeeds");
+    let verified1 =
+        verify_external_evidence(&verifier, &presentation1, &()).expect("verification 1 succeeds");
+    let verified2 =
+        verify_external_evidence(&verifier, &presentation2, &()).expect("verification 2 succeeds");
 
     assert_ne!(
         verified1.evidence_digest(),
@@ -407,8 +409,8 @@ fn verified_external_evidence_binds_all_inputs() {
     )
     .expect("valid presentation");
 
-    let verified = verify_external_evidence(&verifier, &presentation, &())
-        .expect("verification succeeds");
+    let verified =
+        verify_external_evidence(&verifier, &presentation, &()).expect("verification succeeds");
 
     assert_eq!(verified.adapter(), presentation.adapter());
     assert_eq!(verified.protocol(), presentation.protocol());

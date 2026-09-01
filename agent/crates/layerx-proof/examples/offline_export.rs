@@ -1,7 +1,7 @@
 //! Minimal offline-verifier entry point.
 
-use layerx_proof::export::{verify, OfflineExport};
 use layerx_proof::checkpoint::SettlementDomain;
+use layerx_proof::export::{verify, OfflineExport};
 
 fn verify_without_network(
     artifact: &OfflineExport,

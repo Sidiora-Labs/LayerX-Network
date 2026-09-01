@@ -161,13 +161,17 @@ fn start_human_owner() -> Result<mpsc::Receiver<Result<(), String>>, String> {
     {
         return Err("human daemon paths must be absolute".to_owned());
     }
+    let human_protocol_version = required("LAYERX_AGENT_HUMAN_PROTOCOL_VERSION")?
+        .parse()
+        .map_err(|_| "human protocol version is invalid")?;
+    if human_protocol_version != layerx_wire::limits::PROTOCOL_VERSION {
+        return Err("human protocol version is not the current beta protocol".to_owned());
+    }
     let node = Client::connect(ClientConfig {
         endpoint: node_path,
         handshake: HandshakeConfig {
             built_interface_version: Version::V1_2,
-            expected_protocol_version: required("LAYERX_AGENT_HUMAN_PROTOCOL_VERSION")?
-                .parse()
-                .map_err(|_| "human protocol version is invalid")?,
+            expected_protocol_version: human_protocol_version,
             expected_network_id: required("LAYERX_AGENT_HUMAN_NETWORK_ID")?
                 .parse()
                 .map_err(|_| "human network id is invalid")?,

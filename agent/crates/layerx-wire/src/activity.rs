@@ -154,7 +154,7 @@ fn decode_internal(
     signed: bool,
 ) -> Result<Activity, WireError> {
     let mut decoder = Decoder::new(bytes, MAX_MESSAGE_BYTES);
-    decoder.structure_header(STRUCTURE_TAG)?;
+    let envelope_version = decoder.structure_header_version(STRUCTURE_TAG)?;
     let expected_count = if signed {
         SIGNED_FIELD_COUNT
     } else {
@@ -169,7 +169,7 @@ fn decode_internal(
     }
     field(&mut decoder, 1)?;
     let protocol_version = decoder.u16()?;
-    if !matches!(protocol_version, 1 | 2) {
+    if protocol_version != envelope_version {
         return Err(WireError::known(
             KnownResult::VersionUnsupported,
             decoder.offset(),
@@ -256,7 +256,7 @@ pub fn decode_unsigned(bytes: &[u8], registry: &ModuleRegistry) -> Result<Activi
 
 fn encode_internal(activity: &Activity, signed: bool) -> Result<Vec<u8>, WireError> {
     let mut encoder = Encoder::new(MAX_MESSAGE_BYTES);
-    encoder.structure_header(STRUCTURE_TAG)?;
+    encoder.structure_header_version(STRUCTURE_TAG, activity.protocol_version)?;
     encoder.u8(if signed {
         SIGNED_FIELD_COUNT
     } else {

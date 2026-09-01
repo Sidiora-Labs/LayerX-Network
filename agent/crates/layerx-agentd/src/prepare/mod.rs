@@ -9,6 +9,7 @@ use layerx_types::payload::{ActivityType, ModuleRegistry, Payload, PayloadError}
 use layerx_types::result::ResultCode;
 use layerx_wire::activity::encode_unsigned_envelope;
 use layerx_wire::hash::payload_hash_for;
+use layerx_wire::limits::PROTOCOL_VERSION;
 use layerx_wire::sign::preimage_unsigned;
 use layerx_wire::WireError;
 
@@ -307,7 +308,7 @@ pub fn prepare_activity(
     let payload_hash = payload_hash_for(&payload).map_err(PrepareError::Wire)?;
     let mut builder = EnvelopeBuilder::new();
     builder
-        .protocol_version(1)
+        .protocol_version(PROTOCOL_VERSION)
         .and_then(|builder| builder.network_id(state.network_id))
         .and_then(|builder| builder.activity_type(request.activity_type))
         .and_then(|builder| builder.actor_did(request.actor))

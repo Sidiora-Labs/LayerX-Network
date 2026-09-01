@@ -7,7 +7,7 @@ use layerx_wire::hash::Domain;
 use sha2::{Digest as _, Sha256};
 
 const NETWORK_ID: u32 = 17;
-const PROTOCOL_VERSION: u16 = 1;
+const PROTOCOL_VERSION: u16 = layerx_wire::limits::PROTOCOL_VERSION;
 const SEQUENCE: u64 = 7;
 const NOT_BEFORE: u64 = 10;
 const EXPIRES_AT: u64 = 100;
@@ -110,7 +110,9 @@ pub fn canonical_send(amount: u128) -> Vec<u8> {
     let payload_hash: [u8; 32] = hasher.finalize().into();
 
     let mut activity = Encoder::new(4096);
-    assert!(activity.structure_header(0x1001).is_ok());
+    assert!(activity
+        .structure_header_version(0x1001, PROTOCOL_VERSION)
+        .is_ok());
     assert!(activity.u8(11).is_ok());
     assert!(activity.tag(1, 12).is_ok());
     assert!(activity.u16(PROTOCOL_VERSION).is_ok());
@@ -156,7 +158,9 @@ pub fn canonical_bridge_withdraw(amount: u128) -> Vec<u8> {
     let payload_hash: [u8; 32] = hasher.finalize().into();
 
     let mut activity = Encoder::new(4096);
-    assert!(activity.structure_header(0x1001).is_ok());
+    assert!(activity
+        .structure_header_version(0x1001, PROTOCOL_VERSION)
+        .is_ok());
     assert!(activity.u8(11).is_ok());
     assert!(activity.tag(1, 12).is_ok());
     assert!(activity.u16(PROTOCOL_VERSION).is_ok());
@@ -202,7 +206,9 @@ pub fn canonical_bridge_credit(amount: u128) -> Vec<u8> {
     let payload_hash: [u8; 32] = hasher.finalize().into();
 
     let mut activity = Encoder::new(4096);
-    assert!(activity.structure_header(0x1001).is_ok());
+    assert!(activity
+        .structure_header_version(0x1001, PROTOCOL_VERSION)
+        .is_ok());
     assert!(activity.u8(11).is_ok());
     assert!(activity.tag(1, 12).is_ok());
     assert!(activity.u16(PROTOCOL_VERSION).is_ok());

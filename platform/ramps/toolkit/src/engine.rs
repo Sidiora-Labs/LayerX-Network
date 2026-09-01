@@ -2,9 +2,8 @@ use layerx_paxeer_client::{FinalityReport, FinalityStage, FinalityTracker, Trans
 use layerx_types::payload::ModuleRegistry;
 
 use crate::clients::{
-    callback_evidence_digest, ComplianceClient, ComplianceOutcome, LayerxClient,
-    LayerxSubmission, PaxeerCustodyClient, ProviderCallback, ProviderClient, ProviderResult,
-    ProviderState,
+    callback_evidence_digest, ComplianceClient, ComplianceOutcome, LayerxClient, LayerxSubmission,
+    PaxeerCustodyClient, ProviderCallback, ProviderClient, ProviderResult, ProviderState,
 };
 use crate::journal::{Journal, OrderSnapshot, TransitionEvidence, WorkflowStage};
 use crate::{RampDirection, RampError, RampOrder};
@@ -27,8 +26,10 @@ impl RampEngine<'_> {
     ) -> Result<(), RampError> {
         self.acquire(order_digest, now)?;
         let snapshot = self.snapshot(order_digest)?;
-        if !matches!(snapshot.stage, WorkflowStage::CompliancePending | WorkflowStage::ManualReview)
-            || snapshot.evidence.provider_operation_id.is_some()
+        if !matches!(
+            snapshot.stage,
+            WorkflowStage::CompliancePending | WorkflowStage::ManualReview
+        ) || snapshot.evidence.provider_operation_id.is_some()
         {
             return Err(RampError::IllegalTransition);
         }
@@ -43,32 +44,20 @@ impl RampEngine<'_> {
                 },
                 None,
             ),
-            ComplianceOutcome::Refused => (
-                WorkflowStage::ComplianceRefused,
-                Some(decision.reason_code),
-            ),
-            ComplianceOutcome::ManualReview => (
-                WorkflowStage::ManualReview,
-                Some(decision.reason_code),
-            ),
+            ComplianceOutcome::Refused => {
+                (WorkflowStage::ComplianceRefused, Some(decision.reason_code))
+            }
+            ComplianceOutcome::ManualReview => {
+                (WorkflowStage::ManualReview, Some(decision.reason_code))
+            }
         };
         let mut evidence = TransitionEvidence::empty();
         evidence.refusal_code = refusal;
-        self.journal.transition(
-            order_digest,
-            expected,
-            next,
-            evidence,
-            self.worker_id,
-            now,
-        )
+        self.journal
+            .transition(order_digest, expected, next, evidence, self.worker_id, now)
     }
 
-    pub fn submit_provider(
-        &mut self,
-        order_digest: [u8; 32],
-        now: u64,
-    ) -> Result<(), RampError> {
+    pub fn submit_provider(&mut self, order_digest: [u8; 32], now: u64) -> Result<(), RampError> {
         self.acquire(order_digest, now)?;
         let snapshot = self.snapshot(order_digest)?;
         let expected = snapshot.stage;
@@ -99,16 +88,14 @@ impl RampEngine<'_> {
                 result,
                 now,
             ),
-            Err(_) => {
-                self.journal.transition(
-                    order_digest,
-                    WorkflowStage::ProviderSubmissionPlanned,
-                    WorkflowStage::ProviderSubmittedUnknown,
-                    planned,
-                    self.worker_id,
-                    now,
-                )
-            }
+            Err(_) => self.journal.transition(
+                order_digest,
+                WorkflowStage::ProviderSubmissionPlanned,
+                WorkflowStage::ProviderSubmittedUnknown,
+                planned,
+                self.worker_id,
+                now,
+            ),
         }
     }
 
@@ -180,12 +167,9 @@ impl RampEngine<'_> {
             return Err(RampError::IllegalTransition);
         }
         let order = snapshot.order;
-        let prepared = self.layerx.prepare_payment(
-            &order,
-            account_sequence,
-            now,
-            self.registry,
-        )?;
+        let prepared = self
+            .layerx
+            .prepare_payment(&order, account_sequence, now, self.registry)?;
         let mut planned = TransitionEvidence::empty();
         planned.activity_id = Some(prepared.activity_id());
         planned.canonical_activity = Some(prepared.canonical_activity().to_vec());
@@ -207,10 +191,7 @@ impl RampEngine<'_> {
             ),
             Err(_) => {
                 let mut evidence = TransitionEvidence::empty();
-                evidence.activity_id = self
-                    .snapshot(order_digest)?
-                    .evidence
-                    .activity_id;
+                evidence.activity_id = self.snapshot(order_digest)?.evidence.activity_id;
                 self.journal.transition(
                     order_digest,
                     WorkflowStage::LayerxSubmissionPlanned,
@@ -223,11 +204,7 @@ impl RampEngine<'_> {
         }
     }
 
-    pub fn resolve_layerx(
-        &mut self,
-        order_digest: [u8; 32],
-        now: u64,
-    ) -> Result<(), RampError> {
+    pub fn resolve_layerx(&mut self, order_digest: [u8; 32], now: u64) -> Result<(), RampError> {
         self.acquire(order_digest, now)?;
         let snapshot = self.snapshot(order_digest)?;
         if !matches!(
@@ -251,8 +228,14 @@ impl RampEngine<'_> {
         now: u64,
     ) -> Result<(), RampError> {
         let (next, evidence) = provider_transition(result);
-        self.journal
-            .transition(order.order_digest, expected, next, evidence, self.worker_id, now)?;
+        self.journal.transition(
+            order.order_digest,
+            expected,
+            next,
+            evidence,
+            self.worker_id,
+            now,
+        )?;
         self.finish_if_complete(order.order_digest, now)
     }
 
@@ -306,8 +289,14 @@ impl RampEngine<'_> {
                 (WorkflowStage::LayerxVerified, evidence)
             }
         };
-        self.journal
-            .transition(order.order_digest, expected, next, evidence, self.worker_id, now)?;
+        self.journal.transition(
+            order.order_digest,
+            expected,
+            next,
+            evidence,
+            self.worker_id,
+            now,
+        )?;
         self.finish_if_complete(order.order_digest, now)
     }
 
@@ -337,12 +326,8 @@ impl RampEngine<'_> {
     }
 
     fn acquire(&mut self, digest: [u8; 32], now: u64) -> Result<(), RampError> {
-        self.journal.acquire_lease(
-            digest,
-            self.worker_id,
-            now,
-            self.lease_seconds,
-        )
+        self.journal
+            .acquire_lease(digest, self.worker_id, now, self.lease_seconds)
     }
 
     fn snapshot(&self, digest: [u8; 32]) -> Result<OrderSnapshot, RampError> {
@@ -416,9 +401,9 @@ impl InventoryRebalancer<'_> {
         if snapshot.operation_id.is_some() {
             return Err(RampError::Conflict);
         }
-        let submission = self
-            .custody
-            .reconcile(snapshot.asset, snapshot.amount, idempotency_key)?;
+        let submission =
+            self.custody
+                .reconcile(snapshot.asset, snapshot.amount, idempotency_key)?;
         let transaction = TransactionHash::from_hex(&submission.transaction_hash)
             .map_err(|_| RampError::Paxeer)?;
         self.journal.observe_paxeer(

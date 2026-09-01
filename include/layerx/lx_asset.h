@@ -57,6 +57,16 @@ typedef struct lx_asset_transfer_request {
     bool direct_balance_write;
 } lx_asset_transfer_request;
 
+typedef struct lx_asset_runtime {
+    lx_account_registry *accounts;
+    const lx_asset_record *assets;
+    size_t asset_count;
+    const lxp_transfer_asset_state *transfer_assets;
+    size_t transfer_asset_count;
+    uint32_t network_id;
+    uint16_t protocol_version;
+} lx_asset_runtime;
+
 enum {
     LX_CHECKPOINT_CAPACITY = 64,
     LX_DEPOSIT_NULLIFIER_CAPACITY = 128

@@ -132,6 +132,8 @@ struct lxp_module_ctx {
     void *activity_state;
     lxp_activity_state_release_fn activity_state_release;
     lxp_program_outcome program_outcome;
+    lxp_ledger_receipt_input ledger_receipt;
+    bool ledger_receipt_present;
     lxp_call_admission_facts call_admission;
     const lxp_verified_receipt_index *verified_receipts;
     lxp_module_blob staged_blobs[LXP_KERNEL_MAX_STAGED_BLOBS];

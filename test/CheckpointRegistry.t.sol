@@ -4,6 +4,7 @@ pragma solidity ^0.8.24;
 import {CanonicalCheckpoint} from "../contracts/libraries/CanonicalCheckpoint.sol";
 import {CheckpointRegistry} from "../contracts/CheckpointRegistry.sol";
 import {GuarantorBond} from "../contracts/GuarantorBond.sol";
+import {Constants} from "../contracts/libraries/Constants.sol";
 
 interface CheckpointVm {
     function addr(uint256 privateKey) external returns (address);
@@ -12,6 +13,34 @@ interface CheckpointVm {
     function sign(uint256 privateKey, bytes32 digest) external returns (uint8 v, bytes32 r, bytes32 s);
     function warp(uint256 timestamp) external;
     function expectRevert(bytes4 selector) external;
+    function etch(address target, bytes calldata code) external;
+}
+
+contract CheckpointToken {
+    mapping(address => uint256) public balanceOf;
+    mapping(address => mapping(address => uint256)) public allowance;
+
+    function mint(address recipient, uint256 amount) external {
+        balanceOf[recipient] += amount;
+    }
+
+    function approve(address spender, uint256 amount) external returns (bool) {
+        allowance[msg.sender][spender] = amount;
+        return true;
+    }
+
+    function transfer(address recipient, uint256 amount) external returns (bool) {
+        balanceOf[msg.sender] -= amount;
+        balanceOf[recipient] += amount;
+        return true;
+    }
+
+    function transferFrom(address sender, address recipient, uint256 amount) external returns (bool) {
+        allowance[sender][msg.sender] -= amount;
+        balanceOf[sender] -= amount;
+        balanceOf[recipient] += amount;
+        return true;
+    }
 }
 
 contract CheckpointRegistryTest {
@@ -21,34 +50,149 @@ contract CheckpointRegistryTest {
     CheckpointRegistry private registry;
     uint256[3] private keys = [uint256(1), uint256(2), uint256(3)];
     bytes32 private constant GENESIS_RECEIPT_ROOT = bytes32(uint256(0x11) << 248);
+    bytes32 private constant GENESIS_CANONICAL_STATE_ROOT = bytes32(uint256(0x12) << 248);
+    bytes32 private constant GENESIS_MANIFEST_DIGEST = bytes32(uint256(0x13) << 248);
     bytes32 private constant CONFIG = keccak256("checkpoint-test-config");
     uint192 private constant RELEASE = uint192(1) << 128;
 
     function setUp() public {
         vm.warp(1000);
-        bond = new GuarantorBond(address(this), address(this), 1, 42, 100, 200 ether, 7 days, CONFIG, RELEASE);
+        CheckpointToken implementation = new CheckpointToken();
+        vm.etch(Constants.USDL_TOKEN, address(implementation).code);
+        bond = new GuarantorBond(
+            address(this),
+            address(this),
+            Constants.USDL_TOKEN,
+            address(this),
+            Constants.USDL_ASSET_ID,
+            Constants.PROTOCOL_VERSION,
+            42,
+            100,
+            7 days,
+            CONFIG,
+            RELEASE
+        );
+        CheckpointToken token = CheckpointToken(Constants.USDL_TOKEN);
         for (uint256 i = 0; i < keys.length; ++i) {
             address signer = vm.addr(keys[i]);
             bond.activateGuarantor(bytes32(i + 1), signer, signer, 1, uint64(i + 1));
-            vm.deal(signer, 3 ether);
+            token.mint(signer, 2 ether);
             vm.prank(signer);
-            bond.depositBond{value: 2 ether}(bytes32(i + 1));
+            token.approve(address(bond), 2 ether);
+            vm.prank(signer);
+            bond.depositBond(bytes32(i + 1), 2 ether);
         }
-        registry = new CheckpointRegistry(bond, 1, 42, 2, 4, 1 hours, 5 minutes, GENESIS_RECEIPT_ROOT, CONFIG, RELEASE);
+        registry = new CheckpointRegistry(
+            bond,
+            Constants.PROTOCOL_VERSION,
+            42,
+            2,
+            4,
+            1 hours,
+            5 minutes,
+            GENESIS_MANIFEST_DIGEST,
+            GENESIS_CANONICAL_STATE_ROOT,
+            GENESIS_RECEIPT_ROOT,
+            CONFIG,
+            RELEASE
+        );
     }
 
     function testCanonicalHeaderMatchesCVector() public view {
         CanonicalCheckpoint.HeaderCommitments memory header = _vectorHeader();
         bytes memory encoded = registry.canonicalHeader(header);
         require(encoded.length == 354, "header length");
+        require(encoded[0] == bytes1(0) && encoded[1] == bytes1(uint8(2)), "outer header version");
         require(
-            registry.checkpointHash(header, "") == 0xf655c001cc9392bddb71932afa21742e7be6ac762e76f3ce0c56e32e8ec35aee,
+            registry.checkpointHash(header, "") == 0xf5d35dfd948812aac72e8bc5bd87c57be8377c891e9b9fec6d84350cdd8ff743,
             "C checkpoint vector mismatch"
         );
     }
 
+    function testCanonicalAttestationMatchesProtocolV2GoldenVector() public pure {
+        CanonicalCheckpoint.GuarantorAttestation memory attestation = CanonicalCheckpoint.GuarantorAttestation({
+            protocolVersion: 2,
+            networkId: 42,
+            paxeerChainId: 31_337,
+            settlementContract: address(0x1111111111111111111111111111111111111111),
+            epoch: 1,
+            checkpointId: bytes32(uint256(0xaa) << 248),
+            checkpointHash: bytes32(uint256(0xaa) << 248),
+            guarantorId: bytes32(uint256(1) << 248),
+            batchNumber: 1,
+            dataAvailabilityRoot: bytes32(uint256(0x66) << 248),
+            replayed: true,
+            dataAvailable: true,
+            availabilityClassMask: 0x1f,
+            attestedAt: 1001,
+            signer: address(0),
+            r: bytes32(0),
+            s: bytes32(0),
+            v: 0
+        });
+        require(
+            CanonicalCheckpoint.attestationHash(attestation)
+                == 0xc8c4749f2a9ee3d933696bebb1c0543e028c9fe22aac54f4ff33c124b2bbf991,
+            "C attestation vector mismatch"
+        );
+    }
+
     function testInitialContinuityUsesGenesisReceiptRoot() public view {
+        require(registry.protocolVersion() == 2, "protocol v2 not active");
         require(registry.latestFinalisedStateRoot() == GENESIS_RECEIPT_ROOT, "genesis receipt root");
+        require(registry.genesisManifestDigest() == GENESIS_MANIFEST_DIGEST, "genesis manifest digest");
+        require(registry.genesisCanonicalStateRoot() == GENESIS_CANONICAL_STATE_ROOT, "canonical root");
+        require(registry.genesisReceiptRoot() == GENESIS_RECEIPT_ROOT, "receipt root");
+        require(registry.genesisCheckpointId() == registry.derivedGenesisCheckpointId(), "genesis checkpoint id");
+    }
+
+    function testFirstCheckpointRejectsCanonicalRootAndAcceptsReceiptRoot() public {
+        CanonicalCheckpoint.HeaderCommitments memory header = _header();
+        header.previousStateRoot = GENESIS_CANONICAL_STATE_ROOT;
+        bytes32 digest = registry.checkpointHash(header, "");
+        CanonicalCheckpoint.GuarantorAttestation[] memory attestations = _attestations(header, digest, 2);
+        vm.expectRevert(CheckpointRegistry.StateRootDiscontinuity.selector);
+        registry.registerCheckpoint(header, "", attestations);
+
+        header.previousStateRoot = GENESIS_RECEIPT_ROOT;
+        digest = registry.checkpointHash(header, "");
+        attestations = _attestations(header, digest, 2);
+        registry.registerCheckpoint(header, "", attestations);
+        require(registry.checkpointAtBatch(1) == digest, "receipt-root continuity rejected");
+    }
+
+    function testGenesisCheckpointIdentityBindsDistinctRootsManifestAndConfig() public {
+        CheckpointRegistry other = new CheckpointRegistry(
+            bond,
+            Constants.PROTOCOL_VERSION,
+            42,
+            2,
+            4,
+            1 hours,
+            5 minutes,
+            keccak256("other-manifest"),
+            GENESIS_CANONICAL_STATE_ROOT,
+            GENESIS_RECEIPT_ROOT,
+            keccak256("other-config"),
+            RELEASE
+        );
+        require(other.genesisCheckpointId() != registry.genesisCheckpointId(), "genesis identity not bound");
+
+        vm.expectRevert(CheckpointRegistry.InvalidConfiguration.selector);
+        new CheckpointRegistry(
+            bond,
+            Constants.PROTOCOL_VERSION,
+            42,
+            2,
+            4,
+            1 hours,
+            5 minutes,
+            GENESIS_RECEIPT_ROOT,
+            GENESIS_RECEIPT_ROOT,
+            GENESIS_RECEIPT_ROOT,
+            CONFIG,
+            RELEASE
+        );
     }
 
     function testCanonicalMillisecondTimestampsMeetSecondBasedWallClockBounds() public {
@@ -92,15 +236,15 @@ contract CheckpointRegistryTest {
         registry.registerCheckpoint(header, "", attestations);
         require(registry.latestFinalisedStateRoot() == header.resultingStateRoot, "root not advanced");
         require(registry.checkpointAtBatch(1) == digest, "batch checkpoint absent");
-        require(registry.checkpointGuarantorSetVersion(digest) == 3, "guarantor-set version absent");
+        require(registry.checkpointGuarantorSetVersion(digest) == 6, "guarantor-set version absent");
         require(
             registry.certificateCommitment(digest)
                 == sha256(
                     abi.encode(
-                        keccak256("LXP1/registered-guarantor-certificate/v1"),
+                        keccak256("LXP2/registered-guarantor-certificate/v2"),
                         digest,
                         header.epoch,
-                        uint64(3),
+                        uint64(6),
                         attestations
                     )
                 ),
@@ -241,7 +385,7 @@ contract CheckpointRegistryTest {
         vm.prank(originalSigner);
         bond.finalizeUnbond(guarantorId);
         _requireRecordedCertificate(header, digest, attestations);
-        bond.updateCustodiedValue(1_000 ether);
+        bond.syncCustodiedValue(1_000 ether);
         _requireRecordedCertificate(header, digest, attestations);
 
         _slashRotatedOldSigner(attestations[1]);
@@ -256,11 +400,11 @@ contract CheckpointRegistryTest {
         registry.registerCheckpoint(header, "", attestations);
         bond.setSlashingAuthority(address(this));
         bond.slashForCheckpoint(bytes32(uint256(1)), digest);
-        require(bond.membershipVersion() == 4, "slash did not advance guarantor-set version");
+        require(bond.membershipVersion() == 7, "slash did not advance guarantor-set version");
         require(bond.bondRecord(bytes32(uint256(1))).removedEpoch == 0, "slash invented removal epoch");
-        require(bond.bondRecord(bytes32(uint256(1))).ejectedAtVersion == 4, "slash boundary not recorded");
+        require(bond.bondRecord(bytes32(uint256(1))).ejectedAtVersion == 7, "slash boundary not recorded");
         _requireRecordedCertificate(header, digest, attestations);
-        require(registry.checkpointGuarantorSetVersion(digest) == 3, "recorded set version mutated");
+        require(registry.checkpointGuarantorSetVersion(digest) == 6, "recorded set version mutated");
     }
 
     function testOnlySlashingAuthorityCanInvalidateWithoutErasingHistory() public {
@@ -306,7 +450,7 @@ contract CheckpointRegistryTest {
 
     function _header() private pure returns (CanonicalCheckpoint.HeaderCommitments memory header) {
         header = CanonicalCheckpoint.HeaderCommitments({
-            protocolVersion: 1,
+            protocolVersion: 2,
             networkId: 42,
             epoch: 1,
             batchNumber: 1,
@@ -360,7 +504,7 @@ contract CheckpointRegistryTest {
         second.r = r;
         second.s = s;
         bond.submitEquivocation(first, second);
-        require(bond.bondRecord(guarantorId).ejectedAtVersion == 9, "old signer did not eject member");
+        require(bond.bondRecord(guarantorId).ejectedAtVersion == 16, "old signer did not eject member");
         require(!bond.bondedActive(guarantorId, rotatedSigner, 4), "rotated member survived old-key slash");
     }
 

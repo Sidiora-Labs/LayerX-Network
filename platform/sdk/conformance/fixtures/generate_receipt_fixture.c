@@ -213,7 +213,7 @@ int main(int argc, char **argv)
     uint64_t amount_low;
     uint64_t fee_low;
     const char *output_path = argc > 1 ? argv[1] :
-        "platform/sdk/conformance/fixtures/receipt-positive-v1.json";
+        "platform/sdk/conformance/fixtures/receipt-positive-v2.json";
     FILE *output;
     lxp_result status;
 
@@ -291,10 +291,14 @@ int main(int argc, char **argv)
         (void)fprintf(stderr, "fixture: settled balances are wrong\n");
         return 1;
     }
-    receipt.protocol_version = LXP_PROTOCOL_VERSION_LEGACY;
+    receipt.protocol_version = LXP_PROTOCOL_VERSION;
     receipt.module_id = LXP_MODULE_ASSET;
     receipt.module_version = 1U;
     receipt.parameter_version = 1U;
+    if (receipt.protocol_version != LXP_PROTOCOL_VERSION) {
+        (void)fprintf(stderr, "fixture: receipt protocol version drifted\n");
+        return 1;
+    }
     status = lxp_receipt_sign(&receipt, sequencer_private_key, &arena);
     if (status != LXP_OK) {
         (void)fprintf(stderr, "fixture: receipt signing failed: %s\n",
@@ -341,7 +345,7 @@ int main(int argc, char **argv)
         return 1;
     }
     (void)fprintf(output, "{\n");
-    (void)fprintf(output, "  \"name\": \"receipt-positive-v1\",\n");
+    (void)fprintf(output, "  \"name\": \"receipt-positive-v2\",\n");
     (void)fprintf(output,
         "  \"provenance\": {\n"
         "    \"generator\": "

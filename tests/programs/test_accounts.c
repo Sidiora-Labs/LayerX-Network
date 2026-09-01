@@ -954,7 +954,8 @@ static int registration_law(void)
 
     if (lxp_snapshot_write(&kernel, 7U, &snapshot_arena, &snapshot) != LXP_OK ||
         lxp_snapshot_manifest_build(snapshot.bytes, snapshot.length, 7U,
-                                    committed_root, &manifest) != LXP_OK ||
+                                    committed_root, committed_root,
+                                    &manifest) != LXP_OK ||
         lx_account_registry_init(&restored_accounts) != LXP_OK ||
         lxp_state_store_init(&restored_store, 0U) != LXP_OK ||
         lxp_kernel_create(&restored_kernel, &restored_store,
@@ -971,7 +972,7 @@ static int registration_law(void)
     if (lxp_kernel_bind_module_runtime(&restored_kernel, LXP_MODULE_PROGRAMS,
                                        &restored_runtime) != LXP_OK ||
         lxp_snapshot_load(snapshot.bytes, snapshot.length, &manifest,
-                          committed_root, &restored_kernel) != LXP_OK ||
+                          &restored_kernel) != LXP_OK ||
         restored_accounts.count != 1U ||
         memcmp(restored_accounts.accounts[0].id, expected_id, 32U) != 0 ||
         lxp_state_root(&restored_kernel, before_root) != LXP_OK ||

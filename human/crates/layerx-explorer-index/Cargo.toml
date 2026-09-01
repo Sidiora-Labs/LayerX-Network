@@ -20,6 +20,7 @@ serde_json.workspace = true
 
 [dev-dependencies]
 k256.workspace = true
+layerx-wire.workspace = true
 
 [lints]
 workspace = true

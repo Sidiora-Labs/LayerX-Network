@@ -1,8 +1,6 @@
 //! Durable unknown reservations and fail-closed restart accounting.
 
-use crate::protocol_evidence::{
-    EvidenceAuthority, RawReceiptEvidence, ReceiptReplayError,
-};
+use crate::protocol_evidence::{EvidenceAuthority, RawReceiptEvidence, ReceiptReplayError};
 use crate::store::{ObjectKind, Store, StoreError, TenantId, TenantKey};
 
 use super::ProtocolBudgetState;

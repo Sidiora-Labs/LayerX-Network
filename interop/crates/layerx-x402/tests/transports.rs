@@ -11,6 +11,7 @@ use layerx_interop_gateway::GatewayCore;
 use layerx_proof::receipt::AuthorizedBatch;
 use layerx_wire::encode::Encoder;
 use layerx_wire::hash::receipt_digest;
+use layerx_wire::limits::PROTOCOL_VERSION;
 use layerx_x402::facilitator::{
     Facilitator, FacilitatorKind, FacilitatorPaymentRequest, FacilitatorPlane, FacilitatorRequest,
     FacilitatorSettlementOutcome, PlaneVerifyOutcome, SettlementIdentity, SettlementStep,
@@ -239,8 +240,7 @@ fn register_x402(gateway: &mut GatewayCore, trace: &TraceId) {
     let version = SpecVersion::parse("2").unwrap_or_else(|error| panic!("version: {error}"));
     let spec = PinnedSpec::new(adapter.clone(), version, [0x7d; 32])
         .unwrap_or_else(|error| panic!("pinned spec: {error}"));
-    let suite_id =
-        AdapterId::new("x402-v2").unwrap_or_else(|error| panic!("suite id: {error}"));
+    let suite_id = AdapterId::new("x402-v2").unwrap_or_else(|error| panic!("suite id: {error}"));
     let conformance = ConformanceSuite::new(suite_id, 20, [0xc0; 32])
         .unwrap_or_else(|error| panic!("conformance suite: {error}"));
     let descriptor = AdapterDescriptor::new(adapter, spec, conformance);
@@ -284,8 +284,11 @@ fn receipt_fields(activity_id: [u8; 32]) -> ReceiptFields {
 
 fn encode_fields(fields: &ReceiptFields, signature: Option<[u8; 64]>) -> Vec<u8> {
     let mut encoder = Encoder::new(4096);
-    assert_eq!(encoder.structure_header(0x5201), Ok(()));
-    assert_eq!(encoder.u16(1), Ok(()));
+    assert_eq!(
+        encoder.structure_header_version(0x5201, PROTOCOL_VERSION),
+        Ok(())
+    );
+    assert_eq!(encoder.u16(PROTOCOL_VERSION), Ok(()));
     assert_eq!(encoder.bytes(&fields.activity_id, 32), Ok(()));
     assert_eq!(encoder.u64(9), Ok(()));
     assert_eq!(encoder.bytes(&fields.previous_state_root, 32), Ok(()));
@@ -395,7 +398,11 @@ impl FacilitatorPlane for FaultInjectingPlane {
         _trace: &TraceId,
     ) -> Result<FacilitatorSettlementOutcome, X402Error> {
         self.settle_calls += 1;
-        let planned = self.script.get(self.cursor).copied().unwrap_or(Planned::Execute);
+        let planned = self
+            .script
+            .get(self.cursor)
+            .copied()
+            .unwrap_or(Planned::Execute);
         self.cursor += 1;
         match planned {
             Planned::Pending => Ok(FacilitatorSettlementOutcome::Pending {
@@ -441,7 +448,14 @@ fn confirmed_settlement_records_exactly_one_receipt_verified_effect() {
     let mut plane = FaultInjectingPlane::new(vec![Planned::Execute]);
     let response = facilitator
         .settle(
-            &mut gateway, &principal, &request, stable, step, &mut plane, &trace, 0,
+            &mut gateway,
+            &principal,
+            &request,
+            stable,
+            step,
+            &mut plane,
+            &trace,
+            0,
         )
         .unwrap_or_else(|error| panic!("settle: {error}"));
 
@@ -525,7 +539,14 @@ fn transport_independent_identity_settles_once_across_http_mcp_and_a2a() {
             .unwrap_or_else(|error| panic!("decode {transport:?}: {error}"));
         let response = facilitator
             .settle(
-                &mut gateway, &principal, &decoded, stable, step, &mut plane, &trace, 0,
+                &mut gateway,
+                &principal,
+                &decoded,
+                stable,
+                step,
+                &mut plane,
+                &trace,
+                0,
             )
             .unwrap_or_else(|error| panic!("settle {transport:?}: {error}"));
         assert!(response.success);
@@ -565,7 +586,14 @@ fn settlement_recovers_after_a_crash_without_a_second_economic_effect() {
     // Delayed confirmation: no economic effect yet.
     let pending = facilitator
         .settle(
-            &mut gateway, &principal, &request, stable, step, &mut plane, &trace, 0,
+            &mut gateway,
+            &principal,
+            &request,
+            stable,
+            step,
+            &mut plane,
+            &trace,
+            0,
         )
         .unwrap_or_else(|error| panic!("pending settle: {error}"));
     assert!(!pending.success);
@@ -595,7 +623,14 @@ fn settlement_recovers_after_a_crash_without_a_second_economic_effect() {
     // Recovery: the retry confirms exactly one receipt-verified effect.
     let confirmed = facilitator
         .settle(
-            &mut gateway, &principal, &request, stable, step, &mut plane, &trace, 2,
+            &mut gateway,
+            &principal,
+            &request,
+            stable,
+            step,
+            &mut plane,
+            &trace,
+            2,
         )
         .unwrap_or_else(|error| panic!("recovery settle: {error}"));
     assert!(confirmed.success);
@@ -604,7 +639,14 @@ fn settlement_recovers_after_a_crash_without_a_second_economic_effect() {
     // Post-success duplicate: idempotent, no new effect, same digest.
     let duplicate = facilitator
         .settle(
-            &mut gateway, &principal, &request, stable, step, &mut plane, &trace, 3,
+            &mut gateway,
+            &principal,
+            &request,
+            stable,
+            step,
+            &mut plane,
+            &trace,
+            3,
         )
         .unwrap_or_else(|error| panic!("duplicate settle: {error}"));
     assert!(duplicate.success);
@@ -633,12 +675,18 @@ fn a_swapped_receipt_for_a_settled_identity_is_refused() {
     // First confirm the primary receipt, then a fault redelivers a *different*
     // receipt (same asset, recipient and amount, different activity) under the
     // already-settled identity.
-    let mut plane =
-        FaultInjectingPlane::new(vec![Planned::Execute, Planned::ExecuteAlternate]);
+    let mut plane = FaultInjectingPlane::new(vec![Planned::Execute, Planned::ExecuteAlternate]);
 
     let confirmed = facilitator
         .settle(
-            &mut gateway, &principal, &request, stable, step, &mut plane, &trace, 0,
+            &mut gateway,
+            &principal,
+            &request,
+            stable,
+            step,
+            &mut plane,
+            &trace,
+            0,
         )
         .unwrap_or_else(|error| panic!("primary settle: {error}"));
     assert!(confirmed.success);

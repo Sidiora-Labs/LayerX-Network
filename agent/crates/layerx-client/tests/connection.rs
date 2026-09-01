@@ -8,11 +8,12 @@ use layerx_client::lni::handshake::{
 };
 use layerx_client::lni::schema::Version;
 use layerx_client::lni::transport::TransportError;
+use layerx_wire::limits::PROTOCOL_VERSION;
 
 fn node(sequence: u64, batch: u64, key: u8) -> NodeInfo {
     NodeInfo {
         interface_version: Version::V1_0,
-        protocol_version: 1,
+        protocol_version: PROTOCOL_VERSION,
         network_id: 77,
         role: NodeRole::Sequencer,
         chain_head_sequence: sequence,
@@ -26,7 +27,7 @@ fn node(sequence: u64, batch: u64, key: u8) -> NodeInfo {
 fn config() -> HandshakeConfig {
     HandshakeConfig {
         built_interface_version: Version::V1_0,
-        expected_protocol_version: 1,
+        expected_protocol_version: PROTOCOL_VERSION,
         expected_network_id: 77,
     }
 }

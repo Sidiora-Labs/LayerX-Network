@@ -45,7 +45,7 @@ fuzz_target!(|data: &[u8]| {
     let Ok(network) = NetworkId::new(1) else {
         return;
     };
-    let Ok(protocol) = ProtocolVersion::new(1) else {
+    let Ok(protocol) = ProtocolVersion::new(layerx_wire::limits::PROTOCOL_VERSION) else {
         return;
     };
     let Ok(send) = LxpSend::new(

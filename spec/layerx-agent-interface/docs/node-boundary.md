@@ -68,6 +68,8 @@ of the schema rather than a second authority.
 | Proof bundle | `ProofBundleRequest`, `ProofBundleResponse` | activity id or account id, target root selector | opaque target bytes, activity inclusion proof, state inclusion proof |
 | Availability fetch | `AvailabilityFetchRequest`, `AvailabilityChunk`, `AvailabilityEnd` | checkpoint id / batch / sequence range / activity id, class selector | DA chunks with inclusion proofs and final class report |
 | Event subscribe | `EventSubscribeRequest`, `EventRecord`, `EventGap`, `EventHeartbeat` | start cursor, filter | ordered event records, gap markers, heartbeat |
+| Preparation state | `PreparationStateRequest`, `PreparationStateResponse` | actor DID | one atomic node-owned snapshot containing network id, account sequence, protocol timestamp, observed head and state root, kernel epoch, and module registry |
+| Finality evidence registration | `FinalityEvidenceRegisterRequest`, `FinalityEvidenceRegisterResponse` | verified checkpoint bytes and evidence context | checkpoint id, batch number, and durable registration-record digest |
 | Shared failure | `ErrorResponse` | not applicable | typed boundary failure distinct from core rejection and proof failure |
 
 Every response that carries protocol data carries it as canonical bytes. Every

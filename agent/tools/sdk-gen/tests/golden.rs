@@ -6,7 +6,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use generator::{agent_sdk_drift_gate, agent_sdk_generator};
+use generator::{
+    agent_sdk_drift_gate, agent_sdk_generator, programs_golden_drift_gate, write_programs_golden,
+};
 
 static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(1);
 
@@ -123,6 +125,23 @@ fn golden_schema_generation_is_byte_deterministic() {
         assert!(guarantees.contains("`ApprovalHold` | `daemon_enforced`"));
         assert!(guarantees.contains("confers no protocol authority"));
     }
+}
+
+#[test]
+fn programs_golden_is_generated_from_the_canonical_schema() {
+    let root = directory("programs-golden");
+    copy_schema(&root);
+    write_programs_golden(&root).unwrap_or_else(|error| panic!("write Programs golden: {error}"));
+    programs_golden_drift_gate(&root)
+        .unwrap_or_else(|error| panic!("Programs golden should match: {error}"));
+
+    fs::write(
+        root.join("golden/programs.kvx"),
+        "[module]\nname = \"stale\"\n",
+    )
+    .unwrap_or_else(|error| panic!("replace Programs golden: {error}"));
+    assert!(programs_golden_drift_gate(&root).is_err());
+    let _ = fs::remove_dir_all(root);
 }
 
 #[test]

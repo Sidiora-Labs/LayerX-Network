@@ -13,11 +13,11 @@ use layerx_agentd::outbox::{
     resolve_unknown, Outbox, ReceiptLookup, ResendObservation, ResolutionObservation,
     SubmissionState, UnknownBoundaryError,
 };
-use layerx_agentd::protocol_evidence::RawReceiptEvidence;
 use layerx_agentd::prepare::{
     prepare_activity, CorePreparationBoundary, CorePreparationState, CoreStateError,
     PreparationDefaults, PrepareRequest,
 };
+use layerx_agentd::protocol_evidence::RawReceiptEvidence;
 use layerx_agentd::sign::{attach_external_signature, verify_before_submit, VerifiedSubmission};
 use layerx_agentd::store::{Store, TenantId};
 use layerx_crypto::local::LocalSigner;
@@ -154,7 +154,7 @@ fn send_payload(id: u8) -> Vec<u8> {
         .u32(17)
         .unwrap_or_else(|error| panic!("network: {error:?}"));
     encoder
-        .u16(1)
+        .u16(layerx_wire::limits::PROTOCOL_VERSION)
         .unwrap_or_else(|error| panic!("version: {error:?}"));
     encoder.finish()
 }
@@ -251,9 +251,10 @@ fn receipt(activity_id: [u8; 32], result_code: i32) -> RawReceiptEvidence {
 }
 
 fn activity_id(outbox: &Outbox, id: u8) -> [u8; 32] {
-    outbox
-        .status([id; 32])
-        .map_or_else(|| panic!("outbox activity missing"), |status| status.activity_id)
+    outbox.status([id; 32]).map_or_else(
+        || panic!("outbox activity missing"),
+        |status| status.activity_id,
+    )
 }
 
 #[test]
@@ -261,7 +262,8 @@ fn acknowledgement_loss_is_resolved_only_by_the_existing_receipt() {
     let root = directory("ack-loss");
     let (mut store, mut outbox, _) = unknown_outbox(&root, 1);
     let mut node = FaultInjectedNode::default();
-    node.receipts.insert([1; 32], receipt(activity_id(&outbox, 1), 0));
+    node.receipts
+        .insert([1; 32], receipt(activity_id(&outbox, 1), 0));
 
     let result = resolve_unknown(
         &mut outbox,
@@ -271,7 +273,7 @@ fn acknowledgement_loss_is_resolved_only_by_the_existing_receipt() {
         &support::evidence_verifier(),
         &mut node,
     )
-        .unwrap_or_else(|error| panic!("resolve: {error:?}"));
+    .unwrap_or_else(|error| panic!("resolve: {error:?}"));
     assert_eq!(result.state, SubmissionState::Executed);
     assert_eq!(result.observation, ResolutionObservation::ExecutedReceipt);
     assert_eq!(result.resend, ResendObservation::NotWarranted);
@@ -323,7 +325,7 @@ fn lost_resend_response_keeps_budget_held_while_unreconciled_ceiling_refuses_adm
         &support::evidence_verifier(),
         &mut node,
     )
-        .unwrap_or_else(|error| panic!("first resolve: {error:?}"));
+    .unwrap_or_else(|error| panic!("first resolve: {error:?}"));
     assert_eq!(first.state, SubmissionState::Unknown);
     assert_eq!(first.observation, ResolutionObservation::ReceiptMissing);
     assert_eq!(first.resend, ResendObservation::Indeterminate);
@@ -364,7 +366,7 @@ fn restart_preserves_backoff_age_and_a_receipt_can_appear_minutes_later() {
         &support::evidence_verifier(),
         &mut node,
     )
-        .unwrap_or_else(|error| panic!("first resolve: {error:?}"));
+    .unwrap_or_else(|error| panic!("first resolve: {error:?}"));
     assert_eq!(first.age.attempt_count, 1);
     assert_eq!(node.transmitted, vec![([3; 32], exact)]);
     drop(outbox);
@@ -397,7 +399,7 @@ fn restart_preserves_backoff_age_and_a_receipt_can_appear_minutes_later() {
         &support::evidence_verifier(),
         &mut node,
     )
-        .unwrap_or_else(|error| panic!("later: {error:?}"));
+    .unwrap_or_else(|error| panic!("later: {error:?}"));
     assert_eq!(later.state, SubmissionState::Failed);
     assert_eq!(later.age.age_ms, 180_000);
     assert_eq!(later.age.attempt_count, 2);
@@ -420,7 +422,7 @@ fn lookup_failure_and_unverified_receipt_never_infer_a_terminal_outcome() {
         &support::evidence_verifier(),
         &mut node,
     )
-        .unwrap_or_else(|error| panic!("lookup loss: {error:?}"));
+    .unwrap_or_else(|error| panic!("lookup loss: {error:?}"));
     assert_eq!(first.state, SubmissionState::Unknown);
     assert_eq!(first.observation, ResolutionObservation::LookupUnavailable);
     assert!(node.transmitted.is_empty());

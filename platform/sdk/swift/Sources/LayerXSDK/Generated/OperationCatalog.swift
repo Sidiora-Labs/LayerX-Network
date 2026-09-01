@@ -232,13 +232,13 @@ public enum PlatformOperation: String, CaseIterable, Sendable {
         case .humanSecurityPasskeyRegisterFinish: return OperationDescriptor(plane: .human, name: "security.passkey.register.finish", method: .post, path: "/v1/security/passkeys/registrations/{registration_id}", requestType: "SecurityPasskeyRegistrationFinish", responseType: "Passkey", requiresIdempotency: false, bodyless: false)
         case .humanSecurityPasskeyRevoke: return OperationDescriptor(plane: .human, name: "security.passkey.revoke", method: .post, path: "/v1/security/passkeys/{passkey_id}/revoke", requestType: "SecurityPasskeyRevocation", responseType: "PasskeyList", requiresIdempotency: false, bodyless: false)
         case .humanSecurityRecoveryReveal: return OperationDescriptor(plane: .human, name: "security.recovery.reveal", method: .post, path: "/v1/security/recovery/evidence", requestType: "SecurityRecoveryReveal", responseType: "TimedSecret", requiresIdempotency: false, bodyless: false)
-        case .humanSecuritySessionRevoke: return OperationDescriptor(plane: .human, name: "security.session.revoke", method: .post, path: "/v1/security/sessions/{session_id}/revoke", requestType: "SecuritySessionRevocation", responseType: "SessionRevocation", requiresIdempotency: false, bodyless: false)
-        case .humanSecuritySessionRevokeAll: return OperationDescriptor(plane: .human, name: "security.session.revoke-all", method: .post, path: "/v1/security/sessions/revoke-all", requestType: "SecuritySessionRevocation", responseType: "SessionRevocation", requiresIdempotency: false, bodyless: false)
+        case .humanSecuritySessionRevoke: return OperationDescriptor(plane: .human, name: "security.session.revoke", method: .post, path: "/v1/security/sessions/{session_id}/revoke", requestType: "SecuritySessionRevocation", responseType: "SessionRevocation", requiresIdempotency: true, bodyless: false)
+        case .humanSecuritySessionRevokeAll: return OperationDescriptor(plane: .human, name: "security.session.revoke-all", method: .post, path: "/v1/security/sessions/revoke-all", requestType: "SecuritySessionRevocation", responseType: "SessionRevocation", requiresIdempotency: true, bodyless: false)
         case .humanSessionList: return OperationDescriptor(plane: .human, name: "session.list", method: .get, path: "/v1/sessions", requestType: "Empty", responseType: "SessionList", requiresIdempotency: false, bodyless: true)
-        case .humanSessionOpen: return OperationDescriptor(plane: .human, name: "session.open", method: .post, path: "/v1/sessions", requestType: "SessionOpenRequest", responseType: "Session", requiresIdempotency: false, bodyless: false)
+        case .humanSessionOpen: return OperationDescriptor(plane: .human, name: "session.open", method: .post, path: "/v1/sessions", requestType: "SessionOpenRequest", responseType: "Session", requiresIdempotency: true, bodyless: false)
         case .humanSessionRefresh: return OperationDescriptor(plane: .human, name: "session.refresh", method: .post, path: "/v1/sessions/refresh", requestType: "Empty", responseType: "Session", requiresIdempotency: false, bodyless: true)
-        case .humanSessionRevoke: return OperationDescriptor(plane: .human, name: "session.revoke", method: .delete, path: "/v1/sessions/{session_id}", requestType: "Empty", responseType: "SessionRevocation", requiresIdempotency: false, bodyless: true)
-        case .humanSessionRevokeAll: return OperationDescriptor(plane: .human, name: "session.revoke-all", method: .post, path: "/v1/sessions/revoke-all", requestType: "Empty", responseType: "SessionRevocation", requiresIdempotency: false, bodyless: true)
+        case .humanSessionRevoke: return OperationDescriptor(plane: .human, name: "session.revoke", method: .delete, path: "/v1/sessions/{session_id}", requestType: "Empty", responseType: "SessionRevocation", requiresIdempotency: true, bodyless: true)
+        case .humanSessionRevokeAll: return OperationDescriptor(plane: .human, name: "session.revoke-all", method: .post, path: "/v1/sessions/revoke-all", requestType: "Empty", responseType: "SessionRevocation", requiresIdempotency: true, bodyless: true)
         case .humanStepupBegin: return OperationDescriptor(plane: .human, name: "stepup.begin", method: .post, path: "/v1/step-up", requestType: "StepUpRequest", responseType: "StepUpChallenge", requiresIdempotency: false, bodyless: false)
         case .humanStepupFinish: return OperationDescriptor(plane: .human, name: "stepup.finish", method: .post, path: "/v1/step-up/{challenge_id}", requestType: "StepUpFinish", responseType: "StepUpEvidence", requiresIdempotency: false, bodyless: false)
         case .humanStreamNext: return OperationDescriptor(plane: .human, name: "stream.next", method: .get, path: "/v1/stream/{cursor}", requestType: "Empty", responseType: "StreamPage", requiresIdempotency: false, bodyless: true)
@@ -569,26 +569,26 @@ public extension PlatformClient {
     func humanSecurityRecoveryReveal(_ request: JSONValue, pathParameters: [String: String] = [:]) async throws -> JSONValue {
         try await read(.humanSecurityRecoveryReveal, request: request, pathParameters: pathParameters)
     }
-    func humanSecuritySessionRevoke(_ request: JSONValue, pathParameters: [String: String] = [:]) async throws -> JSONValue {
-        try await read(.humanSecuritySessionRevoke, request: request, pathParameters: pathParameters)
+    func humanSecuritySessionRevoke(_ request: JSONValue, idempotencyKey: IdempotencyKey, pathParameters: [String: String] = [:]) async throws -> JSONValue {
+        try await mutate(.humanSecuritySessionRevoke, request: request, idempotencyKey: idempotencyKey, pathParameters: pathParameters)
     }
-    func humanSecuritySessionRevokeAll(_ request: JSONValue, pathParameters: [String: String] = [:]) async throws -> JSONValue {
-        try await read(.humanSecuritySessionRevokeAll, request: request, pathParameters: pathParameters)
+    func humanSecuritySessionRevokeAll(_ request: JSONValue, idempotencyKey: IdempotencyKey, pathParameters: [String: String] = [:]) async throws -> JSONValue {
+        try await mutate(.humanSecuritySessionRevokeAll, request: request, idempotencyKey: idempotencyKey, pathParameters: pathParameters)
     }
     func humanSessionList(_ request: JSONValue = .object([:]), pathParameters: [String: String] = [:]) async throws -> JSONValue {
         try await read(.humanSessionList, request: request, pathParameters: pathParameters)
     }
-    func humanSessionOpen(_ request: JSONValue, pathParameters: [String: String] = [:]) async throws -> JSONValue {
-        try await read(.humanSessionOpen, request: request, pathParameters: pathParameters)
+    func humanSessionOpen(_ request: JSONValue, idempotencyKey: IdempotencyKey, pathParameters: [String: String] = [:]) async throws -> JSONValue {
+        try await mutate(.humanSessionOpen, request: request, idempotencyKey: idempotencyKey, pathParameters: pathParameters)
     }
     func humanSessionRefresh(_ request: JSONValue = .object([:]), pathParameters: [String: String] = [:]) async throws -> JSONValue {
         try await read(.humanSessionRefresh, request: request, pathParameters: pathParameters)
     }
-    func humanSessionRevoke(_ request: JSONValue = .object([:]), pathParameters: [String: String] = [:]) async throws -> JSONValue {
-        try await read(.humanSessionRevoke, request: request, pathParameters: pathParameters)
+    func humanSessionRevoke(idempotencyKey: IdempotencyKey, pathParameters: [String: String] = [:]) async throws -> JSONValue {
+        try await mutate(.humanSessionRevoke, request: .emptyObject, idempotencyKey: idempotencyKey, pathParameters: pathParameters)
     }
-    func humanSessionRevokeAll(_ request: JSONValue = .object([:]), pathParameters: [String: String] = [:]) async throws -> JSONValue {
-        try await read(.humanSessionRevokeAll, request: request, pathParameters: pathParameters)
+    func humanSessionRevokeAll(idempotencyKey: IdempotencyKey, pathParameters: [String: String] = [:]) async throws -> JSONValue {
+        try await mutate(.humanSessionRevokeAll, request: .emptyObject, idempotencyKey: idempotencyKey, pathParameters: pathParameters)
     }
     func humanStepupBegin(_ request: JSONValue, pathParameters: [String: String] = [:]) async throws -> JSONValue {
         try await read(.humanStepupBegin, request: request, pathParameters: pathParameters)

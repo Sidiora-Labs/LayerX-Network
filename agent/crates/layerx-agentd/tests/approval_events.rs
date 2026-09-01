@@ -20,7 +20,6 @@ use layerx_agentd::approval::{
 use layerx_agentd::audit::{
     export, Coverage, Decision, EventClass, EvidenceStore, Log, PayloadEvidence, Query,
 };
-use layerx_proof::checkpoint::SettlementDomain;
 use layerx_agentd::events::gap::{
     admit, apply_backfill, detect, BackfillReport, BackfillResolution, RecoveredEvent,
 };
@@ -31,6 +30,7 @@ use layerx_agentd::events::{
 use layerx_agentd::session::SessionId;
 use layerx_agentd::store::{Store, TenantId};
 use layerx_agentd::tenant::{Config, RedactionPolicy, Retention};
+use layerx_proof::checkpoint::SettlementDomain;
 use layerx_types::ids::Did;
 use layerx_types::result::ResultCode;
 use layerx_types::verify::VerificationLevel;

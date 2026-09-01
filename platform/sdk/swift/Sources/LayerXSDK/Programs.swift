@@ -1094,8 +1094,9 @@ private func requireNonzero(_ value: Data) throws {
 private func decodeSignedCall(_ call: ProgramCall) throws -> ActivityBinding {
     do {
         var cursor = BinaryCursor(call.signedActivity)
-        guard try cursor.u16() == 1, try cursor.u16() == 0x1001, try cursor.u8() == 12 else { throw programInvalid() }
-        try cursor.tag(1); let version = try cursor.u16(); guard version == 1 || version == 2 else { throw programInvalid() }
+        let envelopeVersion = try cursor.u16()
+        guard envelopeVersion == 1 || envelopeVersion == 2, try cursor.u16() == 0x1001, try cursor.u8() == 12 else { throw programInvalid() }
+        try cursor.tag(1); let version = try cursor.u16(); guard version == envelopeVersion else { throw programInvalid() }
         try cursor.tag(2); _ = try cursor.u32(); try cursor.tag(3)
         guard try cursor.u32() == ((UInt32(ProgramsClient.receiptModuleID) << 16) | UInt32(ProgramsClient.callOperation)) else {
             throw programInvalid()

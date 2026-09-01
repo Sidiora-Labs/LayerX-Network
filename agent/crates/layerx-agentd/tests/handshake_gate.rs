@@ -53,7 +53,7 @@ fn config_with_authority(authority_source: PathBuf) -> StartupConfig {
     StartupConfig {
         network_id: 42,
         node_endpoint: PathBuf::from("/run/layerx/layerxd.sock"),
-        expected_protocol_version: 1,
+        expected_protocol_version: layerx_wire::limits::PROTOCOL_VERSION,
         tenants: BTreeSet::from([tenant.clone()]),
         policy_sources: BTreeMap::from([(
             tenant.clone(),
@@ -86,7 +86,7 @@ fn protected_authority(path: &Path) {
 fn node(minor: u16, capabilities: &[&str]) -> NodeInfo {
     NodeInfo {
         interface_version: Version { major: 1, minor },
-        protocol_version: 1,
+        protocol_version: layerx_wire::limits::PROTOCOL_VERSION,
         network_id: 42,
         role: NodeRole::Sequencer,
         chain_head_sequence: 900 + u64::from(minor),
@@ -209,8 +209,7 @@ fn connect(path: &Path) -> Uds {
 
 #[test]
 fn startup_is_not_ready_until_real_framed_handshake_reports_the_full_intersection() {
-    let mut gate =
-        Gate::new(&config()).unwrap_or_else(|error| panic!("startup gate: {error:?}"));
+    let mut gate = Gate::new(&config()).unwrap_or_else(|error| panic!("startup gate: {error:?}"));
     let operation_ran = std::cell::Cell::new(false);
     assert_eq!(
         gate.guard_write(|| operation_ran.set(true)),
@@ -227,7 +226,10 @@ fn startup_is_not_ready_until_real_framed_handshake_reports_the_full_intersectio
     let status = handshake_gate(&mut gate, &mut transport)
         .unwrap_or_else(|error| panic!("handshake gate: {error:?}"));
     assert_eq!(status.interface_version, Version::V1_0);
-    assert_eq!(status.protocol_version, 1);
+    assert_eq!(
+        status.protocol_version,
+        layerx_wire::limits::PROTOCOL_VERSION
+    );
     assert_eq!(status.network_id, 42);
     assert_eq!(status.node_role, NodeRole::Sequencer);
     assert_eq!(status.chain_head_sequence, 900);
@@ -253,8 +255,7 @@ fn startup_is_not_ready_until_real_framed_handshake_reports_the_full_intersectio
 
 #[test]
 fn reconnect_repeats_handshake_for_node_upgrade_and_disappearing_capability() {
-    let mut gate =
-        Gate::new(&config()).unwrap_or_else(|error| panic!("startup gate: {error:?}"));
+    let mut gate = Gate::new(&config()).unwrap_or_else(|error| panic!("startup gate: {error:?}"));
     let first_path = socket_path("reconnect-first");
     let first_server = serve_handshake(&first_path, node(0, &["node_info", "submit"]));
     let mut first_transport = connect(&first_path);
@@ -305,12 +306,12 @@ fn network_protocol_and_major_upgrade_mismatches_refuse_operation() {
             "protocol",
             {
                 let mut value = node(0, &["node_info", "submit"]);
-                value.protocol_version = 2;
+                value.protocol_version = layerx_wire::limits::LEGACY_PROTOCOL_VERSION;
                 value
             },
             HandshakeError::ProtocolVersion {
-                expected: 1,
-                peer: 2,
+                expected: layerx_wire::limits::PROTOCOL_VERSION,
+                peer: layerx_wire::limits::LEGACY_PROTOCOL_VERSION,
             },
         ),
         (

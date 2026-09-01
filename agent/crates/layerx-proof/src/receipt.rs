@@ -2,6 +2,7 @@
 
 use layerx_crypto::ed25519;
 use layerx_wire::hash::receipt_digest;
+use layerx_wire::limits::PROTOCOL_VERSION;
 use layerx_wire::receipt::{decode, encode, encode_unsigned, Receipt};
 
 use crate::evidence::Evidence;
@@ -12,7 +13,7 @@ const PROGRAMS_STATE_OPERATION: u16 = 0;
 const PROGRAMS_CALL_OPERATION: u16 = 3;
 
 const fn supported_protocol_version(version: u16) -> bool {
-    matches!(version, 1 | 2)
+    version == PROTOCOL_VERSION
 }
 
 const fn supported_programs_module_version(version: u32) -> bool {
@@ -419,7 +420,7 @@ pub fn verify_program_outcome(
     let protocol = receipt
         .protocol()
         .ok_or_else(|| VerificationFailure::at(ReceiptCheck::ReceiptShape))?;
-    if !matches!(protocol.protocol_version(), 1 | 2) {
+    if !supported_protocol_version(protocol.protocol_version()) {
         return Err(VerificationFailure::at(ReceiptCheck::ProtocolVersion));
     }
     if u32::from(protocol.module_id()) != PROGRAMS_MODULE_ID
@@ -526,7 +527,7 @@ mod programs_version_contract {
 
     #[test]
     fn module_and_guest_versions_are_independent() {
-        assert!(supported_protocol_version(1));
+        assert!(!supported_protocol_version(1));
         assert!(supported_protocol_version(2));
         assert!(!supported_protocol_version(3));
         assert!(supported_programs_module_version(3));

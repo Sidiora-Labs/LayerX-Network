@@ -1,7 +1,7 @@
 use ed25519_dalek::{Signer as _, SigningKey as EdSigningKey};
 use k256::ecdsa::{Signature, SigningKey};
-use layerx_crypto::secp256k1;
 use layerx_agentd::export::build;
+use layerx_crypto::secp256k1;
 use layerx_proof::checkpoint::{
     checkpoint_id, Attestation, Certificate, Checkpoint, GuarantorKey, SettlementDomain,
 };
@@ -17,8 +17,11 @@ use layerx_wire::hash::{batch_header_digest, checkpoint_attestation_digest, rece
 
 fn receipt_bytes(signature: Option<[u8; 64]>) -> Vec<u8> {
     let mut encoder = Encoder::new(4096);
-    assert_eq!(encoder.structure_header(0x5201), Ok(()));
-    assert_eq!(encoder.u16(1), Ok(()));
+    assert_eq!(
+        encoder.structure_header_version(0x5201, layerx_wire::limits::PROTOCOL_VERSION),
+        Ok(())
+    );
+    assert_eq!(encoder.u16(layerx_wire::limits::PROTOCOL_VERSION), Ok(()));
     assert_eq!(encoder.bytes(&[1; 32], 32), Ok(()));
     assert_eq!(encoder.u64(9), Ok(()));
     assert_eq!(encoder.bytes(&[2; 32], 32), Ok(()));
@@ -54,12 +57,15 @@ fn receipt_bytes(signature: Option<[u8; 64]>) -> Vec<u8> {
 
 fn header_bytes(state_root: [u8; 32], activity_root: [u8; 32], sequencer_id: [u8; 32]) -> Vec<u8> {
     let mut encoder = Encoder::new(354);
-    assert_eq!(encoder.structure_header(0x1701), Ok(()));
+    assert_eq!(
+        encoder.structure_header_version(0x1701, layerx_wire::limits::PROTOCOL_VERSION),
+        Ok(())
+    );
     assert_eq!(encoder.u8(15), Ok(()));
     for field in 1..=15 {
         assert_eq!(encoder.tag(field, 15), Ok(()));
         match field {
-            1 => assert_eq!(encoder.u16(1), Ok(())),
+            1 => assert_eq!(encoder.u16(layerx_wire::limits::PROTOCOL_VERSION), Ok(())),
             2 => assert_eq!(encoder.u32(42), Ok(())),
             3 => assert_eq!(encoder.u64(7), Ok(())),
             4 => assert_eq!(encoder.u64(8), Ok(())),
@@ -98,7 +104,7 @@ fn guarantor_key(value: u8) -> (SigningKey, [u8; 33], [u8; 32]) {
 fn attestation(checkpoint: [u8; 32], guarantor_id: [u8; 32], key: &SigningKey) -> Attestation {
     let settlement_contract = [0x55; 20];
     let mut message = [0_u8; 189];
-    message[..2].copy_from_slice(&1_u16.to_be_bytes());
+    message[..2].copy_from_slice(&layerx_wire::limits::PROTOCOL_VERSION.to_be_bytes());
     message[2..6].copy_from_slice(&42_u32.to_be_bytes());
     message[6..14].copy_from_slice(&31_337_u64.to_be_bytes());
     message[14..34].copy_from_slice(&settlement_contract);
@@ -117,12 +123,10 @@ fn attestation(checkpoint: [u8; 32], guarantor_id: [u8; 32], key: &SigningKey) -
     let (signature, recovery_id): (Signature, _) = key
         .sign_prehash_recoverable(&digest)
         .unwrap_or_else(|error| panic!("attestation signature: {error}"));
-    let signer = secp256k1::evm_address(
-        key.verifying_key().to_encoded_point(true).as_bytes(),
-    )
-    .unwrap_or_else(|error| panic!("attestation signer: {error:?}"));
+    let signer = secp256k1::evm_address(key.verifying_key().to_encoded_point(true).as_bytes())
+        .unwrap_or_else(|error| panic!("attestation signer: {error:?}"));
     Attestation::new(
-        1,
+        layerx_wire::limits::PROTOCOL_VERSION,
         42,
         31_337,
         settlement_contract,
@@ -234,9 +238,8 @@ fn layerx_proof_verifies_complete_export_with_no_daemon_node_or_network() {
     );
 
     let offline = built.artifact;
-    let third_party =
-        verify_export(&offline, domain)
-            .unwrap_or_else(|error| panic!("offline verification: {error:?}"));
+    let third_party = verify_export(&offline, domain)
+        .unwrap_or_else(|error| panic!("offline verification: {error:?}"));
     assert_eq!(third_party.verified_receipts, 1);
     assert_eq!(third_party.achieved_levels.len(), 3);
 }

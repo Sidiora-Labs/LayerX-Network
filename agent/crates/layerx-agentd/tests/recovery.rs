@@ -83,9 +83,10 @@ fn restart_preserves_recovery_actions_but_blocks_writes_without_budget_schema() 
     let root = directory("stages");
     let mut before = Store::open(&root).unwrap_or_else(|error| panic!("store: {error}"));
     let (before_outbox, queued_exact) = populate_every_stage(&mut before);
-    let unknown_activity_id = before_outbox
-        .status([4; 32])
-        .map_or_else(|| panic!("unknown activity missing"), |status| status.activity_id);
+    let unknown_activity_id = before_outbox.status([4; 32]).map_or_else(
+        || panic!("unknown activity missing"),
+        |status| status.activity_id,
+    );
     hold_unknown(
         &mut before,
         &UnknownReservation {
@@ -318,7 +319,7 @@ fn clock_regression_during_restarted_resolution_fails_closed() {
         &support::evidence_verifier(),
         &mut core,
     )
-        .unwrap_or_else(|error| panic!("initial resolution: {error:?}"));
+    .unwrap_or_else(|error| panic!("initial resolution: {error:?}"));
     drop(outbox);
     drop(store);
     let mut reopened = Store::open(&root).unwrap_or_else(|error| panic!("reopen: {error}"));

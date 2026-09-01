@@ -2,7 +2,7 @@
 
 use layerx_types::result::KnownResult;
 
-use crate::limits::{MAX_PROTOCOL_VERSION, PROTOCOL_VERSION};
+use crate::limits::{LEGACY_PROTOCOL_VERSION, MAX_PROTOCOL_VERSION, STRUCTURE_VERSION};
 use crate::WireError;
 
 /// A borrowed decoder with an explicit cumulative owned-allocation budget.
@@ -219,7 +219,7 @@ impl<'a> Decoder<'a> {
         let offset = self.offset;
         let version = self.u16()?;
         let actual_tag = self.u16()?;
-        if version != PROTOCOL_VERSION || expected_tag == 0 || actual_tag != expected_tag {
+        if version != STRUCTURE_VERSION || expected_tag == 0 || actual_tag != expected_tag {
             return Err(WireError::known(KnownResult::VersionUnsupported, offset));
         }
         Ok(())
@@ -235,7 +235,7 @@ impl<'a> Decoder<'a> {
         let offset = self.offset;
         let version = self.u16()?;
         let actual_tag = self.u16()?;
-        if !(PROTOCOL_VERSION..=MAX_PROTOCOL_VERSION).contains(&version)
+        if !(LEGACY_PROTOCOL_VERSION..=MAX_PROTOCOL_VERSION).contains(&version)
             || expected_tag == 0
             || actual_tag != expected_tag
         {

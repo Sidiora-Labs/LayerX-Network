@@ -27,7 +27,8 @@ typedef struct platform_emulator_receipt {
 } platform_emulator_receipt;
 
 typedef struct platform_emulator_state {
-    uint8_t state_root[32];
+    uint8_t canonical_state_root[32];
+    uint8_t receipt_state_root[32];
     uint64_t next_sequence;
     uint64_t batch_number;
     uint64_t timestamp_ms;
@@ -85,7 +86,11 @@ int32_t platform_emulator_cell(const platform_emulator *emulator, size_t index,
 int32_t platform_emulator_account(const platform_emulator *emulator,
                                   size_t index, uint8_t id[32],
                                   const uint8_t **name, size_t *name_length,
-                                  uint64_t *balance_hi, uint64_t *balance_lo);
+                                  uint64_t *balance_hi, uint64_t *balance_lo,
+                                  uint64_t *next_sequence);
+int32_t platform_emulator_identity_sequence(
+    const platform_emulator *emulator, const uint8_t *did,
+    size_t did_length, uint64_t *next_sequence);
 int32_t platform_emulator_snapshot_export(platform_emulator *emulator,
                                           const uint8_t **bytes,
                                           size_t *length);

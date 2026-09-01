@@ -6,16 +6,19 @@ use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::Duration;
 
-use ed25519_dalek::SigningKey;
+use ed25519_dalek::{Signer as _, SigningKey};
 use layerx_paxeer_client::{
     raw_call, CancelledFundsDisposition, ChallengeKind, CheckpointProof, ClaimProgress,
-    CommittedWithdrawalDebit, DebitExpectation, EndpointConfig, EndpointTransport,
+    CommittedWithdrawalDebit, DebitExpectation, DebitFault, EndpointConfig, EndpointTransport,
     ExecutionOutcome, FinalityReport, FinalityStage, Json, PaxeerFundsDisposition, PayoutEvidence,
     ProtocolDebitDisposition, SubmittedWithdrawalClaim, TransactionHash, TransactionInclusion,
     WithdrawalAttestation, WithdrawalBoundary, WithdrawalConfig, WithdrawalError,
 };
-use layerx_proof::receipt::AuthorizedBatch;
+use layerx_proof::receipt::{AuthorizedBatch, ReceiptCheck, VerificationFailure};
 use layerx_types::intent::EvmAddress;
+use layerx_wire::encode::Encoder;
+use layerx_wire::hash::receipt_digest;
+use layerx_wire::limits::PROTOCOL_VERSION;
 use sha2::{Digest as _, Sha256};
 
 const FUNDED: &str = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266";
@@ -25,9 +28,19 @@ const CHALLENGER: &str = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8";
 const RECIPIENT: &str = "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC";
 
 const NETWORK_ID: u32 = 17;
-const ASSET: [u8; 32] = [0x42; 32];
+const USDL_TOKEN: EvmAddress = EvmAddress::new([
+    0x85, 0xfc, 0xd1, 0x37, 0x35, 0xf4, 0x30, 0x98, 0x33, 0xa5, 0x03, 0xee, 0x80, 0x4e, 0xa3, 0x23,
+    0x95, 0x85, 0x14, 0x79,
+]);
+const ASSET: [u8; 32] = [
+    0x70, 0xf5, 0xb6, 0x3a, 0x98, 0x55, 0xdd, 0x2b, 0xe2, 0xba, 0x94, 0x1c, 0x04, 0xa3, 0x3a, 0x1f,
+    0x0e, 0xeb, 0x97, 0x50, 0xcc, 0xeb, 0x32, 0x4c, 0x22, 0x37, 0x64, 0xf0, 0xfd, 0xc5, 0x01, 0xd8,
+];
 const AMOUNT: u128 = 25;
 const VAULT_BALANCE: u128 = 100;
+const BOND: u128 = 1;
+const GENESIS_MANIFEST: [u8; 32] = [0x12; 32];
+const GENESIS_CANONICAL_STATE: [u8; 32] = [0x11; 32];
 const GENESIS: [u8; 32] = [0x10; 32];
 const GUARANTOR_ID: [u8; 32] = quantity_const(1);
 const WITHDRAW_RECEIPT_HEX: &str = "0x0001520100010000002031313131313131313131313131313131313131313131313131313131313131310000000000000001000000204141414141414141414141414141414141414141414141414141414141414141000000204242424242424242424242424242424242424242424242424242424242424242000000204444444444444444444444444444444444444444444444444444444444444444000000000000000000000000000000000000000000000001000000204343434343434343434343434343434343434343434343434343434343434343000800000002000000010100000020424242424242424242424242424242424242424242424242424242424242424200000000000000000000000000000019000000203333333333333333333333333333333333333333333333333333333333333333000000000000000000000000000000640000000000000000000000000000004b0000000000000001000000203434343434343434343434343434343434343434343434343434343434343434000000000000000000000000000000000000000000000000000000000000001900000020454545454545454545454545454545454545454545454545454545454545454500000020464646464646464646464646464646464646464646464646464646464646464600000020474747474747474747474747474747474747474747474747474747474747474700000000000003e80100000040a3c5df8259d413eaddaab76e7c1efd2a5ffc8a7beefc7b28ffca71e44d830c79e9763f0c8f4dfec8ecbf7e6ce61a8a5de40b1d6c0ff19c313da85982df118f06";
@@ -40,7 +53,8 @@ const MINT: [u8; 4] = [0x40, 0xc1, 0x0f, 0x19];
 const APPROVE: [u8; 4] = [0x09, 0x5e, 0xa7, 0xb3];
 const DEPOSIT: [u8; 4] = [0x8a, 0x9e, 0x53, 0x2c];
 const ACTIVATE_GUARANTOR: [u8; 4] = [0x23, 0x7d, 0xd0, 0x4f];
-const DEPOSIT_BOND: [u8; 4] = [0xf5, 0x14, 0x8c, 0x24];
+const DEPOSIT_BOND: [u8; 4] = [0x09, 0xe0, 0x86, 0x44];
+const SET_GUARANTOR_BOND: [u8; 4] = [0x05, 0xc3, 0xd9, 0xea];
 const REGISTER_CHECKPOINT: [u8; 4] = [0xc7, 0x2a, 0x88, 0x43];
 const RAISE_CHALLENGE: [u8; 4] = [0x0c, 0xfc, 0xd9, 0x2c];
 const RESOLVE_CHALLENGE: [u8; 4] = [0x7d, 0x89, 0x12, 0x2d];
@@ -138,10 +152,31 @@ impl Anvil {
         }
         let transaction = self.send(FUNDED, None, &creation, 0);
         let receipt = wait_receipt(self, transaction);
-        assert_eq!(receipt.execution, ExecutionOutcome::Succeeded);
+        assert_eq!(
+            receipt.execution,
+            ExecutionOutcome::Succeeded,
+            "{contract} deployment reverted"
+        );
         receipt
             .deployed_contract
             .unwrap_or_else(|| panic!("{contract}: no deployed address"))
+    }
+
+    fn install_code(&self, source: EvmAddress, target: EvmAddress) {
+        let code = self.call(
+            "eth_getCode",
+            &[
+                Json::Text(address_hex(source)),
+                Json::Text("latest".to_owned()),
+            ],
+        );
+        let code = code
+            .as_text()
+            .unwrap_or_else(|| panic!("eth_getCode: expected text"));
+        let _ = self.call(
+            "anvil_setCode",
+            &[Json::Text(address_hex(target)), Json::Text(code.to_owned())],
+        );
     }
 
     fn send_checked(
@@ -153,7 +188,13 @@ impl Anvil {
     ) -> TransactionHash {
         let transaction = self.send(from, Some(to), data, value);
         let receipt = wait_receipt(self, transaction);
-        assert_eq!(receipt.execution, ExecutionOutcome::Succeeded);
+        assert_eq!(
+            receipt.execution,
+            ExecutionOutcome::Succeeded,
+            "transaction to {} with selector {} reverted",
+            address_hex(to),
+            bytes_hex(data.get(..4).unwrap_or(data))
+        );
         transaction
     }
 
@@ -436,7 +477,9 @@ fn deploy_suite(
 ) {
     let owner = parse_address(FUNDED);
     let challenger = parse_address(CHALLENGER);
-    let token = anvil.deploy("IntegrationToken", &[address_word(owner)]);
+    let token_template = anvil.deploy("IntegrationToken", &[address_word(owner)]);
+    anvil.install_code(token_template, USDL_TOKEN);
+    let token = USDL_TOKEN;
     let asset_registry = anvil.deploy(
         "AssetRegistry",
         &[
@@ -461,10 +504,12 @@ fn deploy_suite(
         &[
             address_word(owner),
             address_word(owner),
-            quantity_word(&1_u16.to_be_bytes()),
+            address_word(token),
+            address_word(vault),
+            ASSET,
+            quantity_word(&PROTOCOL_VERSION.to_be_bytes()),
             quantity_word(&NETWORK_ID.to_be_bytes()),
             quantity_word(&100_u32.to_be_bytes()),
-            [0; 32],
             quantity_word(&86_400_u64.to_be_bytes()),
             [0x23; 32],
             quantity_word(&1_u128.to_be_bytes()),
@@ -474,12 +519,14 @@ fn deploy_suite(
         "CheckpointRegistry",
         &[
             address_word(bond),
-            quantity_word(&1_u16.to_be_bytes()),
+            quantity_word(&PROTOCOL_VERSION.to_be_bytes()),
             quantity_word(&NETWORK_ID.to_be_bytes()),
             quantity_word(&1_u16.to_be_bytes()),
             quantity_word(&1_u16.to_be_bytes()),
             quantity_word(&3_600_u64.to_be_bytes()),
             quantity_word(&300_u64.to_be_bytes()),
+            GENESIS_MANIFEST,
+            GENESIS_CANONICAL_STATE,
             GENESIS,
             [0x24; 32],
             quantity_word(&1_u128.to_be_bytes()),
@@ -533,6 +580,7 @@ fn deploy_suite(
                 ],
             ),
         ),
+        (vault, call_data(SET_GUARANTOR_BOND, &[address_word(bond)])),
         (
             vault,
             call_data(
@@ -597,7 +645,33 @@ fn deploy_suite(
         ),
         0,
     );
-    anvil.send_checked(FUNDED, bond, &call_data(DEPOSIT_BOND, &[GUARANTOR_ID]), 1);
+    anvil.send_checked(
+        FUNDED,
+        token,
+        &call_data(
+            MINT,
+            &[address_word(owner), quantity_word(&BOND.to_be_bytes())],
+        ),
+        0,
+    );
+    anvil.send_checked(
+        FUNDED,
+        token,
+        &call_data(
+            APPROVE,
+            &[address_word(bond), quantity_word(&BOND.to_be_bytes())],
+        ),
+        0,
+    );
+    anvil.send_checked(
+        FUNDED,
+        bond,
+        &call_data(
+            DEPOSIT_BOND,
+            &[GUARANTOR_ID, quantity_word(&BOND.to_be_bytes())],
+        ),
+        0,
+    );
     (
         token,
         vault,
@@ -635,8 +709,77 @@ fn committed_debit(expectation: DebitExpectation) -> CommittedWithdrawalDebit {
         [0x42; 32],
         signer.verifying_key().to_bytes(),
     );
-    CommittedWithdrawalDebit::verify(&hex_bytes(WITHDRAW_RECEIPT_HEX), &batch, expectation)
+    CommittedWithdrawalDebit::verify(&withdraw_receipt(), &batch, expectation)
         .unwrap_or_else(|error| panic!("committed debit: {error:?}"))
+}
+
+fn withdraw_receipt() -> Vec<u8> {
+    let signer = SigningKey::from_bytes(&[0x51; 32]);
+    let encode = |signature: Option<[u8; 64]>| {
+        let mut encoder = Encoder::new(4_096);
+        assert_eq!(
+            encoder.structure_header_version(0x5201, PROTOCOL_VERSION),
+            Ok(())
+        );
+        assert_eq!(encoder.u16(PROTOCOL_VERSION), Ok(()));
+        assert_eq!(encoder.bytes(&[0x31; 32], 32), Ok(()));
+        assert_eq!(encoder.u64(1), Ok(()));
+        assert_eq!(encoder.bytes(&[0x41; 32], 32), Ok(()));
+        assert_eq!(encoder.bytes(&[0x42; 32], 32), Ok(()));
+        assert_eq!(encoder.bytes(&[0x44; 32], 32), Ok(()));
+        assert_eq!(encoder.i32(0), Ok(()));
+        assert_eq!(encoder.sequence_length(0, 512), Ok(()));
+        assert_eq!(encoder.u128(1), Ok(()));
+        assert_eq!(encoder.bytes(&[0x43; 32], 32), Ok(()));
+        assert_eq!(encoder.u16(8), Ok(()));
+        assert_eq!(encoder.u32(2), Ok(()));
+        assert_eq!(encoder.u32(1), Ok(()));
+        assert_eq!(encoder.u8(1), Ok(()));
+        assert_eq!(encoder.bytes(&ASSET, 32), Ok(()));
+        assert_eq!(encoder.u128(AMOUNT), Ok(()));
+        assert_eq!(encoder.bytes(&[0x33; 32], 32), Ok(()));
+        assert_eq!(encoder.u128(VAULT_BALANCE), Ok(()));
+        assert_eq!(encoder.u128(VAULT_BALANCE - AMOUNT), Ok(()));
+        assert_eq!(encoder.u64(1), Ok(()));
+        assert_eq!(encoder.bytes(&[0x34; 32], 32), Ok(()));
+        assert_eq!(encoder.u128(0), Ok(()));
+        assert_eq!(encoder.u128(AMOUNT), Ok(()));
+        assert_eq!(encoder.bytes(&[0x45; 32], 32), Ok(()));
+        assert_eq!(encoder.bytes(&[0x46; 32], 32), Ok(()));
+        assert_eq!(encoder.bytes(&[0x47; 32], 32), Ok(()));
+        assert_eq!(encoder.u64(1_000), Ok(()));
+        assert_eq!(encoder.u8(u8::from(signature.is_some())), Ok(()));
+        if let Some(signature) = signature {
+            assert_eq!(encoder.bytes(&signature, 64), Ok(()));
+        }
+        encoder.finish()
+    };
+    let unsigned = encode(None);
+    let digest = receipt_digest(&unsigned)
+        .unwrap_or_else(|error| panic!("withdraw receipt digest: {error:?}"));
+    encode(Some(signer.sign(&digest).to_bytes()))
+}
+
+#[test]
+fn legacy_withdrawal_receipts_decode_but_are_not_accepted_as_beta_debits() {
+    let signer = SigningKey::from_bytes(&[0x51; 32]);
+    let batch = AuthorizedBatch::new(
+        [0x43; 32],
+        ASSET,
+        [0x41; 32],
+        [0x42; 32],
+        signer.verifying_key().to_bytes(),
+    );
+    assert_eq!(
+        CommittedWithdrawalDebit::verify(
+            &hex_bytes(WITHDRAW_RECEIPT_HEX),
+            &batch,
+            debit_expectation(EvmAddress::new([1; 20])),
+        ),
+        Err(DebitFault::Unverifiable(VerificationFailure {
+            check: ReceiptCheck::ProtocolVersion,
+        }))
+    );
 }
 
 fn withdrawal_leaf(expectation: DebitExpectation) -> [u8; 32] {
@@ -652,7 +795,7 @@ fn withdrawal_leaf(expectation: DebitExpectation) -> [u8; 32] {
 
 fn checkpoint_header(state_root: [u8; 32], timestamp: u64) -> Header {
     Header {
-        protocol_version: 1,
+        protocol_version: PROTOCOL_VERSION,
         network_id: NETWORK_ID,
         epoch: 1,
         batch_number: 1,
@@ -671,7 +814,7 @@ fn checkpoint_header(state_root: [u8; 32], timestamp: u64) -> Header {
 }
 
 fn encoded_header(header: &Header) -> Vec<u8> {
-    let mut bytes = vec![0x00, 0x01, 0x17, 0x01, 0x0f];
+    let mut bytes = vec![0x00, 0x02, 0x17, 0x01, 0x0f];
     bytes.push(1);
     bytes.extend_from_slice(&header.protocol_version.to_be_bytes());
     bytes.push(2);
@@ -709,7 +852,7 @@ fn encoded_header(header: &Header) -> Vec<u8> {
 
 fn checkpoint_hash(header: &Header) -> [u8; 32] {
     let mut hasher = Sha256::new();
-    hasher.update(b"LXP/v1/checkpoint-certificate\0");
+    hasher.update(b"LXP/v2/checkpoint-certificate\0");
     hasher.update(encoded_header(header));
     hasher.update(0_u32.to_be_bytes());
     hasher.finalize().into()
@@ -739,7 +882,7 @@ fn signed_attestation(
     message.extend_from_slice(&attested_at.to_be_bytes());
     assert_eq!(message.len(), 189);
     let mut hasher = Sha256::new();
-    hasher.update(b"LXP/v1/guarantor-attestation\0");
+    hasher.update(b"LXP/v2/guarantor-attestation\0");
     hasher.update(message);
     let digest: [u8; 32] = hasher.finalize().into();
     let signature = sign_digest(digest);

@@ -3,6 +3,7 @@
 
 use layerx_wire::encode::Encoder;
 use layerx_wire::hash;
+use layerx_wire::limits::PROTOCOL_VERSION;
 use layerx_wire::WireError;
 
 /// Builds the committed canonical receipt vector, optionally carrying its
@@ -14,8 +15,8 @@ use layerx_wire::WireError;
 /// its declared bound.
 pub fn receipt(signature: Option<[u8; 64]>) -> Result<Vec<u8>, WireError> {
     let mut encoder = Encoder::new(4096);
-    encoder.structure_header(0x5201)?;
-    encoder.u16(1)?;
+    encoder.structure_header_version(0x5201, PROTOCOL_VERSION)?;
+    encoder.u16(PROTOCOL_VERSION)?;
     encoder.bytes(&[1; 32], 32)?;
     encoder.u64(9)?;
     encoder.bytes(&[2; 32], 32)?;
@@ -61,12 +62,12 @@ pub fn batch_header(
     sequencer_id: [u8; 32],
 ) -> Result<Vec<u8>, WireError> {
     let mut encoder = Encoder::new(354);
-    encoder.structure_header(0x1701)?;
+    encoder.structure_header_version(0x1701, PROTOCOL_VERSION)?;
     encoder.u8(15)?;
     for field in 1..=15_u8 {
         encoder.tag(field, 15)?;
         match field {
-            1 => encoder.u16(1)?,
+            1 => encoder.u16(PROTOCOL_VERSION)?,
             2 => encoder.u32(42)?,
             3 => encoder.u64(7)?,
             4 => encoder.u64(8)?,

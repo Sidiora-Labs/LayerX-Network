@@ -24,7 +24,7 @@ final class ReceiptFixtureTests: XCTestCase {
         let authorizedBatch: [String: Any]
     }
 
-    private func fixtureURL(_ name: String = "receipt-positive-v1.json") -> URL {
+    private func fixtureURL(_ name: String = "receipt-positive-v2.json") -> URL {
         var url = URL(fileURLWithPath: #filePath)
         for _ in 0..<6 { url.deleteLastPathComponent() }
         return url
@@ -54,7 +54,7 @@ final class ReceiptFixtureTests: XCTestCase {
         return UInt128Value(high: 0, low: try XCTUnwrap(UInt64(text), "non-decimal \(key)"))
     }
 
-    private func loadFixture(_ name: String = "receipt-positive-v1.json") throws -> Fixture {
+    private func loadFixture(_ name: String = "receipt-positive-v2.json") throws -> Fixture {
         let raw = try Data(contentsOf: fixtureURL(name))
         let json = try XCTUnwrap(
             try JSONSerialization.jsonObject(with: raw) as? [String: Any], "fixture is not an object")
@@ -131,18 +131,23 @@ final class ReceiptFixtureTests: XCTestCase {
     }
 
     func testProgramsReceiptPreservesOptionalOutcome() async throws {
-        let fixture = try loadFixture("receipt-programs-positive-v1.json")
+        let fixture = try loadFixture("receipt-programs-positive-v2.json")
         let verified = try await LocalVerifier.verifyReceipt(
             fixture.canonicalReceipt, authorized: fixture.batch)
         let outcome = try XCTUnwrap(verified.receipt.programOutcome)
         XCTAssertEqual(outcome.encodingVersion, 3)
         XCTAssertEqual(outcome.runtimeVersion, 1)
         XCTAssertEqual(outcome.abiVersion, 1)
+        XCTAssertEqual(outcome.occupancyByteBatches, UInt128Value(high: 0, low: 2))
+        XCTAssertEqual(outcome.occupancyFeeUnits, UInt128Value(high: 0, low: 7))
+        XCTAssertEqual(outcome.occupancyAssetID, fixture.batch.asset)
+        XCTAssertNotEqual(outcome.occupancyEvidenceDigest, Data(repeating: 0, count: 32))
+        XCTAssertNotEqual(outcome.occupancyTransferRoot, Data(repeating: 0, count: 32))
         XCTAssertEqual(outcome.feeUnits, UInt128Value(high: 0, low: 16))
     }
 
     func testRefusalVectorsExposeSharedTaxonomy() async throws {
-        let raw = try Data(contentsOf: fixtureURL("receipt-refusals-v1.json"))
+        let raw = try Data(contentsOf: fixtureURL("receipt-refusals-v2.json"))
         let json = try XCTUnwrap(
             try JSONSerialization.jsonObject(with: raw) as? [String: Any])
         let authority = try XCTUnwrap(json["authorized_batch"] as? [String: Any])

@@ -92,22 +92,38 @@ impl HermeticBuilder {
             || !entrypoint.starts_with('/')
             || entrypoint.contains("..")
         {
-            return Err("the isolated builder bounds and absolute in-environment entrypoint are required".to_owned());
+            return Err(
+                "the isolated builder bounds and absolute in-environment entrypoint are required"
+                    .to_owned(),
+            );
         }
         let environment_root = fs::canonicalize(&environment_root)
             .map_err(|error| format!("builder environment is unavailable: {error}"))?;
         if environment_digest(&environment_root, None)? != builder_image_digest {
-            return Err("builder environment bytes do not match the configured immutable digest".to_owned());
+            return Err(
+                "builder environment bytes do not match the configured immutable digest".to_owned(),
+            );
         }
-        let isolation_runtime = verified_executable(isolation_runtime, isolation_runtime_digest, "isolation runtime")?;
-        let job_supervisor = verified_executable(job_supervisor, job_supervisor_digest, "cgroup job supervisor")?;
+        let isolation_runtime = verified_executable(
+            isolation_runtime,
+            isolation_runtime_digest,
+            "isolation runtime",
+        )?;
+        let job_supervisor = verified_executable(
+            job_supervisor,
+            job_supervisor_digest,
+            "cgroup job supervisor",
+        )?;
         let cgroup_root = fs::canonicalize(cgroup_root)
             .map_err(|error| format!("delegated builder cgroup is unavailable: {error}"))?;
         if !cgroup_root.is_dir() {
             return Err("delegated builder cgroup must be a directory".to_owned());
         }
         let workspace = validate_build_boundary(&workspace, &cgroup_root)?;
-        if !environment_root.join(entrypoint.trim_start_matches('/')).is_file() {
+        if !environment_root
+            .join(entrypoint.trim_start_matches('/'))
+            .is_file()
+        {
             return Err("builder entrypoint is absent from the pinned environment".to_owned());
         }
         Ok(Self {
@@ -143,18 +159,29 @@ impl HermeticBuilder {
     }
 
     fn sandbox(&self, attempt: &BuildAttempt<'_>) -> Result<QuotaWorkspace, BuildRefusal> {
-        let mut slots = fs::read_dir(&self.workspace).map_err(unavailable)?
-            .collect::<Result<Vec<_>, _>>().map_err(unavailable)?;
+        let mut slots = fs::read_dir(&self.workspace)
+            .map_err(unavailable)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(unavailable)?;
         slots.sort_by_key(fs::DirEntry::file_name);
-        let (slot, lock) = slots.into_iter().find_map(|entry| {
-            let slot = entry.path();
-            let lock = slot.join(".layerx-build-lock");
-            let file = fs::OpenOptions::new().create(true).read(true).write(true).open(&lock).ok()?;
-            rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive)
-                .ok().map(|()| (slot, file))
-        }).ok_or_else(|| BuildRefusal::SandboxUnavailable {
-            reason: "no hard-quota build filesystem is available".to_owned(),
-        })?;
+        let (slot, lock) = slots
+            .into_iter()
+            .find_map(|entry| {
+                let slot = entry.path();
+                let lock = slot.join(".layerx-build-lock");
+                let file = fs::OpenOptions::new()
+                    .create(true)
+                    .read(true)
+                    .write(true)
+                    .open(&lock)
+                    .ok()?;
+                rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive)
+                    .ok()
+                    .map(|()| (slot, file))
+            })
+            .ok_or_else(|| BuildRefusal::SandboxUnavailable {
+                reason: "no hard-quota build filesystem is available".to_owned(),
+            })?;
         for entry in fs::read_dir(&slot).map_err(unavailable)? {
             let entry = entry.map_err(unavailable)?;
             if entry.file_name() == ".layerx-build-lock" || entry.file_name() == "lost+found" {
@@ -167,21 +194,32 @@ impl HermeticBuilder {
                 fs::remove_file(entry.path()).map_err(unavailable)?;
             }
         }
-        File::open(&slot).and_then(|directory| directory.sync_all()).map_err(unavailable)?;
+        File::open(&slot)
+            .and_then(|directory| directory.sync_all())
+            .map_err(unavailable)?;
         let root = slot.join(format!("attempt-{}", attempt.attempt));
         if let Err(error) = fs::create_dir(&root) {
             return Err(unavailable(error));
         }
         let workspace = QuotaWorkspace { root, _lock: lock };
-        let deadline = self.request_deadline.lock().map_err(|_| BuildRefusal::SandboxUnavailable {
-            reason: "builder deadline lock is unavailable".to_owned(),
-        })?.ok_or_else(|| BuildRefusal::SandboxUnavailable {
-            reason: "builder request deadline is unavailable".to_owned(),
-        })?;
+        let deadline = self
+            .request_deadline
+            .lock()
+            .map_err(|_| BuildRefusal::SandboxUnavailable {
+                reason: "builder deadline lock is unavailable".to_owned(),
+            })?
+            .ok_or_else(|| BuildRefusal::SandboxUnavailable {
+                reason: "builder request deadline is unavailable".to_owned(),
+            })?;
         fs::create_dir_all(workspace.root.join("source")).map_err(unavailable)?;
         materialize(&workspace.root.join("source"), attempt.archive, deadline)?;
-        copy_environment(&self.environment_root, &workspace.root.join("environment"), deadline)?;
-        if environment_digest(&workspace.root.join("environment"), Some(deadline)).map_err(|reason| BuildRefusal::SandboxUnavailable { reason })?
+        copy_environment(
+            &self.environment_root,
+            &workspace.root.join("environment"),
+            deadline,
+        )?;
+        if environment_digest(&workspace.root.join("environment"), Some(deadline))
+            .map_err(|reason| BuildRefusal::SandboxUnavailable { reason })?
             != self.builder_image_digest
         {
             return Err(BuildRefusal::BuilderImageMismatch);
@@ -205,28 +243,34 @@ impl HermeticBuilder {
         let source = root.join("source");
         let environment = root.join("environment");
         let arguments = &attempt.plan.environment.command;
-        if arguments.len() > 32 || arguments.iter().any(|argument| {
-            argument.is_empty()
-                || argument.len() > 512
-                || argument.starts_with('/')
-                || argument.contains("..")
-                || argument.bytes().any(|byte| byte.is_ascii_control())
-        }) {
+        if arguments.len() > 32
+            || arguments.iter().any(|argument| {
+                argument.is_empty()
+                    || argument.len() > 512
+                    || argument.starts_with('/')
+                    || argument.contains("..")
+                    || argument.bytes().any(|byte| byte.is_ascii_control())
+            })
+        {
             return Err(BuildRefusal::InvalidPlan);
         }
         let log_path = source.join(BUILD_LOG);
         let log = File::create(&log_path).map_err(unavailable)?;
         let mut log_reader = log.try_clone().map_err(unavailable)?;
-        let request_deadline = self.request_deadline.lock().map_err(|_| BuildRefusal::SandboxUnavailable {
-            reason: "builder deadline lock is unavailable".to_owned(),
-        })?.ok_or_else(|| BuildRefusal::SandboxUnavailable {
-            reason: "builder request deadline is unavailable".to_owned(),
-        })?;
-        let remaining = request_deadline.checked_duration_since(Instant::now()).ok_or_else(|| {
-            BuildRefusal::BuilderFailed {
+        let request_deadline = self
+            .request_deadline
+            .lock()
+            .map_err(|_| BuildRefusal::SandboxUnavailable {
+                reason: "builder deadline lock is unavailable".to_owned(),
+            })?
+            .ok_or_else(|| BuildRefusal::SandboxUnavailable {
+                reason: "builder request deadline is unavailable".to_owned(),
+            })?;
+        let remaining = request_deadline
+            .checked_duration_since(Instant::now())
+            .ok_or_else(|| BuildRefusal::BuilderFailed {
                 reason: "request deadline expired before cgroup admission".to_owned(),
-            }
-        })?;
+            })?;
         let mut child = Command::new(format!("/proc/self/fd/{}", job_supervisor.as_raw_fd()))
             .arg("--cgroup-v2")
             .arg("--cgroup-root")
@@ -234,7 +278,10 @@ impl HermeticBuilder {
             .arg("--attach-before-exec")
             .arg("--kill-tree-on-exit")
             .arg(format!("--memory-max={}", self.memory_bytes))
-            .arg(format!("--cpu-time-max-usec={}", self.timeout_seconds.saturating_mul(1_000_000)))
+            .arg(format!(
+                "--cpu-time-max-usec={}",
+                self.timeout_seconds.saturating_mul(1_000_000)
+            ))
             .arg(format!("--pids-max={}", self.process_limit))
             .arg(format!("--io-write-max={}", self.file_size_bytes))
             .arg("--workspace-device-path")
@@ -257,10 +304,28 @@ impl HermeticBuilder {
             .args(["--dir", "/build", "--bind"])
             .arg(&source)
             .arg("/build")
-            .args(["--dir", "/tmp", "--tmpfs", "/tmp", "--proc", "/proc", "--dev", "/dev"])
-            .args(["--chdir", "/build", "--setenv", "HOME", "/tmp", "--setenv", "TMPDIR", "/tmp"])
-            .args(["--setenv", "CARGO_HOME", "/opt/cache/cargo", "--setenv", "RUSTUP_HOME", "/opt/cache/rustup"])
-            .args(["--setenv", "CARGO_TERM_COLOR", "never", "--setenv", "CARGO_NET_OFFLINE", "true"])
+            .args([
+                "--dir", "/tmp", "--tmpfs", "/tmp", "--proc", "/proc", "--dev", "/dev",
+            ])
+            .args([
+                "--chdir", "/build", "--setenv", "HOME", "/tmp", "--setenv", "TMPDIR", "/tmp",
+            ])
+            .args([
+                "--setenv",
+                "CARGO_HOME",
+                "/opt/cache/cargo",
+                "--setenv",
+                "RUSTUP_HOME",
+                "/opt/cache/rustup",
+            ])
+            .args([
+                "--setenv",
+                "CARGO_TERM_COLOR",
+                "never",
+                "--setenv",
+                "CARGO_NET_OFFLINE",
+                "true",
+            ])
             .args(["--setenv", "TZ", "UTC", "--setenv", "LC_ALL", "C"])
             .arg("--setenv")
             .arg("SOURCE_DATE_EPOCH")
@@ -323,31 +388,48 @@ fn validate_build_boundary(workspace: &Path, cgroup: &Path) -> Result<PathBuf, S
     let controllers = fs::read_to_string(cgroup.join("cgroup.subtree_control"))
         .map_err(|error| format!("builder cgroup controllers are unavailable: {error}"))?;
     if ["cpu", "memory", "pids", "io"].iter().any(|required| {
-        !controllers.split_whitespace().any(|controller| controller == *required)
+        !controllers
+            .split_whitespace()
+            .any(|controller| controller == *required)
     }) {
         return Err("builder cgroup delegation omits a required controller".to_owned());
     }
     let root = fs::canonicalize(workspace)
         .map_err(|error| format!("build quota root is unavailable: {error}"))?;
-    let root_device = fs::metadata(&root).map_err(|error| error.to_string())?.dev();
-    let slots = fs::read_dir(&root).map_err(|error| error.to_string())?
-        .collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())?;
-    let mounted = slots.iter().filter(|entry| {
-        entry.file_type().is_ok_and(|kind| kind.is_dir())
-            && entry.metadata().is_ok_and(|metadata| {
-                metadata.uid() == 4030 && metadata.gid() == 4030 && metadata.dev() != root_device
-            })
-    }).count();
+    let root_device = fs::metadata(&root)
+        .map_err(|error| error.to_string())?
+        .dev();
+    let slots = fs::read_dir(&root)
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    let mounted = slots
+        .iter()
+        .filter(|entry| {
+            entry.file_type().is_ok_and(|kind| kind.is_dir())
+                && entry.metadata().is_ok_and(|metadata| {
+                    metadata.uid() == 4030
+                        && metadata.gid() == 4030
+                        && metadata.dev() != root_device
+                })
+        })
+        .count();
     if mounted == 0 || mounted > 64 {
         return Err("no owned hard-quota build filesystem is mounted".to_owned());
     }
     for entry in slots.iter().filter(|entry| {
         entry.file_type().is_ok_and(|kind| kind.is_dir())
-            && entry.metadata().is_ok_and(|metadata| metadata.dev() != root_device)
+            && entry
+                .metadata()
+                .is_ok_and(|metadata| metadata.dev() != root_device)
     }) {
         let slot = entry.path();
-        let lock = fs::OpenOptions::new().create(true).read(true).write(true)
-            .open(slot.join(".layerx-build-lock")).map_err(|error| error.to_string())?;
+        let lock = fs::OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .open(slot.join(".layerx-build-lock"))
+            .map_err(|error| error.to_string())?;
         if rustix::fs::flock(&lock, rustix::fs::FlockOperation::NonBlockingLockExclusive).is_err() {
             continue;
         }
@@ -356,13 +438,18 @@ fn validate_build_boundary(workspace: &Path, cgroup: &Path) -> Result<PathBuf, S
             if stale.file_name() == ".layerx-build-lock" || stale.file_name() == "lost+found" {
                 continue;
             }
-            if stale.file_type().map_err(|error| error.to_string())?.is_dir() {
+            if stale
+                .file_type()
+                .map_err(|error| error.to_string())?
+                .is_dir()
+            {
                 fs::remove_dir_all(stale.path()).map_err(|error| error.to_string())?;
             } else {
                 fs::remove_file(stale.path()).map_err(|error| error.to_string())?;
             }
         }
-        File::open(&slot).and_then(|directory| directory.sync_all())
+        File::open(&slot)
+            .and_then(|directory| directory.sync_all())
             .map_err(|error| format!("stale quota slot could not be durably reclaimed: {error}"))?;
     }
     Ok(root)
@@ -374,8 +461,10 @@ fn validate_build_boundary(_workspace: &Path, _cgroup: &Path) -> Result<PathBuf,
 }
 
 fn verified_executable(path: PathBuf, expected: [u8; 32], label: &str) -> Result<PathBuf, String> {
-    let canonical = fs::canonicalize(path).map_err(|error| format!("{label} is unavailable: {error}"))?;
-    let metadata = fs::metadata(&canonical).map_err(|error| format!("{label} is unavailable: {error}"))?;
+    let canonical =
+        fs::canonicalize(path).map_err(|error| format!("{label} is unavailable: {error}"))?;
+    let metadata =
+        fs::metadata(&canonical).map_err(|error| format!("{label} is unavailable: {error}"))?;
     if !metadata.is_file() || metadata.len() == 0 || metadata.len() > 64 * 1024 * 1024 {
         return Err(format!("{label} is not a bounded regular file"));
     }
@@ -391,17 +480,22 @@ fn verified_executable_fd(path: &Path, expected: [u8; 32], label: &str) -> Resul
     use rustix::io::{fcntl_setfd, FdFlags};
 
     let mut file = File::open(path).map_err(|error| format!("{label} is unavailable: {error}"))?;
-    let metadata = file.metadata().map_err(|error| format!("{label} is unavailable: {error}"))?;
+    let metadata = file
+        .metadata()
+        .map_err(|error| format!("{label} is unavailable: {error}"))?;
     if !metadata.is_file() || metadata.len() == 0 || metadata.len() > 64 * 1024 * 1024 {
         return Err(format!("{label} is not a bounded regular file"));
     }
     let mut bytes = Vec::with_capacity(usize::try_from(metadata.len()).unwrap_or(0));
-    file.read_to_end(&mut bytes).map_err(|error| format!("{label} is unreadable: {error}"))?;
+    file.read_to_end(&mut bytes)
+        .map_err(|error| format!("{label} is unreadable: {error}"))?;
     if <[u8; 32]>::from(Sha256::digest(&bytes)) != expected {
         return Err(format!("{label} bytes do not match the configured digest"));
     }
-    file.seek(SeekFrom::Start(0)).map_err(|error| format!("{label} is unseekable: {error}"))?;
-    fcntl_setfd(&file, FdFlags::empty()).map_err(|error| format!("{label} fd cannot be inherited: {error}"))?;
+    file.seek(SeekFrom::Start(0))
+        .map_err(|error| format!("{label} is unseekable: {error}"))?;
+    fcntl_setfd(&file, FdFlags::empty())
+        .map_err(|error| format!("{label} fd cannot be inherited: {error}"))?;
     Ok(file)
 }
 
@@ -440,14 +534,20 @@ fn environment_digest(root: &Path, deadline: Option<Instant>) -> Result<[u8; 32]
         if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
             return Err("request deadline expired while hashing the build environment".to_owned());
         }
-        let relative = path.strip_prefix(root).map_err(|_| "builder environment path escaped its root".to_owned())?;
-        let name = relative.to_str().ok_or_else(|| "builder environment path is not UTF-8".to_owned())?;
+        let relative = path
+            .strip_prefix(root)
+            .map_err(|_| "builder environment path escaped its root".to_owned())?;
+        let name = relative
+            .to_str()
+            .ok_or_else(|| "builder environment path is not UTF-8".to_owned())?;
         let bytes = if directory {
             Vec::new()
         } else {
             fs::read(&path).map_err(|error| error.to_string())?
         };
-        total = total.checked_add(bytes.len() as u64).ok_or_else(|| "builder environment size overflowed".to_owned())?;
+        total = total
+            .checked_add(bytes.len() as u64)
+            .ok_or_else(|| "builder environment size overflowed".to_owned())?;
         if total > MAX_ENVIRONMENT_BYTES {
             return Err("builder environment exceeds its byte bound".to_owned());
         }
@@ -501,7 +601,8 @@ fn copy_environment(source: &Path, target: &Path, deadline: Instant) -> Result<(
     while let Some((from, to)) = pending.pop() {
         if Instant::now() >= deadline {
             return Err(BuildRefusal::BuilderFailed {
-                reason: "request deadline expired while snapshotting the build environment".to_owned(),
+                reason: "request deadline expired while snapshotting the build environment"
+                    .to_owned(),
             });
         }
         for entry in fs::read_dir(&from).map_err(unavailable)? {
@@ -519,8 +620,10 @@ fn copy_environment(source: &Path, target: &Path, deadline: Instant) -> Result<(
                 fs::create_dir(&target_path).map_err(unavailable)?;
                 pending.push((source_path, target_path));
             } else if metadata.is_file() {
-                copied = copied.checked_add(metadata.len()).ok_or_else(|| BuildRefusal::SandboxUnavailable {
-                    reason: "builder environment size overflowed".to_owned(),
+                copied = copied.checked_add(metadata.len()).ok_or_else(|| {
+                    BuildRefusal::SandboxUnavailable {
+                        reason: "builder environment size overflowed".to_owned(),
+                    }
                 })?;
                 if copied > MAX_ENVIRONMENT_BYTES {
                     return Err(BuildRefusal::SandboxUnavailable {
@@ -539,7 +642,11 @@ fn copy_environment(source: &Path, target: &Path, deadline: Instant) -> Result<(
     Ok(())
 }
 
-fn materialize(root: &Path, archive: &SourceArchive, deadline: Instant) -> Result<(), BuildRefusal> {
+fn materialize(
+    root: &Path,
+    archive: &SourceArchive,
+    deadline: Instant,
+) -> Result<(), BuildRefusal> {
     for file in archive.files() {
         if Instant::now() >= deadline {
             return Err(BuildRefusal::BuilderFailed {
@@ -579,7 +686,9 @@ fn tail_open(file: &mut File) -> Result<String, BuildRefusal> {
     let start = length.saturating_sub(LOG_TAIL as u64);
     file.seek(SeekFrom::Start(start)).map_err(unavailable)?;
     let mut bytes = Vec::new();
-    file.take(LOG_TAIL as u64).read_to_end(&mut bytes).map_err(unavailable)?;
+    file.take(LOG_TAIL as u64)
+        .read_to_end(&mut bytes)
+        .map_err(unavailable)?;
     Ok(String::from_utf8_lossy(&bytes)
         .replace(['\n', '\r', '"'], " ")
         .trim()
@@ -607,11 +716,14 @@ fn read_beneath(root: &Path, relative: &Path, maximum: u64) -> Result<Vec<u8>, i
         || stat.st_size < 0
         || u64::try_from(stat.st_size).map_or(true, |size| size > maximum)
     {
-        return Err(io::Error::other("sandbox output is not a bounded regular file"));
+        return Err(io::Error::other(
+            "sandbox output is not a bounded regular file",
+        ));
     }
     let mut file = File::from(descriptor);
     let mut bytes = Vec::with_capacity(usize::try_from(stat.st_size).unwrap_or(0));
-    file.take(maximum.saturating_add(1)).read_to_end(&mut bytes)?;
+    file.take(maximum.saturating_add(1))
+        .read_to_end(&mut bytes)?;
     if bytes.len() as u64 > maximum {
         return Err(io::Error::other("sandbox output exceeds its byte bound"));
     }
@@ -620,7 +732,9 @@ fn read_beneath(root: &Path, relative: &Path, maximum: u64) -> Result<Vec<u8>, i
 
 #[cfg(not(target_os = "linux"))]
 fn read_beneath(_root: &Path, _relative: &Path, _maximum: u64) -> Result<Vec<u8>, io::Error> {
-    Err(io::Error::other("descriptor-safe sandbox output requires Linux openat2"))
+    Err(io::Error::other(
+        "descriptor-safe sandbox output requires Linux openat2",
+    ))
 }
 
 #[allow(clippy::needless_pass_by_value)]

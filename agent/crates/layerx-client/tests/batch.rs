@@ -6,6 +6,7 @@ use layerx_client::lni::schema::{decode_envelope, encode_envelope, Envelope, Ver
 use layerx_client::lni::transport::{FrameTransport, TransportError};
 use layerx_wire::encode::Encoder;
 use layerx_wire::hash::batch_header_digest;
+use layerx_wire::limits::PROTOCOL_VERSION;
 
 struct Scripted {
     sent: Vec<Vec<u8>>,
@@ -27,10 +28,10 @@ impl FrameTransport for Scripted {
 
 fn header(sequencer: [u8; 32]) -> Vec<u8> {
     let mut e = Encoder::new(354);
-    assert!(e.structure_header(0x1701).is_ok());
+    assert!(e.structure_header_version(0x1701, PROTOCOL_VERSION).is_ok());
     assert!(e.u8(15).is_ok());
     assert!(e.tag(1, 15).is_ok());
-    assert!(e.u16(1).is_ok());
+    assert!(e.u16(PROTOCOL_VERSION).is_ok());
     assert!(e.tag(2, 15).is_ok());
     assert!(e.u32(77).is_ok());
     for (tag, value) in [(3, 2), (4, 7), (5, 10), (6, 12)] {

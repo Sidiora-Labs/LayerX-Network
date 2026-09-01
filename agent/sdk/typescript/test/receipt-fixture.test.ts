@@ -74,7 +74,7 @@ function hexEqual(actual: Uint8Array, expectedHex: string, field: string): void 
   }
 }
 
-function loadFixture(name = "receipt-positive-v1.json"): ReceiptFixture {
+function loadFixture(name = "receipt-positive-v2.json"): ReceiptFixture {
   const path = fileURLToPath(
     new URL(
       `../../../../../platform/sdk/conformance/fixtures/${name}`,
@@ -139,7 +139,7 @@ export async function verifyReceiptFixture(): Promise<void> {
   }
   assert(refused, "mutated receipt verified; a flipped signature byte must fail");
 
-  const programs = loadFixture("receipt-programs-positive-v1.json");
+  const programs = loadFixture("receipt-programs-positive-v2.json");
   const verifiedPrograms = await verifyReceipt(
     hexBytes(programs.canonical_receipt_hex),
     authorizedBatch(programs),
@@ -149,9 +149,14 @@ export async function verifyReceiptFixture(): Promise<void> {
   assert(embedded.encodingVersion === 3, "embedded outcome version diverged");
   assert(embedded.runtimeVersion === 1, "embedded runtime version diverged");
   assert(embedded.abiVersion === 1, "embedded ABI version diverged");
+  assert(embedded.occupancyByteBatches === 2n, "embedded occupancy byte batches diverged");
+  assert(embedded.occupancyFeeUnits === 7n, "embedded occupancy fee units diverged");
+  hexEqual(embedded.occupancyAssetId, programs.authorized_batch.asset_hex, "embedded occupancy asset");
+  assert(embedded.occupancyEvidenceDigest.some((byte) => byte !== 0), "embedded occupancy evidence is zero");
+  assert(embedded.occupancyTransferRoot.some((byte) => byte !== 0), "embedded occupancy transfer root is zero");
   assert(embedded.feeUnits === 16n, "embedded fee units diverged");
 
-  const refusals = loadFixture("receipt-refusals-v1.json") as unknown as ReceiptRefusalFixture;
+  const refusals = loadFixture("receipt-refusals-v2.json") as unknown as ReceiptRefusalFixture;
   for (const vector of refusals.vectors) {
     try {
       await verifyReceipt(

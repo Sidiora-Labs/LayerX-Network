@@ -504,8 +504,8 @@ public final class ProgramsContractTest {
     private static byte[] signedActivity(byte[] payload, byte[] key) {
         byte[] payloadHash = sha256("LXP/v1/payload-hash\0".getBytes(StandardCharsets.UTF_8), payload);
         ByteBuffer out = ByteBuffer.allocate(157 + payload.length);
-        out.putShort((short) 1).putShort((short) 0x1001).put((byte) 12);
-        out.put((byte) 1).putShort((short) 1);
+        out.putShort((short) 2).putShort((short) 0x1001).put((byte) 12);
+        out.put((byte) 1).putShort((short) 2);
         out.put((byte) 2).putInt(1);
         out.put((byte) 3).putInt((9 << 16) | 3);
         out.put((byte) 4).putInt(1).put((byte) 'a');

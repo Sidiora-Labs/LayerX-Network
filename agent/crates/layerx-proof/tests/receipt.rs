@@ -5,6 +5,7 @@ use layerx_proof::receipt::{
 use layerx_types::verify::VerificationLevel;
 use layerx_wire::encode::Encoder;
 use layerx_wire::hash::receipt_digest;
+use layerx_wire::limits::{LEGACY_PROTOCOL_VERSION, PROTOCOL_VERSION};
 
 #[derive(Clone)]
 struct Fields {
@@ -84,7 +85,7 @@ fn encode_fields_version(
 }
 
 fn encode_fields(fields: &Fields, signature: Option<[u8; 64]>) -> Vec<u8> {
-    encode_fields_version(fields, signature, 1)
+    encode_fields_version(fields, signature, PROTOCOL_VERSION)
 }
 
 fn sign(fields: &Fields, signing_key: &SigningKey) -> Vec<u8> {
@@ -136,7 +137,7 @@ fn verifies_from_bytes_with_no_ambient_capabilities() {
 fn verifies_current_occupancy_protocol_receipts() {
     let signing_key = SigningKey::from_bytes(&[3; 32]);
     let fields = fields();
-    let bytes = sign_version(&fields, &signing_key, 2);
+    let bytes = sign_version(&fields, &signing_key, PROTOCOL_VERSION);
     let verified = verify(&bytes, &authorised(&fields, &signing_key))
         .unwrap_or_else(|error| panic!("valid protocol v2 receipt rejected: {error:?}"));
     assert_eq!(verified.canonical_bytes(), bytes);
@@ -145,7 +146,20 @@ fn verifies_current_occupancy_protocol_receipts() {
             .receipt()
             .protocol()
             .map(|receipt| receipt.protocol_version()),
-        Some(2)
+        Some(PROTOCOL_VERSION)
+    );
+}
+
+#[test]
+fn legacy_receipts_decode_but_are_not_accepted_as_beta_evidence() {
+    let signing_key = SigningKey::from_bytes(&[3; 32]);
+    let fields = fields();
+    let bytes = sign_version(&fields, &signing_key, LEGACY_PROTOCOL_VERSION);
+    assert_eq!(
+        verify(&bytes, &authorised(&fields, &signing_key)),
+        Err(VerificationFailure {
+            check: ReceiptCheck::ProtocolVersion,
+        })
     );
 }
 

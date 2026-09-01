@@ -63,7 +63,7 @@ export async function verifyTypeScriptPackage(): Promise<void> {
   secret.destroy();
 
   const attestation: CheckpointAttestation = {
-    protocolVersion: 1,
+    protocolVersion: 2,
     networkId: 17,
     paxeerChainId: 777n,
     settlementContract: new Uint8Array(20).fill(1),

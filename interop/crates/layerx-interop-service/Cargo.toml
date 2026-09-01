@@ -19,6 +19,7 @@ layerx-platform-gateway = { path = "../../../platform/hosted/gateway" }
 layerx-proof.workspace = true
 layerx-ucp = { path = "../layerx-ucp" }
 layerx-visa-tap = { path = "../layerx-visa-tap" }
+layerx-wire.workspace = true
 layerx-x402 = { path = "../layerx-x402" }
 native-tls.workspace = true
 p256.workspace = true

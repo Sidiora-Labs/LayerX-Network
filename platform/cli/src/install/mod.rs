@@ -155,11 +155,9 @@ impl FileTransaction {
                 Some((file, metadata)) => {
                     let mut bytes = Vec::new();
                     let mut source = file.take((MAX_INSTALLATION_SNAPSHOT_BYTES + 1) as u64);
-                    source
-                        .read_to_end(&mut bytes)
-                        .map_err(|error| {
-                            format!("could not snapshot {}: {error}", path.display())
-                        })?;
+                    source.read_to_end(&mut bytes).map_err(|error| {
+                        format!("could not snapshot {}: {error}", path.display())
+                    })?;
                     if bytes.len() > MAX_INSTALLATION_SNAPSHOT_BYTES {
                         bytes.zeroize();
                         return Err(format!(
@@ -207,7 +205,10 @@ impl FileTransaction {
             .find(|snapshot| snapshot.path == path)
             .ok_or_else(|| format!("{} is outside the installation transaction", path.display()))?;
         if snapshot.publication_in_progress {
-            return Err(format!("{} already has an unresolved publication", path.display()));
+            return Err(format!(
+                "{} already has an unresolved publication",
+                path.display()
+            ));
         }
         snapshot.publication_in_progress = true;
         Ok(())
@@ -221,7 +222,10 @@ impl FileTransaction {
             .find(|snapshot| snapshot.path == path)
             .ok_or_else(|| format!("{} is outside the installation transaction", path.display()))?;
         if !snapshot.publication_in_progress {
-            return Err(format!("{} has no pending installation publication", path.display()));
+            return Err(format!(
+                "{} has no pending installation publication",
+                path.display()
+            ));
         }
         if changed {
             snapshot.published = Some(observed.ok_or_else(|| {
@@ -230,7 +234,10 @@ impl FileTransaction {
         } else {
             let expected = snapshot.published.as_ref().or(snapshot.original.as_ref());
             if !same_optional_installation_metadata(expected, observed.as_ref()) {
-                return Err(format!("{} changed despite an unchanged publication", path.display()));
+                return Err(format!(
+                    "{} changed despite an unchanged publication",
+                    path.display()
+                ));
             }
         }
         snapshot.publication_in_progress = false;
@@ -262,10 +269,9 @@ impl FileTransaction {
                     }
                 }
                 (Some(_), Some(original), None) => {
-                    if let Err(error) = require_expected_installation_leaf(
-                        &snapshot.path,
-                        Some(&original),
-                    ) {
+                    if let Err(error) =
+                        require_expected_installation_leaf(&snapshot.path, Some(&original))
+                    {
                         failures.push(format!(
                             "could not preserve unchanged {}: {error}",
                             snapshot.path.display()
@@ -308,7 +314,10 @@ fn open_stable_installation_file(path: &Path) -> Result<Option<(File, Metadata)>
         Ok(metadata)
             if metadata.is_file()
                 && !metadata.file_type().is_symlink()
-                && owned_by_current_user(&metadata) => metadata,
+                && owned_by_current_user(&metadata) =>
+        {
+            metadata
+        }
         Ok(_) => {
             return Err(format!(
                 "installation target {} must be a current-owner regular non-symlink file",
@@ -331,8 +340,8 @@ fn open_stable_installation_file(path: &Path) -> Result<Option<(File, Metadata)>
         )
     };
     #[cfg(not(unix))]
-    let file = File::open(path)
-        .map_err(|error| format!("could not open {}: {error}", path.display()))?;
+    let file =
+        File::open(path).map_err(|error| format!("could not open {}: {error}", path.display()))?;
     let opened = file
         .metadata()
         .map_err(|error| format!("could not inspect opened {}: {error}", path.display()))?;
@@ -382,7 +391,10 @@ fn restore_snapshot(
         let published = fs::symlink_metadata(path)
             .map_err(|error| format!("could not inspect restored {}: {error}", path.display()))?;
         if !stable_installation_metadata(&temporary_metadata, &published) {
-            return Err(format!("{} changed during rollback publication", path.display()));
+            return Err(format!(
+                "{} changed during rollback publication",
+                path.display()
+            ));
         }
         sync_parent(path)
     })();
@@ -407,7 +419,10 @@ fn installation_leaf_metadata(path: &Path) -> Result<Option<Metadata>, String> {
         Ok(metadata)
             if metadata.is_file()
                 && !metadata.file_type().is_symlink()
-                && owned_by_current_user(&metadata) => Ok(Some(metadata)),
+                && owned_by_current_user(&metadata) =>
+        {
+            Ok(Some(metadata))
+        }
         Ok(_) => Err(format!(
             "{} is not a current-owner regular non-symlink file",
             path.display()
@@ -433,7 +448,10 @@ fn require_expected_installation_leaf(
     if same_optional_installation_metadata(expected, observed.as_ref()) {
         Ok(())
     } else {
-        Err(format!("{} changed since its transaction publication", path.display()))
+        Err(format!(
+            "{} changed since its transaction publication",
+            path.display()
+        ))
     }
 }
 
@@ -895,7 +913,10 @@ fn write_temporary(temporary: &Path, path: &Path, contents: &str) -> Result<(), 
     validate_existing_ancestors(path, true)?;
     let after = installation_leaf_metadata(path)?;
     if !same_optional_installation_metadata(before.as_ref(), after.as_ref()) {
-        return Err(format!("{} changed while publication was prepared", path.display()));
+        return Err(format!(
+            "{} changed while publication was prepared",
+            path.display()
+        ));
     }
     fs::rename(temporary, path)
         .map_err(|error| format!("could not replace {}: {error}", path.display()))?;
@@ -935,7 +956,10 @@ pub(super) fn private_file_metadata(path: &Path) -> Result<Metadata, String> {
             if metadata.is_file()
                 && !metadata.file_type().is_symlink()
                 && owner_only(&metadata)
-                && owned_by_current_user(&metadata) => Ok(metadata),
+                && owned_by_current_user(&metadata) =>
+        {
+            Ok(metadata)
+        }
         Ok(_) => Err(format!(
             "{} must be a regular owner-only file owned by the current user",
             path.display()
@@ -990,7 +1014,10 @@ pub(super) fn validate_existing_ancestors(path: &Path, private_parent: bool) -> 
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => {
-                return Err(format!("could not inspect {}: {error}", directory.display()))
+                return Err(format!(
+                    "could not inspect {}: {error}",
+                    directory.display()
+                ))
             }
         }
         current = directory.parent();

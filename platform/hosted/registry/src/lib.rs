@@ -3,8 +3,8 @@
 //! against the canonical deployment journal, and verified-source status is
 //! produced by rebuilding published source in a pinned toolchain environment.
 
-mod builder;
 mod auth;
+mod builder;
 mod http;
 mod journal;
 mod mirror;
@@ -18,8 +18,8 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-pub use builder::HermeticBuilder;
 pub use auth::{Authorization, RegistryAuthority};
+pub use builder::HermeticBuilder;
 pub use http::{parse_request, write_response};
 pub use journal::FileDeploymentJournal;
 pub use mirror::{MirrorRefusal, MirroredSource, SourceMirror};

@@ -4,6 +4,7 @@ PLATFORM_MANIFEST := platform/Cargo.toml
 .PHONY: platform-js-install platform-build platform-build-all platform-lint platform-test platform-sdk-check \
 	platform-sdk-generate platform-receipt-fixture platform-verify-sdks platform-test-sdks platform-release-check platform-release-plan \
 	platform-test-tooling platform-emulator-conformance platform-test-middleware \
+	platform-test-cli-production-credential-refusal \
 	platform-test-reference-apps platform-test-mobile-artifacts \
 	platform-test-android-artifact platform-test-ios-artifact \
 	platform-real-agent-integration \
@@ -107,14 +108,18 @@ platform-lint:
 platform-test:
 	$(PLATFORM_CARGO) test --offline --manifest-path $(PLATFORM_MANIFEST) --locked --workspace --features layerx-platform-cli/test-credential-store
 
-platform-test-tooling:
+platform-test-tooling: platform-test-cli-production-credential-refusal
 	$(PLATFORM_CARGO) test --offline --manifest-path $(PLATFORM_MANIFEST) --locked -p layerx-platform-cli --features test-credential-store
-	$(PLATFORM_CARGO) check --offline --manifest-path $(PLATFORM_MANIFEST) --locked -p layerx-platform-emulator
+	$(PLATFORM_CARGO) test --offline --manifest-path $(PLATFORM_MANIFEST) --locked -p layerx-platform-emulator
 	$(PLATFORM_CARGO) test --offline --manifest-path $(PLATFORM_MANIFEST) --locked -p layerx-platform-faucet
 	$(PLATFORM_CARGO) test --offline --manifest-path $(PLATFORM_MANIFEST) --locked -p layerx-platform-testnet
 	sh -n platform/hosted/testnet/run-testnet.sh platform/hosted/testnet/reset-testnet.sh \
 		platform/hosted/testnet/render-status.sh platform/hosted/testnet/tests/hosted-smoke.sh
-	bash -n platform/cli/tests/install-journey.sh
+	bash -n platform/cli/tests/install-journey.sh \
+		platform/examples/agent-program-call/walkthrough.sh
+
+platform-test-cli-production-credential-refusal:
+	bash platform/cli/tests/production-credential-refusal.sh
 
 platform-hosted-smoke:
 	@test -n "$${LAYERX_TESTNET_URL:-}"
@@ -179,10 +184,10 @@ $(BUILD_DIR)/tools/generate_program_receipt_fixture: \
 platform-receipt-fixture: $(BUILD_DIR)/tools/generate_receipt_fixture \
 		$(BUILD_DIR)/tools/generate_program_receipt_fixture
 	$(RUN_PREFIX) $(BUILD_DIR)/tools/generate_receipt_fixture \
-		platform/sdk/conformance/fixtures/receipt-positive-v1.json
+		platform/sdk/conformance/fixtures/receipt-positive-v2.json
 	$(RUN_PREFIX) $(BUILD_DIR)/tools/generate_program_receipt_fixture \
-		platform/sdk/conformance/fixtures/receipt-programs-positive-v1.json \
-		platform/sdk/conformance/fixtures/receipt-refusals-v1.json
+		platform/sdk/conformance/fixtures/receipt-programs-positive-v2.json \
+		platform/sdk/conformance/fixtures/receipt-refusals-v2.json
 
 platform-verify-sdks: platform-sdk-check platform-sample-dependencies-ready platform-js-install
 	@python3 -c 'import pytest' || { echo "pytest is required for Python SDK conformance" >&2; exit 1; }

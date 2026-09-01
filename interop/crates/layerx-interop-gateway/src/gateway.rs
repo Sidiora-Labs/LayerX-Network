@@ -17,7 +17,7 @@ use crate::codec::{self, Decoder};
 use crate::error::GatewayError;
 use crate::principal::{GatewayStore, PrincipalId, RowKey, Table};
 use crate::redaction::{emit, FieldValue, Label, ADAPTER_CALL_SCHEMA};
-use crate::trace::{Traced, TraceId};
+use crate::trace::{TraceId, Traced};
 
 const RECORD_MAGIC: &[u8; 4] = b"LXIT";
 const RECORD_VERSION: u8 = 1;
@@ -347,7 +347,9 @@ impl GatewayCore {
     ) -> Option<TranslationStatus> {
         let row = translation_row(idempotency_key).ok()?;
         let stored = self.store.read(principal, Table::Translations, &row)?;
-        decode_record(stored.bytes()).ok().map(|record| record.status)
+        decode_record(stored.bytes())
+            .ok()
+            .map(|record| record.status)
     }
 
     /// Opens one translation under the caller's idempotency key. Repeating

@@ -79,6 +79,19 @@ const signedBinding = await decodeSignedProgramCall({
   signedActivity,
 });
 assert(signedBinding.notBefore === 10n && signedBinding.notAfter === 20n, "signed Programs validity window was discarded");
+const mismatchedLegacyEnvelope = new Uint8Array(signedActivity);
+mismatchedLegacyEnvelope[1] = 1;
+await rejectsWith(
+  () => decodeSignedProgramCall({
+    programId,
+    calldata: new Uint8Array([0xaa]),
+    budget: { fuel: 1n, feeLimit: 0n },
+    capabilities: [],
+    signedActivity: mismatchedLegacyEnvelope,
+  }),
+  "protocol",
+  "legacy outer envelope accepted a protocol v2 Programs activity",
+);
 assertFreshSimulationObservation(15n, signedBinding, 15n, 5n);
 for (const [observedAt, now, maximumAge] of [[9n, 15n, 10n], [21n, 21n, 10n], [15n, 14n, 10n], [15n, 21n, 5n]] as const) {
   let rejected = false;
@@ -305,8 +318,8 @@ async function canonicalProgramCall(callee: string, idempotency: string): Promis
   );
   const payloadHash = await hash(join(Buffer.from("LXP/v1/payload-hash\0", "utf8"), payload));
   return join(
-    integer(1n, 2), integer(0x1001n, 2), Buffer.from([12]),
-    Buffer.from([1]), integer(1n, 2),
+    integer(2n, 2), integer(0x1001n, 2), Buffer.from([12]),
+    Buffer.from([1]), integer(2n, 2),
     Buffer.from([2]), integer(1n, 4),
     Buffer.from([3]), integer(0x0009_0003n, 4),
     Buffer.from([4]), sized(Buffer.from("did:lxp:test", "utf8")),

@@ -545,9 +545,9 @@ fn receipt(stage: CreationStage, action_key: [u8; 32]) -> ProtocolEvidence {
 
 fn encode_receipt(fields: &ReceiptFields, signature: Option<[u8; 64]>) -> Vec<u8> {
     let mut bytes = Vec::new();
-    push_u16(&mut bytes, 1);
+    push_u16(&mut bytes, layerx_wire::limits::PROTOCOL_VERSION);
     push_u16(&mut bytes, 0x5201);
-    push_u16(&mut bytes, 1);
+    push_u16(&mut bytes, layerx_wire::limits::PROTOCOL_VERSION);
     push_bytes(&mut bytes, &fields.activity_id);
     push_u64(&mut bytes, CORE_SEQUENCE);
     push_bytes(&mut bytes, &fields.previous_state_root);

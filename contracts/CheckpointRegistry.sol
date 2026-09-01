@@ -17,7 +17,7 @@ contract CheckpointRegistry is LayerXComponent {
     error ChallengeAuthorityOnly();
     error CanonicalChainInvalidated();
 
-    bytes32 private constant REGISTERED_CERTIFICATE_DOMAIN = keccak256("LXP1/registered-guarantor-certificate/v1");
+    bytes32 private constant REGISTERED_CERTIFICATE_DOMAIN = keccak256("LXP2/registered-guarantor-certificate/v2");
     uint64 private constant MILLISECONDS_PER_SECOND = 1_000;
 
     IGuarantorEligibility public immutable guarantorEligibility;
@@ -29,6 +29,10 @@ contract CheckpointRegistry is LayerXComponent {
     uint64 public immutable maximumFutureTimestampDrift;
     uint64 public immutable maximumAttestationDelayMilliseconds;
     uint64 public immutable maximumFutureTimestampDriftMilliseconds;
+    bytes32 public immutable genesisManifestDigest;
+    bytes32 public immutable genesisCanonicalStateRoot;
+    bytes32 public immutable genesisReceiptRoot;
+    bytes32 public immutable genesisCheckpointId;
 
     mapping(bytes32 => bytes32) public finalisedStateRoot;
     mapping(uint64 => bytes32) public checkpointAtBatch;
@@ -73,14 +77,18 @@ contract CheckpointRegistry is LayerXComponent {
         uint16 attestationLimit,
         uint64 attestationDelay,
         uint64 futureTimestampDrift,
-        bytes32 genesisReceiptRoot,
+        bytes32 manifestDigest,
+        bytes32 canonicalStateRoot,
+        bytes32 receiptRoot,
         bytes32 componentConfigHash,
         uint192 componentRelease
     ) LayerXComponent(Predeploys.CHECKPOINT_REGISTRY, componentConfigHash, componentRelease) {
         if (
             address(eligibility) == address(0) || expectedProtocolVersion == 0 || expectedNetworkId == 0
                 || certificateThreshold == 0 || attestationLimit < certificateThreshold || attestationLimit > 32
-                || attestationDelay == 0 || futureTimestampDrift == 0 || genesisReceiptRoot == bytes32(0)
+                || attestationDelay == 0 || futureTimestampDrift == 0 || manifestDigest == bytes32(0)
+                || canonicalStateRoot == bytes32(0) || receiptRoot == bytes32(0) || manifestDigest == canonicalStateRoot
+                || manifestDigest == receiptRoot || canonicalStateRoot == receiptRoot
                 || attestationDelay > type(uint64).max / MILLISECONDS_PER_SECOND
                 || futureTimestampDrift > type(uint64).max / MILLISECONDS_PER_SECOND || block.chainid > type(uint64).max
                 || eligibility.protocolVersion() != expectedProtocolVersion
@@ -97,7 +105,29 @@ contract CheckpointRegistry is LayerXComponent {
         maximumFutureTimestampDrift = futureTimestampDrift;
         maximumAttestationDelayMilliseconds = attestationDelay * MILLISECONDS_PER_SECOND;
         maximumFutureTimestampDriftMilliseconds = futureTimestampDrift * MILLISECONDS_PER_SECOND;
-        latestFinalisedStateRoot = genesisReceiptRoot;
+        genesisManifestDigest = manifestDigest;
+        genesisCanonicalStateRoot = canonicalStateRoot;
+        genesisReceiptRoot = receiptRoot;
+        genesisCheckpointId = _deriveGenesisCheckpointId(
+            expectedProtocolVersion,
+            expectedNetworkId,
+            manifestDigest,
+            canonicalStateRoot,
+            receiptRoot,
+            componentConfigHash
+        );
+        latestFinalisedStateRoot = receiptRoot;
+    }
+
+    function derivedGenesisCheckpointId() external view returns (bytes32) {
+        return _deriveGenesisCheckpointId(
+            protocolVersion,
+            networkId,
+            genesisManifestDigest,
+            genesisCanonicalStateRoot,
+            genesisReceiptRoot,
+            staticConfigHash
+        );
     }
 
     function canonicalHeader(CanonicalCheckpoint.HeaderCommitments calldata header)
@@ -315,5 +345,28 @@ contract CheckpointRegistry is LayerXComponent {
         CanonicalCheckpoint.GuarantorAttestation[] calldata attestations
     ) private pure returns (bytes32) {
         return sha256(abi.encode(REGISTERED_CERTIFICATE_DOMAIN, digest, epoch, guarantorSetVersion, attestations));
+    }
+
+    function _deriveGenesisCheckpointId(
+        uint16 expectedProtocolVersion,
+        uint32 expectedNetworkId,
+        bytes32 manifestDigest,
+        bytes32 canonicalStateRoot,
+        bytes32 receiptRoot,
+        bytes32 configHash
+    ) private view returns (bytes32) {
+        return sha256(
+            abi.encode(
+                "LXP/Paxeer/genesis-checkpoint/v2",
+                expectedProtocolVersion,
+                expectedNetworkId,
+                uint64(block.chainid),
+                address(guarantorEligibility),
+                manifestDigest,
+                canonicalStateRoot,
+                receiptRoot,
+                configHash
+            )
+        );
     }
 }

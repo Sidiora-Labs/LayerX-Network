@@ -1327,12 +1327,18 @@ public final class GeneratedSchema {
                 Objects.requireNonNull(last_active_at, "last_active_at");
             }
         }
+        public record SessionDevice(String label, String platform) implements SchemaTypes.GeneratedResponse {
+            public SessionDevice {
+                Objects.requireNonNull(label, "label");
+                Objects.requireNonNull(platform, "platform");
+            }
+        }
         public record SessionList(List<HumanModels.Session> sessions) implements SchemaTypes.GeneratedResponse {
             public SessionList {
                 sessions = List.copyOf(Objects.requireNonNull(sessions, "sessions"));
             }
         }
-        public record SessionOpenRequest(String assertion_id) implements SchemaTypes.GeneratedResponse {
+        public record SessionOpenRequest(String assertion_id, HumanModels.SessionDevice device) implements SchemaTypes.GeneratedResponse {
             public SessionOpenRequest {
                 Objects.requireNonNull(assertion_id, "assertion_id");
             }
@@ -3076,7 +3082,7 @@ public final class GeneratedSchema {
                 Objects.requireNonNull(revoked_at, "revoked_at");
             }
         }
-        public static final SchemaTypes.TypedOperation<SecuritySessionRevokeRequest, SecuritySessionRevokeResponse> SECURITY_SESSION_REVOKE = new SchemaTypes.TypedOperation<>(OperationCatalog.Plane.HUMAN, "security.session.revoke", false, SecuritySessionRevokeRequest.class, SecuritySessionRevokeResponse.class);
+        public static final SchemaTypes.TypedOperation<SecuritySessionRevokeRequest, SecuritySessionRevokeResponse> SECURITY_SESSION_REVOKE = new SchemaTypes.TypedOperation<>(OperationCatalog.Plane.HUMAN, "security.session.revoke", true, SecuritySessionRevokeRequest.class, SecuritySessionRevokeResponse.class);
         public record SecuritySessionRevokeAllRequest(HumanModels.StepUpEvidence step_up) implements SchemaTypes.GeneratedRequest {
             public SecuritySessionRevokeAllRequest {
                 Objects.requireNonNull(step_up, "step_up");
@@ -3088,7 +3094,7 @@ public final class GeneratedSchema {
                 Objects.requireNonNull(revoked_at, "revoked_at");
             }
         }
-        public static final SchemaTypes.TypedOperation<SecuritySessionRevokeAllRequest, SecuritySessionRevokeAllResponse> SECURITY_SESSION_REVOKE_ALL = new SchemaTypes.TypedOperation<>(OperationCatalog.Plane.HUMAN, "security.session.revoke-all", false, SecuritySessionRevokeAllRequest.class, SecuritySessionRevokeAllResponse.class);
+        public static final SchemaTypes.TypedOperation<SecuritySessionRevokeAllRequest, SecuritySessionRevokeAllResponse> SECURITY_SESSION_REVOKE_ALL = new SchemaTypes.TypedOperation<>(OperationCatalog.Plane.HUMAN, "security.session.revoke-all", true, SecuritySessionRevokeAllRequest.class, SecuritySessionRevokeAllResponse.class);
         public record SessionListRequest() implements SchemaTypes.GeneratedRequest {
         }
         public record SessionListResponse(List<HumanModels.Session> sessions) implements SchemaTypes.GeneratedResponse {
@@ -3097,7 +3103,7 @@ public final class GeneratedSchema {
             }
         }
         public static final SchemaTypes.TypedOperation<SessionListRequest, SessionListResponse> SESSION_LIST = new SchemaTypes.TypedOperation<>(OperationCatalog.Plane.HUMAN, "session.list", false, SessionListRequest.class, SessionListResponse.class);
-        public record SessionOpenRequest(String assertion_id) implements SchemaTypes.GeneratedRequest {
+        public record SessionOpenRequest(String assertion_id, HumanModels.SessionDevice device) implements SchemaTypes.GeneratedRequest {
             public SessionOpenRequest {
                 Objects.requireNonNull(assertion_id, "assertion_id");
             }
@@ -3110,7 +3116,7 @@ public final class GeneratedSchema {
                 Objects.requireNonNull(last_active_at, "last_active_at");
             }
         }
-        public static final SchemaTypes.TypedOperation<SessionOpenRequest, SessionOpenResponse> SESSION_OPEN = new SchemaTypes.TypedOperation<>(OperationCatalog.Plane.HUMAN, "session.open", false, SessionOpenRequest.class, SessionOpenResponse.class);
+        public static final SchemaTypes.TypedOperation<SessionOpenRequest, SessionOpenResponse> SESSION_OPEN = new SchemaTypes.TypedOperation<>(OperationCatalog.Plane.HUMAN, "session.open", true, SessionOpenRequest.class, SessionOpenResponse.class);
         public record SessionRefreshRequest() implements SchemaTypes.GeneratedRequest {
         }
         public record SessionRefreshResponse(String session_id, HumanModels.Device device, String opened_at, String last_active_at, boolean current) implements SchemaTypes.GeneratedResponse {
@@ -3130,7 +3136,7 @@ public final class GeneratedSchema {
                 Objects.requireNonNull(revoked_at, "revoked_at");
             }
         }
-        public static final SchemaTypes.TypedOperation<SessionRevokeRequest, SessionRevokeResponse> SESSION_REVOKE = new SchemaTypes.TypedOperation<>(OperationCatalog.Plane.HUMAN, "session.revoke", false, SessionRevokeRequest.class, SessionRevokeResponse.class);
+        public static final SchemaTypes.TypedOperation<SessionRevokeRequest, SessionRevokeResponse> SESSION_REVOKE = new SchemaTypes.TypedOperation<>(OperationCatalog.Plane.HUMAN, "session.revoke", true, SessionRevokeRequest.class, SessionRevokeResponse.class);
         public record SessionRevokeAllRequest() implements SchemaTypes.GeneratedRequest {
         }
         public record SessionRevokeAllResponse(List<String> revoked_session_ids, String revoked_at) implements SchemaTypes.GeneratedResponse {
@@ -3139,7 +3145,7 @@ public final class GeneratedSchema {
                 Objects.requireNonNull(revoked_at, "revoked_at");
             }
         }
-        public static final SchemaTypes.TypedOperation<SessionRevokeAllRequest, SessionRevokeAllResponse> SESSION_REVOKE_ALL = new SchemaTypes.TypedOperation<>(OperationCatalog.Plane.HUMAN, "session.revoke-all", false, SessionRevokeAllRequest.class, SessionRevokeAllResponse.class);
+        public static final SchemaTypes.TypedOperation<SessionRevokeAllRequest, SessionRevokeAllResponse> SESSION_REVOKE_ALL = new SchemaTypes.TypedOperation<>(OperationCatalog.Plane.HUMAN, "session.revoke-all", true, SessionRevokeAllRequest.class, SessionRevokeAllResponse.class);
         public record StepupBeginRequest(String confirms) implements SchemaTypes.GeneratedRequest {
             public StepupBeginRequest {
                 Objects.requireNonNull(confirms, "confirms");

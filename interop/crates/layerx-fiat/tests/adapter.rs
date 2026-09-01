@@ -1,8 +1,8 @@
 use ed25519_dalek::{Signer as _, SigningKey};
 use layerx_fiat::{
-    EvidenceClass, ExternalId, FiatAdapter, FiatError, FiatIntent, 
+    EvidenceClass, ExecutedFiatOutcome, ExternalId, FiatAdapter, FiatError, FiatIntent,
     FiatJourneyState, FiatPlane, FiatPlaneResult, FiatRail, PlaneFiatOutcome, ProviderEvidence,
-    ProviderVerifier, TokenReference, VerifiedProviderFacts, ExecutedFiatOutcome,
+    ProviderVerifier, TokenReference, VerifiedProviderFacts,
 };
 use layerx_interop_gateway::adapter::{
     AdapterDescriptor, AdapterId, ConformanceSuite, PinnedSpec, SpecVersion,
@@ -39,7 +39,13 @@ struct ReceiptMaterial {
     authorised_batch: AuthorizedBatch,
 }
 
-fn signed_receipt(sequence: u64, idempotency_key: [u8; 32], amount: u128, from: [u8; 32], to: [u8; 32]) -> ReceiptMaterial {
+fn signed_receipt(
+    sequence: u64,
+    idempotency_key: [u8; 32],
+    amount: u128,
+    from: [u8; 32],
+    to: [u8; 32],
+) -> ReceiptMaterial {
     let activity_id: [u8; 32] = Sha256::digest(
         [
             b"fiat-adapter-activity/v1".as_slice(),
@@ -82,9 +88,9 @@ fn encode_receipt(fields: &ReceiptFields, signature: Option<[u8; 64]>) -> Vec<u8
     let from_before = 50_000_u128;
     let to_before = 10_000_u128;
     let mut bytes = Vec::new();
-    push_u16(&mut bytes, 1);
+    push_u16(&mut bytes, 2);
     push_u16(&mut bytes, 0x5201);
-    push_u16(&mut bytes, 1);
+    push_u16(&mut bytes, 2);
     push_bytes(&mut bytes, &fields.activity_id);
     push_u64(&mut bytes, fields.sequence);
     push_bytes(&mut bytes, &fields.previous_state_root);
@@ -201,10 +207,12 @@ impl FiatPlane for SandboxPlane {
     ) -> Result<FiatPlaneResult, FiatError> {
         match &self.intent_outcome {
             Ok(FiatPlaneResult::Open(outcome)) => Ok(FiatPlaneResult::Open(*outcome)),
-            Ok(FiatPlaneResult::Executed(executed)) => Ok(FiatPlaneResult::Executed(ExecutedFiatOutcome {
-                canonical_receipt: executed.canonical_receipt.clone(),
-                authorised_batch: executed.authorised_batch,
-            })),
+            Ok(FiatPlaneResult::Executed(executed)) => {
+                Ok(FiatPlaneResult::Executed(ExecutedFiatOutcome {
+                    canonical_receipt: executed.canonical_receipt.clone(),
+                    authorised_batch: executed.authorised_batch,
+                }))
+            }
             Err(error) => Err(*error),
         }
     }
@@ -241,11 +249,17 @@ fn evidence() -> ProviderEvidence {
 #[test]
 fn card_data_never_enters_layerx_components() {
     assert!(
-        matches!(TokenReference::new(Vec::new()), Err(FiatError::CardDataRefused)),
+        matches!(
+            TokenReference::new(Vec::new()),
+            Err(FiatError::CardDataRefused)
+        ),
         "empty token must be refused"
     );
     assert!(
-        matches!(TokenReference::new(vec![0; 513]), Err(FiatError::CardDataRefused)),
+        matches!(
+            TokenReference::new(vec![0; 513]),
+            Err(FiatError::CardDataRefused)
+        ),
         "oversized token must be refused"
     );
     assert!(
@@ -309,10 +323,7 @@ fn authorised_hold_requires_a_declared_hold_until() {
         NOW,
     )
     .unwrap_or_else(|error| panic!("authorised hold: {error}"));
-    assert_eq!(
-        state,
-        FiatJourneyState::AuthorisedHold { until: NOW + 300 }
-    );
+    assert_eq!(state, FiatJourneyState::AuthorisedHold { until: NOW + 300 });
 
     let no_hold = sandbox_verifier(EvidenceClass::Authorised, None);
     let refused = FiatAdapter::apply(
@@ -657,7 +668,10 @@ fn idempotency_binds_provider_settlement_to_exactly_one_outcome() {
         NOW + 10,
     )
     .unwrap_or_else(|error| panic!("replay: {error}"));
-    assert_eq!(first, replay, "replayed settlement must return the same outcome");
+    assert_eq!(
+        first, replay,
+        "replayed settlement must return the same outcome"
+    );
 }
 
 #[test]

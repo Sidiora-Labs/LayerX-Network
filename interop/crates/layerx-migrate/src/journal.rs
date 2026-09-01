@@ -1,10 +1,10 @@
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{ErrorKind, Write};
-use std::path::PathBuf;
 use std::os::unix::fs::{
     DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _,
 };
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -169,8 +169,8 @@ impl Journal {
         builder
             .create(&directory)
             .map_err(|_| MigrationError::Configuration)?;
-        let directory_metadata = fs::symlink_metadata(&directory)
-            .map_err(|_| MigrationError::Configuration)?;
+        let directory_metadata =
+            fs::symlink_metadata(&directory).map_err(|_| MigrationError::Configuration)?;
         if !directory_metadata.file_type().is_dir()
             || directory_metadata.permissions().mode() & 0o077 != 0
             || directory_metadata.uid() != key_metadata.uid()
@@ -453,9 +453,7 @@ impl Journal {
     fn load(&self) -> Result<State, MigrationError> {
         let directory_metadata = fs::symlink_metadata(&self.directory)
             .map_err(|_| MigrationError::CheckpointIntegrity)?;
-        if !private_directory(&directory_metadata)
-            || !canonical_direct_path(&self.directory)
-        {
+        if !private_directory(&directory_metadata) || !canonical_direct_path(&self.directory) {
             return Err(MigrationError::CheckpointIntegrity);
         }
         let owner = directory_metadata.uid();
@@ -949,8 +947,7 @@ mod storage_tests {
             .expect("namespace entries")
             .find_map(|entry| {
                 let entry = entry.ok()?;
-                (entry.file_name().to_str() == Some("00000000000000000001.seal"))
-                    .then_some(entry)
+                (entry.file_name().to_str() == Some("00000000000000000001.seal")).then_some(entry)
             })
             .expect("seal symlink entry");
         assert_eq!(private_file(&entry, owner), Ok(false));

@@ -39,8 +39,11 @@ fn fields(result_code: i32) -> Fields {
 fn encode_fields(fields: &Fields, signature: Option<[u8; 64]>) -> Vec<u8> {
     let successful = fields.result_code == 0;
     let mut encoder = Encoder::new(4096);
-    assert_eq!(encoder.structure_header(0x5201), Ok(()));
-    assert_eq!(encoder.u16(1), Ok(()));
+    assert_eq!(
+        encoder.structure_header_version(0x5201, layerx_wire::limits::PROTOCOL_VERSION),
+        Ok(())
+    );
+    assert_eq!(encoder.u16(layerx_wire::limits::PROTOCOL_VERSION), Ok(()));
     assert_eq!(encoder.bytes(&fields.activity_id, 32), Ok(()));
     assert_eq!(encoder.u64(fields.global_sequence), Ok(()));
     assert_eq!(encoder.bytes(&fields.previous_state_root, 32), Ok(()));

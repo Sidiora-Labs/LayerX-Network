@@ -191,13 +191,7 @@ pub fn resolve_unknown<B: ReceiptLookup>(
                 "verified failure receipt found by idempotency key",
             )
         };
-        outbox.transition(
-            store,
-            submission_id,
-            state,
-            cause,
-            Some(verified_receipt),
-        )?;
+        outbox.transition(store, submission_id, state, cause, Some(verified_receipt))?;
         store.remove_local(&key)?;
         return Ok(UnknownResolution {
             state,

@@ -605,7 +605,8 @@ static lxp_result value_account_fill(
     (void)memset(view, 0, sizeof(*view));
     view->binding = *binding;
     view->account = *account;
-    view->balance = account->balance;
+    view->balance.hi = account->balance.hi;
+    view->balance.lo = account->balance.lo;
     view->frozen = account->frozen;
     if (ctx->kernel->state->next_sequence == 0U)
         return LXP_FATAL_INVARIANT;

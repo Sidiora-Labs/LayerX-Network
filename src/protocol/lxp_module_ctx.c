@@ -1,4 +1,5 @@
 #include "layerx/lxp_kernel.h"
+#include "layerx/lx_asset.h"
 #include "layerx/lxp_transfer.h"
 #include "layerx/lxp_crypto.h"
 #include "layerx/lxp_hash.h"
@@ -36,6 +37,8 @@ struct lxp_prepared_module_transition {
     uint64_t gas_used;
     lxp_effect_buffer effects;
     lxp_program_outcome program_outcome;
+    lxp_ledger_receipt_input ledger_receipt;
+    bool ledger_receipt_present;
     lxp_module_kv_change staged[LXP_MODULE_MAX_STAGED_WRITES];
     bool kv_existed[LXP_MODULE_MAX_STAGED_WRITES];
     uint32_t kv_before_length[LXP_MODULE_MAX_STAGED_WRITES];
@@ -465,6 +468,8 @@ lxp_result lxp_module_ctx_commit(lxp_module_ctx *ctx)
         }
     }
     ctx->staged_blob_count = 0U;
+    (void)memset(&ctx->ledger_receipt, 0, sizeof(ctx->ledger_receipt));
+    ctx->ledger_receipt_present = false;
     ctx->staged_count = 0U;
     ctx->staged_account_count = 0U;
     ctx->transfer_snapshot_count = 0U;
@@ -758,6 +763,8 @@ void lxp_module_ctx_rollback(lxp_module_ctx *ctx)
     for (i = 0U; i < ctx->staged_blob_count; ++i)
         free(ctx->staged_blobs[i].bytes);
     ctx->staged_blob_count = 0U;
+    (void)memset(&ctx->ledger_receipt, 0, sizeof(ctx->ledger_receipt));
+    ctx->ledger_receipt_present = false;
     if (ctx->activity_state_release != NULL)
         ctx->activity_state_release(ctx->activity_state);
     ctx->activity_state = NULL;
@@ -1079,6 +1086,83 @@ lxp_result lxp_ctx_emit_transfer_set(lxp_module_ctx *ctx,
     return emit_transfer_set(ctx, set, receipt, false);
 }
 
+lxp_result lxp_ctx_emit_monetary_transfer_set(lxp_module_ctx *ctx,
+                                              const lxp_transfer_set *set,
+                                              lxp_receipt *receipt)
+{
+    lxp_effect effect;
+    lxp_result status;
+    if (ctx == NULL || set == NULL || receipt == NULL || ctx->effects == NULL)
+        return LXP_ERR_NON_CANONICAL;
+    status = emit_transfer_set(ctx, set, receipt, false);
+    if (status != LXP_OK) return status;
+    if (ctx->next_effect_ordinal == UINT16_MAX) {
+        restore_transfer_snapshots(ctx);
+        return LXP_ERR_OVERFLOW;
+    }
+    (void)memset(&effect, 0, sizeof(effect));
+    effect.module_id = ctx->module_id;
+    effect.ordinal = ctx->next_effect_ordinal;
+    effect.kind = LXP_EFFECT_TRANSFER;
+    effect.monetary = true;
+    (void)memcpy(effect.transfer_set_root, receipt->transfer_set_root, 32U);
+    status = lxp_effect_buffer_add(ctx->effects, &effect);
+    if (status != LXP_OK) {
+        restore_transfer_snapshots(ctx);
+        return status;
+    }
+    ++ctx->next_effect_ordinal;
+    return LXP_OK;
+}
+
+lxp_result lxp_ctx_bind_ledger_receipt(
+    lxp_module_ctx *ctx, const lxp_ledger_receipt_input *input)
+{
+    lxp_u128 expected_from;
+    lxp_u128 expected_to;
+    size_t index;
+    size_t matching_effects = 0U;
+    if (ctx == NULL || input == NULL || !ctx->mutable ||
+        ctx->module_id != LXP_MODULE_ASSET || !ctx->transfer_applied ||
+        ctx->ledger_receipt_present ||
+        input->operation !=
+            (uint8_t)lxp_activity_type_ordinal(LX_ASSET_SEND) ||
+        lxp_u128_is_zero(input->amount) ||
+        input->leg_count != 1U || input->global_sequence != ctx->global_sequence ||
+        input->timestamp != lxp_ctx_batch_timestamp_ms(ctx) ||
+        memcmp(input->transaction_id, ctx->activity_id, 32U) != 0 ||
+        lxp_ct_is_zero(input->asset, 32U) ||
+        lxp_ct_is_zero(input->from, 32U) || lxp_ct_is_zero(input->to, 32U) ||
+        lxp_ct_memcmp(input->from, input->to, 32U) == 0 ||
+        lxp_ct_is_zero(input->transfer_set_root, 32U) ||
+        lxp_ct_is_zero(input->authorization_hash, 32U) ||
+        lxp_ct_is_zero(input->context_hash, 32U) ||
+        !lxp_ct_is_zero(input->previous_state_root, 32U) ||
+        !lxp_ct_is_zero(input->resulting_state_root, 32U) ||
+        !lxp_ct_is_zero(input->batch_id, 32U) ||
+        lxp_u128_sub(input->from_balance_before, input->amount,
+                     &expected_from) != LXP_OK ||
+        lxp_u128_add(input->to_balance_before, input->amount,
+                     &expected_to) != LXP_OK ||
+        lxp_u128_cmp(expected_from, input->from_balance_after) != 0 ||
+        lxp_u128_cmp(expected_to, input->to_balance_after) != 0)
+        return LXP_ERR_NON_CANONICAL;
+    if (ctx->effects == NULL || ctx->effects->count != 1U)
+        return LXP_FATAL_INVARIANT;
+    for (index = 0U; index < ctx->effects->count; ++index) {
+        const lxp_effect *effect = &ctx->effects->effects[index];
+        if (effect->module_id == ctx->module_id && effect->monetary &&
+            effect->kind == LXP_EFFECT_TRANSFER &&
+            lxp_ct_memcmp(effect->transfer_set_root,
+                          input->transfer_set_root, 32U) == 0)
+            ++matching_effects;
+    }
+    if (matching_effects != 1U) return LXP_FATAL_INVARIANT;
+    ctx->ledger_receipt = *input;
+    ctx->ledger_receipt_present = true;
+    return LXP_OK;
+}
+
 void lxp_prepared_module_transition_destroy(
     lxp_prepared_module_transition *prepared)
 {
@@ -1134,6 +1218,8 @@ lxp_result lxp_module_ctx_export_prepared(
     result->gas_used = ctx->gas_used;
     result->effects = *effects;
     result->program_outcome = ctx->program_outcome;
+    result->ledger_receipt = ctx->ledger_receipt;
+    result->ledger_receipt_present = ctx->ledger_receipt_present;
     result->staged_count = ctx->staged_count;
     (void)memcpy(result->staged, ctx->staged,
                  ctx->staged_count * sizeof(ctx->staged[0]));
@@ -1289,7 +1375,8 @@ lxp_result lxp_module_ctx_import_prepared(
         lxp_module_account_snapshot *snapshot =
             &ctx->transfer_snapshots[ctx->transfer_snapshot_count++];
         snapshot->account = accounts[i];
-        snapshot->balance = accounts[i]->balance;
+        snapshot->balance.hi = accounts[i]->balance.hi;
+        snapshot->balance.lo = accounts[i]->balance.lo;
         (void)memcpy(snapshot->asset_id, accounts[i]->asset_id, 32U);
         snapshot->has_asset = accounts[i]->has_asset;
         snapshot->next_sequence = accounts[i]->next_sequence;
@@ -1303,6 +1390,8 @@ lxp_result lxp_module_ctx_import_prepared(
     ctx->staged_blob_count = prepared->blob_count;
     ctx->gas_used = prepared->gas_used;
     ctx->program_outcome = prepared->program_outcome;
+    ctx->ledger_receipt = prepared->ledger_receipt;
+    ctx->ledger_receipt_present = prepared->ledger_receipt_present;
     {
         lxp_result status = lxp_module_ctx_prepare_commit(ctx);
         if (status != LXP_OK) {

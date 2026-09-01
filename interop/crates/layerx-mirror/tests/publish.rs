@@ -29,7 +29,7 @@ use layerx_wire::encode::Encoder;
 use layerx_wire::hash::{availability_chunk_digest, batch_header_digest};
 
 const NETWORK_ID: u32 = 42;
-const PROTOCOL_VERSION: u16 = 1;
+const PROTOCOL_VERSION: u16 = layerx_wire::limits::PROTOCOL_VERSION;
 const REQUIRED_CONFIRMATIONS: u64 = 3;
 const REQUIRED_ROOTED_SLOTS: u64 = 32;
 
@@ -85,7 +85,10 @@ fn record_roots(records: &RecordSet) -> RootCommitments {
 
 fn header_bytes(batch_number: u64, availability_root: [u8; 32], roots: RootCommitments) -> Vec<u8> {
     let mut encoder = Encoder::new(354);
-    assert_eq!(encoder.structure_header(0x1701), Ok(()));
+    assert_eq!(
+        encoder.structure_header_version(0x1701, PROTOCOL_VERSION),
+        Ok(())
+    );
     assert_eq!(encoder.u8(15), Ok(()));
     assert_eq!(encoder.tag(1, 15), Ok(()));
     assert_eq!(encoder.u16(PROTOCOL_VERSION), Ok(()));

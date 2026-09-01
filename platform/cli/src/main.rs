@@ -262,23 +262,36 @@ enum ProgramCommand {
         capabilities: Vec<String>,
         #[arg(long)]
         idempotency_key: String,
-        #[arg(long)] key: Option<String>,
-        #[arg(long)] account_sequence: u64,
-        #[arg(long)] not_before_ms: u64,
-        #[arg(long)] expires_at_ms: u64,
+        #[arg(long)]
+        key: Option<String>,
+        #[arg(long)]
+        account_sequence: u64,
+        #[arg(long)]
+        not_before_ms: u64,
+        #[arg(long)]
+        expires_at_ms: u64,
     },
     /// Execute a program call against current state without committing it.
     Simulate {
         program_id: String,
-        #[arg(long)] calldata: Option<String>,
-        #[arg(long)] fuel: u64,
-        #[arg(long, default_value = "0")] fee_limit: String,
-        #[arg(long = "capability")] capabilities: Vec<String>,
-        #[arg(long)] idempotency_key: String,
-        #[arg(long)] key: Option<String>,
-        #[arg(long)] account_sequence: u64,
-        #[arg(long)] not_before_ms: u64,
-        #[arg(long)] expires_at_ms: u64,
+        #[arg(long)]
+        calldata: Option<String>,
+        #[arg(long)]
+        fuel: u64,
+        #[arg(long, default_value = "0")]
+        fee_limit: String,
+        #[arg(long = "capability")]
+        capabilities: Vec<String>,
+        #[arg(long)]
+        idempotency_key: String,
+        #[arg(long)]
+        key: Option<String>,
+        #[arg(long)]
+        account_sequence: u64,
+        #[arg(long)]
+        not_before_ms: u64,
+        #[arg(long)]
+        expires_at_ms: u64,
     },
     /// Read the protocol registry or submit source-verification material.
     #[command(subcommand)]
@@ -287,11 +300,15 @@ enum ProgramCommand {
 
 #[derive(Subcommand)]
 enum ProgramInterfaceCommand {
-    Get { program_id: String },
+    Get {
+        program_id: String,
+    },
     Publish {
         program_id: String,
-        #[arg(long)] interface: PathBuf,
-        #[arg(long)] idempotency_key: String,
+        #[arg(long)]
+        interface: PathBuf,
+        #[arg(long)]
+        idempotency_key: String,
     },
 }
 
@@ -653,12 +670,17 @@ fn environment(command: EnvironmentCommand) -> Result<CommandOutput, String> {
             sequencer_trust_anchor,
         } => {
             Configuration::validate_environment_name(&name)?;
-            if endpoint.is_some() != network_id.is_some() || endpoint.is_some() != sequencer_trust_anchor.is_some() {
+            if endpoint.is_some() != network_id.is_some()
+                || endpoint.is_some() != sequencer_trust_anchor.is_some()
+            {
                 return Err("--endpoint, --network-id and --sequencer-trust-anchor must be supplied together".into());
             }
-            if let (Some(endpoint), Some(network_id), Some(sequencer_trust_anchor)) = (endpoint, network_id, sequencer_trust_anchor) {
+            if let (Some(endpoint), Some(network_id), Some(sequencer_trust_anchor)) =
+                (endpoint, network_id, sequencer_trust_anchor)
+            {
                 validate_endpoint(&endpoint)?;
-                let _: [u8; 32] = crate::encoding::fixed_hex("sequencer trust anchor", &sequencer_trust_anchor)?;
+                let _: [u8; 32] =
+                    crate::encoding::fixed_hex("sequencer trust anchor", &sequencer_trust_anchor)?;
                 if network_id == 0 {
                     return Err("network id zero is reserved".into());
                 }
@@ -897,14 +919,35 @@ fn program(command: ProgramCommand) -> Result<CommandOutput, String> {
         ProgramCommand::Discover { program_id } => {
             let configuration = Configuration::load()?;
             let (environment, client) = active_client(&configuration)?;
-            Ok(CommandOutput::new("program.discovered", format!("Discovered program {program_id} on {environment}"), programs::discover(&client, &program_id)?))
+            Ok(CommandOutput::new(
+                "program.discovered",
+                format!("Discovered program {program_id} on {environment}"),
+                programs::discover(&client, &program_id)?,
+            ))
         }
         ProgramCommand::Interface(command) => {
             let configuration = Configuration::load()?;
             let (environment, client) = active_client(&configuration)?;
             match command {
-                ProgramInterfaceCommand::Get { program_id } => Ok(CommandOutput::new("program.interface_read", format!("Read program interface for {program_id} on {environment}"), programs::interface_get(&client, &program_id)?)),
-                ProgramInterfaceCommand::Publish { program_id, interface, idempotency_key } => Ok(CommandOutput::new("program.interface_published", format!("Published program interface for {program_id} on {environment}"), programs::interface_publish(&client, &program_id, &interface, &idempotency_key)?)),
+                ProgramInterfaceCommand::Get { program_id } => Ok(CommandOutput::new(
+                    "program.interface_read",
+                    format!("Read program interface for {program_id} on {environment}"),
+                    programs::interface_get(&client, &program_id)?,
+                )),
+                ProgramInterfaceCommand::Publish {
+                    program_id,
+                    interface,
+                    idempotency_key,
+                } => Ok(CommandOutput::new(
+                    "program.interface_published",
+                    format!("Published program interface for {program_id} on {environment}"),
+                    programs::interface_publish(
+                        &client,
+                        &program_id,
+                        &interface,
+                        &idempotency_key,
+                    )?,
+                )),
             }
         }
         ProgramCommand::Build {
@@ -915,7 +958,12 @@ fn program(command: ProgramCommand) -> Result<CommandOutput, String> {
             "Built and validated a deterministic LayerX program",
             programs::build(&manifest_path, artifact.as_deref())?,
         )),
-        ProgramCommand::Bindings { interface, digest, code_hash, output } => Ok(CommandOutput::new(
+        ProgramCommand::Bindings {
+            interface,
+            digest,
+            code_hash,
+            output,
+        } => Ok(CommandOutput::new(
             "program.bindings_generated",
             "Generated digest-bound program bindings",
             programs::program_bindings(&interface, &digest, &code_hash, &output)?,
@@ -956,7 +1004,12 @@ fn program(command: ProgramCommand) -> Result<CommandOutput, String> {
             let (environment, client) = active_client(&configuration)?;
             let (_, active) = configuration.active_environment()?;
             let key_name = serving_key(&configuration, key.as_deref())?;
-            let actor_did = configuration.keys.get(key_name).ok_or_else(|| format!("key {key_name} does not exist"))?.did.clone();
+            let actor_did = configuration
+                .keys
+                .get(key_name)
+                .ok_or_else(|| format!("key {key_name} does not exist"))?
+                .did
+                .clone();
             Ok(CommandOutput::new(
                 "program.call_started",
                 format!("Submitted program call to {environment}"),
@@ -981,19 +1034,39 @@ fn program(command: ProgramCommand) -> Result<CommandOutput, String> {
                 )?,
             ))
         }
-        ProgramCommand::Simulate { program_id, calldata, fuel, fee_limit, capabilities, idempotency_key, key, account_sequence, not_before_ms, expires_at_ms } => {
+        ProgramCommand::Simulate {
+            program_id,
+            calldata,
+            fuel,
+            fee_limit,
+            capabilities,
+            idempotency_key,
+            key,
+            account_sequence,
+            not_before_ms,
+            expires_at_ms,
+        } => {
             let configuration = Configuration::load()?;
             let (environment, client) = active_client(&configuration)?;
             let (_, active) = configuration.active_environment()?;
             let key_name = serving_key(&configuration, key.as_deref())?;
-            let actor_did = configuration.keys.get(key_name).ok_or_else(|| format!("key {key_name} does not exist"))?.did.clone();
+            let actor_did = configuration
+                .keys
+                .get(key_name)
+                .ok_or_else(|| format!("key {key_name} does not exist"))?
+                .did
+                .clone();
             Ok(CommandOutput::new("program.call_simulated", format!("Simulated program call on {environment}"), programs::simulate(&client, &programs::CallRequest { program_id: &program_id, calldata: calldata.as_deref().unwrap_or(""), fuel, fee_limit: &fee_limit, capabilities: &capabilities, idempotency_key: &idempotency_key, network_id: active.network_id, actor_did: &actor_did, key_name, account_sequence, not_before_ms, expires_at_ms, sequencer_public_key: active.sequencer_trust_anchor.as_deref().ok_or_else(|| format!("environment {environment} has no configured sequencer trust anchor"))? })?))
         }
         ProgramCommand::Registry(command) => {
             let configuration = Configuration::load()?;
             let (environment, client) = active_client(&configuration)?;
             match command {
-                RegistryCommand::List => Ok(CommandOutput::new("program.registry_list", format!("Listed programs on {environment}"), programs::registry_list(&client)?)),
+                RegistryCommand::List => Ok(CommandOutput::new(
+                    "program.registry_list",
+                    format!("Listed programs on {environment}"),
+                    programs::registry_list(&client)?,
+                )),
                 RegistryCommand::Get { program_id } => Ok(CommandOutput::new(
                     "program.registry_read",
                     format!("Read program {program_id} from {environment}"),
@@ -1057,7 +1130,10 @@ fn emulator_arguments(command: EmulatorCommand) -> Vec<String> {
     if let Some(value) = time_ms {
         arguments.extend(["--time-ms".into(), value.to_string()]);
     }
-    arguments.extend(["--sequencer-seed-file".into(), sequencer_seed_file.display().to_string()]);
+    arguments.extend([
+        "--sequencer-seed-file".into(),
+        sequencer_seed_file.display().to_string(),
+    ]);
     for value in prefund {
         arguments.extend(["--prefund".into(), value]);
     }

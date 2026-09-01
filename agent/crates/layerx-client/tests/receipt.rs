@@ -21,6 +21,7 @@ use layerx_types::verify::VerificationLevel;
 use layerx_wire::activity::decode_signed;
 use layerx_wire::encode::Encoder;
 use layerx_wire::hash::{activity_id, receipt_digest, Domain};
+use layerx_wire::limits::PROTOCOL_VERSION;
 
 static NEXT_SOCKET: AtomicU64 = AtomicU64::new(1);
 const IDEMPOTENCY_KEY: [u8; 32] = [0x81; 32];
@@ -70,7 +71,7 @@ fn registry() -> ModuleRegistry {
 
 fn activity_fields(encoder: &mut Encoder, public_key: &[u8; 32]) {
     assert!(encoder.tag(1, 12).is_ok());
-    assert!(encoder.u16(1).is_ok());
+    assert!(encoder.u16(PROTOCOL_VERSION).is_ok());
     assert!(encoder.tag(2, 12).is_ok());
     assert!(encoder.u32(77).is_ok());
     assert!(encoder.tag(3, 12).is_ok());
@@ -98,17 +99,22 @@ fn signed_activity() -> (Vec<u8>, [u8; 32], [u8; 32]) {
     let key = SigningKey::from_bytes(&[0x31; 32]);
     let public_key = key.verifying_key().to_bytes();
     let mut unsigned = Encoder::new(4096);
-    assert!(unsigned.structure_header(0x1001).is_ok());
+    assert!(unsigned
+        .structure_header_version(0x1001, PROTOCOL_VERSION)
+        .is_ok());
     assert!(unsigned.u8(11).is_ok());
     activity_fields(&mut unsigned, &public_key);
     let unsigned = unsigned.finish();
-    let message = match SignatureMessage::new(Domain::SignaturePreimage, 1, 77, &unsigned) {
-        Ok(message) => message,
-        Err(error) => panic!("signature scope rejected: {error:?}"),
-    };
+    let message =
+        match SignatureMessage::new(Domain::SignaturePreimage, PROTOCOL_VERSION, 77, &unsigned) {
+            Ok(message) => message,
+            Err(error) => panic!("signature scope rejected: {error:?}"),
+        };
     let signature = key.sign(&message.digest()).to_bytes();
     let mut signed = Encoder::new(4096);
-    assert!(signed.structure_header(0x1001).is_ok());
+    assert!(signed
+        .structure_header_version(0x1001, PROTOCOL_VERSION)
+        .is_ok());
     assert!(signed.u8(12).is_ok());
     activity_fields(&mut signed, &public_key);
     assert!(signed.tag(12, 12).is_ok());
@@ -129,8 +135,10 @@ fn receipt(activity_identifier: [u8; 32]) -> (Vec<u8>, AuthorizedBatch) {
     let key = SigningKey::from_bytes(&[0x63; 32]);
     let encode = |signature: Option<[u8; 64]>| {
         let mut encoder = Encoder::new(4096);
-        assert!(encoder.structure_header(0x5201).is_ok());
-        assert!(encoder.u16(1).is_ok());
+        assert!(encoder
+            .structure_header_version(0x5201, PROTOCOL_VERSION)
+            .is_ok());
+        assert!(encoder.u16(PROTOCOL_VERSION).is_ok());
         assert!(encoder.bytes(&activity_identifier, 32).is_ok());
         assert!(encoder.u64(9).is_ok());
         assert!(encoder.bytes(&[2; 32], 32).is_ok());
@@ -253,7 +261,7 @@ fn unknown(socket: &SocketPath, signed: &[u8], public_key: [u8; 32]) -> Unknown 
     };
     let context = SubmissionContext {
         interface_version: Version::V1_0,
-        protocol_version: 1,
+        protocol_version: PROTOCOL_VERSION,
         network_id: 77,
         correlation_id: 1,
         signer_public_key: public_key,

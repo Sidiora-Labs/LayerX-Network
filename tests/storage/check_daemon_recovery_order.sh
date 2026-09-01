@@ -17,12 +17,12 @@ line_of() {
     printf '%s\n' "$line"
 }
 
-canonical_open=$(line_of '"LAYERX_NODE_CANONICAL_LOG"' "$process")
+canonical_open=$(line_of '&process->canonical_log, "LAYERX_NODE_CANONICAL_LOG"' "$process")
 canonical_recover=$(line_of 'status = lxp_log_recover(&process->canonical_log' "$process")
-authority_open=$(line_of '"LAYERX_NODE_RECEIPT_AUTHORITY_LOG"' "$process")
-batch_open=$(line_of '"LAYERX_NODE_BATCH_LOG"' "$process")
+authority_open=$(line_of '&process->authority_log, "LAYERX_NODE_RECEIPT_AUTHORITY_LOG"' "$process")
+batch_open=$(line_of '&process->batch_log, "LAYERX_NODE_BATCH_LOG"' "$process")
 batch_recover=$(line_of 'status = lxp_log_recover_complete_records(' "$process")
-evidence_open=$(line_of '"LAYERX_NODE_EVIDENCE_LOG"' "$process")
+evidence_open=$(line_of '&process->evidence_log, "LAYERX_NODE_EVIDENCE_LOG"' "$process")
 distinct_logs=$(line_of 'status = require_distinct_logs(logs, 5U);' "$process")
 evidence_component=$(line_of 'status = lxp_daemon_evidence_open(' "$process")
 history_open=$(line_of 'status = lxp_history_open(' "$process")

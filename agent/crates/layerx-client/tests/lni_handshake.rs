@@ -4,11 +4,12 @@ use layerx_client::lni::handshake::{
 };
 use layerx_client::lni::schema::{Capability, Version};
 use layerx_types::error::LayerError;
+use layerx_wire::limits::PROTOCOL_VERSION;
 
 fn config(version: Version) -> HandshakeConfig {
     HandshakeConfig {
         built_interface_version: version,
-        expected_protocol_version: 1,
+        expected_protocol_version: PROTOCOL_VERSION,
         expected_network_id: 42,
     }
 }
@@ -16,7 +17,7 @@ fn config(version: Version) -> HandshakeConfig {
 fn node(version: Version) -> NodeInfo {
     NodeInfo {
         interface_version: version,
-        protocol_version: 1,
+        protocol_version: PROTOCOL_VERSION,
         network_id: 42,
         role: NodeRole::Sequencer,
         chain_head_sequence: 900,
@@ -74,7 +75,7 @@ fn refuses_wrong_network_and_protocol_as_startup_failures() {
     assert_eq!(
         validate(wrong_protocol, &config(Version::V1_0), None),
         Err(HandshakeError::ProtocolVersion {
-            expected: 1,
+            expected: PROTOCOL_VERSION,
             peer: 7,
         })
     );

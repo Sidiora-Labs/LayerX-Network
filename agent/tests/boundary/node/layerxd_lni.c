@@ -210,20 +210,12 @@ static int sign_raw(
     return ok ? 0 : 1;
 }
 
-static lxp_result genesis_checkpoint_id(
-    uint32_t network_id, const uint8_t state_root[32], uint8_t output[32])
-{
-    uint8_t preimage[36];
-    store_u32(preimage, network_id);
-    (void)memcpy(preimage + 4U, state_root, 32U);
-    return lxp_hash_domain(
-        LXP_DOMAIN_CHECKPOINT_CERTIFICATE,
-        preimage, sizeof(preimage), output);
-}
-
 static int write_genesis(const char *path)
 {
     static const uint8_t private_key[32] = {7U};
+    static const uint8_t parameter_version_key[32] = {
+        'p','a','r','a','m','e','t','e','r','-','v','e','r','s','i','o','n'
+    };
     static uint8_t arena_storage[ARENA_BYTES];
     static lxp_genesis_manifest manifest;
     lxp_arena arena;
@@ -239,17 +231,14 @@ static int write_genesis(const char *path)
     manifest.network_id = 77U;
     manifest.genesis_timestamp_ms = UINT64_C(1700000000000);
     manifest.parameter_count = 1U;
-    manifest.parameters[0].module_id = 1U;
-    manifest.parameters[0].key[0] = 1U;
-    manifest.parameters[0].value[0] = 1U;
+    manifest.parameters[0].module_id = LXP_MODULE_GOVERNANCE;
+    (void)memcpy(manifest.parameters[0].key, parameter_version_key,
+                 sizeof(parameter_version_key));
+    manifest.parameters[0].value[31] = 1U;
     manifest.guarantor_count = 1U;
     manifest.guarantors[0].guarantor_id[0] = 1U;
     manifest.guarantors[0].public_key[0] = 2U;
-    manifest.guarantors[0].bond = (lxp_u128){0U, 100U};
-    manifest.account_count = 1U;
-    manifest.accounts[0].account_id[0] = 1U;
-    manifest.accounts[0].asset_id[0] = 1U;
-    manifest.accounts[0].balance = (lxp_u128){0U, 1000U};
+    manifest.guarantors[0].bond = (lxp_u128){0U, 0U};
     (void)memset(&metering, 0, sizeof(metering));
     metering.version = 1U;
     metering.coefficients[0] = 1U;
@@ -275,6 +264,8 @@ static int write_genesis(const char *path)
     fee_genesis.minimum_fee_units_per_occupancy_byte_batch = 1U;
     fee_genesis.maximum_fee_units_per_occupancy_byte_batch = 1000U;
     if (public_key_for(private_key, manifest.signer_public_key) != 0 ||
+        lxp_genesis_fresh_empty_accounts(
+            &manifest, fee_genesis.occupancy_asset_id) != LXP_OK ||
         lxp_hash_payload(
             manifest.signer_public_key, 32U,
             metering.authority_digest) != LXP_OK ||
@@ -284,9 +275,9 @@ static int write_genesis(const char *path)
             &manifest, &fee_genesis) != LXP_OK ||
         lxp_genesis_state_root(
             &manifest, &arena, manifest.genesis_state_root) != LXP_OK ||
-        genesis_checkpoint_id(
+        lxp_genesis_receipt_state_root(
             manifest.network_id, manifest.genesis_state_root,
-            manifest.paxeer_genesis_checkpoint_id) != LXP_OK ||
+            manifest.genesis_receipt_state_root) != LXP_OK ||
         lxp_genesis_encode(
             &manifest, false, &arena, &preimage) != LXP_OK ||
         sign_raw(private_key, preimage.bytes, preimage.length,
@@ -307,7 +298,7 @@ static int load_genesis(
     uint8_t *bytes;
     long size;
     FILE *file = fopen(path, "rb");
-    lxp_genesis_registration registration;
+    lxp_genesis_bootstrap_registration registration;
     bool enabled = false;
     if (file == NULL) {
         (void)fputs("boundary genesis open failed\n", stderr);
@@ -351,10 +342,10 @@ static int load_genesis(
     free(bytes);
     (void)memset(&registration, 0, sizeof(registration));
     registration.network_id = manifest->network_id;
-    (void)memcpy(registration.checkpoint_id,
-                 manifest->paxeer_genesis_checkpoint_id, 32U);
+    (void)memcpy(registration.settlement_anchor,
+                 manifest->genesis_receipt_state_root, 32U);
     (void)memcpy(registration.state_root,
-                 manifest->genesis_state_root, 32U);
+                 manifest->genesis_receipt_state_root, 32U);
     registration.finalised = true;
     if (lxp_genesis_accept(
             manifest, &registration, true, arena, &enabled) != LXP_OK ||
@@ -405,7 +396,7 @@ static int fixture_init(node_fixture *fixture, lxp_arena *arena)
     (void)memcpy(fixture->event, "EVENT", sizeof(fixture->event));
     fixture->sequencer_key[0] = 9U;
     (void)memset(&activity, 0, sizeof(activity));
-    activity.protocol_version = 1U;
+    activity.protocol_version = LXP_PROTOCOL_VERSION;
     activity.network_id = 77U;
     activity.activity_type = UINT32_C(0x00010001);
     activity.actor_did = (lxp_byte_span){actor, sizeof(actor)};
@@ -452,7 +443,7 @@ static int fixture_init(node_fixture *fixture, lxp_arena *arena)
             fixture->receipt_length, fixture->receipt_root) != LXP_OK ||
         lxp_arena_reset(arena, 0U) != LXP_OK) return 1;
     (void)memset(&header, 0, sizeof(header));
-    header.protocol_version = 1U;
+    header.protocol_version = LXP_PROTOCOL_VERSION;
     header.network_id = 77U;
     header.batch_number = 22U;
     header.first_sequence = 10U;
@@ -516,7 +507,7 @@ static size_t node_info_payload(
     size_t index;
     store_u16(output + cursor, 1U); cursor += 2U;
     store_u16(output + cursor, 1U); cursor += 2U;
-    store_u16(output + cursor, 1U); cursor += 2U;
+    store_u16(output + cursor, LXP_PROTOCOL_VERSION); cursor += 2U;
     store_u32(output + cursor, 77U); cursor += 4U;
     output[cursor++] = 1U;
     store_u64(output + cursor, mode == NODE_BEHIND ? 5U : 10U); cursor += 8U;

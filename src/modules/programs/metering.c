@@ -448,9 +448,8 @@ static lxp_result kernel_insert(
     return LXP_OK;
 }
 
-lxp_result lxp_programs_metering_genesis_project(
-    const lxp_genesis_manifest *manifest, lxp_arena *arena,
-    lxp_kernel *kernel)
+lxp_result lxp_programs_metering_genesis_materialize(
+    const lxp_genesis_manifest *manifest, lxp_kernel *kernel)
 {
     size_t index;
     const lxp_genesis_module_value *active = NULL;
@@ -458,10 +457,8 @@ lxp_result lxp_programs_metering_genesis_project(
     uint8_t history_v1_key[sizeof(metering_history_prefix) - 1U + 4U];
     uint8_t signer_digest[32];
     lxp_result status = LXP_OK;
-    if (manifest == NULL || arena == NULL || kernel == NULL)
+    if (manifest == NULL || kernel == NULL)
         return LXP_ERR_NON_CANONICAL;
-    status = lxp_genesis_verify_signature(manifest, arena);
-    if (status != LXP_OK) return status;
     status = lxp_programs_metering_genesis_validate(manifest);
     if (status != LXP_OK) return status;
     status = lxp_hash_payload(manifest->signer_public_key, 32U,
@@ -550,4 +547,16 @@ lxp_result lxp_programs_metering_genesis_project(
                                sizeof(history_v1_key),
                                history->value, history->value_length);
     return status;
+}
+
+lxp_result lxp_programs_metering_genesis_project(
+    const lxp_genesis_manifest *manifest, lxp_arena *arena,
+    lxp_kernel *kernel)
+{
+    lxp_result status;
+    if (manifest == NULL || arena == NULL || kernel == NULL)
+        return LXP_ERR_NON_CANONICAL;
+    status = lxp_genesis_verify_signature(manifest, arena);
+    return status == LXP_OK ?
+        lxp_programs_metering_genesis_materialize(manifest, kernel) : status;
 }

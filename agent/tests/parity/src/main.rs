@@ -242,7 +242,7 @@ fn connect_node(socket: &Path) -> Result<Uds, String> {
 fn node_config() -> HandshakeConfig {
     HandshakeConfig {
         built_interface_version: Version::V1_0,
-        expected_protocol_version: 1,
+        expected_protocol_version: layerx_wire::limits::PROTOCOL_VERSION,
         expected_network_id: 77,
     }
 }

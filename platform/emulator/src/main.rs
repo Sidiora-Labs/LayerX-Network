@@ -16,14 +16,18 @@ use ed25519_dalek::{Signer as _, SigningKey};
 use layerx_proof::program::{
     verify_program_execution, ProgramExecutionExpectation, VerifiedProgramExecution,
 };
+use layerx_proof::receipt::{verify as verify_receipt, AuthorizedBatch};
+use layerx_types::activity::{Authority, EnvelopeBuilder, Signature, TimestampBound};
 use layerx_types::amount::Amount;
+use layerx_types::ids::{Did, IdempotencyKey};
 use layerx_types::intent::{
     CallBudget, Calldata, CapabilityRequest, ProgramCall, ProgramCallFailure, ProgramCallOutcome,
     ProgramId, ProgramLegacyValue, RequestedCapabilities,
 };
-use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry};
-use layerx_wire::activity::decode_signed;
-use layerx_wire::hash::activity_id as derive_activity_id;
+use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry, Payload};
+use layerx_wire::activity::{decode_signed, encode_signed_envelope, encode_unsigned_envelope};
+use layerx_wire::encode::Encoder;
+use layerx_wire::hash::{activity_id as derive_activity_id, Domain};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use sha2::{Digest as _, Sha256};
@@ -42,11 +46,25 @@ const MAX_RECEIPTS: usize = 4096;
 const MAX_RECEIPT_BYTES: usize = 1024 * 1024;
 const MAX_CORE_SNAPSHOT_BYTES: usize = 24 * 1024 * 1024;
 const MAX_PROGRAM_OPERATIONS: usize = 4096;
+const MAX_MOVE_QUOTES: usize = 4096;
+const MAX_MOVE_OPERATIONS: usize = 4096;
+const MAX_EMULATOR_ACCOUNTS: usize = 512;
 const MAX_PROGRAM_RESPONSE_BYTES: usize = MAX_JSON_BYTES;
 const MAX_RETAINED_SIGNED_ACTIVITY_BYTES: usize = 1024 * 1024;
 const RECOVERY_SNAPSHOT_MAGIC: &[u8; 8] = b"LXEMR001";
-const RECOVERY_SNAPSHOT_VERSION: u32 = 1;
+const RECOVERY_SNAPSHOT_VERSION: u32 = 4;
 const RECOVERY_SNAPSHOT_DIGEST_DOMAIN: &[u8] = b"layerx-emulator-recovery-snapshot-v1\0";
+const MOVE_QUOTE_DOMAIN: &[u8] = b"layerx-emulator-move-quote-v1\0";
+const MOVE_IDEMPOTENCY_DOMAIN: &[u8] = b"layerx-emulator-move-idempotency-v1\0";
+const MOVE_JOURNEY_DOMAIN: &[u8] = b"layerx-emulator-move-journey-v1\0";
+const MOVE_STAGE_DOMAIN: &[u8] = b"layerx-emulator-move-stage-v1\0";
+const MOVE_QUOTE_WINDOW_MS: u64 = 300_000;
+const ASSET_SEND_OPERATION: u16 = 5;
+const ASSET_SEND_TAG: u16 = 0x5301;
+const ASSET_SEND_FIELDS: u16 = 10;
+const NATIVE_ASSET: [u8; 32] = [
+    1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+];
 
 #[repr(C)]
 struct CoreReceipt {
@@ -71,7 +89,8 @@ struct CoreReceipt {
 
 #[repr(C)]
 struct CoreState {
-    state_root: [u8; 32],
+    canonical_state_root: [u8; 32],
+    receipt_state_root: [u8; 32],
     next_sequence: c_ulonglong,
     batch_number: c_ulonglong,
     timestamp_ms: c_ulonglong,
@@ -151,6 +170,13 @@ unsafe extern "C" {
         name_length: *mut usize,
         balance_hi: *mut c_ulonglong,
         balance_lo: *mut c_ulonglong,
+        next_sequence: *mut c_ulonglong,
+    ) -> c_int;
+    fn platform_emulator_identity_sequence(
+        emulator: *const c_void,
+        did: *const c_uchar,
+        did_length: usize,
+        next_sequence: *mut c_ulonglong,
     ) -> c_int;
     fn platform_emulator_snapshot_export(
         emulator: *mut c_void,
@@ -167,10 +193,14 @@ unsafe extern "C" {
 struct Emulator {
     core: *mut c_void,
     signing_key: SigningKey,
+    network_id: u32,
     receipts: HashMap<String, String>,
     receipt_order: VecDeque<String>,
     program_operations: HashMap<String, ProgramOperation>,
     program_activity_operations: HashMap<String, String>,
+    accounts: HashMap<String, EmulatorAccount>,
+    move_quotes: HashMap<String, MoveQuoteRecord>,
+    move_operations: HashMap<String, MoveOperation>,
     trace: u64,
 }
 
@@ -179,6 +209,42 @@ struct ProgramOperation {
     activity_id: String,
     response: String,
     retained_signed_activity: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct EmulatorAccount {
+    id: [u8; 32],
+    did: String,
+    public_key: [u8; 32],
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct MoveQuoteRecord {
+    quote_id: String,
+    source: String,
+    destination: String,
+    source_id: [u8; 32],
+    destination_id: [u8; 32],
+    amount: u128,
+    currency: String,
+    created_at: u64,
+    expires_at: u64,
+    identity_sequence: u64,
+    source_sequence: u64,
+    committed_idempotency: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct MoveOperation {
+    quote_id: String,
+    status: u16,
+    body: String,
+}
+
+struct CoreAccountView {
+    id: [u8; 32],
+    balance: u128,
+    next_sequence: u64,
 }
 
 struct DecodedProgramActivity {
@@ -273,6 +339,27 @@ struct PrefundBody {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct MoveMoneyBody {
+    currency: String,
+    amount: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MoveQuoteBody {
+    source: String,
+    destination: String,
+    money: MoveMoneyBody,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MoveCommitBody {
+    quote_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct TimestampBody {
     timestamp_ms: u64,
 }
@@ -346,6 +433,258 @@ fn hex_decode(encoded: &str) -> Result<Vec<u8>, String> {
             Ok((high << 4) | low)
         })
         .collect()
+}
+
+fn hash_bytes(domain: &[u8], bytes: &[u8]) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(domain);
+    digest.update(bytes);
+    digest.finalize().into()
+}
+
+fn protocol_hash(domain: Domain, bytes: &[u8]) -> [u8; 32] {
+    hash_bytes(domain.tag(), bytes)
+}
+
+fn valid_human_idempotency(value: &str) -> bool {
+    (16..=128).contains(&value.len())
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+}
+
+fn account_did(account: &str) -> Option<&str> {
+    account
+        .strip_prefix("agent:")
+        .and_then(|value| value.strip_suffix(":main"))
+        .filter(|value| !value.is_empty())
+}
+
+fn timestamp_text(timestamp_ms: u64) -> Result<String, String> {
+    if timestamp_ms > 253_402_300_799_999 {
+        return Err("emulator timestamp is outside the RFC 3339 range".to_owned());
+    }
+    let seconds = timestamp_ms / 1_000;
+    let days = i64::try_from(seconds / 86_400)
+        .map_err(|_| "emulator timestamp day count is invalid".to_owned())?;
+    let second_of_day = seconds % 86_400;
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let day_of_era = z - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let mut year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_prime = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
+    let month = month_prime + if month_prime < 10 { 3 } else { -9 };
+    year += i64::from(month <= 2);
+    let hour = second_of_day / 3_600;
+    let minute = (second_of_day % 3_600) / 60;
+    let second = second_of_day % 60;
+    Ok(format!(
+        "{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{:03}Z",
+        timestamp_ms % 1_000
+    ))
+}
+
+fn core_account(emulator: &Emulator, expected_name: &str) -> Result<Option<CoreAccountView>, i32> {
+    let state = inspect_state(emulator)?;
+    for index in 0..state.account_count {
+        let mut id = [0_u8; 32];
+        let mut name = ptr::null();
+        let mut name_length = 0_usize;
+        let mut balance_hi = 0_u64;
+        let mut balance_lo = 0_u64;
+        let mut next_sequence = 0_u64;
+        let code = unsafe {
+            platform_emulator_account(
+                emulator.core,
+                index,
+                id.as_mut_ptr(),
+                &raw mut name,
+                &raw mut name_length,
+                &raw mut balance_hi,
+                &raw mut balance_lo,
+                &raw mut next_sequence,
+            )
+        };
+        if code != 0 {
+            return Err(code);
+        }
+        if name.is_null() || name_length == 0 {
+            return Err(-3);
+        }
+        let name = unsafe { slice::from_raw_parts(name, name_length) };
+        if name == expected_name.as_bytes() {
+            return Ok(Some(CoreAccountView {
+                id,
+                balance: (u128::from(balance_hi) << 64) | u128::from(balance_lo),
+                next_sequence,
+            }));
+        }
+    }
+    Ok(None)
+}
+
+fn core_identity_sequence(emulator: &Emulator, did: &str) -> Result<u64, i32> {
+    let mut next_sequence = 0_u64;
+    let code = unsafe {
+        platform_emulator_identity_sequence(
+            emulator.core,
+            did.as_ptr(),
+            did.len(),
+            &raw mut next_sequence,
+        )
+    };
+    if code == 0 {
+        Ok(next_sequence)
+    } else {
+        Err(code)
+    }
+}
+
+fn asset_send_registry() -> Result<(ActivityType, ModuleRegistry), String> {
+    let activity_type = ActivityType::new(ModuleId::Asset, ASSET_SEND_OPERATION)
+        .map_err(|_| "Asset SEND activity type is unavailable".to_owned())?;
+    let registration = ModuleRegistration::new(ModuleId::Asset, &[activity_type])
+        .map_err(|_| "Asset module registration is unavailable".to_owned())?;
+    let registry = ModuleRegistry::new(&[registration])
+        .map_err(|_| "Asset module registry is unavailable".to_owned())?;
+    Ok((activity_type, registry))
+}
+
+fn move_idempotency(value: &str) -> [u8; 32] {
+    hash_bytes(MOVE_IDEMPOTENCY_DOMAIN, value.as_bytes())
+}
+
+fn move_context(
+    source: &[u8; 32],
+    destination: &[u8; 32],
+    amount: u128,
+    idempotency: &[u8; 32],
+) -> [u8; 32] {
+    let mut bytes = Vec::with_capacity(144);
+    bytes.extend_from_slice(source);
+    bytes.extend_from_slice(destination);
+    bytes.extend_from_slice(&NATIVE_ASSET);
+    bytes.extend_from_slice(&amount.to_be_bytes());
+    bytes.extend_from_slice(idempotency);
+    protocol_hash(Domain::ContextHash, &bytes)
+}
+
+fn move_send_payload(
+    signing_key: &SigningKey,
+    quote: &MoveQuoteRecord,
+    idempotency: [u8; 32],
+    network_id: u32,
+) -> Result<(Vec<u8>, [u8; 32], [u8; 32]), String> {
+    let public_key = signing_key.verifying_key().to_bytes();
+    let context = move_context(
+        &quote.source_id,
+        &quote.destination_id,
+        quote.amount,
+        &idempotency,
+    );
+    let mut authorization = Encoder::new(512);
+    authorization
+        .u16(ASSET_SEND_TAG)
+        .and_then(|()| authorization.fixed(&quote.source_id))
+        .and_then(|()| authorization.fixed(&quote.destination_id))
+        .and_then(|()| authorization.fixed(&NATIVE_ASSET))
+        .and_then(|()| authorization.u128(quote.amount))
+        .and_then(|()| authorization.u64(quote.source_sequence))
+        .and_then(|()| authorization.fixed(&idempotency))
+        .and_then(|()| authorization.u64(quote.expires_at))
+        .and_then(|()| authorization.fixed(&context))
+        .and_then(|()| authorization.u8(0))
+        .and_then(|()| authorization.u8(1))
+        .and_then(|()| authorization.fixed(&quote.source_id))
+        .and_then(|()| authorization.fixed(&context))
+        .and_then(|()| authorization.u32(network_id))
+        .and_then(|()| authorization.u16(layerx_wire::limits::PROTOCOL_VERSION))
+        .map_err(|_| "move authorization exceeds its canonical bound".to_owned())?;
+    let authorization_hash = protocol_hash(Domain::SignaturePreimage, &authorization.finish());
+    let authorization_signature = signing_key.sign(&authorization_hash).to_bytes();
+    let mut payload = Encoder::new(512);
+    payload
+        .u16(ASSET_SEND_TAG)
+        .and_then(|()| payload.u16(ASSET_SEND_FIELDS))
+        .and_then(|()| payload.fixed(&quote.source_id))
+        .and_then(|()| payload.fixed(&quote.destination_id))
+        .and_then(|()| payload.fixed(&NATIVE_ASSET))
+        .and_then(|()| payload.u128(quote.amount))
+        .and_then(|()| payload.u64(quote.source_sequence))
+        .and_then(|()| payload.fixed(&idempotency))
+        .and_then(|()| payload.u64(quote.expires_at))
+        .and_then(|()| payload.fixed(&context))
+        .and_then(|()| payload.u8(0))
+        .and_then(|()| payload.u8(1))
+        .and_then(|()| payload.fixed(&quote.source_id))
+        .and_then(|()| payload.fixed(&public_key))
+        .and_then(|()| payload.fixed(&authorization_signature))
+        .and_then(|()| payload.fixed(&context))
+        .and_then(|()| payload.u32(network_id))
+        .and_then(|()| payload.u16(layerx_wire::limits::PROTOCOL_VERSION))
+        .map_err(|_| "move payload exceeds its canonical bound".to_owned())?;
+    Ok((payload.finish(), context, authorization_hash))
+}
+
+fn signed_move_activity(
+    emulator: &Emulator,
+    quote: &MoveQuoteRecord,
+    idempotency: [u8; 32],
+) -> Result<(Vec<u8>, [u8; 32], [u8; 32], [u8; 32]), String> {
+    let (activity_type, registry) = asset_send_registry()?;
+    let (payload_bytes, context_hash, authorization_hash) = move_send_payload(
+        &emulator.signing_key,
+        quote,
+        idempotency,
+        emulator.network_id,
+    )?;
+    let payload = Payload::new(&registry, activity_type, &payload_bytes)
+        .map_err(|_| "move payload is not canonical".to_owned())?;
+    let payload_hash = protocol_hash(Domain::PayloadHash, payload.as_bytes());
+    let did = account_did(&quote.source)
+        .ok_or_else(|| "move source is not a canonical agent main account".to_owned())?;
+    let actor = Did::new(did.as_bytes()).map_err(|_| "move source DID is invalid".to_owned())?;
+    let authority = Authority::owner(&emulator.signing_key.verifying_key().to_bytes())
+        .map_err(|_| "move owner authority is invalid".to_owned())?;
+    let timestamps = TimestampBound::new(quote.created_at, quote.expires_at)
+        .map_err(|_| "move timestamp bound is invalid".to_owned())?;
+    let mut builder = EnvelopeBuilder::new();
+    builder
+        .protocol_version(layerx_wire::limits::PROTOCOL_VERSION)
+        .and_then(|value| value.network_id(emulator.network_id))
+        .and_then(|value| value.activity_type(activity_type))
+        .and_then(|value| value.actor_did(actor))
+        .and_then(|value| value.authority(authority))
+        .and_then(|value| value.account_sequence(quote.identity_sequence))
+        .and_then(|value| value.timestamp_bound(timestamps))
+        .and_then(|value| value.idempotency_key(IdempotencyKey::new(idempotency)))
+        .and_then(|value| value.fee_limit(Amount::from_u128(0)))
+        .and_then(|value| value.payload_hash(payload_hash))
+        .and_then(|value| value.payload(payload))
+        .map_err(|_| "move envelope is invalid".to_owned())?;
+    let unsigned = builder
+        .build()
+        .map_err(|_| "move envelope is incomplete".to_owned())?;
+    let unsigned_bytes = encode_unsigned_envelope(&unsigned)
+        .map_err(|_| "move signing bytes are invalid".to_owned())?;
+    let signature = emulator
+        .signing_key
+        .sign(&protocol_hash(Domain::SignaturePreimage, &unsigned_bytes))
+        .to_bytes();
+    let signed = unsigned.attach_signature(
+        Signature::new(&signature).map_err(|_| "move signature is invalid".to_owned())?,
+    );
+    let canonical =
+        encode_signed_envelope(&signed).map_err(|_| "signed move is invalid".to_owned())?;
+    let decoded = decode_signed(&canonical, &registry)
+        .map_err(|_| "signed move did not decode canonically".to_owned())?;
+    let activity_id =
+        derive_activity_id(&decoded).map_err(|_| "signed move identity is invalid".to_owned())?;
+    Ok((canonical, activity_id, context_hash, authorization_hash))
 }
 
 fn decode_json<T: DeserializeOwned>(request: &Request) -> Result<T, String> {
@@ -808,13 +1147,15 @@ fn parse_request(stream: &mut TcpStream) -> Result<Request, String> {
             if idempotency_key.is_some()
                 || if target == "/v1/programs/call" {
                     value.is_empty() || value.len() > 128
+                } else if target == "/v1/moves" {
+                    !valid_human_idempotency(value)
                 } else {
                     value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit())
                 }
             {
                 return Err("invalid idempotency key".into());
             }
-            idempotency_key = Some(if target == "/v1/programs/call" {
+            idempotency_key = Some(if matches!(target, "/v1/programs/call" | "/v1/moves") {
                 value.to_owned()
             } else {
                 value.to_ascii_lowercase()
@@ -1110,7 +1451,8 @@ fn take_core_receipt(receipt: &mut CoreReceipt) -> Result<OwnedCoreReceipt, Stri
 
 fn inspect_state(emulator: &Emulator) -> Result<CoreState, i32> {
     let mut state = CoreState {
-        state_root: [0; 32],
+        canonical_state_root: [0; 32],
+        receipt_state_root: [0; 32],
         next_sequence: 0,
         batch_number: 0,
         timestamp_ms: 0,
@@ -1123,6 +1465,45 @@ fn inspect_state(emulator: &Emulator) -> Result<CoreState, i32> {
     } else {
         Err(code)
     }
+}
+
+fn prefund_core(
+    emulator: &mut Emulator,
+    did: &str,
+    public_key: [u8; 32],
+    amount_hi: u64,
+    amount_lo: u64,
+) -> Result<(), i32> {
+    if emulator.accounts.len() >= MAX_EMULATOR_ACCOUNTS {
+        return Err(-5);
+    }
+    let account_name = format!("agent:{did}:main");
+    if emulator.accounts.contains_key(&account_name) {
+        return Err(-3);
+    }
+    let code = unsafe {
+        platform_emulator_prefund(
+            emulator.core,
+            did.as_ptr(),
+            did.len(),
+            public_key.as_ptr(),
+            amount_hi,
+            amount_lo,
+        )
+    };
+    if code != 0 {
+        return Err(code);
+    }
+    let account = core_account(emulator, &account_name)?.ok_or(-3)?;
+    emulator.accounts.insert(
+        account_name,
+        EmulatorAccount {
+            id: account.id,
+            did: did.to_owned(),
+            public_key,
+        },
+    );
+    Ok(())
 }
 
 fn program_head(emulator: &mut Emulator, program_id: [u8; 32]) -> Result<CoreProgram, i32> {
@@ -1434,7 +1815,7 @@ fn program_call(emulator: &mut Emulator, request: &Request, trace: u64) -> Respo
         &material.call_graph,
         ProgramExecutionExpectation {
             sequencer_public_key: emulator.signing_key.verifying_key().to_bytes(),
-            previous_state_root: before.state_root,
+            previous_state_root: before.receipt_state_root,
             activity_id: decoded.activity_id,
             program_id,
             guest_abi_version: head.abi_version,
@@ -1482,7 +1863,8 @@ fn program_call(emulator: &mut Emulator, request: &Request, trace: u64) -> Respo
 
 fn inspect(emulator: &Emulator, trace: u64) -> Response {
     let mut state = CoreState {
-        state_root: [0; 32],
+        canonical_state_root: [0; 32],
+        receipt_state_root: [0; 32],
         next_sequence: 0,
         batch_number: 0,
         timestamp_ms: 0,
@@ -1526,6 +1908,7 @@ fn inspect(emulator: &Emulator, trace: u64) -> Response {
         let mut name_length = 0_usize;
         let mut hi = 0_u64;
         let mut lo = 0_u64;
+        let mut next_sequence = 0_u64;
         let code = unsafe {
             platform_emulator_account(
                 emulator.core,
@@ -1535,6 +1918,7 @@ fn inspect(emulator: &Emulator, trace: u64) -> Response {
                 &raw mut name_length,
                 &raw mut hi,
                 &raw mut lo,
+                &raw mut next_sequence,
             )
         };
         if code != 0 {
@@ -1555,17 +1939,18 @@ fn inspect(emulator: &Emulator, trace: u64) -> Response {
         }
         let _ = write!(
             accounts,
-            "{{\"id\":\"{}\",\"name\":\"{}\",\"balance_hi\":{hi},\"balance_lo\":{lo}}}",
+            "{{\"id\":\"{}\",\"name\":\"{}\",\"balance_hi\":{hi},\"balance_lo\":{lo},\"next_sequence\":{next_sequence}}}",
             hex_encode(&id),
             escape_json(&account_name)
         );
     }
-    success(trace, &format!("{{\"network_mode\":\"emulator\",\"batch_cadence\":\"instant\",\"state_root\":\"{}\",\"next_sequence\":{},\"batch_number\":{},\"timestamp_ms\":{},\"cells\":[{cells}],\"accounts\":[{accounts}]}}", hex_encode(&state.state_root), state.next_sequence, state.batch_number, state.timestamp_ms))
+    success(trace, &format!("{{\"network_mode\":\"emulator\",\"batch_cadence\":\"instant\",\"state_root\":\"{}\",\"canonical_state_root\":\"{}\",\"receipt_state_root\":\"{}\",\"next_sequence\":{},\"batch_number\":{},\"timestamp_ms\":{},\"cells\":[{cells}],\"accounts\":[{accounts}]}}", hex_encode(&state.canonical_state_root), hex_encode(&state.canonical_state_root), hex_encode(&state.receipt_state_root), state.next_sequence, state.batch_number, state.timestamp_ms))
 }
 
 fn health(emulator: &Emulator, trace: u64) -> Response {
     let mut state = CoreState {
-        state_root: [0; 32],
+        canonical_state_root: [0; 32],
+        receipt_state_root: [0; 32],
         next_sequence: 0,
         batch_number: 0,
         timestamp_ms: 0,
@@ -1603,20 +1988,642 @@ fn prefund(emulator: &mut Emulator, request: &Request, trace: u64) -> Response {
             "public_key must be 32 bytes",
         );
     }
+    let public_key: [u8; 32] = match key.try_into() {
+        Ok(value) => value,
+        Err(_) => {
+            return refusal(
+                trace,
+                400,
+                "invalid_argument",
+                "public_key must be 32 bytes",
+            )
+        }
+    };
+    match prefund_core(
+        emulator,
+        &body.did,
+        public_key,
+        body.amount_hi,
+        body.amount_lo,
+    ) {
+        Ok(()) => success(trace, "{\"prefunded\":true}"),
+        Err(code) => core_response(trace, code),
+    }
+}
+
+fn move_quote_document(quote: &MoveQuoteRecord) -> Result<serde_json::Value, String> {
+    Ok(serde_json::json!({
+        "quote_id":quote.quote_id,
+        "description_copy_key":"move.quote.send-to-account",
+        "mechanism":"transfer",
+        "money":{"amount":quote.amount.to_string(),"currency":quote.currency},
+        "fee_estimate":{"amount":"0","currency":quote.currency},
+        "fee_ceiling":{"amount":"0","currency":quote.currency},
+        "arrival_estimate":timestamp_text(quote.created_at)?,
+        "expires_at":timestamp_text(quote.expires_at)?,
+        "irreversibility_copy_key":"move.irreversible.send-to-account",
+    }))
+}
+
+fn move_quote(emulator: &mut Emulator, request: &Request, trace: u64) -> Response {
+    let body = match decode_json::<MoveQuoteBody>(request) {
+        Ok(body) => body,
+        Err(error) => return refusal(trace, 400, "invalid_move_quote", &error),
+    };
+    if body.source == body.destination
+        || account_did(&body.source).is_none()
+        || account_did(&body.destination).is_none()
+        || body.source.len() > 512
+        || body.destination.len() > 512
+    {
+        return refusal(
+            trace,
+            400,
+            "invalid_move_quote",
+            "source and destination must name distinct bounded agent main accounts",
+        );
+    }
+    if body.money.currency != "LXP" {
+        return refusal(
+            trace,
+            400,
+            "unsupported_move_asset",
+            "the emulator canonical asset is LXP",
+        );
+    }
+    let amount = match body.money.amount.parse::<u128>() {
+        Ok(value) if value != 0 && value.to_string() == body.money.amount => value,
+        _ => {
+            return refusal(
+                trace,
+                400,
+                "invalid_move_amount",
+                "move amount must be a positive canonical protocol integer",
+            )
+        }
+    };
+    if emulator.move_quotes.len() >= MAX_MOVE_QUOTES {
+        return refusal(
+            trace,
+            503,
+            "persistence_unavailable",
+            "move quote recovery index reached its bounded capacity",
+        );
+    }
+    let source_authority = match emulator.accounts.get(&body.source) {
+        Some(value) => value.clone(),
+        None => {
+            return refusal(
+                trace,
+                404,
+                "move_source_not_found",
+                "source account is not registered in this emulator",
+            )
+        }
+    };
+    if source_authority.public_key != emulator.signing_key.verifying_key().to_bytes() {
+        return refusal(
+            trace,
+            409,
+            "move_source_not_managed",
+            "source account is not controlled by the emulator signing authority",
+        );
+    }
+    let source = match core_account(emulator, &body.source) {
+        Ok(Some(value)) => value,
+        Ok(None) => {
+            return refusal(
+                trace,
+                404,
+                "move_source_not_found",
+                "source account is absent from canonical state",
+            )
+        }
+        Err(code) => return core_response(trace, code),
+    };
+    let identity_sequence = match core_identity_sequence(emulator, &source_authority.did) {
+        Ok(value) => value,
+        Err(code) => return core_response(trace, code),
+    };
+    if identity_sequence.checked_add(1).is_none() || source.next_sequence.checked_add(1).is_none() {
+        return refusal(
+            trace,
+            503,
+            "core_invalid_output",
+            "move source sequence is exhausted",
+        );
+    }
+    let destination = match core_account(emulator, &body.destination) {
+        Ok(Some(value)) => value,
+        Ok(None) => {
+            return refusal(
+                trace,
+                404,
+                "move_destination_not_found",
+                "destination account is absent from canonical state",
+            )
+        }
+        Err(code) => return core_response(trace, code),
+    };
+    if destination.balance.checked_add(amount).is_none() {
+        return refusal(
+            trace,
+            409,
+            "move_balance_unavailable",
+            "destination canonical balance cannot accept the requested move",
+        );
+    }
+    if source.id != source_authority.id || source.balance < amount {
+        return refusal(
+            trace,
+            409,
+            "move_balance_unavailable",
+            "source canonical balance cannot cover the requested move",
+        );
+    }
+    let state = match inspect_state(emulator) {
+        Ok(value) => value,
+        Err(code) => return core_response(trace, code),
+    };
+    let expires_at = match state.timestamp_ms.checked_add(MOVE_QUOTE_WINDOW_MS) {
+        Some(value) => value,
+        None => {
+            return refusal(
+                trace,
+                503,
+                "core_invalid_output",
+                "move quote expiry overflowed",
+            )
+        }
+    };
+    if timestamp_text(state.timestamp_ms).is_err() || timestamp_text(expires_at).is_err() {
+        return refusal(
+            trace,
+            503,
+            "core_invalid_output",
+            "move quote timestamp is outside the supported range",
+        );
+    }
+    let mut quote_material = Vec::new();
+    quote_material.extend_from_slice(&(body.source.len() as u16).to_be_bytes());
+    quote_material.extend_from_slice(body.source.as_bytes());
+    quote_material.extend_from_slice(&(body.destination.len() as u16).to_be_bytes());
+    quote_material.extend_from_slice(body.destination.as_bytes());
+    quote_material.extend_from_slice(&amount.to_be_bytes());
+    quote_material.extend_from_slice(&state.timestamp_ms.to_be_bytes());
+    quote_material.extend_from_slice(&expires_at.to_be_bytes());
+    quote_material.extend_from_slice(&identity_sequence.to_be_bytes());
+    quote_material.extend_from_slice(&source.next_sequence.to_be_bytes());
+    quote_material.extend_from_slice(&state.canonical_state_root);
+    quote_material.extend_from_slice(&state.receipt_state_root);
+    let quote_id = format!(
+        "qte_{}",
+        hex_encode(&hash_bytes(MOVE_QUOTE_DOMAIN, &quote_material))
+    );
+    let quote = MoveQuoteRecord {
+        quote_id: quote_id.clone(),
+        source: body.source,
+        destination: body.destination,
+        source_id: source.id,
+        destination_id: destination.id,
+        amount,
+        currency: body.money.currency,
+        created_at: state.timestamp_ms,
+        expires_at,
+        identity_sequence,
+        source_sequence: source.next_sequence,
+        committed_idempotency: None,
+    };
+    let document = match move_quote_document(&quote) {
+        Ok(value) => value,
+        Err(error) => return refusal(trace, 503, "core_invalid_output", &error),
+    };
+    emulator.move_quotes.insert(quote_id, quote);
+    success(trace, &document.to_string())
+}
+
+fn empty_core_receipt() -> CoreReceipt {
+    CoreReceipt {
+        activity_id: [0; 32],
+        batch_id: [0; 32],
+        state_root: [0; 32],
+        previous_state_root: [0; 32],
+        asset: [0; 32],
+        sequencer_public_key: [0; 32],
+        global_sequence: 0,
+        result_code: 0,
+        metered_cost_hi: 0,
+        metered_cost_lo: 0,
+        bytes: ptr::null(),
+        length: 0,
+        terminal_payload: ptr::null(),
+        terminal_payload_length: 0,
+        call_graph: ptr::null(),
+        call_graph_length: 0,
+        isolated_owner: ptr::null_mut(),
+    }
+}
+
+fn stored_move_operation(operation: &MoveOperation) -> Response {
+    Response {
+        status: operation.status,
+        content_type: "application/json",
+        body: operation.body.as_bytes().to_vec(),
+    }
+}
+
+fn retain_move_response(
+    emulator: &mut Emulator,
+    idempotency: String,
+    quote_id: &str,
+    response: &Response,
+) {
+    let body = String::from_utf8_lossy(&response.body).into_owned();
+    emulator.move_operations.insert(
+        idempotency.clone(),
+        MoveOperation {
+            quote_id: quote_id.to_owned(),
+            status: response.status,
+            body,
+        },
+    );
+    if let Some(quote) = emulator.move_quotes.get_mut(quote_id) {
+        quote.committed_idempotency = Some(idempotency);
+    }
+}
+
+fn move_unknown(
+    emulator: &mut Emulator,
+    idempotency: String,
+    quote_id: &str,
+    trace: u64,
+    code: &str,
+    detail: &str,
+) -> Response {
+    let response = refusal(trace, 503, code, detail);
+    retain_move_response(emulator, idempotency, quote_id, &response);
+    response
+}
+
+fn move_journey(
+    quote: &MoveQuoteRecord,
+    idempotency: &str,
+    activity_id: [u8; 32],
+    receipt_digest: [u8; 32],
+    updated_at: u64,
+) -> Result<serde_json::Value, String> {
+    let journey_digest = hash_bytes(MOVE_JOURNEY_DOMAIN, idempotency.as_bytes());
+    let stage_digest = hash_bytes(MOVE_STAGE_DOMAIN, &journey_digest);
+    let evidence_id = format!("evd_{}", hex_encode(&receipt_digest));
+    let evidence = serde_json::json!({
+        "evidence_id":evidence_id,
+        "class":"layerx-receipt",
+        "verification":"receipt-verified",
+        "source_ref":format!("/v1/receipts/{}", hex_encode(&activity_id)),
+    });
+    Ok(serde_json::json!({
+        "journey_id":format!("jrn_{}", hex_encode(&journey_digest)),
+        "kind":"move",
+        "state":"done",
+        "state_copy_key":"status.done",
+        "stages":[{
+            "stage_id":format!("stg_{}", hex_encode(&stage_digest)),
+            "copy_key":"move.stage.send-to-account",
+            "state":"done",
+            "evidence":[evidence.clone()],
+        }],
+        "evidence":[evidence],
+        "started_at":timestamp_text(quote.created_at)?,
+        "updated_at":timestamp_text(updated_at)?,
+    }))
+}
+
+fn move_commit(emulator: &mut Emulator, request: &Request, trace: u64) -> Response {
+    let idempotency = match request.idempotency_key.as_deref() {
+        Some(value) if valid_human_idempotency(value) => value.to_owned(),
+        _ => {
+            return refusal(
+                trace,
+                400,
+                "idempotency_key_required",
+                "Idempotency-Key must be 16-128 safe ASCII characters",
+            )
+        }
+    };
+    let body = match decode_json::<MoveCommitBody>(request) {
+        Ok(value) => value,
+        Err(error) => return refusal(trace, 400, "invalid_move_commit", &error),
+    };
+    if let Some(operation) = emulator.move_operations.get(&idempotency) {
+        if operation.quote_id == body.quote_id {
+            return stored_move_operation(operation);
+        }
+        return refusal(
+            trace,
+            409,
+            "idempotency_conflict",
+            "the idempotency key is already bound to another move quote",
+        );
+    }
+    if emulator.move_operations.len() >= MAX_MOVE_OPERATIONS {
+        return refusal(
+            trace,
+            503,
+            "persistence_unavailable",
+            "move operation recovery index reached its bounded capacity",
+        );
+    }
+    let quote = match emulator.move_quotes.get(&body.quote_id) {
+        Some(value) => value.clone(),
+        None => {
+            return refusal(
+                trace,
+                404,
+                "move_quote_not_found",
+                "move quote is not present in this emulator process",
+            )
+        }
+    };
+    if quote.committed_idempotency.is_some() {
+        return refusal(
+            trace,
+            409,
+            "move_quote_already_committed",
+            "move quote is already bound to another commit attempt",
+        );
+    }
+    let state = match inspect_state(emulator) {
+        Ok(value) => value,
+        Err(code) => return core_response(trace, code),
+    };
+    if state.timestamp_ms > quote.expires_at {
+        return refusal(
+            trace,
+            409,
+            "move_quote_expired",
+            "move quote expired before commitment",
+        );
+    }
+    let source_authority = match emulator.accounts.get(&quote.source) {
+        Some(value)
+            if value.id == quote.source_id
+                && value.public_key == emulator.signing_key.verifying_key().to_bytes() =>
+        {
+            value.clone()
+        }
+        _ => {
+            return refusal(
+                trace,
+                409,
+                "move_quote_stale",
+                "source authority or account sequence changed after quotation",
+            )
+        }
+    };
+    let identity_sequence = match core_identity_sequence(emulator, &source_authority.did) {
+        Ok(value) if value == quote.identity_sequence => value,
+        Ok(_) => {
+            return refusal(
+                trace,
+                409,
+                "move_quote_stale",
+                "source identity sequence changed after quotation",
+            )
+        }
+        Err(code) => return core_response(trace, code),
+    };
+    let source = match core_account(emulator, &quote.source) {
+        Ok(Some(value))
+            if value.id == quote.source_id
+                && value.next_sequence == quote.source_sequence
+                && value.balance >= quote.amount =>
+        {
+            value
+        }
+        Ok(_) => {
+            return refusal(
+                trace,
+                409,
+                "move_balance_unavailable",
+                "source canonical balance cannot cover the quoted move",
+            )
+        }
+        Err(code) => return core_response(trace, code),
+    };
+    let destination = match core_account(emulator, &quote.destination) {
+        Ok(Some(value)) if value.id == quote.destination_id => value,
+        Ok(_) => {
+            return refusal(
+                trace,
+                409,
+                "move_quote_stale",
+                "destination account changed after quotation",
+            )
+        }
+        Err(code) => return core_response(trace, code),
+    };
+    let _ = (source_authority, identity_sequence);
+    let protocol_idempotency = move_idempotency(&idempotency);
+    let (activity, expected_activity_id, expected_context_hash, expected_authorization_hash) =
+        match signed_move_activity(emulator, &quote, protocol_idempotency) {
+            Ok(value) => value,
+            Err(error) => return refusal(trace, 503, "move_encoding_failed", &error),
+        };
+    let mut receipt = empty_core_receipt();
     let code = unsafe {
-        platform_emulator_prefund(
+        platform_emulator_execute(
             emulator.core,
-            body.did.as_ptr(),
-            body.did.len(),
-            key.as_ptr(),
-            body.amount_hi,
-            body.amount_lo,
+            activity.as_ptr(),
+            activity.len(),
+            &raw mut receipt,
         )
     };
-    if code != 0 {
+    if code != 0 && code != -904 {
         return core_response(trace, code);
     }
-    success(trace, "{\"prefunded\":true}")
+    let batch_id = receipt.batch_id;
+    let previous_state_root = receipt.previous_state_root;
+    let resulting_state_root = receipt.state_root;
+    let asset = receipt.asset;
+    let sequencer_public_key = receipt.sequencer_public_key;
+    let result_code = receipt.result_code;
+    let material = match take_core_receipt(&mut receipt) {
+        Ok(value) => value,
+        Err(error) => {
+            return move_unknown(
+                emulator,
+                idempotency,
+                &quote.quote_id,
+                trace,
+                "move_receipt_unavailable",
+                &error,
+            );
+        }
+    };
+    if result_code != 0 {
+        let refused = core_response(trace, result_code);
+        retain_move_response(emulator, idempotency, &quote.quote_id, &refused);
+        return refused;
+    }
+    let authorised = AuthorizedBatch::new(
+        batch_id,
+        asset,
+        previous_state_root,
+        resulting_state_root,
+        sequencer_public_key,
+    );
+    let verified = match verify_receipt(&material.receipt, &authorised) {
+        Ok(value) => value,
+        Err(_) => {
+            return move_unknown(
+                emulator,
+                idempotency,
+                &quote.quote_id,
+                trace,
+                "move_receipt_verification_failed",
+                "core committed a move but its returned receipt did not verify",
+            )
+        }
+    };
+    let expected_source_after = source.balance - quote.amount;
+    let expected_destination_after = destination.balance + quote.amount;
+    let protocol = match verified.receipt().protocol() {
+        Some(value)
+            if material.activity_id == expected_activity_id
+                && value.protocol_version() == layerx_wire::limits::PROTOCOL_VERSION
+                && value.activity_id() == expected_activity_id
+                && value.result_code() == 0
+                && value.module_id() == 1
+                && value.operation() == ASSET_SEND_OPERATION as u8
+                && value.asset() == NATIVE_ASSET
+                && value.amount() == quote.amount
+                && value.from() == quote.source_id
+                && value.to() == quote.destination_id
+                && value.debit_balance_before() == source.balance
+                && value.debit_balance_after() == expected_source_after
+                && value.credit_balance_before() == destination.balance
+                && value.credit_balance_after() == expected_destination_after
+                && value.from_sequence() == quote.source_sequence
+                && value.previous_state_root() == state.receipt_state_root
+                && value.resulting_state_root() != value.previous_state_root()
+                && value.context_hash() == expected_context_hash
+                && value.authorization_hash() == expected_authorization_hash
+                && value.transfer_set_root() != [0; 32]
+                && value.effects().len() == 1
+                && value.effects()[0].module_id() == 1
+                && value.effects()[0].kind() == 2
+                && value.effects()[0].monetary()
+                && value.effects()[0].transfer_set_root() == value.transfer_set_root() =>
+        {
+            value
+        }
+        _ => {
+            return move_unknown(
+                emulator,
+                idempotency,
+                &quote.quote_id,
+                trace,
+                "move_receipt_binding_failed",
+                "verified receipt does not bind the exact quoted move",
+            )
+        }
+    };
+    let post_source = match core_account(emulator, &quote.source) {
+        Ok(Some(value)) => value,
+        Ok(None) => {
+            return move_unknown(
+                emulator,
+                idempotency,
+                &quote.quote_id,
+                trace,
+                "move_receipt_binding_failed",
+                "committed source account disappeared from canonical state",
+            )
+        }
+        Err(code) => return core_response(trace, code),
+    };
+    let post_destination = match core_account(emulator, &quote.destination) {
+        Ok(Some(value)) => value,
+        Ok(None) => {
+            return move_unknown(
+                emulator,
+                idempotency,
+                &quote.quote_id,
+                trace,
+                "move_receipt_binding_failed",
+                "committed destination account disappeared from canonical state",
+            )
+        }
+        Err(code) => return core_response(trace, code),
+    };
+    let post_state = match inspect_state(emulator) {
+        Ok(value) => value,
+        Err(code) => return core_response(trace, code),
+    };
+    if post_source.balance != protocol.debit_balance_after()
+        || post_source.next_sequence != quote.source_sequence + 1
+        || post_destination.balance != protocol.credit_balance_after()
+        || post_state.receipt_state_root != protocol.resulting_state_root()
+        || post_state.canonical_state_root == state.canonical_state_root
+    {
+        return move_unknown(
+            emulator,
+            idempotency,
+            &quote.quote_id,
+            trace,
+            "move_receipt_binding_failed",
+            "receipt economic facts disagree with canonical account state",
+        );
+    }
+    let receipt_digest = match verified.evidence().receipt_digest() {
+        Some(value) => value,
+        None => {
+            return move_unknown(
+                emulator,
+                idempotency,
+                &quote.quote_id,
+                trace,
+                "move_receipt_binding_failed",
+                "verified receipt omitted its digest",
+            )
+        }
+    };
+    remember_receipt(
+        emulator,
+        hex_encode(&expected_activity_id),
+        hex_encode(&material.receipt),
+    );
+    let journey = match move_journey(
+        &quote,
+        &idempotency,
+        expected_activity_id,
+        receipt_digest,
+        state.timestamp_ms,
+    ) {
+        Ok(value) => value,
+        Err(error) => {
+            return move_unknown(
+                emulator,
+                idempotency,
+                &quote.quote_id,
+                trace,
+                "move_journey_encoding_failed",
+                &error,
+            )
+        }
+    };
+    let completed = success(trace, &journey.to_string());
+    retain_move_response(emulator, idempotency, &quote.quote_id, &completed);
+    if code == -904 {
+        refusal(
+            trace,
+            503,
+            "move_acknowledgement_lost",
+            "move committed and was retained under the original idempotency key",
+        )
+    } else {
+        completed
+    }
 }
 
 fn update_time(emulator: &mut Emulator, request: &Request, trace: u64, advance: bool) -> Response {
@@ -1676,6 +2683,9 @@ struct RecoverySnapshot {
     receipt_order: VecDeque<String>,
     program_operations: HashMap<String, ProgramOperation>,
     program_activity_operations: HashMap<String, String>,
+    accounts: HashMap<String, EmulatorAccount>,
+    move_quotes: HashMap<String, MoveQuoteRecord>,
+    move_operations: HashMap<String, MoveOperation>,
 }
 
 fn append_snapshot_bytes(encoded: &mut Vec<u8>, bytes: &[u8]) -> Result<(), String> {
@@ -1695,6 +2705,17 @@ fn append_snapshot_u32(encoded: &mut Vec<u8>, value: usize) -> Result<(), String
     let value = u32::try_from(value)
         .map_err(|_| "emulator recovery snapshot field exceeds u32".to_owned())?;
     append_snapshot_bytes(encoded, &value.to_be_bytes())
+}
+
+fn append_snapshot_u16(encoded: &mut Vec<u8>, value: usize) -> Result<(), String> {
+    let value = u16::try_from(value)
+        .map_err(|_| "emulator recovery snapshot field exceeds u16".to_owned())?;
+    append_snapshot_bytes(encoded, &value.to_be_bytes())
+}
+
+fn append_snapshot_text(encoded: &mut Vec<u8>, value: &str) -> Result<(), String> {
+    append_snapshot_u16(encoded, value.len())?;
+    append_snapshot_bytes(encoded, value.as_bytes())
 }
 
 fn canonical_program_response(response: &str, activity_id: &str, idempotency_key: &str) -> bool {
@@ -1722,6 +2743,9 @@ fn encode_recovery_snapshot(
     receipt_order: &VecDeque<String>,
     program_operations: &HashMap<String, ProgramOperation>,
     program_activity_operations: &HashMap<String, String>,
+    accounts: &HashMap<String, EmulatorAccount>,
+    move_quotes: &HashMap<String, MoveQuoteRecord>,
+    move_operations: &HashMap<String, MoveOperation>,
 ) -> Result<Vec<u8>, String> {
     if core_snapshot.is_empty() || core_snapshot.len() > MAX_CORE_SNAPSHOT_BYTES {
         return Err("emulator core snapshot is outside its bound".to_owned());
@@ -1734,6 +2758,12 @@ fn encode_recovery_snapshot(
     {
         return Err("emulator program recovery index is outside its bound".to_owned());
     }
+    if accounts.len() > MAX_EMULATOR_ACCOUNTS
+        || move_quotes.len() > MAX_MOVE_QUOTES
+        || move_operations.len() > MAX_MOVE_OPERATIONS
+    {
+        return Err("emulator move recovery index is outside its bound".to_owned());
+    }
 
     let mut encoded = Vec::new();
     append_snapshot_bytes(&mut encoded, RECOVERY_SNAPSHOT_MAGIC)?;
@@ -1741,6 +2771,9 @@ fn encode_recovery_snapshot(
     append_snapshot_u32(&mut encoded, core_snapshot.len())?;
     append_snapshot_u32(&mut encoded, receipts.len())?;
     append_snapshot_u32(&mut encoded, program_operations.len())?;
+    append_snapshot_u32(&mut encoded, accounts.len())?;
+    append_snapshot_u32(&mut encoded, move_quotes.len())?;
+    append_snapshot_u32(&mut encoded, move_operations.len())?;
     append_snapshot_bytes(&mut encoded, core_snapshot)?;
 
     let mut seen_receipts = HashMap::new();
@@ -1803,6 +2836,91 @@ fn encode_recovery_snapshot(
         append_snapshot_bytes(&mut encoded, &retained)?;
     }
 
+    let mut account_entries: Vec<_> = accounts.iter().collect();
+    account_entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+    for (name, account) in account_entries {
+        if name != &format!("agent:{}:main", account.did)
+            || account.did.is_empty()
+            || account.did.len() > 512
+            || !account.did.starts_with("did:")
+            || account.did.contains('\0')
+            || account.public_key == [0; 32]
+            || account.id == [0; 32]
+        {
+            return Err("emulator account recovery binding is invalid".to_owned());
+        }
+        append_snapshot_text(&mut encoded, name)?;
+        append_snapshot_text(&mut encoded, &account.did)?;
+        append_snapshot_bytes(&mut encoded, &account.id)?;
+        append_snapshot_bytes(&mut encoded, &account.public_key)?;
+    }
+
+    let mut quote_entries: Vec<_> = move_quotes.iter().collect();
+    quote_entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+    for (quote_id, quote) in quote_entries {
+        let quote_hex = quote_id.strip_prefix("qte_");
+        if quote_id != &quote.quote_id
+            || quote_hex.is_none_or(|value| !canonical_hex32_text(value))
+            || quote.source == quote.destination
+            || quote.amount == 0
+            || quote.currency != "LXP"
+            || quote.created_at == 0
+            || quote.expires_at <= quote.created_at
+            || accounts
+                .get(&quote.source)
+                .is_none_or(|account| account.id != quote.source_id)
+            || accounts
+                .get(&quote.destination)
+                .is_none_or(|account| account.id != quote.destination_id)
+            || quote
+                .committed_idempotency
+                .as_deref()
+                .is_some_and(|value| !valid_human_idempotency(value))
+        {
+            return Err("emulator move quote recovery binding is invalid".to_owned());
+        }
+        append_snapshot_text(&mut encoded, quote_id)?;
+        append_snapshot_text(&mut encoded, &quote.source)?;
+        append_snapshot_text(&mut encoded, &quote.destination)?;
+        append_snapshot_bytes(&mut encoded, &quote.source_id)?;
+        append_snapshot_bytes(&mut encoded, &quote.destination_id)?;
+        append_snapshot_bytes(&mut encoded, &quote.amount.to_be_bytes())?;
+        append_snapshot_text(&mut encoded, &quote.currency)?;
+        append_snapshot_bytes(&mut encoded, &quote.created_at.to_be_bytes())?;
+        append_snapshot_bytes(&mut encoded, &quote.expires_at.to_be_bytes())?;
+        append_snapshot_bytes(&mut encoded, &quote.identity_sequence.to_be_bytes())?;
+        append_snapshot_bytes(&mut encoded, &quote.source_sequence.to_be_bytes())?;
+        match quote.committed_idempotency.as_deref() {
+            Some(value) => {
+                append_snapshot_bytes(&mut encoded, &[1])?;
+                append_snapshot_text(&mut encoded, value)?;
+            }
+            None => append_snapshot_bytes(&mut encoded, &[0])?,
+        }
+    }
+
+    let mut move_entries: Vec<_> = move_operations.iter().collect();
+    move_entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+    for (idempotency, operation) in move_entries {
+        if !valid_human_idempotency(idempotency)
+            || operation.body.is_empty()
+            || operation.body.len() > MAX_PROGRAM_RESPONSE_BYTES
+            || !matches!(operation.status, 200 | 400 | 404 | 409 | 503)
+            || serde_json::from_str::<serde_json::Value>(&operation.body).is_err()
+            || move_quotes
+                .get(&operation.quote_id)
+                .and_then(|quote| quote.committed_idempotency.as_deref())
+                != Some(idempotency)
+        {
+            return Err("emulator move operation recovery binding is invalid".to_owned());
+        }
+        append_snapshot_text(&mut encoded, idempotency)?;
+        append_snapshot_text(&mut encoded, &operation.quote_id)?;
+        append_snapshot_bytes(&mut encoded, &operation.status.to_be_bytes())?;
+        append_snapshot_u32(&mut encoded, operation.body.len())?;
+        append_snapshot_bytes(&mut encoded, operation.body.as_bytes())?;
+    }
+
     let mut digest = Sha256::new();
     digest.update(RECOVERY_SNAPSHOT_DIGEST_DOMAIN);
     digest.update(&encoded);
@@ -1834,8 +2952,39 @@ fn snapshot_u32(snapshot: &[u8], offset: &mut usize) -> Result<usize, String> {
         .map_err(|_| "emulator recovery snapshot integer exceeds usize".to_owned())
 }
 
+fn snapshot_u16(snapshot: &[u8], offset: &mut usize) -> Result<usize, String> {
+    let bytes: [u8; 2] = snapshot_take(snapshot, offset, 2)?
+        .try_into()
+        .map_err(|_| "emulator recovery snapshot integer is invalid".to_owned())?;
+    Ok(usize::from(u16::from_be_bytes(bytes)))
+}
+
+fn snapshot_u64(snapshot: &[u8], offset: &mut usize) -> Result<u64, String> {
+    let bytes: [u8; 8] = snapshot_take(snapshot, offset, 8)?
+        .try_into()
+        .map_err(|_| "emulator recovery snapshot integer is invalid".to_owned())?;
+    Ok(u64::from_be_bytes(bytes))
+}
+
+fn snapshot_u128(snapshot: &[u8], offset: &mut usize) -> Result<u128, String> {
+    let bytes: [u8; 16] = snapshot_take(snapshot, offset, 16)?
+        .try_into()
+        .map_err(|_| "emulator recovery snapshot integer is invalid".to_owned())?;
+    Ok(u128::from_be_bytes(bytes))
+}
+
+fn snapshot_text(snapshot: &[u8], offset: &mut usize, maximum: usize) -> Result<String, String> {
+    let length = snapshot_u16(snapshot, offset)?;
+    if length == 0 || length > maximum {
+        return Err("emulator recovery snapshot text exceeds its bound".to_owned());
+    }
+    std::str::from_utf8(snapshot_take(snapshot, offset, length)?)
+        .map(str::to_owned)
+        .map_err(|_| "emulator recovery snapshot text is not UTF-8".to_owned())
+}
+
 fn decode_recovery_snapshot(body: &[u8]) -> Result<RecoverySnapshot, String> {
-    if body.len() > MAX_REQUEST_BYTES || body.len() < 8 + 4 + 4 + 4 + 4 + 32 {
+    if body.len() > MAX_REQUEST_BYTES || body.len() < 8 + 4 + 7 * 4 + 32 {
         return Err("emulator recovery snapshot is outside its bound".to_owned());
     }
     let authenticated_length = body.len() - 32;
@@ -1859,10 +3008,16 @@ fn decode_recovery_snapshot(body: &[u8]) -> Result<RecoverySnapshot, String> {
     let core_length = snapshot_u32(authenticated, &mut offset)?;
     let receipt_count = snapshot_u32(authenticated, &mut offset)?;
     let operation_count = snapshot_u32(authenticated, &mut offset)?;
+    let account_count = snapshot_u32(authenticated, &mut offset)?;
+    let move_quote_count = snapshot_u32(authenticated, &mut offset)?;
+    let move_operation_count = snapshot_u32(authenticated, &mut offset)?;
     if core_length == 0
         || core_length > MAX_CORE_SNAPSHOT_BYTES
         || receipt_count > MAX_RECEIPTS
         || operation_count > MAX_PROGRAM_OPERATIONS
+        || account_count > MAX_EMULATOR_ACCOUNTS
+        || move_quote_count > MAX_MOVE_QUOTES
+        || move_operation_count > MAX_MOVE_OPERATIONS
     {
         return Err("emulator recovery snapshot counts exceed their bounds".to_owned());
     }
@@ -1929,6 +3084,137 @@ fn decode_recovery_snapshot(body: &[u8]) -> Result<RecoverySnapshot, String> {
             return Err("emulator recovery program binding is duplicated".to_owned());
         }
     }
+
+    let mut accounts = HashMap::with_capacity(account_count);
+    for _ in 0..account_count {
+        let name = snapshot_text(authenticated, &mut offset, 1_024)?;
+        let did = snapshot_text(authenticated, &mut offset, 512)?;
+        let id: [u8; 32] = snapshot_take(authenticated, &mut offset, 32)?
+            .try_into()
+            .map_err(|_| "emulator recovery account id is invalid".to_owned())?;
+        let public_key: [u8; 32] = snapshot_take(authenticated, &mut offset, 32)?
+            .try_into()
+            .map_err(|_| "emulator recovery public key is invalid".to_owned())?;
+        if name != format!("agent:{did}:main")
+            || !did.starts_with("did:")
+            || did.contains('\0')
+            || id == [0; 32]
+            || public_key == [0; 32]
+            || accounts
+                .insert(
+                    name,
+                    EmulatorAccount {
+                        id,
+                        did,
+                        public_key,
+                    },
+                )
+                .is_some()
+        {
+            return Err("emulator recovery account binding is invalid".to_owned());
+        }
+    }
+
+    let mut move_quotes = HashMap::with_capacity(move_quote_count);
+    for _ in 0..move_quote_count {
+        let quote_id = snapshot_text(authenticated, &mut offset, 80)?;
+        let source = snapshot_text(authenticated, &mut offset, 1_024)?;
+        let destination = snapshot_text(authenticated, &mut offset, 1_024)?;
+        let source_id: [u8; 32] = snapshot_take(authenticated, &mut offset, 32)?
+            .try_into()
+            .map_err(|_| "emulator recovery source id is invalid".to_owned())?;
+        let destination_id: [u8; 32] = snapshot_take(authenticated, &mut offset, 32)?
+            .try_into()
+            .map_err(|_| "emulator recovery destination id is invalid".to_owned())?;
+        let amount = snapshot_u128(authenticated, &mut offset)?;
+        let currency = snapshot_text(authenticated, &mut offset, 16)?;
+        let created_at = snapshot_u64(authenticated, &mut offset)?;
+        let expires_at = snapshot_u64(authenticated, &mut offset)?;
+        let identity_sequence = snapshot_u64(authenticated, &mut offset)?;
+        let source_sequence = snapshot_u64(authenticated, &mut offset)?;
+        let committed_idempotency = match snapshot_take(authenticated, &mut offset, 1)?[0] {
+            0 => None,
+            1 => Some(snapshot_text(authenticated, &mut offset, 128)?),
+            _ => return Err("emulator recovery move quote state is invalid".to_owned()),
+        };
+        let quote = MoveQuoteRecord {
+            quote_id: quote_id.clone(),
+            source,
+            destination,
+            source_id,
+            destination_id,
+            amount,
+            currency,
+            created_at,
+            expires_at,
+            identity_sequence,
+            source_sequence,
+            committed_idempotency,
+        };
+        if quote_id
+            .strip_prefix("qte_")
+            .is_none_or(|value| !canonical_hex32_text(value))
+            || quote.source == quote.destination
+            || quote.amount == 0
+            || quote.currency != "LXP"
+            || quote.created_at == 0
+            || quote.expires_at <= quote.created_at
+            || accounts
+                .get(&quote.source)
+                .is_none_or(|account| account.id != quote.source_id)
+            || accounts
+                .get(&quote.destination)
+                .is_none_or(|account| account.id != quote.destination_id)
+            || quote
+                .committed_idempotency
+                .as_deref()
+                .is_some_and(|value| !valid_human_idempotency(value))
+            || move_quotes.insert(quote_id, quote).is_some()
+        {
+            return Err("emulator recovery move quote binding is invalid".to_owned());
+        }
+    }
+
+    let mut move_operations = HashMap::with_capacity(move_operation_count);
+    for _ in 0..move_operation_count {
+        let idempotency = snapshot_text(authenticated, &mut offset, 128)?;
+        let quote_id = snapshot_text(authenticated, &mut offset, 80)?;
+        let status_bytes: [u8; 2] = snapshot_take(authenticated, &mut offset, 2)?
+            .try_into()
+            .map_err(|_| "emulator recovery move status is invalid".to_owned())?;
+        let status = u16::from_be_bytes(status_bytes);
+        let body_length = snapshot_u32(authenticated, &mut offset)?;
+        if body_length == 0 || body_length > MAX_PROGRAM_RESPONSE_BYTES {
+            return Err("emulator recovery move response exceeds its bound".to_owned());
+        }
+        let body = std::str::from_utf8(snapshot_take(authenticated, &mut offset, body_length)?)
+            .map_err(|_| "emulator recovery move response is not UTF-8".to_owned())?
+            .to_owned();
+        let operation = MoveOperation {
+            quote_id: quote_id.clone(),
+            status,
+            body,
+        };
+        if !valid_human_idempotency(&idempotency)
+            || !matches!(status, 200 | 400 | 404 | 409 | 503)
+            || serde_json::from_str::<serde_json::Value>(&operation.body).is_err()
+            || move_quotes
+                .get(&quote_id)
+                .and_then(|quote| quote.committed_idempotency.as_deref())
+                != Some(idempotency.as_str())
+            || move_operations.insert(idempotency, operation).is_some()
+        {
+            return Err("emulator recovery move operation binding is invalid".to_owned());
+        }
+    }
+    if move_quotes.values().any(|quote| {
+        quote
+            .committed_idempotency
+            .as_ref()
+            .is_some_and(|key| !move_operations.contains_key(key))
+    }) {
+        return Err("emulator recovery committed quote is missing its operation".to_owned());
+    }
     if offset != authenticated.len() {
         return Err("emulator recovery snapshot has trailing bytes".to_owned());
     }
@@ -1938,6 +3224,9 @@ fn decode_recovery_snapshot(body: &[u8]) -> Result<RecoverySnapshot, String> {
         receipt_order,
         program_operations,
         program_activity_operations,
+        accounts,
+        move_quotes,
+        move_operations,
     })
 }
 
@@ -1965,6 +3254,9 @@ fn export_snapshot(emulator: &mut Emulator, trace: u64) -> Response {
         &emulator.receipt_order,
         &emulator.program_operations,
         &emulator.program_activity_operations,
+        &emulator.accounts,
+        &emulator.move_quotes,
+        &emulator.move_operations,
     ) {
         Ok(body) => Response {
             status: 200,
@@ -1980,6 +3272,28 @@ fn import_snapshot(emulator: &mut Emulator, body: &[u8], trace: u64) -> Response
         Ok(value) => value,
         Err(error) => return refusal(trace, 400, "invalid_snapshot", &error),
     };
+    let mut prior_bytes = ptr::null();
+    let mut prior_length = 0_usize;
+    let prior_code = unsafe {
+        platform_emulator_snapshot_export(
+            emulator.core,
+            &raw mut prior_bytes,
+            &raw mut prior_length,
+        )
+    };
+    if prior_code != 0
+        || prior_bytes.is_null()
+        || prior_length == 0
+        || prior_length > MAX_CORE_SNAPSHOT_BYTES
+    {
+        return refusal(
+            trace,
+            503,
+            "snapshot_rollback_unavailable",
+            "current canonical state could not be retained before import",
+        );
+    }
+    let prior_core = unsafe { slice::from_raw_parts(prior_bytes, prior_length) }.to_vec();
     let code = unsafe {
         platform_emulator_snapshot_import(
             emulator.core,
@@ -1990,10 +3304,41 @@ fn import_snapshot(emulator: &mut Emulator, body: &[u8], trace: u64) -> Response
     if code != 0 {
         return core_response(trace, code);
     }
+    let recovered_accounts_match = inspect_state(emulator)
+        .ok()
+        .is_some_and(|state| state.account_count == recovered.accounts.len())
+        && recovered.accounts.iter().all(|(name, expected)| {
+            core_account(emulator, name)
+                .ok()
+                .flatten()
+                .is_some_and(|account| account.id == expected.id)
+        });
+    if !recovered_accounts_match {
+        let rollback = unsafe {
+            platform_emulator_snapshot_import(emulator.core, prior_core.as_ptr(), prior_core.len())
+        };
+        if rollback != 0 {
+            return refusal(
+                trace,
+                503,
+                "snapshot_rollback_failed",
+                "invalid move metadata was refused but prior canonical state could not be restored",
+            );
+        }
+        return refusal(
+            trace,
+            400,
+            "invalid_snapshot",
+            "recovered account metadata does not match canonical state",
+        );
+    }
     emulator.receipts = recovered.receipts;
     emulator.receipt_order = recovered.receipt_order;
     emulator.program_operations = recovered.program_operations;
     emulator.program_activity_operations = recovered.program_activity_operations;
+    emulator.accounts = recovered.accounts;
+    emulator.move_quotes = recovered.move_quotes;
+    emulator.move_operations = recovered.move_operations;
     success(trace, "{\"imported\":true}")
 }
 
@@ -2107,6 +3452,8 @@ fn route(emulator: &mut Emulator, request: &Request) -> Response {
     let result = match (request.method.as_str(), request.path.as_str()) {
         ("GET", "/healthz") => health(emulator, trace),
         ("POST", "/v1/activities") => submit(emulator, request, trace),
+        ("POST", "/v1/moves/quote") => move_quote(emulator, request, trace),
+        ("POST", "/v1/moves") => move_commit(emulator, request, trace),
         ("POST", "/v1/programs/call") => program_call(emulator, request, trace),
         ("POST", "/v1/programs/simulate") => program_simulate(emulator, request, trace),
         ("GET", path)
@@ -2154,6 +3501,8 @@ fn route(emulator: &mut Emulator, request: &Request) -> Response {
         (
             _,
             "/v1/activities"
+            | "/v1/moves/quote"
+            | "/v1/moves"
             | "/v1/state"
             | "/__emulator/accounts/prefund"
             | "/__emulator/time/set"
@@ -2227,7 +3576,8 @@ fn program_registry_read(
         return program_head_error(trace, code);
     }
     let mut live = CoreState {
-        state_root: [0; 32],
+        canonical_state_root: [0; 32],
+        receipt_state_root: [0; 32],
         next_sequence: 0,
         batch_number: 0,
         timestamp_ms: 0,
@@ -2544,24 +3894,24 @@ fn platform_emulator(config: Config) -> Result<(), String> {
     let mut emulator = Emulator {
         core,
         signing_key: SigningKey::from_bytes(&seed),
+        network_id: config.network_id,
         receipts: HashMap::new(),
         receipt_order: VecDeque::new(),
         program_operations: HashMap::new(),
         program_activity_operations: HashMap::new(),
+        accounts: HashMap::new(),
+        move_quotes: HashMap::new(),
+        move_operations: HashMap::new(),
         trace: 0,
     };
     for prefund in config.prefunds {
-        let status = unsafe {
-            platform_emulator_prefund(
-                emulator.core,
-                prefund.did.as_ptr(),
-                prefund.did.len(),
-                prefund.public_key.as_ptr(),
-                prefund.amount_hi,
-                prefund.amount_lo,
-            )
-        };
-        if status != 0 {
+        if let Err(status) = prefund_core(
+            &mut emulator,
+            &prefund.did,
+            prefund.public_key,
+            prefund.amount_hi,
+            prefund.amount_lo,
+        ) {
             return Err(format!(
                 "prefund {} failed: {}",
                 prefund.did,
@@ -2721,7 +4071,8 @@ mod program_call_tests {
         agent_error_class, agent_response, decode_activity, decode_program_activity,
         decode_recovery_snapshot, encode_recovery_snapshot, hex_decode, program_activity_selector,
         program_receipt_selector, program_selector, programs_route, refusal,
-        stored_program_operation_response, success, ProgramOperation, Request, MAX_RECEIPT_BYTES,
+        stored_program_operation_response, success, EmulatorAccount, MoveOperation,
+        MoveQuoteRecord, ProgramOperation, Request, MAX_RECEIPT_BYTES,
     };
     use std::collections::{HashMap, VecDeque};
 
@@ -2963,6 +4314,53 @@ mod program_call_tests {
         )]);
         let program_activity_operations =
             HashMap::from([(program_activity.clone(), idempotency.clone())]);
+        let source_name = "agent:did:layerx:source:main".to_owned();
+        let destination_name = "agent:did:layerx:destination:main".to_owned();
+        let accounts = HashMap::from([
+            (
+                source_name.clone(),
+                EmulatorAccount {
+                    id: [1; 32],
+                    did: "did:layerx:source".to_owned(),
+                    public_key: [2; 32],
+                },
+            ),
+            (
+                destination_name.clone(),
+                EmulatorAccount {
+                    id: [3; 32],
+                    did: "did:layerx:destination".to_owned(),
+                    public_key: [4; 32],
+                },
+            ),
+        ]);
+        let move_idempotency = "move-operation-key-0001".to_owned();
+        let quote_id = format!("qte_{}", "d".repeat(64));
+        let move_quotes = HashMap::from([(
+            quote_id.clone(),
+            MoveQuoteRecord {
+                quote_id: quote_id.clone(),
+                source: source_name,
+                destination: destination_name,
+                source_id: [1; 32],
+                destination_id: [3; 32],
+                amount: 9,
+                currency: "LXP".to_owned(),
+                created_at: 1_700_000_000_000,
+                expires_at: 1_700_000_300_000,
+                identity_sequence: 7,
+                source_sequence: 8,
+                committed_idempotency: Some(move_idempotency.clone()),
+            },
+        )]);
+        let move_operations = HashMap::from([(
+            move_idempotency,
+            MoveOperation {
+                quote_id,
+                status: 200,
+                body: serde_json::json!({"ok":true,"result":{"state":"done"}}).to_string(),
+            },
+        )]);
 
         let first = encode_recovery_snapshot(
             b"bounded-core-snapshot",
@@ -2970,6 +4368,9 @@ mod program_call_tests {
             &receipt_order,
             &program_operations,
             &program_activity_operations,
+            &accounts,
+            &move_quotes,
+            &move_operations,
         )
         .unwrap();
         let second = encode_recovery_snapshot(
@@ -2978,6 +4379,9 @@ mod program_call_tests {
             &receipt_order,
             &program_operations,
             &program_activity_operations,
+            &accounts,
+            &move_quotes,
+            &move_operations,
         )
         .unwrap();
         assert_eq!(first, second);
@@ -2991,6 +4395,9 @@ mod program_call_tests {
             recovered.program_activity_operations,
             program_activity_operations
         );
+        assert_eq!(recovered.accounts, accounts);
+        assert_eq!(recovered.move_quotes, move_quotes);
+        assert_eq!(recovered.move_operations, move_operations);
     }
 
     #[test]
@@ -3014,12 +4421,18 @@ mod program_call_tests {
             },
         )]);
         let bindings = HashMap::from([(activity, "c".repeat(64))]);
+        let accounts = HashMap::new();
+        let move_quotes = HashMap::new();
+        let move_operations = HashMap::new();
         assert!(encode_recovery_snapshot(
             b"bounded-core-snapshot",
             &receipts,
             &receipt_order,
             &operations,
             &bindings,
+            &accounts,
+            &move_quotes,
+            &move_operations,
         )
         .is_err());
 
@@ -3031,6 +4444,9 @@ mod program_call_tests {
             &receipt_order,
             &empty_operations,
             &empty_bindings,
+            &accounts,
+            &move_quotes,
+            &move_operations,
         )
         .unwrap();
         let last = encoded.len() - 1;

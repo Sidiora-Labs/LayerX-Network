@@ -8,8 +8,11 @@ use layerx_wire::hash::receipt_digest;
 
 fn receipt_bytes(signature: Option<[u8; 64]>) -> Vec<u8> {
     let mut encoder = Encoder::new(4096);
-    assert_eq!(encoder.structure_header(0x5201), Ok(()));
-    assert_eq!(encoder.u16(1), Ok(()));
+    assert_eq!(
+        encoder.structure_header_version(0x5201, layerx_wire::limits::PROTOCOL_VERSION),
+        Ok(())
+    );
+    assert_eq!(encoder.u16(layerx_wire::limits::PROTOCOL_VERSION), Ok(()));
     assert_eq!(encoder.bytes(&[1; 32], 32), Ok(()));
     assert_eq!(encoder.u64(9), Ok(()));
     assert_eq!(encoder.bytes(&[2; 32], 32), Ok(()));

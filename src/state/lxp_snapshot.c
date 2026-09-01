@@ -7,6 +7,47 @@
 
 enum { LXP_SNAPSHOT_STRUCTURE_TAG = 0x1804 };
 
+static void snapshot_put_u64(uint8_t out[8], uint64_t value)
+{
+    size_t i;
+    for (i = 0U; i < 8U; ++i)
+        out[7U - i] = (uint8_t)(value >> (i * 8U));
+}
+
+static lxp_result snapshot_digest(const uint8_t *snapshot,
+                                  size_t snapshot_length,
+                                  uint64_t global_sequence,
+                                  const uint8_t canonical_state_root[32],
+                                  const uint8_t receipt_state_root[32],
+                                  uint8_t digest[32])
+{
+    static const uint8_t format[] = {'L', 'X', 'S', '2'};
+    uint8_t fields[80];
+    lxp_hash_context context;
+    const uint8_t *domain;
+    size_t domain_length = 0U;
+    lxp_result status;
+    if ((snapshot == NULL && snapshot_length != 0U) ||
+        canonical_state_root == NULL || receipt_state_root == NULL ||
+        digest == NULL || snapshot_length > UINT64_MAX)
+        return LXP_ERR_NON_CANONICAL;
+    snapshot_put_u64(fields, global_sequence);
+    (void)memcpy(fields + 8U, canonical_state_root, 32U);
+    (void)memcpy(fields + 40U, receipt_state_root, 32U);
+    snapshot_put_u64(fields + 72U, (uint64_t)snapshot_length);
+    domain = lxp_domain_tag(LXP_DOMAIN_SNAPSHOT, &domain_length);
+    if (domain == NULL) return LXP_ERR_INVALID_TAG;
+    lxp_hash_init(&context);
+    status = lxp_hash_update(&context, domain, domain_length);
+    if (status == LXP_OK)
+        status = lxp_hash_update(&context, format, sizeof(format));
+    if (status == LXP_OK)
+        status = lxp_hash_update(&context, fields, sizeof(fields));
+    if (status == LXP_OK)
+        status = lxp_hash_update(&context, snapshot, snapshot_length);
+    return status == LXP_OK ? lxp_hash_final(&context, digest) : status;
+}
+
 static int bytes_order(const uint8_t *left, size_t left_length,
                        const uint8_t *right, size_t right_length)
 {
@@ -335,39 +376,43 @@ lxp_result lxp_snapshot_write(const lxp_kernel *kernel,
 lxp_result lxp_snapshot_manifest_build(const uint8_t *snapshot,
                                        size_t snapshot_length,
                                        uint64_t global_sequence,
-                                       const uint8_t state_root[32],
+                                       const uint8_t canonical_state_root[32],
+                                       const uint8_t receipt_state_root[32],
                                        lxp_snapshot_manifest_record *manifest)
 {
-    if ((snapshot == NULL && snapshot_length != 0U) || state_root == NULL ||
+    if ((snapshot == NULL && snapshot_length != 0U) ||
+        canonical_state_root == NULL || receipt_state_root == NULL ||
         manifest == NULL) return LXP_ERR_NON_CANONICAL;
     manifest->global_sequence = global_sequence;
-    (void)memcpy(manifest->state_root, state_root, 32U);
-    return lxp_hash_domain(LXP_DOMAIN_SNAPSHOT, snapshot, snapshot_length,
+    (void)memcpy(manifest->canonical_state_root, canonical_state_root, 32U);
+    (void)memcpy(manifest->receipt_state_root, receipt_state_root, 32U);
+    return snapshot_digest(snapshot, snapshot_length, global_sequence,
+                           canonical_state_root, receipt_state_root,
                            manifest->snapshot_digest);
 }
 
 lxp_result lxp_snapshot_manifest(const uint8_t *snapshot,
                                  size_t snapshot_length,
                                  uint64_t global_sequence,
-                                 const uint8_t state_root[32],
+                                 const uint8_t canonical_state_root[32],
+                                 const uint8_t receipt_state_root[32],
                                  lxp_snapshot_manifest_record *manifest)
 {
     return lxp_snapshot_manifest_build(snapshot, snapshot_length,
-                                       global_sequence, state_root, manifest);
+                                       global_sequence, canonical_state_root,
+                                       receipt_state_root, manifest);
 }
 
 lxp_result lxp_snapshot_verify_root(const lxp_kernel *kernel,
-                                    const lxp_snapshot_manifest_record *manifest,
-                                    const uint8_t receipt_state_root[32])
+                                    const lxp_snapshot_manifest_record *manifest)
 {
     uint8_t computed[32];
     lxp_result status;
-    if (kernel == NULL || manifest == NULL || receipt_state_root == NULL)
+    if (kernel == NULL || manifest == NULL)
         return LXP_ERR_NON_CANONICAL;
     status = lxp_state_root(kernel, computed);
     if (status != LXP_OK) return status;
-    return lxp_ct_memcmp(computed, manifest->state_root, 32U) == 0 &&
-           lxp_ct_memcmp(computed, receipt_state_root, 32U) == 0 ?
+    return lxp_ct_memcmp(computed, manifest->canonical_state_root, 32U) == 0 ?
            LXP_OK : LXP_ERR_SNAPSHOT_MISMATCH;
 }
 
@@ -434,7 +479,6 @@ static lxp_result read_account(lxp_codec_reader *reader, lx_account *account)
 
 lxp_result lxp_snapshot_load(const uint8_t *snapshot, size_t snapshot_length,
                              const lxp_snapshot_manifest_record *manifest,
-                             const uint8_t receipt_state_root[32],
                              lxp_kernel *kernel)
 {
     lxp_kernel *candidate;
@@ -450,11 +494,13 @@ lxp_result lxp_snapshot_load(const uint8_t *snapshot, size_t snapshot_length,
     size_t i;
     lxp_result status;
     if ((snapshot == NULL && snapshot_length != 0U) || manifest == NULL ||
-        receipt_state_root == NULL || kernel == NULL || kernel->state == NULL)
+        kernel == NULL || kernel->state == NULL)
         return LXP_ERR_NON_CANONICAL;
     live_accounts = kernel->state->accounts;
-    status = lxp_hash_domain(LXP_DOMAIN_SNAPSHOT, snapshot, snapshot_length,
-                             digest);
+    status = snapshot_digest(snapshot, snapshot_length,
+                             manifest->global_sequence,
+                             manifest->canonical_state_root,
+                             manifest->receipt_state_root, digest);
     if (status != LXP_OK || lxp_ct_memcmp(
         digest, manifest->snapshot_digest, 32U) != 0)
         return status != LXP_OK ? status : LXP_ERR_SNAPSHOT_MISMATCH;
@@ -645,8 +691,7 @@ lxp_result lxp_snapshot_load(const uint8_t *snapshot, size_t snapshot_length,
     }
     if (status == LXP_OK) status = lxp_codec_finish(&reader);
     if (status == LXP_OK)
-        status = lxp_snapshot_verify_root(candidate, manifest,
-                                          receipt_state_root);
+        status = lxp_snapshot_verify_root(candidate, manifest);
     if (status == LXP_OK) {
         if (snapshot_version ==
                 (uint16_t)LXP_PROTOCOL_VERSION_OCCUPANCY) {
@@ -670,7 +715,8 @@ lxp_result lxp_snapshot_load(const uint8_t *snapshot, size_t snapshot_length,
         (void)memcpy(kernel->module_kv, candidate->module_kv,
                      candidate->module_kv_count *
                      sizeof(candidate->module_kv[0]));
-        (void)memcpy(kernel->current_state_root, manifest->state_root, 32U);
+        (void)memcpy(kernel->current_state_root,
+                     manifest->receipt_state_root, 32U);
     }
     free(accounts);
     free(state);

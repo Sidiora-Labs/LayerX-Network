@@ -1,17 +1,13 @@
+use layerx_interop_gateway::adapter::{AdapterId, ConformanceSuite, PinnedSpec, SpecVersion};
 use layerx_ucp::{
     interop_ucp, ucp_adapter_descriptor, Capability, MerchantProfile, PaymentHandler, UcpError,
-    UcpIdempotencyKey,
+    UcpIdempotencyKey, UCP_CHECKOUT_SPEC_SHA256,
 };
-use layerx_interop_gateway::adapter::{AdapterId, ConformanceSuite, PinnedSpec, SpecVersion};
 use sha2::{Digest as _, Sha256};
 
 const UCP_VERSION: &str = "2026-04-08";
 const CHECKOUT_CAPABILITY: &str = "dev.ucp.shopping.checkout";
 const ORDER_CAPABILITY: &str = "dev.ucp.shopping.order";
-
-fn spec_digest(content: &str) -> [u8; 32] {
-    Sha256::digest(content.as_bytes()).into()
-}
 
 fn conformance_digest(vectors: &[&str]) -> [u8; 32] {
     let mut hasher = Sha256::new();
@@ -24,13 +20,6 @@ fn conformance_digest(vectors: &[&str]) -> [u8; 32] {
 
 #[test]
 fn ucp_adapter_declares_versioned_spec_and_conformance() {
-    let spec_content = concat!(
-        "UCP 2026-04-08 Specification\n",
-        "Checkout: POST /checkout {checkout_id, currency, amount}\n",
-        "Order: GET /order/{order_id} -> {id, checkout_id, amount, receipt_digest}\n",
-    );
-    let spec_digest = spec_digest(spec_content);
-
     let vectors = vec![
         "checkout_minimal: {checkout_id: 'chk_1', currency: 'USD', amount: 100}",
         "checkout_refused: {checkout_id: 'chk_bad', status: 'incomplete'}",
@@ -38,11 +27,9 @@ fn ucp_adapter_declares_versioned_spec_and_conformance() {
     ];
     let conformance_digest = conformance_digest(&vectors);
 
-    let version = SpecVersion::parse("20260408")
-        .unwrap_or_else(|error| panic!("version: {error}"));
-    let adapter_id = AdapterId::new("ucp")
-        .unwrap_or_else(|error| panic!("adapter id: {error}"));
-    let spec = PinnedSpec::new(adapter_id.clone(), version, spec_digest)
+    let version = SpecVersion::parse("20260408").unwrap_or_else(|error| panic!("version: {error}"));
+    let adapter_id = AdapterId::new("ucp").unwrap_or_else(|error| panic!("adapter id: {error}"));
+    let spec = PinnedSpec::new(adapter_id.clone(), version, UCP_CHECKOUT_SPEC_SHA256)
         .unwrap_or_else(|error| panic!("spec: {error}"));
     let conformance = ConformanceSuite::new(
         AdapterId::new("ucp-2026-04-08-vectors")

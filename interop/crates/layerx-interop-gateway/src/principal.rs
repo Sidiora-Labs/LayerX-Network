@@ -13,9 +13,9 @@ const IDENTIFIER_LIMIT: usize = 128;
 fn valid_identifier(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= IDENTIFIER_LIMIT
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-' || byte == b'_')
+        && value.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-' || byte == b'_'
+        })
 }
 
 /// A validated principal identifier, the only handle that reaches stored
@@ -256,10 +256,7 @@ mod tests {
             PrincipalId::new("../other"),
             Err(StoreError::InvalidPrincipal)
         );
-        assert_eq!(
-            PrincipalId::new("Alice"),
-            Err(StoreError::InvalidPrincipal)
-        );
+        assert_eq!(PrincipalId::new("Alice"), Err(StoreError::InvalidPrincipal));
         assert_eq!(
             PrincipalId::new("a".repeat(129)),
             Err(StoreError::InvalidPrincipal)
@@ -281,7 +278,10 @@ mod tests {
             .get(Table::Translations, &row)
             .is_none());
         assert!(store.read(&mallory, Table::Translations, &row).is_none());
-        assert!(store.principal(&mallory).keys(Table::Translations).is_empty());
+        assert!(store
+            .principal(&mallory)
+            .keys(Table::Translations)
+            .is_empty());
         let stored = store
             .read(&alice, Table::Translations, &row)
             .unwrap_or_else(|| panic!("owner lost its own row"));

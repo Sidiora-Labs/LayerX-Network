@@ -29,8 +29,7 @@ fn place(root: &Path, relative: &str, contents: &str) {
 
 fn manifest() -> String {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../workspace.kvx");
-    fs::read_to_string(&path)
-        .unwrap_or_else(|error| panic!("read {}: {error}", path.display()))
+    fs::read_to_string(&path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()))
 }
 
 fn declared_directories(source: &str) -> Vec<String> {
@@ -118,7 +117,11 @@ fn undeclared_mandated_directory_is_refused() {
     let root = repo_fixture("undeclared");
     let start_marker = "[dir.emulator]\npath = \"platform/emulator\"\n";
     let source = manifest().replace(start_marker, "");
-    expect_refusal(&root, &source, "mandated workspace directory undeclared: emulator");
+    expect_refusal(
+        &root,
+        &source,
+        "mandated workspace directory undeclared: emulator",
+    );
     cleanup(&root);
 }
 
@@ -145,17 +148,18 @@ fn unknown_declaration_is_refused() {
         "[ecosystem.rust]\nmanifest",
         "[ecosystem.rust]\nwarn_only = \"true\"\nmanifest",
     );
-    expect_refusal(&root, &source, "unknown declaration ecosystem.rust.warn_only");
+    expect_refusal(
+        &root,
+        &source,
+        "unknown declaration ecosystem.rust.warn_only",
+    );
     cleanup(&root);
 }
 
 #[test]
 fn directory_escaping_the_workspace_root_is_refused() {
     let root = repo_fixture("escape");
-    let source = manifest().replace(
-        "path = \"platform/middleware\"",
-        "path = \"human/crates\"",
-    );
+    let source = manifest().replace("path = \"platform/middleware\"", "path = \"human/crates\"");
     expect_refusal(&root, &source, "escapes the workspace root");
     cleanup(&root);
 }

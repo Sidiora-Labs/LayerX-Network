@@ -43,13 +43,18 @@ impl std::fmt::Debug for RegistryAuthority {
 impl RegistryAuthority {
     /// Consumes a bounded non-empty secret and retains only its digest.
     pub fn new(mut secret: Zeroizing<String>) -> Result<Self, String> {
-        if secret.is_empty() || secret.len() > 4_096 || secret.bytes().any(|byte| byte.is_ascii_control()) {
+        if secret.is_empty()
+            || secret.len() > 4_096
+            || secret.bytes().any(|byte| byte.is_ascii_control())
+        {
             secret.zeroize();
             return Err("registry bearer secret is outside its bound".to_owned());
         }
         let digest: [u8; 32] = Sha256::digest(secret.as_bytes()).into();
         secret.zeroize();
-        Ok(Self { digest: Zeroizing::new(digest) })
+        Ok(Self {
+            digest: Zeroizing::new(digest),
+        })
     }
 
     /// Verifies the exact bearer credential in constant time after fixed-size hashing.
@@ -58,7 +63,10 @@ impl RegistryAuthority {
         let Some(candidate) = header.and_then(|value| value.strip_prefix("Bearer ")) else {
             return false;
         };
-        if candidate.is_empty() || candidate.len() > 4_096 || candidate.bytes().any(|byte| byte.is_ascii_control()) {
+        if candidate.is_empty()
+            || candidate.len() > 4_096
+            || candidate.bytes().any(|byte| byte.is_ascii_control())
+        {
             return false;
         }
         let mut candidate_digest: [u8; 32] = Sha256::digest(candidate.as_bytes()).into();

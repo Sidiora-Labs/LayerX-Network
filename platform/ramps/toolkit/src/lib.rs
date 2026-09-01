@@ -169,24 +169,20 @@ impl RampOrder {
         field(&mut hasher, &self.quote.layerx_asset);
         field(&mut hasher, &self.quote.layerx_amount.to_be_bytes());
         field(&mut hasher, self.quote.external_currency.as_bytes());
-        field(
-            &mut hasher,
-            &self.quote.external_amount_minor.to_be_bytes(),
-        );
+        field(&mut hasher, &self.quote.external_amount_minor.to_be_bytes());
         field(&mut hasher, &self.quote.rate_numerator.to_be_bytes());
         field(&mut hasher, &self.quote.rate_denominator.to_be_bytes());
         field(&mut hasher, &self.quote.fee_minor.to_be_bytes());
-        field(
-            &mut hasher,
-            &self.quote.maximum_slippage_bps.to_be_bytes(),
-        );
+        field(&mut hasher, &self.quote.maximum_slippage_bps.to_be_bytes());
         field(&mut hasher, &self.context);
         field(&mut hasher, self.quote.provider_token.as_bytes());
         field(&mut hasher, self.quote.payout_token.as_bytes());
         field(&mut hasher, &self.quote.expires_at.to_be_bytes());
         field(
             &mut hasher,
-            self.payer_grant.as_ref().map_or(&[], |value| value.as_slice()),
+            self.payer_grant
+                .as_ref()
+                .map_or(&[], |value| value.as_slice()),
         );
         hasher.finalize().into()
     }
@@ -304,7 +300,7 @@ pub fn operator_send_authorization_message(
     if order.direction() != RampDirection::OnRamp
         || order.payer_grant.is_some()
         || network_id == 0
-        || protocol_version == 0
+        || protocol_version != layerx_wire::limits::PROTOCOL_VERSION
     {
         return Err(RampError::InvalidOrder);
     }

@@ -827,6 +827,45 @@ fn write_generated(generated: &Generated, output_root: &Path) -> Result<(), Stri
     Ok(())
 }
 
+/// Compares the locked Programs contract with the canonical Programs schema source.
+///
+/// # Errors
+///
+/// Names a missing or byte-stale locked Programs contract.
+pub fn programs_golden_drift_gate(schema_root: &Path) -> Result<(), String> {
+    let source_path = schema_root.join("programs.kvx");
+    let golden_path = schema_root.join("golden/programs.kvx");
+    let source = fs::read(&source_path)
+        .map_err(|error| format!("read {}: {error}", source_path.display()))?;
+    let golden = fs::read(&golden_path)
+        .map_err(|error| format!("read {}: {error}", golden_path.display()))?;
+    if source != golden {
+        return Err(format!(
+            "generated Programs contract drift at {}; run make agent-sdk-generate",
+            golden_path.display()
+        ));
+    }
+    Ok(())
+}
+
+/// Regenerates the locked Programs contract from its canonical schema source.
+///
+/// # Errors
+///
+/// Fails when the canonical source cannot be read or the locked output cannot be written.
+pub fn write_programs_golden(schema_root: &Path) -> Result<(), String> {
+    let source_path = schema_root.join("programs.kvx");
+    let golden_path = schema_root.join("golden/programs.kvx");
+    let source = fs::read(&source_path)
+        .map_err(|error| format!("read {}: {error}", source_path.display()))?;
+    let parent = golden_path
+        .parent()
+        .ok_or_else(|| format!("generated path has no parent: {}", golden_path.display()))?;
+    fs::create_dir_all(parent).map_err(|error| format!("create {}: {error}", parent.display()))?;
+    fs::write(&golden_path, source)
+        .map_err(|error| format!("write {}: {error}", golden_path.display()))
+}
+
 fn run() -> Result<(), String> {
     let arguments = env::args().skip(1).collect::<Vec<_>>();
     let mode = arguments.first().map_or("--check", String::as_str);
@@ -838,8 +877,14 @@ fn run() -> Result<(), String> {
         .map_or_else(|| PathBuf::from("agent/sdk"), PathBuf::from);
     let generated = agent_sdk_generator(&schema)?;
     match mode {
-        "--write" => write_generated(&generated, &output),
-        "--check" => agent_sdk_drift_gate(&generated, &output),
+        "--write" => {
+            write_generated(&generated, &output)?;
+            write_programs_golden(&schema)
+        }
+        "--check" => {
+            agent_sdk_drift_gate(&generated, &output)?;
+            programs_golden_drift_gate(&schema)
+        }
         _ => Err("usage: agent-sdk-gen [--write|--check] [schema-root] [output-root]".to_owned()),
     }
 }

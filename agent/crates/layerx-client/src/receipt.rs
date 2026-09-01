@@ -5,8 +5,8 @@ use std::thread;
 use layerx_proof::receipt::{verify, AuthorizedBatch, VerificationFailure, VerifiedReceipt};
 
 use crate::client::ReconnectPolicy;
-use crate::lni::schema::{decode_envelope, encode_envelope, Envelope, SchemaError, Version};
 use crate::lni::refusal::decode_core_refusal;
+use crate::lni::schema::{decode_envelope, encode_envelope, Envelope, SchemaError, Version};
 use crate::lni::transport::{FrameTransport, TransportError};
 use crate::submit::Unknown;
 

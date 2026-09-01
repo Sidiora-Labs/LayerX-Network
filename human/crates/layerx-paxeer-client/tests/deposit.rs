@@ -19,6 +19,10 @@ use layerx_types::amount::Amount;
 use layerx_types::ids::AssetId;
 use layerx_types::intent::EvmAddress;
 use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry};
+use layerx_wire::encode::Encoder;
+use layerx_wire::hash::receipt_digest;
+use layerx_wire::limits::PROTOCOL_VERSION;
+use layerx_wire::receipt::decode;
 use sha2::{Digest as _, Sha256};
 
 const FUNDED: &str = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266";
@@ -159,7 +163,7 @@ fn deposit_verifier(
         paxeer_checkpoint_authority: authority.verifying_key().to_bytes(),
         custody_reference: CUSTODY_REFERENCE,
         layerx_network_id: CORE_NETWORK,
-        layerx_protocol_version: 1,
+        layerx_protocol_version: layerx_wire::limits::PROTOCOL_VERSION,
     })
     .unwrap_or_else(|error| panic!("deposit proof verifier: {error:?}"))
 }
@@ -386,7 +390,7 @@ fn published_proof(
         Amount::from_u128(AMOUNT),
         checkpoint_id,
         CORE_NETWORK,
-        1,
+        layerx_wire::limits::PROTOCOL_VERSION,
     )
     .unwrap_or_else(|error| panic!("deposit leaf: {error:?}"));
     let deposit_root =
@@ -397,7 +401,7 @@ fn published_proof(
         deposit_root,
         custody_reference: CUSTODY_REFERENCE,
         network_id: CORE_NETWORK,
-        protocol_version: 1,
+        protocol_version: layerx_wire::limits::PROTOCOL_VERSION,
         signature: [0; 64],
     };
     let message = deposit_root_registration_message(&registration)
@@ -417,7 +421,7 @@ fn dummy_published_proof(authority: &SigningKey) -> PublishedDepositProof {
         deposit_root: [9; 32],
         custody_reference: CUSTODY_REFERENCE,
         network_id: CORE_NETWORK,
-        protocol_version: 1,
+        protocol_version: layerx_wire::limits::PROTOCOL_VERSION,
         signature: [0; 64],
     };
     let message = deposit_root_registration_message(&registration)
@@ -468,7 +472,82 @@ fn signed_receipt(fields: &ReceiptFields, signing: &SigningKey) -> (Vec<u8>, Aut
         fields.resulting_state_root,
         signing.verifying_key().to_bytes(),
     );
-    (hex_bytes(CREDIT_RECEIPT_HEX), batch)
+    let encode = |signature: Option<[u8; 64]>| {
+        let mut encoder = Encoder::new(4_096);
+        assert_eq!(
+            encoder.structure_header_version(0x5201, PROTOCOL_VERSION),
+            Ok(())
+        );
+        assert_eq!(encoder.u16(PROTOCOL_VERSION), Ok(()));
+        assert_eq!(encoder.bytes(&fields.activity_id, 32), Ok(()));
+        assert_eq!(encoder.u64(9), Ok(()));
+        assert_eq!(encoder.bytes(&fields.previous_state_root, 32), Ok(()));
+        assert_eq!(encoder.bytes(&fields.resulting_state_root, 32), Ok(()));
+        assert_eq!(encoder.bytes(&fields.resulting_state_root, 32), Ok(()));
+        assert_eq!(encoder.i32(0), Ok(()));
+        assert_eq!(encoder.sequence_length(0, 512), Ok(()));
+        assert_eq!(encoder.u128(1), Ok(()));
+        assert_eq!(encoder.bytes(&fields.batch_id, 32), Ok(()));
+        assert_eq!(encoder.u16(ModuleId::Bridge as u16), Ok(()));
+        assert_eq!(encoder.u32(2), Ok(()));
+        assert_eq!(encoder.u32(1), Ok(()));
+        assert_eq!(encoder.u8(1), Ok(()));
+        assert_eq!(encoder.bytes(&fields.asset, 32), Ok(()));
+        assert_eq!(encoder.u128(fields.amount), Ok(()));
+        assert_eq!(encoder.bytes(&fields.from, 32), Ok(()));
+        assert_eq!(encoder.u128(100), Ok(()));
+        assert_eq!(encoder.u128(75), Ok(()));
+        assert_eq!(encoder.u64(1), Ok(()));
+        assert_eq!(encoder.bytes(&fields.to, 32), Ok(()));
+        assert_eq!(encoder.u128(10), Ok(()));
+        assert_eq!(encoder.u128(35), Ok(()));
+        assert_eq!(encoder.bytes(&[9; 32], 32), Ok(()));
+        assert_eq!(encoder.bytes(&[10; 32], 32), Ok(()));
+        assert_eq!(encoder.bytes(&[11; 32], 32), Ok(()));
+        assert_eq!(encoder.u64(1_000), Ok(()));
+        assert_eq!(encoder.u8(u8::from(signature.is_some())), Ok(()));
+        if let Some(signature) = signature {
+            assert_eq!(encoder.bytes(&signature, 64), Ok(()));
+        }
+        encoder.finish()
+    };
+    let unsigned = encode(None);
+    let digest = receipt_digest(&unsigned)
+        .unwrap_or_else(|error| panic!("credit receipt digest: {error:?}"));
+    let receipt_bytes = encode(Some(signing.sign(&digest).to_bytes()));
+    let receipt = decode(&receipt_bytes)
+        .unwrap_or_else(|error| panic!("canonical credit receipt: {error:?}"));
+    let protocol = receipt
+        .protocol()
+        .unwrap_or_else(|| panic!("credit receipt must use the protocol envelope"));
+    assert_eq!(protocol.protocol_version(), PROTOCOL_VERSION);
+    assert_eq!(protocol.module_id(), ModuleId::Bridge as u16);
+    assert_eq!(protocol.module_version(), 2);
+    assert_eq!(
+        protocol
+            .program_outcome()
+            .map(|outcome| outcome.abi_version()),
+        None
+    );
+    (receipt_bytes, batch)
+}
+
+#[test]
+fn legacy_credit_receipt_remains_explicitly_protocol_v1() {
+    let receipt = decode(&hex_bytes(CREDIT_RECEIPT_HEX))
+        .unwrap_or_else(|error| panic!("legacy credit receipt: {error:?}"));
+    let protocol = receipt
+        .protocol()
+        .unwrap_or_else(|| panic!("legacy credit receipt must use the protocol envelope"));
+    assert_eq!(protocol.protocol_version(), 1);
+    assert_eq!(protocol.module_id(), ModuleId::Bridge as u16);
+    assert_eq!(protocol.module_version(), 1);
+    assert_eq!(
+        protocol
+            .program_outcome()
+            .map(|outcome| outcome.abi_version()),
+        None
+    );
 }
 
 #[test]
@@ -493,8 +572,30 @@ fn signed_custody_root_mints_an_opaque_proof_but_credit_ingress_fails_closed() {
     let published = published_proof(&anvil, deposit_transaction, vault, &authority);
     let signed_message = deposit_root_registration_message(&published.registration)
         .unwrap_or_else(|error| panic!("signed root message: {error:?}"));
-    assert!(signed_message.starts_with(b"LX:PAXEER:DEPOSIT:ROOT:v1"));
-    assert!(signed_message.ends_with(&[0, 0, 0, 17, 0, 1]));
+    let domain = b"LX:PAXEER:DEPOSIT:ROOT:v1";
+    let mut offset = 0;
+    assert_eq!(&signed_message[offset..offset + domain.len()], domain);
+    offset += domain.len();
+    for field in [
+        published.registration.checkpoint_id,
+        published.registration.checkpoint_state_root,
+        published.registration.deposit_root,
+        published.registration.custody_reference,
+    ] {
+        assert_eq!(&signed_message[offset..offset + field.len()], field);
+        offset += field.len();
+    }
+    assert_eq!(
+        &signed_message[offset..offset + 4],
+        CORE_NETWORK.to_be_bytes()
+    );
+    offset += 4;
+    assert_eq!(
+        &signed_message[offset..offset + 2],
+        PROTOCOL_VERSION.to_be_bytes()
+    );
+    offset += 2;
+    assert_eq!(offset, signed_message.len());
     let proof_verifier = deposit_verifier(&anvil, 1, &authority);
     let proof = proof_verifier
         .obtain(&report, vault, published.clone())
@@ -510,7 +611,7 @@ fn signed_custody_root_mints_an_opaque_proof_but_credit_ingress_fails_closed() {
     assert_eq!(proof.inclusion_proof().leaf_index(), 0);
     assert_eq!(proof.inclusion_proof().leaf_count(), 1);
     assert_eq!(proof.network_id(), CORE_NETWORK);
-    assert_eq!(proof.protocol_version(), 1);
+    assert_eq!(proof.protocol_version(), PROTOCOL_VERSION);
     let mut nullifier = Sha256::new();
     nullifier.update(b"LX:DEPOSIT:NULLIFIER:v1");
     nullifier.update(proof.custody().deposit_id);

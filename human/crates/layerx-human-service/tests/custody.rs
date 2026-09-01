@@ -83,7 +83,8 @@ fn send_intent(public_key: [u8; 32], amount: u128, idempotency: u8) -> Intent {
             AuthorizationSignature::new([0x77; 64]),
         ),
         NetworkId::new(NETWORK_ID).unwrap_or_else(|error| panic!("network: {error:?}")),
-        ProtocolVersion::new(1).unwrap_or_else(|error| panic!("protocol: {error:?}")),
+        ProtocolVersion::new(layerx_wire::limits::PROTOCOL_VERSION)
+            .unwrap_or_else(|error| panic!("protocol: {error:?}")),
     )
     .unwrap_or_else(|error| panic!("send intent: {error:?}"));
     Intent::v1(IntentKind::LxpSend(send))

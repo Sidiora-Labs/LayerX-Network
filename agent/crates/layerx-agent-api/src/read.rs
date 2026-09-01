@@ -72,11 +72,7 @@ pub struct VerifiedRead<T: CoreProduced> {
 
 impl<T: CoreProduced> VerifiedRead<T> {
     #[must_use]
-    pub const fn new(
-        value: T,
-        achieved_verification_level: Level,
-        freshness: Freshness,
-    ) -> Self {
+    pub const fn new(value: T, achieved_verification_level: Level, freshness: Freshness) -> Self {
         Self {
             value,
             achieved_verification_level,

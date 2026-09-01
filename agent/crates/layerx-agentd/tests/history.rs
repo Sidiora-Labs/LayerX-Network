@@ -58,7 +58,7 @@ fn context(head: u64) -> ReadContext {
     ReadContext {
         interface_version: Version::V1_2,
         correlation_id: 91,
-        expected_protocol_version: 1,
+        expected_protocol_version: layerx_wire::limits::PROTOCOL_VERSION,
         expected_network_id: 77,
         requested: Requested::new(VerificationLevel::UNVERIFIED),
         head: Head {

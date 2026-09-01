@@ -37,6 +37,7 @@ use layerx_types::amount::Amount;
 use layerx_types::ids::{Did, IdempotencyKey};
 use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry};
 use layerx_wire::encode::Encoder;
+use layerx_wire::limits::PROTOCOL_VERSION;
 
 static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(1);
 const INTENT: [u8; 32] = [0x17; 32];
@@ -947,7 +948,7 @@ fn send_payload() -> Result<Vec<u8>, SuiteFailure> {
         .u32(17)
         .map_err(|error| failure(format!("payload network: {error:?}"), &[]))?;
     encoder
-        .u16(1)
+        .u16(PROTOCOL_VERSION)
         .map_err(|error| failure(format!("payload version: {error:?}"), &[]))?;
     Ok(encoder.finish())
 }

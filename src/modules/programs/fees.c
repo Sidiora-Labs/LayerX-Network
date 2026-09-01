@@ -1082,9 +1082,8 @@ static lxp_result genesis_kernel_insert(
     return LXP_OK;
 }
 
-lxp_result lxp_programs_fee_genesis_project(
-    const lxp_genesis_manifest *manifest, lxp_arena *arena,
-    lxp_kernel *kernel)
+lxp_result lxp_programs_fee_genesis_materialize(
+    const lxp_genesis_manifest *manifest, lxp_kernel *kernel)
 {
     const lxp_genesis_module_value *active = NULL;
     const lxp_genesis_module_value *history = NULL;
@@ -1093,10 +1092,9 @@ lxp_result lxp_programs_fee_genesis_project(
     uint8_t key[sizeof(fee_history_prefix) - 1U + 4U];
     size_t index;
     lxp_result status;
-    if (manifest == NULL || arena == NULL || kernel == NULL)
+    if (manifest == NULL || kernel == NULL)
         return LXP_ERR_NON_CANONICAL;
-    status = lxp_genesis_verify_signature(manifest, arena);
-    if (status == LXP_OK) status = lxp_programs_fee_genesis_validate(manifest);
+    status = lxp_programs_fee_genesis_validate(manifest);
     if (status != LXP_OK) return status;
     history_key(1U, key);
     for (index = 0U; index < manifest->module_value_count; ++index) {
@@ -1134,6 +1132,18 @@ lxp_result lxp_programs_fee_genesis_project(
                                        history->value,
                                        history->value_length);
     return status;
+}
+
+lxp_result lxp_programs_fee_genesis_project(
+    const lxp_genesis_manifest *manifest, lxp_arena *arena,
+    lxp_kernel *kernel)
+{
+    lxp_result status;
+    if (manifest == NULL || arena == NULL || kernel == NULL)
+        return LXP_ERR_NON_CANONICAL;
+    status = lxp_genesis_verify_signature(manifest, arena);
+    return status == LXP_OK ?
+        lxp_programs_fee_genesis_materialize(manifest, kernel) : status;
 }
 
 /* Canonical replay selector: only the exact state-retained version is

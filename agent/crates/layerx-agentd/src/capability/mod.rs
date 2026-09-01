@@ -14,9 +14,7 @@ mod reporting;
 
 use crate::identity::ProtocolAuthority;
 pub use attenuation::{AttenuationError, CapabilityGraph, RevocableActivity, RevocationResult};
-pub use consumption::{
-    Ceiling, CeilingError, CeilingSnapshot, ReceiptApplication, Reservation,
-};
+pub use consumption::{Ceiling, CeilingError, CeilingSnapshot, ReceiptApplication, Reservation};
 pub use narrowing::{Binding, Enforcement, NarrowingError, NarrowingReport, ProtocolScope};
 pub use reporting::{
     check_guarantee_wording, CapabilityReport, DecisionEvidence, ReportError, ReportSurfaces,

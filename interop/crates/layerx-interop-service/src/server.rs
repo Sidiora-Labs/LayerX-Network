@@ -34,9 +34,8 @@ use layerx_ucp::{
     UcpPaymentIntent, UcpPaymentPlane, UcpPlaneResult,
 };
 use layerx_visa_tap::{
-    prepare_trusted_intent, AgentIntent, AgentPublicKey, CredentialBinding,
-    CredentialBindingStore, KeyStatus, RegisteredAgentKey, TapError, TapRequest, TapVerifier,
-    TrustedAgentRegistry,
+    prepare_trusted_intent, AgentIntent, AgentPublicKey, CredentialBinding, CredentialBindingStore,
+    KeyStatus, RegisteredAgentKey, TapError, TapRequest, TapVerifier, TrustedAgentRegistry,
 };
 use layerx_x402::buyer::{BuyerPaymentPlane, PaymentBuildRequest, SupportedKind};
 use layerx_x402::facilitator::{
@@ -57,8 +56,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use subtle::ConstantTimeEq;
 
 const MAX_BODY: usize = 512 * 1024;
-const FIAT_EVIDENCE_SIGNATURE_DOMAIN: &[u8] =
-    b"LayerX/interop/fiat/provider-evidence/v1\0";
+const FIAT_EVIDENCE_SIGNATURE_DOMAIN: &[u8] = b"LayerX/interop/fiat/provider-evidence/v1\0";
 
 pub fn route(config: &Config, request: &IncomingRequest) -> OutgoingResponse {
     if request.headers.contains_key("x-layerx-principal")
@@ -110,8 +108,11 @@ fn authenticated(
             {
                 if stored.state == "pending" && !stored.continuation.is_empty() {
                     match resumed_request(&stored.continuation, authorization) {
-                        Ok(resumed) => match interop_gateway_routes(&resumed.method, &resumed.path) {
-                            Ok(resumed_route) if !matches!(resumed_route, InteropRoute::Resume { .. }) => {
+                        Ok(resumed) => match interop_gateway_routes(&resumed.method, &resumed.path)
+                        {
+                            Ok(resumed_route)
+                                if !matches!(resumed_route, InteropRoute::Resume { .. }) =>
+                            {
                                 authenticated(config, &resumed, resumed_route)
                             }
                             _ => failure(503, "continuation_invalid", Some(5)),
@@ -174,6 +175,7 @@ fn authenticated(
         observed_at,
         config.idempotency_seconds,
         &request_digest,
+        idempotency,
         &record.principal_digest,
         &audit,
         &continuation,
@@ -271,7 +273,11 @@ fn continuation(request: &IncomingRequest) -> Result<String, ()> {
     serde_json::to_string(&DurableContinuation {
         method: request.method.clone(),
         path: request.path.clone(),
-        content_type: request.headers.get("content-type").cloned().unwrap_or_default(),
+        content_type: request
+            .headers
+            .get("content-type")
+            .cloned()
+            .unwrap_or_default(),
         idempotency_key: request.headers.get("idempotency-key").cloned(),
         body: hex(&request.body),
     })
@@ -330,7 +336,6 @@ impl Dispatch {
         );
         value.to_string().into_bytes()
     }
-
 }
 
 fn dispatch(
@@ -637,7 +642,14 @@ fn x402_verify(
         expected_signer,
         observed_at: server_now,
     };
-    match facilitator.verify(&mut gateway, principal, &parsed, &mut plane, trace, server_now) {
+    match facilitator.verify(
+        &mut gateway,
+        principal,
+        &parsed,
+        &mut plane,
+        trace,
+        server_now,
+    ) {
         Ok(response) => Dispatch::result(200, "completed", json!(response)),
         Err(traced) => match traced.into_error() {
             X402Error::UnsupportedOffer => {
@@ -728,10 +740,12 @@ impl FacilitatorPlane for X402SettlePlane<'_> {
             Ok(PlaneOutcome::Executed(evidence)) => {
                 self.receipt_hex = Some(hex(&evidence.receipt));
                 self.activity_id = Some(hex(&evidence.verified.activity_id()));
-                Ok(FacilitatorSettlementOutcome::Executed(X402ExecutedPayment {
-                    canonical_receipt: evidence.receipt,
-                    authorised_batch: evidence.authorized,
-                }))
+                Ok(FacilitatorSettlementOutcome::Executed(
+                    X402ExecutedPayment {
+                        canonical_receipt: evidence.receipt,
+                        authorised_batch: evidence.authorized,
+                    },
+                ))
             }
             Err(_) => {
                 self.unavailable = true;
@@ -1113,8 +1127,13 @@ fn ucp_client_profile(body: &UcpRequest) -> Result<PlatformProfile, ()> {
     let mut payment_handlers = Vec::with_capacity(body.payment_handlers.len());
     for handler in &body.payment_handlers {
         payment_handlers.push(
-            PaymentHandler::new(&handler.id, &handler.version, &handler.spec, &handler.schema)
-                .map_err(|_| ())?,
+            PaymentHandler::new(
+                &handler.id,
+                &handler.version,
+                &handler.spec,
+                &handler.schema,
+            )
+            .map_err(|_| ())?,
         );
     }
     Ok(PlatformProfile {
@@ -1450,9 +1469,7 @@ fn visa(
     let intent =
         match prepare_trusted_intent(principal, layerx_agent, &verified, &mut bindings, trace) {
             Ok(value) => value,
-            Err(TapError::Replay) => {
-                return Dispatch::error(409, "refused", "visa_tap_replayed")
-            }
+            Err(TapError::Replay) => return Dispatch::error(409, "refused", "visa_tap_replayed"),
             Err(TapError::StorageRefused) => {
                 return Dispatch::error(503, "pending", "persistence_unavailable")
             }
@@ -1651,8 +1668,7 @@ impl CredentialBindingStore for DurableVisaBinding<'_> {
             self.audit_event,
         ) {
             Ok(
-                TapNonceConsumption::Consumed { .. }
-                | TapNonceConsumption::AlreadyConsumed { .. },
+                TapNonceConsumption::Consumed { .. } | TapNonceConsumption::AlreadyConsumed { .. },
             ) => Ok(()),
             Ok(TapNonceConsumption::Replay) => Err(TapError::Replay),
             Err(_) => Err(TapError::StorageRefused),
@@ -2361,7 +2377,7 @@ mod tests {
     use layerx_interop_gateway::adapter::{AdapterId, ConformanceSuite};
     use layerx_x402::facilitator::{FacilitatorKind, SupportedResponse};
     use layerx_x402::model::AtomicAmount;
-    use layerx_x402::x402_adapter_descriptor;
+    use layerx_x402::{x402_adapter_descriptor, PaymentPayload};
 
     fn parsed_tap(authority: &str, path: &str) -> TapRequest {
         TapRequest::parse(
@@ -2395,10 +2411,7 @@ mod tests {
         })
     }
 
-    fn signed_fiat_evidence(
-        signing: &SigningKey,
-        token: &TokenReference,
-    ) -> ProviderEvidence {
+    fn signed_fiat_evidence(signing: &SigningKey, token: &TokenReference) -> ProviderEvidence {
         let facts = FiatFacts {
             provider: "provider-001".to_owned(),
             settlement: "settlement-001".to_owned(),
@@ -2613,7 +2626,7 @@ mod tests {
         let modules = ModuleRegistry::new(&[]).expect("empty module registry is valid");
         let mut plane = X402VerifyPlane {
             modules: &modules,
-            protocol_version: 1,
+            protocol_version: layerx_wire::limits::PROTOCOL_VERSION,
             protocol_network_id: 1,
             expected_signer: [0x21; 32],
             observed_at: 10,
@@ -2638,7 +2651,10 @@ mod tests {
             .verify(
                 &mut gateway,
                 &principal,
-                &x402_fixture_request(serde_json::json!({ "layerxActivity": "deadbeef" })),
+                &x402_fixture_request(serde_json::json!({
+                    "layerxActivity": "deadbeef",
+                    "layerxIdempotencyKey": "00".repeat(32),
+                })),
                 &mut plane,
                 &trace,
                 10,
@@ -2735,7 +2751,10 @@ mod tests {
         ] {
             request[field] = serde_json::json!(1);
             assert!(serde_json::from_value::<Ap2Request>(request.clone()).is_err());
-            request.as_object_mut().expect("AP2 request is an object").remove(field);
+            request
+                .as_object_mut()
+                .expect("AP2 request is an object")
+                .remove(field);
         }
     }
 }

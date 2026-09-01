@@ -17,6 +17,7 @@ use layerx_crypto::SignatureMessage;
 use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry};
 use layerx_wire::encode::Encoder;
 use layerx_wire::hash::Domain;
+use layerx_wire::limits::PROTOCOL_VERSION;
 
 static NEXT_SOCKET: AtomicU64 = AtomicU64::new(1);
 const IDEMPOTENCY_KEY: [u8; 32] = [0x81; 32];
@@ -56,7 +57,7 @@ fn registry() -> ModuleRegistry {
 
 fn fields(encoder: &mut Encoder, public_key: &[u8; 32]) {
     assert!(encoder.tag(1, 12).is_ok());
-    assert!(encoder.u16(1).is_ok());
+    assert!(encoder.u16(PROTOCOL_VERSION).is_ok());
     assert!(encoder.tag(2, 12).is_ok());
     assert!(encoder.u32(77).is_ok());
     assert!(encoder.tag(3, 12).is_ok());
@@ -84,18 +85,23 @@ fn signed_activity() -> (Vec<u8>, [u8; 32]) {
     let key = SigningKey::from_bytes(&[0x31; 32]);
     let public_key = key.verifying_key().to_bytes();
     let mut unsigned = Encoder::new(4096);
-    assert!(unsigned.structure_header(0x1001).is_ok());
+    assert!(unsigned
+        .structure_header_version(0x1001, PROTOCOL_VERSION)
+        .is_ok());
     assert!(unsigned.u8(11).is_ok());
     fields(&mut unsigned, &public_key);
     let unsigned = unsigned.finish();
-    let message = match SignatureMessage::new(Domain::SignaturePreimage, 1, 77, &unsigned) {
-        Ok(message) => message,
-        Err(error) => panic!("signature scope rejected: {error:?}"),
-    };
+    let message =
+        match SignatureMessage::new(Domain::SignaturePreimage, PROTOCOL_VERSION, 77, &unsigned) {
+            Ok(message) => message,
+            Err(error) => panic!("signature scope rejected: {error:?}"),
+        };
     let signature = key.sign(&message.digest()).to_bytes();
 
     let mut signed = Encoder::new(4096);
-    assert!(signed.structure_header(0x1001).is_ok());
+    assert!(signed
+        .structure_header_version(0x1001, PROTOCOL_VERSION)
+        .is_ok());
     assert!(signed.u8(12).is_ok());
     fields(&mut signed, &public_key);
     assert!(signed.tag(12, 12).is_ok());
@@ -116,7 +122,7 @@ fn limits() -> Limits {
 fn context(public_key: [u8; 32], attempt: u32) -> SubmissionContext {
     SubmissionContext {
         interface_version: Version::V1_0,
-        protocol_version: 1,
+        protocol_version: PROTOCOL_VERSION,
         network_id: 77,
         correlation_id: 42,
         signer_public_key: public_key,

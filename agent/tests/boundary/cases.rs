@@ -16,8 +16,8 @@ use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRe
 use layerx_wire::activity::decode_signed;
 use layerx_wire::hash::{activity_id, batch_header_digest, checkpoint_id};
 use layerx_wire::receipt::{
-    decode as decode_receipt, decode_batch_header, decode_checkpoint,
-    encode as encode_receipt, encode_batch_header, encode_checkpoint,
+    decode as decode_receipt, decode_batch_header, decode_checkpoint, encode as encode_receipt,
+    encode_batch_header, encode_checkpoint,
 };
 
 static NEXT_DIRECTORY: AtomicUsize = AtomicUsize::new(0);
@@ -37,12 +37,7 @@ struct NodeProcess {
 }
 
 impl NodeProcess {
-    fn start(
-        executable: &Path,
-        socket: &Path,
-        genesis: &Path,
-        mode: &str,
-    ) -> Result<Self, String> {
+    fn start(executable: &Path, socket: &Path, genesis: &Path, mode: &str) -> Result<Self, String> {
         let child = Command::new(executable)
             .arg("--serve")
             .arg(socket)
@@ -113,7 +108,7 @@ pub(crate) fn connect(socket: &Path) -> Result<Uds, String> {
 fn config() -> HandshakeConfig {
     HandshakeConfig {
         built_interface_version: Version::V1_1,
-        expected_protocol_version: 1,
+        expected_protocol_version: layerx_wire::limits::PROTOCOL_VERSION,
         expected_network_id: 77,
     }
 }
@@ -210,7 +205,10 @@ fn assert_leaf(response: &Response) -> Result<(), String> {
     let root = leaf_hash(&response.payload)
         .map_err(|error| format!("independent payload hash failed: {error:?}"))?;
     if response.proof.as_slice() != root {
-        return Err(format!("response tag {} claimed a mismatched root", response.tag));
+        return Err(format!(
+            "response tag {} claimed a mismatched root",
+            response.tag
+        ));
     }
     Ok(())
 }
@@ -265,8 +263,8 @@ fn exercise_live_messages(
     expect(&submitted, 4, 3)?;
     let decoded = decode_signed(&submitted.payload, &registry()?)
         .map_err(|error| format!("node activity is not canonical: {error:?}"))?;
-    let identifier = activity_id(&decoded)
-        .map_err(|error| format!("activity identifier failed: {error:?}"))?;
+    let identifier =
+        activity_id(&decoded).map_err(|error| format!("activity identifier failed: {error:?}"))?;
     if submitted.proof.as_slice() != identifier {
         return Err("submitted activity identifier mismatch".to_owned());
     }
@@ -443,8 +441,8 @@ fn create_genesis(executable: &Path, path: &Path) -> Result<(), String> {
     if !status.success() {
         return Err(format!("real layerxd genesis writer failed: {status}"));
     }
-    let metadata = fs::metadata(path)
-        .map_err(|error| format!("signed genesis manifest missing: {error}"))?;
+    let metadata =
+        fs::metadata(path).map_err(|error| format!("signed genesis manifest missing: {error}"))?;
     if metadata.len() == 0 {
         return Err("signed genesis manifest is empty".to_owned());
     }
@@ -465,10 +463,8 @@ pub fn agent_boundary_conformance_suite(
         return Err("boundary suite requires the repository's real layerxd binary".to_owned());
     }
     let sequence = NEXT_DIRECTORY.fetch_add(1, Ordering::Relaxed);
-    let directory = std::env::temp_dir().join(format!(
-        "layerx-boundary-{}-{sequence}",
-        std::process::id()
-    ));
+    let directory =
+        std::env::temp_dir().join(format!("layerx-boundary-{}-{sequence}", std::process::id()));
     fs::create_dir(&directory)
         .map_err(|error| format!("could not create boundary directory: {error}"))?;
     let genesis = directory.join("genesis.lxp");

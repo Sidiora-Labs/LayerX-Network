@@ -102,6 +102,14 @@ contract ComponentAttestation is ILayerXComponent {
         address public checkpointRegistry;
         address public withdrawalNullifiers;
 
+        function bondToken() external pure returns (address) {
+            return Constants.USDL_TOKEN;
+        }
+
+        function assetId() external pure returns (bytes32) {
+            return Constants.USDL_ASSET_ID;
+        }
+
         constructor(bytes32 role, bytes32 configHash, uint192 release, address timelock, address emergencyAuthority) {
             componentRole = role;
             staticConfigHash = configHash;
@@ -178,15 +186,48 @@ contract ComponentAttestation is ILayerXComponent {
                 require(receiptRootChanged != second, "config field not bound");
             }
 
+            function testStaticConfigRejectsWrongUsdlIdentityDecimalsAndGenesisRoots() public {
+                StaticConfig.Config memory config = _config(harness.hashAssets(_assets()));
+                config.usdlToken = address(0x1234);
+                vm.expectPartialRevert(StaticConfig.InvalidStaticConfig.selector);
+                harness.configHash(config, block.chainid);
+                config = _config(harness.hashAssets(_assets()));
+                config.usdlAssetId = keccak256("wrong-asset");
+                vm.expectPartialRevert(StaticConfig.InvalidStaticConfig.selector);
+                harness.configHash(config, block.chainid);
+                config = _config(harness.hashAssets(_assets()));
+                config.usdlDecimals = 18;
+                vm.expectPartialRevert(StaticConfig.InvalidStaticConfig.selector);
+                harness.configHash(config, block.chainid);
+                config = _config(harness.hashAssets(_assets()));
+                config.genesisCanonicalStateRoot = bytes32(0);
+                vm.expectPartialRevert(StaticConfig.InvalidStaticConfig.selector);
+                harness.configHash(config, block.chainid);
+            }
+
             function testStaticConfigRejectsWrongChainAndUnorderedAssets() public {
                 StaticConfig.AssetDefinition[] memory assets = _assets();
                 bytes32 assetsRoot = harness.hashAssets(assets);
                 StaticConfig.Config memory config = _config(assetsRoot);
                 vm.expectPartialRevert(StaticConfig.StaticConfigWrongChain.selector);
                 harness.configHash(config, block.chainid + 1);
-                StaticConfig.AssetDefinition memory temporary = assets[0];
-                assets[0] = assets[1];
-                assets[1] = temporary;
+                assets = new StaticConfig.AssetDefinition[](2);
+                assets[0] = StaticConfig.AssetDefinition({
+                    assetId: bytes32(uint256(2)),
+                    token: address(0x2002),
+                    tokenDecimals: 6,
+                    protocolDecimals: 18,
+                    minimumDeposit: 1,
+                    custodyCap: 2
+                });
+                assets[1] = StaticConfig.AssetDefinition({
+                    assetId: bytes32(uint256(1)),
+                    token: address(0x2001),
+                    tokenDecimals: 6,
+                    protocolDecimals: 18,
+                    minimumDeposit: 1,
+                    custodyCap: 2
+                });
                 vm.expectPartialRevert(StaticConfig.AssetDefinitionsNotOrdered.selector);
                 harness.hashAssets(assets);
             }
@@ -405,22 +446,14 @@ contract ComponentAttestation is ILayerXComponent {
             }
 
             function _assets() private pure returns (StaticConfig.AssetDefinition[] memory assets) {
-                assets = new StaticConfig.AssetDefinition[](2);
+                assets = new StaticConfig.AssetDefinition[](1);
                 assets[0] = StaticConfig.AssetDefinition({
-                    assetId: bytes32(uint256(1)),
-                    token: address(0x1001),
-                    tokenDecimals: 6,
-                    protocolDecimals: 18,
+                    assetId: Constants.USDL_ASSET_ID,
+                    token: Constants.USDL_TOKEN,
+                    tokenDecimals: Constants.USDL_TOKEN_DECIMALS,
+                    protocolDecimals: Constants.USDL_PROTOCOL_DECIMALS,
                     minimumDeposit: 1_000_000,
                     custodyCap: 1_000_000_000_000
-                });
-                assets[1] = StaticConfig.AssetDefinition({
-                    assetId: bytes32(uint256(2)),
-                    token: address(0x1002),
-                    tokenDecimals: 18,
-                    protocolDecimals: 18,
-                    minimumDeposit: 1 ether,
-                    custodyCap: 1_000_000 ether
                 });
             }
 
@@ -431,7 +464,15 @@ contract ComponentAttestation is ILayerXComponent {
                     releaseVersion: release,
                     governanceTimelock: address(0x1000),
                     emergencyCouncil: address(0x2000),
+                    genesisManifestDigest: keccak256("genesis-manifest"),
+                    genesisCanonicalStateRoot: keccak256("genesis-canonical-state-root"),
                     genesisReceiptRoot: keccak256("genesis-receipt-root"),
+                    usdlToken: Constants.USDL_TOKEN,
+                    usdlAssetId: Constants.USDL_ASSET_ID,
+                    usdlDecimals: Constants.USDL_TOKEN_DECIMALS,
+                    usdlProtocolDecimals: Constants.USDL_PROTOCOL_DECIMALS,
+                    usdlMinimumDeposit: 1_000_000,
+                    usdlCustodyCap: 1_000_000_000_000,
                     challengeWindow: 7 days,
                     checkpointLivenessBound: 1 days,
                     enabledFeatures: Features.ERC20_CUSTODY | Features.CHECKPOINT_CHALLENGES

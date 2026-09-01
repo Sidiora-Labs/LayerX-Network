@@ -10,9 +10,7 @@ use layerx_client::lni::schema::{Capability, Version};
 use layerx_client::lni::transport::FrameTransport;
 
 use crate::config::StartupConfig;
-use crate::protocol_evidence::{
-    EvidenceAuthority, ProtocolEvidenceVerifier, VerifierPolicyError,
-};
+use crate::protocol_evidence::{EvidenceAuthority, ProtocolEvidenceVerifier, VerifierPolicyError};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HandshakeStatus {
@@ -73,8 +71,7 @@ impl Gate {
     ///
     /// Refuses an unavailable or malformed configured authority source.
     pub fn new(config: &StartupConfig) -> Result<Self, GateError> {
-        let verifier =
-            ProtocolEvidenceVerifier::load(config).map_err(GateError::Evidence)?;
+        let verifier = ProtocolEvidenceVerifier::load(config).map_err(GateError::Evidence)?;
         Ok(Self {
             config: HandshakeConfig {
                 built_interface_version: Version::V1_0,
@@ -158,10 +155,7 @@ pub fn handshake_gate<'a, T: FrameTransport>(
     apply_handshake(gate, accepted)
 }
 
-fn apply_handshake(
-    gate: &mut Gate,
-    accepted: Handshake,
-) -> Result<&HandshakeStatus, GateError> {
+fn apply_handshake(gate: &mut Gate, accepted: Handshake) -> Result<&HandshakeStatus, GateError> {
     let node = accepted.node();
     if node.protocol_version != gate.config.expected_protocol_version {
         gate.status = Status::EvidenceRefused(VerifierPolicyError::ProtocolVersion);

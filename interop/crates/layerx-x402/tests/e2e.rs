@@ -12,18 +12,17 @@ use layerx_interop_gateway::trace::TraceId;
 use layerx_interop_gateway::GatewayCore;
 use layerx_proof::receipt::AuthorizedBatch;
 use layerx_x402::buyer::{Buyer, BuyerPaymentPlane, PaymentBuildRequest, SupportedKind};
-use layerx_x402::x402_adapter_descriptor;
 use layerx_x402::model::{
     AtomicAmount, PaymentPayload, PaymentRequired, PaymentRequirements, ResourceInfo, X402Error,
     X402_VERSION,
 };
 use layerx_x402::seller::{
-    ExecutedPayment, LayerXPaymentRequest, PaymentPlane, PlanePaymentOutcome, Seller,
-    SellerOutcome,
+    ExecutedPayment, LayerXPaymentRequest, PaymentPlane, PlanePaymentOutcome, Seller, SellerOutcome,
 };
 use layerx_x402::transport::{
     decode_payment_payload, encode_payment_payload, encode_payment_required, TransportKind,
 };
+use layerx_x402::x402_adapter_descriptor;
 use serde_json::{json, Value};
 
 struct MockBuyerPlane {
@@ -53,14 +52,13 @@ impl PaymentPlane for MockSellerPlane {
     }
 }
 
-
 fn registered_gateway() -> GatewayCore {
     let mut gateway = GatewayCore::new();
     let suite = AdapterId::new("x402-v2").unwrap_or_else(|error| panic!("suite id: {error}"));
     let conformance = ConformanceSuite::new(suite, 20, [0xc0; 32])
         .unwrap_or_else(|error| panic!("conformance: {error}"));
-    let descriptor = x402_adapter_descriptor(conformance)
-        .unwrap_or_else(|error| panic!("descriptor: {error}"));
+    let descriptor =
+        x402_adapter_descriptor(conformance).unwrap_or_else(|error| panic!("descriptor: {error}"));
     gateway
         .register_adapter(descriptor, &TraceId::mint([0xcc; 16]), 0)
         .unwrap_or_else(|error| panic!("register x402: {error}"));
@@ -123,8 +121,8 @@ fn buyer_and_seller_complete_payment_flow_over_http() {
     ])
     .expect("buyer created");
 
-    let transport_value = encode_payment_required(TransportKind::Http, &signal.body)
-        .expect("encode for transport");
+    let transport_value =
+        encode_payment_required(TransportKind::Http, &signal.body).expect("encode for transport");
     let payment_header = match transport_value {
         layerx_x402::transport::TransportValue::HttpHeader { value, .. } => value,
         _ => panic!("expected HTTP header"),
@@ -230,12 +228,13 @@ fn seller_validates_buyer_payment_matches_issued_requirements() {
 #[test]
 fn payment_flow_preserves_extensions_end_to_end() {
     let mut required = create_payment_required();
-    required
-        .extensions
-        .insert("merchant".to_owned(), layerx_x402::model::Extension {
+    required.extensions.insert(
+        "merchant".to_owned(),
+        layerx_x402::model::Extension {
             info: json!({"merchantId": "12345", "region": "us-west"}),
             schema: json!({"type": "object"}),
-        });
+        },
+    );
 
     let seller = Seller::new(required.clone()).expect("seller created");
     let signal = seller.payment_required().expect("signal issued");
@@ -262,12 +261,13 @@ fn payment_flow_preserves_extensions_end_to_end() {
 #[test]
 fn seller_refuses_payment_when_extension_missing() {
     let mut required = create_payment_required();
-    required
-        .extensions
-        .insert("required".to_owned(), layerx_x402::model::Extension {
+    required.extensions.insert(
+        "required".to_owned(),
+        layerx_x402::model::Extension {
             info: json!({"must": "exist"}),
             schema: json!({"type": "object"}),
-        });
+        },
+    );
 
     let seller = Seller::new(required.clone()).expect("seller created");
 
@@ -306,8 +306,8 @@ fn transport_independent_payment_flow_over_mcp() {
     let required = create_payment_required();
     let seller = Seller::new(required.clone()).expect("seller created");
 
-    let transport_value = encode_payment_required(TransportKind::Mcp, &required)
-        .expect("encode for MCP transport");
+    let transport_value =
+        encode_payment_required(TransportKind::Mcp, &required).expect("encode for MCP transport");
     let json_value = match transport_value {
         layerx_x402::transport::TransportValue::Json(value) => value,
         _ => panic!("expected JSON"),
@@ -493,7 +493,10 @@ fn payment_required_with_error_message_is_valid() {
     let seller = Seller::new(required.clone()).expect("seller created");
     let signal = seller.payment_required().expect("signal issued");
 
-    assert_eq!(signal.body.error, Some("Authentication required".to_owned()));
+    assert_eq!(
+        signal.body.error,
+        Some("Authentication required".to_owned())
+    );
 }
 
 #[test]

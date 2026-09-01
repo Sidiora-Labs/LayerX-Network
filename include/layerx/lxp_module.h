@@ -29,6 +29,7 @@ typedef struct lxp_module_ctx lxp_module_ctx;
 typedef struct lxp_effect_buffer lxp_effect_buffer;
 typedef struct lxp_transfer_set lxp_transfer_set;
 typedef struct lxp_receipt lxp_receipt;
+typedef struct lxp_ledger_receipt_input lxp_ledger_receipt_input;
 typedef struct lxp_verified_receipt_facts lxp_verified_receipt_facts;
 typedef struct lxp_prepared_module_transition lxp_prepared_module_transition;
 typedef struct lx_account lx_account;
@@ -112,6 +113,11 @@ lxp_result lxp_ctx_account_find(lxp_module_ctx *ctx,
 lxp_result lxp_ctx_emit_transfer_set(lxp_module_ctx *ctx,
                                      const lxp_transfer_set *set,
                                      lxp_receipt *receipt);
+lxp_result lxp_ctx_emit_monetary_transfer_set(lxp_module_ctx *ctx,
+                                              const lxp_transfer_set *set,
+                                              lxp_receipt *receipt);
+lxp_result lxp_ctx_bind_ledger_receipt(
+    lxp_module_ctx *ctx, const lxp_ledger_receipt_input *input);
 lxp_result lxp_ctx_emit_event(lxp_module_ctx *ctx, uint16_t event_type,
                               const uint8_t *body, size_t body_length);
 uint64_t lxp_ctx_batch_timestamp_ms(const lxp_module_ctx *ctx);

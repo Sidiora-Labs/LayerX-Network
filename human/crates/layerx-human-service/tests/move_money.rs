@@ -610,9 +610,9 @@ fn encode_receipt(
     signature: Option<[u8; 64]>,
 ) -> Vec<u8> {
     let mut bytes = Vec::new();
-    push_u16(&mut bytes, 1);
+    push_u16(&mut bytes, layerx_wire::limits::PROTOCOL_VERSION);
     push_u16(&mut bytes, 0x5201);
-    push_u16(&mut bytes, 1);
+    push_u16(&mut bytes, layerx_wire::limits::PROTOCOL_VERSION);
     push_bytes(&mut bytes, &activity_id);
     push_u64(&mut bytes, sequence);
     push_bytes(&mut bytes, &previous);
@@ -753,7 +753,7 @@ impl Fixture {
                 ),
                 network_id: NetworkId::new(NETWORK_ID)
                     .unwrap_or_else(|error| panic!("network: {error:?}")),
-                protocol_version: ProtocolVersion::new(1)
+                protocol_version: ProtocolVersion::new(layerx_wire::limits::PROTOCOL_VERSION)
                     .unwrap_or_else(|error| panic!("protocol: {error:?}")),
             }),
             asset: AssetId::new(ASSET),

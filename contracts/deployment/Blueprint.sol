@@ -219,6 +219,16 @@ contract Blueprint is UUPSNotUpgradeable {
                 revert InvalidBlueprint();
             }
         }
+        try managerAttestation.genesisFinalized() returns (bool finalized) {
+            if (!finalized) revert InvalidBlueprint();
+        } catch {
+            revert InvalidBlueprint();
+        }
+        try managerAttestation.deploymentId() returns (bytes32 identifier) {
+            if (identifier == bytes32(0)) revert InvalidBlueprint();
+        } catch {
+            revert InvalidBlueprint();
+        }
         deploymentsSealed = true;
         emit DeploymentsSealed(staticConfigHash, releaseVersion);
     }
@@ -260,5 +270,7 @@ interface IManagerSealAttestation {
     function governanceTimelock() external view returns (address);
     function emergencyCouncil() external view returns (address);
     function initialized() external view returns (bool);
+    function genesisFinalized() external view returns (bool);
+    function deploymentId() external view returns (bytes32);
     function componentForRole(bytes32 role) external view returns (address);
 }

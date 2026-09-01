@@ -462,19 +462,15 @@ pub fn deliver(
         }
         return schedule_retry(engine, now_ms, failure.into_failure());
     }
-    let acknowledgement = match read_frame_bounded(
-        &mut stream,
-        endpoint.maximum_frame_bytes,
-        &mut budget,
-        stop,
-    ) {
-        Ok(value) => value,
-        Err(EndpointIo::Stopped(reason)) => {
-            apply_stop(engine, reason)?;
-            return Err(OutboundError::Stopped(reason));
-        }
-        Err(error) => return schedule_retry(engine, now_ms, error.into_failure()),
-    };
+    let acknowledgement =
+        match read_frame_bounded(&mut stream, endpoint.maximum_frame_bytes, &mut budget, stop) {
+            Ok(value) => value,
+            Err(EndpointIo::Stopped(reason)) => {
+                apply_stop(engine, reason)?;
+                return Err(OutboundError::Stopped(reason));
+            }
+            Err(error) => return schedule_retry(engine, now_ms, error.into_failure()),
+        };
     if authenticator
         .verify_acknowledgement(&acknowledgement, frame.binding)
         .is_err()

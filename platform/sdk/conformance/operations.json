@@ -1048,7 +1048,7 @@
       "path": "/v1/security/sessions/{session_id}/revoke",
       "request": "SecuritySessionRevocation",
       "response": "SessionRevocation",
-      "idempotency": false,
+      "idempotency": true,
       "bodyless": false
     },
     {
@@ -1058,7 +1058,7 @@
       "path": "/v1/security/sessions/revoke-all",
       "request": "SecuritySessionRevocation",
       "response": "SessionRevocation",
-      "idempotency": false,
+      "idempotency": true,
       "bodyless": false
     },
     {
@@ -1078,7 +1078,7 @@
       "path": "/v1/sessions",
       "request": "SessionOpenRequest",
       "response": "Session",
-      "idempotency": false,
+      "idempotency": true,
       "bodyless": false
     },
     {
@@ -1098,7 +1098,7 @@
       "path": "/v1/sessions/{session_id}",
       "request": "Empty",
       "response": "SessionRevocation",
-      "idempotency": false,
+      "idempotency": true,
       "bodyless": true
     },
     {
@@ -1108,7 +1108,7 @@
       "path": "/v1/sessions/revoke-all",
       "request": "Empty",
       "response": "SessionRevocation",
-      "idempotency": false,
+      "idempotency": true,
       "bodyless": true
     },
     {

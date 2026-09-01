@@ -10,6 +10,7 @@ use layerx_crypto::ed25519;
 use layerx_crypto::signer::{sign_disclosed, LocalSigner, SignError, Signer};
 use layerx_crypto::SignatureMessage;
 use layerx_wire::hash::Domain;
+use layerx_wire::limits::PROTOCOL_VERSION;
 
 struct NoopWake;
 
@@ -109,7 +110,9 @@ fn disclosed_signing_uses_the_exact_canonical_bytes() {
     let Ok(signature) = ready(sign_disclosed(&signer, &canonical, &disclosure, &registry)) else {
         panic!("matching disclosed activity was refused");
     };
-    let Ok(message) = SignatureMessage::new(Domain::SignaturePreimage, 1, 17, &canonical) else {
+    let Ok(message) =
+        SignatureMessage::new(Domain::SignaturePreimage, PROTOCOL_VERSION, 17, &canonical)
+    else {
         panic!("valid message scope rejected");
     };
     assert_eq!(

@@ -59,18 +59,13 @@ fn verified_creation_without_a_proven_object_effect_fails_closed() {
     let path = root("success");
     let mut store = Store::open(&path).unwrap_or_else(|error| panic!("store: {error}"));
     let request = request();
-    let activity_id = request
-        .verified_submission
-        .as_ref()
-        .map_or_else(
-            || panic!("verified submission missing"),
-            layerx_agentd::sign::VerifiedSubmission::activity_id,
-        );
+    let activity_id = request.verified_submission.as_ref().map_or_else(
+        || panic!("verified submission missing"),
+        layerx_agentd::sign::VerifiedSubmission::activity_id,
+    );
     let evidence = support::raw_receipt(activity_id, 0, 25);
     let mut pipeline = SignedActivityPipeline {
-        result: Ok(CoreBudgetReceipt {
-            evidence,
-        }),
+        result: Ok(CoreBudgetReceipt { evidence }),
         submitted_bytes: Vec::new(),
     };
     assert_eq!(
@@ -83,7 +78,9 @@ fn verified_creation_without_a_proven_object_effect_fails_closed() {
         Err(BudgetCreationError::ProtocolObjectEffectUnavailable)
     );
     assert_eq!(pipeline.submitted_bytes, request.canonical_activity);
-    assert!(store.list_object_ids(&tenant(), ObjectKind::Budget).is_empty());
+    assert!(store
+        .list_object_ids(&tenant(), ObjectKind::Budget)
+        .is_empty());
     let _ = fs::remove_dir_all(path);
 }
 
@@ -104,7 +101,9 @@ fn failed_creation_leaves_no_daemon_budget_record() {
         ),
         Err(BudgetCreationError::Submission)
     ));
-    assert!(store.list_object_ids(&tenant(), ObjectKind::Budget).is_empty());
+    assert!(store
+        .list_object_ids(&tenant(), ObjectKind::Budget)
+        .is_empty());
     let _ = fs::remove_dir_all(path);
 }
 
@@ -154,7 +153,9 @@ fn unverified_or_substituted_canonical_activity_never_reaches_submission() {
         Err(BudgetCreationError::ActivityBindingMismatch)
     );
     assert!(pipeline.submitted_bytes.is_empty());
-    assert!(store.list_object_ids(&tenant(), ObjectKind::Budget).is_empty());
+    assert!(store
+        .list_object_ids(&tenant(), ObjectKind::Budget)
+        .is_empty());
     let _ = fs::remove_dir_all(path);
 }
 
@@ -180,7 +181,9 @@ fn unverifiable_creation_receipt_leaves_no_protocol_budget_cache() {
         ),
         Err(BudgetCreationError::UnverifiedReceipt)
     ));
-    assert!(store.list_object_ids(&tenant(), ObjectKind::Budget).is_empty());
+    assert!(store
+        .list_object_ids(&tenant(), ObjectKind::Budget)
+        .is_empty());
     let _ = fs::remove_dir_all(path);
 }
 
@@ -190,11 +193,7 @@ fn receipt_for_another_canonical_activity_cannot_create_or_cache_a_budget() {
     let mut store = Store::open(&path).unwrap_or_else(|error| panic!("store: {error}"));
     let mut pipeline = SignedActivityPipeline {
         result: Ok(CoreBudgetReceipt {
-            evidence: support::raw_receipt(
-                support::verified_submission(2).activity_id(),
-                0,
-                25,
-            ),
+            evidence: support::raw_receipt(support::verified_submission(2).activity_id(), 0, 25),
         }),
         submitted_bytes: Vec::new(),
     };
@@ -207,7 +206,9 @@ fn receipt_for_another_canonical_activity_cannot_create_or_cache_a_budget() {
         ),
         Err(BudgetCreationError::ReceiptActivityMismatch)
     );
-    assert!(store.list_object_ids(&tenant(), ObjectKind::Budget).is_empty());
+    assert!(store
+        .list_object_ids(&tenant(), ObjectKind::Budget)
+        .is_empty());
     let _ = fs::remove_dir_all(path);
 }
 

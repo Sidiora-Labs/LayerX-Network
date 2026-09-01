@@ -133,7 +133,8 @@ static lxp_result execute_fault_workload(void *opaque)
                                  sizeof(checkpoint_bytes), state_root);
     if (status == LXP_OK)
         status = lxp_snapshot_manifest_build(checkpoint_bytes,
-                    sizeof(checkpoint_bytes), 0U, state_root, &manifest);
+                    sizeof(checkpoint_bytes), 0U, state_root, state_root,
+                    &manifest);
     if (status == LXP_OK)
         status = lxp_snapshot_store_write(fixture->checkpoint_directory,
                     &manifest, checkpoint_bytes, sizeof(checkpoint_bytes));
@@ -232,10 +233,14 @@ static lxp_result verify_checkpoint(const fault_fixture *fixture)
                                  sizeof(checkpoint_bytes), state_root);
     if (status == LXP_OK)
         status = lxp_snapshot_manifest_build(checkpoint_bytes,
-                    sizeof(checkpoint_bytes), 0U, state_root, &expected);
+                    sizeof(checkpoint_bytes), 0U, state_root, state_root,
+                    &expected);
     if (status == LXP_OK &&
         (stored.global_sequence != expected.global_sequence ||
-         memcmp(stored.state_root, expected.state_root, 32U) != 0 ||
+         memcmp(stored.canonical_state_root,
+                expected.canonical_state_root, 32U) != 0 ||
+         memcmp(stored.receipt_state_root,
+                expected.receipt_state_root, 32U) != 0 ||
          memcmp(stored.snapshot_digest, expected.snapshot_digest, 32U) != 0))
         status = LXP_ERR_SNAPSHOT_MISMATCH;
     return status;

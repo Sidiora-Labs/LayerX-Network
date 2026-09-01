@@ -20,9 +20,9 @@ impl ReasonCode {
     pub fn new(value: impl Into<String>) -> Result<Self, ContractError> {
         let value = value.into();
         if value.is_empty()
-            || !value
-                .bytes()
-                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"_.".contains(&byte))
+            || !value.bytes().all(|byte| {
+                byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"_.".contains(&byte)
+            })
         {
             return Err(ContractError::Empty("reason"));
         }

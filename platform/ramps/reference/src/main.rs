@@ -10,6 +10,10 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use layerx_paxeer_client::{
+    ChainSignal, EndpointConfig, EndpointSignal, EndpointTransport, FinalityTracker, TrackerConfig,
+    TransactionHash,
+};
 use layerx_ramp_toolkit::clients::{
     parse_hex32, ActivityConfig, ComplianceClient, Endpoint, IdentityClient, LayerxClient,
     MutualTlsClient, MutualTlsFiles, PaxeerCustodyClient, ProviderCallback, ProviderClient,
@@ -22,10 +26,6 @@ use layerx_ramp_toolkit::{
     EXTERNAL_CUSTODY_LABEL,
 };
 use layerx_types::payload::{ActivityType, ModuleId, ModuleRegistration, ModuleRegistry};
-use layerx_paxeer_client::{
-    ChainSignal, EndpointConfig, EndpointSignal, EndpointTransport, FinalityTracker,
-    TrackerConfig, TransactionHash,
-};
 use native_tls::{Identity, TlsAcceptor, TlsStream};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -239,11 +239,7 @@ fn validate_config(config: &Config) -> Result<(), String> {
         || config.lease_seconds == 0
         || config.reconcile_seconds == 0
         || config.client_tls.timeout_seconds == 0
-        || config.lease_seconds
-            <= config
-                .client_tls
-                .timeout_seconds
-                .saturating_mul(5)
+        || config.lease_seconds <= config.client_tls.timeout_seconds.saturating_mul(5)
         || config.quotes.is_empty()
         || config.paxeer.rpc_endpoints.is_empty()
         || config.paxeer.rpc_chain_id == 0
@@ -253,7 +249,7 @@ fn validate_config(config: &Config) -> Result<(), String> {
         || config.paxeer.poll_cadence_seconds == 0
         || config.paxeer.delayed_after_polls == 0
         || config.paxeer.operator_account != config.operator.account
-        || config.layerx.protocol_version != 1
+        || config.layerx.protocol_version != layerx_wire::limits::PROTOCOL_VERSION
         || config.layerx.network_id == 0
         || config.layerx.fee_limit == 0
         || config.identity.audience.is_empty()
@@ -323,9 +319,8 @@ fn build_state(config: &Config) -> Result<State, String> {
             .map_err(|_| "invalid client identity password".to_owned())?,
     };
     let timeout = Duration::from_secs(config.client_tls.timeout_seconds);
-    let client = || {
-        MutualTlsClient::new(&tls, timeout).map_err(|_| "mTLS client rejected".to_owned())
-    };
+    let client =
+        || MutualTlsClient::new(&tls, timeout).map_err(|_| "mTLS client rejected".to_owned());
     let identity = IdentityClient {
         http: client()?,
         endpoint: Endpoint::parse(&config.identity.endpoint)
@@ -409,11 +404,14 @@ fn build_state(config: &Config) -> Result<State, String> {
         .map_err(|_| "asset receive activity rejected".to_owned())?;
     let registration = ModuleRegistration::new(ModuleId::Asset, &[send, receive])
         .map_err(|_| "asset registry rejected".to_owned())?;
-    let registry = ModuleRegistry::new(&[registration])
-        .map_err(|_| "module registry rejected".to_owned())?;
+    let registry =
+        ModuleRegistry::new(&[registration]).map_err(|_| "module registry rejected".to_owned())?;
     let mut quotes = BTreeMap::new();
     for quote in &config.quotes {
-        if quotes.insert(quote.quote_id.clone(), quote.clone()).is_some() {
+        if quotes
+            .insert(quote.quote_id.clone(), quote.clone())
+            .is_some()
+        {
             return Err("duplicate quote id".to_owned());
         }
     }
@@ -462,7 +460,10 @@ fn secret_text(path: &PathBuf) -> Result<String, String> {
         return Err(format!("secret file {} is empty", path.display()));
     }
     if value.len() > 4096 || value.bytes().any(|byte| matches!(byte, 0 | b'\r' | b'\n')) {
-        return Err(format!("secret file {} is not a bounded credential", path.display()));
+        return Err(format!(
+            "secret file {} is not a bounded credential",
+            path.display()
+        ));
     }
     Ok(value)
 }
@@ -540,8 +541,8 @@ fn read_request(stream: &mut TlsStream<TcpStream>) -> Result<Request, Response> 
             break;
         }
     }
-    let headers = std::str::from_utf8(&bytes[..boundary])
-        .map_err(|_| error(400, "headers_invalid"))?;
+    let headers =
+        std::str::from_utf8(&bytes[..boundary]).map_err(|_| error(400, "headers_invalid"))?;
     let mut lines = headers.split("\r\n");
     let request_line = lines.next().ok_or_else(|| error(400, "request_invalid"))?;
     let mut parts = request_line.split_ascii_whitespace();
@@ -630,14 +631,12 @@ fn route(state: &State, request: Request) -> Result<Response, Response> {
             .ok_or_else(|| error(404, "quote_not_found"))?;
         let order = RampOrder::bind(create, quote, principal, state.operator.clone(), now())
             .map_err(map_error)?;
-        let snapshot = journal
-            .create_order(order, now())
-            .map_err(map_error)?;
+        let snapshot = journal.create_order(order, now()).map_err(map_error)?;
         return Ok(created(&snapshot.presentation()));
     }
     if request.method == "POST" && request.path == "/v1/provider-callbacks" {
-        let callback: ProviderCallback = serde_json::from_slice(&request.body)
-            .map_err(|_| error(400, "callback_invalid"))?;
+        let callback: ProviderCallback =
+            serde_json::from_slice(&request.body).map_err(|_| error(400, "callback_invalid"))?;
         let mut journal = state
             .journal
             .lock()
@@ -658,7 +657,9 @@ fn route(state: &State, request: Request) -> Result<Response, Response> {
             .journal
             .lock()
             .map_err(|_| error(503, "journal_unavailable"))?;
-        let snapshot = journal.order(&digest).ok_or_else(|| error(404, "order_not_found"))?;
+        let snapshot = journal
+            .order(&digest)
+            .ok_or_else(|| error(404, "order_not_found"))?;
         if snapshot.order.customer != principal {
             return Err(error(404, "order_not_found"));
         }
@@ -698,8 +699,8 @@ fn route(state: &State, request: Request) -> Result<Response, Response> {
     }
     if request.method == "POST" && request.path == "/internal/v1/rebalances" {
         require_operator(state, &request)?;
-        let action: Rebalance = serde_json::from_slice(&request.body)
-            .map_err(|_| error(400, "rebalance_invalid"))?;
+        let action: Rebalance =
+            serde_json::from_slice(&request.body).map_err(|_| error(400, "rebalance_invalid"))?;
         let mut journal = state
             .journal
             .lock()
@@ -735,11 +736,9 @@ fn route(state: &State, request: Request) -> Result<Response, Response> {
                     .lock()
                     .map_err(|_| error(503, "paxeer_tracker_unavailable"))?;
                 if !trackers.contains_key(&idempotency_key) {
-                    let tracker = FinalityTracker::new(
-                        state.paxeer_tracker_config.clone(),
-                        transaction,
-                    )
-                    .map_err(|_| error(503, "paxeer_tracker_unavailable"))?;
+                    let tracker =
+                        FinalityTracker::new(state.paxeer_tracker_config.clone(), transaction)
+                            .map_err(|_| error(503, "paxeer_tracker_unavailable"))?;
                     trackers.insert(idempotency_key, tracker);
                 }
                 let tracker = trackers
@@ -840,7 +839,10 @@ enum Rebalance {
     },
 }
 
-fn authenticate(state: &State, request: &Request) -> Result<layerx_ramp_toolkit::AuthenticatedPrincipal, Response> {
+fn authenticate(
+    state: &State,
+    request: &Request,
+) -> Result<layerx_ramp_toolkit::AuthenticatedPrincipal, Response> {
     state
         .identity
         .authenticate(
@@ -912,14 +914,10 @@ fn reconcile_loop(state: Arc<State>, cadence: Duration) {
             let result = match snapshot.stage {
                 WorkflowStage::ProviderSubmissionPlanned
                 | WorkflowStage::ProviderSubmittedUnknown
-                | WorkflowStage::ProviderPending => {
-                    worker.reconcile_provider(digest, observed_at)
-                }
+                | WorkflowStage::ProviderPending => worker.reconcile_provider(digest, observed_at),
                 WorkflowStage::LayerxSubmissionPlanned
                 | WorkflowStage::LayerxSubmittedUnknown
-                | WorkflowStage::LayerxPending => {
-                    worker.resolve_layerx(digest, observed_at)
-                }
+                | WorkflowStage::LayerxPending => worker.resolve_layerx(digest, observed_at),
                 WorkflowStage::ProviderSettled | WorkflowStage::LayerxVerified => {
                     worker.finish_if_complete(digest, observed_at)
                 }
