@@ -4,14 +4,20 @@ The emulator is the local LayerX environment. It is not a mock: it runs the real
 
 ## Starting it
 
+The emulator has no compiled-in signing authority. `layerx emulator provision` generates the sequencer seed under your profile directory, readable only by you, and publishes the matching trust anchor beside it; `layerx emulator up` requires the seed path.
+
+Secure provisioning is supported on Linux, Android and Apple hosts. Other host targets fail closed before writing profile material because they do not provide the atomic owner-only directory publication this command requires.
+
 ```
-layerx emulator up --listen 127.0.0.1:9402
+layerx emulator provision
+layerx emulator up --sequencer-seed-file "$HOME/.config/layerx/emulator/sequencer.seed"
 ```
 
 Defaults: listen on `127.0.0.1:9402`, network id `402`, clock at `1700000000000` milliseconds. Override any of them:
 
 ```
 layerx emulator up \
+  --sequencer-seed-file "$HOME/.config/layerx/emulator/sequencer.seed" \
   --listen 127.0.0.1:9402 \
   --network-id 402 \
   --time-ms 1700000000000 \
@@ -24,8 +30,11 @@ Point your app at it and nothing else changes:
 
 ```
 export LAYERX_API_URL=http://127.0.0.1:9402
-layerx environment use emulator --endpoint http://127.0.0.1:9402 --network-id 402
+layerx environment use emulator --endpoint http://127.0.0.1:9402 --network-id 402 \
+  --sequencer-trust-anchor-file "$HOME/.config/layerx/emulator/sequencer.anchor"
 ```
+
+The CLI reads the published anchor, fetches the identity the running emulator advertises on `GET /v1/sequencer`, and saves the profile only when the network id and the sequencer public key both agree.
 
 Loopback `http://` is accepted here and only here. Every non-loopback endpoint must be `https://`, in the CLI and in the middleware transport alike, and that is a refusal rather than a warning.
 
@@ -34,6 +43,7 @@ Loopback `http://` is accepted here and only here. Every non-loopback endpoint m
 | Method and path | Purpose |
 |---|---|
 | `GET /healthz` | Readiness |
+| `GET /v1/sequencer` | Network id and the sequencer public key receipts are signed with |
 | `POST /v1/activities` | Submit a canonical activity, receive a receipt |
 | `GET /v1/state` | State root, next sequence, batch number, clock, cell and account counts |
 | `GET /v1/receipts/{id}` | Exact receipt material |

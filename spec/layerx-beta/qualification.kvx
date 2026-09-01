@@ -142,3 +142,42 @@ symbol = "NODE_BOUNDARY"
 observed = "The layerx-client integration test lni_schema.rs embeds spec/layerx-agent-interface/docs/node-boundary.md with include_str!, but commit cc5191b5 archived that document to spec/.beta/layerx-agent-interface/docs/node-boundary.md, so cargo test -p layerx-client and any aggregate agent-workspace test run (make agent-test) fails at compile time with: couldn't read crates/layerx-client/tests/../../../../spec/layerx-agent-interface/docs/node-boundary.md: No such file or directory. Found during the shared cargo pre-warm of the agent workspace (cargo test --no-run --workspace, exit 101)."
 assumption = "This is a pre-existing failure outside every beta task's touches; no beta task edits lni_schema.rs or the archived document. It is recorded here rather than repaired. Per-crate targets that the beta tasks verify (make agent-test-agentd-*) compile only layerx-agentd tests and are not affected, but any aggregate agent-workspace test gate in wave 5 will fail on this until the include path is pointed at the archived document or the document is restored."
 severity = "blocker"
+[observation.1.2.1]
+task = "1.2"
+file = "platform/cli/tests/install-journey.sh"
+symbol = "environment use testnet"
+observed = "The install journey binds the testnet profile with layerx --json environment use testnet --endpoint LAYERX_GATEWAY_URL --network-id LAYERX_NETWORK_ID and no sequencer trust anchor. EnvironmentCommand::Use has required the anchor together with the endpoint and network id since before task 1.2 and now refuses with environment_input_missing naming --sequencer-trust-anchor-file; platform-test-tooling only syntax-checks this script with bash -n, so the runtime failure stays latent."
+assumption = "The hosted-testnet journey belongs to the wave-5 beta run and the hosted install gates, where the script is repaired to pass the published testnet anchor from its owner input; task 1.2 leaves the script untouched."
+severity = "suspect"
+
+[observation.1.2.2]
+task = "1.2"
+file = "platform/emulator/src/main.rs"
+symbol = "decode_activity"
+observed = "cargo build -p layerx-platform-emulator reports dead_code for decode_activity on the library target; the function is referenced only from cfg(test) modules, on main at cc5191b5 as well as on this branch. The task 1.2 verify_cmd passes because cargo test does not deny warnings; platform-lint runs clippy with -D warnings over the workspace and was not run under this task."
+assumption = "Pre-existing and unrelated to the GET /v1/sequencer route added by task 1.2; left intact so no unrelated code is removed under this task."
+severity = "note"
+
+[observation.1.2.3]
+task = "1.2"
+file = "platform/docs/content/reference/agent-api.md"
+symbol = "platform/tools/docs-gate"
+observed = "sh platform/tools/docs-gate exits 1 with stale documentation output for platform/docs/content/reference/agent-api.md and platform/docs/content/reference/human-api.md both on this branch and on main at cc5191b5. The builder renders every page, including the rewritten install.md bootstrap block, before it reports the stale generated reference pages."
+assumption = "The stale generated reference pages belong to the interface tasks that own those API references; the docs gate is not part of the task 1.2 verify_cmd and the install.md change introduces no new staleness."
+severity = "note"
+
+[observation.1.2.4]
+task = "1.2"
+file = "platform/cli/src/install/a2a.rs"
+symbol = "cargo fmt -p layerx-platform-cli"
+observed = "cargo fmt for the CLI crate also rewrites platform/cli/src/install/a2a.rs and platform/cli/tests/credential.rs, which task 1.2 does not touch; the formatting drift exists on main at cc5191b5."
+assumption = "Those reformats were reverted so the branch stays inside the task's touches; a formatting-only commit by the owner of those files should absorb them."
+severity = "note"
+
+[observation.1.2.5]
+task = "1.2"
+file = "platform/cli/src/a2a.rs"
+symbol = "cargo clippy --no-deps -p layerx-platform-cli --all-targets"
+observed = "Under the workspace deny-level clippy lints, the CLI crate reports 27 errors in files task 1.2 does not touch (a2a.rs, programs.rs, workspace.rs, credential.rs, http.rs, install/a2a.rs, install/mcp.rs, install/mod.rs, tests/commands.rs, tests/workspace.rs, fn program in main.rs, and the pre-existing 104-line payment test at tests/emulator.rs:115), and the emulator library reports 28 errors that are identical when platform/emulator/src/main.rs is swapped to its main revision at cc5191b5. The task 1.2 code (cli/src/emulator.rs, the Provision and Use wiring in cli/src/main.rs, cli/tests/emulator.rs, the GET /v1/sequencer route) lints clean once its one single_match_else finding was rewritten."
+assumption = "platform-lint cannot pass on main for these crates today; the pre-existing findings belong to the tasks that own those files and are left intact under task 1.2 rather than silenced or refactored out of scope."
+severity = "note"

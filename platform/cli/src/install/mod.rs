@@ -971,7 +971,7 @@ pub(super) fn private_file_metadata(path: &Path) -> Result<Metadata, String> {
     }
 }
 
-pub(super) fn validate_existing_ancestors(path: &Path, private_parent: bool) -> Result<(), String> {
+pub(crate) fn validate_existing_ancestors(path: &Path, private_parent: bool) -> Result<(), String> {
     if !path.is_absolute() {
         return Err(format!("{} must be an absolute path", path.display()));
     }

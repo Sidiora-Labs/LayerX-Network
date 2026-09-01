@@ -9,6 +9,7 @@ mod a2a;
 mod account;
 mod config;
 mod credential;
+mod emulator;
 mod encoding;
 mod http;
 mod install;
@@ -101,6 +102,8 @@ enum EnvironmentCommand {
         network_id: Option<u32>,
         #[arg(long)]
         sequencer_trust_anchor: Option<String>,
+        #[arg(long)]
+        sequencer_trust_anchor_file: Option<PathBuf>,
     },
 }
 
@@ -333,18 +336,27 @@ enum RegistryCommand {
 #[derive(Subcommand)]
 enum EmulatorCommand {
     /// Start the local real-transition gateway.
-    Up {
+    Up(EmulatorUpArgs),
+    /// Generate the sequencer seed and publish its trust anchor under the profile directory.
+    Provision {
+        /// Replace an existing seed and anchor instead of refusing to overwrite them.
         #[arg(long)]
-        listen: Option<String>,
-        #[arg(long)]
-        network_id: Option<u32>,
-        #[arg(long)]
-        time_ms: Option<u64>,
-        #[arg(long)]
-        prefund: Vec<String>,
-        #[arg(long)]
-        sequencer_seed_file: PathBuf,
+        force: bool,
     },
+}
+
+#[derive(Args)]
+struct EmulatorUpArgs {
+    #[arg(long)]
+    listen: Option<String>,
+    #[arg(long)]
+    network_id: Option<u32>,
+    #[arg(long)]
+    time_ms: Option<u64>,
+    #[arg(long)]
+    prefund: Vec<String>,
+    #[arg(long)]
+    sequencer_seed_file: PathBuf,
 }
 
 #[derive(Subcommand)]
@@ -466,8 +478,13 @@ fn run(command: Command, machine: bool) -> Result<Option<CommandOutput>, String>
         Command::Payment(command) => payment(command).map(Some),
         Command::Receipt(command) => receipt(command).map(Some),
         Command::Program(command) => program(command).map(Some),
-        Command::Emulator(command) => {
-            let arguments = emulator_arguments(command);
+        Command::Emulator(EmulatorCommand::Provision { force }) => Ok(Some(CommandOutput::new(
+            "emulator.provisioned",
+            "Provisioned the LayerX emulator sequencer identity under the profile directory",
+            emulator::provision(force)?,
+        ))),
+        Command::Emulator(EmulatorCommand::Up(arguments)) => {
+            let arguments = emulator_arguments(arguments);
             if machine {
                 CommandOutput::new(
                     "emulator.starting",
@@ -668,45 +685,65 @@ fn environment(command: EnvironmentCommand) -> Result<CommandOutput, String> {
             endpoint,
             network_id,
             sequencer_trust_anchor,
+            sequencer_trust_anchor_file,
         } => {
             Configuration::validate_environment_name(&name)?;
-            if endpoint.is_some() != network_id.is_some()
-                || endpoint.is_some() != sequencer_trust_anchor.is_some()
-            {
-                return Err("--endpoint, --network-id and --sequencer-trust-anchor must be supplied together".into());
-            }
-            if let (Some(endpoint), Some(network_id), Some(sequencer_trust_anchor)) =
-                (endpoint, network_id, sequencer_trust_anchor)
-            {
-                validate_endpoint(&endpoint)?;
-                let _: [u8; 32] =
-                    crate::encoding::fixed_hex("sequencer trust anchor", &sequencer_trust_anchor)?;
-                if network_id == 0 {
-                    return Err("network id zero is reserved".into());
-                }
+            let bound = emulator::resolve_inputs(emulator::EnvironmentInputs {
+                endpoint,
+                network_id,
+                sequencer_trust_anchor,
+                sequencer_trust_anchor_file,
+            })?;
+            let identity = if let Some(bound) = bound {
+                let identity = if name == "emulator" {
+                    Some(emulator::verify_sequencer_identity(&bound)?)
+                } else {
+                    None
+                };
                 configuration.environments.insert(
                     name.clone(),
                     Environment {
-                        endpoint,
-                        network_id,
-                        sequencer_trust_anchor: Some(sequencer_trust_anchor),
+                        endpoint: bound.endpoint,
+                        network_id: bound.network_id,
+                        sequencer_trust_anchor: Some(bound.sequencer_trust_anchor),
                     },
                 );
-            } else if !configuration.environments.contains_key(&name) {
-                return Err(format!(
-                    "environment {name} is not configured; supply --endpoint, --network-id and --sequencer-trust-anchor"
-                ));
-            }
+                identity
+            } else {
+                let existing = configuration.environments.get(&name).ok_or_else(|| {
+                    emulator::BootstrapError::EnvironmentUnconfigured { name: name.clone() }
+                })?;
+                if name == "emulator" {
+                    let sequencer_trust_anchor =
+                        existing.sequencer_trust_anchor.clone().ok_or_else(|| {
+                            emulator::BootstrapError::AnchorUnbound { name: name.clone() }
+                        })?;
+                    Some(emulator::verify_sequencer_identity(
+                        &emulator::BoundEnvironment {
+                            endpoint: existing.endpoint.clone(),
+                            network_id: existing.network_id,
+                            sequencer_trust_anchor,
+                            anchor_input: emulator::STORED_ANCHOR_INPUT,
+                        },
+                    )?)
+                } else {
+                    None
+                }
+            };
             configuration.current_environment.clone_from(&name);
             configuration.save()?;
             let value = configuration
                 .environments
                 .get(&name)
                 .ok_or_else(|| "environment disappeared while saving configuration".to_string())?;
+            let mut data = json!({"name": name, "endpoint": value.endpoint, "network_id": value.network_id, "sequencer_trust_anchor": value.sequencer_trust_anchor});
+            if let (Some(identity), Value::Object(fields)) = (identity, &mut data) {
+                fields.insert("sequencer_identity".into(), identity);
+            }
             Ok(CommandOutput::new(
                 "environment.selected",
                 format!("Using LayerX {name}"),
-                json!({"name": name, "endpoint": value.endpoint, "network_id": value.network_id, "sequencer_trust_anchor": value.sequencer_trust_anchor}),
+                data,
             ))
         }
     }
@@ -1108,18 +1145,14 @@ fn selected_environment(
     Ok(name)
 }
 
-fn validate_endpoint(endpoint: &str) -> Result<(), String> {
-    Client::new(endpoint, None).map(|_| ())
-}
-
-fn emulator_arguments(command: EmulatorCommand) -> Vec<String> {
-    let EmulatorCommand::Up {
+fn emulator_arguments(arguments: EmulatorUpArgs) -> Vec<String> {
+    let EmulatorUpArgs {
         listen,
         network_id,
         time_ms,
         prefund,
         sequencer_seed_file,
-    } = command;
+    } = arguments;
     let mut arguments = vec!["up".to_string()];
     if let Some(value) = listen {
         arguments.extend(["--listen".into(), value]);

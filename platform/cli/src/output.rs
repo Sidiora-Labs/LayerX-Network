@@ -47,7 +47,7 @@ pub fn emit_error(error: &str, machine: bool) {
         let value = json!({
             "ok": false,
             "error": {
-                "code": "command_failed",
+                "code": machine_error_code(error),
                 "detail": error,
             }
         });
@@ -56,5 +56,45 @@ pub fn emit_error(error: &str, machine: bool) {
         eprintln!("{encoded}");
     } else {
         eprintln!("layerx: {error}");
+    }
+}
+
+fn machine_error_code(error: &str) -> &str {
+    let Some((code, _)) = error.split_once(": ") else {
+        return "command_failed";
+    };
+    if code.contains('_')
+        && code
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+    {
+        code
+    } else {
+        "command_failed"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::machine_error_code;
+
+    #[test]
+    fn typed_command_errors_keep_their_machine_code() {
+        assert_eq!(
+            machine_error_code("sequencer_seed_exists: already provisioned"),
+            "sequencer_seed_exists"
+        );
+    }
+
+    #[test]
+    fn prose_errors_use_the_generic_machine_code() {
+        assert_eq!(
+            machine_error_code("could not contact the endpoint: refused"),
+            "command_failed"
+        );
+        assert_eq!(
+            machine_error_code("unauthorized: refused"),
+            "command_failed"
+        );
     }
 }

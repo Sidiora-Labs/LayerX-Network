@@ -20,10 +20,19 @@ The binary is called `layerx`. Every subcommand accepts `--json` and will then e
 
 Start on the emulator. It runs the same transition function as production, so a payment it accepts is a payment production would accept, and a refusal it gives you is a real refusal rather than a stub.
 
-```text
-layerx emulator up --listen 127.0.0.1:9402
-layerx environment use emulator --endpoint http://127.0.0.1:9402 --network-id 402
+The emulator signs receipts with a sequencer key it has no compiled-in copy of. `layerx emulator provision` generates that key once, under your profile directory (`~/.config/layerx/emulator/`, readable only by you), and publishes its trust anchor beside it. It prints the paths and the anchor, never the seed. Start the emulator with the seed, then bind the profile to the endpoint, the network id and the anchor file; the CLI checks the anchor against the identity the running emulator advertises before it saves anything:
+
+The canonical local bootstrap is supported on Linux, Android and Apple hosts, where the CLI can atomically publish the owner-only seed and anchor directory. Other host targets fail closed before writing profile material.
+
+<!-- layerx:bootstrap-sequence -->
+```bash
+layerx emulator provision
+layerx emulator up --sequencer-seed-file "$HOME/.config/layerx/emulator/sequencer.seed" &
+layerx environment use emulator --endpoint http://127.0.0.1:9402 --network-id 402 \
+  --sequencer-trust-anchor-file "$HOME/.config/layerx/emulator/sequencer.anchor"
 ```
+
+If `XDG_CONFIG_HOME` or `LAYERX_CONFIG` is set, the profile directory moves with it; use the paths `layerx emulator provision` prints. Provisioning refuses to replace an existing seed unless you pass `--force`.
 
 `layerx environment current` shows the active profile, and `layerx environment list` shows every profile you have configured.
 

@@ -208,7 +208,7 @@ impl Drop for Emulator {
     }
 }
 
-fn emulator_trust_anchor() -> String {
+pub fn emulator_trust_anchor() -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let public_key = ed25519_dalek::SigningKey::from_bytes(&EMULATOR_SEQUENCER_SEED)
         .verifying_key()
@@ -231,14 +231,13 @@ fn free_port() -> u16 {
     }
 }
 
-fn http_get(endpoint: &str, path: &str) -> Result<String, String> {
+pub fn http_get(endpoint: &str, path: &str) -> Result<String, String> {
     let authority = endpoint
         .strip_prefix("http://")
         .ok_or_else(|| "endpoint must be loopback http".to_string())?;
     let mut stream =
         TcpStream::connect(authority).map_err(|error| format!("connect failed: {error}"))?;
-    let request =
-        format!("GET {path} HTTP/1.1\r\nHost: {authority}\r\nConnection: close\r\n\r\n");
+    let request = format!("GET {path} HTTP/1.1\r\nHost: {authority}\r\nConnection: close\r\n\r\n");
     stream
         .write_all(request.as_bytes())
         .map_err(|error| format!("write failed: {error}"))?;

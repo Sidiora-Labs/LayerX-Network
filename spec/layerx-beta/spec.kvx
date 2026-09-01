@@ -260,7 +260,7 @@ reqs = ["12.1","12.2","13.1","13.2","13.3","13.5"]
 
 [task.1.2]
 title = "Repair the clean-profile bootstrap"
-status = "pending"
+status = "done"
 wave = 1
 do_1 = "Add an emulator provisioning command to the CLI that generates the sequencer seed under the profile directory with owner-only permissions, refuses to overwrite without a force flag, publishes the sequencer trust anchor to a profile-local path, and prints only the paths and the anchor - never seed bytes - in text and JSON output."
 do_2 = "Keep sequencer_seed_file mandatory on EmulatorCommand::Up and keep endpoint, network id and trust anchor mandatory together on EnvironmentCommand::Use; add an anchor-file input to environment use that reads the published anchor and verifies it against the sequencer identity the emulator endpoint advertises before the environment is saved."
@@ -269,7 +269,7 @@ do_4 = "Add platform/cli/tests/clean-bootstrap.sh that extracts that fenced bloc
 do_5 = "Wire the script into platform-test-tooling for syntax and execution when the built binary is present, so the target runs the published sequence end to end."
 verify_cmd = "make platform-test-tooling"
 symbols = ["EmulatorCommand::Provision","EmulatorCommand::Up","EnvironmentCommand::Use","clean_bootstrap"]
-touches = ["platform/cli/src/main.rs","platform/emulator/src/main.rs","platform/docs/content/install.md","platform/cli/tests/clean-bootstrap.sh","platform/cli/tests/emulator.rs","platform/Makefile.inc"]
+touches = ["platform/cli/src/main.rs","platform/cli/src/emulator.rs","platform/cli/src/output.rs","platform/cli/src/install/mod.rs","platform/cli/tests/common/mod.rs","platform/cli/tests/commands.rs","platform/emulator/src/main.rs","platform/docs/content/install.md","platform/docs/content/environments/emulator.md","platform/cli/tests/clean-bootstrap.sh","platform/cli/tests/emulator.rs","platform/Makefile.inc"]
 reqs = ["1.1","1.2","1.3","1.4","1.5"]
 
 [task.2]

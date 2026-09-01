@@ -1947,6 +1947,23 @@ fn inspect(emulator: &Emulator, trace: u64) -> Response {
     success(trace, &format!("{{\"network_mode\":\"emulator\",\"batch_cadence\":\"instant\",\"state_root\":\"{}\",\"canonical_state_root\":\"{}\",\"receipt_state_root\":\"{}\",\"next_sequence\":{},\"batch_number\":{},\"timestamp_ms\":{},\"cells\":[{cells}],\"accounts\":[{accounts}]}}", hex_encode(&state.canonical_state_root), hex_encode(&state.canonical_state_root), hex_encode(&state.receipt_state_root), state.next_sequence, state.batch_number, state.timestamp_ms))
 }
 
+fn sequencer_identity(emulator: &Emulator, trace: u64) -> Response {
+    success(
+        trace,
+        &sequencer_identity_body(
+            emulator.network_id,
+            &emulator.signing_key.verifying_key().to_bytes(),
+        ),
+    )
+}
+
+fn sequencer_identity_body(network_id: u32, sequencer_public_key: &[u8; 32]) -> String {
+    format!(
+        "{{\"network_id\":{network_id},\"sequencer_public_key\":\"{}\"}}",
+        hex_encode(sequencer_public_key)
+    )
+}
+
 fn health(emulator: &Emulator, trace: u64) -> Response {
     let mut state = CoreState {
         canonical_state_root: [0; 32],
@@ -3451,6 +3468,7 @@ fn route(emulator: &mut Emulator, request: &Request) -> Response {
     };
     let result = match (request.method.as_str(), request.path.as_str()) {
         ("GET", "/healthz") => health(emulator, trace),
+        ("GET", "/v1/sequencer") => sequencer_identity(emulator, trace),
         ("POST", "/v1/activities") => submit(emulator, request, trace),
         ("POST", "/v1/moves/quote") => move_quote(emulator, request, trace),
         ("POST", "/v1/moves") => move_commit(emulator, request, trace),
@@ -3500,7 +3518,8 @@ fn route(emulator: &mut Emulator, request: &Request) -> Response {
         }
         (
             _,
-            "/v1/activities"
+            "/v1/sequencer"
+            | "/v1/activities"
             | "/v1/moves/quote"
             | "/v1/moves"
             | "/v1/state"
@@ -4025,7 +4044,24 @@ pub fn run(arguments: impl IntoIterator<Item = String>) -> Result<(), String> {
 
 #[cfg(test)]
 mod boundary_tests {
-    use super::{advance_trace, parse_config};
+    use super::{advance_trace, hex_encode, parse_config, sequencer_identity_body};
+
+    #[test]
+    fn sequencer_identity_advertises_the_public_key_and_never_the_seed() {
+        let seed = [0x42_u8; 32];
+        let public_key = ed25519_dalek::SigningKey::from_bytes(&seed)
+            .verifying_key()
+            .to_bytes();
+        let body = sequencer_identity_body(402, &public_key);
+        assert_eq!(
+            body,
+            format!(
+                "{{\"network_id\":402,\"sequencer_public_key\":\"{}\"}}",
+                hex_encode(&public_key)
+            )
+        );
+        assert!(!body.contains(&hex_encode(&seed)));
+    }
 
     #[test]
     fn control_surface_refuses_non_loopback_listeners() {

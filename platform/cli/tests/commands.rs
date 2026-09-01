@@ -98,7 +98,43 @@ fn environment_use_requires_endpoint_and_network_together() {
         "--endpoint",
         "https://testnet.example",
     ]);
-    assert_command_failed(&output);
+    assert!(!output.status.success());
+    let value = error_envelope(&output);
+    assert_eq!(
+        value.pointer("/error/code").and_then(Value::as_str),
+        Some("environment_input_missing")
+    );
+}
+
+#[test]
+fn legacy_non_emulator_profile_without_an_anchor_can_be_selected() {
+    let cli = Cli::new();
+    let configuration = r#"{
+  "version": 1,
+  "current_environment": "emulator",
+  "default_key": null,
+  "environments": {
+    "emulator": {
+      "endpoint": "http://127.0.0.1:9402",
+      "network_id": 402,
+      "sequencer_trust_anchor": null
+    },
+    "testnet": {
+      "endpoint": "https://testnet.example",
+      "network_id": 402,
+      "sequencer_trust_anchor": null
+    }
+  },
+  "keys": {}
+}
+"#;
+    if let Err(error) = std::fs::write(cli.config_path(), configuration) {
+        panic!("legacy configuration should be writable: {error}");
+    }
+
+    let selected = cli.run(&["--json", "environment", "use", "testnet"]);
+    let value = assert_success_envelope(&selected, "environment.selected");
+    assert_eq!(string_field(&value, "/data/name"), "testnet");
 }
 
 #[test]

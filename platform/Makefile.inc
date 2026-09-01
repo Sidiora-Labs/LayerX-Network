@@ -117,6 +117,9 @@ platform-test-tooling: platform-test-cli-production-credential-refusal
 		platform/hosted/testnet/render-status.sh platform/hosted/testnet/tests/hosted-smoke.sh
 	bash -n platform/cli/tests/install-journey.sh \
 		platform/examples/agent-program-call/walkthrough.sh
+	bash -n platform/cli/tests/clean-bootstrap.sh
+	$(PLATFORM_CARGO) build --offline --manifest-path $(PLATFORM_MANIFEST) --locked -p layerx-platform-cli
+	bash platform/cli/tests/clean-bootstrap.sh
 
 platform-test-cli-production-credential-refusal:
 	bash platform/cli/tests/production-credential-refusal.sh
