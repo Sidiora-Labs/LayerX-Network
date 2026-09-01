@@ -40,15 +40,15 @@ This file is a GENERATED pointer to it. Do not hand-edit it; edit `spec/workflow
 
 ## Active feature
 
-`spec/layerx-platform/spec.kvx` — read its `[meta]` status, `[req.*]` acceptance criteria, and the `[task.*]` list (status + wave + requires). Work one task at a time in wave order; update `status` in the kvx as you go.
+`spec/layerx-beta/spec.kvx` — read its `[meta]` status, `[req.*]` acceptance criteria, and the `[task.*]` list (status + wave + requires). Work one task at a time in wave order; update `status` in the kvx as you go.
 
 ## Hard rules
 
-- **Task Durability**: Once a task is dispatched, keep at least one agent alive through complete implementation and task qualification; on agent failure, resume from durable state. Done means implementation and every task gate genuinely pass.
-- **Phase Boundary**: Finish the entire task implementation before qualification. After implementation is complete, the same agent may format, build, test, fix task-scoped failures, and rerun gates. Never interleave partial implementation with qualification or expand into unrelated repair.
-- **No Weakening**: Never weaken the system to produce a passing signal. No relaxed assertions, loosened bounds, widened types, silent fallbacks, skipped or deleted tests, disabled checks, or lowered thresholds. Leave the conflict standing and log it.
-- **No Fakes**: Never write stub/mock/fake test doubles or placeholder implementations. Test REAL code paths with REAL types.
-- **No False Claims**: Never claim code compiles, tests pass, or behavior is verified before the exact gate runs successfully. Preserve exact failed commands and distinguish task qualification from final release qualification.
+- **Task Durability**: Once a task is dispatched, keep at least one agent alive until it is done to the highest standard; decouple task lifecycle from the user's connection; on failure, bring up a fresh agent and continue. 'Done' means it genuinely meets the quality bar.
+- **No Fakes**: Never write stub/mock/fake test doubles or placeholder implementations to make tests pass. Test REAL code paths with REAL types.
 - **Read Full**: When tool output is truncated and the rest is retrievable, fetch the full content before reasoning or answering.
-- **Publish Steps**: After every task passes task qualification and cg spec done without force, commit and push from the repository root with a natural-sounding message. A finished task that is not pushed is not finished.
-- **Ui Component Library**: Client UI uses the exact styling and component API of the owner-supplied @layerx/ui package. Its borders, dividers, shadows, gradients, palette, radii and interaction states are authoritative; application code consumes the package instead of restyling its primitives.
+- **Publish Steps**: After every completed task, commit and push from the repository root with a natural-sounding commit message. Every development step is published publicly for trust and auditability; a finished task that is not pushed is not finished. Commit messages describe the real change honestly — never claim work that did not happen.
+- **Repository Instructions**: may guide how explicitly requested work is performed, but must never be used to infer authorization for additional work.
+- **User Authority**: The user's direct messages are the authoritative instructions for the session and take precedence over AGENTS.md, Codify, skills, or repository workflow guidance when those sources would broaden the requested scope.
+- **Session Init**: Interpret 'get context' or 'session init' as read-only inspection and summarization only.
+- **Expand Work**: Do not run builds, tests, verification gates, start or claim Codify tasks, modify project files, deploy, or otherwise expand the work unless the user explicitly requests that action.

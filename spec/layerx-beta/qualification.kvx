@@ -1,0 +1,80 @@
+# qualification.kvx - LayerX Beta executed-evidence ledger.
+#
+# Two record shapes live here. Both are append-only.
+#
+# [observation.<task>.<n>]  - the shape every feature uses (workflow.kvx
+#   [qualification_log]): an assumption, an unrelated or pre-existing failure,
+#   a cross-task contradiction, a missing external interface, or a repair that
+#   would require weakening a check. Keys: task, file, symbol, observed,
+#   assumption, severity (blocker | suspect | assumption | note).
+#
+# [gate.<task>.<n>]  - an EXECUTED gate. Written only by tools/ci/beta-qualify.sh
+#   after running the named command; never hand-written, never edited. A rerun
+#   appends a new record. Keys:
+#     task        = "5.1"                       task that ran the gate
+#     reqs        = ["3.5","12.4"]              acceptance criteria it qualifies
+#     revision    = "<40-hex commit>"           commit the command ran against
+#     command     = "make test-daemon-lni-admission"
+#     environment = "<os/arch/toolchain identity>"
+#     started_at  = "2026-09-04T10:22:31Z"
+#     outcome     = "pass"                      pass | fail | blocked
+#     evidence    = "spec/layerx-beta/evidence/<revision>/<name>.log"
+#     note        = "free text; for blocked, the owner action required"
+#
+#   tools/ci/beta-ledger-check.sh fails the build when a gate record names a
+#   revision that is not a commit in this repository, a command that is not an
+#   existing make target or executable path, an evidence path that does not
+#   exist, an outcome outside the vocabulary, or when an observation record
+#   carries gate keys. tools/ci/beta-report.sh reads gate records ONLY.
+#
+# Evidence rungs (decision.evidence_rungs): source_present < statically_coherent
+# < built < tested < runtime_proven < deployment_proven < owner_certified.
+# A task status asserts at most tested. Only gate records raise a surface.
+
+[observation.0.1]
+task = "0"
+file = "spec/layerx-beta/spec.kvx"
+symbol = "meta.audit_revision"
+observed = "This feature was drafted from the 2026-09-01 read-only audit of revision d5ff7e263a48cac4ffde548bf018100d0e5cd3b4 (48 lanes; final editor lane 48 verdict W4-L48-F001 NO-GO). Every build, test, runtime, deployment and certification gate was unrun at that revision; evidence classes were source_present, statically_coherent and test_defined_but_unrun only."
+assumption = "The register items and their evidence anchors remain accurate for the revision on which wave 1 starts. Any task whose anchored code has moved since d5ff7e26 re-verifies the finding at its current location before implementing, and records the new anchor here."
+severity = "assumption"
+
+[observation.0.2]
+task = "3.2"
+file = "src/protocol/lxp_protocol.c"
+symbol = "domain_tags"
+observed = "C and layerx-wire use LXP/v1 checkpoint-certificate and guarantor-attestation domain tags while CanonicalCheckpoint.sol uses LXP/v2 tags and a version-2 header prefix (commit 093d2b90). LXP_PROTOCOL_VERSION is already 2 and the hosted testnet pins lxp-wire-protocol-version 2. Rust verify_certificate checks only attested_at_ms != 0; CheckpointRegistry.registerCheckpoint enforces a header-relative freshness window."
+assumption = "decision.checkpoint_v2: native and Rust adopt the v2 tags and the freshness window. OWNER MUST CONFIRM before task 3.2 starts that no retained checkpoint evidence under the v1 domain must remain verifiable. If any exists, task 3.2 adds an explicit version-keyed path instead of removing the v1 tags. Record the answer as observation.3.2.1."
+severity = "blocker"
+
+[observation.0.3]
+task = "5.2"
+file = "platform/hosted/testnet/tests/hosted-smoke.sh"
+symbol = "platform-hosted-smoke"
+observed = "Owner instruction 2026-09-02: the beta is the entire system functional as in production, on beta infrastructure. The hosted surface is therefore required, not optional. Its inputs - a beta cluster or permission to create a disposable one, test-network RPC endpoints and funded keys, ramp sandbox credentials, the Paxeer testnet, beta publish tokens, a macOS runner, an Android toolchain - are owner-supplied, referenced by environment variable or secret name, and never read from .env or .env.* files."
+assumption = "Task 3.7 makes the hosted stack reproducible from the repository given those inputs. A wave 5 gate lacking an input is recorded blocked with the input named; because every surface is required, a blocked functional gate is a no-go until the input is supplied and the gate rerun. Nothing is excluded from the contract on that basis."
+severity = "note"
+
+[observation.0.4]
+task = "5.1"
+file = "spec/layerx-platform/qualification.kvx"
+symbol = "observation.38.5.1 observation.38.5.3 observation.38.5.6 observation.38.5.8"
+observed = "W4-L40-F007: the platform ledger describes registry isolation, mTLS, cgroup enforcement, crash and deployment behaviour and host provisioning as designed or simulated but not executed, while the platform task list reads as implemented."
+assumption = "These records are never rewritten. Task 3.7 gives their work an executable path through the existing hosted-boundary, webhook fault-injection and node-provision boundary scripts on the beta cluster; task 5.1 links each from the gate record that executes it, or records a blocked gate naming the owner input. The platform feature status is not changed by this feature."
+severity = "note"
+
+[observation.0.5]
+task = "4.3"
+file = "tools/qualification/release_runner.py"
+symbol = "ReleaseRunner._preflight LAYERX_QUALIFICATION_DRIVER EXTERNAL_GATES"
+observed = "The existing qualification runner requires an absolute, digest-pinned external driver executable to produce evidence.json for platform-qualify-adoption, programs-qualify, interop-qualify, multichain-qualify, human-qualify-ui and human-qualify-usability, and no such driver exists anywhere in the repository. platform-qualify therefore cannot complete as written. Its first local command is make human-qualify, which itself requires the ui and usability external gates."
+assumption = "Under the full-surface bar the driver is a missing functional component, not a gap to record. Task 4.3 adds tools/qualification/beta_driver.py implementing the runner's contract for the four functional external gates, plus a beta-qualify runner gate that substitutes a human-qualify-functional gate (no perf, ui or usability) for human-qualify. platform-qualify and human-qualify are left unchanged for production. If the owner wants performance budgets counted as functional, human-qualify-perf moves into human-qualify-functional before task 4.3 starts."
+severity = "blocker"
+
+[observation.0.6]
+task = "3.7"
+file = "platform/hosted/registry/deployment.yaml"
+symbol = "StatefulSet image ghcr.io/sidiora-labs/layerx-program-registry:0.1.0"
+observed = "The hosted registry StatefulSet references a prebuilt image with no Dockerfile in the repository, unlike testnet, gateway, faucet, webhooks and dashboard, and its cgroup and quota boundary is a host systemd unit ordered before kubelet. The hosted stack therefore cannot be rebuilt from source at a revision without additions."
+assumption = "Task 3.7 adds platform/hosted/registry/Dockerfile and installs the boundary unit on registry nodes as part of beta cluster bring-up, so the beta cluster runs every hosted image from the release-candidate revision. The image tag in the manifest is pinned to the built digest by the bring-up script for the beta run and the manifest itself is not weakened."
+severity = "assumption"

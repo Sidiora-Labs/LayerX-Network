@@ -1,0 +1,186 @@
+## Overview
+
+LayerX Beta is a remediation and qualification feature, not a product feature. Its input is the 2026-09-01 beta fix register: twelve items confirmed at source on revision `d5ff7e26`, every build, test, runtime, deployment and certification gate unrun, and a NO-GO verdict for the beta as advertised. Its bar is the owner's: **the entire system functional exactly as it would be in production**, differing from production only in polish, external audit and infrastructure. Its output is a repository in which each of the twelve items is closed by a change to the code path the audit anchors, the whole stack stands up on beta infrastructure from the repository plus owner-supplied inputs, every surface is proven by gates actually executed on one immutable revision, and one canonical contract states every surface, its reached rung, the beta endpoints and how the beta differs from production.
+
+Four ideas organise the design.
+
+**The evidence rung is the unit of truth.** Every surface sits on exactly one rung of a seven-rung ladder — `source_present`, `statically_coherent`, `built`, `tested`, `runtime_proven`, `deployment_proven`, `owner_certified` — and the only thing that moves a surface up a rung is a gate record that names the revision, the command, the environment and the outcome. Task status, prose in a qualification log, a detailed plan or a passing build on some other revision moves nothing. This is the direct answer to W4-L40-F007 and the reason the ledger is designed before any code is touched.
+
+**Fix the seam, keep the check.** Every broken item is a place where a real verifier, bound or label exists but is bypassed, applied to the wrong input, or contradicted across languages. The LNI has `lxp_activity_verify_signature`; the admission path does not call it. The human service has `EvidenceBundle::verify`; the evidence read does not call it. The agent daemon has `SessionRegistry` and revocation records; `Token::authorize` never consults them. Solidity enforces a freshness window; C and Rust do not. The custody module records the withdrawal asset; settlement ignores it. In each case the design adds the missing call, input or comparison and leaves the existing check, bound, label and mandatory CLI input intact. Nothing is made optional to make the path work.
+
+**The whole surface, on beta infrastructure.** The audit's cutline proposed a narrow beta; the owner declined it. So the beta rung for every local surface is `runtime_proven` and for every hosted surface `deployment_proven` — on real, non-production infrastructure: a beta Kubernetes cluster running the real manifests and images, the Ethereum and Solana test networks for mirrors, provider sandboxes for ramps, the Paxeer testnet, beta pre-release versions on real registries. `owner_certified` is the production rung and is not required. What the beta does *not* need is enumerated once — UI polish, visual regression, accessibility and usability studies, performance budgets and soak, an external security audit, production cluster, DNS, TLS, KMS, HSM, SLOs and production peers — and nothing functional hides under that heading. A functional surface below its rung is a no-go; there is no exclusion path.
+
+**Use the runner that exists; build the driver that doesn't.** `tools/qualification/release_runner.py` already defines the full-stack `platform-qualify` gate — human journeys, platform build and tests, SDK conformance, middleware, docs samples, hosted smoke, agent install, emulator conformance, real agent-framework, iOS and Android integrations, Programs, interop, migration testnets, ramp sandboxes, release check — and already records source revision, a dirty-tree fingerprint, per-command logs and validated external evidence. It also requires an external qualification driver executable for the adoption, Programs, interop and multichain evidence, and no such driver exists in the repository. The feature adds a `beta-qualify` gate (the functional subset: `platform-qualify` with the polish gates out) and a real in-repository driver that produces every case in the runner's inventory by executing the beta stack. The ledger points at the runner's `status.json` and `report.json`; it does not duplicate them.
+
+## Architecture
+
+```
+spec/layerx-beta/
+  spec.kvx                    normative requirements and task plan (this feature)
+  qualification.kvx           observation records + gate records (the ledger)
+  evidence/<revision>/        retained runner output and captured logs per executed gate
+  report.md                   go/no-go report generated from gate records only
+tools/ci/
+  beta-ledger-check.sh        validates every gate record (revision, command, evidence, outcome, runner identity)
+  beta-contract-check.sh      checks docs, manifests, workflows, status surface and report against beta.md
+  beta-qualify.sh             runs focused and journey gates, captures output, appends gate records
+  beta-stack.sh               starts node, agentd, human service and web; brings the beta cluster up; exports runner URLs
+  beta-report.sh              computes reached rung per surface + stop-condition table from gate records
+tools/qualification/
+  release_runner.py           existing executor of record; gains beta-qualify and human-qualify-functional gates
+  beta_driver.py              NEW in-repository qualification driver for adoption / programs / interop / multichain
+platform/hosted/tests/
+  topology-check.sh           static Service-port and NetworkPolicy edge check over the hosted manifests
+  beta-cluster.sh             builds images, creates or targets the beta cluster, applies manifests, waits for journeys
+platform/docs/content/beta.md the one canonical beta contract
+```
+
+Beta infrastructure, by surface:
+
+| Surface | Beta infrastructure | Production counterpart not required |
+|---|---|---|
+| Native node, daemon, agentd, human service, web app | Processes on the qualification host, started by `beta-stack.sh` | Production hosts, SLOs |
+| Hosted testnet, gateway, faucet, registry, webhooks, dashboard | Beta Kubernetes cluster (owner-designated or disposable local) running the real manifests and images with a beta CA and beta secrets | Production cluster, DNS, TLS, KMS, HSM |
+| Settlement contracts and mirrors | Ethereum and Solana test networks (Solana devnet mirror already recorded in 653909da) | Mainnets, production guarantor set |
+| Ramps | Provider sandboxes (`interop-test-ramps-sandbox`) | Live providers |
+| Paxeer boundary | Paxeer testnet (`LAYERX_QUALIFICATION_PAXEER_URL`) | Paxeer production |
+| SDKs, middleware, integrations | Beta pre-release versions on real registries or an owner-designated beta registry; install checks install from there | Stable versions |
+| Mobile | iOS sample on a macOS runner, Android sample on an Android toolchain, both owner-supplied | Store distribution |
+
+The remediation itself lands in the surfaces the audit anchors, with no new subsystem:
+
+| Seam | Where the repair lives | What is added | What is kept |
+|---|---|---|---|
+| Bootstrap | `platform/cli`, `platform/emulator`, `install.md` | provisioning command; anchor-file input to `environment use`; extracted-block test | mandatory `--sequencer-seed-file`, `--endpoint`, `--network-id`, `--sequencer-trust-anchor` |
+| Programs snapshot | `src/state/lxp_snapshot.c`, `src/modules/programs/artifact.c` | kernel-blob section with bound, root recomputation, atomic store replacement | blob keys in `lxp_state_subtree_root` |
+| LNI admission | `cmd/layerxd/lxp_daemon_lni.c`, `lxp_daemon_main.c` | pre-queue `lxp_activity_verify_signature` call; ack after durable insert; per-peer refusal counter | `validate_canonical_items` batch/WAL signature check |
+| Session revocation | `layerx-agentd` `session.rs`, `tenant.rs`, `session_revocation.rs` | persisted revocation generation; open+generation check in `Token::authorize` via `tenant::resolve`; boot reload; stream termination | existing tenant, agent, scope and expiry checks |
+| Evidence truth | `layerx-human-service` `production_reads.rs`, `activity/export.rs` | `EvidenceBundle::verify` call before any status; constructor-restricted status type | the receipt-verified label itself, now only reachable through the verifier |
+| Checkpoint identity | `lxp_protocol.c`, `layerx-wire` `hash.rs`, `layerx-proof` `checkpoint.rs`, contracts | v2 domains in C and Rust; shared freshness window and max delay; cross-language vector set | Solidity v2 domains, freshness window and header prefix |
+| Hosted topology | `platform/hosted/testnet`, `platform/hosted/gateway` | port alignment; NetworkPolicy edge; per-dependency and per-journey readiness; static topology check | Service port 443; existing probes |
+| Artifact truth | `platform/release`, `.github/workflows/platform.yml` | manifest-vs-workflow bidirectional check; per-ecosystem publication with digest, signature, SBOM, attestation, install check; artifact manifest; byte verification; rollback identity | `platform-release-check` as the gate |
+| Crash recovery | `platform/hosted/registry` `journal.rs`, `platform/ramps/toolkit` `journal.rs` | one commit unit for record+proof; quarantine report; staged validation before append; single-step apply | proof-set completeness check; callback validation rules |
+| Asset binding | `lx_asset_custody.c`, `lxp_bridge_withdraw.c` | equality check on settle; asset derived from stored record on finalize | request-time asset check; conservation property |
+| Human API errors | `human-api/v1.kvx`, generated client, explorer | `ApiError` in `ResponseEnvelope`; regenerated projections; typed overloaded state with Retry-After | drift gate; route returns 429 |
+
+## Components and Interfaces
+
+### The ledger (`qualification.kvx`)
+
+The existing observation shape is unchanged:
+
+```
+[observation.<task>.<n>]
+task = "..."  file = "..."  symbol = "..."  observed = "..."  assumption = "..."  severity = "..."
+```
+
+A second record shape is added beside it and is the only thing the report reads:
+
+```
+[gate.<task>.<n>]
+task        = "5.1"
+reqs        = ["3.5","12.4"]
+revision    = "<40-hex commit>"
+command     = "make test-daemon-lni-admission"
+environment = "<os/arch/toolchain identity string>"
+started_at  = "2026-09-04T10:22:31Z"
+outcome     = "pass"            # pass | fail | blocked
+evidence    = "spec/layerx-beta/evidence/<revision>/test-daemon-lni-admission.log"
+note        = "..."
+```
+
+`beta-ledger-check.sh` fails when `revision` is not a commit reachable in the repository, `command` is not an existing make target or an executable path in the tree, `evidence` does not exist, `outcome` is outside the vocabulary, an observation record carries gate keys, or — when `evidence` is a runner `status.json` / `report.json` — the runner's `source_revision` differs from `revision` or its `source_identity` is not the clean-tree identity for that revision. Gate records are append-only; a rerun appends a new record, it never edits an old one.
+
+### The runner gate and the driver (`tools/qualification/`)
+
+`release_runner.py` gains two gates and loses nothing:
+
+```
+human-qualify-functional  = human-qualify local commands minus human-qualify-perf; no external gates
+beta-qualify              = platform-qualify local commands with human-qualify-functional substituted
+                            for human-qualify; external gates platform-qualify-adoption, programs-qualify,
+                            interop-qualify, multichain-qualify
+```
+
+`platform-qualify` and `human-qualify` stay exactly as they are for production. The runner's preflight — `LAYERX_QUALIFICATION_REAL_STACK=1`, a pinned driver digest, four distinct component URLs — is unchanged.
+
+`beta_driver.py` implements the driver contract the runner already invokes (`run --gate <g> --output <dir> --source-identity <id> --node-url … --agentd-url … --human-service-url … --paxeer-testnet-url …`) and writes `evidence.json` in the shape `validate_evidence` checks, with every case and artifact kind of `EVIDENCE_SPECS[g]`. Each case is executed against the beta stack:
+
+| Gate | Cases | Executed through |
+|---|---|---|
+| `platform-qualify-adoption` | seven `<ecosystem>/first-payment`, `middleware/ten-line-integration`, `programs/five-minute-deploy-and-paid-call` | the published beta artifacts installed from their registries, the CLI, the node and agentd, the hosted Programs registry |
+| `programs-qualify` | `real-node/*` gauntlet, isolation, determinism differential, metering, concurrency, idempotency, the eight crash points, ported reference contracts, monetary-law replay | the real node with `programs-*` targets and fault injection at each crash point |
+| `interop-qualify` | x402 all transports, AP2 / UCP / Visa pinned conformance, portable verification both directions, migration and fiat fault injection | `interop-test-*` suites against the running gateway and the sandboxes |
+| `multichain-qualify` | mirror offline verification and tamper rejection, Paxeer exclusivity, one-ledger, reference ramp end to end and labelling | the Ethereum and Solana test-network mirrors, the Paxeer testnet, the ramp sandbox |
+
+A case that cannot execute is reported `failed` with its reason and the driver exits non-zero; the runner then records the external gate failed. The driver never synthesises a result.
+
+### The beta stack (`tools/ci/beta-stack.sh`, `platform/hosted/tests/beta-cluster.sh`)
+
+`beta-stack.sh` starts the native node and daemon, agentd, the human service and the web application on the qualification host, calls `platform-beta-cluster-up`, points the mirror and ramp configuration at the test networks and sandboxes from owner-supplied environment, and exports the runner's component URLs and the driver digest. `beta-cluster.sh` builds the five hosted images that have Dockerfiles plus the registry image from a new `platform/hosted/registry/Dockerfile` (the StatefulSet currently pulls `ghcr.io/sidiora-labs/layerx-program-registry:0.1.0` with no in-repo build), installs the registry node boundary unit and `node-provision-build-boundary.sh` on every node that schedules the registry, creates a disposable local cluster or targets the owner's beta cluster, generates a beta CA and the beta secrets by name, applies the real manifests, waits for every journey to report ready through the task 3.6 readiness endpoint, exports the hosted-smoke variables, prints the cluster identity, and under a flag runs the existing `hosted-boundary.sh`, webhook `fault-injection.sh` and `node-provision-build-boundary.sh` so the platform's unexecuted 38.5 observations have an executable path. `platform-beta-cluster-down` leaves nothing on the host.
+
+### The contract (`platform/docs/content/beta.md`)
+
+One document with fixed headings, each of which `beta-contract-check.sh` parses: surfaces and journeys with required and reached rung; beta endpoints and hostnames; network id; wire protocol version; beta CA; artifact set (by reference to the artifact manifest); unknown-state behaviour; architecture summary; external dependencies and their beta counterparts; beta-versus-production differences. The check extracts the same values from `install.md`, `platform/hosted/testnet/deployment.yaml` (configmap `lxp-wire-protocol-version`, control URLs), `platform/release/registries.kvx`, the publish jobs in `.github/workflows/platform.yml`, the docs content index and `report.md`, and fails on any disagreement, on any surface below its required rung while the contract claims readiness, on any difference outside the polish boundary, and on any docs journey the contract does not name.
+
+### Bootstrap (task 1.2)
+
+`layerx emulator provision` writes the sequencer seed under the profile directory with mode 0600, writes the derived trust anchor beside it, refuses to overwrite either without `--force`, and prints paths plus the anchor (never seed bytes) in text and `--json` output. `layerx emulator up --sequencer-seed-file <path>` is unchanged. `layerx environment use emulator --endpoint … --network-id … --sequencer-trust-anchor-file <path>` reads the anchor, fetches the identity the endpoint advertises, compares, and saves only on equality; the three inputs stay mandatory together and any absence or mismatch is a typed error naming the input. The fenced block in `install.md` is the one sequence; `platform/cli/tests/clean-bootstrap.sh` extracts it with a marker comment and runs it in a fresh `HOME`, so the doc cannot drift from the test.
+
+### LNI pre-queue authentication (task 2.1)
+
+In `send_submit`, after the existing framing, role, decode, network, payload-hash and identity checks and before `lxp_daemon_submit`, the handler calls `lxp_activity_verify_signature` against current state, outside the queue lock. Failure returns a typed authentication refusal and increments the per-peer counter; nothing touches the queue. Success proceeds to `lxp_daemon_submit`, and the acknowledgement is written only after insertion returns. `validate_canonical_items` continues to verify signatures in the batch/WAL path, so an activity is verified twice; that redundancy is deliberate and is not removed.
+
+### Session revocation (task 2.2)
+
+The persisted session record gains `generation: u64`, incremented on close, on `apply_revocation` and on scope change. A token is minted with the generation current at issue. `Token::authorize` takes a registry view and refuses with `AuthorizeError::Revoked` when the session is not open or the token generation differs from the current one; `Expired` stays a distinct variant. `tenant::resolve` is the single call site, so every operation — reads, subscriptions, prepare, export, approvals, writes — inherits the check without a per-operation patch. On boot the registry loads generations before the daemon accepts a connection. Subscriptions and long-running operations check the generation at each boundary and terminate with a typed revoked event.
+
+### Evidence verification (task 2.3)
+
+`evidence_get` decodes the cached bundle exactly as today, then calls `EvidenceBundle::verify(expected_digest, principal, settlement_domain, receipt_authority)`. `Ok` yields `VerificationStatus::ReceiptVerified`; each verifier error variant yields `Unverified(reason)`; a verifier or authority error yields `Unavailable`. `VerificationStatus::ReceiptVerified` is constructible only inside `activity::export`, so no other module can fabricate it. Custody rows and exported bundles take the same path.
+
+### Checkpoint identity (task 3.2)
+
+The C `domain_tags` table and the Rust `Domain` enum move to `LXP/v2/checkpoint-certificate` and `LXP/v2/guarantor-attestation`, matching `CanonicalCheckpoint.sol`. The native verifier and `verify_certificate` enforce `header.timestamp <= attested_at <= header.timestamp + max_delay`, with `max_delay` read from one declared configuration value that the registry deployment also consumes. A vector directory under `tests/vectors/checkpoint/` carries headers, certificates, attestations, expected digests and expected outcomes for fresh, too-early, too-late and boundary times; the C, Rust, Foundry and mirror test suites read the same files. Whether a version-keyed v1 path is needed is an owner decision recorded before the task starts.
+
+### Hosted topology and readiness (task 3.6)
+
+`LAYERX_TESTNET_GATEWAY_URL` targets the port the gateway Service exposes; the gateway NetworkPolicy admits ingress from testnet-control. `topology-check.sh` resolves every in-cluster URL in the manifests to a Service and port and checks every declared edge against NetworkPolicy on both ends. The testnet readiness endpoint reports per-dependency state for identity, faucet, core, receipt authority, registry, Redis, gateway and the Paxeer boundary, then per-journey state as the conjunction of each journey's declared set; a global ready with any journey degraded cannot be rendered.
+
+### Artifact publication (tasks 4.1, 4.2)
+
+`platform-release-check` compares ecosystems declared in `registries.kvx` with publish jobs in `platform.yml` in both directions. All seven declared ecosystems — crates.io, npm, PyPI, Go modules, Maven Central, SwiftPM, NuGet — get publication jobs producing a beta pre-release version with an immutable digest, a signature, an SBOM, a provenance attestation and an install check that installs from the registry it was published to; the skeleton entries in `registries.kvx` are completed with real package identities. The Programs aggregate acceptance, sanitizers, long-fuzz corpus and supported-architecture replay lose their schedule-only and opt-in gating for the release revision. The release tool emits one artifact manifest — name, version, registry, digest, signature, SBOM and attestation references, source revision, rollback identity — verifies published bytes against it before promotion, halts naming the failing artifact otherwise, and retains the manifest as a release artifact referenced from `beta.md`.
+
+### Crash recovery (tasks 3.4, 3.5)
+
+`FileDeploymentJournal::append` writes one canonical envelope carrying record and proof to a temporary file, fsyncs and renames atomically; startup loads complete units and quarantines incomplete ones with a typed per-unit report. The ramp `Journal::append` validates a callback completely against a staged view — transition legality, evidence, provider sequence — before any sync, then appends and applies index mutations in one step; apply failure retains nothing and retry under the same callback identity is idempotent.
+
+### Asset binding (task 3.3)
+
+`lx_asset_withdraw_settle` compares the supplied asset to the recorded one and refuses with a typed mismatch before any transfer; `lxp_bridge_withdraw_finalize` derives the asset from the record located by nullifier and validates any caller-supplied asset for equality. The refused record stays claimable and the state root is unchanged.
+
+### Human API errors (task 2.4)
+
+`record.ResponseEnvelope` gains `error:ApiError` for failed responses; the generated client and other projections are regenerated and the drift gate proves nothing is stale. The explorer verifier client maps 429 to `Overloaded { retry_after }` distinct from `Refused`, rendering the wait and a Retry action; the route keeps returning 429 with Retry-After.
+
+## Data Models
+
+**Gate record** — see the ledger section; the report and the contract check are the only consumers.
+
+**Artifact manifest entry** — `{ name, version, registry, digest, signature_ref, sbom_ref, attestation_ref, source_revision, rollback_version }`, emitted by `layerx-platform-release`, retained as a release artifact.
+
+**Snapshot blob section** — header `{ count, total_bytes }` under a declared bound, followed by `count` entries of `{ key, length, bytes }` in canonical key order; the loader recomputes `lxp_state_subtree_root` over the module subtree and rejects on mismatch.
+
+**Session record** — adds `generation` beside the existing open flag, expiry and scope; tokens carry `generation` beside the existing tenant, agent, scope and expiry.
+
+**Journey readiness** — `{ journey, ready, dependencies: [{ name, ready, detail }] }` for funding, payment, receipt inspection and Programs.
+
+**Checkpoint vector** — `{ header, certificate, attestations, expected_digest, expected_outcome, attested_at_case }` with `attested_at_case` in `fresh | too_early | too_late | boundary_low | boundary_high`.
+
+## Error Handling
+
+Every repaired seam returns a typed refusal rather than a silent fallback: authentication refusal (LNI), `Revoked` distinct from `Expired` (agent), `Unverified(reason)` and `Unavailable` (human evidence), typed bound-exceeded and root-mismatch errors (snapshot), typed asset-mismatch (custody and bridge), per-unit quarantine reports (registry), typed missing-input and anchor-mismatch errors (CLI), `Overloaded { retry_after }` (explorer). A repaired path that fails leaves state exactly as it was before the call, proven by state-root equality or map equality in the tests. A gate that cannot run for lack of an owner input — cluster, test-network keys, sandbox credentials, registry tokens, a macOS runner — is recorded as `blocked` with the input named, never omitted and never marked pass; because every surface is required, a blocked functional gate makes the report no-go until the input is supplied and the gate rerun.
+
+## Testing Strategy
+
+Every task's `verify_cmd` is an existing or task-created make target that runs real code paths with real types; no test double stands in for a verifier, a queue, a journal, a registry or the qualification driver. Wave 2 and 3 tasks each add the negative and fault cases the audit named as missing; task 3.7 makes the hosted stack reproducible from the repository; task 4.3 gives the runner a real driver. Wave 5 then runs, on one release-candidate revision against the beta stack: `beta-qualify-focused` (every wave 2 and 3 verify_cmd plus the native, agent and human fault, fuzz, wire and boundary qualification targets), `beta-qualify` through `release_runner.py` (the full functional stack plus the four external evidence gates from the driver), `beta-qualify-journey` (clean-profile verified payment locally and against the hosted beta endpoints, the unknown-outcome restart case, cross-language vectors per published artifact), and `platform-hosted-smoke` with the cluster identity. Each command's output and the runner's `status.json` / `report.json` are retained under `evidence/<revision>/` and appended to the ledger as gate records; `beta-report` derives the reached rung per surface against its required rung and the stop-condition table from gate records alone, writes a single go or no-go line, and `beta-contract-check` fails if `beta.md` claims more than the report proves.

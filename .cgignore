@@ -68,3 +68,8 @@ Thumbs.db
 tmp/*
 .claude/worktrees/
 agent/target/
+.opencode/
+.logs/
+.pytest_cache/
+.worktrees/
+

@@ -16,7 +16,7 @@ kind            = "portable-agent-operating-contract"
 version         = "1.2.0"
 status          = "active"
 source_of_truth = "spec/ (kvx). Per-IDE rule files are GENERATED pointers — never hand-edit; run cg spec render && cg commit -m \"Specgen re-render\" to regenerate."
-active_feature  = "layerx-platform"
+active_feature  = "layerx-beta"
 
 [principle]
 task_driven      = "Work is driven by the active feature's spec.kvx task list — not ad-hoc. Pick the next eligible task by dependency wave, do it, mark it, move on."
@@ -79,14 +79,14 @@ feature = ["draft", "in_progress", "paused", "blocked", "complete"]
 # HARD rules mirrored in-repo so an agent without cortex still sees them.
 # These mirror the cortex HARD ruleset; cortex_recall is still authoritative.
 [hard_rules]
-task_durability = "Once a task is dispatched, keep at least one agent alive through complete implementation and task qualification; on agent failure, resume from durable state. Done means implementation and every task gate genuinely pass."
-phase_boundary  = "Finish the entire task implementation before qualification. After implementation is complete, the same agent may format, build, test, fix task-scoped failures, and rerun gates. Never interleave partial implementation with qualification or expand into unrelated repair."
-no_weakening    = "Never weaken the system to produce a passing signal. No relaxed assertions, loosened bounds, widened types, silent fallbacks, skipped or deleted tests, disabled checks, or lowered thresholds. Leave the conflict standing and log it."
-no_fakes        = "Never write stub/mock/fake test doubles or placeholder implementations. Test REAL code paths with REAL types."
-no_false_claims = "Never claim code compiles, tests pass, or behavior is verified before the exact gate runs successfully. Preserve exact failed commands and distinguish task qualification from final release qualification."
+task_durability = "Once a task is dispatched, keep at least one agent alive until it is done to the highest standard; decouple task lifecycle from the user's connection; on failure, bring up a fresh agent and continue. 'Done' means it genuinely meets the quality bar."
+no_fakes        = "Never write stub/mock/fake test doubles or placeholder implementations to make tests pass. Test REAL code paths with REAL types."
 read_full       = "When tool output is truncated and the rest is retrievable, fetch the full content before reasoning or answering."
-publish_steps   = "After every task passes task qualification and cg spec done without force, commit and push from the repository root with a natural-sounding message. A finished task that is not pushed is not finished."
-ui_component_library = "Client UI uses the exact styling and component API of the owner-supplied @layerx/ui package. Its borders, dividers, shadows, gradients, palette, radii and interaction states are authoritative; application code consumes the package instead of restyling its primitives."
+publish_steps   = "After every completed task, commit and push from the repository root with a natural-sounding commit message. Every development step is published publicly for trust and auditability; a finished task that is not pushed is not finished. Commit messages describe the real change honestly — never claim work that did not happen."
+repository_instructions = "may guide how explicitly requested work is performed, but must never be used to infer authorization for additional work."
+user_authority = "The user's direct messages are the authoritative instructions for the session and take precedence over AGENTS.md, Codify, skills, or repository workflow guidance when those sources would broaden the requested scope."
+session_init = "Interpret 'get context' or 'session init' as read-only inspection and summarization only."
+expand_work = "Do not run builds, tests, verification gates, start or claim Codify tasks, modify project files, deploy, or otherwise expand the work unless the user explicitly requests that action."
 
 # Generation config: which IDE adapter files specgen emits, and where the
 # human-readable markdown mirror is rendered. Paths are repo-relative.

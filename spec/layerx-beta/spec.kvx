@@ -1,0 +1,536 @@
+# spec.kvx - LayerX Beta. SINGLE SOURCE OF TRUTH for this feature.
+#
+# requirements.md / design.md / tasks.md next to this file are GENERATED from it
+# by spec/specgen. Never hand-edit those; edit this file and regenerate.
+#
+# Drive the work with:  cg spec next -> cg spec start <id> -> cg spec done <id>
+#
+# Provenance: the 2026-09-01 read-only 48-lane audit of revision d5ff7e26,
+# presented as the LayerX beta fix register (docs/00-source-brief.md maps every
+# register item to its raw finding, evidence anchors and the requirement here).
+# Requirements 1-12 mirror register items 01-12 one for one. Requirement 13 is
+# the umbrella the register's verdict demands: one canonical beta contract.
+#
+# Beta bar (owner instruction, 2026-09-02): the beta is the ENTIRE system
+# functional as it would be in production. The only differences from production
+# are that the beta is not polished, not externally audited, and not deployed on
+# production infrastructure. The audit's six-day narrowing recommendation is
+# therefore NOT adopted; every surface must reach its beta evidence rung.
+#
+# Upstream normative sources: spec/layerx-protocol/spec.kvx (the protocol wins),
+# spec/layerx-agent-interface/spec.kvx (the boundary and the agent layer) and
+# spec/layerx-platform/spec.kvx (the surface this feature repairs). This feature
+# does NOT supersede layerx-platform; it is the remediation and qualification
+# feature that stands between the platform as written and a beta invitation.
+# Nothing here relaxes a platform requirement. Where a platform requirement and
+# an audit finding disagree, the finding names a defect in the code, not in the
+# requirement.
+
+[meta]
+feature        = "layerx-beta"
+title          = "LayerX Beta - Fix Register Closure and Executed Qualification"
+kind           = "remediation-specification"
+version        = "0.1.0"
+status         = "draft"
+language       = "C17 core and daemon; Rust agent, human, platform, hosted and ramp services; Solidity settlement contracts; TypeScript web application and generated client; Kubernetes manifests; GitHub Actions; shell and make gates"
+repo_root      = "src/ and cmd/layerxd/ (native core and daemon); agent/ (agent layer); human/ (human control plane); platform/ (developer platform, hosted services, ramps, release); contracts/ (settlement contracts); spec/layerx-beta/ (this feature and its executed-evidence ledger)"
+upstream       = "spec/layerx-protocol (normative for protocol behaviour); spec/layerx-agent-interface (normative for the node boundary and the agent layer); spec/layerx-platform (the product surface under repair; its requirements remain binding and are not restated here)"
+audit_revision = "d5ff7e263a48cac4ffde548bf018100d0e5cd3b4"
+audit_source   = "/tmp/layerx-audit-20260901/presentation/index.html (register); /tmp/layerx-audit-20260901/runtime-protocol/runs/lane-NN/result.json (raw findings); mirrored in docs/00-source-brief.md"
+audit_verdict  = "W4-L48-F001: NO-GO for the full advertised beta. Twelve register items are confirmed at source; every build, test, runtime, deployment and certification gate was unrun at the audit revision. The audit recommended narrowing the beta to one local payment path; the owner instead requires the entire system functional, so this feature repairs every item and qualifies every surface."
+beta_bar       = "Entire system functional as in production, on beta infrastructure. Not required: polish (UI and visual regression, usability studies, performance budgets and soak), an external security audit, production infrastructure (production cluster, DNS, TLS, KMS, HSM, SLOs, production peers) and production certification."
+intro          = "The LayerX Beta feature closes the twelve items of the 2026-09-01 beta fix register and replaces narrative qualification with executed, revision-bound evidence, to the bar the owner set: the entire system functional exactly as it would be in production, differing from production only in polish, external audit and infrastructure. It fixes one missing bootstrap input path, seven broken money-safety and authorization seams (Programs snapshot state, LNI pre-queue authentication, agent session revocation, human evidence verification, checkpoint identity and freshness, withdrawal asset binding, registry and ramp crash consistency), one broken hosted topology, one divergent human API error contract, and one release pipeline whose declarations exceed what it publishes. It then stands the whole stack up on beta infrastructure - native node and daemon, agent daemon, human service and web application, hosted testnet, gateway, faucet, registry, webhooks and dashboard on a beta cluster, settlement mirrors on test networks, ramp sandboxes, the Paxeer testnet boundary - and runs the gates the audit found unrun on one immutable revision: the existing qualification runner over every functional surface, an in-repository qualification driver for the adoption, Programs, interop and multichain evidence the runner expects, focused negative and fault cases for every repaired seam, the clean-profile verified payment with independent receipt verification, and cross-language vectors. Each executed gate is recorded with revision, command, environment and outcome. It ends with one canonical beta contract that names every surface, its evidence rung, the beta endpoints and artifacts, and exactly how the beta differs from production, checked statically against docs, manifests and workflows so nothing claims more than was proven. These requirements are normative; the design and the task plan beside them are compiled from this file."
+
+# Decisions locked before implementation begins. Where they touch protocol or
+# agent-layer behaviour they defer to the upstream specs, which are normative.
+[decision]
+full_surface        = "The beta is the entire system functional as it would be in production. Every surface is in scope and must reach its beta rung: native core and daemon; settlement contracts and the Ethereum and Solana mirrors; the agent daemon and all seven SDK ecosystems; the human service and web application with every journey including custody, approvals, withdrawal claim and emergency exit; the developer platform - CLI, emulator, faucet, hosted testnet, gateway, registry, webhooks, dashboard, middleware, docs samples, reference apps, agent-framework, iOS and Android integrations; Programs runtime, hosted registry, deploy, paid call and restart; interop - x402, AP2, UCP, Visa trusted agent, portable verification, migration, fiat; ramps; multichain surfaces. Nothing is deferred by scope. The audit's six-day narrowing recommendation is not adopted."
+beta_bar            = "A surface is beta-functional when it reaches runtime_proven on beta infrastructure through executed gates on the release-candidate revision, and hosted surfaces reach deployment_proven on the beta cluster. owner_certified is the production rung and is not required for the beta. Any functional surface below its beta rung makes the report no-go; there is no exclusion path."
+polish_boundary     = "Not required for the beta and named as such in the contract: UI polish, visual regression, automated accessibility, usability studies, performance budgets and soak - the human-qualify-ui, human-qualify-usability and human-qualify-perf gates; an external security audit; production infrastructure and production certification. These are the only differences between the beta and production. Nothing functional is excused under this heading."
+beta_infra          = "Beta infrastructure is real infrastructure that is not production. Hosted services run from the real manifests and images on a beta Kubernetes cluster the owner designates or a disposable local cluster created by the repository bring-up script, with real Services, NetworkPolicies, readiness and a beta CA. Settlement mirrors run on the Ethereum and Solana test networks. Ramps run against provider sandboxes. The Paxeer boundary runs against the Paxeer testnet. SDK artifacts are published under a beta pre-release version to their real registries, or to an owner-designated beta registry, and installed from there by the install checks. Beta hostnames, network id, wire version, CA and endpoints are named once in the beta contract."
+qualification_runner = "tools/qualification/release_runner.py is the executor of record. The feature adds a beta-qualify gate to it that runs every functional local command of platform-qualify with a human-qualify-functional gate in place of human-qualify, and the same adoption, Programs, interop and multichain external gates. platform-qualify itself is left intact for production. The runner's status.json and report.json, with their source revision, source identity fingerprint, per-command logs and validated external evidence, are the evidence the feature ledger points to."
+qualification_driver = "The runner requires an external qualification driver executable and none exists in the repository. The feature adds tools/qualification/beta_driver.py, a real in-repository driver that implements the runner's run --gate --output --source-identity --node-url --agentd-url --human-service-url --paxeer-testnet-url contract and produces evidence.json for platform-qualify-adoption, programs-qualify, interop-qualify and multichain-qualify by driving the real beta stack through the real SDKs, CLI, node, hosted registry, mirrors and ramp sandboxes. Every case in the runner's inventory is produced by execution; a case that cannot execute is reported failed, never synthesised."
+evidence_rungs      = "Evidence has seven ordered rungs: source_present, statically_coherent, built, tested, runtime_proven, deployment_proven, owner_certified. A task status asserts at most tested, and only through its verify_cmd. Release reporting names the rung reached per surface from gate records alone and never promotes narrative, task status or a detailed plan to a passing rung."
+revision_binding    = "Every executed gate is recorded against one immutable git revision, the exact command, the environment identity, the start time, the outcome and the retained evidence path. The go/no-go report counts only gates recorded on the release-candidate revision the beta contract names; evidence from an earlier revision is history, not proof, and is rerun. The runner's source identity fingerprint must show a clean tree at that revision."
+fix_not_relabel     = "A finding is closed by changing the code path the audit anchors. It is never closed by changing a label, a document, a status or the audit record. Documentation changes only to describe the repaired behaviour. Where a finding names a bypassed verifier or check, the repair invokes the verifier; it never removes the label the verifier guards."
+no_weakening        = "Inherited from workflow.kvx and restated because every item here is a security or money-safety seam: no assertion is relaxed, no bound loosened, no test skipped, no check disabled to make a gate pass. The CLI keeps its mandatory inputs; the batch validator keeps its signature check; the explorer route keeps returning 429; Solidity keeps its freshness window. Fixes add checks and supply inputs."
+checkpoint_v2       = "The single checkpoint identity is protocol version 2: the native core and layerx-wire adopt the LXP/v2/checkpoint-certificate and LXP/v2/guarantor-attestation domain tags and the header-relative attestation freshness window that CheckpointRegistry already enforces. Rationale: LXP_PROTOCOL_VERSION is already 2 in include/layerx/lxp_protocol.h, the Solidity header prefix already encodes version 2 and the hosted testnet already pins wire protocol version 2; only the C domain table and the Rust Domain enum lag. The maximum attestation delay becomes one declared configuration value shared by all three verifiers. OWNER CONFIRMATION REQUIRED before task 3.2 starts: this decision assumes no retained checkpoint evidence was produced under the v1 domain that must remain verifiable; if any exists, task 3.2 adds an explicit version-keyed verification path rather than trying both domains."
+admission_is_authn  = "An LNI admission acknowledgement means the activity was authenticated and durably queued. Signature and authority verification therefore happens before queue insertion using the existing native verifier; batch and WAL validation keep verifying independently. Unauthenticated submissions never consume sequencer queue capacity."
+revocation_generation = "Agent session tokens bind to a durable, monotonically increasing revocation generation persisted with the session record. Every authorization boundary checks that the session is open and the token generation is current, through the one common resolver. Restart reloads generations before any token is accepted. A stale generation is a typed revoked result, distinct from expired."
+verified_is_verifier = "The only code path that can produce a receipt-verified status for human evidence is the return path of EvidenceBundle::verify. Cached rows, exports and custody evidence all go through it; tamper, digest, principal, settlement-domain and authority mismatches return unverified with a typed reason; verifier errors return unavailable."
+one_commit_unit     = "A hosted-registry deployment record and its admission proof are one commit unit: written as one canonical envelope replaced atomically, or as a two-phase write with a commit marker. Startup sees both or neither and quarantines incomplete units with a typed report. A ramp callback is validated completely against a staged view before any durable append and is appended together with its index mutations in one step."
+asset_identity      = "Withdrawal settlement is bound to the asset recorded at request time. Custody settlement and bridge finalization derive the settlement asset from the stored record; a caller-supplied asset is checked for equality and refused on mismatch with no transfer and no state mutation."
+journey_readiness   = "Hosted readiness is per journey: funding, payment, receipt inspection and Programs each declare their dependency set and are ready only when every dependency is reachable from testnet-control through the applied Service and NetworkPolicy. A global green with a missing dependency is a defect."
+artifact_truth      = "The release manifest declares exactly what the release workflow publishes, every declared ecosystem is published, and every published artifact is bound to the source revision by an immutable digest, a signature, an SBOM, a provenance attestation, an install check and a rollback identity, listed in one retained artifact manifest that the beta contract references."
+single_contract     = "One canonical beta contract is the only statement of supported surfaces and journeys, beta endpoints, hostnames, network id, wire protocol version, beta CA, artifact set, evidence rung per surface, unknown-state behaviour, external dependencies and the beta-versus-production differences. Install docs, hosted manifests, the release manifest, the release workflow and the hosted status surface are checked against it statically; disagreement fails the build."
+owner_inputs        = "The owner supplies what the beta infrastructure needs and the repository cannot contain: the beta cluster or permission to create a disposable one on the qualification host, Ethereum and Solana test-network RPC endpoints and funded keys, ramp sandbox credentials, the Paxeer testnet endpoint and credentials, beta pre-release publish tokens for each registry, a macOS runner for the Swift and iOS gates and an Android toolchain. Each is referenced by environment variable or secret name only, never read from .env or .env.* files. A gate that cannot run for lack of an input is recorded blocked with the input named, and a blocked functional gate is a no-go."
+release_authority   = "Task qualification is agent work. The go decision is an owner action under phase.release_qualification. Agents assemble the report and the stop-condition table from gate records; they never mark a stop condition clear without a gate record, and never invite users. Production certification of peers, DNS, TLS and KMS is outside the beta."
+
+[design]
+include = "design.body.md"
+
+[tasks]
+heading          = "Implementation Plan: LayerX Beta"
+overview_include = "tasks.overview.md"
+notes_include    = "tasks.notes.md"
+
+# --------------------------------------------------------------------------
+# REQUIREMENTS - req.1 through req.12 mirror register items 01 through 12.
+# audit_finding / register_item keys are traceability only; specgen ignores them.
+# --------------------------------------------------------------------------
+
+[req.1]
+title = "Clean Bootstrap Inputs"
+register_item = "01 Clean bootstrap inputs (MISSING)"
+audit_finding = "W4-L47-F001"
+story = "As a developer following the published quickstart on a clean machine, I want the canonical commands to actually start the emulator and connect the CLI, so that the five-minute verified-payment promise is reachable through the published path alone."
+ac_1 = "WHEN a developer runs the canonical local setup from platform/docs/content/install.md on a clean profile THE published command sequence SHALL provision a sequencer seed file and a sequencer trust anchor explicitly - through a documented CLI provisioning step whose outputs the following commands consume - and SHALL reach a running emulator and a selected environment with no undocumented input, wrapper or environment variable."
+ac_2 = "THE CLI SHALL keep sequencer_seed_file mandatory for emulator up and SHALL keep endpoint, network id and sequencer trust anchor mandatory together for a new environment; the repair SHALL supply those inputs and SHALL NOT make them optional, default them to an embedded key, or accept an empty anchor."
+ac_3 = "WHEN the provisioning step generates a seed THE CLI SHALL write it under the profile directory with owner-only permissions, SHALL never print seed bytes to stdout, stderr, logs or JSON output, and SHALL refuse to overwrite an existing seed without an explicit force flag."
+ac_4 = "WHEN environment use selects the emulator THE CLI SHALL bind the trust anchor the running emulator published for its sequencer identity, SHALL verify that anchor against the identity the endpoint advertises before saving the environment, and SHALL fail with a typed error naming the missing or mismatched input when any of endpoint, network id or anchor is absent or disagrees."
+ac_5 = "THE repository SHALL carry a clean-profile bootstrap test that extracts the fenced command block from install.md, executes exactly those commands from a fresh temporary profile against the built CLI binary, and asserts the emulator is reachable, the environment is current and the anchor is bound; the doc and the test SHALL share one command sequence so they cannot drift."
+ac_6 = "THE five-minute benchmark SHALL be measured from a clean profile using only the published commands, and the measurement SHALL be recorded as a gate entry in the executed-evidence ledger with the revision it ran against."
+
+[req.2]
+title = "Programs Snapshot State"
+register_item = "02 Programs snapshot state (BROKEN)"
+audit_finding = "W4-L48-F002"
+story = "As a node operator restoring from a snapshot, I want deployed program code to come back exactly, so that the restored state root equals the committed root and program calls keep working after restart."
+ac_1 = "THE snapshot format SHALL carry a kernel-blob section holding every module blob the state root commits - key, length and bytes in canonical key order - under a declared bound on blob count and total bytes so that snapshot_size can account for it before write."
+ac_2 = "WHEN a snapshot is written THE writer SHALL serialise the blob section, SHALL include it in sizing, and SHALL refuse with a typed error to write a snapshot whose blob set exceeds the declared bound rather than truncating or omitting blobs."
+ac_3 = "WHEN a snapshot is parsed THE loader SHALL validate the blob section structurally and SHALL recompute the module subtree root from the parsed blobs, rejecting the snapshot with a typed error when it does not reproduce the committed state root, before anything is published."
+ac_4 = "WHEN a snapshot is published THE loader SHALL replace the kernel blob store atomically with the snapshot's blob set, removing blobs the snapshot does not carry, so no stale executable bytes survive restoration."
+ac_5 = "WHEN a restored node resolves a Programs artifact THE resolver SHALL locate and hash-check it exactly as before restoration, and a post-restore CALL SHALL execute under the recorded runtime version with the same receipt shape as before restoration."
+ac_6 = "IF a snapshot omits the blob section while the parsed state carries a Programs module registration or any committed blob key THEN THE loader SHALL reject it with a typed error naming the missing section, and SHALL NOT publish root-inconsistent state; snapshots of states with no committed blobs SHALL remain loadable."
+ac_7 = "THE qualification suite SHALL prove deploy, snapshot, restore into a fresh node, state-root equality, and a successful post-restore CALL, and SHALL prove rejection of a snapshot with a tampered blob, a missing blob and an oversize blob set."
+
+[req.3]
+title = "LNI Pre-Queue Authentication"
+register_item = "03 LNI pre-queue authentication (BROKEN)"
+audit_finding = "W4-L48-F003"
+story = "As the operator of a sequencer, I want an activity authenticated before it takes queue capacity or receives an admission acknowledgement, so that a local process cannot exhaust admission with badly signed activities or be told something was admitted that will be rejected."
+ac_1 = "WHEN the native LNI submit handler has validated framing, role, decoding, network, payload hash and activity identity THE daemon SHALL verify the activity signature and signing authority against current state through the existing native verifier before any queue insertion, and SHALL refuse with a typed authentication result on failure without touching the queue."
+ac_2 = "THE admission acknowledgement SHALL be returned only after signature and authority verification succeed and the activity is durably queued; the acknowledgement SHALL never precede verification, and the LNI contract text SHALL define it as authenticated-and-queued."
+ac_3 = "THE batch and WAL validation path SHALL continue to verify signatures independently; pre-queue verification SHALL add a check and remove none."
+ac_4 = "THE daemon SHALL perform pre-queue verification outside the queue's critical section so that a submitter of invalid signatures cannot hold the queue against valid submitters, and SHALL count authentication refusals per LNI peer on its observability surface."
+ac_5 = "THE qualification suite SHALL prove that an invalid signature is refused with zero queue occupancy, that a wrong authority is refused, that a valid activity is acknowledged only after insertion, and that a flood of invalid signatures leaves the full bounded capacity available to a valid submitter."
+
+[req.4]
+title = "Agent Session Revocation"
+register_item = "04 Agent session revocation (BROKEN)"
+audit_finding = "W4-L48-F004"
+story = "As an operator who closes or revokes a compromised agent session, I want every token that session issued to stop working immediately and stay dead across restarts, so that termination actually terminates."
+ac_1 = "THE session registry SHALL maintain a durable revocation generation per session, persisted with the session record and incremented on close, on authority revocation and on any change of the session's permitted scope, and every issued token SHALL carry the generation it was minted under."
+ac_2 = "WHEN a token is authorised THE authorization path used by the common tenant resolver SHALL require the current session record to be open and the token's generation to equal the session's current generation, in addition to the existing tenant, agent, scope and expiry checks, and a mismatch SHALL be a typed revoked result distinct from expired."
+ac_3 = "THE check SHALL apply at every authorization boundary - reads, subscriptions, prepare, export, approvals and writes - by routing through the one common resolver, and the daemon test suite SHALL enumerate every token-gated operation entry point and prove each refuses a revoked token."
+ac_4 = "WHEN the daemon restarts THE persisted generations SHALL be reloaded before any token is accepted, so a token revoked before the restart remains revoked after it."
+ac_5 = "WHEN a session is closed or its authority revoked WHILE a subscription or long-running operation for that session is in flight THE daemon SHALL terminate it at the next boundary with a typed revoked event and SHALL deliver nothing further on it."
+ac_6 = "THE qualification suite SHALL prove post-closure, post-revocation and post-restart refusal for every operation class, SHALL prove that another session's tokens are unaffected, and SHALL prove that closure of a session under one tenant cannot alter generations under another."
+
+[req.5]
+title = "Human Evidence Verification"
+register_item = "05 Human evidence verification (BROKEN)"
+audit_finding = "W4-L48-F005"
+story = "As a person relying on a Verified label, I want the service to have actually run the verifier against the exact record, so that verified means verified."
+ac_1 = "WHEN the authenticated activity-evidence read decodes a cached evidence bundle THE service SHALL invoke EvidenceBundle::verify against the expected activity digest, the requesting principal, the settlement domain and the receipt authority before assigning any verification status."
+ac_2 = "THE service SHALL return receipt-verified only when the verifier succeeds; on tamper, digest mismatch, principal mismatch, settlement-domain mismatch or authority mismatch THE service SHALL return unverified carrying the typed reason; on verifier error or unavailable authority THE service SHALL return unavailable; and no path SHALL return verified for any other reason."
+ac_3 = "THE verification-status value returned by evidence reads SHALL be constructible only from the verifier's result path, so that no other code in the service can produce receipt-verified, and a compile-time or lint gate SHALL enforce the constructor's visibility."
+ac_4 = "THE same rule SHALL apply to custody evidence rows and to exported evidence bundles, so that no export carries a verified label the verifier did not produce."
+ac_5 = "THE qualification suite SHALL prove that an altered cached row, a row bound to another principal, a row carrying a foreign settlement domain and a row signed by a wrong receipt authority are each returned as unverified with the correct reason, and that a genuine row verifies."
+
+[req.6]
+title = "Checkpoint Identity and Freshness"
+register_item = "06 Checkpoint identity and freshness (BROKEN)"
+audit_finding = "W4-L48-F006"
+story = "As anyone consuming checkpoint evidence, I want one identity and one acceptance rule for a checkpoint across the node, the agent layer, the settlement contracts and the mirrors, so that the same certificate is either valid everywhere or nowhere."
+ac_1 = "THE protocol SHALL use exactly one checkpoint-certificate domain tag and one guarantor-attestation domain tag for protocol version 2, and the native domain table, the layerx-wire Domain enum and the Solidity constants SHALL be byte-identical for those tags, proven by a test that reads all three."
+ac_2 = "THE native and layerx-proof certificate verifiers SHALL enforce the same header-relative attestation freshness window CheckpointRegistry enforces - attested-at not before the header timestamp and not after the header timestamp plus the maximum attestation delay - and the maximum delay SHALL be one declared configuration value consumed by all three verifiers, never a constant private to one."
+ac_3 = "IF retained checkpoint evidence produced under the version 1 domain must remain verifiable THEN THE verifiers SHALL accept it only through an explicit version-keyed path selected by the certificate's protocol version, never by attempting both domains, and OTHERWISE the version 1 tags SHALL be removed from every verifier."
+ac_4 = "THE repository SHALL carry one cross-language checkpoint vector set - header, certificate, attestations, expected digest and expected accept or reject outcome for fresh, too-early, too-late and boundary attestation times - consumed from the same fixture files by the C tests, the Rust tests, the Foundry tests and the mirror verifier tests, so a divergence fails all of them."
+ac_5 = "THE Solidity header encoding prefix and the native header encoding SHALL agree byte for byte, proven by the vector set."
+ac_6 = "THE settlement domain layerx-proof verifies against - contract address, chain id, guarantor set and finality policy - SHALL be sourced from the one declared configuration the beta contract names, so local verification and Solidity registration verify the same deployed registry."
+
+[req.7]
+title = "Hosted Reachability and Readiness"
+register_item = "07 Hosted reachability and readiness (BROKEN)"
+audit_finding = "W4-L48-F007"
+story = "As a tester admitted to the hosted testnet, I want readiness to mean my journey's dependencies are actually reachable, so that green means I can pay and get a receipt."
+ac_1 = "THE testnet-control configuration SHALL address every in-cluster dependency on the port its Service actually exposes, and a static topology check over the hosted manifests SHALL fail the build when a configured in-cluster URL names a host or port no matching Service exposes."
+ac_2 = "THE gateway NetworkPolicy SHALL admit ingress from testnet-control and from every other declared in-cluster caller, and the static topology check SHALL fail when a declared dependency edge is not admitted by the policies on both ends."
+ac_3 = "THE testnet readiness endpoint SHALL report per-dependency readiness for identity, faucet, core, receipt authority, registry, Redis, gateway and the Paxeer boundary, and SHALL compute per-journey readiness - funding, payment, receipt inspection, Programs - as the conjunction of that journey's declared dependency set."
+ac_4 = "THE readiness surface SHALL admit a tester into a journey only when that journey is ready, and SHALL present a degraded journey with the failing dependency named; a global ready state with any journey dependency unreachable SHALL be impossible to render."
+ac_5 = "THE hosted smoke test SHALL verify pod-to-Service connectivity for every declared dependency edge and SHALL exercise the complete hosted first-payment path against the beta cluster, and its result SHALL be recorded as a gate entry with the cluster identity; absent a passing record the hosted surface is below its beta rung and the report is no-go."
+ac_6 = "THE hostname, wire protocol version and network id used by testnet-control, the gateway, the install docs and the beta contract SHALL agree, enforced by the beta contract check."
+ac_7 = "THE repository SHALL carry a beta cluster bring-up script that builds the hosted images from their Dockerfiles, creates or targets the beta cluster, applies the real hosted manifests with beta secrets and a beta CA, waits for every journey to report ready, and exports the endpoint, CA and token values the hosted smoke and the qualification runner consume, so that the hosted surface can be stood up from the repository alone given the owner inputs."
+
+[req.8]
+title = "Artifact Publication and Provenance"
+register_item = "08 Artifact publication and provenance (MISSING)"
+audit_finding = "W4-L48-F008"
+story = "As a developer installing a LayerX SDK, I want to install only artifacts that were really published from the release revision, and to check their digest, signature, SBOM and attestation myself, so that I know what I am running."
+ac_1 = "THE release manifest SHALL declare exactly the artifacts and ecosystems the release workflow publishes, and platform-release-check SHALL fail when an ecosystem is declared without a publication job or a publication job publishes an artifact the manifest does not declare."
+ac_2 = "THE release workflow SHALL publish every declared ecosystem - Rust, TypeScript, Python, Go, JVM, Swift and .NET - under a beta pre-release version with an immutable digest, a signature, an SBOM and a provenance attestation binding the artifact to the source revision, and SHALL run an install check per artifact that installs it from the registry it was published to and verifies the digest."
+ac_3 = "THE release tool SHALL emit one source-bound artifact manifest listing, for every published artifact, its name, version, registry, immutable digest, signature reference, SBOM reference, attestation reference, source revision and the previous version as rollback identity, and SHALL verify each published artifact's bytes against that manifest before the release is marked complete."
+ac_4 = "THE artifact manifest SHALL be retained as a release artifact and referenced from the beta contract, and the docs SHALL name only manifest-listed artifacts, enforced by the beta contract check."
+ac_5 = "THE aggregate Programs acceptance, the sanitizer jobs, the committed long-fuzz corpus and replay on every supported architecture SHALL run as required gates on the release revision before publication, each recorded as a gate entry; none SHALL remain schedule-only or opt-in for the release revision."
+ac_6 = "WHEN a published artifact fails verification THE release SHALL halt before promotion with the failing artifact named, and no partial promotion SHALL be presented as a release."
+
+[req.9]
+title = "Registry and Ramp Crash Recovery"
+register_item = "09 Registry and ramp crash recovery (BROKEN)"
+audit_finding = "W4-L48-F009"
+story = "As an operator of the hosted registry or a ramp, I want an interrupted write to leave either a complete accepted record or nothing, so that restart never strands a deployment or corrupts provider reconciliation."
+ac_1 = "THE hosted registry journal SHALL publish a deployment record and its admission proof as one commit unit - one canonical envelope replaced atomically, or a two-phase write with a commit marker - such that after interruption at any step startup observes both or neither."
+ac_2 = "WHEN the registry starts THE journal SHALL load complete units, SHALL quarantine incomplete units with a typed per-unit report naming what is missing, and SHALL NOT reject the whole journal or silently drop a unit."
+ac_3 = "THE ramp journal SHALL validate a provider callback completely - transition legality, evidence, provider sequence - against a staged view before any durable append, and SHALL append the callback and apply its index mutations only after validation succeeds, in one step."
+ac_4 = "WHEN a ramp apply fails after validation THE journal SHALL retain no callback event and SHALL leave the callback and provider-sequence maps unchanged, and a retry of the same callback SHALL produce the same outcome under its callback identity."
+ac_5 = "THE qualification suite SHALL inject interruption at every write step of both journals and prove restart recovery without operator repair, and SHALL prove that replaying either journal reproduces identical projections."
+
+[req.10]
+title = "Withdrawal Asset Binding"
+register_item = "10 Withdrawal asset binding (BROKEN)"
+audit_finding = "W4-L48-F010"
+story = "As the holder of an asset-A withdrawal, I want settlement to be able to pay only in asset A, so that per-asset custody balances are conserved and my withdrawal cannot be satisfied with the wrong asset."
+ac_1 = "WHEN custody settlement is invoked THE asset module SHALL compare the supplied asset identity with the asset recorded at request time and SHALL refuse with a typed mismatch result - performing no transfer and no state mutation - when they differ."
+ac_2 = "WHEN bridge finalization locates a withdrawal by nullifier THE bridge SHALL derive the settlement asset from the stored withdrawal record, SHALL validate any caller-supplied asset for equality against it, and SHALL refuse on mismatch before calling settlement."
+ac_3 = "THE refusal SHALL leave the withdrawal record unsettled and claimable and the per-asset reserve accounting unchanged, proven by state-root equality before and after the refused call."
+ac_4 = "THE qualification suite SHALL prove cross-asset mismatch refusal at both custody settlement and bridge finalization with no-transfer and no-settlement assertions, and SHALL prove the matched-asset path still settles and conserves."
+ac_5 = "THE per-asset conservation property SHALL extend across request, settle and refused-settle, so that the sum of custody balances plus outstanding withdrawals per asset is invariant."
+
+[req.11]
+title = "Human API Error Contract"
+register_item = "11 Human API error contract (BROKEN)"
+audit_finding = "W4-L48-F011"
+story = "As a user whose request failed, I want the app to tell me whether to retry, sign in again or fix a field, so that a temporary overload never reads as a permanent refusal."
+ac_1 = "THE canonical ResponseEnvelope in human/schema/human-api/v1.kvx SHALL carry the structured ApiError member for failed responses - stable machine code, copy-catalog key, trace identifier, retriability classification, retry-after where applicable and field errors - matching the encoding rule the schema already states."
+ac_2 = "THE generated TypeScript client and every other projection SHALL be regenerated from the schema in the same change, and the drift gate SHALL fail if any generated output is stale or hand-edited."
+ac_3 = "WHEN the explorer verifier responds with HTTP 429 THE browser SHALL map it to an explicit retryable overloaded state that preserves Retry-After, distinct from refused, and SHALL render it with the wait time and a Retry action."
+ac_4 = "THE explorer verify route SHALL keep returning 429 with Retry-After for overload, and the mapping from HTTP status to client state SHALL be tested for 401, 409, 429, 503 and other 5xx so that only a genuine verification failure renders as refused."
+ac_5 = "THE golden request and response vectors SHALL include failed responses carrying the structured error for every operation, and the generated client SHALL decode them into the typed error model."
+
+[req.12]
+title = "Executed Qualification Evidence"
+register_item = "12 Executed qualification evidence (MISSING)"
+audit_finding = "W4-L40-F007"
+story = "As the person deciding go or no-go, I want to see what was actually run, on which revision, in which environment, with which result, so that a detailed plan is never mistaken for a passed gate."
+ac_1 = "THE feature qualification ledger SHALL distinguish observation records - assumptions, unrelated failures, conflicts - from gate records, and a gate record SHALL carry the task, the requirements it qualifies, the revision, the exact command, the environment identity, the start time, the outcome as pass, fail or blocked, and the retained evidence path."
+ac_2 = "A gate record SHALL be written only by executing the command it names, and a ledger check SHALL fail when a gate's revision is not a commit in the repository, its command is not an existing make target or script, its evidence path does not exist, its outcome is outside the declared vocabulary, or - where the evidence is a qualification runner status or report - the runner's recorded source revision differs from the record's revision or its source identity shows a dirty tree."
+ac_3 = "THE go/no-go report SHALL be generated from gate records only, SHALL state for every beta surface the highest evidence rung reached against its required beta rung, and SHALL derive no rung from task status, observation narrative or documentation."
+ac_4 = "THE required beta gates SHALL be executed on one immutable revision against the beta stack: the builds; focused negative and fault tests for every register item - invalid LNI signature and queue exhaustion, post-closure, post-revocation and post-restart token use, evidence tamper and principal mismatch, snapshot restore with non-empty blobs, cross-asset withdrawal, registry and ramp interruption, checkpoint freshness bounds; the beta-qualify runner gate covering the human service and web journeys, platform build, lint, tests, SDK conformance, middleware, docs samples, hosted smoke, agent install, emulator conformance, real agent-framework, iOS and Android integrations, Programs tests, interop tests, migration testnets, ramp sandboxes and the release check; the adoption, Programs, interop and multichain external evidence produced by the in-repository driver; the clean-profile end-to-end verified payment with independent receipt verification; the cross-language vectors; artifact publication and verification; and the hosted smoke with cluster identity."
+ac_5 = "THE work the observations in spec/layerx-platform/qualification.kvx describe as designed or simulated but unexecuted - registry isolation and bearer refusal, mTLS and TLS boundaries, cgroup and isolated executor limits, crash and deployment recovery, host provisioning - SHALL be executed on beta infrastructure through the existing boundary, fault-injection and provisioning scripts and linked from gate records; none SHALL be rewritten to read as executed, and a case that cannot execute SHALL be recorded blocked with the owner input named."
+ac_6 = "THE report SHALL list every stop condition - clean bootstrap, independent receipt verification, unknown-outcome reconciliation, effective revocation, journey-transitive readiness, artifact identity, every surface at its beta rung, scope closure - with whether it is clear and the gate record that clears it, and a beta invitation SHALL require every stop condition clear and a recorded owner go decision."
+
+[req.13]
+title = "One Canonical Beta Contract"
+register_item = "Umbrella: register verdict and must-statically-clarify items"
+audit_finding = "W4-L48-F001"
+story = "As a beta user or operator, I want one document that says exactly what the beta supports, how it differs from production, and what was proven, and I want every other source to agree with it, so that no doc, manifest or workflow claims more than the executed evidence."
+ac_1 = "THE repository SHALL carry one canonical beta contract naming every surface and journey of the system, the beta endpoints and hostnames, the network id, the wire protocol version, the beta CA, the artifact set by reference to the artifact manifest, the required beta rung and the reached rung per surface, the unknown-state behaviour, the architecture summary, the external dependencies with their beta counterparts - test networks, sandboxes, Paxeer testnet, beta registries - and the beta-versus-production differences."
+ac_2 = "THE contract SHALL be the only source for those values, and the install docs, the hosted manifests, the release manifest, the release workflow and the hosted status surface SHALL be checked against it by a static consistency check that fails the build on disagreement."
+ac_3 = "THE beta-versus-production differences SHALL be limited to polish - UI polish, visual regression, accessibility, usability, performance budgets and soak - an external security audit, and production infrastructure and certification; the contract SHALL mark no functional surface as unsupported, and the consistency check SHALL fail if any surface is listed below its required beta rung while the contract claims the beta is ready."
+ac_4 = "THE contract SHALL state each surface's reached evidence rung exactly as the go/no-go report records it, and the consistency check SHALL fail when the contract and the report disagree."
+ac_5 = "THE docs SHALL describe every journey the contract names as available exactly as the beta stack provides it, and SHALL describe nothing the report has not proven, enforced by the same check."
+
+# --------------------------------------------------------------------------
+# TASKS - five waves in the audit's ordering, widened to the full surface:
+#   1 freeze, contract, bootstrap   2 admission, revocation, evidence, API
+#   3 durability, settlement identity, hosted topology, beta cluster bring-up
+#   4 artifact truth for every ecosystem; runner gate and in-repo driver
+#   5 whole stack on beta infra, every gate on one revision, go/no-go record
+# --------------------------------------------------------------------------
+
+[task.1]
+section = "Wave 1 - Freeze, Contract and Clean Bootstrap"
+title = "Fix the evidence model and make the published path work"
+status = "pending"
+
+[task.1.1]
+title = "Define the executed-evidence ledger and the canonical beta contract"
+status = "pending"
+wave = 1
+do_1 = "Extend spec/layerx-beta/qualification.kvx with the gate record shape beside the observation shape: [gate.<task>.<n>] with task, reqs, revision, command, environment, started_at, outcome, evidence and note, documented in the file header with the outcome vocabulary pass, fail, blocked."
+do_2 = "Write tools/ci/beta-ledger-check.sh: parse every gate record, fail when revision is not a commit in this repository, when command is not an existing make target or an executable path in the tree, when evidence does not exist, when outcome is outside the vocabulary, when an evidence path that is a runner status.json or report.json carries a different source_revision or a source_identity that is not the clean-tree identity for that revision, or when any observation record was edited to carry gate keys; print the set of distinct revisions so the report can select the release candidate."
+do_3 = "Write the canonical beta contract at platform/docs/content/beta.md with every field req.13 names: every surface and journey of the system with its required beta rung from decision.beta_bar and its reached rung set to source_present until a gate record raises it, the beta endpoints, hostnames, network id, wire version and CA from decision.beta_infra, the external dependencies with their beta counterparts, and the beta-versus-production differences limited to decision.polish_boundary."
+do_4 = "Write tools/ci/beta-contract-check.sh: extract endpoint, hostname, network id and wire protocol version from platform/hosted/testnet/deployment.yaml and install.md, the artifact set from platform/release/registries.kvx and the publish jobs in .github/workflows/platform.yml, and the journey list from the docs content index; fail on any disagreement with beta.md, on any surface listed below its required rung while the contract claims readiness, and on any docs journey the contract does not name."
+do_5 = "Add the beta-ledger-check and beta-contract-check make targets and run both in the repository check workflow, wiring them without loosening any existing gate."
+verify_cmd = "make beta-contract-check beta-ledger-check"
+symbols = ["beta_ledger_check","beta_contract_check","beta_contract"]
+touches = ["spec/layerx-beta/qualification.kvx","tools/ci/beta-ledger-check.sh","tools/ci/beta-contract-check.sh","platform/docs/content/beta.md","Makefile",".github/workflows/platform.yml"]
+reqs = ["12.1","12.2","13.1","13.2","13.3","13.5"]
+
+[task.1.2]
+title = "Repair the clean-profile bootstrap"
+status = "pending"
+wave = 1
+do_1 = "Add an emulator provisioning command to the CLI that generates the sequencer seed under the profile directory with owner-only permissions, refuses to overwrite without a force flag, publishes the sequencer trust anchor to a profile-local path, and prints only the paths and the anchor - never seed bytes - in text and JSON output."
+do_2 = "Keep sequencer_seed_file mandatory on EmulatorCommand::Up and keep endpoint, network id and trust anchor mandatory together on EnvironmentCommand::Use; add an anchor-file input to environment use that reads the published anchor and verifies it against the sequencer identity the emulator endpoint advertises before the environment is saved."
+do_3 = "Rewrite the local setup block in platform/docs/content/install.md to the exact working sequence: provision, emulator up with the seed path, environment use with endpoint, network id and the anchor file; mark the block as the extracted bootstrap sequence."
+do_4 = "Add platform/cli/tests/clean-bootstrap.sh that extracts that fenced block from install.md, runs it in a fresh temporary HOME and profile against the built binary, asserts emulator reachability, environment current and the bound anchor, and records elapsed time; add a Rust integration test in platform/cli/tests that drives the same commands through the binary with a temporary profile."
+do_5 = "Wire the script into platform-test-tooling for syntax and execution when the built binary is present, so the target runs the published sequence end to end."
+verify_cmd = "make platform-test-tooling"
+symbols = ["EmulatorCommand::Provision","EmulatorCommand::Up","EnvironmentCommand::Use","clean_bootstrap"]
+touches = ["platform/cli/src/main.rs","platform/emulator/src/main.rs","platform/docs/content/install.md","platform/cli/tests/clean-bootstrap.sh","platform/cli/tests/emulator.rs","platform/Makefile.inc"]
+reqs = ["1.1","1.2","1.3","1.4","1.5"]
+
+[task.2]
+section = "Wave 2 - Admission, Revocation, Evidence Truth and Recovery Contracts"
+title = "Close the authorization and truthfulness seams on the smallest signed mutation path"
+status = "pending"
+
+[task.2.1]
+title = "Authenticate LNI activities before queue insertion"
+status = "pending"
+wave = 2
+requires = ["1.1"]
+do_1 = "In the native LNI submit handler, after structural validation and before lxp_daemon_submit, verify the activity signature and signing authority against current state through the existing native verifier, and return a typed authentication refusal without touching the queue on failure."
+do_2 = "Move the acknowledgement so it is sent only after verification and durable queue insertion succeed, and update the LNI contract text and the daemon documentation to define admission as authenticated-and-queued."
+do_3 = "Leave validate_canonical_items in the batch and WAL path verifying signatures exactly as before; add nothing that lets a pre-verified activity skip it."
+do_4 = "Run verification outside the queue lock and add a per-peer authentication-refusal counter to the daemon observability surface."
+do_5 = "Add tests/test_daemon_lni_admission.c with a test-daemon-lni-admission target proving invalid signature refused with zero occupancy, wrong authority refused, valid activity acknowledged only after insertion, and full capacity available to a valid submitter after a flood of invalid ones."
+verify_cmd = "make test-daemon-lni-admission test-admission test-batch-wal-recovery"
+symbols = ["send_submit","lxp_daemon_submit","lxp_activity_verify_signature","validate_canonical_items"]
+touches = ["cmd/layerxd/lxp_daemon_lni.c","cmd/layerxd/lxp_daemon_main.c","cmd/layerxd/lxp_daemon_batch_wal.c","tests/test_daemon_lni_admission.c","Makefile"]
+reqs = ["3.1","3.2","3.3","3.4","3.5"]
+
+[task.2.2]
+title = "Bind agent tokens to a durable revocation generation"
+status = "pending"
+wave = 2
+requires = ["1.1"]
+do_1 = "Add a revocation generation to the persisted session record, incremented on close, on apply_revocation and on scope change, and stamp every minted token with the generation it was issued under."
+do_2 = "Make Token::authorize take the current SessionRegistry view and require open state and generation equality beside the existing tenant, agent, scope and expiry checks, returning a typed revoked error distinct from expired; route tenant::resolve through it so every operation inherits the check."
+do_3 = "Reload generations from the store before the daemon accepts any token on boot, and terminate in-flight subscriptions for a closed or revoked session at the next boundary with a typed revoked event."
+do_4 = "Add a test that enumerates every token-gated operation entry point and proves each refuses a revoked token, plus post-closure, post-revocation and post-restart cases and a cross-tenant isolation case, in the session, revocation, tenant_resolve and subscription suites."
+verify_cmd = "make agent-test-agentd-session agent-test-agentd-revocation agent-test-agentd-tenant-resolve agent-test-agentd-subscription"
+symbols = ["Token::authorize","SessionRegistry::generation","tenant::resolve","apply_revocation"]
+touches = ["agent/crates/layerx-agentd/src/session.rs","agent/crates/layerx-agentd/src/tenant.rs","agent/crates/layerx-agentd/src/session_revocation.rs","agent/crates/layerx-agentd/tests/session.rs","agent/crates/layerx-agentd/tests/revocation.rs","agent/crates/layerx-agentd/tests/tenant_resolve.rs"]
+reqs = ["4.1","4.2","4.3","4.4","4.5","4.6"]
+
+[task.2.3]
+title = "Run the evidence verifier before any verified label"
+status = "pending"
+wave = 2
+requires = ["1.1"]
+do_1 = "In the authenticated evidence read, after decoding the cached bundle, call EvidenceBundle::verify with the expected activity digest, the requesting principal, the settlement domain and the receipt authority, and map its result to receipt-verified, unverified with the typed reason, or unavailable."
+do_2 = "Make the verification-status type constructible only from the verifier's result path by restricting its constructor to the export module, and apply the same path to custody evidence rows and exported bundles."
+do_3 = "Add activity and export tests for an altered row, a foreign-principal row, a foreign-settlement-domain row and a wrong-authority row each returning unverified with the correct reason, and a genuine row returning verified."
+verify_cmd = "make human-test-activity"
+symbols = ["evidence_get","EvidenceBundle::verify","VerificationStatus"]
+touches = ["human/crates/layerx-human-service/src/server/production_reads.rs","human/crates/layerx-human-service/src/activity/export.rs","human/crates/layerx-human-service/tests/activity.rs","human/crates/layerx-human-service/tests/export.rs"]
+reqs = ["5.1","5.2","5.3","5.4","5.5"]
+
+[task.2.4]
+title = "Carry the structured error in the envelope and type the overload state"
+status = "pending"
+wave = 2
+requires = ["1.1"]
+do_1 = "Add the ApiError member to record.ResponseEnvelope in human/schema/human-api/v1.kvx and add failed-response golden vectors carrying it for every operation."
+do_2 = "Regenerate the TypeScript client and every other projection from the schema; leave the drift gate as the proof that nothing generated is stale."
+do_3 = "In the explorer verifier client, map HTTP 429 to an explicit retryable overloaded state that preserves Retry-After and renders the wait and a Retry action; keep the verify route returning 429 with Retry-After."
+do_4 = "Add a unit test over the status-to-state mapping for 401, 409, 429, 503 and other 5xx proving only genuine verification failures render as refused."
+verify_cmd = "make human-build human-test-unit human-test-component"
+symbols = ["record.ResponseEnvelope","ApiError","explorer verifier verify"]
+touches = ["human/schema/human-api/v1.kvx","human/apps/web/src/api/generated/index.ts","human/apps/web/src/app/api/explorer/verify/route.ts","human/apps/web/src/explorer/verifier.tsx"]
+reqs = ["11.1","11.2","11.3","11.4","11.5"]
+
+[task.3]
+section = "Wave 3 - Durability, Settlement Identity and Hosted Topology"
+title = "Make committed state durable, settlement identity singular and hosted readiness truthful"
+status = "pending"
+
+[task.3.1]
+title = "Persist committed Programs blobs through snapshots"
+status = "pending"
+wave = 3
+requires = ["1.1"]
+do_1 = "Add a kernel-blob section to the snapshot format with a declared bound on count and total bytes, account for it in snapshot_size, and serialise blobs in canonical key order in lxp_snapshot_write, refusing with a typed error when the bound is exceeded."
+do_2 = "Parse and structurally validate the section in the loader, recompute the module subtree root from the parsed blobs and reject the snapshot when it does not reproduce the committed state root; reject a snapshot lacking the section while the state carries a Programs registration or committed blob keys."
+do_3 = "On successful load, replace the kernel blob store atomically with the snapshot's blob set, removing blobs the snapshot does not carry, before publishing state and module KV."
+do_4 = "Extend tests/test_snapshot.c and the programs call-activity test to prove deploy, snapshot, restore into a fresh node, state-root equality and a post-restore CALL, plus rejection for tampered, missing and oversize blob sets."
+verify_cmd = "make test-snapshot test-state-root programs-core-test"
+symbols = ["snapshot_size","lxp_snapshot_write","lxp_snapshot_load","lxp_programs_artifact_open","lxp_state_subtree_root"]
+touches = ["src/state/lxp_snapshot.c","include/layerx/lxp_snapshot.h","src/modules/programs/artifact.c","tests/test_snapshot.c","tests/programs/test_call_activity.c"]
+reqs = ["2.1","2.2","2.3","2.4","2.5","2.6","2.7"]
+
+[task.3.2]
+title = "Unify checkpoint identity and freshness across C, Rust and Solidity"
+status = "pending"
+wave = 3
+requires = ["1.1"]
+do_1 = "Confirm decision.checkpoint_v2 with the owner and record the answer as an observation; then move the native domain table and the layerx-wire Domain enum to the version 2 checkpoint-certificate and guarantor-attestation tags, removing the version 1 tags unless retained evidence requires an explicit version-keyed path."
+do_2 = "Add the header-relative attestation freshness window to the native verifier and to layerx-proof verify_certificate, sourcing the maximum attestation delay from one declared configuration value that the Solidity registry, the native core and layerx-proof all consume."
+do_3 = "Create one cross-language checkpoint vector set under tests/vectors covering fresh, too-early, too-late and boundary attestation times with expected digests and outcomes, and consume it from the C protocol test, the Rust wire and proof tests, the Foundry registry test and the mirror verifier test."
+do_4 = "Source the settlement domain layerx-proof verifies against from the declared configuration the beta contract names, and prove the Solidity and native header encodings agree byte for byte through the vectors."
+verify_cmd = "make test-protocol agent-test-wire-hashing agent-test-proof-checkpoint test-contracts interop-test-mirrors"
+symbols = ["domain_tags","Domain::CheckpointCertificate","verify_certificate","CanonicalCheckpoint.CHECKPOINT_DOMAIN","CheckpointRegistry.registerCheckpoint"]
+touches = ["src/protocol/lxp_protocol.c","agent/crates/layerx-wire/src/hash.rs","agent/crates/layerx-proof/src/checkpoint.rs","contracts/libraries/CanonicalCheckpoint.sol","contracts/CheckpointRegistry.sol","test/CheckpointRegistry.t.sol","tests/vectors/checkpoint"]
+reqs = ["6.1","6.2","6.3","6.4","6.5","6.6"]
+
+[task.3.3]
+title = "Bind withdrawal settlement to the recorded asset"
+status = "pending"
+wave = 3
+requires = ["1.1"]
+do_1 = "In custody settlement, compare the supplied asset identity with the asset recorded by the withdrawal request and refuse with a typed mismatch result before any transfer or state mutation."
+do_2 = "In bridge finalization, derive the settlement asset from the withdrawal record located by nullifier, validate any caller-supplied asset for equality, and refuse on mismatch before settlement is reached."
+do_3 = "Extend the asset withdraw and bridge withdraw tests with cross-asset mismatch at both boundaries asserting no transfer, no settlement, state-root equality and a still-claimable record, and extend the conservation property across request, settle and refused-settle per asset."
+verify_cmd = "make test-asset-withdraw test-bridge-withdraw"
+symbols = ["lx_asset_withdraw_settle","lx_asset_withdraw_request","lxp_bridge_withdraw_finalize"]
+touches = ["src/modules/asset/lx_asset_custody.c","src/modules/bridge/lxp_bridge_withdraw.c","tests/modules/test_asset_withdraw.c","tests/test_bridge_withdraw.c"]
+reqs = ["10.1","10.2","10.3","10.4","10.5"]
+
+[task.3.4]
+title = "Make hosted registry publication one commit unit"
+status = "pending"
+wave = 3
+requires = ["1.1"]
+do_1 = "Replace the separate record and proof replacements in FileDeploymentJournal::append with one canonical envelope written to a temporary file, fsynced and renamed atomically, or a two-phase write with a commit marker written last."
+do_2 = "Make startup load complete units, quarantine incomplete units with a typed per-unit report, and never reject the whole journal for one incomplete unit."
+do_3 = "Add a platform-test-registry target running the registry crate suite, with fault-injection tests that interrupt every write step and prove restart recovery and replay equivalence."
+verify_cmd = "make platform-test-registry"
+symbols = ["FileDeploymentJournal::append","FileDeploymentJournal::proofs","DeploymentEnvelope"]
+touches = ["platform/hosted/registry/src/journal.rs","platform/hosted/registry/tests/journal.rs","platform/Makefile.inc"]
+reqs = ["9.1","9.2","9.5"]
+
+[task.3.5]
+title = "Stage ramp callback validation before durable append"
+status = "pending"
+wave = 3
+requires = ["1.1"]
+do_1 = "In the ramp Journal::append path, validate a provider callback completely against a staged view - transition legality, evidence, provider sequence - before any sync, and only then append the event and apply the callback and provider-sequence index mutations in one step."
+do_2 = "On apply failure after validation, retain no event and leave every index unchanged; make a retry of the same callback identity produce the same outcome."
+do_3 = "Add fault-injection tests interrupting every write step and proving restart recovery without operator repair, replay equivalence and callback idempotency."
+verify_cmd = "make interop-test-ramps"
+symbols = ["Journal::append","ProviderCallbackApplied","StagedCallback"]
+touches = ["platform/ramps/toolkit/src/journal.rs","platform/ramps/toolkit/tests/contracts.rs"]
+reqs = ["9.3","9.4","9.5"]
+
+[task.3.6]
+title = "Align hosted topology and make readiness journey-specific"
+status = "pending"
+wave = 3
+requires = ["1.1"]
+do_1 = "Point testnet-control's in-cluster gateway URL at the port the gateway Service exposes, and admit testnet-control in the gateway NetworkPolicy ingress alongside ingress-nginx; do the same for every other declared dependency edge."
+do_2 = "Write platform/hosted/tests/topology-check.sh that parses the hosted manifests, resolves every configured in-cluster URL to a Service and port, checks each declared edge against NetworkPolicy on both ends and fails on any mismatch; add a platform-hosted-topology-check target."
+do_3 = "Extend the testnet readiness endpoint to report per-dependency readiness for identity, faucet, core, receipt authority, registry, Redis, gateway and Paxeer boundary, and per-journey readiness as the conjunction of each journey's declared dependency set; make the status surface unable to render a global ready state with any journey degraded."
+do_4 = "Extend hosted-smoke.sh to verify pod-to-Service connectivity for every declared edge and exercise the complete hosted first-payment path, emitting the cluster identity for the gate record."
+verify_cmd = "make platform-test-tooling platform-hosted-topology-check"
+symbols = ["testnet probe and status","gateway Service","gateway NetworkPolicy","JourneyReadiness"]
+touches = ["platform/hosted/testnet/deployment.yaml","platform/hosted/gateway/deployment.yaml","platform/hosted/testnet/src/main.rs","platform/hosted/testnet/tests/hosted-smoke.sh","platform/hosted/tests/topology-check.sh","platform/Makefile.inc"]
+reqs = ["7.1","7.2","7.3","7.4","7.6"]
+
+[task.3.7]
+title = "Stand the hosted stack up on a beta cluster from the repository"
+status = "pending"
+wave = 3
+requires = ["3.6"]
+do_1 = "Write platform/hosted/tests/beta-cluster.sh: build the testnet, gateway, faucet, webhooks and dashboard images from their Dockerfiles at the current revision, add the missing platform/hosted/registry/Dockerfile so the layerx-program-registry image the StatefulSet references is built from source rather than pulled, create a disposable local cluster or target the owner-designated beta cluster from an environment variable, install the registry node boundary unit and node-provision-build-boundary.sh on every node that schedules the registry, generate a beta CA and beta secrets by secret name, apply the real hosted manifests for every service, and wait until every journey reports ready through the readiness endpoint from task 3.6."
+do_2 = "Export the values the hosted smoke and the qualification runner consume - LAYERX_TESTNET_URL, LAYERX_GATEWAY_URL, LAYERX_FAUCET_URL, LAYERX_TEST_AUTH_TOKEN_FILE, LAYERX_TEST_CA_FILE, LAYERX_TEST_SOURCE_DID and the runner component URLs - to an environment file under the build directory, and print the cluster identity for the gate record."
+do_3 = "Run the existing hosted boundary, webhook fault-injection and registry node-provision boundary scripts against the stood-up cluster from the same script under a flag, so the unexecuted platform observations have an executable path."
+do_4 = "Add platform-beta-cluster-up and platform-beta-cluster-down make targets, and a syntax check of the script in platform-test-tooling; add a teardown that leaves nothing on the host."
+verify_cmd = "make platform-test-tooling platform-beta-cluster-up platform-hosted-smoke platform-beta-cluster-down"
+symbols = ["beta_cluster_up","beta_cluster_down","hosted-boundary.sh","fault-injection.sh","node-provision-build-boundary.sh"]
+touches = ["platform/hosted/tests/beta-cluster.sh","platform/hosted/registry/Dockerfile","platform/hosted/registry/deployment.yaml","platform/hosted/gateway/tests/hosted-boundary.sh","platform/hosted/webhooks/tests/fault-injection.sh","platform/hosted/registry/node-provision-build-boundary.sh","platform/hosted/registry/layerx-program-registry-boundary.service","platform/Makefile.inc"]
+reqs = ["7.5","7.7","12.5"]
+
+[task.4]
+section = "Wave 4 - Artifact Identity, Publication and the Qualification Gate"
+title = "Publish every ecosystem with provenance, and give the runner a real driver"
+status = "pending"
+
+[task.4.1]
+title = "Make the release manifest and the release workflow agree"
+status = "pending"
+wave = 4
+requires = ["1.1"]
+do_1 = "Make platform-release-check compare the ecosystems declared in registries.kvx with the publication jobs in the release workflow in both directions and fail on any declared-but-unpublished or published-but-undeclared artifact."
+do_2 = "Add a publication job for every ecosystem registries.kvx declares - crates.io, npm, PyPI, Go modules, Maven Central, SwiftPM and NuGet - publishing under a beta pre-release version with an immutable digest, a signature, an SBOM and a provenance attestation, targeting the real registry or the owner-designated beta registry by secret name, and an install check per artifact that installs from that registry and verifies the digest; complete the skeleton entries in registries.kvx with the real package identities."
+do_3 = "Promote the aggregate Programs acceptance, the sanitizer jobs, the committed long-fuzz corpus and supported-architecture replay to required jobs on the release revision - remove the schedule-only and opt-in gating - and record each as a gate entry when run."
+verify_cmd = "make platform-release-check"
+symbols = ["release_pipeline","registries declarations","release-pipeline workflow job"]
+touches = ["platform/release/registries.kvx","platform/release/src/main.rs",".github/workflows/platform.yml",".github/workflows/agent.yml",".github/workflows/programs-conformance.yml","tools/ci/replay-matrix.sh"]
+reqs = ["8.1","8.2","8.5","8.6"]
+
+[task.4.2]
+title = "Emit the source-bound artifact manifest and verify published bytes"
+status = "pending"
+wave = 4
+requires = ["4.1"]
+do_1 = "Extend the release tool to emit one artifact manifest listing name, version, registry, immutable digest, signature, SBOM and attestation references, source revision and rollback identity for every published artifact."
+do_2 = "Add a verification step that fetches each published artifact, checks its bytes against the manifest digest and halts the release before promotion naming the failing artifact."
+do_3 = "Retain the manifest as a release artifact, reference it from the beta contract, and extend beta-contract-check so the docs name only manifest-listed artifacts."
+verify_cmd = "make platform-release-check platform-release-plan beta-contract-check"
+symbols = ["ArtifactManifest","release_pipeline verify"]
+touches = ["platform/release/src/main.rs","platform/release/registries.kvx",".github/workflows/platform.yml","platform/docs/content/beta.md","tools/ci/beta-contract-check.sh"]
+reqs = ["8.3","8.4","8.6"]
+
+[task.4.3]
+title = "Add the beta-qualify runner gate and the in-repository qualification driver"
+status = "pending"
+wave = 4
+requires = ["1.1"]
+do_1 = "In tools/qualification/release_runner.py add a human-qualify-functional gate whose local commands are those of human-qualify without human-qualify-perf and with no external ui or usability gates, and a beta-qualify gate whose local commands are those of platform-qualify with human-qualify-functional in place of human-qualify and whose external gates are platform-qualify-adoption, programs-qualify, interop-qualify and multichain-qualify; leave platform-qualify and human-qualify unchanged."
+do_2 = "Write tools/qualification/beta_driver.py implementing the runner's driver contract - run --gate --output --source-identity and the four component URL flags - and producing evidence.json with every case and artifact kind in the runner's EVIDENCE_SPECS for the four external gates by executing the real stack: per-ecosystem first payments through the published SDKs against the node and agent daemon, the ten-line middleware integration, the five-minute Programs deploy and paid call through the hosted registry, the real-node hostile-program gauntlet, isolation, determinism, metering, concurrency, idempotency and crash matrix, ported reference contracts and program-heavy monetary-law replay, x402, AP2, UCP and Visa trusted-agent pinned conformance, portable verification both directions, migration and fiat fault injection, mirror offline verification and tamper rejection on the test networks, Paxeer exclusivity, one-ledger and the reference ramp end to end."
+do_3 = "Make every case's result the outcome of execution; a case that cannot run reports failed with the reason and the driver exits non-zero, so the runner records the gate failed rather than passing on synthesised evidence."
+do_4 = "Extend tools/qualification/test_release_runner.py to cover the two new gates and add a driver test that runs the driver against the local emulator-backed stack for at least the adoption and multichain inventories; add beta-qualify and beta-driver-test make targets."
+verify_cmd = "make beta-driver-test"
+symbols = ["ReleaseRunner","LOCAL_COMMANDS","EXTERNAL_GATES","beta_driver"]
+touches = ["tools/qualification/release_runner.py","tools/qualification/beta_driver.py","tools/qualification/test_release_runner.py","Makefile"]
+reqs = ["12.1","12.4"]
+
+[task.5]
+section = "Wave 5 - Executed Qualification and the Go/No-Go Record"
+title = "Stand the whole system up on beta infrastructure, run every gate on one revision, and record it"
+status = "pending"
+
+[task.5.1]
+title = "Execute and record the focused negative and fault gates"
+status = "pending"
+wave = 5
+requires = ["2.1","2.2","2.3","2.4","3.1","3.2","3.3","3.4","3.5","3.6","3.7"]
+do_1 = "Add a beta-qualify-focused make target that runs, in order, the builds and the verify_cmd of every wave 2 and wave 3 task plus qualify-faults, qualify-replay, agent-qualify-faults, agent-qualify-fuzz, agent-qualify-wire, agent-qualify-boundary and human-qualify-faults, capturing each command's output under spec/layerx-beta/evidence/<revision>/ and appending one gate record per command with revision, environment identity, start time and outcome."
+do_2 = "Run it on the release-candidate revision; on any failure fix only task-scoped causes and rerun, recording unrelated failures as observations."
+do_3 = "Link every observation.38.5.* in spec/layerx-platform/qualification.kvx from the gate record that executes its work through the task 3.7 boundary scripts, or record it blocked with the owner input named; rewrite none."
+verify_cmd = "make beta-qualify-focused beta-ledger-check"
+symbols = ["beta_qualify_focused","gate records"]
+touches = ["Makefile","tools/ci/beta-qualify.sh","spec/layerx-beta/qualification.kvx","spec/layerx-beta/evidence"]
+reqs = ["12.2","12.4","12.5"]
+
+[task.5.2]
+title = "Stand up the beta stack and run the beta-qualify runner gate"
+status = "pending"
+wave = 5
+requires = ["3.7","4.2","4.3","5.1"]
+do_1 = "Write tools/ci/beta-stack.sh that starts the native node and daemon, the agent daemon, the human service and web application on the qualification host, brings the hosted stack up on the beta cluster through platform-beta-cluster-up, points the Ethereum and Solana mirror configuration at the test networks and the ramp toolkit at the provider sandboxes from owner-supplied environment, and exports the runner component URLs and the pinned driver digest."
+do_2 = "Run python3 tools/qualification/release_runner.py beta-qualify with LAYERX_QUALIFICATION_REAL_STACK=1 and the in-repository driver on the release-candidate revision, retain build/qualification/beta-qualify status.json, report.json, logs and validated external evidence under spec/layerx-beta/evidence/<revision>/beta-qualify/, and append one gate record per planned command and per external gate from the runner's report."
+do_3 = "On failure fix only task-scoped causes, advance the revision, and rerun the whole gate; record any input the owner has not supplied as a blocked gate naming the input, which is a no-go until supplied."
+verify_cmd = "make beta-qualify beta-ledger-check"
+symbols = ["beta_stack","release_runner beta-qualify"]
+touches = ["tools/ci/beta-stack.sh","Makefile","spec/layerx-beta/qualification.kvx","spec/layerx-beta/evidence"]
+reqs = ["7.5","8.2","12.2","12.4","12.5"]
+
+[task.5.3]
+title = "Execute the clean-profile verified payment, the restart case and the cross-language vectors"
+status = "pending"
+wave = 5
+requires = ["1.2","5.1"]
+do_1 = "Add a beta-qualify-journey make target that, from a fresh temporary profile using only the published commands, runs bootstrap, emulator start, account creation, funding, quote, signed commit, polling, canonical receipt retrieval, independent batch-fact retrieval and local verification, timing the run against the five-minute bound and recording a gate entry with the elapsed time and the receipt digest; then repeats the journey against the hosted beta endpoints from the beta contract."
+do_2 = "Run the cross-language vectors - checkpoint hashes and freshness, receipts, refusal outcomes, idempotency keys and verification levels - for every published artifact in the artifact manifest, and record one gate entry per artifact."
+do_3 = "Run the unknown-outcome and restart cases on the same revision: interrupt the journey after submission, restart, and prove reconciliation by receipt lookup with no duplicate effect."
+verify_cmd = "make beta-qualify-journey beta-ledger-check"
+symbols = ["beta_qualify_journey"]
+touches = ["Makefile","tools/ci/beta-qualify.sh","spec/layerx-beta/qualification.kvx","spec/layerx-beta/evidence"]
+reqs = ["1.6","6.4","12.4"]
+
+[task.5.4]
+title = "Generate the go/no-go report and reconcile the beta contract"
+status = "pending"
+wave = 5
+requires = ["5.2","5.3"]
+do_1 = "Write tools/ci/beta-report.sh and a beta-report target that reads only gate records on the release-candidate revision, computes the reached rung per surface against its required beta rung, lists every stop condition with the gate that clears it or the words not clear, and writes spec/layerx-beta/report.md with a single go or no-go line that is go only when every surface is at its rung and every stop condition is clear."
+do_2 = "Update the reached rung per surface in platform/docs/content/beta.md from the report and extend beta-contract-check to fail when contract and report disagree or when the contract claims readiness with any surface below its rung."
+do_3 = "Hand the report to the owner under phase.release_qualification; record the owner go decision, when given, as a gate entry with outcome pass and the decider named, and record nothing if it is not given."
+verify_cmd = "make beta-report beta-ledger-check beta-contract-check"
+symbols = ["beta_report","stop conditions"]
+touches = ["tools/ci/beta-report.sh","Makefile","spec/layerx-beta/report.md","platform/docs/content/beta.md","tools/ci/beta-contract-check.sh"]
+reqs = ["12.3","12.6","13.3","13.4","13.5"]
