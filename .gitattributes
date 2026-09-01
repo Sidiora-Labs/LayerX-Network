@@ -19,3 +19,4 @@ Makefile text eol=lf
 *.vsix binary
 
 programs/vendor/** -text -eol whitespace=-blank-at-eol,-blank-at-eof,-space-before-tab conflict-marker-size=255
+spec/layerx-beta/qualification.kvx merge=union
