@@ -41,7 +41,7 @@ Two points need owner confirmation before the corresponding task starts, and one
 ## Wave 1 - Freeze, Contract and Clean Bootstrap
 
 - [ ] 1. Fix the evidence model and make the published path work
-  - [ ] 1.1 Define the executed-evidence ledger and the canonical beta contract
+  - [-] 1.1 Define the executed-evidence ledger and the canonical beta contract
     - Extend spec/layerx-beta/qualification.kvx with the gate record shape beside the observation shape: [gate.<task>.<n>] with task, reqs, revision, command, environment, started_at, outcome, evidence and note, documented in the file header with the outcome vocabulary pass, fail, blocked.
     - Write tools/ci/beta-ledger-check.sh: parse every gate record, fail when revision is not a commit in this repository, when command is not an existing make target or an executable path in the tree, when evidence does not exist, when outcome is outside the vocabulary, when an evidence path that is a runner status.json or report.json carries a different source_revision or a source_identity that is not the clean-tree identity for that revision, or when any observation record was edited to carry gate keys; print the set of distinct revisions so the report can select the release candidate.
     - Write the canonical beta contract at platform/docs/content/beta.md with every field req.13 names: every surface and journey of the system with its required beta rung from decision.beta_bar and its reached rung set to source_present until a gate record raises it, the beta endpoints, hostnames, network id, wire version and CA from decision.beta_infra, the external dependencies with their beta counterparts, and the beta-versus-production differences limited to decision.polish_boundary.

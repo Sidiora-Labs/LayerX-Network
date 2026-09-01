@@ -2933,3 +2933,12 @@ programs-sdk-assemblyscript:
 
 programs-quickstart:
 	sh programs/sdk/rust/quickstart/build.sh all
+
+# LayerX beta: canonical contract and executed-evidence ledger checks
+.PHONY: beta-ledger-check beta-contract-check
+
+beta-ledger-check:
+	tools/ci/beta-ledger-check.sh
+
+beta-contract-check:
+	tools/ci/beta-contract-check.sh

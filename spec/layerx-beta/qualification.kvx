@@ -78,3 +78,59 @@ symbol = "StatefulSet image ghcr.io/sidiora-labs/layerx-program-registry:0.1.0"
 observed = "The hosted registry StatefulSet references a prebuilt image with no Dockerfile in the repository, unlike testnet, gateway, faucet, webhooks and dashboard, and its cgroup and quota boundary is a host systemd unit ordered before kubelet. The hosted stack therefore cannot be rebuilt from source at a revision without additions."
 assumption = "Task 3.7 adds platform/hosted/registry/Dockerfile and installs the boundary unit on registry nodes as part of beta cluster bring-up, so the beta cluster runs every hosted image from the release-candidate revision. The image tag in the manifest is pinned to the built digest by the bring-up script for the beta run and the manifest itself is not weakened."
 severity = "assumption"
+
+[observation.1.1.1]
+task = "3.6"
+file = "platform/hosted/gateway/deployment.yaml"
+symbol = "Ingress layerx-gateway host"
+observed = "The gateway Ingress (platform/hosted/gateway/deployment.yaml lines 187-189) serves gateway.testnet.layerx.network, while every client-facing source names api.testnet.layerx.network: .github/workflows/platform.yml LAYERX_GATEWAY_URL (lines 334 and 348), platform/hosted/testnet/src/lib.rs gateway_endpoint (line 69), platform/docs/testnet.md (line 3), platform/docs/content/guide/interop.md (line 40) and every platform/examples/*/layerx.example.json. No manifest binds faucet.testnet.layerx.network either: platform/hosted/testnet/deployment.yaml exposes the faucet as the LoadBalancer Service layerx-faucet-public (line 170-176) without an Ingress host. The beta contract lists both as the contradictions gateway_hostname and faucet_hostname and beta-contract-check requires them to stay listed until the sources agree."
+assumption = "Task 3.6 (req 7.6) makes testnet-control, the gateway manifest, the workflow and the docs agree on one gateway hostname, and task 3.7 binds the faucet hostname during beta cluster bring-up; the contract rows are then removed. Task 1.1 did not edit either source because both are outside its touches and the choice of hostname is the owner's."
+severity = "suspect"
+
+[observation.1.1.2]
+task = "3.6"
+file = "platform/docs/testnet.md"
+symbol = "LXP wire protocol version"
+observed = "platform/docs/testnet.md line 3 (the docs page environments/testnet) states LXP wire protocol version 1 while platform/hosted/testnet/deployment.yaml ConfigMap layerx-testnet-release pins lxp-wire-protocol-version 2 (line 10), platform/hosted/gateway/deployment.yaml sets LAYERX_GATEWAY_LXP_WIRE_VERSION 2 (line 92), platform/hosted/webhooks/deployment.yaml sets LAYERX_WEBHOOKS_LXP_WIRE_VERSION 2 (line 17) and agent/crates/layerx-wire/src/limits.rs declares PROTOCOL_VERSION 2 (line 12). The beta contract carries wire_protocol_version 2 and lists docs_wire_protocol_version as an open contradiction."
+assumption = "Task 3.6 (req 7.6) corrects the docs page; the contradiction row is removed in the same change. Task 1.1 left the page untouched because it is outside its touches."
+severity = "suspect"
+
+[observation.1.1.3]
+task = "3.6"
+file = "platform/hosted/gateway/deployment.yaml"
+symbol = "LAYERX_GATEWAY_PROTOCOL_NETWORK_ID"
+observed = "The gateway verifies protocol envelopes with LAYERX_GATEWAY_PROTOCOL_NETWORK_ID 1 (platform/hosted/gateway/deployment.yaml line 93; platform/hosted/gateway/src/main.rs lines 581-584, 1497 and 1756) while testnet-control publishes TESTNET_NETWORK_ID 402 (platform/hosted/testnet/src/lib.rs line 4), the install docs configure --network-id 402 (platform/docs/content/install.md line 25, platform/docs/content/environments/emulator.md line 27) and the CLI default environment signs with network_id 402 (platform/cli/src/config.rs line 44). The beta contract carries network_id 402 and lists protocol_network_id as an open contradiction."
+assumption = "Task 3.6 (req 7.6) aligns the gateway protocol network id with the published testnet network id or documents a distinct beta protocol network id in the contract; until then envelopes signed under 402 and verified under 1 cannot both be right."
+severity = "suspect"
+
+[observation.1.1.4]
+task = "3.7"
+file = "platform/hosted/webhooks/deployment.yaml"
+symbol = "Ingress layerx-developer layerx-developer-web host"
+observed = "The developer surface (webhooks, dashboard API and dashboard web) is served on the placeholder host developers.layerx.example (platform/hosted/webhooks/deployment.yaml lines 222-224 and 239-241), which is not under the beta domain layerx.network. The beta contract states the value the manifest carries today and lists placeholder_hostname as an open contradiction."
+assumption = "Task 3.7 assigns the beta developer hostname when the hosted stack is brought up on the beta cluster; the contract row is replaced by the real hostname in the same change."
+severity = "suspect"
+
+[observation.1.1.5]
+task = "3.7"
+file = "platform/hosted/testnet/deployment.yaml"
+symbol = "LAYERX_TESTNET_CORE_URL LAYERX_TESTNET_CORE_ADMIN_URL LAYERX_TESTNET_PAXEER_URL LAYERX_GATEWAY_IDENTITY_URL LAYERX_GATEWAY_AUTHORITY_URL LAYERX_GATEWAY_COMPONENT_URL"
+observed = "The hosted manifests address layerx-pending-core, layerx-pending-core-admin, paxeer-boundary, layerx-identity, layerx-receipt-authority and layerx-agent-boundary in namespace layerx-testnet (platform/hosted/testnet/deployment.yaml lines 88-91; platform/hosted/gateway/deployment.yaml lines 78-82), and platform/hosted/testnet/README.md line 3 calls them separately operated services. No manifest, Dockerfile or image reference for any of them exists in the repository, so the beta cluster cannot be brought up from the repository alone and the hosted surfaces cannot reach deployment_proven without them. The beta contract names them as external dependencies whose beta counterparts are declared by task 3.7."
+assumption = "Task 3.7 either adds manifests and images for these services at the release-candidate revision or the owner designates their beta endpoints and images by name as bring-up inputs; a gate that lacks them is recorded blocked naming the input."
+severity = "blocker"
+
+[observation.1.1.6]
+task = "4.1"
+file = "platform/release/registries.kvx"
+symbol = "registry.npm packages"
+observed = "platform/docs/content/install.md line 86 instructs npm install @sidiora/layerx-sdk, but [registry.npm] in platform/release/registries.kvx lists only the four middleware packages, and .github/workflows/platform.yml publishes only those four (lines 288-291). Of the seven declared ecosystems only npm has a publication job; crates-io, pypi, go-modules, maven-central, swiftpm and nuget have none, and every registry is status skeleton. The beta contract records the publication job as absent for those six ecosystems and lists install_package_unlisted as an open contradiction."
+assumption = "Task 4.1 (req 10.1) makes the release manifest and the workflow agree, adding @sidiora/layerx-sdk and the SDK packages of the other ecosystems to the manifest and the workflow; task 4.2 then binds the docs to the artifact manifest. The contract rows are updated in those changes."
+severity = "suspect"
+
+[observation.1.1.7]
+task = "1.1"
+file = "tools/ci/beta-ledger-check.sh"
+symbol = "beta_ledger_check"
+observed = "cg spec done 1.1 ran verify_cmd (make beta-contract-check beta-ledger-check) to pass and every touch check to pass, then failed its graph symbol check for beta_ledger_check, beta_contract_check and beta_contract. The Codify graph indexes go, rust, c, solidity, typescript, javascript, java, python, swift, csharp and kotlin only (cg agentmd language table); bash functions and markdown identifiers are never graph symbols, so cg symbol beta_ledger_check reports not found while the function is defined at tools/ci/beta-ledger-check.sh:148."
+assumption = "The task was marked done with --force solely to override the symbol check that cannot see shell or markdown identifiers; the verify_cmd was executed and passed and no gate was skipped. The same limitation applies to every task whose declared symbols are shell functions or markdown ids (1.2 clean_bootstrap, 3.6 topology_check, 3.7 beta_cluster_up and beta_cluster_down, 4.3 beta_driver in Python is indexed, 5.1 to 5.4 beta_qualify_* and beta_report); each such task is forced only after its verify_cmd passes and only for symbol checks, and the outcome is recorded here."
+severity = "note"

@@ -246,7 +246,7 @@ status = "pending"
 
 [task.1.1]
 title = "Define the executed-evidence ledger and the canonical beta contract"
-status = "pending"
+status = "in_progress"
 wave = 1
 do_1 = "Extend spec/layerx-beta/qualification.kvx with the gate record shape beside the observation shape: [gate.<task>.<n>] with task, reqs, revision, command, environment, started_at, outcome, evidence and note, documented in the file header with the outcome vocabulary pass, fail, blocked."
 do_2 = "Write tools/ci/beta-ledger-check.sh: parse every gate record, fail when revision is not a commit in this repository, when command is not an existing make target or an executable path in the tree, when evidence does not exist, when outcome is outside the vocabulary, when an evidence path that is a runner status.json or report.json carries a different source_revision or a source_identity that is not the clean-tree identity for that revision, or when any observation record was edited to carry gate keys; print the set of distinct revisions so the report can select the release candidate."
